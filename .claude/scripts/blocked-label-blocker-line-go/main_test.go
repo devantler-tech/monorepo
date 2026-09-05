@@ -2,9 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAuthorityGrammar(t *testing.T) {
@@ -17,6 +23,13 @@ func TestAuthorityGrammar(t *testing.T) {
 		{"bare issue authority", "#7 | authority | last-verified 2026-09-01: pending | asked pr 2026-09-01", "CONFORMS"},
 		{"empty authority identifier", " | authority | last-verified 2026-09-01: pending | asked pr 2026-09-01", "MALFORMED"},
 		{"URL alone cannot identify authority", "https://example.com/account | authority | last-verified 2026-09-01: pending | asked pr 2026-09-01", "MALFORMED"},
+		{"mailto alone cannot identify authority", "mailto:admin@example.com | authority | last-verified 2026-09-01: pending | asked pr 2026-09-01", "MALFORMED"},
+		{"tel alone cannot identify authority", "tel:+4512345678 | authority | last-verified 2026-09-01: pending | asked pr 2026-09-01", "MALFORMED"},
+		{"opaque scheme is case insensitive", "URN:uuid:12345678 | authority | last-verified 2026-09-01: pending | asked pr 2026-09-01", "MALFORMED"},
+		{"description alongside opaque URL", "Account activation mailto:admin@example.com | authority | last-verified 2026-09-01: pending | asked pr 2026-09-01", "CONFORMS"},
+		{"description with punctuation", "Account action: enable signing | authority | last-verified 2026-09-01: pending | asked pr 2026-09-01", "CONFORMS"},
+		{"legacy authority with punctuation", "maintainer authority: enable signing | last-verified 2026-09-01: pending | asked pr 2026-09-01", "CONFORMS"},
+		{"upstream repository with punctuation", "owner/repo: pending release | upstream | last-verified 2026-09-01: pending", "CONFORMS"},
 		{"multiple kinds", "owner/repo#1 | authority | upstream | last-verified 2026-09-01: pending", "MALFORMED"},
 		{"hidden unspaced kind", "#7 |authority | upstream | last-verified 2026-09-01: pending", "MALFORMED"},
 		{"duplicate same kind", "owner/repo#1 | upstream | upstream | last-verified 2026-09-01: pending", "MALFORMED"},
@@ -134,6 +147,57 @@ func TestOutputFailureReturnsUnknown(t *testing.T) {
 			code := run(tc.args, strings.NewReader(tc.input), writer, &stderr)
 			if code != 2 || !strings.Contains(stderr.String(), "UNKNOWN") {
 				t.Fatalf("undelivered output: code=%d stderr=%q, want UNKNOWN", code, stderr.String())
+			}
+		})
+	}
+}
+
+func TestCLIClosedPipeReturnsUnknown(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "blocker-guard")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(ctx, "go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build CLI: %v\n%s", err, output)
+	}
+	for _, tc := range []struct {
+		name, input string
+		args        []string
+		closeStderr bool
+	}{
+		{"help stdout", "", []string{"--help"}, false},
+		{"conforming stdout", `[]`, []string{"--input", "-"}, false},
+		{"finding stdout", `[{"repo":"r","number":2}]`, []string{"--input", "-"}, false},
+		{"usage stderr", "", []string{"--invalid"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader, writer, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := reader.Close(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = writer.Close() })
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, binary, tc.args...)
+			cmd.Stdin = strings.NewReader(tc.input)
+			var diagnostic bytes.Buffer
+			if tc.closeStderr {
+				cmd.Stderr = writer
+			} else {
+				cmd.Stdout = writer
+				cmd.Stderr = &diagnostic
+			}
+			// A real descriptor 1 or 2 with no reader exercises SIGPIPE in the
+			// public entrypoint. Passing an io.Pipe to run cannot do that.
+			err = cmd.Run()
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+				t.Fatalf("closed pipe: error=%v stderr=%q, want exit 2", err, diagnostic.String())
+			}
+			if !tc.closeStderr && !strings.Contains(diagnostic.String(), "could not write report -- UNKNOWN") {
+				t.Fatalf("missing report-delivery diagnostic: %q", diagnostic.String())
 			}
 		})
 	}

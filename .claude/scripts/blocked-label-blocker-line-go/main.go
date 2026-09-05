@@ -11,9 +11,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -42,7 +44,7 @@ var (
 	orgRE          = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 	dateRE         = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 	identifierRE   = regexp.MustCompile(`#[0-9]+|maintainer authority|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
-	urlRE          = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://|//|www\.|[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.[A-Za-z]{2,}/)[^\s]*`)
+	urlRE          = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*:[^\s]|//|www\.|[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.[A-Za-z]{2,}/)[^\s]*`)
 	askRE          = regexp.MustCompile(`\| asked (pr|slack|session) ([0-9]{4}-[0-9]{2}-[0-9]{2})[\t ]*$`)
 	verificationRE = regexp.MustCompile(`^([0-9]{4}-[0-9]{2}-[0-9]{2}): (.*)$`)
 )
@@ -412,4 +414,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return emit(report.String(), 0)
 }
 
-func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
+func main() {
+	// Let failed stdout/stderr writes reach run's UNKNOWN handling instead of
+	// terminating the process before it can return the documented exit status.
+	signal.Ignore(syscall.SIGPIPE)
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
