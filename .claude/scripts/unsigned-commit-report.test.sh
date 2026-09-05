@@ -90,8 +90,9 @@ if printf '%s\n' "$OUT" | grep -q '^::warning title=Unsigned or unverifiable com
 if ! printf '%s\n' "$OUT" | grep -q '^::error'; then ok "and never an ::error:: (non-blocking)"; else bad "and never an ::error:: (non-blocking)" "out: $OUT"; fi
 if grep -q 'examined=2 signed=1 unsigned=1' "$TMP/summary.md" && grep -q '| N | `cccc3333` | unsigned | codex/y-2 |' "$TMP/summary.md"; then ok "the step summary carries the summary and the finding table"; else bad "the step summary carries the summary and the finding table" "$(cat "$TMP/summary.md")"; fi
 [ "$RC" = 0 ] && ok "and the Actions run still exits 0" || bad "and the Actions run still exits 0" "rc=$RC"
-# CONTROL: outside Actions no annotation is printed
-run --input "$TMP/unsigned.json" --head-ref codex/y-2
+# CONTROL: outside Actions no annotation is printed. The suite itself runs under Actions, where
+# GITHUB_ACTIONS is already set, so the control must clear it explicitly or it tests nothing.
+OUT="$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$CHECK" --input "$TMP/unsigned.json" --head-ref codex/y-2 2>&1)"; RC=$?
 if ! printf '%s\n' "$OUT" | grep -q '^::warning'; then ok "CONTROL: no annotation outside Actions"; else bad "CONTROL: no annotation outside Actions" "out: $OUT"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
