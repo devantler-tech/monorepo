@@ -95,5 +95,35 @@ if grep -q 'examined=2 signed=1 unsigned=1' "$TMP/summary.md" && grep -q '| N | 
 OUT="$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$CHECK" --input "$TMP/unsigned.json" --head-ref codex/y-2 2>&1)"; RC=$?
 if ! printf '%s\n' "$OUT" | grep -q '^::warning'; then ok "CONTROL: no annotation outside Actions"; else bad "CONTROL: no annotation outside Actions" "out: $OUT"; fi
 
+# ------------------------------------------------------------------ 10. the two listing caps fail CLOSED (stubbed gh)
+#
+# Both `gh` reads have a hard ceiling -- `pulls/<n>/commits` lists at most 250 commits, and the
+# merged-PR listing is capped by --limit -- so a set that reaches the cap may be incomplete while
+# `examined=` reads as the whole. A stub `gh` on PATH returns exactly the row counts asked for, so
+# these cases need no network and pin the guard against silent regression.
+mkdir -p "$TMP/bin"
+cat >"$TMP/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  *"pr list"*)
+    i=0; while [ "$i" -lt "${FAKE_PRS:-0}" ]; do i=$((i + 1)); printf '%s\tclaude/x-%s\n' "$i" "$i"; done ;;
+  *"/commits"*)
+    jq -n --argjson n "${FAKE_COMMITS:-0}" '[range($n) | {sha: ("c" + tostring), commit: {verification: {verified: true, reason: "valid"}}}]' ;;
+  *) echo "stub gh: unexpected call: $*" >&2; exit 99 ;;
+esac
+STUB
+chmod +x "$TMP/bin/gh"
+stub() { PATH="$TMP/bin:$PATH" FAKE_PRS="$1" FAKE_COMMITS="$2" "$CHECK" "${@:3}" 2>&1; }
+OUT="$(stub 3 250 --pr 7 --repo o/r --head-ref claude/x-7)"; RC=$?
+if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'at the 250-commit endpoint cap'; then ok "a PR at the 250-commit cap is UNKNOWN, not a partial count"; else bad "a PR at the 250-commit cap is UNKNOWN, not a partial count" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(stub 3 249 --pr 7 --repo o/r --head-ref claude/x-7)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=249 signed=249'; then ok "CONTROL: one below the commit cap reports the full set"; else bad "CONTROL: one below the commit cap reports the full set" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(stub 1000 1 --repo o/r --merged-since 2026-09-01)"; RC=$?
+if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'at the 1000-PR cap'; then ok "a lane at the merged-PR cap is UNKNOWN, not a partial sweep"; else bad "a lane at the merged-PR cap is UNKNOWN, not a partial sweep" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=6 signed=6 .* prs=3 lanes=claude lane=sweep$'; then ok "CONTROL: a lane below the cap sweeps every PR"; else bad "CONTROL: a lane below the cap sweeps every PR" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(stub 0 0 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=0 .* prs=0 '; then ok "CONTROL: an empty listing states prs=0"; else bad "CONTROL: an empty listing states prs=0" "rc=$RC out=${OUT:0:200}"; fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1
