@@ -387,6 +387,23 @@ assert_prose 'The single cursor writer is the Claude machine-local Agent Improve
 assert_prose 'never researches or advances the cursor' \
   "Memory does not keep the non-writer instance off the research cursor, so two instances could advance it"
 
+# Same WHITELIST discipline for the research-register block (review round 1 on #3215 named the unpinned
+# clauses one by one — budget, routing, fallback — which is the blacklist that never converges). The
+# three named assertions above keep their specific messages; this pins the whole paragraph verbatim.
+research_fixture="${repo_root}/.claude/scripts/fixtures/agent-improver-research-register.txt"
+[ -r "${research_fixture}" ] ||
+  fail "research-register fixture is missing: ${research_fixture}"
+research_block="$(awk '
+  /^   \*\*Agent Improver research register and cursor\*\*/ { f = 1 }
+  f { print }
+  f && /named as the blocker\.$/ { exit }
+' "${constitution}")"
+[ -n "${research_block}" ] ||
+  fail "Could not locate the research-register block in AGENTS.md — its opening anchor was removed or reworded"
+if ! printf '%s\n' "${research_block}" | diff -q - "${research_fixture}" >/dev/null 2>&1; then
+  fail "The research-register block no longer matches its fixture. Intentional edits must update .claude/scripts/fixtures/agent-improver-research-register.txt in the same commit"
+fi
+
 # WHITELIST, not another named clause. Four review rounds each found "clause N is unpinned" — a
 # blacklist that never converges, because the next round just names clause N+1. The named assertions
 # above stay for their specific failure messages; this one closes the CLASS by pinning the whole block
