@@ -127,7 +127,6 @@ func visibleRecord(body string) string {
 				if inComment {
 					end := strings.Index(line, "-->")
 					if end < 0 {
-						line = ""
 						break
 					}
 					line = line[end+3:]
@@ -136,7 +135,6 @@ func visibleRecord(body string) string {
 					start := strings.Index(line, "<!--")
 					if start < 0 {
 						visible.WriteString(line)
-						line = ""
 						break
 					}
 					visible.WriteString(line[:start])
@@ -338,14 +336,25 @@ func load(o options, stdin io.Reader) ([]issue, error) {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	unknown := func(err error) int { fmt.Fprintln(stderr, "blocked-label-blocker-line.sh:", err); return 2 }
+	unknown := func(err error) int {
+		// A failed diagnostic write cannot change the UNKNOWN exit status.
+		_, _ = fmt.Fprintln(stderr, "blocked-label-blocker-line.sh:", err)
+		return 2
+	}
+	emit := func(report string, code int) int {
+		if report != "" {
+			if _, err := io.WriteString(stdout, report); err != nil {
+				return unknown(fmt.Errorf("could not write report -- UNKNOWN: %w", err))
+			}
+		}
+		return code
+	}
 	o, wantsHelp, err := arguments(args)
 	if err != nil {
 		return unknown(err)
 	}
 	if wantsHelp {
-		fmt.Fprint(stdout, help)
-		return 0
+		return emit(help, 0)
 	}
 	issues, err := load(o, stdin)
 	if err != nil {
@@ -357,6 +366,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return unknown(fmt.Errorf("record %d is missing or has invalid repo or number -- UNKNOWN", i))
 		}
 	}
+	// Builder writes cannot fail. Check the external writer once the complete
+	// report is ready, so an undelivered report never returns a valid verdict.
+	var report strings.Builder
 	bad := 0
 	for _, item := range issues {
 		line := visibleRecord(item.Body)
@@ -364,9 +376,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if verdict == "CONFORMS" && o.quiet {
 			continue
 		}
-		fmt.Fprintf(stdout, "%-10s %s#%d", verdict, item.Repo, item.Number)
+		_, _ = fmt.Fprintf(&report, "%-10s %s#%d", verdict, item.Repo, item.Number)
 		if legacy {
-			fmt.Fprint(stdout, "  [legacy: no class token]")
+			_, _ = fmt.Fprint(&report, "  [legacy: no class token]")
 		}
 		if verdict != "CONFORMS" {
 			bad++
@@ -383,17 +395,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 					}
 					return r
 				}, string(snippet))
-				fmt.Fprintf(stdout, "  >>%s", safe)
+				_, _ = fmt.Fprintf(&report, "  >>%s", safe)
 			}
 		}
-		fmt.Fprintln(stdout)
+		_, _ = fmt.Fprintln(&report)
 	}
 	if bad > 0 {
-		fmt.Fprintf(stdout, "\nblocked-label-blocker-line.sh: %d of %d open blocked-labelled issue(s) need repair (missing, malformed, or an unraised authority blocker).\n", bad, len(issues))
-		return 1
+		if !o.quiet {
+			_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: %d of %d open blocked-labelled issue(s) need repair (missing, malformed, or an unraised authority blocker).\n", bad, len(issues))
+		}
+		return emit(report.String(), 1)
 	}
-	fmt.Fprintf(stdout, "\nblocked-label-blocker-line.sh: all %d open blocked-labelled issue(s) carry a conforming **Blocker:** line.\n", len(issues))
-	return 0
+	if !o.quiet {
+		_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: all %d open blocked-labelled issue(s) carry a conforming **Blocker:** line.\n", len(issues))
+	}
+	return emit(report.String(), 0)
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }

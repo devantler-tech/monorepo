@@ -9,6 +9,7 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname -- "$0")" && pwd -P)"
 CHECK="$HERE/blocked-label-blocker-line.sh"
+WRAPPER="$CHECK"
 [ -x "$CHECK" ] || {
   echo "FATAL: $CHECK is not executable" >&2
   exit 2
@@ -197,17 +198,15 @@ OUT="$("$CHECK" --input - <"$TMP/good.json" 2>&1)"
 RC=$?
 if [ "$RC" = 0 ]; then ok "--input - reads stdin"; else bad "--input - reads stdin" "rc=$RC; ${OUT:0:150}"; fi
 
-# ------------------------------------------------------------------ 12. --quiet drops CONFORMS rows ONLY: findings and the verdict survive
+# ------------------------------------------------------------------ 12. --quiet preserves finding rows and their exit status, without summaries
 # The help text promises "print findings only"; a --quiet that also hid MISSING/MALFORMED/NO-ASK rows
 # left an operator with a count and no issue ids to repair.
 OUT="$("$CHECK" --quiet --input "$TMP/mixed.json" 2>&1)"
 RC=$?
-if [ "$RC" = 1 ] && ! printf '%s\n' "$OUT" | grep -q '^CONFORMS' &&
-  printf '%s\n' "$OUT" | grep -qE '^MISSING +b#2' && printf '%s\n' "$OUT" | grep -qE '^MISSING +c#3' &&
-  printf '%s\n' "$OUT" | grep -q '2 of 3'; then
-  ok "--quiet drops CONFORMS rows but keeps every finding row and the verdict"
+if [ "$RC" = 1 ] && [ "$OUT" = $'MISSING    b#2\nMISSING    c#3' ]; then
+  ok "--quiet prints every finding row without a summary"
 else
-  bad "--quiet drops CONFORMS rows but keeps every finding row and the verdict" "rc=$RC; out: ${OUT:0:200}"
+  bad "--quiet prints every finding row without a summary" "rc=$RC; out: ${OUT:0:200}"
 fi
 
 # ------------------------------------------------------------------ 13. the identifier must NAME something
@@ -739,6 +738,14 @@ cat >"$TMP/pr-ask.json" <<'JSON'
 JSON
 OUT="$("$CHECK" --input "$TMP/pr-ask.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 0 ]; then ok "a draft PR ask and separate outage cause conform"; else bad "a draft PR ask and separate outage cause conform" "rc=$RC out=$OUT"; fi
+
+# Exercise the installed entrypoint as a caller, including stdin/argument forwarding
+# and both successful and findings exit codes. Keep the large fixture suite fast
+# by running its individual cases through the compiled binary above.
+OUT="$("$WRAPPER" --quiet --input "$TMP/good.json" 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && [ -z "$OUT" ]; then ok "shell entrypoint forwards quiet success"; else bad "shell entrypoint forwards quiet success" "rc=$RC out=$OUT"; fi
+OUT="$("$WRAPPER" --quiet --input - <"$TMP/missing.json" 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && [ "$OUT" = 'MISSING    b#2' ]; then ok "shell entrypoint forwards stdin and findings status"; else bad "shell entrypoint forwards stdin and findings status" "rc=$RC out=$OUT"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1

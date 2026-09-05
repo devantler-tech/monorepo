@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -93,5 +94,47 @@ func TestMalformedRecordCannotEmitTerminalControls(t *testing.T) {
 	}
 	if strings.ContainsAny(out.String(), "\x1b\b") {
 		t.Fatalf("raw terminal control in output: %q", out.String())
+	}
+}
+
+func TestQuietEmitsOnlyFindingRecords(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, want string
+		code              int
+	}{
+		{"empty", `[]`, "", 0},
+		{"conforming", `[{"repo":"r","number":1,"body":"**Blocker:** o/r#7 | upstream | last-verified 2026-09-01: pending"}]`, "", 0},
+		{"finding", `[{"repo":"r","number":2}]`, "MISSING    r#2\n", 1},
+		{"mixed", `[{"repo":"r","number":1,"body":"**Blocker:** o/r#7 | upstream | last-verified 2026-09-01: pending"},{"repo":"r","number":2}]`, "MISSING    r#2\n", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, stderr bytes.Buffer
+			code := run([]string{"--quiet", "--input", "-"}, strings.NewReader(tc.input), &out, &stderr)
+			if code != tc.code || out.String() != tc.want || stderr.Len() != 0 {
+				t.Fatalf("code=%d output=%q stderr=%q; want code=%d output=%q", code, out.String(), stderr.String(), tc.code, tc.want)
+			}
+		})
+	}
+}
+
+func TestOutputFailureReturnsUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		args        []string
+	}{
+		{"help", "", []string{"--help"}},
+		{"conforming", `[]`, []string{"--input", "-"}},
+		{"finding", `[{"repo":"r","number":2}]`, []string{"--input", "-"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader, writer := io.Pipe()
+			_ = reader.Close()
+			t.Cleanup(func() { _ = writer.Close() })
+			var stderr bytes.Buffer
+			code := run(tc.args, strings.NewReader(tc.input), writer, &stderr)
+			if code != 2 || !strings.Contains(stderr.String(), "UNKNOWN") {
+				t.Fatalf("undelivered output: code=%d stderr=%q, want UNKNOWN", code, stderr.String())
+			}
+		})
 	}
 }

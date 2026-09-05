@@ -9,8 +9,8 @@ if ! go -C "$HERE/blocked-label-blocker-line-go" build -o "$BINARY" .; then
   echo "blocked-label-blocker-line.sh: could not build Go guard -- UNKNOWN" >&2
   exit 2
 fi
-set +e
-"$BINARY" "$@"
-RC=$?
-set -e
-exit "$RC"
+if "$BINARY" "$@"; then
+  exit 0
+else
+  exit "$?"
+fi
