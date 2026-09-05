@@ -2828,3 +2828,28 @@ for _clause in "${_shape_clauses[@]}"; do
 done
 unset _clause _shape_clauses
 echo "portfolio surveyor contract: round-10 admitted-call-shape assertions passed"
+
+# ------------------------------------------------------------------ round 11: a Portfolio-map product is never an infra exclusion
+# `aws` became a product row in the Portfolio map (#3216) while the overlay's strategy-review
+# exclusion still named it as org/infra, so an AWS repo with no `roadmap` issue would never surface
+# as a strategy-review candidate. The overlay states that exclusion in MORE THAN ONE place — the
+# strategy-review sweep and the live-set reconciliation note — and a stale name in either changes
+# survey behaviour, so every statement is checked, not only the first. Statements are matched across
+# line breaks, because the reconciliation note wraps its list.
+_exclusion_lists="$(tr '\n' ' ' <"${surveyor}" | grep -o 'outside th[a-z]* map ([^)]*)' || true)"
+_exclusion_count="$(printf '%s\n' "${_exclusion_lists}" | grep -c 'outside th' || true)"
+[ "${_exclusion_count}" -ge 2 ] ||
+  fail "expected at least two strategy-review exclusion statements in the overlay, found ${_exclusion_count} (round 11)"
+for _repo in $(printf '%s\n' "${_exclusion_lists}" | grep -o '`[^`]*`' | tr -d '`' | LC_ALL=C sort -u); do
+  if grep -Eq "^\| [^|]+ \| \`devantler-tech/${_repo}\` \|" "${constitution}"; then
+    fail "the overlay excludes \`${_repo}\` from strategy reviews, but the Portfolio map lists it as a product (round 11)"
+  fi
+done
+# CONTROL: every statement still names at least one genuine non-product repo, so the loop is never
+# vacuous — `maintenance` is the org repo that stays outside the map by design.
+while IFS= read -r _statement; do
+  printf '%s\n' "${_statement}" | grep -Fq '`maintenance`' ||
+    fail "a strategy-review exclusion statement no longer names maintenance — the round-11 check would be vacuous for it: ${_statement}"
+done <<<"${_exclusion_lists}"
+echo "portfolio surveyor contract: round-11 product-vs-infra exclusion assertions passed (${_exclusion_count} statements)"
+unset _exclusion_lists _exclusion_count _repo _statement
