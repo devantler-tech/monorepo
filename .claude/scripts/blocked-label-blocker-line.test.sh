@@ -17,6 +17,10 @@ CHECK="$HERE/blocked-label-blocker-line.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+go -C "$HERE/blocked-label-blocker-line-go" test ./... || exit 2
+go -C "$HERE/blocked-label-blocker-line-go" build -o "$TMP/guard" . || exit 2
+CHECK="$TMP/guard"
+
 pass=0
 fail=0
 ok() {
@@ -479,7 +483,7 @@ expect_rc "explicit upstream class conforms" 0 "$TMP/cls-upstream.json"
 
 # ------------------------------------------------------------------ 24. CAUSE CLASS: authority WITH an ask
 cat >"$TMP/cls-auth-ok.json" <<'EOF'
-[{"repo":"a","number":2,"body":"**Blocker:** maintainer authority — an R2 bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-09-01"}]
+[{"repo":"a","number":2,"body":"**Blocker:** maintainer authority — an R2 bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-09-01"}]
 EOF
 # Pinned clock: the fixture's ask is dated 2026-09-01, so an unpinned run would read it STALE-ASK
 # from 2026-09-16 on and fail CI purely because the calendar advanced.
@@ -528,7 +532,7 @@ expect_rc "an unknown class token is a finding" 1 "$TMP/cls-bogus.json"
 # `--today` is passed explicitly so the case is hermetic; without it the suite would change verdict
 # with the calendar, which is a test that eventually fails for no reason and gets deleted.
 cat >"$TMP/cls-auth-stale.json" <<'EOF'
-[{"repo":"a","number":7,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-08-01"}]
+[{"repo":"a","number":7,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-08-01"}]
 EOF
 OUT="$("$CHECK" --input "$TMP/cls-auth-stale.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 1 ]; then ok "an ask older than the cadence is a finding"; else bad "an ask older than the cadence is a finding" "rc=$RC out=${OUT:0:200}"; fi
@@ -536,14 +540,14 @@ if printf '%s\n' "$OUT" | grep -qE '^STALE-ASK +a#7'; then ok "a stale ask is re
 
 # ------------------------------------------------------------------ 30. BOUNDARY: an ask inside the cadence passes
 cat >"$TMP/cls-auth-fresh.json" <<'EOF'
-[{"repo":"a","number":8,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-08-30"}]
+[{"repo":"a","number":8,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-08-30"}]
 EOF
 OUT="$("$CHECK" --input "$TMP/cls-auth-fresh.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 0 ]; then ok "BOUNDARY: an ask inside the cadence passes"; else bad "BOUNDARY: an ask inside the cadence passes" "rc=$RC out=${OUT:0:200}"; fi
 
 # ------------------------------------------------------------------ 31. the ask date must be a real day
 cat >"$TMP/cls-auth-baddate.json" <<'EOF'
-[{"repo":"a","number":9,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-02-31"}]
+[{"repo":"a","number":9,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-02-31"}]
 EOF
 expect_rc "an ask carrying an impossible date is a finding" 1 "$TMP/cls-auth-baddate.json"
 
@@ -562,7 +566,7 @@ expect_out "and is reported as NO-ASK" '^NO-ASK +a#10' "$TMP/cls-legacy-auth.jso
 # CONTROL: the same unclassed record WITH an ask conforms -- so case 32 is failing on the missing
 # ask rather than on being unclassed.
 cat >"$TMP/cls-legacy-auth-ok.json" <<'EOF'
-[{"repo":"a","number":11,"body":"**Blocker:** maintainer authority (Cloudflare account action) | last-verified 2026-09-01: not provisioned | asked push 2026-09-01"}]
+[{"repo":"a","number":11,"body":"**Blocker:** maintainer authority (Cloudflare account action) | last-verified 2026-09-01: not provisioned | asked pr 2026-09-01"}]
 EOF
 OUT="$("$CHECK" --input "$TMP/cls-legacy-auth-ok.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 0 ]; then ok "CONTROL: the same unclassed record with an ask conforms"; else bad "CONTROL: the same unclassed record with an ask conforms" "rc=$RC out=${OUT:0:200}"; fi
@@ -599,7 +603,7 @@ done
 # `today - ask` goes negative for a date after today, and a plain "older than the cadence" test
 # reads negative as fresh: an ask dated 2030-01-01 would bypass the re-raise cadence until 2030.
 cat >"$TMP/cls-auth-future.json" <<'EOF2'
-[{"repo":"a","number":15,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2030-01-01"}]
+[{"repo":"a","number":15,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2030-01-01"}]
 EOF2
 OUT="$("$CHECK" --input "$TMP/cls-auth-future.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 1 ]; then ok "an ask dated after today is a finding"; else bad "an ask dated after today is a finding" "rc=$RC out=${OUT:0:200}"; fi
@@ -607,7 +611,7 @@ if printf '%s\n' "$OUT" | grep -qE '^MALFORMED +a#15'; then ok "a future ask is 
 
 # BOUNDARY: an ask dated exactly today is not future and conforms.
 cat >"$TMP/cls-auth-today.json" <<'EOF2'
-[{"repo":"a","number":16,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-09-05"}]
+[{"repo":"a","number":16,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-09-05"}]
 EOF2
 OUT="$("$CHECK" --input "$TMP/cls-auth-today.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 0 ]; then ok "BOUNDARY: an ask dated today conforms"; else bad "BOUNDARY: an ask dated today conforms" "rc=$RC out=${OUT:0:200}"; fi
@@ -630,7 +634,7 @@ if [ "$RC" = 0 ]; then ok "CONTROL: --today on a real boundary date is accepted"
 # where bash's truncating division disagrees with the algorithm's floor division: 0000-02-29 and
 # 0000-03-01 collapse onto the same day count, and an ask dated AFTER today read as current.
 cat >"$TMP/year0.json" <<'EOF2'
-[{"repo":"p","number":60,"body":"**Blocker:** maintainer authority | authority | last-verified 0000-02-29: pending | asked push 0000-03-01"}]
+[{"repo":"p","number":60,"body":"**Blocker:** maintainer authority | authority | last-verified 0000-02-29: pending | asked pr 0000-03-01"}]
 EOF2
 OUT="$("$CHECK" --input "$TMP/year0.json" --today 0000-02-29 --ask-max-age-days 0 2>&1)"; RC=$?
 if [ "$RC" = 2 ]; then ok "--today in year zero is a usage error"; else bad "--today in year zero is a usage error" "rc=$RC out=${OUT:0:200}"; fi
@@ -639,7 +643,7 @@ OUT="$("$CHECK" --input "$TMP/year0.json" --today 2026-09-05 --ask-max-age-days 
 if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^MALFORMED +p#60'; then ok "a year-zero ask date is MALFORMED"; else bad "a year-zero ask date is MALFORMED" "rc=$RC out=${OUT:0:200}"; fi
 # CONTROL: year 1 is inside the domain and still evaluates normally.
 cat >"$TMP/year1.json" <<'EOF2'
-[{"repo":"p","number":61,"body":"**Blocker:** maintainer authority | authority | last-verified 0001-03-01: pending | asked push 0001-03-01"}]
+[{"repo":"p","number":61,"body":"**Blocker:** maintainer authority | authority | last-verified 0001-03-01: pending | asked pr 0001-03-01"}]
 EOF2
 OUT="$("$CHECK" --input "$TMP/year1.json" --today 0001-03-01 --ask-max-age-days 0 2>&1)"; RC=$?
 if [ "$RC" = 0 ]; then ok "CONTROL: year one is inside the domain and conforms"; else bad "CONTROL: year one is inside the domain and conforms" "rc=$RC out=${OUT:0:200}"; fi
@@ -648,7 +652,7 @@ if [ "$RC" = 0 ]; then ok "CONTROL: year one is inside the domain and conforms";
 # A digits-only check accepts a value past the 64-bit range; `[ a -gt b ]` then prints
 # `integer expression expected` and evaluates FALSE, so a stale ask reported CONFORMS.
 cat >"$TMP/stale-ask.json" <<'EOF2'
-[{"repo":"p","number":62,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-05: pending | asked push 2026-08-01"}]
+[{"repo":"p","number":62,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-05: pending | asked pr 2026-08-01"}]
 EOF2
 OUT="$("$CHECK" --input "$TMP/stale-ask.json" --today 2026-09-05 --ask-max-age-days 999999999999999999999999 2>&1)"; RC=$?
 if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q -- 'at most 9 digits'; then ok "an out-of-range cadence is a usage error"; else bad "an out-of-range cadence is a usage error" "rc=$RC out=${OUT:0:200}"; fi
@@ -681,22 +685,22 @@ if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#41' && ! printf 
 # ------------------------------------------------------------------ 41. trailing whitespace after the ask date is not a missing ask
 # Markdown's two-space hard break is ordinary; an end-anchored regex read it as NO-ASK and prompted a repeat ask.
 cat >"$TMP/ask-trailing-ws.json" <<'JSON'
-[{"repo":"a","number":42,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-09-01  "}]
+[{"repo":"a","number":42,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-09-01  "}]
 JSON
 OUT="$("$CHECK" --input "$TMP/ask-trailing-ws.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -qE '^CONFORMS +a#42'; then ok "trailing whitespace after the ask date still conforms"; else bad "trailing whitespace after the ask date still conforms" "rc=$RC out=${OUT:0:200}"; fi
 # CONTROL: trailing NON-whitespace after the date is still not an ask
 cat >"$TMP/ask-trailing-text.json" <<'JSON'
-[{"repo":"a","number":43,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-09-01 maybe"}]
+[{"repo":"a","number":43,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-09-01 maybe"}]
 JSON
 OUT="$("$CHECK" --input "$TMP/ask-trailing-text.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#43'; then ok "CONTROL: trailing text after the ask date is still NO-ASK"; else bad "CONTROL: trailing text after the ask date is still NO-ASK" "rc=$RC out=${OUT:0:200}"; fi
 
 # ------------------------------------------------------------------ 42. an EMPTY verification result is MALFORMED, ask or no ask
-# `last-verified <date>: | asked push <date>` let the structure regex read the ask suffix as the result,
+# `last-verified <date>: | asked pr <date>` let the structure regex read the ask suffix as the result,
 # so an authority record with a fresh ask and NO live verification evidence conformed.
 cat >"$TMP/empty-result-ask.json" <<'JSON'
-[{"repo":"a","number":44,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: | asked push 2026-09-01"}]
+[{"repo":"a","number":44,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: | asked pr 2026-09-01"}]
 JSON
 OUT="$("$CHECK" --input "$TMP/empty-result-ask.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^MALFORMED +a#44'; then ok "an authority record with an ask but no verification result is MALFORMED"; else bad "an authority record with an ask but no verification result is MALFORMED" "rc=$RC out=${OUT:0:200}"; fi
@@ -707,7 +711,7 @@ OUT="$("$CHECK" --input "$TMP/empty-result-upstream.json" 2>&1)"; RC=$?
 if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^MALFORMED +a#45'; then ok "an upstream record whose result is only whitespace is MALFORMED"; else bad "an upstream record whose result is only whitespace is MALFORMED" "rc=$RC out=${OUT:0:200}"; fi
 # CONTROL: a one-word result with the same ask suffix still conforms
 cat >"$TMP/short-result-ask.json" <<'JSON'
-[{"repo":"a","number":46,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: pending | asked push 2026-09-01"}]
+[{"repo":"a","number":46,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: pending | asked pr 2026-09-01"}]
 JSON
 OUT="$("$CHECK" --input "$TMP/short-result-ask.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -qE '^CONFORMS +a#46'; then ok "CONTROL: a real result with the same ask suffix conforms"; else bad "CONTROL: a real result with the same ask suffix conforms" "rc=$RC out=${OUT:0:200}"; fi
@@ -716,8 +720,25 @@ if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -qE '^CONFORMS +a#46'; then ok "
 # A caller following the built-in help must not be led to write a classless authority record, which
 # the legacy fallback reads as upstream and never asks for an ask.
 OUT="$("$CHECK" --help 2>&1)"; RC=$?
-if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '| <class> | last-verified' && printf '%s\n' "$OUT" | grep -q '| authority | last-verified <YYYY-MM-DD>: <result> | asked <push|slack|session> <YYYY-MM-DD>' && printf '%s\n' "$OUT" | grep -q -- '--ask-max-age-days <n>'; then ok "--help shows the class token, the authority ask suffix and the cadence option"; else bad "--help shows the class token, the authority ask suffix and the cadence option" "rc=$RC out=${OUT:0:300}"; fi
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '| <blocker-kind> | last-verified' && printf '%s\n' "$OUT" | grep -q '| authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session> <YYYY-MM-DD>' && printf '%s\n' "$OUT" | grep -q -- '--ask-max-age-days <n>'; then ok "--help shows the class token, the authority ask suffix and the cadence option"; else bad "--help shows the class token, the authority ask suffix and the cadence option" "rc=$RC out=${OUT:0:300}"; fi
 if ! printf '%s\n' "$OUT" | grep -q '^set -euo pipefail'; then ok "and --help stops before the code"; else bad "and --help stops before the code" "help leaked code"; fi
+
+# Current-head review regressions: exercise the public CLI with literal records.
+cat >"$TMP/authority-description.json" <<'JSON'
+[{"repo":"a","number":70,"body":"**Blocker:** Cloudflare account action | authority | last-verified 2026-09-01: pending | asked session 2026-09-01"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/authority-description.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "explicit authority accepts a descriptive account action"; else bad "explicit authority accepts a descriptive account action" "rc=$RC out=$OUT"; fi
+cat >"$TMP/duplicate-kind.json" <<'JSON'
+[{"repo":"a","number":71,"body":"**Blocker:** owner/repo#1 | authority | upstream | last-verified 2026-09-01: pending"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/duplicate-kind.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -q '^MALFORMED'; then ok "multiple blocker kinds cannot bypass the authority ask"; else bad "multiple blocker kinds cannot bypass the authority ask" "rc=$RC out=$OUT"; fi
+cat >"$TMP/pr-ask.json" <<'JSON'
+[{"repo":"a","number":72,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-01: outage-cause=credentials/auth; access is still missing | asked pr 2026-09-01"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/pr-ask.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "a draft PR ask and separate outage cause conform"; else bad "a draft PR ask and separate outage cause conform" "rc=$RC out=$OUT"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1

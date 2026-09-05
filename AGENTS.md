@@ -1185,7 +1185,7 @@ governs the issue work that follows.) Two rules enforce that:
    Give every externally-blocked issue a **structured blocker line** in its body (and keep the
    `blocked` label on) so the next tick retains the fully-qualified identity and last result without
    retaining a destination:
-   `**Blocker:** <identifier> | <cause-class> | last-verified <YYYY-MM-DD>: <result>`
+   `**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`
    Example: `**Blocker:** opencost/opencost#3710 | upstream | last-verified 2026-08-01: not shipped`.
    The reference is an identifier, not permission to inspect that repository. Independently choose an
    allowed source and re-check it on every run before using (b) to skip. If the dependency has shipped,
@@ -1193,8 +1193,12 @@ governs the issue work that follows.) Two rules enforce that:
    `last-verified` result. A missing, malformed, or merely prose "waiting on upstream" record is
    under-specified for (b) — repair the line and verify it (or unblock) rather than skipping.
 
-   🔴 **`<cause-class>` is exactly `upstream` or `authority`, and the difference decides whether
-   re-verification is sufficient or futile.** An **upstream** blocker clears itself when the
+   🔴 **`<blocker-kind>` is exactly `upstream` or `authority`, and the difference decides whether
+   re-verification is sufficient or futile.** This is separate from the provider-outage **cause
+   class** (`quota/billing`, `credentials/auth`, `runtime/config`, `unknown`). For an outage, put
+   `outage-cause=<cause-class>; <verification evidence>` in `<result>`; never use that class in
+   the blocker-kind field. An explicit `authority` identifier may describe the account action,
+   credential or permission in plain language. An **upstream** blocker clears itself when the
    dependency ships, so re-checking it every run is exactly right. An **authority** blocker — an
    account action, a provider credential, a permission only the maintainer can grant — clears *only
    when a person is asked*, so re-verification alone **guarantees it never clears**: the loop is
@@ -1207,7 +1211,9 @@ governs the issue work that follows.) Two rules enforce that:
 
    🔴 **An `authority` line MUST also record the ask: append `| asked <channel> <YYYY-MM-DD>`.**
    `<channel>` names where it actually landed — a channel that *reaches* him per *Maintainer
-   channels*, so `push`, `slack` or `session`, never `issue`: a GitHub comment is a durable
+   channels*: `pr` means a draft PR, `slack` the declared Slack channel, and `session` the native
+   ask tool in an interactive session. `push` and `issue` are not channel tokens: a GitHub comment
+   is a durable
    **record** of an ask and is explicitly **not** an attention channel, so a comment alone leaves
    the issue exactly as parked as silence. Re-raise on a cadence rather than every run; the ask
    goes stale after **14 days** by default. An authority line with no ask, or with a stale one, is
