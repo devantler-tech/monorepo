@@ -202,10 +202,11 @@ days_from_civil() { # YYYY-MM-DD -> days since 1970-01-01 on stdout
 # comments at all. The oldest had been open 54 days. Their blocker lines were all CONFORMING; the
 # check reported a clean sweep over them, because conformance was never the same thing as progress.
 #
-# The class is an EXPLICIT token rather than something sniffed out of the identifier. Inference
-# would fail open on exactly the case that matters: a blocker phrased "needs an account action" or
-# "requires provisioning" is authority-caused, reads as ordinary prose, and would silently escape
-# the ask requirement forever. A missing class is therefore a finding (LEGACY), never a pass.
+# The class is an EXPLICIT token, and the contract requires it, because inference fails open on
+# exactly the case that matters: a blocker phrased "needs an account action" or "requires
+# provisioning" is authority-caused, reads as ordinary prose, and escapes the ask requirement.
+# A record predating the field is still INFERRED rather than refused -- see classify_record for
+# why -- so the explicit token buys strictness that inference cannot, and always overrides it.
 CLASS_RE='^(upstream|authority)$'
 ASK_RE='\| asked ([A-Za-z0-9._-]+) ([0-9]{4}-[0-9]{2}-[0-9]{2})$'
 
@@ -234,8 +235,8 @@ line_conforms() { # <logical line>
 
 # Classify a structurally-conforming record. Sets VERDICT to one of:
 #
-#   CONFORMS   an upstream blocker, or an authority blocker with a fresh ask
-#   LEGACY     no class field -- predates this grammar, repair it
+#   CONFORMS   an upstream blocker, or an authority blocker with a fresh ask (LEGACY_NOTE=1 when
+#              the record predates the class field and the class had to be inferred)
 #   MALFORMED  a class token that is not one of the two, or a malformed ask
 #   NO-ASK     an authority blocker nobody has raised
 #   STALE-ASK  an authority blocker whose ask has gone quiet past the cadence
