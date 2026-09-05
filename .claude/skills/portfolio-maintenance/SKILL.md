@@ -464,7 +464,7 @@ stays private*) — and track it with a `last_host_audit` cursor like the other 
 *(Fallback: if you cannot spawn a subagent in this environment, run the same leaned survey inline —
 org-wide `gh search` first, deepen only the candidates — never the old per-repo `gh pr/issue list` loop.)*
 
-Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../products/platform/SKILL.md) ·
+Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../products/platform/SKILL.md) · [fleet-gitops](../products/fleet-gitops/SKILL.md) ·
 [monorepo + site](../products/monorepo/SKILL.md) · [templates](../products/templates/SKILL.md) ·
 [github-actions](../products/github-actions/SKILL.md) · [skills (+ plugins)](../products/agent-skills/SKILL.md) ·
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md) ·
