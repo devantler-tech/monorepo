@@ -20,6 +20,7 @@ keeping them healthy *and* moving them forward.
 | KSail (Go CLI) | `devantler-tech/ksail` | `applications/ksail` | [AGENTS.md](https://github.com/devantler-tech/ksail/blob/main/AGENTS.md) |
 | Data Product Controller | `devantler-tech/data-product-controller` | `applications/data-product-controller` | [AGENTS.md](https://github.com/devantler-tech/data-product-controller/blob/main/AGENTS.md) |
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | [AGENTS.md](https://github.com/devantler-tech/platform/blob/main/AGENTS.md) |
+| AWS config tenant | `devantler-tech/aws` | `applications/aws` | [AGENTS.md](https://github.com/devantler-tech/aws/blob/main/AGENTS.md) |
 | devantler.tech site | `devantler-tech/monorepo` | `docs/` + repo root | this file |
 | GitHub organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | [AGENTS.md](https://github.com/devantler-tech/.github/blob/main/AGENTS.md) |
 | Go template | `devantler-tech/go-template` | `templates/go-template` | [AGENTS.md](https://github.com/devantler-tech/go-template/blob/main/AGENTS.md) |
@@ -104,6 +105,7 @@ no row are filed on the **default intake repo** below.
 | Wedding app | THIS suite's existing deployed wedding website only — its guest pages, RSVPs, schedules, photos and practical info (not new wedding sites in general) | `devantler-tech/wedding-app` |
 | AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |
 | App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
+| AWS infrastructure | Changing THIS suite's deployed AWS resources — today the EKS-based CI cluster, and anything else the platform's AWS tenant reconciles through Crossplane (not AWS setups in general) | `devantler-tech/aws` |
 | KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
 | Data product controller | Creating, composing, publishing, and exploring reusable data products backed by new or existing data sources | `devantler-tech/data-product-controller` |
 | Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/actions` |
