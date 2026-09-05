@@ -19,11 +19,11 @@
 #        (`*.md`, `*.mdx`): `python`, `python3`, `python3.12`, `pip`, `pip3` or `pytest` in
 #        COMMAND POSITION. After `#` comments and quotes are stripped, a line is cut into
 #        command segments at `;`, `|`, `&`, `(`, a backtick, `{`, and at `-c` / `run:` (which
-#        open a nested command); in each segment the first token that is not a `VAR=` prefix, a
+#        open a nested command; YAML `shell:` selects one); in each segment the first token that is not a `VAR=` prefix, a
 #        `-flag`, or a command-wrapping word (`exec`, `xargs`, `env`, `sudo`, `time`, `command`,
 #        `nohup`, `if`/`then`/`else`/`do`/`while`/`until`/`!`) is the command. So
 #        `bash -c "python3 -m x"` and `FOO=1 python3 x` flag, while `echo "install python3"` and
-#        a YAML `name: Install python deps` do not.
+#        a YAML `name: Install python deps` do not. Executable paths are matched by basename.
 #        Two known limits of that heuristic, accepted for a ~150-line bash guard: a flag's
 #        ARGUMENT is read as the command (`sudo -u nobody pip3 …` reads `nobody`), and quotes
 #        are stripped before segmenting, so a quoted alternation such as
@@ -32,8 +32,9 @@
 #
 # THE CARVE-OUT (#2324) — recognised by INVOCATION, never by file extension
 #   An embedded interpreter that admits only Python is dictated by the host tool, not chosen by
-#   us: `blender --background --python bake.py`. A line carrying both `blender` and `--python`
-#   is skipped. A `.py` file still trips check 1 in THIS repository on purpose: the sanctioned
+#   us: `blender --background --python bake.py`. Here Blender is the command and `--python`
+#   is its argument; an unrelated Python command on that line is still checked. A `.py` file
+#   still trips check 1 in THIS repository on purpose: the sanctioned
 #   instance lives in a submodule (world-at-ruin), which this guard never scans.
 #
 # ALLOW-FILE MARKER
@@ -59,6 +60,14 @@ fi
 top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" ||
   { echo "python-ban-guard: not a git repository: $repo" >&2; exit 2; }
 
+# Keep NUL-delimited paths intact, and inspect the producer's exit status before scanning.
+tracked_paths="$(mktemp)" || { echo "python-ban-guard: cannot allocate tracked-file list" >&2; exit 2; }
+trap 'rm -f -- "$tracked_paths"' EXIT
+if ! git -C "$top" ls-files -z >"$tracked_paths"; then
+  echo "python-ban-guard: cannot enumerate tracked files in $top" >&2
+  exit 2
+fi
+
 rule='AGENTS.md → "Scripting stack — bash or Go, never Python": write it in bash (jq for data shaping) and migrate it to Go when it grows. The one carve-out is an embedded interpreter that admits only Python, recognised by its invocation (`blender --background --python …`), never by file extension. A file that is ABOUT the offending form may declare `python-ban-guard: allow-file — <reason>`.'
 
 findings=0
@@ -70,12 +79,16 @@ report() {
 # Print one `path:line: Python invocation `<hit>`` per offending line of $2 (displayed as $1).
 scan_invocations() {
   awk -v path="$1" -v sq="'" '
+    function executable_name(token) {
+      sub(/^.*\//, "", token)
+      return token
+    }
     # Index of the first token from `from` that is a command: not empty, not a -flag, not a
     # VAR= prefix, not a wrapping word. Returns n + 1 when the segment has none.
     function first_command(tok, from, n,    i, t) {
       for (i = from; i <= n; i++) {
         t = tok[i]
-        if (t == "" || t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || index(wrappers, " " t " ") > 0) continue
+        if (t == "" || t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || index(wrappers, " " executable_name(t) " ") > 0) continue
         return i
       }
       return n + 1
@@ -91,26 +104,25 @@ scan_invocations() {
       # A `#` at line start or after whitespace opens a comment: a commented-out or
       # merely-mentioned invocation is not an executable one.
       if (match(line, /(^|[[:space:]])#/)) line = substr(line, 1, RSTART - 1)
-      # The embedded-interpreter carve-out, keyed on the invocation shape.
-      if (line ~ /(^|[^[:alnum:]_.-])blender([[:space:]]|$)/ && line ~ /--python([[:space:]=]|$)/) next
       # Quotes do not hide an invocation: `bash -c "python3 …"` still runs it.
       gsub(/"/, " ", line)
       gsub(sq, " ", line)
       # A YAML `run:` opens a command: cut a new segment there.
       gsub(/(^|[[:space:]])run:([[:space:]]|$)/, " ; ", line)
+      if (path ~ /\.ya?ml$/) gsub(/(^|[[:space:]])shell:([[:space:]]|$)/, " ; ", line)
       nseg = split(line, seg, /[;|&(`{]+/)
       for (s = 1; s <= nseg; s++) {
         n = split(seg[s], tok, /[[:space:]]+/)
         i = first_command(tok, 1, n)
         # A shell given -c runs the string after it: the command is what follows the -c.
-        while (i <= n && tok[i] ~ /^(bash|sh|zsh|dash|ksh)$/) {
+        while (i <= n && executable_name(tok[i]) ~ /^(bash|sh|zsh|dash|ksh)$/) {
           k = 0
           for (j = i + 1; j <= n; j++) if (tok[j] == "-c") { k = j; break }
           if (k == 0) break
           i = first_command(tok, k + 1, n)
         }
         if (i > n) continue
-        if (tok[i] ~ interp) {
+        if (executable_name(tok[i]) ~ interp) {
           # Name the interpreter and its first argument, so the reader sees the form at a glance.
           hit = tok[i]
           if (i < n && tok[i + 1] != "") hit = hit " " tok[i + 1]
@@ -147,7 +159,7 @@ while IFS= read -r -d '' path; do
       report "$hit"
     done <<<"$hits"
   fi
-done < <(git -C "$top" ls-files -z)
+done <"$tracked_paths"
 
 if [ "$findings" -gt 0 ]; then
   printf 'python-ban-guard: %d finding(s) in %s\n%s\n' "$findings" "$top" "$rule" >&2

@@ -8,14 +8,13 @@
 # fixture depended on that pattern rather than on some other path through the script.
 #
 # Fixtures are throwaway git repositories under mktemp: the guard scans TRACKED files, so each
-# fixture stages what it wants seen. The only repository file read is the guard itself, plus the
-# real tree once, as the positive control the issue demands ("passes on the current tree").
+# fixture stages what it wants seen. The repository-wide sweep is a separate CI step behind
+# ENFORCE_PYTHON_BAN_GUARD; running it here would silently enforce the rule even with that flag off.
 #
 # python-ban-guard: allow-file — this file quotes every Python shape the guard rejects as fixture text.
 set -Eeuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$here/../.." && pwd)"
 guard="$here/python-ban-guard.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -68,9 +67,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Positive control: the real tree is clean, and the guard says so.
-run "$repo_root"
-report "positive control: the repository's current tree passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+# 1. Positive control: a tracked bash script is clean.
+r="$(mkrepo clean-bash)"; addf "$r" tools/check.sh '#!/usr/bin/env bash' 'echo safe'
+run "$r"
+report "positive control: a tracked bash script passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
 # 2. A tracked Python source file, by extension and by shebang.
@@ -110,6 +110,16 @@ r="$(mkrepo blender)"; addf "$r" tools/bake.sh '#!/usr/bin/env bash' 'blender --
 run "$r"
 report "carve-out: blender --background --python passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
+r="$(mkrepo blender-followed-by-python)"; addf "$r" tools/bake.sh 'blender --background --python tools/bake.py; python3 tools/check.py'
+run "$r"
+report "a blender invocation does not exempt a later Python command" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo blender-mentioned-after-python)"; addf "$r" tools/bake.sh 'python3 tools/check.py; echo blender --python'
+run "$r"
+report "mentioning blender as data does not exempt an earlier Python command" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
 r="$(mkrepo blender-control)"; addf "$r" tools/bake.sh '#!/usr/bin/env bash' 'python tools/bake.py -- "$@"'
 run "$r"
 report "control: the same line without blender is a plain python invocation and flags" \
@@ -147,6 +157,25 @@ report "flags pip and pytest in a workflow step" \
 r="$(mkrepo quoted)"; addf "$r" tools/q.sh '#!/usr/bin/env bash' 'bash -c "python3 -m http.server 8000"'
 run "$r"
 report "a quoted invocation still flags" "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 -m`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo absolute-interpreter)"; addf "$r" tools/check.sh '/usr/bin/python3 tools/check.py' './venv/bin/pip install example'
+run "$r"
+report "interpreter executable paths do not hide Python or pip" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation `/usr/bin/python3 tools/check.py`'* && "$out" == *'Python invocation `./venv/bin/pip install`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo absolute-shell)"; addf "$r" tools/check.sh '/usr/bin/env /bin/bash -c "python3 tools/check.py"'
+run "$r"
+report "absolute wrapper and shell paths do not hide a nested Python invocation" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo python-shell)"; addf "$r" .github/workflows/ci.yaml 'steps:' '  - shell: python' '    run: placeholder' "  - shell: '/usr/bin/python3 {0}'" '    run: placeholder'
+run "$r"
+report "a workflow Python shell selector is an invocation" \
+  "$([[ $rc -eq 1 && "$out" == *'ci.yaml:2: Python invocation `python`'* && "$out" == *'ci.yaml:4: Python invocation `/usr/bin/python3'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo bash-shell)"; addf "$r" .github/workflows/ci.yaml 'steps:' '  - shell: bash' '    run: echo safe'
+run "$r"
+report "control: a workflow bash shell selector passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 r="$(mkrepo piped)"; addf "$r" tools/p.sh '#!/usr/bin/env bash' 'cat data | python3.12 - >out'
 run "$r"
@@ -204,6 +233,11 @@ report "control: prose that mentions a bare marker is never a finding" "$([[ $rc
 # 8. Usage and non-repository input fail closed with exit 2.
 run "$tmp/not-a-repo-$$"
 report "a directory that is not a git repository exits 2" "$([[ $rc -eq 2 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo unreadable-index)"; addf "$r" tools/check.sh 'echo safe'
+GIT_INDEX_FILE="$tmp" run "$r"
+report "failed tracked-file enumeration exits 2 instead of reporting clean" \
+  "$([[ $rc -eq 2 && "$out" != *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
 # 9. Ablation: neutralise the invocation pattern in a COPY of the guard and show the

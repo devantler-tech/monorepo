@@ -953,7 +953,7 @@ jobs:
           persist-credentials: false
       # The self-test covers each Python shape the guard must catch, each safe
       # shape it must leave alone (prose, comments, the blender carve-out, the
-      # allow-file marker), the current tree as a positive control, and an
+      # allow-file marker), a clean fixture as a positive control, and an
       # ablation proving the flagged fixture depends on the invocation pattern.
       - name: Self-test the guard
         run: bash .claude/scripts/python-ban-guard.test.sh
