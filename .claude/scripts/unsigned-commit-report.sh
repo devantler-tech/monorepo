@@ -132,13 +132,20 @@ elif [ -n "$PR" ]; then
 else
   # Measurement mode. One search per lane keeps the query agent-constructed and the branch
   # attribution exact; `--limit` is explicit because gh defaults to 30 and would silently truncate.
+  # The cap is still a cap: a lane with MORE merged PRs than it in the window would be analysed
+  # only in part while the summary read as a complete sweep, so reaching it is UNKNOWN, never a
+  # smaller number presented as the whole -- narrow `--merged-since` or `--lanes` and re-run.
+  LANE_PR_LIMIT=1000
   prs=""
   IFS=, read -r -a lane_list <<<"$LANES"
   for l in "${lane_list[@]}"; do
     [ -n "$l" ] || continue
-    chunk="$(gh pr list --repo "$REPO" --state merged --limit 1000 --search "merged:>=$SINCE head:$l/" \
+    chunk="$(gh pr list --repo "$REPO" --state merged --limit "$LANE_PR_LIMIT" --search "merged:>=$SINCE head:$l/" \
       --json number,headRefName --jq '.[] | [.number, .headRefName] | @tsv')" \
       || die "could not list merged $l/* PRs in $REPO -- UNKNOWN"
+    lane_count="$(printf '%s' "$chunk" | grep -c .)" || true
+    [ "$lane_count" -lt "$LANE_PR_LIMIT" ] \
+      || die "lane $l/* has $lane_count merged PRs since $SINCE, at the $LANE_PR_LIMIT-PR cap: the sweep would be TRUNCATED -- UNKNOWN; narrow --merged-since or --lanes"
     prs="${prs}${chunk}"$'\n'
   done
   count=0
