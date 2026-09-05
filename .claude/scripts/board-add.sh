@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# board-add.sh — put an issue on the 🌊 Project Board *with* a Status, atomically.
+# board-add.sh — ensure an issue is on the 🌊 Project Board with a Status.
 #
 # WHY THIS EXISTS
 #   `gh project item-add` has no Status option, so adding an issue to the board is
@@ -17,16 +17,17 @@
 #   .claude/scripts/board-add.sh https://github.com/devantler-tech/ksail/issues/42
 #   .claude/scripts/board-add.sh <issue-url> "🫴 Ready"
 #
-#   Default status is "📥 Backlog" — the contract's landing column for new work.
+#   With no status argument, preserve an existing Status and use "📥 Backlog"
+#   only for a card with no Status. An explicit status deliberately updates it.
 #
 # EXIT CODES
-#   0  item is on the board and carries the requested Status (verified by read-back)
+#   0  item has a Status; an explicit change is verified by read-back
 #   1  usage error
 #   2  add or set failed, or the read-back did not show the requested Status
 #
 # NOTES
-#   - Idempotent: an issue already on the board is not duplicated; its Status is
-#     set (or corrected) and verified all the same.
+#   - Idempotent: an issue already on the board is not duplicated. A membership
+#     sweep leaves its Status untouched; explicit status changes are verified.
 #   - PRIVATE REPOS: project 5 is PUBLIC. Adding an item from a private repo is a
 #     maintainer decision, never an agent default — this script refuses one.
 #   - Serialized on purpose: GitHub's secondary limits allow ~80 content-generating
@@ -154,24 +155,26 @@ readonly STATE_ITEM_ON_BOARD="The item is ON THE BOARD, but its Status was NOT w
           existing item for an issue that was already there, so this cannot tell a
           fresh add from a no-op: the Status is either unset (new item) or still its
           previous value (already present). Re-run this script on the same URL after
-          the reset to set it — but look at the card first, because the re-run
-          OVERWRITES whatever Status it currently has."
+          the reset; the default preserves an existing Status. An explicit status
+          argument OVERWRITES whatever Status it currently has."
 
 usage() {
   cat >&2 <<EOF
 usage: board-add.sh <issue-url> [status-name]
 
   <issue-url>    full https://github.com/<owner>/<repo>/issues/<n> URL
-  [status-name]  board Status, default "${DEFAULT_STATUS}"
+  [status-name]  explicitly set Status; omitted preserves it, or uses "${DEFAULT_STATUS}" if unset
 
 Statuses: ${STATUS_LADDER}
 EOF
   exit 1
 }
 
-[ $# -ge 1 ] || usage
+[ $# -ge 1 ] && [ $# -le 2 ] || usage
 ISSUE_URL="$1"
-STATUS_NAME="${2:-$DEFAULT_STATUS}"
+STATUS_NAME="${2-$DEFAULT_STATUS}"
+EXPLICIT_STATUS=false
+[ $# -eq 2 ] && EXPLICIT_STATUS=true
 
 case "$ISSUE_URL" in
   https://github.com/*/*/issues/*) : ;;
@@ -183,6 +186,8 @@ _path="${ISSUE_URL#https://github.com/}"
 REPO_OWNER="${_path%%/*}"
 _rest="${_path#*/}"
 REPO_NAME="${_rest%%/*}"
+ISSUE_NUMBER="${_rest#*/issues/}"
+case "$ISSUE_NUMBER" in ''|*[!0-9]*) die "not an issue URL: ${ISSUE_URL}" 1 ;; esac
 
 command -v gh >/dev/null 2>&1 || die "gh CLI not found"
 command -v jq >/dev/null 2>&1 || die "jq not found"
@@ -228,6 +233,60 @@ PROJECT_ID=$(gh project view "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format
                        "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER} (auth, network, or scope)"
 [ -n "$PROJECT_ID" ] || die "could not resolve project ${PROJECT_OWNER}/${PROJECT_NUMBER}"
 
+# Read membership from the issue, never by walking the board. Absence requires
+# every page, while a hit must match the project ID (numbers are owner-local).
+ITEM_ID=""
+CURRENT_STATUS=""
+AFTER=""
+while :; do
+  CURSOR_ARGS=(-F after=null)
+  [ -z "$AFTER" ] || CURSOR_ARGS=(-f "after=$AFTER")
+  # GraphQL variables belong to the query, not the shell.
+  # shellcheck disable=SC2016
+  PAGE=$(gh api graphql -f owner="$REPO_OWNER" -f repo="$REPO_NAME" \
+    -F number="$ISSUE_NUMBER" "${CURSOR_ARGS[@]}" -f query='
+    query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+      repository(owner: $owner, name: $repo) {
+        issue(number: $number) {
+          projectItems(first: 100, after: $after, includeArchived: false) {
+            nodes { id project { id } fieldValueByName(name: "Status") {
+              ... on ProjectV2ItemFieldSingleSelectValue { name }
+            } }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }' 2>"$GH_ERR") || die_gh graphql "could not read project membership for ${ISSUE_URL}" \
+      "$STATE_NOTHING_WRITTEN" "could not read project membership; refusing before any write"
+  if ! printf '%s' "$PAGE" | jq -e '
+    (.errors // [] | length) == 0 and
+    (.data.repository.issue.projectItems | .nodes | type == "array") and
+    (.data.repository.issue.projectItems.pageInfo.hasNextPage | type == "boolean") and
+    all(.data.repository.issue.projectItems.nodes[];
+      (.id | type == "string" and length > 0) and
+      (.project.id | type == "string" and length > 0) and
+      has("fieldValueByName") and
+      (.fieldValueByName == null or (.fieldValueByName.name | type == "string" and length > 0)))' >/dev/null; then
+    die "invalid project membership response; refusing before any write"
+  fi
+  EXISTING=$(printf '%s' "$PAGE" | jq -c --arg project "$PROJECT_ID" \
+    '.data.repository.issue.projectItems.nodes[] | select(.project.id == $project)')
+  if [ -n "$EXISTING" ]; then
+    ITEM_ID=$(printf '%s' "$EXISTING" | jq -r '.id')
+    CURRENT_STATUS=$(printf '%s' "$EXISTING" | jq -r '.fieldValueByName.name // empty')
+    break
+  fi
+  [ "$(printf '%s' "$PAGE" | jq -r '.data.repository.issue.projectItems.pageInfo.hasNextPage')" = true ] || break
+  NEXT=$(printf '%s' "$PAGE" | jq -r '.data.repository.issue.projectItems.pageInfo.endCursor // empty')
+  [ -n "$NEXT" ] && [ "$NEXT" != "$AFTER" ] || die "invalid project membership cursor; refusing before any write"
+  AFTER="$NEXT"
+done
+
+if [ "$EXPLICIT_STATUS" = false ] && [ -n "$CURRENT_STATUS" ]; then
+  printf 'board-add: %s already-present (status untouched) (item %s) [verified]\n' "$ISSUE_URL" "$ITEM_ID"
+  exit 0
+fi
+
 FIELD_JSON=$(gh project field-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
                --limit "$FIELD_PAGE_LIMIT" --format json 2>"$GH_ERR" \
              | jq -r '.fields[] | select(.name=="Status")') \
@@ -254,12 +313,44 @@ fi
 
 # Add. `item-add` is idempotent server-side (an existing item is returned, not
 # duplicated), and prints nothing useful off-TTY, so ask for the id explicitly.
-ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
+OUTCOME="already-present (status set)"
+if [ -z "$ITEM_ID" ]; then
+  ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
             --url "$ISSUE_URL" --format json 2>"$GH_ERR" | jq -r '.id // empty') \
             || die_gh graphql "item-add failed for ${ISSUE_URL}" \
                       "$STATE_NOTHING_WRITTEN" \
                       "item-add failed for ${ISSUE_URL} (auth, network, or scope)"
 [ -n "$ITEM_ID" ] || die "item-add returned no item id for ${ISSUE_URL}"
+  OUTCOME="added (absent at lookup)"
+fi
+
+# item-add can return a card created by another writer after the lookup. Read
+# its Status before applying the default, so a concurrent add is not flattened.
+if [ "$EXPLICIT_STATUS" = false ]; then
+  # shellcheck disable=SC2016
+  ADDED_JSON=$(gh api graphql -f id="$ITEM_ID" -f query='
+    query AddedStatus($id: ID!) {
+      node(id: $id) { ... on ProjectV2Item { id
+        fieldValueByName(name: "Status") {
+          ... on ProjectV2ItemFieldSingleSelectValue { name }
+        }
+      } }
+    }' 2>"$GH_ERR") ||
+      die_gh graphql "could not read the existing Status for ${ISSUE_URL}" "$STATE_ITEM_ON_BOARD" \
+        "could not read the existing Status; item is on the board, no Status was written"
+  if ! printf '%s' "$ADDED_JSON" | jq -e --arg id "$ITEM_ID" '
+    (.errors // [] | length) == 0 and (.data.node.id == $id) and
+    (.data.node | has("fieldValueByName")) and
+    (.data.node.fieldValueByName == null or
+      (.data.node.fieldValueByName.name | type == "string" and length > 0))' >/dev/null; then
+    die "invalid existing Status response; no Status was written"
+  fi
+  ADDED_STATUS=$(printf '%s' "$ADDED_JSON" | jq -r '.data.node.fieldValueByName.name // empty')
+  if [ -n "$ADDED_STATUS" ]; then
+    printf 'board-add: %s already-present (status untouched) (item %s) [verified]\n' "$ISSUE_URL" "$ITEM_ID"
+    exit 0
+  fi
+fi
 
 # DELIBERATELY NO ROLLBACK-BY-DELETE. An earlier revision deleted the item when
 # the Status could not be set, which looks tidier but is strictly worse: telling
@@ -268,9 +359,9 @@ ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
 # misreadings ends in DELETING a board card the maintainer already had. That
 # trades a recoverable failure for a destructive one.
 #
-# The failure left behind here is recoverable instead: the item is on the board
-# with its Status unwritten, and re-running this script on the same URL sets it
-# (item-add is idempotent). So we fail loudly and tell the caller what is true.
+# Failure leaves the item on the board with its Status unwritten. A default
+# retry preserves a populated Status and fills an unset one; an explicit retry
+# deliberately sets it. No card is deleted to recover from a failed field write.
 if ! gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" \
         --field-id "$FIELD_ID" --single-select-option-id "$OPTION_ID" >/dev/null 2>"$GH_ERR"; then
   # item-add has ALREADY succeeded here, so "nothing was written" would be false.
@@ -281,8 +372,8 @@ if ! gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" \
          "could not set the Status for ${ISSUE_URL} (item ${ITEM_ID}).
           The item is on the board and its Status was not written — it is either
           unset, or unchanged if the issue was already there.
-          To set it, re-run this script on the same URL — but look at the card
-          first, because that OVERWRITES whatever Status it currently has."
+          To set it, re-run this script on the same URL. The default preserves a
+          Status; an explicit status argument OVERWRITES whatever it currently has."
 fi
 
 # VERIFY BY READ-BACK — the whole point of the script. An exit-0 from item-edit is
@@ -298,6 +389,7 @@ fi
 # statement of fact about a board it had not managed to read. Under a rate limit
 # that is exactly what happened, and it is the most misleading of the five sites:
 # the other four report a failure, this one reported a wrong answer.
+# shellcheck disable=SC2016
 if ! ACTUAL=$(gh api graphql -f id="$ITEM_ID" -f query='
   query($id: ID!) {
     node(id: $id) {
@@ -315,22 +407,21 @@ if ! ACTUAL=$(gh api graphql -f id="$ITEM_ID" -f query='
   # ("the Status write already succeeded … most likely set"). The contract stated
   # at the top of this read-back is the whole reason it exists: an exit-0 from
   # item-edit is NOT evidence the value landed. Once the read is what failed, the
-  # final state is genuinely unknown — so report the write as UNVERIFIED, and warn
-  # about the overwrite, because the repair instruction is "re-run" and a re-run
-  # writes the DEFAULT status over whatever is actually there (monorepo#2506).
+  # final state is unknown. Report UNVERIFIED and distinguish a preserving default
+  # retry from an explicit status update.
   die_gh graphql "could not read the Status back for ${ISSUE_URL} (item ${ITEM_ID})" \
          "The item is on the board. The Status write command returned success, but
           that is not evidence it persisted — only this read-back establishes that,
           and the read-back is what failed. The Status is therefore UNVERIFIED: it
           may or may not be set. To confirm it, re-run this script on the same URL
-          after the reset — but look at the card first, because that OVERWRITES
-          whatever Status it currently has." \
+          after the reset. The default preserves a Status; an explicit status
+          argument OVERWRITES whatever Status it currently has." \
          "could not read the Status back for ${ISSUE_URL} (item ${ITEM_ID}) (auth, network, or scope).
           This is a failed VERIFICATION rather than a failed write — but the write is
           not confirmed either: the command returned success, and only this read-back
           could establish that it persisted. The Status is UNVERIFIED. To confirm it,
-          re-run this script on the same URL — but look at the card first, because
-          that OVERWRITES whatever Status it currently has."
+          re-run this script on the same URL. The default preserves a Status;
+          an explicit status argument OVERWRITES whatever it currently has."
 fi
 
 if [ "$ACTUAL" != "$STATUS_NAME" ]; then
@@ -344,4 +435,4 @@ if [ "$ACTUAL" != "$STATUS_NAME" ]; then
           value is not printed here because board text is not trusted input)."
 fi
 
-printf 'board-add: %s → %s (item %s) [verified]\n' "$ISSUE_URL" "$STATUS_NAME" "$ITEM_ID"
+printf 'board-add: %s %s → %s (item %s) [verified]\n' "$ISSUE_URL" "$OUTCOME" "$STATUS_NAME" "$ITEM_ID"

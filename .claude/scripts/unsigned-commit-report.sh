@@ -191,6 +191,11 @@ else
       --json number,headRefName,author,headRepositoryOwner \
       --jq '.[] | [.number, .headRefName, (.author.login // ""), (.headRepositoryOwner.login // "")] | @tsv')" \
       || die "could not list merged $l/* PRs in $REPO -- UNKNOWN"
+    # Foreign-provenance results consume the same search limit. Check the raw listing before
+    # filtering, or a capped search with even one foreign result could look complete.
+    lane_count="$(printf '%s' "$chunk" | grep -c .)" || true
+    [ "$lane_count" -lt "$LANE_PR_LIMIT" ] \
+      || die "lane $l/* has $lane_count merged PRs since $SINCE, at the $LANE_PR_LIMIT-PR cap: the sweep would be TRUNCATED -- UNKNOWN; narrow --merged-since or --lanes"
     # `head:<lane>/` matches branch NAMES, and names are not owned across forks: a stranger's `claude/x`
     # on a fork is not lane work. Provenance is the lane's exact writer identity on a head that lives in
     # this repository's own owner; anything else is counted `foreign=` and never examined.
@@ -204,9 +209,6 @@ else
       fi
     done <<<"$chunk"
     chunk="$own"
-    lane_count="$(printf '%s' "$chunk" | grep -c .)" || true
-    [ "$lane_count" -lt "$LANE_PR_LIMIT" ] \
-      || die "lane $l/* has $lane_count merged PRs since $SINCE, at the $LANE_PR_LIMIT-PR cap: the sweep would be TRUNCATED -- UNKNOWN; narrow --merged-since or --lanes"
     prs="${prs}${chunk}"$'\n'
   done
   count=0

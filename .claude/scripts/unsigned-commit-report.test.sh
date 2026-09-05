@@ -108,7 +108,7 @@ case "$*" in
   *"pr list"*)
     i=0; while [ "$i" -lt "${FAKE_PRS:-0}" ]; do i=$((i + 1)); printf '%s\tclaude/x-%s\tdevantler\to\n' "$i" "$i"; done
     # a fork PR whose branch merely LOOKS like lane work: wrong author, wrong head-repository owner
-    [ -z "${FAKE_FOREIGN:-}" ] || printf '99\tclaude/x-99\tstranger\tforkowner\n' ;;
+    i=0; while [ "$i" -lt "${FAKE_FOREIGN:-0}" ]; do i=$((i + 1)); printf '%s\tclaude/foreign-%s\tstranger\tforkowner\n' "$((10000 + i))" "$i"; done ;;
   *"/commits"*)
     jq -n --argjson n "${FAKE_COMMITS:-0}" '[range($n) | {sha: ("c" + tostring), commit: {verification: {verified: true, reason: "valid"}}}]' ;;
   *) echo "stub gh: unexpected call: $*" >&2; exit 99 ;;
@@ -122,6 +122,12 @@ OUT="$(stub 3 249 --pr 7 --repo o/r --head-ref claude/x-7)"; RC=$?
 if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=249 signed=249'; then ok "CONTROL: one below the commit cap reports the full set"; else bad "CONTROL: one below the commit cap reports the full set" "rc=$RC out=${OUT:0:200}"; fi
 OUT="$(stub 1000 1 --repo o/r --merged-since 2026-09-01)"; RC=$?
 if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'at the 1000-PR cap'; then ok "a lane at the merged-PR cap is UNKNOWN, not a partial sweep"; else bad "a lane at the merged-PR cap is UNKNOWN, not a partial sweep" "rc=$RC out=${OUT:0:200}"; fi
+# Foreign results consume the same search limit as lane-owned PRs. Filtering them first must not
+# hide a truncated listing: one own plus 999 foreign results still reaches the 1000-result cap.
+OUT="$(FAKE_FOREIGN=999 stub 1 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
+if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'at the 1000-PR cap'; then ok "foreign results count toward the merged-PR completeness cap"; else bad "foreign results count toward the merged-PR completeness cap" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(FAKE_FOREIGN=998 stub 1 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=2 signed=2 .* prs=1 foreign=998 '; then ok "CONTROL: mixed provenance below the listing cap remains complete"; else bad "CONTROL: mixed provenance below the listing cap remains complete" "rc=$RC out=${OUT:0:200}"; fi
 OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
 if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=6 signed=6 .* prs=3 foreign=0 lanes=claude lane=sweep$'; then ok "CONTROL: a lane below the cap sweeps every PR"; else bad "CONTROL: a lane below the cap sweeps every PR" "rc=$RC out=${OUT:0:200}"; fi
 OUT="$(stub 0 0 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
@@ -160,7 +166,7 @@ expect_out "CONTROL: one below the cap reports the full set" '^examined=249 sign
 # `head:claude/` matches branch NAMES across forks; a stranger's `claude/x` would be counted as Claude-lane
 # work and corrupt the incidence. Provenance is the exact writer identity plus the base repository owner.
 OUT="$(FAKE_FOREIGN=1 stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
-if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=6 signed=6 .* prs=3 foreign=1 lanes=claude lane=sweep$' && ! printf '%s\n' "$OUT" | grep -q '^T  o/r#99 '; then ok "a foreign-provenance PR is excluded from the sweep and counted as foreign=1"; else bad "a foreign-provenance PR is excluded from the sweep and counted as foreign=1" "rc=$RC out=${OUT:0:300}"; fi
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=6 signed=6 .* prs=3 foreign=1 lanes=claude lane=sweep$' && ! printf '%s\n' "$OUT" | grep -q '^T  o/r#10001 '; then ok "a foreign-provenance PR is excluded from the sweep and counted as foreign=1"; else bad "a foreign-provenance PR is excluded from the sweep and counted as foreign=1" "rc=$RC out=${OUT:0:300}"; fi
 # CONTROL: without the foreign row the same sweep reports foreign=0
 OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
 if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q ' prs=3 foreign=0 '; then ok "CONTROL: an all-own sweep reports foreign=0"; else bad "CONTROL: an all-own sweep reports foreign=0" "rc=$RC out=${OUT:0:200}"; fi
