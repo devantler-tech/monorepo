@@ -94,10 +94,12 @@ lane_of() { # <ref>
   case ",$LANES," in *",$l,"*) printf '%s' "$l" ;; *) printf 'none' ;; esac
 }
 
-# `verification.reason` -> class letter. Anything this table does not name is class E: a reason
-# the report has not seen is still "GitHub could not verify it", never a pass.
-class_of() { # <verified true|false> <reason>
-  case "$2" in
+# `verification.reason` -> class letter. Only the reason is consulted: GitHub sets `verified`
+# true exactly when the reason is `valid`, and the reason is what a future gate would key on.
+# Anything this table does not name is class E: a reason the report has not seen is still
+# "GitHub could not verify it", never a pass.
+class_of() { # <reason>
+  case "$1" in
     valid) printf 'G' ;;
     unsigned) printf 'N' ;;
     invalid | malformed_signature | bad_cert | unknown_signature_type | malformed_ssh_signature) printf 'B' ;;
@@ -124,7 +126,7 @@ if [ -n "$INPUT" ]; then
     || die "could not parse payload -- UNKNOWN"
 elif [ -n "$PR" ]; then
   if [ -z "$HEAD_REF" ]; then
-    HEAD_REF="$(gh api "repos/$REPO/pulls/$PR" --jq '.head.ref' 2>/dev/null)" || die "could not read $REPO#$PR head ref -- UNKNOWN"
+    HEAD_REF="$(gh api "repos/$REPO/pulls/$PR" --jq '.head.ref')" || die "could not read $REPO#$PR head ref -- UNKNOWN"
   fi
   rows="$(acquire_pr_commits "$REPO" "$PR" "$HEAD_REF")" || die "could not read $REPO#$PR commits -- UNKNOWN"
 else
@@ -135,7 +137,7 @@ else
   for l in "${lane_list[@]}"; do
     [ -n "$l" ] || continue
     chunk="$(gh pr list --repo "$REPO" --state merged --limit 1000 --search "merged:>=$SINCE head:$l/" \
-      --json number,headRefName --jq '.[] | [.number, .headRefName] | @tsv' 2>/dev/null)" \
+      --json number,headRefName --jq '.[] | [.number, .headRefName] | @tsv')" \
       || die "could not list merged $l/* PRs in $REPO -- UNKNOWN"
     prs="${prs}${chunk}"$'\n'
   done
@@ -152,12 +154,10 @@ fi
 # ---------------------------------------------------------------- classify and report
 examined=0; g=0; n=0; b=0; e=0
 findings=""
-while IFS=$'\t' read -r sha verified reason branch; do
+while IFS=$'\t' read -r sha _ reason branch; do
   [ -n "$sha" ] || continue
   examined=$((examined + 1))
-  cls="$(class_of "$verified" "$reason")"
-  # A `verified: true` with a non-`valid` reason cannot happen on GitHub's side today; if it ever
-  # does, the reason wins, because the class is what a future gate would key on.
+  cls="$(class_of "$reason")"
   case "$cls" in
     G) g=$((g + 1)); continue ;;
     N) n=$((n + 1)) ;;
