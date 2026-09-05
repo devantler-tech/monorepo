@@ -4,9 +4,15 @@
 # WHY THIS EXISTS. `AGENTS.md` (*Issue-driven -> Drain oldest-first*, skip clause (b)) permits an
 # older issue to be passed over only for a NAMED, LIVE-VERIFIED external dependency, recorded as:
 #
-#     **Blocker:** <owner/repo#N-or-release-id> | last-verified <YYYY-MM-DD>: <result>
+#     **Blocker:** <owner/repo#N-or-release-id> | <class> | last-verified <YYYY-MM-DD>: <result>
 #
-# and it is explicit that "a missing, malformed, or merely prose 'waiting on upstream' record is
+# where <class> is `upstream` (clears when the dependency ships; re-verify every run) or
+# `authority` (clears only when a person acts, so it MUST also carry an ask record):
+#
+#     **Blocker:** <what only the maintainer can do> | authority | last-verified <YYYY-MM-DD>: <result> | asked <push|slack|session> <YYYY-MM-DD>
+#
+# A record with no class is legacy: it is read as `upstream` unless its identifier literally
+# names `maintainer authority`. New records always state the class. `AGENTS.md` is explicit that "a missing, malformed, or merely prose 'waiting on upstream' record is
 # under-specified for (b) -- repair the line and verify it (or unblock) rather than skipping."
 #
 # In practice the LABEL alone is what runs act on, and nothing couples the label to the line. That
@@ -30,7 +36,8 @@
 #
 # Exit codes:
 #   0  every considered issue carries a conforming line
-#   1  at least one issue does not (missing or malformed) -- each is listed with which it is
+#   1  at least one issue does not -- each is listed with its verdict: MISSING, MALFORMED,
+#      NO-ASK (an authority record with no ask), or STALE-ASK (an ask older than the cadence)
 #   2  UNKNOWN -- the check could not verify what it claims to verify (bad usage, a failed or
 #      truncated forge read, an unreadable payload). UNKNOWN is NEVER "everything is fine":
 #      an empty listing is a claim about the QUERY, never about the world.
@@ -39,6 +46,11 @@
 #   --org <org>            enumerate open `blocked`-labelled issues across the org via `gh`
 #   --input <file>|-       a pre-assembled JSON array of {repo, number, body}, for hermetic tests
 #                          and for callers that already hold the bodies.
+#
+# Options:
+#   --today <YYYY-MM-DD>       the clock for ask-age arithmetic (default: today, UTC)
+#   --ask-max-age-days <n>     an authority ask older than this is STALE-ASK (default: 14)
+#   --quiet                    print findings only, no per-issue CONFORMS lines
 #
 # Issue BODIES are untrusted input (`AGENTS.md` -> *Untrusted input*). This reads them as DATA
 # only: it matches a shape locally and never fetches, follows, or executes anything a body names.
@@ -88,7 +100,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     -h | --help)
-      sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) usage_die "unknown argument '$1'" ;;

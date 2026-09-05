@@ -478,7 +478,10 @@ expect_rc "explicit upstream class conforms" 0 "$TMP/cls-upstream.json"
 cat >"$TMP/cls-auth-ok.json" <<'EOF'
 [{"repo":"a","number":2,"body":"**Blocker:** maintainer authority — an R2 bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-09-01"}]
 EOF
-expect_rc "authority class with a fresh ask conforms" 0 "$TMP/cls-auth-ok.json"
+# Pinned clock: the fixture's ask is dated 2026-09-01, so an unpinned run would read it STALE-ASK
+# from 2026-09-16 on and fail CI purely because the calendar advanced.
+OUT="$("$CHECK" --input "$TMP/cls-auth-ok.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "authority class with a fresh ask conforms"; else bad "authority class with a fresh ask conforms" "rc=$RC out=${OUT:0:200}"; fi
 
 # ------------------------------------------------------------------ 25. THE DEFECT: authority with NO ask
 #
@@ -652,6 +655,13 @@ if [ "$RC" = 0 ]; then ok "CONTROL: a nine-digit cadence is accepted and evaluat
 # CONTROL: the default cadence still reports that same ask as STALE-ASK, so the bound changed no verdict.
 OUT="$("$CHECK" --input "$TMP/stale-ask.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^STALE-ASK +p#62'; then ok "CONTROL: the default cadence still reports the stale ask"; else bad "CONTROL: the default cadence still reports the stale ask" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 38. --help documents the class and the ask record
+# A caller following the built-in help must not be led to write a classless authority record, which
+# the legacy fallback reads as upstream and never asks for an ask.
+OUT="$("$CHECK" --help 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '| <class> | last-verified' && printf '%s\n' "$OUT" | grep -q '| authority | last-verified <YYYY-MM-DD>: <result> | asked <push|slack|session> <YYYY-MM-DD>' && printf '%s\n' "$OUT" | grep -q -- '--ask-max-age-days <n>'; then ok "--help shows the class token, the authority ask suffix and the cadence option"; else bad "--help shows the class token, the authority ask suffix and the cadence option" "rc=$RC out=${OUT:0:300}"; fi
+if ! printf '%s\n' "$OUT" | grep -q '^set -euo pipefail'; then ok "and --help stops before the code"; else bad "and --help stops before the code" "help leaked code"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1
