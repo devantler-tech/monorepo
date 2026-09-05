@@ -25,7 +25,7 @@
 #        `bash -c "python3 -m x"` and `FOO=1 python3 x` flag, while `echo "install python3"` and
 #        a YAML `name: Install python deps` do not. Executable paths are matched by basename.
 #        Dockerfile RUN shell/JSON operands are scanned; RUN is not a wrapper in other files.
-#        Unquoted backslash-newline continuations join before matching command names.
+#        Backslash-newline continuations outside single quotes join before matching command names.
 #        Two known limits of that heuristic, accepted for a ~150-line bash guard: a flag's
 #        ARGUMENT is read as the command (`sudo -u nobody pip3 …` reads `nobody`), and quotes
 #        are stripped before segmenting, so a quoted alternation such as
@@ -87,7 +87,7 @@ scan_invocations() {
       return token
     }
     # Only an unquoted, unescaped hash at a token boundary starts a comment.
-    # Expose an unquoted trailing escape so the caller can join physical lines.
+    # Expose a trailing escape outside single quotes so the caller can join physical lines.
     function without_comment(text,    i, c, quote, escaped, boundary) {
       quote = ""
       escaped = 0
@@ -105,7 +105,7 @@ scan_invocations() {
         if (c == "#" && boundary) return substr(text, 1, i - 1)
         boundary = c ~ /[[:space:]]/
       }
-      continues = escaped && quote == ""
+      continues = escaped && quote != sq
       return text
     }
     # Index of the first token from `from` that is a command: not empty, not a -flag, not a

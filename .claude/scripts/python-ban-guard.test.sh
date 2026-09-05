@@ -165,7 +165,7 @@ run "$r"
 report "control: a real comment after a quoted hash still hides comment text" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
-# Unquoted backslash-newline pairs join a logical command before token matching.
+# Backslash-newline pairs outside single quotes join before token matching.
 r="$(mkrepo continued-bare)"; addf "$r" tools/continued.sh '#!/usr/bin/env bash' 'py\' 'thon3 tools/check.py'
 run "$r"
 report "an unquoted continuation cannot split the interpreter name" \
@@ -174,6 +174,14 @@ r="$(mkrepo continued-wrapper)"; addf "$r" tools/continued.sh '#!/usr/bin/env ba
 run "$r"
 report "wrapped names join repeated continuations and retain the first physical line" \
   "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-double-quoted-wrapper)"; addf "$r" tools/continued.sh '#!/usr/bin/env bash' 'bash -c "py\' 'thon3 tools/check.py"'
+run "$r"
+report "a double-quoted shell command joins continuations at its first physical line" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-double-quoted-argument)"; addf "$r" tools/continued.sh '#!/usr/bin/env bash' 'echo "py\' 'thon3 tools/check.py"'
+run "$r"
+report "control: the same double-quoted continuation remains a safe echo argument" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 r="$(mkrepo continued-line-numbers)"; addf "$r" tools/continued.sh 'echo sa\' 'fe' 'python3 tools/check.py'
 run "$r"
 report "a command after a joined logical line retains its own physical line" \
