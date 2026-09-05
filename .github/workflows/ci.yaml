@@ -890,21 +890,33 @@ jobs:
   # aggregate below. At ~9% incidence a required check would fail one PR in eleven for a condition
   # the author cannot fix at commit time; enforcement is devantler-tech/.github#142's decision,
   # which this standing measurement exists to make possible.
+  #
+  # FEATURE-FLAGGED, default OFF (*Feature-flag-first delivery*): the job runs only while the repository
+  # variable UNSIGNED_COMMIT_REPORT is exactly `true`. Flipping it is the separate, reversible activation
+  # step, taken once this workflow is on the default branch -- which is also what lets the reporter run
+  # from a TRUSTED base-branch copy below rather than from the pull request being measured.
   report-unsigned-commits:
     name: Report unsigned commits (non-blocking)
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && vars.UNSIGNED_COMMIT_REPORT == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read # checkout of the reporter script
       pull-requests: read # gh api reads this pull request's commits and their verification objects
     steps:
-      - name: Checkout
+      # The reporter runs from the BASE branch, never from the pull request: a PR that edits the script
+      # (or its self-test) must not be able to rewrite the verdict on its own commits. Only that trusted
+      # copy is checked out here -- nothing from the PR head is executed by this job.
+      - name: Checkout the base branch's reporter (trusted copy)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-base
+          sparse-checkout: .claude/scripts/unsigned-commit-report.sh
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       # The only step that holds a token, and it runs no pull-request code: the payload is read here
-      # with an inline `gh api`, then the reporter -- which IS checked out from the pull request --
-      # runs on that file with no token in its environment, so a modified script cannot use one.
+      # with an inline `gh api`, then the trusted reporter runs on that file with no token in its
+      # environment.
       - name: Read the pull request's commits (the only step with a token)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -915,7 +927,7 @@ jobs:
       - name: Report unsigned commits on this pull request
         env:
           HEAD_REF: ${{ github.head_ref }}
-        run: bash .claude/scripts/unsigned-commit-report.sh --input "${RUNNER_TEMP}/pr-commits.json" --head-ref "$HEAD_REF"
+        run: bash trusted-base/.claude/scripts/unsigned-commit-report.sh --input "${RUNNER_TEMP}/pr-commits.json" --head-ref "$HEAD_REF"
 
   test-release-exemption-identity-currency:
     name: Test release exemption identity currency

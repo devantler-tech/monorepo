@@ -34,13 +34,17 @@
 #       Measurement mode: sweep every PR merged since the date whose head branch is in one of the
 #       lanes. Every examined PR gets a `T  <repo>#<n>  <branch>  commits=<k>  <sha…>` line so a clean
 #       sweep still names what it examined.
+#       A PR is lane work only when its author is the lane's exact writer identity AND its head lives in
+#       this repository's owner; a fork branch that merely LOOKS like `claude/x` is counted `foreign=`
+#       and never examined. Repeating a lane in --lanes is a usage error (it would double every count).
 #       lane namespaces (default claude,codex,cursor) and report incidence across them, so a fix
 #       can be shown to have moved the number. Merged PRs are used rather than branches because
 #       lane branches are deleted on merge and a branch sweep is blind to exactly the commits
 #       that reached main.
 #   unsigned-commit-report.sh --input <payload.json> [--head-ref <ref>]
-#       Payload mode -- what CI runs (a trusted step reads the endpoint with the token, the report
-#       then runs on the checkout WITHOUT one) and the seam for the self-test: <payload.json> is a JSON array of commit objects in the
+#       Payload mode -- what CI runs (a trusted step reads the endpoint with the token; the report then
+#       runs from the BASE branch's copy of this script, without a token, behind the default-off
+#       repository variable UNSIGNED_COMMIT_REPORT) and the seam for the self-test: <payload.json> is a JSON array of commit objects in the
 #       REST `pulls/<n>/commits` shape (`sha`, `commit.verification.{verified,reason}`), or `-`.
 #
 # EXIT CODES
@@ -97,6 +101,17 @@ lane_of() { # <ref>
   local ref="$1" l
   case "$ref" in */*) l="${ref%%/*}" ;; *) l="none" ;; esac
   case ",$LANES," in *",$l,"*) printf '%s' "$l" ;; *) printf 'none' ;; esac
+}
+
+# The exact writer identity each lane publishes under (*Trust gate*): the machine-local lanes author as
+# `devantler`; the Cursor cloud lane as its App, which `gh pr list` renders `app/cursor` and REST
+# `cursor[bot]`. Exact match only -- a login merely containing a trusted name is not trusted.
+lane_writer_ok() { # <lane> <author-login>
+  case "$1" in
+    claude | codex) [ "$2" = devantler ] ;;
+    cursor) [ "$2" = app/cursor ] || [ "$2" = "cursor[bot]" ] || [ "$2" = cursor ] ;;
+    *) return 1 ;;
+  esac
 }
 
 # `verification.reason` -> class letter. Only the reason is consulted: GitHub sets `verified`
@@ -160,13 +175,35 @@ else
   # only in part while the summary read as a complete sweep, so reaching it is UNKNOWN, never a
   # smaller number presented as the whole -- narrow `--merged-since` or `--lanes` and re-run.
   LANE_PR_LIMIT=1000
-  prs=""
+  prs=""; foreign=0
   IFS=, read -r -a lane_list <<<"$LANES"
+  # A repeated lane would query the same PR set twice and silently double prs=, examined= and every
+  # class count; a valid-looking invocation must not be able to produce a false incidence.
+  seen_lanes=","
+  for l in "${lane_list[@]}"; do
+    [ -n "$l" ] || continue
+    case "$seen_lanes" in *",$l,"*) usage_die "--lanes repeats '$l'" ;; esac
+    seen_lanes="${seen_lanes}${l},"
+  done
   for l in "${lane_list[@]}"; do
     [ -n "$l" ] || continue
     chunk="$(gh pr list --repo "$REPO" --state merged --limit "$LANE_PR_LIMIT" --search "merged:>=$SINCE head:$l/" \
-      --json number,headRefName --jq '.[] | [.number, .headRefName] | @tsv')" \
+      --json number,headRefName,author,headRepositoryOwner \
+      --jq '.[] | [.number, .headRefName, (.author.login // ""), (.headRepositoryOwner.login // "")] | @tsv')" \
       || die "could not list merged $l/* PRs in $REPO -- UNKNOWN"
+    # `head:<lane>/` matches branch NAMES, and names are not owned across forks: a stranger's `claude/x`
+    # on a fork is not lane work. Provenance is the lane's exact writer identity on a head that lives in
+    # this repository's own owner; anything else is counted `foreign=` and never examined.
+    own=""
+    while IFS=$'\t' read -r pn pbranch pauthor powner; do
+      [ -n "$pn" ] || continue
+      if [ "$powner" = "${REPO%%/*}" ] && lane_writer_ok "$l" "$pauthor"; then
+        own="${own}${pn}"$'\t'"${pbranch}"$'\n'
+      else
+        foreign=$((foreign + 1))
+      fi
+    done <<<"$chunk"
+    chunk="$own"
     lane_count="$(printf '%s' "$chunk" | grep -c .)" || true
     [ "$lane_count" -lt "$LANE_PR_LIMIT" ] \
       || die "lane $l/* has $lane_count merged PRs since $SINCE, at the $LANE_PR_LIMIT-PR cap: the sweep would be TRUNCATED -- UNKNOWN; narrow --merged-since or --lanes"
@@ -184,7 +221,7 @@ else
     shas="$(printf '%s\n' "$chunk" | awk -F'\t' 'NF { printf "%s%s", (seen++ ? " " : ""), substr($1, 1, 10) }')"
     targets="${targets}$(printf 'T  %s#%s  %s  commits=%s  %s' "$REPO" "$n" "$branch" "$k" "$shas")"$'\n'
   done <<<"$prs"
-  HEAD_REF="merged-since:$SINCE prs=$count lanes=$LANES"
+  HEAD_REF="merged-since:$SINCE prs=$count foreign=$foreign lanes=$LANES"
 fi
 
 # ---------------------------------------------------------------- classify and report

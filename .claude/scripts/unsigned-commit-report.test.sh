@@ -106,7 +106,9 @@ cat >"$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 case "$*" in
   *"pr list"*)
-    i=0; while [ "$i" -lt "${FAKE_PRS:-0}" ]; do i=$((i + 1)); printf '%s\tclaude/x-%s\n' "$i" "$i"; done ;;
+    i=0; while [ "$i" -lt "${FAKE_PRS:-0}" ]; do i=$((i + 1)); printf '%s\tclaude/x-%s\tdevantler\to\n' "$i" "$i"; done
+    # a fork PR whose branch merely LOOKS like lane work: wrong author, wrong head-repository owner
+    [ -z "${FAKE_FOREIGN:-}" ] || printf '99\tclaude/x-99\tstranger\tforkowner\n' ;;
   *"/commits"*)
     jq -n --argjson n "${FAKE_COMMITS:-0}" '[range($n) | {sha: ("c" + tostring), commit: {verification: {verified: true, reason: "valid"}}}]' ;;
   *) echo "stub gh: unexpected call: $*" >&2; exit 99 ;;
@@ -121,7 +123,7 @@ if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=249 signed=249'; t
 OUT="$(stub 1000 1 --repo o/r --merged-since 2026-09-01)"; RC=$?
 if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'at the 1000-PR cap'; then ok "a lane at the merged-PR cap is UNKNOWN, not a partial sweep"; else bad "a lane at the merged-PR cap is UNKNOWN, not a partial sweep" "rc=$RC out=${OUT:0:200}"; fi
 OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
-if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=6 signed=6 .* prs=3 lanes=claude lane=sweep$'; then ok "CONTROL: a lane below the cap sweeps every PR"; else bad "CONTROL: a lane below the cap sweeps every PR" "rc=$RC out=${OUT:0:200}"; fi
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=6 signed=6 .* prs=3 foreign=0 lanes=claude lane=sweep$'; then ok "CONTROL: a lane below the cap sweeps every PR"; else bad "CONTROL: a lane below the cap sweeps every PR" "rc=$RC out=${OUT:0:200}"; fi
 OUT="$(stub 0 0 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
 if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=0 .* prs=0 '; then ok "CONTROL: an empty listing states prs=0"; else bad "CONTROL: an empty listing states prs=0" "rc=$RC out=${OUT:0:200}"; fi
 
@@ -153,6 +155,21 @@ jq -n '[range(250) | {sha: ("c" + tostring), commit: {verification: {verified: t
 expect_rc "an --input payload at the 250-commit cap is UNKNOWN" 2 --input "$TMP/cap.json" --head-ref claude/x-1
 jq -n '[range(249) | {sha: ("c" + tostring), commit: {verification: {verified: true, reason: "valid"}}}]' >"$TMP/cap-1.json"
 expect_out "CONTROL: one below the cap reports the full set" '^examined=249 signed=249' --input "$TMP/cap-1.json" --head-ref claude/x-1
+
+# ------------------------------------------------------------------ 14. a fork PR with a lane-looking branch is NOT lane work
+# `head:claude/` matches branch NAMES across forks; a stranger's `claude/x` would be counted as Claude-lane
+# work and corrupt the incidence. Provenance is the exact writer identity plus the base repository owner.
+OUT="$(FAKE_FOREIGN=1 stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=6 signed=6 .* prs=3 foreign=1 lanes=claude lane=sweep$' && ! printf '%s\n' "$OUT" | grep -q '^T  o/r#99 '; then ok "a foreign-provenance PR is excluded from the sweep and counted as foreign=1"; else bad "a foreign-provenance PR is excluded from the sweep and counted as foreign=1" "rc=$RC out=${OUT:0:300}"; fi
+# CONTROL: without the foreign row the same sweep reports foreign=0
+OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q ' prs=3 foreign=0 '; then ok "CONTROL: an all-own sweep reports foreign=0"; else bad "CONTROL: an all-own sweep reports foreign=0" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 15. a repeated lane name is refused, never double-counted
+OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude,claude)"; RC=$?
+if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'repeats'; then ok "--lanes with a repeated name is UNKNOWN (usage error), not a doubled count"; else bad "--lanes with a repeated name is UNKNOWN (usage error), not a doubled count" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude,codex)"; RC=$?
+if [ "$RC" = 0 ]; then ok "CONTROL: distinct lane names still sweep"; else bad "CONTROL: distinct lane names still sweep" "rc=$RC out=${OUT:0:200}"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1
