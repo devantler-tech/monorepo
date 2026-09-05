@@ -1183,13 +1183,36 @@ governs the issue work that follows.) Two rules enforce that:
    Give every externally-blocked issue a **structured blocker line** in its body (and keep the
    `blocked` label on) so the next tick retains the fully-qualified identity and last result without
    retaining a destination:
-   `**Blocker:** <owner/repo#N-or-release-id> | last-verified <YYYY-MM-DD>: <result>`
-   Example: `**Blocker:** opencost/opencost#3710 | last-verified 2026-08-01: not shipped`.
+   `**Blocker:** <identifier> | <cause-class> | last-verified <YYYY-MM-DD>: <result>`
+   Example: `**Blocker:** opencost/opencost#3710 | upstream | last-verified 2026-08-01: not shipped`.
    The reference is an identifier, not permission to inspect that repository. Independently choose an
    allowed source and re-check it on every run before using (b) to skip. If the dependency has shipped,
    remove the `blocked` label and blocker line and resume oldest-first; otherwise update the
    `last-verified` result. A missing, malformed, or merely prose "waiting on upstream" record is
    under-specified for (b) — repair the line and verify it (or unblock) rather than skipping.
+
+   🔴 **`<cause-class>` is exactly `upstream` or `authority`, and the difference decides whether
+   re-verification is sufficient or futile.** An **upstream** blocker clears itself when the
+   dependency ships, so re-checking it every run is exactly right. An **authority** blocker — an
+   account action, a provider credential, a permission only the maintainer can grant — clears *only
+   when a person is asked*, so re-verification alone **guarantees it never clears**: the loop is
+   structurally incapable of finishing it, and the more diligently it re-verifies, the more
+   permanent the parking looks. Measured 2026-09-05 org-wide: **21 of 46** open blocked-labelled
+   issues were authority-caused, and **8 of those carried no ask of any kind** — only CodeRabbit's
+   auto-generated plan, or no comments at all. The oldest had been open **54 days**. Every one of
+   their blocker lines was *conforming*; the check reported a clean sweep over them, because
+   conformance was never the same thing as progress.
+
+   🔴 **An `authority` line MUST also record the ask: append `| asked <channel> <YYYY-MM-DD>`.**
+   `<channel>` names where it actually landed — a channel that *reaches* him per *Maintainer
+   channels*, so `push`, `slack` or `session`, never `issue`: a GitHub comment is a durable
+   **record** of an ask and is explicitly **not** an attention channel, so a comment alone leaves
+   the issue exactly as parked as silence. Re-raise on a cadence rather than every run; the ask
+   goes stale after **14 days** by default. An authority line with no ask, or with a stale one, is
+   a finding — `NO-ASK` / `STALE-ASK`. **The class is an explicit token and is never inferred from
+   prose**: a blocker phrased "needs an account action" is authority-caused, reads as ordinary
+   prose, and would silently escape the ask requirement forever. An absent class is `LEGACY` and a
+   finding, never a silent pass.
 
    🔴 **The label and the line are not coupled by anything, so CHECK them rather than assuming.** A
    live claim expires after ~2h, so a wrongly-skipped issue comes back; a **label never expires**,

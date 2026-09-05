@@ -49,6 +49,8 @@ PROG="${0##*/}"
 ORG=""
 INPUT=""
 QUIET=0
+TODAY=""
+ASK_MAX_AGE_DAYS=14
 
 die() {
   printf '%s: %s\n' "$PROG" "$*" >&2
@@ -69,6 +71,16 @@ while [ $# -gt 0 ]; do
     --input)
       [ $# -ge 2 ] || usage_die "--input requires a value"
       INPUT="$2"
+      shift 2
+      ;;
+    --today)
+      [ $# -ge 2 ] || usage_die "--today requires a value"
+      TODAY="$2"
+      shift 2
+      ;;
+    --ask-max-age-days)
+      [ $# -ge 2 ] || usage_die "--ask-max-age-days requires a value"
+      ASK_MAX_AGE_DAYS="$2"
       shift 2
       ;;
     --quiet)
@@ -96,6 +108,19 @@ case "$ORG" in
 esac
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
+
+# `date -u +%F` is the one spelling both BSD and GNU agree on; every OTHER date operation in this
+# script is hand-rolled arithmetic for exactly that reason. `--today` exists so the self-test can
+# pin the clock: a suite whose verdict changes with the calendar is one that eventually fails for
+# no reason and gets deleted.
+if [ -z "$TODAY" ]; then
+  TODAY="$(date -u +%F)" || die "could not read the current date -- UNKNOWN"
+fi
+is_real_date_early() { case "$1" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) return 0 ;; *) return 1 ;; esac; }
+is_real_date_early "$TODAY" || usage_die "--today must be YYYY-MM-DD (got '$TODAY')"
+case "$ASK_MAX_AGE_DAYS" in
+  "" | *[!0-9]*) usage_die "--ask-max-age-days must be a non-negative integer (got '$ASK_MAX_AGE_DAYS')" ;;
+esac
 
 # What counts as NAMING a dependency. The contract's shape is `<owner/repo#N-or-release-id>`,
 # but that grammar alone rejects the idiom actually in use: measured 2026-08-25 across all live
@@ -146,6 +171,44 @@ is_real_date() { # YYYY-MM-DD
   [ "$d" -ge 1 ] && [ "$d" -le "$max" ]
 }
 
+# Days since the civil epoch (Howard Hinnant's algorithm), in pure shell arithmetic.
+#
+# `date` is deliberately not used: its parsing flags differ between BSD and GNU, which would make
+# this check disagree with itself across the two CI runners -- the same reason `is_real_date` above
+# counts days itself. Every year this sees is well inside the range where bash's truncating
+# division agrees with the algorithm's floor division, so no negative-year correction is needed.
+days_from_civil() { # YYYY-MM-DD -> days since 1970-01-01 on stdout
+  local y m d era yoe doy doe
+  y=$((10#${1:0:4}))
+  m=$((10#${1:5:2}))
+  d=$((10#${1:8:2}))
+  [ "$m" -le 2 ] && y=$((y - 1))
+  era=$((y / 400))
+  yoe=$((y - era * 400))
+  if [ "$m" -gt 2 ]; then doy=$(((153 * (m - 3) + 2) / 5 + d - 1)); else doy=$(((153 * (m + 9) + 2) / 5 + d - 1)); fi
+  doe=$((yoe * 365 + yoe / 4 - yoe / 100 + doy))
+  printf '%s' "$((era * 146097 + doe - 719468))"
+}
+
+# The CAUSE CLASS, and why it is not inferred from prose.
+#
+# An `upstream` blocker clears itself when the dependency ships, so re-verifying it every run is
+# exactly right. An `authority` blocker clears only when a person is asked, so re-verification
+# ALONE GUARANTEES IT NEVER CLEARS -- the loop is structurally incapable of finishing it, and the
+# more diligently it re-verifies the more permanent the parking looks.
+#
+# Measured 2026-09-05 across the org: 21 of 46 open blocked-labelled issues were authority-caused,
+# and 8 of those carried no ask of ANY kind -- only CodeRabbit's auto-generated plan, or no
+# comments at all. The oldest had been open 54 days. Their blocker lines were all CONFORMING; the
+# check reported a clean sweep over them, because conformance was never the same thing as progress.
+#
+# The class is an EXPLICIT token rather than something sniffed out of the identifier. Inference
+# would fail open on exactly the case that matters: a blocker phrased "needs an account action" or
+# "requires provisioning" is authority-caused, reads as ordinary prose, and would silently escape
+# the ask requirement forever. A missing class is therefore a finding (LEGACY), never a pass.
+CLASS_RE='^(upstream|authority)$'
+ASK_RE='\| asked ([A-Za-z0-9._-]+) ([0-9]{4}-[0-9]{2}-[0-9]{2})$'
+
 # Matching is done with bash's own `=~` rather than `printf | grep -q`: `grep -q` exits on its
 # first match and can SIGPIPE the writer, which under `set -o pipefail` surfaces as rc=141 on a
 # body large enough to exceed the pipe buffer. Keeping the match in-process removes that class.
@@ -167,6 +230,46 @@ line_conforms() { # <logical line>
   ident="${logical%% | last-verified *}"
   stripped="$(printf '%s\n' "$ident" | sed -E "s#$URL_TOKEN_RE##g")"
   [[ $stripped =~ $IDENTIFIER_RE ]]
+}
+
+# Classify a structurally-conforming record. Sets VERDICT to one of:
+#
+#   CONFORMS   an upstream blocker, or an authority blocker with a fresh ask
+#   LEGACY     no class field -- predates this grammar, repair it
+#   MALFORMED  a class token that is not one of the two, or a malformed ask
+#   NO-ASK     an authority blocker nobody has raised
+#   STALE-ASK  an authority blocker whose ask has gone quiet past the cadence
+#
+# The class is the ` | `-delimited segment immediately before `last-verified`. Reading it
+# positionally rather than by searching the whole line matters: an identifier may legitimately
+# contain the word "authority" as prose ("maintainer authority — a bucket"), and a substring
+# search would then read a class out of an identifier that never declared one.
+classify_record() { # <logical line> -> sets VERDICT
+  local logical="$1" head cls ask_date ask_days today_days
+
+  head="${logical%% | last-verified *}"
+  if [ "$head" = "$logical" ]; then VERDICT="MALFORMED"; return; fi
+
+  # No ` | ` inside the head at all means no class segment was supplied.
+  if [ "$head" = "${head%% | *}" ]; then VERDICT="LEGACY"; return; fi
+
+  cls="${head##* | }"
+  [[ $cls =~ $CLASS_RE ]] || { VERDICT="MALFORMED"; return; }
+
+  if [ "$cls" = "upstream" ]; then VERDICT="CONFORMS"; return; fi
+
+  # ---- authority: an ask is REQUIRED, because nothing else will ever move this issue.
+  if [[ ! $logical =~ $ASK_RE ]]; then VERDICT="NO-ASK"; return; fi
+  ask_date="${BASH_REMATCH[2]}"
+  is_real_date "$ask_date" || { VERDICT="MALFORMED"; return; }
+
+  ask_days="$(days_from_civil "$ask_date")"
+  today_days="$(days_from_civil "$TODAY")"
+  if [ "$((today_days - ask_days))" -gt "$ASK_MAX_AGE_DAYS" ]; then
+    VERDICT="STALE-ASK"
+    return
+  fi
+  VERDICT="CONFORMS"
 }
 
 # ---------------------------------------------------------------- acquire payload
@@ -332,11 +435,20 @@ while [ "$i" -lt "$count" ]; do
   if [ -z "$logical" ]; then
     [ "$QUIET" = 1 ] || printf 'MISSING    %s#%s\n' "$repo" "$num"
     bad=$((bad + 1))
-  elif line_conforms "$logical"; then
-    [ "$QUIET" = 1 ] || printf 'CONFORMS   %s#%s\n' "$repo" "$num"
-  else
+  elif ! line_conforms "$logical"; then
     [ "$QUIET" = 1 ] || printf 'MALFORMED  %s#%s  >>%s\n' "$repo" "$num" "${logical:0:100}"
     bad=$((bad + 1))
+  else
+    classify_record "$logical"
+    case "$VERDICT" in
+      CONFORMS)
+        [ "$QUIET" = 1 ] || printf 'CONFORMS   %s#%s\n' "$repo" "$num"
+        ;;
+      *)
+        [ "$QUIET" = 1 ] || printf '%-10s %s#%s  >>%s\n' "$VERDICT" "$repo" "$num" "${logical:0:100}"
+        bad=$((bad + 1))
+        ;;
+    esac
   fi
 done
 
