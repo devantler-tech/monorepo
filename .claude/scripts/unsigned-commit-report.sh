@@ -27,15 +27,20 @@
 # USAGE
 #   unsigned-commit-report.sh --pr <n> --repo <owner/repo> [--head-ref <ref>]
 #       CI mode: read the pull request's commits and report. Exit 0 whether or not anything is
-#       unsigned -- findings are annotations and a summary line, never a failure.
+#       unsigned -- findings are annotations and a summary line, never a failure. A head outside
+#       every agent lane is SKIPPED (nothing classified, `skipped=non-agent-head` in the summary):
+#       the report is scoped to agent branches and must not warn about branches it never covered.
 #   unsigned-commit-report.sh --repo <owner/repo> --merged-since <YYYY-MM-DD> [--lanes a,b,c]
 #       Measurement mode: sweep every PR merged since the date whose head branch is in one of the
+#       lanes. Every examined PR gets a `T  <repo>#<n>  <branch>  commits=<k>  <sha…>` line so a clean
+#       sweep still names what it examined.
 #       lane namespaces (default claude,codex,cursor) and report incidence across them, so a fix
 #       can be shown to have moved the number. Merged PRs are used rather than branches because
 #       lane branches are deleted on merge and a branch sweep is blind to exactly the commits
 #       that reached main.
 #   unsigned-commit-report.sh --input <payload.json> [--head-ref <ref>]
-#       Hermetic mode for the self-test: <payload.json> is a JSON array of commit objects in the
+#       Payload mode -- what CI runs (a trusted step reads the endpoint with the token, the report
+#       then runs on the checkout WITHOUT one) and the seam for the self-test: <payload.json> is a JSON array of commit objects in the
 #       REST `pulls/<n>/commits` shape (`sha`, `commit.verification.{verified,reason}`), or `-`.
 #
 # EXIT CODES
@@ -124,7 +129,7 @@ acquire_pr_commits() { # <repo> <pr> <branch-label>
   printf '%s' "$out"
 }
 
-rows=""
+rows=""; SKIPPED=0; targets=""
 if [ -n "$INPUT" ]; then
   if [ "$INPUT" = "-" ]; then payload="$(cat)" || die "could not read payload from stdin"
   else [ -r "$INPUT" ] || die "cannot read payload: $INPUT"; payload="$(cat -- "$INPUT")" || die "could not read payload: $INPUT"; fi
@@ -132,11 +137,22 @@ if [ -n "$INPUT" ]; then
   rows="$(printf '%s' "$payload" | jq -r --arg branch "${HEAD_REF:-}" \
     '.[] | [(.sha // "missing"), (.commit.verification.verified // false | tostring), (.commit.verification.reason // "missing"), $branch] | @tsv')" \
     || die "could not parse payload -- UNKNOWN"
+  if [ -n "$HEAD_REF" ] && [ "$(lane_of "$HEAD_REF")" = none ]; then
+    # A named head outside every agent lane is out of scope: classify nothing, state the skip.
+    # An EMPTY head ref is unknown rather than non-agent and is still classified (the hermetic seam).
+    SKIPPED=1; rows=""
+  else
+    # CI feeds this mode the raw endpoint payload, so the 250-commit cap applies here as well.
+    count="$(printf '%s' "$rows" | grep -c .)" || true
+    [ "$count" -lt "$PR_COMMIT_CAP" ] \
+      || die "payload has $count commits, at the $PR_COMMIT_CAP-commit endpoint cap: the report would be TRUNCATED -- UNKNOWN"
+  fi
 elif [ -n "$PR" ]; then
   if [ -z "$HEAD_REF" ]; then
     HEAD_REF="$(gh api "repos/$REPO/pulls/$PR" --jq '.head.ref')" || die "could not read $REPO#$PR head ref -- UNKNOWN"
   fi
-  rows="$(acquire_pr_commits "$REPO" "$PR" "$HEAD_REF")" || exit 2
+  if [ "$(lane_of "$HEAD_REF")" = none ]; then SKIPPED=1
+  else rows="$(acquire_pr_commits "$REPO" "$PR" "$HEAD_REF")" || exit 2; fi
 else
   # Measurement mode. One search per lane keeps the query agent-constructed and the branch
   # attribution exact; `--limit` is explicit because gh defaults to 30 and would silently truncate.
@@ -162,6 +178,11 @@ else
     chunk="$(acquire_pr_commits "$REPO" "$n" "$branch")" || exit 2
     rows="${rows}${chunk}"$'\n'
     count=$((count + 1))
+    # Name the target: a clean sweep that identifies neither the PRs nor the SHAs it examined cannot
+    # be audited, so every PR gets a T line whatever its verdict.
+    k="$(printf '%s' "$chunk" | grep -c .)" || true
+    shas="$(printf '%s\n' "$chunk" | awk -F'\t' 'NF { printf "%s%s", (seen++ ? " " : ""), substr($1, 1, 10) }')"
+    targets="${targets}$(printf 'T  %s#%s  %s  commits=%s  %s' "$REPO" "$n" "$branch" "$k" "$shas")"$'\n'
   done <<<"$prs"
   HEAD_REF="merged-since:$SINCE prs=$count lanes=$LANES"
 fi
@@ -186,10 +207,12 @@ while IFS=$'\t' read -r sha _ reason branch; do
   fi
 done <<<"$rows"
 
+[ -z "$targets" ] || printf '%s' "$targets"
 [ -z "$findings" ] || printf '%s' "$findings"
 if [ -n "$SINCE" ]; then lane="sweep"; else lane="$(lane_of "${HEAD_REF:-}")"; fi
-summary="$(printf 'examined=%d signed=%d unsigned=%d bad=%d unverifiable=%d head=%s lane=%s' \
-  "$examined" "$g" "$n" "$b" "$e" "${HEAD_REF:-unknown}" "$lane")"
+skip_note=""; [ "$SKIPPED" = 1 ] && skip_note=" skipped=non-agent-head"
+summary="$(printf 'examined=%d signed=%d unsigned=%d bad=%d unverifiable=%d head=%s lane=%s%s' \
+  "$examined" "$g" "$n" "$b" "$e" "${HEAD_REF:-unknown}" "$lane" "$skip_note")"
 printf '%s\n' "$summary"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
@@ -198,8 +221,14 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     if [ -n "$findings" ]; then
       printf '| class | sha | reason | branch |\n|---|---|---|---|\n'
       printf '%s' "$findings" | awk '{ printf "| %s | `%s` | %s | %s |\n", $1, substr($2,1,10), $3, $4 }'
+    elif [ "$SKIPPED" = 1 ]; then
+      printf 'Skipped: `%s` is not an agent-lane head (%s), so nothing was classified.\n' "${HEAD_REF:-}" "$LANES"
     else
       printf 'No unsigned or unverifiable commits among the %d examined.\n' "$examined"
+    fi
+    if [ -n "$targets" ]; then
+      printf '\n| target | branch | commits | examined |\n|---|---|---|---|\n'
+      printf '%s' "$targets" | awk '{ b = $4; sub(/^commits=/, "", b); rest = ""; for (i = 5; i <= NF; i++) rest = rest (i > 5 ? " " : "") $i; printf "| %s | %s | %s | `%s` |\n", $2, $3, b, rest }'
     fi
   } >>"$GITHUB_STEP_SUMMARY"
 fi

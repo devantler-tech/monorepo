@@ -61,9 +61,9 @@ expect_out "a commit with no verification object is reported, reason=missing" '^
 
 # ------------------------------------------------------------------ 6. coverage: the lane is stated, and a non-lane branch is lane=none
 expect_out "a cursor/* head is lane=cursor" 'lane=cursor$' --input "$TMP/signed.json" --head-ref cursor/z-3
-expect_out "a non-lane head is lane=none" 'lane=none$' --input "$TMP/signed.json" --head-ref feature/thing
-expect_out "a lookalike prefix is not a lane" 'lane=none$' --input "$TMP/signed.json" --head-ref claudex/thing
-expect_out "--lanes narrows the namespace set" 'lane=none$' --input "$TMP/signed.json" --head-ref claude/x --lanes codex
+expect_out "a non-lane head is lane=none and skipped" '^examined=0 .* head=feature/thing lane=none skipped=non-agent-head$' --input "$TMP/signed.json" --head-ref feature/thing
+expect_out "a lookalike prefix is not a lane" 'lane=none skipped=non-agent-head$' --input "$TMP/signed.json" --head-ref claudex/thing
+expect_out "--lanes narrows the namespace set" 'lane=none skipped=non-agent-head$' --input "$TMP/signed.json" --head-ref claude/x --lanes codex
 
 # ------------------------------------------------------------------ 7. an empty payload states it examined nothing
 printf '[]\n' >"$TMP/empty.json"
@@ -124,6 +124,35 @@ OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
 if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=6 signed=6 .* prs=3 lanes=claude lane=sweep$'; then ok "CONTROL: a lane below the cap sweeps every PR"; else bad "CONTROL: a lane below the cap sweeps every PR" "rc=$RC out=${OUT:0:200}"; fi
 OUT="$(stub 0 0 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
 if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=0 .* prs=0 '; then ok "CONTROL: an empty listing states prs=0"; else bad "CONTROL: an empty listing states prs=0" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 11. a non-agent head is SKIPPED: no classification, no annotation
+# The CI job runs on every pull request; the report is scoped to agent branches. Classifying a
+# feature/* head produced an agent-lane warning for a commit the report never claimed to cover.
+expect_rc "an unsigned commit on a non-agent head exits 0" 0 --input "$TMP/unsigned.json" --head-ref feature/thing
+run --input "$TMP/unsigned.json" --head-ref feature/thing
+if ! printf '%s\n' "$OUT" | grep -q '^N  ' && printf '%s\n' "$OUT" | grep -qE '^examined=0 signed=0 unsigned=0 bad=0 unverifiable=0 head=feature/thing lane=none skipped=non-agent-head$'; then ok "a non-agent head classifies nothing and states the skip"; else bad "a non-agent head classifies nothing and states the skip" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(GITHUB_ACTIONS=1 "$CHECK" --input "$TMP/unsigned.json" --head-ref feature/thing 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && ! printf '%s\n' "$OUT" | grep -q '::warning'; then ok "and emits no annotation under Actions"; else bad "and emits no annotation under Actions" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: the same payload on an agent head is still classified (the N row and the warning)
+OUT="$(GITHUB_ACTIONS=1 "$CHECK" --input "$TMP/unsigned.json" --head-ref codex/y-2 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^N  cccc3333' && printf '%s\n' "$OUT" | grep -q '::warning'; then ok "CONTROL: an agent head is still classified and annotated"; else bad "CONTROL: an agent head is still classified and annotated" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: no head ref at all (the hermetic seam) still classifies -- unknown is not the same as non-agent
+expect_out "CONTROL: a payload with no head ref is still classified" '^N  cccc3333' --input "$TMP/unsigned.json"
+
+# ------------------------------------------------------------------ 12. the sweep NAMES its targets even when everything is signed
+# A clean sweep that identifies neither the PRs nor the SHAs it examined cannot be audited; the target
+# lines are what let a reader re-derive `examined=` from the PR list.
+OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude)"; RC=$?
+if [ "$RC" = 0 ] && [ "$(printf '%s\n' "$OUT" | grep -c '^T  o/r#[0-9]*  claude/x-[0-9]*  commits=2  ')" = 3 ] && printf '%s\n' "$OUT" | grep -q '^T  o/r#2  claude/x-2  commits=2  c0 c1$'; then ok "the sweep prints one target line per PR with its examined SHAs"; else bad "the sweep prints one target line per PR with its examined SHAs" "rc=$RC out=${OUT:0:300}"; fi
+# CONTROL: --pr mode prints no target line (the head is already named in the summary)
+OUT="$(stub 3 2 --pr 7 --repo o/r --head-ref claude/x-7)"; RC=$?
+if [ "$RC" = 0 ] && ! printf '%s\n' "$OUT" | grep -q '^T  '; then ok "CONTROL: --pr mode prints no target line"; else bad "CONTROL: --pr mode prints no target line" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 13. --input honours the commit cap (CI now feeds the reporter a payload, tokenless)
+jq -n '[range(250) | {sha: ("c" + tostring), commit: {verification: {verified: true, reason: "valid"}}}]' >"$TMP/cap.json"
+expect_rc "an --input payload at the 250-commit cap is UNKNOWN" 2 --input "$TMP/cap.json" --head-ref claude/x-1
+jq -n '[range(249) | {sha: ("c" + tostring), commit: {verification: {verified: true, reason: "valid"}}}]' >"$TMP/cap-1.json"
+expect_out "CONTROL: one below the cap reports the full set" '^examined=249 signed=249' --input "$TMP/cap-1.json" --head-ref claude/x-1
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1
