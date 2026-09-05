@@ -3136,8 +3136,10 @@ Two mechanics make this a standing duty rather than something automation handles
   Describing the two steps did not hold, so **use the script — it does both halves and verifies the
   Status by reading it back, exiting non-zero if it did not land**:
   ```sh
-  .claude/scripts/board-add.sh <issue-url> [status]   # default: 📥 Backlog
+  .claude/scripts/board-add.sh <issue-url> [status]   # preserves Status; 📥 Backlog only when unset
   ```
+  With no status argument it preserves an existing Status; an explicit argument deliberately sets
+  or corrects it. Output distinguishes an added card from an existing card left untouched.
   It is idempotent for an issue already on the board, and **refuses a private repo's issue** — project
   5 is public, so that is a maintainer decision, never an agent default.
 - **Board the cloud instance's issues — it cannot board its own.** `app/cursor` gets 403 on Projects,
