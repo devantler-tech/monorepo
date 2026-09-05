@@ -619,5 +619,39 @@ if printf '%s\n' "$OUT" | grep -q -- '--today must be a real'; then ok "and name
 OUT="$("$CHECK" --input "$TMP/cls-upstream.json" --today 2026-02-28 2>&1)"; RC=$?
 if [ "$RC" = 0 ]; then ok "CONTROL: --today on a real boundary date is accepted"; else bad "CONTROL: --today on a real boundary date is accepted" "rc=$RC out=${OUT:0:200}"; fi
 
+# ------------------------------------------------------------------ 36. year zero is outside the arithmetic domain
+# `days_from_civil` steps the year back for January and February, so year 0 computes with y=-1,
+# where bash's truncating division disagrees with the algorithm's floor division: 0000-02-29 and
+# 0000-03-01 collapse onto the same day count, and an ask dated AFTER today read as current.
+cat >"$TMP/year0.json" <<'EOF2'
+[{"repo":"p","number":60,"body":"**Blocker:** maintainer authority | authority | last-verified 0000-02-29: pending | asked push 0000-03-01"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/year0.json" --today 0000-02-29 --ask-max-age-days 0 2>&1)"; RC=$?
+if [ "$RC" = 2 ]; then ok "--today in year zero is a usage error"; else bad "--today in year zero is a usage error" "rc=$RC out=${OUT:0:200}"; fi
+# The same year-zero date inside a RECORD is a malformed record, not a verdict.
+OUT="$("$CHECK" --input "$TMP/year0.json" --today 2026-09-05 --ask-max-age-days 0 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^MALFORMED +p#60'; then ok "a year-zero ask date is MALFORMED"; else bad "a year-zero ask date is MALFORMED" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: year 1 is inside the domain and still evaluates normally.
+cat >"$TMP/year1.json" <<'EOF2'
+[{"repo":"p","number":61,"body":"**Blocker:** maintainer authority | authority | last-verified 0001-03-01: pending | asked push 0001-03-01"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/year1.json" --today 0001-03-01 --ask-max-age-days 0 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "CONTROL: year one is inside the domain and conforms"; else bad "CONTROL: year one is inside the domain and conforms" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 37. the cadence must fit the integer comparison
+# A digits-only check accepts a value past the 64-bit range; `[ a -gt b ]` then prints
+# `integer expression expected` and evaluates FALSE, so a stale ask reported CONFORMS.
+cat >"$TMP/stale-ask.json" <<'EOF2'
+[{"repo":"p","number":62,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-05: pending | asked push 2026-08-01"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/stale-ask.json" --today 2026-09-05 --ask-max-age-days 999999999999999999999999 2>&1)"; RC=$?
+if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q -- 'at most 9 digits'; then ok "an out-of-range cadence is a usage error"; else bad "an out-of-range cadence is a usage error" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: the largest accepted cadence still evaluates and permits the same age.
+OUT="$("$CHECK" --input "$TMP/stale-ask.json" --today 2026-09-05 --ask-max-age-days 999999999 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "CONTROL: a nine-digit cadence is accepted and evaluates"; else bad "CONTROL: a nine-digit cadence is accepted and evaluates" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: the default cadence still reports that same ask as STALE-ASK, so the bound changed no verdict.
+OUT="$("$CHECK" --input "$TMP/stale-ask.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^STALE-ASK +p#62'; then ok "CONTROL: the default cadence still reports the stale ask"; else bad "CONTROL: the default cadence still reports the stale ask" "rc=$RC out=${OUT:0:200}"; fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1

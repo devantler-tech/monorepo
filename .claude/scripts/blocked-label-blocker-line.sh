@@ -112,6 +112,10 @@ command -v jq >/dev/null 2>&1 || die "jq is required"
 case "$ASK_MAX_AGE_DAYS" in
   "" | *[!0-9]*) usage_die "--ask-max-age-days must be a non-negative integer (got '$ASK_MAX_AGE_DAYS')" ;;
 esac
+# Bound the magnitude too: `[ a -gt b ]` on a value past the 64-bit range prints `integer
+# expression expected` and evaluates FALSE, so the checker would report CONFORMS on a stale ask.
+# Nine digits is ~2.7 million years -- far beyond any cadence, well inside the integer range.
+[ "${#ASK_MAX_AGE_DAYS}" -le 9 ] || usage_die "--ask-max-age-days must have at most 9 digits (got '$ASK_MAX_AGE_DAYS')"
 
 # What counts as NAMING a dependency. The contract's shape is `<owner/repo#N-or-release-id>`,
 # but that grammar alone rejects the idiom actually in use: measured 2026-08-25 across all live
@@ -151,6 +155,10 @@ is_real_date() { # YYYY-MM-DD
   local y m d max
   [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || return 1
   y=$((10#${1:0:4}))
+  # Year 0 is outside the civil-date arithmetic domain: January and February of it make
+  # `days_from_civil` compute with y=-1, where bash truncation and floor division disagree, so
+  # `0000-02-29` and `0000-03-01` collapse onto one day and a future ask reads as current.
+  [ "$y" -ge 1 ] || return 1
   m=$((10#${1:5:2}))
   d=$((10#${1:8:2}))
   case "$m" in
