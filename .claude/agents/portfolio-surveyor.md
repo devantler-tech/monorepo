@@ -1273,7 +1273,7 @@ public and private — no per-repo loop needed to enumerate):
    Flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
-   repos outside the map (`maintenance`, `fleet-gitops`)
+   repos outside the map (`maintenance`)
    are never strategy-review candidates, however empty their issue lists.
 5b. **Board coverage (org project 5) — measure with pagination, or report `unknown`.** The digest
    carries a `board_coverage=` row. Live miss (2026-07-20, #2326): a survey emitted
@@ -1390,8 +1390,8 @@ public and private — no per-repo loop needed to enumerate):
 
 Portfolio repos (the org-wide search covers them). The
 **authoritative set is the org's live non-archived repo list**: the monorepo `AGENTS.md` portfolio
-map names the *products*, and org/infra repos outside that map (e.g. `maintenance`,
-`fleet-gitops`) are in scope too. Reconcile each run with one bounded call —
+map names the *products*, and org/infra repos outside that map (e.g. `maintenance`) are in scope
+too. Reconcile each run with one bounded call —
 `gh repo list devantler-tech --no-archived --limit 100 --json name` — and when that live set
 disagrees with **the list below**, survey the live set and flag the drift in the digest rather than
 dropping any repo. (A live repo absent from the portfolio map is *not* drift — the map intentionally
