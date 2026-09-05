@@ -2851,4 +2851,11 @@ grep -Fq 'is denied as `not the guarded remote-mode shape`' <<<"${_ci_step}" ||
   fail "step 4 must say the positional classifier form is DENIED by the guard, so a caller does not read the flag form as one option among two (agent-plugins#195)"
 grep -Fq 'the helper itself exits 2 on it' <<<"${_ci_step}" ||
   fail "step 4 must say the helper itself rejects the positional form — the guard is right, not a gap to work around (agent-plugins#195)"
+# The flag form alone is not enough: the guard admits only the exact installed sibling PATH, so a
+# literal copy of a bare `classify-default-branch-ci-runs.sh …` example is denied as "not a forge
+# command" (Codex P1 on agent-plugins#197). Both halves are pinned on their own lines.
+grep -Fq -- '<installed plugin>/scripts/classify-default-branch-ci-runs.sh --repo' <<<"${_ci_step}" ||
+  fail "step 4 must prescribe the classifier by its resolved installed path, not a bare basename (agent-plugins#197, Codex P1)"
+grep -Fq 'never a bare basename' <<<"${_ci_step}" ||
+  fail "step 4 must say the guard admits only the exact installed sibling path — never a bare basename (agent-plugins#197, Codex P1)"
 echo "portfolio surveyor contract: round-11 classifier-argument-shape assertions passed"
