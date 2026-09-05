@@ -1209,10 +1209,13 @@ governs the issue work that follows.) Two rules enforce that:
    **record** of an ask and is explicitly **not** an attention channel, so a comment alone leaves
    the issue exactly as parked as silence. Re-raise on a cadence rather than every run; the ask
    goes stale after **14 days** by default. An authority line with no ask, or with a stale one, is
-   a finding — `NO-ASK` / `STALE-ASK`. **The class is an explicit token and is never inferred from
-   prose**: a blocker phrased "needs an account action" is authority-caused, reads as ordinary
-   prose, and would silently escape the ask requirement forever. An absent class is `LEGACY` and a
-   finding, never a silent pass.
+   a finding — `NO-ASK` / `STALE-ASK`. **The class is an explicit token; a record that predates the
+   field is INFERRED rather than refused** — read as `authority` only when its identifier already
+   says `maintainer authority`, otherwise `upstream` — and annotated `[legacy: no class token]` so
+   the migration stays visible while the record is judged exactly as before. Inference is the weaker
+   guarantee: a blocker phrased "needs an account action" is authority-caused, reads as ordinary
+   prose, and escapes the ask requirement until it is classed — which is why the explicit token is
+   required on every record written under this rule and always overrides the inference.
 
    🔴 **The label and the line are not coupled by anything, so CHECK them rather than assuming.** A
    live claim expires after ~2h, so a wrongly-skipped issue comes back; a **label never expires**,

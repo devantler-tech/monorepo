@@ -568,5 +568,56 @@ cat >"$TMP/cls-explicit-wins.json" <<'EOF'
 EOF
 expect_rc "CONTROL: an explicit class overrides the inference" 0 "$TMP/cls-explicit-wins.json"
 
+# ------------------------------------------------------------------ 33. the ask CHANNEL is a closed set
+#
+# `issue` is not a channel that reaches the maintainer -- a GitHub comment is a record of an ask,
+# not an attention channel -- so `asked issue <date>` must read as NO ask at all. Accepting any
+# token here let exactly the parked-while-looking-handled record this check exists to find CONFORM.
+cat >"$TMP/cls-auth-issue-channel.json" <<'EOF2'
+[{"repo":"a","number":13,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked issue 2026-09-01"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/cls-auth-issue-channel.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ]; then ok "an ask on a non-attention channel is a finding"; else bad "an ask on a non-attention channel is a finding" "rc=$RC out=${OUT:0:200}"; fi
+if printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#13'; then ok "and is reported as NO-ASK, not as delivered"; else bad "and is reported as NO-ASK, not as delivered" "out=${OUT:0:200}"; fi
+
+# CONTROL: the two other named channels conform on the same body -- so case 33 fails on the
+# channel token rather than on some other property of the line.
+for ch in slack session; do
+  printf '[{"repo":"a","number":14,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked %s 2026-09-01"}]\n' "$ch" >"$TMP/cls-auth-$ch.json"
+  OUT="$("$CHECK" --input "$TMP/cls-auth-$ch.json" --today 2026-09-05 2>&1)"; RC=$?
+  if [ "$RC" = 0 ]; then ok "CONTROL: an ask via '$ch' conforms"; else bad "CONTROL: an ask via '$ch' conforms" "rc=$RC out=${OUT:0:200}"; fi
+done
+
+# ------------------------------------------------------------------ 34. a FUTURE ask date is not a fresh ask
+#
+# `today - ask` goes negative for a date after today, and a plain "older than the cadence" test
+# reads negative as fresh: an ask dated 2030-01-01 would bypass the re-raise cadence until 2030.
+cat >"$TMP/cls-auth-future.json" <<'EOF2'
+[{"repo":"a","number":15,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2030-01-01"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/cls-auth-future.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ]; then ok "an ask dated after today is a finding"; else bad "an ask dated after today is a finding" "rc=$RC out=${OUT:0:200}"; fi
+if printf '%s\n' "$OUT" | grep -qE '^MALFORMED +a#15'; then ok "a future ask is reported as MALFORMED"; else bad "a future ask is reported as MALFORMED" "out=${OUT:0:200}"; fi
+
+# BOUNDARY: an ask dated exactly today is not future and conforms.
+cat >"$TMP/cls-auth-today.json" <<'EOF2'
+[{"repo":"a","number":16,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-09-05"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/cls-auth-today.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "BOUNDARY: an ask dated today conforms"; else bad "BOUNDARY: an ask dated today conforms" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 35. `--today` must name a real day
+#
+# The clock the whole ask cadence is measured against was only shape-checked, so `2026-02-31`
+# reached the day arithmetic and produced a verdict against a date that never happened.
+OUT="$("$CHECK" --input "$TMP/cls-auth-ok.json" --today 2026-02-31 2>&1)"; RC=$?
+if [ "$RC" = 2 ]; then ok "--today on an impossible date is a usage error"; else bad "--today on an impossible date is a usage error" "rc=$RC out=${OUT:0:200}"; fi
+if printf '%s\n' "$OUT" | grep -q -- '--today must be a real'; then ok "and names --today as the cause"; else bad "and names --today as the cause" "out=${OUT:0:200}"; fi
+
+# CONTROL: the well-formed shape is still what is rejected -- a real boundary date is accepted
+# (on an upstream record, so no ask date can read as future against a February clock).
+OUT="$("$CHECK" --input "$TMP/cls-upstream.json" --today 2026-02-28 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "CONTROL: --today on a real boundary date is accepted"; else bad "CONTROL: --today on a real boundary date is accepted" "rc=$RC out=${OUT:0:200}"; fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1

@@ -109,15 +109,6 @@ esac
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
-# `date -u +%F` is the one spelling both BSD and GNU agree on; every OTHER date operation in this
-# script is hand-rolled arithmetic for exactly that reason. `--today` exists so the self-test can
-# pin the clock: a suite whose verdict changes with the calendar is one that eventually fails for
-# no reason and gets deleted.
-if [ -z "$TODAY" ]; then
-  TODAY="$(date -u +%F)" || die "could not read the current date -- UNKNOWN"
-fi
-is_real_date_early() { case "$1" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) return 0 ;; *) return 1 ;; esac; }
-is_real_date_early "$TODAY" || usage_die "--today must be YYYY-MM-DD (got '$TODAY')"
 case "$ASK_MAX_AGE_DAYS" in
   "" | *[!0-9]*) usage_die "--ask-max-age-days must be a non-negative integer (got '$ASK_MAX_AGE_DAYS')" ;;
 esac
@@ -171,6 +162,17 @@ is_real_date() { # YYYY-MM-DD
   [ "$d" -ge 1 ] && [ "$d" -le "$max" ]
 }
 
+# `date -u +%F` is the one spelling both BSD and GNU agree on; every OTHER date operation in this
+# script is hand-rolled arithmetic for exactly that reason. `--today` exists so the self-test can
+# pin the clock: a suite whose verdict changes with the calendar is one that eventually fails for
+# no reason and gets deleted. The clock is read only once `is_real_date` exists, so `--today` is
+# held to the same calendar test as every date the check judges: `2026-02-31` names no day, and a
+# verdict computed from it would be a stale-ask reading against a date that never happened.
+if [ -z "$TODAY" ]; then
+  TODAY="$(date -u +%F)" || die "could not read the current date -- UNKNOWN"
+fi
+is_real_date "$TODAY" || usage_die "--today must be a real YYYY-MM-DD calendar date (got '$TODAY')"
+
 # Days since the civil epoch (Howard Hinnant's algorithm), in pure shell arithmetic.
 #
 # `date` is deliberately not used: its parsing flags differ between BSD and GNU, which would make
@@ -208,7 +210,11 @@ days_from_civil() { # YYYY-MM-DD -> days since 1970-01-01 on stdout
 # A record predating the field is still INFERRED rather than refused -- see classify_record for
 # why -- so the explicit token buys strictness that inference cannot, and always overrides it.
 CLASS_RE='^(upstream|authority)$'
-ASK_RE='\| asked ([A-Za-z0-9._-]+) ([0-9]{4}-[0-9]{2}-[0-9]{2})$'
+# The channel is a closed set, not a free token: the contract names `push`, `slack` and `session` as
+# the channels that REACH the maintainer, and rules `issue` out by name -- a GitHub comment is a record
+# of an ask, never an attention channel. Accepting any word here would let `asked issue <date>` read as
+# a delivered ask, which is precisely the parked-while-looking-handled state this check exists to find.
+ASK_RE='\| asked (push|slack|session) ([0-9]{4}-[0-9]{2}-[0-9]{2})$'
 
 # Matching is done with bash's own `=~` rather than `printf | grep -q`: `grep -q` exits on its
 # first match and can SIGPIPE the writer, which under `set -o pipefail` surfaces as rc=141 on a
@@ -282,6 +288,9 @@ classify_record() { # <logical line> -> sets VERDICT, LEGACY_NOTE
 
   ask_days="$(days_from_civil "$ask_date")"
   today_days="$(days_from_civil "$TODAY")"
+  # An ask dated after today is not a fresh ask -- it is a record nobody could have made yet, and the
+  # age arithmetic would read it as fresh until that date arrives, bypassing the re-raise cadence.
+  if [ "$ask_days" -gt "$today_days" ]; then VERDICT="MALFORMED"; return; fi
   if [ "$((today_days - ask_days))" -gt "$ASK_MAX_AGE_DAYS" ]; then
     VERDICT="STALE-ASK"
     return
