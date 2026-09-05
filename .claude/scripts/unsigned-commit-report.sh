@@ -117,7 +117,7 @@ acquire_pr_commits() { # <repo> <pr> <branch-label>
   # emits one array per page and `.[]` walks each. `pipefail` is set, so a failed read fails here.
   local out count
   out="$(gh api "repos/$1/pulls/$2/commits" --paginate |
-    jq -r --arg branch "$3" '.[] | [.sha, (.commit.verification.verified|tostring), (.commit.verification.reason // "missing"), $branch] | @tsv')" || return 1
+    jq -r --arg branch "$3" '.[] | [.sha, (.commit.verification.verified|tostring), (.commit.verification.reason // "missing"), $branch] | @tsv')" || die "could not read $1#$2 commits -- UNKNOWN"
   count="$(printf '%s' "$out" | grep -c .)" || true
   [ "$count" -lt "$PR_COMMIT_CAP" ] \
     || die "$1#$2 has $count commits, at the $PR_COMMIT_CAP-commit endpoint cap: the report would be TRUNCATED -- UNKNOWN"
@@ -136,7 +136,7 @@ elif [ -n "$PR" ]; then
   if [ -z "$HEAD_REF" ]; then
     HEAD_REF="$(gh api "repos/$REPO/pulls/$PR" --jq '.head.ref')" || die "could not read $REPO#$PR head ref -- UNKNOWN"
   fi
-  rows="$(acquire_pr_commits "$REPO" "$PR" "$HEAD_REF")" || die "could not read $REPO#$PR commits -- UNKNOWN"
+  rows="$(acquire_pr_commits "$REPO" "$PR" "$HEAD_REF")" || exit 2
 else
   # Measurement mode. One search per lane keeps the query agent-constructed and the branch
   # attribution exact; `--limit` is explicit because gh defaults to 30 and would silently truncate.
@@ -159,7 +159,7 @@ else
   count=0
   while IFS=$'\t' read -r n branch; do
     [ -n "$n" ] || continue
-    chunk="$(acquire_pr_commits "$REPO" "$n" "$branch")" || die "could not read $REPO#$n commits -- UNKNOWN"
+    chunk="$(acquire_pr_commits "$REPO" "$n" "$branch")" || exit 2
     rows="${rows}${chunk}"$'\n'
     count=$((count + 1))
   done <<<"$prs"
