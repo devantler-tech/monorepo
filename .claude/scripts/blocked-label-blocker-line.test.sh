@@ -9,6 +9,7 @@ set -uo pipefail
 
 HERE="$(cd -- "$(dirname -- "$0")" && pwd -P)"
 CHECK="$HERE/blocked-label-blocker-line.sh"
+WRAPPER="$CHECK"
 [ -x "$CHECK" ] || {
   echo "FATAL: $CHECK is not executable" >&2
   exit 2
@@ -16,6 +17,10 @@ CHECK="$HERE/blocked-label-blocker-line.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+go -C "$HERE/blocked-label-blocker-line-go" test ./... || exit 2
+go -C "$HERE/blocked-label-blocker-line-go" build -o "$TMP/guard" . || exit 2
+CHECK="$TMP/guard"
 
 pass=0
 fail=0
@@ -46,7 +51,7 @@ expect_out() { # name pattern file
 
 # ------------------------------------------------------------------ 1. conforming
 cat >"$TMP/good.json" <<'EOF'
-[{"repo":"a","number":1,"body":"lead\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-01: not shipped\n\ntail"}]
+[{"repo":"a","number":1,"body":"lead\n\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-01: not shipped\n\ntail"}]
 EOF
 expect_rc "conforming line exits 0" 0 "$TMP/good.json"
 
@@ -66,7 +71,7 @@ expect_out "prose blocker is MALFORMED" '^MALFORMED +d#4' "$TMP/prose.json"
 
 # ------------------------------------------------------------------ 4. malformed date
 cat >"$TMP/date.json" <<'EOF'
-[{"repo":"e","number":5,"body":"**Blocker:** owner/repo#9 | last-verified 26-08-01: bad date"}]
+[{"repo":"e","number":5,"body":"**Blocker:** owner/repo#9 | upstream | last-verified 26-08-01: bad date"}]
 EOF
 expect_rc "two-digit year is MALFORMED" 1 "$TMP/date.json"
 
@@ -75,14 +80,14 @@ expect_rc "two-digit year is MALFORMED" 1 "$TMP/date.json"
 # it conforms (measured against platform#3274). Both halves are asserted, so a join that silently
 # stops working is caught by the POSITIVE CONTROL rather than passing vacuously.
 cat >"$TMP/wrapped.json" <<'EOF'
-[{"repo":"c","number":3,"body":"**Blocker:** maintainer authority - an org-owned App with packages read, installed on at\nleast one tenant repository | last-verified 2026-08-21: not provisioned\n\nnext"}]
+[{"repo":"c","number":3,"body":"**Blocker:** maintainer authority - an org-owned App with packages read, installed on at\nleast one tenant repository | upstream | last-verified 2026-08-21: not provisioned\n\nnext"}]
 EOF
 expect_rc "wrapped conforming line exits 0" 0 "$TMP/wrapped.json"
 
 # POSITIVE CONTROL: the same text on ONE line must also conform. If this ever fails, the case
 # above is proving nothing about wrapping -- it would be passing for an unrelated reason.
 cat >"$TMP/unwrapped.json" <<'EOF'
-[{"repo":"c","number":3,"body":"**Blocker:** maintainer authority - an org-owned App with packages read, installed on at least one tenant repository | last-verified 2026-08-21: not provisioned\n\nnext"}]
+[{"repo":"c","number":3,"body":"**Blocker:** maintainer authority - an org-owned App with packages read, installed on at least one tenant repository | upstream | last-verified 2026-08-21: not provisioned\n\nnext"}]
 EOF
 expect_rc "control: same line unwrapped also exits 0" 0 "$TMP/unwrapped.json"
 
@@ -114,7 +119,7 @@ while [ "$i" -lt 6000 ]; do
 done >"$TMP/big.txt"
 {
   echo
-  echo "**Blocker:** owner/repo#7 | last-verified 2026-08-01: not shipped"
+  echo "**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-01: not shipped"
 } >>"$TMP/big.txt"
 jq -Rs '[{repo: "big", number: 11, body: .}]' <"$TMP/big.txt" >"$TMP/big.json"
 
@@ -135,12 +140,12 @@ elif [ "$RC" = 141 ]; then
 else bad "large body does not raise SIGPIPE" "rc=$RC; out: ${OUT:0:200}"; fi
 
 # ------------------------------------------------------------------ 7. CRLF bodies
-printf '[{"repo":"f","number":6,"body":"**Blocker:** owner/repo#7 | last-verified 2026-08-01: not shipped\\r\\n\\r\\ntail"}]\n' >"$TMP/crlf.json"
+printf '[{"repo":"f","number":6,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-01: not shipped\\r\\n\\r\\ntail"}]\n' >"$TMP/crlf.json"
 expect_rc "CRLF body conforms" 0 "$TMP/crlf.json"
 
 # ------------------------------------------------------------------ 8. counting is accurate
 cat >"$TMP/mixed.json" <<'EOF'
-[{"repo":"a","number":1,"body":"**Blocker:** o/r#1 | last-verified 2026-08-01: x"},
+[{"repo":"a","number":1,"body":"**Blocker:** o/r#1 | upstream | last-verified 2026-08-01: x"},
  {"repo":"b","number":2,"body":"none"},
  {"repo":"c","number":3,"body":"none either"}]
 EOF
@@ -193,21 +198,22 @@ OUT="$("$CHECK" --input - <"$TMP/good.json" 2>&1)"
 RC=$?
 if [ "$RC" = 0 ]; then ok "--input - reads stdin"; else bad "--input - reads stdin" "rc=$RC; ${OUT:0:150}"; fi
 
-# ------------------------------------------------------------------ 12. --quiet suppresses rows, keeps the verdict
+# ------------------------------------------------------------------ 12. --quiet preserves finding rows and their exit status, without summaries
+# The help text promises "print findings only"; a --quiet that also hid MISSING/MALFORMED/NO-ASK rows
+# left an operator with a count and no issue ids to repair.
 OUT="$("$CHECK" --quiet --input "$TMP/mixed.json" 2>&1)"
 RC=$?
-if [ "$RC" = 1 ] && ! printf '%s\n' "$OUT" | grep -q '^MISSING' &&
-  printf '%s\n' "$OUT" | grep -q '2 of 3'; then
-  ok "--quiet suppresses rows but keeps the verdict"
+if [ "$RC" = 1 ] && [ "$OUT" = $'MISSING    b#2\nMISSING    c#3' ]; then
+  ok "--quiet prints every finding row without a summary"
 else
-  bad "--quiet suppresses rows but keeps the verdict" "rc=$RC; out: ${OUT:0:200}"
+  bad "--quiet prints every finding row without a summary" "rc=$RC; out: ${OUT:0:200}"
 fi
 
 # ------------------------------------------------------------------ 13. the identifier must NAME something
 # A well-formed date and reason are not enough: the contract calls a "merely prose 'waiting on
 # upstream' record" under-specified, and such a line would otherwise satisfy every other check.
 cat >"$TMP/prose-dated.json" <<'EOF'
-[{"repo":"p","number":20,"body":"**Blocker:** waiting on upstream | last-verified 2026-08-01: no response"}]
+[{"repo":"p","number":20,"body":"**Blocker:** waiting on upstream | upstream | last-verified 2026-08-01: no response"}]
 EOF
 expect_rc "dated prose with no identifier is MALFORMED" 1 "$TMP/prose-dated.json"
 
@@ -215,11 +221,11 @@ expect_rc "dated prose with no identifier is MALFORMED" 1 "$TMP/prose-dated.json
 # blocker lines: 10 name an authority, 8 an owner/repo#N, and the rest a bare repo path, a bare
 # issue reference, or a slug. A rule that rejected any of these would fire on correct work.
 cat >"$TMP/idioms.json" <<'EOF'
-[{"repo":"a","number":1,"body":"**Blocker:** loft-sh/vcluster#3805 | last-verified 2026-08-25: not shipped"},
- {"repo":"b","number":2,"body":"**Blocker:** maintainer authority - an org admin must set the property | last-verified 2026-08-25: still false"},
- {"repo":"c","number":3,"body":"**Blocker:** crossplane-contrib/provider-upjet-github (a settings resource) | last-verified 2026-08-25: not shipped"},
- {"repo":"d","number":4,"body":"**Blocker:** child #3274 (installation token) | last-verified 2026-08-24: not provisioned"},
- {"repo":"e","number":5,"body":"**Blocker:** maintainer authority (an account-scoped provider quota) | last-verified 2026-08-19: still limited"}]
+[{"repo":"a","number":1,"body":"**Blocker:** loft-sh/vcluster#3805 | upstream | last-verified 2026-08-25: not shipped"},
+ {"repo":"b","number":2,"body":"**Blocker:** maintainer authority - an org admin must set the property | upstream | last-verified 2026-08-25: still false"},
+ {"repo":"c","number":3,"body":"**Blocker:** crossplane-contrib/provider-upjet-github (a settings resource) | upstream | last-verified 2026-08-25: not shipped"},
+ {"repo":"d","number":4,"body":"**Blocker:** child #3274 (installation token) | upstream | last-verified 2026-08-24: not provisioned"},
+ {"repo":"e","number":5,"body":"**Blocker:** maintainer authority (an account-scoped provider quota) | upstream | last-verified 2026-08-19: still limited"}]
 EOF
 expect_rc "every identifier idiom in live use still CONFORMS" 0 "$TMP/idioms.json"
 
@@ -269,14 +275,14 @@ fi
 # syntactic way to separate a deliberate slug from an incidental compound word, which is why the
 # slug form was removed rather than narrowed.
 cat >"$TMP/hyphen-prose.json" <<'EOF'
-[{"repo":"p","number":21,"body":"**Blocker:** waiting on third-party response | last-verified 2026-08-25: no response"}]
+[{"repo":"p","number":21,"body":"**Blocker:** waiting on third-party response | upstream | last-verified 2026-08-25: no response"}]
 EOF
 expect_rc "hyphenated prose is not an identifier" 1 "$TMP/hyphen-prose.json"
 
 # CONTROL: the same sentence carrying a real identifier must still pass, so the case above is
 # shown to turn on the identifier rather than on the surrounding prose.
 cat >"$TMP/hyphen-prose-ok.json" <<'EOF'
-[{"repo":"p","number":22,"body":"**Blocker:** waiting on third-party response from owner/repo#7 | last-verified 2026-08-25: no response"}]
+[{"repo":"p","number":22,"body":"**Blocker:** waiting on third-party response from owner/repo#7 | upstream | last-verified 2026-08-25: no response"}]
 EOF
 expect_rc "control: the same prose WITH an identifier conforms" 0 "$TMP/hyphen-prose-ok.json"
 
@@ -284,19 +290,19 @@ expect_rc "control: the same prose WITH an identifier conforms" 0 "$TMP/hyphen-p
 # Digit counting alone accepts 2026-99-99, so a record that cannot represent a real verification
 # date was reported as a clean verdict.
 cat >"$TMP/baddate.json" <<'EOF'
-[{"repo":"p","number":23,"body":"**Blocker:** owner/repo#7 | last-verified 2026-99-99: nope"}]
+[{"repo":"p","number":23,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-99-99: nope"}]
 EOF
 expect_rc "an impossible date is MALFORMED" 1 "$TMP/baddate.json"
 
 cat >"$TMP/baddate2.json" <<'EOF'
-[{"repo":"p","number":24,"body":"**Blocker:** owner/repo#7 | last-verified 2026-13-01: nope"}]
+[{"repo":"p","number":24,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-13-01: nope"}]
 EOF
 expect_rc "month 13 is MALFORMED" 1 "$TMP/baddate2.json"
 
 # CONTROL: a boundary date that IS real must still pass, so the range check is not simply
 # rejecting everything.
 cat >"$TMP/gooddate.json" <<'EOF'
-[{"repo":"p","number":25,"body":"**Blocker:** owner/repo#7 | last-verified 2026-12-31: nope"}]
+[{"repo":"p","number":25,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-12-31: nope"}]
 EOF
 expect_rc "control: a real boundary date conforms" 0 "$TMP/gooddate.json"
 
@@ -326,20 +332,20 @@ fi
 # so `github.com/owner` inside a link satisfied it and a record naming nothing but a link
 # CONFORMED -- the indefinite skip this check exists to expose.
 cat >"$TMP/url.json" <<'EOF'
-[{"repo":"p","number":30,"body":"**Blocker:** https://github.com/owner/repo/issues/7 | last-verified 2026-08-25: not shipped"}]
+[{"repo":"p","number":30,"body":"**Blocker:** https://github.com/owner/repo/issues/7 | upstream | last-verified 2026-08-25: not shipped"}]
 EOF
 expect_rc "a URL identifier is MALFORMED" 1 "$TMP/url.json"
 
 # A scheme-less URL is the same class and must not slip past a scheme-only test.
 cat >"$TMP/url-bare.json" <<'EOF'
-[{"repo":"p","number":36,"body":"**Blocker:** github.com/owner/repo/issues/7 | last-verified 2026-08-25: not shipped"}]
+[{"repo":"p","number":36,"body":"**Blocker:** github.com/owner/repo/issues/7 | upstream | last-verified 2026-08-25: not shipped"}]
 EOF
 expect_rc "a scheme-less URL identifier is MALFORMED" 1 "$TMP/url-bare.json"
 
 # CONTROL: a record may legitimately NAME an identifier and also link to it. Rejecting that
 # would fire on correct work, so URL tokens are stripped rather than poisoning the whole record.
 cat >"$TMP/url-plus-id.json" <<'EOF'
-[{"repo":"p","number":37,"body":"**Blocker:** owner/repo#7 (see https://github.com/owner/repo/issues/7) | last-verified 2026-08-25: x"}]
+[{"repo":"p","number":37,"body":"**Blocker:** owner/repo#7 (see https://github.com/owner/repo/issues/7) | upstream | last-verified 2026-08-25: x"}]
 EOF
 expect_rc "control: a real identifier alongside a link still CONFORMS" 0 "$TMP/url-plus-id.json"
 
@@ -347,24 +353,24 @@ expect_rc "control: a real identifier alongside a link still CONFORMS" 0 "$TMP/u
 # Bounding month and day independently accepts a day that cannot exist in that month, so
 # `2026-02-31` read as a verification date. The date is what makes a skip re-verifiable.
 cat >"$TMP/feb31.json" <<'EOF'
-[{"repo":"p","number":31,"body":"**Blocker:** owner/repo#7 | last-verified 2026-02-31: nope"}]
+[{"repo":"p","number":31,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-02-31: nope"}]
 EOF
 expect_rc "31 February is MALFORMED" 1 "$TMP/feb31.json"
 
 cat >"$TMP/apr31.json" <<'EOF'
-[{"repo":"p","number":40,"body":"**Blocker:** owner/repo#7 | last-verified 2026-04-31: nope"}]
+[{"repo":"p","number":40,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-04-31: nope"}]
 EOF
 expect_rc "31 April is MALFORMED" 1 "$TMP/apr31.json"
 
 # Leap years must be computed, not assumed: these two differ ONLY in the year, so a check that
 # hard-coded 28 or 29 days fails one of them.
 cat >"$TMP/feb29-non.json" <<'EOF'
-[{"repo":"p","number":38,"body":"**Blocker:** owner/repo#7 | last-verified 2026-02-29: nope"}]
+[{"repo":"p","number":38,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-02-29: nope"}]
 EOF
 expect_rc "29 February in a non-leap year is MALFORMED" 1 "$TMP/feb29-non.json"
 
 cat >"$TMP/feb29-leap.json" <<'EOF'
-[{"repo":"p","number":39,"body":"**Blocker:** owner/repo#7 | last-verified 2024-02-29: leap"}]
+[{"repo":"p","number":39,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2024-02-29: leap"}]
 EOF
 expect_rc "control: 29 February in a leap year CONFORMS" 0 "$TMP/feb29-leap.json"
 
@@ -375,27 +381,27 @@ expect_rc "control: 29 February in a leap year CONFORMS" 0 "$TMP/feb29-leap.json
 # declines it for the disclosure classifier: there an unswallowed marker costs a re-askable steer,
 # here it costs an issue parked forever, so the cheap direction is the opposite one.
 cat >"$TMP/in-comment.json" <<'EOF'
-[{"repo":"p","number":32,"body":"real text\n\n<!--\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: stale\n-->\n\nmore"}]
+[{"repo":"p","number":32,"body":"real text\n\n<!--\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: stale\n-->\n\nmore"}]
 EOF
 expect_rc "a marker inside an HTML comment is MISSING" 1 "$TMP/in-comment.json"
 expect_out "a commented marker reports MISSING" '^MISSING +p#32' "$TMP/in-comment.json"
 
 cat >"$TMP/in-fence.json" <<'EOF'
-[{"repo":"p","number":33,"body":"Example of the format:\n\n```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n```\n\nend"}]
+[{"repo":"p","number":33,"body":"Example of the format:\n\n```\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: example\n```\n\nend"}]
 EOF
 expect_rc "a marker inside a code fence is MISSING" 1 "$TMP/in-fence.json"
 
 # CONTROL: an inline comment ELSEWHERE in the body must not suppress a real record, so the case
 # above is shown to turn on the marker's context rather than on the body containing a comment.
 cat >"$TMP/comment-elsewhere.json" <<'EOF'
-[{"repo":"p","number":34,"body":"x <!-- hidden --> y\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: real\n\nend"}]
+[{"repo":"p","number":34,"body":"x <!-- hidden --> y\n\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: real\n\nend"}]
 EOF
 expect_rc "control: a comment elsewhere does not hide a real record" 0 "$TMP/comment-elsewhere.json"
 
 # CONTROL: the fence must TOGGLE, not swallow the rest of the body -- a record after a closed
 # fence is still a record. Without this, "ignore fences" could pass by ignoring everything.
 cat >"$TMP/after-fence.json" <<'EOF'
-[{"repo":"p","number":35,"body":"```\nexample fence\n```\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: real\n\nend"}]
+[{"repo":"p","number":35,"body":"```\nexample fence\n```\n\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: real\n\nend"}]
 EOF
 expect_rc "control: a record after a closed fence still CONFORMS" 0 "$TMP/after-fence.json"
 
@@ -407,25 +413,25 @@ expect_rc "control: a record after a closed fence still CONFORMS" 0 "$TMP/after-
 #
 # Built with printf rather than a heredoc: the fixtures are made OF fence delimiters, so embedding
 # them in this file's own prose is what makes them easy to get subtly wrong.
-printf 'Example:\n\n````\n```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n```\n````\n\nend\n' >"$TMP/fence4.txt"
+printf 'Example:\n\n````\n```\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: example\n```\n````\n\nend\n' >"$TMP/fence4.txt"
 jq -Rs '[{repo:"p",number:50,body:.}]' <"$TMP/fence4.txt" >"$TMP/fence4.json"
 expect_rc "a shorter run inside a longer fence does not close it" 1 "$TMP/fence4.json"
 expect_out "the 4-backtick fence body reports MISSING" '^MISSING +p#50' "$TMP/fence4.json"
 
 # The character must match too: a ``` run cannot close a ~~~ fence.
-printf 'Example:\n\n~~~\n```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n```\n~~~\n\nend\n' >"$TMP/fencex.txt"
+printf 'Example:\n\n~~~\n```\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: example\n```\n~~~\n\nend\n' >"$TMP/fencex.txt"
 jq -Rs '[{repo:"p",number:52,body:.}]' <"$TMP/fencex.txt" >"$TMP/fencex.json"
 expect_rc "a mismatched fence character does not close it" 1 "$TMP/fencex.json"
 
 # CONTROL: a fence that IS properly closed must release, or "never close" would pass every case
 # above by simply swallowing the rest of the body. The record here sits after a closed 4-backtick
 # fence and must conform.
-printf 'Example:\n\n````\n```\ninner\n```\n````\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: real\n\nend\n' >"$TMP/fenceok.txt"
+printf 'Example:\n\n````\n```\ninner\n```\n````\n\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: real\n\nend\n' >"$TMP/fenceok.txt"
 jq -Rs '[{repo:"p",number:54,body:.}]' <"$TMP/fenceok.txt" >"$TMP/fenceok.json"
 expect_rc "control: a record after a closed 4-backtick fence CONFORMS" 0 "$TMP/fenceok.json"
 
 # CONTROL: a LONGER closing run is legal, so it must close a shorter fence.
-printf 'Example:\n\n```\ninner\n````\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: real\n\nend\n' >"$TMP/fencelong.txt"
+printf 'Example:\n\n```\ninner\n````\n\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: real\n\nend\n' >"$TMP/fencelong.txt"
 jq -Rs '[{repo:"p",number:55,body:.}]' <"$TMP/fencelong.txt" >"$TMP/fencelong.json"
 expect_rc "control: a longer closing run closes a shorter fence" 0 "$TMP/fencelong.json"
 
@@ -436,32 +442,310 @@ expect_rc "control: a longer closing run closes a shorter fence" 0 "$TMP/fencelo
 # early and exposing the example as a live record. Reported by CodeRabbit on PR #3053 -- the reported
 # 4-backtick fixture did NOT reproduce (the run-length rule already rejects it); the equal-length
 # one did, so both shapes are pinned here.
-printf 'Example:\n\n```\n<!-- x -->```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n```\n\nend\n' >"$TMP/fencecmt.txt"
+printf 'Example:\n\n```\n<!-- x -->```\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: example\n```\n\nend\n' >"$TMP/fencecmt.txt"
 jq -Rs '[{repo:"p",number:56,body:.}]' <"$TMP/fencecmt.txt" >"$TMP/fencecmt.json"
 expect_rc "a commented prefix cannot forge a closing fence" 1 "$TMP/fencecmt.json"
 expect_out "the forged-close body reports MISSING" '^MISSING +p#56' "$TMP/fencecmt.json"
 
 # The reported 4-backtick shape, pinned so the run-length rule that already covers it cannot regress.
-printf 'Example:\n\n````\n<!-- ignored -->```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n````\n\nend\n' >"$TMP/fencecmt4.txt"
+printf 'Example:\n\n````\n<!-- ignored -->```\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: example\n````\n\nend\n' >"$TMP/fencecmt4.txt"
 jq -Rs '[{repo:"p",number:57,body:.}]' <"$TMP/fencecmt4.txt" >"$TMP/fencecmt4.json"
 expect_rc "a commented prefix cannot forge a shorter closing run either" 1 "$TMP/fencecmt4.json"
 
 # CONTROL: the strip must still run OUTSIDE a fence, or suppressing it there would stop a
 # comment-prefixed line from OPENING one -- exposing the example by the opposite route.
-printf 'Example:\n\n<!-- lead-in -->```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n```\n\nend\n' >"$TMP/cmtopen.txt"
+printf 'Example:\n\n<!-- lead-in -->```\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: example\n```\n\nend\n' >"$TMP/cmtopen.txt"
 jq -Rs '[{repo:"p",number:58,body:.}]' <"$TMP/cmtopen.txt" >"$TMP/cmtopen.json"
 expect_rc "control: a commented prefix still OPENS a fence outside one" 1 "$TMP/cmtopen.json"
 
 # CONTROL: the fence still releases, so a real record after it conforms -- without this, "never
 # close inside a fence" would pass every negative case above by swallowing the whole body.
-printf 'Example:\n\n```\n<!-- x -->```\ninner\n```\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: real\n\nend\n' >"$TMP/fencecmtok.txt"
+printf 'Example:\n\n```\n<!-- x -->```\ninner\n```\n\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: real\n\nend\n' >"$TMP/fencecmtok.txt"
 jq -Rs '[{repo:"p",number:59,body:.}]' <"$TMP/fencecmtok.txt" >"$TMP/fencecmtok.json"
 expect_rc "control: a record after that fence still CONFORMS" 0 "$TMP/fencecmtok.json"
 
 # CONTROL: multi-line comment suppression outside a fence is unchanged by the guard.
-printf '<!--\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: retired\n-->\n\nend\n' >"$TMP/cmtmulti.txt"
+printf '<!--\n**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-25: retired\n-->\n\nend\n' >"$TMP/cmtmulti.txt"
 jq -Rs '[{repo:"p",number:60,body:.}]' <"$TMP/cmtmulti.txt" >"$TMP/cmtmulti.json"
 expect_rc "control: a multi-line commented record is still MISSING" 1 "$TMP/cmtmulti.json"
+
+
+# ------------------------------------------------------------------ 23. CAUSE CLASS: explicit upstream
+#
+# The class is the segment immediately before `last-verified`. An `upstream` blocker clears itself
+# when the dependency ships, so re-verification is exactly the right treatment and the check must
+# not ask for anything more.
+cat >"$TMP/cls-upstream.json" <<'EOF'
+[{"repo":"a","number":1,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-01: not shipped"}]
+EOF
+expect_rc "explicit upstream class conforms" 0 "$TMP/cls-upstream.json"
+
+# ------------------------------------------------------------------ 24. CAUSE CLASS: authority WITH an ask
+cat >"$TMP/cls-auth-ok.json" <<'EOF'
+[{"repo":"a","number":2,"body":"**Blocker:** maintainer authority — an R2 bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-09-01"}]
+EOF
+# Pinned clock: the fixture's ask is dated 2026-09-01, so an unpinned run would read it STALE-ASK
+# from 2026-09-16 on and fail CI purely because the calendar advanced.
+OUT="$("$CHECK" --input "$TMP/cls-auth-ok.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "authority class with a fresh ask conforms"; else bad "authority class with a fresh ask conforms" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 25. THE DEFECT: authority with NO ask
+#
+# This is the whole point of the change. An authority blocker clears only when a person is asked,
+# so re-verification alone guarantees it never clears. Measured 2026-09-05: 8 of 21 authority-class
+# blocked issues org-wide carried no ask of any kind, the oldest 54 days.
+cat >"$TMP/cls-auth-noask.json" <<'EOF'
+[{"repo":"a","number":3,"body":"**Blocker:** maintainer authority — an R2 bucket | authority | last-verified 2026-09-01: not provisioned"}]
+EOF
+expect_rc "authority class with no ask is a finding" 1 "$TMP/cls-auth-noask.json"
+expect_out "authority with no ask is reported as NO-ASK" '^NO-ASK +a#3' "$TMP/cls-auth-noask.json"
+
+# ------------------------------------------------------------------ 26. NEGATIVE CONTROL
+#
+# The same body shape, differing ONLY in the class token, must NOT be flagged. Without this the
+# check could be passing case 25 by flagging every line regardless of class.
+cat >"$TMP/cls-upstream-noask.json" <<'EOF'
+[{"repo":"a","number":4,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-09-01: not shipped"}]
+EOF
+expect_rc "NEGATIVE CONTROL: upstream with no ask is NOT flagged" 0 "$TMP/cls-upstream-noask.json"
+
+# ------------------------------------------------------------------ 27. absent class is INFERRED
+#
+# Every live record predates this field, so refusing them would report 46 findings on day one and
+# bury the real ones. An unclassed record is evaluated exactly as before -- and is marked so the
+# migration stays visible.
+cat >"$TMP/cls-legacy.json" <<'EOF'
+[{"repo":"a","number":5,"body":"**Blocker:** owner/repo#7 | last-verified 2026-09-01: not shipped"}]
+EOF
+expect_rc "absent class is inferred, not refused" 0 "$TMP/cls-legacy.json"
+expect_out "an unclassed record is marked legacy" 'legacy: no class token' "$TMP/cls-legacy.json"
+
+# ------------------------------------------------------------------ 28. an unknown class token is MALFORMED
+cat >"$TMP/cls-bogus.json" <<'EOF'
+[{"repo":"a","number":6,"body":"**Blocker:** owner/repo#7 | sometimes | last-verified 2026-09-01: not shipped"}]
+EOF
+expect_rc "an unknown class token is a finding" 1 "$TMP/cls-bogus.json"
+
+# ------------------------------------------------------------------ 29. an ask goes STALE on the cadence
+#
+# `--today` is passed explicitly so the case is hermetic; without it the suite would change verdict
+# with the calendar, which is a test that eventually fails for no reason and gets deleted.
+cat >"$TMP/cls-auth-stale.json" <<'EOF'
+[{"repo":"a","number":7,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-08-01"}]
+EOF
+OUT="$("$CHECK" --input "$TMP/cls-auth-stale.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ]; then ok "an ask older than the cadence is a finding"; else bad "an ask older than the cadence is a finding" "rc=$RC out=${OUT:0:200}"; fi
+if printf '%s\n' "$OUT" | grep -qE '^STALE-ASK +a#7'; then ok "a stale ask is reported as STALE-ASK"; else bad "a stale ask is reported as STALE-ASK" "out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 30. BOUNDARY: an ask inside the cadence passes
+cat >"$TMP/cls-auth-fresh.json" <<'EOF'
+[{"repo":"a","number":8,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-08-30"}]
+EOF
+OUT="$("$CHECK" --input "$TMP/cls-auth-fresh.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "BOUNDARY: an ask inside the cadence passes"; else bad "BOUNDARY: an ask inside the cadence passes" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 31. the ask date must be a real day
+cat >"$TMP/cls-auth-baddate.json" <<'EOF'
+[{"repo":"a","number":9,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-02-31"}]
+EOF
+expect_rc "an ask carrying an impossible date is a finding" 1 "$TMP/cls-auth-baddate.json"
+
+
+# ------------------------------------------------------------------ 32. THE MIGRATION-FREE WIN
+#
+# An unclassed record whose identifier already says "maintainer authority" is inferred as authority,
+# so the ask requirement bites on the 19 live records that need it WITHOUT editing a single issue
+# body first. This is the case that makes the change deliverable rather than merely correct.
+cat >"$TMP/cls-legacy-auth.json" <<'EOF'
+[{"repo":"a","number":10,"body":"**Blocker:** maintainer authority (Cloudflare account action) | last-verified 2026-09-01: not provisioned"}]
+EOF
+expect_rc "an unclassed AUTHORITY record still demands an ask" 1 "$TMP/cls-legacy-auth.json"
+expect_out "and is reported as NO-ASK" '^NO-ASK +a#10' "$TMP/cls-legacy-auth.json"
+
+# CONTROL: the same unclassed record WITH an ask conforms -- so case 32 is failing on the missing
+# ask rather than on being unclassed.
+cat >"$TMP/cls-legacy-auth-ok.json" <<'EOF'
+[{"repo":"a","number":11,"body":"**Blocker:** maintainer authority (Cloudflare account action) | last-verified 2026-09-01: not provisioned | asked pr 2026-09-01"}]
+EOF
+OUT="$("$CHECK" --input "$TMP/cls-legacy-auth-ok.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "CONTROL: the same unclassed record with an ask conforms"; else bad "CONTROL: the same unclassed record with an ask conforms" "rc=$RC out=${OUT:0:200}"; fi
+
+# CONTROL: an explicit class OVERRIDES the inference -- an identifier mentioning "maintainer
+# authority" that is explicitly classed `upstream` is not held to the ask requirement.
+cat >"$TMP/cls-explicit-wins.json" <<'EOF'
+[{"repo":"a","number":12,"body":"**Blocker:** maintainer authority (an account-scoped provider quota) | upstream | last-verified 2026-09-01: still limited"}]
+EOF
+expect_rc "CONTROL: an explicit class overrides the inference" 0 "$TMP/cls-explicit-wins.json"
+
+# ------------------------------------------------------------------ 33. the ask CHANNEL is a closed set
+#
+# `issue` is not a channel that reaches the maintainer -- a GitHub comment is a record of an ask,
+# not an attention channel -- so `asked issue <date>` must read as NO ask at all. Accepting any
+# token here let exactly the parked-while-looking-handled record this check exists to find CONFORM.
+cat >"$TMP/cls-auth-issue-channel.json" <<'EOF2'
+[{"repo":"a","number":13,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked issue 2026-09-01"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/cls-auth-issue-channel.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ]; then ok "an ask on a non-attention channel is a finding"; else bad "an ask on a non-attention channel is a finding" "rc=$RC out=${OUT:0:200}"; fi
+if printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#13'; then ok "and is reported as NO-ASK, not as delivered"; else bad "and is reported as NO-ASK, not as delivered" "out=${OUT:0:200}"; fi
+
+# CONTROL: the two other named channels conform on the same body -- so case 33 fails on the
+# channel token rather than on some other property of the line.
+for ch in slack session; do
+  printf '[{"repo":"a","number":14,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked %s 2026-09-01"}]\n' "$ch" >"$TMP/cls-auth-$ch.json"
+  OUT="$("$CHECK" --input "$TMP/cls-auth-$ch.json" --today 2026-09-05 2>&1)"; RC=$?
+  if [ "$RC" = 0 ]; then ok "CONTROL: an ask via '$ch' conforms"; else bad "CONTROL: an ask via '$ch' conforms" "rc=$RC out=${OUT:0:200}"; fi
+done
+
+# ------------------------------------------------------------------ 34. a FUTURE ask date is not a fresh ask
+#
+# `today - ask` goes negative for a date after today, and a plain "older than the cadence" test
+# reads negative as fresh: an ask dated 2030-01-01 would bypass the re-raise cadence until 2030.
+cat >"$TMP/cls-auth-future.json" <<'EOF2'
+[{"repo":"a","number":15,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2030-01-01"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/cls-auth-future.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ]; then ok "an ask dated after today is a finding"; else bad "an ask dated after today is a finding" "rc=$RC out=${OUT:0:200}"; fi
+if printf '%s\n' "$OUT" | grep -qE '^MALFORMED +a#15'; then ok "a future ask is reported as MALFORMED"; else bad "a future ask is reported as MALFORMED" "out=${OUT:0:200}"; fi
+
+# BOUNDARY: an ask dated exactly today is not future and conforms.
+cat >"$TMP/cls-auth-today.json" <<'EOF2'
+[{"repo":"a","number":16,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-09-05"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/cls-auth-today.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "BOUNDARY: an ask dated today conforms"; else bad "BOUNDARY: an ask dated today conforms" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 35. `--today` must name a real day
+#
+# The clock the whole ask cadence is measured against was only shape-checked, so `2026-02-31`
+# reached the day arithmetic and produced a verdict against a date that never happened.
+OUT="$("$CHECK" --input "$TMP/cls-auth-ok.json" --today 2026-02-31 2>&1)"; RC=$?
+if [ "$RC" = 2 ]; then ok "--today on an impossible date is a usage error"; else bad "--today on an impossible date is a usage error" "rc=$RC out=${OUT:0:200}"; fi
+if printf '%s\n' "$OUT" | grep -q -- '--today must be a real'; then ok "and names --today as the cause"; else bad "and names --today as the cause" "out=${OUT:0:200}"; fi
+
+# CONTROL: the well-formed shape is still what is rejected -- a real boundary date is accepted
+# (on an upstream record, so no ask date can read as future against a February clock).
+OUT="$("$CHECK" --input "$TMP/cls-upstream.json" --today 2026-02-28 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "CONTROL: --today on a real boundary date is accepted"; else bad "CONTROL: --today on a real boundary date is accepted" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 36. year zero is outside the arithmetic domain
+# `days_from_civil` steps the year back for January and February, so year 0 computes with y=-1,
+# where bash's truncating division disagrees with the algorithm's floor division: 0000-02-29 and
+# 0000-03-01 collapse onto the same day count, and an ask dated AFTER today read as current.
+cat >"$TMP/year0.json" <<'EOF2'
+[{"repo":"p","number":60,"body":"**Blocker:** maintainer authority | authority | last-verified 0000-02-29: pending | asked pr 0000-03-01"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/year0.json" --today 0000-02-29 --ask-max-age-days 0 2>&1)"; RC=$?
+if [ "$RC" = 2 ]; then ok "--today in year zero is a usage error"; else bad "--today in year zero is a usage error" "rc=$RC out=${OUT:0:200}"; fi
+# The same year-zero date inside a RECORD is a malformed record, not a verdict.
+OUT="$("$CHECK" --input "$TMP/year0.json" --today 2026-09-05 --ask-max-age-days 0 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^MALFORMED +p#60'; then ok "a year-zero ask date is MALFORMED"; else bad "a year-zero ask date is MALFORMED" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: year 1 is inside the domain and still evaluates normally.
+cat >"$TMP/year1.json" <<'EOF2'
+[{"repo":"p","number":61,"body":"**Blocker:** maintainer authority | authority | last-verified 0001-03-01: pending | asked pr 0001-03-01"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/year1.json" --today 0001-03-01 --ask-max-age-days 0 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "CONTROL: year one is inside the domain and conforms"; else bad "CONTROL: year one is inside the domain and conforms" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 37. the cadence must fit the integer comparison
+# A digits-only check accepts a value past the 64-bit range; `[ a -gt b ]` then prints
+# `integer expression expected` and evaluates FALSE, so a stale ask reported CONFORMS.
+cat >"$TMP/stale-ask.json" <<'EOF2'
+[{"repo":"p","number":62,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-05: pending | asked pr 2026-08-01"}]
+EOF2
+OUT="$("$CHECK" --input "$TMP/stale-ask.json" --today 2026-09-05 --ask-max-age-days 999999999999999999999999 2>&1)"; RC=$?
+if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q -- 'at most 9 digits'; then ok "an out-of-range cadence is a usage error"; else bad "an out-of-range cadence is a usage error" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: the largest accepted cadence still evaluates and permits the same age.
+OUT="$("$CHECK" --input "$TMP/stale-ask.json" --today 2026-09-05 --ask-max-age-days 999999999 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "CONTROL: a nine-digit cadence is accepted and evaluates"; else bad "CONTROL: a nine-digit cadence is accepted and evaluates" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: the default cadence still reports that same ask as STALE-ASK, so the bound changed no verdict.
+OUT="$("$CHECK" --input "$TMP/stale-ask.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^STALE-ASK +p#62'; then ok "CONTROL: the default cadence still reports the stale ask"; else bad "CONTROL: the default cadence still reports the stale ask" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 39. --quiet keeps NO-ASK rows too (findings, not CONFORMS)
+OUT="$("$CHECK" --quiet --input "$TMP/cls-legacy-auth.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#10'; then ok "--quiet still prints the NO-ASK row"; else bad "--quiet still prints the NO-ASK row" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: a payload of only CONFORMS rows prints no row at all under --quiet
+OUT="$("$CHECK" --quiet --input "$TMP/good.json" 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && ! printf '%s\n' "$OUT" | grep -qE '^(CONFORMS|MISSING|MALFORMED|NO-ASK|STALE-ASK) '; then ok "CONTROL: --quiet on an all-conforming payload prints no row"; else bad "CONTROL: --quiet on an all-conforming payload prints no row" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 40. the legacy annotation reaches NON-conforming rows too
+# An operator repairing a NO-ASK on a classless record must also be told the class token is missing;
+# annotating only the CONFORMS branch left the migration invisible exactly where it is acted on.
+OUT="$("$CHECK" --input "$TMP/cls-legacy-auth.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#10 +\[legacy: no class token\]'; then ok "a legacy NO-ASK row carries the legacy annotation"; else bad "a legacy NO-ASK row carries the legacy annotation" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: an explicitly classed NO-ASK row carries NO legacy annotation
+cat >"$TMP/cls-explicit-noask.json" <<'JSON'
+[{"repo":"a","number":41,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/cls-explicit-noask.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#41' && ! printf '%s\n' "$OUT" | grep -q 'legacy: no class token'; then ok "CONTROL: an explicitly classed NO-ASK row is not marked legacy"; else bad "CONTROL: an explicitly classed NO-ASK row is not marked legacy" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 41. trailing whitespace after the ask date is not a missing ask
+# Markdown's two-space hard break is ordinary; an end-anchored regex read it as NO-ASK and prompted a repeat ask.
+cat >"$TMP/ask-trailing-ws.json" <<'JSON'
+[{"repo":"a","number":42,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-09-01  "}]
+JSON
+OUT="$("$CHECK" --input "$TMP/ask-trailing-ws.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -qE '^CONFORMS +a#42'; then ok "trailing whitespace after the ask date still conforms"; else bad "trailing whitespace after the ask date still conforms" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: trailing NON-whitespace after the date is still not an ask
+cat >"$TMP/ask-trailing-text.json" <<'JSON'
+[{"repo":"a","number":43,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked pr 2026-09-01 maybe"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/ask-trailing-text.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#43'; then ok "CONTROL: trailing text after the ask date is still NO-ASK"; else bad "CONTROL: trailing text after the ask date is still NO-ASK" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 42. an EMPTY verification result is MALFORMED, ask or no ask
+# `last-verified <date>: | asked pr <date>` let the structure regex read the ask suffix as the result,
+# so an authority record with a fresh ask and NO live verification evidence conformed.
+cat >"$TMP/empty-result-ask.json" <<'JSON'
+[{"repo":"a","number":44,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: | asked pr 2026-09-01"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/empty-result-ask.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^MALFORMED +a#44'; then ok "an authority record with an ask but no verification result is MALFORMED"; else bad "an authority record with an ask but no verification result is MALFORMED" "rc=$RC out=${OUT:0:200}"; fi
+cat >"$TMP/empty-result-upstream.json" <<'JSON'
+[{"repo":"a","number":45,"body":"**Blocker:** o/r#1 | upstream | last-verified 2026-08-01:   "}]
+JSON
+OUT="$("$CHECK" --input "$TMP/empty-result-upstream.json" 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^MALFORMED +a#45'; then ok "an upstream record whose result is only whitespace is MALFORMED"; else bad "an upstream record whose result is only whitespace is MALFORMED" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: a one-word result with the same ask suffix still conforms
+cat >"$TMP/short-result-ask.json" <<'JSON'
+[{"repo":"a","number":46,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: pending | asked pr 2026-09-01"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/short-result-ask.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -qE '^CONFORMS +a#46'; then ok "CONTROL: a real result with the same ask suffix conforms"; else bad "CONTROL: a real result with the same ask suffix conforms" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 38. --help documents the class and the ask record
+# A caller following the built-in help must not be led to write a classless authority record, which
+# the legacy fallback reads as upstream and never asks for an ask.
+OUT="$("$CHECK" --help 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '| <blocker-kind> | last-verified' && printf '%s\n' "$OUT" | grep -q '| authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session> <YYYY-MM-DD>' && printf '%s\n' "$OUT" | grep -q -- '--ask-max-age-days <n>'; then ok "--help shows the class token, the authority ask suffix and the cadence option"; else bad "--help shows the class token, the authority ask suffix and the cadence option" "rc=$RC out=${OUT:0:300}"; fi
+if ! printf '%s\n' "$OUT" | grep -q '^set -euo pipefail'; then ok "and --help stops before the code"; else bad "and --help stops before the code" "help leaked code"; fi
+
+# Current-head review regressions: exercise the public CLI with literal records.
+cat >"$TMP/authority-description.json" <<'JSON'
+[{"repo":"a","number":70,"body":"**Blocker:** Cloudflare account action | authority | last-verified 2026-09-01: pending | asked session 2026-09-01"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/authority-description.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "explicit authority accepts a descriptive account action"; else bad "explicit authority accepts a descriptive account action" "rc=$RC out=$OUT"; fi
+cat >"$TMP/duplicate-kind.json" <<'JSON'
+[{"repo":"a","number":71,"body":"**Blocker:** owner/repo#1 | authority | upstream | last-verified 2026-09-01: pending"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/duplicate-kind.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -q '^MALFORMED'; then ok "multiple blocker kinds cannot bypass the authority ask"; else bad "multiple blocker kinds cannot bypass the authority ask" "rc=$RC out=$OUT"; fi
+cat >"$TMP/pr-ask.json" <<'JSON'
+[{"repo":"a","number":72,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-01: outage-cause=credentials/auth; access is still missing | asked pr 2026-09-01"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/pr-ask.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "a draft PR ask and separate outage cause conform"; else bad "a draft PR ask and separate outage cause conform" "rc=$RC out=$OUT"; fi
+
+# Exercise the installed entrypoint as a caller, including stdin/argument forwarding
+# and both successful and findings exit codes. Keep the large fixture suite fast
+# by running its individual cases through the compiled binary above.
+OUT="$("$WRAPPER" --quiet --input "$TMP/good.json" 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && [ -z "$OUT" ]; then ok "shell entrypoint forwards quiet success"; else bad "shell entrypoint forwards quiet success" "rc=$RC out=$OUT"; fi
+OUT="$("$WRAPPER" --quiet --input - <"$TMP/missing.json" 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && [ "$OUT" = 'MISSING    b#2' ]; then ok "shell entrypoint forwards stdin and findings status"; else bad "shell entrypoint forwards stdin and findings status" "rc=$RC out=$OUT"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1
