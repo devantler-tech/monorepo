@@ -1233,8 +1233,10 @@ governs the issue work that follows.) Two rules enforce that:
    waiting on a dependency that shipped five weeks earlier, another was a `security`+`bug` issue
    parked 23 days with nothing behind it. Run
    [`.claude/scripts/blocked-label-blocker-line.sh --org devantler-tech`](.claude/scripts/blocked-label-blocker-line.sh)
-   when a run reaches issue triage; each row it reports as `MISSING` or `MALFORMED` is an issue to
-   repair or unblock, exactly as the sentence above requires. Exit `1` means findings, `2` means
+   when a run reaches issue triage. Every `MISSING`, `MALFORMED`, `NO-ASK`, or `STALE-ASK` row
+   requires action: repair or unblock missing or malformed records; for `NO-ASK`, deliver an ask
+   through a canonical attention channel and record it; for `STALE-ASK`, renew the ask and update
+   its channel and date to the actual delivery. Exit `1` means findings, `2` means
    UNKNOWN — a failed or timed-out read, never a clean sweep.
    ⚠️ **Verify before repairing.** Adding a well-formed line to an issue whose dependency has already
    shipped makes the skip look *more* legitimate on every future tick, which is worse than the
