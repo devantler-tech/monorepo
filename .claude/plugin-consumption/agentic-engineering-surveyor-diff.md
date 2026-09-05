@@ -129,7 +129,11 @@ measured casualty is agent-plugins#182's admitted-call-shape rule: installed on 
 dispatch. It is now ported into the Safety block above (monorepo#3179, pinned by round 10 of
 `portfolio-surveyor.test.sh`). **Until monorepo#3180 decides the topology, route every surveyor
 refinement to BOTH places** — upstream for the target definition, and here for the loaded one — and
-treat "merged upstream + gitlink bumped + install CURRENT" as *not* evidence a surveyor rule is live.
+treat "merged upstream + gitlink bumped + install CURRENT" as *not* evidence a surveyor rule is live. Second measured casualty, 2026-09-05: the CI classifier's argument shape. Over 7 days, **19 of 20**
+classifier-calling surveyor dispatches read this file rather than the plugin agent, and 3 of the 19 that
+reached the helper invoked it positionally and lost 24 reads to the guard. The flag-form sentence from
+agent-plugins#195 is now in step 4 of the survey above as well (monorepo#3223, pinned by round 11 of
+`portfolio-surveyor.test.sh`).
 
 ## Equivalence status (this slice)
 
