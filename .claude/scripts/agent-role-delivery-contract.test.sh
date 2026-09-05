@@ -377,6 +377,32 @@ assert_prose 'cross-*reading* them is mandatory, cross-*publishing* them is not 
   "Memory does not prohibit cross-publishing the sibling store or leaking it into a repository artifact or public comment"
 assert_prose "The sibling's file remains **its** single source of truth — read it, never write it" \
   "Memory does not keep the sibling store read-only, so a run could write to another instance's ledger"
+# The agent-improvement skill's no-change research fallback needs a consumer-declared cursor store and
+# writer; without them every Improver run that reaches it records QUERY-UNKNOWN (measured on every such
+# run of both instances from 2026-08-15 to 2026-09-05). Each clause below is pinned on its own line.
+assert_prose 'Agent Improver research register and cursor' \
+  "Memory does not name the Agent Improver research register and cursor, so the research fallback stays QUERY-UNKNOWN on every no-change run"
+assert_prose 'The single cursor writer is the Claude machine-local Agent Improver' \
+  "Memory does not declare the single research-cursor writer, so no instance may claim the cursor and the fallback never completes a pass"
+assert_prose 'never researches or advances the cursor' \
+  "Memory does not keep the non-writer instance off the research cursor, so two instances could advance it"
+
+# Same WHITELIST discipline for the research-register block (review round 1 on #3215 named the unpinned
+# clauses one by one — budget, routing, fallback — which is the blacklist that never converges). The
+# three named assertions above keep their specific messages; this pins the whole paragraph verbatim.
+research_fixture="${repo_root}/.claude/scripts/fixtures/agent-improver-research-register.txt"
+[ -r "${research_fixture}" ] ||
+  fail "research-register fixture is missing: ${research_fixture}"
+research_block="$(awk '
+  /^   \*\*Agent Improver research register and cursor\*\*/ { f = 1 }
+  f { print }
+  f && /named as the blocker\.$/ { exit }
+' "${constitution}")"
+[ -n "${research_block}" ] ||
+  fail "Could not locate the research-register block in AGENTS.md — its opening anchor was removed or reworded"
+if ! printf '%s\n' "${research_block}" | diff -q - "${research_fixture}" >/dev/null 2>&1; then
+  fail "The research-register block no longer matches its fixture. Intentional edits must update .claude/scripts/fixtures/agent-improver-research-register.txt in the same commit"
+fi
 
 # WHITELIST, not another named clause. Four review rounds each found "clause N is unpinned" — a
 # blacklist that never converges, because the next round just names clause N+1. The named assertions

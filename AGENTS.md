@@ -4956,6 +4956,27 @@ step:
    store: `/Users/homelab-mac-mini/.codex/automations/daily-ai-engineer/memory.md` for Codex and the
    runtime's native project memory for Claude. These are private runtime stores, never repository
    artifacts, and absolute financial figures live **only** here or in the private channel.
+   **Agent Improver research register and cursor** — the durable store the `agent-improvement` skill's
+   no-change research fallback (its section *3a*) reads, claims and advances. It is the
+   `## Research register` section of the Claude hypothesis store named above: the topic cursor, plus one
+   line per pass recording the topic, the sources checked, and the pass's single disposition — one of
+   the skill's four outcomes (`ENGINEER-CANDIDATE`, `IMPROVER-CANDIDATE`, `RESEARCH-CANDIDATE`,
+   `RESEARCH-NO-CANDIDATE`) or the deferral `QUERY-UNKNOWN` with its blocker named. 🔴 **The single
+   cursor writer is the Claude machine-local Agent Improver.** This deployment's private stores are
+   per-runtime files with no compare-and-set, so the atomic cross-instance claim with a fencing token the
+   skill prefers is unavailable, and its single-writer alternative is what is declared here. The Codex
+   Agent Improver reads the register on its cross-read and **never researches or advances the cursor**:
+   its disposition is the deferral `QUERY-UNKNOWN (not the declared cursor writer)`, recorded in its own
+   ledger — a deferral to the writer, never a blocker to escalate. Research budget: the skill's hard
+   maxima (20 minutes, 12 calls, eight primary sources), with no tighter consumer bound. Routing and
+   lifecycle: an `ENGINEER-CANDIDATE` becomes a well-formed issue on the owning repository per the
+   *Stack map*, filed under the Improver's own disclosure and boarded per *Every issue belongs on the
+   board*; an `IMPROVER-CANDIDATE` stays in the register until a later Improver run establishes measured
+   local evidence for it; a `RESEARCH-CANDIDATE` stays in the register with its uncertainty named and is
+   re-examined by the next pass that reaches its topic, which either promotes it to one of the two queues
+   or closes it as `RESEARCH-NO-CANDIDATE`; `RESEARCH-NO-CANDIDATE` is terminal for that cursor value, so
+   the topic is not re-searched until the rotation returns to it. Absent or malformed, the fallback fails
+   closed to `QUERY-UNKNOWN` with this paragraph named as the blocker.
 2. **The end-of-run report** is a per-run record (products surveyed, what changed with PR links). It is
    **not** an attention channel — he rarely reads it — so anything that needs his action goes via a draft
    PR or `AskUserQuestion` (or, when genuinely blocked in an unattended run, a last-resort Slack ping),
