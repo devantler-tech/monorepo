@@ -498,6 +498,32 @@ submodule. Split its work in two, because only one half is path-less:
   is exactly the collision this loop's worktree rule exists to prevent. Retire the board issue's
   acquired SHA when that draft PR opens, using the same monorepo root.
 
+### 1c. Board the Cursor lane's issues — one command, before you select
+
+The Cursor cloud instance gets 403 on Projects, so **every issue it files is necessarily unboarded**
+and a local run has to board it. Run this before issue selection, so the board reflects the lane's
+findings while you are choosing work rather than after:
+
+```sh
+.claude/scripts/cursor-issue-board-sweep.sh
+```
+
+It discovers open Cursor-authored issues org-wide — author matched **exactly**, oldest first, with
+`--limit` pinned because `gh search` defaults to 30 — and passes **every** result through the
+idempotent `board-add.sh`, which does both halves of the add and verifies the Status by reading it
+back. Do **not** hand-roll the `item-add` + `item-edit` pair here: `item-add` exits 0 and prints an
+item id, so a half-completed add is indistinguishable from a finished one, which is the defect that
+helper exists to close.
+
+Read its exit status rather than its output: `0` means every discovered issue is on the board (or
+there were none), and `2` means the **discovery itself failed** or an issue could not be boarded —
+never treat a failed search as an empty lane. A private repository's issue is reported `SKIPPED`,
+because project 5 is public and boarding one from a private repo is a maintainer decision.
+
+This exists as a step because a distant constitutional paragraph was not reliably reached: the
+status-less card count regressed 0 → 4 → 0 → 16 across ticks while the repair was already scripted
+and idempotent (monorepo#2402).
+
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
 rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and
