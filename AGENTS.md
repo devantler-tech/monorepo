@@ -20,6 +20,7 @@ keeping them healthy *and* moving them forward.
 | KSail (Go CLI) | `devantler-tech/ksail` | `applications/ksail` | [AGENTS.md](https://github.com/devantler-tech/ksail/blob/main/AGENTS.md) |
 | Data Product Controller | `devantler-tech/data-product-controller` | `applications/data-product-controller` | [AGENTS.md](https://github.com/devantler-tech/data-product-controller/blob/main/AGENTS.md) |
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | [AGENTS.md](https://github.com/devantler-tech/platform/blob/main/AGENTS.md) |
+| AWS config tenant | `devantler-tech/aws` | `applications/aws` | [AGENTS.md](https://github.com/devantler-tech/aws/blob/main/AGENTS.md) |
 | devantler.tech site | `devantler-tech/monorepo` | `docs/` + repo root | this file |
 | GitHub organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | [AGENTS.md](https://github.com/devantler-tech/.github/blob/main/AGENTS.md) |
 | Go template | `devantler-tech/go-template` | `templates/go-template` | [AGENTS.md](https://github.com/devantler-tech/go-template/blob/main/AGENTS.md) |
@@ -37,6 +38,7 @@ keeping them healthy *and* moving them forward.
 | Wedding app | `devantler-tech/wedding-app` | `applications/wedding-app` | [AGENTS.md](https://github.com/devantler-tech/wedding-app/blob/main/AGENTS.md) |
 | AS Coaching | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | [AGENTS.md](https://github.com/devantler-tech/ascoachingogvaner/blob/main/AGENTS.md) |
 | UniFi network | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
+| FleetDM device config | `devantler-tech/fleet-gitops` | `applications/fleet-gitops` | — (the repo carries no `AGENTS.md` yet; see its [product card](.claude/skills/products/fleet-gitops/SKILL.md)) |
 | 🌊 Project Board (org project 5) | — (not a repo; [org project 5](https://github.com/orgs/devantler-tech/projects/5)) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
 
 > Submodule `AGENTS.md` links use full GitHub URLs because those files live in the submodule repos, not this repo's tree (a relative link would 404 on GitHub).
@@ -103,6 +105,7 @@ no row are filed on the **default intake repo** below.
 | Wedding app | THIS suite's existing deployed wedding website only — its guest pages, RSVPs, schedules, photos and practical info (not new wedding sites in general) | `devantler-tech/wedding-app` |
 | AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |
 | App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
+| AWS infrastructure | Changing THIS suite's deployed AWS resources — today the EKS-based CI cluster, and anything else the platform's AWS tenant reconciles through Crossplane (not AWS setups in general) | `devantler-tech/aws` |
 | KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
 | Data product controller | Creating, composing, publishing, and exploring reusable data products backed by new or existing data sources | `devantler-tech/data-product-controller` |
 | Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/actions` |
@@ -113,6 +116,7 @@ no row are filed on the **default intake repo** below.
 | Platform tenant template | The starter template new platform-tenant repositories are created from | `devantler-tech/platform-tenant-template` |
 | Platform template | The starter template new platform repositories are created from | `devantler-tech/platform-template` |
 | UniFi home network | Changing THIS suite's deployed UniFi network — SSIDs, VLANs, firewall rules, device and VPN config | `devantler-tech/unifi` |
+| Managed devices (FleetDM) | Changing how THIS suite's enrolled Macs and other devices are configured and checked — the policies, queries and enrolment settings its FleetDM GitOps repo defines (not device management in general) | `devantler-tech/fleet-gitops` |
 | UniFi Crossplane provider | Developing the Crossplane provider library itself (new resource support, codegen, provider bugs) | `devantler-tech/provider-upjet-unifi` |
 | Cluster guardrail policies | Shared rules that check or adjust what may run on the suite's clusters, so every platform inherits the same guardrails | `devantler-tech/kyverno-policies` |
 | Mac install packages | Making the suite's tools installable on a Mac via Homebrew | `devantler-tech/homebrew-tap` |
@@ -1183,13 +1187,45 @@ governs the issue work that follows.) Two rules enforce that:
    Give every externally-blocked issue a **structured blocker line** in its body (and keep the
    `blocked` label on) so the next tick retains the fully-qualified identity and last result without
    retaining a destination:
-   `**Blocker:** <owner/repo#N-or-release-id> | last-verified <YYYY-MM-DD>: <result>`
-   Example: `**Blocker:** opencost/opencost#3710 | last-verified 2026-08-01: not shipped`.
+   `**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`
+   Example: `**Blocker:** opencost/opencost#3710 | upstream | last-verified 2026-08-01: not shipped`.
    The reference is an identifier, not permission to inspect that repository. Independently choose an
    allowed source and re-check it on every run before using (b) to skip. If the dependency has shipped,
    remove the `blocked` label and blocker line and resume oldest-first; otherwise update the
    `last-verified` result. A missing, malformed, or merely prose "waiting on upstream" record is
    under-specified for (b) — repair the line and verify it (or unblock) rather than skipping.
+
+   🔴 **`<blocker-kind>` is exactly `upstream` or `authority`, and the difference decides whether
+   re-verification is sufficient or futile.** This is separate from the provider-outage **cause
+   class** (`quota/billing`, `credentials/auth`, `runtime/config`, `unknown`). For an outage, put
+   `outage-cause=<cause-class>; <verification evidence>` in `<result>`; never use that class in
+   the blocker-kind field. An explicit `authority` identifier may describe the account action,
+   credential or permission in plain language. An **upstream** blocker clears itself when the
+   dependency ships, so re-checking it every run is exactly right. An **authority** blocker — an
+   account action, a provider credential, a permission only the maintainer can grant — clears *only
+   when a person is asked*, so re-verification alone **guarantees it never clears**: the loop is
+   structurally incapable of finishing it, and the more diligently it re-verifies, the more
+   permanent the parking looks. Measured 2026-09-05 org-wide: **19 of 46** open blocked-labelled
+   issues were authority-caused, and **8 of those carried no ask of any kind** — only CodeRabbit's
+   auto-generated plan, or no comments at all. The oldest had been open **54 days**. Every one of
+   their blocker lines was *conforming*; the check reported a clean sweep over them, because
+   conformance was never the same thing as progress.
+
+   🔴 **An `authority` line MUST also record the ask: append `| asked <channel> <YYYY-MM-DD>`.**
+   `<channel>` names where it actually landed — a channel that *reaches* him per *Maintainer
+   channels*: `pr` means a draft PR, `slack` the declared Slack channel, and `session` the native
+   ask tool in an interactive session. `push` and `issue` are not channel tokens: a GitHub comment
+   is a durable
+   **record** of an ask and is explicitly **not** an attention channel, so a comment alone leaves
+   the issue exactly as parked as silence. Re-raise on a cadence rather than every run; the ask
+   goes stale after **14 days** by default. An authority line with no ask, or with a stale one, is
+   a finding — `NO-ASK` / `STALE-ASK`. **The class is an explicit token; a record that predates the
+   field is INFERRED rather than refused** — read as `authority` only when its identifier already
+   says `maintainer authority`, otherwise `upstream` — and annotated `[legacy: no class token]` so
+   the migration stays visible while the record is judged exactly as before. Inference is the weaker
+   guarantee: a blocker phrased "needs an account action" is authority-caused, reads as ordinary
+   prose, and escapes the ask requirement until it is classed — which is why the explicit token is
+   required on every record written under this rule and always overrides the inference.
 
    🔴 **The label and the line are not coupled by anything, so CHECK them rather than assuming.** A
    live claim expires after ~2h, so a wrongly-skipped issue comes back; a **label never expires**,
@@ -1199,8 +1235,10 @@ governs the issue work that follows.) Two rules enforce that:
    waiting on a dependency that shipped five weeks earlier, another was a `security`+`bug` issue
    parked 23 days with nothing behind it. Run
    [`.claude/scripts/blocked-label-blocker-line.sh --org devantler-tech`](.claude/scripts/blocked-label-blocker-line.sh)
-   when a run reaches issue triage; each row it reports as `MISSING` or `MALFORMED` is an issue to
-   repair or unblock, exactly as the sentence above requires. Exit `1` means findings, `2` means
+   when a run reaches issue triage. Every `MISSING`, `MALFORMED`, `NO-ASK`, or `STALE-ASK` row
+   requires action: repair or unblock missing or malformed records; for `NO-ASK`, deliver an ask
+   through a canonical attention channel and record it; for `STALE-ASK`, renew the ask and update
+   its channel and date to the actual delivery. Exit `1` means findings, `2` means
    UNKNOWN — a failed or timed-out read, never a clean sweep.
    ⚠️ **Verify before repairing.** Adding a well-formed line to an issue whose dependency has already
    shipped makes the skip look *more* legitimate on every future tick, which is worse than the
@@ -4251,7 +4289,7 @@ refinements (the `4b`–`4e` items in
 [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
 were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
 closed, pushing the file's own deletion further away, and charging every hourly dispatch for it. Its
-**enforced high-water mark is now 157,672 B** (raised 2026-09-05 by monorepo#3223 to port agent-plugins#195's classifier flag-form sentence into the overlay's step 4, which 19 of 20 classifier-calling surveyor dispatches read instead of the plugin agent; the 2026-09-04 raise by monorepo#3207 ported agent-plugins#177's `gh --json` vocabulary rule for the same reason); that is the live ratchet ceiling, not a rewrite of the
+**enforced high-water mark is now 157,615 B** (raised 2026-09-05 by monorepo#3223 to port agent-plugins#195's classifier flag-form sentence into the overlay's step 4, which 19 of 20 classifier-calling surveyor dispatches read instead of the plugin agent; the 2026-09-04 raise by monorepo#3207 ported agent-plugins#177's `gh --json` vocabulary rule for the same reason); that is the live ratchet ceiling, not a rewrite of the
 dated measurement.
 
 **So a new surveyor refinement goes UPSTREAM unless it is a genuine deployment fact.**
