@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
 	goparser "go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -661,13 +663,17 @@ func (s *scanner) file(src string) (bool, error) {
 	// Known non-shell source formats retain the legacy invocation scan. A real
 	// Go comment can declare an exemption; raw string contents never can.
 	if ext == ".go" {
-		if tree, err := goparser.ParseFile(token.NewFileSet(), s.path, src, goparser.ParseComments); err == nil {
+		fset := token.NewFileSet()
+		if tree, err := goparser.ParseFile(fset, s.path, src, goparser.ParseComments); err == nil {
 			var comments []string
 			for _, group := range tree.Comments {
 				comments = append(comments, group.Text())
 			}
 			if s.declaration(comments) {
 				return true, nil
+			}
+			if err := s.goExec(fset, tree); err != nil {
+				return false, err
 			}
 		}
 		return false, s.goGenerate(src)
@@ -873,4 +879,78 @@ func (s *scanner) docker(src string) error {
 		}
 	}
 	return nil
+}
+
+// goExec reports statically named programs handed to os/exec constructors. The
+// compatibility scanner reads Go source as if it were shell, so it splits at the
+// call parenthesis and selects the first token -- "ctx," for CommandContext --
+// and never examines the program-name argument at all.
+func (s *scanner) goExec(fset *token.FileSet, tree *ast.File) error {
+	// Only a real os/exec import binds these constructors, and a file may rename
+	// it. A dot import or a local shadow is deliberately not resolved.
+	packages := make(map[string]bool)
+	for _, spec := range tree.Imports {
+		path, unquoteErr := strconv.Unquote(spec.Path.Value)
+		if unquoteErr != nil || path != "os/exec" {
+			continue
+		}
+		if spec.Name == nil {
+			packages["exec"] = true
+		} else if spec.Name.Name != "_" && spec.Name.Name != "." {
+			packages[spec.Name.Name] = true
+		}
+	}
+	if len(packages) == 0 {
+		return nil
+	}
+	var err error
+	ast.Inspect(tree, func(node ast.Node) bool {
+		if err != nil {
+			return false
+		}
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := selector.X.(*ast.Ident)
+		if !ok || !packages[pkg.Name] {
+			return true
+		}
+		// CommandContext takes the context first; the program name follows.
+		skip := 0
+		switch selector.Sel.Name {
+		case "Command":
+		case "CommandContext":
+			skip = 1
+		default:
+			return true
+		}
+		if len(call.Args) <= skip {
+			return true
+		}
+		args := call.Args[skip:]
+		values, known := make([]string, len(args)), make([]bool, len(args))
+		for i, arg := range args {
+			literal, isLiteral := arg.(*ast.BasicLit)
+			if !isLiteral || literal.Kind != token.STRING {
+				continue
+			}
+			value, unquoteErr := strconv.Unquote(literal.Value)
+			if unquoteErr != nil {
+				continue
+			}
+			values[i], known[i] = value, true
+		}
+		// A program built at run time is unknown, exactly as in shell.
+		if !known[0] {
+			return true
+		}
+		_, err = s.argv(values, known, fset.Position(call.Pos()).Line, 0)
+		return true
+	})
+	return err
 }

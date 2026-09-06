@@ -181,6 +181,19 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 			source:  "PYTHON=python3\nfor PYTHON in node; do \"$PYTHON\" --version; done\n",
 			handled: true,
 		},
+		{
+			name: "go os/exec names the program", path: "tools/run.go",
+			source: "package main\n\nimport (\n\t\"context\"\n\t\"os/exec\"\n)\n\nfunc run(ctx context.Context) error {\n\treturn exec.CommandContext(ctx, \"python3\", \"--version\").Run()\n}\n",
+			want:   "Python invocation",
+		},
+		{
+			name: "go os/exec with a non-python program", path: "tools/run.go",
+			source: "package main\n\nimport \"os/exec\"\n\nfunc run() error {\n\treturn exec.Command(\"node\", \"--version\").Run()\n}\n",
+		},
+		{
+			name: "go os/exec program from a variable stays unknown", path: "tools/run.go",
+			source: "package main\n\nimport \"os/exec\"\n\nfunc run(program string) error {\n\treturn exec.Command(program, \"--version\").Run()\n}\n",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
