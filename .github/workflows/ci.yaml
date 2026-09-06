@@ -55,6 +55,7 @@ jobs:
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
       board-add: ${{ steps.filter.outputs.board-add }}
+      cursor-board-sweep: ${{ steps.filter.outputs.cursor-board-sweep }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
       memory-rewrite: ${{ steps.filter.outputs.memory-rewrite }}
@@ -105,6 +106,15 @@ jobs:
               - '.claude/scripts/agent-telemetry.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            cursor-board-sweep:
+              - '.claude/scripts/cursor-issue-board-sweep.sh'
+              - '.claude/scripts/cursor-issue-board-sweep.test.sh'
+              # The sweep hands every discovered issue to board-add.sh, so a change
+              # to that helper's interface can break this one without touching it.
+              - '.claude/scripts/board-add.sh'
+              # Self-gate on the workflow too, so a change that breaks this job's
+              # own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
             board-add:
               - '.claude/scripts/board-add.sh'
@@ -664,6 +674,29 @@ jobs:
       # while CI defaults to Linux, and bash/jq portability is what this pins.
       - name: Self-test board-add
         run: bash .claude/scripts/board-add.test.sh
+
+  test-cursor-board-sweep:
+    name: Test cursor board sweep
+    needs: changes
+    if: needs.changes.outputs.cursor-board-sweep == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Fixture-only: the GitHub CLI is stubbed on PATH and board-add.sh is
+      # substituted for a logger, so nothing reaches the network or the live
+      # board. Both OSes because the daily runs happen on macOS while CI
+      # defaults to Linux, and bash portability is what this pins.
+      - name: Self-test the cursor board sweep
+        run: bash .claude/scripts/cursor-issue-board-sweep.test.sh
 
   test-worktree-claim:
     name: Test worktree claim
@@ -1730,6 +1763,7 @@ jobs:
       - drift-check-renovate-dashboard
       - test-agent-telemetry
       - test-board-add
+      - test-cursor-board-sweep
       - test-comment-disclosure-drift
       - test-surveyor-forge-vocabulary
       - test-pr-ownership-disclosure
@@ -1789,6 +1823,7 @@ jobs:
             ${{ needs.drift-check-renovate-dashboard.result }}
             ${{ needs.test-agent-telemetry.result }}
             ${{ needs.test-board-add.result }}
+            ${{ needs.test-cursor-board-sweep.result }}
             ${{ needs.test-comment-disclosure-drift.result }}
             ${{ needs.test-surveyor-forge-vocabulary.result }}
             ${{ needs.test-pr-ownership-disclosure.result }}
