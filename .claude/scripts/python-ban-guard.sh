@@ -24,7 +24,8 @@
 #        `nohup`, `if`/`then`/`else`/`do`/`while`/`until`/`!`) is the command. So
 #        `bash -c "python3 -m x"` and `FOO=1 python3 x` flag, while `echo "install python3"` and
 #        a YAML `name: Install python deps` do not. Executable paths are matched by basename.
-#        Dockerfile RUN shell/JSON operands are scanned; RUN is not a wrapper in other files.
+#        Dockerfile RUN/CMD/ENTRYPOINT shell and JSON operands are scanned; those words are
+#        not command wrappers in other files.
 #        Backslash-newline continuations outside single quotes join before matching command names.
 #        Unquoted escapes before executable-name/path characters retain their executable identity.
 #        Two known limits of that heuristic, accepted for a ~150-line bash guard: a flag's
@@ -161,10 +162,13 @@ scan_invocations() {
         logical_line = substr(logical_line, 1, length(logical_line) - 1) next_line
         line = without_comment(logical_line)
       }
-      # Dockerfile RUN owns its command operand. JSON punctuation separates argv;
+      # Dockerfile RUN, CMD and ENTRYPOINT own their command operand: RUN runs it at build
+      # time, while CMD and ENTRYPOINT declare the command the image itself runs, so a
+      # container whose Python entrypoint is written there — most often in exec form — is
+      # exactly as much an invocation as a RUN. JSON punctuation separates argv;
       # a Python-looking argument of echo remains data, not a command.
       if (executable_name(path) ~ /^(Dockerfile([.].+)?|.+[.]Dockerfile)$/ &&
-          toupper(line) ~ /^[[:space:]]*RUN[[:space:]]+/) {
+          toupper(line) ~ /^[[:space:]]*(RUN|CMD|ENTRYPOINT)[[:space:]]+/) {
         sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, "", line)
         operand = line
         while (operand ~ /^[[:space:]]*--[^[:space:]]+[[:space:]]+/) sub(/^[[:space:]]*--[^[:space:]]+[[:space:]]+/, "", operand)

@@ -290,6 +290,30 @@ r="$(mkrepo docker-run-controls)"; addf "$r" Dockerfile \
 run "$r"
 report "control: Dockerfile arguments and metadata do not become commands" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+# CMD and ENTRYPOINT declare the image's own command, so a container whose Python entrypoint is
+# written there — most often in exec form — is exactly as much an invocation as a RUN.
+docker_entry_case=0
+for instruction in 'CMD ["python3", "-m", "http.server"]' \
+  'ENTRYPOINT ["python3", "app.py"]' \
+  'CMD python3 -m http.server' \
+  'entrypoint ["/usr/bin/python3", "app.py"]'; do
+  docker_entry_case=$((docker_entry_case + 1))
+  r="$(mkrepo "docker-entry-${docker_entry_case}")"; addf "$r" Dockerfile 'FROM scratch' "$instruction"
+  run "$r"
+  report "a Dockerfile CMD/ENTRYPOINT operand exposes its Python invocation (${docker_entry_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'Dockerfile:2: Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo docker-entry-controls)"; addf "$r" Dockerfile \
+  'FROM scratch' 'CMD ["echo", "python3"]' 'ENTRYPOINT ["/bin/bash"]' \
+  'LABEL example="CMD python3 app.py"'
+run "$r"
+report "control: a CMD/ENTRYPOINT naming python only as an argument passes" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo docker-entry-scope)"; addf "$r" tools/text.sh 'CMD python3 app.py'
+run "$r"
+report "control: CMD is not a command wrapper outside Dockerfiles" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
 r="$(mkrepo docker-prefix-scope)"; addf "$r" tools/text.sh 'RUN python3 tools/check.py'
 run "$r"
 report "control: RUN is not a command wrapper outside Dockerfiles" \
