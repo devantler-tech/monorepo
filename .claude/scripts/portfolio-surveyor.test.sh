@@ -2853,3 +2853,34 @@ while IFS= read -r _statement; do
 done <<<"${_exclusion_lists}"
 echo "portfolio surveyor contract: round-11 product-vs-infra exclusion assertions passed (${_exclusion_count} statements)"
 unset _exclusion_lists _exclusion_count _repo _statement
+
+# ── Round 12: the CI classifier's flag-form argument shape must reach the loaded definition ───────
+# Measured 2026-09-05 (agent-plugins#195): over 7 days, 3 of the 19 surveyor dispatches that reached
+# `classify-default-branch-ci-runs.sh` invoked it POSITIONALLY (`OWNER/REPO main <sha>`) and lost
+# 24 reads to the forge guard's `not the guarded remote-mode shape` denial — 22 in one dispatch,
+# fanned across every repository, after which the survey reported `nothing_on_fire: unknown`. The
+# plugin definition named the three VALUES without the FLAGS that carry them; agent-plugins#197 fixed
+# that upstream. This overlay's step 4 defers to "the generic role" for the invocation, and 19 of 20
+# classifier-calling dispatches read THIS file rather than the plugin agent, so the sentence is ported
+# here verbatim (the #3179/#3207 precedent). Extracted by its own numbered heading so the assertions
+# track the step rather than line numbers; an empty extraction is rejected FIRST.
+_ci_step=$(sed -n '/^4\. \*\*CI red on `main` — deployment delta only\.\*\*/,/^   \*\*Split GitHub-MANAGED runs/p' "${surveyor}")
+[ -n "${_ci_step}" ] ||
+  fail "portfolio-surveyor.md must keep an extractable step '4. **CI red on \`main\` — deployment delta only.**' (#195)"
+# Flattened before matching: the ported sentence wraps at 100 columns, so a phrase can straddle a line
+# break and a raw-block grep would read a present clause as missing.
+_ci_step=$(tr "\n" " " <<<"${_ci_step}" | tr -s "[:space:]" " ")
+grep -Fq -- '--repo OWNER/REPO --branch BRANCH --head-sha FULL_SHA' <<<"${_ci_step}" ||
+  fail "step 4 must name the classifier's flag-form argument shape '--repo OWNER/REPO --branch BRANCH --head-sha FULL_SHA' — naming only the values is what callers rendered positionally (agent-plugins#195)"
+grep -Fq 'is denied as `not the guarded remote-mode shape`' <<<"${_ci_step}" ||
+  fail "step 4 must say the positional classifier form is DENIED by the guard, so a caller does not read the flag form as one option among two (agent-plugins#195)"
+grep -Fq 'the helper itself exits 2 on it' <<<"${_ci_step}" ||
+  fail "step 4 must say the helper itself rejects the positional form — the guard is right, not a gap to work around (agent-plugins#195)"
+# The flag form alone is not enough: the guard admits only the exact installed sibling PATH, so a
+# literal copy of a bare `classify-default-branch-ci-runs.sh …` example is denied as "not a forge
+# command" (Codex P1 on agent-plugins#197). Both halves are pinned on their own lines.
+grep -Fq -- '<installed plugin>/scripts/classify-default-branch-ci-runs.sh --repo' <<<"${_ci_step}" ||
+  fail "step 4 must prescribe the classifier by its resolved installed path, not a bare basename (agent-plugins#197, Codex P1)"
+grep -Fq 'never a bare basename' <<<"${_ci_step}" ||
+  fail "step 4 must say the guard admits only the exact installed sibling path — never a bare basename (agent-plugins#197, Codex P1)"
+echo "portfolio surveyor contract: round-12 classifier-argument-shape assertions passed"
