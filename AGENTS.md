@@ -2694,15 +2694,17 @@ against Conventional Commits in this final read**, not only when you set it.
 🔴 **`state` is in that list because every other field reads the same on an ALREADY-MERGED PR as
 on a healthy one still computing mergeability.** A merged PR returns `isDraft:false`, the author, a
 Conventional title, a real `headRefOid`, a full green `statusCheckRollup` — and
-`mergeStateStatus:UNKNOWN`, which is exactly the lazy-recompute signature exception (a) below tells a
-run to look past. Nothing in the seven-field list distinguishes the two, so the run diagnoses a
+`mergeStateStatus:UNKNOWN`, which also occurs while an open PR's mergeability is being computed.
+`UNKNOWN` does not satisfy `CLEAN` or exception (a); an open PR with that value cannot proceed to merge.
+Nothing in the seven-field list distinguishes the two, so the run diagnoses a
 phantom blocker on work that is already done. Measured twice: `world-at-ruin#740` on 2026-08-20, read
 34 minutes after it merged; and `monorepo#3220` on 2026-09-06, read **5h22m** after it merged as
 `b7c4b29563`, with 77/77 checks green, zero unresolved threads, a Codex green at that exact head and
 every commit `verified=true` — roughly eight calls spent chasing a blocker that did not exist,
-including a rulesets read and a per-commit signature check. The REST fields agree and stay unhelpful
-(`mergeable=null`, `mergeable_state=unknown`, stable across repeated reads), so re-reading cannot
-resolve it. `state` is decisive where none of the others is, it is the same field *Merge policy*
+including a rulesets read and a per-commit signature check. The REST fields in those merged-PR
+observations also stayed unhelpful (`mergeable=null`, `mergeable_state=unknown`, stable across repeated
+reads); re-reading mergeability could not identify their terminal state. `state` is decisive where
+none of the others is, it is the same field *Merge policy*
 already names for confirming a merge landed, and it costs nothing — the eight-field read is accepted
 by `gh` unchanged. **Read it first: continue only when `state` is `OPEN`. `MERGED` and `CLOSED`
 end the preflight; do not diagnose their mergeability. A failed or missing state read is `UNKNOWN`
