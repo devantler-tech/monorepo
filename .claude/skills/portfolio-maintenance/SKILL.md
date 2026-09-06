@@ -577,7 +577,8 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    showing `state` still `OPEN` (a `MERGED` PR reads otherwise identically — contract *Merge policy*) and the same
    `headRefOid`, `isDraft:false`, owner `devantler-tech`, and `CLEAN`; merge only when the pentad also has zero
    findings and a green review at that
-   head.
+   head. Read `state` first: `MERGED` and `CLOSED` end the preflight without diagnosing mergeability;
+   a failed or missing state read is `UNKNOWN` and authorizes no action.
    🔴 **That field list CANNOT see unresolved review threads, and thread resolution is a REQUIRED
    merge rule on every repository here** (contract *Merge policy*, `required_review_thread_resolution`
    on all nineteen). `reviewThreads` is **not** a valid `gh pr view --json` field, so adding it would

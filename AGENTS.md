@@ -2704,7 +2704,9 @@ including a rulesets read and a per-commit signature check. The REST fields agre
 (`mergeable=null`, `mergeable_state=unknown`, stable across repeated reads), so re-reading cannot
 resolve it. `state` is decisive where none of the others is, it is the same field *Merge policy*
 already names for confirming a merge landed, and it costs nothing — the eight-field read is accepted
-by `gh` unchanged. **Read it first: `MERGED` ends the preflight, and there is nothing to drive.**
+by `gh` unchanged. **Read it first: continue only when `state` is `OPEN`. `MERGED` and `CLOSED`
+end the preflight; do not diagnose their mergeability. A failed or missing state read is `UNKNOWN`
+and authorizes no action.**
 
 🔴 **The preflight field list CANNOT see review-thread resolution — and an unresolved thread is a
 REQUIRED merge rule on every repository here.** `required_review_thread_resolution: true` is set on
@@ -2787,7 +2789,7 @@ names the contributor's **fork**), so without the flag the command resolves agai
 the run happens to be standing in. Across a cross-repo sweep a colliding PR number then reads a
 different repository's PR while appearing to satisfy the ownership check. Pinning `--repo` is what
 makes owner `devantler-tech` an actual test rather than an assumption.
-The result must show `isDraft:false`, owner `devantler-tech`, and
+The result must show `state:OPEN`, `isDraft:false`, owner `devantler-tech`, and
 `mergeStateStatus:CLEAN`; the pentad must show zero review findings and a green review from any lane
 (CodeRabbit, Codex, Cursor Bugbot) —
 or a qualifying clean **local
