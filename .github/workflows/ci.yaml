@@ -904,7 +904,7 @@ jobs:
   # from a TRUSTED base-branch copy below rather than from the pull request being measured.
   #
   # RELEASE FLAG, so it is short-lived by contract and its removal is owned rather than assumed:
-  # monorepo#3212 activates it and then deletes BOTH the repository variable and this condition.
+  # monorepo#3229 owns activation and deletion of BOTH the repository variable and this condition.
   # EXPIRES 2026-10-31 -- from that date unsigned-commit-report.test.sh fails on the expiry case, so
   # the flag cannot quietly become permanent debt. That suite checks the flag wiring; actual
   # expression behavior is evaluated separately before activation.

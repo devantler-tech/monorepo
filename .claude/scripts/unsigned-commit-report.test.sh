@@ -266,7 +266,7 @@ else
   bad "the workflow is readable for the flag-state assertions" "missing $CI_YAML"
 fi
 
-# The flag is a RELEASE flag, so it is short-lived by contract: monorepo#3212 owns activating it and
+# The flag is a RELEASE flag, so it is short-lived by contract: monorepo#3229 owns activating it and
 # then removing both the variable and the condition. This assertion is the forcing function -- from
 # the expiry it fails, so the flag cannot quietly become permanent debt. Removing the flag means
 # removing this case in the same change.
@@ -274,6 +274,6 @@ fi
 # `date -u +%Y%m%d` is the one spelling BSD and GNU agree on; every relative-date form differs.
 flag_expiry=20261031
 today="$(date -u +%Y%m%d)"
-if [ "$today" -lt "$flag_expiry" ]; then ok "the UNSIGNED_COMMIT_REPORT release flag has not passed its expiry"; else bad "the UNSIGNED_COMMIT_REPORT release flag has not passed its expiry" "today=$today expiry=$flag_expiry -- activate then remove the flag per monorepo#3212"; fi
+if [ "$today" -lt "$flag_expiry" ]; then ok "the UNSIGNED_COMMIT_REPORT release flag has not passed its expiry"; else bad "the UNSIGNED_COMMIT_REPORT release flag has not passed its expiry" "today=$today expiry=$flag_expiry -- activate then remove the flag per monorepo#3229"; fi
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1
