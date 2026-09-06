@@ -9,7 +9,7 @@
 # ascoachingogvaner, doggy-countdown, .github) — every repo in the Portfolio map, no exception — so an
 # unresolved review thread blocks a merge exactly like a failing required check.
 # But NO `gh pr view --json` field carries thread-resolution state, so the prescribed preflight
-# — number,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup — is structurally blind
+# — number,state,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup — is structurally blind
 # to it, and `mergeStateStatus` reports it only as a bare `BLOCKED`.
 #
 # That produces the exact signature documented exception (a) tells a run to DISMISS as staleness:
@@ -255,7 +255,7 @@ spaced-before: gh pr view 1 --json "mergedAt ,isResolved"
 FIXTURE
 
 cat > "${self_test_dir}/good.md" <<'FIXTURE'
-the prescribed preflight: --json number,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup
+the prescribed preflight: --json number,state,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup
 the post-merge read: --json state,mergedAt
 prose after a command: `--json comments`, reviewThreads are read over GraphQL instead
 graphql is not a --json list: reviewThreads(first:100){nodes{isResolved}}

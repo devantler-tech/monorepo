@@ -573,8 +573,8 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    class forever (contract *You own EVERY pull request*). Anything with a reachable code path still
    owes the CI reading. The merge is **low-ceremony**:
    combine the already-collected current-head pentad with one fresh
-   `gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup`
-   showing the same
+   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup`
+   showing `state` still `OPEN` (a `MERGED` PR reads otherwise identically — contract *Merge policy*) and the same
    `headRefOid`, `isDraft:false`, owner `devantler-tech`, and `CLEAN`; merge only when the pentad also has zero
    findings and a green review at that
    head.

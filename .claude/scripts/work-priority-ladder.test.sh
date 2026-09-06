@@ -540,10 +540,17 @@ assert_prose 'available on your own **and on taken-over** PRs' \
 # (2) The preflight demands owner `devantler-tech` from a read that cannot supply it: none of the
 # requested fields carries the BASE repository's identity, and the command was unpinned, so a
 # cross-repo sweep could inspect a colliding PR number in whatever checkout it stood in.
-assert_prose 'gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup' \
+assert_prose 'gh pr view <n> --repo devantler-tech/<repo> --json number,state,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup' \
   "${constitution_flat}" "the prescribed pre-merge read is not pinned to the base repository with --repo"
 assert_prose '`--repo` is part of the prescription, not an optional convenience' \
   "${constitution_flat}" "the contract does not say why the pre-merge --repo pin is load-bearing"
+
+# (2b) An ALREADY-MERGED PR reads identically to a healthy one whose mergeability GitHub has not
+# finished computing: isDraft false, real head, green rollup, mergeStateStatus UNKNOWN. Measured on
+# world-at-ruin#740 (34 min after merge) and monorepo#3220 (5h22m after merge). Only `state` separates
+# them, and re-reading cannot — the REST fields stay null. Without it the run chases a phantom blocker.
+assert_prose '`state` is in that list because every other field reads the same on an ALREADY-MERGED PR' \
+  "${constitution_flat}" "the contract does not say why the pre-merge state field is load-bearing"
 
 # (3) A COMPLETED reviewer artifact was read as "someone is working here", parking the PR ~2h against
 # the mandatory every-run pentad sweep — on an hourly cadence, findings age untouched at the current
