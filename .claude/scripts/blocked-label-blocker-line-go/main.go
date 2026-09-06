@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"os"
 	"os/exec"
@@ -310,6 +311,9 @@ var identifierOnlyRE = regexp.MustCompile(`^(#[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9.
 // is bounded and control-stripped exactly as the verdict report's snippet is.
 func askRequest(line string) string {
 	text := strings.SplitN(strings.TrimPrefix(line, "**Blocker:** "), " | ", 2)[0]
+	// Decode before bounding and stripping controls so Markdown destinations
+	// cannot hide schemes or introduce a newline after sanitization.
+	text = html.UnescapeString(text)
 	runes := []rune(strings.TrimSpace(text))
 	if len(runes) > 100 {
 		runes = runes[:100]
@@ -323,7 +327,11 @@ func askRequest(line string) string {
 	if safe == "" {
 		return "(no description in record)"
 	}
-	return neutralize(safe)
+	// Keep Markdown links and HTML inert, including nested entities and an
+	// existing backslash that could otherwise unescape an opening bracket.
+	return strings.NewReplacer(
+		`\`, `\\`, "[", `\[`, "<", "&lt;", ">", "&gt;", "&", "&amp;",
+	).Replace(neutralize(safe))
 }
 
 // requestIsOpaque reports a record that names an identifier but no action a

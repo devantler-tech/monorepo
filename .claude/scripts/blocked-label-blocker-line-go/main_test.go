@@ -355,7 +355,7 @@ func TestAskRequestOmitsURLs(t *testing.T) {
 	} {
 		t.Run(link, func(t *testing.T) {
 			line := "**Blocker:** inspect " + link + " then continue | authority | last-verified 2026-09-06: pending"
-			if got := askRequest(line); got != "inspect [URL omitted] then continue" {
+			if got := askRequest(line); got != "inspect \\[URL omitted] then continue" {
 				t.Fatalf("URL must not survive in the quoted request: %q", got)
 			}
 		})
@@ -370,8 +370,51 @@ func TestAskDigestOmitsAllURLsInDescription(t *testing.T) {
 	var out, stderr bytes.Buffer
 	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
 	got := out.String()
-	if code != 1 || !strings.Contains(got, "  > inspect [URL omitted] then [URL omitted] and [URL omitted]\n") {
+	if code != 1 || !strings.Contains(got, "  > inspect \\[URL omitted] then \\[URL omitted] and \\[URL omitted]\n") {
 		t.Fatalf("code=%d output=%q stderr=%q", code, got, stderr.String())
+	}
+}
+
+func TestAskRequestNeutralizesEncodedDestinationsAndControls(t *testing.T) {
+	for _, tc := range []struct {
+		name, description, want string
+	}{
+		{
+			name:        "named entity destination",
+			description: "[example](https&colon;&sol;&sol;example.invalid)",
+			want:        "\\[example](\\[URL omitted]",
+		},
+		{
+			name:        "numeric entity destination",
+			description: "inspect https&#58;&#47;&#47;example.invalid",
+			want:        "inspect \\[URL omitted]",
+		},
+		{
+			name:        "encoded newline and mention",
+			description: "inspect&NewLine;&commat;codex review",
+			want:        "inspect\ufffd@\u200bcodex review",
+		},
+		{
+			name:        "nested entities cannot decode into a URL later",
+			description: "[example](https&amp;colon;&amp;sol;&amp;sol;example.invalid)",
+			want:        "\\[example](https&amp;colon;&amp;sol;&amp;sol;example.invalid)",
+		},
+		{
+			name:        "backslash cannot unescape a bracket",
+			description: `\[example](https&amp;colon;&amp;sol;&amp;sol;example.invalid)`,
+			want:        `\\\[example](https&amp;colon;&amp;sol;&amp;sol;example.invalid)`,
+		},
+		{
+			name:        "HTML stays literal",
+			description: "<b>inspect the account</b>",
+			want:        "&lt;b&gt;inspect the account&lt;/b&gt;",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := askRequest("**Blocker:** " + tc.description + " | authority"); got != tc.want {
+				t.Fatalf("got %q; want %q", got, tc.want)
+			}
+		})
 	}
 }
 
