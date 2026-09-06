@@ -265,7 +265,7 @@ func TestAskDigestEmptyStillReportsOtherFindings(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("code=%d, want 1; output=%q", code, got)
 	}
-	if !strings.Contains(got, "no authority blocker") {
+	if !strings.Contains(got, "no declared authority blocker") {
 		t.Fatalf("empty digest must say so; got %q", got)
 	}
 }
@@ -282,8 +282,8 @@ func TestAskDigestIsOptIn(t *testing.T) {
 	}
 }
 
-// A stale ask still needs the maintainer -- the contract repairs it by renewing
-// the ask -- so the sheet must carry it, distinguished from one never asked.
+// A stale ask record still needs verification, so the sheet must carry it,
+// distinguished from a missing ask record.
 // The fresh ask is the control: it conforms, so it must NOT appear.
 func TestAskDigestIncludesStaleAsksAndExcludesFreshOnes(t *testing.T) {
 	input := `[
@@ -296,7 +296,7 @@ func TestAskDigestIncludesStaleAsksAndExcludesFreshOnes(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("code=%d, want 1; output=%q stderr=%q", code, got, stderr.String())
 	}
-	if !strings.Contains(got, "stale#5") || !strings.Contains(got, "renew it") {
+	if !strings.Contains(got, "stale#5") || !strings.Contains(got, "verify before renewing") {
 		t.Fatalf("stale ask must appear and be marked; got %q", got)
 	}
 	if strings.Contains(got, "fresh#6") {
@@ -304,14 +304,14 @@ func TestAskDigestIncludesStaleAsksAndExcludesFreshOnes(t *testing.T) {
 	}
 }
 
-// The two kinds must stay distinguishable: a never-asked row is labelled as
-// such, so a reader cannot mistake it for one already raised.
+// The two record states must stay distinguishable without claiming that a
+// missing record proves no ask was delivered.
 func TestAskDigestLabelsNeverAskedRows(t *testing.T) {
 	input := `[{"repo":"r","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - an action | last-verified 2026-09-01: pending"}]`
 	var out, stderr bytes.Buffer
 	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
 	got := out.String()
-	if code != 1 || !strings.Contains(got, "never asked") || strings.Contains(got, "renew it") {
+	if code != 1 || !strings.Contains(got, "no ask recorded") || strings.Contains(got, "verify before renewing") {
 		t.Fatalf("code=%d output=%q", code, got)
 	}
 }
@@ -368,7 +368,7 @@ func TestAskDigestCautionsOnRepositoryVisibility(t *testing.T) {
 	if !strings.Contains(got, "CHECK BEFORE DELIVERY") || !strings.Contains(got, "alpha, beta") {
 		t.Fatalf("digest must caution and list distinct repositories; got %q", got)
 	}
-	// These are actions only the maintainer can perform, not decisions to defer.
+	// Verification may establish a maintainer action, not an agent-owned decision to defer.
 	if strings.Contains(got, "maintainer decision") || !strings.Contains(got, "maintainer action") {
 		t.Fatalf("digest must ask for an action, not a decision; got %q", got)
 	}
