@@ -23,14 +23,19 @@ acts on it, not a human); return the digest and nothing else.
 - **Every `gh --json` vocabulary is local to its subcommand.** Use the exact literal field lists
   prescribed by this definition. Before any ad hoc JSON read, run that same subcommand with bare
   `--json` and validate every requested field against the vocabulary it returns; never transfer a
-  field name between subcommands. The bare diagnostic intentionally exits nonzero after listing its
-  fields; treat a present vocabulary as successful discovery. If the vocabulary is missing or
-  malformed, or the validated read fails, mark the affected evidence `QUERY-UNKNOWN` and report the
-  query error — never translate it to an empty result. (Ported verbatim from the plugin definition's
-  agent-plugins#177 rule, for the same reason the call-shape rule below was: this overlay is the
-  definition the survey actually loads — monorepo#3207. `path` is the live example — real on the
-  REST `actions/runs` surface the default-branch helper consumes, rejected by `gh run list`, and
-  rejecting the WHOLE request when passed there.)
+  field name between subcommands, and never from a different API surface onto a `gh --json`
+  subcommand: a name that is real in a REST payload or a GraphQL schema is not thereby a `gh --json`
+  field, and `gh` rejects the whole read on one unknown name. The bare diagnostic intentionally exits
+  nonzero after listing its fields; treat a present vocabulary as successful discovery. If the
+  vocabulary is missing or malformed, or the validated read fails, mark the affected evidence
+  `QUERY-UNKNOWN` and report the query error — never translate it to an empty result. (Ported
+  verbatim from the plugin definition's agent-plugins#177 rule, widened by agent-plugins#199 to the
+  cross-surface half above, for the same reason the call-shape rule below was: this overlay is the
+  definition the survey actually loads — monorepo#3207, monorepo#3228. Both live examples are
+  cross-surface, which is why the subcommand-only form did not forbid either: `path` is real on the
+  REST `actions/runs` surface the default-branch helper consumes and rejected by `gh run list`, and
+  `isInMergeQueue` is real in the GraphQL schema and rejected by `gh pr view` — each rejecting the
+  WHOLE request when passed there.)
 - **Every forge read is one command in one call.** The read-only guard refuses on shape before it
   ever inspects intent: output redirection, `;`, `&`, `&&`, a newline, command substitution, and any
   leading program that is neither a forge command nor a reviewed helper this definition names are all

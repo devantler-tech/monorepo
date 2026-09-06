@@ -178,6 +178,7 @@ closed on the cost dimension only** — operate and advance work continue, spend
 
 | What the plugin resolves here | This deployment's fact |
 |---|---|
+| **Effective desired state** | [`.claude/plugin-consumption/agentic-engineering.desired-state.json`](.claude/plugin-consumption/agentic-engineering.desired-state.json) — the single effective desired-state document for this deployment, including `spec.roles["agentic-engineer"].spendStewardshipEnabled: false`. The reviewed entrypoint's opt-in contract governs its resolution. |
 | **Protected-outcomes floor** | [`.claude/finops/lifestyle-floor.md`](.claude/finops/lifestyle-floor.md) — the declared, versioned list of outcomes never traded for money. **Changing it is the maintainer's call**, in a session or over the private channel; never the engineer's, and never inferred from a metric. |
 | **Run procedure for a cost pass** | [`.claude/skills/finops/`](.claude/skills/finops/SKILL.md) — measure → attribute → diagnose → floor-veto → act → verify → record. |
 | **Cost evidence source** | the read-only [`.claude/scripts/finops-snapshot.sh`](.claude/scripts/finops-snapshot.sh) (OpenCost attribution), plus Coroot's Prometheus for actual usage. The **provider billing API is NOT wired**, so every saving figure is *modelled*, never *realised*, and must say so. The run loop carries the full source-by-source state and its four known measurement defects. |
@@ -187,19 +188,21 @@ closed on the cost dimension only** — operate and advance work continue, spend
 | **Private evidence store** | the out-of-repository ledger named under *Durable memory* — proposals, open asks, and projected-vs-realised. Absolute figures never enter a repo file. |
 
 **Activation gate — the decision-producing half is DEFAULT-OFF until the private channel resolves.**
-Spend stewardship ships latent, per *Feature-flag-first delivery*, and the gate is the **Private
-decision channel** row above rather than a config toggle:
+Spend stewardship is disabled in the effective desired state; ordinary operate and advance work
+continue. The **Private decision channel** row supplies an additional restriction after the reviewed
+entrypoint's explicit opt-in and deployment prerequisites resolve:
 
 | Half of the mandate | State while the channel reads UNRESOLVED | Why |
 |---|---|---|
 | **Measurement & engineering** — wiring an evidence source, fixing the stale price table, an orphaned-volume cleanup | **ON** | ordinary engineering work with no financial output; blocking it would stall the very measurement the rest depends on |
 | **Decision-producing** — a financial ask, a spend proposal, a savings figure put to the maintainer | **OFF** | there is nowhere to send it, and parking it in a report is the passive self-blocking this contract forbids elsewhere |
 
-So while the channel is unresolved the cost pass runs steps 1–4 of its run loop and **stops before
-step 5's ask**: it may fix measurement, and it may **not** produce a financial decision. Resolving the
-channel is what flips the second half on — a maintainer act, never an agent one. **This is the tested
-both-states condition** for the feature-flag rule: the engineer must behave differently in each state,
-and the delivery-contract test pins the gate's presence.
+Only after the reviewed entrypoint resolves explicit spend enablement and the required deployment
+facts may the cost pass run steps 1–4 of its run loop and **stop before step 5's ask** while the channel
+is unresolved. Ordinary engineering repairs to measurement remain available while spend stewardship
+is disabled; spend analysis and financial decisions do not. Resolving the channel is a further
+prerequisite for financial decisions, never spend opt-in; both are maintainer acts, never agent ones.
+The delivery-contract test checks the disabled configuration and the separate channel restriction.
 
 Three properties are **not negotiable by the engineer**, and merging the role changed none of them: it
 **never moves money** (it prepares the decision; the maintainer executes it), it **gives no
@@ -4331,7 +4334,7 @@ refinements (the `4b`–`4e` items in
 [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
 were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
 closed, pushing the file's own deletion further away, and charging every hourly dispatch for it. Its
-**enforced high-water mark is now 157,615 B** (raised 2026-09-05 by monorepo#3223 to port agent-plugins#195's classifier flag-form sentence into the overlay's step 4, which 19 of 20 classifier-calling surveyor dispatches read instead of the plugin agent; the 2026-09-04 raise by monorepo#3207 ported agent-plugins#177's `gh --json` vocabulary rule for the same reason); that is the live ratchet ceiling, not a rewrite of the
+**enforced high-water mark is now 158,085 B** (raised 2026-09-06 by monorepo#3228 to port agent-plugins#199's cross-surface half of the `gh --json` vocabulary rule into the overlay, whose subcommand-only form forbade neither live example; the 2026-09-05 raise by monorepo#3223 ported agent-plugins#195's classifier flag-form sentence into the overlay's step 4, which 19 of 20 classifier-calling surveyor dispatches read instead of the plugin agent, and the 2026-09-04 raise by monorepo#3207 ported agent-plugins#177's `gh --json` vocabulary rule for the same reason); that is the live ratchet ceiling, not a rewrite of the
 dated measurement.
 
 **So a new surveyor refinement goes UPSTREAM unless it is a genuine deployment fact.**

@@ -1712,7 +1712,7 @@ fi
 # The forbidden sets below are the measured cross-surface names, not the full
 # vocabularies — a full mirror of `gh`'s field lists would go stale on the next
 # CLI release and start failing on correct text.
-pr_view_forbidden='reviewThreads merged baseRepository authorAssociation commentsCount isPullRequest isLocked repository'
+pr_view_forbidden='reviewThreads merged baseRepository authorAssociation commentsCount isPullRequest isLocked repository isInMergeQueue'
 search_forbidden='reviewThreads merged baseRepository mergedAt headRefName headRefOid headRepository mergeStateStatus reviewDecision statusCheckRollup files commits reviews latestReviews mergeable mergeCommit'
 
 surveyor_flat="$(tr '\n' ' ' < "${surveyor}" | tr -s ' ')"
