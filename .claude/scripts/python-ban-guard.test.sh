@@ -451,6 +451,19 @@ for invocation in 'RUN ["env", "-u", "-Spython3", "echo", "safe"]' \
     "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 done
 
+# Versioned pip must be detected through both scanner routes.
+for route in shell fallback; do
+  r="$(mkrepo "versioned-pip-$route")"
+  if [[ "$route" == shell ]]; then
+    addf "$r" tools/check.sh 'pip3.12 install example'
+  else
+    addf "$r" Dockerfile 'FROM scratch' 'RUN <<SCRIPT' 'echo safe' 'SCRIPT' 'RUN pip3.12 install example'
+  fi
+  run "$r"
+  report "versioned pip is detected by the $route scanner" \
+    "$([[ $rc -eq 1 && "$out" == *'Python invocation `pip3.12 install`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+
 # 9. Ablation: neutralise the invocation pattern in a COPY of the guard and show the
 #    #2769 fixture no longer fires — so the earlier flag depended on that pattern — while
 #    the source-file check, which the ablation does not touch, still fires.
@@ -458,8 +471,8 @@ ablated_dir="$tmp/ablation"
 mkdir -p "$ablated_dir"
 cp -R "$here/python-ban-guard-go" "$ablated_dir/"
 ablated="$ablated_dir/python-ban-guard.sh"
-sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip3?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ3?|pytestZZ)/' "$guard" >"$ablated"
-sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip3?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ3?|pytestZZ)/' "$here/python-ban-guard-go/main.go" >"$ablated_dir/python-ban-guard-go/main.go"
+sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip3?(\[\.\]\[0-9\]+)?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ3?([.][0-9]+)?|pytestZZ)/' "$guard" >"$ablated"
+sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip3?(\[\.\]\[0-9\]+)?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ3?([.][0-9]+)?|pytestZZ)/' "$here/python-ban-guard-go/main.go" >"$ablated_dir/python-ban-guard-go/main.go"
 if grep -q 'pythonZZ' "$ablated"; then
   report "ablation edit landed" yes
 else
@@ -547,6 +560,8 @@ r="$(mkrepo review-package-control)"; addf "$r" docs/package.json \
   '{"description":"python3 --version","scripts":{"check":"echo python3"}}'
 run "$r"
 report "control: package metadata and script arguments are data" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+if ! bash "$here/python-ban-guard-wrappers.test.sh"; then fail=1; fi
 
 if [[ $fail -eq 0 ]]; then
   echo "python-ban-guard self-test: all cases passed"

@@ -168,6 +168,28 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 	}
 }
 
+// TestVersionedPipCommands distinguishes executable names from lookalikes and data.
+func TestVersionedPipCommands(t *testing.T) {
+	for _, command := range []string{"pip3.12 --version", "/opt/venv/bin/pip3.13 install example"} {
+		s := scanner{path: "check.sh", seen: make(map[string]bool)}
+		if err := s.source(command, 1, 0, false); err != nil {
+			t.Fatal(err)
+		}
+		if len(s.hits) != 1 {
+			t.Errorf("command %q: want one finding, got %v", command, s.hits)
+		}
+	}
+	for _, command := range []string{"pip-tools --version", "echo pip3.12", "pip3.12-helper --version"} {
+		s := scanner{path: "check.sh", seen: make(map[string]bool)}
+		if err := s.source(command, 1, 0, false); err != nil {
+			t.Fatal(err)
+		}
+		if len(s.hits) != 0 {
+			t.Errorf("command %q: unexpected findings %v", command, s.hits)
+		}
+	}
+}
+
 func TestEnvSplitStringBoundaries(t *testing.T) {
 	tests := []struct {
 		name, path, source string

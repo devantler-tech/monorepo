@@ -16,12 +16,14 @@
 #   owns widening). Two checks per file:
 #     1. A Python SOURCE file: `*.py`, `*.pyi`, `*.pyw`, or a shebang naming python.
 #     2. A Python INVOCATION on an executable surface — every tracked text file except prose
-#        (`*.md`, `*.mdx`): `python`, `python3`, `python3.12`, `pip`, `pip3` or `pytest` in
+#        (`*.md`, `*.mdx`): `python`, `python3`, `python3.12`, `pip`, `pip3`, `pip3.12` or `pytest` in
 #        COMMAND POSITION. After unquoted `#` comments and quotes are stripped, a line is cut into
 #        command segments at `;`, `|`, `&`, `(`, a backtick, `{`, and at `-c` / `run:` (which
 #        open a nested command; YAML `shell:` selects one); in each segment the first token that is not a `VAR=` prefix, a
 #        `-flag`, or a command-wrapping word (`exec`, `xargs`, `env`, `sudo`, `time`, `command`,
-#        `nohup`, `if`/`then`/`else`/`do`/`while`/`until`/`!`) is the command. So
+#        `nohup`, `nice`, `timeout`, `stdbuf`, `setsid`, `ionice`, `doas`,
+#        `if`/`then`/`else`/`do`/`while`/`until`/`!`) is the command. Wrappers consume their
+#        option operands and exclude non-executing modes before selecting a child. So
 #        `bash -c "python3 -m x"` and `FOO=1 python3 x` flag, while `echo "install python3"` and
 #        a YAML `name: Install python deps` do not. Executable paths are matched by basename.
 #        Dockerfile RUN/CMD/ENTRYPOINT shell and JSON operands are scanned; those words are
@@ -31,7 +33,9 @@
 #        Shell sources, workflow command fields, package scripts and Dockerfile operands
 #        use the Go syntax parser before this compatibility scanner. Other non-prose
 #        textual formats retain the legacy invocation heuristic; their language semantics
-#        are not exhaustively analysed. Malformed declared shell sources exit 2.
+#        are not exhaustively analysed, and quoted snippets in those formats can still be
+#        reported by the heuristic. Module extensions use that same compatibility route,
+#        not shell parsing; this does not add a JavaScript parser. Malformed declared shell sources exit 2.
 #
 # THE CARVE-OUT (#2324) — recognised by INVOCATION, never by file extension
 #   An embedded interpreter that admits only Python is dictated by the host tool, not chosen by
@@ -139,12 +143,67 @@ scan_invocations() {
     }
     # Index of the first token from `from` that is a command: not empty, not a -flag, not a
     # VAR= prefix, not a wrapping word. Returns n + 1 when the segment has none.
-    function first_command(tok, from, n,    i, t, wrapper, env_options) {
+    # Resolve an exact or uniquely abbreviated GNU long option to its short form.
+    function wrapper_long(name, key,    parts, pair, count, j, result) {
+      count = split(long_options[name], parts, " ")
+      result = ""
+      for (j = 1; j <= count; j++) {
+        split(parts[j], pair, ":")
+        if (pair[1] == key) return pair[2]
+        if (index(pair[1], key) == 1) {
+          if (result != "") return ""
+          result = pair[2]
+        }
+      }
+      return result
+    }
+    # Return the selected child index; options and their values remain data.
+    function wrapped_command(name, tok, from, n,    i, t, options, option, attached, j, key, mode) {
+      mode = 0
+      for (i = from; i <= n;) {
+        t = tok[i]
+        if (t == "") { i++; continue }
+        if (t == "--") { i++; break }
+        if (t !~ /^-/ || t == "-") break
+        i++
+        attached = 0
+        if (t ~ /^--/) {
+          key = substr(t, 3)
+          attached = index(key, "=") > 0
+          sub(/=.*/, "", key)
+          options = wrapper_long(name, key)
+          if (options == "") return n + 1
+          if (attached && index(value_options[name], options) == 0) return n + 1
+        } else options = substr(t, 2)
+        for (j = 1; j <= length(options); j++) {
+          option = substr(options, j, 1)
+          if (index(stop_options[name], option) > 0) return n + 1
+          if (index(value_options[name], option) > 0) {
+            mode = 1
+            if (!attached && j == length(options)) {
+              while (i <= n && tok[i] == "") i++
+              if (i > n) return n + 1
+              i++
+            }
+            break
+          }
+          if (index(flag_options[name], option) == 0) return n + 1
+        }
+      }
+      if (name == "stdbuf" && !mode) return n + 1
+      while (i <= n && tok[i] == "") i++
+      if (name == "timeout" && i <= n) i++
+      while (i <= n && tok[i] == "") i++
+      return i
+    }
+    function first_command(tok, from, n,    i, t, wrapper, env_options, selected) {
       wrapper = ""
       env_options = 0
+      selected = 0
       for (i = from; i <= n; i++) {
         t = tok[i]
         if (t == "") continue
+        if (selected && (t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) return i
         if (wrapper == "env") {
           if (env_options) {
             if (t == "--" || t == "-") { env_options = 0; continue }
@@ -162,9 +221,17 @@ scan_invocations() {
         if (wrapper == "nice" && (t == "--help" || t == "--version")) return n + 1
         if (wrapper == "nice" && (t == "-n" || t == "--adjustment")) { i++; continue }
         if (wrapper != "env" && (t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) continue
+        if (index(extended_wrappers, " " executable_name(t) " ") > 0) {
+          i = wrapped_command(executable_name(t), tok, i + 1, n) - 1
+          wrapper = ""
+          env_options = 0
+          selected = 1
+          continue
+        }
         if (index(wrappers, " " executable_name(t) " ") > 0) {
           wrapper = executable_name(t)
           env_options = wrapper == "env"
+          selected = 0
           continue
         }
         return i
@@ -173,7 +240,17 @@ scan_invocations() {
     }
     BEGIN {
       # Legacy fallback pattern; the self-test ablates both scanner engines.
-      interp = "^(python[23]?([.][0-9]+)?|pip3?|pytest)$"
+      interp = "^(python[23]?([.][0-9]+)?|pip3?([.][0-9]+)?|pytest)$"
+      extended_wrappers = " timeout stdbuf setsid ionice doas "
+      flag_options["timeout"] = "fpv"; value_options["timeout"] = "ks"; stop_options["timeout"] = "HV"
+      long_options["timeout"] = "kill-after:k signal:s foreground:f preserve-status:p verbose:v help:H version:V"
+      value_options["stdbuf"] = "ioe"; stop_options["stdbuf"] = "HV"
+      long_options["stdbuf"] = "input:i output:o error:e help:H version:V"
+      flag_options["setsid"] = "cfw"; stop_options["setsid"] = "hV"
+      long_options["setsid"] = "ctty:c fork:f wait:w help:h version:V"
+      flag_options["ionice"] = "t"; value_options["ionice"] = "cn"; stop_options["ionice"] = "pPuhV"
+      long_options["ionice"] = "class:c classdata:n ignore:t pid:p pgid:P uid:u help:h version:V"
+      flag_options["doas"] = "n"; value_options["doas"] = "au"; stop_options["doas"] = "CLs"
       # Words that wrap a command rather than being one: the walk skips them and reads on.
       wrappers = " exec xargs env sudo time command nohup nice if then elif else do while until ! "
     }

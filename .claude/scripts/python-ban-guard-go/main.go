@@ -17,7 +17,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-var interpreter = regexp.MustCompile("^(python[23]?([.][0-9]+)?|pip3?|pytest)$")
+var interpreter = regexp.MustCompile("^(python[23]?([.][0-9]+)?|pip3?([.][0-9]+)?|pytest)$")
 var assignment = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*=")
 
 const marker = "python-ban-guard: allow-file"
@@ -28,6 +28,7 @@ type scanner struct {
 	seen map[string]bool
 }
 
+// main scans one supplied file and reports whether the compatibility route is needed.
 func main() {
 	if len(os.Args) != 3 {
 		fmt.Fprintln(os.Stderr, "python-ban-parser: need display path and input file")
@@ -53,6 +54,7 @@ func main() {
 	}
 }
 
+// add records a command finding once at its source location.
 func (s *scanner) add(line int, command string) {
 	q := string(rune(96))
 	hit := fmt.Sprintf("%s:%d: Python invocation %s%s%s", s.path, line, q, command, q)
@@ -62,6 +64,7 @@ func (s *scanner) add(line int, command string) {
 	}
 }
 
+// declaration validates exemptions found in comments parsed by the source language.
 func (s *scanner) declaration(comments []string) bool {
 	for _, comment := range comments {
 		start := strings.Index(comment, marker)
@@ -78,6 +81,7 @@ func (s *scanner) declaration(comments []string) bool {
 	return false
 }
 
+// shellName recognizes interpreters whose command operands use shell syntax.
 func shellName(name string) bool {
 	switch filepath.Base(name) {
 	case "bash", "sh", "zsh", "dash", "ksh":
@@ -122,10 +126,12 @@ func staticWord(word *syntax.Word) (string, bool) {
 	return values[0], true
 }
 
+// parse builds a shell syntax tree without executing or expanding the source.
 func parse(src string) (*syntax.File, error) {
 	return syntax.NewParser(syntax.KeepComments(true)).Parse(strings.NewReader(src), "")
 }
 
+// source visits executable shell nodes and follows statically known nested programs.
 func (s *scanner) source(src string, firstLine, depth int, declarations bool) error {
 	if depth > 32 {
 		return errors.New("nested shell command limit exceeded")
@@ -253,6 +259,9 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 			return true, nil
 		}
 		switch name {
+		case "timeout", "stdbuf", "setsid", "ionice", "doas":
+			i++
+			i += wrapperCommand(name, args[i:], known[i:])
 		case "env":
 			return s.envArgs(args[i+1:], known[i+1:], line, depth+1)
 		case "sudo", "exec", "xargs", "command", "nohup", "time", "nice":
@@ -524,6 +533,7 @@ func shebang(src string) string {
 	return ""
 }
 
+// file dispatches known executable formats and preserves the compatibility scan for others.
 func (s *scanner) file(src string) (bool, error) {
 	entry := shebang(src)
 	if strings.HasPrefix(filepath.Base(entry), "python") && regexp.MustCompile("^python[0-9.]*$").MatchString(filepath.Base(entry)) {
@@ -568,7 +578,7 @@ func (s *scanner) file(src string) (bool, error) {
 		return false, nil
 	}
 	switch ext {
-	case ".js", ".jsx", ".ts", ".tsx", ".json", ".yaml", ".yml", ".toml":
+	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".json", ".yaml", ".yml", ".toml":
 		return false, nil
 	}
 	if _, err := parse(src); err == nil {
@@ -577,6 +587,7 @@ func (s *scanner) file(src string) (bool, error) {
 	return false, nil
 }
 
+// packageScripts scans each JSON scripts value while retaining its original line number.
 func (s *scanner) packageScripts(src string) error {
 	if !json.Valid([]byte(src)) {
 		return errors.New("cannot parse package scripts: invalid JSON")
@@ -634,6 +645,7 @@ func (s *scanner) packageScripts(src string) error {
 	return nil
 }
 
+// yaml follows workflow command fields and aliases without scanning descriptive values.
 func (s *scanner) yaml(src string) error {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
@@ -692,6 +704,7 @@ func (s *scanner) yaml(src string) error {
 	return visit(&doc)
 }
 
+// docker scans shell and JSON operands of Dockerfile execution instructions.
 func (s *scanner) docker(src string) error {
 	lines := strings.Split(src, "\n")
 	var comments []string
