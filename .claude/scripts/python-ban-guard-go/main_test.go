@@ -96,6 +96,24 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 			source: "command -v python3\n", handled: true,
 		},
 		{
+			name: "nice wraps a command", path: "tools/check.sh",
+			source: "nice python3 --version\n", handled: true, want: "Python invocation",
+		},
+		{
+			name: "nice consumes its priority operand", path: "tools/check.sh",
+			source: "nice -n 10 pip3 --version\n", handled: true, want: "Python invocation",
+		},
+		{
+			name: "nice long priority operand", path: "Dockerfile",
+			source: "FROM scratch\nRUN nice --adjustment 10 python3 --version\n",
+			handled: true, want: "Python invocation",
+		},
+		{
+			name: "nice command arguments remain data", path: "tools/check.sh",
+			source: "nice echo python3\nnice -n 10 echo python3\nnice --help python3\n",
+			handled: true,
+		},
+		{
 			name: "wrapper option operand", path: "tools/check.sh",
 			source: "sudo -u nobody python3 --version\n", handled: true, want: "Python invocation",
 		},

@@ -246,7 +246,7 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 			return true, nil
 		}
 		switch name {
-		case "env", "sudo", "exec", "xargs", "command", "nohup", "time":
+		case "env", "sudo", "exec", "xargs", "command", "nohup", "time", "nice":
 			i++
 			for i < len(args) && known[i] {
 				arg := args[i]
@@ -262,6 +262,9 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 					break
 				}
 				if (name == "command" && (arg == "-v" || arg == "-V")) || (name == "sudo" && (arg == "-l" || arg == "--list")) {
+					return false, nil
+				}
+				if name == "nice" && (arg == "--help" || arg == "--version") {
 					return false, nil
 				}
 				needsValue := false
@@ -282,6 +285,8 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 					needsValue = arg == "-a"
 				case "time":
 					needsValue = arg == "-f" || arg == "-o" || arg == "--format" || arg == "--output"
+				case "nice":
+					needsValue = arg == "-n" || arg == "--adjustment"
 				}
 				i++
 				if needsValue {
