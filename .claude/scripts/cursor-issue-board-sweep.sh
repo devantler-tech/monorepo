@@ -26,16 +26,19 @@
 #   A failed discovery is never treated as "no issues": an empty result is only believed when the
 #   search command itself succeeded. A `board-add.sh` failure on one issue does not abort the
 #   sweep -- the remaining issues are still boarded -- but the script exits non-zero so the
-#   failure is visible rather than absorbed. A private repository's issue is a maintainer
+#   failure is visible rather than absorbed. A result set sitting exactly AT the --limit cap is
+#   treated as truncated and fails closed, because `--limit` bounds what is fetched rather than
+#   guaranteeing an exhaustive search, and a silent shortfall would leave issues unboarded behind
+#   a clean exit. A private repository's issue is a maintainer
 #   decision, and `board-add.sh` refuses it; that refusal is reported as SKIPPED and does not
 #   fail the sweep.
 #
 # USAGE
 #   cursor-issue-board-sweep.sh [--author <login>] [--owner <org>] [--limit <n>]
-#                               [--board-add <path>] [--dry-run]
+#                               [--pace-seconds <n>] [--board-add <path>] [--dry-run]
 #   exit 0  every discovered issue is on the board (or there were none)
 #   exit 1  usage error
-#   exit 2  discovery failed, or at least one issue could not be boarded
+#   exit 2  discovery failed or was truncated at the cap, or an issue could not be boarded
 set -Eeuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +48,10 @@ owner="devantler-tech"
 limit=300
 board_add="${here}/board-add.sh"
 dry_run=0
+# GitHub's secondary limits allow roughly 80 content-generating requests per minute, and each
+# board-add performs an item-add AND an item-edit. A backfill of a few hundred issues at full speed
+# would blow through that and keep hammering after the failures start, so the loop paces itself.
+pace=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -52,6 +59,7 @@ while [ $# -gt 0 ]; do
     --owner)      owner="${2:?--owner needs a value}"; shift 2 ;;
     --limit)      limit="${2:?--limit needs a value}"; shift 2 ;;
     --board-add)  board_add="${2:?--board-add needs a value}"; shift 2 ;;
+    --pace-seconds) pace="${2:?--pace-seconds needs a value}"; shift 2 ;;
     --dry-run)    dry_run=1; shift ;;
     -h|--help)    sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "cursor-issue-board-sweep: unknown argument: $1" >&2; exit 1 ;;
@@ -59,19 +67,42 @@ while [ $# -gt 0 ]; do
 done
 
 case "$limit" in ''|*[!0-9]*) echo "cursor-issue-board-sweep: --limit must be a number: $limit" >&2; exit 1 ;; esac
+case "$pace" in ''|*[!0-9]*) echo "cursor-issue-board-sweep: --pace-seconds must be a whole number of seconds: $pace" >&2; exit 1 ;; esac
 [ "$dry_run" -eq 1 ] || [ -x "$board_add" ] ||
   { echo "cursor-issue-board-sweep: board-add helper is not executable: $board_add" >&2; exit 1; }
 
 # Discovery. Captured rather than piped so a FAILED search cannot read as an empty one:
 # `gh ... | while read` would report the loop's status and sweep zero issues on an auth error.
-if ! found="$(gh search issues --owner "$owner" --state open --author "$author" \
-                --limit "$limit" --sort created --order asc --json url --jq '.[].url' 2>&1)"; then
-  echo "cursor-issue-board-sweep: discovery FAILED (nothing swept) — ${found}" >&2
+#
+# stderr goes to its OWN file, never folded in with `2>&1`: the CLI prints an upgrade notice on
+# stderr roughly once a day, and merging that into the newline-delimited URL list would hand a
+# banner line to board-add.sh as if it were an issue.
+#
+# `--archived=false` because the search otherwise covers every repository in the owner, including
+# archived ones. Archived repositories are read-only history and outside the active portfolio, so a
+# stale issue in one must never be added to the live board.
+err_file="$(mktemp)"
+trap 'rm -f "$err_file"' EXIT
+if ! found="$(gh search issues --owner "$owner" --archived=false --state open --author "$author" \
+                --limit "$limit" --sort created --order asc --json url --jq '.[].url' 2>"$err_file")"; then
+  echo "cursor-issue-board-sweep: discovery FAILED (nothing swept) — $(tr '\n' ' ' <"$err_file")" >&2
   exit 2
 fi
 
 # `--jq` on an empty result set prints nothing, so an empty string here means zero issues from a
 # search that SUCCEEDED. That is the only path on which an empty sweep is believed.
+discovered_count=0
+[ -z "$found" ] || discovered_count="$(printf '%s\n' "$found" | grep -c .)"
+
+# SATURATION. `--limit` is a CAP on results fetched, not a page size that guarantees an exhaustive
+# search, so a result set exactly at the cap means the lane may hold more issues that were never
+# returned. Reporting success there would leave them unboarded behind a clean exit, so fail closed
+# and say what to do.
+if [ "$discovered_count" -ge "$limit" ]; then
+  echo "cursor-issue-board-sweep: discovery TRUNCATED at the --limit cap (${discovered_count} of at least ${limit}); re-run with a higher --limit — some issues would stay unboarded behind a success" >&2
+  exit 2
+fi
+
 total=0
 boarded=0
 skipped=0
@@ -85,6 +116,9 @@ while IFS= read -r url; do
     boarded=$((boarded + 1))
     continue
   fi
+  # Pace before each real mutation, never before the first: this is deliberate throttling against
+  # the secondary limits, not a wait for anything remote to change.
+  [ "$total" -eq 1 ] || [ "$pace" -eq 0 ] || sleep "$pace"
   if out="$("$board_add" "$url" 2>&1)"; then
     boarded=$((boarded + 1))
     echo "cursor-issue-board-sweep: boarded ${url}"

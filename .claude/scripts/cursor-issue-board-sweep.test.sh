@@ -27,6 +27,7 @@ mkstub_gh() {
   cat > "$tmp/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${GH_ARGV_LOG}"
+if [ -n "${GH_STDERR:-}" ]; then printf '%s\n' "${GH_STDERR}" >&2; fi
 if [ "${GH_EXIT:-0}" != 0 ]; then echo "stub: simulated search failure" >&2; exit "${GH_EXIT}"; fi
 [ -s "${GH_RESULTS}" ] && cat "${GH_RESULTS}"
 exit 0
@@ -64,7 +65,7 @@ run_sweep() {
   local script="$1"; shift
   : > "$BOARD_LOG"; : > "$GH_ARGV_LOG"
   rc=0
-  out="$(PATH="$tmp/bin:$PATH" "$script" --board-add "$tmp/board-add-stub.sh" "$@" 2>&1)" || rc=$?
+  out="$(PATH="$tmp/bin:$PATH" "$script" --board-add "$tmp/board-add-stub.sh" --pace-seconds 0 "$@" 2>&1)" || rc=$?
 }
 
 # ---------------------------------------------------------------------------
@@ -80,7 +81,7 @@ report "summary counts the sweep" \
 
 # 2. Discovery flags are pinned (the AC names each one).
 argv="$(cat "$GH_ARGV_LOG")"
-for flag in "--owner devantler-tech" "--state open" "--author app/cursor" "--limit 300" "--sort created" "--order asc"; do
+for flag in "--archived=false" "--owner devantler-tech" "--state open" "--author app/cursor" "--limit 300" "--sort created" "--order asc"; do
   report "discovery pins ${flag}" "$(printf '%s' "$argv" | grep -qF -- "$flag" && echo yes || echo no)" "$argv"
 done
 
@@ -117,6 +118,29 @@ run_sweep "$sweep" --limit not-a-number
 report "a non-numeric --limit is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"
 
 # ---------------------------------------------------------------------------
+# 7c. SATURATION — a result set at the cap may be truncated, so success would hide unboarded issues.
+printf '%s\n%s\n' "$U1" "$U2" > "$GH_RESULTS"
+run_sweep "$sweep" --limit 2
+report "a result set AT the --limit cap fails closed" \
+  "$([ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'TRUNCATED' && echo yes || echo no)" "rc=$rc $out"
+report "a saturated discovery boards nothing" "$([ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "log=[$(cat "$BOARD_LOG")]"
+# Control: one BELOW the cap is a complete census and sweeps normally.
+run_sweep "$sweep" --limit 3
+report "control: one result below the cap sweeps normally" \
+  "$([ "$rc" -eq 0 ] && [ "$(wc -l < "$BOARD_LOG" | tr -d ' ')" = 2 ] && echo yes || echo no)" "rc=$rc"
+
+# 7d. A SUCCESSFUL search that writes to stderr must not fold that text into the URL list.
+#     The CLI prints an upgrade notice on stderr about once a day, so this is routine, not exotic.
+printf '%s\n%s\n%s\n' "$U1" "$U2" "$U3" > "$GH_RESULTS"
+GH_STDERR="A new release of gh is available: 2.0.0 -> 2.1.0" run_sweep "$sweep"
+got_stderr="$(sort "$BOARD_LOG")"
+report "a stderr notice is not passed to board-add as an issue" \
+  "$([ "$got_stderr" = "$want" ] && [ "$rc" -eq 0 ] && echo yes || echo no)" "rc=$rc got=[$(echo "$got_stderr" | tr '\n' ' ')]"
+
+# 7e. Pacing is validated like every other numeric option.
+run_sweep "$sweep" --pace-seconds nope
+report "a non-numeric --pace-seconds is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"
+
 # 8. ABLATION — a copy that drops the LAST discovered issue must make assertion 1 FIRE.
 #    Without this, a set comparison that can never fail would read as a passing test.
 ablated="$tmp/sweep-ablated.sh"

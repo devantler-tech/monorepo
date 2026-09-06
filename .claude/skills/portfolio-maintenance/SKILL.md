@@ -508,17 +508,21 @@ findings while you are choosing work rather than after:
 .claude/scripts/cursor-issue-board-sweep.sh
 ```
 
-It discovers open Cursor-authored issues org-wide — author matched **exactly**, oldest first, with
-`--limit` pinned because `gh search` defaults to 30 — and passes **every** result through the
+It discovers open Cursor-authored issues org-wide — author matched **exactly**, archived repositories
+excluded, oldest first, with `--limit` pinned because `gh search` defaults to 30 — and passes
+**every** result through the
 idempotent `board-add.sh`, which does both halves of the add and verifies the Status by reading it
 back. Do **not** hand-roll the `item-add` + `item-edit` pair here: `item-add` exits 0 and prints an
 item id, so a half-completed add is indistinguishable from a finished one, which is the defect that
 helper exists to close.
 
 Read its exit status rather than its output: `0` means every discovered issue is on the board (or
-there were none), and `2` means the **discovery itself failed** or an issue could not be boarded —
-never treat a failed search as an empty lane. A private repository's issue is reported `SKIPPED`,
-because project 5 is public and boarding one from a private repo is a maintainer decision.
+there were none), and `2` means the **discovery itself failed**, came back truncated at the `--limit`
+cap, or an issue could not be boarded — never treat a failed or short search as an empty lane, since
+the cap bounds what is fetched rather than guaranteeing a complete census. A private repository's
+issue is reported `SKIPPED`, because project 5 is public and boarding one from a private repo is a
+maintainer decision. The loop paces itself between board mutations: each add is two
+content-generating requests against a shared secondary limit.
 
 This exists as a step because a distant constitutional paragraph was not reliably reached: the
 status-less card count regressed 0 → 4 → 0 → 16 across ticks while the repair was already scripted
