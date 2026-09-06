@@ -207,6 +207,12 @@ func (s *scanner) makeRecipes(src string) error {
 				value = value[:at]
 			}
 			value = strings.TrimSpace(value)
+			// Make runs $(shell ...) while reading the file, so its command is an
+			// executable surface even when the surrounding value is discarded as
+			// dynamic just below.
+			for _, command := range makeShellCommands(value) {
+				recipes = append(recipes, makeRecipe{source: command, line: i + 1})
+			}
 			// Only literal definitions are statically resolved. References and
 			// escapes have different := and = expansion times; leave both unknown
 			// instead of re-evaluating an immediate assignment at recipe time.
@@ -306,4 +312,53 @@ func makeRecipeVariables(src string, variables map[string]string, depth int) str
 		}
 	}
 	return out.String()
+}
+
+// makeShellCommands returns the command text of every $(shell ...) expression in
+// a Make value. Make executes these while reading the file, so treating a value
+// as unknown because it contains a reference still leaves its shell command run.
+func makeShellCommands(value string) []string {
+	var commands []string
+	for i := 0; i+1 < len(value); i++ {
+		if value[i] != '$' {
+			continue
+		}
+		if value[i+1] == '$' {
+			i++
+			continue
+		}
+		opening := value[i+1]
+		var closing byte
+		switch opening {
+		case '(':
+			closing = ')'
+		case '{':
+			closing = '}'
+		default:
+			continue
+		}
+		rest := value[i+2:]
+		if !strings.HasPrefix(rest, "shell") || len(rest) == len("shell") {
+			continue
+		}
+		if next := rest[len("shell")]; next != ' ' && next != '\t' {
+			continue
+		}
+		depth, at := 1, len("shell")
+		for ; at < len(rest); at++ {
+			if rest[at] == opening {
+				depth++
+			} else if rest[at] == closing {
+				if depth--; depth == 0 {
+					break
+				}
+			}
+		}
+		if depth != 0 {
+			continue
+		}
+		commands = append(commands, strings.TrimSpace(rest[len("shell"):at]))
+		i += 1 + at
+	}
+	return commands
 }

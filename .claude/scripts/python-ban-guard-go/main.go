@@ -532,15 +532,37 @@ func shebang(src string) string {
 				i++
 				continue
 			}
-			if arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir" {
+			if arg == "--unset" || arg == "--chdir" {
 				if i+1 >= len(args) || !known[i+1] {
 					return ""
 				}
 				i += 2
 				continue
 			}
-			if strings.HasPrefix(arg, "-") {
+			if strings.HasPrefix(arg, "--") {
 				i++
+				continue
+			}
+			if strings.HasPrefix(arg, "-") {
+				// GNU env short options cluster, and -u/-C take a value. The value
+				// is the rest of the cluster when one follows and otherwise the
+				// next argument, so skipping the cluster whole would select that
+				// operand as the interpreter and report the file clean.
+				rest := arg[1:]
+				skip := 1
+				for at := 0; at < len(rest); at++ {
+					if rest[at] != 'u' && rest[at] != 'C' {
+						continue
+					}
+					if at+1 == len(rest) {
+						if i+1 >= len(args) || !known[i+1] {
+							return ""
+						}
+						skip = 2
+					}
+					break
+				}
+				i += skip
 				continue
 			}
 			break
@@ -773,7 +795,11 @@ func (s *scanner) docker(src string) error {
 			continue
 		}
 		switch strings.ToUpper(fields[0]) {
-		case "RUN", "CMD", "ENTRYPOINT":
+		// SHELL overrides the interpreter used by every later shell-form RUN,
+		// CMD and ENTRYPOINT, so an explicitly selected Python there would
+		// otherwise run while each shell-form operand parsed as an ordinary
+		// command and reported clean.
+		case "RUN", "CMD", "ENTRYPOINT", "SHELL":
 		default:
 			continue
 		}

@@ -150,6 +150,23 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 			name: "wrapper option operand", path: "tools/check.sh",
 			source: "sudo -u nobody python3 --version\n", handled: true, want: "Python invocation",
 		},
+		{
+			name: "clustered env option consumes its operand", path: "tools/check",
+			source: "#!/usr/bin/env -S -iu HOME python3\n", handled: true, want: "Python source file",
+		},
+		{
+			name: "dockerfile SHELL selects the interpreter", path: "Dockerfile",
+			source: "SHELL [\"python3\", \"-c\"]\nRUN pass\n", handled: true, want: "Python invocation",
+		},
+		{
+			name: "kubernetes args supply the shell operand", path: "deploy.yaml",
+			source:  "spec:\n  containers:\n    - name: app\n      command: [\"sh\", \"-c\"]\n      args: [\"python3 --version\"]\n",
+			handled: true, want: "Python invocation",
+		},
+		{
+			name: "make shell function runs at read time", path: "Makefile",
+			source: "VERSION := $(shell python3 --version)\n", handled: true, want: "Python invocation",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

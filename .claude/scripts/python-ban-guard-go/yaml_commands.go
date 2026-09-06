@@ -70,6 +70,31 @@ func (s *scanner) yamlCommands(src string) error {
 		}
 		return nil
 	}
+	// Kubernetes derives one process from command and args jointly, so a shell
+	// named in command whose script sits in the sibling args field executes
+	// while each field, scanned alone, carries no command operand at all.
+	combined := func(command, args *yaml.Node) (bool, error) {
+		command, args = unalias(command), unalias(args)
+		if command.Kind != yaml.SequenceNode || args.Kind != yaml.SequenceNode {
+			return false, nil
+		}
+		items := append(append([]*yaml.Node{}, command.Content...), args.Content...)
+		argv := make([]string, len(items))
+		known := make([]bool, len(items))
+		line := command.Line
+		for at, item := range items {
+			item = unalias(item)
+			if item.Kind != yaml.ScalarNode {
+				return false, nil
+			}
+			if at == 0 {
+				line = item.Line
+			}
+			argv[at], known[at] = item.Value, true
+		}
+		_, err := s.argv(argv, known, line, 0)
+		return true, err
+	}
 	active := make(map[*yaml.Node]bool)
 	var visit func(*yaml.Node, bool) error
 	visit = func(node *yaml.Node, commands bool) error {
@@ -82,6 +107,12 @@ func (s *scanner) yamlCommands(src string) error {
 			return visit(node.Alias, commands)
 		}
 		if node.Kind == yaml.MappingNode {
+			var argsValue *yaml.Node
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				if k := unalias(node.Content[i]); k.Kind == yaml.ScalarNode && k.Value == "args" {
+					argsValue = node.Content[i+1]
+				}
+			}
 			for i := 0; i+1 < len(node.Content); i += 2 {
 				key, value := node.Content[i], node.Content[i+1]
 				if err := visit(key, false); err != nil {
@@ -92,6 +123,15 @@ func (s *scanner) yamlCommands(src string) error {
 				}
 				key = unalias(key)
 				if commands && key.Kind == yaml.ScalarNode && (key.Value == "command" || key.Value == "run" || key.Value == "shell") {
+					if key.Value == "command" && argsValue != nil {
+						handled, err := combined(value, argsValue)
+						if err != nil {
+							return err
+						}
+						if handled {
+							continue
+						}
+					}
 					if err := operand(value); err != nil {
 						return err
 					}
