@@ -3466,8 +3466,10 @@ steps, tooling, generators, test harnesses, and one-off helpers. Concretely:
   (Generalizes the platform-only direction of 2026-07-12, platform#2608, to the whole portfolio.)
 - **This repository provides a CI guard for the rule.** `.claude/scripts/python-ban-guard.sh` fails a
   change that adds a tracked `.py` file or a Python invocation on an executable surface; prose
-  without an executable shebang is excluded. Shell sources, workflow commands and package scripts
-  use a static Go parser; other textual formats retain the compatibility scan. The guard names
+  without an executable shebang is excluded. Shell sources, workflow commands, YAML command operands,
+  package scripts, Make recipes and Dockerfile operands use a static Go parser. Go generate directives
+  are parsed before the remaining Go text reaches the compatibility scan; other textual formats
+  retain that scan. The guard names
   this rule and the bash/Go alternative, honours the embedded-interpreter carve-out by invocation
   shape, and exempts a file about the form only when a parsed comment declares
   `python-ban-guard: allow-file — <reason>`. The sweep ships latent

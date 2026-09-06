@@ -17,7 +17,8 @@
 #     1. A Python SOURCE file: `*.py`, `*.pyi`, `*.pyw`, or a shebang naming python.
 #     2. A Python INVOCATION on an executable surface — every tracked text file except prose
 #        (`*.md`, `*.mdx`): `python`, `python3`, `python3.12`, `pip`, `pip2`, `pip2.7`, `pip3`, `pip3.12` or `pytest` in
-#        COMMAND POSITION. After unquoted `#` comments and quotes are stripped, a line is cut into
+#        COMMAND POSITION. In the remaining compatibility heuristic described below, after
+#        unquoted `#` comments and quotes are stripped, a line is cut into
 #        command segments at `;`, `|`, `&`, `(`, a backtick, `{`, and at `-c` / `run:` (which
 #        open a nested command; YAML `shell:` selects one); in each segment the first token that is not a `VAR=` prefix, a
 #        `-flag`, or a command-wrapping word (`exec`, `xargs`, `env`, `sudo`, `time`, `command`,
