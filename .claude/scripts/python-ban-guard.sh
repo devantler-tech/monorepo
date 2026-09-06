@@ -28,11 +28,10 @@
 #        not command wrappers in other files.
 #        Backslash-newline continuations outside single quotes join before matching command names.
 #        Unquoted escapes before executable-name/path characters retain their executable identity.
-#        Two known limits of that heuristic, accepted for a ~150-line bash guard: a flag's
-#        ARGUMENT is read as the command (`sudo -u nobody pip3 …` reads `nobody`), and quotes
-#        are stripped before segmenting, so a quoted alternation such as
-#        `grep -E '(npm ci|pytest)'` reads `pytest` as a command — a file that legitimately
-#        lists interpreters as text declares the allow-file marker below.
+#        Shell sources, workflow command fields, package scripts and Dockerfile operands
+#        use the Go syntax parser before this compatibility scanner. Other non-prose
+#        textual formats retain the legacy invocation heuristic; their language semantics
+#        are not exhaustively analysed. Malformed declared shell sources exit 2.
 #
 # THE CARVE-OUT (#2324) — recognised by INVOCATION, never by file extension
 #   An embedded interpreter that admits only Python is dictated by the host tool, not chosen by
@@ -43,7 +42,7 @@
 #
 # ALLOW-FILE MARKER
 #   A file that is ABOUT the offending form — this guard's self-test quotes `python3 -c` as
-#   fixture text — declares `python-ban-guard: allow-file — <reason>` anywhere in its text. The
+#   fixture text — declares `python-ban-guard: allow-file — <reason>` in a parsed comment. The
 #   reason is mandatory: a bare marker is reported as a finding, never honoured.
 #
 # USAGE
@@ -66,7 +65,13 @@ top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" ||
 
 # Keep NUL-delimited paths intact, and inspect the producer's exit status before scanning.
 tracked_paths="$(mktemp)" || { echo "python-ban-guard: cannot allocate tracked-file list" >&2; exit 2; }
-trap 'rm -f -- "$tracked_paths"' EXIT
+parser_binary="$(mktemp)" || { rm -f -- "$tracked_paths"; exit 2; }
+trap 'rm -f -- "$tracked_paths" "$parser_binary"' EXIT
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! go -C "$script_dir/python-ban-guard-go" build -o "$parser_binary" .; then
+  echo "python-ban-guard: cannot build command parser" >&2
+  exit 2
+fi
 if ! git -C "$top" ls-files -z >"$tracked_paths"; then
   echo "python-ban-guard: cannot enumerate tracked files in $top" >&2
   exit 2
@@ -143,7 +148,7 @@ scan_invocations() {
       return n + 1
     }
     BEGIN {
-      # The interpreter pattern lives HERE and nowhere else; the self-test ablates this line.
+      # Legacy fallback pattern; the self-test ablates both scanner engines.
       interp = "^(python[23]?([.][0-9]+)?|pip3?|pytest)$"
       # Words that wrap a command rather than being one: the walk skips them and reads on.
       wrappers = " exec xargs env sudo time command nohup if then elif else do while until ! "
@@ -214,32 +219,14 @@ while IFS= read -r -d '' path; do
       report "$path: Python source file"
       continue ;;
   esac
-  case "$path" in *.md|*.mdx) continue ;; esac  # prose is not an executable surface
   grep -Iq . "$file" 2>/dev/null || continue     # binary, or empty
-  if head -n 1 "$file" | awk '
-    {
-      line = $0
-      # Normalize only the first env split-string option, not an argument of
-      # another interpreter later in the shebang.
-      if (line ~ /^#![[:space:]]*([^[:space:]]*\/)?env[[:space:]]+(-S|--split-string=)/) {
-        sub(/[[:space:]]-S/, " -S ", line)
-        sub(/[[:space:]]--split-string=/, " --split-string ", line)
-      }
-      if (line ~ /^#![^#]*[\/[:space:]]python[0-9.]*([[:space:]]|$)/) found = 1
-    }
-    END { exit !found }
-  '; then
-    report "$path: Python source file (its shebang names python)"
-    continue
-  fi
-  if grep -Fq 'python-ban-guard: allow-file' "$file"; then
-    if grep -Eq 'python-ban-guard: allow-file — [^[:space:]]' "$file"; then
-      continue
-    fi
-    report "$path: bare \`python-ban-guard: allow-file\` marker carries no reason; a marker states WHY the file is about the form, or it is a finding"
-    continue
-  fi
-  hits="$(scan_invocations "$path" "$file")"
+  parser_rc=0
+  hits="$("$parser_binary" "$path" "$file")" || parser_rc=$?
+  case "$parser_rc" in
+    0) ;;
+    3) hits="$(scan_invocations "$path" "$file")" ;;
+    *) exit 2 ;;
+  esac
   if [ -n "$hits" ]; then
     while IFS= read -r hit; do
       report "$hit"

@@ -16,6 +16,7 @@ set -Eeuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 guard="$here/python-ban-guard.sh"
+go -C "$here/python-ban-guard-go" test ./...
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -396,11 +397,22 @@ report "failed tracked-file enumeration exits 2 instead of reporting clean" \
   "$([[ $rc -eq 2 && "$out" != *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
+# The compatibility route must still report non-workflow command operands.
+r="$(mkrepo legacy-command)"; addf "$r" deploy/pod.yaml \
+  "annotation: 'python-ban-guard: allow-file — data'" 'command:' '  - python3'
+run "$r"
+report "unsupported YAML retains detection and marker data cannot exempt it" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
 # 9. Ablation: neutralise the invocation pattern in a COPY of the guard and show the
 #    #2769 fixture no longer fires — so the earlier flag depended on that pattern — while
 #    the source-file check, which the ablation does not touch, still fires.
-ablated="$tmp/guard-ablated.sh"
+ablated_dir="$tmp/ablation"
+mkdir -p "$ablated_dir"
+cp -R "$here/python-ban-guard-go" "$ablated_dir/"
+ablated="$ablated_dir/python-ban-guard.sh"
 sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip3?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ3?|pytestZZ)/' "$guard" >"$ablated"
+sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip3?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ3?|pytestZZ)/' "$here/python-ban-guard-go/main.go" >"$ablated_dir/python-ban-guard-go/main.go"
 if grep -q 'pythonZZ' "$ablated"; then
   report "ablation edit landed" yes
 else
@@ -410,6 +422,84 @@ GUARD="$ablated" run "$tmp/test-sh"
 report "ablation: with the invocation pattern neutralised, the #2769 fixture passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 GUARD="$ablated" run "$tmp/py-file"
 report "ablation control: the untouched source-file check still flags a .py file" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc: $out"
+GUARD="$ablated" run "$tmp/legacy-command"
+report "ablation: the compatibility invocation pattern is neutralised too" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# Review regressions: these strings are scanner inputs, never executable fixtures.
+review_case=0
+for invocation in "case \"\$mode\" in yes) python3 --version ;; esac" \
+  "eval 'python3 --version'" \
+  "bash -lc 'python3 --version'" \
+  "bash -ec 'python3 --version'" \
+  "bash -xc 'python3 --version'" \
+  "py''thon3 --version" '"py"thon3 --version' "\$'python3' --version" \
+  '>output python3 --version' '2>output python3 --version' '> output python3 --version'; do
+  review_case=$((review_case + 1))
+  r="$(mkrepo "review-command-${review_case}")"; addf "$r" tools/check.sh "$invocation"
+  run "$r"
+  report "shell syntax preserves command position (${review_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo review-command-controls)"; addf "$r" tools/check.sh \
+  'case "$mode" in yes) echo python3 ;; esac' "eval 'echo python3'" \
+  "bash -lc 'echo python3'" "echo py''thon3" '2>output echo python3' \
+  "bash -- -lc 'python3 --version'" "grep -E '(npm ci|pytest)' input"
+run "$r"
+report "control: shell words used as data stay data" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo review-marker-data)"; addf "$r" tools/check.sh \
+  "printf '%s\\n' 'python-ban-guard: allow-file — user data'; python3 --version"
+run "$r"
+report "marker text in an argument cannot exempt a command" "$([[ $rc -eq 1 && "$out" == *'Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo review-marker-data-control)"; addf "$r" tools/check.sh \
+  "printf '%s\\n' 'python-ban-guard: allow-file'"
+run "$r"
+report "control: bare marker text as data is not a declaration" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo review-heredoc-data)"; addf "$r" tools/check.sh \
+  "cat <<'DATA'" 'python3 --version' 'DATA' \
+  'cat <<DATA' 'python3 --version' 'DATA'
+run "$r"
+report "control: literal heredoc content is data" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo review-heredoc-marker)"; addf "$r" tools/check.sh \
+  "cat <<'DATA'" '# python-ban-guard: allow-file — data' 'DATA' 'python3 --version'
+run "$r"
+report "a heredoc marker cannot exempt the command after it" \
+  "$([[ $rc -eq 1 && "$out" == *'check.sh:4: Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo review-heredoc-substitution)"; addf "$r" tools/check.sh \
+  'cat <<DATA' '$(python3 --version)' 'DATA'
+run "$r"
+report "an unquoted heredoc still executes command substitutions" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo review-heredoc-shell)"; addf "$r" tools/check.sh \
+  "bash <<'SCRIPT'" 'python3 --version' 'SCRIPT'
+run "$r"
+report "a shell reading a heredoc executes its body" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+review_shebang=0
+for shebang in "#!/usr/bin/env -S 'python3' -u" '#!/usr/bin/env -S "python3" -u' \
+  "#!/usr/bin/env -S'python3' -u" "#!/usr/bin/env --split-string='python3' -u"; do
+  review_shebang=$((review_shebang + 1))
+  r="$(mkrepo "review-shebang-${review_shebang}")"; addf "$r" tools/check "$shebang"
+  run "$r"
+  report "quoted env split-string exposes the source interpreter (${review_shebang})" \
+    "$([[ $rc -eq 1 && "$out" == *'shebang names python'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo review-prose-shebang)"; addf "$r" tools/check.md '#!/usr/bin/env python3'
+chmod +x "$r/tools/check.md"; git -C "$r" add -- tools/check.md
+run "$r"
+report "a prose suffix cannot hide an executable Python shebang" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo review-prose-shell)"; addf "$r" tools/check.md '#!/usr/bin/env bash' 'python3 --version'
+chmod +x "$r/tools/check.md"; git -C "$r" add -- tools/check.md
+run "$r"
+report "a prose suffix cannot hide an executable shell invocation" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo review-package-script)"; addf "$r" docs/package.json '{"scripts":{"check":"python3 --version"}}'
+run "$r"
+report "package scripts expose their executable command" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo review-package-control)"; addf "$r" docs/package.json \
+  '{"description":"python3 --version","scripts":{"check":"echo python3"}}'
+run "$r"
+report "control: package metadata and script arguments are data" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 if [[ $fail -eq 0 ]]; then
   echo "python-ban-guard self-test: all cases passed"

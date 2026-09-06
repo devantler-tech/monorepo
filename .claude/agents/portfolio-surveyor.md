@@ -1066,8 +1066,15 @@ public and private — no per-repo loop needed to enumerate):
    default-branch classification and its required runtime helper; this consumer carries no second
    implementation. For every mapped repository the deployment names that branch `main`, invokes the
    installed reviewed helper exactly as the generic role prescribes, and treats any helper error as
-   `QUERY-UNKNOWN`. The paragraphs below add only this portfolio's GitHub-managed routing policy to
-   the generic classifier output.
+   `QUERY-UNKNOWN`. **Invoke the classifier only in its flag form, by its resolved installed
+   path:** `<installed plugin>/scripts/classify-default-branch-ci-runs.sh --repo OWNER/REPO --branch
+   BRANCH --head-sha FULL_SHA`. The helper and the read-only guard accept nothing else: the guard
+   admits only that exact installed sibling path — never a bare basename, a `PATH` lookup, or a
+   relative `../scripts/` form — and a positional `OWNER/REPO BRANCH SHA` is denied as `not the
+   guarded remote-mode shape` while the helper itself exits 2 on it, so the first invocation must
+   already carry the resolved path and all three flags (ported verbatim from agent-plugins#195's fix,
+   because this overlay is the definition the survey actually reads for this step). The paragraphs below add only
+   this portfolio's GitHub-managed routing policy to the generic classifier output.
 
    **Split GitHub-MANAGED runs out of that red set before reporting it.** Identify the class by the
    **property, not by an enumerated path**: `event: dynamic` **and** a `path` under `dynamic/` — which

@@ -3433,11 +3433,13 @@ steps, tooling, generators, test harnesses, and one-off helpers. Concretely:
 - **Never introduce a `.py` file or a Python invocation** into any devantler-tech repo. Tests use
   the repo's real test framework (Go test, the stack's native runner), never a Python harness.
   (Generalizes the platform-only direction of 2026-07-12, platform#2608, to the whole portfolio.)
-- **This repository enforces the rule in CI.** `.claude/scripts/python-ban-guard.sh` fails a change
-  that adds a tracked `.py` file or a Python invocation on an executable surface (every tracked
-  file except prose), names this rule and the bash/Go alternative in its message, honours the
-  embedded-interpreter carve-out below by invocation shape, and exempts a file that is *about* the
-  form only when it declares `python-ban-guard: allow-file — <reason>`. The sweep ships latent
+- **This repository provides a CI guard for the rule.** `.claude/scripts/python-ban-guard.sh` fails a
+  change that adds a tracked `.py` file or a Python invocation on an executable surface; prose
+  without an executable shebang is excluded. Shell sources, workflow commands and package scripts
+  use a static Go parser; other textual formats retain the compatibility scan. The guard names
+  this rule and the bash/Go alternative, honours the embedded-interpreter carve-out by invocation
+  shape, and exempts a file about the form only when a parsed comment declares
+  `python-ban-guard: allow-file — <reason>`. The sweep ships latent
   behind the `ENFORCE_PYTHON_BAN_GUARD` repository variable until #3221 activates it; its
   self-test runs on every PR regardless.
 - **Go is the preferred scripting language; bash is a legitimate starting point.** Write a small,
@@ -4296,7 +4298,7 @@ refinements (the `4b`–`4e` items in
 [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
 were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
 closed, pushing the file's own deletion further away, and charging every hourly dispatch for it. Its
-**enforced high-water mark is now 156,920 B** (raised 2026-09-04 by monorepo#3207 to port agent-plugins#177's `gh --json` vocabulary rule into the overlay, which 122 of 153 measured surveyor dispatches load instead of the plugin agent); that is the live ratchet ceiling, not a rewrite of the
+**enforced high-water mark is now 157,615 B** (raised 2026-09-05 by monorepo#3223 to port agent-plugins#195's classifier flag-form sentence into the overlay's step 4, which 19 of 20 classifier-calling surveyor dispatches read instead of the plugin agent; the 2026-09-04 raise by monorepo#3207 ported agent-plugins#177's `gh --json` vocabulary rule for the same reason); that is the live ratchet ceiling, not a rewrite of the
 dated measurement.
 
 **So a new surveyor refinement goes UPSTREAM unless it is a genuine deployment fact.**

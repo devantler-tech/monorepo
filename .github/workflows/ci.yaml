@@ -951,13 +951,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/python-ban-guard-go/go.mod
+          cache-dependency-path: .claude/scripts/python-ban-guard-go/go.sum
       # The self-test covers each Python shape the guard must catch, each safe
       # shape it must leave alone (prose, comments, the blender carve-out, the
       # allow-file marker), a clean fixture as a positive control, and an
       # ablation proving the flagged fixture depends on the invocation pattern.
       - name: Self-test the guard
         run: bash .claude/scripts/python-ban-guard.test.sh
-      # ENFORCEMENT IS LATENT, per feature-flag-first delivery: a regex over
+      # ENFORCEMENT IS LATENT, per feature-flag-first delivery: a static scan over
       # every tracked file can block a valid change on a false positive, and
       # gating the whole repository on that judgement is the risk the flag
       # holds back. The sweep gates a PR only while the
