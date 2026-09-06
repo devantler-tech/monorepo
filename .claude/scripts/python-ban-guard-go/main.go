@@ -45,12 +45,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "python-ban-guard: %s: %v\n", s.path, err)
 		os.Exit(2)
 	}
-	if !handled {
-		// Only unsupported non-shell text reaches the original compatibility scanner.
-		os.Exit(3)
-	}
 	for _, hit := range s.hits {
 		fmt.Println(hit)
+	}
+	if !handled {
+		// Preserve parsed directive findings when other source text needs the compatibility route.
+		os.Exit(3)
 	}
 }
 
@@ -239,7 +239,8 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 				if arg == "--" {
 					return stdin || j+1 == len(args), nil
 				}
-				if arg == "-o" || arg == "-O" || arg == "+o" || arg == "+O" {
+				if arg == "-o" || arg == "-O" || arg == "+o" || arg == "+O" ||
+					(name == "bash" && (arg == "--rcfile" || arg == "--init-file")) {
 					j++
 					continue
 				}
@@ -263,7 +264,9 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 			i++
 			i += wrapperCommand(name, args[i:], known[i:])
 		case "env":
-			return s.envArgs(args[i+1:], known[i+1:], line, depth+1)
+			return s.envArgs(args[i+1:], known[i+1:], line, depth+1, nil)
+		case "find":
+			return false, s.findCommands(args[i+1:], known[i+1:], line, depth+1)
 		case "nice":
 			i++
 			for i < len(args) && known[i] {
@@ -292,9 +295,19 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 }
 
 // envArgs preserves argv boundaries: env -S splits one operand, never shell code.
-func (s *scanner) envArgs(args []string, known []bool, line, depth int) (bool, error) {
+func (s *scanner) envArgs(args []string, known []bool, line, depth int, optional []bool) (bool, error) {
+	if depth > 32 {
+		return false, errors.New("nested command limit exceeded")
+	}
 	i := 0
-	for i < len(args) && known[i] {
+	for i < len(args) {
+		if i < len(optional) && optional[i] {
+			i++ // An unquoted expansion-only word can disappear before command selection.
+			continue
+		}
+		if !known[i] {
+			break
+		}
 		arg := args[i]
 		if arg == "--" || arg == "-" {
 			i++
@@ -332,36 +345,42 @@ func (s *scanner) envArgs(args []string, known []bool, line, depth int) (bool, e
 			i++
 		}
 		if split {
-			words, literal, err := splitEnvString(payload)
+			words, literal, canDisappear, err := splitEnvString(payload)
 			if err != nil {
 				return false, err
 			}
-			values := append(append([]string{"env"}, words...), args[i:]...)
-			flags := append(append([]bool{true}, literal...), known[i:]...)
-			return s.argv(values, flags, line, depth)
+			values := append(words, args[i:]...)
+			flags := append(literal, known[i:]...)
+			canDisappear = append(canDisappear, make([]bool, len(args)-i)...)
+			return s.envArgs(values, flags, line, depth+1, canDisappear)
 		}
 	}
-	for i < len(args) && known[i] && strings.Contains(args[i], "=") {
-		i++
+	for i < len(args) {
+		if (i < len(optional) && optional[i]) || (known[i] && strings.Contains(args[i], "=")) {
+			i++
+			continue
+		}
+		break
 	}
 	return s.argv(args[i:], known[i:], line, depth)
 }
 
 // splitEnvString implements the literal GNU/FreeBSD env -S grammar. Shell
 // punctuation is data. Environment expansions remain unknown; none are evaluated.
-func splitEnvString(src string) ([]string, []bool, error) {
+func splitEnvString(src string) ([]string, []bool, []bool, error) {
 	var words []string
-	var known []bool
+	var known, optional []bool
 	var word strings.Builder
 	var quote byte
-	started, literal := false, true
+	started, literal, keepEmpty := false, true, false
 	finish := func() {
 		if started {
 			words = append(words, word.String())
 			known = append(known, literal)
+			optional = append(optional, !literal && !keepEmpty && word.Len() == 0)
 		}
 		word.Reset()
-		started, literal = false, true
+		started, literal, keepEmpty = false, true, false
 	}
 	for i := 0; i < len(src); i++ {
 		c := src[i]
@@ -373,6 +392,7 @@ func splitEnvString(src string) ([]string, []bool, error) {
 			break
 		}
 		if (c == '\'' || c == '"') && (quote == 0 || quote == c) {
+			keepEmpty = true
 			if quote == c {
 				quote = 0
 			} else {
@@ -384,7 +404,7 @@ func splitEnvString(src string) ([]string, []bool, error) {
 		if c == '\\' && (quote != '\'' || (i+1 < len(src) && strings.ContainsRune("\\'", rune(src[i+1])))) {
 			i++
 			if i == len(src) {
-				return nil, nil, errors.New("env split-string ends with a backslash")
+				return nil, nil, nil, errors.New("env split-string ends with a backslash")
 			}
 			c = src[i]
 			switch c {
@@ -396,10 +416,10 @@ func splitEnvString(src string) ([]string, []bool, error) {
 				c = ' '
 			case 'c':
 				if quote != 0 {
-					return nil, nil, errors.New("env split-string stop escape inside quotes")
+					return nil, nil, nil, errors.New("env split-string stop escape inside quotes")
 				}
 				finish()
-				return words, known, nil
+				return words, known, optional, nil
 			case 'f':
 				c = '\f'
 			case 'n':
@@ -412,12 +432,12 @@ func splitEnvString(src string) ([]string, []bool, error) {
 				c = '\v'
 			case '"', '#', '$', '\'', '\\':
 			default:
-				return nil, nil, fmt.Errorf("unsupported env split-string escape: %q", c)
+				return nil, nil, nil, fmt.Errorf("unsupported env split-string escape: %q", c)
 			}
 		} else if c == '$' && quote != '\'' {
 			end := strings.IndexByte(src[i:], '}')
 			if !strings.HasPrefix(src[i:], "${") || end < 3 || !assignment.MatchString(src[i+2:i+end]+"=") {
-				return nil, nil, errors.New("invalid env split-string variable")
+				return nil, nil, nil, errors.New("invalid env split-string variable")
 			}
 			i += end
 			started, literal = true, false
@@ -427,10 +447,10 @@ func splitEnvString(src string) ([]string, []bool, error) {
 		word.WriteByte(c)
 	}
 	if quote != 0 {
-		return nil, nil, errors.New("unclosed env split-string quote")
+		return nil, nil, nil, errors.New("unclosed env split-string quote")
 	}
 	finish()
-	return words, known, nil
+	return words, known, optional, nil
 }
 
 // literalArgs decodes one simple command whose words are entirely static.
@@ -477,45 +497,51 @@ func shebang(src string) string {
 		}
 	}
 	args, err := literalArgs(command)
-	if split {
-		var known []bool
-		args, known, err = splitEnvString(command)
-		// Keep only the statically known prefix. An unknown word cannot turn
-		// a later argument into an interpreter, but a known interpreter stays visible.
-		for i, literal := range known {
-			if !literal {
-				args = args[:i]
-				break
-			}
-		}
+	known, optional := make([]bool, len(args)), make([]bool, len(args))
+	for i := range known {
+		known[i] = true
 	}
+	if split {
+		args, known, optional, err = splitEnvString(command)
+	}
+	i := 0
 	if err == nil && isEnv {
-		for len(args) > 0 {
-			arg := args[0]
+		for i < len(args) {
+			if !known[i] {
+				if optional[i] {
+					i++
+					continue
+				}
+				return ""
+			}
+			arg := args[i]
 			if arg == "--" {
-				args = args[1:]
+				i++
 				break
 			}
 			if assignment.MatchString(arg) {
-				args = args[1:]
+				i++
 				continue
 			}
 			if arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir" {
-				if len(args) < 2 {
+				if i+1 >= len(args) || !known[i+1] {
 					return ""
 				}
-				args = args[2:]
+				i += 2
 				continue
 			}
 			if strings.HasPrefix(arg, "-") {
-				args = args[1:]
+				i++
 				continue
 			}
 			break
 		}
 	}
-	if err == nil && len(args) > 0 {
-		return args[0]
+	for i < len(optional) && optional[i] {
+		i++
+	}
+	if err == nil && i < len(args) && known[i] {
+		return args[i]
 	}
 	return ""
 }
@@ -541,6 +567,9 @@ func (s *scanner) file(src string) (bool, error) {
 	if (ext == ".yaml" || ext == ".yml") && strings.HasPrefix(filepath.ToSlash(s.path), ".github/workflows/") {
 		return true, s.yaml(src)
 	}
+	if ext == ".yaml" || ext == ".yml" {
+		return true, s.yamlCommands(src)
+	}
 	base := filepath.Base(s.path)
 	if base == "Dockerfile" || strings.HasPrefix(base, "Dockerfile.") || strings.HasSuffix(base, ".Dockerfile") {
 		if strings.Contains(src, "<<") {
@@ -562,10 +591,13 @@ func (s *scanner) file(src string) (bool, error) {
 				return true, nil
 			}
 		}
-		return false, nil
+		return false, s.goGenerate(src)
+	}
+	if makeSourcePath(s.path) {
+		return true, s.makeRecipes(src)
 	}
 	switch ext {
-	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".json", ".yaml", ".yml", ".toml":
+	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".json", ".toml":
 		return false, nil
 	}
 	if _, err := parse(src); err == nil {
@@ -651,44 +683,56 @@ func (s *scanner) yaml(src string) error {
 		return nil
 	}
 	active := make(map[*yaml.Node]bool)
-	var visit func(*yaml.Node) error
-	visit = func(node *yaml.Node) error {
+	var visit func(*yaml.Node, []string) error
+	visit = func(node *yaml.Node, path []string) error {
 		if active[node] {
 			return errors.New("cyclic YAML alias")
 		}
 		active[node] = true
 		defer delete(active, node)
 		if node.Kind == yaml.AliasNode {
-			return visit(node.Alias)
+			return visit(node.Alias, path)
 		}
 		if node.Kind == yaml.MappingNode {
 			for i := 0; i+1 < len(node.Content); i += 2 {
 				key, value := node.Content[i], node.Content[i+1]
-				if value.Kind == yaml.AliasNode {
-					value = value.Alias
+				// Keys remain data, but their aliases must still be cycle-checked.
+				if err := visit(key, []string{"<key>"}); err != nil {
+					return err
 				}
-				if (key.Value == "run" || key.Value == "shell") && value.Kind == yaml.ScalarNode {
-					line := value.Line
-					if value.Style == yaml.LiteralStyle || value.Style == yaml.FoldedStyle {
-						line++
-					}
-					// Expressions are runtime values, not shell syntax. Leave a
-					// non-command placeholder while retaining all surrounding code.
-					program := regexp.MustCompile(`(?s)\$\{\{.*?\}\}`).ReplaceAllString(value.Value, "__workflow_expression__")
-					if err := s.source(program, line, 0, false); err != nil {
-						return err
-					}
+				for key.Kind == yaml.AliasNode {
+					key = key.Alias
+				}
+				if err := visit(value, append(path, key.Value)); err != nil {
+					return err
 				}
 			}
+			return nil
+		}
+		stepCommand := len(path) == 5 && path[0] == "jobs" && path[2] == "steps" && path[3] == "*" && (path[4] == "run" || path[4] == "shell")
+		defaultShell := len(path) == 3 && path[0] == "defaults" && path[1] == "run" && path[2] == "shell"
+		jobDefaultShell := len(path) == 5 && path[0] == "jobs" && path[2] == "defaults" && path[3] == "run" && path[4] == "shell"
+		if node.Kind == yaml.ScalarNode && (stepCommand || defaultShell || jobDefaultShell) {
+			line := node.Line
+			if node.Style == yaml.LiteralStyle || node.Style == yaml.FoldedStyle {
+				line++
+			}
+			// Expressions are runtime values, not shell syntax. Leave a
+			// non-command placeholder while retaining all surrounding code.
+			program := regexp.MustCompile(`(?s)\$\{\{.*?\}\}`).ReplaceAllString(node.Value, "__workflow_expression__")
+			return s.source(program, line, 0, false)
+		}
+		if node.Kind == yaml.SequenceNode {
+			path = append(path, "*")
 		}
 		for _, child := range node.Content {
-			if err := visit(child); err != nil {
+			if err := visit(child, path); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	return visit(&doc)
+	return visit(&doc, nil)
 }
 
 // docker scans shell and JSON operands of Dockerfile execution instructions.

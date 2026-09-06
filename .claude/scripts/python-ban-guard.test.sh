@@ -264,12 +264,12 @@ run "$r"
 report "absolute wrapper and shell paths do not hide a nested Python invocation" \
   "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
-r="$(mkrepo python-shell)"; addf "$r" .github/workflows/ci.yaml 'steps:' '  - shell: python' '    run: placeholder' "  - shell: '/usr/bin/python3 {0}'" '    run: placeholder'
+r="$(mkrepo python-shell)"; addf "$r" .github/workflows/ci.yaml 'jobs:' '  check:' '    steps:' '      - shell: python' '        run: placeholder' "      - shell: '/usr/bin/python3 {0}'" '        run: placeholder'
 run "$r"
 report "a workflow Python shell selector is an invocation" \
-  "$([[ $rc -eq 1 && "$out" == *'ci.yaml:2: Python invocation `python`'* && "$out" == *'ci.yaml:4: Python invocation `/usr/bin/python3'* ]] && echo yes || echo no)" "rc=$rc: $out"
+  "$([[ $rc -eq 1 && "$out" == *'ci.yaml:4: Python invocation `python`'* && "$out" == *'ci.yaml:6: Python invocation `/usr/bin/python3'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
-r="$(mkrepo bash-shell)"; addf "$r" .github/workflows/ci.yaml 'steps:' '  - shell: bash' '    run: echo safe'
+r="$(mkrepo bash-shell)"; addf "$r" .github/workflows/ci.yaml 'jobs:' '  check:' '    steps:' '      - shell: bash' '        run: echo safe'
 run "$r"
 report "control: a workflow bash shell selector passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
@@ -418,25 +418,52 @@ report "ablation: ignoring a parser failure defeats the malformed-shell exit che
   "$([[ $rc -eq 0 && "$out" == *'cannot parse shell commands:'* && "$out" == *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
-# The compatibility route must still report non-workflow command operands.
+# Non-workflow YAML command operands retain typed argv and parsed-comment boundaries.
 r="$(mkrepo legacy-command)"; addf "$r" deploy/pod.yaml \
   "annotation: 'python-ban-guard: allow-file — data'" 'command:' '  - python3'
 run "$r"
-report "unsupported YAML retains detection and marker data cannot exempt it" \
+report "YAML command detection cannot be exempted by marker data" \
   "$([[ $rc -eq 1 && "$out" == *'Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo fallback-command)"; addf "$r" Dockerfile \
+  'FROM scratch' 'RUN <<SCRIPT' 'echo safe' 'SCRIPT' 'RUN python3 --version'
+run "$r"
+report "Dockerfile heredoc fixture selects and verifies the compatibility route" \
+  "$([[ $rc -eq 1 && "$out" == *'Dockerfile:5: Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# Inline YAML command arrays retain command position and keep ordinary arguments as data.
+yaml_argv_case=0
+while IFS='|' read -r expected content; do
+  yaml_argv_case=$((yaml_argv_case + 1))
+  r="$(mkrepo "yaml-argv-${yaml_argv_case}")"; addf "$r" deploy/pod.yaml "$content"
+  run "$r"
+  report "typed YAML argv command/data boundary (${yaml_argv_case})" \
+    "$([[ $rc -eq $expected ]] && echo yes || echo no)" "expected=$expected rc=$rc: $out"
+done <<'YAML_ARGV_CASES'
+1|command: ["python3", "--version"]
+1|  command: ['pip2.7', '--version']
+1|- command: [/usr/bin/python3,--version]
+1|command: ["env", "python3", "--version"]
+0|command: ["echo", "python3"]
+0|command: ["not-python3", "--version"]
+0|command: ["python[3]", "--version"]
+0|command: ["python,3", "--version"]
+0|annotation: ["python3", "--version"]
+0|command: ["env", "echo", "python3"]
+YAML_ARGV_CASES
 
 legacy_nice_case=0
 for invocation in 'nice python3 --version' 'nice -n 10 pip3 --version' 'nice --adjustment 10 python3 --version'; do
   legacy_nice_case=$((legacy_nice_case + 1))
   r="$(mkrepo "legacy-nice-${legacy_nice_case}")"; addf "$r" deploy/pod.yaml "command: $invocation"
   run "$r"
-  report "compatibility command operands inspect $invocation" \
+  report "YAML command operands inspect $invocation" \
     "$([[ $rc -eq 1 && "$out" == *'Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
 done
 r="$(mkrepo legacy-nice-control)"; addf "$r" deploy/pod.yaml \
   'command: nice echo python3' 'run: nice -n 10 echo python3' 'run: nice --help python3'
 run "$r"
-report "control: compatibility nice arguments remain data" \
+report "control: YAML nice arguments remain data" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # A Dockerfile heredoc selects the compatibility route for the whole file.
@@ -514,6 +541,8 @@ report "ablation: with the invocation pattern neutralised, the #2769 fixture pas
 GUARD="$ablated" run "$tmp/py-file"
 report "ablation control: the untouched source-file check still flags a .py file" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc: $out"
 GUARD="$ablated" run "$tmp/legacy-command"
+report "ablation: the typed YAML invocation pattern is neutralised too" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+GUARD="$ablated" run "$tmp/fallback-command"
 report "ablation: the compatibility invocation pattern is neutralised too" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # Review regressions: these strings are scanner inputs, never executable fixtures.
@@ -593,6 +622,8 @@ run "$r"
 report "control: package metadata and script arguments are data" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 if ! bash "$here/python-ban-guard-wrappers.test.sh"; then fail=1; fi
+if ! bash "$here/python-ban-guard-command-surfaces.test.sh"; then fail=1; fi
+if ! bash "$here/python-ban-guard-build-surfaces.test.sh"; then fail=1; fi
 
 if [[ $fail -eq 0 ]]; then
   echo "python-ban-guard self-test: all cases passed"

@@ -4,11 +4,11 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/tools" "$tmp/deploy"
+mkdir -p "$tmp/tools"
 : >"$tmp/tools/check.sh"
-: >"$tmp/deploy/pod.yaml"
+: >"$tmp/Dockerfile"
 git -C "$tmp" init -q
-git -C "$tmp" add -- tools/check.sh deploy/pod.yaml
+git -C "$tmp" add -- tools/check.sh Dockerfile
 fail=0
 
 # Scan fixture text through each engine; no fixture command is ever executed.
@@ -16,11 +16,13 @@ check() {
   local name="$1" command="$2" expected="$3" route out rc
   for route in shell fallback; do
     : >"$tmp/tools/check.sh"
-    : >"$tmp/deploy/pod.yaml"
+    : >"$tmp/Dockerfile"
     if [[ "$route" == shell ]]; then
       printf '%s\n' "$command" >"$tmp/tools/check.sh"
     else
-      printf 'command: %s\n' "$command" >"$tmp/deploy/pod.yaml"
+      # A Dockerfile heredoc deliberately selects the compatibility engine.
+      # YAML now has a typed parser and cannot stand in for this route.
+      printf 'FROM scratch\nRUN <<SCRIPT\necho safe\nSCRIPT\nRUN %s\n' "$command" >"$tmp/Dockerfile"
     fi
     rc=0
     out="$(bash "$here/python-ban-guard.sh" "$tmp" 2>&1)" || rc=$?

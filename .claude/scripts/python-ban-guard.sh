@@ -30,12 +30,17 @@
 #        not command wrappers in other files.
 #        Backslash-newline continuations outside single quotes join before matching command names.
 #        Unquoted escapes before executable-name/path characters retain their executable identity.
-#        Shell sources, workflow command fields, package scripts and Dockerfile operands
-#        use the Go syntax parser before this compatibility scanner. Other non-prose
+#        Shell sources, workflow command fields, other YAML command/run/shell operands,
+#        package scripts, Make recipes and Dockerfile operands use the Go parser.
+#        YAML argv sequences preserve complete scalar boundaries. Go generate directives
+#        and aliases are parsed before the remaining Go text reaches the compatibility route.
+#        Make resolves literal local definitions only; functions, referenced values, includes,
+#        conditional values and host environment are not evaluated. Dynamic recipe prefixes fail closed.
+#        Other non-prose
 #        textual formats retain the legacy invocation heuristic; their language semantics
 #        are not exhaustively analysed, and quoted snippets in those formats can still be
 #        reported by the heuristic. Module extensions use that same compatibility route,
-#        not shell parsing; this does not add a JavaScript parser. Malformed declared shell sources exit 2.
+#        not shell parsing; this does not add a JavaScript parser. Malformed declared shell/YAML sources exit 2.
 #
 # THE CARVE-OUT (#2324) — recognised by INVOCATION, never by file extension
 #   An embedded interpreter that admits only Python is dictated by the host tool, not chosen by
@@ -328,10 +333,6 @@ scan_invocations() {
       }
       # Recognize command prefixes before normalization can change their spelling.
       gsub(/(^|[[:space:]])run:([[:space:]]|$)/, " ; ", line)
-      if (path ~ /\.ya?ml$/) {
-        gsub(/(^|[[:space:]])shell:([[:space:]]|$)/, " ; ", line)
-        sub(/^[[:space:]]*(-[[:space:]]+)?command:[[:space:]]+/, "", line)
-      }
       line = word_escapes(line)
       # Quotes do not hide an invocation: `bash -c "python3 …"` still runs it.
       gsub(/"/, " ", line)
@@ -371,7 +372,9 @@ while IFS= read -r -d '' path; do
   hits="$("$parser_binary" "$path" "$file")" || parser_rc=$?
   case "$parser_rc" in
     0) ;;
-    3) hits="$(scan_invocations "$path" "$file")" ;;
+    3)
+      legacy_hits="$(scan_invocations "$path" "$file")"
+      if [ -n "$legacy_hits" ]; then hits="${hits:+$hits$'\n'}$legacy_hits"; fi ;;
     *) exit 2 ;;
   esac
   if [ -n "$hits" ]; then

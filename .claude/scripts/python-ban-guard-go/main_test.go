@@ -80,12 +80,12 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 			handled: true, want: "package.json:4: Python invocation",
 		},
 		{
-			name: "non workflow YAML keeps compatibility scan", path: "deploy/pod.yaml",
-			source: "command:\n  - python3\n", handled: false,
+			name: "non workflow YAML parses command argv", path: "deploy/pod.yaml",
+			source: "command:\n  - python3\n", handled: true, want: "Python invocation",
 		},
 		{
-			name: "unsupported marker data cannot exempt the fallback", path: "deploy/pod.yaml",
-			source: "annotation: 'python-ban-guard: allow-file — data'\ncommand:\n  - python3\n", handled: false,
+			name: "YAML marker data cannot exempt a command", path: "deploy/pod.yaml",
+			source: "annotation: 'python-ban-guard: allow-file — data'\ncommand:\n  - python3\n", handled: true, want: "Python invocation",
 		},
 		{
 			name: "Dockerfile flags accept tab separators", path: "Dockerfile",
@@ -108,7 +108,7 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 		},
 		{
 			name: "workflow command alias", path: ".github/workflows/test.yaml",
-			source:  "command: &cmd python3 --version\nsteps:\n  - run: *cmd\n",
+			source:  "command: &cmd python3 --version\njobs:\n  check:\n    steps:\n      - run: *cmd\n",
 			handled: true, want: "Python invocation",
 		},
 		{
@@ -231,12 +231,12 @@ func TestEnvSplitStringBoundaries(t *testing.T) {
 	}
 }
 
-// TestProductionTelemetryRemainsScanned prevents fixture exemptions from hiding production code.
-func TestProductionTelemetryRemainsScanned(t *testing.T) {
-	data, err := os.ReadFile("../agent-telemetry.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
+// TestTelemetryFixtureRemainsScanned separates fixture validation from the flag-gated production sweep.
+func TestTelemetryFixtureRemainsScanned(t *testing.T) {
+	const data = "#!/usr/bin/env bash\n" +
+		"pattern='python-ban-guard: allow-file — quoted search data'\n" +
+		"grep -F \"$pattern\" input.log\n" +
+		"grep -E '(^|;)[[:space:]]*python3' input.log\n"
 	for _, test := range []struct {
 		name, suffix string
 		wantHit      bool
@@ -246,7 +246,7 @@ func TestProductionTelemetryRemainsScanned(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s := scanner{path: "agent-telemetry.sh", seen: make(map[string]bool)}
-			handled, err := s.file(string(data) + test.suffix)
+			handled, err := s.file(data + test.suffix)
 			if err != nil || !handled {
 				t.Fatalf("handled=%v error=%v", handled, err)
 			}
