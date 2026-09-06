@@ -152,6 +152,7 @@ jobs:
               - '.claude/scripts/submodule-pin-currency.test.sh'
               - '.github/workflows/ci.yaml'
             blocked-label-blocker-line:
+              - '.claude/scripts/blocked-label-blocker-line-go/**'
               - 'AGENTS.md'
               - '.claude/scripts/blocked-label-blocker-line.sh'
               - '.claude/scripts/blocked-label-blocker-line.test.sh'
@@ -486,7 +487,9 @@ jobs:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/skills/products/agent-skills/SKILL.md'
+              - '.claude/skills/products/aws/SKILL.md'
               - '.claude/skills/products/data-product-controller/SKILL.md'
+              - '.claude/skills/products/fleet-gitops/SKILL.md'
               - '.claude/skills/products/ksail/SKILL.md'
               - '.claude/skills/products/monorepo/SKILL.md'
               - '.claude/skills/products/platform/SKILL.md'
@@ -861,9 +864,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Hand-built JSON payloads through the --input seam only -- no network and no real issue
-      # touched. Both OSes because the check joins soft-wrapped lines with awk and strips CR,
-      # and BSD and GNU awk/grep differ on exactly that ground.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/blocked-label-blocker-line-go/go.mod
+          cache: false
+      # Hermetic Go and CLI fixtures exercise the same guard on both operating systems.
       - name: Verify the blocked-label blocker-line check
         run: bash .claude/scripts/blocked-label-blocker-line.test.sh
 
@@ -947,7 +953,7 @@ jobs:
           persist-credentials: false
       # The self-test covers each Python shape the guard must catch, each safe
       # shape it must leave alone (prose, comments, the blender carve-out, the
-      # allow-file marker), the current tree as a positive control, and an
+      # allow-file marker), a clean fixture as a positive control, and an
       # ablation proving the flagged fixture depends on the invocation pattern.
       - name: Self-test the guard
         run: bash .claude/scripts/python-ban-guard.test.sh

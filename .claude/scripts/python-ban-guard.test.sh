@@ -8,14 +8,13 @@
 # fixture depended on that pattern rather than on some other path through the script.
 #
 # Fixtures are throwaway git repositories under mktemp: the guard scans TRACKED files, so each
-# fixture stages what it wants seen. The only repository file read is the guard itself, plus the
-# real tree once, as the positive control the issue demands ("passes on the current tree").
+# fixture stages what it wants seen. The repository-wide sweep is a separate CI step behind
+# ENFORCE_PYTHON_BAN_GUARD; running it here would silently enforce the rule even with that flag off.
 #
 # python-ban-guard: allow-file — this file quotes every Python shape the guard rejects as fixture text.
 set -Eeuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$here/../.." && pwd)"
 guard="$here/python-ban-guard.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -68,19 +67,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Positive control. The repository-wide sweep is gated behind the release flag, so this
-#    reads the REAL tree only in the on state. In the off state a fixed clean fixture stands in:
-#    the self-test itself is not gated, so an unconditional repository sweep here would block
-#    exactly the changes the off state exists to let through, and the two flag states would not
-#    be distinguishable at all (Codex P1 on #3222).
-if [[ "${ENFORCE_PYTHON_BAN_GUARD:-}" == "true" ]]; then
-  run "$repo_root"
-  report "positive control (flag on): the repository's current tree passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
-else
-  r="$(mkrepo clean-fixture)"; addf "$r" tools/ok.sh '#!/usr/bin/env bash' 'jq -n 1'
-  run "$r"
-  report "positive control (flag off): a clean fixture passes, and the repository sweep stays behind ENFORCE_PYTHON_BAN_GUARD" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
-fi
+# 1. Positive control: a tracked bash script is clean.
+r="$(mkrepo clean-bash)"; addf "$r" tools/check.sh '#!/usr/bin/env bash' 'echo safe'
+run "$r"
+report "positive control: a tracked bash script passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
 # 2. A tracked Python source file, by extension and by shebang.
@@ -120,6 +110,16 @@ r="$(mkrepo blender)"; addf "$r" tools/bake.sh '#!/usr/bin/env bash' 'blender --
 run "$r"
 report "carve-out: blender --background --python passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
+r="$(mkrepo blender-followed-by-python)"; addf "$r" tools/bake.sh 'blender --background --python tools/bake.py; python3 tools/check.py'
+run "$r"
+report "a blender invocation does not exempt a later Python command" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo blender-mentioned-after-python)"; addf "$r" tools/bake.sh 'python3 tools/check.py; echo blender --python'
+run "$r"
+report "mentioning blender as data does not exempt an earlier Python command" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
 r="$(mkrepo blender-control)"; addf "$r" tools/bake.sh '#!/usr/bin/env bash' 'python tools/bake.py -- "$@"'
 run "$r"
 report "control: the same line without blender is a plain python invocation and flags" \
@@ -147,6 +147,100 @@ r="$(mkrepo comments-control)"; addf "$r" tools/a.sh '#!/usr/bin/env bash' "pyth
 run "$r"
 report "control: code before the comment marker still flags" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc: $out"
 
+# Hashes inside quotes or escaped as data cannot erase a later command.
+hash_case=0
+for shell_line in 'echo "a # b"; python3 tools/check.py' \
+  "echo 'a # b'; python3 tools/check.py" \
+  'echo a\ #\ b; python3 tools/check.py' \
+  'echo "a \" # b"; python3 tools/check.py'; do
+  hash_case=$((hash_case + 1))
+  r="$(mkrepo "quoted-hash-${hash_case}")"; addf "$r" tools/hash.sh "$shell_line"
+  run "$r"
+  report "a quoted or escaped hash preserves the later invocation (${hash_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo quoted-hash-comment)"; addf "$r" tools/hash.sh \
+  'echo "a # b" # python3 tools/check.py' "echo 'a # b' # python3 tools/check.py"
+run "$r"
+report "control: a real comment after a quoted hash still hides comment text" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# Unquoted escapes in command names retain the same executable identity.
+escape_case=0
+for invocation in 'pyt\hon3 tools/check.py' 'pi\p3 install example' \
+  '/usr/bi\n/pyt\hon3 tools/check.py' \
+  '/usr/bi\n/env /usr/bi\n/pyt\hon3 tools/check.py'; do
+  escape_case=$((escape_case + 1))
+  r="$(mkrepo "escaped-command-${escape_case}")"; addf "$r" tools/escaped.sh "$invocation"
+  run "$r"
+  report "unquoted escapes do not hide an interpreter or executable path (${escape_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'tools/escaped.sh:1: Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo escaped-command-controls)"; addf "$r" tools/escaped.sh \
+  'pyt\honics --version' 'pyt\\hon3 tools/check.py' 'pyt\\\hon3 tools/check.py' \
+  '"pyt\hon3" tools/check.py' "'pyt\\hon3' tools/check.py" \
+  '"/usr/bin/pyt\hon3" tools/check.py' '/usr/bin/pyt\\hon3 tools/check.py' \
+  'echo pyt\hon3' 'echo "pyt\hon3"' 'py\ thon3 tools/check.py' \
+  'r\un: python3 tools/check.py'
+run "$r"
+report "control: non-Python commands, quoted literal backslashes and escaped backslashes pass" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# Backslash-newline pairs outside single quotes join before token matching.
+r="$(mkrepo continued-bare)"; addf "$r" tools/continued.sh '#!/usr/bin/env bash' 'py\' 'thon3 tools/check.py'
+run "$r"
+report "an unquoted continuation cannot split the interpreter name" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-wrapper)"; addf "$r" tools/continued.sh '#!/usr/bin/env bash' '/usr/bin/env py\' 'th\' 'on3 tools/check.py'
+run "$r"
+report "wrapped names join repeated continuations and retain the first physical line" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-double-quoted-wrapper)"; addf "$r" tools/continued.sh '#!/usr/bin/env bash' 'bash -c "py\' 'thon3 tools/check.py"'
+run "$r"
+report "a double-quoted shell command joins continuations at its first physical line" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-double-quoted-argument)"; addf "$r" tools/continued.sh '#!/usr/bin/env bash' 'echo "py\' 'thon3 tools/check.py"'
+run "$r"
+report "control: the same double-quoted continuation remains a safe echo argument" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-line-numbers)"; addf "$r" tools/continued.sh 'echo sa\' 'fe' 'python3 tools/check.py'
+run "$r"
+report "a command after a joined logical line retains its own physical line" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:3: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continuation-controls)"; addf "$r" tools/continued.sh \
+  'py\\' 'thon3 tools/check.py' \
+  '# py\' 'thon3 tools/check.py' \
+  'echo safe # py\' 'thon3 tools/check.py' \
+  'echo "py\' 'thon3"' \
+  "echo 'py\\" "thon3'" \
+  "'py\\" "thon3'" \
+  'echo py\' 'thon3'
+run "$r"
+report "control: escaped slashes, comments, quoted continuations and arguments stay safe" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-comment)"; addf "$r" tools/continued.sh '# a comment ending in a backslash\' 'python3 tools/check.py'
+run "$r"
+report "a backslash in a comment cannot consume the next command" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-even-slashes)"; addf "$r" tools/continued.sh 'echo safe\\' 'python3 tools/check.py'
+run "$r"
+report "an even number of trailing backslashes cannot consume the next command" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-eof)"; addf "$r" tools/continued.sh 'echo safe\'
+run "$r"
+report "control: a trailing continuation at EOF terminates scanning" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# Executable text can contain non-UTF-8 bytes; command syntax is still ASCII.
+r="$(mkrepo invalid-utf8-command)"; addf "$r" tools/bytes.sh "$(printf 'echo "\377"; python3 tools/check.py')"
+LC_ALL=C.UTF-8 run "$r"
+report "an invalid UTF-8 byte cannot crash scanning or hide a later command" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo invalid-utf8-control)"; addf "$r" tools/bytes.sh "$(printf 'echo "\377"; echo safe')"
+LC_ALL=C.UTF-8 run "$r"
+report "control: executable text with an invalid UTF-8 byte can pass" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
 # ---------------------------------------------------------------------------
 # 6. Other executable surfaces and spellings.
 r="$(mkrepo workflow)"; addf "$r" .github/workflows/ci.yaml 'jobs:' '  t:' '    steps:' '      - run: pip install requests' '      - run: |' '          pytest -q'
@@ -157,6 +251,49 @@ report "flags pip and pytest in a workflow step" \
 r="$(mkrepo quoted)"; addf "$r" tools/q.sh '#!/usr/bin/env bash' 'bash -c "python3 -m http.server 8000"'
 run "$r"
 report "a quoted invocation still flags" "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 -m`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo absolute-interpreter)"; addf "$r" tools/check.sh '/usr/bin/python3 tools/check.py' './venv/bin/pip install example'
+run "$r"
+report "interpreter executable paths do not hide Python or pip" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation `/usr/bin/python3 tools/check.py`'* && "$out" == *'Python invocation `./venv/bin/pip install`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo absolute-shell)"; addf "$r" tools/check.sh '/usr/bin/env /bin/bash -c "python3 tools/check.py"'
+run "$r"
+report "absolute wrapper and shell paths do not hide a nested Python invocation" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo python-shell)"; addf "$r" .github/workflows/ci.yaml 'steps:' '  - shell: python' '    run: placeholder' "  - shell: '/usr/bin/python3 {0}'" '    run: placeholder'
+run "$r"
+report "a workflow Python shell selector is an invocation" \
+  "$([[ $rc -eq 1 && "$out" == *'ci.yaml:2: Python invocation `python`'* && "$out" == *'ci.yaml:4: Python invocation `/usr/bin/python3'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo bash-shell)"; addf "$r" .github/workflows/ci.yaml 'steps:' '  - shell: bash' '    run: echo safe'
+run "$r"
+report "control: a workflow bash shell selector passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# Dockerfile RUN introduces a shell command or an exec-form JSON operand.
+docker_case=0
+for instruction in 'RUN python3 tools/check.py' \
+  'run /usr/bin/python3 tools/check.py' \
+  'RUN --mount=type=cache,target=/cache pip install example' \
+  'RUN ["python3", "tools/check.py"]' \
+  'RUN ["/usr/bin/env", "/bin/sh", "-c", "python3 tools/check.py"]'; do
+  docker_case=$((docker_case + 1))
+  r="$(mkrepo "docker-run-${docker_case}")"; addf "$r" Dockerfile 'FROM scratch' "$instruction"
+  run "$r"
+  report "a Dockerfile RUN operand exposes its Python invocation (${docker_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'Dockerfile:2: Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo docker-run-controls)"; addf "$r" Dockerfile \
+  'FROM scratch' 'RUN echo python3' 'RUN ["echo", "python3"]' \
+  'ARG TOOL=python3' 'LABEL example="RUN python3 tools/check.py"'
+run "$r"
+report "control: Dockerfile arguments and metadata do not become commands" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo docker-prefix-scope)"; addf "$r" tools/text.sh 'RUN python3 tools/check.py'
+run "$r"
+report "control: RUN is not a command wrapper outside Dockerfiles" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 r="$(mkrepo piped)"; addf "$r" tools/p.sh '#!/usr/bin/env bash' 'cat data | python3.12 - >out'
 run "$r"
@@ -206,64 +343,33 @@ r="$(mkrepo shebang-env-s)"; addf "$r" tools/check '#!/usr/bin/env -S python3 -u
 run "$r"
 report "flags an env -S shebang naming python" "$([[ $rc -eq 1 && "$out" == *"shebang names python"* ]] && echo yes || echo no)" "rc=$rc: $out"
 
+shebang_case=0
+for shebang in '#!/usr/bin/env -Spython3 -u' '#!/usr/bin/env --split-string=python3 -u'; do
+  shebang_case=$((shebang_case + 1))
+  r="$(mkrepo "attached-env-python-${shebang_case}")"; addf "$r" tools/check "$shebang" '# entry point fixture only'
+  run "$r"
+  report "an attached env split-string operand exposes the Python shebang (${shebang_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'Python source file (its shebang names python)'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo attached-env-shell-control)"; addf "$r" tools/short '#!/usr/bin/env -Sbash -e' 'echo safe'
+addf "$r" tools/long '#!/usr/bin/env --split-string=bash -e' 'echo safe'
+run "$r"
+report "control: attached env split-string shell operands pass" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
 r="$(mkrepo prose-marker)"; addf "$r" docs/guard.md 'Declare `python-ban-guard: allow-file` — no, with a reason.'
 run "$r"
 report "control: prose that mentions a bare marker is never a finding" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# 7c. Codex round on #3222: shapes that read clean under the first cut of the heuristic.
-r="$(mkrepo quoted-hash)"; addf "$r" tools/h.sh '#!/usr/bin/env bash' 'echo "a # b"; python3 -c "print(1)"'
-run "$r"
-report "a quoted # does not open a comment: the invocation after it flags" "$([[ $rc -eq 1 && "$out" == *'h.sh:2: Python invocation `python3 -c`'* ]] && echo yes || echo no)" "rc=$rc: $out"
-
-r="$(mkrepo quoted-hash-control)"; addf "$r" tools/h.sh '#!/usr/bin/env bash' 'echo "a" # python3 -c "print(1)"'
-run "$r"
-report "control: an unquoted # still opens a comment" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
-
-r="$(mkrepo dockerfile)"; addf "$r" tools/Dockerfile 'FROM debian:stable' 'RUN python3 -c "print(1)"' 'CMD ["python3", "-m", "http.server"]'
-run "$r"
-report "flags a Dockerfile RUN and an exec-form CMD" \
-  "$([[ $rc -eq 1 && "$out" == *'Dockerfile:2: Python invocation `python3 -c`'* && "$out" == *'Dockerfile:3: Python invocation `python3`'* ]] && echo yes || echo no)" "rc=$rc: $out"
-
-r="$(mkrepo dockerfile-control)"; addf "$r" tools/Dockerfile 'FROM debian:stable' 'RUN echo python3' 'ENTRYPOINT ["/bin/bash"]'
-run "$r"
-report "control: a Dockerfile whose RUN mentions python as an argument passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
-
-r="$(mkrepo path-qualified)"; addf "$r" tools/p.sh '#!/usr/bin/env bash' '/usr/bin/python3 -c "print(1)"' './venv/bin/pip install x'
-run "$r"
-report "a path-qualified interpreter flags by its basename" \
-  "$([[ $rc -eq 1 && "$out" == *'p.sh:2: Python invocation `/usr/bin/python3 -c`'* && "$out" == *'p.sh:3: Python invocation `./venv/bin/pip install`'* ]] && echo yes || echo no)" "rc=$rc: $out"
-
-r="$(mkrepo path-qualified-control)"; addf "$r" tools/p.sh '#!/usr/bin/env bash' '/usr/bin/pythonic-tool -c x' '/usr/bin/env bash -c "echo python3"'
-run "$r"
-report "control: a path whose basename is not an interpreter passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
-
-r="$(mkrepo shebang-env-s-attached)"; addf "$r" tools/check '#!/usr/bin/env -Spython3 -u' 'print(1)'
-run "$r"
-report "flags an attached env -Spython3 shebang" "$([[ $rc -eq 1 && "$out" == *"shebang names python"* ]] && echo yes || echo no)" "rc=$rc: $out"
-
-r="$(mkrepo shebang-split-string)"; addf "$r" tools/check '#!/usr/bin/env --split-string=python3 -u' 'print(1)'
-run "$r"
-report "flags an env --split-string=python3 shebang" "$([[ $rc -eq 1 && "$out" == *"shebang names python"* ]] && echo yes || echo no)" "rc=$rc: $out"
-
-r="$(mkrepo shebang-env-s-control)"; addf "$r" tools/check '#!/usr/bin/env -Sbash -u' 'echo 1'
-run "$r"
-report "control: an attached env -Sbash shebang passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
-
-r="$(mkrepo blender-shared-line)"; addf "$r" tools/b.sh '#!/usr/bin/env bash' 'echo blender --python; python3 -c "print(1)"' 'blender --background --python bake.py -- "$@"; python3 post.py'
-run "$r"
-report "the blender carve-out exempts only its own command segment" \
-  "$([[ $rc -eq 1 && "$out" == *'b.sh:2: Python invocation `python3 -c`'* && "$out" == *'b.sh:3: Python invocation `python3 post.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
-
-r="$(mkrepo blender-shared-line-control)"; addf "$r" tools/b.sh '#!/usr/bin/env bash' 'blender --background --python bake.py -- "$@"; echo done'
-run "$r"
-report "control: a blender segment followed by a non-Python command passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
-
-# ---------------------------------------------------------------------------
 # 8. Usage and non-repository input fail closed with exit 2.
 run "$tmp/not-a-repo-$$"
 report "a directory that is not a git repository exits 2" "$([[ $rc -eq 2 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo unreadable-index)"; addf "$r" tools/check.sh 'echo safe'
+GIT_INDEX_FILE="$tmp" run "$r"
+report "failed tracked-file enumeration exits 2 instead of reporting clean" \
+  "$([[ $rc -eq 2 && "$out" != *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
 # 9. Ablation: neutralise the invocation pattern in a COPY of the guard and show the

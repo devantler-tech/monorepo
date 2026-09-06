@@ -17,16 +17,17 @@
 #     1. A Python SOURCE file: `*.py`, `*.pyi`, `*.pyw`, or a shebang naming python.
 #     2. A Python INVOCATION on an executable surface — every tracked text file except prose
 #        (`*.md`, `*.mdx`): `python`, `python3`, `python3.12`, `pip`, `pip3` or `pytest` in
-#        COMMAND POSITION, matched by the command's BASENAME so `/usr/bin/python3` counts. A
-#        `#` comment is cut off quote-aware (a `#` inside quotes is text), then quotes are
-#        stripped and the line is cut into command segments at `;`, `|`, `&`, `(`, a backtick,
-#        `{`, `[`, `]`, `,`, and at `-c`, YAML `run:` and Dockerfile `RUN`/`CMD`/`ENTRYPOINT`
-#        (which open a nested command); in each segment the first token that is not a `VAR=`
-#        prefix, a `-flag`, or a command-wrapping word (`exec`, `xargs`, `env`, `sudo`, `time`,
-#        `command`, `nohup`, `if`/`then`/`else`/`do`/`while`/`until`/`!`) is the command. So
-#        `bash -c "python3 -m x"`, `FOO=1 python3 x` and `RUN python3 x` flag, while
-#        `echo "install python3"` and a YAML `name: Install python deps` do not.
-#        Two known limits of that heuristic, accepted for a ~170-line bash guard: a flag's
+#        COMMAND POSITION. After unquoted `#` comments and quotes are stripped, a line is cut into
+#        command segments at `;`, `|`, `&`, `(`, a backtick, `{`, and at `-c` / `run:` (which
+#        open a nested command; YAML `shell:` selects one); in each segment the first token that is not a `VAR=` prefix, a
+#        `-flag`, or a command-wrapping word (`exec`, `xargs`, `env`, `sudo`, `time`, `command`,
+#        `nohup`, `if`/`then`/`else`/`do`/`while`/`until`/`!`) is the command. So
+#        `bash -c "python3 -m x"` and `FOO=1 python3 x` flag, while `echo "install python3"` and
+#        a YAML `name: Install python deps` do not. Executable paths are matched by basename.
+#        Dockerfile RUN shell/JSON operands are scanned; RUN is not a wrapper in other files.
+#        Backslash-newline continuations outside single quotes join before matching command names.
+#        Unquoted escapes before executable-name/path characters retain their executable identity.
+#        Two known limits of that heuristic, accepted for a ~150-line bash guard: a flag's
 #        ARGUMENT is read as the command (`sudo -u nobody pip3 …` reads `nobody`), and quotes
 #        are stripped before segmenting, so a quoted alternation such as
 #        `grep -E '(npm ci|pytest)'` reads `pytest` as a command — a file that legitimately
@@ -34,10 +35,10 @@
 #
 # THE CARVE-OUT (#2324) — recognised by INVOCATION, never by file extension
 #   An embedded interpreter that admits only Python is dictated by the host tool, not chosen by
-#   us: `blender --background --python bake.py`. The ONE command segment carrying both `blender`
-#   and `--python` is skipped; other commands on the same line are still scanned. A `.py` file
-#   still trips check 1 in THIS repository on purpose: the sanctioned instance lives in a
-#   submodule (world-at-ruin), which this guard never scans.
+#   us: `blender --background --python bake.py`. Here Blender is the command and `--python`
+#   is its argument; an unrelated Python command on that line is still checked. A `.py` file
+#   still trips check 1 in THIS repository on purpose: the sanctioned
+#   instance lives in a submodule (world-at-ruin), which this guard never scans.
 #
 # ALLOW-FILE MARKER
 #   A file that is ABOUT the offending form — this guard's self-test quotes `python3 -c` as
@@ -62,6 +63,14 @@ fi
 top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" ||
   { echo "python-ban-guard: not a git repository: $repo" >&2; exit 2; }
 
+# Keep NUL-delimited paths intact, and inspect the producer's exit status before scanning.
+tracked_paths="$(mktemp)" || { echo "python-ban-guard: cannot allocate tracked-file list" >&2; exit 2; }
+trap 'rm -f -- "$tracked_paths"' EXIT
+if ! git -C "$top" ls-files -z >"$tracked_paths"; then
+  echo "python-ban-guard: cannot enumerate tracked files in $top" >&2
+  exit 2
+fi
+
 rule='AGENTS.md → "Scripting stack — bash or Go, never Python": write it in bash (jq for data shaping) and migrate it to Go when it grows. The one carve-out is an embedded interpreter that admits only Python, recognised by its invocation (`blender --background --python …`), never by file extension. A file that is ABOUT the offending form may declare `python-ban-guard: allow-file — <reason>`.'
 
 findings=0
@@ -72,29 +81,65 @@ report() {
 
 # Print one `path:line: Python invocation `<hit>`` per offending line of $2 (displayed as $1).
 scan_invocations() {
-  awk -v path="$1" -v sq="'" '
+  # Commands use ASCII syntax; unrelated invalid UTF-8 bytes must not abort the scan.
+  LC_ALL=C awk -v path="$1" -v sq="'" '
+    function executable_name(token) {
+      sub(/^.*\//, "", token)
+      return token
+    }
+    # Only an unquoted, unescaped hash at a token boundary starts a comment.
+    # Expose a trailing escape outside single quotes so the caller can join physical lines.
+    function without_comment(text,    i, c, quote, escaped, boundary) {
+      quote = ""
+      escaped = 0
+      boundary = 1
+      continues = 0
+      for (i = 1; i <= length(text); i++) {
+        c = substr(text, i, 1)
+        if (escaped) { escaped = 0; boundary = 0; continue }
+        if (c == "\\" && quote != sq) { escaped = 1; boundary = 0; continue }
+        if (quote != "") {
+          if (c == quote) quote = ""
+          continue
+        }
+        if (c == sq || c == "\"") { quote = c; boundary = 0; continue }
+        if (c == "#" && boundary) return substr(text, 1, i - 1)
+        boundary = c ~ /[[:space:]]/
+      }
+      continues = escaped && quote != sq
+      return text
+    }
+    # Normalize only unquoted word escapes, before quote stripping loses that
+    # context. Preserve literal backslashes and escapes for shell punctuation.
+    function word_escapes(text,    i, c, following, quote, result) {
+      quote = ""
+      result = ""
+      for (i = 1; i <= length(text); i++) {
+        c = substr(text, i, 1)
+        if (c == "\\" && quote != sq) {
+          following = substr(text, i + 1, 1)
+          if (quote == "" && (following ~ /^[A-Za-z0-9_.-]$/ || following == "/")) result = result following
+          else result = result c following
+          i++
+          continue
+        }
+        if (c == sq || c == "\"") {
+          if (quote == "") quote = c
+          else if (quote == c) quote = ""
+        }
+        result = result c
+      }
+      return result
+    }
     # Index of the first token from `from` that is a command: not empty, not a -flag, not a
     # VAR= prefix, not a wrapping word. Returns n + 1 when the segment has none.
     function first_command(tok, from, n,    i, t) {
       for (i = from; i <= n; i++) {
         t = tok[i]
-        if (t == "" || t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || index(wrappers, " " t " ") > 0) continue
+        if (t == "" || t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || index(wrappers, " " executable_name(t) " ") > 0) continue
         return i
       }
       return n + 1
-    }
-    # Cut a shell comment off `s`, QUOTE-AWARE: a `#` opens a comment only at line start or
-    # after whitespace, and only outside single or double quotes — `echo "a # b"; python3 …`
-    # keeps its invocation. (A backslash-escaped quote inside double quotes is not modelled.)
-    function strip_comment(s,    i, c, q) {
-      q = ""
-      for (i = 1; i <= length(s); i++) {
-        c = substr(s, i, 1)
-        if (q != "") { if (c == q) q = ""; continue }
-        if (c == "\"" || c == sq) { q = c; continue }
-        if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[[:space:]]/)) return substr(s, 1, i - 1)
-      }
-      return s
     }
     BEGIN {
       # The interpreter pattern lives HERE and nowhere else; the self-test ablates this line.
@@ -103,36 +148,55 @@ scan_invocations() {
       wrappers = " exec xargs env sudo time command nohup if then elif else do while until ! "
     }
     {
-      line = strip_comment($0)
+      first_line = NR
+      logical_line = $0
+      line = without_comment(logical_line)
+      while (continues) {
+        read_status = (getline next_line)
+        if (read_status < 0) {
+          printf "python-ban-guard: %s:%d: cannot read continued command\n", path, first_line > "/dev/stderr"
+          exit 2
+        }
+        if (read_status == 0) break
+        logical_line = substr(logical_line, 1, length(logical_line) - 1) next_line
+        line = without_comment(logical_line)
+      }
+      # Dockerfile RUN owns its command operand. JSON punctuation separates argv;
+      # a Python-looking argument of echo remains data, not a command.
+      if (executable_name(path) ~ /^(Dockerfile([.].+)?|.+[.]Dockerfile)$/ &&
+          toupper(line) ~ /^[[:space:]]*RUN[[:space:]]+/) {
+        sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, "", line)
+        operand = line
+        while (operand ~ /^[[:space:]]*--[^[:space:]]+[[:space:]]+/) sub(/^[[:space:]]*--[^[:space:]]+[[:space:]]+/, "", operand)
+        if (operand ~ /^[[:space:]]*\[/) {
+          line = operand
+          gsub(/\[|\]|,/, " ", line)
+        }
+      }
+      # Recognize command prefixes before normalization can change their spelling.
+      gsub(/(^|[[:space:]])run:([[:space:]]|$)/, " ; ", line)
+      if (path ~ /\.ya?ml$/) gsub(/(^|[[:space:]])shell:([[:space:]]|$)/, " ; ", line)
+      line = word_escapes(line)
       # Quotes do not hide an invocation: `bash -c "python3 …"` still runs it.
       gsub(/"/, " ", line)
       gsub(sq, " ", line)
-      # A YAML `run:` and a Dockerfile `RUN`/`CMD`/`ENTRYPOINT` open a command: cut a new
-      # segment there. The exec-form brackets and commas are separators too.
-      gsub(/(^|[[:space:]])(run:|RUN|CMD|ENTRYPOINT)([[:space:]]|$)/, " ; ", line)
-      nseg = split(line, seg, /[][;|&(`{,]+/)
+      nseg = split(line, seg, /[;|&(`{]+/)
       for (s = 1; s <= nseg; s++) {
-        # The embedded-interpreter carve-out, keyed on the invocation shape and scoped to the
-        # ONE segment that carries it: commands sharing its line are still scanned.
-        if (seg[s] ~ /(^|[^[:alnum:]_.-])blender([[:space:]]|$)/ && seg[s] ~ /--python([[:space:]=]|$)/) continue
         n = split(seg[s], tok, /[[:space:]]+/)
         i = first_command(tok, 1, n)
         # A shell given -c runs the string after it: the command is what follows the -c.
-        while (i <= n && tok[i] ~ /^(bash|sh|zsh|dash|ksh)$/) {
+        while (i <= n && executable_name(tok[i]) ~ /^(bash|sh|zsh|dash|ksh)$/) {
           k = 0
           for (j = i + 1; j <= n; j++) if (tok[j] == "-c") { k = j; break }
           if (k == 0) break
           i = first_command(tok, k + 1, n)
         }
         if (i > n) continue
-        # Match the command by its BASENAME, so `/usr/bin/python3` is the same invocation.
-        base = tok[i]
-        sub(/.*\//, "", base)
-        if (base ~ interp) {
+        if (executable_name(tok[i]) ~ interp) {
           # Name the interpreter and its first argument, so the reader sees the form at a glance.
           hit = tok[i]
           if (i < n && tok[i + 1] != "") hit = hit " " tok[i + 1]
-          printf "%s:%d: Python invocation `%s`\n", path, NR, hit
+          printf "%s:%d: Python invocation `%s`\n", path, first_line, hit
         }
       }
     }' "$2"
@@ -148,7 +212,19 @@ while IFS= read -r -d '' path; do
   esac
   case "$path" in *.md|*.mdx) continue ;; esac  # prose is not an executable surface
   grep -Iq . "$file" 2>/dev/null || continue     # binary, or empty
-  if head -n 1 "$file" | grep -Eq '^#![^#]*([/[:space:]]|-S|--split-string=)python[0-9.]*([[:space:]]|$)'; then
+  if head -n 1 "$file" | awk '
+    {
+      line = $0
+      # Normalize only the first env split-string option, not an argument of
+      # another interpreter later in the shebang.
+      if (line ~ /^#![[:space:]]*([^[:space:]]*\/)?env[[:space:]]+(-S|--split-string=)/) {
+        sub(/[[:space:]]-S/, " -S ", line)
+        sub(/[[:space:]]--split-string=/, " --split-string ", line)
+      }
+      if (line ~ /^#![^#]*[\/[:space:]]python[0-9.]*([[:space:]]|$)/) found = 1
+    }
+    END { exit !found }
+  '; then
     report "$path: Python source file (its shebang names python)"
     continue
   fi
@@ -165,7 +241,7 @@ while IFS= read -r -d '' path; do
       report "$hit"
     done <<<"$hits"
   fi
-done < <(git -C "$top" ls-files -z)
+done <"$tracked_paths"
 
 if [ "$findings" -gt 0 ]; then
   printf 'python-ban-guard: %d finding(s) in %s\n%s\n' "$findings" "$top" "$rule" >&2
