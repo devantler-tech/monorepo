@@ -617,6 +617,75 @@ grep -Fq '### Spend contract' "${constitution}" ||
   fail "consumer does not define the Spend contract section the engineer resolves"
 grep -Fq '| **Spend contract** |' "${constitution}" ||
   fail "plugin contract table does not map the Spend contract section"
+
+# Resolve the source from the Spend contract itself. The same desired-state path
+# appears elsewhere in AGENTS.md, which must not satisfy a missing declaration.
+assert_spend_configuration() {
+  local contract="$1" state="$2" declared_source
+  jq -e '.spec.roles["agentic-engineer"].spendStewardshipEnabled
+    | type == "boolean" and . == false' "${state}" >/dev/null 2>&1 ||
+    fail "consumer spend stewardship must remain explicitly boolean false"
+  declared_source="$(awk -F '|' '
+    /^### Spend contract( |$)/ { in_spend = 1; next }
+    in_spend && /^#/ { in_spend = 0 }
+    in_spend && $2 ~ /^[[:space:]]*\*\*Effective desired state\*\*[[:space:]]*$/ {
+      sources++
+      if (!match($3, /\]\([^()]+\)/)) exit 1
+      source = substr($3, RSTART + 2, RLENGTH - 3)
+    }
+    END { if (sources != 1) exit 1; print source }
+  ' "${contract}")" ||
+    fail "Spend contract must declare exactly one effective desired-state document"
+  [ "${declared_source}" = '.claude/plugin-consumption/agentic-engineering.desired-state.json' ] ||
+    fail "Spend contract effective desired-state document must resolve to the consumer mirror"
+}
+assert_spend_configuration "${constitution}" "${desired_state}"
+cmp -s "${desired_state}" "${plugin_root}/resources/provider-neutral.desired-state.json" ||
+  fail "consumer desired-state mirror differs from the pinned canonical document"
+
+# Exercise the same check on invalid inputs; no runtime registry or live spend
+# source is involved. A correct path outside the Spend contract cannot mask drift.
+(
+  spend_tmp="$(mktemp -d)"
+  trap 'rm -rf "${spend_tmp}"' EXIT
+  for invalid_flag in missing null '"false"' 0 '[]' '{}' true; do
+    if [ "${invalid_flag}" = missing ]; then
+      jq 'del(.spec.roles["agentic-engineer"].spendStewardshipEnabled)' \
+        "${desired_state}" > "${spend_tmp}/state.json"
+    else
+      jq --argjson flag "${invalid_flag}" \
+        '.spec.roles["agentic-engineer"].spendStewardshipEnabled = $flag' \
+        "${desired_state}" > "${spend_tmp}/state.json"
+    fi
+    if (assert_spend_configuration "${constitution}" "${spend_tmp}/state.json") \
+      > "${spend_tmp}/failure" 2>&1; then
+      fail "spend configuration accepted invalid flag ${invalid_flag}"
+    fi
+    grep -Fq 'must remain explicitly boolean false' "${spend_tmp}/failure" ||
+      fail "invalid spend flag failed for an unrelated reason"
+  done
+  for invalid_source in missing wrong duplicate outside; do
+    awk -v scenario="${invalid_source}" '
+      /^\| \*\*Effective desired state\*\* \|/ {
+        if (scenario == "missing" || scenario == "outside") next
+        if (scenario == "wrong") sub(/\]\([^)]*\)/, "](wrong.json)")
+        if (scenario == "duplicate") print
+      }
+      { print }
+    ' "${constitution}" > "${spend_tmp}/AGENTS.md"
+    if [ "${invalid_source}" = outside ]; then
+      printf '\n### Unrelated example\n' >> "${spend_tmp}/AGENTS.md"
+      awk '/^\| \*\*Effective desired state\*\* \|/' "${constitution}" \
+        >> "${spend_tmp}/AGENTS.md"
+    fi
+    if (assert_spend_configuration "${spend_tmp}/AGENTS.md" "${desired_state}") \
+      > "${spend_tmp}/failure" 2>&1; then
+      fail "spend configuration accepted ${invalid_source} effective source"
+    fi
+    grep -Fq 'Spend contract' "${spend_tmp}/failure" ||
+      fail "invalid spend source failed for an unrelated reason"
+  done
+)
 assert_prose 'never moves money' \
   "Spend contract does not preserve the never-move-money boundary"
 assert_prose 'private financial data never reaches a public artifact' \
@@ -631,12 +700,18 @@ assert_prose 'fails closed on the cost dimension only' \
 # channel, so an unresolved destination cannot leave the ask path live.
 assert_prose 'DEFAULT-OFF until the private channel resolves' \
   "Spend contract does not gate the decision-producing half default-off"
-# Match the WHOLE clause, not just "stops before": the weak form survives even if the
-# contract loses what stops, under which condition, and that resolving it is the maintainer's.
-assert_prose "the cost pass runs steps 1–4 of its run loop and **stops before step 5's ask**" \
+# The channel restriction applies only after the upstream opt-in and deployment
+# prerequisites resolve; its presence must never imply that spend is enabled.
+assert_prose 'Spend stewardship is disabled in the effective desired state; ordinary operate and advance work continue.' \
+  "Spend contract does not keep disabled spend separate from ordinary engineering"
+assert_prose 'Only after the reviewed entrypoint resolves explicit spend enablement and the required deployment facts' \
+  "Spend contract does not require upstream opt-in and prerequisites before a cost pass"
+assert_prose "the cost pass run steps 1–4 of its run loop and **stop before step 5's ask**" \
   "Spend contract does not tie the stop to the unresolved channel and the financial-ask boundary"
-assert_prose 'Resolving the channel is what flips the second half on — a maintainer act, never an agent one' \
+assert_prose 'Resolving the channel is a further prerequisite for financial decisions, never spend opt-in; both are maintainer acts, never agent ones.' \
   "Spend contract does not reserve activation to the maintainer"
+refute_prose 'rather than a config toggle' \
+  "Spend contract still treats the private channel as the only spend gate"
 # The unresolved-channel state must read the same everywhere. This site previously said
 # "route anything blocking through the run report", which contradicted the gate by letting a
 # financial decision be parked in the report instead of not being produced at all.
