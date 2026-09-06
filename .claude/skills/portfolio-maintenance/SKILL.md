@@ -523,16 +523,21 @@ the cap bounds what is fetched rather than guaranteeing a complete census. A pri
 issue is reported `SKIPPED`, because project 5 is public and boarding one from a private repo is a
 maintainer decision.
 
-The loop paces itself and stops at a bounded batch, both derived from the documented secondary
-limits (~80 content-generating requests a minute, ~500 an hour, shared with everything else the run
-writes). Each add is **two** requests, so the sweep waits between writes and defers the remainder of
-a large backfill to the next run.
+The loop paces itself and stops at a small bounded batch. Three limits bind and the batch is sized
+by the tightest: ~80 content-generating requests a minute, ~500 an hour **shared across both
+machine-local lanes** (each runs this sweep hourly), and the runtime's own ~120-second Bash call
+budget. Each add is **two** requests, so the defaults spend under a minute sleeping and two lanes
+together stay near a fifth of the hourly budget. A batch large enough to outlast the call timeout
+would be killed mid-run, losing its summary and exit status while leaving the writes it had already
+made applied — the self-test asserts the defaults against both budgets so a later raise cannot
+contradict this silently.
 
 Both bounds count **actual writes**, never issues examined. An issue already on the board costs a
 read and no mutation, and discovery is oldest-first, so charging no-ops to the budget would spend
 the batch on the oldest already-boarded issues and defer everything after them on *every* run —
-permanently, not until next time. Counting writes is what makes the deferral safe. A deferral is
-reported in the summary (`wrote=` and `deferred=`) and is not an error.
+permanently, not until next time. Counting writes is what makes the deferral safe: a large
+catch-up drains over several runs, and a deferral is reported in the summary (`wrote=` and
+`deferred=`) and is not an error.
 
 This exists as a step because a distant constitutional paragraph was not reliably reached: the
 status-less card count regressed 0 → 4 → 0 → 16 across ticks while the repair was already scripted

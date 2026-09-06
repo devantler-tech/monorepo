@@ -208,6 +208,23 @@ report "repeated failures are bounded by the batch rather than hammering" \
 run_sweep "$sweep" --pace-seconds nope
 report "a non-numeric --pace-seconds is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"
 
+# 7f. THE DEFAULTS MUST FIT THE RUNTIME'S CALL BUDGET. A batch large enough to outlast the Bash
+#     tool's 120 s default would be killed mid-run, losing the summary and the exit status while
+#     leaving the writes it had already made applied — so the defaults are asserted here rather
+#     than left to a comment that a later raise could contradict silently.
+def_pace="$(awk -F= '/^pace=[0-9]+$/{print $2; exit}' "$sweep")"
+def_batch="$(awk -F= '/^max_mutations=[0-9]+$/{print $2; exit}' "$sweep")"
+report "the script declares numeric pace and batch defaults" \
+  "$([ -n "$def_pace" ] && [ -n "$def_batch" ] && echo yes || echo no)" "pace=[$def_pace] batch=[$def_batch]"
+sleep_budget=$(( def_pace * (def_batch - 1) ))
+report "a full batch's sleeping fits the 120 s call budget with margin" \
+  "$([ "$sleep_budget" -le 90 ] && echo yes || echo no)" "${def_pace}s x ($def_batch - 1) = ${sleep_budget}s"
+# The ~500/hour budget is shared across BOTH machine-local lanes, each running this hourly, and
+# every write costs two requests.
+fleet_hourly=$(( 2 * def_batch * 2 ))
+report "two lanes' hourly writes stay well inside the shared ~500 request budget" \
+  "$([ "$fleet_hourly" -le 250 ] && echo yes || echo no)" "2 lanes x $def_batch writes x 2 requests = $fleet_hourly"
+
 # 8. ABLATION — a copy that drops the LAST discovered issue must make assertion 1 FIRE.
 #    Without this, a set comparison that can never fail would read as a passing test.
 ablated="$tmp/sweep-ablated.sh"

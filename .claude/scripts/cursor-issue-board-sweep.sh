@@ -49,19 +49,23 @@ owner="devantler-tech"
 limit=300
 board_add="${here}/board-add.sh"
 dry_run=0
-# PACING AND BATCH SIZE, both derived from the documented secondary limits: roughly 80
-# content-generating requests per MINUTE and 500 per HOUR, shared with everything else the agent
-# writes. Each board-add performs an item-add AND an item-edit, so one issue costs TWO requests.
+# PACING AND BATCH SIZE. Three limits bind, and the batch is sized by the tightest of them. Each
+# board-add performs an item-add AND an item-edit, so one WRITE costs TWO requests.
 #
-#   per-minute: 2 requests / 2 s  = 60 per minute, under the ~80 ceiling with margin.
-#   per-hour:   150 issues x 2    = 300 requests, leaving room in the ~500 hourly budget for the
-#               rest of the run rather than consuming it all here.
+#   per-minute  ~80 content-generating requests: 2 requests / 2 s = 60 a minute, with margin.
+#   per-hour    ~500, and that budget is SHARED — both machine-local lanes run this sweep every
+#               hour, so the ceiling is per-hour-per-fleet, not per-process. 2 lanes x 25 writes
+#               x 2 requests = 100 an hour, leaving the rest for everything else the runs do.
+#   per-call    the runtime's Bash timeout defaults to 120 s. At a 2 s pace a batch of 25 spends
+#               48 s sleeping before any API latency, which fits; a batch of 150 would have spent
+#               298 s and been killed mid-run, losing the summary and the exit status while
+#               leaving the writes it had already made applied.
 #
-# A backfill larger than the batch is not an error and needs no human: the helper is idempotent
-# and the next scheduled run continues where this one stopped, so the sweep reports the remainder
-# and exits 0 rather than hammering past a limit it would then keep failing against.
+# A backfill larger than the batch is not an error and needs no human: board-add.sh is idempotent
+# and discovery is oldest-first, so the next scheduled run continues where this one stopped. A
+# large catch-up therefore drains over several runs rather than in one oversized call.
 pace=2
-max_mutations=150
+max_mutations=25
 
 while [ $# -gt 0 ]; do
   case "$1" in
