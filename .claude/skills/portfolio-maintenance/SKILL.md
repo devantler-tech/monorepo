@@ -498,6 +498,57 @@ submodule. Split its work in two, because only one half is path-less:
   is exactly the collision this loop's worktree rule exists to prevent. Retire the board issue's
   acquired SHA when that draft PR opens, using the same monorepo root.
 
+### Board the Cursor lane's issues — one command, before you select
+
+The Cursor cloud instance gets 403 on Projects, so **every issue it files is necessarily unboarded**
+and a local run has to board it. Run this before issue selection, so the board reflects the lane's
+findings while you are choosing work rather than after:
+
+```sh
+.claude/scripts/cursor-issue-board-sweep.sh
+```
+
+It discovers open Cursor-authored issues org-wide — author matched **exactly**, archived repositories
+excluded, oldest first, with `--limit` pinned because `gh search` defaults to 30 — and processes
+the results within its write budget through the idempotent `board-add.sh`, which does both halves
+of the add and verifies the Status by reading it
+back. Do **not** hand-roll the `item-add` + `item-edit` pair here: `item-add` exits 0 and prints an
+item id, so a half-completed add is indistinguishable from a finished one, which is the defect that
+helper exists to close.
+
+Read both its exit status and summary: `0` means the bounded batch succeeded, while `deferred` counts
+issues left for later runs and `skipped` counts private issues requiring a maintainer decision.
+It does not prove complete board coverage. Exit `2` means the **discovery itself failed**, came back
+truncated at the `--limit` cap, or an issue could not be boarded — never treat a failed or short search as an empty lane, since
+the cap bounds what is fetched rather than guaranteeing a complete census. A private repository's
+issue is reported `SKIPPED`, because project 5 is public and boarding one from a private repo is a
+maintainer decision.
+
+The default discovery cap is 300. Saturation stops before any writes and requires an explicit
+larger `--limit` (a decimal integer from 1 to 1000 without leading zeros); repeating the same default
+invocation does not advance past a saturated prefix. If 1000 is also saturated, keep the census
+incomplete until partitioned discovery is implemented. The sweep does not paginate beyond that cap.
+
+The loop paces itself and stops at a small bounded batch. Three limits bind and the batch is sized
+by the tightest: ~80 content-generating requests a minute, ~500 an hour **shared across both
+machine-local lanes** (each runs this sweep hourly), and the runtime's own ~120-second Bash call
+budget. Each add is **two** requests, so the defaults spend under a minute sleeping and two lanes
+together stay near a fifth of the hourly budget. A batch large enough to outlast the call timeout
+would be killed mid-run, losing its summary and exit status while leaving the writes it had already
+made applied — the self-test asserts the defaults against both budgets so a later raise cannot
+contradict this silently.
+
+Both bounds count **actual writes**, never issues examined. An issue already on the board costs a
+read and no mutation, and discovery is oldest-first, so charging no-ops to the budget would spend
+the batch on the oldest already-boarded issues and defer everything after them on *every* run —
+permanently, not until next time. Counting writes is what makes the deferral safe: a large
+catch-up drains over several runs, and a deferral is reported in the summary (`wrote=` and
+`deferred=`) and is not an error.
+
+This exists as a step because a distant constitutional paragraph was not reliably reached: the
+status-less card count regressed 0 → 4 → 0 → 16 across ticks while the repair was already scripted
+and idempotent (monorepo#2402).
+
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
 rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and
