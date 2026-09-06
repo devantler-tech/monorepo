@@ -177,7 +177,11 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 					input = r
 				}
 			}
-			if input != nil && input.Hdoc != nil {
+			if input != nil && input.Op == syntax.WordHdoc {
+				if program, known := staticWord(input.Word); known {
+					err = s.source(program, firstLine+int(input.Word.Pos().Line())-1, depth+1, false)
+				}
+			} else if input != nil && input.Hdoc != nil {
 				// Reparse the source spelling, never an evaluated document. This
 				// preserves independent literal commands beside unknown expansions;
 				// the outer walk also visits substitutions executed by this shell.
@@ -522,7 +526,7 @@ func (s *scanner) yaml(src string) error {
 					}
 					// Expressions are runtime values, not shell syntax. Leave a
 					// non-command placeholder while retaining all surrounding code.
-					program := regexp.MustCompile("(?s)\\$\\{\\{.*?\\}\\}").ReplaceAllString(value.Value, "__workflow_expression__")
+					program := regexp.MustCompile(`(?s)\$\{\{.*?\}\}`).ReplaceAllString(value.Value, "__workflow_expression__")
 					if err := s.source(program, line, 0, false); err != nil {
 						return err
 					}

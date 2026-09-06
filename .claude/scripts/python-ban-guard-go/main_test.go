@@ -42,6 +42,30 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 			handled: true, want: "check.sh:2: Python invocation",
 		},
 		{
+			name: "shell herestring is executable input", path: "tools/check.sh",
+			source: "bash <<< 'python3 --version'\n", handled: true, want: "check.sh:1: Python invocation",
+		},
+		{
+			name: "stdin shell arguments preserve herestring input", path: "tools/check.sh",
+			source: "bash -s argument <<< 'python3 --version'\n", handled: true, want: "Python invocation",
+		},
+		{
+			name: "explicit stdin herestring is executable input", path: "tools/check.sh",
+			source: "bash 0<<< 'python3 --version'\n", handled: true, want: "Python invocation",
+		},
+		{
+			name: "herestring used as data stays data", path: "tools/check.sh",
+			source: "cat <<< 'python3 --version'\nbash <<< 'echo python3'\nbash -c 'echo safe' <<< 'python3 --version'\n", handled: true,
+		},
+		{
+			name: "later stdin redirect replaces herestring", path: "tools/check.sh",
+			source: "bash <<< 'python3 --version' </dev/null\n", handled: true,
+		},
+		{
+			name: "non stdin herestring stays data", path: "tools/check.sh",
+			source: "bash 3<<< 'python3 --version'\n", handled: true,
+		},
+		{
 			name: "same value in package metadata has its own location", path: "package.json",
 			source:  "{\n\"description\":\"python3 --version\",\n\"scripts\": {\n\"check\": \"python3 --version\"\n}\n}",
 			handled: true, want: "package.json:4: Python invocation",
@@ -105,12 +129,12 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 		},
 		{
 			name: "nice long priority operand", path: "Dockerfile",
-			source: "FROM scratch\nRUN nice --adjustment 10 python3 --version\n",
+			source:  "FROM scratch\nRUN nice --adjustment 10 python3 --version\n",
 			handled: true, want: "Python invocation",
 		},
 		{
 			name: "nice command arguments remain data", path: "tools/check.sh",
-			source: "nice echo python3\nnice -n 10 echo python3\nnice --help python3\n",
+			source:  "nice echo python3\nnice -n 10 echo python3\nnice --help python3\n",
 			handled: true,
 		},
 		{
@@ -131,6 +155,31 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 			}
 			if test.want != "" && !strings.Contains(got, test.want) {
 				t.Errorf("findings %q do not contain %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestProductionTelemetryRemainsScanned(t *testing.T) {
+	data, err := os.ReadFile("../agent-telemetry.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, suffix string
+		wantHit      bool
+	}{
+		{name: "grep patterns remain data"},
+		{name: "appended command cannot inherit an exemption", suffix: "\npython3 --version\n", wantHit: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := scanner{path: "agent-telemetry.sh", seen: make(map[string]bool)}
+			handled, err := s.file(string(data) + test.suffix)
+			if err != nil || !handled {
+				t.Fatalf("handled=%v error=%v", handled, err)
+			}
+			if gotHit := len(s.hits) > 0; gotHit != test.wantHit {
+				t.Errorf("findings=%v; want hit=%v", s.hits, test.wantHit)
 			}
 		})
 	}
