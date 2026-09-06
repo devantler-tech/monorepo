@@ -41,14 +41,17 @@ mkstub_board_add() {
   cat > "$tmp/board-add-stub.sh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$1" >> "${BOARD_LOG}"
-if [ -n "${BOARD_ADD_PRIVATE_ON:-}" ] && [ "$1" = "${BOARD_ADD_PRIVATE_ON}" ]; then
+if [ -n "${BOARD_ADD_PRIVATE_ON:-}" ] && printf '%s\n' "${BOARD_ADD_PRIVATE_ON}" | grep -qxF "$1"; then
   echo "board-add: devantler-tech/x is PRIVATE; project 5 is public — adding it is a maintainer decision, not an agent default"; exit 2
 fi
-if [ -n "${BOARD_ADD_FAIL_ON:-}" ] && [ "$1" = "${BOARD_ADD_FAIL_ON}" ]; then
+if [ -n "${BOARD_ADD_FAIL_ON:-}" ] && printf '%s\n' "${BOARD_ADD_FAIL_ON}" | grep -qxF "$1"; then
   echo "board-add: set failed"; exit 2
 fi
 if [ -n "${BOARD_ADD_NOOP_ON:-}" ] && printf '%s\n' "${BOARD_ADD_NOOP_ON}" | grep -qxF "$1"; then
   echo "board-add: $1 already-present (status untouched) (item X) [verified]"; exit 0
+fi
+if [ -n "${BOARD_ADD_STATUS_SET_ON:-}" ] && printf '%s\n' "${BOARD_ADD_STATUS_SET_ON}" | grep -qxF "$1"; then
+  echo "board-add: $1 already-present (status set) → 📥 Backlog (item X) [verified]"; exit 0
 fi
 echo "board-add: $1 added → 📥 Backlog (item X) [verified]"
 STUB
@@ -176,6 +179,30 @@ report "the issue needing a write is still reached past the no-ops" \
 BOARD_ADD_NOOP_ON="" run_sweep "$sweep" --max-mutations 1
 report "control: with three real writes and a batch of 1, two ARE deferred" \
   "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'wrote=1' && printf '%s' "$out" | grep -q 'deferred=2' && echo yes || echo no)" "rc=$rc $out"
+
+# 7d4. `already-present (status set)` is a REAL write, not a no-op. board-add.sh emits it when it
+#      item-edits a card that was on the board without a Status — and a backlog of status-less
+#      cards is exactly what this sweep exists to repair, so a bare `already-present` substring
+#      match would let the one case that matters bypass the batch and the pacing entirely.
+printf '%s\n%s\n%s\n' "$U1" "$U2" "$U3" > "$GH_RESULTS"
+BOARD_ADD_STATUS_SET_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep"
+report "a status-set outcome counts as a write" \
+  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'wrote=3' && echo yes || echo no)" "rc=$rc $out"
+# Control: the same three as genuine no-ops must count zero, so the check is not matching everything.
+BOARD_ADD_NOOP_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep"
+report "control: status-untouched no-ops count zero writes" \
+  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'wrote=0' && echo yes || echo no)" "rc=$rc $out"
+report "a status-set backlog is still bounded by the batch" \
+  "$(BOARD_ADD_STATUS_SET_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep" --max-mutations 2; printf '%s' "$out" | grep -q 'wrote=2' && printf '%s' "$out" | grep -q 'deferred=1' && echo yes || echo no)" "$out"
+
+# 7d5. A FAILURE is charged to the budget: board-add.sh can fail after a successful item-add or
+#      item-edit (a read-back that does not confirm), so treating failures as costless would let
+#      repeated partial writes bypass both safeguards exactly when GitHub is already refusing.
+BOARD_ADD_FAIL_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep"
+report "a possibly-partial failure is charged to the write budget" \
+  "$([ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'wrote=3' && printf '%s' "$out" | grep -q 'failed=3' && echo yes || echo no)" "rc=$rc $out"
+report "repeated failures are bounded by the batch rather than hammering" \
+  "$(BOARD_ADD_FAIL_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep" --max-mutations 1; printf '%s' "$out" | grep -q 'failed=1' && printf '%s' "$out" | grep -q 'deferred=2' && echo yes || echo no)" "$out"
 
 # 7e. Pacing is validated like every other numeric option.
 run_sweep "$sweep" --pace-seconds nope

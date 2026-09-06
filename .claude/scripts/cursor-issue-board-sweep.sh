@@ -148,8 +148,11 @@ while IFS= read -r url; do
   wrote_last=0
   if out="$("$board_add" "$url" 2>&1)"; then
     boarded=$((boarded + 1))
-    # `already-present (status untouched)` is board-add.sh's own no-op marker.
-    if printf '%s' "$out" | grep -q 'already-present'; then
+    # Match board-add.sh's EXACT no-op marker. A bare `already-present` substring would also match
+    # its `already-present (status set)` outcome, which is a real item-edit — and a backlog of
+    # status-less cards is precisely what this sweep exists to repair, so that misread would let
+    # the one case that matters bypass both the batch and the pacing.
+    if printf '%s' "$out" | grep -q 'already-present (status untouched)'; then
       echo "cursor-issue-board-sweep: already on the board ${url}"
     else
       mutated=$((mutated + 1))
@@ -160,7 +163,13 @@ while IFS= read -r url; do
     skipped=$((skipped + 1))
     echo "cursor-issue-board-sweep: SKIPPED (private repository, a maintainer decision) ${url}"
   else
+    # A failure is charged to the budget and paced, because board-add.sh can fail AFTER a
+    # successful item-add or item-edit — a read-back that does not confirm the status still exits
+    # non-zero. Treating that as costless would let repeated partial writes bypass both safeguards
+    # and keep hammering exactly when GitHub is already refusing.
     failed=$((failed + 1))
+    mutated=$((mutated + 1))
+    wrote_last=1
     echo "cursor-issue-board-sweep: FAILED ${url} — ${out}" >&2
   fi
 # Process substitution, NOT a pipe: `printf ... | while` runs the loop in a SUBSHELL, so every
