@@ -202,3 +202,277 @@ func TestCLIClosedPipeReturnsUnknown(t *testing.T) {
 		})
 	}
 }
+
+// The digest exists so a run can deliver one consolidated ask instead of
+// assembling nineteen by hand. It must therefore carry exactly the unasked
+// authority blockers -- a digest that echoed every finding would re-create the
+// hand-assembly problem, so the conforming and malformed rows are the control.
+func TestAskDigestSelectsOnlyUnaskedAuthorityBlockersOldestFirst(t *testing.T) {
+	input := `[
+	  {"repo":"beta","number":2,"created_at":"2026-08-01T00:00:00Z","body":"**Blocker:** maintainer authority - newer account action | last-verified 2026-09-01: pending"},
+	  {"repo":"alpha","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - oldest account action | last-verified 2026-09-01: pending"},
+	  {"repo":"gamma","number":3,"created_at":"2026-07-01T00:00:00Z","body":"**Blocker:** o/r#7 | upstream | last-verified 2026-09-01: pending"},
+	  {"repo":"delta","number":4,"created_at":"2026-07-02T00:00:00Z","body":"**Blocker:** nonsense"}
+	]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 {
+		t.Fatalf("code=%d, want 1; output=%q stderr=%q", code, got, stderr.String())
+	}
+	for _, want := range []string{"alpha#1", "beta#2", "oldest account action", "newer account action", "81d", "36d"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("digest missing %q; got %q", want, got)
+		}
+	}
+	// Control: a conforming record and a malformed one are both excluded.
+	for _, absent := range []string{"gamma#3", "delta#4"} {
+		if strings.Contains(got, absent) {
+			t.Fatalf("digest must exclude %q; got %q", absent, got)
+		}
+	}
+	if strings.Index(got, "alpha#1") > strings.Index(got, "beta#2") {
+		t.Fatalf("digest must be oldest-first; got %q", got)
+	}
+}
+
+// An unparseable or absent creation date must not drop the row or fail the
+// read: the ask is still owed. It sorts last so the aged head stays stable.
+func TestAskDigestKeepsRowsWithUnknownAge(t *testing.T) {
+	input := `[
+	  {"repo":"nodate","number":9,"body":"**Blocker:** maintainer authority - undated action | last-verified 2026-09-01: pending"},
+	  {"repo":"dated","number":8,"created_at":"2026-08-01T00:00:00Z","body":"**Blocker:** maintainer authority - dated action | last-verified 2026-09-01: pending"}
+	]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 || !strings.Contains(got, "nodate#9") || !strings.Contains(got, "dated#8") {
+		t.Fatalf("code=%d output=%q stderr=%q", code, got, stderr.String())
+	}
+	if strings.Index(got, "dated#8") > strings.Index(got, "nodate#9") {
+		t.Fatalf("undated rows sort last; got %q", got)
+	}
+}
+
+// A malformed record is still a finding, so the exit status must stay 1 even
+// when the digest itself is empty. Reporting 0 here would let a real repair
+// need vanish behind an empty ask sheet.
+func TestAskDigestEmptyStillReportsOtherFindings(t *testing.T) {
+	input := `[{"repo":"r","number":4,"created_at":"2026-07-02T00:00:00Z","body":"**Blocker:** nonsense"}]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 {
+		t.Fatalf("code=%d, want 1; output=%q", code, got)
+	}
+	if !strings.Contains(got, "no declared authority blocker") {
+		t.Fatalf("empty digest must say so; got %q", got)
+	}
+}
+
+// The digest is opt-in: without the flag the verdict report is byte-identical
+// to what every existing caller already parses.
+func TestAskDigestIsOptIn(t *testing.T) {
+	input := `[{"repo":"r","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - an action | last-verified 2026-09-01: pending"}]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 || !strings.Contains(got, "NO-ASK") || strings.Contains(got, "ASK DIGEST") {
+		t.Fatalf("default output changed: code=%d output=%q", code, got)
+	}
+}
+
+// A stale ask record still needs verification, so the sheet must carry it,
+// distinguished from a missing ask record.
+// The fresh ask is the control: it conforms, so it must NOT appear.
+func TestAskDigestIncludesStaleAsksAndExcludesFreshOnes(t *testing.T) {
+	input := `[
+	  {"repo":"stale","number":5,"created_at":"2026-07-01T00:00:00Z","body":"**Blocker:** maintainer authority - stale action | last-verified 2026-09-01: pending | asked pr 2026-08-01"},
+	  {"repo":"fresh","number":6,"created_at":"2026-07-02T00:00:00Z","body":"**Blocker:** maintainer authority - fresh action | last-verified 2026-09-01: pending | asked pr 2026-09-05"}
+	]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 {
+		t.Fatalf("code=%d, want 1; output=%q stderr=%q", code, got, stderr.String())
+	}
+	if !strings.Contains(got, "stale#5") || !strings.Contains(got, "verify before renewing") {
+		t.Fatalf("stale ask must appear and be marked; got %q", got)
+	}
+	if strings.Contains(got, "fresh#6") {
+		t.Fatalf("a fresh ask conforms and must be excluded; got %q", got)
+	}
+}
+
+// The two record states must stay distinguishable without claiming that a
+// missing record proves no ask was delivered.
+func TestAskDigestLabelsNeverAskedRows(t *testing.T) {
+	input := `[{"repo":"r","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - an action | last-verified 2026-09-01: pending"}]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 || !strings.Contains(got, "no ask recorded") || strings.Contains(got, "verify before renewing") {
+		t.Fatalf("code=%d output=%q", code, got)
+	}
+}
+
+// The sheet is built to be pasted into a PR, Slack or a session, and issue
+// bodies are attacker-authorable. A live mention or bot command surviving into
+// it would fire when delivered, from our own authenticated account.
+func TestAskDigestNeutralizesActiveSyntaxInUntrustedText(t *testing.T) {
+	input := `[{"repo":"r","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - ping @codex review and @devantler about #123 | last-verified 2026-09-01: pending"}]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 {
+		t.Fatalf("code=%d output=%q", code, got)
+	}
+	for _, live := range []string{"@codex", "@devantler", "#123"} {
+		if strings.Contains(got, live) {
+			t.Fatalf("live token %q survived into the digest: %q", live, got)
+		}
+	}
+	// Control: the words are still there, only the trigger characters are inert.
+	for _, want := range []string{"codex", "devantler", "123"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("neutralizing must keep the text readable, lost %q: %q", want, got)
+		}
+	}
+	// And it is marked as quoted untrusted text, not presented as instruction.
+	if !strings.Contains(got, "\n  > ") {
+		t.Fatalf("request must be quoted; got %q", got)
+	}
+}
+
+func TestAskRequestOmitsURLs(t *testing.T) {
+	for _, link := range []string{
+		"https://example.invalid/path",
+		"HTTP://example.invalid/path",
+		"www.example.invalid/path",
+		"//example.invalid/path",
+		"example.invalid/path",
+		"mailto:person@example.invalid",
+	} {
+		t.Run(link, func(t *testing.T) {
+			line := "**Blocker:** inspect " + link + " then continue | authority | last-verified 2026-09-06: pending"
+			if got := askRequest(line); got != "inspect \\[URL omitted] then continue" {
+				t.Fatalf("URL must not survive in the quoted request: %q", got)
+			}
+		})
+	}
+	if got := askRequest("**Blocker:** inspect the account setting | authority"); got != "inspect the account setting" {
+		t.Fatalf("ordinary description changed: %q", got)
+	}
+}
+
+func TestAskDigestOmitsAllURLsInDescription(t *testing.T) {
+	input := `[{"repo":"r","number":1,"body":"**Blocker:** inspect https://one.invalid then www.two.invalid and //three.invalid | authority | last-verified 2026-09-06: pending"}]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 || !strings.Contains(got, "  > inspect \\[URL omitted] then \\[URL omitted] and \\[URL omitted]\n") {
+		t.Fatalf("code=%d output=%q stderr=%q", code, got, stderr.String())
+	}
+}
+
+func TestAskRequestNeutralizesEncodedDestinationsAndControls(t *testing.T) {
+	for _, tc := range []struct {
+		name, description, want string
+	}{
+		{
+			name:        "named entity destination",
+			description: "[example](https&colon;&sol;&sol;example.invalid)",
+			want:        "\\[example](\\[URL omitted]",
+		},
+		{
+			name:        "numeric entity destination",
+			description: "inspect https&#58;&#47;&#47;example.invalid",
+			want:        "inspect \\[URL omitted]",
+		},
+		{
+			name:        "encoded newline and mention",
+			description: "inspect&NewLine;&commat;codex review",
+			want:        "inspect\ufffd@\u200bcodex review",
+		},
+		{
+			name:        "nested entities cannot decode into a URL later",
+			description: "[example](https&amp;colon;&amp;sol;&amp;sol;example.invalid)",
+			want:        "\\[example](https&amp;colon;&amp;sol;&amp;sol;example.invalid)",
+		},
+		{
+			name:        "backslash cannot unescape a bracket",
+			description: `\[example](https&amp;colon;&amp;sol;&amp;sol;example.invalid)`,
+			want:        `\\\[example](https&amp;colon;&amp;sol;&amp;sol;example.invalid)`,
+		},
+		{
+			name:        "HTML stays literal",
+			description: "<b>inspect the account</b>",
+			want:        "&lt;b&gt;inspect the account&lt;/b&gt;",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := askRequest("**Blocker:** " + tc.description + " | authority"); got != tc.want {
+				t.Fatalf("got %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Slack authenticates as the maintainer's own account, so a digest delivered
+// without a leading disclosure reads as him writing to himself.
+func TestAskDigestLeadsWithTheAgentDisclosure(t *testing.T) {
+	input := `[{"repo":"r","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - an action | last-verified 2026-09-01: pending"}]`
+	var out, stderr bytes.Buffer
+	run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	if !strings.HasPrefix(out.String(), "> 🤖 Generated by the ") {
+		t.Fatalf("digest must begin with the disclosure; got %q", out.String())
+	}
+}
+
+// Visibility is not in the search payload, so the sheet must not imply it is
+// safe for a public channel, and must name the repositories to check.
+func TestAskDigestCautionsOnRepositoryVisibility(t *testing.T) {
+	input := `[
+	  {"repo":"beta","number":2,"created_at":"2026-08-01T00:00:00Z","body":"**Blocker:** maintainer authority - b | last-verified 2026-09-01: pending"},
+	  {"repo":"alpha","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - a | last-verified 2026-09-01: pending"}
+	]`
+	var out, stderr bytes.Buffer
+	run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if !strings.Contains(got, "CHECK BEFORE DELIVERY") || !strings.Contains(got, "alpha, beta") {
+		t.Fatalf("digest must caution and list distinct repositories; got %q", got)
+	}
+	// Verification may establish a maintainer action, not an agent-owned decision to defer.
+	if strings.Contains(got, "maintainer decision") || !strings.Contains(got, "maintainer action") {
+		t.Fatalf("digest must ask for an action, not a decision; got %q", got)
+	}
+}
+
+// A legacy record still needs migrating to an explicit class token, and a row
+// naming only an identifier cannot communicate what to actually do. Both must
+// stay visible, or an ask gets recorded as delivered while being useless.
+func TestAskDigestFlagsLegacyAndActionlessRows(t *testing.T) {
+	input := `[
+	  {"repo":"legacyrepo","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority | last-verified 2026-09-01: pending"},
+	  {"repo":"explicit","number":2,"created_at":"2026-08-01T00:00:00Z","body":"**Blocker:** rotate the signing key | authority | last-verified 2026-09-01: pending"}
+	]`
+	var out, stderr bytes.Buffer
+	run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if !strings.Contains(got, "[legacy: no class token]") {
+		t.Fatalf("legacy annotation must survive into the digest; got %q", got)
+	}
+	if !strings.Contains(got, "NO ACTION DESCRIBED") {
+		t.Fatalf("an identifier-only record must be flagged; got %q", got)
+	}
+	// Control: the explicit, descriptive row carries neither marker.
+	line := ""
+	for _, l := range strings.Split(got, "\n") {
+		if strings.Contains(l, "explicit#2") {
+			line = l
+		}
+	}
+	if line == "" || strings.Contains(line, "legacy") || strings.Contains(line, "NO ACTION") {
+		t.Fatalf("descriptive explicit row must be unmarked; got line %q in %q", line, got)
+	}
+}

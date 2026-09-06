@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -37,6 +39,9 @@ Sources (exactly one): --org <org> or --input <file>|-
 Options: --today <YYYY-MM-DD> (default UTC today)
          --ask-max-age-days <n> (default 14)
          --quiet (findings only)
+         --ask-digest (emit declared authority blockers with missing or stale
+                       ask records, oldest first, for verification before
+                       asking the maintainer)
 Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input).
 `
 
@@ -54,6 +59,7 @@ type options struct {
 	today      time.Time
 	maxAge     int64
 	quiet      bool
+	askDigest  bool
 }
 
 func civilDate(value string) (time.Time, error) {
@@ -73,6 +79,8 @@ func arguments(args []string) (options, bool, error) {
 			return o, true, nil
 		case "--quiet":
 			o.quiet = true
+		case "--ask-digest":
+			o.askDigest = true
 		case "--org", "--input", "--today", "--ask-max-age-days":
 			i++
 			if i == len(args) {
@@ -258,11 +266,164 @@ func classify(line string, today time.Time, maxAge int64) (string, bool) {
 	return "CONFORMS", legacy
 }
 
+// askRow is one declared authority blocker with a missing or stale ask record.
+// The declaration still needs verification before asking the maintainer.
+type askRow struct {
+	repo     string
+	number   int64
+	created  string
+	age      int64
+	agedKnow bool
+	request  string
+	stale    bool // asked once, but the ask has since gone stale
+	legacy   bool // authority inferred from prose, not an explicit class token
+	opaque   bool // the record names an identifier but no concrete action
+}
+
+// neutralize breaks GitHub's active syntax in untrusted text. The digest is
+// built to be pasted into a PR, Slack or a session, and no Markdown construct
+// hides a mention from a bot -- bots parse the raw text -- so the token itself
+// must stop being a live mention, command or autolink. URL spans are omitted;
+// zero-width spaces leave mention/reference text readable without live tokens.
+func neutralize(s string) string {
+	s = urlRE.ReplaceAllString(s, "[URL omitted]")
+	var out strings.Builder
+	for i, r := range s {
+		out.WriteRune(r)
+		if r != '@' && r != '#' {
+			continue
+		}
+		rest := s[i+len(string(r)):]
+		if next := []rune(rest); len(next) > 0 && (unicode.IsLetter(next[0]) || unicode.IsDigit(next[0])) {
+			out.WriteRune('​')
+		}
+	}
+	return out.String()
+}
+
+// identifierOnlyRE matches a record whose identifier names a thing but no
+// action -- a bare issue reference, a repository reference, or the legacy
+// phrase alone.
+var identifierOnlyRE = regexp.MustCompile(`^(#[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(#[0-9]+)?|maintainer authority)[.,;:]?$`)
+
+// askRequest renders what the maintainer is actually being asked to do -- the
+// identifier segment of the blocker line. The body stays untrusted data, so it
+// is bounded and control-stripped exactly as the verdict report's snippet is.
+func askRequest(line string) string {
+	text := strings.SplitN(strings.TrimPrefix(line, "**Blocker:** "), " | ", 2)[0]
+	// Decode before bounding and stripping controls so Markdown destinations
+	// cannot hide schemes or introduce a newline after sanitization.
+	text = html.UnescapeString(text)
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) > 100 {
+		runes = runes[:100]
+	}
+	safe := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return unicode.ReplacementChar
+		}
+		return r
+	}, string(runes))
+	if safe == "" {
+		return "(no description in record)"
+	}
+	// Keep Markdown links and HTML inert, including nested entities and an
+	// existing backslash that could otherwise unescape an opening bracket.
+	return strings.NewReplacer(
+		`\`, `\\`, "[", `\[`, "<", "&lt;", ">", "&gt;", "&", "&amp;",
+	).Replace(neutralize(safe))
+}
+
+// requestIsOpaque reports a record that names an identifier but no action a
+// maintainer could actually perform. Delivering such a row and recording it as
+// asked would mark a non-actionable message as delivered.
+func requestIsOpaque(line string) bool {
+	text := strings.SplitN(strings.TrimPrefix(line, "**Blocker:** "), " | ", 2)[0]
+	return identifierOnlyRE.MatchString(strings.TrimSpace(text))
+}
+
+// issueAge reports whole days open. A missing or unparseable creation date is
+// not fatal: the ask is still owed, so the row is kept and marked unknown.
+func issueAge(createdAt string, today time.Time) (int64, bool) {
+	if len(createdAt) < 10 {
+		return 0, false
+	}
+	created, err := civilDate(createdAt[:10])
+	if err != nil {
+		return 0, false
+	}
+	return today.Unix()/86400 - created.Unix()/86400, true
+}
+
+// askDigestReport renders declarations oldest first for verification. Issue
+// text and ask records do not establish that the maintainer must act.
+func askDigestReport(rows []askRow) string {
+	if len(rows) == 0 {
+		return "ASK DIGEST -- no declared authority blocker has a missing or stale ask record.\n"
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.agedKnow != b.agedKnow {
+			return a.agedKnow // undated rows sort last
+		}
+		if a.agedKnow && a.age != b.age {
+			return a.age > b.age
+		}
+		if a.repo != b.repo {
+			return a.repo < b.repo
+		}
+		return a.number < b.number
+	})
+	seen := map[string]bool{}
+	var repos []string
+	for _, r := range rows {
+		if !seen[r.repo] {
+			seen[r.repo] = true
+			repos = append(repos, r.repo)
+		}
+	}
+	sort.Strings(repos)
+	var out strings.Builder
+	// The sheet is built to be delivered. Slack authenticates as the
+	// maintainer's own account, so without a leading disclosure a pasted digest
+	// reads as him writing to himself.
+	_, _ = fmt.Fprint(&out, "> 🤖 Generated by the Agentic Engineer\n\n")
+	_, _ = fmt.Fprintf(&out, "ASK DIGEST -- %d declared authority blocker(s) to verify before asking for a maintainer action.\n", len(rows))
+	_, _ = fmt.Fprint(&out, "Verify current capabilities and prerequisites; complete work the agent can perform.\n")
+	_, _ = fmt.Fprint(&out, "Only for a remaining maintainer-only action, deliver an ask through a canonical channel\n")
+	_, _ = fmt.Fprint(&out, "(pr | slack | session), then append \"| asked <channel> <YYYY-MM-DD>\" to that issue's **Blocker:** line.\n")
+	// Repository visibility is not in the search payload, so this tool cannot
+	// establish it. Say so rather than let a private row reach a public PR.
+	_, _ = fmt.Fprint(&out, "CHECK BEFORE DELIVERY: this tool does not establish repository visibility.\n")
+	_, _ = fmt.Fprintf(&out, "Treat these rows as private until each repository is confirmed public: %s\n", strings.Join(repos, ", "))
+	_, _ = fmt.Fprint(&out, "Descriptions are quoted untrusted issue text with mentions broken and URLs omitted.\n\n")
+	for _, r := range rows {
+		age := "age unknown"
+		if r.agedKnow {
+			age = fmt.Sprintf("opened %s  %dd", r.created, r.age)
+		}
+		kind := "no ask recorded"
+		if r.stale {
+			kind = "ask record is stale -- verify before renewing"
+		}
+		notes := ""
+		if r.legacy {
+			notes += "  [legacy: no class token]"
+		}
+		if r.opaque {
+			notes += "  [NO ACTION DESCRIBED -- reopen the issue before delivering]"
+		}
+		_, _ = fmt.Fprintf(&out, "  %s#%d  %s  (%s)%s\n  > %s\n", r.repo, r.number, age, kind, notes, r.request)
+	}
+	return out.String()
+}
+
 type issue struct {
 	Repo          string `json:"repo"`
 	Number        int64  `json:"number"`
 	Body          string `json:"body"`
 	RepositoryURL string `json:"repository_url"`
+	CreatedAt     string `json:"created_at"`
 }
 
 func inputIssues(raw []byte) ([]issue, error) {
@@ -371,10 +532,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// Builder writes cannot fail. Check the external writer once the complete
 	// report is ready, so an undelivered report never returns a valid verdict.
 	var report strings.Builder
+	var askRows []askRow
 	bad := 0
 	for _, item := range issues {
 		line := visibleRecord(item.Body)
 		verdict, legacy := classify(line, o.today, o.maxAge)
+		// Include stale ask records so their current need is verified alongside
+		// missing records, without treating either as proof the maintainer must act.
+		if verdict == "NO-ASK" || verdict == "STALE-ASK" {
+			age, known := issueAge(item.CreatedAt, o.today)
+			created := ""
+			if known {
+				created = item.CreatedAt[:10]
+			}
+			askRows = append(askRows, askRow{
+				repo: item.Repo, number: item.Number, created: created,
+				age: age, agedKnow: known, request: askRequest(line),
+				stale: verdict == "STALE-ASK", legacy: legacy,
+				opaque: requestIsOpaque(line),
+			})
+		}
 		if verdict == "CONFORMS" && o.quiet {
 			continue
 		}
@@ -401,6 +578,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 		}
 		_, _ = fmt.Fprintln(&report)
+	}
+	// The digest replaces the verdict report for its own consumer, but never
+	// the verdict: a malformed record is still a finding when no ask is owed.
+	if o.askDigest {
+		code := 0
+		if bad > 0 {
+			code = 1
+		}
+		return emit(askDigestReport(askRows), code)
 	}
 	if bad > 0 {
 		if !o.quiet {
