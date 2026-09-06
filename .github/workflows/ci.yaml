@@ -901,6 +901,12 @@ jobs:
   # variable UNSIGNED_COMMIT_REPORT is exactly `true`. Flipping it is the separate, reversible activation
   # step, taken once this workflow is on the default branch -- which is also what lets the reporter run
   # from a TRUSTED base-branch copy below rather than from the pull request being measured.
+  #
+  # RELEASE FLAG, so it is short-lived by contract and its removal is owned rather than assumed:
+  # monorepo#3212 activates it and then deletes BOTH the repository variable and this condition.
+  # EXPIRES 2026-10-31 -- from that date unsigned-commit-report.test.sh fails on the expiry case, so
+  # the flag cannot quietly become permanent debt. Both states are covered there too: exactly `true`
+  # runs the job and every other value leaves it skipped.
   report-unsigned-commits:
     name: Report unsigned commits (non-blocking)
     if: github.event_name == 'pull_request' && vars.UNSIGNED_COMMIT_REPORT == 'true'
@@ -930,10 +936,18 @@ jobs:
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits" --paginate --slurp |
             jq 'add // []' >"${RUNNER_TEMP}/pr-commits.json"
+      # Provenance travels with the payload, or a fork PR opened from a branch merely NAMED
+      # `codex/foo` is classified as agent-lane work and warned about commits from a stranger's
+      # repository. `user.login` is the REST spelling, so the Cursor App arrives as `cursor[bot]`.
       - name: Report unsigned commits on this pull request
         env:
           HEAD_REF: ${{ github.head_ref }}
-        run: bash trusted-base/.claude/scripts/unsigned-commit-report.sh --input "${RUNNER_TEMP}/pr-commits.json" --head-ref "$HEAD_REF"
+          HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          bash trusted-base/.claude/scripts/unsigned-commit-report.sh \
+            --input "${RUNNER_TEMP}/pr-commits.json" --head-ref "$HEAD_REF" \
+            --repo "${GITHUB_REPOSITORY}" --head-owner "$HEAD_OWNER" --pr-author "$PR_AUTHOR"
 
   test-release-exemption-identity-currency:
     name: Test release exemption identity currency

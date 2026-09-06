@@ -42,10 +42,16 @@
 #       lane branches are deleted on merge and a branch sweep is blind to exactly the commits
 #       that reached main.
 #   unsigned-commit-report.sh --input <payload.json> [--head-ref <ref>]
+#                             [--repo <owner/repo> --head-owner <login> --pr-author <login>]
 #       Payload mode -- what CI runs (a trusted step reads the endpoint with the token; the report then
 #       runs from the BASE branch's copy of this script, without a token, behind the default-off
 #       repository variable UNSIGNED_COMMIT_REPORT) and the seam for the self-test: <payload.json> is a JSON array of commit objects in the
 #       REST `pulls/<n>/commits` shape (`sha`, `commit.verification.{verified,reason}`), or `-`.
+#       PROVENANCE: --head-owner and --pr-author carry the pull request's own provenance into this
+#       path, which is the same rule the sweep applies -- a head outside the base repository is
+#       `skipped=foreign-head` and an author that is not the lane's writer identity is
+#       `skipped=foreign-author`. Without them a fork PR opened from a branch merely NAMED
+#       `codex/foo` is classified as agent-lane work and warned about.
 #
 # EXIT CODES
 #   0  the report was produced (findings or not -- this is the non-blocking contract)
@@ -54,6 +60,7 @@
 # OUTPUT
 #   One line per reported commit:  <class>  <sha>  <reason>  [<branch>]
 #   One summary line:               examined=<n> signed=<g> unsigned=<n> bad=<b> unverifiable=<e> head=<ref> lane=<lane>
+#   A skipped report adds `skipped=<non-agent-head|foreign-head|foreign-author>`, naming which
 #   The summary always states what was examined, so an empty finding list reads as "none found"
 #   rather than "nothing looked". Under GitHub Actions each finding is also a `::warning::`
 #   annotation and the summary is appended to the step summary.
@@ -64,12 +71,15 @@ die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
 usage_die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
 
 PR=""; REPO=""; INPUT=""; HEAD_REF=""; SINCE=""; LANES="claude,codex,cursor"
+PR_AUTHOR=""; HEAD_OWNER=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --pr) [ $# -ge 2 ] || usage_die "--pr needs a number"; PR="$2"; shift 2 ;;
     --repo) [ $# -ge 2 ] || usage_die "--repo needs owner/repo"; REPO="$2"; shift 2 ;;
     --input) [ $# -ge 2 ] || usage_die "--input needs a path"; INPUT="$2"; shift 2 ;;
     --head-ref) [ $# -ge 2 ] || usage_die "--head-ref needs a ref"; HEAD_REF="$2"; shift 2 ;;
+    --pr-author) [ $# -ge 2 ] || usage_die "--pr-author needs a login"; PR_AUTHOR="$2"; shift 2 ;;
+    --head-owner) [ $# -ge 2 ] || usage_die "--head-owner needs a login"; HEAD_OWNER="$2"; shift 2 ;;
     --merged-since) [ $# -ge 2 ] || usage_die "--merged-since needs YYYY-MM-DD"; SINCE="$2"; shift 2 ;;
     --lanes) [ $# -ge 2 ] || usage_die "--lanes needs a comma-separated list"; LANES="$2"; shift 2 ;;
     -h | --help) sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -104,14 +114,38 @@ lane_of() { # <ref>
 }
 
 # The exact writer identity each lane publishes under (*Trust gate*): the machine-local lanes author as
-# `devantler`; the Cursor cloud lane as its App, which `gh pr list` renders `app/cursor` and REST
-# `cursor[bot]`. Exact match only -- a login merely containing a trusted name is not trusted.
+# `devantler`; the Cursor cloud lane as its App. Exact match only -- a login merely containing a
+# trusted name is not trusted.
+#
+# The App answers to two RETURNED spellings and no more. Measured 2026-09-06 against actions#1054:
+# `gh pr list --json author` and `gh pr view` both return `app/cursor`, REST `user.login` returns
+# `cursor[bot]`, and only GraphQL returns the bare `cursor` -- a surface this reporter never reads.
+# Accepting bare `cursor` therefore matched no App PR at all while admitting any ORDINARY account
+# whose login happens to be `cursor`, which is the provenance check inverted.
 lane_writer_ok() { # <lane> <author-login>
   case "$1" in
     claude | codex) [ "$2" = devantler ] ;;
-    cursor) [ "$2" = app/cursor ] || [ "$2" = "cursor[bot]" ] || [ "$2" = cursor ] ;;
+    cursor) [ "$2" = app/cursor ] || [ "$2" = "cursor[bot]" ] ;;
     *) return 1 ;;
   esac
+}
+
+# Per-PR provenance, the same rule the sweep applies: this pull request is lane work only when its
+# head lives in the base repository AND its author is that lane's exact writer identity. The sweep
+# had this from the start; the per-PR path did not, so a fork PR opened from a branch merely NAMED
+# `codex/foo` was classified as agent-lane work and warned about commits from a stranger's
+# repository. Absent provenance is UNKNOWN rather than trusted: the caller states it or the report
+# says it could not check.
+non_lane_reason() { # <lane> -> "" when this PR is lane work, else the skip reason
+  local lane="$1"
+  [ "$lane" != none ] || { printf 'non-agent-head'; return; }
+  if [ -n "$HEAD_OWNER" ] && [ -n "$REPO" ] && [ "$HEAD_OWNER" != "${REPO%%/*}" ]; then
+    printf 'foreign-head'; return
+  fi
+  if [ -n "$PR_AUTHOR" ] && ! lane_writer_ok "$lane" "$PR_AUTHOR"; then
+    printf 'foreign-author'; return
+  fi
+  printf ''
 }
 
 # `verification.reason` -> class letter. Only the reason is consulted: GitHub sets `verified`
@@ -144,7 +178,7 @@ acquire_pr_commits() { # <repo> <pr> <branch-label>
   printf '%s' "$out"
 }
 
-rows=""; SKIPPED=0; targets=""
+rows=""; SKIPPED=0; SKIP_REASON=""; targets=""
 if [ -n "$INPUT" ]; then
   if [ "$INPUT" = "-" ]; then payload="$(cat)" || die "could not read payload from stdin"
   else [ -r "$INPUT" ] || die "cannot read payload: $INPUT"; payload="$(cat -- "$INPUT")" || die "could not read payload: $INPUT"; fi
@@ -152,9 +186,11 @@ if [ -n "$INPUT" ]; then
   rows="$(printf '%s' "$payload" | jq -r --arg branch "${HEAD_REF:-}" \
     '.[] | [(.sha // "missing"), (.commit.verification.verified // false | tostring), (.commit.verification.reason // "missing"), $branch] | @tsv')" \
     || die "could not parse payload -- UNKNOWN"
-  if [ -n "$HEAD_REF" ] && [ "$(lane_of "$HEAD_REF")" = none ]; then
-    # A named head outside every agent lane is out of scope: classify nothing, state the skip.
-    # An EMPTY head ref is unknown rather than non-agent and is still classified (the hermetic seam).
+  # A named head outside every agent lane, a fork head, or a non-lane author is out of scope:
+  # classify nothing and state WHICH of those it was. An EMPTY head ref is unknown rather than
+  # non-agent and is still classified (the hermetic seam).
+  if [ -n "$HEAD_REF" ] && [ -n "$(non_lane_reason "$(lane_of "$HEAD_REF")")" ]; then
+    SKIP_REASON="$(non_lane_reason "$(lane_of "$HEAD_REF")")"
     SKIPPED=1; rows=""
   else
     # CI feeds this mode the raw endpoint payload, so the 250-commit cap applies here as well.
@@ -166,7 +202,8 @@ elif [ -n "$PR" ]; then
   if [ -z "$HEAD_REF" ]; then
     HEAD_REF="$(gh api "repos/$REPO/pulls/$PR" --jq '.head.ref')" || die "could not read $REPO#$PR head ref -- UNKNOWN"
   fi
-  if [ "$(lane_of "$HEAD_REF")" = none ]; then SKIPPED=1
+  SKIP_REASON="$(non_lane_reason "$(lane_of "$HEAD_REF")")"
+  if [ -n "$SKIP_REASON" ]; then SKIPPED=1
   else rows="$(acquire_pr_commits "$REPO" "$PR" "$HEAD_REF")" || exit 2; fi
 else
   # Measurement mode. One search per lane keeps the query agent-constructed and the branch
@@ -249,7 +286,7 @@ done <<<"$rows"
 [ -z "$targets" ] || printf '%s' "$targets"
 [ -z "$findings" ] || printf '%s' "$findings"
 if [ -n "$SINCE" ]; then lane="sweep"; else lane="$(lane_of "${HEAD_REF:-}")"; fi
-skip_note=""; [ "$SKIPPED" = 1 ] && skip_note=" skipped=non-agent-head"
+skip_note=""; [ "$SKIPPED" = 1 ] && skip_note=" skipped=${SKIP_REASON:-non-agent-head}"
 summary="$(printf 'examined=%d signed=%d unsigned=%d bad=%d unverifiable=%d head=%s lane=%s%s' \
   "$examined" "$g" "$n" "$b" "$e" "${HEAD_REF:-unknown}" "$lane" "$skip_note")"
 printf '%s\n' "$summary"
@@ -261,7 +298,14 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
       printf '| class | sha | reason | branch |\n|---|---|---|---|\n'
       printf '%s' "$findings" | awk '{ printf "| %s | `%s` | %s | %s |\n", $1, substr($2,1,10), $3, $4 }'
     elif [ "$SKIPPED" = 1 ]; then
-      printf 'Skipped: `%s` is not an agent-lane head (%s), so nothing was classified.\n' "${HEAD_REF:-}" "$LANES"
+      case "${SKIP_REASON:-non-agent-head}" in
+        foreign-head)
+          printf 'Skipped: the head of this pull request lives outside `%s`, so its commits are not agent-lane work and nothing was classified.\n' "${REPO%%/*}" ;;
+        foreign-author)
+          printf 'Skipped: `%s` is not the writer identity of the `%s` lane, so nothing was classified.\n' "$PR_AUTHOR" "$(lane_of "${HEAD_REF:-}")" ;;
+        *)
+          printf 'Skipped: `%s` is not an agent-lane head (%s), so nothing was classified.\n' "${HEAD_REF:-}" "$LANES" ;;
+      esac
     else
       printf 'No unsigned or unverifiable commits among the %d examined.\n' "$examined"
     fi

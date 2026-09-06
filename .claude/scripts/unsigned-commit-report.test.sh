@@ -177,5 +177,81 @@ if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'repeats'; then ok "--lanes w
 OUT="$(stub 3 2 --repo o/r --merged-since 2026-09-01 --lanes claude,codex)"; RC=$?
 if [ "$RC" = 0 ]; then ok "CONTROL: distinct lane names still sweep"; else bad "CONTROL: distinct lane names still sweep" "rc=$RC out=${OUT:0:200}"; fi
 
+
+# ------------------------------------------------------------------ 16. the PER-PR path checks provenance, not just the branch NAME
+# The sweep has always required the lane's writer identity on a head in this repository's owner. The
+# per-PR path did not: an external fork opening a PR from `codex/foo` was classified as agent-lane
+# work, so the report warned about a stranger's commits under our lane's name. The skip reason is
+# named rather than folded into `non-agent-head`, because "not an agent branch" and "not our
+# repository" are different facts about coverage.
+printf '%s' "[$(commit 1111111111111111111111111111111111111111 false unsigned)]" >"$TMP/prov.json"
+expect_out "a fork head is skipped as foreign, not classified" 'examined=0 .*skipped=foreign-head' \
+  --input "$TMP/prov.json" --head-ref codex/foo --repo devantler-tech/monorepo --head-owner stranger
+expect_out "an author that is not the lane's writer identity is skipped as foreign" 'examined=0 .*skipped=foreign-author' \
+  --input "$TMP/prov.json" --head-ref codex/foo --repo devantler-tech/monorepo --head-owner devantler-tech --pr-author stranger
+# CONTROL: the same payload with our own provenance IS classified -- so the two cases above key on
+# provenance rather than on the payload or the branch name.
+expect_out "CONTROL: our own head and writer identity is still classified" '^N  1111111111' \
+  --input "$TMP/prov.json" --head-ref codex/foo --repo devantler-tech/monorepo --head-owner devantler-tech --pr-author devantler
+# CONTROL: absent provenance still classifies -- unknown is the hermetic seam, not a refusal.
+expect_out "CONTROL: no provenance supplied still classifies" '^N  1111111111' \
+  --input "$TMP/prov.json" --head-ref codex/foo
+
+# ------------------------------------------------------------------ 17. the Cursor App's DECLARED spellings, and only those
+# Measured 2026-09-06 on actions#1054: `gh pr list --json author` returns `app/cursor`, REST
+# `user.login` returns `cursor[bot]`, and the bare `cursor` is GraphQL-only -- a surface this
+# reporter never reads. Accepting bare `cursor` matched no App PR while admitting any ordinary
+# account with that login, which is the provenance check inverted.
+expect_out "the bare cursor login is not the App and is refused" 'skipped=foreign-author' \
+  --input "$TMP/prov.json" --head-ref cursor/foo --repo devantler-tech/monorepo --head-owner devantler-tech --pr-author cursor
+for spelling in app/cursor "cursor[bot]"; do
+  expect_out "CONTROL: the declared spelling $spelling is accepted" '^N  1111111111' \
+    --input "$TMP/prov.json" --head-ref cursor/foo --repo devantler-tech/monorepo --head-owner devantler-tech --pr-author "$spelling"
+done
+
+# ------------------------------------------------------------------ 18. the release flag is tested in BOTH states, and expires
+# *Feature-flag-first delivery*: a flagged feature is tested with the flag on AND off. The gate is a
+# workflow condition, so the assertion is made against the condition itself: it must name the
+# variable and require exactly `true`, so any other value -- unset, empty, `TRUE`, `1` -- leaves the
+# job skipped. A wiring regression that dropped either half would otherwise leave reporting
+# permanently active or permanently skipped while this suite stayed green.
+CI_YAML="$HERE/../../.github/workflows/ci.yaml"
+if [ -r "$CI_YAML" ]; then
+  gate="$(awk '/^  report-unsigned-commits:/ { injob = 1; next } injob && /^    if: / { sub(/^    if: /, ""); print; exit } injob && /^  [a-z]/ { exit }' "$CI_YAML")"
+  # The condition as a two-state function of the variable: `true` runs, everything else skips.
+  flag_state() { # <value> -> runs|skips
+    case "$gate" in
+      *"vars.UNSIGNED_COMMIT_REPORT == 'true'"*) [ "$1" = true ] && printf runs || printf skips ;;
+      *) printf 'unparsed' ;;
+    esac
+  }
+  if [ "$(flag_state true)" = runs ]; then ok "flag ON: the reporting job runs"; else bad "flag ON: the reporting job runs" "gate=$gate"; fi
+  for off in "" false TRUE 1 true-ish; do
+    if [ "$(flag_state "$off")" = skips ]; then ok "flag OFF ('${off}'): the reporting job is skipped"; else bad "flag OFF ('${off}'): the reporting job is skipped" "gate=$gate"; fi
+  done
+  # The other conjunct: the job is scoped to pull requests, so a push to main never reports.
+  case "$gate" in
+    *"github.event_name == 'pull_request'"*) ok "the reporting job is scoped to pull_request events" ;;
+    *) bad "the reporting job is scoped to pull_request events" "gate=$gate" ;;
+  esac
+  # And the provenance the per-PR path needs must actually be wired, or case 16 guards a path CI
+  # never takes.
+  step="$(awk '/^  report-unsigned-commits:/ { injob = 1 } injob && /unsigned-commit-report\.sh/ { found = 1 } injob && /^  [a-z]/ && !/report-unsigned-commits/ { exit } END { print found + 0 }' "$CI_YAML")"
+  wired=0
+  grep -q -- '--head-owner "\$HEAD_OWNER"' "$CI_YAML" && grep -q -- '--pr-author "\$PR_AUTHOR"' "$CI_YAML" && wired=1
+  if [ "$step" = 1 ] && [ "$wired" = 1 ]; then ok "CI passes the pull request's provenance to the reporter"; else bad "CI passes the pull request's provenance to the reporter" "step=$step wired=$wired"; fi
+else
+  bad "the workflow is readable for the flag-state assertions" "missing $CI_YAML"
+fi
+
+# The flag is a RELEASE flag, so it is short-lived by contract: monorepo#3212 owns activating it and
+# then removing both the variable and the condition. This assertion is the forcing function -- from
+# the expiry it fails, so the flag cannot quietly become permanent debt. Removing the flag means
+# removing this case in the same change.
+#
+# `date -u +%Y%m%d` is the one spelling BSD and GNU agree on; every relative-date form differs.
+flag_expiry=20261031
+today="$(date -u +%Y%m%d)"
+if [ "$today" -lt "$flag_expiry" ]; then ok "the UNSIGNED_COMMIT_REPORT release flag has not passed its expiry"; else bad "the UNSIGNED_COMMIT_REPORT release flag has not passed its expiry" "today=$today expiry=$flag_expiry -- activate then remove the flag per monorepo#3212"; fi
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1
