@@ -23,6 +23,14 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 			source: "#!/usr/bin/env -S NAME=value python3 -u\n", handled: true, want: "Python source file",
 		},
 		{
+			name: "attached clustered env shebang", path: "tools/check",
+			source: "#!/usr/bin/env -vSpython3 -u\n", handled: true, want: "Python source file",
+		},
+		{
+			name: "env split separator in shebang", path: "tools/check",
+			source: "#!/usr/bin/env -Spython3\\_--version\n", handled: true, want: "Python source file",
+		},
+		{
 			name: "ordinary env flags precede the interpreter", path: "tools/check",
 			source: "#!/usr/bin/env -u UNUSED python3\n", handled: true, want: "Python source file",
 		},

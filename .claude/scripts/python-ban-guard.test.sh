@@ -438,6 +438,19 @@ run "$r"
 report "control: compatibility env split arguments stay data" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
+legacy_env_boundary=0
+for invocation in 'RUN ["env", "-u", "-Spython3", "echo", "safe"]' \
+  'RUN ["env", "-vu", "-Spython3", "echo", "safe"]' \
+  'RUN ["env", "--", "-Spython3"]' \
+  'RUN ["env", "NAME=value", "-Spython3"]'; do
+  legacy_env_boundary=$((legacy_env_boundary + 1))
+  r="$(mkrepo "legacy-env-boundary-${legacy_env_boundary}")"; addf "$r" Dockerfile \
+    'FROM scratch' 'RUN <<SCRIPT' 'echo safe' 'SCRIPT' "$invocation"
+  run "$r"
+  report "control: compatibility env option boundary (${legacy_env_boundary})" \
+    "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+
 # 9. Ablation: neutralise the invocation pattern in a COPY of the guard and show the
 #    #2769 fixture no longer fires — so the earlier flag depended on that pattern — while
 #    the source-file check, which the ablation does not touch, still fires.

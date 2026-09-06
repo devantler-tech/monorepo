@@ -468,17 +468,31 @@ func shebang(src string) string {
 	// env split-string syntax is distinct from ordinary interpreter arguments.
 	fields := strings.Fields(command)
 	isEnv := len(fields) > 1 && filepath.Base(fields[0]) == "env"
+	split := false
 	if isEnv {
 		rest := strings.TrimSpace(strings.TrimPrefix(command, fields[0]))
-		if strings.HasPrefix(rest, "-S") {
-			command = strings.TrimSpace(strings.TrimPrefix(rest, "-S"))
+		short := regexp.MustCompile("^-[iv]*S").FindString(rest)
+		if short != "" {
+			command, split = strings.TrimPrefix(rest, short), true
 		} else if strings.HasPrefix(rest, "--split-string=") {
-			command = strings.TrimPrefix(rest, "--split-string=")
+			command, split = strings.TrimPrefix(rest, "--split-string="), true
 		} else {
 			command = rest
 		}
 	}
 	args, err := literalArgs(command)
+	if split {
+		var known []bool
+		args, known, err = splitEnvString(command)
+		// Keep only the statically known prefix. An unknown word cannot turn
+		// a later argument into an interpreter, but a known interpreter stays visible.
+		for i, literal := range known {
+			if !literal {
+				args = args[:i]
+				break
+			}
+		}
+	}
 	if err == nil && isEnv {
 		for len(args) > 0 {
 			arg := args[0]

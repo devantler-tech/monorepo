@@ -139,22 +139,34 @@ scan_invocations() {
     }
     # Index of the first token from `from` that is a command: not empty, not a -flag, not a
     # VAR= prefix, not a wrapping word. Returns n + 1 when the segment has none.
-    function first_command(tok, from, n,    i, t, wrapper) {
+    function first_command(tok, from, n,    i, t, wrapper, env_options) {
       wrapper = ""
+      env_options = 0
       for (i = from; i <= n; i++) {
         t = tok[i]
         if (t == "") continue
-        if (wrapper == "env" && t ~ /^-[iv]*S./) {
-          sub(/^-[iv]*S/, "", t)
-          tok[i] = t
-        } else if (wrapper == "env" && t ~ /^--split-string=./) {
-          sub(/^--split-string=/, "", t)
-          tok[i] = t
+        if (wrapper == "env") {
+          if (env_options) {
+            if (t == "--" || t == "-") { env_options = 0; continue }
+            if (t ~ /^-[iv]*[uCaP]$/ || t == "--unset" || t == "--chdir" || t == "--argv0") { i++; continue }
+            if (t == "--help" || t == "--version") return n + 1
+            while (t ~ /^-[iv]*S./ || t ~ /^--split-string=./) {
+              if (t ~ /^-[iv]*S./) sub(/^-[iv]*S/, "", t)
+              else sub(/^--split-string=/, "", t)
+              tok[i] = t
+            }
+            if (t ~ /^-/) continue
+          }
+          if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { env_options = 0; continue }
         }
         if (wrapper == "nice" && (t == "--help" || t == "--version")) return n + 1
         if (wrapper == "nice" && (t == "-n" || t == "--adjustment")) { i++; continue }
-        if (t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
-        if (index(wrappers, " " executable_name(t) " ") > 0) { wrapper = executable_name(t); continue }
+        if (wrapper != "env" && (t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) continue
+        if (index(wrappers, " " executable_name(t) " ") > 0) {
+          wrapper = executable_name(t)
+          env_options = wrapper == "env"
+          continue
+        }
         return i
       }
       return n + 1
