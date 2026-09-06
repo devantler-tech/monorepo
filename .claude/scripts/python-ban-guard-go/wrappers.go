@@ -4,8 +4,9 @@ import "strings"
 
 // wrapperSpec describes option arity and modes that do not select a child command.
 type wrapperSpec struct {
-	flags, values, stops, long string
-	duration, needsMode        bool
+	flags, values, stops, long       string
+	optional, optionalLong           string
+	duration, needsMode, assignments bool
 }
 
 var commandWrappers = map[string]wrapperSpec{
@@ -14,6 +15,12 @@ var commandWrappers = map[string]wrapperSpec{
 	"setsid":  {flags: "cfw", stops: "hV", long: "ctty:c fork:f wait:w help:h version:V"},
 	"ionice":  {flags: "t", values: "cn", stops: "pPuhV", long: "class:c classdata:n ignore:t pid:p pgid:P uid:u help:h version:V"},
 	"doas":    {flags: "n", values: "au", stops: "CLs"},
+	"xargs":   {flags: "0oprtx", values: "adEIJLnPRSs", optional: "eil", optionalLong: "L", stops: "HV", long: "arg-file:a delimiter:d eof:e replace:i max-lines:L max-args:n max-procs:P max-chars:s process-slot-var:a null:0 open-tty:o interactive:p no-run-if-empty:r verbose:t exit:x show-limits:0 help:H version:V"},
+	"sudo":    {flags: "ABbEHkNnPSis", values: "acCDghpRrtTu", optionalLong: "E", stops: "VKvleU?", long: "auth-type:a login-class:c close-from:C chdir:D group:g host:h prompt:p chroot:R role:r type:t command-timeout:T user:u preserve-env:E preserve-groups:P set-home:H askpass:A background:b bell:B login:i shell:s reset-timestamp:k remove-timestamp:K stdin:S non-interactive:n no-update:N edit:e list:l validate:v other-user:U version:V help:?", assignments: true},
+	"time":    {flags: "ahlpqv", values: "fo", stops: "HV", long: "append:a portability:p quiet:q verbose:v format:f output:o help:H version:V"},
+	"exec":    {flags: "cl", values: "a"},
+	"command": {flags: "p", stops: "vV"},
+	"nohup":   {stops: "HV", long: "help:H version:V"},
 }
 
 // longOption accepts an exact spelling or a unique getopt_long abbreviation.
@@ -63,6 +70,11 @@ func wrapperCommand(name string, args []string, known []bool) int {
 			if option == 0 {
 				return len(args)
 			}
+			// Optional long operands use =VALUE only, even when the short form
+			// has different arity (xargs -L, sudo -E).
+			if strings.ContainsRune(spec.optional+spec.optionalLong, rune(option)) {
+				continue
+			}
 			options, attached = string(option), hasValue
 			if hasValue && !strings.ContainsRune(spec.values, rune(option)) {
 				return len(args)
@@ -74,6 +86,9 @@ func wrapperCommand(name string, args []string, known []bool) int {
 			option := rune(options[j])
 			if strings.ContainsRune(spec.stops, option) {
 				return len(args)
+			}
+			if strings.ContainsRune(spec.optional, option) {
+				break // Only the remainder of this short token is its value.
 			}
 			if strings.ContainsRune(spec.values, option) {
 				mode = true
@@ -95,6 +110,11 @@ func wrapperCommand(name string, args []string, known []bool) int {
 	}
 	if spec.duration && i < len(args) {
 		i++
+	}
+	if spec.assignments {
+		for i < len(args) && known[i] && assignment.MatchString(args[i]) {
+			i++
+		}
 	}
 	return i
 }

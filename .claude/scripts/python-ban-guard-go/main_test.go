@@ -9,6 +9,7 @@ import (
 
 // python-ban-guard: allow-file — these inert inputs exercise command classification.
 
+// TestExecutableSurfaceBoundaries pairs executable syntax with nonexecuting data controls.
 func TestExecutableSurfaceBoundaries(t *testing.T) {
 	tests := []struct {
 		name, path, source, want string
@@ -170,7 +171,7 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 
 // TestVersionedPipCommands distinguishes executable names from lookalikes and data.
 func TestVersionedPipCommands(t *testing.T) {
-	for _, command := range []string{"pip3.12 --version", "/opt/venv/bin/pip3.13 install example"} {
+	for _, command := range []string{"pip2 --version", "/opt/venv/bin/pip2.7 install example", "pip3.12 --version", "/opt/venv/bin/pip3.13 install example"} {
 		s := scanner{path: "check.sh", seen: make(map[string]bool)}
 		if err := s.source(command, 1, 0, false); err != nil {
 			t.Fatal(err)
@@ -179,7 +180,7 @@ func TestVersionedPipCommands(t *testing.T) {
 			t.Errorf("command %q: want one finding, got %v", command, s.hits)
 		}
 	}
-	for _, command := range []string{"pip-tools --version", "echo pip3.12", "pip3.12-helper --version"} {
+	for _, command := range []string{"pip-tools --version", "echo pip2 pip2.7 pip3.12", "pip2.7-helper --version", "pip3.12-helper --version"} {
 		s := scanner{path: "check.sh", seen: make(map[string]bool)}
 		if err := s.source(command, 1, 0, false); err != nil {
 			t.Fatal(err)
@@ -190,6 +191,7 @@ func TestVersionedPipCommands(t *testing.T) {
 	}
 }
 
+// TestEnvSplitStringBoundaries checks env splitting without applying shell evaluation.
 func TestEnvSplitStringBoundaries(t *testing.T) {
 	tests := []struct {
 		name, path, source string
@@ -229,6 +231,7 @@ func TestEnvSplitStringBoundaries(t *testing.T) {
 	}
 }
 
+// TestProductionTelemetryRemainsScanned prevents fixture exemptions from hiding production code.
 func TestProductionTelemetryRemainsScanned(t *testing.T) {
 	data, err := os.ReadFile("../agent-telemetry.sh")
 	if err != nil {
@@ -254,6 +257,7 @@ func TestProductionTelemetryRemainsScanned(t *testing.T) {
 	}
 }
 
+// TestScanningNeverExecutesSubstitutions verifies that parsed substitutions cause no filesystem effects.
 func TestScanningNeverExecutesSubstitutions(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "must-not-exist")
 	s := scanner{path: "tools/check.sh", seen: make(map[string]bool)}

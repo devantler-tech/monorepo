@@ -17,7 +17,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-var interpreter = regexp.MustCompile("^(python[23]?([.][0-9]+)?|pip3?([.][0-9]+)?|pytest)$")
+var interpreter = regexp.MustCompile("^(python[23]?([.][0-9]+)?|pip[23]?([.][0-9]+)?|pytest)$")
 var assignment = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*=")
 
 const marker = "python-ban-guard: allow-file"
@@ -259,12 +259,12 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 			return true, nil
 		}
 		switch name {
-		case "timeout", "stdbuf", "setsid", "ionice", "doas":
+		case "timeout", "stdbuf", "setsid", "ionice", "doas", "sudo", "exec", "xargs", "command", "nohup", "time":
 			i++
 			i += wrapperCommand(name, args[i:], known[i:])
 		case "env":
 			return s.envArgs(args[i+1:], known[i+1:], line, depth+1)
-		case "sudo", "exec", "xargs", "command", "nohup", "time", "nice":
+		case "nice":
 			i++
 			for i < len(args) && known[i] {
 				arg := args[i]
@@ -275,25 +275,10 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 				if !strings.HasPrefix(arg, "-") {
 					break
 				}
-				if (name == "command" && (arg == "-v" || arg == "-V")) || (name == "sudo" && (arg == "-l" || arg == "--list")) {
+				if arg == "--help" || arg == "--version" {
 					return false, nil
 				}
-				if name == "nice" && (arg == "--help" || arg == "--version") {
-					return false, nil
-				}
-				needsValue := false
-				switch name {
-				case "sudo":
-					needsValue = arg == "-u" || arg == "-g" || arg == "-h" || arg == "-p" || arg == "-C" || arg == "-T" || arg == "--user" || arg == "--group" || arg == "--host" || arg == "--prompt"
-				case "xargs":
-					needsValue = arg == "-I" || arg == "-L" || arg == "-n" || arg == "-P" || arg == "-s" || arg == "-E" || arg == "-d"
-				case "exec":
-					needsValue = arg == "-a"
-				case "time":
-					needsValue = arg == "-f" || arg == "-o" || arg == "--format" || arg == "--output"
-				case "nice":
-					needsValue = arg == "-n" || arg == "--adjustment"
-				}
+				needsValue := arg == "-n" || arg == "--adjustment"
 				i++
 				if needsValue {
 					i++
@@ -448,6 +433,7 @@ func splitEnvString(src string) ([]string, []bool, error) {
 	return words, known, nil
 }
 
+// literalArgs decodes one simple command whose words are entirely static.
 func literalArgs(src string) ([]string, error) {
 	tree, err := parse(src)
 	if err != nil || len(tree.Stmts) != 1 {
@@ -468,6 +454,7 @@ func literalArgs(src string) ([]string, error) {
 	return args, nil
 }
 
+// shebang returns the static interpreter, including env option and split-string forms.
 func shebang(src string) string {
 	first, _, _ := strings.Cut(src, "\n")
 	if !strings.HasPrefix(first, "#!") {

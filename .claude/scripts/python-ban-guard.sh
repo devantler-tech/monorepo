@@ -16,7 +16,7 @@
 #   owns widening). Two checks per file:
 #     1. A Python SOURCE file: `*.py`, `*.pyi`, `*.pyw`, or a shebang naming python.
 #     2. A Python INVOCATION on an executable surface — every tracked text file except prose
-#        (`*.md`, `*.mdx`): `python`, `python3`, `python3.12`, `pip`, `pip3`, `pip3.12` or `pytest` in
+#        (`*.md`, `*.mdx`): `python`, `python3`, `python3.12`, `pip`, `pip2`, `pip2.7`, `pip3`, `pip3.12` or `pytest` in
 #        COMMAND POSITION. After unquoted `#` comments and quotes are stripped, a line is cut into
 #        command segments at `;`, `|`, `&`, `(`, a backtick, `{`, and at `-c` / `run:` (which
 #        open a nested command; YAML `shell:` selects one); in each segment the first token that is not a `VAR=` prefix, a
@@ -69,7 +69,7 @@ top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" ||
 
 # Keep NUL-delimited paths intact, and inspect the producer's exit status before scanning.
 tracked_paths="$(mktemp)" || { echo "python-ban-guard: cannot allocate tracked-file list" >&2; exit 2; }
-parser_binary="$(mktemp)" || { rm -f -- "$tracked_paths"; exit 2; }
+parser_binary="$(mktemp)" || { echo "python-ban-guard: cannot allocate parser binary" >&2; rm -f -- "$tracked_paths"; exit 2; }
 trap 'rm -f -- "$tracked_paths" "$parser_binary"' EXIT
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! go -C "$script_dir/python-ban-guard-go" build -o "$parser_binary" .; then
@@ -84,6 +84,7 @@ fi
 rule='AGENTS.md → "Scripting stack — bash or Go, never Python": write it in bash (jq for data shaping) and migrate it to Go when it grows. The one carve-out is an embedded interpreter that admits only Python, recognised by its invocation (`blender --background --python …`), never by file extension. A file that is ABOUT the offending form may declare `python-ban-guard: allow-file — <reason>`.'
 
 findings=0
+# Emit one finding and include it in the final failure count.
 report() {
   printf 'python-ban-guard: %s\n' "$1"
   findings=$((findings + 1))
@@ -93,6 +94,7 @@ report() {
 scan_invocations() {
   # Commands use ASCII syntax; unrelated invalid UTF-8 bytes must not abort the scan.
   LC_ALL=C awk -v path="$1" -v sq="'" '
+    # Compare executable basenames while preserving full paths in diagnostics.
     function executable_name(token) {
       sub(/^.*\//, "", token)
       return token
@@ -119,11 +121,16 @@ scan_invocations() {
       continues = escaped && quote != sq
       return text
     }
-    # Normalize only unquoted word escapes, before quote stripping loses that
-    # context. Preserve literal backslashes and escapes for shell punctuation.
-    function word_escapes(text,    i, c, following, quote, result) {
+    # Recognize unquoted boundaries used by the compatibility command segments.
+    function word_boundary(c) {
+      return c == "" || c ~ /[[:space:];|&({]/ || c == "`"
+    }
+    # Normalize unquoted escapes and preserve empty words before quote stripping.
+    # Keep literal backslashes and escapes for shell punctuation intact.
+    function word_escapes(text,    i, c, following, quote, result, boundary, after, pair) {
       quote = ""
       result = ""
+      boundary = 1
       for (i = 1; i <= length(text); i++) {
         c = substr(text, i, 1)
         if (c == "\\" && quote != sq) {
@@ -131,18 +138,36 @@ scan_invocations() {
           if (quote == "" && (following ~ /^[A-Za-z0-9_.-]$/ || following == "/")) result = result following
           else result = result c following
           i++
+          boundary = 0
           continue
+        }
+        # Keep an explicit empty argv word when later quote stripping would erase it.
+        # Only whole unescaped words qualify; empty quotes can also join real text.
+        if (quote == "" && boundary && (c == sq || c == "\"")) {
+          after = i
+          pair = substr(text, after, 2)
+          while (pair == sq sq || pair == "\"\"") {
+            after += 2
+            pair = substr(text, after, 2)
+          }
+          if (after > i && word_boundary(substr(text, after, 1))) {
+            result = result "__python_ban_guard_empty_word__"
+            i = after - 1
+            boundary = 0
+            continue
+          }
         }
         if (c == sq || c == "\"") {
           if (quote == "") quote = c
           else if (quote == c) quote = ""
+          boundary = 0
+        } else {
+          boundary = quote == "" && word_boundary(c)
         }
         result = result c
       }
       return result
     }
-    # Index of the first token from `from` that is a command: not empty, not a -flag, not a
-    # VAR= prefix, not a wrapping word. Returns n + 1 when the segment has none.
     # Resolve an exact or uniquely abbreviated GNU long option to its short form.
     function wrapper_long(name, key,    parts, pair, count, j, result) {
       count = split(long_options[name], parts, " ")
@@ -173,11 +198,14 @@ scan_invocations() {
           sub(/=.*/, "", key)
           options = wrapper_long(name, key)
           if (options == "") return n + 1
+          # Optional long operands must be attached with =; short arity can differ.
+          if (index(optional_options[name] optional_long_options[name], options) > 0) continue
           if (attached && index(value_options[name], options) == 0) return n + 1
         } else options = substr(t, 2)
         for (j = 1; j <= length(options); j++) {
           option = substr(options, j, 1)
           if (index(stop_options[name], option) > 0) return n + 1
+          if (index(optional_options[name], option) > 0) break
           if (index(value_options[name], option) > 0) {
             mode = 1
             if (!attached && j == length(options)) {
@@ -194,8 +222,12 @@ scan_invocations() {
       while (i <= n && tok[i] == "") i++
       if (name == "timeout" && i <= n) i++
       while (i <= n && tok[i] == "") i++
+      if (name == "sudo") {
+        while (i <= n && (tok[i] == "" || tok[i] ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) i++
+      }
       return i
     }
+    # Return the first command after assignments and wrappers, or n + 1 if absent.
     function first_command(tok, from, n,    i, t, wrapper, env_options, selected) {
       wrapper = ""
       env_options = 0
@@ -240,8 +272,8 @@ scan_invocations() {
     }
     BEGIN {
       # Legacy fallback pattern; the self-test ablates both scanner engines.
-      interp = "^(python[23]?([.][0-9]+)?|pip3?([.][0-9]+)?|pytest)$"
-      extended_wrappers = " timeout stdbuf setsid ionice doas "
+      interp = "^(python[23]?([.][0-9]+)?|pip[23]?([.][0-9]+)?|pytest)$"
+      extended_wrappers = " timeout stdbuf setsid ionice doas sudo exec xargs command nohup time "
       flag_options["timeout"] = "fpv"; value_options["timeout"] = "ks"; stop_options["timeout"] = "HV"
       long_options["timeout"] = "kill-after:k signal:s foreground:f preserve-status:p verbose:v help:H version:V"
       value_options["stdbuf"] = "ioe"; stop_options["stdbuf"] = "HV"
@@ -251,8 +283,19 @@ scan_invocations() {
       flag_options["ionice"] = "t"; value_options["ionice"] = "cn"; stop_options["ionice"] = "pPuhV"
       long_options["ionice"] = "class:c classdata:n ignore:t pid:p pgid:P uid:u help:h version:V"
       flag_options["doas"] = "n"; value_options["doas"] = "au"; stop_options["doas"] = "CLs"
+      flag_options["xargs"] = "0oprtx"; value_options["xargs"] = "adEIJLnPRSs"; stop_options["xargs"] = "HV"
+      optional_options["xargs"] = "eil"; optional_long_options["xargs"] = "L"
+      long_options["xargs"] = "arg-file:a delimiter:d eof:e replace:i max-lines:L max-args:n max-procs:P max-chars:s process-slot-var:a null:0 open-tty:o interactive:p no-run-if-empty:r verbose:t exit:x show-limits:0 help:H version:V"
+      flag_options["sudo"] = "ABbEHkNnPSis"; value_options["sudo"] = "acCDghpRrtTu"; stop_options["sudo"] = "VKvleU?"
+      optional_long_options["sudo"] = "E"
+      long_options["sudo"] = "auth-type:a login-class:c close-from:C chdir:D group:g host:h prompt:p chroot:R role:r type:t command-timeout:T user:u preserve-env:E preserve-groups:P set-home:H askpass:A background:b bell:B login:i shell:s reset-timestamp:k remove-timestamp:K stdin:S non-interactive:n no-update:N edit:e list:l validate:v other-user:U version:V help:?"
+      flag_options["time"] = "ahlpqv"; value_options["time"] = "fo"; stop_options["time"] = "HV"
+      long_options["time"] = "append:a portability:p quiet:q verbose:v format:f output:o help:H version:V"
+      flag_options["exec"] = "cl"; value_options["exec"] = "a"
+      flag_options["command"] = "p"; stop_options["command"] = "vV"
+      stop_options["nohup"] = "HV"; long_options["nohup"] = "help:H version:V"
       # Words that wrap a command rather than being one: the walk skips them and reads on.
-      wrappers = " exec xargs env sudo time command nohup nice if then elif else do while until ! "
+      wrappers = " env nice if then elif else do while until ! "
     }
     {
       first_line = NR

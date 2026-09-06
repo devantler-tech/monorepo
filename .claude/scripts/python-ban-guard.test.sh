@@ -21,6 +21,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 fail=0
+# Record an assertion without hiding later failures in the same fixture suite.
 report() {
   local name="$1" ok="$2" detail="${3:-}"
   if [[ "$ok" == "yes" ]]; then
@@ -396,6 +397,26 @@ GIT_INDEX_FILE="$tmp" run "$r"
 report "failed tracked-file enumeration exits 2 instead of reporting clean" \
   "$([[ $rc -eq 2 && "$out" != *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
+r="$(mkrepo malformed-shell)"; addf "$r" tools/broken.sh "echo 'unfinished"
+run "$r"
+report "malformed declared shell fails closed with its parser diagnostic" \
+  "$([[ $rc -eq 2 && "$out" == *'tools/broken.sh: cannot parse shell commands:'* && "$out" != *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo corrected-shell)"; addf "$r" tools/broken.sh "echo 'finished'"
+run "$r"
+report "control: correcting the malformed shell makes the same surface clean" \
+  "$([[ $rc -eq 0 && "$out" == *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# Ablate only the wrapper's fail-closed branch; keep its parser source unchanged.
+parser_error_dir="$tmp/parser-error-ablation"
+mkdir -p "$parser_error_dir"
+cp -R "$here/python-ban-guard-go" "$parser_error_dir/"
+sed 's/    \*) exit 2 ;;/    *) ;;/' "$guard" >"$parser_error_dir/python-ban-guard.sh"
+report "parser-error ablation edit landed" \
+  "$(grep -Fq '    *) ;;' "$parser_error_dir/python-ban-guard.sh" && echo yes || echo no)"
+GUARD="$parser_error_dir/python-ban-guard.sh" run "$tmp/malformed-shell"
+report "ablation: ignoring a parser failure defeats the malformed-shell exit check" \
+  "$([[ $rc -eq 0 && "$out" == *'cannot parse shell commands:'* && "$out" == *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
 # ---------------------------------------------------------------------------
 # The compatibility route must still report non-workflow command operands.
 r="$(mkrepo legacy-command)"; addf "$r" deploy/pod.yaml \
@@ -451,17 +472,27 @@ for invocation in 'RUN ["env", "-u", "-Spython3", "echo", "safe"]' \
     "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 done
 
-# Versioned pip must be detected through both scanner routes.
+# Python 2 and versioned pip must be detected through both scanner routes.
 for route in shell fallback; do
-  r="$(mkrepo "versioned-pip-$route")"
-  if [[ "$route" == shell ]]; then
-    addf "$r" tools/check.sh 'pip3.12 install example'
-  else
-    addf "$r" Dockerfile 'FROM scratch' 'RUN <<SCRIPT' 'echo safe' 'SCRIPT' 'RUN pip3.12 install example'
-  fi
-  run "$r"
-  report "versioned pip is detected by the $route scanner" \
-    "$([[ $rc -eq 1 && "$out" == *'Python invocation `pip3.12 install`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+  for executable in pip2 pip2.7 pip3.12; do
+    r="$(mkrepo "versioned-$executable-$route")"
+    if [[ "$route" == shell ]]; then
+      addf "$r" tools/check.sh "$executable install example"
+    else
+      addf "$r" Dockerfile 'FROM scratch' 'RUN <<SCRIPT' 'echo safe' 'SCRIPT' "RUN $executable install example"
+    fi
+    run "$r"
+    report "$executable is detected by the $route scanner" \
+      "$([[ $rc -eq 1 && "$out" == *"Python invocation \`$executable install\`"* ]] && echo yes || echo no)" "rc=$rc: $out"
+    if [[ "$route" == shell ]]; then
+      addf "$r" tools/check.sh "echo $executable" "$executable-helper --version"
+    else
+      addf "$r" Dockerfile 'FROM scratch' 'RUN <<SCRIPT' 'echo safe' 'SCRIPT' "RUN echo $executable" "RUN $executable-helper --version"
+    fi
+    run "$r"
+    report "control: $executable data and lookalikes stay clean through $route" \
+      "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+  done
 done
 
 # 9. Ablation: neutralise the invocation pattern in a COPY of the guard and show the
@@ -471,8 +502,8 @@ ablated_dir="$tmp/ablation"
 mkdir -p "$ablated_dir"
 cp -R "$here/python-ban-guard-go" "$ablated_dir/"
 ablated="$ablated_dir/python-ban-guard.sh"
-sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip3?(\[\.\]\[0-9\]+)?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ3?([.][0-9]+)?|pytestZZ)/' "$guard" >"$ablated"
-sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip3?(\[\.\]\[0-9\]+)?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ3?([.][0-9]+)?|pytestZZ)/' "$here/python-ban-guard-go/main.go" >"$ablated_dir/python-ban-guard-go/main.go"
+sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip\[23\]?(\[\.\]\[0-9\]+)?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ[23]?([.][0-9]+)?|pytestZZ)/' "$guard" >"$ablated"
+sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip\[23\]?(\[\.\]\[0-9\]+)?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ[23]?([.][0-9]+)?|pytestZZ)/' "$here/python-ban-guard-go/main.go" >"$ablated_dir/python-ban-guard-go/main.go"
 if grep -q 'pythonZZ' "$ablated"; then
   report "ablation edit landed" yes
 else
