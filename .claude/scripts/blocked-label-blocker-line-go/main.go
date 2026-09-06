@@ -284,13 +284,13 @@ type askRow struct {
 // built to be pasted into a PR, Slack or a session, and no Markdown construct
 // hides a mention from a bot -- bots parse the raw text -- so the token itself
 // must stop being a live mention, command or autolink. URL spans are omitted;
-// zero-width spaces leave mention/reference text readable without live tokens.
+// zero-width spaces leave mention/reference/command text readable without live tokens.
 func neutralize(s string) string {
 	s = urlRE.ReplaceAllString(s, "[URL omitted]")
 	var out strings.Builder
 	for i, r := range s {
 		out.WriteRune(r)
-		if r != '@' && r != '#' {
+		if r != '@' && r != '#' && r != '/' {
 			continue
 		}
 		rest := s[i+len(string(r)):]

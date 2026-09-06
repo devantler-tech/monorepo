@@ -320,20 +320,20 @@ func TestAskDigestLabelsNeverAskedRows(t *testing.T) {
 // bodies are attacker-authorable. A live mention or bot command surviving into
 // it would fire when delivered, from our own authenticated account.
 func TestAskDigestNeutralizesActiveSyntaxInUntrustedText(t *testing.T) {
-	input := `[{"repo":"r","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - ping @codex review and @devantler about #123 | last-verified 2026-09-01: pending"}]`
+	input := `[{"repo":"r","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - @codex review @devantler #123 /close &sol;reopen | last-verified 2026-09-01: pending"}]`
 	var out, stderr bytes.Buffer
 	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
 	got := out.String()
 	if code != 1 {
 		t.Fatalf("code=%d output=%q", code, got)
 	}
-	for _, live := range []string{"@codex", "@devantler", "#123"} {
+	for _, live := range []string{"@codex", "@devantler", "#123", "/close", "/reopen"} {
 		if strings.Contains(got, live) {
 			t.Fatalf("live token %q survived into the digest: %q", live, got)
 		}
 	}
 	// Control: the words are still there, only the trigger characters are inert.
-	for _, want := range []string{"codex", "devantler", "123"} {
+	for _, want := range []string{"codex", "devantler", "123", "close", "reopen"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("neutralizing must keep the text readable, lost %q: %q", want, got)
 		}
@@ -407,7 +407,7 @@ func TestAskRequestNeutralizesEncodedDestinationsAndControls(t *testing.T) {
 		{
 			name:        "HTML stays literal",
 			description: "<b>inspect the account</b>",
-			want:        "&lt;b&gt;inspect the account&lt;/b&gt;",
+			want:        "&lt;b&gt;inspect the account&lt;/\u200bb&gt;",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
