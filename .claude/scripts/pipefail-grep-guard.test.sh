@@ -1244,14 +1244,14 @@ report "the same holds for a double-quoted assignment value" \
 
 # The control changes only the operand: quote-aware tokenising must reach the real
 # command, not wave every -S shebang through.
-r="$(mkrepo "shebang-env-quoted-not-a-shell" "#!/usr/bin/env -S LABEL='a b' python3")"
+r="$(mkrepo "shebang-env-quoted-not-a-shell" "#!/usr/bin/env -S LABEL='a b' ruby")"
 out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
 report "a quoted-assignment -S shebang naming a non-shell is not swept" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
 # The control changes only the operand: walking env's options must reach the
 # real command, not treat every env shebang as a shell.
-r="$(mkrepo "shebang-env-split-not-a-shell" '#!/usr/bin/env -S python3')"
+r="$(mkrepo "shebang-env-split-not-a-shell" '#!/usr/bin/env -S ruby')"
 out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
 report "an env -S shebang naming a non-shell is not swept" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
