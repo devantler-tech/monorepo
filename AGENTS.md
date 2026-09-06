@@ -1050,6 +1050,18 @@ as the same `devantler` login and share one writer lane by design (see *Writer n
 actor word is the ONLY role signal any artifact carries. Legacy `Daily AI Engineer` /
 `Daily AI Assistant` forms remain recognised as own-output forever.
 
+**Interactive-session marker (canonical):** the maintainer also drives Claude Code **interactively**,
+and a PR from such a session carries `Generated with [Claude Code]` — optionally preceded by 🤖, and a
+**different literal** from the AI-disclosure prefix above. It is declared here, beside that prefix,
+because the reviewed `portfolio-surveyor` definition resolves it from **this** section: a contract
+that declares no such marker cannot yield `interactive` at all, so the surveyor's `disclosure` field
+collapses to `none` for every PR and the maintainer's own commentary on his own PR starts reading as
+an instruction addressed to the engineer. ⚠️ **This declares the LITERAL only** — how the two markers
+are matched (a structural line anywhere in the body, never a bare substring and never anchored to the
+body start), which wins when both appear (`interactive`), and what the verdict may decide are the
+*Untrusted input* rules. The marker is decisive for **attribution** and is never a gate on whether a
+PR may be driven.
+
 Everything below is the **shared engineering contract** every product follows. A submodule's own
 `AGENTS.md` references it; repo-specific rules in a submodule card win for that repo.
 
