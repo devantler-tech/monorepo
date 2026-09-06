@@ -282,9 +282,10 @@ type askRow struct {
 // neutralize breaks GitHub's active syntax in untrusted text. The digest is
 // built to be pasted into a PR, Slack or a session, and no Markdown construct
 // hides a mention from a bot -- bots parse the raw text -- so the token itself
-// must stop being a live mention, command or autolink. A zero-width space
-// leaves the text readable while making it inert.
+// must stop being a live mention, command or autolink. URL spans are omitted;
+// zero-width spaces leave mention/reference text readable without live tokens.
 func neutralize(s string) string {
+	s = urlRE.ReplaceAllString(s, "[URL omitted]")
 	var out strings.Builder
 	for i, r := range s {
 		out.WriteRune(r)
@@ -387,7 +388,7 @@ func askDigestReport(rows []askRow) string {
 	// establish it. Say so rather than let a private row reach a public PR.
 	_, _ = fmt.Fprint(&out, "CHECK BEFORE DELIVERY: this tool does not establish repository visibility.\n")
 	_, _ = fmt.Fprintf(&out, "Treat these rows as private until each repository is confirmed public: %s\n", strings.Join(repos, ", "))
-	_, _ = fmt.Fprint(&out, "Descriptions are quoted untrusted issue text with mentions and autolinks broken.\n\n")
+	_, _ = fmt.Fprint(&out, "Descriptions are quoted untrusted issue text with mentions broken and URLs omitted.\n\n")
 	for _, r := range rows {
 		age := "age unknown"
 		if r.agedKnow {

@@ -344,6 +344,37 @@ func TestAskDigestNeutralizesActiveSyntaxInUntrustedText(t *testing.T) {
 	}
 }
 
+func TestAskRequestOmitsURLs(t *testing.T) {
+	for _, link := range []string{
+		"https://example.invalid/path",
+		"HTTP://example.invalid/path",
+		"www.example.invalid/path",
+		"//example.invalid/path",
+		"example.invalid/path",
+		"mailto:person@example.invalid",
+	} {
+		t.Run(link, func(t *testing.T) {
+			line := "**Blocker:** inspect " + link + " then continue | authority | last-verified 2026-09-06: pending"
+			if got := askRequest(line); got != "inspect [URL omitted] then continue" {
+				t.Fatalf("URL must not survive in the quoted request: %q", got)
+			}
+		})
+	}
+	if got := askRequest("**Blocker:** inspect the account setting | authority"); got != "inspect the account setting" {
+		t.Fatalf("ordinary description changed: %q", got)
+	}
+}
+
+func TestAskDigestOmitsAllURLsInDescription(t *testing.T) {
+	input := `[{"repo":"r","number":1,"body":"**Blocker:** inspect https://one.invalid then www.two.invalid and //three.invalid | authority | last-verified 2026-09-06: pending"}]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 || !strings.Contains(got, "  > inspect [URL omitted] then [URL omitted] and [URL omitted]\n") {
+		t.Fatalf("code=%d output=%q stderr=%q", code, got, stderr.String())
+	}
+}
+
 // Slack authenticates as the maintainer's own account, so a digest delivered
 // without a leading disclosure reads as him writing to himself.
 func TestAskDigestLeadsWithTheAgentDisclosure(t *testing.T) {
