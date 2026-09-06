@@ -144,6 +144,13 @@ scan_invocations() {
       for (i = from; i <= n; i++) {
         t = tok[i]
         if (t == "") continue
+        if (wrapper == "env" && t ~ /^-[iv]*S./) {
+          sub(/^-[iv]*S/, "", t)
+          tok[i] = t
+        } else if (wrapper == "env" && t ~ /^--split-string=./) {
+          sub(/^--split-string=/, "", t)
+          tok[i] = t
+        }
         if (wrapper == "nice" && (t == "--help" || t == "--version")) return n + 1
         if (wrapper == "nice" && (t == "-n" || t == "--adjustment")) { i++; continue }
         if (t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue

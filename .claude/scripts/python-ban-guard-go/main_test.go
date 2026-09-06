@@ -160,6 +160,45 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 	}
 }
 
+func TestEnvSplitStringBoundaries(t *testing.T) {
+	tests := []struct {
+		name, path, source string
+		wantHit            bool
+	}{
+		{"attached short", "check.sh", `env -S'python3 --version'`, true},
+		{"attached long", "check.sh", `env --split-string='pip3 install example'`, true},
+		{"short option cluster", "check.sh", `env -vS'python3 --version'`, true},
+		{"Docker exec", "Dockerfile", "FROM scratch\nRUN [\"env\",\"-Spython3 --version\"]\n", true},
+		{"split options", "check.sh", `env -S '-i python3 --version'`, true},
+		{"split assignments", "check.sh", `env -S 'NAME=value python3 --version'`, true},
+		{"quoted tail program", "check.sh", `env -S 'sh -c' 'python3 --version'`, true},
+		{"quoted tail data", "check.sh", `env -S 'echo' 'safe; python3 --version'`, false},
+		{"split punctuation is data", "check.sh", `env -S 'echo ; python3 --version'`, false},
+		{"unknown tail stays unknown", "check.sh", `env -S 'sh -c' "$program" python3`, false},
+		{"unset operand stays data", "check.sh", `env -u python3 -S 'echo safe'`, false},
+		{"attached unset operand stays data", "check.sh", `env -uSpython3 echo safe`, false},
+		{"assignment ends options", "check.sh", `env NAME=value -S 'echo; python3'`, false},
+		{"separator ends options", "check.sh", `env -- -S 'echo; python3'`, false},
+		{"env separator escape", "check.sh", `env -S 'python3\_--version'`, true},
+		{"single quoted split interpreter", "check.sh", `env -S "'python3' --version"`, true},
+		{"unknown split environment", "check.sh", `env -S 'sh -c ${PROGRAM}' python3`, false},
+		{"split comment stops input", "check.sh", `env -S 'echo # python3'`, false},
+		{"split stop escape", "check.sh", `env -S 'echo \c; python3'`, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := scanner{path: test.path, seen: make(map[string]bool)}
+			handled, err := s.file(test.source)
+			if err != nil || !handled {
+				t.Fatalf("handled=%v error=%v", handled, err)
+			}
+			if gotHit := len(s.hits) > 0; gotHit != test.wantHit {
+				t.Errorf("findings=%v; want hit=%v", s.hits, test.wantHit)
+			}
+		})
+	}
+}
+
 func TestProductionTelemetryRemainsScanned(t *testing.T) {
 	data, err := os.ReadFile("../agent-telemetry.sh")
 	if err != nil {

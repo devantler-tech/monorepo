@@ -196,6 +196,9 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 
 // argv returns whether the selected shell reads commands from stdin.
 func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, error) {
+	if depth > 32 {
+		return false, errors.New("nested command limit exceeded")
+	}
 	for i := 0; i < len(args); {
 		if !known[i] {
 			return false, nil
@@ -250,17 +253,15 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 			return true, nil
 		}
 		switch name {
-		case "env", "sudo", "exec", "xargs", "command", "nohup", "time", "nice":
+		case "env":
+			return s.envArgs(args[i+1:], known[i+1:], line, depth+1)
+		case "sudo", "exec", "xargs", "command", "nohup", "time", "nice":
 			i++
 			for i < len(args) && known[i] {
 				arg := args[i]
 				if arg == "--" {
 					i++
 					break
-				}
-				if name == "env" && assignment.MatchString(arg) {
-					i++
-					continue
 				}
 				if !strings.HasPrefix(arg, "-") {
 					break
@@ -273,14 +274,6 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 				}
 				needsValue := false
 				switch name {
-				case "env":
-					needsValue = arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir"
-					if arg == "-S" || arg == "--split-string" {
-						if i+1 < len(args) && known[i+1] {
-							return false, s.source(args[i+1]+" "+strings.Join(args[i+2:], " "), line, depth+1, false)
-						}
-						return false, nil
-					}
 				case "sudo":
 					needsValue = arg == "-u" || arg == "-g" || arg == "-h" || arg == "-p" || arg == "-C" || arg == "-T" || arg == "--user" || arg == "--group" || arg == "--host" || arg == "--prompt"
 				case "xargs":
@@ -302,6 +295,148 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 		}
 	}
 	return false, nil
+}
+
+// envArgs preserves argv boundaries: env -S splits one operand, never shell code.
+func (s *scanner) envArgs(args []string, known []bool, line, depth int) (bool, error) {
+	i := 0
+	for i < len(args) && known[i] {
+		arg := args[i]
+		if arg == "--" || arg == "-" {
+			i++
+			break
+		}
+		if !strings.HasPrefix(arg, "-") {
+			break // Assignments and the command end option processing.
+		}
+		if arg == "--help" || arg == "--version" {
+			return false, nil
+		}
+		payload, split, operand := "", false, false
+		switch {
+		case arg == "--split-string":
+			split, operand = true, true
+		case strings.HasPrefix(arg, "--split-string="):
+			payload, split = strings.TrimPrefix(arg, "--split-string="), true
+		case arg == "--unset" || arg == "--chdir" || arg == "--argv0":
+			operand = true
+		case !strings.HasPrefix(arg, "--"):
+			for j := 1; j < len(arg); j++ {
+				if strings.ContainsRune("uCaPS", rune(arg[j])) {
+					split = arg[j] == 'S'
+					payload, operand = arg[j+1:], j+1 == len(arg)
+					break // The rest belongs to this option, including any S.
+				}
+			}
+		}
+		i++
+		if operand {
+			if i >= len(args) || !known[i] {
+				return false, nil
+			}
+			payload = args[i]
+			i++
+		}
+		if split {
+			words, literal, err := splitEnvString(payload)
+			if err != nil {
+				return false, err
+			}
+			values := append(append([]string{"env"}, words...), args[i:]...)
+			flags := append(append([]bool{true}, literal...), known[i:]...)
+			return s.argv(values, flags, line, depth)
+		}
+	}
+	for i < len(args) && known[i] && strings.Contains(args[i], "=") {
+		i++
+	}
+	return s.argv(args[i:], known[i:], line, depth)
+}
+
+// splitEnvString implements the literal GNU/FreeBSD env -S grammar. Shell
+// punctuation is data. Environment expansions remain unknown; none are evaluated.
+func splitEnvString(src string) ([]string, []bool, error) {
+	var words []string
+	var known []bool
+	var word strings.Builder
+	var quote byte
+	started, literal := false, true
+	finish := func() {
+		if started {
+			words = append(words, word.String())
+			known = append(known, literal)
+		}
+		word.Reset()
+		started, literal = false, true
+	}
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if quote == 0 && strings.ContainsRune(" \t\n\r\v\f", rune(c)) {
+			finish()
+			continue
+		}
+		if quote == 0 && c == '#' && !started {
+			break
+		}
+		if (c == '\'' || c == '"') && (quote == 0 || quote == c) {
+			if quote == c {
+				quote = 0
+			} else {
+				quote = c
+			}
+			started = true
+			continue
+		}
+		if c == '\\' && (quote != '\'' || (i+1 < len(src) && strings.ContainsRune("\\'", rune(src[i+1])))) {
+			i++
+			if i == len(src) {
+				return nil, nil, errors.New("env split-string ends with a backslash")
+			}
+			c = src[i]
+			switch c {
+			case '_':
+				if quote == 0 {
+					finish()
+					continue
+				}
+				c = ' '
+			case 'c':
+				if quote != 0 {
+					return nil, nil, errors.New("env split-string stop escape inside quotes")
+				}
+				finish()
+				return words, known, nil
+			case 'f':
+				c = '\f'
+			case 'n':
+				c = '\n'
+			case 'r':
+				c = '\r'
+			case 't':
+				c = '\t'
+			case 'v':
+				c = '\v'
+			case '"', '#', '$', '\'', '\\':
+			default:
+				return nil, nil, fmt.Errorf("unsupported env split-string escape: %q", c)
+			}
+		} else if c == '$' && quote != '\'' {
+			end := strings.IndexByte(src[i:], '}')
+			if !strings.HasPrefix(src[i:], "${") || end < 3 || !assignment.MatchString(src[i+2:i+end]+"=") {
+				return nil, nil, errors.New("invalid env split-string variable")
+			}
+			i += end
+			started, literal = true, false
+			continue
+		}
+		started = true
+		word.WriteByte(c)
+	}
+	if quote != 0 {
+		return nil, nil, errors.New("unclosed env split-string quote")
+	}
+	finish()
+	return words, known, nil
 }
 
 func literalArgs(src string) ([]string, error) {

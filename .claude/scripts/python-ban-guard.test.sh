@@ -418,6 +418,26 @@ run "$r"
 report "control: compatibility nice arguments remain data" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
+# A Dockerfile heredoc selects the compatibility route for the whole file.
+# Attached env split-string operands must remain visible on that route too.
+legacy_env_case=0
+for invocation in 'RUN ["env", "-Spython3 --version"]' \
+  'RUN ["env", "--split-string=pip3 install example"]' \
+  'RUN ["env", "-vSpython3 --version"]'; do
+  legacy_env_case=$((legacy_env_case + 1))
+  r="$(mkrepo "legacy-env-${legacy_env_case}")"; addf "$r" Dockerfile \
+    'FROM scratch' 'RUN <<SCRIPT' 'echo safe' 'SCRIPT' "$invocation"
+  run "$r"
+  report "compatibility Dockerfile inspects attached env split-string (${legacy_env_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo legacy-env-control)"; addf "$r" Dockerfile \
+  'FROM scratch' 'RUN <<SCRIPT' 'echo safe' 'SCRIPT' \
+  'RUN ["env", "-Secho python3"]' 'RUN ["env", "-uSpython3", "echo", "safe"]'
+run "$r"
+report "control: compatibility env split arguments stay data" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
 # 9. Ablation: neutralise the invocation pattern in a COPY of the guard and show the
 #    #2769 fixture no longer fires — so the earlier flag depended on that pattern — while
 #    the source-file check, which the ablation does not touch, still fires.
