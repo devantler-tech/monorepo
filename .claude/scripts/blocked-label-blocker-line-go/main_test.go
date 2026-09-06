@@ -202,3 +202,82 @@ func TestCLIClosedPipeReturnsUnknown(t *testing.T) {
 		})
 	}
 }
+
+// The digest exists so a run can deliver one consolidated ask instead of
+// assembling nineteen by hand. It must therefore carry exactly the unasked
+// authority blockers -- a digest that echoed every finding would re-create the
+// hand-assembly problem, so the conforming and malformed rows are the control.
+func TestAskDigestSelectsOnlyUnaskedAuthorityBlockersOldestFirst(t *testing.T) {
+	input := `[
+	  {"repo":"beta","number":2,"created_at":"2026-08-01T00:00:00Z","body":"**Blocker:** maintainer authority - newer account action | last-verified 2026-09-01: pending"},
+	  {"repo":"alpha","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - oldest account action | last-verified 2026-09-01: pending"},
+	  {"repo":"gamma","number":3,"created_at":"2026-07-01T00:00:00Z","body":"**Blocker:** o/r#7 | upstream | last-verified 2026-09-01: pending"},
+	  {"repo":"delta","number":4,"created_at":"2026-07-02T00:00:00Z","body":"**Blocker:** nonsense"}
+	]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 {
+		t.Fatalf("code=%d, want 1; output=%q stderr=%q", code, got, stderr.String())
+	}
+	for _, want := range []string{"alpha#1", "beta#2", "oldest account action", "newer account action", "81d", "36d"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("digest missing %q; got %q", want, got)
+		}
+	}
+	// Control: a conforming record and a malformed one are both excluded.
+	for _, absent := range []string{"gamma#3", "delta#4"} {
+		if strings.Contains(got, absent) {
+			t.Fatalf("digest must exclude %q; got %q", absent, got)
+		}
+	}
+	if strings.Index(got, "alpha#1") > strings.Index(got, "beta#2") {
+		t.Fatalf("digest must be oldest-first; got %q", got)
+	}
+}
+
+// An unparseable or absent creation date must not drop the row or fail the
+// read: the ask is still owed. It sorts last so the aged head stays stable.
+func TestAskDigestKeepsRowsWithUnknownAge(t *testing.T) {
+	input := `[
+	  {"repo":"nodate","number":9,"body":"**Blocker:** maintainer authority - undated action | last-verified 2026-09-01: pending"},
+	  {"repo":"dated","number":8,"created_at":"2026-08-01T00:00:00Z","body":"**Blocker:** maintainer authority - dated action | last-verified 2026-09-01: pending"}
+	]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 || !strings.Contains(got, "nodate#9") || !strings.Contains(got, "dated#8") {
+		t.Fatalf("code=%d output=%q stderr=%q", code, got, stderr.String())
+	}
+	if strings.Index(got, "dated#8") > strings.Index(got, "nodate#9") {
+		t.Fatalf("undated rows sort last; got %q", got)
+	}
+}
+
+// A malformed record is still a finding, so the exit status must stay 1 even
+// when the digest itself is empty. Reporting 0 here would let a real repair
+// need vanish behind an empty ask sheet.
+func TestAskDigestEmptyStillReportsOtherFindings(t *testing.T) {
+	input := `[{"repo":"r","number":4,"created_at":"2026-07-02T00:00:00Z","body":"**Blocker:** nonsense"}]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 {
+		t.Fatalf("code=%d, want 1; output=%q", code, got)
+	}
+	if !strings.Contains(got, "no authority blocker") {
+		t.Fatalf("empty digest must say so; got %q", got)
+	}
+}
+
+// The digest is opt-in: without the flag the verdict report is byte-identical
+// to what every existing caller already parses.
+func TestAskDigestIsOptIn(t *testing.T) {
+	input := `[{"repo":"r","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - an action | last-verified 2026-09-01: pending"}]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 || !strings.Contains(got, "NO-ASK") || strings.Contains(got, "ASK DIGEST") {
+		t.Fatalf("default output changed: code=%d output=%q", code, got)
+	}
+}

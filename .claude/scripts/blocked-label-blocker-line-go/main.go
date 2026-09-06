@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -37,6 +38,8 @@ Sources (exactly one): --org <org> or --input <file>|-
 Options: --today <YYYY-MM-DD> (default UTC today)
          --ask-max-age-days <n> (default 14)
          --quiet (findings only)
+         --ask-digest (emit only the unasked authority blockers, oldest first,
+                       as one consolidated sheet to deliver through a channel)
 Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input).
 `
 
@@ -54,6 +57,7 @@ type options struct {
 	today      time.Time
 	maxAge     int64
 	quiet      bool
+	askDigest  bool
 }
 
 func civilDate(value string) (time.Time, error) {
@@ -73,6 +77,8 @@ func arguments(args []string) (options, bool, error) {
 			return o, true, nil
 		case "--quiet":
 			o.quiet = true
+		case "--ask-digest":
+			o.askDigest = true
 		case "--org", "--input", "--today", "--ask-max-age-days":
 			i++
 			if i == len(args) {
@@ -258,11 +264,91 @@ func classify(line string, today time.Time, maxAge int64) (string, bool) {
 	return "CONFORMS", legacy
 }
 
+// askRow is one unasked authority blocker, rendered for a maintainer rather
+// than for a checker: what is being requested, and how long it has waited.
+type askRow struct {
+	repo     string
+	number   int64
+	created  string
+	age      int64
+	agedKnow bool
+	request  string
+}
+
+// askRequest renders what the maintainer is actually being asked to do -- the
+// identifier segment of the blocker line. The body stays untrusted data, so it
+// is bounded and control-stripped exactly as the verdict report's snippet is.
+func askRequest(line string) string {
+	text := strings.SplitN(strings.TrimPrefix(line, "**Blocker:** "), " | ", 2)[0]
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) > 100 {
+		runes = runes[:100]
+	}
+	safe := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return unicode.ReplacementChar
+		}
+		return r
+	}, string(runes))
+	if safe == "" {
+		return "(no description in record)"
+	}
+	return safe
+}
+
+// issueAge reports whole days open. A missing or unparseable creation date is
+// not fatal: the ask is still owed, so the row is kept and marked unknown.
+func issueAge(createdAt string, today time.Time) (int64, bool) {
+	if len(createdAt) < 10 {
+		return 0, false
+	}
+	created, err := civilDate(createdAt[:10])
+	if err != nil {
+		return 0, false
+	}
+	return today.Unix()/86400 - created.Unix()/86400, true
+}
+
+// askDigestReport renders the consolidated sheet. Oldest first, because the
+// age is the argument: a blocker nobody can clear without the maintainer only
+// gets worse by being re-verified.
+func askDigestReport(rows []askRow) string {
+	if len(rows) == 0 {
+		return "ASK DIGEST -- no authority blocker is awaiting an ask.\n"
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.agedKnow != b.agedKnow {
+			return a.agedKnow // undated rows sort last
+		}
+		if a.agedKnow && a.age != b.age {
+			return a.age > b.age
+		}
+		if a.repo != b.repo {
+			return a.repo < b.repo
+		}
+		return a.number < b.number
+	})
+	var out strings.Builder
+	_, _ = fmt.Fprintf(&out, "ASK DIGEST -- %d authority blocker(s) awaiting a maintainer decision.\n", len(rows))
+	_, _ = fmt.Fprint(&out, "Deliver one ask through a canonical channel (pr | slack | session), then append\n")
+	_, _ = fmt.Fprint(&out, "\"| asked <channel> <YYYY-MM-DD>\" to each **Blocker:** line below.\n\n")
+	for _, r := range rows {
+		age := "age unknown"
+		if r.agedKnow {
+			age = fmt.Sprintf("opened %s  %dd", r.created, r.age)
+		}
+		_, _ = fmt.Fprintf(&out, "  %s#%d  %s\n    %s\n", r.repo, r.number, age, r.request)
+	}
+	return out.String()
+}
+
 type issue struct {
 	Repo          string `json:"repo"`
 	Number        int64  `json:"number"`
 	Body          string `json:"body"`
 	RepositoryURL string `json:"repository_url"`
+	CreatedAt     string `json:"created_at"`
 }
 
 func inputIssues(raw []byte) ([]issue, error) {
@@ -371,10 +457,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// Builder writes cannot fail. Check the external writer once the complete
 	// report is ready, so an undelivered report never returns a valid verdict.
 	var report strings.Builder
+	var askRows []askRow
 	bad := 0
 	for _, item := range issues {
 		line := visibleRecord(item.Body)
 		verdict, legacy := classify(line, o.today, o.maxAge)
+		if verdict == "NO-ASK" {
+			age, known := issueAge(item.CreatedAt, o.today)
+			created := ""
+			if known {
+				created = item.CreatedAt[:10]
+			}
+			askRows = append(askRows, askRow{
+				repo: item.Repo, number: item.Number, created: created,
+				age: age, agedKnow: known, request: askRequest(line),
+			})
+		}
 		if verdict == "CONFORMS" && o.quiet {
 			continue
 		}
@@ -401,6 +499,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 		}
 		_, _ = fmt.Fprintln(&report)
+	}
+	// The digest replaces the verdict report for its own consumer, but never
+	// the verdict: a malformed record is still a finding when no ask is owed.
+	if o.askDigest {
+		code := 0
+		if bad > 0 {
+			code = 1
+		}
+		return emit(askDigestReport(askRows), code)
 	}
 	if bad > 0 {
 		if !o.quiet {
