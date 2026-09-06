@@ -739,6 +739,21 @@ JSON
 OUT="$("$CHECK" --input "$TMP/pr-ask.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 0 ]; then ok "a draft PR ask and separate outage cause conform"; else bad "a draft PR ask and separate outage cause conform" "rc=$RC out=$OUT"; fi
 
+# Exercise digest flag plumbing through the compiled CLI with both selected and
+# excluded records; direct run() tests cannot catch a main() argument regression.
+cat >"$TMP/ask-digest.json" <<'JSON'
+[{"repo":"pending","number":73,"body":"**Blocker:** Grant pending access | authority | last-verified 2026-09-05: unavailable"},
+ {"repo":"fresh","number":74,"body":"**Blocker:** Already requested access | authority | last-verified 2026-09-05: unavailable | asked session 2026-09-05"}]
+JSON
+OUT="$("$CHECK" --ask-digest --input "$TMP/ask-digest.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -q '^ASK DIGEST -- 1 ' &&
+  printf '%s\n' "$OUT" | grep -q '^  > Grant pending access$' &&
+  ! printf '%s\n' "$OUT" | grep -qE 'fresh|Already requested access'; then
+  ok "compiled CLI emits the digest and excludes a fresh ask"
+else
+  bad "compiled CLI emits the digest and excludes a fresh ask" "rc=$RC out=$OUT"
+fi
+
 # Exercise the installed entrypoint as a caller, including stdin/argument forwarding
 # and both successful and findings exit codes. Keep the large fixture suite fast
 # by running its individual cases through the compiled binary above.
