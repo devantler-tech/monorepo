@@ -27,7 +27,9 @@
 # USAGE
 #   unsigned-commit-report.sh --pr <n> --repo <owner/repo> [--head-ref <ref>]
 #       CI mode: read the pull request's commits and report. Exit 0 whether or not anything is
-#       unsigned -- findings are annotations and a summary line, never a failure. A head outside
+#       unsigned -- findings are annotations and a summary line, never a failure. Author and head
+#       repository provenance are always read from the PR API; --head-ref, when supplied, must match.
+#       A head outside
 #       every agent lane is SKIPPED (nothing classified, `skipped=non-agent-head` in the summary):
 #       the report is scoped to agent branches and must not warn about branches it never covered.
 #   unsigned-commit-report.sh --repo <owner/repo> --merged-since <YYYY-MM-DD> [--lanes a,b,c]
@@ -182,7 +184,7 @@ rows=""; SKIPPED=0; SKIP_REASON=""; targets=""
 if [ -n "$INPUT" ]; then
   if [ "$INPUT" = "-" ]; then payload="$(cat)" || die "could not read payload from stdin"
   else [ -r "$INPUT" ] || die "cannot read payload: $INPUT"; payload="$(cat -- "$INPUT")" || die "could not read payload: $INPUT"; fi
-  printf '%s' "$payload" | jq -e 'type == "array"' >/dev/null 2>&1 || die "payload is not a JSON array -- UNKNOWN"
+  printf '%s' "$payload" | jq -se 'length == 1 and (.[0] | type == "array")' >/dev/null 2>&1 || die "payload is not a JSON array (exactly one document required) -- UNKNOWN"
   rows="$(printf '%s' "$payload" | jq -r --arg branch "${HEAD_REF:-}" \
     '.[] | [(.sha // "missing"), (.commit.verification.verified // false | tostring), (.commit.verification.reason // "missing"), $branch] | @tsv')" \
     || die "could not parse payload -- UNKNOWN"
@@ -199,9 +201,18 @@ if [ -n "$INPUT" ]; then
       || die "payload has $count commits, at the $PR_COMMIT_CAP-commit endpoint cap: the report would be TRUNCATED -- UNKNOWN"
   fi
 elif [ -n "$PR" ]; then
-  if [ -z "$HEAD_REF" ]; then
-    HEAD_REF="$(gh api "repos/$REPO/pulls/$PR" --jq '.head.ref')" || die "could not read $REPO#$PR head ref -- UNKNOWN"
-  fi
+  # Fetch provenance even when a caller supplies the branch name. Only payload mode is a
+  # caller-supplied fixture seam; direct mode must describe the PR the endpoint actually returned.
+  metadata="$(gh api "repos/$REPO/pulls/$PR")" || die "could not read $REPO#$PR metadata -- UNKNOWN"
+  printf '%s' "$metadata" | jq -se '
+    length == 1 and (.[0] | type == "object" and
+      ([.head.ref, .head.repo.owner.login, .user.login] | all(type == "string" and length > 0)))
+  ' >/dev/null 2>&1 || die "$REPO#$PR has missing or malformed provenance -- UNKNOWN"
+  actual_head="$(printf '%s' "$metadata" | jq -r '.head.ref')"
+  [ -z "$HEAD_REF" ] || [ "$HEAD_REF" = "$actual_head" ] || die "supplied head ref differs from $REPO#$PR -- UNKNOWN"
+  HEAD_REF="$actual_head"
+  HEAD_OWNER="$(printf '%s' "$metadata" | jq -r '.head.repo.owner.login')"
+  PR_AUTHOR="$(printf '%s' "$metadata" | jq -r '.user.login')"
   SKIP_REASON="$(non_lane_reason "$(lane_of "$HEAD_REF")")"
   if [ -n "$SKIP_REASON" ]; then SKIPPED=1
   else rows="$(acquire_pr_commits "$REPO" "$PR" "$HEAD_REF")" || exit 2; fi

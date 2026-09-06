@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Self-test for unsigned-commit-report.sh -- hermetic through the --input seam, no network.
 set -uo pipefail
+# Fixtures never write to the enclosing Actions job. The dedicated output case below supplies
+# its own temporary summary and opts into annotations explicitly.
+unset GITHUB_ACTIONS GITHUB_STEP_SUMMARY
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK="$HERE/unsigned-commit-report.sh"
 [ -x "$CHECK" ] || { echo "FATAL: $CHECK is not executable" >&2; exit 2; }
@@ -9,7 +12,7 @@ trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
 ok() { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf 'FAIL %s\n     %s\n' "$1" "${2:-}"; }
-run() { OUT="$("$CHECK" "$@" 2>&1)"; RC=$?; }
+run() { OUT="$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$CHECK" "$@" 2>&1)"; RC=$?; }
 expect_rc() { # name rc args...
   local name="$1" want="$2"; shift 2; run "$@"
   if [ "$RC" = "$want" ]; then ok "$name"; else bad "$name" "expected rc=$want got rc=$RC; out: ${OUT:0:300}"; fi
@@ -76,6 +79,8 @@ expect_rc "a non-array payload is UNKNOWN(2)" 2 --input "$TMP/obj.json"
 expect_out "and says so" 'not a JSON array' --input "$TMP/obj.json"
 printf 'nope\n' >"$TMP/nonjson.json"
 expect_rc "an unparseable payload is UNKNOWN(2)" 2 --input "$TMP/nonjson.json"
+printf '{}\n[]\n' >"$TMP/multiple.json"
+expect_rc "multiple JSON documents are UNKNOWN, not an empty report" 2 --input "$TMP/multiple.json"
 expect_rc "a missing payload file is UNKNOWN(2)" 2 --input "$TMP/does-not-exist.json"
 expect_rc "no mode at all is a usage error" 2
 expect_rc "two modes at once is a usage error" 2 --input "$TMP/empty.json" --pr 1 --repo a/b
@@ -84,6 +89,12 @@ expect_rc "a non-numeric --pr is a usage error" 2 --pr x --repo a/b
 expect_rc "a malformed --merged-since is a usage error" 2 --repo a/b --merged-since yesterday
 
 # ------------------------------------------------------------------ 9. under GitHub Actions the finding is an annotation and the summary lands in the step summary
+GITHUB_ACTIONS=true GITHUB_STEP_SUMMARY="$TMP/fixture-leak.md" run --input "$TMP/unsigned.json" --head-ref codex/y-2
+if [ ! -e "$TMP/fixture-leak.md" ] && ! printf '%s\n' "$OUT" | grep -q '^::warning'; then
+  ok "ordinary fixture calls do not emit Actions annotations or summaries"
+else
+  bad "ordinary fixture calls do not emit Actions annotations or summaries" "fixture output reached the Actions surface"
+fi
 : >"$TMP/summary.md"
 OUT="$(GITHUB_ACTIONS=true GITHUB_STEP_SUMMARY="$TMP/summary.md" "$CHECK" --input "$TMP/unsigned.json" --head-ref codex/y-2 2>&1)"; RC=$?
 if printf '%s\n' "$OUT" | grep -q '^::warning title=Unsigned or unverifiable commit (N)::cccc3333 unsigned on codex/y-2'; then ok "a finding is a ::warning:: annotation under Actions"; else bad "a finding is a ::warning:: annotation under Actions" "out: $OUT"; fi
@@ -110,12 +121,32 @@ case "$*" in
     # a fork PR whose branch merely LOOKS like lane work: wrong author, wrong head-repository owner
     i=0; while [ "$i" -lt "${FAKE_FOREIGN:-0}" ]; do i=$((i + 1)); printf '%s\tclaude/foreign-%s\tstranger\tforkowner\n' "$((10000 + i))" "$i"; done ;;
   *"/commits"*)
+    [ "${FAKE_COMMIT_READ_FAIL:-0}" = 0 ] || exit 98
     jq -n --argjson n "${FAKE_COMMITS:-0}" '[range($n) | {sha: ("c" + tostring), commit: {verification: {verified: true, reason: "valid"}}}]' ;;
+  *"api repos/o/r/pulls/7"*)
+    [ "${FAKE_PR_READ_FAIL:-0}" = 0 ] || exit 97
+    if [ "${FAKE_PR_MISSING:-0}" = 1 ]; then printf '{}\n'
+    elif [ "${!#}" = '.head.ref' ]; then printf '%s\n' "${FAKE_PR_HEAD:-claude/x-7}"
+    else
+      jq -n --arg head "${FAKE_PR_HEAD:-claude/x-7}" --arg owner "${FAKE_PR_OWNER:-o}" --arg author "${FAKE_PR_AUTHOR:-devantler}" \
+        '{head:{ref:$head,repo:{owner:{login:$owner}}},user:{login:$author}}'
+    fi ;;
   *) echo "stub gh: unexpected call: $*" >&2; exit 99 ;;
 esac
 STUB
 chmod +x "$TMP/bin/gh"
 stub() { PATH="$TMP/bin:$PATH" FAKE_PRS="$1" FAKE_COMMITS="$2" "$CHECK" "${@:3}" 2>&1; }
+# Direct mode obtains provenance from the PR API even when --head-ref is supplied.
+OUT="$(FAKE_PR_OWNER=contributor FAKE_COMMIT_READ_FAIL=1 stub 0 2 --pr 7 --repo o/r)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q 'examined=0 .*skipped=foreign-head'; then ok "direct PR mode skips a foreign head before reading commits"; else bad "direct PR mode skips a foreign head before reading commits" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(FAKE_PR_AUTHOR=contributor FAKE_COMMIT_READ_FAIL=1 stub 0 2 --pr 7 --repo o/r --head-ref claude/x-7)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q 'examined=0 .*skipped=foreign-author'; then ok "a supplied head ref does not replace the PR author lookup"; else bad "a supplied head ref does not replace the PR author lookup" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(FAKE_PR_READ_FAIL=1 stub 0 2 --pr 7 --repo o/r --head-ref claude/x-7)"; RC=$?
+if [ "$RC" = 2 ]; then ok "failed PR metadata is UNKNOWN even with a supplied head ref"; else bad "failed PR metadata is UNKNOWN even with a supplied head ref" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(FAKE_PR_MISSING=1 stub 0 2 --pr 7 --repo o/r --head-ref claude/x-7)"; RC=$?
+if [ "$RC" = 2 ]; then ok "missing PR provenance is UNKNOWN"; else bad "missing PR provenance is UNKNOWN" "rc=$RC out=${OUT:0:200}"; fi
+OUT="$(stub 0 2 --pr 7 --repo o/r)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=2 signed=2'; then ok "CONTROL: direct PR mode still reports our own branch"; else bad "CONTROL: direct PR mode still reports our own branch" "rc=$RC out=${OUT:0:200}"; fi
 OUT="$(stub 3 250 --pr 7 --repo o/r --head-ref claude/x-7)"; RC=$?
 if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'at the 250-commit endpoint cap'; then ok "a PR at the 250-commit cap is UNKNOWN, not a partial count"; else bad "a PR at the 250-commit cap is UNKNOWN, not a partial count" "rc=$RC out=${OUT:0:200}"; fi
 OUT="$(stub 3 249 --pr 7 --repo o/r --head-ref claude/x-7)"; RC=$?
@@ -209,26 +240,17 @@ for spelling in app/cursor "cursor[bot]"; do
     --input "$TMP/prov.json" --head-ref cursor/foo --repo devantler-tech/monorepo --head-owner devantler-tech --pr-author "$spelling"
 done
 
-# ------------------------------------------------------------------ 18. the release flag is tested in BOTH states, and expires
-# *Feature-flag-first delivery*: a flagged feature is tested with the flag on AND off. The gate is a
-# workflow condition, so the assertion is made against the condition itself: it must name the
-# variable and require exactly `true`, so any other value -- unset, empty, `TRUE`, `1` -- leaves the
-# job skipped. A wiring regression that dropped either half would otherwise leave reporting
-# permanently active or permanently skipped while this suite stayed green.
+# ------------------------------------------------------------------ 18. release-flag wiring and expiry
+# These assertions check workflow wiring, not expression evaluation. Actions compares strings
+# without case sensitivity, so `TRUE` enables the job too. Both-state behavior must be evaluated
+# with the Actions expression engine or an actual workflow, never a Bash replacement for it.
 CI_YAML="$HERE/../../.github/workflows/ci.yaml"
 if [ -r "$CI_YAML" ]; then
   gate="$(awk '/^  report-unsigned-commits:/ { injob = 1; next } injob && /^    if: / { sub(/^    if: /, ""); print; exit } injob && /^  [a-z]/ { exit }' "$CI_YAML")"
-  # The condition as a two-state function of the variable: `true` runs, everything else skips.
-  flag_state() { # <value> -> runs|skips
-    case "$gate" in
-      *"vars.UNSIGNED_COMMIT_REPORT == 'true'"*) [ "$1" = true ] && printf runs || printf skips ;;
-      *) printf 'unparsed' ;;
-    esac
-  }
-  if [ "$(flag_state true)" = runs ]; then ok "flag ON: the reporting job runs"; else bad "flag ON: the reporting job runs" "gate=$gate"; fi
-  for off in "" false TRUE 1 true-ish; do
-    if [ "$(flag_state "$off")" = skips ]; then ok "flag OFF ('${off}'): the reporting job is skipped"; else bad "flag OFF ('${off}'): the reporting job is skipped" "gate=$gate"; fi
-  done
+  case "$gate" in
+    *"vars.UNSIGNED_COMMIT_REPORT == 'true'"*) ok "the reporting job retains the release-variable condition" ;;
+    *) bad "the reporting job retains the release-variable condition" "gate=$gate" ;;
+  esac
   # The other conjunct: the job is scoped to pull requests, so a push to main never reports.
   case "$gate" in
     *"github.event_name == 'pull_request'"*) ok "the reporting job is scoped to pull_request events" ;;

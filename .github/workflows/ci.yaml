@@ -898,15 +898,16 @@ jobs:
   # which this standing measurement exists to make possible.
   #
   # FEATURE-FLAGGED, default OFF (*Feature-flag-first delivery*): the job runs only while the repository
-  # variable UNSIGNED_COMMIT_REPORT is exactly `true`. Flipping it is the separate, reversible activation
+  # variable UNSIGNED_COMMIT_REPORT matches `true` (Actions string comparison is case-insensitive).
+  # Flipping it is the separate, reversible activation
   # step, taken once this workflow is on the default branch -- which is also what lets the reporter run
   # from a TRUSTED base-branch copy below rather than from the pull request being measured.
   #
   # RELEASE FLAG, so it is short-lived by contract and its removal is owned rather than assumed:
   # monorepo#3212 activates it and then deletes BOTH the repository variable and this condition.
   # EXPIRES 2026-10-31 -- from that date unsigned-commit-report.test.sh fails on the expiry case, so
-  # the flag cannot quietly become permanent debt. Both states are covered there too: exactly `true`
-  # runs the job and every other value leaves it skipped.
+  # the flag cannot quietly become permanent debt. That suite checks the flag wiring; actual
+  # expression behavior is evaluated separately before activation.
   report-unsigned-commits:
     name: Report unsigned commits (non-blocking)
     if: github.event_name == 'pull_request' && vars.UNSIGNED_COMMIT_REPORT == 'true'
@@ -930,6 +931,7 @@ jobs:
       # with an inline `gh api`, then the trusted reporter runs on that file with no token in its
       # environment.
       - name: Read the pull request's commits (the only step with a token)
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
