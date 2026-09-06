@@ -100,7 +100,13 @@ func shellName(name string) bool {
 }
 
 // staticWord never expands host variables, runs substitutions or consults the filesystem.
-func staticWord(word *syntax.Word) (string, bool) {
+func staticWord(word *syntax.Word, vars []string) (string, bool) {
+	resolved := make(map[string]bool, len(vars))
+	for _, entry := range vars {
+		if name, _, ok := strings.Cut(entry, "="); ok {
+			resolved[name] = true
+		}
+	}
 	var safe func([]syntax.WordPart) bool
 	safe = func(parts []syntax.WordPart) bool {
 		for _, part := range parts {
@@ -108,6 +114,15 @@ func staticWord(word *syntax.Word) (string, bool) {
 			case *syntax.Lit:
 				// Expansion-sensitive literals are unknown. Quoted literal values are data.
 			case *syntax.SglQuoted:
+			case *syntax.ParamExp:
+				// A name bound to a literal exactly once in this file expands
+				// statically. Anything carrying an operator, index, slice or
+				// alternate value depends on host state and stays unknown.
+				if p.Excl || p.Length || p.Width || p.Index != nil || p.Slice != nil ||
+					p.Repl != nil || p.Exp != nil || p.Names != 0 || p.Param == nil ||
+					!resolved[p.Param.Value] {
+					return false
+				}
 			case *syntax.DblQuoted:
 				if !safe(p.Parts) {
 					return false
@@ -128,7 +143,7 @@ func staticWord(word *syntax.Word) (string, bool) {
 			}
 		}
 	}
-	values, err := expand.Fields(&expand.Config{Env: expand.ListEnviron()}, word)
+	values, err := expand.Fields(&expand.Config{Env: expand.ListEnviron(vars...)}, word)
 	if err != nil || len(values) != 1 {
 		return "", false
 	}
@@ -161,6 +176,39 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 			return nil
 		}
 	}
+	// A name bound once to a literal and later expanded in command position is
+	// fully static, so leaving that expansion unknown lets PYTHON=python3 hide
+	// the interpreter. Only names bound exactly once anywhere in the file are
+	// resolved, so a rebinding in any branch, loop or scope keeps it unknown.
+	binds := make(map[string]int)
+	literals := make(map[string]string)
+	syntax.Walk(tree, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.Assign:
+			if n.Name == nil {
+				return true
+			}
+			binds[n.Name.Value]++
+			if n.Append || n.Naked || n.Index != nil || n.Array != nil || n.Value == nil {
+				return true
+			}
+			if value, ok := staticWord(n.Value, nil); ok {
+				literals[n.Name.Value] = value
+			}
+		case *syntax.WordIter:
+			// A loop variable is rebound on every iteration.
+			if n.Name != nil {
+				binds[n.Name.Value] += 2
+			}
+		}
+		return true
+	})
+	var vars []string
+	for name, value := range literals {
+		if binds[name] == 1 {
+			vars = append(vars, name+"="+value)
+		}
+	}
 	syntax.Walk(tree, func(node syntax.Node) bool {
 		if err != nil {
 			return false
@@ -176,7 +224,7 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 		values := make([]string, len(call.Args))
 		known := make([]bool, len(call.Args))
 		for i, word := range call.Args {
-			values[i], known[i] = staticWord(word)
+			values[i], known[i] = staticWord(word, vars)
 		}
 		line := firstLine + int(stmt.Pos().Line()) - 1
 		var stdin bool
@@ -193,7 +241,7 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 				}
 			}
 			if input != nil && input.Op == syntax.WordHdoc {
-				if program, known := staticWord(input.Word); known {
+				if program, known := staticWord(input.Word, vars); known {
 					err = s.source(program, firstLine+int(input.Word.Pos().Line())-1, depth+1, false)
 				}
 			} else if input != nil && input.Hdoc != nil {
@@ -474,7 +522,7 @@ func literalArgs(src string) ([]string, error) {
 	}
 	args := make([]string, len(call.Args))
 	for i, word := range call.Args {
-		value, known := staticWord(word)
+		value, known := staticWord(word, nil)
 		if !known {
 			return nil, errors.New("dynamic command word")
 		}

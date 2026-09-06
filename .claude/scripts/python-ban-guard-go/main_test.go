@@ -167,6 +167,20 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 			name: "make shell function runs at read time", path: "Makefile",
 			source: "VERSION := $(shell python3 --version)\n", handled: true, want: "Python invocation",
 		},
+		{
+			name: "literal shell assignment used in command position", path: "tools/check.sh",
+			source: "PYTHON=python3\n\"$PYTHON\" --version\n", handled: true, want: "Python invocation",
+		},
+		{
+			name: "reassigned shell name stays unknown", path: "tools/check.sh",
+			source:  "PYTHON=python3\nPYTHON=node\n\"$PYTHON\" --version\n",
+			handled: true,
+		},
+		{
+			name: "loop rebound shell name stays unknown", path: "tools/check.sh",
+			source:  "PYTHON=python3\nfor PYTHON in node; do \"$PYTHON\" --version; done\n",
+			handled: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
