@@ -307,7 +307,7 @@ interface verified on 2026-09-06 does not supply an agent discriminator on `PreT
 session_id is shared with the parent. `SubagentStart` identity therefore cannot safely scope the
 Claude `agent_type` adapter to later tool calls. A role name or prompt is not runtime enforcement.
 
-Delegation remains disabled by this consumer override until a reviewed change records a
+Surveyor delegation remains disabled by this consumer override until a reviewed change records a
 runtime-authenticated discriminator at the actual pre-execution boundary and proves ordinary reads
 succeed, writes are denied for every exposed surveyor type, and the engineer's own write path
 remains usable. A failed or missing probe retains the inline route. The inline survey exercises the

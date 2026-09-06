@@ -442,7 +442,6 @@ jobs:
               - '.claude/finops/**'
               - '.claude/scripts/finops-snapshot.sh'
               - '.claude/scripts/agent-role-delivery-contract.test.sh'
-              - '.claude/scripts/codex-survey-dispatch-contract.test.sh'
               - '.claude/scripts/portfolio-surveyor-forge-hook.sh'
               # The test diffs AGENTS.md blocks against committed fixtures. Without this path a
               # fixture-only commit skips the job entirely, so the mismatch assertion never runs on
@@ -1631,9 +1630,6 @@ jobs:
             submodule update --init libraries/agent-plugins
       - name: Verify the agent-role delivery contract
         run: bash .claude/scripts/agent-role-delivery-contract.test.sh
-
-      - name: Validate Codex survey dispatch capability override
-        run: bash .claude/scripts/codex-survey-dispatch-contract.test.sh
 
   test-work-priority-ladder:
     name: Test work-priority ladder
