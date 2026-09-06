@@ -339,6 +339,7 @@ func askRequest(line string) string {
 // asked would mark a non-actionable message as delivered.
 func requestIsOpaque(line string) bool {
 	text := strings.SplitN(strings.TrimPrefix(line, "**Blocker:** "), " | ", 2)[0]
+	text = html.UnescapeString(text)
 	return identifierOnlyRE.MatchString(strings.TrimSpace(text))
 }
 
@@ -391,7 +392,7 @@ func askDigestReport(rows []askRow) string {
 	_, _ = fmt.Fprintf(&out, "ASK DIGEST -- %d declared authority blocker(s) to verify before asking for a maintainer action.\n", len(rows))
 	_, _ = fmt.Fprint(&out, "Verify current capabilities and prerequisites; complete work the agent can perform.\n")
 	_, _ = fmt.Fprint(&out, "Only for a remaining maintainer-only action, deliver an ask through a canonical channel\n")
-	_, _ = fmt.Fprint(&out, "(pr | slack | session), then append \"| asked <channel> <YYYY-MM-DD>\" to that issue's **Blocker:** line.\n")
+	_, _ = fmt.Fprint(&out, "(pr | slack | session), then append `| asked <channel> <YYYY-MM-DD>` to that issue's **Blocker:** line.\n")
 	// Repository visibility is not in the search payload, so this tool cannot
 	// establish it. Say so rather than let a private row reach a public PR.
 	_, _ = fmt.Fprint(&out, "CHECK BEFORE DELIVERY: this tool does not establish repository visibility.\n")
