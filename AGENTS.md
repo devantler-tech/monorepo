@@ -293,6 +293,28 @@ that the generic plugin does not carry yet; remove it only after the side-by-sid
 [`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md)
 passes.
 
+<!-- codex-survey-dispatch:begin -->
+**Codex survey dispatch — deployment capability override (#3057).** For Codex, run the survey
+inline in the engineer by default. Missing agent-scoped enforcement is an unavailable read-only
+subagent capability, even when the runtime can spawn agents. Do not dispatch either surveyor type
+or a renamed substitute while this override applies. Instead, use the same reviewed pinned survey
+procedure and local compatibility overlay in the engineer's read-only survey phase. Scope queries
+to the Portfolio map, deepen only candidates, and retain the same digest and evidence requirements.
+The rest of the engineer's authorised work continues; no new maintainer permission is needed.
+
+This is a dispatch instruction, not a claim of native delegated enforcement. The Codex hook
+interface verified on 2026-09-06 does not supply an agent discriminator on `PreToolUse`, and
+session_id is shared with the parent. `SubagentStart` identity therefore cannot safely scope the
+Claude `agent_type` adapter to later tool calls. A role name or prompt is not runtime enforcement.
+
+Delegation remains disabled by this consumer override until a reviewed change records a
+runtime-authenticated discriminator at the actual pre-execution boundary and proves ordinary reads
+succeed, writes are denied for every exposed surveyor type, and the engineer's own write path
+remains usable. A failed or missing probe retains the inline route. The inline survey exercises the
+reviewed procedure's existing fallback; it does not waive the plugin surveyor's read-only guard or
+alter other providers' verified dispatch paths.
+<!-- codex-survey-dispatch:end -->
+
 🔴 **Verify that the definition the runtime LOADED is the one this consumer PINNED — the desired
 state's `refreshTiming: before-starting-each-run` is a declaration, not a mechanism.** Two controls
 already watch this chain and neither reaches its last link: [#2736](https://github.com/devantler-tech/monorepo/issues/2736)
