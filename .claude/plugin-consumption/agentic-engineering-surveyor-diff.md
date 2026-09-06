@@ -132,7 +132,7 @@ refinement to BOTH places** — upstream for the target definition, and here for
 treat "merged upstream + gitlink bumped + install CURRENT" as *not* evidence a surveyor rule is live. Second measured casualty, 2026-09-05: the CI classifier's argument shape. Over 7 days, **19 of 20**
 classifier-calling surveyor dispatches read this file rather than the plugin agent, and 3 of the 19 that
 reached the helper invoked it positionally and lost 24 reads to the guard. The flag-form sentence from
-agent-plugins#195 is now in step 4 of the survey above as well (monorepo#3223, pinned by round 11 of
+agent-plugins#195 is now in step 4 of the survey above as well (monorepo#3223, pinned by round 12 of
 `portfolio-surveyor.test.sh`).
 
 ## Equivalence status (this slice)
