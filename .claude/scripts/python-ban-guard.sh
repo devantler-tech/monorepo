@@ -373,7 +373,15 @@ while IFS= read -r -d '' path; do
       report "$path: Python source file"
       continue ;;
   esac
-  grep -Iq . "$file" 2>/dev/null || continue     # binary, or empty
+  probe_rc=0
+  grep -Iq . "$file" 2>/dev/null || probe_rc=$?
+  case "$probe_rc" in
+    0) ;;
+    1) continue ;;                            # binary, or empty
+    *)
+      echo "python-ban-guard: $path: cannot inspect tracked file contents" >&2
+      exit 2 ;;
+  esac
   parser_rc=0
   hits="$("$parser_binary" "$path" "$file")" || parser_rc=$?
   case "$parser_rc" in

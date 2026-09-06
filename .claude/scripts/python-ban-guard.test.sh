@@ -397,6 +397,36 @@ GIT_INDEX_FILE="$tmp" run "$r"
 report "failed tracked-file enumeration exits 2 instead of reporting clean" \
   "$([[ $rc -eq 2 && "$out" != *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
+# A failed content probe must not masquerade as a binary or empty file. Inject
+# the I/O failure at grep so this regression also runs as root, where chmod 000
+# does not reliably prevent reads.
+r="$(mkrepo failed-content-probe)"; addf "$r" tools/check.sh 'echo safe'
+probe_bin="$tmp/probe-bin"
+mkdir -p "$probe_bin"
+cat >"$probe_bin/grep" <<'PROBE'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [[ "$arg" == "$TEST_PROBE_PATH" ]]; then exit 2; fi
+done
+exec "$TEST_REAL_GREP" "$@"
+PROBE
+chmod +x "$probe_bin/grep"
+real_grep="$(command -v grep)"
+probe_path="$(git -C "$r" rev-parse --show-toplevel)/tools/check.sh"
+PATH="$probe_bin:$PATH" TEST_REAL_GREP="$real_grep" TEST_PROBE_PATH="$probe_path" run "$r"
+report "failed tracked-file content probe exits 2 and names the path" \
+  "$([[ $rc -eq 2 && "$out" == *'tools/check.sh'* && "$out" != *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
+run "$r"
+report "control: the readable file passes without a probe failure" \
+  "$([[ $rc -eq 0 && "$out" == *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo binary-and-empty)"; addf "$r" empty.sh ''
+: >"$r/empty.sh"
+printf '\000\001\002' >"$r/binary.dat"
+git -C "$r" add -- binary.dat
+run "$r"
+report "control: binary and empty tracked files remain clean" \
+  "$([[ $rc -eq 0 && "$out" == *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
 r="$(mkrepo malformed-shell)"; addf "$r" tools/broken.sh "echo 'unfinished"
 run "$r"
 report "malformed declared shell fails closed with its parser diagnostic" \
