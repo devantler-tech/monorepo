@@ -17,14 +17,16 @@
 #     1. A Python SOURCE file: `*.py`, `*.pyi`, `*.pyw`, or a shebang naming python.
 #     2. A Python INVOCATION on an executable surface — every tracked text file except prose
 #        (`*.md`, `*.mdx`): `python`, `python3`, `python3.12`, `pip`, `pip3` or `pytest` in
-#        COMMAND POSITION. After `#` comments and quotes are stripped, a line is cut into
-#        command segments at `;`, `|`, `&`, `(`, a backtick, `{`, and at `-c` / `run:` (which
-#        open a nested command); in each segment the first token that is not a `VAR=` prefix, a
-#        `-flag`, or a command-wrapping word (`exec`, `xargs`, `env`, `sudo`, `time`, `command`,
-#        `nohup`, `if`/`then`/`else`/`do`/`while`/`until`/`!`) is the command. So
-#        `bash -c "python3 -m x"` and `FOO=1 python3 x` flag, while `echo "install python3"` and
-#        a YAML `name: Install python deps` do not.
-#        Two known limits of that heuristic, accepted for a ~150-line bash guard: a flag's
+#        COMMAND POSITION, matched by the command's BASENAME so `/usr/bin/python3` counts. A
+#        `#` comment is cut off quote-aware (a `#` inside quotes is text), then quotes are
+#        stripped and the line is cut into command segments at `;`, `|`, `&`, `(`, a backtick,
+#        `{`, `[`, `]`, `,`, and at `-c`, YAML `run:` and Dockerfile `RUN`/`CMD`/`ENTRYPOINT`
+#        (which open a nested command); in each segment the first token that is not a `VAR=`
+#        prefix, a `-flag`, or a command-wrapping word (`exec`, `xargs`, `env`, `sudo`, `time`,
+#        `command`, `nohup`, `if`/`then`/`else`/`do`/`while`/`until`/`!`) is the command. So
+#        `bash -c "python3 -m x"`, `FOO=1 python3 x` and `RUN python3 x` flag, while
+#        `echo "install python3"` and a YAML `name: Install python deps` do not.
+#        Two known limits of that heuristic, accepted for a ~170-line bash guard: a flag's
 #        ARGUMENT is read as the command (`sudo -u nobody pip3 …` reads `nobody`), and quotes
 #        are stripped before segmenting, so a quoted alternation such as
 #        `grep -E '(npm ci|pytest)'` reads `pytest` as a command — a file that legitimately
@@ -32,9 +34,10 @@
 #
 # THE CARVE-OUT (#2324) — recognised by INVOCATION, never by file extension
 #   An embedded interpreter that admits only Python is dictated by the host tool, not chosen by
-#   us: `blender --background --python bake.py`. A line carrying both `blender` and `--python`
-#   is skipped. A `.py` file still trips check 1 in THIS repository on purpose: the sanctioned
-#   instance lives in a submodule (world-at-ruin), which this guard never scans.
+#   us: `blender --background --python bake.py`. The ONE command segment carrying both `blender`
+#   and `--python` is skipped; other commands on the same line are still scanned. A `.py` file
+#   still trips check 1 in THIS repository on purpose: the sanctioned instance lives in a
+#   submodule (world-at-ruin), which this guard never scans.
 #
 # ALLOW-FILE MARKER
 #   A file that is ABOUT the offending form — this guard's self-test quotes `python3 -c` as
@@ -80,6 +83,19 @@ scan_invocations() {
       }
       return n + 1
     }
+    # Cut a shell comment off `s`, QUOTE-AWARE: a `#` opens a comment only at line start or
+    # after whitespace, and only outside single or double quotes — `echo "a # b"; python3 …`
+    # keeps its invocation. (A backslash-escaped quote inside double quotes is not modelled.)
+    function strip_comment(s,    i, c, q) {
+      q = ""
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (q != "") { if (c == q) q = ""; continue }
+        if (c == "\"" || c == sq) { q = c; continue }
+        if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[[:space:]]/)) return substr(s, 1, i - 1)
+      }
+      return s
+    }
     BEGIN {
       # The interpreter pattern lives HERE and nowhere else; the self-test ablates this line.
       interp = "^(python[23]?([.][0-9]+)?|pip3?|pytest)$"
@@ -87,19 +103,18 @@ scan_invocations() {
       wrappers = " exec xargs env sudo time command nohup if then elif else do while until ! "
     }
     {
-      line = $0
-      # A `#` at line start or after whitespace opens a comment: a commented-out or
-      # merely-mentioned invocation is not an executable one.
-      if (match(line, /(^|[[:space:]])#/)) line = substr(line, 1, RSTART - 1)
-      # The embedded-interpreter carve-out, keyed on the invocation shape.
-      if (line ~ /(^|[^[:alnum:]_.-])blender([[:space:]]|$)/ && line ~ /--python([[:space:]=]|$)/) next
+      line = strip_comment($0)
       # Quotes do not hide an invocation: `bash -c "python3 …"` still runs it.
       gsub(/"/, " ", line)
       gsub(sq, " ", line)
-      # A YAML `run:` opens a command: cut a new segment there.
-      gsub(/(^|[[:space:]])run:([[:space:]]|$)/, " ; ", line)
-      nseg = split(line, seg, /[;|&(`{]+/)
+      # A YAML `run:` and a Dockerfile `RUN`/`CMD`/`ENTRYPOINT` open a command: cut a new
+      # segment there. The exec-form brackets and commas are separators too.
+      gsub(/(^|[[:space:]])(run:|RUN|CMD|ENTRYPOINT)([[:space:]]|$)/, " ; ", line)
+      nseg = split(line, seg, /[][;|&(`{,]+/)
       for (s = 1; s <= nseg; s++) {
+        # The embedded-interpreter carve-out, keyed on the invocation shape and scoped to the
+        # ONE segment that carries it: commands sharing its line are still scanned.
+        if (seg[s] ~ /(^|[^[:alnum:]_.-])blender([[:space:]]|$)/ && seg[s] ~ /--python([[:space:]=]|$)/) continue
         n = split(seg[s], tok, /[[:space:]]+/)
         i = first_command(tok, 1, n)
         # A shell given -c runs the string after it: the command is what follows the -c.
@@ -110,7 +125,10 @@ scan_invocations() {
           i = first_command(tok, k + 1, n)
         }
         if (i > n) continue
-        if (tok[i] ~ interp) {
+        # Match the command by its BASENAME, so `/usr/bin/python3` is the same invocation.
+        base = tok[i]
+        sub(/.*\//, "", base)
+        if (base ~ interp) {
           # Name the interpreter and its first argument, so the reader sees the form at a glance.
           hit = tok[i]
           if (i < n && tok[i + 1] != "") hit = hit " " tok[i + 1]
@@ -130,7 +148,7 @@ while IFS= read -r -d '' path; do
   esac
   case "$path" in *.md|*.mdx) continue ;; esac  # prose is not an executable surface
   grep -Iq . "$file" 2>/dev/null || continue     # binary, or empty
-  if head -n 1 "$file" | grep -Eq '^#![^#]*[/[:space:]]python[0-9.]*([[:space:]]|$)'; then
+  if head -n 1 "$file" | grep -Eq '^#![^#]*([/[:space:]]|-S|--split-string=)python[0-9.]*([[:space:]]|$)'; then
     report "$path: Python source file (its shebang names python)"
     continue
   fi

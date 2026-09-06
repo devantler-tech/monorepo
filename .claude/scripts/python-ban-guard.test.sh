@@ -68,9 +68,19 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Positive control: the real tree is clean, and the guard says so.
-run "$repo_root"
-report "positive control: the repository's current tree passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+# 1. Positive control. The repository-wide sweep is gated behind the release flag, so this
+#    reads the REAL tree only in the on state. In the off state a fixed clean fixture stands in:
+#    the self-test itself is not gated, so an unconditional repository sweep here would block
+#    exactly the changes the off state exists to let through, and the two flag states would not
+#    be distinguishable at all (Codex P1 on #3222).
+if [[ "${ENFORCE_PYTHON_BAN_GUARD:-}" == "true" ]]; then
+  run "$repo_root"
+  report "positive control (flag on): the repository's current tree passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+else
+  r="$(mkrepo clean-fixture)"; addf "$r" tools/ok.sh '#!/usr/bin/env bash' 'jq -n 1'
+  run "$r"
+  report "positive control (flag off): a clean fixture passes, and the repository sweep stays behind ENFORCE_PYTHON_BAN_GUARD" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+fi
 
 # ---------------------------------------------------------------------------
 # 2. A tracked Python source file, by extension and by shebang.
@@ -199,6 +209,56 @@ report "flags an env -S shebang naming python" "$([[ $rc -eq 1 && "$out" == *"sh
 r="$(mkrepo prose-marker)"; addf "$r" docs/guard.md 'Declare `python-ban-guard: allow-file` — no, with a reason.'
 run "$r"
 report "control: prose that mentions a bare marker is never a finding" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 7c. Codex round on #3222: shapes that read clean under the first cut of the heuristic.
+r="$(mkrepo quoted-hash)"; addf "$r" tools/h.sh '#!/usr/bin/env bash' 'echo "a # b"; python3 -c "print(1)"'
+run "$r"
+report "a quoted # does not open a comment: the invocation after it flags" "$([[ $rc -eq 1 && "$out" == *'h.sh:2: Python invocation `python3 -c`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo quoted-hash-control)"; addf "$r" tools/h.sh '#!/usr/bin/env bash' 'echo "a" # python3 -c "print(1)"'
+run "$r"
+report "control: an unquoted # still opens a comment" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo dockerfile)"; addf "$r" tools/Dockerfile 'FROM debian:stable' 'RUN python3 -c "print(1)"' 'CMD ["python3", "-m", "http.server"]'
+run "$r"
+report "flags a Dockerfile RUN and an exec-form CMD" \
+  "$([[ $rc -eq 1 && "$out" == *'Dockerfile:2: Python invocation `python3 -c`'* && "$out" == *'Dockerfile:3: Python invocation `python3`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo dockerfile-control)"; addf "$r" tools/Dockerfile 'FROM debian:stable' 'RUN echo python3' 'ENTRYPOINT ["/bin/bash"]'
+run "$r"
+report "control: a Dockerfile whose RUN mentions python as an argument passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo path-qualified)"; addf "$r" tools/p.sh '#!/usr/bin/env bash' '/usr/bin/python3 -c "print(1)"' './venv/bin/pip install x'
+run "$r"
+report "a path-qualified interpreter flags by its basename" \
+  "$([[ $rc -eq 1 && "$out" == *'p.sh:2: Python invocation `/usr/bin/python3 -c`'* && "$out" == *'p.sh:3: Python invocation `./venv/bin/pip install`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo path-qualified-control)"; addf "$r" tools/p.sh '#!/usr/bin/env bash' '/usr/bin/pythonic-tool -c x' '/usr/bin/env bash -c "echo python3"'
+run "$r"
+report "control: a path whose basename is not an interpreter passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo shebang-env-s-attached)"; addf "$r" tools/check '#!/usr/bin/env -Spython3 -u' 'print(1)'
+run "$r"
+report "flags an attached env -Spython3 shebang" "$([[ $rc -eq 1 && "$out" == *"shebang names python"* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo shebang-split-string)"; addf "$r" tools/check '#!/usr/bin/env --split-string=python3 -u' 'print(1)'
+run "$r"
+report "flags an env --split-string=python3 shebang" "$([[ $rc -eq 1 && "$out" == *"shebang names python"* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo shebang-env-s-control)"; addf "$r" tools/check '#!/usr/bin/env -Sbash -u' 'echo 1'
+run "$r"
+report "control: an attached env -Sbash shebang passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo blender-shared-line)"; addf "$r" tools/b.sh '#!/usr/bin/env bash' 'echo blender --python; python3 -c "print(1)"' 'blender --background --python bake.py -- "$@"; python3 post.py'
+run "$r"
+report "the blender carve-out exempts only its own command segment" \
+  "$([[ $rc -eq 1 && "$out" == *'b.sh:2: Python invocation `python3 -c`'* && "$out" == *'b.sh:3: Python invocation `python3 post.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo blender-shared-line-control)"; addf "$r" tools/b.sh '#!/usr/bin/env bash' 'blender --background --python bake.py -- "$@"; echo done'
+run "$r"
+report "control: a blender segment followed by a non-Python command passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
 # 8. Usage and non-repository input fail closed with exit 2.
