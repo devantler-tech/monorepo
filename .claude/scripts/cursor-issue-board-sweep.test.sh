@@ -123,6 +123,20 @@ report "a private-repo refusal is skipped, not failed" \
 run_sweep "$sweep" --limit not-a-number
 report "a non-numeric --limit is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"
 
+# Reject out-of-range or ambiguous integer spellings before discovery, rather than blaming an outage.
+for invalid_limit in 0 1001 0001 999999999999999999999999999999; do
+  run_sweep "$sweep" --limit "$invalid_limit"
+  report "invalid --limit $invalid_limit fails before any external call" \
+    "$([ "$rc" -eq 1 ] && [ ! -s "$GH_ARGV_LOG" ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
+done
+# Empty successful discovery separates acceptance of both endpoints from saturation handling.
+: > "$GH_RESULTS"
+for valid_limit in 1 1000; do
+  run_sweep "$sweep" --limit "$valid_limit"
+  report "valid --limit $valid_limit reaches discovery" \
+    "$([ "$rc" -eq 0 ] && [ -s "$GH_ARGV_LOG" ] && echo yes || echo no)" "rc=$rc $out"
+done
+
 # ---------------------------------------------------------------------------
 # 7c. SATURATION — a result set at the cap may be truncated, so success would hide unboarded issues.
 printf '%s\n%s\n' "$U1" "$U2" > "$GH_RESULTS"

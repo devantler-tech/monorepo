@@ -509,19 +509,25 @@ findings while you are choosing work rather than after:
 ```
 
 It discovers open Cursor-authored issues org-wide — author matched **exactly**, archived repositories
-excluded, oldest first, with `--limit` pinned because `gh search` defaults to 30 — and passes
-**every** result through the
-idempotent `board-add.sh`, which does both halves of the add and verifies the Status by reading it
+excluded, oldest first, with `--limit` pinned because `gh search` defaults to 30 — and processes
+the results within its write budget through the idempotent `board-add.sh`, which does both halves
+of the add and verifies the Status by reading it
 back. Do **not** hand-roll the `item-add` + `item-edit` pair here: `item-add` exits 0 and prints an
 item id, so a half-completed add is indistinguishable from a finished one, which is the defect that
 helper exists to close.
 
-Read its exit status rather than its output: `0` means every discovered issue is on the board (or
-there were none), and `2` means the **discovery itself failed**, came back truncated at the `--limit`
-cap, or an issue could not be boarded — never treat a failed or short search as an empty lane, since
+Read both its exit status and summary: `0` means the bounded batch succeeded, while `deferred` counts
+issues left for later runs and `skipped` counts private issues requiring a maintainer decision.
+It does not prove complete board coverage. Exit `2` means the **discovery itself failed**, came back
+truncated at the `--limit` cap, or an issue could not be boarded — never treat a failed or short search as an empty lane, since
 the cap bounds what is fetched rather than guaranteeing a complete census. A private repository's
 issue is reported `SKIPPED`, because project 5 is public and boarding one from a private repo is a
 maintainer decision.
+
+The default discovery cap is 300. Saturation stops before any writes and requires an explicit
+larger `--limit` (a decimal integer from 1 to 1000 without leading zeros); repeating the same default
+invocation does not advance past a saturated prefix. If 1000 is also saturated, keep the census
+incomplete until partitioned discovery is implemented. The sweep does not paginate beyond that cap.
 
 The loop paces itself and stops at a small bounded batch. Three limits bind and the batch is sized
 by the tightest: ~80 content-generating requests a minute, ~500 an hour **shared across both

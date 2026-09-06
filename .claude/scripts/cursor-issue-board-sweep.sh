@@ -37,7 +37,7 @@
 #   cursor-issue-board-sweep.sh [--author <login>] [--owner <org>] [--limit <n>]
 #                               [--pace-seconds <n>] [--max-mutations <n>]
 #                               [--board-add <path>] [--dry-run]
-#   exit 0  every discovered issue is on the board (or there were none)
+#   exit 0  bounded batch succeeded; inspect deferred and skipped for remaining issues
 #   exit 1  usage error
 #   exit 2  discovery failed or was truncated at the cap, or an issue could not be boarded
 set -Eeuo pipefail
@@ -81,7 +81,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-case "$limit" in ''|*[!0-9]*) echo "cursor-issue-board-sweep: --limit must be a number: $limit" >&2; exit 1 ;; esac
+# Match the bounded decimal spelling before arithmetic or gh argument parsing. This also rejects
+# ambiguous leading zeros and oversized integers without depending on the shell's integer width.
+case "$limit" in
+  [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|1000) ;;
+  *) echo "cursor-issue-board-sweep: --limit must be a decimal integer from 1 to 1000 without leading zeros" >&2; exit 1 ;;
+esac
 case "$pace" in ''|*[!0-9]*) echo "cursor-issue-board-sweep: --pace-seconds must be a whole number of seconds: $pace" >&2; exit 1 ;; esac
 case "$max_mutations" in ''|*[!0-9]*) echo "cursor-issue-board-sweep: --max-mutations must be a number: $max_mutations" >&2; exit 1 ;; esac
 [ "$max_mutations" -gt 0 ] || { echo "cursor-issue-board-sweep: --max-mutations must be greater than zero" >&2; exit 1; }
@@ -116,7 +121,7 @@ discovered_count=0
 # returned. Reporting success there would leave them unboarded behind a clean exit, so fail closed
 # and say what to do.
 if [ "$discovered_count" -ge "$limit" ]; then
-  echo "cursor-issue-board-sweep: discovery TRUNCATED at the --limit cap (${discovered_count} of at least ${limit}); re-run with a higher --limit — some issues would stay unboarded behind a success" >&2
+  echo "cursor-issue-board-sweep: discovery TRUNCATED at the --limit cap (${discovered_count} of at least ${limit}); use a higher --limit up to 1000; saturation at 1000 requires partitioned discovery before this sweep can proceed" >&2
   exit 2
 fi
 
