@@ -281,3 +281,37 @@ func TestAskDigestIsOptIn(t *testing.T) {
 		t.Fatalf("default output changed: code=%d output=%q", code, got)
 	}
 }
+
+// A stale ask still needs the maintainer -- the contract repairs it by renewing
+// the ask -- so the sheet must carry it, distinguished from one never asked.
+// The fresh ask is the control: it conforms, so it must NOT appear.
+func TestAskDigestIncludesStaleAsksAndExcludesFreshOnes(t *testing.T) {
+	input := `[
+	  {"repo":"stale","number":5,"created_at":"2026-07-01T00:00:00Z","body":"**Blocker:** maintainer authority - stale action | last-verified 2026-09-01: pending | asked pr 2026-08-01"},
+	  {"repo":"fresh","number":6,"created_at":"2026-07-02T00:00:00Z","body":"**Blocker:** maintainer authority - fresh action | last-verified 2026-09-01: pending | asked pr 2026-09-05"}
+	]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 {
+		t.Fatalf("code=%d, want 1; output=%q stderr=%q", code, got, stderr.String())
+	}
+	if !strings.Contains(got, "stale#5") || !strings.Contains(got, "renew it") {
+		t.Fatalf("stale ask must appear and be marked; got %q", got)
+	}
+	if strings.Contains(got, "fresh#6") {
+		t.Fatalf("a fresh ask conforms and must be excluded; got %q", got)
+	}
+}
+
+// The two kinds must stay distinguishable: a never-asked row is labelled as
+// such, so a reader cannot mistake it for one already raised.
+func TestAskDigestLabelsNeverAskedRows(t *testing.T) {
+	input := `[{"repo":"r","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - an action | last-verified 2026-09-01: pending"}]`
+	var out, stderr bytes.Buffer
+	code := run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	if code != 1 || !strings.Contains(got, "never asked") || strings.Contains(got, "renew it") {
+		t.Fatalf("code=%d output=%q", code, got)
+	}
+}

@@ -38,8 +38,9 @@ Sources (exactly one): --org <org> or --input <file>|-
 Options: --today <YYYY-MM-DD> (default UTC today)
          --ask-max-age-days <n> (default 14)
          --quiet (findings only)
-         --ask-digest (emit only the unasked authority blockers, oldest first,
-                       as one consolidated sheet to deliver through a channel)
+         --ask-digest (emit only the authority blockers owing an ask -- never
+                       asked, or asked and gone stale -- oldest first, as one
+                       consolidated sheet to deliver through a channel)
 Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input).
 `
 
@@ -273,6 +274,7 @@ type askRow struct {
 	age      int64
 	agedKnow bool
 	request  string
+	stale    bool // asked once, but the ask has since gone stale
 }
 
 // askRequest renders what the maintainer is actually being asked to do -- the
@@ -338,7 +340,11 @@ func askDigestReport(rows []askRow) string {
 		if r.agedKnow {
 			age = fmt.Sprintf("opened %s  %dd", r.created, r.age)
 		}
-		_, _ = fmt.Fprintf(&out, "  %s#%d  %s\n    %s\n", r.repo, r.number, age, r.request)
+		kind := "never asked"
+		if r.stale {
+			kind = "ask went stale -- renew it"
+		}
+		_, _ = fmt.Fprintf(&out, "  %s#%d  %s  (%s)\n    %s\n", r.repo, r.number, age, kind, r.request)
 	}
 	return out.String()
 }
@@ -462,7 +468,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	for _, item := range issues {
 		line := visibleRecord(item.Body)
 		verdict, legacy := classify(line, o.today, o.maxAge)
-		if verdict == "NO-ASK" {
+		// STALE-ASK belongs here too: the contract repairs it by renewing the
+		// ask, which needs the maintainer exactly as a first ask does. Omitting
+		// it would make a complete-looking sheet under-report what is owed.
+		if verdict == "NO-ASK" || verdict == "STALE-ASK" {
 			age, known := issueAge(item.CreatedAt, o.today)
 			created := ""
 			if known {
@@ -471,6 +480,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			askRows = append(askRows, askRow{
 				repo: item.Repo, number: item.Number, created: created,
 				age: age, agedKnow: known, request: askRequest(line),
+				stale: verdict == "STALE-ASK",
 			})
 		}
 		if verdict == "CONFORMS" && o.quiet {
