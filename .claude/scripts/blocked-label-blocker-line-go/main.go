@@ -309,7 +309,7 @@ func neutralize(s string) string {
 // identifierOnlyRE matches a record whose identifier names a thing but no
 // action -- a bare issue reference, a repository reference, or the legacy
 // phrase alone.
-var identifierOnlyRE = regexp.MustCompile(`^(#[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(#[0-9]+)?|maintainer authority)[.,;:]?$`)
+var identifierOnlyRE = regexp.MustCompile(`^(#[0-9]+|(?i:gh)-[0-9]+|[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?#[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+|maintainer authority)[.,;:]?$`)
 
 // askRequest renders what the maintainer is actually being asked to do -- the
 // identifier segment of the blocker line. The body stays untrusted data, so it

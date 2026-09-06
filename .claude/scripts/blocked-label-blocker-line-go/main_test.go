@@ -504,7 +504,10 @@ func TestAskDigestFlagsLegacyAndActionlessRows(t *testing.T) {
 	input := `[
 	  {"repo":"legacyrepo","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority | last-verified 2026-09-01: pending"},
 	  {"repo":"explicit","number":2,"created_at":"2026-08-01T00:00:00Z","body":"**Blocker:** rotate the signing key | authority | last-verified 2026-09-01: pending"},
-	  {"repo":"encoded","number":3,"created_at":"2026-08-01T00:00:00Z","body":"**Blocker:** &num;7 | authority | last-verified 2026-09-01: pending"}
+	  {"repo":"encoded","number":3,"created_at":"2026-08-01T00:00:00Z","body":"**Blocker:** &num;7 | authority | last-verified 2026-09-01: pending"},
+	  {"repo":"ghref","number":4,"body":"**Blocker:** GH-123 | authority | last-verified 2026-09-01: pending"},
+	  {"repo":"shortref","number":5,"body":"**Blocker:** monorepo#7 | authority | last-verified 2026-09-01: pending"},
+	  {"repo":"lowergh","number":6,"body":"**Blocker:** gh-123 | authority | last-verified 2026-09-01: pending"}
 	]`
 	var out, stderr bytes.Buffer
 	run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
@@ -517,19 +520,23 @@ func TestAskDigestFlagsLegacyAndActionlessRows(t *testing.T) {
 	}
 	// Control: the explicit, descriptive row carries neither marker.
 	line := ""
-	encodedLine := ""
+	opaqueRows := map[string]bool{"encoded#\u200b3": false, "ghref#\u200b4": false, "shortref#\u200b5": false, "lowergh#\u200b6": false}
 	for _, l := range strings.Split(got, "\n") {
 		if strings.Contains(l, "explicit#\u200b2") {
 			line = l
 		}
-		if strings.Contains(l, "encoded#\u200b3") {
-			encodedLine = l
+		for identifier := range opaqueRows {
+			if strings.Contains(l, identifier) && strings.Contains(l, "NO ACTION DESCRIBED") {
+				opaqueRows[identifier] = true
+			}
 		}
 	}
 	if line == "" || strings.Contains(line, "legacy") || strings.Contains(line, "NO ACTION") {
 		t.Fatalf("descriptive explicit row must be unmarked; got line %q in %q", line, got)
 	}
-	if !strings.Contains(encodedLine, "NO ACTION DESCRIBED") {
-		t.Fatalf("an encoded identifier-only record must be flagged; got %q", encodedLine)
+	for identifier, flagged := range opaqueRows {
+		if !flagged {
+			t.Errorf("identifier-only row %q must be flagged; got %q", identifier, got)
+		}
 	}
 }
