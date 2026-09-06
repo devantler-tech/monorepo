@@ -137,6 +137,27 @@ got_stderr="$(sort "$BOARD_LOG")"
 report "a stderr notice is not passed to board-add as an issue" \
   "$([ "$got_stderr" = "$want" ] && [ "$rc" -eq 0 ] && echo yes || echo no)" "rc=$rc got=[$(echo "$got_stderr" | tr '\n' ' ')]"
 
+# 7d2. BOUNDED BATCH — a backfill larger than the batch defers the remainder instead of exceeding
+#      the hourly request budget. Deferral is reported and is NOT a failure: board-add is
+#      idempotent, so the next run continues from where this one stopped.
+printf '%s\n%s\n%s\n' "$U1" "$U2" "$U3" > "$GH_RESULTS"
+run_sweep "$sweep" --max-mutations 2
+report "a batch bound stops after max-mutations issues" \
+  "$([ "$(wc -l < "$BOARD_LOG" | tr -d ' ')" = 2 ] && echo yes || echo no)" "log=[$(cat "$BOARD_LOG" | tr '\n' ' ')]"
+report "the deferred remainder is reported, not failed" \
+  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'deferred=1' && printf '%s' "$out" | grep -q 'failed=0' && echo yes || echo no)" "rc=$rc $out"
+report "a deferral says the next run continues" \
+  "$(printf '%s' "$out" | grep -q 'next sweep continues where this one stopped' && echo yes || echo no)" "$out"
+# Control: a batch at least as large as the set defers nothing, so the bound cannot fire vacuously.
+run_sweep "$sweep" --max-mutations 3
+report "control: a batch covering the whole set defers nothing" \
+  "$([ "$rc" -eq 0 ] && [ "$(wc -l < "$BOARD_LOG" | tr -d ' ')" = 3 ] && printf '%s' "$out" | grep -q 'deferred=0' && echo yes || echo no)" "rc=$rc $out"
+
+run_sweep "$sweep" --max-mutations 0
+report "a zero --max-mutations is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"
+run_sweep "$sweep" --max-mutations nope
+report "a non-numeric --max-mutations is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"
+
 # 7e. Pacing is validated like every other numeric option.
 run_sweep "$sweep" --pace-seconds nope
 report "a non-numeric --pace-seconds is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"

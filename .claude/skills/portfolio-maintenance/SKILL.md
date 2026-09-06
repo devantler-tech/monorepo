@@ -521,8 +521,14 @@ there were none), and `2` means the **discovery itself failed**, came back trunc
 cap, or an issue could not be boarded — never treat a failed or short search as an empty lane, since
 the cap bounds what is fetched rather than guaranteeing a complete census. A private repository's
 issue is reported `SKIPPED`, because project 5 is public and boarding one from a private repo is a
-maintainer decision. The loop paces itself between board mutations: each add is two
-content-generating requests against a shared secondary limit.
+maintainer decision.
+
+The loop paces itself and stops at a bounded batch, both derived from the documented secondary
+limits (~80 content-generating requests a minute, ~500 an hour, shared with everything else the run
+writes). Each add is **two** requests, so the sweep waits between mutations and defers the remainder
+of a large backfill to the next run rather than exceeding the budget and then failing against it.
+A deferral is reported in the summary and is **not** an error: `board-add.sh` is idempotent, so the
+next sweep continues where this one stopped.
 
 This exists as a step because a distant constitutional paragraph was not reliably reached: the
 status-less card count regressed 0 → 4 → 0 → 16 across ticks while the repair was already scripted

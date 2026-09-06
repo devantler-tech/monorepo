@@ -35,7 +35,8 @@
 #
 # USAGE
 #   cursor-issue-board-sweep.sh [--author <login>] [--owner <org>] [--limit <n>]
-#                               [--pace-seconds <n>] [--board-add <path>] [--dry-run]
+#                               [--pace-seconds <n>] [--max-mutations <n>]
+#                               [--board-add <path>] [--dry-run]
 #   exit 0  every discovered issue is on the board (or there were none)
 #   exit 1  usage error
 #   exit 2  discovery failed or was truncated at the cap, or an issue could not be boarded
@@ -48,10 +49,19 @@ owner="devantler-tech"
 limit=300
 board_add="${here}/board-add.sh"
 dry_run=0
-# GitHub's secondary limits allow roughly 80 content-generating requests per minute, and each
-# board-add performs an item-add AND an item-edit. A backfill of a few hundred issues at full speed
-# would blow through that and keep hammering after the failures start, so the loop paces itself.
-pace=1
+# PACING AND BATCH SIZE, both derived from the documented secondary limits: roughly 80
+# content-generating requests per MINUTE and 500 per HOUR, shared with everything else the agent
+# writes. Each board-add performs an item-add AND an item-edit, so one issue costs TWO requests.
+#
+#   per-minute: 2 requests / 2 s  = 60 per minute, under the ~80 ceiling with margin.
+#   per-hour:   150 issues x 2    = 300 requests, leaving room in the ~500 hourly budget for the
+#               rest of the run rather than consuming it all here.
+#
+# A backfill larger than the batch is not an error and needs no human: the helper is idempotent
+# and the next scheduled run continues where this one stopped, so the sweep reports the remainder
+# and exits 0 rather than hammering past a limit it would then keep failing against.
+pace=2
+max_mutations=150
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -60,6 +70,7 @@ while [ $# -gt 0 ]; do
     --limit)      limit="${2:?--limit needs a value}"; shift 2 ;;
     --board-add)  board_add="${2:?--board-add needs a value}"; shift 2 ;;
     --pace-seconds) pace="${2:?--pace-seconds needs a value}"; shift 2 ;;
+    --max-mutations) max_mutations="${2:?--max-mutations needs a value}"; shift 2 ;;
     --dry-run)    dry_run=1; shift ;;
     -h|--help)    sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "cursor-issue-board-sweep: unknown argument: $1" >&2; exit 1 ;;
@@ -68,6 +79,8 @@ done
 
 case "$limit" in ''|*[!0-9]*) echo "cursor-issue-board-sweep: --limit must be a number: $limit" >&2; exit 1 ;; esac
 case "$pace" in ''|*[!0-9]*) echo "cursor-issue-board-sweep: --pace-seconds must be a whole number of seconds: $pace" >&2; exit 1 ;; esac
+case "$max_mutations" in ''|*[!0-9]*) echo "cursor-issue-board-sweep: --max-mutations must be a number: $max_mutations" >&2; exit 1 ;; esac
+[ "$max_mutations" -gt 0 ] || { echo "cursor-issue-board-sweep: --max-mutations must be greater than zero" >&2; exit 1; }
 [ "$dry_run" -eq 1 ] || [ -x "$board_add" ] ||
   { echo "cursor-issue-board-sweep: board-add helper is not executable: $board_add" >&2; exit 1; }
 
@@ -107,6 +120,8 @@ total=0
 boarded=0
 skipped=0
 failed=0
+mutated=0
+deferred=0
 
 while IFS= read -r url; do
   [ -n "$url" ] || continue
@@ -116,9 +131,16 @@ while IFS= read -r url; do
     boarded=$((boarded + 1))
     continue
   fi
+  # BOUNDED BATCH. Stop before exceeding the hourly request budget; the helper is idempotent and
+  # the next run continues, so a deferral is neither a failure nor a silent gap — it is reported.
+  if [ "$mutated" -ge "$max_mutations" ]; then
+    deferred=$((deferred + 1))
+    continue
+  fi
   # Pace before each real mutation, never before the first: this is deliberate throttling against
   # the secondary limits, not a wait for anything remote to change.
-  [ "$total" -eq 1 ] || [ "$pace" -eq 0 ] || sleep "$pace"
+  [ "$mutated" -eq 0 ] || [ "$pace" -eq 0 ] || sleep "$pace"
+  mutated=$((mutated + 1))
   if out="$("$board_add" "$url" 2>&1)"; then
     boarded=$((boarded + 1))
     echo "cursor-issue-board-sweep: boarded ${url}"
@@ -134,6 +156,9 @@ while IFS= read -r url; do
 # not a heredoc, whose unquoted body would expand a `$` arriving inside a URL.
 done < <(printf '%s\n' "$found")
 
-echo "cursor-issue-board-sweep: discovered=${total} boarded=${boarded} skipped=${skipped} failed=${failed} author=${author} owner=${owner} limit=${limit}"
+echo "cursor-issue-board-sweep: discovered=${total} boarded=${boarded} skipped=${skipped} failed=${failed} deferred=${deferred} author=${author} owner=${owner} limit=${limit} pace=${pace}s batch=${max_mutations}"
+if [ "$deferred" -gt 0 ]; then
+  echo "cursor-issue-board-sweep: ${deferred} issue(s) deferred to the next run to stay inside the hourly request budget — board-add is idempotent, so the next sweep continues where this one stopped"
+fi
 [ "$failed" -eq 0 ] || exit 2
 exit 0
