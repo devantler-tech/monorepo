@@ -47,7 +47,10 @@ fi
 if [ -n "${BOARD_ADD_FAIL_ON:-}" ] && [ "$1" = "${BOARD_ADD_FAIL_ON}" ]; then
   echo "board-add: set failed"; exit 2
 fi
-echo "board-add: ok $1"
+if [ -n "${BOARD_ADD_NOOP_ON:-}" ] && printf '%s\n' "${BOARD_ADD_NOOP_ON}" | grep -qxF "$1"; then
+  echo "board-add: $1 already-present (status untouched) (item X) [verified]"; exit 0
+fi
+echo "board-add: $1 added → 📥 Backlog (item X) [verified]"
 STUB
   chmod +x "$tmp/board-add-stub.sh"
 }
@@ -77,7 +80,7 @@ want="$(printf '%s\n%s\n%s\n' "$U1" "$U2" "$U3" | sort)"
 report "every discovered issue is passed to board-add" \
   "$([ "$got" = "$want" ] && [ "$rc" -eq 0 ] && echo yes || echo no)" "rc=$rc got=[$(echo "$got" | tr '\n' ' ')]"
 report "summary counts the sweep" \
-  "$(printf '%s' "$out" | grep -q 'discovered=3 boarded=3 skipped=0 failed=0' && echo yes || echo no)" "$out"
+  "$(printf '%s' "$out" | grep -q 'discovered=3 boarded=3 wrote=3 skipped=0 failed=0' && echo yes || echo no)" "$out"
 
 # 2. Discovery flags are pinned (the AC names each one).
 argv="$(cat "$GH_ARGV_LOG")"
@@ -157,6 +160,22 @@ run_sweep "$sweep" --max-mutations 0
 report "a zero --max-mutations is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"
 run_sweep "$sweep" --max-mutations nope
 report "a non-numeric --max-mutations is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"
+
+# 7d3. THE BATCH COUNTS WRITES, NOT ISSUES EXAMINED. Discovery is oldest-first and returns the same
+#      prefix every run, so charging an already-boarded issue to the budget would spend the batch on
+#      the oldest no-ops and defer everything after them FOREVER — the exact opposite of "the next
+#      run continues". Two already-boarded issues plus one needing a write, with a batch of 1:
+printf '%s\n%s\n%s\n' "$U1" "$U2" "$U3" > "$GH_RESULTS"
+BOARD_ADD_NOOP_ON="$(printf '%s\n%s' "$U1" "$U2")" run_sweep "$sweep" --max-mutations 1
+report "already-boarded issues do not consume the write budget" \
+  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'wrote=1' && printf '%s' "$out" | grep -q 'deferred=0' && echo yes || echo no)" "rc=$rc $out"
+report "the issue needing a write is still reached past the no-ops" \
+  "$(printf '%s' "$out" | grep -q "boarded ${U3}" && echo yes || echo no)" "$out"
+# Control: charge the same three to the budget as ISSUES and the third would be deferred — this is
+# the regression the fix exists to prevent, so prove the counter is the thing that changed.
+BOARD_ADD_NOOP_ON="" run_sweep "$sweep" --max-mutations 1
+report "control: with three real writes and a batch of 1, two ARE deferred" \
+  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'wrote=1' && printf '%s' "$out" | grep -q 'deferred=2' && echo yes || echo no)" "rc=$rc $out"
 
 # 7e. Pacing is validated like every other numeric option.
 run_sweep "$sweep" --pace-seconds nope

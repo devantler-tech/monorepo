@@ -525,10 +525,14 @@ maintainer decision.
 
 The loop paces itself and stops at a bounded batch, both derived from the documented secondary
 limits (~80 content-generating requests a minute, ~500 an hour, shared with everything else the run
-writes). Each add is **two** requests, so the sweep waits between mutations and defers the remainder
-of a large backfill to the next run rather than exceeding the budget and then failing against it.
-A deferral is reported in the summary and is **not** an error: `board-add.sh` is idempotent, so the
-next sweep continues where this one stopped.
+writes). Each add is **two** requests, so the sweep waits between writes and defers the remainder of
+a large backfill to the next run.
+
+Both bounds count **actual writes**, never issues examined. An issue already on the board costs a
+read and no mutation, and discovery is oldest-first, so charging no-ops to the budget would spend
+the batch on the oldest already-boarded issues and defer everything after them on *every* run —
+permanently, not until next time. Counting writes is what makes the deferral safe. A deferral is
+reported in the summary (`wrote=` and `deferred=`) and is not an error.
 
 This exists as a step because a distant constitutional paragraph was not reliably reached: the
 status-less card count regressed 0 → 4 → 0 → 16 across ticks while the repair was already scripted

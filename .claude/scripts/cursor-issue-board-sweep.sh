@@ -122,6 +122,7 @@ skipped=0
 failed=0
 mutated=0
 deferred=0
+wrote_last=0
 
 while IFS= read -r url; do
   [ -n "$url" ] || continue
@@ -131,19 +132,30 @@ while IFS= read -r url; do
     boarded=$((boarded + 1))
     continue
   fi
-  # BOUNDED BATCH. Stop before exceeding the hourly request budget; the helper is idempotent and
-  # the next run continues, so a deferral is neither a failure nor a silent gap — it is reported.
+  # BOUNDED BATCH, counted in actual WRITES rather than issues examined. An issue already on the
+  # board costs board-add.sh a read and no mutation, so charging it to the budget would spend the
+  # whole batch on the oldest already-boarded issues — and because discovery is oldest-first and
+  # returns the same prefix every run, the later issues would then be deferred FOREVER rather than
+  # picked up next time. Counting writes is what makes "the next run continues" actually true.
   if [ "$mutated" -ge "$max_mutations" ]; then
     deferred=$((deferred + 1))
     continue
   fi
-  # Pace before each real mutation, never before the first: this is deliberate throttling against
-  # the secondary limits, not a wait for anything remote to change.
-  [ "$mutated" -eq 0 ] || [ "$pace" -eq 0 ] || sleep "$pace"
-  mutated=$((mutated + 1))
+  # Pace only after a call that actually wrote: a no-op costs no mutation, so it needs no
+  # throttling. Sleeping before a call whose predecessor wrote guarantees at least `pace` seconds
+  # between any two writes. This is deliberate throttling, not a wait for remote state to change.
+  [ "$wrote_last" -eq 0 ] || [ "$pace" -eq 0 ] || sleep "$pace"
+  wrote_last=0
   if out="$("$board_add" "$url" 2>&1)"; then
     boarded=$((boarded + 1))
-    echo "cursor-issue-board-sweep: boarded ${url}"
+    # `already-present (status untouched)` is board-add.sh's own no-op marker.
+    if printf '%s' "$out" | grep -q 'already-present'; then
+      echo "cursor-issue-board-sweep: already on the board ${url}"
+    else
+      mutated=$((mutated + 1))
+      wrote_last=1
+      echo "cursor-issue-board-sweep: boarded ${url}"
+    fi
   elif printf '%s' "$out" | grep -q 'is PRIVATE; project 5 is public'; then
     skipped=$((skipped + 1))
     echo "cursor-issue-board-sweep: SKIPPED (private repository, a maintainer decision) ${url}"
@@ -156,7 +168,7 @@ while IFS= read -r url; do
 # not a heredoc, whose unquoted body would expand a `$` arriving inside a URL.
 done < <(printf '%s\n' "$found")
 
-echo "cursor-issue-board-sweep: discovered=${total} boarded=${boarded} skipped=${skipped} failed=${failed} deferred=${deferred} author=${author} owner=${owner} limit=${limit} pace=${pace}s batch=${max_mutations}"
+echo "cursor-issue-board-sweep: discovered=${total} boarded=${boarded} wrote=${mutated} skipped=${skipped} failed=${failed} deferred=${deferred} author=${author} owner=${owner} limit=${limit} pace=${pace}s batch=${max_mutations}"
 if [ "$deferred" -gt 0 ]; then
   echo "cursor-issue-board-sweep: ${deferred} issue(s) deferred to the next run to stay inside the hourly request budget — board-add is idempotent, so the next sweep continues where this one stopped"
 fi
