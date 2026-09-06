@@ -404,6 +404,20 @@ run "$r"
 report "unsupported YAML retains detection and marker data cannot exempt it" \
   "$([[ $rc -eq 1 && "$out" == *'Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
+legacy_nice_case=0
+for invocation in 'nice python3 --version' 'nice -n 10 pip3 --version' 'nice --adjustment 10 python3 --version'; do
+  legacy_nice_case=$((legacy_nice_case + 1))
+  r="$(mkrepo "legacy-nice-${legacy_nice_case}")"; addf "$r" deploy/pod.yaml "command: $invocation"
+  run "$r"
+  report "compatibility command operands inspect $invocation" \
+    "$([[ $rc -eq 1 && "$out" == *'Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo legacy-nice-control)"; addf "$r" deploy/pod.yaml \
+  'command: nice echo python3' 'run: nice -n 10 echo python3' 'run: nice --help python3'
+run "$r"
+report "control: compatibility nice arguments remain data" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
 # 9. Ablation: neutralise the invocation pattern in a COPY of the guard and show the
 #    #2769 fixture no longer fires — so the earlier flag depended on that pattern — while
 #    the source-file check, which the ablation does not touch, still fires.

@@ -139,10 +139,15 @@ scan_invocations() {
     }
     # Index of the first token from `from` that is a command: not empty, not a -flag, not a
     # VAR= prefix, not a wrapping word. Returns n + 1 when the segment has none.
-    function first_command(tok, from, n,    i, t) {
+    function first_command(tok, from, n,    i, t, wrapper) {
+      wrapper = ""
       for (i = from; i <= n; i++) {
         t = tok[i]
-        if (t == "" || t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || index(wrappers, " " executable_name(t) " ") > 0) continue
+        if (t == "") continue
+        if (wrapper == "nice" && (t == "--help" || t == "--version")) return n + 1
+        if (wrapper == "nice" && (t == "-n" || t == "--adjustment")) { i++; continue }
+        if (t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
+        if (index(wrappers, " " executable_name(t) " ") > 0) { wrapper = executable_name(t); continue }
         return i
       }
       return n + 1
@@ -151,7 +156,7 @@ scan_invocations() {
       # Legacy fallback pattern; the self-test ablates both scanner engines.
       interp = "^(python[23]?([.][0-9]+)?|pip3?|pytest)$"
       # Words that wrap a command rather than being one: the walk skips them and reads on.
-      wrappers = " exec xargs env sudo time command nohup if then elif else do while until ! "
+      wrappers = " exec xargs env sudo time command nohup nice if then elif else do while until ! "
     }
     {
       first_line = NR
@@ -184,7 +189,10 @@ scan_invocations() {
       }
       # Recognize command prefixes before normalization can change their spelling.
       gsub(/(^|[[:space:]])run:([[:space:]]|$)/, " ; ", line)
-      if (path ~ /\.ya?ml$/) gsub(/(^|[[:space:]])shell:([[:space:]]|$)/, " ; ", line)
+      if (path ~ /\.ya?ml$/) {
+        gsub(/(^|[[:space:]])shell:([[:space:]]|$)/, " ; ", line)
+        sub(/^[[:space:]]*(-[[:space:]]+)?command:[[:space:]]+/, "", line)
+      }
       line = word_escapes(line)
       # Quotes do not hide an invocation: `bash -c "python3 …"` still runs it.
       gsub(/"/, " ", line)
