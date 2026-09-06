@@ -2682,7 +2682,7 @@ still applies.
 
 For every other actionable PR — whoever authored it — the merge itself is
 **low-ceremony**: use the current survey pentad plus a **fresh**
-`gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup`
+`gh pr view <n> --repo devantler-tech/<repo> --json number,state,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup`
 immediately before merging.
 🔴 **`title` is in that list because the head pin does NOT cover it.** Editing a PR title changes no
 commit, so `--match-head-commit` still succeeds — and the squash subject comes from the title, which
@@ -2690,6 +2690,25 @@ becomes the changelog and release input. An author who edits the title after the
 (most reachable on an external PR, where the editor is the party the preflight exists to check) lands a
 non-Conventional subject through a merge that passed every other gate. So **re-validate the title
 against Conventional Commits in this final read**, not only when you set it.
+
+🔴 **`state` is in that list because every other field reads the same on an ALREADY-MERGED PR as
+on a healthy one still computing mergeability.** A merged PR returns `isDraft:false`, the author, a
+Conventional title, a real `headRefOid`, a full green `statusCheckRollup` — and
+`mergeStateStatus:UNKNOWN`, which also occurs while an open PR's mergeability is being computed.
+`UNKNOWN` does not satisfy `CLEAN` or exception (a); an open PR with that value cannot proceed to merge.
+Nothing in the seven-field list distinguishes the two, so the run diagnoses a
+phantom blocker on work that is already done. Measured twice: `world-at-ruin#740` on 2026-08-20, read
+34 minutes after it merged; and `monorepo#3220` on 2026-09-06, read **5h22m** after it merged as
+`b7c4b29563`, with 77/77 checks green, zero unresolved threads, a Codex green at that exact head and
+every commit `verified=true` — roughly eight calls spent chasing a blocker that did not exist,
+including a rulesets read and a per-commit signature check. The REST fields in those merged-PR
+observations also stayed unhelpful (`mergeable=null`, `mergeable_state=unknown`, stable across repeated
+reads); re-reading mergeability could not identify their terminal state. `state` is decisive where
+none of the others is, it is the same field *Merge policy*
+already names for confirming a merge landed, and it costs nothing — the eight-field read is accepted
+by `gh` unchanged. **Read it first: continue only when `state` is `OPEN`. `MERGED` and `CLOSED`
+end the preflight; do not diagnose their mergeability. A failed or missing state read is `UNKNOWN`
+and authorizes no action.**
 
 🔴 **The preflight field list CANNOT see review-thread resolution — and an unresolved thread is a
 REQUIRED merge rule on every repository here.** `required_review_thread_resolution: true` is set on
@@ -2772,7 +2791,7 @@ names the contributor's **fork**), so without the flag the command resolves agai
 the run happens to be standing in. Across a cross-repo sweep a colliding PR number then reads a
 different repository's PR while appearing to satisfy the ownership check. Pinning `--repo` is what
 makes owner `devantler-tech` an actual test rather than an assumption.
-The result must show `isDraft:false`, owner `devantler-tech`, and
+The result must show `state:OPEN`, `isDraft:false`, owner `devantler-tech`, and
 `mergeStateStatus:CLEAN`; the pentad must show zero review findings and a green review from any lane
 (CodeRabbit, Codex, Cursor Bugbot) —
 or a qualifying clean **local
