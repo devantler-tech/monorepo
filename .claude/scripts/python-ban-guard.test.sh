@@ -624,6 +624,7 @@ report "control: package metadata and script arguments are data" "$([[ $rc -eq 0
 if ! bash "$here/python-ban-guard-wrappers.test.sh"; then fail=1; fi
 if ! bash "$here/python-ban-guard-command-surfaces.test.sh"; then fail=1; fi
 if ! bash "$here/python-ban-guard-build-surfaces.test.sh"; then fail=1; fi
+if ! bash "$here/python-ban-guard-symlinks.test.sh"; then fail=1; fi
 
 if [[ $fail -eq 0 ]]; then
   echo "python-ban-guard self-test: all cases passed"

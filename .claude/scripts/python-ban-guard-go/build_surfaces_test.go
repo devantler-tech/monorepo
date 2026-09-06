@@ -14,6 +14,7 @@ func TestBuildExecutionSurfaces(t *testing.T) {
 		wantError                bool
 	}{
 		{"generate direct", "tools.go", "package tools\n//go:generate python3 --version\n", "tools.go:2: Python invocation", false},
+		{"generate invalid package is ignored", "tools.go", "package 123\n//go:generate python3 --version\n", "", false},
 		{"generate tab", "tools.go", "package tools\n//go:generate\tpip3 --version\n", "tools.go:2: Python invocation", false},
 		{"generate quoted", "tools.go", "package tools\n//go:generate \"pyth\\x6fn3\" --version\n", "tools.go:2: Python invocation", false},
 		{"generate alias", "tools.go", "package tools\n//go:generate -command py python3\n//go:generate py --version\n", "tools.go:3: Python invocation", false},

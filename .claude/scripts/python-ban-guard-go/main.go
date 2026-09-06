@@ -34,6 +34,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "python-ban-parser: need display path and input file")
 		os.Exit(2)
 	}
+	info, err := os.Lstat(os.Args[2])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintf(os.Stderr, "python-ban-parser: %s: symlink inputs are not supported\n", os.Args[1])
+		os.Exit(2)
+	}
 	data, err := os.ReadFile(os.Args[2])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

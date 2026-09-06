@@ -88,7 +88,7 @@ func generateWords(src string) ([]generateWord, error) {
 		if end < 0 {
 			end = len(src)
 		}
-		value := ""
+		var value string
 		if src[0] == '"' {
 			end = 1
 			for end < len(src) && src[end] != '"' {
@@ -241,7 +241,7 @@ func (s *scanner) makeRecipes(src string) error {
 	for _, recipe := range recipes {
 		program := makeRecipeVariables(recipe.source, variables, 0)
 		if err := s.source(program, recipe.line, 0, false); err != nil {
-			return fmt.Errorf("Make recipe line %d: %w", recipe.line, err)
+			return fmt.Errorf("make recipe line %d: %w", recipe.line, err)
 		}
 	}
 	return nil
@@ -278,15 +278,15 @@ func makeRecipeVariables(src string, variables map[string]string, depth int) str
 		}
 		name := string(src[i])
 		if src[i] == '(' || src[i] == '{' {
-			open, close := src[i], byte(')')
+			open, closing := src[i], byte(')')
 			if open == '{' {
-				close = '}'
+				closing = '}'
 			}
 			start, nesting := i+1, 1
 			for i++; i < len(src); i++ {
 				if src[i] == open {
 					nesting++
-				} else if src[i] == close {
+				} else if src[i] == closing {
 					nesting--
 					if nesting == 0 {
 						break

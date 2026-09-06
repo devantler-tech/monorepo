@@ -362,6 +362,11 @@ scan_invocations() {
 
 while IFS= read -r -d '' path; do
   file="$top/$path"
+  # Reject tracked links before any content probe, including dangling links.
+  if [ -L "$file" ]; then
+    echo "python-ban-guard: $path: symlink inputs are not supported" >&2
+    exit 2
+  fi
   [ -f "$file" ] || continue                     # a gitlink, or a path missing from the tree
   case "$path" in
     *.py|*.pyi|*.pyw)

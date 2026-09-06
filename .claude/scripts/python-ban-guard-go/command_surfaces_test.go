@@ -64,6 +64,7 @@ func TestCommandSurfaceRegressions(t *testing.T) {
 
 // TestEnvOptionalShebangWords preserves interpreter detection and quoted data boundaries.
 func TestEnvOptionalShebangWords(t *testing.T) {
+	t.Setenv("EMPTY", "echo") // Interpreter selection must not read the scanner host's environment.
 	for _, test := range []struct {
 		source string
 		want   string
