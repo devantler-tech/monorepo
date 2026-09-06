@@ -1767,7 +1767,7 @@ jobs:
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
-    if: false
+    if: always()
     needs:
       - changes
       - build-docs
