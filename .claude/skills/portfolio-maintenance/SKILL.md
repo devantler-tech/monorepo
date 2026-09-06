@@ -498,7 +498,7 @@ submodule. Split its work in two, because only one half is path-less:
   is exactly the collision this loop's worktree rule exists to prevent. Retire the board issue's
   acquired SHA when that draft PR opens, using the same monorepo root.
 
-### 1c. Board the Cursor lane's issues — one command, before you select
+### Board the Cursor lane's issues — one command, before you select
 
 The Cursor cloud instance gets 403 on Projects, so **every issue it files is necessarily unboarded**
 and a local run has to board it. Run this before issue selection, so the board reflects the lane's
