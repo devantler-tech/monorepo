@@ -1,0 +1,44 @@
+name: CI aggregate contract
+
+# An organization ruleset binds this workflow to reviewed main. The candidate
+# cannot disable its own control by editing this workflow in the same PR.
+on:
+  pull_request:
+  merge_group:
+
+permissions: {}
+
+jobs:
+  validate:
+    name: Validate CI aggregate execution
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Read one candidate file through GitHub's API. Never check out or run
+      # candidate code: the inline checker below comes from the ruleset source.
+      - name: Read candidate CI workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_REPOSITORY: ${{ github.repository }}
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$CANDIDATE_REPOSITORY/contents/.github/workflows/ci.yaml?ref=$CANDIDATE_SHA" \
+            --jq '.content | @base64d' >"$RUNNER_TEMP/candidate-ci.yaml"
+
+      - name: Require the aggregate to always run
+        env:
+          CI_WORKFLOW: ${{ runner.temp }}/candidate-ci.yaml
+        run: |
+          set -euo pipefail
+          condition="$(yq -r '.jobs.status.if // ""' "$CI_WORKFLOW")"
+          # Match literal GitHub syntax without interpolating it in this workflow.
+          # shellcheck disable=SC2016
+          case "$condition" in
+            'always()' | '${''{ always() }}') ;;
+            *)
+              echo 'CI aggregate must use jobs.status.if: always()' >&2
+              exit 1
+              ;;
+          esac
