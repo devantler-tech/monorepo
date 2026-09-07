@@ -5018,6 +5018,22 @@ step:
    The **open verification-hypothesis store** is
    `/Users/homelab-mac-mini/.claude/projects/-Users-homelab-mac-mini-git-personal-monorepo/memory/agent-improver-routine.md`
    for Claude and the `Hypotheses / next run` section of the Codex Agent Improver memory file.
+   🔴 **A SIBLING'S STORE IS EVIDENCE ONLY WHILE ITS LANE IS PRODUCING — establish that FIRST, because
+   a frozen ledger and a quiet one are indistinguishable.** That store is the one input this instance
+   cannot corroborate from its own lane, so an unchecked read is exactly where a dead sibling silently
+   becomes data. Run [`.claude/scripts/codex-lane-liveness.sh`](.claude/scripts/codex-lane-liveness.sh)
+   (`0` producing, `1` not producing, `2` UNKNOWN) and read its verdict **before** scoring or opening
+   anything against that store. On a `1` or a `2` the sibling's pending hypotheses are **blocked by the
+   outage**: record them that way and take **no** verdict, directional reading, or "no movement"
+   inference from them. The reasoning is measured under *Agent definition locations* — a dead lane's
+   error count falls to zero, so a naive read scores it as having **improved**, while the scheduler's
+   own view stays healthy throughout because `last_run_at` advances across every stub. ⚠️ **A `1` or a
+   `2` is never a run-stopper**: it fences only what the outage actually froze, and the settled-verdict
+   and signature-overlap rules below still bind on everything else — letting one lane's provider quota
+   halt the other would be the passive self-blocking this contract forbids everywhere else. Measured
+   2026-09-07: the Codex lane was NOT-PRODUCING across **26 consecutive stub dispatches** (cause class
+   `quota/billing`) while its ledger sat ~29 h stale, and nothing in this clause would have said so
+   (monorepo#3267).
    🔴 **Each Agent Improver run reads the SIBLING instance's scorecard and hypothesis store too, before
    it scores or opens any hypothesis — naming the two stores is not the same as wiring them together.**
    Each run boots into its own store, so without this cross-read a hypothesis opened by one instance can
