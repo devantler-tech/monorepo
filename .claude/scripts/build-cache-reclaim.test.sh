@@ -139,6 +139,22 @@ if command -v go > /dev/null 2>&1; then
       fail "${label} over budget was not selected for cleaning"
   done
 
+  # ...and the dry-run SUMMARY must include those caches. The tree sweep counts a WOULD
+  # REAP toward the projected total, so a cache branch that does not is not merely
+  # inconsistent -- it under-reports the larger half. Measured on the real host: the log
+  # said GOMODCACHE would reclaim ~34794 MB while the summary beneath it read "would
+  # reclaim=~43 MB", i.e. an operator reading the scheduled dry-run would conclude there
+  # was nothing worth reclaiming. The issue's own acceptance criterion is that it reports
+  # sizes so growth is visible before it is critical.
+  summary_mb=$(printf '%s\n' "$out" | sed -n 's/.*would reclaim=~\([0-9]*\) MB.*/\1/p' | tail -1)
+  case "$summary_mb" in
+    '' | *[!0-9]*) fail "dry-run summary reported no parsable would-reclaim total" ;;
+    *)
+      [ "$summary_mb" -ge 4 ] ||
+        fail "dry-run summary omitted the Go caches: would reclaim=~${summary_mb} MB, expected >= 4"
+      ;;
+  esac
+
   rm -f "$GO_BUILD_FIXTURE/blob" "$GO_MOD_FIXTURE/blob"
 fi
 

@@ -155,6 +155,13 @@ reclaim_go_cache() {
   fi
 
   if [ "$MODE" != apply ]; then
+    # Count the projection, exactly as the tree sweep below does for a WOULD REAP. Without
+    # this the dry-run summary reports the tree total alone and silently omits the caches --
+    # which are the larger half. Measured on the real host: the log said GOMODCACHE would
+    # reclaim ~34794 MB while the summary beneath it read "would reclaim=~43 MB". Dry-run is
+    # the mode the scheduled sibling runs, so that summary is the line an operator actually
+    # reads to decide whether reclaiming is worth doing at all.
+    reclaimed_mb=$((reclaimed_mb + cache_mb))
     log "${label} would be cleaned (over budget), ~${cache_mb} MB"
     return 0
   fi
