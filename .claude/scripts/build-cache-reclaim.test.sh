@@ -231,6 +231,69 @@ PATH="${stub_dir}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$late_root" \
   bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
 [ -e "$late_tree" ] ||
   fail "a tree whose holder appeared after the snapshot was reaped: $late_tree"
+
+# --- 12. an INCOMPLETE liveness scan keeps the tree (completeness ablation) --------
+# `lsof +D` exits 1 in EVERY case that matters here -- an idle tree, a tree with a
+# holder, and a scan it could not finish -- so the exit status discriminates nothing.
+# Measured on this host:
+#     idle, readable        status=1  rows=[]      stderr=[]
+#     holder present        status=1  rows=[path]  stderr=[]
+#     unreadable subdir     status=1  rows=[]      stderr=[lsof: WARNING: can't opendir]
+# So "no rows" is a claim about the SCAN, not about the tree: an unreadable
+# subdirectory yields exactly the same empty row set as a genuinely idle tree, and the
+# tree is then deleted on the strength of an answer lsof never gave. The diagnostic
+# stream is the only signal that separates the two.
+#
+# The two fixtures below differ in exactly that dimension and nothing else -- same
+# shape, same age, same empty row set, same exit status -- so this test is its own
+# ablation: the blocked one must be KEPT and the clean one must still be REAPED. A
+# script that simply kept everything would fail on the second.
+scan_root="${fixture_root}/scan-root"
+mkdir -p "$scan_root" || fail 'fixture: scan root'
+blocked_tree="${scan_root}/codex-blocked-scan"
+clean_tree="${scan_root}/codex-clean-scan"
+for d in "$blocked_tree" "$clean_tree"; do
+  mkdir -p "${d}/nested" || fail "fixture: $d"
+  printf 'payload\n' > "${d}/nested/file"
+  scan_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
+    scan_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
+  touch -t "$scan_stamp" "$d" || fail "fixture: touch $d"
+done
+blocked_canon=$(cd -- "$blocked_tree" && pwd -P) || fail 'fixture: resolve blocked tree'
+scan_stub="${fixture_root}/scan-stub-bin"
+mkdir -p "$scan_stub" || fail 'fixture: scan stub dir'
+scan_canon_parent=$(cd -- "$scan_root" && pwd -P) || fail 'fixture: resolve scan root'
+cat > "${scan_stub}/lsof" <<STUB
+#!/bin/sh
+# Call 1 is the up-front snapshot: valid, and names neither tree, so both reach the
+# per-tree re-verification that this test is about.
+c="${fixture_root}/scan-stub-calls"
+n=\$(cat "\$c" 2>/dev/null || echo 0)
+echo \$((n + 1)) > "\$c"
+if [ "\$n" -eq 0 ]; then
+  printf 'n%s\n' "${scan_canon_parent}/unrelated-path"
+  exit 0
+fi
+# Re-verification. Both answers carry an EMPTY row set and exit 1 -- the shapes are
+# identical except for the diagnostic, which is the whole point of the ablation.
+for a in "\$@"; do
+  case "\$a" in
+    "${blocked_canon}"|"${blocked_canon}"/*)
+      echo "lsof: WARNING: can't opendir(${blocked_canon}/nested): Permission denied" >&2
+      exit 1
+      ;;
+  esac
+done
+exit 1
+STUB
+chmod +x "${scan_stub}/lsof" || fail 'fixture: chmod scan stub'
+PATH="${scan_stub}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$scan_root" \
+  bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
+[ -e "$blocked_tree" ] ||
+  fail "a tree whose liveness scan could not complete was reaped: $blocked_tree"
+[ -e "$clean_tree" ] &&
+  fail "ablation partner: a tree with a COMPLETE empty scan was not reaped: $clean_tree"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0

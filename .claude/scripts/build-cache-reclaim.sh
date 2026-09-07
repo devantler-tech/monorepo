@@ -257,16 +257,30 @@ still_idle() {
   # Probe the RESOLVED path: lsof works in physical paths, so a symlinked spelling would
   # be asking about a different name for the same tree. A path that cannot be resolved is
   # reported in use, so it is kept.
-  local path=$1 rows canon
+  local path=$1 rows canon errfile diagnostics
   [ -n "$LSOF_BIN" ] || return 1
   canon=$(cd -- "$path" 2>/dev/null && pwd -P) || return 1
   [ -n "$canon" ] || return 1
-  rows=$("$LSOF_BIN" +D "$canon" -Fn 2>/dev/null | sed -n 's/^n//p')
-  if [ $? -gt 1 ]; then
-    # Could not get an answer at all: report "in use" so the tree is kept.
+  errfile=$(mktemp 2>/dev/null) || return 1
+  rows=$("$LSOF_BIN" +D "$canon" -Fn 2>"$errfile" | sed -n 's/^n//p')
+  diagnostics=$(cat -- "$errfile" 2>/dev/null)
+  rm -f -- "$errfile"
+  # A non-empty row set names a holder, so the tree is in use.
+  [ -z "$rows" ] || return 1
+  # An EMPTY row set is a claim about the SCAN, not about the tree, and on its own it is
+  # not evidence of anything. Measured here: lsof exits 1 for an idle tree, for a tree
+  # with a holder, and for a scan it could not finish alike, so the exit status separates
+  # none of the three -- and a subdirectory it cannot opendir() yields exactly the same
+  # empty row set as a genuinely idle tree. The diagnostic stream is the only signal that
+  # tells those two apart, so an empty result counts as idle only when the scan ran clean.
+  # Anything else keeps the tree: the same fail-closed direction as every other rule here,
+  # and the cheap side of the trade -- a kept tree costs one more cycle, while a tree
+  # deleted on an answer lsof never gave costs a live run its working state.
+  if [ -n "$diagnostics" ]; then
+    log "KEEP  (scan incomplete) $canon: ${diagnostics%%$'\n'*}"
     return 1
   fi
-  [ -z "$rows" ]
+  return 0
 }
 
 own_session_tree() {
