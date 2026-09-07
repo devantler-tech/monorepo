@@ -67,6 +67,14 @@ dry=$(make_tree 'ksail-dry-run' 10) || fail 'fixture: ksail-dry-run'
 out=$(run dry-run 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$dry" ] || fail "dry-run deleted a tree: $dry"
 printf '%s' "$out" | grep -q 'WOULD REAP' || fail 'dry-run did not report WOULD REAP'
+# ...and its SUMMARY must not claim it reaped anything. The per-tree lines say
+# "WOULD REAP", but the summary counter is shared with apply mode, so a dry-run
+# reported "reaped=N ... reclaimed=~N MB" while deleting nothing. In a script whose
+# entire value is that it is safe to trust, a summary that says it deleted trees it did
+# not delete is a reporting defect, not a cosmetic one -- and the scheduled sibling runs
+# in dry-run, so that is the line an operator actually reads.
+printf '%s' "$out" | grep -qE 'summary: reaped=[1-9]' &&
+  fail 'dry-run summary claimed trees were reaped'
 
 # --- 5. invalid arguments fail closed, before any deletion ------------------------
 guard=$(make_tree 'war-guard-run' 10) || fail 'fixture: war-guard-run'

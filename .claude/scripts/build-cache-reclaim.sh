@@ -360,7 +360,16 @@ $(find "$TMPDIR_ROOT" -maxdepth 1 -type d \
 EOF
 fi
 
-log "summary: reaped=${removed} kept=${kept} reclaimed=~${reclaimed_mb} MB"
+# Report in the mode's own vocabulary. The counters are shared between the two modes, so
+# a dry-run summary phrased as apply ("reaped=N, reclaimed=~N MB") states that trees were
+# deleted when none were -- and dry-run is the mode the scheduled sibling runs, so that is
+# the line an operator actually reads. In a script whose value rests on being trustworthy
+# about deletion, that is a reporting defect rather than a cosmetic one.
+if [ "$MODE" = apply ]; then
+  log "summary: reaped=${removed} kept=${kept} reclaimed=~${reclaimed_mb} MB"
+else
+  log "summary: would reap=${removed} kept=${kept} would reclaim=~${reclaimed_mb} MB (dry-run: nothing deleted)"
+fi
 if command -v df >/dev/null 2>&1; then
   log "free now: $(df -h / 2>/dev/null | awk 'NR==2{print $4}')"
 fi
