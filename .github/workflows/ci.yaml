@@ -22,6 +22,7 @@ jobs:
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
       branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
       worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
+      build-cache-reclaim: ${{ steps.filter.outputs.build-cache-reclaim }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
@@ -144,6 +145,12 @@ jobs:
             branch-cleanup:
               - '.claude/scripts/branch-cleanup.sh'
               - '.claude/scripts/branch-cleanup.test.sh'
+            build-cache-reclaim:
+              - '.claude/scripts/build-cache-reclaim.sh'
+              - '.claude/scripts/build-cache-reclaim.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             worktree-cleanup:
               - '.claude/scripts/worktree-claim-lib.sh'
               - '.claude/scripts/worktree-cleanup.sh'
@@ -783,6 +790,31 @@ jobs:
       # (monorepo#2298), plus the codex-namespace refusal.
       - name: Self-test branch-cleanup namespaces
         run: bash .claude/scripts/branch-cleanup.test.sh
+
+  test-build-cache-reclaim:
+    name: Test build cache reclaim
+    needs: changes
+    if: needs.changes.outputs.build-cache-reclaim == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # This script DELETES, so every assertion is a safety property proved by
+      # ablation: a fixture differing from a reapable tree in exactly one dimension
+      # (age, name pattern, dry-run, read-only module cache) must be KEPT, so a script
+      # that deleted everything could not pass. The macos leg is load-bearing: the host
+      # ships bash 3.2 and BSD find/touch/stat, which is where the age and read-only
+      # probes actually run in production.
+      - name: Self-test build-cache-reclaim safety gates
+        run: bash .claude/scripts/build-cache-reclaim.test.sh
 
   test-worktree-cleanup:
     name: Test worktree cleanup
@@ -1785,6 +1817,7 @@ jobs:
       - test-safe-clone
       - test-branch-cleanup
       - test-worktree-cleanup
+      - test-build-cache-reclaim
       - test-submodule-init
       - test-submodule-pin-currency
       - test-blocked-label-blocker-line
@@ -1846,6 +1879,7 @@ jobs:
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-worktree-cleanup.result }}
+            ${{ needs.test-build-cache-reclaim.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-blocked-label-blocker-line.result }}
