@@ -47,6 +47,9 @@ make_tree() {
 # caches: `du` over a multi-gigabyte module cache took minutes per call, and the suite
 # calls this many times. It is also a stronger safety guarantee than the absurd budget
 # below -- that only stops a cache being CLEANED; this stops one being touched at all.
+# The three cases that invoke the script DIRECTLY (10, 11, 12) must set both variables
+# themselves for the same reason. Without them each of those runs `du` over the real
+# multi-gigabyte module cache, which dominated this suite's runtime.
 GO_BUILD_FIXTURE="$fixture_root/go-build-cache"
 GO_MOD_FIXTURE="$fixture_root/go-mod-cache"
 mkdir -p "$GO_BUILD_FIXTURE" "$GO_MOD_FIXTURE" || {
@@ -247,6 +250,7 @@ touch -t "$own_stamp" "$own_tree" || fail 'fixture: touch own-session tree'
 # Run over the PHYSICAL root while TMPDIR names the SAME tree through the symlink.
 TMPDIR="${fixture_root}/link/codex-own-session" \
   BUILD_CACHE_RECLAIM_TMPDIR="${fixture_root}/phys" \
+  GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" \
   bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
 [ -e "$own_tree" ] ||
   fail "the caller's own session tree was reaped through a symlinked TMPDIR: $own_tree"
@@ -299,6 +303,7 @@ exit 0
 STUB
 chmod +x "${stub_dir}/lsof" || fail 'fixture: chmod stub'
 PATH="${stub_dir}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$late_root" \
+  GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" \
   bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
 [ -e "$late_tree" ] ||
   fail "a tree whose holder appeared after the snapshot was reaped: $late_tree"
@@ -359,11 +364,112 @@ exit 1
 STUB
 chmod +x "${scan_stub}/lsof" || fail 'fixture: chmod scan stub'
 PATH="${scan_stub}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$scan_root" \
+  GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" \
   bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
 [ -e "$blocked_tree" ] ||
   fail "a tree whose liveness scan could not complete was reaped: $blocked_tree"
 [ -e "$clean_tree" ] &&
   fail "ablation partner: a tree with a COMPLETE empty scan was not reaped: $clean_tree"
+
+# --- 13. a Go cache a LIVE process is using is kept (cache liveness ablation) ------
+# `go clean -modcache` empties the ENTIRE module cache, and nothing above protected it:
+# holds_open and still_idle both narrow to TMPDIR_ROOT and both run in the tree sweep
+# that FOLLOWS, so a concurrent build's module files could vanish mid-build. That breaks
+# the script's own invariant -- every "I could not tell" path keeps the cache -- so the
+# budget must not be the only gate.
+#
+# The cache fixture deliberately lives OUTSIDE the swept temp root, exactly as the real
+# GOMODCACHE does. Keyed on a cache inside TMPDIR_ROOT this case would pass on an
+# implementation that only consulted the temp-root-narrowed snapshot -- which is the
+# wrong instrument for a path that is never under it.
+#
+# The gate runs BEFORE the mode branch on purpose, so the dry-run PROJECTION is honest
+# too: the scheduled sibling runs dry-run, and promising to reclaim a cache that apply
+# would keep is the same class of defect as omitting one it would clean.
+if command -v go > /dev/null 2>&1; then
+  mod_outside_root=$(mktemp -d) || fail 'fixture: module-cache root outside the temp root'
+  mkdir -p "${mod_outside_root}/nested" || fail 'fixture: module-cache nested dir'
+  printf 'payload\n' > "${mod_outside_root}/nested/file"
+  dd if=/dev/zero of="${mod_outside_root}/blob" bs=1024 count=2048 2> /dev/null
+
+  # 13a. ABLATION PARTNER, no holder: over a 0 GB budget the cache IS selected. Without
+  # this, 13b passes just as well on a script that never selects any cache at all.
+  out=$(GOMODCACHE_OVERRIDE="$mod_outside_root" run dry-run 3 0)
+  printf '%s\n' "$out" | grep -q 'GOMODCACHE would be cleaned' ||
+    fail 'ablation partner: an idle over-budget module cache was not selected for cleaning'
+
+  # 13b. the same cache, now held open by a live process, must be KEPT.
+  /bin/sh -c "exec 9<'${mod_outside_root}/nested/file'; sleep 30" &
+  mod_holder_pid=$!
+  sleep 1
+  if kill -0 "$mod_holder_pid" 2>/dev/null; then
+    out=$(GOMODCACHE_OVERRIDE="$mod_outside_root" run dry-run 3 0)
+    printf '%s\n' "$out" | grep -q 'GOMODCACHE would be cleaned' &&
+      fail 'a module cache held open by a live process was selected for cleaning'
+    printf '%s\n' "$out" | grep -qE '^build-cache-reclaim: GOMODCACHE .* in use' ||
+      fail 'a module cache held open by a live process was not reported as in use'
+
+    # ...and apply must leave it on disk, not merely log a keep.
+    GOMODCACHE_OVERRIDE="$mod_outside_root" run apply 3 0 > /dev/null
+    [ -e "${mod_outside_root}/nested/file" ] ||
+      fail 'apply cleaned a module cache that a live process was using'
+
+    kill "$mod_holder_pid" 2>/dev/null
+    wait "$mod_holder_pid" 2>/dev/null
+  else
+    fail 'fixture: module-cache holder did not stay alive; liveness assertion not exercised'
+  fi
+
+  rm -rf -- "$mod_outside_root"
+fi
+
+# --- 14. a LARGE snapshot must not fail OPEN (SIGPIPE / pipefail ablation) ---------
+# The liveness matchers pipe the snapshot into awk. An awk that `exit`s on its first hit
+# closes that pipe, printf takes SIGPIPE, and under `set -o pipefail` the PIPELINE reports
+# 141 -- which the matcher reads as "not in use" and the caller acts on by DELETING. It is
+# invisible on a small snapshot, because printf finishes before awk can exit; it appears
+# once enough files are open, which is exactly when a sweep matters.
+#
+# The filler paths must sit UNDER the temp root, because the snapshot is narrowed to that
+# root before holds_open ever sees it -- filler outside it is stripped, the snapshot
+# collapses to one line, printf completes, and this case passes on the broken matcher.
+# Verified both ways: with the filler narrowed away the pre-fix matcher KEEPS the tree;
+# with it retained the pre-fix matcher REAPS a tree lsof has explicitly named as held.
+#
+# `+D` (still_idle's targeted re-probe) deliberately answers with a CLEAN EMPTY scan, so
+# holds_open is the ONLY check that can keep this tree -- without that, still_idle rescues
+# it and the case passes on the broken matcher too.
+sigpipe_root="${fixture_root}/sigpipe-root"
+mkdir -p "$sigpipe_root" || fail 'fixture: sigpipe root'
+sigpipe_tree="${sigpipe_root}/codex-sigpipe-holder"
+mkdir -p "${sigpipe_tree}/nested" || fail 'fixture: sigpipe tree'
+printf 'payload\n' > "${sigpipe_tree}/nested/file"
+sigpipe_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
+  sigpipe_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
+touch -t "$sigpipe_stamp" "$sigpipe_tree" || fail 'fixture: touch sigpipe tree'
+sigpipe_canon=$(cd -- "$sigpipe_tree" && pwd -P) || fail 'fixture: resolve sigpipe tree'
+sigpipe_root_canon=$(cd -- "$sigpipe_root" && pwd -P) || fail 'fixture: resolve sigpipe root'
+sigpipe_stub="${fixture_root}/sigpipe-bin"
+mkdir -p "$sigpipe_stub" || fail 'fixture: sigpipe stub dir'
+cat > "${sigpipe_stub}/lsof" <<STUB
+#!/bin/sh
+for a in "\$@"; do
+  # still_idle's targeted re-probe: a clean, empty scan (idle). This is what forces the
+  # assertion below to be about holds_open alone.
+  [ "\$a" = "+D" ] && exit 0
+done
+# The up-front snapshot: holder FIRST, then bulk that SURVIVES the temp-root narrowing, so
+# an early-exiting awk closes the pipe with most of the input still unwritten.
+printf 'n%s\n' "${sigpipe_canon}/nested/file"
+seq 1 20000 | sed 's|^|n${sigpipe_root_canon}/filler-|'
+exit 0
+STUB
+chmod +x "${sigpipe_stub}/lsof" || fail 'fixture: chmod sigpipe stub'
+PATH="${sigpipe_stub}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$sigpipe_root" \
+  GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" \
+  bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
+[ -e "$sigpipe_tree" ] ||
+  fail "a tree named in a LARGE liveness snapshot was reaped (matcher failed open on SIGPIPE): $sigpipe_tree"
 
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'

@@ -88,6 +88,100 @@ printf '\n===== %s  build-cache-reclaim (%s) =====\n' "$(date -u +%Y-%m-%dT%H:%M
 log "temp root=${TMPDIR_ROOT} min_age_days=${MIN_AGE_DAYS} cache_budget_gb=${CACHE_BUDGET_GB}"
 
 # ---------------------------------------------------------------------------
+# 0. Liveness probe, shared by the cache gate below and the tree sweep further down.
+#
+# This sits ahead of BOTH consumers on purpose. `go clean -modcache` empties the whole
+# module cache, so it needs the same "can I prove nothing is using this?" answer the tree
+# sweep needs -- and it runs first, so the probe has to exist by then.
+# ---------------------------------------------------------------------------
+# find_lsof resolves an lsof binary. Its path differs by platform (/usr/sbin on macOS,
+# /usr/bin on most Linux), and hardcoding one turns the liveness check into a permanent
+# "everything is in use" on the other -- fail-closed, but a silent no-op that reclaims
+# nothing forever. CI caught exactly that: every assertion failed on ubuntu while macOS
+# passed. Resolve it, and if it genuinely does not exist say so loudly rather than
+# reaping nothing in silence.
+find_lsof() {
+  local candidate
+  candidate=$(command -v lsof 2>/dev/null) && [ -x "$candidate" ] && {
+    printf '%s' "$candidate"
+    return 0
+  }
+  for candidate in /usr/sbin/lsof /usr/bin/lsof /bin/lsof; do
+    [ -x "$candidate" ] && {
+      printf '%s' "$candidate"
+      return 0
+    }
+  done
+  return 1
+}
+
+LSOF_BIN=$(find_lsof) || LSOF_BIN=''
+[ -n "$LSOF_BIN" ] ||
+  log 'WARNING: no lsof found — cannot prove a tree is idle, so every tree will be KEPT'
+
+# LSOF_SNAPSHOT holds every open path on this host, captured ONCE and then narrowed to
+# the temp root. Probing per tree with `lsof +D` was measured at ~2 s on a 26k-file tree
+# and a sweep can have hundreds of candidates, so a per-tree descent would cost many
+# minutes; one system-wide pass costs ~7 s no matter how many trees there are.
+#
+# LSOF_OK is tracked separately from the snapshot's contents on purpose: an empty
+# snapshot is a perfectly ordinary state (nothing open under the temp root), whereas a
+# failed lsof must keep every tree. Collapsing the two would turn a probe failure into
+# "nothing is in use" — a fail-open in a script that deletes.
+LSOF_OK=0
+LSOF_PATHS=''
+LSOF_SNAPSHOT=''
+if [ -n "$LSOF_BIN" ]; then
+  if lsof_raw=$("$LSOF_BIN" -Fn 2>/dev/null) && [ -n "$lsof_raw" ]; then
+    LSOF_OK=1
+    # LSOF_PATHS keeps every open path on the host. The Go caches live OUTSIDE the temp
+    # root, so the temp-root-narrowed snapshot below is the wrong instrument for them --
+    # narrowing first and asking about a cache afterwards reports every cache as idle.
+    LSOF_PATHS=$(printf "%s\n" "$lsof_raw" | sed -n "s/^n//p")
+    # lsof reports PHYSICAL paths, so narrow on the resolved root. On macOS the usual
+    # temp roots are symlinks (/tmp -> /private/tmp, /var -> /private/var); narrowing on
+    # the caller-supplied spelling would discard every matching row and leave an empty
+    # snapshot, so every tree would read as free. When the root cannot be resolved, keep
+    # the whole snapshot rather than a wrong subset.
+    lsof_root=$(cd -- "$TMPDIR_ROOT" 2>/dev/null && pwd -P) || lsof_root=""
+    if [ -n "$lsof_root" ]; then
+      LSOF_SNAPSHOT=$(printf "%s\n" "$LSOF_PATHS" | grep -F -- "$lsof_root" || true)
+    else
+      LSOF_SNAPSHOT=$LSOF_PATHS
+    fi
+    unset lsof_raw
+  else
+    log 'WARNING: lsof produced no usable snapshot — cannot prove a tree is idle, so every tree will be KEPT'
+  fi
+fi
+
+# dir_in_use reports whether any process on this host holds a file at or below `dir`.
+#
+# It answers for a path that is NOT under the temp root, so it reads LSOF_PATHS rather
+# than the narrowed snapshot. Same literal position-1 prefix test as holds_open, and for
+# the same reason: a holder almost never has the top directory open, it holds something
+# beneath it -- and a Go cache is exactly that shape, since every entry lands in a
+# subdirectory. `index()` is literal, so a path containing regex metacharacters cannot
+# make this match the wrong tree or nothing at all.
+#
+# Fail closed in every direction: no usable snapshot, or a path that cannot be resolved,
+# reports "in use" so the caller keeps the cache. A cache kept costs one more sweep; a
+# cache deleted under a running build costs that build its module files.
+dir_in_use() {
+  local dir=$1 canon
+  [ "$LSOF_OK" -eq 1 ] || return 0
+  canon=$(cd -- "$dir" 2>/dev/null && pwd -P) || return 0
+  [ -n "$canon" ] || return 0
+  # NO early `exit` in the match rule. Under `set -o pipefail`, an awk that exits on its
+  # first hit closes the pipe, printf takes SIGPIPE, and the PIPELINE reports 141 -- which
+  # this function reads as "not in use", and the caller then DELETES. Measured on a
+  # ~20k-line snapshot: the early-exit form returns 141 on a genuine match, while the same
+  # program over a short snapshot returns 0, so the bug only bites once the host is busy.
+  # Scanning to EOF costs microseconds and is the only form whose status means what it says.
+  printf "%s\n" "$LSOF_PATHS" |
+    awk -v p="$canon" 'index($0, p "/") == 1 || $0 == p { found = 1 } END { exit !found }'
+}
+# ---------------------------------------------------------------------------
 # 1. Go build cache, trimmed only when it exceeds its budget.
 #
 # Unconditional cleaning would throw away a warm cache on every sweep and make each
@@ -154,6 +248,19 @@ reclaim_go_cache() {
     return 0
   fi
 
+  # The budget says this cache is worth trimming; liveness says whether it is safe to.
+  # `go clean` empties the cache wholesale, so a build reading it mid-sweep loses files
+  # from under itself. Nothing later protects this: holds_open and still_idle both narrow
+  # to the temp root, and both run in the sweep that FOLLOWS.
+  #
+  # Checked BEFORE the mode branch so the dry-run projection matches what apply would do.
+  # The scheduled sibling runs dry-run, so a summary promising space that apply would then
+  # keep is the same class of defect as one that omits space it would reclaim.
+  if dir_in_use "$dir"; then
+    log "${label} ${dir} in use by a live process — keeping"
+    return 0
+  fi
+
   if [ "$MODE" != apply ]; then
     # Count the projection, exactly as the tree sweep below does for a WOULD REAP. Without
     # this the dry-run summary reports the tree total alone and silently omits the caches --
@@ -191,61 +298,6 @@ fi
 # the lanes actually create; anything else in the temp root belongs to some other tool
 # and is never touched.
 # ---------------------------------------------------------------------------
-# find_lsof resolves an lsof binary. Its path differs by platform (/usr/sbin on macOS,
-# /usr/bin on most Linux), and hardcoding one turns the liveness check into a permanent
-# "everything is in use" on the other -- fail-closed, but a silent no-op that reclaims
-# nothing forever. CI caught exactly that: every assertion failed on ubuntu while macOS
-# passed. Resolve it, and if it genuinely does not exist say so loudly rather than
-# reaping nothing in silence.
-find_lsof() {
-  local candidate
-  candidate=$(command -v lsof 2>/dev/null) && [ -x "$candidate" ] && {
-    printf '%s' "$candidate"
-    return 0
-  }
-  for candidate in /usr/sbin/lsof /usr/bin/lsof /bin/lsof; do
-    [ -x "$candidate" ] && {
-      printf '%s' "$candidate"
-      return 0
-    }
-  done
-  return 1
-}
-
-LSOF_BIN=$(find_lsof) || LSOF_BIN=''
-[ -n "$LSOF_BIN" ] ||
-  log 'WARNING: no lsof found — cannot prove a tree is idle, so every tree will be KEPT'
-
-# LSOF_SNAPSHOT holds every open path on this host, captured ONCE and then narrowed to
-# the temp root. Probing per tree with `lsof +D` was measured at ~2 s on a 26k-file tree
-# and a sweep can have hundreds of candidates, so a per-tree descent would cost many
-# minutes; one system-wide pass costs ~7 s no matter how many trees there are.
-#
-# LSOF_OK is tracked separately from the snapshot's contents on purpose: an empty
-# snapshot is a perfectly ordinary state (nothing open under the temp root), whereas a
-# failed lsof must keep every tree. Collapsing the two would turn a probe failure into
-# "nothing is in use" — a fail-open in a script that deletes.
-LSOF_OK=0
-LSOF_SNAPSHOT=''
-if [ -n "$LSOF_BIN" ]; then
-  if lsof_raw=$("$LSOF_BIN" -Fn 2>/dev/null) && [ -n "$lsof_raw" ]; then
-    LSOF_OK=1
-    # lsof reports PHYSICAL paths, so narrow on the resolved root. On macOS the usual
-    # temp roots are symlinks (/tmp -> /private/tmp, /var -> /private/var); narrowing on
-    # the caller-supplied spelling would discard every matching row and leave an empty
-    # snapshot, so every tree would read as free. When the root cannot be resolved, keep
-    # the whole snapshot rather than a wrong subset.
-    lsof_root=$(cd -- "$TMPDIR_ROOT" 2>/dev/null && pwd -P) || lsof_root=""
-    if [ -n "$lsof_root" ]; then
-      LSOF_SNAPSHOT=$(printf "%s\n" "$lsof_raw" | sed -n "s/^n//p" | grep -F -- "$lsof_root" || true)
-    else
-      LSOF_SNAPSHOT=$(printf "%s\n" "$lsof_raw" | sed -n "s/^n//p")
-    fi
-    unset lsof_raw
-  else
-    log 'WARNING: lsof produced no usable snapshot — cannot prove a tree is idle, so every tree will be KEPT'
-  fi
-fi
 
 holds_open() {
   # Fail closed: without a usable snapshot, report "in use" so the tree is kept.
@@ -268,8 +320,14 @@ holds_open() {
   [ "$LSOF_OK" -eq 1 ] || return 0
   canon=$(cd -- "$path" 2>/dev/null && pwd -P) || return 0
   [ -n "$canon" ] || return 0
+  # NO early `exit` in the match rule. Under `set -o pipefail`, an awk that exits on its
+  # first hit closes the pipe, printf takes SIGPIPE, and the PIPELINE reports 141 -- which
+  # this function reads as "not in use", and the caller then DELETES. Measured on a
+  # ~20k-line snapshot: the early-exit form returns 141 on a genuine match, while the same
+  # program over a short snapshot returns 0, so the bug only bites once the host is busy.
+  # Scanning to EOF costs microseconds and is the only form whose status means what it says.
   printf "%s\n" "$LSOF_SNAPSHOT" |
-    awk -v p="$canon" 'index($0, p "/") == 1 || $0 == p { found = 1; exit } END { exit !found }'
+    awk -v p="$canon" 'index($0, p "/") == 1 || $0 == p { found = 1 } END { exit !found }'
 }
 
 still_idle() {
