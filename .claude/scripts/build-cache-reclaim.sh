@@ -137,11 +137,36 @@ fi
 # the lanes actually create; anything else in the temp root belongs to some other tool
 # and is never touched.
 # ---------------------------------------------------------------------------
+# find_lsof resolves an lsof binary. Its path differs by platform (/usr/sbin on macOS,
+# /usr/bin on most Linux), and hardcoding one turns the liveness check into a permanent
+# "everything is in use" on the other -- fail-closed, but a silent no-op that reclaims
+# nothing forever. CI caught exactly that: every assertion failed on ubuntu while macOS
+# passed. Resolve it, and if it genuinely does not exist say so loudly rather than
+# reaping nothing in silence.
+find_lsof() {
+  local candidate
+  candidate=$(command -v lsof 2>/dev/null) && [ -x "$candidate" ] && {
+    printf '%s' "$candidate"
+    return 0
+  }
+  for candidate in /usr/sbin/lsof /usr/bin/lsof /bin/lsof; do
+    [ -x "$candidate" ] && {
+      printf '%s' "$candidate"
+      return 0
+    }
+  done
+  return 1
+}
+
+LSOF_BIN=$(find_lsof) || LSOF_BIN=''
+[ -n "$LSOF_BIN" ] ||
+  log 'WARNING: no lsof found — cannot prove a tree is idle, so every tree will be KEPT'
+
 holds_open() {
   # Fail closed: if lsof is unavailable or errors, report "in use" so the tree is kept.
   local path=$1
-  command -v /usr/sbin/lsof >/dev/null 2>&1 || return 0
-  /usr/sbin/lsof -- "$path" >/dev/null 2>&1 && return 0
+  [ -n "$LSOF_BIN" ] || return 0
+  "$LSOF_BIN" -- "$path" >/dev/null 2>&1 && return 0
   return 1
 }
 
