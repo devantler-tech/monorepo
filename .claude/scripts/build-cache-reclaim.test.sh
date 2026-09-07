@@ -42,8 +42,23 @@ make_tree() {
   printf '%s' "$dir"
 }
 
+# Both Go caches are pointed at empty fixture directories for EVERY invocation, because
+# `go env` honours these variables. Without that, each run measures the developer's real
+# caches: `du` over a multi-gigabyte module cache took minutes per call, and the suite
+# calls this many times. It is also a stronger safety guarantee than the absurd budget
+# below -- that only stops a cache being CLEANED; this stops one being touched at all.
+GO_BUILD_FIXTURE="$fixture_root/go-build-cache"
+GO_MOD_FIXTURE="$fixture_root/go-mod-cache"
+mkdir -p "$GO_BUILD_FIXTURE" "$GO_MOD_FIXTURE" || {
+  printf 'cannot create Go cache fixtures\n' >&2
+  exit 2
+}
+
 run() {
-  BUILD_CACHE_RECLAIM_TMPDIR="$fixture_root" bash "$impl" "$@" 2>&1
+  BUILD_CACHE_RECLAIM_TMPDIR="$fixture_root" \
+    GOCACHE="${GOCACHE_OVERRIDE:-$GO_BUILD_FIXTURE}" \
+    GOMODCACHE="${GOMODCACHE_OVERRIDE:-$GO_MOD_FIXTURE}" \
+    bash "$impl" "$@" 2>&1
 }
 
 # --- 1. a stale agent tree IS reaped (the positive case) --------------------------
@@ -85,14 +100,46 @@ run apply notanumber "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
 [ $? -eq 2 ] || fail 'a non-numeric min_age_days did not exit 2'
 [ -e "$guard" ] || fail "a bad min_age_days still deleted a tree: $guard"
 
-# --- 6. the Go cache is NOT cleaned while it is within budget ---------------------
-# The budget branch is what stops every sweep throwing away a warm cache.
-out=$(run dry-run 3 "$NEVER_CLEAN_BUDGET")
-if printf '%s' "$out" | grep -q 'GOCACHE'; then
-  printf '%s' "$out" | grep -q 'within budget' ||
-    fail 'GOCACHE was not reported as within budget at an absurdly high budget'
-  printf '%s' "$out" | grep -q 'would be cleaned' &&
-    fail 'GOCACHE would be cleaned despite being within budget'
+# --- 6. BOTH Go caches are budget-gated ------------------------------------------
+# `run` points both caches at empty fixtures (see above), so both labels can be asserted
+# UNCONDITIONALLY. Keyed on the developer's real caches the module-cache assertion has to
+# be written as "if it was reported, check it", which passes vacuously on a script that
+# never mentions the module cache at all -- exactly the gap this case exists to close.
+#
+# Each label is matched ANCHORED, because a bare `grep GOCACHE` also matches
+# "GOMODCACHE": unanchored, the build-cache branch could be deleted outright and the
+# module cache's own lines would satisfy the assertion.
+if command -v go > /dev/null 2>&1; then
+  # Over a 0 GB budget a cache has to measure at least 1 MB, so give each one some bulk.
+  # bs is NUMERIC deliberately: BSD dd takes `bs=1m`, GNU dd does not, and this suite runs
+  # on both. A rejected dd would leave the fixtures empty and 6b would fail on ubuntu only.
+  dd if=/dev/zero of="$GO_BUILD_FIXTURE/blob" bs=1024 count=2048 2> /dev/null
+  dd if=/dev/zero of="$GO_MOD_FIXTURE/blob" bs=1024 count=2048 2> /dev/null
+
+  # 6a. within budget -> both reported, NEITHER cleaned. This is the ablation partner:
+  # the budget branch is what stops every sweep throwing away a warm cache.
+  out=$(run dry-run 3 "$NEVER_CLEAN_BUDGET")
+  for label in GOCACHE GOMODCACHE; do
+    line=$(printf '%s\n' "$out" | grep -E "^build-cache-reclaim: ${label} ") || {
+      fail "${label} was never reported"
+      continue
+    }
+    printf '%s\n' "$line" | grep -q 'within budget' ||
+      fail "${label} was not reported as within budget at an absurdly high budget"
+    printf '%s\n' "$out" | grep -q "${label} would be cleaned" &&
+      fail "${label} would be cleaned despite being within budget"
+  done
+
+  # 6b. OVER budget -> both selected for cleaning. Without this, 6a passes on a script
+  # that reports a size and is wired to nothing; this is what proves the module cache
+  # reaches the clean path. Still dry-run, so no cache is actually emptied.
+  out=$(run dry-run 3 0)
+  for label in GOCACHE GOMODCACHE; do
+    printf '%s\n' "$out" | grep -q "${label} would be cleaned" ||
+      fail "${label} over budget was not selected for cleaning"
+  done
+
+  rm -f "$GO_BUILD_FIXTURE/blob" "$GO_MOD_FIXTURE/blob"
 fi
 
 

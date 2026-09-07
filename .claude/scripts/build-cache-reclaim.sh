@@ -118,30 +118,61 @@ find_go() {
   return 1
 }
 
-if go_bin=$(find_go); then
-  gocache=$("$go_bin" env GOCACHE 2>/dev/null)
-  if [ -n "$gocache" ] && [ -d "$gocache" ]; then
-    if cache_mb=$(size_mb "$gocache"); then
-      budget_mb=$((CACHE_BUDGET_GB * 1024))
-      log "GOCACHE ${gocache} = ${cache_mb} MB (budget ${budget_mb} MB)"
-      if [ "$cache_mb" -gt "$budget_mb" ]; then
-        if [ "$MODE" = apply ]; then
-          if "$go_bin" clean -cache 2>/dev/null; then
-            reclaimed_mb=$((reclaimed_mb + cache_mb))
-            log "GOCACHE cleaned, reclaimed ~${cache_mb} MB"
-          else
-            log "GOCACHE clean FAILED — keeping"
-          fi
-        else
-          log "GOCACHE would be cleaned (over budget), ~${cache_mb} MB"
-        fi
-      else
-        log 'GOCACHE within budget — keeping (a warm cache is worth more than the space)'
-      fi
-    else
-      log 'GOCACHE size unmeasurable — keeping'
-    fi
+# reclaim_go_cache trims ONE Go cache when it exceeds the budget, and keeps it otherwise.
+#
+# Both Go caches obey the same rule, so they share one implementation rather than two
+# copies that can drift: an unconditional clean would throw away a warm cache on every
+# sweep and make each following build far slower for no space benefit, so the budget is
+# what decides. Every failure path KEEPS the cache -- an unmeasurable size and a failed
+# clean are both "I could not tell", which must never become "delete".
+#
+# `go clean` is used rather than `rm -rf` deliberately: Go marks every file under the
+# module cache read-only, so a plain recursive remove stops partway and leaves an
+# orphaned remnant whose bumped mtime hides it from the age filter forever. `go clean`
+# handles those permissions itself.
+#
+#   $1  label used in the log ("GOCACHE" / "GOMODCACHE")
+#   $2  the `go env` variable naming the cache directory
+#   $3  the `go clean` flag that empties it
+reclaim_go_cache() {
+  local label=$1 env_var=$2 clean_flag=$3
+  local dir cache_mb budget_mb
+
+  dir=$("$go_bin" env "$env_var" 2>/dev/null)
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+
+  if ! cache_mb=$(size_mb "$dir"); then
+    log "${label} size unmeasurable — keeping"
+    return 0
   fi
+
+  budget_mb=$((CACHE_BUDGET_GB * 1024))
+  log "${label} ${dir} = ${cache_mb} MB (budget ${budget_mb} MB)"
+
+  if [ "$cache_mb" -le "$budget_mb" ]; then
+    log "${label} within budget — keeping (a warm cache is worth more than the space)"
+    return 0
+  fi
+
+  if [ "$MODE" != apply ]; then
+    log "${label} would be cleaned (over budget), ~${cache_mb} MB"
+    return 0
+  fi
+
+  if "$go_bin" clean "$clean_flag" 2>/dev/null; then
+    reclaimed_mb=$((reclaimed_mb + cache_mb))
+    log "${label} cleaned, reclaimed ~${cache_mb} MB"
+  else
+    log "${label} clean FAILED — keeping"
+  fi
+}
+
+if go_bin=$(find_go); then
+  # The BUILD cache is the largest single consumer (55 GB when the host filled). The
+  # MODULE cache is the second (34 GB) and is named by the issue's acceptance criteria;
+  # leaving it out would let a third of the reclaimable space keep growing unowned.
+  reclaim_go_cache GOCACHE GOCACHE -cache
+  reclaim_go_cache GOMODCACHE GOMODCACHE -modcache
 else
   log 'no go binary found (PATH or known locations) — skipping Go cache reclamation'
 fi
