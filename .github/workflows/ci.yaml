@@ -349,6 +349,10 @@ jobs:
               - '.github/workflows/ci.yaml'
             improver-cross-read-liveness-contract:
               - 'AGENTS.md'
+              # The PRODUCER of the 0/1/2 verdict contract this policy consumes. Without
+              # it a change to the exit codes could land while this consumer-contract job
+              # skipped, leaving the clause describing semantics that no longer exist.
+              - '.claude/scripts/codex-lane-liveness.sh'
               - '.claude/scripts/improver-cross-read-liveness-contract.test.sh'
               - '.github/workflows/ci.yaml'
             git-safety-contract:

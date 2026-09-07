@@ -105,8 +105,17 @@ clause="$(extract_clause \
 # ---------------------------------------------------------------------------
 assert_contains "${clause}" 'codex-lane-liveness.sh' \
   'the cross-read clause must name the liveness check it depends on'
-assert_contains "${clause}" 'producing' \
-  'the cross-read clause must state the producing precondition'
+# shellcheck disable=SC2016  # The backticks are MARKDOWN in the contract text being matched, not
+# command substitution. Single quotes are mandatory here: in double quotes the shell would try to
+# EXECUTE `1`, so following SC2016 would turn a correct assertion into a bug.
+# The verdict mapping must be EXACT, not gestured at. A bare 'producing' needle stays green if the
+# clause drops the 1/2 mapping entirely, or permits a verdict while still mentioning "no movement" —
+# so the weak form guards the vocabulary rather than the rule (CodeRabbit, PR #3268).
+assert_contains "${clause}" '`1` not producing, `2` UNKNOWN' \
+  'the clause must define the non-producing and unknown verdicts explicitly'
+# shellcheck disable=SC2016  # markdown backticks, as above
+assert_contains "${clause}" 'On a `1` or a `2`' \
+  'the clause must handle BOTH outage verdicts, not only the not-producing one'
 
 # ---------------------------------------------------------------------------
 # 2. The required handling of a dead or unknown lane. Naming the check without
@@ -116,6 +125,12 @@ assert_contains "${clause}" 'blocked by the outage' \
   'a non-producing sibling must have its hypotheses recorded as blocked by the outage'
 assert_contains "${clause}" 'no movement' \
   'the clause must forbid the directional / "no movement" reading, which is the inverted-signal case'
+# "no movement" alone is the weakest of the three prohibitions: a clause could forbid that phrasing
+# while still permitting an outright verdict. Pin all three forms the rule actually names.
+assert_contains "${clause}" 'no verdict' \
+  'the clause must forbid taking a verdict from a frozen ledger'
+assert_contains "${clause}" 'directional reading' \
+  'the clause must forbid a directional reading, not only the "no movement" phrasing'
 
 # ---------------------------------------------------------------------------
 # 3. The other side of the rule — the one a tightening would delete. A dead

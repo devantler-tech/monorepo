@@ -5024,7 +5024,7 @@ step:
    becomes data. Run [`.claude/scripts/codex-lane-liveness.sh`](.claude/scripts/codex-lane-liveness.sh)
    (`0` producing, `1` not producing, `2` UNKNOWN) and read its verdict **before** scoring or opening
    anything against that store. On a `1` or a `2` the sibling's pending hypotheses are **blocked by the
-   outage**: record them that way and take **no** verdict, directional reading, or "no movement"
+   outage**: record them that way and take **no verdict**, directional reading, or "no movement"
    inference from them. The reasoning is measured under *Agent definition locations* — a dead lane's
    error count falls to zero, so a naive read scores it as having **improved**, while the scheduler's
    own view stays healthy throughout because `last_run_at` advances across every stub. ⚠️ **A `1` or a
