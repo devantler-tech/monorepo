@@ -202,16 +202,24 @@ func (s *scanner) makeRecipes(src string) error {
 				continue
 			}
 			defined[parts[1]] = true
-			value := parts[3]
-			if at := strings.IndexByte(value, '#'); at >= 0 {
-				value = value[:at]
-			}
-			value = strings.TrimSpace(value)
+			value := strings.TrimSpace(stripMakeComment(parts[3]))
 			// Make runs $(shell ...) while reading the file, so its command is an
 			// executable surface even when the surrounding value is discarded as
 			// dynamic just below.
 			for _, command := range makeShellCommands(value) {
 				recipes = append(recipes, makeRecipe{source: command, line: i + 1})
+			}
+			// `!=` executes its right-hand side through the shell as Make reads the
+			// file, so that command runs even though the value stays unresolved below.
+			if parts[2] == "!=" && value != "" {
+				recipes = append(recipes, makeRecipe{source: value, line: i + 1})
+			}
+			// GNU Make runs every recipe through SHELL, so a Python interpreter
+			// selected there executes each recipe body.
+			if parts[1] == "SHELL" && value != "" && !strings.ContainsAny(value, "$\\") {
+				if err := s.source(value, i+1, 0, false); err != nil {
+					return fmt.Errorf("make SHELL line %d: %w", i+1, err)
+				}
 			}
 			// Only literal definitions are statically resolved. References and
 			// escapes have different := and = expansion times; leave both unknown
@@ -245,12 +253,37 @@ func (s *scanner) makeRecipes(src string) error {
 		return nil
 	}
 	for _, recipe := range recipes {
+		// Make expands $(shell ...) before handing the recipe to the shell, so its
+		// command runs even when the surrounding expansion is discarded as unknown.
+		for _, command := range makeShellCommands(recipe.source) {
+			if err := s.source(command, recipe.line, 0, false); err != nil {
+				return fmt.Errorf("make shell function line %d: %w", recipe.line, err)
+			}
+		}
 		program := makeRecipeVariables(recipe.source, variables, 0)
 		if err := s.source(program, recipe.line, 0, false); err != nil {
 			return fmt.Errorf("make recipe line %d: %w", recipe.line, err)
 		}
 	}
 	return nil
+}
+
+// stripMakeComment drops an unescaped trailing comment and unescapes `\#`, which
+// GNU Make treats as a literal hash rather than a comment introducer.
+func stripMakeComment(value string) string {
+	var out strings.Builder
+	for i := 0; i < len(value); i++ {
+		if value[i] == '\\' && i+1 < len(value) && value[i+1] == '#' {
+			out.WriteByte('#')
+			i++
+			continue
+		}
+		if value[i] == '#' {
+			break
+		}
+		out.WriteByte(value[i])
+	}
+	return out.String()
 }
 
 // stripMakePrefixes removes only the control characters on a recipe's first line.

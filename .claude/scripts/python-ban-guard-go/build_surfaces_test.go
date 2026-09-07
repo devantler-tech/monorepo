@@ -17,10 +17,10 @@ func TestBuildExecutionSurfaces(t *testing.T) {
 		{"generate invalid package is ignored", "tools.go", "package 123\n//go:generate python3 --version\n", "", false},
 		{"generate tab", "tools.go", "package tools\n//go:generate\tpip3 --version\n", "tools.go:2: Python invocation", false},
 		{"generate quoted", "tools.go", "package tools\n//go:generate \"pyth\\x6fn3\" --version\n", "tools.go:2: Python invocation", false},
-		{"generate alias", "tools.go", "package tools\n//go:generate -command py python3\n//go:generate py --version\n", "tools.go:3: Python invocation", false},
-		{"generate alias expands at definition", "tools.go", "package tools\n//go:generate -command py python$GOLINE\n\n\n//go:generate py --version\n", "tools.go:5: Python invocation `python2 --version`", false},
-		{"generate alias escaped dollar expands at use", "tools.go", "package tools\n//go:generate -command py python${DOLLAR}GOLINE\n//go:generate py --version\n", "tools.go:3: Python invocation `python3 --version`", false},
-		{"generate unused alias", "tools.go", "package tools\n//go:generate -command py python3\n", "", false},
+		{"generate alias", "tools.go", "package tools\n//go:generate -command gen python3\n//go:generate gen --version\n", "tools.go:3: Python invocation", false},
+		{"generate alias expands at definition", "tools.go", "package tools\n//go:generate -command gen python$GOLINE\n\n\n//go:generate gen --version\n", "tools.go:5: Python invocation `python2 --version`", false},
+		{"generate alias escaped dollar expands at use", "tools.go", "package tools\n//go:generate -command gen python${DOLLAR}GOLINE\n//go:generate gen --version\n", "tools.go:3: Python invocation `python3 --version`", false},
+		{"generate unused alias", "tools.go", "package tools\n//go:generate -command gen python3\n", "", false},
 		{"generate shell alias", "tools.go", "package tools\n//go:generate -command check sh -c\n//go:generate check \"python3 --version\"\n", "tools.go:3: Python invocation", false},
 		{"generate literal punctuation", "tools.go", "package tools\n//go:generate echo safe ; python3 --version\n", "", false},
 		{"generate quoted argument", "tools.go", "package tools\n//go:generate echo \"python3 --version\"\n", "", false},
@@ -42,12 +42,12 @@ func TestBuildExecutionSurfaces(t *testing.T) {
 		{"make unused assignment", "Makefile", "TOOL = python3\ncheck:\n\t@echo safe\n", "", false},
 		{"make literal variable command", "Makefile", "TOOL = python3\ncheck:\n\t@$(TOOL) --version\n", "Makefile:3: Python invocation", false},
 		{"make empty definition blocks conditional assignment", "Makefile", "TOOL =\nTOOL ?= python3\ncheck:\n\t@$(TOOL) --version\n", "", false},
-		{"make unknown definition blocks conditional assignment", "Makefile", "TOOL = $(RUNTIME)\nTOOL ?= python3\ncheck:\n\t@$(TOOL) --version\n", "", false},
-		{"make shell assignment invalidates literal", "Makefile", "TOOL = python3\nTOOL != printf echo\ncheck:\n\t@$(TOOL) --version\n", "", false},
-		{"make immediate variable reference stays unknown", "Makefile", "TOOL := $(LATER)\nLATER = python3\ncheck:\n\t@$(TOOL) --version\n", "", false},
-		{"make recursive variable reference stays unknown", "Makefile", "TOOL = $(LATER)\nLATER = python3\ncheck:\n\t@$(TOOL) --version\n", "", false},
-		{"make escaped variable value stays unknown", "Makefile", "TOOL := $$RUNTIME\ncheck:\n\t@$(TOOL) python3\n", "", false},
-		{"make unknown command", "Makefile", "check:\n\t@$(DYNAMIC_TOOL) python3\n", "", false},
+		{"make unknown definition blocks conditional assignment", "Makefile", "TOOL = $(RUNTIME)\nTOOL ?= python3\ncheck:\n\t@$(TOOL) --version\n", "unresolved build-surface command", false},
+		{"make shell assignment invalidates literal", "Makefile", "TOOL = python3\nTOOL != printf echo\ncheck:\n\t@$(TOOL) --version\n", "unresolved build-surface command", false},
+		{"make immediate variable reference stays unknown", "Makefile", "TOOL := $(LATER)\nLATER = python3\ncheck:\n\t@$(TOOL) --version\n", "unresolved build-surface command", false},
+		{"make recursive variable reference stays unknown", "Makefile", "TOOL = $(LATER)\nLATER = python3\ncheck:\n\t@$(TOOL) --version\n", "unresolved build-surface command", false},
+		{"make escaped variable value stays unknown", "Makefile", "TOOL := $$RUNTIME\ncheck:\n\t@$(TOOL) python3\n", "unresolved build-surface command", false},
+		{"make unknown command", "Makefile", "check:\n\t@$(DYNAMIC_TOOL) python3\n", "unresolved build-surface command", false},
 		{"make dollar shell expansion", "Makefile", "check:\n\t@echo $$(printf python3)\n", "", false},
 		{"make shell substitution executes", "Makefile", "check:\n\t@echo $$(python3 --version)\n", "Makefile:2: Python invocation", false},
 		{"make argument data", "Makefile", "check:\n\t@echo python3 --version\n", "", false},
@@ -78,11 +78,11 @@ func TestBuildExecutionSurfaces(t *testing.T) {
 // TestGenerateAliasesAreFileLocal rejects alias leakage between independent inputs.
 func TestGenerateAliasesAreFileLocal(t *testing.T) {
 	s := scanner{path: "first.go", seen: map[string]bool{}}
-	if _, err := s.file("package tools\n//go:generate -command py python3\n"); err != nil {
+	if _, err := s.file("package tools\n//go:generate -command gen python3\n"); err != nil {
 		t.Fatal(err)
 	}
 	s.path = "second.go"
-	if _, err := s.file("package tools\n//go:generate py --version\n"); err != nil {
+	if _, err := s.file("package tools\n//go:generate gen --version\n"); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.hits) != 0 {

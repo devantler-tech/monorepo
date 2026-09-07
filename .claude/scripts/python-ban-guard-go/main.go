@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -19,7 +20,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-var interpreter = regexp.MustCompile("^(python[23]?([.][0-9]+)?|pip[23]?([.][0-9]+)?|pytest)$")
+var interpreter = regexp.MustCompile("^(py|python[23]?([.][0-9]+)?|pip[23]?([.][0-9]+)?|pytest)([.]exe)?$")
 var assignment = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*=")
 
 const marker = "python-ban-guard: allow-file"
@@ -62,6 +63,62 @@ func main() {
 	if !handled {
 		// Preserve parsed directive findings when other source text needs the compatibility route.
 		os.Exit(3)
+	}
+}
+
+// recordDockerEnv keeps literal ENV values and forgets any it cannot resolve.
+func recordDockerEnv(env map[string]string, fields []string) {
+	for _, field := range fields {
+		name, value, found := strings.Cut(field, "=")
+		if !found || name == "" {
+			continue
+		}
+		value = strings.Trim(value, "\"'")
+		if value == "" || strings.ContainsAny(value, "$\\`") {
+			delete(env, name)
+			continue
+		}
+		env[name] = value
+	}
+}
+
+// dockerEnvPrefix replays resolved ENV values as shell assignments so the shell
+// scanner can resolve an interpreter named only by one of them.
+func dockerEnvPrefix(env map[string]string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out strings.Builder
+	for _, name := range names {
+		out.WriteString(name + "=" + env[name] + "; ")
+	}
+	return out.String()
+}
+
+// dockerSourcePath identifies the Dockerfile spellings this scanner parses.
+func dockerSourcePath(path string) bool {
+	base := filepath.Base(path)
+	return base == "Dockerfile" || strings.HasPrefix(base, "Dockerfile.") || strings.HasSuffix(base, ".Dockerfile")
+}
+
+// buildSurfacePath reports files whose expansion this parser models only in
+// part. An unresolved command word on one of them must fail closed instead of
+// leaving the file reading clean.
+func buildSurfacePath(path string) bool {
+	return makeSourcePath(path) || dockerSourcePath(path)
+}
+
+// addUnresolved records a build-surface command this parser could not resolve.
+func (s *scanner) addUnresolved(line int) {
+	hit := fmt.Sprintf("%s:%d: unresolved build-surface command; this guard cannot prove it is not Python", s.path, line)
+	if !s.seen[hit] {
+		s.seen[hit] = true
+		s.hits = append(s.hits, hit)
 	}
 }
 
@@ -184,6 +241,7 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 	// resolved, so a rebinding in any branch, loop or scope keeps it unknown.
 	binds := make(map[string]int)
 	literals := make(map[string]string)
+	literalAt := make(map[string]uint)
 	syntax.Walk(tree, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.Assign:
@@ -196,6 +254,7 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 			}
 			if value, ok := staticWord(n.Value, nil); ok {
 				literals[n.Name.Value] = value
+				literalAt[n.Name.Value] = n.Pos().Offset()
 			}
 		case *syntax.WordIter:
 			// A loop variable is rebound on every iteration.
@@ -205,12 +264,6 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 		}
 		return true
 	})
-	var vars []string
-	for name, value := range literals {
-		if binds[name] == 1 {
-			vars = append(vars, name+"="+value)
-		}
-	}
 	syntax.Walk(tree, func(node syntax.Node) bool {
 		if err != nil {
 			return false
@@ -222,6 +275,15 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 		call, ok := stmt.Cmd.(*syntax.CallExpr)
 		if !ok || len(call.Args) == 0 {
 			return true
+		}
+		// A binding applies only where it is already in scope. Applying a
+		// whole-file literal to an expansion that precedes its assignment would
+		// report a command the shell never runs.
+		var vars []string
+		for name, value := range literals {
+			if binds[name] == 1 && literalAt[name] < stmt.Pos().Offset() {
+				vars = append(vars, name+"="+value)
+			}
 		}
 		values := make([]string, len(call.Args))
 		known := make([]bool, len(call.Args))
@@ -266,6 +328,12 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 	}
 	for i := 0; i < len(args); {
 		if !known[i] {
+			// Make and Docker expand constructs this parser models only in part,
+			// so an unresolved command word on those surfaces can still run Python.
+			// Report it rather than leaving the whole file reading clean.
+			if buildSurfacePath(s.path) {
+				s.addUnresolved(line)
+			}
 			return false, nil
 		}
 		name := filepath.Base(args[i])
@@ -651,8 +719,7 @@ func (s *scanner) file(src string) (bool, error) {
 	if ext == ".yaml" || ext == ".yml" {
 		return true, s.yamlCommands(src)
 	}
-	base := filepath.Base(s.path)
-	if base == "Dockerfile" || strings.HasPrefix(base, "Dockerfile.") || strings.HasSuffix(base, ".Dockerfile") {
+	if dockerSourcePath(s.path) {
 		if strings.Contains(src, "<<") {
 			// Dockerfile heredocs require Dockerfile-level parsing. Preserve the
 			// original scanner here instead of silently omitting their bodies.
@@ -823,6 +890,7 @@ func (s *scanner) yaml(src string) error {
 // docker scans shell and JSON operands of Dockerfile execution instructions.
 func (s *scanner) docker(src string) error {
 	lines := strings.Split(src, "\n")
+	env := map[string]string{}
 	var comments []string
 	for _, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
@@ -848,11 +916,33 @@ func (s *scanner) docker(src string) error {
 		if len(fields) == 0 {
 			continue
 		}
+		// ONBUILD registers an instruction for the downstream build and
+		// HEALTHCHECK runs its command repeatedly; both wrap a real execution
+		// instruction whose operand must still be scanned.
+		for len(fields) > 1 {
+			verb := strings.ToUpper(fields[0])
+			if verb != "ONBUILD" && verb != "HEALTHCHECK" {
+				break
+			}
+			line = strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
+			for strings.HasPrefix(line, "--") {
+				line = strings.TrimSpace(strings.TrimPrefix(line, strings.Fields(line)[0]))
+			}
+			fields = strings.Fields(line)
+		}
+		if len(fields) == 0 {
+			continue
+		}
 		switch strings.ToUpper(fields[0]) {
 		// SHELL overrides the interpreter used by every later shell-form RUN,
 		// CMD and ENTRYPOINT, so an explicitly selected Python there would
 		// otherwise run while each shell-form operand parsed as an ordinary
 		// command and reported clean.
+		// Docker persists literal ENV values for every later instruction, so a
+		// shell-form RUN can execute an interpreter named only by an ENV value.
+		case "ENV":
+			recordDockerEnv(env, fields[1:])
+			continue
 		case "RUN", "CMD", "ENTRYPOINT", "SHELL":
 		default:
 			continue
@@ -874,7 +964,7 @@ func (s *scanner) docker(src string) error {
 			if _, err := s.argv(args, known, first, 0); err != nil {
 				return err
 			}
-		} else if err := s.source(operand, first, 0, false); err != nil {
+		} else if err := s.source(dockerEnvPrefix(env)+operand, first, 0, false); err != nil {
 			return err
 		}
 	}

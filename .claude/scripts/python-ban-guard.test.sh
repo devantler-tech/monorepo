@@ -559,12 +559,19 @@ ablated_dir="$tmp/ablation"
 mkdir -p "$ablated_dir"
 cp -R "$here/python-ban-guard-go" "$ablated_dir/"
 ablated="$ablated_dir/python-ban-guard.sh"
-sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip\[23\]?(\[\.\]\[0-9\]+)?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ[23]?([.][0-9]+)?|pytestZZ)/' "$guard" >"$ablated"
-sed 's/(python\[23\]?(\[\.\]\[0-9\]+)?|pip\[23\]?(\[\.\]\[0-9\]+)?|pytest)/(pythonZZ[23]?([.][0-9]+)?|pipZZ[23]?([.][0-9]+)?|pytestZZ)/' "$here/python-ban-guard-go/main.go" >"$ablated_dir/python-ban-guard-go/main.go"
+sed 's/(py|python\[23\]?(\[\.\]\[0-9\]+)?|pip\[23\]?(\[\.\]\[0-9\]+)?|pytest)/(pyZZ|pythonZZ[23]?([.][0-9]+)?|pipZZ[23]?([.][0-9]+)?|pytestZZ)/' "$guard" >"$ablated"
+sed 's/(py|python\[23\]?(\[\.\]\[0-9\]+)?|pip\[23\]?(\[\.\]\[0-9\]+)?|pytest)/(pyZZ|pythonZZ[23]?([.][0-9]+)?|pipZZ[23]?([.][0-9]+)?|pytestZZ)/' "$here/python-ban-guard-go/main.go" >"$ablated_dir/python-ban-guard-go/main.go"
 if grep -q 'pythonZZ' "$ablated"; then
   report "ablation edit landed" yes
 else
   report "ablation edit landed" no "the sed did not change the guard's invocation pattern"
+fi
+# The Go parser is the primary scanner, so assert its ablation landed too: a sed
+# that silently stops matching would leave the checks below asserting nothing.
+if grep -q 'pythonZZ' "$ablated_dir/python-ban-guard-go/main.go"; then
+  report "ablation edit landed in the Go parser" yes
+else
+  report "ablation edit landed in the Go parser" no "the sed did not change the Go scanner's invocation pattern"
 fi
 GUARD="$ablated" run "$tmp/test-sh"
 report "ablation: with the invocation pattern neutralised, the #2769 fixture passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"

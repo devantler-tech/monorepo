@@ -7,3 +7,6 @@ docs/.astro/
 *.png
 .playwright-mcp/
 !docs/src/assets/*.png
+
+# Compiled python-ban-guard parser: the self-tests build it in place.
+/.claude/scripts/python-ban-guard-go/python-ban-guard

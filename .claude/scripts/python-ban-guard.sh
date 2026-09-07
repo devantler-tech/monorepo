@@ -278,7 +278,7 @@ scan_invocations() {
     }
     BEGIN {
       # Legacy fallback pattern; the self-test ablates both scanner engines.
-      interp = "^(python[23]?([.][0-9]+)?|pip[23]?([.][0-9]+)?|pytest)$"
+      interp = "^(py|python[23]?([.][0-9]+)?|pip[23]?([.][0-9]+)?|pytest)([.]exe)?$"
       extended_wrappers = " timeout stdbuf setsid ionice doas sudo exec xargs command nohup time "
       flag_options["timeout"] = "fpv"; value_options["timeout"] = "ks"; stop_options["timeout"] = "HV"
       long_options["timeout"] = "kill-after:k signal:s foreground:f preserve-status:p verbose:v help:H version:V"
