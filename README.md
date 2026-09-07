@@ -6,8 +6,6 @@ Each project stays its own repository and is linked in here as a *submodule* —
 repository, checked out inside this one. So one clone opens everything in VS Code, while each project
 keeps its own releases, issues, and access.
 
-<img width="1800" alt="image" src="https://github.com/devantler/monorepo/assets/26203420/615d3085-1c58-4718-9d40-ab511c5b1da9">
-
 ## Getting started
 
 ```bash
