@@ -105,6 +105,13 @@ clause="$(extract_clause \
 # ---------------------------------------------------------------------------
 assert_contains "${clause}" 'codex-lane-liveness.sh' \
   'the cross-read clause must name the liveness check it depends on'
+
+# ORDERING is the whole point of a precondition: naming the check and defining its verdicts still
+# leaves a clause that could put the read AFTER the store is scored, which is the defect this guard
+# exists to prevent. A bare 'before' is too weak (it occurs twice in the clause for unrelated
+# reasons), so pin the full ordering phrase (CodeRabbit, PR #3268).
+assert_contains "${clause}" 'read **before** scoring or opening anything against the store' \
+  'the clause must place the liveness read BEFORE the store is scored or opened'
 # shellcheck disable=SC2016  # The backticks are MARKDOWN in the contract text being matched, not
 # command substitution. Single quotes are mandatory here: in double quotes the shell would try to
 # EXECUTE `1`, so following SC2016 would turn a correct assertion into a bug.
