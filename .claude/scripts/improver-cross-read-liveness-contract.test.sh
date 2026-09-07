@@ -132,4 +132,11 @@ assert_contains "${clause}" 'never a run-stopper' \
 assert_contains "${clause}" 'Agent definition locations' \
   'the clause must cross-reference the section carrying the measured reasoning'
 
+# ...and that cross-reference must POINT AT SOMETHING. Asserting only that the clause names the
+# section is a fail-open: this contract has renamed sections before (the actor was renamed twice),
+# and a rename would leave the clause pointing at nothing while this test stayed green — silently
+# un-wiring the two halves it exists to keep together. Verified against the heading itself.
+grep -q '^### Agent definition locations' "${constitution}" ||
+  fail 'the clause cross-references "### Agent definition locations" but no such section exists — the reference has rotted'
+
 echo "improver cross-read liveness contract: PASS — precondition, handling, non-blocking guarantee and cross-reference all present at the point of use"
