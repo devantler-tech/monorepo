@@ -5021,9 +5021,13 @@ step:
    🔴 **A SIBLING'S STORE IS EVIDENCE ONLY WHILE ITS LANE IS PRODUCING — establish that FIRST, because
    a frozen ledger and a quiet one are indistinguishable.** That store is the one input this instance
    cannot corroborate from its own lane, so an unchecked read is exactly where a dead sibling silently
-   becomes data. Run [`.claude/scripts/codex-lane-liveness.sh`](.claude/scripts/codex-lane-liveness.sh)
-   (`0` producing, `1` not producing, `2` UNKNOWN) and read its verdict **before** scoring or opening
-   anything against that store. On a `1` or a `2` the sibling's pending hypotheses are **blocked by the
+   becomes data. Establish it with **that lane's own** liveness check, read **before** scoring or
+   opening anything against the store: for the Codex lane that is
+   [`.claude/scripts/codex-lane-liveness.sh`](.claude/scripts/codex-lane-liveness.sh)
+   (`0` producing, `1` not producing, `2` UNKNOWN). ⚠️ **No equivalent exists for the Claude lane**, so
+   a Codex-side run reading the Claude ledger has no check to run and its verdict is `2` by
+   construction — never read that absence as producing, and never substitute the Codex check, which
+   measures the reader rather than the sibling. On a `1` or a `2` the sibling's pending hypotheses are **blocked by the
    outage**: record them that way and take **no verdict**, directional reading, or "no movement"
    inference from them. The reasoning is measured under *Agent definition locations* — a dead lane's
    error count falls to zero, so a naive read scores it as having **improved**, while the scheduler's
