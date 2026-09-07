@@ -49,6 +49,22 @@ case "$CACHE_BUDGET_GB" in
     exit 2
     ;;
 esac
+# Bound the DIGITS before any arithmetic, then read them as decimal.
+#
+# Two distinct failures live here and the digits-only guard above catches neither:
+#   * a leading zero makes bash read the value as octal, so `08` is not mis-scaled -- it
+#     is a hard parse error that aborts the GOCACHE branch, which is the reclaim that
+#     actually recovers the space. `10#` forces base ten.
+#   * a value beyond int64 wraps silently, and the `10#` conversion wraps with it, so the
+#     bound has to be applied to the digit string rather than to the converted number.
+#     Seven digits caps the budget near 9.5 PB, whose product with 1024 is nowhere near
+#     the int64 limit. Unbounded, a wrapped negative budget makes every cache read as
+#     over budget and be cleaned on every single sweep.
+if [ "${#CACHE_BUDGET_GB}" -gt 7 ]; then
+  printf 'build-cache-reclaim: cache_budget_gb is too large (max 7 digits)\n' >&2
+  exit 2
+fi
+CACHE_BUDGET_GB=$((10#$CACHE_BUDGET_GB))
 
 TMPDIR_ROOT=${BUILD_CACHE_RECLAIM_TMPDIR:-/private/tmp}
 reclaimed_mb=0
@@ -218,15 +234,64 @@ holds_open() {
     awk -v p="$canon" 'index($0, p "/") == 1 || $0 == p { found = 1; exit } END { exit !found }'
 }
 
+still_idle() {
+  # Re-verify a single tree immediately before it is removed.
+  #
+  # The snapshot above is captured once, up front, and the loop then measures the size of
+  # every candidate before it deletes any of them -- so minutes can pass between that
+  # snapshot and a given unlink. A process that opens a file under a candidate inside that
+  # window is simply not in the snapshot, and the tree is deleted while genuinely in use.
+  # One targeted probe per tree costs time proportional to the DELETION set rather than to
+  # the ~1600 candidates a sweep scans, which is why it is affordable here and was not
+  # affordable as the primary check.
+  #
+  # This NARROWS the window; it does not close it, and nothing available here could. The
+  # trees are created by agent harnesses this script does not own, so there is no lock to
+  # take between the last observation and unlink(2). What remains is the gap between this
+  # probe and the `rm` a few lines below, and the cost of losing that race is a rebuild of
+  # regenerable content.
+  #
+  # `+D` descends the subtree, and its rows are judged rather than its exit status: it
+  # exits 1 while PRINTING the processes that hold a tree, so an exit-status test calls a
+  # tree free at the very moment lsof is naming who is using it.
+  # Probe the RESOLVED path: lsof works in physical paths, so a symlinked spelling would
+  # be asking about a different name for the same tree. A path that cannot be resolved is
+  # reported in use, so it is kept.
+  local path=$1 rows canon
+  [ -n "$LSOF_BIN" ] || return 1
+  canon=$(cd -- "$path" 2>/dev/null && pwd -P) || return 1
+  [ -n "$canon" ] || return 1
+  rows=$("$LSOF_BIN" +D "$canon" -Fn 2>/dev/null | sed -n 's/^n//p')
+  if [ $? -gt 1 ]; then
+    # Could not get an answer at all: report "in use" so the tree is kept.
+    return 1
+  fi
+  [ -z "$rows" ]
+}
+
 own_session_tree() {
   # Never reap the tree this very process is running out of.
-  local path=$1
-  case "${TMPDIR:-}/" in
-    "$path"/*) return 0 ;;
-  esac
-  case "$PWD/" in
-    "$path"/*) return 0 ;;
-  esac
+  #
+  # Compare RESOLVED paths, for the same reason holds_open does. On macOS the usual temp
+  # roots are symlinks (/tmp -> /private/tmp, /var -> /private/var), so TMPDIR and the
+  # candidate routinely name one directory in two spellings, and a lexical match misses
+  # it. holds_open does NOT compensate here: TMPDIR by itself holds no file open, so a
+  # session tree that has not been written to yet reads as idle and is reaped out from
+  # under the very run that owns it.
+  #
+  # A path that cannot be resolved is treated as ours, so an unreadable candidate is kept
+  # rather than deleted -- the same fail-closed direction as every other rule here.
+  local path=$1 canon dir resolved
+  canon=$(cd -- "$path" 2>/dev/null && pwd -P) || return 0
+  [ -n "$canon" ] || return 0
+  for dir in "${TMPDIR:-}" "$PWD"; do
+    [ -n "$dir" ] || continue
+    resolved=$(cd -- "$dir" 2>/dev/null && pwd -P) || continue
+    [ -n "$resolved" ] || continue
+    case "$resolved/" in
+      "$canon"/*) return 0 ;;
+    esac
+  done
   return 1
 }
 
@@ -249,6 +314,13 @@ if [ -d "$TMPDIR_ROOT" ]; then
       continue
     fi
     if [ "$MODE" = apply ]; then
+      # Everything above was decided from the up-front snapshot, which by now is minutes
+      # old. Ask once more, about this tree alone, before destroying it.
+      if ! still_idle "$tree"; then
+        kept=$((kept + 1))
+        log "KEEP  (in use, late)  $tree"
+        continue
+      fi
       # Go marks every file under a module cache read-only, so a plain `rm -rf` stops
       # partway. That is worse than skipping the tree: the partial delete bumps its
       # mtime, the age filter then never selects it again, and the remnant is orphaned

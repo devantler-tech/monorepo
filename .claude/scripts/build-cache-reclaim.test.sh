@@ -141,6 +141,96 @@ if kill -0 "$holder_pid" 2>/dev/null; then
 else
   fail 'fixture: live holder process did not stay alive; liveness assertion not exercised'
 fi
+
+# --- 9. the cache budget is read as DECIMAL and bounded ---------------------------
+# `08` is a perfectly ordinary way to write eight, and it passes the digits-only guard.
+# Bash arithmetic then reads a leading zero as octal and `$((08 * 1024))` is a hard parse
+# error, not a mis-scaling -- so the GOCACHE branch aborts and the reclaim that actually
+# recovers the space silently never runs. A value too long to multiply by 1024 wraps
+# instead, and a negative budget makes every cache read as over budget and be cleaned on
+# every sweep. Both directions are safety-relevant, so both are pinned.
+out=$(run dry-run 3 08 2>&1)
+printf '%s' "$out" | grep -q 'value too great for base' &&
+  fail 'a zero-padded cache_budget_gb hit a bash octal parse error'
+printf '%s' "$out" | grep -q 'cache_budget_gb=8' ||
+  fail 'a zero-padded cache_budget_gb was not normalised to decimal 8'
+run dry-run 3 99999999999999999999 > /dev/null 2>&1
+[ $? -eq 2 ] || fail 'an unrepresentably large cache_budget_gb was not rejected'
+
+# --- 10. the caller's own session tree is matched across SYMLINKED spellings -------
+# `holds_open` resolves paths with `pwd -P` because lsof reports physical paths; the
+# own-session guard has to do the same. On macOS the usual temp roots are symlinks
+# (/tmp -> /private/tmp, /var -> /private/var), so TMPDIR and the candidate routinely name
+# one directory in two spellings. A lexical compare misses that, and `holds_open` does NOT
+# compensate: TMPDIR alone holds no file open, so a session tree not yet written to reads
+# as idle and is reaped out from under the run that owns it.
+# Test 1 is the ablation partner: same shape, not our session, and it must be reaped.
+mkdir -p "${fixture_root}/phys" || fail 'fixture: phys root'
+ln -sfn "${fixture_root}/phys" "${fixture_root}/link" || fail 'fixture: root symlink'
+own_tree="${fixture_root}/phys/codex-own-session"
+mkdir -p "$own_tree" || fail 'fixture: own-session tree'
+printf 'payload\n' > "${own_tree}/file"
+own_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
+  own_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
+touch -t "$own_stamp" "$own_tree" || fail 'fixture: touch own-session tree'
+# Run over the PHYSICAL root while TMPDIR names the SAME tree through the symlink.
+TMPDIR="${fixture_root}/link/codex-own-session" \
+  BUILD_CACHE_RECLAIM_TMPDIR="${fixture_root}/phys" \
+  bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
+[ -e "$own_tree" ] ||
+  fail "the caller's own session tree was reaped through a symlinked TMPDIR: $own_tree"
+
+# --- 11. a holder that appears AFTER the snapshot still keeps the tree -------------
+# The liveness snapshot is captured once, up front, and the loop then measures sizes
+# across every candidate before it deletes any of them -- so minutes can pass between the
+# snapshot and a given unlink. A process that opens a file under a candidate inside that
+# window is invisible to the snapshot, and the tree is deleted while genuinely in use.
+# The stub below reproduces exactly that ordering deterministically: its FIRST call (the
+# snapshot) reports an unrelated path, so the snapshot is valid but does not name the
+# tree; every later call reports the holder. A script that trusts only the snapshot reaps
+# the tree; one that re-verifies immediately before removing keeps it.
+stub_dir="${fixture_root}/stub-bin"
+mkdir -p "$stub_dir" || fail 'fixture: stub dir'
+# Give this case its OWN root. Sweeping the debris of the earlier cases would make the
+# stub answer for whichever tree the scan reached first, which is directory order and
+# therefore not reproducible -- a flaky safety test is worse than no safety test.
+late_root="${fixture_root}/late-root"
+mkdir -p "$late_root" || fail 'fixture: late-holder root'
+late_tree="${late_root}/codex-late-holder"
+mkdir -p "${late_tree}/nested" || fail 'fixture: late-holder tree'
+printf 'payload\n' > "${late_tree}/nested/file"
+late_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
+  late_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
+touch -t "$late_stamp" "$late_tree" || fail 'fixture: touch late-holder tree'
+late_canon=$(cd -- "$late_tree" && pwd -P) || fail 'fixture: resolve late-holder tree'
+late_canon_parent=$(cd -- "$late_root" && pwd -P) || fail 'fixture: resolve late-holder root'
+cat > "${stub_dir}/lsof" <<STUB
+#!/bin/sh
+# Call 1 is the up-front snapshot: valid output, but the tree is not in it.
+# Every later call is a re-verification: the holder is now present.
+c="${fixture_root}/stub-calls"
+n=\$(cat "\$c" 2>/dev/null || echo 0)
+echo \$((n + 1)) > "\$c"
+if [ "\$n" -eq 0 ]; then
+  # The snapshot: valid, non-empty, and deliberately does not name the tree.
+  printf 'n%s\n' "${late_canon_parent}/unrelated-path"
+  exit 0
+fi
+# Every later call is a per-tree re-verification. Answer only for the tree that is
+# actually held, so the other fixtures still reap and this test stays an instrument
+# rather than a blanket keep-everything.
+for a in "\$@"; do
+  case "\$a" in
+    "${late_canon}"|"${late_canon}"/*) printf 'n%s\n' "${late_canon}/nested/file" ;;
+  esac
+done
+exit 0
+STUB
+chmod +x "${stub_dir}/lsof" || fail 'fixture: chmod stub'
+PATH="${stub_dir}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$late_root" \
+  bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
+[ -e "$late_tree" ] ||
+  fail "a tree whose holder appeared after the snapshot was reaped: $late_tree"
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0
