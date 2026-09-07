@@ -162,12 +162,60 @@ LSOF_BIN=$(find_lsof) || LSOF_BIN=''
 [ -n "$LSOF_BIN" ] ||
   log 'WARNING: no lsof found — cannot prove a tree is idle, so every tree will be KEPT'
 
+# LSOF_SNAPSHOT holds every open path on this host, captured ONCE and then narrowed to
+# the temp root. Probing per tree with `lsof +D` was measured at ~2 s on a 26k-file tree
+# and a sweep can have hundreds of candidates, so a per-tree descent would cost many
+# minutes; one system-wide pass costs ~7 s no matter how many trees there are.
+#
+# LSOF_OK is tracked separately from the snapshot's contents on purpose: an empty
+# snapshot is a perfectly ordinary state (nothing open under the temp root), whereas a
+# failed lsof must keep every tree. Collapsing the two would turn a probe failure into
+# "nothing is in use" — a fail-open in a script that deletes.
+LSOF_OK=0
+LSOF_SNAPSHOT=''
+if [ -n "$LSOF_BIN" ]; then
+  if lsof_raw=$("$LSOF_BIN" -Fn 2>/dev/null) && [ -n "$lsof_raw" ]; then
+    LSOF_OK=1
+    # lsof reports PHYSICAL paths, so narrow on the resolved root. On macOS the usual
+    # temp roots are symlinks (/tmp -> /private/tmp, /var -> /private/var); narrowing on
+    # the caller-supplied spelling would discard every matching row and leave an empty
+    # snapshot, so every tree would read as free. When the root cannot be resolved, keep
+    # the whole snapshot rather than a wrong subset.
+    lsof_root=$(cd -- "$TMPDIR_ROOT" 2>/dev/null && pwd -P) || lsof_root=""
+    if [ -n "$lsof_root" ]; then
+      LSOF_SNAPSHOT=$(printf "%s\n" "$lsof_raw" | sed -n "s/^n//p" | grep -F -- "$lsof_root" || true)
+    else
+      LSOF_SNAPSHOT=$(printf "%s\n" "$lsof_raw" | sed -n "s/^n//p")
+    fi
+    unset lsof_raw
+  else
+    log 'WARNING: lsof produced no usable snapshot — cannot prove a tree is idle, so every tree will be KEPT'
+  fi
+fi
+
 holds_open() {
-  # Fail closed: if lsof is unavailable or errors, report "in use" so the tree is kept.
-  local path=$1
-  [ -n "$LSOF_BIN" ] || return 0
-  "$LSOF_BIN" -- "$path" >/dev/null 2>&1 && return 0
-  return 1
+  # Fail closed: without a usable snapshot, report "in use" so the tree is kept.
+  #
+  # The test is a literal, position-1 prefix match against the snapshot, which is what
+  # makes a NESTED holder visible. Both halves were verified against a live holder:
+  #   * a holder almost never has the top directory itself open — it holds a file, or has
+  #     its cwd, somewhere beneath it. `lsof -- <dir>` reports only that exact node, so
+  #     such a tree was reported free and reaped while genuinely in use. A shared Go cache
+  #     is exactly this shape: entries land in subdirectories, so the top-level mtime goes
+  #     stale while builds are still reading and writing underneath it.
+  #   * `lsof +D <dir>` does see into the subtree, yet still exits 1 while PRINTING the
+  #     holding processes — so an exit-status test calls the tree free at the very moment
+  #     lsof is naming who is using it. Judge the rows, never the status.
+  # `index()` is a literal match, so a path containing regex metacharacters cannot make
+  # this silently match the wrong tree — or nothing at all.
+  # lsof reports PHYSICAL paths, so compare on the resolved path. A tree whose real
+  # path cannot be resolved is KEPT.
+  local path=$1 canon
+  [ "$LSOF_OK" -eq 1 ] || return 0
+  canon=$(cd -- "$path" 2>/dev/null && pwd -P) || return 0
+  [ -n "$canon" ] || return 0
+  printf "%s\n" "$LSOF_SNAPSHOT" |
+    awk -v p="$canon" 'index($0, p "/") == 1 || $0 == p { found = 1; exit } END { exit !found }'
 }
 
 own_session_tree() {

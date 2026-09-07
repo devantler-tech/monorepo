@@ -106,6 +106,41 @@ if [ -e "$readonly_tree" ]; then
   chmod -R u+w "$readonly_tree" 2>/dev/null
   fail "a tree with a read-only Go module cache was not fully removed: $readonly_tree"
 fi
+
+# --- 8. a stale tree a LIVE process is using is kept (liveness ablation) -----------
+# The script's whole liveness claim is "a tree any running process holds open is KEPT".
+# A holder almost never has the TOP directory itself open -- it holds a file, or has its
+# cwd, somewhere beneath it -- and a shared Go cache is exactly this shape: entries are
+# written into subdirectories, so the top-level mtime goes stale while builds are still
+# reading and writing underneath. So the check has to see into the subtree.
+#
+# Two things must both hold, and each was verified against a live holder:
+#   * the probe must recurse. `lsof -- <dir>` reports only that exact node, so a nested
+#     holder is invisible and the tree is reaped while in use.
+#   * the probe must be judged by its OUTPUT, not its exit status. `lsof +D <dir>` PRINTS
+#     the holding processes and still exits 1, so an exit-status test calls the tree free
+#     at the very moment lsof is naming who is using it.
+# Test 1 is this test's ablation partner: same shape, no holder, and it must be reaped.
+live_tree="${fixture_root}/codex-live-holder"
+mkdir -p "${live_tree}/nested" || fail 'fixture: live-holder tree'
+printf 'payload\n' > "${live_tree}/nested/file"
+live_stamp=$(date -u -v-10d +%Y%m%d%H%M 2>/dev/null) ||
+  live_stamp=$(date -u -d '10 days ago' +%Y%m%d%H%M 2>/dev/null)
+touch -t "$live_stamp" "$live_tree" || fail 'fixture: touch live-holder tree'
+
+# Hold the NESTED file open, never the top directory, in a separate process.
+/bin/sh -c "exec 9<'${live_tree}/nested/file'; sleep 30" &
+holder_pid=$!
+sleep 1
+if kill -0 "$holder_pid" 2>/dev/null; then
+  run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+  [ -e "$live_tree" ] ||
+    fail "a tree held open by a running process was reaped: $live_tree"
+  kill "$holder_pid" 2>/dev/null
+  wait "$holder_pid" 2>/dev/null
+else
+  fail 'fixture: live holder process did not stay alive; liveness assertion not exercised'
+fi
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0
