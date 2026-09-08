@@ -76,7 +76,8 @@ top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" ||
 # Keep NUL-delimited paths intact, and inspect the producer's exit status before scanning.
 tracked_paths="$(mktemp)" || { echo "python-ban-guard: cannot allocate tracked-file list" >&2; exit 2; }
 parser_binary="$(mktemp)" || { echo "python-ban-guard: cannot allocate parser binary" >&2; rm -f -- "$tracked_paths"; exit 2; }
-trap 'rm -f -- "$tracked_paths" "$parser_binary"' EXIT
+utf16_scratch="$(mktemp)" || { echo "python-ban-guard: cannot allocate decode buffer" >&2; rm -f -- "$tracked_paths" "$parser_binary"; exit 2; }
+trap 'rm -f -- "$tracked_paths" "$parser_binary" "$utf16_scratch"' EXIT
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! go -C "$script_dir/python-ban-guard-go" build -o "$parser_binary" .; then
   echo "python-ban-guard: cannot build command parser" >&2
@@ -97,6 +98,20 @@ report() {
 }
 
 # Print one `path:line: Python invocation `<hit>`` per offending line of $2 (displayed as $1).
+
+# decode_utf16 rewrites a BOM-prefixed UTF-16 file as UTF-8 in the scratch buffer.
+#
+# `grep -I` calls a UTF-16 script binary because of its NUL bytes, so a Windows PowerShell
+# script would otherwise be skipped before either scanner sees it. Only a byte-order mark
+# selects this path: it makes the encoding unambiguous, so a genuine binary — which carries
+# no BOM — stays excluded exactly as before.
+decode_utf16() {
+  case "$(od -An -N2 -tx1 -- "$1" 2>/dev/null | tr -d ' \n')" in
+    fffe|feff) ;;
+    *) return 1 ;;
+  esac
+  iconv -f UTF-16 -t UTF-8 -- "$1" >"$utf16_scratch" 2>/dev/null
+}
 scan_invocations() {
   # Commands use ASCII syntax; unrelated invalid UTF-8 bytes must not abort the scan.
   LC_ALL=C awk -v path="$1" -v sq="'" '
@@ -378,7 +393,9 @@ while IFS= read -r -d '' path; do
   grep -Iq . "$file" 2>/dev/null || probe_rc=$?
   case "$probe_rc" in
     0) ;;
-    1) continue ;;                            # binary, or empty
+    1)
+      # A BOM-prefixed UTF-16 script is text; everything else here is binary or empty.
+      if decode_utf16 "$file"; then file="$utf16_scratch"; else continue; fi ;;
     *)
       echo "python-ban-guard: $path: cannot inspect tracked file contents" >&2
       exit 2 ;;

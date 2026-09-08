@@ -426,6 +426,29 @@ run "$r"
 report "control: binary and empty tracked files remain clean" \
   "$([[ $rc -eq 0 && "$out" == *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
 
+# A UTF-16 script is text that `grep -I` classifies as binary. Both byte orders are covered,
+# and the binary/empty control above must keep passing: a real binary carries no BOM.
+r="$(mkrepo utf16le-powershell)"; mkdir -p "$r/tools"
+{ printf '\377\376'; printf 'python.exe --version\n' | iconv -f UTF-8 -t UTF-16LE; } >"$r/tools/check.ps1"
+git -C "$r" add -- tools/check.ps1
+run "$r"
+report "UTF-16LE script is decoded before the binary exclusion" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/check.ps1'* && "$out" == *'Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo utf16be-powershell)"; mkdir -p "$r/tools"
+{ printf '\376\377'; printf 'python.exe --version\n' | iconv -f UTF-8 -t UTF-16BE; } >"$r/tools/check.ps1"
+git -C "$r" add -- tools/check.ps1
+run "$r"
+report "UTF-16BE script is decoded before the binary exclusion" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/check.ps1'* && "$out" == *'Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo utf16-clean)"; mkdir -p "$r/tools"
+{ printf '\377\376'; printf 'echo safe\n' | iconv -f UTF-8 -t UTF-16LE; } >"$r/tools/check.ps1"
+git -C "$r" add -- tools/check.ps1
+run "$r"
+report "control: a decoded UTF-16 script without Python stays clean" \
+  "$([[ $rc -eq 0 && "$out" == *'clean —'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
 r="$(mkrepo malformed-shell)"; addf "$r" tools/broken.sh "echo 'unfinished"
 run "$r"
 report "malformed declared shell fails closed with its parser diagnostic" \
