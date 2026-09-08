@@ -34,7 +34,7 @@
 # It never reads message content, and never emits anything from a transcript into its own output.
 #
 # Usage: claude-lane-liveness.sh [--store PATH] [--projects PATH] [--task ID]
-#                               [--grace-seconds N] [--stub-seconds N] [--skew-seconds N]
+#                               [--grace-seconds N] [--skew-seconds N]
 #                               [--lookback-hours N] [--now-epoch S] [--quiet]
 #
 # Exit 0  every enabled task checked produced work on its most recent settled dispatch
@@ -59,7 +59,7 @@ PROJECTS="${CLAUDE_PROJECTS_ROOT:-$HOME/.claude/projects}"
 TASK=""
 TASK_SET=0
 GRACE_SECONDS=900
-STUB_SECONDS=60
+
 SKEW_SECONDS=120
 LOOKBACK_HOURS=72
 NOW_EPOCH=""
@@ -85,7 +85,6 @@ while [ "$#" -gt 0 ]; do
     --projects) [ "$#" -ge 2 ] || die_unknown "--projects needs a value"; PROJECTS="$2"; shift 2 ;;
     --task) [ "$#" -ge 2 ] || die_unknown "--task needs a value"; TASK="$2"; TASK_SET=1; shift 2 ;;
     --grace-seconds) [ "$#" -ge 2 ] || die_unknown "--grace-seconds needs a value"; GRACE_SECONDS="$2"; shift 2 ;;
-    --stub-seconds) [ "$#" -ge 2 ] || die_unknown "--stub-seconds needs a value"; STUB_SECONDS="$2"; shift 2 ;;
     --skew-seconds) [ "$#" -ge 2 ] || die_unknown "--skew-seconds needs a value"; SKEW_SECONDS="$2"; shift 2 ;;
     --lookback-hours) [ "$#" -ge 2 ] || die_unknown "--lookback-hours needs a value"; LOOKBACK_HOURS="$2"; shift 2 ;;
     --now-epoch) [ "$#" -ge 2 ] || die_unknown "--now-epoch needs a value"; NOW_EPOCH="$2"; shift 2 ;;
@@ -96,19 +95,17 @@ done
 
 # Every numeric knob is validated before use. An unvalidated value would otherwise reach arithmetic
 # and either abort under `set -e` or silently widen a window until the check cannot fire.
-for pair in "GRACE_SECONDS:$GRACE_SECONDS" "STUB_SECONDS:$STUB_SECONDS" \
+for pair in "GRACE_SECONDS:$GRACE_SECONDS" \
             "SKEW_SECONDS:$SKEW_SECONDS" "LOOKBACK_HOURS:$LOOKBACK_HOURS"; do
   name=${pair%%:*}; val=${pair#*:}
   case "$val" in ''|*[!0-9]*) die_unknown "$name must be a non-negative integer, got: $val" ;; esac
 done
 # Each carries a floor of 1, because 0 defeats the invariant it exists to hold:
 # --grace-seconds 0 classifies a dispatch that is still in flight -- the trap the settled window
-# closes; --stub-seconds 0 makes the stub window unreachable, so the check could never return its
-# actual verdict; --skew-seconds 0 requires a session to start in the same second as its dispatch,
+# closes; --skew-seconds 0 requires a session to start in the same second as its dispatch,
 # which no real dispatch does (~1.0s measured), so every healthy lane would read NOT PRODUCING;
 # --lookback-hours 0 enumerates nothing, so every task reads as having no session.
 [ "$GRACE_SECONDS" -ge 1 ] || die_unknown "--grace-seconds must be at least 1"
-[ "$STUB_SECONDS" -ge 1 ] || die_unknown "--stub-seconds must be at least 1"
 [ "$SKEW_SECONDS" -ge 1 ] || die_unknown "--skew-seconds must be at least 1"
 [ "$LOOKBACK_HOURS" -ge 1 ] || die_unknown "--lookback-hours must be at least 1"
 
@@ -396,8 +393,8 @@ $ids
 EOF
 
 if [ "$QUIET" -eq 0 ]; then
-  printf 'claude-lane-liveness: store=%s grace=%ss stub<=%ss skew<=%ss lookback=%sh\n' \
-    "$STORE" "$GRACE_SECONDS" "$STUB_SECONDS" "$SKEW_SECONDS" "$LOOKBACK_HOURS"
+  printf 'claude-lane-liveness: store=%s grace=%ss skew<=%ss lookback=%sh\n' \
+    "$STORE" "$GRACE_SECONDS" "$SKEW_SECONDS" "$LOOKBACK_HOURS"
   printf '%s' "$report"
 fi
 

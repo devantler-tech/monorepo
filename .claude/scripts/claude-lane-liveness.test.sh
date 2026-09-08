@@ -364,10 +364,14 @@ mkcase knobs
 mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
 expect 2 "--grace-seconds 0 is refused" --grace-seconds 0
-expect 2 "--stub-seconds 0 is refused" --stub-seconds 0
 expect 2 "--skew-seconds 0 is refused" --skew-seconds 0
 expect 2 "--lookback-hours 0 is refused" --lookback-hours 0
-expect 2 "a non-numeric knob is refused" --stub-seconds abc
+expect 2 "a non-numeric knob is refused" --skew-seconds abc
+# --stub-seconds was removed with the span conjunct: the verdict is now `turns == 0` alone, so the
+# knob decided nothing. It is asserted as an UNRECOGNISED ARGUMENT rather than left in the knob list,
+# where it would keep passing on the unknown-option path while its label claimed a window was being
+# validated -- a test that passes for a reason other than the one it names.
+expect 2 "--stub-seconds is gone and refused as unrecognised" --stub-seconds 60
 expect 2 "an unrecognised argument is refused" --nope
 expect 2 "an unusable task id is refused" --task 'a;b'
 
