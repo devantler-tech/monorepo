@@ -49,6 +49,7 @@ jobs:
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
+      claude-lane-liveness: ${{ steps.filter.outputs.claude-lane-liveness }}
       improver-role-disclosure: ${{ steps.filter.outputs.improver-role-disclosure }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       gh-json-vocabulary-contract: ${{ steps.filter.outputs.gh-json-vocabulary-contract }}
@@ -354,6 +355,7 @@ jobs:
               # it a change to the exit codes could land while this consumer-contract job
               # skipped, leaving the clause describing semantics that no longer exist.
               - '.claude/scripts/codex-lane-liveness.sh'
+              - '.claude/scripts/claude-lane-liveness.sh'
               - '.claude/scripts/improver-cross-read-liveness-contract.test.sh'
               - '.github/workflows/ci.yaml'
             git-safety-contract:
@@ -419,6 +421,11 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/codex-lane-liveness.sh'
               - '.claude/scripts/codex-lane-liveness.test.sh'
+              - '.github/workflows/ci.yaml'
+            claude-lane-liveness:
+              - 'AGENTS.md'
+              - '.claude/scripts/claude-lane-liveness.sh'
+              - '.claude/scripts/claude-lane-liveness.test.sh'
               - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
@@ -1662,6 +1669,25 @@ jobs:
       - name: Verify the codex lane liveness check
         run: bash .claude/scripts/codex-lane-liveness.test.sh
 
+  test-claude-lane-liveness:
+    name: Test claude lane liveness
+    needs: changes
+    if: needs.changes.outputs.claude-lane-liveness == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the claude lane liveness check
+        run: bash .claude/scripts/claude-lane-liveness.test.sh
+
   test-plugin-definition-refresh:
     name: Test plugin definition refresh
     needs: changes
@@ -1924,6 +1950,7 @@ jobs:
       - test-plugin-definition-currency
       - test-plugin-definition-refresh
       - test-codex-lane-liveness
+      - test-claude-lane-liveness
       - test-self-review-contract
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
@@ -1988,6 +2015,7 @@ jobs:
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-plugin-definition-refresh.result }}
             ${{ needs.test-codex-lane-liveness.result }}
+            ${{ needs.test-claude-lane-liveness.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}

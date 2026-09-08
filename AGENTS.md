@@ -5035,10 +5035,18 @@ step:
    becomes data. Establish it with **that lane's own** liveness check, read **before** scoring or
    opening anything against the store: for the Codex lane that is
    [`.claude/scripts/codex-lane-liveness.sh`](.claude/scripts/codex-lane-liveness.sh)
-   (`0` producing, `1` not producing, `2` UNKNOWN). ⚠️ **No equivalent exists for the Claude lane**, so
-   a Codex-side run reading the Claude ledger has no check to run and its verdict is `2` by
-   construction — never read that absence as producing, and never substitute the Codex check, which
-   measures the reader rather than the sibling. On a `1` or a `2` the sibling's pending hypotheses are **blocked by the
+   (`0` producing, `1` not producing, `2` UNKNOWN); for the Claude lane it is
+   [`.claude/scripts/claude-lane-liveness.sh`](.claude/scripts/claude-lane-liveness.sh), which
+   answers the same question with the same three verdicts. ⚠️ **Never substitute the other lane's
+   check, which measures the reader rather than the sibling.** The two read different evidence
+   because the runtimes record different things — Codex keeps per-run rows, while Claude's store
+   keeps only a dispatch marker, so the Claude check anchors on whether that dispatch produced a
+   session at all — and neither is portable to the other lane. **Scope the read to the task whose
+   ledger you are about to consume** (`--automation agent-improver` for Codex,
+   `--task agent-improver` for Claude): a task dispatched inside the grace
+   window is still in flight and correctly reports `2`, so an unscoped run inherits that `2` from
+   the caller's own live dispatch and learns nothing about the sibling.
+   On a `1` or a `2` the sibling's pending hypotheses are **blocked by the
    outage**: record them that way and take **no verdict**, directional reading, or "no movement"
    inference from them. The reasoning is measured under *Agent definition locations* — a dead lane's
    error count falls to zero, so a naive read scores it as having **improved**, while the scheduler's
