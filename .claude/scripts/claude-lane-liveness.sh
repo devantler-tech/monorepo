@@ -348,9 +348,11 @@ while IFS= read -r id; do
   fi
 
   # Read the candidate whole, but for two scalars only: how many assistant turns it produced and how
-  # long it spanned. BOTH discriminators are required, exactly as the Codex check requires duration
-  # AND inbox-presence: a turn count alone fires on a run whose output was not an assistant message,
-  # and a span alone fires on a legitimately fast run.
+  # long it spanned. Only the TURN COUNT decides -- see the verdict below. The span is carried for the
+  # diagnostic line, so a reader can tell a four-second death from an hour-long one, and it must not
+  # be reintroduced as a second required condition: a run that dies part way produces no assistant
+  # turn while easily outlasting any stub window, so requiring both reported a dead lane as healthy
+  # (monorepo#3287).
   stats=$(jq -rs '
       [.[] | select(type == "object")] as $r
       | ([$r[] | select(.type == "assistant")] | length) as $a

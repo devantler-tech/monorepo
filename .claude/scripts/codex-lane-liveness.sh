@@ -38,6 +38,12 @@
 # Exit 1 requires BOTH discriminators on EVERY run in the window. Duration alone fires on a
 # legitimately fast run; inbox-presence alone fires on a run that wrote nothing for a benign reason.
 # Requiring both, on consecutive runs, is what keeps a real verdict rare enough to act on.
+#
+# But failing that conjunction is NOT health, and reading it as health was a fail-open: a run that
+# wrote no inbox item yet outlasted the stub window died PART WAY, and this store cannot tell that
+# apart from a long run that never wrote one. That third class is exit 2, never exit 0
+# (monorepo#3287). So the window has three outcomes, not two: every run a stub is exit 1, any run
+# unproven is exit 2, and only an inbox item anywhere in the window is exit 0.
 
 set -Eeuo pipefail
 
@@ -64,7 +70,7 @@ RECOVERY="
   scheduler's view is healthy by construction here. Re-run this check once a run has settled."
 
 usage() {
-  sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 die_unknown() {
