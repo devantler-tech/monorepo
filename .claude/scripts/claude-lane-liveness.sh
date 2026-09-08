@@ -70,7 +70,7 @@ RECOVERY="
   advances lastRunAt, so look at whether a session exists for that dispatch rather than at the
   scheduler's own view. Re-run this check once the newest dispatch has had time to settle."
 
-usage() { sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; }
 
 die_unknown() {
   printf 'claude-lane-liveness: UNKNOWN -- %s\n' "$1" >&2
@@ -247,6 +247,18 @@ while IFS= read -r f; do
   [ -n "$se" ] || continue
   printf '%s\t%s\t%s\n' "$nm" "$se" "$f" >> "$SESSION_INDEX"
 done < "$FILELIST"
+
+# Transcripts exist but NONE is attributable to any scheduled task. The likeliest cause is not
+# a dead lane but a changed marker: the `<scheduled-task ...>` block is undocumented runtime
+# internals, so a rename or reformat would leave every task with no session and report the
+# WHOLE FLEET as not producing at once. That is the same wrong-verdict class the empty-file-list
+# guard above closes, one level in.
+# The trade-off is deliberate and costs little: a genuine outage lasting the entire lookback
+# window would also empty this index and now reports UNKNOWN rather than NOT-PRODUCING. Both
+# fail closed identically for the consumer -- neither is ever read as producing -- so the only
+# loss is crispness, against a false accusation that would send a run escalating a healthy lane.
+[ -s "$SESSION_INDEX" ] \
+  || die_unknown "no transcript in the last ${LOOKBACK_HOURS}h is attributable to a scheduled task -- the task marker may have changed; cannot judge"
 
 any_dead=0
 any_unknown=0

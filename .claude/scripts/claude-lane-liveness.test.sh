@@ -120,6 +120,18 @@ expect() {
   [ "$got" = "$want" ] || note_fail "$label: expected exit $want, got $got"
 }
 
+# Two different empty reads must stay DISTINGUISHABLE. Both exit 2, so an exit-code assertion
+# alone leaves whichever guard runs second unpinned -- a later change could delete it and no
+# test would notice. Pinning the diagnostic is what keeps both alive.
+expect_msg() {
+  local want=$1 needle=$2 label=$3; shift 3
+  local got=0 out
+  out=$("$SCRIPT" --store "$STORE" --projects "$PROJECTS" --now-epoch "$NOW" "$@" 2>&1) || got=$?
+  asserts=$(( asserts + 1 ))
+  [ "$got" = "$want" ] || note_fail "$label: expected exit $want, got $got"
+  case "$out" in *"$needle"*) : ;; *) note_fail "$label: output did not mention '$needle'" ;; esac
+}
+
 # --- GREEN: a healthy lane must NOT fire -------------------------------------------------------
 mkcase healthy
 mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
@@ -159,14 +171,27 @@ mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 escaped >/dev/null
 expect 0 "a backslash-escaped marker is attributed (regression: unescaped-only matched nothing)"
 
 mkcase late_marker
-mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
+# `beta` is healthy purely so the session index is NOT empty -- otherwise the unattributable-index
+# guard fires first and this case would stop testing the bounded first-line read at all.
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\"" beta true "\"$(iso_at $(( NOW - 3600 )))\""
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 late >/dev/null
+mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 40 1200 >/dev/null
 expect 1 "a marker on a later line is NOT attributed (the first-line read is deliberate)"
 
 # --- REGRESSION: a broken/empty enumeration is UNKNOWN, never a verdict --------------------------
 mkcase empty_projects
 mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
-expect 2 "no transcripts at all is UNKNOWN, not NOT-PRODUCING (regression: BSD find fail-open)"
+expect_msg 2 "no transcripts at all under" "no transcripts at all is UNKNOWN (regression: BSD find fail-open)"
+
+# --- Transcripts exist but none is attributable: UNKNOWN, not a fleet-wide verdict ---------------
+# A changed task marker would empty the index while transcripts are plentiful. Reporting every task
+# NOT-PRODUCING there accuses a healthy fleet on the strength of a parse that stopped matching.
+mkcase unattributable
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
+printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"no marker here"}}\n' \
+  "$(iso_at $(( NOW - 3599 )))" > "$PROJECTS/proj-a/interactive.jsonl"
+touch -t "$(touch_at $(( NOW - 2399 )))" "$PROJECTS/proj-a/interactive.jsonl"
+expect_msg 2 "task marker may have changed" "unattributable transcripts is UNKNOWN, with its own diagnostic"
 
 # --- UNKNOWN: an in-flight dispatch must not be classified ---------------------------------------
 mkcase inflight
