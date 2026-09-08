@@ -293,6 +293,28 @@ that the generic plugin does not carry yet; remove it only after the side-by-sid
 [`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md)
 passes.
 
+<!-- codex-survey-dispatch:begin -->
+**Codex survey dispatch — deployment capability override (#3057).** For Codex, run the survey
+inline in the engineer by default. Missing agent-scoped enforcement is an unavailable read-only
+subagent capability, even when the runtime can spawn agents. Do not dispatch either surveyor type
+or a renamed substitute while this override applies. Instead, use the same reviewed pinned survey
+procedure and local compatibility overlay in the engineer's read-only survey phase. Scope queries
+to the Portfolio map, deepen only candidates, and retain the same digest and evidence requirements.
+The rest of the engineer's authorised work continues; no new maintainer permission is needed.
+
+This is a dispatch instruction, not a claim of native delegated enforcement. The Codex hook
+interface verified on 2026-09-06 does not supply an agent discriminator on `PreToolUse`, and
+session_id is shared with the parent. `SubagentStart` identity therefore cannot safely scope the
+Claude `agent_type` adapter to later tool calls. A role name or prompt is not runtime enforcement.
+
+Surveyor delegation remains disabled by this consumer override until a reviewed change records a
+runtime-authenticated discriminator at the actual pre-execution boundary and proves ordinary reads
+succeed, writes are denied for every exposed surveyor type, and the engineer's own write path
+remains usable. A failed or missing probe retains the inline route. The inline survey exercises the
+reviewed procedure's existing fallback; it does not waive the plugin surveyor's read-only guard or
+alter other providers' verified dispatch paths.
+<!-- codex-survey-dispatch:end -->
+
 🔴 **Verify that the definition the runtime LOADED is the one this consumer PINNED — the desired
 state's `refreshTiming: before-starting-each-run` is a declaration, not a mechanism.** Two controls
 already watch this chain and neither reaches its last link: [#2736](https://github.com/devantler-tech/monorepo/issues/2736)
@@ -5007,6 +5029,26 @@ step:
    The **open verification-hypothesis store** is
    `/Users/homelab-mac-mini/.claude/projects/-Users-homelab-mac-mini-git-personal-monorepo/memory/agent-improver-routine.md`
    for Claude and the `Hypotheses / next run` section of the Codex Agent Improver memory file.
+   🔴 **A SIBLING'S STORE IS EVIDENCE ONLY WHILE ITS LANE IS PRODUCING — establish that FIRST, because
+   a frozen ledger and a quiet one are indistinguishable.** That store is the one input this instance
+   cannot corroborate from its own lane, so an unchecked read is exactly where a dead sibling silently
+   becomes data. Establish it with **that lane's own** liveness check, read **before** scoring or
+   opening anything against the store: for the Codex lane that is
+   [`.claude/scripts/codex-lane-liveness.sh`](.claude/scripts/codex-lane-liveness.sh)
+   (`0` producing, `1` not producing, `2` UNKNOWN). ⚠️ **No equivalent exists for the Claude lane**, so
+   a Codex-side run reading the Claude ledger has no check to run and its verdict is `2` by
+   construction — never read that absence as producing, and never substitute the Codex check, which
+   measures the reader rather than the sibling. On a `1` or a `2` the sibling's pending hypotheses are **blocked by the
+   outage**: record them that way and take **no verdict**, directional reading, or "no movement"
+   inference from them. The reasoning is measured under *Agent definition locations* — a dead lane's
+   error count falls to zero, so a naive read scores it as having **improved**, while the scheduler's
+   own view stays healthy throughout because `last_run_at` advances across every stub. ⚠️ **A `1` or a
+   `2` is never a run-stopper**: it fences only what the outage actually froze, and the settled-verdict
+   and signature-overlap rules below still bind on everything else — letting one lane's provider quota
+   halt the other would be the passive self-blocking this contract forbids everywhere else. Measured
+   2026-09-07: the Codex lane was NOT-PRODUCING across **26 consecutive stub dispatches** (cause class
+   `quota/billing`) while its ledger sat ~29 h stale, and nothing in this clause would have said so
+   (monorepo#3267).
    🔴 **Each Agent Improver run reads the SIBLING instance's scorecard and hypothesis store too, before
    it scores or opens any hypothesis — naming the two stores is not the same as wiring them together.**
    Each run boots into its own store, so without this cross-read a hypothesis opened by one instance can

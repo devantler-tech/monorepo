@@ -22,6 +22,7 @@ jobs:
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
       branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
       worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
+      build-cache-reclaim: ${{ steps.filter.outputs.build-cache-reclaim }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
@@ -39,6 +40,7 @@ jobs:
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
       codex-dispatch-supersession-contract: ${{ steps.filter.outputs.codex-dispatch-supersession-contract }}
       lane-outage-disclosure-contract: ${{ steps.filter.outputs.lane-outage-disclosure-contract }}
+      improver-cross-read-liveness-contract: ${{ steps.filter.outputs.improver-cross-read-liveness-contract }}
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
       rung-type-filter-contract: ${{ steps.filter.outputs.rung-type-filter-contract }}
       definition-load-budget-contract: ${{ steps.filter.outputs.definition-load-budget-contract }}
@@ -145,6 +147,12 @@ jobs:
             branch-cleanup:
               - '.claude/scripts/branch-cleanup.sh'
               - '.claude/scripts/branch-cleanup.test.sh'
+            build-cache-reclaim:
+              - '.claude/scripts/build-cache-reclaim.sh'
+              - '.claude/scripts/build-cache-reclaim.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             worktree-cleanup:
               - '.claude/scripts/worktree-claim-lib.sh'
               - '.claude/scripts/worktree-cleanup.sh'
@@ -339,6 +347,14 @@ jobs:
             lane-outage-disclosure-contract:
               - 'AGENTS.md'
               - '.claude/scripts/lane-outage-disclosure-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            improver-cross-read-liveness-contract:
+              - 'AGENTS.md'
+              # The PRODUCER of the 0/1/2 verdict contract this policy consumes. Without
+              # it a change to the exit codes could land while this consumer-contract job
+              # skipped, leaving the clause describing semantics that no longer exist.
+              - '.claude/scripts/codex-lane-liveness.sh'
+              - '.claude/scripts/improver-cross-read-liveness-contract.test.sh'
               - '.github/workflows/ci.yaml'
             git-safety-contract:
               - 'AGENTS.md'
@@ -791,6 +807,31 @@ jobs:
       # (monorepo#2298), plus the codex-namespace refusal.
       - name: Self-test branch-cleanup namespaces
         run: bash .claude/scripts/branch-cleanup.test.sh
+
+  test-build-cache-reclaim:
+    name: Test build cache reclaim
+    needs: changes
+    if: needs.changes.outputs.build-cache-reclaim == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # This script DELETES, so every assertion is a safety property proved by
+      # ablation: a fixture differing from a reapable tree in exactly one dimension
+      # (age, name pattern, dry-run, read-only module cache) must be KEPT, so a script
+      # that deleted everything could not pass. The macos leg is load-bearing: the host
+      # ships bash 3.2 and BSD find/touch/stat, which is where the age and read-only
+      # probes actually run in production.
+      - name: Self-test build-cache-reclaim safety gates
+        run: bash .claude/scripts/build-cache-reclaim.test.sh
 
   test-worktree-cleanup:
     name: Test worktree cleanup
@@ -1526,6 +1567,21 @@ jobs:
       - name: Verify the lane outage disclosure contract
         run: bash .claude/scripts/lane-outage-disclosure-contract.test.sh
 
+  test-improver-cross-read-liveness-contract:
+    name: Test improver cross-read liveness contract
+    needs: changes
+    if: needs.changes.outputs.improver-cross-read-liveness-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the improver cross-read liveness contract
+        run: bash .claude/scripts/improver-cross-read-liveness-contract.test.sh
+
   test-git-safety-contract:
     name: Test git safety contract
     needs: changes
@@ -1837,6 +1893,7 @@ jobs:
       - test-safe-clone
       - test-branch-cleanup
       - test-worktree-cleanup
+      - test-build-cache-reclaim
       - test-submodule-init
       - test-submodule-pin-currency
       - test-blocked-label-blocker-line
@@ -1857,6 +1914,7 @@ jobs:
       - test-bash-call-timeout-budget-contract
       - test-codex-dispatch-supersession-contract
       - test-lane-outage-disclosure-contract
+      - test-improver-cross-read-liveness-contract
       - test-git-safety-contract
       - test-rung-type-filter-contract
       - test-definition-load-budget-contract
@@ -1880,7 +1938,7 @@ jobs:
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/actions/aggregate-job-checks@4f4e07a3ebf3e1161756a292966e36c91a65ee04 # v13.3.0
+        uses: devantler-tech/actions/aggregate-job-checks@883d891a0e6a2c9420d2b60aea9d5f47c20ce803 # v13.5.0
         with:
           job-results: >-
             ${{ needs.changes.result }}
@@ -1899,6 +1957,7 @@ jobs:
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-worktree-cleanup.result }}
+            ${{ needs.test-build-cache-reclaim.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-blocked-label-blocker-line.result }}
@@ -1919,6 +1978,7 @@ jobs:
             ${{ needs.test-bash-call-timeout-budget-contract.result }}
             ${{ needs.test-codex-dispatch-supersession-contract.result }}
             ${{ needs.test-lane-outage-disclosure-contract.result }}
+            ${{ needs.test-improver-cross-read-liveness-contract.result }}
             ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-rung-type-filter-contract.result }}
             ${{ needs.test-definition-load-budget-contract.result }}
