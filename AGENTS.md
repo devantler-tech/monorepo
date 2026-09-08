@@ -924,6 +924,16 @@ inbox-item presence — the discriminators that actually separate the two states
 768–24,428 s with an inbox item, against 4-second stubs with none) — and exits `0` producing, `1` not
 producing, `2` **UNKNOWN**. It reads only timings and an inbox-presence flag, never a run's error
 payload, so it stays generic across causes and cannot carry private runtime state into an artifact.
+🔴 **Those two discriminators are read as THREE classes, not two, because a run can die PART WAY.** An
+inbox-less run inside the stub window died at dispatch and is the `1`; an inbox-less run that outlasted
+it is **UNPROVEN, never healthy** — this store cannot separate a mid-run death from a long run that
+simply never wrote an inbox item, so it is a `2`. Requiring both conditions at once made that third
+class report `0`: measured 2026-09-08, a twice-daily automation whose newest settled run had run 46
+minutes and died to an account-scoped cause read `OK`, and the lane was caught only because a *second*
+automation on the same account happened to show the stub signature (monorepo#3287). The Claude-side
+check answers the same question on a stronger signal — **zero assistant turns is decisive on its own**,
+because unlike a missing inbox item it admits no benign reading, and its grace window already excludes
+in-flight dispatches.
 ⚠️ **That narrowness is defence in depth, NOT a claim that the cause may never be named.**
 *Sensitive information stays private* governs what may be published, and it permits — and the
 `**Blocker:**` line requires — the bounded **cause class**. So diagnose a `1` from the runtime's own

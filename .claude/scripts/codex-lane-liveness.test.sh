@@ -112,6 +112,19 @@ $OUT" ;;
   esac
 }
 
+# The negative counterpart. An exit code says which verdict was reached but not which one was
+# AVOIDED, and the two failure directions here are not interchangeable: reporting an unproven run as
+# a proven dead lane is a different defect from reporting it as healthy.
+expect_out_not() {
+  asserts=$(( asserts + 1 ))
+  case "$OUT" in
+    *"$1"*) note_fail "$2 (expected output NOT to contain: $1)
+--- output ---
+$OUT" ;;
+    *) : ;;
+  esac
+}
+
 # --- 1. a healthy lane must NOT fire -----------------------------------------------------------
 db=$TMP/healthy.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
@@ -161,12 +174,39 @@ add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 yes
 run_check "$db"
 expect_rc 0 "a fast run that wrote an inbox item is not a stub"
 
-# --- 5. missing inbox alone is not enough ------------------------------------------------------
+# --- 5. missing inbox alone is not a STUB, but it is not health either --------------------------
+# A long run without an inbox item is not the dispatch-time death the NOT-PRODUCING verdict names,
+# so it is still not a stub. It is not evidence of production either: this store cannot separate a
+# run that died part way from one that worked and never wrote an inbox item. Reporting OK here is
+# what let a lane whose newest settled run had died to an account-scoped cause read healthy
+# (monorepo#3287), so the verdict is UNKNOWN -- which is never read as producing.
 db=$TMP/longnoinbox.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 no          # long BUT no inbox item
 add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 no
 run_check "$db"
-expect_rc 0 "a long run with no inbox item is not a stub"
+expect_rc 2 "a long run with no inbox item is unproven, not healthy"
+expect_out "production is unproven" "the unproven verdict must name why it could not judge"
+expect_out_not "NOT-PRODUCING" "an unproven run must not be reported as a proven dead lane"
+
+# --- 5b. THE LIVE SHAPE (monorepo#3287): newest run died part way, older one produced ------------
+# Measured on 2026-09-08: the newest settled run of a twice-daily automation ran 46 minutes, wrote no
+# inbox item and died to an account-scoped cause, while the run before it was healthy. The old
+# conjunctive test scored this window OK, and the lane was only caught because a SECOND automation on
+# the same account happened to show the stub signature. A lane must not depend on a sibling's cadence
+# to be diagnosed, so this window is UNKNOWN on its own evidence.
+db=$TMP/newestdied.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  2764 no         # newest: long, produced nothing
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 997  yes        # older:  healthy
+run_check "$db"
+expect_rc 2 "a healthy older run must not certify a newest run that produced nothing"
+expect_out "1 of 2" "the verdict must say how many runs were unproven"
+
+# --- 5c. the OK path is untouched: an inbox item is still proof of production --------------------
+db=$TMP/stillok.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  2764 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 4    yes
+run_check "$db"
+expect_rc 0 "runs that wrote inbox items remain OK regardless of duration"
 
 # --- 6. mixed window does not fire (requires ALL runs to be stubs) ------------------------------
 db=$TMP/mixed.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
@@ -383,8 +423,9 @@ db=$TMP/justover.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))  60999 no
 add_run_ms "$db" lane-a $(( GRACE_MS + 900000 )) 60999 no
 run_check "$db"
-expect_rc 0 "a run 999ms over the stub threshold must not be counted a stub"
-expect_out "OK" "a just-over-threshold lane must report OK"
+expect_rc 2 "a run 999ms over the stub threshold must not be counted a stub"
+expect_out "60999ms" "the verdict must report the millisecond duration it actually compared"
+expect_out_not "NOT-PRODUCING" "999ms over the threshold must not reach the dead-lane verdict"
 
 # --- a NEGATIVE duration is corrupt timing data, not a long run ----------------------------------
 # updated_at before created_at cannot describe a real run. Treating it as a large duration made it a

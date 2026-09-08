@@ -34,7 +34,7 @@
 # It never reads message content, and never emits anything from a transcript into its own output.
 #
 # Usage: claude-lane-liveness.sh [--store PATH] [--projects PATH] [--task ID]
-#                               [--grace-seconds N] [--stub-seconds N] [--skew-seconds N]
+#                               [--grace-seconds N] [--skew-seconds N]
 #                               [--lookback-hours N] [--now-epoch S] [--quiet]
 #
 # Exit 0  every enabled task checked produced work on its most recent settled dispatch
@@ -59,7 +59,6 @@ PROJECTS="${CLAUDE_PROJECTS_ROOT:-$HOME/.claude/projects}"
 TASK=""
 TASK_SET=0
 GRACE_SECONDS=900
-STUB_SECONDS=60
 SKEW_SECONDS=120
 LOOKBACK_HOURS=72
 NOW_EPOCH=""
@@ -85,7 +84,6 @@ while [ "$#" -gt 0 ]; do
     --projects) [ "$#" -ge 2 ] || die_unknown "--projects needs a value"; PROJECTS="$2"; shift 2 ;;
     --task) [ "$#" -ge 2 ] || die_unknown "--task needs a value"; TASK="$2"; TASK_SET=1; shift 2 ;;
     --grace-seconds) [ "$#" -ge 2 ] || die_unknown "--grace-seconds needs a value"; GRACE_SECONDS="$2"; shift 2 ;;
-    --stub-seconds) [ "$#" -ge 2 ] || die_unknown "--stub-seconds needs a value"; STUB_SECONDS="$2"; shift 2 ;;
     --skew-seconds) [ "$#" -ge 2 ] || die_unknown "--skew-seconds needs a value"; SKEW_SECONDS="$2"; shift 2 ;;
     --lookback-hours) [ "$#" -ge 2 ] || die_unknown "--lookback-hours needs a value"; LOOKBACK_HOURS="$2"; shift 2 ;;
     --now-epoch) [ "$#" -ge 2 ] || die_unknown "--now-epoch needs a value"; NOW_EPOCH="$2"; shift 2 ;;
@@ -96,19 +94,17 @@ done
 
 # Every numeric knob is validated before use. An unvalidated value would otherwise reach arithmetic
 # and either abort under `set -e` or silently widen a window until the check cannot fire.
-for pair in "GRACE_SECONDS:$GRACE_SECONDS" "STUB_SECONDS:$STUB_SECONDS" \
+for pair in "GRACE_SECONDS:$GRACE_SECONDS" \
             "SKEW_SECONDS:$SKEW_SECONDS" "LOOKBACK_HOURS:$LOOKBACK_HOURS"; do
   name=${pair%%:*}; val=${pair#*:}
   case "$val" in ''|*[!0-9]*) die_unknown "$name must be a non-negative integer, got: $val" ;; esac
 done
 # Each carries a floor of 1, because 0 defeats the invariant it exists to hold:
 # --grace-seconds 0 classifies a dispatch that is still in flight -- the trap the settled window
-# closes; --stub-seconds 0 makes the stub window unreachable, so the check could never return its
-# actual verdict; --skew-seconds 0 requires a session to start in the same second as its dispatch,
+# closes; --skew-seconds 0 requires a session to start in the same second as its dispatch,
 # which no real dispatch does (~1.0s measured), so every healthy lane would read NOT PRODUCING;
 # --lookback-hours 0 enumerates nothing, so every task reads as having no session.
 [ "$GRACE_SECONDS" -ge 1 ] || die_unknown "--grace-seconds must be at least 1"
-[ "$STUB_SECONDS" -ge 1 ] || die_unknown "--stub-seconds must be at least 1"
 [ "$SKEW_SECONDS" -ge 1 ] || die_unknown "--skew-seconds must be at least 1"
 [ "$LOOKBACK_HOURS" -ge 1 ] || die_unknown "--lookback-hours must be at least 1"
 
@@ -352,9 +348,11 @@ while IFS= read -r id; do
   fi
 
   # Read the candidate whole, but for two scalars only: how many assistant turns it produced and how
-  # long it spanned. BOTH discriminators are required, exactly as the Codex check requires duration
-  # AND inbox-presence: a turn count alone fires on a run whose output was not an assistant message,
-  # and a span alone fires on a legitimately fast run.
+  # long it spanned. Only the TURN COUNT decides -- see the verdict below. The span is carried for the
+  # diagnostic line, so a reader can tell a four-second death from an hour-long one, and it must not
+  # be reintroduced as a second required condition: a run that dies part way produces no assistant
+  # turn while easily outlasting any stub window, so requiring both reported a dead lane as healthy
+  # (monorepo#3287).
   stats=$(jq -rs '
       [.[] | select(type == "object")] as $r
       | ([$r[] | select(.type == "assistant")] | length) as $a
@@ -376,7 +374,14 @@ while IFS= read -r id; do
   fi
   span=$(( le - fe ))
 
-  if [ "$turns" -eq 0 ] && [ "$span" -le "$STUB_SECONDS" ]; then
+  # ZERO ASSISTANT TURNS IS THE WHOLE TEST -- the span is reported, never required. A session that
+  # emitted no assistant turn produced nothing whether it died in four seconds or hung for an hour,
+  # and pairing the two as a conjunction meant a dispatch that died PART WAY fell through to OK, which
+  # is the one verdict this check exists to prevent (monorepo#3287). Unlike the Codex store's
+  # inbox flag -- where a long run really can do work without writing one -- `turns == 0` admits no
+  # benign reading, and an in-flight dispatch is already excluded by the grace window above, so
+  # nothing here can be a run that simply has not got going yet.
+  if [ "$turns" -eq 0 ]; then
     report="${report}  NOT-PRODUCING  ${id} -- dispatched at ${last_run}, session produced 0 assistant turns in ${span}s
 "
     any_dead=1
@@ -389,8 +394,8 @@ $ids
 EOF
 
 if [ "$QUIET" -eq 0 ]; then
-  printf 'claude-lane-liveness: store=%s grace=%ss stub<=%ss skew<=%ss lookback=%sh\n' \
-    "$STORE" "$GRACE_SECONDS" "$STUB_SECONDS" "$SKEW_SECONDS" "$LOOKBACK_HOURS"
+  printf 'claude-lane-liveness: store=%s grace=%ss skew<=%ss lookback=%sh\n' \
+    "$STORE" "$GRACE_SECONDS" "$SKEW_SECONDS" "$LOOKBACK_HOURS"
   printf '%s' "$report"
 fi
 
