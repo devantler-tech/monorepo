@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -102,5 +103,41 @@ func TestYAMLCommandsNeverExecute(t *testing.T) {
 	}
 	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
 		t.Fatalf("nested shell payload executed: stat error=%v", err)
+	}
+}
+
+// TestNestedAliasesDoNotExplode pins the traversal cost of repeated YAML aliases.
+// Decoding into raw nodes means yaml.v3 never expands aliases, so `visit` follows
+// them itself. Without memoizing completed visits each level doubles the work, and
+// a document this small becomes unscannable: measured before the fix, 26 levels
+// took 72s and 24 levels took 19s from a 553-byte file. This test would not
+// complete at 40 levels without that memoization.
+func TestNestedAliasesDoNotExplode(t *testing.T) {
+	const levels = 40
+	var b strings.Builder
+	b.WriteString("l0: &a0 [t, t, t, t]\n")
+	for i := 1; i <= levels; i++ {
+		fmt.Fprintf(&b, "l%d: &a%d [*a%d, *a%d]\n", i, i, i-1, i-1)
+	}
+	fmt.Fprintf(&b, "top: [*a%d, *a%d]\n", levels, levels)
+
+	s := scanner{path: "deploy/pod.yaml", seen: map[string]bool{}}
+	if err := s.yamlCommands(b.String()); err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	if len(s.hits) != 0 {
+		t.Fatalf("hits = %v, want none", s.hits)
+	}
+}
+
+// TestNestedAliasesStillReachCommands proves the memoization does not skip work
+// that matters: an interpreter behind an alias is still reported.
+func TestNestedAliasesStillReachCommands(t *testing.T) {
+	s := scanner{path: "deploy/pod.yaml", seen: map[string]bool{}}
+	if err := s.yamlCommands("exe: &e python3\ndup: [*e, *e]\ncommand: [*e, --version]\n"); err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	if len(s.hits) == 0 {
+		t.Fatal("interpreter behind an alias was not reported")
 	}
 }

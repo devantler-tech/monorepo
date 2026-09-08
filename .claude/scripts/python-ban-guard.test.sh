@@ -16,7 +16,6 @@ set -Eeuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 guard="$here/python-ban-guard.sh"
-go -C "$here/python-ban-guard-go" test ./...
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -664,7 +663,10 @@ if ! bash "$here/python-ban-guard-build-surfaces.test.sh"; then fail=1; fi
 if ! bash "$here/python-ban-guard-symlinks.test.sh"; then fail=1; fi
 
 # The Go parser is this guard's primary engine; its package tests pin the
-# executable-surface behaviour the shell suites cannot reach directly.
+# executable-surface behaviour the shell suites cannot reach directly. Keep this
+# invocation GUARDED: an unguarded one under `set -Eeuo pipefail` aborts the whole
+# self-test on a Go failure, so no shell fixture runs and the summary never prints
+# (measured: 0 fixtures vs 378).
 if ! go -C "$here/python-ban-guard-go" test ./...; then fail=1; fi
 
 if [[ $fail -eq 0 ]]; then

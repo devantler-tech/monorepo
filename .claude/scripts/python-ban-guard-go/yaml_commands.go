@@ -116,13 +116,32 @@ func (s *scanner) yamlCommands(src string) error {
 		return true, err
 	}
 	active := make(map[*yaml.Node]bool)
+	// A node reached through repeated aliases is otherwise re-traversed once per
+	// path to it, so nested aliases make the scan exponential in their depth.
+	// Memoize successful visits; `active` still detects genuine cycles. The key
+	// carries `commands` because the same node can be reached as a mapping key
+	// (data) and as a value (a command operand), which are different traversals.
+	type visitKey struct {
+		node     *yaml.Node
+		commands bool
+	}
+	done := make(map[visitKey]bool)
 	var visit func(*yaml.Node, bool) error
-	visit = func(node *yaml.Node, commands bool) error {
+	visit = func(node *yaml.Node, commands bool) (err error) {
 		if active[node] {
 			return errors.New("cyclic YAML alias")
 		}
+		key := visitKey{node: node, commands: commands}
+		if done[key] {
+			return nil
+		}
 		active[node] = true
-		defer delete(active, node)
+		defer func() {
+			delete(active, node)
+			if err == nil {
+				done[key] = true
+			}
+		}()
 		if node.Kind == yaml.AliasNode {
 			return visit(node.Alias, commands)
 		}
