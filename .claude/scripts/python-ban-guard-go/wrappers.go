@@ -10,6 +10,7 @@ type wrapperSpec struct {
 }
 
 var commandWrappers = map[string]wrapperSpec{
+	"watch":   {flags: "bCcegprtwx", values: "nq", optional: "d", stops: "hv", long: "beep:b color:c no-color:C differences:d errexit:e chgexit:g equexit:q interval:n precise:p no-rerun:r no-title:t no-wrap:w exec:x help:h version:v"},
 	"timeout": {flags: "fpv", values: "ks", stops: "HV", long: "kill-after:k signal:s foreground:f preserve-status:p verbose:v help:H version:V", duration: true},
 	"stdbuf":  {values: "ioe", stops: "HV", long: "input:i output:o error:e help:H version:V", needsMode: true},
 	"setsid":  {flags: "cfw", stops: "hV", long: "ctty:c fork:f wait:w help:h version:V"},
@@ -44,6 +45,12 @@ func longOption(options, name string) byte {
 // wrapperCommand locates the command without expanding or validating option values.
 // len(args) means there is no statically selected child command.
 func wrapperCommand(name string, args []string, known []bool) int {
+	return wrapperCommandOptions(name, args, known, nil)
+}
+
+// wrapperCommandOptions also reports validated flags when a wrapper changes
+// between shell-source and direct-argv execution modes.
+func wrapperCommandOptions(name string, args []string, known []bool, flag func(byte)) int {
 	spec := commandWrappers[name]
 	i, mode := 0, false
 	for i < len(args) {
@@ -102,6 +109,9 @@ func wrapperCommand(name string, args []string, known []bool) int {
 			}
 			if !strings.ContainsRune(spec.flags, option) {
 				return len(args)
+			}
+			if flag != nil {
+				flag(byte(option))
 			}
 		}
 	}

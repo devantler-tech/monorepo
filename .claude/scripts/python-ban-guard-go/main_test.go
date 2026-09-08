@@ -9,6 +9,99 @@ import (
 
 // python-ban-guard: allow-file — these inert inputs exercise command classification.
 
+// TestKnownShellExecutionBoundaries catches known executable operands without
+// treating unknown command words or inert arguments as Python invocations.
+func TestKnownShellExecutionBoundaries(t *testing.T) {
+	tests := []struct {
+		name, source string
+		wantHit      bool
+	}{
+		{"shell positional zero", `bash -c '"$0" --version' python3`, true},
+		{"shell positional one", `sh -c '"$1" --version' ignored python3`, true},
+		{"shell positional ten", `bash -c '"${10}" --version' ignored a b c d e f g h i python3`, true},
+		{"shell positional unknown does not shift", `sh -c '"$1" --version' "$name" python3`, true},
+		{"shell positional arguments remain data", `sh -c 'echo "$0" "$1"' python3 python3`, false},
+		{"shell positional command remains unknown", `sh -c '"$0" --version' "$tool" python3`, false},
+		{"shell positional replacement", `sh -c 'set -- echo; "$1" python3' ignored python3`, false},
+		{"shell positional shift", `sh -c 'shift; "$1" python3' ignored python3 echo`, false},
+		{"shell function has separate parameters", `sh -c 'f() { "$1" python3; }; f echo' ignored python3`, false},
+		{"shell function inherits zero", `sh -c 'f() { "$0" --version; }; f' python3`, true},
+		{"bash function inherits zero", `bash -c 'f() { "$0" --version; }; f' python3`, true},
+		{"dash function inherits zero", `dash -c 'f() { "$0" --version; }; f' python3`, true},
+		{"zsh function zero is not inherited", `zsh -c 'f() { "$0" --version; }; f' python3`, false},
+		{"zsh top level zero is inherited", `zsh -c '"$0" --version' python3`, true},
+		{"ksh function zero remains unknown", `ksh -c 'f() { "$0" --version; }; f' python3`, false},
+		{"ksh keyword function zero remains unknown", `ksh -c 'function f { "$0" --version; }; f' python3`, false},
+		{"shell unquoted parameter may vanish", `sh -c '"$1" --version' $name python3 echo`, false},
+		{"shell known empty parameter disappears", `name=; sh -c '"$1" --version' $name python3 echo`, false},
+		{"shell quoted at can change argument count", `sh -c '"$1" --version' "$@" python3 echo`, false},
+		{"shell quoted array can change argument count", `sh -c '"$1" --version' "${ARGS[@]}" python3 echo`, false},
+		{"shell quoted set invalidates parameters", `sh -c '"set" -- echo; "$1" python3' ignored python3`, false},
+		{"shell command set invalidates parameters", `sh -c 'command set -- echo; "$1" python3' ignored python3`, false},
+		{"shell wrapped quoted set invalidates parameters", `sh -c '"command" -p "set" -- echo; "$1" python3' ignored python3`, false},
+		{"shell literal bound set invalidates parameters", `sh -c 's=set; "$s" -- echo; "$1" python3' ignored python3`, false},
+		{"shell positional bound set invalidates parameters", `sh -c '"$1" -- echo; "$2" python3' ignored set python3`, false},
+		{"shell command literal bound set invalidates parameters", `sh -c 's=set; command "$s" -- echo; "$1" python3' ignored python3`, false},
+		{"shell repeated command set invalidates parameters", `sh -c 'command command set -- echo; "$1" python3' ignored python3`, false},
+		{"shell mutation preserves earlier parameters", `sh -c '"$1" --version; set -- echo' ignored python3`, true},
+		{"shell data bound command keeps parameters", `sh -c 's=echo; "$s" set; "$1" --version' ignored python3`, true},
+		{"shell zero survives set", `sh -c 'set -- echo; "$0" --version' python3`, true},
+		{"env opaque chdir", `env -C "$WORKDIR" python3 --version`, true},
+		{"env opaque long chdir", `env --chdir "$WORKDIR" python3 --version`, true},
+		{"env opaque unset", `env -u "$NAME" python3 --version`, true},
+		{"env opaque argv zero", `env --argv0 "$NAME" python3 --version`, true},
+		{"env opaque operand remains data", `env -C "$WORKDIR" echo python3`, false},
+		{"env unquoted operand may vanish", `env -C $WORKDIR python3 echo safe`, false},
+		{"env unquoted unset operand may vanish", `env -u $NAME python3 echo safe`, false},
+		{"env known empty unset operand disappears", `NAME=; env -u $NAME python3 echo safe`, false},
+		{"env literal operand remains data", `env -C python3 echo safe`, false},
+		{"env unknown split string stays unknown", `env -S "$PROGRAM" python3`, false},
+		{"env split quoted operand remains one word", `env -S '-u "${NAME}" python3 --version'`, true},
+		{"watch command", `watch python3 --version`, true},
+		{"watch option operand", `watch -n "$INTERVAL" python3 --version`, true},
+		{"watch long options", `watch --interval=1 --differences=permanent -- python3`, true},
+		{"watch shell string", `watch 'echo safe; python3 --version'`, true},
+		{"watch exec mode", `watch -x python3 --version`, true},
+		{"watch exec data", `watch -x echo 'safe; python3 --version'`, false},
+		{"watch optional short operand", `watch -dx 'echo safe; python3'`, true},
+		{"watch command argument data", `watch echo python3`, false},
+		{"watch help", `watch --help python3`, false},
+		{"watch short help", `watch -h python3`, false},
+		{"watch version", `watch --version python3`, false},
+		{"watch short version", `watch -v python3`, false},
+		{"watch operand data", `watch -n python3 echo safe`, false},
+		{"tilde basename", `~/bin/python3 --version`, true},
+		{"named home basename", `~someone/bin/python3 --version`, true},
+		{"wrapped tilde basename", `env ~/bin/python3 --version`, true},
+		{"tilde command remains unknown", `~/bin/"$TOOL" python3`, false},
+		{"tilde directory only", `~python3`, false},
+		{"tilde argument remains data", `echo ~/bin/python3`, false},
+		{"trap handler", `trap 'python3 --version' EXIT`, true},
+		{"trap delimiter", `trap -- 'python3 --version' EXIT`, true},
+		{"trap nested handler", `trap 'sh -c "python3 --version"' EXIT`, true},
+		{"trap handler data", `trap 'echo python3' EXIT`, false},
+		{"trap print", `trap -p 'python3 --version' EXIT`, false},
+		{"trap list", `trap -l 'python3 --version' EXIT`, false},
+		{"trap reset", `trap - EXIT`, false},
+		{"trap ignore", `trap '' EXIT`, false},
+		{"trap missing signal", `trap 'python3 --version'`, false},
+		{"trap unknown handler", `trap "$HANDLER" EXIT`, false},
+		{"unknown wrapper stays unchanged", `custom-wrapper python3 --version`, false},
+		{"unknown command stays unchanged", `"$TOOL" python3 --version`, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := scanner{path: "check.sh", seen: make(map[string]bool)}
+			if err := s.source(test.source, 1, 0, false); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(s.hits) > 0; got != test.wantHit {
+				t.Errorf("findings=%v; want hit=%v", s.hits, test.wantHit)
+			}
+		})
+	}
+}
+
 // TestExecutableSurfaceBoundaries pairs executable syntax with nonexecuting data controls.
 func TestExecutableSurfaceBoundaries(t *testing.T) {
 	tests := []struct {

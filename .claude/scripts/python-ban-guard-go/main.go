@@ -208,18 +208,66 @@ func staticWord(word *syntax.Word, vars []string) (string, bool) {
 	if !safe(word.Parts) {
 		return "", false
 	}
-	for i, part := range word.Parts {
+	for _, part := range word.Parts {
 		if p, ok := part.(*syntax.Lit); ok {
-			if (i == 0 && strings.HasPrefix(p.Value, "~")) || strings.ContainsAny(p.Value, "*?[{") {
+			if strings.ContainsAny(p.Value, "*?[{") {
 				return "", false
 			}
 		}
+	}
+	var first *syntax.Lit
+	if len(word.Parts) > 0 {
+		first, _ = word.Parts[0].(*syntax.Lit)
+	}
+	if first != nil && strings.HasPrefix(first.Value, "~") {
+		// Home expansion changes the directory, not a fully literal basename.
+		// Quote only that prefix in a copy so expand never reads host user data.
+		slash := strings.IndexByte(first.Value, '/')
+		if slash < 0 {
+			return "", false
+		}
+		copyWord, suffix := *word, *first
+		suffix.Value = first.Value[slash:]
+		copyWord.Parts = []syntax.WordPart{&syntax.SglQuoted{Value: first.Value[:slash]}, &suffix}
+		copyWord.Parts = append(copyWord.Parts, word.Parts[1:]...)
+		word = &copyWord
 	}
 	values, err := expand.Fields(&expand.Config{Env: expand.ListEnviron(vars...)}, word)
 	if err != nil || len(values) != 1 {
 		return "", false
 	}
 	return values[0], true
+}
+
+// singleArgument recognizes unknown values whose quoting still fixes argv
+// arity. Unquoted expansions and quoted arrays can disappear or produce many
+// arguments, so positions after them cannot be inferred from syntax alone.
+func singleArgument(parts []syntax.WordPart, quoted bool) bool {
+	for _, part := range parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			if !quoted && strings.ContainsAny(p.Value, "*?[{") {
+				return false
+			}
+		case *syntax.SglQuoted:
+		case *syntax.DblQuoted:
+			if !singleArgument(p.Parts, true) {
+				return false
+			}
+		case *syntax.ParamExp:
+			if !quoted || p.Param == nil || p.Param.Value == "@" || p.Index != nil ||
+				p.Excl || p.Names != 0 || p.Exp != nil {
+				return false
+			}
+		case *syntax.CmdSubst:
+			if !quoted {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // parse builds a shell syntax tree without executing or expanding the source.
@@ -229,6 +277,12 @@ func parse(src string) (*syntax.File, error) {
 
 // source visits executable shell nodes and follows statically known nested programs.
 func (s *scanner) source(src string, firstLine, depth int, declarations bool) error {
+	return s.sourceWithParams(src, firstLine, depth, declarations, nil, false)
+}
+
+// sourceWithParams carries only known shell -c positional operands. It never
+// borrows positional parameters from the process running the guard.
+func (s *scanner) sourceWithParams(src string, firstLine, depth int, declarations bool, params []string, functionInheritsZero bool) error {
 	if depth > 32 {
 		return errors.New("nested shell command limit exceeded")
 	}
@@ -255,8 +309,12 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 	binds := make(map[string]int)
 	literals := make(map[string]string)
 	literalAt := make(map[string]uint)
+	paramsChangedAt := ^uint(0)
+	var functions [][2]uint
 	syntax.Walk(tree, func(node syntax.Node) bool {
 		switch n := node.(type) {
+		case *syntax.FuncDecl:
+			functions = append(functions, [2]uint{n.Body.Pos().Offset(), n.Body.End().Offset()})
 		case *syntax.Assign:
 			if n.Name == nil {
 				return true
@@ -293,6 +351,21 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 		// whole-file literal to an expansion that precedes its assignment would
 		// report a command the shell never runs.
 		var vars []string
+		insideFunction := false
+		for _, span := range functions {
+			if stmt.Pos().Offset() >= span[0] && stmt.Pos().Offset() < span[1] {
+				insideFunction = true
+				break
+			}
+		}
+		for _, param := range params {
+			// Functions and set/shift replace $1 onward. Inherit function $0
+			// only for the shells whose semantics are established here.
+			zero := strings.HasPrefix(param, "0=")
+			if (zero && (!insideFunction || functionInheritsZero)) || (!insideFunction && stmt.Pos().Offset() < paramsChangedAt) {
+				vars = append(vars, param)
+			}
+		}
 		for name, value := range literals {
 			if binds[name] == 1 && literalAt[name] < stmt.Pos().Offset() {
 				vars = append(vars, name+"="+value)
@@ -302,6 +375,29 @@ func (s *scanner) source(src string, firstLine, depth int, declarations bool) er
 		known := make([]bool, len(call.Args))
 		for i, word := range call.Args {
 			values[i], known[i] = staticWord(word, vars)
+			if !known[i] && !singleArgument(word.Parts, false) {
+				// Keep the unknown word itself: removing it could make a shell
+				// appear to select stdin or an option appear to have no operand.
+				values, known = values[:i+1], known[:i+1]
+				break
+			}
+		}
+		// Mutators use the same resolved argv as command scanning, including
+		// literal and positional bindings. Their arguments are evaluated before
+		// the mutation, so only subsequent calls lose positional knowledge.
+		command := values[0]
+		for i := 0; command == "command"; {
+			i += 1 + wrapperCommand(command, values[i+1:], known[i+1:])
+			if i >= len(values) || !known[i] {
+				break
+			}
+			command = values[i]
+		}
+		switch command {
+		case "set", "shift", "eval", ".", "source":
+			if at := call.End().Offset(); at < paramsChangedAt {
+				paramsChangedAt = at
+			}
 		}
 		line := firstLine + int(stmt.Pos().Line()) - 1
 		var stdin bool
@@ -386,7 +482,14 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 				}
 				if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && strings.Contains(arg[1:], "c") {
 					if j+1 < len(args) && known[j+1] {
-						return false, s.source(args[j+1], line, depth+1, false)
+						var params []string
+						for index := j + 2; index < len(args); index++ {
+							if known[index] {
+								params = append(params, strconv.Itoa(index-j-2)+"="+args[index])
+							}
+						}
+						inheritZero := name == "sh" || name == "bash" || name == "dash"
+						return false, s.sourceWithParams(args[j+1], line, depth+1, false, params, inheritZero)
 					}
 					return false, nil
 				}
@@ -400,6 +503,40 @@ func (s *scanner) argv(args []string, known []bool, line, depth int) (bool, erro
 			return true, nil
 		}
 		switch name {
+		case "watch":
+			childArgs, childKnown := args[i+1:], known[i+1:]
+			execMode := false
+			child := wrapperCommandOptions(name, childArgs, childKnown, func(option byte) {
+				if option == 'x' {
+					execMode = true
+				}
+			})
+			childArgs, childKnown = childArgs[child:], childKnown[child:]
+			if execMode {
+				return s.argv(childArgs, childKnown, line, depth+1)
+			}
+			for _, literal := range childKnown {
+				if !literal {
+					// The first literal interpreter is still decisive even when a
+					// later argument is dynamic; other joined shell text is unknown.
+					if len(childArgs) > 0 && childKnown[0] && interpreter.MatchString(filepath.Base(childArgs[0])) {
+						return s.argv(childArgs, childKnown, line, depth+1)
+					}
+					return false, nil
+				}
+			}
+			return false, s.source(strings.Join(childArgs, " "), line, depth+1, false)
+		case "trap":
+			j := i + 1
+			options := true
+			if j < len(args) && known[j] && args[j] == "--" {
+				j++
+				options = false
+			}
+			if j+1 >= len(args) || !known[j] || args[j] == "-" || (options && strings.HasPrefix(args[j], "-")) {
+				return false, nil // Display/list/reset forms do not install a handler.
+			}
+			return false, s.source(args[j], line, depth+1, false)
 		case "timeout", "stdbuf", "setsid", "ionice", "doas", "sudo", "exec", "xargs", "command", "nohup", "time":
 			i++
 			i += wrapperCommand(name, args[i:], known[i:])
@@ -478,7 +615,9 @@ func (s *scanner) envArgs(args []string, known []bool, line, depth int, optional
 		}
 		i++
 		if operand {
-			if i >= len(args) || !known[i] {
+			if i >= len(args) || (split && !known[i]) || (i < len(optional) && optional[i]) {
+				// An env -S expansion-only word can disappear; then the next
+				// word becomes this option's operand instead of its command.
 				return false, nil
 			}
 			payload = args[i]
