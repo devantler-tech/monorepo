@@ -723,6 +723,12 @@ func (s *scanner) file(src string) (bool, error) {
 	if declaredShell {
 		return true, s.source(src, 1, 0, true)
 	}
+	if devcontainerSourcePath(s.path) {
+		if handled, err := s.devcontainerCommands(src); handled || err != nil {
+			return handled, err
+		}
+	}
+
 	if filepath.Base(s.path) == "package.json" {
 		return true, s.packageScripts(src)
 	}
