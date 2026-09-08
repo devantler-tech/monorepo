@@ -126,10 +126,13 @@ func makeSourcePath(path string) bool {
 
 var makeAssignment = regexp.MustCompile(`^(?:override[ \t]+|export[ \t]+)?([A-Za-z_.][A-Za-z0-9_.-]*)[ \t]*(:::=|::=|:=|\?=|\+=|!=|=)[ \t]*(.*)$`)
 
+var makeScopedShellAssignment = regexp.MustCompile(`^[ \t]*(?:(?:export|unexport|override|private)[ \t]+)*SHELL[ \t]*(:::=|::=|:=|\?=|\+=|!=|=)[ \t]*(.*)$`)
+
 // makeRecipe is one shell invocation with its original physical line number.
 type makeRecipe struct {
-	source string
-	line   int
+	source     string
+	line       int
+	unresolved bool
 }
 
 // makeRecipes separates literal recipes from Make declarations before shell parsing.
@@ -191,7 +194,7 @@ func (s *scanner) makeRecipes(src string) error {
 		if trimmed == "else" || strings.HasPrefix(trimmed, "else ") {
 			continue
 		}
-		declaration := line
+		declaration, declarationLine := line, i+1
 		for strings.HasSuffix(declaration, "\\") && i+1 < len(lines) {
 			i++
 			declaration = strings.TrimSuffix(declaration, "\\") + " " + strings.TrimSpace(lines[i])
@@ -241,18 +244,34 @@ func (s *scanner) makeRecipes(src string) error {
 			}
 			continue
 		}
-		inRule = false
-		if colon := strings.IndexByte(declaration, ':'); colon >= 0 {
+		colon := makeRuleColon(declaration)
+		if colon < 0 {
+			inRule = false
+			continue
+		}
+		if parts := makeScopedShellAssignment.FindStringSubmatch(strings.TrimPrefix(declaration[colon+1:], ":")); parts != nil {
+			// Target and pattern overrides select an interpreter without updating
+			// the global variable table. Dynamic or compound assignments cannot
+			// be resolved without Make's target context, so retain that uncertainty.
+			value := strings.TrimSpace(stripMakeComment(parts[2]))
+			unresolved := value == "" || strings.ContainsAny(value, "$\\") || parts[1] == "+=" || parts[1] == "!=" || parts[1] == ":::=" || parts[1] == "?="
+			recipes = append(recipes, makeRecipe{source: value, line: declarationLine, unresolved: unresolved})
 			inRule = true
-			if semicolon := strings.IndexByte(declaration[colon+1:], ';'); semicolon >= 0 {
-				recipes = append(recipes, makeRecipe{source: stripMakePrefixes(declaration[colon+1+semicolon+1:]), line: i + 1})
-			}
+			continue
+		}
+		inRule = true
+		if semicolon := strings.IndexByte(declaration[colon+1:], ';'); semicolon >= 0 {
+			recipes = append(recipes, makeRecipe{source: stripMakePrefixes(declaration[colon+1+semicolon+1:]), line: i + 1})
 		}
 	}
 	if s.declaration(comments) {
 		return nil
 	}
 	for _, recipe := range recipes {
+		if recipe.unresolved {
+			s.addUnresolved(recipe.line)
+			continue
+		}
 		// Make expands $(shell ...) before handing the recipe to the shell, so its
 		// command runs even when the surrounding expansion is discarded as unknown.
 		for _, command := range makeShellCommands(recipe.source) {
@@ -266,6 +285,42 @@ func (s *scanner) makeRecipes(src string) error {
 		}
 	}
 	return nil
+}
+
+// makeRuleColon distinguishes a rule separator from escaped target-name colons
+// and colons inside variable references, without evaluating those references.
+// A backslash quotes the following byte, so pairs leave a colon unescaped.
+func makeRuleColon(declaration string) int {
+	for i := 0; i < len(declaration); i++ {
+		switch declaration[i] {
+		case '\\':
+			i++
+		case '$':
+			i++
+			if i >= len(declaration) || declaration[i] != '(' && declaration[i] != '{' {
+				continue
+			}
+			opening, closing, depth := declaration[i], byte(')'), 1
+			if opening == '{' {
+				closing = '}'
+			}
+			for i++; i < len(declaration); i++ {
+				if declaration[i] == opening {
+					depth++
+				} else if declaration[i] == closing {
+					depth--
+					if depth == 0 {
+						break
+					}
+				}
+			}
+		case '#':
+			return -1
+		case ':':
+			return i
+		}
+	}
+	return -1
 }
 
 // makeDirective strips a trailing comment from a directive line. GNU Make accepts

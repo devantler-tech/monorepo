@@ -74,6 +74,41 @@ func TestYAMLCommandOperands(t *testing.T) {
 	}
 }
 
+// TestYAMLCommandMerges joins the effective command and args after YAML overrides.
+func TestYAMLCommandMerges(t *testing.T) {
+	tests := []struct {
+		name, source, want string
+	}{
+		{"container inherits command", "apiVersion: v1\nkind: Pod\nspec:\n  containers:\n    - &base\n      name: base\n      command: [sh, -c]\n      args: ['echo safe']\n    - <<: *base\n      name: app\n      args: ['python3 --version']\n", ":7: Python invocation"},
+		{"command inherits args", "defaults: &base {args: ['python3 --version']}\ncontainer:\n  <<: *base\n  command: [sh, -c]\n", ":4: Python invocation"},
+		{"nested merge inherits command", "base: &base {command: [sh, -c]}\nintermediate: &next {<<: *base}\ncontainer: {<<: *next, args: ['python3 --version']}\n", ":1: Python invocation"},
+		{"inline merge inherits command", "container: {<<: {command: [sh, -c]}, args: ['python3 --version']}\n", ":1: Python invocation"},
+		{"earlier sequence entry wins", "shell: &shell {command: [sh, -c]}\nsafe: &safe {command: [echo]}\ncontainer: {<<: [*shell, *safe], args: ['python3 --version']}\n", ":1: Python invocation"},
+		{"earlier safe sequence entry wins", "shell: &shell {command: [sh, -c]}\nsafe: &safe {command: [echo]}\ncontainer: {<<: [*safe, *shell], args: ['python3 --version']}\n", ""},
+		{"merge sequence fills missing keys", "shell: &shell {command: [sh, -c]}\nargs: &args {args: ['python3 --version']}\ncontainer: {<<: [*shell, *args]}\n", ":1: Python invocation"},
+		{"explicit command before merge wins", "base: &base {command: [sh, -c]}\ncontainer: {command: [echo], <<: *base, args: ['python3 --version']}\n", ""},
+		{"explicit command after merge wins", "base: &base {command: [sh, -c]}\ncontainer: {<<: *base, command: [echo], args: ['python3 --version']}\n", ""},
+		{"explicit args before merge win", "base: &base {args: ['python3 --version']}\ncontainer: {args: ['echo safe'], <<: *base, command: [sh, -c]}\n", ""},
+		{"explicit args after merge win", "base: &base {args: ['python3 --version']}\ncontainer: {<<: *base, args: ['echo safe'], command: [sh, -c]}\n", ""},
+		{"quoted merge key stays data", "base: &base {command: [sh, -c]}\ncontainer: {'<<': *base, args: ['python3 --version']}\n", ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := scanner{path: "deploy/pod.yaml", seen: make(map[string]bool)}
+			if err := s.yamlCommands(test.source); err != nil {
+				t.Fatal(err)
+			}
+			if test.want == "" {
+				if len(s.hits) != 0 {
+					t.Errorf("data reported as executable: %v", s.hits)
+				}
+			} else if len(s.hits) != 1 || !strings.Contains(s.hits[0], test.want) {
+				t.Errorf("findings=%v; want one containing %q", s.hits, test.want)
+			}
+		})
+	}
+}
+
 // TestYAMLCommandErrors keeps malformed YAML, argv, commands and aliases fail-closed.
 func TestYAMLCommandErrors(t *testing.T) {
 	for _, test := range []struct{ name, source, want string }{
@@ -83,6 +118,12 @@ func TestYAMLCommandErrors(t *testing.T) {
 		{"command alias cycle", "command: &loop [*loop]\n", "cyclic YAML alias"},
 		{"nonscalar argv", "command: [echo, {data: value}]\n", "YAML command argv"},
 		{"malformed scalar command", "command: echo 'unfinished\n", "cannot parse shell commands"},
+		{"nonmapping merge", "container: {<<: scalar, command: [echo]}\n", "YAML merge"},
+		{"nonmapping merge sequence entry", "container: {<<: [{command: [echo]}, scalar]}\n", "YAML merge"},
+		{"merge alias cycle", "container: &loop {<<: *loop}\n", "cyclic YAML alias"},
+		{"duplicate command fields", "command: [python3]\ncommand: [echo]\n", "duplicate YAML command field"},
+		{"duplicate args fields", "command: [sh, -c]\nargs: ['python3 --version']\nargs: ['echo safe']\n", "duplicate YAML command field"},
+		{"duplicate merge keys", "container: {<<: {command: [echo]}, <<: {command: [sh, -c]}, args: ['python3 --version']}\n", "duplicate YAML merge"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s := scanner{path: "deploy/pod.yaml", seen: make(map[string]bool)}
@@ -142,5 +183,23 @@ func TestNestedAliasesStillReachCommands(t *testing.T) {
 	}
 	if len(s.hits) == 0 {
 		t.Fatal("interpreter behind an alias was not reported")
+	}
+}
+
+// TestNestedCommandMergesDoNotExplode bounds effective-field resolution on a DAG.
+func TestNestedCommandMergesDoNotExplode(t *testing.T) {
+	const levels = 40
+	var b strings.Builder
+	b.WriteString("l0: &a0 {command: [echo]}\n")
+	for i := 1; i <= levels; i++ {
+		fmt.Fprintf(&b, "l%d: &a%d {<<: [*a%d, *a%d]}\n", i, i, i-1, i-1)
+	}
+	fmt.Fprintf(&b, "container: {<<: *a%d, args: [python3]}\n", levels)
+	s := scanner{path: "deploy/pod.yaml", seen: make(map[string]bool)}
+	if err := s.yamlCommands(b.String()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.hits) != 0 {
+		t.Fatalf("data reported as executable: %v", s.hits)
 	}
 }

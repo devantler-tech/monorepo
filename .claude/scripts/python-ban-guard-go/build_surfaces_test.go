@@ -106,3 +106,50 @@ func TestGenerateDoesNotReadHostEnvironment(t *testing.T) {
 		t.Fatalf("host environment influenced scan: %v", s.hits)
 	}
 }
+
+// TestMakeScopedShellSelection follows target and pattern interpreter overrides
+// without treating assignments in recipe arguments as declarations.
+func TestMakeScopedShellSelection(t *testing.T) {
+	tests := []struct{ name, source, want string }{
+		{"target literal", "check: SHELL := python3\ncheck:\n\tpass\n", "Makefile:1: Python invocation"},
+		{"escaped colon target", "a\\:b: SHELL := python3\na\\:b:\n\t@echo $(SHELL)\n", "Makefile:1: Python invocation"},
+		{"escaped colon multiple targets", "a\\:b c: private SHELL = /usr/bin/python3\nc:\n\tpass\n", "Makefile:1: Python invocation"},
+		{"escaped colon pattern", "a\\:%.checked: SHELL := python3\na\\:%.checked:\n\tpass\n", "Makefile:1: Python invocation"},
+		{"target function colon", "$(subst :,x,a:b): SHELL := python3\naxb:\n\t@echo $(SHELL)\n", "Makefile:1: Python invocation"},
+		{"nested target function colon", "${subst :,x,${subst q,:,aqb}}: SHELL := python3\naxb:\n\t@echo $(SHELL)\n", "Makefile:1: Python invocation"},
+		{"escaped backslash before rule separator", "a\\\\: SHELL := python3\na\\\\:\n\tpass\n", "Makefile:1: Python invocation"},
+		{"safe escaped colon target", "a\\:b: SHELL := /bin/sh\na\\:b:\n\techo python3\n", ""},
+		{"comment colon is data", "check # example: SHELL := python3\ncheck:\n\techo safe\n", ""},
+		{"pattern literal", "%.checked: SHELL = /usr/bin/python3\n%.checked:\n\tpass\n", "Makefile:1: Python invocation"},
+		{"multiple targets", "check verify: SHELL ::= python3\ncheck:\n\tpass\n", "Makefile:1: Python invocation"},
+		{"double colon", "check:: SHELL := python3\ncheck::\n\tpass\n", "Makefile:1: Python invocation"},
+		{"combined modifiers", "check: private override export SHELL := python3\ncheck:\n\tpass\n", "Makefile:1: Python invocation"},
+		{"unexport modifier", "check: unexport SHELL := python3\ncheck:\n\tpass\n", "Makefile:1: Python invocation"},
+		{"continued declaration", "check: SHELL := \\\n python3\ncheck:\n\tpass\n", "Makefile:1: Python invocation"},
+		{"safe target shell", "check: SHELL := /bin/sh\ncheck:\n\techo python3\n", ""},
+		{"safe pattern shell", "%.checked: private SHELL := /bin/bash\n%.checked:\n\techo safe\n", ""},
+		{"comment data", "# check: SHELL := python3\ncheck:\n\techo safe\n", ""},
+		{"inline recipe argument data", "check: ; echo SHELL := python3\n", ""},
+		{"other scoped variable data", "check: TOOL := python3\ncheck:\n\techo safe\n", ""},
+		{"dynamic shell", "check: SHELL := $(INTERPRETER)\ncheck:\n\tpass\n", "Makefile:1: unresolved build-surface command"},
+		{"escaped shell", "check: SHELL := pyth\\on3\ncheck:\n\tpass\n", "Makefile:1: unresolved build-surface command"},
+		{"append shell", "check: SHELL += python3\ncheck:\n\tpass\n", "Makefile:1: unresolved build-surface command"},
+		{"shell assignment result", "check: SHELL != printf python3\ncheck:\n\tpass\n", "Makefile:1: unresolved build-surface command"},
+		{"empty shell", "check: SHELL :=\ncheck:\n\tpass\n", "Makefile:1: unresolved build-surface command"},
+		{"allow marker", "# python-ban-guard: allow-file — inert fixture\ncheck: SHELL := python3\ncheck:\n\tpass\n", ""},
+		{"allow marker unresolved", "# python-ban-guard: allow-file — inert fixture\ncheck: SHELL := $(INTERPRETER)\ncheck:\n\tpass\n", ""},
+		{"unknown shell cannot bind to a make variable", "__python_ban_make_unknown := /bin/sh\ncheck: SHELL := $(INTERPRETER)\ncheck:\n\tpass\n", "Makefile:2: unresolved build-surface command"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := scanner{path: "Makefile", seen: map[string]bool{}}
+			if _, err := s.file(tt.source); err != nil {
+				t.Fatalf("scan error: %v", err)
+			}
+			got := strings.Join(s.hits, "\n")
+			if tt.want == "" && got != "" || tt.want != "" && !strings.Contains(got, tt.want) {
+				t.Fatalf("hits = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

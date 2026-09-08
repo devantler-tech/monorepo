@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -34,15 +35,18 @@ func devcontainerSourcePath(path string) bool {
 // devcontainerCommands scans each lifecycle value while retaining its original line number.
 //
 // A lifecycle value is a string (shell source), an argv array, or an object whose values are
-// themselves strings or argv arrays. Anything the standard JSON decoder cannot read — a
-// comment-bearing JSONC file being the common case — is reported unhandled so the caller's
-// existing fallback still sees the file, rather than erroring on a legitimate configuration.
+// themselves strings or argv arrays. JSONC comments and trailing commas become whitespace,
+// preserving every byte offset and newline used to locate the executable values.
 func (s *scanner) devcontainerCommands(src string) (bool, error) {
-	if !json.Valid([]byte(src)) {
+	jsonSource, err := devcontainerJSON(src)
+	if err != nil {
+		return false, err
+	}
+	if !json.Valid([]byte(jsonSource)) {
 		return false, nil
 	}
 
-	decoder := json.NewDecoder(strings.NewReader(src))
+	decoder := json.NewDecoder(strings.NewReader(jsonSource))
 	if open, err := decoder.Token(); err != nil || open != json.Delim('{') {
 		return false, nil
 	}
@@ -71,6 +75,76 @@ func (s *scanner) devcontainerCommands(src string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// devcontainerJSON removes JSONC syntax without moving strings or their source locations.
+func devcontainerJSON(src string) (string, error) {
+	data := []byte(src)
+	quoted := false
+	for i := 0; i < len(data); i++ {
+		if quoted {
+			if data[i] == '\\' {
+				i++
+			} else if data[i] == '"' {
+				quoted = false
+			}
+			continue
+		}
+		if data[i] == '"' {
+			quoted = true
+			continue
+		}
+		if data[i] != '/' || i+1 >= len(data) {
+			continue
+		}
+		switch data[i+1] {
+		case '/':
+			for i < len(data) && data[i] != '\n' && data[i] != '\r' {
+				data[i] = ' '
+				i++
+			}
+		case '*':
+			data[i], data[i+1] = ' ', ' '
+			i += 2
+			for i+1 < len(data) && !(data[i] == '*' && data[i+1] == '/') {
+				if data[i] != '\n' && data[i] != '\r' {
+					data[i] = ' '
+				}
+				i++
+			}
+			if i+1 >= len(data) {
+				return "", errors.New("unterminated devcontainer JSONC comment")
+			}
+			data[i], data[i+1] = ' ', ' '
+			i++
+		}
+	}
+	quoted = false
+	for i := 0; i < len(data); i++ {
+		if quoted {
+			if data[i] == '\\' {
+				i++
+			} else if data[i] == '"' {
+				quoted = false
+			}
+			continue
+		}
+		if data[i] == '"' {
+			quoted = true
+			continue
+		}
+		if data[i] != ',' {
+			continue
+		}
+		j := i + 1
+		for j < len(data) && strings.ContainsRune(" \t\r\n", rune(data[j])) {
+			j++
+		}
+		if j < len(data) && (data[j] == '}' || data[j] == ']') {
+			data[i] = ' '
+		}
+	}
+	return string(data), nil
 }
 
 // devcontainerValue scans one lifecycle value. Object forms name parallel commands, so their

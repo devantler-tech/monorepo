@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -47,9 +48,9 @@ func TestDevcontainerLifecycleCommands(t *testing.T) {
 			handled: true,
 		},
 		{
-			name: "comment bearing jsonc defers to the fallback", path: ".devcontainer.json",
+			name: "comment bearing jsonc is handled", path: ".devcontainer.json",
 			source:  "{\n  // a comment makes this JSONC\n  \"postCreateCommand\": \"echo safe\"\n}\n",
-			handled: false,
+			handled: true,
 		},
 	}
 	for _, test := range tests {
@@ -70,6 +71,42 @@ func TestDevcontainerLifecycleCommands(t *testing.T) {
 			}
 			if test.want != "" && !strings.Contains(got, test.want) {
 				t.Errorf("findings %q do not contain %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestDevcontainerJSONC scans standard commented configurations without moving diagnostics.
+func TestDevcontainerJSONC(t *testing.T) {
+	for _, test := range []struct {
+		name, source string
+		lines        []int
+	}{
+		{"line comment", "{\n// ordinary comment\n\"postCreateCommand\": \"python3 --version\"\n}", []int{3}},
+		{"block comment before value", "{\n\"postCreateCommand\": /* unicode æ\ncomment */\n\"python3 --version\"\n}", []int{4}},
+		{"parallel comments retain distinct lines", "{\n\"postCreateCommand\": {\n// first\n\"a\": \"python3 --version\",\n/* second */\n\"b\": [\"python3\", /* argument */ \"--version\"]\n}\n}", []int{4, 6}},
+		{"trailing commas with comments", "{\n\"postCreateCommand\": [\"python3\", \"--version\", /* trailing */], // trailing\n}", []int{2}},
+		{"commented command is data", "{\n// \"postCreateCommand\": \"python3 --version\"\n\"name\": \"safe\"\n}", nil},
+		{"block commented command is data", "{/* \"postCreateCommand\": \"python3 --version\", */\"name\": \"safe\"}", nil},
+		{"comment delimiters in strings", "{\"postCreateCommand\": [\"echo\", \"https://example.test/*safe*/\", \"\\\"//safe\"], // comment\n}", nil},
+		{"CRLF comment", "{\r\n// comment\r\n\"postCreateCommand\": \"python3 --version\"\r\n}", []int{3}},
+		{"EOF comment", "{\"postCreateCommand\": \"python3 --version\"}// trailing comment", []int{1}},
+		{"comma and delimiters inside command", "{\"postCreateCommand\": \"echo ',}' '/*' '//'; python3 --version\",}", []int{1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := scanner{path: ".devcontainer.json", seen: make(map[string]bool)}
+			handled, err := s.file(test.source)
+			if err != nil || !handled {
+				t.Fatalf("scan: handled=%v error=%v", handled, err)
+			}
+			if len(s.hits) != len(test.lines) {
+				t.Fatalf("findings=%v; expected lines %v", s.hits, test.lines)
+			}
+			for i, line := range test.lines {
+				want := fmt.Sprintf(".devcontainer.json:%d: Python invocation", line)
+				if !strings.HasPrefix(s.hits[i], want) {
+					t.Errorf("finding=%q; want prefix %q", s.hits[i], want)
+				}
 			}
 		})
 	}

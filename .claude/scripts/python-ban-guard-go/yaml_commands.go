@@ -115,6 +115,64 @@ func (s *scanner) yamlCommands(src string) error {
 		_, err := s.argv(argv, known, line, 0)
 		return true, err
 	}
+	// Resolve only the five executable fields, retaining their original nodes for
+	// diagnostics. Memoizing each mapping keeps repeated merge aliases bounded;
+	// copying whole effective mappings would expand unrelated data needlessly.
+	fieldsByMapping := make(map[*yaml.Node]map[string]*yaml.Node)
+	var effectiveFields func(*yaml.Node) (map[string]*yaml.Node, error)
+	effectiveFields = func(node *yaml.Node) (map[string]*yaml.Node, error) {
+		node = unalias(node)
+		if node.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("YAML merge at line %d must contain mappings", node.Line)
+		}
+		if fields, ok := fieldsByMapping[node]; ok {
+			return fields, nil
+		}
+		fields := make(map[string]*yaml.Node)
+		var merges []*yaml.Node
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key, value := unalias(node.Content[i]), node.Content[i+1]
+			if key.Kind != yaml.ScalarNode {
+				continue
+			}
+			if key.Tag == "!!merge" {
+				if len(merges) != 0 {
+					return nil, fmt.Errorf("duplicate YAML merge at line %d", key.Line)
+				}
+				merges = append(merges, value)
+				continue
+			}
+			switch key.Value {
+			case "command", "args", "run", "shell", "entrypoint":
+				if _, exists := fields[key.Value]; exists {
+					return nil, fmt.Errorf("duplicate YAML command field %q at line %d", key.Value, key.Line)
+				}
+				fields[key.Value] = value
+			}
+		}
+		// Explicit fields win regardless of where << occurs. Earlier mappings in
+		// a merge sequence win over later mappings, so fill only missing fields.
+		for _, merge := range merges {
+			merge = unalias(merge)
+			sources := []*yaml.Node{merge}
+			if merge.Kind == yaml.SequenceNode {
+				sources = merge.Content
+			}
+			for _, source := range sources {
+				inherited, err := effectiveFields(source)
+				if err != nil {
+					return nil, err
+				}
+				for name, value := range inherited {
+					if _, exists := fields[name]; !exists {
+						fields[name] = value
+					}
+				}
+			}
+		}
+		fieldsByMapping[node] = fields
+		return fields, nil
+	}
 	active := make(map[*yaml.Node]bool)
 	// A node reached through repeated aliases is otherwise re-traversed once per
 	// path to it, so nested aliases make the scan exponential in their depth.
@@ -146,12 +204,6 @@ func (s *scanner) yamlCommands(src string) error {
 			return visit(node.Alias, commands)
 		}
 		if node.Kind == yaml.MappingNode {
-			var argsValue *yaml.Node
-			for i := 0; i+1 < len(node.Content); i += 2 {
-				if k := unalias(node.Content[i]); k.Kind == yaml.ScalarNode && k.Value == "args" {
-					argsValue = node.Content[i+1]
-				}
-			}
 			for i := 0; i+1 < len(node.Content); i += 2 {
 				key, value := node.Content[i], node.Content[i+1]
 				if err := visit(key, false); err != nil {
@@ -160,20 +212,32 @@ func (s *scanner) yamlCommands(src string) error {
 				if err := visit(value, commands); err != nil {
 					return err
 				}
-				key = unalias(key)
-				if commands && key.Kind == yaml.ScalarNode && (key.Value == "command" || key.Value == "run" || key.Value == "shell" || key.Value == "entrypoint") {
-					if key.Value == "command" && argsValue != nil {
-						handled, err := combined(value, argsValue)
-						if err != nil {
-							return err
-						}
-						if handled {
-							continue
-						}
-					}
-					if err := operand(value); err != nil {
+			}
+			// Complete cycle-checked traversal before following merge aliases or
+			// decoding operands, including mappings reused as keys and values.
+			if !commands {
+				return nil
+			}
+			fields, err := effectiveFields(node)
+			if err != nil {
+				return err
+			}
+			for _, name := range []string{"command", "run", "shell", "entrypoint"} {
+				value := fields[name]
+				if value == nil {
+					continue
+				}
+				if name == "command" && fields["args"] != nil {
+					handled, err := combined(value, fields["args"])
+					if err != nil {
 						return err
 					}
+					if handled {
+						continue
+					}
+				}
+				if err := operand(value); err != nil {
+					return err
 				}
 			}
 			return nil
