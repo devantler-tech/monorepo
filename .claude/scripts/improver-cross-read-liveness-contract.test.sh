@@ -104,7 +104,17 @@ clause="$(extract_clause \
 #    deployment's own check rather than gesturing at the idea of one.
 # ---------------------------------------------------------------------------
 assert_contains "${clause}" 'codex-lane-liveness.sh' \
-  'the cross-read clause must name the liveness check it depends on'
+  'the cross-read clause must name the Codex liveness check'
+assert_contains "${clause}" 'claude-lane-liveness.sh' \
+  'the cross-read clause must name the Claude liveness check'
+# The selectors belong to different runtime CLIs. Pin each to its lane so swapping them or
+# dropping scope cannot silently turn the sibling read into an unknown result from our own task.
+# shellcheck disable=SC2016  # Literal Markdown, not command substitution.
+assert_contains "${clause}" '`--automation agent-improver` for Codex' \
+  'the Codex sibling read must select the Improver automation'
+# shellcheck disable=SC2016  # Literal Markdown, not command substitution.
+assert_contains "${clause}" '`--task agent-improver` for Claude' \
+  'the Claude sibling read must select the Improver task'
 
 # ORDERING is the whole point of a precondition: naming the check and defining its verdicts still
 # leaves a clause that could put the read AFTER the store is scored, which is the defect this guard
