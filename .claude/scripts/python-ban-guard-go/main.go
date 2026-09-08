@@ -1,4 +1,6 @@
 // Command python-ban-guard parses executable shell surfaces without evaluating them.
+//
+// python-ban-guard: allow-file — the interpreter pattern in this file spells out every Python command form the guard rejects, as source.
 package main
 
 import (
