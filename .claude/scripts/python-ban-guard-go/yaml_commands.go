@@ -161,7 +161,7 @@ func (s *scanner) yamlCommands(src string) error {
 					return err
 				}
 				key = unalias(key)
-				if commands && key.Kind == yaml.ScalarNode && (key.Value == "command" || key.Value == "run" || key.Value == "shell") {
+				if commands && key.Kind == yaml.ScalarNode && (key.Value == "command" || key.Value == "run" || key.Value == "shell" || key.Value == "entrypoint") {
 					if key.Value == "command" && argsValue != nil {
 						handled, err := combined(value, argsValue)
 						if err != nil {

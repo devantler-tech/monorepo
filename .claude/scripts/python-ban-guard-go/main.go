@@ -22,6 +22,9 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// pythonInterpreter matches only the Python launcher spellings, so a shebang naming pip or pytest
+// is never reported as a Python source file. Command positions use the wider `interpreter`.
+var pythonInterpreter = regexp.MustCompile("^(py|python[23]?([.][0-9]+)?)([.]exe)?$")
 var interpreter = regexp.MustCompile("^(py|python[23]?([.][0-9]+)?|pip[23]?([.][0-9]+)?|pytest)([.]exe)?$")
 var assignment = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*=")
 
@@ -708,7 +711,7 @@ func shebang(src string) string {
 // file dispatches known executable formats and preserves the compatibility scan for others.
 func (s *scanner) file(src string) (bool, error) {
 	entry := shebang(src)
-	if strings.HasPrefix(filepath.Base(entry), "python") && regexp.MustCompile("^python[0-9.]*$").MatchString(filepath.Base(entry)) {
+	if pythonInterpreter.MatchString(filepath.Base(entry)) {
 		s.hits = append(s.hits, s.path+": Python source file (its shebang names python)")
 		return true, nil
 	}

@@ -36,6 +36,22 @@ func TestExecutableSurfaceBoundaries(t *testing.T) {
 			source: "#!/usr/bin/env -u UNUSED python3\n", handled: true, want: "Python source file",
 		},
 		{
+			name: "windows launcher shebang", path: "tools/check",
+			source: "#!/usr/bin/env py\n", handled: true, want: "Python source file",
+		},
+		{
+			name: "windows python executable shebang", path: "tools/check",
+			source: "#!/usr/bin/env python.exe\n", handled: true, want: "Python source file",
+		},
+		{
+			name: "windows versioned python executable shebang", path: "tools/check",
+			source: "#!/usr/bin/env python3.exe\n", handled: true, want: "Python source file",
+		},
+		{
+			name: "pip executable shebang is not a python source file", path: "tools/check",
+			source: "#!/usr/bin/env pip3.exe\n", handled: true,
+		},
+		{
 			name: "shell heredoc retains commands beside unknown expansion", path: "tools/check.sh",
 			source:  "bash <<SCRIPT\necho \"$HOME\"\npython3 --version\nSCRIPT\n",
 			handled: true, want: "check.sh:3: Python invocation",
