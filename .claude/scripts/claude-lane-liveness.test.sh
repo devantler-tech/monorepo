@@ -242,6 +242,39 @@ mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 80 * 3600 )))\""
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
 expect 2 "a dispatch predating the lookback window is UNKNOWN, not NOT-PRODUCING"
 
+# --- Malformed enabled task IDs are UNKNOWN, never a verdict --------------------------------------
+# Field presence is not field validity. Each of these reaches a verdict without the assertions:
+# an unmatched id reports NOT-PRODUCING, and a duplicate is masked by the first record's lastRunAt.
+mkcase dup_id
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\"" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+expect_msg 2 "duplicate enabled task id" "a duplicate enabled task id is UNKNOWN (a later dispatch would be masked)"
+
+mkcase null_id
+printf '{"scheduledTasks":[{"id":null,"enabled":true,"lastRunAt":"%s","cronExpression":"0 * * * *"}]}\n' \
+  "$(iso_at $(( NOW - 3600 )))" > "$STORE"
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+expect_msg 2 "is not a string" "a non-string enabled task id is UNKNOWN"
+
+mkcase weird_id
+printf '{"scheduledTasks":[{"id":"a;b","enabled":true,"lastRunAt":"%s","cronExpression":"0 * * * *"}]}\n' \
+  "$(iso_at $(( NOW - 3600 )))" > "$STORE"
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+expect_msg 2 "unusable enabled task id" "an unsupported enabled task id is UNKNOWN"
+
+# --- An attributable but unreadable transcript is UNKNOWN for THAT task --------------------------
+# `beta` is healthy so the index is non-empty and the run reaches the per-task match. `alpha`'s only
+# transcript carries alpha's marker but no readable timestamp, so alpha's dispatch is unprovable --
+# NOT-PRODUCING there would be a verdict about the parse rather than about the lane.
+mkcase unreadable_attributable
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\"" beta true "\"$(iso_at $(( NOW - 3600 )))\""
+mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 40 1200 >/dev/null
+bsq='\"'
+printf '{"type":"user","timestamp":"not-a-timestamp","message":{"role":"user","content":"<scheduled-task name=%s%s%s>"}}\n' \
+  "$bsq" alpha "$bsq" > "$PROJECTS/proj-a/alpha-broken.jsonl"
+touch -t "$(touch_at $(( NOW - 2399 )))" "$PROJECTS/proj-a/alpha-broken.jsonl"
+expect_msg 2 "could not be parsed" "an attributable but unreadable transcript is UNKNOWN for that task"
+
 # --- Knob validation: a zero window must never disable the guard ---------------------------------
 mkcase knobs
 mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""

@@ -168,6 +168,23 @@ for field in id enabled lastRunAt; do
     || die_unknown "unexpected store schema: a scheduled task is missing .$field"
 done
 
+# Field PRESENCE is not field VALIDITY. Two malformed-store shapes reach a verdict otherwise,
+# and both fail OPEN in the direction that matters:
+#   - a non-string or unsupported id (null, a number, a value with characters the marker parser
+#     cannot produce) can never match a session, so the task reports NOT-PRODUCING;
+#   - a DUPLICATE enabled id is evaluated once per occurrence while the lastRunAt lookup below
+#     returns the FIRST record every time, so a second, dead dispatch is masked by an earlier
+#     healthy one and the check exits 0.
+# Both are unprovable stores rather than lanes, so both are UNKNOWN. The two conditions are
+# asserted SEPARATELY rather than joined, so neither depends on jq's short-circuit behaviour:
+# `test` on a non-string raises, which would abort the run instead of reporting UNKNOWN.
+jq -e '[.scheduledTasks[]? | select(.enabled == true) | .id] | all(type == "string")' "$STORE" >/dev/null 2>&1 \
+  || die_unknown "unexpected store schema: an enabled task id is not a string"
+jq -e '[.scheduledTasks[]? | select(.enabled == true) | .id] | all(test("^[A-Za-z0-9._-]+$"))' "$STORE" >/dev/null 2>&1 \
+  || die_unknown "unusable enabled task id in $STORE (only A-Za-z0-9._- are supported)"
+jq -e '[.scheduledTasks[]? | select(.enabled == true) | .id] | length == (unique | length)' "$STORE" >/dev/null 2>&1 \
+  || die_unknown "duplicate enabled task id in $STORE -- a later dispatch would be masked by an earlier record"
+
 if [ "$TASK_SET" -eq 1 ]; then
   [ -n "$TASK" ] || die_unknown "--task must not be empty"
   case "$TASK" in *[!A-Za-z0-9._-]*) die_unknown "unusable task id: $TASK" ;; esac
@@ -191,8 +208,9 @@ fi
 SESSION_INDEX=$(mktemp) || die_unknown "could not create a temporary file"
 FILELIST=$(mktemp) || die_unknown "could not create a temporary file"
 TIMEREF=$(mktemp) || die_unknown "could not create a temporary file"
+UNPARSABLE=$(mktemp) || die_unknown "could not create a temporary file"
 
-trap 'rm -f "$SESSION_INDEX" "$FILELIST" "$TIMEREF"' EXIT
+trap 'rm -f "$SESSION_INDEX" "$FILELIST" "$TIMEREF" "$UNPARSABLE"' EXIT
 
 # `find -newermt @<epoch>` is GNU-only syntax. BSD find -- which is what /usr/bin/find is on the
 # deployment host -- rejects it outright with "Can't parse date/time", and with stderr suppressed
@@ -242,9 +260,14 @@ while IFS= read -r f; do
   if [ -z "$start" ]; then
     start=$(head -n 40 "$f" 2>/dev/null | jq -rs '[.[] | select(.timestamp) | .timestamp] | sort | first // empty' 2>/dev/null) || start=""
   fi
-  [ -n "$start" ] || continue
+  # ATTRIBUTABLE but unreadable. The marker already told us which task this transcript
+  # belongs to, so dropping it silently is not neutral: that task then reaches the match
+  # step with nothing, and reports NOT-PRODUCING on evidence that was malformed rather
+  # than absent -- a verdict about the parse, not about the lane. Record the task so the
+  # verdict loop can answer UNKNOWN instead.
+  if [ -z "$start" ]; then printf '%s\n' "$nm" >> "$UNPARSABLE"; continue; fi
   se=$(iso_to_epoch "$start")
-  [ -n "$se" ] || continue
+  if [ -z "$se" ]; then printf '%s\n' "$nm" >> "$UNPARSABLE"; continue; fi
   printf '%s\t%s\t%s\n' "$nm" "$se" "$f" >> "$SESSION_INDEX"
 done < "$FILELIST"
 
@@ -265,7 +288,11 @@ any_unknown=0
 report=""
 
 while IFS= read -r id; do
-  [ -n "$id" ] || continue
+  if [ -z "$id" ]; then
+    report="${report}  UNKNOWN  <blank task id> -- cannot judge
+"
+    any_unknown=1; continue
+  fi
   last_run=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t) | .lastRunAt) // empty' "$STORE") || last_run=""
   if [ -z "$last_run" ] || [ "$last_run" = "null" ]; then
     report="${report}  UNKNOWN  ${id} -- no lastRunAt recorded, never dispatched or store incomplete
@@ -301,6 +328,14 @@ while IFS= read -r id; do
     END { if (best != "") print best }' "$SESSION_INDEX") || match=""
 
   if [ -z "$match" ]; then
+    # No session matched. Before calling that NOT-PRODUCING, check whether a transcript that WAS
+    # attributable to this task had to be discarded for being unreadable: if so the dispatch is
+    # unprovable rather than unproductive, and the honest answer is UNKNOWN.
+    if grep -qxF -- "$id" "$UNPARSABLE" 2>/dev/null; then
+      report="${report}  UNKNOWN  ${id} -- an attributable transcript could not be parsed, so the dispatch is unprovable
+"
+      any_unknown=1; continue
+    fi
     report="${report}  NOT-PRODUCING  ${id} -- dispatched at ${last_run} and no session started within ${SKEW_SECONDS}s of it
 "
     any_dead=1; continue
