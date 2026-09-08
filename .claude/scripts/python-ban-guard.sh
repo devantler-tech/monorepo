@@ -107,12 +107,18 @@ report() {
 # script would otherwise be skipped before either scanner sees it. Only a byte-order mark
 # selects this path: it makes the encoding unambiguous, so a genuine binary — which carries
 # no BOM — stays excluded exactly as before.
+#
+# Three statuses, and the last two must stay distinct: 0 decoded, 1 no mark, 2 marked but
+# undecodable. The mark has already proved the file is UTF-16 text, so a failed decode is an
+# inspection failure rather than a binary file. Collapsing 2 into 1 would drop a UTF-16 script
+# from the scan with no message and exit 0 — the omission this route exists to close — whenever
+# iconv is absent from the image or the payload is truncated.
 decode_utf16() {
   case "$(od -An -N2 -tx1 -- "$1" 2>/dev/null | tr -d ' \n')" in
     fffe|feff) ;;
     *) return 1 ;;
   esac
-  iconv -f UTF-16 -t UTF-8 -- "$1" >"$utf16_scratch" 2>/dev/null
+  iconv -f UTF-16 -t UTF-8 -- "$1" >"$utf16_scratch" 2>/dev/null || return 2
 }
 scan_invocations() {
   # Commands use ASCII syntax; unrelated invalid UTF-8 bytes must not abort the scan.
@@ -397,7 +403,17 @@ while IFS= read -r -d '' path; do
     0) ;;
     1)
       # A BOM-prefixed UTF-16 script is text; everything else here is binary or empty.
-      if decode_utf16 "$file"; then file="$utf16_scratch"; else continue; fi ;;
+      # decode_utf16 separates "no mark" (1, genuinely not text) from "marked but undecodable"
+      # (2), because only the first is a file this scan may skip.
+      decode_rc=0
+      decode_utf16 "$file" || decode_rc=$?
+      case "$decode_rc" in
+        0) file="$utf16_scratch" ;;
+        1) continue ;;
+        *)
+          echo "python-ban-guard: $path: cannot decode UTF-16 contents" >&2
+          exit 2 ;;
+      esac ;;
     *)
       echo "python-ban-guard: $path: cannot inspect tracked file contents" >&2
       exit 2 ;;

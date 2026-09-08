@@ -51,6 +51,12 @@ func (s *scanner) devcontainerCommands(src string) (bool, error) {
 		return false, nil
 	}
 
+	type lifecycleCommand struct {
+		value json.RawMessage
+		start int
+	}
+	lifecycle := make(map[string]lifecycleCommand)
+
 	for decoder.More() {
 		key, err := decoder.Token()
 		if err != nil {
@@ -69,7 +75,22 @@ func (s *scanner) devcontainerCommands(src string) (bool, error) {
 			continue
 		}
 
-		if err := s.devcontainerValue(src, value, start, true); err != nil {
+		// Preserve JSON's last-value-wins behavior for duplicate member names, exactly as
+		// devcontainerObject does. Scanning every occurrence would report a shadowed earlier
+		// value as a command the resolver never runs.
+		lifecycle[name] = lifecycleCommand{value: value, start: start}
+	}
+
+	commands := make([]lifecycleCommand, 0, len(lifecycle))
+	for _, command := range lifecycle {
+		commands = append(commands, command)
+	}
+	// Map iteration is unordered, so restore source order before scanning: findings are
+	// reported by position and must not depend on Go's map ordering.
+	slices.SortFunc(commands, func(a, b lifecycleCommand) int { return a.start - b.start })
+
+	for _, command := range commands {
+		if err := s.devcontainerValue(src, command.value, command.start, true); err != nil {
 			return false, err
 		}
 	}
