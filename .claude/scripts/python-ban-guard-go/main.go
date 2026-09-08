@@ -309,10 +309,16 @@ func (s *scanner) sourceWithParams(src string, firstLine, depth int, declaration
 	binds := make(map[string]int)
 	literals := make(map[string]string)
 	literalAt := make(map[string]uint)
-	paramsChangedAt := ^uint(0)
+	paramsChangedAt := []uint{^uint(0)}
+	var scopeFrames []bool
+	pipelineInputs := make(map[*syntax.Stmt]bool)
 	var functions [][2]uint
 	syntax.Walk(tree, func(node syntax.Node) bool {
 		switch n := node.(type) {
+		case *syntax.BinaryCmd:
+			if n.Op == syntax.Pipe || n.Op == syntax.PipeAll {
+				pipelineInputs[n.X] = true
+			}
 		case *syntax.FuncDecl:
 			functions = append(functions, [2]uint{n.Body.Pos().Offset(), n.Body.End().Offset()})
 		case *syntax.Assign:
@@ -339,6 +345,28 @@ func (s *scanner) sourceWithParams(src string, firstLine, depth int, declaration
 		if err != nil {
 			return false
 		}
+		if node == nil {
+			last := len(scopeFrames) - 1
+			if scopeFrames[last] {
+				paramsChangedAt = paramsChangedAt[:len(paramsChangedAt)-1]
+			}
+			scopeFrames = scopeFrames[:last]
+			return true
+		}
+		// These execution contexts inherit positional knowledge, but mutations
+		// inside them cannot change the enclosing shell's parameters.
+		localScope := false
+		switch n := node.(type) {
+		case *syntax.FuncDecl, *syntax.Subshell, *syntax.CmdSubst, *syntax.ProcSubst:
+			localScope = true
+		case *syntax.Stmt:
+			localScope = n.Background || pipelineInputs[n]
+		}
+		scopeFrames = append(scopeFrames, localScope)
+		if localScope {
+			paramsChangedAt = append(paramsChangedAt, paramsChangedAt[len(paramsChangedAt)-1])
+		}
+		scope := len(paramsChangedAt) - 1
 		stmt, ok := node.(*syntax.Stmt)
 		if !ok {
 			return true
@@ -362,7 +390,7 @@ func (s *scanner) sourceWithParams(src string, firstLine, depth int, declaration
 			// Functions and set/shift replace $1 onward. Inherit function $0
 			// only for the shells whose semantics are established here.
 			zero := strings.HasPrefix(param, "0=")
-			if (zero && (!insideFunction || functionInheritsZero)) || (!insideFunction && stmt.Pos().Offset() < paramsChangedAt) {
+			if (zero && (!insideFunction || functionInheritsZero)) || (!insideFunction && stmt.Pos().Offset() < paramsChangedAt[scope]) {
 				vars = append(vars, param)
 			}
 		}
@@ -386,7 +414,7 @@ func (s *scanner) sourceWithParams(src string, firstLine, depth int, declaration
 		// literal and positional bindings. Their arguments are evaluated before
 		// the mutation, so only subsequent calls lose positional knowledge.
 		command := values[0]
-		for i := 0; command == "command"; {
+		for i := 0; command == "command" || command == "builtin"; {
 			i += 1 + wrapperCommand(command, values[i+1:], known[i+1:])
 			if i >= len(values) || !known[i] {
 				break
@@ -395,8 +423,8 @@ func (s *scanner) sourceWithParams(src string, firstLine, depth int, declaration
 		}
 		switch command {
 		case "set", "shift", "eval", ".", "source":
-			if at := call.End().Offset(); at < paramsChangedAt {
-				paramsChangedAt = at
+			if at := call.End().Offset(); at < paramsChangedAt[scope] {
+				paramsChangedAt[scope] = at
 			}
 		}
 		line := firstLine + int(stmt.Pos().Line()) - 1

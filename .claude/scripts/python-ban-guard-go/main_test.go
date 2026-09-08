@@ -102,6 +102,56 @@ func TestKnownShellExecutionBoundaries(t *testing.T) {
 	}
 }
 
+// TestShellParameterMutationScopes distinguishes local execution environments
+// from mutations that change the current shell's positional parameters.
+func TestShellParameterMutationScopes(t *testing.T) {
+	tests := []struct {
+		name, source string
+		wantHit      bool
+	}{
+		{"uncalled function keeps outer parameters", `sh -c 'f() { set -- echo; }; "$1" --version' ignored python3`, true},
+		{"called function restores outer parameters", `sh -c 'f() { set -- echo; }; f; "$1" --version' ignored python3`, true},
+		{"function shift keeps outer parameters", `sh -c 'f() { shift; }; "$1" --version' ignored python3 echo`, true},
+		{"function builtin set keeps outer parameters", `bash -c 'f() { builtin set -- echo; }; f; "$1" --version' ignored python3`, true},
+		{"brace group changes outer parameters", `sh -c '{ set -- echo; }; "$1" python3' ignored python3`, false},
+		{"subshell keeps outer parameters", `sh -c '(set -- echo); "$1" --version' ignored python3`, true},
+		{"subshell inherits earlier parameters", `sh -c '("$1" --version; set -- echo)' ignored python3`, true},
+		{"subshell mutates its own parameters", `sh -c '(set -- echo; "$1" python3)' ignored python3`, false},
+		{"subshell inherits outer mutation", `sh -c 'set -- echo; ("$1" python3)' ignored python3`, false},
+		{"nested subshell keeps enclosing parameters", `sh -c '( (set -- echo); "$1" --version)' ignored python3`, true},
+		{"command substitution keeps outer parameters", `sh -c 'v=$(set -- echo); "$1" --version' ignored python3`, true},
+		{"command substitution inherits earlier parameters", `sh -c 'v=$("$1" --version; set -- echo)' ignored python3`, true},
+		{"command substitution mutates its own parameters", `sh -c 'v=$(set -- echo; "$1" python3)' ignored python3`, false},
+		{"mutator arguments precede mutation", `sh -c 'set -- "$("$1" --version)"' ignored python3`, true},
+		{"process substitution keeps outer parameters", `bash -c 'cat <(set -- echo); "$1" --version' ignored python3`, true},
+		{"background command keeps outer parameters", `sh -c 'set -- echo & "$1" --version' ignored python3`, true},
+		{"nonfinal pipeline keeps outer parameters", `sh -c 'set -- echo | cat; "$1" --version' ignored python3`, true},
+		{"middle pipeline keeps outer parameters", `sh -c 'cat | { set -- echo; } | cat; "$1" --version' ignored python3`, true},
+		{"pipeline component mutates its own parameters", `sh -c '{ set -- echo; "$1" python3; } | cat' ignored python3`, false},
+		{"builtin set changes parameters", `bash -c 'builtin set -- echo; "$1" python3' ignored python3`, false},
+		{"builtin shift changes parameters", `bash -c 'builtin shift; "$1" python3' ignored python3 echo`, false},
+		{"command builtin set changes parameters", `bash -c 'command builtin set -- echo; "$1" python3' ignored python3`, false},
+		{"builtin command set changes parameters", `bash -c 'builtin command set -- echo; "$1" python3' ignored python3`, false},
+		{"nested builtin command shift changes parameters", `bash -c 'command builtin command builtin shift; "$1" python3' ignored python3 echo`, false},
+		{"builtin delimiter selects setter", `bash -c 'builtin -- set -- echo; "$1" python3' ignored python3`, false},
+		{"builtin help does not set parameters", `bash -c 'builtin --help set -- echo; "$1" --version' ignored python3`, true},
+		{"builtin command inspection does not set parameters", `bash -c 'builtin command -v set; "$1" --version' ignored python3`, true},
+		{"builtin echo preserves parameters", `bash -c 'builtin echo set; "$1" --version' ignored python3`, true},
+		{"builtin interpreter operand does not execute", `bash -c 'builtin python3 --version'`, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := scanner{path: "check.sh", seen: make(map[string]bool)}
+			if err := s.source(test.source, 1, 0, false); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(s.hits) > 0; got != test.wantHit {
+				t.Errorf("findings=%v; want hit=%v", s.hits, test.wantHit)
+			}
+		})
+	}
+}
+
 // TestExecutableSurfaceBoundaries pairs executable syntax with nonexecuting data controls.
 func TestExecutableSurfaceBoundaries(t *testing.T) {
 	tests := []struct {

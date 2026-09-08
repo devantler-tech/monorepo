@@ -21,6 +21,7 @@ var commandWrappers = map[string]wrapperSpec{
 	"time":    {flags: "ahlpqv", values: "fo", stops: "HV", long: "append:a portability:p quiet:q verbose:v format:f output:o help:H version:V"},
 	"exec":    {flags: "cl", values: "a"},
 	"command": {flags: "p", stops: "vV"},
+	"builtin": {}, // Used only to resolve parameter mutators, never arbitrary external commands.
 	"nohup":   {stops: "HV", long: "help:H version:V"},
 }
 
