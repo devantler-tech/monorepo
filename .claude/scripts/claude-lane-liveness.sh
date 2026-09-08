@@ -248,7 +248,9 @@ find "$PROJECTS" -maxdepth 2 -name '*.jsonl' -type f -newer "$TIMEREF" > "$FILEL
 
 while IFS= read -r f; do
   [ -n "$f" ] || continue
-  line1=$(head -n 1 "$f" 2>/dev/null) || continue
+  # An unreadable header cannot establish either task attribution or absence.
+  line1=$(head -n 1 "$f" 2>/dev/null) \
+    || die_unknown "could not read a transcript header; cannot establish attribution"
   case "$line1" in *'<scheduled-task name='*) : ;; *) continue ;; esac
   # Decode the first enqueue event or user message before recognizing its opening task marker. A
   # quoted example elsewhere in that message, another record type, or a prefix

@@ -207,6 +207,28 @@ mkcase empty_projects
 mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
 expect_msg 2 "no transcripts at all under" "no transcripts at all is UNKNOWN (regression: BSD find fail-open)"
 
+# A candidate header that cannot be read is missing evidence, not an absent session.
+# Keep beta readable so the nonempty index cannot hide a false NOT-PRODUCING verdict.
+mkcase unreadable_header
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\"" beta true "\"$(iso_at $(( NOW - 3600 )))\""
+candidate=$(mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200)
+mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 40 1200 >/dev/null
+real_head=$(command -v head)
+mkdir -p "$CASE/bin"
+cat > "$CASE/bin/head" <<'SH'
+#!/usr/bin/env bash
+if [ "$#" -eq 3 ] && [ "$1" = "-n" ] && [ "$2" = "1" ] && [ "$3" = "$LIVENESS_DENIED_HEADER" ]; then
+  exit 1
+fi
+exec "$LIVENESS_REAL_HEAD" "$@"
+SH
+chmod +x "$CASE/bin/head"
+LIVENESS_REAL_HEAD="$real_head" LIVENESS_DENIED_HEADER="$CASE/absent.jsonl" PATH="$CASE/bin:$PATH" \
+  expect 0 "the header-read shim preserves readable healthy transcripts"
+LIVENESS_REAL_HEAD="$real_head" LIVENESS_DENIED_HEADER="$candidate" PATH="$CASE/bin:$PATH" \
+  expect_msg 2 "claude-lane-liveness: UNKNOWN -- could not read a transcript header; cannot establish attribution" \
+    "an unreadable candidate header is UNKNOWN even when another task keeps the index nonempty"
+
 # --- Transcripts exist but none is attributable: UNKNOWN, not a fleet-wide verdict ---------------
 # A changed task marker would empty the index while transcripts are plentiful. Reporting every task
 # NOT-PRODUCING there accuses a healthy fleet on the strength of a parse that stopped matching.
