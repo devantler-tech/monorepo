@@ -153,11 +153,17 @@ mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 5 >/dev/null
 expect 1 "dispatch whose session produced 0 turns in 5s exits 1"
 
-# --- Both discriminators are required, one at a time --------------------------------------------
+# --- Zero turns is decisive on its own; a short span is not ------------------------------------
+# This case previously expected 0, on the reasoning that both discriminators should be required. That
+# was wrong, and it was the fail-open direction: a dispatch that reaches the model and then dies part
+# way emits no assistant turn but easily outlasts the stub window, so requiring BOTH let exactly that
+# run report OK (monorepo#3287). Zero assistant turns admits no benign reading -- the session produced
+# nothing -- and an in-flight dispatch is already excluded by the grace window, so the span is
+# reported for diagnosis rather than required for the verdict.
 mkcase turns_only
 mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 1200 >/dev/null
-expect 0 "0 turns but a long span is NOT a stub (span discriminator required)"
+expect 1 "0 turns is not producing however long the session lasted"
 
 mkcase span_only
 mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""

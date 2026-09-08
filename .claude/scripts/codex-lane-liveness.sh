@@ -217,6 +217,8 @@ while IFS= read -r id; do
 
   n=0
   stubs=0
+  indeterminate=0
+  indet_ms=-1
   maxdur_ms=-1
   malformed=0
   stub_ms=$(( STUB_SECONDS * 1000 ))
@@ -238,8 +240,21 @@ while IFS= read -r id; do
     # An `[ ... ] && x=y` here would return non-zero whenever the test is false and abort the loop
     # under `set -e`, so the assignment is written as a full conditional.
     if [ "$dur_ms" -gt "$maxdur_ms" ]; then maxdur_ms=$dur_ms; fi
-    if [ "$dur_ms" -le "$stub_ms" ] && [ "$no_inbox" = "1" ]; then
-      stubs=$(( stubs + 1 ))
+    # A run that wrote no inbox item produced no recorded output. The DURATION only says how it got
+    # there: inside the stub window it died at dispatch, which is the diagnosable signature the
+    # NOT-PRODUCING verdict is built on; beyond it the run died or hung PART WAY, and this store
+    # cannot tell that apart from a long run that simply never wrote an inbox item. Counting the
+    # second case as a non-stub — which a single conjunctive test does — is what let a lane whose
+    # newest settled run had died to an account-scoped cause report OK (monorepo#3287). It is
+    # counted separately rather than folded into `stubs` because the two support different
+    # verdicts: a stub proves the lane is dead, an inbox-less long run only proves it is unproven.
+    if [ "$no_inbox" = "1" ]; then
+      if [ "$dur_ms" -le "$stub_ms" ]; then
+        stubs=$(( stubs + 1 ))
+      else
+        indeterminate=$(( indeterminate + 1 ))
+        if [ "$dur_ms" -gt "$indet_ms" ]; then indet_ms=$dur_ms; fi
+      fi
     fi
   done <<EOF
 $rows
@@ -257,6 +272,13 @@ EOF
     report="${report}  NOT-PRODUCING  ${id} — newest ${n} settled runs all ended within ${STUB_SECONDS}s with no inbox item
 "
     any_dead=1
+  elif [ "$indeterminate" -gt 0 ]; then
+    # Ordered AFTER the all-stubs branch on purpose: a proven dead lane is actionable now, so it
+    # outranks an unjudgeable one — the same precedence the Claude-side check applies between its
+    # own exit 1 and exit 2. UNKNOWN is never read as producing, so this fails closed.
+    report="${report}  UNKNOWN  ${id} — ${indeterminate} of ${n} newest settled runs wrote no inbox item despite outlasting the ${STUB_SECONDS}s stub window (longest ${indet_ms}ms), so production is unproven
+"
+    any_unknown=1
   else
     # Reported in MILLISECONDS, matching the comparison. Dividing back to whole seconds here would
     # make a run just over the threshold print as exactly STUB_SECONDS beside a `stub<=${STUB_SECONDS}s`

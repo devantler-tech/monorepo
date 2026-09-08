@@ -376,7 +376,14 @@ while IFS= read -r id; do
   fi
   span=$(( le - fe ))
 
-  if [ "$turns" -eq 0 ] && [ "$span" -le "$STUB_SECONDS" ]; then
+  # ZERO ASSISTANT TURNS IS THE WHOLE TEST -- the span is reported, never required. A session that
+  # emitted no assistant turn produced nothing whether it died in four seconds or hung for an hour,
+  # and pairing the two as a conjunction meant a dispatch that died PART WAY fell through to OK, which
+  # is the one verdict this check exists to prevent (monorepo#3287). Unlike the Codex store's
+  # inbox flag -- where a long run really can do work without writing one -- `turns == 0` admits no
+  # benign reading, and an in-flight dispatch is already excluded by the grace window above, so
+  # nothing here can be a run that simply has not got going yet.
+  if [ "$turns" -eq 0 ]; then
     report="${report}  NOT-PRODUCING  ${id} -- dispatched at ${last_run}, session produced 0 assistant turns in ${span}s
 "
     any_dead=1
