@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -48,6 +49,31 @@ func TestWorkflowSchemaPositions(t *testing.T) {
 				}
 			} else if len(s.hits) != 1 || !strings.Contains(s.hits[0], test.want) {
 				t.Errorf("findings=%v; want one finding containing %q", s.hits, test.want)
+			}
+		})
+	}
+}
+
+// TestWorkflowAliasesDoNotExplode exercises the workflow route with compact alias DAGs.
+// Each level doubles the paths but adds only two aliases. Both sequence and mapping
+// graphs must finish; memoizing unrestricted paths still expands the mapping graph.
+func TestWorkflowAliasesDoNotExplode(t *testing.T) {
+	for _, shape := range []string{"sequence", "mapping"} {
+		t.Run(shape, func(t *testing.T) {
+			var source strings.Builder
+			source.WriteString("metadata:\n  n0: &a0 safe\n")
+			for i := 1; i <= 40; i++ {
+				if shape == "sequence" {
+					fmt.Fprintf(&source, "  n%d: &a%d [*a%d, *a%d]\n", i, i, i-1, i-1)
+				} else {
+					fmt.Fprintf(&source, "  n%d: &a%d {left: *a%d, right: *a%d}\n", i, i, i-1, i-1)
+				}
+			}
+			source.WriteString("jobs:\n  check:\n    steps:\n      - run: echo safe\n")
+			s := scanner{path: ".github/workflows/test.yml", seen: make(map[string]bool)}
+			handled, err := s.file(source.String())
+			if err != nil || !handled || len(s.hits) != 0 {
+				t.Fatalf("workflow scan: handled=%v, error=%v, findings=%v", handled, err, s.hits)
 			}
 		})
 	}

@@ -1002,6 +1002,36 @@ func (s *scanner) packageScripts(src string) error {
 	return nil
 }
 
+// workflowSchemaContext folds paths with identical future command positions together.
+// Job names are interchangeable, and a path outside these schema prefixes can only
+// contain data. Keeping arbitrary data paths would make alias memoization exponential.
+func workflowSchemaContext(path []string) string {
+	for _, command := range [][]string{
+		{"jobs", "*", "steps", "*", "run"},
+		{"jobs", "*", "steps", "*", "shell"},
+		{"jobs", "*", "defaults", "run", "shell"},
+		{"defaults", "run", "shell"},
+	} {
+		if len(path) > len(command) {
+			continue
+		}
+		matches := true
+		for i, part := range path {
+			if i == 1 && command[0] == "jobs" {
+				continue
+			}
+			if part != command[i] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return strings.Join(command[:len(path)], "/")
+		}
+	}
+	return "<data>"
+}
+
 // yaml follows workflow command fields and aliases without scanning descriptive values.
 func (s *scanner) yaml(src string) error {
 	var doc yaml.Node
@@ -1021,13 +1051,27 @@ func (s *scanner) yaml(src string) error {
 		return nil
 	}
 	active := make(map[*yaml.Node]bool)
+	type visitKey struct {
+		node    *yaml.Node
+		context string
+	}
+	done := make(map[visitKey]bool)
 	var visit func(*yaml.Node, []string) error
-	visit = func(node *yaml.Node, path []string) error {
+	visit = func(node *yaml.Node, path []string) (err error) {
 		if active[node] {
 			return errors.New("cyclic YAML alias")
 		}
+		key := visitKey{node: node, context: workflowSchemaContext(path)}
+		if done[key] {
+			return nil
+		}
 		active[node] = true
-		defer delete(active, node)
+		defer func() {
+			delete(active, node)
+			if err == nil {
+				done[key] = true
+			}
+		}()
 		if node.Kind == yaml.AliasNode {
 			return visit(node.Alias, path)
 		}

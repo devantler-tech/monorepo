@@ -54,12 +54,12 @@ func (s *scanner) devcontainerCommands(src string) (bool, error) {
 		}
 
 		name, _ := key.(string)
-		start := int(decoder.InputOffset())
 
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
 			return false, err
 		}
+		start := int(decoder.InputOffset()) - len(value)
 
 		if !devcontainerLifecycle[name] {
 			continue
@@ -112,27 +112,37 @@ func (s *scanner) devcontainerValue(
 	return nil
 }
 
-// devcontainerObject scans each member of a parallel-command object in a deterministic order.
+// devcontainerObject keeps each parallel command's source offset, including identical values.
 func (s *scanner) devcontainerObject(src string, value json.RawMessage, start int) error {
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(value, &members); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(string(value)))
+	if _, err := decoder.Token(); err != nil {
 		return err
 	}
-
-	names := make([]string, 0, len(members))
-	for name := range members {
-		names = append(names, name)
+	type command struct {
+		value json.RawMessage
+		start int
 	}
-
-	slices.Sort(names)
-
-	for _, name := range names {
-		offset := strings.Index(src[start:], string(members[name]))
-		if offset < 0 {
-			offset = 0
+	// Preserve JSON's existing last-value-wins behavior for duplicate member names.
+	members := make(map[string]command)
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return err
 		}
-
-		if err := s.devcontainerValue(src, members[name], start+offset, false); err != nil {
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return err
+		}
+		name, _ := key.(string)
+		members[name] = command{value: raw, start: start + int(decoder.InputOffset()) - len(raw)}
+	}
+	commands := make([]command, 0, len(members))
+	for _, member := range members {
+		commands = append(commands, member)
+	}
+	slices.SortFunc(commands, func(a, b command) int { return a.start - b.start })
+	for _, member := range commands {
+		if err := s.devcontainerValue(src, member.value, member.start, false); err != nil {
 			return err
 		}
 	}
