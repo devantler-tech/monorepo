@@ -148,7 +148,7 @@ func (s *scanner) makeRecipes(src string) error {
 		if defineDepth > 0 {
 			if strings.HasPrefix(trimmed, "define ") {
 				defineDepth++
-			} else if trimmed == "endef" {
+			} else if makeDirective(trimmed) == "endef" {
 				defineDepth--
 			}
 			continue
@@ -182,7 +182,7 @@ func (s *scanner) makeRecipes(src string) error {
 			conditionalDepth++
 			continue
 		}
-		if trimmed == "endif" {
+		if makeDirective(trimmed) == "endif" {
 			if conditionalDepth > 0 {
 				conditionalDepth--
 			}
@@ -266,6 +266,13 @@ func (s *scanner) makeRecipes(src string) error {
 		}
 	}
 	return nil
+}
+
+// makeDirective strips a trailing comment from a directive line. GNU Make accepts
+// a comment after `endif` and `endef`, so an exact comparison against the raw line
+// leaves the block open and swallows every later recipe.
+func makeDirective(trimmed string) string {
+	return strings.TrimSpace(stripMakeComment(trimmed))
 }
 
 // stripMakeComment drops an unescaped trailing comment and unescapes `\#`, which

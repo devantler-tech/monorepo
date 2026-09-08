@@ -128,4 +128,10 @@ check 'quoted empty pair is data' 'echo "'\'''\''" python3' 0
 for command in 'timeout 5' 'stdbuf -oL' 'setsid -fw' 'ionice -tc2 -n7' 'doas -u root'; do
   check "argument stays data: $command" "$command echo python3" 0
 done
+# A clustered short-option group carrying `c` still runs the next argument as a
+# command string; `bash -lc 'python3 …'` is the common spelling in CI images.
+check 'clustered shell option lc' "bash -lc 'python3 --version'" 1
+check 'clustered shell option ec' "sh -ec 'python3 --version'" 1
+check 'clustered shell option xc' "bash -xc 'python3 --version'" 1
+check 'clustered shell option c not last' "bash -cl 'python3 --version'" 1
 exit "$fail"

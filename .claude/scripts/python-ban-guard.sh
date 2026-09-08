@@ -342,10 +342,11 @@ scan_invocations() {
       for (s = 1; s <= nseg; s++) {
         n = split(seg[s], tok, /[[:space:]]+/)
         i = first_command(tok, 1, n)
-        # A shell given -c runs the string after it: the command is what follows the -c.
+        # A shell given -c runs the string after it, including inside a clustered
+        # option group such as -lc or -cl: the command is what follows that token.
         while (i <= n && executable_name(tok[i]) ~ /^(bash|sh|zsh|dash|ksh)$/) {
           k = 0
-          for (j = i + 1; j <= n; j++) if (tok[j] == "-c") { k = j; break }
+          for (j = i + 1; j <= n; j++) if (tok[j] ~ /^-[a-zA-Z]*c[a-zA-Z]*$/) { k = j; break }
           if (k == 0) break
           i = first_command(tok, k + 1, n)
         }

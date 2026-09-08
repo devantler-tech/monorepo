@@ -52,6 +52,9 @@ func TestBuildExecutionSurfaces(t *testing.T) {
 		{"make shell substitution executes", "Makefile", "check:\n\t@echo $$(python3 --version)\n", "Makefile:2: Python invocation", false},
 		{"make argument data", "Makefile", "check:\n\t@echo python3 --version\n", "", false},
 		{"make define data", "Makefile", "define SCRIPT\n\t@python3 --version\nendef\ncheck:\n\t@echo safe\n", "", false},
+		{"make define comment terminator", "Makefile", "define SCRIPT\n\t@echo safe\nendef # done\ncheck:\n\t@python3 --version\n", "Makefile:5: Python invocation", false},
+		{"make conditional comment terminator", "Makefile", "ifeq (1,1)\nINNER = 1\nendif # done\nTOOL = python3\ncheck:\n\t@$(TOOL) --version\n", "Makefile:6: Python invocation", false},
+		{"make escaped hash is not a comment terminator", "Makefile", "define SCRIPT\n\t@echo safe\nendef\\# done\ncheck:\n\t@python3 --version\n", "", false},
 		{"make comment data", "Makefile", "# check: ; python3\ncheck:\n\t@# python3 --version\n", "", false},
 		{"make continuations", "Makefile", "check:\n\t@echo safe; \\\n\tpython3 --version\n", "Makefile:3: Python invocation", false},
 		{"make continuation argument", "Makefile", "check:\n\t@echo \\\n\tpython3 --version\n", "", false},
@@ -59,6 +62,8 @@ func TestBuildExecutionSurfaces(t *testing.T) {
 		{"make custom recipe prefix", "Makefile", ".RECIPEPREFIX = >\ncheck:\n>@python3 --version\n", "Makefile:3: Python invocation", false},
 		{"make malformed recipe", "Makefile", "check:\n\t@if true; then\n", "", true},
 		{"make allow marker", "Makefile", "# python-ban-guard: allow-file — fixture\ncheck:\n\t@python3 --version\n", "", false},
+		{"dockerfile env apostrophe value", "Dockerfile", "FROM alpine\nENV DESCRIPTION=\"Devantler's tool\"\nRUN echo safe\n", "", false},
+		{"dockerfile env interpreter still resolves", "Dockerfile", "FROM alpine\nENV TOOL=python3\nRUN $TOOL --version\n", "Python invocation", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

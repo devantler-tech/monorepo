@@ -313,3 +313,26 @@ func TestScanningNeverExecutesSubstitutions(t *testing.T) {
 		t.Fatalf("scanner executed fixture contents: %v", err)
 	}
 }
+
+// TestDockerEnvPrefixQuotesValues pins the replay contract: a recorded ENV value is
+// injected into shell source, so it must be single-quoted, and a name that is not a
+// shell identifier must not be replayed as a command word.
+func TestDockerEnvPrefixQuotesValues(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"apostrophe is quoted", map[string]string{"DESC": "Devantler's"}, `DESC='Devantler'\''s'; `},
+		{"plain value is quoted", map[string]string{"TOOL": "python3"}, "TOOL='python3'; "},
+		{"non-identifier name is dropped", map[string]string{"-Dfoo": "bar", "OPTS": "x"}, "OPTS='x'; "},
+		{"digit-leading name is dropped", map[string]string{"2BAD": "x"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := dockerEnvPrefix(tt.env); got != tt.want {
+				t.Fatalf("dockerEnvPrefix = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

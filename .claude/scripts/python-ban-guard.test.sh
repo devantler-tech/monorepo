@@ -663,6 +663,10 @@ if ! bash "$here/python-ban-guard-command-surfaces.test.sh"; then fail=1; fi
 if ! bash "$here/python-ban-guard-build-surfaces.test.sh"; then fail=1; fi
 if ! bash "$here/python-ban-guard-symlinks.test.sh"; then fail=1; fi
 
+# The Go parser is this guard's primary engine; its package tests pin the
+# executable-surface behaviour the shell suites cannot reach directly.
+if ! go -C "$here/python-ban-guard-go" test ./...; then fail=1; fi
+
 if [[ $fail -eq 0 ]]; then
   echo "python-ban-guard self-test: all cases passed"
 else

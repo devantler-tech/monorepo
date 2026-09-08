@@ -73,12 +73,32 @@ func (s *scanner) yamlCommands(src string) error {
 	// Kubernetes derives one process from command and args jointly, so a shell
 	// named in command whose script sits in the sibling args field executes
 	// while each field, scanned alone, carries no command operand at all.
+	// plainCommandWord reports whether a scalar command is a bare executable name.
+	// Only such a scalar is safe to normalize into a one-element argv; a scalar
+	// carrying shell syntax stays with the shell scanner, which parses it whole.
+	plainCommandWord := func(value string) bool {
+		if value == "" || strings.ContainsAny(value, " \t\n;|&<>()$`\"'\\*?[]{}~#!") {
+			return false
+		}
+		return true
+	}
 	combined := func(command, args *yaml.Node) (bool, error) {
 		command, args = unalias(command), unalias(args)
-		if command.Kind != yaml.SequenceNode || args.Kind != yaml.SequenceNode {
+		if args.Kind != yaml.SequenceNode {
 			return false, nil
 		}
-		items := append(append([]*yaml.Node{}, command.Content...), args.Content...)
+		var head []*yaml.Node
+		switch {
+		case command.Kind == yaml.SequenceNode:
+			head = command.Content
+		case command.Kind == yaml.ScalarNode && plainCommandWord(command.Value):
+			// Kubernetes derives one argv from command and args jointly, so a
+			// scalar command names the executable of that joint argv.
+			head = []*yaml.Node{command}
+		default:
+			return false, nil
+		}
+		items := append(append([]*yaml.Node{}, head...), args.Content...)
 		argv := make([]string, len(items))
 		known := make([]bool, len(items))
 		line := command.Line

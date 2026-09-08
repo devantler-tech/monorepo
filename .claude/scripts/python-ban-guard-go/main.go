@@ -97,7 +97,15 @@ func dockerEnvPrefix(env map[string]string) string {
 	sort.Strings(names)
 	var out strings.Builder
 	for _, name := range names {
-		out.WriteString(name + "=" + env[name] + "; ")
+		// Only a shell identifier can be replayed as an assignment; anything else
+		// would become a command word in the replayed source.
+		if !assignment.MatchString(name + "=") {
+			continue
+		}
+		// The value is injected into shell source, so single-quote it. An
+		// apostrophe in a legitimate value would otherwise leave the source
+		// unparseable and fail the whole file.
+		out.WriteString(name + "='" + strings.ReplaceAll(env[name], "'", `'\''`) + "'; ")
 	}
 	return out.String()
 }

@@ -49,6 +49,9 @@ func TestYAMLCommandOperands(t *testing.T) {
 		{"mapping key alias", "name: &key command\n*key: [python3]\n", ":2: Python invocation"},
 		{"later YAML document", "description: safe\n---\ncommand: [python3]\n", ":3: Python invocation"},
 		{"empty document", "", ""},
+		{"scalar command joins args", "command: sh\nargs: ['-c', 'python3 --version']\n", "Python invocation"},
+		{"array command joins args", "command: [sh, -c]\nargs: ['python3 --version']\n", "Python invocation"},
+		{"joined argv argument stays data", "command: echo\nargs: [python3]\n", ""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
