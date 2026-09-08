@@ -153,3 +153,34 @@ func TestMakeScopedShellSelection(t *testing.T) {
 		})
 	}
 }
+
+// Make's target context must not let a global literal hide interpreter selection.
+func TestMakeInterpreterUncertainty(t *testing.T) {
+	tests := []struct{ name, source, want string }{
+		{"global referenced shell", "TOOL := python3\nSHELL := $(TOOL)\ncheck:\n\tpass\n", "Makefile:2: unresolved build-surface command"},
+		{"global escaped shell", "SHELL := pyth\\on3\ncheck:\n\tpass\n", "Makefile:1: unresolved build-surface command"},
+		{"global appended shell", "SHELL += python3\ncheck:\n\tpass\n", "Makefile:1: unresolved build-surface command"},
+		{"continued global shell", "SHELL := \\\n $(TOOL)\ncheck:\n\tpass\n", "Makefile:1: unresolved build-surface command"},
+		{"target overrides global command", "TOOL := echo\ncheck: TOOL := python3\ncheck:\n\t$(TOOL) --version\n", "Makefile:4: unresolved build-surface command"},
+		{"later global cannot erase target command", "check: TOOL := python3\nTOOL := echo\ncheck:\n\t$(TOOL) --version\n", "Makefile:4: unresolved build-surface command"},
+		{"pattern overrides global command", "TOOL := echo\n%.checked: TOOL := python3\n%.checked:\n\t$(TOOL) --version\n", "Makefile:4: unresolved build-surface command"},
+		{"modified target command", "TOOL := echo\ncheck: private override export TOOL := python3\ncheck:\n\t$(TOOL) --version\n", "Makefile:4: unresolved build-surface command"},
+		{"inherited target command", "TOOL := echo\ncheck: TOOL := python3\ncheck: child\nchild:\n\t$(TOOL) --version\n", "Makefile:5: unresolved build-surface command"},
+		{"unused target value", "TOOL := echo\ncheck: TOOL := python3\ncheck:\n\techo safe\n", ""},
+		{"target value as data", "TOOL := echo\ncheck: TOOL := python3\ncheck:\n\techo $(TOOL)\n", ""},
+		{"safe global shell and command", "SHELL := /bin/sh\nTOOL := echo\ncheck:\n\t$(TOOL) python3\n", ""},
+		{"allow marker", "# python-ban-guard: allow-file — inert fixture\nSHELL := $(TOOL)\ncheck:\n\tpass\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := scanner{path: "Makefile", seen: map[string]bool{}}
+			if _, err := s.file(tt.source); err != nil {
+				t.Fatalf("scan error: %v", err)
+			}
+			got := strings.Join(s.hits, "\n")
+			if tt.want == "" && got != "" || tt.want != "" && !strings.Contains(got, tt.want) {
+				t.Fatalf("hits = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

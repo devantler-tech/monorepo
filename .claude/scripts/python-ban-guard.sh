@@ -37,6 +37,8 @@
 #        and aliases are parsed before the remaining Go text reaches the compatibility route.
 #        Make resolves literal local definitions only; functions, referenced values, includes,
 #        conditional values and host environment are not evaluated. Dynamic recipe prefixes fail closed.
+#        Dynamic SHELL selections report uncertainty. Target and pattern variable overrides
+#        invalidate global recipe bindings; unresolved command selections report a finding.
 #        Other non-prose
 #        textual formats retain the legacy invocation heuristic; their language semantics
 #        are not exhaustively analysed, and quoted snippets in those formats can still be

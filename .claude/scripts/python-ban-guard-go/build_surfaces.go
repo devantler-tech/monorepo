@@ -126,7 +126,7 @@ func makeSourcePath(path string) bool {
 
 var makeAssignment = regexp.MustCompile(`^(?:override[ \t]+|export[ \t]+)?([A-Za-z_.][A-Za-z0-9_.-]*)[ \t]*(:::=|::=|:=|\?=|\+=|!=|=)[ \t]*(.*)$`)
 
-var makeScopedShellAssignment = regexp.MustCompile(`^[ \t]*(?:(?:export|unexport|override|private)[ \t]+)*SHELL[ \t]*(:::=|::=|:=|\?=|\+=|!=|=)[ \t]*(.*)$`)
+var makeScopedAssignment = regexp.MustCompile(`^[ \t]*(?:(?:export|unexport|override|private)[ \t]+)*([A-Za-z_.][A-Za-z0-9_.-]*)[ \t]*(:::=|::=|:=|\?=|\+=|!=|=)[ \t]*(.*)$`)
 
 // makeRecipe is one shell invocation with its original physical line number.
 type makeRecipe struct {
@@ -143,6 +143,7 @@ func (s *scanner) makeRecipes(src string) error {
 	var comments []string
 	variables := make(map[string]string)
 	defined := make(map[string]bool)
+	scoped := make(map[string]bool)
 	prefix := byte('\t')
 	inRule, defineDepth, conditionalDepth := false, 0, 0
 	for i := 0; i < len(lines); i++ {
@@ -217,17 +218,16 @@ func (s *scanner) makeRecipes(src string) error {
 			if parts[2] == "!=" && value != "" {
 				recipes = append(recipes, makeRecipe{source: value, line: i + 1})
 			}
-			// GNU Make runs every recipe through SHELL, so a Python interpreter
-			// selected there executes each recipe body.
-			if parts[1] == "SHELL" && value != "" && !strings.ContainsAny(value, "$\\") {
-				if err := s.source(value, i+1, 0, false); err != nil {
-					return fmt.Errorf("make SHELL line %d: %w", i+1, err)
-				}
-			}
 			// Only literal definitions are statically resolved. References and
 			// escapes have different := and = expansion times; leave both unknown
 			// instead of re-evaluating an immediate assignment at recipe time.
 			unsupported := parts[2] == "+=" || parts[2] == "!=" || parts[2] == ":::="
+			// SHELL is executable selection even when no recipe names it. Keep
+			// dynamic selections unresolved rather than silently discarding them.
+			if parts[1] == "SHELL" {
+				unresolved := value == "" || unsupported || strings.ContainsAny(value, "$\\")
+				recipes = append(recipes, makeRecipe{source: value, line: declarationLine, unresolved: unresolved})
+			}
 			if conditionalDepth > 0 || unsupported || strings.ContainsAny(value, "$\\") {
 				delete(variables, parts[1])
 			} else {
@@ -249,13 +249,16 @@ func (s *scanner) makeRecipes(src string) error {
 			inRule = false
 			continue
 		}
-		if parts := makeScopedShellAssignment.FindStringSubmatch(strings.TrimPrefix(declaration[colon+1:], ":")); parts != nil {
-			// Target and pattern overrides select an interpreter without updating
-			// the global variable table. Dynamic or compound assignments cannot
-			// be resolved without Make's target context, so retain that uncertainty.
-			value := strings.TrimSpace(stripMakeComment(parts[2]))
-			unresolved := value == "" || strings.ContainsAny(value, "$\\") || parts[1] == "+=" || parts[1] == "!=" || parts[1] == ":::=" || parts[1] == "?="
-			recipes = append(recipes, makeRecipe{source: value, line: declarationLine, unresolved: unresolved})
+		if parts := makeScopedAssignment.FindStringSubmatch(strings.TrimPrefix(declaration[colon+1:], ":")); parts != nil {
+			// Target and pattern values can also reach prerequisites. Without
+			// evaluating Make's target graph, a global literal for this name is
+			// no longer a reliable recipe binding, even if declared later.
+			scoped[parts[1]] = true
+			if parts[1] == "SHELL" {
+				value := strings.TrimSpace(stripMakeComment(parts[3]))
+				unresolved := value == "" || strings.ContainsAny(value, "$\\") || parts[2] == "+=" || parts[2] == "!=" || parts[2] == ":::=" || parts[2] == "?="
+				recipes = append(recipes, makeRecipe{source: value, line: declarationLine, unresolved: unresolved})
+			}
 			inRule = true
 			continue
 		}
@@ -266,6 +269,9 @@ func (s *scanner) makeRecipes(src string) error {
 	}
 	if s.declaration(comments) {
 		return nil
+	}
+	for name := range scoped {
+		delete(variables, name)
 	}
 	for _, recipe := range recipes {
 		if recipe.unresolved {
