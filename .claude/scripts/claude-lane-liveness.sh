@@ -250,11 +250,19 @@ while IFS= read -r f; do
   [ -n "$f" ] || continue
   line1=$(head -n 1 "$f" 2>/dev/null) || continue
   case "$line1" in *'<scheduled-task name='*) : ;; *) continue ;; esac
-  # The marker is embedded in JSON, so its quotes arrive backslash-escaped. Matching the unescaped
-  # spelling alone silently attributes NOTHING -- every transcript reads as unscheduled and the check
-  # degrades to "no session found" for every task, which is a fabricated NOT PRODUCING on a healthy
-  # lane. The optional backslash is what makes this fire at all.
-  nm=$(printf '%s' "$line1" | grep -oE '<scheduled-task name=\\?"[A-Za-z0-9._-]+' | head -1 | sed 's/.*name=\\\{0,1\}"//') || nm=""
+  # Decode the first enqueue event or user message before recognizing its opening task marker. A
+  # quoted example elsewhere in that message, another record type, or a prefix
+  # of an unsupported task name must not supply evidence for a scheduled run.
+  printf '%s' "$line1" | jq -e 'true' >/dev/null 2>&1 \
+    || die_unknown "a task-marker candidate is not valid JSON; cannot establish attribution"
+  nm=$(printf '%s' "$line1" | jq -er '
+    select(type == "object")
+    | if .type == "queue-operation" and .operation == "enqueue" then .content
+      elif .type == "user" and .message.role == "user" then .message.content
+      else empty end
+    | select(type == "string")
+    | capture("^<scheduled-task name=\"(?<id>[A-Za-z0-9._-]+)\"([[:space:]]|>)").id
+  ' 2>/dev/null) || nm=""
   [ -n "$nm" ] || continue
   start=$(printf '%s' "$line1" | jq -r 'select(.timestamp) | .timestamp' 2>/dev/null | head -1) || start=""
   if [ -z "$start" ]; then
@@ -293,7 +301,7 @@ while IFS= read -r id; do
 "
     any_unknown=1; continue
   fi
-  last_run=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t) | .lastRunAt) // empty' "$STORE") || last_run=""
+  last_run=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .lastRunAt) // empty' "$STORE") || last_run=""
   if [ -z "$last_run" ] || [ "$last_run" = "null" ]; then
     report="${report}  UNKNOWN  ${id} -- no lastRunAt recorded, never dispatched or store incomplete
 "

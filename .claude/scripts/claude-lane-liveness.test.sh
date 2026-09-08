@@ -170,6 +170,30 @@ mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 escaped >/dev/null
 expect 0 "a backslash-escaped marker is attributed (regression: unescaped-only matched nothing)"
 
+# The deployed runtime starts with an enqueue record, before the user message.
+# Exercise its actual envelope as well as the user-message representation.
+for queue_case in enqueue queue_example queue_suffix dequeue; do
+  mkcase "$queue_case"
+  mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\"" beta true "\"$(iso_at $(( NOW - 3600 )))\""
+  mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 40 1200 >/dev/null
+  candidate=$(mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200)
+  jq -c --arg scenario "$queue_case" '
+    if .type == "user" then
+      {type: "queue-operation", operation: "enqueue", timestamp: .timestamp,
+       sessionId: "synthetic", content: .message.content}
+      | if $scenario == "queue_example" then .content = ("Explain this: " + .content)
+        elif $scenario == "queue_suffix" then .content |= sub("alpha"; "alpha:unrelated")
+        elif $scenario == "dequeue" then .operation = "dequeue"
+        else . end
+    else . end' "$candidate" > "$CASE/rewritten.jsonl"
+  mv "$CASE/rewritten.jsonl" "$candidate"
+  if [ "$queue_case" = "enqueue" ]; then
+    expect 0 "a real queue enqueue envelope supplies the scheduled session"
+  else
+    expect 1 "$queue_case cannot supply the scheduled session"
+  fi
+done
+
 mkcase late_marker
 # `beta` is healthy purely so the session index is NOT empty -- otherwise the unattributable-index
 # guard fires first and this case would stop testing the bounded first-line read at all.
@@ -212,6 +236,38 @@ mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\"" beta false "\"$(is
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
 expect 0 "a disabled task is not judged (it does not dispatch)"
 expect 2 "--task on a disabled task is UNKNOWN, not a verdict" --task beta
+
+# A disabled record must never supply an enabled duplicate's dispatch timestamp.
+mkcase disabled_duplicate
+mkstore "$STORE" alpha false "\"$(iso_at $(( NOW - 40000 )))\"" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 39999 )) 40 1200 >/dev/null
+expect 1 "an enabled dispatch cannot inherit a disabled duplicate's healthy session"
+expect 1 "scoped lookup also ignores a disabled duplicate" --task alpha
+
+# First-line text is not necessarily a runtime task marker. Keep beta healthy so the
+# empty-index guard does not mask a false attribution of alpha's missing dispatch.
+for marker_case in example_marker suffix_marker non_user_marker; do
+  mkcase "$marker_case"
+  mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\"" beta true "\"$(iso_at $(( NOW - 3600 )))\""
+  mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 40 1200 >/dev/null
+  candidate=$(mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200)
+  case "$marker_case" in
+    example_marker) filter='if .type == "user" then .message.content = ("Explain this example: " + .message.content) else . end' ;;
+    suffix_marker) filter='if .type == "user" then .message.content |= sub("alpha"; "alpha:unrelated") else . end' ;;
+    non_user_marker) filter='if .type == "user" then .type = "assistant" | .message.role = "assistant" else . end' ;;
+  esac
+  jq -c "$filter" "$candidate" > "$CASE/rewritten.jsonl"
+  mv "$CASE/rewritten.jsonl" "$candidate"
+  expect 1 "$marker_case cannot supply a scheduled session"
+done
+
+# Invalid JSON with a task-marker candidate cannot establish either attribution
+# or absence. Preserve UNKNOWN instead of treating a failed parse as no session.
+mkcase malformed_marker_json
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\"" beta true "\"$(iso_at $(( NOW - 3600 )))\""
+mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 40 1200 >/dev/null
+printf '{broken <scheduled-task name="alpha">\n' > "$PROJECTS/proj-a/broken.jsonl"
+expect 2 "a malformed marker-bearing candidate is UNKNOWN"
 
 # --- Malformed inputs all fail closed ------------------------------------------------------------
 mkcase badstore

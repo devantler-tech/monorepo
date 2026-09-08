@@ -5031,7 +5031,8 @@ step:
    because the runtimes record different things — Codex keeps per-run rows, while Claude's store
    keeps only a dispatch marker, so the Claude check anchors on whether that dispatch produced a
    session at all — and neither is portable to the other lane. **Scope the read to the task whose
-   ledger you are about to consume** (`--task agent-improver`): a task dispatched inside the grace
+   ledger you are about to consume** (`--automation agent-improver` for Codex,
+   `--task agent-improver` for Claude): a task dispatched inside the grace
    window is still in flight and correctly reports `2`, so an unscoped run inherits that `2` from
    the caller's own live dispatch and learns nothing about the sibling.
    On a `1` or a `2` the sibling's pending hypotheses are **blocked by the
