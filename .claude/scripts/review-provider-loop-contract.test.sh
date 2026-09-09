@@ -488,6 +488,27 @@ assert_prose "${parity_checklist}" 'updated after the latest authenticated' \
   "parity checklist omits request freshness, so a pre-request reply at the same head satisfies a later round"
 assert_prose "${parity_checklist}" 'stays an acknowledgement' \
   "parity checklist no longer rejects a bare Action-performed shell"
+
+# monorepo#3290, measured on ksail#6930 head a333b570d11d: `@coderabbitai full review` — the command
+# this contract itself prescribes for escaping the incremental/chat-misparse wedge — announces its
+# completion as `Full review is complete for <full 40-char sha>` / `I found no blocking issues`,
+# which matches NONE of the three literal shapes above. On that PR CodeRabbit emitted 4 such
+# completions and 7 such verdicts and ZERO in the recognised wording, so the matcher was blind to
+# every verdict it produced: the run reported `green_review=none` over a real current-head green and
+# then spent weekly-limited Codex and monthly-limited Bugbot, both of which returned usage limits.
+# Worse, it recorded the blindness as a fact ABOUT CodeRabbit in durable memory.
+#
+# Pinned on every surface, and conjunctively — the completion wording ALONE would accept a
+# completion naming an older head, which is the same fail-open the `at <sha>` clause closes for the
+# other verdict form.
+for f in "${constitution}" "${surveyor}" "${maintenance_skill}" "${parity_checklist}"; do
+  assert_prose "${f}" 'Full review is complete for' \
+    "$(basename "${f}") does not recognise the completion wording of \`@coderabbitai full review\`, so a real current-head green reads as none and the metered lanes are spent"
+  assert_prose "${f}" 'I found no blocking issues' \
+    "$(basename "${f}") does not pin \`full review\`'s verdict line, so its completion cannot be told from an acknowledgement"
+  assert_prose "${f}" 'must still match `headRefOid`' \
+    "$(basename "${f}") accepts the completion wording without binding it to the head, so a completion naming an older head satisfies the gate"
+done
 if grep -Fq 'pre-merge summary parsing' "${parity_checklist}"; then
   fail "plugin-parity checklist can reintroduce the removed pre-merge gate"
 fi

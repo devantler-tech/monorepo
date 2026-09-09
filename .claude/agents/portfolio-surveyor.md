@@ -768,7 +768,7 @@ public and private — no per-repo loop needed to enumerate):
      carrying a verdict** as three alternative substantive artifacts; the review object does **not**
      require a `Review completed` status conjunct. The verdict reply must state
      `Reviewed pull request #<n> at <sha>` with `<sha>` a **prefix of `headRefOid`**, together with
-     `I found no actionable issues`, and be updated after that request. Report any alternative green
+     `I found no actionable issues`, and be updated after that request. `@coderabbitai full review` states its completion as `Full review is complete for <sha>` with `I found no blocking issues`; that counts too, and its `<sha>` must still match `headRefOid` (ksail#6930 emitted 4 such completions and ZERO in the other wording, so a matcher pinned to one wording saw no green at all). Report any alternative green
      only when its threads, review-body sections, and explicit ancillary problem count are all zero.
      **All three artifacts must have `user.login == "coderabbitai[bot]"`**: the reply is matched on
      plain prose, so without the author bind any account could post those phrases and be read green.

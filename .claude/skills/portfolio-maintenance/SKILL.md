@@ -255,7 +255,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   current-head request by `updated_at` plus an explicit head reference, or bind its
   **command-invocation reply comment carrying a verdict** — a body stating
   `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of `headRefOid`**, together with
-  `I found no actionable issues`, updated after that request (`updated_at`) — then require zero
+  `I found no actionable issues`, or — the wording `@coderabbitai full review` actually uses — `Full review is complete for <sha>` with `I found no blocking issues`, whose `<sha>` must still match `headRefOid`, updated after that request (`updated_at`) — then require zero
   CodeRabbit threads, body findings, and explicit ancillary problems.
   ⚠️ **Both conjuncts, always: a verdict can arrive with no `at <sha>` clause** and then reviews an
   earlier head, so a verdict naming no sha is `cr-stale` evidence at best, never `cr@<sha>`.

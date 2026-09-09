@@ -100,6 +100,13 @@ plugin carries them (or an explicit, tested subset):
    two-artifact sweep reported `none` and would spend weekly-limited Codex and monthly-limited
    Bugbot on an already-green head. Both conjuncts are required: comment `5236900950` on that PR
    carries the verdict with no sha and reviews an earlier head.
+   The same satisfier also appears in CodeRabbit's other wording: `@coderabbitai full review`
+   announces `Full review is complete for <sha>` together with `I found no blocking issues`, and that
+   counts as a verdict-bearing reply on identical terms — its `<sha>` **must still match
+   `headRefOid`**, since the completion line alone would accept a completion naming an older head.
+   Measured on ksail#6930 (head `a333b570d11d`): 4 such completions and 7 such verdicts, and **zero**
+   in the `Reviewed pull request … at …` wording, so a matcher pinned to one wording saw no green at
+   all and spent both metered lanes (monorepo#3290).
 5. **Sequential review coordination state** — authenticated single-phase request marker posted with
    the trigger (the two-phase reservation was retired on measurement 2026-07-25), pending request,
    monotonic artifact-backed or evidenced-expiry no-gate progression,
