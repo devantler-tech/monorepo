@@ -259,7 +259,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   CodeRabbit threads, body findings, and explicit ancillary problems.
   ⚠️ **Both conjuncts, always: a verdict can arrive with no `at <sha>` clause** and then reviews an
   earlier head, so a verdict naming no sha is `cr-stale` evidence at best, never `cr@<sha>`.
-  **Every one of the three artifacts must have `user.login == "coderabbitai[bot]"`** — the reply is
+  **Every one of these artifacts — the review object, the summary, and BOTH verdict-reply wordings — must have `user.login == "coderabbitai[bot]"`** — the reply is
   matched on plain prose, so without the author bind any account could post the two phrases with the
   head prefix and be read as a green.
   **Discriminate a command reply on SUBSTANCE, never on comment type:** a reply carrying no verdict

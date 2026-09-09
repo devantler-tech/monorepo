@@ -92,7 +92,7 @@ plugin carries them (or an explicit, tested subset):
    **and** `I found no actionable issues`, **and** is updated after the latest authenticated
    CodeRabbit request marker for that head — the same freshness condition the review object and the
    summary carry, without which a pre-request reply at the same head satisfies a later round. **All
-   three artifacts must have `user.login == "coderabbitai[bot]"`** — the reply is matched on plain
+   these artifacts — review object, summary, and BOTH verdict-reply wordings — must have `user.login == "coderabbitai[bot]"`** — the reply is matched on plain
    prose, so without the author bind any account could post those phrases and be read as a green. A bare
    `✅ Action performed` shell stays an acknowledgement, and a reply carrying a rate-limit, quota, or
    service marker saying the review did not run is rejected like any other artifact. Measured on platform#3051: the head's only satisfier was that reply, because the

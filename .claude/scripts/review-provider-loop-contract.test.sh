@@ -508,6 +508,12 @@ for f in "${constitution}" "${surveyor}" "${maintenance_skill}" "${parity_checkl
     "$(basename "${f}") does not pin \`full review\`'s verdict line, so its completion cannot be told from an acknowledgement"
   assert_prose "${f}" 'must still match `headRefOid`' \
     "$(basename "${f}") accepts the completion wording without binding it to the head, so a completion naming an older head satisfies the gate"
+  # The author bind read "all THREE artifacts" while there are now four forms, so the newest one sat
+  # OUTSIDE the spoofing guard — any account could post the completion wording at the head and be read
+  # as a green. Caught in self-review before this shipped. Keep the quantifier form-agnostic so a
+  # fifth form cannot reopen it.
+  assert_absent "${f}" 'three artifacts' \
+    "$(basename "${f}") binds the author to a FIXED COUNT of artifacts, leaving the newest verdict form outside the spoofing guard"
 done
 if grep -Fq 'pre-merge summary parsing' "${parity_checklist}"; then
   fail "plugin-parity checklist can reintroduce the removed pre-merge gate"
