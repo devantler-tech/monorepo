@@ -1,7 +1,7 @@
 # ADR 0001 — kagent as the Daily AI Engineer agent-fleet substrate (Phase 0)
 
-- **Status:** Proposed — **preliminary conditional GO, pending Phase-0b hands-on validation** (see *Decision*)
-- **Date:** 2026-07-07
+- **Status:** Rejected — **superseded by maintainer direction on subscription economics** (2026-09-10; see *Decision*)
+- **Date:** 2026-07-07 (rejected 2026-09-10)
 - **Deciders:** devantler-tech maintainers
 - **Issue:** [#2075](https://github.com/devantler-tech/monorepo/issues/2075) (Phase 0 of epic [#2074](https://github.com/devantler-tech/monorepo/issues/2074) — *run cheap, capable agents at scale to level up the Daily AI Engineer*)
 
@@ -166,6 +166,21 @@ pinned `v0.9.11`, default values, no live cluster needed) gives an authoritative
 
 ## Decision
 
+### Status update (2026-09-10) — REJECTED / SUPERSEDED
+
+**Decision:** The kagent / OpenRouter model-pool architecture and API-metered agent rework is **REJECTED**. Epic [#2074](https://github.com/devantler-tech/monorepo/issues/2074) and its child spikes ([#2075](https://github.com/devantler-tech/monorepo/issues/2075), [#2076](https://github.com/devantler-tech/monorepo/issues/2076), [#2451](https://github.com/devantler-tech/monorepo/issues/2451), [#2452](https://github.com/devantler-tech/monorepo/issues/2452), [#2619](https://github.com/devantler-tech/monorepo/issues/2619)) are closed as not planned.
+
+**Rationale:**
+1. **Subsidized subscription economics beat API metering:** In the current market, subsidized flat-rate provider subscriptions (e.g. Claude Pro/Max, ChatGPT Plus, Coding Plans) are orders of magnitude cheaper than retail pay-per-token API usage. Real telemetry across 790 sessions measured a median run at 43.1M input tokens and 310K output tokens (~`$13.49`/run at retail rates), scaling to `~$14,600/month` at regular autonomous cadence (73× over the `$200/mo` cap). Consumer subscriptions offer an effective ~50× cost advantage for equivalent work.
+2. **Cloud hosting is not viable:** Evaluated in [#2619](https://github.com/devantler-tech/monorepo/issues/2619), renting cloud GPUs (e.g. 5× H100 for GLM-5.2 full residency) costs `~$3,760/mo`—9.4× higher than top-tier subscriptions (`$400/mo`) that provide continuous, zero-ops, unmetered frontier access (`$0.55/hr`).
+3. **Brain preservation:** The autonomous fleet requires the full `agentic-engineering` plugin and rich context. Narrowing agent prompts to fit an artificial pay-per-token token envelope (`≤300K` in / `≤30K` out) would fork the brain and degrade engineering capability.
+
+Autonomous and interactive engineering workflows remain on provider subscription models rather than an API-metered kagent fleet.
+
+---
+
+### Historical Decision (2026-07-07)
+
 ### D1 — Preliminary recommendation: **conditional GO to Phase-0b**, then re-decide Phase 1
 
 The desk evidence clears kagent's two hardest *disqualifiers*: it does **not** require Istio (so it fits
@@ -242,7 +257,7 @@ their product's ADR directory; this location is for cross-portfolio engineer-inf
 model spend required.** The remaining two (F-open-1 live boot, F-open-2 cost/quality benchmark) are
 genuinely hands-on and stay gated on a live-cluster spike (tracked in
 [#2076](https://github.com/devantler-tech/monorepo/issues/2076), respecting the ≤1-real-cluster-spin-up/
-day guardrail); the ADR's status stays **Proposed** until those close and Phase 1 is re-decided.
+day guardrail); with Phase 1 rejected on market subscription economics, those hands-on spikes are closed as not planned.
 
 ## Consequences
 
