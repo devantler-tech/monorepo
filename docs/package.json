@@ -9,9 +9,10 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@astrojs/markdown-satteri": "^0.4.1",
     "@astrojs/sitemap": "^3.7.4",
-    "@astrojs/starlight": "^0.41.11",
-    "astro": "^7.2.10",
+    "@astrojs/starlight": "^0.42.0",
+    "astro": "^7.3.1",
     "astro-mermaid": "^2.1.0",
     "mermaid": "^11.17.2",
     "sharp": "^0.35.4",
@@ -26,6 +27,7 @@
     "uuid": "^14.0.0",
     "@astrojs/markdown-remark": "^7.2.0",
     "esbuild": "^0.28.1",
-    "js-yaml": "^4.3.2"
+    "js-yaml": "^4.3.2",
+    "smol-toml": "^1.8.0"
   }
 }
