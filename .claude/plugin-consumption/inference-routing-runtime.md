@@ -15,7 +15,7 @@ evidence and a reviewed policy revision, not extending a date automatically.
 |---|---|---|
 | Codex local, CLI 0.154.0 and desktop task tools | CLI reports ChatGPT login; explicit parent/subagent model selection; native Pro usage reports; weekly bucket exposed | Five-hour bucket absent; no verified pre-inference account admission or no-substitution boundary; parent permission overrides can affect children |
 | Claude local, bundled CLI 2.1.266 | Bundled binary found outside PATH; enabled engineer/improver schedule records expose no model field; user settings have no model allowlist and no managed settings file was present | CLI status reports no login in the inspecting process; desktop authentication, included billing, effective model and native enforcement remain unresolved |
-| Cursor cloud | Existing `cursor/*` draft handoff contract and loader | Included billing/on-demand setting, effective model/fallback, inherited MCP restrictions and complete quota evidence unresolved |
+| Cursor cloud | Existing `cursor/*` draft handoff contract and loader; web dashboard requires sign-in | Included billing/on-demand setting, effective model/fallback, inherited MCP restrictions and complete quota evidence unresolved; GitHub sign-in was blocked by automatic approval review pending explicit login authorization |
 | Cursor local 3.20.10 | Native app present; observer inspection returned only Loading after a long delay; no active writer namespace | Billing/model/tool controls and isolation unresolved; no settings evidence from the UI |
 | Antigravity local 2.13.0 | Installed app present; reserved static-observer registration, no writer namespace | Included allowance/overage setting, exact backend model and tool restrictions unresolved |
 
