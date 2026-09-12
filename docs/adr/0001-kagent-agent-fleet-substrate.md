@@ -1,7 +1,7 @@
 # ADR 0001 — kagent as the Daily AI Engineer agent-fleet substrate (Phase 0)
 
-- **Status:** Proposed — **preliminary conditional GO, pending Phase-0b hands-on validation** (see *Decision*)
-- **Date:** 2026-07-07
+- **Status:** Rejected — **superseded by maintainer direction on subscription economics** (2026-09-10; see *Decision*)
+- **Date:** 2026-07-07 (rejected 2026-09-10)
 - **Deciders:** devantler-tech maintainers
 - **Issue:** [#2075](https://github.com/devantler-tech/monorepo/issues/2075) (Phase 0 of epic [#2074](https://github.com/devantler-tech/monorepo/issues/2074) — *run cheap, capable agents at scale to level up the Daily AI Engineer*)
 
@@ -166,7 +166,22 @@ pinned `v0.9.11`, default values, no live cluster needed) gives an authoritative
 
 ## Decision
 
-### D1 — Preliminary recommendation: **conditional GO to Phase-0b**, then re-decide Phase 1
+### Status update (2026-09-10) — REJECTED / SUPERSEDED
+
+**Decision:** The kagent / OpenRouter model-pool architecture and API-metered agent rework are **REJECTED**. Epic [#2074](https://github.com/devantler-tech/monorepo/issues/2074) and its child spikes ([#2075](https://github.com/devantler-tech/monorepo/issues/2075), [#2076](https://github.com/devantler-tech/monorepo/issues/2076), [#2451](https://github.com/devantler-tech/monorepo/issues/2451), [#2452](https://github.com/devantler-tech/monorepo/issues/2452), [#2619](https://github.com/devantler-tech/monorepo/issues/2619)) are closed as not planned.
+
+**Rationale:**
+1. **Subsidized subscription economics beat API metering:** In the current market, subsidized flat-rate provider subscriptions (e.g. Claude Pro/Max, ChatGPT Plus, Coding Plans) are orders of magnitude cheaper than retail pay-per-token API usage. The [epic's measured baseline](https://github.com/devantler-tech/monorepo/issues/2074) sampled 790 host sessions and measured a median run shape of 43.1M input tokens and 310K output tokens. The public August 2026 [price comparison](https://github.com/devantler-tech/monorepo/issues/2619) recorded z.ai list inputs of `$1.40/M` input and `$4.40/M` output, but the retained evidence does not include the cache-read rate and formula needed to reproduce the epic's `$13.49` per-run estimate. That value is therefore a historical model, not a measured bill. Its cadence calculation was `3 instances × 12 runs/day × 30 days = 1,080 runs/month`, then `1,080 × $13.49 = $14,569`, rounded to `~$14,600/month` (73× over the `$200/mo` cap). No provider billing API was wired.
+2. **Cloud hosting is not viable:** The [August 2026 comparison](https://github.com/devantler-tech/monorepo/issues/2619) modelled published spot/list prices rather than measured billing. Its full-residency estimate is `5 H100s × $1.03/hour × 730 hours = $3,759.50`, rounded to `~$3,760/month`; its subscription comparison is `2 × $200 = $400/month`, or `$400 ÷ 730 = $0.55/hour`. On those dated assumptions, continuously rented GPUs cost 9.4× the subscription baseline. Rates move and must be rechecked before any future decision.
+3. **Brain preservation:** The autonomous fleet requires the full `agentic-engineering` plugin and rich context. Narrowing agent prompts to fit an artificial pay-per-token token envelope (`≤300K` in / `≤30K` out) would fork the brain and degrade engineering capability.
+
+Autonomous and interactive engineering workflows remain on provider subscription models rather than an API-metered kagent fleet.
+
+---
+
+### Historical Decision (2026-07-07)
+
+#### D1 — Preliminary recommendation: **conditional GO to Phase-0b**, then re-decide Phase 1
 
 The desk evidence clears kagent's two hardest *disqualifiers*: it does **not** require Istio (so it fits
 the Cilium platform, F3) and it **natively supports cheap model tiers** including in-cluster Ollama and
@@ -176,7 +191,7 @@ fleet yet. The final go/no-go on **Phase 1** is gated on Phase-0b closing the fi
 above all a real **cost/quality benchmark** (the entire premise is capability-per-dollar) and a live
 **RBAC/webhook** inspection.
 
-### D2 — If GO: the intended shape (design seams for Phase 1)
+#### D2 — If GO: the intended shape (design seams for Phase 1)
 
 - **Runtime:** adopt the **Agent Substrate** (WorkerPool + gVisor actors), not plain Deployments — it is
   the only model that makes "many cheap agents" dense enough to be cost-effective, and its gVisor
@@ -191,7 +206,7 @@ above all a real **cost/quality benchmark** (the entire premise is capability-pe
 - **Pin discipline:** because CRDs are `v1alpha2` and releases break weekly (F7), **pin an exact chart
   version** and treat kagent bumps as reviewed, tested changes — never a floating tag.
 
-### D3 — The safety model is enforced *outside* the model, and kagent does not weaken it
+#### D3 — The safety model is enforced *outside* the model, and kagent does not weaken it
 
 The contract's guardrails (trust gate, never-run-untrusted-code, never-merge-external,
 never-push-to-`main`, untrusted-input, the draft-PR checkpoint) are **not** properties of the LLM — they
@@ -210,14 +225,14 @@ genuinely cannot exceed its granted scope) — F8 closes the *design-exists* que
 *enforced-in-our-deploy* question. No guardrail is relaxed by adopting kagent; this ADR does not propose
 loosening any safety rule, and Phase 1 must not adopt the default cluster-admin RBAC.
 
-### D4 — Home of this decision: `.claude/adr/`
+#### D4 — Home of this decision: `.claude/adr/`
 
 This ADR establishes `.claude/adr/` as the home for **portfolio-level Daily-AI-Engineer architecture
 decisions** (decisions about the *brain* — the `.claude/` primitives and how the engineer runs), mirroring
 the per-product ADR convention in `libraries/agent-plugins/docs/adr/`. Product-specific decisions stay in
 their product's ADR directory; this location is for cross-portfolio engineer-infrastructure calls.
 
-## Open questions for Phase-0b (the hands-on spike must close these)
+#### Historical Phase-0b questions (closed as not planned 2026-09-10)
 
 1. **F-open-1 — Cilium install, live — OPEN (needs a live cluster).** install the kagent OCI charts via
    Flux on a `talos-local`/kind Cilium cluster and confirm the controller + engine + UI come up healthy
@@ -242,9 +257,9 @@ their product's ADR directory; this location is for cross-portfolio engineer-inf
 model spend required.** The remaining two (F-open-1 live boot, F-open-2 cost/quality benchmark) are
 genuinely hands-on and stay gated on a live-cluster spike (tracked in
 [#2076](https://github.com/devantler-tech/monorepo/issues/2076), respecting the ≤1-real-cluster-spin-up/
-day guardrail); the ADR's status stays **Proposed** until those close and Phase 1 is re-decided.
+day guardrail); with Phase 1 rejected on market subscription economics, those hands-on spikes are closed as not planned.
 
-## Consequences
+#### Consequences recorded by the historical decision
 
 - **Positive:** a viable, Kubernetes-native, GitOps-reconciled path to a *cheap* agent fleet that reuses
   the platform (Flux, Cilium, OTel) and the engineer's existing MCP tools; the safety model becomes *more*
@@ -253,7 +268,7 @@ day guardrail); the ADR's status stays **Proposed** until those close and Phase 
   buys ongoing churn and a real maintenance tax; the Substrate runtime is newer and less battle-tested;
   the cost win is *asserted, not yet measured*. These are why Phase 1 stays gated on Phase-0b.
 
-## Alternatives considered (briefly)
+#### Alternatives considered by the historical decision
 
 - **Do nothing (single orchestrator):** cheapest to maintain, but leaves the parallel-cheap-work
   opportunity on the table — the thing the epic exists to test.
