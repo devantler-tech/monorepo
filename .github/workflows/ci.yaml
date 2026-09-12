@@ -457,6 +457,12 @@ jobs:
               - '.claude/agents/agent-improver.md'
               - '.claude/agents/finops-engineer.md'
               - '.claude/plugin-consumption/agentic-engineering.desired-state.json'
+              - '.claude/plugin-consumption/inference-routing*'
+              - '.claude/loaders/antigravity-observer.md'
+              - '.agents/rules/inference-routing.md'
+              - '.claude/scripts/inference-routing-contract.test.sh'
+              - '.claude/scripts/inference-routing-scorecard.sh'
+              - '.claude/scripts/inference-routing-scorecard.test.sh'
               - '.claude/settings.json'
               - '.claude/skills/agent-improvement/**'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
@@ -1764,6 +1770,13 @@ jobs:
             submodule update --init libraries/agent-plugins
       - name: Verify the agent-role delivery contract
         run: bash .claude/scripts/agent-role-delivery-contract.test.sh
+      - name: Verify inference routing policy and telemetry
+        run: |
+          shellcheck .claude/scripts/inference-routing-contract.test.sh \
+            .claude/scripts/inference-routing-scorecard.sh \
+            .claude/scripts/inference-routing-scorecard.test.sh
+          bash .claude/scripts/inference-routing-contract.test.sh
+          bash .claude/scripts/inference-routing-scorecard.test.sh
 
   test-work-priority-ladder:
     name: Test work-priority ladder

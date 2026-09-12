@@ -213,6 +213,75 @@ retiring its limits. The **Agent Improver improves the spend dimension too**, on
 own parameters — calibration, floor integrity, signal discipline, honesty, confidentiality, coverage —
 deliberately *not* on how much it saves.
 
+### Inference routing
+
+The reviewed [inference routing policy](.claude/plugin-consumption/inference-routing.policy.json)
+is this deployment's source for task-class aliases, effort, escalation thresholds, quota reserves,
+and runtime registrations. The plugin owns the portable evaluator/procedure; this consumer owns
+these assignments. [Runtime verification and governance](.claude/plugin-consumption/inference-routing-runtime.md)
+records the concrete surface/version, expiry, capability gaps and promotion criteria. A registry row
+does not establish entitlement or enforcement.
+
+**Inference spend stewardship is mandatory and separate from infrastructure FinOps opt-in.** Use
+only already-included native subscription inference. No inference API keys, pay-as-you-go endpoints,
+purchased/reset credits, paid fallback, overage activation, automatic subscription upgrades, or
+inference brokers. The existing infrastructure `spendStewardshipEnabled: false` and private-channel
+gate remain unchanged. A quota or capability failure queues the dependent work; it never widens billing.
+
+**No-Fable is a protected limit:** the entire Fable model family is prohibited in recurring parent
+runs, children, advisors, fallback, retries and experiments, even if a provider describes it as
+included. No automatic alias or default may resolve to it. The policy rejects visible model IDs
+containing `fable`, case-insensitively; native controls must prove opaque resolution and fallback
+before a route is enabled. Prompt wording and a successful evaluator result are not proof of that
+boundary. A forbidden request must be intercepted before inference, never executed as a probe.
+
+| Task class | Reviewed candidate alias | Scope and escalation |
+|---|---|---|
+| `support` | Terra, medium | Bounded analysis with an independently verifiable result and measured net context savings |
+| `workhorse` | Sol, medium | One repository/behavior, clear acceptance checks and ownership, reversible implementation; routine lint/Git steps stay in the owning task |
+| `diagnosis` | Astra, high | Direct admission for difficult reasoning or sensitive invariants; otherwise two distinct failed repair hypotheses or 20 active minutes without resolution |
+| `deepRefactor` | Opus 5, high | Explicit Claude-native workflow advantage or measured class-specific benefit; not an automatic next rung after Astra |
+
+The exact runtime/model IDs are in the policy, not inferred from this table. Unknown scope, missing
+checks or irreversible writes hold implementation; a diagnostic step may investigate read-only.
+Authentication, environment, ownership, quota and authority failures use their existing recovery
+paths, never model escalation. A handoff carries failed hypotheses and evidence and happens at most
+once across providers; stop the previous writer first. One delivery owner retains the issue and PR.
+
+**Activation:** automatic routing is initially disabled in the policy and every runtime registration.
+Existing native parent execution may continue only on an independently confirmed permitted model
+and included billing route. Disabled routing does not grandfather an unknown parent route, reconfigure
+its scheduler, or prove its initial inference is quota-protected. Missing pre-inference controls hold
+the affected startup, resume or fallback; report unresolved parent enforcement explicitly. Resolve
+this contract before any new delegated/model-switched execution. Do not enable a route until native billing, exact model,
+tool, isolation, and serialized account-admission probes pass. Retain **UNKNOWN** for unexposed quota
+buckets and **NO-VERDICT** for incomplete attribution. The Codex **inline survey override** remains
+in force; an explore alias or model change cannot evade it.
+
+Initial automatic limits, when verified and enabled, are one child at depth one and one admitted
+scheduled execution chain per account across engineer and improver. Admission is before inference;
+schedule offsets and in-session preflight do not enforce it. Reserve 20% of short-window and 15% of
+weekly allowance, accounting for all attempts and unsettled consumption. These are pilot parameters,
+not measured optima. A missing estimate or bucket never becomes zero.
+
+**Temporary runtime boundaries:** Antigravity is a static observer only after verified read-only
+enforcement. Cursor cloud is a bounded builder in its existing `cursor/*` lane, with an isolated
+worktree, explicit file/interface scope and draft handoff. Cursor local has no active writer
+namespace and cannot reuse the cloud lane. No temporary runtime gets automatic children, model
+substitution, deployment/merge authority, live cluster access or a write-capable MCP by association
+with another harness. Registrations expire after 14 days and require fresh reviewed evidence to renew.
+
+The Codex Agent Improver is the single policy publisher, fenced by the existing issue claim and
+current-head PR workflow even against overlapping Codex runs. Claude supplies independent evidence
+and review. Weekly candidate research uses an existing improvement run, with at most a 10% canary
+only after runtime admission is verified. Keep the Sol xhigh baseline until that experiment is
+admitted. Use the [routing telemetry procedure](.claude/plugin-consumption/inference-routing-telemetry.md)
+and its scorecard to count complete attempt chains and accepted outcomes; never attribute a mixed
+model PR to its final model. Two weeks and 30 completed tasks per arm/class are minimum floors,
+not proof of statistical significance. Billing, No-Fable, ownership and quality floors are vetoes.
+Changes to protected spend/model/runtime limits require explicit maintainer direction; benchmarks
+may nominate aliases but cannot authorize activation or automatically select `latest`.
+
 ### Design principles — native to Claude, portable by default
 Two rules shape *how* the engineer is built:
 1. **Stay native to first-class Claude capabilities** — use the **memory tool** for durable memory,
@@ -763,10 +832,13 @@ definition surface, and an installed/cache copy is never an authoring target.
 - Deployment configuration and declared compatibility surfaces under `.claude/`: the thin
   `daily-maintainer` alias, the explicitly temporary surveyor and procedure overlays, the spend run
   loop at `.claude/skills/finops/SKILL.md` with its lifestyle floor and evidence script, the
-  provider-neutral desired state, plugin settings, and the Cursor loader source. These surfaces may
+  provider-neutral desired state, plugin settings, inference-routing policy/evidence procedures and
+  scorecard, and the Cursor/Antigravity loader sources. These surfaces may
   carry only their named deployment/provider delta; generic role logic changes at its owning upstream.
   The local Agent Improver agent/skill forks are retired, and so is the standalone FinOps agent fork —
   the reviewed plugin is the source for both roles.
+- `.agents/rules/inference-routing.md` is a thin Antigravity pointer to the consumer contract and
+  loader, never a second policy or role definition.
 - The generic upstream source, which is **NOT one repository**. **Check the file's own provenance
   before editing it — the question is per-FILE, never per-directory**, because one plugin directory
   mixes locally-authored files with copies synced from *several different* upstreams:

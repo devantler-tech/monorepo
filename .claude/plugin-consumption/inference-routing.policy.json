@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "revision": "2026-09-12.1",
+  "enabled": false,
+  "billingMode": "subscription-only",
+  "paidFallback": false,
+  "deniedModelTerms": ["fable"],
+  "routes": {
+    "support": {"model": "gpt-5.6-terra", "runtime": "codex-local", "effort": "medium"},
+    "workhorse": {"model": "gpt-5.6-sol", "runtime": "codex-local", "effort": "medium"},
+    "diagnosis": {"model": "gpt-6-astra", "runtime": "codex-local", "effort": "high"},
+    "deepRefactor": {"model": "claude-opus-5", "runtime": "claude-local", "effort": "high"}
+  },
+  "runtimes": {
+    "codex-local": {"enabled": false, "role": "owner", "expiresAt": 1790380800},
+    "claude-local": {"enabled": false, "role": "owner", "expiresAt": 1790380800},
+    "cursor-cloud": {"enabled": false, "role": "builder", "expiresAt": 1790380800},
+    "cursor-local": {"enabled": false, "role": "builder", "expiresAt": 1790380800},
+    "antigravity-local": {"enabled": false, "role": "observer", "expiresAt": 1790380800}
+  },
+  "limits": {
+    "maxDepth": 1,
+    "maxChildren": 1,
+    "repairHypotheses": 2,
+    "activeMinutes": 20,
+    "snapshotMaxAgeSeconds": 300,
+    "reservePercent": {"short": 20, "weekly": 15}
+  }
+}
