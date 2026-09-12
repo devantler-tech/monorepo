@@ -46,6 +46,10 @@ Keep the Claude route disabled; do not substitute a prompt or a non-blocking hoo
 
 1. Bind runtime, surface/version, policy revision, loaded role/skill blob identities, and account
    bucket identity in the private verification record. Keep credentials and account IDs out of Git.
+   Also verify the loaded `resources/inference-routing.md` against the reviewed plugin revision.
+   The existing currency helper covers agents, skills and declared executable assets; its `CURRENT`
+   result alone does not attest this ancillary Markdown resource. Read the verified pinned copy
+   whenever the installed resource cannot be verified.
 2. Confirm the subscription-authenticated native path. Disable paid fallback, on-demand usage,
    credit overages and purchases using the native setting. Record its authoritative read-back.
    A local dollar estimate or `--max-budget` is not subscription billing enforcement.
