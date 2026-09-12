@@ -251,6 +251,10 @@ while IFS= read -r f; do
   # Decode the first enqueue event or user message before recognizing its opening task marker. A
   # quoted example elsewhere in that message, another record type, or a prefix
   # of an unsupported task name must not supply evidence for a scheduled run.
+  # The runtime opens a scheduled dispatch with system-reminder blocks (a worktree notice), so only
+  # COMPLETE leading reminder blocks and the whitespace after them are skipped before the anchored
+  # match (monorepo#3320). Nothing else is skipped: a marker quoted inside a reminder, after ordinary
+  # text, or after an unterminated reminder still attributes nothing.
   printf '%s' "$line1" | jq -e 'true' >/dev/null 2>&1 \
     || die_unknown "a task-marker candidate is not valid JSON; cannot establish attribution"
   nm=$(printf '%s' "$line1" | jq -er '
@@ -259,6 +263,7 @@ while IFS= read -r f; do
       elif .type == "user" and .message.role == "user" then .message.content
       else empty end
     | select(type == "string")
+    | sub("^(<system-reminder>[\\s\\S]*?</system-reminder>[[:space:]]*)+"; "")
     | capture("^<scheduled-task name=\"(?<id>[A-Za-z0-9._-]+)\"([[:space:]]|>)").id
   ' 2>/dev/null) || nm=""
   [ -n "$nm" ] || continue
