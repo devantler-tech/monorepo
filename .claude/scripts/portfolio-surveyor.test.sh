@@ -14,13 +14,19 @@ agent_skills_card="${repo_root}/.claude/skills/products/agent-skills/SKILL.md"
 ksail_card="${repo_root}/.claude/skills/products/ksail/SKILL.md"
 platform_card="${repo_root}/.claude/skills/products/platform/SKILL.md"
 platform_security_surveyor="${repo_root}/.claude/agents/platform-security-surveyor.md"
-cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
-ci_workflow="${repo_root}/.github/workflows/ci.yaml"
+portable_loader="${repo_root}/.claude/loaders/portable-agentic-engineer.md"
+instance_registry="${repo_root}/.claude/plugin-consumption/agent-instances.json"
+# Test-only override permits a removed-input control without editing the live workflow.
+ci_workflow="${PORTFOLIO_SURVEYOR_WORKFLOW:-${repo_root}/.github/workflows/ci.yaml}"
 
 fail() {
   echo "portfolio surveyor contract: FAIL — $*" >&2
   exit 1
 }
+
+portfolio_surveyor_filter="$(sed -n '/^            portfolio-surveyor:/,/^            pipefail-grep-guard:/p' "${ci_workflow}")"
+grep -Fq -- "- '.claude/plugin-consumption/agent-instances.json'" <<<"${portfolio_surveyor_filter}" ||
+  fail "instance registry changes do not trigger the portfolio-surveyor contract job"
 
 # The compatibility overlay carries a static repo list for live-set reconciliation. Every
 # active product in the canonical Portfolio map must appear there, or the survey reports
@@ -250,12 +256,28 @@ grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
   fail "surveyor does not fetch complete current-head commit provenance"
 grep -Fq 'Dependency-automation PRs are conditional operate work' "${constitution}" ||
   fail "constitution does not make stalled Renovate/Dependabot PRs actionable"
-grep -Fq '`cursor[bot]` on REST surfaces' "${constitution}" ||
-  fail "constitution does not map the REST surface for the trusted app/cursor author"
-grep -Fq 'Cursor Automation is a trusted PR author' "${constitution}" ||
-  fail "constitution does not trust the maintainer-authorized Cursor Automation author"
-grep -Fq 'For `app/cursor`, the acting local sibling' "${constitution}" ||
-  fail "merge policy still tells the permission-limited Cursor App to arm its own merge"
+grep -Fq "exact author matches the registered instance's identity on the API surface being read" "${constitution}" ||
+  fail "constitution does not authenticate the exact registered author on the surface being read"
+grep -Fq 'REST, GraphQL and CLI author fields use their own registered values' "${constitution}" ||
+  fail "constitution conflates author spellings across API surfaces"
+grep -Fq 'a registered sibling with that capability performs the scoped hygiene' "${constitution}" ||
+  fail "merge policy does not bind metadata handoff to a registered sibling with the verified capability"
+# Every registered instance needs an explicit author on every consumed surface. A provider name
+# or search qualifier cannot fill a missing REST/GraphQL author mapping.
+jq -e '
+  .instances | type == "object" and length > 0 and
+  ([.[].namespace] as $names |
+    all($names[]; type == "string" and length > 0) and
+    (($names | unique | length) == ($names | length)))
+' "${instance_registry}" >/dev/null ||
+  fail "every instance must have its own non-empty registered namespace"
+for author_surface in cli rest graphql search; do
+  jq -e --arg surface "$author_surface" '
+    .instances | type == "object" and length > 0 and
+    all(.[]; (.authors[$surface] | type == "string" and length > 0))
+  ' "${instance_registry}" >/dev/null ||
+    fail "an instance is missing its exact ${author_surface} author mapping"
+done
 # EVERY merge mutation carries both pins. `--auto` needs the head pin more than a direct merge does:
 # arming defers the merge until checks settle, so a trusted App pushing inside that window gets its
 # unevaluated commit merged by the arming already performed.
@@ -272,43 +294,20 @@ done
 # that arming widens the evaluated-head gap to however long CI takes.
 grep -Fq '`--auto` has the WIDEST exposure window' "${constitution}" ||
   fail "constitution does not explain why arming auto-merge widens the evaluated-head gap"
-grep -Fq "The machine-local agents' **own** PRs" "${constitution}" ||
-  fail "self-promotion rule still ambiguously includes the permission-limited Cursor cloud lane"
-grep -Fq '`cursor[bot]` — **exact' "${surveyor}" ||
-  fail "reference surveyor does not deepen PRs authored by the trusted Cursor Automation App"
-grep -Fq 'siblings may build, run, review,' "${cursor_loader}" ||
-  fail "Cursor loader still prevents trusted sibling instances from driving Cursor-authored PRs"
-grep -Fq 'and drive your PRs' "${cursor_loader}" ||
-  fail "Cursor loader does not authorize the sibling handoff through merge"
-grep -Fq 'Product repositories are in scope' "${cursor_loader}" ||
-  fail "Cursor loader still treats its empty boot checkout as a product-repository boundary"
-grep -Fq 'submodule-init.sh' "${cursor_loader}" ||
-  fail "Cursor loader does not document on-demand submodule-init for product work"
-grep -Fq 'environment-membership-bound' "${cursor_loader}" ||
-  fail "Cursor loader does not document the ManagePullRequest / open_git_pr membership constraint"
-if grep -Fq 'any task requiring a submodule worktree are **not yours**' "${cursor_loader}"; then
-  fail "Cursor loader still forbids product work that the cloud lane demonstrably delivers"
-fi
-if grep -Fq 'monorepo-native advance work' "${cursor_loader}"; then
-  fail "Cursor loader still scopes the lane to monorepo-native-only"
-fi
-cursor_env_json="${repo_root}/.cursor/environment.json"
-[ -f "${cursor_env_json}" ] ||
-  fail "Cursor .cursor/environment.json is missing (product-scope AC)"
-grep -Fq 'repositoryDependencies' "${cursor_env_json}" ||
-  fail "Cursor environment.json does not declare repositoryDependencies"
-grep -Fq 'npm ci' "${cursor_env_json}" ||
-  fail "Cursor environment.json does not preserve the docs npm ci install"
-grep -Fq 'github.com/devantler-tech/ksail' "${cursor_env_json}" ||
-  fail "Cursor environment.json omits portfolio product repos from repositoryDependencies"
-grep -Fq -- "- '.claude/loaders/cursor-daily-ai-engineer.md'" "${ci_workflow}" ||
-  fail "Cursor loader changes do not trigger the portfolio surveyor contract job"
-if grep -Fq '`app/cursor` is **not** in the contract' "${cursor_loader}"; then
-  fail "Cursor loader still classifies its trusted App identity as external"
-fi
-if grep -Fq '**`app/cursor` is NOT a trusted PR AUTHOR' "${constitution}"; then
-  fail "constitution still classifies the maintainer-authorized Cursor App as an external author"
-fi
+grep -Fq 'Promotion is never gated on who opened the PR' "${constitution}" ||
+  fail "self-promotion incorrectly depends on an author's provider"
+grep -Fq 'Author trust decides EXECUTION, never deepening' "${surveyor}" ||
+  fail "reference surveyor uses author trust to hide PRs from deepening"
+grep -Fq "Read the checkout's [AGENTS.md]" "${portable_loader}" ||
+  fail "portable loader does not inherit portfolio scope and delivery gates from the consumer"
+grep -Fq 'Resolve this instance and its capabilities from the consumer contract' "${portable_loader}" ||
+  fail "portable loader does not resolve the instance and its verified capabilities"
+grep -Fq 'permissions, branch namespaces, or billing from a provider name' "${portable_loader}" ||
+  fail "portable loader permits inferred provider authority"
+grep -Fq 'Keep unknown or unsupported authority closed for the affected action' "${portable_loader}" ||
+  fail "portable loader does not fail closed on unavailable authority"
+grep -Fq -- "- '.claude/loaders/portable-agentic-engineer.md'" <<<"${portfolio_surveyor_filter}" ||
+  fail "portable loader changes do not trigger the portfolio surveyor contract job"
 # Untouched bot output keeps its established automation review path, but any agent adaptation must
 # restore semantic review. Provenance is therefore a required survey input, and merge authority is
 # head-pinned rather than forbidden.
@@ -341,7 +340,7 @@ grep -Fq 'report it `codex-stale@<sha>`, never `none`' "${surveyor}" ||
   fail "surveyor may report a well-formed non-matching Codex marker as none instead of codex-stale"
 grep -Fq 'absent,' "${surveyor}" ||
   fail "surveyor does not reserve none for an absent/malformed/too-short marker"
-# Cursor Bugbot publishes BOTH "I found issues" and "I failed to run" as `conclusion: neutral`;
+# Bugbot publishes BOTH "I found issues" and "I failed to run" as `conclusion: neutral`;
 # only `output.title` separates them (measured 2026-07-21: 25 real reviews, then 34 consecutive
 # `Error` runs). A rule keyed on `conclusion` alone reports a dead lane as a findings row, which
 # hides the outage from the fallback ladder and sends the run hunting for comments that do not exist.
@@ -1318,7 +1317,7 @@ expect_review_gated \
 expect_review_gated \
   "agent-skills updater lookalike from the wrong actor" \
   "agent-plugins" \
-  "app/cursor" \
+  "app/fixture-agent" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
   "${agent_plugins_skills_head}" \
@@ -1465,27 +1464,37 @@ expect_classifier_error \
   "${ksail_files}" \
   'not-json'
 
-# Multi-lane claim visibility (monorepo#2300): Cursor cloud and Codex siblings claim under
-# cursor/* and codex/*; a surveyor that only greps ^claude/ cannot see those pre-PR claims.
-# The scan must also NOT be gated on assignees — app/cursor cannot assign, so a Cursor claim
-# is branch-only until its draft PR opens.
-grep -Fq "grep -E '^(agent-claim/[1-9][0-9]*|(claude|cursor|codex)/)'" "${surveyor}" ||
-  fail "surveyor claim scan does not cover the shared tip and all three lane prefixes"
-grep -Fq '(claude|cursor|codex)/*-<issue>' "${surveyor}" ||
-  fail "surveyor CLAIMED matching does not name all three lane prefixes"
+# Claim visibility follows every registry entry, independent of the provider count or names.
+# Assignment capability is verified per instance; it is never inferred from a provider label.
+grep -Fq 'namespaces in the consumer instance registry' "${surveyor}" ||
+  fail "surveyor claim scan does not resolve all registered namespaces"
+grep -Fq 'An unreadable or invalid registry leaves claim coverage `QUERY-UNKNOWN`' "${surveyor}" ||
+  fail "surveyor treats an unreadable registry as an empty claim set"
+grep -Fq '<registered-namespace>/*-<issue>' "${surveyor}" ||
+  fail "surveyor CLAIMED matching does not cover each registered namespace"
+grep -Fq 'or a legacy normalised stem under any registered' "${surveyor}" ||
+  fail "surveyor drops legacy branch claims from a registered namespace"
 grep -Fq 'Do not gate this scan on assignees' "${surveyor}" ||
-  fail "surveyor claim-branch scan is still gated on assignees (hides cursor/* claims)"
-grep -Fq 'none(cursor-lane)' "${surveyor}" ||
-  fail "surveyor CLAIMED digest does not allow cursor-lane branch-only claims"
+  fail "surveyor claim-branch scan hides instances without assignment capability"
+grep -Fq "require BOTH the registered writer's assignment and its" "${surveyor}" ||
+  fail "surveyor permits an assignment-capable fallback without the registered writer and branch"
+grep -Fq 'Instances with verified assignment unavailability' "${surveyor}" ||
+  fail "surveyor lacks a capability-verified branch-only fallback"
+grep -Fq 'an assumed provider limitation' "${surveyor}" ||
+  fail "surveyor permits provider assumptions to replace assignment-capability evidence"
+grep -Fq 'assignee=none(verified-unavailable), claim=branch:<name>' "${surveyor}" ||
+  fail "surveyor CLAIMED digest cannot emit verified branch-only claims"
+grep -Fq 'Missing identity or clock evidence is `QUERY-UNKNOWN`' "${surveyor}" ||
+  fail "surveyor clears claims without identity or lease-clock evidence"
 grep -Fq 'commit.committer.date' "${surveyor}" ||
   fail "surveyor does not read the shared tip lease clock"
 grep -Fq 'claim=agent-claim/<issue>@<sha>@<age>' "${surveyor}" ||
   fail "surveyor CLAIMED grammar cannot emit a live shared tip"
 grep -Fq 'shared tip alone is enough' "${surveyor}" ||
   fail "surveyor still requires a lane branch before recognizing a shared claim"
-# shellcheck disable=SC2016 # literal ownership-token command in the loader contract
-grep -Fq '`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <selected-repo-path>`' "${cursor_loader}" ||
-  fail "Cursor loader retirement does not invoke the repository-qualified helper"
+# shellcheck disable=SC2016 # literal ownership-token command in the procedure contract
+grep -Fq '`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <product-path>`' "${maintenance_skill}" ||
+  fail "the delivery procedure does not retire the exact claim SHA with the repository-qualified helper"
 
 # Same-repo PR-body claim filter (#2250) — echoed at every site that tells a run how to decide
 # "no open PR". `-R` scopes the PR *list* to this repo, but a body can still name a foreign
@@ -2512,7 +2521,7 @@ case "${surveyor_flat}" in
   *) fail "the surveyor does not state that deepened fields supersede the org-search snapshot" ;;
 esac
 
-# (7) A same-repository branch outside the three agent namespaces (`deps/agent-skills-update`, a
+# (7) A same-repository branch outside the registered agent namespaces (`deps/agent-skills-update`, a
 #     release branch) had NO legal <lane> value, though those PRs are inside the takeover test.
 case "${surveyor_flat}" in
   *'`base` for any other same-repository branch'*) ;;

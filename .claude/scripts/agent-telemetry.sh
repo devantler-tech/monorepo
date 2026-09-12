@@ -15,6 +15,7 @@
 # Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME]
 #                           [--signature STRING]
 #                           [--injection-provenance] [--credential-provenance]
+#                           [--instances <trusted-registry.json>]
 set -uo pipefail
 
 # Regex locale. Two constraints pull in opposite directions, and exactly one
@@ -70,6 +71,7 @@ fi
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
+INSTANCES="${AGENT_INSTANCES_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../plugin-consumption/agent-instances.json}"
 SIGNATURE=""
 SIGNATURE_SET=0
 INJECTION_PROVENANCE=0
@@ -91,6 +93,7 @@ while [ $# -gt 0 ]; do
     --since-days) need_val "$@"; SINCE_DAYS="$2"; shift 2 ;;
     --max-files)  need_val "$@"; MAX_FILES="$2";  shift 2 ;;
     --section)    need_val "$@"; SECTION="$2";    shift 2 ;;
+    --instances)  need_val "$@"; INSTANCES="$2";  shift 2 ;;
     # An EMPTY signature is rejected below rather than treated as absent: an
     # empty needle matches every record, which would report the whole corpus as
     # occurrences of a defect. SIGNATURE_SET distinguishes "not asked for" from
@@ -283,6 +286,27 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "MISSING-DEP: $1" >&2; return
 need jq || exit 3
 
 want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
+
+# Only forge outcome attribution requires the deployment registry. Native
+# transcript adapters retain their own format and coverage boundaries.
+if want outcomes; then
+  registry=$(jq -ces '
+    def nonempty: type == "string" and length > 0;
+    if length == 1 then .[0] else error("one registry required") end
+    | select(type == "object" and .version == 1 and (.instances | type == "object" and length > 0))
+    | select(.policyPublisher as $p | ($p | nonempty) and (.instances | has($p)))
+    | select(all(.instances[];
+        (.namespace | type == "string" and test("^[a-z][a-z0-9-]*$")) and
+        (.authors | type == "object") and
+        ([.authors.cli, .authors.rest, .authors.graphql, .authors.search] | all(nonempty)) and
+        (.definitionAdapter | nonempty) and
+        (.roles | type == "array" and length > 0 and all(nonempty))))
+    | select([.instances[].namespace] | length == (unique | length))
+  ' "$INSTANCES" 2>/dev/null) || {
+    echo "agent-telemetry: instance registry is unreadable or malformed -- UNKNOWN" >&2
+    exit 2
+  }
+fi
 
 # Scratch file for the error-signature pass. `mktemp` (0600, unpredictable name)
 # rather than a guessable `/tmp/.name.$$`, and removed on ANY exit including a
@@ -4020,13 +4044,10 @@ fi
 # The instances share repos, branches and PRs. Collisions are the failure
 # mode: duplicate artifacts, two-writer races, clobbered pushes.
 #
-# THREE instances now write to that shared queue (Claude, Codex, Cursor), and the
-# COLLISION counts below see exactly ONE of them. Session counts cover the two
-# machine-local instances; the collision metrics are Claude-only, because they read
-# errored tool results and Codex records carry no error flag. Cursor contributes no
-# corpus at all. So the denominator differs per row — do not read "three instances"
-# and assume three are measured. Adding a writer raises collisions, so the section
-# that measures them must not read as complete while blind to two of the three.
+# The local transcript adapters do not establish the deployment's writer count.
+# Session counts cover their respective corpora; collision metrics are Claude-only,
+# because they read errored tool results and Codex records carry no error flag.
+# Other adapters are unmeasured, never inferred from a branch namespace.
 if want a2a; then
   echo
   echo "── CROSS-INSTANCE / A2A ─────────────────────────────────────────"
@@ -4035,7 +4056,6 @@ if want a2a; then
   # cross-instance scorecard reported professional sessions it must not see.
   echo "  codex sessions in window ... ${CX_COUNT}  (scope-filtered)"
   echo "  claude sessions in window .. ${SF_COUNT}"
-  echo "  cursor sessions in window .. n/a  (cloud instance — leaves no local corpus)"
   # Collisions are inherently a CROSS-instance metric, so reading only the Claude
   # corpus was self-defeating: a race the Codex instance hit — the sibling half of
   # the very interaction being measured — was invisible. Structural (tool results),
@@ -4053,11 +4073,8 @@ if want a2a; then
     echo "          error flag (verified). Its side of a two-writer race is therefore"
     echo "          NOT counted — which understates precisely the cross-instance"
     echo "          coordination this section exists to measure. Unmeasured, not zero."
-    echo "          The Cursor instance is invisible here for a second, stronger"
-    echo "          reason: it runs in the cloud and leaves no local corpus, so its"
-    echo "          side of every collision is unreadable by this tool. So these"
-    echo "          collision counts observe ONE writer of three — a hard floor,"
-    echo "          never a total, and never evidence the third writer was free."
+    echo "          These native adapters do not measure other runtime corpora;"
+    echo "          collision counts are a lower bound, never a deployment total."
   fi
   if command -v sqlite3 >/dev/null 2>&1 && [ -f "$CODEX_HOME/logs_2.sqlite" ]; then
     CUT=$(( $(date +%s) - SINCE_DAYS*86400 ))
@@ -4672,7 +4689,7 @@ fi
 if want outcomes; then
   echo
   echo "── OUTCOMES (did the work hold?) ────────────────────────────────"
-  if command -v gh >/dev/null 2>&1 && [ -d "$MONOREPO/.git" ]; then
+  if command -v gh >/dev/null 2>&1 && [ -e "$MONOREPO/.git" ]; then
     SINCE_ISO=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%d' 2>/dev/null \
                 || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%d' 2>/dev/null)
     # PORTFOLIO-WIDE, not monorepo-only. Quality is the signal these counts feed,
@@ -4680,7 +4697,7 @@ if want outcomes; then
     # only the monorepo scored the definition work and ignored the products.
     # Repos come from the submodule list, so the set follows the portfolio map
     # instead of being hard-coded here and going stale.
-    echo "  AGENT-authored merged PRs since ${SINCE_ISO} (claude/* + codex/* + cursor/* branches):"
+    echo "  AGENT-authored merged PRs since ${SINCE_ISO} (registered instance identities):"
     # Portable extraction: BSD sed rejects the non-greedy `+?` a single-pass
     # regex would need, so strip in stages instead of relying on a GNU-only form.
     REPOS=$(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.url$' 2>/dev/null \
@@ -4692,21 +4709,31 @@ if want outcomes; then
     TOTAL=0; APIFAIL=0
     while IFS= read -r r; do
       [ -n "$r" ] || continue
-      # AGENT-AUTHORED ONLY. This scorecard diagnoses the two agents, so a
+      # AGENT-AUTHORED ONLY. This scorecard diagnoses the registered instances, so a
       # maintainer, external-contributor, or dependency-bot merge must not move
       # it — otherwise a quiet week for the agents plus a busy week for Renovate
       # reads as agent productivity and can trigger a definition change.
-      # The instances ship from claude/*, codex/* and cursor/* branches; author
-      # login cannot discriminate, because the agent commits as the maintainer.
-      # Branch names are contributor-controlled, so a FORK PR can call its head
-      # cursor/* and be counted as agent output — which would corrupt the very
-      # totals used to justify changing the agents. Require a same-owner head,
-      # exactly as the flow scorecard's isCrossRepository check does.
-      if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt,headRefName,headRepositoryOwner \
-            --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")
-                       | select((.headRepositoryOwner.login // \"\") == \"devantler-tech\")
-                       | select(.headRefName | test(\"^(claude|codex|cursor)/\"))] | length" 2>/dev/null); then
-        printf '    %-42s QUERY FAILED (auth/rate-limit/network)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
+      # Match the registered namespace AND the CLI author spelling on an
+      # explicitly same-repository head. Same-owner sibling repositories are forks.
+      if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt,headRefName,author,isCrossRepository \
+            | jq -er --arg since "$SINCE_ISO" --argjson registry "$registry" '
+                if type != "array" then error("malformed PR listing") else . end
+                | [.[]
+                   | if (.headRefName | if type == "string"
+                        then length > 0 and (test("[[:space:][:cntrl:]]") | not) else false end)
+                     then . else error("missing or malformed PR branch") end
+                   | select(.mergedAt >= $since) | . as $pr
+                   | select(any($registry.instances[];
+                       . as $instance | $pr.headRefName | startswith($instance.namespace + "/")))
+                   | if (.author.login | type != "string") or (.author.login | length == 0)
+                        or (.isCrossRepository | type != "boolean")
+                     then error("missing PR provenance") else . end
+                   | select(.isCrossRepository == false)
+                   | select(any($registry.instances[];
+                       . as $instance | ($pr.headRefName | startswith($instance.namespace + "/"))
+                       and $pr.author.login == $instance.authors.cli))] | length
+              ' 2>/dev/null); then
+        printf '    %-42s UNKNOWN (query or provenance)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
       fi
       case "$c" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; APIFAIL=$((APIFAIL+1)); continue ;; esac
       [ "$c" -gt 0 ] && printf '    %-42s %s\n' "$r" "$c"
@@ -4714,7 +4741,11 @@ if want outcomes; then
     done <<EOF
 $REPOS
 EOF
-    echo "    ────────────────────────────────────────── total: ${TOTAL}"
+    if [ "$APIFAIL" -gt 0 ]; then
+      echo "    merged PRs: UNKNOWN (${APIFAIL} repository queries incomplete)"
+    else
+      echo "    ────────────────────────────────────────── total: ${TOTAL}"
+    fi
     # PORTFOLIO-WIDE, matching the merge count above. Reverts are the sharper
     # half of the quality signal, and most agent work lands in product repos —
     # a submodule revert against a monorepo-only check reported "nothing needed

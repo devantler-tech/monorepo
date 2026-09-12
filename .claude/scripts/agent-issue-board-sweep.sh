@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
-# cursor-issue-board-sweep.sh — put every open Cursor-authored issue on the 🌊 Project Board.
+# agent-issue-board-sweep.sh — put an explicit author's open issues on the 🌊 Project Board.
 #
 # WHY THIS EXISTS
-#   The Cursor cloud instance gets 403 on Projects, so every issue it files is necessarily
-#   unboarded and a local run has to board it. That duty lived only as a paragraph in AGENTS.md,
-#   and a distant paragraph is not reliably reached: the status-less card count regressed
-#   0 -> 4 -> 0 -> 16 across ticks while the repair was already scripted and idempotent
-#   (monorepo#2402). This is that duty as one executable step, so the run loop invokes it
-#   instead of re-deriving it.
+#   An engineering runtime may be able to file issues without access to Projects. An authorised
+#   runtime can reconcile those issues onto the board through this executable step, instead of
+#   re-deriving the idempotent add and Status repair. The caller must choose the exact author;
+#   neither the active runtime nor a built-in provider identity determines the discovery scope.
 #
 # WHAT IT DOES
-#   Discovers open issues authored by the Cursor identity across the org, oldest first, then
+#   Discovers open issues authored by the explicitly supplied identity across the org, oldest first, then
 #   passes EVERY result through `board-add.sh` — the idempotent helper that does both halves of
 #   the add and verifies the Status by reading it back. No hand-written item-add/item-edit
 #   sequence: a half-completed add is indistinguishable from a finished one, which is the defect
@@ -34,7 +32,7 @@
 #   fail the sweep.
 #
 # USAGE
-#   cursor-issue-board-sweep.sh [--author <login>] [--owner <org>] [--limit <n>]
+#   agent-issue-board-sweep.sh --author <login> [--owner <org>] [--limit <n>]
 #                               [--pace-seconds <n>] [--max-mutations <n>]
 #                               [--board-add <path>] [--dry-run]
 #   exit 0  bounded batch succeeded; inspect deferred and skipped for remaining issues
@@ -44,7 +42,7 @@ set -Eeuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-author="app/cursor"
+author=""
 owner="devantler-tech"
 limit=300
 board_add="${here}/board-add.sh"
@@ -69,7 +67,9 @@ max_mutations=25
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --author)     author="${2:?--author needs a value}"; shift 2 ;;
+    --author)
+      [ $# -ge 2 ] || { echo "agent-issue-board-sweep: --author needs a value" >&2; exit 1; }
+      author="$2"; shift 2 ;;
     --owner)      owner="${2:?--owner needs a value}"; shift 2 ;;
     --limit)      limit="${2:?--limit needs a value}"; shift 2 ;;
     --board-add)  board_add="${2:?--board-add needs a value}"; shift 2 ;;
@@ -77,21 +77,27 @@ while [ $# -gt 0 ]; do
     --max-mutations) max_mutations="${2:?--max-mutations needs a value}"; shift 2 ;;
     --dry-run)    dry_run=1; shift ;;
     -h|--help)    sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
-    *) echo "cursor-issue-board-sweep: unknown argument: $1" >&2; exit 1 ;;
+    *) echo "agent-issue-board-sweep: unknown argument: $1" >&2; exit 1 ;;
   esac
 done
+
+# Validate author before discovery or helper invocation: no implicit identity may select issues.
+case "$author" in
+  '') echo "agent-issue-board-sweep: --author is required" >&2; exit 1 ;;
+  -*|*[[:space:]]*) echo "agent-issue-board-sweep: --author must be an exact login without whitespace or a leading hyphen" >&2; exit 1 ;;
+esac
 
 # Match the bounded decimal spelling before arithmetic or gh argument parsing. This also rejects
 # ambiguous leading zeros and oversized integers without depending on the shell's integer width.
 case "$limit" in
   [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|1000) ;;
-  *) echo "cursor-issue-board-sweep: --limit must be a decimal integer from 1 to 1000 without leading zeros" >&2; exit 1 ;;
+  *) echo "agent-issue-board-sweep: --limit must be a decimal integer from 1 to 1000 without leading zeros" >&2; exit 1 ;;
 esac
-case "$pace" in ''|*[!0-9]*) echo "cursor-issue-board-sweep: --pace-seconds must be a whole number of seconds: $pace" >&2; exit 1 ;; esac
-case "$max_mutations" in ''|*[!0-9]*) echo "cursor-issue-board-sweep: --max-mutations must be a number: $max_mutations" >&2; exit 1 ;; esac
-[ "$max_mutations" -gt 0 ] || { echo "cursor-issue-board-sweep: --max-mutations must be greater than zero" >&2; exit 1; }
+case "$pace" in ''|*[!0-9]*) echo "agent-issue-board-sweep: --pace-seconds must be a whole number of seconds: $pace" >&2; exit 1 ;; esac
+case "$max_mutations" in ''|*[!0-9]*) echo "agent-issue-board-sweep: --max-mutations must be a number: $max_mutations" >&2; exit 1 ;; esac
+[ "$max_mutations" -gt 0 ] || { echo "agent-issue-board-sweep: --max-mutations must be greater than zero" >&2; exit 1; }
 [ "$dry_run" -eq 1 ] || [ -x "$board_add" ] ||
-  { echo "cursor-issue-board-sweep: board-add helper is not executable: $board_add" >&2; exit 1; }
+  { echo "agent-issue-board-sweep: board-add helper is not executable: $board_add" >&2; exit 1; }
 
 # Discovery. Captured rather than piped so a FAILED search cannot read as an empty one:
 # `gh ... | while read` would report the loop's status and sweep zero issues on an auth error.
@@ -107,7 +113,7 @@ err_file="$(mktemp)"
 trap 'rm -f "$err_file"' EXIT
 if ! found="$(gh search issues --owner "$owner" --archived=false --state open --author "$author" \
                 --limit "$limit" --sort created --order asc --json url --jq '.[].url' 2>"$err_file")"; then
-  echo "cursor-issue-board-sweep: discovery FAILED (nothing swept) — $(tr '\n' ' ' <"$err_file")" >&2
+  echo "agent-issue-board-sweep: discovery FAILED (nothing swept) — $(tr '\n' ' ' <"$err_file")" >&2
   exit 2
 fi
 
@@ -121,7 +127,7 @@ discovered_count=0
 # returned. Reporting success there would leave them unboarded behind a clean exit, so fail closed
 # and say what to do.
 if [ "$discovered_count" -ge "$limit" ]; then
-  echo "cursor-issue-board-sweep: discovery TRUNCATED at the --limit cap (${discovered_count} of at least ${limit}); use a higher --limit up to 1000; saturation at 1000 requires partitioned discovery before this sweep can proceed" >&2
+  echo "agent-issue-board-sweep: discovery TRUNCATED at the --limit cap (${discovered_count} of at least ${limit}); use a higher --limit up to 1000; saturation at 1000 requires partitioned discovery before this sweep can proceed" >&2
   exit 2
 fi
 
@@ -137,7 +143,7 @@ while IFS= read -r url; do
   [ -n "$url" ] || continue
   total=$((total + 1))
   if [ "$dry_run" -eq 1 ]; then
-    echo "cursor-issue-board-sweep: DRY-RUN would board ${url}"
+    echo "agent-issue-board-sweep: DRY-RUN would board ${url}"
     boarded=$((boarded + 1))
     continue
   fi
@@ -162,15 +168,15 @@ while IFS= read -r url; do
     # status-less cards is precisely what this sweep exists to repair, so that misread would let
     # the one case that matters bypass both the batch and the pacing.
     if printf '%s' "$out" | grep -q 'already-present (status untouched)'; then
-      echo "cursor-issue-board-sweep: already on the board ${url}"
+      echo "agent-issue-board-sweep: already on the board ${url}"
     else
       mutated=$((mutated + 1))
       wrote_last=1
-      echo "cursor-issue-board-sweep: boarded ${url}"
+      echo "agent-issue-board-sweep: boarded ${url}"
     fi
   elif printf '%s' "$out" | grep -q 'is PRIVATE; project 5 is public'; then
     skipped=$((skipped + 1))
-    echo "cursor-issue-board-sweep: SKIPPED (private repository, a maintainer decision) ${url}"
+    echo "agent-issue-board-sweep: SKIPPED (private repository, a maintainer decision) ${url}"
   else
     # A failure is charged to the budget and paced, because board-add.sh can fail AFTER a
     # successful item-add or item-edit — a read-back that does not confirm the status still exits
@@ -179,16 +185,16 @@ while IFS= read -r url; do
     failed=$((failed + 1))
     mutated=$((mutated + 1))
     wrote_last=1
-    echo "cursor-issue-board-sweep: FAILED ${url} — ${out}" >&2
+    echo "agent-issue-board-sweep: FAILED ${url} — ${out}" >&2
   fi
 # Process substitution, NOT a pipe: `printf ... | while` runs the loop in a SUBSHELL, so every
 # counter incremented above would be discarded and the summary would always read zeros. It is also
 # not a heredoc, whose unquoted body would expand a `$` arriving inside a URL.
 done < <(printf '%s\n' "$found")
 
-echo "cursor-issue-board-sweep: discovered=${total} boarded=${boarded} wrote=${mutated} skipped=${skipped} failed=${failed} deferred=${deferred} author=${author} owner=${owner} limit=${limit} pace=${pace}s batch=${max_mutations}"
+echo "agent-issue-board-sweep: discovered=${total} boarded=${boarded} wrote=${mutated} skipped=${skipped} failed=${failed} deferred=${deferred} author=${author} owner=${owner} limit=${limit} pace=${pace}s batch=${max_mutations}"
 if [ "$deferred" -gt 0 ]; then
-  echo "cursor-issue-board-sweep: ${deferred} issue(s) deferred to the next run to stay inside the hourly request budget — board-add is idempotent, so the next sweep continues where this one stopped"
+  echo "agent-issue-board-sweep: ${deferred} issue(s) deferred to the next run to stay inside the hourly request budget — board-add is idempotent, so the next sweep continues where this one stopped"
 fi
 [ "$failed" -eq 0 ] || exit 2
 exit 0

@@ -128,7 +128,9 @@ public and private — no per-repo loop needed to enumerate):
    dashboard heads a repo's oldest-first queue forever and every run re-derives that it is not real
    work.
 2b. **Shared claim tips and lane branches (one branch-list call per repo that has PR-less open issues):**
-   `gh api repos/<o>/<r>/branches --paginate --jq '.[] | [.name,.commit.sha] | @tsv' | grep -E '^(agent-claim/[1-9][0-9]*|(claude|cursor|codex)/)'`.
+   `gh api repos/<o>/<r>/branches --paginate --jq '.[] | [.name,.commit.sha] | @tsv'`.
+   Filter the result by exact shared-claim names and the namespaces in the consumer instance registry.
+   An unreadable or invalid registry leaves claim coverage `QUERY-UNKNOWN`, never an empty set.
    An exact `agent-claim/<issue>` name maps directly to its open issue. Read that tip's lease clock
    with `gh api repos/<o>/<r>/commits/<sha> --jq '.commit.committer.date'`; when it is inside the ~2h
    lease and there is no open PR, report `CLAIMED` immediately — the **shared tip alone is enough**,
@@ -136,17 +138,14 @@ public and private — no per-repo loop needed to enumerate):
    failed=claim:<reason>` for that issue. If the tip is stale, leave the issue actionable and include
    `stale-claim=agent-claim/<issue>@<sha>@<age>` so the orchestrator can use the evidence-gated
    takeover path rather than treating it as live.
-   As rollout fallback, also report any `claude/*`, `cursor/*`, or `codex/*` branch that ends in
+   As rollout fallback, also report any branch in a registered namespace that ends in
    `-<issue>`, ends in a
    **takeover suffix** (`-<issue>-2`, `-3`, …), OR whose normalised stem matches an open issue's
    title (strip `war-`/area prefixes and hyphens, and normalise `our`→`or` spelling) — legacy claims
    predate the issue-number template and would otherwise be invisible during rollout — for an open
-   issue with **no** open PR, as a lane-branch claim. All three Daily AI Engineer lanes claim under their own
-   prefix (`claude/` local Claude Code, `cursor/` Cursor cloud, `codex/` ChatGPT/Codex sibling); a
-   survey that only greps `^claude/` is blind to the other two and recreates the duplicate-build race
-   the claim protocol exists to prevent. **Do not gate this scan on assignees:** `app/cursor` cannot
-   assign (403), so a Cursor-lane claim is branch-only until its draft PR opens — an
-   assigned-but-PR-less gate would skip every `cursor/*` claim. Keep it bounded — skip the call for
+   issue with **no** open PR, as a lane-branch claim. Resolve every instance's unique namespace from
+   the registry. **Do not gate this scan on assignees:** missing assignment capability cannot make
+   a branch claim invisible. Keep it bounded — skip the call for
    repos with no open PR-less issues at all, and deepen only shared tips whose issue is in that set.
    Before a PR there is no body to grep, so these refs are the pre-PR coordination signals.
 3. **Classify dependency PRs before yielding.** Identify exact `renovate[bot]`/`dependabot[bot]`
@@ -437,7 +436,7 @@ public and private — no per-repo loop needed to enumerate):
      produced itself. The surveyor cannot resolve this alone (it holds no creation record), so it
      reports the **actor, the branch namespace, and the pushed identity** —
      `pushed:<age>@<lane>:<headRefName>@<headRefOid>`, where `<lane>` is the
-     `claude/`/`codex/`/`cursor/` prefix of `headRefName`, `fork` for an external head, or **`base`
+     registered namespace prefix of `headRefName`, `fork` for an external head, or **`base`
      for any other same-repository branch** — and the
      consumer discounts a signal **only when that exact branch and sha are ones THIS RUN pushed**.
      🔴 **`base` is not a tidy-up — without it a whole PR class cannot be reported at all.** The three
@@ -917,9 +916,9 @@ public and private — no per-repo loop needed to enumerate):
      lane-failure evidence, and a run that reads it as "findings" will chase comments that do not
      exist while a lane outage goes unreported. A success at an older head is
      `bugbot-stale@<sha>`. ⚠️ **Match Bugbot on the CHECK-RUN only, never on the `cursor[bot]` login**
-     — that same login is also our trusted Cursor Automation instance authoring PRs, so a
-     login-keyed match would let that instance appear to green its own work (contract *Trust gate →
-     Cursor Bugbot has reviewer-only standing*). A `cursor[bot]` approval, comment or review object is
+     — a provider identity alone cannot distinguish a reviewer artifact from another kind of bot
+     output. Only the configured current-head review artifact qualifies (contract *Trust gate —
+     Bugbot has reviewer-only standing*). A `cursor[bot]` approval, comment or review object is
      **never** a green.
      **Same-SHA Bugbot tie-break: findings win by default.** A **same-SHA Bugbot success supersedes findings only after all finding threads are resolved and a later authenticated re-request produces that check**.
      Every finding thread needs a later exact-author disclosed resolution reply and must be resolved;
@@ -1521,7 +1520,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
-- <repo> #<n> "<title>" — CLAIMED: assignee=devantler|none(cursor-lane)|none(shared-tip), claim=agent-claim/<issue>@<sha>@<age>|branch:<name>, no open PR
+- <repo> #<n> "<title>" — CLAIMED: assignee=<registered-writer>|none(verified-unavailable)|none(shared-tip), claim=agent-claim/<issue>@<sha>@<age>|branch:<name>, no open PR
 ```
 
 Digest rules:
@@ -1538,9 +1537,9 @@ Digest rules:
   `CLAIMED … assignee=none(shared-tip), claim=agent-claim/<issue>@<sha>@<age>` only inside the ~2h
   lease. A failed tip/date join is `QUERY-UNKNOWN ... failed=claim:<reason>`, never a clean or stale
   claim; an expired tip is not `CLAIMED` and is annotated as `stale-claim` on the ordinary issue row.
-  For lane fallbacks, match `(claude|cursor|codex)/*-<issue>`, a takeover branch
-  (`(claude|cursor|codex)/*-<issue>-2`, `-3`, …), or a legacy normalised stem under any of those three
-  prefixes — match a lane branch by the **issue number or a normalised stem**, never an assumed exact
+  For lane fallbacks, match `<registered-namespace>/*-<issue>`, a takeover branch
+  (`<registered-namespace>/*-<issue>-2`, `-3`, …), or a legacy normalised stem under any registered
+  prefix — match a lane branch by the **issue number or a normalised stem**, never an assumed exact
   stem (contract *Claim protocol* rule 1). 🔴 **Number resolution does NOT subsume the legacy stem —
   run both.** A
   `-<issue>` / `-<issue>-<k>` anchor matches nothing on a branch that predates the numbering rule and
@@ -1550,18 +1549,14 @@ Digest rules:
   When deciding "no open PR", a body hit on `"#<issue>"` counts only if it
   references **this** repo's issue (`Fixes`/`Closes`/`Resolves #<issue>`, `<o>/<r>#<issue>`, or a bare
   `#<issue>` that is not solely a foreign `owner/repo#<issue>`).
-  **(2) `claude/*` / `codex/*`:** require BOTH a `devantler` assignment and the matching
-  branch — an assignment to **anyone but `devantler`** is not a claim, and a `devantler` assignment
-  with **no** branch is not a live claim under the contract's *Claim protocol*, so reporting either
-  as one would let a bare assignee park an issue. **(3) `cursor/*`:** the matching branch alone is
-  enough — `app/cursor` cannot assign (403), so a Cursor-lane claim is branch-only until the draft
-  PR opens; requiring an assignee would make every cloud-lane claim invisible (monorepo#2300). Report
-  that shape as `CLAIMED … assignee=none(cursor-lane), claim=branch:<name>`. A bare `devantler`
-  assignee with no branch is still an ordinary open issue (mention `assignees=<n>` if useful), never
-  skip reason (e). The orchestrator times the ~2h lease from the issue's newest `assigned` timeline
-  event when one exists; for a cursor-lane branch-only claim, time from the branch tip's push
-  (or treat it as live until a PR appears / the tip goes stale). An assignee is an **instance**
-  claim, never the maintainer.
+  **(2) Assignment-capable instances:** require BOTH the registered writer's assignment and its
+  matching branch. An unrelated assignee, or an assignment without a matching branch, is not a live
+  fallback claim. **(3) Instances with verified assignment unavailability:** preserve a matching
+  branch-only claim with its exact instance and capability evidence; an assumed provider limitation
+  is insufficient. Report `assignee=none(verified-unavailable), claim=branch:<name>` for that case.
+  The orchestrator verifies the ~2h lease from the newest matching assignment event or authoritative
+  branch-push evidence. Missing identity or clock evidence is `QUERY-UNKNOWN`, never a clear lane.
+  An assignee is an **instance** claim, never the maintainer.
 - **Report a `devantler` PR's routine-own vs maintainer-interactive signals as DATA; never resolve
   them into a verdict.** That question now decides only **comment attribution** — whose control
   channel a `devantler` comment on the PR is — so report `headRefName` + disclosure and let the

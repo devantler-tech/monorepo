@@ -30,10 +30,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 product_skill="${repo_root}/.claude/skills/product-engineering/SKILL.md"
-cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
+portable_loader="${repo_root}/.claude/loaders/portable-agentic-engineer.md"
 project_board_card="${repo_root}/.claude/skills/products/project-board/SKILL.md"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
-workflow="${repo_root}/.github/workflows/ci.yaml"
+# Test-only override permits a removed-input control without editing the live workflow.
+workflow="${WORK_PRIORITY_LADDER_WORKFLOW:-${repo_root}/.github/workflows/ci.yaml}"
 
 fail() {
   echo "work-priority ladder: FAIL — $*" >&2
@@ -46,10 +47,12 @@ fail() {
 constitution_flat="$(tr '\n' ' ' < "${constitution}" | tr -s '[:space:]' ' ')"
 skill_flat="$(tr '\n' ' ' < "${maintenance_skill}" | tr -s '[:space:]' ' ')"
 product_skill_flat="$(tr '\n' ' ' < "${product_skill}" | tr -s '[:space:]' ' ')"
-cursor_loader_flat="$(tr '\n' ' ' < "${cursor_loader}" | tr -s '[:space:]' ' ')"
+portable_loader_flat="$(tr '\n' ' ' < "${portable_loader}" | tr -s '[:space:]' ' ')"
 project_board_card_flat="$(tr '\n' ' ' < "${project_board_card}" | tr -s '[:space:]' ' ')"
 surveyor_flat="$(tr '\n' ' ' < "${surveyor}" | tr -s '[:space:]' ' ')"
 work_priority_filter="$(sed -n '/^            work-priority-ladder:/,/^            merge-confirmation-read:/p' "${workflow}")"
+grep -Fq -- "- '.claude/loaders/portable-agentic-engineer.md'" <<<"${work_priority_filter}" ||
+  fail "portable loader changes do not trigger the work-priority-ladder contract job"
 
 assert_prose() {
   case "$2" in
@@ -96,8 +99,7 @@ assert_prose 'retire the acquired SHA after the board/API mutation is verified' 
 for claim_contract in \
   "${constitution_flat}" \
   "${skill_flat}" \
-  "${product_skill_flat}" \
-  "${cursor_loader_flat}"; do
+  "${product_skill_flat}"; do
   assert_prose 'before pushing the lane branch or opening its draft PR' \
     "${claim_contract}" "a live claim procedure can publish after losing ownership"
   assert_prose 'again after any resumed pause' \
@@ -107,6 +109,17 @@ for claim_contract in \
   assert_prose 'agent-claim.sh renew <issue> "$claim_sha"' \
     "${claim_contract}" "a publication boundary does not retain the renewed ownership token"
 done
+# The portable bootstrap inherits the delivery procedure instead of copying its lease steps.
+assert_prose "Read the checkout's [AGENTS.md]" \
+  "${portable_loader_flat}" "portable loader does not inherit the canonical claim and delivery gates"
+assert_prose 'only the deployment overlays declared by the consumer' \
+  "${portable_loader_flat}" "portable loader can select an undeclared claim procedure"
+assert_prose 'remote work branches in every registered namespace' \
+  "${constitution_flat}" "claim selection omits a registered instance namespace"
+assert_prose 'exact author matches the registered instance' \
+  "${constitution_flat}" "claim authentication is not tied to the exact registered identity"
+assert_prose 'REST, GraphQL and CLI author fields use their own registered values' \
+  "${constitution_flat}" "claim authentication conflates author identities across API surfaces"
 assert_prose 'the retained SHA immediately before the board mutation' \
   "${skill_flat}" "board-only work can mutate after losing its shared claim"
 assert_prose 'the retained SHA immediately before the board mutation' \
@@ -274,12 +287,10 @@ assert_prose 'no undefined permanent-sounding gate' \
 # for one head, never the requirement to merge at that same head. An updater push during the
 # `--auto` wait lands a replacement head the classifier never ran on — possibly an exit-1/3 head
 # needing the very review exit 0 waived — and `--match-head-commit` does not close it, because it
-# gates the ARMING, not the later merge. So pin the three-plus-one split in both surfaces, and pin
+# gates the ARMING, not the later merge. So pin the author-based split in both surfaces, and pin
 # the re-run that keeps the exemption tied to the commit it was granted for.
-assert_absent '(`github-actions`/`ksail-bot`/`app/cursor`) uses pre-CLEAN' \
-  "${constitution_flat}" "the ambiguous bare three-name --auto author list survived"
-assert_prose 'The `--auto`-eligible authors are exactly three, and every one of them is eligible unconditionally' \
-  "${constitution_flat}" "contract does not state the --auto author matrix as three unconditional authors"
+assert_prose 'The `--auto`-eligible authors are exactly two, and every one of them is eligible unconditionally' \
+  "${constitution_flat}" "contract does not state the --auto author matrix as two unconditional authors"
 assert_prose '`app/botantler-1` is NEVER `--auto`-eligible — not even on exit 0' \
   "${constitution_flat}" "contract does not exclude app/botantler-1 from --auto on every classifier result"
 assert_prose 're-run the classifier at the current head immediately before merging' \
@@ -293,23 +304,23 @@ assert_absent 'the three **trusted single-author Apps**' \
   "${skill_flat}" "the maintenance skill still states an exclusive three-App --auto list"
 assert_absent '`--auto` is for those named Apps only' \
   "${skill_flat}" "the maintenance skill still scopes --auto to an unnamed 'those named Apps' set"
-assert_prose '`--auto`-eligible authors are exactly three, and every one of them is eligible unconditionally' \
-  "${skill_flat}" "the maintenance skill does not state the --auto author matrix as three unconditional authors"
+assert_prose '`--auto`-eligible authors are exactly two, and every one of them is eligible unconditionally' \
+  "${skill_flat}" "the maintenance skill does not state the --auto author matrix as two unconditional authors"
 assert_prose '`app/botantler-1` is never `--auto`-eligible, not even on exit 0' \
   "${skill_flat}" "the maintenance skill does not exclude app/botantler-1 from --auto on every classifier result"
 
-# Asserting the COUNT leaves the three names unpinned — a policy edit could swap
-# `github-actions`/`ksail-bot`/`app/cursor` for different authors and every assertion above would
+# Asserting the COUNT leaves the exact names unpinned — a policy edit could swap
+# `github-actions`/`ksail-bot` for different authors and every assertion above would
 # still pass. `--auto` merges whatever head passes checks later, so WHICH author holds that power is
 # the whole security property; pin the contiguous list in both documents, not just its shape. The
-# trailing `and` before `app/cursor` (rather than a comma) is what makes this fail if a fourth name
-# is appended to the list — the exact regression this guard exists to catch.
+# explicit list and exclusion prevent an updater's head-scoped exemption from becoming persistent
+# merge authority when a later head arrives.
 for _doc_pair in "constitution:${constitution_flat}" "skill:${skill_flat}"; do
   _doc_label="${_doc_pair%%:*}"
   _doc_text="${_doc_pair#*:}"
-  assert_prose '`github-actions`, `ksail-bot`, and `app/cursor`' \
-    "${_doc_text}" "the ${_doc_label} does not name the three unconditional --auto authors as a closed contiguous list"
-  assert_absent '`github-actions`, `ksail-bot`, `app/cursor`, and `app/botantler-1`' \
+  assert_prose '`github-actions` and `ksail-bot`' \
+    "${_doc_text}" "the ${_doc_label} does not name the two unconditional --auto authors as a closed contiguous list"
+  assert_absent '`github-actions`, `ksail-bot`, and `app/botantler-1`' \
     "${_doc_text}" "the ${_doc_label} still lists app/botantler-1 in the --auto author list"
 done
 

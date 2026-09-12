@@ -1,7 +1,9 @@
 # Inference routing runtime verification
 
 The canonical policy is [inference-routing.policy.json](inference-routing.policy.json), resolved
-through `AGENTS.md` **Inference routing**. This deployment targets ChatGPT/Codex and Claude Code.
+through `AGENTS.md` **Inference routing**. Shared behavior is provider agnostic; the
+[instance registry](agent-instances.json) and routing policy contain the current deployment bindings.
+Adding a compatible native adapter does not require another role definition or infer authority.
 Its opt-in controls the new automatic routing and
 delegation mechanism; it does not stop or reconfigure existing native parent schedules. Existing
 parent execution also requires an independently confirmed permitted model and included billing
@@ -93,9 +95,9 @@ failed attempts and model evidence travel with it. Never bounce work between mod
 
 ## Governance and cadence
 
-The Codex Agent Improver is the single routing-policy publisher. It uses the existing issue claim,
-owned worktree and current-head PR review protocol, including collisions with other runs of itself.
-Claude contributes independent evidence/review; neither changes this policy concurrently. Model
+The registry's `policyPublisher` is the single routing-policy publisher. It uses the existing issue
+claim, owned worktree and current-head PR review protocol, including collisions with its own runs.
+Other registered instances contribute evidence/review and do not mutate this policy concurrently. Model
 evidence is reviewed weekly during an existing improvement run; no additional recurring model
 session is needed. Candidate discovery also runs after a documented model release or regression.
 

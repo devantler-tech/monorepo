@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Per-tick branch hygiene: delete spent agent-lane branches locally and/or on the remote.
+# Native Claude-host adapter: delete spent claude/* branches locally and on the remote.
 #
 # Usage: branch-cleanup.sh <repo_path> <slug> <manifest> [apply|dry-run] [namespace]
 #   apply   (default) — record each deletion to the manifest, then delete
 #   dry-run — report what would be deleted; write NOTHING to the manifest
 #   Any other MODE value exits non-zero (typos must not silently mean "don't delete"
 #   and must not pollute the restore ledger — monorepo#2252 / #2255).
-#   namespace = claude (default) | cursor
-#     claude — local + remote sweep of claude/* (this host's local lane)
-#     cursor — REMOTE-ONLY sweep of cursor/* (cloud lane has no local checkout here;
-#              local Claude runs this so spent cursor/* remotes do not accumulate forever)
+#   namespace = claude (default and only supported value)
+#     claude — local + remote sweep of claude/* (this host's native lane)
+#   Omitting namespace selects claude; an explicit empty or other value is refused.
 #   codex is intentionally unsupported — the Codex sibling owns its own local lane.
 #
 # SAFETY CONTRACT (fail-closed — every ambiguity resolves to KEEP, every
@@ -17,16 +16,14 @@
 #   KEEP  - any branch that is the head of an OPEN PR       (deleting it would CLOSE the PR)
 #   KEEP  - any branch checked out by a worktree            (git refuses anyway; we skip explicitly)
 #   KEEP  - the default branch
-#   KEEP  - anything outside the selected namespace's prefix (never touch the other lanes'
-#           namespaces from this invocation — run once per namespace)
+#   KEEP  - anything outside claude/* (a namespace argument does not grant authority
+#           to delete another runtime's branches)
 #   LOCAL - delete when not in KEEP (squash-merge means `-d` can't see merges, so `-D` + manifest).
-#           Local deletion runs ONLY for namespace=claude — no other lane has a local checkout on
-#           this host (monorepo#2298).
+#           Local deletion is restricted to this adapter's native claude/* namespace.
 #   REMOTE- delete ONLY with positive evidence: an associated MERGED/CLOSED PR whose recorded head
 #           SHA equals the branch's CURRENT SHA (same incarnation — a re-pushed branch invalidates
 #           old PR evidence). Commit age is NOT evidence (commit time != push time), so no-PR
-#           branches are REPORTED as candidates, never deleted. Same evidence gate for every
-#           namespace (claude and cursor alike).
+#           branches are REPORTED as candidates, never deleted.
 #   CAS   - every remote delete uses --force-with-lease pinned to the evidence SHA, so a branch a
 #           concurrent session moves between evidence-gathering and deletion is rejected, and the
 #           open-PR keep-set is re-fetched immediately before the delete loop.
@@ -39,7 +36,7 @@
 # the write is verified — no restore record, no deletion. dry-run never touches the manifest.
 set -uo pipefail
 
-REPO_PATH="$1"; SLUG="$2"; MANIFEST="$3"; MODE="${4-apply}"; NAMESPACE="${5:-claude}"
+REPO_PATH="$1"; SLUG="$2"; MANIFEST="$3"; MODE="${4-apply}"; NAMESPACE="${5-claude}"
 errors=0
 
 case "$MODE" in
@@ -51,21 +48,18 @@ case "$MODE" in
 esac
 
 case "$NAMESPACE" in
-  claude|cursor) ;;
+  claude) ;;
   codex)
     echo "$SLUG: ABORT — namespace 'codex' is owned by the Codex sibling; refusing to sweep it" >&2
     exit 2
     ;;
   *)
-    echo "$SLUG: ABORT — unknown namespace '$NAMESPACE' (expected claude|cursor)" >&2
+    echo "$SLUG: ABORT — unsupported namespace '$NAMESPACE' (this native adapter supports only claude)" >&2
     exit 2
     ;;
 esac
 
-PREFIX="$NAMESPACE"
-# Local sweep only for the lane that actually has local checkouts on this host.
-DO_LOCAL=0
-[ "$NAMESPACE" = "claude" ] && DO_LOCAL=1
+PREFIX="claude"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=branch-op-lock.sh
@@ -407,7 +401,7 @@ is_kept() { grep -Fxq "$1" "$keep"; }
 # and never carry a trailing 6-hex slug, so skip anything that does — fail-closed (an
 # ambiguous match is KEPT, never reaped), so a merged/closed interactive PR's branch is
 # never mistaken for one of this routine's spent per-run worktrees.
-# Cursor/Codex lanes do not use that harness pattern — only apply under namespace=claude.
+# This exemption belongs to the native Claude harness used by this adapter.
 is_interactive_slug() {
   [ "$NAMESPACE" = "claude" ] || return 1
   # The harness names every per-session worktree branch `claude/<word>-<word>-<6hex>`
@@ -426,7 +420,7 @@ pr_evidence() { awk -F'\t' -v b="$1" '$1==b{print $2 "\t" $3; exit}' "$prs"; }
 l_del=0; r_del=0; l_keep=0; r_keep=0; candidates=0; r_rej=0
 
 # --- LOCAL (claude only) --------------------------------------------------
-if [ "$DO_LOCAL" -eq 1 ]; then
+if [ "$NAMESPACE" = "claude" ]; then
   while IFS= read -r b; do
     [ -z "$b" ] && continue
     if is_kept "$b"; then l_keep=$((l_keep+1)); continue; fi

@@ -39,9 +39,11 @@ check no-missing-window '.policy.enabled=true | .policy.runtimes["codex-local"].
 check unverified-controls '.snapshot.billing="included"' 1 '.reasons | index("CONTROLS_UNVERIFIED") != null'
 check deep-reasoning '.task.distinctFailedHypotheses=2' 1 '.taskClass == "diagnosis" and .route.model == "gpt-6-astra" and .executionAdmitted == false'
 check environment-hold '.task.failureKind="environment"' 1 '.reasons | index("NON_REASONING_FAILURE") != null'
-# This rollout targets the two primary subscription providers and is intentionally inert.
+check provider-neutral-binding '.policy.runtimes["test-instance"]={enabled:false,role:"owner",expiresAt:1790380800} | .policy.routes.workhorse={model:"test-workhorse-v1",runtime:"test-instance",effort:"medium"} | .snapshot.runtime="test-instance" | .snapshot.model="test-workhorse-v1"' 1 '.route.runtime == "test-instance" and .route.model == "test-workhorse-v1" and .executionAdmitted == false'
+# Current deployment bindings are intentionally inert; provider names are not a schema constraint.
 # Activation is a later reviewed change with native evidence and its own positive/negative probes.
-jq -e '.enabled == false and all(.runtimes[]; .enabled == false)
-  and (.runtimes | keys) == ["claude-local", "codex-local"]
+jq -e --slurpfile registry "$ROOT/.claude/plugin-consumption/agent-instances.json" '
+  .enabled == false and all(.runtimes[]; .enabled == false)
+  and all(.runtimes | keys[]; . as $id | $registry[0].instances | has($id))
   and .limits.maxDepth == 1 and .limits.maxChildren == 1' "$POLICY" > /dev/null
 printf 'PASS inert runtime registrations\n'

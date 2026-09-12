@@ -22,7 +22,7 @@
 #     over-limit flags. Unconfigured columns print "limit ?" — unmeasured, not OK.
 #   - GitHub search caps at 1000 results per query; counts near that are floors.
 #
-# Usage: flow-scorecard.sh [--window-days N] [--section wip|throughput|age|mix|all]
+# Usage: flow-scorecard.sh [--window-days N] [--section wip|throughput|age|mix|all] [--instances FILE]
 #
 # Test seams (all optional; when set, gh is never invoked for that surface):
 #   FLOW_ITEMS_JSON        file: JSON array shaped like the REST
@@ -30,12 +30,13 @@
 #                          content.state, fields[] with the Status single-select)
 #   FLOW_CLOSED_JSON       file: JSON array of {number, created_at, closed_at, repository_url}
 #   FLOW_SUBSTANTIVE_JSON  file: JSON array of {number, created_at, repository_url, type}
-#   FLOW_PRS_JSON          file: JSON array of {title, headRefName, mergedAt, repo}
+#   FLOW_PRS_JSON          file: array of {title, headRefName, mergedAt, author:{login}, isCrossRepository, repo}
 #   FLOW_NOW_UTC           fixed ISO-8601 clock for deterministic date math
 set -uo pipefail
 
 WINDOW_DAYS=7
 SECTION=all
+INSTANCES="${AGENT_INSTANCES_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../plugin-consumption/agent-instances.json}"
 
 # Require a value before shifting past it (a lone flag would otherwise spin the
 # loop forever under `set +e`). Error messages name the OPTION only — a malformed
@@ -48,6 +49,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --window-days) need_val "$@"; WINDOW_DAYS="$2"; shift 2 ;;
     --section)     need_val "$@"; SECTION="$2";     shift 2 ;;
+    --instances)   need_val "$@"; INSTANCES="$2";   shift 2 ;;
     -h|--help)     sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
@@ -279,48 +281,73 @@ fi
 # ── Merged agent-PR mix (substantive vs supporting) ──────────────
 if want mix; then
   echo ""
-  echo "── Merged agent-PR mix, window ${WINDOW_DAYS}d (claude/* + codex/* + cursor/* head branches) ──"
-  prs=$(load_array FLOW_PRS_JSON bash -c '
-    set -o pipefail
-    q="org:devantler-tech is:pr is:merged merged:>='"$CUTOFF_DATE"'"
-    cursor=""; out="[]"
-    for _page in 1 2 3 4 5 6 7 8 9 10; do
-      args=(-f q="$q"); [ -n "$cursor" ] && args+=(-f after="$cursor")
-      resp=$(gh api graphql -f query="query(\$q:String!,\$after:String){search(query:\$q,type:ISSUE,first:100,after:\$after){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{title headRefName mergedAt isCrossRepository repository{name}}}}}" "${args[@]}") || exit 1
-      out=$(jq -n --argjson a "$out" --argjson r "$resp" \
-        "\$a + [\$r.data.search.nodes[] | {title, headRefName, mergedAt, isCrossRepository, repo: .repository.name}]")
-      [ "$(printf "%s" "$resp" | jq -r .data.search.pageInfo.hasNextPage)" = "true" ] || break
-      cursor=$(printf "%s" "$resp" | jq -r .data.search.pageInfo.endCursor)
-    done
-    printf "%s" "$out"') || prs=""
-  if ! printf '%s' "$prs" | is_array; then
-    section_failed mix "merged-PR query returned no JSON array"
+  echo "── Merged agent-PR mix, window ${WINDOW_DAYS}d (registered instance identities) ──"
+  registry=$(jq -ces '
+    def nonempty: type == "string" and length > 0;
+    if length == 1 then .[0] else error("one registry required") end
+    | select(type == "object" and .version == 1 and (.instances | type == "object" and length > 0))
+    | select(.policyPublisher as $p | ($p | nonempty) and (.instances | has($p)))
+    | select(all(.instances[];
+        (.namespace | type == "string" and test("^[a-z][a-z0-9-]*$")) and
+        (.authors | type == "object") and
+        ([.authors.cli, .authors.rest, .authors.graphql, .authors.search] | all(nonempty)) and
+        (.definitionAdapter | nonempty) and
+        (.roles | type == "array" and length > 0 and all(nonempty))))
+    | select([.instances[].namespace] | length == (unique | length))
+  ' "$INSTANCES" 2>/dev/null) || registry=""
+  if [ -z "$registry" ]; then
+    section_failed mix "instance registry is unreadable or malformed -- UNKNOWN"
   else
-    printf '%s' "$prs" | jq -r --arg now "$NOW_UTC" --argjson d "$WINDOW_DAYS" '
-      (($now|fromdateiso8601) - ($d*86400)) as $cut
-      | map(select((.headRefName // "") | test("^(claude|codex|cursor)/"))
-            # Branch names are contributor-controlled, so a fork PR can name
-            # itself claude/* — a cross-repository head is never agent work.
-            | select(.isCrossRepository != true)
-            | select(.mergedAt != null and (.mergedAt|fromdateiso8601) >= $cut))
-      | map((.title | capture("^(?<t>[A-Za-z]+)") | .t | ascii_downcase) // "unparsed") as $types
-      | ($types | map(select(. == "feat" or . == "fix" or . == "perf")) | length) as $sub
-      | ($types | map(select(. == "docs" or . == "chore" or . == "ci" or . == "test"
-                             or . == "build" or . == "style" or . == "refactor")) | length) as $sup
-      | ($types | length) as $n
-      | "  merged agent PRs: \($n)\n"
-        + "  substantive (feat|fix|perf): \($sub)\n"
-        + "  supporting  (docs|chore|ci|test|build|style|refactor): \($sup)\n"
-        + "  other/unparsed titles: \($n - $sub - $sup)"
-        # Denominator is ALL merged agent PRs, not just the classified ones —
-        # otherwise one feat PR plus any number of unparsed titles reports 100%
-        # and the trend moves on title formatting rather than work mix.
-        + (if $n > 0
-           then "\n  substantive share: \(($sub * 100 / $n) | round)%  (of all \($n); classification coverage \((($sub + $sup) * 100 / $n) | round)%)"
-           else "" end)' || section_failed mix "metric rendering failed (malformed or drifted PR payload)"
-    echo "  NOTE: classified by Conventional-Commit title type — a heuristic for the"
-    echo "        easy-vs-substantive gate, not a quality judgement (a docs PR can be"
-    echo "        real advance work). Codex-side races/branches are included via codex/*."
+    prs=$(load_array FLOW_PRS_JSON bash -c '
+      set -o pipefail
+      q="org:devantler-tech is:pr is:merged merged:>='"$CUTOFF_DATE"'"
+      cursor=""; out="[]"
+      for _page in 1 2 3 4 5 6 7 8 9 10; do
+        args=(-f q="$q"); [ -n "$cursor" ] && args+=(-f after="$cursor")
+        resp=$(gh api graphql -f query="query(\$q:String!,\$after:String){search(query:\$q,type:ISSUE,first:100,after:\$after){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{title headRefName mergedAt author{login} isCrossRepository repository{name}}}}}" "${args[@]}") || exit 1
+        out=$(jq -n --argjson a "$out" --argjson r "$resp" \
+          "\$a + [\$r.data.search.nodes[] | {title, headRefName, mergedAt, author, isCrossRepository, repo: .repository.name}]")
+        [ "$(printf "%s" "$resp" | jq -r .data.search.pageInfo.hasNextPage)" = "true" ] || break
+        cursor=$(printf "%s" "$resp" | jq -r .data.search.pageInfo.endCursor)
+      done
+      printf "%s" "$out"') || prs=""
+    if ! printf '%s' "$prs" | is_array; then
+      section_failed mix "merged-PR query returned no JSON array"
+    else
+      printf '%s' "$prs" | jq -r --arg now "$NOW_UTC" --argjson d "$WINDOW_DAYS" --argjson registry "$registry" '
+        (($now|fromdateiso8601) - ($d*86400)) as $cut
+        | map(if (.headRefName | if type == "string"
+                   then length > 0 and (test("[[:space:][:cntrl:]]") | not) else false end)
+                then . else error("missing or malformed PR branch -- UNKNOWN") end
+              | . as $pr
+              | select(any($registry.instances[]; . as $instance | $pr.headRefName | startswith($instance.namespace + "/")))
+              | if (.author.login | type != "string") or (.author.login | length == 0)
+                   or (.isCrossRepository | type != "boolean")
+                then error("missing PR provenance -- UNKNOWN") else . end
+              | select(.isCrossRepository == false)
+              | select(any($registry.instances[];
+                  . as $instance | ($pr.headRefName | startswith($instance.namespace + "/"))
+                  and $pr.author.login == $instance.authors.graphql))
+              | select(.mergedAt != null and (.mergedAt|fromdateiso8601) >= $cut))
+        | map((.title | capture("^(?<t>[A-Za-z]+)") | .t | ascii_downcase) // "unparsed") as $types
+        | ($types | map(select(. == "feat" or . == "fix" or . == "perf")) | length) as $sub
+        | ($types | map(select(. == "docs" or . == "chore" or . == "ci" or . == "test"
+                               or . == "build" or . == "style" or . == "refactor")) | length) as $sup
+        | ($types | length) as $n
+        | "  merged agent PRs: \($n)\n"
+          + "  substantive (feat|fix|perf): \($sub)\n"
+          + "  supporting  (docs|chore|ci|test|build|style|refactor): \($sup)\n"
+          + "  other/unparsed titles: \($n - $sub - $sup)"
+          # Denominator is ALL merged agent PRs, not just the classified ones —
+          # otherwise one feat PR plus any number of unparsed titles reports 100%
+          # and the trend moves on title formatting rather than work mix.
+          + (if $n > 0
+             then "\n  substantive share: \(($sub * 100 / $n) | round)%  (of all \($n); classification coverage \((($sub + $sup) * 100 / $n) | round)%)"
+             else "" end)' || section_failed mix "metric rendering failed (malformed or drifted PR payload) -- UNKNOWN"
+      echo "  NOTE: classified by Conventional-Commit title type — a heuristic for the"
+      echo "        easy-vs-substantive gate, not a quality judgement (a docs PR can be"
+      echo "        real advance work). Membership requires a registered writer and head."
+    fi
   fi
 fi
 

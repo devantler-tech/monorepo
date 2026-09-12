@@ -92,14 +92,76 @@ cat > "$tmp/prs.json" <<'EOF'
   {"title":"feat: fork impersonating an agent branch","headRefName":"claude/evil-4","mergedAt":"2026-07-15T00:00:00Z","isCrossRepository":true,"repo":"beta"}
 ]
 EOF
+jq 'map(. + {author:{login:"devantler"}, isCrossRepository:(.isCrossRepository // false)})' "$tmp/prs.json" > "$tmp/prs-provenance.json"
+mv "$tmp/prs-provenance.json" "$tmp/prs.json"
+cat > "$tmp/instances.json" <<'JSON'
+{"version":1,"policyPublisher":"codex-local","instances":{
+  "claude-local":{"namespace":"claude","authors":{"cli":"devantler","rest":"devantler","graphql":"devantler","search":"devantler"},"definitionAdapter":"claude","roles":["agentic-engineer"]},
+  "codex-local":{"namespace":"codex","authors":{"cli":"devantler","rest":"devantler","graphql":"devantler","search":"devantler"},"definitionAdapter":"codex","roles":["agentic-engineer"]},
+  "build-worker":{"namespace":"worker","authors":{"cli":"app/build-worker","rest":"build-worker[bot]","graphql":"build-worker","search":"app/build-worker"},"definitionAdapter":"local-runtime","roles":["agentic-engineer"]}
+}}
+JSON
 
 fixture_env=(
+  AGENT_INSTANCES_FILE="$tmp/instances.json"
   FLOW_NOW_UTC="2026-07-19T00:00:00Z"
   FLOW_ITEMS_JSON="$tmp/items.json"
   FLOW_CLOSED_JSON="$tmp/closed.json"
   FLOW_SUBSTANTIVE_JSON="$tmp/substantive.json"
   FLOW_PRS_JSON="$tmp/prs.json"
 )
+
+# Registered identity joins, including non-provider namespaces. One genuine
+# worker PR survives; wrong authors, API spellings, forks and unknown lanes do not.
+cat > "$tmp/prs-registered.json" <<'JSON'
+[
+  {"title":"feat: worker change","headRefName":"worker/change","author":{"login":"build-worker"},"isCrossRepository":false,"mergedAt":"2026-07-15T00:00:00Z"},
+  {"title":"feat: forged author","headRefName":"worker/forged","author":{"login":"stranger"},"isCrossRepository":false,"mergedAt":"2026-07-15T00:00:00Z"},
+  {"title":"feat: wrong API spelling","headRefName":"worker/spelling","author":{"login":"app/build-worker"},"isCrossRepository":false,"mergedAt":"2026-07-15T00:00:00Z"},
+  {"title":"feat: fork","headRefName":"worker/fork","author":{"login":"build-worker"},"isCrossRepository":true,"mergedAt":"2026-07-15T00:00:00Z"},
+  {"title":"feat: unknown lane","headRefName":"unknown/change","author":{"login":"build-worker"},"isCrossRepository":false,"mergedAt":"2026-07-15T00:00:00Z"},
+  {"title":"docs: forged local writer","headRefName":"codex/forged","author":{"login":"stranger"},"isCrossRepository":false,"mergedAt":"2026-07-15T00:00:00Z"}
+]
+JSON
+out="$tmp/out-registered.txt"
+if env "${fixture_env[@]}" FLOW_PRS_JSON="$tmp/prs-registered.json" bash "$tool" --section mix > "$out" 2>&1; then
+  contains "mix joins exact registered GraphQL authors and same-repository heads" "$out" 'merged agent PRs: 1'
+  contains "the included PR is the registered worker change" "$out" 'substantive (feat|fix|perf): 1'
+else
+  fail "registered-instance fixture succeeds"
+fi
+for field in author isCrossRepository headRefName; do
+  jq "[.[0] | del(.$field)]" "$tmp/prs-registered.json" > "$tmp/prs-missing.json"
+  if env "${fixture_env[@]}" FLOW_PRS_JSON="$tmp/prs-missing.json" bash "$tool" --section mix > "$out" 2>&1; then
+    fail "missing $field provenance is UNKNOWN"
+  else
+    contains "missing $field provenance is UNKNOWN" "$out" 'UNKNOWN'
+  fi
+done
+for branch in null '""' '" "' '"worker/space name"' 7 false '[]' '{}'; do
+  jq --argjson branch "$branch" '[.[0] | .headRefName = $branch]' "$tmp/prs-registered.json" > "$tmp/prs-missing.json"
+  if env "${fixture_env[@]}" FLOW_PRS_JSON="$tmp/prs-missing.json" bash "$tool" --section mix > "$out" 2>&1; then
+    fail "malformed branch evidence $branch is UNKNOWN before lane filtering"
+  else
+    contains "malformed branch evidence $branch is UNKNOWN before lane filtering" "$out" 'UNKNOWN'
+  fi
+done
+jq '[.[0], (.[0] | del(.headRefName))]' "$tmp/prs-registered.json" > "$tmp/prs-missing.json"
+if env "${fixture_env[@]}" FLOW_PRS_JSON="$tmp/prs-missing.json" bash "$tool" --section mix > "$out" 2>&1; then
+  fail "mixed known and missing branch evidence never reports a partial count"
+else
+  contains "mixed known and missing branch evidence is UNKNOWN" "$out" 'UNKNOWN'
+  not_contains "mixed branch evidence never reports the known row as a complete total" "$out" 'merged agent PRs: 1'
+fi
+for registry in missing malformed; do
+  printf '{}\n' > "$tmp/malformed-instances.json"
+  if env "${fixture_env[@]}" bash "$tool" --section mix --instances "$tmp/$registry-instances.json" > "$out" 2>&1; then
+    fail "$registry registry fails closed"
+  else
+    contains "$registry registry is explicitly UNKNOWN" "$out" 'UNKNOWN'
+    not_contains "$registry registry never reports zero merged PRs" "$out" 'merged agent PRs: 0'
+  fi
+done
 
 # ── Full run over fixtures ───────────────────────────────────────
 out="$tmp/out-all.txt"

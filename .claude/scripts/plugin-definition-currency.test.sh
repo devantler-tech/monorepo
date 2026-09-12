@@ -22,7 +22,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="${repo_root}/.claude/scripts/plugin-definition-currency.sh"
 constitution="${repo_root}/AGENTS.md"
-cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
+portable_loader="${repo_root}/.claude/loaders/portable-agentic-engineer.md"
 
 pass_count=0
 fail() {
@@ -36,7 +36,7 @@ ok() {
 
 [ -x "${script}" ] || fail "${script} is missing or not executable"
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
-[ -r "${cursor_loader}" ] || fail "cannot read ${cursor_loader}"
+[ -r "${portable_loader}" ] || fail "cannot read ${portable_loader}"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
@@ -98,6 +98,70 @@ git -C "${pin_repo}" config user.name t
 git -C "${pin_repo}" add -A
 git -C "${pin_repo}" -c commit.gpgsign=false commit -qm pin
 gitlink="$(git -C "${pin_repo}" rev-parse HEAD)"
+
+# The source backend is selected explicitly and must not imply a runtime-loaded attestation.
+if out="$("${script}" --runtime git-ref --loaded-ref "${gitlink}" \
+                      --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; then
+  case "${out}" in
+    *"CURRENT"*"source parity only"*"does not attest the loaded session"*)
+      ok "the generic selector checks an explicit commit and labels its limited evidence" ;;
+    *) fail "matching source check overstated or omitted its evidence boundary: ${out}" ;;
+  esac
+else
+  fail "generic git-ref selector must accept a pinned commit, got $? — ${out}"
+fi
+
+for invalid_ref in '' origin/main --help; do
+  set +e
+  out="$("${script}" --runtime git-ref --loaded-ref "${invalid_ref}" \
+                     --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+  set -e
+  [ "${rc}" -eq 2 ] || fail "missing or ambiguous source ref must be UNKNOWN, got ${rc}: ${out}"
+  case "${out}" in
+    *"requires --loaded-ref"*|*"fully qualified ref or full commit ID"*)
+      ok "missing, ambiguous, or option-shaped source ref is rejected" ;;
+    *) fail "invalid source ref was rejected for an unrelated reason: ${out}" ;;
+  esac
+done
+set +e
+out="$("${script}" --runtime git-ref --repo-root "${tmp}/consumer" \
+                   --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "omitted source ref must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"requires --loaded-ref"*) ok "the source backend never assumes a default ref" ;;
+  *) fail "omitted source ref was not diagnosed: ${out}" ;;
+esac
+set +e
+out="$("${script}" --runtime claude --loaded-ref "${gitlink}" \
+                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "installed backend must reject source-ref evidence, got ${rc}: ${out}"
+case "${out}" in
+  *"only valid with --runtime git-ref"*) ok "a source ref cannot substitute for installed-state evidence" ;;
+  *) fail "source ref on installed backend was rejected for an unrelated reason: ${out}" ;;
+esac
+
+for obsolete_runtime in cursor antigravity; do
+  set +e
+  out="$("${script}" --runtime "${obsolete_runtime}" --repo-root "${tmp}/consumer" \
+                     --gitlink "${gitlink}" 2>&1)"; rc=$?
+  set -e
+  [ "${rc}" -eq 2 ] || fail "obsolete runtime selector must be UNKNOWN, got ${rc}: ${out}"
+  case "${out}" in
+    *"unsupported runtime"*) ok "obsolete runtime selector is rejected" ;;
+    *) fail "obsolete runtime selector did not name the unsupported selector: ${out}" ;;
+  esac
+done
+set +e
+out="$("${script}" --cursor-ref "${gitlink}" --repo-root "${tmp}/consumer" \
+                   --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "obsolete ref option must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"unknown argument"*) ok "obsolete ref option is rejected" ;;
+  *) fail "obsolete ref option was not rejected as an unknown argument: ${out}" ;;
+esac
 
 run() { "${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --installed "$1" 2>&1; }
 
@@ -342,7 +406,7 @@ esac
 # `shift 2` on a lone trailing flag returns 1, and under `set -e` that exited the script with 1 — the
 # code that tells a caller the definition is stale. A typo would have produced a silent, output-free
 # drift verdict, which is the most misleading failure this script can have.
-for flag in --runtime --repo-root --gitlink --installed --plugins-root --codex-home --cursor-ref; do
+for flag in --runtime --repo-root --gitlink --installed --plugins-root --codex-home --loaded-ref; do
   set +e; out="$("${script}" "${flag}" 2>&1)"; rc=$?; set -e
   [ "${rc}" -eq 2 ] || fail "a missing value for ${flag} must exit 2, got ${rc}: ${out}"
 done
@@ -352,7 +416,7 @@ ok "a missing option value exits 2, never 1 (DRIFT)"
 # runtime selector expanded Usage, dropping part of the exit-code contract from operator output.
 out="$("${script}" --help)" || fail "--help must exit 0"
 case "${out}" in
-  *"--runtime claude|codex|cursor"*"collapsing them is how a currency check becomes decoration"*)
+  *"--runtime claude|codex|git-ref"*"collapsing them is how a currency check becomes decoration"*)
     ok "--help prints the complete runtime-aware header and exit contract" ;;
   *) fail "--help truncated the runtime-aware header: ${out}" ;;
 esac
@@ -754,74 +818,74 @@ case "${out}" in
   *) fail "Codex install override was rejected without naming the reason: ${out}" ;;
 esac
 
-# ── 7n. CURSOR compares the exact submodule ref its loader reads ──────────────
-# The Cursor loader fetches and reads origin/main directly from the submodule object database. It
-# has no installed plugin copy, so this lane compares that resolved commit with the consumer pin.
+# ── 7n. GIT_REF compares an explicitly declared source revision ───────────────
+# A caller may name a fully qualified ref or a full commit ID. This checks source parity only,
+# without assuming how any harness loads its definitions or querying another instance's install.
 git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
-if out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" \
+if out="$("${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main --repo-root "${tmp}/consumer" \
                       --gitlink "${gitlink}" 2>&1)"; then
   case "${out}" in
     *CURRENT*) ;;
-    *) fail "Cursor matching ref exited 0 without reporting CURRENT: ${out}" ;;
+    *) fail "Git-ref matching ref exited 0 without reporting CURRENT: ${out}" ;;
   esac
   case "${out}" in
-    *"refs/remotes/origin/main"*) ok "Cursor matching loaded revision reports CURRENT" ;;
-    *) fail "Cursor matching ref did not name its source ref: ${out}" ;;
+    *"refs/remotes/origin/main"*) ok "A matching source revision reports CURRENT" ;;
+    *) fail "Git-ref matching ref did not name its source ref: ${out}" ;;
   esac
 else
-  fail "Cursor matching loaded revision must exit 0, got $? — ${out}"
+  fail "A matching source revision must exit 0, got $? — ${out}"
 fi
 
 printf 'newer upstream prose\n' > "${p}/README.md"
 git -C "${pin_repo}" add plugins/agentic-engineering/README.md
-git -C "${pin_repo}" -c commit.gpgsign=false commit -qm cursor-drift
-cursor_drift="$(git -C "${pin_repo}" rev-parse HEAD)"
-git -C "${pin_repo}" update-ref refs/remotes/origin/main "${cursor_drift}"
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm ref-drift
+ref_drift="$(git -C "${pin_repo}" rev-parse HEAD)"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${ref_drift}"
 set +e
-out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" \
+out="$("${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main --repo-root "${tmp}/consumer" \
                   --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
-[ "${rc}" -eq 1 ] || fail "a drifted Cursor loaded revision must exit 1, got ${rc}: ${out}"
+[ "${rc}" -eq 1 ] || fail "a drifted source revision must exit 1, got ${rc}: ${out}"
 case "${out}" in
-  *DRIFT*"${cursor_drift}"*"${gitlink}"*) ok "a drifted Cursor loaded revision fires and names both commits" ;;
-  *) fail "Cursor revision drift did not name loaded and pinned commits: ${out}" ;;
+  *DRIFT*"${ref_drift}"*"${gitlink}"*) ok "a drifted source revision fires and names both commits" ;;
+  *) fail "Source revision drift did not name source and pinned commits: ${out}" ;;
 esac
 
 git -C "${pin_repo}" update-ref -d refs/remotes/origin/main
 set +e
-out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" \
+out="$("${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main --repo-root "${tmp}/consumer" \
                   --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
-[ "${rc}" -eq 2 ] || fail "an unresolved Cursor loaded revision must exit 2, got ${rc}: ${out}"
+[ "${rc}" -eq 2 ] || fail "an unresolved source revision must exit 2, got ${rc}: ${out}"
 case "${out}" in
-  *"cannot resolve Cursor loaded revision"*) ok "an unresolved Cursor ref is UNKNOWN and names the reason" ;;
-  *) fail "missing Cursor ref did not name the reason: ${out}" ;;
+  *"cannot resolve source revision"*) ok "an unresolved source ref is UNKNOWN and names the reason" ;;
+  *) fail "missing Git-ref ref did not name the reason: ${out}" ;;
 esac
 
 set +e
-out="$("${script}" --runtime cursor --installed "${cur}" \
+out="$("${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main --installed "${cur}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
-[ "${rc}" -eq 2 ] || fail "Cursor with an install override must exit 2, got ${rc}: ${out}"
+[ "${rc}" -eq 2 ] || fail "Git-ref with an install override must exit 2, got ${rc}: ${out}"
 case "${out}" in
-  *"does not accept --installed"*) ok "Cursor cannot be pointed at another lane's installed copy" ;;
-  *) fail "Cursor install override was rejected without naming the reason: ${out}" ;;
+  *"does not accept --installed"*) ok "Git-ref cannot be pointed at another lane's installed copy" ;;
+  *) fail "Git-ref install override was rejected without naming the reason: ${out}" ;;
 esac
 
 # These cases share the pinned repository with later checks. They must leave both the checkout and
-# the loader ref exactly as they found them, or a later assertion can inherit Cursor-case state and
+# the source ref exactly as they found them, or a later assertion can inherit Git-ref-case state and
 # pass or fail for the wrong reason.
 git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
 git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
 [ "$(git -C "${pin_repo}" rev-parse HEAD)" = "${gitlink}" ] \
-  || fail "Cursor cases did not restore the shared pin fixture HEAD"
+  || fail "Git-ref cases did not restore the shared pin fixture HEAD"
 [ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
-  || fail "Cursor cases left the shared pin fixture dirty"
+  || fail "Git-ref cases left the shared pin fixture dirty"
 [ "$(git -C "${pin_repo}" rev-parse refs/remotes/origin/main)" = "${gitlink}" ] \
-  || fail "Cursor cases did not restore the shared loader ref"
-ok "Cursor cases restore the shared pin fixture before later checks"
+  || fail "Git-ref cases did not restore the shared source ref"
+ok "Git-ref cases restore the shared pin fixture before later checks"
 
-# The loader must resolve the same unambiguous remote-tracking ref the currency check verifies.
+# The source check must resolve an unambiguous ref.
 # A tag can legally contain a slash, so a tag named `origin/main` makes the shorthand ambiguous:
 # plain `git show origin/main:<path>` then follows the tag while the check follows
 # `refs/remotes/origin/main` and can report CURRENT over different bytes.
@@ -831,23 +895,31 @@ git -C "${pin_repo}" -c commit.gpgsign=false commit -qm ambiguous-loader-ref
 ambiguous_loader_commit="$(git -C "${pin_repo}" rev-parse HEAD)"
 git -C "${pin_repo}" tag origin/main "${ambiguous_loader_commit}"
 git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
-loader_ref="$(sed -n \
-  's/.*git -C libraries\/agent-plugins show \([^:][^:]*\):plugins\/agentic-engineering\/agents\/agentic-engineer\.agent\.md.*/\1/p' \
-  "${cursor_loader}" | tail -n 1)"
-[ -n "${loader_ref}" ] || fail "could not extract the Cursor loader definition ref"
-loaded_agent="$(git -C "${pin_repo}" show \
-  "${loader_ref}:plugins/agentic-engineering/agents/agentic-engineer.agent.md" 2>/dev/null)"
-pinned_agent="$(git -C "${pin_repo}" show \
-  "${gitlink}:plugins/agentic-engineering/agents/agentic-engineer.agent.md")"
-[ "${loaded_agent}" = "${pinned_agent}" ] \
-  || fail "Cursor loader ref '${loader_ref}' resolved ambiguous content instead of the verified remote-tracking ref"
+if out="$("${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main \
+                      --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; then
+  case "${out}" in
+    *CURRENT*"source parity only"*) ok "a shadowing tag cannot change the fully qualified source ref" ;;
+    *) fail "qualified source check did not report source parity: ${out}" ;;
+  esac
+else
+  fail "qualified source check followed the shadowing tag, got $? — ${out}"
+fi
+set +e
+out="$("${script}" --runtime git-ref --loaded-ref origin/main \
+                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "an ambiguous source shorthand must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"fully qualified ref or full commit ID"*) ok "an ambiguous source shorthand cannot produce a verdict" ;;
+  *) fail "ambiguous source shorthand was rejected for an unrelated reason: ${out}" ;;
+esac
 git -C "${pin_repo}" tag -d origin/main >/dev/null
 git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
 [ "$(git -C "${pin_repo}" rev-parse HEAD)" = "${gitlink}" ] \
-  || fail "the ambiguous Cursor loader case did not restore the shared pin fixture HEAD"
+  || fail "the ambiguous source-ref case did not restore the shared pin fixture HEAD"
 [ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
-  || fail "ambiguous Cursor loader case left the shared pin fixture dirty"
-ok "Cursor loader reads the unambiguous remote-tracking ref the currency check verifies"
+  || fail "ambiguous source-ref case left the shared pin fixture dirty"
+ok "the ambiguous source-ref cases restore the shared pin fixture"
 
 # ── 8. The remediation is NAMED in the failure output ─────────────────────────
 # The deployment's own "fail with the fix" rule: a guard that blocks without naming the resolving
@@ -919,8 +991,8 @@ case "${section}" in
   *) fail "the plugin contract section does not require comparison by blob identity" ;;
 esac
 # The command is lane-scoped: a bare invocation still defaults to Claude for compatibility, so each
-# deployed adapter must name itself or Codex/Cursor can silently inspect the wrong lane.
-for runtime in claude codex cursor; do
+# deployed adapter must name itself or another instance can silently inspect the wrong copy.
+for runtime in claude codex git-ref; do
   case "${section}" in
     *"--runtime ${runtime}"*) ok "the contract names the ${runtime} runtime selector" ;;
     *) fail "the plugin contract section does not name --runtime ${runtime}" ;;
@@ -932,9 +1004,9 @@ case "${section}" in
   *) fail "the plugin contract section does not fail closed on ambiguous Codex caches" ;;
 esac
 case "${section}" in
-  *"refs/remotes/origin/main"*)
-    ok "the contract binds Cursor verification to the ref its loader reads" ;;
-  *) fail "the plugin contract section does not name Cursor's loaded submodule ref" ;;
+  *"--loaded-ref"*"source parity"*)
+    ok "the contract requires an explicit ref and limits the verdict to source parity" ;;
+  *) fail "the plugin contract section does not bound the declared source-ref check" ;;
 esac
 
 # ── 10. The fallback must be EXECUTABLE, not just named ───────────────────────
@@ -1151,15 +1223,15 @@ git -C "${rc_root}" -c commit.gpgsign=false commit -qm true-pin
 rc_true="$(git -C "${rc_root}" rev-parse HEAD)"
 # A decoy commit carrying a DIFFERENT gitlink, built on a side branch so HEAD never moves by reset.
 git -C "${rc_root}" checkout -q -b decoy
-git -C "${rc_root}" update-index --add --cacheinfo "160000,${cursor_drift},libraries/agent-plugins"
+git -C "${rc_root}" update-index --add --cacheinfo "160000,${ref_drift},libraries/agent-plugins"
 git -C "${rc_root}" -c commit.gpgsign=false commit -qm decoy-pin
 rc_decoy="$(git -C "${rc_root}" rev-parse HEAD)"
 git -C "${rc_root}" checkout -q -
 git -C "${rc_root}" replace "${rc_true}" "${rc_decoy}"
 # The loader ref matches the DECOY's gitlink, so a replacement-poisoned read sees them as equal.
-git -C "${rc_root}/libraries/agent-plugins" update-ref refs/remotes/origin/main "${cursor_drift}"
+git -C "${rc_root}/libraries/agent-plugins" update-ref refs/remotes/origin/main "${ref_drift}"
 set +e
-out="$("${script}" --runtime cursor --repo-root "${rc_root}" 2>&1)"; rc=$?
+out="$("${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main --repo-root "${rc_root}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 1 ] || fail "a replace-poisoned pin must still report DRIFT (exit 1), got ${rc}: ${out}"
 case "${out}" in
@@ -1222,10 +1294,10 @@ esac
 cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
 
 # ── 7t. A replace ref INSIDE the submodule defeats a revision comparison ──────
-# The Cursor loader reads content with a plain `git show <ref>:<path>`, which resolves THROUGH
-# refs/replace. So a replacement inside the submodule changes the bytes it loads while leaving BOTH
+# A source reader using plain `git show <ref>:<path>` resolves THROUGH refs/replace.
+# A replacement inside the submodule changes the bytes it reads while leaving BOTH
 # compared revisions identical — `--no-replace-objects rev-parse` still returns the original commit.
-# A revision equality check therefore cannot establish the loaded content and must refuse a verdict.
+# A revision equality check therefore cannot establish the source bytes and must refuse a verdict.
 git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
 printf 'UNREVIEWED replacement content\n' > "${p}/README.md"
 git -C "${pin_repo}" add plugins/agentic-engineering/README.md
@@ -1234,7 +1306,7 @@ sub_replacement="$(git -C "${pin_repo}" rev-parse HEAD)"
 git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
 git -C "${pin_repo}" replace "${gitlink}" "${sub_replacement}"
 set +e
-out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+out="$("${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 2 ] || fail "a replace ref inside the submodule must be UNKNOWN (exit 2), got ${rc}: ${out}"
 case "${out}" in
@@ -1244,7 +1316,7 @@ esac
 # The same UNKNOWN must remain visible under --quiet: say() is suppressed, so the reason has to
 # travel on stderr (every other UNKNOWN path already does via die()).
 set +e
-quiet_out="$("${script}" --runtime cursor --quiet --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; quiet_rc=$?
+quiet_out="$("${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main --quiet --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; quiet_rc=$?
 set -e
 [ "${quiet_rc}" -eq 2 ] \
   || fail "a replace ref under --quiet must still be UNKNOWN (exit 2), got ${quiet_rc}: ${quiet_out}"
@@ -1264,13 +1336,13 @@ git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
 
 # ── 7ab. The replacement NAMESPACE is configurable, so a hard-coded scan misses it ─────
 # GIT_REPLACE_REF_BASE moves Git's effective replacement namespace off refs/replace/. A scan
-# hard-coded to refs/replace/* then returns nothing while the loader's plain `git show` still
+# hard-coded to refs/replace/* then returns nothing while a reader's plain `git show` still
 # resolves through the replacement — so the branch proceeds to a revision comparison, which
 # --no-replace-objects answers with the pin, and reports CURRENT over unreviewed bytes. The
 # enumeration has to follow the namespace Git is actually honouring, not the default one.
 git -C "${pin_repo}" update-ref "refs/evil/${gitlink}" "${sub_replacement}"
 set +e
-out="$(GIT_REPLACE_REF_BASE=refs/evil/ "${script}" --runtime cursor \
+out="$(GIT_REPLACE_REF_BASE=refs/evil/ "${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main \
         --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 2 ] \
@@ -1286,7 +1358,7 @@ git -C "${pin_repo}" update-ref -d "refs/evil/${gitlink}"
 
 # ── 7v. A replace ref must not be able to REDEFINE the pinned tree ────────────
 # 7q proves the PIN ITSELF is resolved without replacement objects, and 7t refuses a verdict for
-# Cursor, whose loader reads through refs/replace. Neither covers the read every OTHER runtime
+# git-ref, where a source reader can follow refs/replace. Neither covers the read every OTHER runtime
 # makes: the pinned TREE is read with `cat-file`/`ls-tree`, which also resolve THROUGH refs/replace.
 # A replacement therefore rewrites the REVIEWED side of the comparison itself, so an install
 # carrying the unreviewed replacement bytes matches it and reports CURRENT. That is a fail-open on

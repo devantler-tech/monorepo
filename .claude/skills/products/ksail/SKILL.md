@@ -11,7 +11,7 @@ section of `applications/ksail/AGENTS.md` (on the submodule's latest `main`):
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a
 pointer by design — the menu is maintained once, in the product's own `AGENTS.md`, so it stays
-correct for every tool (Claude, Copilot, Cursor, …).
+correct for every compatible agent harness.
 
 ## Roadmap & enhancement
 KSail's roadmap lives in **GitHub Issues** on `devantler-tech/ksail` (`roadmap`-labelled epics +

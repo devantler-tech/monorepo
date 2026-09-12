@@ -31,32 +31,29 @@ card.
    instead — hard-coding the Mac path would make a conforming cloud run `cd` into nothing and stop
    before doing any work. Whichever applies, verify you are in the right tree the same way: confirm
    (`test -d docs && test -f .gitmodules`); `gh auth status --active --hostname github.com` shows the
-   expected identity (`devantler` locally; the cloud lane authenticates as its own App — see its
-   loader). **Sync the definition:**
+   registered identity for the active native adapter. **Sync the definition:**
    this checkout carries permanent submodule-pointer drift, so don't gate on a fully clean tree — if
    `main` is behind `origin/main` and the only dirt is submodule pointers, fast-forward with
    `git fetch origin main && git merge --ff-only origin/main` (it never checks out submodule contents;
    `--ff-only` refuses anything that isn't a clean fast-forward).
-   **Your EXPECTED IDENTITY depends on the deployment — match it exactly, never widen it.** For the
-   machine-local instances it is **`devantler`**. For a cloud instance it is that deployment's own App
-   identity (**`app/cursor`** for the Cursor Automation — see its loader). Substitute your own below;
-   an account that is neither `devantler` nor your deployment's stated App identity is always a hard
-   stop, so this stays an exact-match check rather than "any authenticated account".
-   **The token-clearing ladder that follows is MACHINE-LOCAL ONLY** — it exists for the macOS keychain
-   saved-login case, and a cloud instance's App token *is* its credential, so unsetting
-   `GH_TOKEN`/`GITHUB_TOKEN` there would break the auth it depends on. A cloud instance simply
-   verifies its expected App identity once and proceeds.
+   **Your EXPECTED IDENTITY comes from the instance registry — match it exactly, never widen it.**
+   Resolve the registered instance and the identity for the API surface being read. A provider name,
+   branch prefix or arbitrary authenticated account cannot substitute for this declared identity.
+   **The token-clearing ladder that follows is for SAVED-LOGIN ADAPTERS ONLY** — it exists for the
+   declared macOS keychain adapter. An injected credential must be retained when the native adapter
+   relies on it; host location does not select an authentication mode. Verify the registered exact
+   identity with that adapter's credential context.
 
-   On a machine-local instance: when `gh auth status --active --hostname github.com` reports an
-   invalid credential or authenticates an active account other than `devantler`, retry once as
+   On the declared saved-login adapter: when `gh auth status --active --hostname github.com` reports an
+   invalid credential or authenticates an active account other than the registered `authors.cli` identity, retry once as
    `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --active --hostname github.com` to clear both
    environment-token sources and test the active saved login for the host this portfolio uses. Accept either
-   probe only when it authenticates `devantler`. In a runtime that sandboxes macOS keychain access, if that
-   sandboxed saved-login check also fails to authenticate `devantler`:
+   probe only when it authenticates the registered `authors.cli` identity. In a runtime that sandboxes macOS keychain access, if that
+   sandboxed saved-login check also fails to authenticate the registered `authors.cli` identity:
    classify the saved login as indeterminate.
    Repeat the exact command once through the approved host-level execution path.
    A sandbox-only failure is not evidence that the saved login is invalid.
-   Continue when the host-level check authenticates `devantler`.
+   Continue when the host-level check authenticates the registered `authors.cli` identity.
    If the saved login is selected, prefix every subsequent `gh` command with `env -u GH_TOKEN -u GITHUB_TOKEN`.
    This prevents a rejected injected token from overriding the verified login again.
    If only the host-level saved-login check succeeds, run every subsequent `gh` command through that
@@ -84,12 +81,9 @@ card.
    failure cannot be misread as a bad keychain login. Always pass `--hostname github.com` so
    `GH_HOST` cannot redirect the fallback to an unrelated enterprise host.
    Compare `viewer.login` with this deployment's exact expected identity on the API surface:
-   `devantler` for a machine-local lane. For the Cursor cloud lane, the GraphQL API identity is the
-   BARE `cursor` -- REST `user.login` returns `cursor[bot]`, and `app/cursor` is a search-qualifier
-   INPUT that no read hands back. Requiring `cursor[bot]` on the GraphQL fallback rejected the
-   legitimate identity and stopped the dispatch; accept the spelling the surface being read returns.
-   `app/cursor` is what you PASS IN as a search qualifier or PR-author filter; do not expect it back
-   from `gh auth status` or any other read, which is the mistake the line above exists to stop.
+   Use `authors.graphql` from the registered instance for `viewer.login`, `authors.rest` for
+   REST `user.login`, and `authors.search` only as a search qualifier. Native adapters may expose
+   different spellings; never infer one from another or treat a search input as a returned identity.
    A mismatch is `wrong GitHub identity` and must not be described as an invalid credential.
    A REST 5xx (or rate-limit) followed by a successful, expected-identity GraphQL
    `viewer.login` proves the login valid. Never report that saved login as invalid.
@@ -498,23 +492,19 @@ submodule. Split its work in two, because only one half is path-less:
   is exactly the collision this loop's worktree rule exists to prevent. Retire the board issue's
   acquired SHA when that draft PR opens, using the same monorepo root.
 
-### Board the Cursor lane's issues — one command, before you select
+### Board registered instances' issues — explicit identity and capability
 
-The Cursor cloud instance gets 403 on Projects, so **every issue it files is necessarily unboarded**
-and a local run has to board it. Run this before issue selection, so the board reflects the lane's
-findings while you are choosing work rather than after:
+When an instance lacks the verified capability to board its own issues, an instance with that
+capability performs the scoped handoff before selection. Resolve the exact search identity from the
+instance registry; never assume a provider requires a handoff or supplies mutation authority.
 
 ```sh
-.claude/scripts/cursor-issue-board-sweep.sh
+.claude/scripts/agent-issue-board-sweep.sh --author <registered-search-identity>
 ```
 
-It discovers open Cursor-authored issues org-wide — author matched **exactly**, archived repositories
-excluded, oldest first, with `--limit` pinned because `gh search` defaults to 30 — and processes
-the results within its write budget through the idempotent `board-add.sh`, which does both halves
-of the add and verifies the Status by reading it
-back. Do **not** hand-roll the `item-add` + `item-edit` pair here: `item-add` exits 0 and prints an
-item id, so a half-completed add is indistinguishable from a finished one, which is the defect that
-helper exists to close.
+The helper requires an explicit author, excludes archived repositories, discovers oldest-first with
+a bounded limit, and uses `board-add.sh` for idempotent status-preserving mutations. Do not hand-roll
+the item-add/item-edit pair or read a half-completed add as a finished one.
 
 Read both its exit status and summary: `0` means the bounded batch succeeded, while `deferred` counts
 issues left for later runs and `skipped` counts private issues requiring a maintainer decision.
@@ -591,8 +581,8 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
 2. **Drive actionable PRs to merge — the first-priority sweep, ahead of issues, every
    run.** Across all `devantler-tech` repos, drive every **actionable** PR, whoever authored it, to merge per
    the contract (clear the current-head pentad, then merge with the **command that matches the author**:
-   the **`--auto`-eligible authors are exactly three, and every one of them is eligible
-   unconditionally** — `github-actions`, `ksail-bot`, and `app/cursor` — may arm
+   the **`--auto`-eligible authors are exactly two, and every one of them is eligible
+   unconditionally** — `github-actions` and `ksail-bot` — may arm
    `--auto` once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
    with `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <the head you
    evaluated>` once CLEAN and self-promoted on genuine readiness; incl. majors;
@@ -826,7 +816,7 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    a tip with no open PR past the ~2h lease may be taken over
    with `--takeover` only after confirming no open `#<issue>` PR. Check open PRs (same-repo body refs
    only — drop hits whose only `#<issue>` is a foreign `owner/repo#<issue>`), remote
-   `agent-claim/<issue>` tips, lane work branches (`claude/*`/`codex/*`/`cursor/*`) AND assignees by
+   `agent-claim/<issue>` tips, work branches in every registered namespace AND assignees by
    **issue number, never literal branch name**. A live claim (shared tip in-window, or assigned +
    branched in-window, no PR) is skip reason **(e)** — the only one that expires by
    itself. An issue **authored by an exact dependency-automation identity** (`renovate[bot]` /
@@ -922,7 +912,7 @@ For each selected product:
    The `<session-owner-token>` is **unique to one runtime invocation** and stable only for renewals
    within that run: derive it as `<lane>-<trusted-runtime-run-or-thread-id>`. Never use a stable
    agent, schedule, or lane slug, because overlapping ticks would then impersonate the same owner.
-   **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*`. Never open NEW
+   **`<lane>` is YOUR instance's namespace from the registry**. Never open NEW
    work in a sibling's lane: it breaks draft ownership, and a `claude/*` branch from another instance
    would be swept by the Claude tick's cleanup. ⚠️ **REPAIR is the exception** (contract *Autonomy*):
    you may push into a sibling lane's branch to *repair* a PR the active-work test shows is unowned —
@@ -971,9 +961,8 @@ For each selected product:
    no worktree or dirty state behind. **Then reap spent branches EVERY run** (contract *End-of-tick
    branch hygiene*): with the worktree already removed (a branch still checked out sits in the keep-set),
    run [`.claude/scripts/branch-cleanup.sh <repo_path> <slug> <manifest>`](../../scripts/branch-cleanup.sh)
-   for each repo touched (default namespace `claude`: local + remote), then a second pass with
-   `cursor` as the fifth argument for a **remote-only** sweep of spent `cursor/*` (monorepo#2298 —
-   the cloud lane cannot reap its own remotes). It restores the default-branch checkout and deletes
+   only through the declared native adapter (this host's helper supports `claude`: local + remote).
+   Other instances use their own verified cleanup path. It restores the default-branch checkout and deletes
    only spent branches in the selected namespace — KEEPING open-PR heads, worktree-checked-out
    branches, and the maintainer's interactive random-slug `claude/*` branches, and deleting a remote
    branch only on MERGED/CLOSED PR evidence (a restore manifest is written before each delete). Apply

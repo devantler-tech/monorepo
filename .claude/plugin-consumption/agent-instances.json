@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "policyPublisher": "codex-local",
+  "instances": {
+    "claude-local": {
+      "namespace": "claude",
+      "authors": {"cli": "devantler", "rest": "devantler", "graphql": "devantler", "search": "devantler"},
+      "definitionAdapter": "claude",
+      "roles": ["agentic-engineer", "agent-improver"]
+    },
+    "codex-local": {
+      "namespace": "codex",
+      "authors": {"cli": "devantler", "rest": "devantler", "graphql": "devantler", "search": "devantler"},
+      "definitionAdapter": "codex",
+      "roles": ["agentic-engineer", "agent-improver"]
+    }
+  }
+}
