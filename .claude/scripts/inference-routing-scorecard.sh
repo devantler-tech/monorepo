@@ -52,14 +52,17 @@ result=$(jq -sce '
     and ([.workItems[].attempts[]] | length <= 10000);
   def root_reached($attempts; $id; $seen):
     if ($seen | index($id)) != null or ($seen | length) >= 32 then false
-    else ($attempts | map(select(.id == $id)) | first) as $a
+    else $attempts[$id] as $a
       | if $a == null then false elif $a.parentId == null then true
         else root_reached($attempts; $a.parentId; $seen + [$id]) end
     end;
   def complete_chain:
-    . as $item | .attempts as $a | ([$a[] | select(.parentId == null)] | length) == 1
+    . as $item | .attempts as $a
+      | (reduce $a[] as $attempt ({}; .[$attempt.id] = $attempt)) as $by_id
+      | ([$a[] | select(.parentId == null)] | length) == 1
+      and ([$a[] | select(.parentId != null)] | group_by(.parentId) | all(.[]; length == 1))
       and ($item.status == "pending" or all($a[]; .status != "pending"))
-      and all($a[]; root_reached($a; .id; []));
+      and all($a[]; root_reached($by_id; .id; []));
   def metrics:
     . as $attempts | reduce metric_keys[] as $key ({};
       .[$key] = {observedTotal: ([$attempts[][$key] | select(. != null)] | add // 0),

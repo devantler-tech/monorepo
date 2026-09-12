@@ -29,7 +29,7 @@ most 10^12; timestamps and token counts are integers. The top-level object conta
 | --- | --- |
 | `version` | Literal `1` |
 | `window` | `{start,end}` UTC epoch seconds; nonempty half-open interval `[start,end)` |
-| `coverage` | `{inventoryKnown,expectedAttempts}`; boolean plus independent inventory entries, each exactly `{id,workItemId}` with a unique attempt `id` and its expected work-item identity |
+| `coverage` | `{inventoryKnown,expectedAttempts}`; `inventoryKnown` is a boolean and `expectedAttempts` is an array of independent inventory entries, each exactly `{id,workItemId}` with a unique attempt `id` and its expected work-item identity |
 | `workItems` | Array of the work-item records below |
 
 Each work item contains exactly `id`, `cohort`, `taskClass`, `policyRevision`, `status`, `terminalAt`,
@@ -64,7 +64,9 @@ A structurally valid chain assigned to another work item yields `misassignedAtte
 coverage; flat ID-only inventories and duplicate inventory IDs are invalid. Verify cohort assignment
 against the experiment register separately; this join does not authenticate caller-supplied labels.
 
-There must be one root per complete work item. Missing parents, cycles, chains deeper than 32,
+There must be one root per complete work item and at most one child or successor per attempt.
+Sibling branches retain all observed usage but make the chain incomplete; serial handoffs use the
+preceding attempt as their `parentId`. Missing parents, cycles, chains deeper than 32,
 unattributed attempts, missing measurements, or pending descendants of terminal work yield UNKNOWN
 coverage. Exact duplicate rows are deduplicated and counted; conflicting work-item/attempt identities
 and attempts assigned to multiple work items are invalid. Input is bounded to 512 item rows,
@@ -82,7 +84,8 @@ attempts produces null. `failedByKind` separates reasoning failures from environ
 authority failures. Abandonment remains a separate count, never hidden as success.
 
 Every metric reports `observedTotal` and `unknownAttempts`; an observed zero with missing values is
-not a complete zero. Coverage reports expected/observed/missing/unexpected/misassigned attempts, incomplete
+not a complete zero. Output `coverage.expectedAttempts` is a numeric count, unlike the input inventory
+array with the same name. Coverage reports expected/observed/missing/unexpected/misassigned attempts, incomplete
 chains, unknown attribution/metrics, and duplicate rows. Counts under UNKNOWN coverage are partial
 observations, never a successful optimization verdict.
 

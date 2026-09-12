@@ -52,6 +52,16 @@ run_case missing-inventory '.coverage.inventoryKnown=false' 0 '.coverage.status 
 run_case missing-child '.workItems[0].attempts |= map(select(.id != "b"))' 0 '.coverage.missingAttempts == 1 and .coverage.status == "UNKNOWN"'
 run_case unrecorded-child '.coverage.expectedAttempts |= map(select(.id != "b"))' 0 '.coverage.unexpectedAttempts == 1 and .coverage.status == "UNKNOWN"'
 run_case missing-parent '.workItems[0].attempts[1].parentId="absent"' 0 '.coverage.incompleteChains == 1 and .coverage.status == "UNKNOWN"'
+run_case sibling-branch '.workItems[0].attempts += [(.workItems[0].attempts[1] | .id="d")] | .coverage.expectedAttempts += [{"id":"d","workItemId":"one"}]' 0 '.coverage.incompleteChains == 1 and .coverage.status == "UNKNOWN" and .totals.attempts == 4'
+# Keep jq variables literal while constructing chains at the traversal boundary.
+# shellcheck disable=SC2016
+run_case chain-depth-32 '.workItems[0].attempts[1] as $template | .workItems=[(.workItems[0] | .attempts=[range(32) as $i | $template + {id:("node-"+($i|tostring)),parentId:(if $i == 0 then null else "node-"+(($i-1)|tostring) end)}])] | .coverage.expectedAttempts=[.workItems[0].attempts[] | {id,workItemId:"one"}]' 0 '.coverage.status == "COMPLETE" and .totals.attempts == 32'
+# shellcheck disable=SC2016
+run_case chain-depth-33 '.workItems[0].attempts[1] as $template | .workItems=[(.workItems[0] | .attempts=[range(33) as $i | $template + {id:("node-"+($i|tostring)),parentId:(if $i == 0 then null else "node-"+(($i-1)|tostring) end)}])] | .coverage.expectedAttempts=[.workItems[0].attempts[] | {id,workItemId:"one"}]' 0 '.coverage.status == "UNKNOWN" and .coverage.incompleteChains == 1 and .totals.attempts == 33'
+# Exercise the maximum per-item input with long shared ancestry; retain every
+# attempt in accounting even when the graph violates the one-child limit.
+# shellcheck disable=SC2016
+run_case maximum-branched-chain '.workItems[0].attempts[1] as $template | .workItems=[(.workItems[0] | .attempts=[range(1024) as $i | $template + {id:("node-"+($i|tostring)),parentId:(if $i == 0 then null else "node-"+(([($i-1),30]|min)|tostring) end)}])] | .coverage.expectedAttempts=[.workItems[0].attempts[] | {id,workItemId:"one"}]' 0 '.coverage.status == "UNKNOWN" and .coverage.incompleteChains == 1 and .totals.attempts == 1024 and .cohorts[0].metrics.inputTokens.observedTotal == 204800'
 run_case cyclic-chain '.workItems[0].attempts[0].parentId="b"' 0 '.coverage.incompleteChains == 1 and .coverage.status == "UNKNOWN"'
 run_case unknown-model '.workItems[0].attempts[1].effectiveModel=null' 0 '.coverage.unattributedAttempts == 1 and .coverage.status == "UNKNOWN" and .totals.attempts == 3'
 run_case unknown-metric '.workItems[0].attempts[1].inputTokens=null' 0 '.cohorts[0].metrics.inputTokens.observedTotal == 150 and .cohorts[0].metrics.inputTokens.unknownAttempts == 1 and .coverage.status == "UNKNOWN"'
