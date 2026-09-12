@@ -7,7 +7,7 @@ description: Product card for devantler-tech/cloudflare, the declarative owner o
 
 `devantler-tech/cloudflare` declares the Cloudflare resources the suite depends on before its
 platform, Flux or Crossplane can run — DNS, certificate issuance and backup storage. It exists
-outside the cluster on purpose: its automation and state must not depend on the platform it
+outside the cluster deliberately: its automation and state must not depend on the platform it
 bootstraps. It is **not a submodule** of this monorepo yet, so work there is API-first and a code
 change is an ordinary draft PR **in that repository**. The ownership rules and the remaining
 rollout live on [monorepo#3274](https://github.com/devantler-tech/monorepo/issues/3274).
