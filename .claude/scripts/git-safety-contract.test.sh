@@ -144,4 +144,15 @@ assert_section "After detaching, repeat \`git -C <wt> status --porcelain\`" \
 assert_section "Run \`git -C <wt> clean -ndx\` as its own read-only call; require exit 0 and empty output" \
   "the Git safety section no longer rejects stale untracked or ignored residue after detaching — a removed initialized submodule can survive outside the reviewed tree while submodule status passes vacuously"
 
+# 6. NO SELF-INFLICTED UNSIGNED COMMITS (monorepo#3322). The four most recent unsigned lane commits that
+#    reached merged PRs were traced to their tool calls: three passed `-c commit.gpgsign=false` to a
+#    real commit, one wrote through the contents API. Both paths are pinned, and so is the pre-push
+#    check. Without the check the rule is prose again, and prose is what had already failed here.
+assert_section '`-c commit.gpgsign=false` belongs **only** in a throwaway fixture repository' \
+  "the Git safety section no longer confines \`-c commit.gpgsign=false\` to throwaway fixtures — that flag on a real commit is how three of the four traced unsigned lane commits were made"
+assert_section '(`gh api --method PUT …/contents/…`)' \
+  "the Git safety section no longer forbids authoring work-branch commits through the REST contents API — commits made that way are unsigned"
+assert_section 'Run [`unsigned-push-guard.sh <repo-dir>`](.claude/scripts/unsigned-push-guard.sh) as its own call immediately before `git push`' \
+  "the Git safety section no longer requires the pre-push signature check — without it the rule has no mechanical backstop"
+
 echo "git safety contract: OK (${section_words} words scoped)"
