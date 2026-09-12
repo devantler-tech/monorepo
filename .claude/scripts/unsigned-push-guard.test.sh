@@ -86,11 +86,8 @@ sha3="$(git -C "$r3" rev-parse HEAD)"
 signed_commit "$r3" c
 run "mixed range fails" 1 "$guard" "$r3" base
 n_named="$(printf '%s\n' "$out" | awk '/^UNSIGNED /{n++} END{print n+0}')"
-case "$out" in
-  *"UNSIGNED  $sha3"*)
-    if [ "$n_named" = 1 ]; then pass "mixed range names exactly the unsigned commit"; else bad "named $n_named commits: $out"; fi ;;
-  *) bad "unsigned sha not named: $out" ;;
-esac
+case "$out" in *"UNSIGNED  $sha3"*) pass "mixed range names the unsigned commit" ;; *) bad "unsigned sha not named: $out" ;; esac
+if [ "$n_named" = 1 ]; then pass "mixed range names only that commit"; else bad "named $n_named commits: $out"; fi
 
 # 4. Empty range — passes, and says so rather than printing nothing.
 r4="$(new_repo empty)"
@@ -103,6 +100,12 @@ run "non-repository is UNKNOWN" 2 "$guard" "$tmp"
 
 # 6. Default base — with no argument and no upstream, origin/main is used; absent, it is UNKNOWN.
 run "missing default base is UNKNOWN" 2 "$guard" "$r1"
+
+# 6b. With origin's default branch recorded, it becomes the base before origin/main is tried.
+git -C "$r1" update-ref refs/remotes/origin/trunk "$(git -C "$r1" rev-parse base)"
+git -C "$r1" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+run "origin's default branch is the fallback base" 1 "$guard" "$r1"
+case "$out" in *"range=origin/trunk..HEAD"*) pass "fallback resolves origin/HEAD" ;; *) bad "fallback base is not origin/HEAD: $out" ;; esac
 
 # 7. Ablation — a copy that no longer treats N as a finding must PASS the unsigned fixture.
 #    This proves case 1 fails because of the N branch, not for some incidental reason.

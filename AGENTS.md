@@ -4043,16 +4043,14 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
-🔴 **Never make an unsigned commit on a real branch — and check before every push.** Two paths
-produce one silently, and each was traced to a scheduled run's own tool call (monorepo#3322):
+🔴 **Never make an unsigned commit on a real branch.** Both known paths were scheduled runs' own tool
+calls ([#3322](https://github.com/devantler-tech/monorepo/issues/3322)):
 `-c commit.gpgsign=false` belongs **only** in a throwaway fixture repository, never on a commit in a
 worktree you will push; and never author a work-branch commit through the REST contents API
-(`gh api --method PUT …/contents/…`), which creates an unsigned commit under the account's primary
-address. Measured: the four most recent unsigned lane commits that reached merged PRs were three of
-the first and one of the second, and the two that looked like a lost signing environment were
-neither. Run [`unsigned-push-guard.sh <repo-dir>`](.claude/scripts/unsigned-push-guard.sh) as its own
-call immediately before `git push`: `0` every added commit is signed, `1` a named commit is not —
-re-sign it locally before pushing — and `2` UNKNOWN, never a clean result.
+(`gh api --method PUT …/contents/…`), which creates an unsigned commit. Run
+[`unsigned-push-guard.sh <repo-dir>`](.claude/scripts/unsigned-push-guard.sh) as its own call
+immediately before `git push`, and do not push on a non-zero exit. It sees only local commits, so the
+contents-API rule has no mechanical backstop yet.
 
 **The permitted way to put a worktree on a specific commit is
 `git --no-replace-objects -C <wt> checkout --no-overwrite-ignore --detach <sha>`, issued as its OWN

@@ -8,12 +8,14 @@
 #   and one was written through the REST contents API. None was a session that lost its
 #   signing configuration. unsigned-commit-report.sh sees these only after they merge; this
 #   checks the commits a branch adds at the one moment the author can still fix them —
-#   before they leave the machine.
+#   before they leave the machine. It sees only commits made locally: a commit written through
+#   the contents API is created on GitHub and never passes through here, so that path still
+#   relies on the contract rule alone.
 #
 # USAGE
 #   unsigned-push-guard.sh <repo-dir> [<base>]
 #     Checks every commit in <base>..HEAD. <base> defaults to the branch's upstream, else
-#     origin/main. Run it immediately before `git push`.
+#     origin's default branch, else origin/main. Run it immediately before `git push`.
 #
 # WHAT COUNTS
 #   git's %G? letter for each commit:
@@ -43,13 +45,10 @@ repo="$1"
 [ -d "$repo" ] || unknown "not a directory: $repo"
 git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || unknown "not a git repository: $repo"
 
-if [ $# -eq 2 ]; then
-  base="$2"
-elif upstream="$(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)" && [ -n "$upstream" ]; then
-  base="$upstream"
-else
-  base="origin/main"
-fi
+# The argument, else the branch's upstream, else origin's default branch, else origin/main.
+base="${2:-$(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null ||
+  git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null ||
+  echo origin/main)}"
 
 git --no-replace-objects -C "$repo" rev-parse --verify --quiet "${base}^{commit}" >/dev/null \
   || unknown "base does not resolve to a commit: $base"
@@ -69,12 +68,10 @@ while IFS=' ' read -r sha class; do
     N) findings=$((findings + 1)); printf 'UNSIGNED  %s\n' "$sha" ;;
     B) findings=$((findings + 1)); printf 'BAD-SIG   %s\n' "$sha" ;;
     '') unknown "no signature class reported for $sha" ;;
-    *) ;;
   esac
 done <<EOF
 $log
 EOF
 
 printf '%s: examined=%d findings=%d range=%s..HEAD\n' "$PROG" "$examined" "$findings" "$base"
-[ "$findings" -eq 0 ] || exit 1
-exit 0
+[ "$findings" -eq 0 ]
