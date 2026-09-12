@@ -39,6 +39,7 @@ keeping them healthy *and* moving them forward.
 | AS Coaching | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | [AGENTS.md](https://github.com/devantler-tech/ascoachingogvaner/blob/main/AGENTS.md) |
 | UniFi network | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
 | FleetDM device config | `devantler-tech/fleet-gitops` | `applications/fleet-gitops` | — (the repo carries no `AGENTS.md` yet; see its [product card](.claude/skills/products/fleet-gitops/SKILL.md)) |
+| Cloudflare bootstrap owner | `devantler-tech/cloudflare` | — (not a submodule yet) | — (the repo carries no `AGENTS.md` yet; see its [product card](.claude/skills/products/cloudflare/SKILL.md)) |
 | 🌊 Project Board (org project 5) | — (not a repo; [org project 5](https://github.com/orgs/devantler-tech/projects/5)) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
 
 > Submodule `AGENTS.md` links use full GitHub URLs because those files live in the submodule repos, not this repo's tree (a relative link would 404 on GitHub).
@@ -117,6 +118,7 @@ no row are filed on the **default intake repo** below.
 | Platform template | The starter template new platform repositories are created from | `devantler-tech/platform-template` |
 | UniFi home network | Changing THIS suite's deployed UniFi network — SSIDs, VLANs, firewall rules, device and VPN config | `devantler-tech/unifi` |
 | Managed devices (FleetDM) | Changing how THIS suite's enrolled Macs and other devices are configured and checked — the policies, queries and enrolment settings its FleetDM GitOps repo defines (not device management in general) | `devantler-tech/fleet-gitops` |
+| Cloudflare account resources | Changing THIS suite's Cloudflare resources that must exist before its platform can start — DNS, certificate issuance and backup storage buckets (the platform's in-cluster use of them stays with the platform; not Cloudflare setups in general) | `devantler-tech/cloudflare` |
 | UniFi Crossplane provider | Developing the Crossplane provider library itself (new resource support, codegen, provider bugs) | `devantler-tech/provider-upjet-unifi` |
 | Cluster guardrail policies | Shared rules that check or adjust what may run on the suite's clusters, so every platform inherits the same guardrails | `devantler-tech/kyverno-policies` |
 | Mac install packages | Making the suite's tools installable on a Mac via Homebrew | `devantler-tech/homebrew-tap` |

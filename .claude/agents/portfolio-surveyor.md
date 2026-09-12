@@ -1412,7 +1412,7 @@ intentional tombstone, never drift.) The list:
 `ksail`, `data-product-controller`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
 `platform-tenant-template`, `platform-template`, `actions`, `homebrew-tap`, `agent-skills`,
 `agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`,
-`world-at-ruin`, `wedding-app`, `ascoachingogvaner`, `unifi`.
+`cloudflare`, `world-at-ruin`, `wedding-app`, `ascoachingogvaner`, `unifi`.
 Archived repos (currently `reusable-workflows`, `data-product`, `doggy-countdown`) are
 read-only: skip them entirely —
 no CI-red pass, no actionable signal (their stale bot PRs are unmergeable by design).
