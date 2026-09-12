@@ -24,7 +24,16 @@ fail() {
   exit 1
 }
 
-portfolio_surveyor_filter="$(sed -n '/^            portfolio-surveyor:/,/^            pipefail-grep-guard:/p' "${ci_workflow}")"
+if ! portfolio_surveyor_filter="$(\
+  awk '
+    /^            portfolio-surveyor:/ { inblock = 1; found_start = 1; next }
+    inblock && /^            [a-z0-9-]+:/ { found_end = 1; exit }
+    inblock { print }
+    END { if (!found_start || !found_end) exit 1 }
+  ' "${ci_workflow}"
+)"; then
+  fail "could not extract the portfolio-surveyor path filter from ${ci_workflow}"
+fi
 grep -Fq -- "- '.claude/plugin-consumption/agent-instances.json'" <<<"${portfolio_surveyor_filter}" ||
   fail "instance registry changes do not trigger the portfolio-surveyor contract job"
 

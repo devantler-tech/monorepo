@@ -179,6 +179,10 @@ assert_contains "${section}" 'body begins with' \
 assert_contains "${section}" 'canonical generated-output disclosure' \
   'the issue must require the canonical disclosure — without it a human-authored issue reads as agent state'
 
+assert_contains "${section}" 'AUTHENTICATE it' \
+  'the authentication subsection anchor is missing, so the scoped assertions cannot be bound'
+assert_contains "${section}" '**Close an occurrence' \
+  'the authentication subsection end anchor is missing, so the scoped assertions cannot be bound'
 authentication="${section#*'AUTHENTICATE it'}"
 authentication="${authentication%%'**Close an occurrence'*}"
 case "${authentication}" in
