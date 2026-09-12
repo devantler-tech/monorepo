@@ -178,7 +178,11 @@ expect 0 "a backslash-escaped marker is attributed (regression: unescaped-only m
 
 # The deployed runtime starts with an enqueue record, before the user message.
 # Exercise its actual envelope as well as the user-message representation.
-for queue_case in enqueue queue_example queue_suffix dequeue; do
+# The runtime also opens a scheduled dispatch with a system-reminder block before the marker
+# (monorepo#3320). Only complete leading reminder blocks may be skipped: a marker quoted inside one,
+# following ordinary text after one, or following an unterminated one must still attribute nothing.
+for queue_case in enqueue reminder_prefix reminder_quoted reminder_then_text reminder_unterminated \
+    queue_example queue_suffix dequeue; do
   mkcase "$queue_case"
   mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\"" beta true "\"$(iso_at $(( NOW - 3600 )))\""
   mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 40 1200 >/dev/null
@@ -190,11 +194,21 @@ for queue_case in enqueue queue_example queue_suffix dequeue; do
       | if $scenario == "queue_example" then .content = ("Explain this: " + .content)
         elif $scenario == "queue_suffix" then .content |= sub("alpha"; "alpha:unrelated")
         elif $scenario == "dequeue" then .operation = "dequeue"
+        elif $scenario == "reminder_prefix" then
+          .content = ("<system-reminder>\nYou are operating in a git worktree.\n</system-reminder>\n\n" + .content)
+        elif $scenario == "reminder_quoted" then
+          .content = ("<system-reminder>\nQuoted: " + .content + "\n</system-reminder>\n")
+        elif $scenario == "reminder_then_text" then
+          .content = ("<system-reminder>\nnotice\n</system-reminder>\nExplain this:\n" + .content)
+        elif $scenario == "reminder_unterminated" then
+          .content = ("<system-reminder>\nnotice\n" + .content)
         else . end
     else . end' "$candidate" > "$CASE/rewritten.jsonl"
   mv "$CASE/rewritten.jsonl" "$candidate"
   if [ "$queue_case" = "enqueue" ]; then
     expect 0 "a real queue enqueue envelope supplies the scheduled session"
+  elif [ "$queue_case" = "reminder_prefix" ]; then
+    expect 0 "a leading system-reminder block does not hide the scheduled session (regression: monorepo#3320)"
   else
     expect 1 "$queue_case cannot supply the scheduled session"
   fi
