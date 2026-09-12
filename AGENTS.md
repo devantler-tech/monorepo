@@ -283,6 +283,7 @@ Changes to protected spend/model/runtime limits require explicit maintainer dire
 may nominate aliases but cannot authorize activation or automatically select `latest`.
 
 ### Design principles — portable roles, native adapters
+
 Two rules shape *how* the engineer is built:
 1. **Use the runtime's native capabilities** — native persistent memory, skills, subagents and
    scheduling where verified. A filesystem layout or provider name does not establish capability.

@@ -289,6 +289,11 @@ want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
 
 # Only forge outcome attribution requires the deployment registry. Native
 # transcript adapters retain their own format and coverage boundaries.
+#
+# Initialised unconditionally. `set -u` is on and the outcomes block passes
+# `--argjson registry "$registry"`, so leaving this unset would kill the script
+# at that line instead of reporting anything.
+registry=''
 if want outcomes; then
   registry=$(jq -ces '
     def nonempty: type == "string" and length > 0;
@@ -304,7 +309,14 @@ if want outcomes; then
     | select([.instances[].namespace] | length == (unique | length))
   ' "$INSTANCES" 2>/dev/null) || {
     echo "agent-telemetry: instance registry is unreadable or malformed -- UNKNOWN" >&2
-    exit 2
+    registry=''
+    # Fatal ONLY when outcomes is the requested section. On a default (`all`)
+    # run the dispatch, reliability, efficiency, safety, drift and A2A sections
+    # carry no registry dependency, so exiting here withheld six working
+    # sections in order to report one broken one. Continuing is not a fail-open:
+    # the outcomes block's own per-repository guard sees `--argjson registry ''`
+    # fail and prints UNKNOWN, never a clean zero.
+    if [ "$SECTION" = outcomes ]; then exit 2; fi
   }
 fi
 

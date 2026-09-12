@@ -330,6 +330,26 @@ for registry in missing malformed; do
   check "$registry outcomes registry explicitly states UNKNOWN" "$OUT" 'UNKNOWN'
   nocheck "$registry outcomes registry never reports a zero merged total" "$OUT" 'total: 0'
 done
+# A malformed registry must not withhold the sections that do not depend on it.
+# `want outcomes` is true on the default `all` run, so validating there used to
+# exit 2 and suppress dispatch, reliability, efficiency, safety, drift and A2A —
+# six working sections withheld to report one broken one. Only an explicit
+# `--section outcomes` request is fatal now. Continuing is not a fail-open: the
+# outcomes block still reports UNKNOWN, never a clean zero.
+all_run() {
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="${OUTCOMES_PRS:-$FIX/outcomes/prs.json}" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  CODEX_HOME="$FIX/outcomes/no-codex" \
+  bash "$TARGET" --instances "$FIX/outcomes/malformed-instances.json" "$@" 2>&1
+}
+printf '{}\n' > "$FIX/outcomes/malformed-instances.json"
+OUT=$(all_run); RC=$?
+if [ "$RC" != 2 ]; then ok "malformed registry does not abort a default all-section run"; else bad "malformed registry does not abort a default all-section run" "rc=$RC"; fi
+check "default all-section run still renders a registry-independent section" "$OUT" '── DISPATCH HEALTH'
+check "default all-section run reports outcomes as UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+check "default all-section run marks every merged-PR row UNKNOWN, never a count" "$OUT" 'UNKNOWN (query or provenance)'
+OUT=$(all_run --section outcomes); RC=$?
+if [ "$RC" = 2 ]; then ok "explicit --section outcomes still fails closed on a malformed registry"; else bad "explicit --section outcomes still fails closed on a malformed registry" "rc=$RC"; fi
 if [ "${1:-}" = --registry-only ]; then
   echo "  passed: $PASS   failed: $FAIL"
   [ "$FAIL" -eq 0 ]; exit
