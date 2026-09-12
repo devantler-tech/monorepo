@@ -42,10 +42,11 @@ result=$(jq -sce '
     exact(["version","window","coverage","workItems"])
     and .version == 1
     and (.window | exact(["start","end"]) and all(.[]; integer) and .start < .end)
-    and (.coverage | exact(["inventoryKnown","expectedAttemptIds"])
+    and (.coverage | exact(["inventoryKnown","expectedAttempts"])
       and (.inventoryKnown | type == "boolean")
-      and (.expectedAttemptIds | type == "array" and length <= 10000
-        and all(.[]; identifier) and length == (unique | length)))
+      and (.expectedAttempts | type == "array" and length <= 10000
+        and all(.[]; exact(["id","workItemId"]) and all(.id,.workItemId; identifier))
+        and length == (unique_by(.id) | length)))
     and (.window as $window | .workItems | type == "array" and length <= 512
       and all(.[]; work_item($window)))
     and ([.workItems[].attempts[]] | length <= 10000);
@@ -77,21 +78,27 @@ result=$(jq -sce '
       or any($items | map(select(.pr != null)) | group_by(.pr)[];
         (map(cohort_key) | unique | length) != 1)
     then error("conflicting attribution") else . end
-  | ($input.coverage.expectedAttemptIds - [$attempts[].id] | length) as $missing
-  | ([$attempts[].id] - $input.coverage.expectedAttemptIds | length) as $unexpected
+  | (reduce $input.coverage.expectedAttempts[] as $entry ({};
+      .[$entry.id] = $entry.workItemId)) as $inventory
+  | ($inventory | keys) as $expected_ids
+  | ($expected_ids - [$attempts[].id] | length) as $missing
+  | ([$attempts[].id] - $expected_ids | length) as $unexpected
+  | ([$attempts[] | . as $a | select(($inventory | has($a.id))
+      and $inventory[$a.id] != $a.workItemId)] | length) as $misassigned
   | ([$items[] | select(complete_chain | not)] | length) as $incomplete
   | ([$attempts[] | select(.runtime == null or .requestedModel == null or .effectiveModel == null
       or .effort == null or (.status == "failed" and (.failureKind == null or .failureKind == "unknown")))] | length) as $unattributed
   | ([$attempts[] | . as $a | select(any(metric_keys[]; $a[.] == null))] | length) as $unknown_metrics
-  | ($input.coverage.inventoryKnown and $missing == 0 and $unexpected == 0
+  | ($input.coverage.inventoryKnown and $missing == 0 and $unexpected == 0 and $misassigned == 0
       and $incomplete == 0 and $unattributed == 0 and $unknown_metrics == 0) as $complete
   | ($input.window.end - $input.window.start) as $duration
   | {
       version:1,status:"OK",window:$input.window,evidenceTrust:"NORMALIZED_CALLER_REPORTS",
       optimizationVerdict:"NO_VERDICT",quotaAttribution:"UNKNOWN",
       coverage:{status:(if $complete then "COMPLETE" else "UNKNOWN" end),
-        inventoryKnown:$input.coverage.inventoryKnown,expectedAttempts:($input.coverage.expectedAttemptIds | length),
+        inventoryKnown:$input.coverage.inventoryKnown,expectedAttempts:($expected_ids | length),
         observedAttempts:($attempts | length),missingAttempts:$missing,unexpectedAttempts:$unexpected,
+        misassignedAttempts:$misassigned,
         incompleteChains:$incomplete,unattributedAttempts:$unattributed,unknownMetricAttempts:$unknown_metrics,
         duplicateWorkItemRows:(($input.workItems | length) - ($items | length)),
         duplicateAttemptRows:(([$input.workItems[].attempts[]] | length) - ($attempts | length))},

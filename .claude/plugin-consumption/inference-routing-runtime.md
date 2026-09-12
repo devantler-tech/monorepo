@@ -84,6 +84,11 @@ weaken the contract or silently substitute a model.
 
 ## Temporary execution boundaries
 
+**Cursor is deferred until at least 2026-09-20** by maintainer direction on 2026-09-12.
+Skip Cursor login, billing verification, loader deployment and task dispatch in this rollout until
+then. Both registrations remain disabled. Availability returning on that date does not enable a
+route; the native verification and reviewed activation gates above still apply.
+
 Antigravity may perform static surveying and dependency mapping only after its read-only boundary is
 verified. Give it a fixed revision and return a compact map/evidence digest. No installs, builds,
 formatters, repository/Git writes, live cluster access, forge mutations or write-capable MCP calls.

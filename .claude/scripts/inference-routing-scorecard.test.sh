@@ -8,7 +8,7 @@ cat > "$TMP/evidence.json" <<'JSON'
 {
   "version": 1,
   "window": {"start": 1000, "end": 2000},
-  "coverage": {"inventoryKnown": true, "expectedAttemptIds": ["a", "b", "c"]},
+  "coverage": {"inventoryKnown": true, "expectedAttempts": [{"id":"a","workItemId":"one"},{"id":"b","workItemId":"one"},{"id":"c","workItemId":"two"}]},
   "workItems": [
     {"id":"one","cohort":"bounded-repair","taskClass":"workhorse","policyRevision":"p1","status":"accepted","terminalAt":1500,"pr":"owner/repo#1","attempts":[
       {"id":"a","parentId":null,"runtime":"local","requestedModel":"small","effectiveModel":"small","effort":"medium","status":"failed","failureKind":"reasoning","inputTokens":100,"cachedInputTokens":10,"outputTokens":20,"reasoningTokens":5,"activeSeconds":30},
@@ -33,6 +33,14 @@ run_case() {
   printf 'PASS %s\n' "$name"
 }
 run_case complete-chain '.' 0 '.coverage.status == "COMPLETE" and .totals.acceptedWorkItems == 1 and .totals.acceptedPRs == 1 and .totals.attempts == 3 and .optimizationVerdict == "NO_VERDICT" and .quotaAttribution == "UNKNOWN"'
+# Preserve the jq variable; shell expansion would corrupt the chain swap.
+# shellcheck disable=SC2016
+run_case swapped-work-item-chains '.workItems[0].attempts as $first | .workItems[0].attempts=.workItems[1].attempts | .workItems[1].attempts=$first | .workItems[1].cohort="canary"' 0 '.coverage.status == "UNKNOWN" and .coverage.misassignedAttempts == 3 and .optimizationVerdict == "NO_VERDICT"'
+run_case reordered-inventory '.coverage.expectedAttempts |= reverse' 0 '.coverage.status == "COMPLETE" and .coverage.misassignedAttempts == 0'
+run_case wrong-inventory-owner '.coverage.expectedAttempts[1].workItemId="absent"' 0 '.coverage.status == "UNKNOWN" and .coverage.misassignedAttempts == 1'
+run_case duplicate-inventory-id '.coverage.expectedAttempts += [{"id":"a","workItemId":"two"}]' 2 '.status == "INVALID"'
+run_case missing-inventory-owner 'del(.coverage.expectedAttempts[0].workItemId)' 2 '.status == "INVALID"'
+run_case flat-inventory '.coverage.expectedAttemptIds=["a","b","c"] | del(.coverage.expectedAttempts)' 2 '.status == "INVALID"'
 run_case mixed-models '.' 0 '(.modelParticipation | length) == 2 and (.modelParticipation[] | select(.effectiveModel == "small") | .participatingWorkItems == 2 and .failedAttempts == 2 and .terminalAttempts == 2 and .failedAttemptRate == 1 and (has("acceptedWorkItems") | not)) and (.cohorts[0] | .metrics.inputTokens.observedTotal == 350 and .metrics.activeSeconds.observedTotal == 105)'
 run_case failure-causes '.' 0 '(.modelParticipation[] | select(.effectiveModel == "small") | .failedByKind == {"environment":1,"reasoning":1})'
 run_case duplicate-item '.workItems += [.workItems[0]]' 0 '.totals.workItems == 2 and .totals.attempts == 3 and .totals.acceptedWorkItems == 1 and .coverage.duplicateWorkItemRows == 1'
@@ -42,7 +50,7 @@ run_case conflicting-attempt '.workItems[0].attempts += [(.workItems[0].attempts
 run_case reused-attempt '.workItems[1].attempts=[.workItems[0].attempts[0]]' 2 '.status == "INVALID"'
 run_case missing-inventory '.coverage.inventoryKnown=false' 0 '.coverage.status == "UNKNOWN" and .optimizationVerdict == "NO_VERDICT"'
 run_case missing-child '.workItems[0].attempts |= map(select(.id != "b"))' 0 '.coverage.missingAttempts == 1 and .coverage.status == "UNKNOWN"'
-run_case unrecorded-child '.coverage.expectedAttemptIds=["a","c"]' 0 '.coverage.unexpectedAttempts == 1 and .coverage.status == "UNKNOWN"'
+run_case unrecorded-child '.coverage.expectedAttempts |= map(select(.id != "b"))' 0 '.coverage.unexpectedAttempts == 1 and .coverage.status == "UNKNOWN"'
 run_case missing-parent '.workItems[0].attempts[1].parentId="absent"' 0 '.coverage.incompleteChains == 1 and .coverage.status == "UNKNOWN"'
 run_case cyclic-chain '.workItems[0].attempts[0].parentId="b"' 0 '.coverage.incompleteChains == 1 and .coverage.status == "UNKNOWN"'
 run_case unknown-model '.workItems[0].attempts[1].effectiveModel=null' 0 '.coverage.unattributedAttempts == 1 and .coverage.status == "UNKNOWN" and .totals.attempts == 3'
@@ -59,7 +67,7 @@ run_case outside-window '.workItems[0].terminalAt=2000' 2 '.status == "INVALID"'
 run_case missing-field 'del(.workItems[0].attempts[0].inputTokens)' 2 '.status == "INVALID"'
 run_case extra-field '.rawTranscript="sensitive-value"' 2 '.status == "INVALID" and (tostring | contains("sensitive-value") | not)'
 run_case invalid-metric '.workItems[0].attempts[0].activeSeconds=-1' 2 '.status == "INVALID"'
-run_case empty-observation '.coverage.expectedAttemptIds=[] | .workItems=[]' 0 '.totals.attempts == 0 and .totals.acceptedWorkItems == 0 and .optimizationVerdict == "NO_VERDICT" and (.modelParticipation | length) == 0'
+run_case empty-observation '.coverage.expectedAttempts=[] | .workItems=[]' 0 '.totals.attempts == 0 and .totals.acceptedWorkItems == 0 and .optimizationVerdict == "NO_VERDICT" and (.modelParticipation | length) == 0'
 printf '{invalid' > "$TMP/input.json"
 status=0
 bash "$HERE/inference-routing-scorecard.sh" < "$TMP/input.json" > "$TMP/output.json" 2> "$TMP/error" || status=$?

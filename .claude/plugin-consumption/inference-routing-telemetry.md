@@ -29,7 +29,7 @@ most 10^12; timestamps and token counts are integers. The top-level object conta
 | --- | --- |
 | `version` | Literal `1` |
 | `window` | `{start,end}` UTC epoch seconds; nonempty half-open interval `[start,end)` |
-| `coverage` | `{inventoryKnown,expectedAttemptIds}`; boolean plus unique identifier array from independent runtime inventory |
+| `coverage` | `{inventoryKnown,expectedAttempts}`; boolean plus independent inventory entries, each exactly `{id,workItemId}` with a unique attempt `id` and its expected work-item identity |
 | `workItems` | Array of the work-item records below |
 
 Each work item contains exactly `id`, `cohort`, `taskClass`, `policyRevision`, `status`, `terminalAt`,
@@ -59,6 +59,11 @@ Every attempt contains exactly:
 | `inputTokens`, `cachedInputTokens`, `outputTokens`, `reasoningTokens` | Native counters or null; separate series, never summed together because counters can overlap |
 | `activeSeconds` | Processing time excluding waits and child processing, or null when not measurable |
 
+The independent inventory must bind each attempt to its work item, not merely enumerate attempt IDs.
+A structurally valid chain assigned to another work item yields `misassignedAttempts` and UNKNOWN
+coverage; flat ID-only inventories and duplicate inventory IDs are invalid. Verify cohort assignment
+against the experiment register separately; this join does not authenticate caller-supplied labels.
+
 There must be one root per complete work item. Missing parents, cycles, chains deeper than 32,
 unattributed attempts, missing measurements, or pending descendants of terminal work yield UNKNOWN
 coverage. Exact duplicate rows are deduplicated and counted; conflicting work-item/attempt identities
@@ -77,7 +82,7 @@ attempts produces null. `failedByKind` separates reasoning failures from environ
 authority failures. Abandonment remains a separate count, never hidden as success.
 
 Every metric reports `observedTotal` and `unknownAttempts`; an observed zero with missing values is
-not a complete zero. Coverage reports expected/observed/missing/unexpected attempts, incomplete
+not a complete zero. Coverage reports expected/observed/missing/unexpected/misassigned attempts, incomplete
 chains, unknown attribution/metrics, and duplicate rows. Counts under UNKNOWN coverage are partial
 observations, never a successful optimization verdict.
 
