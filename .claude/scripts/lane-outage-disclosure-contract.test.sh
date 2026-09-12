@@ -30,7 +30,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${1:-${repo_root}/AGENTS.md}"
 
 fail() {
   echo "lane-outage-disclosure contract: FAIL — $*" >&2
@@ -131,7 +131,7 @@ assert_contains "${privacy}" 'under-specified for **skip clause (b)**' \
 #    while its factual description of the script stays accurate.
 # ---------------------------------------------------------------------------
 liveness="$(extract_section 'Run [`.claude/scripts/codex-lane-liveness.sh`]' \
-                            'The deployed Cursor Automation has no supported local write surface')"
+                            '### Authority model')"
 
 [ "${#liveness}" -gt 200 ] || fail "liveness paragraph captured only ${#liveness} chars — extraction is broken"
 

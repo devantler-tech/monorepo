@@ -58,7 +58,7 @@ jobs:
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
       board-add: ${{ steps.filter.outputs.board-add }}
-      cursor-board-sweep: ${{ steps.filter.outputs.cursor-board-sweep }}
+      agent-board-sweep: ${{ steps.filter.outputs.agent-board-sweep }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
       memory-rewrite: ${{ steps.filter.outputs.memory-rewrite }}
@@ -106,14 +106,15 @@ jobs:
               - '.gitmodules'
               - 'github/devantler-tech/github-actions/actions'
             agent-telemetry:
+              - '.claude/plugin-consumption/agent-instances.json'
               - '.claude/scripts/agent-telemetry.sh'
               - '.claude/scripts/agent-telemetry.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
-            cursor-board-sweep:
-              - '.claude/scripts/cursor-issue-board-sweep.sh'
-              - '.claude/scripts/cursor-issue-board-sweep.test.sh'
+            agent-board-sweep:
+              - '.claude/scripts/agent-issue-board-sweep.sh'
+              - '.claude/scripts/agent-issue-board-sweep.test.sh'
               # The sweep hands every discovered issue to board-add.sh, so a change
               # to that helper's interface can break this one without touching it.
               - '.claude/scripts/board-add.sh'
@@ -137,6 +138,7 @@ jobs:
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
             flow-scorecard:
+              - '.claude/plugin-consumption/agent-instances.json'
               - '.claude/scripts/flow-scorecard.sh'
               - '.claude/scripts/flow-scorecard.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
@@ -178,6 +180,7 @@ jobs:
               - '.claude/scripts/blocked-label-blocker-line.test.sh'
               - '.github/workflows/ci.yaml'
             unsigned-commit-report:
+              - '.claude/plugin-consumption/agent-instances.json'
               - '.claude/scripts/unsigned-commit-report.sh'
               - '.claude/scripts/unsigned-commit-report.test.sh'
               - '.github/workflows/ci.yaml'
@@ -323,7 +326,7 @@ jobs:
               # The loader is read and asserted against by this test, so a change to it alone must
               # run the job. Omitting it is how the GraphQL-identity correction turned the test red
               # without CI noticing: the loader moved, the assertion did not, and nothing ran.
-              - '.claude/loaders/cursor-daily-ai-engineer.md'
+              - '.claude/loaders/portable-agentic-engineer.md'
               - '.claude/scripts/maintainer-preflight.test.sh'
             latency-discipline-contract:
               - 'AGENTS.md'
@@ -385,7 +388,7 @@ jobs:
               # does, so a change to the loader alone must run it. The sibling maintainer-preflight
               # filter needed the same entry for the same reason — fixing one and not the other is
               # how a guard loses sight of its own subject.
-              - '.claude/loaders/cursor-daily-ai-engineer.md'
+              - '.claude/loaders/portable-agentic-engineer.md'
               - '.claude/scripts/drifted-lane-escalation-contract.test.sh'
               - '.github/workflows/ci.yaml'
             skill-owner:
@@ -405,6 +408,7 @@ jobs:
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
             plugin-definition-currency:
+              - '.claude/loaders/portable-agentic-engineer.md'
               - 'AGENTS.md'
               - '.claude/scripts/plugin-definition-currency.sh'
               - '.claude/scripts/plugin-definition-currency.test.sh'
@@ -448,15 +452,23 @@ jobs:
               - '.claude/scripts/fixtures/**'
               - '.github/workflows/ci.yaml'
             agent-role-delivery-contract:
+              - '.claude/plugin-consumption/agent-instances.json'
               - 'AGENTS.md'
               - '.claude/agents/daily-maintainer.md'
               - '.claude/agents/portfolio-surveyor.md'
-              - '.claude/loaders/cursor-daily-ai-engineer.md'
+              - '.claude/loaders/portable-agentic-engineer.md'
               # The two retired agent forks stay listed deliberately: the test asserts they
               # do NOT exist, so re-adding either must trigger the job that rejects it.
               - '.claude/agents/agent-improver.md'
               - '.claude/agents/finops-engineer.md'
               - '.claude/plugin-consumption/agentic-engineering.desired-state.json'
+              - '.claude/plugin-consumption/inference-routing*'
+              - '.claude/scripts/provider-neutral-agents-contract.test.sh'
+              - '.claude/loaders/**'
+              - '.*/environment.json'
+              - '.claude/scripts/inference-routing-contract.test.sh'
+              - '.claude/scripts/inference-routing-scorecard.sh'
+              - '.claude/scripts/inference-routing-scorecard.test.sh'
               - '.claude/settings.json'
               - '.claude/skills/agent-improvement/**'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
@@ -474,6 +486,7 @@ jobs:
               - 'libraries/agent-plugins'
               - '.github/workflows/ci.yaml'
             work-priority-ladder:
+              - '.claude/loaders/portable-agentic-engineer.md'
               - 'AGENTS.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
@@ -516,12 +529,12 @@ jobs:
               - '.gitmodules'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
+              - '.claude/plugin-consumption/agent-instances.json'
               - 'AGENTS.md'
               - '.claude/agents/daily-maintainer.md'
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/agents/platform-security-surveyor.md'
-              - '.claude/loaders/cursor-daily-ai-engineer.md'
-              - '.cursor/environment.json'
+              - '.claude/loaders/portable-agentic-engineer.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/skills/products/agent-skills/SKILL.md'
@@ -706,10 +719,10 @@ jobs:
       - name: Self-test board-add
         run: bash .claude/scripts/board-add.test.sh
 
-  test-cursor-board-sweep:
-    name: Test cursor board sweep
+  test-agent-board-sweep:
+    name: Test agent board sweep
     needs: changes
-    if: needs.changes.outputs.cursor-board-sweep == 'true'
+    if: needs.changes.outputs.agent-board-sweep == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -726,8 +739,8 @@ jobs:
       # substituted for a logger, so nothing reaches the network or the live
       # board. Both OSes because the daily runs happen on macOS while CI
       # defaults to Linux, and bash portability is what this pins.
-      - name: Self-test the cursor board sweep
-        run: bash .claude/scripts/cursor-issue-board-sweep.test.sh
+      - name: Self-test the agent board sweep
+        run: bash .claude/scripts/agent-issue-board-sweep.test.sh
 
   test-worktree-claim:
     name: Test worktree claim
@@ -810,7 +823,7 @@ jobs:
         with:
           persist-credentials: false
       # Hermetic bare-origin fixture + stubbed `gh` — no network, no token.
-      # Pins open-PR survival and SHA-matched MERGED reaping for cursor/*
+      # Pins open-PR survival and SHA-matched MERGED reaping for the native adapter
       # (monorepo#2298), plus the codex-namespace refusal.
       - name: Self-test branch-cleanup namespaces
         run: bash .claude/scripts/branch-cleanup.test.sh
@@ -1013,7 +1026,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted-base
-          sparse-checkout: .claude/scripts/unsigned-commit-report.sh
+          sparse-checkout: |
+            .claude/scripts/unsigned-commit-report.sh
+            .claude/plugin-consumption/agent-instances.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
       # The only step that holds a token, and it runs no pull-request code: the payload is read here
@@ -1029,16 +1044,22 @@ jobs:
             jq 'add // []' >"${RUNNER_TEMP}/pr-commits.json"
       # Provenance travels with the payload, or a fork PR opened from a branch merely NAMED
       # `codex/foo` is classified as agent-lane work and warned about commits from a stranger's
-      # repository. `user.login` is the REST spelling, so the Cursor App arrives as `cursor[bot]`.
+      # repository. Match the exact registered identity for the REST surface.
       - name: Report unsigned commits on this pull request
         env:
           HEAD_REF: ${{ github.head_ref }}
           HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
+          if [[ ! -r trusted-base/.claude/plugin-consumption/agent-instances.json ]]; then
+            echo '::notice::Unsigned-commit report UNKNOWN: instance registry is absent from the trusted base.'
+            exit 0
+          fi
           bash trusted-base/.claude/scripts/unsigned-commit-report.sh \
+            --instances trusted-base/.claude/plugin-consumption/agent-instances.json \
             --input "${RUNNER_TEMP}/pr-commits.json" --head-ref "$HEAD_REF" \
-            --repo "${GITHUB_REPOSITORY}" --head-owner "$HEAD_OWNER" --pr-author "$PR_AUTHOR"
+            --repo "${GITHUB_REPOSITORY}" --head-owner "$HEAD_OWNER" --head-repo "$HEAD_REPO" --pr-author "$PR_AUTHOR"
 
   test-release-exemption-identity-currency:
     name: Test release exemption identity currency
@@ -1764,6 +1785,15 @@ jobs:
             submodule update --init libraries/agent-plugins
       - name: Verify the agent-role delivery contract
         run: bash .claude/scripts/agent-role-delivery-contract.test.sh
+      - name: Verify inference routing policy and telemetry
+        run: |
+          shellcheck .claude/scripts/provider-neutral-agents-contract.test.sh \
+            .claude/scripts/inference-routing-contract.test.sh \
+            .claude/scripts/inference-routing-scorecard.sh \
+            .claude/scripts/inference-routing-scorecard.test.sh
+          bash .claude/scripts/provider-neutral-agents-contract.test.sh
+          bash .claude/scripts/inference-routing-contract.test.sh
+          bash .claude/scripts/inference-routing-scorecard.test.sh
 
   test-work-priority-ladder:
     name: Test work-priority ladder
@@ -1910,7 +1940,7 @@ jobs:
       - drift-check-renovate-dashboard
       - test-agent-telemetry
       - test-board-add
-      - test-cursor-board-sweep
+      - test-agent-board-sweep
       - test-comment-disclosure-drift
       - test-surveyor-forge-vocabulary
       - test-pr-ownership-disclosure
@@ -1975,7 +2005,7 @@ jobs:
             ${{ needs.drift-check-renovate-dashboard.result }}
             ${{ needs.test-agent-telemetry.result }}
             ${{ needs.test-board-add.result }}
-            ${{ needs.test-cursor-board-sweep.result }}
+            ${{ needs.test-agent-board-sweep.result }}
             ${{ needs.test-comment-disclosure-drift.result }}
             ${{ needs.test-surveyor-forge-vocabulary.result }}
             ${{ needs.test-pr-ownership-disclosure.result }}

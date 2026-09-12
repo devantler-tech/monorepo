@@ -10,7 +10,7 @@
 #
 # Examples:
 #   worktree-add.sh applications/ksail .claude/worktrees/maint-abc \
-#     -b cursor/area-desc-123
+#     -b codex/area-desc-123
 #   worktree-add.sh . /tmp/probe --detach
 #
 # All args after <worktree_path> are forwarded to `git worktree add` AFTER the

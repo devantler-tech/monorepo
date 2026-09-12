@@ -1,70 +1,18 @@
 #!/usr/bin/env bash
 #
-# Guards the escalation rule for a lane that is serving a SUPERSEDED agent definition and has no
-# repair path available to it.
+# Guard condition-based definition-drift tracking across registered instances.
+# Unknown recovery, unsafe repair fences, exact per-surface authorship plus disclosure,
+# occurrence reuse and capability-scoped metadata handoffs remain independent requirements.
+# Installed adapters and declared source-ref evidence are distinct: source parity cannot
+# authenticate a running session. The native refresh adapter remains CLI-specific.
 #
-# Why this needs a guard. The currency block's original escalation sentence names two triggers, and
-# both are exit states of `plugin-definition-refresh.sh`:
-#
-#     "When the script cannot resolve its CLI, or a refusal persists across rollouts, surface it on
-#      a declared *Maintainer channel* ..."
-#
-# `plugin-definition-currency.sh` DETECTS drift on three lanes (`--runtime claude|codex|cursor`).
-# `plugin-definition-refresh.sh` can REPAIR exactly one: it takes no runtime selector, and it drives
-# the Claude CLI control plane — dying unless it resolves an executable `claude`. Its plugins root is
-# NOT the constraint; `--plugins-root` makes that configurable, and naming it as the limitation would
-# send a future repair at a filesystem restriction that does not exist. So on two of three lanes the
-# script is never invoked, neither trigger can fire, and a
-# run that follows the section exactly detects the drift, reports it privately, and continues — with
-# no bound on how long that repeats.
-#
-# Measured 2026-08-22 (monorepo#2997): Claude CURRENT at 4.4.8, Codex DRIFT at 4.4.2 across 3 of 11
-# pinned files including `agents/portfolio-surveyor.agent.md`; 26 Codex dispatches on the superseded
-# copy since the pin moved; two Agent Improver dispatches saw it, correctly fenced the unsafe
-# remove/add hot-swap, and continued, because nothing obliged them to do more.
-#
-# Three properties are pinned here, and the second and third are the ones a well-meaning edit would
-# drop first:
-#
-#   1. The obligation is keyed to the CONDITION — a lane reading DRIFT whose repair is unavailable,
-#      refused, fenced or failed — never to a tool's exit code. `plugin-definition-currency.sh` detects
-#      drift on three lanes; `plugin-definition-refresh.sh` repairs one and takes no runtime selector,
-#      so an exit-code trigger is unreachable on the other two. Its Claude-only-ness is the CLI control
-#      plane it drives, not its plugins root, which `--plugins-root` makes configurable.
-#   2. The tracked issue is AUTHENTICATED. This repository is public, so opening an issue needs no write
-#      access and existence alone establishes nothing. An issue counts only on BOTH halves of the
-#      own-output test: an accepted agent author — `devantler` for a machine-local lane, or the cloud
-#      App — AND the canonical disclosure. That test extends to every field a run reads back.
-#
-#      The cloud App answers to THREE different spellings, so a checker must compare against the one
-#      its own surface returns. Measured 2026-08-23 against live artifacts:
-#
-#        search qualifier (input)     `app/cursor`     e.g. `--author app/cursor`, `author:app/cursor`
-#        REST `user.login`            `cursor[bot]`
-#        GraphQL `author.login`       `cursor`         (bare; `__typename: Bot`)
-#
-#      `app/cursor` is what you PASS to a search, never what a read returns, and GraphQL returns
-#      neither of the bracketed forms. Hardcoding one spelling for the wrong surface rejects an
-#      authentic Cursor tracker and opens a duplicate.
-#   3. A FENCED repair qualifies exactly as a failed one does. Fencing is usually correct, so it reads
-#      as a non-event, and a decision recorded as nothing is what makes the staleness unbounded.
-#   4. The rule stays ADDITIVE: a DRIFT is never a run-stopper and the reviewed-definition fallback
-#      survives, or a later tightening turns a reporting obligation into a halt.
-#   5. The scripts' premises stay true, verified against the CLIs rather than their source spelling.
-#
-# The clause tracks drift as an issue and does not page a maintainer channel; that is deliberate scope,
-# recorded in the prose and asserted below, because sound delivery needs an unforgeable delivery
-# record, a crash-safe ordering, an arbitration token distinct from the work claim, and closure
-# serialised against sending — none of which prose can carry.
-#
-# Assertions are scoped to the currency section rather than the whole file: `AGENTS.md` discusses
-# drift, fencing and maintainer channels elsewhere, so an unscoped match would pass on unrelated
-# prose while this passage stayed wrong.
+# Assertions are scoped to the currency section; a local Git fixture also preserves the
+# RED/GREEN proof that a fully qualified fetch refspec remains stable under pruning.
 
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${1:-${repo_root}/AGENTS.md}"
 refresh="${repo_root}/.claude/scripts/plugin-definition-refresh.sh"
 currency="${repo_root}/.claude/scripts/plugin-definition-currency.sh"
 
@@ -169,14 +117,14 @@ assert_contains "${section}" "unresolved currency \`UNKNOWN\` qualifies" \
 assert_contains "${section}" 'this run'"'"'s prescribed recovery did not resolve' \
   'the UNKNOWN trigger must turn on the recovery NOT resolving it — a transient UNKNOWN resolved in the same tick is not tracked'
 
-# The Cursor reset reads a SIBLING checkout's remote-tracking ref, and the currency script contains no
-# fetch at all. Without refreshing it first, a stale local ref reads CURRENT and closes a tracker while
-# that lane still serves a superseded revision. A close discards state, so it must fail closed.
-assert_contains "${section}" 'does NOT fetch' \
-  'the reset must record that the currency script performs no fetch, or a stale sibling ref silently justifies the close'
-
-assert_contains "${section}" 'Fetch that ref in the submodule immediately before the check' \
-  'the reset must require a fresh ref before closing a Cursor tracker'
+# Source refs need fresh source evidence, while an installed or running session needs its own
+# evidence. A source comparison must never close an occurrence whose loaded state remains unknown.
+assert_contains "${section}" 'source parity only' \
+  'a source-ref comparison must not attest the loaded session'
+assert_contains "${section}" 'Before comparing a remote-tracking ref' \
+  'the source reset must bind refresh to the ref being checked'
+assert_contains "${section}" 'failed initialization, fetch or source resolution remains UNKNOWN and never closes a tracker' \
+  'failed source recovery must remain unknown and cannot justify closure'
 
 # In a fresh worktree `libraries/agent-plugins` is EMPTY, so the fetch below has no repository to
 # update and the reset path is dead before the refspec ever matters. Pinning only the refspec leaves
@@ -201,8 +149,8 @@ assert_order "${section}" '.claude/scripts/submodule-init.sh libraries/agent-plu
   'git -C libraries/agent-plugins fetch origin '"'"'+refs/heads/main:refs/remotes/origin/main'"'"'' \
   'the reset must initialise the submodule BEFORE fetching, or the fetch runs against an empty checkout'
 
-assert_contains "${section}" 'never what the drifted dispatch actually loaded' \
-  'the close must not overstate a sibling read as verification of what the Cursor lane loaded'
+assert_contains "${section}" 'only runtime-authenticated loaded-revision evidence' \
+  'a loaded-session recovery needs runtime evidence, not source parity'
 
 # The FOUR ways a repair fails to happen. Each is pinned separately: a single catch-all word could
 # later be narrowed to the two that are easy to detect, silently dropping the others. **failed** is the
@@ -220,15 +168,6 @@ done
 assert_contains "${section}" 'existence proves nothing on a PUBLIC repository' \
   'the clause must state that issue existence is not self-authenticating on a public repo'
 
-# Both agent identities that can file one. The cloud lane's 403s cover Projects, comments, review
-# requests and PR-state mutations — not issue creation — so excluding it would discard the only
-# scheduled observation of the lane it is the sole checker for.
-assert_contains "${section}" "exactly **\`devantler\`**" \
-  'the machine-local agent identity must be named, not merely "an agent"'
-
-assert_contains "${section}" "**\`app/cursor\`**" \
-  'the cloud identity must be accepted — it files issues, and it is the only checker of its own lane'
-
 # The OTHER half of the own-output test, and the conjunction. Asserting the accepted authors alone is
 # not enough: with the disclosure requirement removed from the prose this guard would stay green, and a
 # HUMAN-authored devantler issue matching the drift description would then read as agent-owned state
@@ -237,30 +176,23 @@ assert_contains "${section}" "**\`app/cursor\`**" \
 assert_contains "${section}" 'body begins with' \
   'the disclosure must be required at the START of the body — the disambiguator anchors at position zero'
 
-assert_contains "${section}" '🤖 Generated by the' \
+assert_contains "${section}" 'canonical generated-output disclosure' \
   'the issue must require the canonical disclosure — without it a human-authored issue reads as agent state'
 
-assert_contains "${section}" '**both** halves of the own-output test' \
-  'author and disclosure must be required TOGETHER, or either alone can be read as sufficient'
-
-# ALL THREE spellings, each bound to the surface that actually produces it. GitHub renders this App
-# differently per surface, and no surface returns more than one: a run reconciling through REST that
-# checks only app/cursor -- or through GraphQL that checks only cursor[bot] -- rejects the authentic
-# tracker and files the duplicate the reuse rule exists to prevent.
-assert_contains "${section}" "**\`cursor[bot]\`**" \
-  'the REST spelling of the cloud identity must be accepted, or a REST-side lookup rejects its own issue'
-
-assert_contains "${section}" "**\`app/cursor\`**" \
-  'the search-qualifier spelling must be named, or a search for the tracker cannot be constructed'
-
-# The GraphQL spelling is the one that was measured WRONG: the clause claimed cursor[bot] on "the REST
-# and GraphQL APIs", but platform#2812 read both ways returns cursor[bot] on REST and the BARE cursor
-# on GraphQL. A GraphQL checker matching the bracketed form rejects every authentic Cursor tracker.
-assert_contains "${section}" "GraphQL \`author.login\`" \
-  'the GraphQL spelling must be stated for its own surface, not folded in with REST'
-
-assert_contains "${section}" "bare, \`__typename: Bot\`" \
-  'GraphQL returns the BARE cursor -- pinning this stops the bracketed REST form being reintroduced there'
+assert_contains "${section}" 'AUTHENTICATE it' \
+  'the authentication subsection anchor is missing, so the scoped assertions cannot be bound'
+assert_contains "${section}" '**Close an occurrence' \
+  'the authentication subsection end anchor is missing, so the scoped assertions cannot be bound'
+authentication="${section#*'AUTHENTICATE it'}"
+authentication="${authentication%%'**Close an occurrence'*}"
+case "${authentication}" in
+  *'exact author matches'*"registered instance's identity"*'API surface being read and its body begins with'*'canonical generated-output disclosure'*) ;;
+  *) fail 'registered author and leading disclosure must be required together' ;;
+esac
+assert_contains "${authentication}" 'REST, GraphQL and CLI author fields use their own registered values' \
+  'the tracker must authenticate the identity returned by its own API surface'
+assert_contains "${authentication}" 'search qualifier is an input' \
+  'a search input must not be accepted as a returned identity'
 
 # Reconciliation must belong to the reader, not the creator: a creator that dies between filing and
 # cleaning up leaves an orphan that nothing else is looking for.
@@ -277,11 +209,8 @@ assert_contains "${section}" 'RE-READ currency immediately before filing' \
 assert_contains "${section}" 'NARROWS that window; it does not close it' \
   'the clause must admit the recheck is not atomic, or the reset that bounds it looks redundant'
 
-assert_contains "${section}" 'The Cursor cloud lane files its own issue' \
-  'the contract must not claim the cloud instance cannot open an issue — it can, and does so elsewhere'
-
 # Authentication as a property of each value, not of the container that carried it.
-assert_contains "${section}" 'governs EVERY field a run reads back' \
+assert_contains "${section}" 'same authentication to every state field and subsequent observation' \
   'the authentication test must extend to any state a later edit adds, not only the issue'
 
 # One occurrence, one issue. Overlapping same-lane runs are normal, so create-only produces duplicate
@@ -292,8 +221,10 @@ assert_contains "${section}" 'governs EVERY field a run reads back' \
 # tracker and then closed by the reset.
 # The marker's VALUE must be canonical too, not just its shape: it is the tracker's sole identity, so
 # two runs rendering the lane differently each conclude no tracker exists and file their own.
-assert_contains "${section}" 'exactly one of `claude`, `codex`, `cursor`' \
+assert_contains "${section}" "registry's exact instance ID" \
   'the lane token in the marker must be canonical, or differing renderings produce duplicate trackers'
+assert_contains "${section}" 'backend selector and an instance identity are separate values' \
+  'a definition backend must not be used as an instance identity'
 
 assert_contains "${section}" '**Lane drift tracker:**' \
   'the tracker must be identified by an exact marker, or the reset can close an unrelated drift issue'
@@ -310,28 +241,17 @@ assert_contains "${section}" 'tracked, repository-visible issue' \
 assert_contains "${section}" 'creation, lookup, duplicate reconciliation, observation updates, and reset all use `devantler-tech/monorepo`' \
   'the full tracker lifecycle must use one canonical repository, or repo-local lookup and issue-number ordering cannot converge'
 
-assert_contains "${section}" 'Close the issue when that lane next reads' \
-  'closing on CURRENT is the reset — without it a recovered lane stays tracked forever'
+assert_contains "${section}" 'Close an occurrence only after a fresh verified recovery observation' \
+  'an occurrence must close only on fresh recovery evidence for that condition'
 
-# The cloud lane can CREATE an issue but its measured write matrix returns 403 for CLOSING one, so its
-# tracker has no reset unless a machine-local run performs it. Without this the round-9 fix (Cursor
-# files its own issue) produces a tracker nobody can close.
-# Repeat DRIFT from Cursor needs no handoff — the tracker already records the condition. Stated and
-# asserted for the same reason the paging scope limit is: an unexplained absence reads as an oversight
-# and invites someone building a delivery path for information that is not actually lost.
-assert_contains "${section}" 'carries no new state' \
-  'a repeat Cursor observation must be explained as needing no handoff, or its absence invites a mechanism'
-
-assert_contains "${section}" "EVERY close on a Cursor-filed tracker is a MACHINE-LOCAL run" \
-  'every close on a Cursor tracker needs a writable lane — reset AND duplicate reconciliation, since that lane cannot close at all'
-
-# The close handoff above says WHO closes; this says the reset is REACHABLE at all. Detection may stay
-# lane-local, but nothing obliges a machine-local schedule to run `--runtime cursor`, so a Cursor
-# tracker filed on DRIFT would never see the CURRENT that closes it — the clause would create state
-# nothing can reset, and a stale open issue reads as a live condition. Pinned separately because the
-# handoff assertion passes with the reachability gap wide open.
-assert_contains "${section}" 'runs `--runtime cursor` itself' \
-  'an open Cursor tracker must oblige the machine-local closer to run that lane check, or the reset is unreachable'
+assert_contains "${section}" 'Repeated unchanged observations reuse the authenticated occurrence' \
+  'same-condition observations must reuse the existing authenticated tracker'
+assert_contains "${section}" 'registered instance with that verified capability performs the scoped metadata handoff' \
+  'a metadata handoff needs verified capability rather than a provider or host assumption'
+assert_contains "${section}" 'Missing capability is not evidence that the action happened' \
+  'an unavailable action must not be reported as completed'
+assert_contains "${section}" 'owner of an open tracker also owns collecting recovery evidence and closing it' \
+  'an open occurrence needs a reachable recovery owner'
 
 # Scope. The clause deliberately stops short of paging, and that decision has to stay legible or a
 # later editor reads the absence as an omission and re-adds the delivery protocol this removed.
@@ -419,16 +339,16 @@ if [ -x "${currency}" ]; then
   # POSITIVE verification, not "anything but unknown argument". The negative form treats every other
   # failure as proof the flag was parsed — so if this script ever drops --runtime AND words its
   # unknown-option diagnostic differently ("invalid option", a usage dump, a bare exit), the branch
-  # reads that as success and CI passes on a stale three-lane premise. Assert the advertised option
+  # reads that as success and CI passes on a stale adapter premise. Assert the advertised option
   # instead, which is the same "read what the tool declares" fix applied to the refresh probe above.
   currency_help="$("${currency}" --help 2>&1 || true)"
   # Assert the option AND its exact advertised VALUE SET. Checking the words separately is vacuous:
-  # "cursor" and "codex" both appear in this script's surrounding help prose, so a usage line that had
-  # quietly dropped a lane still satisfies a word-by-word scan — verified by ablation.
+  # adapter names may appear in surrounding help prose, so separately matching words would miss a
+  # supported value disappearing from the usage line.
   case "${currency_help}" in
-    *"--runtime claude|codex|cursor"*) ;;
+    *"--runtime claude|codex|git-ref"*) ;;
     *)
-      fail "plugin-definition-currency.sh --help no longer advertises the exact three-lane selector, so the three-lane detection the contract assumes is gone"
+      fail "plugin-definition-currency.sh --help no longer advertises the declared native and source-ref adapters"
       ;;
   esac
 
@@ -452,39 +372,23 @@ fi
 
 
 # ---------------------------------------------------------------------------
-# 9. THE DEPLOYED CURSOR LOADER carries the same two facts, not just this contract.
-#     Establishing a fact in AGENTS.md while the boot path still runs the old command
-#     leaves the defect fully live: the loader is what the cloud lane actually executes.
-#     Both of these were found live on the loader after the contract had already been
-#     corrected here.
+# 9. The portable loader points to the reviewed contract instead of duplicating adapters.
 # ---------------------------------------------------------------------------
-loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
-[ -r "${loader}" ] || fail "cannot read ${loader} — the deployed Cursor boot path is unverifiable"
+loader="${repo_root}/.claude/loaders/portable-agentic-engineer.md"
+[ -r "${loader}" ] || fail "cannot read ${loader} — the declared bootstrap is unavailable"
 loader_text="$(tr '\n' ' ' <"${loader}" | tr -s '[:space:]' ' ')"
-[ "${#loader_text}" -gt 2000 ] || fail "loader captured only ${#loader_text} chars — the read is broken"
-
-# Same two-step sequence on the deployed loader: the bootstrap guard must initialise the submodule
-# before it fetches, or a fresh cloud checkout fetches into nothing.
-assert_contains "${loader_text}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
-  'the Cursor loader must initialise the submodule before fetching, or the fetch has no repository to update'
-
-# A bare `git fetch origin main` guarantees only FETCH_HEAD; the very next step of the loader reads
-# refs/remotes/origin/main, so with remote.origin.fetch unset the boot loads a STALE reviewed
-# definition while reporting success.
-assert_contains "${loader_text}" 'git -C libraries/agent-plugins fetch origin '"'"'+refs/heads/main:refs/remotes/origin/main'"'"'' \
-  'the Cursor loader must pin the FULLY-QUALIFIED refspec for the ref its next step reads: a generic fetch guarantees only FETCH_HEAD, and the short-form source is deleted by prune on alternate invocations'
-
-assert_order "${loader_text}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
-  'git -C libraries/agent-plugins fetch origin '"'"'+refs/heads/main:refs/remotes/origin/main'"'"'' \
-  'the Cursor loader must initialise the submodule BEFORE fetching, or the fetch runs against an empty checkout'
-
-# GraphQL returns the BARE `cursor`; requiring `cursor[bot]` on the GraphQL fallback rejects the
-# authentic identity and hard-stops the dispatch, which is the failure this fallback exists to avoid.
-assert_contains "${loader_text}" 'The GraphQL API identity is the BARE `cursor`' \
-  'the Cursor loader must accept the spelling the GraphQL surface actually returns, or its own fallback path rejects the authentic identity'
-
-assert_not_contains "${loader_text}" 'rejected the legitimate fallback and stopped the dispatch' \
-  'the deployed loader must state current identity rules without carrying a past-failure narrative in every dispatch'
+assert_contains "${loader_text}" 'AGENTS.md' 'the loader must resolve the consumer contract'
+assert_contains "${loader_text}" "consumer's pinned gitlink" 'the loader must use the reviewed consumer pin'
+assert_contains "${loader_text}" 'Agentic engineering plugin contract' \
+  'the loader must delegate source materialization to the canonical procedure'
+assert_contains "${loader_text}" 'without replacement objects' \
+  'the loader must preserve the reviewed object namespace'
+assert_contains "${loader_text}" 'unknown or unsupported authority closed for the affected action' \
+  'unknown capability must close the affected action without inventing a whole-run outage'
+assert_contains "${loader_text}" 'reviewed inline fallback where authorized' \
+  'an unavailable delegated capability must retain the authorized inline fallback'
+assert_not_contains "${loader_text}" 'gh auth' \
+  'the portable loader must not duplicate a provider-specific authentication adapter'
 
 # ---------------------------------------------------------------------------
 # BEHAVIOURAL: the fully-qualified refspec is load-bearing, not verbosity.
@@ -564,5 +468,5 @@ green_runs=$(refspec_arm green origin '+refs/heads/main:refs/remotes/origin/main
 # success — the arm would pass hardest exactly when it observed least. Three
 # explicit 'present' tokens are the only passing value.
 [ "${green_runs}" = "present present present " ] || fail \
-  "the fully-qualified refspec must keep refs/remotes/origin/main present on EVERY run; expected 'present present present ', got '${green_runs}' (an EMPTY value means the fixture itself failed, not that the refspec is sound) — otherwise the lane reset leaves the currency check reading a missing ref, exits 2 UNKNOWN, and a Cursor drift tracker can never be closed"
+  "the fully-qualified refspec must keep refs/remotes/origin/main present on EVERY run; expected 'present present present ', got '${green_runs}' (an EMPTY value means the fixture itself failed, not that the refspec is sound) — otherwise a source-drift reset leaves the currency check reading a missing ref and exits 2 UNKNOWN"
 echo "drifted-lane-escalation contract: PASS — condition-keyed escalation, issue-latched, additive, and both script premises verified behaviourally"

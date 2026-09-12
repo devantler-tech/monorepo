@@ -392,7 +392,7 @@ maintainer direction 2026-07-05):
 - **Output = well-formed issues, never ad-hoc PRs.** Each finding becomes an issue using the contract's
   evidence-led shape (labelled; `roadmap` for theme-sized findings) per the *Issue-driven* rule, joining
   the oldest-first queue. Research restocks the queue — it never displaces startable substantive work.
-- **Cursor & cadence.** Record a per-product `last_research` cursor in native memory (pointer only).
+- **Research position & cadence.** Record a per-product `last_research` cursor in native memory (pointer only).
   Dedupe against existing issues before filing; a research pass that files nothing new still updates
   the cursor and notes what was checked.
 

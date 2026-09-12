@@ -37,19 +37,20 @@
 #       lanes. Every examined PR gets a `T  <repo>#<n>  <branch>  commits=<k>  <sha…>` line so a clean
 #       sweep still names what it examined.
 #       A PR is lane work only when its author is the lane's exact writer identity AND its head lives in
-#       this repository's owner; a fork branch that merely LOOKS like `claude/x` is counted `foreign=`
+#       this repository; a fork branch that merely LOOKS like `claude/x` is counted `foreign=`
 #       and never examined. Repeating a lane in --lanes is a usage error (it would double every count).
-#       lane namespaces (default claude,codex,cursor) and report incidence across them, so a fix
+#       lane namespaces (default: the consumer instance registry) and report incidence across them, so a fix
 #       can be shown to have moved the number. Merged PRs are used rather than branches because
 #       lane branches are deleted on merge and a branch sweep is blind to exactly the commits
 #       that reached main.
 #   unsigned-commit-report.sh --input <payload.json> [--head-ref <ref>]
-#                             [--repo <owner/repo> --head-owner <login> --pr-author <login>]
+#                             [--repo <owner/repo> --head-repo <owner/repo> --pr-author <login>]
+#                             [--instances <trusted-registry.json>]
 #       Payload mode -- what CI runs (a trusted step reads the endpoint with the token; the report then
 #       runs from the BASE branch's copy of this script, without a token, behind the default-off
 #       repository variable UNSIGNED_COMMIT_REPORT) and the seam for the self-test: <payload.json> is a JSON array of commit objects in the
 #       REST `pulls/<n>/commits` shape (`sha`, `commit.verification.{verified,reason}`), or `-`.
-#       PROVENANCE: --head-owner and --pr-author carry the pull request's own provenance into this
+#       PROVENANCE: --head-repo and --pr-author carry the pull request's own provenance into this
 #       path, which is the same rule the sweep applies -- a head outside the base repository is
 #       `skipped=foreign-head` and an author that is not the lane's writer identity is
 #       `skipped=foreign-author`. Without them a fork PR opened from a branch merely NAMED
@@ -72,8 +73,9 @@ PROG="$(basename "$0")"
 die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
 usage_die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
 
-PR=""; REPO=""; INPUT=""; HEAD_REF=""; SINCE=""; LANES="claude,codex,cursor"
-PR_AUTHOR=""; HEAD_OWNER=""
+PR=""; REPO=""; INPUT=""; HEAD_REF=""; SINCE=""; LANES=""
+PR_AUTHOR=""; HEAD_OWNER=""; HEAD_REPO=""
+INSTANCES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../plugin-consumption/agent-instances.json"
 while [ $# -gt 0 ]; do
   case "$1" in
     --pr) [ $# -ge 2 ] || usage_die "--pr needs a number"; PR="$2"; shift 2 ;;
@@ -82,6 +84,8 @@ while [ $# -gt 0 ]; do
     --head-ref) [ $# -ge 2 ] || usage_die "--head-ref needs a ref"; HEAD_REF="$2"; shift 2 ;;
     --pr-author) [ $# -ge 2 ] || usage_die "--pr-author needs a login"; PR_AUTHOR="$2"; shift 2 ;;
     --head-owner) [ $# -ge 2 ] || usage_die "--head-owner needs a login"; HEAD_OWNER="$2"; shift 2 ;;
+    --head-repo) [ $# -ge 2 ] || usage_die "--head-repo needs owner/repo"; HEAD_REPO="$2"; shift 2 ;;
+    --instances) [ $# -ge 2 ] || usage_die "--instances needs a path"; INSTANCES="$2"; shift 2 ;;
     --merged-since) [ $# -ge 2 ] || usage_die "--merged-since needs YYYY-MM-DD"; SINCE="$2"; shift 2 ;;
     --lanes) [ $# -ge 2 ] || usage_die "--lanes needs a comma-separated list"; LANES="$2"; shift 2 ;;
     -h | --help) sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -90,6 +94,32 @@ while [ $# -gt 0 ]; do
 done
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
+
+# The checked-in consumer registry is the authority for membership and each API's
+# exact author spelling. A head prefix alone can never register a provider.
+registry="$(jq -ces '
+  def nonempty: type == "string" and length > 0;
+  if length == 1 then .[0] else error("one registry required") end
+  | select(type == "object" and .version == 1 and (.instances | type == "object" and length > 0))
+  | select(.policyPublisher as $p | ($p | nonempty) and (.instances | has($p)))
+  | select(all(.instances[];
+      (.namespace | type == "string" and test("^[a-z][a-z0-9-]*$")) and
+      (.authors | type == "object") and
+      ([.authors.cli, .authors.rest, .authors.graphql, .authors.search] | all(nonempty)) and
+      (.definitionAdapter | nonempty) and
+      (.roles | type == "array" and length > 0 and all(nonempty))))
+  | select([.instances[].namespace] | length == (unique | length))
+' "$INSTANCES" 2>/dev/null)" || die "instance registry is unreadable or malformed -- UNKNOWN"
+[ -n "$LANES" ] || LANES="$(printf '%s' "$registry" | jq -r '[.instances[].namespace] | join(",")')"
+IFS=, read -r -a lane_list <<<"$LANES"
+seen_lanes=","
+for l in "${lane_list[@]}"; do
+  [ -n "$l" ] || usage_die "--lanes has an empty namespace -- UNKNOWN"
+  case "$seen_lanes" in *",$l,"*) usage_die "--lanes repeats '$l' -- UNKNOWN" ;; esac
+  seen_lanes="${seen_lanes}${l},"
+  printf '%s' "$registry" | jq -e --arg lane "$l" 'any(.instances[]; .namespace == $lane)' >/dev/null \
+    || usage_die "--lanes names an unregistered namespace -- UNKNOWN"
+done
 
 modes=0
 [ -z "$PR" ] || modes=$((modes + 1))
@@ -107,29 +137,20 @@ if [ -n "$PR" ] || [ -n "$SINCE" ]; then
   command -v gh >/dev/null 2>&1 || die "gh is required"
 fi
 
-# The lane is read from the head ref's first path segment. `none` is a real answer: the report
-# runs on every PR, and stating the lane is part of stating coverage.
+# The lane is read from the head ref's first path segment. An empty internal
+# result means no registered match; every allowed namespace, including `none`,
+# remains usable. Only the rendered summary uses `none` as its no-match label.
 lane_of() { # <ref>
   local ref="$1" l
-  case "$ref" in */*) l="${ref%%/*}" ;; *) l="none" ;; esac
-  case ",$LANES," in *",$l,"*) printf '%s' "$l" ;; *) printf 'none' ;; esac
+  case "$ref" in */*) l="${ref%%/*}" ;; *) return 0 ;; esac
+  case ",$LANES," in *",$l,"*) printf '%s' "$l" ;; *) return 0 ;; esac
 }
 
-# The exact writer identity each lane publishes under (*Trust gate*): the machine-local lanes author as
-# `devantler`; the Cursor cloud lane as its App. Exact match only -- a login merely containing a
-# trusted name is not trusted.
-#
-# The App answers to two RETURNED spellings and no more. Measured 2026-09-06 against actions#1054:
-# `gh pr list --json author` and `gh pr view` both return `app/cursor`, REST `user.login` returns
-# `cursor[bot]`, and only GraphQL returns the bare `cursor` -- a surface this reporter never reads.
-# Accepting bare `cursor` therefore matched no App PR at all while admitting any ORDINARY account
-# whose login happens to be `cursor`, which is the provenance check inverted.
-lane_writer_ok() { # <lane> <author-login>
-  case "$1" in
-    claude | codex) [ "$2" = devantler ] ;;
-    cursor) [ "$2" = app/cursor ] || [ "$2" = "cursor[bot]" ] ;;
-    *) return 1 ;;
-  esac
+# API spellings are not interchangeable: accepting a GraphQL App login on the
+# REST surface can admit an ordinary account with the same bare name.
+lane_writer_ok() { # <lane> <author-login> [rest|cli]
+  printf '%s' "$registry" | jq -e --arg lane "$1" --arg author "$2" --arg surface "${3:-rest}" \
+    'any(.instances[]; .namespace == $lane and .authors[$surface] == $author)' >/dev/null
 }
 
 # Per-PR provenance, the same rule the sweep applies: this pull request is lane work only when its
@@ -140,8 +161,11 @@ lane_writer_ok() { # <lane> <author-login>
 # says it could not check.
 non_lane_reason() { # <lane> -> "" when this PR is lane work, else the skip reason
   local lane="$1"
-  [ "$lane" != none ] || { printf 'non-agent-head'; return; }
+  [ -n "$lane" ] || { printf 'non-agent-head'; return; }
   if [ -n "$HEAD_OWNER" ] && [ -n "$REPO" ] && [ "$HEAD_OWNER" != "${REPO%%/*}" ]; then
+    printf 'foreign-head'; return
+  fi
+  if [ -n "$HEAD_REPO" ] && [ -n "$REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then
     printf 'foreign-head'; return
   fi
   if [ -n "$PR_AUTHOR" ] && ! lane_writer_ok "$lane" "$PR_AUTHOR"; then
@@ -188,9 +212,15 @@ if [ -n "$INPUT" ]; then
   rows="$(printf '%s' "$payload" | jq -r --arg branch "${HEAD_REF:-}" \
     '.[] | [(.sha // "missing"), (.commit.verification.verified // false | tostring), (.commit.verification.reason // "missing"), $branch] | @tsv')" \
     || die "could not parse payload -- UNKNOWN"
-  # A named head outside every agent lane, a fork head, or a non-lane author is out of scope:
-  # classify nothing and state WHICH of those it was. An EMPTY head ref is unknown rather than
-  # non-agent and is still classified (the hermetic seam).
+  # Identity/repository claims turn this into an authoritative PR report. Bind
+  # the branch and every required provenance field before any skip or count.
+  # The raw classification seam makes no identity/repository claims at all.
+  if [ -n "$REPO$HEAD_OWNER$HEAD_REPO$PR_AUTHOR" ]; then
+    [ -n "$HEAD_REF" ] && [ -n "$REPO" ] && [ -n "$HEAD_REPO" ] && [ -n "$PR_AUTHOR" ] \
+      || die "payload has incomplete branch/repository/author provenance -- UNKNOWN"
+  fi
+  # A complete named head outside every agent lane, a fork head, or a non-lane
+  # author is out of scope: classify nothing and state which of those it was.
   if [ -n "$HEAD_REF" ] && [ -n "$(non_lane_reason "$(lane_of "$HEAD_REF")")" ]; then
     SKIP_REASON="$(non_lane_reason "$(lane_of "$HEAD_REF")")"
     SKIPPED=1; rows=""
@@ -206,12 +236,13 @@ elif [ -n "$PR" ]; then
   metadata="$(gh api "repos/$REPO/pulls/$PR")" || die "could not read $REPO#$PR metadata -- UNKNOWN"
   printf '%s' "$metadata" | jq -se '
     length == 1 and (.[0] | type == "object" and
-      ([.head.ref, .head.repo.owner.login, .user.login] | all(type == "string" and length > 0)))
+      ([.head.ref, .head.repo.owner.login, .head.repo.full_name, .user.login] | all(type == "string" and length > 0)))
   ' >/dev/null 2>&1 || die "$REPO#$PR has missing or malformed provenance -- UNKNOWN"
   actual_head="$(printf '%s' "$metadata" | jq -r '.head.ref')"
   [ -z "$HEAD_REF" ] || [ "$HEAD_REF" = "$actual_head" ] || die "supplied head ref differs from $REPO#$PR -- UNKNOWN"
   HEAD_REF="$actual_head"
   HEAD_OWNER="$(printf '%s' "$metadata" | jq -r '.head.repo.owner.login')"
+  HEAD_REPO="$(printf '%s' "$metadata" | jq -r '.head.repo.full_name')"
   PR_AUTHOR="$(printf '%s' "$metadata" | jq -r '.user.login')"
   SKIP_REASON="$(non_lane_reason "$(lane_of "$HEAD_REF")")"
   if [ -n "$SKIP_REASON" ]; then SKIPPED=1
@@ -224,20 +255,11 @@ else
   # smaller number presented as the whole -- narrow `--merged-since` or `--lanes` and re-run.
   LANE_PR_LIMIT=1000
   prs=""; foreign=0
-  IFS=, read -r -a lane_list <<<"$LANES"
-  # A repeated lane would query the same PR set twice and silently double prs=, examined= and every
-  # class count; a valid-looking invocation must not be able to produce a false incidence.
-  seen_lanes=","
-  for l in "${lane_list[@]}"; do
-    [ -n "$l" ] || continue
-    case "$seen_lanes" in *",$l,"*) usage_die "--lanes repeats '$l'" ;; esac
-    seen_lanes="${seen_lanes}${l},"
-  done
   for l in "${lane_list[@]}"; do
     [ -n "$l" ] || continue
     chunk="$(gh pr list --repo "$REPO" --state merged --limit "$LANE_PR_LIMIT" --search "merged:>=$SINCE head:$l/" \
-      --json number,headRefName,author,headRepositoryOwner \
-      --jq '.[] | [.number, .headRefName, (.author.login // ""), (.headRepositoryOwner.login // "")] | @tsv')" \
+      --json number,headRefName,author,isCrossRepository \
+      --jq '.[] | [.number, .headRefName, (.author.login // ""), (.isCrossRepository | tostring)] | @tsv')" \
       || die "could not list merged $l/* PRs in $REPO -- UNKNOWN"
     # Foreign-provenance results consume the same search limit. Check the raw listing before
     # filtering, or a capped search with even one foreign result could look complete.
@@ -246,11 +268,14 @@ else
       || die "lane $l/* has $lane_count merged PRs since $SINCE, at the $LANE_PR_LIMIT-PR cap: the sweep would be TRUNCATED -- UNKNOWN; narrow --merged-since or --lanes"
     # `head:<lane>/` matches branch NAMES, and names are not owned across forks: a stranger's `claude/x`
     # on a fork is not lane work. Provenance is the lane's exact writer identity on a head that lives in
-    # this repository's own owner; anything else is counted `foreign=` and never examined.
+    # this repository; anything else is counted `foreign=` and never examined.
     own=""
-    while IFS=$'\t' read -r pn pbranch pauthor powner; do
+    while IFS=$'\t' read -r pn pbranch pauthor pcross; do
       [ -n "$pn" ] || continue
-      if [ "$powner" = "${REPO%%/*}" ] && lane_writer_ok "$l" "$pauthor"; then
+      if [ -z "$pauthor" ] || { [ "$pcross" != true ] && [ "$pcross" != false ]; }; then
+        die "merged PR has missing or malformed provenance -- UNKNOWN"
+      fi
+      if [ "$pcross" = false ] && [ "$(lane_of "$pbranch")" = "$l" ] && lane_writer_ok "$l" "$pauthor" cli; then
         own="${own}${pn}"$'\t'"${pbranch}"$'\n'
       else
         foreign=$((foreign + 1))
@@ -296,7 +321,7 @@ done <<<"$rows"
 
 [ -z "$targets" ] || printf '%s' "$targets"
 [ -z "$findings" ] || printf '%s' "$findings"
-if [ -n "$SINCE" ]; then lane="sweep"; else lane="$(lane_of "${HEAD_REF:-}")"; fi
+if [ -n "$SINCE" ]; then lane="sweep"; else lane="$(lane_of "${HEAD_REF:-}")"; lane="${lane:-none}"; fi
 skip_note=""; [ "$SKIPPED" = 1 ] && skip_note=" skipped=${SKIP_REASON:-non-agent-head}"
 summary="$(printf 'examined=%d signed=%d unsigned=%d bad=%d unverifiable=%d head=%s lane=%s%s' \
   "$examined" "$g" "$n" "$b" "$e" "${HEAD_REF:-unknown}" "$lane" "$skip_note")"
@@ -311,7 +336,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     elif [ "$SKIPPED" = 1 ]; then
       case "${SKIP_REASON:-non-agent-head}" in
         foreign-head)
-          printf 'Skipped: the head of this pull request lives outside `%s`, so its commits are not agent-lane work and nothing was classified.\n' "${REPO%%/*}" ;;
+          printf 'Skipped: the head of this pull request lives outside `%s`, so its commits are not agent-lane work and nothing was classified.\n' "$REPO" ;;
         foreign-author)
           printf 'Skipped: `%s` is not the writer identity of the `%s` lane, so nothing was classified.\n' "$PR_AUTHOR" "$(lane_of "${HEAD_REF:-}")" ;;
         *)

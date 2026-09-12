@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test for cursor-issue-board-sweep.sh.
+# Self-test for agent-issue-board-sweep.sh.
 #
 # BEHAVIOURAL, not textual: `gh` is stubbed on PATH to emit a chosen result set and to RECORD its
 # own argv, and `board-add.sh` is stubbed to LOG every URL it is handed. The central assertion is
@@ -10,7 +10,7 @@
 set -Eeuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-sweep="$here/cursor-issue-board-sweep.sh"
+sweep="$here/agent-issue-board-sweep.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -27,6 +27,7 @@ mkstub_gh() {
   cat > "$tmp/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${GH_ARGV_LOG}"
+printf '%s\n' "$@" >> "${GH_ARGS_LOG}"
 if [ -n "${GH_STDERR:-}" ]; then printf '%s\n' "${GH_STDERR}" >&2; fi
 if [ "${GH_EXIT:-0}" != 0 ]; then echo "stub: simulated search failure" >&2; exit "${GH_EXIT}"; fi
 [ -s "${GH_RESULTS}" ] && cat "${GH_RESULTS}"
@@ -60,19 +61,43 @@ STUB
 
 mkstub_gh
 mkstub_board_add
-export GH_ARGV_LOG="$tmp/gh-argv" GH_RESULTS="$tmp/results" BOARD_LOG="$tmp/board-log"
+export GH_ARGV_LOG="$tmp/gh-argv" GH_ARGS_LOG="$tmp/gh-args" GH_RESULTS="$tmp/results" BOARD_LOG="$tmp/board-log"
 
 U1=https://github.com/devantler-tech/monorepo/issues/1
 U2=https://github.com/devantler-tech/platform/issues/2
 U3=https://github.com/devantler-tech/ksail/issues/3
 
 # Run the sweep (arg $1 = script under test) with a fresh log; sets $rc and $out.
-run_sweep() {
+run_sweep_without_author() {
   local script="$1"; shift
-  : > "$BOARD_LOG"; : > "$GH_ARGV_LOG"
+  : > "$BOARD_LOG"; : > "$GH_ARGV_LOG"; : > "$GH_ARGS_LOG"
   rc=0
   out="$(PATH="$tmp/bin:$PATH" "$script" --board-add "$tmp/board-add-stub.sh" --pace-seconds 0 "$@" 2>&1)" || rc=$?
 }
+
+run_sweep() {
+  local script="$1"; shift
+  run_sweep_without_author "$script" --author app/agent-fixture "$@"
+}
+
+# An omitted author must never trigger discovery or boarding under an implicit identity.
+printf '%s\n' "$U1" > "$GH_RESULTS"
+run_sweep_without_author "$sweep"
+report "an omitted --author fails before any external call" \
+  "$([ "$rc" -eq 1 ] && [ ! -s "$GH_ARGV_LOG" ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
+report "an omitted --author reports the required input" \
+  "$(printf '%s' "$out" | grep -qF -- '--author is required' && echo yes || echo no)" "$out"
+run_sweep_without_author "$sweep" --dry-run
+report "dry-run also requires an explicit author before discovery" \
+  "$([ "$rc" -eq 1 ] && [ ! -s "$GH_ARGV_LOG" ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
+for invalid_author in '' ' ' '--dry-run'; do
+  run_sweep_without_author "$sweep" --author "$invalid_author"
+  report "an empty, blank or option-shaped author fails before any external call [$invalid_author]" \
+    "$([ "$rc" -eq 1 ] && [ ! -s "$GH_ARGV_LOG" ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
+done
+run_sweep_without_author "$sweep" --author
+report "--author without a value is a usage error with no external call" \
+  "$([ "$rc" -eq 1 ] && [ ! -s "$GH_ARGV_LOG" ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
 
 # ---------------------------------------------------------------------------
 # 1. THE CENTRAL ASSERTION — every discovered issue reaches the helper.
@@ -87,9 +112,16 @@ report "summary counts the sweep" \
 
 # 2. Discovery flags are pinned (the AC names each one).
 argv="$(cat "$GH_ARGV_LOG")"
-for flag in "--archived=false" "--owner devantler-tech" "--state open" "--author app/cursor" "--limit 300" "--sort created" "--order asc"; do
+for flag in "--archived=false" "--owner devantler-tech" "--state open" "--author app/agent-fixture" "--limit 300" "--sort created" "--order asc"; do
   report "discovery pins ${flag}" "$(printf '%s' "$argv" | grep -qF -- "$flag" && echo yes || echo no)" "$argv"
 done
+report "discovery passes the explicit author as an exact argument" \
+  "$([ "$(awk 'previous == "--author" { print; exit } { previous=$0 }' "$GH_ARGS_LOG")" = app/agent-fixture ] && echo yes || echo no)" "$argv"
+
+# A different explicit identity must select the caller's author without a provider default.
+run_sweep_without_author "$sweep" --author fixture-maintainer
+report "an explicit user author is preserved and every issue reaches board-add" \
+  "$([ "$rc" -eq 0 ] && [ "$(sort "$BOARD_LOG")" = "$want" ] && [ "$(awk 'previous == "--author" { print; exit } { previous=$0 }' "$GH_ARGS_LOG")" = fixture-maintainer ] && echo yes || echo no)" "rc=$rc $out"
 
 # 3. An EMPTY but SUCCESSFUL sweep is believed: exit 0, nothing handed to the helper.
 : > "$GH_RESULTS"
@@ -259,4 +291,4 @@ else
   report "ablation: dropping an issue makes the set assertion fire" yes
 fi
 
-if [ "$fail" -eq 0 ]; then echo "cursor-issue-board-sweep self-test: all cases passed"; else echo "cursor-issue-board-sweep self-test: FAILED" >&2; exit 1; fi
+if [ "$fail" -eq 0 ]; then echo "agent-issue-board-sweep self-test: all cases passed"; else echo "agent-issue-board-sweep self-test: FAILED" >&2; exit 1; fi

@@ -3,8 +3,8 @@
 # agent-claim.sh — lane-neutral claim arbitration for multi-instance races
 # (monorepo#2302).
 #
-# Every agent instance writes its own work-branch namespace (`claude/*`,
-# `codex/*`, `cursor/*`), so a race settled on the work-branch name is never
+# Every agent instance writes its registered work-branch namespace (for example,
+# `claude/*` or `codex/*`), so a race settled on the work-branch name is never
 # arbitrated across lanes. This helper pushes a SINGLE shared ref
 # `agent-claim/<issue>` that every instance derives from the issue number
 # alone, BEFORE creating its lane-specific work branch. The push decides the

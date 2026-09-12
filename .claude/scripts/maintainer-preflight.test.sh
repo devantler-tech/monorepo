@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 run_loop="${1:-${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md}"
 routine_prompt="${2:-}"
-cursor_loader="${3:-${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md}"
+portable_loader="${3:-${repo_root}/.claude/loaders/portable-agentic-engineer.md}"
 
 fail() {
   echo "maintainer preflight contract: FAIL — $*" >&2
@@ -18,8 +18,8 @@ grep -Fq 'sandboxed' "${run_loop}" ||
 grep -Fq 'env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --active --hostname github.com' "${run_loop}" ||
   fail "saved-login probe does not clear both injected-token variables"
 
-grep -Fq "active account other than \`devantler\`" "${run_loop}" ||
-  fail "saved-login fallback does not cover a valid token for the wrong account"
+grep -Fq 'instance registry' "${run_loop}" ||
+  fail "preflight does not resolve the expected identity from the instance registry"
 
 grep -Fq "If the saved login is selected, prefix every subsequent \`gh\` command with \`env -u GH_TOKEN -u GITHUB_TOKEN\`" "${run_loop}" ||
   fail "saved-login fallback does not neutralize env tokens for later gh commands"
@@ -72,8 +72,18 @@ grep -Fq 'Reject explicit authentication failures before inspecting the response
 grep -Fq "Compare \`viewer.login\` with this deployment's exact expected identity" "${run_loop}" ||
   fail "GraphQL fallback does not use the deployment-scoped expected identity"
 
-grep -Fq "GraphQL API identity is the" "${run_loop}" && grep -Fq "BARE \`cursor\`" "${run_loop}" ||
-  fail "GraphQL fallback does not pin the measured BARE cursor identity (cursor[bot] is the REST spelling)"
+preflight="$(tr '\n' ' ' <"${run_loop}" | tr -s '[:space:]' ' ')"
+# The field must be bound to its own surface. Merely mentioning all three registry keys would
+# accept a swapped REST/GraphQL mapping and reject a correctly authenticated native instance.
+# shellcheck disable=SC2016 # literal Markdown identifiers, never command substitutions
+case "${preflight}" in
+  *'`authors.graphql`'*'`viewer.login`'*'`authors.rest`'*'REST `user.login`'*'`authors.search` only as a search qualifier'*) ;;
+  *) fail "preflight does not bind each registered identity to its own API surface" ;;
+esac
+case "${preflight}" in
+  *'never infer one from another or treat a search input as a returned identity'*) ;;
+  *) fail "preflight permits inferring returned identities from a different surface" ;;
+esac
 
 grep -Fq "A mismatch is \`wrong GitHub identity\`" "${run_loop}" ||
   fail "GraphQL fallback does not classify the wrong-identity case"
@@ -94,17 +104,14 @@ grep -Fq "and **only then** recommend \`gh auth login\`" "${run_loop}" ||
 grep -Fq 'record only these gate classifications in durable memory' "${run_loop}" ||
   fail "missing the credential-safe memory rule"
 
-grep -Fq 'gh api --include --hostname github.com user' "${cursor_loader}" ||
-  fail "Cursor boot gate does not expose the REST status and headers"
-
-grep -Fq "generic \`gh auth status\` invalid-token message is not conclusive" "${cursor_loader}" ||
-  fail "Cursor boot gate can still collapse a REST outage into an invalid-token verdict"
-
-grep -Fq "GraphQL API identity is the BARE \`cursor\`" "${cursor_loader}" ||
-  fail "Cursor boot gate does not pin the measured BARE cursor GraphQL identity"
-
-if grep -Fq "Confirm \`gh auth status\` authenticates **\`app/cursor\`**" "${cursor_loader}"; then
-  fail "Cursor loader still hard-stops before the observable API fallback"
+[ -r "${portable_loader}" ] || fail "portable loader is unavailable"
+loader_text="$(tr '\n' ' ' <"${portable_loader}" | tr -s '[:space:]' ' ')"
+case "${loader_text}" in
+  *'AGENTS.md'*'instance registry'*'native harness'*'authenticated identity'*) ;;
+  *) fail "portable loader does not delegate authentication to the registered native instance contract" ;;
+esac
+if grep -Fq 'gh auth' "${portable_loader}"; then
+  fail "portable loader duplicates authentication commands instead of the versioned preflight"
 fi
 
 if [[ -n "${routine_prompt}" ]]; then

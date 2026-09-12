@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Self-test for branch-cleanup.sh — proves namespace parameterisation (monorepo#2298)
+# Self-test for branch-cleanup.sh — proves the native Claude-host namespace boundary
 # and the MODE / manifest contract (monorepo#2252 / #2255):
-#   - a live cursor/* branch whose OPEN PR is in the keep-set SURVIVES a cursor sweep
-#   - a spent cursor/* branch with SHA-matched MERGED PR evidence is REAPED remotely
-#   - local deletion stays claude-only (cursor sweep never deletes local refs)
+#   - a live claude/* branch whose OPEN PR is in the keep-set SURVIVES a claude sweep
+#   - a spent claude/* branch with SHA-matched MERGED PR evidence is REAPED remotely
+#   - an unsupported namespace fails before changing local/remote refs or the manifest
 #   - codex namespace is refused
 #   - unrecognised MODE exits non-zero
 #   - dry-run leaves the manifest byte-identical (and still reports would-delete counts)
@@ -97,53 +97,69 @@ mk_remote_branch() {
   git -C "$work" rev-parse "$name"
 }
 
-# --- 1. Open-PR cursor branch survives ------------------------------------
-open_sha=$(mk_remote_branch "cursor/open-pr-survives-2298")
+# --- 1. Open-PR claude branch survives ------------------------------------
+open_sha=$(mk_remote_branch "claude/open-pr-survives-2298")
 git -C "$work" checkout main >/dev/null
 export OPEN_HEADS_FILE="$tmp/open_heads"
 export PR_EVIDENCE_FILE="$tmp/pr_evidence"
-printf '%s\n' "cursor/open-pr-survives-2298" >"$OPEN_HEADS_FILE"
+printf '%s\n' "claude/open-pr-survives-2298" >"$OPEN_HEADS_FILE"
 # Even MERGED evidence must not override an OPEN keep — but we give OPEN only.
 : >"$PR_EVIDENCE_FILE"
 manifest="$tmp/manifest1"
 : >"$manifest"
-out="$("$helper" "$work" "monorepo" "$manifest" apply cursor 2>&1)" && rc=0 || rc=$?
-report "cursor sweep with open PR exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
-report "open cursor/* remote ref still exists" \
-  "$(git -C "$bare" show-ref --verify --quiet "refs/heads/cursor/open-pr-survives-2298" && echo yes || echo no)"
+out="$("$helper" "$work" "monorepo" "$manifest" apply claude 2>&1)" && rc=0 || rc=$?
+report "claude sweep with open PR exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "open claude/* remote ref still exists" \
+  "$(git -C "$bare" show-ref --verify --quiet "refs/heads/claude/open-pr-survives-2298" && echo yes || echo no)"
 report "open-PR survival wrote no remote deletion to manifest" \
-  "$(grep -q $'\tremote\tcursor/open-pr-survives-2298\t' "$manifest" && echo no || echo yes)"
+  "$(grep -q $'\tremote\tclaude/open-pr-survives-2298\t' "$manifest" && echo no || echo yes)"
 
-# --- 2. Spent cursor/* with SHA-matched MERGED evidence is reaped ---------
-spent_sha=$(mk_remote_branch "cursor/spent-merged-2298")
+# --- 2. Spent claude/* with SHA-matched MERGED evidence is reaped ---------
+spent_sha=$(mk_remote_branch "claude/spent-merged-2298")
 git -C "$work" checkout main >/dev/null
 : >"$OPEN_HEADS_FILE"
 # gh --jq already shapes rows as name\tstate\toid — stub emits that shape directly.
-printf '%s\tMERGED\t%s\n' "cursor/spent-merged-2298" "$spent_sha" >"$PR_EVIDENCE_FILE"
+printf '%s\tMERGED\t%s\n' "claude/spent-merged-2298" "$spent_sha" >"$PR_EVIDENCE_FILE"
 manifest="$tmp/manifest2"
 : >"$manifest"
-out="$("$helper" "$work" "monorepo" "$manifest" apply cursor 2>&1)" && rc=0 || rc=$?
-report "cursor sweep of spent branch exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
-report "spent cursor/* remote ref was deleted" \
-  "$(git -C "$bare" show-ref --verify --quiet "refs/heads/cursor/spent-merged-2298" && echo no || echo yes)"
+out="$("$helper" "$work" "monorepo" "$manifest" apply claude 2>&1)" && rc=0 || rc=$?
+report "claude sweep of spent branch exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "spent claude/* remote ref was deleted" \
+  "$(git -C "$bare" show-ref --verify --quiet "refs/heads/claude/spent-merged-2298" && echo no || echo yes)"
 report "manifest recorded the remote deletion sha" \
-  "$(grep -Fq $'monorepo\tremote\tcursor/spent-merged-2298\t'"$spent_sha"$'\tMERGED' "$manifest" && echo yes || echo no)"
+  "$(grep -Fq $'monorepo\tremote\tclaude/spent-merged-2298\t'"$spent_sha"$'\tMERGED' "$manifest" && echo yes || echo no)"
 
-# --- 3. cursor sweep does not delete local refs ---------------------------
-# Create a local-only cursor branch (no remote) — cursor namespace must leave local alone.
-git -C "$work" checkout -B "cursor/local-only-2298" main >/dev/null
-git -C "$work" commit --allow-empty -m "local only" >/dev/null
+# --- 3. unsupported namespace fails before any mutation -------------------
+# Both refs have deletion evidence: falling back to the native namespace or
+# treating an arbitrary argument as authority would delete one of them.
+native_guard=claude/namespace-guard-2298
+foreign_guard=external-agent/namespace-guard-2298
+native_sha=$(mk_remote_branch "$native_guard")
+foreign_sha=$(mk_remote_branch "$foreign_guard")
 git -C "$work" checkout main >/dev/null
-local_sha=$(git -C "$work" rev-parse "cursor/local-only-2298")
 : >"$OPEN_HEADS_FILE"
-: >"$PR_EVIDENCE_FILE"
-manifest="$tmp/manifest3"
-: >"$manifest"
-out="$("$helper" "$work" "monorepo" "$manifest" apply cursor 2>&1)" && rc=0 || rc=$?
-report "cursor sweep leaves local-only cursor/* intact" \
-  "$(git -C "$work" rev-parse --verify --quiet "refs/heads/cursor/local-only-2298" >/dev/null && echo yes || echo no)"
-report "cursor sweep wrote no local deletion for that branch" \
-  "$(grep -q $'\tlocal\tcursor/local-only-2298\t' "$manifest" && echo no || echo yes)"
+printf '%s\tMERGED\t%s\n' "$native_guard" "$native_sha" "$foreign_guard" "$foreign_sha" >"$PR_EVIDENCE_FILE"
+for unsupported_namespace in external-agent ''; do
+  manifest="$tmp/manifest3-${unsupported_namespace:-empty}"
+  printf 'seed-row\n' >"$manifest"
+  before=$(cksum "$manifest")
+  out="$("$helper" "$work" "monorepo" "$manifest" apply "$unsupported_namespace" 2>&1)" && rc=0 || rc=$?
+  report "unsupported namespace [$unsupported_namespace] is refused (exit 2)" \
+    "$([[ $rc -eq 2 ]] && echo yes || echo no)" "rc=$rc out=$out"
+  report "unsupported namespace [$unsupported_namespace] leaves the manifest byte-identical" \
+    "$([[ "$before" == "$(cksum "$manifest")" ]] && echo yes || echo no)" "out=$out"
+  for guarded_branch in "$native_guard" "$foreign_guard"; do
+    report "unsupported namespace [$unsupported_namespace] preserves local $guarded_branch" \
+      "$(git -C "$work" show-ref --verify --quiet "refs/heads/$guarded_branch" && echo yes || echo no)"
+    report "unsupported namespace [$unsupported_namespace] preserves remote $guarded_branch" \
+      "$(git -C "$bare" show-ref --verify --quiet "refs/heads/$guarded_branch" && echo yes || echo no)"
+  done
+done
+# Remove only these hermetic fixture refs so later exact deletion counts stay independent.
+for guarded_branch in "$native_guard" "$foreign_guard"; do
+  git -C "$work" update-ref -d "refs/heads/$guarded_branch"
+  git -C "$bare" update-ref -d "refs/heads/$guarded_branch"
+done
 
 # --- 4. codex namespace refused -------------------------------------------
 out="$("$helper" "$work" "monorepo" "$tmp/m4" apply codex 2>&1)" && rc=0 || rc=$?
@@ -413,7 +429,7 @@ report "apply recorded the remote deletion sha and MERGED status" \
 
 
 # Silence unused-var lint for the open_sha we only needed for push tip creation.
-: "$open_sha" "$local_sha"
+: "$open_sha"
 
 # --- 13. the pre-delete worktree re-check must survive a realistic list -----
 # monorepo#2674. The local delete loop re-reads `git worktree list --porcelain`

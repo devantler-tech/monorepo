@@ -261,6 +261,100 @@ run() {
 
 echo "agent-telemetry.sh"
 
+# Registry joins are independent of native transcript adapters. Exercise the
+# forge response boundary with neutral names and exact CLI identities.
+mkdir -p "$FIX/outcomes/bin" "$FIX/outcomes/repo/.git"
+cat > "$FIX/outcomes/instances.json" <<'JSON'
+{"version":1,"policyPublisher":"build-worker","instances":{
+  "build-worker":{"namespace":"worker","authors":{"cli":"app/build-worker","rest":"build-worker[bot]","graphql":"build-worker","search":"app/build-worker"},"definitionAdapter":"local-runtime","roles":["agentic-engineer"]},
+  "codex-local":{"namespace":"codex","authors":{"cli":"devantler","rest":"devantler","graphql":"devantler","search":"devantler"},"definitionAdapter":"codex","roles":["agentic-engineer"]}
+}}
+JSON
+cat > "$FIX/outcomes/prs.json" <<'JSON'
+[
+  {"mergedAt":"2099-01-01T00:00:00Z","headRefName":"worker/change","author":{"login":"app/build-worker"},"isCrossRepository":false,"headRepositoryOwner":{"login":"devantler-tech"}},
+  {"mergedAt":"2099-01-01T00:00:00Z","headRefName":"worker/wrong-spelling","author":{"login":"build-worker[bot]"},"isCrossRepository":false,"headRepositoryOwner":{"login":"devantler-tech"}},
+  {"mergedAt":"2099-01-01T00:00:00Z","headRefName":"worker/fork","author":{"login":"app/build-worker"},"isCrossRepository":true,"headRepositoryOwner":{"login":"devantler-tech"}},
+  {"mergedAt":"2099-01-01T00:00:00Z","headRefName":"codex/forged","author":{"login":"stranger"},"isCrossRepository":false,"headRepositoryOwner":{"login":"devantler-tech"}},
+  {"mergedAt":"2099-01-01T00:00:00Z","headRefName":"claude/unregistered","author":{"login":"devantler"},"isCrossRepository":false,"headRepositoryOwner":{"login":"devantler-tech"}}
+]
+JSON
+cat > "$FIX/outcomes/bin/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  'pr list '*)
+    while [ $# -gt 0 ]; do
+      if [ "$1" = --jq ]; then jq -r "$2" "$OUTCOMES_PRS"; exit; fi
+      shift
+    done
+    cat "$OUTCOMES_PRS" ;;
+  'api repos/'*) printf '0\n' ;;
+  *) exit 93 ;;
+esac
+SH
+chmod +x "$FIX/outcomes/bin/gh"
+outcomes_run() {
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="${OUTCOMES_PRS:-$FIX/outcomes/prs.json}" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  CODEX_HOME="$FIX/outcomes/no-codex" \
+  bash "$TARGET" --section outcomes --instances "$FIX/outcomes/instances.json" "$@" 2>&1
+}
+OUT=$(outcomes_run); RC=$?
+if [ "$RC" = 0 ] && grep -qE 'devantler-tech/monorepo +1$' <<<"$OUT"; then
+  ok "outcomes count only the registered neutral CLI author in the same repository"
+else
+  bad "outcomes count only the registered neutral CLI author in the same repository" "$OUT"
+fi
+for field in author isCrossRepository headRefName; do
+  jq "[.[0] | del(.$field)]" "$FIX/outcomes/prs.json" > "$FIX/outcomes/missing.json"
+  OUT=$(OUTCOMES_PRS="$FIX/outcomes/missing.json" outcomes_run); RC=$?
+  check "outcomes missing $field provenance is UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+done
+for branch in null '""' '" "' '"worker/space name"' 7 false '[]' '{}'; do
+  jq --argjson branch "$branch" '[.[0] | .headRefName = $branch]' "$FIX/outcomes/prs.json" > "$FIX/outcomes/missing.json"
+  OUT=$(OUTCOMES_PRS="$FIX/outcomes/missing.json" outcomes_run); RC=$?
+  check "outcomes malformed branch evidence $branch is UNKNOWN before lane filtering" "$OUT" 'merged PRs: UNKNOWN'
+done
+jq '[.[0], (.[0] | del(.headRefName))]' "$FIX/outcomes/prs.json" > "$FIX/outcomes/missing.json"
+OUT=$(OUTCOMES_PRS="$FIX/outcomes/missing.json" outcomes_run); RC=$?
+check "outcomes mixed known and missing branch evidence is UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+if grep -qE 'devantler-tech/monorepo +1$' <<<"$OUT"; then
+  bad "outcomes never presents a partial branch join as a complete count" "$OUT"
+else
+  ok "outcomes never presents a partial branch join as a complete count"
+fi
+for registry in missing malformed; do
+  printf '{}\n' > "$FIX/outcomes/malformed-instances.json"
+  OUT=$(outcomes_run --instances "$FIX/outcomes/$registry-instances.json"); RC=$?
+  if [ "$RC" != 0 ]; then ok "$registry outcomes registry fails closed"; else bad "$registry outcomes registry fails closed" "rc=$RC"; fi
+  check "$registry outcomes registry explicitly states UNKNOWN" "$OUT" 'UNKNOWN'
+  nocheck "$registry outcomes registry never reports a zero merged total" "$OUT" 'total: 0'
+done
+# A malformed registry must not withhold the sections that do not depend on it.
+# `want outcomes` is true on the default `all` run, so validating there used to
+# exit 2 and suppress dispatch, reliability, efficiency, safety, drift and A2A —
+# six working sections withheld to report one broken one. Only an explicit
+# `--section outcomes` request is fatal now. Continuing is not a fail-open: the
+# outcomes block still reports UNKNOWN, never a clean zero.
+all_run() {
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="${OUTCOMES_PRS:-$FIX/outcomes/prs.json}" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  CODEX_HOME="$FIX/outcomes/no-codex" \
+  bash "$TARGET" --instances "$FIX/outcomes/malformed-instances.json" "$@" 2>&1
+}
+printf '{}\n' > "$FIX/outcomes/malformed-instances.json"
+OUT=$(all_run); RC=$?
+if [ "$RC" != 2 ]; then ok "malformed registry does not abort a default all-section run"; else bad "malformed registry does not abort a default all-section run" "rc=$RC"; fi
+check "default all-section run still renders a registry-independent section" "$OUT" '── DISPATCH HEALTH'
+check "default all-section run reports outcomes as UNKNOWN" "$OUT" 'merged PRs: UNKNOWN'
+check "default all-section run marks every merged-PR row UNKNOWN, never a count" "$OUT" 'UNKNOWN (query or provenance)'
+OUT=$(all_run --section outcomes); RC=$?
+if [ "$RC" = 2 ]; then ok "explicit --section outcomes still fails closed on a malformed registry"; else bad "explicit --section outcomes still fails closed on a malformed registry" "rc=$RC"; fi
+if [ "${1:-}" = --registry-only ]; then
+  echo "  passed: $PASS   failed: $FAIL"
+  [ "$FAIL" -eq 0 ]; exit
+fi
+
 # ── 1. syntax ─────────────────────────────────────────────────────────────────
 echo
 echo "syntax"

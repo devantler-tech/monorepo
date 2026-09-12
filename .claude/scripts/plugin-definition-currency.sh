@@ -6,8 +6,8 @@
 # the gitlink against upstream `main` — but the machine-local copy the agent and skill entrypoints are
 # actually served from is a runtime-managed install. Its staleness can therefore be unbounded.
 # Measured 2026-08-14 on the Claude instance, 7 of 9 definition files differed from the pin and had
-# not moved in 20 days, while both existing controls read clean. See monorepo#2847. Cursor instead
-# loads a submodule ref, so that lane verifies the loaded revision rather than inventing an install.
+# not moved in 20 days, while both existing controls read clean. See monorepo#2847. The optional
+# git-ref backend compares a declared source revision only; it cannot attest a loaded session.
 #
 # READ-ONLY. It never edits, and never needs write access to, the runtime's plugin install. Refresh
 # is a runtime control-plane action (the `/plugin` marketplace update), never a cache edit.
@@ -17,12 +17,15 @@
 # installed version string still looks plausible. The loaded surface is every agent and skill file
 # plus every provider-neutral requiredRuntimeAsset declared by this consumer.
 #
-# Usage: plugin-definition-currency.sh [--runtime claude|codex|cursor] [--repo-root DIR]
+# Usage: plugin-definition-currency.sh [--runtime claude|codex|git-ref] [--repo-root DIR]
 #                                      [--plugins-root DIR] [--codex-home DIR] [--gitlink SHA]
 #                                      [--installed DIR] [--submodule-path PATH]
-#                                      [--cursor-ref REF] [--quiet]
+#                                      [--loaded-ref REF] [--quiet]
 #
-# Exit 0  every pinned loaded file was CLASSIFIED and MATCHED
+# git-ref requires --loaded-ref with a full commit ID or fully qualified ref. Its exit 0 means
+# source parity only; it does not attest the loaded session, effective runtime state, or authority.
+#
+# Exit 0  installed paths were CLASSIFIED and MATCHED, or the declared git-ref source matched
 #      1  DRIFT — at least one differs, is missing, or is unexpected
 #      2  UNKNOWN — could not determine (usage error, unresolvable install, unreachable revision,
 #         or a path inside the definition directories this script cannot classify)
@@ -31,8 +34,8 @@
 # Only 0 and 1 are verdicts; a caller must not read anything else as "current". The lone exception
 # is `--help`, which exits 0 without checking anything.
 #
-# Exit 0 is deliberately narrow: every pinned path under the definition directories was recognised
-# AND matched, never "everything I happened to recognise matched".
+# An installed-backend exit 0 is deliberately narrow: every pinned path under the definition
+# directories was recognised AND matched, never "everything I happened to recognise matched".
 #
 # Exit 2 is deliberately NOT exit 0. "I could not check" and "it is current" are different answers,
 # and collapsing them is how a currency check becomes decoration.
@@ -48,7 +51,8 @@ SUBMODULE_PATH="libraries/agent-plugins"
 PLUGIN_ID="agentic-engineering@devantler-plugins"
 PLUGIN_NAME="agentic-engineering"
 RUNTIME="claude"
-CURSOR_REF="refs/remotes/origin/main"
+LOADED_REF=""
+LOADED_REF_SET=0
 QUIET=0
 
 # Named beside every UNKNOWN that a fresh worktree can actually hit. A guard that blocks without
@@ -76,7 +80,7 @@ while [ $# -gt 0 ]; do
     --submodule-path) need $# "$1"; SUBMODULE_PATH="$2"; shift 2 ;;
     --plugin-id) need $# "$1"; PLUGIN_ID="$2"; shift 2 ;;
     --plugin-name) need $# "$1"; PLUGIN_NAME="$2"; shift 2 ;;
-    --cursor-ref) need $# "$1"; CURSOR_REF="$2"; shift 2 ;;
+    --loaded-ref) need $# "$1"; LOADED_REF="$2"; LOADED_REF_SET=1; shift 2 ;;
     --quiet) QUIET=1; shift ;;
     -h|--help) awk '/^set -euo pipefail$/ { exit } { print }' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -85,11 +89,22 @@ done
 
 command -v git >/dev/null 2>&1 || die "git is required"
 case "$RUNTIME" in
-  claude|codex|cursor) ;;
-  *) die "unsupported runtime '$RUNTIME' (expected claude, codex, or cursor)" ;;
+  claude|codex|git-ref) ;;
+  *) die "unsupported runtime '$RUNTIME' (expected claude, codex, or git-ref)" ;;
 esac
 if [ "$RUNTIME" != claude ] && [ -n "$INSTALLED" ]; then
   die "runtime '$RUNTIME' does not accept --installed; resolve the copy that lane actually loaded"
+fi
+if [ "$RUNTIME" = git-ref ]; then
+  [ -n "$LOADED_REF" ] || die "runtime git-ref requires --loaded-ref"
+  if [[ "$LOADED_REF" = refs/* ]]; then
+    git check-ref-format "$LOADED_REF" >/dev/null 2>&1 \
+      || die "--loaded-ref must be a fully qualified ref or full commit ID"
+  elif ! [[ "$LOADED_REF" =~ ^([[:xdigit:]]{40}|[[:xdigit:]]{64})$ ]]; then
+    die "--loaded-ref must be a fully qualified ref or full commit ID"
+  fi
+elif [ "$LOADED_REF_SET" -eq 1 ]; then
+  die "--loaded-ref is only valid with --runtime git-ref"
 fi
 
 say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
@@ -111,17 +126,15 @@ if [ -z "$GITLINK" ]; then
 fi
 [ -n "$GITLINK" ] || die "no gitlink for '$SUBMODULE_PATH' at HEAD — cannot establish the pinned revision"
 
-# Cursor has no runtime-managed install. Its deployment loader fetches and reads origin/main
-# directly from this submodule's object database, so the commit behind that exact ref is the loaded
-# definition source. Comparing any Claude or Codex cache here would inspect another lane's copy.
-if [ "$RUNTIME" = cursor ]; then
-  cursor_sub="$REPO_ROOT/$SUBMODULE_PATH"
-  [ -e "$cursor_sub/.git" ] \
-    || die "Cursor plugin submodule is not initialised: $cursor_sub"
-  # The loader reads its definition with a plain `git show <ref>:<path>`, which resolves THROUGH
-  # refs/replace. A revision comparison made with --no-replace-objects therefore cannot establish the
-  # bytes it loads: a replacement inside THIS submodule changes the loaded content without changing
-  # either compared revision, so an equality check here would report CURRENT over unreviewed bytes.
+# A declared source ref does not identify what a native harness loaded. Compare only that source
+# with the consumer pin; never substitute a sibling runtime's cache for missing loaded-state evidence.
+if [ "$RUNTIME" = git-ref ]; then
+  source_sub="$REPO_ROOT/$SUBMODULE_PATH"
+  [ -e "$source_sub/.git" ] \
+    || die "plugin source submodule is not initialised: $source_sub"
+  # A plain `git show <ref>:<path>` resolves THROUGH refs/replace. A revision comparison made with
+  # --no-replace-objects cannot establish the bytes such a reader sees: a replacement inside THIS
+  # submodule changes the source content without changing either compared revision.
   # There is no safe verdict available from a revision comparison, so refuse to produce one.
   # Git's replacement namespace is CONFIGURABLE: GIT_REPLACE_REF_BASE moves it off refs/replace/,
   # and git then honours only that namespace. A scan hard-coded to the default therefore returns
@@ -131,42 +144,43 @@ if [ "$RUNTIME" = cursor ]; then
   replace_base="${GIT_REPLACE_REF_BASE:-refs/replace/}"
   replace_base="${replace_base%/}"
   if [ "$replace_base" = "refs/replace" ]; then
-    replaced="$(git -C "$cursor_sub" for-each-ref --format='%(refname)' 'refs/replace/*' 2>/dev/null)" \
-      || die "cannot enumerate replacement refs in $cursor_sub"
+    replaced="$(git -C "$source_sub" for-each-ref --format='%(refname)' 'refs/replace/*' 2>/dev/null)" \
+      || die "cannot enumerate replacement refs in $source_sub"
   else
-    replaced="$(git -C "$cursor_sub" for-each-ref --format='%(refname)' \
+    replaced="$(git -C "$source_sub" for-each-ref --format='%(refname)' \
         'refs/replace/*' "$replace_base/*" 2>/dev/null)" \
-      || die "cannot enumerate replacement refs in $cursor_sub"
+      || die "cannot enumerate replacement refs in $source_sub"
   fi
   if [ -n "$replaced" ]; then
     # UNKNOWN reasons must survive --quiet: say() is suppressed when QUIET=1, and every other
     # UNKNOWN path uses die() → stderr. Keep this multi-line explanation on stderr so a quiet
-    # caller still sees why the Cursor lane refused a verdict.
+    # caller still sees why the source check refused a verdict.
     {
       printf 'pinned revision        : %s\n\n' "$GITLINK"
       printf 'UNKNOWN — the plugin submodule carries replacement ref(s):\n'
       printf '%s\n' "$replaced" | while IFS= read -r r; do
         [ -n "$r" ] && printf '  %s\n' "$r"
       done
-      printf '\nThe Cursor loader reads content with a plain '\''git show'\'', which resolves through\n'
-      printf 'refs/replace, so comparing revisions cannot establish what it actually loads. Remove the\n'
+      printf '\nA source reader using plain '\''git show'\'' resolves through refs/replace, so comparing\n'
+      printf 'revisions cannot establish the source bytes it reads. Remove the\n'
       printf 'replacement ref, or verify the loaded blobs against the pinned tree directly.\n'
     } >&2
     exit 2
   fi
-  loaded_revision="$(git -C "$cursor_sub" --no-replace-objects rev-parse "$CURSOR_REF^{commit}" 2>/dev/null)" \
-    || die "cannot resolve Cursor loaded revision '$CURSOR_REF' in $cursor_sub"
+  loaded_revision="$(git -C "$source_sub" --no-replace-objects rev-parse --verify --end-of-options "$LOADED_REF^{commit}" 2>/dev/null)" \
+    || die "cannot resolve source revision '$LOADED_REF' in $source_sub"
   say "pinned revision        : $GITLINK"
-  say "Cursor loaded revision : $loaded_revision ($CURSOR_REF)"
+  say "declared source revision: $loaded_revision ($LOADED_REF)"
   say ""
   if [ "$loaded_revision" = "$GITLINK" ]; then
-    say "CURRENT — Cursor loaded revision matches the pinned gitlink."
+    say "CURRENT — declared source revision matches the pinned gitlink."
+    say "Evidence: source parity only; this does not attest the loaded session."
     exit 0
   fi
-  say "DRIFT — Cursor loaded revision $loaded_revision differs from pinned gitlink $GITLINK."
+  say "DRIFT — declared source revision $loaded_revision differs from pinned gitlink $GITLINK."
   say ""
   say "Do not inspect another runtime's cache. Follow the reviewed definition at $GITLINK and"
-  say "report that the Cursor loader's $CURSOR_REF must be reconciled with the consumer pin."
+  say "report that the declared source $LOADED_REF must be reconciled with the consumer pin."
   exit 1
 fi
 
@@ -266,7 +280,7 @@ tree=""
 sub="$REPO_ROOT/$SUBMODULE_PATH"
 # --no-replace-objects on BOTH reads. `cat-file` and `ls-tree` resolve THROUGH refs/replace, so a
 # replacement for the gitlink rewrites the REVIEWED side of the comparison itself: an install
-# carrying the replacement bytes then matches and reports CURRENT. The Cursor branch above refuses a
+# carrying the replacement bytes then matches and reports CURRENT. The git-ref branch above refuses a
 # verdict for the same hazard, but it exits before this point, so every other runtime reaches these
 # reads unprotected. Same rule the pin resolution above already follows.
 if [ -e "$sub" ] && git -C "$sub" --no-replace-objects cat-file -e "$GITLINK^{commit}" 2>/dev/null; then

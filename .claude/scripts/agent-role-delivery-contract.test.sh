@@ -15,7 +15,7 @@ desired_state="${repo_root}/.claude/plugin-consumption/agentic-engineering.desir
 engineer_agent="${repo_root}/.claude/agents/daily-maintainer.md"
 surveyor_agent="${repo_root}/.claude/agents/portfolio-surveyor.md"
 surveyor_hook_resolver="${repo_root}/.claude/scripts/portfolio-surveyor-forge-hook.sh"
-cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
+portable_loader="${repo_root}/.claude/loaders/portable-agentic-engineer.md"
 maintenance_overlay="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 engineering_overlay="${repo_root}/.claude/skills/product-engineering/SKILL.md"
 self_improvement_overlay="${repo_root}/.claude/skills/self-improvement/SKILL.md"
@@ -178,6 +178,7 @@ canonical_improver="${plugin_agents}/agent-improver.agent.md"
 canonical_ci_classifier="${plugin_scripts}/classify-default-branch-ci-runs.sh"
 canonical_forge_guard="${plugin_scripts}/forge-readonly-guard.sh"
 canonical_surveyor_hook="${plugin_scripts}/surveyor-forge-readonly.sh"
+canonical_routing_evaluator="${plugin_scripts}/evaluate-inference-routing.sh"
 [ -f "${canonical_surveyor}" ] ||
   fail "pinned plugin does not bundle portfolio-surveyor.agent.md"
 [ -f "${canonical_improver}" ] ||
@@ -197,6 +198,11 @@ if [ ! -f "${canonical_surveyor_hook}" ] \
   || [ -L "${canonical_surveyor_hook}" ]; then
   fail "pinned plugin does not bundle the regular executable surveyor forge-guard hook adapter"
 fi
+if [ ! -f "${canonical_routing_evaluator}" ] \
+  || [ ! -x "${canonical_routing_evaluator}" ] \
+  || [ -L "${canonical_routing_evaluator}" ]; then
+  fail "pinned plugin does not bundle the regular executable inference-routing evaluator"
+fi
 grep -Fq '../scripts/classify-default-branch-ci-runs.sh' "${canonical_surveyor}" ||
   fail "pinned portfolio surveyor does not delegate default-branch CI to the bundled classifier"
 grep -Fq 'refuses partial or capped' "${canonical_surveyor}" ||
@@ -206,7 +212,7 @@ grep -Fq 'manual dispatch, and GitHub-managed dynamic runs' "${canonical_surveyo
 declared_runtime_asset_sha() {
   jq -er --arg path "$1" '
     .spec.source.requiredRuntimeAssets
-    | select(type == "array" and length == 3)
+    | select(type == "array" and length == 4)
     | map(select(
           type == "object"
           and keys == ["executable", "path", "sha256"]
@@ -220,11 +226,12 @@ declared_runtime_asset_sha() {
 for runtime_asset in \
   "scripts/classify-default-branch-ci-runs.sh:${canonical_ci_classifier}" \
   "scripts/forge-readonly-guard.sh:${canonical_forge_guard}" \
-  "scripts/surveyor-forge-readonly.sh:${canonical_surveyor_hook}"; do
+  "scripts/surveyor-forge-readonly.sh:${canonical_surveyor_hook}" \
+  "scripts/evaluate-inference-routing.sh:${canonical_routing_evaluator}"; do
   runtime_asset_path="${runtime_asset%%:*}"
   canonical_runtime_asset="${runtime_asset#*:}"
   if ! declared_runtime_asset_sha="$(declared_runtime_asset_sha "${runtime_asset_path}")"; then
-    fail "consumer desired state does not carry exactly three executable path-and-digest surveyor runtime assets including ${runtime_asset_path}"
+    fail "consumer desired state does not carry exactly four executable path-and-digest runtime assets including ${runtime_asset_path}"
   fi
   [ "${declared_runtime_asset_sha}" = "$(sha256_bytes "${canonical_runtime_asset}")" ] ||
     fail "consumer desired-state ${runtime_asset_path} sha256 does not match the pinned executable bytes"
@@ -327,25 +334,37 @@ grep -Fq 'metadata.github-repo' "${self_improvement_overlay}" ||
 if grep -Fq '`.claude/agents/*`, `.claude/skills/*`' "${self_improvement_overlay}"; then
   fail "self-improvement distillation still routes every local agent or skill change to the monorepo"
 fi
-grep -Fq 'agentic-engineer.agent.md' "${cursor_loader}" ||
-  fail "Cursor adapter does not resolve the canonical plugin role"
-grep -Fq '.claude/scripts/submodule-init.sh libraries/agent-plugins' "${cursor_loader}" ||
-  fail "Cursor adapter does not pass the plugin path to submodule-init"
-grep -Fq "git -C libraries/agent-plugins fetch origin '+refs/heads/main:refs/remotes/origin/main'" "${cursor_loader}" ||
-  fail "Cursor adapter does not refresh the reviewed plugin default branch before loading it"
-grep -Fq 'git -C libraries/agent-plugins show refs/remotes/origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md' \
-  "${cursor_loader}" ||
-  fail "Cursor adapter does not load the agent from the refreshed reviewed plugin ref"
-for cursor_overlay in \
-  '.claude/skills/portfolio-maintenance/SKILL.md' \
-  '.claude/skills/product-engineering/SKILL.md' \
-  '.claude/skills/self-improvement/SKILL.md'; do
-  grep -Fq "${cursor_overlay}" "${cursor_loader}" ||
-    fail "Cursor adapter does not load deployment overlay ${cursor_overlay}"
-done
-if grep -Fq '.claude/agents/daily-maintainer.md' "${cursor_loader}"; then
-  fail "Cursor adapter still boots from the legacy local alias"
-fi
+grep -Fq 'agentic-engineer.agent.md' "${portable_loader}" ||
+  fail "portable loader does not resolve the canonical plugin role"
+portable_loader_flat="$(flatten "${portable_loader}")"
+case "${portable_loader_flat}" in
+  *'spec.source'*'latest-reviewed-default-branch'*'before-starting-each-run'*) ;;
+  *) fail "portable loader drops the desired-state before-run reviewed-source refresh policy" ;;
+esac
+case "${portable_loader_flat}" in
+  *'hotSwapDuringRun: false'*) ;;
+  *) fail "portable loader permits replacing the running definition during a refresh" ;;
+esac
+case "${portable_loader_flat}" in
+  *'rollout-verification evidence, not a runtime version lock'*) ;;
+  *) fail "portable loader turns the consumer gitlink into a runtime version lock" ;;
+esac
+case "${portable_loader_flat}" in
+  *'DRIFT'*'UNKNOWN'*"consumer's pinned gitlink"*) ;;
+  *) fail "portable loader drops the reviewed pinned fallback on drift or unknown state" ;;
+esac
+case "${portable_loader_flat}" in
+  *'source parity only'*'does not attest the loaded session'*) ;;
+  *) fail "portable loader overstates a source-ref comparison as loaded-session evidence" ;;
+esac
+grep -Fq "consumer's pinned gitlink" "${portable_loader}" ||
+  fail "portable loader does not name the reviewed consumer pin for fallback verification"
+grep -Fq 'deployment overlays declared by the consumer' "${portable_loader}" ||
+  fail "portable loader does not resolve the declared overlays"
+grep -Fq 'verified state' "${portable_loader}" ||
+  fail "portable loader does not resolve native capability evidence"
+grep -Fq 'inline fallback' "${portable_loader}" ||
+  fail "portable loader drops the authorized inline fallback"
 
 grep -Fq 'Agent Improver scorecard store' "${constitution}" ||
   fail "Memory does not name the Agent Improver scorecard store"
@@ -477,18 +496,12 @@ grep -Fq 'An issue, recommendation, or draft PR is not completion' "${constituti
   fail "consumer permits a write-capable role to stop before merge"
 grep -Fq '### Writer namespaces' "${constitution}" ||
   fail "consumer does not record namespaces for its scheduled writers"
-# Backticks are literal Markdown, not command substitution.
-# shellcheck disable=SC2016
-grep -Fq 'The `agent-improver` schedule intentionally shares its provider instance' \
-  "${constitution}" ||
-  fail "consumer does not declare the intentional provider-lane sharing model"
-# shellcheck disable=SC2016
-for writer_namespace in '`claude/*`' '`codex/*`' '`cursor/*`'; do
-  grep -Fq "${writer_namespace}" "${constitution}" ||
-    fail "consumer does not record writer namespace ${writer_namespace}"
-done
-grep -Fq 'remain undeployed and read-only' "${constitution}" ||
-  fail "consumer does not fail closed for unmapped Cursor role schedules"
+assert_prose 'Roles sharing one instance also share its claim protocol, draft ownership and checkout discipline' \
+  "consumer does not bind shared roles to one instance's ownership"
+assert_prose 'an absent, duplicated or unsupported mapping leaves mutation unavailable' \
+  "consumer does not fail closed for unmapped role schedules"
+grep -Fq 'agent-instances.json' "${constitution}" ||
+  fail "consumer does not resolve registered writer namespaces"
 assert_prose 'the in-session read-back is necessary but not sufficient' \
   "runtime-local delivery incorrectly treats an in-session read-back as persistence proof"
 assert_prose 're-read after at least one dispatch of that schedule' \

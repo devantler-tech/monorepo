@@ -9,10 +9,18 @@ CHECK="$HERE/unsigned-commit-report.sh"
 [ -x "$CHECK" ] || { echo "FATAL: $CHECK is not executable" >&2; exit 2; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+INSTANCES="$TMP/instances.json"
+cat >"$INSTANCES" <<'JSON'
+{"version":1,"policyPublisher":"codex-local","instances":{
+  "claude-local":{"namespace":"claude","authors":{"cli":"devantler","rest":"devantler","graphql":"devantler","search":"devantler"},"definitionAdapter":"claude","roles":["agentic-engineer","agent-improver"]},
+  "codex-local":{"namespace":"codex","authors":{"cli":"devantler","rest":"devantler","graphql":"devantler","search":"devantler"},"definitionAdapter":"codex","roles":["agentic-engineer","agent-improver"]},
+  "build-worker":{"namespace":"worker","authors":{"cli":"app/build-worker","rest":"build-worker[bot]","graphql":"build-worker","search":"app/build-worker"},"definitionAdapter":"local-runtime","roles":["agentic-engineer"]}
+}}
+JSON
 pass=0; fail=0
 ok() { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf 'FAIL %s\n     %s\n' "$1" "${2:-}"; }
-run() { OUT="$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$CHECK" "$@" 2>&1)"; RC=$?; }
+run() { OUT="$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$CHECK" --instances "$INSTANCES" "$@" 2>&1)"; RC=$?; }
 expect_rc() { # name rc args...
   local name="$1" want="$2"; shift 2; run "$@"
   if [ "$RC" = "$want" ]; then ok "$name"; else bad "$name" "expected rc=$want got rc=$RC; out: ${OUT:0:300}"; fi
@@ -63,7 +71,8 @@ printf '[{"sha":"f1","commit":{}}]\n' >"$TMP/noverif.json"
 expect_out "a commit with no verification object is reported, reason=missing" '^E  f1  missing' --input "$TMP/noverif.json"
 
 # ------------------------------------------------------------------ 6. coverage: the lane is stated, and a non-lane branch is lane=none
-expect_out "a cursor/* head is lane=cursor" 'lane=cursor$' --input "$TMP/signed.json" --head-ref cursor/z-3
+expect_out "a registered neutral namespace is classified" 'lane=worker$' --input "$TMP/signed.json" --head-ref worker/z-3
+expect_out "an unregistered retired namespace is skipped" 'lane=none skipped=non-agent-head$' --input "$TMP/signed.json" --head-ref cursor/z-3
 expect_out "a non-lane head is lane=none and skipped" '^examined=0 .* head=feature/thing lane=none skipped=non-agent-head$' --input "$TMP/signed.json" --head-ref feature/thing
 expect_out "a lookalike prefix is not a lane" 'lane=none skipped=non-agent-head$' --input "$TMP/signed.json" --head-ref claudex/thing
 expect_out "--lanes narrows the namespace set" 'lane=none skipped=non-agent-head$' --input "$TMP/signed.json" --head-ref claude/x --lanes codex
@@ -96,14 +105,14 @@ else
   bad "ordinary fixture calls do not emit Actions annotations or summaries" "fixture output reached the Actions surface"
 fi
 : >"$TMP/summary.md"
-OUT="$(GITHUB_ACTIONS=true GITHUB_STEP_SUMMARY="$TMP/summary.md" "$CHECK" --input "$TMP/unsigned.json" --head-ref codex/y-2 2>&1)"; RC=$?
+OUT="$(GITHUB_ACTIONS=true GITHUB_STEP_SUMMARY="$TMP/summary.md" "$CHECK" --instances "$INSTANCES" --input "$TMP/unsigned.json" --head-ref codex/y-2 2>&1)"; RC=$?
 if printf '%s\n' "$OUT" | grep -q '^::warning title=Unsigned or unverifiable commit (N)::cccc3333 unsigned on codex/y-2'; then ok "a finding is a ::warning:: annotation under Actions"; else bad "a finding is a ::warning:: annotation under Actions" "out: $OUT"; fi
 if ! printf '%s\n' "$OUT" | grep -q '^::error'; then ok "and never an ::error:: (non-blocking)"; else bad "and never an ::error:: (non-blocking)" "out: $OUT"; fi
 if grep -q 'examined=2 signed=1 unsigned=1' "$TMP/summary.md" && grep -q '| N | `cccc3333` | unsigned | codex/y-2 |' "$TMP/summary.md"; then ok "the step summary carries the summary and the finding table"; else bad "the step summary carries the summary and the finding table" "$(cat "$TMP/summary.md")"; fi
 [ "$RC" = 0 ] && ok "and the Actions run still exits 0" || bad "and the Actions run still exits 0" "rc=$RC"
 # CONTROL: outside Actions no annotation is printed. The suite itself runs under Actions, where
 # GITHUB_ACTIONS is already set, so the control must clear it explicitly or it tests nothing.
-OUT="$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$CHECK" --input "$TMP/unsigned.json" --head-ref codex/y-2 2>&1)"; RC=$?
+OUT="$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY "$CHECK" --instances "$INSTANCES" --input "$TMP/unsigned.json" --head-ref codex/y-2 2>&1)"; RC=$?
 if ! printf '%s\n' "$OUT" | grep -q '^::warning'; then ok "CONTROL: no annotation outside Actions"; else bad "CONTROL: no annotation outside Actions" "out: $OUT"; fi
 
 # ------------------------------------------------------------------ 10. the two listing caps fail CLOSED (stubbed gh)
@@ -117,9 +126,9 @@ cat >"$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 case "$*" in
   *"pr list"*)
-    i=0; while [ "$i" -lt "${FAKE_PRS:-0}" ]; do i=$((i + 1)); printf '%s\tclaude/x-%s\tdevantler\to\n' "$i" "$i"; done
+    i=0; while [ "$i" -lt "${FAKE_PRS:-0}" ]; do i=$((i + 1)); printf '%s\t%s/x-%s\t%s\t%s\n' "$i" "${FAKE_LANE:-claude}" "$i" "${FAKE_AUTHOR:-devantler}" "${FAKE_CROSS:-false}"; done
     # a fork PR whose branch merely LOOKS like lane work: wrong author, wrong head-repository owner
-    i=0; while [ "$i" -lt "${FAKE_FOREIGN:-0}" ]; do i=$((i + 1)); printf '%s\tclaude/foreign-%s\tstranger\tforkowner\n' "$((10000 + i))" "$i"; done ;;
+    i=0; while [ "$i" -lt "${FAKE_FOREIGN:-0}" ]; do i=$((i + 1)); printf '%s\tclaude/foreign-%s\tstranger\ttrue\n' "$((10000 + i))" "$i"; done ;;
   *"/commits"*)
     [ "${FAKE_COMMIT_READ_FAIL:-0}" = 0 ] || exit 98
     jq -n --argjson n "${FAKE_COMMITS:-0}" '[range($n) | {sha: ("c" + tostring), commit: {verification: {verified: true, reason: "valid"}}}]' ;;
@@ -128,14 +137,14 @@ case "$*" in
     if [ "${FAKE_PR_MISSING:-0}" = 1 ]; then printf '{}\n'
     elif [ "${!#}" = '.head.ref' ]; then printf '%s\n' "${FAKE_PR_HEAD:-claude/x-7}"
     else
-      jq -n --arg head "${FAKE_PR_HEAD:-claude/x-7}" --arg owner "${FAKE_PR_OWNER:-o}" --arg author "${FAKE_PR_AUTHOR:-devantler}" \
-        '{head:{ref:$head,repo:{owner:{login:$owner}}},user:{login:$author}}'
+      jq -n --arg head "${FAKE_PR_HEAD:-claude/x-7}" --arg owner "${FAKE_PR_OWNER:-o}" --arg repo "${FAKE_PR_REPO:-o/r}" --arg author "${FAKE_PR_AUTHOR:-devantler}" \
+        '{head:{ref:$head,repo:{owner:{login:$owner},full_name:$repo}},user:{login:$author}}'
     fi ;;
   *) echo "stub gh: unexpected call: $*" >&2; exit 99 ;;
 esac
 STUB
 chmod +x "$TMP/bin/gh"
-stub() { PATH="$TMP/bin:$PATH" FAKE_PRS="$1" FAKE_COMMITS="$2" "$CHECK" "${@:3}" 2>&1; }
+stub() { PATH="$TMP/bin:$PATH" FAKE_PRS="$1" FAKE_COMMITS="$2" "$CHECK" --instances "$INSTANCES" "${@:3}" 2>&1; }
 # Direct mode obtains provenance from the PR API even when --head-ref is supplied.
 OUT="$(FAKE_PR_OWNER=contributor FAKE_COMMIT_READ_FAIL=1 stub 0 2 --pr 7 --repo o/r)"; RC=$?
 if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q 'examined=0 .*skipped=foreign-head'; then ok "direct PR mode skips a foreign head before reading commits"; else bad "direct PR mode skips a foreign head before reading commits" "rc=$RC out=${OUT:0:200}"; fi
@@ -170,10 +179,10 @@ if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=0 .* prs=0 '; then
 expect_rc "an unsigned commit on a non-agent head exits 0" 0 --input "$TMP/unsigned.json" --head-ref feature/thing
 run --input "$TMP/unsigned.json" --head-ref feature/thing
 if ! printf '%s\n' "$OUT" | grep -q '^N  ' && printf '%s\n' "$OUT" | grep -qE '^examined=0 signed=0 unsigned=0 bad=0 unverifiable=0 head=feature/thing lane=none skipped=non-agent-head$'; then ok "a non-agent head classifies nothing and states the skip"; else bad "a non-agent head classifies nothing and states the skip" "rc=$RC out=${OUT:0:200}"; fi
-OUT="$(GITHUB_ACTIONS=1 "$CHECK" --input "$TMP/unsigned.json" --head-ref feature/thing 2>&1)"; RC=$?
+OUT="$(GITHUB_ACTIONS=1 "$CHECK" --instances "$INSTANCES" --input "$TMP/unsigned.json" --head-ref feature/thing 2>&1)"; RC=$?
 if [ "$RC" = 0 ] && ! printf '%s\n' "$OUT" | grep -q '::warning'; then ok "and emits no annotation under Actions"; else bad "and emits no annotation under Actions" "rc=$RC out=${OUT:0:200}"; fi
 # CONTROL: the same payload on an agent head is still classified (the N row and the warning)
-OUT="$(GITHUB_ACTIONS=1 "$CHECK" --input "$TMP/unsigned.json" --head-ref codex/y-2 2>&1)"; RC=$?
+OUT="$(GITHUB_ACTIONS=1 "$CHECK" --instances "$INSTANCES" --input "$TMP/unsigned.json" --head-ref codex/y-2 2>&1)"; RC=$?
 if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^N  cccc3333' && printf '%s\n' "$OUT" | grep -q '::warning'; then ok "CONTROL: an agent head is still classified and annotated"; else bad "CONTROL: an agent head is still classified and annotated" "rc=$RC out=${OUT:0:200}"; fi
 # CONTROL: no head ref at all (the hermetic seam) still classifies -- unknown is not the same as non-agent
 expect_out "CONTROL: a payload with no head ref is still classified" '^N  cccc3333' --input "$TMP/unsigned.json"
@@ -217,27 +226,54 @@ if [ "$RC" = 0 ]; then ok "CONTROL: distinct lane names still sweep"; else bad "
 # repository" are different facts about coverage.
 printf '%s' "[$(commit 1111111111111111111111111111111111111111 false unsigned)]" >"$TMP/prov.json"
 expect_out "a fork head is skipped as foreign, not classified" 'examined=0 .*skipped=foreign-head' \
-  --input "$TMP/prov.json" --head-ref codex/foo --repo devantler-tech/monorepo --head-owner stranger
+  --input "$TMP/prov.json" --head-ref codex/foo --repo devantler-tech/monorepo --head-owner stranger --head-repo stranger/monorepo --pr-author stranger
 expect_out "an author that is not the lane's writer identity is skipped as foreign" 'examined=0 .*skipped=foreign-author' \
-  --input "$TMP/prov.json" --head-ref codex/foo --repo devantler-tech/monorepo --head-owner devantler-tech --pr-author stranger
+  --input "$TMP/prov.json" --head-ref codex/foo --repo devantler-tech/monorepo --head-owner devantler-tech --head-repo devantler-tech/monorepo --pr-author stranger
 # CONTROL: the same payload with our own provenance IS classified -- so the two cases above key on
 # provenance rather than on the payload or the branch name.
 expect_out "CONTROL: our own head and writer identity is still classified" '^N  1111111111' \
-  --input "$TMP/prov.json" --head-ref codex/foo --repo devantler-tech/monorepo --head-owner devantler-tech --pr-author devantler
+  --input "$TMP/prov.json" --head-ref codex/foo --repo devantler-tech/monorepo --head-repo devantler-tech/monorepo --head-owner devantler-tech --pr-author devantler
 # CONTROL: absent provenance still classifies -- unknown is the hermetic seam, not a refusal.
 expect_out "CONTROL: no provenance supplied still classifies" '^N  1111111111' \
   --input "$TMP/prov.json" --head-ref codex/foo
+for head_repo in devantler-tech/monorepo stranger/fork; do
+  run --input "$TMP/prov.json" --repo devantler-tech/monorepo --head-repo "$head_repo" --pr-author stranger
+  if [ "$RC" = 2 ] && grep -q 'UNKNOWN' <<<"$OUT" && ! grep -q '^N  ' <<<"$OUT"; then
+    ok "supplied provenance with absent branch is UNKNOWN for $head_repo"
+  else
+    bad "supplied provenance with absent branch is UNKNOWN for $head_repo" "rc=$RC out=$OUT"
+  fi
+done
+run --input "$TMP/prov.json" --head-ref '' --repo devantler-tech/monorepo --head-repo devantler-tech/monorepo --pr-author devantler
+if [ "$RC" = 2 ] && grep -q 'UNKNOWN' <<<"$OUT"; then ok "explicitly empty authoritative branch is UNKNOWN"; else bad "explicitly empty authoritative branch is UNKNOWN" "rc=$RC out=$OUT"; fi
+expect_out "CONTROL: payload-only classification remains available" '^N  1111111111' --input "$TMP/prov.json"
 
-# ------------------------------------------------------------------ 17. the Cursor App's DECLARED spellings, and only those
-# Measured 2026-09-06 on actions#1054: `gh pr list --json author` returns `app/cursor`, REST
-# `user.login` returns `cursor[bot]`, and the bare `cursor` is GraphQL-only -- a surface this
-# reporter never reads. Accepting bare `cursor` matched no App PR while admitting any ordinary
-# account with that login, which is the provenance check inverted.
-expect_out "the bare cursor login is not the App and is refused" 'skipped=foreign-author' \
-  --input "$TMP/prov.json" --head-ref cursor/foo --repo devantler-tech/monorepo --head-owner devantler-tech --pr-author cursor
-for spelling in app/cursor "cursor[bot]"; do
-  expect_out "CONTROL: the declared spelling $spelling is accepted" '^N  1111111111' \
-    --input "$TMP/prov.json" --head-ref cursor/foo --repo devantler-tech/monorepo --head-owner devantler-tech --pr-author "$spelling"
+# ------------------------------------------------------------------ 17. configured API spellings, and only those
+expect_out "REST input accepts the registered neutral writer" '^N  1111111111' \
+  --input "$TMP/prov.json" --head-ref worker/foo --repo devantler-tech/monorepo --head-repo devantler-tech/monorepo --head-owner devantler-tech --pr-author 'build-worker[bot]'
+for spelling in build-worker app/build-worker stranger 'build-worker[bot]-forged'; do
+  expect_out "REST input refuses foreign or wrong-surface author $spelling" 'skipped=foreign-author' \
+    --input "$TMP/prov.json" --head-ref worker/foo --repo devantler-tech/monorepo --head-owner devantler-tech --head-repo devantler-tech/monorepo --pr-author "$spelling"
+done
+jq '.instances["build-worker"].namespace = "none"' "$INSTANCES" >"$TMP/none-instances.json"
+expect_out "a registered namespace named none is classified" '^N  1111111111' \
+  --input "$TMP/prov.json" --instances "$TMP/none-instances.json" --head-ref none/work \
+  --repo devantler-tech/monorepo --head-repo devantler-tech/monorepo --pr-author 'build-worker[bot]'
+OUT="$(FAKE_LANE=worker FAKE_AUTHOR=app/build-worker stub 1 2 --repo o/r --merged-since 2026-09-01 --lanes worker)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=2 signed=2 .*prs=1 foreign=0'; then ok "CLI sweep accepts the registered neutral writer"; else bad "CLI sweep accepts the registered neutral writer" "rc=$RC out=$OUT"; fi
+OUT="$(FAKE_LANE=worker FAKE_AUTHOR='build-worker[bot]' stub 1 2 --repo o/r --merged-since 2026-09-01 --lanes worker)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q '^examined=0 .*prs=0 foreign=1'; then ok "CLI sweep refuses the REST spelling"; else bad "CLI sweep refuses the REST spelling" "rc=$RC out=$OUT"; fi
+OUT="$(FAKE_PR_REPO=o/fork FAKE_COMMIT_READ_FAIL=1 stub 0 2 --pr 7 --repo o/r)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -q 'skipped=foreign-head'; then ok "direct PR excludes a same-owner sibling repository"; else bad "direct PR excludes a same-owner sibling repository" "rc=$RC out=$OUT"; fi
+expect_rc "owner-only payload provenance cannot establish the head repository" 2 --input "$TMP/prov.json" --head-ref codex/foo --repo devantler-tech/monorepo --head-owner devantler-tech --pr-author devantler
+expect_out "same-owner fork is excluded by full repository provenance" 'skipped=foreign-head' \
+  --input "$TMP/prov.json" --head-ref worker/foo --repo devantler-tech/monorepo --head-owner devantler-tech --head-repo devantler-tech/fork --pr-author 'build-worker[bot]'
+expect_rc "--lanes cannot register an unknown namespace" 2 --input "$TMP/prov.json" --head-ref unknown/foo --lanes unknown
+expect_rc "missing registry is UNKNOWN" 2 --input "$TMP/prov.json" --instances "$TMP/missing-instances.json"
+expect_out "missing registry explicitly states UNKNOWN" 'UNKNOWN' --input "$TMP/prov.json" --instances "$TMP/missing-instances.json"
+for mutation in '.version = 2' '.instances = {}' '.instances["build-worker"].namespace = "codex"' '.instances["build-worker"].authors.rest = ""' '.policyPublisher = "missing"'; do
+  jq "$mutation" "$INSTANCES" >"$TMP/bad-instances.json"
+  expect_rc "malformed registry fails closed: $mutation" 2 --input "$TMP/prov.json" --instances "$TMP/bad-instances.json"
 done
 
 # ------------------------------------------------------------------ 18. release-flag wiring and expiry
@@ -262,6 +298,88 @@ if [ -r "$CI_YAML" ]; then
   wired=0
   grep -q -- '--head-owner "\$HEAD_OWNER"' "$CI_YAML" && grep -q -- '--pr-author "\$PR_AUTHOR"' "$CI_YAML" && wired=1
   if [ "$step" = 1 ] && [ "$wired" = 1 ]; then ok "CI passes the pull request's provenance to the reporter"; else bad "CI passes the pull request's provenance to the reporter" "step=$step wired=$wired"; fi
+
+  # Execute the workflow's actual report-step shell, with no Actions expression
+  # emulation and no authenticated operations. The old base has no registry;
+  # both fixtures contain a conflicting PR-head registry and a poisoned PR-head
+  # reporter, so neither can accidentally satisfy the trusted-base contract.
+  CI_RUN="$(awk '
+    /^  report-unsigned-commits:/ { injob = 1; next }
+    injob && /^  [a-z]/ { exit }
+    injob && /^      - name: Report unsigned commits on this pull request$/ { instep = 1; next }
+    instep && /^        run: \|$/ { inrun = 1; next }
+    inrun && /^          / { sub(/^          /, ""); print; next }
+    inrun && /^[[:space:]]*$/ { next }
+    inrun { exit }
+  ' "$CI_YAML")"
+  if [ -n "$CI_RUN" ] && bash -n <<<"$CI_RUN"; then
+    CI_FIX="$TMP/ci-step"
+    mkdir -p "$CI_FIX/bin" "$CI_FIX/temp" "$CI_FIX/trusted-base/.claude/scripts" \
+      "$CI_FIX/trusted-base/.claude/plugin-consumption" "$CI_FIX/.claude/scripts" \
+      "$CI_FIX/.claude/plugin-consumption"
+    cp "$TMP/prov.json" "$CI_FIX/temp/pr-commits.json"
+    jq '.instances["build-worker"].authors.rest = "forged-writer"' "$INSTANCES" \
+      >"$CI_FIX/.claude/plugin-consumption/agent-instances.json"
+    cat >"$CI_FIX/.claude/scripts/unsigned-commit-report.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'UNTRUSTED_REPORTER_EXECUTED\n' >"$CI_EXEC_MARKER"
+exit 93
+SH
+    cat >"$CI_FIX/bin/gh" <<'SH'
+#!/usr/bin/env bash
+printf 'UNEXPECTED_FORGE_CALL\n' >"$CI_FORGE_MARKER"
+exit 94
+SH
+    chmod +x "$CI_FIX/bin/gh"
+    # Run the real reporter from a detached path behind a transparent wrapper.
+    # Its default registry path does not exist there, so successful reporting
+    # also proves the workflow forwards --instances explicitly.
+    cp "$CHECK" "$CI_FIX/real-reporter.sh"
+    cat >"$CI_FIX/trusted-base/.claude/scripts/unsigned-commit-report.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'TRUSTED_REPORTER_EXECUTED\n' >"$CI_EXEC_MARKER"
+exec bash "$CI_REAL_REPORTER" "$@"
+SH
+    ci_step() { # actual or deliberately ablated shell, optional head repository
+      rm -f "$CI_FIX/reporter-called" "$CI_FIX/forge-called"
+      OUT="$(cd "$CI_FIX" && env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN \
+        -u GITHUB_ENTERPRISE_TOKEN -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY \
+        PATH="$CI_FIX/bin:$PATH" RUNNER_TEMP="$CI_FIX/temp" \
+        CI_EXEC_MARKER="$CI_FIX/reporter-called" CI_FORGE_MARKER="$CI_FIX/forge-called" \
+        CI_REAL_REPORTER="$CI_FIX/real-reporter.sh" GITHUB_REPOSITORY=devantler-tech/monorepo \
+        HEAD_REF=worker/change HEAD_OWNER=devantler-tech \
+        HEAD_REPO="${2:-devantler-tech/monorepo}" PR_AUTHOR='build-worker[bot]' \
+        bash --noprofile --norc -eo pipefail -c "$1" 2>&1)"; RC=$?
+      if [ -e "$CI_FIX/forge-called" ]; then bad "CI report step never calls the forge" "$OUT"; fi
+    }
+    old_base_ok() { [ "$RC" = 0 ] && grep -q 'UNKNOWN.*trusted base' <<<"$OUT" && [ ! -e "$CI_FIX/reporter-called" ]; }
+    current_base_ok() { [ "$RC" = 0 ] && grep -q '^N  1111111111' <<<"$OUT" && grep -q '^TRUSTED_REPORTER_EXECUTED$' "$CI_FIX/reporter-called"; }
+
+    ci_step "$CI_RUN"
+    if old_base_ok; then ok "CI old base reports UNKNOWN without executing either reporter or the PR registry"; else bad "CI old base reports UNKNOWN without executing either reporter or the PR registry" "rc=$RC out=$OUT"; fi
+    # Mutation control: removing the compatibility guard must break that exact
+    # outcome, even though the real reporter also returns an UNKNOWN diagnostic.
+    CI_NO_GUARD="$(awk '/^if \[\[ ! -r / { skip = 1; next } skip && /^fi$/ { skip = 0; next } !skip' <<<"$CI_RUN")"
+    ci_step "$CI_NO_GUARD"
+    if [ "$CI_NO_GUARD" != "$CI_RUN" ] && ! old_base_ok; then ok "CONTROL: the old-base assertion catches removal of the compatibility guard"; else bad "CONTROL: the old-base assertion catches removal of the compatibility guard" "rc=$RC out=$OUT"; fi
+
+    cp "$INSTANCES" "$CI_FIX/trusted-base/.claude/plugin-consumption/agent-instances.json"
+    ci_step "$CI_RUN"
+    if current_base_ok; then ok "CI current base executes the trusted reporter with its explicit registry"; else bad "CI current base executes the trusted reporter with its explicit registry" "rc=$RC out=$OUT"; fi
+    CI_PR_REGISTRY="$(sed 's|--instances trusted-base/|--instances |' <<<"$CI_RUN")"
+    ci_step "$CI_PR_REGISTRY"
+    if [ "$CI_PR_REGISTRY" != "$CI_RUN" ] && ! current_base_ok; then ok "CONTROL: the current-base assertion catches use of the PR-head registry"; else bad "CONTROL: the current-base assertion catches use of the PR-head registry" "rc=$RC out=$OUT"; fi
+    CI_PR_REPORTER="$(sed 's|bash trusted-base/|bash |' <<<"$CI_RUN")"
+    ci_step "$CI_PR_REPORTER"
+    if [ "$CI_PR_REPORTER" != "$CI_RUN" ] && ! current_base_ok; then ok "CONTROL: the current-base assertion catches execution of the PR-head reporter"; else bad "CONTROL: the current-base assertion catches execution of the PR-head reporter" "rc=$RC out=$OUT"; fi
+    ci_step "$CI_RUN" devantler-tech/sibling-fork
+    if [ "$RC" = 0 ] && grep -q 'skipped=foreign-head' <<<"$OUT"; then ok "CI forwards full head repository provenance and excludes same-owner forks"; else bad "CI forwards full head repository provenance and excludes same-owner forks" "rc=$RC out=$OUT"; fi
+    printf '{}\n' >"$CI_FIX/trusted-base/.claude/plugin-consumption/agent-instances.json"
+    ci_step "$CI_RUN"
+    if [ "$RC" = 2 ] && grep -q 'instance registry.*UNKNOWN' <<<"$OUT"; then ok "CI malformed trusted registry stays UNKNOWN instead of falling back to the PR registry"; else bad "CI malformed trusted registry stays UNKNOWN instead of falling back to the PR registry" "rc=$RC out=$OUT"; fi
+  else
+    bad "the workflow report-step shell is present and executable" "missing or malformed report run block"
+  fi
 else
   bad "the workflow is readable for the flag-state assertions" "missing $CI_YAML"
 fi

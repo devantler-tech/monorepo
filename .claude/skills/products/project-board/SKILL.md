@@ -33,7 +33,7 @@ has to look for.
 
 ⚠️ **Enumeration also costs the whole hourly GraphQL budget, which every lane shares.** That same
 pass left `graphql: {limit:5000, remaining:73}`. The budget is attached to the **user**, so
-`claude/*`, `codex/*` and `cursor/*` all draw on it — and the surveyor's paginated `reviewThreads`
+all registered writer namespaces draw on it — and the surveyor's paginated `reviewThreads`
 queries are what the hygiene pentad's unresolved-thread count depends on. A starved pentad reads as
 *clean*, which is a **fail-open on the promotion gate**. Never spend the shared budget on a board
 sweep to answer a question a per-issue query answers for ~1 point.
