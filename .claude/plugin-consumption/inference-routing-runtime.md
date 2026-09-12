@@ -30,6 +30,18 @@ the absent short window and unknown chain reservations. It returned `HOLD` with 
 `CONTROLS_UNVERIFIED`, `POLICY_DISABLED` and `RUNTIME_DISABLED`, and `executionAdmitted: false`.
 No model was launched by that probe and no quota reservation was made.
 
+Claude's native exact-model allowlist with `enforceAvailableModels` covers startup, resume and
+fallback, but an empty list or an entirely unavailable list permits the account default. The
+`PreModelSwitch` hook omits automatic fallback and restored resume models; `SessionStart` and
+`SubagentStart` cannot block. These documented controls do not close that escape. This is a missing
+guarantee, not evidence that an existing run selected Fable.
+
+`forceLoginMethod: claudeai` and absence of API keys also do not establish included billing:
+Console OAuth can incur API charges without an API key. Disabling usage credits in the actual
+Claude.ai account supplies the included-usage ceiling only when the scheduler's subscription route
+is independently verified. Neither the account setting nor that scheduler identity was verified.
+Keep the Claude route disabled; do not substitute a prompt or a non-blocking hook for enforcement.
+
 ## Native verification procedure
 
 1. Bind runtime, surface/version, policy revision, loaded role/skill blob identities, and account
@@ -119,6 +131,10 @@ local runtime evidence:
 - [Claude subagents](https://code.claude.com/docs/en/sub-agents) and
   [model configuration](https://code.claude.com/docs/en/model-config): plugin restrictions and
   model allowlist resolution, including the unavailable-list fallback edge case.
+- [Claude hooks](https://code.claude.com/docs/en/hooks),
+  [authentication](https://code.claude.com/docs/en/authentication#restrict-login-to-your-organization)
+  and [usage credits](https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans):
+  hook coverage, Console OAuth and the account's included-usage ceiling.
 - [Cursor subagents](https://cursor.com/docs/subagents) and
   [overages](https://prod.cursor.com/help/account-and-billing/overages): model fallback, inherited
   tools, and the native on-demand setting.
