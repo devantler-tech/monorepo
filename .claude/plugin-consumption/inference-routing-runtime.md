@@ -57,9 +57,14 @@ Keep the Claude route disabled; do not substitute a prompt or a non-blocking hoo
    frontmatter cannot supply ignored hooks/permission settings. Codex keeps its existing inline
    survey override. Cursor read-only defaults do not prove all inherited connectors are read-only.
    Antigravity adapters must use documented native tool names; unmapped names are not a sandbox.
-5. Bind one physical worktree to each builder and the immutable base/claim owner. Check the actual
+5. Verify every builder's allowed paths, tools and remote actions at the runtime boundary; an isolated
+   directory and prompt do not constrain shell or authenticated forge access. Bind child execution to
+   the owner's renewable claim token/generation and expiry. Prove claim loss/expiry denies further
+   mutations and cancels the stale child, and reject stale-owner output at integration. If that
+   enforcement is unavailable, retain inline work. Bind one physical worktree to each builder and
+   the immutable base/claim owner. Check the actual
    top-level path and common gitdir/config; a submodule worktree that resolves into a shared
-   directory fails isolation. Verify a read-only mount/capability boundary for an observer.
+  directory fails isolation. Verify a read-only mount/capability boundary for an observer.
 6. Establish serialized admission before inference for each account, including engineer and improver
    schedules. Start with one execution chain and no speculative fan-out. Native schedule offsets
    do not serialize long-running tasks. An in-session prompt cannot protect its initial inference.
