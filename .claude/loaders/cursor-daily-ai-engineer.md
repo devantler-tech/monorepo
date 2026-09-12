@@ -85,12 +85,6 @@ machine-local engineer.
 > **Your lane, which differs from the local instances' — these bounds are part of the contract for
 > you:**
 >
-> - **Resolve `AGENTS.md` → Inference routing before delegation or model changes.** Follow its
->   temporary-runtime registration, billing and No-Fable limits. This loader does not prove native
->   model/fallback enforcement. Keep automatic delegation off while the registration is disabled or
->   expired, and scope edits to one claimed work item and explicit file/interface set in an isolated
->   checkout. Hand off a draft plus the exact result revision and checks; never share a writable
->   checkout with a sibling. The cloud namespace does not authorize a second local Cursor writer.
 > - **Branch namespace is `cursor/<area>-<desc>-<issue>`** — never `claude/*` (the Claude instance's
 >   lane and its per-tick branch sweep) and never `codex/*`. The issue number stays mandatory: it is
 >   what makes a pre-PR claim matchable.

@@ -1,7 +1,8 @@
 # Inference routing runtime verification
 
 The canonical policy is [inference-routing.policy.json](inference-routing.policy.json), resolved
-through `AGENTS.md` **Inference routing**. Its opt-in controls the new automatic routing and
+through `AGENTS.md` **Inference routing**. This deployment targets ChatGPT/Codex and Claude Code.
+Its opt-in controls the new automatic routing and
 delegation mechanism; it does not stop or reconfigure existing native parent schedules. Existing
 parent execution also requires an independently confirmed permitted model and included billing
 route. Disabled routing does not establish that compliance. Missing pre-inference controls hold the
@@ -15,14 +16,11 @@ evidence and a reviewed policy revision, not extending a date automatically.
 |---|---|---|
 | Codex local, CLI 0.154.0 and desktop task tools | CLI reports ChatGPT login; explicit parent/subagent model selection; native Pro usage reports; weekly bucket exposed | Five-hour bucket absent; no verified pre-inference account admission or no-substitution boundary; parent permission overrides can affect children |
 | Claude local, bundled CLI 2.1.266 | Bundled binary found outside PATH; enabled engineer/improver schedule records expose no model field; user settings have no model allowlist and no managed settings file was present | CLI status reports no login in the inspecting process; desktop authentication, included billing, effective model and native enforcement remain unresolved |
-| Cursor cloud | Existing `cursor/*` draft handoff contract and loader; web dashboard requires sign-in | Included billing/on-demand setting, effective model/fallback, inherited MCP restrictions and complete quota evidence unresolved; GitHub sign-in was blocked by automatic approval review pending explicit login authorization |
-| Cursor local 3.20.10 | Native app present; observer inspection returned only Loading after a long delay; no active writer namespace | Billing/model/tool controls and isolation unresolved; no settings evidence from the UI |
-| Antigravity local 2.13.0 | Installed app present; reserved static-observer registration, no writer namespace | Included allowance/overage setting, exact backend model and tool restrictions unresolved |
 
 These are separate surfaces, not a fleet-wide verification result. Presence in a policy is neither
-entitlement nor activation. No temporary runtime has a model route yet. The primary model strings
+entitlement nor activation. The primary model strings
 are candidates to resolve against the deployed harness; benchmark availability cannot resolve them.
-The inspecting process exposed no OpenAI, Anthropic, Google or Gemini inference API-key environment
+The inspecting process exposed no OpenAI or Anthropic inference API-key environment
 variables. This is a scoped process observation, not proof about other applications or devices.
 
 A local evaluator probe on 2026-09-12 used a fresh native Codex weekly observation while retaining
@@ -59,8 +57,8 @@ Keep the Claude route disabled; do not substitute a prompt or a non-blocking hoo
    or an opaque alias with no enforceable resolution leaves the affected route disabled.
 4. Probe ordinary reads and denied writes through every exposed tool, including MCP. Claude plugin
    frontmatter cannot supply ignored hooks/permission settings. Codex keeps its existing inline
-   survey override. Cursor read-only defaults do not prove all inherited connectors are read-only.
-   Antigravity adapters must use documented native tool names; unmapped names are not a sandbox.
+   survey override. Verify inherited connectors at their actual execution boundary; a model or
+   role name does not establish a read-only sandbox.
 5. Verify every builder's allowed paths, tools and remote actions at the runtime boundary; an isolated
    directory and prompt do not constrain shell or authenticated forge access. Bind child execution to
    the owner's renewable claim token/generation and expiry. Prove claim loss/expiry denies further
@@ -82,24 +80,11 @@ Use native subscription controls only. Do not add a paid inference broker or API
 an unavailable native feature. An unsupported route is a measured capability gap, not a reason to
 weaken the contract or silently substitute a model.
 
-## Temporary execution boundaries
+## Writer coordination
 
-**Cursor is deferred until at least 2026-09-20** by maintainer direction on 2026-09-12.
-Skip Cursor login, billing verification, loader deployment and task dispatch in this rollout until
-then. Both registrations remain disabled. Availability returning on that date does not enable a
-route; the native verification and reviewed activation gates above still apply.
-
-Antigravity may perform static surveying and dependency mapping only after its read-only boundary is
-verified. Give it a fixed revision and return a compact map/evidence digest. No installs, builds,
-formatters, repository/Git writes, live cluster access, forge mutations or write-capable MCP calls.
-Do not run it in a directory another agent is mutating; use an immutable snapshot/read-only mount.
-
-Cursor cloud keeps its existing `cursor/*` namespace and push-plus-draft handoff limits. Scope each
-bounded edit to an explicit file/interface set, one issue claim and one isolated worktree. Coupled
-API/schema/lockfile/generated-output changes serialize even when file paths differ. The owner checks
-the returned commit and rebinds it to current main before integration and review. Cursor local stays
-unregistered as a writer until a unique namespace and matching cleanup/ownership coverage are
-delivered; it must not reuse the cloud lane's namespace.
+Scope each delegated edit to an explicit file/interface set, one issue claim and one isolated
+worktree. Coupled API/schema/lockfile/generated-output changes serialize even when file paths differ.
+The owner checks the returned commit and rebinds it to current main before integration and review.
 
 Only one owner integrates a work item. Before cross-runtime handoff, stop the prior writer and
 transfer the actual claim/worktree/result evidence; do not hand both runtimes the same writable
@@ -149,9 +134,3 @@ local runtime evidence:
   [authentication](https://code.claude.com/docs/en/authentication#restrict-login-to-your-organization)
   and [usage credits](https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans):
   hook coverage, Console OAuth and the account's included-usage ceiling.
-- [Cursor subagents](https://cursor.com/docs/subagents) and
-  [overages](https://prod.cursor.com/help/account-and-billing/overages): model fallback, inherited
-  tools, and the native on-demand setting.
-- [Antigravity subagents](https://antigravity.google/docs/subagents/),
-  [plugins](https://antigravity.google/docs/plugins/) and
-  [plans](https://antigravity.google/docs/plans): native adapter formats and overage controls.

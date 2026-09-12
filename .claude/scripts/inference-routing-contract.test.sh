@@ -39,9 +39,9 @@ check no-missing-window '.policy.enabled=true | .policy.runtimes["codex-local"].
 check unverified-controls '.snapshot.billing="included"' 1 '.reasons | index("CONTROLS_UNVERIFIED") != null'
 check deep-reasoning '.task.distinctFailedHypotheses=2' 1 '.taskClass == "diagnosis" and .route.model == "gpt-6-astra" and .executionAdmitted == false'
 check environment-hold '.task.failureKind="environment"' 1 '.reasons | index("NON_REASONING_FAILURE") != null'
-# This rollout is intentionally inert, including temporary runtimes. Activation is a later
-# reviewed change with native evidence and its own positive/negative probes.
+# This rollout targets the two primary subscription providers and is intentionally inert.
+# Activation is a later reviewed change with native evidence and its own positive/negative probes.
 jq -e '.enabled == false and all(.runtimes[]; .enabled == false)
-  and .runtimes["antigravity-local"].role == "observer"
+  and (.runtimes | keys) == ["claude-local", "codex-local"]
   and .limits.maxDepth == 1 and .limits.maxChildren == 1' "$POLICY" > /dev/null
 printf 'PASS inert runtime registrations\n'

@@ -458,8 +458,6 @@ jobs:
               - '.claude/agents/finops-engineer.md'
               - '.claude/plugin-consumption/agentic-engineering.desired-state.json'
               - '.claude/plugin-consumption/inference-routing*'
-              - '.claude/loaders/antigravity-observer.md'
-              - '.agents/rules/inference-routing.md'
               - '.claude/scripts/inference-routing-contract.test.sh'
               - '.claude/scripts/inference-routing-scorecard.sh'
               - '.claude/scripts/inference-routing-scorecard.test.sh'

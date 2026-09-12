@@ -217,8 +217,9 @@ deliberately *not* on how much it saves.
 
 The reviewed [inference routing policy](.claude/plugin-consumption/inference-routing.policy.json)
 is this deployment's source for task-class aliases, effort, escalation thresholds, quota reserves,
-and runtime registrations. The plugin owns the portable evaluator/procedure; this consumer owns
-these assignments. [Runtime verification and governance](.claude/plugin-consumption/inference-routing-runtime.md)
+and runtime registrations for ChatGPT/Codex and Claude Code. The plugin owns the portable
+evaluator/procedure; this consumer owns these assignments.
+[Runtime verification and governance](.claude/plugin-consumption/inference-routing-runtime.md)
 records the concrete surface/version, expiry, capability gaps and promotion criteria. A registry row
 does not establish entitlement or enforcement.
 
@@ -264,12 +265,9 @@ schedule offsets and in-session preflight do not enforce it. Reserve 20% of shor
 weekly allowance, accounting for all attempts and unsettled consumption. These are pilot parameters,
 not measured optima. A missing estimate or bucket never becomes zero.
 
-**Temporary runtime boundaries:** Antigravity is a static observer only after verified read-only
-enforcement. Cursor cloud is a bounded builder in its existing `cursor/*` lane, with an isolated
-worktree, explicit file/interface scope and draft handoff. Cursor local has no active writer
-namespace and cannot reuse the cloud lane. No temporary runtime gets automatic children, model
-substitution, deployment/merge authority, live cluster access or a write-capable MCP by association
-with another harness. Registrations expire after 14 days and require fresh reviewed evidence to renew.
+Each delegated writer requires an isolated worktree, explicit file/interface scope, enforced tool
+permissions and claim fencing. The delivery owner integrates the result after checking its revision
+and evidence. Registrations expire after 14 days and require fresh reviewed evidence to renew.
 
 The Codex Agent Improver is the single policy publisher, fenced by the existing issue claim and
 current-head PR workflow even against overlapping Codex runs. Claude supplies independent evidence
@@ -833,12 +831,10 @@ definition surface, and an installed/cache copy is never an authoring target.
   `daily-maintainer` alias, the explicitly temporary surveyor and procedure overlays, the spend run
   loop at `.claude/skills/finops/SKILL.md` with its lifestyle floor and evidence script, the
   provider-neutral desired state, plugin settings, inference-routing policy/evidence procedures and
-  scorecard, and the Cursor/Antigravity loader sources. These surfaces may
+  scorecard, and the Cursor loader source. These surfaces may
   carry only their named deployment/provider delta; generic role logic changes at its owning upstream.
   The local Agent Improver agent/skill forks are retired, and so is the standalone FinOps agent fork —
   the reviewed plugin is the source for both roles.
-- `.agents/rules/inference-routing.md` is a thin Antigravity pointer to the consumer contract and
-  loader, never a second policy or role definition.
 - The generic upstream source, which is **NOT one repository**. **Check the file's own provenance
   before editing it — the question is per-FILE, never per-directory**, because one plugin directory
   mixes locally-authored files with copies synced from *several different* upstreams:

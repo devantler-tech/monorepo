@@ -13,10 +13,7 @@
   },
   "runtimes": {
     "codex-local": {"enabled": false, "role": "owner", "expiresAt": 1790380800},
-    "claude-local": {"enabled": false, "role": "owner", "expiresAt": 1790380800},
-    "cursor-cloud": {"enabled": false, "role": "builder", "expiresAt": 1790380800},
-    "cursor-local": {"enabled": false, "role": "builder", "expiresAt": 1790380800},
-    "antigravity-local": {"enabled": false, "role": "observer", "expiresAt": 1790380800}
+    "claude-local": {"enabled": false, "role": "owner", "expiresAt": 1790380800}
   },
   "limits": {
     "maxDepth": 1,
