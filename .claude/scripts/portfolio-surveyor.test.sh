@@ -36,6 +36,10 @@ if ! portfolio_surveyor_filter="$(\
 fi
 grep -Fq -- "- '.claude/plugin-consumption/agent-instances.json'" <<<"${portfolio_surveyor_filter}" ||
   fail "instance registry changes do not trigger the portfolio-surveyor contract job"
+grep -Fq -- "- '.claude/skills/portfolio-maintenance/SKILL.md'" <<<"${portfolio_surveyor_filter}" ||
+  fail "maintenance skill changes do not trigger the portfolio-surveyor contract job"
+grep -Fq -- "- '.claude/skills/products/**'" <<<"${portfolio_surveyor_filter}" ||
+  fail "product card changes do not trigger the portfolio-surveyor contract job"
 
 # The compatibility overlay carries a static repo list for live-set reconciliation. Every
 # active product in the canonical Portfolio map must appear there, or the survey reports
@@ -86,6 +90,76 @@ missing_product_repos="$(comm -23 \
   fail "surveyor overlay omits mapped portfolio repos: $(printf '%s' "${missing_product_repos}" | tr '\n' ' ')"
 
 echo "portfolio surveyor contract: portfolio-map coverage assertion passed"
+
+# Every product in the canonical Portfolio map must have its maintenance card indexed in
+# portfolio-maintenance/SKILL.md, so the run loop loads its maintenance guidance.
+# Legitimate multi-repo cards (templates, applications, agent-skills, github-actions) are
+# resolved explicitly to their shared card; org defaults (.github) carries no maintenance card.
+mapped_product_cards="$({
+  awk -F '|' '
+    /^## Portfolio map$/ { in_map = 1; next }
+    /^## Stack map$/ { exit }
+    in_map && /^\|/ {
+      if ($0 ~ /\*\*archived /) next
+      if (match($0, /\[product card\]\(\.?\/?\.claude\/skills\/products\/([^\/]+)\/SKILL\.md\)/)) {
+        match_str = substr($0, RSTART, RLENGTH)
+        sub(/^\[product card\]\(\.?\/?\.claude\/skills\/products\//, "", match_str)
+        sub(/\/SKILL\.md\)$/, "", match_str)
+        print match_str
+        next
+      }
+      repo = $3
+      gsub(/^ +| +$/, "", repo)
+      if (repo ~ /^`devantler-tech\/[^`]+`/) {
+        sub(/^`devantler-tech\//, "", repo)
+        sub(/`.*/, "", repo)
+        if (repo == ".github") next
+        if (repo == "actions") { print "github-actions"; next }
+        if (repo == "agent-plugins") { print "agent-skills"; next }
+        if (repo ~ /-template$/) { print "templates"; next }
+        if (repo == "wedding-app" || repo == "ascoachingogvaner" || repo == "unifi") { print "applications"; next }
+        print repo
+      }
+    }
+  ' "${constitution}"
+} | LC_ALL=C sort -u)"
+
+while IFS= read -r card; do
+  [ -f "${repo_root}/.claude/skills/products/${card}/SKILL.md" ] ||
+    fail "mapped product card does not exist on disk: .claude/skills/products/${card}/SKILL.md"
+done <<<"${mapped_product_cards}"
+
+indexed_product_cards="$({
+  awk '
+    /Products → cards:/ { in_cards = 1 }
+    in_cards && /^$/ { in_cards = 0 }
+    in_cards {
+      line = $0
+      while (match(line, /\[[^]]+\]\(\.\.\/products\/([^\/]+)\/SKILL\.md\)/)) {
+        match_str = substr(line, RSTART, RLENGTH)
+        sub(/^\[[^]]+\]\(\.\.\/products\//, "", match_str)
+        sub(/\/SKILL\.md\)$/, "", match_str)
+        print match_str
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' "${maintenance_skill}"
+} | LC_ALL=C sort -u)"
+
+missing_product_cards="$(comm -23 \
+  <(printf '%s\n' "${mapped_product_cards}") \
+  <(printf '%s\n' "${indexed_product_cards}"))"
+[ -z "${missing_product_cards}" ] ||
+  fail "maintenance run loop product index omits mapped product cards: $(printf '%s' "${missing_product_cards}" | tr '\n' ' ')"
+
+# Negative control: verify omission of an indexed card actually trips the assertion.
+simulated_missing_cards="$(comm -23 \
+  <(printf '%s\n' "${mapped_product_cards}") \
+  <(printf '%s\n' "${indexed_product_cards}" | grep -Fvx 'cloudflare'))"
+[ "${simulated_missing_cards}" = 'cloudflare' ] ||
+  fail "negative control failed: omitting cloudflare did not isolate cloudflare as missing (got: ${simulated_missing_cards:-<empty>})"
+
+echo "portfolio surveyor contract: product-card index coverage assertion passed"
 
 for security_definition in "${platform_card}" "${platform_security_surveyor}"; do
   grep -Fq 'Kubescape CR LISTs return spec-stripped skeletons.' "${security_definition}" ||
