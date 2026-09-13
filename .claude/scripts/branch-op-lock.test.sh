@@ -188,14 +188,22 @@ printf '%s\n' "Thu Jan  1 00:00:00 1970" >"$stale_lockdir/pid_start"
 check "a live but RECYCLED pid (start-time mismatch) IS stale" "0" \
   "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
 
-# (1b) No recorded start time (a lock written before the field existed): PID liveness alone is not
-#      trusted, so the TTL governs — held inside it, reclaimable past it.
+# (1b) No recorded start time (a lock written by the script before this field existed): the holder is
+#      live, and a live holder's critical section may legitimately outlast the TTL, so it is kept
+#      whatever its age. Reclaiming it would put two holders in one critical section; keeping it costs
+#      at most a transitional wait on a recycled PID, which has a documented manual recovery.
 rm -f "$stale_lockdir/pid_start"
-check "live pid with NO recorded start time IS stale past TTL" "0" \
+check "live pid with NO recorded start time is NOT stale past TTL" "1" \
   "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
-printf '%s\n' "$(date -u +%s)" >"$stale_lockdir/acquired_epoch"
-check "live pid with NO recorded start time is NOT stale inside TTL" "1" \
-  "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+
+# (1b'') The recorded start time exists but THIS reading fails (a transient `ps` failure). Unproven is
+#       not recycled, so the live holder is kept past the TTL rather than reaped.
+printf '%s\n' "$(_branch_op_lock_pid_start "$$")" >"$stale_lockdir/pid_start"
+check "live pid whose start time cannot be read now is NOT stale past TTL" "1" \
+  "$(
+    _branch_op_lock_pid_start() { return 1; }
+    _branch_op_lock_is_stale "$stale_lockdir" 600; echo $?
+  )"
 
 # (1b') The recorded start time must not depend on the reader's timezone. `ps -o lstart=` prints local
 #       time, so a holder that recorded under one TZ and a waiter judging under another would see two

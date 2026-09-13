@@ -21,7 +21,9 @@
 #     least 16 characters, or when a supervised holder's start time is unreadable.
 #   - Stale recovery (fail-closed otherwise):
 #       1. Same-host dead PID, or a live PID whose start time differs from the
-#          recorded `pid_start` (the PID was recycled) → remove and retry.
+#          recorded `pid_start` (the PID was recycled) → remove and retry. A
+#          live PID whose start time cannot be compared (no recorded value, or
+#          `ps` cannot answer now) is kept, whatever its age.
 #       2. Age past STALE_TTL_SEC (default 600) → remove and retry
 #          (covers cross-host / reboot where kill -0 is meaningless).
 #       3. Anything else → keep waiting until --timeout-sec, then FAIL.
@@ -191,8 +193,12 @@ _branch_op_lock_is_stale() {
       return 0
     fi
     # One side of the comparison is missing — a lock written before the field existed, or a `ps` that
-    # cannot answer now. PID liveness alone is not evidence, so the age tests below decide instead of
-    # holding the lock indefinitely.
+    # cannot answer right now. Only two successful readings that DIFFER prove the PID was recycled, so
+    # an unproven reading keeps the live holder, whatever its age. Falling through to the TTL here
+    # would reap a holder whose critical section legitimately outlasts it and put two holders in one
+    # critical section. The cost of keeping is bounded: acquire now always records the start time, so
+    # only a transitional lock or a transient `ps` failure takes this path.
+    return 1
   fi
 
   if [[ -f "$lockdir/acquired_epoch" ]]; then
