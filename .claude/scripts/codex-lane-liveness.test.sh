@@ -474,6 +474,19 @@ run_check "$db"
 expect_rc 2 "a missing next_run_at must be UNKNOWN"
 expect_out "no usable scheduled next run" "a missing next run must say why it could not judge"
 
+# A NON-EMPTY malformed value takes the other half of that guard, and it is a FAIL-OPEN without it:
+# `[ invalid -lt … ]` errors inside an `if` condition, which neither `set -e` nor the ERR trap sees,
+# so the overdue test reads false and the lane falls through to the run classifier and reports OK.
+# Ablated 2026-09-13: guard narrowed to `'')` ⇒ exit 0. The diagnostic pins that the value was
+# rejected by the guard itself rather than by some later failure.
+db=$TMP/badnext.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+sqlite3 "$db" "UPDATE automations SET next_run_at = 'invalid' WHERE id = 'lane-a';"
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+run_check "$db"
+expect_rc 2 "a non-numeric next_run_at must be UNKNOWN"
+expect_out "no usable scheduled next run" "a malformed next run must be rejected by the guard, not by an internal failure"
+
 # Schema drift on the new dependency is diagnosed like the others, never read as healthy.
 db=$TMP/next-schema.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
@@ -485,7 +498,7 @@ expect_out "automations.next_run_at is missing" "next_run_at schema drift must n
 
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 61 ]; then
+if [ "$asserts" -lt 63 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi
