@@ -1011,10 +1011,26 @@ Three channels actually get the maintainer's attention, and all are *active* (ne
    draft rather than parking work.
 2. **The ask tool** — the native clickable prompt (`AskUserQuestion` or the runtime's equivalent);
    present an enumerable decision as **one-click options**, not free text. Interactive sessions only.
-3. **The devantler-tech Slack** — **last resort**, only when the agent cannot proceed on its own
-   (a genuinely blocking decision or an urgent unwedge only he can perform). **Never send status
-   messages.** Lead with the instance's 🤖 disclosure line; the connector authenticates as his
-   account, so never phrase outbound text as if he authored it.
+3. **The devantler-tech Slack, as a DM to the maintainer's own Slack user** — **last resort**, only
+   when the agent cannot proceed on its own (a genuinely blocking decision or an urgent unwedge only he
+   can perform). **Never send status messages.** Lead with the instance's 🤖 disclosure line; the
+   connector authenticates as his account, so never phrase outbound text as if he authored it.
+   - **Destination:** his self-DM (the connector's `channel_id` set to his own Slack user id, which
+     the connector reports), never a channel. Every channel in the workspace is public, and the self-DM
+     is the one private destination, so an ask that names a weakness can go there.
+   - **Unattended runs may send it** (maintainer direction, interactive session 2026-09-13: *"figure
+     out how to reach me on slack on your own"*, resolving #3014). Because an unattended run takes a
+     write action only when its task file names it, the machine-local scheduler pointer must name this
+     action too.
+   - 🔴 **Try to resolve the blocker before asking.** An `authority` blocker that is really a missing
+     engineering path is not an ask. A reviewed, dispatch-only workflow can do what an agent's own shell
+     may not, and a value judgement about our own work is the agent's to make. Measured 2026-09-13: of 4
+     authority blockers carrying no ask, 3 were resolvable without the maintainer.
+   - ⚠️ **It does not notify him.** Slack never pushes a user's own message, so the ask waits until he
+     opens Slack. It is a durable place he will look, not an alarm. Send it once per blocker, not on
+     every tick.
+   - **Record it.** Only after the send returns a message link, append `| asked slack <YYYY-MM-DD>` to
+     the issue's blocker line. Never record an ask that was not delivered.
 
 The end-of-run report and a GitHub `@devantler` mention are **not** attention channels. Full rules
 and the disclosure disambiguator live under *Issue-driven* and *Untrusted input* below.
@@ -1244,7 +1260,9 @@ governs the issue work that follows.) Two rules enforce that:
    (2) the **ask tool** — the native **`AskUserQuestion`** clickable prompt (present an enumerable decision
    as **one-click options**, not free text; interactive sessions only); and (3) the **devantler-tech
    Slack** (maintainer direction 2026-07-11: *"you can always reach me on the devantler-tech slack"*) —
-   works from **unattended runs too**, via each agent's Slack tooling. **Slack is a LAST-RESORT
+   works from **unattended runs too**, sent as a DM to his own Slack user — *Maintainer channels*
+   carries the destination, the try-to-resolve-first rule, the fact that it does not notify him, and
+   how a delivered ask is recorded. **Slack is a LAST-RESORT
    channel, only for when the agent cannot proceed on its own** (maintainer direction 2026-07-12,
    superseding the same-day "standing ping duties": *"You should only contact me when you cannot
    proceed on your own, and I am not interested in status messages"*): a genuinely blocking decision,
