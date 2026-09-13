@@ -41,7 +41,7 @@ mkstore() {
   sqlite3 "$db" "
     CREATE TABLE automations (
       id TEXT PRIMARY KEY, status TEXT NOT NULL, rrule TEXT,
-      last_run_at INTEGER, updated_at INTEGER);
+      next_run_at INTEGER, last_run_at INTEGER, updated_at INTEGER);
     CREATE TABLE automation_runs (
       thread_id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, status TEXT NOT NULL,
       thread_title TEXT, inbox_title TEXT, inbox_summary TEXT, last_error TEXT,
@@ -49,9 +49,12 @@ mkstore() {
   "
 }
 
+# add_automation <db> <id> <status> [next_run_at_ms]
+# The default next run is an hour in the future: a healthy scheduler always holds a slot ahead of now.
 add_automation() {
-  sqlite3 "$1" "INSERT INTO automations (id,status,rrule,last_run_at,updated_at)
-                VALUES ('$2','$3','RRULE:FREQ=DAILY',$NOW_MS,$NOW_MS);"
+  local next=${4:-$(( NOW_MS + 3600000 ))}
+  sqlite3 "$1" "INSERT INTO automations (id,status,rrule,next_run_at,last_run_at,updated_at)
+                VALUES ('$2','$3','RRULE:FREQ=DAILY',$next,$NOW_MS,$NOW_MS);"
 }
 
 # `thread_id` is the PRIMARY KEY, so its uniqueness has to be guaranteed rather than likely. A
@@ -437,9 +440,65 @@ run_check "$db"
 expect_rc 2 "a negative run duration must be UNKNOWN, never a silent non-stub"
 expect_out "unparsable run row" "a negative duration must report as an unparsable row"
 
+# --- a lane that has STOPPED DISPATCHING must not read healthy (monorepo#3333) --------------------
+# When the scheduler stops, no new run is written, so the newest settled runs stay the last healthy
+# ones. Measured 2026-09-13: both Codex automations had missed their slots for five hours and read OK.
+# The runs here are deliberately healthy, so the overdue slot is the only thing that can decide.
+db=$TMP/stopped.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE $(( NOW_MS - GRACE_MS - 3600000 ))
+add_run "$db" lane-a $(( 5 * 3600000 )) 900 yes
+add_run "$db" lane-a $(( 6 * 3600000 )) 800 yes
+run_check "$db"
+expect_rc 1 "an automation whose scheduled run is overdue past grace must be NOT-PRODUCING"
+expect_out "NOT-PRODUCING" "a stopped scheduler must reach the not-producing verdict"
+expect_out "overdue" "the verdict must say the scheduled run is overdue, not that the runs were stubs"
+
+# A slot that is due but still inside the grace window is ordinary dispatch jitter, not an outage.
+db=$TMP/due.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE $(( NOW_MS - 60000 ))
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+run_check "$db"
+expect_rc 0 "a slot overdue by less than the grace window must stay OK"
+
+# A stopped scheduler is known without run history, so thin history must not downgrade it to UNKNOWN.
+db=$TMP/stopped-thin.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE $(( NOW_MS - GRACE_MS - 3600000 ))
+add_run "$db" lane-a $(( 5 * 3600000 )) 900 yes
+run_check "$db"
+expect_rc 1 "an overdue slot must outrank too-little settled history"
+
+# A missing next-run time cannot prove the scheduler is still dispatching, so it is UNKNOWN, never OK.
+db=$TMP/nonext.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+sqlite3 "$db" "UPDATE automations SET next_run_at = NULL WHERE id = 'lane-a';"
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+run_check "$db"
+expect_rc 2 "a missing next_run_at must be UNKNOWN"
+expect_out "no usable scheduled next run" "a missing next run must say why it could not judge"
+
+# A NON-EMPTY malformed value takes the other half of that guard, and it is a FAIL-OPEN without it:
+# `[ invalid -lt … ]` errors inside an `if` condition, which neither `set -e` nor the ERR trap sees,
+# so the overdue test reads false and the lane falls through to the run classifier and reports OK.
+# Ablated 2026-09-13: guard narrowed to `'')` ⇒ exit 0. The diagnostic pins that the value was
+# rejected by the guard itself rather than by some later failure.
+db=$TMP/badnext.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+sqlite3 "$db" "UPDATE automations SET next_run_at = 'invalid' WHERE id = 'lane-a';"
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+run_check "$db"
+expect_rc 2 "a non-numeric next_run_at must be UNKNOWN"
+expect_out "no usable scheduled next run" "a malformed next run must be rejected by the guard, not by an internal failure"
+
+# Schema drift on the new dependency is diagnosed like the others, never read as healthy.
+db=$TMP/next-schema.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+sqlite3 "$db" "ALTER TABLE automations RENAME COLUMN next_run_at TO upcoming_at;"
+run_check "$db"
+expect_rc 2 "a missing next_run_at column must be UNKNOWN"
+expect_out "automations.next_run_at is missing" "next_run_at schema drift must name the missing dependency"
+
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 52 ]; then
+if [ "$asserts" -lt 63 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi

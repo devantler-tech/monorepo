@@ -26,7 +26,7 @@
 #                              [--stub-seconds N] [--consecutive N] [--now-ms MS] [--quiet]
 #
 # Exit 0  every ACTIVE automation checked has a healthy run among its newest settled runs
-#      1  NOT PRODUCING — some automation's newest settled runs are ALL stubs
+#      1  NOT PRODUCING — some automation's scheduled run is overdue, or its newest runs are ALL stubs
 #      2  UNKNOWN — could not determine (no sqlite3, unreadable/absent store, unexpected schema,
 #         an unusable automation id, or too little settled history to judge)
 #
@@ -65,9 +65,11 @@ NOW_MS=""
 QUIET=0
 
 RECOVERY="
-  To resolve: confirm the lane's runs are reaching the model at all. A stub run is a dispatch whose
-  turn ended immediately, so look at the runtime's own run record rather than the scheduler's — the
-  scheduler's view is healthy by construction here. Re-run this check once a run has settled."
+  To resolve: an OVERDUE scheduled run means nothing is dispatching — confirm the runtime that owns
+  the scheduler is running on the host. For STUB runs, confirm the lane's runs are reaching the model
+  at all: a stub is a dispatch whose turn ended immediately, so look at the runtime's own run record
+  rather than the scheduler's, whose view is healthy by construction there. Re-run this check once a
+  run has settled."
 
 usage() {
   sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
@@ -173,6 +175,13 @@ fi
 
 [ -n "$ids" ] || die_unknown "no ACTIVE automations found in $STORE"
 
+# `next_run_at` is what reveals a scheduler that has STOPPED dispatching (monorepo#3333). It is
+# asserted like every other dependency: a renamed column would make the lookup below return empty for
+# every automation, and that must reach UNKNOWN by diagnosis rather than by accident.
+have=$(sq "SELECT COUNT(*) FROM pragma_table_info('automations') WHERE name='next_run_at';") \
+  || die_unknown "could not read schema for automations"
+[ "${have:-0}" = "1" ] || die_unknown "unexpected schema: automations.next_run_at is missing"
+
 settled_before=$(( NOW_MS - GRACE_SECONDS * 1000 ))
 # Tracked as two independent flags rather than one severity counter. A counter invites the ordering
 # bug this had on its first run: a later unjudgeable lane overwrote an already-detected dead lane,
@@ -201,6 +210,28 @@ while IFS= read -r id; do
       any_unknown=1
       continue ;;
   esac
+
+  # A scheduler that has STOPPED dispatching writes no new runs, so the newest settled runs below stay
+  # the last healthy ones and would score OK for the whole outage (monorepo#3333: both automations
+  # five hours past their slots, reading OK). The overdue slot is therefore judged FIRST, and it
+  # outranks thin history, because a stopped scheduler is known without any run to classify. The
+  # scheduler advances `next_run_at` when it dispatches, so a slot past the grace window means no
+  # dispatch happened. A missing or non-numeric value cannot prove the scheduler is alive: UNKNOWN.
+  next_run=$(sq "SELECT COALESCE(next_run_at, '') FROM automations WHERE id = '${id}' AND status = 'ACTIVE';") \
+    || die_unknown "could not read the next run for ${id}"
+  case "$next_run" in
+    ''|*[!0-9]*)
+      report="${report}  UNKNOWN  ${id} — no usable scheduled next run, cannot tell whether the scheduler is dispatching
+"
+      any_unknown=1
+      continue ;;
+  esac
+  if [ "$next_run" -lt "$settled_before" ]; then
+    report="${report}  NOT-PRODUCING  ${id} — scheduled run is $(( (NOW_MS - next_run) / 60000 )) min overdue with no dispatch, so the scheduler has stopped
+"
+    any_dead=1
+    continue
+  fi
 
   # Only SETTLED runs are classified. An in-flight run is short BECAUSE it is still running — most
   # acutely when the checking run inspects its own row — so classifying it would make the guard fire

@@ -899,6 +899,12 @@ inbox-item presence — the discriminators that actually separate the two states
 768–24,428 s with an inbox item, against 4-second stubs with none) — and exits `0` producing, `1` not
 producing, `2` **UNKNOWN**. It reads only timings and an inbox-presence flag, never a run's error
 payload, so it stays generic across causes and cannot carry private runtime state into an artifact.
+🔴 **A lane that stops DISPATCHING has no new runs to classify, so the check reads `next_run_at`
+first.** An ACTIVE automation whose scheduled next run is overdue by more than the grace window is a
+`1` whatever its older runs look like, and a missing next-run time is a `2`. Without this, the newest
+settled runs stay the last healthy ones and the check reports `0` for the whole outage: measured
+2026-09-13, both Codex automations had missed their slots for five hours and read `OK`
+(monorepo#3333).
 🔴 **Those two discriminators are read as THREE classes, not two, because a run can die PART WAY.** An
 inbox-less run inside the stub window died at dispatch and is the `1`; an inbox-less run that outlasted
 it is **UNPROVEN, never healthy** — this store cannot separate a mid-run death from a long run that
