@@ -100,11 +100,14 @@ _branch_op_lock_new_token() {
 # Start time of a process with single-space separators, or nothing when it cannot be read. Recorded
 # beside the PID so liveness can tell the holder apart from an unrelated process that later received
 # the same PID: a recycled PID does not carry the original start time. `ps -o lstart=` is spelled the
-# same on BSD and GNU procps, and `LC_ALL=C` keeps two readings of it comparable.
+# same on BSD and GNU procps, but it prints LOCAL time in the caller's language: `LC_ALL=C` fixes the
+# language and `TZ=UTC` the timezone. Without the timezone pin, a holder and a waiter running under
+# different `TZ` values read two different strings for the same live process, and the waiter reclaims
+# an actively held lock.
 _branch_op_lock_pid_start() {
   local pid="$1" start
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  start=$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s '[:space:]' ' ' || true)
+  start=$(TZ=UTC LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s '[:space:]' ' ' || true)
   start="${start# }"
   start="${start% }"
   [[ -n "$start" ]] || return 1

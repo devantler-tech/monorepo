@@ -197,6 +197,21 @@ printf '%s\n' "$(date -u +%s)" >"$stale_lockdir/acquired_epoch"
 check "live pid with NO recorded start time is NOT stale inside TTL" "1" \
   "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
 
+# (1b') The recorded start time must not depend on the reader's timezone. `ps -o lstart=` prints local
+#       time, so a holder that recorded under one TZ and a waiter judging under another would see two
+#       different strings for the SAME live process and reclaim an actively held lock.
+rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
+printf '%s\n' "$$" >"$stale_lockdir/pid"
+printf '%s\n' "$(uname -n)" >"$stale_lockdir/host"
+printf '%s\n' "supervised" >"$stale_lockdir/pid_mode"
+printf '%s\n' "$(TZ=UTC _branch_op_lock_pid_start "$$")" >"$stale_lockdir/pid_start"
+printf '%s\n' "$(( $(date -u +%s) - 99999 ))" >"$stale_lockdir/acquired_epoch"
+check "a live holder recorded under TZ=UTC is NOT stale when judged under another TZ" "1" \
+  "$(TZ=America/New_York _branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+check "…nor when the holder recorded under another TZ and the waiter judges under UTC" "1" \
+  "$(printf '%s\n' "$(TZ=Asia/Tokyo _branch_op_lock_pid_start "$$")" >"$stale_lockdir/pid_start"
+     TZ=UTC _branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+
 # (1c) A real supervised acquisition records the holder's start time, so (1) is the path it takes.
 rm -rf "$stale_lockdir"
 start_token=$(branch_op_lock_acquire "$stale_repo" 5 600)
