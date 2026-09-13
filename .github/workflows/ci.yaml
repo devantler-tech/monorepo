@@ -271,6 +271,11 @@ jobs:
               # consumption rule that decides which findings are real.
               - '.claude/scripts/disclosure-drift-sweep.sh'
               - '.claude/scripts/disclosure-drift-sweep.test.sh'
+              # The review-request composer's test round-trips every composed
+              # comment through this guard, so either side changing can break the
+              # contract that composed requests pass the disclosure check.
+              - '.claude/scripts/review-request-comment.sh'
+              - '.claude/scripts/review-request-comment.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1282,6 +1287,10 @@ jobs:
       # makes no API call either.
       - name: Verify the disclosure drift sweep wrapper
         run: bash .claude/scripts/disclosure-drift-sweep.test.sh
+      # Hermetic: composes every allowed review-request shape and feeds each through
+      # the guard above, with bare-trigger negative controls.
+      - name: Verify the review-request comment composer
+        run: bash .claude/scripts/review-request-comment.test.sh
 
   test-surveyor-forge-vocabulary:
     name: Test surveyor forge vocabulary conformance

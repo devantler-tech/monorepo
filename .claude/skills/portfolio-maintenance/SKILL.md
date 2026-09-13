@@ -691,7 +691,8 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    CodeRabbit > Codex > Cursor Bugbot order, and **stop on its first successful current-head review**;
    a reaction emoji earns a generous bounded wait for the substantive response, while no reaction
    means inspect or retry promptly; put the current-head request marker in the **same comment as the
-   trigger**, re-reading the repository-visible current-head request markers immediately before
+   trigger** — compose it with `.claude/scripts/review-request-comment.sh`, never by hand (#3319) —
+   re-reading the repository-visible current-head request markers immediately before
    posting it (each marker names its provider; pair Cursor's marker to the next exact-author bare
    trigger, ignoring interleaved other-author comments); accept markers only from exact author `devantler`
    with the structural agent disclosure; **never post a separate pre-trigger reservation comment** —
