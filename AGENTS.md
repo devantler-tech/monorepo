@@ -1027,8 +1027,8 @@ Three channels actually get the maintainer's attention, and all are *active* (ne
      may not, and a value judgement about our own work is the agent's to make. Measured 2026-09-13: of 4
      authority blockers carrying no ask, 3 were resolvable without the maintainer.
    - ⚠️ **It does not notify him.** Slack never pushes a user's own message, so the ask waits until he
-     opens Slack. It is a durable place he will look, not an alarm. Send it once per blocker, not on
-     every tick.
+     opens Slack. It is a durable place he will look, not an alarm. Send it once per blocker, and
+     renew it only when the blocker-line check reports it `STALE-ASK` — never on every tick.
    - **Record it.** Only after the send returns a message link, append `| asked slack <YYYY-MM-DD>` to
      the issue's blocker line. Never record an ask that was not delivered.
 

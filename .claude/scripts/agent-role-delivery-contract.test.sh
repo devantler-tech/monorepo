@@ -1115,6 +1115,10 @@ assert_prose "It does not notify him." \
   "Maintainer channels overstates the Slack self-DM as a notification"
 assert_prose "Never record an ask that was not delivered." \
   "Maintainer channels lets an undelivered Slack ask be recorded on a blocker line"
+# "Once per blocker" alone contradicts the blocker-line rule that an authority ask goes
+# stale after 14 days and must be renewed: a run reading it literally never re-raises.
+assert_prose "renew it only when the blocker-line check reports it \`STALE-ASK\`" \
+  "Maintainer channels forbids renewing a stale Slack ask, contradicting the STALE-ASK rule"
 refute_prose "works from **unattended runs too**, via each agent's Slack tooling" \
   "Issue-driven still claims Slack works unattended without the destination and caveats"
 
