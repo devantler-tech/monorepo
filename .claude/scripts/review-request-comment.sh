@@ -50,6 +50,7 @@ focus=""
 focus_set=0
 part=""
 actor="engineer"
+actor_set=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -81,6 +82,7 @@ while [ "$#" -gt 0 ]; do
     --actor)
       [ "$#" -ge 2 ] || usage
       actor="$2"
+      actor_set=1
       shift 2
       ;;
     -h | --help)
@@ -147,6 +149,7 @@ case "${provider}" in
         # Bugbot exact-matches the whole body: any extra byte, including a disclosure line,
         # silently voids the request. This is the one sanctioned bare trigger.
         [ -z "${head}" ] || die "--head belongs on the disclosure part, not the trigger"
+        [ "${actor_set}" -eq 0 ] || die "--actor belongs on the disclosure part, not the trigger"
         printf '%s' '@cursor review'
         ;;
       '') die "--part disclosure|trigger is required for bugbot" ;;

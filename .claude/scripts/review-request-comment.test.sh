@@ -91,6 +91,9 @@ expect_refusal "full on codex" --provider codex --head "${sha}" --full
 expect_refusal "bugbot without part" --provider bugbot --head "${sha}"
 expect_refusal "bugbot bad part" --provider bugbot --head "${sha}" --part both
 expect_refusal "bugbot trigger with head" --provider bugbot --head "${sha}" --part trigger
+# --actor cannot change the bare trigger's bytes, so accepting it silently would hide a caller
+# that believes it selected a role for the trigger.
+expect_refusal "bugbot trigger with actor" --provider bugbot --part trigger --actor improver
 expect_refusal "part on cr" --provider cr --head "${sha}" --part trigger
 expect_refusal "bad actor" --provider cr --head "${sha}" --actor maintainer
 expect_refusal "unknown flag" --provider cr --head "${sha}" --body x
