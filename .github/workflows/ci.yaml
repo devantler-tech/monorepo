@@ -20,6 +20,7 @@ jobs:
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
+      unsigned-push-guard: ${{ steps.filter.outputs.unsigned-push-guard }}
       branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
       worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
       build-cache-reclaim: ${{ steps.filter.outputs.build-cache-reclaim }}
@@ -147,6 +148,9 @@ jobs:
             safe-clone:
               - '.claude/scripts/safe-clone.sh'
               - '.claude/scripts/safe-clone.test.sh'
+            unsigned-push-guard:
+              - '.claude/scripts/unsigned-push-guard.sh'
+              - '.claude/scripts/unsigned-push-guard.test.sh'
             branch-cleanup:
               - '.claude/scripts/branch-cleanup.sh'
               - '.claude/scripts/branch-cleanup.test.sh'
@@ -805,6 +809,26 @@ jobs:
       # marker) — no network, no real credentials involved.
       - name: Self-test the safe-clone guard
         run: bash .claude/scripts/safe-clone.test.sh
+
+  test-unsigned-push-guard:
+    needs: changes
+    if: needs.changes.outputs.unsigned-push-guard == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Throwaway fixture repositories signed with a generated SSH key and a
+      # hermetic git config — no GPG agent, keychain, or real credentials.
+      - name: Self-test the unsigned-push guard
+        run: bash .claude/scripts/unsigned-push-guard.test.sh
 
   test-branch-cleanup:
     name: Test branch cleanup
@@ -1947,6 +1971,7 @@ jobs:
       - test-worktree-claim
       - test-flow-scorecard
       - test-safe-clone
+      - test-unsigned-push-guard
       - test-branch-cleanup
       - test-worktree-cleanup
       - test-build-cache-reclaim
@@ -2012,6 +2037,7 @@ jobs:
             ${{ needs.test-worktree-claim.result }}
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
+            ${{ needs.test-unsigned-push-guard.result }}
             ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-build-cache-reclaim.result }}
