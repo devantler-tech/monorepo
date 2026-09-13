@@ -415,11 +415,19 @@ check "acquire FAILS when the entropy source returns a malformed token" "1" "$ma
 check "a malformed token leaves NO lock dir behind" "0" \
   "$([[ -d "$stale_lockdir" ]] && echo 1 || echo 0)"
 
-# Positive control: with the real sources a token is issued and has the required shape.
-real_token=$(branch_op_lock_acquire "$stale_repo" 5 600)
-check "a real acquisition issues a hex token of at least 16 characters" "1" \
-  "$([[ "$real_token" =~ ^[0-9a-f]{16,}$ ]] && echo 1 || echo 0)"
-branch_op_lock_release "$stale_repo" "$real_token" >/dev/null 2>&1 || true
+# Positive control: a source that answers with a valid token is accepted and that exact token is
+# issued. Both sources are stubbed so the check does not depend on the host's entropy; the round-trip
+# at the top of this file already exercises the real sources.
+positive_token=$(
+  # shellcheck source=branch-op-lock.sh
+  source "$lock_tool"
+  openssl() { builtin printf '0123456789abcdef\n'; }
+  od() { return 1; }
+  branch_op_lock_acquire "$stale_repo" 5 600 2>/dev/null
+) || true
+check "a source answering with a valid token has that token issued" "0123456789abcdef" "$positive_token"
+check "the positive control holds the lock under that token" "0123456789abcdef" \
+  "$(tr -d '[:space:]' <"$stale_lockdir/token" 2>/dev/null || echo MISSING)"
 rm -rf "$stale_lockdir"
 
 # ---------------------------------------------------------------------------
