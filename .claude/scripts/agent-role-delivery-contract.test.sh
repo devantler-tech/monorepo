@@ -1119,6 +1119,12 @@ assert_prose "Never record an ask that was not delivered." \
 # stale after 14 days and must be renewed: a run reading it literally never re-raises.
 assert_prose "renew it only when the blocker-line check reports it \`STALE-ASK\`" \
   "Maintainer channels forbids renewing a stale Slack ask, contradicting the STALE-ASK rule"
+# The check reads a blocker record as the whole paragraph that starts with `**Blocker:**`,
+# so an ask appended to a line that is followed by more prose is read as prose and
+# stays NO-ASK. Measured 2026-09-13 on ksail#5515: a delivered, correctly spelled ask did
+# not register until a blank line was added after it.
+assert_prose "the ask must be the last thing in that paragraph, followed by a blank line" \
+  "Maintainer channels lets a Slack ask be recorded where the blocker check cannot see it"
 refute_prose "works from **unattended runs too**, via each agent's Slack tooling" \
   "Issue-driven still claims Slack works unattended without the destination and caveats"
 

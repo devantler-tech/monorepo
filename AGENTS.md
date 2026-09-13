@@ -1030,7 +1030,10 @@ Three channels actually get the maintainer's attention, and all are *active* (ne
      opens Slack. It is a durable place he will look, not an alarm. Send it once per blocker, and
      renew it only when the blocker-line check reports it `STALE-ASK` — never on every tick.
    - **Record it.** Only after the send returns a message link, append `| asked slack <YYYY-MM-DD>` to
-     the issue's blocker line. Never record an ask that was not delivered.
+     the issue's blocker line. Never record an ask that was not delivered. The blocker check reads the
+     whole paragraph that starts with `**Blocker:**` as one record, so the ask must be the last thing in
+     that paragraph, followed by a blank line. An ask followed by more prose is read as prose and stays
+     `NO-ASK` (measured 2026-09-13 on ksail#5515).
 
 The end-of-run report and a GitHub `@devantler` mention are **not** attention channels. Full rules
 and the disclosure disambiguator live under *Issue-driven* and *Untrusted input* below.
