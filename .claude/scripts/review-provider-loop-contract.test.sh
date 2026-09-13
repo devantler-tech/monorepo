@@ -657,6 +657,15 @@ assert_prose "${constitution}" 'never WHETHER A REVIEW IS REQUIRED' \
   "the lane probe could be read as relaxing the green-review gate"
 assert_prose "${constitution}" 'never** evidence for the *Local review round* fallback on its own' \
   "a per-head quota refusal could be misread as satisfying the local-review-round evidence bar"
+# #3319: the same-comment rule held only as prose, and lanes kept posting bare triggers that the
+# disambiguator reads as the maintainer. The composer is the enforced path; both the constitution
+# and the run loop must name it, and CI must execute its round-trip test.
+assert_prose "${constitution}" 'Compose every review-request comment with' \
+  "the constitution does not require the review-request composer, so bare triggers can return"
+assert_prose "${maintenance_skill}" 'compose it with `.claude/scripts/review-request-comment.sh`, never by hand' \
+  "the run loop does not route review requests through the composer"
+grep -Fq 'run: bash .claude/scripts/review-request-comment.test.sh' "${workflow}" ||
+  fail "CI does not execute the review-request composer test"
 
 grep -Fq 'review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}' "${workflow}" ||
   fail "CI does not export the review-provider contract change filter"
