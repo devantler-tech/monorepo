@@ -171,14 +171,38 @@ git -C "$stale_repo" config user.name "Test"
 git -C "$stale_repo" commit -q --allow-empty -m init
 stale_lockdir=$(branch_op_lock_dir "$stale_repo")
 
-# (1) A LIVE same-host supervised holder is never stale, even far past the TTL.
+# (1) A LIVE same-host supervised holder whose recorded start time still matches is never stale, even
+#     far past the TTL.
 rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
 printf '%s\n' "$$" >"$stale_lockdir/pid"
 printf '%s\n' "$(uname -n)" >"$stale_lockdir/host"
 printf '%s\n' "supervised" >"$stale_lockdir/pid_mode"
+printf '%s\n' "$(_branch_op_lock_pid_start "$$")" >"$stale_lockdir/pid_start"
 printf '%s\n' "$(( $(date -u +%s) - 99999 ))" >"$stale_lockdir/acquired_epoch"
 check "live same-host supervised holder is NOT stale past TTL" "1" \
   "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+
+# (1a) PID REUSE (monorepo#2867): the recorded PID is alive but now belongs to a DIFFERENT process, so
+#      its start time no longer matches the holder's. `kill -0` alone kept this lock forever.
+printf '%s\n' "Thu Jan  1 00:00:00 1970" >"$stale_lockdir/pid_start"
+check "a live but RECYCLED pid (start-time mismatch) IS stale" "0" \
+  "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+
+# (1b) No recorded start time (a lock written before the field existed): PID liveness alone is not
+#      trusted, so the TTL governs — held inside it, reclaimable past it.
+rm -f "$stale_lockdir/pid_start"
+check "live pid with NO recorded start time IS stale past TTL" "0" \
+  "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+printf '%s\n' "$(date -u +%s)" >"$stale_lockdir/acquired_epoch"
+check "live pid with NO recorded start time is NOT stale inside TTL" "1" \
+  "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+
+# (1c) A real supervised acquisition records the holder's start time, so (1) is the path it takes.
+rm -rf "$stale_lockdir"
+start_token=$(branch_op_lock_acquire "$stale_repo" 5 600)
+check "supervised acquire records the holder start time" "$(_branch_op_lock_pid_start "$$")" \
+  "$(cat "$stale_lockdir/pid_start" 2>/dev/null || echo MISSING)"
+branch_op_lock_release "$stale_repo" "$start_token" >/dev/null 2>&1 || true
 
 # (2) A DEAD same-host supervised holder still IS stale — the recovery path must survive fix (1).
 rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
@@ -276,9 +300,14 @@ rm -rf "$stale_lockdir"
 # ---------------------------------------------------------------------------
 rm -rf "$stale_lockdir"
 acquire_rc=0
+metadata_err="$tmp/metadata-write.err"
 (
   # shellcheck source=branch-op-lock.sh
   source "$lock_tool"
+  # The token and start time are produced before `mkdir` and would otherwise consume the failing
+  # `printf` calls below, making this case pass for an unrelated reason. Pin them to valid values.
+  _branch_op_lock_new_token() { echo 0123456789abcdef; }
+  _branch_op_lock_pid_start() { echo "fixture start time"; }
   # Fail every `printf` after the first, which is the one `branch_op_lock_dir` needs to report the
   # path. That lands the failure squarely on the metadata block — the same shape a full disk or
   # exhausted inodes produces — without depending on filesystem permissions.
@@ -288,9 +317,11 @@ acquire_rc=0
     (( _pf_calls >= 2 )) && return 1
     builtin printf "$@"
   }
-  branch_op_lock_acquire "$stale_repo" 5 600 >/dev/null 2>&1
+  branch_op_lock_acquire "$stale_repo" 5 600 >/dev/null 2>"$metadata_err"
 ) || acquire_rc=$?
 check "acquire FAILS when its metadata cannot be written" "1" "$acquire_rc"
+check "the failure is the metadata write, not an earlier refusal" "1" \
+  "$(grep -q 'could not write its metadata' "$metadata_err" && echo 1 || echo 0)"
 check "a metadata-write failure leaves NO lock dir behind" "0" \
   "$([[ -d "$stale_lockdir" ]] && echo 1 || echo 0)"
 
@@ -346,6 +377,49 @@ check "the replacement holder's dir SURVIVES the declined reclaim" "1" \
   "$([[ -d "$stale_lockdir" ]] && echo 1 || echo 0)"
 check "the replacement holder's token is intact" "newholder" \
   "$(cat "$stale_lockdir/token" 2>/dev/null || echo MISSING)"
+rm -rf "$stale_lockdir"
+
+# ---------------------------------------------------------------------------
+# Token generation must fail closed without real entropy (monorepo#2867).
+#
+# With `openssl` unusable and the `/dev/urandom` read failing, the fallback produced an EMPTY token and
+# acquisition carried on, so ownership rested on the PID alone — and a detached lock's PID is dead by
+# design, so release refused and the lock leaked until its TTL. Stub both sources and require the
+# acquisition to refuse without leaving a lock directory behind.
+# ---------------------------------------------------------------------------
+rm -rf "$stale_lockdir"
+entropy_rc=0
+(
+  # shellcheck source=branch-op-lock.sh
+  source "$lock_tool"
+  openssl() { return 1; }
+  head() { return 1; }
+  od() { return 1; }
+  branch_op_lock_acquire "$stale_repo" 5 600 >/dev/null 2>&1
+) || entropy_rc=$?
+check "acquire FAILS when no entropy source yields a token" "1" "$entropy_rc"
+check "an entropy failure leaves NO lock dir behind" "0" \
+  "$([[ -d "$stale_lockdir" ]] && echo 1 || echo 0)"
+
+# A source that answers with something other than hex is rejected too, not written as a token.
+malformed_rc=0
+(
+  # shellcheck source=branch-op-lock.sh
+  source "$lock_tool"
+  openssl() { builtin printf 'not-a-token\n'; }
+  head() { return 1; }
+  od() { return 1; }
+  branch_op_lock_acquire "$stale_repo" 5 600 >/dev/null 2>&1
+) || malformed_rc=$?
+check "acquire FAILS when the entropy source returns a malformed token" "1" "$malformed_rc"
+check "a malformed token leaves NO lock dir behind" "0" \
+  "$([[ -d "$stale_lockdir" ]] && echo 1 || echo 0)"
+
+# Positive control: with the real sources a token is issued and has the required shape.
+real_token=$(branch_op_lock_acquire "$stale_repo" 5 600)
+check "a real acquisition issues a hex token of at least 16 characters" "1" \
+  "$([[ "$real_token" =~ ^[0-9a-f]{16,}$ ]] && echo 1 || echo 0)"
+branch_op_lock_release "$stale_repo" "$real_token" >/dev/null 2>&1 || true
 rm -rf "$stale_lockdir"
 
 # ---------------------------------------------------------------------------

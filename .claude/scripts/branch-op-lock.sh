@@ -12,13 +12,16 @@
 # Protocol:
 #   - Lock path: `<git-common-dir>/devantler-branch-op.lock/` (directory).
 #   - Acquire is `mkdir` — atomic on both Linux and macOS APFS/HFS+.
-#   - Holder writes `pid`, `token`, `acquired_at` (UTC), `acquired_epoch`, `host`.
+#   - Holder writes `pid`, `pid_start`, `token`, `acquired_at` (UTC), `acquired_epoch`, `host`.
 #   - Ownership for release is the **token** (also kept in-shell as
 #     BRANCH_OP_LOCK_TOKEN). Same-pid is accepted as a convenience when sourced.
 #     A CLI `acquire` that exits leaves a dead-pid lock — prefer `run`, or keep
 #     the acquiring process alive and `release --token`.
+#   - Acquisition fails closed when no entropy source yields a hex token of at
+#     least 16 characters, or when a supervised holder's start time is unreadable.
 #   - Stale recovery (fail-closed otherwise):
-#       1. Same-host dead PID → remove and retry.
+#       1. Same-host dead PID, or a live PID whose start time differs from the
+#          recorded `pid_start` (the PID was recycled) → remove and retry.
 #       2. Age past STALE_TTL_SEC (default 600) → remove and retry
 #          (covers cross-host / reboot where kill -0 is meaningless).
 #       3. Anything else → keep waiting until --timeout-sec, then FAIL.
@@ -72,13 +75,40 @@ branch_op_lock_dir() {
   printf '%s\n' "$common/devantler-branch-op.lock"
 }
 
+# Ownership token. Each source is checked against the shape a real token has, so an unavailable or
+# misbehaving source yields NO token rather than an empty one: an empty token leaves ownership resting
+# on the PID alone, which a detached lock's exited process can never prove, so release refuses and
+# the lock leaks until its TTL. `agent-claim.sh` fails closed on missing entropy for the same reason.
 _branch_op_lock_new_token() {
+  local candidate
   if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 8
-  else
-    # Portable fallback — not cryptographic; ownership uniqueness is enough.
-    head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n'
+    candidate=$(openssl rand -hex 8 2>/dev/null || true)
+    if [[ "$candidate" =~ ^[0-9a-f]{16,}$ ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
   fi
+  # Portable fallback — not cryptographic; ownership uniqueness is enough.
+  candidate=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)
+  if [[ "$candidate" =~ ^[0-9a-f]{16,}$ ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  return 1
+}
+
+# Start time of a process with single-space separators, or nothing when it cannot be read. Recorded
+# beside the PID so liveness can tell the holder apart from an unrelated process that later received
+# the same PID: a recycled PID does not carry the original start time. `ps -o lstart=` is spelled the
+# same on BSD and GNU procps, and `LC_ALL=C` keeps two readings of it comparable.
+_branch_op_lock_pid_start() {
+  local pid="$1" start
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  start=$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s '[:space:]' ' ' || true)
+  start="${start# }"
+  start="${start% }"
+  [[ -n "$start" ]] || return 1
+  printf '%s\n' "$start"
 }
 
 # Directory mtime, in epoch seconds, across GNU and BSD userlands. `date -r <file>` handles both
@@ -107,7 +137,7 @@ _branch_op_lock_identity() {
 
 _branch_op_lock_clear_dir() {
   local lockdir="$1"
-  rm -f "$lockdir/pid" "$lockdir/token" "$lockdir/host" "$lockdir/pid_mode" \
+  rm -f "$lockdir/pid" "$lockdir/token" "$lockdir/host" "$lockdir/pid_mode" "$lockdir/pid_start" \
     "$lockdir/acquired_at" "$lockdir/acquired_epoch" 2>/dev/null || true
   rmdir "$lockdir" 2>/dev/null || true
 }
@@ -115,7 +145,7 @@ _branch_op_lock_clear_dir() {
 _branch_op_lock_is_stale() {
   local lockdir="$1" stale_ttl="$2"
   local pid_file="$lockdir/pid" host_file="$lockdir/host" at_file="$lockdir/acquired_at"
-  local holder host_now host_then age now pid_mode
+  local holder host_now host_then age now pid_mode start_then start_now
 
   if [[ ! -d "$lockdir" ]]; then
     return 1
@@ -137,14 +167,29 @@ _branch_op_lock_is_stale() {
   [[ -f "$lockdir/pid_mode" ]] && pid_mode=$(tr -d '[:space:]' <"$lockdir/pid_mode" 2>/dev/null || true)
 
   if [[ -n "$holder" && "$host_then" == "$host_now" && "$pid_mode" == "supervised" ]]; then
-    if kill -0 "$holder" 2>/dev/null; then
-      # A LIVE same-host holder is never stale, whatever its age. The critical section legitimately
-      # spans network calls (GitHub queries, per-branch pushes), so an age-only test would declare an
-      # actively-running holder stale and let the next acquirer delete its directory mid-operation —
-      # defeating the mutual exclusion the lock exists to provide.
-      return 1
+    if ! kill -0 "$holder" 2>/dev/null; then
+      return 0
     fi
-    return 0
+    # `kill -0` proves only that SOME process has this PID. Once the holder dies the OS can recycle its
+    # PID onto an unrelated process, and trusting liveness alone then kept the lock forever: this
+    # branch ignores age, so control never reached the TTL test. Liveness counts only when the
+    # recorded start time agrees with the running process's.
+    start_then=""
+    [[ -f "$lockdir/pid_start" ]] && start_then=$(tr -d '[:space:]' <"$lockdir/pid_start" 2>/dev/null || true)
+    start_now=$(_branch_op_lock_pid_start "$holder" 2>/dev/null | tr -d '[:space:]' || true)
+    if [[ -n "$start_then" && -n "$start_now" ]]; then
+      if [[ "$start_then" == "$start_now" ]]; then
+        # A LIVE same-host holder is never stale, whatever its age. The critical section legitimately
+        # spans network calls (GitHub queries, per-branch pushes), so an age-only test would declare
+        # an actively-running holder stale and let the next acquirer delete its directory
+        # mid-operation — defeating the mutual exclusion the lock exists to provide.
+        return 1
+      fi
+      return 0
+    fi
+    # One side of the comparison is missing — a lock written before the field existed, or a `ps` that
+    # cannot answer now. PID liveness alone is not evidence, so the age tests below decide instead of
+    # holding the lock indefinitely.
   fi
 
   if [[ -f "$lockdir/acquired_epoch" ]]; then
@@ -216,14 +261,26 @@ branch_op_lock_acquire() {
   local repo="$1"
   local timeout="${2:-$DEFAULT_TIMEOUT_SEC}"
   local stale_ttl="${3:-$DEFAULT_STALE_TTL_SEC}"
-  local lockdir start_epoch now holder_info token
+  local lockdir start_epoch now holder_info token pid_mode pid_start
 
   lockdir=$(branch_op_lock_dir "$repo") || return $?
   start_epoch=$(date -u +%s)
+  pid_mode="${BRANCH_OP_LOCK_PID_MODE:-supervised}"
 
   while true; do
+    # Both identifying facts are established BEFORE the directory exists, so a failure to produce
+    # either never publishes a lock that nobody can prove they own.
+    token=$(_branch_op_lock_new_token || true)
+    if [[ ! "$token" =~ ^[0-9a-f]{16,}$ ]]; then
+      echo "branch-op-lock: FAIL CLOSED — no entropy source produced an ownership token; refusing to acquire '$lockdir'." >&2
+      return 1
+    fi
+    pid_start=$(_branch_op_lock_pid_start "$$" || true)
+    if [[ "$pid_mode" == "supervised" && -z "$pid_start" ]]; then
+      echo "branch-op-lock: FAIL CLOSED — cannot read this process's start time, so a recycled PID could hold '$lockdir' forever; refusing to acquire." >&2
+      return 1
+    fi
     if mkdir "$lockdir" 2>/dev/null; then
-      token=$(_branch_op_lock_new_token)
       # Every metadata write is checked. An unchecked failure (a full disk, exhausted inodes) left the
       # acquirer holding a lock whose `pid`/`host` never landed, so `_branch_op_lock_is_stale` fell
       # through to the age path and a waiter reaped the ACTIVE holder once the TTL elapsed. A lock we
@@ -231,7 +288,8 @@ branch_op_lock_acquire() {
       if ! { printf '%s\n' "$$" >"$lockdir/pid" &&
              printf '%s\n' "$token" >"$lockdir/token" &&
              printf '%s\n' "$(uname -n 2>/dev/null || hostname 2>/dev/null || echo unknown)" >"$lockdir/host" &&
-             printf '%s\n' "${BRANCH_OP_LOCK_PID_MODE:-supervised}" >"$lockdir/pid_mode" &&
+             printf '%s\n' "$pid_mode" >"$lockdir/pid_mode" &&
+             printf '%s\n' "$pid_start" >"$lockdir/pid_start" &&
              printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$lockdir/acquired_at" &&
              printf '%s\n' "$(date -u +%s)" >"$lockdir/acquired_epoch"; }; then
         _branch_op_lock_clear_dir "$lockdir"
