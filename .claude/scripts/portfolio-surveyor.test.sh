@@ -129,7 +129,7 @@ while IFS= read -r card; do
     fail "mapped product card does not exist on disk: .claude/skills/products/${card}/SKILL.md"
 done <<<"${mapped_product_cards}"
 
-indexed_product_cards="$({
+indexed_cards_from() {
   awk '
     /Products → cards:/ { in_cards = 1 }
     in_cards && /^$/ { in_cards = 0 }
@@ -143,21 +143,27 @@ indexed_product_cards="$({
         line = substr(line, RSTART + RLENGTH)
       }
     }
-  ' "${maintenance_skill}"
-} | LC_ALL=C sort -u)"
+  ' | LC_ALL=C sort -u
+}
 
-missing_product_cards="$(comm -23 \
-  <(printf '%s\n' "${mapped_product_cards}") \
-  <(printf '%s\n' "${indexed_product_cards}"))"
+missing_cards_in() {
+  comm -23 <(printf '%s\n' "${mapped_product_cards}") <(indexed_cards_from)
+}
+
+missing_product_cards="$(missing_cards_in <"${maintenance_skill}")"
 [ -z "${missing_product_cards}" ] ||
   fail "maintenance run loop product index omits mapped product cards: $(printf '%s' "${missing_product_cards}" | tr '\n' ' ')"
 
-# Negative control: verify omission of an indexed card actually trips the assertion.
-simulated_missing_cards="$(comm -23 \
-  <(printf '%s\n' "${mapped_product_cards}") \
-  <(printf '%s\n' "${indexed_product_cards}" | grep -Fvx 'cloudflare'))"
+# Negative control: remove the cloudflare link from the real skill text and run the same
+# parser and comparison over it, so a parser that ignores the file cannot pass.
+grep -Fq '[cloudflare](../products/cloudflare/SKILL.md)' "${maintenance_skill}" ||
+  fail "negative control precondition failed: the maintenance skill does not link the cloudflare card"
+# A here-string, not a pipe: a parser that stops reading stdin must fail on the message
+# below, not on a silent SIGPIPE from pipefail.
+skill_without_cloudflare="$(sed 's#\[cloudflare\](\.\./products/cloudflare/SKILL\.md)##' "${maintenance_skill}")"
+simulated_missing_cards="$(missing_cards_in <<<"${skill_without_cloudflare}")"
 [ "${simulated_missing_cards}" = 'cloudflare' ] ||
-  fail "negative control failed: omitting cloudflare did not isolate cloudflare as missing (got: ${simulated_missing_cards:-<empty>})"
+  fail "negative control failed: removing the cloudflare link did not report cloudflare as missing (got: ${simulated_missing_cards:-<empty>})"
 
 echo "portfolio surveyor contract: product-card index coverage assertion passed"
 
