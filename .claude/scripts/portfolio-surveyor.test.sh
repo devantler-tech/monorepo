@@ -2997,6 +2997,8 @@ grep -Fq 'the refusal carries one `classifier-path-json:` record' <<<"${_ci_step
   fail "step 4 must name the \`classifier-path-json:\` record the probe's refusal carries (monorepo#3338)"
 grep -Fq 'quote the decoded path as one literal shell argument' <<<"${_ci_step}" ||
   fail "step 4 must say to decode the hint and quote the decoded path as one literal shell argument (monorepo#3338)"
+grep -Fq 'and submit the resulting call through the same guard' <<<"${_ci_step}" ||
+  fail "step 4 must say the resolved call is submitted through the SAME read-only guard — without it the resolved helper may run outside the guard (monorepo#3338, CodeRabbit)"
 grep -Fq 'Never evaluate the record or reuse JSON double quotes as shell quoting' <<<"${_ci_step}" ||
   fail "step 4 must forbid evaluating the hint record — it is path data, not a command (monorepo#3338)"
 grep -Fq 'A missing, malformed, ambiguous, or unusable hint means `QUERY-UNKNOWN`; do not hunt directories or try other roots' <<<"${_ci_step}" ||
