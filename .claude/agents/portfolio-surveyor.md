@@ -1078,6 +1078,12 @@ public and private — no per-repo loop needed to enumerate):
    decoded path as one literal shell argument, and submit the resulting call through the same guard.
    Never evaluate the record or reuse JSON double quotes as shell quoting. A missing, malformed,
    ambiguous, or unusable hint means `QUERY-UNKNOWN`; do not hunt directories or try other roots.
+   **That probe is for a delegated surveyor dispatch only, where the read-only guard is active.**
+   In an inline survey with no surveyor guard (the Codex survey dispatch override), never submit the bare probe:
+   unguarded, a bare basename is a `PATH` lookup, not a denial. Instead take the `installed copy` path
+   that this lane's `plugin-definition-currency.sh --runtime <lane>` reported with a `CURRENT` verdict,
+   and invoke `<installed copy>/scripts/classify-default-branch-ci-runs.sh`. Any other verdict, or
+   no executable helper at exactly that path, means `QUERY-UNKNOWN`.
    **Invoke the classifier only in its flag form, by its resolved installed
    path:** `<installed plugin>/scripts/classify-default-branch-ci-runs.sh --repo OWNER/REPO --branch
    BRANCH --head-sha FULL_SHA`. The helper and the read-only guard accept nothing else: the guard

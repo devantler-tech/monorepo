@@ -3003,4 +3003,17 @@ grep -Fq 'Never evaluate the record or reuse JSON double quotes as shell quoting
   fail "step 4 must forbid evaluating the hint record — it is path data, not a command (monorepo#3338)"
 grep -Fq 'A missing, malformed, ambiguous, or unusable hint means `QUERY-UNKNOWN`; do not hunt directories or try other roots' <<<"${_ci_step}" ||
   fail "step 4 must fail closed on an unusable hint and forbid directory hunting (monorepo#3338)"
+# The probe is only a denial where the surveyor guard runs. The Codex survey dispatch override runs
+# this overlay INLINE with no surveyor-scoped guard, where a bare basename is an unguarded `PATH`
+# lookup that yields no hint — so every repository would read `QUERY-UNKNOWN` (Codex P1 on
+# monorepo#3339). The inline route must never probe and must resolve from the lane's own verified
+# install instead, failing closed otherwise.
+grep -Fq 'That probe is for a delegated surveyor dispatch only, where the read-only guard is active' <<<"${_ci_step}" ||
+  fail "step 4 must scope the bare probe to a delegated surveyor dispatch where the guard is active (Codex P1, monorepo#3339)"
+grep -Fq 'never submit the bare probe' <<<"${_ci_step}" ||
+  fail "step 4 must forbid the bare probe in an unguarded inline survey — there it is a PATH lookup, not a denial (Codex P1, monorepo#3339)"
+grep -Fq 'reported with a `CURRENT` verdict' <<<"${_ci_step}" ||
+  fail "step 4 must resolve the inline helper path only from the lane's CURRENT currency check (Codex P1, monorepo#3339)"
+grep -Fq 'no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"${_ci_step}" ||
+  fail "step 4 must fail closed when the inline install path does not hold an executable helper (Codex P1, monorepo#3339)"
 echo "portfolio surveyor contract: round-13 classifier-path-resolution assertions passed"
