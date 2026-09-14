@@ -292,5 +292,11 @@ STUB_RECHECK_SUBISSUES='{"totalCount":1,"nodes":[{"state":"CLOSED","subIssuesSum
 check "a closed sub-issue whose own children were not read keeps the item" \
   "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | tr '\n' ' ')" = "archive PVTI_1 " ] && echo 0 || echo 1)" "rc=$rc $log"
 
+# 17. the printed usage matches what the parser requires
+run usagetext --not-a-flag
+check "usage shows --claim for both mutating forms" \
+  "$([ "$rc" = 1 ] && grep -qF -- '--apply --manifest NEW-FILE --claim ISSUE:SHA' <<<"$err" &&
+    grep -qF -- '--restore FILE --claim ISSUE:SHA' <<<"$err" && echo 0 || echo 1)" "rc=$rc $err"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ]

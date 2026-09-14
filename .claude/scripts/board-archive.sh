@@ -22,8 +22,8 @@
 #
 # USAGE
 #   board-archive.sh                                  # dry run
-#   board-archive.sh --apply --manifest <file> [--max N]
-#   board-archive.sh --restore <manifest>
+#   board-archive.sh --apply --manifest <new-file> --claim <issue>:<sha> [--max N]
+#   board-archive.sh --restore <manifest> --claim <issue>:<sha>
 #
 #   Dry run prints one candidate per line on stdout (item id, repo#number, type,
 #   closedAt) and a summary on stderr. It writes nothing.
@@ -84,8 +84,8 @@ die() {
 usage() {
   cat >&2 <<'EOF'
 usage: board-archive.sh [--min-closed-days N]
-       board-archive.sh --apply --manifest FILE [--max N] [--min-closed-days N]
-       board-archive.sh --restore FILE
+       board-archive.sh --apply --manifest NEW-FILE --claim ISSUE:SHA [--max N] [--min-closed-days N]
+       board-archive.sh --restore FILE --claim ISSUE:SHA
 EOF
   exit 1
 }
