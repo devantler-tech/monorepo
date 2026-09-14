@@ -176,6 +176,26 @@ mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
 mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
 expect 0 "an overlapping-run delay inside the next-slot grace stays healthy"
 
+# A schedule anchor must name the exact start of a cron minute. Silently accepting nonzero seconds
+# shifts every derived deadline and can delay a stopped-scheduler verdict.
+mkcase scheduled_seconds
+last_slot=$(( NOW - NOW % 3600 ))
+last_run=$(( last_slot + 60 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at $(( last_slot + 59 )))\"" "0 * * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
+expect_msg 2 "does not name one of its slots" "a lastScheduledFor value with nonzero seconds is UNKNOWN"
+
+# jq decodes JSON's escaped newline before this value reaches the evaluator. Reading just its first
+# physical line would bless malformed schedule evidence as a valid hourly expression.
+mkcase multiline_schedule
+last_slot=$(( NOW - NOW % 3600 ))
+last_run=$(( last_slot + 60 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$last_slot")\"" "0 * * * *\ninvalid"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
+expect_msg 2 "unsupported cron expression" "a multiline cron expression is UNKNOWN"
+
 # Both cron shapes in the live store must be understood. Anything else is unproved scheduler state,
 # never permission to fall back to the last healthy transcript.
 mkcase daily_schedule
@@ -200,6 +220,22 @@ mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
   "\"$(iso_at "$last_slot")\"" "0 0,12 * * *"
 mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
 expect 0 "the twice-daily schedule remains healthy across the autumn DST fallback"
+NOW=$saved_now
+TZ=$saved_tz
+
+# Europe/Copenhagen has no 02:30 on the 2026 spring-forward day. The checker must skip that phantom
+# slot and derive the next configured 14:30 run instead of reporting an outage after 02:45.
+saved_now=$NOW
+saved_tz=$TZ
+NOW=$(epoch_utc '2026-03-29T03:00:00Z')
+TZ=Europe/Copenhagen
+mkcase daily_schedule_dst_spring_gap
+last_slot=$(epoch_utc '2026-03-28T13:30:00Z')
+last_run=$(( last_slot + 100 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$last_slot")\"" "30 2,14 * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
+expect 0 "the daily schedule skips a nonexistent spring-forward slot"
 NOW=$saved_now
 TZ=$saved_tz
 

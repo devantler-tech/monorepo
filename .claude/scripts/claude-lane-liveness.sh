@@ -141,10 +141,10 @@ iso_to_epoch() {
 # store timestamps are UTC. BSD and GNU date expose an epoch differently, so try both forms.
 epoch_to_local_clock() {
   local e=$1 out
-  out=$(date -r "$e" '+%H %M %z' 2>/dev/null) || out=""
-  if [ -z "$out" ]; then out=$(date -d "@$e" '+%H %M %z' 2>/dev/null) || out=""; fi
+  out=$(date -r "$e" '+%H %M %S %z' 2>/dev/null) || out=""
+  if [ -z "$out" ]; then out=$(date -d "@$e" '+%H %M %S %z' 2>/dev/null) || out=""; fi
   case "$out" in
-    [0-2][0-9]' '[0-5][0-9]' '[+-][0-9][0-9][0-9][0-9]) printf '%s\n' "$out" ;;
+    [0-2][0-9]' '[0-5][0-9]' '[0-5][0-9]' '[+-][0-9][0-9][0-9][0-9]) printf '%s\n' "$out" ;;
     *) return 0 ;;
   esac
 }
@@ -166,8 +166,11 @@ offset_minutes() {
 # trust an arbitrarily old healthy transcript.
 next_scheduled_epoch() {
   local cron=$1 after=$2 minute hourspec dom month dow extra minute_n
-  local clock current_hour current_minute current_offset candidate candidate_clock candidate_offset
-  local best="" h h_n gap offset_before offset_after
+  local clock current_hour current_minute current_second current_offset
+  local candidate candidate_clock candidate_offset corrected_clock corrected_hour corrected_minute corrected_second
+  local best="" h h_n gap offset_before offset_after extra_gap
+
+  case "$cron" in *$'\n'*|*$'\r'*) return 0 ;; esac
 
   read -r minute hourspec dom month dow extra <<EOF
 $cron
@@ -179,11 +182,11 @@ EOF
 
   clock=$(epoch_to_local_clock "$after")
   [ -n "$clock" ] || return 0
-  read -r current_hour current_minute current_offset <<EOF
+  read -r current_hour current_minute current_second current_offset <<EOF
 $clock
 EOF
-  current_hour=$((10#$current_hour)); current_minute=$((10#$current_minute))
-  [ "$current_minute" -eq "$minute_n" ] || return 0
+  current_hour=$((10#$current_hour)); current_minute=$((10#$current_minute)); current_second=$((10#$current_second))
+  [ "$current_minute" -eq "$minute_n" ] && [ "$current_second" -eq 0 ] || return 0
 
   if [ "$hourspec" = "*" ]; then
     printf '%s\n' "$(( after + 3600 ))"
@@ -205,22 +208,37 @@ EOF
   [ "$best" = present ] || return 0
 
   best=""
+  offset_before=$(offset_minutes "$current_offset")
+  [ -n "$offset_before" ] || return 0
   for h in "${hour_values[@]}"; do
     h_n=$((10#$h))
     gap=$(( (h_n - current_hour + 24) % 24 ))
     [ "$gap" -gt 0 ] || gap=24
-    if [ -z "$best" ] || [ "$gap" -lt "$best" ]; then best=$gap; fi
-  done
-  candidate=$(( after + best * 3600 ))
-  candidate_clock=$(epoch_to_local_clock "$candidate")
-  [ -n "$candidate_clock" ] || return 0
-  read -r _ _ candidate_offset <<EOF
+    for extra_gap in 0 24; do
+      candidate=$(( after + (gap + extra_gap) * 3600 ))
+      candidate_clock=$(epoch_to_local_clock "$candidate")
+      [ -n "$candidate_clock" ] || return 0
+      read -r _ _ _ candidate_offset <<EOF
 $candidate_clock
 EOF
-  offset_before=$(offset_minutes "$current_offset")
-  offset_after=$(offset_minutes "$candidate_offset")
-  [ -n "$offset_before" ] && [ -n "$offset_after" ] || return 0
-  printf '%s\n' "$(( candidate + (offset_before - offset_after) * 60 ))"
+      offset_after=$(offset_minutes "$candidate_offset")
+      [ -n "$offset_after" ] || return 0
+      candidate=$(( candidate + (offset_before - offset_after) * 60 ))
+      corrected_clock=$(epoch_to_local_clock "$candidate")
+      [ -n "$corrected_clock" ] || return 0
+      read -r corrected_hour corrected_minute corrected_second _ <<EOF
+$corrected_clock
+EOF
+      corrected_hour=$((10#$corrected_hour)); corrected_minute=$((10#$corrected_minute)); corrected_second=$((10#$corrected_second))
+      if [ "$corrected_hour" -eq "$h_n" ] && [ "$corrected_minute" -eq "$minute_n" ] && \
+        [ "$corrected_second" -eq 0 ] && [ "$candidate" -gt "$after" ]; then
+        if [ -z "$best" ] || [ "$candidate" -lt "$best" ]; then best=$candidate; fi
+        break
+      fi
+    done
+  done
+  [ -n "$best" ] || return 0
+  printf '%s\n' "$best"
 }
 
 # The store is discovered the same way agent-telemetry.sh discovers it, and requires EXACTLY ONE
