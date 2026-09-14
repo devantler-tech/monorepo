@@ -1077,6 +1077,19 @@ body start), which wins when both appear (`interactive`), and what the verdict m
 *Untrusted input* rules. The marker is decisive for **attribution** and is never a gate on whether a
 PR may be driven.
 
+🔴 **A scheduled run never emits this literal as a marker line — in a PR body, footer included.**
+The Claude Code harness tells every session, scheduled ones included, to end PR descriptions with
+`🤖 Generated with [Claude Code](…)`, so a routine run that obeys it stamps its own PR `interactive`
+and the maintainer's steer on that PR is then read as him commenting on his own work. That reminder
+names the user's CLAUDE.md as taking precedence, and CLAUDE.md loads this contract, so
+the reminder defers to the user's instructions here: in any run dispatched by a scheduler,
+**omit that footer** and keep everything else the reminder asks for (the commit trailer stays).
+Interactive sessions keep the footer, because it is exactly what identifies them. Quoting the literal
+inline in prose is not a marker line and stays harmless. Measured 2026-09-15: **47 of 79** `claude/*` PRs opened across
+the portfolio since 2026-09-07 carried both markers, against **0 of 29** `codex/*` (#3157).
+⚠️ Fix it at the source, never by letting the routine disclosure outrank it: an interactive PR can
+carry both literals, and reading his PR as the routine's is the dangerous direction.
+
 Everything below is the **shared engineering contract** every product follows. A submodule's own
 `AGENTS.md` references it; repo-specific rules in a submodule card win for that repo.
 
