@@ -36,15 +36,18 @@
 #                        (tab-separated) BEFORE each archive, so every item this
 #                        run may have touched can be restored
 #   --restore FILE       unarchive every item a manifest names
-#   --claim ISSUE:SHA    the agent-claim coordination claim this run holds; it is
-#                        renewed before the first mutation and every 100 after, the
-#                        run stops if renewal fails, and the latest tip is printed
-#                        so the caller retires the current sha
+#   --claim ISSUE:SHA    REQUIRED for --apply and --restore: the agent-claim
+#                        coordination claim this run holds. It is renewed before the
+#                        first mutation and every 100 after, the run stops if
+#                        renewal fails, and the latest tip is printed so the caller
+#                        retires the current sha
 #
-#   --apply and --restore are mutually exclusive. Just before each archive, the
-#   item is re-read and every per-item part of the rule is checked again: still
-#   closed, closed long enough, no open ancestor, and no open or unlisted
-#   sub-issue within two levels.
+#   --apply and --restore are mutually exclusive, and --apply needs a new or empty
+#   manifest, so each run's manifest stays within the restore ceiling. Just before
+#   each archive, the item is re-read and every per-item part of the rule is
+#   checked again: still closed, closed long enough, no open ancestor, and no open
+#   or unlisted sub-issue within two levels. A deeper branch that was not read
+#   keeps the item active.
 #
 # ENVIRONMENT
 #   BOARD_ARCHIVE_NOW            ISO-8601 UTC instant used as "now" (tests)
@@ -145,6 +148,12 @@ if [ -n "$CLAIM" ]; then
     die "--claim must be <issue>:<40-character claim sha>" 1
   fi
 fi
+if [ "$MODE" != dry-run ] && [ -z "$CLAIM" ]; then
+  die "--apply and --restore require --claim <issue>:<sha>, so every board write is owned" 1
+fi
+if [ "$MODE" = apply ] && [ -s "$MANIFEST" ]; then
+  die "manifest ${MANIFEST} already has entries; use a fresh manifest for each run so every run stays restorable" 1
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PACE="${BOARD_ARCHIVE_PACE_SECONDS:-1}"
@@ -165,7 +174,7 @@ gh_reason() { head -c 300 "$GH_ERR" 2>/dev/null | tr '\n' ' '; }
 # taken over stops instead of writing to the public board.
 readonly CLAIM_RENEW_EVERY=100
 renew_claim() {
-  [ -n "$CLAIM" ] || return 0
+  [ -n "$CLAIM" ] || die "no claim is held; refusing to write to the board"
   local helper repo_dir new
   helper="${BOARD_ARCHIVE_CLAIM_HELPER:-$SCRIPT_DIR/agent-claim.sh}"
   repo_dir=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || printf '.')
@@ -335,9 +344,11 @@ while IFS=$'\t' read -r item ref _ closed; do
   state=$(gh api graphql -f item="$item" -f query="$RECHECK" 2>"$GH_ERR" |
     jq -r --arg id "$item" --argjson cutoff "$cutoff" '
       def unfinished: (.subIssuesSummary.total // 1) != (.subIssuesSummary.completed // 0);
-      # Any open, unfinished or unlisted sub-issue in the fetched levels keeps the item.
+      # Any open, unfinished or unlisted sub-issue in the fetched levels keeps the item,
+      # and so does a node at the deepest fetched level that still has sub-issues of
+      # its own: that branch was not read, so it is not known to be closed.
       def open_below:
-        if has("subIssues") | not then false
+        if has("subIssues") | not then (.subIssuesSummary.total // 1) > 0
         else .subIssues as $s
           | ($s == null) or ($s.totalCount != ($s.nodes | length))
             or any($s.nodes[]; .state != "CLOSED" or unfinished or open_below)
@@ -352,7 +363,7 @@ while IFS=$'\t' read -r item ref _ closed; do
           then "open-ancestor"
         elif $n.content.subIssuesSummary != null and ($n.content | unfinished)
           then "open-sub-issue"
-        elif $n.content | open_below
+        elif $n.content.subIssuesSummary != null and ($n.content | open_below)
           then "open-descendant"
         else $state end') ||
     die "could not re-read ${ref} after ${archived} archived (manifest: ${MANIFEST}): $(gh_reason)"

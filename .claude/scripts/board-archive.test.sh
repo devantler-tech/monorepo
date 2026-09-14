@@ -42,6 +42,8 @@ pr() { # pr <item> <number> <closedAt>
       number: $n, state: "MERGED", closedAt: $closed, repository: {nameWithOwner: "devantler-tech/ksail"}}}'
 }
 old='"2026-07-01T00:00:00Z"'
+# Every mutating run must hold a claim; the fake helper accepts any well-formed sha.
+claim_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 page() { # page <hasNext> <cursor> <node>...
   local has="$1" cur="$2"
   shift 2
@@ -174,11 +176,11 @@ check "a recently merged PR becomes eligible with a shorter window" \
   "$([ "$refs" = "devantler-tech/ksail#1 devantler-tech/ksail#2 devantler-tech/monorepo#3 " ] && echo 0 || echo 1)" "got: $refs"
 
 # 3. apply requires a manifest
-run nomanifest --apply
+run nomanifest --apply --claim "2238:$claim_sha"
 check "--apply without --manifest is a usage error" "$([ "$rc" = 1 ] && ! grep -q archive <<<"$log" && echo 0 || echo 1)" "rc=$rc"
 
 # 4. apply archives each candidate, recording it first
-run apply --apply --manifest "$tmp/apply.tsv"
+run apply --apply --manifest "$tmp/apply.tsv" --claim "2238:$claim_sha"
 check "apply exits 0" "$([ "$rc" = 0 ] && echo 0 || echo 1)" "rc=$rc err=$err"
 check "apply archives exactly the candidates" \
   "$([ "$(grep '^archive' <<<"$log" | sort | tr '\n' ' ')" = "archive PVTI_1 archive PVTI_3 " ] && echo 0 || echo 1)" "$log"
@@ -188,69 +190,69 @@ check "manifest records project and item for each archive" \
   "$([ "$(cut -f1,2 "$tmp/apply.tsv" | tr '\t' ':' | sort | tr '\n' ' ')" = "PVT_test:PVTI_1 PVT_test:PVTI_3 " ] && echo 0 || echo 1)" "$(cat "$tmp/apply.tsv")"
 
 # 5. --max caps one run
-run cap --apply --manifest "$tmp/cap.tsv" --max 1
+run cap --apply --manifest "$tmp/cap.tsv" --max 1 --claim "2238:$claim_sha"
 check "--max caps archives per run" "$([ "$(grep -c '^archive' <<<"$log")" = 1 ] && echo 0 || echo 1)" "$log"
 
 # 6. an item reopened since the read is skipped, not archived
-STUB_RECHECK_STATE=OPEN run reopened --apply --manifest "$tmp/reopened.tsv"
+STUB_RECHECK_STATE=OPEN run reopened --apply --manifest "$tmp/reopened.tsv" --claim "2238:$claim_sha"
 check "a reopened item is skipped" \
   "$([ "$rc" = 0 ] && ! grep -q '^archive' <<<"$log" && [ ! -s "$tmp/reopened.tsv" ] && echo 0 || echo 1)" "rc=$rc $log"
 
 # 7. a mutation that does not read back as archived stops the run
-STUB_ARCHIVE_BAD=1 run badreadback --apply --manifest "$tmp/bad.tsv"
+STUB_ARCHIVE_BAD=1 run badreadback --apply --manifest "$tmp/bad.tsv" --claim "2238:$claim_sha"
 check "unverified archive exits 2 after one attempt" \
   "$([ "$rc" = 2 ] && [ "$(grep -c '^archive' <<<"$log")" = 1 ] && echo 0 || echo 1)" "rc=$rc $log"
 check "the attempted item is already in the manifest" "$([ "$(wc -l <"$tmp/bad.tsv" | tr -d ' ')" = 1 ] && echo 0 || echo 1)"
 
 # 8. read failures never lead to a mutation
-STUB_PAGE_BAD=1 run badpage --apply --manifest "$tmp/badpage.tsv"
+STUB_PAGE_BAD=1 run badpage --apply --manifest "$tmp/badpage.tsv" --claim "2238:$claim_sha"
 check "an error page exits 2 without archiving" "$([ "$rc" = 2 ] && ! grep -q archive <<<"$log" && echo 0 || echo 1)" "rc=$rc"
-STUB_CURSOR_STUCK=1 run stuck --apply --manifest "$tmp/stuck.tsv"
+STUB_CURSOR_STUCK=1 run stuck --apply --manifest "$tmp/stuck.tsv" --claim "2238:$claim_sha"
 check "a cursor that does not advance exits 2 without archiving" \
   "$([ "$rc" = 2 ] && ! grep -q archive <<<"$log" && echo 0 || echo 1)" "rc=$rc"
 
 # 9. restore unarchives a manifest, and refuses one from another project
-run restore --restore "$tmp/apply.tsv"
+run restore --restore "$tmp/apply.tsv" --claim "2238:$claim_sha"
 check "restore unarchives every manifest item" \
   "$([ "$rc" = 0 ] && [ "$(grep '^unarchive' <<<"$log" | sort | tr '\n' ' ')" = "unarchive PVTI_1 unarchive PVTI_3 " ] && echo 0 || echo 1)" "rc=$rc $log"
-STUB_PROJECT=PVT_other run foreign --restore "$tmp/apply.tsv"
+STUB_PROJECT=PVT_other run foreign --restore "$tmp/apply.tsv" --claim "2238:$claim_sha"
 check "restore refuses another project's manifest before any mutation" \
   "$([ "$rc" = 2 ] && ! grep -q unarchive <<<"$log" && echo 0 || echo 1)" "rc=$rc $log"
 
 # 10. no run may plan more writes than the hourly budget allows
-run overmax --apply --manifest "$tmp/overmax.tsv" --max 451
+run overmax --apply --manifest "$tmp/overmax.tsv" --max 451 --claim "2238:$claim_sha"
 check "--max above the hourly cap is a usage error" "$([ "$rc" = 1 ] && ! grep -q archive <<<"$log" && echo 0 || echo 1)" "rc=$rc"
-TEST_PACE=. run badpace --apply --manifest "$tmp/badpace.tsv"
+TEST_PACE=. run badpace --apply --manifest "$tmp/badpace.tsv" --claim "2238:$claim_sha"
 check "a malformed pace is refused before any read or write" \
   "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
 : >"$tmp/big.tsv"
 for ((i = 0; i < 451; i++)); do printf 'PVT_test\tPVTI_big%s\tdevantler-tech/monorepo#%s\t2026-07-01T00:00:00Z\n' "$i" "$i" >>"$tmp/big.tsv"; done
-run bigrestore --restore "$tmp/big.tsv"
+run bigrestore --restore "$tmp/big.tsv" --claim "2238:$claim_sha"
 check "restore refuses a manifest over the hourly cap before any mutation" \
   "$([ "$rc" = 2 ] && ! grep -q unarchive <<<"$log" && echo 0 || echo 1)" "rc=$rc $log"
 
 # 11. the recheck repeats the hierarchy rule, not only the state
-STUB_RECHECK_PARENT='{"id":"I_P3","state":"OPEN","parent":null}' run ancestorreopened --apply --manifest "$tmp/anc.tsv"
+STUB_RECHECK_PARENT='{"id":"I_P3","state":"OPEN","parent":null}' run ancestorreopened --apply --manifest "$tmp/anc.tsv" --claim "2238:$claim_sha"
 check "an ancestor reopened since the read keeps the item" \
   "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | tr '\n' ' ')" = "archive PVTI_1 " ] && echo 0 || echo 1)" "rc=$rc $log"
-STUB_RECHECK_SIS='{"total":2,"completed":1}' run subissueadded --apply --manifest "$tmp/sis.tsv"
+STUB_RECHECK_SIS='{"total":2,"completed":1}' run subissueadded --apply --manifest "$tmp/sis.tsv" --claim "2238:$claim_sha"
 check "an unfinished sub-issue added since the read keeps the item" \
   "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | tr '\n' ' ')" = "archive PVTI_1 " ] && echo 0 || echo 1)" "rc=$rc $log"
 
 # 12. apply and restore are opposite mutations and cannot be combined
-run bothmodes --restore "$tmp/apply.tsv" --apply --manifest "$tmp/both.tsv"
+run bothmodes --restore "$tmp/apply.tsv" --apply --manifest "$tmp/both.tsv" --claim "2238:$claim_sha"
 check "combining --restore then --apply is a usage error" \
   "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
-run bothmodes2 --apply --manifest "$tmp/both2.tsv" --restore "$tmp/apply.tsv"
+run bothmodes2 --apply --manifest "$tmp/both2.tsv" --restore "$tmp/apply.tsv" --claim "2238:$claim_sha"
 check "combining --apply then --restore is a usage error" \
   "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
 
 # 13. the recheck repeats the closing-age gate and walks the descendants
-STUB_RECHECK_CLOSED_AT=2026-09-10T00:00:00Z run reclosed --apply --manifest "$tmp/reclosed.tsv"
+STUB_RECHECK_CLOSED_AT=2026-09-10T00:00:00Z run reclosed --apply --manifest "$tmp/reclosed.tsv" --claim "2238:$claim_sha"
 check "an item re-closed since the read is too recent to archive" \
   "$([ "$rc" = 0 ] && ! grep -q '^archive' <<<"$log" && echo 0 || echo 1)" "rc=$rc $log"
 STUB_RECHECK_SUBISSUES='{"totalCount":1,"nodes":[{"state":"CLOSED","subIssuesSummary":{"total":1,"completed":1},"subIssues":{"totalCount":1,"nodes":[{"state":"OPEN","subIssuesSummary":{"total":0,"completed":0}}]}}]}' \
-  run grandchild --apply --manifest "$tmp/grandchild.tsv"
+  run grandchild --apply --manifest "$tmp/grandchild.tsv" --claim "2238:$claim_sha"
 check "an open grandchild under a closed child keeps the item" \
   "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | tr '\n' ' ')" = "archive PVTI_1 " ] && echo 0 || echo 1)" "rc=$rc $log"
 
@@ -271,6 +273,24 @@ check "a lost claim stops a restore before any unarchive" \
   "$([ "$rc" = 2 ] && ! grep -q '^unarchive' <<<"$log" && echo 0 || echo 1)" "rc=$rc $log"
 run badclaim --apply --manifest "$tmp/badclaim.tsv" --claim 2238:nothex
 check "a malformed claim is a usage error" "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+
+# 15. board writes are never unowned, and a manifest is never reused across runs
+run noclaimapply --apply --manifest "$tmp/noclaim.tsv"
+check "--apply without --claim is a usage error before any call" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+run noclaimrestore --restore "$tmp/apply.tsv"
+check "--restore without --claim is a usage error before any call" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+printf 'PVT_test\tPVTI_old\tdevantler-tech/monorepo#99\t2026-07-01T00:00:00Z\n' >"$tmp/reused.tsv"
+run reused --apply --manifest "$tmp/reused.tsv" --claim "2238:$claim_sha"
+check "--apply refuses a manifest that already has entries" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && [ "$(wc -l <"$tmp/reused.tsv" | tr -d ' ')" = 1 ] && echo 0 || echo 1)" "rc=$rc $log"
+
+# 16. a deeper branch the recheck could not read keeps the item
+STUB_RECHECK_SUBISSUES='{"totalCount":1,"nodes":[{"state":"CLOSED","subIssuesSummary":{"total":1,"completed":1},"subIssues":{"totalCount":1,"nodes":[{"state":"CLOSED","subIssuesSummary":{"total":1,"completed":1}}]}}]}' \
+  run unreadbranch --apply --manifest "$tmp/unread.tsv" --claim "2238:$claim_sha"
+check "a closed sub-issue whose own children were not read keeps the item" \
+  "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | tr '\n' ' ')" = "archive PVTI_1 " ] && echo 0 || echo 1)" "rc=$rc $log"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ]
