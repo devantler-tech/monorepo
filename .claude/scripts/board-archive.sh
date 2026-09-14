@@ -38,9 +38,9 @@
 #   --restore FILE       unarchive every item a manifest names
 #   --claim ISSUE:SHA    REQUIRED for --apply and --restore: the agent-claim
 #                        coordination claim this run holds. It is renewed before the
-#                        first mutation and every 100 after, the run stops if
-#                        renewal fails, and the latest tip is printed so the caller
-#                        retires the current sha
+#                        first mutation and again before any later mutation once 10
+#                        minutes have passed, the run stops if renewal fails, and the
+#                        latest tip is printed so the caller retires the current sha
 #
 #   --apply and --restore are mutually exclusive, and --apply needs a new or empty
 #   manifest, so each run's manifest stays within the restore ceiling. Just before
@@ -53,6 +53,7 @@
 #   BOARD_ARCHIVE_NOW            ISO-8601 UTC instant used as "now" (tests)
 #   BOARD_ARCHIVE_PACE_SECONDS   pause between mutations (default 1)
 #   BOARD_ARCHIVE_CLAIM_HELPER   claim helper to call (default: agent-claim.sh beside this script)
+#   BOARD_ARCHIVE_CLAIM_RENEW_SECONDS  renewal interval before a mutation (default 600)
 #
 # EXIT CODES
 #   0  dry run finished, or every requested mutation was verified
@@ -160,6 +161,9 @@ esac
 if [ "$MODE" = apply ] && { [ -L "$MANIFEST" ] || { [ -e "$MANIFEST" ] && [ ! -f "$MANIFEST" ]; }; }; then
   die "manifest ${MANIFEST} must be a regular file (not a symlink, device or FIFO), so the restore record persists" 1
 fi
+if [ "$MODE" = restore ] && { [ -L "$MANIFEST" ] || [ ! -f "$MANIFEST" ]; }; then
+  die "restore manifest ${MANIFEST} must be an existing regular file (not a symlink, device or FIFO)" 1
+fi
 CLAIM_ISSUE=""
 CLAIM_SHA=""
 if [ -n "$CLAIM" ]; then
@@ -191,9 +195,12 @@ GH_ERR="$TMP/gh.err"
 gh_reason() { head -c 300 "$GH_ERR" 2>/dev/null | tr '\n' ' '; }
 
 # With --claim, the coordination claim is renewed immediately before the first
-# mutation and again every CLAIM_RENEW_EVERY mutations, so a run whose claim was
-# taken over stops instead of writing to the public board.
-readonly CLAIM_RENEW_EVERY=100
+# mutation and again before any later mutation once CLAIM_RENEW_SECONDS have
+# passed since the last renewal. The clock, not a mutation count, decides: a long
+# stretch of skipped candidates cannot outlast the lease between two writes.
+readonly CLAIM_RENEW_SECONDS="${BOARD_ARCHIVE_CLAIM_RENEW_SECONDS:-600}"
+is_count "$CLAIM_RENEW_SECONDS" || die "BOARD_ARCHIVE_CLAIM_RENEW_SECONDS must be a whole number of seconds" 1
+LAST_RENEW=""
 renew_claim() {
   [ -n "$CLAIM" ] || die "no claim is held; refusing to write to the board"
   local helper repo_dir new
@@ -205,6 +212,16 @@ renew_claim() {
     die "renewing agent-claim/${CLAIM_ISSUE} returned no claim sha; stopped before the next mutation"
   CLAIM_SHA="$new"
   printf 'board-archive: renewed agent-claim/%s tip=%s\n' "$CLAIM_ISSUE" "$CLAIM_SHA" >&2
+}
+
+# Call immediately before every mutation.
+renew_claim_if_due() {
+  local now
+  now=$(date -u +%s)
+  if [ -z "$LAST_RENEW" ] || [ $((now - LAST_RENEW)) -ge "$CLAIM_RENEW_SECONDS" ]; then
+    renew_claim
+    LAST_RENEW=$(date -u +%s)
+  fi
 }
 
 # shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
@@ -222,6 +239,10 @@ resolve_project_id() {
 # ── restore ────────────────────────────────────────────────────────────────
 if [ "$MODE" = restore ]; then
   [ -r "$MANIFEST" ] || die "cannot read manifest: ${MANIFEST}" 1
+  # Read the manifest exactly once. Validation and mutation both use this private
+  # copy, so what was validated is exactly what gets restored.
+  SNAPSHOT="$TMP/restore.tsv"
+  cp "$MANIFEST" "$SNAPSHOT" || die "cannot snapshot manifest: ${MANIFEST}; nothing was restored"
   resolve_project_id
   # Validate every line before the first mutation, so a manifest from another
   # project cannot be half-applied.
@@ -231,7 +252,7 @@ if [ "$MODE" = restore ]; then
     [ -n "$item" ] || die "malformed manifest line for ${ref:-an unnamed item}; nothing was restored"
     [ "$pid" = "$PROJECT_ID" ] || die "manifest names a different project for ${ref}; nothing was restored"
     lines=$((lines + 1))
-  done <"$MANIFEST"
+  done <"$SNAPSHOT"
   [ "$lines" -le "$HOURLY_CAP" ] ||
     die "manifest names ${lines} items, over the ${HOURLY_CAP}-per-run limit; split it and restore each part in its own run (nothing was restored)"
   # shellcheck disable=SC2016
@@ -240,7 +261,7 @@ if [ "$MODE" = restore ]; then
   restored=0
   while IFS=$'\t' read -r pid item ref _; do
     [ -n "$pid$item" ] || continue
-    if [ $((restored % CLAIM_RENEW_EVERY)) -eq 0 ]; then renew_claim; fi
+    renew_claim_if_due
     out=$(gh api graphql -f project="$PROJECT_ID" -f item="$item" -f query="$UNARCHIVE" 2>"$GH_ERR") ||
       die "unarchive failed for ${ref} after ${restored} of ${lines} restored: $(gh_reason)"
     printf '%s' "$out" | jq -e --arg id "$item" '(.errors // [] | length) == 0 and
@@ -249,7 +270,7 @@ if [ "$MODE" = restore ]; then
       die "read-back for ${ref} did not show it active after ${restored} of ${lines} restored"
     restored=$((restored + 1))
     [ "$PACE" = 0 ] || sleep "$PACE"
-  done <"$MANIFEST"
+  done <"$SNAPSHOT"
   printf 'board-archive: restored %s item(s) from %s [verified]\n' "$restored" "$MANIFEST" >&2
   exit 0
 fi
@@ -397,7 +418,7 @@ while IFS=$'\t' read -r item ref _ closed; do
     ;;
   esac
 
-  if [ $((archived % CLAIM_RENEW_EVERY)) -eq 0 ]; then renew_claim; fi
+  renew_claim_if_due
   printf '%s\t%s\t%s\t%s\n' "$PROJECT_ID" "$item" "$ref" "$closed" >>"$MANIFEST" ||
     die "cannot write manifest before archiving ${ref}; stopped after ${archived} archived"
   out=$(gh api graphql -f project="$PROJECT_ID" -f item="$item" -f query="$ARCHIVE" 2>"$GH_ERR") ||

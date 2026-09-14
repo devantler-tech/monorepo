@@ -317,6 +317,17 @@ ln -s "$tmp/real.tsv" "$tmp/link.tsv"
 run symlink --apply --manifest "$tmp/link.tsv" --claim "2238:$claim_sha"
 check "--apply rejects a symlinked manifest" "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
 
+# 20. renewal is due by elapsed time, and a restore reads only an existing regular file
+BOARD_ARCHIVE_CLAIM_RENEW_SECONDS=0 run renewevery --apply --manifest "$tmp/renewevery.tsv" --claim "2238:$claim_sha"
+check "when renewal is due every time, the claim is renewed before each archive" \
+  "$([ "$rc" = 0 ] && [ "$(grep -E '^(claim-renew|archive) ' <<<"$log" | cut -d' ' -f1 | tr '\n' ' ')" = "claim-renew archive claim-renew archive " ] && echo 0 || echo 1)" "rc=$rc $log"
+run restoredevnull --restore /dev/null --claim "2238:$claim_sha"
+check "--restore rejects a non-regular manifest such as /dev/null" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+ln -s "$tmp/apply.tsv" "$tmp/restore-link.tsv"
+run restoresymlink --restore "$tmp/restore-link.tsv" --claim "2238:$claim_sha"
+check "--restore rejects a symlinked manifest" "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+
 # 17. the printed usage matches what the parser requires
 run usagetext --not-a-flag
 check "usage shows --claim for both mutating forms" \
