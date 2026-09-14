@@ -100,7 +100,10 @@ MODE=dry-run
 MIN_DAYS=30
 MAX=$HOURLY_CAP
 MANIFEST=""
+RESTORE_FILE=""
 CLAIM=""
+MAX_SET=""
+DAYS_SET=""
 while [ $# -gt 0 ]; do
   case "$1" in
   --apply)
@@ -111,7 +114,7 @@ while [ $# -gt 0 ]; do
   --restore)
     if [ $# -lt 2 ] || [ "$MODE" != dry-run ]; then usage; fi
     MODE=restore
-    MANIFEST="$2"
+    RESTORE_FILE="$2"
     shift
     ;;
   --claim)
@@ -127,18 +130,36 @@ while [ $# -gt 0 ]; do
   --max)
     if [ $# -lt 2 ] || ! is_count "$2" || [ "$2" -eq 0 ] || [ "$2" -gt "$HOURLY_CAP" ]; then usage; fi
     MAX="$2"
+    MAX_SET=1
     shift
     ;;
   --min-closed-days)
     if [ $# -lt 2 ] || ! is_count "$2"; then usage; fi
     MIN_DAYS="$2"
+    DAYS_SET=1
     shift
     ;;
   *) usage ;;
   esac
   shift
 done
+# Each option is accepted only by the modes it applies to, so option order can
+# never redirect a mutation or silently ignore a limit.
+case "$MODE" in
+dry-run)
+  if [ -n "$MANIFEST" ] || [ -n "$MAX_SET" ] || [ -n "$CLAIM" ]; then usage; fi
+  ;;
+restore)
+  if [ -n "$MANIFEST" ] || [ -n "$MAX_SET" ] || [ -n "$DAYS_SET" ]; then usage; fi
+  MANIFEST="$RESTORE_FILE"
+  ;;
+esac
 [ "$MODE" != apply ] || [ -n "$MANIFEST" ] || die "--apply requires --manifest, so every archive can be restored" 1
+# The manifest is the only restore record, so it must be a regular file that
+# persists: not a symlink, a device such as /dev/null, or a FIFO.
+if [ "$MODE" = apply ] && { [ -L "$MANIFEST" ] || { [ -e "$MANIFEST" ] && [ ! -f "$MANIFEST" ]; }; }; then
+  die "manifest ${MANIFEST} must be a regular file (not a symlink, device or FIFO), so the restore record persists" 1
+fi
 CLAIM_ISSUE=""
 CLAIM_SHA=""
 if [ -n "$CLAIM" ]; then

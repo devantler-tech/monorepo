@@ -303,6 +303,20 @@ check "the recheck asks for a full 100-item page at both sub-issue levels" \
 check "a finished issue with 60 closed sub-issues is still archived" \
   "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | sort | tr '\n' ' ')" = "archive PVTI_1 archive PVTI_3 " ] && echo 0 || echo 1)" "rc=$rc $log"
 
+# 19. options are accepted only by the modes they apply to, and the manifest must persist
+run restoremanifest --restore "$tmp/apply.tsv" --manifest "$tmp/other.tsv" --claim "2238:$claim_sha"
+check "--restore rejects --manifest before any call" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+run drymanifest --manifest "$tmp/dry.tsv"
+check "a dry run rejects --manifest" "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+run devnull --apply --manifest /dev/null --claim "2238:$claim_sha"
+check "--apply rejects a non-regular manifest such as /dev/null" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+: >"$tmp/real.tsv"
+ln -s "$tmp/real.tsv" "$tmp/link.tsv"
+run symlink --apply --manifest "$tmp/link.tsv" --claim "2238:$claim_sha"
+check "--apply rejects a symlinked manifest" "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+
 # 17. the printed usage matches what the parser requires
 run usagetext --not-a-flag
 check "usage shows --claim for both mutating forms" \
