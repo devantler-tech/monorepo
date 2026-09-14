@@ -22,10 +22,11 @@
 # zero markers, zero assistant turns). Classifying transcripts alone therefore cannot see a dead
 # dispatch, because the dead one is exactly the transcript that cannot be attributed.
 #
-# So the anchor is the DISPATCH, not the transcript: `lastRunAt` is authoritative for "a dispatch
-# happened", and a healthy dispatch's session starts within about a second of it (measured ~1.0s on
-# both tasks). ABSENCE of a session at that anchor is itself the signal, and it needs no marker on
-# the failed run.
+# So the anchor is the SCHEDULE plus the dispatch, not the transcript: `lastScheduledFor` and
+# `cronExpression` establish whether the scheduler is still dispatching, while `lastRunAt` establishes
+# whether the newest attempted dispatch produced a session. A healthy dispatch's session starts within
+# about a second of `lastRunAt` (measured ~1.0s on both tasks). ABSENCE of a session at that anchor is
+# itself the signal, and it needs no marker on the failed run.
 #
 # READ-ONLY, and deliberately NARROW. Session transcripts contain the entire content of every run --
 # code, credentials in tool output, private operator reasoning. This check reads ONLY:
@@ -37,8 +38,8 @@
 #                               [--grace-seconds N] [--skew-seconds N]
 #                               [--lookback-hours N] [--now-epoch S] [--quiet]
 #
-# Exit 0  every enabled task checked produced work on its most recent settled dispatch
-#      1  NOT PRODUCING -- a dispatch happened and produced no work
+# Exit 0  every enabled task checked is dispatching and produced work on its most recent settled run
+#      1  NOT PRODUCING -- a dispatch produced no work, or an expected dispatch never happened
 #      2  UNKNOWN -- could not determine (no jq, absent/ambiguous store, absent projects root,
 #         unparsable record, or the newest dispatch still in flight)
 #
@@ -65,9 +66,10 @@ NOW_EPOCH=""
 QUIET=0
 
 RECOVERY="
-  To resolve: confirm the lane's dispatched runs are reaching the model at all. A dead dispatch still
-  advances lastRunAt, so look at whether a session exists for that dispatch rather than at the
-  scheduler's own view. Re-run this check once the newest dispatch has had time to settle."
+  To resolve: confirm the scheduler is dispatching the task and that dispatched runs reach the model.
+  A dead dispatch still advances lastRunAt, while a stopped scheduler leaves it frozen; inspect both
+  the expected slot and whether a session exists for the latest dispatch. Re-run this check once the
+  newest expected dispatch has had time to settle."
 
 usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -135,6 +137,110 @@ iso_to_epoch() {
   printf '%s\n' "$out"
 }
 
+# Render local wall-clock fields portably. Claude cron expressions use the host timezone, while the
+# store timestamps are UTC. BSD and GNU date expose an epoch differently, so try both forms.
+epoch_to_local_clock() {
+  local e=$1 out
+  out=$(date -r "$e" '+%H %M %S %z' 2>/dev/null) || out=""
+  if [ -z "$out" ]; then out=$(date -d "@$e" '+%H %M %S %z' 2>/dev/null) || out=""; fi
+  case "$out" in
+    [0-2][0-9]' '[0-5][0-9]' '[0-5][0-9]' '[+-][0-9][0-9][0-9][0-9]) printf '%s\n' "$out" ;;
+    *) return 0 ;;
+  esac
+}
+
+offset_minutes() {
+  local raw=$1 sign=1 hh mm
+  case "$raw" in
+    +[0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9]) ;;
+    *) return 0 ;;
+  esac
+  case "$raw" in -*) sign=-1 ;; esac
+  hh=${raw:1:2}; mm=${raw:3:2}
+  printf '%s\n' "$(( sign * (10#$hh * 60 + 10#$mm) ))"
+}
+
+# Return the first scheduled slot strictly after `after`. The deployment currently uses exactly two
+# portable cron shapes: hourly at one minute, or a comma-separated list of hours at one minute. The
+# daily form is evaluated in local time; an unfamiliar expression is UNKNOWN, never permission to
+# trust an arbitrarily old healthy transcript.
+next_scheduled_epoch() {
+  local cron=$1 after=$2 minute hourspec dom month dow extra minute_n
+  local clock current_hour current_minute current_second current_offset
+  local candidate candidate_clock candidate_offset corrected_clock corrected_hour corrected_minute corrected_second
+  local best="" h h_n gap offset_before offset_after extra_gap
+
+  case "$cron" in *$'\n'*|*$'\r'*) return 0 ;; esac
+
+  read -r minute hourspec dom month dow extra <<EOF
+$cron
+EOF
+  [ -z "${extra:-}" ] && [ "$dom" = "*" ] && [ "$month" = "*" ] && [ "$dow" = "*" ] || return 0
+  case "$minute" in ''|*[!0-9]*) return 0 ;; esac
+  minute_n=$((10#$minute))
+  [ "$minute_n" -le 59 ] || return 0
+
+  clock=$(epoch_to_local_clock "$after")
+  [ -n "$clock" ] || return 0
+  read -r current_hour current_minute current_second current_offset <<EOF
+$clock
+EOF
+  current_hour=$((10#$current_hour)); current_minute=$((10#$current_minute)); current_second=$((10#$current_second))
+  [ "$current_minute" -eq "$minute_n" ] && [ "$current_second" -eq 0 ] || return 0
+
+  if [ "$hourspec" = "*" ]; then
+    printf '%s\n' "$(( after + 3600 ))"
+    return 0
+  fi
+
+  case "$hourspec" in ''|,*|*,|*,,*) return 0 ;; esac
+  local hour_values=()
+  IFS=, read -r -a hour_values <<EOF
+$hourspec
+EOF
+  [ "${#hour_values[@]}" -gt 0 ] || return 0
+  for h in "${hour_values[@]}"; do
+    case "$h" in ''|*[!0-9]*) return 0 ;; esac
+    h_n=$((10#$h)); [ "$h_n" -le 23 ] || return 0
+    [ "$h_n" -eq "$current_hour" ] || continue
+    best=present
+  done
+  [ "$best" = present ] || return 0
+
+  best=""
+  offset_before=$(offset_minutes "$current_offset")
+  [ -n "$offset_before" ] || return 0
+  for h in "${hour_values[@]}"; do
+    h_n=$((10#$h))
+    gap=$(( (h_n - current_hour + 24) % 24 ))
+    [ "$gap" -gt 0 ] || gap=24
+    for extra_gap in 0 24; do
+      candidate=$(( after + (gap + extra_gap) * 3600 ))
+      candidate_clock=$(epoch_to_local_clock "$candidate")
+      [ -n "$candidate_clock" ] || return 0
+      read -r _ _ _ candidate_offset <<EOF
+$candidate_clock
+EOF
+      offset_after=$(offset_minutes "$candidate_offset")
+      [ -n "$offset_after" ] || return 0
+      candidate=$(( candidate + (offset_before - offset_after) * 60 ))
+      corrected_clock=$(epoch_to_local_clock "$candidate")
+      [ -n "$corrected_clock" ] || return 0
+      read -r corrected_hour corrected_minute corrected_second _ <<EOF
+$corrected_clock
+EOF
+      corrected_hour=$((10#$corrected_hour)); corrected_minute=$((10#$corrected_minute)); corrected_second=$((10#$corrected_second))
+      if [ "$corrected_hour" -eq "$h_n" ] && [ "$corrected_minute" -eq "$minute_n" ] && \
+        [ "$corrected_second" -eq 0 ] && [ "$candidate" -gt "$after" ]; then
+        if [ -z "$best" ] || [ "$candidate" -lt "$best" ]; then best=$candidate; fi
+        break
+      fi
+    done
+  done
+  [ -n "$best" ] || return 0
+  printf '%s\n' "$best"
+}
+
 # The store is discovered the same way agent-telemetry.sh discovers it, and requires EXACTLY ONE
 # match. Two candidate stores mean two plausible answers about the same lane, and picking either is
 # a guess; that fails closed rather than reporting a lane's health from an arbitrary file.
@@ -159,7 +265,7 @@ jq -e . "$STORE" >/dev/null 2>&1 || die_unknown "scheduled-tasks store is not va
 # empty, and empty reads exactly like "nothing to report" -- a silent pass in the case this exists for.
 jq -e 'has("scheduledTasks") and (.scheduledTasks | type == "array")' "$STORE" >/dev/null 2>&1 \
   || die_unknown "unexpected store schema: .scheduledTasks is missing or not an array"
-for field in id enabled lastRunAt; do
+for field in id enabled lastRunAt lastScheduledFor cronExpression; do
   jq -e --arg f "$field" 'all(.scheduledTasks[]?; has($f))' "$STORE" >/dev/null 2>&1 \
     || die_unknown "unexpected store schema: a scheduled task is missing .$field"
 done
@@ -304,6 +410,28 @@ while IFS= read -r id; do
 "
     any_unknown=1; continue
   fi
+
+  # A stopped scheduler writes no new run. Keep its schedule state alongside the transcript state
+  # instead of returning early: Claude deliberately suppresses a dispatch when the preceding run
+  # spans that slot, and a conclusive transcript failure elsewhere must still outrank a malformed
+  # schedule. A materially future anchor is impossible store evidence, never a healthy schedule.
+  schedule_state=ok
+  schedule_reason=""
+  last_scheduled=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .lastScheduledFor) // empty' "$STORE") || last_scheduled=""
+  cron=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .cronExpression) // empty' "$STORE") || cron=""
+  ls_epoch=$(iso_to_epoch "$last_scheduled")
+  next_epoch=""
+  if [ -n "$ls_epoch" ] && [ "$ls_epoch" -gt $(( NOW_EPOCH + SKEW_SECONDS )) ]; then
+    schedule_state=unknown
+    schedule_reason="future lastScheduledFor is more than ${SKEW_SECONDS}s ahead of the observer clock"
+  elif [ -n "$ls_epoch" ] && [ -n "$cron" ]; then
+    next_epoch=$(next_scheduled_epoch "$cron" "$ls_epoch")
+  fi
+  if [ "$schedule_state" = ok ] && [ -z "$next_epoch" ]; then
+    schedule_state=unknown
+    schedule_reason="unsupported cron expression or lastScheduledFor does not name one of its slots: ${cron:-<missing>}"
+  fi
+
   last_run=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .lastRunAt) // empty' "$STORE") || last_run=""
   if [ -z "$last_run" ] || [ "$last_run" = "null" ]; then
     report="${report}  UNKNOWN  ${id} -- no lastRunAt recorded, never dispatched or store incomplete
@@ -379,6 +507,59 @@ while IFS= read -r id; do
   fi
   span=$(( le - fe ))
 
+  # A transcript timestamp beyond the same observer-skew allowance used for dispatch matching is
+  # impossible overlap evidence. Letting it reach the slot loop can advance a stopped scheduler's
+  # deadline into the future and turn corrupted evidence into OK.
+  transcript_unknown_reason=""
+  if [ "$le" -gt $(( NOW_EPOCH + SKEW_SECONDS )) ]; then
+    transcript_unknown_reason="future session endpoint is more than ${SKEW_SECONDS}s ahead of the observer clock"
+  fi
+
+  # Claude appends top-level per_task_limit samples while an already-running task prevents a new
+  # dispatch. Those scheduler-side samples cover slots even when the transcript is silent inside a
+  # long tool call. Accept only integral millisecond epochs within the observer-skew allowance;
+  # malformed, differently-reasoned, and future samples prove nothing.
+  skip_ms=$(jq -r --arg t "$id" --argjson cutoff "$(( (NOW_EPOCH + SKEW_SECONDS) * 1000 ))" '
+    [(.recordedSkips? // {})
+      | select(type == "object")
+      | .[$t][]?
+      | select(type == "object" and .reason == "per_task_limit")
+      | .at
+      | select(type == "number" and . >= 0 and floor == . and . <= $cutoff)]
+    | max // empty' "$STORE" 2>/dev/null) || skip_ms=""
+  overlap_until=$le
+  if [ -n "$skip_ms" ]; then
+    skip_epoch=$(( skip_ms / 1000 ))
+    if [ "$skip_epoch" -gt "$overlap_until" ]; then overlap_until=$skip_epoch; fi
+  fi
+
+  # A producing session or scheduler skip that crosses a scheduled slot explains why Claude did not
+  # dispatch there: its per-task concurrency limit suppresses overlaps. Advance past every visibly
+  # covered slot, then judge only the first later slot. The bound turns implausibly broad coverage
+  # into UNKNOWN instead of an unbounded loop.
+  overlap_slots=0
+  if [ -z "$transcript_unknown_reason" ] && [ "$schedule_state" = ok ]; then
+    while [ "$overlap_until" -ge "$next_epoch" ]; do
+      overlap_slots=$(( overlap_slots + 1 ))
+      if [ "$overlap_slots" -gt 256 ]; then
+        schedule_state=unknown
+        schedule_reason="session spans more than 256 scheduled slots; schedule evidence is not bounded"
+        break
+      fi
+      following_epoch=$(next_scheduled_epoch "$cron" "$next_epoch")
+      if [ -z "$following_epoch" ] || [ "$following_epoch" -le "$next_epoch" ]; then
+        schedule_state=unknown
+        schedule_reason="could not advance the schedule beyond an overlapping run"
+        break
+      fi
+      next_epoch=$following_epoch
+    done
+  fi
+  if [ "$schedule_state" = ok ] && [ "$NOW_EPOCH" -gt $(( next_epoch + GRACE_SECONDS )) ]; then
+    schedule_state=dead
+    schedule_reason="next expected slot after the observed session is overdue by more than ${GRACE_SECONDS}s"
+  fi
+
   # ZERO ASSISTANT TURNS IS THE WHOLE TEST -- the span is reported, never required. A session that
   # emitted no assistant turn produced nothing whether it died in four seconds or hung for an hour,
   # and pairing the two as a conjunction meant a dispatch that died PART WAY fell through to OK, which
@@ -386,12 +567,24 @@ while IFS= read -r id; do
   # inbox flag -- where a long run really can do work without writing one -- `turns == 0` admits no
   # benign reading, and an in-flight dispatch is already excluded by the grace window above, so
   # nothing here can be a run that simply has not got going yet.
-  if [ "$turns" -eq 0 ]; then
+  if [ -n "$transcript_unknown_reason" ]; then
+    report="${report}  UNKNOWN  ${id} -- ${transcript_unknown_reason}
+"
+    any_unknown=1
+  elif [ "$turns" -eq 0 ]; then
     report="${report}  NOT-PRODUCING  ${id} -- dispatched at ${last_run}, session produced 0 assistant turns in ${span}s
 "
     any_dead=1
+  elif [ "$schedule_state" = dead ]; then
+    report="${report}  NOT-PRODUCING  ${id} -- ${schedule_reason}
+"
+    any_dead=1
+  elif [ "$schedule_state" = unknown ]; then
+    report="${report}  UNKNOWN  ${id} -- ${schedule_reason}
+"
+    any_unknown=1
   else
-    report="${report}  OK  ${id} -- dispatched at ${last_run}, session produced ${turns} assistant turn(s) over ${span}s
+    report="${report}  OK  ${id} -- dispatched at ${last_run}, session produced ${turns} assistant turn(s) over ${span}s, covered ${overlap_slots} suppressed slot(s)
 "
   fi
 done <<EOF
