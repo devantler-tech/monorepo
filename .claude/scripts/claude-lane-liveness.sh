@@ -510,17 +510,17 @@ while IFS= read -r id; do
   # A transcript timestamp beyond the same observer-skew allowance used for dispatch matching is
   # impossible overlap evidence. Letting it reach the slot loop can advance a stopped scheduler's
   # deadline into the future and turn corrupted evidence into OK.
-  if [ "$schedule_state" = ok ] && [ "$le" -gt $(( NOW_EPOCH + SKEW_SECONDS )) ]; then
-    schedule_state=unknown
-    schedule_reason="future session endpoint is more than ${SKEW_SECONDS}s ahead of the observer clock"
+  transcript_unknown_reason=""
+  if [ "$le" -gt $(( NOW_EPOCH + SKEW_SECONDS )) ]; then
+    transcript_unknown_reason="future session endpoint is more than ${SKEW_SECONDS}s ahead of the observer clock"
   fi
 
   # A producing session that crosses a scheduled slot explains why Claude did not dispatch there:
   # its per-task concurrency limit suppresses overlaps. Advance past every visibly covered slot,
-  # then judge only the first slot after the observed session. The bound turns impossible/future
-  # transcript times into UNKNOWN instead of an unbounded loop.
+  # then judge only the first slot after the observed session. The bound turns implausibly broad
+  # coverage into UNKNOWN instead of an unbounded loop.
   overlap_slots=0
-  if [ "$schedule_state" = ok ]; then
+  if [ -z "$transcript_unknown_reason" ] && [ "$schedule_state" = ok ]; then
     while [ "$le" -ge "$next_epoch" ]; do
       overlap_slots=$(( overlap_slots + 1 ))
       if [ "$overlap_slots" -gt 256 ]; then
@@ -549,7 +549,11 @@ while IFS= read -r id; do
   # inbox flag -- where a long run really can do work without writing one -- `turns == 0` admits no
   # benign reading, and an in-flight dispatch is already excluded by the grace window above, so
   # nothing here can be a run that simply has not got going yet.
-  if [ "$turns" -eq 0 ]; then
+  if [ -n "$transcript_unknown_reason" ]; then
+    report="${report}  UNKNOWN  ${id} -- ${transcript_unknown_reason}
+"
+    any_unknown=1
+  elif [ "$turns" -eq 0 ]; then
     report="${report}  NOT-PRODUCING  ${id} -- dispatched at ${last_run}, session produced 0 assistant turns in ${span}s
 "
     any_dead=1

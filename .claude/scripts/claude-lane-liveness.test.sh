@@ -229,6 +229,18 @@ mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 \
   $(( NOW + 5 * 3600 - last_run - 1 )) >/dev/null
 expect_msg 2 "future session endpoint" "a future transcript endpoint is UNKNOWN"
 
+# Corruption in the same transcript invalidates its apparent turn count. The global dead-over-unknown
+# rule applies across tasks; it must not reinterpret a corrupt endpoint and zero turns in one task as
+# conclusive proof that this task failed to produce.
+mkcase future_transcript_endpoint_zero_turns
+last_slot=$(( NOW - NOW % 3600 - 3 * 3600 ))
+last_run=$(( last_slot + 60 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$last_slot")\"" "0 * * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 0 \
+  $(( NOW + 5 * 3600 - last_run - 1 )) >/dev/null
+expect_msg 2 "future session endpoint" "a corrupt future endpoint outranks zero turns in the same transcript"
+
 # Both cron shapes in the live store must be understood. Anything else is unproved scheduler state,
 # never permission to fall back to the last healthy transcript.
 mkcase daily_schedule
