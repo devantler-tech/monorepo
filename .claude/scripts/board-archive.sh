@@ -36,10 +36,20 @@
 #                        (tab-separated) BEFORE each archive, so every item this
 #                        run may have touched can be restored
 #   --restore FILE       unarchive every item a manifest names
+#   --claim ISSUE:SHA    the agent-claim coordination claim this run holds; it is
+#                        renewed before the first mutation and every 100 after, the
+#                        run stops if renewal fails, and the latest tip is printed
+#                        so the caller retires the current sha
+#
+#   --apply and --restore are mutually exclusive. Just before each archive, the
+#   item is re-read and every per-item part of the rule is checked again: still
+#   closed, closed long enough, no open ancestor, and no open or unlisted
+#   sub-issue within two levels.
 #
 # ENVIRONMENT
 #   BOARD_ARCHIVE_NOW            ISO-8601 UTC instant used as "now" (tests)
 #   BOARD_ARCHIVE_PACE_SECONDS   pause between mutations (default 1)
+#   BOARD_ARCHIVE_CLAIM_HELPER   claim helper to call (default: agent-claim.sh beside this script)
 #
 # EXIT CODES
 #   0  dry run finished, or every requested mutation was verified
@@ -87,13 +97,23 @@ MODE=dry-run
 MIN_DAYS=30
 MAX=$HOURLY_CAP
 MANIFEST=""
+CLAIM=""
 while [ $# -gt 0 ]; do
   case "$1" in
-  --apply) MODE=apply ;;
+  --apply)
+    # Apply and restore are opposite mutations, so a second mode flag is an error.
+    [ "$MODE" = dry-run ] || usage
+    MODE=apply
+    ;;
   --restore)
-    [ $# -ge 2 ] || usage
+    if [ $# -lt 2 ] || [ "$MODE" != dry-run ]; then usage; fi
     MODE=restore
     MANIFEST="$2"
+    shift
+    ;;
+  --claim)
+    [ $# -ge 2 ] || usage
+    CLAIM="$2"
     shift
     ;;
   --manifest)
@@ -116,6 +136,16 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ "$MODE" != apply ] || [ -n "$MANIFEST" ] || die "--apply requires --manifest, so every archive can be restored" 1
+CLAIM_ISSUE=""
+CLAIM_SHA=""
+if [ -n "$CLAIM" ]; then
+  CLAIM_ISSUE="${CLAIM%%:*}"
+  CLAIM_SHA="${CLAIM#*:}"
+  if ! is_count "$CLAIM_ISSUE" || ! [[ "$CLAIM_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+    die "--claim must be <issue>:<40-character claim sha>" 1
+  fi
+fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PACE="${BOARD_ARCHIVE_PACE_SECONDS:-1}"
 [[ "$PACE" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "BOARD_ARCHIVE_PACE_SECONDS must be a non-negative number such as 1 or 0.5" 1
@@ -129,6 +159,23 @@ GH_ERR="$TMP/gh.err"
 
 # GitHub's own error text, bounded. It comes from the API, not the board.
 gh_reason() { head -c 300 "$GH_ERR" 2>/dev/null | tr '\n' ' '; }
+
+# With --claim, the coordination claim is renewed immediately before the first
+# mutation and again every CLAIM_RENEW_EVERY mutations, so a run whose claim was
+# taken over stops instead of writing to the public board.
+readonly CLAIM_RENEW_EVERY=100
+renew_claim() {
+  [ -n "$CLAIM" ] || return 0
+  local helper repo_dir new
+  helper="${BOARD_ARCHIVE_CLAIM_HELPER:-$SCRIPT_DIR/agent-claim.sh}"
+  repo_dir=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || printf '.')
+  new=$("$helper" renew "$CLAIM_ISSUE" "$CLAIM_SHA" --repo-dir "$repo_dir" 2>"$GH_ERR" | tail -n 1) ||
+    die "could not renew agent-claim/${CLAIM_ISSUE}; stopped before the next mutation: $(gh_reason)"
+  [[ "$new" =~ ^[0-9a-f]{40}$ ]] ||
+    die "renewing agent-claim/${CLAIM_ISSUE} returned no claim sha; stopped before the next mutation"
+  CLAIM_SHA="$new"
+  printf 'board-archive: renewed agent-claim/%s tip=%s\n' "$CLAIM_ISSUE" "$CLAIM_SHA" >&2
+}
 
 # shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
 readonly PROJECT_QUERY='query($owner: String!, $number: Int!) {
@@ -163,6 +210,7 @@ if [ "$MODE" = restore ]; then
   restored=0
   while IFS=$'\t' read -r pid item ref _; do
     [ -n "$pid$item" ] || continue
+    if [ $((restored % CLAIM_RENEW_EVERY)) -eq 0 ]; then renew_claim; fi
     out=$(gh api graphql -f project="$PROJECT_ID" -f item="$item" -f query="$UNARCHIVE" 2>"$GH_ERR") ||
       die "unarchive failed for ${ref} after ${restored} of ${lines} restored: $(gh_reason)"
     printf '%s' "$out" | jq -e --arg id "$item" '(.errors // [] | length) == 0 and
@@ -269,8 +317,10 @@ fi
 # ancestor can reopen, or an unfinished sub-issue can be added, after the read.
 # shellcheck disable=SC2016
 RECHECK='query($item: ID!) { node(id: $item) { ... on ProjectV2Item { id isArchived
-  content { ... on Issue { state subIssuesSummary { total completed }'"$chain"' }
-    ... on PullRequest { state } } } } }'
+  content { ... on Issue { state closedAt subIssuesSummary { total completed }
+      subIssues(first: 50) { totalCount nodes { state subIssuesSummary { total completed }
+        subIssues(first: 50) { totalCount nodes { state subIssuesSummary { total completed } } } } }'"$chain"' }
+    ... on PullRequest { state closedAt } } } } }'
 # shellcheck disable=SC2016
 readonly ARCHIVE='mutation($project: ID!, $item: ID!) {
   archiveProjectV2Item(input: {projectId: $project, itemId: $item}) { item { id isArchived } } }'
@@ -283,15 +333,27 @@ while IFS=$'\t' read -r item ref _ closed; do
 
   # The read above can be minutes old by now; a reopened item must not be archived.
   state=$(gh api graphql -f item="$item" -f query="$RECHECK" 2>"$GH_ERR" |
-    jq -r --arg id "$item" 'select((.errors // [] | length) == 0 and .data.node.id == $id)
+    jq -r --arg id "$item" --argjson cutoff "$cutoff" '
+      def unfinished: (.subIssuesSummary.total // 1) != (.subIssuesSummary.completed // 0);
+      # Any open, unfinished or unlisted sub-issue in the fetched levels keeps the item.
+      def open_below:
+        if has("subIssues") | not then false
+        else .subIssues as $s
+          | ($s == null) or ($s.totalCount != ($s.nodes | length))
+            or any($s.nodes[]; .state != "CLOSED" or unfinished or open_below)
+        end;
+      select((.errors // [] | length) == 0 and .data.node.id == $id)
       | .data.node as $n | ($n.content.state // "unknown") as $state
       | if $n.isArchived then "archived"
         elif ($state == "CLOSED" or $state == "MERGED") | not then $state
+        elif ($n.content.closedAt | type) != "string" or ($n.content.closedAt | fromdateiso8601) >= $cutoff
+          then "closed-recently"
         elif ([($n.content.parent // empty) | recurse(.parent // empty) | select(.state != "CLOSED")] | length) > 0
           then "open-ancestor"
-        elif $n.content.subIssuesSummary != null
-          and (($n.content.subIssuesSummary.total // 1) != ($n.content.subIssuesSummary.completed // 0))
+        elif $n.content.subIssuesSummary != null and ($n.content | unfinished)
           then "open-sub-issue"
+        elif $n.content | open_below
+          then "open-descendant"
         else $state end') ||
     die "could not re-read ${ref} after ${archived} archived (manifest: ${MANIFEST}): $(gh_reason)"
   case "$state" in
@@ -303,6 +365,7 @@ while IFS=$'\t' read -r item ref _ closed; do
     ;;
   esac
 
+  if [ $((archived % CLAIM_RENEW_EVERY)) -eq 0 ]; then renew_claim; fi
   printf '%s\t%s\t%s\t%s\n' "$PROJECT_ID" "$item" "$ref" "$closed" >>"$MANIFEST" ||
     die "cannot write manifest before archiving ${ref}; stopped after ${archived} archived"
   out=$(gh api graphql -f project="$PROJECT_ID" -f item="$item" -f query="$ARCHIVE" 2>"$GH_ERR") ||

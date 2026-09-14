@@ -67,7 +67,8 @@ page 'false' '' \
 
 # ── the fake gh ────────────────────────────────────────────────────────────
 # Knobs: STUB_LOG, STUB_PAGE_BAD, STUB_CURSOR_STUCK, STUB_ARCHIVE_BAD, STUB_RECHECK_STATE, STUB_PROJECT,
-#        STUB_RECHECK_PARENT / STUB_RECHECK_SIS (JSON applied to the issue candidate PVTI_3 at recheck)
+#        STUB_RECHECK_PARENT / STUB_RECHECK_SIS / STUB_RECHECK_SUBISSUES (JSON applied to the issue
+#        candidate PVTI_3 at recheck), STUB_RECHECK_CLOSED_AT (every recheck), STUB_CLAIM_FAIL (claim helper)
 mkdir -p "$tmp/bin"
 cat >"$tmp/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -87,16 +88,22 @@ case "$args" in
   *"node(id:"*)
     printf 'recheck %s\n' "$item" >>"$STUB_LOG"
     state="${STUB_RECHECK_STATE:-CLOSED}"
+    closed_at="${STUB_RECHECK_CLOSED_AT:-2026-07-01T00:00:00Z}"
     parent=null
     sis=null
+    subs=null
     if [ "$item" = PVTI_3 ]; then
       parent="${STUB_RECHECK_PARENT:-null}"
       sis='{"total":0,"completed":0}'
       [ -z "${STUB_RECHECK_SIS:-}" ] || sis="$STUB_RECHECK_SIS"
+      subs='{"totalCount":0,"nodes":[]}'
+      [ -z "${STUB_RECHECK_SUBISSUES:-}" ] || subs="$STUB_RECHECK_SUBISSUES"
     fi
-    jq -n --arg id "$item" --arg s "$state" --argjson p "$parent" --argjson sis "$sis" \
+    jq -n --arg id "$item" --arg s "$state" --arg c "$closed_at" \
+      --argjson p "$parent" --argjson sis "$sis" --argjson subs "$subs" \
       '{data: {node: {id: $id, isArchived: false,
-        content: ({state: $s} + (if $sis == null then {} else {subIssuesSummary: $sis, parent: $p} end))}}}' ;;
+        content: ({state: $s, closedAt: $c}
+          + (if $sis == null then {} else {subIssuesSummary: $sis, parent: $p, subIssues: $subs} end))}}}' ;;
   *"items("*)
     if [ "${STUB_PAGE_BAD:-0}" = 1 ]; then
       printf '{"errors":[{"message":"boom"}]}\n'
@@ -116,6 +123,20 @@ esac
 STUB
 chmod +x "$tmp/bin/gh"
 
+# A fake agent-claim helper: logs each renewal and prints a fresh tip, or fails.
+cat >"$tmp/bin/claim-helper" <<'HELPER'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'claim-renew %s %s\n' "$2" "$3" >>"$STUB_LOG"
+if [ "${STUB_CLAIM_FAIL:-0}" = 1 ]; then
+  echo "agent-claim: LOST" >&2
+  exit 1
+fi
+echo "agent-claim: RENEWED" >&2
+printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+HELPER
+chmod +x "$tmp/bin/claim-helper"
+
 run() { # run <case> <args...>  → sets rc, out, err; fresh log per case
   local name="$1"
   shift
@@ -123,6 +144,7 @@ run() { # run <case> <args...>  → sets rc, out, err; fresh log per case
   set +e
   out=$(PATH="$tmp/bin:$PATH" STUB_DIR="$tmp" STUB_LOG="$tmp/$name.log" \
     BOARD_ARCHIVE_NOW=2026-09-14T00:00:00Z BOARD_ARCHIVE_PACE_SECONDS="${TEST_PACE:-0}" \
+    BOARD_ARCHIVE_CLAIM_HELPER="$tmp/bin/claim-helper" \
     bash "$script" "$@" 2>"$tmp/$name.err")
   rc=$?
   set -e
@@ -214,6 +236,41 @@ check "an ancestor reopened since the read keeps the item" \
 STUB_RECHECK_SIS='{"total":2,"completed":1}' run subissueadded --apply --manifest "$tmp/sis.tsv"
 check "an unfinished sub-issue added since the read keeps the item" \
   "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | tr '\n' ' ')" = "archive PVTI_1 " ] && echo 0 || echo 1)" "rc=$rc $log"
+
+# 12. apply and restore are opposite mutations and cannot be combined
+run bothmodes --restore "$tmp/apply.tsv" --apply --manifest "$tmp/both.tsv"
+check "combining --restore then --apply is a usage error" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+run bothmodes2 --apply --manifest "$tmp/both2.tsv" --restore "$tmp/apply.tsv"
+check "combining --apply then --restore is a usage error" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+
+# 13. the recheck repeats the closing-age gate and walks the descendants
+STUB_RECHECK_CLOSED_AT=2026-09-10T00:00:00Z run reclosed --apply --manifest "$tmp/reclosed.tsv"
+check "an item re-closed since the read is too recent to archive" \
+  "$([ "$rc" = 0 ] && ! grep -q '^archive' <<<"$log" && echo 0 || echo 1)" "rc=$rc $log"
+STUB_RECHECK_SUBISSUES='{"totalCount":1,"nodes":[{"state":"CLOSED","subIssuesSummary":{"total":1,"completed":1},"subIssues":{"totalCount":1,"nodes":[{"state":"OPEN","subIssuesSummary":{"total":0,"completed":0}}]}}]}' \
+  run grandchild --apply --manifest "$tmp/grandchild.tsv"
+check "an open grandchild under a closed child keeps the item" \
+  "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | tr '\n' ' ')" = "archive PVTI_1 " ] && echo 0 || echo 1)" "rc=$rc $log"
+
+# 14. a supplied claim is renewed before the first mutation, and a lost claim stops the run
+claim_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+run claimed --apply --manifest "$tmp/claimed.tsv" --claim "2238:$claim_sha"
+check "the claim is renewed once, before the first archive" \
+  "$([ "$rc" = 0 ] && [ "$(grep -c '^claim-renew' <<<"$log")" = 1 ] &&
+    awk '/^claim-renew/ {c = NR} /^archive/ && !a {a = NR} END {exit !(c && a && c < a)}' <<<"$log" &&
+    echo 0 || echo 1)" "rc=$rc $log"
+check "the renewed claim tip is reported" \
+  "$(grep -qF 'tip=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' <<<"$err" && echo 0 || echo 1)" "$err"
+STUB_CLAIM_FAIL=1 run claimlost --apply --manifest "$tmp/claimlost.tsv" --claim "2238:$claim_sha"
+check "a lost claim stops an apply before any archive" \
+  "$([ "$rc" = 2 ] && ! grep -q '^archive' <<<"$log" && [ ! -s "$tmp/claimlost.tsv" ] && echo 0 || echo 1)" "rc=$rc $log"
+STUB_CLAIM_FAIL=1 run restoreclaimlost --restore "$tmp/apply.tsv" --claim "2238:$claim_sha"
+check "a lost claim stops a restore before any unarchive" \
+  "$([ "$rc" = 2 ] && ! grep -q '^unarchive' <<<"$log" && echo 0 || echo 1)" "rc=$rc $log"
+run badclaim --apply --manifest "$tmp/badclaim.tsv" --claim 2238:nothex
+check "a malformed claim is a usage error" "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ]
