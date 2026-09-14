@@ -22,10 +22,11 @@
 # zero markers, zero assistant turns). Classifying transcripts alone therefore cannot see a dead
 # dispatch, because the dead one is exactly the transcript that cannot be attributed.
 #
-# So the anchor is the DISPATCH, not the transcript: `lastRunAt` is authoritative for "a dispatch
-# happened", and a healthy dispatch's session starts within about a second of it (measured ~1.0s on
-# both tasks). ABSENCE of a session at that anchor is itself the signal, and it needs no marker on
-# the failed run.
+# So the anchor is the SCHEDULE plus the dispatch, not the transcript: `lastScheduledFor` and
+# `cronExpression` establish whether the scheduler is still dispatching, while `lastRunAt` establishes
+# whether the newest attempted dispatch produced a session. A healthy dispatch's session starts within
+# about a second of `lastRunAt` (measured ~1.0s on both tasks). ABSENCE of a session at that anchor is
+# itself the signal, and it needs no marker on the failed run.
 #
 # READ-ONLY, and deliberately NARROW. Session transcripts contain the entire content of every run --
 # code, credentials in tool output, private operator reasoning. This check reads ONLY:
@@ -37,8 +38,8 @@
 #                               [--grace-seconds N] [--skew-seconds N]
 #                               [--lookback-hours N] [--now-epoch S] [--quiet]
 #
-# Exit 0  every enabled task checked produced work on its most recent settled dispatch
-#      1  NOT PRODUCING -- a dispatch happened and produced no work
+# Exit 0  every enabled task checked is dispatching and produced work on its most recent settled run
+#      1  NOT PRODUCING -- a dispatch produced no work, or an expected dispatch never happened
 #      2  UNKNOWN -- could not determine (no jq, absent/ambiguous store, absent projects root,
 #         unparsable record, or the newest dispatch still in flight)
 #
@@ -65,9 +66,10 @@ NOW_EPOCH=""
 QUIET=0
 
 RECOVERY="
-  To resolve: confirm the lane's dispatched runs are reaching the model at all. A dead dispatch still
-  advances lastRunAt, so look at whether a session exists for that dispatch rather than at the
-  scheduler's own view. Re-run this check once the newest dispatch has had time to settle."
+  To resolve: confirm the scheduler is dispatching the task and that dispatched runs reach the model.
+  A dead dispatch still advances lastRunAt, while a stopped scheduler leaves it frozen; inspect both
+  the expected slot and whether a session exists for the latest dispatch. Re-run this check once the
+  newest expected dispatch has had time to settle."
 
 usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -135,6 +137,92 @@ iso_to_epoch() {
   printf '%s\n' "$out"
 }
 
+# Render local wall-clock fields portably. Claude cron expressions use the host timezone, while the
+# store timestamps are UTC. BSD and GNU date expose an epoch differently, so try both forms.
+epoch_to_local_clock() {
+  local e=$1 out
+  out=$(date -r "$e" '+%H %M %z' 2>/dev/null) || out=""
+  if [ -z "$out" ]; then out=$(date -d "@$e" '+%H %M %z' 2>/dev/null) || out=""; fi
+  case "$out" in
+    [0-2][0-9]' '[0-5][0-9]' '[+-][0-9][0-9][0-9][0-9]) printf '%s\n' "$out" ;;
+    *) return 0 ;;
+  esac
+}
+
+offset_minutes() {
+  local raw=$1 sign=1 hh mm
+  case "$raw" in
+    +[0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9]) ;;
+    *) return 0 ;;
+  esac
+  case "$raw" in -*) sign=-1 ;; esac
+  hh=${raw:1:2}; mm=${raw:3:2}
+  printf '%s\n' "$(( sign * (10#$hh * 60 + 10#$mm) ))"
+}
+
+# Return the first scheduled slot strictly after `after`. The deployment currently uses exactly two
+# portable cron shapes: hourly at one minute, or a comma-separated list of hours at one minute. The
+# daily form is evaluated in local time; an unfamiliar expression is UNKNOWN, never permission to
+# trust an arbitrarily old healthy transcript.
+next_scheduled_epoch() {
+  local cron=$1 after=$2 minute hourspec dom month dow extra minute_n
+  local clock current_hour current_minute current_offset candidate candidate_clock candidate_offset
+  local best="" h h_n gap offset_before offset_after
+
+  read -r minute hourspec dom month dow extra <<EOF
+$cron
+EOF
+  [ -z "${extra:-}" ] && [ "$dom" = "*" ] && [ "$month" = "*" ] && [ "$dow" = "*" ] || return 0
+  case "$minute" in ''|*[!0-9]*) return 0 ;; esac
+  minute_n=$((10#$minute))
+  [ "$minute_n" -le 59 ] || return 0
+
+  clock=$(epoch_to_local_clock "$after")
+  [ -n "$clock" ] || return 0
+  read -r current_hour current_minute current_offset <<EOF
+$clock
+EOF
+  current_hour=$((10#$current_hour)); current_minute=$((10#$current_minute))
+  [ "$current_minute" -eq "$minute_n" ] || return 0
+
+  if [ "$hourspec" = "*" ]; then
+    printf '%s\n' "$(( after + 3600 ))"
+    return 0
+  fi
+
+  case "$hourspec" in ''|,*|*,|*,,*) return 0 ;; esac
+  local hour_values=()
+  IFS=, read -r -a hour_values <<EOF
+$hourspec
+EOF
+  [ "${#hour_values[@]}" -gt 0 ] || return 0
+  for h in "${hour_values[@]}"; do
+    case "$h" in ''|*[!0-9]*) return 0 ;; esac
+    h_n=$((10#$h)); [ "$h_n" -le 23 ] || return 0
+    [ "$h_n" -eq "$current_hour" ] || continue
+    best=present
+  done
+  [ "$best" = present ] || return 0
+
+  best=""
+  for h in "${hour_values[@]}"; do
+    h_n=$((10#$h))
+    gap=$(( (h_n - current_hour + 24) % 24 ))
+    [ "$gap" -gt 0 ] || gap=24
+    if [ -z "$best" ] || [ "$gap" -lt "$best" ]; then best=$gap; fi
+  done
+  candidate=$(( after + best * 3600 ))
+  candidate_clock=$(epoch_to_local_clock "$candidate")
+  [ -n "$candidate_clock" ] || return 0
+  read -r _ _ candidate_offset <<EOF
+$candidate_clock
+EOF
+  offset_before=$(offset_minutes "$current_offset")
+  offset_after=$(offset_minutes "$candidate_offset")
+  [ -n "$offset_before" ] && [ -n "$offset_after" ] || return 0
+  printf '%s\n' "$(( candidate + (offset_before - offset_after) * 60 ))"
+}
+
 # The store is discovered the same way agent-telemetry.sh discovers it, and requires EXACTLY ONE
 # match. Two candidate stores mean two plausible answers about the same lane, and picking either is
 # a guess; that fails closed rather than reporting a lane's health from an arbitrary file.
@@ -159,7 +247,7 @@ jq -e . "$STORE" >/dev/null 2>&1 || die_unknown "scheduled-tasks store is not va
 # empty, and empty reads exactly like "nothing to report" -- a silent pass in the case this exists for.
 jq -e 'has("scheduledTasks") and (.scheduledTasks | type == "array")' "$STORE" >/dev/null 2>&1 \
   || die_unknown "unexpected store schema: .scheduledTasks is missing or not an array"
-for field in id enabled lastRunAt; do
+for field in id enabled lastRunAt lastScheduledFor cronExpression; do
   jq -e --arg f "$field" 'all(.scheduledTasks[]?; has($f))' "$STORE" >/dev/null 2>&1 \
     || die_unknown "unexpected store schema: a scheduled task is missing .$field"
 done
@@ -196,6 +284,57 @@ else
     || die_unknown "could not enumerate scheduled tasks"
 fi
 [ -n "$ids" ] || die_unknown "no enabled scheduled tasks found in $STORE"
+
+# A stopped scheduler writes no new run and therefore cannot be detected from run rows or transcripts.
+# Derive the next expected slot before scanning sessions. A known overdue task outranks an unrelated
+# unjudgeable task; if no task is known overdue, any unsupported schedule keeps the lane UNKNOWN.
+schedule_report=""
+schedule_dead=0
+schedule_unknown=0
+while IFS= read -r id; do
+  [ -n "$id" ] || continue
+  last_scheduled=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .lastScheduledFor) // empty' "$STORE") || last_scheduled=""
+  cron=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .cronExpression) // empty' "$STORE") || cron=""
+  ls_epoch=$(iso_to_epoch "$last_scheduled")
+  next_epoch=""
+  if [ -n "$ls_epoch" ] && [ -n "$cron" ]; then
+    next_epoch=$(next_scheduled_epoch "$cron" "$ls_epoch")
+  fi
+  if [ -z "$next_epoch" ]; then
+    schedule_report="${schedule_report}  UNKNOWN  ${id} -- unsupported cron expression or lastScheduledFor does not name one of its slots: ${cron:-<missing>}
+"
+    schedule_unknown=1
+    continue
+  fi
+  if [ "$NOW_EPOCH" -gt $(( next_epoch + GRACE_SECONDS )) ]; then
+    schedule_report="${schedule_report}  NOT-PRODUCING  ${id} -- next expected slot is overdue by more than ${GRACE_SECONDS}s
+"
+    schedule_dead=1
+  fi
+done <<EOF
+$ids
+EOF
+
+if [ "$schedule_dead" -eq 1 ]; then
+  if [ "$QUIET" -eq 0 ]; then
+    printf 'claude-lane-liveness: store=%s grace=%ss skew<=%ss lookback=%sh\n' \
+      "$STORE" "$GRACE_SECONDS" "$SKEW_SECONDS" "$LOOKBACK_HOURS"
+    printf '%s' "$schedule_report"
+  fi
+  printf 'claude-lane-liveness: NOT PRODUCING -- an expected scheduler dispatch is overdue.\n' >&2
+  printf '%s\n' "$RECOVERY" >&2
+  exit 1
+fi
+if [ "$schedule_unknown" -eq 1 ]; then
+  if [ "$QUIET" -eq 0 ]; then
+    printf 'claude-lane-liveness: store=%s grace=%ss skew<=%ss lookback=%sh\n' \
+      "$STORE" "$GRACE_SECONDS" "$SKEW_SECONDS" "$LOOKBACK_HOURS"
+    printf '%s' "$schedule_report"
+  fi
+  printf 'claude-lane-liveness: UNKNOWN -- at least one task schedule could not be judged.\n' >&2
+  printf '%s\n' "$RECOVERY" >&2
+  exit 2
+fi
 
 # Enumerated once, not per task. `find` over the projects root is the expensive step here (the
 # per-session worktree layout leaves hundreds of project directories behind), and the marker read is

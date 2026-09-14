@@ -915,6 +915,16 @@ automation on the same account happened to show the stub signature (monorepo#328
 check answers the same question on a stronger signal — **zero assistant turns is decisive on its own**,
 because unlike a missing inbox item it admits no benign reading, and its grace window already excludes
 in-flight dispatches.
+🔴 **The Claude check must also detect a scheduler that writes NO new dispatch.** Before it reads any
+transcript, it derives each task's next expected slot from the store's `lastScheduledFor` and
+`cronExpression`; a slot overdue past the grace window is `1 NOT-PRODUCING`, while a missing,
+malformed or unsupported schedule is `2 UNKNOWN`. The supported shapes are exactly this deployment's
+hourly minute and comma-separated daily hours. They are evaluated in the host timezone, including a
+DST offset change. This check cannot be reconstructed from `lastRunAt`: when the scheduler stops, that
+field and its last healthy transcript freeze together, so the old implementation reported `OK` until
+the transcript fell outside its 72-hour lookback. The 900-second grace is load-bearing for Claude's
+overlap delay (a live `:50` dispatch was measured arriving almost ten minutes later); shrinking it to
+Codex's five-minute grace would false-fire. See monorepo#3335.
 ⚠️ **That narrowness is defence in depth, NOT a claim that the cause may never be named.**
 *Sensitive information stays private* governs what may be published, and it permits — and the
 `**Blocker:**` line requires — the bounded **cause class**. So diagnose a `1` from the runtime's own

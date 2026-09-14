@@ -15,6 +15,7 @@
 # Fixtures are synthetic. Every case pins `--now-epoch`, so no assertion depends on wall-clock time.
 
 set -euo pipefail
+export TZ=UTC
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SCRIPT="$SCRIPT_DIR/claude-lane-liveness.sh"
@@ -43,6 +44,13 @@ iso_at() {
   [ -n "$out" ] || { echo "FAIL: cannot render epoch $e as ISO" >&2; exit 1; }
   printf '%s.000Z\n' "$out"
 }
+epoch_utc() {
+  local raw=$1 base=${1%Z} out
+  out=$(date -u -d "$raw" +%s 2>/dev/null) || out=""
+  [ -n "$out" ] || out=$(date -u -j -f '%Y-%m-%dT%H:%M:%S' "$base" +%s 2>/dev/null) || out=""
+  [ -n "$out" ] || { echo "FAIL: cannot parse UTC instant $raw" >&2; exit 1; }
+  printf '%s\n' "$out"
+}
 touch_at() {
   local e=$1 out
   out=$(date -r "$e" +%Y%m%d%H%M.%S 2>/dev/null) || out=""
@@ -61,16 +69,24 @@ mkcase() {
 # `enabled` and `lastRunAt` are written exactly as the real store writes them.
 mkstore() {
   local file=$1; shift
+  local scheduled
+  scheduled=$(iso_at $(( NOW - NOW % 3600 )))
   printf '{"scheduledTasks":[' > "$file"
   local first=1
   while [ "$#" -gt 0 ]; do
     [ "$first" -eq 1 ] || printf ',' >> "$file"
     first=0
-    printf '{"id":"%s","enabled":%s,"lastRunAt":%s,"cronExpression":"0 * * * *","filePath":"/x","cwd":"/y"}' \
-      "$1" "$2" "$3" >> "$file"
+    printf '{"id":"%s","enabled":%s,"lastRunAt":%s,"lastScheduledFor":"%s","cronExpression":"0 * * * *","filePath":"/x","cwd":"/y"}' \
+      "$1" "$2" "$3" "$scheduled" >> "$file"
     shift 3
   done
   printf ']}\n' >> "$file"
+}
+
+mkstore_scheduled() {
+  local file=$1 id=$2 enabled=$3 last_run=$4 last_scheduled=$5 cron=$6
+  printf '{"scheduledTasks":[{"id":"%s","enabled":%s,"lastRunAt":%s,"lastScheduledFor":%s,"cronExpression":"%s","filePath":"/x","cwd":"/y"}]}\n' \
+    "$id" "$enabled" "$last_run" "$last_scheduled" "$cron" > "$file"
 }
 
 # A transcript whose FIRST line carries the marker plus the session's start timestamp, followed by
@@ -137,6 +153,63 @@ mkcase healthy
 mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
 expect 0 "healthy dispatch with a producing session exits 0"
+
+# --- RED: the scheduler stopped before dispatching another run ---------------------------------
+# A healthy historical session is not evidence that the scheduler is still producing. The live
+# store exposes the last slot it attempted plus the task's cron expression, so the next expected
+# slot can be derived without relying on a new run row that a stopped scheduler will never write.
+mkcase stopped_scheduler
+last_slot=$(( NOW - NOW % 3600 - 3 * 3600 ))
+last_run=$(( last_slot + 600 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$last_slot")\"" "0 * * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
+expect 1 "a healthy old run does not mask an overdue hourly scheduler"
+
+# The real Claude scheduler can delay a dispatch while its prior run is open. A delayed run and a
+# next slot that is still inside the grace window remain healthy rather than false-firing.
+mkcase delayed_inside_grace
+last_slot=$(( NOW - NOW % 3600 - 3600 + 50 * 60 ))
+last_run=$(( last_slot + 600 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$last_slot")\"" "50 * * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
+expect 0 "an overlapping-run delay inside the next-slot grace stays healthy"
+
+# Both cron shapes in the live store must be understood. Anything else is unproved scheduler state,
+# never permission to fall back to the last healthy transcript.
+mkcase daily_schedule
+day_start=$(( NOW - NOW % 86400 ))
+last_run=$(( day_start + 100 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$day_start")\"" "0 0,12 * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
+expect 0 "the live twice-daily Improver cron shape derives its next slot"
+
+# The Europe/Copenhagen clock falls back between the midnight and noon Improver slots on
+# 2026-10-25. Noon is thirteen real hours after midnight that day, so nominal-hour arithmetic would
+# false-fire for 45 minutes before the real noon slot plus grace had elapsed.
+saved_now=$NOW
+saved_tz=$TZ
+NOW=$(epoch_utc '2026-10-25T11:05:00Z')
+TZ=Europe/Copenhagen
+mkcase daily_schedule_dst_fall
+last_slot=$(epoch_utc '2026-10-24T22:00:00Z')
+last_run=$(( last_slot + 100 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$last_slot")\"" "0 0,12 * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
+expect 0 "the twice-daily schedule remains healthy across the autumn DST fallback"
+NOW=$saved_now
+TZ=$saved_tz
+
+mkcase unsupported_schedule
+last_slot=$(( NOW - NOW % 3600 ))
+last_run=$(( last_slot + 60 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$last_slot")\"" "*/5 * * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
+expect_msg 2 "unsupported cron expression" "an unsupported cron expression is UNKNOWN"
 
 # --- RED: dispatched, but nothing ran ----------------------------------------------------------
 mkcase nosession
@@ -349,14 +422,14 @@ mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
 expect_msg 2 "duplicate enabled task id" "a duplicate enabled task id is UNKNOWN (a later dispatch would be masked)"
 
 mkcase null_id
-printf '{"scheduledTasks":[{"id":null,"enabled":true,"lastRunAt":"%s","cronExpression":"0 * * * *"}]}\n' \
-  "$(iso_at $(( NOW - 3600 )))" > "$STORE"
+printf '{"scheduledTasks":[{"id":null,"enabled":true,"lastRunAt":"%s","lastScheduledFor":"%s","cronExpression":"0 * * * *"}]}\n' \
+  "$(iso_at $(( NOW - 3600 )))" "$(iso_at $(( NOW - NOW % 3600 )))" > "$STORE"
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
 expect_msg 2 "is not a string" "a non-string enabled task id is UNKNOWN"
 
 mkcase weird_id
-printf '{"scheduledTasks":[{"id":"a;b","enabled":true,"lastRunAt":"%s","cronExpression":"0 * * * *"}]}\n' \
-  "$(iso_at $(( NOW - 3600 )))" > "$STORE"
+printf '{"scheduledTasks":[{"id":"a;b","enabled":true,"lastRunAt":"%s","lastScheduledFor":"%s","cronExpression":"0 * * * *"}]}\n' \
+  "$(iso_at $(( NOW - 3600 )))" "$(iso_at $(( NOW - NOW % 3600 )))" > "$STORE"
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
 expect_msg 2 "unusable enabled task id" "an unsupported enabled task id is UNKNOWN"
 
