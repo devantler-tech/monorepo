@@ -140,7 +140,11 @@ treat "merged upstream + gitlink bumped + install CURRENT" as *not* evidence a s
 classifier-calling surveyor dispatches read this file rather than the plugin agent, and 3 of the 19 that
 reached the helper invoked it positionally and lost 24 reads to the guard. The flag-form sentence from
 agent-plugins#195 is now in step 4 of the survey above as well (monorepo#3223, pinned by round 12 of
-`portfolio-surveyor.test.sh`).
+`portfolio-surveyor.test.sh`). Third measured casualty, 2026-09-14: the classifier's path resolution.
+From 2026-09-06 to 2026-09-14, **0 of 79** overlay-type dispatches used the guard's
+`classifier-path-json` hint, while all 10 plugin-type dispatches did, and 59 hunted plugin directories
+the guard denies instead. The resolution procedure is now in step 4 as well (monorepo#3338, pinned by
+round 13 of `portfolio-surveyor.test.sh`).
 
 ## Equivalence status (this slice)
 

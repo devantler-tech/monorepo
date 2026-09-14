@@ -2982,3 +2982,23 @@ grep -Fq -- '<installed plugin>/scripts/classify-default-branch-ci-runs.sh --rep
 grep -Fq 'never a bare basename' <<<"${_ci_step}" ||
   fail "step 4 must say the guard admits only the exact installed sibling path — never a bare basename (agent-plugins#197, Codex P1)"
 echo "portfolio surveyor contract: round-12 classifier-argument-shape assertions passed"
+
+# ── Round 13: the classifier PATH-RESOLUTION procedure must reach the loaded definition ─────────
+# Measured 2026-09-14 (monorepo#3338), surveyor sidechains 2026-09-06T02:52Z→2026-09-14T10:10Z: all
+# 10 plugin-type dispatches resolved the classifier path from the guard's `classifier-path-json`
+# hint, while 0 of 79 overlay-type dispatches did — 59 of them hunted `~/.claude/plugins` with
+# `find`/`ls` instead (100 guard-denied calls) and 38 never reached the classifier at all. Round 12
+# pinned the invocation SHAPE, but step 4 still deferred the resolution to "the generic role", which
+# an overlay dispatch never loads. The plugin surveyor's procedure is ported verbatim; each clause is
+# pinned on its own line so one missing sentence names itself.
+grep -Fq 'submit **one** bare `classify-default-branch-ci-runs.sh` probe through the active read-only guard' <<<"${_ci_step}" ||
+  fail "step 4 must tell the caller to resolve the classifier path with ONE bare probe through the guard — without it overlay surveys hunt plugin directories (monorepo#3338)"
+grep -Fq 'the refusal carries one `classifier-path-json:` record' <<<"${_ci_step}" ||
+  fail "step 4 must name the \`classifier-path-json:\` record the probe's refusal carries (monorepo#3338)"
+grep -Fq 'quote the decoded path as one literal shell argument' <<<"${_ci_step}" ||
+  fail "step 4 must say to decode the hint and quote the decoded path as one literal shell argument (monorepo#3338)"
+grep -Fq 'Never evaluate the record or reuse JSON double quotes as shell quoting' <<<"${_ci_step}" ||
+  fail "step 4 must forbid evaluating the hint record — it is path data, not a command (monorepo#3338)"
+grep -Fq 'A missing, malformed, ambiguous, or unusable hint means `QUERY-UNKNOWN`; do not hunt directories or try other roots' <<<"${_ci_step}" ||
+  fail "step 4 must fail closed on an unusable hint and forbid directory hunting (monorepo#3338)"
+echo "portfolio surveyor contract: round-13 classifier-path-resolution assertions passed"
