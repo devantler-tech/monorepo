@@ -59,6 +59,7 @@ jobs:
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
       board-add: ${{ steps.filter.outputs.board-add }}
+      board-archive: ${{ steps.filter.outputs.board-archive }}
       agent-board-sweep: ${{ steps.filter.outputs.agent-board-sweep }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
@@ -125,6 +126,12 @@ jobs:
             board-add:
               - '.claude/scripts/board-add.sh'
               - '.claude/scripts/board-add.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            board-archive:
+              - '.claude/scripts/board-archive.sh'
+              - '.claude/scripts/board-archive.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -721,6 +728,28 @@ jobs:
       # while CI defaults to Linux, and bash/jq portability is what this pins.
       - name: Self-test board-add
         run: bash .claude/scripts/board-add.test.sh
+
+  test-board-archive:
+    name: Test board archive
+    needs: changes
+    if: needs.changes.outputs.board-archive == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Fixture-only run behind a stubbed `gh` on PATH — no network, no token,
+      # no live board touched. Both OSes because the archive pass runs on macOS
+      # while CI defaults to Linux, and bash/jq portability is what this pins.
+      - name: Self-test board-archive
+        run: bash .claude/scripts/board-archive.test.sh
 
   test-agent-board-sweep:
     name: Test agent board sweep
@@ -1967,6 +1996,7 @@ jobs:
       - drift-check-renovate-dashboard
       - test-agent-telemetry
       - test-board-add
+      - test-board-archive
       - test-agent-board-sweep
       - test-comment-disclosure-drift
       - test-surveyor-forge-vocabulary
@@ -2033,6 +2063,7 @@ jobs:
             ${{ needs.drift-check-renovate-dashboard.result }}
             ${{ needs.test-agent-telemetry.result }}
             ${{ needs.test-board-add.result }}
+            ${{ needs.test-board-archive.result }}
             ${{ needs.test-agent-board-sweep.result }}
             ${{ needs.test-comment-disclosure-drift.result }}
             ${{ needs.test-surveyor-forge-vocabulary.result }}
