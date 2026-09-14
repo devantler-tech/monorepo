@@ -217,6 +217,18 @@ mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
 mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
 expect_msg 2 "future lastScheduledFor" "a future schedule anchor is UNKNOWN"
 
+# A future transcript endpoint is not proof that one session covered every intervening scheduler
+# slot. Without an observer-clock bound, corrupted transcript time can advance a stopped scheduler's
+# required slot into the future and turn a known evidence defect into a false OK.
+mkcase future_transcript_endpoint
+last_slot=$(( NOW - NOW % 3600 - 3 * 3600 ))
+last_run=$(( last_slot + 60 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$last_slot")\"" "0 * * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 \
+  $(( NOW + 5 * 3600 - last_run - 1 )) >/dev/null
+expect_msg 2 "future session endpoint" "a future transcript endpoint is UNKNOWN"
+
 # Both cron shapes in the live store must be understood. Anything else is unproved scheduler state,
 # never permission to fall back to the last healthy transcript.
 mkcase daily_schedule

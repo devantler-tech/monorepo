@@ -919,8 +919,9 @@ in-flight dispatches.
 final verdict, it joins each task's `lastScheduledFor`/`cronExpression` with its latest transcript. A
 producing session that crosses an expected slot explains Claude's `per_task_limit` overlap skip, so
 the first later slot is required instead; an overdue unexplained slot is `1 NOT-PRODUCING`. A missing,
-malformed, unsupported or materially-future schedule is `2 UNKNOWN`, but cannot mask another task's
-known death. Supported shapes are exactly hourly minute and comma-separated daily hours, evaluated in
+malformed, unsupported or materially-future schedule, or a materially-future transcript endpoint, is
+`2 UNKNOWN`, but cannot mask another task's known death. Supported shapes are exactly hourly minute
+and comma-separated daily hours, evaluated in
 host time across DST. `lastRunAt` alone cannot show a stopped scheduler: it and the last healthy
 transcript freeze together, so the old check reported `OK` for up to 72 hours. The 900-second grace is
 load-bearing for Claude's overlap delay (a live `:50` dispatch arrived almost ten minutes later);

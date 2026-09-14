@@ -507,6 +507,14 @@ while IFS= read -r id; do
   fi
   span=$(( le - fe ))
 
+  # A transcript timestamp beyond the same observer-skew allowance used for dispatch matching is
+  # impossible overlap evidence. Letting it reach the slot loop can advance a stopped scheduler's
+  # deadline into the future and turn corrupted evidence into OK.
+  if [ "$schedule_state" = ok ] && [ "$le" -gt $(( NOW_EPOCH + SKEW_SECONDS )) ]; then
+    schedule_state=unknown
+    schedule_reason="future session endpoint is more than ${SKEW_SECONDS}s ahead of the observer clock"
+  fi
+
   # A producing session that crosses a scheduled slot explains why Claude did not dispatch there:
   # its per-task concurrency limit suppresses overlaps. Advance past every visibly covered slot,
   # then judge only the first slot after the observed session. The bound turns impossible/future
