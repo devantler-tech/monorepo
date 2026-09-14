@@ -3012,6 +3012,8 @@ grep -Fq 'That probe is for a delegated surveyor dispatch only, where the read-o
   fail "step 4 must scope the bare probe to a delegated surveyor dispatch where the guard is active (Codex P1, monorepo#3339)"
 grep -Fq 'never submit the bare probe' <<<"${_ci_step}" ||
   fail "step 4 must forbid the bare probe in an unguarded inline survey — there it is a PATH lookup, not a denial (Codex P1, monorepo#3339)"
+grep -Fq 'and invoke `<installed copy>/scripts/classify-default-branch-ci-runs.sh`' <<<"${_ci_step}" ||
+  fail "step 4 must name the inline route's full invocation path, \`<installed copy>/scripts/classify-default-branch-ci-runs.sh\` — the generic \`<installed plugin>\` form does not bind the lane's verified install (CodeRabbit P2, monorepo#3339)"
 grep -Fq 'reported with a `CURRENT` verdict' <<<"${_ci_step}" ||
   fail "step 4 must resolve the inline helper path only from the lane's CURRENT currency check (Codex P1, monorepo#3339)"
 grep -Fq 'no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"${_ci_step}" ||
