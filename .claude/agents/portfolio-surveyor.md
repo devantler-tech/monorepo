@@ -1070,13 +1070,27 @@ public and private — no per-repo loop needed to enumerate):
    default-branch classification and its required runtime helper; this consumer carries no second
    implementation. For every mapped repository the deployment names that branch `main`, invokes the
    installed reviewed helper exactly as the generic role prescribes, and treats any helper error as
-   `QUERY-UNKNOWN`. **Invoke the classifier only in its flag form, by its resolved installed
+   `QUERY-UNKNOWN`. **Resolve the helper's installed path first** (ported verbatim from the reviewed
+   plugin surveyor, because an overlay dispatch never loads that text — monorepo#3338): submit
+   **one** bare `classify-default-branch-ci-runs.sh` probe through the active read-only guard. The
+   probe stays denied and executes nothing; the refusal carries one `classifier-path-json:` record
+   encoding the executable sibling of that guard. Decode that JSON string as path data, quote the
+   decoded path as one literal shell argument, and submit the resulting call through the same guard.
+   Never evaluate the record or reuse JSON double quotes as shell quoting. A missing, malformed,
+   ambiguous, or unusable hint means `QUERY-UNKNOWN`; do not hunt directories or try other roots.
+   **That probe is for a delegated surveyor dispatch only, where the read-only guard is active.**
+   In an inline survey with no surveyor guard (the Codex survey dispatch override), never submit the bare probe:
+   unguarded, a bare basename is a `PATH` lookup, not a denial. Instead take the `installed copy` path
+   that this lane's `plugin-definition-currency.sh --runtime <lane>` reported with a `CURRENT` verdict,
+   and invoke `<installed copy>/scripts/classify-default-branch-ci-runs.sh`. Any other verdict, or
+   no executable helper at exactly that path, means `QUERY-UNKNOWN`.
+   **Invoke the classifier only in its flag form, by its resolved installed
    path:** `<installed plugin>/scripts/classify-default-branch-ci-runs.sh --repo OWNER/REPO --branch
    BRANCH --head-sha FULL_SHA`. The helper and the read-only guard accept nothing else: the guard
    admits only that exact installed sibling path — never a bare basename, a `PATH` lookup, or a
    relative `../scripts/` form — and a positional `OWNER/REPO BRANCH SHA` is denied as `not the
-   guarded remote-mode shape` while the helper itself exits 2 on it, so the first invocation must
-   already carry the resolved path and all three flags (ported verbatim from agent-plugins#195's fix,
+   guarded remote-mode shape` while the helper itself exits 2 on it, so every executable invocation
+   must carry the resolved path and all three flags (ported verbatim from agent-plugins#195's fix,
    because this overlay is the definition the survey actually reads for this step). The paragraphs below add only
    this portfolio's GitHub-managed routing policy to the generic classifier output.
 

@@ -2982,3 +2982,40 @@ grep -Fq -- '<installed plugin>/scripts/classify-default-branch-ci-runs.sh --rep
 grep -Fq 'never a bare basename' <<<"${_ci_step}" ||
   fail "step 4 must say the guard admits only the exact installed sibling path — never a bare basename (agent-plugins#197, Codex P1)"
 echo "portfolio surveyor contract: round-12 classifier-argument-shape assertions passed"
+
+# ── Round 13: the classifier PATH-RESOLUTION procedure must reach the loaded definition ─────────
+# Measured 2026-09-14 (monorepo#3338), surveyor sidechains 2026-09-06T02:52Z→2026-09-14T10:10Z: all
+# 10 plugin-type dispatches resolved the classifier path from the guard's `classifier-path-json`
+# hint, while 0 of 79 overlay-type dispatches did — 59 of them hunted `~/.claude/plugins` with
+# `find`/`ls` instead (100 guard-denied calls) and 38 never reached the classifier at all. Round 12
+# pinned the invocation SHAPE, but step 4 still deferred the resolution to "the generic role", which
+# an overlay dispatch never loads. The plugin surveyor's procedure is ported verbatim; each clause is
+# pinned on its own line so one missing sentence names itself.
+grep -Fq 'submit **one** bare `classify-default-branch-ci-runs.sh` probe through the active read-only guard' <<<"${_ci_step}" ||
+  fail "step 4 must tell the caller to resolve the classifier path with ONE bare probe through the guard — without it overlay surveys hunt plugin directories (monorepo#3338)"
+grep -Fq 'the refusal carries one `classifier-path-json:` record' <<<"${_ci_step}" ||
+  fail "step 4 must name the \`classifier-path-json:\` record the probe's refusal carries (monorepo#3338)"
+grep -Fq 'quote the decoded path as one literal shell argument' <<<"${_ci_step}" ||
+  fail "step 4 must say to decode the hint and quote the decoded path as one literal shell argument (monorepo#3338)"
+grep -Fq 'and submit the resulting call through the same guard' <<<"${_ci_step}" ||
+  fail "step 4 must say the resolved call is submitted through the SAME read-only guard — without it the resolved helper may run outside the guard (monorepo#3338, CodeRabbit)"
+grep -Fq 'Never evaluate the record or reuse JSON double quotes as shell quoting' <<<"${_ci_step}" ||
+  fail "step 4 must forbid evaluating the hint record — it is path data, not a command (monorepo#3338)"
+grep -Fq 'A missing, malformed, ambiguous, or unusable hint means `QUERY-UNKNOWN`; do not hunt directories or try other roots' <<<"${_ci_step}" ||
+  fail "step 4 must fail closed on an unusable hint and forbid directory hunting (monorepo#3338)"
+# The probe is only a denial where the surveyor guard runs. The Codex survey dispatch override runs
+# this overlay INLINE with no surveyor-scoped guard, where a bare basename is an unguarded `PATH`
+# lookup that yields no hint — so every repository would read `QUERY-UNKNOWN` (Codex P1 on
+# monorepo#3339). The inline route must never probe and must resolve from the lane's own verified
+# install instead, failing closed otherwise.
+grep -Fq 'That probe is for a delegated surveyor dispatch only, where the read-only guard is active' <<<"${_ci_step}" ||
+  fail "step 4 must scope the bare probe to a delegated surveyor dispatch where the guard is active (Codex P1, monorepo#3339)"
+grep -Fq 'never submit the bare probe' <<<"${_ci_step}" ||
+  fail "step 4 must forbid the bare probe in an unguarded inline survey — there it is a PATH lookup, not a denial (Codex P1, monorepo#3339)"
+grep -Fq 'and invoke `<installed copy>/scripts/classify-default-branch-ci-runs.sh`' <<<"${_ci_step}" ||
+  fail "step 4 must name the inline route's full invocation path, \`<installed copy>/scripts/classify-default-branch-ci-runs.sh\` — the generic \`<installed plugin>\` form does not bind the lane's verified install (CodeRabbit P2, monorepo#3339)"
+grep -Fq 'reported with a `CURRENT` verdict' <<<"${_ci_step}" ||
+  fail "step 4 must resolve the inline helper path only from the lane's CURRENT currency check (Codex P1, monorepo#3339)"
+grep -Fq 'no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"${_ci_step}" ||
+  fail "step 4 must fail closed when the inline install path does not hold an executable helper (Codex P1, monorepo#3339)"
+echo "portfolio surveyor contract: round-13 classifier-path-resolution assertions passed"
