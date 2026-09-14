@@ -89,6 +89,7 @@ case "$args" in
     jq -n --arg id "$item" --argjson a "$archived" '{data: {archiveProjectV2Item: {item: {id: $id, isArchived: $a}}}}' ;;
   *"node(id:"*)
     printf 'recheck %s\n' "$item" >>"$STUB_LOG"
+    printf 'recheck-full-pages %s\n' "$(grep -o 'subIssues(first: 100)' <<<"$args" | wc -l | tr -d ' ')" >>"$STUB_LOG"
     state="${STUB_RECHECK_STATE:-CLOSED}"
     closed_at="${STUB_RECHECK_CLOSED_AT:-2026-07-01T00:00:00Z}"
     parent=null
@@ -185,7 +186,7 @@ check "apply exits 0" "$([ "$rc" = 0 ] && echo 0 || echo 1)" "rc=$rc err=$err"
 check "apply archives exactly the candidates" \
   "$([ "$(grep '^archive' <<<"$log" | sort | tr '\n' ' ')" = "archive PVTI_1 archive PVTI_3 " ] && echo 0 || echo 1)" "$log"
 check "apply rechecks each item before archiving it" \
-  "$([ "$(grep -c '^recheck' <<<"$log")" = 2 ] && echo 0 || echo 1)" "$log"
+  "$([ "$(grep -c '^recheck ' <<<"$log")" = 2 ] && echo 0 || echo 1)" "$log"
 check "manifest records project and item for each archive" \
   "$([ "$(cut -f1,2 "$tmp/apply.tsv" | tr '\t' ':' | sort | tr '\n' ' ')" = "PVT_test:PVTI_1 PVT_test:PVTI_3 " ] && echo 0 || echo 1)" "$(cat "$tmp/apply.tsv")"
 
@@ -291,6 +292,16 @@ STUB_RECHECK_SUBISSUES='{"totalCount":1,"nodes":[{"state":"CLOSED","subIssuesSum
   run unreadbranch --apply --manifest "$tmp/unread.tsv" --claim "2238:$claim_sha"
 check "a closed sub-issue whose own children were not read keeps the item" \
   "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | tr '\n' ' ')" = "archive PVTI_1 " ] && echo 0 || echo 1)" "rc=$rc $log"
+
+# 18. the recheck reads a full sub-issue level (GitHub allows 100 per parent)
+wide=$(jq -cn '{totalCount: 60, nodes: [range(60) | {state: "CLOSED", subIssuesSummary: {total: 0, completed: 0},
+  subIssues: {totalCount: 0, nodes: []}}]}')
+STUB_RECHECK_SIS='{"total":60,"completed":60}' STUB_RECHECK_SUBISSUES="$wide" \
+  run widetree --apply --manifest "$tmp/wide.tsv" --claim "2238:$claim_sha"
+check "the recheck asks for a full 100-item page at both sub-issue levels" \
+  "$([ "$(grep '^recheck-full-pages' <<<"$log" | sort -u | tr '\n' ' ')" = "recheck-full-pages 2 " ] && echo 0 || echo 1)" "$log"
+check "a finished issue with 60 closed sub-issues is still archived" \
+  "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | sort | tr '\n' ' ')" = "archive PVTI_1 archive PVTI_3 " ] && echo 0 || echo 1)" "rc=$rc $log"
 
 # 17. the printed usage matches what the parser requires
 run usagetext --not-a-flag

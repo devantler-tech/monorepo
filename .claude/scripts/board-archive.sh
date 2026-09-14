@@ -327,8 +327,8 @@ fi
 # shellcheck disable=SC2016
 RECHECK='query($item: ID!) { node(id: $item) { ... on ProjectV2Item { id isArchived
   content { ... on Issue { state closedAt subIssuesSummary { total completed }
-      subIssues(first: 50) { totalCount nodes { state subIssuesSummary { total completed }
-        subIssues(first: 50) { totalCount nodes { state subIssuesSummary { total completed } } } } }'"$chain"' }
+      subIssues(first: 100) { totalCount nodes { state subIssuesSummary { total completed }
+        subIssues(first: 100) { totalCount nodes { state subIssuesSummary { total completed } } } } }'"$chain"' }
     ... on PullRequest { state closedAt } } } } }'
 # shellcheck disable=SC2016
 readonly ARCHIVE='mutation($project: ID!, $item: ID!) {
