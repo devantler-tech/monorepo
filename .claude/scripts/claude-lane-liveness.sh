@@ -303,57 +303,6 @@ else
 fi
 [ -n "$ids" ] || die_unknown "no enabled scheduled tasks found in $STORE"
 
-# A stopped scheduler writes no new run and therefore cannot be detected from run rows or transcripts.
-# Derive the next expected slot before scanning sessions. A known overdue task outranks an unrelated
-# unjudgeable task; if no task is known overdue, any unsupported schedule keeps the lane UNKNOWN.
-schedule_report=""
-schedule_dead=0
-schedule_unknown=0
-while IFS= read -r id; do
-  [ -n "$id" ] || continue
-  last_scheduled=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .lastScheduledFor) // empty' "$STORE") || last_scheduled=""
-  cron=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .cronExpression) // empty' "$STORE") || cron=""
-  ls_epoch=$(iso_to_epoch "$last_scheduled")
-  next_epoch=""
-  if [ -n "$ls_epoch" ] && [ -n "$cron" ]; then
-    next_epoch=$(next_scheduled_epoch "$cron" "$ls_epoch")
-  fi
-  if [ -z "$next_epoch" ]; then
-    schedule_report="${schedule_report}  UNKNOWN  ${id} -- unsupported cron expression or lastScheduledFor does not name one of its slots: ${cron:-<missing>}
-"
-    schedule_unknown=1
-    continue
-  fi
-  if [ "$NOW_EPOCH" -gt $(( next_epoch + GRACE_SECONDS )) ]; then
-    schedule_report="${schedule_report}  NOT-PRODUCING  ${id} -- next expected slot is overdue by more than ${GRACE_SECONDS}s
-"
-    schedule_dead=1
-  fi
-done <<EOF
-$ids
-EOF
-
-if [ "$schedule_dead" -eq 1 ]; then
-  if [ "$QUIET" -eq 0 ]; then
-    printf 'claude-lane-liveness: store=%s grace=%ss skew<=%ss lookback=%sh\n' \
-      "$STORE" "$GRACE_SECONDS" "$SKEW_SECONDS" "$LOOKBACK_HOURS"
-    printf '%s' "$schedule_report"
-  fi
-  printf 'claude-lane-liveness: NOT PRODUCING -- an expected scheduler dispatch is overdue.\n' >&2
-  printf '%s\n' "$RECOVERY" >&2
-  exit 1
-fi
-if [ "$schedule_unknown" -eq 1 ]; then
-  if [ "$QUIET" -eq 0 ]; then
-    printf 'claude-lane-liveness: store=%s grace=%ss skew<=%ss lookback=%sh\n' \
-      "$STORE" "$GRACE_SECONDS" "$SKEW_SECONDS" "$LOOKBACK_HOURS"
-    printf '%s' "$schedule_report"
-  fi
-  printf 'claude-lane-liveness: UNKNOWN -- at least one task schedule could not be judged.\n' >&2
-  printf '%s\n' "$RECOVERY" >&2
-  exit 2
-fi
-
 # Enumerated once, not per task. `find` over the projects root is the expensive step here (the
 # per-session worktree layout leaves hundreds of project directories behind), and the marker read is
 # bounded to the transcript's FIRST LINE -- measured to be where the marker always sits, and the only
@@ -461,6 +410,28 @@ while IFS= read -r id; do
 "
     any_unknown=1; continue
   fi
+
+  # A stopped scheduler writes no new run. Keep its schedule state alongside the transcript state
+  # instead of returning early: Claude deliberately suppresses a dispatch when the preceding run
+  # spans that slot, and a conclusive transcript failure elsewhere must still outrank a malformed
+  # schedule. A materially future anchor is impossible store evidence, never a healthy schedule.
+  schedule_state=ok
+  schedule_reason=""
+  last_scheduled=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .lastScheduledFor) // empty' "$STORE") || last_scheduled=""
+  cron=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .cronExpression) // empty' "$STORE") || cron=""
+  ls_epoch=$(iso_to_epoch "$last_scheduled")
+  next_epoch=""
+  if [ -n "$ls_epoch" ] && [ "$ls_epoch" -gt $(( NOW_EPOCH + SKEW_SECONDS )) ]; then
+    schedule_state=unknown
+    schedule_reason="future lastScheduledFor is more than ${SKEW_SECONDS}s ahead of the observer clock"
+  elif [ -n "$ls_epoch" ] && [ -n "$cron" ]; then
+    next_epoch=$(next_scheduled_epoch "$cron" "$ls_epoch")
+  fi
+  if [ "$schedule_state" = ok ] && [ -z "$next_epoch" ]; then
+    schedule_state=unknown
+    schedule_reason="unsupported cron expression or lastScheduledFor does not name one of its slots: ${cron:-<missing>}"
+  fi
+
   last_run=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .lastRunAt) // empty' "$STORE") || last_run=""
   if [ -z "$last_run" ] || [ "$last_run" = "null" ]; then
     report="${report}  UNKNOWN  ${id} -- no lastRunAt recorded, never dispatched or store incomplete
@@ -536,6 +507,33 @@ while IFS= read -r id; do
   fi
   span=$(( le - fe ))
 
+  # A producing session that crosses a scheduled slot explains why Claude did not dispatch there:
+  # its per-task concurrency limit suppresses overlaps. Advance past every visibly covered slot,
+  # then judge only the first slot after the observed session. The bound turns impossible/future
+  # transcript times into UNKNOWN instead of an unbounded loop.
+  overlap_slots=0
+  if [ "$schedule_state" = ok ]; then
+    while [ "$le" -ge "$next_epoch" ]; do
+      overlap_slots=$(( overlap_slots + 1 ))
+      if [ "$overlap_slots" -gt 256 ]; then
+        schedule_state=unknown
+        schedule_reason="session spans more than 256 scheduled slots; schedule evidence is not bounded"
+        break
+      fi
+      following_epoch=$(next_scheduled_epoch "$cron" "$next_epoch")
+      if [ -z "$following_epoch" ] || [ "$following_epoch" -le "$next_epoch" ]; then
+        schedule_state=unknown
+        schedule_reason="could not advance the schedule beyond an overlapping run"
+        break
+      fi
+      next_epoch=$following_epoch
+    done
+  fi
+  if [ "$schedule_state" = ok ] && [ "$NOW_EPOCH" -gt $(( next_epoch + GRACE_SECONDS )) ]; then
+    schedule_state=dead
+    schedule_reason="next expected slot after the observed session is overdue by more than ${GRACE_SECONDS}s"
+  fi
+
   # ZERO ASSISTANT TURNS IS THE WHOLE TEST -- the span is reported, never required. A session that
   # emitted no assistant turn produced nothing whether it died in four seconds or hung for an hour,
   # and pairing the two as a conjunction meant a dispatch that died PART WAY fell through to OK, which
@@ -547,8 +545,16 @@ while IFS= read -r id; do
     report="${report}  NOT-PRODUCING  ${id} -- dispatched at ${last_run}, session produced 0 assistant turns in ${span}s
 "
     any_dead=1
+  elif [ "$schedule_state" = dead ]; then
+    report="${report}  NOT-PRODUCING  ${id} -- ${schedule_reason}
+"
+    any_dead=1
+  elif [ "$schedule_state" = unknown ]; then
+    report="${report}  UNKNOWN  ${id} -- ${schedule_reason}
+"
+    any_unknown=1
   else
-    report="${report}  OK  ${id} -- dispatched at ${last_run}, session produced ${turns} assistant turn(s) over ${span}s
+    report="${report}  OK  ${id} -- dispatched at ${last_run}, session produced ${turns} assistant turn(s) over ${span}s, covered ${overlap_slots} suppressed slot(s)
 "
   fi
 done <<EOF

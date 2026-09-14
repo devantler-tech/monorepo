@@ -176,6 +176,17 @@ mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
 mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
 expect 0 "an overlapping-run delay inside the next-slot grace stays healthy"
 
+# Claude suppresses a dispatch when the previous run overlaps its next slot. A session that visibly
+# spans that slot proves the scheduler's frozen anchor is an overlap skip, not a stopped scheduler;
+# the next slot after the session becomes the first one the checker may require.
+mkcase overlap_suppresses_dispatch
+last_slot=$(( NOW - NOW % 3600 - 3600 ))
+last_run=$(( last_slot + 60 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$last_slot")\"" "0 * * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 3700 >/dev/null
+expect 0 "a producing session spanning the next slot defers the stopped-scheduler verdict"
+
 # A schedule anchor must name the exact start of a cron minute. Silently accepting nonzero seconds
 # shifts every derived deadline and can delay a stopped-scheduler verdict.
 mkcase scheduled_seconds
@@ -195,6 +206,16 @@ mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
   "\"$(iso_at "$last_slot")\"" "0 * * * *\ninvalid"
 mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
 expect_msg 2 "unsupported cron expression" "a multiline cron expression is UNKNOWN"
+
+# A last attempted slot cannot be materially later than the observer's clock. Accepting that value
+# lets a healthy historical transcript mask a corrupted scheduler store until wall time catches up.
+mkcase future_schedule_anchor
+last_slot=$(( NOW - NOW % 3600 + 3600 ))
+last_run=$(( NOW - 3600 ))
+mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
+  "\"$(iso_at "$last_slot")\"" "0 * * * *"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
+expect_msg 2 "future lastScheduledFor" "a future schedule anchor is UNKNOWN"
 
 # Both cron shapes in the live store must be understood. Anything else is unproved scheduler state,
 # never permission to fall back to the last healthy transcript.
@@ -380,6 +401,17 @@ mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\"" beta true "\"$(iso
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 5 >/dev/null
 mksession "$PROJECTS/proj-a" beta $(( NOW - 9 )) 30 5 >/dev/null
 expect 1 "a detected dead task outranks an unjudgeable one"
+
+# Schedule evidence follows the same precedence rule. One malformed cron must not prevent the
+# transcript scan from surfacing another task whose settled dispatch produced zero turns.
+mkcase transcript_dead_outranks_schedule_unknown
+current_slot=$(( NOW - NOW % 3600 ))
+printf '{"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":"%s","lastScheduledFor":"%s","cronExpression":"*/5 * * * *"},{"id":"beta","enabled":true,"lastRunAt":"%s","lastScheduledFor":"%s","cronExpression":"0 * * * *"}]}\n' \
+  "$(iso_at $(( NOW - 3600 )))" "$(iso_at "$current_slot")" \
+  "$(iso_at $(( NOW - 3600 )))" "$(iso_at "$current_slot")" > "$STORE"
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 0 5 >/dev/null
+expect 1 "a dead dispatch outranks an unrelated unsupported schedule"
 
 # --- Disabled tasks ------------------------------------------------------------------------------
 mkcase disabled_excluded
