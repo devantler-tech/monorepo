@@ -66,7 +66,8 @@ page 'false' '' \
   "$(issue PVTI_13 13 CLOSED "$old" '{"id":"I_P13","state":"CLOSED","parent":{"id":"I_X13"}}')" >"$tmp/page2.json"
 
 # ── the fake gh ────────────────────────────────────────────────────────────
-# Knobs: STUB_LOG, STUB_PAGE_BAD, STUB_CURSOR_STUCK, STUB_ARCHIVE_BAD, STUB_RECHECK_STATE, STUB_PROJECT
+# Knobs: STUB_LOG, STUB_PAGE_BAD, STUB_CURSOR_STUCK, STUB_ARCHIVE_BAD, STUB_RECHECK_STATE, STUB_PROJECT,
+#        STUB_RECHECK_PARENT / STUB_RECHECK_SIS (JSON applied to the issue candidate PVTI_3 at recheck)
 mkdir -p "$tmp/bin"
 cat >"$tmp/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -86,7 +87,16 @@ case "$args" in
   *"node(id:"*)
     printf 'recheck %s\n' "$item" >>"$STUB_LOG"
     state="${STUB_RECHECK_STATE:-CLOSED}"
-    jq -n --arg id "$item" --arg s "$state" '{data: {node: {id: $id, isArchived: false, content: {state: $s}}}}' ;;
+    parent=null
+    sis=null
+    if [ "$item" = PVTI_3 ]; then
+      parent="${STUB_RECHECK_PARENT:-null}"
+      sis='{"total":0,"completed":0}'
+      [ -z "${STUB_RECHECK_SIS:-}" ] || sis="$STUB_RECHECK_SIS"
+    fi
+    jq -n --arg id "$item" --arg s "$state" --argjson p "$parent" --argjson sis "$sis" \
+      '{data: {node: {id: $id, isArchived: false,
+        content: ({state: $s} + (if $sis == null then {} else {subIssuesSummary: $sis, parent: $p} end))}}}' ;;
   *"items("*)
     if [ "${STUB_PAGE_BAD:-0}" = 1 ]; then
       printf '{"errors":[{"message":"boom"}]}\n'
@@ -112,7 +122,7 @@ run() { # run <case> <args...>  → sets rc, out, err; fresh log per case
   : >"$tmp/$name.log"
   set +e
   out=$(PATH="$tmp/bin:$PATH" STUB_DIR="$tmp" STUB_LOG="$tmp/$name.log" \
-    BOARD_ARCHIVE_NOW=2026-09-14T00:00:00Z BOARD_ARCHIVE_PACE_SECONDS=0 \
+    BOARD_ARCHIVE_NOW=2026-09-14T00:00:00Z BOARD_ARCHIVE_PACE_SECONDS="${TEST_PACE:-0}" \
     bash "$script" "$@" 2>"$tmp/$name.err")
   rc=$?
   set -e
@@ -184,6 +194,26 @@ check "restore unarchives every manifest item" \
 STUB_PROJECT=PVT_other run foreign --restore "$tmp/apply.tsv"
 check "restore refuses another project's manifest before any mutation" \
   "$([ "$rc" = 2 ] && ! grep -q unarchive <<<"$log" && echo 0 || echo 1)" "rc=$rc $log"
+
+# 10. no run may plan more writes than the hourly budget allows
+run overmax --apply --manifest "$tmp/overmax.tsv" --max 451
+check "--max above the hourly cap is a usage error" "$([ "$rc" = 1 ] && ! grep -q archive <<<"$log" && echo 0 || echo 1)" "rc=$rc"
+TEST_PACE=. run badpace --apply --manifest "$tmp/badpace.tsv"
+check "a malformed pace is refused before any read or write" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+: >"$tmp/big.tsv"
+for ((i = 0; i < 451; i++)); do printf 'PVT_test\tPVTI_big%s\tdevantler-tech/monorepo#%s\t2026-07-01T00:00:00Z\n' "$i" "$i" >>"$tmp/big.tsv"; done
+run bigrestore --restore "$tmp/big.tsv"
+check "restore refuses a manifest over the hourly cap before any mutation" \
+  "$([ "$rc" = 2 ] && ! grep -q unarchive <<<"$log" && echo 0 || echo 1)" "rc=$rc $log"
+
+# 11. the recheck repeats the hierarchy rule, not only the state
+STUB_RECHECK_PARENT='{"id":"I_P3","state":"OPEN","parent":null}' run ancestorreopened --apply --manifest "$tmp/anc.tsv"
+check "an ancestor reopened since the read keeps the item" \
+  "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | tr '\n' ' ')" = "archive PVTI_1 " ] && echo 0 || echo 1)" "rc=$rc $log"
+STUB_RECHECK_SIS='{"total":2,"completed":1}' run subissueadded --apply --manifest "$tmp/sis.tsv"
+check "an unfinished sub-issue added since the read keeps the item" \
+  "$([ "$rc" = 0 ] && [ "$(grep '^archive' <<<"$log" | tr '\n' ' ')" = "archive PVTI_1 " ] && echo 0 || echo 1)" "rc=$rc $log"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ]

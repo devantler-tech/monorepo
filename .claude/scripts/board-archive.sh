@@ -30,7 +30,8 @@
 #
 # OPTIONS
 #   --min-closed-days N  minimum days since closing (default 30)
-#   --max N              most items archived in one --apply run (default 450)
+#   --max N              most items archived in one --apply run (default and
+#                        ceiling 450; a restore manifest is held to the same ceiling)
 #   --manifest FILE      --apply appends "<project id> <item id> <ref> <closedAt>"
 #                        (tab-separated) BEFORE each archive, so every item this
 #                        run may have touched can be restored
@@ -78,9 +79,13 @@ EOF
 
 is_count() { case "$1" in '' | *[!0-9]*) return 1 ;; *) return 0 ;; esac }
 
+# GitHub allows roughly 500 content-generating requests an hour. No run, archive
+# or restore, may plan more mutations than this.
+readonly HOURLY_CAP=450
+
 MODE=dry-run
 MIN_DAYS=30
-MAX=450
+MAX=$HOURLY_CAP
 MANIFEST=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -97,7 +102,7 @@ while [ $# -gt 0 ]; do
     shift
     ;;
   --max)
-    if [ $# -lt 2 ] || ! is_count "$2" || [ "$2" -eq 0 ]; then usage; fi
+    if [ $# -lt 2 ] || ! is_count "$2" || [ "$2" -eq 0 ] || [ "$2" -gt "$HOURLY_CAP" ]; then usage; fi
     MAX="$2"
     shift
     ;;
@@ -113,7 +118,7 @@ done
 [ "$MODE" != apply ] || [ -n "$MANIFEST" ] || die "--apply requires --manifest, so every archive can be restored" 1
 
 PACE="${BOARD_ARCHIVE_PACE_SECONDS:-1}"
-case "$PACE" in '' | *[!0-9.]*) die "BOARD_ARCHIVE_PACE_SECONDS must be a number" 1 ;; esac
+[[ "$PACE" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "BOARD_ARCHIVE_PACE_SECONDS must be a non-negative number such as 1 or 0.5" 1
 
 command -v gh >/dev/null 2>&1 || die "gh CLI not found"
 command -v jq >/dev/null 2>&1 || die "jq not found"
@@ -150,6 +155,8 @@ if [ "$MODE" = restore ]; then
     [ "$pid" = "$PROJECT_ID" ] || die "manifest names a different project for ${ref}; nothing was restored"
     lines=$((lines + 1))
   done <"$MANIFEST"
+  [ "$lines" -le "$HOURLY_CAP" ] ||
+    die "manifest names ${lines} items, over the ${HOURLY_CAP}-per-run limit; split it and restore each part in its own run (nothing was restored)"
   # shellcheck disable=SC2016
   readonly UNARCHIVE='mutation($project: ID!, $item: ID!) {
     unarchiveProjectV2Item(input: {projectId: $project, itemId: $item}) { item { id isArchived } } }'
@@ -258,9 +265,12 @@ fi
 # ── archive ────────────────────────────────────────────────────────────────
 : >>"$MANIFEST" || die "cannot write manifest: ${MANIFEST}; nothing was archived"
 
+# The recheck repeats every per-item part of the rule, not only the state: an
+# ancestor can reopen, or an unfinished sub-issue can be added, after the read.
 # shellcheck disable=SC2016
-readonly RECHECK='query($item: ID!) { node(id: $item) { ... on ProjectV2Item { id isArchived
-  content { ... on Issue { state } ... on PullRequest { state } } } } }'
+RECHECK='query($item: ID!) { node(id: $item) { ... on ProjectV2Item { id isArchived
+  content { ... on Issue { state subIssuesSummary { total completed }'"$chain"' }
+    ... on PullRequest { state } } } } }'
 # shellcheck disable=SC2016
 readonly ARCHIVE='mutation($project: ID!, $item: ID!) {
   archiveProjectV2Item(input: {projectId: $project, itemId: $item}) { item { id isArchived } } }'
@@ -274,7 +284,15 @@ while IFS=$'\t' read -r item ref _ closed; do
   # The read above can be minutes old by now; a reopened item must not be archived.
   state=$(gh api graphql -f item="$item" -f query="$RECHECK" 2>"$GH_ERR" |
     jq -r --arg id "$item" 'select((.errors // [] | length) == 0 and .data.node.id == $id)
-      | if .data.node.isArchived then "archived" else (.data.node.content.state // "unknown") end') ||
+      | .data.node as $n | ($n.content.state // "unknown") as $state
+      | if $n.isArchived then "archived"
+        elif ($state == "CLOSED" or $state == "MERGED") | not then $state
+        elif ([($n.content.parent // empty) | recurse(.parent // empty) | select(.state != "CLOSED")] | length) > 0
+          then "open-ancestor"
+        elif $n.content.subIssuesSummary != null
+          and (($n.content.subIssuesSummary.total // 1) != ($n.content.subIssuesSummary.completed // 0))
+          then "open-sub-issue"
+        else $state end') ||
     die "could not re-read ${ref} after ${archived} archived (manifest: ${MANIFEST}): $(gh_reason)"
   case "$state" in
   CLOSED | MERGED) : ;;
