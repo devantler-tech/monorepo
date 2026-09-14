@@ -515,13 +515,31 @@ while IFS= read -r id; do
     transcript_unknown_reason="future session endpoint is more than ${SKEW_SECONDS}s ahead of the observer clock"
   fi
 
-  # A producing session that crosses a scheduled slot explains why Claude did not dispatch there:
-  # its per-task concurrency limit suppresses overlaps. Advance past every visibly covered slot,
-  # then judge only the first slot after the observed session. The bound turns implausibly broad
-  # coverage into UNKNOWN instead of an unbounded loop.
+  # Claude appends top-level per_task_limit samples while an already-running task prevents a new
+  # dispatch. Those scheduler-side samples cover slots even when the transcript is silent inside a
+  # long tool call. Accept only integral millisecond epochs within the observer-skew allowance;
+  # malformed, differently-reasoned, and future samples prove nothing.
+  skip_ms=$(jq -r --arg t "$id" --argjson cutoff "$(( (NOW_EPOCH + SKEW_SECONDS) * 1000 ))" '
+    [(.recordedSkips? // {})
+      | select(type == "object")
+      | .[$t][]?
+      | select(type == "object" and .reason == "per_task_limit")
+      | .at
+      | select(type == "number" and . >= 0 and floor == . and . <= $cutoff)]
+    | max // empty' "$STORE" 2>/dev/null) || skip_ms=""
+  overlap_until=$le
+  if [ -n "$skip_ms" ]; then
+    skip_epoch=$(( skip_ms / 1000 ))
+    if [ "$skip_epoch" -gt "$overlap_until" ]; then overlap_until=$skip_epoch; fi
+  fi
+
+  # A producing session or scheduler skip that crosses a scheduled slot explains why Claude did not
+  # dispatch there: its per-task concurrency limit suppresses overlaps. Advance past every visibly
+  # covered slot, then judge only the first later slot. The bound turns implausibly broad coverage
+  # into UNKNOWN instead of an unbounded loop.
   overlap_slots=0
   if [ -z "$transcript_unknown_reason" ] && [ "$schedule_state" = ok ]; then
-    while [ "$le" -ge "$next_epoch" ]; do
+    while [ "$overlap_until" -ge "$next_epoch" ]; do
       overlap_slots=$(( overlap_slots + 1 ))
       if [ "$overlap_slots" -gt 256 ]; then
         schedule_state=unknown

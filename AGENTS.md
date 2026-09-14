@@ -916,9 +916,10 @@ check answers the same question on a stronger signal — **zero assistant turns 
 because unlike a missing inbox item it admits no benign reading, and its grace window already excludes
 in-flight dispatches.
 🔴 **The Claude check must also detect a scheduler that writes NO new dispatch.** Before selecting its
-final verdict, it joins each task's `lastScheduledFor`/`cronExpression` with its latest transcript. A
-producing session that crosses an expected slot explains Claude's `per_task_limit` overlap skip, so
-the first later slot is required instead; an overdue unexplained slot is `1 NOT-PRODUCING`. A missing,
+final verdict, it joins each task's `lastScheduledFor`/`cronExpression` with its latest transcript and
+top-level `recordedSkips`. A producing session or fresh `per_task_limit` sample that crosses an
+expected slot explains Claude's overlap skip, so the first later slot is required instead; an overdue
+unexplained slot is `1 NOT-PRODUCING`. A missing,
 malformed, unsupported or materially-future schedule, or a materially-future transcript endpoint, is
 `2 UNKNOWN`, but cannot mask another task's known death. Supported shapes are exactly hourly minute
 and comma-separated daily hours, evaluated in

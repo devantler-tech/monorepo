@@ -187,6 +187,17 @@ mkstore_scheduled "$STORE" alpha true "\"$(iso_at "$last_run")\"" \
 mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 3700 >/dev/null
 expect 0 "a producing session spanning the next slot defers the stopped-scheduler verdict"
 
+# During a long tool call the transcript can be silent across the due slot. Claude's scheduler keeps
+# polling and records per_task_limit samples while the run is open; a fresh sample beyond the slot is
+# stronger overlap evidence than the transcript endpoint alone.
+mkcase recorded_skip_suppresses_dispatch
+last_slot=$(( NOW - NOW % 3600 - 3600 ))
+last_run=$(( last_slot + 60 ))
+printf '{"recordedSkips":{"alpha":[{"at":%s,"reason":"per_task_limit"}]},"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":"%s","lastScheduledFor":"%s","cronExpression":"0 * * * *","filePath":"/x","cwd":"/y"}]}\n' \
+  "$(( (NOW - 60) * 1000 ))" "$(iso_at "$last_run")" "$(iso_at "$last_slot")" > "$STORE"
+mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
+expect 0 "a live per_task_limit sample covers a slot crossed during transcript silence"
+
 # A schedule anchor must name the exact start of a cron minute. Silently accepting nonzero seconds
 # shifts every derived deadline and can delay a stopped-scheduler verdict.
 mkcase scheduled_seconds
