@@ -38,10 +38,6 @@ set -euo pipefail
 readonly PROJECT_NUMBER=5
 readonly PROJECT_OWNER="devantler-tech"
 readonly DEFAULT_STATUS="📥 Backlog"
-# Fields default to 30 per page and the documented project cap is 50, so Status
-# can fall off the first page and read as "field missing" on a project that has
-# it. Ask for the whole set.
-readonly FIELD_PAGE_LIMIT=100
 
 # The CANONICAL ladder, as documented in the contract. Deliberately a local
 # constant rather than the live option names: option names are editable by
@@ -217,20 +213,40 @@ case "$IS_PRIVATE" in
                 "could not determine visibility of ${REPO_OWNER}/${REPO_NAME}; refusing (fail-closed)" ;;
 esac
 
-# Field metadata. Resolved live rather than hardcoded: option ids change whenever
-# the maintainer edits the column set, and a stale id sets the WRONG column silently.
+# Project metadata in ONE query: the project id, plus the Status field and its
+# options asked for BY NAME. `gh project field-list --limit 100` returned the
+# same ids but cost ~101 GraphQL points per call — nearly the whole price of
+# setting a status, enough for a board sweep to drain the shared hourly budget —
+# while this query costs ~1 (measured 2026-09-15, monorepo#2507). Asking by name
+# also cannot miss Status on a later page, because there is no page.
 #
-# NOTE the `|| die` on each assignment. Under `set -euo pipefail` a failing gh
+# Resolved live rather than hardcoded: option ids change whenever the maintainer
+# edits the column set, and a stale id sets the WRONG column silently.
+#
+# NOTE the `|| die` on the assignment. Under `set -euo pipefail` a failing gh
 # makes the ASSIGNMENT fail, which aborts the script immediately — before the
 # empty-value check below can run. The caller would then get exit 1 (documented
-# here as a *usage* error) and, because stderr is discarded, no diagnostic at
-# all. Binding the failure to `die` keeps operational failures on exit 2 where
-# they belong. An assignment inside a `||` list does not trip `set -e`.
-PROJECT_ID=$(gh project view "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json 2>"$GH_ERR" \
-             | jq -r '.id // empty') \
-             || die_gh graphql "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER}" \
-                       "$STATE_NOTHING_WRITTEN" \
-                       "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER} (auth, network, or scope)"
+# here as a *usage* error) and no diagnostic at all. Binding the failure to
+# `die` keeps operational failures on exit 2 where they belong. An assignment
+# inside a `||` list does not trip `set -e`.
+# GraphQL variables belong to the query, not the shell.
+# shellcheck disable=SC2016
+METADATA=$(gh api graphql -f owner="$PROJECT_OWNER" -F number="$PROJECT_NUMBER" -f query='
+  query($owner: String!, $number: Int!) {
+    organization(login: $owner) {
+      projectV2(number: $number) {
+        id
+        field(name: "Status") {
+          ... on ProjectV2SingleSelectField { id options { id name } }
+        }
+      }
+    }
+  }' 2>"$GH_ERR") \
+  || die_gh graphql "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER}" \
+            "$STATE_NOTHING_WRITTEN" \
+            "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER} (auth, network, or scope)"
+PROJECT_ID=$(printf '%s' "$METADATA" | jq -r '.data.organization.projectV2.id // empty' 2>/dev/null) \
+  || PROJECT_ID=""
 [ -n "$PROJECT_ID" ] || die "could not resolve project ${PROJECT_OWNER}/${PROJECT_NUMBER}"
 
 # Read membership from the issue, never by walking the board. Absence requires
@@ -287,15 +303,13 @@ if [ "$EXPLICIT_STATUS" = false ] && [ -n "$CURRENT_STATUS" ]; then
   exit 0
 fi
 
-FIELD_JSON=$(gh project field-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
-               --limit "$FIELD_PAGE_LIMIT" --format json 2>"$GH_ERR" \
-             | jq -r '.fields[] | select(.name=="Status")') \
-             || die_gh graphql "could not read the field list of project ${PROJECT_NUMBER}" \
-                       "$STATE_NOTHING_WRITTEN" \
-                       "could not read the field list of project ${PROJECT_NUMBER} (auth, network, or scope)"
-[ -n "$FIELD_JSON" ] || die "could not resolve the Status field on project ${PROJECT_NUMBER}"
-
+# The Status field came back with the project metadata above, so writing a
+# status needs no further lookup. A missing field, or one that is not a
+# single-select, has no id and is refused before any board write.
+FIELD_JSON=$(printf '%s' "$METADATA" | jq -c '.data.organization.projectV2.field // empty')
 FIELD_ID=$(printf '%s' "$FIELD_JSON" | jq -r '.id // empty')
+[ -n "$FIELD_ID" ] || die "could not resolve the Status field on project ${PROJECT_NUMBER}"
+
 OPTION_ID=$(printf '%s' "$FIELD_JSON" \
             | jq -r --arg n "$STATUS_NAME" '.options[]? | select(.name==$n) | .id // empty')
 
