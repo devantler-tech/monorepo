@@ -328,6 +328,14 @@ ln -s "$tmp/apply.tsv" "$tmp/restore-link.tsv"
 run restoresymlink --restore "$tmp/restore-link.tsv" --claim "2238:$claim_sha"
 check "--restore rejects a symlinked manifest" "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
 
+# 21. a full run at the default pace spans an hour, so consecutive runs stay under the hourly limit
+# shellcheck disable=SC2016 # the pattern matches the script's literal ${...} text; it must not expand
+default_pace=$(sed -n 's/^PACE="\${BOARD_ARCHIVE_PACE_SECONDS:-\([0-9][0-9]*\)}"$/\1/p' "$script")
+cap=$(sed -n 's/^readonly HOURLY_CAP=\([0-9][0-9]*\)$/\1/p' "$script")
+check "the default pace times the per-run cap is at least an hour" \
+  "$([ -n "$default_pace" ] && [ -n "$cap" ] && [ $((default_pace * cap)) -ge 3600 ] && echo 0 || echo 1)" \
+  "pace=${default_pace:-?} cap=${cap:-?}"
+
 # 17. the printed usage matches what the parser requires
 run usagetext --not-a-flag
 check "usage shows --claim for both mutating forms" \

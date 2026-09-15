@@ -51,7 +51,7 @@
 #
 # ENVIRONMENT
 #   BOARD_ARCHIVE_NOW            ISO-8601 UTC instant used as "now" (tests)
-#   BOARD_ARCHIVE_PACE_SECONDS   pause between mutations (default 1)
+#   BOARD_ARCHIVE_PACE_SECONDS   pause between mutations (default 8, so a full run spans an hour)
 #   BOARD_ARCHIVE_CLAIM_HELPER   claim helper to call (default: agent-claim.sh beside this script)
 #   BOARD_ARCHIVE_CLAIM_RENEW_SECONDS  renewal interval before a mutation (default 600)
 #
@@ -62,8 +62,9 @@
 #
 # NOTES
 #   - Paced and capped on purpose: GitHub allows ~80 content-generating requests a
-#     minute and 500 an hour. The default --max stays under the hourly figure, so a
-#     large backlog is drained over several runs. Never run two at once.
+#     minute and 500 an hour. A full run of 450 writes at the default pause takes an
+#     hour, so a large backlog can be drained by starting the next run as soon as the
+#     previous one ends without exceeding the hourly figure. Never run two at once.
 #   - Idempotent: the read excludes archived items, and each candidate's state is
 #     re-read immediately before it is archived.
 #   - Board text is untrusted input. Titles and field values are never printed.
@@ -181,7 +182,9 @@ if [ "$MODE" = apply ] && [ -s "$MANIFEST" ]; then
 fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-PACE="${BOARD_ARCHIVE_PACE_SECONDS:-1}"
+# 450 writes x 8 seconds = one hour, so even back-to-back capped runs stay under
+# GitHub's ~500 content-generating requests an hour.
+PACE="${BOARD_ARCHIVE_PACE_SECONDS:-8}"
 [[ "$PACE" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "BOARD_ARCHIVE_PACE_SECONDS must be a non-negative number such as 1 or 0.5" 1
 
 command -v gh >/dev/null 2>&1 || die "gh CLI not found"
