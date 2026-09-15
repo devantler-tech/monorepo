@@ -92,7 +92,9 @@ EOF
   exit 1
 }
 
-is_count() { case "$1" in '' | *[!0-9]*) return 1 ;; *) return 0 ;; esac }
+# Canonical decimal only: shell arithmetic reads a leading zero as octal, so "030"
+# would silently mean 24 and "08" would abort.
+is_count() { case "$1" in '' | *[!0-9]* | 0[0-9]*) return 1 ;; *) return 0 ;; esac }
 
 # GitHub allows roughly 500 content-generating requests an hour. No run, archive
 # or restore, may plan more mutations than this.

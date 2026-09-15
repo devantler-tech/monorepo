@@ -336,6 +336,15 @@ check "the default pace times the per-run cap is at least an hour" \
   "$([ -n "$default_pace" ] && [ -n "$cap" ] && [ $((default_pace * cap)) -ge 3600 ] && echo 0 || echo 1)" \
   "pace=${default_pace:-?} cap=${cap:-?}"
 
+# 22. numbers are canonical decimal, never octal
+run octaldays --min-closed-days 030
+check "--min-closed-days with a leading zero is a usage error" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+run octalmax --apply --manifest "$tmp/octal.tsv" --claim "2238:$claim_sha" --max 010
+check "--max with a leading zero is a usage error" "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+run zerodays --min-closed-days 0
+check "a plain zero is still accepted" "$([ "$rc" = 0 ] && echo 0 || echo 1)" "rc=$rc $err"
+
 # 17. the printed usage matches what the parser requires
 run usagetext --not-a-flag
 check "usage shows --claim for both mutating forms" \
