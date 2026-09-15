@@ -82,12 +82,55 @@ gh_saw_rate_limit() {
 # budget shows up first. A classifier reading only stderr would stay silent
 # exactly where it is needed most.
 #
-# So ask the API what the budget actually is. `GET /rate_limit` is unmetered, so
-# it answers even when everything else is refused, and it is authoritative in a
-# way an error string is not.
+# So ask the API what the budget actually is — and ask the pool that is spent.
+#
+# GraphQL is read IN-QUERY, never from `GET /rate_limit`. Measured 2026-09-15 at
+# the same moment (monorepo#2507): the REST endpoint reported GraphQL used=0,
+# remaining=5000, while `rateLimit` inside a GraphQL query reported used=1182,
+# remaining=3818, with a different reset time. The REST figure is a different
+# pool, so it could never show this script's GraphQL budget running out.
+#
+# REST (core) is still read from `GET /rate_limit`, which is unmetered and is
+# the authoritative figure for REST calls.
+
+# Prints "<remaining> <limit> <resetAt>" for the GraphQL budget this script
+# spends. Returns 1 when no reading could be taken, and 3 when the probe was
+# itself refused on a PRIMARY rate limit: it spends the same pool, so an empty
+# pool can refuse it, and that refusal is the answer. A SECONDARY refusal of the
+# probe says nothing about the primary budget, so it is no reading (1).
+graphql_rate_limit() {
+  local reading err
+  err="$(mktemp)"
+  if reading=$(gh api graphql -f query='query { rateLimit { remaining limit resetAt } }' \
+                 --jq '.data.rateLimit | "\(.remaining) \(.limit) \(.resetAt)"' 2>"$err"); then
+    rm -f "$err"
+    case "${reading%% *}" in
+      ''|*[!0-9]*) return 1 ;;   # a response without a numeric figure is no reading
+    esac
+    printf '%s\n' "$reading"
+    return 0
+  fi
+  if grep -qiE 'rate.limit|RATE_LIMITED' "$err" 2>/dev/null &&
+     ! grep -qiE 'secondary rate limit|submitted too quickly' "$err" 2>/dev/null; then
+    rm -f "$err"
+    return 3
+  fi
+  rm -f "$err"
+  return 1
+}
+
+# True only when the budget is provably gone. Anything unreadable is "not
+# proven", so the caller keeps its original wording rather than guessing.
 gh_budget_exhausted() { # <resource>
-  local remaining
-  remaining=$(gh api rate_limit --jq ".resources.${1}.remaining" 2>/dev/null) || return 1
+  local remaining reading rc=0
+  if [ "$1" = graphql ]; then
+    reading=$(graphql_rate_limit) || rc=$?
+    [ "$rc" -eq 3 ] && return 0
+    [ "$rc" -eq 0 ] || return 1
+    remaining=${reading%% *}
+  else
+    remaining=$(gh api rate_limit --jq ".resources.${1}.remaining" 2>/dev/null) || return 1
+  fi
   case "$remaining" in
     ''|*[!0-9]*) return 1 ;;   # unparseable — do not guess
     *) [ "$remaining" -eq 0 ] ;;
@@ -108,7 +151,7 @@ gh_budget_exhausted() { # <resource>
 # once item-add has succeeded, "nothing was written" is false, and repeating it
 # would hide a status-less item that needs repairing.
 die_gh() { # <resource: graphql|core> <context> <state> <message-for-every-other-cause>
-  local resource="$1" context="$2" state="$3" other="$4" label budget
+  local resource="$1" context="$2" state="$3" other="$4" label budget reading rest
   case "$resource" in
     graphql) label="GraphQL" ;;
     core)    label="REST (core)" ;;
@@ -124,12 +167,20 @@ die_gh() { # <resource: graphql|core> <context> <state> <message-for-every-other
 
   # Either signal is enough: GitHub said so, OR the budget is provably gone.
   if gh_saw_rate_limit || gh_budget_exhausted "$resource"; then
-    # `GET /rate_limit` is itself unmetered, so it still answers precisely when
-    # everything else is refused. Never fatal: a missing figure must not turn a
-    # clear diagnosis into a crash.
-    budget=$(gh api rate_limit \
-               --jq "\"\\(.resources.${resource}.remaining)/\\(.resources.${resource}.limit), resets \\(.resources.${resource}.reset|todate)\"" \
-             2>/dev/null) || budget="figure unavailable"
+    # Quote the figure from the same pool the probe read. Never fatal: a missing
+    # figure must not turn a clear diagnosis into a crash.
+    if [ "$resource" = graphql ]; then
+      if reading=$(graphql_rate_limit); then
+        rest=${reading#* }
+        budget="${reading%% *}/${rest%% *}, resets ${rest#* }"
+      else
+        budget="figure unavailable"
+      fi
+    else
+      budget=$(gh api rate_limit \
+                 --jq "\"\\(.resources.${resource}.remaining)/\\(.resources.${resource}.limit), resets \\(.resources.${resource}.reset|todate)\"" \
+               2>/dev/null) || budget="figure unavailable"
+    fi
     die "${context} — GitHub ${label} RATE LIMIT is exhausted (${budget}).
           ${state}
           This is NOT an auth, scope, or network problem — the credential is fine.
