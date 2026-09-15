@@ -22,16 +22,19 @@ const displayPath = (path) => relative(workspace, path) || path;
 // an emphasised `organisation, location — engagement` line.
 const ROSTER_SECTIONS = new Set(["Professional Experience", "Previous Experience"]);
 
+/** Flattens an MDX node to its plain words, so a heading can be compared with the data. */
 const text = (node) => {
   if (typeof node.value === "string" && (node.type === "text" || node.type === "inlineCode")) return node.value;
   return (node.children || []).map(text).join("");
 };
 
+/** Blanks the frontmatter so its fences are not parsed as Markdown, keeping line numbers intact. */
 const maskAstroFrontmatter = (source) => {
   const frontmatter = source.match(/^(?:﻿)?---[ \t]*\r?\n[\s\S]*?^---[ \t]*(?:\r?\n|$)/m);
   return frontmatter ? frontmatter[0].replace(/[^\r\n]/g, " ") + source.slice(frontmatter[0].length) : source;
 };
 
+/** Collects the document's headings and paragraphs in source order, at any nesting depth. */
 const flowNodes = (tree) => {
   const found = [];
   const visit = (node) => {
@@ -44,6 +47,7 @@ const flowNodes = (tree) => {
   return found;
 };
 
+/** Reads the roles the page states by hand: each title, period, and organisation line. */
 const pageRoster = (tree) => {
   const nodes = flowNodes(tree);
   const roster = [];
@@ -67,6 +71,7 @@ const pageRoster = (tree) => {
   return roster;
 };
 
+/** The same roles as the CV data states them, written the way the page writes them. */
 const dataRoster = (cv) =>
   [...cv.experience, ...cv.earlierExperience].map((role) => ({
     title: role.title,
