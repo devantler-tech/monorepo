@@ -209,6 +209,23 @@ grep -Fq 'refuses partial or capped' "${canonical_surveyor}" ||
   fail "pinned portfolio surveyor does not fail closed on incomplete default-branch CI evidence"
 grep -Fq 'manual dispatch, and GitHub-managed dynamic runs' "${canonical_surveyor}" ||
   fail "pinned portfolio surveyor does not treat managed dynamic runs as default-branch events"
+# A successful filtered API call is not proof that GitHub returned the requested head. The
+# classifier must validate every returned row before the surveyor may report a current-head
+# failure, and hexadecimal case in the requested SHA must not change that identity check.
+# shellcheck disable=SC2016 # jq variables are literal classifier source text.
+grep -Fq '.head_sha != $expected_head_sha or .head_branch != $expected_branch' "${canonical_ci_classifier}" ||
+  fail "pinned default-branch classifier does not reject workflow runs from another head or branch"
+grep -Fq "head_sha=\$(printf '%s' \"\$head_sha\" | tr 'A-F' 'a-f')" "${canonical_ci_classifier}" ||
+  fail "pinned default-branch classifier does not normalize an uppercase requested SHA before comparison"
+# Classifier unavailability is an unknown observation, not evidence of a fire. Preserve the
+# surveyor's three-way verdict while keeping independently known fire and other mandatory-query
+# failures dominant.
+# shellcheck disable=SC2016 # Markdown backticks are literal contract text.
+grep -Fq 'When the classifier exits 2, emit only `QUERY-UNKNOWN step-4-classifier`' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor can replace a failed classifier with unreviewed in-band reads"
+# shellcheck disable=SC2016 # Markdown backticks are literal contract text.
+grep -Fq 'Any other mandatory-query failure also wins as `nothing_on_fire: false`.' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not preserve mandatory-query failure precedence over classifier unknown"
 declared_runtime_asset_sha() {
   jq -er --arg path "$1" '
     .spec.source.requiredRuntimeAssets
