@@ -2012,6 +2012,8 @@ jobs:
         # the Linux runners, so the self-test runs on both.
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # The real check fetches from GitHub; a stalled connection must not hold a required check open.
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
