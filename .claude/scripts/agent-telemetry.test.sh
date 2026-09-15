@@ -692,6 +692,114 @@ mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0' WHERE id = 'agent-improver';"
 
+# ── 5b. hard-coded review-lane rosters (#2401) ────────────────────────────────
+# The Codex loader once kept `CodeRabbit/Codex` after Cursor Bugbot became the third
+# lane, and a PR parked on exhausted lanes while a serving one existed. A loader that
+# names lanes is drift for either sibling; one that points at AGENTS.md is clean.
+codex_loader="$FIX/codex/automations/daily-ai-engineer/automation.toml"
+claude_loader="$FIX/claude-sched/daily-ai-assistant/SKILL.md"
+codex_improver="$FIX/codex/automations/agent-improver/automation.toml"
+claude_improver="$FIX/claude-sched/agent-improver/SKILL.md"
+cp "$codex_loader" "$FIX/codex-roster.bak"
+cp "$claude_loader" "$FIX/claude-roster.bak"
+cp "$codex_improver" "$FIX/codex-improver-roster.bak"
+cp "$claude_improver" "$FIX/claude-improver-roster.bak"
+restore_roster_loaders() {
+  cp "$FIX/codex-roster.bak" "$codex_loader"
+  cp "$FIX/claude-roster.bak" "$claude_loader"
+  cp "$FIX/codex-improver-roster.bak" "$codex_improver"
+  cp "$FIX/claude-improver-roster.bak" "$claude_improver"
+}
+STALE='secure a green review from CodeRabbit/Codex before promoting'
+FULL='lane priority: CodeRabbit > Codex > Cursor Bugbot'
+
+sed "s|^prompt = .*|prompt = \"$STALE\"|" "$FIX/codex-roster.bak" > "$codex_loader"
+printf '%s\n' 'Request a review from CodeRabbit, then @codex review.' >> "$claude_loader"
+OUT=$(run --section drift)
+check "stale two-lane Codex engineer loader is drift"  "$OUT" "DRIFT: codex engineer loader hard-codes review lanes (CodeRabbit, Codex);"
+check "stale two-lane Claude engineer loader is drift" "$OUT" "DRIFT: claude engineer loader hard-codes review lanes (CodeRabbit, Codex);"
+restore_roster_loaders
+
+# Each improver loader is named by its runtime, so a single run proves both: a
+# regression in either one drops its own line.
+printf 'prompt = "%s"\n' "$STALE" >> "$codex_improver"
+printf '%s\n' "$STALE" >> "$claude_improver"
+OUT=$(run --section drift)
+check "stale two-lane Codex improver loader is drift"  "$OUT" "DRIFT: codex improver loader hard-codes review lanes (CodeRabbit, Codex);"
+check "stale two-lane Claude improver loader is drift" "$OUT" "DRIFT: claude improver loader hard-codes review lanes (CodeRabbit, Codex);"
+restore_roster_loaders
+
+# Codex named alone, with review wording on either side of it, is still a roster.
+sed 's/^prompt = .*/prompt = "request a review from Codex before promoting"/' \
+  "$FIX/codex-roster.bak" > "$codex_loader"
+printf '%s\n' 'Use Codex for the current-head review.' >> "$claude_loader"
+OUT=$(run --section drift)
+check "review wording before Codex is drift" "$OUT" "DRIFT: codex engineer loader hard-codes review lanes (Codex);"
+check "review wording after Codex is drift"  "$OUT" "DRIFT: claude engineer loader hard-codes review lanes (Codex);"
+restore_roster_loaders
+
+# Cursor named alone, with review wording on either side, is a lane too.
+sed 's/^prompt = .*/prompt = "request a review from Cursor before promoting"/' \
+  "$FIX/codex-roster.bak" > "$codex_loader"
+printf '%s\n' 'Use Cursor for the current-head review.' >> "$claude_loader"
+OUT=$(run --section drift)
+check "review wording before Cursor is drift" "$OUT" "DRIFT: codex engineer loader hard-codes review lanes (Cursor Bugbot);"
+check "review wording after Cursor is drift"  "$OUT" "DRIFT: claude engineer loader hard-codes review lanes (Cursor Bugbot);"
+restore_roster_loaders
+
+sed "s|^prompt = .*|prompt = \"$FULL\"|" "$FIX/codex-roster.bak" > "$codex_loader"
+OUT=$(run --section drift)
+check "a complete hard-coded roster is still drift" "$OUT" "DRIFT: codex engineer loader hard-codes review lanes (CodeRabbit, Codex, Cursor Bugbot);"
+restore_roster_loaders
+
+# "reviewed" describes vetted boot material, not a review provider, so a thin pointer
+# that loads the reviewed plugin and names its runtime is not roster drift.
+sed 's/^prompt = .*/prompt = "Load the reviewed plugin before starting the Codex routine."/' \
+  "$FIX/codex-roster.bak" > "$codex_loader"
+printf '%s\n' 'Load the reviewed plugin, then hand off to the Cursor automation.' >> "$claude_loader"
+# Naming sibling runtimes together is instance context, not a review roster.
+printf '%s\n' 'The sibling Codex and Cursor instances share the claim protocol.' >> "$claude_improver"
+OUT=$(run --section drift)
+nocheck "\"reviewed\" beside a runtime name is not roster drift" "$OUT" "hard-codes review lanes"
+restore_roster_loaders
+
+# A directory at a loader path passes -r but cannot be inspected; it is UNKNOWN too.
+mv "$codex_improver" "$FIX/codex-improver-dir.bak"
+mkdir "$codex_improver"
+OUT=$(run --section drift)
+check   "a directory at a loader path is reported UNKNOWN"   "$OUT" "UNKNOWN: codex improver loader is missing or unreadable"
+nocheck "a directory at a loader path never yields the all-clear" "$OUT" "no loader hard-codes the review-lane roster"
+rmdir "$codex_improver"
+mv "$FIX/codex-improver-dir.bak" "$codex_improver"
+restore_roster_loaders
+
+# A loader that could not be read was never checked, so the verdict must say so
+# instead of printing the all-clear.
+mv "$codex_improver" "$FIX/codex-improver-missing.bak"
+OUT=$(run --section drift)
+check   "a missing loader is reported UNKNOWN"          "$OUT" "UNKNOWN: codex improver loader is missing or unreadable"
+check   "a missing loader makes the roster check incomplete" "$OUT" "roster check INCOMPLETE: 1 of 4 loaders not inspected"
+nocheck "a missing loader never yields the roster all-clear" "$OUT" "no loader hard-codes the review-lane roster"
+mv "$FIX/codex-improver-missing.bak" "$codex_improver"
+restore_roster_loaders
+
+POINTER='Request reviews in the lane order AGENTS.md#Merge policy defines.'
+sed 's/^prompt = .*/prompt = "request reviews in the lane order AGENTS.md defines; the Codex lane surveys inline"/' \
+  "$FIX/codex-roster.bak" > "$codex_loader"
+printf '%s\n' "$POINTER" >> "$claude_loader"
+printf 'prompt = "%s the Codex improver surveys inline"\n' "$POINTER" >> "$codex_improver"
+printf '%s\n' "$POINTER" >> "$claude_improver"
+OUT=$(run --section drift)
+nocheck "thin-pointer loaders (all four) are not roster drift" "$OUT" "hard-codes review lanes"
+# The Cursor prompt is deployed server-side, so this script never reads a Cursor loader;
+# it states that the lane is unmeasured instead of leaving it out of the report.
+check "cursor lane is reported UNKNOWN, never omitted" "$OUT" "cursor loader: UNKNOWN"
+
+mv "$FIX/codex-roster.bak" "$codex_loader"
+mv "$FIX/claude-roster.bak" "$claude_loader"
+mv "$FIX/codex-improver-roster.bak" "$codex_improver"
+mv "$FIX/claude-improver-roster.bak" "$claude_improver"
+
 # ── 6. clean-state: no false positives when nothing is wrong ──────────────────
 echo
 echo "clean state"

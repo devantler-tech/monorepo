@@ -4692,7 +4692,62 @@ if want drift; then
       fi
     fi
   done
+
+  # A loader that names review lanes carries its own copy of the roster, and that
+  # copy goes stale the moment AGENTS.md adds or reorders a lane: the Codex loader
+  # kept `CodeRabbit/Codex` after Cursor Bugbot became the third lane, and a PR sat
+  # parked ~2 days on exhausted lanes while a serving one existed (#2401). The only
+  # clean shape is a pointer to the contract's roster. A bare "Codex" is the
+  # runtime's own name, so Codex counts as a lane only in a review phrase or when
+  # listed beside another lane.
   echo "    (no output above = loaders agree with the constitution)"
+  echo
+  echo "  hard-coded review-lane roster (loader names lanes instead of pointing at AGENTS.md):"
+  # Labelled by runtime and role: both improver loaders live in an `agent-improver`
+  # directory, and an instance has to know whether the stale prompt is its own
+  # (editable) or its sibling's (report-only).
+  roster_unread=0
+  # "Codex" and "Cursor" are also runtime and product names that a thin pointer may
+  # legitimately use, so they count as a lane only beside review-request wording or
+  # another lane. "review" must be a whole word (review/reviews/reviewer(s)/reviewing):
+  # "reviewed plugin" describes vetted boot material, not a provider. Boundaries are
+  # spelled as character classes because BSD grep on macOS lacks a portable \b.
+  review_near() {
+    printf '(^|[^a-z])review(s|ers?|ing)?[^a-z.][^.]{0,30}%s|%s[^.]{0,30}[^a-z]review(s|ers?|ing)?([^a-z]|$)' "$1" "$1"
+  }
+  # Adjacency counts only beside an unambiguous lane name: "Codex and Cursor" together
+  # usually names sibling instances, not a review roster.
+  codex_lane_re="chatgpt-codex-connector|$(review_near codex)|(coderabbit|bugbot)[^.]{0,20}codex|codex[^.]{0,20}(coderabbit|bugbot)"
+  cursor_lane_re="bugbot|$(review_near cursor)|coderabbit[^.]{0,20}cursor|cursor[^.]{0,20}coderabbit"
+  for entry in "claude engineer|$CLAUDE_LOADER" "claude improver|$CLAUDE_IMPROVER_LOADER" \
+               "codex engineer|$CODEX_LOADER" "codex improver|$CODEX_IMPROVER_LOADER"; do
+    label=${entry%%|*}
+    L=${entry#*|}
+    # An uninspected loader is not a clean one: count it, so the all-clear below can
+    # never stand in for a check that did not run. Read it exactly once, and only as a
+    # regular file — a directory passes `-r` while every grep over it fails silently.
+    if [ ! -f "$L" ] || [ ! -r "$L" ] || ! loader_text=$(cat -- "$L" 2>/dev/null); then
+      roster_unread=$((roster_unread + 1))
+      echo "    UNKNOWN: $label loader is missing or unreadable"
+      continue
+    fi
+    named=""
+    grep -qiE 'coderabbit' <<<"$loader_text" && named="CodeRabbit"
+    grep -qiE "$codex_lane_re" <<<"$loader_text" && named="${named:+$named, }Codex"
+    grep -qiE "$cursor_lane_re" <<<"$loader_text" && named="${named:+$named, }Cursor Bugbot"
+    if [ -n "$named" ]; then
+      echo "    ⚠️  DRIFT: $label loader hard-codes review lanes ($named);"
+      echo "        the roster and its priority belong to AGENTS.md — point at it instead."
+    fi
+  done
+  if [ "$roster_unread" -eq 0 ]; then
+    echo "    (no output above = no loader hard-codes the review-lane roster)"
+  else
+    echo "    roster check INCOMPLETE: $roster_unread of 4 loaders not inspected — not an all-clear"
+  fi
+  # The Cursor lane's prompt is deployed server-side. A version-controlled source
+  # file says what was written, not what is running, so equality is never inferred.
+  echo "    cursor loader: UNKNOWN (deployed prompt is server-side; its source file is not evidence of it)"
 fi
 
 # ── 6. OUTCOMES ───────────────────────────────────────────────────────────────
