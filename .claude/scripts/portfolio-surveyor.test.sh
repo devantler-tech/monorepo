@@ -641,6 +641,15 @@ grep -Fq 'board_coverage=unknown:incomplete-denominator' "${surveyor}" ||
 if grep -Fq 'gh search issues --owner devantler-tech --state open --archived=false' "${surveyor}"; then
   fail "surveyor still prescribes the default-limited gh search issues row set as the denominator"
 fi
+# The open-issue census exceeds any single search cap on every run (monorepo#3357), so it must be
+# read per in-scope repository and reconciled with the org total, never as one capped org-wide call.
+grep -Fq 'gh search issues --repo devantler-tech/<repo> --state open --limit 300' "${surveyor}" ||
+  fail "surveyor does not read the open-issue census per repository, so it truncates on every run"
+grep -Fq 'Reconcile the merged rows with the org' "${surveyor}" ||
+  fail "surveyor does not reconcile the per-repository issue census with the org total_count"
+if grep -Fq 'gh search issues --owner devantler-tech --archived=false --state open --limit 300' "${surveyor}"; then
+  fail "surveyor still prescribes one capped org-wide open-issue call, which truncates on every run"
+fi
 # The assertions above only prove the valid forms are PRESENT. A document carrying the valid template
 # AND a bare numeric row would satisfy every one of them, so bound the output shape from both ends:
 # exactly one digest row, and no board_coverage form outside the measured|unknown grammar.

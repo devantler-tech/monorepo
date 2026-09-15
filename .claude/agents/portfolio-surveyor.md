@@ -95,16 +95,16 @@ public and private — no per-repo loop needed to enumerate):
    red `main`, so folding it into a health field mislabels a backlog gap as breakage. Emit
    `DISCOVERY-TRUNCATED (issues, 300 cap)` on its own line and leave `nothing_on_fire` decided by the
    PR and `main` evidence alone.
-   ⚠️ **But that row still CONSTRAINS the consumer, and saying only what it does not touch left that
-   unstated.** Rungs 2–4 select by severity and then by age, so an incomplete issue set cannot support
-   *"this is the oldest actionable issue"* — the one older than the cap is exactly the one the search
-   dropped. Under this row the orchestrator treats every rung-2/3/4 pick as **provisional**: complete
-   the discovery by partitioning (per repo, or by date range) before claiming an issue as oldest, and
-   never record "oldest actionable" in an artifact on the strength of a truncated read. This bounds
-   *issue selection* only; it is still not breakage and still never moves `nothing_on_fire`.
-2. **Open issues (org-wide, one call) — include `assignees` (claim signal) and `author`
+   ⚠️ **But that row still CONSTRAINS the consumer:** rungs 2–4 pick by severity then age, so under it
+   every rung-2/3/4 pick is **provisional** — never record "oldest actionable" from a truncated read.
+   It bounds issue selection only and still never moves `nothing_on_fire`.
+2. **Open issues, one call PER in-scope repository — include `assignees` (claim signal) and `author`
    (automation-owned filter):**
-   `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,labels,updatedAt,url,assignees`
+   `gh search issues --repo devantler-tech/<repo> --state open --limit 300 --json number,repository,title,author,labels,updatedAt,url,assignees`
+   🔴 **Never one org-wide call: the backlog exceeds the cap on EVERY run** (755 open vs 300 on
+   2026-09-15, each repo below it — monorepo#3357). Reconcile the merged rows with the org
+   `search/issues` `total_count` (`archived:false`; re-read once on a mismatch). A repo returning
+   exactly 300, or a total still unequal, emits `DISCOVERY-TRUNCATED (issues, 300 cap)` naming it.
    (`--archived=false` keeps archived repos' stale PRs/issues — e.g. `data-product`'s 2025 bot PRs —
    out of every survey; archived repos are read-only and carry no actionable signal.)
    (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
@@ -1507,7 +1507,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 
 ### Operate
 - DISCOVERY-TRUNCATED (prs, 300 cap)   # the org PR search returned exactly the cap and could not be completed by partitioning this survey: a rung-1 PR may exist that this digest never saw. REQUIRES `nothing_on_fire: unknown` — `true` asserts no actionable PR is broken, which an incomplete discovery cannot know, and `false` claims a fire nobody observed
-- DISCOVERY-TRUNCATED (issues, 300 cap)   # the org ISSUE search returned exactly the cap. Reported SEPARATELY and does NOT touch `nothing_on_fire`: issues are rungs 2–4, so a missing one delays lower-rung work and says nothing about a broken PR or a red `main`. Emitting it as a fire would mislabel a backlog gap as breakage
+- DISCOVERY-TRUNCATED (issues, 300 cap)   # a per-repo ISSUE search returned exactly the cap, or the org total_count did not reconcile. Reported SEPARATELY and does NOT touch `nothing_on_fire`: issues are rungs 2–4, so a missing one delays lower-rung work and says nothing about a broken PR or a red `main`. Emitting it as a fire would mislabel a backlog gap as breakage
 - CANDIDATE-MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator reads the PR's own disclosure marker: a comment on HIS interactive PR is him steering his own work, not an instruction to the routine
 - CANDIDATE-MAINTAINER-ISSUE-COMMENT <repo> #<n> — `devantler`: "<one-line gist>" → orchestrator decides whether the comment is addressed to it; an issue has no author-disclosure marker, so treat it as a maintainer instruction candidate
 - CANDIDATE-SIBLING-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance

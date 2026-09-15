@@ -168,6 +168,7 @@ allow	gh pr view 2927 --repo devantler-tech/monorepo --json number,isDraft,headR
 allow	gh issue view 108 --repo devantler-tech/agent-plugins --json number,title,state
 allow	gh search prs --owner devantler-tech --state open --limit 100
 allow	gh search issues --owner devantler-tech --state open --limit 100
+allow	gh search issues --repo devantler-tech/monorepo --state open --limit 300 --json number,repository,title,author,labels,updatedAt,url,assignees
 allow	gh search issues --owner devantler-tech --state open --commenter devantler --limit 100
 allow	gh search prs --owner devantler-tech --merged --merged-at "2026-08-01..2026-08-02" --limit 100
 allow	gh run list --repo devantler-tech/monorepo --branch main --limit 50 --json conclusion,path,event
