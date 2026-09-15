@@ -698,39 +698,68 @@ sqlite3 "$CODEX_AUTOMATION_STORE" \
 # names lanes is drift for either sibling; one that points at AGENTS.md is clean.
 codex_loader="$FIX/codex/automations/daily-ai-engineer/automation.toml"
 claude_loader="$FIX/claude-sched/daily-ai-assistant/SKILL.md"
+codex_improver="$FIX/codex/automations/agent-improver/automation.toml"
+claude_improver="$FIX/claude-sched/agent-improver/SKILL.md"
 cp "$codex_loader" "$FIX/codex-roster.bak"
 cp "$claude_loader" "$FIX/claude-roster.bak"
+cp "$codex_improver" "$FIX/codex-improver-roster.bak"
+cp "$claude_improver" "$FIX/claude-improver-roster.bak"
+restore_roster_loaders() {
+  cp "$FIX/codex-roster.bak" "$codex_loader"
+  cp "$FIX/claude-roster.bak" "$claude_loader"
+  cp "$FIX/codex-improver-roster.bak" "$codex_improver"
+  cp "$FIX/claude-improver-roster.bak" "$claude_improver"
+}
+# Both improver loaders report as `agent-improver`, so count the lines to prove
+# each loader contributes its own finding.
+check_count() {
+  local got; got=$(grep -cF -- "$3" <<<"$2" || true)
+  if [ "$got" = "$4" ]; then ok "$1"; else bad "$1" "expected $4 lines of: $3 (got $got)"; fi
+}
+STALE='secure a green review from CodeRabbit/Codex before promoting'
+FULL='lane priority: CodeRabbit > Codex > Cursor Bugbot'
 
-sed 's/^prompt = .*/prompt = "secure a green review from CodeRabbit\/Codex before promoting"/' \
-  "$FIX/codex-roster.bak" > "$codex_loader"
+sed "s|^prompt = .*|prompt = \"$STALE\"|" "$FIX/codex-roster.bak" > "$codex_loader"
 printf '%s\n' 'Request a review from CodeRabbit, then @codex review.' >> "$claude_loader"
 OUT=$(run --section drift)
 check "stale two-lane Codex loader is drift"  "$OUT" "DRIFT: daily-ai-engineer hard-codes review lanes (CodeRabbit, Codex);"
 check "stale two-lane Claude loader is drift" "$OUT" "DRIFT: daily-ai-assistant hard-codes review lanes (CodeRabbit, Codex);"
+restore_roster_loaders
 
-sed 's/^prompt = .*/prompt = "lane priority: CodeRabbit > Codex > Cursor Bugbot"/' \
-  "$FIX/codex-roster.bak" > "$codex_loader"
+printf 'prompt = "%s"\n' "$STALE" >> "$codex_improver"
 OUT=$(run --section drift)
-check "a complete hard-coded roster is still drift" "$OUT" "DRIFT: daily-ai-engineer hard-codes review lanes (CodeRabbit, Codex, Cursor Bugbot);"
+check_count "stale two-lane Codex improver loader is drift" "$OUT" "DRIFT: agent-improver hard-codes review lanes (CodeRabbit, Codex);" 1
+restore_roster_loaders
 
+printf '%s\n' "$STALE" >> "$claude_improver"
+OUT=$(run --section drift)
+check_count "stale two-lane Claude improver loader is drift" "$OUT" "DRIFT: agent-improver hard-codes review lanes (CodeRabbit, Codex);" 1
+restore_roster_loaders
+
+sed "s|^prompt = .*|prompt = \"$FULL\"|" "$FIX/codex-roster.bak" > "$codex_loader"
+printf 'prompt = "%s"\n' "$FULL" >> "$codex_improver"
+printf '%s\n' "$FULL" >> "$claude_improver"
+OUT=$(run --section drift)
+check       "a complete hard-coded roster is still drift" "$OUT" "DRIFT: daily-ai-engineer hard-codes review lanes (CodeRabbit, Codex, Cursor Bugbot);"
+check_count "both improver loaders report a complete hard-coded roster" "$OUT" "DRIFT: agent-improver hard-codes review lanes (CodeRabbit, Codex, Cursor Bugbot);" 2
+restore_roster_loaders
+
+POINTER='Request reviews in the lane order AGENTS.md#Merge policy defines.'
 sed 's/^prompt = .*/prompt = "request reviews in the lane order AGENTS.md defines; the Codex lane surveys inline"/' \
   "$FIX/codex-roster.bak" > "$codex_loader"
-cp "$FIX/claude-roster.bak" "$claude_loader"
-printf '%s\n' 'Request reviews in the lane order AGENTS.md#Merge policy defines.' >> "$claude_loader"
+printf '%s\n' "$POINTER" >> "$claude_loader"
+printf 'prompt = "%s the Codex improver surveys inline"\n' "$POINTER" >> "$codex_improver"
+printf '%s\n' "$POINTER" >> "$claude_improver"
 OUT=$(run --section drift)
-nocheck "thin-pointer loaders are not roster drift" "$OUT" "hard-codes review lanes"
-
-# The Cursor prompt is deployed server-side, so a version-controlled source that
-# names lanes must neither be read as that prompt nor let it read as clean.
-mkdir -p "$FIX/monorepo/.claude/loaders"
-printf '%s\n' 'secure a green review from CodeRabbit/Codex' > "$FIX/monorepo/.claude/loaders/cursor-automation.md"
-OUT=$(run --section drift)
-check   "cursor lane stays UNKNOWN"                           "$OUT" "cursor loader: UNKNOWN"
-nocheck "cursor source file is not read as the deployed prompt" "$OUT" "DRIFT: loaders"
-rm -rf "$FIX/monorepo/.claude/loaders"
+nocheck "thin-pointer loaders (all four) are not roster drift" "$OUT" "hard-codes review lanes"
+# The Cursor prompt is deployed server-side, so this script never reads a Cursor loader;
+# it states that the lane is unmeasured instead of leaving it out of the report.
+check "cursor lane is reported UNKNOWN, never omitted" "$OUT" "cursor loader: UNKNOWN"
 
 mv "$FIX/codex-roster.bak" "$codex_loader"
 mv "$FIX/claude-roster.bak" "$claude_loader"
+mv "$FIX/codex-improver-roster.bak" "$codex_improver"
+mv "$FIX/claude-improver-roster.bak" "$claude_improver"
 
 # ── 6. clean-state: no false positives when nothing is wrong ──────────────────
 echo
