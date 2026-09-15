@@ -16,13 +16,14 @@
 #     PENDING_REVIEW, the SAME status healthy runs carry. Status cannot discriminate.
 #   - `last_run_at` records that a dispatch STARTED, never that it ran.
 #
-# READ-ONLY, and deliberately NARROW in what it reads. It selects run timings and a computed
-# inbox-presence FLAG only — never `last_error`, `inbox_summary`, `thread_title`, or any archived
+# READ-ONLY, and deliberately NARROW in what it reads. From the store it selects run timings, a computed
+# inbox-presence FLAG, and the thread id that locates a run's outcome record — never `last_error`,
+# `inbox_summary`, `thread_title`, or any archived
 # message. The cause of a stall is frequently private runtime state (billing, credentials, account
 # posture); this check is about the deployment being BLIND, so it must stay generic across causes and
 # must not be able to carry such state into a repository artifact or a run report.
 #
-# Usage: codex-lane-liveness.sh [--store PATH] [--automation ID] [--grace-seconds N]
+# Usage: codex-lane-liveness.sh [--store PATH] [--sessions DIR] [--automation ID] [--grace-seconds N]
 #                              [--stub-seconds N] [--consecutive N] [--now-ms MS] [--quiet]
 #
 # Exit 0  every ACTIVE automation checked has a healthy run among its newest settled runs
@@ -44,6 +45,22 @@
 # apart from a long run that never wrote one. That third class is exit 2, never exit 0
 # (monorepo#3287). So the window has three outcomes, not two: every run a stub is exit 1, any run
 # unproven is exit 2, and only an inbox item anywhere in the window is exit 0.
+#
+# CAUSE CLASS (monorepo#2908). A NOT-PRODUCING verdict names a bounded cause class taken from the
+# runtime's own per-turn outcome record: the `codex_error_info` classifier of the stub's rollout under
+# `--sessions` (default: the `sessions` directory beside the store's parent). ONLY that classifier is
+# read, and it is mapped to a fixed class — `quota/billing` for `usage_limit_exceeded`, `unknown` for
+# anything else, a missing record, or an unusable thread id. The operator-facing text beside it
+# carries reset times and account detail, so it is never selected and never printed.
+#
+# ACCOUNT SCOPE. A `quota/billing` refusal is per ACCOUNT, and every automation in this store shares
+# one. Measured 2026-09-15: `daily-ai-engineer` showed 12 consecutive refusals while `agent-improver`
+# read OK, because the older of its two newest settled runs was still healthy — its own newest run was
+# the same 3-second refusal. So when ANY active automation's newest settled run is such a refusal and
+# no automation has produced output since, every automation without a producing run after that
+# refusal is NOT-PRODUCING, whichever automation the caller asked about. A producing run anywhere on
+# the account after the refusal clears it. An unfindable cause never escalates: it leaves the
+# per-automation verdict exactly as it was.
 
 set -Eeuo pipefail
 
@@ -53,6 +70,7 @@ set -Eeuo pipefail
 trap 'ec=$?; [ "$ec" -eq 0 ] || exit 2' ERR
 
 STORE="${CODEX_HOME:-$HOME/.codex}/sqlite/codex-dev.db"
+SESSIONS=""
 AUTOMATION=""
 # Tracked separately from the value, because `--automation ""` is a REQUEST for one automation that
 # happens to be empty, not an absent flag. Testing the value alone would silently widen that request
@@ -85,6 +103,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
     --store) [ "$#" -ge 2 ] || die_unknown "--store needs a value"; STORE="$2"; shift 2 ;;
+    --sessions) [ "$#" -ge 2 ] || die_unknown "--sessions needs a value"; SESSIONS="$2"; shift 2 ;;
     --automation) [ "$#" -ge 2 ] || die_unknown "--automation needs a value"; AUTOMATION="$2"; AUTOMATION_SET=1; shift 2 ;;
     --grace-seconds) [ "$#" -ge 2 ] || die_unknown "--grace-seconds needs a value"; GRACE_SECONDS="$2"; shift 2 ;;
     --stub-seconds) [ "$#" -ge 2 ] || die_unknown "--stub-seconds needs a value"; STUB_SECONDS="$2"; shift 2 ;;
@@ -124,6 +143,31 @@ command -v sqlite3 >/dev/null 2>&1 || die_unknown "sqlite3 is not available"
 [ -f "$STORE" ] || die_unknown "scheduler store not found: $STORE"
 [ -r "$STORE" ] || die_unknown "scheduler store is not readable: $STORE"
 
+if [ -z "$SESSIONS" ]; then
+  SESSIONS="$(dirname -- "$(dirname -- "$STORE")")/sessions"
+fi
+
+# cause_class <thread_id> — prints a BOUNDED class and always returns 0.
+# The mapping is an exact match on purpose: a prefix-extended or reworded classifier is `unknown`,
+# because only a recognised account-scoped value may escalate a verdict. Every lookup failure lands on
+# `unknown` too, which leaves the per-automation verdict exactly as it would have been without this.
+# `find -print -quit` rather than a pipe into `head`: under pipefail a SIGPIPE would discard the path.
+cause_class() {
+  local tid=$1 rec="" raw=""
+  case "$tid" in ''|*[!A-Za-z0-9-]*) printf 'unknown'; return 0 ;; esac
+  if ! command -v jq >/dev/null 2>&1 || [ ! -d "$SESSIONS" ]; then printf 'unknown'; return 0; fi
+  rec=$(find "$SESSIONS" -type f -name "rollout-*-${tid}.jsonl" -print -quit 2>/dev/null) || rec=""
+  if [ -n "$rec" ]; then
+    raw=$(jq -r 'select(.payload?.type? == "task_complete") | .payload.error?.codex_error_info? // empty' \
+      "$rec" 2>/dev/null) || raw=""
+    raw=${raw##*$'\n'}
+  fi
+  case "$raw" in
+    usage_limit_exceeded) printf 'quota/billing' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
 # Open read-only. The sibling lane may be mid-dispatch, and *Obligations* forbids a change that could
 # break a sibling in flight; a read-only URI cannot create the -wal/-shm files a plain open would.
 #
@@ -148,7 +192,7 @@ probe=$(sq "SELECT 1,2;") || die_unknown "scheduler store probe query failed"
 # one case the check exists for.
 for spec in "automations:id" "automations:status" "automation_runs:automation_id" \
             "automation_runs:status" "automation_runs:created_at" "automation_runs:updated_at" \
-            "automation_runs:inbox_title"; do
+            "automation_runs:inbox_title" "automation_runs:thread_id"; do
   tbl=${spec%%:*}; col=${spec#*:}
   have=$(sq "SELECT COUNT(*) FROM pragma_table_info('${tbl}') WHERE name='${col}';") \
     || die_unknown "could not read schema for ${tbl}"
@@ -183,6 +227,52 @@ have=$(sq "SELECT COUNT(*) FROM pragma_table_info('automations') WHERE name='nex
 [ "${have:-0}" = "1" ] || die_unknown "unexpected schema: automations.next_run_at is missing"
 
 settled_before=$(( NOW_MS - GRACE_SECONDS * 1000 ))
+
+# Account-scope pre-pass over EVERY active automation, whatever --automation named: the Improver's
+# cross-read asks about one automation, and the refusal that decides its verdict may sit on another.
+# acct_ms is the newest account-scoped refusal that is some automation's newest settled run. A skipped
+# row here only fails to ESCALATE, so it cannot turn a verdict healthy; the main loop still reports it.
+acct_ms=0
+acct_src=""
+stub_limit_ms=$(( STUB_SECONDS * 1000 ))
+all_ids=$(sq "SELECT id FROM automations WHERE status='ACTIVE' ORDER BY id;") \
+  || die_unknown "could not enumerate automations"
+while IFS= read -r aid; do
+  case "$aid" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+  newest=$(sq "SELECT created_at, (updated_at - created_at),
+                      CASE WHEN inbox_title IS NULL OR trim(inbox_title) = '' THEN 1 ELSE 0 END,
+                      COALESCE(thread_id, '')
+               FROM automation_runs
+               WHERE automation_id = '${aid}'
+                 AND status != 'IN_PROGRESS'
+                 AND updated_at <= ${settled_before}
+               ORDER BY updated_at DESC
+               LIMIT 1;") || die_unknown "could not read runs for ${aid}"
+  IFS='|' read -r n_created n_dur n_noinbox n_tid <<EOF
+$newest
+EOF
+  case "$n_created" in ''|*[!0-9]*) continue ;; esac
+  case "$n_dur" in ''|*[!0-9]*) continue ;; esac
+  [ "$n_noinbox" = "1" ] || continue
+  [ "$n_dur" -le "$stub_limit_ms" ] || continue
+  [ "$(cause_class "$n_tid")" = "quota/billing" ] || continue
+  if [ "$n_created" -gt "$acct_ms" ]; then acct_ms=$n_created; acct_src=$aid; fi
+done <<EOF
+$all_ids
+EOF
+
+# A producing run ANYWHERE on the account after that refusal means the account has cleared.
+if [ "$acct_ms" -gt 0 ]; then
+  produced_since=$(sq "SELECT COUNT(*) FROM automation_runs r JOIN automations a ON a.id = r.automation_id
+                       WHERE a.status = 'ACTIVE'
+                         AND r.status != 'IN_PROGRESS'
+                         AND r.updated_at <= ${settled_before}
+                         AND r.inbox_title IS NOT NULL AND trim(r.inbox_title) != ''
+                         AND r.created_at > ${acct_ms};") \
+    || die_unknown "could not read account-wide production"
+  case "$produced_since" in ''|*[!0-9]*) die_unknown "unparsable account-wide production count" ;; esac
+  if [ "$produced_since" -gt 0 ]; then acct_ms=0; acct_src=""; fi
+fi
 # Tracked as two independent flags rather than one severity counter. A counter invites the ordering
 # bug this had on its first run: a later unjudgeable lane overwrote an already-detected dead lane,
 # downgrading a real verdict to UNKNOWN purely because of the order automations were enumerated in.
@@ -244,7 +334,8 @@ while IFS= read -r id; do
   # and be counted a stub — a run that is genuinely over the threshold classified as under it, which
   # is the direction that produces a false NOT-PRODUCING on a healthy lane.
   rows=$(sq "SELECT (updated_at - created_at) AS dur_ms,
-                    CASE WHEN inbox_title IS NULL OR trim(inbox_title) = '' THEN 1 ELSE 0 END AS no_inbox
+                    CASE WHEN inbox_title IS NULL OR trim(inbox_title) = '' THEN 1 ELSE 0 END AS no_inbox,
+                    COALESCE(thread_id, '') AS tid
              FROM automation_runs
              WHERE automation_id = '${id}'
                AND status != 'IN_PROGRESS'
@@ -259,7 +350,8 @@ while IFS= read -r id; do
   maxdur_ms=-1
   malformed=0
   stub_ms=$(( STUB_SECONDS * 1000 ))
-  while IFS='|' read -r dur_ms no_inbox; do
+  newest_tid=""
+  while IFS='|' read -r dur_ms no_inbox tid; do
     [ -n "$dur_ms" ] || continue
     n=$(( n + 1 ))
     # BOTH fields are validated. An unparsable value must never fall through to the healthy verdict:
@@ -276,6 +368,7 @@ while IFS= read -r id; do
     esac
     # An `[ ... ] && x=y` here would return non-zero whenever the test is false and abort the loop
     # under `set -e`, so the assignment is written as a full conditional.
+    if [ "$n" -eq 1 ]; then newest_tid=$tid; fi
     if [ "$dur_ms" -gt "$maxdur_ms" ]; then maxdur_ms=$dur_ms; fi
     # A run that wrote no inbox item produced no recorded output. The DURATION only says how it got
     # there: inside the stub window it died at dispatch, which is the diagnosable signature the
@@ -297,6 +390,18 @@ while IFS= read -r id; do
 $rows
 EOF
 
+  # This automation's newest PRODUCING run, needed only while an account-scoped refusal is live.
+  own_prod=0
+  if [ "$acct_ms" -gt 0 ]; then
+    own_prod=$(sq "SELECT COALESCE(MAX(created_at), 0) FROM automation_runs
+                   WHERE automation_id = '${id}'
+                     AND status != 'IN_PROGRESS'
+                     AND updated_at <= ${settled_before}
+                     AND inbox_title IS NOT NULL AND trim(inbox_title) != '';") \
+      || die_unknown "could not read production for ${id}"
+    case "$own_prod" in ''|*[!0-9]*) die_unknown "unparsable production time for ${id}" ;; esac
+  fi
+
   if [ "$malformed" -eq 1 ]; then
     report="${report}  UNKNOWN  ${id} — unparsable run row, cannot judge
 "
@@ -306,7 +411,13 @@ EOF
 "
     any_unknown=1
   elif [ "$stubs" -eq "$n" ]; then
-    report="${report}  NOT-PRODUCING  ${id} — newest ${n} settled runs all ended within ${STUB_SECONDS}s with no inbox item
+    report="${report}  NOT-PRODUCING  ${id} — newest ${n} settled runs all ended within ${STUB_SECONDS}s with no inbox item (cause=$(cause_class "$newest_tid"))
+"
+    any_dead=1
+  elif [ "$acct_ms" -gt 0 ] && [ "$own_prod" -lt "$acct_ms" ]; then
+    # Ordered BEFORE the unproven and OK branches: a live account-scoped refusal is proof, and a healthy
+    # older run in the window is exactly the evidence that refusal has already superseded.
+    report="${report}  NOT-PRODUCING  ${id} — no run has produced output since an account-scoped refusal (cause=quota/billing) on ${acct_src}
 "
     any_dead=1
   elif [ "$indeterminate" -gt 0 ]; then

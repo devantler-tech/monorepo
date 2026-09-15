@@ -897,8 +897,10 @@ Run [`.claude/scripts/codex-lane-liveness.sh`](.claude/scripts/codex-lane-livene
 liveness question. It classifies each ACTIVE automation's newest **settled** runs by run duration and
 inbox-item presence — the discriminators that actually separate the two states (healthy runs measured
 768–24,428 s with an inbox item, against 4-second stubs with none) — and exits `0` producing, `1` not
-producing, `2` **UNKNOWN**. It reads only timings and an inbox-presence flag, never a run's error
-payload, so it stays generic across causes and cannot carry private runtime state into an artifact.
+producing, `2` **UNKNOWN**. From the scheduler store it reads only timings and an inbox-presence flag, never a run's error
+payload. From a stub's own outcome record it reads exactly one field, the `codex_error_info`
+classifier, and prints it as a bounded cause class (`cause=quota/billing` or `cause=unknown`), never
+the text beside it — so it cannot carry private runtime state into an artifact (monorepo#2908).
 🔴 **A lane that stops DISPATCHING has no new runs to classify, so the check reads `next_run_at`
 first.** An ACTIVE automation whose scheduled next run is overdue by more than the grace window is a
 `1` whatever its older runs look like, and a missing next-run time is a `2`. Without this, the newest
@@ -955,6 +957,14 @@ account as not producing until the cause clears. An undetermined scope is **UNKN
 a positive assertion of health for a lane whose remaining dispatches are already guaranteed to die is
 worse than silence, and it is the same absence-as-evidence class as reading `last_run_at`, one level
 down.
+**The check now applies the recognised case itself** (monorepo#2908). When any active automation's
+newest settled run is a `quota/billing` refusal and nothing on the account has produced output
+since, every automation without a producing run after that refusal reports `NOT-PRODUCING`, whichever
+one `--automation` named. A producing run anywhere on the account afterwards clears it. Measured
+2026-09-15: `agent-improver` read `OK` beside 12 consecutive `daily-ai-engineer` refusals while its
+own newest run was the same 3-second refusal; the check now reports both. A cause it cannot classify
+is `unknown` and escalates nothing, so an `OK` beside an unclassified `NOT-PRODUCING` still carries the
+caution above.
 
 A native scheduler without a supported local write surface requires its documented control plane
 and authoritative read-back. Editing the portable loader source does not update a deployed prompt.
