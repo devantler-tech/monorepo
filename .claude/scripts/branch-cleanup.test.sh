@@ -630,11 +630,17 @@ git -C "$work" checkout -q main
 : >"$OPEN_HEADS_FILE"
 printf '%s\tMERGED\t%s\n' "claude/query-failure-survives-2511" "$q_sha" >"$PR_EVIDENCE_FILE"
 fq_slug=monorepo
-run_failing_query() { # <state> <stderr> <case>
+# run_failing_query <state> <stderr> <case>
+#   Runs an apply-mode sweep whose <state> list query fails with <stderr>, against a
+#   fresh seeded manifest. Sets $out, $rc, $manifest and $before for the assertions.
+run_failing_query() {
   manifest="$tmp/manifest-2511-$3"; printf 'seed-row\n' >"$manifest"; before=$(cksum "$manifest")
   out="$(GH_FAIL_STATE="$1" GH_FAIL_STDERR="$2" "$helper" "$work" "$fq_slug" "$manifest" apply claude 2>&1)" && rc=0 || rc=$?
 }
-assert_failed_closed() { # <case>
+# assert_failed_closed <case>
+#   Asserts the last run_failing_query aborted, left the manifest untouched, kept the
+#   evidence-backed remote branch, and named devantler-tech/$fq_slug on its ABORT line.
+assert_failed_closed() {
   report "$1: sweep aborts (#2511)" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
   report "$1: manifest byte-identical (#2511)" "$([[ "$before" == "$(cksum "$manifest")" ]] && echo yes || echo no)" "out=$out"
   report "$1: evidence-backed remote ref survives (#2511)" \
@@ -644,7 +650,9 @@ assert_failed_closed() { # <case>
   report "$1: abort line names the queried repository (#2511)" \
     "$(grep -F "ABORT — " <<<"$out" | grep -Fq "for 'devantler-tech/$fq_slug'" && echo yes || echo no)" "out=$out"
 }
+# has <text>: prints "yes" when the last sweep's output contains <text>, else "no".
 has() { grep -Fq "$1" <<<"$out" && echo yes || echo no; }
+# lacks <text>: prints "yes" when the last sweep's output does not contain <text>, else "no".
 lacks() { grep -Fq "$1" <<<"$out" && echo no || echo yes; }
 
 run_failing_query open "GraphQL: Could not resolve to a Repository with the name 'devantler-tech/monorepo'. (repository)" notfound
