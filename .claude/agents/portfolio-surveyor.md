@@ -1070,7 +1070,13 @@ public and private — no per-repo loop needed to enumerate):
    default-branch classification and its required runtime helper; this consumer carries no second
    implementation. For every mapped repository the deployment names that branch `main`, invokes the
    installed reviewed helper exactly as the generic role prescribes, and treats any helper error as
-   `QUERY-UNKNOWN`. **Resolve the helper's installed path first** (ported verbatim from the reviewed
+   unavailable evidence. When the classifier exits 2, emit only `QUERY-UNKNOWN step-4-classifier`;
+   do not issue substitute in-band forge reads, and do not derive `nothing_on_fire: false` from that
+   unknown result. A classifier failure produces `nothing_on_fire: unknown` only when no completed
+   signal independently establishes fire and no other mandatory query failed.
+   Any other mandatory-query failure also wins as `nothing_on_fire: false`. Any independently known
+   fire still wins as `nothing_on_fire: false`. **Resolve the helper's installed path first** (ported
+   verbatim from the reviewed
    plugin surveyor, because an overlay dispatch never loads that text — monorepo#3338): submit
    **one** bare `classify-default-branch-ci-runs.sh` probe through the active read-only guard. The
    probe stays denied and executes nothing; the refusal carries one `classifier-path-json:` record
@@ -1499,7 +1505,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false|unknown>   # true only if NO CI red on main AND no actionable PR broken, whoever authored it; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does. 🔴 EMIT `unknown` WHENEVER ANY `QUERY-UNKNOWN`, `NOT-DEEPENED (budget)`, `NOT-DEEPENED (next-shard)`, OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS (the issue-truncation row never affects this field): `true` asserts that no actionable PR is broken, which a survey that never assessed those PRs cannot know. `false` is equally wrong — it claims a fire nobody observed. `unknown` is the only honest value. It blocks declaring the portfolio healthy and blocks issue descent; it does not block acting on fully joined deepened rows.
+nothing_on_fire: <true|false|unknown>   # false when a known CI/PR fire or any mandatory-query failure other than the step-4 classifier exists; unknown when the step-4 classifier alone failed without a known fire, or when `NOT-DEEPENED (budget)`, `NOT-DEEPENED (next-shard)`, or `DISCOVERY-TRUNCATED (prs, 300 cap)` leaves fire evidence unassessed; otherwise true only if NO CI red on main, no actionable PR is broken, and the evidence is complete. A GITHUB-MANAGED-SCAN (NO-ACTION) specialisation is equivalent: a GITHUB-MANAGED (NO-ACTION) line never makes this false, but a (REPEATED — ACTIONABLE) one does; the issue-truncation row never affects this field. Unknown blocks declaring the portfolio healthy and issue descent; it does not block acting on fully joined deepened rows.
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 

@@ -226,6 +226,14 @@ grep -Fq 'When the classifier exits 2, emit only `QUERY-UNKNOWN step-4-classifie
 # shellcheck disable=SC2016 # Markdown backticks are literal contract text.
 grep -Fq 'Any other mandatory-query failure also wins as `nothing_on_fire: false`.' "${canonical_surveyor}" ||
   fail "pinned portfolio surveyor does not preserve mandatory-query failure precedence over classifier unknown"
+# The legacy consumer overlay remains on the deployed path until its migration is complete. It must
+# not shadow the reviewed plugin with the superseded Boolean rule.
+# shellcheck disable=SC2016 # Markdown backticks are literal contract text.
+grep -Fq 'When the classifier exits 2, emit only `QUERY-UNKNOWN step-4-classifier`' "${surveyor_agent}" ||
+  fail "consumer portfolio-surveyor overlay does not preserve classifier failure as unavailable evidence"
+# shellcheck disable=SC2016 # Markdown backticks are literal contract text.
+grep -Fq 'Any other mandatory-query failure also wins as `nothing_on_fire: false`.' "${surveyor_agent}" ||
+  fail "consumer portfolio-surveyor overlay can let classifier unknown mask another mandatory-query failure"
 declared_runtime_asset_sha() {
   jq -er --arg path "$1" '
     .spec.source.requiredRuntimeAssets
