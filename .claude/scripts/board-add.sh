@@ -95,8 +95,9 @@ gh_saw_rate_limit() {
 
 # Prints "<remaining> <limit> <resetAt>" for the GraphQL budget this script
 # spends. Returns 1 when no reading could be taken, and 3 when the probe was
-# itself refused on a rate limit: it spends the same pool, so an empty pool can
-# refuse it, and that refusal is the answer.
+# itself refused on a PRIMARY rate limit: it spends the same pool, so an empty
+# pool can refuse it, and that refusal is the answer. A SECONDARY refusal of the
+# probe says nothing about the primary budget, so it is no reading (1).
 graphql_rate_limit() {
   local reading err
   err="$(mktemp)"
@@ -109,7 +110,8 @@ graphql_rate_limit() {
     printf '%s\n' "$reading"
     return 0
   fi
-  if grep -qiE 'rate.limit|RATE_LIMITED' "$err" 2>/dev/null; then
+  if grep -qiE 'rate.limit|RATE_LIMITED' "$err" 2>/dev/null &&
+     ! grep -qiE 'secondary rate limit|submitted too quickly' "$err" 2>/dev/null; then
     rm -f "$err"
     return 3
   fi

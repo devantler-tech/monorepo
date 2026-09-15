@@ -370,6 +370,17 @@ check "…and says no figure could be read" 2 "$rc" "$out" "figure unavailable"
 STUB_FAIL_ON="project metadata" STUB_FAIL_STDERR="$RL" STUB_GQL_REMAINING=null run "$URL"
 check "non-numeric probe figure is not quoted" 2 "$rc" "$out" "figure unavailable"
 
+# A SECONDARY refusal of the probe says nothing about the primary budget, even
+# though its wording contains "rate limit". The caller's original wording stands.
+STUB_FAIL_ON="project metadata" STUB_FAIL_STDERR="unknown owner type" STUB_GQL_PROBE_FAIL="You have exceeded a secondary rate limit" run "$URL"
+check "secondary-limited probe keeps the old wording" 2 "$rc" "$out" "auth, network, or scope"
+if grep -qF "RATE LIMIT is exhausted" <<<"$out"; then
+  printf 'FAIL a secondary-limited probe was reported as primary exhaustion\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   a secondary-limited probe is not primary exhaustion\n'; pass=$((pass + 1))
+fi
+
 # NEGATIVE CONTROL: a probe that fails for any OTHER reason proves nothing, so
 # the caller's original wording stands.
 STUB_FAIL_ON="project metadata" STUB_FAIL_STDERR="unknown owner type" STUB_GQL_PROBE_FAIL="connection reset" run "$URL"
