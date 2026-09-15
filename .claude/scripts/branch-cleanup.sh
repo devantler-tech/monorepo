@@ -350,15 +350,44 @@ manifest_write() {
   fi
 }
 
+# Name a failed gh query's cause class from its stderr, so an abort is diagnosable
+# from the message alone (monorepo#2511). A missing repository or bad credentials
+# fail identically on every retry; a rate limit or transport failure is worth
+# retrying. The class only shapes the message: every caller still aborts.
+gh_failure_reason() { # <stderr-file>
+  local err
+  err=$(tr '[:upper:]' '[:lower:]' <"$1" 2>/dev/null || true)
+  case "$err" in
+    *"rate limit"*|*"abuse detection"*|*"http 429"*|*"http 5"[0-9][0-9]*|*"timeout"*|*"timed out"*|*"error connecting"*|*"connection reset"*|*"connection refused"*|*"dial tcp"*|*"tls handshake"*|*"no such host"*|*"unexpected eof"*)
+      echo "transient API or transport failure (retryable)" ;;
+    *"could not resolve to a repository"*|*"http 404"*|*"not found"*)
+      # GitHub answers the same way for a missing repository and for one these
+      # credentials cannot see, so the class names both.
+      echo "repository not found or not visible to these credentials (check <slug>; a retry will not help)" ;;
+    *"http 401"*|*"bad credentials"*|*"authentication"*|*"gh auth login"*|*"http 403"*|*"resource not accessible"*)
+      echo "authentication failed or access denied (fix credentials; a retry will not help)" ;;
+    *) echo "unclassified failure (see the gh output below)" ;;
+  esac
+}
+
+# Abort on a failed gh query, naming what was queried and why it failed.
+abort_gh_query() { # <what> <stderr-file> <consequence>
+  echo "$SLUG: ABORT — $1 for 'devantler-tech/$SLUG' failed: $(gh_failure_reason "$2"); $3" >&2
+  echo "  gh: $(head -n 1 "$2" 2>/dev/null | cut -c1-200)" >&2
+  rm -f "$2"
+  exit 1
+}
+
 # Fetch the open-PR head list; ABORT on failure (an empty keep-set on a failed
 # query is the catastrophic fail-open: it would delete every open PR's branch).
 fetch_open_heads() {
-  local out
+  local out errf
+  errf=$(mktemp)
   if ! out=$(gh pr list --repo "devantler-tech/$SLUG" --state open --limit 300 \
-      --json headRefName --jq '.[].headRefName' 2>/dev/null); then
-    echo "$SLUG: ABORT — open-PR query failed; keep-set cannot be trusted" >&2
-    exit 1
+      --json headRefName --jq '.[].headRefName' 2>"$errf"); then
+    abort_gh_query "open-PR query" "$errf" "keep-set cannot be trusted"
   fi
+  rm -f "$errf"
   printf '%s\n' "$out"
 }
 
@@ -385,12 +414,13 @@ fi
 # newest-first per branch: state + the head SHA the PR evidence belongs to.
 # Bounded evidence is FAIL-CLOSED: a merged PR older than the newest 1000
 # results yields "no evidence" => KEEP/candidate, never a deletion.
+prs_err=$(mktemp)
 if ! gh pr list --repo "devantler-tech/$SLUG" --state all --limit 1000 \
     --json headRefName,state,headRefOid,headRepositoryOwner \
-    --jq '.[]|select(.headRepositoryOwner.login=="devantler-tech")|"\(.headRefName)\t\(.state)\t\(.headRefOid)"' 2>/dev/null >"$prs"; then
-  echo "$SLUG: ABORT — PR-state query failed; remote evidence unavailable" >&2
-  exit 1
+    --jq '.[]|select(.headRepositoryOwner.login=="devantler-tech")|"\(.headRefName)\t\(.state)\t\(.headRefOid)"' 2>"$prs_err" >"$prs"; then
+  abort_gh_query "PR-state query" "$prs_err" "remote evidence unavailable"
 fi
+rm -f "$prs_err"
 
 is_kept() { grep -Fxq "$1" "$keep"; }
 
