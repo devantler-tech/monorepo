@@ -738,9 +738,39 @@ check "review wording before Codex is drift" "$OUT" "DRIFT: codex engineer loade
 check "review wording after Codex is drift"  "$OUT" "DRIFT: claude engineer loader hard-codes review lanes (Codex);"
 restore_roster_loaders
 
+# Cursor named alone, with review wording on either side, is a lane too.
+sed 's/^prompt = .*/prompt = "request a review from Cursor before promoting"/' \
+  "$FIX/codex-roster.bak" > "$codex_loader"
+printf '%s\n' 'Use Cursor for the current-head review.' >> "$claude_loader"
+OUT=$(run --section drift)
+check "review wording before Cursor is drift" "$OUT" "DRIFT: codex engineer loader hard-codes review lanes (Cursor Bugbot);"
+check "review wording after Cursor is drift"  "$OUT" "DRIFT: claude engineer loader hard-codes review lanes (Cursor Bugbot);"
+restore_roster_loaders
+
 sed "s|^prompt = .*|prompt = \"$FULL\"|" "$FIX/codex-roster.bak" > "$codex_loader"
 OUT=$(run --section drift)
 check "a complete hard-coded roster is still drift" "$OUT" "DRIFT: codex engineer loader hard-codes review lanes (CodeRabbit, Codex, Cursor Bugbot);"
+restore_roster_loaders
+
+# "reviewed" describes vetted boot material, not a review provider, so a thin pointer
+# that loads the reviewed plugin and names its runtime is not roster drift.
+sed 's/^prompt = .*/prompt = "Load the reviewed plugin before starting the Codex routine."/' \
+  "$FIX/codex-roster.bak" > "$codex_loader"
+printf '%s\n' 'Load the reviewed plugin, then hand off to the Cursor automation.' >> "$claude_loader"
+# Naming sibling runtimes together is instance context, not a review roster.
+printf '%s\n' 'The sibling Codex and Cursor instances share the claim protocol.' >> "$claude_improver"
+OUT=$(run --section drift)
+nocheck "\"reviewed\" beside a runtime name is not roster drift" "$OUT" "hard-codes review lanes"
+restore_roster_loaders
+
+# A directory at a loader path passes -r but cannot be inspected; it is UNKNOWN too.
+mv "$codex_improver" "$FIX/codex-improver-dir.bak"
+mkdir "$codex_improver"
+OUT=$(run --section drift)
+check   "a directory at a loader path is reported UNKNOWN"   "$OUT" "UNKNOWN: codex improver loader is missing or unreadable"
+nocheck "a directory at a loader path never yields the all-clear" "$OUT" "no loader hard-codes the review-lane roster"
+rmdir "$codex_improver"
+mv "$FIX/codex-improver-dir.bak" "$codex_improver"
 restore_roster_loaders
 
 # A loader that could not be read was never checked, so the verdict must say so

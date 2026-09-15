@@ -4707,23 +4707,34 @@ if want drift; then
   # directory, and an instance has to know whether the stale prompt is its own
   # (editable) or its sibling's (report-only).
   roster_unread=0
+  # "Codex" and "Cursor" are also runtime and product names that a thin pointer may
+  # legitimately use, so they count as a lane only beside review-request wording or
+  # another lane. "review" must be a whole word (review/reviews/reviewer(s)/reviewing):
+  # "reviewed plugin" describes vetted boot material, not a provider. Boundaries are
+  # spelled as character classes because BSD grep on macOS lacks a portable \b.
+  review_near() {
+    printf '(^|[^a-z])review(s|ers?|ing)?[^a-z.][^.]{0,30}%s|%s[^.]{0,30}[^a-z]review(s|ers?|ing)?([^a-z]|$)' "$1" "$1"
+  }
+  # Adjacency counts only beside an unambiguous lane name: "Codex and Cursor" together
+  # usually names sibling instances, not a review roster.
+  codex_lane_re="chatgpt-codex-connector|$(review_near codex)|(coderabbit|bugbot)[^.]{0,20}codex|codex[^.]{0,20}(coderabbit|bugbot)"
+  cursor_lane_re="bugbot|$(review_near cursor)|coderabbit[^.]{0,20}cursor|cursor[^.]{0,20}coderabbit"
   for entry in "claude engineer|$CLAUDE_LOADER" "claude improver|$CLAUDE_IMPROVER_LOADER" \
                "codex engineer|$CODEX_LOADER" "codex improver|$CODEX_IMPROVER_LOADER"; do
     label=${entry%%|*}
     L=${entry#*|}
     # An uninspected loader is not a clean one: count it, so the all-clear below can
-    # never stand in for a check that did not run.
-    if [ ! -r "$L" ]; then
+    # never stand in for a check that did not run. Read it exactly once, and only as a
+    # regular file — a directory passes `-r` while every grep over it fails silently.
+    if [ ! -f "$L" ] || [ ! -r "$L" ] || ! loader_text=$(cat -- "$L" 2>/dev/null); then
       roster_unread=$((roster_unread + 1))
       echo "    UNKNOWN: $label loader is missing or unreadable"
       continue
     fi
     named=""
-    grep -qiE 'coderabbit' "$L" 2>/dev/null && named="CodeRabbit"
-    if grep -qiE 'chatgpt-codex-connector|review[^.]{0,30}codex|codex[^.]{0,30}review|(coderabbit|bugbot)[^.]{0,20}codex|codex[^.]{0,20}(coderabbit|bugbot)' "$L" 2>/dev/null; then
-      named="${named:+$named, }Codex"
-    fi
-    grep -qiE 'bugbot|cursor review' "$L" 2>/dev/null && named="${named:+$named, }Cursor Bugbot"
+    grep -qiE 'coderabbit' <<<"$loader_text" && named="CodeRabbit"
+    grep -qiE "$codex_lane_re" <<<"$loader_text" && named="${named:+$named, }Codex"
+    grep -qiE "$cursor_lane_re" <<<"$loader_text" && named="${named:+$named, }Cursor Bugbot"
     if [ -n "$named" ]; then
       echo "    ⚠️  DRIFT: $label loader hard-codes review lanes ($named);"
       echo "        the roster and its priority belong to AGENTS.md — point at it instead."
