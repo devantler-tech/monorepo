@@ -710,38 +710,47 @@ restore_roster_loaders() {
   cp "$FIX/codex-improver-roster.bak" "$codex_improver"
   cp "$FIX/claude-improver-roster.bak" "$claude_improver"
 }
-# Both improver loaders report as `agent-improver`, so count the lines to prove
-# each loader contributes its own finding.
-check_count() {
-  local got; got=$(grep -cF -- "$3" <<<"$2" || true)
-  if [ "$got" = "$4" ]; then ok "$1"; else bad "$1" "expected $4 lines of: $3 (got $got)"; fi
-}
 STALE='secure a green review from CodeRabbit/Codex before promoting'
 FULL='lane priority: CodeRabbit > Codex > Cursor Bugbot'
 
 sed "s|^prompt = .*|prompt = \"$STALE\"|" "$FIX/codex-roster.bak" > "$codex_loader"
 printf '%s\n' 'Request a review from CodeRabbit, then @codex review.' >> "$claude_loader"
 OUT=$(run --section drift)
-check "stale two-lane Codex loader is drift"  "$OUT" "DRIFT: daily-ai-engineer hard-codes review lanes (CodeRabbit, Codex);"
-check "stale two-lane Claude loader is drift" "$OUT" "DRIFT: daily-ai-assistant hard-codes review lanes (CodeRabbit, Codex);"
+check "stale two-lane Codex engineer loader is drift"  "$OUT" "DRIFT: codex engineer loader hard-codes review lanes (CodeRabbit, Codex);"
+check "stale two-lane Claude engineer loader is drift" "$OUT" "DRIFT: claude engineer loader hard-codes review lanes (CodeRabbit, Codex);"
 restore_roster_loaders
 
+# Each improver loader is named by its runtime, so a single run proves both: a
+# regression in either one drops its own line.
 printf 'prompt = "%s"\n' "$STALE" >> "$codex_improver"
-OUT=$(run --section drift)
-check_count "stale two-lane Codex improver loader is drift" "$OUT" "DRIFT: agent-improver hard-codes review lanes (CodeRabbit, Codex);" 1
-restore_roster_loaders
-
 printf '%s\n' "$STALE" >> "$claude_improver"
 OUT=$(run --section drift)
-check_count "stale two-lane Claude improver loader is drift" "$OUT" "DRIFT: agent-improver hard-codes review lanes (CodeRabbit, Codex);" 1
+check "stale two-lane Codex improver loader is drift"  "$OUT" "DRIFT: codex improver loader hard-codes review lanes (CodeRabbit, Codex);"
+check "stale two-lane Claude improver loader is drift" "$OUT" "DRIFT: claude improver loader hard-codes review lanes (CodeRabbit, Codex);"
+restore_roster_loaders
+
+# Codex named alone, with review wording on either side of it, is still a roster.
+sed 's/^prompt = .*/prompt = "request a review from Codex before promoting"/' \
+  "$FIX/codex-roster.bak" > "$codex_loader"
+printf '%s\n' 'Use Codex for the current-head review.' >> "$claude_loader"
+OUT=$(run --section drift)
+check "review wording before Codex is drift" "$OUT" "DRIFT: codex engineer loader hard-codes review lanes (Codex);"
+check "review wording after Codex is drift"  "$OUT" "DRIFT: claude engineer loader hard-codes review lanes (Codex);"
 restore_roster_loaders
 
 sed "s|^prompt = .*|prompt = \"$FULL\"|" "$FIX/codex-roster.bak" > "$codex_loader"
-printf 'prompt = "%s"\n' "$FULL" >> "$codex_improver"
-printf '%s\n' "$FULL" >> "$claude_improver"
 OUT=$(run --section drift)
-check       "a complete hard-coded roster is still drift" "$OUT" "DRIFT: daily-ai-engineer hard-codes review lanes (CodeRabbit, Codex, Cursor Bugbot);"
-check_count "both improver loaders report a complete hard-coded roster" "$OUT" "DRIFT: agent-improver hard-codes review lanes (CodeRabbit, Codex, Cursor Bugbot);" 2
+check "a complete hard-coded roster is still drift" "$OUT" "DRIFT: codex engineer loader hard-codes review lanes (CodeRabbit, Codex, Cursor Bugbot);"
+restore_roster_loaders
+
+# A loader that could not be read was never checked, so the verdict must say so
+# instead of printing the all-clear.
+mv "$codex_improver" "$FIX/codex-improver-missing.bak"
+OUT=$(run --section drift)
+check   "a missing loader is reported UNKNOWN"          "$OUT" "UNKNOWN: codex improver loader is missing or unreadable"
+check   "a missing loader makes the roster check incomplete" "$OUT" "roster check INCOMPLETE: 1 of 4 loaders not inspected"
+nocheck "a missing loader never yields the roster all-clear" "$OUT" "no loader hard-codes the review-lane roster"
+mv "$FIX/codex-improver-missing.bak" "$codex_improver"
 restore_roster_loaders
 
 POINTER='Request reviews in the lane order AGENTS.md#Merge policy defines.'

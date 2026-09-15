@@ -4703,21 +4703,37 @@ if want drift; then
   echo "    (no output above = loaders agree with the constitution)"
   echo
   echo "  hard-coded review-lane roster (loader names lanes instead of pointing at AGENTS.md):"
-  for L in "$CLAUDE_LOADER" "$CLAUDE_IMPROVER_LOADER" \
-           "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER"; do
-    [ -f "$L" ] || continue
+  # Labelled by runtime and role: both improver loaders live in an `agent-improver`
+  # directory, and an instance has to know whether the stale prompt is its own
+  # (editable) or its sibling's (report-only).
+  roster_unread=0
+  for entry in "claude engineer|$CLAUDE_LOADER" "claude improver|$CLAUDE_IMPROVER_LOADER" \
+               "codex engineer|$CODEX_LOADER" "codex improver|$CODEX_IMPROVER_LOADER"; do
+    label=${entry%%|*}
+    L=${entry#*|}
+    # An uninspected loader is not a clean one: count it, so the all-clear below can
+    # never stand in for a check that did not run.
+    if [ ! -r "$L" ]; then
+      roster_unread=$((roster_unread + 1))
+      echo "    UNKNOWN: $label loader is missing or unreadable"
+      continue
+    fi
     named=""
     grep -qiE 'coderabbit' "$L" 2>/dev/null && named="CodeRabbit"
-    if grep -qiE 'codex review|chatgpt-codex-connector|(coderabbit|bugbot)[^.]{0,20}codex|codex[^.]{0,20}(coderabbit|bugbot)' "$L" 2>/dev/null; then
+    if grep -qiE 'chatgpt-codex-connector|review[^.]{0,30}codex|codex[^.]{0,30}review|(coderabbit|bugbot)[^.]{0,20}codex|codex[^.]{0,20}(coderabbit|bugbot)' "$L" 2>/dev/null; then
       named="${named:+$named, }Codex"
     fi
     grep -qiE 'bugbot|cursor review' "$L" 2>/dev/null && named="${named:+$named, }Cursor Bugbot"
     if [ -n "$named" ]; then
-      echo "    ⚠️  DRIFT: $(basename "$(dirname "$L")") hard-codes review lanes ($named);"
+      echo "    ⚠️  DRIFT: $label loader hard-codes review lanes ($named);"
       echo "        the roster and its priority belong to AGENTS.md — point at it instead."
     fi
   done
-  echo "    (no output above = no loader hard-codes the review-lane roster)"
+  if [ "$roster_unread" -eq 0 ]; then
+    echo "    (no output above = no loader hard-codes the review-lane roster)"
+  else
+    echo "    roster check INCOMPLETE: $roster_unread of 4 loaders not inspected — not an all-clear"
+  fi
   # The Cursor lane's prompt is deployed server-side. A version-controlled source
   # file says what was written, not what is running, so equality is never inferred.
   echo "    cursor loader: UNKNOWN (deployed prompt is server-side; its source file is not evidence of it)"
