@@ -274,6 +274,15 @@ set -e
 asserts=$(( asserts + 1 ))
 [ "$resolved" = "/srv/remotes/devantler-tech/x.git" ] || note_fail "local url passthrough: got '$resolved'"
 
+# --- 11. Redirects are never followed, on the fetch or on the lazy blob read. -----------------
+# An approved GitHub URL could redirect to another owner's repository, and the blob read can fetch
+# lazily from the same remote. File-transport fixtures cannot issue HTTP redirects, so the guard is
+# asserted on the script: both remote git commands must refuse redirects.
+redirect_guards=$(grep -c -- '-c http.followRedirects=false' "$SCRIPT" || true)
+asserts=$(( asserts + 1 ))
+[ "$redirect_guards" -ge 2 ] ||
+  note_fail "redirect guard: expected http.followRedirects=false on the fetch and the blob read, found $redirect_guards"
+
 if [ "$fails" -gt 0 ]; then
   echo "submodule-agents-drift.test.sh: $fails of $asserts assertions FAILED" >&2
   exit 1

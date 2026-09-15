@@ -274,9 +274,11 @@ while IFS=$'\t' read -r sub pin; do
   fi
   # Anonymous on purpose: with a credential helper a private repository reads fine locally and
   # fails in CI, so the local verdict would not predict the CI one. The low-speed limits abandon a
-  # transfer that stalls instead of holding the check open.
+  # transfer that stalls instead of holding the check open. Redirects are refused: an approved URL
+  # could otherwise be redirected to a repository outside the approved owner.
   if ! GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false git -C "$repo" -c credential.helper= \
-    -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 -c protocol.file.allow=always \
+    -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 -c http.followRedirects=false \
+    -c protocol.file.allow=always \
     fetch -q --depth 1 --filter=blob:none origin "$pin" >/dev/null 2>&1; then
     echo "UNKNOWN $sub $short cannot fetch the pinned revision from $url"
     bump 2
@@ -293,8 +295,10 @@ while IFS=$'\t' read -r sub pin; do
     continue
   fi
 
+  # The blob read can fetch lazily from the same remote, so it refuses redirects too.
   if ! body=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false git -C "$repo" -c credential.helper= \
-    -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 -c protocol.file.allow=always \
+    -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 -c http.followRedirects=false \
+    -c protocol.file.allow=always \
     show "$pin:AGENTS.md" 2>/dev/null); then
     echo "UNKNOWN $sub $short cannot read AGENTS.md at the pinned revision"
     bump 2
