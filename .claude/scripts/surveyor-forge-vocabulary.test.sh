@@ -182,6 +182,8 @@ allow	gh api repos/devantler-tech/platform/rules/branches/main
 allow	gh api "repos/devantler-tech/agent-plugins/contents/plugins/agentic-engineering/agents/portfolio-surveyor.agent.md?ref=a0add262"
 allow	gh api "orgs/devantler-tech/repos?type=private" --paginate
 allow	gh api rate_limit --jq .resources
+allow	gh api rate_limit --jq .resources.core
+allow	gh api graphql -f query='query { rateLimit { remaining limit resetAt } }'
 allow	gh api graphql -f query='query { repository(owner:"devantler-tech", name:"monorepo") { pullRequest(number:2927) { reviewThreads(first:100) { nodes { isResolved } } } } }'
 deny	gh pr merge 2927 --repo devantler-tech/monorepo --squash
 deny	gh pr create --repo devantler-tech/monorepo --title x --body y
