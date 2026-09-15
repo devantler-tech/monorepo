@@ -42,6 +42,7 @@
 #   exit 2  UNKNOWN — something could not be read, parsed, or safely fetched; never read it as clean
 set -uo pipefail
 
+# usage prints the calling convention to stderr.
 usage() {
   cat >&2 <<'USAGE'
 Usage: submodule-agents-drift.sh [--root <superproject>] [--ref <revision>] [--exceptions <file>]
@@ -56,6 +57,7 @@ Usage: submodule-agents-drift.sh [--root <superproject>] [--ref <revision>] [--e
 USAGE
 }
 
+# die_unknown reports why no verdict could be produced and exits 2 (UNKNOWN, never clean).
 die_unknown() {
   printf 'submodule-agents-drift: UNKNOWN — %s\n' "$1" >&2
   exit 2
@@ -105,6 +107,7 @@ scratch=$(mktemp -d) || die_unknown "cannot create a scratch directory"
 trap 'rm -rf "$scratch"' EXIT
 
 worst=0
+# bump raises the worst exit status seen so far; UNKNOWN (2) outranks DRIFT (1).
 bump() {
   if [ "$1" -gt "$worst" ]; then
     worst=$1

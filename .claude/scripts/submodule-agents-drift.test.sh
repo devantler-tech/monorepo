@@ -27,8 +27,10 @@ trap 'rm -rf "$TMP"' EXIT
 
 fails=0
 asserts=0
+# note_fail records one failed assertion and keeps going, so one run reports every failure.
 note_fail() { echo "FAIL: $1" >&2; fails=$(( fails + 1 )); }
 
+# git_q runs git with fixture-stable identity and settings, so the host's config cannot change a result.
 git_q() { git -c init.defaultBranch=main -c user.name=t -c user.email=t@e -c commit.gpgsign=false "$@"; }
 
 # mkproduct <owner> <name> <agents-content|-> — build a product repo with one commit and a bare remote
@@ -95,16 +97,19 @@ run_check_strict() {
   set -e
 }
 
+# expect_rc asserts the exit status of the last run_check: 0 clean, 1 drift, 2 unknown.
 expect_rc() {
   asserts=$(( asserts + 1 ))
   [ "$RC" -eq "$2" ] || note_fail "$1: expected exit $2, got $RC; output: $OUT"
 }
 
+# expect_line asserts the output has a line matching the given pattern.
 expect_line() {
   asserts=$(( asserts + 1 ))
   printf '%s\n' "$OUT" | grep -qE "$2" || note_fail "$1: expected a line matching /$2/; output: $OUT"
 }
 
+# expect_no_line asserts the output has no line matching the given pattern.
 expect_no_line() {
   asserts=$(( asserts + 1 ))
   if printf '%s\n' "$OUT" | grep -qE "$2"; then
