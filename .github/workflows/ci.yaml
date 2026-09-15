@@ -103,6 +103,9 @@ jobs:
               - 'docs/scripts/check-active-projects-drift.sh'
               - 'docs/scripts/check-active-projects-drift.test.sh'
               - 'docs/scripts/check-homepage-project-parity.mjs'
+              - 'docs/scripts/check-cv-drift.mjs'
+              - 'docs/scripts/check-cv-drift.test.sh'
+              - 'docs/src/data/cv.ts'
               - 'docs/package.json'
               - 'docs/package-lock.json'
               - '.gitmodules'
@@ -672,6 +675,10 @@ jobs:
       # submodule checkout needed, so it fails fast if a refactor broke a check.
       - name: Self-test the drift checker
         run: bash docs/scripts/check-active-projects-drift.test.sh
+      - name: Self-test the CV drift checker
+        run: bash docs/scripts/check-cv-drift.test.sh
+      - name: Check the About page and CV data for drift
+        run: node --disable-warning=ExperimentalWarning docs/scripts/check-cv-drift.mjs docs/src/content/docs/about.mdx docs/src/data/cv.ts
       # The source-of-truth repo is a public submodule; check it out alone at
       # its pinned commit (no GitHub API, no other submodules). The .gitmodules
       # URL is SSH (git@github.com:), which the runner has no key for, so point

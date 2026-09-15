@@ -280,12 +280,13 @@ main > .hero,
   line-height: 1.65;
 }
 
-/* Hero action buttons */
+/* Hero action buttons (shared with the About page CV download button) */
 .hero .actions {
   justify-content: center !important;
 }
 
-.hero .sl-link-button {
+.hero .sl-link-button,
+.sl-markdown-content .cv-download .sl-link-button {
   font-weight: 600;
   letter-spacing: 0.01em;
   transition:
@@ -295,11 +296,13 @@ main > .hero,
     border-color 0.25s ease;
 }
 
-.hero .sl-link-button.primary {
+.hero .sl-link-button.primary,
+.sl-markdown-content .cv-download .sl-link-button.primary {
   box-shadow: 0 2px 16px var(--glow-color);
 }
 
-.hero .sl-link-button.primary:hover {
+.hero .sl-link-button.primary:hover,
+.sl-markdown-content .cv-download .sl-link-button.primary:hover {
   box-shadow: 0 4px 24px var(--glow-color);
   transform: translateY(-2px);
 }
@@ -433,6 +436,7 @@ main > .hero,
 }
 
 /* ─── About Page — CV Download ─── */
+/* The button itself shares the hero primary-button rules above. */
 
 .sl-markdown-content .cv-download {
   display: flex;
@@ -443,19 +447,6 @@ main > .hero,
 .sl-markdown-content .cv-download .sl-link-button {
   /* Starlight gives markdown link buttons a trailing margin; drop it so flex centering is exact. */
   margin-inline-end: 0;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  box-shadow: 0 2px 16px var(--glow-color);
-  transition:
-    box-shadow 0.25s ease,
-    transform 0.25s ease,
-    background-color 0.25s ease,
-    border-color 0.25s ease;
-}
-
-.sl-markdown-content .cv-download .sl-link-button:hover {
-  box-shadow: 0 4px 24px var(--glow-color);
-  transform: translateY(-2px);
 }
 
 /* ─── About Page — Connect Bar ─── */

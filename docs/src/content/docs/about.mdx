@@ -5,33 +5,30 @@ description: Nikolai Emil Damm — software engineer, open-source advocate, and 
 
 import { Image } from "astro:assets";
 import { LinkButton } from "@astrojs/starlight/components";
+import { cv } from "../../data/cv";
 import profileImg from "../../assets/profile.jpg";
 
+export const cvPdf = { href: "/pdfs/nikolai-emil-damm-cv.pdf", filename: "Nikolai Emil Damm - CV.pdf" };
+
 <div style="text-align: center; margin-bottom: 1.5rem;">
-  <Image src={profileImg} alt="Nikolai Emil Damm" width={280} style="border-radius: 50%;" />
+  <Image src={profileImg} alt={cv.name} width={280} style="border-radius: 50%;" />
 </div>
 
 <div class="cv-download">
-  <LinkButton
-    href="/pdfs/nikolai-emil-damm-cv.pdf"
-    variant="primary"
-    icon="download"
-    iconPlacement="start"
-    download="Nikolai Emil Damm - CV.pdf"
-  >
+  <LinkButton href={cvPdf.href} download={cvPdf.filename} variant="primary" icon="download" iconPlacement="start">
     Download CV (PDF)
   </LinkButton>
 </div>
 
-I am a Developer Experience Engineer based in Denmark with an MSc in Software Engineering. I build open-source developer tools, operate Kubernetes platforms, and care deeply about making engineers more effective. My focus is on CNCF technologies, GitOps, and reducing friction in the software delivery lifecycle.
+<p>{cv.profile}</p>
 
 <dl class="about-meta">
-  <div><dt>Name</dt><dd>Nikolai Emil Damm</dd></div>
-  <div><dt>Location</dt><dd>Funen, Denmark</dd></div>
-  <div><dt>Role</dt><dd>Developer Experience Engineer</dd></div>
-  <div><dt>Education</dt><dd>MSc in Software Engineering</dd></div>
-  <div><dt>Languages</dt><dd>Danish, English</dd></div>
-  <div><dt>Interests</dt><dd>Fitness, running, gaming, music, technology</dd></div>
+  <div><dt>Name</dt><dd>{cv.name}</dd></div>
+  <div><dt>Location</dt><dd>{cv.location}</dd></div>
+  <div><dt>Role</dt><dd>{cv.title}</dd></div>
+  <div><dt>Education</dt><dd>{cv.education[0].title}</dd></div>
+  <div><dt>Languages</dt><dd>{cv.languages}</dd></div>
+  <div><dt>Interests</dt><dd>{cv.interests}</dd></div>
 </dl>
 
 ## Talks and Presentations
@@ -52,7 +49,7 @@ It closes with the roadmap and an open invitation to contribute.
 
 ## Professional Experience
 
-### Developer Experience Engineer <span style="float:right">Jun 2025 — Now</span>
+### Developer Experience Engineer <span style="float:right">Jun 2025 — Present</span>
 
 _TV2, Odense_
 
@@ -192,21 +189,17 @@ Part of the development team for the GF Forsikring website and landing pages.
 ### Technical
 
 <dl class="about-meta">
-  <div><dt>Cloud Native</dt><dd>Kubernetes, GitOps (Flux), Cilium, CNCF ecosystem</dd></div>
-  <div><dt>Platform & DevEx</dt><dd>Self-service via CLI, declarative files, AI assistants, or ClickOps portals (Backstage, Port); multi-tenancy and golden paths</dd></div>
-  <div><dt>Automation</dt><dd>CI/CD, GitHub Actions, Terraform (IaC), Docker</dd></div>
-  <div><dt>AI-Assisted Engineering</dt><dd>Agentic coding assistants, AI-driven planning & implementation, and automating chores, fixes, and specified changes to focus on high-impact work</dd></div>
-  <div><dt>Languages</dt><dd>Go, YAML, TypeScript, Bash, C#/.NET, SQL</dd></div>
-  <div><dt>Cloud & Operations</dt><dd>Azure, AWS, on-prem operations and monitoring</dd></div>
+  {cv.technicalSkills.map((skill) => (
+    <div><dt>{skill.label}</dt><dd>{skill.value}</dd></div>
+  ))}
 </dl>
 
 ### Personal
 
 <dl class="about-meta">
-  <div><dt>Communication</dt><dd>Public speaking, technical writing, Danish and English</dd></div>
-  <div><dt>Collaboration</dt><dd>Cross-team enablement, inner & open source collaboration, stakeholder engagement</dd></div>
-  <div><dt>Leadership</dt><dd>Driving initiatives, open-source community facilitation, mentoring and teaching</dd></div>
-  <div><dt>Mindset</dt><dd>Continuous learning, pragmatism, ownership, accountability, integrity, honesty, principled</dd></div>
+  {cv.personalSkills.map((skill) => (
+    <div><dt>{skill.label}</dt><dd>{skill.value}</dd></div>
+  ))}
 </dl>
 
 ## Side Projects
@@ -261,7 +254,7 @@ Member of the VS Code and GitHub Copilot backstage group, where I get early acce
 ## Connect
 
 <ul class="connect-bar">
-  <li><a href="/pdfs/nikolai-emil-damm-cv.pdf" download="Nikolai Emil Damm - CV.pdf">Download CV</a></li>
+  <li><a href={cvPdf.href} download={cvPdf.filename}>Download CV</a></li>
   <li><a href="https://www.linkedin.com/in/nikolai-emil-damm-14a786150/">LinkedIn</a></li>
   <li><a href="https://github.com/devantler">GitHub</a></li>
   <li><a href="https://github.com/sponsors/devantler">Sponsor</a></li>

@@ -1,5 +1,6 @@
-// Single source of truth for the downloadable CV (rendered to A4 PDF by src/lib/cv-pdf.ts).
-// Keep it in step with src/content/docs/about.mdx — the About page is the same story in web form.
+// Single source of truth for the CV. The About page renders its header, meta cards and skills
+// from it, the PDF endpoint renders all of it, and scripts/check-cv-drift.mjs keeps the page's
+// hand-written experience roster in step with the roles below.
 
 export interface Role {
   title: string;
@@ -25,8 +26,36 @@ export interface SkillGroup {
   value: string;
 }
 
-export const cv = {
-  /** Bump when the content below changes: it is the "Updated" date printed on the PDF. */
+export interface Link {
+  label: string;
+  url: string;
+}
+
+export interface Cv {
+  /** Bump when the content changes: it is the "Updated" date printed on the PDF. */
+  updated: string;
+  name: string;
+  title: string;
+  location: string;
+  website: Link;
+  github: Link;
+  linkedin: Link;
+  profile: string;
+  experience: Role[];
+  earlierExperience: Role[];
+  education: Entry[];
+  talks: Entry[];
+  openSource: Entry[];
+  certifications: Entry[];
+  courses: Entry[];
+  community: Entry[];
+  technicalSkills: SkillGroup[];
+  personalSkills: SkillGroup[];
+  languages: string;
+  interests: string;
+}
+
+export const cv: Cv = {
   updated: "2026-09-15",
   name: "Nikolai Emil Damm",
   title: "Developer Experience Engineer",
@@ -38,7 +67,7 @@ export const cv = {
     url: "https://www.linkedin.com/in/nikolai-emil-damm-14a786150/",
   },
   profile:
-    "Developer Experience Engineer based in Denmark with an MSc in Software Engineering. I build open-source developer tools, operate Kubernetes platforms, and care deeply about making engineers more effective. My focus is on CNCF technologies, GitOps, and reducing friction in the software delivery lifecycle.",
+    "I am a Developer Experience Engineer based in Denmark with an MSc in Software Engineering. I build open-source developer tools, operate Kubernetes platforms, and care deeply about making engineers more effective. My focus is on CNCF technologies, GitOps, and reducing friction in the software delivery lifecycle.",
 
   experience: [
     {
@@ -53,7 +82,7 @@ export const cv = {
       ],
     },
     {
-      title: "Platform Engineer & Open Source Community Facilitator",
+      title: "Platform Engineer and Open Source Community Facilitator",
       organisation: "Energinet",
       location: "Fredericia",
       engagement: "Consultant",
@@ -68,7 +97,7 @@ export const cv = {
       ],
     },
     {
-      title: "Software Engineer & Open Source Community Facilitator",
+      title: "Software Engineer and Open Source Community Facilitator",
       organisation: "Energinet",
       location: "Fredericia",
       engagement: "Junior Consultant",
@@ -82,7 +111,7 @@ export const cv = {
         "Championed GitHub Flow, DevOps, cloud-native, and open-source practices.",
       ],
     },
-  ] satisfies Role[],
+  ],
 
   earlierExperience: [
     {
@@ -132,7 +161,7 @@ export const cv = {
       summary:
         "Part of the development team for the GF Forsikring website and landing pages — Sitecore, AngularJS, SQL Server, Git and SVN — working with the Marketing team to quickly create landing pages for campaigns.",
     },
-  ] satisfies Role[],
+  ],
 
   education: [
     {
@@ -143,7 +172,7 @@ export const cv = {
         "Thesis: “Exploration of State-of-the-Art Technology, Architectures and Tools to Create Future-Proof Data Spaces” — graded 12/12 (top grade).",
       url: "https://devantler.tech/pdfs/thesis.pdf",
     },
-  ] satisfies Entry[],
+  ],
 
   talks: [
     {
@@ -153,7 +182,7 @@ export const cv = {
         "KSail's public introduction — conceptual explanation and live demos of how it simplifies local development and CI workflows, and lets developers take on cluster operations earlier in the process.",
       url: "https://youtu.be/Q-Hfn_-B7p8",
     },
-  ] satisfies Entry[],
+  ],
 
   openSource: [
     {
@@ -174,18 +203,18 @@ export const cv = {
         "A curated library of GitHub Actions and reusable workflows for Go, .NET, docs, releases, and repository automation.",
       url: "https://github.com/devantler-tech/actions",
     },
-  ] satisfies Entry[],
+  ],
 
   certifications: [
     { title: "GitHub Actions Certification", subtitle: "GitHub" },
     { title: "KCD Denmark 2024 Speaker", subtitle: "Credly badge" },
     { title: "Cilium: Discovery Platform Engineer", subtitle: "Credly badge" },
-  ] satisfies Entry[],
+  ],
 
   courses: [
     { title: "Kubernetes for the Absolute Beginners", subtitle: "KodeKloud" },
     { title: "Kubernetes and Cloud-Native Associate (KCNA)", subtitle: "KodeKloud" },
-  ] satisfies Entry[],
+  ],
 
   community: [
     {
@@ -194,7 +223,7 @@ export const cv = {
       summary:
         "Early access to the latest offerings, testing pre-release features and giving feedback directly to the teams behind them.",
     },
-  ] satisfies Entry[],
+  ],
 
   technicalSkills: [
     { label: "Cloud Native", value: "Kubernetes, GitOps (Flux), Cilium, CNCF ecosystem" },
@@ -207,17 +236,17 @@ export const cv = {
     {
       label: "AI-Assisted Engineering",
       value:
-        "Agentic coding assistants, AI-driven planning and implementation, automating chores and fixes to focus on high-impact work",
+        "Agentic coding assistants, AI-driven planning & implementation, and automating chores, fixes, and specified changes to focus on high-impact work",
     },
     { label: "Languages", value: "Go, YAML, TypeScript, Bash, C#/.NET, SQL" },
     { label: "Cloud & Operations", value: "Azure, AWS, on-prem operations and monitoring" },
-  ] satisfies SkillGroup[],
+  ],
 
   personalSkills: [
     { label: "Communication", value: "Public speaking, technical writing, Danish and English" },
     {
       label: "Collaboration",
-      value: "Cross-team enablement, inner and open source collaboration, stakeholder engagement",
+      value: "Cross-team enablement, inner & open source collaboration, stakeholder engagement",
     },
     {
       label: "Leadership",
@@ -227,10 +256,8 @@ export const cv = {
       label: "Mindset",
       value: "Continuous learning, pragmatism, ownership, accountability, integrity, honesty, principled",
     },
-  ] satisfies SkillGroup[],
+  ],
 
   languages: "Danish, English",
   interests: "Fitness, running, gaming, music, technology",
 };
-
-export type Cv = typeof cv;
