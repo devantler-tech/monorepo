@@ -649,8 +649,12 @@ grep -Fq 'Reconcile the merged rows with the org' "${surveyor}" ||
   fail "surveyor does not reconcile the per-repository issue census with the org total_count"
 # The org total must count issues only: without is:issue every open PR inflates it, so the
 # reconcile would report a complete census as truncated on every run.
-grep -Fq '`is:issue is:open archived:false` `total_count`' "${surveyor}" ||
-  fail "surveyor's org issue total is not restricted to open, non-archived issues"
+grep -Fq "gh api -X GET search/issues -f q='org:devantler-tech is:issue is:open archived:false' -f per_page=1" "${surveyor}" ||
+  fail "surveyor names no metadata read for the org issue total, or does not restrict it to open, non-archived issues"
+# gh search issues --json returns rows only, so the total must come from the Search API metadata, and a
+# read that fails or reports incomplete_results must never reconcile into a complete census.
+grep -Fq 'so does a failed read or `incomplete_results: true`.' "${surveyor}" ||
+  fail "surveyor does not report a truncated issue census when the org total read fails or is incomplete"
 # Both truncation triggers must produce the row: a repository at the cap, and a total that still
 # disagrees after the re-read. Checking only that the row exists leaves either trigger free to vanish.
 grep -Fq 'exactly 300, or a total still unequal, emits `DISCOVERY-TRUNCATED (issues, 300 cap)` naming it' "${surveyor}" ||

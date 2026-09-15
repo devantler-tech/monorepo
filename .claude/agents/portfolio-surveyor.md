@@ -95,16 +95,16 @@ public and private — no per-repo loop needed to enumerate):
    red `main`, so folding it into a health field mislabels a backlog gap as breakage. Emit
    `DISCOVERY-TRUNCATED (issues, 300 cap)` on its own line and leave `nothing_on_fire` decided by the
    PR and `main` evidence alone.
-   ⚠️ **But that row still CONSTRAINS the consumer:** rungs 2–4 pick by severity then age, so under it
-   every rung-2/3/4 pick is **provisional** — never record "oldest actionable" from a truncated read.
-   It bounds issue selection only and still never moves `nothing_on_fire`.
+   ⚠️ **It still constrains the consumer:** under it every rung-2/3/4 pick is **provisional** — never
+   record "oldest actionable" from a truncated read.
 2. **Open issues, one call PER in-scope repository — include `assignees` (claim signal) and `author`
    (automation-owned filter):**
    `gh search issues --repo devantler-tech/<repo> --state open --limit 300 --json number,repository,title,author,labels,updatedAt,url,assignees`
-   🔴 **Never one org-wide call: the backlog exceeds the cap EVERY run** (755 vs 300 on
-   2026-09-15, each repo below it — monorepo#3357). Reconcile the merged rows with the org
-   `is:issue is:open archived:false` `total_count` (re-read once on mismatch). A repo returning
-   exactly 300, or a total still unequal, emits `DISCOVERY-TRUNCATED (issues, 300 cap)` naming it.
+   🔴 **Never one org-wide call: capped below the backlog** (monorepo#3357). Reconcile the merged rows with the org
+   `gh api -X GET search/issues -f q='org:devantler-tech is:issue is:open archived:false' -f per_page=1`
+   total (re-read once on mismatch). A repo returning
+   exactly 300, or a total still unequal, emits `DISCOVERY-TRUNCATED (issues, 300 cap)` naming it;
+   so does a failed read or `incomplete_results: true`.
    (`--archived=false` keeps archived repos' stale PRs/issues — e.g. `data-product`'s 2025 bot PRs —
    out of every survey; archived repos are read-only and carry no actionable signal.)
    (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
