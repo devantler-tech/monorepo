@@ -47,6 +47,12 @@ while [[ $# -gt 0 ]]; do
     *) shift ;;
   esac
 done
+# Failure injection (monorepo#2511): the list query for GH_FAIL_STATE fails with
+# GH_FAIL_STDERR on stderr, the way a real gh failure reports its cause.
+if [[ -n "${GH_FAIL_STATE:-}" && "$state" == "$GH_FAIL_STATE" && -z "$head" ]]; then
+  printf '%s\n' "${GH_FAIL_STDERR:-gh: unknown failure}" >&2
+  exit 1
+fi
 if [[ "$state" == "open" && -n "$head" ]]; then
   # Per-branch open recheck: length 0 unless head is listed in OPEN_HEADS.
   if grep -Fxq "$head" "${OPEN_HEADS_FILE:-/dev/null}" 2>/dev/null; then
@@ -611,6 +617,92 @@ out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
 report "residual: a two-segment routine slug is shape-identical to a harness branch and stays exempt (#2708)" \
   "$(git -C "$work" rev-parse --verify --quiet "refs/heads/claude/area-desc-123456" >/dev/null && echo yes || echo no)" \
   "rc=$rc out=$out"
+git -C "$work" checkout -q -f main
+
+# --- 14. a failed query names its target and whether a retry can help (#2511) ---
+# The abort itself stays fail-closed; what changes is that the message carries the
+# exact owner/repo queried and a cause class, so a bad target (never succeeds) reads
+# differently from a rate limit or transport failure (worth retrying). Every case
+# carries SHA-matched MERGED evidence, so a sweep that wrongly continued would delete.
+git -C "$work" checkout -q -f main
+q_sha=$(mk_remote_branch "claude/query-failure-survives-2511")
+git -C "$work" checkout -q main
+: >"$OPEN_HEADS_FILE"
+printf '%s\tMERGED\t%s\n' "claude/query-failure-survives-2511" "$q_sha" >"$PR_EVIDENCE_FILE"
+fq_slug=monorepo
+# run_failing_query <state> <stderr> <case>
+#   Runs an apply-mode sweep whose <state> list query fails with <stderr>, against a
+#   fresh seeded manifest. Sets $out, $rc, $manifest and $before for the assertions.
+run_failing_query() {
+  manifest="$tmp/manifest-2511-$3"; printf 'seed-row\n' >"$manifest"; before=$(cksum "$manifest")
+  out="$(GH_FAIL_STATE="$1" GH_FAIL_STDERR="$2" "$helper" "$work" "$fq_slug" "$manifest" apply claude 2>&1)" && rc=0 || rc=$?
+}
+# assert_failed_closed <case>
+#   Asserts the last run_failing_query aborted, left the manifest untouched, kept the
+#   evidence-backed remote branch, and named devantler-tech/$fq_slug on its ABORT line.
+assert_failed_closed() {
+  report "$1: sweep aborts (#2511)" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
+  report "$1: manifest byte-identical (#2511)" "$([[ "$before" == "$(cksum "$manifest")" ]] && echo yes || echo no)" "out=$out"
+  report "$1: evidence-backed remote ref survives (#2511)" \
+    "$(git -C "$bare" show-ref --verify --quiet "refs/heads/claude/query-failure-survives-2511" && echo yes || echo no)"
+  # Read the ABORT line alone: the echoed gh line can carry the slug by itself,
+  # which would let this pass even if the abort stopped naming its target.
+  report "$1: abort line names the queried repository (#2511)" \
+    "$(grep -F "ABORT — " <<<"$out" | grep -Fq "for 'devantler-tech/$fq_slug'" && echo yes || echo no)" "out=$out"
+}
+# has <text>: prints "yes" when the last sweep's output contains <text>, else "no".
+has() { grep -Fq "$1" <<<"$out" && echo yes || echo no; }
+# lacks <text>: prints "yes" when the last sweep's output does not contain <text>, else "no".
+lacks() { grep -Fq "$1" <<<"$out" && echo no || echo yes; }
+
+run_failing_query open "GraphQL: Could not resolve to a Repository with the name 'devantler-tech/monorepo'. (repository)" notfound
+assert_failed_closed "open query, repository not found"
+report "open query 404 is classed as not found (#2511)" "$(has "repository not found")" "out=$out"
+report "open query 404 is not classed retryable (#2511)" "$(lacks "retryable")" "out=$out"
+
+run_failing_query open "GraphQL: API rate limit exceeded for user ID 1." ratelimit
+assert_failed_closed "open query, rate limited"
+report "open query rate limit is classed retryable (#2511)" "$(has "retryable")" "out=$out"
+report "open query rate limit is not classed not found (#2511)" "$(lacks "repository not found")" "out=$out"
+
+run_failing_query open "error connecting to api.github.com" transport
+assert_failed_closed "open query, transport failure"
+report "open query transport failure is classed retryable (#2511)" "$(has "retryable")" "out=$out"
+
+run_failing_query open "HTTP 401: Bad credentials (https://api.github.com/graphql)" auth
+assert_failed_closed "open query, bad credentials"
+report "open query bad credentials is classed as authentication (#2511)" "$(has "authentication failed")" "out=$out"
+report "open query bad credentials is not classed retryable (#2511)" "$(lacks "retryable")" "out=$out"
+
+run_failing_query open "something nobody anticipated" unknown
+assert_failed_closed "open query, unrecognised failure"
+report "open query unrecognised failure says so (#2511)" "$(has "unclassified")" "out=$out"
+
+run_failing_query open "branch-cleanup.sh: line 384: gh: command not found" nogh
+assert_failed_closed "open query, gh missing from PATH"
+report "missing gh is classed as a PATH problem (#2511)" "$(has "gh CLI not found on PATH")" "out=$out"
+report "missing gh is not classed as a missing repository (#2511)" "$(lacks "repository not found")" "out=$out"
+
+run_failing_query open "context deadline exceeded" deadline
+assert_failed_closed "open query, context deadline"
+report "context deadline is classed retryable (#2511)" "$(has "retryable")" "out=$out"
+
+run_failing_query open 'Post "https://api.github.com/graphql": EOF' eof
+assert_failed_closed "open query, bare EOF"
+report "bare EOF is classed retryable (#2511)" "$(has "retryable")" "out=$out"
+
+# gh echoes the queried repository, so a slug containing a transient word must not
+# select the retryable class or hide a missing repository.
+fq_slug=timeout-lab
+run_failing_query open "GraphQL: Could not resolve to a Repository with the name 'devantler-tech/timeout-lab'. (repository)" slug-word
+assert_failed_closed "open query, slug containing a transient word"
+report "slug text does not select the retryable class (#2511)" "$(lacks "retryable")" "out=$out"
+report "slug text does not hide a missing repository (#2511)" "$(has "repository not found")" "out=$out"
+fq_slug=monorepo
+
+run_failing_query all "GraphQL: Could not resolve to a Repository with the name 'devantler-tech/monorepo'. (repository)" state-notfound
+assert_failed_closed "PR-state query, repository not found"
+report "PR-state query 404 is classed as not found (#2511)" "$(has "repository not found")" "out=$out"
 git -C "$work" checkout -q -f main
 
 if [[ "$fail" -ne 0 ]]; then
