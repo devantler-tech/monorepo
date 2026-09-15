@@ -629,17 +629,20 @@ q_sha=$(mk_remote_branch "claude/query-failure-survives-2511")
 git -C "$work" checkout -q main
 : >"$OPEN_HEADS_FILE"
 printf '%s\tMERGED\t%s\n' "claude/query-failure-survives-2511" "$q_sha" >"$PR_EVIDENCE_FILE"
+fq_slug=monorepo
 run_failing_query() { # <state> <stderr> <case>
   manifest="$tmp/manifest-2511-$3"; printf 'seed-row\n' >"$manifest"; before=$(cksum "$manifest")
-  out="$(GH_FAIL_STATE="$1" GH_FAIL_STDERR="$2" "$helper" "$work" "monorepo" "$manifest" apply claude 2>&1)" && rc=0 || rc=$?
+  out="$(GH_FAIL_STATE="$1" GH_FAIL_STDERR="$2" "$helper" "$work" "$fq_slug" "$manifest" apply claude 2>&1)" && rc=0 || rc=$?
 }
 assert_failed_closed() { # <case>
   report "$1: sweep aborts (#2511)" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
   report "$1: manifest byte-identical (#2511)" "$([[ "$before" == "$(cksum "$manifest")" ]] && echo yes || echo no)" "out=$out"
   report "$1: evidence-backed remote ref survives (#2511)" \
     "$(git -C "$bare" show-ref --verify --quiet "refs/heads/claude/query-failure-survives-2511" && echo yes || echo no)"
-  report "$1: abort names the queried repository (#2511)" \
-    "$(grep -Fq "devantler-tech/monorepo" <<<"$out" && echo yes || echo no)" "out=$out"
+  # Read the ABORT line alone: the echoed gh line can carry the slug by itself,
+  # which would let this pass even if the abort stopped naming its target.
+  report "$1: abort line names the queried repository (#2511)" \
+    "$(grep -F "ABORT — " <<<"$out" | grep -Fq "for 'devantler-tech/$fq_slug'" && echo yes || echo no)" "out=$out"
 }
 has() { grep -Fq "$1" <<<"$out" && echo yes || echo no; }
 lacks() { grep -Fq "$1" <<<"$out" && echo no || echo yes; }
@@ -666,6 +669,28 @@ report "open query bad credentials is not classed retryable (#2511)" "$(lacks "r
 run_failing_query open "something nobody anticipated" unknown
 assert_failed_closed "open query, unrecognised failure"
 report "open query unrecognised failure says so (#2511)" "$(has "unclassified")" "out=$out"
+
+run_failing_query open "branch-cleanup.sh: line 384: gh: command not found" nogh
+assert_failed_closed "open query, gh missing from PATH"
+report "missing gh is classed as a PATH problem (#2511)" "$(has "gh CLI not found on PATH")" "out=$out"
+report "missing gh is not classed as a missing repository (#2511)" "$(lacks "repository not found")" "out=$out"
+
+run_failing_query open "context deadline exceeded" deadline
+assert_failed_closed "open query, context deadline"
+report "context deadline is classed retryable (#2511)" "$(has "retryable")" "out=$out"
+
+run_failing_query open 'Post "https://api.github.com/graphql": EOF' eof
+assert_failed_closed "open query, bare EOF"
+report "bare EOF is classed retryable (#2511)" "$(has "retryable")" "out=$out"
+
+# gh echoes the queried repository, so a slug containing a transient word must not
+# select the retryable class or hide a missing repository.
+fq_slug=timeout-lab
+run_failing_query open "GraphQL: Could not resolve to a Repository with the name 'devantler-tech/timeout-lab'. (repository)" slug-word
+assert_failed_closed "open query, slug containing a transient word"
+report "slug text does not select the retryable class (#2511)" "$(lacks "retryable")" "out=$out"
+report "slug text does not hide a missing repository (#2511)" "$(has "repository not found")" "out=$out"
+fq_slug=monorepo
 
 run_failing_query all "GraphQL: Could not resolve to a Repository with the name 'devantler-tech/monorepo'. (repository)" state-notfound
 assert_failed_closed "PR-state query, repository not found"

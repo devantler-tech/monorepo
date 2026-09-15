@@ -356,14 +356,24 @@ manifest_write() {
 # retrying. The class only shapes the message: every caller still aborts.
 gh_failure_reason() { # <stderr-file>
   local err
-  err=$(tr '[:upper:]' '[:lower:]' <"$1" 2>/dev/null || true)
+  err=$({ tr '[:upper:]' '[:lower:]' <"$1"; } 2>/dev/null || true)
+  # gh repeats the queried repository in its errors. Drop it first, so a slug that
+  # happens to contain "timeout" or "not found" cannot pick the class. Prefix and
+  # suffix removal with a quoted pattern stays literal, including on bash 3.2.
+  while [[ -n "$slug_lc" && "$err" == *"$slug_lc"* ]]; do
+    err="${err%%"$slug_lc"*}${err#*"$slug_lc"}"
+  done
   case "$err" in
-    *"rate limit"*|*"abuse detection"*|*"http 429"*|*"http 5"[0-9][0-9]*|*"timeout"*|*"timed out"*|*"error connecting"*|*"connection reset"*|*"connection refused"*|*"dial tcp"*|*"tls handshake"*|*"no such host"*|*"unexpected eof"*)
+    # Before "not found": bash reports a missing gh as "gh: command not found",
+    # which would otherwise read as a missing repository.
+    *"command not found"*)
+      echo "gh CLI not found on PATH (install gh or fix PATH; a retry will not help)" ;;
+    *"rate limit"*|*"abuse detection"*|*"http 429"*|*"http 5"[0-9][0-9]*|*"timeout"*|*"timed out"*|*"context deadline exceeded"*|*"error connecting"*|*"connection reset"*|*"connection refused"*|*"dial tcp"*|*"tls handshake"*|*"no such host"*|*"unexpected eof"*|*": eof"*)
       echo "transient API or transport failure (retryable)" ;;
     *"could not resolve to a repository"*|*"http 404"*|*"not found"*)
       # GitHub answers the same way for a missing repository and for one these
       # credentials cannot see, so the class names both.
-      echo "repository not found or not visible to these credentials (check <slug>; a retry will not help)" ;;
+      echo "repository not found or not visible to these credentials (check the slug; a retry will not help)" ;;
     *"http 401"*|*"bad credentials"*|*"authentication"*|*"gh auth login"*|*"http 403"*|*"resource not accessible"*)
       echo "authentication failed or access denied (fix credentials; a retry will not help)" ;;
     *) echo "unclassified failure (see the gh output below)" ;;
