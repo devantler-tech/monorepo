@@ -4692,6 +4692,32 @@ if want drift; then
       fi
     fi
   done
+
+  # A loader that names review lanes carries its own copy of the roster, and that
+  # copy goes stale the moment AGENTS.md adds or reorders a lane: the Codex loader
+  # kept `CodeRabbit/Codex` after Cursor Bugbot became the third lane, and a PR sat
+  # parked ~2 days on exhausted lanes while a serving one existed (#2401). The only
+  # clean shape is a pointer to the contract's roster. A bare "Codex" is the
+  # runtime's own name, so Codex counts as a lane only in a review phrase or when
+  # listed beside another lane.
+  echo "  hard-coded review-lane roster (loader names lanes instead of pointing at AGENTS.md):"
+  for L in "$CLAUDE_LOADER" "$CLAUDE_IMPROVER_LOADER" \
+           "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER"; do
+    [ -f "$L" ] || continue
+    named=""
+    grep -qiE 'coderabbit' "$L" 2>/dev/null && named="CodeRabbit"
+    if grep -qiE 'codex review|chatgpt-codex-connector|(coderabbit|bugbot)[^.]{0,20}codex|codex[^.]{0,20}(coderabbit|bugbot)' "$L" 2>/dev/null; then
+      named="${named:+$named, }Codex"
+    fi
+    grep -qiE 'bugbot|cursor review' "$L" 2>/dev/null && named="${named:+$named, }Cursor Bugbot"
+    if [ -n "$named" ]; then
+      echo "    ⚠️  DRIFT: $(basename "$(dirname "$L")") hard-codes review lanes ($named);"
+      echo "        the roster and its priority belong to AGENTS.md — point at it instead."
+    fi
+  done
+  # The Cursor lane's prompt is deployed server-side. A version-controlled source
+  # file says what was written, not what is running, so equality is never inferred.
+  echo "    cursor loader: UNKNOWN (deployed prompt is server-side; its source file is not evidence of it)"
   echo "    (no output above = loaders agree with the constitution)"
 fi
 

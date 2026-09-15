@@ -692,6 +692,46 @@ mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0' WHERE id = 'agent-improver';"
 
+# ── 5b. hard-coded review-lane rosters (#2401) ────────────────────────────────
+# The Codex loader once kept `CodeRabbit/Codex` after Cursor Bugbot became the third
+# lane, and a PR parked on exhausted lanes while a serving one existed. A loader that
+# names lanes is drift for either sibling; one that points at AGENTS.md is clean.
+codex_loader="$FIX/codex/automations/daily-ai-engineer/automation.toml"
+claude_loader="$FIX/claude-sched/daily-ai-assistant/SKILL.md"
+cp "$codex_loader" "$FIX/codex-roster.bak"
+cp "$claude_loader" "$FIX/claude-roster.bak"
+
+sed 's/^prompt = .*/prompt = "secure a green review from CodeRabbit\/Codex before promoting"/' \
+  "$FIX/codex-roster.bak" > "$codex_loader"
+printf '%s\n' 'Request a review from CodeRabbit, then @codex review.' >> "$claude_loader"
+OUT=$(run --section drift)
+check "stale two-lane Codex loader is drift"  "$OUT" "DRIFT: daily-ai-engineer hard-codes review lanes (CodeRabbit, Codex);"
+check "stale two-lane Claude loader is drift" "$OUT" "DRIFT: daily-ai-assistant hard-codes review lanes (CodeRabbit, Codex);"
+
+sed 's/^prompt = .*/prompt = "lane priority: CodeRabbit > Codex > Cursor Bugbot"/' \
+  "$FIX/codex-roster.bak" > "$codex_loader"
+OUT=$(run --section drift)
+check "a complete hard-coded roster is still drift" "$OUT" "DRIFT: daily-ai-engineer hard-codes review lanes (CodeRabbit, Codex, Cursor Bugbot);"
+
+sed 's/^prompt = .*/prompt = "request reviews in the lane order AGENTS.md defines; the Codex lane surveys inline"/' \
+  "$FIX/codex-roster.bak" > "$codex_loader"
+cp "$FIX/claude-roster.bak" "$claude_loader"
+printf '%s\n' 'Request reviews in the lane order AGENTS.md#Merge policy defines.' >> "$claude_loader"
+OUT=$(run --section drift)
+nocheck "thin-pointer loaders are not roster drift" "$OUT" "hard-codes review lanes"
+
+# The Cursor prompt is deployed server-side, so a version-controlled source that
+# names lanes must neither be read as that prompt nor let it read as clean.
+mkdir -p "$FIX/monorepo/.claude/loaders"
+printf '%s\n' 'secure a green review from CodeRabbit/Codex' > "$FIX/monorepo/.claude/loaders/cursor-automation.md"
+OUT=$(run --section drift)
+check   "cursor lane stays UNKNOWN"                           "$OUT" "cursor loader: UNKNOWN"
+nocheck "cursor source file is not read as the deployed prompt" "$OUT" "DRIFT: loaders"
+rm -rf "$FIX/monorepo/.claude/loaders"
+
+mv "$FIX/codex-roster.bak" "$codex_loader"
+mv "$FIX/claude-roster.bak" "$claude_loader"
+
 # ── 6. clean-state: no false positives when nothing is wrong ──────────────────
 echo
 echo "clean state"
