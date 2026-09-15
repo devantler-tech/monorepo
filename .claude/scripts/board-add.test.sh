@@ -70,7 +70,15 @@ case "$1 ${2:-}" in
                   # Status field and its options in one query), the
                   # pre-existing-item probe (query mentions projectItems), the
                   # added-status read, and the status read-back.
-                  if grep -q 'projectV2(number' <<<"$*"; then
+                  if grep -q 'rateLimit' <<<"$*"; then
+                    # The in-query GraphQL budget probe. It spends the same pool
+                    # as every other GraphQL call, so when that pool is empty the
+                    # probe itself can be refused — STUB_GQL_PROBE_FAIL models it.
+                    if [ -n "${STUB_GQL_PROBE_FAIL:-}" ]; then
+                      printf '%s\n' "$STUB_GQL_PROBE_FAIL" >&2; exit 1
+                    fi
+                    printf '%s 5000 2026-07-27T15:55:22Z\n' "${STUB_GQL_REMAINING:-5000}"
+                  elif grep -q 'projectV2(number' <<<"$*"; then
                     fail_stage "project metadata" && exit 1
                     if [ "${STUB_METADATA_BAD:-0}" = 1 ]; then
                       printf '{"data":{"organization":null}}\n'
@@ -312,8 +320,24 @@ check "GraphQL refusal still names GraphQL" 2 "$rc" "$out" "GraphQL RATE LIMIT"
 # it is needed — the first version of this fix was, and only exercising it
 # against a live exhausted budget revealed that. The budget probe is what makes
 # the diagnosis work; without it this arm reads the old auth wording.
-STUB_FAIL_ON="project metadata" STUB_FAIL_STDERR="unknown owner type" STUB_REMAINING=0 run "$URL"
+#
+# The probe must read the GraphQL budget IN-QUERY. Measured 2026-09-15 at the
+# same moment (monorepo#2507): `gh api rate_limit` reported GraphQL used=0,
+# remaining=5000, while `rateLimit { used remaining }` inside a GraphQL query
+# reported used=1182, remaining=3818, with a reset 55 minutes apart. The REST
+# endpoint reads a different pool, so it can never show this script's budget
+# running out. The REST stub stays at a healthy 5000 here on purpose: a probe
+# that still asks REST reads that and misses the exhaustion.
+: >"$tmp/log"
+STUB_LOG="$tmp/log" STUB_FAIL_ON="project metadata" STUB_FAIL_STDERR="unknown owner type" STUB_GQL_REMAINING=0 run "$URL"
 check "exhausted budget is caught despite misleading stderr" 2 "$rc" "$out" "RATE LIMIT"
+check "…and quotes the in-query figure" 2 "$rc" "$out" "0/5000"
+if grep -q '^api rate_limit' "$tmp/log"; then
+  printf 'FAIL the GraphQL budget was read from the REST endpoint (a different pool)\n' >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   the GraphQL budget is read in-query, never from REST\n'; pass=$((pass + 1))
+fi
 check "…and still names the reset" 2 "$rc" "$out" "2026-07-27T15:55:22Z"
 if grep -qF "auth, network, or scope" <<<"$out"; then
   printf 'FAIL exhausted budget with unhelpful stderr still blamed on auth/scope\n  got: %s\n' "$out" >&2
@@ -325,13 +349,36 @@ fi
 # NEGATIVE CONTROL for the probe: an unhelpful stderr with a HEALTHY budget must
 # NOT be called a rate limit. Without this, the probe could simply declare every
 # failure a rate limit and the arm above would still pass.
-STUB_FAIL_ON="project metadata" STUB_FAIL_STDERR="unknown owner type" STUB_REMAINING=4231 run "$URL"
+# The REST figure is set to 0 here: it is not this pool, so it must not decide.
+STUB_FAIL_ON="project metadata" STUB_FAIL_STDERR="unknown owner type" STUB_GQL_REMAINING=4231 STUB_REMAINING=0 run "$URL"
 check "healthy budget keeps the old wording" 2 "$rc" "$out" "auth, network, or scope"
 if grep -qF "RATE LIMIT" <<<"$out"; then
   printf 'FAIL healthy budget reported as a rate limit\n  got: %s\n' "$out" >&2
   fail=$((fail + 1))
 else
   printf 'ok   healthy budget is not reported as a rate limit\n'; pass=$((pass + 1))
+fi
+
+# The in-query probe spends the pool it measures, so an empty pool can refuse
+# the probe too. A refusal that names the rate limit is itself the answer.
+STUB_FAIL_ON="project metadata" STUB_FAIL_STDERR="unknown owner type" STUB_GQL_PROBE_FAIL="$RL" run "$URL"
+check "refused budget probe is read as exhaustion" 2 "$rc" "$out" "RATE LIMIT"
+check "…and says no figure could be read" 2 "$rc" "$out" "figure unavailable"
+
+# A probe response without a numeric figure is no reading, never a quoted
+# "null/null" allowance.
+STUB_FAIL_ON="project metadata" STUB_FAIL_STDERR="$RL" STUB_GQL_REMAINING=null run "$URL"
+check "non-numeric probe figure is not quoted" 2 "$rc" "$out" "figure unavailable"
+
+# NEGATIVE CONTROL: a probe that fails for any OTHER reason proves nothing, so
+# the caller's original wording stands.
+STUB_FAIL_ON="project metadata" STUB_FAIL_STDERR="unknown owner type" STUB_GQL_PROBE_FAIL="connection reset" run "$URL"
+check "unrelated probe failure keeps the old wording" 2 "$rc" "$out" "auth, network, or scope"
+if grep -qF "RATE LIMIT" <<<"$out"; then
+  printf 'FAIL an unrelated probe failure was reported as a rate limit\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   an unrelated probe failure is not a rate limit\n'; pass=$((pass + 1))
 fi
 
 # ── SECONDARY limits are a different animal ────────────────────────────────
