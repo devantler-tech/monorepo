@@ -647,6 +647,14 @@ grep -Fq 'gh search issues --repo devantler-tech/<repo> --state open --limit 300
   fail "surveyor does not read the open-issue census per repository, so it truncates on every run"
 grep -Fq 'Reconcile the merged rows with the org' "${surveyor}" ||
   fail "surveyor does not reconcile the per-repository issue census with the org total_count"
+# The org total must count issues only: without is:issue every open PR inflates it, so the
+# reconcile would report a complete census as truncated on every run.
+grep -Fq '`is:issue is:open archived:false` `total_count`' "${surveyor}" ||
+  fail "surveyor's org issue total is not restricted to open, non-archived issues"
+# Both truncation triggers must produce the row: a repository at the cap, and a total that still
+# disagrees after the re-read. Checking only that the row exists leaves either trigger free to vanish.
+grep -Fq 'exactly 300, or a total still unequal, emits `DISCOVERY-TRUNCATED (issues, 300 cap)` naming it' "${surveyor}" ||
+  fail "surveyor does not report a truncated issue census for a capped repository or an unreconciled total"
 if grep -Fq 'gh search issues --owner devantler-tech --archived=false --state open --limit 300' "${surveyor}"; then
   fail "surveyor still prescribes one capped org-wide open-issue call, which truncates on every run"
 fi

@@ -101,9 +101,9 @@ public and private — no per-repo loop needed to enumerate):
 2. **Open issues, one call PER in-scope repository — include `assignees` (claim signal) and `author`
    (automation-owned filter):**
    `gh search issues --repo devantler-tech/<repo> --state open --limit 300 --json number,repository,title,author,labels,updatedAt,url,assignees`
-   🔴 **Never one org-wide call: the backlog exceeds the cap on EVERY run** (755 open vs 300 on
+   🔴 **Never one org-wide call: the backlog exceeds the cap EVERY run** (755 vs 300 on
    2026-09-15, each repo below it — monorepo#3357). Reconcile the merged rows with the org
-   `search/issues` `total_count` (`archived:false`; re-read once on a mismatch). A repo returning
+   `is:issue is:open archived:false` `total_count` (re-read once on mismatch). A repo returning
    exactly 300, or a total still unequal, emits `DISCOVERY-TRUNCATED (issues, 300 cap)` naming it.
    (`--archived=false` keeps archived repos' stale PRs/issues — e.g. `data-product`'s 2025 bot PRs —
    out of every survey; archived repos are read-only and carry no actionable signal.)
