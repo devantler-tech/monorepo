@@ -77,9 +77,10 @@ gh_saw_rate_limit() {
 #   $ gh project view 5 --owner devantler-tech --format json
 #   unknown owner type
 #
-# — which names neither a rate limit nor the real cause, and is the single most
-# common failure point in this script. A classifier reading only stderr would
-# stay silent exactly where it is needed most.
+# — which names neither a rate limit nor the real cause. The project metadata
+# lookup is the first GraphQL call this script makes, so it is where an exhausted
+# budget shows up first. A classifier reading only stderr would stay silent
+# exactly where it is needed most.
 #
 # So ask the API what the budget actually is. `GET /rate_limit` is unmetered, so
 # it answers even when everything else is refused, and it is authoritative in a
