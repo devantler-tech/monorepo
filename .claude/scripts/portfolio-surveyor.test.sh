@@ -2523,8 +2523,8 @@ case "${surveyor_flat}" in
   *) fail "the digest cannot express an unassessed portfolio" ;;
 esac
 case "${surveyor_flat}" in
-  *'EMIT `unknown` WHENEVER ANY `QUERY-UNKNOWN`, `NOT-DEEPENED (budget)`, `NOT-DEEPENED (next-shard)`, OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS'*) ;;
-  *) fail "the digest may still claim nothing_on_fire while PRs went unassessed or undiscovered" ;;
+  *'false for a known CI/PR fire or any mandatory-query failure except the step-4 classifier'*'unknown for classifier-only failure with no known fire'*'`NOT-DEEPENED (budget)`, `NOT-DEEPENED (next-shard)`, or `DISCOVERY-TRUNCATED (prs, 300 cap)` means unassessed fire evidence'*) ;;
+  *) fail "the digest does not preserve classifier-only unknown while keeping known fire, other mandatory failures, and unassessed PR coverage correctly ordered" ;;
 esac
 # A survey that tries to deepen the whole portfolio before returning can spend the complete dispatch
 # on joins and deliver no candidate to the writer. Bound the expensive shard, preserve global UNKNOWN,
