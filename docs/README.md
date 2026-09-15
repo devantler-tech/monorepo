@@ -18,7 +18,8 @@ npm run build    # production build (this is what CI validates)
 The About page offers the CV as an A4 PDF at `/pdfs/nikolai-emil-damm-cv.pdf`. It is not a checked-in
 file: the static endpoint in `src/pages/pdfs/` renders it during `npm run build` (and on request in
 `npm run dev`) from the data in `src/data/cv.ts`, using the same palette as the site theme. Update the
-About page and `src/data/cv.ts` together when experience, skills, or education change.
+About page and `src/data/cv.ts` together when experience, skills, or education change, and bump the
+`updated` date there so the PDF says when its content last changed.
 
 ## Blog editorial standard
 

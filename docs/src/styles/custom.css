@@ -441,6 +441,8 @@ main > .hero,
 }
 
 .sl-markdown-content .cv-download .sl-link-button {
+  /* Starlight gives markdown link buttons a trailing margin; drop it so flex centering is exact. */
+  margin-inline-end: 0;
   font-weight: 600;
   letter-spacing: 0.01em;
   box-shadow: 0 2px 16px var(--glow-color);

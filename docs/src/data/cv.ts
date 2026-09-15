@@ -26,6 +26,8 @@ export interface SkillGroup {
 }
 
 export const cv = {
+  /** Bump when the content below changes: it is the "Updated" date printed on the PDF. */
+  updated: "2026-09-15",
   name: "Nikolai Emil Damm",
   title: "Developer Experience Engineer",
   location: "Funen, Denmark",

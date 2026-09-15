@@ -11,11 +11,11 @@ import { cv, type Entry, type Role, type SkillGroup } from "../data/cv";
 const PAGE = { width: 595.28, height: 841.89 };
 
 // Two-column layout: a dark sidebar in the site's dark theme, a white main column.
-const SIDEBAR = { width: 178, pad: 20 };
+const SIDEBAR = { width: 178, pad: 20, footerTop: PAGE.height - 60 };
 const MAIN = { x: SIDEBAR.width + 28, right: 30, top: 40, bottom: 38 };
-const SIDEBAR_FOOTER_TOP = PAGE.height - 60;
 const MAIN_WIDTH = PAGE.width - MAIN.x - MAIN.right;
 const TIMELINE_INDENT = 16;
+const SECTION_HEADER_HEIGHT = 27;
 
 // Palette mirrors src/styles/custom.css: neon green on the dark surface, forest green on white.
 const COLOR = {
@@ -56,8 +56,6 @@ const FONT_DATA: Record<string, string> = {
 export interface CvPdfOptions {
   /** Portrait photo as a path, Buffer, or data URI (JPEG or PNG). */
   photo: string | Buffer;
-  /** Shown as "Updated <month> <year>" in the sidebar footer. */
-  updatedAt: Date;
 }
 
 interface TextStyle {
@@ -93,11 +91,30 @@ interface EntryLayout {
   url?: string;
 }
 
+/** A sidebar section body draws at (x, width, y) and returns the y it ended at. */
+type SidebarSection = [title: string, body: (x: number, width: number, y: number) => number];
+
 class CvRenderer {
   private readonly doc: PDFKit.PDFDocument;
+  private readonly updatedAt = new Date(cv.updated);
   private y = MAIN.top;
   private pageIndex = 0;
   private timeline: number[] = [];
+  private pendingSection: string | undefined;
+  /** Measuring pass: text and lines are laid out but not drawn. */
+  private measuring = false;
+
+  // Sidebar sections flow across pages in this order, each drawn on the first page with room for it.
+  private readonly sidebarQueue: SidebarSection[] = [
+    ["Contact", (x, w, y) => this.sideContact(x, w, y)],
+    ["Technical Skills", (x, w, y) => this.sideSkills(cv.technicalSkills, x, w, y)],
+    ["Languages", (x, w, y) => this.sideValue(cv.languages, x, w, y)],
+    ["Personal Skills", (x, w, y) => this.sideSkills(cv.personalSkills, x, w, y)],
+    ["Certifications & Badges", (x, w, y) => this.sideList(cv.certifications, x, w, y)],
+    ["Courses", (x, w, y) => this.sideList(cv.courses, x, w, y)],
+    ["Community", (x, w, y) => this.sideList(cv.community, x, w, y)],
+    ["Interests", (x, w, y) => this.sideValue(cv.interests, x, w, y)],
+  ];
 
   constructor(private readonly options: CvPdfOptions) {
     this.doc = new PDFDocument({
@@ -113,8 +130,8 @@ class CvRenderer {
         Subject: `${cv.title} — curriculum vitae`,
         Keywords: "CV, resume, developer experience, platform engineering, Kubernetes, GitOps",
         Creator: "devantler.tech",
-        CreationDate: options.updatedAt,
-        ModDate: options.updatedAt,
+        CreationDate: this.updatedAt,
+        ModDate: this.updatedAt,
       },
     });
     for (const [name, data] of Object.entries(FONT_DATA)) this.doc.registerFont(name, dataUriToBuffer(data));
@@ -130,6 +147,12 @@ class CvRenderer {
 
     this.drawSidebar();
     this.drawMain();
+    if (this.sidebarQueue.length > 0) {
+      const left = this.sidebarQueue.map(([title]) => title).join(", ");
+      throw new Error(
+        `CV sidebar sections did not fit on the ${this.pageIndex + 1} page(s) the main column needs: ${left}. Shorten sidebar content in src/data/cv.ts or reorder the sidebar queue in src/lib/cv-pdf.ts.`,
+      );
+    }
     this.drawPageNumbers();
     this.doc.end();
     return done;
@@ -157,14 +180,17 @@ class CvRenderer {
     this.entries(cv.openSource);
   }
 
+  /** Defers the heading so the first entry can reserve space for both and never strand it. */
   private section(title: string) {
-    // Keep the heading with whatever follows it: never strand it at the bottom of a page.
-    this.ensure(70);
+    this.pendingSection = title;
+  }
+
+  private drawSectionHeader(title: string) {
     this.y += 2;
     this.text(title.toUpperCase(), MAIN.x, this.y, MAIN_WIDTH, STYLE.sectionTitle);
     this.y += 13;
-    this.doc.moveTo(MAIN.x, this.y).lineTo(MAIN.x + MAIN_WIDTH, this.y).lineWidth(0.8).stroke(COLOR.rule);
-    this.doc.moveTo(MAIN.x, this.y).lineTo(MAIN.x + 34, this.y).lineWidth(2).stroke(COLOR.accentOnWhite);
+    this.line(MAIN.x, this.y, MAIN.x + MAIN_WIDTH, this.y, 0.8, COLOR.rule);
+    this.line(MAIN.x, this.y, MAIN.x + 34, this.y, 2, COLOR.accentOnWhite);
     this.y += 12;
   }
 
@@ -207,7 +233,11 @@ class CvRenderer {
     for (const bullet of item.bullets ?? []) height += 3 + this.height(bullet, width - 11, STYLE.body);
     if (linkText) height += 4 + this.height(linkText, width, STYLE.link);
     height += 8;
-    this.ensure(height);
+    this.ensure(height + (this.pendingSection ? SECTION_HEADER_HEIGHT : 0));
+    if (this.pendingSection) {
+      this.drawSectionHeader(this.pendingSection);
+      this.pendingSection = undefined;
+    }
 
     this.timeline.push(this.y + STYLE.entryTitle.size * 0.55);
     if (item.period) {
@@ -239,9 +269,7 @@ class CvRenderer {
     const x = MAIN.x + 4;
     const first = this.timeline[0]!;
     const last = this.timeline[this.timeline.length - 1]!;
-    if (this.timeline.length > 1) {
-      this.doc.moveTo(x, first).lineTo(x, last).lineWidth(1.2).stroke(COLOR.accentRail);
-    }
+    if (this.timeline.length > 1) this.line(x, first, x, last, 1.2, COLOR.accentRail);
     for (const y of this.timeline) {
       this.doc.circle(x, y, 2.6).fillAndStroke(COLOR.accentOnWhite, COLOR.white);
     }
@@ -273,27 +301,13 @@ class CvRenderer {
     const width = SIDEBAR.width - SIDEBAR.pad * 2;
     let y = this.pageIndex === 0 ? this.sidebarHero(x, width) : this.sidebarCompactHero(x, width);
 
-    const sections: Array<[string, (y: number) => number]> =
-      this.pageIndex === 0
-        ? [
-            ["Contact", (y) => this.sideContact(x, width, y)],
-            ["Technical Skills", (y) => this.sideSkills(cv.technicalSkills, x, width, y)],
-            ["Languages", (y) => this.sideValue(cv.languages, x, width, y)],
-          ]
-        : this.pageIndex === 1
-          ? [
-              ["Personal Skills", (y) => this.sideSkills(cv.personalSkills, x, width, y)],
-              ["Certifications & Badges", (y) => this.sideList(cv.certifications, x, width, y)],
-              ["Courses", (y) => this.sideList(cv.courses, x, width, y)],
-              ["Community", (y) => this.sideList(cv.community, x, width, y)],
-              ["Interests", (y) => this.sideValue(cv.interests, x, width, y)],
-            ]
-          : [];
-    for (const [title, body] of sections) y = this.sideSection(title, x, width, y, body);
-    if (y > SIDEBAR_FOOTER_TOP) {
-      throw new Error(
-        `CV sidebar on page ${this.pageIndex + 1} overflows into its footer by ${Math.ceil(y - SIDEBAR_FOOTER_TOP)}pt: shorten a sidebar entry in src/data/cv.ts or move a section to another page in src/lib/cv-pdf.ts.`,
-      );
+    // Draw queued sections in order while they fit above the footer; the rest wait for the next page.
+    while (this.sidebarQueue.length > 0) {
+      const [title, body] = this.sidebarQueue[0]!;
+      const height = this.measure(() => this.sideSection(title, x, width, 0, body));
+      if (y + height > SIDEBAR.footerTop) break;
+      y = this.sideSection(title, x, width, y, body);
+      this.sidebarQueue.shift();
     }
 
     this.sidebarFooter(x, width);
@@ -332,14 +346,14 @@ class CvRenderer {
   }
 
   private sideDivider(y: number): number {
-    this.doc.moveTo(SIDEBAR.pad, y).lineTo(SIDEBAR.width - SIDEBAR.pad, y).lineWidth(0.6).stroke(COLOR.sidebarRule);
+    this.line(SIDEBAR.pad, y, SIDEBAR.width - SIDEBAR.pad, y, 0.6, COLOR.sidebarRule);
     return y + 16;
   }
 
-  private sideSection(title: string, x: number, width: number, y: number, body: (y: number) => number): number {
+  private sideSection(title: string, x: number, width: number, y: number, body: SidebarSection[1]): number {
     this.text(title.toUpperCase(), x, y, width, STYLE.sideLabel);
-    this.doc.moveTo(x, y + 12).lineTo(x + 18, y + 12).lineWidth(1.2).stroke(COLOR.accent);
-    return body(y + 20) + 16;
+    this.line(x, y + 12, x + 18, y + 12, 1.2, COLOR.accent);
+    return body(x, width, y + 20) + 16;
   }
 
   private sideContact(x: number, width: number, y: number): number {
@@ -381,9 +395,9 @@ class CvRenderer {
   }
 
   private sidebarFooter(x: number, width: number) {
-    const updated = this.options.updatedAt.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+    const updated = this.updatedAt.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
     const y = PAGE.height - 40;
-    this.doc.moveTo(x, y - 12).lineTo(x + width, y - 12).lineWidth(0.6).stroke(COLOR.sidebarRule);
+    this.line(x, y - 12, x + width, y - 12, 0.6, COLOR.sidebarRule);
     this.text(cv.website.label, x, y, width, { ...STYLE.link, color: COLOR.accent }, { link: cv.website.url });
     this.text(`Updated ${updated}`, x, y + 12, width, STYLE.sideMuted);
   }
@@ -399,7 +413,22 @@ class CvRenderer {
     }
   }
 
-  // ─── Text primitives ───
+  // ─── Drawing primitives ───
+
+  /** Runs a layout closure without drawing and returns its result. */
+  private measure<T>(layout: () => T): T {
+    this.measuring = true;
+    try {
+      return layout();
+    } finally {
+      this.measuring = false;
+    }
+  }
+
+  private line(x1: number, y1: number, x2: number, y2: number, lineWidth: number, color: string) {
+    if (this.measuring) return;
+    this.doc.moveTo(x1, y1).lineTo(x2, y2).lineWidth(lineWidth).stroke(color);
+  }
 
   private apply(style: TextStyle) {
     this.doc.font(style.font).fontSize(style.size).fillColor(style.color);
@@ -409,11 +438,11 @@ class CvRenderer {
     return { width, lineGap: style.lineGap ?? 0, characterSpacing: style.characterSpacing ?? 0, ...extra };
   }
 
-  /** Draws wrapped text at an absolute position and returns the height it occupied. */
+  /** Lays out wrapped text at an absolute position, draws it unless measuring, and returns its height. */
   private text(content: string, x: number, y: number, width: number, style: TextStyle, extra: PDFKit.Mixins.TextOptions = {}): number {
     this.apply(style);
     const options = this.textOptions(style, width, extra);
-    this.doc.text(content, x, y, options);
+    if (!this.measuring) this.doc.text(content, x, y, options);
     return this.doc.heightOfString(content, options);
   }
 
