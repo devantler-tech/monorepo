@@ -483,8 +483,16 @@ grep -Fq 'AUTOMATION-OWNED (SELF-PROGRESSING)' "${surveyor}" ||
 # (and `gh pr checks` exits 1, indistinguishable from red CI). Pin the probe, the digest shape,
 # and the EXHAUSTED_AT_START annotation so a later edit cannot silently drop attribution.
 # shellcheck disable=SC2016
-grep -Fq 'gh api rate_limit --jq' "${surveyor}" ||
-  fail "surveyor does not sample gh api rate_limit at survey start/end"
+# #2501 — GraphQL must be sampled IN-QUERY. Measured 2026-09-15 at the same moment, `gh api
+# rate_limit` reported GraphQL used=0 while `rateLimit` inside a query reported used=1182: the REST
+# endpoint reads another pool, so a budget line built from it can never show exhaustion coming.
+grep -Fq "gh api graphql -f query='query { rateLimit { remaining limit resetAt } }'" "${surveyor}" ||
+  fail "surveyor does not sample the GraphQL budget in-query at survey start/end (#2501)"
+grep -Fq 'gh api rate_limit --jq .resources.core' "${surveyor}" ||
+  fail "surveyor does not sample the REST core budget at survey start/end"
+if grep -Fq '.resources.graphql' "${surveyor}"; then
+  fail "surveyor reads the GraphQL budget from gh api rate_limit, a different pool from the one its GraphQL calls spend (#2501)"
+fi
 grep -Fq 'budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>' "${surveyor}" ||
   fail "surveyor digest template is missing the fixed-shape budget line"
 grep -Fq 'EXHAUSTED_AT_START' "${surveyor}" ||

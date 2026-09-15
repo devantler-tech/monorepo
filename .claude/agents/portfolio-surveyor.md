@@ -62,10 +62,10 @@ public and private — no per-repo loop needed to enumerate):
 
 0. **Budget sample (start + end) — before any other GitHub read, and again immediately before you
    emit the digest:**
-   `gh api rate_limit --jq '{graphql:.resources.graphql,core:.resources.core,search:.resources.search}'`
-   Record `remaining`/`limit` for **graphql** and **core** at both samples (search is optional
-   context). The `rate_limit` endpoint does **not** spend the GraphQL or core budgets — it is the
-   cheap attribution instrument for [#2365](https://github.com/devantler-tech/monorepo/issues/2365).
+   `gh api graphql -f query='query { rateLimit { remaining limit resetAt } }'` for **graphql**, and
+   `gh api rate_limit --jq .resources.core` for **core**; record `remaining`/`limit` at both samples.
+   Never take graphql from `rate_limit`: it reads another pool (used=0 there vs 1182 in-query, #2501).
+   A probe refused on a rate limit counts as 0 — the attribution instrument for #2365.
    Emit both samples as the digest `budget:` line (shape below). If **graphql.remaining is 0 at the
    start sample**, still emit the line and mark it `EXHAUSTED_AT_START` so the orchestrator knows the
    tick is about to run blind *before* a failed command discovers it — do not invent numbers; if the
