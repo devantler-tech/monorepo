@@ -92,9 +92,10 @@ EOF
   exit 1
 }
 
-# Canonical decimal only: shell arithmetic reads a leading zero as octal, so "030"
-# would silently mean 24 and "08" would abort.
-is_count() { case "$1" in '' | *[!0-9]* | 0[0-9]*) return 1 ;; *) return 0 ;; esac }
+# Canonical decimal of at most 9 digits only. Shell arithmetic reads a leading zero
+# as octal ("030" would silently mean 24, "08" would abort), and a longer number can
+# wrap once multiplied (days x 86400 must stay far below the 64-bit limit).
+is_count() { case "$1" in '' | *[!0-9]* | 0[0-9]*) return 1 ;; *) [ "${#1}" -le 9 ] ;; esac }
 
 # GitHub allows roughly 500 content-generating requests an hour. No run, archive
 # or restore, may plan more mutations than this.
@@ -205,6 +206,9 @@ gh_reason() { head -c 300 "$GH_ERR" 2>/dev/null | tr '\n' ' '; }
 # stretch of skipped candidates cannot outlast the lease between two writes.
 readonly CLAIM_RENEW_SECONDS="${BOARD_ARCHIVE_CLAIM_RENEW_SECONDS:-600}"
 is_count "$CLAIM_RENEW_SECONDS" || die "BOARD_ARCHIVE_CLAIM_RENEW_SECONDS must be a whole number of seconds" 1
+# The claim lease is about two hours; renewing less often than hourly would let a
+# write happen on a lapsed claim.
+[ "$CLAIM_RENEW_SECONDS" -le 3600 ] || die "BOARD_ARCHIVE_CLAIM_RENEW_SECONDS must be at most 3600, well inside the claim lease" 1
 LAST_RENEW=""
 renew_claim() {
   [ -n "$CLAIM" ] || die "no claim is held; refusing to write to the board"

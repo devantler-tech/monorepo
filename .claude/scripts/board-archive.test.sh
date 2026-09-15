@@ -345,6 +345,13 @@ check "--max with a leading zero is a usage error" "$([ "$rc" = 1 ] && [ -z "$lo
 run zerodays --min-closed-days 0
 check "a plain zero is still accepted" "$([ "$rc" = 0 ] && echo 0 || echo 1)" "rc=$rc $err"
 
+# 23. numbers are bounded before any arithmetic, and renewal stays inside the claim lease
+run hugedays --min-closed-days 9223372036854775807
+check "an oversized --min-closed-days is a usage error" "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+BOARD_ARCHIVE_CLAIM_RENEW_SECONDS=3601 run slowrenew --apply --manifest "$tmp/slowrenew.tsv" --claim "2238:$claim_sha"
+check "a renewal interval longer than an hour is refused before any call" \
+  "$([ "$rc" = 1 ] && [ -z "$log" ] && echo 0 || echo 1)" "rc=$rc $log"
+
 # 17. the printed usage matches what the parser requires
 run usagetext --not-a-flag
 check "usage shows --claim for both mutating forms" \
