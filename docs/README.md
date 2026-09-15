@@ -13,6 +13,13 @@ npm run dev      # local dev server
 npm run build    # production build (this is what CI validates)
 ```
 
+## CV download
+
+The About page offers the CV as an A4 PDF at `/pdfs/nikolai-emil-damm-cv.pdf`. It is not a checked-in
+file: the static endpoint in `src/pages/pdfs/` renders it during `npm run build` (and on request in
+`npm run dev`) from the data in `src/data/cv.ts`, using the same palette as the site theme. Update the
+About page and `src/data/cv.ts` together when experience, skills, or education change.
+
 ## Blog editorial standard
 
 The blog is a maintained product for people outside the repository, not a release-note feed or an

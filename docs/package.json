@@ -12,15 +12,19 @@
     "@astrojs/markdown-satteri": "^0.4.1",
     "@astrojs/sitemap": "^3.7.4",
     "@astrojs/starlight": "^0.42.0",
+    "@expo-google-fonts/inter": "^0.4.2",
+    "@expo-google-fonts/roboto-mono": "^0.4.2",
     "astro": "^7.3.1",
     "astro-mermaid": "^2.1.0",
     "mermaid": "^11.17.2",
+    "pdfkit": "^0.20.2",
     "sharp": "^0.35.4",
     "starlight-blog": "^0.29.0",
     "starlight-links-validator": "^0.26.0"
   },
   "devDependencies": {
     "@mdx-js/mdx": "^3.1.1",
+    "@types/pdfkit": "^0.17.6",
     "starlight-github-alerts": "^0.4.0"
   },
   "overrides": {
