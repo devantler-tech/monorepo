@@ -4700,6 +4700,8 @@ if want drift; then
   # clean shape is a pointer to the contract's roster. A bare "Codex" is the
   # runtime's own name, so Codex counts as a lane only in a review phrase or when
   # listed beside another lane.
+  echo "    (no output above = loaders agree with the constitution)"
+  echo
   echo "  hard-coded review-lane roster (loader names lanes instead of pointing at AGENTS.md):"
   for L in "$CLAUDE_LOADER" "$CLAUDE_IMPROVER_LOADER" \
            "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER"; do
@@ -4715,10 +4717,10 @@ if want drift; then
       echo "        the roster and its priority belong to AGENTS.md — point at it instead."
     fi
   done
+  echo "    (no output above = no loader hard-codes the review-lane roster)"
   # The Cursor lane's prompt is deployed server-side. A version-controlled source
   # file says what was written, not what is running, so equality is never inferred.
   echo "    cursor loader: UNKNOWN (deployed prompt is server-side; its source file is not evidence of it)"
-  echo "    (no output above = loaders agree with the constitution)"
 fi
 
 # ── 6. OUTCOMES ───────────────────────────────────────────────────────────────
