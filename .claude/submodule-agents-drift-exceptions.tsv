@@ -1,0 +1,14 @@
+# Pinned submodules whose AGENTS.md is known to lag. Read by .claude/scripts/submodule-agents-drift.sh.
+# One row per pin: path TAB full 40-character revision TAB reason. A row matches only its exact
+# revision; when the pin moves the row turns stale and fails, so this list can only shrink.
+applications/ascoachingogvaner	7f08db28150e00dad49f0ce7ec516e63b2534832	pin predates the AGENTS.md fix on main; remove this row when the pin moves
+applications/fleet-gitops	8f514f9d985fe9a616af42809bea93b7dd266c4c	private repository; not readable anonymously in CI
+applications/unifi	895c3e07a849cc4bf57eba0fe57c0df8f0fc0125	pin predates the AGENTS.md fix on main; remove this row when the pin moves
+applications/wedding-app	6eb0d5ed4f554b0f8dd9014d49ff671fc3c34d6b	pin predates the AGENTS.md fix on main; remove this row when the pin moves
+github/devantler-tech/github-actions/actions	4f4e07a3ebf3e1161756a292966e36c91a65ee04	pin predates the AGENTS.md fix on main; remove this row when the pin moves
+libraries/agent-plugins	2a6f0aea35514572c0ff902e0abcbd34dd4e9349	pin predates the AGENTS.md fix on main; remove this row when the pin moves
+libraries/agent-skills	9d434db40324c052f018a1c26ca8167a32e4e245	pin predates the AGENTS.md fix on main; remove this row when the pin moves
+platform	bd0b2ad4cc9a07db8c93f437bdefbde44485ea52	pin predates the AGENTS.md fix on main; remove this row when the pin moves
+templates/dotnet-template	611c180a8ae57f7a056b4b525a423ab1f53ea48b	pin predates the AGENTS.md fix on main; remove this row when the pin moves
+templates/go-template	e907384f02b3dada506ab12b272eff6a69cc5c12	pin predates the AGENTS.md fix on main; remove this row when the pin moves
+templates/platform-tenant-template	1d50ee517b0a02f28817eed9814f99867fa5d445	main still names the old role; fixed by devantler-tech/platform-tenant-template#191, then remove this row when the pin moves

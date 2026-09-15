@@ -74,6 +74,7 @@ jobs:
       pipefail-grep-guard: ${{ steps.filter.outputs.pipefail-grep-guard }}
       python-ban-guard: ${{ steps.filter.outputs.python-ban-guard }}
       surveyor-forge-vocabulary: ${{ steps.filter.outputs.surveyor-forge-vocabulary }}
+      submodule-agents-drift: ${{ steps.filter.outputs.submodule-agents-drift }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -262,6 +263,22 @@ jobs:
               # guard can start refusing a newly mandated read with CI silent.
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            submodule-agents-drift:
+              - '.claude/scripts/submodule-agents-drift.sh'
+              - '.claude/scripts/submodule-agents-drift.test.sh'
+              - '.claude/submodule-agents-drift-exceptions.tsv'
+              # Every pin bump changes which AGENTS.md is read, and a moved pin turns its
+              # exceptions row stale, so any gitlink change must re-run the check.
+              - '.gitmodules'
+              - 'applications/**'
+              - 'libraries/**'
+              - 'templates/**'
+              - 'github/**'
+              - 'platform'
+              - 'homebrew-tap'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1984,6 +2001,35 @@ jobs:
       - name: Test disabled aggregates and legitimate filtered jobs
         run: bash .claude/scripts/ci-aggregate-contract.test.sh
 
+  test-submodule-agents-drift:
+    name: Check submodule AGENTS.md drift
+    needs: changes
+    if: needs.changes.outputs.submodule-agents-drift == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # Scheduled agent runs execute this on macOS, whose bash 3.2 and BSD userland differ from
+        # the Linux runners, so the self-test runs on both.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint the drift check
+        if: matrix.os == 'ubuntu-latest'
+        run: shellcheck .claude/scripts/submodule-agents-drift.sh .claude/scripts/submodule-agents-drift.test.sh
+      - name: Self-test the drift check
+        run: bash .claude/scripts/submodule-agents-drift.test.sh
+      # Reads each pinned AGENTS.md anonymously over HTTPS: no token is passed, so a private
+      # submodule needs an exceptions row and the verdict matches a local run.
+      - name: Check pinned submodule AGENTS.md files
+        if: matrix.os == 'ubuntu-latest'
+        run: bash .claude/scripts/submodule-agents-drift.sh
+
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
@@ -2050,6 +2096,7 @@ jobs:
       - test-portfolio-surveyor-contract
       - test-product-value-contract
       - test-ci-aggregate-contract
+      - test-submodule-agents-drift
     permissions: {}
     steps:
       - name: Check job results
@@ -2117,3 +2164,4 @@ jobs:
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}
             ${{ needs.test-ci-aggregate-contract.result }}
+            ${{ needs.test-submodule-agents-drift.result }}
