@@ -91,7 +91,9 @@ add_run_ms() {
 
 run_check() {
   set +e
-  OUT=$(bash "$SCRIPT" --store "$1" --now-ms "$NOW_MS" "${@:2}" 2>&1)
+  # Every case names a sessions root inside the fixture directory, so no verdict can depend on
+  # outcome records that happen to exist beside the temporary directory on the invoking machine.
+  OUT=$(bash "$SCRIPT" --store "$1" --sessions "$TMP/sessions" --now-ms "$NOW_MS" "${@:2}" 2>&1)
   RC=$?
   set -e
 }
@@ -496,9 +498,128 @@ run_check "$db"
 expect_rc 2 "a missing next_run_at column must be UNKNOWN"
 expect_out "automations.next_run_at is missing" "next_run_at schema drift must name the missing dependency"
 
+# --- cause class and account scope (monorepo#2908) -----------------------------------------------
+# A NOT-PRODUCING verdict used to name no cause, so every outage re-derived it by hand. And a
+# per-automation OK survived an account-wide refusal: measured 2026-09-15, `daily-ai-engineer` had 12
+# consecutive `usage_limit_exceeded` stubs while `agent-improver` read OK because the older of its two
+# newest settled runs was still healthy — its own newest run was the same 3-second refusal.
+SESS=$TMP/sessions
+
+# add_rollout <db> <automation> <codex_error_info>
+# Attaches an outcome record to the automation's NEWEST run, shaped like the runtime's own: the
+# classifier sits beside an operator-facing message that must never reach the check's output.
+add_rollout() {
+  local tid
+  tid=$(sqlite3 "$1" "SELECT thread_id FROM automation_runs WHERE automation_id='$2' ORDER BY updated_at DESC LIMIT 1;")
+  mkdir -p "$SESS/2026/09/15"
+  printf '%s\n' '{"type":"session_meta","payload":{"id":"fixture"}}' \
+    "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"t\",\"error\":{\"message\":\"PRIVATE-ROLLOUT-MESSAGE\",\"codex_error_info\":\"$3\"}}}" \
+    > "$SESS/2026/09/15/rollout-2026-09-15T00-00-00-$tid.jsonl"
+}
+
+# An all-stub lane names its cause class.
+db=$TMP/cause-quota.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 no
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 no
+add_rollout "$db" lane-a usage_limit_exceeded
+run_check "$db"
+expect_rc 1 "an all-stub lane refused for quota must still be NOT-PRODUCING"
+expect_out "cause=quota/billing" "the verdict must name the bounded cause class"
+expect_out_not "PRIVATE-ROLLOUT-MESSAGE" "the outcome record's message must never reach the output"
+expect_out_not "usage_limit_exceeded" "the raw classifier is mapped to a bounded class, never echoed"
+
+# No outcome record is an UNKNOWN cause, never a missing verdict.
+db=$TMP/cause-none.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 no
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 no
+run_check "$db"
+expect_rc 1 "an all-stub lane with no outcome record must still be NOT-PRODUCING"
+expect_out "cause=unknown" "an unfindable cause must be reported as unknown"
+
+# THE LIVE SHAPE: one automation all stubs, the other's newest run the same refusal beside a healthy run.
+db=$TMP/acct-live.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-e $(( GRACE_MS + 900000 )) 4 no
+add_run "$db" lane-e $(( GRACE_MS + 60000 ))  3 no
+add_rollout "$db" lane-e usage_limit_exceeded
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 120000 ))  3 no
+add_rollout "$db" lane-i usage_limit_exceeded
+run_check "$db"
+expect_rc 1 "an account-wide refusal must be NOT-PRODUCING"
+expect_out "NOT-PRODUCING  lane-i" "a healthy OLDER run must not certify an automation whose newest run the account refused"
+expect_out "account-scoped" "the account-scope verdict must say why a mixed window did not read OK"
+expect_out_not "OK  lane-i" "the refused automation must not also be reported OK"
+
+# The cross-read names ONE automation, so scope must not depend on which one was asked about.
+run_check "$db" --automation lane-i
+expect_rc 1 "a scoped check must still see its own account-scoped refusal"
+
+# A lane that has not dispatched since a SIBLING's account-scoped refusal is not proven producing.
+db=$TMP/acct-sibling.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-e $(( GRACE_MS + 900000 )) 4 no
+add_run "$db" lane-e $(( GRACE_MS + 60000 ))  3 no
+add_rollout "$db" lane-e usage_limit_exceeded
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 3600000 )) 800 yes
+run_check "$db" --automation lane-i
+expect_rc 1 "an automation with no run since a sibling's account-scoped refusal must be NOT-PRODUCING"
+expect_out "on lane-e" "the verdict must name the automation whose refusal it rests on"
+
+# Control: a NON-account cause changes nothing — a mixed window stays OK.
+db=$TMP/cause-transient.db; mkstore "$db"; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 120000 ))  3 no
+add_rollout "$db" lane-i server_overloaded
+run_check "$db"
+expect_rc 0 "a per-run cause must not escalate to an account-wide verdict"
+expect_out_not "NOT-PRODUCING" "a transient per-run failure beside a healthy run must stay OK"
+
+# The mapping is EXACT: a lookalike classifier is unknown, never account-scoped.
+db=$TMP/cause-lookalike.db; mkstore "$db"; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 120000 ))  3 no
+add_rollout "$db" lane-i usage_limit_exceeded_v2
+run_check "$db"
+expect_rc 0 "a prefix-extended classifier must not be read as an account-scoped refusal"
+
+# Recovery: a healthy run ANYWHERE on the account after the refusal means it has cleared.
+db=$TMP/acct-cleared.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 3600000 )) 3 no
+add_rollout "$db" lane-i usage_limit_exceeded
+add_run "$db" lane-e $(( GRACE_MS + 1800000 )) 800 yes
+add_run "$db" lane-e $(( GRACE_MS + 60000 ))  900 yes
+run_check "$db"
+expect_rc 0 "a healthy run after the refusal clears the account-scope verdict"
+
+# Recovery compares SETTLEMENT times, not start times. The newest settled run is selected by
+# `updated_at`, so the refusal marker and the producing runs it is compared against must be too.
+# Otherwise a run that STARTED after the refusal began but SETTLED before it ended clears the
+# refusal, and the sibling lane reads OK while the account is still refusing — a false certification
+# in the one direction this check exists to prevent.
+db=$TMP/acct-order.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run    "$db" lane-e $(( GRACE_MS + 900000 )) 4    no          # older stub
+add_run_ms "$db" lane-e $(( GRACE_MS + 60000 ))  4000 no          # the refusal: settles last
+add_rollout "$db" lane-e usage_limit_exceeded
+add_run    "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes         # long-past producing run
+# Nested inside the refusal's window: created_at is LATER than the refusal's, updated_at EARLIER.
+add_run_ms "$db" lane-i $(( GRACE_MS + 61000 ))  1000 yes
+run_check "$db"
+expect_rc 1 "a run nested inside the refusal's window must not clear an account-scoped refusal"
+expect_out "NOT-PRODUCING  lane-i" "a run that settled before the refusal must not certify the sibling lane"
+expect_out "account-scoped" "the verdict must still name the account scope"
+expect_out_not "OK  lane-i" "a start-time comparison would have reported this lane OK"
+
+# Structural privacy: the outcome record is read for its classifier only.
+asserts=$(( asserts + 1 ))
+noncomment=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
+if grep -Eq '(^|[^A-Za-z0-9_])message([^A-Za-z0-9_]|$)' <<<"$noncomment"; then
+  note_fail "the script must not read the outcome record's message"
+fi
+
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 63 ]; then
+if [ "$asserts" -lt 91 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi

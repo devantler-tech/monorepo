@@ -135,10 +135,12 @@ liveness="$(extract_section 'Run [`.claude/scripts/codex-lane-liveness.sh`]' \
 
 [ "${#liveness}" -gt 200 ] || fail "liveness paragraph captured only ${#liveness} chars — extraction is broken"
 
-# The factual description is TRUE of the script as it stands and must not be quietly dropped:
-# deleting it would let a later reader assume the check already reports a cause.
-assert_contains "${liveness}" 'reads only timings and an inbox-presence flag' \
-  'the accurate description of what the script reads must survive'
+# The factual description of what the script reads from the STORE must not be quietly dropped, and
+# since monorepo#2908 the one outcome-record field it reads must be named beside it, bounded.
+assert_contains "${liveness}" 'reads only run timings, an inbox-presence flag, and the `thread_id`' \
+  'the accurate description of what the script reads from the store must survive, naming every field it selects including the thread id'
+assert_contains "${liveness}" 'prints it as a bounded cause class' \
+  'the clause must say the check reports a bounded class, not the outcome record itself'
 
 assert_contains "${liveness}" 'defence in depth' \
   'the clause must say its narrowness is defence in depth, not a bar on naming the cause'
