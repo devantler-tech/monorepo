@@ -1943,39 +1943,34 @@ grep -Fq 'not by `workflow_id` alone' "${surveyor}" ||
 # make the exemption permanent for every managed path instead of one run deep, destroying the safety
 # net that justifies the property test. Require the id to be stripped before grouping, and pin the
 # absence of the exact-match form so it cannot come back.
-# Pin BOTH OPERANDS WHOLE, never an isolated fragment. A bare `sub(…)` / `$ENV.RUN_NAME` /
-# `(.name // "")` token search passes as long as the token appears ANYWHERE in the document, so the
-# moment prose quotes the old shape — documenting the superseded form is exactly the kind of edit
-# that happens here — the assertion goes vacuous while the executable recipe regresses freely.
-# Each grep below therefore matches one complete operand of the comparison as it appears in the
-# recipe. They are split at the recipe's own line break because `grep -F` is line-oriented: the
-# comparison spans two lines, so a single pattern containing `== (($ENV.RUN_NAME` can never match.
-# (CodeRabbit raised the vacuity; its suggested one-line form had exactly that defect.)
-grep -Fq 'select(((.name // "") | sub("( - Update)? #[0-9]+$"; "")) ==' "${surveyor}" ||
-  fail "surveyor must normalise the API run name (null-safe, id stripped) as the comparison's left operand (#2704)"
-
-grep -Fq '(($ENV.RUN_NAME // "") | sub("( - Update)? #[0-9]+$"; "")))]' "${surveyor}" ||
-  fail "surveyor must normalise \$ENV.RUN_NAME (null-safe, id stripped) as the comparison's right operand (#2704)"
+# Pin the WHOLE executable recipe line, never an isolated fragment: a bare `sub(…)` token passes as
+# long as it appears anywhere in the document, including prose quoting a superseded shape. The line
+# strips the id null-safely (the corpus has NULL names, and `sub` on null aborts the filter) and emits
+# one TSV line per run, so --paginate cannot restart a grouping at a page boundary (#2704, #2939).
+grep -Fq "gh api --paginate \"repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100\" --jq '.workflow_runs[] | [((.name // \"\") | sub(\"( - Update)? #[0-9]+\$\"; \"\")), (.conclusion // \"none\"), .created_at, .id] | @tsv'" "${surveyor}" ||
+  fail "surveyor's streak walk must emit one id-stripped, null-safe TSV line per run (#2704, #2939)"
 
 grep -Fq 'select(.name == $ENV.RUN_NAME)' "${surveyor}" &&
   fail "surveyor must not match the RAW run name — the per-run id caps every streak at 1 (#2704)"
 
 # A run name is untrusted: a workflow's run-name: can be built from a pull-request title, so a name
 # carrying a quote would terminate an interpolated jq string and the rest would parse as filter
-# syntax. $ENV passes it as data. Pin the absence of the interpolated form too — fixing the query
-# while leaving the old shape documented elsewhere would keep the injectable recipe in circulation.
+# syntax. Pin the absence of the interpolated form.
 grep -Fq 'select(.name == "<name>")' "${surveyor}" &&
   fail "surveyor must not interpolate an untrusted run name into the --jq filter (#2704)"
 
-# $ENV closes the jq half only — the value still has to reach the environment intact. A single-quoted
-# literal ends at the first apostrophe, and real run names carry them, so that form breaks in the
-# shell before jq ever sees it. Require the variable handoff, and reject the literal-paste shape:
-# without both, the boundary is merely relocated rather than closed.
-grep -Fq 'RUN_NAME="$run_name" gh api' "${surveyor}" ||
-  fail "surveyor must hand the run name to the environment as a variable, not a literal (#2704)"
+# The environment handoff is not a safe alternative: the read-only guard refuses a $ENV read inside
+# --jq and an assignment prefix in front of gh, both correctly, so that recipe failed closed in ~54
+# surveyor dispatches (2026-08-25 → 09-16). The query takes no parameter and the surveyor matches by
+# reading its output (#2939). Pin both refused shapes absent, and the page-restarting array wrapper.
+grep -Fq '$ENV.RUN_NAME' "${surveyor}" &&
+  fail "surveyor must not read the run name from \$ENV — the forge guard refuses it (#2939)"
 
-grep -Fq "RUN_NAME='<name>'" "${surveyor}" &&
-  fail "surveyor must not paste an untrusted run name in as a single-quoted literal (#2704)"
+grep -Fq 'RUN_NAME="$run_name" gh api' "${surveyor}" &&
+  fail "surveyor must not prefix gh with a run-name assignment — the forge guard refuses it (#2939)"
+
+grep -Fq -e "--jq '[.workflow_runs[]" "${surveyor}" &&
+  fail "surveyor's paginated streak walk must not wrap runs in an array — --jq runs per page (#2939)"
 
 # AGENTS.md must carry the same property test, or the two surfaces disagree about what preempts a run.
 grep -Fq 'dynamic/dependabot/' "${constitution}" ||

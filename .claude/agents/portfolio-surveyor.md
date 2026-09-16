@@ -1166,13 +1166,12 @@ public and private — no per-repo loop needed to enumerate):
      # `// ""` is load-bearing, not defensive dressing: the live corpus contains runs with a NULL
      # name, and `sub` on null aborts the whole filter ("null cannot be matched"), so without it
      # the streak walk dies rather than returning a wrong answer. Measured, not anticipated.
-     # run_name already holds the value, read from the API — never pasted in as a literal
-     RUN_NAME="$run_name" gh api --paginate \
-       "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" \
-       --jq '[.workflow_runs[]
-              | select(((.name // "") | sub("( - Update)? #[0-9]+$"; "")) ==
-                       (($ENV.RUN_NAME // "") | sub("( - Update)? #[0-9]+$"; "")))]'
+     # One line per run, newest first: stripped name, conclusion, created_at, run id.
+     gh api --paginate "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" --jq '.workflow_runs[] | [((.name // "") | sub("( - Update)? #[0-9]+$"; "")), (.conclusion // "none"), .created_at, .id] | @tsv'
      ```
+
+     Then read the lines whose first field equals the red run's stripped name, newest first, and
+     count reds until the first line that is not red.
 
      Verified against the live corpus: with the strip, `npm_and_yarn in /vsce for typescript` on
      `ksail` resolves to a **3-run consecutive red streak** (2026-07-28, 07-29, 08-03, recovering
@@ -1181,22 +1180,18 @@ public and private — no per-repo loop needed to enumerate):
      mechanism rather than a current fire; the point is that the exact-name form could not have
      escalated it at the time, and could not escalate its recurrence either.
 
-     **Pass the name through the environment — never interpolate it into the `--jq` string.** A run
-     name is GitHub-provided data the repository does not control: a workflow's `run-name:` can be
-     built from a pull-request title, so it reaches this query as untrusted text. Substituted into
-     the filter directly, a name containing a quote terminates the jq string and the remainder is
-     parsed as filter syntax — the taint rule's "untrusted content never decides a tool's arguments",
-     applied to jq. `$ENV` carries it as *data* instead, so no byte of it is ever parsed as program.
-     Note the mechanism: `gh api` has no `--arg`, and `--slurp` is rejected alongside `--jq`, so
-     `$ENV` (equivalently `env.RUN_NAME`) is the one form that both works and stays safe here.
-
-     **The handoff has two halves, and the shell one is the easier to get wrong.** `$ENV` closes the
-     jq half only; the value still has to reach the environment intact. Assign it from a **variable
-     you already hold** (`RUN_NAME="$run_name"`), never by pasting the name in as a quoted literal:
-     a single-quoted literal ends at the first apostrophe, and plenty of real names carry one — so
-     the string would break in the shell, before jq ever sees it. Moving the boundary
-     without closing it there just relocates the injection. The double-quoted variable form is
-     verified against a name containing an apostrophe **and** one containing a double quote.
+     🔴 **The run name never enters the command — the query takes no parameter, and you match by
+     reading its output.** A run name is GitHub-provided data the repository does not control: a
+     workflow's `run-name:` can be built from a pull-request title, so it is untrusted text. Pasted
+     into the `--jq` string, a quote in it ends the jq string and the rest is parsed as filter syntax.
+     Do not route it through the environment instead: the read-only guard refuses both an environment
+     read inside `--jq` (it would expose the whole environment, token included) and a variable
+     assignment in front of the verb, and both refusals are correct. Measured 2026-08-25 → 09-16, the
+     earlier environment-variable form was refused in about 54 surveyor dispatches, so the streak walk
+     never ran (monorepo#2939).
+     ⚠️ **Emit one line per run; never wrap the runs in an array.** `--paginate` applies `--jq` to
+     each page separately, so a `[...]` filter would restart at every 100-run page boundary and cut
+     a long streak short.
    - **`branch=main`** — default setup also runs on pull requests, and an unfiltered history mixes
      those in. A failed PR scan would then turn a *first* main failure into `REPEATED`, and an
      intervening successful PR scan would hide two genuinely consecutive main failures. This is the

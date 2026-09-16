@@ -51,10 +51,10 @@
 # it to whitelist safe names means parsing jq programs inside a security boundary,
 # which is more attack surface than the one benign use is worth.
 #
-# The surveyor overlay prescribes exactly that benign use today (the default-branch
-# streak walk, to avoid pasting a run name into a jq program as a literal), so with
-# the guard enforcing, that walk fails closed mid-run. The fix belongs in the overlay
-# — filter in the shell instead of in jq — and is tracked as monorepo#2939. This row
+# The surveyor's default-branch streak walk used exactly that benign use (to avoid
+# pasting a run name into a jq program as a literal), so it failed closed mid-run.
+# The overlay now runs a parameter-free query and matches by reading its output
+# (monorepo#2939); that form is pinned `allow` below the assignment row. This row
 # records the refusal as a decision so it stops being invisible; it is deliberately
 # NOT a gap, because promoting it to `allow` is the one outcome that would be unsafe.
 # On the two WRAPPED prescriptions: both are pinned `deny` because the refusal is
@@ -65,9 +65,8 @@
 # reason `$ENV` is: the guard classifies statically from argv, and a prefix is an
 # execution vector (`LD_PRELOAD=`, `GIT_SSH_COMMAND=`, `GH_HOST=`), so it would
 # have to whitelist names and reason about their semantics inside a security
-# boundary. This is the same overlay line the `$ENV` row above covers, so the one
-# overlay fix tracked as monorepo#2939 — filter in the shell, not in jq — removes
-# both refusals together.
+# boundary. It was the same overlay line the `$ENV` row above covers; the
+# parameter-free query that replaced it (monorepo#2939) removed both refusals.
 #
 # `fid_status=$(gh api ...)` — a read wrapped in a command substitution. The guard
 # refuses BOTH substitution forms (backtick and dollar-paren) as a category, which
@@ -217,6 +216,7 @@ allow	gh api -X GET "repos/devantler-tech/monorepo/activity" -f per_page=100 -f 
 allow	gh api --method GET "repos/devantler-tech/monorepo/activity" -f per_page=100
 allow	gh api -X GET search/issues -f q=org:devantler-tech --paginate
 deny	RUN_NAME="$run_name" gh api --paginate "repos/devantler-tech/monorepo/actions/workflows/ci.yaml/runs?branch=main&per_page=100" --jq '[.workflow_runs[]]'
+allow	gh api --paginate "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" --jq '.workflow_runs[] | [((.name // "") | sub("( - Update)? #[0-9]+$"; "")), (.conclusion // "none"), .created_at, .id] | @tsv'
 deny	fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
 deny	for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10], .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"; done
 deny	set -o pipefail; fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
