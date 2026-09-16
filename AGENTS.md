@@ -897,7 +897,7 @@ Run [`.claude/scripts/codex-lane-liveness.sh`](.claude/scripts/codex-lane-livene
 liveness question. It classifies each ACTIVE automation's newest **settled** runs by run duration and
 inbox-item presence — the discriminators that actually separate the two states (healthy runs measured
 768–24,428 s with an inbox item, against 4-second stubs with none) — and exits `0` producing, `1` not
-producing, `2` **UNKNOWN**. From the scheduler store it reads only timings and an inbox-presence flag, never a run's error
+producing, `2` **UNKNOWN**. From the scheduler store it reads only run timings, an inbox-presence flag, and the `thread_id` that locates a run's outcome record, never a run's error
 payload. From a stub's own outcome record it reads exactly one field, the `codex_error_info`
 classifier, and prints it as a bounded cause class (`cause=quota/billing` or `cause=unknown`), never
 the text beside it — so it cannot carry private runtime state into an artifact (monorepo#2908).
