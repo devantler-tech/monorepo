@@ -1095,7 +1095,14 @@ names the user's CLAUDE.md as taking precedence, and CLAUDE.md loads this contra
 the reminder defers to the user's instructions here: in any run dispatched by a scheduler,
 **omit that footer** and keep everything else the reminder asks for (the commit trailer stays).
 Interactive sessions keep the footer, because it is exactly what identifies them. Quoting the literal
-inline in prose is not a marker line and stays harmless. Measured 2026-09-15: **47 of 79** `claude/*` PRs opened across
+inline in prose is not a marker line and stays harmless.
+🔴 **This is ENFORCED on every pull request, so the collision cannot silently return.** The
+`Guard PR body disclosure-marker collision` job runs
+[`pr-ownership-disclosure.sh --enforce`](.claude/scripts/pr-ownership-disclosure.sh) against the PR
+body and **fails when it carries BOTH literals** — the exact state that makes a routine PR classify
+as the maintainer's own interactive work. It carries no paths filter, because the collision is a
+property of the body rather than of any file the PR touches. A genuine interactive PR carries only
+the footer and passes, so the guard can never fire on his own work. Measured 2026-09-15: **47 of 79** `claude/*` PRs opened across
 the portfolio since 2026-09-07 carried both markers, against **0 of 29** `codex/*` (#3157).
 ⚠️ Fix it at the source, never by letting the routine disclosure outrank it: an interactive PR can
 carry both literals, and reading his PR as the routine's is the dangerous direction.
