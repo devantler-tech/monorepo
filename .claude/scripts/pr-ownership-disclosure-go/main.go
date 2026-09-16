@@ -219,6 +219,8 @@ func Classify(body string) string {
 	}
 }
 
+// usage writes the command-line help to stderr. It is wired to flag.Usage so an
+// unrecognised flag prints the same text as an explicit usage error.
 func usage() {
 	fmt.Fprint(os.Stderr, `Usage:
   pr-ownership-disclosure --input <file>|-
@@ -240,6 +242,10 @@ Exit codes:
 `)
 }
 
+// main reads a pull-request body from a file or stdin and prints its ownership
+// verdict. With --enforce it additionally fails, before printing any verdict,
+// when the body carries both disclosure literals at once — the collision that
+// would otherwise classify as interactive and hide the routine marker.
 func main() {
 	input := flag.String("input", "", "file containing the PR body, or - for stdin")
 	enforce := flag.Bool("enforce", false, "exit 1 when the body carries BOTH literals")
