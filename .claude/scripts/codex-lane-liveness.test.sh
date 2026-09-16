@@ -592,6 +592,24 @@ add_run "$db" lane-e $(( GRACE_MS + 60000 ))  900 yes
 run_check "$db"
 expect_rc 0 "a healthy run after the refusal clears the account-scope verdict"
 
+# Recovery compares SETTLEMENT times, not start times. The newest settled run is selected by
+# `updated_at`, so the refusal marker and the producing runs it is compared against must be too.
+# Otherwise a run that STARTED after the refusal began but SETTLED before it ended clears the
+# refusal, and the sibling lane reads OK while the account is still refusing — a false certification
+# in the one direction this check exists to prevent.
+db=$TMP/acct-order.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run    "$db" lane-e $(( GRACE_MS + 900000 )) 4    no          # older stub
+add_run_ms "$db" lane-e $(( GRACE_MS + 60000 ))  4000 no          # the refusal: settles last
+add_rollout "$db" lane-e usage_limit_exceeded
+add_run    "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes         # long-past producing run
+# Nested inside the refusal's window: created_at is LATER than the refusal's, updated_at EARLIER.
+add_run_ms "$db" lane-i $(( GRACE_MS + 61000 ))  1000 yes
+run_check "$db"
+expect_rc 1 "a run nested inside the refusal's window must not clear an account-scoped refusal"
+expect_out "NOT-PRODUCING  lane-i" "a run that settled before the refusal must not certify the sibling lane"
+expect_out "account-scoped" "the verdict must still name the account scope"
+expect_out_not "OK  lane-i" "a start-time comparison would have reported this lane OK"
+
 # Structural privacy: the outcome record is read for its classifier only.
 asserts=$(( asserts + 1 ))
 noncomment=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
@@ -601,7 +619,7 @@ fi
 
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 87 ]; then
+if [ "$asserts" -lt 91 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi

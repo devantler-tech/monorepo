@@ -239,7 +239,7 @@ all_ids=$(sq "SELECT id FROM automations WHERE status='ACTIVE' ORDER BY id;") \
   || die_unknown "could not enumerate automations"
 while IFS= read -r aid; do
   case "$aid" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
-  newest=$(sq "SELECT created_at, (updated_at - created_at),
+  newest=$(sq "SELECT updated_at, (updated_at - created_at),
                       CASE WHEN inbox_title IS NULL OR trim(inbox_title) = '' THEN 1 ELSE 0 END,
                       COALESCE(thread_id, '')
                FROM automation_runs
@@ -248,15 +248,15 @@ while IFS= read -r aid; do
                  AND updated_at <= ${settled_before}
                ORDER BY updated_at DESC
                LIMIT 1;") || die_unknown "could not read runs for ${aid}"
-  IFS='|' read -r n_created n_dur n_noinbox n_tid <<EOF
+  IFS='|' read -r n_settled n_dur n_noinbox n_tid <<EOF
 $newest
 EOF
-  case "$n_created" in ''|*[!0-9]*) continue ;; esac
+  case "$n_settled" in ''|*[!0-9]*) continue ;; esac
   case "$n_dur" in ''|*[!0-9]*) continue ;; esac
   [ "$n_noinbox" = "1" ] || continue
   [ "$n_dur" -le "$stub_limit_ms" ] || continue
   [ "$(cause_class "$n_tid")" = "quota/billing" ] || continue
-  if [ "$n_created" -gt "$acct_ms" ]; then acct_ms=$n_created; acct_src=$aid; fi
+  if [ "$n_settled" -gt "$acct_ms" ]; then acct_ms=$n_settled; acct_src=$aid; fi
 done <<EOF
 $all_ids
 EOF
@@ -268,7 +268,7 @@ if [ "$acct_ms" -gt 0 ]; then
                          AND r.status != 'IN_PROGRESS'
                          AND r.updated_at <= ${settled_before}
                          AND r.inbox_title IS NOT NULL AND trim(r.inbox_title) != ''
-                         AND r.created_at > ${acct_ms};") \
+                         AND r.updated_at > ${acct_ms};") \
     || die_unknown "could not read account-wide production"
   case "$produced_since" in ''|*[!0-9]*) die_unknown "unparsable account-wide production count" ;; esac
   if [ "$produced_since" -gt 0 ]; then acct_ms=0; acct_src=""; fi
@@ -393,7 +393,7 @@ EOF
   # This automation's newest PRODUCING run, needed only while an account-scoped refusal is live.
   own_prod=0
   if [ "$acct_ms" -gt 0 ]; then
-    own_prod=$(sq "SELECT COALESCE(MAX(created_at), 0) FROM automation_runs
+    own_prod=$(sq "SELECT COALESCE(MAX(updated_at), 0) FROM automation_runs
                    WHERE automation_id = '${id}'
                      AND status != 'IN_PROGRESS'
                      AND updated_at <= ${settled_before}
