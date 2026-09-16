@@ -4945,8 +4945,8 @@ work misses:
   `devantler-tech` App is premium because subscriptions fund managed compute, maintenance,
   availability, retention, and support. **Premium buys operation, not permission.** MegaLinter has an
   additional gate: its AGPL-3.0 license explanation says a closed-source online service calling it is
-  not permitted, so external paid use requires written commercial permission or full AGPL
-  network-source compliance before beta or billing.
+  not permitted, so operating a hosted service that calls it requires written commercial permission
+  or full AGPL network-source compliance before any external beta, paid access, or production launch.
 - **Emergent generic patterns.** Once that sharing boundary is met, an approach (a CI step, a release
   config, a workflow, a lint/test setup, an agent skill, a docs convention) that independently appears
   in 2+ products has become *generic* — extract the reusable mechanism into the right **shared library**
