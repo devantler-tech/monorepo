@@ -316,6 +316,7 @@ jobs:
               - 'AGENTS.md'
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/scripts/pr-ownership-disclosure.sh'
+              - '.claude/scripts/pr-ownership-disclosure.test.sh'
               - '.claude/scripts/pr-ownership-disclosure-go/**'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
@@ -589,6 +590,7 @@ jobs:
               # The contract test asserts the ownership classifier exists and
               # pins the matcher rules, so a change to it must re-run the test.
               - '.claude/scripts/pr-ownership-disclosure.sh'
+              - '.claude/scripts/pr-ownership-disclosure.test.sh'
               - '.claude/scripts/pr-ownership-disclosure-go/**'
               - '.github/workflows/ci.yaml'
             pipefail-grep-guard:
@@ -1415,6 +1417,36 @@ jobs:
           cache: false
       - name: Verify the PR ownership disclosure classifier
         run: go -C .claude/scripts/pr-ownership-disclosure-go test ./...
+      - name: Verify the wrapper forwards --enforce on every path
+        run: bash .claude/scripts/pr-ownership-disclosure.test.sh
+
+  guard-pr-body-marker-collision:
+    name: Guard PR body disclosure-marker collision
+    # Runs on EVERY pull request, deliberately without a paths filter: the collision is a property
+    # of the PR body, not of any file the PR touches, so a filtered job would pass precisely on the
+    # PRs that change nothing under .claude/.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/pr-ownership-disclosure-go/go.mod
+          cache: false
+      - name: Guard the PR body against the disclosure-marker collision
+        env:
+          # The body is attacker-controlled on a fork PR, so it reaches the step as an environment
+          # value and never as a template expansion inside the script.
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" >"$RUNNER_TEMP/pr-body.md"
+          bash .claude/scripts/pr-ownership-disclosure.sh --enforce --input "$RUNNER_TEMP/pr-body.md"
 
   test-memory-hygiene:
     name: Test memory hygiene guard
@@ -2059,6 +2091,7 @@ jobs:
       - test-comment-disclosure-drift
       - test-surveyor-forge-vocabulary
       - test-pr-ownership-disclosure
+      - guard-pr-body-marker-collision
       - test-worktree-claim
       - test-flow-scorecard
       - test-safe-clone
@@ -2127,6 +2160,7 @@ jobs:
             ${{ needs.test-comment-disclosure-drift.result }}
             ${{ needs.test-surveyor-forge-vocabulary.result }}
             ${{ needs.test-pr-ownership-disclosure.result }}
+            ${{ needs.guard-pr-body-marker-collision.result }}
             ${{ needs.test-worktree-claim.result }}
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}

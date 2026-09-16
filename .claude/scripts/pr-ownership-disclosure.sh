@@ -28,14 +28,22 @@
 #   pr-ownership-disclosure.sh --input <file>|-
 #   pr-ownership-disclosure.sh --repo <owner>/<repo> --pr <number>
 #
+# Options:
+#   --enforce   exit 1 when the body carries BOTH literals. A scheduled run omits
+#               the interactive footer by contract, so a body carrying both makes
+#               a routine PR classify as the maintainer's own interactive work and
+#               mutes his steer on it.
+#
 # Exit codes:
 #   0  classified (verdict on stdout)
+#   1  --enforce only: the body carries both literals
 #   2  usage, unreadable input, or a failed fetch
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 input=""
+enforce=""
 repo=""
 pr=""
 
@@ -51,6 +59,10 @@ while [ $# -gt 0 ]; do
       input="$2"
       shift 2
       ;;
+    --enforce)
+      enforce="--enforce"
+      shift
+      ;;
     --repo)
       [ $# -ge 2 ] || die "--repo needs a value"
       repo="$2"
@@ -62,7 +74,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     -h|--help)
-      sed -n '3,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '3,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -98,11 +110,11 @@ fi
 
 if [ -n "$input" ]; then
   if [ "$input" = "-" ]; then
-    "$guard_binary" --input -
+    "$guard_binary" ${enforce:+$enforce} --input -
     exit $?
   fi
   [ -r "$input" ] || die "cannot read body: $input"
-  "$guard_binary" --input "$input"
+  "$guard_binary" ${enforce:+$enforce} --input "$input"
   exit $?
 fi
 
@@ -116,4 +128,4 @@ if ! gh pr view "$pr" --repo "$repo" --json body --jq '.body' >"$body_file"; the
   die "failed to fetch $repo#$pr"
 fi
 
-"$guard_binary" --input "$body_file"
+"$guard_binary" ${enforce:+$enforce} --input "$body_file"

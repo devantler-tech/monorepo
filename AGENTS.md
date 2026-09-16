@@ -1095,10 +1095,26 @@ names the user's CLAUDE.md as taking precedence, and CLAUDE.md loads this contra
 the reminder defers to the user's instructions here: in any run dispatched by a scheduler,
 **omit that footer** and keep everything else the reminder asks for (the commit trailer stays).
 Interactive sessions keep the footer, because it is exactly what identifies them. Quoting the literal
-inline in prose is not a marker line and stays harmless. Measured 2026-09-15: **47 of 79** `claude/*` PRs opened across
+inline in prose is not a marker line and stays harmless.
+🔴 **This is ENFORCED on every pull request, so the collision cannot silently return.** The
+`Guard PR body disclosure-marker collision` job runs
+[`pr-ownership-disclosure.sh --enforce`](.claude/scripts/pr-ownership-disclosure.sh) against the PR
+body and **fails when it carries BOTH literals** — the exact state that makes a routine PR classify
+as the maintainer's own interactive work. It carries no paths filter, because the collision is a
+property of the body rather than of any file the PR touches. Measured 2026-09-15: **47 of 79** `claude/*` PRs opened across
 the portfolio since 2026-09-07 carried both markers, against **0 of 29** `codex/*` (#3157).
-⚠️ Fix it at the source, never by letting the routine disclosure outrank it: an interactive PR can
-carry both literals, and reading his PR as the routine's is the dangerous direction.
+🔴 **The collision is a defect WHICHEVER session produced it, so the guard is deliberately NOT
+exempted for interactive PRs — but its message names BOTH remedies.** An interactive PR *can* carry
+both literals, so a guard that skipped interactive PRs would skip exactly the ambiguous bodies it
+exists to stop. The correct edit differs by origin, though, and naming only one would hand the
+maintainer the wrong one on his own PR: a scheduled run deletes the footer it should never have
+emitted, while an interactive session deletes the routine disclosure it is not entitled to. Either
+way the body ends up carrying one marker and classifies unambiguously.
+⚠️ The classification rule above is UNCHANGED and still reads **interactive wins** when both appear.
+That rule governs how an EXISTING artifact is attributed — every already-merged both-marker PR
+included — while the guard governs only what may newly land, so the two never disagree about the same
+body. Fix it at the source, never by letting the routine disclosure outrank it: reading his PR as the
+routine's is the dangerous direction.
 
 Everything below is the **shared engineering contract** every product follows. A submodule's own
 `AGENTS.md` references it; repo-specific rules in a submodule card win for that repo.
