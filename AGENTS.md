@@ -4934,6 +4934,19 @@ work misses:
   evidence. If any condition is missing, fail closed to local ownership — never move the first consumer
   merely to manufacture a shared abstraction. World at Ruin-specific automation therefore stays in
   `devantler-tech/world-at-ruin` unless a second repository demonstrates the same product-neutral need.
+- **Recurring CI/CD is an operated-product decision
+  ([#3374](https://github.com/devantler-tech/monorepo/issues/3374)).** When the same concern recurs
+  portfolio-wide, evaluate a centrally operated GitHub App or hosted service before copying caller
+  workflows. Keep reusable workflows and actions when execution must remain repository-local or a
+  service adds unjustified complexity. Before adoption, review licensing and commercial-hosting
+  rights, isolate untrusted code, grant least privilege, define data retention, assess cost and
+  availability, and preserve an exit or self-hosting path. Follow the Renovate model: the software is
+  open source and genuinely self-hostable with the operator's own App and infrastructure; the official
+  `devantler-tech` App is premium because subscriptions fund managed compute, maintenance,
+  availability, retention, and support. **Premium buys operation, not permission.** MegaLinter has an
+  additional gate: its AGPL-3.0 license explanation says a closed-source online service calling it is
+  not permitted, so operating a hosted service that calls it requires written commercial permission
+  or full AGPL network-source compliance before any external beta, paid access, or production launch.
 - **Emergent generic patterns.** Once that sharing boundary is met, an approach (a CI step, a release
   config, a workflow, a lint/test setup, an agent skill, a docs convention) that independently appears
   in 2+ products has become *generic* — extract the reusable mechanism into the right **shared library**
