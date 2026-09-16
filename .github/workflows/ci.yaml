@@ -316,6 +316,7 @@ jobs:
               - 'AGENTS.md'
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/scripts/pr-ownership-disclosure.sh'
+              - '.claude/scripts/pr-ownership-disclosure.test.sh'
               - '.claude/scripts/pr-ownership-disclosure-go/**'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
@@ -589,6 +590,7 @@ jobs:
               # The contract test asserts the ownership classifier exists and
               # pins the matcher rules, so a change to it must re-run the test.
               - '.claude/scripts/pr-ownership-disclosure.sh'
+              - '.claude/scripts/pr-ownership-disclosure.test.sh'
               - '.claude/scripts/pr-ownership-disclosure-go/**'
               - '.github/workflows/ci.yaml'
             pipefail-grep-guard:
@@ -1415,6 +1417,8 @@ jobs:
           cache: false
       - name: Verify the PR ownership disclosure classifier
         run: go -C .claude/scripts/pr-ownership-disclosure-go test ./...
+      - name: Verify the wrapper forwards --enforce on every path
+        run: bash .claude/scripts/pr-ownership-disclosure.test.sh
 
   guard-pr-body-marker-collision:
     name: Guard PR body disclosure-marker collision

@@ -128,4 +128,4 @@ if ! gh pr view "$pr" --repo "$repo" --json body --jq '.body' >"$body_file"; the
   die "failed to fetch $repo#$pr"
 fi
 
-"$guard_binary" --input "$body_file"
+"$guard_binary" ${enforce:+$enforce} --input "$body_file"
