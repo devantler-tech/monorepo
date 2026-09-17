@@ -30,3 +30,12 @@ updates:
       interval: "daily"
     cooldown:
       default-days: 7
+    ignore:
+      # astro-mermaid renders the site's diagrams and declares
+      # `peer mermaid@"^10.0.0 || ^11.0.0"`, so a mermaid major breaks `npm ci`
+      # with ERESOLVE and the docs build never starts. No published
+      # astro-mermaid version widens that range, so a mermaid 12 PR can only
+      # ever sit red. Minor and patch updates still come through.
+      # Drop this entry once astro-mermaid ships a release accepting mermaid 12.
+      - dependency-name: "mermaid"
+        update-types: ["version-update:semver-major"]
