@@ -3056,3 +3056,19 @@ grep -Fq 'reported with a `CURRENT` verdict' <<<"${_ci_step}" ||
 grep -Fq 'no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"${_ci_step}" ||
   fail "step 4 must fail closed when the inline install path does not hold an executable helper (Codex P1, monorepo#3339)"
 echo "portfolio surveyor contract: round-13 classifier-path-resolution assertions passed"
+
+# Round 14 — a GitHub-managed red (`event: dynamic`, `path` under `dynamic/`) is not a repairable
+# pentad failure: the per-PR pentad must classify it `managed-failing`, fail closed when the run
+# cannot be joined, and keep `mergeState` as the independent gate (monorepo#2557, agent-plugins#219).
+grep -Fq 'is GitHub-managed: report `managed-failing:X`, never `failing:X`' "${surveyor}" ||
+  fail "pentad (a) must report a GitHub-managed red as managed-failing, never failing (monorepo#2557)"
+grep -Fq 'unjoinable one stays `failing:X` (fail closed)' "${surveyor}" ||
+  fail "pentad (a) must keep an unjoinable managed red as failing:X — fail closed (monorepo#2557)"
+grep -Fq '`managed-failing` alone never makes a PR `NEEDS-FIX`' "${surveyor}" ||
+  fail "pentad (a) must say managed-failing alone never makes a PR NEEDS-FIX (monorepo#2557)"
+grep -Fq 'no ordinary failing check (`managed-failing` alone does not count)' "${surveyor}" ||
+  fail "review-ready must exclude managed-failing from the failing-check condition (monorepo#2557)"
+_mf_lines=$(grep -Fc 'pentad: checks=<green|failing:X|managed-failing:X|failing:X+managed-failing:Y>,' "${surveyor}" || true)
+[ "${_mf_lines}" -ge 2 ] ||
+  fail "both trusted-bot digest lines must carry the managed-failing checks grammar, found ${_mf_lines} (monorepo#2557)"
+echo "portfolio surveyor contract: round-14 managed-failing pentad assertions passed"
