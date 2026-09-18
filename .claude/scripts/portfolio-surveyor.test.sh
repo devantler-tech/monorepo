@@ -3072,3 +3072,30 @@ _mf_lines=$(grep -Fc 'pentad: checks=<green|failing:X|managed-failing:X|failing:
 [ "${_mf_lines}" -ge 2 ] ||
   fail "both trusted-bot digest lines must carry the managed-failing checks grammar, found ${_mf_lines} (monorepo#2557)"
 echo "portfolio surveyor contract: round-14 managed-failing pentad assertions passed"
+
+# Round 15 — step 4 states how to READ the classifier, so the three output cases it defines are
+# pinned here. Round 13 covers how the helper is INVOKED and where its path resolves; neither
+# answers what a caller does with what comes back, and that is the half that decides
+# `nothing_on_fire`. The contract has exactly one green case, so a rule keyed to "not empty"
+# would parse the helper's own `usage:` block as red runs (CodeRabbit, monorepo#3390/#3391).
+# Re-extracted independently rather than reusing the round-12 `_ci_step`, so this round cannot
+# pass because an earlier round happened to leave a stale value in scope.
+_out_step=$(sed -n '/^4\. \*\*CI red on `main` — deployment delta only\.\*\*/,/^   \*\*Split GitHub-MANAGED runs/p' "${surveyor}")
+[ -n "${_out_step}" ] ||
+  fail "portfolio-surveyor.md must keep an extractable step '4. **CI red on \`main\` — deployment delta only.**' (monorepo#3390)"
+# Flattened exactly as round 12 does: the table and the prose wrap at 100 columns, so an
+# unflattened grep reads a present clause as missing.
+_out_step=$(tr "\n" " " <<<"${_out_step}" | tr -s "[:space:]" " ")
+grep -Fq -- "Read the verdict from the helper's OUTPUT, never by capturing its exit status." <<<"${_out_step}" ||
+  fail "step 4 must send the caller to the helper's OUTPUT, not its exit status — the \`; echo \"EXIT=\$?\"\` idiom is denied by the read-only guard and nothing executes (monorepo#3390)"
+grep -Fq 'completely empty | exit 0 with no red runs → that branch is **green**' <<<"${_out_step}" ||
+  fail "step 4 must pin empty output as the green case (monorepo#3390)"
+grep -Fq 'those are the **red runs**' <<<"${_out_step}" ||
+  fail "step 4 must pin well-formed TSV output as the red runs (monorepo#3390)"
+grep -Fq 'the helper FAILED → **`QUERY-UNKNOWN`** for that repository; never `nothing_on_fire: true`' <<<"${_out_step}" ||
+  fail "step 4 must route any other output to QUERY-UNKNOWN and forbid nothing_on_fire: true there (monorepo#3390)"
+grep -Fq 'never treat "not empty" as "red runs"' <<<"${_out_step}" ||
+  fail "step 4 must require POSITIVE identification of red rows — the helper's \`usage:\` block is not empty and is not TSV (monorepo#3390)"
+grep -Fq 'the empty result stays the one green case' <<<"${_out_step}" ||
+  fail "step 4 must state that the empty result is the ONLY green case (monorepo#3390)"
+echo "portfolio surveyor contract: round-15 classifier-output-contract assertions passed"
