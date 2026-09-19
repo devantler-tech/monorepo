@@ -306,7 +306,9 @@ validate_body() {
   done <"${body_setext_headings}"
 
   awk 'NF && $0 !~ /^(Fixes|Part of) #$/ { print }' "${visible_template}" >"${template_structure}"
-  awk 'NF && $0 != "## Why" && $0 != "## What" && $0 !~ /^(Fixes|Part of) #$/ { print }' \
+  # Preserve level-two section headings in the authored-content view so Why
+  # and What can stop at the next repository-template section.
+  awk 'NF && $0 !~ /^##[[:space:]]+/ && $0 !~ /^(Fixes|Part of) #$/ { print }' \
     "${visible_template}" >"${template_fixed}"
   awk '!seen[$0]++' "${template_fixed}" >"${template_fixed_unique}"
   while IFS= read -r fixed_line; do
@@ -358,12 +360,15 @@ validate_body() {
   fi
 
   issue_count="$(grep -Ec '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" || true)"
-  relationship_marker_count="$(grep -Ec '^(Fixes|Part of) #' "${visible_body}" || true)"
+  relationship_marker_count="$(grep -Eic '^[[:space:]]*(Fixes|Part of)[[:space:]]*#' \
+    "${visible_body}" || true)"
   fixes_count="$(grep -Ec '^Fixes #[1-9][0-9]*$' "${visible_body}" || true)"
   part_of_count="$(grep -Ec '^Part of #[1-9][0-9]*$' "${visible_body}" || true)"
   no_issue_marker_count="$(grep -Fxc 'No issue: trivial fix.' "${visible_body}" || true)"
   case "${issue_count}:${fixes_count}:${part_of_count}" in
     1:1:0|1:0:1|2:1:1)
+      [ "${relationship_marker_count}" -eq "${issue_count}" ] ||
+        fail "every issue relationship marker must use a positive issue number"
       [ "${no_issue_marker_count}" -eq 0 ] ||
         fail "the trivial-fix marker cannot accompany an issue relationship"
       ;;
@@ -405,12 +410,13 @@ validate_body() {
 
   why_chars="$(awk '
     /^## Why$/ { active = 1; next }
-    /^## What$/ { active = 0 }
+    active && /^##[[:space:]]+/ { active = 0 }
     active { line = $0; gsub(/[[:space:]]/, "", line); total += length(line) }
     END { print total + 0 }
   ' "${body_content}")"
   what_chars="$(awk '
     /^## What$/ { active = 1; next }
+    active && /^##[[:space:]]+/ { active = 0 }
     /^(Fixes|Part of) #[1-9][0-9]*$/ || /^No issue: trivial fix[.]$/ { active = 0 }
     active { line = $0; gsub(/[[:space:]]/, "", line); total += length(line) }
     END { print total + 0 }
@@ -439,7 +445,7 @@ validate_body() {
       return count
     }
     /^## Why$/ { active = 1; next }
-    /^## What$/ { active = 0 }
+    active && /^##[[:space:]]+/ { active = 0 }
     active { text = text " " $0 }
     END { print sentence_count(text) }
   ' "${body_content}")"
@@ -462,6 +468,7 @@ validate_body() {
       return count
     }
     /^## What$/ { active = 1; next }
+    active && /^##[[:space:]]+/ { active = 0 }
     /^(Fixes|Part of) #[1-9][0-9]*$/ || /^No issue: trivial fix[.]$/ { active = 0 }
     active { text = text " " $0 }
     END { print sentence_count(text) }
@@ -514,6 +521,10 @@ validate_body() {
   fi
   if grep -Fq '`' "${body_validation}"; then
     fail "PR body must not contain code or command snippets"
+  fi
+  if grep -Eq '(^|[^[:alnum:]_])([Cc]hange|[Cc]all|[Ii]nvoke|[Rr]ename|[Rr]efactor|[Mm]odify|[Rr]emove|[Aa]dd|[Uu]pdate|[Ff]ix)[[:space:]]+[A-Z][[:alnum:]]*(Body|Config|Handler|Parser|Client|Server|Controller|Service|Factory|Manager|Reader|Writer|Validator|Builder|Request|Response|Error|Result|Context|Option|Options)([^[:alnum:]_]|$)' \
+    "${body_validation}"; then
+    fail "PR body must not contain implementation or validation detail"
   fi
   if grep -Eiq '(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
     "${body_validation}"; then
