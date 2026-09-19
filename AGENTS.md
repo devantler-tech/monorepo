@@ -4887,7 +4887,8 @@ finishing capacity:
 🔴 **Check the per-lane bound before opening a draft — do not assume it.** Run
 [`lane-draft-count.sh --lane <your namespace>`](.claude/scripts/lane-draft-count.sh): it counts open
 drafts by **branch namespace**, never by author, because every instance authors as the same login
-(monorepo#2562). Exit `0` allows a new draft, `1` means the lane is over the cap, and `2` is
+(monorepo#2562). Exit `0` means only that the **per-lane** bound does not block a draft — the
+per-run limit of 5 still applies on its own — `1` means the lane is over the cap, and `2` is
 **UNKNOWN**. Treat UNKNOWN as "not permitted": a partial read is a floor, and a floor below the cap
 looks exactly like permission. Finishing work and filing issues stay available either way.
 
