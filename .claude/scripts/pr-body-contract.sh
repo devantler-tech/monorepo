@@ -164,6 +164,8 @@ validate_body() {
   local line_number
   local previous_line=0
   local issue_count
+  local fixes_count
+  local part_of_count
   local issue_line
   local what_line
   local why_chars
@@ -200,9 +202,15 @@ validate_body() {
   done <"${body_headings}"
 
   issue_count="$(grep -Ec '^(Fixes|Part of) #[0-9]+$' "${visible_body}" || true)"
-  [ "${issue_count}" -eq 1 ] ||
-    fail "body must contain exactly one issue relationship: Fixes #N or Part of #N"
-  issue_line="$(grep -nE '^(Fixes|Part of) #[0-9]+$' "${visible_body}" | cut -d: -f1)"
+  fixes_count="$(grep -Ec '^Fixes #[0-9]+$' "${visible_body}" || true)"
+  part_of_count="$(grep -Ec '^Part of #[0-9]+$' "${visible_body}" || true)"
+  case "${issue_count}:${fixes_count}:${part_of_count}" in
+    1:1:0|1:0:1|2:1:1) ;;
+    *)
+      fail "body must contain exactly one issue relationship: Fixes #N or Part of #N; one Fixes and one Part of experiment relationship may appear together"
+      ;;
+  esac
+  issue_line="$(grep -nE '^(Fixes|Part of) #[0-9]+$' "${visible_body}" | head -n 1 | cut -d: -f1)"
   what_line="$(grep -nFx '## What' "${visible_body}" | cut -d: -f1)"
   [ "${issue_line}" -gt "${what_line}" ] || fail "issue relationship must follow the What section"
 
