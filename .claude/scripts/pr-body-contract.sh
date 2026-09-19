@@ -256,7 +256,7 @@ validate_body() {
   local no_issue_marker_count
   local no_issue_line
   local issue_line
-  local final_issue_line
+  local final_delivery_line
   local what_line
   local why_chars
   local what_chars
@@ -480,9 +480,10 @@ validate_body() {
     fail "Why and What must be short prose, not bullet inventories"
   fi
 
-  if [ "${issue_count}" -gt 0 ]; then
-    final_issue_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$' "${body_content}" | tail -n 1 | cut -d: -f1)"
-    if awk -v boundary="${final_issue_line}" '
+  if [ "${issue_count}" -gt 0 ] || [ "${allow_no_issue}" -eq 1 ]; then
+    final_delivery_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$|^No issue: trivial fix[.]$' \
+      "${body_content}" | tail -n 1 | cut -d: -f1)"
+    if awk -v boundary="${final_delivery_line}" '
       NR > boundary && NF {
         if ($0 ~ /^⚠️ Merge order:[[:space:]]+[^[:space:]]/ ||
             $0 ~ /^💥 Breaking change:[[:space:]]+[^[:space:]]/ ||
@@ -498,7 +499,7 @@ validate_body() {
       }
       END { exit invalid ? 0 : 1 }
     ' "${body_content}"; then
-      fail "body adds non-template text after the final issue relationship"
+      fail "body adds non-template text after the final delivery relationship"
     fi
   fi
 
