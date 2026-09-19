@@ -74,6 +74,24 @@ trap 'rm -rf "${work_dir}"' EXIT
 
 strip_comments() {
   awk '
+    function unescaped_comment_start(text, offset, relative, position, slashes, index_before) {
+      offset = 1
+      while (offset <= length(text)) {
+        relative = index(substr(text, offset), "<!--")
+        if (relative == 0) { return 0 }
+        position = offset + relative - 1
+        slashes = 0
+        index_before = position - 1
+        while (index_before > 0 && substr(text, index_before, 1) == "\\") {
+          slashes++
+          index_before--
+        }
+        if (slashes % 2 == 0) { return position }
+        offset = position + 4
+      }
+      return 0
+    }
+
     {
       sub(/\r$/, "")
       line = $0
@@ -90,7 +108,7 @@ strip_comments() {
           continue
         }
 
-        comment_start = index(line, "<!--")
+        comment_start = unescaped_comment_start(line)
         if (comment_start == 0) {
           output = output line
           line = ""
@@ -353,7 +371,9 @@ validate_body() {
   strip_blockquotes "${body_content}" >"${body_validation}"
   awk '$0 !~ /^ {0,3}\[[^]]+\]:[[:space:]]*/ { print }' \
     "${body_validation}" >"${body_prose}"
-  sed -E 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js)([^[:alnum:]_]|$)/\1product\3/g' \
+  sed -E \
+    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_validation}" >"${body_symbols}"
   # Remove every inherited visible template line for the post-relationship
   # check, including repository-required sections that follow the issue link.
@@ -552,6 +572,9 @@ validate_body() {
     fi
   fi
 
+  if grep -Eiq '</?(pre|code|samp|kbd)([[:space:]>]|$)' "${body_validation}"; then
+    fail "PR body must not contain raw HTML code containers"
+  fi
   if grep -Eiq '^[[:space:]]*</?h[1-6]([[:space:]>]|$)' "${body_validation}"; then
     fail "body adds a non-template HTML section"
   fi
