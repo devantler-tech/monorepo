@@ -549,6 +549,48 @@ printf '{"type":"user","timestamp":"not-a-timestamp","message":{"role":"user","c
 touch -t "$(touch_at $(( NOW - 2399 )))" "$PROJECTS/proj-a/alpha-broken.jsonl"
 expect_msg 2 "could not be parsed" "an attributable but unreadable transcript is UNKNOWN for that task"
 
+# --- RED: the runtime's own error message is not an assistant turn --------------------------------
+# When the account hits a usage limit, the runtime ends the session by writing ONE record of type
+# `assistant` that it synthesised itself: `isApiErrorMessage: true`, an `error` class, and model
+# `<synthetic>`. Counted as a turn, it made an account-wide quota outage read OK on every task for a
+# day (monorepo#3412). Shape copied from a real 2026-09-19 transcript; message text omitted.
+append_synthetic() {
+  local f=$1 at=$2 err=$3 mt
+  mt=$(iso_at "$at")
+  printf '{"type":"assistant","timestamp":"%s","isApiErrorMessage":true,"error":"%s","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"limit"}]}}\n' \
+    "$mt" "$err" >> "$f"
+  touch -t "$(touch_at "$at")" "$f"
+}
+
+mkcase quota_killed
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
+f=$(mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 1)
+append_synthetic "$f" $(( NOW - 3598 )) rate_limit
+expect_msg 1 "cause=quota/billing" "a session holding only a synthetic rate_limit message is NOT-PRODUCING, cause quota/billing"
+
+# The cause vocabulary is the one AGENTS.md already fixes for a provider outage and the Codex check
+# already prints, so an auth refusal is `credentials/auth` rather than a second spelling of unknown.
+# Pinned because it is the class a reader is most likely to "simplify" away.
+mkcase synthetic_auth
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
+f=$(mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 1)
+append_synthetic "$f" $(( NOW - 3598 )) authentication_failed
+expect_msg 1 "cause=credentials/auth" "a synthetic authentication_failed message is NOT-PRODUCING, cause credentials/auth"
+
+mkcase synthetic_unclassified
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
+f=$(mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 1)
+append_synthetic "$f" $(( NOW - 3598 )) something_new
+expect_msg 1 "cause=unknown" "an unrecognised synthetic error class is NOT-PRODUCING with cause unknown"
+
+# GREEN control: a run that did real work and THEN hit the limit produced output. Discounting the
+# synthetic record must not discount the work before it.
+mkcase worked_then_limited
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
+f=$(mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200)
+append_synthetic "$f" $(( NOW - 2399 )) rate_limit
+expect 0 "real turns followed by a synthetic limit message stay OK"
+
 # --- Knob validation: a zero window must never disable the guard ---------------------------------
 mkcase knobs
 mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
