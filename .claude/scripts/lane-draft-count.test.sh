@@ -39,6 +39,7 @@ run() {
   LANE_DRAFTS_JSON_2="${T_SECOND:-$fixture}" \
   LANE_REPOS_EXPECTED="${T_EXPECTED:-26}" \
   LANE_REPOS_VISIBLE="${T_VISIBLE:-26}" \
+  LANE_REPOS_VISIBLE_2="${T_VISIBLE_2:-${T_VISIBLE:-26}}" \
     bash "$SCRIPT" --instances "${T_REGISTRY:-$FIX/registry.json}" "$@" 2>/dev/null
 }
 
@@ -68,6 +69,7 @@ check "no open drafts at all is WITHIN with zero" 0 "lane=claude drafts=0 cap=20
 # Coverage: a repository the credential cannot list contributes nothing.
 T_VISIBLE=24 check "a credential blind to some repositories is UNKNOWN" 2 "verdict=UNKNOWN" "$FIX/three.json" --lane claude
 T_EXPECTED=x check "an unreadable private-repository total is UNKNOWN" 2 "verdict=UNKNOWN" "$FIX/three.json" --lane claude
+T_VISIBLE_2=27 check "a repository appearing between the two passes is UNKNOWN" 2 "verdict=UNKNOWN" "$FIX/three.json" --lane claude
 
 # Stability: the two full reads must agree on every draft's attribution.
 jq '.[4].id = "PR_new"' "$FIX/three.json" > "$FIX/churn.json"

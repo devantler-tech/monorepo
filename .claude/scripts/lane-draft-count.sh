@@ -25,6 +25,8 @@
 #     purpose: whether an INVISIBLE repository is archived cannot be known either;
 #   - two full reads that disagree on any draft's attribution (id, branch, fork, author), meaning
 #     a PR opened, closed, converted or was renamed while it was being read;
+#   - a repository inventory that differs between the two passes (a repository created or
+#     transferred in while it was being read);
 #   - a duplicate PR id within one read.
 #
 # Usage: lane-draft-count.sh --lane <namespace> [--cap N] [--instances FILE]
@@ -40,6 +42,7 @@
 #   LANE_DRAFTS_JSON_2    file: the second full read (defaults to LANE_DRAFTS_JSON)
 #   LANE_REPOS_EXPECTED   repositories the organisation reports (public + private)
 #   LANE_REPOS_VISIBLE    repositories the credential could list
+#   LANE_REPOS_EXPECTED_2 / LANE_REPOS_VISIBLE_2  the second pass's inventory (default: the first)
 set -uo pipefail
 
 CAP=20
@@ -56,7 +59,7 @@ while [ $# -gt 0 ]; do
     --lane)      need_val "$@"; LANE="$2"; shift 2 ;;
     --cap)       need_val "$@"; CAP="$2"; shift 2 ;;
     --instances) need_val "$@"; INSTANCES="$2"; shift 2 ;;
-    -h|--help)   sed -n '2,42p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '2,45p' "$0"; exit 0 ;;
     *)           unknown "unknown argument: $1" ;;
   esac
 done
@@ -90,26 +93,39 @@ read_drafts() {
   printf '%s' "$out" | jq -c 'sort_by(.id)'
 }
 
-if [ -n "${LANE_DRAFTS_JSON:-}" ]; then
-  nodes=$(jq -ec 'select(type == "array") | sort_by(.id)' "$LANE_DRAFTS_JSON" 2>/dev/null) || unknown "fixture is not a JSON array"
-  nodes2=$(jq -ec 'select(type == "array") | sort_by(.id)' "${LANE_DRAFTS_JSON_2:-$LANE_DRAFTS_JSON}" 2>/dev/null) || unknown "second fixture is not a JSON array"
-  repos_expected=${LANE_REPOS_EXPECTED:-}
-  repos_visible=${LANE_REPOS_VISIBLE:-}
-else
+# read_inventory — {expected, visible, repos:[{name, archived}]} for the organisation right now.
+read_inventory() {
+  local totals pub priv repos
   # total_private_repos is null for a credential without org-owner visibility; is_count rejects it.
   totals=$(gh api "orgs/$ORG" --jq '(.public_repos // "x" | tostring) + " " + (.total_private_repos // "x" | tostring)' 2>/dev/null) \
     || unknown "organisation repository totals are unreadable"
   pub=${totals%% *}; priv=${totals##* }
   is_count "$pub" && is_count "$priv" || unknown "the credential cannot see the organisation's private repository total"
-  repos_expected=$((pub + priv))
-  repos=$(set -o pipefail; gh api --paginate --slurp "orgs/$ORG/repos?type=all&per_page=100" 2>/dev/null | jq -c '[.[][]]') \
+  repos=$(set -o pipefail; gh api --paginate --slurp "orgs/$ORG/repos?type=all&per_page=100" 2>/dev/null \
+    | jq -c '[.[][] | {name, archived: (.archived == true)}] | sort_by(.name)') \
     || unknown "organisation repository listing failed"
-  repos_visible=$(printf '%s' "$repos" | jq 'length')
-  active=$(printf '%s' "$repos" | jq -r '.[] | select(.archived != true) | .name')
-  nodes=$(read_drafts "$active")
-  nodes2=$(read_drafts "$active")
+  jq -nc --argjson e "$((pub + priv))" --argjson r "$repos" '{expected: $e, visible: ($r | length), repos: $r}'
+}
+
+# Each pass reads its own repository inventory and then the drafts of that inventory's active
+# repositories, so a repository created or transferred in during the read changes the second
+# inventory and fails the comparison below instead of being silently omitted from both passes.
+if [ -n "${LANE_DRAFTS_JSON:-}" ]; then
+  nodes=$(jq -ec 'select(type == "array") | sort_by(.id)' "$LANE_DRAFTS_JSON" 2>/dev/null) || unknown "fixture is not a JSON array"
+  nodes2=$(jq -ec 'select(type == "array") | sort_by(.id)' "${LANE_DRAFTS_JSON_2:-$LANE_DRAFTS_JSON}" 2>/dev/null) || unknown "second fixture is not a JSON array"
+  inv=$(jq -nc --arg e "${LANE_REPOS_EXPECTED:-}" --arg v "${LANE_REPOS_VISIBLE:-}" '{expected: $e, visible: $v}')
+  inv2=$(jq -nc --arg e "${LANE_REPOS_EXPECTED_2:-${LANE_REPOS_EXPECTED:-}}" --arg v "${LANE_REPOS_VISIBLE_2:-${LANE_REPOS_VISIBLE:-}}" '{expected: $e, visible: $v}')
+else
+  inv=$(read_inventory) || { echo "verdict=UNKNOWN"; exit 2; }
+  nodes=$(read_drafts "$(printf '%s' "$inv" | jq -r '.repos[] | select(.archived | not) | .name')") || { echo "verdict=UNKNOWN"; exit 2; }
+  inv2=$(read_inventory) || { echo "verdict=UNKNOWN"; exit 2; }
+  nodes2=$(read_drafts "$(printf '%s' "$inv2" | jq -r '.repos[] | select(.archived | not) | .name')") || { echo "verdict=UNKNOWN"; exit 2; }
 fi
 
+jq -en --argjson a "$inv" --argjson b "$inv2" '$a == $b' >/dev/null \
+  || unknown "the organisation's repositories changed while the drafts were being read"
+repos_expected=$(printf '%s' "$inv" | jq -r '.expected')
+repos_visible=$(printf '%s' "$inv" | jq -r '.visible')
 is_count "$repos_expected" && is_count "$repos_visible" || unknown "repository coverage is not a number"
 [ "$repos_visible" -eq "$repos_expected" ] || unknown "the credential sees $repos_visible of $repos_expected organisation repositories"
 
