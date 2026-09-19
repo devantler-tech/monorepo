@@ -545,6 +545,8 @@ jobs:
               - '.claude/**/*.md'
               - '.claude/**/*.json'
               - '.claude/scripts/merge-confirmation-read.test.sh'
+              # the consumed plugin definitions: a gitlink bump changes what the agent reads
+              - 'libraries/agent-plugins'
               - '.github/workflows/ci.yaml'
             gh-json-vocabulary-contract:
               - 'AGENTS.md'
@@ -1961,6 +1963,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The scan covers the plugin definitions this deployment consumes, so the pinned submodule
+      # must be present (the test fails closed without it). Same anonymous HTTPS, full-history
+      # init as the agent-role delivery contract job, for the same reasons.
+      - name: Initialise the agent-plugins submodule
+        run: |
+          git -c 'url.https://github.com/.insteadOf=git@github.com:' \
+            submodule update --init libraries/agent-plugins
       - name: Verify the merge-confirmation read contract
         run: bash .claude/scripts/merge-confirmation-read.test.sh
 
