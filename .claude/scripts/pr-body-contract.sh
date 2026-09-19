@@ -327,9 +327,10 @@ validate_body() {
     active { text = text " " $0 }
     END { print sentence_count(text) }
   ' "${body_content}")"
-  [ "${why_sentences}" -ge 1 ] && [ "${why_sentences}" -le 3 ] && \
-    [ "${what_sentences}" -ge 1 ] && [ "${what_sentences}" -le 3 ] ||
+  if [ "${why_sentences}" -lt 1 ] || [ "${why_sentences}" -gt 3 ] || \
+    [ "${what_sentences}" -lt 1 ] || [ "${what_sentences}" -gt 3 ]; then
     fail "Why and What must each contain 1 to 3 sentences"
+  fi
 
   if awk '
     /^## Why$/ { active = 1; next }
