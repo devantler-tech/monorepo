@@ -269,7 +269,6 @@ validate_body() {
   local body_validation="${work_dir}/body-validation.md"
   local body_prose="${work_dir}/body-prose.md"
   local body_symbols="${work_dir}/body-symbols.md"
-  local body_trailing_content="${work_dir}/body-trailing-content.md"
   local first_line
   local expected_disclosure
   local heading
@@ -383,19 +382,16 @@ validate_body() {
     awaiting_title && reference_title($0) { awaiting_title = 0; next }
     { awaiting_title = 0 }
     /^ {0,3}\[[^]]+\]:[[:space:]]*/ { awaiting_title = 1; next }
-    !thematic_break($0) { print }
+    !thematic_break($0) {
+      rendered = $0
+      gsub(/<\/?[A-Za-z][A-Za-z0-9-]*([[:space:]][^>]*)?\/?>/, "", rendered)
+      if (rendered ~ /[^[:space:]]/) { print rendered }
+    }
   ' "${body_validation}" >"${body_prose}"
   sed -E \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_validation}" >"${body_symbols}"
-  # Remove every inherited visible template line for the post-relationship
-  # check, including repository-required sections that follow the issue link.
-  awk '
-    FILENAME == ARGV[1] { inherited[$0]++; next }
-    inherited[$0] > 0 { inherited[$0]--; next }
-    { print }
-  ' "${template_structure}" "${visible_body}" >"${body_trailing_content}"
   previous_line=0
   while IFS= read -r structure_line; do
     line_number="$(awk -v target="${structure_line}" -v after="${previous_line}" '
@@ -565,10 +561,14 @@ validate_body() {
 
   if [ "${issue_count}" -gt 0 ] || [ "${allow_no_issue}" -eq 1 ]; then
     final_delivery_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$|^No issue: trivial fix[.]$' \
-      "${body_trailing_content}" | tail -n 1 | cut -d: -f1)"
+      "${body_content}" | tail -n 1 | cut -d: -f1)"
     if awk -v boundary="${final_delivery_line}" '
       NR > boundary && NF {
-        if ($0 ~ /^⚠️ Merge order:[[:space:]]+[^[:space:]]/ ||
+        if ($0 ~ /^##[[:space:]]+/) {
+          in_template_section = 1
+        } else if (in_template_section) {
+          next
+        } else if ($0 ~ /^⚠️ Merge order:[[:space:]]+[^[:space:]]/ ||
             $0 ~ /^💥 Breaking change:[[:space:]]+[^[:space:]]/ ||
             $0 ~ /^📦 New dependency:[[:space:]]+[^[:space:]]/ ||
             $0 ~ /^👉 After merge\/promotion:[[:space:]]+[^[:space:]]/) {
@@ -581,7 +581,7 @@ validate_body() {
         }
       }
       END { exit invalid ? 0 : 1 }
-    ' "${body_trailing_content}"; then
+    ' "${body_content}"; then
       fail "body adds non-template text after the final delivery relationship"
     fi
   fi
