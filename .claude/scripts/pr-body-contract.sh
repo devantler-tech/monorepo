@@ -246,6 +246,7 @@ validate_body() {
   local first_template_line
   local first_template_body_line
   local issue_count
+  local relationship_marker_count
   local fixes_count
   local part_of_count
   local fixes_issue
@@ -301,7 +302,7 @@ validate_body() {
   done <"${body_setext_headings}"
 
   awk 'NF && $0 !~ /^(Fixes|Part of) #$/ { print }' "${visible_template}" >"${template_structure}"
-  awk 'NF && $0 !~ /^#{1,6} / && $0 !~ /^(Fixes|Part of) #$/ { print }' \
+  awk 'NF && $0 != "## Why" && $0 != "## What" && $0 !~ /^(Fixes|Part of) #$/ { print }' \
     "${visible_template}" >"${template_fixed}"
   awk '!seen[$0]++' "${template_fixed}" >"${template_fixed_unique}"
   while IFS= read -r fixed_line; do
@@ -340,6 +341,7 @@ validate_body() {
   fi
 
   issue_count="$(grep -Ec '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" || true)"
+  relationship_marker_count="$(grep -Ec '^(Fixes|Part of) #' "${visible_body}" || true)"
   fixes_count="$(grep -Ec '^Fixes #[1-9][0-9]*$' "${visible_body}" || true)"
   part_of_count="$(grep -Ec '^Part of #[1-9][0-9]*$' "${visible_body}" || true)"
   case "${issue_count}:${fixes_count}:${part_of_count}" in
@@ -347,6 +349,8 @@ validate_body() {
     0:0:0)
       [ "${allow_no_issue}" -eq 1 ] ||
         fail "body must contain exactly one issue relationship: Fixes #N or Part of #N; one Fixes and one Part of experiment relationship may appear together"
+      [ "${relationship_marker_count}" -eq 0 ] ||
+        fail "no-issue mode forbids relationship markers"
       ;;
     *)
       fail "body must contain exactly one issue relationship: Fixes #N or Part of #N; one Fixes and one Part of experiment relationship may appear together"
@@ -452,8 +456,10 @@ validate_body() {
     final_issue_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$' "${body_content}" | tail -n 1 | cut -d: -f1)"
     if awk -v boundary="${final_issue_line}" '
       NR > boundary && NF {
-        if ($0 ~ /^⚠️ (Merge order|Breaking change|New dependency):[[:space:]]+[^[:space:]]/ ||
-            $0 ~ /^👉 (Maintainer action|After merge):[[:space:]]+[^[:space:]]/) {
+        if ($0 ~ /^⚠️ Merge order:[[:space:]]+[^[:space:]]/ ||
+            $0 ~ /^💥 Breaking change:[[:space:]]+[^[:space:]]/ ||
+            $0 ~ /^📦 New dependency:[[:space:]]+[^[:space:]]/ ||
+            $0 ~ /^👉 After merge\/promotion:[[:space:]]+[^[:space:]]/) {
           kind = $0
           sub(/:.*/, ":", kind)
           seen[kind]++
