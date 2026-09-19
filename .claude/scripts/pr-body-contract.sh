@@ -303,8 +303,8 @@ validate_body() {
 
   strip_comments "${template}" >"${visible_template}"
   strip_comments "${body}" >"${visible_body}"
-  strip_blockquotes "${visible_template}" >"${markdown_template}"
-  strip_blockquotes "${visible_body}" >"${markdown_body}"
+  awk -f "${script_dir}/markdown-structural-lines.awk" "${visible_template}" >"${markdown_template}"
+  awk -f "${script_dir}/markdown-structural-lines.awk" "${visible_body}" >"${markdown_body}"
   validate_template "${template}"
 
   IFS= read -r first_line <"${body}" || fail "body is empty"
@@ -374,6 +374,19 @@ validate_body() {
   # product-facing body forbids, while preserving the original body for prose,
   # template-order, and relationship validation.
   strip_blockquotes "${body_content}" >"${body_validation}"
+  if grep -Eiq '</?(pre|code|samp|kbd)([[:space:]>]|$)' "${body_validation}"; then
+    fail "PR body must not contain raw HTML code containers"
+  fi
+  if grep -Eiq '^[[:space:]]*</?h[1-6]([[:space:]>]|$)' "${body_validation}"; then
+    fail "body adds a non-template HTML section"
+  fi
+  if grep -Eiq '<[[:space:]]*/?[[:space:]]*[A-Za-z][A-Za-z0-9-]*([[:space:]/>])' \
+    "${body_validation}"; then
+    fail "PR body must not contain raw HTML tags"
+  fi
+  if grep -Eq '&(#([xX][0-9A-Fa-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);' "${body_validation}"; then
+    fail "PR body must not contain HTML character references"
+  fi
   awk '
     function thematic_break(line, compact) {
       compact = line
@@ -390,8 +403,6 @@ validate_body() {
     /^ {0,3}\[[^]]+\]:[[:space:]]*/ { awaiting_title = 1; next }
     !thematic_break($0) {
       rendered = $0
-      gsub(/<\/?[A-Za-z][A-Za-z0-9-]*([[:space:]][^>]*)?\/?>/, "", rendered)
-      gsub(/&(#([xX][0-9A-Fa-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);/, "", rendered)
       if (rendered ~ /[^[:space:]]/) { print rendered }
     }
   ' "${body_validation}" >"${body_prose}"
@@ -619,12 +630,6 @@ validate_body() {
     fi
   fi
 
-  if grep -Eiq '</?(pre|code|samp|kbd)([[:space:]>]|$)' "${body_validation}"; then
-    fail "PR body must not contain raw HTML code containers"
-  fi
-  if grep -Eiq '^[[:space:]]*</?h[1-6]([[:space:]>]|$)' "${body_validation}"; then
-    fail "body adds a non-template HTML section"
-  fi
   if grep -Eq '^[[:space:]]*(```|~~~)' "${body_validation}"; then
     fail "PR body must not contain code or command fences"
   fi
