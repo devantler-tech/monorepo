@@ -134,17 +134,24 @@ expect_defect "continue-on-error status" "status: sets continue-on-error"
 
 # The job-level if is an allow-list of two shapes; anything else does not filter the job.
 fixture
-edit '.jobs.test-alpha.if = "needs.changes.outputs.alpha == '"'"'true'"'"' && (github.event_name != '"'"'pull_request'"'"' || github.actor == '"'"'x'"'"')"'
-expect_ok "trust predicate after the filter"
+# shellcheck disable=SC2016
+edit '.jobs.test-alpha.if = "needs.changes.outputs.alpha == '"'"'true'"'"' && (github.event_name != '"'"'pull_request'"'"' ||\n github.event.pull_request.head.repo.full_name == github.repository)"'
+expect_ok "same-repository clause after the filter"
 for condition in \
   "needs.changes.outputs.alpha != 'true'" \
   "needs.changes.outputs.alpha == 'true' || always()" \
   "needs.changes.outputs.alpha == 'true' && (needs.changes.outputs.beta == 'true')" \
+  "needs.changes.outputs.alpha == 'true' && (false)" \
   "needs.changes.outputs.alpha == 'true' && (a) || (b)"; do
   fixture
   COND="$condition" edit '.jobs.test-alpha.if = strenv(COND)'
   expect_defect "if shape: $condition" "test-alpha: job-level if is not needs.changes.outputs.<name> == 'true'"
 done
+
+# A filter with no rules never matches.
+fixture
+edit '.jobs.changes.steps[0].with.filters = "alpha: []\nbeta:\n  - '"'"'b/**'"'"'\n"'
+expect_defect "empty filter" "filter 'alpha' has no path rules"
 
 # The producer must always run and never suppress a failed filter.
 fixture; edit '.jobs.changes.if = "false"'

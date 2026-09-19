@@ -31,26 +31,17 @@ read_set jobs '.jobs | keys | .[]'
 [[ -s "$tmp/jobs" ]] || { echo "ci-job-wiring: $workflow declares no jobs" >&2; exit 2; }
 grep -qx status "$tmp/jobs" || { echo "ci-job-wiring: $workflow has no status job" >&2; exit 2; }
 
+# The only clause a filter may carry: run on every non-PR event and on same-repository PRs. Any other
+# clause could be constant-false and skip the job on every matching change.
+same_repo_clause=" && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)"
+
 # filter_output <condition> — print the output a job-level if filters on, or fail when the condition is
-# not one of the accepted shapes. A trailing clause must be one parenthesised group reading no output.
+# not needs.changes.outputs.<name> == 'true', optionally followed by exactly $same_repo_clause.
 filter_output() {
-  local c="$1" head="^needs\\.changes\\.outputs\\.([A-Za-z0-9_-]+) == 'true'(.*)$" tail='^ && \((.*)\)$'
-  local name rest inner depth=0 i
+  local c="$1" head="^needs\\.changes\\.outputs\\.([A-Za-z0-9_-]+) == 'true'(.*)$"
   [[ "$c" =~ $head ]] || return 1
-  name="${BASH_REMATCH[1]}" rest="${BASH_REMATCH[2]}"
-  if [ -n "$rest" ]; then
-    [[ "$rest" =~ $tail ]] || return 1
-    inner="${BASH_REMATCH[1]}"
-    [[ "$inner" != *needs.changes* ]] || return 1
-    for ((i = 0; i < ${#inner}; i++)); do
-      case "${inner:i:1}" in
-        "(") depth=$((depth + 1)) ;;
-        ")") depth=$((depth - 1)); [ "$depth" -ge 0 ] || return 1 ;;
-      esac
-    done
-    [ "$depth" -eq 0 ] || return 1
-  fi
-  printf '%s' "$name"
+  [[ -z "${BASH_REMATCH[2]}" || "${BASH_REMATCH[2]}" == "$same_repo_clause" ]] || return 1
+  printf '%s' "${BASH_REMATCH[1]}"
 }
 
 failures=0
@@ -65,6 +56,11 @@ if grep -qx changes "$tmp/jobs"; then
     printf '%s\n' "$filter_text" | yq -r 'keys | .[]' >"$tmp/filters" 2>"$tmp/err" ||
       { echo "ci-job-wiring: cannot parse the paths-filter filters: $(cat "$tmp/err")" >&2; exit 2; }
     sort -u -o "$tmp/filters" "$tmp/filters"
+    # A filter with no rules never matches, so its job skips on every change.
+    while IFS= read -r name; do
+      [[ -n "$name" ]] && defect "filter '$name' has no path rules, so it never matches"
+    done < <(printf '%s\n' "$filter_text" |
+      yq -r 'to_entries | .[] | select((.value | tag) != "!!seq" or (.value | length) == 0) | .key')
   fi
   read_set outputs '.jobs.changes.outputs // {} | keys | .[]'
   # The producer must always run: a skipped or failure-suppressed filter empties every output, and each
@@ -116,7 +112,7 @@ while IFS= read -r job; do
   if filter="$(filter_output "$condition")"; then
     printf '%s\n' "$filter" >>"$tmp/referenced"
   elif [[ "$condition" == *needs.changes.outputs.* ]]; then
-    defect "$job: job-level if is not needs.changes.outputs.<name> == 'true' (optionally && (...)), so it does not filter the job"
+    defect "$job: job-level if is not needs.changes.outputs.<name> == 'true' (optionally with the same-repository clause), so it does not filter the job"
   fi
   needs_changes="$(JOB="$job" yq -r '[.jobs[strenv(JOB)].needs] | flatten | map(select(. == "changes")) | length' "$workflow")"
   [[ "$needs_changes" != 0 ]] || defect "$job: reads needs.changes.outputs but does not list 'changes' in needs"
