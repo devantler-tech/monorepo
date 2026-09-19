@@ -100,6 +100,24 @@ fixture
 edit '.jobs.status.steps[0].with."job-results" |= sub(" \$\{\{ needs.test-alpha.result \}\}"; "")'
 expect_defect "missing job-result" "test-alpha: missing from status job-results"
 
+# Index syntax is equivalent in GitHub expressions, so it must be refused, not skipped: here the
+# job drops `changes` from needs and nothing else would notice.
+fixture
+edit '.jobs.test-alpha.needs = [] | .jobs.test-alpha.if = "needs['"'"'changes'"'"']['"'"'outputs'"'"']['"'"'alpha'"'"'] == '"'"'true'"'"'"'
+expect_defect "index syntax" "test-alpha: reads needs with index syntax"
+
+# job-results is read only from the aggregate step: a decoy step listing the job does not count.
+fixture
+edit '.jobs.status.steps[0].with."job-results" |= sub(" \$\{\{ needs.test-alpha.result \}\}"; "")'
+# shellcheck disable=SC2016
+edit '.jobs.status.steps += [{"name": "decoy", "run": "true", "with": {"job-results": "${{ needs.test-alpha.result }}"}}]'
+expect_defect "decoy job-results" "test-alpha: missing from status job-results"
+
+fixture; edit '.jobs.status.steps[0].uses = "example/other@v1"'
+expect_defect "no aggregate step" "expected exactly one aggregate-job-checks step, found 0"
+fixture; edit '.jobs.status.steps += [.jobs.status.steps[0]]'
+expect_defect "two aggregate steps" "expected exactly one aggregate-job-checks step, found 2"
+
 # status names a job that does not exist.
 fixture; edit '.jobs.status.needs += ["ghost"]'
 expect_defect "ghost need" "status.needs names 'ghost', which is not a job"

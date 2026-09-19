@@ -67,6 +67,11 @@ fi
 while IFS= read -r job; do
   [[ -n "$job" && "$job" != changes ]] || continue
   JOB="$job" yq -o=json '.jobs[strenv(JOB)]' "$workflow" >"$tmp/job.json"
+  # Index syntax (needs['changes']...) is equivalent in GitHub expressions but invisible to the
+  # dot-syntax extraction below, so it is refused rather than silently skipped.
+  if grep -qE 'needs(\.changes)?[[:space:]]*\[' "$tmp/job.json"; then
+    defect "$job: reads needs with index syntax; write needs.changes.outputs.<name> so the wiring can be checked"
+  fi
   refs="$(grep -oE 'needs\.changes\.outputs\.[A-Za-z0-9_-]+' "$tmp/job.json" | sed 's/^needs\.changes\.outputs\.//' | sort -u || true)"
   [[ -n "$refs" ]] || continue
   printf '%s\n' "$refs" >>"$tmp/referenced"
@@ -83,7 +88,12 @@ while IFS= read -r name; do
 done < <(comm -23 "$tmp/outputs" "$tmp/referenced")
 
 read_set status_needs '[.jobs.status.needs] | flatten | .[] | select(. != null)'
-yq -r '[.jobs.status.steps[].with."job-results" // ""] | join(" ")' "$workflow" |
+# Read job-results from exactly the aggregate step: another step's input proves nothing.
+aggregate='[.jobs.status.steps[] | select((.uses // "") | test("^devantler-tech/actions/aggregate-job-checks@"))]'
+aggregate_steps="$(yq -r "$aggregate | length" "$workflow")"
+[[ "$aggregate_steps" == 1 ]] ||
+  defect "status: expected exactly one aggregate-job-checks step, found $aggregate_steps"
+yq -r "$aggregate | .[0].with.\"job-results\" // \"\"" "$workflow" |
   { grep -oE 'needs\.[A-Za-z0-9_-]+\.result' || true; } | sed -E 's/^needs\.(.*)\.result$/\1/' | sort -u >"$tmp/status_results"
 read_set nonblocking '.jobs | to_entries | .[] | select((.value.name // "") | test("\(non-blocking\)$")) | .key'
 
