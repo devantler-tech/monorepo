@@ -2043,6 +2043,26 @@ jobs:
       - name: Test disabled aggregates and legitimate filtered jobs
         run: bash .claude/scripts/ci-aggregate-contract.test.sh
 
+  # A path-filtered job needs five coordinated edits; missing one makes it skip forever or run
+  # without gating the merge, and neither shows in a passing run (monorepo#2567). Unfiltered on
+  # purpose: any PR can break the wiring, and the check takes seconds.
+  test-ci-job-wiring:
+    name: Test CI job wiring
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test the wiring checker
+        run: |
+          shellcheck .claude/scripts/ci-job-wiring.sh .claude/scripts/ci-job-wiring.test.sh
+          bash .claude/scripts/ci-job-wiring.test.sh
+      - name: Check this workflow's wiring
+        run: bash .claude/scripts/ci-job-wiring.sh .github/workflows/ci.yaml
+
   test-submodule-agents-drift:
     name: Check submodule AGENTS.md drift
     needs: changes
@@ -2141,6 +2161,7 @@ jobs:
       - test-portfolio-surveyor-contract
       - test-product-value-contract
       - test-ci-aggregate-contract
+      - test-ci-job-wiring
       - test-submodule-agents-drift
     permissions: {}
     steps:
@@ -2210,4 +2231,5 @@ jobs:
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}
             ${{ needs.test-ci-aggregate-contract.result }}
+            ${{ needs.test-ci-job-wiring.result }}
             ${{ needs.test-submodule-agents-drift.result }}
