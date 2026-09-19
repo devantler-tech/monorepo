@@ -249,6 +249,7 @@ validate_body() {
   local template_fixed_unique="${work_dir}/template-fixed-unique"
   local body_content="${work_dir}/body-content.md"
   local body_validation="${work_dir}/body-validation.md"
+  local body_symbols="${work_dir}/body-symbols.md"
   local first_line
   local expected_disclosure
   local heading
@@ -348,6 +349,8 @@ validate_body() {
   # product-facing body forbids, while preserving the original body for prose,
   # template-order, and relationship validation.
   strip_blockquotes "${body_content}" >"${body_validation}"
+  sed -E 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|PostgreSQL|JavaScript|TypeScript)([^[:alnum:]_]|$)/\1product\3/g' \
+    "${body_validation}" >"${body_symbols}"
   previous_line=0
   while IFS= read -r structure_line; do
     line_number="$(awk -v target="${structure_line}" -v after="${previous_line}" '
@@ -373,7 +376,7 @@ validate_body() {
   fi
 
   issue_count="$(grep -Ec '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" || true)"
-  relationship_marker_count="$(grep -Eic '(^|[^[:alnum:]_])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]*#|(^|[^[:alnum:]_])part[[:space:]]+of[[:space:]]*#' \
+  relationship_marker_count="$(grep -Eic '(^|[^[:alnum:]_])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]*(#|[[:alnum:]_.-]+/[[:alnum:]_.-]+#|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/)|(^|[^[:alnum:]_])part[[:space:]]+of[[:space:]]*#' \
     "${visible_body}" || true)"
   fixes_count="$(grep -Ec '^Fixes #[1-9][0-9]*$' "${visible_body}" || true)"
   part_of_count="$(grep -Ec '^Part of #[1-9][0-9]*$' "${visible_body}" || true)"
@@ -499,6 +502,16 @@ validate_body() {
   ' "${body_validation}"; then
     fail "Why and What must be short prose, not bullet inventories"
   fi
+  if awk '
+    /^## Why$/ || /^## What$/ { active = 1; next }
+    active && /^##[[:space:]]+/ { active = 0 }
+    /^(Fixes|Part of) #[1-9][0-9]*$/ || /^No issue: trivial fix[.]$/ { active = 0 }
+    active && (/^[[:space:]]*\|.*\|[[:space:]]*$/ ||
+      /^[[:space:]]*:?-{3,}:?[[:space:]]*(\|[[:space:]]*:?-{3,}:?[[:space:]]*)+$/) { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "${body_validation}"; then
+    fail "Why and What must be short prose, not Markdown tables"
+  fi
 
   if [ "${issue_count}" -gt 0 ] || [ "${allow_no_issue}" -eq 1 ]; then
     final_delivery_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$|^No issue: trivial fix[.]$' \
@@ -535,8 +548,8 @@ validate_body() {
   if grep -Fq '`' "${body_validation}"; then
     fail "PR body must not contain code or command snippets"
   fi
-  if grep -Eq '(^|[^[:alnum:]_])([Cc]hange|[Cc]all|[Ii]nvoke|[Rr]ename|[Rr]efactor|[Mm]odify|[Rr]emove|[Aa]dd|[Uu]pdate|[Ff]ix)[[:space:]]+[A-Z][[:alnum:]]*(Body|Config|Handler|Parser|Client|Server|Controller|Service|Factory|Manager|Reader|Writer|Validator|Builder|Request|Response|Error|Result|Context|Option|Options)([^[:alnum:]_]|$)' \
-    "${body_validation}"; then
+  if grep -Eq '(^|[^[:alnum:]_])[A-Z][a-z0-9]+([A-Z][A-Za-z0-9]*)+([^[:alnum:]_]|$)' \
+    "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
   if grep -Eiq '(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
