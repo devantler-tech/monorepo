@@ -132,6 +132,30 @@ expect_defect "continue-on-error job" "test-alpha: sets continue-on-error"
 fixture; edit '.jobs.status."continue-on-error" = true'
 expect_defect "continue-on-error status" "status: sets continue-on-error"
 
+# The job-level if is an allow-list of two shapes; anything else does not filter the job.
+fixture
+edit '.jobs.test-alpha.if = "needs.changes.outputs.alpha == '"'"'true'"'"' && (github.event_name != '"'"'pull_request'"'"' || github.actor == '"'"'x'"'"')"'
+expect_ok "trust predicate after the filter"
+for condition in \
+  "needs.changes.outputs.alpha != 'true'" \
+  "needs.changes.outputs.alpha == 'true' || always()" \
+  "needs.changes.outputs.alpha == 'true' && (needs.changes.outputs.beta == 'true')" \
+  "needs.changes.outputs.alpha == 'true' && (a) || (b)"; do
+  fixture
+  COND="$condition" edit '.jobs.test-alpha.if = strenv(COND)'
+  expect_defect "if shape: $condition" "test-alpha: job-level if is not needs.changes.outputs.<name> == 'true'"
+done
+
+# The producer must always run and never suppress a failed filter.
+fixture; edit '.jobs.changes.if = "false"'
+expect_defect "conditional producer" "changes: has a job-level if"
+fixture; edit '.jobs.changes."continue-on-error" = true'
+expect_defect "producer continue-on-error" "changes: sets continue-on-error"
+fixture; edit '.jobs.changes.steps[0].if = "false"'
+expect_defect "conditional filter step" "changes: the filter step has an if"
+fixture; edit '.jobs.changes.steps[0]."continue-on-error" = true'
+expect_defect "filter step continue-on-error" "changes: the filter step sets continue-on-error"
+
 # Index syntax is equivalent in GitHub expressions, so it must be refused, not skipped: here the
 # job drops `changes` from needs and nothing else would notice.
 fixture

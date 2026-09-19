@@ -31,6 +31,28 @@ read_set jobs '.jobs | keys | .[]'
 [[ -s "$tmp/jobs" ]] || { echo "ci-job-wiring: $workflow declares no jobs" >&2; exit 2; }
 grep -qx status "$tmp/jobs" || { echo "ci-job-wiring: $workflow has no status job" >&2; exit 2; }
 
+# filter_output <condition> — print the output a job-level if filters on, or fail when the condition is
+# not one of the accepted shapes. A trailing clause must be one parenthesised group reading no output.
+filter_output() {
+  local c="$1" head="^needs\\.changes\\.outputs\\.([A-Za-z0-9_-]+) == 'true'(.*)$" tail='^ && \((.*)\)$'
+  local name rest inner depth=0 i
+  [[ "$c" =~ $head ]] || return 1
+  name="${BASH_REMATCH[1]}" rest="${BASH_REMATCH[2]}"
+  if [ -n "$rest" ]; then
+    [[ "$rest" =~ $tail ]] || return 1
+    inner="${BASH_REMATCH[1]}"
+    [[ "$inner" != *needs.changes* ]] || return 1
+    for ((i = 0; i < ${#inner}; i++)); do
+      case "${inner:i:1}" in
+        "(") depth=$((depth + 1)) ;;
+        ")") depth=$((depth - 1)); [ "$depth" -ge 0 ] || return 1 ;;
+      esac
+    done
+    [ "$depth" -eq 0 ] || return 1
+  fi
+  printf '%s' "$name"
+}
+
 failures=0
 defect() { echo "✗ $*"; failures=$((failures + 1)); }
 
@@ -45,6 +67,16 @@ if grep -qx changes "$tmp/jobs"; then
     sort -u -o "$tmp/filters" "$tmp/filters"
   fi
   read_set outputs '.jobs.changes.outputs // {} | keys | .[]'
+  # The producer must always run: a skipped or failure-suppressed filter empties every output, and each
+  # filtered job then reports skipped, which the aggregate accepts.
+  [[ "$(yq -r '.jobs.changes.if // ""' "$workflow")" == "" ]] ||
+    defect "changes: has a job-level if, so its outputs can be empty and every filtered job skipped"
+  [[ "$(yq -r '.jobs.changes."continue-on-error" // false' "$workflow")" == false ]] ||
+    defect "changes: sets continue-on-error, so a failed filter empties every output"
+  [[ "$(yq -r '.jobs.changes.steps[] | select(.id == "filter") | (.if // "")' "$workflow")" == "" ]] ||
+    defect "changes: the filter step has an if, so it can be skipped"
+  [[ "$(yq -r '.jobs.changes.steps[] | select(.id == "filter") | (."continue-on-error" // false)' "$workflow")" == false ]] ||
+    defect "changes: the filter step sets continue-on-error, so a failed filter empties every output"
 
   while IFS= read -r name; do
     defect "filter '$name' has no changes output, so no job can read it"
@@ -75,10 +107,17 @@ while IFS= read -r job; do
   fi
   refs="$(grep -oE 'needs\.changes\.outputs\.[A-Za-z0-9_-]+' "$tmp/job.json" | sed 's/^needs\.changes\.outputs\.//' | sort -u || true)"
   [[ -n "$refs" ]] || continue
-  # Only the job-level `if` filters the job: a reference in a step `if`, `env` or `run` is not wiring,
-  # and neither is text inside a quoted string literal of that `if`.
-  JOB="$job" yq -r '.jobs[strenv(JOB)].if // ""' "$workflow" | sed "s/'[^']*'//g" |
-    { grep -oE 'needs\.changes\.outputs\.[A-Za-z0-9_-]+' || true; } | sed 's/^needs\.changes\.outputs\.//' >>"$tmp/referenced"
+  # Only the job-level `if` filters the job, and only in one of two shapes (an allow-list: every other
+  # spelling, including a negated or quoted reference, reads as no filter):
+  #   needs.changes.outputs.<name> == 'true'
+  #   needs.changes.outputs.<name> == 'true' && (<a predicate that reads no changes output>)
+  condition="$(JOB="$job" yq -r '.jobs[strenv(JOB)].if // ""' "$workflow" | tr -s '[:space:]' ' ' |
+    sed -E 's/^ *(\$\{\{ *)?//; s/ *(\}\} *)?$//')"
+  if filter="$(filter_output "$condition")"; then
+    printf '%s\n' "$filter" >>"$tmp/referenced"
+  elif [[ "$condition" == *needs.changes.outputs.* ]]; then
+    defect "$job: job-level if is not needs.changes.outputs.<name> == 'true' (optionally && (...)), so it does not filter the job"
+  fi
   needs_changes="$(JOB="$job" yq -r '[.jobs[strenv(JOB)].needs] | flatten | map(select(. == "changes")) | length' "$workflow")"
   [[ "$needs_changes" != 0 ]] || defect "$job: reads needs.changes.outputs but does not list 'changes' in needs"
   while IFS= read -r ref; do
