@@ -180,7 +180,12 @@ CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 MONOREPO="${MONOREPO_DIR:-$HOME/git-personal/monorepo}"
 DEFINITION_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-AGENT_CI_CLASSIFIER="${AGENT_CI_CLASSIFIER:-$DEFINITION_ROOT/libraries/agent-plugins/plugins/agentic-engineering/scripts/classify-default-branch-ci-runs.sh}"
+if [ "${AGENT_CI_CLASSIFIER+x}" = x ]; then
+  AGENT_CI_CLASSIFIER_EXPLICIT=1
+else
+  AGENT_CI_CLASSIFIER_EXPLICIT=0
+  AGENT_CI_CLASSIFIER="$DEFINITION_ROOT/libraries/agent-plugins/plugins/agentic-engineering/scripts/classify-default-branch-ci-runs.sh"
+fi
 AGENT_CI_DESIRED_STATE="${AGENT_CI_DESIRED_STATE:-$DEFINITION_ROOT/.claude/plugin-consumption/agentic-engineering.desired-state.json}"
 
 # ── PROFESSIONAL-WORK BOUNDARY (hard exclusion) ───────────────────────────────
@@ -4832,10 +4837,7 @@ EOF
     # path must not become a trusted forge classifier merely because it runs.
     CI_CLASSIFIER_READY=1
     CI_CLASSIFIER_ERROR=""
-    if [ ! -f "$AGENT_CI_CLASSIFIER" ] || [ ! -x "$AGENT_CI_CLASSIFIER" ] || [ -L "$AGENT_CI_CLASSIFIER" ]; then
-      CI_CLASSIFIER_READY=0
-      CI_CLASSIFIER_ERROR="reviewed classifier unavailable"
-    elif [ ! -r "$AGENT_CI_DESIRED_STATE" ]; then
+    if [ ! -r "$AGENT_CI_DESIRED_STATE" ]; then
       CI_CLASSIFIER_READY=0
       CI_CLASSIFIER_ERROR="desired state unavailable"
     else
@@ -4849,10 +4851,45 @@ EOF
         | select(length == 1)
         | .[0]
       ' "$AGENT_CI_DESIRED_STATE" 2>/dev/null) || expected_classifier_sha=""
-      actual_classifier_sha=$(sha256_digest < "$AGENT_CI_CLASSIFIER" 2>/dev/null) || actual_classifier_sha=""
-      if [ -z "$expected_classifier_sha" ] || [ "$actual_classifier_sha" != "$expected_classifier_sha" ]; then
+      classifier_matches_reviewed_digest() {
+        candidate=$1
+        [ -f "$candidate" ] && [ -x "$candidate" ] && [ ! -L "$candidate" ] || return 1
+        candidate_sha=$(sha256_digest < "$candidate" 2>/dev/null) || return 1
+        [ "$candidate_sha" = "$expected_classifier_sha" ]
+      }
+      resolve_reviewed_classifier() {
+        if classifier_matches_reviewed_digest "$AGENT_CI_CLASSIFIER"; then
+          printf '%s\n' "$AGENT_CI_CLASSIFIER"
+          return 0
+        fi
+        # An explicit override is a trust boundary: never replace a bad caller-supplied
+        # path with a cache entry. Defaults may fall back because the exact desired-state
+        # digest, not the cache location or version label, authenticates the asset.
+        [ "$AGENT_CI_CLASSIFIER_EXPLICIT" -eq 0 ] || return 1
+        cache_root="$CODEX_HOME/plugins/cache"
+        [ -d "$cache_root" ] || return 1
+        cache_candidates=$(find "$cache_root" -type f \
+          -path '*/agentic-engineering/*/scripts/classify-default-branch-ci-runs.sh' \
+          -print 2>/dev/null) || return 1
+        while IFS= read -r candidate; do
+          [ -n "$candidate" ] || continue
+          if classifier_matches_reviewed_digest "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+          fi
+        done <<EOF
+$cache_candidates
+EOF
+        return 1
+      }
+      if [ -z "$expected_classifier_sha" ]; then
         CI_CLASSIFIER_READY=0
         CI_CLASSIFIER_ERROR="reviewed classifier digest mismatch"
+      elif resolved_classifier=$(resolve_reviewed_classifier); then
+        AGENT_CI_CLASSIFIER=$resolved_classifier
+      else
+        CI_CLASSIFIER_READY=0
+        CI_CLASSIFIER_ERROR="reviewed classifier unavailable"
       fi
     fi
     REDS=0
@@ -4917,7 +4954,7 @@ EOF
                          and (.path | startswith("dynamic/"))
                          and (.name | type) == "string"
                          and ((.name | sub("( - Update)? #[0-9]+$"; "")) == $logical_name)
-                         and (.conclusion == "success" or red))]
+                         and (.conclusion | type) == "string")]
               | if any(.[];
                    (.id | type) != "number"
                    or ((.run_started_at // .created_at) | type) != "string"

@@ -297,6 +297,13 @@ cat > "$FIX/outcomes/managed-history-repeated.json" <<'JSON'
   {"id":200,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"timed_out","created_at":"2026-09-17T09:00:00Z","run_started_at":"2026-09-17T09:00:00Z","name":"Analyze (actions)"}
 ]}
 JSON
+cat > "$FIX/outcomes/managed-history-interrupted.json" <<'JSON'
+{"total_count":3,"workflow_runs":[
+  {"id":201,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-18T09:00:00Z","run_started_at":"2026-09-18T09:00:00Z","name":"Analyze (actions)"},
+  {"id":200,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"cancelled","created_at":"2026-09-17T09:00:00Z","run_started_at":"2026-09-17T09:00:00Z","name":"Analyze (actions)"},
+  {"id":199,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-16T09:00:00Z","run_started_at":"2026-09-16T09:00:00Z","name":"Analyze (actions)"}
+]}
+JSON
 cat > "$FIX/outcomes/classifier" <<'SH'
 #!/usr/bin/env bash
 if [ "$*" != '--repo devantler-tech/monorepo --branch main --head-sha 0123456789abcdef0123456789abcdef01234567' ]; then
@@ -361,6 +368,24 @@ definition_root_run() {
   bash "$FIX/outcomes/definition-root/.claude/scripts/agent-telemetry.sh" \
     --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
 }
+mkdir -p \
+  "$FIX/outcomes/cache-definition-root/.claude/scripts" \
+  "$FIX/outcomes/cache-definition-root/.claude/plugin-consumption" \
+  "$FIX/outcomes/cache-codex/plugins/cache/devantler-plugins/agentic-engineering/9.9.9/scripts"
+cp "$TARGET" "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh"
+cp "$FIX/outcomes/desired-state.json" \
+  "$FIX/outcomes/cache-definition-root/.claude/plugin-consumption/agentic-engineering.desired-state.json"
+cp "$FIX/outcomes/classifier" \
+  "$FIX/outcomes/cache-codex/plugins/cache/devantler-plugins/agentic-engineering/9.9.9/scripts/classify-default-branch-ci-runs.sh"
+cache_definition_run() {
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="$FIX/outcomes/prs.json" \
+  OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+  OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-first.json" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  CODEX_HOME="$FIX/outcomes/cache-codex" \
+  bash "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh" \
+    --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
+}
 OUT=$(outcomes_run); RC=$?
 if [ "$RC" = 0 ] && grep -qE 'devantler-tech/monorepo +1$' <<<"$OUT"; then
   ok "outcomes count only the registered neutral CLI author in the same repository"
@@ -377,11 +402,17 @@ OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
       OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-repeated.json" outcomes_run); RC=$?
 check "outcomes escalate a repeated GitHub-managed failure to actionable" "$OUT" 'GITHUB-MANAGED (REPEATED — ACTIONABLE): Analyze (actions)'
 check "outcomes count a repeated GitHub-managed failure as actionable red" "$OUT" 'repos RED on main: 1'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+      OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-interrupted.json" outcomes_run); RC=$?
+check "outcomes stop a managed failure streak at an intervening cancelled run" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+check "outcomes do not count an interrupted managed failure streak as actionable red" "$OUT" 'repos RED on main: 0'
 OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-failing.tsv" outcomes_run); RC=$?
 check "outcomes preserve a current non-managed failure as actionable red" "$OUT" 'devantler-tech/monorepo                    RED: CI'
 check "outcomes count a current non-managed failure as actionable red" "$OUT" 'repos RED on main: 1'
 OUT=$(definition_root_run); RC=$?
 check "outcomes resolve reviewed classifier assets beside the loaded definition, not the telemetry corpus" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(cache_definition_run); RC=$?
+check "outcomes resolve a digest-matching reviewed classifier from the installed plugin cache" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
 cat > "$FIX/outcomes/repo/.gitmodules" <<'EOF'
 [submodule "outside"]
   path = applications/outside
