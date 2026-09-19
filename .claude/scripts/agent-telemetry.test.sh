@@ -279,6 +279,59 @@ cat > "$FIX/outcomes/prs.json" <<'JSON'
   {"mergedAt":"2099-01-01T00:00:00Z","headRefName":"claude/unregistered","author":{"login":"devantler"},"isCrossRepository":false,"headRepositoryOwner":{"login":"devantler-tech"}}
 ]
 JSON
+: > "$FIX/outcomes/classification-empty.tsv"
+printf '%s\n' \
+  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201' \
+  > "$FIX/outcomes/classification-managed.tsv"
+printf '%s\n' \
+  $'33\ttimed_out\thttps://example.test/current-failure\tCI\tpush\t.github/workflows/ci.yaml\t2026-09-18T10:00:00Z\t301' \
+  > "$FIX/outcomes/classification-failing.tsv"
+printf '%s\n' \
+  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201' \
+  'usage: classifier' \
+  > "$FIX/outcomes/classification-mixed.tsv"
+printf '%s\n' \
+  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201\textra' \
+  > "$FIX/outcomes/classification-extra-field.tsv"
+printf '%s\n' \
+  $'33\ttimed_out\thttps://example.test/current-failure\t\tpush\t.github/workflows/ci.yaml\t2026-09-18T10:00:00Z\t301' \
+  > "$FIX/outcomes/classification-empty-name.tsv"
+cat > "$FIX/outcomes/managed-history-first.json" <<'JSON'
+{"total_count":1,"workflow_runs":[
+  {"id":201,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-18T09:00:00Z","run_started_at":"2026-09-18T09:00:00Z","name":"Analyze (actions)"}
+]}
+JSON
+cat > "$FIX/outcomes/managed-history-repeated.json" <<'JSON'
+{"total_count":2,"workflow_runs":[
+  {"id":201,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-18T09:00:00Z","run_started_at":"2026-09-18T09:00:00Z","name":"Analyze (actions)"},
+  {"id":200,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"timed_out","created_at":"2026-09-17T09:00:00Z","run_started_at":"2026-09-17T09:00:00Z","name":"Analyze (actions)"}
+]}
+JSON
+cat > "$FIX/outcomes/managed-history-interrupted.json" <<'JSON'
+{"total_count":3,"workflow_runs":[
+  {"id":201,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-18T09:00:00Z","run_started_at":"2026-09-18T09:00:00Z","name":"Analyze (actions)"},
+  {"id":200,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"cancelled","created_at":"2026-09-17T09:00:00Z","run_started_at":"2026-09-17T09:00:00Z","name":"Analyze (actions)"},
+  {"id":199,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-16T09:00:00Z","run_started_at":"2026-09-16T09:00:00Z","name":"Analyze (actions)"}
+]}
+JSON
+cat > "$FIX/outcomes/classifier" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" != '--repo devantler-tech/monorepo --branch main --head-sha 0123456789abcdef0123456789abcdef01234567' ]; then
+  exit 2
+fi
+cat "$OUTCOMES_CLASSIFICATION"
+SH
+chmod +x "$FIX/outcomes/classifier"
+if command -v sha256sum >/dev/null 2>&1; then
+  outcomes_classifier_sha=$(sha256sum "$FIX/outcomes/classifier" | awk '{print $1}')
+else
+  outcomes_classifier_sha=$(shasum -a 256 "$FIX/outcomes/classifier" | awk '{print $1}')
+fi
+cat > "$FIX/outcomes/desired-state.json" <<JSON
+{"spec":{"source":{"requiredRuntimeAssets":[
+  {"path":"scripts/classify-default-branch-ci-runs.sh","sha256":"$outcomes_classifier_sha","executable":true}
+]}}}
+JSON
 cat > "$FIX/outcomes/bin/gh" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
@@ -288,16 +341,97 @@ case "$*" in
       shift
     done
     cat "$OUTCOMES_PRS" ;;
+  'api repos/devantler-tech/monorepo/commits/main --jq .sha')
+    printf '%s\n' '0123456789abcdef0123456789abcdef01234567' ;;
+  'api --paginate --slurp --method GET repos/devantler-tech/monorepo/actions/workflows/22/runs '*)
+    cat "$OUTCOMES_MANAGED_HISTORY" ;;
   'api repos/'*) printf '0\n' ;;
   *) exit 93 ;;
 esac
 SH
 chmod +x "$FIX/outcomes/bin/gh"
+cat > "$FIX/outcomes/bin/codex" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" = 'plugin list --json' ]; then
+  printf '%s\n' '{"installed":[{"pluginId":"agentic-engineering@devantler-plugins","enabled":true}]}'
+else
+  exit 93
+fi
+SH
+chmod +x "$FIX/outcomes/bin/codex"
 outcomes_run() {
   PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="${OUTCOMES_PRS:-$FIX/outcomes/prs.json}" \
+  OUTCOMES_CLASSIFICATION="${OUTCOMES_CLASSIFICATION:-$FIX/outcomes/classification-empty.tsv}" \
+  OUTCOMES_MANAGED_HISTORY="${OUTCOMES_MANAGED_HISTORY:-$FIX/outcomes/managed-history-first.json}" \
+  AGENT_CI_CLASSIFIER="$FIX/outcomes/classifier" \
+  AGENT_CI_DESIRED_STATE="$FIX/outcomes/desired-state.json" \
   MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
   CODEX_HOME="$FIX/outcomes/no-codex" \
   bash "$TARGET" --section outcomes --instances "$FIX/outcomes/instances.json" "$@" 2>&1
+}
+mkdir -p \
+  "$FIX/outcomes/definition-root/.claude/scripts" \
+  "$FIX/outcomes/definition-root/.claude/plugin-consumption" \
+  "$FIX/outcomes/definition-root/libraries/agent-plugins/plugins/agentic-engineering/scripts"
+cp "$TARGET" "$FIX/outcomes/definition-root/.claude/scripts/agent-telemetry.sh"
+cp "$FIX/outcomes/classifier" \
+  "$FIX/outcomes/definition-root/libraries/agent-plugins/plugins/agentic-engineering/scripts/classify-default-branch-ci-runs.sh"
+cp "$FIX/outcomes/desired-state.json" \
+  "$FIX/outcomes/definition-root/.claude/plugin-consumption/agentic-engineering.desired-state.json"
+definition_root_run() {
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="$FIX/outcomes/prs.json" \
+  OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+  OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-first.json" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  CODEX_HOME="$FIX/outcomes/no-codex" \
+  bash "$FIX/outcomes/definition-root/.claude/scripts/agent-telemetry.sh" \
+    --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
+}
+mkdir -p \
+  "$FIX/outcomes/cache-definition-root/.claude/scripts" \
+  "$FIX/outcomes/cache-definition-root/.claude/plugin-consumption" \
+  "$FIX/outcomes/cache-codex/plugins/cache/devantler-plugins/agentic-engineering/9.9.9/scripts"
+cp "$TARGET" "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh"
+cp "$FIX/outcomes/desired-state.json" \
+  "$FIX/outcomes/cache-definition-root/.claude/plugin-consumption/agentic-engineering.desired-state.json"
+cp "$FIX/outcomes/classifier" \
+  "$FIX/outcomes/cache-codex/plugins/cache/devantler-plugins/agentic-engineering/9.9.9/scripts/classify-default-branch-ci-runs.sh"
+cache_definition_run() {
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="$FIX/outcomes/prs.json" \
+  OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+  OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-first.json" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  AGENT_TELEMETRY_RUNTIME=codex CODEX_HOME="$FIX/outcomes/cache-codex" \
+  bash "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh" \
+    --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
+}
+mkdir -p \
+  "$FIX/outcomes/claude-config/plugins" \
+  "$FIX/outcomes/claude-install/scripts"
+cp "$FIX/outcomes/classifier" \
+  "$FIX/outcomes/claude-install/scripts/classify-default-branch-ci-runs.sh"
+cat > "$FIX/outcomes/claude-config/plugins/installed_plugins.json" <<JSON
+{"plugins":{"agentic-engineering@devantler-plugins":[{"installPath":"$FIX/outcomes/claude-install"}]}}
+JSON
+claude_definition_run() {
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="$FIX/outcomes/prs.json" \
+  OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+  OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-first.json" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  AGENT_TELEMETRY_RUNTIME=claude CLAUDE_CONFIG_DIR="$FIX/outcomes/claude-config" \
+  CODEX_HOME="$FIX/outcomes/no-codex" \
+  bash "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh" \
+    --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
+}
+claude_no_sibling_run() {
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="$FIX/outcomes/prs.json" \
+  OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+  OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-first.json" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  AGENT_TELEMETRY_RUNTIME=claude CLAUDE_CONFIG_DIR="$FIX/outcomes/no-claude-config" \
+  CODEX_HOME="$FIX/outcomes/cache-codex" \
+  bash "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh" \
+    --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
 }
 OUT=$(outcomes_run); RC=$?
 if [ "$RC" = 0 ] && grep -qE 'devantler-tech/monorepo +1$' <<<"$OUT"; then
@@ -305,6 +439,48 @@ if [ "$RC" = 0 ] && grep -qE 'devantler-tech/monorepo +1$' <<<"$OUT"; then
 else
   bad "outcomes count only the registered neutral CLI author in the same repository" "$OUT"
 fi
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-empty.tsv" outcomes_run); RC=$?
+nocheck "outcomes do not report a recovered current-head workflow as red" "$OUT" 'devantler-tech/monorepo                    RED:'
+check "outcomes recovered current-head workflow leaves the actionable-red count at zero" "$OUT" 'repos RED on main: 0'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" outcomes_run); RC=$?
+check "outcomes report a GitHub-managed dynamic failure as no-action" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+check "outcomes exclude a GitHub-managed dynamic failure from the actionable-red count" "$OUT" 'repos RED on main: 0'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+      OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-repeated.json" outcomes_run); RC=$?
+check "outcomes escalate a repeated GitHub-managed failure to actionable" "$OUT" 'GITHUB-MANAGED (REPEATED — ACTIONABLE): Analyze (actions)'
+check "outcomes count a repeated GitHub-managed failure as actionable red" "$OUT" 'repos RED on main: 1'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+      OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-interrupted.json" outcomes_run); RC=$?
+check "outcomes stop a managed failure streak at an intervening cancelled run" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+check "outcomes do not count an interrupted managed failure streak as actionable red" "$OUT" 'repos RED on main: 0'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-mixed.tsv" outcomes_run); RC=$?
+check "outcomes reject mixed valid and malformed classifier output" "$OUT" 'UNKNOWN (malformed classifier output)'
+nocheck "outcomes never report a partial managed result from malformed classifier output" "$OUT" 'GITHUB-MANAGED'
+check "outcomes keep the aggregate unknown when any classifier output is malformed" "$OUT" 'repos RED on main: QUERY-UNKNOWN (known RED: 0)'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-extra-field.tsv" outcomes_run); RC=$?
+check "outcomes reject classifier rows with extra fields" "$OUT" 'UNKNOWN (malformed classifier output)'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-empty-name.tsv" outcomes_run); RC=$?
+check "outcomes reject a classifier row with an empty workflow name" "$OUT" 'UNKNOWN (malformed classifier output)'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-failing.tsv" outcomes_run); RC=$?
+check "outcomes preserve a current non-managed failure as actionable red" "$OUT" 'devantler-tech/monorepo                    RED: CI'
+check "outcomes count a current non-managed failure as actionable red" "$OUT" 'repos RED on main: 1'
+OUT=$(definition_root_run); RC=$?
+check "outcomes resolve reviewed classifier assets beside the loaded definition, not the telemetry corpus" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(cache_definition_run); RC=$?
+check "outcomes resolve a digest-matching reviewed classifier from the installed plugin cache" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(claude_definition_run); RC=$?
+check "outcomes resolve the reviewed classifier from the active Claude install registry" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(claude_no_sibling_run); RC=$?
+check "outcomes fail closed when the active Claude install is unavailable" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never substitute a sibling Codex cache for the active Claude install" "$OUT" 'GITHUB-MANAGED'
+cat > "$FIX/outcomes/repo/.gitmodules" <<'EOF'
+[submodule "outside"]
+  path = applications/outside
+  url = https://github.com/example-corp/outside.git
+EOF
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-failing.tsv" outcomes_run); RC=$?
+nocheck "outcomes omit repositories outside the portfolio owner" "$OUT" 'example-corp/outside'
+rm -f "$FIX/outcomes/repo/.gitmodules"
 for field in author isCrossRepository headRefName; do
   jq "[.[0] | del(.$field)]" "$FIX/outcomes/prs.json" > "$FIX/outcomes/missing.json"
   OUT=$(OUTCOMES_PRS="$FIX/outcomes/missing.json" outcomes_run); RC=$?
