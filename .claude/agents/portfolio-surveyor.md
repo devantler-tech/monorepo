@@ -1099,25 +1099,26 @@ public and private — no per-repo loop needed to enumerate):
    because this overlay is the definition the survey actually reads for this step). The paragraphs below add only
    this portfolio's GitHub-managed routing policy to the generic classifier output.
 
-   **Read the verdict from the helper's OUTPUT, never by capturing its exit status.** The verdict is
-   carried by the exit code — 0 is a complete classification, 2 is `health is unknown` — so the
-   natural idiom is `… --head-sha FULL_SHA; echo "EXIT=$?"`. The read-only guard **denies** that
-   (`deny: chaining with ; can carry a write`) and nothing executes, costing the rung-0 step its
-   opening calls: measured 2026-09-18, **10 of 87** surveyor dispatches over 7 days did exactly this,
-   rising once monorepo#3339 made the path resolve (monorepo#3390). Read the result instead — stderr
-   **is** surfaced in the tool result, so every failure is visible there without the exit code:
+   **Read the verdict from the helper's native tool result, never by capturing its exit status with
+   shell syntax.** The native result carries the process status plus stdout and stderr — 0 is a
+   complete classification, 2 is `health is unknown` — so the natural idiom `… --head-sha FULL_SHA;
+   echo "EXIT=$?"` is unnecessary. The read-only guard **denies** that (`deny: chaining with ; can
+   carry a write`) and nothing executes, costing the rung-0 step its opening calls: measured
+   2026-09-18, **10 of 87** surveyor dispatches over 7 days did exactly this, rising once
+   monorepo#3339 made the path resolve (monorepo#3390). Classify the native result directly:
 
-   | Output | Meaning |
+   | Native process status and output | Meaning |
    |---|---|
-   | completely empty | exit 0 with no red runs → that branch is **green** |
-   | **well-formed TSV rows** — tab-separated, first field a numeric `workflow_id` | those are the **red runs** |
-   | anything else | the helper FAILED → **`QUERY-UNKNOWN`** for that repository; never `nothing_on_fire: true` |
+   | observed native process status 0 and completely empty output | no red runs → that branch is **green** |
+   | observed native process status 0 and **well-formed TSV rows** — exactly eight tab-separated fields in helper order: numeric `workflow_id`, red `conclusion` (`failure`, `timed_out`, or `startup_failure`), `html_url`, `name`, supported `event`, `path`, valid `created_at`, numeric `run_id` | those are the **red runs** |
+   | any nonzero or unavailable native process status; or any other output, including mixed valid and malformed rows | the helper FAILED → **`QUERY-UNKNOWN`** for that repository; never `nothing_on_fire: true` |
 
    🔴 **IDENTIFY THE RED ROWS POSITIVELY; never treat "not empty" as "red runs".** The helper fails in
    more than one voice — a pagination or payload failure prints `classify-default-branch-ci-runs: …
    health is unknown`, but a malformed invocation prints a bare `usage:` block, and neither is TSV. A
-   rule keyed to the diagnostic prefix alone would parse that usage text as red runs. Match the TSV
-   shape, and route everything else to `QUERY-UNKNOWN` — the empty result stays the one green case.
+   rule keyed to the diagnostic prefix alone would parse that usage text as red runs. Every nonempty
+   line must match the complete eight-field row shape. Match that TSV shape, and route everything
+   else to `QUERY-UNKNOWN` — status 0 plus empty output stays the one green case.
 
    **Split GitHub-MANAGED runs out of that red set before reporting it.** Identify the class by the
    **property, not by an enumerated path**: `event: dynamic` **and** a `path` under `dynamic/` — which

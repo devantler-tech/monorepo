@@ -3086,18 +3086,16 @@ _out_step=$(sed -n '/^4\. \*\*CI red on `main` — deployment delta only\.\*\*/,
 # Flattened exactly as round 12 does: the table and the prose wrap at 100 columns, so an
 # unflattened grep reads a present clause as missing.
 _out_step=$(tr "\n" " " <<<"${_out_step}" | tr -s "[:space:]" " ")
-grep -Fq -- "Read the verdict from the helper's OUTPUT, never by capturing its exit status." <<<"${_out_step}" ||
-  fail "step 4 must send the caller to the helper's OUTPUT, not its exit status — the \`; echo \"EXIT=\$?\"\` idiom is denied by the read-only guard and nothing executes (monorepo#3390)"
-grep -Fq 'completely empty | exit 0 with no red runs → that branch is **green**' <<<"${_out_step}" ||
-  fail "step 4 must pin empty output as the green case (monorepo#3390)"
-grep -Fq 'tab-separated, first field a numeric `workflow_id`' <<<"${_out_step}" ||
-  fail "step 4 must define red runs as TSV rows with a numeric workflow_id (monorepo#3390)"
-grep -Fq 'those are the **red runs**' <<<"${_out_step}" ||
-  fail "step 4 must pin well-formed TSV output as the red runs (monorepo#3390)"
-grep -Fq 'the helper FAILED → **`QUERY-UNKNOWN`** for that repository; never `nothing_on_fire: true`' <<<"${_out_step}" ||
-  fail "step 4 must route any other output to QUERY-UNKNOWN and forbid nothing_on_fire: true there (monorepo#3390)"
+grep -Fq -- "Read the verdict from the helper's native tool result, never by capturing its exit status with shell syntax." <<<"${_out_step}" ||
+  fail "step 4 must use the native tool result, not the guard-denied \`; echo \"EXIT=\$?\"\` idiom (monorepo#3390)"
+grep -Fq '| observed native process status 0 and completely empty output | no red runs → that branch is **green** |' <<<"${_out_step}" ||
+  fail "step 4 must require both native process status 0 and empty output as the green case (monorepo#3390)"
+grep -Fq '| observed native process status 0 and **well-formed TSV rows** — exactly eight tab-separated fields in helper order: numeric `workflow_id`, red `conclusion` (`failure`, `timed_out`, or `startup_failure`), `html_url`, `name`, supported `event`, `path`, valid `created_at`, numeric `run_id` | those are the **red runs** |' <<<"${_out_step}" ||
+  fail "step 4 must couple the complete eight-field TSV predicate to the red verdict in one table row (monorepo#3390)"
+grep -Fq '| any nonzero or unavailable native process status; or any other output, including mixed valid and malformed rows | the helper FAILED → **`QUERY-UNKNOWN`** for that repository; never `nothing_on_fire: true` |' <<<"${_out_step}" ||
+  fail "step 4 must route nonzero or unavailable status and malformed or mixed output to QUERY-UNKNOWN (monorepo#3390)"
 grep -Fq 'never treat "not empty" as "red runs"' <<<"${_out_step}" ||
   fail "step 4 must require POSITIVE identification of red rows — the helper's \`usage:\` block is not empty and is not TSV (monorepo#3390)"
-grep -Fq 'the empty result stays the one green case' <<<"${_out_step}" ||
-  fail "step 4 must state that the empty result is the ONLY green case (monorepo#3390)"
+grep -Fq 'status 0 plus empty output stays the one green case' <<<"${_out_step}" ||
+  fail "step 4 must state that status 0 plus empty output is the ONLY green case (monorepo#3390)"
 echo "portfolio surveyor contract: round-15 classifier-output-contract assertions passed"
