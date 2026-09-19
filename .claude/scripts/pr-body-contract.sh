@@ -353,7 +353,7 @@ validate_body() {
   strip_blockquotes "${body_content}" >"${body_validation}"
   awk '$0 !~ /^ {0,3}\[[^]]+\]:[[:space:]]*/ { print }' \
     "${body_validation}" >"${body_prose}"
-  sed -E 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|PostgreSQL|JavaScript|TypeScript)([^[:alnum:]_]|$)/\1product\3/g' \
+  sed -E 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js)([^[:alnum:]_]|$)/\1product\3/g' \
     "${body_validation}" >"${body_symbols}"
   # Remove every inherited visible template line for the post-relationship
   # check, including repository-required sections that follow the issue link.
@@ -564,12 +564,12 @@ validate_body() {
   if grep -Fq '`' "${body_validation}"; then
     fail "PR body must not contain code or command snippets"
   fi
-  if grep -Eq '(^|[^[:alnum:]_])([Aa]dd|[Aa]dded|[Aa]dding|[Cc]all|[Cc]alled|[Cc]alling|[Cc]hange|[Cc]hanged|[Cc]hanging|[Ff]ix|[Ff]ixed|[Ff]ixing|[Ii]nvoke|[Ii]nvoked|[Ii]nvoking|[Mm]odify|[Mm]odified|[Mm]odifying|[Rr]efactor|[Rr]efactored|[Rr]efactoring|[Rr]emove|[Rr]emoved|[Rr]emoving|[Rr]ename|[Rr]enamed|[Rr]enaming|[Uu]pdate|[Uu]pdated|[Uu]pdating|[Uu]se|[Uu]sed|[Uu]sing)[[:space:]]+(the[[:space:]]+)?[A-Z][a-z0-9]+([A-Z][A-Za-z0-9]*)+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[A-Z][a-z0-9]+([A-Z][A-Za-z0-9]*)+[[:space:]]+(now[[:space:]]+)?(accepts?|calls?|creates?|deletes?|fails?|handles?|invokes?|loads?|parses?|reads?|returns?|runs?|updates?|validates?|writes?)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])([Ff]unction|[Mm]ethod|[Ss]ymbol|[Tt]ype|[Cc]lass|[Ss]truct|[Ii]nterface)[[:space:]]+[A-Z][a-z0-9]+([A-Z][A-Za-z0-9]*)+([^[:alnum:]_]|$)' \
+  if grep -Eq '(^|[^[:alnum:]_])([Aa]dd|[Aa]dded|[Aa]dding|[Cc]all|[Cc]alled|[Cc]alling|[Cc]hange|[Cc]hanged|[Cc]hanging|[Ff]ix|[Ff]ixed|[Ff]ixing|[Ii]nvoke|[Ii]nvoked|[Ii]nvoking|[Mm]odify|[Mm]odified|[Mm]odifying|[Rr]efactor|[Rr]efactored|[Rr]efactoring|[Rr]emove|[Rr]emoved|[Rr]emoving|[Rr]ename|[Rr]enamed|[Rr]enaming|[Uu]pdate|[Uu]pdated|[Uu]pdating|[Uu]se|[Uu]sed|[Uu]sing)[[:space:]]+(the[[:space:]]+)?[A-Za-z][a-z0-9]*([A-Z][A-Za-z0-9]*)+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[A-Za-z][a-z0-9]*([A-Z][A-Za-z0-9]*)+[[:space:]]+(now[[:space:]]+)?(accepts?|calls?|creates?|deletes?|fails?|handles?|invokes?|loads?|parses?|reads?|returns?|runs?|updates?|validates?|writes?)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])([Ff]unction|[Mm]ethod|[Ss]ymbol|[Tt]ype|[Cc]lass|[Ss]truct|[Ii]nterface)[[:space:]]+[A-Za-z][a-z0-9]*([A-Z][A-Za-z0-9]*)+([^[:alnum:]_]|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
   if grep -Eiq '(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])(Dockerfile|Makefile|Taskfile|Justfile|Procfile|Gemfile|Rakefile|Jenkinsfile|Vagrantfile|Tiltfile|Brewfile)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl|mod|sum|toml|lock|ini|conf|cfg|env|properties|gradle|xml|sql|proto)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
-    "${body_validation}"; then
+    "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
 
