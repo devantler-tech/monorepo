@@ -478,6 +478,9 @@ jobs:
               - '.claude/scripts/review-lane-health.test.sh'
               - '.github/workflows/ci.yaml'
             lane-draft-count:
+              # AGENTS.md carries the cap the suite compares the script's default against, so a
+              # threshold change must run this test.
+              - 'AGENTS.md'
               - '.claude/scripts/lane-draft-count.sh'
               - '.claude/scripts/lane-draft-count.test.sh'
               - '.github/workflows/ci.yaml'
