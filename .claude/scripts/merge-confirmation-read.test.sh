@@ -279,16 +279,85 @@ good_flagged="$(bad_lists_in "${self_test_dir}/good.md" | grep -c . || true)"
 # runs, whereas a bad PROSE prescription silently misleads every agent that reads it, which is what this
 # control is for.
 #
-# The role definitions and skills this deployment CONSUMES are surfaces too. They live in the
-# `libraries/agent-plugins` submodule at the pinned gitlink, so a gitlink bump can deliver a bad
-# prescription that no file under `.claude/` contains. An uninitialised submodule FAILS rather than
-# narrowing the scan: skipping it would report OK over fewer surfaces, which is this control's own
-# vacuous-success mode. (The owning repository runs the same check before a definition ships; this
-# one proves what is actually pinned here.)
-plugin_root="${repo_root}/libraries/agent-plugins/plugins"
+# The plugin this deployment ENABLES (`agentic-engineering`, per `.claude/settings.json`) is a surface
+# too. Its role definitions and skills live in the `libraries/agent-plugins` submodule at the pinned
+# gitlink, so a gitlink bump can deliver a bad prescription that no file under `.claude/` contains.
+# Only the enabled plugin is scanned: the marketplace's other plugins are never loaded here, so a
+# problem in one of them must not block a bump. An uninitialised submodule FAILS rather than narrowing
+# the scan, which would report OK over fewer surfaces — this control's own vacuous-success mode. (The
+# owning repository runs the same check before a definition ships; this one proves what is pinned.)
+plugin_root="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering"
 [ -d "${plugin_root}" ] && [ -n "$(find "${plugin_root}" -type f -name '*.md' -print -quit)" ] ||
   fail "libraries/agent-plugins is not initialised, so the consumed plugin definitions cannot be scanned. Initialise it with
        .claude/scripts/submodule-init.sh libraries/agent-plugins"
+
+# The pin checks below are the same ones merge-preflight-thread-gate.test.sh applies to the same
+# directory, and for the same reasons (see the explanation there): a populated submodule may be at
+# another revision, carry uncommitted or index-hidden edits, or hold filter-laundered bytes, and each of
+# those would let this scan pass over content this commit does not pin.
+
+# "PINNED" is a REVISION, not a directory — and a nonempty directory is the weaker claim.
+# A shared checkout sits at whatever revision it was last left on, which is the dangerous case: it
+# returns plausible definitions and the scan passes while inspecting a revision this commit does not
+# pin. So resolve the gitlink and require the populated tree to match it, with a clean worktree.
+# `--no-replace-objects` on the gitlink read for the reason AGENTS.md gives: a `refs/replace` entry
+# for HEAD makes `HEAD:<path>` resolve through the replacement while `rev-parse HEAD` still prints
+# the expected commit, so the pin would silently name a revision nobody reviewed.
+pinned_rev="$(git -C "${repo_root}" --no-replace-objects rev-parse HEAD:libraries/agent-plugins 2>/dev/null)" ||
+  fail "could not resolve this commit's libraries/agent-plugins gitlink, so the scanned revision cannot be verified"
+[ -n "${pinned_rev}" ] ||
+  fail "this commit's libraries/agent-plugins gitlink resolved empty — unproven is not proven"
+actual_rev="$(git -C "${repo_root}/libraries/agent-plugins" rev-parse HEAD 2>/dev/null)" ||
+  fail "could not read the populated libraries/agent-plugins revision, so the scan target is unverified"
+[ "${actual_rev}" = "${pinned_rev}" ] ||
+  fail "libraries/agent-plugins is at ${actual_rev} but this commit pins ${pinned_rev} — the scan would
+  inspect a revision this commit does not pin, which passes while proving nothing about the pinned definitions"
+# A matching revision still does not establish the CONTENT: a modified tracked file survives with HEAD
+# equal to the pin, and `assume-unchanged`/`skip-worktree` hide a modification from `status` entirely.
+sub_status="$(git -C "${repo_root}/libraries/agent-plugins" status --porcelain 2>/dev/null)" ||
+  fail "could not read libraries/agent-plugins worktree status, so its content is unverified"
+[ -z "${sub_status}" ] ||
+  fail "libraries/agent-plugins has uncommitted changes, so the scanned definitions are not the pinned ones"
+hidden="$(git -C "${repo_root}/libraries/agent-plugins" ls-files -v 2>/dev/null | awk '$1 ~ /^[a-z]$/ || $1 == "S"')" ||
+  fail "could not read libraries/agent-plugins index flags, so a hidden modification cannot be ruled out"
+[ -z "${hidden}" ] ||
+  fail "libraries/agent-plugins carries assume-unchanged/skip-worktree entries, which hide a modification from status"
+
+# The three checks above answer "is the tree unmodified AS GIT SEES IT", which is weaker than "are
+# these the reviewed bytes" — and it is the weaker claim that is easy to mistake for proof. A
+# clean/smudge filter assigned to these paths through the repository, a global, or
+# $GIT_DIR/info/attributes makes git compare the CLEANED form, so the file on disk can carry
+# different instructions while status prints nothing and ls-files -v reports an ordinary entry.
+# This scanner then reads the worktree bytes directly (`cat`), so a forbidden thread field would be
+# scanned from altered bytes with every check above passing. Assert byte identity against the pinned
+# blobs, which no filter can launder because --no-filters bypasses the clean stage.
+#
+# Every guard below closes a path where the naive form reports success on a check that never ran:
+# piping ls-tree straight into the loop takes the WHILE's status, so an enumeration failure runs the
+# body zero times and prints nothing — indistinguishable from a verified tree. An uninitialised
+# submodule makes rev-parse and hash-object both return empty, and [ "$want" = "$got" ] then compares
+# EQUAL, so the emptiest possible evidence would read as the strongest. --no-replace-objects belongs
+# on ls-tree too, or the enumeration walks a replaced tree while the lookups beside it do not.
+# printf '%s\n' is required: command substitution strips the trailing newline, so a bare printf '%s'
+# makes read return false on the final entry and drops the last file unchecked.
+byte_files="$(git -C "${repo_root}/libraries/agent-plugins" --no-replace-objects ls-tree -r --name-only HEAD -- plugins/agentic-engineering 2>/dev/null)" ||
+  fail "could not enumerate the pinned plugin definition blobs, so their bytes are unverified — unproven is not proven"
+[ -n "${byte_files}" ] ||
+  fail "the pinned plugin definition enumeration came back empty, so a byte check here would pass vacuously"
+byte_mismatch="$(printf '%s\n' "${byte_files}" | while IFS= read -r bf; do
+  [ -n "${bf}" ] || continue
+  want="$(git -C "${repo_root}/libraries/agent-plugins" --no-replace-objects rev-parse "HEAD:${bf}" 2>/dev/null)" ||
+    { printf 'BYTES-UNKNOWN %s\n' "${bf}"; continue; }
+  got="$(git -C "${repo_root}/libraries/agent-plugins" hash-object --no-filters -- "${bf}" 2>/dev/null)" ||
+    { printf 'BYTES-UNKNOWN %s\n' "${bf}"; continue; }
+  { [ -n "${want}" ] && [ -n "${got}" ]; } ||
+    { printf 'BYTES-UNKNOWN %s\n' "${bf}"; continue; }
+  [ "${want}" = "${got}" ] || printf 'BYTES-DIFFER %s\n' "${bf}"
+done)"
+[ -z "${byte_mismatch}" ] ||
+  fail "the plugin definition worktree bytes are not the pinned blobs, so the scan would inspect
+  unreviewed content while revision, status and index flags all read clean:
+${byte_mismatch}"
 scan_surfaces="$(
   printf '%s\n' "${constitution}"
   find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null | sort
@@ -329,7 +398,7 @@ EOF
 [ "${scanned}" -ge 5 ] ||
   fail "negative control scanned only ${scanned} surface(s); the definition surfaces are missing or moved"
 [ "${plugin_surfaces}" -ge 5 ] ||
-  fail "negative control found only ${plugin_surfaces} consumed plugin surface(s) under libraries/agent-plugins/plugins; the submodule is incomplete or moved"
+  fail "negative control found only ${plugin_surfaces} consumed plugin surface(s) under libraries/agent-plugins/plugins/agentic-engineering; the submodule is incomplete or moved"
 [ "${lists_seen}" -ge 5 ] ||
   fail "negative control extracted only ${lists_seen} \`--json\` field list(s) from ${scanned} surfaces; the extractor is probably broken"
 
