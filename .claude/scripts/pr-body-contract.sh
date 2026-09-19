@@ -369,8 +369,14 @@ validate_body() {
   # product-facing body forbids, while preserving the original body for prose,
   # template-order, and relationship validation.
   strip_blockquotes "${body_content}" >"${body_validation}"
-  awk '$0 !~ /^ {0,3}\[[^]]+\]:[[:space:]]*/ { print }' \
-    "${body_validation}" >"${body_prose}"
+  awk '
+    function thematic_break(line, compact) {
+      compact = line
+      gsub(/[[:space:]]/, "", compact)
+      return compact ~ /^(\*{3,}|-{3,}|_{3,})$/
+    }
+    $0 !~ /^ {0,3}\[[^]]+\]:[[:space:]]*/ && !thematic_break($0) { print }
+  ' "${body_validation}" >"${body_prose}"
   sed -E \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js)([^[:alnum:]_]|$)/\1product\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
@@ -587,7 +593,7 @@ validate_body() {
   if grep -Fq '`' "${body_validation}"; then
     fail "PR body must not contain code or command snippets"
   fi
-  if grep -Eq '(^|[^[:alnum:]_])([Aa]dd|[Aa]dded|[Aa]dding|[Cc]all|[Cc]alled|[Cc]alling|[Cc]hange|[Cc]hanged|[Cc]hanging|[Ff]ix|[Ff]ixed|[Ff]ixing|[Ii]nvoke|[Ii]nvoked|[Ii]nvoking|[Mm]odify|[Mm]odified|[Mm]odifying|[Rr]efactor|[Rr]efactored|[Rr]efactoring|[Rr]emove|[Rr]emoved|[Rr]emoving|[Rr]ename|[Rr]enamed|[Rr]enaming|[Uu]pdate|[Uu]pdated|[Uu]pdating|[Uu]se|[Uu]sed|[Uu]sing)[[:space:]]+(the[[:space:]]+)?[A-Za-z][a-z0-9]*([A-Z][A-Za-z0-9]*)+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[A-Za-z][a-z0-9]*([A-Z][A-Za-z0-9]*)+[[:space:]]+(now[[:space:]]+)?(accepts?|calls?|creates?|deletes?|fails?|handles?|invokes?|loads?|parses?|reads?|returns?|runs?|updates?|validates?|writes?)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])([Ff]unction|[Mm]ethod|[Ss]ymbol|[Tt]ype|[Cc]lass|[Ss]truct|[Ii]nterface)[[:space:]]+[A-Za-z][a-z0-9]*([A-Z][A-Za-z0-9]*)+([^[:alnum:]_]|$)' \
+  if grep -Eq '(^|[^[:alnum:]_])([Aa]dd|[Aa]dded|[Aa]dding|[Cc]all|[Cc]alled|[Cc]alling|[Cc]hange|[Cc]hanged|[Cc]hanging|[Ff]ix|[Ff]ixed|[Ff]ixing|[Ii]nvoke|[Ii]nvoked|[Ii]nvoking|[Mm]odify|[Mm]odified|[Mm]odifying|[Rr]efactor|[Rr]efactored|[Rr]efactoring|[Rr]emove|[Rr]emoved|[Rr]emoving|[Rr]ename|[Rr]enamed|[Rr]enaming|[Uu]pdate|[Uu]pdated|[Uu]pdating|[Uu]se|[Uu]sed|[Uu]sing)[[:space:]]+(the[[:space:]]+)?[A-Za-z][a-z0-9]*([A-Z][a-z0-9]+)+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[A-Za-z][a-z0-9]*([A-Z][a-z0-9]+)+[[:space:]]+(now[[:space:]]+)?(accepts?|calls?|creates?|deletes?|fails?|handles?|invokes?|loads?|parses?|reads?|returns?|runs?|updates?|validates?|writes?)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])([Ff]unction|[Mm]ethod|[Ss]ymbol|[Tt]ype|[Cc]lass|[Ss]truct|[Ii]nterface)[[:space:]]+[A-Za-z][a-z0-9]*([A-Z][a-z0-9]+)+([^[:alnum:]_]|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
