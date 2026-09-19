@@ -52,6 +52,7 @@ jobs:
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
       claude-lane-liveness: ${{ steps.filter.outputs.claude-lane-liveness }}
       review-lane-health: ${{ steps.filter.outputs.review-lane-health }}
+      lane-draft-count: ${{ steps.filter.outputs.lane-draft-count }}
       improver-role-disclosure: ${{ steps.filter.outputs.improver-role-disclosure }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       gh-json-vocabulary-contract: ${{ steps.filter.outputs.gh-json-vocabulary-contract }}
@@ -475,6 +476,13 @@ jobs:
             review-lane-health:
               - '.claude/scripts/review-lane-health.sh'
               - '.claude/scripts/review-lane-health.test.sh'
+              - '.github/workflows/ci.yaml'
+            lane-draft-count:
+              # AGENTS.md carries the cap the suite compares the script's default against, so a
+              # threshold change must run this test.
+              - 'AGENTS.md'
+              - '.claude/scripts/lane-draft-count.sh'
+              - '.claude/scripts/lane-draft-count.test.sh'
               - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
@@ -1850,6 +1858,25 @@ jobs:
       - name: Verify the review lane health check
         run: bash .claude/scripts/review-lane-health.test.sh
 
+  test-lane-draft-count:
+    name: Test lane draft count
+    needs: changes
+    if: needs.changes.outputs.lane-draft-count == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the lane draft count
+        run: bash .claude/scripts/lane-draft-count.test.sh
+
   test-plugin-definition-refresh:
     name: Test plugin definition refresh
     needs: changes
@@ -2164,6 +2191,7 @@ jobs:
       - test-codex-lane-liveness
       - test-claude-lane-liveness
       - test-review-lane-health
+      - test-lane-draft-count
       - test-self-review-contract
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
@@ -2234,6 +2262,7 @@ jobs:
             ${{ needs.test-codex-lane-liveness.result }}
             ${{ needs.test-claude-lane-liveness.result }}
             ${{ needs.test-review-lane-health.result }}
+            ${{ needs.test-lane-draft-count.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}

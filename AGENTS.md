@@ -4884,6 +4884,16 @@ finishing capacity:
 | **Per run** | Open at most **5** new own drafts. |
 | **Per lane** | While your own lane holds **more than 20** open drafts, open **no** new ones — spend the whole run finishing. |
 
+🔴 **Check the per-lane bound before opening a draft — do not assume it.** Run
+[`lane-draft-count.sh --lane <your namespace>`](.claude/scripts/lane-draft-count.sh): it counts open
+drafts by **branch namespace**, because every instance authors as the same login, so an author
+count alone cannot tell the lanes apart (monorepo#2562). A draft counts for a lane only when its
+branch is in that namespace, it comes from the same repository, **and** its author is the lane's
+registered REST identity, so a collaborator or bot using the prefix does not inflate the lane. Exit `0` means only that the **per-lane** bound does not block a draft — the
+per-run limit of 5 still applies on its own — `1` means the lane is over the cap, and `2` is
+**UNKNOWN**. Treat UNKNOWN as "not permitted": a partial read is a floor, and a floor below the cap
+looks exactly like permission. Finishing work and filing issues stay available either way.
+
 **Rung-0 live breakage is exempt from both** — a hotfix is never blocked by a cap. So is the
 issue-capture *Issue-driven* mandates: **filing an issue is not opening a draft**, and the backlog must
 stay capturable while the caps bite. Both numbers are a deliberately permissive starting point rather
