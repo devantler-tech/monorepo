@@ -169,12 +169,16 @@ validate_body() {
   local body_setext_headings="${work_dir}/body-setext-headings"
   local template_structure="${work_dir}/template-structure"
   local template_fixed="${work_dir}/template-fixed"
+  local template_fixed_unique="${work_dir}/template-fixed-unique"
   local body_content="${work_dir}/body-content.md"
   local first_line
   local expected_disclosure
   local heading
   local structure_line
+  local fixed_line
   local count
+  local allowed_count
+  local body_count
   local line_number
   local previous_line=0
   local first_template_line
@@ -185,6 +189,7 @@ validate_body() {
   local fixes_issue
   local part_of_issue
   local issue_line
+  local final_issue_line
   local what_line
   local why_chars
   local what_chars
@@ -236,6 +241,13 @@ validate_body() {
   awk 'NF && $0 !~ /^(Fixes|Part of) #$/ { print }' "${visible_template}" >"${template_structure}"
   awk 'NF && $0 !~ /^#{1,6} / && $0 !~ /^(Fixes|Part of) #$/ { print }' \
     "${visible_template}" >"${template_fixed}"
+  awk '!seen[$0]++' "${template_fixed}" >"${template_fixed_unique}"
+  while IFS= read -r fixed_line; do
+    allowed_count="$(grep -Fxc -- "${fixed_line}" "${template_fixed}" || true)"
+    body_count="$(grep -Fxc -- "${fixed_line}" "${visible_body}" || true)"
+    [ "${body_count}" -le "${allowed_count}" ] ||
+      fail "body repeats visible template content: ${fixed_line}"
+  done <"${template_fixed_unique}"
   awk '
     FILENAME == ARGV[1] { inherited[$0]++; next }
     inherited[$0] > 0 { inherited[$0]--; next }
@@ -339,6 +351,14 @@ validate_body() {
     END { exit found ? 0 : 1 }
   ' "${body_content}"; then
     fail "Why and What must be short prose, not bullet inventories"
+  fi
+
+  final_issue_line="$(grep -nE '^(Fixes|Part of) #[0-9]+$' "${body_content}" | tail -n 1 | cut -d: -f1)"
+  if awk -v boundary="${final_issue_line}" '
+    NR > boundary && NF { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "${body_content}"; then
+    fail "body adds non-template text after the final issue relationship"
   fi
 
   if grep -Eq '^[[:space:]]*(```|~~~)' "${visible_body}"; then
