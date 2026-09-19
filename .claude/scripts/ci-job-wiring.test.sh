@@ -216,6 +216,54 @@ expect_defect "missing file" "cannot read" 2
 fixture; edit 'del(.jobs.status)'
 expect_defect "no status job" "has no status job" 2
 
+# A BLOCKING job that reads no changes output is skipped by its own job-level `if` before any
+# filter check applies, and the aggregate accepts `skipped` — so a condition here can silently
+# stop a required check from gating merges. Only an allow-listed condition passes.
+fixture; edit '.jobs.unfiltered.if = false'
+expect_defect "blocking job disabled outright" \
+  "unfiltered: job-level if is not an allowed condition for a blocking job that reads no changes output"
+
+# A repository variable can be flipped off without touching the workflow, so it must not decide
+# whether a required check runs.
+fixture; edit '.jobs.unfiltered.if = "vars.RUN_IT == '"'"'true'"'"'"'
+expect_defect "blocking job behind a repo variable" \
+  "unfiltered: job-level if is not an allowed condition for a blocking job that reads no changes output"
+
+# `always()` is not an event gate: it reads as a condition that never filters, and it would also
+# mask a later real one.
+fixture; edit '.jobs.unfiltered.if = "always()"'
+expect_defect "blocking job with always()" \
+  "unfiltered: job-level if is not an allowed condition for a blocking job that reads no changes output"
+
+# The one allow-listed shape: gating on the triggering event, which no setting can switch off.
+fixture; edit '.jobs.unfiltered.if = "github.event_name == '"'"'pull_request'"'"'"'
+expect_ok "blocking job gated on the event"
+fixture
+# shellcheck disable=SC2016
+edit '.jobs.unfiltered.if = "${{ github.event_name == '"'"'pull_request'"'"' }}"'
+expect_ok "blocking job gated on the event, wrapped"
+
+# A non-blocking job is exempt: its result never reaches the gate, so a condition cannot weaken it.
+fixture; edit '.jobs.advisory.if = false'
+expect_ok "non-blocking job may carry any condition"
+
+# No condition at all stays the normal case.
+fixture; expect_ok "blocking job with no condition"
+
+# A fatal abort must never be reported as a clean pass. Under bash 3.2 a successful `rm` in an EXIT
+# trap replaces the failing status with 0, so the checker printed nothing and exited 0 — a guard
+# silently passing is worse than one that errors. Inject a fatal error and assert the status survives.
+fixture
+# The fatal error goes AFTER the trap line: the point is that the cleanup is already installed when
+# the abort happens, which is the only arrangement that can mask the status.
+awk '{print} /^trap /&&!d{print ": \"${ci_job_wiring_deliberately_unset:?fatal}\""; d=1}' \
+  "$checker" >"$tmp/aborting.sh"
+awk '/^trap /{t=NR} /ci_job_wiring_deliberately_unset/{i=NR} END{exit !(t && i && i==t+1)}' "$tmp/aborting.sh" ||
+  fail "abort fixture did not inject the fatal error directly after the trap"
+set +e; bash "$tmp/aborting.sh" "$tmp/ci.yaml" >"$tmp/out" 2>&1; abort_rc=$?; set -e
+[[ $abort_rc -ne 0 ]] || { cat "$tmp/out" >&2; fail "a fatal abort exited 0, so the cleanup trap masked it"; }
+grep -qF "ci-job-wiring: OK" "$tmp/out" && fail "an aborting run printed the OK line"
+
 # Positive control: the real workflow is wired.
 "$checker" "$root/.github/workflows/ci.yaml" >/dev/null || fail "the real ci.yaml has wiring defects"
 

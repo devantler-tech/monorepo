@@ -18,7 +18,21 @@ workflow="${1:-.github/workflows/ci.yaml}"
 command -v yq >/dev/null || { echo "ci-job-wiring: yq is required" >&2; exit 2; }
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+# A guard that exits 0 without having run is worse than one that errors, and two things can produce
+# exactly that. Bash 3.2 reports $? as 0 to an EXIT trap for a parameter-expansion abort (`set -u`),
+# and a successful `rm` in the trap can become the script's own status. So completion is recorded
+# explicitly: reaching the end is the only way a zero status leaves this script.
+ci_job_wiring_finished=0
+cleanup() {
+  local rc=$?
+  rm -rf "$tmp"
+  if [[ "$ci_job_wiring_finished" != 1 && $rc -eq 0 ]]; then
+    echo "ci-job-wiring: aborted before finishing; reporting failure rather than a clean pass" >&2
+    rc=1
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
 
 # Every read is checked: a failed parse must never leave an empty set that compares as clean.
 read_set() { # <name> <yq expression>
@@ -42,6 +56,29 @@ filter_output() {
   [[ "$c" =~ $head ]] || return 1
   [[ -z "${BASH_REMATCH[2]}" || "${BASH_REMATCH[2]}" == "$same_repo_clause" ]] || return 1
   printf '%s' "${BASH_REMATCH[1]}"
+}
+
+# The only conditions a BLOCKING job that reads no changes output may carry. Such a job is not
+# path-filtered, so its `if` is the single thing deciding whether it runs — and the aggregate counts
+# a skipped job as a pass. `if: false`, a repository variable, or anything else switchable therefore
+# takes a required check out of the gate while every file still looks wired. Gating on the event that
+# triggered the run is allowed because nothing outside the workflow can turn it off. This is an
+# allow-list on purpose: an unrecognised spelling is refused rather than assumed safe.
+unfiltered_conditions=("github.event_name == 'pull_request'")
+allowed_unfiltered_condition() {
+  local c="$1" allowed
+  for allowed in ${unfiltered_conditions[@]+"${unfiltered_conditions[@]}"}; do
+    [[ "$c" == "$allowed" ]] && return 0
+  done
+  return 1
+}
+
+# job_condition <job> — print the job-level `if`, normalised. Presence is tested with has(), never
+# `//`, which reads a YAML `false` as absent — the exact spelling that disables a job outright.
+job_condition() {
+  [[ "$(JOB="$1" yq -r '.jobs[strenv(JOB)] | has("if")' "$workflow")" == true ]] || return 1
+  JOB="$1" yq -r '.jobs[strenv(JOB)].if | tostring' "$workflow" |
+    tr -s '[:space:]' ' ' | sed -E 's/^ *(\$\{\{ *)?//; s/ *(\}\} *)?$//'
 }
 
 failures=0
@@ -95,6 +132,7 @@ else
 fi
 
 : >"$tmp/referenced"
+: >"$tmp/unfiltered"
 while IFS= read -r job; do
   [[ -n "$job" && "$job" != changes ]] || continue
   JOB="$job" yq -o=json '.jobs[strenv(JOB)]' "$workflow" >"$tmp/job.json"
@@ -105,7 +143,9 @@ while IFS= read -r job; do
     defect "$job: reads needs with index syntax; write needs.changes.outputs.<name> so the wiring can be checked"
   fi
   refs="$(grep -oE 'needs\.changes\.outputs\.[A-Za-z0-9_-]+' "$tmp/job.json" | sed 's/^needs\.changes\.outputs\.//' | sort -u || true)"
-  [[ -n "$refs" ]] || continue
+  # A job that reads no changes output is not path-filtered, so nothing above governs it. Its own
+  # `if` alone decides whether it runs, and the allow-list below is what checks that.
+  if [[ -z "$refs" ]]; then printf '%s\n' "$job" >>"$tmp/unfiltered"; continue; fi
   # Only the job-level `if` filters the job, and only in one of two shapes (an allow-list: every other
   # spelling, including a negated or quoted reference, reads as no filter):
   #   needs.changes.outputs.<name> == 'true'
@@ -148,6 +188,12 @@ while IFS= read -r job; do
   grep -qx -- "$job" "$tmp/nonblocking" && continue
   grep -qx -- "$job" "$tmp/status_needs" || defect "$job: missing from status.needs, so it never gates the merge"
   grep -qx -- "$job" "$tmp/status_results" || defect "$job: missing from status job-results, so its failure is never counted"
+  # A job whose result the gate counts, and which no changes output filters, must not be able to
+  # skip itself: the aggregate reads `skipped` as a pass, so its condition is checked here.
+  if grep -qx -- "$job" "$tmp/unfiltered" && grep -qx -- "$job" "$tmp/status_results" &&
+    condition="$(job_condition "$job")" && ! allowed_unfiltered_condition "$condition"; then
+    defect "$job: job-level if is not an allowed condition for a blocking job that reads no changes output (found '$condition'), so it can skip while the gate still passes"
+  fi
   [[ "$(JOB="$job" yq -r '.jobs[strenv(JOB)]."continue-on-error" // false' "$workflow")" == false ]] ||
     defect "$job: sets continue-on-error, so it can fail without failing the merge"
 done <"$tmp/jobs"
@@ -164,4 +210,5 @@ if ((failures > 0)); then
   echo "ci-job-wiring: $failures wiring defect(s) in $workflow" >&2
   exit 1
 fi
+ci_job_wiring_finished=1
 echo "ci-job-wiring: OK ($(wc -l <"$tmp/jobs" | tr -d ' ') jobs, $(wc -l <"$tmp/outputs" | tr -d ' ') filtered outputs)"
