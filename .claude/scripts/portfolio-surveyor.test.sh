@@ -3090,6 +3090,8 @@ grep -Fq -- "Read the verdict from the helper's OUTPUT, never by capturing its e
   fail "step 4 must send the caller to the helper's OUTPUT, not its exit status — the \`; echo \"EXIT=\$?\"\` idiom is denied by the read-only guard and nothing executes (monorepo#3390)"
 grep -Fq 'completely empty | exit 0 with no red runs → that branch is **green**' <<<"${_out_step}" ||
   fail "step 4 must pin empty output as the green case (monorepo#3390)"
+grep -Fq 'tab-separated, first field a numeric `workflow_id`' <<<"${_out_step}" ||
+  fail "step 4 must define red runs as TSV rows with a numeric workflow_id (monorepo#3390)"
 grep -Fq 'those are the **red runs**' <<<"${_out_step}" ||
   fail "step 4 must pin well-formed TSV output as the red runs (monorepo#3390)"
 grep -Fq 'the helper FAILED → **`QUERY-UNKNOWN`** for that repository; never `nothing_on_fire: true`' <<<"${_out_step}" ||
