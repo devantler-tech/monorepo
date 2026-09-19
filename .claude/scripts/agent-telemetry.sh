@@ -71,7 +71,8 @@ fi
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
-INSTANCES="${AGENT_INSTANCES_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../plugin-consumption/agent-instances.json}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTANCES="${AGENT_INSTANCES_FILE:-$SCRIPT_DIR/../plugin-consumption/agent-instances.json}"
 SIGNATURE=""
 SIGNATURE_SET=0
 INJECTION_PROVENANCE=0
@@ -178,6 +179,9 @@ esac
 CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 MONOREPO="${MONOREPO_DIR:-$HOME/git-personal/monorepo}"
+DEFINITION_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+AGENT_CI_CLASSIFIER="${AGENT_CI_CLASSIFIER:-$DEFINITION_ROOT/libraries/agent-plugins/plugins/agentic-engineering/scripts/classify-default-branch-ci-runs.sh}"
+AGENT_CI_DESIRED_STATE="${AGENT_CI_DESIRED_STATE:-$DEFINITION_ROOT/.claude/plugin-consumption/agentic-engineering.desired-state.json}"
 
 # ── PROFESSIONAL-WORK BOUNDARY (hard exclusion) ───────────────────────────────
 # The host's session stores hold transcripts for EVERY project worked on there,
@@ -4822,34 +4826,152 @@ EOF
     # leaves main red WITHOUT being reverted produced no signal at all — the
     # worst case to miss, since nothing else surfaces it.
     echo "  main CI state per repo (post-merge red — a merge that broke main):"
+    # Reuse the reviewed plugin's current-head reducer instead of independently
+    # reimplementing its pagination and latest-run identity rules here. Pin the
+    # executable to the consumer's desired-state digest: an arbitrary inherited
+    # path must not become a trusted forge classifier merely because it runs.
+    CI_CLASSIFIER_READY=1
+    CI_CLASSIFIER_ERROR=""
+    if [ ! -f "$AGENT_CI_CLASSIFIER" ] || [ ! -x "$AGENT_CI_CLASSIFIER" ] || [ -L "$AGENT_CI_CLASSIFIER" ]; then
+      CI_CLASSIFIER_READY=0
+      CI_CLASSIFIER_ERROR="reviewed classifier unavailable"
+    elif [ ! -r "$AGENT_CI_DESIRED_STATE" ]; then
+      CI_CLASSIFIER_READY=0
+      CI_CLASSIFIER_ERROR="desired state unavailable"
+    else
+      expected_classifier_sha=$(jq -er '
+        [.spec.source.requiredRuntimeAssets[]?
+          | select(.path == "scripts/classify-default-branch-ci-runs.sh"
+                   and .executable == true
+                   and (.sha256 | type) == "string"
+                   and (.sha256 | length) == 64)
+          | .sha256]
+        | select(length == 1)
+        | .[0]
+      ' "$AGENT_CI_DESIRED_STATE" 2>/dev/null) || expected_classifier_sha=""
+      actual_classifier_sha=$(sha256_digest < "$AGENT_CI_CLASSIFIER" 2>/dev/null) || actual_classifier_sha=""
+      if [ -z "$expected_classifier_sha" ] || [ "$actual_classifier_sha" != "$expected_classifier_sha" ]; then
+        CI_CLASSIFIER_READY=0
+        CI_CLASSIFIER_ERROR="reviewed classifier digest mismatch"
+      fi
+    fi
     REDS=0
     while IFS= read -r r; do
       [ -n "$r" ] || continue
-      # Read the CHECK-RUNS on main's head, not "the latest workflow run".
-      # The latter picks up path-filtered workflows that legitimately report
-      # `skipped`, which is not a broken main — treating any non-success as RED
-      # produced three false alarms on the live portfolio. Only genuine failure
-      # conclusions count.
-      fails=$(gh api "repos/$r/commits/main/check-runs?per_page=100" \
-                --jq '[.check_runs[]? | select(.conclusion == "failure" or .conclusion == "timed_out"
-                                               or .conclusion == "startup_failure")] | length' 2>/dev/null)
-      case "$fails" in
-        ''|*[!0-9]*) printf '    %-42s %s\n' "$r" "UNKNOWN (query failed)" ;;
-        0) ;;
-        *) names=$(gh api "repos/$r/commits/main/check-runs?per_page=100" \
-                     --jq '[.check_runs[]? | select(.conclusion == "failure" or .conclusion == "timed_out"
-                                                    or .conclusion == "startup_failure") | .name]
-                           | join(", ")' 2>/dev/null | cut -c1-46)
-           printf '    %-42s RED: %s\n' "$r" "$names"; REDS=$((REDS+1)) ;;
-      esac
+      if [ "$CI_CLASSIFIER_READY" -ne 1 ]; then
+        printf '    %-42s UNKNOWN (%s)\n' "$r" "$CI_CLASSIFIER_ERROR"
+        continue
+      fi
+      head_sha=$(gh api "repos/$r/commits/main" --jq '.sha' 2>/dev/null)
+      if ! printf '%s' "$head_sha" | grep -qE '^[0-9a-fA-F]{40}$'; then
+        printf '    %-42s %s\n' "$r" "UNKNOWN (head query failed)"
+        continue
+      fi
+      if ! current_red=$(
+        "$AGENT_CI_CLASSIFIER" --repo "$r" --branch main --head-sha "$head_sha" 2>/dev/null
+      ); then
+        printf '    %-42s %s\n' "$r" "UNKNOWN (classification failed)"
+        continue
+      fi
+      actionable_names=$(printf '%s\n' "$current_red" | awk -F '\t' '
+        !($5 == "dynamic" && $6 ~ /^dynamic\//) && NF >= 8 {
+          if (names != "") names = names ", "
+          names = names $4
+        }
+        END { print names }
+      ' | cut -c1-46)
+      managed_noaction_names=""
+      managed_actionable_names=""
+      managed_unknown_names=""
+      while IFS= read -r managed_row; do
+        [ -n "$managed_row" ] || continue
+        workflow_id=$(printf '%s\n' "$managed_row" | cut -f1)
+        managed_name=$(printf '%s\n' "$managed_row" | cut -f4)
+        current_run_id=$(printf '%s\n' "$managed_row" | cut -f8)
+        logical_name=$(printf '%s\n' "$managed_name" | sed -E 's/( - Update)? #[0-9]+$//')
+        managed_state="unknown"
+        if history=$(
+          gh api --paginate --slurp --method GET \
+            "repos/$r/actions/workflows/$workflow_id/runs" \
+            -f branch=main -F per_page=100 2>/dev/null
+        ); then
+          managed_state=$(printf '%s\n' "$history" | jq -er \
+            --arg logical_name "$logical_name" \
+            --argjson current_run_id "$current_run_id" '
+              def red:
+                .conclusion == "failure"
+                or .conclusion == "timed_out"
+                or .conclusion == "startup_failure";
+              def pages:
+                if type == "object" and (.workflow_runs | type) == "array" then [.]
+                elif type == "array"
+                     and all(.[]; type == "object" and (.workflow_runs | type) == "array") then .
+                elif type == "array" and length == 1 and (.[0] | type) == "array"
+                     and all(.[0][]; type == "object" and (.workflow_runs | type) == "array") then .[0]
+                else error("malformed workflow-run pages")
+                end;
+              pages
+              | [.[].workflow_runs[]
+                | select(.event == "dynamic"
+                         and (.path | type) == "string"
+                         and (.path | startswith("dynamic/"))
+                         and (.name | type) == "string"
+                         and ((.name | sub("( - Update)? #[0-9]+$"; "")) == $logical_name)
+                         and (.conclusion == "success" or red))]
+              | if any(.[];
+                   (.id | type) != "number"
+                   or ((.run_started_at // .created_at) | type) != "string"
+                   or ((.run_attempt // 1) | type) != "number")
+                then error("managed run is missing ordering evidence")
+                else sort_by([(.run_started_at // .created_at), .id, (.run_attempt // 1)])
+                     | reverse
+                end
+              | if length == 0 or .[0].id != $current_run_id or (.[0] | red | not)
+                then error("current managed run is not the newest terminal result")
+                elif length > 1 and (.[1] | red)
+                then "repeated"
+                else "first"
+                end
+            ' 2>/dev/null) || managed_state="unknown"
+        fi
+        case "$managed_state" in
+          first)
+            [ -z "$managed_noaction_names" ] || managed_noaction_names="$managed_noaction_names, "
+            managed_noaction_names="$managed_noaction_names$managed_name" ;;
+          repeated)
+            [ -z "$managed_actionable_names" ] || managed_actionable_names="$managed_actionable_names, "
+            managed_actionable_names="$managed_actionable_names$managed_name" ;;
+          *)
+            [ -z "$managed_unknown_names" ] || managed_unknown_names="$managed_unknown_names, "
+            managed_unknown_names="$managed_unknown_names$managed_name" ;;
+        esac
+      done <<EOF
+$(printf '%s\n' "$current_red" | awk -F '\t' '$5 == "dynamic" && $6 ~ /^dynamic\// && NF >= 8')
+EOF
+      repo_actionable=0
+      if [ -n "$managed_noaction_names" ]; then
+        printf '    %-42s GITHUB-MANAGED (NO-ACTION): %s\n' "$r" "$(printf '%s' "$managed_noaction_names" | cut -c1-46)"
+      fi
+      if [ -n "$managed_actionable_names" ]; then
+        printf '    %-42s GITHUB-MANAGED (REPEATED — ACTIONABLE): %s\n' "$r" "$(printf '%s' "$managed_actionable_names" | cut -c1-46)"
+        repo_actionable=1
+      fi
+      if [ -n "$managed_unknown_names" ]; then
+        printf '    %-42s QUERY-UNKNOWN (managed streak): %s\n' "$r" "$(printf '%s' "$managed_unknown_names" | cut -c1-46)"
+      fi
+      if [ -n "$actionable_names" ]; then
+        printf '    %-42s RED: %s\n' "$r" "$actionable_names"
+        repo_actionable=1
+      fi
+      [ "$repo_actionable" -eq 0 ] || REDS=$((REDS+1))
     done <<EOF
 $REPOS
 EOF
     echo "    ────────────────────────────────────────── repos RED on main: ${REDS}"
     echo "    (a RED here outranks every advance item next run — see the skill)"
-    echo "    UNKNOWN usually means HTTP 403: the token lacks checks:read on that"
-    echo "    repo (seen on the private ones). Verified cause, not a mystery —"
-    echo "    treat it as UNMEASURED, never as green, and surface the scope gap."
+    echo "    UNKNOWN / QUERY-UNKNOWN names the failed head, classifier, or streak"
+    echo "    join in its row. Treat that repository as UNMEASURED, never green,"
+    echo "    and resolve the named evidence gap before drawing a CI verdict."
     echo "  revert commits since ${SINCE_ISO} (portfolio):"
     RTOTAL=0
     while IFS= read -r r; do
