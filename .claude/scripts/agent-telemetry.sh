@@ -4892,26 +4892,60 @@ EOF
         CI_CLASSIFIER_ERROR="reviewed classifier unavailable"
       fi
     fi
+    classifier_output_is_valid() {
+      printf '%s' "$1" | jq -eRs '
+        if . == "" then true
+        else
+          split("\n")
+          | all(.[];
+              split("\t") as $row
+              | ($row | length) == 8
+                and ($row[0] | test("^[0-9]+$"))
+                and ($row[1] == "failure"
+                     or $row[1] == "timed_out"
+                     or $row[1] == "startup_failure")
+                and (["push", "schedule", "merge_group", "workflow_dispatch", "dynamic"]
+                     | index($row[4]) != null)
+                and (if $row[4] == "dynamic"
+                     then ($row[3] | length) > 0 and ($row[5] | startswith("dynamic/"))
+                     else true
+                     end)
+                and ($row[6] | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+                and (try (($row[6] | fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")) == $row[6])
+                     catch false)
+                and ($row[7] | test("^[0-9]+$")))
+        end
+      ' >/dev/null 2>&1
+    }
     REDS=0
+    REDS_UNKNOWN=0
     while IFS= read -r r; do
       [ -n "$r" ] || continue
       if [ "$CI_CLASSIFIER_READY" -ne 1 ]; then
         printf '    %-42s UNKNOWN (%s)\n' "$r" "$CI_CLASSIFIER_ERROR"
+        REDS_UNKNOWN=1
         continue
       fi
       head_sha=$(gh api "repos/$r/commits/main" --jq '.sha' 2>/dev/null)
       if ! printf '%s' "$head_sha" | grep -qE '^[0-9a-fA-F]{40}$'; then
         printf '    %-42s %s\n' "$r" "UNKNOWN (head query failed)"
+        REDS_UNKNOWN=1
         continue
       fi
       if ! current_red=$(
         "$AGENT_CI_CLASSIFIER" --repo "$r" --branch main --head-sha "$head_sha" 2>/dev/null
       ); then
         printf '    %-42s %s\n' "$r" "UNKNOWN (classification failed)"
+        REDS_UNKNOWN=1
+        continue
+      fi
+      if ! classifier_output_is_valid "$current_red"; then
+        printf '    %-42s %s\n' "$r" "UNKNOWN (malformed classifier output)"
+        REDS_UNKNOWN=1
         continue
       fi
       actionable_names=$(printf '%s\n' "$current_red" | awk -F '\t' '
-        !($5 == "dynamic" && $6 ~ /^dynamic\//) && NF >= 8 {
+        !($5 == "dynamic" && $6 ~ /^dynamic\//) && NF == 8 {
           if (names != "") names = names ", "
           names = names $4
         }
@@ -4983,7 +5017,7 @@ EOF
             managed_unknown_names="$managed_unknown_names$managed_name" ;;
         esac
       done <<EOF
-$(printf '%s\n' "$current_red" | awk -F '\t' '$5 == "dynamic" && $6 ~ /^dynamic\// && NF >= 8')
+$(printf '%s\n' "$current_red" | awk -F '\t' '$5 == "dynamic" && $6 ~ /^dynamic\// && NF == 8')
 EOF
       repo_actionable=0
       if [ -n "$managed_noaction_names" ]; then
@@ -4995,6 +5029,7 @@ EOF
       fi
       if [ -n "$managed_unknown_names" ]; then
         printf '    %-42s QUERY-UNKNOWN (managed streak): %s\n' "$r" "$(printf '%s' "$managed_unknown_names" | cut -c1-46)"
+        REDS_UNKNOWN=1
       fi
       if [ -n "$actionable_names" ]; then
         printf '    %-42s RED: %s\n' "$r" "$actionable_names"
@@ -5004,7 +5039,11 @@ EOF
     done <<EOF
 $REPOS
 EOF
-    echo "    ────────────────────────────────────────── repos RED on main: ${REDS}"
+    if [ "$REDS_UNKNOWN" -eq 1 ]; then
+      echo "    ────────────────────────────────────────── repos RED on main: QUERY-UNKNOWN (known RED: ${REDS})"
+    else
+      echo "    ────────────────────────────────────────── repos RED on main: ${REDS}"
+    fi
     echo "    (a RED here outranks every advance item next run — see the skill)"
     echo "    UNKNOWN / QUERY-UNKNOWN names the failed head, classifier, or streak"
     echo "    join in its row. Treat that repository as UNMEASURED, never green,"

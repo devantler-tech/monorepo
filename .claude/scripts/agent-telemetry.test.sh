@@ -286,6 +286,13 @@ printf '%s\n' \
 printf '%s\n' \
   $'33\ttimed_out\thttps://example.test/current-failure\tCI\tpush\t.github/workflows/ci.yaml\t2026-09-18T10:00:00Z\t301' \
   > "$FIX/outcomes/classification-failing.tsv"
+printf '%s\n' \
+  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201' \
+  'usage: classifier' \
+  > "$FIX/outcomes/classification-mixed.tsv"
+printf '%s\n' \
+  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201\textra' \
+  > "$FIX/outcomes/classification-extra-field.tsv"
 cat > "$FIX/outcomes/managed-history-first.json" <<'JSON'
 {"total_count":1,"workflow_runs":[
   {"id":201,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-18T09:00:00Z","run_started_at":"2026-09-18T09:00:00Z","name":"Analyze (actions)"}
@@ -406,6 +413,12 @@ OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
       OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-interrupted.json" outcomes_run); RC=$?
 check "outcomes stop a managed failure streak at an intervening cancelled run" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
 check "outcomes do not count an interrupted managed failure streak as actionable red" "$OUT" 'repos RED on main: 0'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-mixed.tsv" outcomes_run); RC=$?
+check "outcomes reject mixed valid and malformed classifier output" "$OUT" 'UNKNOWN (malformed classifier output)'
+nocheck "outcomes never report a partial managed result from malformed classifier output" "$OUT" 'GITHUB-MANAGED'
+check "outcomes keep the aggregate unknown when any classifier output is malformed" "$OUT" 'repos RED on main: QUERY-UNKNOWN (known RED: 0)'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-extra-field.tsv" outcomes_run); RC=$?
+check "outcomes reject classifier rows with extra fields" "$OUT" 'UNKNOWN (malformed classifier output)'
 OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-failing.tsv" outcomes_run); RC=$?
 check "outcomes preserve a current non-managed failure as actionable red" "$OUT" 'devantler-tech/monorepo                    RED: CI'
 check "outcomes count a current non-managed failure as actionable red" "$OUT" 'repos RED on main: 1'
