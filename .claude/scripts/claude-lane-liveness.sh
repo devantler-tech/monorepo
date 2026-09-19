@@ -31,8 +31,11 @@
 # READ-ONLY, and deliberately NARROW. Session transcripts contain the entire content of every run --
 # code, credentials in tool output, private operator reasoning. This check reads ONLY:
 #   - the `<scheduled-task name=...>` marker on the transcript's first line, to attribute it, and
-#   - `.timestamp` and `.type` values, to time it and count assistant turns.
-# It never reads message content, and never emits anything from a transcript into its own output.
+#   - `.timestamp` and `.type` values, to time it and count assistant turns, and
+#   - on assistant records only, `isApiErrorMessage`, `message.model` and the `error` class token, to
+#     tell a runtime-synthesised error record from a real turn (monorepo#3412).
+# It never reads message content. The only transcript-derived value it emits is that error class,
+# mapped onto a fixed cause-class vocabulary -- never the message text, which carries reset times.
 #
 # Usage: claude-lane-liveness.sh [--store PATH] [--projects PATH] [--task ID]
 #                               [--grace-seconds N] [--skew-seconds N]
@@ -486,18 +489,32 @@ while IFS= read -r id; do
   # be reintroduced as a second required condition: a run that dies part way produces no assistant
   # turn while easily outlasting any stub window, so requiring both reported a dead lane as healthy
   # (monorepo#3287).
+  # A record the RUNTIME synthesised is not a turn. When the account hits a usage limit the session
+  # ends on one `assistant` record carrying `isApiErrorMessage: true`, an `error` class and model
+  # `<synthetic>`; counting it read an account-wide outage as OK on every task (monorepo#3412). The
+  # fourth field is the newest synthetic record's error class, mapped to a fixed vocabulary.
   stats=$(jq -rs '
       [.[] | select(type == "object")] as $r
-      | ([$r[] | select(.type == "assistant")] | length) as $a
+      | [$r[] | select(.type == "assistant")] as $as
+      | [$as[] | select(.isApiErrorMessage == true or .message.model? == "<synthetic>")] as $syn
+      | (($as | length) - ($syn | length)) as $a
       | ([$r[] | select(.timestamp) | .timestamp] | sort) as $t
-      | "\($a)\t\($t | first // "")\t\($t | last // "")"' "$match" 2>/dev/null) || stats=""
+      | (if ($syn | length) == 0 then "none"
+         else ($syn | last | .error) as $e
+           | if $e == "rate_limit" or $e == "billing_error" then "quota/billing"
+             elif $e == "authentication_failed" then "credentials/auth"
+             else "unknown" end
+         end) as $c
+      | "\($a)\t\($t | first // "")\t\($t | last // "")\t\($c)"' "$match" 2>/dev/null) || stats=""
   if [ -z "$stats" ]; then
     report="${report}  UNKNOWN  ${id} -- session transcript could not be parsed, cannot judge
 "
     any_unknown=1; continue
   fi
   turns=${stats%%$'\t'*}; rest=${stats#*$'\t'}
-  t_first=${rest%%$'\t'*}; t_last=${rest##*$'\t'}
+  t_first=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+  t_last=${rest%%$'\t'*}; cause=${rest#*$'\t'}
+  case "$cause" in none|quota/billing|credentials/auth|unknown) : ;; *) turns="" ;; esac
   case "$turns" in ''|*[!0-9]*) turns="" ;; esac
   fe=$(iso_to_epoch "$t_first"); le=$(iso_to_epoch "$t_last")
   if [ -z "$turns" ] || [ -z "$fe" ] || [ -z "$le" ] || [ "$le" -lt "$fe" ]; then
@@ -572,7 +589,9 @@ while IFS= read -r id; do
 "
     any_unknown=1
   elif [ "$turns" -eq 0 ]; then
-    report="${report}  NOT-PRODUCING  ${id} -- dispatched at ${last_run}, session produced 0 assistant turns in ${span}s
+    cause_note=""
+    [ "$cause" = none ] || cause_note=" (runtime error record only, cause=${cause})"
+    report="${report}  NOT-PRODUCING  ${id} -- dispatched at ${last_run}, session produced 0 assistant turns in ${span}s${cause_note}
 "
     any_dead=1
   elif [ "$schedule_state" = dead ]; then
