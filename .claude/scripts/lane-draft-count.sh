@@ -25,8 +25,8 @@
 #     purpose: whether an INVISIBLE repository is archived cannot be known either;
 #   - two full reads that disagree on any draft's attribution (id, branch, fork, author), meaning
 #     a PR opened, closed, converted or was renamed while it was being read;
-#   - a repository inventory that differs between the two passes (a repository created or
-#     transferred in while it was being read);
+#   - a repository inventory that differs across the three reads taken before, between and after
+#     the two draft scans (a repository created, transferred in or unarchived mid-read);
 #   - a duplicate PR id within one read.
 #
 # Usage: lane-draft-count.sh --lane <namespace> [--cap N] [--instances FILE]
@@ -43,6 +43,7 @@
 #   LANE_REPOS_EXPECTED   repositories the organisation reports (public + private)
 #   LANE_REPOS_VISIBLE    repositories the credential could list
 #   LANE_REPOS_EXPECTED_2 / LANE_REPOS_VISIBLE_2  the second pass's inventory (default: the first)
+#   LANE_REPOS_VISIBLE_3  the inventory read after the last scan (default: the second)
 set -uo pipefail
 
 CAP=20
@@ -115,14 +116,19 @@ if [ -n "${LANE_DRAFTS_JSON:-}" ]; then
   nodes2=$(jq -ec 'select(type == "array") | sort_by(.id)' "${LANE_DRAFTS_JSON_2:-$LANE_DRAFTS_JSON}" 2>/dev/null) || unknown "second fixture is not a JSON array"
   inv=$(jq -nc --arg e "${LANE_REPOS_EXPECTED:-}" --arg v "${LANE_REPOS_VISIBLE:-}" '{expected: $e, visible: $v}')
   inv2=$(jq -nc --arg e "${LANE_REPOS_EXPECTED_2:-${LANE_REPOS_EXPECTED:-}}" --arg v "${LANE_REPOS_VISIBLE_2:-${LANE_REPOS_VISIBLE:-}}" '{expected: $e, visible: $v}')
+  inv3=$(jq -nc --arg e "${LANE_REPOS_EXPECTED_2:-${LANE_REPOS_EXPECTED:-}}" --arg v "${LANE_REPOS_VISIBLE_3:-${LANE_REPOS_VISIBLE_2:-${LANE_REPOS_VISIBLE:-}}}" '{expected: $e, visible: $v}')
 else
   inv=$(read_inventory) || { echo "verdict=UNKNOWN"; exit 2; }
   nodes=$(read_drafts "$(printf '%s' "$inv" | jq -r '.repos[] | select(.archived | not) | .name')") || { echo "verdict=UNKNOWN"; exit 2; }
   inv2=$(read_inventory) || { echo "verdict=UNKNOWN"; exit 2; }
   nodes2=$(read_drafts "$(printf '%s' "$inv2" | jq -r '.repos[] | select(.archived | not) | .name')") || { echo "verdict=UNKNOWN"; exit 2; }
+  # A third inventory AFTER the last scan closes the remaining window: a repository created,
+  # transferred in or unarchived during that scan would otherwise be missing from both draft
+  # reads while both inventories still described the old set.
+  inv3=$(read_inventory) || { echo "verdict=UNKNOWN"; exit 2; }
 fi
 
-jq -en --argjson a "$inv" --argjson b "$inv2" '$a == $b' >/dev/null \
+jq -en --argjson a "$inv" --argjson b "$inv2" --argjson c "${inv3:-$inv2}" '$a == $b and $b == $c' >/dev/null \
   || unknown "the organisation's repositories changed while the drafts were being read"
 repos_expected=$(printf '%s' "$inv" | jq -r '.expected')
 repos_visible=$(printf '%s' "$inv" | jq -r '.visible')

@@ -40,6 +40,7 @@ run() {
   LANE_REPOS_EXPECTED="${T_EXPECTED:-26}" \
   LANE_REPOS_VISIBLE="${T_VISIBLE:-26}" \
   LANE_REPOS_VISIBLE_2="${T_VISIBLE_2:-${T_VISIBLE:-26}}" \
+  LANE_REPOS_VISIBLE_3="${T_VISIBLE_3:-${T_VISIBLE_2:-${T_VISIBLE:-26}}}" \
     bash "$SCRIPT" --instances "${T_REGISTRY:-$FIX/registry.json}" "$@" 2>/dev/null
 }
 
@@ -70,6 +71,25 @@ check "no open drafts at all is WITHIN with zero" 0 "lane=claude drafts=0 cap=20
 T_VISIBLE=24 check "a credential blind to some repositories is UNKNOWN" 2 "verdict=UNKNOWN" "$FIX/three.json" --lane claude
 T_EXPECTED=x check "an unreadable private-repository total is UNKNOWN" 2 "verdict=UNKNOWN" "$FIX/three.json" --lane claude
 T_VISIBLE_2=27 check "a repository appearing between the two passes is UNKNOWN" 2 "verdict=UNKNOWN" "$FIX/three.json" --lane claude
+T_VISIBLE_3=27 check "a repository appearing after the last scan is UNKNOWN" 2 "verdict=UNKNOWN" "$FIX/three.json" --lane claude
+
+# The default cap and the contract's number are two copies of one decision: if the row is
+# remeasured and this default is not, the script keeps allowing drafts against the old limit.
+contract_cap=$(grep -oE 'more than \*{0,2}[0-9]+\*{0,2} open drafts' "$SCRIPT_DIR/../../AGENTS.md" | grep -oE '[0-9]+' | head -1 || true)
+script_cap=$(grep -oE '^CAP=[0-9]+' "$SCRIPT" | grep -oE '[0-9]+' || true)
+if [ -n "$contract_cap" ] && [ "$contract_cap" = "$script_cap" ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1)); echo "FAIL: default cap $script_cap does not match the AGENTS.md row ($contract_cap)"
+fi
+# …and the default must actually be the value the boundary uses, not just a variable that matches.
+out=$(run "$FIX/three.json" --lane claude --cap "$script_cap")
+at_cap=$(printf '%s' "$out" | grep -oE 'cap=[0-9]+')
+if [ "$at_cap" = "cap=$script_cap" ] && printf '%s' "$(run "$FIX/three.json" --lane claude)" | grep -qF "$at_cap"; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1)); echo "FAIL: the default cap is not the one the verdict uses ($at_cap)"
+fi
 
 # Stability: the two full reads must agree on every draft's attribution.
 jq '.[4].id = "PR_new"' "$FIX/three.json" > "$FIX/churn.json"
