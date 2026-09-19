@@ -249,7 +249,9 @@ validate_body() {
   local template_fixed_unique="${work_dir}/template-fixed-unique"
   local body_content="${work_dir}/body-content.md"
   local body_validation="${work_dir}/body-validation.md"
+  local body_prose="${work_dir}/body-prose.md"
   local body_symbols="${work_dir}/body-symbols.md"
+  local body_trailing_content="${work_dir}/body-trailing-content.md"
   local first_line
   local expected_disclosure
   local heading
@@ -349,8 +351,17 @@ validate_body() {
   # product-facing body forbids, while preserving the original body for prose,
   # template-order, and relationship validation.
   strip_blockquotes "${body_content}" >"${body_validation}"
-  sed -E 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|PostgreSQL|JavaScript|TypeScript)([^[:alnum:]_]|$)/\1product\3/g' \
+  awk '$0 !~ /^ {0,3}\[[^]]+\]:[[:space:]]*/ { print }' \
+    "${body_validation}" >"${body_prose}"
+  sed -E 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|PostgreSQL|JavaScript|TypeScript)([^[:alnum:]_]|$)/\1product\3/g' \
     "${body_validation}" >"${body_symbols}"
+  # Remove every inherited visible template line for the post-relationship
+  # check, including repository-required sections that follow the issue link.
+  awk '
+    FILENAME == ARGV[1] { inherited[$0]++; next }
+    inherited[$0] > 0 { inherited[$0]--; next }
+    { print }
+  ' "${template_structure}" "${visible_body}" >"${body_trailing_content}"
   previous_line=0
   while IFS= read -r structure_line; do
     line_number="$(awk -v target="${structure_line}" -v after="${previous_line}" '
@@ -429,19 +440,21 @@ validate_body() {
     active && /^##[[:space:]]+/ { active = 0 }
     active { line = $0; gsub(/[[:space:]]/, "", line); total += length(line) }
     END { print total + 0 }
-  ' "${body_content}")"
+  ' "${body_prose}")"
   what_chars="$(awk '
     /^## What$/ { active = 1; next }
     active && /^##[[:space:]]+/ { active = 0 }
     /^(Fixes|Part of) #[1-9][0-9]*$/ || /^No issue: trivial fix[.]$/ { active = 0 }
     active { line = $0; gsub(/[[:space:]]/, "", line); total += length(line) }
     END { print total + 0 }
-  ' "${body_content}")"
+  ' "${body_prose}")"
   [ "${why_chars}" -gt 0 ] || fail "Why section has no visible explanation"
   [ "${what_chars}" -gt 0 ] || fail "What section has no visible explanation"
   [ "${why_chars}" -le 800 ] || fail "Why section is too long for the PM review surface"
   [ "${what_chars}" -le 800 ] || fail "What section is too long for the PM review surface"
 
+  # Curly quotes are literal Markdown delimiters in the AWK regex.
+  # shellcheck disable=SC1112
   why_sentences="$(awk '
     function sentence_count(text, rest, count) {
       rest = text
@@ -453,7 +466,7 @@ validate_body() {
       gsub(/[mM]rs[.]/, "Mrs", rest)
       gsub(/[dD]r[.]/, "Dr", rest)
       gsub(/[uU][.][sS][.]/, "US", rest)
-      while (match(rest, /[.!?]([[:space:]]|$)/)) {
+      while (match(rest, /[.!?]["”’)}\]*_]*([[:space:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
       }
@@ -464,7 +477,9 @@ validate_body() {
     active && /^##[[:space:]]+/ { active = 0 }
     active { text = text " " $0 }
     END { print sentence_count(text) }
-  ' "${body_content}")"
+  ' "${body_prose}")"
+  # Curly quotes are literal Markdown delimiters in the AWK regex.
+  # shellcheck disable=SC1112
   what_sentences="$(awk '
     function sentence_count(text, rest, count) {
       rest = text
@@ -476,7 +491,7 @@ validate_body() {
       gsub(/[mM]rs[.]/, "Mrs", rest)
       gsub(/[dD]r[.]/, "Dr", rest)
       gsub(/[uU][.][sS][.]/, "US", rest)
-      while (match(rest, /[.!?]([[:space:]]|$)/)) {
+      while (match(rest, /[.!?]["”’)}\]*_]*([[:space:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
       }
@@ -488,7 +503,7 @@ validate_body() {
     /^(Fixes|Part of) #[1-9][0-9]*$/ || /^No issue: trivial fix[.]$/ { active = 0 }
     active { text = text " " $0 }
     END { print sentence_count(text) }
-  ' "${body_content}")"
+  ' "${body_prose}")"
   if [ "${why_sentences}" -lt 1 ] || [ "${why_sentences}" -gt 3 ] || \
     [ "${what_sentences}" -lt 1 ] || [ "${what_sentences}" -gt 3 ]; then
     fail "Why and What must each contain 1 to 3 sentences"
@@ -497,6 +512,7 @@ validate_body() {
   if awk '
     /^## Why$/ { active = 1; next }
     /^## What$/ { active = 1; next }
+    active && /^##[[:space:]]+/ { active = 0 }
     active && /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ { found = 1 }
     END { exit found ? 0 : 1 }
   ' "${body_validation}"; then
@@ -515,7 +531,7 @@ validate_body() {
 
   if [ "${issue_count}" -gt 0 ] || [ "${allow_no_issue}" -eq 1 ]; then
     final_delivery_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$|^No issue: trivial fix[.]$' \
-      "${body_content}" | tail -n 1 | cut -d: -f1)"
+      "${body_trailing_content}" | tail -n 1 | cut -d: -f1)"
     if awk -v boundary="${final_delivery_line}" '
       NR > boundary && NF {
         if ($0 ~ /^⚠️ Merge order:[[:space:]]+[^[:space:]]/ ||
@@ -531,7 +547,7 @@ validate_body() {
         }
       }
       END { exit invalid ? 0 : 1 }
-    ' "${body_content}"; then
+    ' "${body_trailing_content}"; then
       fail "body adds non-template text after the final delivery relationship"
     fi
   fi
@@ -548,11 +564,11 @@ validate_body() {
   if grep -Fq '`' "${body_validation}"; then
     fail "PR body must not contain code or command snippets"
   fi
-  if grep -Eq '(^|[^[:alnum:]_])[A-Z][a-z0-9]+([A-Z][A-Za-z0-9]*)+([^[:alnum:]_]|$)' \
+  if grep -Eq '(^|[^[:alnum:]_])([Aa]dd|[Aa]dded|[Aa]dding|[Cc]all|[Cc]alled|[Cc]alling|[Cc]hange|[Cc]hanged|[Cc]hanging|[Ff]ix|[Ff]ixed|[Ff]ixing|[Ii]nvoke|[Ii]nvoked|[Ii]nvoking|[Mm]odify|[Mm]odified|[Mm]odifying|[Rr]efactor|[Rr]efactored|[Rr]efactoring|[Rr]emove|[Rr]emoved|[Rr]emoving|[Rr]ename|[Rr]enamed|[Rr]enaming|[Uu]pdate|[Uu]pdated|[Uu]pdating|[Uu]se|[Uu]sed|[Uu]sing)[[:space:]]+(the[[:space:]]+)?[A-Z][a-z0-9]+([A-Z][A-Za-z0-9]*)+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[A-Z][a-z0-9]+([A-Z][A-Za-z0-9]*)+[[:space:]]+(now[[:space:]]+)?(accepts?|calls?|creates?|deletes?|fails?|handles?|invokes?|loads?|parses?|reads?|returns?|runs?|updates?|validates?|writes?)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])([Ff]unction|[Mm]ethod|[Ss]ymbol|[Tt]ype|[Cc]lass|[Ss]truct|[Ii]nterface)[[:space:]]+[A-Z][a-z0-9]+([A-Z][A-Za-z0-9]*)+([^[:alnum:]_]|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
-  if grep -Eiq '(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
+  if grep -Eiq '(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])(Dockerfile|Makefile|Taskfile|Justfile|Procfile|Gemfile|Rakefile|Jenkinsfile|Vagrantfile|Tiltfile|Brewfile)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl|mod|sum|toml|lock|ini|conf|cfg|env|properties|gradle|xml|sql|proto)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
     "${body_validation}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
