@@ -93,6 +93,7 @@ strip_comments() {
         in_comment = 1
       }
 
+      sub(/[[:space:]]+$/, "", output)
       if (!in_comment || length(output) > 0) {
         print output
       }
@@ -143,12 +144,18 @@ resolve_template() {
 validate_template() {
   local template="$1"
   local visible="${work_dir}/template-visible.md"
+  local why_line
+  local what_line
   strip_comments "${template}" >"${visible}"
 
   grep -Fqx '## Why' "${visible}" ||
     fail "effective template does not provide the required PM-facing heading: ## Why"
   grep -Fqx '## What' "${visible}" ||
     fail "effective template does not provide the required PM-facing heading: ## What"
+  why_line="$(grep -nFx '## Why' "${visible}" | head -n 1 | cut -d: -f1)"
+  what_line="$(grep -nFx '## What' "${visible}" | head -n 1 | cut -d: -f1)"
+  [ "${why_line}" -lt "${what_line}" ] ||
+    fail "effective template must place ## Why before ## What"
 }
 
 validate_body() {
@@ -158,7 +165,11 @@ validate_body() {
   local visible_body="${work_dir}/body-visible.md"
   local template_headings="${work_dir}/template-headings"
   local body_headings="${work_dir}/body-headings"
+  local template_setext_headings="${work_dir}/template-setext-headings"
+  local body_setext_headings="${work_dir}/body-setext-headings"
   local template_structure="${work_dir}/template-structure"
+  local template_fixed="${work_dir}/template-fixed"
+  local body_content="${work_dir}/body-content.md"
   local first_line
   local expected_disclosure
   local heading
@@ -177,6 +188,8 @@ validate_body() {
   local what_line
   local why_chars
   local what_chars
+  local why_sentences
+  local what_sentences
   local visible_chars
 
   strip_comments "${template}" >"${visible_template}"
@@ -211,7 +224,23 @@ validate_body() {
       fail "body adds a non-template section: ${heading}"
   done <"${body_headings}"
 
+  awk 'previous != "" && /^[[:space:]]*(=+|-+)[[:space:]]*$/ { print previous } { previous = $0 }' \
+    "${visible_template}" >"${template_setext_headings}"
+  awk 'previous != "" && /^[[:space:]]*(=+|-+)[[:space:]]*$/ { print previous } { previous = $0 }' \
+    "${visible_body}" >"${body_setext_headings}"
+  while IFS= read -r heading; do
+    grep -Fqx "${heading}" "${template_setext_headings}" ||
+      fail "body adds a non-template Setext section: ${heading}"
+  done <"${body_setext_headings}"
+
   awk 'NF && $0 !~ /^(Fixes|Part of) #$/ { print }' "${visible_template}" >"${template_structure}"
+  awk 'NF && $0 !~ /^#{1,6} / && $0 !~ /^(Fixes|Part of) #$/ { print }' \
+    "${visible_template}" >"${template_fixed}"
+  awk '
+    FILENAME == ARGV[1] { inherited[$0]++; next }
+    inherited[$0] > 0 { inherited[$0]--; next }
+    { print }
+  ' "${template_fixed}" "${visible_body}" >"${body_content}"
   previous_line=0
   while IFS= read -r structure_line; do
     line_number="$(awk -v target="${structure_line}" -v after="${previous_line}" '
@@ -256,30 +285,66 @@ validate_body() {
     /^## What$/ { active = 0 }
     active { line = $0; gsub(/[[:space:]]/, "", line); total += length(line) }
     END { print total + 0 }
-  ' "${visible_body}")"
+  ' "${body_content}")"
   what_chars="$(awk '
     /^## What$/ { active = 1; next }
     /^(Fixes|Part of) #[0-9]+$/ { active = 0 }
     active { line = $0; gsub(/[[:space:]]/, "", line); total += length(line) }
     END { print total + 0 }
-  ' "${visible_body}")"
+  ' "${body_content}")"
   [ "${why_chars}" -gt 0 ] || fail "Why section has no visible explanation"
   [ "${what_chars}" -gt 0 ] || fail "What section has no visible explanation"
   [ "${why_chars}" -le 800 ] || fail "Why section is too long for the PM review surface"
   [ "${what_chars}" -le 800 ] || fail "What section is too long for the PM review surface"
 
+  why_sentences="$(awk '
+    function sentence_count(text, rest, count) {
+      rest = text
+      while (match(rest, /[.!?]([[:space:]]|$)/)) {
+        count++
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      if (text ~ /[^[:space:]]/ && count == 0) { count = 1 }
+      return count
+    }
+    /^## Why$/ { active = 1; next }
+    /^## What$/ { active = 0 }
+    active { text = text " " $0 }
+    END { print sentence_count(text) }
+  ' "${body_content}")"
+  what_sentences="$(awk '
+    function sentence_count(text, rest, count) {
+      rest = text
+      while (match(rest, /[.!?]([[:space:]]|$)/)) {
+        count++
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      if (text ~ /[^[:space:]]/ && count == 0) { count = 1 }
+      return count
+    }
+    /^## What$/ { active = 1; next }
+    /^(Fixes|Part of) #[0-9]+$/ { active = 0 }
+    active { text = text " " $0 }
+    END { print sentence_count(text) }
+  ' "${body_content}")"
+  [ "${why_sentences}" -ge 1 ] && [ "${why_sentences}" -le 3 ] && \
+    [ "${what_sentences}" -ge 1 ] && [ "${what_sentences}" -le 3 ] ||
+    fail "Why and What must each contain 1 to 3 sentences"
+
   if awk '
     /^## Why$/ { active = 1; next }
     /^## What$/ { active = 1; next }
-    /^(Fixes|Part of) #[0-9]+$/ { active = 0 }
     active && /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ { found = 1 }
     END { exit found ? 0 : 1 }
-  ' "${visible_body}"; then
+  ' "${body_content}"; then
     fail "Why and What must be short prose, not bullet inventories"
   fi
 
   if grep -Eq '^[[:space:]]*(```|~~~)' "${visible_body}"; then
     fail "PR body must not contain code or command fences"
+  fi
+  if grep -Fq '`' "${body_content}"; then
+    fail "PR body must not contain code or command snippets"
   fi
 
   visible_chars="$(wc -c <"${visible_body}" | tr -d '[:space:]')"
