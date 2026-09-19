@@ -224,7 +224,8 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    closing it from the delivery PR. Body = PM-level why & what only (the org template — zero
    validation detail; how you validated goes in the READINESS COMMENT, per contract *Autonomy*).
    Treat that as a write gate: use `.claude/scripts/pr-body-contract.sh seed` to load the effective
-   GitHub template, fill the seeded file, run `.claude/scripts/pr-body-contract.sh check`, publish only
+   GitHub template, fill the seeded file, run `.claude/scripts/pr-body-contract.sh check` with the same
+   acting `--role`, publish only
    with `--body-file`, then validate the GitHub readback before continuing. It stays a
    draft while you drive the hygiene pentad clear (root-cause-fix its failing CI, resolve its review
    threads, secure a green review at head); **self-promote it only on genuine readiness** —

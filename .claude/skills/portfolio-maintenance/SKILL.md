@@ -956,7 +956,8 @@ For each selected product:
    Open a **draft** PR (Conventional-Commit title, AI-disclosure line, labels; `Fixes #N` when it
    closes an issue). Before creating or editing its body, use
    `.claude/scripts/pr-body-contract.sh seed` to load the effective GitHub template, fill that file in
-   PM-level plain language, run `.claude/scripts/pr-body-contract.sh check`, publish only with
+   PM-level plain language, run `.claude/scripts/pr-body-contract.sh check` with the same acting
+   `--role`, publish only with
    `--body-file`, and check the GitHub readback. Treat a failing existing own PR body as hygiene to
    correct before review, promotion, or merge.
    Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff. External-repository work

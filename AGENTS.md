@@ -4634,7 +4634,8 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   --role <agentic-engineer|agent-improver>` from the consumer checkout. It loads the repository's
   effective GitHub template (repository-local first, then the owner's `.github` default); fill that
   seeded file without replacing its visible structure, then run
-  `.claude/scripts/pr-body-contract.sh check --repo <owner/repo> --body-file <body-file>`. Publish only
+  `.claude/scripts/pr-body-contract.sh check --repo <owner/repo> --body-file <body-file> --role
+  <agentic-engineer|agent-improver>` using the same acting role. Publish only
   the passing file with `gh pr create --body-file` or `gh pr edit --body-file` — never bypass the
   template with an inline `--body`. Immediately read the published body back from GitHub and pipe it
   through the same `check --body-file -` command before requesting review or continuing the delivery
