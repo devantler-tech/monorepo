@@ -4969,9 +4969,9 @@ $REPOS
 EOF
     echo "    ────────────────────────────────────────── repos RED on main: ${REDS}"
     echo "    (a RED here outranks every advance item next run — see the skill)"
-    echo "    UNKNOWN usually means HTTP 403: the token lacks checks:read on that"
-    echo "    repo (seen on the private ones). Verified cause, not a mystery —"
-    echo "    treat it as UNMEASURED, never as green, and surface the scope gap."
+    echo "    UNKNOWN / QUERY-UNKNOWN names the failed head, classifier, or streak"
+    echo "    join in its row. Treat that repository as UNMEASURED, never green,"
+    echo "    and resolve the named evidence gap before drawing a CI verdict."
     echo "  revert commits since ${SINCE_ISO} (portfolio):"
     RTOTAL=0
     while IFS= read -r r; do
