@@ -1990,6 +1990,15 @@ the account and that **an admin must raise the limit in the Cursor dashboard**. 
   by the ladder's own rule makes the lane *genuinely unavailable* — retrying it on a timer is pure
   waste, and re-requesting across 30 drafts posts 60 comments that cannot succeed. Surface the spend
   limit to the maintainer instead; only he can lift it.
+- **Check lane health across the portfolio, not one PR at a time.** A lane that is down everywhere
+  looks like many PRs that simply have no review yet: Bugbot's 2026-07-21 usage limit went unreported
+  for weeks that way (#2561). Run
+  [`.claude/scripts/review-lane-health.sh`](.claude/scripts/review-lane-health.sh) once per run
+  before requesting reviews. It prints one `LANE-HEALTH` line per lane: `OK`, `LIMITED` (a rate limit
+  that clears on its own), `DOWN` (`MAINTAINER-ONLY` for a usage limit), or `NO-EVIDENCE`. It exits
+  `1` when any lane is `DOWN` and `2` when it could not read everything. Stop requesting a `DOWN` lane
+  and escalate a `MAINTAINER-ONLY` one. ⚠️ It is detection only: the *Local review round* still needs
+  the direct per-PR check of all three lanes at the current head.
 - **Do not sweep review requests across a large batch of drafts in one pass.** It converts a shared,
   budgeted resource into a burst, and the tail of the batch is recorded as "reviewed" when none of it
   was. Request against the drafts a run is actually going to finish, and **re-read each check-run's
