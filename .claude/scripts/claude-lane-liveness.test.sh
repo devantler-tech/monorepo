@@ -568,6 +568,15 @@ f=$(mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 1)
 append_synthetic "$f" $(( NOW - 3598 )) rate_limit
 expect_msg 1 "cause=quota/billing" "a session holding only a synthetic rate_limit message is NOT-PRODUCING, cause quota/billing"
 
+# The cause vocabulary is the one AGENTS.md already fixes for a provider outage and the Codex check
+# already prints, so an auth refusal is `credentials/auth` rather than a second spelling of unknown.
+# Pinned because it is the class a reader is most likely to "simplify" away.
+mkcase synthetic_auth
+mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
+f=$(mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 1)
+append_synthetic "$f" $(( NOW - 3598 )) authentication_failed
+expect_msg 1 "cause=credentials/auth" "a synthetic authentication_failed message is NOT-PRODUCING, cause credentials/auth"
+
 mkcase synthetic_unclassified
 mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
 f=$(mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 1)
