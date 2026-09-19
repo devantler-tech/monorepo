@@ -106,6 +106,12 @@ fixture
 edit '.jobs.test-alpha.needs = [] | .jobs.test-alpha.if = "needs['"'"'changes'"'"']['"'"'outputs'"'"']['"'"'alpha'"'"'] == '"'"'true'"'"'"'
 expect_defect "index syntax" "test-alpha: reads needs with index syntax"
 
+# The index can also follow a dotted chain, which neither the dot-only extraction nor a guard
+# anchored at needs/needs.changes sees.
+fixture
+edit '.jobs.test-alpha.needs = [] | .jobs.test-alpha.if = "needs.changes.outputs['"'"'alpha'"'"'] == '"'"'true'"'"'"'
+expect_defect "mixed index syntax" "test-alpha: reads needs with index syntax"
+
 # job-results is read only from the aggregate step: a decoy step listing the job does not count.
 fixture
 edit '.jobs.status.steps[0].with."job-results" |= sub(" \$\{\{ needs.test-alpha.result \}\}"; "")'

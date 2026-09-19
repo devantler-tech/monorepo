@@ -68,8 +68,9 @@ while IFS= read -r job; do
   [[ -n "$job" && "$job" != changes ]] || continue
   JOB="$job" yq -o=json '.jobs[strenv(JOB)]' "$workflow" >"$tmp/job.json"
   # Index syntax (needs['changes']...) is equivalent in GitHub expressions but invisible to the
-  # dot-syntax extraction below, so it is refused rather than silently skipped.
-  if grep -qE 'needs(\.changes)?[[:space:]]*\[' "$tmp/job.json"; then
+  # dot-syntax extraction below, so it is refused rather than silently skipped — including an
+  # index after any dotted chain (needs.changes.outputs['x']).
+  if grep -qE 'needs(\.[A-Za-z0-9_-]+)*[[:space:]]*\[' "$tmp/job.json"; then
     defect "$job: reads needs with index syntax; write needs.changes.outputs.<name> so the wiring can be checked"
   fi
   refs="$(grep -oE 'needs\.changes\.outputs\.[A-Za-z0-9_-]+' "$tmp/job.json" | sed 's/^needs\.changes\.outputs\.//' | sort -u || true)"
