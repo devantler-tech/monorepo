@@ -293,6 +293,9 @@ printf '%s\n' \
 printf '%s\n' \
   $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201\textra' \
   > "$FIX/outcomes/classification-extra-field.tsv"
+printf '%s\n' \
+  $'33\ttimed_out\thttps://example.test/current-failure\t\tpush\t.github/workflows/ci.yaml\t2026-09-18T10:00:00Z\t301' \
+  > "$FIX/outcomes/classification-empty-name.tsv"
 cat > "$FIX/outcomes/managed-history-first.json" <<'JSON'
 {"total_count":1,"workflow_runs":[
   {"id":201,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-18T09:00:00Z","run_started_at":"2026-09-18T09:00:00Z","name":"Analyze (actions)"}
@@ -347,6 +350,15 @@ case "$*" in
 esac
 SH
 chmod +x "$FIX/outcomes/bin/gh"
+cat > "$FIX/outcomes/bin/codex" <<'SH'
+#!/usr/bin/env bash
+if [ "$*" = 'plugin list --json' ]; then
+  printf '%s\n' '{"installed":[{"pluginId":"agentic-engineering@devantler-plugins","enabled":true}]}'
+else
+  exit 93
+fi
+SH
+chmod +x "$FIX/outcomes/bin/codex"
 outcomes_run() {
   PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="${OUTCOMES_PRS:-$FIX/outcomes/prs.json}" \
   OUTCOMES_CLASSIFICATION="${OUTCOMES_CLASSIFICATION:-$FIX/outcomes/classification-empty.tsv}" \
@@ -389,6 +401,34 @@ cache_definition_run() {
   OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
   OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-first.json" \
   MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  AGENT_TELEMETRY_RUNTIME=codex CODEX_HOME="$FIX/outcomes/cache-codex" \
+  bash "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh" \
+    --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
+}
+mkdir -p \
+  "$FIX/outcomes/claude-config/plugins" \
+  "$FIX/outcomes/claude-install/scripts"
+cp "$FIX/outcomes/classifier" \
+  "$FIX/outcomes/claude-install/scripts/classify-default-branch-ci-runs.sh"
+cat > "$FIX/outcomes/claude-config/plugins/installed_plugins.json" <<JSON
+{"plugins":{"agentic-engineering@devantler-plugins":[{"installPath":"$FIX/outcomes/claude-install"}]}}
+JSON
+claude_definition_run() {
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="$FIX/outcomes/prs.json" \
+  OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+  OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-first.json" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  AGENT_TELEMETRY_RUNTIME=claude CLAUDE_CONFIG_DIR="$FIX/outcomes/claude-config" \
+  CODEX_HOME="$FIX/outcomes/no-codex" \
+  bash "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh" \
+    --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
+}
+claude_no_sibling_run() {
+  PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="$FIX/outcomes/prs.json" \
+  OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-managed.tsv" \
+  OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-first.json" \
+  MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
+  AGENT_TELEMETRY_RUNTIME=claude CLAUDE_CONFIG_DIR="$FIX/outcomes/no-claude-config" \
   CODEX_HOME="$FIX/outcomes/cache-codex" \
   bash "$FIX/outcomes/cache-definition-root/.claude/scripts/agent-telemetry.sh" \
     --section outcomes --instances "$FIX/outcomes/instances.json" 2>&1
@@ -419,6 +459,8 @@ nocheck "outcomes never report a partial managed result from malformed classifie
 check "outcomes keep the aggregate unknown when any classifier output is malformed" "$OUT" 'repos RED on main: QUERY-UNKNOWN (known RED: 0)'
 OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-extra-field.tsv" outcomes_run); RC=$?
 check "outcomes reject classifier rows with extra fields" "$OUT" 'UNKNOWN (malformed classifier output)'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-empty-name.tsv" outcomes_run); RC=$?
+check "outcomes reject a classifier row with an empty workflow name" "$OUT" 'UNKNOWN (malformed classifier output)'
 OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-failing.tsv" outcomes_run); RC=$?
 check "outcomes preserve a current non-managed failure as actionable red" "$OUT" 'devantler-tech/monorepo                    RED: CI'
 check "outcomes count a current non-managed failure as actionable red" "$OUT" 'repos RED on main: 1'
@@ -426,6 +468,11 @@ OUT=$(definition_root_run); RC=$?
 check "outcomes resolve reviewed classifier assets beside the loaded definition, not the telemetry corpus" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
 OUT=$(cache_definition_run); RC=$?
 check "outcomes resolve a digest-matching reviewed classifier from the installed plugin cache" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(claude_definition_run); RC=$?
+check "outcomes resolve the reviewed classifier from the active Claude install registry" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+OUT=$(claude_no_sibling_run); RC=$?
+check "outcomes fail closed when the active Claude install is unavailable" "$OUT" 'UNKNOWN (reviewed classifier unavailable)'
+nocheck "outcomes never substitute a sibling Codex cache for the active Claude install" "$OUT" 'GITHUB-MANAGED'
 cat > "$FIX/outcomes/repo/.gitmodules" <<'EOF'
 [submodule "outside"]
   path = applications/outside

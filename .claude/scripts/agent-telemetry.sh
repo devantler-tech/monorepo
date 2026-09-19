@@ -179,6 +179,19 @@ esac
 CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 MONOREPO="${MONOREPO_DIR:-$HOME/git-personal/monorepo}"
+if [ -z "${AGENT_TELEMETRY_RUNTIME:-}" ]; then
+  if [ -n "${CODEX_THREAD_ID:-}" ]; then
+    AGENT_TELEMETRY_RUNTIME=codex
+  elif [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] || [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    AGENT_TELEMETRY_RUNTIME=claude
+  else
+    AGENT_TELEMETRY_RUNTIME=unknown
+  fi
+fi
+case "$AGENT_TELEMETRY_RUNTIME" in
+  claude|codex|unknown) ;;
+  *) echo "AGENT_TELEMETRY_RUNTIME must be claude or codex when set" >&2; exit 2 ;;
+esac
 DEFINITION_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 if [ "${AGENT_CI_CLASSIFIER+x}" = x ]; then
   AGENT_CI_CLASSIFIER_EXPLICIT=1
@@ -4863,24 +4876,45 @@ EOF
           return 0
         fi
         # An explicit override is a trust boundary: never replace a bad caller-supplied
-        # path with a cache entry. Defaults may fall back because the exact desired-state
-        # digest, not the cache location or version label, authenticates the asset.
+        # path with an installed entry. Defaults may fall back because the exact desired-state
+        # digest authenticates the asset, but only after the invoking runtime identifies the
+        # install it actually loaded. A sibling runtime's cache is never evidence for this lane.
         [ "$AGENT_CI_CLASSIFIER_EXPLICIT" -eq 0 ] || return 1
-        cache_root="$CODEX_HOME/plugins/cache"
-        [ -d "$cache_root" ] || return 1
-        cache_candidates=$(find "$cache_root" -type f \
-          -path '*/agentic-engineering/*/scripts/classify-default-branch-ci-runs.sh' \
-          -print 2>/dev/null) || return 1
-        while IFS= read -r candidate; do
-          [ -n "$candidate" ] || continue
-          if classifier_matches_reviewed_digest "$candidate"; then
-            printf '%s\n' "$candidate"
-            return 0
-          fi
-        done <<EOF
-$cache_candidates
-EOF
-        return 1
+        plugin_id="agentic-engineering@devantler-plugins"
+        case "$AGENT_TELEMETRY_RUNTIME" in
+          codex)
+            command -v codex >/dev/null 2>&1 || return 1
+            codex_state=$(CODEX_HOME="$CODEX_HOME" codex plugin list --json 2>/dev/null) || return 1
+            printf '%s' "$codex_state" | jq -e --arg id "$plugin_id" '
+              .installed
+              | select(type == "array")
+              | [.[] | select(.pluginId == $id)]
+              | select(length == 1 and .[0].enabled == true)
+            ' >/dev/null 2>&1 || return 1
+            cache_root="$CODEX_HOME/plugins/cache/devantler-plugins/agentic-engineering"
+            [ -d "$cache_root" ] || return 1
+            install_paths=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null) \
+              || return 1
+            install_count=$(printf '%s\n' "$install_paths" | awk 'NF { n++ } END { print n + 0 }')
+            [ "$install_count" -eq 1 ] || return 1
+            installed_root=$install_paths
+            ;;
+          claude)
+            plugins_root="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"
+            registry="$plugins_root/installed_plugins.json"
+            [ -r "$registry" ] || return 1
+            installed_root=$(jq -er --arg id "$plugin_id" '
+              .plugins[$id]
+              | select(type == "array" and length == 1)
+              | .[0].installPath
+              | select(type == "string" and length > 0)
+            ' "$registry" 2>/dev/null) || return 1
+            ;;
+          *) return 1 ;;
+        esac
+        candidate="$installed_root/scripts/classify-default-branch-ci-runs.sh"
+        classifier_matches_reviewed_digest "$candidate" || return 1
+        printf '%s\n' "$candidate"
       }
       if [ -z "$expected_classifier_sha" ]; then
         CI_CLASSIFIER_READY=0
@@ -4904,6 +4938,7 @@ EOF
                 and ($row[1] == "failure"
                      or $row[1] == "timed_out"
                      or $row[1] == "startup_failure")
+                and ($row[3] | length) > 0
                 and (["push", "schedule", "merge_group", "workflow_dispatch", "dynamic"]
                      | index($row[4]) != null)
                 and (if $row[4] == "dynamic"
