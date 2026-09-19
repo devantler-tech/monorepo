@@ -278,10 +278,23 @@ good_flagged="$(bad_lists_in "${self_test_dir}/good.md" | grep -c . || true)"
 # itself. The risk profile also differs — a script with a bad `--json` fails loudly the first time it
 # runs, whereas a bad PROSE prescription silently misleads every agent that reads it, which is what this
 # control is for.
+#
+# The role definitions and skills this deployment CONSUMES are surfaces too. They live in the
+# `libraries/agent-plugins` submodule at the pinned gitlink, so a gitlink bump can deliver a bad
+# prescription that no file under `.claude/` contains. An uninitialised submodule FAILS rather than
+# narrowing the scan: skipping it would report OK over fewer surfaces, which is this control's own
+# vacuous-success mode. (The owning repository runs the same check before a definition ships; this
+# one proves what is actually pinned here.)
+plugin_root="${repo_root}/libraries/agent-plugins/plugins"
+[ -d "${plugin_root}" ] && [ -n "$(find "${plugin_root}" -type f -name '*.md' -print -quit)" ] ||
+  fail "libraries/agent-plugins is not initialised, so the consumed plugin definitions cannot be scanned. Initialise it with
+       .claude/scripts/submodule-init.sh libraries/agent-plugins"
 scan_surfaces="$(
   printf '%s\n' "${constitution}"
   find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null | sort
+  find "${plugin_root}" -type f \( -name '*.md' -o -name '*.json' \) | sort
 )"
+plugin_surfaces="$(printf '%s\n' "${scan_surfaces}" | grep -c "^${plugin_root}/" || true)"
 
 # PREFLIGHT, in the main shell: every JSON surface must actually parse. This cannot live inside
 # `normalise_and_extract`, which runs inside command substitution where `exit` only leaves the subshell.
@@ -315,6 +328,8 @@ EOF
 # A silently-small scan set, or one that parsed no field lists at all, would make this vacuous.
 [ "${scanned}" -ge 5 ] ||
   fail "negative control scanned only ${scanned} surface(s); the definition surfaces are missing or moved"
+[ "${plugin_surfaces}" -ge 5 ] ||
+  fail "negative control found only ${plugin_surfaces} consumed plugin surface(s) under libraries/agent-plugins/plugins; the submodule is incomplete or moved"
 [ "${lists_seen}" -ge 5 ] ||
   fail "negative control extracted only ${lists_seen} \`--json\` field list(s) from ${scanned} surfaces; the extractor is probably broken"
 
@@ -348,10 +363,22 @@ for trigger in \
   "              - '.claude/**/*.md'" \
   "              - '.claude/**/*.json'" \
   "              - '.claude/scripts/merge-confirmation-read.test.sh'" \
+  "              - 'libraries/agent-plugins'" \
   "              - '.github/workflows/ci.yaml'"; do
   grep -Fqx -- "${trigger}" "${workflow}" ||
     fail "ci.yaml filter is missing ${trigger# *} — an edit there would not run this guard"
 done
+# The job must initialise the submodule, or the scan above fails closed on every run. Assert the step
+# INSIDE this job, not anywhere in the file — another job already carries the same command.
+this_job="$(awk '
+  /^  test-merge-confirmation-read:$/ { inside = 1; next }
+  inside && /^  [A-Za-z0-9_-]+:$/     { exit }
+  inside                              { print }
+' "${workflow}")"
+case "${this_job}" in
+  *"submodule update --init libraries/agent-plugins"*) ;;
+  *) fail "ci.yaml's test-merge-confirmation-read job does not initialise libraries/agent-plugins — the consumed definitions could not be scanned" ;;
+esac
 if [ -n "${offenders}" ]; then
   printf 'merge-confirmation read: FAIL — an invalid `merged` field is prescribed:\n%s' "${offenders}" >&2
   echo "  \`merged\` exists on none of gh pr view / gh pr list / gh search prs, and one unknown" >&2
@@ -359,4 +386,4 @@ if [ -n "${offenders}" ]; then
   exit 1
 fi
 
-echo "merge-confirmation read: OK — self-test caught ${bad_caught}/10 markdown + ${json_bad_caught}/2 escaped-JSON bad forms, flagged ${good_flagged}+${json_good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces"
+echo "merge-confirmation read: OK — self-test caught ${bad_caught}/10 markdown + ${json_bad_caught}/2 escaped-JSON bad forms, flagged ${good_flagged}+${json_good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces (${plugin_surfaces} of them consumed plugin definitions)"
