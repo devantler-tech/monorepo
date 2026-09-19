@@ -14,7 +14,7 @@
 #
 # Verdict per lane, from its newest events:
 #   OK           the newest event is a completed review
-#   LIMITED      the newest event is a rate-limit refusal and the lane served within --stale-hours
+#   LIMITED      the newest event is a rate-limit or error refusal and the lane served within --stale-hours
 #   DOWN         the newest event is a usage-limit refusal (MAINTAINER-ONLY), or a refusal/error with
 #                no completed review within --stale-hours
 #   NO-EVIDENCE  no artifact from this lane in the window (not requested; says nothing about health)
@@ -61,38 +61,47 @@ unknown() { echo "review-lane-health: UNKNOWN — $*" >&2; exit 2; }
 collect_pr() {
   local repo="$1" n="$2" head
   head="$(gh api "repos/$org/$repo/pulls/$n" --jq '.head.sha')" || unknown "cannot read $repo#$n"
-  gh api "repos/$org/$repo/issues/$n/comments" --paginate --jq '.[] | {login: .user.login, at: .updated_at, body: .body}' \
+  gh api "repos/$org/$repo/issues/$n/comments" --paginate \
+    --jq '.[] | {kind: "comment", login: .user.login, at: .updated_at, body: .body}' \
     >"$tmp/comments" || unknown "cannot read $repo#$n comments"
-  gh api "repos/$org/$repo/pulls/$n/reviews" --paginate --jq '.[] | {login: .user.login, at: .submitted_at, body: .body}' \
+  gh api "repos/$org/$repo/pulls/$n/reviews" --paginate \
+    --jq '.[] | {kind: "review", login: .user.login, at: .submitted_at, state: .state, body: .body}' \
     >"$tmp/reviews" || unknown "cannot read $repo#$n reviews"
   gh api "repos/$org/$repo/commits/$head/check-runs?check_name=Cursor%20Bugbot&per_page=100" \
-    --jq '.check_runs[] | {at: .completed_at, conclusion: .conclusion, title: .output.title}' \
+    --jq '.check_runs[] | {app: .app.slug, at: .completed_at, conclusion: .conclusion, title: .output.title}' \
     >"$tmp/checks" || unknown "cannot read $repo#$n check-runs"
   jq -r -f "$tmp/classify-comments.jq" "$tmp/comments" "$tmp/reviews" >>"$tmp/events"
-  jq -r 'select(.at != null) |
-    if .conclusion == "success" or (.conclusion == "neutral" and .title == "Bugbot Review") then
+  # Only the Cursor app's run, and only the three documented conclusion/title pairs, count.
+  jq -r 'select(.at != null and .app == "cursor") |
+    if (.conclusion == "success" or .conclusion == "neutral") and .title == "Bugbot Review" then
       "bugbot\t\(.at)\tok\t-"
-    elif .conclusion == "neutral" then "bugbot\t\(.at)\tfail\terror"
+    elif .conclusion == "neutral" and .title == "Error" then "bugbot\t\(.at)\tfail\terror"
     else empty end' "$tmp/checks" >>"$tmp/events"
 }
 
-# One jq program classifies both comments and review objects. A body counts only when its author is
-# the lane's own bot; leading HTML comments are stripped before reading CodeRabbit's review marker.
+# One jq program classifies comments and review objects. Each lane counts only its own bot and only
+# exact artifact shapes, so a review that merely discusses a rate or usage limit is never a refusal.
+# CodeRabbit's auto-generated summary is not evidence: a refusal refreshes it.
 cat >"$tmp/classify-comments.jq" <<'JQ'
-def text: (.body // "") | gsub("^(\\s*<!--[\\s\\S]*?-->)*\\s*"; "");
+def body: .body // "";
+def text: body | gsub("^(\\s*<!--[\\s\\S]*?-->)*\\s*"; "");
+def invocation: body | contains("<!-- CodeRabbit review command invocation");
 select(.at != null) |
 if .login == "coderabbitai[bot]" then
-  if (.body // "") | test("Review rate limited|Review limit reached") then "cr\t\(.at)\tfail\trate-limit"
-  elif (text | startswith("**Actionable comments posted:"))
-    or ((.body // "") | test("No actionable comments were generated|Full review is complete for|Reviewed pull request"))
+  if (body | contains("<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->"))
+    or (invocation and (body | contains("Review rate limited")))
+  then "cr\t\(.at)\tfail\trate-limit"
+  elif (.kind == "review" and (text | startswith("**Actionable comments posted:")))
+    or (invocation and (body | test("Full review is complete for [0-9a-f]{7,40}|Reviewed pull request .* at `?[0-9a-f]{7,40}")))
   then "cr\t\(.at)\tok\t-"
   else empty end
 elif .login == "chatgpt-codex-connector[bot]" then
-  if (.body // "") | test("reached your Codex usage limits|usage limit"; "i") then "codex\t\(.at)\tfail\tusage-limit"
-  elif (.body // "") | test("Didn't find any major issues|## Review finding|\\*\\*Reviewed commit:\\*\\*") then "codex\t\(.at)\tok\t-"
+  if .kind == "review" then "codex\t\(.at)\tok\t-"
+  elif body | test("## Review finding|Didn't find any major issues") then "codex\t\(.at)\tok\t-"
+  elif body | contains("You have reached your Codex usage limits") then "codex\t\(.at)\tfail\tusage-limit"
   else empty end
 elif .login == "cursor[bot]" then
-  if (.body // "") | test("usage limit"; "i") then "bugbot\t\(.at)\tfail\tusage-limit" else empty end
+  if body | contains("usage limit reached") then "bugbot\t\(.at)\tfail\tusage-limit" else empty end
 else empty end
 JQ
 
@@ -105,7 +114,8 @@ else
   if [ -z "$since" ]; then
     since="$(date -u -v-7d +%Y-%m-%d 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%d)"
   fi
-  gh search prs --owner "$org" --updated ">=$since" --limit "$limit" --json repository,number \
+  gh search prs --owner "$org" --updated ">=$since" --archived=false --sort updated --order desc \
+    --limit "$limit" --json repository,number \
     --jq '.[] | "\(.repository.name) \(.number)"' >"$tmp/prs" || unknown "cannot search $org pull requests"
   while IFS= read -r pr; do
     [ -n "$pr" ] || continue
@@ -113,14 +123,18 @@ else
   done <"$tmp/prs"
 fi
 
-# Classify: per lane, the newest ok and the newest fail (with its cause).
+# to_epoch <ISO-8601 UTC> — BSD and GNU date spell the parse differently.
+to_epoch() { date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || date -u -d "$1" +%s; }
+
+# Classify: per lane, the newest ok, the newest fail (with its cause), and the newest usage-limit.
 down=0
 for lane in cr codex bugbot; do
   line="$(awk -F'\t' -v l="$lane" '
     $1 == l && $3 == "ok"   && $2 > ok   { ok = $2 }
     $1 == l && $3 == "fail" && $2 > fail { fail = $2; cause = $4 }
-    END { printf "%s\t%s\t%s", ok, fail, cause }' "$tmp/events")"
-  ok="${line%%$'\t'*}"; rest="${line#*$'\t'}"; fail="${rest%%$'\t'*}"; cause="${rest#*$'\t'}"
+    $1 == l && $4 == "usage-limit" && $2 > ul { ul = $2 }
+    END { printf "%s|%s|%s|%s", ok, fail, cause, ul }' "$tmp/events")"
+  IFS="|" read -r ok fail cause ul <<<"$line" || true
   if [ -z "$ok" ] && [ -z "$fail" ]; then
     echo "LANE-HEALTH $lane=NO-EVIDENCE"
     continue
@@ -129,18 +143,25 @@ for lane in cr codex bugbot; do
     echo "LANE-HEALTH $lane=OK last-review $ok"
     continue
   fi
+  # Bugbot posts its usage-limit comment moments before the failed check completes, so the check's
+  # generic error takes its cause from a usage-limit notice within 15 minutes of it.
+  if [ "$cause" = error ] && [ -n "$ul" ]; then
+    fail_epoch="$(to_epoch "$fail")" || unknown "unparseable time $fail"
+    ul_epoch="$(to_epoch "$ul")" || unknown "unparseable time $ul"
+    gap=$((fail_epoch - ul_epoch)); [ "$gap" -lt 0 ] && gap=$((-gap))
+    [ "$gap" -le 900 ] && cause=usage-limit
+  fi
   fresh=0
   if [ -n "$ok" ]; then
-    ok_epoch="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$ok" +%s 2>/dev/null || date -u -d "$ok" +%s)" ||
-      unknown "unparseable time $ok"
+    ok_epoch="$(to_epoch "$ok")" || unknown "unparseable time $ok"
     [ $((now - ok_epoch)) -le $((stale_hours * 3600)) ] && fresh=1
   fi
   last="${ok:-never}"
   if [ "$cause" = usage-limit ]; then
     echo "LANE-HEALTH $lane=DOWN usage-limit since $fail last-review $last — MAINTAINER-ONLY"
     down=1
-  elif [ "$cause" = rate-limit ] && [ "$fresh" = 1 ]; then
-    echo "LANE-HEALTH $lane=LIMITED rate-limit at $fail last-review $last"
+  elif [ "$fresh" = 1 ]; then
+    echo "LANE-HEALTH $lane=LIMITED $cause at $fail last-review $last"
   else
     echo "LANE-HEALTH $lane=DOWN $cause since $fail last-review $last"
     down=1
