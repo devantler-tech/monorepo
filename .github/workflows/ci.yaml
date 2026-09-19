@@ -51,6 +51,7 @@ jobs:
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
       claude-lane-liveness: ${{ steps.filter.outputs.claude-lane-liveness }}
+      review-lane-health: ${{ steps.filter.outputs.review-lane-health }}
       improver-role-disclosure: ${{ steps.filter.outputs.improver-role-disclosure }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       gh-json-vocabulary-contract: ${{ steps.filter.outputs.gh-json-vocabulary-contract }}
@@ -470,6 +471,10 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/claude-lane-liveness.sh'
               - '.claude/scripts/claude-lane-liveness.test.sh'
+              - '.github/workflows/ci.yaml'
+            review-lane-health:
+              - '.claude/scripts/review-lane-health.sh'
+              - '.claude/scripts/review-lane-health.test.sh'
               - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
@@ -1824,6 +1829,25 @@ jobs:
       - name: Verify the claude lane liveness check
         run: bash .claude/scripts/claude-lane-liveness.test.sh
 
+  test-review-lane-health:
+    name: Test review lane health
+    needs: changes
+    if: needs.changes.outputs.review-lane-health == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the review lane health check
+        run: bash .claude/scripts/review-lane-health.test.sh
+
   test-plugin-definition-refresh:
     name: Test plugin definition refresh
     needs: changes
@@ -2130,6 +2154,7 @@ jobs:
       - test-plugin-definition-refresh
       - test-codex-lane-liveness
       - test-claude-lane-liveness
+      - test-review-lane-health
       - test-self-review-contract
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
@@ -2199,6 +2224,7 @@ jobs:
             ${{ needs.test-plugin-definition-refresh.result }}
             ${{ needs.test-codex-lane-liveness.result }}
             ${{ needs.test-claude-lane-liveness.result }}
+            ${{ needs.test-review-lane-health.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}
