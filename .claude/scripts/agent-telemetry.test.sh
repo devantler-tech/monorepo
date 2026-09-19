@@ -279,6 +279,36 @@ cat > "$FIX/outcomes/prs.json" <<'JSON'
   {"mergedAt":"2099-01-01T00:00:00Z","headRefName":"claude/unregistered","author":{"login":"devantler"},"isCrossRepository":false,"headRepositoryOwner":{"login":"devantler-tech"}}
 ]
 JSON
+cat > "$FIX/outcomes/runs-empty.json" <<'JSON'
+{"total_count":0,"workflow_runs":[]}
+JSON
+cat > "$FIX/outcomes/runs-recovered.json" <<'JSON'
+{"total_count":2,"workflow_runs":[
+  {"id":101,"workflow_id":11,"event":"push","head_branch":"main","head_sha":"0123456789abcdef0123456789abcdef01234567","conclusion":"failure","created_at":"2026-09-17T08:00:00Z","run_started_at":"2026-09-17T08:00:00Z","html_url":"https://example.test/old-failure","name":"CI"},
+  {"id":102,"workflow_id":11,"event":"push","head_branch":"main","head_sha":"0123456789abcdef0123456789abcdef01234567","conclusion":"success","created_at":"2026-09-18T08:00:00Z","run_started_at":"2026-09-18T08:00:00Z","html_url":"https://example.test/recovered","name":"CI"}
+]}
+JSON
+cat > "$FIX/outcomes/runs-managed.json" <<'JSON'
+{"total_count":1,"workflow_runs":[
+  {"id":201,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","head_branch":"main","head_sha":"0123456789abcdef0123456789abcdef01234567","conclusion":"failure","created_at":"2026-09-18T09:00:00Z","run_started_at":"2026-09-18T09:00:00Z","html_url":"https://example.test/managed-failure","name":"Analyze (actions)"}
+]}
+JSON
+cat > "$FIX/outcomes/managed-history-first.json" <<'JSON'
+{"total_count":1,"workflow_runs":[
+  {"id":201,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-18T09:00:00Z","run_started_at":"2026-09-18T09:00:00Z","name":"Analyze (actions)"}
+]}
+JSON
+cat > "$FIX/outcomes/managed-history-repeated.json" <<'JSON'
+{"total_count":2,"workflow_runs":[
+  {"id":201,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-18T09:00:00Z","run_started_at":"2026-09-18T09:00:00Z","name":"Analyze (actions)"},
+  {"id":200,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"timed_out","created_at":"2026-09-17T09:00:00Z","run_started_at":"2026-09-17T09:00:00Z","name":"Analyze (actions)"}
+]}
+JSON
+cat > "$FIX/outcomes/runs-failing.json" <<'JSON'
+{"total_count":1,"workflow_runs":[
+  {"id":301,"workflow_id":33,"event":"push","path":".github/workflows/ci.yaml","head_branch":"main","head_sha":"0123456789abcdef0123456789abcdef01234567","conclusion":"timed_out","created_at":"2026-09-18T10:00:00Z","run_started_at":"2026-09-18T10:00:00Z","html_url":"https://example.test/current-failure","name":"CI"}
+]}
+JSON
 cat > "$FIX/outcomes/bin/gh" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
@@ -288,6 +318,12 @@ case "$*" in
       shift
     done
     cat "$OUTCOMES_PRS" ;;
+  'api repos/devantler-tech/monorepo/commits/main --jq .sha')
+    printf '%s\n' '0123456789abcdef0123456789abcdef01234567' ;;
+  'api --paginate --slurp --method GET repos/devantler-tech/monorepo/actions/runs '*)
+    cat "$OUTCOMES_RUNS" ;;
+  'api --paginate --slurp --method GET repos/devantler-tech/monorepo/actions/workflows/22/runs '*)
+    cat "$OUTCOMES_MANAGED_HISTORY" ;;
   'api repos/'*) printf '0\n' ;;
   *) exit 93 ;;
 esac
@@ -295,6 +331,8 @@ SH
 chmod +x "$FIX/outcomes/bin/gh"
 outcomes_run() {
   PATH="$FIX/outcomes/bin:$PATH" OUTCOMES_PRS="${OUTCOMES_PRS:-$FIX/outcomes/prs.json}" \
+  OUTCOMES_RUNS="${OUTCOMES_RUNS:-$FIX/outcomes/runs-empty.json}" \
+  OUTCOMES_MANAGED_HISTORY="${OUTCOMES_MANAGED_HISTORY:-$FIX/outcomes/managed-history-first.json}" \
   MONOREPO_DIR="$FIX/outcomes/repo" CLAUDE_PROJECTS_DIR="$FIX/outcomes/no-corpus" \
   CODEX_HOME="$FIX/outcomes/no-codex" \
   bash "$TARGET" --section outcomes --instances "$FIX/outcomes/instances.json" "$@" 2>&1
@@ -305,6 +343,27 @@ if [ "$RC" = 0 ] && grep -qE 'devantler-tech/monorepo +1$' <<<"$OUT"; then
 else
   bad "outcomes count only the registered neutral CLI author in the same repository" "$OUT"
 fi
+OUT=$(OUTCOMES_RUNS="$FIX/outcomes/runs-recovered.json" outcomes_run); RC=$?
+nocheck "outcomes do not report a recovered current-head workflow as red" "$OUT" 'devantler-tech/monorepo                    RED:'
+check "outcomes recovered current-head workflow leaves the actionable-red count at zero" "$OUT" 'repos RED on main: 0'
+OUT=$(OUTCOMES_RUNS="$FIX/outcomes/runs-managed.json" outcomes_run); RC=$?
+check "outcomes report a GitHub-managed dynamic failure as no-action" "$OUT" 'GITHUB-MANAGED (NO-ACTION): Analyze (actions)'
+check "outcomes exclude a GitHub-managed dynamic failure from the actionable-red count" "$OUT" 'repos RED on main: 0'
+OUT=$(OUTCOMES_RUNS="$FIX/outcomes/runs-managed.json" \
+      OUTCOMES_MANAGED_HISTORY="$FIX/outcomes/managed-history-repeated.json" outcomes_run); RC=$?
+check "outcomes escalate a repeated GitHub-managed failure to actionable" "$OUT" 'GITHUB-MANAGED (REPEATED — ACTIONABLE): Analyze (actions)'
+check "outcomes count a repeated GitHub-managed failure as actionable red" "$OUT" 'repos RED on main: 1'
+OUT=$(OUTCOMES_RUNS="$FIX/outcomes/runs-failing.json" outcomes_run); RC=$?
+check "outcomes preserve a current non-managed failure as actionable red" "$OUT" 'devantler-tech/monorepo                    RED: CI'
+check "outcomes count a current non-managed failure as actionable red" "$OUT" 'repos RED on main: 1'
+cat > "$FIX/outcomes/repo/.gitmodules" <<'EOF'
+[submodule "outside"]
+  path = applications/outside
+  url = https://github.com/example-corp/outside.git
+EOF
+OUT=$(OUTCOMES_RUNS="$FIX/outcomes/runs-failing.json" outcomes_run); RC=$?
+nocheck "outcomes omit repositories outside the portfolio owner" "$OUT" 'example-corp/outside'
+rm -f "$FIX/outcomes/repo/.gitmodules"
 for field in author isCrossRepository headRefName; do
   jq "[.[0] | del(.$field)]" "$FIX/outcomes/prs.json" > "$FIX/outcomes/missing.json"
   OUT=$(OUTCOMES_PRS="$FIX/outcomes/missing.json" outcomes_run); RC=$?
