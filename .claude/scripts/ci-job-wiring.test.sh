@@ -87,7 +87,13 @@ expect_defect "needs without changes" "test-alpha: reads needs.changes.outputs b
 # Output no job reads.
 fixture; edit 'del(.jobs.test-beta) | .jobs.status.needs -= ["test-beta"]'
 edit '.jobs.status.steps[0].with."job-results" |= sub(" \$\{\{ needs.test-beta.result \}\}"; "")'
-expect_defect "unread output" "changes output 'beta' is read by no job"
+expect_defect "unread output" "changes output 'beta' filters no job"
+
+# A reference outside the job-level if (here a step env) does not filter the job.
+fixture
+# shellcheck disable=SC2016
+edit '.jobs.test-beta.if = "always()" | .jobs.test-beta.steps = [{"run": "true", "env": {"B": "${{ needs.changes.outputs.beta }}"}}]'
+expect_defect "step-only reference" "changes output 'beta' filters no job"
 
 # (4) missing from status.needs.
 fixture; edit '.jobs.status.needs -= ["unfiltered"]'
@@ -99,6 +105,14 @@ grep -qF "status job-results reads 'unfiltered', which status does not need" "$t
 fixture
 edit '.jobs.status.steps[0].with."job-results" |= sub(" \$\{\{ needs.test-alpha.result \}\}"; "")'
 expect_defect "missing job-result" "test-alpha: missing from status job-results"
+
+# An unevaluated reference is passed to the aggregate as literal text, so it does not count.
+# shellcheck disable=SC2016
+for literal in 'needs.test-alpha.result' '$ {{ needs.test-alpha.result }}'; do
+  fixture
+  LIT="$literal" edit '.jobs.status.steps[0].with."job-results" |= sub("\$\{\{ needs.test-alpha.result \}\}"; strenv(LIT))'
+  expect_defect "unevaluated job-result ($literal)" "test-alpha: missing from status job-results"
+done
 
 # Index syntax is equivalent in GitHub expressions, so it must be refused, not skipped: here the
 # job drops `changes` from needs and nothing else would notice.

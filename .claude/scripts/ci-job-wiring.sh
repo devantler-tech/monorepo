@@ -75,7 +75,9 @@ while IFS= read -r job; do
   fi
   refs="$(grep -oE 'needs\.changes\.outputs\.[A-Za-z0-9_-]+' "$tmp/job.json" | sed 's/^needs\.changes\.outputs\.//' | sort -u || true)"
   [[ -n "$refs" ]] || continue
-  printf '%s\n' "$refs" >>"$tmp/referenced"
+  # Only the job-level `if` filters the job: a reference in a step `if`, `env` or `run` is not wiring.
+  JOB="$job" yq -r '.jobs[strenv(JOB)].if // ""' "$workflow" |
+    { grep -oE 'needs\.changes\.outputs\.[A-Za-z0-9_-]+' || true; } | sed 's/^needs\.changes\.outputs\.//' >>"$tmp/referenced"
   needs_changes="$(JOB="$job" yq -r '[.jobs[strenv(JOB)].needs] | flatten | map(select(. == "changes")) | length' "$workflow")"
   [[ "$needs_changes" != 0 ]] || defect "$job: reads needs.changes.outputs but does not list 'changes' in needs"
   while IFS= read -r ref; do
@@ -85,7 +87,7 @@ while IFS= read -r job; do
 done <"$tmp/jobs"
 sort -u -o "$tmp/referenced" "$tmp/referenced"
 while IFS= read -r name; do
-  defect "changes output '$name' is read by no job"
+  defect "changes output '$name' filters no job (no job-level if reads it)"
 done < <(comm -23 "$tmp/outputs" "$tmp/referenced")
 
 read_set status_needs '[.jobs.status.needs] | flatten | .[] | select(. != null)'
@@ -95,8 +97,8 @@ aggregate_steps="$(yq -r "$aggregate | length" "$workflow")"
 [[ "$aggregate_steps" == 1 ]] ||
   defect "status: expected exactly one aggregate-job-checks step, found $aggregate_steps"
 yq -r "$aggregate | .[0].with.\"job-results\" // \"\"" "$workflow" |
-  { grep -oE 'needs\.[A-Za-z0-9_-]+\.result' || true; } | sed -E 's/^needs\.(.*)\.result$/\1/' | sort -u >"$tmp/status_results"
-read_set nonblocking '.jobs | to_entries | .[] | select((.value.name // "") | test("\(non-blocking\)$")) | .key'
+  { grep -oE '\$\{\{[^}]*\}\}' || true; } | { grep -oE 'needs\.[A-Za-z0-9_-]+\.result' || true; } | sed -E 's/^needs\.(.*)\.result$/\1/' | sort -u >"$tmp/status_results"
+read_set nonblocking '.jobs | to_entries | .[] | select((.value.name // "") | test("\\(non-blocking\\)$")) | .key'
 
 while IFS= read -r job; do
   [[ -n "$job" && "$job" != status ]] || continue
