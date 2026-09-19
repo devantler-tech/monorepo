@@ -4629,8 +4629,9 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   findings, test names/counts, validation transcripts. That detail lives in commit messages, code
   comments, and PR *comments* (e.g. CodeRabbit resolution records) — never the body. Applies to body
   **edits** too, not just creation.
-  **This is an executable write gate, not prose advice.** Before every agent-authored PR creation or
-  body edit, run `.claude/scripts/pr-body-contract.sh seed --repo <owner/repo> --output <body-file>
+  **This is an executable write gate for the two routine roles it supports, not prose advice.**
+  Before every Agentic Engineer or Agent Improver PR creation or body edit, run
+  `.claude/scripts/pr-body-contract.sh seed --repo <owner/repo> --output <body-file>
   --role <agentic-engineer|agent-improver>` from the consumer checkout. It loads the repository's
   effective GitHub template (repository-local first, then the owner's `.github` default); fill that
   seeded file without replacing its visible structure, then run
@@ -4640,8 +4641,10 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   template with an inline `--body`. Immediately read the published body back from GitHub and pipe it
   through the same `check --body-file -` command before requesting review or continuing the delivery
   loop. A missing template, failed check, or readback mismatch blocks that PR write; it never becomes
-  a best-effort warning. Existing own PRs that fail this gate are body-hygiene work and are corrected
-  before review, promotion, or merge.
+  a best-effort warning. Existing PRs authored by either routine role that fail this gate are
+  body-hygiene work and are corrected before review, promotion, or merge. Interactive sessions still
+  follow this section's PM-facing body shape and effective template, but keep only their interactive
+  marker and do not invoke a routine role or disclosure through this script.
 - **Third-party upstream repos — clear the professional boundary, then get approval and check policy.**
   Do not even inspect an external repository until the maintainer confirms in the current conversation
   that it is unrelated to professional work. After that, **never autonomously open an issue or PR** —

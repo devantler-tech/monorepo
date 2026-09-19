@@ -93,9 +93,25 @@ strip_comments() {
         in_comment = 1
       }
 
+      if (output ~ /^[[:space:]]*[-*+][[:space:]]+\[[ xX]\]/) {
+        sub(/\[[xX]\]/, "[ ]", output)
+      }
       sub(/[[:space:]]+$/, "", output)
       if (!in_comment || length(output) > 0) {
         print output
+      }
+    }
+  ' "$1"
+}
+
+extract_atx_headings() {
+  awk '
+    {
+      line = $0
+      if (line ~ /^ {0,3}#{1,6}[[:space:]]+/) {
+        sub(/^ {1,3}/, "", line)
+        sub(/[[:space:]]+#+[[:space:]]*$/, "", line)
+        print line
       }
     }
   ' "$1"
@@ -105,11 +121,21 @@ fetch_raw() {
   local source_repo="$1"
   local source_path="$2"
   local destination="$3"
+  local error_file="${work_dir}/gh-api-error"
 
-  gh api \
+  if gh api \
     -H 'Accept: application/vnd.github.raw+json' \
     "repos/${source_repo}/contents/${source_path}" \
-    >"${destination}" 2>/dev/null && [ -s "${destination}" ]
+    >"${destination}" 2>"${error_file}"; then
+    [ -s "${destination}" ] ||
+      fail "template lookup returned empty content for ${source_repo}/${source_path}"
+    return 0
+  fi
+
+  if grep -Eq '(HTTP 404|Not Found)' "${error_file}"; then
+    return 1
+  fi
+  fail "template lookup failed for ${source_repo}/${source_path}"
 }
 
 resolve_template() {
@@ -132,7 +158,11 @@ resolve_template() {
 
   for candidate in \
     '.github/PULL_REQUEST_TEMPLATE.md' \
-    '.github/pull_request_template.md'; do
+    '.github/pull_request_template.md' \
+    'PULL_REQUEST_TEMPLATE.md' \
+    'pull_request_template.md' \
+    'docs/PULL_REQUEST_TEMPLATE.md' \
+    'docs/pull_request_template.md'; do
     if fetch_raw "${owner}/.github" "${candidate}" "${destination}"; then
       return 0
     fi
@@ -211,9 +241,9 @@ validate_body() {
   [ "${first_line}" = "${expected_disclosure}" ] ||
     fail "first-line disclosure does not match --role ${role}"
 
-  grep -E '^#{1,6} ' "${visible_template}" >"${template_headings}" || true
+  extract_atx_headings "${visible_template}" >"${template_headings}"
   [ -s "${template_headings}" ] || fail "effective template has no visible Markdown headings"
-  grep -E '^#{1,6} ' "${visible_body}" >"${body_headings}" || true
+  extract_atx_headings "${visible_body}" >"${body_headings}"
 
   while IFS= read -r heading; do
     count="$(grep -Fxc "${heading}" "${visible_body}" || true)"
@@ -265,7 +295,7 @@ validate_body() {
 
   IFS= read -r first_template_line <"${template_structure}" ||
     fail "effective template has no visible structure"
-  first_template_body_line="$(grep -nFx "${first_template_line}" "${visible_body}" | head -n 1 | cut -d: -f1)"
+  first_template_body_line="$(grep -nFx -- "${first_template_line}" "${visible_body}" | head -n 1 | cut -d: -f1)"
   if awk -v boundary="${first_template_body_line}" '
     NR > 1 && NR < boundary && NF { found = 1 }
     END { exit found ? 0 : 1 }
@@ -273,9 +303,9 @@ validate_body() {
     fail "body adds visible content before the effective template"
   fi
 
-  issue_count="$(grep -Ec '^(Fixes|Part of) #[0-9]+$' "${visible_body}" || true)"
-  fixes_count="$(grep -Ec '^Fixes #[0-9]+$' "${visible_body}" || true)"
-  part_of_count="$(grep -Ec '^Part of #[0-9]+$' "${visible_body}" || true)"
+  issue_count="$(grep -Ec '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" || true)"
+  fixes_count="$(grep -Ec '^Fixes #[1-9][0-9]*$' "${visible_body}" || true)"
+  part_of_count="$(grep -Ec '^Part of #[1-9][0-9]*$' "${visible_body}" || true)"
   case "${issue_count}:${fixes_count}:${part_of_count}" in
     1:1:0|1:0:1|2:1:1) ;;
     *)
@@ -288,7 +318,7 @@ validate_body() {
     [ "${fixes_issue}" != "${part_of_issue}" ] ||
       fail "delivery and experiment issue numbers must be distinct"
   fi
-  issue_line="$(grep -nE '^(Fixes|Part of) #[0-9]+$' "${visible_body}" | head -n 1 | cut -d: -f1)"
+  issue_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" | head -n 1 | cut -d: -f1)"
   what_line="$(grep -nFx '## What' "${visible_body}" | cut -d: -f1)"
   [ "${issue_line}" -gt "${what_line}" ] || fail "issue relationship must follow the What section"
 
@@ -300,7 +330,7 @@ validate_body() {
   ' "${body_content}")"
   what_chars="$(awk '
     /^## What$/ { active = 1; next }
-    /^(Fixes|Part of) #[0-9]+$/ { active = 0 }
+    /^(Fixes|Part of) #[1-9][0-9]*$/ { active = 0 }
     active { line = $0; gsub(/[[:space:]]/, "", line); total += length(line) }
     END { print total + 0 }
   ' "${body_content}")"
@@ -335,7 +365,7 @@ validate_body() {
       return count
     }
     /^## What$/ { active = 1; next }
-    /^(Fixes|Part of) #[0-9]+$/ { active = 0 }
+    /^(Fixes|Part of) #[1-9][0-9]*$/ { active = 0 }
     active { text = text " " $0 }
     END { print sentence_count(text) }
   ' "${body_content}")"
@@ -353,10 +383,20 @@ validate_body() {
     fail "Why and What must be short prose, not bullet inventories"
   fi
 
-  final_issue_line="$(grep -nE '^(Fixes|Part of) #[0-9]+$' "${body_content}" | tail -n 1 | cut -d: -f1)"
+  final_issue_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$' "${body_content}" | tail -n 1 | cut -d: -f1)"
   if awk -v boundary="${final_issue_line}" '
-    NR > boundary && NF { found = 1 }
-    END { exit found ? 0 : 1 }
+    NR > boundary && NF {
+      if ($0 ~ /^⚠️ (Merge order|Breaking change|New dependency):[[:space:]]+[^[:space:]]/ ||
+          $0 ~ /^👉 (Maintainer action|After merge):[[:space:]]+[^[:space:]]/) {
+        kind = $0
+        sub(/:.*/, ":", kind)
+        seen[kind]++
+        if (seen[kind] > 1) { invalid = 1 }
+      } else {
+        invalid = 1
+      }
+    }
+    END { exit invalid ? 0 : 1 }
   ' "${body_content}"; then
     fail "body adds non-template text after the final issue relationship"
   fi
@@ -366,6 +406,10 @@ validate_body() {
   fi
   if grep -Fq '`' "${body_content}"; then
     fail "PR body must not contain code or command snippets"
+  fi
+  if grep -Eiq '(^|[^[:alnum:]_])([.]{0,2}/)?[[:alnum:]_.-]+/[[:alnum:]_./-]+|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
+    "${body_content}"; then
+    fail "PR body must not contain implementation or validation detail"
   fi
 
   visible_chars="$(wc -c <"${visible_body}" | tr -d '[:space:]')"
