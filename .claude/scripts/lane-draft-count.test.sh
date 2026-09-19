@@ -19,13 +19,14 @@ trap 'rm -rf "$FIX"' EXIT
 pass=0; fail=0
 
 cat > "$FIX/registry.json" <<'EOF'
-{"version":1,"instances":{"claude-local":{"namespace":"claude"},"codex-local":{"namespace":"codex"}}}
+{"version":1,"instances":{"claude-local":{"namespace":"claude","authors":{"graphql":"devantler"}},"codex-local":{"namespace":"codex","authors":{"graphql":"devantler"}}}}
 EOF
 
-# drafts <file> <headRefName[:x]>... — writes a fixture array; ":x" marks a fork branch
+# drafts <file> <headRefName[:x|:a]>... — writes a fixture array; ":x" marks a fork branch and
+# ":a" an author other than the registered identity
 drafts() {
   local out=$1; shift
-  printf '%s\n' "$@" | jq -R 'split(":") | {headRefName: .[0], isCrossRepository: (.[1] == "x")}' \
+  printf '%s\n' "$@" | jq -R 'split(":") | {headRefName: .[0], isCrossRepository: (.[1] == "x"), author: {login: (if .[1] == "a" then "someone-else" else "devantler" end)}}' \
     | jq -s 'to_entries | map(.value + {id: ("PR_" + (.key | tostring))})' > "$out"
 }
 
@@ -78,10 +79,17 @@ T_EXPECTED=x check "an unreadable private-repository total is UNKNOWN" 2 "verdic
 T_PAGES="5 6" check "a total that changes between pages is UNKNOWN" 2 "verdict=UNKNOWN" 5 "$FIX/three.json" --lane claude
 jq '.[4].id = .[0].id' "$FIX/three.json" > "$FIX/dup.json"
 check "a draft read twice is UNKNOWN" 2 "verdict=UNKNOWN" 5 "$FIX/dup.json" --lane claude
+# One draft closes while another opens: every total and every id stays consistent within a read,
+# so only a second full read comparing the id sets catches it.
+jq '.[4].id = "PR_new"' "$FIX/three.json" > "$FIX/churn.json"
+rc=0; out=$(LANE_DRAFTS_JSON_2="$FIX/churn.json" run "$FIX/three.json" 5 --lane claude) || rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "verdict=UNKNOWN"; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: same-count churn between reads (rc=$rc)"; fi
 
 # Attribution: the lane is the branch namespace of a same-repository branch, matched exactly.
 drafts "$FIX/lookalike.json" claude/a-1 claudex/b-2 claude-x/c-3 claude/fork-4:x
 check "lookalike prefixes and fork branches are not the lane" 0 "open_drafts: claude=1 codex=0 other=3 total=4" 4 "$FIX/lookalike.json" --lane claude
+drafts "$FIX/impostor.json" claude/a-1 claude/b-2:a claude/c-3:a
+check "a lane-prefixed branch by another author is not the lane" 0 "open_drafts: claude=1 codex=0 other=2 total=3" 3 "$FIX/impostor.json" --lane claude
 
 # Usage and registry errors are UNKNOWN, never a verdict.
 check "an unregistered lane is UNKNOWN" 2 "verdict=UNKNOWN" 5 "$FIX/three.json" --lane cursor
