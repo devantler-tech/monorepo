@@ -18,7 +18,8 @@ seed fetches the repository's own default pull-request template, falling back to
 OWNER/.github, and prepends the canonical role disclosure. Fill that file without
 replacing its visible structure, run check, and pass it to gh with --body-file.
 --allow-no-issue is reserved for the consumer contract's explicit trivial-fix
-carve-out; remove the seeded issue placeholder before using it.
+carve-out; replace the seeded issue placeholder with the exact visible line
+"No issue: trivial fix." before using it.
 EOF
   exit 2
 }
@@ -233,6 +234,7 @@ validate_body() {
   local template_fixed="${work_dir}/template-fixed"
   local template_fixed_unique="${work_dir}/template-fixed-unique"
   local body_content="${work_dir}/body-content.md"
+  local body_validation="${work_dir}/body-validation.md"
   local first_line
   local expected_disclosure
   local heading
@@ -251,6 +253,8 @@ validate_body() {
   local part_of_count
   local fixes_issue
   local part_of_issue
+  local no_issue_marker_count
+  local no_issue_line
   local issue_line
   local final_issue_line
   local what_line
@@ -316,6 +320,19 @@ validate_body() {
     inherited[$0] > 0 { inherited[$0]--; next }
     { print }
   ' "${template_fixed}" "${visible_body}" >"${body_content}"
+  # A blockquote changes presentation, not the kind of content it contains.
+  # Peel every nested quote prefix before checking for structures that the
+  # product-facing body forbids, while preserving the original body for prose,
+  # template-order, and relationship validation.
+  awk '
+    {
+      line = $0
+      while (line ~ /^ {0,3}>[[:space:]]?/) {
+        sub(/^ {0,3}>[[:space:]]?/, "", line)
+      }
+      print line
+    }
+  ' "${body_content}" >"${body_validation}"
   previous_line=0
   while IFS= read -r structure_line; do
     line_number="$(awk -v target="${structure_line}" -v after="${previous_line}" '
@@ -344,13 +361,19 @@ validate_body() {
   relationship_marker_count="$(grep -Ec '^(Fixes|Part of) #' "${visible_body}" || true)"
   fixes_count="$(grep -Ec '^Fixes #[1-9][0-9]*$' "${visible_body}" || true)"
   part_of_count="$(grep -Ec '^Part of #[1-9][0-9]*$' "${visible_body}" || true)"
+  no_issue_marker_count="$(grep -Fxc 'No issue: trivial fix.' "${visible_body}" || true)"
   case "${issue_count}:${fixes_count}:${part_of_count}" in
-    1:1:0|1:0:1|2:1:1) ;;
+    1:1:0|1:0:1|2:1:1)
+      [ "${no_issue_marker_count}" -eq 0 ] ||
+        fail "the trivial-fix marker cannot accompany an issue relationship"
+      ;;
     0:0:0)
       [ "${allow_no_issue}" -eq 1 ] ||
         fail "body must contain exactly one issue relationship: Fixes #N or Part of #N; one Fixes and one Part of experiment relationship may appear together"
       [ "${relationship_marker_count}" -eq 0 ] ||
         fail "no-issue mode forbids relationship markers"
+      [ "${no_issue_marker_count}" -eq 1 ] ||
+        fail "no-issue mode requires the explicit trivial-fix marker: No issue: trivial fix."
       ;;
     *)
       fail "body must contain exactly one issue relationship: Fixes #N or Part of #N; one Fixes and one Part of experiment relationship may appear together"
@@ -373,6 +396,11 @@ validate_body() {
     issue_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" | head -n 1 | cut -d: -f1)"
     what_line="$(grep -nFx '## What' "${visible_body}" | cut -d: -f1)"
     [ "${issue_line}" -gt "${what_line}" ] || fail "issue relationship must follow the What section"
+  else
+    no_issue_line="$(grep -nFx 'No issue: trivial fix.' "${visible_body}" | cut -d: -f1)"
+    what_line="$(grep -nFx '## What' "${visible_body}" | cut -d: -f1)"
+    [ "${no_issue_line}" -gt "${what_line}" ] ||
+      fail "the trivial-fix marker must follow the What section"
   fi
 
   why_chars="$(awk '
@@ -383,7 +411,7 @@ validate_body() {
   ' "${body_content}")"
   what_chars="$(awk '
     /^## What$/ { active = 1; next }
-    /^(Fixes|Part of) #[1-9][0-9]*$/ { active = 0 }
+    /^(Fixes|Part of) #[1-9][0-9]*$/ || /^No issue: trivial fix[.]$/ { active = 0 }
     active { line = $0; gsub(/[[:space:]]/, "", line); total += length(line) }
     END { print total + 0 }
   ' "${body_content}")"
@@ -434,7 +462,7 @@ validate_body() {
       return count
     }
     /^## What$/ { active = 1; next }
-    /^(Fixes|Part of) #[1-9][0-9]*$/ { active = 0 }
+    /^(Fixes|Part of) #[1-9][0-9]*$/ || /^No issue: trivial fix[.]$/ { active = 0 }
     active { text = text " " $0 }
     END { print sentence_count(text) }
   ' "${body_content}")"
@@ -448,7 +476,7 @@ validate_body() {
     /^## What$/ { active = 1; next }
     active && /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ { found = 1 }
     END { exit found ? 0 : 1 }
-  ' "${body_content}"; then
+  ' "${body_validation}"; then
     fail "Why and What must be short prose, not bullet inventories"
   fi
 
@@ -474,17 +502,20 @@ validate_body() {
     fi
   fi
 
-  if grep -Eq '^[[:space:]]*(```|~~~)' "${visible_body}"; then
+  if grep -Eiq '^[[:space:]]*</?h[1-6]([[:space:]>]|$)' "${body_validation}"; then
+    fail "body adds a non-template HTML section"
+  fi
+  if grep -Eq '^[[:space:]]*(```|~~~)' "${body_validation}"; then
     fail "PR body must not contain code or command fences"
   fi
-  if awk '/^    / || /^\t/ { found = 1 } END { exit found ? 0 : 1 }' "${body_content}"; then
+  if awk '/^    / || /^\t/ { found = 1 } END { exit found ? 0 : 1 }' "${body_validation}"; then
     fail "PR body must not contain indented code blocks"
   fi
-  if grep -Fq '`' "${body_content}"; then
+  if grep -Fq '`' "${body_validation}"; then
     fail "PR body must not contain code or command snippets"
   fi
   if grep -Eiq '(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
-    "${body_content}"; then
+    "${body_validation}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
 

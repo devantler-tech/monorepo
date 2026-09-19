@@ -4640,8 +4640,10 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   the passing file with `gh pr create --body-file` or `gh pr edit --body-file` — never bypass the
   template with an inline `--body`. Immediately read the published body back from GitHub and pipe it
   through the same `check --body-file -` command before requesting review or continuing the delivery
-  loop. Only the explicit trivial-fix no-issue carve-out above may remove the seeded issue placeholder
-  and add `--allow-no-issue` to both checks; ordinary delivery work may not use that flag. A missing
+  loop. Only the explicit trivial-fix no-issue carve-out above may replace the seeded issue placeholder
+  with the exact visible line `No issue: trivial fix.` and add `--allow-no-issue` to both checks;
+  ordinary delivery work may not use that flag. The required PR-body CI recognises that exact line so
+  the carve-out remains explicit and auditable after publication. A missing
   template, failed check, or readback mismatch blocks that PR write; it never becomes a best-effort
   warning. Existing PRs authored by either routine role that fail this gate are
   body-hygiene work and are corrected before review, promotion, or merge. Interactive sessions still
