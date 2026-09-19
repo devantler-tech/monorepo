@@ -64,15 +64,18 @@ if grep -qx changes "$tmp/jobs"; then
   fi
   read_set outputs '.jobs.changes.outputs // {} | keys | .[]'
   # The producer must always run: a skipped or failure-suppressed filter empties every output, and each
-  # filtered job then reports skipped, which the aggregate accepts.
-  [[ "$(yq -r '.jobs.changes.if // ""' "$workflow")" == "" ]] ||
+  # filtered job then reports skipped, which the aggregate accepts. Presence is tested, never `//`, which
+  # treats a YAML false as absent. The producer must be paths-filter itself.
+  [[ "$(yq -r '.jobs.changes | has("if")' "$workflow")" == false ]] ||
     defect "changes: has a job-level if, so its outputs can be empty and every filtered job skipped"
-  [[ "$(yq -r '.jobs.changes."continue-on-error" // false' "$workflow")" == false ]] ||
+  [[ "$(yq -r '.jobs.changes | has("continue-on-error")' "$workflow")" == false ]] ||
     defect "changes: sets continue-on-error, so a failed filter empties every output"
-  [[ "$(yq -r '.jobs.changes.steps[] | select(.id == "filter") | (.if // "")' "$workflow")" == "" ]] ||
+  [[ "$(yq -r '[.jobs.changes.steps[] | select(.id == "filter") | has("if")] | any' "$workflow")" == false ]] ||
     defect "changes: the filter step has an if, so it can be skipped"
-  [[ "$(yq -r '.jobs.changes.steps[] | select(.id == "filter") | (."continue-on-error" // false)' "$workflow")" == false ]] ||
+  [[ "$(yq -r '[.jobs.changes.steps[] | select(.id == "filter") | has("continue-on-error")] | any' "$workflow")" == false ]] ||
     defect "changes: the filter step sets continue-on-error, so a failed filter empties every output"
+  [[ "$(yq -r '[.jobs.changes.steps[] | select(.id == "filter") | (.uses // "") | test("^dorny/paths-filter@")] | all' "$workflow")" == true ]] ||
+    defect "changes: the filter step does not run dorny/paths-filter, so it sets no outputs"
 
   while IFS= read -r name; do
     defect "filter '$name' has no changes output, so no job can read it"
@@ -132,6 +135,9 @@ aggregate='[.jobs.status.steps[] | select((.uses // "") | test("^devantler-tech/
 aggregate_steps="$(yq -r "$aggregate | length" "$workflow")"
 [[ "$aggregate_steps" == 1 ]] ||
   defect "status: expected exactly one aggregate-job-checks step, found $aggregate_steps"
+# The aggregate step must always run and never swallow its own failure.
+[[ "$(yq -r "$aggregate | map(has(\"if\") or has(\"continue-on-error\")) | any" "$workflow")" == false ]] ||
+  defect "status: the aggregate-job-checks step has an if or continue-on-error, so it can pass without enforcing"
 yq -r "$aggregate | .[0].with.\"job-results\" // \"\"" "$workflow" |
   # Only the untransformed expression passes a result through; anything else can mask a failure.
   { grep -oE '\$\{\{ *needs\.[A-Za-z0-9_-]+\.result *\}\}' || true; } | { grep -oE 'needs\.[A-Za-z0-9_-]+\.result' || true; } | sed -E 's/^needs\.(.*)\.result$/\1/' | sort -u >"$tmp/status_results"

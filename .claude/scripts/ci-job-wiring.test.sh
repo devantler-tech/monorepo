@@ -162,6 +162,19 @@ fixture; edit '.jobs.changes.steps[0].if = "false"'
 expect_defect "conditional filter step" "changes: the filter step has an if"
 fixture; edit '.jobs.changes.steps[0]."continue-on-error" = true'
 expect_defect "filter step continue-on-error" "changes: the filter step sets continue-on-error"
+# An unquoted YAML false is still a condition: `//` would read it as absent.
+fixture; edit '.jobs.changes.if = false'
+expect_defect "boolean-false producer" "changes: has a job-level if"
+fixture; edit '.jobs.changes.steps[0].if = false'
+expect_defect "boolean-false filter step" "changes: the filter step has an if"
+# Another action sets none of the outputs.
+fixture; edit '.jobs.changes.steps[0].uses = "actions/checkout@v4"'
+expect_defect "wrong producer action" "changes: the filter step does not run dorny/paths-filter"
+# The aggregate step itself must run and fail the job.
+fixture; edit '.jobs.status.steps[0].if = false'
+expect_defect "skipped aggregate" "status: the aggregate-job-checks step has an if or continue-on-error"
+fixture; edit '.jobs.status.steps[0]."continue-on-error" = true'
+expect_defect "suppressed aggregate" "status: the aggregate-job-checks step has an if or continue-on-error"
 
 # Index syntax is equivalent in GitHub expressions, so it must be refused, not skipped: here the
 # job drops `changes` from needs and nothing else would notice.
