@@ -1468,7 +1468,7 @@ jobs:
       - name: Enforce the routine-role PR body contract
         # Routine roles write branches in this repository. Never execute a fork's candidate
         # version of this guard or expose the base repository token to untrusted code.
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'devantler'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
