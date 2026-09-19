@@ -39,6 +39,7 @@ gitops-kubernetes	gitops-cluster-debug	https://github.com/fluxcd/agent-skills
 gitops-kubernetes	gitops-knowledge	https://github.com/fluxcd/agent-skills
 gitops-kubernetes	gitops-tenant-onboarding	https://github.com/devantler-tech/agent-skills
 go	golang-pro	https://github.com/Jeffallan/claude-skills
+ksail	ksail	https://github.com/devantler-tech/ksail
 vibe-coding	allowed-stack-guardrail	https://github.com/devantler-tech/agent-skills
 vibe-coding	jargon-free-voice	https://github.com/devantler-tech/agent-skills
 vibe-coding	needs-stack-mapping	https://github.com/devantler-tech/agent-skills
