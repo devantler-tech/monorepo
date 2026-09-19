@@ -95,6 +95,12 @@ fixture
 edit '.jobs.test-beta.if = "always()" | .jobs.test-beta.steps = [{"run": "true", "env": {"B": "${{ needs.changes.outputs.beta }}"}}]'
 expect_defect "step-only reference" "changes output 'beta' filters no job"
 
+
+# An output named only inside a string literal is constant text, not a filter.
+fixture
+edit '.jobs.test-beta.if = "'"'"'needs.changes.outputs.beta'"'"' == '"'"'true'"'"'"'
+expect_defect "quoted-literal reference" "changes output 'beta' filters no job"
+
 # (4) missing from status.needs.
 fixture; edit '.jobs.status.needs -= ["unfiltered"]'
 expect_defect "missing status need" "unfiltered: missing from status.needs"
@@ -113,6 +119,18 @@ for literal in 'needs.test-alpha.result' '$ {{ needs.test-alpha.result }}'; do
   LIT="$literal" edit '.jobs.status.steps[0].with."job-results" |= sub("\$\{\{ needs.test-alpha.result \}\}"; strenv(LIT))'
   expect_defect "unevaluated job-result ($literal)" "test-alpha: missing from status job-results"
 done
+
+# A transformed expression can hand the aggregate "success" for a failed job.
+fixture
+# shellcheck disable=SC2016
+edit '.jobs.status.steps[0].with."job-results" |= sub("\$\{\{ needs.test-alpha.result \}\}"; "${{ needs.test-alpha.result == '"'"'failure'"'"' && '"'"'success'"'"' || needs.test-alpha.result }}")'
+expect_defect "masked job-result" "test-alpha: missing from status job-results"
+
+# A job that may fail without failing the workflow does not gate the merge, nor does such a status.
+fixture; edit '.jobs.test-alpha."continue-on-error" = true'
+expect_defect "continue-on-error job" "test-alpha: sets continue-on-error"
+fixture; edit '.jobs.status."continue-on-error" = true'
+expect_defect "continue-on-error status" "status: sets continue-on-error"
 
 # Index syntax is equivalent in GitHub expressions, so it must be refused, not skipped: here the
 # job drops `changes` from needs and nothing else would notice.

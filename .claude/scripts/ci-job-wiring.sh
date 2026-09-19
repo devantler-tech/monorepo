@@ -75,8 +75,9 @@ while IFS= read -r job; do
   fi
   refs="$(grep -oE 'needs\.changes\.outputs\.[A-Za-z0-9_-]+' "$tmp/job.json" | sed 's/^needs\.changes\.outputs\.//' | sort -u || true)"
   [[ -n "$refs" ]] || continue
-  # Only the job-level `if` filters the job: a reference in a step `if`, `env` or `run` is not wiring.
-  JOB="$job" yq -r '.jobs[strenv(JOB)].if // ""' "$workflow" |
+  # Only the job-level `if` filters the job: a reference in a step `if`, `env` or `run` is not wiring,
+  # and neither is text inside a quoted string literal of that `if`.
+  JOB="$job" yq -r '.jobs[strenv(JOB)].if // ""' "$workflow" | sed "s/'[^']*'//g" |
     { grep -oE 'needs\.changes\.outputs\.[A-Za-z0-9_-]+' || true; } | sed 's/^needs\.changes\.outputs\.//' >>"$tmp/referenced"
   needs_changes="$(JOB="$job" yq -r '[.jobs[strenv(JOB)].needs] | flatten | map(select(. == "changes")) | length' "$workflow")"
   [[ "$needs_changes" != 0 ]] || defect "$job: reads needs.changes.outputs but does not list 'changes' in needs"
@@ -97,7 +98,8 @@ aggregate_steps="$(yq -r "$aggregate | length" "$workflow")"
 [[ "$aggregate_steps" == 1 ]] ||
   defect "status: expected exactly one aggregate-job-checks step, found $aggregate_steps"
 yq -r "$aggregate | .[0].with.\"job-results\" // \"\"" "$workflow" |
-  { grep -oE '\$\{\{[^}]*\}\}' || true; } | { grep -oE 'needs\.[A-Za-z0-9_-]+\.result' || true; } | sed -E 's/^needs\.(.*)\.result$/\1/' | sort -u >"$tmp/status_results"
+  # Only the untransformed expression passes a result through; anything else can mask a failure.
+  { grep -oE '\$\{\{ *needs\.[A-Za-z0-9_-]+\.result *\}\}' || true; } | { grep -oE 'needs\.[A-Za-z0-9_-]+\.result' || true; } | sed -E 's/^needs\.(.*)\.result$/\1/' | sort -u >"$tmp/status_results"
 read_set nonblocking '.jobs | to_entries | .[] | select((.value.name // "") | test("\\(non-blocking\\)$")) | .key'
 
 while IFS= read -r job; do
@@ -105,7 +107,11 @@ while IFS= read -r job; do
   grep -qx -- "$job" "$tmp/nonblocking" && continue
   grep -qx -- "$job" "$tmp/status_needs" || defect "$job: missing from status.needs, so it never gates the merge"
   grep -qx -- "$job" "$tmp/status_results" || defect "$job: missing from status job-results, so its failure is never counted"
+  [[ "$(JOB="$job" yq -r '.jobs[strenv(JOB)]."continue-on-error" // false' "$workflow")" == false ]] ||
+    defect "$job: sets continue-on-error, so it can fail without failing the merge"
 done <"$tmp/jobs"
+[[ "$(yq -r '.jobs.status."continue-on-error" // false' "$workflow")" == false ]] ||
+  defect "status: sets continue-on-error, so a failed gate does not fail the merge"
 while IFS= read -r job; do
   grep -qx -- "$job" "$tmp/jobs" || defect "status.needs names '$job', which is not a job"
 done <"$tmp/status_needs"
