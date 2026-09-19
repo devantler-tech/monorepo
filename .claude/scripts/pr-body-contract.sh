@@ -12,11 +12,13 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   pr-body-contract.sh seed --repo OWNER/REPO --output FILE [--role agentic-engineer|agent-improver]
-  pr-body-contract.sh check --repo OWNER/REPO --body-file FILE|- [--role agentic-engineer|agent-improver]
+  pr-body-contract.sh check --repo OWNER/REPO --body-file FILE|- [--role agentic-engineer|agent-improver] [--allow-no-issue]
 
 seed fetches the repository's own default pull-request template, falling back to
 OWNER/.github, and prepends the canonical role disclosure. Fill that file without
 replacing its visible structure, run check, and pass it to gh with --body-file.
+--allow-no-issue is reserved for the consumer contract's explicit trivial-fix
+carve-out; remove the seeded issue placeholder before using it.
 EOF
   exit 2
 }
@@ -29,6 +31,7 @@ repo=''
 output=''
 role='agentic-engineer'
 body_file=''
+allow_no_issue=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -51,6 +54,10 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || usage
       body_file="$2"
       shift 2
+      ;;
+    --allow-no-issue)
+      allow_no_issue=1
+      shift
       ;;
     *) usage ;;
   esac
@@ -138,32 +145,57 @@ fetch_raw() {
   fail "template lookup failed for ${source_repo}/${source_path}"
 }
 
+discovered_path=''
+find_template_path() {
+  local source_repo="$1"
+  local source_directory="$2"
+  local endpoint="repos/${source_repo}/contents"
+  local listing="${work_dir}/template-directory-listing"
+  local matches="${work_dir}/template-directory-matches"
+  local error_file="${work_dir}/gh-api-error"
+  local match_count
+
+  if [ "${source_directory}" != '.' ]; then
+    endpoint="${endpoint}/${source_directory}"
+  fi
+  if ! gh api "${endpoint}" --jq '.[] | select(.type == "file") | .name' \
+    >"${listing}" 2>"${error_file}"; then
+    if grep -Eq '(HTTP 404|Not Found)' "${error_file}"; then
+      return 1
+    fi
+    fail "template directory lookup failed for ${source_repo}/${source_directory}"
+  fi
+
+  awk 'tolower($0) ~ /^pull_request_template[.](md|txt)$/ { print }' \
+    "${listing}" >"${matches}"
+  match_count="$(wc -l <"${matches}" | tr -d '[:space:]')"
+  [ "${match_count}" -le 1 ] ||
+    fail "template lookup is ambiguous for ${source_repo}/${source_directory}"
+  [ "${match_count}" -eq 1 ] || return 1
+  IFS= read -r discovered_path <"${matches}"
+  if [ "${source_directory}" != '.' ]; then
+    discovered_path="${source_directory}/${discovered_path}"
+  fi
+}
+
 resolve_template() {
   local target_repo="$1"
   local destination="$2"
   local owner="${target_repo%%/*}"
-  local candidate
+  local directory
 
-  for candidate in \
-    '.github/PULL_REQUEST_TEMPLATE.md' \
-    '.github/pull_request_template.md' \
-    'PULL_REQUEST_TEMPLATE.md' \
-    'pull_request_template.md' \
-    'docs/PULL_REQUEST_TEMPLATE.md' \
-    'docs/pull_request_template.md'; do
-    if fetch_raw "${target_repo}" "${candidate}" "${destination}"; then
+  for directory in '.github' '.' 'docs'; do
+    if find_template_path "${target_repo}" "${directory}"; then
+      fetch_raw "${target_repo}" "${discovered_path}" "${destination}" ||
+        fail "discovered template disappeared for ${target_repo}/${discovered_path}"
       return 0
     fi
   done
 
-  for candidate in \
-    '.github/PULL_REQUEST_TEMPLATE.md' \
-    '.github/pull_request_template.md' \
-    'PULL_REQUEST_TEMPLATE.md' \
-    'pull_request_template.md' \
-    'docs/PULL_REQUEST_TEMPLATE.md' \
-    'docs/pull_request_template.md'; do
-    if fetch_raw "${owner}/.github" "${candidate}" "${destination}"; then
+  for directory in '.github' '.' 'docs'; do
+    if find_template_path "${owner}/.github" "${directory}"; then
+      fetch_raw "${owner}/.github" "${discovered_path}" "${destination}" ||
+        fail "discovered template disappeared for ${owner}/.github/${discovered_path}"
       return 0
     fi
   done
@@ -246,9 +278,9 @@ validate_body() {
   extract_atx_headings "${visible_body}" >"${body_headings}"
 
   while IFS= read -r heading; do
-    count="$(grep -Fxc "${heading}" "${visible_body}" || true)"
+    count="$(grep -Fxc -- "${heading}" "${body_headings}" || true)"
     [ "${count}" -eq 1 ] || fail "required template heading is missing: ${heading}"
-    line_number="$(grep -nFx "${heading}" "${visible_body}" | head -n 1 | cut -d: -f1)"
+    line_number="$(grep -nFx -- "${heading}" "${body_headings}" | head -n 1 | cut -d: -f1)"
     [ "${line_number}" -gt "${previous_line}" ] ||
       fail "template headings are out of order at: ${heading}"
     previous_line="${line_number}"
@@ -303,24 +335,41 @@ validate_body() {
     fail "body adds visible content before the effective template"
   fi
 
+  if grep -Eq '^(Fixes|Part of) #[[:space:]]*$' "${visible_body}"; then
+    fail "body contains an unresolved issue placeholder"
+  fi
+
   issue_count="$(grep -Ec '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" || true)"
   fixes_count="$(grep -Ec '^Fixes #[1-9][0-9]*$' "${visible_body}" || true)"
   part_of_count="$(grep -Ec '^Part of #[1-9][0-9]*$' "${visible_body}" || true)"
   case "${issue_count}:${fixes_count}:${part_of_count}" in
     1:1:0|1:0:1|2:1:1) ;;
+    0:0:0)
+      [ "${allow_no_issue}" -eq 1 ] ||
+        fail "body must contain exactly one issue relationship: Fixes #N or Part of #N; one Fixes and one Part of experiment relationship may appear together"
+      ;;
     *)
       fail "body must contain exactly one issue relationship: Fixes #N or Part of #N; one Fixes and one Part of experiment relationship may appear together"
       ;;
   esac
-  if [ "${issue_count}" -eq 2 ]; then
-    fixes_issue="$(sed -n 's/^Fixes #//p' "${visible_body}")"
-    part_of_issue="$(sed -n 's/^Part of #//p' "${visible_body}")"
-    [ "${fixes_issue}" != "${part_of_issue}" ] ||
-      fail "delivery and experiment issue numbers must be distinct"
+  if [ "${issue_count}" -gt 0 ]; then
+    if [ "${issue_count}" -eq 2 ]; then
+      fixes_issue="$(sed -n 's/^Fixes #//p' "${visible_body}")"
+      part_of_issue="$(sed -n 's/^Part of #//p' "${visible_body}")"
+      [ "${fixes_issue}" != "${part_of_issue}" ] ||
+        fail "delivery and experiment issue numbers must be distinct"
+      if awk '
+        /^(Fixes|Part of) #[1-9][0-9]*$/ { seen++; next }
+        seen == 1 && NF { invalid = 1 }
+        END { exit invalid ? 0 : 1 }
+      ' "${body_content}"; then
+        fail "issue relationship lines must be contiguous"
+      fi
+    fi
+    issue_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" | head -n 1 | cut -d: -f1)"
+    what_line="$(grep -nFx '## What' "${visible_body}" | cut -d: -f1)"
+    [ "${issue_line}" -gt "${what_line}" ] || fail "issue relationship must follow the What section"
   fi
-  issue_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" | head -n 1 | cut -d: -f1)"
-  what_line="$(grep -nFx '## What' "${visible_body}" | cut -d: -f1)"
-  [ "${issue_line}" -gt "${what_line}" ] || fail "issue relationship must follow the What section"
 
   why_chars="$(awk '
     /^## Why$/ { active = 1; next }
@@ -342,6 +391,14 @@ validate_body() {
   why_sentences="$(awk '
     function sentence_count(text, rest, count) {
       rest = text
+      gsub(/[eE][.][gG][.]/, "eg", rest)
+      gsub(/[iI][.][eE][.]/, "ie", rest)
+      gsub(/[eE]tc[.]/, "etc", rest)
+      gsub(/[vV]s[.]/, "vs", rest)
+      gsub(/[mM]r[.]/, "Mr", rest)
+      gsub(/[mM]rs[.]/, "Mrs", rest)
+      gsub(/[dD]r[.]/, "Dr", rest)
+      gsub(/[uU][.][sS][.]/, "US", rest)
       while (match(rest, /[.!?]([[:space:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
@@ -357,6 +414,14 @@ validate_body() {
   what_sentences="$(awk '
     function sentence_count(text, rest, count) {
       rest = text
+      gsub(/[eE][.][gG][.]/, "eg", rest)
+      gsub(/[iI][.][eE][.]/, "ie", rest)
+      gsub(/[eE]tc[.]/, "etc", rest)
+      gsub(/[vV]s[.]/, "vs", rest)
+      gsub(/[mM]r[.]/, "Mr", rest)
+      gsub(/[mM]rs[.]/, "Mrs", rest)
+      gsub(/[dD]r[.]/, "Dr", rest)
+      gsub(/[uU][.][sS][.]/, "US", rest)
       while (match(rest, /[.!?]([[:space:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
@@ -383,31 +448,36 @@ validate_body() {
     fail "Why and What must be short prose, not bullet inventories"
   fi
 
-  final_issue_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$' "${body_content}" | tail -n 1 | cut -d: -f1)"
-  if awk -v boundary="${final_issue_line}" '
-    NR > boundary && NF {
-      if ($0 ~ /^⚠️ (Merge order|Breaking change|New dependency):[[:space:]]+[^[:space:]]/ ||
-          $0 ~ /^👉 (Maintainer action|After merge):[[:space:]]+[^[:space:]]/) {
-        kind = $0
-        sub(/:.*/, ":", kind)
-        seen[kind]++
-        if (seen[kind] > 1) { invalid = 1 }
-      } else {
-        invalid = 1
+  if [ "${issue_count}" -gt 0 ]; then
+    final_issue_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$' "${body_content}" | tail -n 1 | cut -d: -f1)"
+    if awk -v boundary="${final_issue_line}" '
+      NR > boundary && NF {
+        if ($0 ~ /^⚠️ (Merge order|Breaking change|New dependency):[[:space:]]+[^[:space:]]/ ||
+            $0 ~ /^👉 (Maintainer action|After merge):[[:space:]]+[^[:space:]]/) {
+          kind = $0
+          sub(/:.*/, ":", kind)
+          seen[kind]++
+          if (seen[kind] > 1) { invalid = 1 }
+        } else {
+          invalid = 1
+        }
       }
-    }
-    END { exit invalid ? 0 : 1 }
-  ' "${body_content}"; then
-    fail "body adds non-template text after the final issue relationship"
+      END { exit invalid ? 0 : 1 }
+    ' "${body_content}"; then
+      fail "body adds non-template text after the final issue relationship"
+    fi
   fi
 
   if grep -Eq '^[[:space:]]*(```|~~~)' "${visible_body}"; then
     fail "PR body must not contain code or command fences"
   fi
+  if awk '/^    / || /^\t/ { found = 1 } END { exit found ? 0 : 1 }' "${body_content}"; then
+    fail "PR body must not contain indented code blocks"
+  fi
   if grep -Fq '`' "${body_content}"; then
     fail "PR body must not contain code or command snippets"
   fi
-  if grep -Eiq '(^|[^[:alnum:]_])([.]{0,2}/)?[[:alnum:]_.-]+/[[:alnum:]_./-]+|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
+  if grep -Eiq '(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
     "${body_content}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
