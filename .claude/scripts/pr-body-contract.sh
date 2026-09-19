@@ -440,7 +440,7 @@ validate_body() {
   fi
 
   issue_count="$(grep -Ec '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" || true)"
-  relationship_marker_count="$(grep -Eic '(^|[^[:alnum:]_])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]*(#|[[:alnum:]_.-]+/[[:alnum:]_.-]+#|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/)|(^|[^[:alnum:]_])part[[:space:]]+of[[:space:]]*#' \
+  relationship_marker_count="$(grep -Eic '(^|[^[:alnum:]_])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]*(#|[[:alnum:]_.-]+/[[:alnum:]_.-]+#|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/)|(^|[^[:alnum:]_])part[[:space:]]+of[[:space:]]*(#|[[:alnum:]_.-]+/[[:alnum:]_.-]+#|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/)' \
     "${visible_body}" || true)"
   fixes_count="$(grep -Ec '^Fixes #[1-9][0-9]*$' "${visible_body}" || true)"
   part_of_count="$(grep -Ec '^Part of #[1-9][0-9]*$' "${visible_body}" || true)"
@@ -479,11 +479,11 @@ validate_body() {
       fi
     fi
     issue_line="$(grep -nE '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" | head -n 1 | cut -d: -f1)"
-    what_line="$(grep -nFx '## What' "${visible_body}" | cut -d: -f1)"
+    what_line="$(grep -nFx '## What' "${visible_body}" | tail -n 1 | cut -d: -f1)"
     [ "${issue_line}" -gt "${what_line}" ] || fail "issue relationship must follow the What section"
   else
     no_issue_line="$(grep -nFx 'No issue: trivial fix.' "${visible_body}" | cut -d: -f1)"
-    what_line="$(grep -nFx '## What' "${visible_body}" | cut -d: -f1)"
+    what_line="$(grep -nFx '## What' "${visible_body}" | tail -n 1 | cut -d: -f1)"
     [ "${no_issue_line}" -gt "${what_line}" ] ||
       fail "the trivial-fix marker must follow the What section"
   fi
