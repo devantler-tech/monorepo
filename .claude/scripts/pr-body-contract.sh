@@ -628,7 +628,7 @@ validate_body() {
   if grep -Fq '`' "${body_validation}"; then
     fail "PR body must not contain code or command snippets"
   fi
-  if grep -Eq '(^|[^[:alnum:]_])([Aa]dd|[Aa]dded|[Aa]dding|[Cc]all|[Cc]alled|[Cc]alling|[Cc]hange|[Cc]hanged|[Cc]hanging|[Ff]ix|[Ff]ixed|[Ff]ixing|[Ii]mplement|[Ii]mplemented|[Ii]mplementing|[Ii]ntroduce|[Ii]ntroduced|[Ii]ntroducing|[Ii]nvoke|[Ii]nvoked|[Ii]nvoking|[Mm]odify|[Mm]odified|[Mm]odifying|[Rr]efactor|[Rr]efactored|[Rr]efactoring|[Rr]emove|[Rr]emoved|[Rr]emoving|[Rr]ename|[Rr]enamed|[Rr]enaming|[Rr]eplace|[Rr]eplaced|[Rr]eplacing|[Uu]pdate|[Uu]pdated|[Uu]pdating|[Uu]se|[Uu]sed|[Uu]sing)[[:space:]]+(the[[:space:]]+)?([A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*|[A-Z]{2,}[a-z][A-Za-z0-9]*)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])([A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*|[A-Z]{2,}[a-z][A-Za-z0-9]*)[[:space:]]+(now[[:space:]]+)?(accepts?|calls?|creates?|deletes?|fails?|handles?|invokes?|loads?|parses?|reads?|returns?|runs?|updates?|validates?|writes?)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])([Ff]unction|[Mm]ethod|[Ss]ymbol|[Tt]ype|[Cc]lass|[Ss]truct|[Ii]nterface)[[:space:]]+([A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*|[A-Z]{2,}[a-z][A-Za-z0-9]*)([^[:alnum:]_]|$)' \
+  if grep -Eq '(^|[^[:alnum:]_])([A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*|[A-Z]{2,}[a-z][A-Za-z0-9]*)([^[:alnum:]_]|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
