@@ -435,24 +435,21 @@ validate_body() {
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([[:alpha:]][.]([[:alpha:]][.])+)([^[:alnum:]_]|$)/\1abbreviation\4/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
-    -e 's/(^|[^[:alnum:]_.])[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%)([^[:alnum:]_-]|$)/\1measurement\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >"${body_symbols}"
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/[*_]//g' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([[:alpha:]][.]([[:alpha:]][.])+)([^[:alnum:]_]|$)/\1abbreviation\4/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
-    -e 's/(^|[^[:alnum:]_.])[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%)([^[:alnum:]_-]|$)/\1measurement\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >>"${body_symbols}"
-  # A dotted token can be either a filename or a public hostname. Preserve it
-  # as a filename by default and normalize arbitrary hostnames only when the
-  # surrounding prose explicitly identifies a site or domain. Recurring public
-  # hostnames above cover subject-position prose where no lexical cue exists.
+  # A dotted token can be a filename, email address, measurement, or public
+  # hostname. Normalize only the non-filename forms whose syntax or surrounding
+  # product prose identifies them; filename evidence takes precedence.
   awk '
     function normalized_word(text, value) {
       value = tolower(text)
@@ -460,18 +457,35 @@ validate_body() {
       gsub(/[^[:alnum:]_-]+$/, "", value)
       return value
     }
+    function prose_token(text, value) {
+      value = tolower(text)
+      gsub(/^[^[:alnum:].]+/, "", value)
+      gsub(/[^[:alnum:]%@._+-]+$/, "", value)
+      sub(/[.]$/, "", value)
+      return value
+    }
     {
       for (field = 1; field <= NF; field++) {
+        token = prose_token($field)
+        if (token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
+          $field = "email"
+          continue
+        }
+        if (token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%)$/) {
+          $field = "measurement"
+          continue
+        }
         candidate = normalized_word($field)
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           before_previous = field > 2 ? normalized_word($(field - 2)) : ""
           previous = field > 1 ? normalized_word($(field - 1)) : ""
           following = field < NF ? normalized_word($(field + 1)) : ""
-          site_context = previous ~ /^(domain|host|reach|site|visit|website)$/ || \
+          file_context = following ~ /^(file|filename|path)$/
+          site_context = !file_context && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
             (previous ~ /^(at|from|on|via)$/ && before_previous ~ /^(available|hosted|published|served)$/) || \
-            following ~ /^(address|domain|host|site|website)$/
+            following ~ /^(address|audience|customers|domain|host|readers|site|users|visitors|website)$/)
           if (site_context) { $field = "site" }
         }
       }
