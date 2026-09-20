@@ -512,10 +512,11 @@ validate_body() {
           continue
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
+          public_domain = candidate ~ /[.](ai|app|biz|cc|cloud|co|com|dev|edu|gov|info|io|me|net|org|tech)$/
           site_context = !explicit_file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
-            (previous == "from" && before_previous == "traffic") || \
+            (previous == "from" && before_previous == "traffic" && public_domain) || \
             (previous ~ /^(at|from|on|via)$/ && before_previous ~ /^(available|hosted|published|served)$/) || \
             following ~ /^(address|audience|customers|domain|host|readers|site|users|visitors|website)$/ || \
             (following ~ /^(is|remains|was)$/ && after_following ~ /^(available|down|live|offline|online|reachable|unavailable)$/) || \
