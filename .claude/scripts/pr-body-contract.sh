@@ -557,7 +557,9 @@ validate_body() {
         same_sentence_context = $field !~ /[.!?]["”’)}\]*_]*$/
         file_context = same_sentence_context && following ~ /^(asset|attachment|file|filename)$/
         path_context = same_sentence_context && following == "path"
-        explicit_file_context = file_context || path_context
+        leading_file_context = previous_field !~ /[.!?]["”’)}\]*_]*$/ && \
+          previous ~ /^(asset|attachment|file|filename|path)$/
+        explicit_file_context = file_context || path_context || leading_file_context
         direct_file_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
           previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/
         article_file_action = before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
