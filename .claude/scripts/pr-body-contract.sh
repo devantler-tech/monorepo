@@ -486,14 +486,16 @@ validate_body() {
           (previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
             before_previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/)
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/) || \
-            (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action))) {
+            (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
+            (file_action && token ~ /^[.][[:digit:]]+$/)) {
           $field = "file.name"
           continue
         }
         known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/
         email_shape = token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
         email_context = previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/ || \
-          (previous == "to" && before_previous ~ /^(email|emails|message|messages|send|sent|write)$/) || \
+          (previous == "to" && (before_previous ~ /^(email|emails|message|messages|send|sent|write)$/ || \
+            third_previous ~ /^(email|emails|message|messages|send|sent|write)$/)) || \
           (previous == "at" && (before_previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/ || \
             third_previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/)) || \
           following ~ /^(address|can|cannot|could|does|email|has|is|mailbox|was|will|would)$/
@@ -613,8 +615,17 @@ validate_body() {
   # Curly quotes are literal Markdown delimiters in the AWK regex.
   # shellcheck disable=SC1112
   awk '
+    function terminal_abbreviation_count(text, rest, count) {
+      rest = text
+      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.])["”’)}\]*_]*([[:space:]]+[[:upper:]]|$)/)) {
+        count++
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      return count
+    }
     function sentence_count(text, rest, count) {
       rest = text
+      count = terminal_abbreviation_count(text)
       gsub(/[eE][.][gG][.]/, "eg", rest)
       gsub(/[iI][.][eE][.]/, "ie", rest)
       gsub(/[eE]tc[.]/, "etc", rest)
