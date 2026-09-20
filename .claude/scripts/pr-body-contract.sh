@@ -481,6 +481,10 @@ validate_body() {
           $field = "file.name"
           continue
         }
+        if (!file_context && token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)*[.][[:digit:]][[:alnum:]-]*$/) {
+          $field = "file.name"
+          continue
+        }
         if (!file_context && token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           $field = "email"
           continue
