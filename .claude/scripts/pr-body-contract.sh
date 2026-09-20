@@ -548,17 +548,22 @@ validate_body() {
         third_previous = field > 3 ? normalized_word($(field - 3)) : ""
         before_previous = field > 2 ? normalized_word($(field - 2)) : ""
         previous = field > 1 ? normalized_word($(field - 1)) : ""
+        before_previous_field = field > 2 ? $(field - 2) : ""
+        previous_field = field > 1 ? $(field - 1) : ""
         following = field < NF ? normalized_word($(field + 1)) : ""
         after_following = field + 1 < NF ? normalized_word($(field + 2)) : ""
         third_after = field + 2 < NF ? normalized_word($(field + 3)) : ""
         token = prose_token($field)
         same_sentence_context = $field !~ /[.!?]["”’)}\]*_]*$/
-        file_context = same_sentence_context && following ~ /^(file|filename)$/
+        file_context = same_sentence_context && following ~ /^(asset|attachment|file|filename)$/
         path_context = same_sentence_context && following == "path"
         explicit_file_context = file_context || path_context
-        file_action = previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/ || \
-          (previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
-            before_previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/)
+        direct_file_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
+          previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/
+        article_file_action = before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
+          previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
+          before_previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/
+        file_action = direct_file_action || article_file_action
         initialism_candidate = $field
         gsub(/^[^[:alnum:].]+/, "", initialism_candidate)
         gsub(/[^[:alnum:].]+$/, "", initialism_candidate)
