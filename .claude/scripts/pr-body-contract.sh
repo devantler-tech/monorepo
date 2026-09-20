@@ -468,9 +468,13 @@ validate_body() {
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           suffix = candidate
           sub(/^.*[.]/, "", suffix)
+          before_previous = field > 2 ? normalized_word($(field - 2)) : ""
           previous = field > 1 ? normalized_word($(field - 1)) : ""
           following = field < NF ? normalized_word($(field + 1)) : ""
-          site_context = previous ~ /^(at|domain|from|host|of|on|reach|site|to|via|visit|website)$/ || \
+          site_context = previous ~ /^(domain|host|reach|site|visit|website)$/ || \
+            (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
+            (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
+            (previous ~ /^(at|from|on|via)$/ && before_previous ~ /^(available|hosted|published|served)$/) || \
             following ~ /^(address|domain|host|site|website)$/
           if (public_suffix[suffix] && site_context) { $field = "site" }
         }
