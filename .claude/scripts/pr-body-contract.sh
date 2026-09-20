@@ -436,7 +436,7 @@ validate_body() {
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.]?([dD][eE][vV]|[pP][oO][sS][tT])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
@@ -446,7 +446,7 @@ validate_body() {
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/[*_]//g' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.]?([dD][eE][vV]|[pP][oO][sS][tT])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
@@ -516,7 +516,7 @@ validate_body() {
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           public_domain = candidate ~ /[.](ai|app|biz|cc|cloud|co|com|dev|edu|gov|info|io|me|net|org|tech)$/ || \
-            candidate ~ /[.][[:alpha:]][[:alpha:]]$/
+            candidate ~ /[.](ac|co|com|edu|gov|net|org)[.][[:alpha:]][[:alpha:]]$/
           site_context = !explicit_file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
@@ -628,7 +628,7 @@ validate_body() {
     function terminal_abbreviation_count(text, rest, count) {
       rest = text
       gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
-      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)|$)/)) {
+      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|[[:lower:]][[:alnum:]]*([[:upper:]][[:alnum:]]*|[.][[:alnum:].-]+))|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
       }
@@ -651,6 +651,10 @@ validate_body() {
       gsub(/[pP][.][mM][.]/, "pm", rest)
       gsub(/[pP][hH][.][dD][.]/, "PhD", rest)
       gsub(/[mM][.][dD][.]/, "MD", rest)
+      gsub(/[bB][.][sS][cC][.]/, "BSc", rest)
+      gsub(/[mM][.][sS][cC][.]/, "MSc", rest)
+      gsub(/[bB][.][aA][.]/, "BA", rest)
+      gsub(/[mM][.][aA][.]/, "MA", rest)
       while (match(rest, /[.!?]["”’)}\]*_]*([[:space:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
