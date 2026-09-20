@@ -429,7 +429,9 @@ validate_body() {
         dependency = substr(rendered, RSTART, RLENGTH)
         sub(/^📦 New dependency:[[:space:]]+/, "", dependency)
         dependency_lower = tolower(dependency)
-        dependency_filename = dependency_lower ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/ || \
+        dependency_root = dependency_lower
+        sub(/\/.*/, "", dependency_root)
+        dependency_filename = dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/ || \
           dependency ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/
         if (!dependency_filename && (dependency ~ /^@[[:alnum:]][[:alnum:]_.-]*\/[[:alnum:]][[:alnum:]_.-]*$/ || \
             dependency ~ /^[[:alnum:]][[:alnum:]_-]*([.][[:alnum:]][[:alnum:]_-]*)+$/ || \
@@ -567,14 +569,9 @@ validate_body() {
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           public_domain = public_suffix_candidate(candidate)
-          site_context = public_domain && !explicit_file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
-            (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
-            (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
-            (previous == "from" && before_previous == "traffic") || \
-            (previous ~ /^(at|from|on|via)$/ && before_previous ~ /^(available|hosted|published|served)$/) || \
-            following ~ /^(address|audience|customers|domain|host|readers|site|users|visitors|website)$/ || \
-            (following ~ /^(is|remains|was)$/ && after_following ~ /^(available|down|live|offline|online|reachable|unavailable)$/) || \
-            (following == "has" && ((after_following == "an" && third_after == "outage") || after_following == "outage")))
+          site_context = public_domain && !explicit_file_context && !known_filename && \
+            !(following ~ /^(is|was)$/ && \
+              after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/)
           if (site_context) { $field = "site" }
         }
       }
