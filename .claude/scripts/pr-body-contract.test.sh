@@ -1524,11 +1524,11 @@ cat >"${fixture_root}/unit-suffixed-numeric-shorthand.md" <<'EOF'
 
 ## Why
 
-Requests take .5s longer today.
+Requests take .5s or 1.5s longer today.
 
 ## What
 
-Reduce that delay to .25ms for a faster journey.
+Reduce that delay to .25ms or 0.25ms for a faster journey.
 
 Fixes #3402
 EOF

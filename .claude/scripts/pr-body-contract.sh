@@ -437,7 +437,7 @@ validate_body() {
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
     -e 's/(^|[^[:alnum:]_])([[:alpha:]][.]([[:alpha:]][.])+)([^[:alnum:]_]|$)/\1abbreviation\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
-    -e 's/(^|[^[:alnum:]_.])[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%)([^[:alnum:]_-]|$)/\1measurement\3/g' \
+    -e 's/(^|[^[:alnum:]_.])[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%)([^[:alnum:]_-]|$)/\1measurement\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >"${body_symbols}"
   sed -E \
@@ -446,7 +446,7 @@ validate_body() {
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
     -e 's/(^|[^[:alnum:]_])([[:alpha:]][.]([[:alpha:]][.])+)([^[:alnum:]_]|$)/\1abbreviation\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
-    -e 's/(^|[^[:alnum:]_.])[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%)([^[:alnum:]_-]|$)/\1measurement\3/g' \
+    -e 's/(^|[^[:alnum:]_.])[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%)([^[:alnum:]_-]|$)/\1measurement\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >>"${body_symbols}"
   # A dotted token can be either a filename or a public hostname. Preserve it
