@@ -423,7 +423,7 @@ validate_body() {
         rendered = substr(rendered, 1, RSTART - 1) label \
           substr(rendered, RSTART + RLENGTH)
       }
-      if (match(rendered, /^📦 New dependency:[[:space:]]+[-[:alnum:]_.]+(:[-[:alnum:]_.]+)+/)) {
+      if (match(rendered, /^📦 New dependency:[[:space:]]+[^[:space:]]+/)) {
         rendered = "📦 New dependency: dependency" \
           substr(rendered, RSTART + RLENGTH)
       }
@@ -443,6 +443,7 @@ validate_body() {
     -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.-]?([aA][lL][pP][hH][aA]|[bB][eE][tT][aA]|[pP][rR][eE][vV][iI][eE][wW])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.]?([dD][eE][vV]|[pP][oO][sS][tT])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >"${body_symbols}"
@@ -453,6 +454,7 @@ validate_body() {
     -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.-]?([aA][lL][pP][hH][aA]|[bB][eE][tT][aA]|[pP][rR][eE][vV][iI][eE][wW])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.]?([dD][eE][vV]|[pP][oO][sS][tT])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >>"${body_symbols}"
@@ -474,10 +476,11 @@ validate_body() {
       sub(/[.]$/, "", value)
       return value
     }
-    function country_code_domain(candidate, labels, count, tld) {
+    function public_suffix_candidate(candidate, labels, count, tld) {
       count = split(candidate, labels, ".")
       tld = labels[count]
-      return tld ~ /^(ac|ad|ae|af|ag|ai|al|am|ao|aq|ar|as|at|au|aw|ax|az|ba|bb|bd|be|bf|bg|bh|bi|bj|bm|bn|bo|bq|br|bs|bt|bv|bw|by|bz|ca|cc|cd|cf|cg|ch|ci|ck|cl|cm|cn|co|cr|cu|cv|cw|cx|cy|cz|de|dj|dk|dm|do|dz|ec|ee|eg|eh|er|es|et|eu|fi|fj|fk|fm|fo|fr|ga|gb|gd|ge|gf|gg|gh|gi|gl|gm|gn|gp|gq|gr|gs|gt|gu|gw|gy|hk|hm|hn|hr|ht|hu|id|ie|il|im|in|io|iq|ir|is|it|je|jm|jo|jp|ke|kg|kh|ki|km|kn|kp|kr|kw|ky|kz|la|lb|lc|li|lk|lr|ls|lt|lu|lv|ly|ma|mc|md|me|mf|mg|mh|mk|ml|mm|mn|mo|mp|mq|mr|ms|mt|mu|mv|mw|mx|my|mz|na|nc|ne|nf|ng|ni|nl|no|np|nr|nu|nz|om|pa|pe|pf|pg|ph|pk|pl|pm|pn|pr|ps|pt|pw|py|qa|re|ro|rs|ru|rw|sa|sb|sc|sd|se|sg|sh|si|sj|sk|sl|sm|sn|so|sr|ss|st|su|sv|sx|sy|sz|tc|td|tf|tg|th|tj|tk|tl|tm|tn|to|tr|tt|tv|tw|tz|ua|ug|uk|um|us|uy|uz|va|vc|ve|vg|vi|vn|vu|wf|ws|ye|yt|za|zm|zw)$/
+      return tld ~ /^[[:alpha:]][[:alpha:]]+$/ && \
+        tld !~ /^(custom|example|invalid|local|localhost|test)$/
     }
     {
       for (field = 1; field <= NF; field++) {
@@ -506,8 +509,8 @@ validate_body() {
           $field = "file.name"
           continue
         }
-        known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/
-        email_shape = token ~ /^[[:alnum:]_%+\047-]+([.][[:alnum:]_%+\047-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
+        known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/
+        email_shape = token ~ /^[[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+([.][[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
         if (!explicit_file_context && email_shape) {
           $field = (known_filename || file_action) ? "file.name" : "email"
           continue
@@ -522,9 +525,7 @@ validate_body() {
           continue
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
-          public_domain = candidate ~ /[.](academy|aero|agency|app|art|asia|biz|blog|cloud|club|com|company|coop|dev|digital|edu|email|events|finance|foundation|fun|gov|group|guru|info|international|jobs|life|live|media|mobi|museum|name|net|network|news|online|org|photography|pro|shop|site|solutions|space|store|studio|support|systems|tech|technology|tel|today|tools|travel|wiki|work|world|xxx|xyz|zone)$/ || \
-            country_code_domain(candidate) || \
-            candidate ~ /[.](ac|co|com|edu|gov|net|org)[.][[:alpha:]][[:alpha:]]$/
+          public_domain = public_suffix_candidate(candidate)
           site_context = public_domain && !explicit_file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
@@ -636,6 +637,7 @@ validate_body() {
     function terminal_abbreviation_count(text, rest, count) {
       rest = text
       gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
+      gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+[[:upper:]][[:alpha:]-]*[[:space:]]+[[:upper:]][[:alpha:]-]*/, "geographic-name", rest)
       gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+(Agency|Air|Army|Congress|Court|Department|Embassy|Force|Forces|Government|Marine|Marines|Navy|Parliament)/, "geographic-name", rest)
       while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|[[:lower:]][[:alnum:]]*([[:upper:]][[:alnum:]]*|[.][[:alnum:].-]+))|$)/)) {
         count++
