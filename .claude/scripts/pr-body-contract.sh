@@ -488,10 +488,12 @@ validate_body() {
             before_previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/)
         file_subject = file_context && after_following ~ /^(is|was)$/ && \
           third_after ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
+        numeric_file_subject = token ~ /[.][[:digit:]]+$/ && following ~ /^(is|was)$/ && \
+          after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
               (candidate ~ /[.]/ || token ~ /^[.]/ || file_action || file_subject)) || \
             (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
-            (file_action && token ~ /[.][[:digit:]]+$/)) {
+            (file_action && token ~ /[.][[:digit:]]+$/) || numeric_file_subject) {
           $field = "file.name"
           continue
         }
@@ -507,12 +509,14 @@ validate_body() {
           $field = known_filename ? "file.name" : (email_context ? "email" : "file.name")
           continue
         }
-        if (token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|bps|kbps|mbps|gbps|tbps|kibps|mibps|gibps|tibps|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x|st|nd|rd|th)(\/(s|min|h|d|day))?$/) {
+        if (token ~ /^[[:digit:]]*[.][[:digit:]]+e[+-]?[[:digit:]]+$/ || \
+            token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|bps|kbps|mbps|gbps|tbps|kibps|mibps|gibps|tibps|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x|st|nd|rd|th)(\/(s|min|h|d|day))?$/) {
           $field = "measurement"
           continue
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
-          public_domain = candidate ~ /[.](ai|app|biz|cc|cloud|co|com|dev|edu|gov|info|io|me|net|org|tech)$/
+          public_domain = candidate ~ /[.](ai|app|biz|cc|cloud|co|com|dev|edu|gov|info|io|me|net|org|tech)$/ || \
+            candidate ~ /[.][[:alpha:]][[:alpha:]]$/
           site_context = !explicit_file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
@@ -624,7 +628,7 @@ validate_body() {
     function terminal_abbreviation_count(text, rest, count) {
       rest = text
       gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
-      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+[[:upper:][:digit:]]|$)/)) {
+      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
       }
