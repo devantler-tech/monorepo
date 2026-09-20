@@ -21,6 +21,7 @@ jobs:
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
+      cleanup-trap-fail-closed: ${{ steps.filter.outputs.cleanup-trap-fail-closed }}
       unsigned-push-guard: ${{ steps.filter.outputs.unsigned-push-guard }}
       branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
       worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
@@ -165,6 +166,11 @@ jobs:
             safe-clone:
               - '.claude/scripts/safe-clone.sh'
               - '.claude/scripts/safe-clone.test.sh'
+            cleanup-trap-fail-closed:
+              - '.claude/scripts/cleanup-trap-fail-closed.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             unsigned-push-guard:
               - '.claude/scripts/unsigned-push-guard.sh'
               - '.claude/scripts/unsigned-push-guard.test.sh'
@@ -885,6 +891,30 @@ jobs:
       # marker) — no network, no real credentials involved.
       - name: Self-test the safe-clone guard
         run: bash .claude/scripts/safe-clone.test.sh
+
+  test-cleanup-trap-fail-closed:
+    name: Test cleanup-trap fail-closed shape
+    needs: changes
+    if: needs.changes.outputs.cleanup-trap-fail-closed == 'true'
+    # The matrix IS the measurement: ubuntu-latest runs bash 5, macos-latest runs
+    # bash 3.2, and the defect this shape guards against may exist on only one of
+    # them. Running on a single runner would leave the other version unmeasured.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Self-contained: the fixtures are written to a temporary directory at run
+      # time. No network, no credentials, no repository state involved.
+      - name: Self-test the fail-closed cleanup-trap shape
+        run: bash .claude/scripts/cleanup-trap-fail-closed.test.sh
 
   test-unsigned-push-guard:
     needs: changes
@@ -2222,6 +2252,7 @@ jobs:
       - test-worktree-claim
       - test-flow-scorecard
       - test-safe-clone
+      - test-cleanup-trap-fail-closed
       - test-unsigned-push-guard
       - test-branch-cleanup
       - test-worktree-cleanup
@@ -2294,6 +2325,7 @@ jobs:
             ${{ needs.test-worktree-claim.result }}
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
+            ${{ needs.test-cleanup-trap-fail-closed.result }}
             ${{ needs.test-unsigned-push-guard.result }}
             ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-worktree-cleanup.result }}
