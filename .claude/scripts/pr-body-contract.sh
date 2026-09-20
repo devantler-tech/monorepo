@@ -435,16 +435,18 @@ validate_body() {
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >"${body_symbols}"
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/[*_]//g' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >>"${body_symbols}"
   # A dotted token can be a filename, email address, measurement, or public
@@ -473,8 +475,12 @@ validate_body() {
           $field = "file.name"
           continue
         }
-        known_filename = candidate ~ /[.](awk|c|cc|cjs|conf|cpp|cs|css|env|go|gradle|h|hcl|hpp|htm|html|ini|java|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|tf|toml|ts|tsx|xml|yaml|yml)$/
+        known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cjs|conf|cpp|cs|css|env|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|webp|xml|yaml|yml)$/
         token = prose_token($field)
+        if (known_filename && candidate ~ /@/) {
+          $field = "file.name"
+          continue
+        }
         if (!file_context && token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           $field = "email"
           continue
