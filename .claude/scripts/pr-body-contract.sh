@@ -431,7 +431,9 @@ validate_body() {
         dependency_lower = tolower(dependency)
         dependency_root = dependency_lower
         sub(/\/.*/, "", dependency_root)
-        dependency_filename = dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/ || \
+        dependency_dot_segment = dependency ~ /(^|\/)[.][.]?(\/|$)/
+        dependency_filename = dependency_dot_segment || \
+          dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/ || \
           dependency ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/
         if (!dependency_filename && (dependency ~ /^@[[:alnum:]][[:alnum:]_.-]*\/[[:alnum:]][[:alnum:]_.-]*$/ || \
             dependency ~ /^[[:alnum:]][[:alnum:]_-]*([.][[:alnum:]][[:alnum:]_-]*)+$/ || \
@@ -479,6 +481,8 @@ validate_body() {
   # A dotted token can be a filename, email address, measurement, or public
   # hostname. Normalize only the non-filename forms whose syntax or surrounding
   # product prose identifies them; filename evidence takes precedence.
+  # Curly quotes are literal Markdown delimiters in the AWK regex.
+  # shellcheck disable=SC1112
   awk -v public_tld_file="${public_tlds}" '
     BEGIN { RS = "" }
     function normalized_word(text, value) {
@@ -528,8 +532,9 @@ validate_body() {
         after_following = field + 1 < NF ? normalized_word($(field + 2)) : ""
         third_after = field + 2 < NF ? normalized_word($(field + 3)) : ""
         token = prose_token($field)
-        file_context = following ~ /^(file|filename)$/
-        path_context = following == "path"
+        same_sentence_context = $field !~ /[.!?]["”’)}\]*_]*$/
+        file_context = same_sentence_context && following ~ /^(file|filename)$/
+        path_context = same_sentence_context && following == "path"
         explicit_file_context = file_context || path_context
         file_action = previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/ || \
           (previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
@@ -569,7 +574,7 @@ validate_body() {
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           public_domain = public_suffix_candidate(candidate)
-          site_context = public_domain && !explicit_file_context && !known_filename && \
+          site_context = public_domain && !explicit_file_context && !file_action && !known_filename && \
             !(following ~ /^(is|was)$/ && \
               after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/)
           if (site_context) { $field = "site" }
@@ -675,6 +680,7 @@ validate_body() {
     function terminal_abbreviation_count(text, rest, count) {
       rest = text
       gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
+      gsub(/([pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.])[[:space:]]+(Program|Programme)/, "qualification-program", rest)
       gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+[[:upper:]][[:alpha:]-]*[[:space:]]+(Administration|Agency|Association|Authority|Bank|Bureau|Commission|Committee|Council|Court|Department|Embassy|Federation|Force|Forces|Government|Institute|Islands|Marine|Marines|Ministry|Navy|Office|Organization|Parliament|Service|Society|Union|University)/, "geographic-name", rest)
       gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+(Agency|Air|Army|Congress|Court|Department|Embassy|Force|Forces|Government|Marine|Marines|Navy|Parliament)/, "geographic-name", rest)
       while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.]|[dD][.][cC][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|[[:lower:]][[:alnum:]]*([[:upper:]][[:alnum:]]*|[.][[:alnum:].-]+))|$)/)) {
