@@ -615,7 +615,7 @@ validate_body() {
           $field = "business-term"
           continue
         }
-        known_filename = domain_candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml|zip)$/
+        known_filename = domain_candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|mov|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml|zip)$/
         mailbox_token = tolower($field)
         sub(/^[^"]*/, "", mailbox_token)
         gsub(/[^[:alnum:]-]+$/, "", mailbox_token)
@@ -896,7 +896,7 @@ validate_body() {
   # Reject arbitrary filename extensions and dotfiles rather than maintaining
   # a partial portfolio extension list. Unit-suffixed fractions and hostnames
   # have already been normalized above.
-  if grep -Eiq '(^|[^[:alnum:]_.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+([[:alpha:]_][[:alnum:]_.-]*|[.-][[:alnum:]_.-]+))|[[:alnum:]_.-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*))([^[:alnum:]_.-]|[.]+([^[:alnum:]_.-]|$)|$)' \
+  if grep -Eiq '(^|[^[:alnum:]_.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+([[:alpha:]_][[:alnum:]_.-]*|[.-][[:alnum:]_.-]+))|[[:alnum:]_.-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)|[[:alpha:]_][[:alnum:]_.-]*[.][[:digit:]]+)([^[:alnum:]_.-]|[.]+([^[:alnum:]_.-]|$)|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
