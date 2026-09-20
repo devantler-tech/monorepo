@@ -432,7 +432,9 @@ validate_body() {
         dependency_root = dependency_lower
         sub(/\/.*/, "", dependency_root)
         dependency_dot_segment = dependency ~ /(^|\/)[.][.]?(\/|$)/
-        dependency_filename = dependency_dot_segment || \
+        dependency_numeric_suffix = dependency_root !~ /:/ && \
+          dependency_root ~ /[.][[:digit:]][[:alnum:]_-]*$/
+        dependency_filename = dependency_dot_segment || dependency_numeric_suffix || \
           dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/ || \
           dependency ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/
         if (!dependency_filename && (dependency ~ /^@[[:alnum:]][[:alnum:]_.-]*\/[[:alnum:]][[:alnum:]_.-]*$/ || \
@@ -543,7 +545,7 @@ validate_body() {
           third_after ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         product_file_phrase = file_context && after_following ~ /^(upload|uploads)$/
         decimal_number = token ~ /^[[:digit:]]+([.][[:digit:]]+)+$/
-        numeric_file_subject = token ~ /[.][[:digit:]]+$/ && !decimal_number && following ~ /^(is|was)$/ && \
+        numeric_file_subject = token ~ /[.][[:digit:]][[:alnum:]_-]*$/ && !decimal_number && following ~ /^(is|was)$/ && \
           after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
               (candidate ~ /[.]/ || token ~ /^[.]/ || (file_action && !product_file_phrase) || file_subject)) || \

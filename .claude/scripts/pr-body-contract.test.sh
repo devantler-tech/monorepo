@@ -2043,6 +2043,16 @@ expect_fail "email-shaped asset in subject position" \
   "${subject}" check --repo devantler-tech/platform \
   --body-file "${fixture_root}/subject-email-shaped-asset.md"
 
+sed 's/logo@2x.png/logo@2x.3mf/' \
+  "${fixture_root}/subject-email-shaped-asset.md" \
+  >"${fixture_root}/subject-numeric-suffix-email-shaped-asset.md"
+expect_fail "numeric-suffix email-shaped asset in subject position" \
+  "PR body must not contain implementation or validation detail" env \
+  PATH="${fixture_root}/bin:${PATH}" GH_MODE=repo \
+  GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
+  "${subject}" check --repo devantler-tech/platform \
+  --body-file "${fixture_root}/subject-numeric-suffix-email-shaped-asset.md"
+
 sed -e 's/Change the logo@2x.png file/Replace logo@2x.png/' \
   "${fixture_root}/email-shaped-asset.md" \
   >"${fixture_root}/email-shaped-asset-action.md"
@@ -3988,6 +3998,26 @@ expect_fail "dependency note nested filename remains implementation detail" \
   GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
   "${subject}" check --repo devantler-tech/platform \
   --body-file "${fixture_root}/dependency-note-nested-filename.md"
+
+sed 's#../../src/config.yaml#archive.7z#' \
+  "${fixture_root}/dependency-note-path.md" \
+  >"${fixture_root}/dependency-note-numeric-suffix-filename.md"
+expect_fail "dependency note numeric-suffix filename remains implementation detail" \
+  "PR body must not contain implementation or validation detail" env \
+  PATH="${fixture_root}/bin:${PATH}" GH_MODE=repo \
+  GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
+  "${subject}" check --repo devantler-tech/platform \
+  --body-file "${fixture_root}/dependency-note-numeric-suffix-filename.md"
+
+sed 's#../../src/config.yaml#archive.7z/foo#' \
+  "${fixture_root}/dependency-note-path.md" \
+  >"${fixture_root}/dependency-note-nested-numeric-suffix-filename.md"
+expect_fail "dependency note nested numeric-suffix filename remains implementation detail" \
+  "PR body must not contain implementation or validation detail" env \
+  PATH="${fixture_root}/bin:${PATH}" GH_MODE=repo \
+  GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
+  "${subject}" check --repo devantler-tech/platform \
+  --body-file "${fixture_root}/dependency-note-nested-numeric-suffix-filename.md"
 
 sed 's#../../src/config.yaml#README#' "${fixture_root}/dependency-note-path.md" \
   >"${fixture_root}/dependency-note-filename.md"
