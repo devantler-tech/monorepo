@@ -432,14 +432,27 @@ validate_body() {
         dependency_root = dependency_lower
         sub(/\/.*/, "", dependency_root)
         dependency_dot_segment = dependency ~ /(^|\/)[.][.]?(\/|$)/
+        dependency_known_dotted_package = dependency_lower ~ /^(ruamel[.]yaml)$/
         dependency_namespaced_package = dependency ~ \
-          /^[[:upper:]][[:alnum:]_-]*[.][[:upper:]][[:alnum:]_-]*([.][[:upper:]][[:alnum:]_-]*)*$/
+          /^[[:upper:]][[:alnum:]_-]*[.][[:upper:]][[:alnum:]_-]*([.][[:upper:]][[:alnum:]_-]*)*$/ || \
+          dependency_known_dotted_package
         dependency_numeric_suffix = dependency_root !~ /:/ && \
           dependency_root ~ /[.][[:digit:]][[:alnum:]_-]*$/
         dependency_filename = dependency_dot_segment || dependency_numeric_suffix || \
           (!dependency_namespaced_package && \
             dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/) || \
           dependency ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/
+        dependency_segment_count = split(dependency_lower, dependency_segments, "/")
+        for (dependency_segment_index = 2; \
+            dependency_segment_index <= dependency_segment_count; \
+            dependency_segment_index++) {
+          dependency_segment = dependency_segments[dependency_segment_index]
+          if (dependency_segment ~ /[.][[:digit:]][[:alnum:]_-]*$/ || \
+              dependency_segment ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/ || \
+              toupper(dependency_segment) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/) {
+            dependency_filename = 1
+          }
+        }
         if (!dependency_filename && (dependency ~ /^@[[:alnum:]][[:alnum:]_.-]*\/[[:alnum:]][[:alnum:]_.-]*$/ || \
             dependency ~ /^[[:alnum:]][[:alnum:]_-]*([.][[:alnum:]][[:alnum:]_-]*)+$/ || \
             dependency ~ /^[[:alnum:]][[:alnum:]_.-]*:[[:alnum:]][[:alnum:]_.-]*(:[[:alnum:]][[:alnum:]_.+-]*)?(:[[:alnum:]][[:alnum:]_.+-]*)?(:[[:alnum:]][[:alnum:]_.+-]*)?$/ || \
@@ -543,14 +556,14 @@ validate_body() {
         file_context = same_sentence_context && following ~ /^(file|filename)$/
         path_context = same_sentence_context && following == "path"
         explicit_file_context = file_context || path_context
-        file_action = previous ~ /^(change|copy|create|delete|download|edit|fix|modify|move|open|remove|rename|replace|save|update|upload)$/ || \
+        file_action = previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/ || \
           (previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
-            before_previous ~ /^(change|copy|create|delete|download|edit|fix|modify|move|open|remove|rename|replace|save|update|upload)$/)
+            before_previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/)
         initialism_candidate = $field
         gsub(/^[^[:alnum:].]+/, "", initialism_candidate)
         gsub(/[^[:alnum:].]+$/, "", initialism_candidate)
         initialism_continuation = initialism_candidate ~ /^([[:upper:]][.]){2,}$/ && \
-          field < NF && $(field + 1) ~ /^[[:lower:]]/
+          following ~ /^[[:alpha:]]/
         if (initialism_continuation && !file_action) {
           $field = "initialism"
           continue
@@ -559,17 +572,20 @@ validate_body() {
           third_after ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         product_file_phrase = file_context && \
           (after_following ~ /^(upload|uploads)$/ || \
-            (previous ~ /^(copy|save|upload)$/ && \
+            (previous ~ /^(attach|copy|extract|save|upload)$/ && \
               candidate ~ /^(a|an|any|each|every|my|our|that|the|their|these|this|those|your)$/))
         decimal_number = token ~ /^[[:digit:]]+([.][[:digit:]]+)+$/
         literal_quantity = !file_action && !explicit_file_context && \
           $field ~ /^[[:digit:]]*[.][[:digit:]]+[[:upper:]][[:upper:]]?[[:upper:]]?[[:upper:]]?([^[:alnum:]_]|$)/
         numeric_file_subject = token ~ /[.][[:digit:]][[:alnum:]_-]*$/ && !decimal_number && following ~ /^(is|was)$/ && \
           after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
+        reserved_file_subject = following ~ /^(is|was)$/ && \
+          after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
               (candidate ~ /[.]/ || token ~ /^[.]/ || (file_action && !product_file_phrase) || file_subject)) || \
             (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
-            (file_action && toupper(candidate) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)$/) || \
+            ((file_action || reserved_file_subject) && \
+              toupper(candidate) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)$/) || \
             (file_action && token ~ /[.][[:digit:]]+$/ && !decimal_number) || numeric_file_subject) {
           $field = "file.name"
           continue
