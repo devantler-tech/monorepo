@@ -455,6 +455,7 @@ validate_body() {
   # hostname. Normalize only the non-filename forms whose syntax or surrounding
   # product prose identifies them; filename evidence takes precedence.
   awk '
+    BEGIN { RS = "" }
     function normalized_word(text, value) {
       value = tolower(text)
       gsub(/^[^[:alnum:]]+/, "", value)
@@ -478,22 +479,25 @@ validate_body() {
         after_following = field + 1 < NF ? normalized_word($(field + 2)) : ""
         third_after = field + 2 < NF ? normalized_word($(field + 3)) : ""
         token = prose_token($field)
-        file_context = following ~ /^(file|filename|path)$/
+        file_context = following ~ /^(file|filename)$/
+        path_context = following == "path"
+        explicit_file_context = file_context || path_context
         file_action = previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/ || \
           (previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
             before_previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/)
-        if (file_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) {
+        if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/) || \
+            (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action))) {
           $field = "file.name"
           continue
         }
-        known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|webp|xml|yaml|yml)$/
+        known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/
         email_shape = token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
         email_context = previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/ || \
           (previous == "to" && before_previous ~ /^(email|emails|message|messages|send|sent|write)$/) || \
           (previous == "at" && (before_previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/ || \
             third_previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/)) || \
           following ~ /^(address|can|cannot|could|does|email|has|is|mailbox|was|will|would)$/
-        if (!file_context && email_shape) {
+        if (!explicit_file_context && email_shape) {
           $field = email_context ? "email" : "file.name"
           continue
         }
@@ -502,7 +506,7 @@ validate_body() {
           continue
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
-          site_context = !file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
+          site_context = !explicit_file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
             (previous ~ /^(at|from|on|via)$/ && before_previous ~ /^(available|hosted|published|served)$/) || \
@@ -623,6 +627,7 @@ validate_body() {
       gsub(/[eE][.][uU][.]/, "EU", rest)
       gsub(/[aA][.][mM][.]/, "am", rest)
       gsub(/[pP][.][mM][.]/, "pm", rest)
+      gsub(/[pP][hH][.][dD][.]/, "PhD", rest)
       while (match(rest, /[.!?]["”’)}\]*_]*([[:space:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
@@ -737,7 +742,7 @@ validate_body() {
   # Reject arbitrary filename extensions and dotfiles rather than maintaining
   # a partial portfolio extension list. Unit-suffixed fractions and hostnames
   # have already been normalized above.
-  if grep -Eiq '(^|[^[:alnum:]_@.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+([[:alpha:]_][[:alnum:]_.-]*|[.-][[:alnum:]_.-]+))|[[:alnum:]_.-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*))([^[:alnum:]_.-]|[.]+([^[:alnum:]_.-]|$)|$)' \
+  if grep -Eiq '(^|[^[:alnum:]_.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+([[:alpha:]_][[:alnum:]_.-]*|[.-][[:alnum:]_.-]+))|[[:alnum:]_.-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*))([^[:alnum:]_.-]|[.]+([^[:alnum:]_.-]|$)|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
