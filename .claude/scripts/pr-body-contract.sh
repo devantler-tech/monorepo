@@ -543,10 +543,13 @@ validate_body() {
         file_context = same_sentence_context && following ~ /^(file|filename)$/
         path_context = same_sentence_context && following == "path"
         explicit_file_context = file_context || path_context
-        file_action = previous ~ /^(change|create|delete|download|edit|fix|modify|move|open|remove|rename|replace|update)$/ || \
+        file_action = previous ~ /^(change|copy|create|delete|download|edit|fix|modify|move|open|remove|rename|replace|save|update|upload)$/ || \
           (previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
-            before_previous ~ /^(change|create|delete|download|edit|fix|modify|move|open|remove|rename|replace|update)$/)
-        initialism_continuation = $field ~ /^([[:upper:]][.]){2,}$/ && \
+            before_previous ~ /^(change|copy|create|delete|download|edit|fix|modify|move|open|remove|rename|replace|save|update|upload)$/)
+        initialism_candidate = $field
+        gsub(/^[^[:alnum:].]+/, "", initialism_candidate)
+        gsub(/[^[:alnum:].]+$/, "", initialism_candidate)
+        initialism_continuation = initialism_candidate ~ /^([[:upper:]][.]){2,}$/ && \
           field < NF && $(field + 1) ~ /^[[:lower:]]/
         if (initialism_continuation && !file_action) {
           $field = "initialism"
@@ -554,14 +557,19 @@ validate_body() {
         }
         file_subject = file_context && after_following ~ /^(is|was)$/ && \
           third_after ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
-        product_file_phrase = file_context && after_following ~ /^(upload|uploads)$/
+        product_file_phrase = file_context && \
+          (after_following ~ /^(upload|uploads)$/ || \
+            (previous ~ /^(copy|save|upload)$/ && \
+              candidate ~ /^(a|an|any|each|every|my|our|that|the|their|these|this|those|your)$/))
         decimal_number = token ~ /^[[:digit:]]+([.][[:digit:]]+)+$/
-        literal_quantity = $field ~ /^[[:digit:]]*[.][[:digit:]]+[[:upper:]][[:upper:]]?[[:upper:]]?[[:upper:]]?([^[:alnum:]_]|$)/
+        literal_quantity = !file_action && !explicit_file_context && \
+          $field ~ /^[[:digit:]]*[.][[:digit:]]+[[:upper:]][[:upper:]]?[[:upper:]]?[[:upper:]]?([^[:alnum:]_]|$)/
         numeric_file_subject = token ~ /[.][[:digit:]][[:alnum:]_-]*$/ && !decimal_number && following ~ /^(is|was)$/ && \
           after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
               (candidate ~ /[.]/ || token ~ /^[.]/ || (file_action && !product_file_phrase) || file_subject)) || \
             (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
+            (file_action && toupper(candidate) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)$/) || \
             (file_action && token ~ /[.][[:digit:]]+$/ && !decimal_number) || numeric_file_subject) {
           $field = "file.name"
           continue
