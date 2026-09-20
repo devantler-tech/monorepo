@@ -418,11 +418,20 @@ validate_body() {
   if grep -Fq '](' "${body_prose}"; then
     fail "PR body contains an unsupported inline link shape"
   fi
+  # Scan both authored tokens and their emphasis-normalized rendered form.
+  # Keeping the authored view preserves literal underscore detection, while
+  # the rendered view rejoins identifiers or paths split by emphasis markers.
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
-    "${body_validation}" >"${body_symbols}"
+    "${body_prose}" >"${body_symbols}"
+  sed -E \
+    -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
+    -e 's/[*_]//g' \
+    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's#https?://[^[:space:])}>]+#url#g' \
+    "${body_prose}" >>"${body_symbols}"
   previous_line=0
   while IFS= read -r structure_line; do
     if [[ "${structure_line}" == '@RELATIONSHIP:'*'@' ]]; then
