@@ -658,7 +658,7 @@ validate_body() {
   fi
   # Reject dotfiles and the file types used across this portfolio without
   # treating every bare public domain as an implementation filename.
-  if grep -Eiq '(^|[^[:alnum:]_@.-])([.][[:alnum:]_][[:alnum:]_.-]*|[[:alnum:]_.-]+[.](astro|mjs|cjs|mts|cts|vue|svelte|rb|c|h|cc|cpp|cxx|hpp|hh|ps1|psm1|fs|fsx|fsproj|csproj|sln|props|targets|bicep|rego|cue|nix|tfvars|gotmpl|tmpl|tpl))([^[:alnum:]_.-]|$)' \
+  if grep -Eiq '(^|[^[:alnum:]_@.-])([.][[:alpha:]_][[:alnum:]_.-]*|[[:alnum:]_.-]+[.](astro|mjs|cjs|mts|cts|vue|svelte|rb|c|h|cc|cpp|cxx|hpp|hh|ps1|psm1|fs|fsx|fsproj|csproj|sln|props|targets|bicep|rego|cue|nix|tfvars|gotmpl|tmpl|tpl))([^[:alnum:]_.-]|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
