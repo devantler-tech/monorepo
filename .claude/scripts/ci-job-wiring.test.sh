@@ -247,6 +247,29 @@ expect_ok "blocking job gated on the event, wrapped"
 fixture; edit '.jobs.advisory.if = false'
 expect_ok "non-blocking job may carry any condition"
 
+# A reference outside the job-level `if` does not decide when the job runs, so it must not exempt the
+# job from the blocking-condition allow-list. Here `if: false` takes a required check out of the gate
+# while a step env merely mentions an output — the old whole-job scan read that as "filtered".
+fixture
+# shellcheck disable=SC2016 # the GitHub expression must reach yq literally, unexpanded.
+edit '.jobs.unfiltered.needs = ["changes"] |
+  .jobs.unfiltered.if = false |
+  .jobs.unfiltered.steps = [{"run": "echo hi", "env": {"A": "${{ needs.changes.outputs.alpha }}"}}]'
+expect_defect "step reference does not exempt a switchable blocking job" \
+  "unfiltered: job-level if is not an allowed condition for a blocking job"
+
+# A blocking job must not depend on a non-blocking one: if the prerequisite fails the dependent is
+# skipped, and the aggregate counts a skip as a pass, so the required check stops running silently.
+fixture; edit '.jobs.test-alpha.needs = ["changes", "advisory"]'
+expect_defect "blocking job needs a non-blocking one" \
+  "test-alpha: needs 'advisory', which is non-blocking"
+
+# The same hole one level up: renaming the changes producer non-blocking drops it from the gate, but
+# every filtered job needs it, so the dependency check refuses that spelling too.
+fixture; edit '.jobs.changes.name = "Detect changes (non-blocking)"'
+expect_defect "changes producer renamed non-blocking" \
+  "needs 'changes', which is non-blocking"
+
 # No condition at all stays the normal case.
 fixture; expect_ok "blocking job with no condition"
 

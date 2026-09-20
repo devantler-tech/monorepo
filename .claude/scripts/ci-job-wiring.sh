@@ -143,26 +143,33 @@ while IFS= read -r job; do
     defect "$job: reads needs with index syntax; write needs.changes.outputs.<name> so the wiring can be checked"
   fi
   refs="$(grep -oE 'needs\.changes\.outputs\.[A-Za-z0-9_-]+' "$tmp/job.json" | sed 's/^needs\.changes\.outputs\.//' | sort -u || true)"
-  # A job that reads no changes output is not path-filtered, so nothing above governs it. Its own
-  # `if` alone decides whether it runs, and the allow-list below is what checks that.
-  if [[ -z "$refs" ]]; then printf '%s\n' "$job" >>"$tmp/unfiltered"; continue; fi
-  # Only the job-level `if` filters the job, and only in one of two shapes (an allow-list: every other
-  # spelling, including a negated or quoted reference, reads as no filter):
+  # Whether a job is path-filtered is decided by its job-level `if` ALONE. A reference anywhere else
+  # in the job — a step `env`, a `run` string, a `with:` input — changes nothing about when the job
+  # runs, so reading one must never exempt the job from the blocking-condition allow-list below.
+  # Only these two shapes filter a job (an allow-list: every other spelling, including a negated or
+  # quoted reference, reads as no filter):
   #   needs.changes.outputs.<name> == 'true'
   #   needs.changes.outputs.<name> == 'true' && (<a predicate that reads no changes output>)
-  condition="$(JOB="$job" yq -r '.jobs[strenv(JOB)].if // ""' "$workflow" | tr -s '[:space:]' ' ' |
-    sed -E 's/^ *(\$\{\{ *)?//; s/ *(\}\} *)?$//')"
+  # Presence is read through job_condition's has(), never `//`, which reads a YAML `false` as absent.
+  condition="$(job_condition "$job" || true)"
   if filter="$(filter_output "$condition")"; then
     printf '%s\n' "$filter" >>"$tmp/referenced"
   elif [[ "$condition" == *needs.changes.outputs.* ]]; then
     defect "$job: job-level if is not needs.changes.outputs.<name> == 'true' (optionally with the same-repository clause), so it does not filter the job"
+  else
+    # No changes output governs this job, so its own `if` is the only thing deciding whether it runs.
+    printf '%s\n' "$job" >>"$tmp/unfiltered"
   fi
-  needs_changes="$(JOB="$job" yq -r '[.jobs[strenv(JOB)].needs] | flatten | map(select(. == "changes")) | length' "$workflow")"
-  [[ "$needs_changes" != 0 ]] || defect "$job: reads needs.changes.outputs but does not list 'changes' in needs"
-  while IFS= read -r ref; do
-    grep -qx -- "$ref" "$tmp/outputs" ||
-      defect "$job: reads needs.changes.outputs.$ref, which the changes job does not declare (the job would skip forever)"
-  done <<<"$refs"
+  # Reference hygiene applies to every reference in the job, wherever it appears: a step reading an
+  # output the changes job does not declare is still broken wiring, even though it filters nothing.
+  if [[ -n "$refs" ]]; then
+    needs_changes="$(JOB="$job" yq -r '[.jobs[strenv(JOB)].needs] | flatten | map(select(. == "changes")) | length' "$workflow")"
+    [[ "$needs_changes" != 0 ]] || defect "$job: reads needs.changes.outputs but does not list 'changes' in needs"
+    while IFS= read -r ref; do
+      grep -qx -- "$ref" "$tmp/outputs" ||
+        defect "$job: reads needs.changes.outputs.$ref, which the changes job does not declare (the job would skip forever)"
+    done <<<"$refs"
+  fi
 done <"$tmp/jobs"
 sort -u -o "$tmp/referenced" "$tmp/referenced"
 while IFS= read -r name; do
@@ -186,6 +193,16 @@ read_set nonblocking '.jobs | to_entries | .[] | select((.value.name // "") | te
 while IFS= read -r job; do
   [[ -n "$job" && "$job" != status ]] || continue
   grep -qx -- "$job" "$tmp/nonblocking" && continue
+  # A blocking job must not depend on a non-blocking one. If the prerequisite fails, this job is
+  # skipped, and the aggregate counts a skip as a pass — so a required check silently stops running.
+  # Only direct needs are read: every intermediate job in a chain is itself blocking and checked here,
+  # which is also what stops the `changes` producer being renamed non-blocking out of the gate.
+  while IFS= read -r need; do
+    [[ -n "$need" ]] || continue
+    if grep -qx -- "$need" "$tmp/nonblocking"; then
+      defect "$job: needs '$need', which is non-blocking; if that job fails this one skips and the gate counts the skip as a pass"
+    fi
+  done < <(JOB="$job" yq -r '[.jobs[strenv(JOB)].needs] | flatten | .[] | select(. != null)' "$workflow")
   grep -qx -- "$job" "$tmp/status_needs" || defect "$job: missing from status.needs, so it never gates the merge"
   grep -qx -- "$job" "$tmp/status_results" || defect "$job: missing from status job-results, so its failure is never counted"
   # A job whose result the gate counts, and which no changes output filters, must not be able to
