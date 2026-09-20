@@ -431,14 +431,19 @@ validate_body() {
         dependency_lower = tolower(dependency)
         dependency_root = dependency_lower
         sub(/\/.*/, "", dependency_root)
+        dependency_original_root = dependency
+        sub(/\/.*/, "", dependency_original_root)
         dependency_dot_segment = dependency ~ /(^|\/)[.][.]?(\/|$)/
-        dependency_known_dotted_package = dependency_lower ~ /^(ruamel[.]yaml)$/
+        dependency_known_dotted_package = dependency_lower ~ /^(ruamel[.]yaml|zope[.]interface)$/
         dependency_namespaced_package = dependency ~ \
           /^[[:upper:]][[:alnum:]_-]*[.][[:upper:]][[:alnum:]_-]*([.][[:upper:]][[:alnum:]_-]*)*$/ || \
           dependency_known_dotted_package
+        dependency_arbitrary_root_suffix = dependency !~ /\// && \
+          dependency_original_root ~ /^[[:lower:][:digit:]_-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)$/
         dependency_numeric_suffix = dependency_root !~ /:/ && \
           dependency_root ~ /[.][[:digit:]][[:alnum:]_-]*$/
         dependency_filename = dependency_dot_segment || dependency_numeric_suffix || \
+          (!dependency_namespaced_package && dependency_arbitrary_root_suffix) || \
           (!dependency_namespaced_package && \
             dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|mov|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml|zip)$/) || \
           dependency ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/
@@ -520,6 +525,9 @@ validate_body() {
       sub(/[.]$/, "", value)
       return value
     }
+    function file_action_word(word) {
+      return word ~ /^(attach|attached|attaching|change|changed|changing|copy|copied|copying|create|created|creating|delete|deleted|deleting|download|downloaded|downloading|edit|edited|editing|extract|extracted|extracting|fix|fixed|fixing|modify|modified|modifying|move|moved|moving|open|opened|opening|remove|removed|removing|rename|renamed|renaming|replace|replaced|replacing|save|saved|saving|update|updated|updating|upload|uploaded|uploading)$/
+    }
     function public_suffix_candidate(candidate, labels, count, tld, line, saved_rs) {
       if (!public_tlds_loaded) {
         saved_rs = RS
@@ -579,13 +587,13 @@ validate_body() {
           previous ~ /^(asset|attachment|file|filename|path)$/
         explicit_file_context = file_context || path_context || leading_file_context
         direct_file_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
-          previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/
+          file_action_word(previous)
         article_file_action = before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
           previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
-          before_previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/
+          file_action_word(before_previous)
         modifier_file_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
           before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && previous != "" && \
-          before_previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/
+          file_action_word(before_previous)
         file_action = direct_file_action || article_file_action || modifier_file_action
         direct_site_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
           previous ~ /^(browse|reach|visit)$/
@@ -658,7 +666,7 @@ validate_body() {
           continue
         }
         if (previous ~ /^(group|option|phase|plan|section|stage|step|tier)$/ && \
-            token ~ /^[[:digit:]]+[.][[:alnum:]]+$/) {
+            token ~ /^[[:alnum:]]+[.][[:alnum:]]+$/) {
           $field = "journey-step"
           continue
         }
