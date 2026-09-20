@@ -3119,8 +3119,7 @@ _log_step=$(sed -n '/^4\. \*\*CI red on `main` — deployment delta only\.\*\*/,
 _log_step=$(tr "\n" " " <<<"${_log_step}" | tr -s "[:space:]" " ")
 grep -Fq -- "Never read a workflow LOG BODY" <<<"${_log_step}" ||
   fail "step 4 must forbid reading a workflow log body from the survey (monorepo#3420)"
-for _flag in -- "--log-failed" "--log" "--job"; do
-  [ "${_flag}" = "--" ] && continue
+for _flag in "--log-failed" "--log" "--job"; do
   grep -Fq -- "\`${_flag}\`" <<<"${_log_step}" ||
     fail "step 4 must name the denied flag \`${_flag}\` so the refusal is recognisable (monorepo#3420)"
 done
