@@ -474,6 +474,11 @@ validate_body() {
       sub(/[.]$/, "", value)
       return value
     }
+    function country_code_domain(candidate, labels, count, tld) {
+      count = split(candidate, labels, ".")
+      tld = labels[count]
+      return tld ~ /^(ac|ad|ae|af|ag|ai|al|am|ao|aq|ar|as|at|au|aw|ax|az|ba|bb|bd|be|bf|bg|bh|bi|bj|bm|bn|bo|bq|br|bs|bt|bv|bw|by|bz|ca|cc|cd|cf|cg|ch|ci|ck|cl|cm|cn|co|cr|cu|cv|cw|cx|cy|cz|de|dj|dk|dm|do|dz|ec|ee|eg|eh|er|es|et|eu|fi|fj|fk|fm|fo|fr|ga|gb|gd|ge|gf|gg|gh|gi|gl|gm|gn|gp|gq|gr|gs|gt|gu|gw|gy|hk|hm|hn|hr|ht|hu|id|ie|il|im|in|io|iq|ir|is|it|je|jm|jo|jp|ke|kg|kh|ki|km|kn|kp|kr|kw|ky|kz|la|lb|lc|li|lk|lr|ls|lt|lu|lv|ly|ma|mc|md|me|mf|mg|mh|mk|ml|mm|mn|mo|mp|mq|mr|ms|mt|mu|mv|mw|mx|my|mz|na|nc|ne|nf|ng|ni|nl|no|np|nr|nu|nz|om|pa|pe|pf|pg|ph|pk|pl|pm|pn|pr|ps|pt|pw|py|qa|re|ro|rs|ru|rw|sa|sb|sc|sd|se|sg|sh|si|sj|sk|sl|sm|sn|so|sr|ss|st|su|sv|sx|sy|sz|tc|td|tf|tg|th|tj|tk|tl|tm|tn|to|tr|tt|tv|tw|tz|ua|ug|uk|um|us|uy|uz|va|vc|ve|vg|vi|vn|vu|wf|ws|ye|yt|za|zm|zw)$/
+    }
     {
       for (field = 1; field <= NF; field++) {
         candidate = normalized_word($field)
@@ -503,14 +508,8 @@ validate_body() {
         }
         known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/
         email_shape = token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
-        email_context = previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/ || \
-          (previous == "to" && (before_previous ~ /^(email|emails|message|messages|send|sent|write)$/ || \
-            third_previous ~ /^(email|emails|message|messages|send|sent|write)$/)) || \
-          (previous == "at" && (before_previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/ || \
-            third_previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/)) || \
-          following ~ /^(address|can|cannot|could|does|email|has|is|mailbox|was|will|would)$/
         if (!explicit_file_context && email_shape) {
-          $field = known_filename ? "file.name" : (email_context ? "email" : "file.name")
+          $field = (known_filename || file_action) ? "file.name" : "email"
           continue
         }
         if (token ~ /^[[:digit:]]*[.][[:digit:]]+e[+-]?[[:digit:]]+$/ || \
@@ -519,7 +518,8 @@ validate_body() {
           continue
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
-          public_domain = candidate ~ /[.](ai|app|biz|cc|cloud|co|com|dev|edu|gov|info|io|me|net|org|tech)$/ || \
+          public_domain = candidate ~ /[.](app|biz|cloud|com|dev|edu|gov|info|net|org|tech)$/ || \
+            country_code_domain(candidate) || \
             candidate ~ /[.](ac|co|com|edu|gov|net|org)[.][[:alpha:]][[:alpha:]]$/
           site_context = public_domain && !explicit_file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
@@ -632,6 +632,7 @@ validate_body() {
     function terminal_abbreviation_count(text, rest, count) {
       rest = text
       gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
+      gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+(Agency|Air|Army|Congress|Court|Department|Embassy|Force|Forces|Government|Marine|Marines|Navy|Parliament)/, "geographic-name", rest)
       while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|[[:lower:]][[:alnum:]]*([[:upper:]][[:alnum:]]*|[.][[:alnum:].-]+))|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
