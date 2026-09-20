@@ -954,7 +954,12 @@ For each selected product:
    SELF-REVIEW YOUR OWN DIFF* rule, including its trivial-change exemption and its one-pass bound;
    follow it, don't re-derive it here.
    Open a **draft** PR (Conventional-Commit title, AI-disclosure line, labels; `Fixes #N` when it
-   closes an issue).
+   closes an issue). Before creating or editing its body, use
+   `.claude/scripts/pr-body-contract.sh seed` to load the effective GitHub template, fill that file in
+   PM-level plain language, run `.claude/scripts/pr-body-contract.sh check` with the same acting
+   `--role`, publish only with
+   `--body-file`, and check the GitHub readback. Treat a failing existing own PR body as hygiene to
+   correct before review, promotion, or merge.
    Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff. External-repository work
    is forbidden unless the current interactive conversation first clears the professional-work
    boundary for that named repo; creating an upstream artifact then still needs ask-tool approval.

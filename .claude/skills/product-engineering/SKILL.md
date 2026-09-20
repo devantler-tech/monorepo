@@ -222,7 +222,11 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    AI-disclosure line, labels, and **`Fixes #N`** for the delivery issue. When measuring the outcome
    requires a later window, keep the experiment issue open and add **`Part of #N`** for it instead of
    closing it from the delivery PR. Body = PM-level why & what only (the org template — zero
-   validation detail; how you validated goes in the READINESS COMMENT, per contract *Autonomy*). It stays a
+   validation detail; how you validated goes in the READINESS COMMENT, per contract *Autonomy*).
+   Treat that as a write gate: use `.claude/scripts/pr-body-contract.sh seed` to load the effective
+   GitHub template, fill the seeded file, run `.claude/scripts/pr-body-contract.sh check` with the same
+   acting `--role`, publish only
+   with `--body-file`, then validate the GitHub readback before continuing. It stays a
    draft while you drive the hygiene pentad clear (root-cause-fix its failing CI, resolve its review
    threads, secure a green review at head); **self-promote it only on genuine readiness** —
    programmatically tested + reviewed green + **tried and evaluated as a user** (contract *Autonomy*,
