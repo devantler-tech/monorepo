@@ -1127,8 +1127,10 @@ public and private — no per-repo loop needed to enumerate):
    allowed, compact `gh api` GETs carry the same answer and suit a digest better: a job read
    `repos/<o>/<r>/actions/jobs/<job_id>` with `--jq '[.steps[]|select(.conclusion=="failure")|.name]'`
    names the failing **step**, and an annotations read
-   `repos/<o>/<r>/check-runs/<check_run_id>/annotations` with
-   `--jq '.[]|[.annotation_level,.path,.message]|@tsv'` carries the **error text**. Report those
+   `repos/<o>/<r>/check-runs/<check_run_id>/annotations` **with `--paginate`** and
+   `--jq '.[]|[.annotation_level,.path,.message]|@tsv'` carries the **error text** — that endpoint
+   pages at **30**, so without `--paginate` a long check-run returns a partial read that looks
+   complete. (The jobs read needs no `--paginate`: it returns one object, not a list.) Report those
    beside the classifier's `html_url` and `run_id`. This bounds the SURVEY only, never the
    diagnosis: the orchestrator, whose own session is unguarded, reads the log itself when a digest
    line is not enough.

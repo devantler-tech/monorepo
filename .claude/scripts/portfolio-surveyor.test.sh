@@ -3127,6 +3127,11 @@ grep -Fq 'actions/jobs/<job_id>' <<<"${_log_step}" ||
   fail "step 4 must prescribe the allowed jobs read that names the failing step (monorepo#3420)"
 grep -Fq 'check-runs/<check_run_id>/annotations' <<<"${_log_step}" ||
   fail "step 4 must prescribe the allowed annotations read that carries the error text (monorepo#3420)"
+# The annotations endpoint pages at 30, so an unpaginated read returns a PARTIAL result that is
+# indistinguishable from a complete one — the same fail-open this contract pins for review threads.
+# The jobs read is deliberately NOT covered: it returns one object, not a list (CodeRabbit, #3421).
+grep -Fq '**with `--paginate`**' <<<"${_log_step}" ||
+  fail "step 4 must require --paginate on the annotations read, which pages at 30 (monorepo#3420)"
 grep -Fq 'the orchestrator, whose own session is unguarded' <<<"${_log_step}" ||
   fail "step 4 must say WHERE a log read legitimately happens, or the boundary reads as a capability gap (monorepo#3420)"
 echo "portfolio surveyor contract: round-16 log-scope assertions passed"
