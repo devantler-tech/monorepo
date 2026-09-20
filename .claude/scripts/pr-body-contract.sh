@@ -491,7 +491,7 @@ validate_body() {
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
               (candidate ~ /[.]/ || token ~ /^[.]/ || file_action || file_subject)) || \
             (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
-            (file_action && token ~ /^[.][[:digit:]]+$/)) {
+            (file_action && token ~ /[.][[:digit:]]+$/)) {
           $field = "file.name"
           continue
         }
@@ -515,6 +515,7 @@ validate_body() {
           site_context = !explicit_file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
+            (previous == "from" && before_previous == "traffic") || \
             (previous ~ /^(at|from|on|via)$/ && before_previous ~ /^(available|hosted|published|served)$/) || \
             following ~ /^(address|audience|customers|domain|host|readers|site|users|visitors|website)$/ || \
             (following ~ /^(is|remains|was)$/ && after_following ~ /^(available|down|live|offline|online|reachable|unavailable)$/) || \
@@ -622,7 +623,7 @@ validate_body() {
     function terminal_abbreviation_count(text, rest, count) {
       rest = text
       gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
-      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+[[:upper:]]|$)/)) {
+      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+[[:upper:][:digit:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
       }
