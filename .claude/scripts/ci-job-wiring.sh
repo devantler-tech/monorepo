@@ -113,6 +113,8 @@ if grep -qx changes "$tmp/jobs"; then
     defect "changes: the filter step sets continue-on-error, so a failed filter empties every output"
   [[ "$(yq -r '[.jobs.changes.steps[] | select(.id == "filter") | (.uses // "") | test("^dorny/paths-filter@")] | all' "$workflow")" == true ]] ||
     defect "changes: the filter step does not run dorny/paths-filter, so it sets no outputs"
+  [[ "$(yq -r '[.jobs.changes.steps[] | select(.id == "filter") | ((.with."predicate-quantifier" // "some") == "some")] | all' "$workflow")" == true ]] ||
+    defect "changes: the filter step sets predicate-quantifier != some, which can cause multi-path filters to never match"
 
   while IFS= read -r name; do
     defect "filter '$name' has no changes output, so no job can read it"
@@ -186,8 +188,13 @@ aggregate_steps="$(yq -r "$aggregate | length" "$workflow")"
 [[ "$(yq -r "$aggregate | map(has(\"if\") or has(\"continue-on-error\")) | any" "$workflow")" == false ]] ||
   defect "status: the aggregate-job-checks step has an if or continue-on-error, so it can pass without enforcing"
 yq -r "$aggregate | .[0].with.\"job-results\" // \"\"" "$workflow" |
-  # Only the untransformed expression passes a result through; anything else can mask a failure.
-  { grep -oE '\$\{\{ *needs\.[A-Za-z0-9_-]+\.result *\}\}' || true; } | { grep -oE 'needs\.[A-Za-z0-9_-]+\.result' || true; } | sed -E 's/^needs\.(.*)\.result$/\1/' | sort -u >"$tmp/status_results"
+  # Strip spacing within ${{ ... }} so each interpolation expression becomes a single contiguous token.
+  sed -E 's/\$\{\{[[:space:]]*/\${{/g; s/[[:space:]]*\}\}/}}/g' |
+  tr -s '[:space:]' '\n' |
+  # Only the untransformed expression occupying a whole token passes a result through; anything else can mask a failure.
+  { grep -xE '\$\{\{needs\.[A-Za-z0-9_-]+\.result\}\}' || true; } |
+  sed -E 's/^\$\{\{needs\.([A-Za-z0-9_-]+)\.result\}\}$/\1/' |
+  sort -u >"$tmp/status_results"
 read_set nonblocking '.jobs | to_entries | .[] | select((.value.name // "") | test("\\(non-blocking\\)$")) | .key'
 
 while IFS= read -r job; do
@@ -201,6 +208,9 @@ while IFS= read -r job; do
     [[ -n "$need" ]] || continue
     if grep -qx -- "$need" "$tmp/nonblocking"; then
       defect "$job: needs '$need', which is non-blocking; if that job fails this one skips and the gate counts the skip as a pass"
+    fi
+    if grep -qx -- "$job" "$tmp/unfiltered" && [[ "$need" != changes ]] && ! grep -qx -- "$need" "$tmp/unfiltered"; then
+      defect "$job: is unfiltered but needs '$need', which is path-filtered; if '$need' skips this job skips and the gate counts the skip as a pass"
     fi
   done < <(JOB="$job" yq -r '[.jobs[strenv(JOB)].needs] | flatten | .[] | select(. != null)' "$workflow")
   grep -qx -- "$job" "$tmp/status_needs" || defect "$job: missing from status.needs, so it never gates the merge"

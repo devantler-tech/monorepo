@@ -270,6 +270,24 @@ fixture; edit '.jobs.changes.name = "Detect changes (non-blocking)"'
 expect_defect "changes producer renamed non-blocking" \
   "needs 'changes', which is non-blocking"
 
+# An unfiltered blocking job must not depend on a path-filtered one: if the filter misses, the prerequisite
+# skips, this job skips under implicit success(), and the aggregate accepts both skips.
+fixture; edit '.jobs.unfiltered.needs = ["test-alpha"]'
+expect_defect "unfiltered blocking job needs a path-filtered one" \
+  "unfiltered: is unfiltered but needs 'test-alpha', which is path-filtered"
+
+# Substring matches in job-results (e.g. appended text) must not be counted as wired.
+fixture
+# shellcheck disable=SC2016 # the GitHub expression must reach yq literally, unexpanded.
+edit '.jobs.status.steps[0].with."job-results" |= sub("\$\{\{ needs.test-alpha.result \}\}", "${{ needs.test-alpha.result }}-ignored")'
+expect_defect "tampered result token" \
+  "test-alpha: missing from status job-results"
+
+# predicate-quantifier != some causes multi-path filters to require every rule to match.
+fixture; edit '.jobs.changes.steps[0].with.predicate-quantifier = "every"'
+expect_defect "predicate-quantifier every" \
+  "changes: the filter step sets predicate-quantifier != some"
+
 # No condition at all stays the normal case.
 fixture; expect_ok "blocking job with no condition"
 
