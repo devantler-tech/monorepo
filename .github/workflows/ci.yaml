@@ -541,6 +541,7 @@ jobs:
               - '.claude/scripts/markdown-structural-lines.awk'
               - '.claude/scripts/pr-body-contract.sh'
               - '.claude/scripts/pr-body-contract.test.sh'
+              - '.claude/scripts/pr-body-public-tlds.txt'
               - '.claude/scripts/portfolio-surveyor-forge-hook.sh'
               # The test diffs AGENTS.md blocks against committed fixtures. Without this path a
               # fixture-only commit skips the job entirely, so the mismatch assertion never runs on

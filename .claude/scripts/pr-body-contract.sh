@@ -278,6 +278,8 @@ validate_body() {
   local body_validation="${work_dir}/body-validation.md"
   local body_prose="${work_dir}/body-prose.md"
   local body_symbols="${work_dir}/body-symbols.md"
+  local body_domain_normalized="${work_dir}/body-domain-normalized.md"
+  local public_tlds="${script_dir}/pr-body-public-tlds.txt"
   local section_metrics="${work_dir}/section-metrics"
   local first_line
   local expected_disclosure
@@ -309,6 +311,7 @@ validate_body() {
   local section_sentences
   local visible_chars
 
+  [ -r "${public_tlds}" ] || fail "public TLD evidence is missing"
   strip_comments "${template}" >"${visible_template}"
   strip_comments "${body}" >"${visible_body}"
   awk -f "${script_dir}/markdown-structural-lines.awk" "${visible_template}" >"${markdown_template}"
@@ -422,7 +425,50 @@ validate_body() {
         rendered = substr(rendered, 1, RSTART - 1) label \
           substr(rendered, RSTART + RLENGTH)
       }
+      if (match(rendered, /^📦 New dependency:[[:space:]]+[^[:space:]]+/)) {
+        dependency = substr(rendered, RSTART, RLENGTH)
+        sub(/^📦 New dependency:[[:space:]]+/, "", dependency)
+        dependency_lower = tolower(dependency)
+        dependency_root = dependency_lower
+        sub(/\/.*/, "", dependency_root)
+        dependency_dot_segment = dependency ~ /(^|\/)[.][.]?(\/|$)/
+        dependency_known_dotted_namespace = dependency_lower ~ \
+          /^(backports|jaraco|ruamel|zope)([.][[:alnum:]_-]+)+$/
+        dependency_namespaced_package = dependency ~ \
+          /^[[:upper:]][[:alnum:]_-]*[.][[:upper:]][[:alnum:]_-]*([.][[:upper:]][[:alnum:]_-]*)*$/ || \
+          dependency_known_dotted_namespace
+        dependency_arbitrary_root_suffix = dependency !~ /\// && \
+          dependency_root ~ /^[[:lower:][:digit:]_-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)$/
+        dependency_numeric_suffix = dependency_root !~ /:/ && \
+          dependency_root ~ /[.][[:digit:]][[:alnum:]_-]*$/
+        dependency_filename = dependency_dot_segment || dependency_numeric_suffix || \
+          (!dependency_namespaced_package && dependency_arbitrary_root_suffix) || \
+          (!dependency_namespaced_package && \
+            dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|mov|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml|zip)$/) || \
+          dependency ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/
+        dependency_segment_count = split(dependency_lower, dependency_segments, "/")
+        for (dependency_segment_index = 2; \
+            dependency_segment_index <= dependency_segment_count; \
+            dependency_segment_index++) {
+          dependency_segment = dependency_segments[dependency_segment_index]
+          versioned_module_segment = dependency_segment ~ /^[[:alnum:]_-]+[.]v[[:digit:]]+$/
+          if ((!versioned_module_segment && \
+                (dependency_segment ~ /[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)$/ || \
+                 dependency_segment ~ /[.][[:digit:]][[:alnum:]_-]*$/)) || \
+              toupper(dependency_segment) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/) {
+            dependency_filename = 1
+          }
+        }
+        if (!dependency_filename && (dependency ~ /^@[[:alnum:]][[:alnum:]_.-]*\/[[:alnum:]][[:alnum:]_.-]*$/ || \
+            dependency ~ /^[[:alnum:]][[:alnum:]_-]*([.][[:alnum:]][[:alnum:]_-]*)+$/ || \
+            dependency ~ /^[[:alnum:]][[:alnum:]_.-]*:[[:alnum:]][[:alnum:]_.-]*(:[[:alnum:]][[:alnum:]_.+-]*)?(:[[:alnum:]][[:alnum:]_.+-]*)?(:[[:alnum:]][[:alnum:]_.+-]*)?$/ || \
+            dependency ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+(\/[[:alnum:]_.-]+)+$/)) {
+          rendered = "📦 New dependency: dependency" \
+            substr(rendered, RSTART + RLENGTH)
+        }
+      }
       if (rendered ~ /[^[:space:]]/) { print rendered }
+      else { print "" }
     }
   ' "${body_validation}" >"${body_prose}"
   if grep -Fq '](' "${body_prose}"; then
@@ -433,15 +479,221 @@ validate_body() {
   # the rendered view rejoins identifiers or paths split by emphasis markers.
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
-    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's/(^|[^[:alnum:]_])CNAME[[:space:]]+record([^[:alnum:]_]|$)/\1dns-record\2/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Dd][.][Cc][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])(of|named|called|by)[[:space:]]+([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*([^[:alnum:]_]|$)/\1personal-name\4/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+(-[[:alnum:]-]+([.][[:alnum:]-]+)*)?[+][[:alnum:]-]+([.][[:alnum:]-]+)*)([^[:alnum:]_-]|$)/\1version\7/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.-]?([aA][lL][pP][hH][aA]|[bB][eE][tT][aA]|[pP][rR][eE][vV][iI][eE][wW])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.]?([dD][eE][vV]|[pP][oO][sS][tT])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >"${body_symbols}"
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/[*_]//g' \
-    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's/(^|[^[:alnum:]_])CNAME[[:space:]]+record([^[:alnum:]_]|$)/\1dns-record\2/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Dd][.][Cc][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])(of|named|called|by)[[:space:]]+([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*([^[:alnum:]_]|$)/\1personal-name\4/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+(-[[:alnum:]-]+([.][[:alnum:]-]+)*)?[+][[:alnum:]-]+([.][[:alnum:]-]+)*)([^[:alnum:]_-]|$)/\1version\7/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.-]?([aA][lL][pP][hH][aA]|[bB][eE][tT][aA]|[pP][rR][eE][vV][iI][eE][wW])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.]?([dD][eE][vV]|[pP][oO][sS][tT])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >>"${body_symbols}"
+  # A dotted token can be a filename, email address, measurement, or public
+  # hostname. Normalize only the non-filename forms whose syntax or surrounding
+  # product prose identifies them; filename evidence takes precedence.
+  # Curly quotes are literal Markdown delimiters in the AWK regex.
+  # shellcheck disable=SC1112
+  awk -v public_tld_file="${public_tlds}" '
+    BEGIN { RS = "" }
+    function normalized_word(text, value) {
+      value = tolower(text)
+      gsub(/^[^[:alnum:]]+/, "", value)
+      gsub(/[^[:alnum:]_-]+$/, "", value)
+      return value
+    }
+    function prose_token(text, value) {
+      value = tolower(text)
+      gsub(/^[^[:alnum:].]+/, "", value)
+      gsub(/[^[:alnum:]%@._+-]+$/, "", value)
+      sub(/[.]$/, "", value)
+      return value
+    }
+    function file_action_word(word) {
+      return word ~ /^(attach|attached|attaching|change|changed|changing|copy|copied|copying|create|created|creating|delete|deleted|deleting|download|downloaded|downloading|edit|edited|editing|extract|extracted|extracting|fix|fixed|fixing|modify|modified|modifying|move|moved|moving|open|opened|opening|remove|removed|removing|rename|renamed|renaming|replace|replaced|replacing|save|saved|saving|update|updated|updating|upload|uploaded|uploading)$/
+    }
+    function public_suffix_candidate(candidate, labels, count, tld, line, saved_rs) {
+      if (!public_tlds_loaded) {
+        saved_rs = RS
+        RS = "\n"
+        while ((getline line < public_tld_file) > 0) {
+          sub(/\r$/, "", line)
+          if (line !~ /^#/ && line != "") { public_tlds[tolower(line)] = 1 }
+        }
+        close(public_tld_file)
+        RS = saved_rs
+        public_tlds_loaded = 1
+      }
+      count = split(candidate, labels, ".")
+      tld = labels[count]
+      return tld in public_tlds
+    }
+    {
+      rendered_record = $0
+      while (match(rendered_record, /"([^"\\]|\\.)*"@[[:alnum:]-]+([.][[:alnum:]-]+)+/)) {
+        quoted_suffix = substr(rendered_record, RSTART + RLENGTH)
+        quoted_kind = quoted_suffix ~ /^[[:space:]]+(file|filename|path)([^[:alnum:]_]|$)/ \
+          ? "file.name" : "email"
+        rendered_record = substr(rendered_record, 1, RSTART - 1) quoted_kind quoted_suffix
+      }
+      $0 = rendered_record
+      for (field = 1; field <= NF; field++) {
+        prefixed_implementation = $field ~ /^([.][.]?\/|--)[[:alnum:]_.-]+([^[:alnum:]_.-]|$)/
+        if (prefixed_implementation) {
+          $field = "file.name"
+          continue
+        }
+        raw_domain_candidate = tolower($field)
+        gsub(/^["(<{*_`]+/, "", raw_domain_candidate)
+        gsub(/["),;:!?}>*_`]+$/, "", raw_domain_candidate)
+        sub(/[.]$/, "", raw_domain_candidate)
+        candidate = normalized_word($field)
+        domain_candidate = candidate
+        raw_domain_used = 0
+        if (domain_candidate !~ /[.]/ && raw_domain_candidate ~ /[.]/) {
+          domain_candidate = raw_domain_candidate
+          raw_domain_used = 1
+        }
+        sub(/[\047’]s$/, "", domain_candidate)
+        third_previous = field > 3 ? normalized_word($(field - 3)) : ""
+        before_previous = field > 2 ? normalized_word($(field - 2)) : ""
+        previous = field > 1 ? normalized_word($(field - 1)) : ""
+        before_previous_field = field > 2 ? $(field - 2) : ""
+        previous_field = field > 1 ? $(field - 1) : ""
+        following = field < NF ? normalized_word($(field + 1)) : ""
+        after_following = field + 1 < NF ? normalized_word($(field + 2)) : ""
+        third_after = field + 2 < NF ? normalized_word($(field + 3)) : ""
+        token = prose_token($field)
+        same_sentence_context = $field !~ /[.!?]["”’)}\]*_]*$/
+        file_context = same_sentence_context && following ~ /^(asset|attachment|file|filename)$/
+        path_context = same_sentence_context && following == "path"
+        leading_file_context = previous_field !~ /[.!?]["”’)}\]*_]*$/ && \
+          previous ~ /^(asset|attachment|file|filename|path)$/
+        explicit_file_context = file_context || path_context || leading_file_context
+        direct_file_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
+          file_action_word(previous)
+        article_file_action = before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
+          previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
+          file_action_word(before_previous)
+        modifier_file_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
+          before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && previous != "" && \
+          file_action_word(before_previous)
+        file_action = direct_file_action || article_file_action || modifier_file_action
+        direct_site_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
+          previous ~ /^(browse|reach|visit)$/
+        article_site_action = before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
+          previous ~ /^(a|an|that|the|this)$/ && before_previous ~ /^(browse|reach|visit)$/
+        site_action = direct_site_action || article_site_action
+        initialism_candidate = $field
+        gsub(/^[^[:alnum:].]+/, "", initialism_candidate)
+        gsub(/[^[:alnum:].]+$/, "", initialism_candidate)
+        degree_abbreviation = initialism_candidate ~ /^[[:upper:]][.][[:upper:]][[:lower:]]{1,3}[.]$/ && \
+          following ~ /^(applicant|applicants|candidate|candidates|degree|degrees|graduate|graduates|program|programs|student|students)$/
+        if (degree_abbreviation && !file_action) {
+          $field = "abbreviation"
+          continue
+        }
+        initialism_continuation = initialism_candidate ~ /^([[:upper:]][.]){2,}$/ && \
+          following ~ /^[[:alpha:]]/
+        if (initialism_continuation && !file_action) {
+          $field = "initialism"
+          continue
+        }
+        file_subject = file_context && after_following ~ /^(is|was)$/ && \
+          third_after ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
+        product_file_phrase = file_context && \
+          (after_following ~ /^(upload|uploads)$/ || \
+            (previous ~ /^(attach|copy|extract|save|upload)$/ && \
+              candidate ~ /^(a|an|any|each|every|my|our|that|the|their|these|this|those|your)$/))
+        decimal_number = token ~ /^[[:digit:]]+([.][[:digit:]]+)+$/
+        literal_quantity = !file_action && !explicit_file_context && \
+          $field ~ /^[[:digit:]]*[.][[:digit:]]+[[:upper:]][[:upper:]]?[[:upper:]]?[[:upper:]]?([^[:alnum:]_]|$)/
+        lowercase_compact_quantity = !explicit_file_context && \
+          (!file_action || following ~ /^(a|an|each|per)$/) && \
+          token ~ /^[[:digit:]]*[.][[:digit:]]+(am|pm|k)$/
+        numeric_file_subject = token ~ /[.][[:digit:]][[:alnum:]_-]*$/ && !decimal_number && following ~ /^(is|was)$/ && \
+          after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
+        reserved_file_subject = following ~ /^(is|was)$/ && \
+          after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
+        dependency_context = previous == "dependency" && before_previous == "new"
+        reserved_name = toupper(candidate) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)$/
+        if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
+              (candidate ~ /[.]/ || token ~ /^[.]/ || (file_action && !product_file_phrase) || file_subject)) || \
+            (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
+            (reserved_name && \
+              (file_action || reserved_file_subject || explicit_file_context || dependency_context)) || \
+            (file_action && token ~ /[.][[:digit:]]+$/ && !decimal_number) || numeric_file_subject) {
+          $field = "file.name"
+          continue
+        }
+        if (reserved_name) {
+          $field = "business-term"
+          continue
+        }
+        known_filename = domain_candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|mov|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml|zip)$/
+        mailbox_token = tolower($field)
+        sub(/^[^"]*/, "", mailbox_token)
+        gsub(/[^[:alnum:]-]+$/, "", mailbox_token)
+        quoted_email_shape = mailbox_token ~ /^"[^"]+"@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
+        email_shape = token ~ /^[[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+([.][[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/ || \
+          quoted_email_shape
+        if (!explicit_file_context && email_shape) {
+          mailbox_domain = token
+          sub(/^.*@/, "", mailbox_domain)
+          mailbox_public_domain = mailbox_domain ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/ && \
+            public_suffix_candidate(mailbox_domain)
+          bare_file_subject = following ~ /^(is|was)$/ && \
+            after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
+          numeric_terminal_label = token ~ /@[[:alnum:]-]+([.][[:alnum:]-]+)*[.][[:digit:]][[:alnum:]-]*$/
+          email_filename = known_filename && !mailbox_public_domain
+          $field = (email_filename || numeric_terminal_label || file_action || bare_file_subject) ? "file.name" : "email"
+          continue
+        }
+        if (previous ~ /^(group|option|phase|plan|section|stage|step|tier)$/ && \
+            token ~ /^[[:alnum:]]+[.][[:alnum:]]+$/) {
+          $field = "journey-step"
+          continue
+        }
+        if (literal_quantity || lowercase_compact_quantity || \
+            token ~ /^[[:digit:]]*[.][[:digit:]]+e[+-]?[[:digit:]]+$/ || \
+            token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|l|hz|khz|mhz|ghz|bps|kbps|mbps|gbps|tbps|kibps|mibps|gibps|tibps|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x|st|nd|rd|th)(\/(s|min|h|d|day))?$/) {
+          $field = "measurement"
+          continue
+        }
+        domain_lookup_candidate = domain_candidate
+        sub(/[\/?#].*$/, "", domain_lookup_candidate)
+        ascii_domain_shape = domain_lookup_candidate ~ \
+          /^[[:alnum:]]([[:alnum:]-]*[[:alnum:]])?([.][[:alnum:]]([[:alnum:]-]*[[:alnum:]])?)+$/
+        raw_domain_shape = raw_domain_used && domain_lookup_candidate ~ /[.]/ && \
+          domain_lookup_candidate !~ /(^[.-]|[.-]$|[.][.-]|-[.]|[.][.]|[\/\\@_:])/
+        if (ascii_domain_shape || raw_domain_shape) {
+          public_domain = public_suffix_candidate(domain_lookup_candidate)
+          site_context = public_domain && !explicit_file_context && !file_action && \
+            (!known_filename || site_action) && \
+            !(following ~ /^(is|was)$/ && \
+              after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/)
+          if (site_context) { $field = "site" }
+        }
+      }
+      print
+    }
+  ' "${body_symbols}" >"${body_domain_normalized}"
+  body_symbols="${body_domain_normalized}"
   previous_line=0
   while IFS= read -r structure_line; do
     if [[ "${structure_line}" == '@RELATIONSHIP:'*'@' ]]; then
@@ -535,8 +787,23 @@ validate_body() {
   # Curly quotes are literal Markdown delimiters in the AWK regex.
   # shellcheck disable=SC1112
   awk '
+    function terminal_abbreviation_count(text, rest, count) {
+      rest = text
+      gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
+      gsub(/([pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.])[[:space:]]+(Program|Programme)/, "qualification-program", rest)
+      gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+[[:upper:]][[:alpha:]-]*[[:space:]]+(Administration|Agency|Association|Authority|Bank|Bureau|Commission|Committee|Council|Court|Department|Embassy|Federation|Force|Forces|Government|Institute|Islands|Marine|Marines|Ministry|Navy|Office|Organization|Parliament|Service|Society|Union|University)/, "geographic-name", rest)
+      gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+(Agency|Air|Army|Bank|Congress|Court|Department|Embassy|Force|Forces|Government|Marine|Marines|Navy|Parliament)/, "geographic-name", rest)
+      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.]|[dD][.][cC][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|[[:lower:]][[:alnum:]]*([[:upper:]][[:alnum:]]*|[.][[:alnum:].-]+))|$)/)) {
+        count++
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      return count
+    }
     function sentence_count(text, rest, count) {
       rest = text
+      count = terminal_abbreviation_count(text)
+      gsub(/([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*[[:space:]]+[[:upper:]][[:alpha:]-]*/, "initialism title", rest)
+      gsub(/([[:upper:]][.]){2,}[[:space:]]+[[:lower:]]/, "initialism x", rest)
       gsub(/[eE][.][gG][.]/, "eg", rest)
       gsub(/[iI][.][eE][.]/, "ie", rest)
       gsub(/[eE]tc[.]/, "etc", rest)
@@ -544,7 +811,19 @@ validate_body() {
       gsub(/[mM]r[.]/, "Mr", rest)
       gsub(/[mM]rs[.]/, "Mrs", rest)
       gsub(/[dD]r[.]/, "Dr", rest)
+      gsub(/(^|[^[:alnum:]_])(of|named|called|by)[[:space:]]+([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*/, "personal-name", rest)
       gsub(/[uU][.][sS][.]/, "US", rest)
+      gsub(/[uU][.][kK][.]/, "UK", rest)
+      gsub(/[eE][.][uU][.]/, "EU", rest)
+      gsub(/[dD][.][cC][.]/, "DC", rest)
+      gsub(/[aA][.][mM][.]/, "am", rest)
+      gsub(/[pP][.][mM][.]/, "pm", rest)
+      gsub(/[pP][hH][.][dD][.]/, "PhD", rest)
+      gsub(/[mM][.][dD][.]/, "MD", rest)
+      gsub(/[bB][.][sS][cC][.]/, "BSc", rest)
+      gsub(/[mM][.][sS][cC][.]/, "MSc", rest)
+      gsub(/[bB][.][aA][.]/, "BA", rest)
+      gsub(/[mM][.][aA][.]/, "MA", rest)
       while (match(rest, /[.!?]["”’)}\]*_]*([[:space:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
@@ -653,6 +932,17 @@ validate_body() {
     fail "PR body must not contain implementation or validation detail"
   fi
   if grep -Eq '(^|[^[:alnum:]_])([A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*|[A-Z]{2,}[a-z][A-Za-z0-9]*)([^[:alnum:]_]|$)' \
+    "${body_symbols}"; then
+    fail "PR body must not contain implementation or validation detail"
+  fi
+  # Reject arbitrary filename extensions and dotfiles rather than maintaining
+  # a partial portfolio extension list. Unit-suffixed fractions and hostnames
+  # have already been normalized above.
+  if grep -Eiq '(^|[^[:alnum:]_.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+([[:alpha:]_][[:alnum:]_.-]*|[.-][[:alnum:]_.-]+))|[[:alnum:]_.-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)|[[:alpha:]_][[:alnum:]_.-]*[.][[:digit:]]+)([^[:alnum:]_.-]|[.]+([^[:alnum:]_.-]|$)|$)' \
+    "${body_symbols}"; then
+    fail "PR body must not contain implementation or validation detail"
+  fi
+  if grep -Eq '(^|[^[:alnum:]_])(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([^[:alnum:]_]|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
