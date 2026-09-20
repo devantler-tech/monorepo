@@ -434,21 +434,21 @@ validate_body() {
   # the rendered view rejoins identifiers or paths split by emphasis markers.
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
-    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's/(^|[^[:alnum:]_.])[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%)([^[:alnum:]_-]|$)/\1measurement\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >"${body_symbols}"
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/[*_]//g' \
-    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's/(^|[^[:alnum:]_.])[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%)([^[:alnum:]_-]|$)/\1measurement\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >>"${body_symbols}"
-  # A handful of portfolio file extensions are also delegated public suffixes.
-  # Preserve an ambiguous dotted token as a filename by default. Normalize it
-  # only when the surrounding prose explicitly identifies a site or domain;
-  # otherwise sentences such as "fix the defect in parser.py" could evade the
-  # implementation-detail check solely because PY is also a public suffix.
-  # Source: https://data.iana.org/TLD/tlds-alpha-by-domain.txt
+  # A dotted token can be either a filename or a public hostname. Preserve it
+  # as a filename by default and normalize arbitrary hostnames only when the
+  # surrounding prose explicitly identifies a site or domain. Recurring public
+  # hostnames above cover subject-position prose where no lexical cue exists.
   awk '
     function normalized_word(text, value) {
       value = tolower(text)
@@ -456,18 +456,10 @@ validate_body() {
       gsub(/[^[:alnum:]_-]+$/, "", value)
       return value
     }
-    BEGIN {
-      split("cc java md properties py rs sh tf", suffixes)
-      for (suffix_index in suffixes) {
-        public_suffix[suffixes[suffix_index]] = 1
-      }
-    }
     {
       for (field = 1; field <= NF; field++) {
         candidate = normalized_word($field)
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
-          suffix = candidate
-          sub(/^.*[.]/, "", suffix)
           before_previous = field > 2 ? normalized_word($(field - 2)) : ""
           previous = field > 1 ? normalized_word($(field - 1)) : ""
           following = field < NF ? normalized_word($(field + 1)) : ""
@@ -476,7 +468,7 @@ validate_body() {
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
             (previous ~ /^(at|from|on|via)$/ && before_previous ~ /^(available|hosted|published|served)$/) || \
             following ~ /^(address|domain|host|site|website)$/
-          if (public_suffix[suffix] && site_context) { $field = "site" }
+          if (site_context) { $field = "site" }
         }
       }
       print
@@ -697,9 +689,10 @@ validate_body() {
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
-  # Reject dotfiles and the file types used across this portfolio without
-  # treating every bare public domain as an implementation filename.
-  if grep -Eiq '(^|[^[:alnum:]_@.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_.-]*)|[[:alnum:]_.-]+[.](astro|mjs|cjs|mts|cts|vue|svelte|rb|c|h|cc|cpp|cxx|hpp|hh|ps1|psm1|fs|fsx|fsproj|csproj|sln|props|targets|bicep|rego|cue|nix|tfvars|gotmpl|tmpl|tpl))([^[:alnum:]_.-]|$)' \
+  # Reject arbitrary filename extensions and dotfiles rather than maintaining
+  # a partial portfolio extension list. Unit-suffixed fractions and hostnames
+  # have already been normalized above.
+  if grep -Eiq '(^|[^[:alnum:]_@.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+([[:alpha:]_][[:alnum:]_.-]*|[.-][[:alnum:]_.-]+))|[[:alnum:]_.-]+[.][[:alpha:]_][[:alnum:]_-]*)([^[:alnum:]_.-]|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
