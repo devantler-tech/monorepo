@@ -424,6 +424,7 @@ validate_body() {
           substr(rendered, RSTART + RLENGTH)
       }
       if (rendered ~ /[^[:space:]]/) { print rendered }
+      else { print "" }
     }
   ' "${body_validation}" >"${body_prose}"
   if grep -Fq '](' "${body_prose}"; then
@@ -435,7 +436,7 @@ validate_body() {
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.]?([dD][eE][vV]|[pP][oO][sS][tT])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
@@ -445,7 +446,7 @@ validate_body() {
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/[*_]//g' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.]?([dD][eE][vV]|[pP][oO][sS][tT])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
@@ -485,7 +486,10 @@ validate_body() {
         file_action = previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/ || \
           (previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
             before_previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/)
-        if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/) || \
+        file_subject = file_context && after_following ~ /^(is|was)$/ && \
+          third_after ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
+        if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
+              (candidate ~ /[.]/ || token ~ /^[.]/ || file_action || file_subject)) || \
             (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
             (file_action && token ~ /^[.][[:digit:]]+$/)) {
           $field = "file.name"
@@ -500,10 +504,10 @@ validate_body() {
             third_previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/)) || \
           following ~ /^(address|can|cannot|could|does|email|has|is|mailbox|was|will|would)$/
         if (!explicit_file_context && email_shape) {
-          $field = email_context ? "email" : "file.name"
+          $field = known_filename ? "file.name" : (email_context ? "email" : "file.name")
           continue
         }
-        if (token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x|st|nd|rd|th)(\/(s|min|h|d|day))?$/) {
+        if (token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|bps|kbps|mbps|gbps|tbps|kibps|mibps|gibps|tibps|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x|st|nd|rd|th)(\/(s|min|h|d|day))?$/) {
           $field = "measurement"
           continue
         }
@@ -617,7 +621,8 @@ validate_body() {
   awk '
     function terminal_abbreviation_count(text, rest, count) {
       rest = text
-      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.])["”’)}\]*_]*([[:space:]]+[[:upper:]]|$)/)) {
+      gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
+      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+[[:upper:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
       }
@@ -639,6 +644,7 @@ validate_body() {
       gsub(/[aA][.][mM][.]/, "am", rest)
       gsub(/[pP][.][mM][.]/, "pm", rest)
       gsub(/[pP][hH][.][dD][.]/, "PhD", rest)
+      gsub(/[mM][.][dD][.]/, "MD", rest)
       while (match(rest, /[.!?]["”’)}\]*_]*([[:space:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
