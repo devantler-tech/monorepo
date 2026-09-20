@@ -447,8 +447,8 @@ validate_body() {
             dependency_segment_index <= dependency_segment_count; \
             dependency_segment_index++) {
           dependency_segment = dependency_segments[dependency_segment_index]
-          if (dependency_segment ~ /[.][[:digit:]][[:alnum:]_-]*$/ || \
-              dependency_segment ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/ || \
+          if (dependency_segment ~ /[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)$/ || \
+              dependency_segment ~ /[.][[:digit:]][[:alnum:]_-]*$/ || \
               toupper(dependency_segment) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/) {
             dependency_filename = 1
           }
@@ -564,9 +564,20 @@ validate_body() {
           previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
           before_previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/
         file_action = direct_file_action || article_file_action
+        direct_site_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
+          previous ~ /^(browse|reach|visit)$/
+        article_site_action = before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
+          previous ~ /^(a|an|that|the|this)$/ && before_previous ~ /^(browse|reach|visit)$/
+        site_action = direct_site_action || article_site_action
         initialism_candidate = $field
         gsub(/^[^[:alnum:].]+/, "", initialism_candidate)
         gsub(/[^[:alnum:].]+$/, "", initialism_candidate)
+        degree_abbreviation = initialism_candidate ~ /^[[:upper:]][.][[:upper:]][[:lower:]]{1,3}[.]$/ && \
+          following ~ /^(applicant|applicants|candidate|candidates|degree|degrees|graduate|graduates|program|programs|student|students)$/
+        if (degree_abbreviation && !file_action) {
+          $field = "abbreviation"
+          continue
+        }
         initialism_continuation = initialism_candidate ~ /^([[:upper:]][.]){2,}$/ && \
           following ~ /^[[:alpha:]]/
         if (initialism_continuation && !file_action) {
@@ -582,17 +593,26 @@ validate_body() {
         decimal_number = token ~ /^[[:digit:]]+([.][[:digit:]]+)+$/
         literal_quantity = !file_action && !explicit_file_context && \
           $field ~ /^[[:digit:]]*[.][[:digit:]]+[[:upper:]][[:upper:]]?[[:upper:]]?[[:upper:]]?([^[:alnum:]_]|$)/
+        lowercase_compact_quantity = !explicit_file_context && \
+          (!file_action || following ~ /^(a|an|each|per)$/) && \
+          token ~ /^[[:digit:]]*[.][[:digit:]]+(am|pm|k)$/
         numeric_file_subject = token ~ /[.][[:digit:]][[:alnum:]_-]*$/ && !decimal_number && following ~ /^(is|was)$/ && \
           after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         reserved_file_subject = following ~ /^(is|was)$/ && \
           after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
+        dependency_context = previous == "dependency" && before_previous == "new"
+        reserved_name = toupper(candidate) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)$/
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
               (candidate ~ /[.]/ || token ~ /^[.]/ || (file_action && !product_file_phrase) || file_subject)) || \
             (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
-            ((file_action || reserved_file_subject) && \
-              toupper(candidate) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)$/) || \
+            (reserved_name && \
+              (file_action || reserved_file_subject || explicit_file_context || dependency_context)) || \
             (file_action && token ~ /[.][[:digit:]]+$/ && !decimal_number) || numeric_file_subject) {
           $field = "file.name"
+          continue
+        }
+        if (reserved_name) {
+          $field = "business-term"
           continue
         }
         known_filename = domain_candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml|zip)$/
@@ -613,14 +633,17 @@ validate_body() {
           $field = "journey-step"
           continue
         }
-        if (literal_quantity || token ~ /^[[:digit:]]*[.][[:digit:]]+e[+-]?[[:digit:]]+$/ || \
+        if (literal_quantity || lowercase_compact_quantity || \
+            token ~ /^[[:digit:]]*[.][[:digit:]]+e[+-]?[[:digit:]]+$/ || \
             token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|bps|kbps|mbps|gbps|tbps|kibps|mibps|gibps|tibps|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x|st|nd|rd|th)(\/(s|min|h|d|day))?$/) {
           $field = "measurement"
           continue
         }
         if (domain_candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           public_domain = public_suffix_candidate(domain_candidate)
-          site_context = public_domain && !explicit_file_context && !file_action && !known_filename && \
+          explicit_zip_site = site_action && domain_candidate ~ /[.]zip$/
+          site_context = public_domain && !explicit_file_context && !file_action && \
+            (!known_filename || explicit_zip_site) && \
             !(following ~ /^(is|was)$/ && \
               after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/)
           if (site_context) { $field = "site" }
