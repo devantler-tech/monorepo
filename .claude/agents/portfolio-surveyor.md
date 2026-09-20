@@ -1110,28 +1110,36 @@ public and private — no per-repo loop needed to enumerate):
    | Native process status and output | Meaning |
    |---|---|
    | observed native process status 0 and completely empty output | no red runs → that branch is **green** |
-   | observed native process status 0 and **well-formed TSV rows** — exactly eight tab-separated fields in helper order: numeric `workflow_id`, red `conclusion` (`failure`, `timed_out`, or `startup_failure`), `html_url`, `name`, supported `event`, `path`, valid `created_at`, numeric `run_id` | those are the **red runs** |
+   | observed native process status 0 and **well-formed TSV rows** — exactly nine tab-separated fields in helper order: numeric `workflow_id`, red `conclusion` (`failure`, `timed_out`, or `startup_failure`), `html_url`, `name`, supported `event`, `path`, valid `created_at`, numeric `run_id`, positive numeric `run_attempt` | those are the **red runs** |
    | any nonzero or unavailable native process status; or any other output, including mixed valid and malformed rows | the helper FAILED → **`QUERY-UNKNOWN`** for that repository; never `nothing_on_fire: true` |
 
    🔴 **IDENTIFY THE RED ROWS POSITIVELY; never treat "not empty" as "red runs".** The helper fails in
    more than one voice — a pagination or payload failure prints `classify-default-branch-ci-runs: …
    health is unknown`, but a malformed invocation prints a bare `usage:` block, and neither is TSV. A
    rule keyed to the diagnostic prefix alone would parse that usage text as red runs. Every nonempty
-   line must match the complete eight-field row shape. Match that TSV shape, and route everything
+   line must match the complete nine-field row shape. Match that TSV shape, and route everything
    else to `QUERY-UNKNOWN` — status 0 plus empty output stays the one green case.
 
    🔴 **Never read a workflow LOG BODY from this survey.** The read-only guard denies `--log-failed`,
    `--log` and `--job`, and is right to: a log dump is exactly the raw volume this survey exists to
    keep out of the orchestrator's context. With no rule here, dispatches improvise it anyway — 9
    refused calls across 7 of 122 dispatches over 7 days, then recovery by trial (monorepo#3420). Two
-   allowed, compact `gh api` GETs carry the same answer and suit a digest better: a job read
-   `repos/<o>/<r>/actions/jobs/<job_id>` with `--jq '[.steps[]|select(.conclusion=="failure")|.name]'`
-   names the failing **step**, and an annotations read
+   allowed, compact `gh api` GETs carry the same answer and suit a digest better. First correlate the
+   classified attempt with `repos/<o>/<r>/actions/runs/<run_id>/attempts/<run_attempt>/jobs`
+   **with `--paginate`** and
+   `--jq '.jobs[]|select(.conclusion as $c|["failure","timed_out","startup_failure"]|index($c))|[.id,(.check_run_url|capture("/(?<id>[0-9]+)$").id)]|@tsv'`;
+   this emits each red job ID and numeric check-run ID, and a missing or malformed ID fails the read
+   as `QUERY-UNKNOWN`. A well-formed `startup_failure` row with zero returned jobs stays known-red:
+   report its classifier row without step or annotation detail, never `QUERY-UNKNOWN`. Then read
+   `repos/<o>/<r>/actions/jobs/<job_id>` with
+   `--jq '[.steps[]|select(.conclusion as $c|["failure","timed_out","startup_failure"]|index($c))|.name]'`
+   to name the red **step**, and read
    `repos/<o>/<r>/check-runs/<check_run_id>/annotations` **with `--paginate`** and
-   `--jq '.[]|[.annotation_level,.path,.message]|@tsv'` carries the **error text** — that endpoint
+   `--jq '.[]|select(.annotation_level=="failure")|[.annotation_level,.path,.message]|@tsv'` for
+   failure **error text** — that endpoint
    pages at **30**, so without `--paginate` a long check-run returns a partial read that looks
    complete. (The jobs read needs no `--paginate`: it returns one object, not a list.) Report those
-   beside the classifier's `html_url` and `run_id`. This bounds the SURVEY only, never the
+   beside the classifier's `html_url`, `run_id`, and `run_attempt`. This bounds the SURVEY only, never the
    diagnosis: the orchestrator, whose own session is unguarded, reads the log itself when a digest
    line is not enough.
 
@@ -1550,7 +1558,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - BOARD-COVERAGE — `board_coverage=<measured: open_public=<n> on_board=<m> status_less=<k>|unknown:<reason>>` — always emit; `measured:` only after the paginated REST items census of step 5b (never from `totalCount`, which counts a different population); never a single-page `.length`
 - UNTYPED-RESIDUAL-UNAVAILABLE — <repo>: operand=<primary|typed:<Type>> truncated at <cap> of <total> → THAT repo's residual withheld (others unaffected); mandatory-query failure ⇒ nothing_on_fire: false
-- <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
+- <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>), event=<event>, path=<path>, created=<created_at>, run=<run_id>, attempt=<run_attempt>   # judged at main's current head; omit the repo entirely when that head is green
 - GITHUB-MANAGED (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `event: dynamic` AND `path` under `dynamic/` (so NO workflow file exists in the repo): not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only. Covers `dynamic/github-code-scanning/`, `dynamic/dependabot/`, and any future managed path
 - GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # equivalent code-scanning specialisation of the line above; `path` starts `dynamic/github-code-scanning/`
 - GITHUB-MANAGED (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out OR startup_failure) runs on main: ours to repair (build, scanning/dependency config, or move off default setup) — DOES count against nothing_on_fire. This escalation is what makes the property test safe: an actionable managed failure recurs, so it is delayed by one run, never hidden

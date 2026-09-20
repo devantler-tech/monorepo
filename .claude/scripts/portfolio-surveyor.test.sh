@@ -3090,8 +3090,8 @@ grep -Fq -- "Read the verdict from the helper's native tool result, never by cap
   fail "step 4 must use the native tool result, not the guard-denied \`; echo \"EXIT=\$?\"\` idiom (monorepo#3390)"
 grep -Fq '| observed native process status 0 and completely empty output | no red runs → that branch is **green** |' <<<"${_out_step}" ||
   fail "step 4 must require both native process status 0 and empty output as the green case (monorepo#3390)"
-grep -Fq '| observed native process status 0 and **well-formed TSV rows** — exactly eight tab-separated fields in helper order: numeric `workflow_id`, red `conclusion` (`failure`, `timed_out`, or `startup_failure`), `html_url`, `name`, supported `event`, `path`, valid `created_at`, numeric `run_id` | those are the **red runs** |' <<<"${_out_step}" ||
-  fail "step 4 must couple the complete eight-field TSV predicate to the red verdict in one table row (monorepo#3390)"
+grep -Fq '| observed native process status 0 and **well-formed TSV rows** — exactly nine tab-separated fields in helper order: numeric `workflow_id`, red `conclusion` (`failure`, `timed_out`, or `startup_failure`), `html_url`, `name`, supported `event`, `path`, valid `created_at`, numeric `run_id`, positive numeric `run_attempt` | those are the **red runs** |' <<<"${_out_step}" ||
+  fail "step 4 must couple the complete nine-field TSV predicate to the red verdict in one table row (monorepo#3390, #3427)"
 grep -Fq '| any nonzero or unavailable native process status; or any other output, including mixed valid and malformed rows | the helper FAILED → **`QUERY-UNKNOWN`** for that repository; never `nothing_on_fire: true` |' <<<"${_out_step}" ||
   fail "step 4 must route nonzero or unavailable status and malformed or mixed output to QUERY-UNKNOWN (monorepo#3390)"
 grep -Fq 'never treat "not empty" as "red runs"' <<<"${_out_step}" ||
@@ -3125,11 +3125,21 @@ for _flag in "--log-failed" "--log" "--job"; do
 done
 grep -Fq 'actions/jobs/<job_id>' <<<"${_log_step}" ||
   fail "step 4 must prescribe the allowed jobs read that names the failing step (monorepo#3420)"
+grep -Fq 'actions/runs/<run_id>/attempts/<run_attempt>/jobs' <<<"${_log_step}" ||
+  fail "step 4 must bind job correlation to the classified run attempt (monorepo#3427)"
+grep -Fq '["failure","timed_out","startup_failure"]' <<<"${_log_step}" ||
+  fail "step 4 must preserve every classifier-red conclusion in job and step selection (monorepo#3427)"
+grep -Fq '[.id,(.check_run_url|capture("/(?<id>[0-9]+)$").id)]' <<<"${_log_step}" ||
+  fail "step 4 must extract the numeric check-run ID before emitting correlation rows (monorepo#3427)"
+grep -Fq 'A well-formed `startup_failure` row with zero returned jobs stays known-red' <<<"${_log_step}" ||
+  fail "step 4 must preserve configuration startup failures that legitimately create no job (monorepo#3427)"
 grep -Fq 'check-runs/<check_run_id>/annotations' <<<"${_log_step}" ||
   fail "step 4 must prescribe the allowed annotations read that carries the error text (monorepo#3420)"
+grep -Fq 'select(.annotation_level=="failure")' <<<"${_log_step}" ||
+  fail "step 4 must exclude warning and notice annotations from the failure digest (monorepo#3427)"
 # The annotations endpoint pages at 30, so an unpaginated read returns a PARTIAL result that is
 # indistinguishable from a complete one — the same fail-open this contract pins for review threads.
-# The jobs read is deliberately NOT covered: it returns one object, not a list (CodeRabbit, #3421).
+# Both list reads must paginate; the job-detail read returns one object and deliberately does not.
 grep -Fq '**with `--paginate`**' <<<"${_log_step}" ||
   fail "step 4 must require --paginate on the annotations read, which pages at 30 (monorepo#3420)"
 grep -Fq 'the orchestrator, whose own session is unguarded' <<<"${_log_step}" ||

@@ -281,21 +281,27 @@ cat > "$FIX/outcomes/prs.json" <<'JSON'
 JSON
 : > "$FIX/outcomes/classification-empty.tsv"
 printf '%s\n' \
-  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201' \
+  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201\t1' \
   > "$FIX/outcomes/classification-managed.tsv"
 printf '%s\n' \
-  $'33\ttimed_out\thttps://example.test/current-failure\tCI\tpush\t.github/workflows/ci.yaml\t2026-09-18T10:00:00Z\t301' \
+  $'33\ttimed_out\thttps://example.test/current-failure\tCI\tpush\t.github/workflows/ci.yaml\t2026-09-18T10:00:00Z\t301\t2' \
   > "$FIX/outcomes/classification-failing.tsv"
 printf '%s\n' \
-  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201' \
+  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201\t1' \
   'usage: classifier' \
   > "$FIX/outcomes/classification-mixed.tsv"
 printf '%s\n' \
-  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201\textra' \
+  $'22\tfailure\thttps://example.test/managed-failure\tAnalyze (actions)\tdynamic\tdynamic/github-code-scanning/codeql\t2026-09-18T09:00:00Z\t201\t1\textra' \
   > "$FIX/outcomes/classification-extra-field.tsv"
 printf '%s\n' \
-  $'33\ttimed_out\thttps://example.test/current-failure\t\tpush\t.github/workflows/ci.yaml\t2026-09-18T10:00:00Z\t301' \
+  $'33\ttimed_out\thttps://example.test/current-failure\t\tpush\t.github/workflows/ci.yaml\t2026-09-18T10:00:00Z\t301\t1' \
   > "$FIX/outcomes/classification-empty-name.tsv"
+printf '%s\n' \
+  $'33\ttimed_out\thttps://example.test/current-failure\tCI\tpush\t.github/workflows/ci.yaml\t2026-09-18T10:00:00Z\t301' \
+  > "$FIX/outcomes/classification-missing-attempt.tsv"
+printf '%s\n' \
+  $'33\ttimed_out\thttps://example.test/current-failure\tCI\tpush\t.github/workflows/ci.yaml\t2026-09-18T10:00:00Z\t301\t0' \
+  > "$FIX/outcomes/classification-zero-attempt.tsv"
 cat > "$FIX/outcomes/managed-history-first.json" <<'JSON'
 {"total_count":1,"workflow_runs":[
   {"id":201,"workflow_id":22,"event":"dynamic","path":"dynamic/github-code-scanning/codeql","conclusion":"failure","created_at":"2026-09-18T09:00:00Z","run_started_at":"2026-09-18T09:00:00Z","name":"Analyze (actions)"}
@@ -461,6 +467,10 @@ OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-extra-field.tsv" out
 check "outcomes reject classifier rows with extra fields" "$OUT" 'UNKNOWN (malformed classifier output)'
 OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-empty-name.tsv" outcomes_run); RC=$?
 check "outcomes reject a classifier row with an empty workflow name" "$OUT" 'UNKNOWN (malformed classifier output)'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-missing-attempt.tsv" outcomes_run); RC=$?
+check "outcomes reject an eight-field row missing run_attempt" "$OUT" 'UNKNOWN (malformed classifier output)'
+OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-zero-attempt.tsv" outcomes_run); RC=$?
+check "outcomes reject a non-positive run_attempt" "$OUT" 'UNKNOWN (malformed classifier output)'
 OUT=$(OUTCOMES_CLASSIFICATION="$FIX/outcomes/classification-failing.tsv" outcomes_run); RC=$?
 check "outcomes preserve a current non-managed failure as actionable red" "$OUT" 'devantler-tech/monorepo                    RED: CI'
 check "outcomes count a current non-managed failure as actionable red" "$OUT" 'repos RED on main: 1'
