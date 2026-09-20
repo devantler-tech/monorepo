@@ -156,11 +156,14 @@ while IFS= read -r job; do
   condition="$(job_condition "$job" || true)"
   if filter="$(filter_output "$condition")"; then
     printf '%s\n' "$filter" >>"$tmp/referenced"
+    printf '%s\n' "$condition" >"$tmp/condition.$job"
   elif [[ "$condition" == *needs.changes.outputs.* ]]; then
     defect "$job: job-level if is not needs.changes.outputs.<name> == 'true' (optionally with the same-repository clause), so it does not filter the job"
+    printf '%s\n' "$condition" >"$tmp/condition.$job"
   else
     # No changes output governs this job, so its own `if` is the only thing deciding whether it runs.
     printf '%s\n' "$job" >>"$tmp/unfiltered"
+    : >"$tmp/condition.$job"
   fi
   # Reference hygiene applies to every reference in the job, wherever it appears: a step reading an
   # output the changes job does not declare is still broken wiring, even though it filters nothing.
@@ -209,8 +212,16 @@ while IFS= read -r job; do
     if grep -qx -- "$need" "$tmp/nonblocking"; then
       defect "$job: needs '$need', which is non-blocking; if that job fails this one skips and the gate counts the skip as a pass"
     fi
-    if grep -qx -- "$job" "$tmp/unfiltered" && [[ "$need" != changes ]] && ! grep -qx -- "$need" "$tmp/unfiltered"; then
-      defect "$job: is unfiltered but needs '$need', which is path-filtered; if '$need' skips this job skips and the gate counts the skip as a pass"
+    if [[ "$need" != changes ]]; then
+      dep_cond="$(cat "$tmp/condition.$job" 2>/dev/null || true)"
+      need_cond="$(cat "$tmp/condition.$need" 2>/dev/null || true)"
+      if [[ "$dep_cond" != "$need_cond" ]]; then
+        if [[ -z "$dep_cond" ]]; then
+          defect "$job: is unfiltered but needs '$need', which is path-filtered; if '$need' skips this job skips and the gate counts the skip as a pass"
+        else
+          defect "$job: needs '$need', but their filter conditions differ; if '$need' skips this job skips and the gate counts the skip as a pass"
+        fi
+      fi
     fi
   done < <(JOB="$job" yq -r '[.jobs[strenv(JOB)].needs] | flatten | .[] | select(. != null)' "$workflow")
   grep -qx -- "$job" "$tmp/status_needs" || defect "$job: missing from status.needs, so it never gates the merge"

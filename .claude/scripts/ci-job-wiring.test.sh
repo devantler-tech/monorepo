@@ -276,6 +276,12 @@ fixture; edit '.jobs.unfiltered.needs = ["test-alpha"]'
 expect_defect "unfiltered blocking job needs a path-filtered one" \
   "unfiltered: is unfiltered but needs 'test-alpha', which is path-filtered"
 
+# Two path-filtered blocking jobs must not depend on each other when their filters differ: if the
+# prerequisite's filter misses, it skips and forces the dependent to skip even when its own filter matched.
+fixture; edit '.jobs.test-alpha.needs = ["changes", "test-beta"]'
+expect_defect "differing filters between path-filtered jobs" \
+  "test-alpha: needs 'test-beta', but their filter conditions differ"
+
 # Substring matches in job-results (e.g. appended text) must not be counted as wired.
 fixture
 # shellcheck disable=SC2016 # the GitHub expression must reach yq literally, unexpanded.
