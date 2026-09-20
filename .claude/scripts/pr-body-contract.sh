@@ -469,17 +469,17 @@ validate_body() {
         candidate = normalized_word($field)
         following = field < NF ? normalized_word($(field + 1)) : ""
         file_context = following ~ /^(file|filename|path)$/
-        known_filename = candidate ~ /[.](awk|c|cc|cjs|conf|cpp|cs|css|env|go|gradle|h|hcl|hpp|htm|html|ini|java|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|tf|toml|ts|tsx|xml|yaml|yml)$/
-        token = prose_token($field)
-        if (file_context && token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
+        if (file_context && candidate ~ /[.]/) {
           $field = "file.name"
           continue
         }
+        known_filename = candidate ~ /[.](awk|c|cc|cjs|conf|cpp|cs|css|env|go|gradle|h|hcl|hpp|htm|html|ini|java|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|tf|toml|ts|tsx|xml|yaml|yml)$/
+        token = prose_token($field)
         if (!file_context && token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           $field = "email"
           continue
         }
-        if (token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%)$/) {
+        if (token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x)$/) {
           $field = "measurement"
           continue
         }
