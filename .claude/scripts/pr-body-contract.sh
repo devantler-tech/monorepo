@@ -469,6 +469,8 @@ validate_body() {
     {
       for (field = 1; field <= NF; field++) {
         candidate = normalized_word($field)
+        before_previous = field > 2 ? normalized_word($(field - 2)) : ""
+        previous = field > 1 ? normalized_word($(field - 1)) : ""
         following = field < NF ? normalized_word($(field + 1)) : ""
         file_context = following ~ /^(file|filename|path)$/
         if (file_context && candidate ~ /[.]/) {
@@ -477,25 +479,19 @@ validate_body() {
         }
         known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cjs|conf|cpp|cs|css|env|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|webp|xml|yaml|yml)$/
         token = prose_token($field)
-        if (known_filename && candidate ~ /@/) {
-          $field = "file.name"
+        email_shape = token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
+        email_context = previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/ || \
+          (previous == "to" && before_previous ~ /^(email|emails|message|messages|send|sent|write)$/) || \
+          following ~ /^(address|email|mailbox)$/
+        if (!file_context && email_shape) {
+          $field = email_context ? "email" : "file.name"
           continue
         }
-        if (!file_context && token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)*[.][[:digit:]][[:alnum:]-]*$/) {
-          $field = "file.name"
-          continue
-        }
-        if (!file_context && token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
-          $field = "email"
-          continue
-        }
-        if (token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x)$/) {
+        if (token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x|st|nd|rd|th)$/) {
           $field = "measurement"
           continue
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
-          before_previous = field > 2 ? normalized_word($(field - 2)) : ""
-          previous = field > 1 ? normalized_word($(field - 1)) : ""
           site_context = !file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
