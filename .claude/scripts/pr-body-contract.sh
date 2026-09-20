@@ -440,7 +440,7 @@ validate_body() {
           dependency_root ~ /[.][[:digit:]][[:alnum:]_-]*$/
         dependency_filename = dependency_dot_segment || dependency_numeric_suffix || \
           (!dependency_namespaced_package && \
-            dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/) || \
+            dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|mov|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml|zip)$/) || \
           dependency ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/
         dependency_segment_count = split(dependency_lower, dependency_segments, "/")
         for (dependency_segment_index = 2; \
@@ -644,10 +644,15 @@ validate_body() {
         email_shape = token ~ /^[[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+([.][[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/ || \
           quoted_email_shape
         if (!explicit_file_context && email_shape) {
+          mailbox_domain = token
+          sub(/^.*@/, "", mailbox_domain)
+          mailbox_public_domain = mailbox_domain ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/ && \
+            public_suffix_candidate(mailbox_domain)
           bare_file_subject = following ~ /^(is|was)$/ && \
             after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
           numeric_terminal_label = token ~ /@[[:alnum:]-]+([.][[:alnum:]-]+)*[.][[:digit:]][[:alnum:]-]*$/
-          $field = (numeric_terminal_label || file_action || bare_file_subject) ? "file.name" : "email"
+          email_filename = known_filename && !mailbox_public_domain
+          $field = (email_filename || numeric_terminal_label || file_action || bare_file_subject) ? "file.name" : "email"
           continue
         }
         if (previous ~ /^(phase|section|stage|step)$/ && token ~ /^[[:digit:]]+[.][[:alnum:]]+$/) {
