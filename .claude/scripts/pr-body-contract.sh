@@ -435,7 +435,7 @@ validate_body() {
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >"${body_symbols}"
@@ -443,7 +443,7 @@ validate_body() {
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/[*_]//g' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >>"${body_symbols}"
@@ -466,8 +466,16 @@ validate_body() {
     }
     {
       for (field = 1; field <= NF; field++) {
+        candidate = normalized_word($field)
+        following = field < NF ? normalized_word($(field + 1)) : ""
+        file_context = following ~ /^(file|filename|path)$/
+        known_filename = candidate ~ /[.](awk|c|cc|cjs|conf|cpp|cs|css|env|go|gradle|h|hcl|hpp|htm|html|ini|java|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|tf|toml|ts|tsx|xml|yaml|yml)$/
         token = prose_token($field)
-        if (token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
+        if (file_context && token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
+          $field = "file.name"
+          continue
+        }
+        if (!file_context && token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           $field = "email"
           continue
         }
@@ -475,13 +483,10 @@ validate_body() {
           $field = "measurement"
           continue
         }
-        candidate = normalized_word($field)
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           before_previous = field > 2 ? normalized_word($(field - 2)) : ""
           previous = field > 1 ? normalized_word($(field - 1)) : ""
-          following = field < NF ? normalized_word($(field + 1)) : ""
-          file_context = following ~ /^(file|filename|path)$/
-          site_context = !file_context && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
+          site_context = !file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
             (previous ~ /^(at|from|on|via)$/ && before_previous ~ /^(available|hosted|published|served)$/) || \
@@ -711,6 +716,10 @@ validate_body() {
   # a partial portfolio extension list. Unit-suffixed fractions and hostnames
   # have already been normalized above.
   if grep -Eiq '(^|[^[:alnum:]_@.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+([[:alpha:]_][[:alnum:]_.-]*|[.-][[:alnum:]_.-]+))|[[:alnum:]_.-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*))([^[:alnum:]_.-]|[.]+([^[:alnum:]_.-]|$)|$)' \
+    "${body_symbols}"; then
+    fail "PR body must not contain implementation or validation detail"
+  fi
+  if grep -Eq '(^|[^[:alnum:]_])(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([^[:alnum:]_]|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
