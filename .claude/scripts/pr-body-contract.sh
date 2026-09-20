@@ -356,9 +356,9 @@ validate_body() {
       else { print }
     }
   ' "${visible_template}" >"${template_structure}"
-  # Preserve level-two section headings in the authored-content view so Why
-  # and What can stop at the next repository-template section.
-  awk 'NF && $0 !~ /^##[[:space:]]+/ && $0 !~ /^(Fixes|Part of) #$/ { print }' \
+  # Preserve every ATX section heading in the authored-content view so Why
+  # and What can stop at any later repository-template section.
+  awk 'NF && $0 !~ /^#{1,6}[[:space:]]+/ && $0 !~ /^(Fixes|Part of) #$/ { print }' \
     "${visible_template}" >"${template_fixed}"
   awk '!seen[$0]++' "${template_fixed}" >"${template_fixed_unique}"
   while IFS= read -r fixed_line; do
@@ -420,7 +420,7 @@ validate_body() {
   fi
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
-    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
+    -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_validation}" >"${body_symbols}"
   previous_line=0
@@ -548,7 +548,7 @@ validate_body() {
       kind = substr($0, 4)
       next
     }
-    active && (/^##[[:space:]]+/ || /^(Fixes|Part of) #[1-9][0-9]*$/ ||
+    active && (/^#{1,6}[[:space:]]+/ || /^(Fixes|Part of) #[1-9][0-9]*$/ ||
       /^No issue: trivial fix[.]$/) {
       finish_section()
       next
@@ -575,7 +575,7 @@ validate_body() {
   if awk '
     /^## Why$/ { active = 1; next }
     /^## What$/ { active = 1; next }
-    active && /^##[[:space:]]+/ { active = 0 }
+    active && /^#{1,6}[[:space:]]+/ { active = 0 }
     active && /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ { found = 1 }
     END { exit found ? 0 : 1 }
   ' "${body_validation}"; then
@@ -583,7 +583,7 @@ validate_body() {
   fi
   if awk '
     /^## Why$/ || /^## What$/ { active = 1; next }
-    active && /^##[[:space:]]+/ { active = 0 }
+    active && /^#{1,6}[[:space:]]+/ { active = 0 }
     /^(Fixes|Part of) #[1-9][0-9]*$/ || /^No issue: trivial fix[.]$/ { active = 0 }
     active && (/^[[:space:]]*\|.*\|[[:space:]]*$/ ||
       /^[[:space:]]*:?-{3,}:?[[:space:]]*(\|[[:space:]]*:?-{3,}:?[[:space:]]*)+$/) { found = 1 }
@@ -597,7 +597,7 @@ validate_body() {
       "${body_content}" | tail -n 1 | cut -d: -f1)"
     if awk -v boundary="${final_delivery_line}" '
       NR > boundary && NF {
-        if ($0 ~ /^##[[:space:]]+/) {
+        if ($0 ~ /^#{1,6}[[:space:]]+/) {
           in_template_section = 1
         } else if (in_template_section) {
           next
@@ -622,11 +622,16 @@ validate_body() {
   if grep -Eq '^[[:space:]]*(```|~~~)' "${body_validation}"; then
     fail "PR body must not contain code or command fences"
   fi
-  if awk '/^    / || /^\t/ { found = 1 } END { exit found ? 0 : 1 }' "${body_validation}"; then
+  if ! awk -v reject_indented_code=1 -f "${script_dir}/markdown-structural-lines.awk" \
+    "${body_content}" >/dev/null; then
     fail "PR body must not contain indented code blocks"
   fi
   if grep -Fq '`' "${body_validation}"; then
     fail "PR body must not contain code or command snippets"
+  fi
+  if grep -Eiq '(^|[^[:alnum:]_])CI[[:space:]]+(is[[:space:]]+)?(green|red|passing|failing|passed|failed|succeeded|successful)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(the[[:space:]]+)?(build|pipeline|workflow)[[:space:]]+(is[[:space:]]+)?(green|red|passing|failing|passed|failed|succeeded|successful)([[:space:]]+in[[:space:]]+CI)?([^[:alnum:]_]|$)' \
+    "${body_symbols}"; then
+    fail "PR body must not contain implementation or validation detail"
   fi
   if grep -Eq '(^|[^[:alnum:]_])([A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*|[A-Z]{2,}[a-z][A-Za-z0-9]*)([^[:alnum:]_]|$)' \
     "${body_symbols}"; then

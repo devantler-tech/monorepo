@@ -24,7 +24,7 @@ function expand_leading_tabs(line,    output, column, position, char, width, pad
   return output
 }
 
-function structural_line(line,    indent, rest) {
+function structural_line(line,    indent, marker_width, rest) {
   sub(/\r$/, "", line)
   line = expand_leading_tabs(line)
 
@@ -34,6 +34,9 @@ function structural_line(line,    indent, rest) {
       indent++
     }
     if (indent >= 4) {
+      if (reject_indented_code) {
+        found_indented_code = 1
+      }
       return ""
     }
     if (indent >= length(line)) {
@@ -49,8 +52,14 @@ function structural_line(line,    indent, rest) {
       line = rest
       continue
     }
-    if (rest ~ /^[-*][[:space:]]/) {
-      rest = expand_leading_tabs(substr(rest, 2))
+    marker_width = 0
+    if (rest ~ /^[-*+][[:space:]]/) {
+      marker_width = 1
+    } else if (match(rest, /^[0-9]+[.)][[:space:]]/)) {
+      marker_width = RLENGTH - 1
+    }
+    if (marker_width > 0) {
+      rest = expand_leading_tabs(substr(rest, marker_width + 1))
       if (substr(rest, 1, 1) == " ") {
         rest = substr(rest, 2)
       }
@@ -63,4 +72,10 @@ function structural_line(line,    indent, rest) {
 
 {
   print structural_line($0)
+}
+
+END {
+  if (reject_indented_code && found_indented_code) {
+    exit 1
+  }
 }
