@@ -444,14 +444,18 @@ validate_body() {
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >>"${body_symbols}"
   # A handful of portfolio file extensions are also delegated public suffixes.
-  # Treat those dotted tokens as sites in ordinary prose, but retain explicit
-  # implementation contexts such as "change worker.cc" as file references.
+  # Preserve an ambiguous dotted token as a filename by default. Normalize it
+  # only when the surrounding prose explicitly identifies a site or domain;
+  # otherwise sentences such as "fix the defect in parser.py" could evade the
+  # implementation-detail check solely because PY is also a public suffix.
   # Source: https://data.iana.org/TLD/tlds-alpha-by-domain.txt
-  if grep -Eiq '(^|[^[:alnum:]_])(add|change|edit|modify|remove|rename|update)[[:space:]]+(the[[:space:]]+)?[[:alnum:]_.-]+[.](cc|java|md|properties|py|rs|sh|tf)([^[:alnum:]_-]|$)|(^|[^[:alnum:]_])[[:alnum:]_.-]+[.](cc|java|md|properties|py|rs|sh|tf)[[:space:]]+(file|path)([^[:alnum:]_]|$)' \
-    "${body_symbols}"; then
-    fail "PR body must not contain implementation or validation detail"
-  fi
   awk '
+    function normalized_word(text, value) {
+      value = tolower(text)
+      gsub(/^[^[:alnum:]]+/, "", value)
+      gsub(/[^[:alnum:]_-]+$/, "", value)
+      return value
+    }
     BEGIN {
       split("cc java md properties py rs sh tf", suffixes)
       for (suffix_index in suffixes) {
@@ -460,13 +464,15 @@ validate_body() {
     }
     {
       for (field = 1; field <= NF; field++) {
-        candidate = tolower($field)
-        gsub(/^[^[:alnum:]]+/, "", candidate)
-        gsub(/[^[:alnum:]-]+$/, "", candidate)
+        candidate = normalized_word($field)
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           suffix = candidate
           sub(/^.*[.]/, "", suffix)
-          if (public_suffix[suffix]) { $field = "site" }
+          previous = field > 1 ? normalized_word($(field - 1)) : ""
+          following = field < NF ? normalized_word($(field + 1)) : ""
+          site_context = previous ~ /^(at|domain|from|host|of|on|reach|site|to|via|visit|website)$/ || \
+            following ~ /^(address|domain|host|site|website)$/
+          if (public_suffix[suffix] && site_context) { $field = "site" }
         }
       }
       print
