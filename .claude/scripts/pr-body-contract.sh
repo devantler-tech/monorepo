@@ -423,6 +423,10 @@ validate_body() {
         rendered = substr(rendered, 1, RSTART - 1) label \
           substr(rendered, RSTART + RLENGTH)
       }
+      if (match(rendered, /^📦 New dependency:[[:space:]]+[-[:alnum:]_.]+(:[-[:alnum:]_.]+)+/)) {
+        rendered = "📦 New dependency: dependency" \
+          substr(rendered, RSTART + RLENGTH)
+      }
       if (rendered ~ /[^[:space:]]/) { print rendered }
       else { print "" }
     }
