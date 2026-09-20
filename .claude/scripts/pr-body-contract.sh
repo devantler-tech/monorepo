@@ -431,15 +431,14 @@ validate_body() {
         dependency_lower = tolower(dependency)
         dependency_root = dependency_lower
         sub(/\/.*/, "", dependency_root)
-        dependency_original_root = dependency
-        sub(/\/.*/, "", dependency_original_root)
         dependency_dot_segment = dependency ~ /(^|\/)[.][.]?(\/|$)/
-        dependency_known_dotted_package = dependency_lower ~ /^(ruamel[.]yaml|zope[.]interface)$/
+        dependency_known_dotted_namespace = dependency_lower ~ \
+          /^(backports|jaraco|ruamel|zope)([.][[:alnum:]_-]+)+$/
         dependency_namespaced_package = dependency ~ \
           /^[[:upper:]][[:alnum:]_-]*[.][[:upper:]][[:alnum:]_-]*([.][[:upper:]][[:alnum:]_-]*)*$/ || \
-          dependency_known_dotted_package
+          dependency_known_dotted_namespace
         dependency_arbitrary_root_suffix = dependency !~ /\// && \
-          dependency_original_root ~ /^[[:lower:][:digit:]_-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)$/
+          dependency_root ~ /^[[:lower:][:digit:]_-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)$/
         dependency_numeric_suffix = dependency_root !~ /:/ && \
           dependency_root ~ /[.][[:digit:]][[:alnum:]_-]*$/
         dependency_filename = dependency_dot_segment || dependency_numeric_suffix || \
