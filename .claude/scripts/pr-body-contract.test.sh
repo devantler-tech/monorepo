@@ -2167,6 +2167,16 @@ expect_fail "numeric-suffix email-shaped asset in action prose" \
   "${subject}" check --repo devantler-tech/platform \
   --body-file "${fixture_root}/numeric-suffix-email-shaped-asset.md"
 
+sed 's/Change the logo@2x.png file/The update affects logo@2x.3mf/' \
+  "${fixture_root}/email-shaped-asset.md" \
+  >"${fixture_root}/neutral-numeric-suffix-email-shaped-asset.md"
+expect_fail "numeric-suffix email-shaped asset in neutral prose" \
+  "PR body must not contain implementation or validation detail" env \
+  PATH="${fixture_root}/bin:${PATH}" GH_MODE=repo \
+  GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
+  "${subject}" check --repo devantler-tech/platform \
+  --body-file "${fixture_root}/neutral-numeric-suffix-email-shaped-asset.md"
+
 sed 's/logo@2x.png/guide@v2.pdf/' \
   "${fixture_root}/email-shaped-asset-action.md" \
   >"${fixture_root}/document-suffix-email-shaped-asset.md"

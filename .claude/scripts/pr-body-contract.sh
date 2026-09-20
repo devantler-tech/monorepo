@@ -600,7 +600,8 @@ validate_body() {
         if (!explicit_file_context && email_shape) {
           bare_file_subject = following ~ /^(is|was)$/ && \
             after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
-          $field = (file_action || bare_file_subject) ? "file.name" : "email"
+          numeric_terminal_label = token ~ /@[[:alnum:]-]+([.][[:alnum:]-]+)*[.][[:digit:]][[:alnum:]-]*$/
+          $field = (numeric_terminal_label || file_action || bare_file_subject) ? "file.name" : "email"
           continue
         }
         if (previous ~ /^(phase|section|stage|step)$/ && token ~ /^[[:digit:]]+[.][[:alnum:]]+$/) {
