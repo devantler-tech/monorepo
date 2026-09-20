@@ -472,17 +472,17 @@ validate_body() {
         before_previous = field > 2 ? normalized_word($(field - 2)) : ""
         previous = field > 1 ? normalized_word($(field - 1)) : ""
         following = field < NF ? normalized_word($(field + 1)) : ""
+        token = prose_token($field)
         file_context = following ~ /^(file|filename|path)$/
-        if (file_context && candidate ~ /[.]/) {
+        if (file_context && (candidate ~ /[.]/ || token ~ /^[.]/)) {
           $field = "file.name"
           continue
         }
         known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cjs|conf|cpp|cs|css|env|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|webp|xml|yaml|yml)$/
-        token = prose_token($field)
         email_shape = token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
         email_context = previous ~ /^(contact|email|emails|message|messages|notify|reach|send|sent|write)$/ || \
           (previous == "to" && before_previous ~ /^(email|emails|message|messages|send|sent|write)$/) || \
-          following ~ /^(address|email|mailbox)$/
+          following ~ /^(address|can|cannot|could|does|email|has|is|mailbox|was|will|would)$/
         if (!file_context && email_shape) {
           $field = email_context ? "email" : "file.name"
           continue
@@ -496,7 +496,7 @@ validate_body() {
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
             (previous ~ /^(at|from|on|via)$/ && before_previous ~ /^(available|hosted|published|served)$/) || \
-            following ~ /^(address|audience|customers|domain|host|readers|site|users|visitors|website)$/)
+            following ~ /^(address|audience|customers|domain|host|is|readers|site|users|visitors|was|website)$/)
           if (site_context) { $field = "site" }
         }
       }
@@ -607,6 +607,10 @@ validate_body() {
       gsub(/[mM]rs[.]/, "Mrs", rest)
       gsub(/[dD]r[.]/, "Dr", rest)
       gsub(/[uU][.][sS][.]/, "US", rest)
+      gsub(/[uU][.][kK][.]/, "UK", rest)
+      gsub(/[eE][.][uU][.]/, "EU", rest)
+      gsub(/[aA][.][mM][.]/, "am", rest)
+      gsub(/[pP][.][mM][.]/, "pm", rest)
       while (match(rest, /[.!?]["”’)}\]*_]*([[:space:]]|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
