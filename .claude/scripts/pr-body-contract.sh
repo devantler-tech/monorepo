@@ -535,12 +535,13 @@ validate_body() {
         file_subject = file_context && after_following ~ /^(is|was)$/ && \
           third_after ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         product_file_phrase = file_context && after_following ~ /^(upload|uploads)$/
-        numeric_file_subject = token ~ /[.][[:digit:]]+$/ && following ~ /^(is|was)$/ && \
+        decimal_number = token ~ /^[[:digit:]]+([.][[:digit:]]+)+$/
+        numeric_file_subject = token ~ /[.][[:digit:]]+$/ && !decimal_number && following ~ /^(is|was)$/ && \
           after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
               (candidate ~ /[.]/ || token ~ /^[.]/ || (file_action && !product_file_phrase) || file_subject)) || \
             (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
-            (file_action && token ~ /[.][[:digit:]]+$/) || numeric_file_subject) {
+            (file_action && token ~ /[.][[:digit:]]+$/ && !decimal_number) || numeric_file_subject) {
           $field = "file.name"
           continue
         }
