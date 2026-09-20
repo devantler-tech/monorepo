@@ -433,7 +433,7 @@ validate_body() {
           dependency ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/
         if (!dependency_filename && (dependency ~ /^@[[:alnum:]][[:alnum:]_.-]*\/[[:alnum:]][[:alnum:]_.-]*$/ || \
             dependency ~ /^[[:alnum:]][[:alnum:]_-]*([.][[:alnum:]][[:alnum:]_-]*)+$/ || \
-            dependency ~ /^[[:alnum:]][[:alnum:]_.-]*:[[:alnum:]][[:alnum:]_.-]*$/ || \
+            dependency ~ /^[[:alnum:]][[:alnum:]_.-]*:[[:alnum:]][[:alnum:]_.-]*(:[[:alnum:]][[:alnum:]_.+-]*)?$/ || \
             dependency ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+(\/[[:alnum:]_.-]+)+$/)) {
           rendered = "📦 New dependency: dependency" \
             substr(rendered, RSTART + RLENGTH)
@@ -452,7 +452,8 @@ validate_body() {
   sed -E \
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])CNAME[[:space:]]+record([^[:alnum:]_]|$)/\1dns-record\2/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Dd][.][Cc][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_])(of|named|called|by)[[:space:]]+([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*([^[:alnum:]_]|$)/\1personal-name\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
@@ -464,7 +465,8 @@ validate_body() {
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/[*_]//g' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
-    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])CNAME[[:space:]]+record([^[:alnum:]_]|$)/\1dns-record\2/g' \
+    -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Dd][.][Cc][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_])(of|named|called|by)[[:space:]]+([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*([^[:alnum:]_]|$)/\1personal-name\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
@@ -509,8 +511,10 @@ validate_body() {
     {
       rendered_record = $0
       while (match(rendered_record, /"([^"\\]|\\.)*"@[[:alnum:]-]+([.][[:alnum:]-]+)+/)) {
-        rendered_record = substr(rendered_record, 1, RSTART - 1) "email" \
-          substr(rendered_record, RSTART + RLENGTH)
+        quoted_suffix = substr(rendered_record, RSTART + RLENGTH)
+        quoted_kind = quoted_suffix ~ /^[[:space:]]+(file|filename|path)([^[:alnum:]_]|$)/ \
+          ? "file.name" : "email"
+        rendered_record = substr(rendered_record, 1, RSTART - 1) quoted_kind quoted_suffix
       }
       $0 = rendered_record
       for (field = 1; field <= NF; field++) {
@@ -530,10 +534,11 @@ validate_body() {
             before_previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/)
         file_subject = file_context && after_following ~ /^(is|was)$/ && \
           third_after ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
+        product_file_phrase = file_context && after_following ~ /^(upload|uploads)$/
         numeric_file_subject = token ~ /[.][[:digit:]]+$/ && following ~ /^(is|was)$/ && \
           after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
-              (candidate ~ /[.]/ || token ~ /^[.]/ || file_action || file_subject)) || \
+              (candidate ~ /[.]/ || token ~ /^[.]/ || (file_action && !product_file_phrase) || file_subject)) || \
             (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
             (file_action && token ~ /[.][[:digit:]]+$/) || numeric_file_subject) {
           $field = "file.name"
@@ -674,7 +679,7 @@ validate_body() {
       gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
       gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+[[:upper:]][[:alpha:]-]*[[:space:]]+(Administration|Agency|Association|Authority|Bank|Bureau|Commission|Committee|Council|Court|Department|Embassy|Federation|Force|Forces|Government|Institute|Islands|Marine|Marines|Ministry|Navy|Office|Organization|Parliament|Service|Society|Union|University)/, "geographic-name", rest)
       gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+(Agency|Air|Army|Congress|Court|Department|Embassy|Force|Forces|Government|Marine|Marines|Navy|Parliament)/, "geographic-name", rest)
-      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|[[:lower:]][[:alnum:]]*([[:upper:]][[:alnum:]]*|[.][[:alnum:].-]+))|$)/)) {
+      while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.]|[dD][.][cC][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|[[:lower:]][[:alnum:]]*([[:upper:]][[:alnum:]]*|[.][[:alnum:].-]+))|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
       }
@@ -694,6 +699,7 @@ validate_body() {
       gsub(/[uU][.][sS][.]/, "US", rest)
       gsub(/[uU][.][kK][.]/, "UK", rest)
       gsub(/[eE][.][uU][.]/, "EU", rest)
+      gsub(/[dD][.][cC][.]/, "DC", rest)
       gsub(/[aA][.][mM][.]/, "am", rest)
       gsub(/[pP][.][mM][.]/, "pm", rest)
       gsub(/[pP][hH][.][dD][.]/, "PhD", rest)
