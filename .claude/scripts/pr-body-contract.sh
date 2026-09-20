@@ -557,8 +557,10 @@ validate_body() {
         sub(/[.]$/, "", raw_domain_candidate)
         candidate = normalized_word($field)
         domain_candidate = candidate
+        raw_domain_used = 0
         if (domain_candidate !~ /[.]/ && raw_domain_candidate ~ /[.]/) {
           domain_candidate = raw_domain_candidate
+          raw_domain_used = 1
         }
         sub(/[\047’]s$/, "", domain_candidate)
         third_previous = field > 3 ? normalized_word($(field - 3)) : ""
@@ -655,7 +657,8 @@ validate_body() {
           $field = (email_filename || numeric_terminal_label || file_action || bare_file_subject) ? "file.name" : "email"
           continue
         }
-        if (previous ~ /^(phase|section|stage|step)$/ && token ~ /^[[:digit:]]+[.][[:alnum:]]+$/) {
+        if (previous ~ /^(group|option|phase|plan|section|stage|step|tier)$/ && \
+            token ~ /^[[:digit:]]+[.][[:alnum:]]+$/) {
           $field = "journey-step"
           continue
         }
@@ -665,10 +668,14 @@ validate_body() {
           $field = "measurement"
           continue
         }
-        raw_domain_shape = domain_candidate ~ /[.]/ && \
-          domain_candidate !~ /(^[.]|[.]$|[.][.]|[\/\\@_:])/
-        if (domain_candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/ || raw_domain_shape) {
-          public_domain = public_suffix_candidate(domain_candidate)
+        domain_lookup_candidate = domain_candidate
+        sub(/[\/?#].*$/, "", domain_lookup_candidate)
+        ascii_domain_shape = domain_lookup_candidate ~ \
+          /^[[:alnum:]]([[:alnum:]-]*[[:alnum:]])?([.][[:alnum:]]([[:alnum:]-]*[[:alnum:]])?)+$/
+        raw_domain_shape = raw_domain_used && domain_lookup_candidate ~ /[.]/ && \
+          domain_lookup_candidate !~ /(^[.-]|[.-]$|[.][.-]|-[.]|[.][.]|[\/\\@_:])/
+        if (ascii_domain_shape || raw_domain_shape) {
+          public_domain = public_suffix_candidate(domain_lookup_candidate)
           site_context = public_domain && !explicit_file_context && !file_action && \
             (!known_filename || site_action) && \
             !(following ~ /^(is|was)$/ && \
