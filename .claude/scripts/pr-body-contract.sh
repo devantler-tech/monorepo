@@ -432,10 +432,13 @@ validate_body() {
         dependency_root = dependency_lower
         sub(/\/.*/, "", dependency_root)
         dependency_dot_segment = dependency ~ /(^|\/)[.][.]?(\/|$)/
+        dependency_namespaced_package = dependency ~ \
+          /^[[:upper:]][[:alnum:]_-]*[.][[:upper:]][[:alnum:]_-]*([.][[:upper:]][[:alnum:]_-]*)*$/
         dependency_numeric_suffix = dependency_root !~ /:/ && \
           dependency_root ~ /[.][[:digit:]][[:alnum:]_-]*$/
         dependency_filename = dependency_dot_segment || dependency_numeric_suffix || \
-          dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/ || \
+          (!dependency_namespaced_package && \
+            dependency_root ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/) || \
           dependency ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/
         if (!dependency_filename && (dependency ~ /^@[[:alnum:]][[:alnum:]_.-]*\/[[:alnum:]][[:alnum:]_.-]*$/ || \
             dependency ~ /^[[:alnum:]][[:alnum:]_-]*([.][[:alnum:]][[:alnum:]_-]*)+$/ || \
@@ -527,6 +530,8 @@ validate_body() {
       $0 = rendered_record
       for (field = 1; field <= NF; field++) {
         candidate = normalized_word($field)
+        domain_candidate = candidate
+        sub(/[\047’]s$/, "", domain_candidate)
         third_previous = field > 3 ? normalized_word($(field - 3)) : ""
         before_previous = field > 2 ? normalized_word($(field - 2)) : ""
         previous = field > 1 ? normalized_word($(field - 1)) : ""
@@ -538,13 +543,14 @@ validate_body() {
         file_context = same_sentence_context && following ~ /^(file|filename)$/
         path_context = same_sentence_context && following == "path"
         explicit_file_context = file_context || path_context
-        file_action = previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/ || \
+        file_action = previous ~ /^(change|create|delete|download|edit|fix|modify|move|open|remove|rename|replace|update)$/ || \
           (previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
-            before_previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/)
+            before_previous ~ /^(change|create|delete|download|edit|fix|modify|move|open|remove|rename|replace|update)$/)
         file_subject = file_context && after_following ~ /^(is|was)$/ && \
           third_after ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         product_file_phrase = file_context && after_following ~ /^(upload|uploads)$/
         decimal_number = token ~ /^[[:digit:]]+([.][[:digit:]]+)+$/
+        literal_quantity = $field ~ /^[[:digit:]]*[.][[:digit:]]+[[:upper:]][[:upper:]]?[[:upper:]]?[[:upper:]]?([^[:alnum:]_]|$)/
         numeric_file_subject = token ~ /[.][[:digit:]][[:alnum:]_-]*$/ && !decimal_number && following ~ /^(is|was)$/ && \
           after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
@@ -569,13 +575,13 @@ validate_body() {
           $field = "journey-step"
           continue
         }
-        if (token ~ /^[[:digit:]]*[.][[:digit:]]+e[+-]?[[:digit:]]+$/ || \
+        if (literal_quantity || token ~ /^[[:digit:]]*[.][[:digit:]]+e[+-]?[[:digit:]]+$/ || \
             token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|bps|kbps|mbps|gbps|tbps|kibps|mibps|gibps|tibps|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x|st|nd|rd|th)(\/(s|min|h|d|day))?$/) {
           $field = "measurement"
           continue
         }
-        if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
-          public_domain = public_suffix_candidate(candidate)
+        if (domain_candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
+          public_domain = public_suffix_candidate(domain_candidate)
           site_context = public_domain && !explicit_file_context && !file_action && !known_filename && \
             !(following ~ /^(is|was)$/ && \
               after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/)
