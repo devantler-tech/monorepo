@@ -216,6 +216,12 @@ resolve_template() {
   local destination="$2"
   local owner="${target_repo%%/*}"
   local directory
+  local error_file="${work_dir}/gh-api-error"
+
+  if ! gh api "repos/${target_repo}" --jq '.full_name' \
+    >/dev/null 2>"${error_file}"; then
+    fail "target repository is not accessible: ${target_repo}"
+  fi
 
   for directory in '.github' '.' 'docs'; do
     if find_template_path "${target_repo}" "${directory}"; then
@@ -404,6 +410,10 @@ validate_body() {
     }
     !thematic_break($0) {
       rendered = $0
+      while (match(rendered, /!\[[^][]*\]\([^()]*\)/)) {
+        rendered = substr(rendered, 1, RSTART - 1) \
+          substr(rendered, RSTART + RLENGTH)
+      }
       while (match(rendered, /\[[^][]+\]\([^()]*\)/)) {
         token = substr(rendered, RSTART, RLENGTH)
         label = token
@@ -475,7 +485,7 @@ validate_body() {
 
   issue_count="$(grep -Ec '^(Fixes|Part of) #[1-9][0-9]*$' "${visible_body}" || true)"
   relationship_marker_count="$(grep -Eic '(^|[^[:alnum:]_])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]*(#|[[:alnum:]_.-]+/[[:alnum:]_.-]+#|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/)|(^|[^[:alnum:]_])part[[:space:]]+of[[:space:]]*(#|[[:alnum:]_.-]+/[[:alnum:]_.-]+#|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/)' \
-    "${visible_body}" || true)"
+    "${body_content}" || true)"
   fixes_count="$(grep -Ec '^Fixes #[1-9][0-9]*$' "${visible_body}" || true)"
   part_of_count="$(grep -Ec '^Part of #[1-9][0-9]*$' "${visible_body}" || true)"
   no_issue_marker_count="$(grep -Fxc 'No issue: trivial fix.' "${visible_body}" || true)"
@@ -628,7 +638,7 @@ validate_body() {
     fi
   fi
 
-  if grep -Eq '^[[:space:]]*(```|~~~)' "${body_validation}"; then
+  if grep -Eq '^[[:space:]]*(```|~~~)' "${markdown_body}"; then
     fail "PR body must not contain code or command fences"
   fi
   if ! awk -v reject_indented_code=1 -f "${script_dir}/markdown-structural-lines.awk" \
@@ -646,7 +656,7 @@ validate_body() {
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
-  if grep -Eiq '(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])(Dockerfile|Makefile|Taskfile|Justfile|Procfile|Gemfile|Rakefile|Jenkinsfile|Vagrantfile|Tiltfile|Brewfile)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl|mod|sum|toml|lock|ini|conf|cfg|env|properties|gradle|xml|sql|proto)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[[:space:]])--[[:alnum:]][[:alnum:]-]*([^[:alnum:]-]|$)|(^|[^[:alnum:]_])(kubectl[[:space:]]+(apply|create|delete|describe|exec|get|logs|patch|rollout|scale|set|wait)|helm[[:space:]]+(dependency|install|lint|list|package|repo|rollback|status|template|test|uninstall|upgrade)|docker[[:space:]]+(build|compose|exec|images|inspect|logs|ps|pull|push|run|stop)|git[[:space:]]+(add|branch|checkout|cherry-pick|clone|commit|diff|fetch|log|merge|pull|push|rebase|reset|restore|show|status|switch|tag|worktree)|gh[[:space:]]+(api|auth|issue|pr|repo|run|workflow)|(terraform|tofu)[[:space:]]+(apply|destroy|fmt|import|init|output|plan|providers|refresh|show|state|taint|test|validate|workspace)|(curl|wget)[[:space:]]+url|ansible(-playbook|-galaxy)?[[:space:]]+(all|localhost|install|playbook|run))([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(go[[:space:]]+(test|build|run|mod|generate|install|get)|npm[[:space:]]+(run|test|install)|pnpm[[:space:]]+(run|test|install)|cargo[[:space:]]+(test|build|run)|dotnet[[:space:]]+(test|build|run))([^[:alnum:]_]|$)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
+  if grep -Eiq '(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])(Dockerfile|Makefile|Taskfile|Justfile|Procfile|Gemfile|Rakefile|Jenkinsfile|Vagrantfile|Tiltfile|Brewfile)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|rb|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl|mod|sum|toml|lock|ini|conf|cfg|env|properties|gradle|xml|sql|proto)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[[:space:]])--[[:alnum:]][[:alnum:]-]*([^[:alnum:]-]|$)|(^|[^[:alnum:]_])(kubectl[[:space:]]+(apply|create|delete|describe|exec|get|logs|patch|rollout|scale|set|wait)|helm[[:space:]]+(dependency|install|lint|list|package|repo|rollback|status|template|test|uninstall|upgrade)|docker[[:space:]]+(build|compose|exec|images|inspect|logs|ps|pull|push|run|stop)|git[[:space:]]+(add|branch|checkout|cherry-pick|clone|commit|diff|fetch|log|merge|pull|push|rebase|reset|restore|show|status|switch|tag|worktree)|gh[[:space:]]+(api|auth|issue|pr|repo|run|workflow)|(terraform|tofu)[[:space:]]+(apply|destroy|fmt|import|init|output|plan|providers|refresh|show|state|taint|test|validate|workspace)|(curl|wget)[[:space:]]+url|ansible(-playbook|-galaxy)?[[:space:]]+(all|localhost|install|playbook|run))([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(go[[:space:]]+(test|build|run|mod|generate|install|get)|npm[[:space:]]+(run|test|install)|pnpm[[:space:]]+(run|test|install)|cargo[[:space:]]+(test|build|run)|dotnet[[:space:]]+(test|build|run))([^[:alnum:]_]|$)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi

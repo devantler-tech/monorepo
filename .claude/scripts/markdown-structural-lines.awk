@@ -53,9 +53,14 @@ function structural_line(line,    indent, marker_width, rest) {
       continue
     }
     marker_width = 0
-    if (rest ~ /^[-*+][[:space:]]/) {
+    # Role routing recognizes only the quote and unordered-list containers
+    # documented for routine disclosures. The general structural parser keeps
+    # normalizing every supported Markdown list form.
+    if (role_routing && rest ~ /^[-*][[:space:]]/) {
       marker_width = 1
-    } else if (match(rest, /^[0-9]+[.)][[:space:]]/)) {
+    } else if (!role_routing && rest ~ /^[-*+][[:space:]]/) {
+      marker_width = 1
+    } else if (!role_routing && match(rest, /^[0-9]+[.)][[:space:]]/)) {
       marker_width = RLENGTH - 1
     }
     if (marker_width > 0) {
