@@ -507,9 +507,13 @@ validate_body() {
           continue
         }
         known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/
-        email_shape = token ~ /^[[:alnum:]_%+-]+([.][[:alnum:]_%+-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
+        email_shape = token ~ /^[[:alnum:]_%+\047-]+([.][[:alnum:]_%+\047-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
         if (!explicit_file_context && email_shape) {
           $field = (known_filename || file_action) ? "file.name" : "email"
+          continue
+        }
+        if (previous ~ /^(phase|section|stage|step)$/ && token ~ /^[[:digit:]]+[.][[:alnum:]]+$/) {
+          $field = "journey-step"
           continue
         }
         if (token ~ /^[[:digit:]]*[.][[:digit:]]+e[+-]?[[:digit:]]+$/ || \
@@ -518,7 +522,7 @@ validate_body() {
           continue
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
-          public_domain = candidate ~ /[.](app|biz|cloud|com|dev|edu|gov|info|net|org|tech)$/ || \
+          public_domain = candidate ~ /[.](academy|aero|agency|app|art|asia|biz|blog|cloud|club|com|company|coop|dev|digital|edu|email|events|finance|foundation|fun|gov|group|guru|info|international|jobs|life|live|media|mobi|museum|name|net|network|news|online|org|photography|pro|shop|site|solutions|space|store|studio|support|systems|tech|technology|tel|today|tools|travel|wiki|work|world|xxx|xyz|zone)$/ || \
             country_code_domain(candidate) || \
             candidate ~ /[.](ac|co|com|edu|gov|net|org)[.][[:alpha:]][[:alpha:]]$/
           site_context = public_domain && !explicit_file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
