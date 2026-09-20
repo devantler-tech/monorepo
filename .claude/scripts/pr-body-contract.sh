@@ -479,7 +479,7 @@ validate_body() {
     -e 's/(^|[^[:alnum:]_])CNAME[[:space:]]+record([^[:alnum:]_]|$)/\1dns-record\2/g' \
     -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Dd][.][Cc][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_])(of|named|called|by)[[:space:]]+([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*([^[:alnum:]_]|$)/\1personal-name\4/g' \
-    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+[+][[:alnum:]-]+([.][[:alnum:]-]+)*)([^[:alnum:]_-]|$)/\1version\5/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+(-[[:alnum:]-]+([.][[:alnum:]-]+)*)?[+][[:alnum:]-]+([.][[:alnum:]-]+)*)([^[:alnum:]_-]|$)/\1version\7/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.-]?([aA][lL][pP][hH][aA]|[bB][eE][tT][aA]|[pP][rR][eE][vV][iI][eE][wW])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
@@ -493,7 +493,7 @@ validate_body() {
     -e 's/(^|[^[:alnum:]_])CNAME[[:space:]]+record([^[:alnum:]_]|$)/\1dns-record\2/g' \
     -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Dd][.][Cc][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_])(of|named|called|by)[[:space:]]+([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*([^[:alnum:]_]|$)/\1personal-name\4/g' \
-    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+[+][[:alnum:]-]+([.][[:alnum:]-]+)*)([^[:alnum:]_-]|$)/\1version\5/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+(-[[:alnum:]-]+([.][[:alnum:]-]+)*)?[+][[:alnum:]-]+([.][[:alnum:]-]+)*)([^[:alnum:]_-]|$)/\1version\7/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.-]?([aA][lL][pP][hH][aA]|[bB][eE][tT][aA]|[pP][rR][eE][vV][iI][eE][wW])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
@@ -551,8 +551,15 @@ validate_body() {
           $field = "file.name"
           continue
         }
+        raw_domain_candidate = tolower($field)
+        gsub(/^["(<{*_`]+/, "", raw_domain_candidate)
+        gsub(/["),;:!?}>*_`]+$/, "", raw_domain_candidate)
+        sub(/[.]$/, "", raw_domain_candidate)
         candidate = normalized_word($field)
         domain_candidate = candidate
+        if (domain_candidate !~ /[.]/ && raw_domain_candidate ~ /[.]/) {
+          domain_candidate = raw_domain_candidate
+        }
         sub(/[\047’]s$/, "", domain_candidate)
         third_previous = field > 3 ? normalized_word($(field - 3)) : ""
         before_previous = field > 2 ? normalized_word($(field - 2)) : ""
@@ -574,7 +581,10 @@ validate_body() {
         article_file_action = before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
           previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
           before_previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/
-        file_action = direct_file_action || article_file_action
+        modifier_file_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
+          before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && previous != "" && \
+          before_previous ~ /^(attach|change|copy|create|delete|download|edit|extract|fix|modify|move|open|remove|rename|replace|save|update|upload)$/
+        file_action = direct_file_action || article_file_action || modifier_file_action
         direct_site_action = previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
           previous ~ /^(browse|reach|visit)$/
         article_site_action = before_previous_field !~ /[.!?,;:]["”’)}\]*_]*$/ && \
@@ -646,11 +656,13 @@ validate_body() {
         }
         if (literal_quantity || lowercase_compact_quantity || \
             token ~ /^[[:digit:]]*[.][[:digit:]]+e[+-]?[[:digit:]]+$/ || \
-            token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|hz|khz|mhz|ghz|bps|kbps|mbps|gbps|tbps|kibps|mibps|gibps|tibps|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x|st|nd|rd|th)(\/(s|min|h|d|day))?$/) {
+            token ~ /^[[:digit:]]*[.][[:digit:]]+(ns|us|ms|s|min|h|d|mm|cm|m|km|mg|g|kg|l|hz|khz|mhz|ghz|bps|kbps|mbps|gbps|tbps|kibps|mibps|gibps|tibps|b|kb|mb|gb|tb|kib|mib|gib|tib|v|mv|a|ma|w|kw|mw|%|x|st|nd|rd|th)(\/(s|min|h|d|day))?$/) {
           $field = "measurement"
           continue
         }
-        if (domain_candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
+        raw_domain_shape = domain_candidate ~ /[.]/ && \
+          domain_candidate !~ /(^[.]|[.]$|[.][.]|[\/\\@_:])/
+        if (domain_candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/ || raw_domain_shape) {
           public_domain = public_suffix_candidate(domain_candidate)
           site_context = public_domain && !explicit_file_context && !file_action && \
             (!known_filename || site_action) && \
@@ -761,7 +773,7 @@ validate_body() {
       gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
       gsub(/([pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.])[[:space:]]+(Program|Programme)/, "qualification-program", rest)
       gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+[[:upper:]][[:alpha:]-]*[[:space:]]+(Administration|Agency|Association|Authority|Bank|Bureau|Commission|Committee|Council|Court|Department|Embassy|Federation|Force|Forces|Government|Institute|Islands|Marine|Marines|Ministry|Navy|Office|Organization|Parliament|Service|Society|Union|University)/, "geographic-name", rest)
-      gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+(Agency|Air|Army|Congress|Court|Department|Embassy|Force|Forces|Government|Marine|Marines|Navy|Parliament)/, "geographic-name", rest)
+      gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+(Agency|Air|Army|Bank|Congress|Court|Department|Embassy|Force|Forces|Government|Marine|Marines|Navy|Parliament)/, "geographic-name", rest)
       while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.]|[dD][.][cC][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|[[:lower:]][[:alnum:]]*([[:upper:]][[:alnum:]]*|[.][[:alnum:].-]+))|$)/)) {
         count++
         rest = substr(rest, RSTART + RLENGTH)
