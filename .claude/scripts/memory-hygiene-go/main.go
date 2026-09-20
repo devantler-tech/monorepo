@@ -20,6 +20,11 @@ const (
 	maxThresholdKB     = int64(1<<63-1) / 1024
 	legacyIndexFile    = "MEMORY.md"
 	codexSummaryFile   = "memory_summary.md"
+	// phasePreflight proves the run booted on the projection now on disk.
+	// phaseClosing re-measures after the run banked memory, where a rebuilt
+	// projection is the expected outcome rather than an integrity failure.
+	phasePreflight = "preflight"
+	phaseClosing   = "closing"
 )
 
 type config struct {
@@ -28,15 +33,17 @@ type config struct {
 	thresholdKB              int64
 	indexKB                  int64
 	projectionLoadedBeforeMs int64
+	phase                    string
 	quiet                    bool
 	showAll                  bool
 }
 
 type projectionSnapshot struct {
-	file      *os.File
-	info      os.FileInfo
-	digest    [sha256.Size]byte
-	hasDigest bool
+	file             *os.File
+	info             os.FileInfo
+	digest           [sha256.Size]byte
+	hasDigest        bool
+	changedAfterBoot bool
 }
 
 func main() {
@@ -66,6 +73,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			cfg.dir,
 			time.UnixMilli(cfg.projectionLoadedBeforeMs),
 			cfg.indexKB*1024,
+			cfg.phase,
 		)
 		if err != nil {
 			return reportFailure(stderr, err, false)
@@ -86,6 +94,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	output := lineWriter{writer: stdout, quiet: cfg.quiet}
+	if codexProjection != nil && codexProjection.changedAfterBoot {
+		// Reported, never gated: at closing this is the expected result of the
+		// run banking memory, but it still surfaces a concurrent-writer rebuild.
+		output.line(
+			"memory-hygiene: note: boot projection changed after injection " +
+				"(expected when this run banked memory); size and shape checks continue.",
+		)
+	}
 	checked := 0
 	overCount := 0
 	for _, entry := range entries {
@@ -238,7 +254,7 @@ func parseArgs(args []string) (config, bool, error) {
 			cfg.showAll = true
 		case "--quiet":
 			cfg.quiet = true
-		case "--dir", "--layout", "--threshold-kb", "--index-kb", "--projection-loaded-before-ms":
+		case "--dir", "--layout", "--threshold-kb", "--index-kb", "--projection-loaded-before-ms", "--phase":
 			if i+1 >= len(args) {
 				return cfg, false, usageError{message: fmt.Sprintf("%s requires a value", arg)}
 			}
@@ -267,6 +283,14 @@ func parseArgs(args []string) (config, bool, error) {
 					return cfg, false, err
 				}
 				cfg.projectionLoadedBeforeMs = loadedBefore
+			case "--phase":
+				if value != phasePreflight && value != phaseClosing {
+					return cfg, false, usageError{message: fmt.Sprintf(
+						"--phase %q is not recognised (expected %s or %s)",
+						value, phasePreflight, phaseClosing,
+					)}
+				}
+				cfg.phase = value
 			}
 		default:
 			return cfg, false, usageError{message: fmt.Sprintf("unknown argument %q", arg)}
@@ -283,6 +307,14 @@ func parseArgs(args []string) (config, bool, error) {
 		return cfg, false, usageError{
 			message: "--projection-loaded-before-ms is required with --layout codex",
 		}
+	}
+	if cfg.layout == "legacy" && cfg.phase != "" {
+		return cfg, false, usageError{
+			message: "--phase is only valid with --layout codex",
+		}
+	}
+	if cfg.phase == "" {
+		cfg.phase = phasePreflight
 	}
 	if cfg.layout == "legacy" && cfg.projectionLoadedBeforeMs != 0 {
 		return cfg, false, usageError{
@@ -351,6 +383,7 @@ func validateCodexStore(
 	dir string,
 	projectionLoadedBefore time.Time,
 	indexLimitBytes int64,
+	phase string,
 ) (*projectionSnapshot, error) {
 	for _, name := range []string{codexSummaryFile, legacyIndexFile} {
 		path := filepath.Join(dir, name)
@@ -381,7 +414,8 @@ func validateCodexStore(
 	if statErr != nil {
 		return nil, fmt.Errorf("unreadable Codex memory file: %s: %w", codexSummaryFile, statErr)
 	}
-	if info.ModTime().After(projectionLoadedBefore) {
+	changedAfterBoot := info.ModTime().After(projectionLoadedBefore)
+	if changedAfterBoot && phase != phaseClosing {
 		return nil, fmt.Errorf(
 			"codex boot projection changed after injection; restart required: %s",
 			codexSummaryFile,
@@ -403,7 +437,11 @@ func validateCodexStore(
 		)
 	}
 
-	snapshot := &projectionSnapshot{file: summary, info: info}
+	snapshot := &projectionSnapshot{
+		file:             summary,
+		info:             info,
+		changedAfterBoot: changedAfterBoot,
+	}
 	if info.Size() <= indexLimitBytes {
 		digest, digestErr := digestFile(summary)
 		if digestErr != nil {
@@ -555,6 +593,7 @@ func usage() string {
                     [--threshold-kb N] [--index-kb N] [--all] [--quiet]
   memory-hygiene.sh --layout codex --dir <memory-dir>
                     --projection-loaded-before-ms UNIX_MS
+                    [--phase preflight|closing]
                     [--threshold-kb N] [--index-kb N] [--all] [--quiet]
 
 Exit codes:

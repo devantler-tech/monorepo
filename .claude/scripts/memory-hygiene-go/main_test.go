@@ -403,6 +403,7 @@ func TestProjectionSnapshotRejectsReplacementDuringGuard(t *testing.T) {
 			dir,
 			time.Now().Add(time.Minute),
 			defaultIndexKB*1024,
+			phasePreflight,
 		)
 		if err != nil {
 			t.Fatalf("capture projection snapshot: %v", err)
@@ -640,6 +641,10 @@ func TestRepositoryContracts(t *testing.T) {
 		"An exit 2 indicates a usage, malformed-layout, missing, or unreadable-store error",
 		"`x-codex-turn-metadata.turn_started_at_unix_ms` from `nodeRepl.requestMeta`",
 		"If a Codex exit 2 names a missing, unreadable, malformed, or post-injection-changed `memory_summary.md`",
+		// The phase scoping must not silently drift back out: unscoped, the
+		// recovery above also governs a post-run invocation it cannot satisfy.
+		"That precondition is a PRE-FLIGHT property",
+		"That recovery is scoped to `--phase preflight`",
 	} {
 		if !strings.Contains(normalizedConstitution, required) {
 			t.Fatalf("AGENTS.md is missing %q", required)
@@ -662,6 +667,12 @@ func TestRepositoryContracts(t *testing.T) {
 		"`x-codex-turn-metadata.turn_started_at_unix_ms` from `nodeRepl.requestMeta`",
 	) {
 		t.Fatal("portfolio maintenance omits the trusted Codex projection freshness boundary")
+	}
+	if !strings.Contains(
+		normalizedMaintenance,
+		"it is the ONLY phase where a changed projection means something is wrong",
+	) {
+		t.Fatal("portfolio maintenance omits the closing-phase scoping")
 	}
 
 	workflow := read(filepath.Join("..", "..", "..", ".github", "workflows", "ci.yaml"))
@@ -702,4 +713,113 @@ func Example_run() {
 	code, _, _ := execute("--layout", "legacy", "--dir", dir)
 	fmt.Println(code)
 	// Output: 0
+}
+
+// codexArgsStale models a post-run invocation: the run banked memory during its
+// tick, so the projection on disk is newer than the immutable boot boundary.
+func codexArgsStale(dir string, extra ...string) []string {
+	args := []string{
+		"--layout", "codex",
+		"--dir", dir,
+		"--projection-loaded-before-ms",
+		fmt.Sprint(time.Now().Add(-2 * time.Hour).UnixMilli()),
+	}
+	return append(args, extra...)
+}
+
+func TestClosingPhaseKeepsSizeChecksReachable(t *testing.T) {
+	// The defect: the freshness gate runs before the size sweep, so a rebuilt
+	// projection masks a genuine budget breach. The closing phase must still
+	// report it.
+	dir := t.TempDir()
+	writeSummaryKB(t, filepath.Join(dir, "memory_summary.md"), 30)
+	writeKB(t, filepath.Join(dir, "MEMORY.md"), 5)
+
+	code, stdout, _ := execute(
+		codexArgsStale(dir, "--index-kb", "24", "--phase", "closing")...,
+	)
+	if code != 1 {
+		t.Fatalf("closing phase over-budget summary: exit = %d, want 1", code)
+	}
+	if !strings.Contains(stdout, "OVER") ||
+		!strings.Contains(stdout, "memory_summary.md") {
+		t.Fatalf("closing phase must name the breaching file, got: %q", stdout)
+	}
+}
+
+func TestClosingPhaseReportsProjectionChangeWithoutGating(t *testing.T) {
+	dir := codexStore(t)
+
+	code, stdout, stderr := execute(codexArgsStale(dir, "--phase", "closing")...)
+	if code != 0 {
+		t.Fatalf("closing phase within budget: exit = %d, want 0 (%s)", code, stderr)
+	}
+	// The multi-writer signal is preserved as information, never as a stop.
+	if !strings.Contains(stdout, "boot projection changed") {
+		t.Fatalf("closing phase must still report the change, got: %q", stdout)
+	}
+}
+
+func TestPreflightPhaseStillFailsClosedOnRebuiltProjection(t *testing.T) {
+	// Negative control: the protection this change must NOT remove.
+	dir := codexStore(t)
+
+	for _, args := range [][]string{
+		codexArgsStale(dir),                         // default phase
+		codexArgsStale(dir, "--phase", "preflight"), // explicit
+	} {
+		code, _, stderr := execute(args...)
+		if code != 2 {
+			t.Fatalf("preflight must fail closed: exit = %d, want 2", code)
+		}
+		if !strings.Contains(stderr, "restart required") {
+			t.Fatalf("preflight must keep restart guidance, got: %q", stderr)
+		}
+	}
+}
+
+func TestClosingPhaseStillFailsClosedOnMalformedProjection(t *testing.T) {
+	// Shape checks are not relaxed by the phase.
+	dir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(dir, "memory_summary.md"), []byte("v2\nbad\n"), 0o600,
+	); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	writeKB(t, filepath.Join(dir, "MEMORY.md"), 5)
+
+	code, _, stderr := execute(codexArgsStale(dir, "--phase", "closing")...)
+	if code != 2 {
+		t.Fatalf("closing phase malformed projection: exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "malformed") {
+		t.Fatalf("expected malformed diagnostic, got: %q", stderr)
+	}
+}
+
+func TestPhaseArgumentValidation(t *testing.T) {
+	dir := codexStore(t)
+
+	// These assertions name the phase-specific diagnostics on purpose: a bare
+	// `strings.Contains(stderr, "--phase")` is also satisfied by the generic
+	// `unknown argument "--phase"` message, so it would pass before the flag
+	// exists and prove nothing.
+	code, _, stderr := execute(codexArgs(dir, "--phase", "midrun")...)
+	if code != 2 || !strings.Contains(stderr, "is not recognised") {
+		t.Fatalf("unknown phase must fail usage: exit = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(stderr, "unknown argument") {
+		t.Fatalf("expected the phase diagnostic, got the generic one: %q", stderr)
+	}
+
+	legacy := legacyStore(t)
+	code, _, stderr = execute(
+		"--layout", "legacy", "--dir", legacy, "--phase", "closing",
+	)
+	if code != 2 || !strings.Contains(stderr, "only valid with --layout codex") {
+		t.Fatalf("--phase must be codex-only: exit = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(stderr, "unknown argument") {
+		t.Fatalf("expected the codex-only diagnostic, got the generic one: %q", stderr)
+	}
 }
