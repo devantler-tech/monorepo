@@ -279,6 +279,7 @@ validate_body() {
   local body_prose="${work_dir}/body-prose.md"
   local body_symbols="${work_dir}/body-symbols.md"
   local body_domain_normalized="${work_dir}/body-domain-normalized.md"
+  local public_tlds="${script_dir}/pr-body-public-tlds.txt"
   local section_metrics="${work_dir}/section-metrics"
   local first_line
   local expected_disclosure
@@ -310,6 +311,7 @@ validate_body() {
   local section_sentences
   local visible_chars
 
+  [ -r "${public_tlds}" ] || fail "public TLD evidence is missing"
   strip_comments "${template}" >"${visible_template}"
   strip_comments "${body}" >"${visible_body}"
   awk -f "${script_dir}/markdown-structural-lines.awk" "${visible_template}" >"${markdown_template}"
@@ -424,8 +426,14 @@ validate_body() {
           substr(rendered, RSTART + RLENGTH)
       }
       if (match(rendered, /^📦 New dependency:[[:space:]]+[^[:space:]]+/)) {
-        rendered = "📦 New dependency: dependency" \
-          substr(rendered, RSTART + RLENGTH)
+        dependency = substr(rendered, RSTART, RLENGTH)
+        sub(/^📦 New dependency:[[:space:]]+/, "", dependency)
+        if (dependency ~ /^@[[:alnum:]][[:alnum:]_.-]*\/[[:alnum:]][[:alnum:]_.-]*$/ || \
+            dependency ~ /^[[:alnum:]][[:alnum:]_-]*([.][[:alnum:]][[:alnum:]_-]*)+$/ || \
+            dependency ~ /^[[:alnum:]][[:alnum:]_.-]*:[[:alnum:]][[:alnum:]_.-]*$/) {
+          rendered = "📦 New dependency: dependency" \
+            substr(rendered, RSTART + RLENGTH)
+        }
       }
       if (rendered ~ /[^[:space:]]/) { print rendered }
       else { print "" }
@@ -441,6 +449,7 @@ validate_body() {
     -e '/^ {0,3}#{1,6}[[:space:]]+/d' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
     -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*([^[:alnum:]_]|$)/\1personal-name\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.-]?([aA][lL][pP][hH][aA]|[bB][eE][tT][aA]|[pP][rR][eE][vV][iI][eE][wW])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
@@ -452,6 +461,7 @@ validate_body() {
     -e 's/[*_]//g' \
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|arduino[.]cc|github[.]com|openfeature[.]dev|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
     -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
+    -e 's/(^|[^[:alnum:]_])([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*([^[:alnum:]_]|$)/\1personal-name\3/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.-]?([aA][lL][pP][hH][aA]|[bB][eE][tT][aA]|[pP][rR][eE][vV][iI][eE][wW])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
@@ -461,7 +471,7 @@ validate_body() {
   # A dotted token can be a filename, email address, measurement, or public
   # hostname. Normalize only the non-filename forms whose syntax or surrounding
   # product prose identifies them; filename evidence takes precedence.
-  awk '
+  awk -v public_tld_file="${public_tlds}" '
     BEGIN { RS = "" }
     function normalized_word(text, value) {
       value = tolower(text)
@@ -476,11 +486,21 @@ validate_body() {
       sub(/[.]$/, "", value)
       return value
     }
-    function public_suffix_candidate(candidate, labels, count, tld) {
+    function public_suffix_candidate(candidate, labels, count, tld, line, saved_rs) {
+      if (!public_tlds_loaded) {
+        saved_rs = RS
+        RS = "\n"
+        while ((getline line < public_tld_file) > 0) {
+          sub(/\r$/, "", line)
+          if (line !~ /^#/ && line != "") { public_tlds[tolower(line)] = 1 }
+        }
+        close(public_tld_file)
+        RS = saved_rs
+        public_tlds_loaded = 1
+      }
       count = split(candidate, labels, ".")
       tld = labels[count]
-      return tld ~ /^[[:alpha:]][[:alpha:]]+$/ && \
-        tld !~ /^(custom|example|invalid|local|localhost|test)$/
+      return tld in public_tlds
     }
     {
       for (field = 1; field <= NF; field++) {
@@ -510,7 +530,12 @@ validate_body() {
           continue
         }
         known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/
-        email_shape = token ~ /^[[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+([.][[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
+        mailbox_token = tolower($field)
+        sub(/^[^"]*/, "", mailbox_token)
+        gsub(/[^[:alnum:]-]+$/, "", mailbox_token)
+        quoted_email_shape = mailbox_token ~ /^"[^"]+"@[[:alnum:]-]+([.][[:alnum:]-]+)+$/
+        email_shape = token ~ /^[[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+([.][[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/ || \
+          quoted_email_shape
         if (!explicit_file_context && email_shape) {
           $field = (known_filename || file_action) ? "file.name" : "email"
           continue
@@ -526,7 +551,7 @@ validate_body() {
         }
         if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           public_domain = public_suffix_candidate(candidate)
-          site_context = public_domain && !explicit_file_context && !known_filename && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
+          site_context = public_domain && !explicit_file_context && (previous ~ /^(domain|host|reach|site|visit|website)$/ || \
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
             (previous == "from" && before_previous == "traffic") || \
@@ -637,7 +662,7 @@ validate_body() {
     function terminal_abbreviation_count(text, rest, count) {
       rest = text
       gsub(/([aA][.][mM][.]|[pP][.][mM][.])[[:space:]]+(UTC|GMT|CET|CEST|EET|EEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)/, "time-zone", rest)
-      gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+[[:upper:]][[:alpha:]-]*[[:space:]]+[[:upper:]][[:alpha:]-]*/, "geographic-name", rest)
+      gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+[[:upper:]][[:alpha:]-]*[[:space:]]+(Administration|Agency|Association|Authority|Bank|Bureau|Commission|Committee|Council|Court|Department|Embassy|Federation|Force|Forces|Government|Institute|Islands|Marine|Marines|Ministry|Navy|Office|Organization|Parliament|Service|Society|Union|University)/, "geographic-name", rest)
       gsub(/([uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])[[:space:]]+(Agency|Air|Army|Congress|Court|Department|Embassy|Force|Forces|Government|Marine|Marines|Navy|Parliament)/, "geographic-name", rest)
       while (match(rest, /([aA][.][mM][.]|[pP][.][mM][.]|[pP][hH][.][dD][.]|[mM][.][dD][.]|[bB][.][sS][cC][.]|[mM][.][sS][cC][.]|[bB][.][aA][.]|[mM][.][aA][.]|[uU][.][sS][.]|[uU][.][kK][.]|[eE][.][uU][.])["”’)}\]*_]*([[:space:]]+([[:upper:][:digit:]]|[[:lower:]][[:alnum:]]*([[:upper:]][[:alnum:]]*|[.][[:alnum:].-]+))|$)/)) {
         count++
@@ -655,6 +680,7 @@ validate_body() {
       gsub(/[mM]r[.]/, "Mr", rest)
       gsub(/[mM]rs[.]/, "Mrs", rest)
       gsub(/[dD]r[.]/, "Dr", rest)
+      gsub(/([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*/, "personal-name", rest)
       gsub(/[uU][.][sS][.]/, "US", rest)
       gsub(/[uU][.][kK][.]/, "UK", rest)
       gsub(/[eE][.][uU][.]/, "EU", rest)
