@@ -447,8 +447,10 @@ validate_body() {
             dependency_segment_index <= dependency_segment_count; \
             dependency_segment_index++) {
           dependency_segment = dependency_segments[dependency_segment_index]
-          if (dependency_segment ~ /[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)$/ || \
-              dependency_segment ~ /[.][[:digit:]][[:alnum:]_-]*$/ || \
+          versioned_module_segment = dependency_segment ~ /^[[:alnum:]_-]+[.]v[[:digit:]]+$/
+          if ((!versioned_module_segment && \
+                (dependency_segment ~ /[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)$/ || \
+                 dependency_segment ~ /[.][[:digit:]][[:alnum:]_-]*$/)) || \
               toupper(dependency_segment) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/) {
             dependency_filename = 1
           }
@@ -477,6 +479,7 @@ validate_body() {
     -e 's/(^|[^[:alnum:]_])CNAME[[:space:]]+record([^[:alnum:]_]|$)/\1dns-record\2/g' \
     -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Dd][.][Cc][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_])(of|named|called|by)[[:space:]]+([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*([^[:alnum:]_]|$)/\1personal-name\4/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+[+][[:alnum:]-]+([.][[:alnum:]-]+)*)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.-]?([aA][lL][pP][hH][aA]|[bB][eE][tT][aA]|[pP][rR][eE][vV][iI][eE][wW])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
@@ -490,6 +493,7 @@ validate_body() {
     -e 's/(^|[^[:alnum:]_])CNAME[[:space:]]+record([^[:alnum:]_]|$)/\1dns-record\2/g' \
     -e 's/(^|[^[:alnum:]_])([Ee][.][Gg][.]|[Ii][.][Ee][.]|[Uu][.][Ss][.]|[Uu][.][Kk][.]|[Ee][.][Uu][.]|[Dd][.][Cc][.]|[Aa][.][Mm][.]|[Pp][.][Mm][.]|[Pp][Hh][.][Dd][.]|[Mm][.][Dd][.]|[Bb][.][Ss][Cc][.]|[Mm][.][Ss][Cc][.]|[Bb][.][Aa][.]|[Mm][.][Aa][.])([^[:alnum:]_]|$)/\1abbreviation\3/g' \
     -e 's/(^|[^[:alnum:]_])(of|named|called|by)[[:space:]]+([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*([^[:alnum:]_]|$)/\1personal-name\4/g' \
+    -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+[+][[:alnum:]-]+([.][[:alnum:]-]+)*)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)*[.][xX])([^[:alnum:]_-]|$)/\1version\4/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([aAbB]|[rR][cC])[[:digit:]]+)([^[:alnum:]_-]|$)/\1version\5/g' \
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.-]?([aA][lL][pP][hH][aA]|[bB][eE][tT][aA]|[pP][rR][eE][vV][iI][eE][wW])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
@@ -542,6 +546,11 @@ validate_body() {
       }
       $0 = rendered_record
       for (field = 1; field <= NF; field++) {
+        prefixed_implementation = $field ~ /^([.][.]?\/|--)[[:alnum:]_.-]+([^[:alnum:]_.-]|$)/
+        if (prefixed_implementation) {
+          $field = "file.name"
+          continue
+        }
         candidate = normalized_word($field)
         domain_candidate = candidate
         sub(/[\047’]s$/, "", domain_candidate)
@@ -643,9 +652,8 @@ validate_body() {
         }
         if (domain_candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
           public_domain = public_suffix_candidate(domain_candidate)
-          explicit_zip_site = site_action && domain_candidate ~ /[.]zip$/
           site_context = public_domain && !explicit_file_context && !file_action && \
-            (!known_filename || explicit_zip_site) && \
+            (!known_filename || site_action) && \
             !(following ~ /^(is|was)$/ && \
               after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/)
           if (site_context) { $field = "site" }
@@ -763,6 +771,7 @@ validate_body() {
     function sentence_count(text, rest, count) {
       rest = text
       count = terminal_abbreviation_count(text)
+      gsub(/([[:upper:]][.]){2,}[[:space:]]+[[:upper:]][[:alpha:]-]*[[:space:]]+[[:upper:]][[:alpha:]-]*/, "initialism title", rest)
       gsub(/([[:upper:]][.]){2,}[[:space:]]+[[:lower:]]/, "initialism x", rest)
       gsub(/[eE][.][gG][.]/, "eg", rest)
       gsub(/[iI][.][eE][.]/, "ie", rest)
