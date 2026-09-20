@@ -1385,7 +1385,7 @@ Change @FILENAME@ so users can continue.
 
 Fixes #3402
 EOF
-for portfolio_filename in a.mjs worker.c x.c .x; do
+for portfolio_filename in a.mjs worker.c x.c worker.cc .x .1password .2fa; do
   sed "s/@FILENAME@/${portfolio_filename}/" \
     "${fixture_root}/short-portfolio-file-template.md" \
     >"${fixture_root}/short-portfolio-file.md"
@@ -1402,7 +1402,7 @@ cat >"${fixture_root}/bare-public-domains.md" <<'EOF'
 
 ## Why
 
-Users of openfeature.dev cannot complete setup today.
+Users of openfeature.dev and arduino.cc cannot complete setup today.
 
 ## What
 

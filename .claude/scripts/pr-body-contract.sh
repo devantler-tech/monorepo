@@ -278,6 +278,7 @@ validate_body() {
   local body_validation="${work_dir}/body-validation.md"
   local body_prose="${work_dir}/body-prose.md"
   local body_symbols="${work_dir}/body-symbols.md"
+  local body_domain_normalized="${work_dir}/body-domain-normalized.md"
   local section_metrics="${work_dir}/section-metrics"
   local first_line
   local expected_disclosure
@@ -442,6 +443,36 @@ validate_body() {
     -e 's/(^|[^[:alnum:]_])(GitHub|CodeRabbit|OpenAI|OpenBao|OpenCost|CloudWatch|FleetDM|GitOps|DevEx|FinOps|KSail|ASCoaching|UniFi|PostgreSQL|JavaScript|TypeScript|Node[.]js|Next[.]js|Vue[.]js|ASP[.]NET|[.]NET|devantler[.]tech|iPhone|iPad|iPod|iOS|iPadOS|macOS|watchOS)([^[:alnum:]_]|$)/\1product\3/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >>"${body_symbols}"
+  # A handful of portfolio file extensions are also delegated public suffixes.
+  # Treat those dotted tokens as sites in ordinary prose, but retain explicit
+  # implementation contexts such as "change worker.cc" as file references.
+  # Source: https://data.iana.org/TLD/tlds-alpha-by-domain.txt
+  if grep -Eiq '(^|[^[:alnum:]_])(add|change|edit|modify|remove|rename|update)[[:space:]]+(the[[:space:]]+)?[[:alnum:]_.-]+[.](cc|java|md|properties|py|rs|sh|tf)([^[:alnum:]_-]|$)|(^|[^[:alnum:]_])[[:alnum:]_.-]+[.](cc|java|md|properties|py|rs|sh|tf)[[:space:]]+(file|path)([^[:alnum:]_]|$)' \
+    "${body_symbols}"; then
+    fail "PR body must not contain implementation or validation detail"
+  fi
+  awk '
+    BEGIN {
+      split("cc java md properties py rs sh tf", suffixes)
+      for (suffix_index in suffixes) {
+        public_suffix[suffixes[suffix_index]] = 1
+      }
+    }
+    {
+      for (field = 1; field <= NF; field++) {
+        candidate = tolower($field)
+        gsub(/^[^[:alnum:]]+/, "", candidate)
+        gsub(/[^[:alnum:]-]+$/, "", candidate)
+        if (candidate ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+$/) {
+          suffix = candidate
+          sub(/^.*[.]/, "", suffix)
+          if (public_suffix[suffix]) { $field = "site" }
+        }
+      }
+      print
+    }
+  ' "${body_symbols}" >"${body_domain_normalized}"
+  body_symbols="${body_domain_normalized}"
   previous_line=0
   while IFS= read -r structure_line; do
     if [[ "${structure_line}" == '@RELATIONSHIP:'*'@' ]]; then
@@ -658,7 +689,7 @@ validate_body() {
   fi
   # Reject dotfiles and the file types used across this portfolio without
   # treating every bare public domain as an implementation filename.
-  if grep -Eiq '(^|[^[:alnum:]_@.-])([.][[:alpha:]_][[:alnum:]_.-]*|[[:alnum:]_.-]+[.](astro|mjs|cjs|mts|cts|vue|svelte|rb|c|h|cc|cpp|cxx|hpp|hh|ps1|psm1|fs|fsx|fsproj|csproj|sln|props|targets|bicep|rego|cue|nix|tfvars|gotmpl|tmpl|tpl))([^[:alnum:]_.-]|$)' \
+  if grep -Eiq '(^|[^[:alnum:]_@.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_.-]*)|[[:alnum:]_.-]+[.](astro|mjs|cjs|mts|cts|vue|svelte|rb|c|h|cc|cpp|cxx|hpp|hh|ps1|psm1|fs|fsx|fsproj|csproj|sln|props|targets|bicep|rego|cue|nix|tfvars|gotmpl|tmpl|tpl))([^[:alnum:]_.-]|$)' \
     "${body_symbols}"; then
     fail "PR body must not contain implementation or validation detail"
   fi
