@@ -442,7 +442,7 @@ validate_body() {
           dependency ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([.][[:alnum:]_.-]+)?$/
         if (!dependency_filename && (dependency ~ /^@[[:alnum:]][[:alnum:]_.-]*\/[[:alnum:]][[:alnum:]_.-]*$/ || \
             dependency ~ /^[[:alnum:]][[:alnum:]_-]*([.][[:alnum:]][[:alnum:]_-]*)+$/ || \
-            dependency ~ /^[[:alnum:]][[:alnum:]_.-]*:[[:alnum:]][[:alnum:]_.-]*(:[[:alnum:]][[:alnum:]_.+-]*)?$/ || \
+            dependency ~ /^[[:alnum:]][[:alnum:]_.-]*:[[:alnum:]][[:alnum:]_.-]*(:[[:alnum:]][[:alnum:]_.+-]*)?(:[[:alnum:]][[:alnum:]_.+-]*)?(:[[:alnum:]][[:alnum:]_.+-]*)?$/ || \
             dependency ~ /^[[:alnum:]-]+([.][[:alnum:]-]+)+(\/[[:alnum:]_.-]+)+$/)) {
           rendered = "📦 New dependency: dependency" \
             substr(rendered, RSTART + RLENGTH)
@@ -546,6 +546,12 @@ validate_body() {
         file_action = previous ~ /^(change|create|delete|download|edit|fix|modify|move|open|remove|rename|replace|update)$/ || \
           (previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
             before_previous ~ /^(change|create|delete|download|edit|fix|modify|move|open|remove|rename|replace|update)$/)
+        initialism_continuation = $field ~ /^([[:upper:]][.]){2,}$/ && \
+          field < NF && $(field + 1) ~ /^[[:lower:]]/
+        if (initialism_continuation && !file_action) {
+          $field = "initialism"
+          continue
+        }
         file_subject = file_context && after_following ~ /^(is|was)$/ && \
           third_after ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         product_file_phrase = file_context && after_following ~ /^(upload|uploads)$/
@@ -560,7 +566,7 @@ validate_body() {
           $field = "file.name"
           continue
         }
-        known_filename = candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/
+        known_filename = domain_candidate ~ /[.](avif|awk|bmp|c|cc|cfg|cjs|conf|cpp|cs|css|env|fs|fsi|fsx|gif|go|gradle|h|hcl|hpp|htm|html|ico|ini|java|jpeg|jpg|js|json|jsx|kt|less|lock|md|mdx|mjs|mod|pdf|png|properties|proto|py|rb|rs|sass|scss|sh|sql|sum|svg|tf|toml|ts|tsx|txt|webp|xml|yaml|yml)$/
         mailbox_token = tolower($field)
         sub(/^[^"]*/, "", mailbox_token)
         gsub(/[^[:alnum:]-]+$/, "", mailbox_token)
@@ -568,7 +574,9 @@ validate_body() {
         email_shape = token ~ /^[[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+([.][[:alnum:]!#$%&*+\/?=^_`{|}~\047-]+)*@[[:alnum:]-]+([.][[:alnum:]-]+)+$/ || \
           quoted_email_shape
         if (!explicit_file_context && email_shape) {
-          $field = (known_filename || file_action) ? "file.name" : "email"
+          bare_file_subject = following ~ /^(is|was)$/ && \
+            after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
+          $field = (file_action || bare_file_subject) ? "file.name" : "email"
           continue
         }
         if (previous ~ /^(phase|section|stage|step)$/ && token ~ /^[[:digit:]]+[.][[:alnum:]]+$/) {
@@ -700,6 +708,7 @@ validate_body() {
     function sentence_count(text, rest, count) {
       rest = text
       count = terminal_abbreviation_count(text)
+      gsub(/([[:upper:]][.]){2,}[[:space:]]+[[:lower:]]/, "initialism x", rest)
       gsub(/[eE][.][gG][.]/, "eg", rest)
       gsub(/[iI][.][eE][.]/, "ie", rest)
       gsub(/[eE]tc[.]/, "etc", rest)
