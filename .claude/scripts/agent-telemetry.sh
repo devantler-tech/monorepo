@@ -4933,7 +4933,7 @@ EOF
           split("\n")
           | all(.[];
               split("\t") as $row
-              | ($row | length) == 8
+              | ($row | length) == 9
                 and ($row[0] | test("^[0-9]+$"))
                 and ($row[1] == "failure"
                      or $row[1] == "timed_out"
@@ -4948,7 +4948,8 @@ EOF
                 and ($row[6] | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
                 and (try (($row[6] | fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")) == $row[6])
                      catch false)
-                and ($row[7] | test("^[0-9]+$")))
+                and ($row[7] | test("^[0-9]+$"))
+                and ($row[8] | test("^[1-9][0-9]*$")))
         end
       ' >/dev/null 2>&1
     }
@@ -4980,7 +4981,7 @@ EOF
         continue
       fi
       actionable_names=$(printf '%s\n' "$current_red" | awk -F '\t' '
-        !($5 == "dynamic" && $6 ~ /^dynamic\//) && NF == 8 {
+        !($5 == "dynamic" && $6 ~ /^dynamic\//) && NF == 9 {
           if (names != "") names = names ", "
           names = names $4
         }
@@ -5052,7 +5053,7 @@ EOF
             managed_unknown_names="$managed_unknown_names$managed_name" ;;
         esac
       done <<EOF
-$(printf '%s\n' "$current_red" | awk -F '\t' '$5 == "dynamic" && $6 ~ /^dynamic\// && NF == 8')
+$(printf '%s\n' "$current_red" | awk -F '\t' '$5 == "dynamic" && $6 ~ /^dynamic\// && NF == 9')
 EOF
       repo_actionable=0
       if [ -n "$managed_noaction_names" ]; then
