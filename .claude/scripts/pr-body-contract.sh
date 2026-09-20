@@ -472,9 +472,13 @@ validate_body() {
         before_previous = field > 2 ? normalized_word($(field - 2)) : ""
         previous = field > 1 ? normalized_word($(field - 1)) : ""
         following = field < NF ? normalized_word($(field + 1)) : ""
+        after_following = field + 1 < NF ? normalized_word($(field + 2)) : ""
         token = prose_token($field)
         file_context = following ~ /^(file|filename|path)$/
-        if (file_context && (candidate ~ /[.]/ || token ~ /^[.]/)) {
+        file_action = previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/ || \
+          (previous ~ /^(a|an|any|each|every|that|the|these|this|those)$/ && \
+            before_previous ~ /^(change|create|delete|edit|fix|modify|move|remove|rename|replace|update)$/)
+        if (file_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) {
           $field = "file.name"
           continue
         }
@@ -496,7 +500,8 @@ validate_body() {
             (previous == "of" && before_previous ~ /^(audience|customers|readers|users|visitors)$/) || \
             (previous == "to" && before_previous ~ /^(browse|go|navigate|users|visitors)$/) || \
             (previous ~ /^(at|from|on|via)$/ && before_previous ~ /^(available|hosted|published|served)$/) || \
-            following ~ /^(address|audience|customers|domain|host|is|readers|site|users|visitors|was|website)$/)
+            following ~ /^(address|audience|customers|domain|host|readers|site|users|visitors|website)$/ || \
+            (following ~ /^(is|was)$/ && after_following ~ /^(available|down|live|offline|online|reachable|unavailable)$/))
           if (site_context) { $field = "site" }
         }
       }
