@@ -1120,6 +1120,21 @@ public and private — no per-repo loop needed to enumerate):
    line must match the complete eight-field row shape. Match that TSV shape, and route everything
    else to `QUERY-UNKNOWN` — status 0 plus empty output stays the one green case.
 
+   🔴 **Never read a workflow LOG BODY from this survey.** The read-only guard denies `--log-failed`,
+   `--log` and `--job`, and is right to: a log dump is exactly the raw volume this survey exists to
+   keep out of the orchestrator's context. With no rule here, dispatches improvise it anyway — 9
+   refused calls across 7 of 122 dispatches over 7 days, then recovery by trial (monorepo#3420). Two
+   allowed, compact `gh api` GETs carry the same answer and suit a digest better: a job read
+   `repos/<o>/<r>/actions/jobs/<job_id>` with `--jq '[.steps[]|select(.conclusion=="failure")|.name]'`
+   names the failing **step**, and an annotations read
+   `repos/<o>/<r>/check-runs/<check_run_id>/annotations` **with `--paginate`** and
+   `--jq '.[]|[.annotation_level,.path,.message]|@tsv'` carries the **error text** — that endpoint
+   pages at **30**, so without `--paginate` a long check-run returns a partial read that looks
+   complete. (The jobs read needs no `--paginate`: it returns one object, not a list.) Report those
+   beside the classifier's `html_url` and `run_id`. This bounds the SURVEY only, never the
+   diagnosis: the orchestrator, whose own session is unguarded, reads the log itself when a digest
+   line is not enough.
+
    **Split GitHub-MANAGED runs out of that red set before reporting it.** Identify the class by the
    **property, not by an enumerated path**: `event: dynamic` **and** a `path` under `dynamic/` — which
    together mean **no workflow file exists in the repository**. Such a run is **not** repository

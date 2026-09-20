@@ -3099,3 +3099,39 @@ grep -Fq 'never treat "not empty" as "red runs"' <<<"${_out_step}" ||
 grep -Fq 'status 0 plus empty output stays the one green case' <<<"${_out_step}" ||
   fail "step 4 must state that status 0 plus empty output is the ONLY green case (monorepo#3390)"
 echo "portfolio surveyor contract: round-15 classifier-output-contract assertions passed"
+
+# ---------------------------------------------------------------------------
+# Round 16 — the survey never reads a workflow LOG BODY, and the supported read
+# is named. Rounds 13 and 15 cover how the classifier is invoked and how its
+# result is read; neither says what to do once a run is known to be red. With no
+# guidance, dispatches improvise `gh run view --log-failed`, which the read-only
+# guard refuses outright — measured 9 denials across 7 of 122 surveyor dispatches
+# over 7 days, on ksail, .github and ascoachingogvaner (monorepo#3420).
+#
+# The guard is RIGHT: a log dump is the raw volume this survey exists to keep out
+# of the orchestrator's context, and the orchestrator's own session is unguarded.
+# So the fix names the two allowed, compact `gh api` reads that carry the same
+# answer — which dispatches already reach, but only by trial after being refused.
+# Re-extracted independently so this round cannot pass on a stale earlier value.
+_log_step=$(sed -n '/^4\. \*\*CI red on `main` — deployment delta only\.\*\*/,/^   \*\*Split GitHub-MANAGED runs/p' "${surveyor}")
+[ -n "${_log_step}" ] ||
+  fail "portfolio-surveyor.md must keep an extractable step '4. **CI red on \`main\` — deployment delta only.**' (monorepo#3420)"
+_log_step=$(tr "\n" " " <<<"${_log_step}" | tr -s "[:space:]" " ")
+grep -Fq -- "Never read a workflow LOG BODY" <<<"${_log_step}" ||
+  fail "step 4 must forbid reading a workflow log body from the survey (monorepo#3420)"
+for _flag in "--log-failed" "--log" "--job"; do
+  grep -Fq -- "\`${_flag}\`" <<<"${_log_step}" ||
+    fail "step 4 must name the denied flag \`${_flag}\` so the refusal is recognisable (monorepo#3420)"
+done
+grep -Fq 'actions/jobs/<job_id>' <<<"${_log_step}" ||
+  fail "step 4 must prescribe the allowed jobs read that names the failing step (monorepo#3420)"
+grep -Fq 'check-runs/<check_run_id>/annotations' <<<"${_log_step}" ||
+  fail "step 4 must prescribe the allowed annotations read that carries the error text (monorepo#3420)"
+# The annotations endpoint pages at 30, so an unpaginated read returns a PARTIAL result that is
+# indistinguishable from a complete one — the same fail-open this contract pins for review threads.
+# The jobs read is deliberately NOT covered: it returns one object, not a list (CodeRabbit, #3421).
+grep -Fq '**with `--paginate`**' <<<"${_log_step}" ||
+  fail "step 4 must require --paginate on the annotations read, which pages at 30 (monorepo#3420)"
+grep -Fq 'the orchestrator, whose own session is unguarded' <<<"${_log_step}" ||
+  fail "step 4 must say WHERE a log read legitimately happens, or the boundary reads as a capability gap (monorepo#3420)"
+echo "portfolio surveyor contract: round-16 log-scope assertions passed"
