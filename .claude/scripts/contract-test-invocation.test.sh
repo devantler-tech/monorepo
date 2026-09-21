@@ -342,6 +342,34 @@ case_ self-not-run 1 "NOT-INVOKED contract-test-invocation.sh" "jobs:
     steps:
       - run: bash .claude/scripts/a.test.sh" 'a.test.sh=true'
 
+# Spellings outside the grammar the check reads fail CLOSED, and the failure names the fix. These
+# three run the test in a real shell; the check deliberately does not follow them, because every
+# spelling it does not understand must read as NOT-INVOKED, never as coverage.
+spelling_hint="write that invocation as a plain"
+case_ comment-continuation-fails-closed 1 "$spelling_hint" "jobs:
+  test-a:
+    steps:
+      - run: |
+          echo setup # \\
+          bash .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
+case_ ansi-c-heredoc-delimiter-fails-closed 1 "$spelling_hint" "jobs:
+  test-a:
+    steps:
+      - run: |
+          cat <<\$'EOF'
+          data
+          EOF
+          bash .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
+case_ quoted-assignment-with-blank-fails-closed 1 "$spelling_hint" "jobs:
+  test-a:
+    steps:
+      - run: FOO=\"a b\" bash .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
 case_ no-tests 2 "refusing an empty pass" "jobs:
   x:
     steps:

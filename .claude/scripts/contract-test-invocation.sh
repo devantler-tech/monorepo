@@ -21,6 +21,13 @@
 # editing the invoking line itself, which is a visible, reviewed change; what this check exists to
 # catch is the invoking line disappearing while everything around it keeps passing.
 #
+# It reads a deliberately SMALL shell grammar, and every spelling outside it fails CLOSED. Bash has
+# more ways to run a file than a checker can follow — a continuation hidden in a comment, an ANSI-C
+# heredoc delimiter, an assignment whose quoted value contains a blank — and chasing each one grows
+# the parser without ever finishing it. What makes that safe is the direction: a spelling the parser
+# misreads can only hide an invocation (a false NOT-INVOKED, which names the fix), never invent one.
+# Keep it that way — a change here must never let an unrecognised spelling count as coverage.
+#
 # Usage: contract-test-invocation.sh [workflow] [scripts-dir]
 #        (defaults: .github/workflows/ci.yaml .claude/scripts; paths as the workflow names them)
 # Exit codes: 0 every test invoked · 1 at least one is not (each printed) · 2 usage or unreadable input.
@@ -177,6 +184,7 @@ while :; do
   cmp -s "$tmp/before" "$tmp/covered" && break
 done
 
+hint=" (if a step does run it, write that invocation as a plain \`bash $scripts_dir/<name>\` command on its own line)"
 fail=0
 while IFS= read -r t; do
   grep -qxF -- "$t" "$tmp/covered" && continue
@@ -205,9 +213,9 @@ while IFS= read -r t; do
     [[ "$hit" == 1 ]] && mentions="${mentions:+$mentions, }$job"
   done <"$tmp/jobs"
   if [[ -n "$mentions" ]]; then
-    echo "NOT-INVOKED $t: job(s) $mentions are wired to it but no run step executes it"
+    echo "NOT-INVOKED $t: job(s) $mentions are wired to it but no run step executes it$hint"
   else
-    echo "NOT-INVOKED $t: no workflow job or invoked test executes it"
+    echo "NOT-INVOKED $t: no workflow job or invoked test executes it$hint"
   fi
   fail=1
 done <"$tmp/tests"
