@@ -190,7 +190,12 @@ while IFS= read -r t; do
   while IFS= read -r job; do
     [[ "$job" == changes ]] && continue
     hit=0
-    J="$job" yq -o=json '.jobs[strenv(J)]' "$workflow" 2>/dev/null | grep -qF -- "$scripts_dir/$t" && hit=1
+    # Through a file, not a pipe: under pipefail an early `grep -q` match can SIGPIPE yq on a large
+    # job, and the pipeline's 141 would then read as "no mention".
+    if J="$job" yq -o=json '.jobs[strenv(J)]' "$workflow" >"$tmp/job" 2>/dev/null &&
+      grep -qF -- "$scripts_dir/$t" "$tmp/job"; then
+      hit=1
+    fi
     if [[ "$hit" == 0 ]]; then
       cond="$(J="$job" yq -r '.jobs[strenv(J)].if // ""' "$workflow" 2>/dev/null || true)"
       while IFS= read -r key; do
