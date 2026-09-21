@@ -4050,7 +4050,13 @@ YOUR instance's namespace from the registry; the trailing issue
 number is what makes a pre-PR claim matchable — see *Claim protocol*; for the legitimate
 **issue-less** flows the contract allows, a hotfix or a trivial obvious fix, there is no number to
 append, so use plain `<lane>/<area>-<desc>` — those go straight to a PR, so the PR body is the
-discoverable signal and no claim window applies.) Work there, open the PR, then
+discoverable signal and no claim window applies.) 🔴 **In a harness session the worktree path is
+anchored at YOUR session worktree** (`git rev-parse --show-toplevel`), never at the shared checkout
+that contains it: the session write guard refuses every Edit/Write under the shared checkout outside
+`.claude/worktrees/<your-slug>`, so `<shared>/.claude/worktrees/maint-<runid>` or a shared submodule's
+`.claude/worktrees/` builds a tree the run cannot edit. The helper refuses both, and refuses a
+`<repo_path>` that is not its own repository's root — an uninitialized submodule — so populate it with
+`submodule-init.sh` first (monorepo#2755). Work there, open the PR, then
 `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local filesystem path such as
 `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the slug only for `gh`
 commands). **Immediately before editing any worktree this session did not create**, atomically

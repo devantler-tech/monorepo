@@ -65,6 +65,33 @@ out="$(cd "$tmp" && "$script" add "repo" "$relative_wt" "claim-branch-relative" 
 check "relative add succeeds" 0 "$rc" "$out" "owner=session-relative"
 check "relative marker is repo-relative" 0 "$([ -f "$repo/$relative_wt/.claude-worktree-owner" ] && echo 0 || echo 1)"
 
+# ── add refuses a location the session write guard would block (monorepo#2755) ──
+# Layout mirrors a harness session: <checkout>/.claude/worktrees/<slug>. The guard refuses Edit/Write
+# into <checkout> outside <slug>, so a sibling maint-* tree must be refused at creation, not at the
+# first edit. The fixture checkout is the throwaway repo itself, so the session dir is a real worktree.
+sess="$repo/.claude/worktrees/sess-a"
+mkdir -p "$repo/.claude/worktrees"
+git -C "$repo" worktree add -q --detach "$sess"
+rc=0
+out="$(cd "$sess" && "$script" add "$repo" "$repo/.claude/worktrees/maint-sibling" "claim-branch-sibling" "session-sib" 2>&1)" || rc=$?
+check "add refuses a sibling worktree of the session" 1 "$rc" "$out" "outside this session's worktree"
+check "refusal names the writable location" 1 "$rc" "$out" "$sess/.claude/worktrees/maint-sibling"
+check "refused add creates nothing" 1 "$([ -e "$repo/.claude/worktrees/maint-sibling" ] && echo 0 || echo 1)"
+check "refused add creates no branch" 1 "$(git -C "$repo" show-ref --verify --quiet refs/heads/claim-branch-sibling && echo 0 || echo 1)"
+rc=0
+out="$(cd "$sess" && "$script" add "$sess" "$sess/.claude/worktrees/maint-nested" "claim-branch-nested" "session-nested" 2>&1)" || rc=$?
+check "add admits a worktree nested under the session" 0 "$rc" "$out" "owner=session-nested"
+rc=0
+out="$(cd "$sess" && "$script" add "$repo" "$tmp/wt-outside-checkout" "claim-branch-outside" "session-out" 2>&1)" || rc=$?
+check "add admits a target outside the session's checkout" 0 "$rc" "$out" "owner=session-out"
+
+# ── add refuses a repo path that is not its own top level (uninitialized submodule) ──
+mkdir -p "$repo/empty-submodule"
+rc=0
+out="$("$script" add "$repo/empty-submodule" "$tmp/wt-empty-sub" "claim-branch-empty" "session-empty" 2>&1)" || rc=$?
+check "add refuses an uninitialized submodule path" 1 "$rc" "$out" "submodule-init.sh"
+check "uninitialized refusal creates nothing" 1 "$([ -e "$tmp/wt-empty-sub" ] && echo 0 || echo 1)"
+
 # ── check: mine ────────────────────────────────────────────────────────────
 rc=0
 out="$("$script" check "$wt" "session-alpha" 2>&1)" || rc=$?

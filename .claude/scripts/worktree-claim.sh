@@ -423,6 +423,64 @@ add_worktree_on() {
   fi
 }
 
+# physical_path prints PATH with symlinks resolved, even when its tail does not exist yet: it walks up
+# to the nearest existing ancestor, resolves that, and re-appends the missing components.
+physical_path() {
+  local probe="$1" tail=""
+  while [ ! -e "$probe" ] && [ "$probe" != "/" ]; do
+    tail="/$(basename -- "$probe")$tail"
+    probe="$(dirname -- "$probe")"
+  done
+  printf '%s%s\n' "$(cd "$probe" && pwd -P)" "$tail"
+}
+
+# refuse_uninitialized_repo stops `add` when <repo_path> is not the root of its own repository
+# (monorepo#2755). An uninitialized submodule is an empty directory, and `git -C` on it resolves to the
+# PARENT repository, so the helper used to report success while building a worktree of the wrong repo
+# somewhere the run could not edit. Only a directory that is its own top level is a repo to work in.
+refuse_uninitialized_repo() {
+  local repo_abs="$1" top
+  top="$(git -C "$repo_abs" rev-parse --show-toplevel 2>/dev/null)" || top=""
+  [ -n "$top" ] && top="$(cd "$top" && pwd -P)"
+  if [ "$top" != "$repo_abs" ]; then
+    echo "worktree-claim: $repo_abs is not the root of its own repository (git resolves it to '${top:-nothing}')." >&2
+    echo "  An uninitialized submodule looks exactly like this. Populate it first:" >&2
+    echo "    .claude/scripts/submodule-init.sh <path>" >&2
+    exit 1
+  fi
+}
+
+# refuse_unwritable_location stops `add` from building a worktree the caller cannot edit (monorepo#2755).
+# A harness session runs inside <checkout>/.claude/worktrees/<slug>, and its write guard refuses every
+# Edit/Write into <checkout> outside that directory — including a sibling <checkout>/.claude/worktrees/
+# maint-* tree. Placing a per-run worktree there succeeded here and failed only on the first edit, one
+# or more calls later. This mirrors the guard's rule exactly, so it refuses nothing the guard admits:
+# callers outside a session worktree, and targets outside the session's checkout, are unaffected.
+refuse_unwritable_location() {
+  local wt_phys cwd shared_root rest slug session_root
+  wt_phys="$(physical_path "$1")"
+  cwd="$(pwd -P)"
+  case "$cwd" in
+    */.claude/worktrees/*) ;;
+    *) return 0 ;;
+  esac
+  shared_root="${cwd%%/.claude/worktrees/*}"
+  rest="${cwd#"$shared_root"/.claude/worktrees/}"
+  slug="${rest%%/*}"
+  session_root="$shared_root/.claude/worktrees/$slug"
+  case "$wt_phys" in
+    "$session_root" | "$session_root"/*) return 0 ;;
+    "$shared_root"/*) ;;
+    *) return 0 ;;
+  esac
+  echo "worktree-claim: $wt_phys is outside this session's worktree $session_root." >&2
+  echo "  The session write guard refuses edits there, so the new worktree could never be changed." >&2
+  echo "  Place per-run worktrees under the session worktree instead, e.g.:" >&2
+  echo "    $session_root/.claude/worktrees/$(basename -- "$wt_phys")" >&2
+  echo "  and pass the session worktree's own submodule (after submodule-init.sh) as <repo_path>." >&2
+  exit 1
+}
+
 cmd_add() {
   local repo="$1" wt="$2" branch="$3" owner="$4"
   [ -d "$repo" ] || fail "repo path is not a directory: $repo"
@@ -436,6 +494,8 @@ cmd_add() {
   if [ -e "$wt" ]; then
     fail "worktree path already exists: $wt"
   fi
+  refuse_uninitialized_repo "$repo_abs"
+  refuse_unwritable_location "$wt"
   # Create parent so git worktree add can place the tree.
   mkdir -p "$(dirname "$wt")"
   # Hold the shared lock across the WHOLE creation, not around each `git worktree add`.
