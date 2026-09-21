@@ -2980,6 +2980,38 @@ for _clause in "${_shape_clauses[@]}"; do
     fail "the admitted-call-shape rule must keep the clause '${_clause}' (#3179)"
 done
 unset _clause _shape_clauses
+# Aggregation must stay inside jq (monorepo#3444). agent-plugins#228 added this rule to the PLUGIN
+# definition, but all 11 `awk` guard denials measured over 7 days came from THIS overlay and none from
+# the plugin path, so the pin bump alone would fix none of them. The reference command is pinned by
+# its admitted shape and its two fail-closed errors: a copy that dropped either error would turn an
+# incomplete or failed census into a clean-looking count.
+_aggregation_clauses=(
+  'Keep issue/type, assignment, automation-owner, and blocker aggregation inside the forge command'
+  '`awk` is deliberately absent from the'
+  'reissue it once'
+  'gh api graphql --paginate --slurp'
+  'error("QUERY-UNKNOWN: incomplete or malformed issue aggregation input")'
+  'error("QUERY-UNKNOWN: issue aggregation query failed")'
+)
+for _clause in "${_aggregation_clauses[@]}"; do
+  grep -Fq -- "${_clause}" <<<"${_safety_block}" ||
+    fail "the Safety block must keep the jq-only aggregation clause '${_clause}' (#3444)"
+done
+unset _clause _aggregation_clauses
+# The clauses above can be met by prose alone, so the executable pipeline is asserted on its own: the
+# fenced block after "is the reference shape" must hold exactly one command, beginning with the
+# admitted forge read, piping into `jq`, and carrying BOTH fail-closed branches on that same line.
+_aggregation_cmd=$(sed -n '/is the reference shape/,/^  ```$/p' <<<"${_safety_block}" |
+  sed -n '/^  ```sh$/,/^  ```$/p' | sed '1d;$d')
+[ -n "${_aggregation_cmd}" ] ||
+  fail "the jq-only aggregation rule must keep its fenced reference command (#3444)"
+[ "$(wc -l <<<"${_aggregation_cmd}" | tr -d ' ')" = "1" ] ||
+  fail "the aggregation reference block must hold exactly one command line (#3444)"
+case "${_aggregation_cmd}" in
+  "  gh api graphql --paginate --slurp "*"| jq -ce '"*'error("QUERY-UNKNOWN: incomplete or malformed issue aggregation input")'*'error("QUERY-UNKNOWN: issue aggregation query failed")'*) ;;
+  *) fail "the aggregation reference command must be the admitted forge read piped into jq with both fail-closed branches (#3444)" ;;
+esac
+unset _aggregation_cmd
 echo "portfolio surveyor contract: round-10 admitted-call-shape assertions passed"
 
 # ------------------------------------------------------------------ round 11: a Portfolio-map product is never an infra exclusion
