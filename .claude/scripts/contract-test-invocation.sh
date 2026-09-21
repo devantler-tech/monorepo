@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify that every contract test is actually EXECUTED by CI, not merely wired (monorepo#2586).
+# Verify that every contract test has a command that RUNS it in CI, not merely wiring (monorepo#2586).
 #
 # A contract test can assert its own paths-filter entry, job block and aggregate-status entries, but it
 # cannot assert that it ran: delete the `run:` step that invokes it and the job still succeeds as a
@@ -15,6 +15,11 @@
 #
 # The check's own script must be invoked by the workflow too, and its test is one of the enumerated
 # `*.test.sh` files, so neither can exempt itself.
+#
+# It reads commands, not control flow. A run command inside a shell function that is never called,
+# in a branch that is never taken, or after an `exit` still counts. Reaching any of those means
+# editing the invoking line itself, which is a visible, reviewed change; what this check exists to
+# catch is the invoking line disappearing while everything around it keeps passing.
 #
 # Usage: contract-test-invocation.sh [workflow] [scripts-dir]
 #        (defaults: .github/workflows/ci.yaml .claude/scripts; paths as the workflow names them)
