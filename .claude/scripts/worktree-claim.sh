@@ -424,14 +424,27 @@ add_worktree_on() {
 }
 
 # physical_path prints PATH with symlinks resolved, even when its tail does not exist yet: it walks up
-# to the nearest existing ancestor, resolves that, and re-appends the missing components.
+# to the nearest existing ancestor, resolves that, and re-applies the missing components one at a time.
+# The tail is applied component by component, not appended, because it can carry `.` and `..`: a
+# not-yet-created `new/../../x` climbs out of wherever the string appears to be, and containment
+# judged on the uncollapsed string would admit exactly that escape. Missing components cannot be
+# symlinks, so popping them lexically is exact.
 physical_path() {
-  local probe="$1" tail=""
+  local probe="$1" comp resolved
+  local -a tail=()
   while [ ! -e "$probe" ] && [ "$probe" != "/" ]; do
-    tail="/$(basename -- "$probe")$tail"
+    tail=("$(basename -- "$probe")" ${tail[@]+"${tail[@]}"})
     probe="$(dirname -- "$probe")"
   done
-  printf '%s%s\n' "$(cd "$probe" && pwd -P)" "$tail"
+  resolved="$(cd "$probe" && pwd -P)"
+  for comp in ${tail[@]+"${tail[@]}"}; do
+    case "$comp" in
+      . | '') ;;
+      ..) resolved="$(dirname -- "$resolved")" ;;
+      *) resolved="${resolved%/}/$comp" ;;
+    esac
+  done
+  printf '%s\n' "$resolved"
 }
 
 # refuse_uninitialized_repo stops `add` when <repo_path> is not the root of its own repository

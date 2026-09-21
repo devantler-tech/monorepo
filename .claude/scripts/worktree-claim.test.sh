@@ -78,6 +78,12 @@ check "add refuses a sibling worktree of the session" 1 "$rc" "$out" "outside th
 check "refusal names the writable location" 1 "$rc" "$out" "$sess/.claude/worktrees/maint-sibling"
 check "refused add creates nothing" 1 "$([ -e "$repo/.claude/worktrees/maint-sibling" ] && echo 0 || echo 1)"
 check "refused add creates no branch" 1 "$(git -C "$repo" show-ref --verify --quiet refs/heads/claim-branch-sibling && echo 0 || echo 1)"
+# A not-yet-created tail can carry `..` that climbs back out of the session; containment must be
+# judged on the collapsed path, or the string still starts with the session root and is admitted.
+rc=0
+out="$(cd "$sess" && "$script" add "$repo" "$sess/.claude/worktrees/not-yet/../../../../maint-escape" "claim-branch-escape" "session-esc" 2>&1)" || rc=$?
+check "add refuses a not-yet-created tail that climbs out with .." 1 "$rc" "$out" "outside this session's worktree"
+check "traversal refusal creates nothing" 1 "$([ -e "$repo/.claude/worktrees/maint-escape" ] && echo 0 || echo 1)"
 rc=0
 out="$(cd "$sess" && "$script" add "$sess" "$sess/.claude/worktrees/maint-nested" "claim-branch-nested" "session-nested" 2>&1)" || rc=$?
 check "add admits a worktree nested under the session" 0 "$rc" "$out" "owner=session-nested"
