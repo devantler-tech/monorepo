@@ -2998,6 +2998,20 @@ for _clause in "${_aggregation_clauses[@]}"; do
     fail "the Safety block must keep the jq-only aggregation clause '${_clause}' (#3444)"
 done
 unset _clause _aggregation_clauses
+# The clauses above can be met by prose alone, so the executable pipeline is asserted on its own: the
+# fenced block after "is the reference shape" must hold exactly one command, beginning with the
+# admitted forge read, piping into `jq`, and carrying BOTH fail-closed branches on that same line.
+_aggregation_cmd=$(sed -n '/is the reference shape/,/^  ```$/p' <<<"${_safety_block}" |
+  sed -n '/^  ```sh$/,/^  ```$/p' | sed '1d;$d')
+[ -n "${_aggregation_cmd}" ] ||
+  fail "the jq-only aggregation rule must keep its fenced reference command (#3444)"
+[ "$(wc -l <<<"${_aggregation_cmd}" | tr -d ' ')" = "1" ] ||
+  fail "the aggregation reference block must hold exactly one command line (#3444)"
+case "${_aggregation_cmd}" in
+  "  gh api graphql --paginate --slurp "*"| jq -ce '"*'error("QUERY-UNKNOWN: incomplete or malformed issue aggregation input")'*'error("QUERY-UNKNOWN: issue aggregation query failed")'*) ;;
+  *) fail "the aggregation reference command must be the admitted forge read piped into jq with both fail-closed branches (#3444)" ;;
+esac
+unset _aggregation_cmd
 echo "portfolio surveyor contract: round-10 admitted-call-shape assertions passed"
 
 # ------------------------------------------------------------------ round 11: a Portfolio-map product is never an infra exclusion
