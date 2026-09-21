@@ -7,7 +7,19 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sut="$here/contract-test-invocation.sh"
 root="$(mktemp -d)"
-trap 'rm -rf "$root"' EXIT
+# Reaching the end is the only way a zero status leaves this suite: bash 3.2 reports $? as 0 to an
+# EXIT trap after a `set -u` abort, which would otherwise read as a passing run.
+finished=0
+cleanup() {
+  local rc=$?
+  rm -rf "$root"
+  if [[ "$finished" != 1 && $rc -eq 0 ]]; then
+    echo "contract-test-invocation.test: aborted before finishing; reporting failure" >&2
+    rc=1
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
 fail=0
 
 # case <name> <want-exit> <want-output-substring> <workflow body> [test files...]
@@ -323,5 +335,6 @@ else
   fail=1
 fi
 
+finished=1
 if [[ "$fail" != 0 ]]; then exit 1; fi
 echo "contract-test-invocation.test: ok"
