@@ -490,6 +490,8 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/lane-draft-count.sh'
               - '.claude/scripts/lane-draft-count.test.sh'
+              # The run loop's fail-closed intake check is pinned by this suite.
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
