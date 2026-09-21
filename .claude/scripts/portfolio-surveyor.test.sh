@@ -2980,6 +2980,24 @@ for _clause in "${_shape_clauses[@]}"; do
     fail "the admitted-call-shape rule must keep the clause '${_clause}' (#3179)"
 done
 unset _clause _shape_clauses
+# Aggregation must stay inside jq (monorepo#3444). agent-plugins#228 added this rule to the PLUGIN
+# definition, but all 11 `awk` guard denials measured over 7 days came from THIS overlay and none from
+# the plugin path, so the pin bump alone would fix none of them. The reference command is pinned by
+# its admitted shape and its two fail-closed errors: a copy that dropped either error would turn an
+# incomplete or failed census into a clean-looking count.
+_aggregation_clauses=(
+  'Keep issue/type, assignment, automation-owner, and blocker aggregation inside the forge command'
+  '`awk` is deliberately absent from the'
+  'reissue it once'
+  'gh api graphql --paginate --slurp'
+  'error("QUERY-UNKNOWN: incomplete or malformed issue aggregation input")'
+  'error("QUERY-UNKNOWN: issue aggregation query failed")'
+)
+for _clause in "${_aggregation_clauses[@]}"; do
+  grep -Fq -- "${_clause}" <<<"${_safety_block}" ||
+    fail "the Safety block must keep the jq-only aggregation clause '${_clause}' (#3444)"
+done
+unset _clause _aggregation_clauses
 echo "portfolio surveyor contract: round-10 admitted-call-shape assertions passed"
 
 # ------------------------------------------------------------------ round 11: a Portfolio-map product is never an infra exclusion
