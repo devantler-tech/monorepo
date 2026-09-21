@@ -456,6 +456,24 @@ grep -Fq 'every **total** review-output count on the PR is zero' "${maintenance_
   fail "maintenance skill does not require total (any-SHA) zero for not-requested"
 grep -Fq 'artifacts that **exist on the PR** but do not match the current head' "${maintenance_skill}" ||
   fail "maintenance skill does not define none(...) from existing artifacts with no head match"
+# #2561: per-LANE review health must reach the digest. The surveyor's read-only guard cannot run the
+# lane-health script, so the run loop's Survey step completes the digest with it. Scope the check to
+# that section so a mention elsewhere (e.g. the review-request steps) cannot satisfy it.
+survey_section="$(awk '/^## 1\. Survey/{on=1;next} /^## 2\. /{on=0} on' "${maintenance_skill}")"
+[[ -n "${survey_section}" ]] ||
+  fail "could not extract the Survey section from the portfolio-maintenance skill"
+grep -Fq '.claude/scripts/review-lane-health.sh' <<<"${survey_section}" ||
+  fail "Survey step does not complete the digest with review-lane-health.sh (#2561)"
+grep -Fq 'LANE-HEALTH' <<<"${survey_section}" ||
+  fail "Survey step does not name the LANE-HEALTH digest lines (#2561)"
+grep -Fq 'stop requesting a `DOWN` lane' <<<"${survey_section}" ||
+  fail "Survey step does not stop requests to DOWN lanes (#2561)"
+grep -Fq 'escalate a `MAINTAINER-ONLY` one' <<<"${survey_section}" ||
+  fail "Survey step does not escalate MAINTAINER-ONLY lanes (#2561)"
+grep -Fq 'exit `2` as UNKNOWN, never' <<<"${survey_section}" ||
+  fail "Survey step may read an incomplete lane-health read as healthy (#2561)"
+grep -Fq 'Local review round* still needs the direct per-PR check' <<<"${survey_section}" ||
+  fail "Survey step may let lane health replace the per-PR Local review round check (#2561)"
 grep -Fq 'Admissible evidence is a direct per-PR check of all three surfaces only' "${constitution}" ||
   fail "constitution fallback does not require per-PR three-surface evidence (#2244 AC3)"
 grep -Fq 'Zero review-output on all three surfaces is `not-requested`, not `none`' "${surveyor}" ||
