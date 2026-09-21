@@ -1557,6 +1557,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - BOARD-COVERAGE — `board_coverage=<measured: open_public=<n> on_board=<m> status_less=<k>|unknown:<reason>>` — always emit; `measured:` only after the paginated REST items census of step 5b (never from `totalCount`, which counts a different population); never a single-page `.length`
+- WIP-CAP — `open_drafts: claude=<n> codex=<n> cursor=<n> other=<n> total=<n>` verdict=<WITHIN|OVER|UNKNOWN> — always emit; produce by running `.claude/scripts/lane-draft-count.sh` (do not re-derive); incomplete/failed helper or exit 2 → `verdict=UNKNOWN` (never a number); the orchestrator opens no non-hotfix draft when the own lane is UNKNOWN or OVER
 - UNTYPED-RESIDUAL-UNAVAILABLE — <repo>: operand=<primary|typed:<Type>> truncated at <cap> of <total> → THAT repo's residual withheld (others unaffected); mandatory-query failure ⇒ nothing_on_fire: false
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>), event=<event>, path=<path>, created=<created_at>, run=<run_id>, attempt=<run_attempt>   # judged at main's current head; omit the repo entirely when that head is green
 - GITHUB-MANAGED (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `event: dynamic` AND `path` under `dynamic/` (so NO workflow file exists in the repo): not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only. Covers `dynamic/github-code-scanning/`, `dynamic/dependabot/`, and any future managed path
@@ -1586,6 +1587,11 @@ Digest rules:
   never remove or reshape any other digest field to make room for it. An `EXHAUSTED_AT_START` suffix
   is the only allowed annotation when graphql remaining was 0 on the opening sample; the
   orchestrator treats that as "this tick may run blind", not as a fire.
+- **Always emit the WIP-CAP / `open_drafts:` line.** Produce it by running
+  `.claude/scripts/lane-draft-count.sh` (do not re-derive the counts). Consume the helper's
+  `open_drafts:` and `verdict=` lines; an incomplete/failed helper or exit 2 is `UNKNOWN`, never a
+  number. It is additive — never remove or reshape any other digest field to make room for it. The
+  orchestrator opens no non-hotfix draft when the own lane is UNKNOWN or OVER.
 - **Classify, don't decide.** Surface signals; the **orchestrator** selects the work and overlays its
   own native-memory cadence cursors (`last_worked`, `weekly`, docs/roadmap) — **you do not read
   memory**, only live GitHub.
