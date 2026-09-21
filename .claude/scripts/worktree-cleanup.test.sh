@@ -426,6 +426,129 @@ t_keeps_parent_of_a_nested_worktree() {
   rm -rf "$root"
 }
 
+# add_sub_wt <root> <name> <sub-origin> — a pushed candidate worktree with an initialised,
+# clean, fully-pushed submodule at `sub` that gitignores .claude/worktrees/ (the real
+# ksail layout), plus a tracked .claude/scripts so a path-pattern detector would have
+# something ordinary to misfire on. Every step is status-checked: a fixture that silently
+# builds no submodule would let the KEEP assertion pass on nothing.
+add_sub_wt() {
+  local root=$1 name=$2 sub=$3 wt="$1/repo/.claude/worktrees/$2"
+  add_wt "$root" "$name" pushed || return 1
+  git -c protocol.file.allow=always clone -q "$sub" "$wt/sub" || return 1
+  local subsha; subsha=$(git -C "$wt/sub" rev-parse HEAD) || return 1
+  printf '[submodule "sub"]\n\tpath = sub\n\turl = %s\n' "$sub" > "$wt/.gitmodules"
+  mkdir -p "$wt/.claude/scripts" && echo tracked > "$wt/.claude/scripts/keep.sh"
+  git -C "$wt" add .gitmodules .claude/scripts/keep.sh &&
+    git -C "$wt" update-index --add --cacheinfo "160000,$subsha,sub" &&
+    git -C "$wt" commit -qm "add sub" &&
+    git -C "$wt" push -q origin "claude/$name" || return 1
+  touch -t 202001010000 "$wt"
+}
+
+
+t_keeps_submodule_owned_worktree_created_during_the_sweep() {
+  # #2588 review: the initial scan is not enough. A submodule-owned worktree created
+  # after it — and before removal — must still stop the reap. The lsof shim creates it
+  # from inside the pre-removal re-check's own live-process read, i.e. strictly after
+  # the initial scan saw the candidate as clean.
+  local name="KEEPs a submodule-owned worktree created during the sweep"
+  local root; root=$(make_repo)
+  local seed; seed=$(mktemp -d)
+  git init -q -b main "$seed/s" && git -C "$seed/s" config user.email t@t.t &&
+    git -C "$seed/s" config user.name t
+  printf '.claude/worktrees/\n' > "$seed/s/.gitignore"
+  git -C "$seed/s" add .gitignore && git -C "$seed/s" commit -qm base
+  git init -q --bare -b main "$root/sub.git" && git -C "$seed/s" push -q "$root/sub.git" main
+
+  add_wt "$root" spent pushed                        # control: plain spent worktree
+  if ! add_sub_wt "$root" late "$root/sub.git"; then
+    bad "$name" "FIXTURE: build failed"; rm -rf "$root" "$seed"; return
+  fi
+  local p="$root/repo/.claude/worktrees/late"
+  local nested="$p/sub/.claude/worktrees/subwt"
+
+  local real_lsof; real_lsof=$(command -v lsof) || real_lsof=
+  if [ -z "$real_lsof" ]; then
+    bad "$name" "FIXTURE: no lsof on PATH to pass through to"; rm -rf "$root" "$seed"; return
+  fi
+  local shim="$root/shim" flag="$root/lsof-calls"; mkdir -p "$shim"
+  cat > "$shim/lsof" <<SHIM
+#!/usr/bin/env bash
+# First call is the initial snapshot; every later one is a pre-removal re-check.
+if [ -e "$flag" ] && [ ! -e "$nested" ]; then
+  git -C "$p/sub" worktree add -q -b wip "$nested" main >/dev/null 2>&1 &&
+    echo "sole copy" > "$nested/precious.txt"
+fi
+: > "$flag"
+exec "$real_lsof" "\$@"
+SHIM
+  chmod +x "$shim/lsof"
+
+  local out; out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1)
+  if [ ! -e "$nested/precious.txt" ]; then
+    bad "$name" "FIXTURE: the shim never created the nested worktree, or it was deleted: $out"
+  elif grep -q '^KEEP  *late .*submodule-owned worktree appeared during the sweep (sub/\.claude/worktrees/subwt)' <<<"$out" \
+     && [ -d "$p" ] && [ ! -d "$root/repo/.claude/worktrees/spent" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root" "$seed"
+}
+
+t_keeps_parent_of_a_submodule_owned_worktree() {
+  # #2588: the nested-worktree gate reads the PARENT repo's registered list, so a
+  # worktree registered to an initialised SUBMODULE inside the candidate was invisible,
+  # and reaping the candidate deleted it with the only copy of its uncommitted work.
+  local root; root=$(make_repo)
+  local seed; seed=$(mktemp -d)
+  git init -q -b main "$seed/s" && git -C "$seed/s" config user.email t@t.t &&
+    git -C "$seed/s" config user.name t
+  printf '.claude/worktrees/\n' > "$seed/s/.gitignore"
+  git -C "$seed/s" add .gitignore && git -C "$seed/s" commit -qm base
+  git init -q --bare -b main "$root/sub.git" && git -C "$seed/s" push -q "$root/sub.git" main
+
+  add_wt "$root" spent pushed                        # control: plain spent worktree
+  if ! add_sub_wt "$root" subctl "$root/sub.git" ||  # control: submodule, no nested wt
+     ! add_sub_wt "$root" subown "$root/sub.git"; then
+    bad "KEEPs a worktree that contains a submodule-owned worktree" "FIXTURE: build failed"
+    rm -rf "$root" "$seed"; return
+  fi
+  local p="$root/repo/.claude/worktrees/subown"
+  local nested="$p/sub/.claude/worktrees/subwt"
+  git -C "$p/sub" worktree add -q -b wip "$nested" main || {
+    bad "KEEPs a worktree that contains a submodule-owned worktree" "FIXTURE: nested add failed"
+    rm -rf "$root" "$seed"; return; }
+  echo "sole copy" > "$nested/precious.txt"
+  touch -t 202001010000 "$p"
+
+  # Preconditions that keep the test honest (see #2588's acceptance criteria): the
+  # parent repo must NOT know the nested worktree, or the existing gate would pass this;
+  # and the candidate must read clean, or an earlier gate would mask the one under test.
+  local nested_real; nested_real=$(cd "$nested" && pwd -P)
+  if git -C "$root/repo" worktree list --porcelain | grep -qF "$nested_real"; then
+    bad "KEEPs a worktree that contains a submodule-owned worktree" \
+        "FIXTURE: parent repo registers the nested worktree — the old gate would pass"
+    rm -rf "$root" "$seed"; return
+  fi
+  local st; st=$(git -C "$p" status --porcelain)
+  if [ -n "$st" ]; then
+    bad "KEEPs a worktree that contains a submodule-owned worktree" \
+        "FIXTURE: candidate is not clean, an earlier gate would mask this one: [$st]"
+    rm -rf "$root" "$seed"; return
+  fi
+
+  local out; out=$(run "$root")
+  if grep -q '^KEEP  *subown .*submodule-owned worktree (sub/\.claude/worktrees/subwt)' <<<"$out" \
+     && grep -q '^REAP  *subctl ' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
+    ok "KEEPs a worktree that contains a submodule-owned worktree"
+  else
+    bad "KEEPs a worktree that contains a submodule-owned worktree" "$out"
+  fi
+  rm -rf "$root" "$seed"
+}
+
 t_aborts_when_the_manifest_cannot_be_written() {
   # A manifest failure is infrastructure, not a per-worktree verdict: it must abort with
   # a nonzero status, not keep the candidate and let the run report success.
@@ -794,6 +917,8 @@ t_reap_leaves_a_restorable_ref
 t_keeps_live_cwd
 t_keeps_live_cwd_in_subdir_with_regex_metachars
 t_keeps_parent_of_a_nested_worktree
+t_keeps_parent_of_a_submodule_owned_worktree
+t_keeps_submodule_owned_worktree_created_during_the_sweep
 t_aborts_when_the_manifest_cannot_be_written
 t_no_reaped_row_when_removal_is_aborted_after_recording
 t_completion_write_failure_after_removal_is_loud
