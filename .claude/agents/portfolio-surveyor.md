@@ -85,7 +85,9 @@ public and private — no per-repo loop needed to enumerate):
    later query errors as usual.
 
 1. **Open PRs (org-wide, one call):**
-   `gh search prs --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
+   `gh search prs --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url,body --jq '[.[]|del(.body)+{refs:([.body|scan("(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+")]|unique)}]'`
+   `refs` is the all-author body census the "no open PR" rule joins against (monorepo#2618): an
+   issue a PR names only in prose has no closing link, yet is not `ACTIONABLE`.
    🔴 **`--limit` is a CAP, not a page size — check whether it truncated, or `nothing_on_fire` is a
    claim about the first 300 PRs rather than the portfolio.** `gh search prs --help` defines it as the
    maximum number of results to fetch, so PR 301 is simply **absent**: it is never deepened, never
