@@ -79,14 +79,23 @@ case_ invoked-through-parent 0 "all 2 contract tests" "jobs:
   test-parent:
     steps:
       - run: bash ./.claude/scripts/parent.test.sh
-$self_step" 'parent.test.sh=if ! bash "$here/child.test.sh"; then exit 1; fi' 'child.test.sh=true'
+$self_step" 'parent.test.sh=here=$(dirname "$0")
+if ! bash "$here/child.test.sh"; then exit 1; fi' 'child.test.sh=true'
+# The parent fixture is a working script, not just parseable text: run it and require it to reach its child.
+if (cd "$root/invoked-through-parent" && bash .claude/scripts/parent.test.sh) >/dev/null 2>&1; then
+  echo "  ok   invoked-through-parent-runs"
+else
+  echo "  FAIL invoked-through-parent-runs: the parent fixture does not run its child"
+  fail=1
+fi
 
 # shellcheck disable=SC2016 # $here is expanded by the fixture test, not here
 case_ orphaned-parent 1 "NOT-INVOKED child.test.sh" "jobs:
   other:
     steps:
       - run: echo nothing
-$self_step" 'parent.test.sh=bash "$here/child.test.sh"' 'child.test.sh=true'
+$self_step" 'parent.test.sh=here=$(dirname "$0")
+bash "$here/child.test.sh"' 'child.test.sh=true'
 
 case_ commented-invocation 1 "NOT-INVOKED a.test.sh" "jobs:
   test-a:
@@ -151,6 +160,77 @@ case_ invocation-after-heredoc 0 "all 1 contract tests" "jobs:
           EOF
           bash .claude/scripts/a.test.sh
 $self_step" 'a.test.sh=true'
+
+# The delimiter is the whole word, not an identifier-shaped prefix: END-OF-DATA ends only at
+# END-OF-DATA (an END line inside is data), and a numeric delimiter still opens a heredoc.
+case_ hyphenated-delimiter-body-is-data 1 "NOT-INVOKED a.test.sh" "jobs:
+  test-a:
+    steps:
+      - run: |
+          cat <<END-OF-DATA
+          END
+          bash .claude/scripts/a.test.sh
+          END-OF-DATA
+          bash .claude/scripts/b.test.sh
+$self_step" 'a.test.sh=true' 'b.test.sh=true'
+
+case_ numeric-delimiter-body-is-data 1 "NOT-INVOKED a.test.sh" "jobs:
+  test-a:
+    steps:
+      - run: |
+          cat <<123
+          bash .claude/scripts/a.test.sh
+          123
+          bash .claude/scripts/b.test.sh
+$self_step" 'a.test.sh=true' 'b.test.sh=true'
+
+# Two heredocs on one command are read in order: the second delimiter inside the first body is data,
+# the second body is data too, and a command after the second delimiter still counts.
+case_ queued-heredocs-in-order 1 "NOT-INVOKED a.test.sh" "jobs:
+  test-a:
+    steps:
+      - run: |
+          cat <<FIRST <<SECOND
+          SECOND
+          bash .claude/scripts/a.test.sh
+          FIRST
+          cat <<X
+          SECOND
+          bash .claude/scripts/b.test.sh
+$self_step" 'a.test.sh=true' 'b.test.sh=true'
+
+# Companions: with only b.test.sh present, the invocation after each terminator must still count.
+case_ invocation-after-hyphenated-delimiter 0 "all 1 contract tests" "jobs:
+  test-b:
+    steps:
+      - run: |
+          cat <<'END-OF-DATA'
+          bash .claude/scripts/a.test.sh
+          END-OF-DATA
+          bash .claude/scripts/b.test.sh
+$self_step" 'b.test.sh=true'
+
+case_ invocation-after-numeric-delimiter 0 "all 1 contract tests" "jobs:
+  test-b:
+    steps:
+      - run: |
+          cat <<123
+          text
+          123
+          bash .claude/scripts/b.test.sh
+$self_step" 'b.test.sh=true'
+
+case_ invocation-after-queued-heredocs 0 "all 1 contract tests" "jobs:
+  test-b:
+    steps:
+      - run: |
+          cat <<FIRST <<SECOND
+          one
+          FIRST
+          two
+          SECOND
+          bash .claude/scripts/b.test.sh
+$self_step" 'b.test.sh=true'
 
 # bash -n only parses the script, alone or in an option cluster; other options still run it.
 case_ syntax-only-n 1 "NOT-INVOKED a.test.sh" "jobs:

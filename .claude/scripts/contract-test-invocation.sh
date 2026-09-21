@@ -53,7 +53,9 @@ trap cleanup EXIT
 targets() {
   awk '
     BEGIN { SEP = sprintf("%c", 1) }
-    HD != "" { t = $0; if (HDDASH) sub(/^\t+/, "", t); if (t == HD) HD = ""; next }
+    # Pending heredocs form a queue: bodies follow in the order their operators appeared, and each
+    # body ends only at its own delimiter, so a later delimiter inside an earlier body is still data.
+    HQH < HQN { t = $0; if (HQDASH[HQH]) sub(/^\t+/, "", t); if (t == HQ[HQH]) HQH++; next }
     { line = (pending == "" ? $0 : pending " " $0); pending = "" }
     line ~ /\\$/ { sub(/\\$/, "", line); pending = line; next }
     { emit(line) }
@@ -61,7 +63,24 @@ targets() {
     # Rewrites ; && || | to a separator byte and drops a # comment, but only outside quotes: a
     # separator inside a quoted argument is text, not a command boundary. A << or <<- outside quotes
     # (never the <<< here-string) records the heredoc delimiter, so the body lines that follow are skipped.
-    function commands(l,   out, i, c, q, len, rest) {
+    # The whole delimiter word after quote removal, as the shell reads it: it ends at the first
+    # unquoted blank or operator character, so END-OF-DATA and 123 are delimiters in full.
+    function delimiter(s,   w, i, n, c, q) {
+      w = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\047" || c == "\"") {
+          q = c
+          for (i++; i <= n && substr(s, i, 1) != q; i++) w = w substr(s, i, 1)
+          continue
+        }
+        if (c == "\\") { i++; w = w substr(s, i, 1); continue }
+        if (c ~ /[ \t;&|<>()]/) break
+        w = w c
+      }
+      return w
+    }
+    function commands(l,   out, i, c, q, len, rest, dash, word) {
       out = ""; q = ""; len = length(l)
       for (i = 1; i <= len; i++) {
         c = substr(l, i, 1)
@@ -70,10 +89,11 @@ targets() {
           if (c == "\047" || c == "\"") { q = c; out = out c; continue }
           if (c == "#" && (i == 1 || substr(l, i - 1, 1) ~ /[ \t]/)) break
           if (c == "<" && substr(l, i + 1, 1) == "<" && substr(l, i + 2, 1) != "<" && (i == 1 || substr(l, i - 1, 1) != "<")) {
-            rest = substr(l, i + 2); HDDASH = 0
-            if (substr(rest, 1, 1) == "-") { HDDASH = 1; rest = substr(rest, 2) }
+            rest = substr(l, i + 2); dash = 0
+            if (substr(rest, 1, 1) == "-") { dash = 1; rest = substr(rest, 2) }
             sub(/^[ \t]+/, "", rest)
-            if (match(rest, /^["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) { HD = substr(rest, 1, RLENGTH); gsub(/["\047]/, "", HD) }
+            word = delimiter(rest)
+            if (word != "") { HQ[HQN] = word; HQDASH[HQN] = dash; HQN++ }
           }
           if (c == ";") { out = out SEP; continue }
           if (c == "&" && substr(l, i + 1, 1) == "&") { out = out SEP; i++; continue }
