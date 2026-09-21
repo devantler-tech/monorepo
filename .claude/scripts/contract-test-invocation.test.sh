@@ -306,7 +306,28 @@ case_ braced-here-covers 0 "all 2 contract tests" "jobs:
   test-parent:
     steps:
       - run: bash .claude/scripts/parent.test.sh
-$self_step" 'parent.test.sh=bash "${here}/child.test.sh"' 'child.test.sh=true'
+$self_step" 'parent.test.sh=here=$(dirname "$0")
+bash "${here}/child.test.sh"' 'child.test.sh=true'
+# Like invoked-through-parent-runs: the braced fixture must really reach its child.
+if (cd "$root/braced-here-covers" && bash .claude/scripts/parent.test.sh) >/dev/null 2>&1; then
+  echo "  ok   braced-here-covers-runs"
+else
+  echo "  FAIL braced-here-covers-runs: the braced parent fixture does not run its child"
+  fail=1
+fi
+
+# Each run step is its own shell: a trailing continuation or an unclosed heredoc in one step never
+# swallows the next step's invocation.
+case_ step-boundary-ends-continuation 0 "all 2 contract tests" "jobs:
+  test-a:
+    steps:
+      - run: echo setup \\
+      - run: bash .claude/scripts/a.test.sh
+      - run: |
+          cat <<EOF
+          never closed
+      - run: bash .claude/scripts/b.test.sh
+$self_step" 'a.test.sh=true' 'b.test.sh=true'
 
 # A parent that runs a same-named test from ANOTHER directory does not cover the top-level one.
 # shellcheck disable=SC2016 # $here is expanded by the fixture test, not here

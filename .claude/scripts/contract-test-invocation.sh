@@ -62,7 +62,11 @@ trap cleanup EXIT
 # than being read as coverage.
 targets() {
   awk '
-    BEGIN { SEP = sprintf("%c", 1) }
+    BEGIN { SEP = sprintf("%c", 1); STEP = "#contract-test-invocation:step-boundary#" }
+    # Each workflow run step is its own shell: a trailing continuation or an unclosed heredoc in one
+    # step never reaches the next, so the boundary between steps ends the pending command and resets
+    # the heredoc queue.
+    $0 == STEP { if (pending != "") emit(pending); pending = ""; HQH = HQN; next }
     # Pending heredocs form a queue: bodies follow in the order their operators appeared, and each
     # body ends only at its own delimiter, so a later delimiter inside an earlier body is still data.
     HQH < HQN { t = $0; if (HQDASH[HQH]) sub(/^\t+/, "", t); if (t == HQ[HQH]) HQH++; next }
@@ -150,7 +154,7 @@ yq -r '.jobs | keys | .[]' "$workflow" >"$tmp/jobs" 2>"$tmp/err" ||
 
 : >"$tmp/direct"
 while IFS= read -r job; do
-  J="$job" yq -r '.jobs[strenv(J)].steps[]?.run // ""' "$workflow" >"$tmp/run" 2>"$tmp/err" ||
+  J="$job" yq -r '.jobs[strenv(J)].steps[]? | (.run // "") + "\n#contract-test-invocation:step-boundary#"' "$workflow" >"$tmp/run" 2>"$tmp/err" ||
     { echo "contract-test-invocation: cannot read the run steps of job $job: $(cat "$tmp/err")" >&2; exit 2; }
   targets "$tmp/run" | awk -v d="$scripts_dir/" 'index($0, d) == 1 { print substr($0, length(d) + 1) }' >>"$tmp/direct"
 done <"$tmp/jobs"
