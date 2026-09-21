@@ -121,6 +121,64 @@ case_ unquoted-separators-split 0 "all 2 contract tests" "jobs:
       - run: echo \"a; b\" || true; bash .claude/scripts/a.test.sh | cat && sh .claude/scripts/b.test.sh
 $self_step" 'a.test.sh=true' 'b.test.sh=true'
 
+# A heredoc body is data fed to a command, not a command: its lines never run.
+case_ heredoc-body-is-data 1 "NOT-INVOKED a.test.sh" "jobs:
+  test-a:
+    steps:
+      - run: |
+          cat <<EOF > notes.txt
+          bash .claude/scripts/a.test.sh
+          EOF
+$self_step" 'a.test.sh=true'
+
+case_ quoted-dash-heredoc-body-is-data 1 "NOT-INVOKED a.test.sh" "jobs:
+  test-a:
+    steps:
+      - run: |
+          cat <<-'END'
+          bash .claude/scripts/a.test.sh
+          END
+$self_step" 'a.test.sh=true'
+
+# The heredoc ends at its delimiter: a real invocation after it still counts, and <<< is not a heredoc.
+case_ invocation-after-heredoc 0 "all 1 contract tests" "jobs:
+  test-a:
+    steps:
+      - run: |
+          grep -q x <<< \"x\"
+          cat <<EOF
+          text
+          EOF
+          bash .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
+# bash -n only parses the script, alone or in an option cluster; other options still run it.
+case_ syntax-only-n 1 "NOT-INVOKED a.test.sh" "jobs:
+  test-a:
+    steps:
+      - run: bash -n .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
+case_ syntax-only-cluster 1 "NOT-INVOKED a.test.sh" "jobs:
+  test-a:
+    steps:
+      - run: sh -nv .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
+case_ traced-run-counts 0 "all 1 contract tests" "jobs:
+  test-a:
+    steps:
+      - run: bash -x .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
+# A parent that runs a same-named test from ANOTHER directory does not cover the top-level one.
+# shellcheck disable=SC2016 # $here is expanded by the fixture test, not here
+case_ same-basename-other-dir 1 "NOT-INVOKED child.test.sh" "jobs:
+  test-parent:
+    steps:
+      - run: bash .claude/scripts/parent.test.sh
+$self_step" 'parent.test.sh=bash "$here/fixtures/child.test.sh"' 'child.test.sh=true'
+
 case_ self-not-run 1 "NOT-INVOKED contract-test-invocation.sh" "jobs:
   test-a:
     steps:

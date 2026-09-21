@@ -47,17 +47,21 @@ trap cleanup EXIT
 
 # targets <file> — every word run in command position, one per line. Continuation lines are joined
 # first, then each line is split into commands at ; && || | outside quotes, and each command's leading keywords,
-# negation and variable assignments are skipped.
+# negation and variable assignments are skipped. Heredoc bodies are data, not commands, so they are
+# skipped up to their closing delimiter. `bash -n` / `sh -n` only parse the script, so a syntax-only
+# option (alone or in a cluster such as -nv) does not count as running it.
 targets() {
   awk '
     BEGIN { SEP = sprintf("%c", 1) }
+    HD != "" { t = $0; if (HDDASH) sub(/^\t+/, "", t); if (t == HD) HD = ""; next }
     { line = (pending == "" ? $0 : pending " " $0); pending = "" }
     line ~ /\\$/ { sub(/\\$/, "", line); pending = line; next }
     { emit(line) }
     END { if (pending != "") emit(pending) }
     # Rewrites ; && || | to a separator byte and drops a # comment, but only outside quotes: a
-    # separator inside a quoted argument is text, not a command boundary.
-    function commands(l,   out, i, c, q, len) {
+    # separator inside a quoted argument is text, not a command boundary. A << or <<- outside quotes
+    # (never the <<< here-string) records the heredoc delimiter, so the body lines that follow are skipped.
+    function commands(l,   out, i, c, q, len, rest) {
       out = ""; q = ""; len = length(l)
       for (i = 1; i <= len; i++) {
         c = substr(l, i, 1)
@@ -65,6 +69,12 @@ targets() {
           if (c == "\\") { out = out c substr(l, i + 1, 1); i++; continue }
           if (c == "\047" || c == "\"") { q = c; out = out c; continue }
           if (c == "#" && (i == 1 || substr(l, i - 1, 1) ~ /[ \t]/)) break
+          if (c == "<" && substr(l, i + 1, 1) == "<" && substr(l, i + 2, 1) != "<" && (i == 1 || substr(l, i - 1, 1) != "<")) {
+            rest = substr(l, i + 2); HDDASH = 0
+            if (substr(rest, 1, 1) == "-") { HDDASH = 1; rest = substr(rest, 2) }
+            sub(/^[ \t]+/, "", rest)
+            if (match(rest, /^["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) { HD = substr(rest, 1, RLENGTH); gsub(/["\047]/, "", HD) }
+          }
           if (c == ";") { out = out SEP; continue }
           if (c == "&" && substr(l, i + 1, 1) == "&") { out = out SEP; i++; continue }
           if (c == "|") { if (substr(l, i + 1, 1) == "|") i++; out = out SEP; continue }
@@ -74,14 +84,18 @@ targets() {
       }
       return out
     }
-    function emit(l,   n, cmds, i, w, nw, j, t) {
+    function emit(l,   n, cmds, i, w, nw, j, t, syntax_only) {
       n = split(commands(l), cmds, SEP)
       for (i = 1; i <= n; i++) {
         nw = split(cmds[i], w, /[ \t]+/)
         j = 1
         while (j <= nw && (w[j] == "" || w[j] ~ /^(if|then|do|else|elif|while|until|time|!|\(|\{)$/ || w[j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) j++
         if (j > nw) continue
-        if (w[j] ~ /^(bash|sh|source|\.)$/) { j++; while (j <= nw && w[j] ~ /^-/) j++ }
+        if (w[j] ~ /^(bash|sh|source|\.)$/) {
+          j++; syntax_only = 0
+          while (j <= nw && w[j] ~ /^-/) { if (w[j] ~ /^-[^-]*n/) syntax_only = 1; j++ }
+          if (syntax_only) continue
+        }
         if (j > nw) continue
         t = w[j]; gsub(/["\047]/, "", t); sub(/^\.\//, "", t)
         print t
@@ -104,13 +118,18 @@ while IFS= read -r job; do
   targets "$tmp/run" | awk -v d="$scripts_dir/" 'index($0, d) == 1 { print substr($0, length(d) + 1) }' >>"$tmp/direct"
 done <"$tmp/jobs"
 
-# Transitive closure over tests that run other tests from their own directory.
+# Transitive closure over tests that run other tests from their own directory. A target counts when it
+# is written under the scripts directory, or under a variable standing for the test's own directory
+# (`"$here/child.test.sh"`). The remainder keeps its subdirectory, so `$here/fixtures/child.test.sh`
+# never covers a top-level `child.test.sh` of the same name.
 LC_ALL=C sort -u "$tmp/direct" >"$tmp/covered"
 while :; do
   cp "$tmp/covered" "$tmp/before"
   while IFS= read -r t; do
     [[ -f "$scripts_dir/$t" ]] || continue
-    targets "$scripts_dir/$t" | awk -F/ 'NF > 1 { print $NF }' >>"$tmp/covered"
+    targets "$scripts_dir/$t" | awk -v d="$scripts_dir/" '
+      index($0, d) == 1 { print substr($0, length(d) + 1); next }
+      /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\// { t = $0; sub(/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\//, "", t); print t }' >>"$tmp/covered"
   done <"$tmp/before"
   LC_ALL=C sort -u "$tmp/covered" -o "$tmp/covered"
   cmp -s "$tmp/before" "$tmp/covered" && break
