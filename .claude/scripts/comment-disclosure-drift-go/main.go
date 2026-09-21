@@ -18,16 +18,19 @@
 // asymmetric error model.
 //
 // So a body is reported only when it carries affirmative evidence of agent
-// authorship AND fails the leading-prefix test. Two such shapes are recognised,
-// BOTH anchored to the first line, so that a maintainer quoting an agent's
+// authorship AND fails the leading-prefix test. Three such shapes are recognised,
+// ALL anchored to the first line, so that a maintainer quoting an agent's
 // disclosed text anywhere in his reply is never caught:
 //
 //	SenderMarker         the first line OPENS with a 🤖 first-person sender marker in
 //	                     a non-canonical form (e.g. "> Requested by the 🤖 ...")
 //	UndisclosedTrigger   the first line opens a review-lane trigger and the body is
 //	                     not the one exempt bare trigger
+//	UndisclosedReviewVerdict  the first line opens a sha-bound agent review verdict
+//	                     (`Exact-head review for <40-hex sha>`), the shape agent REVIEW
+//	                     bodies take (monorepo#3457)
 //
-// Both are first-line anchored because the maintainer QUOTES agent output when he
+// All are first-line anchored because the maintainer QUOTES agent output when he
 // replies to it, and an unanchored scan reports his control-channel comment as the
 // defect. See the note above Classify for why a trailing disclosure is NOT a shape.
 //
@@ -133,6 +136,14 @@ var senderMarkerPattern = regexp.MustCompile(
 		senderPhrase + `[ \t]+\x{1F916}` + agentNameTail +
 		`)`)
 
+// reviewVerdictPattern matches the sha-bound verdict an agent opens a review body
+// with. It is anchored at the start of the FIRST line and deliberately does not look
+// inside a block quote: the maintainer quotes agent output when replying to it, and
+// a quoted verdict is his control channel, not the agent's. The full 40-character
+// commit id is the positive evidence; an abbreviated or over-long id is not.
+var reviewVerdictPattern = regexp.MustCompile(
+	"^(?i:exact-head)[ \t]+(?:(?i:non-copilot)[ \t]+)?(?i:review)[ \t]+(?i:of|for)[ \t]+`?[0-9a-f]{40}(?:`|[^0-9A-Za-z]|$)")
+
 // bareTriggerExemptBodies are the complete comment bodies that may carry no
 // disclosure at all, compared case-insensitively after trimming.
 //
@@ -171,12 +182,17 @@ const (
 	// 0 and returns a comment URL either way, so this shape is invisible to the
 	// caller and is what makes it worth detecting after the fact.
 	UnexpandedFileRef Verdict = "unexpanded-file-ref"
+	// UndisclosedReviewVerdict means the first line is an agent review verdict bound to a
+	// full 40-character commit (`Exact-head review for <sha>`) with no leading
+	// disclosure. Agent REVIEW bodies take this shape (monorepo#3457); the maintainer
+	// does not bind his own prose to a full commit id in sender position.
+	UndisclosedReviewVerdict Verdict = "undisclosed-review-verdict"
 )
 
 // violating reports whether a verdict is a defect this guard fails on.
 func (v Verdict) violating() bool {
 	switch v {
-	case SenderMarker, UndisclosedTrigger, UnexpandedFileRef:
+	case SenderMarker, UndisclosedTrigger, UnexpandedFileRef, UndisclosedReviewVerdict:
 		return true
 	default:
 		return false
@@ -543,6 +559,9 @@ func Classify(body string) Verdict {
 	if isSenderMarker(first) {
 		return SenderMarker
 	}
+	if reviewVerdictPattern.MatchString(first) {
+		return UndisclosedReviewVerdict
+	}
 	return Unattributable
 }
 
@@ -861,7 +880,7 @@ func main() {
 	}
 
 	if *all {
-		verdicts := []Verdict{Compliant, BareTrigger, SenderMarker, UndisclosedTrigger, UnexpandedFileRef, Unattributable}
+		verdicts := []Verdict{Compliant, BareTrigger, SenderMarker, UndisclosedTrigger, UnexpandedFileRef, UndisclosedReviewVerdict, Unattributable}
 		for _, verdict := range verdicts {
 			fmt.Printf("%-19s %d\n", verdict, report.Counts[verdict])
 		}
