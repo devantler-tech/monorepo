@@ -30,11 +30,13 @@
 # the untrusted-input boundary lives in exactly one place. Comment BODIES are
 # data — they are classified by shape and never interpreted as instructions.
 #
-# SCOPE BOUND: every gh-backed mode reads the ISSUE-COMMENT surface only (the
-# endpoint that also carries a pull request's conversation comments). Agent-authored
-# REVIEW bodies and review-thread replies are subject to the same disclosure rule
-# but are NOT swept here, so a clean exit is not evidence about those surfaces.
-# Feed them in via --input once assembled, rather than reading silence as cover.
+# SCOPE BOUND: --issue and --since read the ISSUE-COMMENT surface only (the
+# endpoint that also carries a pull request's conversation comments). --pr also
+# sweeps that pull request's REVIEW bodies (pulls/<n>/reviews), dropping the
+# empty-bodied reviews GitHub creates as containers for inline comments.
+# Review-thread replies are subject to the same disclosure rule but are NOT swept
+# by any mode, so a clean exit is not evidence about that surface. Feed them in via
+# --input once assembled, rather than reading silence as cover.
 #
 # --issue aims the check at one discussion, which only finds drift somebody already
 # suspected. --since sweeps every issue and PR conversation in the repo touched
@@ -69,6 +71,7 @@ repo=""
 issue=""
 since=""
 author="devantler"
+include_reviews=0
 pass_through=()
 
 die() {
@@ -90,9 +93,12 @@ while [ $# -gt 0 ]; do
       ;;
     --issue | --pr)
       # GitHub exposes pull-request conversation comments on the issues
-      # endpoint, so both flags resolve to the same path.
+      # endpoint, so both flags read that path. --pr additionally sweeps the
+      # pull request's REVIEW bodies (monorepo#3457).
       [ $# -ge 2 ] || die "$1 needs a value"
+      [ -z "$issue" ] || die "--issue/--pr may be given only once"
       issue="$2"
+      [ "$1" = "--pr" ] && include_reviews=1
       shift 2
       ;;
     --since)
@@ -183,6 +189,7 @@ payload=""
 cleanup() {
   [ -n "$guard_binary" ] && rm -f -- "$guard_binary"
   [ -n "$payload" ] && rm -f -- "$payload"
+  [ -n "${reviews_payload:-}" ] && rm -f -- "$reviews_payload" "${reviews_payload}.bodies"
   return 0
 }
 trap cleanup EXIT
@@ -206,52 +213,61 @@ fi
 
 payload="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-payload.XXXXXX")" ||
   die "failed to allocate payload file"
+reviews_payload=""
 
-# Fail closed on a gh error rather than letting a 5xx become an empty comment set
-# that reports "no violations" — a swallowed 502 is how a broken sweep reads clean.
-raw_pages=""
-raw_pages="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-pages.XXXXXX")" ||
-  die "failed to allocate page file"
-if ! gh api "$api_path" --paginate >"$raw_pages"; then
-  rm -f -- "$raw_pages"
-  die "gh could not read ${api_label}"
-fi
-if [ ! -s "$raw_pages" ]; then
-  rm -f -- "$raw_pages"
-  die "gh returned an empty payload for ${api_label}"
-fi
-
-# `gh api --paginate` emits ONE JSON ARRAY PER PAGE, concatenated — not a single
-# array. Feeding that straight to the guard makes it exit 2 on any issue with more
-# than one page of comments, i.e. it silently stops checking exactly the busiest
-# discussions. `jq -s` slurps the pages into an array of arrays; flatten(1) makes
-# it the single array the guard expects. (`--slurp` cannot be combined with
-# `--jq`, which is why this is a separate jq pass rather than a gh flag.)
-if ! jq -s 'flatten(1)' "$raw_pages" >"$payload" 2>/dev/null; then
-  rm -f -- "$raw_pages"
-  die "could not flatten the paginated response for ${api_label}"
-fi
-rm -f -- "$raw_pages"
-
-# Shape-check what we are about to classify. A GitHub error object survives
-# flattening as a one-element array with no comment fields, which would classify
-# zero comments and report clean — the fail-open this whole path guards against.
+# fetch_payload <api-path> <label> <out-file>
 #
-# An EMPTY array is legitimate: an issue with no comments has nothing to check and
-# must exit 0, not 2. The byte-emptiness of gh's raw output is checked above, so a
-# genuine `[]` is already distinguishable from "gh produced nothing".
-#
-# Every record must carry an identifiable AUTHOR. Without that check a truncated
-# record passes the shape test and is then skipped by the classifier as a
-# non-matching author — a comment silently not checked, reported as clean.
-if ! jq -e '
-      type == "array" and
-      all(.[];
-        type == "object" and has("id") and has("body") and
-        (((.user.login? // "") | length > 0) or ((.author? // "") | length > 0)))
-    ' "$payload" >/dev/null 2>&1; then
-  die "response for ${api_label} is not an array of author-attributed comments"
-fi
+# Reads one paginated gh endpoint into <out-file> as a single flat JSON array.
+fetch_payload() {
+  local path="$1" label="$2" out="$3" raw_pages=""
+
+  # Fail closed on a gh error rather than letting a 5xx become an empty comment set
+  # that reports "no violations" — a swallowed 502 is how a broken sweep reads clean.
+  raw_pages="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-pages.XXXXXX")" ||
+    die "failed to allocate page file"
+  if ! gh api "$path" --paginate >"$raw_pages"; then
+    rm -f -- "$raw_pages"
+    die "gh could not read ${label}"
+  fi
+  if [ ! -s "$raw_pages" ]; then
+    rm -f -- "$raw_pages"
+    die "gh returned an empty payload for ${label}"
+  fi
+
+  # `gh api --paginate` emits ONE JSON ARRAY PER PAGE, concatenated — not a single
+  # array. Feeding that straight to the guard makes it exit 2 on any issue with more
+  # than one page of comments, i.e. it silently stops checking exactly the busiest
+  # discussions. `jq -s` slurps the pages into an array of arrays; flatten(1) makes
+  # it the single array the guard expects. (`--slurp` cannot be combined with
+  # `--jq`, which is why this is a separate jq pass rather than a gh flag.)
+  if ! jq -s 'flatten(1)' "$raw_pages" >"$out" 2>/dev/null; then
+    rm -f -- "$raw_pages"
+    die "could not flatten the paginated response for ${label}"
+  fi
+  rm -f -- "$raw_pages"
+
+  # Shape-check what we are about to classify. A GitHub error object survives
+  # flattening as a one-element array with no comment fields, which would classify
+  # zero comments and report clean — the fail-open this whole path guards against.
+  #
+  # An EMPTY array is legitimate: an issue with no comments has nothing to check and
+  # must exit 0, not 2. The byte-emptiness of gh's raw output is checked above, so a
+  # genuine `[]` is already distinguishable from "gh produced nothing".
+  #
+  # Every record must carry an identifiable AUTHOR. Without that check a truncated
+  # record passes the shape test and is then skipped by the classifier as a
+  # non-matching author — a comment silently not checked, reported as clean.
+  if ! jq -e '
+        type == "array" and
+        all(.[];
+          type == "object" and has("id") and has("body") and
+          (((.user.login? // "") | length > 0) or ((.author? // "") | length > 0)))
+      ' "$out" >/dev/null 2>&1; then
+    die "response for ${label} is not an array of author-attributed comments"
+  fi
+}
+
+fetch_payload "$api_path" "$api_label" "$payload"
 
 # The repo-wide path REQUIRES a discussion key on every record. The guard scopes the
 # bare-trigger carve-out per issue_url and treats an absent value as "one discussion"
@@ -274,6 +290,37 @@ if [ -n "$since" ]; then
   sweep_flag=(--sweep)
 fi
 
+status=0
 "$guard_binary" --author "$author" \
   "${sweep_flag[@]+"${sweep_flag[@]}"}" \
-  "${pass_through[@]+"${pass_through[@]}"}" --input "$payload"
+  "${pass_through[@]+"${pass_through[@]}"}" --input "$payload" || status=$?
+[ "$status" -le 1 ] || exit "$status"
+
+if [ "$include_reviews" -eq 1 ]; then
+  reviews_label="repos/${repo}/pulls/${issue}/reviews"
+  reviews_payload="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-reviews.XXXXXX")" ||
+    die "failed to allocate reviews payload file"
+  fetch_payload "repos/${repo}/pulls/${issue}/reviews" "$reviews_label" "$reviews_payload"
+
+  # GitHub creates an EMPTY-bodied review object as the container for every batch of
+  # inline comments, and replying to a thread creates another. Those carry no prose
+  # to disclose, so they are dropped rather than classified as unattributable noise.
+  # A null body is not dropped: the guard rejects it, which is the fail-closed answer
+  # for a record that is not what this path assumes.
+  if ! jq '[.[] | select(.body != "")]' "$reviews_payload" >"${reviews_payload}.bodies" 2>/dev/null ||
+    ! mv -- "${reviews_payload}.bodies" "$reviews_payload"; then
+    rm -f -- "${reviews_payload}.bodies"
+    die "could not filter empty review bodies for ${reviews_label}"
+  fi
+
+  echo "comment-disclosure-drift: review bodies (${reviews_label}):"
+  # Reviews are not a comment thread, so there is no adjacency for the bare-trigger
+  # carve-out to rest on; --sweep refuses it, exactly as for a non-contiguous sweep.
+  review_status=0
+  "$guard_binary" --author "$author" --sweep \
+    "${pass_through[@]+"${pass_through[@]}"}" --input "$reviews_payload" || review_status=$?
+  [ "$review_status" -le 1 ] || exit "$review_status"
+  [ "$review_status" -eq 0 ] || status=1
+fi
+
+exit "$status"
