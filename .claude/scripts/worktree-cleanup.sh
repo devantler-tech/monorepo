@@ -302,6 +302,17 @@ recheck_mutable_gates() {
   if grep -q '^[a-zS]' <<< "$idx"; then
     keep "$wt" "assume-unchanged/skip-worktree flags appeared during the sweep"; return 1
   fi
+
+  # A submodule-owned worktree created after the initial scan is invisible to every check
+  # above when .claude/worktrees/ is ignored, and an abandoned one holds no live CWD. The
+  # recursive removal would take its uncommitted files with it (#2588).
+  local sub_nested
+  if ! sub_nested=$(submodule_owned_worktree "$wt" "$target"); then
+    keep "$wt" "cannot re-enumerate submodule-owned worktrees before removal"; return 1
+  fi
+  if [ -n "$sub_nested" ]; then
+    keep "$wt" "a submodule-owned worktree appeared during the sweep (${sub_nested#"$target"/})"; return 1
+  fi
   return 0
 }
 
