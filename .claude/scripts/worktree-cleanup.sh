@@ -305,6 +305,36 @@ recheck_mutable_gates() {
   return 0
 }
 
+# submodule_owned_worktree <worktree> <worktree-realpath> -> prints the first worktree
+# registered to an initialised submodule (recursively) that lies inside <worktree>, other
+# than the submodule's own checkout. Prints nothing when there is none. Returns non-zero
+# when any submodule or its worktree list cannot be read, so the caller fails closed.
+# Top-level for the same bash 3.2 reason as count_real_changes below.
+submodule_owned_worktree() {
+  local wt=$1 wt_real=$2 subs sub sub_real wts line path path_real
+  subs=$(git -C "$wt" submodule foreach --quiet --recursive \
+           'printf "%s\n" "$toplevel/$sm_path"' 2>/dev/null) || return 1
+  while IFS= read -r sub; do
+    [ -n "$sub" ] || continue
+    sub_real=$(cd "$sub" 2>/dev/null && pwd -P) || return 1
+    wts=$(git -C "$sub" worktree list --porcelain 2>/dev/null) || return 1
+    while IFS= read -r line; do
+      case "$line" in
+        "worktree "*) path=${line#worktree } ;;
+        *) continue ;;
+      esac
+      # A pruned-but-registered path no longer resolves; compare it as written, which is
+      # still enough to see that it sits inside the candidate.
+      path_real=$(cd "$path" 2>/dev/null && pwd -P) || path_real=$path
+      [ "$path_real" = "$sub_real" ] && continue
+      case "$path_real/" in
+        "$wt_real"/*) printf '%s\n' "$path_real"; return 0 ;;
+      esac
+    done <<< "$wts"
+  done <<< "$subs"
+  return 0
+}
+
 # count_real_changes <worktree> <porcelain-status> -> sets $REAL_CHANGES
 # Counts porcelain entries that represent AUTHORED work. Submodule gitlink drift and
 # known tool-noise dirs are excluded — but a gitlink counts as real work the moment the
@@ -548,6 +578,19 @@ while IFS= read -r wt <&3; do
   nested=$(awk -v p="$wt_real/" 'index($0,p)==1' <<< "$REGISTERED" | head -1)
   if [ -n "$nested" ]; then
     keep "$wt" "contains a registered worktree ($(basename "$nested"))"; continue
+  fi
+
+  # KEEP: a worktree registered to an initialised SUBMODULE inside this one (#2588).
+  # REGISTERED is the parent repository's list only, so a submodule's own worktrees —
+  # e.g. <candidate>/applications/ksail/.claude/worktrees/<slug> — never appear in it.
+  # Ask each initialised submodule's gitdir instead of matching paths: a path pattern
+  # cannot tell such a worktree from an ordinary directory like .claude/scripts.
+  # Any failure to enumerate is a KEEP, because an unreadable submodule proves nothing.
+  if ! sub_nested=$(submodule_owned_worktree "$wt" "$wt_real"); then
+    keep "$wt" "cannot enumerate submodule-owned worktrees"; continue
+  fi
+  if [ -n "$sub_nested" ]; then
+    keep "$wt" "contains a submodule-owned worktree (${sub_nested#"$wt_real"/})"; continue
   fi
 
   # KEEP: commits in this worktree's own HEAD reflog that exist nowhere else. HEAD may be
