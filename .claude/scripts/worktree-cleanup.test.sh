@@ -467,6 +467,10 @@ t_keeps_submodule_owned_worktree_created_during_the_sweep() {
   local p="$root/repo/.claude/worktrees/late"
   local nested="$p/sub/.claude/worktrees/subwt"
 
+  local real_lsof; real_lsof=$(command -v lsof) || real_lsof=
+  if [ -z "$real_lsof" ]; then
+    bad "$name" "FIXTURE: no lsof on PATH to pass through to"; rm -rf "$root" "$seed"; return
+  fi
   local shim="$root/shim" flag="$root/lsof-calls"; mkdir -p "$shim"
   cat > "$shim/lsof" <<SHIM
 #!/usr/bin/env bash
@@ -476,7 +480,7 @@ if [ -e "$flag" ] && [ ! -e "$nested" ]; then
     echo "sole copy" > "$nested/precious.txt"
 fi
 : > "$flag"
-exec /usr/sbin/lsof "\$@"
+exec "$real_lsof" "\$@"
 SHIM
   chmod +x "$shim/lsof"
 
