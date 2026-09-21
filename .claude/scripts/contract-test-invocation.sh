@@ -46,18 +46,36 @@ cleanup() {
 trap cleanup EXIT
 
 # targets <file> — every word run in command position, one per line. Continuation lines are joined
-# first, then each line is split into commands at ; && || | and each command's leading keywords,
+# first, then each line is split into commands at ; && || | outside quotes, and each command's leading keywords,
 # negation and variable assignments are skipped.
 targets() {
   awk '
+    BEGIN { SEP = sprintf("%c", 1) }
     { line = (pending == "" ? $0 : pending " " $0); pending = "" }
     line ~ /\\$/ { sub(/\\$/, "", line); pending = line; next }
     { emit(line) }
     END { if (pending != "") emit(pending) }
+    # Rewrites ; && || | to a separator byte and drops a # comment, but only outside quotes: a
+    # separator inside a quoted argument is text, not a command boundary.
+    function commands(l,   out, i, c, q, len) {
+      out = ""; q = ""; len = length(l)
+      for (i = 1; i <= len; i++) {
+        c = substr(l, i, 1)
+        if (q == "") {
+          if (c == "\\") { out = out c substr(l, i + 1, 1); i++; continue }
+          if (c == "\047" || c == "\"") { q = c; out = out c; continue }
+          if (c == "#" && (i == 1 || substr(l, i - 1, 1) ~ /[ \t]/)) break
+          if (c == ";") { out = out SEP; continue }
+          if (c == "&" && substr(l, i + 1, 1) == "&") { out = out SEP; i++; continue }
+          if (c == "|") { if (substr(l, i + 1, 1) == "|") i++; out = out SEP; continue }
+        } else if (q == "\"" && c == "\\") { out = out c substr(l, i + 1, 1); i++; continue }
+        else if (c == q) q = ""
+        out = out c
+      }
+      return out
+    }
     function emit(l,   n, cmds, i, w, nw, j, t) {
-      sub(/(^|[ \t])#.*$/, "", l)
-      gsub(/&&|\|\|/, ";", l); gsub(/\|/, ";", l)
-      n = split(l, cmds, ";")
+      n = split(commands(l), cmds, SEP)
       for (i = 1; i <= n; i++) {
         nw = split(cmds[i], w, /[ \t]+/)
         j = 1

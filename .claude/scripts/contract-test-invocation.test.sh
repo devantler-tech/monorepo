@@ -96,6 +96,31 @@ case_ commented-invocation 1 "NOT-INVOKED a.test.sh" "jobs:
           true
 $self_step" 'a.test.sh=true'
 
+# Separators inside quotes are text, not command boundaries: printing a line that mentions a test
+# must not count as running it.
+case_ quoted-separator-is-text 1 "NOT-INVOKED a.test.sh" "jobs:
+  test-a:
+    steps:
+      - run: |
+          printf '%s\n' \"audit; bash .claude/scripts/a.test.sh\"
+          echo 'x && bash .claude/scripts/a.test.sh | tee y'
+$self_step" 'a.test.sh=true'
+
+# A quoted '#' is not a comment, so a real invocation after it on the same line still counts.
+case_ quoted-hash-then-invocation 0 "all 1 contract tests" "jobs:
+  test-a:
+    steps:
+      - run: |
+          echo 'step #1' && bash .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
+# Real separators outside quotes still split commands.
+case_ unquoted-separators-split 0 "all 2 contract tests" "jobs:
+  test-a:
+    steps:
+      - run: echo \"a; b\" || true; bash .claude/scripts/a.test.sh | cat && sh .claude/scripts/b.test.sh
+$self_step" 'a.test.sh=true' 'b.test.sh=true'
+
 case_ self-not-run 1 "NOT-INVOKED contract-test-invocation.sh" "jobs:
   test-a:
     steps:
