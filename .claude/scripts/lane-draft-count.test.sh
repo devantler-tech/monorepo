@@ -114,5 +114,25 @@ T_REGISTRY="$FIX/empty.json" check "an empty registry is UNKNOWN" 2 "verdict=UNK
 echo '{"version":1,"instances":{"claude-local":{"namespace":"claude"}}}' > "$FIX/noauthor.json"
 T_REGISTRY="$FIX/noauthor.json" check "a registry lane without an author is UNKNOWN" 2 "verdict=UNKNOWN" "$FIX/three.json" --lane claude
 
+# The run loop must consult this helper before opening a draft, and fail closed on it. The count is
+# the orchestrator's to read: the survey subagent's read-only guard declares no route to this
+# script, so a digest line produced there would always be UNKNOWN and block every lane's intake.
+SKILL="$SCRIPT_DIR/../skills/portfolio-maintenance/SKILL.md"
+# Read each section on its own: the same phrases under `## 1. Survey` would be the delegated
+# surveyor's job, which cannot run the helper, so only `## 2. Select` may satisfy the pin.
+section() { awk -v h="$1" '/^## /{on=(index($0,h)==1)} on' "$SKILL"; }
+select_text=$(section "## 2. Select")
+survey_text=$(section "## 1. Survey")
+if [ -n "$select_text" ] && [ -n "$survey_text" ] &&
+  printf '%s\n' "$select_text" | grep -Fq '.claude/scripts/lane-draft-count.sh --lane <your namespace>' &&
+  printf '%s\n' "$select_text" | grep -Fq 'open **no** non-hotfix draft when' &&
+  printf '%s\n' "$select_text" | grep -Fq 'own lane is `UNKNOWN` or `OVER`' &&
+  ! printf '%s\n' "$survey_text" | grep -Fq 'lane-draft-count.sh'; then
+  pass=$((pass + 1))
+else
+  echo 'FAIL: `## 2. Select` must require a fail-closed lane-draft-count check before a new draft, and `## 1. Survey` must not delegate it' >&2
+  fail=$((fail + 1))
+fi
+
 echo "lane-draft-count: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
