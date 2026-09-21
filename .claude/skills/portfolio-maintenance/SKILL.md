@@ -125,6 +125,15 @@ card.
    through the runtime's supported path when needed and **restart the run** because this session did
    not start with the projection the guard checked;
    other exit-2 causes may rerun the guard in this session after resolution.
+   🔴 **All of that is `--phase preflight` (the default), and it is the ONLY phase where a changed
+   projection means something is wrong.** A run that re-measures **after** banking its memory adds
+   `--phase closing`: the rebuild is then the expected result of the run doing its job, so the guard
+   reports it as an informational line and proceeds to the size and shape checks instead of exiting 2.
+   The freshness gate runs before the size sweep, so leaving it armed at closing makes the threshold
+   check unreachable and masks a real breach behind exit 2 — and a verbose tick can re-breach its own
+   file mid-run, which is precisely when the re-measure matters. Shape checks are NOT relaxed by the
+   phase. **Never treat a changed projection under `--phase closing` as a reason to restart or to
+   withhold work this run has already earned.**
    **Before any destructive rewrite of an author-managed (legacy) file**, take a timestamped copy:
    `.claude/scripts/memory-backup.sh <file>` (or `--all <memory-dir>` for a whole-store snapshot).
    Restore with `cp '<backup>' '<file>'`. The store is un-versioned; a trim without a backup is

@@ -5051,7 +5051,18 @@ step:
    `--projection-loaded-before-ms`; never substitute the current clock or the file's modification
    time. This is the projection's freshness precondition: if the on-disk summary is newer than the
    request that injected it, the guard cannot prove that it checked the projection in this session
-   and fails closed. In Codex mode it requires the persistent `memory_summary.md` + `MEMORY.md` pair
+   and fails closed. 🔴 **That precondition is a PRE-FLIGHT property, and the `--phase` selector is what
+   keeps it from eating the post-run re-measure.** `--phase preflight` is the default and is unchanged.
+   A run that re-measures **after** banking its memory passes `--phase closing`, which still reads the
+   same trusted boundary and still reports a changed projection — but as an informational line rather
+   than a stop, because at that point the rebuild is the expected result of the run doing its job. The
+   freshness gate runs BEFORE the size sweep, so leaving it armed at closing makes the entire
+   threshold check unreachable: measured on a fixture, an identical 30,004-byte over-budget summary is
+   reported `OVER` with a fresh boundary and **masked behind exit 2** with the boot boundary. Since the
+   boot-read bound is ENFORCED rather than advisory, and a verbose tick can re-breach its own file
+   mid-run, that is the one measurement this guard most needs to be able to make. Shape checks (the
+   `v1` header, the required file pair) are NOT relaxed by the phase and still fail closed in both.
+   In Codex mode it requires the persistent `memory_summary.md` + `MEMORY.md` pair
    and applies the tight index budget only to the summary; generated registry and temporary input files are
    diagnostic-only (`--all` shows the exemption). Legacy/Claude stores retain the original root-file
    checks. An exit 1 makes repairing the over-threshold boot-loaded file that tick's mandated hygiene
@@ -5065,6 +5076,12 @@ step:
    resolve it before proceeding. If a Codex exit 2 names a missing, unreadable, malformed, or
    post-injection-changed `memory_summary.md`, repair it through the runtime's supported path when
    needed and **restart the run**: this session did not start with the projection the guard checked.
+   ⚠️ **That recovery is scoped to `--phase preflight`.** Read unconditionally it also governs a
+   post-run invocation, where it is both impossible to satisfy — the run cannot un-write its memory —
+   and harmful: a run that has already delivered its work then discards the telemetry and hypothesis
+   verdicts it had earned, which is how the observation plane silently starves its own ledger. **A
+   changed projection reported under `--phase closing` is never a reason to withhold earned verdicts
+   or to restart.**
    Other exit-2 causes may rerun
    the guard in the same session after resolution. After a Codex projection refresh for exit 1,
    **restart the run**, because the old projection was already injected before the shell gate ran; it
