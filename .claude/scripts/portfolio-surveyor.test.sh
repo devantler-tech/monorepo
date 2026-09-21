@@ -499,12 +499,6 @@ grep -Fq 'EXHAUSTED_AT_START' "${surveyor}" ||
   fail "surveyor has no EXHAUSTED_AT_START marker for a tick that opens with graphql.remaining=0"
 grep -Fq 'Always emit the `budget:` line' "${surveyor}" ||
   fail "surveyor digest rules do not require the budget line on every digest"
-grep -Fq 'WIP-CAP' "${surveyor}" ||
-  fail "surveyor digest rules do not require the WIP-CAP / open_drafts line on every digest"
-grep -Fq 'open_drafts:' "${surveyor}" ||
-  fail "surveyor digest cannot name the lane-wide draft counts the WIP cap consumes"
-grep -Fq 'lane-draft-count.sh' "${surveyor}" ||
-  fail "surveyor digest does not invoke lane-draft-count.sh to produce the WIP-CAP line"
 grep -Fq 'renovate[bot]' "${surveyor}" ||
   fail "surveyor does not bind conditional handling to the exact Renovate identity"
 grep -Fq 'dependabot[bot]' "${surveyor}" ||

@@ -114,5 +114,18 @@ T_REGISTRY="$FIX/empty.json" check "an empty registry is UNKNOWN" 2 "verdict=UNK
 echo '{"version":1,"instances":{"claude-local":{"namespace":"claude"}}}' > "$FIX/noauthor.json"
 T_REGISTRY="$FIX/noauthor.json" check "a registry lane without an author is UNKNOWN" 2 "verdict=UNKNOWN" "$FIX/three.json" --lane claude
 
+# The run loop must consult this helper before opening a draft, and fail closed on it. The count is
+# the orchestrator's to read: the survey subagent's read-only guard declares no route to this
+# script, so a digest line produced there would always be UNKNOWN and block every lane's intake.
+SKILL="$SCRIPT_DIR/../skills/portfolio-maintenance/SKILL.md"
+if grep -Fq '.claude/scripts/lane-draft-count.sh --lane <your namespace>' "$SKILL" &&
+  grep -Fq 'open **no** non-hotfix draft when' "$SKILL" &&
+  grep -Fq 'own lane is `UNKNOWN` or `OVER`' "$SKILL"; then
+  pass=$((pass + 1))
+else
+  echo "FAIL: the run-loop skill does not require a fail-closed lane-draft-count check before a new draft" >&2
+  fail=$((fail + 1))
+fi
+
 echo "lane-draft-count: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
