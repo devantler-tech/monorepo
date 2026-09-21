@@ -455,7 +455,7 @@ t_keeps_parent_of_a_submodule_owned_worktree() {
     git -C "$seed/s" config user.name t
   printf '.claude/worktrees/\n' > "$seed/s/.gitignore"
   git -C "$seed/s" add .gitignore && git -C "$seed/s" commit -qm base
-  git init -q --bare "$root/sub.git" && git -C "$seed/s" push -q "$root/sub.git" main
+  git init -q --bare -b main "$root/sub.git" && git -C "$seed/s" push -q "$root/sub.git" main
 
   add_wt "$root" spent pushed                        # control: plain spent worktree
   if ! add_sub_wt "$root" subctl "$root/sub.git" ||  # control: submodule, no nested wt
