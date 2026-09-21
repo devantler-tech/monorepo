@@ -232,7 +232,7 @@ case_ invocation-after-queued-heredocs 0 "all 1 contract tests" "jobs:
           bash .claude/scripts/b.test.sh
 $self_step" 'b.test.sh=true'
 
-# bash -n only parses the script, alone or in an option cluster; other options still run it.
+# bash -n only parses the script, alone or in an option cluster; allow-listed options (-e -u -v -x) still run it.
 case_ syntax-only-n 1 "NOT-INVOKED a.test.sh" "jobs:
   test-a:
     steps:
@@ -250,6 +250,51 @@ case_ traced-run-counts 0 "all 1 contract tests" "jobs:
     steps:
       - run: bash -x .claude/scripts/a.test.sh
 $self_step" 'a.test.sh=true'
+
+# -o takes an operand: the operand is not the script, the word after it is.
+case_ option-operand-consumed 0 "all 1 contract tests" "jobs:
+  test-a:
+    steps:
+      - run: bash -eu -o pipefail .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
+# Options outside the allow-list fail closed: -s reads commands from stdin, so the path is an argument.
+case_ stdin-mode-is-not-a-run 1 "NOT-INVOKED a.test.sh" "jobs:
+  test-a:
+    steps:
+      - run: bash -s .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
+# A # after a control operator starts a comment, even with no blank before it.
+case_ comment-after-operator 1 "NOT-INVOKED a.test.sh" "jobs:
+  test-a:
+    steps:
+      - run: true;# disabled; bash .claude/scripts/a.test.sh
+$self_step" 'a.test.sh=true'
+
+# A lone & and |& end a command; redirections that contain & do not.
+case_ background-and-pipe-stderr-split 0 "all 2 contract tests" "jobs:
+  test-a:
+    steps:
+      - run: |
+          true & bash .claude/scripts/a.test.sh >&2 2>&1
+          true |& bash .claude/scripts/b.test.sh &>/dev/null
+$self_step" 'a.test.sh=true' 'b.test.sh=true'
+
+# Only \$here names the test's own directory; any other variable could point anywhere.
+# shellcheck disable=SC2016 # the variables are expanded by the fixture test, not here
+case_ other-variable-covers-nothing 1 "NOT-INVOKED child.test.sh" "jobs:
+  test-parent:
+    steps:
+      - run: bash .claude/scripts/parent.test.sh
+$self_step" 'parent.test.sh=fixtures="$here/fixtures"; bash "$fixtures/child.test.sh"' 'child.test.sh=true'
+
+# shellcheck disable=SC2016 # $here is expanded by the fixture test, not here
+case_ braced-here-covers 0 "all 2 contract tests" "jobs:
+  test-parent:
+    steps:
+      - run: bash .claude/scripts/parent.test.sh
+$self_step" 'parent.test.sh=bash "${here}/child.test.sh"' 'child.test.sh=true'
 
 # A parent that runs a same-named test from ANOTHER directory does not cover the top-level one.
 # shellcheck disable=SC2016 # $here is expanded by the fixture test, not here

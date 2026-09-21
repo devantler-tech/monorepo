@@ -51,10 +51,15 @@ cleanup() {
 trap cleanup EXIT
 
 # targets <file> — every word run in command position, one per line. Continuation lines are joined
-# first, then each line is split into commands at ; && || | outside quotes, and each command's leading keywords,
-# negation and variable assignments are skipped. Heredoc bodies are data, not commands, so they are
-# skipped up to their closing delimiter. `bash -n` / `sh -n` only parse the script, so a syntax-only
-# option (alone or in a cluster such as -nv) does not count as running it.
+# first, then each line is split into commands at ; & && || | |& outside quotes, and each command's
+# leading keywords, negation and variable assignments are skipped. Heredoc bodies are data, not
+# commands, so they are skipped up to their closing delimiter.
+#
+# Interpreter options are an ALLOW-LIST, not a list of exceptions: `bash`/`sh` count as running the
+# next word only when every option before it is a cluster of -e -u -v -x, or -o/+o with its operand.
+# Anything else — `-n` (parse only), `-s` (read stdin), `-c` (run a string), an unrecognised option —
+# does not count, so a spelling this parser does not understand fails closed as NOT-INVOKED rather
+# than being read as coverage.
 targets() {
   awk '
     BEGIN { SEP = sprintf("%c", 1) }
@@ -92,7 +97,8 @@ targets() {
         if (q == "") {
           if (c == "\\") { out = out c substr(l, i + 1, 1); i++; continue }
           if (c == "\047" || c == "\"") { q = c; out = out c; continue }
-          if (c == "#" && (i == 1 || substr(l, i - 1, 1) ~ /[ \t]/)) break
+          # A # begins a comment after a blank or a control operator: `true;# bash x.test.sh` runs nothing.
+          if (c == "#" && (i == 1 || substr(l, i - 1, 1) ~ /[ \t;&|()]/)) break
           if (c == "<" && substr(l, i + 1, 1) == "<" && substr(l, i + 2, 1) != "<" && (i == 1 || substr(l, i - 1, 1) != "<")) {
             rest = substr(l, i + 2); dash = 0
             if (substr(rest, 1, 1) == "-") { dash = 1; rest = substr(rest, 2) }
@@ -102,14 +108,16 @@ targets() {
           }
           if (c == ";") { out = out SEP; continue }
           if (c == "&" && substr(l, i + 1, 1) == "&") { out = out SEP; i++; continue }
-          if (c == "|") { if (substr(l, i + 1, 1) == "|") i++; out = out SEP; continue }
+          # A lone & ends a background command; &> and >& / <& are redirections, not boundaries.
+          if (c == "&" && substr(l, i + 1, 1) != ">" && (i == 1 || substr(l, i - 1, 1) !~ /[<>]/)) { out = out SEP; continue }
+          if (c == "|") { if (substr(l, i + 1, 1) ~ /[|&]/) i++; out = out SEP; continue }
         } else if (q == "\"" && c == "\\") { out = out c substr(l, i + 1, 1); i++; continue }
         else if (c == q) q = ""
         out = out c
       }
       return out
     }
-    function emit(l,   n, cmds, i, w, nw, j, t, syntax_only) {
+    function emit(l,   n, cmds, i, w, nw, j, t) {
       n = split(commands(l), cmds, SEP)
       for (i = 1; i <= n; i++) {
         nw = split(cmds[i], w, /[ \t]+/)
@@ -117,9 +125,13 @@ targets() {
         while (j <= nw && (w[j] == "" || w[j] ~ /^(if|then|do|else|elif|while|until|time|!|\(|\{)$/ || w[j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) j++
         if (j > nw) continue
         if (w[j] ~ /^(bash|sh|source|\.)$/) {
-          j++; syntax_only = 0
-          while (j <= nw && w[j] ~ /^-/) { if (w[j] ~ /^-[^-]*n/) syntax_only = 1; j++ }
-          if (syntax_only) continue
+          j++
+          while (j <= nw) {
+            if (w[j] ~ /^-[euvx]+$/) { j++; continue }
+            if (w[j] ~ /^[-+]o$/) { j += 2; continue }
+            break
+          }
+          if (j <= nw && w[j] ~ /^[-+]/) continue
         }
         if (j > nw) continue
         t = w[j]; gsub(/["\047]/, "", t); sub(/^\.\//, "", t)
@@ -144,9 +156,10 @@ while IFS= read -r job; do
 done <"$tmp/jobs"
 
 # Transitive closure over tests that run other tests from their own directory. A target counts when it
-# is written under the scripts directory, or under a variable standing for the test's own directory
-# (`"$here/child.test.sh"`). The remainder keeps its subdirectory, so `$here/fixtures/child.test.sh`
-# never covers a top-level `child.test.sh` of the same name.
+# is written under the scripts directory, or under `$here` / `${here}` — the variable every test in this
+# directory sets to its own location. Other variables are not resolved: `"$fixtures/child.test.sh"`
+# could point anywhere, so it covers nothing. The remainder keeps its subdirectory, so
+# `$here/fixtures/child.test.sh` never covers a top-level `child.test.sh` of the same name.
 LC_ALL=C sort -u "$tmp/direct" >"$tmp/covered"
 while :; do
   cp "$tmp/covered" "$tmp/before"
@@ -154,7 +167,7 @@ while :; do
     [[ -f "$scripts_dir/$t" ]] || continue
     targets "$scripts_dir/$t" | awk -v d="$scripts_dir/" '
       index($0, d) == 1 { print substr($0, length(d) + 1); next }
-      /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\// { t = $0; sub(/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\//, "", t); print t }' >>"$tmp/covered"
+      /^\$(here|\{here\})\// { t = $0; sub(/^\$(here|\{here\})\//, "", t); print t }' >>"$tmp/covered"
   done <"$tmp/before"
   LC_ALL=C sort -u "$tmp/covered" -o "$tmp/covered"
   cmp -s "$tmp/before" "$tmp/covered" && break
