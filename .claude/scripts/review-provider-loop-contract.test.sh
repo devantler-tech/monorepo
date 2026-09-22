@@ -272,8 +272,17 @@ assert_prose "${surveyor}" 'green_review=none' \
 # NEGATIVE CONTROL, kept as prose so it cannot be quietly dropped: a rate-limited head must still
 # report `green_review=none`, and the check that proves it must read the durable reply body — a
 # status-based control passes vacuously once the status has reverted to the default.
-assert_prose "${constitution}" 'a rate-limit, quota, or service marker saying the review did not run is rejected whatever its shape' \
+assert_prose "${constitution}" 'a rate-limit, quota, or service marker saying the review did not run is never a green whatever its shape' \
   "constitution lost the artifact-level refusal rejection that the durable control depends on"
+# ...and that rejection is asymmetric (monorepo#2764): it blocks the green, never the findings the
+# same artifact carries. Dropping this lets a rate-limited P2 read as zero findings, advance the
+# lane, and merge on the next provider's green with the finding unaddressed.
+assert_prose "${constitution}" 'it never discards a finding the same artifact carries' \
+  "constitution lets a did-not-run marker discard a finding the same artifact carries"
+assert_prose "${maintenance_skill}" 'any finding it carries still counts as a non-thread review finding' \
+  "maintenance skill lets a did-not-run marker discard a finding the same artifact carries"
+assert_prose "${surveyor}" 'yet any finding in it still counts' \
+  "surveyor lets a did-not-run marker discard a finding the same artifact carries"
 for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
   if grep -Fq 'premerge=' "${contract_file}"; then
     fail "standalone CodeRabbit pre-merge readiness state remains in ${contract_file}"
