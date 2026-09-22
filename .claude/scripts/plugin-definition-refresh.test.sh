@@ -162,7 +162,7 @@ set_gitlink "$MK_NEW"
 out="$(CLAUDE_CLI="$ROOT/nope" "$SCRIPT" --repo-root "$CONSUMER" --plugins-root "$PLUGINS" 2>&1)"; rc=$?
 # The reason, not just the code: exit 2 covers eight conditions here, so a regression that exits 2
 # earlier for an unrelated reason would keep this green while the CLI resolution never ran.
-if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'cannot resolve an executable claude CLI'; then
+if [ "$rc" -eq 2 ] && grep -q 'cannot resolve an executable claude CLI' <<<"$out"; then
   ok "A5 exits 2 (UNKNOWN, named reason) when the CLI cannot be resolved"
 else bad "A5 exits 2 (UNKNOWN, named reason) when the CLI cannot be resolved" \
   "exit was $rc — 0/1 would be a fabricated verdict; out=$(printf '%s' "$out" | tr '\n' '|')"; fi
@@ -173,9 +173,9 @@ cleanup
 # the part the contract most turns on. Behavioural, not a grep of the source.
 help_out="$("$SCRIPT" --help 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] \
-  && printf '%s' "$help_out" | grep -q 'Exit 2 is deliberately not exit 1' \
-  && printf '%s' "$help_out" | grep -q 'Usage: plugin-definition-refresh.sh' \
-  && ! printf '%s' "$help_out" | grep -q '^set -euo pipefail'; then
+  && grep -q 'Exit 2 is deliberately not exit 1' <<<"$help_out" \
+  && grep -q 'Usage: plugin-definition-refresh.sh' <<<"$help_out" \
+  && ! grep -q '^set -euo pipefail' <<<"$help_out"; then
   ok "A22 --help prints the full header including the exit-code contract, and stops before the code"
 else bad "A22 --help prints the full header including the exit-code contract, and stops before the code" \
   "exit was $rc; lines=$(printf '%s' "$help_out" | wc -l | tr -d ' ')"; fi
@@ -190,7 +190,7 @@ set_gitlink "$MK_NEW"
 out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --marketplace staging 2>&1)"; rc=$?
 # Assert the REASON, not merely the code: exit 2 covers eight distinct conditions, so a regression
 # that exits 2 earlier for an unrelated reason would keep this green while the guard never ran.
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'refusing to gate on one marketplace and install from another'; then
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'refusing to gate on one marketplace and install from another' <<<"$out"; then
   ok "A12 refuses (exit 2, named reason) when --marketplace and --plugin-id name different marketplaces"
 else bad "A12 refuses (exit 2, named reason) when --marketplace and --plugin-id name different marketplaces" \
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
@@ -200,7 +200,7 @@ cleanup
 make_fixture
 set_gitlink "$MK_NEW"
 out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --plugin-id agentic-engineering 2>&1)"; rc=$?
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'is not marketplace-qualified'; then
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'is not marketplace-qualified' <<<"$out"; then
   ok "A13 refuses (exit 2, named reason) when the plugin id is not marketplace-qualified"
 else bad "A13 refuses (exit 2, named reason) when the plugin id is not marketplace-qualified" \
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
@@ -230,7 +230,7 @@ mkdir -p "$PLUGINS/.plugin-definition-refresh.lock"
 # takes it — which is what this fixture did on its first version, failing for the right reason.
 printf '%s\n' "$$" > "$PLUGINS/.plugin-definition-refresh.lock/pid"
 out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run 2>&1)"; rc=$?
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'holds .* after'; then
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'holds .* after' <<<"$out"; then
   ok "A15 exits 2 (UNKNOWN, named reason) rather than applying while a LIVE run holds the lock"
 else bad "A15 exits 2 (UNKNOWN, named reason) rather than applying while a LIVE run holds the lock" \
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
@@ -248,7 +248,7 @@ mkdir -p "$PLUGINS/.plugin-definition-refresh.lock"          # fresh, no pid pub
 out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run 2>&1)"; rc=$?
 # The reason matters here too: exit 2 covers eight conditions, so a regression that exits 2 before
 # the lock code runs would keep this green while the guard under test never executed.
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'holds .* after'; then
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'holds .* after' <<<"$out"; then
   ok "A15c does not steal a freshly-created lock that has not published its owner yet"
 else bad "A15c does not steal a freshly-created lock that has not published its owner yet" \
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
@@ -262,7 +262,7 @@ cleanup
 make_fixture
 set_gitlink "$MK_NEW"                        # clone is still at OLD; refresh is skipped in dry-run
 out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --dry-run 2>&1)"; rc=$?
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'NOT evidence the marketplace lacks the pin'; then
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'NOT evidence the marketplace lacks the pin' <<<"$out"; then
   ok "A19b --dry-run against a stale clone exits 2, never a false NOT-ON-PIN"
 else bad "A19b --dry-run against a stale clone exits 2, never a false NOT-ON-PIN" \
   "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
@@ -385,7 +385,7 @@ out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
 # the script and almost none of them apply the update, so `rc -eq 2` plus "no APPLIED" discriminates
 # weakly: a regression that exits 2 anywhere earlier keeps this green while the dirty-worktree guard
 # under test never runs.
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'is not clean at'; then
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'is not clean at' <<<"$out"; then
   ok "A18 refuses (exit 2) when the marketplace worktree is dirty at the pinned commit"
 else bad "A18 refuses (exit 2) when the marketplace worktree is dirty at the pinned commit" \
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
@@ -409,7 +409,7 @@ if [ -n "$(git -C "$MK" status --porcelain)" ]; then
     "status=[$(git -C "$MK" status --porcelain)]"
 else
   out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
-  if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'differ from the pinned blobs'; then
+  if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'differ from the pinned blobs' <<<"$out"; then
     ok "A18b refuses (exit 2) when a clean filter hides differing bytes from status and the index"
   else bad "A18b refuses (exit 2) when a clean filter hides differing bytes from status and the index" \
     "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
@@ -507,7 +507,7 @@ VERIFY_UNK="$BIN/verify-unknown"
 printf '#!/usr/bin/env bash\nexit 2\n' > "$VERIFY_UNK"; chmod +x "$VERIFY_UNK"
 out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
   --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --verify-cmd "$VERIFY_UNK" 2>&1)"; rc=$?
-if [ "$rc" -eq 2 ] && [ -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'VERIFICATION IS UNKNOWN'; then
+if [ "$rc" -eq 2 ] && [ -e "$ROOT/APPLIED" ] && grep -q 'VERIFICATION IS UNKNOWN' <<<"$out"; then
   ok "A18e preserves the verifier's UNKNOWN (exit 2) instead of reporting a false drift"
 else bad "A18e preserves the verifier's UNKNOWN (exit 2) instead of reporting a false drift" \
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
@@ -587,7 +587,7 @@ set_gitlink "$MK_NEW"
 # phrases recur throughout the surrounding prose. A needle that common asserts the topic, not the
 # statement.
 out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"
-if printf '%s' "$out" | grep -qi 'restart'; then
+if grep -qi 'restart' <<<"$out"; then
   ok "A8 states that the applying run still executes the previous definition"
 else bad "A8 states that the applying run still executes the previous definition" "$(printf '%s' "$out" | tail -3 | tr '\n' '|')"; fi
 cleanup

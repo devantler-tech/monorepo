@@ -42,16 +42,16 @@ mkstub_board_add() {
   cat > "$tmp/board-add-stub.sh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$1" >> "${BOARD_LOG}"
-if [ -n "${BOARD_ADD_PRIVATE_ON:-}" ] && printf '%s\n' "${BOARD_ADD_PRIVATE_ON}" | grep -qxF "$1"; then
+if [ -n "${BOARD_ADD_PRIVATE_ON:-}" ] && grep -qxF "$1" <<<"${BOARD_ADD_PRIVATE_ON}"; then
   echo "board-add: devantler-tech/x is PRIVATE; project 5 is public — adding it is a maintainer decision, not an agent default"; exit 2
 fi
-if [ -n "${BOARD_ADD_FAIL_ON:-}" ] && printf '%s\n' "${BOARD_ADD_FAIL_ON}" | grep -qxF "$1"; then
+if [ -n "${BOARD_ADD_FAIL_ON:-}" ] && grep -qxF "$1" <<<"${BOARD_ADD_FAIL_ON}"; then
   echo "board-add: set failed"; exit 2
 fi
-if [ -n "${BOARD_ADD_NOOP_ON:-}" ] && printf '%s\n' "${BOARD_ADD_NOOP_ON}" | grep -qxF "$1"; then
+if [ -n "${BOARD_ADD_NOOP_ON:-}" ] && grep -qxF "$1" <<<"${BOARD_ADD_NOOP_ON}"; then
   echo "board-add: $1 already-present (status untouched) (item X) [verified]"; exit 0
 fi
-if [ -n "${BOARD_ADD_STATUS_SET_ON:-}" ] && printf '%s\n' "${BOARD_ADD_STATUS_SET_ON}" | grep -qxF "$1"; then
+if [ -n "${BOARD_ADD_STATUS_SET_ON:-}" ] && grep -qxF "$1" <<<"${BOARD_ADD_STATUS_SET_ON}"; then
   echo "board-add: $1 already-present (status set) → 📥 Backlog (item X) [verified]"; exit 0
 fi
 echo "board-add: $1 added → 📥 Backlog (item X) [verified]"
@@ -86,7 +86,7 @@ run_sweep_without_author "$sweep"
 report "an omitted --author fails before any external call" \
   "$([ "$rc" -eq 1 ] && [ ! -s "$GH_ARGV_LOG" ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
 report "an omitted --author reports the required input" \
-  "$(printf '%s' "$out" | grep -qF -- '--author is required' && echo yes || echo no)" "$out"
+  "$(grep -qF -- '--author is required' <<<"$out" && echo yes || echo no)" "$out"
 run_sweep_without_author "$sweep" --dry-run
 report "dry-run also requires an explicit author before discovery" \
   "$([ "$rc" -eq 1 ] && [ ! -s "$GH_ARGV_LOG" ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
@@ -108,12 +108,12 @@ want="$(printf '%s\n%s\n%s\n' "$U1" "$U2" "$U3" | sort)"
 report "every discovered issue is passed to board-add" \
   "$([ "$got" = "$want" ] && [ "$rc" -eq 0 ] && echo yes || echo no)" "rc=$rc got=[$(echo "$got" | tr '\n' ' ')]"
 report "summary counts the sweep" \
-  "$(printf '%s' "$out" | grep -q 'discovered=3 boarded=3 wrote=3 skipped=0 failed=0' && echo yes || echo no)" "$out"
+  "$(grep -q 'discovered=3 boarded=3 wrote=3 skipped=0 failed=0' <<<"$out" && echo yes || echo no)" "$out"
 
 # 2. Discovery flags are pinned (the AC names each one).
 argv="$(cat "$GH_ARGV_LOG")"
 for flag in "--archived=false" "--owner devantler-tech" "--state open" "--author app/agent-fixture" "--limit 300" "--sort created" "--order asc"; do
-  report "discovery pins ${flag}" "$(printf '%s' "$argv" | grep -qF -- "$flag" && echo yes || echo no)" "$argv"
+  report "discovery pins ${flag}" "$(grep -qF -- "$flag" <<<"$argv" && echo yes || echo no)" "$argv"
 done
 report "discovery passes the explicit author as an exact argument" \
   "$([ "$(awk 'previous == "--author" { print; exit } { previous=$0 }' "$GH_ARGS_LOG")" = app/agent-fixture ] && echo yes || echo no)" "$argv"
@@ -129,7 +129,7 @@ run_sweep "$sweep"
 report "empty successful sweep exits 0 with no board-add call" \
   "$([ "$rc" -eq 0 ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc log=[$(cat "$BOARD_LOG")]"
 report "empty sweep reports discovered=0" \
-  "$(printf '%s' "$out" | grep -q 'discovered=0 boarded=0' && echo yes || echo no)" "$out"
+  "$(grep -q 'discovered=0 boarded=0' <<<"$out" && echo yes || echo no)" "$out"
 
 # 4. FAIL-CLOSED: a failed discovery is not an empty one. This is the control for case 3 —
 #    both produce no output from `gh`, and only the exit status separates them.
@@ -149,7 +149,7 @@ report "a board-add failure makes the sweep exit 2" "$([ "$rc" -eq 2 ] && echo y
 # 6. A private repository's issue is SKIPPED, not a failure — it is a maintainer decision.
 BOARD_ADD_PRIVATE_ON="$U2" run_sweep "$sweep"
 report "a private-repo refusal is skipped, not failed" \
-  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'skipped=1 failed=0' && echo yes || echo no)" "rc=$rc $out"
+  "$([ "$rc" -eq 0 ] && grep -q 'skipped=1 failed=0' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 # 7. Usage errors fail closed rather than sweeping with a wrong bound.
 run_sweep "$sweep" --limit not-a-number
@@ -174,7 +174,7 @@ done
 printf '%s\n%s\n' "$U1" "$U2" > "$GH_RESULTS"
 run_sweep "$sweep" --limit 2
 report "a result set AT the --limit cap fails closed" \
-  "$([ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'TRUNCATED' && echo yes || echo no)" "rc=$rc $out"
+  "$([ "$rc" -eq 2 ] && grep -q 'TRUNCATED' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 report "a saturated discovery boards nothing" "$([ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "log=[$(cat "$BOARD_LOG")]"
 # Control: one BELOW the cap is a complete census and sweeps normally.
 run_sweep "$sweep" --limit 3
@@ -197,13 +197,13 @@ run_sweep "$sweep" --max-mutations 2
 report "a batch bound stops after max-mutations issues" \
   "$([ "$(wc -l < "$BOARD_LOG" | tr -d ' ')" = 2 ] && echo yes || echo no)" "log=[$(cat "$BOARD_LOG" | tr '\n' ' ')]"
 report "the deferred remainder is reported, not failed" \
-  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'deferred=1' && printf '%s' "$out" | grep -q 'failed=0' && echo yes || echo no)" "rc=$rc $out"
+  "$([ "$rc" -eq 0 ] && grep -q 'deferred=1' <<<"$out" && grep -q 'failed=0' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 report "a deferral says the next run continues" \
-  "$(printf '%s' "$out" | grep -q 'next sweep continues where this one stopped' && echo yes || echo no)" "$out"
+  "$(grep -q 'next sweep continues where this one stopped' <<<"$out" && echo yes || echo no)" "$out"
 # Control: a batch at least as large as the set defers nothing, so the bound cannot fire vacuously.
 run_sweep "$sweep" --max-mutations 3
 report "control: a batch covering the whole set defers nothing" \
-  "$([ "$rc" -eq 0 ] && [ "$(wc -l < "$BOARD_LOG" | tr -d ' ')" = 3 ] && printf '%s' "$out" | grep -q 'deferred=0' && echo yes || echo no)" "rc=$rc $out"
+  "$([ "$rc" -eq 0 ] && [ "$(wc -l < "$BOARD_LOG" | tr -d ' ')" = 3 ] && grep -q 'deferred=0' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 run_sweep "$sweep" --max-mutations 0
 report "a zero --max-mutations is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"
@@ -217,14 +217,14 @@ report "a non-numeric --max-mutations is a usage error" "$([ "$rc" -eq 1 ] && ec
 printf '%s\n%s\n%s\n' "$U1" "$U2" "$U3" > "$GH_RESULTS"
 BOARD_ADD_NOOP_ON="$(printf '%s\n%s' "$U1" "$U2")" run_sweep "$sweep" --max-mutations 1
 report "already-boarded issues do not consume the write budget" \
-  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'wrote=1' && printf '%s' "$out" | grep -q 'deferred=0' && echo yes || echo no)" "rc=$rc $out"
+  "$([ "$rc" -eq 0 ] && grep -q 'wrote=1' <<<"$out" && grep -q 'deferred=0' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 report "the issue needing a write is still reached past the no-ops" \
-  "$(printf '%s' "$out" | grep -q "boarded ${U3}" && echo yes || echo no)" "$out"
+  "$(grep -q "boarded ${U3}" <<<"$out" && echo yes || echo no)" "$out"
 # Control: charge the same three to the budget as ISSUES and the third would be deferred — this is
 # the regression the fix exists to prevent, so prove the counter is the thing that changed.
 BOARD_ADD_NOOP_ON="" run_sweep "$sweep" --max-mutations 1
 report "control: with three real writes and a batch of 1, two ARE deferred" \
-  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'wrote=1' && printf '%s' "$out" | grep -q 'deferred=2' && echo yes || echo no)" "rc=$rc $out"
+  "$([ "$rc" -eq 0 ] && grep -q 'wrote=1' <<<"$out" && grep -q 'deferred=2' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 # 7d4. `already-present (status set)` is a REAL write, not a no-op. board-add.sh emits it when it
 #      item-edits a card that was on the board without a Status — and a backlog of status-less
@@ -233,22 +233,22 @@ report "control: with three real writes and a batch of 1, two ARE deferred" \
 printf '%s\n%s\n%s\n' "$U1" "$U2" "$U3" > "$GH_RESULTS"
 BOARD_ADD_STATUS_SET_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep"
 report "a status-set outcome counts as a write" \
-  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'wrote=3' && echo yes || echo no)" "rc=$rc $out"
+  "$([ "$rc" -eq 0 ] && grep -q 'wrote=3' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 # Control: the same three as genuine no-ops must count zero, so the check is not matching everything.
 BOARD_ADD_NOOP_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep"
 report "control: status-untouched no-ops count zero writes" \
-  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'wrote=0' && echo yes || echo no)" "rc=$rc $out"
+  "$([ "$rc" -eq 0 ] && grep -q 'wrote=0' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 report "a status-set backlog is still bounded by the batch" \
-  "$(BOARD_ADD_STATUS_SET_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep" --max-mutations 2; printf '%s' "$out" | grep -q 'wrote=2' && printf '%s' "$out" | grep -q 'deferred=1' && echo yes || echo no)" "$out"
+  "$(BOARD_ADD_STATUS_SET_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep" --max-mutations 2; grep -q 'wrote=2' <<<"$out" && grep -q 'deferred=1' <<<"$out" && echo yes || echo no)" "$out"
 
 # 7d5. A FAILURE is charged to the budget: board-add.sh can fail after a successful item-add or
 #      item-edit (a read-back that does not confirm), so treating failures as costless would let
 #      repeated partial writes bypass both safeguards exactly when GitHub is already refusing.
 BOARD_ADD_FAIL_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep"
 report "a possibly-partial failure is charged to the write budget" \
-  "$([ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'wrote=3' && printf '%s' "$out" | grep -q 'failed=3' && echo yes || echo no)" "rc=$rc $out"
+  "$([ "$rc" -eq 2 ] && grep -q 'wrote=3' <<<"$out" && grep -q 'failed=3' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 report "repeated failures are bounded by the batch rather than hammering" \
-  "$(BOARD_ADD_FAIL_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep" --max-mutations 1; printf '%s' "$out" | grep -q 'failed=1' && printf '%s' "$out" | grep -q 'deferred=2' && echo yes || echo no)" "$out"
+  "$(BOARD_ADD_FAIL_ON="$(printf '%s\n%s\n%s' "$U1" "$U2" "$U3")" run_sweep "$sweep" --max-mutations 1; grep -q 'failed=1' <<<"$out" && grep -q 'deferred=2' <<<"$out" && echo yes || echo no)" "$out"
 
 # 7e. Pacing is validated like every other numeric option.
 run_sweep "$sweep" --pace-seconds nope
