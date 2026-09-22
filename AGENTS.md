@@ -4561,6 +4561,13 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   re-verify **once** — not a fix-one/re-run round trip per finding.
 - **Parallelize independent setup.** Clones, subagents, and independent investigations start
   together in the background, not one after another.
+- **A per-repository fan-out iterates the repo list, never by globbing the cache directory.** A
+  glob does not match a leading dot in bash or zsh, so `for f in "$dir"/*.json` silently skips the
+  `.github` repository's cache file and reports "nothing found" there — including maintainer
+  comments on org-wide conventions. So iterate the repo list you enumerated from the Portfolio map
+  or the survey (`for r in "${repos[@]}"; do f="$dir/$r.json"; …`). A missing cache file is an error:
+  report UNKNOWN for that repo, never an empty result. This applies to every
+  per-repo sweep: comments, PRs, issues, runs.
 - **Splitting a `"repo number"` pair with `set -- $pair` breaks under `zsh` — use the POSIX
   parameter-expansion form instead.** Claude Code's Bash tool runs **zsh**, which (unlike bash) does **not**
   word-split unquoted *parameter expansions*. So the common bash sweep idiom silently collapses
