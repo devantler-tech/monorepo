@@ -2852,6 +2852,13 @@ fetched=${threads%% *}; rest=${threads#* }; total=${rest%% *}; unresolved=${rest
   { echo "thread read TRUNCATED: fetched $fetched of $total — UNKNOWN, never 0" >&2; exit 1; }
 ```
 
+**Prefer the tested helper that implements exactly this read:**
+[`pr-unresolved-threads.sh devantler-tech/<repo> <n>`](.claude/scripts/pr-unresolved-threads.sh)
+prints `unresolved=<n> total=<t>` (exit 0 for zero, 1 otherwise) only on a complete read, and
+`UNKNOWN …` with exit 2 on a failed, partial or malformed one — never a zero (monorepo#2670). It is
+for the run's own merge preflight; the read-only surveyor cannot execute repository scripts, so its
+field (b) keeps the inline query until the helper ships inside the plugin.
+
 **That must read `0` immediately before the merge — not once, earlier, from the survey.** The survey
 pentad does carry unresolved threads, but it is a **snapshot taken earlier in the run**, and this
 fresh read exists precisely for state that moves after that snapshot — the same reason `title` is

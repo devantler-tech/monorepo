@@ -507,6 +507,8 @@ jobs:
               - '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/review-provider-loop-contract.test.sh'
+              - '.claude/scripts/pr-unresolved-threads.sh'
+              - '.claude/scripts/pr-unresolved-threads.test.sh'
               - '.claude/scripts/coderabbit-summary-verdict.sh'
               - '.claude/scripts/coderabbit-summary-verdict.test.sh'
               # The captured review bodies the contract test asserts against. A
@@ -1999,6 +2001,9 @@ jobs:
           persist-credentials: false
       - name: Verify the review-provider loop contract
         run: bash .claude/scripts/review-provider-loop-contract.test.sh
+      # Hermetic: a stub gh serves canned GraphQL pages, no token or network.
+      - name: Verify the unresolved review-thread counter
+        run: bash .claude/scripts/pr-unresolved-threads.test.sh
       # Hermetic: classifies captured CodeRabbit summary bodies, no API call.
       - name: Verify the CodeRabbit summary verdict classifier
         run: bash .claude/scripts/coderabbit-summary-verdict.test.sh
