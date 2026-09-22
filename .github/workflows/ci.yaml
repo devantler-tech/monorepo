@@ -2190,6 +2190,9 @@ jobs:
             submodule update --init libraries/agent-plugins
       - name: Verify the merge-preflight thread gate
         run: bash .claude/scripts/merge-preflight-thread-gate.test.sh
+      # Same section, same trigger set: the merge fall-through past a stale mergeStateStatus.
+      - name: Verify the merge-API fall-through contract
+        run: bash .claude/scripts/merge-api-fallthrough-contract.test.sh
 
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract

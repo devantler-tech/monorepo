@@ -3006,6 +3006,28 @@ undiagnosed refusal as "maintainer-gated" is worse than losing the run it happen
 EVERY pull request in the portfolio*, no undefined permanent-sounding gate may park a PR — and once
 that label reaches durable memory it teaches every later run, in every lane, to skip the same
 completable PR.
+
+🔴 **`gh pr merge` is NOT the merge API — it checks `mergeStateStatus` itself and refuses before it
+ever calls the endpoint, so exception (a) cannot be reached through it** (#2710). Measured on
+`.github#138` at head `7c2e2b38` (2026-08-06): `gh pr merge` refused with *"the base branch policy
+prohibits the merge"* on two consecutive ticks, while `PUT …/pulls/138/merge` merged the same head at
+the first attempt, seconds later. **That refusal text names no rule**: it is not evidence of any
+specific policy and never seeds an issue on its own (it cost that run a wrong one, #2709). So when
+`gh pr merge` refuses a PR whose unresolved-thread count read `0` and whose every check-run and status
+at the head is `success`/`skipped`, re-read `mergeStateStatus` once, and if it is still not `CLEAN`,
+call the endpoint the contract already names as the authority:
+
+```sh
+gh api --method PUT repos/devantler-tech/<repo>/pulls/<n>/merge -f merge_method=squash -f sha=<headRefOid>
+```
+
+`sha` is the endpoint's own head pin — it refuses when the head has moved, exactly as
+`--match-head-commit` does — so never drop it. **Its response decides:** merged, or a refusal that
+names the unmet requirement, which is then diagnosed like any other. The fall-through is **bounded to
+that pentad-clear case**: never for a PR with a failing or pending required check, an unresolved
+thread, or any other gate above unmet (every precondition in this section still applies, the
+external-contributor evaluation record included), and never on a merge-queue repository, where the
+queue owns the merge and `gh pr merge` only enqueues.
 **Confirming the merge landed: `gh pr view <n> --repo devantler-tech/<repo> --json state,mergedAt` —
 there is NO `merged` field.** This read was unprescribed territory, and the improvisation it invited
 costs more than one value: `gh` rejects the **whole** `--json` request when any single field is unknown,
