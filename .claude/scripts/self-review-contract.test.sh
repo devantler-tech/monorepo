@@ -76,6 +76,17 @@ grep -Eq '^[[:space:]]*fail_commit_status:[[:space:]]*false[[:space:]]*$' "${cod
 grep -Fq 'reviews.fail_commit_status: false' "${constitution}" ||
   fail "constitution no longer names .coderabbit.yaml fail_commit_status: false as the primary #2344 lever"
 
+# monorepo#2617: readiness condition 3 for a runtime surface the host cannot reach. Without these,
+# the condition is either assumed met (erosion) or unmeetable forever (parking).
+grep -Fq 'is NOT "no exercisable runtime surface"' "${constitution}" ||
+  fail "an unreachable runtime surface could be claimed under the no-runtime-surface trace carve-out"
+grep -Fq 'never carried forward' "${constitution}" ||
+  fail "readiness condition 3 could be carried forward as met because the other two are"
+grep -Fq 'name the specific unreachable gate' "${constitution}" ||
+  fail "a readiness comment on a provider-gated change need not name the gate it could not reach"
+grep -Fq 'stays a draft on that named blocker' "${constitution}" ||
+  fail "a provider-gated change with no reaching check has no defined terminal state"
+
 grep -Fq 'Self-review the' "${maintenance_skill}" ||
   fail "portfolio-maintenance run loop does not self-review the diff before requesting review"
 grep -Fq '**Self-review your own diff**' "${product_engineering_skill}" ||
