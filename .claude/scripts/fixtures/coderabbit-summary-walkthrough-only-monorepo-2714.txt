@@ -1,0 +1,70 @@
+<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<!-- review_stack_entry_start -->
+
+[![Review Change Stack](https://storage.googleapis.com/coderabbit_public_assets/review-stack-in-coderabbit-ui.svg)](https://app.coderabbit.ai/change-stack/devantler-tech/monorepo/pull/2714?utm_source=github_walkthrough&utm_medium=github&utm_campaign=change_stack)
+
+<!-- review_stack_entry_end -->
+<!-- walkthrough_start -->
+
+<details>
+<summary>📝 Walkthrough</summary>
+
+## Walkthrough
+
+The PR tightens CodeRabbit review completion criteria. A review object must be positively identified by its body prefix. Empty reply containers do not qualify, even when their `commit_id` matches the current head. Re-anchored inline comments do not independently prove review completion. Contract assertions verify these safeguards across the normative guidance, surveyor overlay, and parity checklist.
+
+**Possibly related issues**
+
+- devantler-tech/monorepo#2653: Both refine CodeRabbit green-review qualification by rejecting non-substantive artifacts.
+- devantler-tech/monorepo#2697: Both require identifiable substantive CodeRabbit review objects instead of accepting empty containers.
+
+**Possibly related PRs**
+
+- [devantler-tech/monorepo#2677](https://github.com/devantler-tech/monorepo/pull/2677): This PR extends its positive CodeRabbit review-identification fix to additional contract surfaces.
+- [devantler-tech/monorepo#2418](https://github.com/devantler-tech/monorepo/pull/2418): Both modify the CodeRabbit review-provider contract and validation workflow.
+- [devantler-tech/monorepo#2359](https://github.com/devantler-tech/monorepo/pull/2359): Both tighten CodeRabbit review-gate rules for substantive review evidence.
+
+</details>
+
+<!-- walkthrough_end -->
+<!-- pre_merge_checks_walkthrough_start -->
+
+<details>
+<summary>🚥 Pre-merge checks | ✅ 5</summary>
+
+<details>
+<summary>✅ Passed checks (5 passed)</summary>
+
+|         Check name         | Status   | Explanation                                                                                                                             |
+| :------------------------: | :------- | :-------------------------------------------------------------------------------------------------------------------------------------- |
+|     Linked Issues check    | ✅ Passed | The changes satisfy issue `#2713` by updating AGENTS.md, aligning the lane table, and adding contract assertions for the safeguard.       |
+| Out of Scope Changes check | ✅ Passed | The changes remain within scope and do not alter other review satisfiers or add alternative CodeRabbit comment forms.                   |
+|     Docstring Coverage     | ✅ Passed | No functions found in the changed files to evaluate docstring coverage. Skipping docstring coverage check.                              |
+|         Title check        | ✅ Passed | The title clearly and concisely describes the main change: requiring positive identification of a CodeRabbit review object.             |
+|      Description check     | ✅ Passed | The description directly explains the CodeRabbit review-object safeguard, affected files, acceptance criteria, and scope of the change. |
+
+</details>
+
+</details>
+
+<!-- pre_merge_checks_walkthrough_end -->
+<!-- tips_start -->
+
+---
+
+Thanks for using [CodeRabbit](https://coderabbit.ai?utm_source=oss&utm_medium=github&utm_campaign=devantler-tech/monorepo&utm_content=2714)! It's free for OSS, and your support helps us grow. If you like it, consider giving us a shout-out.
+
+<details>
+<summary>❤️ Share</summary>
+
+- [X](https://twitter.com/intent/tweet?text=I%20just%20used%20%40coderabbitai%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20the%20proprietary%20code.%20Check%20it%20out%3A&url=https%3A//coderabbit.ai)
+- [Mastodon](https://mastodon.social/share?text=I%20just%20used%20%40coderabbitai%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20the%20proprietary%20code.%20Check%20it%20out%3A%20https%3A%2F%2Fcoderabbit.ai)
+- [Reddit](https://www.reddit.com/submit?title=Great%20tool%20for%20code%20review%20-%20CodeRabbit&text=I%20just%20used%20CodeRabbit%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20proprietary%20code.%20Check%20it%20out%3A%20https%3A//coderabbit.ai)
+- [LinkedIn](https://www.linkedin.com/sharing/share-offsite/?url=https%3A%2F%2Fcoderabbit.ai&mini=true&title=Great%20tool%20for%20code%20review%20-%20CodeRabbit&summary=I%20just%20used%20CodeRabbit%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20proprietary%20code)
+
+</details>
+
+
+<sub>Comment `@coderabbitai help` to get the list of available commands.</sub>
+
+<!-- tips_end -->
