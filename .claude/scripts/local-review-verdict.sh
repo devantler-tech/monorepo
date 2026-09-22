@@ -85,6 +85,7 @@ body="$(jq -rs --arg h "$head" '
   | map(select(type == "object"
       and (.user.login // "") == "devantler"
       and (.commit_id // "") == $h
+      and (.state // "") == "COMMENTED"
       and ((.body // "") | test("(?m)^##[ \t]+Self-review \\(fallback"))))
   | sort_by(.submitted_at // "")
   | if length == 0 then "" else last.body end
@@ -107,6 +108,13 @@ case "$first_line" in
   *) verdict "NONE no-disclosure" ;;
 esac
 
+# The body states the commit it reviewed, and a reader trusts THAT line rather than the object's
+# `commit_id`. A body carried over from an earlier head keeps the old SHA while the object it is
+# posted in carries the new one, so the two disagreeing means the round was not performed at this
+# head — whichever of them is right. Require them to agree (monorepo#3487 review).
+grep -Eq "^\*\*Reviewed commit:\*\*[[:space:]]+\`${head}\`[[:space:]]*$" <<<"$body" ||
+  verdict "NONE reviewed-commit-mismatch"
+
 # The fallback is invalid without evidence for every lane.
 for lane in "CodeRabbit" "Codex" "Cursor Bugbot"; do
   grep -Eq "^[[:space:]]*[-*][[:space:]]+(\*\*)?${lane}(\*\*)?([^[:alnum:]]|$)" <<<"$body" ||
@@ -119,7 +127,11 @@ done
 count_line="$(sed -nE '/^Verdict:[[:space:]]+[0-9]+[[:space:]]+findings?/{p;q;}' <<<"$body")"
 if [ -n "$count_line" ]; then
   total="$(sed -E 's/^Verdict:[[:space:]]+([0-9]+).*/\1/' <<<"$count_line")"
-  blocking="$(sed -nE 's/.*\(P0:[[:space:]]*([0-9]+),[[:space:]]*P1:[[:space:]]*([0-9]+)\).*/\1 \2/p' <<<"$count_line")"
+  # Anchor the WHOLE line: an unanchored match let `Verdict: 1 finding (P0: 0, P1: 0) extra`
+  # read as a standard counted verdict and return GREEN on trailing text nobody wrote to a
+  # contract (monorepo#3487 review). A line that is not exactly the standard form has no
+  # demonstrable P0/P1 breakdown, so it falls through to `FINDINGS $total` and blocks.
+  blocking="$(sed -nE 's/^Verdict:[[:space:]]+[0-9]+[[:space:]]+findings?[[:space:]]+\(P0:[[:space:]]*([0-9]+),[[:space:]]*P1:[[:space:]]*([0-9]+)\)[[:space:]]*$/\1 \2/p' <<<"$count_line")"
   [ -n "$blocking" ] || verdict "FINDINGS $total"
   p0="${blocking% *}"
   p1="${blocking#* }"

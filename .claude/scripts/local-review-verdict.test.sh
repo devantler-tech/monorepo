@@ -103,6 +103,39 @@ expect "finding count with no P0/P1 breakdown" 1 "FINDINGS 2" "${green_head}" "$
 edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 0 findings")' "${tmp}/zero-count.json"
 expect "zero count with no P0/P1 breakdown" 1 "FINDINGS 0" "${green_head}" "${tmp}/zero-count.json"
 
+# --- the three conjuncts added after the monorepo#3487 review, one ablation each ----------
+# Rewrite a FIELD of the clean round's object rather than its body.
+edit_green_obj() { # edit_green_obj <jq-expression-over-the-object> <out-file>
+  jq --arg h "${green_head}" "map(if .commit_id == \$h and (.body | length) > 0 then ($1) else . end)" \
+    "${fixture}" >"$2"
+}
+
+# 1. The contract prescribes `event: COMMENT`, so the round is a COMMENTED review. An APPROVED or
+#    CHANGES_REQUESTED object with an otherwise perfect body is not one — and an approval is
+#    exactly the shape that must never satisfy a gate on one's own work.
+edit_green_obj '.state = "APPROVED"' "${tmp}/approved.json"
+expect "clean round submitted as APPROVED" 1 "NONE no-self-review" "${green_head}" "${tmp}/approved.json"
+edit_green_obj '.state = "CHANGES_REQUESTED"' "${tmp}/changes-requested.json"
+expect "clean round submitted as CHANGES_REQUESTED" 1 "NONE no-self-review" "${green_head}" "${tmp}/changes-requested.json"
+# CONTROL: the same object explicitly re-stamped COMMENTED is still GREEN, so the two above fail
+# on the state and not on the rewrite itself.
+edit_green_obj '.state = "COMMENTED"' "${tmp}/commented.json"
+expect "control: explicitly COMMENTED is still green" 0 "GREEN self@${green_head}" "${green_head}" "${tmp}/commented.json"
+
+# 2. The body names the commit it reviewed, and a reader trusts that line over the object's
+#    commit_id. A body carried over from an earlier head keeps the old SHA.
+edit_green "sub(\"(?m)^\\\\*\\\\*Reviewed commit:\\\\*\\\\* \`${green_head}\`$\"; \"**Reviewed commit:** \`${other_head}\`\")" "${tmp}/stale-body-sha.json"
+expect "body names a DIFFERENT commit than the object" 1 "NONE reviewed-commit-mismatch" "${green_head}" "${tmp}/stale-body-sha.json"
+
+# 3. The counted verdict must be the WHOLE line. Unanchored, `… (P0: 0, P1: 0) extra` read as a
+#    standard breakdown and returned GREEN on text nobody wrote to a contract.
+edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 1 finding (P0: 0, P1: 0) extra")' "${tmp}/verdict-trailing.json"
+expect "counted verdict with trailing text" 1 "FINDINGS 1" "${green_head}" "${tmp}/verdict-trailing.json"
+# CONTROL: the identical line WITHOUT the trailing text is GREEN, so the ablation fires on the
+# trailing text rather than on the singular "finding" or the zero counts.
+edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 1 finding (P0: 0, P1: 0)")' "${tmp}/verdict-clean.json"
+expect "control: the same counted verdict without trailing text" 0 "GREEN self@${green_head}" "${green_head}" "${tmp}/verdict-clean.json"
+
 edit_green 'gsub("(?m)^Verdict: no P0/P1 findings$"; "")' "${tmp}/no-verdict.json"
 expect "clean round minus its verdict" 1 "NONE no-verdict" "${green_head}" "${tmp}/no-verdict.json"
 
