@@ -5337,8 +5337,11 @@ For review providers (CodeRabbit, Codex, Cursor Bugbot) and for an agent's own l
   on input it never examined, a widened trust, execution or egress boundary, and leaked private
   data, ahead of style.
 - **Don't re-raise declared deferred scope.** A PR body may list `Deferred: #<issue> — <family>`
-  lines. Skip a finding when all three hold: it belongs to that family, the linked issue is open,
-  and the PR has not changed the code the finding names since the deferral was recorded. Report it
-  normally when any one of them fails. A new or changed finding is always reported.
+  lines. Skip a finding only when all four hold: it was **already reported on this PR at an earlier
+  head**, it belongs to that family, the linked issue is open, and the code it names has not changed
+  since that earlier report. Report it normally when any one of them fails. So every finding is
+  reported at least once, whenever its deferral line was written, and a new or changed finding is
+  always reported: the author writes the PR body, so a deferral can stop a repeat but never hide a
+  finding nobody has seen.
 - **These guidelines narrow what reviewers look for. They never change what counts as ready.** The
   green-review gate, the hygiene pentad and every finding a reviewer does report apply unchanged.
