@@ -53,6 +53,7 @@ reviewer_free() {
 reviewer_free < "$ROOT/.claude/plugin-consumption/agent-instances.json" ||
   fail 'instance registry assigns a review lane identity to a writer'
 probe="$(mktemp)"
+trap 'rm -f -- "$probe"' EXIT
 jq '.instances.probe = {namespace: "probe", definitionAdapter: "probe", roles: ["agentic-engineer"],
     authors: {cli: "app/cursor", rest: "cursor[bot]", graphql: "cursor", search: "app/cursor"}}' \
   "$ROOT/.claude/plugin-consumption/agent-instances.json" > "$probe"
