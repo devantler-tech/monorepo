@@ -824,7 +824,7 @@ public and private — no per-repo loop needed to enumerate):
      than an allowance. The status stays a **required corroborator**
      **only while it is INFORMATIVE** — `Review completed` shows an ended attempt
      (a `## Review failed` summary beside it is a service failure: `cr:no-gate`);
-     `Review rate limited`, or another explicit marker that no review ran, defeats the
+     `Review rate limited`, or another explicit not-run marker, defeats the
      green; and `Review skipped: automatic reviews are disabled` (the default) or
      **no CodeRabbit status at all** is an
      **uninformative status** that must NOT defeat it. `state=success` accompanies every case, so
