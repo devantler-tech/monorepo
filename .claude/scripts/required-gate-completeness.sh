@@ -38,9 +38,9 @@ usage() {
 repo="" base="" head=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --repo) repo="${2:-}"; shift 2 ;;
-    --base) base="${2:-}"; shift 2 ;;
-    --head) head="${2:-}"; shift 2 ;;
+    --repo) [ "$#" -ge 2 ] || usage; repo="$2"; shift 2 ;;
+    --base) [ "$#" -ge 2 ] || usage; base="$2"; shift 2 ;;
+    --head) [ "$#" -ge 2 ] || usage; head="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -119,7 +119,10 @@ gates="$(jq -n -r \
             elif .state == "pending" then "PENDING" else "FAILED" end) as $st
        | if ($cr | rank) >= ($st | rank) then $cr else $st end
      elif $g.kind == "workflow" then
-       [$wf[] | select(.path == $g.name)] | max_by([.created_at, .id])
+       # A required workflow runs under /actions/required_workflows/; an ordinary workflow at the same
+       # path, including one the PR itself adds, never satisfies it.
+       [$wf[] | select(.path == $g.name and (.workflow_url // "" | contains("/actions/required_workflows/")))]
+       | max_by([.created_at, .id])
        | if . == null then "MISSING"
          elif .status != "completed" then "PENDING"
          elif (.conclusion | ok) then "PASS" else "FAILED" end

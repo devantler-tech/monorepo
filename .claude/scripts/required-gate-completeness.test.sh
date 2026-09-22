@@ -44,7 +44,9 @@ chmod +x "${tmp}/bin/gh"
 rules_check_and_workflow='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"Build"}]}},{"type":"workflows","parameters":{"workflows":[{"repository_id":1,"path":".github/workflows/scan.yaml","ref":"refs/heads/main"}]}}]'
 branch_off='{"name":"main","protection":{"enabled":false,"required_status_checks":{"enforcement_level":"off","contexts":[],"checks":[]}}}'
 build_ok='{"id":10,"name":"Build","status":"completed","conclusion":"success","app":{"id":15368}}'
-scan_ok='{"id":100,"path":".github/workflows/scan.yaml","status":"completed","conclusion":"success","created_at":"2026-09-22T10:00:00Z"}'
+req_url='"workflow_url":"https://api.github.com/repos/devantler-tech/monorepo/actions/required_workflows/7"'
+local_url='"workflow_url":"https://api.github.com/repos/devantler-tech/monorepo/actions/workflows/8"'
+scan_ok='{"id":100,"path":".github/workflows/scan.yaml",'"${req_url}"',"status":"completed","conclusion":"success","created_at":"2026-09-22T10:00:00Z"}'
 
 # fixture <name> <rules> <branch> <check-runs-page> <statuses> <runs-page> [cq]
 fixture() {
@@ -68,10 +70,10 @@ fixture missing-check "${rules_check_and_workflow}" "${branch_off}" \
 # ksail#6645: the required workflow failed before creating a job, so no check-run exists.
 fixture zero-job-failure "${rules_check_and_workflow}" "${branch_off}" \
   "{\"total_count\":1,\"check_runs\":[${build_ok}]}" '[]' \
-  '{"total_count":1,"workflow_runs":[{"id":101,"path":".github/workflows/scan.yaml","status":"completed","conclusion":"failure","created_at":"2026-09-22T10:00:00Z"}]}'
+  "{\"total_count\":1,\"workflow_runs\":[{\"id\":101,\"path\":\".github/workflows/scan.yaml\",${req_url},\"status\":\"completed\",\"conclusion\":\"failure\",\"created_at\":\"2026-09-22T10:00:00Z\"}]}"
 fixture superseded-cancel "${rules_check_and_workflow}" "${branch_off}" \
   "{\"total_count\":1,\"check_runs\":[${build_ok}]}" '[]' \
-  "{\"total_count\":2,\"workflow_runs\":[{\"id\":99,\"path\":\".github/workflows/scan.yaml\",\"status\":\"completed\",\"conclusion\":\"cancelled\",\"created_at\":\"2026-09-22T09:00:00Z\"},${scan_ok}]}"
+  "{\"total_count\":2,\"workflow_runs\":[{\"id\":99,\"path\":\".github/workflows/scan.yaml\",${req_url},\"status\":\"completed\",\"conclusion\":\"cancelled\",\"created_at\":\"2026-09-22T09:00:00Z\"},${scan_ok}]}"
 fixture pending "${rules_check_and_workflow}" "${branch_off}" \
   '{"total_count":1,"check_runs":[{"id":10,"name":"Build","status":"in_progress","conclusion":null,"app":{"id":15368}}]}' '[]' \
   "{\"total_count\":1,\"workflow_runs\":[${scan_ok}]}"
@@ -97,6 +99,13 @@ fixture read-failed "${rules_check_and_workflow}" "${branch_off}" \
   "{\"total_count\":1,\"workflow_runs\":[${scan_ok}]}"
 rm "${tmp}/fx/read-failed/check-runs"
 fixture no-gates '[]' "${branch_off}" '{"total_count":0,"check_runs":[]}' '[]' '{"total_count":0,"workflow_runs":[]}'
+# A local workflow at the required path, e.g. one the PR adds, must not stand in for the required run.
+fixture local-shadow "${rules_check_and_workflow}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[${build_ok}]}" '[]' \
+  "{\"total_count\":2,\"workflow_runs\":[{\"id\":101,\"path\":\".github/workflows/scan.yaml\",${req_url},\"status\":\"completed\",\"conclusion\":\"failure\",\"created_at\":\"2026-09-22T10:00:00Z\"},{\"id\":102,\"path\":\".github/workflows/scan.yaml\",${local_url},\"status\":\"completed\",\"conclusion\":\"success\",\"created_at\":\"2026-09-22T11:00:00Z\"}]}"
+fixture local-only "${rules_check_and_workflow}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[${build_ok}]}" '[]' \
+  "{\"total_count\":1,\"workflow_runs\":[{\"id\":102,\"path\":\".github/workflows/scan.yaml\",${local_url},\"status\":\"completed\",\"conclusion\":\"success\",\"created_at\":\"2026-09-22T11:00:00Z\"}]}"
 
 run() { # run <tool> <fixture> [head] — prints stdout, returns the tool's exit status
   STUB_DIR="${tmp}/fx/$2" PATH="${tmp}/bin:${PATH}" bash "$1" \
@@ -136,6 +145,10 @@ expect "a truncated check list is UNKNOWN, never MISSING" "${tool}" truncated 2 
   "UNKNOWN truncated check_runs fetched=0 total=150"
 expect "a failed read is UNKNOWN on stdout" "${tool}" read-failed 2 "UNKNOWN read-failed check-runs"
 expect "no required gates reads complete" "${tool}" no-gates 0 "COMPLETE required=0"
+expect "a local run never satisfies a failed required workflow" "${tool}" local-shadow 1 \
+  "GATE workflow .github/workflows/scan.yaml FAILED"
+expect "a local run alone leaves the required workflow MISSING" "${tool}" local-only 1 \
+  "GATE workflow .github/workflows/scan.yaml MISSING"
 
 checks=$((checks + 1))
 set +e
@@ -144,6 +157,20 @@ rc=$?
 set -e
 if [ "${rc}" = 2 ]; then echo "ok   an abbreviated head is refused"; else
   echo "FAIL an abbreviated head is refused: rc=${rc}" >&2
+  failures=$((failures + 1))
+fi
+
+missing_value() { # missing_value <tool> — a flag given without its value, as the last argument
+  STUB_DIR="${tmp}/fx/complete" PATH="${tmp}/bin:${PATH}" bash "$1" \
+    --repo devantler-tech/monorepo --head "${head_sha}" --base >/dev/null 2>&1
+}
+checks=$((checks + 1))
+set +e
+missing_value "${tool}"
+rc=$?
+set -e
+if [ "${rc}" = 2 ]; then echo "ok   a flag without its value is a usage error"; else
+  echo "FAIL a flag without its value is a usage error: rc=${rc}" >&2
   failures=$((failures + 1))
 fi
 
@@ -160,6 +187,8 @@ ablate() { # ablate <name> <perl substitution> — writes an ablated copy and ch
 no_trunc="$(ablate no-truncation 's/\[ "\$\{counts% \*\}" = "\$\{counts#\* \}" \] \|\|/true ||/')"
 no_missing="$(ablate no-missing 's/if \. == null then "MISSING"\n            elif \.status/if . == null then "PASS"\n            elif .status/')"
 no_unverified="$(ablate no-unverified 's/\[ "\$\{unverified\}" -eq 0 \] \|\| unknown/true || unknown/')"
+no_required_url="$(ablate no-required-url 's/ and \(\.workflow_url \/\/ "" \| contains\("\/actions\/required_workflows\/"\)\)//')"
+no_value_guard="$(ablate no-value-guard 's/\[ "\$#" -ge 2 \] \|\| usage; //g')"
 
 expect_ablation_fails() { # <label> <ablated tool> <fixture> <rc the real tool gives>
   local got rc
@@ -176,6 +205,16 @@ expect_ablation_fails() { # <label> <ablated tool> <fixture> <rc the real tool g
 expect_ablation_fails "without the truncation guard a partial list is judged" "${no_trunc}" truncated 2
 expect_ablation_fails "without MISSING an absent check reads green" "${no_missing}" missing-check 1
 expect_ablation_fails "without the UNVERIFIED guard code_quality reads complete" "${no_unverified}" code-quality 2
+expect_ablation_fails "without the required-run filter a local run shadows a failure" "${no_required_url}" local-shadow 1
+checks=$((checks + 1))
+set +e
+missing_value "${no_value_guard}"
+rc=$?
+set -e
+if [ "${rc}" != 2 ]; then echo "ok   ablation caught: without the value guard a missing value is not a usage error"; else
+  echo "FAIL ablation not caught: without the value guard (rc=${rc})" >&2
+  failures=$((failures + 1))
+fi
 
 # The contract must route exception (a) through this check, and every prescribed branch update must
 # carry its head pin. Scoped to the Merge policy section so a phrase surviving elsewhere does not count.
