@@ -625,11 +625,9 @@ public and private — no per-repo loop needed to enumerate):
      review-body findings, **Codex comment-form findings (below)**, and any concrete ancillary problem
      CodeRabbit explicitly reports while it
      is the selected current-head reviewer, (d) `mergeStateStatus` conflicts, and (e) **green-review state**
-     (see below). Count (b) with `pr-unresolved-threads.sh <owner>/<repo> <n>` — **required, never
-     an inline query** (monorepo#2670: an inline count reported `unresolved=0` over an open Major).
-     It paginates, counts every author, and prints `unresolved=<n> total=<t>` only on a complete
-     read; exit 2 `UNKNOWN …` reports as `unresolved=unknown`, never 0. It answers (b)'s **count**
-     and nothing else.
+     (see below). Count all unresolved review threads across all pages, regardless of author. Query
+     `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}`
+     and paginate until `hasNextPage` is false. That query answers (b)'s **count** and nothing else.
      🔴 **A human who replies INSIDE an existing review thread is invisible to it — and `active=` must
      still see them.** Such a reply leaves no issue comment and no top-level review, so a
      thread query reports `active=none` while a person is mid-conversation, authorising a takeover of
