@@ -619,6 +619,49 @@ report "residual: a two-segment routine slug is shape-identical to a harness bra
   "rc=$rc out=$out"
 git -C "$work" checkout -q -f main
 
+# --- 11a. a harness-shaped branch that HOLDS NO WORK is reaped locally (#3114) ---
+# The shape exemption protects the maintainer's interactive WORK. A per-session worktree
+# branch is cut at the default branch and never committed to, so its tip is an ANCESTOR of
+# `origin/main`: it holds nothing, and `git branch <name> <sha>` recreates it exactly. The
+# harness mints one such branch per scheduled tick under the very same `<word>-<word>-<6hex>`
+# shape, so exempting it by shape made the local sweep unable to converge — measured on this
+# host 2026-09-22: 1407 of 1591 local claude/* branches kept by shape alone, 1404 of them
+# ancestors of origin/main.
+#
+# Note what carries the RED/GREEN here: the branch has NO PR evidence at all and the open-head
+# list is empty, so nothing but the exemption was ever keeping it.
+git -C "$work" checkout -q -f main
+git -C "$work" fetch -q origin
+# Cut it from the PUBLISHED tip, exactly as the harness cuts a session worktree branch.
+# (This fixture's LOCAL main runs ahead of origin/main, and the rule is deliberately about
+# the published tip — a commit only present locally is not yet safe to discard.)
+nowork_sha=$(git -C "$work" rev-parse refs/remotes/origin/main)
+git -C "$work" branch -f "claude/zealous-panini-b5f417" "$nowork_sha" >/dev/null
+: >"$OPEN_HEADS_FILE"
+: >"$PR_EVIDENCE_FILE"
+manifest="$tmp/manifest-3114a"; : >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
+report "harness-shaped branch holding NO work is reaped locally (#3114)" \
+  "$(git -C "$work" rev-parse --verify --quiet "refs/heads/claude/zealous-panini-b5f417" >/dev/null && echo no || echo yes)" \
+  "rc=$rc out=$out"
+report "…and its deletion is recorded in the manifest, so it is restorable (#3114)" \
+  "$(grep -Fq $'monorepo\tlocal\tclaude/zealous-panini-b5f417\t'"$nowork_sha" "$manifest" && echo yes || echo no)"
+
+# CONTROL — the SAME shape, differing ONLY in that it carries a commit of its own, must
+# SURVIVE. This is what proves the rule narrows the exemption by WORK rather than by name:
+# an interactive session that has actually committed is still HANDS-OFF.
+git -C "$work" checkout -q -f main
+work_sha=$(mk_remote_branch "claude/zealous-panini-c0ffee")
+git -C "$work" checkout -q main
+: >"$OPEN_HEADS_FILE"
+: >"$PR_EVIDENCE_FILE"
+manifest="$tmp/manifest-3114b"; : >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
+report "control: same shape CARRYING WORK survives (#3114)" \
+  "$(git -C "$work" rev-parse --verify --quiet "refs/heads/claude/zealous-panini-c0ffee" >/dev/null && echo yes || echo no)" \
+  "rc=$rc out=$out"
+git -C "$work" checkout -q -f main
+
 # --- 14. a failed query names its target and whether a retry can help (#2511) ---
 # The abort itself stays fail-closed; what changes is that the message carries the
 # exact owner/repo queried and a cause class, so a bad target (never succeeds) reads
