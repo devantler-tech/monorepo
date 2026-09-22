@@ -786,8 +786,8 @@ public and private — no per-repo loop needed to enumerate):
      plain prose, so without the author bind any account could post those phrases and be read green.
      **Discriminate a command reply on SUBSTANCE, never on comment type: a reply carrying no verdict
      line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a
-     review completion**, as are a quota notice and a service shell; reject the summary and the reply
-     alike when the body says the review did not run.
+     review completion**, as are a quota notice and a service shell. A body saying the review did not
+     run is never green, yet any finding in it still counts.
      🔴 **The verdict-bearing reply is frequently the ONLY satisfier at head.** Measured on
      platform#3051 (2026-08-10, head `992a93caecd1…`): status `Review completed`, newest review object
      a `bodylen=0` container at the **older** `5d9d8f5960`, summary comment naming **no sha at all** —

@@ -267,7 +267,8 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   head prefix and be read as a green.
   **Discriminate a command reply on SUBSTANCE, never on comment type:** a reply carrying no verdict
   line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a
-  review, as are a quota notice and a service shell; reject any artifact saying the review did not run.
+  review, as are a quota notice and a service shell; an artifact saying the review did not run is
+  never a green, but any finding it carries still counts as a non-thread review finding.
   Treat an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` as zero when the
   identical section repeats.
   🔴 **Corroborate with the head's `CodeRabbit` commit status, and read its `description`, not its
