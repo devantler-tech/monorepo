@@ -3021,6 +3021,15 @@ field against that output before making the API read. **Never transfer a field l
 subcommands** or infer that a GraphQL field is accepted by `gh`: one unknown field voids the whole read.
 Reuse an exact command that already succeeded in this run instead of rediscovering it, so the guard does
 not become repeated setup overhead.
+🔴 **Never discard both stderr and the exit status of a `gh` read whose empty result you will act
+on.** A rejected request exits non-zero and prints its reason only on stderr, so
+`out=$(gh search prs … --json number,headRefName 2>/dev/null)` leaves an empty string that reads exactly
+like "nothing matched". Measured 2026-08-06, that form reported zero open `claude/*` PRs while 108 were
+open ([#2692](https://github.com/devantler-tech/monorepo/issues/2692)). Run such a read through
+[`.claude/scripts/gh-json-read.sh`](.claude/scripts/gh-json-read.sh) `<gh arguments…>` and filter with
+`jq` afterwards: it passes the JSON through on success and exits `2` with `UNKNOWN` on a failed,
+empty or non-JSON read. Treat that exit as **UNKNOWN, never zero results**. Per-repository
+`2>/dev/null` in a loop remains fine when the exit status is still checked.
 **Stale CodeRabbit CHANGES_REQUESTED is a dismissal one-click, not a re-review loop.** CodeRabbit
 posts re-review results as COMMENTED and structurally never re-APPROVEs after a CHANGES_REQUESTED —
 so a promoted PR whose only blocker is a **`coderabbitai[bot]`-authored** CHANGES_REQUESTED review at
