@@ -1638,6 +1638,20 @@ draft yourself only when you genuinely know it is ready**, which means ALL THREE
    **no exercisable runtime surface** (pure docs/config consumed elsewhere) — and then the readiness
    comment must say so. Record what you exercised in a PR comment (not the body, which stays
    PM-level).
+   🔴 **A runtime surface the agent host CANNOT REACH — a cloud provider, real credentials, a live
+   account — is NOT "no exercisable runtime surface", and the condition is never carried forward
+   as met because the other two are.** Measured on `ksail#6434` (monorepo#2617): the guard under
+   change sat behind a discovery step that needs a real AWS cluster, a hand-off note recorded "all
+   three readiness conditions hold", and no user evaluation had been recorded at any head. For this
+   class the condition is met exactly as it is for an external PR under *You own EVERY pull request
+   in the portfolio*: **observe, do not necessarily run** — read a CI run that actually exercises the
+   changed behaviour against the real provider, and record **which run** and **what it
+   demonstrated**, at the current head. Build-and-lint-only CI observes nothing. The readiness
+   comment must **name the specific unreachable gate** (for example `EKS discovery needs a live
+   cluster`), never assert the condition generally. **Where no check reaches the behaviour, the PR
+   stays a draft on that named blocker** — or you add the coverage that reaches it. A code-path
+   trace never substitutes here: that carve-out is for a change with nothing to run, and this one
+   has something to run that you cannot reach.
 A PR missing any of the three **stays a draft**. **Self-promotion applies to every draft you may
 drive** — your own instance's registered namespace (whichever *you* write;
 see *Execution model*), a sibling lane's, the maintainer's interactive drafts, and outside
