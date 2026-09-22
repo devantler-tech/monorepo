@@ -253,7 +253,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   contradiction.
   Fetch `headRefOid` while deepening every actionable PR. A finding-free CodeRabbit
   review completion counts as `cr@<sha>` even without `APPROVED`: bind a review object by REST
-  `commit_id` **and require `submitted_at` after the latest authenticated request for that head**, or
+  `commit_id` **and require `submitted_at` after the latest authenticated request for that head**
+  (positively identified as a review: after leading HTML comments and whitespace, its body opens with
+  `**Actionable comments posted:` or the outside-diff `> [!CAUTION]` block, never an empty container), or
   bind its substantive auto-generated summary comment to the authenticated
   current-head request by `updated_at` plus an explicit head reference, or bind its
   **command-invocation reply comment carrying a verdict** — a body stating
