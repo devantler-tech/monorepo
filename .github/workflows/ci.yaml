@@ -58,6 +58,7 @@ jobs:
       improver-role-disclosure: ${{ steps.filter.outputs.improver-role-disclosure }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       gh-json-vocabulary-contract: ${{ steps.filter.outputs.gh-json-vocabulary-contract }}
+      gh-json-read: ${{ steps.filter.outputs.gh-json-read }}
       merge-preflight-thread-gate: ${{ steps.filter.outputs.merge-preflight-thread-gate }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
@@ -572,6 +573,12 @@ jobs:
               - '.claude/scripts/merge-confirmation-read.test.sh'
               # the consumed plugin definitions: a gitlink bump changes what the agent reads
               - 'libraries/agent-plugins'
+              - '.github/workflows/ci.yaml'
+            gh-json-read:
+              # AGENTS.md must keep naming the helper, which the suite asserts.
+              - 'AGENTS.md'
+              - '.claude/scripts/gh-json-read.sh'
+              - '.claude/scripts/gh-json-read.test.sh'
               - '.github/workflows/ci.yaml'
             gh-json-vocabulary-contract:
               - 'AGENTS.md'
@@ -2090,6 +2097,25 @@ jobs:
       - name: Verify the merge-confirmation read contract
         run: bash .claude/scripts/merge-confirmation-read.test.sh
 
+  test-gh-json-read:
+    name: Test gh JSON read helper
+    needs: changes
+    if: needs.changes.outputs.gh-json-read == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the gh JSON read helper
+        run: bash .claude/scripts/gh-json-read.test.sh
+
   test-gh-json-vocabulary-contract:
     name: Test gh JSON vocabulary contract
     needs: changes
@@ -2318,6 +2344,7 @@ jobs:
       - test-work-priority-ladder
       - test-merge-confirmation-read
       - test-gh-json-vocabulary-contract
+      - test-gh-json-read
       - test-improver-role-disclosure
       - test-merge-preflight-thread-gate
       - test-portfolio-surveyor-contract
@@ -2391,6 +2418,7 @@ jobs:
             ${{ needs.test-work-priority-ladder.result }}
             ${{ needs.test-merge-confirmation-read.result }}
             ${{ needs.test-gh-json-vocabulary-contract.result }}
+            ${{ needs.test-gh-json-read.result }}
             ${{ needs.test-improver-role-disclosure.result }}
             ${{ needs.test-merge-preflight-thread-gate.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
