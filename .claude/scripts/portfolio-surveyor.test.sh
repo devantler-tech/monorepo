@@ -761,17 +761,45 @@ if grep -Fq 'Bundle Dependabot/Renovate PRs' "${monorepo_skill}"; then
   fail "monorepo product card still tells agents to bundle dependency PRs"
 fi
 
+# Run one fixture through BOTH input shapes and require the same verdict. The stdin form
+# (`--input -`) is the only one the read-only surveyor guard admits (monorepo#3123), so every
+# positional fixture below doubles as a stdin fixture: a divergence would mean the surveyor and
+# a hand-run classification disagree about the same PR. Strings that are not JSON stay strings,
+# so an invalid positional payload is an equally invalid stdin payload. Wrong-arity fixtures have
+# no stdin equivalent and run positionally only.
+classifier_rc() {
+  local name="$1"
+  shift
+  local rc stdin_rc payload
+  if "${classifier}" "$@"; then rc=0; else rc=$?; fi
+  if [[ "$#" -eq 7 || "$#" -eq 8 ]]; then
+    payload="$(jq -nc \
+      --arg repo "$1" --arg author "$2" --arg head_ref "$3" --arg title "$4" \
+      --arg head_oid "$5" --arg files "$6" --arg commits "$7" --arg owners "${8-}" '
+      {repo: $repo, author: $author, head_ref: $head_ref, title: $title, head_oid: $head_oid,
+       files: ($files | try fromjson catch $files),
+       commits: ($commits | try fromjson catch $commits)}
+      + (if $owners == "" then {} else {skill_owners: ($owners | try fromjson catch $owners)} end)')" ||
+      fail "could not build stdin payload for fixture: ${name}"
+    if "${classifier}" --input - <<<"${payload}"; then stdin_rc=0; else stdin_rc=$?; fi
+    [[ "${stdin_rc}" -eq "${rc}" ]] ||
+      fail "classifier --input - disagrees with the positional form for ${name}: ${stdin_rc} vs ${rc}"
+  fi
+  return "${rc}"
+}
+
+
 expect_exempt() {
   local name="$1"
   shift
-  "${classifier}" "$@" || fail "expected exemption: ${name}"
+  classifier_rc "${name}" "$@" || fail "expected exemption: ${name}"
 }
 
 expect_review_gated() {
   local name="$1"
   shift
   local rc
-  if "${classifier}" "$@"; then
+  if classifier_rc "${name}" "$@"; then
     fail "unexpected exemption: ${name}"
   else
     rc=$?
@@ -783,7 +811,7 @@ expect_review_required() {
   local name="$1"
   shift
   local rc
-  if "${classifier}" "$@"; then
+  if classifier_rc "${name}" "$@"; then
     fail "unexpected no-review exemption: ${name}"
   else
     rc=$?
@@ -796,7 +824,7 @@ expect_not_release_exempt() {
   local name="$1"
   shift
   local rc
-  if "${classifier}" "$@"; then
+  if classifier_rc "${name}" "$@"; then
     fail "unexpected release-bot exemption: ${name}"
   else
     rc=$?
@@ -808,7 +836,7 @@ expect_classifier_error() {
   local name="$1"
   shift
   local rc
-  if "${classifier}" "$@"; then
+  if classifier_rc "${name}" "$@"; then
     fail "unexpected exemption: ${name}"
   else
     rc=$?
@@ -1112,6 +1140,32 @@ expect_exempt \
   "${ksail_head}" \
   "${ksail_files}" \
   "${ksail_commits}"
+
+# The stdin shape's own contract, anchored on the exempt fixture above so each negative case
+# differs from a known exit 0 by exactly one change: keys are exact, the only argv is `--input -`,
+# and a null skill_owners map is an omission rather than an empty map.
+ksail_stdin_payload="$(jq -nc \
+  --arg head "${ksail_head}" --argjson files "${ksail_files}" --argjson commits "${ksail_commits}" \
+  '{repo: "ksail", author: "app/ksail-bot", head_ref: "chore/copilot-plugin-v7.172.2",
+    title: "chore(copilot-plugin): release v7.172.2", head_oid: $head, files: $files,
+    commits: $commits}')"
+expect_stdin_rc() {
+  local name="$1" want="$2" payload="$3"
+  shift 3
+  local rc
+  if "${classifier}" "$@" <<<"${payload}"; then rc=0; else rc=$?; fi
+  [[ "${rc}" -eq "${want}" ]] || fail "classifier stdin ${name}: exit ${rc}, want ${want}"
+}
+expect_stdin_rc "baseline" 0 "${ksail_stdin_payload}" --input -
+expect_stdin_rc "null skill_owners" 0 \
+  "$(jq -c '.skill_owners = null' <<<"${ksail_stdin_payload}")" --input -
+expect_stdin_rc "unknown key" 2 \
+  "$(jq -c '.extra = "x"' <<<"${ksail_stdin_payload}")" --input -
+expect_stdin_rc "missing key" 2 "$(jq -c 'del(.title)' <<<"${ksail_stdin_payload}")" --input -
+expect_stdin_rc "non-string scalar" 2 "$(jq -c '.repo = 1' <<<"${ksail_stdin_payload}")" --input -
+expect_stdin_rc "non-object input" 2 '[]' --input -
+expect_stdin_rc "path instead of stdin" 2 "${ksail_stdin_payload}" --input /dev/stdin
+expect_stdin_rc "trailing argument" 2 "${ksail_stdin_payload}" --input - extra
 
 expect_review_required \
   "agent-plugins skill-only update" \
