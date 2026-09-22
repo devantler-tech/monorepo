@@ -808,7 +808,7 @@ echo locally-modified >>"$c21/super/sub/nested/nested.txt"
 report "advance nested-dirty precondition: parent status hides the tracked edit" \
   "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
 report "advance nested-dirty precondition: recursive status still reports a matching pin" \
-  "$(git -C "$c21/super/sub" submodule status --recursive | grep -q '^ ' && echo yes || echo no)"
+  "$(sub_status="$(git -C "$c21/super/sub" submodule status --recursive)" && grep -q '^ ' <<<"$sub_status" && echo yes || echo no)"
 out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 report "advance nested-dirty: fails closed at the recorded outer pin" \
   "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"

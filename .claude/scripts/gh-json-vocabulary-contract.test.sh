@@ -97,7 +97,7 @@ vocabulary_for() {
 
 contains_field() {
   local vocabulary="$1" field="$2"
-  printf '%s\n' "${vocabulary}" | grep -Fqx -- "${field}"
+  grep -Fqx -- "${field}" <<<"${vocabulary}"
 }
 
 assert_unknown_field() {
@@ -162,7 +162,7 @@ for trigger in \
   "              - '.claude/scripts/gh-json-vocabulary-contract.test.sh'" \
   "              - '.github/workflows/ci.yaml'" \
   "              - '.claude/agents/portfolio-surveyor.md'"; do
-  printf '%s\n' "${filter_block}" | grep -Fqx -- "${trigger}" ||
+  grep -Fqx -- "${trigger}" <<<"${filter_block}" ||
     fail "ci.yaml filter is missing ${trigger# *}"
 done
 

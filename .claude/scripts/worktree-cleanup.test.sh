@@ -526,7 +526,8 @@ t_keeps_parent_of_a_submodule_owned_worktree() {
   # parent repo must NOT know the nested worktree, or the existing gate would pass this;
   # and the candidate must read clean, or an earlier gate would mask the one under test.
   local nested_real; nested_real=$(cd "$nested" && pwd -P)
-  if git -C "$root/repo" worktree list --porcelain | grep -qF "$nested_real"; then
+  local registered; registered=$(git -C "$root/repo" worktree list --porcelain)
+  if grep -qF "$nested_real" <<<"$registered"; then
     bad "KEEPs a worktree that contains a submodule-owned worktree" \
         "FIXTURE: parent repo registers the nested worktree — the old gate would pass"
     rm -rf "$root" "$seed"; return

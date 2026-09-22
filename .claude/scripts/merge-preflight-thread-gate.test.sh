@@ -417,7 +417,7 @@ done < <(
 # ~40 `.claude` files alone, so `ci.yaml` could be dropped from the generator — or made unreadable —
 # and the count would still sail past. Name the surface that has to be there, so its removal fails
 # loudly instead of quietly narrowing what the guard sees.
-printf '%s' "${scanned_list}" | grep -qxF -- "${workflow}" ||
+grep -qxF -- "${workflow}" <<<"${scanned_list}" ||
   fail "ci.yaml was not among the ${scanned} scanned surfaces — the guard triggers on it but would not inspect it"
 
 # The self-exclusion above is one path; this refuses if it ever becomes the whole class. Without it,
@@ -466,7 +466,7 @@ done
 job_block=$(awk '/^  test-merge-preflight-thread-gate:$/{f=1;next} f&&/^  [a-z]/{exit} f' "${workflow}")
 [ -n "${job_block}" ] ||
   fail "could not locate the test-merge-preflight-thread-gate job block in ci.yaml — its wiring cannot be verified"
-printf '%s\n' "${job_block}" | grep -qF -- 'submodule update --init libraries/agent-plugins' ||
+grep -qF -- 'submodule update --init libraries/agent-plugins' <<<"${job_block}" ||
   fail "this job does not initialise libraries/agent-plugins — the pinned plugin definitions could not be scanned"
 
 # The filter must cover every surface the scan discovers, or an edit to an unlisted one skips the job.

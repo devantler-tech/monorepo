@@ -78,14 +78,14 @@ $OUT"
 
 expect_match() {
   asserts=$(( asserts + 1 ))
-  printf '%s' "$OUT" | grep -q -- "$1" || note_fail "$2 (output lacks '$1')
+  grep -q -- "$1" <<<"$OUT" || note_fail "$2 (output lacks '$1')
 --- output ---
 $OUT"
 }
 
 expect_no_match() {
   asserts=$(( asserts + 1 ))
-  printf '%s' "$OUT" | grep -q -- "$1" && note_fail "$2 (output wrongly contains '$1')
+  grep -q -- "$1" <<<"$OUT" && note_fail "$2 (output wrongly contains '$1')
 --- output ---
 $OUT"
   return 0

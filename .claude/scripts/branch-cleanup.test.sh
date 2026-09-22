@@ -532,8 +532,8 @@ out="$("$helper" "$sess" "monorepo" "$manifest" dry-run 2>&1)" && rc=0 || rc=$?
 report "default branch held by another worktree is not an error (#2489)" \
   "$([ "$rc" -eq 0 ] && echo yes || echo no)" "rc=$rc out=$out"
 report "…and the run says so instead of reporting FAILED (#2489)" \
-  "$(printf '%s' "$out" | grep -q 'held by another worktree' && \
-     ! printf '%s' "$out" | grep -q 'FAILED to reach' && echo yes || echo no)" \
+  "$(grep -q 'held by another worktree' <<<"$out" && \
+     ! grep -q 'FAILED to reach' <<<"$out" && echo yes || echo no)" \
   "out=$out"
 
 git -C "$work" worktree remove --force "$sess" >/dev/null 2>&1 || true
@@ -545,7 +545,7 @@ git -C "$work" checkout -q -B claude/reachable-2489 main >/dev/null 2>&1
 manifest="$tmp/manifest-2489b"; : >"$manifest"
 out="$("$helper" "$work" "monorepo" "$manifest" dry-run 2>&1)" && rc=0 || rc=$?
 report "control: a reachable default is still returned to (#2489)" \
-  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q -- "-> main" && echo yes || echo no)" \
+  "$([ "$rc" -eq 0 ] && grep -q -- "-> main" <<<"$out" && echo yes || echo no)" \
   "rc=$rc out=$out"
 report "control: the primary checkout really did move back to main (#2489)" \
   "$([ "$(git -C "$work" branch --show-current)" = "main" ] && echo yes || echo no)" \
@@ -565,7 +565,7 @@ printf 'untracked-would-be-overwritten\n' >"$work/blocker-2489.txt"
 manifest="$tmp/manifest-2489c"; : >"$manifest"
 out="$("$helper" "$work" "monorepo" "$manifest" dry-run 2>&1)" && rc=0 || rc=$?
 report "negative control: a genuinely failed return to default is still an error (#2489)" \
-  "$([ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'FAILED to reach' && echo yes || echo no)" \
+  "$([ "$rc" -ne 0 ] && grep -q 'FAILED to reach' <<<"$out" && echo yes || echo no)" \
   "rc=$rc out=$out"
 
 rm -f "$work/blocker-2489.txt"
@@ -648,7 +648,7 @@ assert_failed_closed() {
   # Read the ABORT line alone: the echoed gh line can carry the slug by itself,
   # which would let this pass even if the abort stopped naming its target.
   report "$1: abort line names the queried repository (#2511)" \
-    "$(grep -F "ABORT — " <<<"$out" | grep -Fq "for 'devantler-tech/$fq_slug'" && echo yes || echo no)" "out=$out"
+    "$(abort_line="$(grep -F "ABORT — " <<<"$out")"; grep -Fq "for 'devantler-tech/$fq_slug'" <<<"$abort_line" && echo yes || echo no)" "out=$out"
 }
 # has <text>: prints "yes" when the last sweep's output contains <text>, else "no".
 has() { grep -Fq "$1" <<<"$out" && echo yes || echo no; }

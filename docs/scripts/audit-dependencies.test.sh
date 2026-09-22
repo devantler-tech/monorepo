@@ -116,7 +116,7 @@ for required_path in \
   "              - 'docs/scripts/audit-dependencies.test.sh'" \
   "              - '.github/workflows/audit-docs.yaml'" \
   "              - '.github/workflows/ci.yaml'"; do
-  printf '%s\n' "${docs_deps_filter}" | grep -Fqx -- "${required_path}" ||
+  grep -Fqx -- "${required_path}" <<<"${docs_deps_filter}" ||
     fail "docs-deps filter does not self-gate ${required_path#*\'}"
 done
 

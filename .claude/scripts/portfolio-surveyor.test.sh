@@ -62,10 +62,10 @@ mapped_product_repos="$({
 } | LC_ALL=C sort -u)"
 
 for annotated_product_repo in homebrew-tap agent-plugins; do
-  printf '%s\n' "${mapped_product_repos}" | grep -Fxq "${annotated_product_repo}" ||
+  grep -Fxq "${annotated_product_repo}" <<<"${mapped_product_repos}" ||
     fail "portfolio-map parser omits active annotated repository: ${annotated_product_repo}"
 done
-if printf '%s\n' "${mapped_product_repos}" | grep -Fxq 'reusable-workflows'; then
+if grep -Fxq 'reusable-workflows' <<<"${mapped_product_repos}"; then
   fail 'portfolio-map parser includes an explicitly archived repository'
 fi
 
@@ -3087,7 +3087,7 @@ done
 # CONTROL: every statement still names at least one genuine non-product repo, so the loop is never
 # vacuous — `maintenance` is the org repo that stays outside the map by design.
 while IFS= read -r _statement; do
-  printf '%s\n' "${_statement}" | grep -Fq '`maintenance`' ||
+  grep -Fq '`maintenance`' <<<"${_statement}" ||
     fail "a strategy-review exclusion statement no longer names maintenance — the round-11 check would be vacuous for it: ${_statement}"
 done <<<"${_exclusion_lists}"
 echo "portfolio surveyor contract: round-11 product-vs-infra exclusion assertions passed (${_exclusion_count} statements)"

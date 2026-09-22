@@ -122,7 +122,7 @@ fi
 # 2. A DATED notice sits beside it. The date is asserted by SHAPE, not by value: pinning today's date
 #    would make a legitimate re-dating fail, while dropping the date entirely is exactly the defect —
 #    an undated correction becomes the next standing claim.
-printf '%s' "${section}" | grep -Eq 'SUPERSEDING NOTICE \(20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)' ||
+grep -Eq 'SUPERSEDING NOTICE \(20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)' <<<"${section}" ||
   fail "no dated 'SUPERSEDING NOTICE (YYYY-MM-DD)' beside the measurement — an undated correction is read as a standing property in its turn"
 
 # 3. The notice states the DISTINCTION, which is the whole content of the fix. Without this the
