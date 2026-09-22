@@ -166,7 +166,7 @@ case_ invocation-after-heredoc 0 "all 1 contract tests" "jobs:
   test-a:
     steps:
       - run: |
-          grep -q x <<< \"x\"
+          grep -q x <<< \"x\" # pipefail-grep-guard: allow -- the | above is a YAML block scalar in fixture text, not a pipe
           cat <<EOF
           text
           EOF

@@ -68,7 +68,7 @@ run() {
 stale=$(make_tree 'codex-stale-run' 10) || fail 'fixture: codex-stale-run'
 out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$stale" ] && fail "a stale agent tree was not reaped: $stale"
-printf '%s' "$out" | grep -q 'REAP' || fail 'apply run reported no REAP for a stale tree'
+grep -q 'REAP' <<<"$out" || fail 'apply run reported no REAP for a stale tree'
 
 # --- 2. a YOUNG agent tree is kept (age ablation) ---------------------------------
 young=$(make_tree 'codex-young-run' 0) || fail 'fixture: codex-young-run'
@@ -84,14 +84,14 @@ run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
 dry=$(make_tree 'ksail-dry-run' 10) || fail 'fixture: ksail-dry-run'
 out=$(run dry-run 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$dry" ] || fail "dry-run deleted a tree: $dry"
-printf '%s' "$out" | grep -q 'WOULD REAP' || fail 'dry-run did not report WOULD REAP'
+grep -q 'WOULD REAP' <<<"$out" || fail 'dry-run did not report WOULD REAP'
 # ...and its SUMMARY must not claim it reaped anything. The per-tree lines say
 # "WOULD REAP", but the summary counter is shared with apply mode, so a dry-run
 # reported "reaped=N ... reclaimed=~N MB" while deleting nothing. In a script whose
 # entire value is that it is safe to trust, a summary that says it deleted trees it did
 # not delete is a reporting defect, not a cosmetic one -- and the scheduled sibling runs
 # in dry-run, so that is the line an operator actually reads.
-printf '%s' "$out" | grep -qE 'summary: reaped=[1-9]' &&
+grep -qE 'summary: reaped=[1-9]' <<<"$out" &&
   fail 'dry-run summary claimed trees were reaped'
 
 # --- 5. invalid arguments fail closed, before any deletion ------------------------
@@ -123,13 +123,13 @@ if command -v go > /dev/null 2>&1; then
   # the budget branch is what stops every sweep throwing away a warm cache.
   out=$(run dry-run 3 "$NEVER_CLEAN_BUDGET")
   for label in GOCACHE GOMODCACHE; do
-    line=$(printf '%s\n' "$out" | grep -E "^build-cache-reclaim: ${label} ") || {
+    line=$(grep -E "^build-cache-reclaim: ${label} " <<<"$out") || {
       fail "${label} was never reported"
       continue
     }
-    printf '%s\n' "$line" | grep -q 'within budget' ||
+    grep -q 'within budget' <<<"$line" ||
       fail "${label} was not reported as within budget at an absurdly high budget"
-    printf '%s\n' "$out" | grep -q "${label} would be cleaned" &&
+    grep -q "${label} would be cleaned" <<<"$out" &&
       fail "${label} would be cleaned despite being within budget"
   done
 
@@ -138,7 +138,7 @@ if command -v go > /dev/null 2>&1; then
   # reaches the clean path. Still dry-run, so no cache is actually emptied.
   out=$(run dry-run 3 0)
   for label in GOCACHE GOMODCACHE; do
-    printf '%s\n' "$out" | grep -q "${label} would be cleaned" ||
+    grep -q "${label} would be cleaned" <<<"$out" ||
       fail "${label} over budget was not selected for cleaning"
   done
 
@@ -224,9 +224,9 @@ fi
 # instead, and a negative budget makes every cache read as over budget and be cleaned on
 # every sweep. Both directions are safety-relevant, so both are pinned.
 out=$(run dry-run 3 08 2>&1)
-printf '%s' "$out" | grep -q 'value too great for base' &&
+grep -q 'value too great for base' <<<"$out" &&
   fail 'a zero-padded cache_budget_gb hit a bash octal parse error'
-printf '%s' "$out" | grep -q 'cache_budget_gb=8' ||
+grep -q 'cache_budget_gb=8' <<<"$out" ||
   fail 'a zero-padded cache_budget_gb was not normalised to decimal 8'
 run dry-run 3 99999999999999999999 > /dev/null 2>&1
 [ $? -eq 2 ] || fail 'an unrepresentably large cache_budget_gb was not rejected'
@@ -395,7 +395,7 @@ if command -v go > /dev/null 2>&1; then
   # 13a. ABLATION PARTNER, no holder: over a 0 GB budget the cache IS selected. Without
   # this, 13b passes just as well on a script that never selects any cache at all.
   out=$(GOMODCACHE_OVERRIDE="$mod_outside_root" run dry-run 3 0)
-  printf '%s\n' "$out" | grep -q 'GOMODCACHE would be cleaned' ||
+  grep -q 'GOMODCACHE would be cleaned' <<<"$out" ||
     fail 'ablation partner: an idle over-budget module cache was not selected for cleaning'
 
   # 13b. the same cache, now held open by a live process, must be KEPT.
@@ -404,9 +404,9 @@ if command -v go > /dev/null 2>&1; then
   sleep 1
   if kill -0 "$mod_holder_pid" 2>/dev/null; then
     out=$(GOMODCACHE_OVERRIDE="$mod_outside_root" run dry-run 3 0)
-    printf '%s\n' "$out" | grep -q 'GOMODCACHE would be cleaned' &&
+    grep -q 'GOMODCACHE would be cleaned' <<<"$out" &&
       fail 'a module cache held open by a live process was selected for cleaning'
-    printf '%s\n' "$out" | grep -qE '^build-cache-reclaim: GOMODCACHE .* in use' ||
+    grep -qE '^build-cache-reclaim: GOMODCACHE .* in use' <<<"$out" ||
       fail 'a module cache held open by a live process was not reported as in use'
 
     # ...and apply must leave it on disk, not merely log a keep.
