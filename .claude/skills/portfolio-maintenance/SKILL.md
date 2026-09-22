@@ -269,7 +269,8 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   head prefix and be read as a green.
   **Discriminate a command reply on SUBSTANCE, never on comment type:** a reply carrying no verdict
   line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a
-  review, as are a quota notice and a service shell; reject any artifact saying the review did not run.
+  review, as are a quota notice and a service shell; an artifact saying the review did not run is
+  never a green, but any finding it carries still counts as a non-thread review finding.
   Treat an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` as zero when the
   identical section repeats.
   🔴 **Corroborate with the head's `CodeRabbit` commit status, and read its `description`, not its
@@ -277,7 +278,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   disabled` (the default state of every head, since auto-review is disabled portfolio-wide), and —
   while `fail_commit_status: false` is in force — for a rate-limit refusal alike, so a state-only
   check reads every never-reviewed PR as green. A `description` beginning `Review completed`
-  evidences a run and corroborates the artifact rather than replacing it; `Review rate limited` (or
+  evidences only an attempt that ended, never a result, and corroborates the artifact rather than
+  replacing it — a summary carrying `## Review failed` beside it is a service failure (record
+  `cr:no-gate@<sha>` and advance the lane), never a finding or a green; `Review rate limited` (or
   another explicit not-run marker) defeats the green; and the disabled default, or **no status at
   all**, is an **uninformative status** that must NOT defeat it (monorepo#3015 — a head where
   CodeRabbit posted two real findings carries that same default, and some repos publish no
@@ -948,8 +951,8 @@ For each selected product:
    `<lane>/<area>-<desc>` — they go straight to a PR, so no claim window applies.) **Immediately
    before editing a worktree this session did not create**, atomically reserve it with
    `.claude/scripts/worktree-claim.sh acquire <wt> <session-owner-token>`. **Only exit 0 authorizes
-   editing; every non-zero status means stand down**, whether exit 3 (live foreign claim, ~2h expiry)
-   or an acquisition/validation failure. `check` is read-only diagnosis and does not reserve the tree. Renew a
+   editing; every non-zero status means stand down**, whether exit 3 (live foreign claim, ~2h expiry,
+   or a live process inside a worktree carrying no marker) or an acquisition/validation failure. `check` is read-only diagnosis and does not reserve the tree. Renew a
    long-running claim by calling `acquire` with the same owner at least hourly. Work **in that
    worktree**. A stray `core.worktree` makes the worktree
    resolve back into `.git/modules/<name>`, silently collapsing every parallel session into one
