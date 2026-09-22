@@ -1925,9 +1925,19 @@ is transient and reports only whatever CodeRabbit last wrote at that head:
 
 | `description` | class | effect on a green |
 |---|---|---|
-| `Review completed` | evidences a run | corroborates the artifact |
+| `Review completed` | evidences an attempt that **ended**, never a result | corroborates an artifact that exists; never outweighs one saying the review failed |
 | `Review rate limited`, or another explicit marker that the review did not run, **and not older than the satisfying artifact** | **not-run marker** | **defeats the green** |
 | `Review skipped: automatic reviews are disabled`; **no status at all**; `Review in progress` or any other value; **or a not-run marker the artifact POSTDATES** | **uninformative status** | **must NOT defeat the green** |
+
+🔴 **`Review completed` is published over an ERRORED review too — the artifact decides, never the
+status.** On monorepo#2727 at head `abb3f75b58` (2026-08-08), CodeRabbit rewrote its summary comment
+to `## Review failed` at 23:24:02Z and set the status to `success — Review completed` one second
+later. That head had no review object, no inline comment and no summary naming it. An auto-generated
+summary carrying `## Review failed` is a **service failure**: never a finding and never a green, so
+record `cr:no-gate@<sha>` and advance to the next lane. The status is also latest-wins and keeps no
+history: that same head later reverted to `Review skipped: automatic reviews are disabled`, so the
+status can corroborate only at the moment it is read, and a disabled-default reading never shows
+that no review was attempted.
 
 🔴 **The staleness binding in rows 2 and 3 is load-bearing — without it this rule introduces its own
 fail-closed.** Because the status reports the last event rather than this one, an `e94216b3`-style
@@ -2251,7 +2261,7 @@ result at the current head — self-promotion is forbidden before that. Request 
   identified reply survives after the status reverts to the disabled default. The status remains a
   secondary negative signal — `Review rate limited` is a quota refusal,
   `Review skipped: automatic reviews are disabled` is the never-reviewed default, and
-  `Review completed` says a run happened — but it never overrides the reply. If the reply or a
+  `Review completed` says only that an attempt ended — but it never overrides the reply. If the reply or a
   refusal status whose `updated_at` postdates that request marker records a refusal **that this round
   itself produced** — by the round-provenance test below, which is part of this instruction rather
   than a later refinement of it — do not post another trigger for that round: advance to Codex for
@@ -2377,7 +2387,8 @@ result at the current head — self-promotion is forbidden before that. Request 
   provider in the authenticated CodeRabbit-first restarted sequence also clears the earlier
   provider's resolved same-head findings; stop at that first success instead of requesting the
   original provider redundantly. When the provider reports only a
-  quota/app/service failure, or completes without a gate-satisfying artifact, there is no code issue
+  quota/app/service failure (for CodeRabbit, a summary carrying `## Review failed` is one), or
+  completes without a gate-satisfying artifact, there is no code issue
   to fix: advance to the next provider in order, still one at a time. This distinction permits
   rate/token optimization without weakening the requirement for one successful current-head review.
   Persist a completed no-gate outcome at the current head (`cr:no-gate@<sha>`,

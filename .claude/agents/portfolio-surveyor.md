@@ -822,10 +822,11 @@ public and private — no per-repo loop needed to enumerate):
      (monorepo#2819) and is followed by a blank line, so stripping the comment alone still leaves the
      body starting with a newline and an anchored match still fails. Both are part of the match rather
      than an allowance. The status stays a **required corroborator**
-     of run-completion **only while it is INFORMATIVE** — `Review completed` evidences a run;
-     `Review rate limited`, or another explicit marker that the review did not run, defeats the
-     green; and `Review skipped: automatic reviews are disabled` (the portfolio-wide default,
-     since auto-review is off everywhere) or **no CodeRabbit status at all** is an
+     **only while it is INFORMATIVE** — `Review completed` shows an ended attempt
+     (a `## Review failed` summary beside it is a service failure: `cr:no-gate`);
+     `Review rate limited`, or another explicit marker that no review ran, defeats the
+     green; and `Review skipped: automatic reviews are disabled` (the default) or
+     **no CodeRabbit status at all** is an
      **uninformative status** that must NOT defeat it. `state=success` accompanies every case, so
      the `description` is the discriminator, never the state.
      🔴 **Do not fail an uninformative status closed** (monorepo#3015): a head where CodeRabbit

@@ -665,6 +665,29 @@ assert_prose "${constitution}" 'Compose every review-request comment with' \
   "the constitution does not require the review-request composer, so bare triggers can return"
 assert_prose "${maintenance_skill}" 'compose it with `.claude/scripts/review-request-comment.sh`, never by hand' \
   "the run loop does not route review requests through the composer"
+# #2737: CodeRabbit published `success — Review completed` one second after its summary recorded
+# `## Review failed`, with no review object at the head. The status therefore proves only that an
+# attempt ended; the artifact decides, and an errored review advances the lane as a service failure.
+assert_absent "${constitution}" '| `Review completed` | evidences a run |' \
+  "the constitution still treats a 'Review completed' status as evidence that a review produced a result"
+assert_absent "${constitution}" '`Review completed` says a run happened' \
+  "the refusal read still says a 'Review completed' status means a review happened"
+assert_prose "${constitution}" '`Review completed` is published over an ERRORED review too — the artifact decides, never the status' \
+  "the constitution does not warn that 'Review completed' accompanies an errored review"
+assert_prose "${constitution}" 'An auto-generated summary carrying `## Review failed` is a **service failure**: never a finding and never a green, so record `cr:no-gate@<sha>` and advance to the next lane' \
+  "the constitution does not route an errored CodeRabbit review to cr:no-gate"
+assert_prose "${constitution}" 'for CodeRabbit, a summary carrying `## Review failed` is one' \
+  "the review loop does not list an errored CodeRabbit review among the lane-advancing service failures"
+assert_prose "${constitution}" 'latest-wins and keeps no history' \
+  "the constitution does not say the CodeRabbit status can only corroborate at the moment it is read"
+assert_absent "${surveyor}" '`Review completed` evidences a run;' \
+  "the surveyor still treats 'Review completed' as evidence of a review result"
+assert_prose "${surveyor}" 'a `## Review failed` summary beside it is a service failure: `cr:no-gate`' \
+  "the surveyor does not classify an errored CodeRabbit review as a service failure"
+assert_absent "${maintenance_skill}" 'beginning `Review completed` evidences a run' \
+  "the run loop still treats 'Review completed' as evidence of a review result"
+assert_prose "${maintenance_skill}" 'a summary carrying `## Review failed` beside it is a service failure' \
+  "the run loop does not classify an errored CodeRabbit review as a service failure"
 grep -Fq 'run: bash .claude/scripts/review-request-comment.test.sh' "${workflow}" ||
   fail "CI does not execute the review-request composer test"
 
