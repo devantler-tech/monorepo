@@ -928,6 +928,10 @@ For each selected product:
      <lane>/<area>-<desc>-<issue> <session-owner-token>
    ```
 
+   Run it from your session worktree with `<path>` and the relative worktree path resolved there —
+   never an absolute path into the shared checkout, which the session write guard cannot edit and
+   the helper refuses (contract *Execution model*, #2755).
+
    The `<session-owner-token>` is **unique to one runtime invocation** and stable only for renewals
    within that run: derive it as `<lane>-<trusted-runtime-run-or-thread-id>`. Never use a stable
    agent, schedule, or lane slug, because overlapping ticks would then impersonate the same owner.
