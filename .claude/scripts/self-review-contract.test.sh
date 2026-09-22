@@ -86,6 +86,14 @@ grep -Fq 'name the specific unreachable gate' "${constitution}" ||
   fail "a readiness comment on a provider-gated change need not name the gate it could not reach"
 grep -Fq 'stays a draft on that named blocker' "${constitution}" ||
   fail "a provider-gated change with no reaching check has no defined terminal state"
+# The observation half: phrases unique to that paragraph, so the external-PR section's similar
+# wording cannot keep these passing after the provider-gated requirement is removed.
+grep -Fq 'read a CI run that actually exercises the' "${constitution}" ||
+  fail "an unreachable runtime surface need not be observed by a CI run that exercises it"
+grep -Fq 'against the real provider, and record **which run** and **what it' "${constitution}" ||
+  fail "the readiness record need not identify the CI run and what it demonstrated"
+grep -Fq 'demonstrated**, at the current head' "${constitution}" ||
+  fail "the CI observation for a provider-gated change need not be at the current head"
 
 grep -Fq 'Self-review the' "${maintenance_skill}" ||
   fail "portfolio-maintenance run loop does not self-review the diff before requesting review"
