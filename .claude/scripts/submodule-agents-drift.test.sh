@@ -106,13 +106,13 @@ expect_rc() {
 # expect_line asserts the output has a line matching the given pattern.
 expect_line() {
   asserts=$(( asserts + 1 ))
-  printf '%s\n' "$OUT" | grep -qE "$2" || note_fail "$1: expected a line matching /$2/; output: $OUT"
+  grep -qE "$2" <<<"$OUT" || note_fail "$1: expected a line matching /$2/; output: $OUT"
 }
 
 # expect_no_line asserts the output has no line matching the given pattern.
 expect_no_line() {
   asserts=$(( asserts + 1 ))
-  if printf '%s\n' "$OUT" | grep -qE "$2"; then
+  if grep -qE "$2" <<<"$OUT"; then
     note_fail "$1: expected no line matching /$2/; output: $OUT"
   fi
 }

@@ -65,16 +65,16 @@ rung3_row="$(printf '%s\n' "${rows}" | grep -F '| **3** | **Bugs**')"
 [ -n "${rung2_row}" ] || fail "could not isolate the rung-2 row"
 [ -n "${rung3_row}" ] || fail "could not isolate the rung-3 row"
 
-printf '%s\n' "${rung2_row}" | grep -q 'type:Security' ||
+grep -q 'type:Security' <<<"${rung2_row}" ||
   fail "the rung-2 row no longer names type:Security, so assertion 1 would pass with no filter present at all"
-printf '%s\n' "${rung3_row}" | grep -q 'type:Bug' ||
+grep -q 'type:Bug' <<<"${rung3_row}" ||
   fail "the rung-3 row no longer names type:Bug, so assertion 1 would pass with no filter present at all"
 
 # ...and only its own. Without these, a row naming BOTH filters satisfies the two assertions above
 # while still pointing that rung at the wrong type.
-! printf '%s\n' "${rung2_row}" | grep -q 'type:Bug' ||
+! grep -q 'type:Bug' <<<"${rung2_row}" ||
   fail "the rung-2 (Security) row also names type:Bug — the rung filters are crossed"
-! printf '%s\n' "${rung3_row}" | grep -q 'type:Security' ||
+! grep -q 'type:Security' <<<"${rung3_row}" ||
   fail "the rung-3 (Bug) row also names type:Security — the rung filters are crossed"
 
 # 3. The warning that explains WHY must survive, with its measurement. Flattened, because the

@@ -192,7 +192,7 @@ for repo in "${repos[@]}"; do
         continue
       fi
       # Cleared only when the authoritative full-history read no longer names it.
-      if printf '%s\n' "$DRIFT_OUT" | grep -qF -- "issuecomment-$cid"; then
+      if grep -qF -- "issuecomment-$cid" <<<"$DRIFT_OUT"; then
         real_count=$((real_count + 1))
         real_lines+=("$url ($shape) $body")
       else

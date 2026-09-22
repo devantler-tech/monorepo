@@ -587,7 +587,7 @@ check_sources() {
       # Prose exclusion applies to INLINE candidates only. A fenced block is a
       # prescription, so it always reaches the guard however it is spelled.
       if [ "$origin" = inline ] \
-         && printf '%s\n' "$PROSE_FRAGMENTS" | grep -qxF -- "$cand"; then
+         && grep -qxF -- "$cand" <<<"$PROSE_FRAGMENTS"; then
         skipped=$((skipped+1)); continue
       fi
       checked=$((checked+1))
@@ -604,7 +604,7 @@ check_sources() {
         1:deny:*) : ;;
         *) die_unknown "guard returned status $guard_status for a prescribed command, so its verdict is unverifiable rather than a refusal: ${f#"$repo_root"/} :: $cand :: $reason" ;;
       esac
-      if printf '%s\n' "$CORPUS_REASONS" | grep -qxF -- "$reason"; then
+      if grep -qxF -- "$reason" <<<"$CORPUS_REASONS"; then
         classified=$((classified+1)); continue
       fi
       findings=$((findings+1))

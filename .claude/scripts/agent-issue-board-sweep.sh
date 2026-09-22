@@ -167,14 +167,14 @@ while IFS= read -r url; do
     # its `already-present (status set)` outcome, which is a real item-edit — and a backlog of
     # status-less cards is precisely what this sweep exists to repair, so that misread would let
     # the one case that matters bypass both the batch and the pacing.
-    if printf '%s' "$out" | grep -q 'already-present (status untouched)'; then
+    if grep -q 'already-present (status untouched)' <<<"$out"; then
       echo "agent-issue-board-sweep: already on the board ${url}"
     else
       mutated=$((mutated + 1))
       wrote_last=1
       echo "agent-issue-board-sweep: boarded ${url}"
     fi
-  elif printf '%s' "$out" | grep -q 'is PRIVATE; project 5 is public'; then
+  elif grep -q 'is PRIVATE; project 5 is public' <<<"$out"; then
     skipped=$((skipped + 1))
     echo "agent-issue-board-sweep: SKIPPED (private repository, a maintainer decision) ${url}"
   else

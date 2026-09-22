@@ -46,9 +46,9 @@ verify_regex_locale() {
   em=$(printf '\xe2\x80\x83')   # U+2003 EM SPACE, as bytes: source stays printable
   # 1. ASCII code-point ranges must COMPILE and match. Fails under a UTF-8
   #    collation locale, where the range endpoints are collation-ordered.
-  printf 'AZ.+_\n' | grep -qE -e '^[!-,.-`{-~ ]+$' 2>/dev/null || return 1
+  grep -qE -e '^[!-,.-`{-~ ]+$' <<<'AZ.+_' 2>/dev/null || return 1
   # 2. [[:space:]] must remain Unicode-aware. Fails under plain C.
-  printf 'a%sb\n' "$em" | grep -qE 'a[[:space:]]b' 2>/dev/null || return 2
+  grep -qE 'a[[:space:]]b' <<<"a${em}b" 2>/dev/null || return 2
   return 0
 }
 verify_regex_locale
@@ -4963,7 +4963,7 @@ EOF
         continue
       fi
       head_sha=$(gh api "repos/$r/commits/main" --jq '.sha' 2>/dev/null)
-      if ! printf '%s' "$head_sha" | grep -qE '^[0-9a-fA-F]{40}$'; then
+      if ! grep -qE '^[0-9a-fA-F]{40}$' <<<"$head_sha"; then
         printf '    %-42s %s\n' "$r" "UNKNOWN (head query failed)"
         REDS_UNKNOWN=1
         continue

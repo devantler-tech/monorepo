@@ -52,7 +52,8 @@ assert_section_prose() {
   ' "${file}")"; then
     fail "${message} (section delimiter missing)"
   fi
-  printf '%s\n' "${section}" | tr '\n' ' ' | tr -s '[:space:]' ' ' | grep -Fq -- "${phrase}" ||
+  flattened="$(printf '%s\n' "${section}" | tr '\n' ' ' | tr -s '[:space:]' ' ')"
+  grep -Fq -- "${phrase}" <<<"${flattened}" ||
     fail "${message}"
 }
 
