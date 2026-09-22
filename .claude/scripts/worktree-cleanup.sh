@@ -98,6 +98,133 @@ TOPLEVEL=$(git -C "$REPO_PATH" rev-parse --show-toplevel 2>/dev/null) \
 TOPLEVEL=$(cd "$TOPLEVEL" && pwd -P) || die "cannot resolve toplevel"
 WT_ROOT="$TOPLEVEL/.claude/worktrees"
 
+# --- squash-merge evidence (#2678) ---------------------------------------------------
+# The portfolio squash-merges and deletes the merged branch, so a merged branch's own
+# commits are never ancestors of main and, once the remote branch is pruned, sit on no
+# remote ref at all. The graph test alone therefore keeps every such worktree forever.
+# The commit graph cannot answer "is this merged"; only PR state can (the same rule
+# branch-cleanup.sh follows). A branch counts as spent only when GitHub records a
+# MERGED or CLOSED PR for it whose head is exactly this worktree's HEAD, and no PR for
+# it is still OPEN. GitHub keeps that head under refs/pull/<n>/head, and this script
+# writes refs/reaped/<sha> before any removal, so the commits stay recoverable.
+#
+# The repository is derived from origin and must be devantler-tech on github.com;
+# anything else yields no evidence (KEEP) without a query.
+GH_REPO=""
+origin_url=$(git -C "$TOPLEVEL" remote get-url origin 2>/dev/null || true)
+gh_repo_name=""
+case "$origin_url" in
+  https://github.com/devantler-tech/*)       gh_repo_name=${origin_url#https://github.com/devantler-tech/} ;;
+  git@github.com:devantler-tech/*)           gh_repo_name=${origin_url#git@github.com:devantler-tech/} ;;
+  ssh://git@github.com/devantler-tech/*)     gh_repo_name=${origin_url#ssh://git@github.com/devantler-tech/} ;;
+esac
+gh_repo_name=${gh_repo_name%.git}
+case "$gh_repo_name" in
+  ''|*[!A-Za-z0-9._-]*) ;;
+  *) GH_REPO="devantler-tech/$gh_repo_name" ;;
+esac
+
+# The scheduled sweep runs under launchd, whose default PATH (/usr/bin:/bin:/usr/sbin:/sbin)
+# holds no Homebrew directory. Without this fallback every query would fail and the
+# evidence gate would silently keep everything, exactly as before the fix.
+GH_BIN=$(command -v gh 2>/dev/null || true)
+if [ -z "$GH_BIN" ]; then
+  for gh_candidate in /opt/homebrew/bin/gh /usr/local/bin/gh; do
+    if [ -x "$gh_candidate" ]; then GH_BIN=$gh_candidate; break; fi
+  done
+fi
+
+# A stalled API call must not stall the sweep: launchd starts no second copy while one
+# runs, so a hung query would block every later sweep. It gets a wall-clock deadline, and a
+# query that outlives it fails like any other failed query, so the worktree is KEPT.
+GH_DEADLINE_S=${WORKTREE_CLEANUP_GH_DEADLINE:-60}
+case "$GH_DEADLINE_S" in ''|*[!0-9]*|0) GH_DEADLINE_S=60 ;; esac
+
+# gh_bounded <gh args...> — gh with a deadline; prints its stdout, returns its status or 124.
+gh_bounded() {
+  local tmp pid rc ticks=0
+  tmp=$(mktemp "${TMPDIR:-/tmp}/worktree-cleanup-gh.XXXXXX") || return 2
+  "$GH_BIN" "$@" >"$tmp" 2>/dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$ticks" -ge $((GH_DEADLINE_S * 5)) ]; then
+      kill -TERM "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      rm -f "$tmp"
+      return 124
+    fi
+    sleep 0.2
+    ticks=$((ticks + 1))
+  done
+  wait "$pid"
+  rc=$?
+  cat "$tmp"
+  rm -f "$tmp"
+  return "$rc"
+}
+
+# still_the_reviewed_worktree <wt> <branch> <sha> <merged_head> — re-read under the mutex.
+# Nothing locks the branch, HEAD or the remote PR: a checkout can move the worktree to
+# another branch at the same SHA, and a PR can reopen after the first query. Returns 0
+# only when every fact the removal decision rested on still holds; otherwise sets
+# IDENTITY_NOTE and returns 1.
+IDENTITY_NOTE=""
+still_the_reviewed_worktree() {
+  local wt=$1 branch=$2 sha=$3 merged=$4 now branch_now
+  IDENTITY_NOTE=""
+  now=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || { IDENTITY_NOTE="cannot re-read HEAD before removal"; return 1; }
+  if [ "$now" != "$sha" ]; then IDENTITY_NOTE="HEAD moved during the sweep ($sha -> $now)"; return 1; fi
+  branch_now=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached)")
+  if [ "$branch_now" != "$branch" ]; then IDENTITY_NOTE="branch changed during the sweep ($branch -> $branch_now)"; return 1; fi
+  if [ -n "$merged" ]; then
+    pr_proves_spent "$branch" "$sha"
+    case $? in
+      0) ;;
+      2) IDENTITY_NOTE="PR evidence could not be re-verified before removal ($PR_EVIDENCE_NOTE)"; return 1 ;;
+      *) IDENTITY_NOTE="PR evidence no longer holds before removal (open PR or head moved)"; return 1 ;;
+    esac
+  fi
+  return 0
+}
+
+# pr_proves_spent <branch> <sha> — exit 0 only on positive evidence; 1 when there is
+# none; 2 when the query failed (PR_EVIDENCE_NOTE says why). Never reaps on doubt.
+PR_EVIDENCE_NOTE=""
+pr_proves_spent() {
+  local branch=$1 sha=$2 open rows rc state head proven=1
+  PR_EVIDENCE_NOTE=""
+  [ -n "$GH_REPO" ] || return 1
+  if [ -z "$GH_BIN" ]; then PR_EVIDENCE_NOTE="PR evidence unavailable: gh not found"; return 2; fi
+  case "$branch" in ''|'(detached)') return 1 ;; esac
+  # OPEN is asked on its own: the history query below is capped, so an OPEN pull request
+  # older than its last 100 rows would be missed there while a MERGED row proved the head.
+  open=$(gh_bounded pr list --repo "$GH_REPO" --state open --head "$branch" --limit 1 \
+         --json number --jq length)
+  rc=$?
+  if [ "$rc" -ne 0 ] || ! [[ "$open" =~ ^[0-9]+$ ]]; then
+    PR_EVIDENCE_NOTE="PR evidence unavailable"
+    [ "$rc" -eq 124 ] && PR_EVIDENCE_NOTE="PR evidence unavailable: query exceeded ${GH_DEADLINE_S}s"
+    return 2
+  fi
+  [ "$open" -eq 0 ] || return 1
+  rows=$(gh_bounded pr list --repo "$GH_REPO" --state all --head "$branch" --limit 100 \
+         --json state,headRefOid --jq '.[] | "\(.state)\t\(.headRefOid)"')
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    PR_EVIDENCE_NOTE="PR evidence unavailable"
+    [ "$rc" -eq 124 ] && PR_EVIDENCE_NOTE="PR evidence unavailable: query exceeded ${GH_DEADLINE_S}s"
+    return 2
+  fi
+  while IFS=$'\t' read -r state head; do
+    [ -n "$state" ] || continue
+    case "$state" in
+      OPEN) return 1 ;;
+      MERGED|CLOSED) [ "$head" = "$sha" ] && proven=0 ;;
+    esac
+  done <<< "$rows"
+  return "$proven"
+}
+
 if [ ! -d "$WT_ROOT" ]; then
   # Still prune. A repository whose worktree directories (and .claude/worktrees itself)
   # are already gone can retain STALE registrations, and those keep pinning their
@@ -544,8 +671,15 @@ while IFS= read -r wt <&3; do
   if [ -z "$unpushed" ]; then
     keep "$wt" "cannot determine push state"; continue      # fail closed
   fi
+  # A squash-merged branch reads as unpushed forever; accept it only on PR evidence.
+  merged_head=""
   if [ "$unpushed" -gt 0 ]; then
-    keep "$wt" "$unpushed unpushed commit(s) on $branch"; continue
+    pr_proves_spent "$branch" "$sha"; pr_rc=$?
+    if [ "$pr_rc" -ne 0 ]; then
+      note=""; [ -n "$PR_EVIDENCE_NOTE" ] && note=" ($PR_EVIDENCE_NOTE)"
+      keep "$wt" "$unpushed unpushed commit(s) on $branch$note"; continue
+    fi
+    merged_head=$sha
   fi
 
   # KEEP: real working-tree changes. Submodule gitlinks and known tool-noise dirs are
@@ -610,7 +744,10 @@ while IFS= read -r wt <&3; do
   # that commit's only reference would go with it.
   reflog_shas=$(git -C "$wt" reflog show --format=%H HEAD 2>/dev/null); reflog_rc=$?
   if [ "$reflog_rc" -eq 0 ] && [ -n "$reflog_shas" ]; then
-    orphaned=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog_shas --not --remotes 2>/dev/null | head -1)
+    # On a proven squash-merged branch, ancestors of the PR head are accounted for too;
+    # a commit reset away from that history is not, and still keeps the worktree.
+    # shellcheck disable=SC2086  # merged_head is empty or one sha
+    orphaned=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog_shas --not --remotes $merged_head 2>/dev/null | head -1)
     if [ -n "$orphaned" ]; then
       keep "$wt" "HEAD reflog holds commit(s) reachable from nowhere else (${orphaned:0:12})"
       continue
@@ -645,7 +782,11 @@ while IFS= read -r wt <&3; do
   # the ledger is unwritable, so every subsequent removal would be unrecorded too.
   # Aborting (rather than keeping and carrying on) is what stops the wrapper reporting
   # a healthy sweep — which matters most under the disk pressure this tool exists for.
-  if ! record "$wt_real" "$branch" "$sha" "reachable-from-remote;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
+  # A squash-merged reap is NOT reachable from any remote; its commits survive only in the
+  # PR head ref, so the ledger must say which of the two made the removal safe.
+  reach_evidence="reachable-from-remote"
+  [ -n "$merged_head" ] && reach_evidence="merged-pr-head"
+  if ! record "$wt_real" "$branch" "$sha" "$reach_evidence;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
     die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"
   fi
   # Containment assertion before ANY recursive delete. $wt_real is derived from a glob
@@ -676,12 +817,10 @@ while IFS= read -r wt <&3; do
   # worktree, so the liveness gate does not see it) leaves the working tree clean while
   # $sha still names the OLD commit — preserving that and deleting the worktree would
   # discard the new one.
-  sha_now=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || {
+  # The branch and the PR evidence are re-verified here too, under the mutex.
+  if ! still_the_reviewed_worktree "$wt" "$branch" "$sha" "$merged_head"; then
     worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
-    keep "$wt" "cannot re-read HEAD before removal"; continue; }
-  if [ "$sha_now" != "$sha" ]; then
-    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
-    keep "$wt" "HEAD moved during the sweep ($sha -> $sha_now)"; continue
+    keep "$wt" "$IDENTITY_NOTE"; continue
   fi
 
   if ! git -C "$TOPLEVEL" update-ref "refs/reaped/$sha" "$sha" 2>/dev/null; then
@@ -709,6 +848,9 @@ while IFS= read -r wt <&3; do
   elif ! recheck_mutable_gates "$wt" "$wt_real"; then
     worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     continue    # legitimately KEPT and already reported by the gate
+  elif ! still_the_reviewed_worktree "$wt" "$branch" "$sha" "$merged_head"; then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+    keep "$wt" "$IDENTITY_NOTE"; continue
   elif rm -rf "$wt_real" && [ ! -e "$wt_real" ]; then
     worktree_claim_lock_release || die "REMOVED $wt_real but could not release its ownership mutex"
     git -C "$TOPLEVEL" worktree prune 2>/dev/null \

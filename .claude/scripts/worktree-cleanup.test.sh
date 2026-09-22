@@ -899,6 +899,240 @@ t_rejects_bad_mode() {
   rm -rf "$root"
 }
 
+# --- squash-merged branches (#2678) ------------------------------------------------
+# Under squash-merge a merged branch's own commits are never ancestors of main, and the
+# remote branch is deleted after merge, so the graph test reports them "unpushed"
+# forever. Only a MERGED/CLOSED PR whose recorded head equals the worktree's HEAD proves
+# they are redundant. These fixtures point origin at a GitHub-shaped URL AFTER pushing
+# (the script never talks to the network) and shim `gh` to return canned PR evidence.
+
+# add_merged_wt <root> <name> — a branch that was pushed, then had its remote branch
+# deleted and pruned, exactly as a squash-merged PR branch looks locally.
+add_merged_wt() {
+  local root=$1 name=$2
+  add_wt "$root" "$name" unpushed || return 1
+  local wt="$root/repo/.claude/worktrees/$name"
+  git -C "$wt" push -q origin "claude/$name" || return 1
+  git -C "$wt" push -q origin --delete "claude/$name" || return 1
+  touch -t 202001010000 "$wt"
+}
+
+# gh_shim <root> — an OPEN-only query prints the Nth line of $root/gh-open for its Nth call
+# (a count; "0" when absent), so a PR can reopen between two queries. Otherwise `gh` prints $root/gh-out (TSV state<TAB>headRefOid per line), or
+# fails when $root/gh-fail exists. Every invocation's argv is appended to $root/gh-args.
+gh_shim() {
+  local root=$1 shim="$1/ghshim"; mkdir -p "$shim"
+  cat > "$shim/gh" <<SHIM
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$root/gh-args"
+[ -e "$root/gh-fail" ] && { echo "HTTP 502" >&2; exit 1; }
+[ -e "$root/gh-hang" ] && sleep 30
+case "\$*" in
+  *"--state open"*)
+    n=\$(( \$(cat "$root/gh-open-calls" 2>/dev/null || echo 0) + 1 ))
+    echo "\$n" > "$root/gh-open-calls"
+    line=\$(sed -n "\${n}p" "$root/gh-open" 2>/dev/null)
+    echo "\${line:-0}"; exit 0 ;;
+esac
+[ -e "$root/gh-out" ] && cat "$root/gh-out"
+exit 0
+SHIM
+  chmod +x "$shim/gh" || return 1
+  printf '%s' "$shim"
+}
+
+github_origin() { git -C "$1/repo" remote set-url origin https://github.com/devantler-tech/fixture.git; }
+
+run_gh() { # <root> <shim> -> stdout
+  PATH="$2:$PATH" "$SUT" "$1/repo" "$1/manifest.tsv" dry-run 24 2>&1
+}
+
+t_reaps_squash_merged_worktree() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" merged || { bad "reaps a squash-merged worktree" "FIXTURE"; rm -rf "$root"; return; }
+  add_wt "$root" work unpushed
+  # add_wt commits identical content in the same second, so without a distinct commit
+  # `work` would share `merged`'s SHA and inherit its evidence.
+  echo distinct > "$root/repo/.claude/worktrees/work/distinct.txt"
+  git -C "$root/repo/.claude/worktrees/work" add distinct.txt
+  git -C "$root/repo/.claude/worktrees/work" commit -qm distinct
+  touch -t 202001010000 "$root/repo/.claude/worktrees/work"
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/merged" rev-parse HEAD)
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q '^REAP  .*merged' <<<"$out" \
+     && grep -q 'KEEP .*work ' <<<"$out" \
+     && grep -q -- '--repo devantler-tech/fixture .*--head claude/merged' "$root/gh-args"; then
+    ok "reaps a squash-merged worktree whose PR head equals HEAD"
+  else
+    bad "reaps a squash-merged worktree whose PR head equals HEAD" "$out // $(cat "$root/gh-args" 2>/dev/null)"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_merged_branch_when_pr_head_differs() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" moved || { bad "keeps on PR head mismatch" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  printf 'MERGED\t%s\n' 0123456789abcdef0123456789abcdef01234567 > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*moved .*unpushed commit' <<<"$out"; then
+    ok "KEEPs a merged branch whose current HEAD is not the PR's recorded head"
+  else
+    bad "KEEPs a merged branch whose current HEAD is not the PR's recorded head" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_branch_with_open_pr() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" live || { bad "keeps with open PR" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/live" rev-parse HEAD)
+  printf 'OPEN\t%s\nCLOSED\t%s\n' "$sha" "$sha" > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*live .*unpushed commit' <<<"$out"; then
+    ok "KEEPs a branch that still has an OPEN PR"
+  else
+    bad "KEEPs a branch that still has an OPEN PR" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_when_pr_query_fails() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" blind || { bad "keeps on gh failure" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/blind" rev-parse HEAD)
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"; : > "$root/gh-fail"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*blind .*unpushed commit.*PR evidence unavailable' <<<"$out"; then
+    ok "KEEPs (fail closed) when the PR query fails"
+  else
+    bad "KEEPs (fail closed) when the PR query fails" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_when_pr_query_hangs() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" stalled || { bad "keeps on a hung PR query" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/stalled" rev-parse HEAD)
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"; : > "$root/gh-hang"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local start out elapsed
+  start=$(date +%s)
+  out=$(WORKTREE_CLEANUP_GH_DEADLINE=1 run_gh "$root" "$shim")
+  elapsed=$(( $(date +%s) - start ))
+  if grep -q 'KEEP .*stalled .*PR evidence unavailable: query exceeded 1s' <<<"$out" \
+     && [ "$elapsed" -lt 20 ]; then
+    ok "KEEPs (fail closed) when the PR query outlives its deadline"
+  else
+    bad "KEEPs (fail closed) when the PR query outlives its deadline" "elapsed=${elapsed}s $out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_branch_whose_open_pr_is_beyond_history() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" crowded || { bad "keeps an open PR beyond history" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/crowded" rev-parse HEAD)
+  # History shows only the MERGED row (an older OPEN PR fell past its cap); the OPEN
+  # query still sees one.
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"; echo 1 > "$root/gh-open"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*crowded .*unpushed commit' <<<"$out"; then
+    ok "KEEPs a branch whose OPEN PR the capped history query would miss"
+  else
+    bad "KEEPs a branch whose OPEN PR the capped history query would miss" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_when_pr_reopens_before_removal() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" reopened || { bad "keeps on PR reopen before removal" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/reopened" rev-parse HEAD)
+  # First OPEN query: none. The re-check under the mutex: one — the PR reopened.
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"; printf '0\n1\n' > "$root/gh-open"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1)
+  if [ -d "$root/repo/.claude/worktrees/reopened" ]  && grep -q 'KEEP .*reopened .*PR evidence no longer holds' <<<"$out"; then
+    ok "KEEPs a worktree whose PR reopened between the evidence query and removal"
+  else
+    bad "KEEPs a worktree whose PR reopened between the evidence query and removal" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_records_merged_pr_head_evidence() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" landed || { bad "records merged-pr-head evidence" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/landed" rev-parse HEAD)
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1)
+  local row; row=$(grep -F "$sha" "$root/manifest.tsv" 2>/dev/null)
+  if [ ! -e "$root/repo/.claude/worktrees/landed" ] \
+     && grep -q 'merged-pr-head;no-live-process' <<<"$row" \
+     && ! grep -q 'reachable-from-remote' <<<"$row"; then
+    ok "records a squash-merged reap as merged-pr-head, not reachable-from-remote"
+  else
+    bad "records a squash-merged reap as merged-pr-head, not reachable-from-remote" "row=$row // $out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_merged_branch_on_non_github_origin() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" local || { bad "keeps on non-GitHub origin" "FIXTURE"; rm -rf "$root"; return; }
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/local" rev-parse HEAD)
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*local .*unpushed commit' <<<"$out" && [ ! -e "$root/gh-args" ]; then
+    ok "KEEPs, without querying, when origin is not a devantler-tech GitHub repo"
+  else
+    bad "KEEPs, without querying, when origin is not a devantler-tech GitHub repo" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_merged_branch_with_orphaned_reflog_commit() {
+  local root; root=$(make_repo)
+  add_wt "$root" rewound unpushed || { bad "keeps merged+orphan reflog" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/rewound"
+  # A commit that is then reset away: it lives only in this worktree's reflog.
+  echo lost > "$wt/lost.txt"; git -C "$wt" add lost.txt; git -C "$wt" commit -qm lost
+  git -C "$wt" reset -q --hard HEAD~1
+  # Both pushes are the fixture: without them the branch was never pushed-then-deleted, and
+  # an earlier gate could produce the expected KEEP on its own.
+  if ! { git -C "$wt" push -q origin claude/rewound && git -C "$wt" push -q origin --delete claude/rewound; }; then
+    bad "keeps merged+orphan reflog" "FIXTURE: push-then-delete failed"; rm -rf "$root"; return
+  fi
+  touch -t 202001010000 "$wt"
+  github_origin "$root"
+  printf 'MERGED\t%s\n' "$(git -C "$wt" rev-parse HEAD)" > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*rewound .*HEAD reflog holds commit' <<<"$out"; then
+    ok "KEEPs a merged branch whose reflog holds a commit outside the PR"
+  else
+    bad "KEEPs a merged branch whose reflog holds a commit outside the PR" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -933,5 +1167,15 @@ t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode
+t_reaps_squash_merged_worktree
+t_keeps_merged_branch_when_pr_head_differs
+t_keeps_branch_with_open_pr
+t_keeps_when_pr_query_fails
+t_keeps_when_pr_query_hangs
+t_records_merged_pr_head_evidence
+t_keeps_branch_whose_open_pr_is_beyond_history
+t_keeps_when_pr_reopens_before_removal
+t_keeps_merged_branch_on_non_github_origin
+t_keeps_merged_branch_with_orphaned_reflog_commit
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
