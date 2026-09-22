@@ -92,6 +92,14 @@ expect "clean round minus the CodeRabbit lane" 1 "NONE missing-lane:CodeRabbit" 
 edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 2 findings (P0: 0, P1: 2)")' "${tmp}/findings.json"
 expect "clean round reporting findings" 1 "FINDINGS 2" "${green_head}" "${tmp}/findings.json"
 
+# Nits alone do not block: only P0/P1 count. A count without that breakdown blocks.
+edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 3 findings (P0: 0, P1: 0)")' "${tmp}/nits-only.json"
+expect "clean round reporting only nits" 0 "GREEN self@${green_head}" "${green_head}" "${tmp}/nits-only.json"
+edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 2 findings")' "${tmp}/no-breakdown.json"
+expect "finding count with no P0/P1 breakdown" 1 "FINDINGS 2" "${green_head}" "${tmp}/no-breakdown.json"
+edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 0 findings")' "${tmp}/zero-count.json"
+expect "an explicit zero count" 0 "GREEN self@${green_head}" "${green_head}" "${tmp}/zero-count.json"
+
 edit_green 'gsub("(?m)^Verdict: no P0/P1 findings$"; "")' "${tmp}/no-verdict.json"
 expect "clean round minus its verdict" 1 "NONE no-verdict" "${green_head}" "${tmp}/no-verdict.json"
 
