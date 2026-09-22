@@ -1020,6 +1020,25 @@ exemption_sites="$(grep -o '[^[:space:]"`'"'"']*programmed-bot-review-exemption\
 grep -Fq '| <repo-root>/.claude/scripts/programmed-bot-review-exemption.sh --input -' "${surveyor_agent}" ||
   fail "surveyor overlay does not prescribe the forge-first stdin call to the exemption classifier"
 
+# The unresolved-thread counter is declared too (monorepo#2670): a hand count of GraphQL pages
+# once read an open Major thread as zero. Run the overlay's OWN documented pipeline through the
+# hook, placeholders filled, so the prescription and the guard cannot drift apart.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+threads_command="$(grep -o '`gh api graphql --paginate [^`]*pr-unresolved-threads\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${threads_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded pr-unresolved-threads.sh pipeline (monorepo#2670)"
+threads_command="${threads_command//<repo-root>/${repo_root}}"
+threads_command="${threads_command//<repo>/monorepo}"
+threads_command="${threads_command//<n>/2436}"
+threads_payload="$(jq -nc --arg cmd "${threads_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${threads_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's unresolved-thread pipeline (monorepo#2670)"
+threads_sites="$(grep -o '[^[:space:]"`'"'"']*pr-unresolved-threads\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/pr-unresolved-threads.sh' || true)"
+[ -z "${threads_sites}" ] ||
+  fail "surveyor overlay calls pr-unresolved-threads.sh by a form the guard refuses: ${threads_sites}"
+
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
 # shellcheck disable=SC2016  # fixture must inspect its own child environment

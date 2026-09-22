@@ -87,6 +87,54 @@ expect "103 threads across two pages" "${tool}" paginated 1 "unresolved=1 total=
 expect "failed read is UNKNOWN, not zero" "${tool}" failed 2 "UNKNOWN read-failed"
 expect "missing pull request is UNKNOWN" "${tool}" malformed 2 "UNKNOWN malformed"
 
+# The stdin form (`--input -`) counts pages another process read — the surveyor's guarded shape.
+# It must reach the same verdicts, and a first-page-only or empty input must stay UNKNOWN.
+expect_stdin() { # expect_stdin <label> <stdin-file> <want-rc> <want-line>
+  local label="$1" input="$2" want_rc="$3" want="$4" got rc
+  checks=$((checks + 1))
+  set +e
+  got="$(PATH="${tmp}/bin:${PATH}" bash "${tool}" --input - <"${input}" 2>/dev/null)"
+  rc=$?
+  set -e
+  if [ "${rc}" = "${want_rc}" ] && [ "${got}" = "${want}" ]; then
+    echo "ok   stdin: ${label}"
+  else
+    echo "FAIL stdin: ${label}: want rc=${want_rc} '${want}', got rc=${rc} '${got}'" >&2
+    failures=$((failures + 1))
+  fi
+}
+for s in zero unresolved paginated malformed; do cat "${tmp}/pages/${s}"/page-* >"${tmp}/stdin-${s}"; done
+cp "${tmp}/pages/paginated/page-1" "${tmp}/stdin-first-page"
+: >"${tmp}/stdin-empty"
+expect_stdin "zero-thread PR" "${tmp}/stdin-zero" 0 "unresolved=0 total=0"
+expect_stdin "unresolved-thread PR" "${tmp}/stdin-unresolved" 1 "unresolved=1 total=1"
+expect_stdin "103 threads across two pages" "${tmp}/stdin-paginated" 1 "unresolved=1 total=103"
+expect_stdin "a caller that did not paginate is truncation" "${tmp}/stdin-first-page" 2 "UNKNOWN truncated fetched=100 total=103"
+expect_stdin "empty input (a failed gh behind a pipe) is UNKNOWN" "${tmp}/stdin-empty" 2 "UNKNOWN read-failed"
+expect_stdin "missing pull request is UNKNOWN" "${tmp}/stdin-malformed" 2 "UNKNOWN malformed"
+# The stdin form must never fetch on its own: with a gh that would answer, stdin still decides.
+checks=$((checks + 1))
+set +e
+got="$(STUB_PAGES="${tmp}/pages/zero" PATH="${tmp}/bin:${PATH}" bash "${tool}" --input - <"${tmp}/stdin-unresolved" 2>/dev/null)"
+set -e
+if [ "${got}" = "unresolved=1 total=1" ]; then echo "ok   stdin: the input decides, not a fetch"; else
+  echo "FAIL stdin: expected the stdin count, got '${got}'" >&2
+  failures=$((failures + 1))
+fi
+# Ablation: without the truncation check the first-page-only input reads as the dangerous zero.
+# shellcheck disable=SC2016 # a literal pattern for sed, not a shell expansion
+sed 's/"\${fetched}" != "\${total}"/"x" = "y"/' "${tool}" >"${tmp}/stdin-no-guard.sh"
+checks=$((checks + 1))
+set +e
+got="$(bash "${tmp}/stdin-no-guard.sh" --input - <"${tmp}/stdin-first-page" 2>/dev/null)"
+set -e
+if [ "${got}" = "unresolved=0 total=103" ]; then
+  echo "ok   ablation: stdin without the truncation check reads a partial input as zero"
+else
+  echo "FAIL ablation: stdin no-guard copy printed '${got}'" >&2
+  failures=$((failures + 1))
+fi
+
 # Ablation 1: without --paginate the helper sees 100 of 103 — the truncation check must catch it
 # rather than report the first page's zero.
 sed 's/ --paginate//' "${tool}" >"${tmp}/no-paginate.sh"
@@ -111,7 +159,7 @@ else
 fi
 
 # Usage errors are UNKNOWN too.
-for args in "devantler-tech/monorepo" "monorepo 12" "devantler-tech/monorepo 0" "devantler-tech/monorepo 1x"; do
+for args in "devantler-tech/monorepo" "monorepo 12" "devantler-tech/monorepo 0" "devantler-tech/monorepo 1x" "--input /etc/hosts" "--input - extra"; do
   checks=$((checks + 1))
   set +e
   # shellcheck disable=SC2086 # word-splitting the canned argument list is the point

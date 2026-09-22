@@ -90,7 +90,7 @@ verify_asset "${adapter_relative}"
 # surveyor's environment widen the read-only allowlist to a program of its
 # choosing, which is exactly the bypass the SCOPE and GUARD pins above close.
 #
-# Two programs are declared, and both are READS. pr-ownership-disclosure.sh
+# Three programs are declared, and all are READS. pr-ownership-disclosure.sh
 # classifies a `devantler` PR body as the maintainer's interactive work or the
 # routine's own output. Without a route for it the surveyor falls back to
 # hand-deriving that verdict, and that substitution has already misread live
@@ -100,6 +100,10 @@ verify_asset "${adapter_relative}"
 # exempt from review; undeclared, every such PR reached the orchestrator as
 # QUERY-UNKNOWN and sat green and unmerged (monorepo#3123, monorepo#3139). It
 # reads its payload from stdin and one reviewed allowlist file, nothing else.
+# pr-unresolved-threads.sh counts a PR's unresolved review threads from the
+# paginated GraphQL pages on stdin, and says UNKNOWN for a failed, empty or
+# partial read. Undeclared, the surveyor counted pages by hand, and a hand count
+# once read an open Major thread as zero (monorepo#2670).
 #
 # Absence fails CLOSED, consistently with DESIRED_STATE above: a checkout that
 # cannot present its own reviewed files does not get a survey. Exiting 0 with
@@ -108,7 +112,8 @@ verify_asset "${adapter_relative}"
 consumer_classifiers=''
 for consumer_classifier in \
   "${REPO_ROOT}/.claude/scripts/pr-ownership-disclosure.sh" \
-  "${REPO_ROOT}/.claude/scripts/programmed-bot-review-exemption.sh"; do
+  "${REPO_ROOT}/.claude/scripts/programmed-bot-review-exemption.sh" \
+  "${REPO_ROOT}/.claude/scripts/pr-unresolved-threads.sh"; do
   if [ ! -f "${consumer_classifier}" ] ||
     [ ! -x "${consumer_classifier}" ] ||
     [ -L "${consumer_classifier}" ]; then

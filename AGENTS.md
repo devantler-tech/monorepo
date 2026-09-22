@@ -2869,9 +2869,10 @@ fetched=${threads%% *}; rest=${threads#* }; total=${rest%% *}; unresolved=${rest
 **Prefer the tested helper that implements exactly this read:**
 [`pr-unresolved-threads.sh devantler-tech/<repo> <n>`](.claude/scripts/pr-unresolved-threads.sh)
 prints `unresolved=<n> total=<t>` (exit 0 for zero, 1 otherwise) only on a complete read, and
-`UNKNOWN …` with exit 2 on a failed, partial or malformed one — never a zero (monorepo#2670). It is
-for the run's own merge preflight; the read-only surveyor cannot execute repository scripts, so its
-field (b) keeps the inline query until the helper ships inside the plugin.
+`UNKNOWN …` with exit 2 on a failed, partial or malformed one — never a zero (monorepo#2670). The
+run's merge preflight calls it directly. The read-only surveyor pipes the same query into
+`pr-unresolved-threads.sh --input -`, a classifier its guard admits by declaration, so the survey's
+field (b) and the preflight produce the same count.
 
 **That must read `0` immediately before the merge — not once, earlier, from the survey.** The survey
 pentad does carry unresolved threads, but it is a **snapshot taken earlier in the run**, and this

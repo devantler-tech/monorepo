@@ -12,9 +12,15 @@
 #
 # USAGE
 #   pr-unresolved-threads.sh <owner>/<repo> <pr-number>
+#   gh api graphql --paginate … | pr-unresolved-threads.sh --input -
 #
 #   Counts every thread whatever its author and whether or not it is outdated: an outdated
 #   thread still blocks `required_review_thread_resolution`.
+#
+#   The stdin form counts pages another process already read, and is the only shape the
+#   read-only surveyor guard admits for a consumer classifier (monorepo#2670). The pages must
+#   come from the query below with `--paginate`. Nothing on stdin — which is what a failed `gh`
+#   leaves behind a pipe with no pipefail — is UNKNOWN, never zero.
 #
 # OUTPUT (one line on stdout)
 #   unresolved=<n> total=<t>
@@ -27,20 +33,25 @@
 set -euo pipefail
 
 usage() {
-  sed -n '14,27p' "$0" >&2
+  sed -n '14,32p' "$0" >&2
   exit 2
 }
 
 [ "$#" -eq 2 ] || usage
-repo="$1"
-pr="$2"
-grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' <<<"${repo}" || usage
-grep -Eq '^[1-9][0-9]*$' <<<"${pr}" || usage
-owner="${repo%%/*}"
-name="${repo#*/}"
 
-# shellcheck disable=SC2016 # GraphQL variables, not shell expansions
-query='
+if [ "$1" = "--input" ]; then
+  [ "$2" = "-" ] || usage
+  pages="$(cat)"
+else
+  repo="$1"
+  pr="$2"
+  grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' <<<"${repo}" || usage
+  grep -Eq '^[1-9][0-9]*$' <<<"${pr}" || usage
+  owner="${repo%%/*}"
+  name="${repo#*/}"
+
+  # shellcheck disable=SC2016 # GraphQL variables, not shell expansions
+  query='
 query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$number){
@@ -50,11 +61,12 @@ query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
         pageInfo{hasNextPage endCursor}
       }}}}'
 
-# Capture before parsing: piped straight into jq, a failed read yields an empty stream that
-# `jq -s` turns into a zero.
-if ! pages="$(gh api graphql --paginate -f owner="${owner}" -f name="${name}" -F number="${pr}" -f query="${query}" 2>/dev/null)"; then
-  echo "UNKNOWN read-failed"
-  exit 2
+  # Capture before parsing: piped straight into jq, a failed read yields an empty stream that
+  # `jq -s` turns into a zero.
+  if ! pages="$(gh api graphql --paginate -f owner="${owner}" -f name="${name}" -F number="${pr}" -f query="${query}" 2>/dev/null)"; then
+    echo "UNKNOWN read-failed"
+    exit 2
+  fi
 fi
 [ -n "${pages}" ] || {
   echo "UNKNOWN read-failed"

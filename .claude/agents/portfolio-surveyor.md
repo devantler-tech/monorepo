@@ -234,9 +234,8 @@ public and private — no per-repo loop needed to enumerate):
    reported without it has no CI evidence behind it. What is prohibited is pulling that field in the
    **cheap discovery pass** over every PR in every repo, which is what exhausts the pool before
    deepening starts.
-   ⚠️ **Thread state is NOT available here.** `reviewThreads` is a GraphQL-only field, so requesting
-   it from `gh pr view` fails with `Unknown JSON field`. Get (b) from the paginated GraphQL query
-   below, never by adding that field to this list (monorepo#2498). When the current-head pentad is
+   ⚠️ **Thread state is NOT here:** `reviewThreads` is GraphQL-only (`gh pr view` rejects it), so
+   (b) comes from the counter below (monorepo#2498). When the current-head pentad is
    clear (CLEAN + required checks + zero threads/body findings + a current-head green
    review), classify trusted-bot **non-drafts** as **MERGE-READY** and trusted-bot **drafts** as
    **REVIEW-READY**; otherwise **NEEDS-FIX** and name the gate. A `devantler` PR is classified by that
@@ -625,9 +624,10 @@ public and private — no per-repo loop needed to enumerate):
      review-body findings, **Codex comment-form findings (below)**, and any concrete ancillary problem
      CodeRabbit explicitly reports while it
      is the selected current-head reviewer, (d) `mergeStateStatus` conflicts, and (e) **green-review state**
-     (see below). Count all unresolved review threads across all pages, regardless of author. Query
-     `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}`
-     and paginate until `hasNextPage` is false. That query answers (b)'s **count** and nothing else.
+     (see below). Count unresolved threads, any author, only with the declared counter (#2670):
+     `gh api graphql --paginate -F number=<n> -f query='query($number:Int!,$endCursor:String){repository(owner:"devantler-tech",name:"<repo>"){pullRequest(number:$number){reviewThreads(first:100,after:$endCursor){totalCount nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}' | <repo-root>/.claude/scripts/pr-unresolved-threads.sh --input -`.
+     A non-`unresolved=` line is UNKNOWN: report `unresolved=UNKNOWN`, never `0`. That query
+     answers (b)'s **count** and nothing else.
      🔴 **A human who replies INSIDE an existing review thread is invisible to it — and `active=` must
      still see them.** Such a reply leaves no issue comment and no top-level review, so a
      thread query reports `active=none` while a person is mid-conversation, authorising a takeover of
@@ -645,10 +645,9 @@ public and private — no per-repo loop needed to enumerate):
      timestamp cannot tell them apart — and this signal is defined as the newest **human** comment.
      Without the body there is no disclosure marker to apply, so an agent's own inline reply counts as
      human activity and parks the PR for ~2h against a signal the routine produced itself. Apply the
-     same disclosure disambiguator used everywhere else, then take the newest **surviving** timestamp.
-     Take the newest **human** (non-bot, non-agent-disclosed) timestamp from that, and feed it into
-     `human-comment:<age>` alongside the issue comments and top-level reviews. Choosing the flat
-     surface removes the pagination question by construction rather than answering it per thread. For (b)'s body surface: CodeRabbit emits non-inline
+     same disclosure disambiguator used everywhere else, then feed the newest **surviving** (non-bot,
+     non-agent-disclosed) timestamp into `human-comment:<age>` alongside the issue comments and top-level reviews.
+     For (b)'s body surface: CodeRabbit emits non-inline
      findings as collapsed sections
      in review bodies, each titled `<emoji> <Category> comments (N)` inside a `<summary>` tag —
      `⚠️ Outside diff range comments (N)`, `🧹 Nitpick comments (N)`, `♻️ Duplicate comments (N)`,
