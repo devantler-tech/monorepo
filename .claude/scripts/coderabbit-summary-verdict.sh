@@ -83,8 +83,16 @@ grep -Fq '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
   verdict "NONE not-a-summary"
 
 # A body saying the review did not run defeats everything else in it, including a range header
-# that names the head (the rate-limit shell carries one).
-if grep -Eiq 'rate limited by coderabbit\.ai|Review limit reached|review limit|couldn.t start this review|Review skipped|Review failed' <<<"$body"; then
+# that names the head (the rate-limit shell carries one). The structural marker counts anywhere;
+# the prose markers count only outside the blocks that summarise the PR itself, because a PR ABOUT
+# review limits has a walkthrough that quotes them.
+own_text="$(printf '%s\n' "$body" | awk '
+  /<!-- (walkthrough|pre_merge_checks_walkthrough|change_assessment|tips)_start -->/ { skip = 1 }
+  !skip { print }
+  /<!-- (walkthrough|pre_merge_checks_walkthrough|change_assessment|tips)_end -->/   { skip = 0 }
+')"
+if grep -Fq 'rate limited by coderabbit.ai -->' <<<"$body" ||
+  grep -Eiq 'Review limit reached|review limit|couldn.t start this review|Review skipped|Review failed' <<<"$own_text"; then
   verdict "NONE did-not-run"
 fi
 

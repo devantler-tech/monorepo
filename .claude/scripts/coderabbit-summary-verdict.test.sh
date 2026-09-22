@@ -66,6 +66,11 @@ expect "real rate-limit shell naming the head" 1 "NONE did-not-run" "${limited_h
 { cat "${green_fixture}"; printf '\n> ## Review limit reached\n'; } >"${tmp}/green-plus-limit.txt"
 expect "green + did-not-run marker" 1 "NONE did-not-run" "${green_head}" "${tmp}/green-plus-limit.txt"
 
+# A walkthrough that merely DISCUSSES review limits (a PR about them) is not a refusal.
+awk '{ print } /<!-- walkthrough_start -->/ { print "This PR handles the Review limit reached shell and Review skipped states." }' \
+  "${green_fixture}" >"${tmp}/green-walkthrough-mentions-limit.txt"
+expect "green whose walkthrough mentions review limits" 0 "GREEN" "${green_head}" "${tmp}/green-walkthrough-mentions-limit.txt"
+
 # A walkthrough-only summary is not a verdict, even when the head sha appears in it.
 expect "real walkthrough-only summary" 1 "NONE no-recent-review" "${green_head}" "${walkthrough_fixture}"
 { cat "${walkthrough_fixture}"; printf '\nCommits: %s\n' "${green_head}"; } >"${tmp}/walkthrough-names-head.txt"
