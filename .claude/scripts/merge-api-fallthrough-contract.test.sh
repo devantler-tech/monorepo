@@ -56,10 +56,20 @@ has 'never on a merge-queue repository' ||
   fail "Merge policy must exclude merge-queue repositories from the fall-through"
 
 # 5. Negative control across every definition surface: each prescribed PUT merge is pinned.
+# An unreadable root would make this sweep read clean over it, so each root must exist and yield
+# at least one file — an empty sweep is a claim about the enumeration, never a clean result.
 surfaces=("${constitution}")
-while IFS= read -r f; do surfaces+=("${f}"); done < <(
-  find "${repo_root}/.claude/agents" "${repo_root}/.claude/skills" -name '*.md' -type f 2>/dev/null | sort
-)
+for root in "${repo_root}/.claude/agents" "${repo_root}/.claude/skills"; do
+  [ -d "${root}" ] ||
+    fail "definition surface is missing, so the sweep below would read clean over it: ${root#"${repo_root}"/}"
+  found=0
+  while IFS= read -r f; do
+    surfaces+=("${f}")
+    found=$((found + 1))
+  done < <(find "${root}" -name '*.md' -type f | sort)
+  [ "${found}" -gt 0 ] ||
+    fail "definition surface yielded no Markdown file, so the sweep below would read clean over it: ${root#"${repo_root}"/}"
+done
 unpinned=""
 for f in "${surfaces[@]}"; do
   hits="$(grep -nE 'method[= ]PUT[^`]*pulls/[^ `]*/merge' "${f}" | grep -v 'sha=' || true)"
