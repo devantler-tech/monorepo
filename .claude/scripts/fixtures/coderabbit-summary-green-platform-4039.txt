@@ -1,0 +1,207 @@
+<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<!-- review_stack_entry_start -->
+
+<a href="https://app.coderabbit.ai/change-stack/devantler-tech/platform/pull/4039"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-stack-in-coderabbit-ui-dark.svg?v=2" alt="Review in Change Stack →" width="220" height="32"></a>
+
+Navigate logical layers of code changes, visualize relationships, and explore their blast radius.
+
+<!-- review_stack_entry_end -->
+<!-- recent_review_start -->
+
+No actionable comments were generated in the recent review. 🎉
+
+<details>
+<summary>ℹ️ Recent review info</summary>
+
+<details>
+<summary>⚙️ Run configuration</summary>
+
+**Configuration used**: Repository YAML (base), Organization UI (inherited)
+
+**Review profile**: ASSERTIVE
+
+**Plan**: Advanced
+
+**Run ID**: `170079f8-532c-4a9c-acb3-a8b535fdb221`
+
+</details>
+
+<details>
+<summary>📥 Commits</summary>
+
+Reviewing files that changed from the base of the PR and between 643ee0d9e0dcba8e1399930e402e0d4b5b44be7e and 47702cc36a99d2a28b81793199cbae1c68819a60.
+
+</details>
+
+<details>
+<summary>📒 Files selected for processing (2)</summary>
+
+* `scripts/inventory-first-party-image-signatures.sh`
+* `scripts/tests/test-inventory-first-party-image-signatures.sh`
+
+</details>
+
+**Included review availability:** Your plan provides up to 1 included review per hour; 0 remain after this review.
+
+</details>
+
+<details>
+<summary>📜 Recent review details</summary>
+
+<details>
+<summary>🧰 Additional context used</summary>
+
+<details>
+<summary>🧠 Learnings (1)</summary>
+
+<details>
+<summary>📚 Learning: 2026-08-10T13:01:12.782Z</summary>
+
+```
+Learnt from: devantler
+Repo: devantler-tech/platform PR: 3057
+File: .github/workflows/ci.yaml:622-659
+Timestamp: 2026-08-10T13:01:12.782Z
+Learning: Repository shell tests and scripts must remain compatible with macOS Bash 3.2. Do not use Bash 4+ features such as `mapfile`; use portable constructs, such as a `while IFS= read -r` loop, instead.
+```
+
+**Applied to files:**
+- `scripts/inventory-first-party-image-signatures.sh`
+
+</details>
+
+</details><details>
+<summary>🪛 ast-grep (0.45.3)</summary>
+
+<details>
+<summary>scripts/tests/test-inventory-first-party-image-signatures.sh</summary>
+
+[warning] 121-121: `set +e` (or `set +o errexit`) disables the shell's errexit option, so the script keeps running after a command fails. This masks failures of security-critical operations (downloads, signature/checksum verification, permission changes, cleanup of secrets), letting the script proceed with a bad or insecure state. Leave errexit enabled (`set -e` / `set -euo pipefail`), or handle failures explicitly with `if`/`||` and an explicit exit instead of globally turning off failure detection.
+Context: set +e
+Note: [CWE-754] Improper Check for Unusual or Exceptional Conditions.
+
+(set-plus-e-error-masking-bash)
+
+---
+
+[warning] 540-540: `set +e` (or `set +o errexit`) disables the shell's errexit option, so the script keeps running after a command fails. This masks failures of security-critical operations (downloads, signature/checksum verification, permission changes, cleanup of secrets), letting the script proceed with a bad or insecure state. Leave errexit enabled (`set -e` / `set -euo pipefail`), or handle failures explicitly with `if`/`||` and an explicit exit instead of globally turning off failure detection.
+Context: set +e
+Note: [CWE-754] Improper Check for Unusual or Exceptional Conditions.
+
+(set-plus-e-error-masking-bash)
+
+</details>
+
+</details>
+
+</details>
+
+<details>
+<summary>🔇 Additional comments (2)</summary><blockquote>
+
+<details>
+<summary>scripts/inventory-first-party-image-signatures.sh (1)</summary><blockquote>
+
+`201-219`: LGTM!
+
+
+
+Also applies to: 235-238, 296-299
+
+<!-- cr-comment:v1:8c376cab070ef8afe79e72e5 -->
+
+</blockquote></details>
+<details>
+<summary>scripts/tests/test-inventory-first-party-image-signatures.sh (1)</summary><blockquote>
+
+`34-34`: LGTM!
+
+
+
+Also applies to: 47-50, 101-128, 538-538, 540-540, 605-620
+
+<!-- cr-comment:v1:51aba2a5e17f765923329a3e -->
+
+</blockquote></details>
+
+</blockquote></details>
+
+</details>
+
+---
+
+
+
+<!-- recent_review_end -->
+<!-- walkthrough_start -->
+
+<details>
+<summary>📝 Walkthrough</summary>
+
+## Walkthrough
+
+The inventory script adds `split_reference` to separate image repositories from tags and digests, preserve digests for manifest reads, avoid treating registry ports as tags, and default missing references to `latest`. Manifest probing and rule matching now use this parser. Tests cover exact-rule matching, registry ports, and tag-plus-digest manifest and token requests.
+
+<!-- <fixed_issue_severity>High</fixed_issue_severity> -->
+
+</details>
+
+<!-- walkthrough_end -->
+<!-- change_assessment_start -->
+**Priority:** ➖ Normal
+
+<!-- change_assessment_commit:"47702cc36a99d2a28b81793199cbae1c68819a60" -->
+
+<!-- change_assessment_end -->
+<!-- final_review_risk_start -->
+**Merge Risk:** _⚪ Minimal_ · up to `47702`
+<!-- final_review_risk_coverage:{"sourceCommitId":"47702cc36a99d2a28b81793199cbae1c68819a60","coveredCommitId":"47702cc36a99d2a28b81793199cbae1c68819a60","kind":"reviewed"} -->
+
+This change corrects image verification for tag-and-digest references without a remaining identified production risk, so it is ready to merge with normal checks.
+<!-- final_review_risk_end -->
+<!-- pre_merge_checks_walkthrough_start -->
+
+<details>
+<summary>🚥 Pre-merge checks | ✅ 4 | ❌ 1</summary>
+
+### ❌ Failed checks (1 warning)
+
+|     Check name     | Status     | Explanation                                                                                                                                                                                | Resolution                                                                         |
+| :----------------: | :--------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- |
+| Docstring Coverage | ⚠️ Warning | Docstring coverage is 50.00% which is insufficient. The required threshold is 80.00%. Docstring coverage is scoped to functions touched by this diff. Analyzed 6 functions across 2 files. | Write docstrings for the functions missing them to satisfy the coverage threshold. |
+
+<details>
+<summary>✅ Passed checks (4 passed)</summary>
+
+|         Check name         | Status   | Explanation                                                                                                                                                                                               |
+| :------------------------: | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|     Linked Issues check    | ✅ Passed | Issue `#4038` coding requirements are met. `split_reference` removes the tag from the last path component while preserving registry ports. It retains the digest as the manifest reference. `repository_of… |
+| Out of Scope Changes check | ✅ Passed | The changes stay within Issue `#4038`. The implementation changes image-reference parsing, rule matching, and manifest probing. The added fixture rules and hermetic assertions support the required match… |
+|         Title check        | ✅ Passed | The title clearly identifies the main fix: handling image references that contain both a tag and digest by using the bare repository name.                                                                |
+|      Description check     | ✅ Passed | The description directly explains the image-signature bug, the correction, the affected registry lookup, and the related issue.                                                                           |
+
+</details>
+
+</details>
+
+<!-- pre_merge_checks_walkthrough_end -->
+<!-- tips_start -->
+
+---
+
+Thanks for using [CodeRabbit](https://coderabbit.ai?utm_source=oss&utm_medium=github&utm_campaign=devantler-tech/platform&utm_content=4039)! It's free for OSS, and your support helps us grow. If you like it, consider giving us a shout-out.
+
+<details>
+<summary>❤️ Share</summary>
+
+- [X](https://twitter.com/intent/tweet?text=I%20just%20used%20%40coderabbitai%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20the%20proprietary%20code.%20Check%20it%20out%3A&url=https%3A//coderabbit.ai)
+- [Mastodon](https://mastodon.social/share?text=I%20just%20used%20%40coderabbitai%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20the%20proprietary%20code.%20Check%20it%20out%3A%20https%3A%2F%2Fcoderabbit.ai)
+- [Reddit](https://www.reddit.com/submit?title=Great%20tool%20for%20code%20review%20-%20CodeRabbit&text=I%20just%20used%20CodeRabbit%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20proprietary%20code.%20Check%20it%20out%3A%20https%3A//coderabbit.ai)
+- [LinkedIn](https://www.linkedin.com/sharing/share-offsite/?url=https%3A%2F%2Fcoderabbit.ai&mini=true&title=Great%20tool%20for%20code%20review%20-%20CodeRabbit&summary=I%20just%20used%20CodeRabbit%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20proprietary%20code)
+
+</details>
+
+
+<sub>Comment `@coderabbitai help` to get the list of available commands.</sub>
+
+<!-- tips_end -->

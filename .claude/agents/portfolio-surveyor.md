@@ -780,7 +780,10 @@ public and private — no per-repo loop needed to enumerate):
      LEADING comments and keep the match anchored — a marker further in is not a review, and an
      empty container still fails. Treat that review object, CodeRabbit's substantive
      auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated
-     after the authenticated request and naming `headRefOid`, and its **command-invocation reply comment
+     after the authenticated request **for which `coderabbit-summary-verdict.sh --head <headRefOid>`
+     prints `GREEN`** (verdict `No actionable comments were generated in the recent review` in the
+     `recent_review` block, its range header ending at the head, no did-not-run marker — a walkthrough
+     or a rate-limit shell naming the head is `none`; monorepo#2653), and its **command-invocation reply comment
      carrying a verdict** as three alternative substantive artifacts; the review object does **not**
      require a `Review completed` status conjunct. The verdict reply must state
      `Reviewed pull request #<n> at <sha>` with `<sha>` a **prefix of `headRefOid`**, together with
