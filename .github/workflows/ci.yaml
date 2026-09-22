@@ -2202,6 +2202,15 @@ jobs:
           bash .claude/scripts/ci-job-wiring.test.sh
       - name: Check this workflow's wiring
         run: bash .claude/scripts/ci-job-wiring.sh .github/workflows/ci.yaml
+      # Wiring is not execution: a contract-test job whose run step was deleted still succeeds as a
+      # checkout-only job. This asks, from outside every test job, whether each test is executed
+      # (monorepo#2586).
+      - name: Test the contract-test invocation checker
+        run: |
+          shellcheck .claude/scripts/contract-test-invocation.sh .claude/scripts/contract-test-invocation.test.sh
+          bash .claude/scripts/contract-test-invocation.test.sh
+      - name: Check every contract test is executed
+        run: bash .claude/scripts/contract-test-invocation.sh .github/workflows/ci.yaml .claude/scripts
 
   test-submodule-agents-drift:
     name: Check submodule AGENTS.md drift
