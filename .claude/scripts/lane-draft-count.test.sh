@@ -49,8 +49,10 @@ check() {
   local name=$1 want_rc=$2 want=$3 fixture=$4; shift 4
   local out rc=0
   out=$(run "$fixture" "$@") || rc=$?
-  if [ "$rc" -eq "$want_rc" ] && printf '%s' "$out" | grep -qF -- "$want"; then
-    if [ "$want_rc" -eq 2 ] && printf '%s' "$out" | grep -q "drafts="; then
+  # Here-strings, not `printf | grep -q`: under pipefail a match that closes the pipe early makes
+  # printf's SIGPIPE (141) the pipeline status, which fails a passing check and passes a failing one.
+  if [ "$rc" -eq "$want_rc" ] && grep -qF -- "$want" <<<"$out"; then
+    if [ "$want_rc" -eq 2 ] && grep -q "drafts=" <<<"$out"; then
       fail=$((fail + 1)); echo "FAIL: $name (UNKNOWN leaked a count)"; return
     fi
     pass=$((pass + 1))
@@ -85,7 +87,7 @@ fi
 # …and the default must actually be the value the boundary uses, not just a variable that matches.
 out=$(run "$FIX/three.json" --lane claude --cap "$script_cap")
 at_cap=$(printf '%s' "$out" | grep -oE 'cap=[0-9]+')
-if [ "$at_cap" = "cap=$script_cap" ] && printf '%s' "$(run "$FIX/three.json" --lane claude)" | grep -qF "$at_cap"; then
+if [ "$at_cap" = "cap=$script_cap" ] && grep -qF -- "$at_cap" <<<"$(run "$FIX/three.json" --lane claude)"; then
   pass=$((pass + 1))
 else
   fail=$((fail + 1)); echo "FAIL: the default cap is not the one the verdict uses ($at_cap)"
@@ -124,10 +126,10 @@ section() { awk -v h="$1" '/^## /{on=(index($0,h)==1)} on' "$SKILL"; }
 select_text=$(section "## 2. Select")
 survey_text=$(section "## 1. Survey")
 if [ -n "$select_text" ] && [ -n "$survey_text" ] &&
-  printf '%s\n' "$select_text" | grep -Fq '.claude/scripts/lane-draft-count.sh --lane <your namespace>' &&
-  printf '%s\n' "$select_text" | grep -Fq 'open **no** non-hotfix draft when' &&
-  printf '%s\n' "$select_text" | grep -Fq 'own lane is `UNKNOWN` or `OVER`' &&
-  ! printf '%s\n' "$survey_text" | grep -Fq 'lane-draft-count.sh'; then
+  grep -Fq '.claude/scripts/lane-draft-count.sh --lane <your namespace>' <<<"$select_text" &&
+  grep -Fq 'open **no** non-hotfix draft when' <<<"$select_text" &&
+  grep -Fq 'own lane is `UNKNOWN` or `OVER`' <<<"$select_text" &&
+  ! grep -Fq 'lane-draft-count.sh' <<<"$survey_text"; then
   pass=$((pass + 1))
 else
   echo 'FAIL: `## 2. Select` must require a fail-closed lane-draft-count check before a new draft, and `## 1. Survey` must not delegate it' >&2
