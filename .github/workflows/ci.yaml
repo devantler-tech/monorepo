@@ -316,6 +316,10 @@ jobs:
               # contract that composed requests pass the disclosure check.
               - '.claude/scripts/review-request-comment.sh'
               - '.claude/scripts/review-request-comment.test.sh'
+              # The Bugbot request-marker check pairs the composer's Bugbot output,
+              # so it belongs to the same review-request protocol gate.
+              - '.claude/scripts/bugbot-request-marker.sh'
+              - '.claude/scripts/bugbot-request-marker.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1412,6 +1416,10 @@ jobs:
       # the guard above, with bare-trigger negative controls.
       - name: Verify the review-request comment composer
         run: bash .claude/scripts/review-request-comment.test.sh
+      # Hermetic: gh is stubbed on PATH, and the end-to-end case pairs the
+      # composer's real Bugbot output.
+      - name: Verify the Bugbot request-marker check
+        run: bash .claude/scripts/bugbot-request-marker.test.sh
 
   test-surveyor-forge-vocabulary:
     name: Test surveyor forge vocabulary conformance

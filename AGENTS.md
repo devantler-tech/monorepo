@@ -2181,6 +2181,9 @@ result at the current head — self-promotion is forbidden before that. Request 
   `@cursor review` command, ignoring interleaved comments from other authors; another authenticated
   Bugbot request marker or bare trigger ends the pairing window. The request marker is what lets
   overlapping instances distinguish a live request from a stale-head request.
+  [`bugbot-request-marker.sh --repo <owner>/<repo> --pr <n> [--head <headRefOid>]`](.claude/scripts/bugbot-request-marker.sh)
+  checks that pairing for every bare `@cursor review` on a PR and reports it apart from disclosure
+  drift: `0` paired, `1` an unpaired trigger or a latest request naming another head, `2` unknown.
   🔴 **Compose every review-request comment with
   [`.claude/scripts/review-request-comment.sh`](.claude/scripts/review-request-comment.sh) — never
   hand-write one.** It prints the only allowed shapes: disclosure, marker, and trigger in one comment
