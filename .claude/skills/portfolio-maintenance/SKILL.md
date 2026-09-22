@@ -276,7 +276,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   disabled` (the default state of every head, since auto-review is disabled portfolio-wide), and —
   while `fail_commit_status: false` is in force — for a rate-limit refusal alike, so a state-only
   check reads every never-reviewed PR as green. A `description` beginning `Review completed`
-  evidences a run and corroborates the artifact rather than replacing it; `Review rate limited` (or
+  evidences only an attempt that ended, never a result, and corroborates the artifact rather than
+  replacing it — a summary carrying `## Review failed` beside it is a service failure (record
+  `cr:no-gate@<sha>` and advance the lane), never a finding or a green; `Review rate limited` (or
   another explicit not-run marker) defeats the green; and the disabled default, or **no status at
   all**, is an **uninformative status** that must NOT defeat it (monorepo#3015 — a head where
   CodeRabbit posted two real findings carries that same default, and some repos publish no
