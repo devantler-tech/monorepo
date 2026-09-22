@@ -4277,17 +4277,23 @@ if want drift; then
           else if (key == "INTERVAL") interval = value
           else if (key == "BYHOUR") hours = value
           else if (key == "BYMINUTE") minute = value
-          else if (key == "BYSECOND") second = value
+          else if (key == "BYSECOND") { has_second = 1; second = value }
           else invalid = 1
         }
       }
       END {
+        # An OMITTED BYSECOND is accepted (#2744). RFC 5545 fills it with the
+        # single DTSTART second, which stays inside BYMINUTE, so it cannot move or
+        # add an hour@minute start — the only thing this schedule reports. A
+        # PRESENT BYSECOND must still be exactly "0": an empty, multi-valued or
+        # non-zero value is a start the cadence table does not describe. A missing
+        # BYMINUTE stays unreadable, because only DTSTART could supply it.
         if (invalid || (freq != "DAILY" && freq != "HOURLY") ||
             (interval != "" && interval != "1") ||
             (hours != "" && hours !~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/) ||
             (freq == "DAILY" && hours == "") ||
             minute !~ /^[0-9][0-9]?$/ || minute + 0 > 59 ||
-            second != "0") exit 1
+            (has_second && second != "0")) exit 1
         print (hours == "" ? "*" : hours) "|" minute
       }
     ')
