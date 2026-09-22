@@ -79,6 +79,8 @@ expect "clean round minus disclosure" 1 "NONE no-disclosure" "${green_head}" "${
 
 edit_green '"Some preamble.\n\n" + .' "${tmp}/late-disclosure.json"
 expect "disclosure not on the first line" 1 "NONE no-disclosure" "${green_head}" "${tmp}/late-disclosure.json"
+edit_green '"\n" + .' "${tmp}/blank-first-line.json"
+expect "disclosure after a blank first line" 1 "NONE no-disclosure" "${green_head}" "${tmp}/blank-first-line.json"
 
 edit_green 'gsub("(?m)^- \\*\\*Codex\\*\\*[^\n]*\n"; "")' "${tmp}/no-codex.json"
 expect "clean round minus the Codex lane" 1 "NONE missing-lane:Codex" "${green_head}" "${tmp}/no-codex.json"
@@ -92,13 +94,14 @@ expect "clean round minus the CodeRabbit lane" 1 "NONE missing-lane:CodeRabbit" 
 edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 2 findings (P0: 0, P1: 2)")' "${tmp}/findings.json"
 expect "clean round reporting findings" 1 "FINDINGS 2" "${green_head}" "${tmp}/findings.json"
 
-# Nits alone do not block: only P0/P1 count. A count without that breakdown blocks.
+# Nits alone do not block: only P0/P1 count. A count without that breakdown blocks, even zero,
+# because it is not the standard verdict shape.
 edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 3 findings (P0: 0, P1: 0)")' "${tmp}/nits-only.json"
 expect "clean round reporting only nits" 0 "GREEN self@${green_head}" "${green_head}" "${tmp}/nits-only.json"
 edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 2 findings")' "${tmp}/no-breakdown.json"
 expect "finding count with no P0/P1 breakdown" 1 "FINDINGS 2" "${green_head}" "${tmp}/no-breakdown.json"
 edit_green 'sub("(?m)^Verdict: no P0/P1 findings$"; "Verdict: 0 findings")' "${tmp}/zero-count.json"
-expect "an explicit zero count" 0 "GREEN self@${green_head}" "${green_head}" "${tmp}/zero-count.json"
+expect "zero count with no P0/P1 breakdown" 1 "FINDINGS 0" "${green_head}" "${tmp}/zero-count.json"
 
 edit_green 'gsub("(?m)^Verdict: no P0/P1 findings$"; "")' "${tmp}/no-verdict.json"
 expect "clean round minus its verdict" 1 "NONE no-verdict" "${green_head}" "${tmp}/no-verdict.json"
@@ -126,6 +129,14 @@ expect "two concatenated pages" 0 "GREEN self@${green_head}" "${green_head}" "${
 # Unreadable and unparseable input judges nothing, rather than reading as "no round found".
 printf 'not json\n' >"${tmp}/garbage.json"
 expect "unparseable input" 2 "" "${green_head}" "${tmp}/garbage.json"
+: >"${tmp}/empty.json"
+expect "empty input" 2 "" "${green_head}" "${tmp}/empty.json"
+printf 'null\n' >"${tmp}/null.json"
+expect "null input" 2 "" "${green_head}" "${tmp}/null.json"
+jq '.[0]' "${fixture}" >"${tmp}/object.json"
+expect "a bare review object instead of an array" 2 "" "${green_head}" "${tmp}/object.json"
+{ jq '.' "${fixture}"; printf '{"message":"Bad credentials"}\n'; } >"${tmp}/array-then-object.json"
+expect "an error object after a page" 2 "" "${green_head}" "${tmp}/array-then-object.json"
 expect "missing input file" 2 "" "${green_head}" "${tmp}/does-not-exist.json"
 expect "abbreviated head" 2 "" "${green_head:0:10}" "${fixture}"
 
