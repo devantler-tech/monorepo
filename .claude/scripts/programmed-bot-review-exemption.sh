@@ -5,23 +5,54 @@
 
 set -euo pipefail
 
-if [[ "$#" -lt 7 || "$#" -gt 8 ]] || ! command -v jq >/dev/null 2>&1; then
-  exit 2
-fi
+command -v jq >/dev/null 2>&1 || exit 2
 
-repo="$1"
-author="$2"
-branch="$3"
-title="$4"
-head="$5"
-files_json="$6"
-commits_json="$7"
-# Optional map of changed installed-skill root -> that skill's `metadata.github-repo` value, read by
-# the caller at the PR head (null when the frontmatter is absent or unreadable). This is a
-# CORROBORATOR, never an authorization: the value lives inside the payload being classified, so an
-# upstream can write whatever it likes there. Supplying it can only move a root from allowed to
-# review-required — it can never grant the carve-out on its own.
-skill_owners_json="${8-}"
+# Two input shapes carry the same eight values. The positional form serves existing callers. The
+# stdin form (`--input -`, one JSON object) is the only shape the read-only surveyor guard admits: a
+# declared classifier may run solely as a filter after a forge read, and it may take no argument but
+# `--input -` (monorepo#3123). Keys are exact — an unknown or missing key is invalid input (exit 2),
+# never a silently defaulted field.
+if [[ "$#" -eq 2 && "$1" == "--input" && "$2" == "-" ]]; then
+  input_json="$(cat)"
+  if ! jq -e '
+    type == "object" and
+    ((keys - ["skill_owners"]) == ["author", "commits", "files", "head_oid", "head_ref", "repo", "title"]) and
+    ([.author, .head_oid, .head_ref, .repo, .title] | all(type == "string")) and
+    (.files | type == "array") and
+    (.commits | type == "array") and
+    ((has("skill_owners") | not) or (.skill_owners | type == "object" or type == "null"))
+  ' <<<"${input_json}" >/dev/null 2>&1; then
+    exit 2
+  fi
+  repo="$(jq -r '.repo' <<<"${input_json}")"
+  author="$(jq -r '.author' <<<"${input_json}")"
+  branch="$(jq -r '.head_ref' <<<"${input_json}")"
+  title="$(jq -r '.title' <<<"${input_json}")"
+  head="$(jq -r '.head_oid' <<<"${input_json}")"
+  files_json="$(jq -c '.files' <<<"${input_json}")"
+  commits_json="$(jq -c '.commits' <<<"${input_json}")"
+  # An absent or null map is the positional form's omitted eighth argument, not an empty map: the
+  # installed-skill arm treats an omission as unproven ownership (exit 3), and must keep doing so.
+  skill_owners_json="$(jq -c 'if .skill_owners == null then empty else .skill_owners end' <<<"${input_json}")"
+else
+  if [[ "$#" -lt 7 || "$#" -gt 8 ]]; then
+    exit 2
+  fi
+
+  repo="$1"
+  author="$2"
+  branch="$3"
+  title="$4"
+  head="$5"
+  files_json="$6"
+  commits_json="$7"
+  # Optional map of changed installed-skill root -> that skill's `metadata.github-repo` value, read
+  # by the caller at the PR head (null when the frontmatter is absent or unreadable). This is a
+  # CORROBORATOR, never an authorization: the value lives inside the payload being classified, so an
+  # upstream can write whatever it likes there. Supplying it can only move a root from allowed to
+  # review-required — it can never grant the carve-out on its own.
+  skill_owners_json="${8-}"
+fi
 
 # The authorization source is a reviewed, version-controlled list kept outside the skills, because
 # an installed root holds copies from many upstreams and the copied frontmatter is authored by the

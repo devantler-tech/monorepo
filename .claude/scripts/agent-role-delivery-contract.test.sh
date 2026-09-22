@@ -999,6 +999,27 @@ case "${relative_output}" in
   *) fail "relative classifier call was refused for the wrong reason: ${relative_output}" ;;
 esac
 
+# The programmed-bot review-exemption classifier is declared the same way (monorepo#3123). Before
+# it was, every surveyor call was refused and each release or updater PR reached the orchestrator
+# as QUERY-UNKNOWN, so exempt PRs sat green and unmerged. Pin both halves: the hook admits the
+# documented stdin pipeline, and the overlay names the classifier only by its absolute call site.
+exemption_classifier="${repo_root}/.claude/scripts/programmed-bot-review-exemption.sh"
+exemption_program="'{repo:\"homebrew-tap\",commits:add}'"
+exemption_payload="$(jq -nc --arg cls "${exemption_classifier}" --arg prog "${exemption_program}" '{
+  tool_input: {
+    command: ("gh api --paginate --slurp repos/devantler-tech/homebrew-tap/pulls/1/commits | jq -c "
+      + $prog + " | " + $cls + " --input -")
+  }
+}')"
+run_surveyor_hook "${exemption_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the declared programmed-bot exemption classifier (monorepo#3123)"
+exemption_sites="$(grep -o '[^[:space:]"`'"'"']*programmed-bot-review-exemption\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/programmed-bot-review-exemption.sh' || true)"
+[ -z "${exemption_sites}" ] ||
+  fail "surveyor overlay calls the exemption classifier by a form the guard refuses; use <repo-root>/.claude/scripts/programmed-bot-review-exemption.sh --input -: ${exemption_sites}"
+grep -Fq '| <repo-root>/.claude/scripts/programmed-bot-review-exemption.sh --input -' "${surveyor_agent}" ||
+  fail "surveyor overlay does not prescribe the forge-first stdin call to the exemption classifier"
+
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
 # shellcheck disable=SC2016  # fixture must inspect its own child environment

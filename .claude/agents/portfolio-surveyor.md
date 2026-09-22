@@ -711,9 +711,11 @@ public and private — no per-repo loop needed to enumerate):
      direction 2026-07-23), Homebrew-tap cask PRs (GoReleaser's for `ksail`/`ksail-desktop` and
      World at Ruin's CD-generated ones on `goreleaser/world-at-ruin`, maintainer direction
      2026-07-18), and KSail release bumps (maintainer direction 2026-07-13, ksail#6095). Apply this
-     exemption **only** when the checked-in exact classifier exits 0:
-     `.claude/scripts/programmed-bot-review-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "$headRefOid" "$files_json" "$commits_json" "$skill_owners_json"`.
-     Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the author exactly as
+     exemption **only** when the checked-in exact classifier exits 0. It is a declared classifier,
+     so run it as this forge-first pipeline, the only shape the guard admits (monorepo#3123):
+     `gh api --paginate --slurp repos/devantler-tech/<repo>/pulls/<n>/commits | jq -c '{repo:"<repo>",author:"<author>",head_ref:"<headRefName>",title:"<title>",head_oid:"<headRefOid>",files:<files_json>,skill_owners:<skill_owners_json-or-null>,commits:(add | map({sha, author_login:(.author.login // ""), author_name:.commit.author.name, author_email:.commit.author.email, author_date:.commit.author.date, committer_login:(.committer.login // ""), committer_name:.commit.committer.name, committer_email:.commit.committer.email, committer_date:.commit.committer.date, message:.commit.message}))}' | <repo-root>/.claude/scripts/programmed-bot-review-exemption.sh --input -`.
+     Substitute each `<…>` as a JSON literal; a value containing `'` cannot be quoted, so
+     report that PR `QUERY-UNKNOWN` rather than improvise. Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the author exactly as
      that repo's arm compares it: `app/<slug>` for App-authored arms (`app/ksail-bot`), plain
      `devantler` for the homebrew-tap cask arms. Never the REST `<slug>[bot]` the deepening
      query returns: well-formed, matches no arm, exits 1, spends a metered lane (monorepo#2991).
@@ -723,19 +725,11 @@ public and private — no per-repo loop needed to enumerate):
      `$headRefOid`**, or `null` where the frontmatter is absent or unreadable. It is a corroborator,
      not an authorization — the classifier authorizes from its own reviewed allowlist, because that
      frontmatter is written by the upstream it names — but omitting it returns **3**, because a
-     tripwire the caller may skip never fires. Every other arm takes seven arguments and ignores it.
-     Encode all paths from the deepening query as one compact JSON string array in `files_json`. Fetch
-     the complete commit list separately from the REST endpoint `repos/devantler-tech/<repo>/pulls/<n>/commits`
-     with `gh api --paginate --slurp ... | jq -c 'add | map(...)'` (this `gh` version does not allow
-     `--slurp` together with its own `--jq` flag), then normalize every commit into `commits_json` as an ordered compact
-     JSON array whose objects contain exactly `sha`, `author_login`, `author_name`, `author_email`,
-     `author_date`, `committer_login`, `committer_name`, `committer_email`, `committer_date`, and
-     `message` (use an empty string for a null login). Take both dates from the raw commit object
-     (`.commit.author.date` / `.commit.committer.date`) and pass them through verbatim in the
-     API's `YYYY-MM-DDTHH:MM:SSZ` form — the classifier compares them to each other to tell a
-     freshly-produced release commit from a rewritten one, so a reformatted or omitted date fails
-     the payload closed. Do not substitute `gh pr view --json commits`: it omits raw committer
-     provenance and both dates.
+     tripwire the caller may skip never fires. Every other arm ignores it (pass `null`).
+     `files_json` is every path from the deepening query as one JSON string array. The pipeline
+     builds the commit list itself, from the REST commits endpoint with both raw dates verbatim —
+     the classifier compares them to tell a fresh release commit from a rewritten one. Do not
+     substitute `gh pr view --json commits`: it omits raw committer provenance and both dates.
      The list's last SHA must equal `headRefOid`; an agent/maintainer adaptation commit therefore
      revokes the exemption even when the branch, title, and files still look generated. Exit 1 means
      an external/static-only candidate; exit 2 or any query/classifier failure is a survey error

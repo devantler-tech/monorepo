@@ -161,6 +161,9 @@ esac
 # ── Corpus ───────────────────────────────────────────────────────────────────
 # Tab-separated: <disposition>\t<command>. Tabs are safe here (no raw control
 # bytes in the source) and no command below contains one.
+# The exemption-classifier pipeline row is `deny` only in its placeholder form:
+# `PLACEHOLDER/…` is not a declared path. Its real `<repo-root>` absolute form is
+# admitted, and agent-role-delivery-contract.test.sh proves that (monorepo#3123).
 corpus=$(cat <<'CORPUS'
 allow	gh pr list --repo devantler-tech/monorepo --state open --limit 100 --json number,title,isDraft,headRefName
 allow	gh pr view 2927 --repo devantler-tech/monorepo --json number,isDraft,headRefOid,mergeStateStatus,state
@@ -220,6 +223,7 @@ allow	gh api --paginate "repos/devantler-tech/<repo>/actions/workflows/<workflow
 deny	fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
 deny	for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10], .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"; done
 deny	set -o pipefail; fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
+deny	gh api --paginate --slurp repos/devantler-tech/PLACEHOLDER/pulls/PLACEHOLDER/commits | jq -c '{repo:"PLACEHOLDER",author:"PLACEHOLDER",head_ref:"PLACEHOLDER",title:"PLACEHOLDER",head_oid:"PLACEHOLDER",files:PLACEHOLDER,skill_owners:PLACEHOLDER,commits:(add | map({sha, author_login:(.author.login // ""), author_name:.commit.author.name, author_email:.commit.author.email, author_date:.commit.author.date, committer_login:(.committer.login // ""), committer_name:.commit.committer.name, committer_email:.commit.committer.email, committer_date:.commit.committer.date, message:.commit.message}))}' | PLACEHOLDER/.claude/scripts/programmed-bot-review-exemption.sh --input -
 CORPUS
 )
 
