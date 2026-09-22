@@ -4629,6 +4629,11 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   findings, test names/counts, validation transcripts. That detail lives in commit messages, code
   comments, and PR *comments* (e.g. CodeRabbit resolution records) — never the body. Applies to body
   **edits** too, not just creation.
+  **Declare deliberately deferred scope as one plain line per deferral** in the **What** section:
+  `Deferred: #<issue> — <finding family in plain words>`, where `#<issue>` is an **open** issue in the
+  same repository that tracks the work. It is a statement to the maintainer and to the reviewers (see
+  *Review guidelines*), never a heading, and never a way to skip review: a deferral with no open issue
+  is not a deferral, and the green-review gate still counts every finding a reviewer reports.
   **This is an executable write gate for the two routine roles it supports, not prose advice.**
   Before every Agentic Engineer or Agent Improver PR creation or body edit, run
   `.claude/scripts/pr-body-contract.sh seed --repo <owner/repo> --output <body-file>
@@ -5323,3 +5328,17 @@ the procedure; the rules:
   high-value or security/reliability fix); minimal, reversible changes; one concern per PR; don't
   churn. A run with nothing worth changing proposes nothing — but it still banks its daily 1% learning
   (capture is not proposing; see *The 1% rule* above).
+
+## Review guidelines
+
+For review providers (CodeRabbit, Codex, Cursor Bugbot) and for an agent's own local review round.
+
+- **Report correctness and security first.** Prioritise a wrong result, a check that reports success
+  on input it never examined, a widened trust, execution or egress boundary, and leaked private
+  data, ahead of style.
+- **Don't re-raise declared deferred scope.** A PR body may list `Deferred: #<issue> — <family>`
+  lines. Skip a finding when all three hold: it belongs to that family, the linked issue is open,
+  and the PR has not changed the code the finding names since the deferral was recorded. Report it
+  normally when any one of them fails. A new or changed finding is always reported.
+- **These guidelines narrow what reviewers look for. They never change what counts as ready.** The
+  green-review gate, the hygiene pentad and every finding a reviewer does report apply unchanged.
