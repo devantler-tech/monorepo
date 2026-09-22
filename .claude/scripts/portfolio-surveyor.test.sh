@@ -1388,6 +1388,19 @@ expect_exempt \
   '["Casks/ksail.rb"]' \
   "${ksail_cask_commits}"
 
+# The autocorrect commit's author has no GitHub account, so callers must pass its login as "". The
+# same payload with a null login fails the classifier's string schema on every tap cask PR (#2864).
+null_login_cask_commits="$(jq -c 'map(if .author_login == "" then .author_login = null | .committer_login = null else . end)' <<<"${ksail_cask_commits}")"
+expect_classifier_error \
+  "GoReleaser KSail cask whose autocorrect login is null" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "chore(cask): update ksail to v7.172.2" \
+  "${ksail_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${null_login_cask_commits}"
+
 expect_exempt \
   "GoReleaser KSail Desktop cask" \
   "homebrew-tap" \
