@@ -917,7 +917,8 @@ add_merged_wt() {
   touch -t 202001010000 "$wt"
 }
 
-# gh_shim <root> — `gh` prints $root/gh-out (TSV state<TAB>headRefOid per line), or
+# gh_shim <root> — an OPEN-only query prints the Nth line of $root/gh-open for its Nth call
+# (a count; "0" when absent), so a PR can reopen between two queries. Otherwise `gh` prints $root/gh-out (TSV state<TAB>headRefOid per line), or
 # fails when $root/gh-fail exists. Every invocation's argv is appended to $root/gh-args.
 gh_shim() {
   local root=$1 shim="$1/ghshim"; mkdir -p "$shim"
@@ -926,10 +927,17 @@ gh_shim() {
 printf '%s\n' "\$*" >> "$root/gh-args"
 [ -e "$root/gh-fail" ] && { echo "HTTP 502" >&2; exit 1; }
 [ -e "$root/gh-hang" ] && sleep 30
+case "\$*" in
+  *"--state open"*)
+    n=\$(( \$(cat "$root/gh-open-calls" 2>/dev/null || echo 0) + 1 ))
+    echo "\$n" > "$root/gh-open-calls"
+    line=\$(sed -n "\${n}p" "$root/gh-open" 2>/dev/null)
+    echo "\${line:-0}"; exit 0 ;;
+esac
 [ -e "$root/gh-out" ] && cat "$root/gh-out"
 exit 0
 SHIM
-  chmod +x "$shim/gh"
+  chmod +x "$shim/gh" || return 1
   printf '%s' "$shim"
 }
 
@@ -952,7 +960,7 @@ t_reaps_squash_merged_worktree() {
   github_origin "$root"
   local sha; sha=$(git -C "$root/repo/.claude/worktrees/merged" rev-parse HEAD)
   printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"
-  local shim; shim=$(gh_shim "$root")
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
   local out; out=$(run_gh "$root" "$shim")
   if grep -q '^REAP  .*merged' <<<"$out" \
      && grep -q 'KEEP .*work ' <<<"$out" \
@@ -969,7 +977,7 @@ t_keeps_merged_branch_when_pr_head_differs() {
   add_merged_wt "$root" moved || { bad "keeps on PR head mismatch" "FIXTURE"; rm -rf "$root"; return; }
   github_origin "$root"
   printf 'MERGED\t%s\n' 0123456789abcdef0123456789abcdef01234567 > "$root/gh-out"
-  local shim; shim=$(gh_shim "$root")
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
   local out; out=$(run_gh "$root" "$shim")
   if grep -q 'KEEP .*moved .*unpushed commit' <<<"$out"; then
     ok "KEEPs a merged branch whose current HEAD is not the PR's recorded head"
@@ -985,7 +993,7 @@ t_keeps_branch_with_open_pr() {
   github_origin "$root"
   local sha; sha=$(git -C "$root/repo/.claude/worktrees/live" rev-parse HEAD)
   printf 'OPEN\t%s\nCLOSED\t%s\n' "$sha" "$sha" > "$root/gh-out"
-  local shim; shim=$(gh_shim "$root")
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
   local out; out=$(run_gh "$root" "$shim")
   if grep -q 'KEEP .*live .*unpushed commit' <<<"$out"; then
     ok "KEEPs a branch that still has an OPEN PR"
@@ -1001,7 +1009,7 @@ t_keeps_when_pr_query_fails() {
   github_origin "$root"
   local sha; sha=$(git -C "$root/repo/.claude/worktrees/blind" rev-parse HEAD)
   printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"; : > "$root/gh-fail"
-  local shim; shim=$(gh_shim "$root")
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
   local out; out=$(run_gh "$root" "$shim")
   if grep -q 'KEEP .*blind .*unpushed commit.*PR evidence unavailable' <<<"$out"; then
     ok "KEEPs (fail closed) when the PR query fails"
@@ -1017,7 +1025,7 @@ t_keeps_when_pr_query_hangs() {
   github_origin "$root"
   local sha; sha=$(git -C "$root/repo/.claude/worktrees/stalled" rev-parse HEAD)
   printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"; : > "$root/gh-hang"
-  local shim; shim=$(gh_shim "$root")
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
   local start out elapsed
   start=$(date +%s)
   out=$(WORKTREE_CLEANUP_GH_DEADLINE=1 run_gh "$root" "$shim")
@@ -1031,13 +1039,48 @@ t_keeps_when_pr_query_hangs() {
   rm -rf "$root"
 }
 
+t_keeps_branch_whose_open_pr_is_beyond_history() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" crowded || { bad "keeps an open PR beyond history" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/crowded" rev-parse HEAD)
+  # History shows only the MERGED row (an older OPEN PR fell past its cap); the OPEN
+  # query still sees one.
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"; echo 1 > "$root/gh-open"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*crowded .*unpushed commit' <<<"$out"; then
+    ok "KEEPs a branch whose OPEN PR the capped history query would miss"
+  else
+    bad "KEEPs a branch whose OPEN PR the capped history query would miss" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_when_pr_reopens_before_removal() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" reopened || { bad "keeps on PR reopen before removal" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/reopened" rev-parse HEAD)
+  # First OPEN query: none. The re-check under the mutex: one — the PR reopened.
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"; printf '0\n1\n' > "$root/gh-open"
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
+  local out; out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1)
+  if [ -d "$root/repo/.claude/worktrees/reopened" ]  && grep -q 'KEEP .*reopened .*PR evidence no longer holds' <<<"$out"; then
+    ok "KEEPs a worktree whose PR reopened between the evidence query and removal"
+  else
+    bad "KEEPs a worktree whose PR reopened between the evidence query and removal" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_records_merged_pr_head_evidence() {
   local root; root=$(make_repo)
   add_merged_wt "$root" landed || { bad "records merged-pr-head evidence" "FIXTURE"; rm -rf "$root"; return; }
   github_origin "$root"
   local sha; sha=$(git -C "$root/repo/.claude/worktrees/landed" rev-parse HEAD)
   printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"
-  local shim; shim=$(gh_shim "$root")
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
   local out; out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1)
   local row; row=$(grep -F "$sha" "$root/manifest.tsv" 2>/dev/null)
   if [ ! -e "$root/repo/.claude/worktrees/landed" ] \
@@ -1055,7 +1098,7 @@ t_keeps_merged_branch_on_non_github_origin() {
   add_merged_wt "$root" local || { bad "keeps on non-GitHub origin" "FIXTURE"; rm -rf "$root"; return; }
   local sha; sha=$(git -C "$root/repo/.claude/worktrees/local" rev-parse HEAD)
   printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"
-  local shim; shim=$(gh_shim "$root")
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
   local out; out=$(run_gh "$root" "$shim")
   if grep -q 'KEEP .*local .*unpushed commit' <<<"$out" && [ ! -e "$root/gh-args" ]; then
     ok "KEEPs, without querying, when origin is not a devantler-tech GitHub repo"
@@ -1080,7 +1123,7 @@ t_keeps_merged_branch_with_orphaned_reflog_commit() {
   touch -t 202001010000 "$wt"
   github_origin "$root"
   printf 'MERGED\t%s\n' "$(git -C "$wt" rev-parse HEAD)" > "$root/gh-out"
-  local shim; shim=$(gh_shim "$root")
+  local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
   local out; out=$(run_gh "$root" "$shim")
   if grep -q 'KEEP .*rewound .*HEAD reflog holds commit' <<<"$out"; then
     ok "KEEPs a merged branch whose reflog holds a commit outside the PR"
@@ -1130,6 +1173,8 @@ t_keeps_branch_with_open_pr
 t_keeps_when_pr_query_fails
 t_keeps_when_pr_query_hangs
 t_records_merged_pr_head_evidence
+t_keeps_branch_whose_open_pr_is_beyond_history
+t_keeps_when_pr_reopens_before_removal
 t_keeps_merged_branch_on_non_github_origin
 t_keeps_merged_branch_with_orphaned_reflog_commit
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

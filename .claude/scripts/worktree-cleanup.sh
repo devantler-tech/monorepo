@@ -163,15 +163,50 @@ gh_bounded() {
   return "$rc"
 }
 
+# still_the_reviewed_worktree <wt> <branch> <sha> <merged_head> — re-read under the mutex.
+# Nothing locks the branch, HEAD or the remote PR: a checkout can move the worktree to
+# another branch at the same SHA, and a PR can reopen after the first query. Returns 0
+# only when every fact the removal decision rested on still holds; otherwise sets
+# IDENTITY_NOTE and returns 1.
+IDENTITY_NOTE=""
+still_the_reviewed_worktree() {
+  local wt=$1 branch=$2 sha=$3 merged=$4 now branch_now
+  IDENTITY_NOTE=""
+  now=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || { IDENTITY_NOTE="cannot re-read HEAD before removal"; return 1; }
+  if [ "$now" != "$sha" ]; then IDENTITY_NOTE="HEAD moved during the sweep ($sha -> $now)"; return 1; fi
+  branch_now=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached)")
+  if [ "$branch_now" != "$branch" ]; then IDENTITY_NOTE="branch changed during the sweep ($branch -> $branch_now)"; return 1; fi
+  if [ -n "$merged" ]; then
+    pr_proves_spent "$branch" "$sha"
+    case $? in
+      0) ;;
+      2) IDENTITY_NOTE="PR evidence could not be re-verified before removal ($PR_EVIDENCE_NOTE)"; return 1 ;;
+      *) IDENTITY_NOTE="PR evidence no longer holds before removal (open PR or head moved)"; return 1 ;;
+    esac
+  fi
+  return 0
+}
+
 # pr_proves_spent <branch> <sha> — exit 0 only on positive evidence; 1 when there is
 # none; 2 when the query failed (PR_EVIDENCE_NOTE says why). Never reaps on doubt.
 PR_EVIDENCE_NOTE=""
 pr_proves_spent() {
-  local branch=$1 sha=$2 rows rc state head proven=1
+  local branch=$1 sha=$2 open rows rc state head proven=1
   PR_EVIDENCE_NOTE=""
   [ -n "$GH_REPO" ] || return 1
   if [ -z "$GH_BIN" ]; then PR_EVIDENCE_NOTE="PR evidence unavailable: gh not found"; return 2; fi
   case "$branch" in ''|'(detached)') return 1 ;; esac
+  # OPEN is asked on its own: the history query below is capped, so an OPEN pull request
+  # older than its last 100 rows would be missed there while a MERGED row proved the head.
+  open=$(gh_bounded pr list --repo "$GH_REPO" --state open --head "$branch" --limit 1 \
+         --json number --jq length)
+  rc=$?
+  if [ "$rc" -ne 0 ] || ! [[ "$open" =~ ^[0-9]+$ ]]; then
+    PR_EVIDENCE_NOTE="PR evidence unavailable"
+    [ "$rc" -eq 124 ] && PR_EVIDENCE_NOTE="PR evidence unavailable: query exceeded ${GH_DEADLINE_S}s"
+    return 2
+  fi
+  [ "$open" -eq 0 ] || return 1
   rows=$(gh_bounded pr list --repo "$GH_REPO" --state all --head "$branch" --limit 100 \
          --json state,headRefOid --jq '.[] | "\(.state)\t\(.headRefOid)"')
   rc=$?
@@ -782,12 +817,10 @@ while IFS= read -r wt <&3; do
   # worktree, so the liveness gate does not see it) leaves the working tree clean while
   # $sha still names the OLD commit — preserving that and deleting the worktree would
   # discard the new one.
-  sha_now=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || {
+  # The branch and the PR evidence are re-verified here too, under the mutex.
+  if ! still_the_reviewed_worktree "$wt" "$branch" "$sha" "$merged_head"; then
     worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
-    keep "$wt" "cannot re-read HEAD before removal"; continue; }
-  if [ "$sha_now" != "$sha" ]; then
-    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
-    keep "$wt" "HEAD moved during the sweep ($sha -> $sha_now)"; continue
+    keep "$wt" "$IDENTITY_NOTE"; continue
   fi
 
   if ! git -C "$TOPLEVEL" update-ref "refs/reaped/$sha" "$sha" 2>/dev/null; then
@@ -815,6 +848,9 @@ while IFS= read -r wt <&3; do
   elif ! recheck_mutable_gates "$wt" "$wt_real"; then
     worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     continue    # legitimately KEPT and already reported by the gate
+  elif ! still_the_reviewed_worktree "$wt" "$branch" "$sha" "$merged_head"; then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+    keep "$wt" "$IDENTITY_NOTE"; continue
   elif rm -rf "$wt_real" && [ ! -e "$wt_real" ]; then
     worktree_claim_lock_release || die "REMOVED $wt_real but could not release its ownership mutex"
     git -C "$TOPLEVEL" worktree prune 2>/dev/null \
