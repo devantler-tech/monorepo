@@ -4108,8 +4108,10 @@ that contains it: the session write guard refuses every Edit/Write under the sha
 commands). **Immediately before editing any worktree this session did not create**, atomically
 reserve it with `.claude/scripts/worktree-claim.sh acquire <wt> <session-owner-token>`: exit 3 means a
 **live foreign claim** (marker owner ≠ you, `created_at` within ~2h — the same window as an issue
-claim) → stand down and pick another lane. **Only exit 0 authorizes editing; every non-zero status
-(exit 3 or an acquisition/validation failure) means stand down.** `check` is
+claim) or, on a worktree carrying no marker, **a live process working inside it** → stand down and
+pick another lane. A harness session never writes a marker, so a missing one proves nothing on its
+own; when `lsof` cannot answer, the claim fails closed (#2724). **Only exit 0 authorizes editing;
+every non-zero status (exit 3 or an acquisition/validation failure) means stand down.** `check` is
 read-only diagnosis and does not reserve the worktree. Renew a long-running claim by calling
 `acquire` with the same owner at least hourly. A stale marker must not park a worktree permanently
 (#2284). **Submodule worktree isolation breaks whenever a submodule is initialised** — a

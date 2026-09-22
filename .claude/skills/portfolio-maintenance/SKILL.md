@@ -946,8 +946,8 @@ For each selected product:
    `<lane>/<area>-<desc>` — they go straight to a PR, so no claim window applies.) **Immediately
    before editing a worktree this session did not create**, atomically reserve it with
    `.claude/scripts/worktree-claim.sh acquire <wt> <session-owner-token>`. **Only exit 0 authorizes
-   editing; every non-zero status means stand down**, whether exit 3 (live foreign claim, ~2h expiry)
-   or an acquisition/validation failure. `check` is read-only diagnosis and does not reserve the tree. Renew a
+   editing; every non-zero status means stand down**, whether exit 3 (live foreign claim, ~2h expiry,
+   or a live process inside a worktree carrying no marker) or an acquisition/validation failure. `check` is read-only diagnosis and does not reserve the tree. Renew a
    long-running claim by calling `acquire` with the same owner at least hourly. Work **in that
    worktree**. A stray `core.worktree` makes the worktree
    resolve back into `.git/modules/<name>`, silently collapsing every parallel session into one
