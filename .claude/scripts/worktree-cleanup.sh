@@ -124,6 +124,16 @@ case "$gh_repo_name" in
   *) GH_REPO="devantler-tech/$gh_repo_name" ;;
 esac
 
+# The scheduled sweep runs under launchd, whose default PATH (/usr/bin:/bin:/usr/sbin:/sbin)
+# holds no Homebrew directory. Without this fallback every query would fail and the
+# evidence gate would silently keep everything, exactly as before the fix.
+GH_BIN=$(command -v gh 2>/dev/null || true)
+if [ -z "$GH_BIN" ]; then
+  for gh_candidate in /opt/homebrew/bin/gh /usr/local/bin/gh; do
+    if [ -x "$gh_candidate" ]; then GH_BIN=$gh_candidate; break; fi
+  done
+fi
+
 # pr_proves_spent <branch> <sha> — exit 0 only on positive evidence; 1 when there is
 # none; 2 when the query failed (PR_EVIDENCE_NOTE says why). Never reaps on doubt.
 PR_EVIDENCE_NOTE=""
@@ -131,8 +141,9 @@ pr_proves_spent() {
   local branch=$1 sha=$2 rows state head proven=1
   PR_EVIDENCE_NOTE=""
   [ -n "$GH_REPO" ] || return 1
+  if [ -z "$GH_BIN" ]; then PR_EVIDENCE_NOTE="PR evidence unavailable: gh not found"; return 2; fi
   case "$branch" in ''|'(detached)') return 1 ;; esac
-  if ! rows=$(gh pr list --repo "$GH_REPO" --state all --head "$branch" --limit 100 \
+  if ! rows=$("$GH_BIN" pr list --repo "$GH_REPO" --state all --head "$branch" --limit 100 \
                 --json state,headRefOid --jq '.[] | "\(.state)\t\(.headRefOid)"' 2>/dev/null); then
     PR_EVIDENCE_NOTE="PR evidence unavailable"
     return 2
