@@ -59,7 +59,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-printf '%s' "$head" | grep -Eq '^[0-9a-f]{40}$' || {
+grep -Eq '^[0-9a-f]{40}$' <<<"$head" || {
   echo "coderabbit-summary-verdict: --head must be a full 40-character lowercase sha" >&2
   exit 2
 }
@@ -79,15 +79,17 @@ verdict() {
   case "$1" in GREEN) exit 0 ;; *) exit 1 ;; esac
 }
 
-printf '%s\n' "$body" | grep -Fq '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->' ||
+grep -Fq '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->' <<<"$body" ||
   verdict "NONE not-a-summary"
 
 # A body saying the review did not run defeats everything else in it, including a range header
 # that names the head (the rate-limit shell carries one).
-if printf '%s\n' "$body" | grep -Eiq 'rate limited by coderabbit\.ai|Review limit reached|review limit|couldn.t start this review|Review skipped|Review failed'; then
+if grep -Eiq 'rate limited by coderabbit\.ai|Review limit reached|review limit|couldn.t start this review|Review skipped|Review failed' <<<"$body"; then
   verdict "NONE did-not-run"
 fi
 
+# Every test below reads a here-string, never `printf | grep -q`: under pipefail an early-exiting
+# grep makes printf die of SIGPIPE on a large body, so a match reads as a miss.
 # Judge only the recent_review block: the walkthrough and pre-merge tables are not a verdict.
 recent="$(printf '%s\n' "$body" | awk '
   /<!-- recent_review_start -->/ { inside = 1; next }
@@ -96,11 +98,11 @@ recent="$(printf '%s\n' "$body" | awk '
 ')"
 [ -n "$recent" ] || verdict "NONE no-recent-review"
 
-findings="$(printf '%s\n' "$recent" | sed -nE 's/.*Actionable comments posted: ([0-9]+).*/\1/p' | head -n 1)"
+findings="$(sed -nE '/Actionable comments posted: [0-9]+/{s/.*Actionable comments posted: ([0-9]+).*/\1/p;q;}' <<<"$recent")"
 if [ -n "$findings" ] && [ "$findings" -gt 0 ]; then
   verdict "FINDINGS $findings"
 fi
-printf '%s\n' "$recent" | grep -Fq 'No actionable comments were generated in the recent review' ||
+grep -Fq 'No actionable comments were generated in the recent review' <<<"$recent" ||
   { [ "$findings" = "0" ] || verdict "NONE no-verdict"; }
 
 # The END sha of the range is the commit that was reviewed. Any sha elsewhere in the comment is

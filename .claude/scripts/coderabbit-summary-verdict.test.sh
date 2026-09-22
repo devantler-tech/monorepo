@@ -92,6 +92,15 @@ sed 's/No actionable comments were generated in the recent review. 🎉/**Action
   "${green_fixture}" >"${tmp}/findings.txt"
 expect "recent review with findings" 1 "FINDINGS 2" "${green_head}" "${tmp}/findings.txt"
 
+# A body larger than a pipe buffer must be judged the same way. Piping it into an early-exiting
+# `grep -q` under pipefail reports a match as a miss, which turned both of these into
+# `not-a-summary`; for the did-not-run check that same miss would read a refusal as a green.
+pad() { local i; for i in $(seq 1 4000); do printf 'padding line %s abcdefghijklmnopqrstuvwxyz0123456789\n' "${i}"; done; }
+{ cat "${green_fixture}"; pad; } >"${tmp}/big-green.txt"
+expect "large green summary" 0 "GREEN" "${green_head}" "${tmp}/big-green.txt"
+{ cat "${green_fixture}"; printf '\n> ## Review limit reached\n'; pad; } >"${tmp}/big-limited.txt"
+expect "large summary with a did-not-run marker" 1 "NONE did-not-run" "${green_head}" "${tmp}/big-limited.txt"
+
 # Not a summary comment at all.
 printf 'Reviewing files that changed from the base of the PR and between %s and %s.\n' "${green_head}" "${green_head}" >"${tmp}/plain.txt"
 expect "non-summary body" 1 "NONE not-a-summary" "${green_head}" "${tmp}/plain.txt"
