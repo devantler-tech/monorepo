@@ -3195,3 +3195,31 @@ grep -Fq '**with `--paginate`**' <<<"${_log_step}" ||
 grep -Fq 'the orchestrator, whose own session is unguarded' <<<"${_log_step}" ||
   fail "step 4 must say WHERE a log read legitimately happens, or the boundary reads as a capability gap (monorepo#3420)"
 echo "portfolio surveyor contract: round-16 log-scope assertions passed"
+
+# Round 17 (monorepo#3466): EXECUTE the step-1 PR-body census rather than grep for its wording. A
+# textual check stays green if the jq filter aborts on a bodyless PR (`null|scan` is a jq error, so
+# the whole census returns nothing) or stops extracting a prose-only reference — both regressions
+# that hide an issue's open PR and let the issue be selected twice.
+_census_line="$(grep -F 'gh search prs --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url,body --jq' "${surveyor}" | head -1)"
+[ -n "${_census_line}" ] || fail "step 1 no longer carries the PR-body census command (monorepo#3466)"
+_census_filter="${_census_line#*--jq \'}"
+_census_filter="${_census_filter%\'*}"
+[ -n "${_census_filter}" ] && [ "${_census_filter}" != "${_census_line}" ] ||
+  fail "could not extract the step-1 census jq filter (monorepo#3466)"
+_census_fixture='[
+  {"number":1,"repository":{"name":"platform"},"body":"Follow-up to platform#2451 and #2876; see devantler-tech/ksail#12.","closingIssuesReferences":[]},
+  {"number":2,"repository":{"name":"platform"},"body":null},
+  {"number":3,"repository":{"name":"platform"},"body":"no references here"}
+]'
+if ! _census_out="$(jq -c "${_census_filter}" <<<"${_census_fixture}" 2>&1)"; then
+  fail "the step-1 census jq filter aborts on this fixture (a bodyless PR?): ${_census_out} (monorepo#3466)"
+fi
+[ "$(jq -c '.[0].refs' <<<"${_census_out}")" = '["#2451","#2876","devantler-tech/ksail#12"]' ] ||
+  fail "the census does not extract prose references from a PR body: ${_census_out} (monorepo#3466)"
+[ "$(jq -c '.[1].refs' <<<"${_census_out}")" = '[]' ] ||
+  fail "a bodyless PR must census as refs=[] rather than abort: ${_census_out} (monorepo#3466)"
+[ "$(jq -c '.[2].refs' <<<"${_census_out}")" = '[]' ] ||
+  fail "a PR with no references must census as refs=[]: ${_census_out} (monorepo#3466)"
+[ "$(jq -c '[.[]|has("body")]|any' <<<"${_census_out}")" = 'false' ] ||
+  fail "the census must drop raw PR bodies from its output to keep the digest small (monorepo#3466)"
+echo "portfolio surveyor contract: round-17 census execution assertions passed"
