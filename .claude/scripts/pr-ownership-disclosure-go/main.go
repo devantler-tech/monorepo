@@ -238,7 +238,7 @@ Options:
 Exit codes:
   0  classified (verdict on stdout)
   1  --enforce only: the body carries both literals
-  2  usage or unreadable input
+  2  usage, unreadable input, or empty stdin (UNKNOWN, never none)
 `)
 }
 
@@ -268,6 +268,14 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pr-ownership-disclosure: %v\n", err)
+		os.Exit(2)
+	}
+
+	// An empty stdin is a failed upstream read, not a body: `gh … | guard --input -`
+	// hands over nothing when gh fails, and classifying that as `none` would report a
+	// verdict about a body nobody read. A bodyless PR is checked through a file.
+	if *input == "-" && strings.TrimSpace(string(data)) == "" {
+		fmt.Fprintln(os.Stderr, "pr-ownership-disclosure: empty input on stdin is UNKNOWN, not a body")
 		os.Exit(2)
 	}
 
