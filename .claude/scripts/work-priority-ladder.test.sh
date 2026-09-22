@@ -432,6 +432,12 @@ assert_absent 'Never auto-drive or merge external PRs' \
   "${skill_flat}" "the hygiene sweep still forbids auto-driving an external PR"
 assert_absent 'Never merge external PRs' \
   "${skill_flat}" "the non-negotiable global rules still forbid merging an external PR"
+# The negatives above can also be satisfied by deleting the EXECUTION guardrail along with the merge
+# ban. Pin that guardrail in both places the skill states it, so retiring the ban never retires it.
+assert_prose 'Never *run* an **external-author** branch on this machine (trust gate)' \
+  "${skill_flat}" "the merge-path bullet no longer forbids running an external author's branch"
+assert_prose "Never run an external author's branch locally" \
+  "${skill_flat}" "the non-negotiable global rules no longer forbid running an external author's branch"
 
 # The DEEPENING selector is a second, quieter way the surveyor re-narrows rung 1 at runtime. Widening
 # which PRs the orchestrator may drive achieves nothing while the survey still pulls the pentad only
