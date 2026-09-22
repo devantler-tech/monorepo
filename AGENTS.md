@@ -862,7 +862,10 @@ dispatch marker come from the exact automation id's `rrule` and `last_run_at` fi
 pointer and must equal that scheduler record before the drift check reports `MATCH`;
 `automation.toml.updated_at` is only an apply marker and does not advance on dispatch. A missing or
 ambiguous store, missing baseline, marker that did not advance, or incomplete recurrence rule is
-`UNKNOWN`, never `MATCH`.
+`UNKNOWN`, never `MATCH`. An omitted `BYSECOND` does not make a rule incomplete: RFC 5545 fills it
+with the single `DTSTART` second, which stays inside the stated `BYMINUTE`, so it cannot move or add
+an hour-and-minute start. A missing `BYMINUTE`, an empty or multi-valued `BYSECOND`, or an explicit
+non-zero `BYSECOND` still yields `UNKNOWN`.
 
 🔴 **That sentence governs the PERSISTENCE verdict — "did an applied edit survive a dispatch?" — and
 never the cadence-table comparison beside it.** The two are independent: `expected == actual` is
