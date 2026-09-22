@@ -134,18 +134,50 @@ if [ -z "$GH_BIN" ]; then
   done
 fi
 
+# A stalled API call must not stall the sweep: launchd starts no second copy while one
+# runs, so a hung query would block every later sweep. It gets a wall-clock deadline, and a
+# query that outlives it fails like any other failed query, so the worktree is KEPT.
+GH_DEADLINE_S=${WORKTREE_CLEANUP_GH_DEADLINE:-60}
+case "$GH_DEADLINE_S" in ''|*[!0-9]*|0) GH_DEADLINE_S=60 ;; esac
+
+# gh_bounded <gh args...> — gh with a deadline; prints its stdout, returns its status or 124.
+gh_bounded() {
+  local tmp pid rc ticks=0
+  tmp=$(mktemp "${TMPDIR:-/tmp}/worktree-cleanup-gh.XXXXXX") || return 2
+  "$GH_BIN" "$@" >"$tmp" 2>/dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$ticks" -ge $((GH_DEADLINE_S * 5)) ]; then
+      kill -TERM "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      rm -f "$tmp"
+      return 124
+    fi
+    sleep 0.2
+    ticks=$((ticks + 1))
+  done
+  wait "$pid"
+  rc=$?
+  cat "$tmp"
+  rm -f "$tmp"
+  return "$rc"
+}
+
 # pr_proves_spent <branch> <sha> — exit 0 only on positive evidence; 1 when there is
 # none; 2 when the query failed (PR_EVIDENCE_NOTE says why). Never reaps on doubt.
 PR_EVIDENCE_NOTE=""
 pr_proves_spent() {
-  local branch=$1 sha=$2 rows state head proven=1
+  local branch=$1 sha=$2 rows rc state head proven=1
   PR_EVIDENCE_NOTE=""
   [ -n "$GH_REPO" ] || return 1
   if [ -z "$GH_BIN" ]; then PR_EVIDENCE_NOTE="PR evidence unavailable: gh not found"; return 2; fi
   case "$branch" in ''|'(detached)') return 1 ;; esac
-  if ! rows=$("$GH_BIN" pr list --repo "$GH_REPO" --state all --head "$branch" --limit 100 \
-                --json state,headRefOid --jq '.[] | "\(.state)\t\(.headRefOid)"' 2>/dev/null); then
+  rows=$(gh_bounded pr list --repo "$GH_REPO" --state all --head "$branch" --limit 100 \
+         --json state,headRefOid --jq '.[] | "\(.state)\t\(.headRefOid)"')
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
     PR_EVIDENCE_NOTE="PR evidence unavailable"
+    [ "$rc" -eq 124 ] && PR_EVIDENCE_NOTE="PR evidence unavailable: query exceeded ${GH_DEADLINE_S}s"
     return 2
   fi
   while IFS=$'\t' read -r state head; do
@@ -715,7 +747,11 @@ while IFS= read -r wt <&3; do
   # the ledger is unwritable, so every subsequent removal would be unrecorded too.
   # Aborting (rather than keeping and carrying on) is what stops the wrapper reporting
   # a healthy sweep — which matters most under the disk pressure this tool exists for.
-  if ! record "$wt_real" "$branch" "$sha" "${merged_head:+merged-pr-head;}reachable-from-remote;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
+  # A squash-merged reap is NOT reachable from any remote; its commits survive only in the
+  # PR head ref, so the ledger must say which of the two made the removal safe.
+  reach_evidence="reachable-from-remote"
+  [ -n "$merged_head" ] && reach_evidence="merged-pr-head"
+  if ! record "$wt_real" "$branch" "$sha" "$reach_evidence;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
     die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"
   fi
   # Containment assertion before ANY recursive delete. $wt_real is derived from a glob

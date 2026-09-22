@@ -925,6 +925,7 @@ gh_shim() {
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$root/gh-args"
 [ -e "$root/gh-fail" ] && { echo "HTTP 502" >&2; exit 1; }
+[ -e "$root/gh-hang" ] && sleep 30
 [ -e "$root/gh-out" ] && cat "$root/gh-out"
 exit 0
 SHIM
@@ -1010,6 +1011,45 @@ t_keeps_when_pr_query_fails() {
   rm -rf "$root"
 }
 
+t_keeps_when_pr_query_hangs() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" stalled || { bad "keeps on a hung PR query" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/stalled" rev-parse HEAD)
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"; : > "$root/gh-hang"
+  local shim; shim=$(gh_shim "$root")
+  local start out elapsed
+  start=$(date +%s)
+  out=$(WORKTREE_CLEANUP_GH_DEADLINE=1 run_gh "$root" "$shim")
+  elapsed=$(( $(date +%s) - start ))
+  if grep -q 'KEEP .*stalled .*PR evidence unavailable: query exceeded 1s' <<<"$out" \
+     && [ "$elapsed" -lt 20 ]; then
+    ok "KEEPs (fail closed) when the PR query outlives its deadline"
+  else
+    bad "KEEPs (fail closed) when the PR query outlives its deadline" "elapsed=${elapsed}s $out"
+  fi
+  rm -rf "$root"
+}
+
+t_records_merged_pr_head_evidence() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" landed || { bad "records merged-pr-head evidence" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/landed" rev-parse HEAD)
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root")
+  local out; out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1)
+  local row; row=$(grep -F "$sha" "$root/manifest.tsv" 2>/dev/null)
+  if [ ! -e "$root/repo/.claude/worktrees/landed" ] \
+     && grep -q 'merged-pr-head;no-live-process' <<<"$row" \
+     && ! grep -q 'reachable-from-remote' <<<"$row"; then
+    ok "records a squash-merged reap as merged-pr-head, not reachable-from-remote"
+  else
+    bad "records a squash-merged reap as merged-pr-head, not reachable-from-remote" "row=$row // $out"
+  fi
+  rm -rf "$root"
+}
+
 t_keeps_merged_branch_on_non_github_origin() {
   local root; root=$(make_repo)
   add_merged_wt "$root" local || { bad "keeps on non-GitHub origin" "FIXTURE"; rm -rf "$root"; return; }
@@ -1032,7 +1072,11 @@ t_keeps_merged_branch_with_orphaned_reflog_commit() {
   # A commit that is then reset away: it lives only in this worktree's reflog.
   echo lost > "$wt/lost.txt"; git -C "$wt" add lost.txt; git -C "$wt" commit -qm lost
   git -C "$wt" reset -q --hard HEAD~1
-  git -C "$wt" push -q origin claude/rewound && git -C "$wt" push -q origin --delete claude/rewound
+  # Both pushes are the fixture: without them the branch was never pushed-then-deleted, and
+  # an earlier gate could produce the expected KEEP on its own.
+  if ! { git -C "$wt" push -q origin claude/rewound && git -C "$wt" push -q origin --delete claude/rewound; }; then
+    bad "keeps merged+orphan reflog" "FIXTURE: push-then-delete failed"; rm -rf "$root"; return
+  fi
   touch -t 202001010000 "$wt"
   github_origin "$root"
   printf 'MERGED\t%s\n' "$(git -C "$wt" rev-parse HEAD)" > "$root/gh-out"
@@ -1084,6 +1128,8 @@ t_reaps_squash_merged_worktree
 t_keeps_merged_branch_when_pr_head_differs
 t_keeps_branch_with_open_pr
 t_keeps_when_pr_query_fails
+t_keeps_when_pr_query_hangs
+t_records_merged_pr_head_evidence
 t_keeps_merged_branch_on_non_github_origin
 t_keeps_merged_branch_with_orphaned_reflog_commit
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
