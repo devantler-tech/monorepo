@@ -1625,7 +1625,8 @@ reviewed, and tried and evaluated as a user)"*). You still **work in drafts**, a
 draft yourself only when you genuinely know it is ready**, which means ALL THREE:
 1. **Programmatically tested** — the repo's validation and tests pass (RED/GREEN proof for fixes;
    both-states tests for flagged features) and the full hygiene pentad is clear: green required
-   checks, zero unresolved threads, zero non-thread review findings, no conflict with base, and a
+   checks (every required check present at the head, since one that never ran is not green — see
+   the completeness check under *Merge policy*), zero unresolved threads, zero non-thread review findings, no conflict with base, and a
    current-head successful review. CodeRabbit's ancillary pre-merge output is not a separate
    readiness condition; only an explicit problem it reports during its selected review is a finding.
 2. **Reviewed** — ≥1 green CodeRabbit, Codex or Cursor Bugbot review at the current head — or,
@@ -2986,6 +2987,37 @@ live in every repository here. Measured on monorepo#2927 at head `cc7ac05b` (202
 no `CHANGES_REQUESTED` — and **two** unresolved threads. Promoted 05:59:20Z; the blocking review landed
 93 minutes later, after promotion. (a) still holds for genuine lazy recomputation — it is scoped to a
 head whose threads are already resolved, not widened.
+
+🔴 **Exception (a) also requires the head's REQUIRED gate set to be complete — a gate that never
+reported wears the same all-green costume** (#2730). `statusCheckRollup` lists what ran, never what
+should have run: platform#2704 carried 16 of 27 checks because its head predated 12 required
+workflows, and ksail#6645's required workflow failed before creating a job, so no check-run existed.
+Before reading `BLOCKED` as stale, compare the head against the branch's rulesets and classic
+protection instead of the rollup:
+
+```sh
+.claude/scripts/required-gate-completeness.sh --repo devantler-tech/<repo> --base <baseRefName> --head <headRefOid>
+```
+
+- **Exit `0` (`COMPLETE`)** is the only reading under which (a) applies.
+- **Exit `1`** names each `MISSING`, `FAILED` or `PENDING` gate. That gate is the blocker, and it is
+  never stale. A head missing a required check does not satisfy the promotion gate's check condition.
+- **Exit `2` (`UNKNOWN`)** never reads as stale either. That includes an active `code_quality` rule,
+  which is always `UNVERIFIED` because no readable surface reports its analysis for a head. The merge
+  API may still decide, but diagnose a refusal or a no-op from the gate lines, starting with the
+  `code_quality` setup state they name (monorepo#3404).
+
+**A required workflow MISSING because the head predates it is fixed by updating the branch**, which
+runs every workflow again at a new head:
+
+```sh
+gh api --method PUT repos/devantler-tech/<repo>/pulls/<n>/update-branch -f expected_head_sha=<headRefOid>
+```
+
+It merges the base and never rewrites history. On another lane's PR it is the repair push *Autonomy*
+already permits once the active-work test shows the PR unowned. On an external contributor's PR it
+is the same API call and runs nothing locally. Every push stales the green review, so re-secure it at
+the new head.
 Otherwise `CLEAN` is authoritative for required checks: don't re-derive required
 checks from the rollup, don't re-fetch branch protection on every merge (it's confirmed **once per
 repo per session**), and don't bundle the evidence and the merge into one chained command. Driving a
@@ -3003,6 +3035,12 @@ undiagnosed refusal as "maintainer-gated" is worse than losing the run it happen
 EVERY pull request in the portfolio*, no undefined permanent-sounding gate may park a PR — and once
 that label reaches durable memory it teaches every later run, in every lane, to skip the same
 completable PR.
+
+🔴 **A merge command's exit `0` is not a merge.** On platform#2704, `gh pr merge` exited `0`, printed
+nothing and did nothing, because required checks were missing (#2730). So the confirmation read below
+is part of every merge. Unless `state` reads `MERGED`, or the PR is in the merge queue on a
+merge-queue repository, the merge failed: run the completeness check above and diagnose it. Never
+record it as merged.
 **Confirming the merge landed: `gh pr view <n> --repo devantler-tech/<repo> --json state,mergedAt` —
 there is NO `merged` field.** This read was unprescribed territory, and the improvisation it invited
 costs more than one value: `gh` rejects the **whole** `--json` request when any single field is unknown,
