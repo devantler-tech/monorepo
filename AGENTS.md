@@ -2448,8 +2448,9 @@ result at the current head — self-promotion is forbidden before that. Request 
   the work past the end of the run, review locally and move on.
   🔴 **Read that window from the summary comment CodeRabbit edits in place — the newest comment by
   `created_at` never carries it.** A refusal posts a short `Review rate limited` reply with no window,
-  and the window lands in the existing auto-generated summary as `Next review available in: N
-  minutes`. Select CodeRabbit's comments by `updated_at`, or search all of them for that phrase;
+  and the window lands in the existing auto-generated summary, worded `Next review available in: N
+  minutes` on 2026-08-18 and `Next included review available in N minutes` on 2026-09-22. Select
+  CodeRabbit's comments by `updated_at`, or search all of them for `available in`, which matches both;
   reading only the newest-created one reports "no window stated" and escalates onto the weekly- and
   monthly-limited lanes. Measured 2026-08-18 on monorepo#2892 and #2893: stated windows of 7 and 2
   minutes, and after the 2-minute wait CodeRabbit delivered a real review. The limit is one included
