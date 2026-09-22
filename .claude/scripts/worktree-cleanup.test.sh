@@ -899,6 +899,153 @@ t_rejects_bad_mode() {
   rm -rf "$root"
 }
 
+# --- squash-merged branches (#2678) ------------------------------------------------
+# Under squash-merge a merged branch's own commits are never ancestors of main, and the
+# remote branch is deleted after merge, so the graph test reports them "unpushed"
+# forever. Only a MERGED/CLOSED PR whose recorded head equals the worktree's HEAD proves
+# they are redundant. These fixtures point origin at a GitHub-shaped URL AFTER pushing
+# (the script never talks to the network) and shim `gh` to return canned PR evidence.
+
+# add_merged_wt <root> <name> — a branch that was pushed, then had its remote branch
+# deleted and pruned, exactly as a squash-merged PR branch looks locally.
+add_merged_wt() {
+  local root=$1 name=$2
+  add_wt "$root" "$name" unpushed || return 1
+  local wt="$root/repo/.claude/worktrees/$name"
+  git -C "$wt" push -q origin "claude/$name" || return 1
+  git -C "$wt" push -q origin --delete "claude/$name" || return 1
+  touch -t 202001010000 "$wt"
+}
+
+# gh_shim <root> — `gh` prints $root/gh-out (TSV state<TAB>headRefOid per line), or
+# fails when $root/gh-fail exists. Every invocation's argv is appended to $root/gh-args.
+gh_shim() {
+  local root=$1 shim="$1/ghshim"; mkdir -p "$shim"
+  cat > "$shim/gh" <<SHIM
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$root/gh-args"
+[ -e "$root/gh-fail" ] && { echo "HTTP 502" >&2; exit 1; }
+[ -e "$root/gh-out" ] && cat "$root/gh-out"
+exit 0
+SHIM
+  chmod +x "$shim/gh"
+  printf '%s' "$shim"
+}
+
+github_origin() { git -C "$1/repo" remote set-url origin https://github.com/devantler-tech/fixture.git; }
+
+run_gh() { # <root> <shim> -> stdout
+  PATH="$2:$PATH" "$SUT" "$1/repo" "$1/manifest.tsv" dry-run 24 2>&1
+}
+
+t_reaps_squash_merged_worktree() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" merged || { bad "reaps a squash-merged worktree" "FIXTURE"; rm -rf "$root"; return; }
+  add_wt "$root" work unpushed
+  # add_wt commits identical content in the same second, so without a distinct commit
+  # `work` would share `merged`'s SHA and inherit its evidence.
+  echo distinct > "$root/repo/.claude/worktrees/work/distinct.txt"
+  git -C "$root/repo/.claude/worktrees/work" add distinct.txt
+  git -C "$root/repo/.claude/worktrees/work" commit -qm distinct
+  touch -t 202001010000 "$root/repo/.claude/worktrees/work"
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/merged" rev-parse HEAD)
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root")
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q '^REAP  .*merged' <<<"$out" \
+     && grep -q 'KEEP .*work ' <<<"$out" \
+     && grep -q -- '--repo devantler-tech/fixture .*--head claude/merged' "$root/gh-args"; then
+    ok "reaps a squash-merged worktree whose PR head equals HEAD"
+  else
+    bad "reaps a squash-merged worktree whose PR head equals HEAD" "$out // $(cat "$root/gh-args" 2>/dev/null)"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_merged_branch_when_pr_head_differs() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" moved || { bad "keeps on PR head mismatch" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  printf 'MERGED\t%s\n' 0123456789abcdef0123456789abcdef01234567 > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root")
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*moved .*unpushed commit' <<<"$out"; then
+    ok "KEEPs a merged branch whose current HEAD is not the PR's recorded head"
+  else
+    bad "KEEPs a merged branch whose current HEAD is not the PR's recorded head" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_branch_with_open_pr() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" live || { bad "keeps with open PR" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/live" rev-parse HEAD)
+  printf 'OPEN\t%s\nCLOSED\t%s\n' "$sha" "$sha" > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root")
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*live .*unpushed commit' <<<"$out"; then
+    ok "KEEPs a branch that still has an OPEN PR"
+  else
+    bad "KEEPs a branch that still has an OPEN PR" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_when_pr_query_fails() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" blind || { bad "keeps on gh failure" "FIXTURE"; rm -rf "$root"; return; }
+  github_origin "$root"
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/blind" rev-parse HEAD)
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"; : > "$root/gh-fail"
+  local shim; shim=$(gh_shim "$root")
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*blind .*unpushed commit.*PR evidence unavailable' <<<"$out"; then
+    ok "KEEPs (fail closed) when the PR query fails"
+  else
+    bad "KEEPs (fail closed) when the PR query fails" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_merged_branch_on_non_github_origin() {
+  local root; root=$(make_repo)
+  add_merged_wt "$root" local || { bad "keeps on non-GitHub origin" "FIXTURE"; rm -rf "$root"; return; }
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/local" rev-parse HEAD)
+  printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root")
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*local .*unpushed commit' <<<"$out" && [ ! -e "$root/gh-args" ]; then
+    ok "KEEPs, without querying, when origin is not a devantler-tech GitHub repo"
+  else
+    bad "KEEPs, without querying, when origin is not a devantler-tech GitHub repo" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_merged_branch_with_orphaned_reflog_commit() {
+  local root; root=$(make_repo)
+  add_wt "$root" rewound unpushed || { bad "keeps merged+orphan reflog" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/rewound"
+  # A commit that is then reset away: it lives only in this worktree's reflog.
+  echo lost > "$wt/lost.txt"; git -C "$wt" add lost.txt; git -C "$wt" commit -qm lost
+  git -C "$wt" reset -q --hard HEAD~1
+  git -C "$wt" push -q origin claude/rewound && git -C "$wt" push -q origin --delete claude/rewound
+  touch -t 202001010000 "$wt"
+  github_origin "$root"
+  printf 'MERGED\t%s\n' "$(git -C "$wt" rev-parse HEAD)" > "$root/gh-out"
+  local shim; shim=$(gh_shim "$root")
+  local out; out=$(run_gh "$root" "$shim")
+  if grep -q 'KEEP .*rewound .*HEAD reflog holds commit' <<<"$out"; then
+    ok "KEEPs a merged branch whose reflog holds a commit outside the PR"
+  else
+    bad "KEEPs a merged branch whose reflog holds a commit outside the PR" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -933,5 +1080,11 @@ t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode
+t_reaps_squash_merged_worktree
+t_keeps_merged_branch_when_pr_head_differs
+t_keeps_branch_with_open_pr
+t_keeps_when_pr_query_fails
+t_keeps_merged_branch_on_non_github_origin
+t_keeps_merged_branch_with_orphaned_reflog_commit
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
