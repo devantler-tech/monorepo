@@ -59,6 +59,7 @@ jobs:
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       gh-json-vocabulary-contract: ${{ steps.filter.outputs.gh-json-vocabulary-contract }}
       gh-json-read: ${{ steps.filter.outputs.gh-json-read }}
+      squash-closing-keywords: ${{ steps.filter.outputs.squash-closing-keywords }}
       merge-preflight-thread-gate: ${{ steps.filter.outputs.merge-preflight-thread-gate }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
@@ -579,6 +580,10 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/gh-json-read.sh'
               - '.claude/scripts/gh-json-read.test.sh'
+              - '.github/workflows/ci.yaml'
+            squash-closing-keywords:
+              - '.claude/scripts/squash-closing-keywords.sh'
+              - '.claude/scripts/squash-closing-keywords.test.sh'
               - '.github/workflows/ci.yaml'
             gh-json-vocabulary-contract:
               - 'AGENTS.md'
@@ -1510,6 +1515,15 @@ jobs:
         run: |
           printf '%s' "$PR_BODY" >"$RUNNER_TEMP/pr-body.md"
           bash .claude/scripts/pr-ownership-disclosure.sh --enforce --input "$RUNNER_TEMP/pr-body.md"
+      - name: Guard commit messages against closing a Part-of issue
+        # A squash merge copies every commit message into the squash commit, so a closing keyword in
+        # branch history closes an issue the body only marks Part of. The checkout is the merge ref
+        # at depth 1; fetching its full commit ancestry (commit objects only) makes the PR's commits
+        # exactly HEAD^1..HEAD^2. No token is used, so a fork's candidate copy runs without one.
+        run: |
+          git fetch --no-tags --filter=tree:0 --unshallow origin "+${GITHUB_REF}:${GITHUB_REF}"
+          bash .claude/scripts/squash-closing-keywords.sh --repo "$GITHUB_REPOSITORY" \
+            --body-file "$RUNNER_TEMP/pr-body.md" --base HEAD^1 --head HEAD^2
       - name: Enforce the routine-role PR body contract
         # Routine roles write branches in this repository. Never execute a fork's candidate
         # version of this guard or expose the base repository token to untrusted code.
@@ -2116,6 +2130,25 @@ jobs:
       - name: Verify the gh JSON read helper
         run: bash .claude/scripts/gh-json-read.test.sh
 
+  test-squash-closing-keywords:
+    name: Test squash closing-keyword guard
+    needs: changes
+    if: needs.changes.outputs.squash-closing-keywords == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the squash closing-keyword guard
+        run: bash .claude/scripts/squash-closing-keywords.test.sh
+
   test-gh-json-vocabulary-contract:
     name: Test gh JSON vocabulary contract
     needs: changes
@@ -2345,6 +2378,7 @@ jobs:
       - test-merge-confirmation-read
       - test-gh-json-vocabulary-contract
       - test-gh-json-read
+      - test-squash-closing-keywords
       - test-improver-role-disclosure
       - test-merge-preflight-thread-gate
       - test-portfolio-surveyor-contract
@@ -2419,6 +2453,7 @@ jobs:
             ${{ needs.test-merge-confirmation-read.result }}
             ${{ needs.test-gh-json-vocabulary-contract.result }}
             ${{ needs.test-gh-json-read.result }}
+            ${{ needs.test-squash-closing-keywords.result }}
             ${{ needs.test-improver-role-disclosure.result }}
             ${{ needs.test-merge-preflight-thread-gate.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
