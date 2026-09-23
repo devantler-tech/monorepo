@@ -1520,6 +1520,8 @@ jobs:
         # branch history closes an issue the body only marks Part of. The checkout is the merge ref
         # at depth 1; fetching its full commit ancestry (commit objects only) makes the PR's commits
         # exactly HEAD^1..HEAD^2. No token is used, so a fork's candidate copy runs without one.
+        # It reads the body file the first step writes, so it still reports when that step fails.
+        if: ${{ !cancelled() }}
         run: |
           git fetch --no-tags --filter=tree:0 --unshallow origin "+${GITHUB_REF}:${GITHUB_REF}"
           bash .claude/scripts/squash-closing-keywords.sh --repo "$GITHUB_REPOSITORY" \

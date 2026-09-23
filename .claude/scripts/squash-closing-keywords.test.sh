@@ -75,7 +75,8 @@ check "an early commit closing a Part-of parent fails" '[ "$RC" -eq 1 ]'
 check "the finding names the parent and the commit that closes it" \
   'has "OFFENDING #2609: commit $early (\"fix(agents): first slice\") closes it"'
 check "the delivered child is not reported" '! has "OFFENDING #2728"'
-check "the failure names the remedy" 'has "reword each commit above" && has "Part of #N"'
+check "the failure names the remedy" 'has "remove the closing keyword from each commit above" && has "Part of #N"'
+check "the remedy never prescribes a force-push" '! has "force"'
 check "the summary counts every commit" 'has "examined=2 findings=1"'
 
 # --- GREEN control: commits and body agree -------------------------------------------------------
@@ -101,6 +102,24 @@ repo=$(new_repo)
 commit "$repo" $'fix: unrelated\n\nFixes #11'
 run "$repo" $'Part of #12\n'
 check "a closing keyword for an issue the body does not mark Part of passes" '[ "$RC" -eq 0 ]'
+
+# --- the body as GitHub renders it --------------------------------------------------------------
+# An HTML comment links nothing, so a `Fixes` left inside one must not mask the commit that closes it.
+repo=$(new_repo)
+commit "$repo" $'fix: first slice\n\nFixes #2609'
+run "$repo" $'Part of #2609\n<!-- Fixes #2609 -->\n'
+check "a closing keyword inside an HTML comment does not mask the finding" \
+  '[ "$RC" -eq 1 ] && has "OFFENDING #2609:"'
+
+repo=$(new_repo)
+commit "$repo" $'fix: first slice\n\nFixes #2609'
+run "$repo" $'Fixes #2609\n<!--\nPart of #2609\n-->\n'
+check "a Part-of inside a multi-line HTML comment is not a declaration" '[ "$RC" -eq 0 ]'
+
+repo=$(new_repo)
+commit "$repo" $'fix: first slice\n\nFixes #2609'
+run "$repo" $'Part of <!-- note --> #2609\n'
+check "text on either side of an inline HTML comment is kept" '[ "$RC" -eq 1 ] && has "OFFENDING #2609:"'
 
 # --- keyword spellings GitHub honours -----------------------------------------------------------
 for message in 'close #5' 'Closes: #5' 'closed #5' 'FIX #5' 'Fixed #5' 'resolve #5' 'Resolves #5' 'resolved: #5'; do
@@ -174,6 +193,26 @@ check "a commit already on the base is not part of the squash" '[ "$RC" -eq 0 ] 
 repo=$(new_repo)
 invoke --repo devantler-tech/monorepo --body-file "$FIX/body.md" --base HEAD --head HEAD --repo-dir "$repo"
 check "an empty range is stated, not assumed" '[ "$RC" -eq 0 ] && has "examined=0 findings=0"'
+
+# --- the range CI reads: HEAD^1..HEAD^2 of the PR's merge ref ------------------------------------
+# The branch merged main in after main gained its own `Fixes #9`; only the branch's commits are the
+# squash, so the main-side commit must not count while the branch's own one must.
+repo=$(new_repo)
+main_branch=$(git -C "$repo" symbolic-ref --short HEAD)
+git -C "$repo" checkout -q -b pr
+commit "$repo" $'fix: early slice\n\nFixes #9'
+git -C "$repo" checkout -q "$main_branch"
+commit "$repo" $'chore: main moves on\n\nFixes #9'
+git -C "$repo" checkout -q pr
+git -C "$repo" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false \
+  merge -q --no-ff -m "Merge main into pr" "$main_branch"
+git -C "$repo" checkout -q "$main_branch"
+git -C "$repo" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false \
+  merge -q --no-ff -m "Merge pr into main" pr
+printf 'Part of #9\n' >"$FIX/body.md"
+invoke --repo devantler-tech/monorepo --body-file "$FIX/body.md" --base HEAD^1 --head HEAD^2 --repo-dir "$repo"
+check "the merge ref's second parent yields exactly the branch's commits" \
+  '[ "$RC" -eq 1 ] && has "examined=2 findings=1" && has "(\"fix: early slice\")"'
 
 # --- fail closed ---------------------------------------------------------------------------------
 invoke --repo devantler-tech/monorepo --body-file "$FIX/body.md" --base does-not-exist --head HEAD \

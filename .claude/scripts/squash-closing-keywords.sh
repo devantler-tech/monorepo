@@ -104,7 +104,26 @@ display() {
   esac
 }
 
-body="$(cat -- "$body_file")"
+# The body as GitHub renders it: an HTML comment (template guidance, a stale edit) links nothing,
+# so a `Fixes #N` left inside one must not mask a commit that closes #N.
+body="$(awk '
+  {
+    line = $0
+    out = ""
+    while (line != "") {
+      if (in_comment) {
+        i = index(line, "-->")
+        if (i == 0) { line = "" } else { line = substr(line, i + 3); in_comment = 0 }
+      } else {
+        i = index(line, "<!--")
+        if (i == 0) { out = out line; line = "" } else {
+          out = out substr(line, 1, i - 1); line = substr(line, i + 4); in_comment = 1
+        }
+      }
+    }
+    print out
+  }
+' "$body_file")" || unknown "body file could not be read: $body_file"
 # The issues the body marks Part of without also closing them: the only ones a commit must not close.
 part_only="$(comm -23 <(refs "$PART_OF" "$body" | sort -u) <(refs "$CLOSING" "$body" | sort -u))"
 
@@ -132,10 +151,11 @@ printf '%s: examined=%d findings=%d range=%s..%s\n' "$PROG" "$examined" "$findin
 if [ "$findings" -gt 0 ]; then
   cat <<'EOF'
 A squash merge copies every commit message into the squash commit, and GitHub closes each issue a
-closing keyword there names, whatever the PR body says. Fix one side so they agree:
-  - reword each commit above so it no longer uses a closing keyword for that issue
-    (on a branch you own: `git rebase -i <base>` with `reword`, then `git push --force-with-lease`), or
-  - if the issue should close, change the body's `Part of #N` to `Fixes #N`.
+closing keyword there names, whatever the PR body says. Make the two agree:
+  - if the issue should close, change the body's `Part of #N` to `Fixes #N`; otherwise
+  - remove the closing keyword from each commit above. That rewrites branch history, so do it only
+    where your repository's rules allow it; else carry the change on a fresh branch whose commit
+    messages do not close the issue, and open the pull request from there.
 EOF
   exit 1
 fi
