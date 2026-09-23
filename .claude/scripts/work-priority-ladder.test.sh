@@ -92,6 +92,16 @@ assert_prose 'claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo
   "${skill_flat}" "board-only work does not claim against its issue-owning monorepo repository"
 assert_prose 'retire the acquired SHA after the board/API mutation is verified' \
   "${skill_flat}" "board-only work leaves its shared claim tip live after successful mutation"
+# The contract is the canonical statement the skill and card derive from, so its clause is pinned too:
+# without it the board case reads as exempt from the claim protocol (#2862).
+assert_prose 'the board has no product checkout, but its roadmap issue lives in `devantler-tech/monorepo`. Acquire against the monorepo root' \
+  "${constitution_flat}" "the contract does not claim board-only work against its issue-owning repository"
+assert_prose 'retire that exact SHA after the board/API mutation is read back and verified' \
+  "${constitution_flat}" "the contract gives board-only work no retirement trigger"
+assert_prose 'SHA immediately before the board mutation** and replace `claim_sha` with the SHA returned by' \
+  "${constitution_flat}" "the contract lets board-only work mutate without renewing its claim"
+assert_prose 'if renewal fails, stand down without mutating' \
+  "${constitution_flat}" "the contract lets board-only work mutate after losing its claim"
 
 # A claim can be taken over after its lease expires while the original holder
 # is paused. Every live delivery procedure must re-verify the retained SHA at
@@ -432,6 +442,12 @@ assert_absent 'Never auto-drive or merge external PRs' \
   "${skill_flat}" "the hygiene sweep still forbids auto-driving an external PR"
 assert_absent 'Never merge external PRs' \
   "${skill_flat}" "the non-negotiable global rules still forbid merging an external PR"
+# The negatives above can also be satisfied by deleting the EXECUTION guardrail along with the merge
+# ban. Pin that guardrail in both places the skill states it, so retiring the ban never retires it.
+assert_prose 'Never *run* an **external-author** branch on this machine (trust gate)' \
+  "${skill_flat}" "the merge-path bullet no longer forbids running an external author's branch"
+assert_prose "Never run an external author's branch locally" \
+  "${skill_flat}" "the non-negotiable global rules no longer forbid running an external author's branch"
 
 # The DEEPENING selector is a second, quieter way the surveyor re-narrows rung 1 at runtime. Widening
 # which PRs the orchestrator may drive achieves nothing while the survey still pulls the pentad only

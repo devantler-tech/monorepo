@@ -153,6 +153,23 @@ assert_prose "${constitution}" 'Review skipped: automatic reviews are disabled' 
   "constitution does not name the not-run CodeRabbit status description"
 assert_prose "${constitution}" 'the `description` is the only discriminator' \
   "constitution does not make the status description the discriminator"
+
+# CodeRabbit states its retry window only in the summary comment it edits in place, so reading the
+# newest-created comment misses it and escalates onto the metered lanes (#2897).
+assert_prose "${constitution}" 'Read that window from the summary comment CodeRabbit edits in place' \
+  "constitution does not say where CodeRabbit's retry window is published"
+assert_prose "${constitution}" 'Select CodeRabbit'"'"'s comments by `updated_at`, or search all of them for `available in`, which matches both' \
+  "constitution does not say how to read CodeRabbit's retry window"
+assert_prose "${constitution}" 'stated windows of 7 and 2 minutes' \
+  "constitution drops the measured CodeRabbit retry windows"
+assert_prose "${constitution}" 'and `Next included review available in N minutes` on 2026-09-22' \
+  "constitution drops CodeRabbit's current retry-window wording"
+assert_prose "${constitution}" 'one included review that refills on that stated timer, not a fixed hourly allowance' \
+  "constitution models CodeRabbit's limit as an hourly allowance"
+assert_prose "${constitution}" 'so search for `before sending another message`' \
+  "constitution does not say how to read CodeRabbit's chat-message limit wait"
+assert_prose "${constitution}" 'a limit that states no window (a Codex usage limit, Bugbot'"'"'s `Error`) never clears by waiting' \
+  "constitution does not separate a stated short window from a limit that never clears"
 assert_prose "${constitution}" 'required corroborator, never a satisfier' \
   "the CodeRabbit commit status can satisfy the green-review gate on its own"
 assert_prose "${surveyor}" 'Review skipped: automatic reviews are disabled' \
@@ -272,8 +289,17 @@ assert_prose "${surveyor}" 'green_review=none' \
 # NEGATIVE CONTROL, kept as prose so it cannot be quietly dropped: a rate-limited head must still
 # report `green_review=none`, and the check that proves it must read the durable reply body — a
 # status-based control passes vacuously once the status has reverted to the default.
-assert_prose "${constitution}" 'a rate-limit, quota, or service marker saying the review did not run is rejected whatever its shape' \
+assert_prose "${constitution}" 'a rate-limit, quota, or service marker saying the review did not run is never a green whatever its shape' \
   "constitution lost the artifact-level refusal rejection that the durable control depends on"
+# ...and that rejection is asymmetric (monorepo#2764): it blocks the green, never the findings the
+# same artifact carries. Dropping this lets a rate-limited P2 read as zero findings, advance the
+# lane, and merge on the next provider's green with the finding unaddressed.
+assert_prose "${constitution}" 'it never discards a finding the same artifact carries' \
+  "constitution lets a did-not-run marker discard a finding the same artifact carries"
+assert_prose "${maintenance_skill}" 'any finding it carries still counts as a non-thread review finding' \
+  "maintenance skill lets a did-not-run marker discard a finding the same artifact carries"
+assert_prose "${surveyor}" 'yet any finding in it still counts' \
+  "surveyor lets a did-not-run marker discard a finding the same artifact carries"
 for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
   if grep -Fq 'premerge=' "${contract_file}"; then
     fail "standalone CodeRabbit pre-merge readiness state remains in ${contract_file}"
@@ -313,6 +339,12 @@ assert_prose "${surveyor}" 'Actionable comments posted:' \
 cr_hint_fixture="${repo_root}/.claude/scripts/fixtures/coderabbit-review-body-hint-prefix-2819.txt"
 [ -r "${cr_hint_fixture}" ] ||
   fail "the captured CodeRabbit hint-prefixed review body fixture is missing"
+# monorepo#2748: a review whose findings ALL sit outside the diff opens with the outside-diff CAUTION
+# block and carries no marker anywhere. Captured whole from monorepo#2723 at 9ab847e372 so the
+# marker's absence is a property of real output, not of a trimmed sample.
+cr_outside_diff_fixture="${repo_root}/.claude/scripts/fixtures/coderabbit-review-body-outside-diff-2748.txt"
+[ -r "${cr_outside_diff_fixture}" ] ||
+  fail "the captured CodeRabbit outside-diff review body fixture is missing"
 
 # Remove leading HTML comment blocks (and the whitespace around them), then apply the unchanged
 # BEGINS-WITH test. An unterminated comment stops the strip rather than consuming the whole body.
@@ -342,6 +374,15 @@ strip_leading_html_comments() {
 cr_body_identifies_as_review() {
   case "$(strip_leading_html_comments "$1")" in
     '**Actionable comments posted:'*) return 0 ;;
+    '> [!CAUTION]'$'\n''> Some comments are outside the diff'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The rule as it stood before #2748, kept ONLY as the ablation below.
+cr_body_identifies_pre_2748() {
+  case "$(strip_leading_html_comments "$1")" in
+    '**Actionable comments posted:'*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -362,6 +403,27 @@ if cr_body_identifies_pre_2819 "${cr_hint_body}"; then
 fi
 cr_body_identifies_as_review "${cr_hint_body}" ||
   fail "prefix-tolerant identification does not recognise a real hint-prefixed CodeRabbit review body"
+
+cr_outside_diff_body="$(cat "${cr_outside_diff_fixture}")"
+case "${cr_outside_diff_body}" in
+  *'Actionable comments posted'*)
+    fail "the outside-diff fixture carries the marker, so it no longer reproduces #2748" ;;
+esac
+if cr_body_identifies_pre_2748 "${cr_outside_diff_body}"; then
+  fail "the captured fixture no longer reproduces #2748 — the pre-fix rule matched it, so this guard is vacuous"
+fi
+cr_body_identifies_as_review "${cr_outside_diff_body}" ||
+  fail "a real CodeRabbit review whose findings all sit outside the diff is not identified as a review"
+# Only CodeRabbit's outside-diff block qualifies: another CAUTION, or the block further in, does not.
+if cr_body_identifies_as_review "> [!CAUTION]
+> Not the outside-diff block."; then
+  fail "any CAUTION block is identified as a review, not only the outside-diff one"
+fi
+if cr_body_identifies_as_review "Some prose first.
+> [!CAUTION]
+> Some comments are outside the diff and can’t be posted inline."; then
+  fail "the outside-diff block is matched further in rather than at the start of the stripped body"
+fi
 
 # NEGATIVE CONTROLS — the empty-container rejection (#2620/#2677) must survive the widening, and
 # stripping comments must not turn arbitrary prose into a review.
@@ -422,6 +484,25 @@ assert_prose "${parity_checklist}" \
 # The widening must not become a bare commit_id match — the empty-container measurement still stands.
 assert_prose "${constitution}" 'never weaken this to a bare' \
   "constitution lost the prohibition on weakening identification to a bare commit_id match"
+# monorepo#2748: every site that states the rule also names the outside-diff opening.
+assert_prose "${constitution}" \
+  'or, when every finding sits outside the diff, the body instead begins with the outside-diff `> [!CAUTION]` block' \
+  "constitution's green-review LANE TABLE does not identify a review that opens with the outside-diff block"
+assert_prose "${constitution}" \
+  'a body opening instead with the outside-diff `> [!CAUTION]` block is a review too' \
+  "constitution's CodeRabbit-success paragraph does not identify a review that opens with the outside-diff block"
+assert_prose "${constitution}" \
+  'that exact two-line opening identifies a review too; any other `CAUTION` text does' \
+  "constitution lost the anchored outside-diff identification and its narrowing to that exact block"
+assert_prose "${surveyor}" \
+  'which a review carries **instead of** the marker when every' \
+  "surveyor's primary cr@<sha> instruction does not identify a review that opens with the outside-diff block"
+assert_prose "${parity_checklist}" \
+  'A body opening instead with the outside-diff' \
+  "surveyor parity checklist does not carry the outside-diff identification"
+assert_prose "${maintenance_skill}" \
+  '`**Actionable comments posted:` or the outside-diff `> [!CAUTION]` block, never an empty container' \
+  "maintenance skill does not state how a CodeRabbit review object is positively identified"
 
 # monorepo#2758, measured on platform#3051 head 992a93caecd1: the head's status read
 # `Review completed`, the newest review object was an empty container at an OLDER head, and the
@@ -665,6 +746,29 @@ assert_prose "${constitution}" 'Compose every review-request comment with' \
   "the constitution does not require the review-request composer, so bare triggers can return"
 assert_prose "${maintenance_skill}" 'compose it with `.claude/scripts/review-request-comment.sh`, never by hand' \
   "the run loop does not route review requests through the composer"
+# #2737: CodeRabbit published `success — Review completed` one second after its summary recorded
+# `## Review failed`, with no review object at the head. The status therefore proves only that an
+# attempt ended; the artifact decides, and an errored review advances the lane as a service failure.
+assert_absent "${constitution}" '| `Review completed` | evidences a run |' \
+  "the constitution still treats a 'Review completed' status as evidence that a review produced a result"
+assert_absent "${constitution}" '`Review completed` says a run happened' \
+  "the refusal read still says a 'Review completed' status means a review happened"
+assert_prose "${constitution}" '`Review completed` is published over an ERRORED review too — the artifact decides, never the status' \
+  "the constitution does not warn that 'Review completed' accompanies an errored review"
+assert_prose "${constitution}" 'An auto-generated summary carrying `## Review failed` is a **service failure**: never a finding and never a green, so record `cr:no-gate@<sha>` and advance to the next lane' \
+  "the constitution does not route an errored CodeRabbit review to cr:no-gate"
+assert_prose "${constitution}" 'for CodeRabbit, a summary carrying `## Review failed` is one' \
+  "the review loop does not list an errored CodeRabbit review among the lane-advancing service failures"
+assert_prose "${constitution}" 'latest-wins and keeps no history' \
+  "the constitution does not say the CodeRabbit status can only corroborate at the moment it is read"
+assert_absent "${surveyor}" '`Review completed` evidences a run;' \
+  "the surveyor still treats 'Review completed' as evidence of a review result"
+assert_prose "${surveyor}" 'a `## Review failed` summary beside it is a service failure: `cr:no-gate`' \
+  "the surveyor does not classify an errored CodeRabbit review as a service failure"
+assert_absent "${maintenance_skill}" 'beginning `Review completed` evidences a run' \
+  "the run loop still treats 'Review completed' as evidence of a review result"
+assert_prose "${maintenance_skill}" 'a summary carrying `## Review failed` beside it is a service failure' \
+  "the run loop does not classify an errored CodeRabbit review as a service failure"
 grep -Fq 'run: bash .claude/scripts/review-request-comment.test.sh' "${workflow}" ||
   fail "CI does not execute the review-request composer test"
 

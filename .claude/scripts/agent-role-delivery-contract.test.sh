@@ -545,6 +545,14 @@ assert_prose 'authoritative `scheduled-tasks.json` record selected by exact task
   "runtime-local delivery does not require the authoritative Claude scheduler record"
 assert_prose '`lastRunAt` as its marker; the `SKILL.md` description is not scheduler state' \
   "runtime-local delivery can mistake Claude loader prose for deployed cadence"
+# The natural guess, `~/.claude/scheduled-tasks.json`, does not exist, and searching `$HOME` for the
+# real store timed out a run (#2656), so the contract names the path the scripts already read.
+assert_prose 'That record lives at `~/Library/Application Support/Claude/claude-code-sessions/<session-uuid>/<task-uuid>/scheduled-tasks.json`, not under `~/.claude`.' \
+  "runtime-local delivery does not say where the Claude scheduler record lives"
+assert_prose 'never a `.bak-<epoch>` sibling' \
+  "runtime-local delivery can select a stale Claude scheduler backup"
+grep -Fq 'Library/Application Support/Claude/claude-code-sessions' "${repo_root}/.claude/scripts/agent-telemetry.sh" ||
+  fail "the contract's Claude scheduler path no longer matches the store agent-telemetry.sh reads"
 assert_prose 'A missing or ambiguous store, missing baseline, marker that did not advance, or incomplete recurrence rule is `UNKNOWN`, never `MATCH`.' \
   "runtime-local delivery does not fail closed on incomplete persistence evidence"
 

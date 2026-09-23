@@ -24,7 +24,7 @@
 # OUTPUT (one line on stdout)
 #   GREEN                      verdict `No actionable comments were generated in the recent
 #                              review`, range header ends at --head, no did-not-run marker
-#   FINDINGS <n>               the recent review posted <n> actionable comments
+#   FINDINGS <n>               the recent review posted <n> actionable comments, even beside a did-not-run marker
 #   NONE <reason>              not a review result for this head; <reason> is one of
 #                              not-a-summary, did-not-run, no-recent-review, no-verdict,
 #                              no-range, range-other-head
@@ -82,10 +82,26 @@ verdict() {
 grep -Fq '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->' <<<"$body" ||
   verdict "NONE not-a-summary"
 
-# A body saying the review did not run defeats everything else in it, including a range header
-# that names the head (the rate-limit shell carries one). The structural marker counts anywhere;
-# the prose markers count only outside the blocks that summarise the PR itself, because a PR ABOUT
-# review limits has a walkthrough that quotes them.
+# Every test below reads a here-string, never `printf | grep -q`: under pipefail an early-exiting
+# grep makes printf die of SIGPIPE on a large body, so a match reads as a miss.
+# Judge only the recent_review block: the walkthrough and pre-merge tables are not a verdict.
+recent="$(printf '%s\n' "$body" | awk '
+  /<!-- recent_review_start -->/ { inside = 1; next }
+  /<!-- recent_review_end -->/   { inside = 0 }
+  inside { print }
+')"
+
+# Findings are read BEFORE the did-not-run marker: a finding is positive evidence and survives an
+# incomplete run, so a body carrying both reports its findings (monorepo#2764).
+findings="$(sed -nE '/Actionable comments posted: [0-9]+/{s/.*Actionable comments posted: ([0-9]+).*/\1/p;q;}' <<<"$recent")"
+if [ -n "$findings" ] && [ "$findings" -gt 0 ]; then
+  verdict "FINDINGS $findings"
+fi
+
+# A body saying the review did not run can never be GREEN, even with a range header naming the head
+# (the rate-limit shell carries one). The structural marker counts anywhere; the prose markers count
+# only outside the blocks that summarise the PR itself, because a PR ABOUT review limits has a
+# walkthrough that quotes them.
 own_text="$(printf '%s\n' "$body" | awk '
   /<!-- (walkthrough|pre_merge_checks_walkthrough|change_assessment|tips)_start -->/ { skip = 1 }
   !skip { print }
@@ -96,20 +112,7 @@ if grep -Fq 'rate limited by coderabbit.ai -->' <<<"$body" ||
   verdict "NONE did-not-run"
 fi
 
-# Every test below reads a here-string, never `printf | grep -q`: under pipefail an early-exiting
-# grep makes printf die of SIGPIPE on a large body, so a match reads as a miss.
-# Judge only the recent_review block: the walkthrough and pre-merge tables are not a verdict.
-recent="$(printf '%s\n' "$body" | awk '
-  /<!-- recent_review_start -->/ { inside = 1; next }
-  /<!-- recent_review_end -->/   { inside = 0 }
-  inside { print }
-')"
 [ -n "$recent" ] || verdict "NONE no-recent-review"
-
-findings="$(sed -nE '/Actionable comments posted: [0-9]+/{s/.*Actionable comments posted: ([0-9]+).*/\1/p;q;}' <<<"$recent")"
-if [ -n "$findings" ] && [ "$findings" -gt 0 ]; then
-  verdict "FINDINGS $findings"
-fi
 grep -Fq 'No actionable comments were generated in the recent review' <<<"$recent" ||
   { [ "$findings" = "0" ] || verdict "NONE no-verdict"; }
 

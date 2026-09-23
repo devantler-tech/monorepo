@@ -766,7 +766,10 @@ public and private — no per-repo loop needed to enumerate):
      object **whose own `body` BEGINS WITH the recognised CodeRabbit review-artifact marker
      `**Actionable comments posted:`, after stripping any leading HTML comments and the whitespace around them** — a positive
      identification of the matched object as a review,
-     never merely a non-empty body. CodeRabbit prefixes every real body with an agent-hint block
+     never merely a non-empty body. The one other opening is the outside-diff block — `> [!CAUTION]` then
+     `> Some comments are outside the diff` — which a review carries **instead of** the marker when every
+     finding sits outside the diff (monorepo#2748); it always carries a finding, so on its own it identifies a
+     review with findings, never a green. CodeRabbit prefixes every real body with an agent-hint block
      (`<!-- coderabbit-cli-agent-hint:v3 … -->`), so an unstripped BEGINS-WITH test matches **no**
      genuine current review and reports `green_review=none` over a real green (monorepo#2819;
      measured 2026-08-13 on four substantive bodies across monorepo#2810 and #2723). Strip only the
@@ -786,8 +789,8 @@ public and private — no per-repo loop needed to enumerate):
      plain prose, so without the author bind any account could post those phrases and be read green.
      **Discriminate a command reply on SUBSTANCE, never on comment type: a reply carrying no verdict
      line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a
-     review completion**, as are a quota notice and a service shell; reject the summary and the reply
-     alike when the body says the review did not run.
+     review completion**, as are a quota notice and a service shell. A body saying the review did not
+     run is never green, yet any finding in it still counts.
      🔴 **The verdict-bearing reply is frequently the ONLY satisfier at head.** Measured on
      platform#3051 (2026-08-10, head `992a93caecd1…`): status `Review completed`, newest review object
      a `bodylen=0` container at the **older** `5d9d8f5960`, summary comment naming **no sha at all** —
@@ -817,15 +820,16 @@ public and private — no per-repo loop needed to enumerate):
      `bodylen=0` container at 16:22:58Z **and** a genuine `bodylen=5573` review at 16:33:34Z under one
      `Review completed` status — had the container carried text, a status conjunct would have blessed
      it. So match the artifact itself: every real CodeRabbit review body observed across monorepo and
-     platform begins `**Actionable comments posted: N**` **once its leading HTML comments and
+     platform, except that outside-diff shape, begins `**Actionable comments posted: N**` **once its leading HTML comments and
      surrounding whitespace are stripped** — the agent-hint block now sits in front of that marker
      (monorepo#2819) and is followed by a blank line, so stripping the comment alone still leaves the
      body starting with a newline and an anchored match still fails. Both are part of the match rather
      than an allowance. The status stays a **required corroborator**
-     of run-completion **only while it is INFORMATIVE** — `Review completed` evidences a run;
-     `Review rate limited`, or another explicit marker that the review did not run, defeats the
-     green; and `Review skipped: automatic reviews are disabled` (the portfolio-wide default,
-     since auto-review is off everywhere) or **no CodeRabbit status at all** is an
+     **only while it is INFORMATIVE** — `Review completed` shows an ended attempt
+     (a `## Review failed` summary beside it is a service failure: `cr:no-gate`);
+     `Review rate limited`, or another explicit not-run marker, defeats the
+     green; and `Review skipped: automatic reviews are disabled` (the default) or
+     **no CodeRabbit status at all** is an
      **uninformative status** that must NOT defeat it. `state=success` accompanies every case, so
      the `description` is the discriminator, never the state.
      🔴 **Do not fail an uninformative status closed** (monorepo#3015): a head where CodeRabbit
