@@ -216,26 +216,41 @@ for f in "${fixture}" "${tmp}/newer-findings.json" "${tmp}/no-disclosure.json" "
     want="$(bash "${tool}" --head "${h}" --input "${f}" 2>/dev/null)"
     want_rc=$?
     set -e
-    jq -c --arg h "${h}" '{head: $h, reviews: .}' "${f}" >"${tmp}/json-parity.json"
+    jq -c --arg h "${h}" '{head: $h, per_page: 100, reviews: .}' "${f}" >"${tmp}/json-parity.json"
     expect_json "json parity $(basename "${f}") @${h:0:10}" "${want_rc}" "${want}" "${tmp}/json-parity.json"
   done
 done
-# Two pages, as `--paginate --jq` emits them, are both read.
-{ jq -c --arg h "${green_head}" '{head: $h, reviews: [.[0], .[1]]}' "${fixture}"
-  jq -c --arg h "${green_head}" '{head: $h, reviews: [.[2], .[3]]}' "${fixture}"; } >"${tmp}/json-paged.json"
+# Two pages, as `--paginate --jq` emits them, are both read: the first full, the last short.
+{ jq -c --arg h "${green_head}" '{head: $h, per_page: 3, reviews: [.[0], .[1], .[2]]}' "${fixture}"
+  jq -c --arg h "${green_head}" '{head: $h, per_page: 3, reviews: [.[3]]}' "${fixture}"; } >"${tmp}/json-paged.json"
 expect_json "json: two page objects" 0 "GREEN self@${green_head}" "${tmp}/json-paged.json"
 # Ablations, one conjunct each, against that passing two-page input.
-{ jq -c --arg h "${green_head}" '{head: $h, reviews: [.[0], .[1]]}' "${fixture}"
-  jq -c --arg h "${other_head}" '{head: $h, reviews: [.[2], .[3]]}' "${fixture}"; } >"${tmp}/json-mixed.json"
+{ jq -c --arg h "${green_head}" '{head: $h, per_page: 3, reviews: [.[0], .[1], .[2]]}' "${fixture}"
+  jq -c --arg h "${other_head}" '{head: $h, per_page: 3, reviews: [.[3]]}' "${fixture}"; } >"${tmp}/json-mixed.json"
 expect_json "json: pages disagree on the head" 2 "" "${tmp}/json-mixed.json"
-jq -c --arg h "${green_head}" '{head: $h, reviews: ., extra: 1}' "${fixture}" >"${tmp}/json-extra.json"
+jq -c --arg h "${green_head}" '{head: $h, per_page: 100, reviews: ., extra: 1}' "${fixture}" >"${tmp}/json-extra.json"
 expect_json "json: an extra key" 2 "" "${tmp}/json-extra.json"
-jq -c --arg h "${green_head:0:10}" '{head: $h, reviews: .}' "${fixture}" >"${tmp}/json-short.json"
+jq -c --arg h "${green_head:0:10}" '{head: $h, per_page: 100, reviews: .}' "${fixture}" >"${tmp}/json-short.json"
 expect_json "json: abbreviated head" 2 "" "${tmp}/json-short.json"
-jq -c --arg h "${green_head}" '{head: $h, reviews: .[0]}' "${fixture}" >"${tmp}/json-object.json"
+jq -c --arg h "${green_head}" '{head: $h, per_page: 100, reviews: .[0]}' "${fixture}" >"${tmp}/json-object.json"
 expect_json "json: reviews is not an array" 2 "" "${tmp}/json-object.json"
 jq -c '.' "${fixture}" >"${tmp}/json-bare.json"
 expect_json "json: bare pages with no head" 2 "" "${tmp}/json-bare.json"
+# Completeness (CodeRabbit on #3546): the pipe reports the classifier's status, not gh's, so a
+# read that died after a full page must never be judged. The first page alone of the passing
+# two-page read is exactly that truncation, and it must not reach the GREEN verdict.
+jq -c --arg h "${green_head}" '{head: $h, per_page: 3, reviews: [.[0], .[1], .[2]]}' "${fixture}" >"${tmp}/json-truncated.json"
+expect_json "json: a read that stopped after a full page" 2 "" "${tmp}/json-truncated.json"
+{ jq -c --arg h "${green_head}" '{head: $h, per_page: 3, reviews: [.[0], .[1]]}' "${fixture}"
+  jq -c --arg h "${green_head}" '{head: $h, per_page: 3, reviews: [.[2], .[3]]}' "${fixture}"; } >"${tmp}/json-gap.json"
+expect_json "json: a short page before the last" 2 "" "${tmp}/json-gap.json"
+{ jq -c --arg h "${green_head}" '{head: $h, per_page: 3, reviews: [.[0], .[1], .[2]]}' "${fixture}"
+  jq -c --arg h "${green_head}" '{head: $h, per_page: 2, reviews: [.[3]]}' "${fixture}"; } >"${tmp}/json-sizes.json"
+expect_json "json: pages disagree on the page size" 2 "" "${tmp}/json-sizes.json"
+jq -c --arg h "${green_head}" '{head: $h, reviews: .}' "${fixture}" >"${tmp}/json-no-size.json"
+expect_json "json: no page size" 2 "" "${tmp}/json-no-size.json"
+jq -c --arg h "${green_head}" '{head: $h, per_page: 101, reviews: .}' "${fixture}" >"${tmp}/json-big-size.json"
+expect_json "json: a page size above the API maximum" 2 "" "${tmp}/json-big-size.json"
 expect_json "json: empty stdin" 2 "" "${tmp}/empty.json"
 checks=$((checks + 1))
 if bash "${tool}" --input "${tmp}/json-paged.json" >/dev/null 2>&1; then
