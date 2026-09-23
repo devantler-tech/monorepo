@@ -764,7 +764,9 @@ mk_ssh_origin_checkout() {
   local dest="$1" reach="$2" root
   root="$tmp/https-endpoint-$reach"
   rm -rf "$root" "$dest"; mkdir -p "$root"
-  git init --bare --quiet "$root/monorepo.git"
+  # Name the initial branch explicitly: runners default it to `master`, so relying on
+  # the host's init.defaultBranch leaves no local `main` to branch from in CI.
+  git init --bare --quiet --initial-branch=main "$root/monorepo.git"
   git clone --quiet "$root/monorepo.git" "$dest" 2>/dev/null
   git -C "$dest" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   git -C "$dest" push -q -u origin HEAD:main
