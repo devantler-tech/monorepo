@@ -270,6 +270,25 @@ done <<EOF
 $push_urls
 EOF
 
+# An agent-independent endpoint for the same repository, used only when the
+# configured transport cannot read refs (monorepo#3503). On this host the SSH
+# agent is routinely empty, so `git fetch origin` fails while HTTPS through
+# `gh auth git-credential` succeeds; the sweep then aborted before any keep-set
+# logic and the mandated end-of-tick hygiene silently never ran.
+#
+# It is built from $slug_lc — the value check_remote_identity has ALREADY proven
+# equals this checkout's origin — never by re-parsing the URL. That keeps the
+# "the keep-set is fetched for the repository we verified" property exact, and it
+# cannot carry a credential: there is no userinfo to inherit. Empty when the
+# origin is not a verified GitHub remote, so the unverifiable case keeps aborting.
+HTTPS_ENDPOINT=""
+if [ -n "$(github_nwo "$origin_url")" ]; then
+  HTTPS_ENDPOINT="https://github.com/$slug_lc.git"
+fi
+# Where the delete loop writes. Only ever moved off "origin" once the fallback has
+# actually proven readable, so a working configured transport is left untouched.
+REMOTE_ENDPOINT="origin"
+
 # DEFAULT reads the LOCAL origin/HEAD (set at clone) and needs no fresh fetch,
 # so the checkout-restoration path can be armed BEFORE fetching.
 DEFAULT=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
@@ -332,8 +351,20 @@ return_to_default
 # Stale refs make every later judgement wrong — abort the whole run on fetch
 # failure (the EXIT trap above still returns the checkout to the default first).
 if ! git fetch origin --prune -q 2>/dev/null; then
-  echo "$SLUG: ABORT — git fetch failed; refusing to act on stale refs" >&2
-  exit 1
+  # The configured transport could not read refs. Retry once over the verified
+  # HTTPS endpoint before giving up: an explicit refspec is required because a
+  # URL argument has no configured fetch refspec, and without it refs/remotes/origin/*
+  # is never updated and every later judgement runs on stale refs anyway.
+  #
+  # Still fails CLOSED — if this read also fails, the abort stands. The URL is
+  # never echoed on any path here, matching the rule the identity check follows.
+  if [ -z "$HTTPS_ENDPOINT" ] ||
+    ! git fetch --prune -q "$HTTPS_ENDPOINT" "+refs/heads/*:refs/remotes/origin/*" 2>/dev/null; then
+    echo "$SLUG: ABORT — git fetch failed; refusing to act on stale refs" >&2
+    exit 1
+  fi
+  echo "$SLUG: NOTE — origin unreadable over its configured transport; refreshed over HTTPS" >&2
+  REMOTE_ENDPOINT="$HTTPS_ENDPOINT"
 fi
 
 # Resolve the published default tip ONCE, after the fetch, for `holds_no_work`. A branch
@@ -596,7 +627,10 @@ while IFS= read -r rb; do
       r_keep=$((r_keep+1)); continue
     fi
     # CAS delete: rejected if the remote ref moved off the evidence SHA.
-    if git push --force-with-lease="refs/heads/$b:$sha" origin ":refs/heads/$b" >/dev/null 2>&1; then
+    # $REMOTE_ENDPOINT is "origin" unless the fetch had to fall back, in which case
+    # pushing to "origin" would fail on the same dead transport. The lease pins an
+    # explicit SHA, so it does not depend on remote-tracking refs either way.
+    if git push --force-with-lease="refs/heads/$b:$sha" "$REMOTE_ENDPOINT" ":refs/heads/$b" >/dev/null 2>&1; then
       r_del=$((r_del+1))
     else
       echo "$SLUG: WARN — remote delete of '$b' rejected (ref moved or push failed); kept" >&2

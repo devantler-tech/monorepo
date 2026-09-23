@@ -748,6 +748,83 @@ assert_failed_closed "PR-state query, repository not found"
 report "PR-state query 404 is classed as not found (#2511)" "$(has "repository not found")" "out=$out"
 git -C "$work" checkout -q -f main
 
+
+# --- SSH-independent ref refresh (monorepo#3503) --------------------------------
+# The sweep aborts before any keep-set logic whenever the checkout's SSH origin
+# cannot authenticate — on this host the agent is routinely empty, so the mandated
+# end-of-tick hygiene silently never runs. The refresh needs READABLE refs, not SSH.
+#
+# Fixture: a checkout whose origin is the scp-style GitHub URL (so the identity
+# check still resolves devantler-tech/monorepo) but whose SSH transport is forced
+# to fail. A local `insteadOf` maps the HTTPS endpoint the script derives onto a
+# local bare repo, so the fallback is exercised with NO network. `insteadOf`
+# rewrites an explicit fetch URL argument, which is what makes this hermetic.
+mk_ssh_origin_checkout() {
+  # $1 = destination dir, $2 = "reachable" | "unreachable"
+  local dest="$1" reach="$2" root
+  root="$tmp/https-endpoint-$reach"
+  rm -rf "$root" "$dest"; mkdir -p "$root"
+  git init --bare --quiet "$root/monorepo.git"
+  git clone --quiet "$root/monorepo.git" "$dest" 2>/dev/null
+  git -C "$dest" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  git -C "$dest" push -q -u origin HEAD:main
+  git -C "$dest" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  # A spent claude/* branch that is pure published history, so a completed sweep
+  # has something concrete to report rather than an empty breakdown.
+  git -C "$dest" branch "claude/spent-3503" main
+  git -C "$dest" remote set-url origin "git@github.com:devantler-tech/monorepo.git"
+  # ALWAYS map the derived HTTPS endpoint onto a local path — the suite is hermetic
+  # and must never reach real github.com. The "unreachable" arm points at a path that
+  # does not exist, which is what makes the fail-closed guardrail testable at all:
+  # without this the fallback would quietly fetch the REAL repository and the
+  # guardrail case would fail for the wrong reason.
+  if [[ "$reach" == "reachable" ]]; then
+    git -C "$dest" config "url.$root/.insteadOf" "https://github.com/devantler-tech/"
+  else
+    git -C "$dest" config "url.$tmp/no-such-endpoint-3503/.insteadOf" "https://github.com/devantler-tech/"
+  fi
+  git -C "$dest" checkout -q main
+}
+
+sshwork="$tmp/ssh-origin-work"
+mk_ssh_origin_checkout "$sshwork" reachable
+# Advance the bare repo AFTER the clone so the checkout's origin/main is stale.
+advance_clone="$tmp/advance-3503"
+git clone --quiet "$tmp/https-endpoint-reachable/monorepo.git" "$advance_clone" 2>/dev/null
+git -C "$advance_clone" -c user.email=t@t -c user.name=t commit -q --allow-empty -m advance
+git -C "$advance_clone" push -q origin HEAD:main
+advanced_tip=$(git -C "$advance_clone" rev-parse HEAD)
+: >"$tmp/open_heads_3503"
+set +e
+out=$(cd "$sshwork" && OPEN_HEADS_FILE="$tmp/open_heads_3503" GIT_SSH_COMMAND=false \
+  PATH="$tmp/bin:$PATH" bash "$helper" "$sshwork" monorepo "$tmp/manifest-3503.txt" dry-run claude 2>&1)
+rc=$?
+set -e
+report "empty SSH agent no longer aborts the sweep (#3503)" \
+  "$([[ "$out" != *"ABORT — git fetch failed"* ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "sweep completes and reports a breakdown over the HTTPS endpoint (#3503)" \
+  "$([[ "$out" == *"local:"* && "$out" == *"keep"* ]] && echo yes || echo no)" "rc=$rc out=$out"
+# Non-vacuous proof that the fallback actually FETCHED: the bare repo was advanced
+# behind the checkout's back after cloning, so origin/main is stale going in. Only a
+# real refresh over the derived HTTPS endpoint can move it.
+report "the HTTPS fallback genuinely refreshes origin refs (#3503)" \
+  "$([[ "$(git -C "$sshwork" rev-parse refs/remotes/origin/main)" == "$advanced_tip" ]] && echo yes || echo no)" \
+  "want=$advanced_tip got=$(git -C "$sshwork" rev-parse refs/remotes/origin/main)"
+
+# GUARDRAIL: a genuine read failure must STILL fail closed. Same fixture with no
+# HTTPS endpoint wired up — both transports fail, so stale refs must not be used.
+sshdead="$tmp/ssh-origin-dead"
+mk_ssh_origin_checkout "$sshdead" unreachable
+rm -rf "$tmp/https-endpoint-unreachable" "$tmp/no-such-endpoint-3503"
+set +e
+out=$(cd "$sshdead" && OPEN_HEADS_FILE="$tmp/open_heads_3503" GIT_SSH_COMMAND=false \
+  PATH="$tmp/bin:$PATH" bash "$helper" "$sshdead" monorepo "$tmp/manifest-3503b.txt" dry-run claude 2>&1)
+rc=$?
+set -e
+report "a genuinely unreadable remote still aborts (#3503)" \
+  "$([[ $rc -ne 0 && "$out" == *"ABORT"* ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "the abort path prints no remote URL (#3503)" \
+  "$([[ "$out" != *"https://"* && "$out" != *"git@github.com"* ]] && echo yes || echo no)" "out=$out"
 if [[ "$fail" -ne 0 ]]; then
   echo "branch-cleanup contract: FAILED"
   exit 1
