@@ -607,5 +607,50 @@ expect 2 "--stub-seconds is gone and refused as unrecognised" --stub-seconds 60
 expect 2 "an unrecognised argument is refused" --nope
 expect 2 "an unusable task id is refused" --task 'a;b'
 
+
+# --- An ABSENT lastScheduledFor costs the schedule leg only ---------------------------------------
+# A runtime store-schema change removed `.lastScheduledFor` from every task (monorepo#3530), and the
+# store-wide assertion turned that into exit 2 for the whole store -- so the decisive `turns == 0`
+# test, which needs only `lastRunAt` and the transcript, never ran and BOTH Claude lanes lost
+# liveness attribution at once. The field has a per-task fallback (an empty anchor already yields
+# schedule_state=unknown), so its absence cannot fail open and must not abort the other leg.
+mkstore_noanchor() {
+  local file=$1 id=$2 last_run=$3
+  printf '{"scheduledTasks":[{"id":"%s","enabled":true,"lastRunAt":%s,"cronExpression":"0 * * * *","filePath":"/x","cwd":"/y"}]}\n' \
+    "$id" "$last_run" > "$file"
+}
+
+mkcase noanchor_dead
+mkstore_noanchor "$STORE" alpha "\"$(iso_at $(( NOW - 3600 )))\""
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 0 4 >/dev/null
+expect_msg 1 "0 assistant turns" "a task with no lastScheduledFor still reports a dead session as NOT-PRODUCING"
+
+mkcase noanchor_healthy
+mkstore_noanchor "$STORE" alpha "\"$(iso_at $(( NOW - 3600 )))\""
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+expect_msg 2 "no lastScheduledFor" "a task with no lastScheduledFor names the missing anchor, not the cron"
+
+# The diagnostic must stay DISTINGUISHABLE from the cron/slot one: both exit 2, so an exit-code
+# assertion alone would let a later change collapse them and lose which leg failed.
+mkcase noanchor_not_cron
+mkstore_noanchor "$STORE" alpha "\"$(iso_at $(( NOW - 3600 )))\""
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+asserts=$(( asserts + 1 ))
+out=$("$SCRIPT" --store "$STORE" --projects "$PROJECTS" --now-epoch "$NOW" 2>&1) || true
+case "$out" in
+  *"does not name one of its slots"*) note_fail "an absent anchor must not be reported as a bad cron slot" ;;
+  *) : ;;
+esac
+
+# --- The four fields with NO per-task fallback stay asserted store-wide ---------------------------
+# Narrowing the gate to one field is only safe while the others still abort: each of these makes
+# every lookup below return empty, and empty reads exactly like "nothing to report".
+for missing in id enabled lastRunAt cronExpression; do
+  mkcase "gate_$missing"
+  mkstore "$STORE" alpha true "\"$(iso_at $(( NOW - 3600 )))\""
+  mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+  jq --arg f "$missing" 'del(.scheduledTasks[0][$f])' "$STORE" > "$STORE.tmp" && mv "$STORE.tmp" "$STORE"
+  expect_msg 2 "unexpected store schema" "a task missing .$missing is UNKNOWN store-wide"
+done
 echo "claude-lane-liveness.test.sh: $asserts assertion(s), $fails failure(s)"
 [ "$fails" -eq 0 ] || exit 1

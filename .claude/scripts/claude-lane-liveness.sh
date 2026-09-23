@@ -266,9 +266,14 @@ jq -e . "$STORE" >/dev/null 2>&1 || die_unknown "scheduled-tasks store is not va
 
 # Schema is asserted, never assumed. A renamed field would otherwise make every lookup below return
 # empty, and empty reads exactly like "nothing to report" -- a silent pass in the case this exists for.
+# `lastScheduledFor` is deliberately NOT in that list. It is the one field with a per-task fallback --
+# an empty anchor already yields schedule_state=unknown for that task -- so its absence cannot fail
+# open, while asserting it store-wide turned a partial loss into a total blackout: a runtime
+# store-schema change dropped it from every record, and the decisive `turns == 0` test, which needs
+# only lastRunAt and the transcript, stopped running for BOTH Claude lanes at once (monorepo#3530).
 jq -e 'has("scheduledTasks") and (.scheduledTasks | type == "array")' "$STORE" >/dev/null 2>&1 \
   || die_unknown "unexpected store schema: .scheduledTasks is missing or not an array"
-for field in id enabled lastRunAt lastScheduledFor cronExpression; do
+for field in id enabled lastRunAt cronExpression; do
   jq -e --arg f "$field" 'all(.scheduledTasks[]?; has($f))' "$STORE" >/dev/null 2>&1 \
     || die_unknown "unexpected store schema: a scheduled task is missing .$field"
 done
@@ -424,7 +429,13 @@ while IFS= read -r id; do
   cron=$(jq -r --arg t "$id" 'first(.scheduledTasks[]? | select(.id == $t and .enabled == true) | .cronExpression) // empty' "$STORE") || cron=""
   ls_epoch=$(iso_to_epoch "$last_scheduled")
   next_epoch=""
-  if [ -n "$ls_epoch" ] && [ "$ls_epoch" -gt $(( NOW_EPOCH + SKEW_SECONDS )) ]; then
+  if [ -z "$last_scheduled" ]; then
+    # The schedule leg alone is unanchored. Report THAT, distinctly: routing it to the cron message
+    # below would blame a perfectly good cron expression for a field the store no longer carries,
+    # and send the next reader diagnosing the wrong thing.
+    schedule_state=unknown
+    schedule_reason="no lastScheduledFor on this task, so the schedule leg has no anchor; the transcript leg still applies"
+  elif [ -n "$ls_epoch" ] && [ "$ls_epoch" -gt $(( NOW_EPOCH + SKEW_SECONDS )) ]; then
     schedule_state=unknown
     schedule_reason="future lastScheduledFor is more than ${SKEW_SECONDS}s ahead of the observer clock"
   elif [ -n "$ls_epoch" ] && [ -n "$cron" ]; then
