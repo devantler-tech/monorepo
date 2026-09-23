@@ -41,6 +41,7 @@ jobs:
       control-character-command-contract: ${{ steps.filter.outputs.control-character-command-contract }}
       dotfile-glob-fanout-contract: ${{ steps.filter.outputs.dotfile-glob-fanout-contract }}
       one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
+      retired-rule-survivors-contract: ${{ steps.filter.outputs.retired-rule-survivors-contract }}
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
       codex-dispatch-supersession-contract: ${{ steps.filter.outputs.codex-dispatch-supersession-contract }}
       lane-outage-disclosure-contract: ${{ steps.filter.outputs.lane-outage-disclosure-contract }}
@@ -399,6 +400,10 @@ jobs:
             one-verb-per-bash-call-contract:
               - 'AGENTS.md'
               - '.claude/scripts/one-verb-per-bash-call-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            retired-rule-survivors-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/retired-rule-survivors-contract.test.sh'
               - '.github/workflows/ci.yaml'
             bash-call-timeout-budget-contract:
               - 'AGENTS.md'
@@ -1793,6 +1798,21 @@ jobs:
       - name: Verify the one verb per bash call contract
         run: bash .claude/scripts/one-verb-per-bash-call-contract.test.sh
 
+  test-retired-rule-survivors-contract:
+    name: Test retired rule survivors contract
+    needs: changes
+    if: needs.changes.outputs.retired-rule-survivors-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the retired rule survivors contract
+        run: bash .claude/scripts/retired-rule-survivors-contract.test.sh
+
   test-bash-call-timeout-budget-contract:
     name: Test bash call timeout budget contract
     needs: changes
@@ -2377,6 +2397,7 @@ jobs:
       - test-control-character-command-contract
       - test-dotfile-glob-fanout-contract
       - test-one-verb-per-bash-call-contract
+      - test-retired-rule-survivors-contract
       - test-bash-call-timeout-budget-contract
       - test-codex-dispatch-supersession-contract
       - test-lane-outage-disclosure-contract
@@ -2453,6 +2474,7 @@ jobs:
             ${{ needs.test-control-character-command-contract.result }}
             ${{ needs.test-dotfile-glob-fanout-contract.result }}
             ${{ needs.test-one-verb-per-bash-call-contract.result }}
+            ${{ needs.test-retired-rule-survivors-contract.result }}
             ${{ needs.test-bash-call-timeout-budget-contract.result }}
             ${{ needs.test-codex-dispatch-supersession-contract.result }}
             ${{ needs.test-lane-outage-disclosure-contract.result }}
