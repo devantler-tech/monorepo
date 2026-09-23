@@ -1047,20 +1047,36 @@ report "a delimiter with trailing whitespace does not terminate a heredoc" \
 #     unconditionally in the guard's CI job.
 # ---------------------------------------------------------------------------
 ci="$here/../../.github/workflows/ci.yaml"
+# The sweep step is read as a parsed mapping, not a line window: a window from
+# `name:` down misses an `if:` written above it, and a gated sweep reads green
+# while checking nothing. An empty answer from a failed parse matches no
+# expected value, so it fails rather than reading as ungated.
+sweep_q() {
+  yq -r "[.jobs[].steps[]? | select(.name == \"Reject writers piped into an early-exiting grep\")] | $1" "$2" 2>/dev/null || true
+}
 # An unreadable workflow must FAIL rather than skip: a conditional that silently
 # drops its own assertions is the same silent-omission direction this guard's
 # header rejects — the suite would print no case for the wiring and still exit 0,
 # so a moved or renamed workflow reads exactly like wiring that is still pinned.
 if [[ ! -r "$ci" ]]; then
   report "the CI wiring could be inspected" no "cannot read $ci"
+elif ! command -v yq >/dev/null; then
+  report "the CI wiring could be inspected" no "yq is required to parse $ci (brew install yq; preinstalled on GitHub ubuntu runners)"
 else
-  sweep_step="$(grep -n -A2 'name: Reject writers piped into an early-exiting grep' "$ci" || true)"
+  report "exactly one CI step runs the repository-wide sweep" \
+    "$(yn test "$(sweep_q length "$ci")" = 1)" "ci=$ci"
   report "the repository-wide sweep runs in CI" \
-    "$(yn grep -q 'run: bash .claude/scripts/pipefail-grep-guard.sh' <<<"$sweep_step")" "ci=$ci"
-  # No condition may sit between the step name and its command: a gated sweep
-  # reads green while checking nothing.
+    "$(yn test "$(sweep_q '.[0].run' "$ci")" = 'bash .claude/scripts/pipefail-grep-guard.sh')" "ci=$ci"
   report "the repository-wide sweep is unconditional" \
-    "$(yn test -z "$(grep 'if:' <<<"$sweep_step")")" "step=$sweep_step"
+    "$(yn test "$(sweep_q '.[0] | has("if")' "$ci")" = false)" "ci=$ci"
+  # Control: the same query sees a condition placed above the step name.
+  gated="$tmp/gated-ci.yaml"
+  printf '%s\n' 'jobs:' '  guard:' '    steps:' \
+    "      - if: vars.ENFORCE_PIPEFAIL_GREP_GUARD == 'true'" \
+    '        name: Reject writers piped into an early-exiting grep' \
+    '        run: bash .claude/scripts/pipefail-grep-guard.sh' >"$gated"
+  report "a condition written above the step name is still detected" \
+    "$(yn test "$(sweep_q '.[0] | has("if")' "$gated")" = true)" "fixture=$gated"
   report "the self-test runs in CI" \
     "$(yn test "$(grep -c 'pipefail-grep-guard.test.sh' "$ci")" -ge 1)" "ci=$ci"
 fi
