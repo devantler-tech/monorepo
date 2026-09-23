@@ -4426,7 +4426,9 @@ directory under the repo's `git-common-dir`.
 **🔴 Deleting a remote branch CLOSES its open PR — so the keep-set is the whole safety property:**
 - **KEEP:** the head of an **OPEN PR**; any branch **checked out by a worktree**; the default branch;
   the maintainer's **interactive random-slug** branches `claude/<adjective>-<name>-<6hex>` (HANDS-OFF —
-  never reaped even with a merged/closed PR, since they were never this routine's per-run worktree); and
+  never reaped even with a merged/closed PR, since they were never this routine's per-run worktree),
+  **except locally when its tip is an ancestor of the published default branch**: such a branch holds no
+  work of its own and `git branch <name> <sha>` recreates it, so it is reaped and recorded like any other; and
   anything outside the **selected namespace's** prefix (one invocation never crosses into another lane —
   never sweep another instance's namespace through this native adapter).
 - **`git branch --merged main` is USELESS here** — the portfolio **squash-merges**, so a merged branch's
