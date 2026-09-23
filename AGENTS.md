@@ -2523,6 +2523,17 @@ result at the current head — self-promotion is forbidden before that. Request 
     equal to the current PR head**; the survey reports it as `green_review=self@<sha>`, and it
     stales on the next push exactly like any other green. Findings you raise on your own PR are
     **fixed-or-refuted and their threads resolved** like a bot's, before promotion.
+    Judge a round by its shape, never by eye: pipe the PR's review objects into
+    [`local-review-verdict.sh --head <headRefOid>`](.claude/scripts/local-review-verdict.sh), which
+    prints `GREEN self@<sha>` (exit 0) only for the newest `devantler` round at that head —
+    submitted as a `COMMENT` review, because an `APPROVED` or `CHANGES_REQUESTED` one is a verdict
+    on someone's work rather than a stand-in for a lane — whose `Reviewed commit:` line (bold and
+    backticks optional) names that same full head, since a body carried over from an earlier head keeps the old SHA while the
+    object it sits in carries the new one, and that
+    carries the disclosure first, the fallback heading, a line for each of the three lanes and a
+    standard verdict line with no P0/P1 findings (nits alone do not block), and `FINDINGS <n>` or
+    `NONE <reason>` (exit 1) otherwise. An empty reply container is never a round. The external-contributor exclusion below
+    stays the caller's to apply.
   - **A PR you took over is eligible, and it is the stronger case, not the weaker one.** Since
     2026-08-08 you drive PRs you did not author, so a blanket "never self-review someone else's PR"
     would strand every taken-over draft the moment all three lanes are down — the exact parking this
