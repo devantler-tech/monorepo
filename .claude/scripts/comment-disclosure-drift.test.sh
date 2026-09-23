@@ -443,6 +443,12 @@ sweep_stub "[$trigger_62]" "[$trigger_62]"
 expect_exit 1 "a sweep still reports a trigger with no disclosure before it" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
 expect_stdout "undisclosed-trigger" "the unpaired sweep trigger is named"
 
+# A trigger deleted between the sweep and the history read leaves the history without
+# it, so its predecessor cannot be checked: UNKNOWN, never a violation or a pairing.
+sweep_stub "[$trigger_62]" "[]"
+expect_exit 2 "a sweep exits 2 when a swept trigger is missing from its history" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+expect_stderr "missing from" "the unverifiable trigger is named"
+
 # The history read fails closed: an unread discussion is UNKNOWN, never a pairing.
 cat >"$stubdir/gh" <<STUB
 #!/usr/bin/env bash

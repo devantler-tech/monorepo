@@ -637,7 +637,8 @@ func AnalyseSweep(comments []Comment, author string) Report {
 // trigger just inside the window would be reported. History fetched per discussion
 // is contiguous, so the trigger's real predecessor is known: it is exempt only when
 // that predecessor is a disclosure. A trigger absent from the history is never
-// exempt, so a failed or partial backfill cannot clear anything.
+// exempt, so a failed or partial backfill cannot clear anything; the CLI reports such
+// a trigger as UNKNOWN before classifying (TriggersMissingFromHistory).
 func AnalyseSweepWithContext(comments, history []Comment, author string) Report {
 	return analyse(comments, author, true, pairedBareTriggers(history, author))
 }
@@ -665,6 +666,27 @@ func pairedBareTriggers(history []Comment, author string) map[int64]string {
 		}
 	}
 	return paired
+}
+
+// TriggersMissingFromHistory returns the swept bare triggers by author that have no
+// record with the same ID and discussion in history. Their predecessor cannot be
+// checked, so they are UNKNOWN: reporting one would name a violation nobody verified.
+// A trigger deleted between the sweep and the history read is the live case.
+func TriggersMissingFromHistory(comments, history []Comment, author string) []Comment {
+	present := map[int64]string{}
+	for _, comment := range history {
+		present[comment.ID] = comment.IssueURL
+	}
+	var missing []Comment
+	for _, comment := range comments {
+		if comment.login() != author || Classify(comment.Body) != BareTrigger {
+			continue
+		}
+		if issueURL, found := present[comment.ID]; !found || issueURL != comment.IssueURL {
+			missing = append(missing, comment)
+		}
+	}
+	return missing
 }
 
 // BareTriggerDiscussions lists, in order, the discussions in which author left a bare
@@ -973,6 +995,13 @@ func main() {
 		history, err := loadHistory(*historyFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "comment-disclosure-drift: --context: %v\n", err)
+			os.Exit(2)
+		}
+		if missing := TriggersMissingFromHistory(comments, history, *author); len(missing) > 0 {
+			for _, trigger := range missing {
+				fmt.Fprintf(os.Stderr, "comment-disclosure-drift: UNKNOWN — swept trigger %d is missing from the history of %s, so its predecessor cannot be checked\n",
+					trigger.ID, trigger.IssueURL)
+			}
 			os.Exit(2)
 		}
 		report = AnalyseSweepWithContext(comments, history, *author)

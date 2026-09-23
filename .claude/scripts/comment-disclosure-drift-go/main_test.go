@@ -1058,6 +1058,33 @@ func TestSweepPairsBareTriggersAgainstFullHistory(t *testing.T) {
 	}
 }
 
+// A swept trigger the history does not contain cannot be paired or refuted, so the CLI
+// reports it as UNKNOWN rather than classifying it. A trigger deleted between the sweep
+// and the history read is the live case.
+func TestTriggersMissingFromHistory(t *testing.T) {
+	t.Parallel()
+
+	const issueA = "https://api.github.com/repos/o/r/issues/1"
+	const issueB = "https://api.github.com/repos/o/r/issues/2"
+	trigger := Comment{ID: 3, Author: "devantler", IssueURL: issueA, Body: "@cursor review"}
+	swept := []Comment{
+		trigger,
+		{ID: 4, Author: "devantler", IssueURL: issueA, Body: "the build is green"},
+		{ID: 5, Author: "someone-else", IssueURL: issueA, Body: "@cursor review"},
+	}
+
+	if got := TriggersMissingFromHistory(swept, nil, "devantler"); len(got) != 1 || got[0].ID != 3 {
+		t.Errorf("an empty history did not report the swept trigger: %+v", got)
+	}
+	if got := TriggersMissingFromHistory(swept, []Comment{trigger}, "devantler"); len(got) != 0 {
+		t.Errorf("a trigger present in the history was reported missing: %+v", got)
+	}
+	moved := []Comment{{ID: 3, Author: "devantler", IssueURL: issueB, Body: "@cursor review"}}
+	if got := TriggersMissingFromHistory(swept, moved, "devantler"); len(got) != 1 {
+		t.Errorf("a record under another discussion satisfied the trigger: %+v", got)
+	}
+}
+
 func TestBareTriggerDiscussionsListsOnlyTheAuthorsBareTriggers(t *testing.T) {
 	t.Parallel()
 
