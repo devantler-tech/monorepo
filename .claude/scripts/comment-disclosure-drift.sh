@@ -45,23 +45,17 @@
 # single busy issue does. Pass a literal UTC instant; the caller decides how far
 # back "recent" reaches.
 #
-# KNOWN LIMITATION (--since only): a sweep NEVER grants the bare-trigger carve-out,
-# so every bare `@cursor review` in a sweep is reported as `undisclosed-trigger`.
-#
-# Why: `since` selects comments by UPDATED time, so a discussion's returned history
+# BARE TRIGGERS IN A SWEEP (--since only): the payload never decides the bare-trigger
+# carve-out. `since` selects comments by UPDATED time, so a discussion's returned history
 # is not contiguous. Measured 2026-08-11 — a comment created 21:40:05Z came back in a
-# window starting 22:00:00Z because it was edited at 22:31:08Z. Two records can
-# therefore be ADJACENT in the payload with a real comment between them, and an
-# edited old disclosure can arrive while the comment that truly follows it does not.
-# Adjacency here is not evidence of the pairing the carve-out requires, so granting
-# it would CLEAR a trigger whose real predecessor was never fetched — a fail-open.
+# window starting 22:00:00Z because it was edited at 22:31:08Z. A disclosure just
+# before the window is therefore missing, and an edited old disclosure can sit next to
+# a trigger while the comment that truly precedes it is absent. Pairing on the payload
+# either accuses a compliant trigger or clears an undisclosed one.
 #
-# The cost is a false accusation, not a missed violation: measured 4 of 200 reported
-# on a two-day monorepo window, of which 2 are legitimate Bugbot pairs. Re-check any
-# flagged trigger with `--issue <n>`, where the full comment list is present and the
-# pairing resolves correctly. Because of this, `--since` exits 1 routinely on repos
-# that use Bugbot; treat the listed findings as the signal, not the exit code alone.
-# monorepo#2781 tracks fetching the real predecessor so precision is restored.
+# So each discussion holding a bare trigger is fetched in full, one request each, and
+# the trigger is paired against its real predecessor there (monorepo#2781). A failed
+# fetch exits 2 like any other unread surface, never a clean or a guessed verdict.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -190,6 +184,7 @@ cleanup() {
   [ -n "$guard_binary" ] && rm -f -- "$guard_binary"
   [ -n "$payload" ] && rm -f -- "$payload"
   [ -n "${reviews_payload:-}" ] && rm -f -- "$reviews_payload" "${reviews_payload}.bodies"
+  [ -n "${history:-}" ] && rm -f -- "$history" "${history}.next" "${history}.one"
   return 0
 }
 trap cleanup EXIT
@@ -282,12 +277,35 @@ if [ -n "$since" ] && ! jq -e '
   die "response for ${api_label} has records without issue_url, so discussions cannot be told apart"
 fi
 
-# A sweep payload is non-contiguous per discussion (see KNOWN BOUNDARY EFFECT), so
-# the guard must not grant the bare-trigger carve-out on an adjacency it cannot
-# verify -- that would CLEAR a trigger whose real predecessor was never fetched.
+# A sweep payload is non-contiguous per discussion (see BARE TRIGGERS IN A SWEEP), so a
+# bare trigger is paired only against its discussion's full history, fetched here for
+# the discussions that hold one. The guard never pairs on the payload's adjacency.
 sweep_flag=()
+history=""
 if [ -n "$since" ]; then
   sweep_flag=(--sweep)
+  if ! discussions="$("$guard_binary" --author "$author" --sweep --bare-trigger-discussions --input "$payload")"; then
+    die "could not list the discussions whose bare triggers need their full history"
+  fi
+  if [ -n "$discussions" ]; then
+    history="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-history.XXXXXX")" ||
+      die "failed to allocate history file"
+    printf '[]' >"$history"
+    while IFS= read -r discussion; do
+      # The fetch uses the number alone, against the repo the caller named. The guard
+      # pairs on the exact issue_url, so a history under any other URL pairs nothing.
+      [[ "$discussion" =~ ^https://api\.github\.com/repos/[^/]+/[^/]+/issues/([0-9]+)$ ]] ||
+        die "unexpected discussion URL in the sweep: ${discussion}"
+      number="${BASH_REMATCH[1]}"
+      fetch_payload "repos/${repo}/issues/${number}/comments" \
+        "repos/${repo}/issues/${number}/comments" "${history}.one"
+      if ! jq -s 'add' "$history" "${history}.one" >"${history}.next" 2>/dev/null ||
+        ! mv -- "${history}.next" "$history"; then
+        die "could not assemble the history of ${discussion}"
+      fi
+    done <<<"$discussions"
+    sweep_flag+=(--context "$history")
+  fi
 fi
 
 status=0
