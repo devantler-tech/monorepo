@@ -1436,9 +1436,9 @@ strip_ansi() {
 # record the table excluded, which is the safe direction.
 #
 # What this does NOT do is make the textual locator agree with the parse in
-# general; it removes one specific way they can disagree. Deriving the excluded
-# spans from the parse instead is the durable fix, tracked on monorepo#2741
-# together with the perf constraint in monorepo#2740.
+# general; it removes one specific way they can disagree. The parse-derived pass
+# in cred_mask_image_payloads (monorepo#2741) covers the spellings no pattern can
+# reach; the perf constraint on multi-megabyte lines is monorepo#2740.
 #
 # The counting runs inside the SAME `jq -R` pass that already asks the parse
 # question, so this adds no process and no second read of the file.
@@ -1449,17 +1449,65 @@ CRED_MASK_DECLINED=$(printf '\002')
 # apart in how they spell the same key.
 CRED_MASK_MARKER_RE='"type"[[:space:]]*:[[:space:]]*"input_image"'
 CRED_MASK_RESPELL_RE='"type"[[:space:]]*:[[:space:]]*"[^"]*\\u|"[^"]*\\u[^"]*"[[:space:]]*:'
+# The ONE statement of which values the credential table excludes. The table's
+# decode filter and the mask below both prepend it, so the two cannot disagree
+# about the predicate itself — only about locating the value in raw text.
+CRED_IMAGE_PAYLOAD_DEF='
+        def image_payload_entry($parent):
+          if (($parent.type? // "") == "input_image"
+              and .key == "image_url"
+              and (.value | type) == "string")
+          then (.value | test("^data:image/[^,]*;base64,[A-Za-z0-9+/]*={0,2}$"; "i"))
+          else false
+          end;
+'
+# 🔑 PARSE-DERIVED PASS (monorepo#2741). The textual expressions below approximate
+# the table's predicate, and three spellings stay beyond any pattern: an escaped
+# newline inside the media type, one at the end of the value, and a nested object
+# between `type` and `image_url` (matching balanced braces is not regular). So
+# before the textual pass, ask the parse directly: collect every value the table
+# excludes, and blank each one's canonical JSON spelling (`tojson`) in the raw
+# line — which is how the writers of these transcripts spell it.
+#
+# Blanking a spelling is licensed only when it is UNAMBIGUOUS: the raw line holds
+# that spelling exactly as often as the parsed document holds the value, and
+# every one of those parsed occurrences is excluded. Anything else — the same
+# payload also held by a counted sibling, a duplicate key whose losing value
+# still sits in the text, a value that also appears as a key — declines, leaving
+# the line exactly as it was for the textual pass and its gates. Declining only
+# ever leaves MORE to scan, which is the safe direction for a leak detector.
+#
+# A quoted spelling cannot match inside another JSON string: there the quotes
+# are escaped, and base64 has no backslash to supply one. The line is otherwise
+# byte-identical, so line counts, numbering and every non-excluded byte are kept,
+# and it all happens in the jq pass that already parses the line — no new process
+# and no second decode.
 cred_mask_image_payloads() {
   jq -R -r --arg ok "$CRED_MASK_ELIGIBLE" --arg no "$CRED_MASK_DECLINED" \
      --arg marker "$CRED_MASK_MARKER_RE" --arg respell "$CRED_MASK_RESPELL_RE" \
-     '. as $raw
+     "$CRED_IMAGE_PAYLOAD_DEF"'
+      def excluded_values:
+        [.. | objects | . as $p | to_entries[]
+            | select(image_payload_entry($p)) | .value];
+      def blank_unambiguous($doc):
+        ($doc | excluded_values) as $ex
+        | reduce ($ex | unique[]) as $v (.;
+            ($v | tojson) as $spelled
+            | (split($spelled) | length - 1) as $in_raw
+            | ([$doc | .. | strings | select(. == $v)] | length) as $in_doc
+            | ([$ex[] | select(. == $v)] | length) as $in_ex
+            | if $in_raw == $in_doc and $in_doc == $in_ex
+              then split($spelled) | join("\" \"")
+              else . end);
+      . as $raw
       | (try ($raw | fromjson) catch null) as $doc
+      | (if $doc != null then $raw | blank_unambiguous($doc) else $raw end) as $line
       | (if $doc != null
              and ($raw | test($marker))
              and ([$raw | scan($marker)] | length)
                  == ([$doc | .. | objects | select(.type == "input_image")] | length)
              and ($raw | test($respell) | not)
-          then $ok else $no end) + $raw' 2>/dev/null \
+          then $ok else $no end) + $line' 2>/dev/null \
   | sed -E \
     -e "/^${CRED_MASK_ELIGIBLE}/{" \
     -e 's#('"$CRED_MASK_MARKER_RE"'[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \
@@ -3722,15 +3770,9 @@ if want safety; then
     # so JSON-escaped matches remain visible. One awk process per batch restores
     # a trailing record separator at every file boundary; without it, jq -R
     # joins an unterminated live-session record to the next file.
-    CRED_DECODE_FILTER='
-        def image_payload_entry($parent):
-          if (($parent.type? // "") == "input_image"
-              and .key == "image_url"
-              and (.value | type) == "string")
-          then (.value | test("^data:image/[^,]*;base64,[A-Za-z0-9+/]*={0,2}$"; "i"))
-          else false
-          end;
-
+    # `image_payload_entry` comes from CRED_IMAGE_PAYLOAD_DEF, shared with
+    # cred_mask_image_payloads so the table and the mask cannot drift apart.
+    CRED_DECODE_FILTER="$CRED_IMAGE_PAYLOAD_DEF"'
         def decoded_strings:
           if type == "object" then
             . as $parent
