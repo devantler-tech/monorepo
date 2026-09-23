@@ -748,6 +748,166 @@ assert_failed_closed "PR-state query, repository not found"
 report "PR-state query 404 is classed as not found (#2511)" "$(has "repository not found")" "out=$out"
 git -C "$work" checkout -q -f main
 
+
+# --- SSH-independent ref refresh (monorepo#3503) --------------------------------
+# The sweep aborts before any keep-set logic whenever the checkout's SSH origin
+# cannot authenticate — on this host the agent is routinely empty, so the mandated
+# end-of-tick hygiene silently never runs. The refresh needs READABLE refs, not SSH.
+#
+# Fixture: a checkout whose origin is the scp-style GitHub URL (so the identity
+# check still resolves devantler-tech/monorepo) but whose SSH transport is forced
+# to fail. A local `insteadOf` maps the HTTPS endpoint the script derives onto a
+# local bare repo, so the fallback is exercised with NO network. `insteadOf`
+# rewrites an explicit fetch URL argument, which is what makes this hermetic.
+mk_ssh_origin_checkout() {
+  # $1 = destination dir, $2 = "reachable" | "unreachable"
+  local dest="$1" reach="$2" root
+  root="$tmp/https-endpoint-$reach"
+  rm -rf "$root" "$dest"; mkdir -p "$root"
+  # Name the initial branch explicitly: runners default it to `master`, so relying on
+  # the host's init.defaultBranch leaves no local `main` to branch from in CI.
+  git init --bare --quiet --initial-branch=main "$root/monorepo.git"
+  git clone --quiet "$root/monorepo.git" "$dest" 2>/dev/null
+  git -C "$dest" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  git -C "$dest" push -q -u origin HEAD:main
+  git -C "$dest" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  # A spent claude/* branch that is pure published history, so a completed sweep
+  # has something concrete to report rather than an empty breakdown.
+  git -C "$dest" branch "claude/spent-3503" main
+  # A spent REMOTE branch, pushed while origin is still the local path, so the
+  # apply-mode delete below has to travel over the fallback endpoint to reach it.
+  git -C "$dest" checkout -q -B "claude/spent-remote-3503" main
+  git -C "$dest" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "tip spent-remote"
+  git -C "$dest" push -q -u origin "claude/spent-remote-3503"
+  SPENT_REMOTE_SHA=$(git -C "$dest" rev-parse "claude/spent-remote-3503")
+  SPENT_REMOTE_BARE="$root/monorepo.git"
+  git -C "$dest" checkout -q main
+  git -C "$dest" remote set-url origin "git@github.com:devantler-tech/monorepo.git"
+  # ALWAYS map the derived HTTPS endpoint onto a local path — the suite is hermetic
+  # and must never reach real github.com. The "unreachable" arm points at a path that
+  # does not exist, which is what makes the fail-closed guardrail testable at all:
+  # without this the fallback would quietly fetch the REAL repository and the
+  # guardrail case would fail for the wrong reason.
+  if [[ "$reach" == "reachable" ]]; then
+    git -C "$dest" config "url.$root/.insteadOf" "https://github.com/devantler-tech/"
+  else
+    git -C "$dest" config "url.$tmp/no-such-endpoint-3503/.insteadOf" "https://github.com/devantler-tech/"
+  fi
+  git -C "$dest" checkout -q main
+}
+
+sshwork="$tmp/ssh-origin-work"
+mk_ssh_origin_checkout "$sshwork" reachable
+# Advance the bare repo AFTER the clone so the checkout's origin/main is stale.
+advance_clone="$tmp/advance-3503"
+git clone --quiet "$tmp/https-endpoint-reachable/monorepo.git" "$advance_clone" 2>/dev/null
+git -C "$advance_clone" -c user.email=t@t -c user.name=t commit -q --allow-empty -m advance
+git -C "$advance_clone" push -q origin HEAD:main
+advanced_tip=$(git -C "$advance_clone" rev-parse HEAD)
+: >"$tmp/open_heads_3503"
+set +e
+out=$(cd "$sshwork" && OPEN_HEADS_FILE="$tmp/open_heads_3503" GIT_SSH_COMMAND=false \
+  PATH="$tmp/bin:$PATH" bash "$helper" "$sshwork" monorepo "$tmp/manifest-3503.txt" dry-run claude 2>&1)
+rc=$?
+set -e
+report "empty SSH agent no longer aborts the sweep (#3503)" \
+  "$([[ "$out" != *"ABORT — git fetch failed"* ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "sweep completes and reports a breakdown over the HTTPS endpoint (#3503)" \
+  "$([[ "$out" == *"local:"* && "$out" == *"keep"* ]] && echo yes || echo no)" "rc=$rc out=$out"
+# Non-vacuous proof that the fallback actually FETCHED: the bare repo was advanced
+# behind the checkout's back after cloning, so origin/main is stale going in. Only a
+# real refresh over the derived HTTPS endpoint can move it.
+report "the HTTPS fallback genuinely refreshes origin refs (#3503)" \
+  "$([[ "$(git -C "$sshwork" rev-parse refs/remotes/origin/main)" == "$advanced_tip" ]] && echo yes || echo no)" \
+  "want=$advanced_tip got=$(git -C "$sshwork" rev-parse refs/remotes/origin/main)"
+
+# GUARDRAIL: a genuine read failure must STILL fail closed. Same fixture with no
+# HTTPS endpoint wired up — both transports fail, so stale refs must not be used.
+sshdead="$tmp/ssh-origin-dead"
+mk_ssh_origin_checkout "$sshdead" unreachable
+rm -rf "$tmp/https-endpoint-unreachable" "$tmp/no-such-endpoint-3503"
+set +e
+out=$(cd "$sshdead" && OPEN_HEADS_FILE="$tmp/open_heads_3503" GIT_SSH_COMMAND=false \
+  PATH="$tmp/bin:$PATH" bash "$helper" "$sshdead" monorepo "$tmp/manifest-3503b.txt" dry-run claude 2>&1)
+rc=$?
+set -e
+report "a genuinely unreadable remote still aborts (#3503)" \
+  "$([[ $rc -ne 0 && "$out" == *"ABORT"* ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "the abort path prints no remote URL (#3503)" \
+  "$([[ "$out" != *"https://"* && "$out" != *"git@github.com"* ]] && echo yes || echo no)" "out=$out"
+
+# The delete loop writes to whichever endpoint proved readable. Pushing to "origin"
+# after an HTTPS fallback would fail on the same dead transport, so every remote
+# deletion would be rejected and the remote sweep would silently reap nothing —
+# the exact failure shape this issue is about, one level down. Apply mode, SSH down.
+sshapply="$tmp/ssh-origin-apply"
+mk_ssh_origin_checkout "$sshapply" reachable
+: >"$tmp/open_heads_3503"
+printf '%s\tMERGED\t%s\n' "claude/spent-remote-3503" "$SPENT_REMOTE_SHA" >"$tmp/pr_evidence_3503"
+set +e
+out=$(cd "$sshapply" && OPEN_HEADS_FILE="$tmp/open_heads_3503" PR_EVIDENCE_FILE="$tmp/pr_evidence_3503" \
+  GIT_SSH_COMMAND=false PATH="$tmp/bin:$PATH" \
+  bash "$helper" "$sshapply" monorepo "$tmp/manifest-3503c.txt" apply claude 2>&1)
+rc=$?
+set -e
+report "apply mode completes over the HTTPS fallback (#3503)" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "the spent REMOTE ref is deleted over the fallback endpoint (#3503)" \
+  "$(git -C "$SPENT_REMOTE_BARE" show-ref --verify --quiet "refs/heads/claude/spent-remote-3503" && echo no || echo yes)" \
+  "out=$out"
+report "the fallback deletion is recorded in the restore manifest (#3503)" \
+  "$(grep -Fq $'monorepo\tremote\tclaude/spent-remote-3503\t'"$SPENT_REMOTE_SHA"$'\tMERGED' "$tmp/manifest-3503c.txt" && echo yes || echo no)"
+
+# The fallback URL is an explicit argument, so url.*.insteadOf and pushInsteadOf
+# rewrite it — the fixture above depends on exactly that. A rewrite pointing at a
+# DIFFERENT repository would fetch the keep-set from one place and delete branches
+# in another, so the effective destinations are checked before anything is fetched.
+# The rewrites below target scp-style GitHub URLs with SSH forced to fail: the old
+# code fails harmlessly on the fetch, the new code must refuse before trying.
+mk_redirected_fallback() {
+  # $1 = dir, $2 = config key suffix (insteadOf|pushInsteadOf)
+  mk_ssh_origin_checkout "$1" reachable
+  printf '%s\tMERGED\t%s\n' "claude/spent-remote-3503" "$SPENT_REMOTE_SHA" >"$tmp/pr_evidence_3503"
+  # Strictly LONGER than the fixture's own rule, so git picks it (longest match wins).
+  git -C "$1" config "url.git@github.com:attacker/monorepo.$2" "https://github.com/devantler-tech/monorepo"
+}
+for rw in insteadOf pushInsteadOf; do
+  sshrw="$tmp/ssh-origin-rw-$rw"
+  mk_redirected_fallback "$sshrw" "$rw"
+  set +e
+  out=$(cd "$sshrw" && OPEN_HEADS_FILE="$tmp/open_heads_3503" PR_EVIDENCE_FILE="$tmp/pr_evidence_3503" \
+    GIT_SSH_COMMAND=false PATH="$tmp/bin:$PATH" \
+    bash "$helper" "$sshrw" monorepo "$tmp/manifest-3503-$rw.txt" apply claude 2>&1)
+  rc=$?
+  set -e
+  report "a fallback redirected by $rw to another repository is refused (#3503)" \
+    "$([[ $rc -ne 0 && "$out" == *"redirected"* ]] && echo yes || echo no)" "rc=$rc out=$out"
+  report "the $rw refusal prints no remote URL (#3503)" \
+    "$([[ "$out" != *"attacker"* && "$out" != *"https://"* ]] && echo yes || echo no)" "out=$out"
+done
+
+# A fallback with no GitHub identity (here both destinations are local paths) is
+# refused in apply mode unless the fixture declares itself — the same rule as an
+# unverifiable origin. The suite exports that declaration globally, so this case
+# removes it. The pushInsteadOf case above is what isolates the push check.
+sshpush="$tmp/ssh-origin-push-local"
+mk_ssh_origin_checkout "$sshpush" reachable
+evil_root="$tmp/evil-push-3503"
+rm -rf "$evil_root"; mkdir -p "$evil_root"
+git clone --quiet --bare "$SPENT_REMOTE_BARE" "$evil_root/monorepo.git" 2>/dev/null
+printf '%s\tMERGED\t%s\n' "claude/spent-remote-3503" "$SPENT_REMOTE_SHA" >"$tmp/pr_evidence_3503"
+git -C "$sshpush" config "url.$evil_root/.pushInsteadOf" "https://github.com/devantler-tech/"
+set +e
+out=$(cd "$sshpush" && env -u BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN OPEN_HEADS_FILE="$tmp/open_heads_3503" PR_EVIDENCE_FILE="$tmp/pr_evidence_3503" \
+  GIT_SSH_COMMAND=false PATH="$tmp/bin:$PATH" \
+  bash "$helper" "$sshpush" monorepo "$tmp/manifest-3503-push.txt" apply claude 2>&1)
+rc=$?
+set -e
+report "an unverifiable fallback is refused in apply mode (#3503)" \
+  "$([[ $rc -ne 0 && "$out" == *"redirected"* ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "nothing is deleted from the unverified push destination (#3503)" \
+  "$(git -C "$evil_root/monorepo.git" show-ref --verify --quiet "refs/heads/claude/spent-remote-3503" && echo yes || echo no)" \
+  "out=$out"
 if [[ "$fail" -ne 0 ]]; then
   echo "branch-cleanup contract: FAILED"
   exit 1
