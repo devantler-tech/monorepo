@@ -1,11 +1,41 @@
 #!/usr/bin/env bash
 
-# Exit 0: no-review exemption; 1: untrusted/non-matching; 2: invalid input or environment;
-# 3: genuine programmed updater that is trusted but requires semantic review.
+# Usage:
+#   programmed-bot-review-exemption.sh <repo> <author> <head-ref> <title> <head-oid> <files-json> <commits-json> [<skill-owners-json>]
+#   programmed-bot-review-exemption.sh --input -   # stdin: {repo, author, head_ref, title, head_oid, files, commits[, skill_owners]}
+#
+#   repo              bare name (`homebrew-tap`) or `devantler-tech/<name>`
+#   author            login as the repo's arm compares it (`app/ksail-bot`, `devantler`)
+#   head-ref, title   the PR's head branch and title
+#   head-oid          full 40-hex head SHA
+#   files-json        JSON array of changed paths
+#   commits-json      JSON array, oldest first, ending at head-oid; each commit has exactly these ten string keys
+#                     (logins are null for unlinked accounts, so coalesce them):
+#     gh api --paginate --slurp repos/devantler-tech/<repo>/pulls/<n>/commits | jq -c 'add | map({sha,
+#       author_login: (.author.login // ""), author_name: .commit.author.name, author_email: .commit.author.email,
+#       author_date: .commit.author.date, committer_login: (.committer.login // ""),
+#       committer_name: .commit.committer.name, committer_email: .commit.committer.email,
+#       committer_date: .commit.committer.date, message: .commit.message})'
+#   skill-owners-json optional JSON object: changed `.agents/skills/<name>` root -> its `metadata.github-repo` or null
+#
+# Exit 0: no-review exemption; 1: untrusted/non-matching; 2: invalid input or environment, with the reason
+# on stderr; 3: genuine programmed updater that is trusted but requires semantic review.
 
 set -euo pipefail
 
-command -v jq >/dev/null 2>&1 || exit 2
+die2() {
+  printf 'programmed-bot-review-exemption: %s\n' "$1" >&2
+  exit 2
+}
+
+# Prints the first message a jq program yields for the input, or the fallback when it yields none.
+first_reason() {
+  local reason
+  reason="$(jq -r "$1" <<<"$2" 2>/dev/null | head -n 1)" || true
+  printf '%s' "${reason:-$3}"
+}
+
+command -v jq >/dev/null 2>&1 || die2 "jq is not installed"
 
 # Two input shapes carry the same eight values. The positional form serves existing callers. The
 # stdin form (`--input -`, one JSON object) is the only shape the read-only surveyor guard admits: a
@@ -22,7 +52,19 @@ if [[ "$#" -eq 2 && "$1" == "--input" && "$2" == "-" ]]; then
     (.commits | type == "array") and
     ((has("skill_owners") | not) or (.skill_owners | type == "object" or type == "null"))
   ' <<<"${input_json}" >/dev/null 2>&1; then
-    exit 2
+    die2 "$(first_reason '
+      if type != "object" then "stdin is not one JSON object"
+      else . as $in | first(
+        ("author", "commits", "files", "head_oid", "head_ref", "repo", "title"
+          | select(. as $k | $in | has($k) | not) | "stdin is missing key \(.)"),
+        (keys[] | select(IN("author", "commits", "files", "head_oid", "head_ref", "repo", "skill_owners", "title") | not)
+          | "stdin has unexpected key \(.)"),
+        ("author", "head_oid", "head_ref", "repo", "title"
+          | select(($in[.] | type) != "string") | "stdin \(.) is \($in[.] | type), not a string"),
+        ("files", "commits" | select(($in[.] | type) != "array") | "stdin \(.) is \($in[.] | type), not an array"),
+        (select(has("skill_owners") and (.skill_owners | type | IN("object", "null") | not))
+          | "stdin skill_owners is \(.skill_owners | type), not an object or null"))
+      end' "${input_json}" "stdin is not one JSON object")"
   fi
   repo="$(jq -r '.repo' <<<"${input_json}")"
   author="$(jq -r '.author' <<<"${input_json}")"
@@ -36,7 +78,7 @@ if [[ "$#" -eq 2 && "$1" == "--input" && "$2" == "-" ]]; then
   skill_owners_json="$(jq -c 'if .skill_owners == null then empty else .skill_owners end' <<<"${input_json}")"
 else
   if [[ "$#" -lt 7 || "$#" -gt 8 ]]; then
-    exit 2
+    die2 "expected 7 or 8 arguments or --input -, got $#"
   fi
 
   repo="$1"
@@ -53,6 +95,11 @@ else
   # review-required — it can never grant the carve-out on its own.
   skill_owners_json="${8-}"
 fi
+
+# The arms compare bare names, while other surfaces print `devantler-tech/<name>`. Any other shape is
+# an input error, never a "not exempt" verdict about a PR the arms never examined.
+repo="${repo#devantler-tech/}"
+[[ "${repo}" =~ ^[A-Za-z0-9._-]+$ ]] || die2 "repo must be a bare name or devantler-tech/<name>"
 
 # The authorization source is a reviewed, version-controlled list kept outside the skills, because
 # an installed root holds copies from many upstreams and the copied frontmatter is authored by the
@@ -81,24 +128,40 @@ commit_schema='type == "array" and length > 0 and all(.[];
   (.committer_date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
 )'
 
-if [[ ! "${head}" =~ ^[0-9a-f]{40}$ ]] ||
-  ! jq -e 'type == "array" and all(.[]; type == "string")' \
-    <<<"${files_json}" >/dev/null 2>&1 ||
-  ! jq -e "${commit_schema}" <<<"${commits_json}" >/dev/null 2>&1; then
-  exit 2
+[[ "${head}" =~ ^[0-9a-f]{40}$ ]] || die2 "head-oid is not a full 40-character lowercase hex SHA"
+
+jq -e 'type == "array" and all(.[]; type == "string")' <<<"${files_json}" >/dev/null 2>&1 ||
+  die2 "files-json is not a JSON array of strings"
+
+if ! jq -e "${commit_schema}" <<<"${commits_json}" >/dev/null 2>&1; then
+  die2 "$(first_reason '
+    ["author_date", "author_email", "author_login", "author_name", "committer_date", "committer_email",
+      "committer_login", "committer_name", "message", "sha"] as $keys
+    | if type != "array" then "commits-json is \(type), not an array"
+      elif length == 0 then "commits-json is empty"
+      else first(to_entries[] | .key as $i | .value as $c
+        | if ($c | type) != "object" then "commit[\($i)] is \($c | type), not an object"
+          else
+            ($keys[] | select(. as $k | $c | has($k) | not) | "commit[\($i)] is missing key \(.)"),
+            ($c | keys[] | select(IN($keys[]) | not) | "commit[\($i)] has unexpected key \(.)"),
+            ($keys[] | select(($c[.] | type) != "string") | "commit[\($i)].\(.) is \($c[.] | type), not a string"),
+            (select($c.sha | test("^[0-9a-f]{40}$") | not) | "commit[\($i)].sha is not a 40-character lowercase hex SHA"),
+            ("author_date", "committer_date"
+              | select($c[.] | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$") | not)
+              | "commit[\($i)].\(.) is not YYYY-MM-DDTHH:MM:SSZ")
+          end)
+      end' "${commits_json}" "commits-json is not valid JSON")"
 fi
 
 if [[ -n "${skill_owners_json}" ]] &&
   ! jq -e 'type == "object" and all(.[]; type == "string" or type == "null")' \
     <<<"${skill_owners_json}" >/dev/null 2>&1; then
-  exit 2
+  die2 "skill-owners-json is not a JSON object of string or null values"
 fi
 
 # A stale or partial commit list is a survey error, never a normal exemption miss.
-if ! jq -e --arg head "${head}" '.[-1].sha == $head' \
-  <<<"${commits_json}" >/dev/null; then
-  exit 2
-fi
+jq -e --arg head "${head}" '.[-1].sha == $head' <<<"${commits_json}" >/dev/null ||
+  die2 "the last commit in commits-json is not head-oid (stale or partial commit list)"
 
 matches_exact_files() {
   local expected_json

@@ -97,6 +97,23 @@ sed 's/No actionable comments were generated in the recent review. 🎉/**Action
   "${green_fixture}" >"${tmp}/findings.txt"
 expect "recent review with findings" 1 "FINDINGS 2" "${green_head}" "${tmp}/findings.txt"
 
+# A did-not-run marker stops a GREEN but never discards findings the same body carries
+# (monorepo#2764): "rate limited" means the review may be incomplete, never that nothing is there.
+# Both the structural marker and a prose marker are exercised; the finding-free control below keeps
+# the marker's own rejection pinned so the two states are never collapsed.
+{ cat "${tmp}/findings.txt"; printf '\n> ## Review limit reached\n'; } >"${tmp}/findings-plus-limit.txt"
+expect "findings + prose did-not-run marker" 1 "FINDINGS 2" "${green_head}" "${tmp}/findings-plus-limit.txt"
+{ printf '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n'; cat "${tmp}/findings.txt"; } >"${tmp}/findings-plus-structural-limit.txt"
+expect "findings + structural rate-limit marker" 1 "FINDINGS 2" "${green_head}" "${tmp}/findings-plus-structural-limit.txt"
+{ printf '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n'; cat "${green_fixture}"; } >"${tmp}/green-plus-structural-limit.txt"
+expect "finding-free + structural rate-limit marker" 1 "NONE did-not-run" "${green_head}" "${tmp}/green-plus-structural-limit.txt"
+# A zero-count recent review under a marker is still not green: zero findings from an incomplete run
+# is not evidence of a clean one.
+sed 's/No actionable comments were generated in the recent review. 🎉/**Actionable comments posted: 0**/' \
+  "${green_fixture}" >"${tmp}/zero-findings.txt"
+{ cat "${tmp}/zero-findings.txt"; printf '\n> ## Review limit reached\n'; } >"${tmp}/zero-plus-limit.txt"
+expect "zero findings + did-not-run marker" 1 "NONE did-not-run" "${green_head}" "${tmp}/zero-plus-limit.txt"
+
 # A body larger than a pipe buffer must be judged the same way. Piping it into an early-exiting
 # `grep -q` under pipefail reports a match as a miss, which turned both of these into
 # `not-a-summary`; for the did-not-run check that same miss would read a refusal as a green.
