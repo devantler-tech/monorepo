@@ -234,8 +234,12 @@ contract "a merge exit 0 is not a merge" "A merge command's exit \`0\` is not a 
 contract "the branch-update remedy is pinned" \
   'gh api --method PUT repos/devantler-tech/<repo>/pulls/<n>/update-branch -f expected_head_sha=<headRefOid>'
 checks=$((checks + 1))
-update_branch_lines="$(grep -E 'pulls/[^ `]*/update-branch' "${here}/../../AGENTS.md" || true)"
-if [ -n "${update_branch_lines}" ] && grep -vq 'expected_head_sha=' <<<"${update_branch_lines}"; then
+grep_status=0
+update_branch_lines="$(grep -E 'pulls/[^ `]*/update-branch' "${here}/../../AGENTS.md")" || grep_status=$?
+if [ "${grep_status}" -gt 1 ]; then
+  echo "FAIL contract: could not read the prescribed update-branch calls (grep exit ${grep_status})" >&2
+  failures=$((failures + 1))
+elif [ -n "${update_branch_lines}" ] && grep -vq 'expected_head_sha=' <<<"${update_branch_lines}"; then
   echo "FAIL contract: an update-branch call is prescribed without expected_head_sha" >&2
   failures=$((failures + 1))
 else

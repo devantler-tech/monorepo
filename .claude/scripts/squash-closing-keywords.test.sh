@@ -8,7 +8,7 @@
 #
 # Fixtures are hermetic: each case builds a throwaway local repository, so no network is used.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SCRIPT="$SCRIPT_DIR/squash-closing-keywords.sh"
@@ -25,10 +25,10 @@ fail=0
 # new_repo — a fresh fixture repository with one base commit; prints its path.
 new_repo() {
   local dir
-  dir=$(mktemp -d "$FIX/repo.XXXXXX")
-  git -C "$dir" init -q
+  dir=$(mktemp -d "$FIX/repo.XXXXXX") || return 1
+  git -C "$dir" init -q || return 1
   git -C "$dir" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false \
-    commit -q --allow-empty -m "chore: base"
+    commit -q --allow-empty -m "chore: base" || return 1
   printf '%s\n' "$dir"
 }
 
@@ -53,6 +53,7 @@ run() {
     --base "$(git -C "$1" rev-list --max-parents=0 HEAD)" --head HEAD --repo-dir "$1"
 }
 
+# check <name> <condition> — evaluates a condition written in this file and counts the result.
 check() {
   local name=$1 cond=$2
   if eval "$cond"; then
@@ -63,6 +64,7 @@ check() {
   fi
 }
 
+# has <text> — whether the guard's output contains <text>.
 has() { grep -qF -- "$1" <<<"$OUT"; }
 
 # --- RED: the #2720 shape ------------------------------------------------------------------------

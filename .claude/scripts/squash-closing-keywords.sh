@@ -31,6 +31,7 @@
 set -euo pipefail
 
 PROG="$(basename "$0")"
+# unknown <reason> — report UNKNOWN on stderr and exit 2.
 unknown() {
   printf '%s: UNKNOWN — %s\n' "$PROG" "$*" >&2
   exit 2
