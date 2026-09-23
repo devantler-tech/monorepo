@@ -1777,6 +1777,36 @@ printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_outpu
 # one leaves the other visible and the output looks identical.
 printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","type":"input_file","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"},{"ty'"${_BS}"'u0070e":"input_image","image_url":"data:image/png;base64,'"${_B64RUN}"'"}]}}' \
   >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Lines 17–20 — values the table EXCLUDES but no textual pattern can reach
+# (monorepo#2741). All four parse, and the table's predicate runs on the parsed
+# value, so each is a complete data URL there. Line 17 has an escaped newline
+# INSIDE the media type, line 18 one at the very END of the value, and lines 19
+# and 20 put a NESTED sibling object between `type` and `image_url`, in both key
+# orders. A text pattern proving "same object" with `[^{}]*` cannot cross those
+# braces, and no character class can without also crossing into a different
+# object. Only a mask derived from the parse reaches the table's verdict.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/p'"${_BS}"'ng;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB'"${_BS}"'n"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","metadata":{},"image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB","metadata":{},"type":"input_image"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# 🔴 Line 21 — the parse-derived mask's own unsafe direction. The SAME payload,
+# credential included, sits under `input_image` (excluded) and under a sibling
+# `input_file` (counted). Its JSON spelling therefore occurs twice in the raw
+# line but is excluded only once, so blanking every occurrence would hide the
+# counted one. The parse path must decline; the object-scoped textual path then
+# masks only the first object, and the sibling keeps its locator.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","metadata":{},"image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"},{"type":"input_file","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# 🔴 Line 22 — the same payload also used as a KEY. The table decodes keys too
+# and counts the credential in this one, so its spelling occurs twice in the raw
+# line while the parsed document holds it once as a value. The parse path must
+# decline rather than blank the key.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","index":{"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB":1},"output":[{"type":"input_image","metadata":{},"image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
 sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimgnc/codex/sessions/s.jsonl" && rm -f "$FIX/blobimgnc/codex/sessions/s.jsonl.bak"
 subst "$FIX/blobimgnc/codex/sessions/s.jsonl"
 # Control: the appended lines really do carry literal escapes. Without this,
@@ -1820,6 +1850,23 @@ if [ "$(grep -o '"type":"input_image"' <<<"$_L16" | wc -l | tr -d ' ')" = "1" ] 
    grep -q 'u0070e' <<<"$_L16"; then
   ok "control: line 16's two divergences cancel in the marker count"
 else bad "control: line 16's two divergences cancel in the marker count" "$_L16"; fi
+# Control: lines 17–20 carry what they claim on disk, and the TABLE's own
+# predicate excludes each parsed value. Without the second half the four
+# "is masked" assertions below could pass on values the table also counts.
+_TABLE_EXCLUDES='[.. | objects | select((.type? // "") == "input_image") | .image_url
+                  | select(type == "string")
+                  | test("^data:image/[^,]*;base64,[A-Za-z0-9+/]*={0,2}$"; "i")] == [true]'
+_ROWS_OK=1
+for _n in 17 18 19 20; do
+  _L=$(sed -n "${_n}p" "$FIX/blobimgnc/codex/sessions/s.jsonl")
+  [ "$(jq -r "$_TABLE_EXCLUDES" <<<"$_L")" = "true" ] || _ROWS_OK=0
+done
+grep -q 'image/p\\ng;base64' "$FIX/blobimgnc/codex/sessions/s.jsonl" || _ROWS_OK=0
+grep -q '"input_image","metadata":{},"image_url"' "$FIX/blobimgnc/codex/sessions/s.jsonl" || _ROWS_OK=0
+if [ "$_ROWS_OK" = 1 ]; then
+  ok "control: lines 17-20 are literal escapes/nesting the table's predicate excludes"
+else bad "control: lines 17-20 are literal escapes/nesting the table's predicate excludes" \
+  "$(sed -n '17,20p' "$FIX/blobimgnc/codex/sessions/s.jsonl")"; fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimgnc/projects" CODEX_HOME="$FIX/blobimgnc/codex" \
       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
@@ -1925,6 +1972,26 @@ else ok "a duplicate-key record whose effective type is input_image is masked"; 
 if grep -q 'line=16 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
   ok "a record whose two key divergences cancel in the count keeps its locator"
 else bad "a record whose two key divergences cancel in the count keeps its locator" "$CRED"; fi
+# Lines 17–20 — the table excludes each value, so the raw scans must too
+# (monorepo#2741). A textual pattern cannot reach any of them.
+for _case in '17:an escaped newline inside the media type' \
+             '18:an escaped newline at the end of the value' \
+             '19:a nested sibling between type and image_url' \
+             '20:a nested sibling with image_url before type'; do
+  _n=${_case%%:*}; _what=${_case#*:}
+  if grep -q "line=${_n} record=response_item shape=aws-access-key-id" <<<"$CRED"; then
+    bad "an image payload with ${_what} is masked" "$CRED"
+  else ok "an image payload with ${_what} is masked"; fi
+done
+# 🔴 Line 21 — one spelling, two objects, only one excluded. The counted
+# sibling must keep its locator.
+if grep -q 'line=21 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a payload also held by a counted sibling keeps its locator"
+else bad "a payload also held by a counted sibling keeps its locator" "$CRED"; fi
+# 🔴 Line 22 — the payload spelled as a counted KEY keeps its locator.
+if grep -q 'line=22 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a payload also spelled as a counted key keeps its locator"
+else bad "a payload also spelled as a counted key keeps its locator" "$CRED"; fi
 
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain
