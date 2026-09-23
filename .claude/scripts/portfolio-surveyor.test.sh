@@ -3452,3 +3452,36 @@ fi
 [ "$(jq -c '[.[]|has("body")]|any' <<<"${_census_out}")" = 'false' ] ||
   fail "the census must drop raw PR bodies from its output to keep the digest small (monorepo#3466)"
 echo "portfolio surveyor contract: round-17 census execution assertions passed"
+
+# ---------------------------------------------------------------------------------------------------
+# Round 18 — EXECUTE the issue-aggregation reference predicate, not just its text (monorepo#3561).
+# A row missing its `issueType` key used to be counted as untyped; it must fail closed as
+# QUERY-UNKNOWN, while an explicit `issueType:null` still counts as untyped.
+# ---------------------------------------------------------------------------------------------------
+_agg_line="$(grep -F 'nodes{number issueType{name}}' "${surveyor}" | head -1)"
+[ -n "${_agg_line}" ] || fail "cannot find the issue-aggregation reference command in the overlay (monorepo#3561)"
+_agg_filter="${_agg_line#*jq -ce \'}"
+_agg_filter="${_agg_filter%\'}"
+[ "${_agg_filter}" != "${_agg_line}" ] || fail "cannot extract the jq program from the aggregation command (monorepo#3561)"
+_agg_page() {
+  printf '[{"data":{"repository":{"issues":{"totalCount":2,"nodes":[{"number":1,"issueType":{"name":"Bug"}},%s]}}}}]' "$1"
+}
+if ! _agg_out="$(_agg_page '{"number":2,"issueType":null}' | jq -ce "${_agg_filter}" 2>&1)"; then
+  fail "an explicit issueType:null must count as untyped, not fail: ${_agg_out} (monorepo#3561)"
+fi
+[ "$(jq -c '.types' <<<"${_agg_out}")" = '[{"type":null,"count":1},{"type":"Bug","count":1}]' ] ||
+  fail "the aggregation miscounts a complete answer: ${_agg_out} (monorepo#3561)"
+for _agg_bad in '{"number":2}' '{"number":2,"issueType":"Bug"}' '{"number":2,"issueType":{"name":7}}'; do
+  if _agg_out="$(_agg_page "${_agg_bad}" | jq -ce "${_agg_filter}" 2>&1)"; then
+    fail "a malformed row ${_agg_bad} was counted instead of failing closed: ${_agg_out} (monorepo#3561)"
+  fi
+  grep -Fq 'QUERY-UNKNOWN' <<<"${_agg_out}" ||
+    fail "a malformed row ${_agg_bad} failed without reporting QUERY-UNKNOWN: ${_agg_out} (monorepo#3561)"
+done
+
+# A non-object row aborts earlier, inside the uniqueness check, with jq's own error — still a failed
+# (non-zero) read, never a count.
+if _agg_out="$(_agg_page '2' | jq -ce "${_agg_filter}" 2>&1)"; then
+  fail "a non-object row was counted instead of failing: ${_agg_out} (monorepo#3561)"
+fi
+echo "portfolio surveyor contract: round-18 aggregation execution assertions passed"
