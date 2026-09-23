@@ -1167,6 +1167,80 @@ expect_stdin_rc "non-object input" 2 '[]' --input -
 expect_stdin_rc "path instead of stdin" 2 "${ksail_stdin_payload}" --input /dev/stdin
 expect_stdin_rc "trailing argument" 2 "${ksail_stdin_payload}" --input - extra
 
+# Exit 2 names its failed check in one stderr line, so a caller can tell a payload it built wrongly
+# from an environment it cannot fix (monorepo#3101). The verdicts above stay silent on stderr.
+expect_error_reason() {
+  local name="$1" want="$2" payload="$3" rc err
+  shift 3
+  if err="$("${classifier}" "$@" 2>&1 >/dev/null <<<"${payload}")"; then rc=0; else rc=$?; fi
+  [[ "${rc}" -eq 2 ]] || fail "classifier ${name}: exit ${rc}, want 2"
+  [[ "${err}" == "programmed-bot-review-exemption: ${want}" ]] ||
+    fail "classifier ${name}: stderr '${err}', want '${want}'"
+}
+ksail_args=("ksail" "app/ksail-bot" "chore/copilot-plugin-v7.172.2"
+  "chore(copilot-plugin): release v7.172.2" "${ksail_head}" "${ksail_files}")
+if err="$("${classifier}" --input - 2>&1 >/dev/null <<<"${ksail_stdin_payload}")"; then
+  [[ -z "${err}" ]] || fail "classifier writes stderr on an exempt verdict: ${err}"
+else
+  fail "classifier stdin baseline no longer exempt"
+fi
+expect_error_reason "stdin missing key" "stdin is missing key title" \
+  "$(jq -c 'del(.title)' <<<"${ksail_stdin_payload}")" --input -
+expect_error_reason "stdin unknown key" "stdin has unexpected key extra" \
+  "$(jq -c '.extra = "x"' <<<"${ksail_stdin_payload}")" --input -
+expect_error_reason "stdin non-string" "stdin repo is number, not a string" \
+  "$(jq -c '.repo = 1' <<<"${ksail_stdin_payload}")" --input -
+expect_error_reason "stdin files" "stdin files is string, not an array" \
+  "$(jq -c '.files = "x"' <<<"${ksail_stdin_payload}")" --input -
+expect_error_reason "stdin skill_owners" "stdin skill_owners is array, not an object or null" \
+  "$(jq -c '.skill_owners = []' <<<"${ksail_stdin_payload}")" --input -
+expect_error_reason "stdin non-object" "stdin is not one JSON object" '[]' --input -
+expect_error_reason "stdin not JSON" "stdin is not one JSON object" 'not json' --input -
+expect_error_reason "arity" "expected 7 or 8 arguments or --input -, got 2" \
+  "${ksail_stdin_payload}" --input /dev/stdin
+expect_error_reason "head-oid" "head-oid is not a full 40-character lowercase hex SHA" "" \
+  "${ksail_args[@]:0:4}" "${ksail_head:0:10}" "${ksail_files}" "${ksail_commits}"
+expect_error_reason "files" "files-json is not a JSON array of strings" "" \
+  "${ksail_args[@]:0:5}" '[1]' "${ksail_commits}"
+expect_error_reason "commits not JSON" "commits-json is not valid JSON" "" "${ksail_args[@]}" '['
+expect_error_reason "commits object" "commits-json is object, not an array" "" "${ksail_args[@]}" '{}'
+expect_error_reason "commits empty" "commits-json is empty" "" "${ksail_args[@]}" '[]'
+expect_error_reason "commit not object" "commit[0] is string, not an object" "" "${ksail_args[@]}" '["x"]'
+expect_error_reason "partial commit" "commit[0] is missing key author_date" "" "${ksail_args[@]}" \
+  "$(jq -c --arg head "${ksail_head}" '[{sha: $head, message: "m"}]' <<<'null')"
+expect_error_reason "extra commit key" "commit[0] has unexpected key login" "" "${ksail_args[@]}" \
+  "$(jq -c '.[0].login = "x"' <<<"${ksail_commits}")"
+expect_error_reason "null login" "commit[0].author_login is null, not a string" "" "${ksail_args[@]}" \
+  "$(jq -c '.[0].author_login = null' <<<"${ksail_commits}")"
+expect_error_reason "short sha" "commit[0].sha is not a 40-character lowercase hex SHA" "" \
+  "${ksail_args[@]}" "$(jq -c '.[0].sha = "abc"' <<<"${ksail_commits}")"
+expect_error_reason "bad date" "commit[0].committer_date is not YYYY-MM-DDTHH:MM:SSZ" "" \
+  "${ksail_args[@]}" "$(jq -c '.[0].committer_date = "2026-07-18"' <<<"${ksail_commits}")"
+expect_error_reason "second commit" "commit[1] is missing key sha" "" "${ksail_args[@]}" \
+  "$(jq -c '. + [.[0] | del(.sha)]' <<<"${ksail_commits}")"
+expect_error_reason "stale head" "the last commit in commits-json is not head-oid (stale or partial commit list)" "" \
+  "${ksail_args[@]:0:4}" "${ksail_cask_head}" "${ksail_files}" "${ksail_commits}"
+expect_error_reason "skill owners" "skill-owners-json is not a JSON object of string or null values" "" \
+  "${ksail_args[@]}" "${ksail_commits}" '[]'
+expect_error_reason "foreign owner" "repo must be a bare name or devantler-tech/<name>" "" \
+  "other-org/ksail" "${ksail_args[@]:1}" "${ksail_commits}"
+expect_error_reason "empty repo" "repo must be a bare name or devantler-tech/<name>" "" \
+  "" "${ksail_args[@]:1}" "${ksail_commits}"
+no_jq_path="$(mktemp -d)"
+if err="$(PATH="${no_jq_path}" "${BASH}" "${classifier}" --input - 2>&1 >/dev/null <<<'{}')"; then
+  fail "classifier ran without jq"
+else
+  rc=$?
+  [[ "${rc}" -eq 2 && "${err}" == "programmed-bot-review-exemption: jq is not installed" ]] ||
+    fail "classifier without jq: exit ${rc}, stderr '${err}'"
+fi
+rmdir "${no_jq_path}"
+
+# `devantler-tech/<name>` is the form the survey digest and `gh --repo` print. It names the same
+# repository, so it must reach the same verdict, never a "not exempt" the arms never examined
+# (monorepo#3140).
+expect_exempt "owner-qualified repo" "devantler-tech/ksail" "${ksail_args[@]:1}" "${ksail_commits}"
+
 expect_review_required \
   "agent-plugins skill-only update" \
   "agent-plugins" \
@@ -1387,6 +1461,19 @@ expect_exempt \
   "${ksail_cask_head}" \
   '["Casks/ksail.rb"]' \
   "${ksail_cask_commits}"
+
+# The autocorrect commit's author has no GitHub account, so callers must pass its login as "". The
+# same payload with a null login fails the classifier's string schema on every tap cask PR (#2864).
+null_login_cask_commits="$(jq -c 'map(if .author_login == "" then .author_login = null | .committer_login = null else . end)' <<<"${ksail_cask_commits}")"
+expect_classifier_error \
+  "GoReleaser KSail cask whose autocorrect login is null" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "chore(cask): update ksail to v7.172.2" \
+  "${ksail_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${null_login_cask_commits}"
 
 expect_exempt \
   "GoReleaser KSail Desktop cask" \

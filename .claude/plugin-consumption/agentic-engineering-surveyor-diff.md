@@ -81,7 +81,9 @@ plugin carries them (or an explicit, tested subset):
 4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713 / #2819) — a review
    object counts only when its body begins `**Actionable comments posted:` **after stripping any
    leading HTML comments and the whitespace around them**; an empty object is a reply
-   container, never a review, whatever its `commit_id`. Measured over the 60 most recently merged
+   container, never a review, whatever its `commit_id`. A body opening instead with the outside-diff
+   `> [!CAUTION]` block (`> Some comments are outside the diff`) is a review too (monorepo#2748): it
+   carries every finding outside the diff and never the marker. Measured over the 60 most recently merged
    monorepo PRs: 16 of 19 objects at a merged head were empty, and two PRs merged with no substantive
    review at the merged commit. Without this a bare `commit_id == head` match reports a non-review as
    a green. The strip is required rather than permissive: CodeRabbit fronts every real body with an

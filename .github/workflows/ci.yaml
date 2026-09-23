@@ -39,6 +39,7 @@ jobs:
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
       latency-discipline-contract: ${{ steps.filter.outputs.latency-discipline-contract }}
       control-character-command-contract: ${{ steps.filter.outputs.control-character-command-contract }}
+      dotfile-glob-fanout-contract: ${{ steps.filter.outputs.dotfile-glob-fanout-contract }}
       one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
       codex-dispatch-supersession-contract: ${{ steps.filter.outputs.codex-dispatch-supersession-contract }}
@@ -316,6 +317,10 @@ jobs:
               # contract that composed requests pass the disclosure check.
               - '.claude/scripts/review-request-comment.sh'
               - '.claude/scripts/review-request-comment.test.sh'
+              # The Bugbot request-marker check pairs the composer's Bugbot output,
+              # so it belongs to the same review-request protocol gate.
+              - '.claude/scripts/bugbot-request-marker.sh'
+              - '.claude/scripts/bugbot-request-marker.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -385,6 +390,10 @@ jobs:
             control-character-command-contract:
               - 'AGENTS.md'
               - '.claude/scripts/control-character-command-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            dotfile-glob-fanout-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/dotfile-glob-fanout-contract.test.sh'
               - '.github/workflows/ci.yaml'
             one-verb-per-bash-call-contract:
               - 'AGENTS.md'
@@ -1412,6 +1421,10 @@ jobs:
       # the guard above, with bare-trigger negative controls.
       - name: Verify the review-request comment composer
         run: bash .claude/scripts/review-request-comment.test.sh
+      # Hermetic: gh is stubbed on PATH, and the end-to-end case pairs the
+      # composer's real Bugbot output.
+      - name: Verify the Bugbot request-marker check
+        run: bash .claude/scripts/bugbot-request-marker.test.sh
 
   test-surveyor-forge-vocabulary:
     name: Test surveyor forge vocabulary conformance
@@ -1693,6 +1706,21 @@ jobs:
           persist-credentials: false
       - name: Verify the control character command contract
         run: bash .claude/scripts/control-character-command-contract.test.sh
+
+  test-dotfile-glob-fanout-contract:
+    name: Test dotfile glob fan-out contract
+    needs: changes
+    if: needs.changes.outputs.dotfile-glob-fanout-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the dotfile glob fan-out contract
+        run: bash .claude/scripts/dotfile-glob-fanout-contract.test.sh
 
   test-rung-type-filter-contract:
     name: Test rung type filter contract
@@ -2182,6 +2210,9 @@ jobs:
             submodule update --init libraries/agent-plugins
       - name: Verify the merge-preflight thread gate
         run: bash .claude/scripts/merge-preflight-thread-gate.test.sh
+      # Same section, same trigger set: the merge fall-through past a stale mergeStateStatus.
+      - name: Verify the merge-API fall-through contract
+        run: bash .claude/scripts/merge-api-fallthrough-contract.test.sh
 
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
@@ -2321,6 +2352,7 @@ jobs:
       - test-memory-backup
       - test-latency-discipline-contract
       - test-control-character-command-contract
+      - test-dotfile-glob-fanout-contract
       - test-one-verb-per-bash-call-contract
       - test-bash-call-timeout-budget-contract
       - test-codex-dispatch-supersession-contract
@@ -2395,6 +2427,7 @@ jobs:
             ${{ needs.test-memory-backup.result }}
             ${{ needs.test-latency-discipline-contract.result }}
             ${{ needs.test-control-character-command-contract.result }}
+            ${{ needs.test-dotfile-glob-fanout-contract.result }}
             ${{ needs.test-one-verb-per-bash-call-contract.result }}
             ${{ needs.test-bash-call-timeout-budget-contract.result }}
             ${{ needs.test-codex-dispatch-supersession-contract.result }}
