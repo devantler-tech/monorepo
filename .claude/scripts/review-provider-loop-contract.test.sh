@@ -153,6 +153,23 @@ assert_prose "${constitution}" 'Review skipped: automatic reviews are disabled' 
   "constitution does not name the not-run CodeRabbit status description"
 assert_prose "${constitution}" 'the `description` is the only discriminator' \
   "constitution does not make the status description the discriminator"
+
+# CodeRabbit states its retry window only in the summary comment it edits in place, so reading the
+# newest-created comment misses it and escalates onto the metered lanes (#2897).
+assert_prose "${constitution}" 'Read that window from the summary comment CodeRabbit edits in place' \
+  "constitution does not say where CodeRabbit's retry window is published"
+assert_prose "${constitution}" 'Select CodeRabbit'"'"'s comments by `updated_at`, or search all of them for `available in`, which matches both' \
+  "constitution does not say how to read CodeRabbit's retry window"
+assert_prose "${constitution}" 'stated windows of 7 and 2 minutes' \
+  "constitution drops the measured CodeRabbit retry windows"
+assert_prose "${constitution}" 'and `Next included review available in N minutes` on 2026-09-22' \
+  "constitution drops CodeRabbit's current retry-window wording"
+assert_prose "${constitution}" 'one included review that refills on that stated timer, not a fixed hourly allowance' \
+  "constitution models CodeRabbit's limit as an hourly allowance"
+assert_prose "${constitution}" 'so search for `before sending another message`' \
+  "constitution does not say how to read CodeRabbit's chat-message limit wait"
+assert_prose "${constitution}" 'a limit that states no window (a Codex usage limit, Bugbot'"'"'s `Error`) never clears by waiting' \
+  "constitution does not separate a stated short window from a limit that never clears"
 assert_prose "${constitution}" 'required corroborator, never a satisfier' \
   "the CodeRabbit commit status can satisfy the green-review gate on its own"
 assert_prose "${surveyor}" 'Review skipped: automatic reviews are disabled' \
