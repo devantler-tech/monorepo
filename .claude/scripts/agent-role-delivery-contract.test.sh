@@ -177,6 +177,7 @@ canonical_surveyor="${plugin_agents}/portfolio-surveyor.agent.md"
 canonical_improver="${plugin_agents}/agent-improver.agent.md"
 canonical_ci_classifier="${plugin_scripts}/classify-default-branch-ci-runs.sh"
 canonical_forge_guard="${plugin_scripts}/forge-readonly-guard.sh"
+canonical_thread_counter="${plugin_scripts}/count-unresolved-review-threads.sh"
 canonical_surveyor_hook="${plugin_scripts}/surveyor-forge-readonly.sh"
 canonical_routing_evaluator="${plugin_scripts}/evaluate-inference-routing.sh"
 [ -f "${canonical_surveyor}" ] ||
@@ -237,7 +238,7 @@ grep -Fq 'Any other mandatory-query failure also wins as `nothing_on_fire: false
 declared_runtime_asset_sha() {
   jq -er --arg path "$1" '
     .spec.source.requiredRuntimeAssets
-    | select(type == "array" and length == 4)
+    | select(type == "array" and length == 5)
     | map(select(
           type == "object"
           and keys == ["executable", "path", "sha256"]
@@ -250,13 +251,14 @@ declared_runtime_asset_sha() {
 }
 for runtime_asset in \
   "scripts/classify-default-branch-ci-runs.sh:${canonical_ci_classifier}" \
+  "scripts/count-unresolved-review-threads.sh:${canonical_thread_counter}" \
   "scripts/forge-readonly-guard.sh:${canonical_forge_guard}" \
   "scripts/surveyor-forge-readonly.sh:${canonical_surveyor_hook}" \
   "scripts/evaluate-inference-routing.sh:${canonical_routing_evaluator}"; do
   runtime_asset_path="${runtime_asset%%:*}"
   canonical_runtime_asset="${runtime_asset#*:}"
   if ! declared_runtime_asset_sha="$(declared_runtime_asset_sha "${runtime_asset_path}")"; then
-    fail "consumer desired state does not carry exactly four executable path-and-digest runtime assets including ${runtime_asset_path}"
+    fail "consumer desired state does not carry exactly five executable path-and-digest runtime assets including ${runtime_asset_path}"
   fi
   [ "${declared_runtime_asset_sha}" = "$(sha256_bytes "${canonical_runtime_asset}")" ] ||
     fail "consumer desired-state ${runtime_asset_path} sha256 does not match the pinned executable bytes"
