@@ -198,7 +198,7 @@ esac
 # reaches a match to stop at and the pipeline's failure means "no match" in both
 # the ordinary and the negated form — which is the correct reading rather than
 # the misreported-match this guard exists to catch. Reporting either blocks a
-# safe command, the false-positive direction that keeps enforcement latent.
+# safe command, a false positive that fails every PR reaching the sweep.
 #
 # Zero is decided by VALUE, never by a leading-`0` glob: `-m01` is one, so a
 # pattern like `0*` would read a real early exit as harmless — the fail-open
@@ -991,7 +991,7 @@ _ASSIGN_VALUE='("([^"\\]|\\.)*"|\$'"$_SQ"'([^'"$_SQ"'\\]|\\.)*'"$_SQ"'|'"$_SQ"'[
 # is the demonstrated case: `producer | xargs grep -q MATCH` is SAFE, because
 # xargs consumes the producer's whole stream and grep reads the named files
 # rather than the pipe, so nothing is SIGPIPEd. Reported as an offender it blocks
-# a valid script, which is the failure direction that keeps enforcement latent.
+# a valid script, and the sweep then fails every PR that reaches it.
 #
 # Transparent wrappers stay explicitly enumerated (`command`, `env`, and the
 # value-taking `env` options above). An unlisted wrapper reads as no-match, i.e.
