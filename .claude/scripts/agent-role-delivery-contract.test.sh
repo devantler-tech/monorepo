@@ -1047,6 +1047,27 @@ threads_sites="$(grep -o '[^[:space:]"`'"'"']*pr-unresolved-threads\.sh[^[:space
 [ -z "${threads_sites}" ] ||
   fail "surveyor overlay calls pr-unresolved-threads.sh by a form the guard refuses: ${threads_sites}"
 
+# The CodeRabbit summary-verdict helper is declared too (monorepo#3529): the overlay told the
+# surveyor to judge a summary with it (monorepo#2653) while the guard refused every call, 5 times in
+# one day, and the refused surveyor fell back to judging the summary by eye. Run the overlay's OWN
+# documented pipeline through the hook so the prescription and the declaration cannot drift apart.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+verdict_command="$(grep -o '`gh api [^`]*coderabbit-summary-verdict\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${verdict_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded coderabbit-summary-verdict.sh pipeline (monorepo#3529)"
+verdict_command="${verdict_command//<repo-root>/${repo_root}}"
+verdict_command="${verdict_command//<repo>/monorepo}"
+verdict_command="${verdict_command//<comment-id>/5780024602}"
+verdict_command="${verdict_command//<headRefOid>/aec327979c1f29383cce7aed0df46ab8e1f90b8f}"
+verdict_payload="$(jq -nc --arg cmd "${verdict_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${verdict_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's CodeRabbit summary-verdict pipeline (monorepo#3529)"
+verdict_sites="$(grep -o '[^[:space:]"`'"'"']*coderabbit-summary-verdict\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/coderabbit-summary-verdict.sh' || true)"
+[ -z "${verdict_sites}" ] ||
+  fail "surveyor overlay calls coderabbit-summary-verdict.sh by a form the guard refuses: ${verdict_sites}"
+
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
 # shellcheck disable=SC2016  # fixture must inspect its own child environment
