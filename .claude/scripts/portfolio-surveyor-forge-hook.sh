@@ -79,9 +79,13 @@ verify_asset() {
 classifier_relative="scripts/classify-default-branch-ci-runs.sh"
 guard_relative="scripts/forge-readonly-guard.sh"
 adapter_relative="scripts/surveyor-forge-readonly.sh"
+thread_counter_relative="scripts/count-unresolved-review-threads.sh"
 verify_asset "${classifier_relative}"
 verify_asset "${guard_relative}"
 verify_asset "${adapter_relative}"
+# The guard admits the bundled thread counter by its installed path, so the
+# surveyor may run it: verify its pinned bytes like every other admitted asset.
+verify_asset "${thread_counter_relative}"
 
 # The reviewed plugin admits a CONSUMING deployment's own classifier only when
 # that deployment DECLARES it, as an absolute path, in the hook environment.

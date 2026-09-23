@@ -1158,6 +1158,25 @@ case "${tampered_classifier_output}" in
   *) fail "consumer surveyor hook refused a drifted classifier without an actionable digest reason" ;;
 esac
 
+# The guard also admits the bundled unresolved-thread counter by its installed path,
+# so the surveyor can execute it: a drifted counter must fail the same way.
+tampered_counter_plugin="${hook_tmp}/tampered-counter-plugin"
+cp -R "${plugin_root}" "${tampered_counter_plugin}"
+printf '\n# unreviewed drift\n' >> \
+  "${tampered_counter_plugin}/scripts/count-unresolved-review-threads.sh"
+chmod +x "${tampered_counter_plugin}/scripts/count-unresolved-review-threads.sh"
+write_hook_registry "${tampered_counter_plugin}"
+set +e
+tampered_counter_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+tampered_counter_status=$?
+set -e
+[ "${tampered_counter_status}" -eq 2 ] ||
+  fail "consumer surveyor hook trusted a thread counter whose bytes differ from desired state (exit ${tampered_counter_status})"
+case "${tampered_counter_output}" in
+  *'scripts/count-unresolved-review-threads.sh sha256 does not match desired state'*) ;;
+  *) fail "consumer surveyor hook refused a drifted thread counter without an actionable digest reason" ;;
+esac
+
 jq -e '
   .spec.guardrails | index(
     "Write-capable roles own selected engineering work from claim through exact-head review and merge; issue-only handoff is allowed only for a named external blocker or missing authority."
