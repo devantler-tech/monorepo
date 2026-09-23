@@ -321,6 +321,8 @@ matches_ksail_provenance() {
 # `brew style --fix` autocorrect commit. Every commit must match one of those two identities — an
 # agent or human adaptation commit anywhere in the list takes the PR off its programmed path and
 # makes it review-bearing again, per the constitution's carve-out.
+# GoReleaser writes either its default subject or the Conventional subject ksail's
+# `commit_msg_template` sets (ksail#6975); an evergreen branch can carry both across cycles (#3547).
 matches_homebrew_provenance() {
   local component="$1"
   local version="$2"
@@ -337,7 +339,7 @@ matches_homebrew_provenance() {
         .committer_login == "goreleaserbot" and
         .committer_name == "goreleaserbot" and
         .committer_email == "bot@goreleaser.com" and
-        (.message | test("^Brew cask update for \($component) version v[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"));
+        (.message | test("^(Brew cask update for \($component) version |chore\\(cask\\): update \($component) to )v[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"));
       def autocorrect_commit:
         .author_login == "" and
         .author_name == "generator-bot" and
@@ -357,7 +359,8 @@ matches_homebrew_provenance() {
       # reject a genuine release.
       any(.[];
         goreleaser_commit and
-        .message == "Brew cask update for \($component) version \($version)")
+        (.message == "Brew cask update for \($component) version \($version)" or
+         .message == "chore(cask): update \($component) to \($version)"))
     ' <<<"${commits_json}" >/dev/null
 }
 

@@ -988,6 +988,34 @@ adapted_cask_commits="$(jq -cn \
      message: "fix(cask): correct the sha256 by hand"}
   ]' | with_commit_dates)"
 
+# Measured from homebrew-tap #1669 (#3547): ksail#6975 set GoReleaser's commit_msg_template to the
+# Conventional subject, so cycles from v7.192.5 on carry it while older cycles on the same evergreen
+# branch still carry GoReleaser's default subject.
+conventional_cask_head="9b8a7c6d5e4f30211b2c3d4e5f60718293a4b5c6"
+conventional_cask_commits="$(jq -cn \
+  --arg head "${conventional_cask_head}" \
+  '[
+    {sha: "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
+     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
+     message: "Brew cask update for ksail-desktop version v7.192.4"},
+    {sha: "1b2c3d4e5f60718293a4b5c6d7e8f9012345678a",
+     author_login: "", author_name: "generator-bot", author_email: "generator-bot@users.noreply.github.com",
+     committer_login: "", committer_name: "generator-bot", committer_email: "generator-bot@users.noreply.github.com",
+     message: "style: autocorrect Casks (brew style --fix)"},
+    {sha: "2c3d4e5f60718293a4b5c6d7e8f9012345678a9b",
+     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
+     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
+     message: "chore(cask): update ksail-desktop to v7.192.7"},
+    {sha: $head,
+     author_login: "", author_name: "generator-bot", author_email: "generator-bot@users.noreply.github.com",
+     committer_login: "", committer_name: "generator-bot", committer_email: "generator-bot@users.noreply.github.com",
+     message: "style: autocorrect Casks (brew style --fix)"}
+  ]' | with_commit_dates)"
+conventional_only_cask_commits="$(jq -c '.[2:]' <<<"${conventional_cask_commits}")"
+wrong_component_cask_commits="$(jq -c '.[2].message = "chore(cask): update ksail to v7.192.7"' <<<"${conventional_cask_commits}")"
+non_semver_cask_commits="$(jq -c '.[2].message = "chore(cask): update ksail-desktop to latest"' <<<"${conventional_cask_commits}")"
+
 default_title_cask_head="5a5792bb83bd6b8469f10cd7e00abfe75c7f36be"
 default_title_cask_commits="$(homebrew_commits_json \
   "ksail" \
@@ -1559,6 +1587,66 @@ expect_exempt \
   "${multi_cycle_cask_head}" \
   '["Casks/ksail.rb"]' \
   "${multi_cycle_cask_commits}"
+
+expect_exempt \
+  "GoReleaser cask mixing default and Conventional commit subjects" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail-desktop" \
+  "chore(cask): update ksail-desktop to v7.192.7" \
+  "${conventional_cask_head}" \
+  '["Casks/ksail-desktop.rb"]' \
+  "${conventional_cask_commits}"
+
+expect_exempt \
+  "GoReleaser cask carrying only the Conventional commit subject" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail-desktop" \
+  "chore(cask): update ksail-desktop to v7.192.7" \
+  "${conventional_cask_head}" \
+  '["Casks/ksail-desktop.rb"]' \
+  "${conventional_only_cask_commits}"
+
+expect_exempt \
+  "cask title naming the older default-subject cycle" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail-desktop" \
+  "chore(cask): update ksail-desktop to v7.192.4" \
+  "${conventional_cask_head}" \
+  '["Casks/ksail-desktop.rb"]' \
+  "${conventional_cask_commits}"
+
+expect_review_gated \
+  "Conventional cask commit naming another component" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail-desktop" \
+  "chore(cask): update ksail-desktop to v7.192.4" \
+  "${conventional_cask_head}" \
+  '["Casks/ksail-desktop.rb"]' \
+  "${wrong_component_cask_commits}"
+
+expect_review_gated \
+  "Conventional cask commit naming a non-semver tag" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail-desktop" \
+  "chore(cask): update ksail-desktop to v7.192.4" \
+  "${conventional_cask_head}" \
+  '["Casks/ksail-desktop.rb"]' \
+  "${non_semver_cask_commits}"
+
+expect_review_gated \
+  "Conventional cask title claiming a version no cycle shipped" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail-desktop" \
+  "chore(cask): update ksail-desktop to v7.192.8" \
+  "${conventional_cask_head}" \
+  '["Casks/ksail-desktop.rb"]' \
+  "${conventional_cask_commits}"
 
 expect_review_gated \
   "cask PR carrying a hand adaptation commit" \
