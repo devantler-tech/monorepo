@@ -216,6 +216,103 @@ rc=0
 out="$("$script" check "$bare" "session-other" 2>&1)" || rc=$?
 check "mark then foreign check" 3 "$rc" "$out" "LIVE foreign claim"
 
+# ── an unmarked worktree someone is working in is never "free" (monorepo#2724) ──
+# The marker is a claim a cooperating writer opts into, and a harness session never writes one, so an
+# unmarked tree must be checked for a live process before it reads as free. lsof is stubbed so each
+# arm is deterministic; the last arm uses the real tool to prove the parse against its actual output.
+shim="$tmp/lsof-shim"
+mkdir -p "$shim"
+cat >"$shim/lsof" <<'SHIM'
+#!/usr/bin/env bash
+printf '%b' "${LSOF_STUB_OUT-}"
+exit "${LSOF_STUB_RC:-0}"
+SHIM
+chmod +x "$shim/lsof"
+occupied="$tmp/occupied-wt"
+git -C "$repo" worktree add -q -b "claim-branch-occupied" "$occupied"
+occupied_real="$(cd "$occupied" && pwd -P)"
+idle_out='p1\nn/\n'
+
+run_stubbed() {
+  local stub_out=$1 stub_rc=$2
+  shift 2
+  PATH="$shim:$PATH" LSOF_STUB_OUT="$stub_out" LSOF_STUB_RC="$stub_rc" "$script" "$@"
+}
+
+rc=0
+out="$(run_stubbed "${idle_out}p999999\nn${occupied_real}\n" 0 check "$occupied" "session-delta" 2>&1)" || rc=$?
+check "check unmarked tree with a live process" 3 "$rc" "$out" "pid=999999"
+rc=0
+out="$(run_stubbed "${idle_out}p999999\nn${occupied_real}/sub/dir\n" 0 check "$occupied" "session-delta" 2>&1)" || rc=$?
+check "check unmarked tree with a live process below it" 3 "$rc" "$out" "LIVE"
+rc=0
+out="$(run_stubbed "${idle_out}p999999\nn${occupied_real}\n" 0 acquire "$occupied" "session-delta" 2>&1)" || rc=$?
+check "acquire unmarked tree with a live process" 3 "$rc" "$out" "stand down"
+check "occupied acquire writes no marker" 1 "$([ -e "$occupied/.claude-worktree-owner" ] && echo 0 || echo 1)"
+
+# Negative controls: a sibling path sharing the prefix, the caller's own process chain, and an idle
+# system must all read free, or the check would make every worktree unclaimable.
+rc=0
+out="$(run_stubbed "${idle_out}p999999\nn${occupied_real}-sibling\n" 0 check "$occupied" "session-delta" 2>&1)" || rc=$?
+check "a sibling path sharing the prefix is not an occupant" 0 "$rc" "$out" "free"
+rc=0
+out="$(run_stubbed "${idle_out}p$$\nn${occupied_real}\n" 0 check "$occupied" "session-delta" 2>&1)" || rc=$?
+check "the caller's own process chain is not an occupant" 0 "$rc" "$out" "free"
+rc=0
+out="$(run_stubbed "${idle_out}p999999\nn/proc/999999/cwd (readlink: Permission denied)\n" 0 check "$occupied" "session-delta" 2>&1)" || rc=$?
+check "an unreadable cwd is not an occupant" 0 "$rc" "$out" "free"
+
+# lsof failure fails closed: a partial or empty process list cannot prove the tree is idle.
+rc=0
+out="$(run_stubbed "$idle_out" 1 check "$occupied" "session-delta" 2>&1)" || rc=$?
+check "check fails closed when lsof fails" 2 "$rc" "$out" "cannot tell"
+rc=0
+out="$(run_stubbed "" 0 check "$occupied" "session-delta" 2>&1)" || rc=$?
+check "check fails closed when lsof lists nothing" 2 "$rc" "$out" "cannot tell"
+rc=0
+out="$(run_stubbed "$idle_out" 1 acquire "$occupied" "session-delta" 2>&1)" || rc=$?
+check "acquire fails closed when lsof fails" 2 "$rc" "$out" "cannot tell"
+check "failed acquire writes no marker" 1 "$([ -e "$occupied/.claude-worktree-owner" ] && echo 0 || echo 1)"
+
+rc=0
+out="$(run_stubbed "$idle_out" 0 acquire "$occupied" "session-delta" 2>&1)" || rc=$?
+check "acquire an idle unmarked tree" 0 "$rc" "$out" "acquired"
+# Once marked, the marker decides exactly as before: the owner renews whatever lsof reports.
+rc=0
+out="$(run_stubbed "${idle_out}p999999\nn${occupied_real}\n" 0 acquire "$occupied" "session-delta" 2>&1)" || rc=$?
+check "a marked tree keeps its marker semantics" 0 "$rc" "$out" "renewed"
+
+# `add` creates the tree itself, so nothing can be inside it yet and lsof is never consulted.
+rc=0
+out="$(run_stubbed "" 1 add "$repo" "$tmp/wt-fresh" "claim-branch-fresh" "session-fresh" 2>&1)" || rc=$?
+check "add does not depend on lsof" 0 "$rc" "$out" "owner=session-fresh"
+
+# Real lsof: a process working in an unmarked tree blocks the claim, and its exit frees it.
+if command -v lsof >/dev/null 2>&1; then
+  live="$tmp/live-wt"
+  git -C "$repo" worktree add -q -b "claim-branch-live" "$live"
+  live_real="$(cd "$live" && pwd -P)"
+  (cd "$live" && exec sleep 60) &
+  occupant=$!
+  # Wait for the background process to be inside the tree, or the arm races its own fixture.
+  for _ in $(seq 1 50); do
+    seen="$(lsof -a -p "$occupant" -d cwd -F n 2>/dev/null || true)"
+    grep -qxF "n$live_real" <<<"$seen" && break
+    sleep 0.1
+  done
+  rc=0
+  out="$("$script" check "$live" "session-epsilon" 2>&1)" || rc=$?
+  check "real lsof sees a process in an unmarked tree" 3 "$rc" "$out" "pid=$occupant"
+  kill "$occupant" 2>/dev/null || true
+  wait "$occupant" 2>/dev/null || true
+  rc=0
+  out="$("$script" check "$live" "session-epsilon" 2>&1)" || rc=$?
+  check "real lsof frees the tree once the process exits" 0 "$rc" "$out" "free"
+else
+  printf 'FAIL real lsof arm: lsof is not installed\n' >&2
+  fail=$((fail + 1))
+fi
+
 # ── usage error ────────────────────────────────────────────────────────────
 rc=0
 out="$("$script" 2>&1)" || rc=$?

@@ -14,6 +14,12 @@
 #   claim: pick another lane. Markers expire after ~2 hours so a crashed
 #   session parks nothing permanently (same window as issue claims).
 #
+#   A marker is only written by writers that call this helper; a harness
+#   per-session worktree never has one. So a worktree WITHOUT a marker is free
+#   only when no process outside the caller's own process chain has its working
+#   directory inside it (monorepo#2724). lsof answers that; when it cannot, the
+#   claim fails closed.
+#
 # USAGE
 #   .claude/scripts/worktree-claim.sh add  <repo_path> <worktree_path> <branch> <owner-token>
 #       Create the worktree and write the marker. <branch> is created when it does not exist;
@@ -22,10 +28,12 @@
 #       A relative worktree_path is resolved from repo_path.
 #   .claude/scripts/worktree-claim.sh check <worktree_path> <my-owner-token>
 #       Read-only diagnostic: exit 0 if free / mine / expired; exit 3 if a live
-#       foreign claim exists. This does not reserve the worktree.
+#       foreign claim exists or an unmarked worktree has a live process inside it.
+#       This does not reserve the worktree.
 #   .claude/scripts/worktree-claim.sh acquire <worktree_path> <owner-token>
 #       Atomically acquire a free/expired worktree or renew the current owner's
-#       lease. Exit 3 without changing the marker when another live owner wins.
+#       lease. Exit 3 without changing the marker when another live owner wins
+#       or an unmarked worktree has a live process inside it.
 #   .claude/scripts/worktree-claim.sh mark  <worktree_path> <owner-token>
 #       Compatibility alias for `acquire`.
 #
@@ -39,8 +47,9 @@
 # EXIT CODES
 #   0  success / free-or-mine-or-expired
 #   1  usage / argument error
-#   2  git or filesystem failure
-#   3  live foreign claim (check or acquire mode)
+#   2  git or filesystem failure, or lsof could not tell whether an unmarked
+#      worktree is in use
+#   3  live foreign claim or live unmarked occupant (check or acquire mode)
 
 set -euo pipefail
 
@@ -137,8 +146,75 @@ read_marker() {
   done <"$marker"
 }
 
+# self_and_ancestors prints this process and each of its ancestors, one pid per line. The caller's
+# shell and session sit in this chain and often have the worktree as their own working directory, so
+# counting them would make a session stand down from its own tree. An unreadable parent ends the walk
+# early, which can only make the check stricter.
+self_and_ancestors() {
+  local pid=$$ parent hops=0
+  while [ "$hops" -lt 64 ]; do
+    printf '%s\n' "$pid"
+    parent="$(ps -o ppid= -p "$pid" 2>/dev/null)" || break
+    parent="${parent//[[:space:]]/}"
+    case "$parent" in
+      '' | *[!0-9]* | 0 | "$pid") break ;;
+    esac
+    pid=$parent
+    hops=$((hops + 1))
+  done
+}
+
+# worktree_occupant prints the pid of a process outside this caller's own chain whose working
+# directory is the worktree or anything below it. Returns 0 when there is one, 1 when the tree is
+# idle, and 2 when that cannot be told: lsof missing, failing, or listing nothing. A partial listing
+# reads exactly like an idle system, so a nonzero lsof status is never trusted. Entries whose working
+# directory lsof cannot read belong to processes this user cannot inspect and are skipped, as
+# worktree-cleanup.sh does.
+worktree_occupant() {
+  local target=$1 raw rc=0 line pid="" cwd self
+  command -v lsof >/dev/null 2>&1 || return 2
+  # Run from `/` so neither this substitution nor lsof itself lists the target as its directory.
+  raw="$(cd / && lsof -a -d cwd -F pn 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 0 ] && [ -n "$raw" ] || return 2
+  self=$'\n'"$(self_and_ancestors)"$'\n'
+  while IFS= read -r line; do
+    case "$line" in
+      p*) pid=${line#p} ;;
+      n*)
+        cwd=${line#n}
+        [ "$cwd" = "$target" ] || [ "${cwd#"$target"/}" != "$cwd" ] || continue
+        case "$self" in
+          *$'\n'"$pid"$'\n'*) ;;
+          *)
+            printf '%s\n' "$pid"
+            return 0
+            ;;
+        esac
+        ;;
+    esac
+  done <<<"$raw"
+  return 1
+}
+
+# unmarked_tree_is_idle returns 0 when no other process is working inside the resolved worktree and 1
+# when one is, after saying so. It exits 2 when lsof cannot tell, because an unknown is never free.
+unmarked_tree_is_idle() {
+  local wt=$1 occupant rc=0
+  occupant="$(worktree_occupant "$wt")" || rc=$?
+  case "$rc" in
+    0)
+      echo "worktree-claim: LIVE unmarked occupant pid=$occupant is working in $wt — stand down" >&2
+      return 1
+      ;;
+    1) return 0 ;;
+    *) fail "cannot tell whether a process is working in unmarked worktree $wt (lsof missing, failed, or listed nothing) — stand down; a worktree created with \`worktree-claim.sh add\` carries a marker and needs no process check" ;;
+  esac
+}
+
 cmd_acquire() {
-  local wt="$1" owner="$2"
+  # "fresh" is passed only by `add`, whose tree was created by this invocation, so nothing can be
+  # working in it yet and the process check is skipped.
+  local wt="$1" owner="$2" fresh="${3:-}"
   [ -d "$wt" ] || fail "worktree path is not a directory: $wt"
   [ -n "$owner" ] || usage
   wt="$(cd "$wt" && pwd -P)" || fail "cannot resolve worktree path: $wt"
@@ -146,6 +222,10 @@ cmd_acquire() {
   ignore_marker "$wt"
   local marker="$wt/$WORKTREE_CLAIM_MARKER_NAME" action="acquired"
   read_marker "$marker"
+  if [ ! -e "$marker" ] && [ "$fresh" != "fresh" ] && ! unmarked_tree_is_idle "$wt"; then
+    release_lock
+    exit 3
+  fi
   if [ -e "$marker" ]; then
     if [ -z "${MARKER_OWNER:-}" ] || [ -z "${MARKER_CREATED_AT:-}" ]; then
       fail "malformed ownership marker (owner and created_at are required): $marker"
@@ -528,7 +608,7 @@ cmd_add() {
   # in which a concurrent run can take the marker, leaving this invocation to create the worktree and
   # branch and then exit 3 without the lane it just built. Ownership is the point of `add`; freshness
   # is a NOTE, so the note waits.
-  cmd_acquire "$wt" "$owner"
+  cmd_acquire "$wt" "$owner" fresh
   # `|| true`: the check is advisory by contract, so its status must never decide whether `add`
   # succeeded. Every path in it returns 0 today, but relying on that couples the claim's exit code to
   # the internals of a NOTE -- one future `return 1` on an unresolvable comparison would abort the
@@ -817,7 +897,10 @@ cmd_check() {
   local marker="$wt/$WORKTREE_CLAIM_MARKER_NAME"
   read_marker "$marker"
   if [ ! -e "$marker" ]; then
-    echo "worktree-claim: free (no live marker)"
+    local wt_real
+    wt_real="$(cd "$wt" && pwd -P)" || fail "cannot resolve worktree path: $wt"
+    unmarked_tree_is_idle "$wt_real" || exit 3
+    echo "worktree-claim: free (no live marker, no live process)"
     exit 0
   fi
   if [ -z "${MARKER_OWNER:-}" ] || [ -z "${MARKER_CREATED_AT:-}" ]; then

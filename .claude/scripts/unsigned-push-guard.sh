@@ -18,12 +18,17 @@
 #     origin's default branch, else origin/main. Run it immediately before `git push`.
 #
 # WHAT COUNTS
-#   git's %G? letter for each commit:
-#     N  no signature        -> finding
-#     B  bad signature       -> finding
-#     anything else          -> a signature is present. `E` (cannot be checked here, e.g. a
-#                               missing public key) is NOT this guard's failure class, so it
-#                               passes; GitHub's own verification is the authority for it.
+#   git's %G? letter for each commit, checked against the commit object itself:
+#     N  and no gpgsig/gpgsig-sha256 header  -> finding (UNSIGNED)
+#     N  but the object carries such a header -> passes, named UNVERIFIED. git also reports N
+#                                               when it cannot run verification at all, e.g.
+#                                               an SSH signature with no allowed-signers file
+#                                               (monorepo#3502).
+#     B  bad signature                        -> finding (BAD-SIG)
+#     anything else                           -> a signature is present. `E` (cannot be checked
+#                                               here, e.g. a missing public key) passes too.
+#   A signature this host cannot check is not this guard's failure class; GitHub's own
+#   verification is the authority for it.
 #
 # EXIT CODES
 #   0  every commit in the range carries a signature (an empty range is stated, not assumed)
@@ -59,13 +64,37 @@ if ! log="$(git --no-replace-objects -C "$repo" log --format='%H %G?' "${base}..
   unknown "git log failed for ${base}..HEAD"
 fi
 
+# Whether the commit object carries a signature header. Only the header block counts, so a
+# message line that happens to start with "gpgsig " is not mistaken for one.
+has_signature_header() {
+  local object line
+  object="$(git --no-replace-objects -C "$repo" cat-file commit "$1")" ||
+    unknown "cannot read commit object $1"
+  while IFS= read -r line; do
+    [ -n "$line" ] || return 1
+    case "$line" in
+      'gpgsig '* | 'gpgsig-sha256 '*) return 0 ;;
+    esac
+  done <<EOF
+$object
+EOF
+  return 1
+}
+
 examined=0
 findings=0
+unverified=0
 while IFS=' ' read -r sha class; do
   [ -n "$sha" ] || continue
   examined=$((examined + 1))
   case "$class" in
-    N) findings=$((findings + 1)); printf 'UNSIGNED  %s\n' "$sha" ;;
+    N)
+      if has_signature_header "$sha"; then
+        unverified=$((unverified + 1)); printf 'UNVERIFIED %s\n' "$sha"
+      else
+        findings=$((findings + 1)); printf 'UNSIGNED  %s\n' "$sha"
+      fi
+      ;;
     B) findings=$((findings + 1)); printf 'BAD-SIG   %s\n' "$sha" ;;
     '') unknown "no signature class reported for $sha" ;;
   esac
@@ -73,5 +102,6 @@ done <<EOF
 $log
 EOF
 
-printf '%s: examined=%d findings=%d range=%s..HEAD\n' "$PROG" "$examined" "$findings" "$base"
+printf '%s: examined=%d findings=%d unverified=%d range=%s..HEAD\n' \
+  "$PROG" "$examined" "$findings" "$unverified" "$base"
 [ "$findings" -eq 0 ]

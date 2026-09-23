@@ -640,6 +640,62 @@ sed -i.bak 's/BYMINUTE=50/BYMINUTE=10/' "$FIX/codex/automations/daily-ai-enginee
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET rrule = 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0' WHERE id = 'daily-ai-engineer';"
 
+# ── an omitted BYSECOND (#2744) ───────────────────────────────────────────────
+# The live Codex engineer rule is RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10 in BOTH
+# the pointer and the scheduler store, with no BYSECOND. RFC 5545 fills an omitted
+# BYSECOND with DTSTART's second: exactly ONE second, always inside the BYMINUTE
+# minute. The check measures hour@minute starts, so the omission cannot move a
+# start or add one; it must not be reported as an unreadable schedule, which
+# suppressed the whole stagger block for the busiest lane.
+# Rewrite pointer and store together, because the check also requires them equal.
+set_codex_engineer_rule() {
+  sed -i.bak -E "s|^rrule = \".*\"\$|rrule = \"$1\"|" \
+    "$FIX/codex/automations/daily-ai-engineer/automation.toml"
+  sqlite3 "$CODEX_AUTOMATION_STORE" \
+    "UPDATE automations SET rrule = '$1' WHERE id = 'daily-ai-engineer';"
+}
+set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10'
+OUT=$(NOBASE --section drift)
+check "omitted BYSECOND still compares the engineer schedule" "$OUT" \
+  "codex engineer:  expected=*@10 actual=*@10 MATCH"
+nocheck "omitted BYSECOND is not an unreadable rule" "$OUT" \
+  "UNKNOWN: codex engineer recurrence rule is incomplete or unsupported"
+check "omitted BYSECOND still derives stagger" "$OUT" "local simultaneous starts/day: 0"
+check "omitted BYSECOND still derives slots"   "$OUT" "local engineer slots scheduled/day: 48"
+
+# NEGATIVE CONTROL: an EXPLICIT non-zero BYSECOND is a stated start the cadence
+# table (HH:MM, second 0) does not describe. It stays unreadable, never MATCH.
+set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=30'
+OUT=$(NOBASE --section drift)
+check "explicit BYSECOND=30 stays unreadable" "$OUT" \
+  "UNKNOWN: codex engineer recurrence rule is incomplete or unsupported"
+nocheck "explicit BYSECOND=30 never claims MATCH" "$OUT" \
+  "codex engineer:  expected=*@10 actual=*@10 MATCH"
+check "explicit BYSECOND=30 suppresses stagger" "$OUT" "local simultaneous starts/day: UNKNOWN"
+
+# NEGATIVE CONTROL: a multi-valued BYSECOND is two starts per minute, so it would
+# double the slot count; it must not be read as the single second an omission is.
+set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0,30'
+OUT=$(NOBASE --section drift)
+check "multi-valued BYSECOND stays unreadable" "$OUT" \
+  "UNKNOWN: codex engineer recurrence rule is incomplete or unsupported"
+
+# NEGATIVE CONTROL: a present-but-empty BYSECOND is malformed, not omitted.
+set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND='
+OUT=$(NOBASE --section drift)
+check "empty BYSECOND stays unreadable" "$OUT" \
+  "UNKNOWN: codex engineer recurrence rule is incomplete or unsupported"
+
+# NEGATIVE CONTROL: an incomplete rule stays UNKNOWN. With neither BYMINUTE nor
+# BYSECOND the minute itself would come from DTSTART, which neither surface
+# carries, so it cannot be assumed.
+set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1'
+OUT=$(NOBASE --section drift)
+check "rule without BYMINUTE stays unreadable" "$OUT" \
+  "UNKNOWN: codex engineer recurrence rule is incomplete or unsupported"
+check "rule without BYMINUTE suppresses stagger" "$OUT" "local simultaneous starts/day: UNKNOWN"
+set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0'
+
 # Fail-closed is PRESERVED: an unreadable pointer still suppresses the derivations
 # that depend on it. Only the persistence proof was decoupled, never readability.
 mv "$FIX/codex/automations/agent-improver/automation.toml" \
