@@ -569,7 +569,8 @@ validate_body() {
           domain_candidate = raw_domain_candidate
           raw_domain_used = 1
         }
-        sub(/[\047’]s$/, "", domain_candidate)
+        # An alternation, not a bracket: a byte-oriented awk reads a bracketed ’ as three one-byte choices.
+        sub(/(\047|’)s$/, "", domain_candidate)
         third_previous = field > 3 ? normalized_word($(field - 3)) : ""
         before_previous = field > 2 ? normalized_word($(field - 2)) : ""
         previous = field > 1 ? normalized_word($(field - 1)) : ""
