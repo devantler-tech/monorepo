@@ -138,6 +138,71 @@ if [ "${rc}" = "2" ]; then echo "ok   abbreviated head refused"; else
   failures=$((failures + 1))
 fi
 
+# Stdin-only JSON mode (monorepo#3529). The surveyor's read-only guard admits a declared helper
+# only as `--input -` with no other argument, so the head must travel on stdin. Without --head,
+# stdin is one JSON object with exactly the keys `head` and `body`. Parity: every fixture x head
+# pair judged through JSON must match the --head form exactly, so the modes cannot drift.
+json_verdict() { # json_verdict <json-file> → prints "rc<TAB>output"
+  local got rc
+  set +e
+  got="$(bash "${tool}" --input - <"$1" 2>/dev/null)"
+  rc=$?
+  set -e
+  printf '%s\t%s\n' "${rc}" "${got}"
+}
+for f in "${green_fixture}" "${limited_fixture}" "${walkthrough_fixture}" "${tmp}/plain.txt"; do
+  for h in "${green_head}" "${limited_head}" "${other_head}"; do
+    checks=$((checks + 1))
+    jq -n --arg h "${h}" --rawfile b "${f}" '{head: $h, body: $b}' >"${tmp}/pair.json"
+    set +e
+    want="$(bash "${tool}" --head "${h}" --input "${f}" 2>/dev/null)"
+    want_rc=$?
+    set -e
+    got="$(json_verdict "${tmp}/pair.json")"
+    if [ "${got}" = "${want_rc}	${want}" ]; then
+      echo "ok   json parity: $(basename "${f}") @ ${h:0:8} → ${want}"
+    else
+      echo "FAIL json parity: $(basename "${f}") @ ${h:0:8}: --head gave rc=${want_rc} '${want}', json gave '${got}'" >&2
+      failures=$((failures + 1))
+    fi
+  done
+done
+# The parity loop must include a GREEN, or it could pass with the JSON mode judging nothing.
+checks=$((checks + 1))
+jq -n --arg h "${green_head}" --rawfile b "${green_fixture}" '{head: $h, body: $b}' >"${tmp}/green.json"
+if [ "$(json_verdict "${tmp}/green.json")" = "0	GREEN" ]; then echo "ok   json mode reaches GREEN"; else
+  echo "FAIL json mode did not reach GREEN on the real green summary" >&2
+  failures=$((failures + 1))
+fi
+# Invalid JSON input is refused (exit 2), never judged: keys are exact and typed.
+json_invalid() { # json_invalid <name> <json-text>
+  checks=$((checks + 1))
+  printf '%s' "$2" >"${tmp}/bad.json"
+  if [ "$(json_verdict "${tmp}/bad.json")" = "2	" ]; then echo "ok   json refused: $1"; else
+    echo "FAIL json not refused: $1 → $(json_verdict "${tmp}/bad.json")" >&2
+    failures=$((failures + 1))
+  fi
+}
+json_invalid "extra key" "{\"head\":\"${green_head}\",\"body\":\"x\",\"extra\":1}"
+json_invalid "missing body" "{\"head\":\"${green_head}\"}"
+json_invalid "missing head" '{"body":"x"}'
+json_invalid "non-string body" "{\"head\":\"${green_head}\",\"body\":[]}"
+json_invalid "abbreviated head" "{\"head\":\"${green_head:0:8}\",\"body\":\"x\"}"
+json_invalid "multi-line head" "{\"head\":\"${green_head}\\nzz\",\"body\":\"x\"}"
+json_invalid "array not object" '[]'
+json_invalid "raw body without --head" 'not json at all'
+json_invalid "two objects" "{\"head\":\"${green_head}\",\"body\":\"x\"}{\"head\":\"${green_head}\",\"body\":\"x\"}"
+# A file path is not a JSON channel: without --head only `--input -` is accepted.
+checks=$((checks + 1))
+set +e
+bash "${tool}" --input "${tmp}/green.json" >/dev/null 2>&1
+rc=$?
+set -e
+if [ "${rc}" = "2" ]; then echo "ok   json mode refuses a file path"; else
+  echo "FAIL json mode with a file path: want rc=2, got ${rc}" >&2
+  failures=$((failures + 1))
+fi
+
 # The contract names the requirement and the helper, so a reader of either finds the other.
 for surface in "${root}/AGENTS.md" "${root}/.claude/agents/portfolio-surveyor.md"; do
   checks=$((checks + 1))

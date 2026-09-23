@@ -14,12 +14,16 @@
 #
 # USAGE
 #   coderabbit-summary-verdict.sh --head <40-hex-sha> [--input <file>|-]
+#   coderabbit-summary-verdict.sh --input -     (stdin: {"head": "<40-hex-sha>", "body": "<comment body>"})
 #
 #   --head   the FULL 40-character headRefOid (abbreviations are refused: the range header
 #            always carries full shas, and a prefix match would accept a different commit).
 #   --input  the comment BODY (default: stdin). The caller still owns the author bind
 #            (`user.login == "coderabbitai[bot]"`) and the freshness bind (updated after the
 #            authenticated request); this helper judges the body only.
+#   Without --head, `--input -` is REQUIRED and stdin is ONE JSON object with exactly the string
+#            keys `head` and `body` (monorepo#3529). This is the only shape the surveyor's
+#            read-only guard admits for a declared helper, which accepts `--input -` alone.
 #
 # OUTPUT (one line on stdout)
 #   GREEN                      verdict `No actionable comments were generated in the recent
@@ -36,7 +40,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '15,34p' "$0" >&2
+  sed -n '15,38p' "$0" >&2
   exit 2
 }
 
@@ -59,12 +63,34 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+json_mode=0
+if [ -z "$head" ]; then
+  # Stdin-only JSON mode: the head travels with the body, so the guard's `--input -` is enough.
+  [ "$input" = "-" ] || usage
+  command -v jq >/dev/null 2>&1 || {
+    echo "coderabbit-summary-verdict: jq is required for the stdin JSON form" >&2
+    exit 2
+  }
+  payload="$(cat)" || exit 2
+  jq -se 'length == 1 and (.[0] | type == "object" and (keys == ["body", "head"])
+    and (.head | type == "string" and length == 40 and (test("[^0-9a-f]") | not))
+    and (.body | type == "string"))' <<<"$payload" >/dev/null 2>&1 || {
+    echo "coderabbit-summary-verdict: stdin must be one JSON object with exactly the string keys head and body" >&2
+    exit 2
+  }
+  head="$(jq -r '.head' <<<"$payload")" || exit 2
+  body="$(jq -r '.body' <<<"$payload")" || exit 2
+  json_mode=1
+fi
+
 grep -Eq '^[0-9a-f]{40}$' <<<"$head" || {
   echo "coderabbit-summary-verdict: --head must be a full 40-character lowercase sha" >&2
   exit 2
 }
 
-if [ "$input" = "-" ]; then
+if [ "$json_mode" = 1 ]; then
+  :
+elif [ "$input" = "-" ]; then
   body="$(cat)" || exit 2
 else
   [ -r "$input" ] || {

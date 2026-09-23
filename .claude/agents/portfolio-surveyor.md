@@ -776,8 +776,9 @@ public and private — no per-repo loop needed to enumerate):
      LEADING comments and keep the match anchored — a marker further in is not a review, and an
      empty container still fails. Treat that review object, CodeRabbit's substantive
      auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated
-     after the authenticated request **for which `coderabbit-summary-verdict.sh --head <headRefOid>`
-     prints `GREEN`** (verdict `No actionable comments were generated in the recent review` in the
+     after the authenticated request **for which
+     `gh api repos/devantler-tech/<repo>/issues/comments/<comment-id> --jq '{head:"<headRefOid>",body:.body}' | <repo-root>/.claude/scripts/coderabbit-summary-verdict.sh --input -`
+     prints `GREEN`** (the guard admits a declared helper only as this absolute, forge-first `--input -` call, so the head travels in the JSON; monorepo#3529) (verdict `No actionable comments were generated in the recent review` in the
      `recent_review` block, its range header ending at the head, no did-not-run marker — a walkthrough
      or a rate-limit shell naming the head is `none`; monorepo#2653), and its **command-invocation reply comment
      carrying a verdict** as three alternative substantive artifacts; the review object does **not**
