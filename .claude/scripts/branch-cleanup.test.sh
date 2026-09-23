@@ -772,6 +772,14 @@ mk_ssh_origin_checkout() {
   # A spent claude/* branch that is pure published history, so a completed sweep
   # has something concrete to report rather than an empty breakdown.
   git -C "$dest" branch "claude/spent-3503" main
+  # A spent REMOTE branch, pushed while origin is still the local path, so the
+  # apply-mode delete below has to travel over the fallback endpoint to reach it.
+  git -C "$dest" checkout -q -B "claude/spent-remote-3503" main
+  git -C "$dest" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "tip spent-remote"
+  git -C "$dest" push -q -u origin "claude/spent-remote-3503"
+  SPENT_REMOTE_SHA=$(git -C "$dest" rev-parse "claude/spent-remote-3503")
+  SPENT_REMOTE_BARE="$root/monorepo.git"
+  git -C "$dest" checkout -q main
   git -C "$dest" remote set-url origin "git@github.com:devantler-tech/monorepo.git"
   # ALWAYS map the derived HTTPS endpoint onto a local path — the suite is hermetic
   # and must never reach real github.com. The "unreachable" arm points at a path that
@@ -825,6 +833,28 @@ report "a genuinely unreadable remote still aborts (#3503)" \
   "$([[ $rc -ne 0 && "$out" == *"ABORT"* ]] && echo yes || echo no)" "rc=$rc out=$out"
 report "the abort path prints no remote URL (#3503)" \
   "$([[ "$out" != *"https://"* && "$out" != *"git@github.com"* ]] && echo yes || echo no)" "out=$out"
+
+# The delete loop writes to whichever endpoint proved readable. Pushing to "origin"
+# after an HTTPS fallback would fail on the same dead transport, so every remote
+# deletion would be rejected and the remote sweep would silently reap nothing —
+# the exact failure shape this issue is about, one level down. Apply mode, SSH down.
+sshapply="$tmp/ssh-origin-apply"
+mk_ssh_origin_checkout "$sshapply" reachable
+: >"$tmp/open_heads_3503"
+printf '%s\tMERGED\t%s\n' "claude/spent-remote-3503" "$SPENT_REMOTE_SHA" >"$tmp/pr_evidence_3503"
+set +e
+out=$(cd "$sshapply" && OPEN_HEADS_FILE="$tmp/open_heads_3503" PR_EVIDENCE_FILE="$tmp/pr_evidence_3503" \
+  GIT_SSH_COMMAND=false PATH="$tmp/bin:$PATH" \
+  bash "$helper" "$sshapply" monorepo "$tmp/manifest-3503c.txt" apply claude 2>&1)
+rc=$?
+set -e
+report "apply mode completes over the HTTPS fallback (#3503)" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "the spent REMOTE ref is deleted over the fallback endpoint (#3503)" \
+  "$(git -C "$SPENT_REMOTE_BARE" show-ref --verify --quiet "refs/heads/claude/spent-remote-3503" && echo no || echo yes)" \
+  "out=$out"
+report "the fallback deletion is recorded in the restore manifest (#3503)" \
+  "$(grep -Fq $'monorepo\tremote\tclaude/spent-remote-3503\t'"$SPENT_REMOTE_SHA"$'\tMERGED' "$tmp/manifest-3503c.txt" && echo yes || echo no)"
 if [[ "$fail" -ne 0 ]]; then
   echo "branch-cleanup contract: FAILED"
   exit 1
