@@ -753,7 +753,7 @@ public and private — no per-repo loop needed to enumerate):
      fallback and parks a bot PR permanently for the exact duration of a provider outage — the
      parking this fallback exists to prevent. **Judge it with the contract's classifier, never by
      eye**, by exactly
-     `gh api "repos/devantler-tech/<repo>/pulls/<n>/reviews?per_page=100" --paginate --jq '{head:"<headRefOid>",per_page:100,reviews:.}' | <repo-root>/.claude/scripts/local-review-verdict.sh --input -`
+     `gh api graphql --paginate -F number=<n> -f query='query($number:Int!,$endCursor:String){repository(owner:"devantler-tech",name:"<repo>"){pullRequest(number:$number){headRefOid reviews(first:100,after:$endCursor){totalCount nodes{author{login} state body submittedAt commit{oid}} pageInfo{hasNextPage endCursor}}}}}' | <repo-root>/.claude/scripts/local-review-verdict.sh --input -`
      (the guard admits a declared helper only as this absolute, forge-first `--input -` call;
      monorepo#2697). Report `self@<sha>` only on its `GREEN self@<sha>` line; `FINDINGS`, `NONE` or
      a failed call is `none`. It checks the disclosure, the fallback heading, a line for ALL THREE
