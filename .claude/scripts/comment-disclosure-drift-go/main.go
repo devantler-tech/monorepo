@@ -611,7 +611,7 @@ func excerpt(line string, limit int) string {
 // and a comment from issue B standing between issue A's disclosure and A's trigger
 // would revoke one that is legitimate within A.
 func Analyse(comments []Comment, author string) Report {
-	return analyse(comments, author, false)
+	return analyse(comments, author, false, nil)
 }
 
 // AnalyseSweep is Analyse for a repo-wide `--since` payload, where the carve-out is
@@ -624,14 +624,88 @@ func Analyse(comments []Comment, author string) Report {
 // records can therefore be adjacent in the payload with a real comment between
 // them, so adjacency here is not evidence of the pairing the carve-out requires.
 // Granting it on that evidence CLEARS a trigger whose true predecessor was never
-// seen, which is a fail-open; refusing it costs a false report on a legitimate pair,
-// which is visible and re-checkable with --issue. monorepo#2781 tracks fetching the
-// real predecessor so precision can be restored.
+// seen, which is a fail-open; refusing it costs a false report on a legitimate pair.
+// AnalyseSweepWithContext restores the pairing from each discussion's full history.
 func AnalyseSweep(comments []Comment, author string) Report {
-	return analyse(comments, author, true)
+	return analyse(comments, author, true, nil)
 }
 
-func analyse(comments []Comment, author string, sweep bool) Report {
+// AnalyseSweepWithContext is AnalyseSweep where a bare trigger is paired against its
+// discussion's FULL history rather than the sweep payload (monorepo#2781).
+//
+// The sweep cannot see a disclosure that falls before its window, so a compliant
+// trigger just inside the window would be reported. History fetched per discussion
+// is contiguous, so the trigger's real predecessor is known: it is exempt only when
+// that predecessor is a disclosure. A trigger absent from the history is never
+// exempt, so a failed or partial backfill cannot clear anything; the CLI reports such
+// a trigger as UNKNOWN before classifying (TriggersMissingFromHistory).
+func AnalyseSweepWithContext(comments, history []Comment, author string) Report {
+	return analyse(comments, author, true, pairedBareTriggers(history, author))
+}
+
+// pairedBareTriggers returns the bare triggers in history whose immediately preceding
+// comment by author in the same discussion carries the canonical disclosure, keyed by
+// comment ID with the discussion they belong to. Each discussion is ordered by ID,
+// which GitHub assigns in creation order, so the pairing does not rest on the order
+// the records arrived in.
+func pairedBareTriggers(history []Comment, author string) map[int64]string {
+	discussions := map[string][]Comment{}
+	for _, comment := range history {
+		if comment.login() != author {
+			continue
+		}
+		discussions[comment.IssueURL] = append(discussions[comment.IssueURL], comment)
+	}
+	paired := map[int64]string{}
+	for issueURL, thread := range discussions {
+		sort.Slice(thread, func(i, j int) bool { return thread[i].ID < thread[j].ID })
+		for i := 1; i < len(thread); i++ {
+			if Classify(thread[i].Body) == BareTrigger && hasCanonicalPrefix(normalise(thread[i-1].Body)) {
+				paired[thread[i].ID] = issueURL
+			}
+		}
+	}
+	return paired
+}
+
+// TriggersMissingFromHistory returns the swept bare triggers by author that have no
+// record with the same ID and discussion in history. Their predecessor cannot be
+// checked, so they are UNKNOWN: reporting one would name a violation nobody verified.
+// A trigger deleted between the sweep and the history read is the live case.
+func TriggersMissingFromHistory(comments, history []Comment, author string) []Comment {
+	present := map[int64]string{}
+	for _, comment := range history {
+		present[comment.ID] = comment.IssueURL
+	}
+	var missing []Comment
+	for _, comment := range comments {
+		if comment.login() != author || Classify(comment.Body) != BareTrigger {
+			continue
+		}
+		if issueURL, found := present[comment.ID]; !found || issueURL != comment.IssueURL {
+			missing = append(missing, comment)
+		}
+	}
+	return missing
+}
+
+// BareTriggerDiscussions lists, in order, the discussions in which author left a bare
+// trigger. Those are the only discussions a sweep needs full history for.
+func BareTriggerDiscussions(comments []Comment, author string) []string {
+	seen := map[string]bool{}
+	var discussions []string
+	for _, comment := range comments {
+		if comment.login() != author || Classify(comment.Body) != BareTrigger || seen[comment.IssueURL] {
+			continue
+		}
+		seen[comment.IssueURL] = true
+		discussions = append(discussions, comment.IssueURL)
+	}
+	sort.Strings(discussions)
+	return discussions
+}
+
+func analyse(comments []Comment, author string, sweep bool, pairedInHistory map[int64]string) Report {
 	report := Report{Counts: map[Verdict]int{}}
 	lastWasDisclosure := map[string]bool{}
 	for _, comment := range comments {
@@ -641,10 +715,17 @@ func analyse(comments []Comment, author string, sweep bool) Report {
 		}
 		report.Considered++
 		verdict := Classify(comment.Body)
-		if verdict == BareTrigger && (sweep || !lastWasDisclosure[comment.IssueURL]) {
-			// The exemption is conditional on the pairing; unpaired, it is an
-			// undisclosed trigger like any other.
-			verdict = UndisclosedTrigger
+		if verdict == BareTrigger {
+			paired := !sweep && lastWasDisclosure[comment.IssueURL]
+			if sweep {
+				issueURL, found := pairedInHistory[comment.ID]
+				paired = found && issueURL == comment.IssueURL
+			}
+			if !paired {
+				// The exemption is conditional on the pairing; unpaired, it is an
+				// undisclosed trigger like any other.
+				verdict = UndisclosedTrigger
+			}
 		}
 		lastWasDisclosure[comment.IssueURL] = hasCanonicalPrefix(normalise(comment.Body))
 		report.Counts[verdict]++
@@ -740,6 +821,26 @@ func validateRecords(raw []byte, expected int) error {
 	return nil
 }
 
+// loadHistory reads a --context file with the same record checks as the payload. A
+// history record must name its discussion, since pairing is per discussion and an
+// unnamed record would pair across all of them.
+func loadHistory(path string) ([]Comment, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read history: %w", err)
+	}
+	history, err := decode(raw)
+	if err != nil {
+		return nil, err
+	}
+	for i, comment := range history {
+		if comment.IssueURL == "" {
+			return nil, fmt.Errorf("history comment %d has no issue_url, so its discussion is unknown", i)
+		}
+	}
+	return history, nil
+}
+
 // isJSONArray reports whether an already-trimmed JSON value is a composite
 // array, judged by its opening token.
 //
@@ -826,9 +927,22 @@ func main() {
 		input  = flag.String("input", "-", `comment JSON file, or "-" for stdin`)
 		author = flag.String("author", "devantler", "only classify comments by this exact login")
 		all    = flag.Bool("all", false, "also print the non-violating verdict tally")
-		sweep  = flag.Bool("sweep", false, "payload is a repo-wide --since sweep: never grant the bare-trigger carve-out")
+		sweep  = flag.Bool("sweep", false, "payload is a repo-wide --since sweep: grant the bare-trigger carve-out only from --context")
+		// History is loaded only for discussions holding a bare trigger, so the sweep
+		// stays one request plus one per such discussion.
+		historyFile = flag.String("context", "", "with --sweep: full comment history of each discussion holding a bare trigger")
+		listBare    = flag.Bool("bare-trigger-discussions", false, "with --sweep: print the discussions that need --context, then exit")
 	)
 	flag.Parse()
+
+	if (*historyFile != "" || *listBare) && !*sweep {
+		fmt.Fprintln(os.Stderr, "comment-disclosure-drift: --context and --bare-trigger-discussions apply only to --sweep")
+		os.Exit(2)
+	}
+	if *historyFile != "" && *listBare {
+		fmt.Fprintln(os.Stderr, "comment-disclosure-drift: --context and --bare-trigger-discussions are mutually exclusive")
+		os.Exit(2)
+	}
 
 	// An empty --author matches NOTHING, because validateRecords already rejects
 	// any record without an author. Every comment would land in SkippedAuthors,
@@ -866,9 +980,31 @@ func main() {
 		os.Exit(2)
 	}
 
+	if *listBare {
+		for _, discussion := range BareTriggerDiscussions(comments, *author) {
+			fmt.Println(discussion)
+		}
+		return
+	}
+
 	report := Analyse(comments, *author)
 	if *sweep {
 		report = AnalyseSweep(comments, *author)
+	}
+	if *historyFile != "" {
+		history, err := loadHistory(*historyFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "comment-disclosure-drift: --context: %v\n", err)
+			os.Exit(2)
+		}
+		if missing := TriggersMissingFromHistory(comments, history, *author); len(missing) > 0 {
+			for _, trigger := range missing {
+				fmt.Fprintf(os.Stderr, "comment-disclosure-drift: UNKNOWN — swept trigger %d is missing from the history of %s, so its predecessor cannot be checked\n",
+					trigger.ID, trigger.IssueURL)
+			}
+			os.Exit(2)
+		}
+		report = AnalyseSweepWithContext(comments, history, *author)
 	}
 
 	for _, finding := range report.Findings {

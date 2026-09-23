@@ -4943,11 +4943,10 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   The two are mutually exclusive, and the timestamp is a literal instant — the caller decides how far
   back "recent" reaches, because BSD and GNU `date` disagree on relative arithmetic.
   🔴 **On `--since`, read the findings, not the exit code.** A sweep's per-discussion history is
-  incomplete (`since` selects by *updated* time), so it never grants Bugbot's bare-trigger carve-out and
-  reports **every** bare `@cursor review` — exit 1 is therefore routine on a repo that uses Bugbot and
-  does not by itself mean drift. **Re-verify ONLY a body that is exactly `@cursor review`**, with
-  `--repo <owner>/<repo> --issue <n>`, where the full comment list is present and a legitimate pairing
-  resolves clean.
+  incomplete (`since` selects by *updated* time), so a bare `@cursor review` is **never paired on the
+  sweep itself**: the guard fetches that discussion's full history and pairs the trigger with its real
+  predecessor there. A reported bare `@cursor review` therefore had no disclosure immediately before
+  it, and a history the guard could not read exits 2, never clean.
   🔴 **A bare `@coderabbitai review` or `@codex review` is a violation on sight — never bare-trigger
   noise to re-check.** Those lanes have no carve-out, so `--issue` reports them violating even when a
   canonical disclosure comment sits immediately before them. Scoping the re-check by the *shape*
@@ -4958,8 +4957,7 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   56 re-verifiable `@cursor review`, 11 violations on sight**, spread over three repositories and two
   separate episodes, and **5 of the 11 had posted the disclosure as its own preceding comment** — the
   Bugbot two-comment shape applied to a lane that has none. Every other
-  shape it reports is a real finding. [#2781](https://github.com/devantler-tech/monorepo/issues/2781)
-  restores the precision.
+  shape it reports is a real finding.
   It reports **positive evidence of agent authorship only** — a `devantler`
   comment matching **no recognised agent shape** is the human maintainer, so flagging it would report
   the control channel as a defect. Note the recognised shapes are broader than the 🤖 marker alone: a
