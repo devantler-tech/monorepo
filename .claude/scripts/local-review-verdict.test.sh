@@ -126,6 +126,26 @@ expect "control: explicitly COMMENTED is still green" 0 "GREEN self@${green_head
 #    commit_id. A body carried over from an earlier head keeps the old SHA.
 edit_green "sub(\"(?m)^\\\\*\\\\*Reviewed commit:\\\\*\\\\* \`${green_head}\`$\"; \"**Reviewed commit:** \`${other_head}\`\")" "${tmp}/stale-body-sha.json"
 expect "body names a DIFFERENT commit than the object" 1 "NONE reviewed-commit-mismatch" "${green_head}" "${tmp}/stale-body-sha.json"
+# The line's formatting is not the contract: rounds posted without backticks or without bold still
+# name the head exactly, and rejecting them re-spends review quota on already-reviewed work.
+edit_green "sub(\"(?m)^\\\\*\\\\*Reviewed commit:\\\\*\\\\* \`${green_head}\`$\"; \"**Reviewed commit:** ${green_head}\")" "${tmp}/sha-no-backticks.json"
+expect "reviewed commit without backticks" 0 "GREEN self@${green_head}" "${green_head}" "${tmp}/sha-no-backticks.json"
+edit_green "sub(\"(?m)^\\\\*\\\\*Reviewed commit:\\\\*\\\\* \`${green_head}\`$\"; \"Reviewed commit: \`${green_head}\`\")" "${tmp}/sha-no-bold.json"
+expect "reviewed commit without bold" 0 "GREEN self@${green_head}" "${green_head}" "${tmp}/sha-no-bold.json"
+# CONTROL: the relaxed form still binds the SHA — a different commit without backticks is rejected.
+edit_green "sub(\"(?m)^\\\\*\\\\*Reviewed commit:\\\\*\\\\* \`${green_head}\`$\"; \"**Reviewed commit:** ${other_head}\")" "${tmp}/stale-sha-no-backticks.json"
+expect "control: a different commit without backticks" 1 "NONE reviewed-commit-mismatch" "${green_head}" "${tmp}/stale-sha-no-backticks.json"
+# A GREEN from an edit that never matched would pass on the unmodified round, so prove each edit landed.
+edit_green '.' "${tmp}/identity.json"
+for edited in sha-no-backticks sha-no-bold stale-sha-no-backticks; do
+  checks=$((checks + 1))
+  if cmp -s "${tmp}/identity.json" "${tmp}/${edited}.json"; then
+    echo "FAIL fixture edit ${edited} changed nothing" >&2
+    failures=$((failures + 1))
+  else
+    echo "ok   fixture edit ${edited} changed the round"
+  fi
+done
 
 # 3. The counted verdict must be the WHOLE line. Unanchored, `… (P0: 0, P1: 0) extra` read as a
 #    standard breakdown and returned GREEN on text nobody wrote to a contract.

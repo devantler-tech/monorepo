@@ -111,8 +111,9 @@ esac
 # The body states the commit it reviewed, and a reader trusts THAT line rather than the object's
 # `commit_id`. A body carried over from an earlier head keeps the old SHA while the object it is
 # posted in carries the new one, so the two disagreeing means the round was not performed at this
-# head — whichever of them is right. Require them to agree (monorepo#3487 review).
-grep -Eq "^\*\*Reviewed commit:\*\*[[:space:]]+\`${head}\`[[:space:]]*$" <<<"$body" ||
+# head — whichever of them is right. Require them to agree (monorepo#3487 review). Bold and
+# backticks are formatting, not evidence, so each is optional; the full SHA still has to match.
+grep -Eq "^(\*\*)?Reviewed commit:(\*\*)?[[:space:]]+\`?${head}\`?[[:space:]]*$" <<<"$body" ||
   verdict "NONE reviewed-commit-mismatch"
 
 # The fallback is invalid without evidence for every lane.
