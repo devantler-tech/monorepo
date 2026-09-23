@@ -64,11 +64,20 @@ case "$1 $2" in
  {"user":{"login":"someone"},"updated_at":"2026-09-21T13:00:00Z","body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai --> You have reached your Codex usage limits"}]
 JSON
   ;;
-  "api repos/o/r/pulls/7/reviews") cat <<'JSON' | emit
+  "api repos/o/r/pulls/7/reviews") {
+    cat <<'JSON'
 [{"user":{"login":"coderabbitai[bot]"},"submitted_at":"2026-09-21T09:00:00Z","state":"COMMENTED","body":"<!-- hint -->\n\n**Actionable comments posted: 0**"},
  {"user":{"login":"coderabbitai[bot]"},"submitted_at":"2026-09-21T13:10:00Z","state":"COMMENTED","body":""},
- {"user":{"login":"chatgpt-codex-connector[bot]"},"submitted_at":"2026-09-21T11:45:00Z","state":"COMMENTED","body":""}]
+ {"user":{"login":"chatgpt-codex-connector[bot]"},"submitted_at":"2026-09-21T11:45:00Z","state":"COMMENTED","body":""}
 JSON
+    # A review whose findings all sit outside the diff opens with this block and carries no marker
+    # (monorepo#2748); any other CAUTION body is not a review.
+    [ -z "${CAUTION_REVIEW:-}" ] || cat <<'JSON'
+,{"user":{"login":"coderabbitai[bot]"},"submitted_at":"2026-09-21T11:50:00Z","state":"COMMENTED","body":"\n\n> [!CAUTION]\n> Some comments are outside the diff and can’t be posted inline due to platform limitations.\n>\n> <details>\n> <summary>⚠️ Outside diff range comments (1)</summary>"},
+ {"user":{"login":"coderabbitai[bot]"},"submitted_at":"2026-09-21T11:55:00Z","state":"COMMENTED","body":"> [!CAUTION]\n> Not the outside-diff block."}
+JSON
+    echo ']'
+  } | emit
   ;;
   "api repos/o/r/commits/abc/check-runs?check_name=Cursor%20Bugbot&per_page=100") cat <<'JSON' | emit
 {"check_runs":[{"app":{"slug":"cursor"},"completed_at":"2026-09-21T10:00:05Z","conclusion":"neutral","output":{"title":"Error"}},
@@ -87,6 +96,9 @@ grep -qF "codex=OK last-review 2026-09-21T11:45:00Z" "$tmp/out" ||
   fail "a Codex review object and finding count as reviews, never as a usage limit"
 grep -qF "bugbot=DOWN usage-limit since 2026-09-21T10:00:05Z last-review never — MAINTAINER-ONLY" "$tmp/out" ||
   fail "a Bugbot Error check takes its cause from the usage-limit notice beside it"
+
+CAUTION_REVIEW=1 PATH="$bin:$PATH" run --org o --since 2026-09-14
+expect "outside-diff review" 1 "cr=LIMITED rate-limit at 2026-09-21T12:00:00Z last-review 2026-09-21T11:50:00Z"
 
 # Any failed read is UNKNOWN, never a healthy partial sweep.
 FAIL_ON=reviews PATH="$bin:$PATH" run --org o --since 2026-09-14

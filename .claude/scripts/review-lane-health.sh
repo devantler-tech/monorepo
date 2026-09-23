@@ -86,12 +86,15 @@ cat >"$tmp/classify-comments.jq" <<'JQ'
 def body: .body // "";
 def text: body | gsub("^(\\s*<!--[\\s\\S]*?-->)*\\s*"; "");
 def invocation: body | contains("<!-- CodeRabbit review command invocation");
+# A review whose findings all sit outside the diff opens with this block instead of the marker.
+def review_body: text | startswith("**Actionable comments posted:")
+  or startswith("> [!CAUTION]\n> Some comments are outside the diff");
 select(.at != null) |
 if .login == "coderabbitai[bot]" then
   if (body | contains("<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->"))
     or (invocation and (body | contains("Review rate limited")))
   then "cr\t\(.at)\tfail\trate-limit"
-  elif (.kind == "review" and (text | startswith("**Actionable comments posted:")))
+  elif (.kind == "review" and review_body)
     or (invocation and (body | test("Full review is complete for [0-9a-f]{7,40}|Reviewed pull request .* at `?[0-9a-f]{7,40}")))
   then "cr\t\(.at)\tok\t-"
   else empty end

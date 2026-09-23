@@ -322,6 +322,12 @@ assert_prose "${surveyor}" 'Actionable comments posted:' \
 cr_hint_fixture="${repo_root}/.claude/scripts/fixtures/coderabbit-review-body-hint-prefix-2819.txt"
 [ -r "${cr_hint_fixture}" ] ||
   fail "the captured CodeRabbit hint-prefixed review body fixture is missing"
+# monorepo#2748: a review whose findings ALL sit outside the diff opens with the outside-diff CAUTION
+# block and carries no marker anywhere. Captured whole from monorepo#2723 at 9ab847e372 so the
+# marker's absence is a property of real output, not of a trimmed sample.
+cr_outside_diff_fixture="${repo_root}/.claude/scripts/fixtures/coderabbit-review-body-outside-diff-2748.txt"
+[ -r "${cr_outside_diff_fixture}" ] ||
+  fail "the captured CodeRabbit outside-diff review body fixture is missing"
 
 # Remove leading HTML comment blocks (and the whitespace around them), then apply the unchanged
 # BEGINS-WITH test. An unterminated comment stops the strip rather than consuming the whole body.
@@ -351,6 +357,15 @@ strip_leading_html_comments() {
 cr_body_identifies_as_review() {
   case "$(strip_leading_html_comments "$1")" in
     '**Actionable comments posted:'*) return 0 ;;
+    '> [!CAUTION]'$'\n''> Some comments are outside the diff'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The rule as it stood before #2748, kept ONLY as the ablation below.
+cr_body_identifies_pre_2748() {
+  case "$(strip_leading_html_comments "$1")" in
+    '**Actionable comments posted:'*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -371,6 +386,27 @@ if cr_body_identifies_pre_2819 "${cr_hint_body}"; then
 fi
 cr_body_identifies_as_review "${cr_hint_body}" ||
   fail "prefix-tolerant identification does not recognise a real hint-prefixed CodeRabbit review body"
+
+cr_outside_diff_body="$(cat "${cr_outside_diff_fixture}")"
+case "${cr_outside_diff_body}" in
+  *'Actionable comments posted'*)
+    fail "the outside-diff fixture carries the marker, so it no longer reproduces #2748" ;;
+esac
+if cr_body_identifies_pre_2748 "${cr_outside_diff_body}"; then
+  fail "the captured fixture no longer reproduces #2748 — the pre-fix rule matched it, so this guard is vacuous"
+fi
+cr_body_identifies_as_review "${cr_outside_diff_body}" ||
+  fail "a real CodeRabbit review whose findings all sit outside the diff is not identified as a review"
+# Only CodeRabbit's outside-diff block qualifies: another CAUTION, or the block further in, does not.
+if cr_body_identifies_as_review "> [!CAUTION]
+> Not the outside-diff block."; then
+  fail "any CAUTION block is identified as a review, not only the outside-diff one"
+fi
+if cr_body_identifies_as_review "Some prose first.
+> [!CAUTION]
+> Some comments are outside the diff and can’t be posted inline."; then
+  fail "the outside-diff block is matched further in rather than at the start of the stripped body"
+fi
 
 # NEGATIVE CONTROLS — the empty-container rejection (#2620/#2677) must survive the widening, and
 # stripping comments must not turn arbitrary prose into a review.
@@ -431,6 +467,25 @@ assert_prose "${parity_checklist}" \
 # The widening must not become a bare commit_id match — the empty-container measurement still stands.
 assert_prose "${constitution}" 'never weaken this to a bare' \
   "constitution lost the prohibition on weakening identification to a bare commit_id match"
+# monorepo#2748: every site that states the rule also names the outside-diff opening.
+assert_prose "${constitution}" \
+  'or, when every finding sits outside the diff, the body instead begins with the outside-diff `> [!CAUTION]` block' \
+  "constitution's green-review LANE TABLE does not identify a review that opens with the outside-diff block"
+assert_prose "${constitution}" \
+  'a body opening instead with the outside-diff `> [!CAUTION]` block is a review too' \
+  "constitution's CodeRabbit-success paragraph does not identify a review that opens with the outside-diff block"
+assert_prose "${constitution}" \
+  'that exact two-line opening identifies a review too; any other `CAUTION` text does' \
+  "constitution lost the anchored outside-diff identification and its narrowing to that exact block"
+assert_prose "${surveyor}" \
+  'which a review carries **instead of** the marker when every' \
+  "surveyor's primary cr@<sha> instruction does not identify a review that opens with the outside-diff block"
+assert_prose "${parity_checklist}" \
+  'A body opening instead with the outside-diff' \
+  "surveyor parity checklist does not carry the outside-diff identification"
+assert_prose "${maintenance_skill}" \
+  '`**Actionable comments posted:` or the outside-diff `> [!CAUTION]` block, never an empty container' \
+  "maintenance skill does not state how a CodeRabbit review object is positively identified"
 
 # monorepo#2758, measured on platform#3051 head 992a93caecd1: the head's status read
 # `Review completed`, the newest review object was an empty container at an OLDER head, and the

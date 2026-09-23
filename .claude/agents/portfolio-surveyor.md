@@ -766,7 +766,10 @@ public and private — no per-repo loop needed to enumerate):
      object **whose own `body` BEGINS WITH the recognised CodeRabbit review-artifact marker
      `**Actionable comments posted:`, after stripping any leading HTML comments and the whitespace around them** — a positive
      identification of the matched object as a review,
-     never merely a non-empty body. CodeRabbit prefixes every real body with an agent-hint block
+     never merely a non-empty body. The one other opening is the outside-diff block — `> [!CAUTION]` then
+     `> Some comments are outside the diff` — which a review carries **instead of** the marker when every
+     finding sits outside the diff (monorepo#2748); it always carries a finding, so on its own it identifies a
+     review with findings, never a green. CodeRabbit prefixes every real body with an agent-hint block
      (`<!-- coderabbit-cli-agent-hint:v3 … -->`), so an unstripped BEGINS-WITH test matches **no**
      genuine current review and reports `green_review=none` over a real green (monorepo#2819;
      measured 2026-08-13 on four substantive bodies across monorepo#2810 and #2723). Strip only the
@@ -817,7 +820,7 @@ public and private — no per-repo loop needed to enumerate):
      `bodylen=0` container at 16:22:58Z **and** a genuine `bodylen=5573` review at 16:33:34Z under one
      `Review completed` status — had the container carried text, a status conjunct would have blessed
      it. So match the artifact itself: every real CodeRabbit review body observed across monorepo and
-     platform begins `**Actionable comments posted: N**` **once its leading HTML comments and
+     platform, except that outside-diff shape, begins `**Actionable comments posted: N**` **once its leading HTML comments and
      surrounding whitespace are stripped** — the agent-hint block now sits in front of that marker
      (monorepo#2819) and is followed by a blank line, so stripping the comment alone still leaves the
      body starting with a newline and an anchored match still fails. Both are part of the match rather
