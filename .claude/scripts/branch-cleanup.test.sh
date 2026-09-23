@@ -857,6 +857,57 @@ report "the spent REMOTE ref is deleted over the fallback endpoint (#3503)" \
   "out=$out"
 report "the fallback deletion is recorded in the restore manifest (#3503)" \
   "$(grep -Fq $'monorepo\tremote\tclaude/spent-remote-3503\t'"$SPENT_REMOTE_SHA"$'\tMERGED' "$tmp/manifest-3503c.txt" && echo yes || echo no)"
+
+# The fallback URL is an explicit argument, so url.*.insteadOf and pushInsteadOf
+# rewrite it — the fixture above depends on exactly that. A rewrite pointing at a
+# DIFFERENT repository would fetch the keep-set from one place and delete branches
+# in another, so the effective destinations are checked before anything is fetched.
+# The rewrites below target scp-style GitHub URLs with SSH forced to fail: the old
+# code fails harmlessly on the fetch, the new code must refuse before trying.
+mk_redirected_fallback() {
+  # $1 = dir, $2 = config key suffix (insteadOf|pushInsteadOf)
+  mk_ssh_origin_checkout "$1" reachable
+  printf '%s\tMERGED\t%s\n' "claude/spent-remote-3503" "$SPENT_REMOTE_SHA" >"$tmp/pr_evidence_3503"
+  # Strictly LONGER than the fixture's own rule, so git picks it (longest match wins).
+  git -C "$1" config "url.git@github.com:attacker/monorepo.$2" "https://github.com/devantler-tech/monorepo"
+}
+for rw in insteadOf pushInsteadOf; do
+  sshrw="$tmp/ssh-origin-rw-$rw"
+  mk_redirected_fallback "$sshrw" "$rw"
+  set +e
+  out=$(cd "$sshrw" && OPEN_HEADS_FILE="$tmp/open_heads_3503" PR_EVIDENCE_FILE="$tmp/pr_evidence_3503" \
+    GIT_SSH_COMMAND=false PATH="$tmp/bin:$PATH" \
+    bash "$helper" "$sshrw" monorepo "$tmp/manifest-3503-$rw.txt" apply claude 2>&1)
+  rc=$?
+  set -e
+  report "a fallback redirected by $rw to another repository is refused (#3503)" \
+    "$([[ $rc -ne 0 && "$out" == *"redirected"* ]] && echo yes || echo no)" "rc=$rc out=$out"
+  report "the $rw refusal prints no remote URL (#3503)" \
+    "$([[ "$out" != *"attacker"* && "$out" != *"https://"* ]] && echo yes || echo no)" "out=$out"
+done
+
+# A fallback with no GitHub identity (here both destinations are local paths) is
+# refused in apply mode unless the fixture declares itself — the same rule as an
+# unverifiable origin. The suite exports that declaration globally, so this case
+# removes it. The pushInsteadOf case above is what isolates the push check.
+sshpush="$tmp/ssh-origin-push-local"
+mk_ssh_origin_checkout "$sshpush" reachable
+evil_root="$tmp/evil-push-3503"
+rm -rf "$evil_root"; mkdir -p "$evil_root"
+git clone --quiet --bare "$SPENT_REMOTE_BARE" "$evil_root/monorepo.git" 2>/dev/null
+printf '%s\tMERGED\t%s\n' "claude/spent-remote-3503" "$SPENT_REMOTE_SHA" >"$tmp/pr_evidence_3503"
+git -C "$sshpush" config "url.$evil_root/.pushInsteadOf" "https://github.com/devantler-tech/"
+set +e
+out=$(cd "$sshpush" && env -u BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN OPEN_HEADS_FILE="$tmp/open_heads_3503" PR_EVIDENCE_FILE="$tmp/pr_evidence_3503" \
+  GIT_SSH_COMMAND=false PATH="$tmp/bin:$PATH" \
+  bash "$helper" "$sshpush" monorepo "$tmp/manifest-3503-push.txt" apply claude 2>&1)
+rc=$?
+set -e
+report "an unverifiable fallback is refused in apply mode (#3503)" \
+  "$([[ $rc -ne 0 && "$out" == *"redirected"* ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "nothing is deleted from the unverified push destination (#3503)" \
+  "$(git -C "$evil_root/monorepo.git" show-ref --verify --quiet "refs/heads/claude/spent-remote-3503" && echo yes || echo no)" \
+  "out=$out"
 if [[ "$fail" -ne 0 ]]; then
   echo "branch-cleanup contract: FAILED"
   exit 1

@@ -289,6 +289,49 @@ fi
 # actually proven readable, so a working configured transport is left untouched.
 REMOTE_ENDPOINT="origin"
 
+# The URL git will actually PUSH to for the explicit argument $1, given its fetch
+# rewrite $2. Mirrors git: the longest matching url.<base>.pushInsteadOf wins, and
+# with none matching the push uses the insteadOf-rewritten fetch URL. There is no
+# plumbing command that reports this for a bare URL, so it is resolved here.
+fallback_push_url() {
+  _pu_url="$1"; _pu_best=""; _pu_len=0
+  while IFS= read -r -d '' _pu_entry; do
+    _pu_key=${_pu_entry%%$'\n'*}
+    _pu_prefix=${_pu_entry#*$'\n'}
+    _pu_base=${_pu_key#url.}
+    _pu_base=${_pu_base%.pushinsteadof}
+    case "$_pu_url" in
+      "$_pu_prefix"*)
+        if [ "${#_pu_prefix}" -gt "$_pu_len" ]; then
+          _pu_len=${#_pu_prefix}
+          _pu_best="$_pu_base${_pu_url#"$_pu_prefix"}"
+        fi
+        ;;
+    esac
+  done < <(git config -z --get-regexp '^url\..*\.pushinsteadof$' 2>/dev/null)
+  if [ -n "$_pu_best" ]; then printf '%s' "$_pu_best"; else printf '%s' "$2"; fi
+}
+
+# The fallback URL is an explicit argument, so url.*.insteadOf and pushInsteadOf
+# rules rewrite it. The keep-set and the deletions must both reach the repository
+# the identity check verified, so resolve where each will ACTUALLY go and hold it to
+# the same rule as origin: a GitHub destination must be this slug, and one with no
+# GitHub identity is accepted only where an unverifiable origin would be (dry-run,
+# or a fixture declaring itself). Fails closed and never prints either URL.
+fallback_endpoint_verified() {
+  _fe_fetch=$(git ls-remote --get-url "$HTTPS_ENDPOINT" 2>/dev/null) || return 1
+  [ -n "$_fe_fetch" ] || return 1
+  _fe_push=$(fallback_push_url "$HTTPS_ENDPOINT" "$_fe_fetch")
+  for _fe_url in "$_fe_fetch" "$_fe_push"; do
+    _fe_nwo=$(github_nwo "$_fe_url")
+    if [ -n "$_fe_nwo" ]; then
+      [ "$_fe_nwo" = "$slug_lc" ] || return 1
+    elif [ "$MODE" = "apply" ] && [ "${BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN:-}" != "1" ]; then
+      return 1
+    fi
+  done
+}
+
 # DEFAULT reads the LOCAL origin/HEAD (set at clone) and needs no fresh fetch,
 # so the checkout-restoration path can be armed BEFORE fetching.
 DEFAULT=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
@@ -358,6 +401,12 @@ if ! git fetch origin --prune -q 2>/dev/null; then
   #
   # Still fails CLOSED — if this read also fails, the abort stands. The URL is
   # never echoed on any path here, matching the rule the identity check follows.
+  if [ -n "$HTTPS_ENDPOINT" ] && ! fallback_endpoint_verified; then
+    echo "$SLUG: ABORT — git fetch failed, and the HTTPS fallback is redirected by a url.*.insteadOf" >&2
+    echo "  or pushInsteadOf rule to a destination not verified as devantler-tech/$SLUG; refusing" >&2
+    echo "  to fetch the keep-set or delete branches there." >&2
+    exit 1
+  fi
   if [ -z "$HTTPS_ENDPOINT" ] ||
     ! git fetch --prune -q "$HTTPS_ENDPOINT" "+refs/heads/*:refs/remotes/origin/*" 2>/dev/null; then
     echo "$SLUG: ABORT — git fetch failed; refusing to act on stale refs" >&2
