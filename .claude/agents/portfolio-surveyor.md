@@ -755,8 +755,9 @@ public and private — no per-repo loop needed to enumerate):
      eye**, by exactly
      `gh api graphql --paginate -F number=<n> -f query='query($number:Int!,$endCursor:String){repository(owner:"devantler-tech",name:"<repo>"){pullRequest(number:$number){headRefOid reviews(first:100,after:$endCursor){totalCount nodes{author{login} state body submittedAt commit{oid}} pageInfo{hasNextPage endCursor}}}}}' | <repo-root>/.claude/scripts/local-review-verdict.sh --input -`
      (the guard admits a declared helper only as this absolute, forge-first `--input -` call;
-     monorepo#2697). Report `self@<sha>` only on its `GREEN self@<sha>` line; `FINDINGS`, `NONE` or
-     a failed call is `none`. It checks the disclosure, the fallback heading, a line for ALL THREE
+     monorepo#2697). Report `self@<sha>` only when its `GREEN self@<sha>` line names the
+     `headRefOid` your deepening read captured; on a mismatch discard it and re-read the row's
+     head-dependent evidence. `FINDINGS`, `NONE` or a failed call is `none`. It checks the disclosure, the fallback heading, a line for ALL THREE
      lanes, the standard verdict, a `COMMENTED` `devantler` review at the head, and a
      `Reviewed commit:` line naming that same head — a body carried from an earlier head fails. What the
      orchestrator applies before acting on a `devantler` row is the **`active=` test**, never a
