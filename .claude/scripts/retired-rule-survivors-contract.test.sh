@@ -17,7 +17,8 @@
 # pin the phrase's only occurrence inside its own notice: a second occurrence is a survivor, and a
 # notice that was rewritten or removed leaves the phrase standing as a current rule.
 #
-# Scope. The registry holds the retirements whose OLD wording is still quoted in AGENTS.md. The
+# Scope. The registry holds the retired rules, and withdrawn claims, whose OLD wording is still quoted
+# in AGENTS.md (a sweep for "earlier version", "withdrawn" and supersession markers on 2026-09-23). The
 # external-PR merge ban retired on 2026-08-08 is guarded in work-priority-ladder.test.sh, where its
 # phrases never appear at all, and the reservation-comment and lane-order retirements carry their own
 # negatives in review-provider-loop-contract.test.sh. When a rule is retired and its old wording is
@@ -44,6 +45,7 @@ lowest priority	superseding the bootstrap-day "lowest priority" note	2026-07-17:
 .claude/agents/finops-engineer.md	superseding the standalone FinOps Engineer that used to live at `.claude/agents/finops-engineer.md`	2026-07-25: spend stewardship is the Agentic Engineer's own mandate
 automated-ai-engineer	`automated-ai-engineer` until [agent-plugins#89]	agent-plugins#89: the entrypoint is agentic-engineer
 Codex > Cursor > CodeRabbit	superseding the 2026-07-20 order `Codex > Cursor > CodeRabbit`	2026-07-21: lane priority is CodeRabbit > Codex > Cursor Bugbot
+with the pin, GitHub refuses instead	An earlier version of this paragraph claimed "with the pin, GitHub refuses instead"	Withdrawn: the head pin protects only the arming of --auto, never the later merge
 EOF
 
 flatten() {
