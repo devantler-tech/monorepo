@@ -38,6 +38,30 @@ jq -e '
     and (.definitionAdapter | type == "string" and length > 0)
     and (.roles | type == "array" and length > 0))
 ' "$ROOT/.claude/plugin-consumption/agent-instances.json" > /dev/null || fail 'invalid instance registry'
+# A review lane's identity never registers as a writer: a row carrying one would let that
+# lane's review artifacts satisfy checks written for our own instances (#3490).
+reviewer_free() {
+  jq -e '
+    ["coderabbitai[bot]", "app/coderabbitai", "coderabbitai",
+     "chatgpt-codex-connector[bot]", "app/chatgpt-codex-connector", "chatgpt-codex-connector",
+     "cursor[bot]", "app/cursor", "cursor",
+     "copilot-pull-request-reviewer[bot]", "app/copilot-pull-request-reviewer",
+     "copilot-pull-request-reviewer"] as $reviewers
+    | all(.instances[].authors[]; ascii_downcase as $a | ($reviewers | index($a)) == null)
+  ' > /dev/null
+}
+reviewer_free < "$ROOT/.claude/plugin-consumption/agent-instances.json" ||
+  fail 'instance registry assigns a review lane identity to a writer'
+probe="$(mktemp)"
+trap 'rm -f -- "$probe"' EXIT
+jq '.instances.probe = {namespace: "probe", definitionAdapter: "probe", roles: ["agentic-engineer"],
+    authors: {cli: "app/cursor", rest: "cursor[bot]", graphql: "cursor", search: "app/cursor"}}' \
+  "$ROOT/.claude/plugin-consumption/agent-instances.json" > "$probe"
+if reviewer_free < "$probe"; then
+  rm -f "$probe"
+  fail 'reviewer-identity check accepted a row carrying a review lane identity'
+fi
+rm -f "$probe"
 jq -e --slurpfile registry "$ROOT/.claude/plugin-consumption/agent-instances.json" '
   all(.routes[]; .runtime as $id | $registry[0].instances | has($id))
   and all(.runtimes | keys[]; . as $id | $registry[0].instances | has($id))
