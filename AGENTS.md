@@ -936,6 +936,16 @@ host time across DST. `lastRunAt` alone cannot show a stopped scheduler: it and 
 transcript freeze together, so the old check reported `OK` for up to 72 hours. The 900-second grace is
 load-bearing for Claude's overlap delay (a live `:50` dispatch arrived almost ten minutes later);
 shrinking it to Codex's five minutes would false-fire. See monorepo#3335.
+🔴 **That schedule leg is ONE leg, and its anchor field is not guaranteed to exist — an absent
+`lastScheduledFor` costs that leg alone, never the whole verdict.** The store belongs to the runtime,
+so its shape changes without notice: on 2026-09-23 a runtime upgrade rewrote the store 39 seconds
+after installing and dropped the field from every record, and because the check asserted it
+store-wide it exited `2 UNKNOWN` for **both** Claude lanes on every invocation — including the
+decisive `turns == 0` test, which needs only `lastRunAt` and the transcript and was therefore
+structurally unable to report a dead lane. The field is asserted per task, not store-wide, precisely
+because it has a safe per-task fallback; `id`, `enabled`, `lastRunAt` and `cronExpression` have none
+and still abort the store. A task with no anchor reports the missing field by name rather than the
+cron expression, so the next reader does not diagnose a healthy cron. See monorepo#3530.
 ⚠️ **That narrowness is defence in depth, NOT a claim that the cause may never be named.**
 *Sensitive information stays private* governs what may be published, and it permits — and the
 `**Blocker:**` line requires — the bounded **cause class**. So diagnose a `1` from the runtime's own
