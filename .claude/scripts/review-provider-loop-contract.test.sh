@@ -166,6 +166,8 @@ assert_prose "${constitution}" 'and `Next included review available in N minutes
   "constitution drops CodeRabbit's current retry-window wording"
 assert_prose "${constitution}" 'one included review that refills on that stated timer, not a fixed hourly allowance' \
   "constitution models CodeRabbit's limit as an hourly allowance"
+assert_prose "${constitution}" 'so search for `before sending another message`' \
+  "constitution does not say how to read CodeRabbit's chat-message limit wait"
 assert_prose "${constitution}" 'a limit that states no window (a Codex usage limit, Bugbot'"'"'s `Error`) never clears by waiting' \
   "constitution does not separate a stated short window from a limit that never clears"
 assert_prose "${constitution}" 'required corroborator, never a satisfier' \
