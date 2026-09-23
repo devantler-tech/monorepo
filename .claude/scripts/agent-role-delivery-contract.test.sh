@@ -1068,6 +1068,26 @@ verdict_sites="$(grep -o '[^[:space:]"`'"'"']*coderabbit-summary-verdict\.sh[^[:
 [ -z "${verdict_sites}" ] ||
   fail "surveyor overlay calls coderabbit-summary-verdict.sh by a form the guard refuses: ${verdict_sites}"
 
+# The local-review-round classifier likewise (monorepo#2697): the contract prescribes it
+# (monorepo#3487) while the guard refused 3 of the first 5 surveyor calls, and the refused
+# surveyor judged the round by eye. Run the overlay's OWN pipeline through the hook.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+round_command="$(grep -o '`gh api [^`]*local-review-verdict\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${round_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded local-review-verdict.sh pipeline (monorepo#2697)"
+round_command="${round_command//<repo-root>/${repo_root}}"
+round_command="${round_command//<repo>/platform}"
+round_command="${round_command//<n>/3001}"
+round_command="${round_command//<headRefOid>/63c61e5a251ef35a83ab21e98ec6b4aaecddf26a}"
+round_payload="$(jq -nc --arg cmd "${round_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${round_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's local-review-verdict pipeline (monorepo#2697)"
+round_sites="$(grep -o '[^[:space:]"`'"'"']*local-review-verdict\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/local-review-verdict.sh' || true)"
+[ -z "${round_sites}" ] ||
+  fail "surveyor overlay calls local-review-verdict.sh by a form the guard refuses: ${round_sites}"
+
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
 # shellcheck disable=SC2016  # fixture must inspect its own child environment

@@ -193,6 +193,75 @@ expect "an error object after a page" 2 "" "${green_head}" "${tmp}/array-then-ob
 expect "missing input file" 2 "" "${green_head}" "${tmp}/does-not-exist.json"
 expect "abbreviated head" 2 "" "${green_head:0:10}" "${fixture}"
 
+# Stdin GraphQL mode (monorepo#2697): the surveyor guard admits a declared helper only as `--input -`,
+# so the input is the raw `gh api graphql --paginate` pages, carrying the PR's headRefOid. It must
+# judge exactly as `--head` does, and only a read GraphQL shows is complete.
+expect_json() { # expect_json <name> <want-rc> <want-line> <stdin-file>
+  local name="$1" want_rc="$2" want="$3" input="$4" got rc
+  checks=$((checks + 1))
+  set +e
+  got="$(bash "${tool}" --input - <"${input}" 2>"${tmp}/stderr")"
+  rc=$?
+  set -e
+  if [ "${rc}" != "${want_rc}" ] || [ "${got}" != "${want}" ]; then
+    echo "FAIL ${name}: want rc=${want_rc} '${want}', got rc=${rc} '${got}' ($(cat "${tmp}/stderr"))" >&2
+    failures=$((failures + 1))
+  else
+    echo "ok   ${name}"
+  fi
+}
+# gql_page <head> <totalCount> <hasNextPage> <jq slice of the REST fixture> <file>: one GraphQL page.
+gql_page() {
+  jq -c --arg h "$1" --argjson t "$2" --argjson n "$3" "{data: {repository: {pullRequest: {
+      headRefOid: \$h, reviews: {totalCount: \$t, pageInfo: {hasNextPage: \$n, endCursor: \"c\"},
+      nodes: ($4 | map({author: {login: .user.login}, state, body, submittedAt: .submitted_at,
+        commit: {oid: .commit_id}}))}}}}}" "$5"
+}
+# Parity: every fixture judged above, at every head, gives the same line and status both ways.
+for f in "${fixture}" "${tmp}/newer-findings.json" "${tmp}/no-disclosure.json" "${tmp}/no-verdict.json"; do
+  for h in "${green_head}" "${loose_head}" "${other_head}"; do
+    set +e
+    want="$(bash "${tool}" --head "${h}" --input "${f}" 2>/dev/null)"
+    want_rc=$?
+    set -e
+    gql_page "${h}" "$(jq length "${f}")" false '.' "${f}" >"${tmp}/json-parity.json"
+    expect_json "graphql parity $(basename "${f}") @${h:0:10}" "${want_rc}" "${want}" "${tmp}/json-parity.json"
+  done
+done
+# Two pages, as `--paginate` emits them, are both read.
+{ gql_page "${green_head}" 4 true '.[0:3]' "${fixture}"
+  gql_page "${green_head}" 4 false '.[3:]' "${fixture}"; } >"${tmp}/json-paged.json"
+expect_json "graphql: two complete pages" 0 "GREEN self@${green_head}" "${tmp}/json-paged.json"
+# Completeness (CodeRabbit and Codex on #3546): the pipe reports this helper's status, not gh's, so a
+# read that stopped part-way must never be judged. The first page alone of that passing read is the
+# truncation, and without this check it returns GREEN. A short page is no proof of an end.
+gql_page "${green_head}" 4 true '.[0:3]' "${fixture}" >"${tmp}/json-truncated.json"
+expect_json "graphql: a read that stopped after the first page" 2 "" "${tmp}/json-truncated.json"
+gql_page "${green_head}" 4 false '.[0:3]' "${fixture}" >"${tmp}/json-short.json"
+expect_json "graphql: fewer reviews than totalCount" 2 "" "${tmp}/json-short.json"
+gql_page "${green_head}" 4 true '.' "${fixture}" >"${tmp}/json-next.json"
+expect_json "graphql: the last page says more follow" 2 "" "${tmp}/json-next.json"
+{ gql_page "${green_head}" 4 true '.[0:3]' "${fixture}"
+  gql_page "${green_head}" 5 false '.[3:]' "${fixture}"; } >"${tmp}/json-counts.json"
+expect_json "graphql: pages disagree on totalCount" 2 "" "${tmp}/json-counts.json"
+# One ablation per remaining conjunct, against that passing two-page input.
+{ gql_page "${green_head}" 4 true '.[0:3]' "${fixture}"
+  gql_page "${other_head}" 4 false '.[3:]' "${fixture}"; } >"${tmp}/json-mixed.json"
+expect_json "graphql: pages disagree on the head" 2 "" "${tmp}/json-mixed.json"
+gql_page "${green_head:0:10}" 4 false '.' "${fixture}" >"${tmp}/json-abbrev.json"
+expect_json "graphql: abbreviated head" 2 "" "${tmp}/json-abbrev.json"
+{ gql_page "${green_head}" 4 true '.[0:3]' "${fixture}"
+  echo '{"errors":[{"message":"rate limited"}]}'; } >"${tmp}/json-error.json"
+expect_json "graphql: an error object after a page" 2 "" "${tmp}/json-error.json"
+jq -c '.' "${fixture}" >"${tmp}/json-bare.json"
+expect_json "graphql: bare REST pages with no head" 2 "" "${tmp}/json-bare.json"
+expect_json "graphql: empty stdin" 2 "" "${tmp}/empty.json"
+checks=$((checks + 1))
+if bash "${tool}" --input "${tmp}/json-paged.json" >/dev/null 2>&1; then
+  echo "FAIL graphql: a FILE without --head must be refused (stdin only)" >&2
+  failures=$((failures + 1))
+else echo "ok   graphql: a file without --head is refused"; fi
+
 # The contract names the helper where the local round is defined, so a reader finds it.
 checks=$((checks + 1))
 if grep -Fq 'local-review-verdict.sh' "${root}/AGENTS.md"; then

@@ -18,6 +18,16 @@
 #            --paginate` (default: stdin). Several concatenated pages are accepted. The caller
 #            still owns the PR-class bind: a local round never qualifies on an EXTERNAL
 #            contributor's PR, and this helper does not see who authored the PR.
+#   Without --head, `--input -` is REQUIRED and stdin is the raw pages of
+#            `gh api graphql --paginate -F number=<n> -f query='query($number:Int!,
+#            $endCursor:String){repository(owner:"<o>",name:"<r>"){pullRequest(number:$number){
+#            headRefOid reviews(first:100,after:$endCursor){totalCount nodes{author{login} state
+#            body submittedAt commit{oid}} pageInfo{hasNextPage endCursor}}}}}'`. The head is the
+#            PR's `headRefOid`, which must be the same on every page. It is the only shape the
+#            surveyor's read-only guard admits for a declared helper, which accepts `--input -`
+#            alone (monorepo#2697). The pipe reports this helper's status, not gh's, so a read is
+#            judged only when it is provably complete: the reviews fetched equal `totalCount`,
+#            every page agrees on it, and the last page has no next page. Anything else exits 2.
 #
 # OUTPUT (one line on stdout)
 #   GREEN self@<head>   the newest self-review at the head is clean and fully shaped
@@ -38,7 +48,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '13,37p' "$0" >&2
+  sed -n '13,47p' "$0" >&2
   exit 2
 }
 
@@ -61,12 +71,47 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+json_mode=0
+if [ -z "$head" ]; then
+  # Stdin-only GraphQL mode: the head travels in each page, so the guard's `--input -` is enough.
+  [ "$input" = "-" ] || usage
+  payload="$(cat)" || exit 2
+  # The pipe reports this helper's status, not gh's, so a read that died part-way would otherwise
+  # look complete, and a missing page could hold the newest round. Judge only a read that GraphQL
+  # itself shows is complete: every page for one head and one totalCount, the reviews fetched
+  # equal to that totalCount, and no next page after the last.
+  jq -se 'length >= 1
+    and all(.[]; type == "object" and (.errors == null)
+      and (.data.repository.pullRequest | type == "object")
+      and (.data.repository.pullRequest.headRefOid | type == "string" and length == 40
+        and (test("[^0-9a-f]") | not))
+      and (.data.repository.pullRequest.reviews.totalCount | type == "number")
+      and (.data.repository.pullRequest.reviews.nodes | type == "array"))
+    and (map(.data.repository.pullRequest.headRefOid) | unique | length == 1)
+    and (map(.data.repository.pullRequest.reviews.totalCount) | unique | length == 1)
+    and ((map(.data.repository.pullRequest.reviews.nodes | length) | add)
+      == .[0].data.repository.pullRequest.reviews.totalCount)
+    and (.[-1].data.repository.pullRequest.reviews.pageInfo.hasNextPage == false)' \
+    <<<"$payload" >/dev/null 2>&1 || {
+    echo "local-review-verdict: stdin must be the complete GraphQL review pages for one head (reviews fetched must equal totalCount)" >&2
+    exit 2
+  }
+  head="$(jq -rs '.[0].data.repository.pullRequest.headRefOid' <<<"$payload")" || exit 2
+  # Present the nodes in the REST shape the judgement below reads.
+  raw="$(jq -cs '[.[].data.repository.pullRequest.reviews.nodes[]
+    | {user: {login: (.author.login // "")}, commit_id: (.commit.oid // ""), state, body,
+       submitted_at: .submittedAt}]' <<<"$payload")" || exit 2
+  json_mode=1
+fi
+
 grep -Eq '^[0-9a-f]{40}$' <<<"$head" || {
   echo "local-review-verdict: --head must be a full 40-character lowercase sha" >&2
   exit 2
 }
 
-if [ "$input" = "-" ]; then
+if [ "$json_mode" = 1 ]; then
+  :
+elif [ "$input" = "-" ]; then
   raw="$(cat)" || exit 2
 else
   [ -r "$input" ] || {
