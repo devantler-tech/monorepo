@@ -1632,7 +1632,8 @@ reviewed, and tried and evaluated as a user)"*). You still **work in drafts**, a
 draft yourself only when you genuinely know it is ready**, which means ALL THREE:
 1. **Programmatically tested** — the repo's validation and tests pass (RED/GREEN proof for fixes;
    both-states tests for flagged features) and the full hygiene pentad is clear: green required
-   checks, zero unresolved threads, zero non-thread review findings, no conflict with base, and a
+   checks (every required check present at the head, since one that never ran is not green — see
+   the completeness check under *Merge policy*), zero unresolved threads, zero non-thread review findings, no conflict with base, and a
    current-head successful review. CodeRabbit's ancillary pre-merge output is not a separate
    readiness condition; only an explicit problem it reports during its selected review is a finding.
 2. **Reviewed** — ≥1 green CodeRabbit, Codex or Cursor Bugbot review at the current head — or,
@@ -2522,6 +2523,17 @@ result at the current head — self-promotion is forbidden before that. Request 
     equal to the current PR head**; the survey reports it as `green_review=self@<sha>`, and it
     stales on the next push exactly like any other green. Findings you raise on your own PR are
     **fixed-or-refuted and their threads resolved** like a bot's, before promotion.
+    Judge a round by its shape, never by eye: pipe the PR's review objects into
+    [`local-review-verdict.sh --head <headRefOid>`](.claude/scripts/local-review-verdict.sh), which
+    prints `GREEN self@<sha>` (exit 0) only for the newest `devantler` round at that head —
+    submitted as a `COMMENT` review, because an `APPROVED` or `CHANGES_REQUESTED` one is a verdict
+    on someone's work rather than a stand-in for a lane — whose `Reviewed commit:` line (bold and
+    backticks optional) names that same full head, since a body carried over from an earlier head keeps the old SHA while the
+    object it sits in carries the new one, and that
+    carries the disclosure first, the fallback heading, a line for each of the three lanes and a
+    standard verdict line with no P0/P1 findings (nits alone do not block), and `FINDINGS <n>` or
+    `NONE <reason>` (exit 1) otherwise. An empty reply container is never a round. The external-contributor exclusion below
+    stays the caller's to apply.
   - **A PR you took over is eligible, and it is the stronger case, not the weaker one.** Since
     2026-08-08 you drive PRs you did not author, so a blanket "never self-review someone else's PR"
     would strand every taken-over draft the moment all three lanes are down — the exact parking this
@@ -3034,6 +3046,37 @@ live in every repository here. Measured on monorepo#2927 at head `cc7ac05b` (202
 no `CHANGES_REQUESTED` — and **two** unresolved threads. Promoted 05:59:20Z; the blocking review landed
 93 minutes later, after promotion. (a) still holds for genuine lazy recomputation — it is scoped to a
 head whose threads are already resolved, not widened.
+
+🔴 **Exception (a) also requires the head's REQUIRED gate set to be complete — a gate that never
+reported wears the same all-green costume** (#2730). `statusCheckRollup` lists what ran, never what
+should have run: platform#2704 carried 16 of 27 checks because its head predated 12 required
+workflows, and ksail#6645's required workflow failed before creating a job, so no check-run existed.
+Before reading `BLOCKED` as stale, compare the head against the branch's rulesets and classic
+protection instead of the rollup:
+
+```sh
+.claude/scripts/required-gate-completeness.sh --repo devantler-tech/<repo> --base <baseRefName> --head <headRefOid>
+```
+
+- **Exit `0` (`COMPLETE`)** is the only reading under which (a) applies.
+- **Exit `1`** names each `MISSING`, `FAILED` or `PENDING` gate. That gate is the blocker, and it is
+  never stale. A head missing a required check does not satisfy the promotion gate's check condition.
+- **Exit `2` (`UNKNOWN`)** never reads as stale either. That includes an active `code_quality` rule,
+  which is always `UNVERIFIED` because no readable surface reports its analysis for a head. The merge
+  API may still decide, but diagnose a refusal or a no-op from the gate lines, starting with the
+  `code_quality` setup state they name (monorepo#3404).
+
+**A required workflow MISSING because the head predates it is fixed by updating the branch**, which
+runs every workflow again at a new head:
+
+```sh
+gh api --method PUT repos/devantler-tech/<repo>/pulls/<n>/update-branch -f expected_head_sha=<headRefOid>
+```
+
+It merges the base and never rewrites history. On another lane's PR it is the repair push *Autonomy*
+already permits once the active-work test shows the PR unowned. On an external contributor's PR it
+is the same API call and runs nothing locally. Every push stales the green review, so re-secure it at
+the new head.
 Otherwise `CLEAN` is authoritative for required checks: don't re-derive required
 checks from the rollup, don't re-fetch branch protection on every merge (it's confirmed **once per
 repo per session**), and don't bundle the evidence and the merge into one chained command. Driving a
@@ -3073,6 +3116,12 @@ that pentad-clear case**: never for a PR with a failing or pending required chec
 thread, or any other gate above unmet (every precondition in this section still applies, the
 external-contributor evaluation record included), and never on a merge-queue repository, where the
 queue owns the merge and `gh pr merge` only enqueues.
+
+🔴 **A merge command's exit `0` is not a merge.** On platform#2704, `gh pr merge` exited `0`, printed
+nothing and did nothing, because required checks were missing (#2730). So the confirmation read below
+is part of every merge. Unless `state` reads `MERGED`, or the PR is in the merge queue on a
+merge-queue repository, the merge failed: run the completeness check above and diagnose it. Never
+record it as merged.
 **Confirming the merge landed: `gh pr view <n> --repo devantler-tech/<repo> --json state,mergedAt` —
 there is NO `merged` field.** This read was unprescribed territory, and the improvisation it invited
 costs more than one value: `gh` rejects the **whole** `--json` request when any single field is unknown,
@@ -4426,7 +4475,9 @@ directory under the repo's `git-common-dir`.
 **🔴 Deleting a remote branch CLOSES its open PR — so the keep-set is the whole safety property:**
 - **KEEP:** the head of an **OPEN PR**; any branch **checked out by a worktree**; the default branch;
   the maintainer's **interactive random-slug** branches `claude/<adjective>-<name>-<6hex>` (HANDS-OFF —
-  never reaped even with a merged/closed PR, since they were never this routine's per-run worktree); and
+  never reaped even with a merged/closed PR, since they were never this routine's per-run worktree),
+  **except locally when its tip is an ancestor of the published default branch**: such a branch holds no
+  work of its own and `git branch <name> <sha>` recreates it, so it is reaped and recorded like any other; and
   anything outside the **selected namespace's** prefix (one invocation never crosses into another lane —
   never sweep another instance's namespace through this native adapter).
 - **`git branch --merged main` is USELESS here** — the portfolio **squash-merges**, so a merged branch's

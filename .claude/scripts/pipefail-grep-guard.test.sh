@@ -1043,24 +1043,41 @@ report "a delimiter with trailing whitespace does not terminate a heredoc" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
 # ---------------------------------------------------------------------------
-# 2h. The rollout gate. Enforcement ships LATENT, so both states are pinned here:
-#     the sweep is conditional and the self-test is not.
+# 2h. CI wiring. The repository-wide sweep and the self-test both run
+#     unconditionally in the guard's CI job.
 # ---------------------------------------------------------------------------
 ci="$here/../../.github/workflows/ci.yaml"
+# The sweep step is read as a parsed mapping, not a line window: a window from
+# `name:` down misses an `if:` written above it, and a gated sweep reads green
+# while checking nothing. An empty answer from a failed parse matches no
+# expected value, so it fails rather than reading as ungated.
+sweep_q() {
+  yq -r "[.jobs[].steps[]? | select(.name == \"Reject writers piped into an early-exiting grep\")] | $1" "$2" 2>/dev/null || true
+}
 # An unreadable workflow must FAIL rather than skip: a conditional that silently
 # drops its own assertions is the same silent-omission direction this guard's
-# header rejects — the suite would print no case for the gate and still exit 0,
-# so a moved or renamed workflow reads exactly like a gate that is still pinned.
+# header rejects — the suite would print no case for the wiring and still exit 0,
+# so a moved or renamed workflow reads exactly like wiring that is still pinned.
 if [[ ! -r "$ci" ]]; then
-  report "the rollout gate could be inspected" no "cannot read $ci"
+  report "the CI wiring could be inspected" no "cannot read $ci"
+elif ! command -v yq >/dev/null; then
+  report "the CI wiring could be inspected" no "yq is required to parse $ci (brew install yq; preinstalled on GitHub ubuntu runners)"
 else
-  report "the repository-wide sweep is gated behind a default-off variable" \
-    "$(yn grep -q "if: vars.ENFORCE_PIPEFAIL_GREP_GUARD == 'true'" "$ci")" "ci=$ci"
-  report "the OFF state reports rather than silently skipping" \
-    "$(yn grep -q "if: vars.ENFORCE_PIPEFAIL_GREP_GUARD != 'true'" "$ci")" "ci=$ci"
-  # The self-test must NOT be gated: latent code that stops being tested is how a
-  # flag flip turns into a surprise.
-  report "the self-test itself is not gated" \
+  report "exactly one CI step runs the repository-wide sweep" \
+    "$(yn test "$(sweep_q length "$ci")" = 1)" "ci=$ci"
+  report "the repository-wide sweep runs in CI" \
+    "$(yn test "$(sweep_q '.[0].run' "$ci")" = 'bash .claude/scripts/pipefail-grep-guard.sh')" "ci=$ci"
+  report "the repository-wide sweep is unconditional" \
+    "$(yn test "$(sweep_q '.[0] | has("if")' "$ci")" = false)" "ci=$ci"
+  # Control: the same query sees a condition placed above the step name.
+  gated="$tmp/gated-ci.yaml"
+  printf '%s\n' 'jobs:' '  guard:' '    steps:' \
+    "      - if: vars.ENFORCE_PIPEFAIL_GREP_GUARD == 'true'" \
+    '        name: Reject writers piped into an early-exiting grep' \
+    '        run: bash .claude/scripts/pipefail-grep-guard.sh' >"$gated"
+  report "a condition written above the step name is still detected" \
+    "$(yn test "$(sweep_q '.[0] | has("if")' "$gated")" = true)" "fixture=$gated"
+  report "the self-test runs in CI" \
     "$(yn test "$(grep -c 'pipefail-grep-guard.test.sh' "$ci")" -ge 1)" "ci=$ci"
 fi
 
@@ -1307,23 +1324,6 @@ f="$(mkscript "apostrophe-in-comment.sh" \
 run_guard "$f" && rc=0 || rc=$?
 report "an apostrophe in a comment does not leak an open quote" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
-
-# --- release-flag expiry ---------------------------------------------------
-# `ENFORCE_PIPEFAIL_GREP_GUARD` gates the repository-wide sweep in ci.yaml. It is
-# a RELEASE flag, so it is short-lived by contract and #2821 owns activating then
-# removing it. This assertion is the forcing function: from the expiry date it
-# fails, so the flag cannot quietly become permanent debt.
-#
-# Removing the flag means removing this case in the same change — a guard for a
-# flag that no longer exists would fail forever with nothing to fix.
-#
-# `date -u +%Y%m%d` is the one spelling BSD and GNU agree on; every relative-date
-# form differs between them, which is why the comparison is a plain integer.
-flag_expiry=20260930
-today="$(date -u +%Y%m%d)"
-report "the ENFORCE_PIPEFAIL_GREP_GUARD release flag has not passed its expiry" \
-  "$(yn test "$today" -lt "$flag_expiry")" \
-  "today=$today expiry=$flag_expiry — activate and remove the flag per #2821"
 
 # ---------------------------------------------------------------------------
 # 2k. The guard must SURVIVE the input, not only judge it correctly.

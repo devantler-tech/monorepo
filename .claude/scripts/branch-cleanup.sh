@@ -18,6 +18,10 @@
 #   KEEP  - the default branch
 #   KEEP  - anything outside claude/* (a namespace argument does not grant authority
 #           to delete another runtime's branches)
+#   KEEP  - a `claude/<word>-<word>-<6hex>` branch that CARRIES WORK (HANDS-OFF: the shape is
+#           the maintainer's interactive sessions AND this routine's own, so it is kept unless
+#           its tip is an ancestor of the published default branch, i.e. it holds no work at
+#           all and `git branch <name> <sha>` recreates it exactly). LOCAL only.
 #   LOCAL - delete when not in KEEP (squash-merge means `-d` can't see merges, so `-D` + manifest).
 #           Local deletion is restricted to this adapter's native claude/* namespace.
 #   REMOTE- delete ONLY with positive evidence: an associated MERGED/CLOSED PR whose recorded head
@@ -332,6 +336,22 @@ if ! git fetch origin --prune -q 2>/dev/null; then
   exit 1
 fi
 
+# Resolve the published default tip ONCE, after the fetch, for `holds_no_work`. A branch
+# whose tip is an ancestor of this commit is pure published history and may be reaped
+# whatever its name shape.
+#
+# Report when it cannot be resolved instead of letting the rule lapse in silence. This
+# whole defect family — #3114, #3153, #3293, #3388, #3164, #3018, #2774 — shares one shape:
+# every member fails SAFELY, and failing safely is exactly why none of them surfaces, since
+# a fail-closed skip and a converged sweep print the same thing. A silently disabled reap
+# rule would be the next member.
+DEFAULT_TIP=$(git rev-parse --verify --quiet "refs/remotes/origin/${DEFAULT}" 2>/dev/null || true)
+if [ -z "$DEFAULT_TIP" ]; then
+  echo "$SLUG: WARN — cannot resolve refs/remotes/origin/$DEFAULT; the pure-history reap is DISABLED" >&2
+  echo "  for this run, so shape-exempt branches are all kept. This is a fail-closed skip, not a" >&2
+  echo "  converged sweep — do not read the keep count as 'nothing to reap'." >&2
+fi
+
 # Serialise against harness worktree create/remove (monorepo#2209). Dry-run
 # skips the lock so a stuck holder cannot block a report-only sweep.
 if [ "$MODE" = "apply" ]; then
@@ -455,6 +475,30 @@ is_interactive_slug() {
   # exact head SHA (monorepo#2708).
   [[ "${1#"$PREFIX"/}" =~ ^[a-z]+-[a-z]+-[0-9a-f]{6}$ ]]
 }
+
+# The shape exemption above protects the maintainer's interactive WORK, and a branch whose
+# tip is an ancestor of the published default branch carries none: every commit reachable
+# from it is already in `origin/$DEFAULT`'s history, so the local ref is a pointer into
+# published history and `git branch <name> <sha>` recreates it exactly. Deleting one
+# destroys nothing, whoever created it — so the exemption has nothing to protect there.
+#
+# This is what makes the sweep converge. The premise `is_interactive_slug` was written on
+# — that only the maintainer's sessions carry a 6-hex slug — is false in this deployment:
+# the harness names EVERY per-session worktree branch `claude/<word>-<word>-<6hex>`,
+# scheduled runs included, so each tick mints one more immortal branch. Measured on this
+# host 2026-09-22 (monorepo#3114): of 1591 local `claude/*` branches, 1407 were kept by
+# the shape exemption alone, and 1404 of those were ancestors of `origin/main` — pure
+# history. Only 2 were held by an open PR and 114 by a worktree.
+#
+# Deliberately STRICTER than "reachable from some remote ref": a pushed interactive branch
+# is reachable from its own `origin/claude/*` ref while still carrying real work, and that
+# ref can be pruned later. An ancestor of the default branch cannot lose that property.
+# Fail-closed in every direction — `--is-ancestor` exits non-zero for "no" AND for any
+# error, and an unresolvable default tip disables the rule entirely (reported, below).
+holds_no_work() {
+  [ -n "$DEFAULT_TIP" ] || return 1
+  git merge-base --is-ancestor "$1" "$DEFAULT_TIP" 2>/dev/null
+}
 pr_evidence() { awk -F'\t' -v b="$1" '$1==b{print $2 "\t" $3; exit}' "$prs"; }
 
 l_del=0; r_del=0; l_keep=0; r_keep=0; candidates=0; r_rej=0
@@ -464,7 +508,7 @@ if [ "$NAMESPACE" = "claude" ]; then
   while IFS= read -r b; do
     [ -z "$b" ] && continue
     if is_kept "$b"; then l_keep=$((l_keep+1)); continue; fi
-    if is_interactive_slug "$b"; then l_keep=$((l_keep+1)); continue; fi
+    if is_interactive_slug "$b" && ! holds_no_work "$b"; then l_keep=$((l_keep+1)); continue; fi
     sha=$(git rev-parse "$b" 2>/dev/null) || continue
     # Never lose unpushed work: delete only when the tip is reachable from SOME
     # remote ref, OR a MERGED/CLOSED PR accounts for this exact sha (a
