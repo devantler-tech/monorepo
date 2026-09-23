@@ -37,7 +37,7 @@
 # Exit codes:
 #   0  classified (verdict on stdout)
 #   1  --enforce only: the body carries both literals
-#   2  usage, unreadable input, or a failed fetch
+#   2  usage, unreadable input, empty stdin, or a failed fetch
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

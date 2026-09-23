@@ -369,13 +369,12 @@ extract_fenced() {
       # verb. Without this every `x=$(date)` would reach the guard and stand as a
       # permanent false finding.
       function has_forge(s) { return (s ~ /(^|[[:space:]]|[;&|(])(gh|git)[[:space:]]/) }
-      # A forge read is also prescribed INSIDE a shell compound construct -- the
-      # issue-type sweep in the surveyor definition is a `for T in …; do gh api …; done` loop.
+      # A forge read can also be prescribed INSIDE a shell compound construct, such as
+      # a `for T in …; do gh api …; done` loop.
       # Anchored on the verb, the buffer starts at the nested `gh api` line and the
       # guard is asked about that read alone, which it ALLOWS, while the deployment
       # submits the whole loop, which it refuses (`chaining with ; can carry a
-      # write`). Same fail-open shape as the verb-less substitution above, on the
-      # mandated type sweep.
+      # write`). Same fail-open shape as the verb-less substitution above.
       function compound_starter(s) {
         return (s ~ /^[[:space:]]*(for|while|until|if|case)[[:space:]]/)
       }

@@ -856,13 +856,20 @@ post-dispatch check passes. Supply that post-apply baseline to the drift check a
 `CLAUDE_ENGINEER_MARKER_BASELINE`, `CLAUDE_IMPROVER_MARKER_BASELINE`,
 `CODEX_ENGINEER_MARKER_BASELINE`, or `CODEX_IMPROVER_MARKER_BASELINE`. Claude cadence comes from the
 authoritative `scheduled-tasks.json` record selected by exact task id plus pointer path, with
-`lastRunAt` as its marker; the `SKILL.md` description is not scheduler state. Codex cadence and its
+`lastRunAt` as its marker; the `SKILL.md` description is not scheduler state. That record lives at
+`~/Library/Application Support/Claude/claude-code-sessions/<session-uuid>/<task-uuid>/scheduled-tasks.json`,
+not under `~/.claude`. Select the one such file whose enabled records match those task ids and pointer
+paths, as `agent-telemetry.sh` and `claude-lane-liveness.sh` do; never a `.bak-<epoch>` sibling, and
+never a `find` or `grep -r` over `$HOME`, which times out. Codex cadence and its
 dispatch marker come from the exact automation id's `rrule` and `last_run_at` fields in Codex's local
 `sqlite/codex-dev.db` scheduler store. The complete RRULE in `automation.toml` is a required thin
 pointer and must equal that scheduler record before the drift check reports `MATCH`;
 `automation.toml.updated_at` is only an apply marker and does not advance on dispatch. A missing or
 ambiguous store, missing baseline, marker that did not advance, or incomplete recurrence rule is
-`UNKNOWN`, never `MATCH`.
+`UNKNOWN`, never `MATCH`. An omitted `BYSECOND` does not make a rule incomplete: RFC 5545 fills it
+with the single `DTSTART` second, which stays inside the stated `BYMINUTE`, so it cannot move or add
+an hour-and-minute start. A missing `BYMINUTE`, an empty or multi-valued `BYSECOND`, or an explicit
+non-zero `BYSECOND` still yields `UNKNOWN`.
 
 🔴 **That sentence governs the PERSISTENCE verdict — "did an applied edit survive a dispatch?" — and
 never the cadence-table comparison beside it.** The two are independent: `expected == actual` is
@@ -1821,7 +1828,7 @@ sha in its blob permalinks** — the finding comment carries **no** `**Reviewed 
 is precisely why the marker-based sweep missed it. **`Didn't find any major issues` never clears a P2**:
 the green can be newer than the finding, so recency decides nothing here.
 
-**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head **and positively identified as a review** — its body begins `**Actionable comments posted:` **after stripping any leading HTML comments and the whitespace around them**, because **an empty object is a reply container, never a review**, whatever its `commit_id` — or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request **and carrying a verdict for the head** (see the summary rule below), or its **command-invocation reply comment carrying a verdict** — a body stating `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of `headRefOid`**, together with `I found no actionable issues`, updated after that request. **`@coderabbitai full review` announces its own completion differently, and that form counts too** — a body stating `Full review is complete for <sha>` together with `I found no blocking issues`, whose `<sha>` **must still match `headRefOid`**. It is the same satisfier in CodeRabbit's other wording, so it carries the same conjuncts: the completion line alone would accept a completion naming an older head, exactly as a verdict with no `at <sha>` clause would. **Every one of these artifacts — the review object, the summary, and BOTH verdict-reply wordings — must have `user.login == "coderabbitai[bot]"`** — the reply is matched on plain prose rather than a structural marker, so without the author bind any account could post those two phrases with the head prefix and be read as a green. **Discriminate on SUBSTANCE, not on comment type:** a command reply carrying no verdict line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a review, and any artifact carrying a rate-limit, quota, or service marker saying the review did not run is rejected whatever its shape. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
+**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head **and positively identified as a review** — its body begins `**Actionable comments posted:` **after stripping any leading HTML comments and the whitespace around them**, because **an empty object is a reply container, never a review**, whatever its `commit_id` — or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request **and carrying a verdict for the head** (see the summary rule below), or its **command-invocation reply comment carrying a verdict** — a body stating `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of `headRefOid`**, together with `I found no actionable issues`, updated after that request. **`@coderabbitai full review` announces its own completion differently, and that form counts too** — a body stating `Full review is complete for <sha>` together with `I found no blocking issues`, whose `<sha>` **must still match `headRefOid`**. It is the same satisfier in CodeRabbit's other wording, so it carries the same conjuncts: the completion line alone would accept a completion naming an older head, exactly as a verdict with no `at <sha>` clause would. **Every one of these artifacts — the review object, the summary, and BOTH verdict-reply wordings — must have `user.login == "coderabbitai[bot]"`** — the reply is matched on plain prose rather than a structural marker, so without the author bind any account could post those two phrases with the head prefix and be read as a green. **Discriminate on SUBSTANCE, not on comment type:** a command reply carrying no verdict line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a review, and any artifact carrying a rate-limit, quota, or service marker saying the review did not run is never a green whatever its shape. **That marker blocks the green only — it never discards a finding the same artifact carries:** "rate limited" means the review may be incomplete, never that nothing is there, so such a finding counts toward the non-thread review findings like any other, and the artifact still satisfies nothing (monorepo#2764). Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
 
 🔴 **A summary comment counts only when its `recent_review` block carries a VERDICT for the exact
 head — a fresh `updated_at` and a head sha somewhere in the body prove nothing.** CodeRabbit edits
@@ -1925,9 +1932,19 @@ is transient and reports only whatever CodeRabbit last wrote at that head:
 
 | `description` | class | effect on a green |
 |---|---|---|
-| `Review completed` | evidences a run | corroborates the artifact |
+| `Review completed` | evidences an attempt that **ended**, never a result | corroborates an artifact that exists; never outweighs one saying the review failed |
 | `Review rate limited`, or another explicit marker that the review did not run, **and not older than the satisfying artifact** | **not-run marker** | **defeats the green** |
 | `Review skipped: automatic reviews are disabled`; **no status at all**; `Review in progress` or any other value; **or a not-run marker the artifact POSTDATES** | **uninformative status** | **must NOT defeat the green** |
+
+🔴 **`Review completed` is published over an ERRORED review too — the artifact decides, never the
+status.** On monorepo#2727 at head `abb3f75b58` (2026-08-08), CodeRabbit rewrote its summary comment
+to `## Review failed` at 23:24:02Z and set the status to `success — Review completed` one second
+later. That head had no review object, no inline comment and no summary naming it. An auto-generated
+summary carrying `## Review failed` is a **service failure**: never a finding and never a green, so
+record `cr:no-gate@<sha>` and advance to the next lane. The status is also latest-wins and keeps no
+history: that same head later reverted to `Review skipped: automatic reviews are disabled`, so the
+status can corroborate only at the moment it is read, and a disabled-default reading never shows
+that no review was attempted.
 
 🔴 **The staleness binding in rows 2 and 3 is load-bearing — without it this rule introduces its own
 fail-closed.** Because the status reports the last event rather than this one, an `e94216b3`-style
@@ -2254,7 +2271,7 @@ result at the current head — self-promotion is forbidden before that. Request 
   identified reply survives after the status reverts to the disabled default. The status remains a
   secondary negative signal — `Review rate limited` is a quota refusal,
   `Review skipped: automatic reviews are disabled` is the never-reviewed default, and
-  `Review completed` says a run happened — but it never overrides the reply. If the reply or a
+  `Review completed` says only that an attempt ended — but it never overrides the reply. If the reply or a
   refusal status whose `updated_at` postdates that request marker records a refusal **that this round
   itself produced** — by the round-provenance test below, which is part of this instruction rather
   than a later refinement of it — do not post another trigger for that round: advance to Codex for
@@ -2380,7 +2397,8 @@ result at the current head — self-promotion is forbidden before that. Request 
   provider in the authenticated CodeRabbit-first restarted sequence also clears the earlier
   provider's resolved same-head findings; stop at that first success instead of requesting the
   original provider redundantly. When the provider reports only a
-  quota/app/service failure, or completes without a gate-satisfying artifact, there is no code issue
+  quota/app/service failure (for CodeRabbit, a summary carrying `## Review failed` is one), or
+  completes without a gate-satisfying artifact, there is no code issue
   to fix: advance to the next provider in order, still one at a time. This distinction permits
   rate/token optimization without weakening the requirement for one successful current-head review.
   Persist a completed no-gate outcome at the current head (`cr:no-gate@<sha>`,
@@ -3017,6 +3035,28 @@ undiagnosed refusal as "maintainer-gated" is worse than losing the run it happen
 EVERY pull request in the portfolio*, no undefined permanent-sounding gate may park a PR — and once
 that label reaches durable memory it teaches every later run, in every lane, to skip the same
 completable PR.
+
+🔴 **`gh pr merge` is NOT the merge API — it checks `mergeStateStatus` itself and refuses before it
+ever calls the endpoint, so exception (a) cannot be reached through it** (#2710). Measured on
+`.github#138` at head `7c2e2b38` (2026-08-06): `gh pr merge` refused with *"the base branch policy
+prohibits the merge"* on two consecutive ticks, while `PUT …/pulls/138/merge` merged the same head at
+the first attempt, seconds later. **That refusal text names no rule**: it is not evidence of any
+specific policy and never seeds an issue on its own (it cost that run a wrong one, #2709). So when
+`gh pr merge` refuses a PR whose unresolved-thread count read `0` and whose every check-run and status
+at the head is `success`/`skipped`, re-read `mergeStateStatus` once, and if it is still not `CLEAN`,
+call the endpoint the contract already names as the authority:
+
+```sh
+gh api --method PUT repos/devantler-tech/<repo>/pulls/<n>/merge -f merge_method=squash -f sha=<headRefOid>
+```
+
+`sha` is the endpoint's own head pin — it refuses when the head has moved, exactly as
+`--match-head-commit` does — so never drop it. **Its response decides:** merged, or a refusal that
+names the unmet requirement, which is then diagnosed like any other. The fall-through is **bounded to
+that pentad-clear case**: never for a PR with a failing or pending required check, an unresolved
+thread, or any other gate above unmet (every precondition in this section still applies, the
+external-contributor evaluation record included), and never on a merge-queue repository, where the
+queue owns the merge and `gh pr merge` only enqueues.
 **Confirming the merge landed: `gh pr view <n> --repo devantler-tech/<repo> --json state,mergedAt` —
 there is NO `merged` field.** This read was unprescribed territory, and the improvisation it invited
 costs more than one value: `gh` rejects the **whole** `--json` request when any single field is unknown,
@@ -4547,6 +4587,13 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   re-verify **once** — not a fix-one/re-run round trip per finding.
 - **Parallelize independent setup.** Clones, subagents, and independent investigations start
   together in the background, not one after another.
+- **A per-repository fan-out iterates the repo list, never by globbing the cache directory.** A
+  glob does not match a leading dot in bash or zsh, so `for f in "$dir"/*.json` silently skips the
+  `.github` repository's cache file and reports "nothing found" there — including maintainer
+  comments on org-wide conventions. So iterate the repo list you enumerated from the Portfolio map
+  or the survey (`for r in "${repos[@]}"; do f="$dir/$r.json"; …`). A missing cache file is an error:
+  report UNKNOWN for that repo, never an empty result. This applies to every
+  per-repo sweep: comments, PRs, issues, runs.
 - **Splitting a `"repo number"` pair with `set -- $pair` breaks under `zsh` — use the POSIX
   parameter-expansion form instead.** Claude Code's Bash tool runs **zsh**, which (unlike bash) does **not**
   word-split unquoted *parameter expansions*. So the common bash sweep idiom silently collapses
