@@ -193,6 +193,56 @@ expect "an error object after a page" 2 "" "${green_head}" "${tmp}/array-then-ob
 expect "missing input file" 2 "" "${green_head}" "${tmp}/does-not-exist.json"
 expect "abbreviated head" 2 "" "${green_head:0:10}" "${fixture}"
 
+# Stdin JSON mode (monorepo#2697): the surveyor guard admits a declared helper only as `--input -`,
+# so the head travels in each page object. It must judge exactly as `--head` does.
+expect_json() { # expect_json <name> <want-rc> <want-line> <stdin-file>
+  local name="$1" want_rc="$2" want="$3" input="$4" got rc
+  checks=$((checks + 1))
+  set +e
+  got="$(bash "${tool}" --input - <"${input}" 2>"${tmp}/stderr")"
+  rc=$?
+  set -e
+  if [ "${rc}" != "${want_rc}" ] || [ "${got}" != "${want}" ]; then
+    echo "FAIL ${name}: want rc=${want_rc} '${want}', got rc=${rc} '${got}' ($(cat "${tmp}/stderr"))" >&2
+    failures=$((failures + 1))
+  else
+    echo "ok   ${name}"
+  fi
+}
+# Parity: every fixture judged above, at every head, gives the same line and status both ways.
+for f in "${fixture}" "${tmp}/newer-findings.json" "${tmp}/no-disclosure.json" "${tmp}/no-verdict.json"; do
+  for h in "${green_head}" "${loose_head}" "${other_head}"; do
+    set +e
+    want="$(bash "${tool}" --head "${h}" --input "${f}" 2>/dev/null)"
+    want_rc=$?
+    set -e
+    jq -c --arg h "${h}" '{head: $h, reviews: .}' "${f}" >"${tmp}/json-parity.json"
+    expect_json "json parity $(basename "${f}") @${h:0:10}" "${want_rc}" "${want}" "${tmp}/json-parity.json"
+  done
+done
+# Two pages, as `--paginate --jq` emits them, are both read.
+{ jq -c --arg h "${green_head}" '{head: $h, reviews: [.[0], .[1]]}' "${fixture}"
+  jq -c --arg h "${green_head}" '{head: $h, reviews: [.[2], .[3]]}' "${fixture}"; } >"${tmp}/json-paged.json"
+expect_json "json: two page objects" 0 "GREEN self@${green_head}" "${tmp}/json-paged.json"
+# Ablations, one conjunct each, against that passing two-page input.
+{ jq -c --arg h "${green_head}" '{head: $h, reviews: [.[0], .[1]]}' "${fixture}"
+  jq -c --arg h "${other_head}" '{head: $h, reviews: [.[2], .[3]]}' "${fixture}"; } >"${tmp}/json-mixed.json"
+expect_json "json: pages disagree on the head" 2 "" "${tmp}/json-mixed.json"
+jq -c --arg h "${green_head}" '{head: $h, reviews: ., extra: 1}' "${fixture}" >"${tmp}/json-extra.json"
+expect_json "json: an extra key" 2 "" "${tmp}/json-extra.json"
+jq -c --arg h "${green_head:0:10}" '{head: $h, reviews: .}' "${fixture}" >"${tmp}/json-short.json"
+expect_json "json: abbreviated head" 2 "" "${tmp}/json-short.json"
+jq -c --arg h "${green_head}" '{head: $h, reviews: .[0]}' "${fixture}" >"${tmp}/json-object.json"
+expect_json "json: reviews is not an array" 2 "" "${tmp}/json-object.json"
+jq -c '.' "${fixture}" >"${tmp}/json-bare.json"
+expect_json "json: bare pages with no head" 2 "" "${tmp}/json-bare.json"
+expect_json "json: empty stdin" 2 "" "${tmp}/empty.json"
+checks=$((checks + 1))
+if bash "${tool}" --input "${tmp}/json-paged.json" >/dev/null 2>&1; then
+  echo "FAIL json: a FILE without --head must be refused (stdin only)" >&2
+  failures=$((failures + 1))
+else echo "ok   json: a file without --head is refused"; fi
+
 # The contract names the helper where the local round is defined, so a reader finds it.
 checks=$((checks + 1))
 if grep -Fq 'local-review-verdict.sh' "${root}/AGENTS.md"; then
