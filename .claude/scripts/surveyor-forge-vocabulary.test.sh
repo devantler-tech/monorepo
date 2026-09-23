@@ -76,16 +76,6 @@
 # guard the inner read rather than the shell that captures it; tracked as
 # monorepo#2943.
 #
-# `for T in Epic Feature ...; do gh api ...; done` — the mandated issue-type sweep,
-# and the same category one step further out: a compound whose every segment is a
-# read, refused as `chaining with ; can carry a write`. Pinned `deny` for exactly
-# the reason above — proving that a whole shell construct is read-only means
-# parsing shell, inside a security boundary, so promoting it is not the outcome
-# being waited on. The refusal is real rather than theoretical: the runtime submits
-# the WHOLE construct, so a deployment that wires the guard onto the surveyor has
-# this sweep fail closed mid-run. The caller-side fix is to express the sweep
-# without a shell loop; tracked as monorepo#2955.
-#
 # `gh --json` — NOT a prescribed command at all, but a noun phrase. The surveyor
 # definition names the flag when it says every `gh --json` vocabulary is local to its
 # subcommand, and extraction takes any forge-verb-leading code span, so the phrase
@@ -222,7 +212,6 @@ allow	gh api -X GET search/issues -f q=org:devantler-tech --paginate
 deny	RUN_NAME="$run_name" gh api --paginate "repos/devantler-tech/monorepo/actions/workflows/ci.yaml/runs?branch=main&per_page=100" --jq '[.workflow_runs[]]'
 allow	gh api --paginate "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" --jq '.workflow_runs[] | [((.name // "") | sub("( - Update)? #[0-9]+$"; "")), (.conclusion // "none"), .created_at, .id] | @tsv'
 deny	fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
-deny	for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10], .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"; done
 deny	set -o pipefail; fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
 deny	gh api --paginate --slurp repos/devantler-tech/PLACEHOLDER/pulls/PLACEHOLDER/commits | jq -c '{repo:"PLACEHOLDER",author:"PLACEHOLDER",head_ref:"PLACEHOLDER",title:"PLACEHOLDER",head_oid:"PLACEHOLDER",files:PLACEHOLDER,skill_owners:PLACEHOLDER,commits:(add | map({sha, author_login:(.author.login // ""), author_name:.commit.author.name, author_email:.commit.author.email, author_date:.commit.author.date, committer_login:(.committer.login // ""), committer_name:.commit.committer.name, committer_email:.commit.committer.email, committer_date:.commit.committer.date, message:.commit.message}))}' | PLACEHOLDER/.claude/scripts/programmed-bot-review-exemption.sh --input -
 deny	gh api graphql --paginate -F number=PLACEHOLDER -f query='query($number:Int!,$endCursor:String){repository(owner:"devantler-tech",name:"PLACEHOLDER"){pullRequest(number:$number){reviewThreads(first:100,after:$endCursor){totalCount nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}' | PLACEHOLDER/.claude/scripts/pr-unresolved-threads.sh --input -
