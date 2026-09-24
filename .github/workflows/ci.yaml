@@ -544,6 +544,8 @@ jobs:
               - '.claude/scripts/required-gate-completeness.test.sh'
               - '.claude/scripts/coderabbit-summary-verdict.sh'
               - '.claude/scripts/coderabbit-summary-verdict.test.sh'
+              - '.claude/scripts/coderabbit-review-verdict.sh'
+              - '.claude/scripts/coderabbit-review-verdict.test.sh'
               - '.claude/scripts/local-review-verdict.sh'
               - '.claude/scripts/local-review-verdict.test.sh'
               # The captured review bodies the contract test asserts against. A
@@ -2097,6 +2099,9 @@ jobs:
       # Hermetic: classifies captured CodeRabbit summary bodies, no API call.
       - name: Verify the CodeRabbit summary verdict classifier
         run: bash .claude/scripts/coderabbit-summary-verdict.test.sh
+      # Hermetic: judges captured and synthetic CodeRabbit review objects, no API call.
+      - name: Verify the CodeRabbit review object verdict classifier
+        run: bash .claude/scripts/coderabbit-review-verdict.test.sh
       # Hermetic: judges captured local review rounds, no API call.
       - name: Verify the local review round verdict classifier
         run: bash .claude/scripts/local-review-verdict.test.sh

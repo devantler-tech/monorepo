@@ -1868,6 +1868,13 @@ did-not-run marker anywhere in the body. Judge it with
 which prints `GREEN` (exit 0), `FINDINGS <n>` or `NONE <reason>` (exit 1), and refuses an
 abbreviated head (exit 2). The author and freshness binds above stay the caller's to check.
 
+Judge a CodeRabbit **review object** the same way, by its shape rather than by eye: pipe
+`{head, author, commit_id, body}` into
+[`coderabbit-review-verdict.sh --input -`](.claude/scripts/coderabbit-review-verdict.sh). It applies
+the author and head binds, the empty-container, leading-comment-strip and outside-diff rules below,
+and counts finding sections except `🔇 Additional comments`, printing `GREEN`, `FINDINGS <n>` or
+`NONE <reason>`. The freshness bind and the other pentad surfaces stay the caller's (monorepo#2768).
+
 🔴 **This is not a rare shape — on the PR that exposed it, it was the ONLY shape.** Measured on
 `ksail#6930` (2026-09-09, head `a333b570d11d`): CodeRabbit emitted **4** `Full review is complete for
 <40-char sha>` completions and **7** `I found no blocking issues` verdicts, and **zero** comments in
