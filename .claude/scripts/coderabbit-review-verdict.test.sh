@@ -119,6 +119,18 @@ multibyte_comment="<!-- 🤖 agent hint -->
 ${clean}"
 expect "a leading comment with multibyte text is still stripped" 0 "GREEN" "$(payload "${multibyte_comment}")"
 
+# Quoted code inside the informational section can carry an unmatched literal <details>. The skip
+# then never closes and would hide the real finding section after it, so the walk fails closed.
+unbalanced="${clean}
+<details>
+<summary>🔇 Additional comments (1)</summary><blockquote>
+The template opens a <details> block here without closing it.
+</blockquote></details>
+<details>
+<summary>🧹 Nitpick comments (2)</summary><blockquote>
+</blockquote></details>"
+expect "an unmatched quoted tag never reads green" 1 "NONE unbalanced-sections" "$(payload "${unbalanced}")"
+
 expect "only the exact informational title is excluded" 1 "FINDINGS 2" "$(payload "${clean}
 <summary>🔇 Security comments (2)</summary>")"
 
@@ -193,6 +205,8 @@ ablate "comment strip by byte offset" \
   'if test("^<!--[\\s\\S]*?-->") then sub("^<!--[\\s\\S]*?-->"; "") | strip else . end' \
   'if startswith("<!--") then (index("-->")) as $i | if $i == null then . else (.[$i + 3:] | strip) end else . end' \
   "$(payload "${multibyte_comment}")" "GREEN"
+ablate "no balance check" '($walk.d == 0 and $walk.skip == null) as $balanced' 'true as $balanced' \
+  "$(payload "${unbalanced}")" "NONE unbalanced-sections"
 ablate "no empty-container check" 'elif ($lead | length) == 0 then "NONE empty-container"' \
   'elif false then "NONE empty-container"' "$(payload "")" "NONE empty-container"
 ablate "unanchored marker" 'test("^\\*\\*Actionable comments posted: [0-9]+\\*\\*")' 'test("\\*\\*Actionable comments posted: [0-9]+\\*\\*")' \

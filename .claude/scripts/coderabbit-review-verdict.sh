@@ -29,7 +29,7 @@
 #   GREEN            an identified CodeRabbit review of --head with zero actionable findings
 #   FINDINGS <n>     an identified review carrying <n> findings (actionable + finding sections)
 #   NONE <reason>    not a review result for this head; <reason> is one of not-coderabbit,
-#                    other-head, empty-container, not-a-review, did-not-run
+#                    other-head, empty-container, not-a-review, did-not-run, unbalanced-sections
 #
 # EXIT CODES
 #   0  GREEN
@@ -88,8 +88,11 @@ result="$(jq -r '
           elif ($t | test("^<summary>🔇 Additional comments \\(")) then
             (if .d > 0 then .skip = .d else . end)
           else .n += ([$t | scan("^<summary>[^<]*comments \\(([0-9]+)\\)</summary>$") | .[0] | tonumber] | add // 0)
-          end)
-      | .n) as $sections
+          end)) as $walk
+  | $walk.n as $sections
+  # Quoted code can carry an unmatched literal tag, which leaves the walk unbalanced. A skip that
+  # never closed may have hidden a real section after it, so an unbalanced walk is never GREEN.
+  | ($walk.d == 0 and $walk.skip == null) as $balanced
   | ($actionable + $sections) as $n
   # Only did-not-run markers owned by CodeRabbit count: its structural comment, or a service-shell
   # heading at the start of a line. Prose anywhere in a review can quote those phrases.
@@ -102,6 +105,7 @@ result="$(jq -r '
     # The outside-diff shape always carries a finding; a zero count there is a parse miss, not a green.
     elif $outside then "FINDINGS 1"
     elif $notrun then "NONE did-not-run"
+    elif ($balanced | not) then "NONE unbalanced-sections"
     else "GREEN" end
 ' <<<"$payload")" || exit 2
 
