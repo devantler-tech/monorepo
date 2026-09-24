@@ -117,9 +117,11 @@ out="$("$script" add "$super/mod" "$tmp/wt-sub-ok" "claim-branch-sub-ok" "sessio
 check "add succeeds on a correctly populated submodule" 0 "$rc" "$out" "owner=session-sub-ok"
 
 git -C "$super/mod" config remote.origin.url "$other_sub"
+# The helper names the superproject by its physical path; on macOS $TMPDIR sits under a symlink.
+super_phys="$(cd "$super" && pwd -P)"
 rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-wrong" "claim-branch-sub-wrong" "session-sub-wrong" 2>&1)" || rc=$?
-check "add refuses a submodule whose origin is not its .gitmodules URL" 1 "$rc" "$out" "git -C $super submodule sync -- mod"
+check "add refuses a submodule whose origin is not its .gitmodules URL" 1 "$rc" "$out" "git -C $super_phys submodule sync -- mod"
 check "origin refusal names both repositories" 1 "$rc" "$out" "$other_sub"
 check "origin refusal creates no worktree" 1 "$([ -e "$tmp/wt-sub-wrong" ] && echo 0 || echo 1)"
 check "origin refusal creates no branch" 1 "$(git -C "$super/mod" show-ref --verify --quiet refs/heads/claim-branch-sub-wrong && echo 0 || echo 1)"
