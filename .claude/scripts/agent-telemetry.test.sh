@@ -663,6 +663,27 @@ nocheck "omitted BYSECOND is not an unreadable rule" "$OUT" \
 check "omitted BYSECOND still derives stagger" "$OUT" "local simultaneous starts/day: 0"
 check "omitted BYSECOND still derives slots"   "$OUT" "local engineer slots scheduled/day: 48"
 
+# Codex may serialize the same RRULE without the optional "RRULE:" prefix.
+# The live pointer and scheduler record both use this bare form; it must retain
+# the same cadence and aggregate checks as the prefixed form above.
+set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1;BYMINUTE=10'
+OUT=$(NOBASE --section drift)
+check "bare Codex RRULE compares the engineer schedule" "$OUT" \
+  "codex engineer:  expected=*@10 actual=*@10 MATCH"
+check "bare Codex RRULE still derives stagger" "$OUT" \
+  "local simultaneous starts/day: 0"
+check "bare Codex RRULE still derives slots" "$OUT" \
+  "local engineer slots scheduled/day: 48"
+set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=30'
+OUT=$(NOBASE --section drift)
+check "bare rule with nonzero BYSECOND stays unreadable" "$OUT" \
+  "UNKNOWN: codex engineer recurrence rule is incomplete or unsupported"
+set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1'
+OUT=$(NOBASE --section drift)
+check "bare rule without BYMINUTE stays unreadable" "$OUT" \
+  "UNKNOWN: codex engineer recurrence rule is incomplete or unsupported"
+set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10'
+
 # NEGATIVE CONTROL: an EXPLICIT non-zero BYSECOND is a stated start the cadence
 # table (HH:MM, second 0) does not describe. It stays unreadable, never MATCH.
 set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=30'

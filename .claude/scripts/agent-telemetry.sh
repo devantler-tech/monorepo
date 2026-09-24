@@ -4348,7 +4348,9 @@ if want drift; then
   codex_pointer_schedule() {
     local rule
     [ -f "$1" ] || return 0
-    rule=$(sed -nE 's/^rrule[[:space:]]*=[[:space:]]*"(RRULE:[^"]+)".*/\1/p' "$1" \
+    # Codex may serialize the same rule with or without the optional RRULE:
+    # prefix. The parser below validates the complete rule in either form.
+    rule=$(sed -nE 's/^rrule[[:space:]]*=[[:space:]]*"((RRULE:)?FREQ=[^"]+)".*/\1/p' "$1" \
       | head -1)
     codex_rrule_schedule "$rule"
   }
