@@ -62,12 +62,11 @@ jq -se 'length == 1 and (.[0] | type == "object"
 result="$(jq -r '
   # Strip LEADING HTML comments and whitespace only. An unterminated comment stops the strip
   # rather than consuming the body, so the anchored test below then fails closed.
+  # A regex, not index/1: index returns a byte offset on multibyte text, so slicing by it would
+  # cut an emoji-bearing comment in the wrong place.
   def strip:
     sub("^\\s+"; "")
-    | if startswith("<!--") then
-        (index("-->")) as $i
-        | if $i == null then . else (.[$i + 3:] | strip) end
-      else . end;
+    | if test("^<!--[\\s\\S]*?-->") then sub("^<!--[\\s\\S]*?-->"; "") | strip else . end;
 
   .body as $body
   | ($body | strip) as $lead
@@ -78,7 +77,9 @@ result="$(jq -r '
   | ([$lead | scan("^\\*\\*Actionable comments posted: ([0-9]+)\\*\\*") | .[0] | tonumber] | first // 0) as $actionable
   # Walk the <details> nesting: everything inside the informational section is skipped, because it
   # can quote changed code carrying finding-shaped summaries. Counting resumes once it closes.
-  | ([$body | scan("<details[^>]*>|</details>|<summary>[^<]*</summary>")]
+  # Sections are read from $lead: leading comments are metadata. The did-not-run scan below keeps
+  # the full $body, because the CodeRabbit rate-limit marker is itself a comment.
+  | ([$lead | scan("<details[^>]*>|</details>|<summary>[^<]*</summary>")]
       | reduce .[] as $t ({d: 0, skip: null, n: 0};
           if ($t | startswith("</details")) then
             (if .skip != null and .d <= .skip then .skip = null else . end) | .d -= 1

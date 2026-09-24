@@ -109,6 +109,16 @@ expect "a finding section after the informational section still counts" 1 "FINDI
 <summary>🧹 Nitpick comments (4)</summary><blockquote>
 </blockquote></details>")"
 
+# Leading HTML comments are metadata: a section-shaped string inside one is not a finding.
+metadata_section="<!-- <summary>Nitpick comments (2)</summary> -->
+${clean}"
+expect "a summary inside a leading comment is not a finding" 0 "GREEN" "$(payload "${metadata_section}")"
+# jq's index/1 returns a byte offset on multibyte text, so a strip built on it cuts a leading
+# comment carrying an emoji in the wrong place and loses the marker behind it.
+multibyte_comment="<!-- 🤖 agent hint -->
+${clean}"
+expect "a leading comment with multibyte text is still stripped" 0 "GREEN" "$(payload "${multibyte_comment}")"
+
 expect "only the exact informational title is excluded" 1 "FINDINGS 2" "$(payload "${clean}
 <summary>🔇 Security comments (2)</summary>")"
 
@@ -177,6 +187,12 @@ ablate() { # ablate <name> <exact-phrase> <replacement> <payload> <want-line-wit
 
 ablate "no leading-comment strip" '($body | strip) as $lead' '$body as $lead' \
   "$(payload "${hint_body}")" "FINDINGS 2"
+ablate "sections read from the full body" '[$lead | scan("<details' '[$body | scan("<details' \
+  "$(payload "${metadata_section}")" "GREEN"
+ablate "comment strip by byte offset" \
+  'if test("^<!--[\\s\\S]*?-->") then sub("^<!--[\\s\\S]*?-->"; "") | strip else . end' \
+  'if startswith("<!--") then (index("-->")) as $i | if $i == null then . else (.[$i + 3:] | strip) end else . end' \
+  "$(payload "${multibyte_comment}")" "GREEN"
 ablate "no empty-container check" 'elif ($lead | length) == 0 then "NONE empty-container"' \
   'elif false then "NONE empty-container"' "$(payload "")" "NONE empty-container"
 ablate "unanchored marker" 'test("^\\*\\*Actionable comments posted: [0-9]+\\*\\*")' 'test("\\*\\*Actionable comments posted: [0-9]+\\*\\*")' \
