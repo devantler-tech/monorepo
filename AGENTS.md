@@ -1318,8 +1318,10 @@ governs the issue work that follows.) Two rules enforce that:
    waiting on a dependency that shipped five weeks earlier, another was a `security`+`bug` issue
    parked 23 days with nothing behind it. Run
    [`.claude/scripts/blocked-label-blocker-line.sh --org devantler-tech`](.claude/scripts/blocked-label-blocker-line.sh)
-   when a run reaches issue triage. Every `MISSING`, `MALFORMED`, `NO-ASK`, or `STALE-ASK` row
-   requires action: repair or unblock missing or malformed records; for `NO-ASK`, deliver an ask
+   when a run reaches issue triage. Every `MISSING`, `MALFORMED`, `STALE`, `NO-ASK`, or `STALE-ASK`
+   row requires action: repair or unblock missing or malformed records; for `STALE` (last verified
+   more than 7 days ago, `--verify-max-age-days`), re-verify the blocker and update the date and
+   result, or unblock it; for `NO-ASK`, deliver an ask
    through a canonical attention channel and record it; for `STALE-ASK`, renew the ask and update
    its channel and date to the actual delivery. Exit `1` means findings, `2` means
    UNKNOWN — a failed or timed-out read, never a clean sweep.
