@@ -670,7 +670,14 @@ registering_superproject() {
     case "$parent" in
       */.git) tree="${parent%/.git}" ;;
       *)
-        tree="$(git config -f "$parent/config" --get core.worktree 2>/dev/null)" || tree=""
+        # A linked worktree's admin directory names its working tree in `gitdir`; a submodule's git
+        # directory names it in core.worktree.
+        if [ -f "$parent/gitdir" ]; then
+          tree="$(cat "$parent/gitdir" 2>/dev/null)" || tree=""
+          tree="${tree%/.git}"
+        else
+          tree="$(git config -f "$parent/config" --get core.worktree 2>/dev/null)" || tree=""
+        fi
         case "$tree" in
           '') ;;
           /*) ;;
@@ -687,15 +694,15 @@ registering_superproject() {
   done
 }
 
-# refuse_foreign_submodule_origin stops `add` when <repo_path> is a populated submodule whose `origin`
-# is not the repository its superproject's .gitmodules names (monorepo#3010). Such a checkout is its own
-# top level, so refuse_uninitialized_repo admits it, and every commit made there would target the wrong
-# repository while every message names the submodule. Every fetch and push destination of origin must
-# match, as git resolves it after any url.<base>.insteadOf or pushInsteadOf rewrite: a rewrite decides
-# where commits actually go. A repository that is not a submodule is not checked: nothing names what it
-# should be.
+# refuse_foreign_submodule_origin_checked stops `add` or `acquire` when <repo_path> is a populated
+# submodule whose `origin` is not the repository its superproject's .gitmodules names (monorepo#3010).
+# Such a checkout is its own top level, so refuse_uninitialized_repo admits it, and every commit made
+# there would target the wrong repository while every message names the submodule. Every fetch and
+# push destination of origin must match, as git resolves it after any url.<base>.insteadOf or
+# pushInsteadOf rewrite: a rewrite decides where commits actually go. A repository that is not a
+# submodule is not checked: nothing names what it should be.
 refuse_foreign_submodule_origin_checked() {
-  local repo_abs="$1" super rel name="" key record common found expected="" shown_expected url actual="" matched=0 foreign=0
+  local repo_abs="$1" super rel name="" key record common found admin expected="" shown_expected url actual="" matched=0 foreign=0
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
     super="$(cd "$super" && pwd -P)"
@@ -713,15 +720,28 @@ refuse_foreign_submodule_origin_checked() {
     # shared git directory still records which superproject registered it, and under which name.
     common="$(git -C "$repo_abs" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
     case "$common" in
-      */.git/modules/*) ;;
+      */.git/modules/* | */.git/worktrees/*/modules/*) ;;
       *) return 0 ;;
     esac
     if found="$(registering_superproject "$common")"; then
       super="${found%%$'\n'*}"
       name="${found#*$'\n'}"
     else
-      super="${common%%/.git/modules/*}"
-      name="${common#*/.git/modules/}"
+      case "$common" in
+        */.git/worktrees/*/modules/*)
+          # A submodule of a linked superproject worktree: <top>/.git/worktrees/<id>/modules/<name>.
+          super="${common%%/.git/worktrees/*}"
+          admin="${common#"$super"/.git/worktrees/}"
+          name="${admin#*/modules/}"
+          admin="$super/.git/worktrees/${admin%%/*}"
+          super="$(cat "$admin/gitdir" 2>/dev/null)" || super=""
+          super="${super%/.git}"
+          ;;
+        *)
+          super="${common%%/.git/modules/*}"
+          name="${common#*/.git/modules/}"
+          ;;
+      esac
     fi
     rel="$(git config -f "$super/.gitmodules" --get "submodule.$name.path" 2>/dev/null)" || rel="$name"
   fi

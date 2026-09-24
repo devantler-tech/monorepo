@@ -109,7 +109,7 @@ git init -q -b main "$other_sub"
 git -C "$other_sub" -c user.name=t -c user.email=t@example.com commit --allow-empty -qm "other init"
 super="$tmp/super"
 git init -q -b main "$super"
-git -C "$super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod 2>/dev/null
+git -C "$super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
 git -C "$super" -c user.name=t -c user.email=t@example.com commit -qm "add submodule"
 
 rc=0
@@ -236,7 +236,7 @@ out="$("$script" acquire "$tmp/wt-linked-ok" "session-linked-ok" 2>&1)" || rc=$?
 check "acquire renews a submodule worktree whose origin is registered" 0 "$rc" "$out" "renewed"
 
 # A submodule name may contain a space; the registration must still be found.
-git -C "$super" -c protocol.file.allow=always submodule add -q "$upstream_sub" "mod space" 2>/dev/null
+git -C "$super" -c protocol.file.allow=always submodule add -q "$upstream_sub" "mod space"
 rc=0
 out="$("$script" add "$super/mod space" "$tmp/wt-sub-space" "claim-branch-sub-space" "session-sub-space" 2>&1)" || rc=$?
 check "add finds a submodule whose name contains a space" 0 "$rc" "$out" "owner=session-sub-space"
@@ -244,12 +244,12 @@ check "add finds a submodule whose name contains a space" 0 "$rc" "$out" "owner=
 # A linked worktree of a NESTED submodule is registered by its immediate parent, not the top level.
 outer_sub="$tmp/outer-sub"
 git init -q -b main "$outer_sub"
-git -C "$outer_sub" -c protocol.file.allow=always submodule add -q "$upstream_sub" inner 2>/dev/null
+git -C "$outer_sub" -c protocol.file.allow=always submodule add -q "$upstream_sub" inner
 git -C "$outer_sub" -c user.name=t -c user.email=t@example.com commit -qm "add inner"
 nest_super="$tmp/nest-super"
 git init -q -b main "$nest_super"
-git -C "$nest_super" -c protocol.file.allow=always submodule add -q "$outer_sub" outer 2>/dev/null
-git -C "$nest_super" -c protocol.file.allow=always submodule update -q --init --recursive 2>/dev/null
+git -C "$nest_super" -c protocol.file.allow=always submodule add -q "$outer_sub" outer
+git -C "$nest_super" -c protocol.file.allow=always submodule update -q --init --recursive
 git -C "$nest_super/outer/inner" worktree add -q --detach "$tmp/linked-inner"
 rc=0
 out="$("$script" add "$tmp/linked-inner" "$tmp/wt-linked-inner" "claim-branch-linked-inner" "session-linked-inner" 2>&1)" || rc=$?
@@ -258,6 +258,20 @@ git -C "$nest_super/outer/inner" config remote.origin.url "$other_sub"
 rc=0
 out="$("$script" add "$tmp/linked-inner" "$tmp/wt-linked-inner-wrong" "claim-branch-linked-inner-wrong" "session-linked-inner-wrong" 2>&1)" || rc=$?
 check "add refuses a nested linked worktree whose origin is another repository" 1 "$rc" "$out" "submodule sync -- 'inner'"
+
+# A submodule of a linked superproject worktree keeps its git directory under
+# <super>/.git/worktrees/<id>/modules/, which is how a session worktree's submodules are laid out.
+session="$tmp/session-super"
+git -C "$super" worktree add -q --detach "$session"
+git -C "$session" -c protocol.file.allow=always submodule update -q --init mod
+git -C "$session/mod" worktree add -q --detach "$session/per-run"
+rc=0
+out="$("$script" add "$session/per-run" "$tmp/wt-session-ok" "claim-branch-session-ok" "session-session-ok" 2>&1)" || rc=$?
+check "add admits a worktree of a linked superproject's submodule" 0 "$rc" "$out" "owner=session-session-ok"
+git -C "$session/mod" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" add "$session/per-run" "$tmp/wt-session-wrong" "claim-branch-session-wrong" "session-session-wrong" 2>&1)" || rc=$?
+check "add refuses a linked superproject's submodule whose origin is another repository" 1 "$rc" "$out" "submodule sync -- 'mod'"
 
 # ── check: mine ────────────────────────────────────────────────────────────
 rc=0
