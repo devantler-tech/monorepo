@@ -145,6 +145,46 @@ out="$("$script" add "$super/stray" "$tmp/wt-stray" "claim-branch-stray" "sessio
 check "add refuses a registered path whose stray content resolves to the superproject" 1 "$rc" "$out" "submodule-init.sh"
 check "stray refusal creates no branch in the superproject" 1 "$(git -C "$super" show-ref --verify --quiet refs/heads/claim-branch-stray && echo 0 || echo 1)"
 
+# A push URL is where commits land, so a foreign pushurl is refused even when origin's fetch URL matches.
+git -C "$super/mod" config remote.origin.pushurl "$other_sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-pushurl" "claim-branch-sub-pushurl" "session-sub-pushurl" 2>&1)" || rc=$?
+check "add refuses a submodule whose push URL is another repository" 1 "$rc" "$out" "$other_sub"
+git -C "$super/mod" config --unset remote.origin.pushurl
+
+# A relative path shaped like host/owner/repo is a local repository, not the network URL it resembles.
+git -C "$super/mod" config remote.origin.url "github.com/example/sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-localpath" "claim-branch-sub-localpath" "session-sub-localpath" 2>&1)" || rc=$?
+check "add refuses a local path that merely looks like the registered URL" 1 "$rc" "$out" "origin urls:     github.com/example/sub"
+
+# A relative .gitmodules URL resolves against the superproject's remote, as `git submodule init` does.
+mkdir -p "$tmp/remote-root"
+ln -s "$upstream_sub" "$tmp/remote-root/upstream-sub"
+git -C "$super" config remote.origin.url "$tmp/remote-root/super"
+git -C "$super" config -f .gitmodules submodule.mod.url "../upstream-sub"
+git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-relative" "claim-branch-sub-relative" "session-sub-relative" 2>&1)" || rc=$?
+check "add resolves a relative .gitmodules URL before comparing" 0 "$rc" "$out" "owner=session-sub-relative"
+
+# A linked worktree of the submodule outside the superproject shares origin, so it is checked too.
+git -C "$super/mod" worktree add -q --detach "$tmp/linked-mod"
+git -C "$super/mod" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" add "$tmp/linked-mod" "$tmp/wt-linked-wrong" "claim-branch-linked-wrong" "session-linked-wrong" 2>&1)" || rc=$?
+check "add refuses a linked submodule worktree whose origin is another repository" 1 "$rc" "$out" "$other_sub"
+git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
+rc=0
+out="$("$script" add "$tmp/linked-mod" "$tmp/wt-linked-ok" "claim-branch-linked-ok" "session-linked-ok" 2>&1)" || rc=$?
+check "add admits a linked submodule worktree whose origin is registered" 0 "$rc" "$out" "owner=session-linked-ok"
+
+# A submodule name may contain a space; the registration must still be found.
+git -C "$super" -c protocol.file.allow=always submodule add -q "$upstream_sub" "mod space" 2>/dev/null
+rc=0
+out="$("$script" add "$super/mod space" "$tmp/wt-sub-space" "claim-branch-sub-space" "session-sub-space" 2>&1)" || rc=$?
+check "add finds a submodule whose name contains a space" 0 "$rc" "$out" "owner=session-sub-space"
+
 # ── check: mine ────────────────────────────────────────────────────────────
 rc=0
 out="$("$script" check "$wt" "session-alpha" 2>&1)" || rc=$?
