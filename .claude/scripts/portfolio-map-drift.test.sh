@@ -59,7 +59,7 @@ expect() {
     note_fail "$name: exit $rc, want $want. Output: $out"
     return
   fi
-  if [ "$pattern" != "-" ] && ! printf '%s\n' "$out" | grep -Eq -- "$pattern"; then
+  if [ "$pattern" != "-" ] && ! grep -Eq -- "$pattern" <<<"$out"; then
     note_fail "$name: output lacks /$pattern/. Output: $out"
   fi
 }
@@ -104,7 +104,8 @@ MAP_KSAIL_ONLY='## Portfolio map
 # the submodule owned by another account is out of scope and must not be reported.
 d=$(mkroot "$MODULES" "$MAP_BOTH")
 expect "clean map" 0 'CLEAN \(2 devantler-tech submodules\)' "$d"
-if bash "$SCRIPT" --root "$d" | grep -q 'devantler/devantler\|profile'; then
+clean_out=$(bash "$SCRIPT" --root "$d")
+if grep -q 'devantler/devantler\|profile' <<<"$clean_out"; then
   note_fail "another owner's submodule was checked"
 fi
 asserts=$(( asserts + 1 ))

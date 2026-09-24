@@ -126,7 +126,9 @@ if [ -e "$exclusions" ]; then
     esac
     ex_repo=${line%%"$tab"*}
     ex_reason=${line#*"$tab"}
-    [ -n "$ex_repo" ] && [ -n "$ex_reason" ] || die_unknown "exclusion row without a reason: $line"
+    if [ -z "$ex_repo" ] || [ -z "$ex_reason" ]; then
+      die_unknown "exclusion row without a reason: $line"
+    fi
     excluded="$excluded$ex_repo
 "
   done <"$exclusions"
