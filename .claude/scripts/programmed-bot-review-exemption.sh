@@ -455,6 +455,11 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
       matches_suite_owned_skills && exit 0
       exit 3
     fi
+    # The branch, title and App all name the updater, yet its files or commits do not match any
+    # known shape. That stays exit 1 (untrusted, review-gated), but it is said on stderr so it is
+    # not mistaken for "not the updater" — a silent exit 1 hid a changed updater for weeks (#3126).
+    printf 'programmed-bot-review-exemption: %s updater PR with unexpected files or commit provenance; treated as untrusted\n' \
+      "${repo}" >&2
   fi
 fi
 

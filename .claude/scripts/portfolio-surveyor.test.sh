@@ -1376,6 +1376,22 @@ expect_review_gated \
   "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876" "devantler")" \
   "${allowed_skills_owners}"
 
+# "The updater with unexpected provenance" and "not the updater" are both exit 1, but only the
+# first names itself on stderr, so a changed updater is not mistaken for an unrelated PR (#3126).
+unexpected_updater_stderr="$("${classifier}" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876" "devantler")" \
+  "${allowed_skills_owners}" 2>&1 >/dev/null)" || true
+[[ "${unexpected_updater_stderr}" == *"platform updater PR with unexpected files or commit provenance"* ]] ||
+  fail "an updater PR with unexpected provenance is indistinguishable from a non-updater PR: ${unexpected_updater_stderr}"
+not_updater_stderr="$("${classifier}" \
+  "platform" "app/botantler-1" "claude/not-the-updater" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" "${platform_signed_commits}" \
+  "${allowed_skills_owners}" 2>&1 >/dev/null)" || true
+[[ -z "${not_updater_stderr}" ]] ||
+  fail "a PR that is not the updater must not be reported as an unexpected updater: ${not_updater_stderr}"
+
 # The corroborator is what catches an upstream handover on a root we still allowlist, so a caller
 # that omits it must NOT be handed the carve-out — a tripwire the caller may skip never fires.
 expect_review_required \
