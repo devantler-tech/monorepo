@@ -126,7 +126,8 @@ if [ -e "$exclusions" ]; then
     esac
     ex_repo=${line%%"$tab"*}
     ex_reason=${line#*"$tab"}
-    if [ -z "$ex_repo" ] || [ -z "$ex_reason" ]; then
+    # A reason made only of whitespace is no reason.
+    if [ -z "$ex_repo" ] || [ -z "$(printf '%s' "$ex_reason" | tr -d '[:space:]')" ]; then
       die_unknown "exclusion row without a reason: $line"
     fi
     excluded="$excluded$ex_repo

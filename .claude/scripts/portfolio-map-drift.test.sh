@@ -135,6 +135,10 @@ expect "reasoned exclusion" 0 '^EXCLUDED platform' "$d"
 d=$(mkroot "$MODULES" "$MAP_KSAIL_ONLY" 'platform')
 expect "exclusion without reason" 2 'UNKNOWN exclusion row without a reason' "$d"
 
+# A reason made only of whitespace is no reason either.
+d=$(mkroot "$MODULES" "$MAP_KSAIL_ONLY" "$(printf 'platform\t   \t ')")
+expect "whitespace-only reason" 2 'UNKNOWN exclusion row without a reason' "$d"
+
 # An exclusion for a repository already in the map is stale.
 d=$(mkroot "$MODULES" "$MAP_BOTH" "$(printf 'ksail\tno longer needed')")
 expect "stale exclusion: already mapped" 1 '^STALE-EXCLUSION ksail is already in the Portfolio map' "$d"
