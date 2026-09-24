@@ -1090,6 +1090,35 @@ round_sites="$(grep -o '[^[:space:]"`'"'"']*local-review-verdict\.sh[^[:space:]`
 [ -z "${round_sites}" ] ||
   fail "surveyor overlay calls local-review-verdict.sh by a form the guard refuses: ${round_sites}"
 
+# The CodeRabbit review-object classifier likewise (monorepo#3572): the contract names it
+# (monorepo#3571), and an undeclared helper leaves the surveyor judging review objects by eye.
+# Run the overlay's OWN pipeline through the hook, and prove a relative-path call is refused so
+# the declaration cannot be satisfied by a helper outside the reviewed checkout.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+object_command="$(grep -o '`gh api [^`]*coderabbit-review-verdict\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${object_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded coderabbit-review-verdict.sh pipeline (monorepo#3572)"
+object_command="${object_command//<repo-root>/${repo_root}}"
+object_command="${object_command//<repo>/monorepo}"
+object_command="${object_command//<n>/3571}"
+object_command="${object_command//<review-id>/5310251776}"
+object_command="${object_command//<headRefOid>/0358c8e6be4fe701fc65b67910a37e5ae07de354}"
+object_payload="$(jq -nc --arg cmd "${object_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${object_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's CodeRabbit review-object pipeline (monorepo#3572)"
+relative_object_command="${object_command//${repo_root}\/.claude\/scripts\//.claude/scripts/}"
+[ "${relative_object_command}" != "${object_command}" ] ||
+  fail "negative control did not rewrite the review-object helper path (monorepo#3572)"
+relative_object_payload="$(jq -nc --arg cmd "${relative_object_command}" '{tool_input: {command: $cmd}}')"
+if run_surveyor_hook "${relative_object_payload}" >/dev/null 2>&1; then
+  fail "consumer surveyor hook admitted a RELATIVE coderabbit-review-verdict.sh call (monorepo#3572)"
+fi
+object_sites="$(grep -o '[^[:space:]"`'"'"']*coderabbit-review-verdict\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/coderabbit-review-verdict.sh' || true)"
+[ -z "${object_sites}" ] ||
+  fail "surveyor overlay calls coderabbit-review-verdict.sh by a form the guard refuses: ${object_sites}"
+
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
 # shellcheck disable=SC2016  # fixture must inspect its own child environment
