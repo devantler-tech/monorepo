@@ -32,14 +32,15 @@ trap cleanup EXIT
 
 fails=0
 asserts=0
-case_n=0
 # note_fail records one failed assertion and keeps going, so one run reports every failure.
 note_fail() { echo "FAIL: $1" >&2; fails=$(( fails + 1 )); }
 
 # mkroot <gitmodules-body> <agents-body> [exclusions-body] — build a fixture superproject; prints its dir.
+# Each call gets its own directory: mkroot runs in a command substitution, so a counter incremented
+# here would never reach the caller, and a reused directory leaks one case's exclusions into the next.
 mkroot() {
-  case_n=$(( case_n + 1 ))
-  local dir="$TMP/case$case_n"
+  local dir
+  dir=$(mktemp -d "$TMP/case.XXXXXX")
   mkdir -p "$dir/.claude"
   printf '%s\n' "$1" >"$dir/.gitmodules"
   printf '%s\n' "$2" >"$dir/AGENTS.md"
@@ -153,6 +154,31 @@ expect "stale exclusion: already mapped" 1 '^STALE-EXCLUSION ksail is already in
 # An exclusion for a repository that is not a tracked devantler-tech submodule is stale.
 d=$(mkroot "$MODULES" "$MAP_BOTH" "$(printf 'devantler\tpersonal profile')")
 expect "stale exclusion: not a submodule" 1 '^STALE-EXCLUSION devantler is not a tracked devantler-tech submodule' "$d"
+
+# A mapped submodule whose Path column disagrees with .gitmodules is drift, not a clean row.
+ksail_cell='| `applications/ksail` |'
+moved_cell='| `applications/old-ksail` |'
+empty_cell='| — |'
+d=$(mkroot "$MODULES" "${MAP_BOTH//"$ksail_cell"/"$moved_cell"}")
+expect "path mismatch" 1 '^PATH-MISMATCH ksail: the Portfolio map says applications/old-ksail, \.gitmodules says applications/ksail' "$d"
+
+# A mapped submodule with no path in its Path column cannot be compared, so it is drift too.
+d=$(mkroot "$MODULES" "${MAP_BOTH//"$ksail_cell"/"$empty_cell"}")
+expect "path missing" 1 '^PATH-MISMATCH ksail: the Portfolio map says -, \.gitmodules says applications/ksail' "$d"
+
+# The path comes from the submodule's own path key, not its section name, which is only a label.
+d=$(mkroot '[submodule "ksail-label"]
+	path = applications/ksail
+	url = https://github.com/devantler-tech/ksail
+[submodule "platform"]
+	path = platform
+	url = git@github.com:devantler-tech/platform.git' "$MAP_BOTH")
+expect "section name differs from path" 0 'CLEAN \(2 devantler-tech submodules\)' "$d"
+
+# A submodule with no path key cannot be compared, so the check reports UNKNOWN.
+d=$(mkroot '[submodule "ksail"]
+	url = https://github.com/devantler-tech/ksail' "$MAP_BOTH")
+expect "submodule without a path" 2 'UNKNOWN submodule ksail has no path' "$d"
 
 # A .gitmodules with no devantler-tech submodule is UNKNOWN, never a vacuous clean.
 d=$(mkroot '[submodule "p"]

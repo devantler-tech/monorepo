@@ -10,8 +10,9 @@
 # WHAT IS COMPARED
 # Every .gitmodules URL owned by devantler-tech (git@github.com:devantler-tech/<repo>[.git] or
 # https://github.com/devantler-tech/<repo>[.git]) against the `devantler-tech/<repo>` names in the
-# Repo column of the Portfolio map table. Submodules owned by anyone else are out of scope. A URL of
-# any other shape is UNKNOWN, never skipped, so an unexpected spelling cannot hide a repository.
+# Repo column of the Portfolio map table, and each mapped submodule's .gitmodules path against the
+# row's Path column. Submodules owned by anyone else are out of scope. A URL of any other shape is
+# UNKNOWN, never skipped, so an unexpected spelling cannot hide a repository.
 #
 # EXCLUSIONS
 # .claude/portfolio-map-exclusions.tsv lists deliberate omissions, one per line:
@@ -66,8 +67,11 @@ fi
 submodules=""
 while IFS=' ' read -r key url; do
   [ -n "$key" ] || continue
-  path=${key#submodule.}
-  path=${path%.url}
+  name=${key#submodule.}
+  name=${name%.url}
+  # The section name is only a label; the path is its own key and the two may differ.
+  path=$(git config -f "$gitmodules" --get "submodule.$name.path") ||
+    die_unknown "submodule $name has no path in $gitmodules"
   case "$url" in
     git@github.com:*/*) rest=${url#git@github.com:} ;;
     https://github.com/*/*) rest=${url#https://github.com/} ;;
@@ -87,21 +91,29 @@ $urls
 EOF
 [ -n "$submodules" ] || die_unknown "no devantler-tech submodules found in $gitmodules"
 
-# Map: the first `devantler-tech/<repo>` code span in the Repo column of each Portfolio map row.
-if ! mapped=$(awk -F'|' '
+# Map: "<repo> <path>" per Portfolio map row — the first `devantler-tech/<repo>` code span in the
+# Repo column, and the first code span in the Path column, or `-` when that column names none.
+if ! map_rows=$(awk -F'|' '
     /^## Portfolio map[[:space:]]*$/ { in_map = 1; seen = 1; next }
     in_map && /^## / { in_map = 0 }
     in_map && /^\|/ {
       col = $3
       if (match(col, /`devantler-tech\/[A-Za-z0-9._-]+`/)) {
-        print substr(col, RSTART + 16, RLENGTH - 17)
+        repo = substr(col, RSTART + 16, RLENGTH - 17)
+        path = "-"
+        if (match($4, /`[^` ]+`/)) path = substr($4, RSTART + 1, RLENGTH - 2)
+        print repo " " path
       }
     }
     END { if (!seen) exit 3 }
   ' "$agents"); then
   die_unknown "no '## Portfolio map' section in $agents"
 fi
-[ -n "$mapped" ] || die_unknown "no devantler-tech repositories parsed from the Portfolio map"
+[ -n "$map_rows" ] || die_unknown "no devantler-tech repositories parsed from the Portfolio map"
+mapped=$(printf '%s\n' "$map_rows" | awk '{ print $1 }')
+
+# map_path <repo> prints the Path column the Portfolio map records for that repository.
+map_path() { printf '%s\n' "$map_rows" | awk -v r="$1" '$1 == r { print $2; exit }'; }
 
 # in_list <needle> <newline-separated list> succeeds when the list holds the needle exactly.
 in_list() {
@@ -142,7 +154,13 @@ while IFS=' ' read -r path repo; do
   [ -n "$path" ] || continue
   checked=$((checked + 1))
   if in_list "$repo" "$mapped"; then
-    echo "OK $repo"
+    recorded=$(map_path "$repo")
+    if [ "$recorded" = "$path" ]; then
+      echo "OK $repo"
+    else
+      echo "PATH-MISMATCH $repo: the Portfolio map says $recorded, .gitmodules says $path"
+      drift=1
+    fi
   elif in_list "$repo" "$excluded"; then
     echo "EXCLUDED $repo"
   else
@@ -168,7 +186,7 @@ EOF
 
 [ "$checked" -gt 0 ] || die_unknown "no submodules were checked"
 if [ "$drift" -ne 0 ]; then
-  echo "portfolio-map-drift: DRIFT — add each MISSING repository to the Portfolio map, or record why it is excluded in $exclusions"
+  echo "portfolio-map-drift: DRIFT — add each MISSING repository to the Portfolio map or record why it is excluded in $exclusions, and correct each PATH-MISMATCH row's Path column"
   exit 1
 fi
 echo "portfolio-map-drift: CLEAN ($checked devantler-tech submodules)"
