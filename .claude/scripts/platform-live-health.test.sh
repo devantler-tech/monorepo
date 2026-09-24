@@ -97,7 +97,17 @@ expect "refused read" 2 "PLATFORM-HEALTH=UNKNOWN unreadable=1"
 scenario empty
 list >"$FAKE/kustomizations.json"
 run
-expect "no Kustomization at all" 2 "UNREADABLE kustomizations: no Flux Kustomization returned"
+expect "no Kustomization at all" 2 "UNREADABLE kustomizations: the read returned nothing"
+
+scenario nosources
+list >"$FAKE/ocirepositories.json"
+run
+expect "no Flux source at all" 2 "UNREADABLE sources: the read returned nothing"
+
+scenario nopods
+list >"$FAKE/pods.json"
+run
+expect "no pod at all" 2 "UNREADABLE pods: the read returned nothing"
 
 scenario garbage
 printf 'error: You must be logged in to the server\n' >"$FAKE/pods.json"

@@ -83,6 +83,14 @@ read_json() {
     unknown=$((unknown + 1))
     return 1
   fi
+  # An empty list is a claim about the read, not about the cluster: a running platform always
+  # has a Flux root, its sources, and pods. Reading it as "nothing is failing" would report a
+  # read that saw nothing as healthy.
+  if jq -e '.items | length == 0' "$tmp/$name.json" >/dev/null 2>&1; then
+    printf 'UNREADABLE %s: the read returned nothing\n' "$name"
+    unknown=$((unknown + 1))
+    return 1
+  fi
 }
 
 # Every Flux object: Ready=False is a finding, Ready=Unknown is progress, anything else is fine.
@@ -104,12 +112,6 @@ flux_rows='
 '
 
 if read_json kustomizations kustomizations.kustomize.toolkit.fluxcd.io; then
-  count="$(jq '.items | length' "$tmp/kustomizations.json")"
-  if [ "$count" -eq 0 ]; then
-    # An empty list is a claim about the read, not about the cluster: Flux always has a root.
-    echo "UNREADABLE kustomizations: no Flux Kustomization returned"
-    unknown=$((unknown + 1))
-  fi
   jq -r "$flux_rows" "$tmp/kustomizations.json" >>"$tmp/rows"
 fi
 
