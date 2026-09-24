@@ -546,13 +546,16 @@ refuse_uninitialized_repo() {
 }
 
 # normalized_remote prints a remote URL as a comparable identity. A network URL becomes
-# `net:<lowercase host[:port]/path>`, so the ssh (`git@host:owner/repo.git`) and https
-# (`https://host/owner/repo`) spellings of one repository compare equal; userinfo, the scheme's
-# default port, a trailing `.git` and a trailing slash are dropped. Any other port is kept: it can
-# name a different server. Anything else is a local path, kept as `path:<as written>`, so a relative
-# path shaped like `host/owner/repo` never equals a network URL.
+# `net:[user@]<lowercase host[:port]><path>`, so the ssh (`git@host:owner/repo.git`) and https
+# (`https://host/owner/repo`) spellings of one repository compare equal. Only the host is
+# case-folded: a server may treat paths case-sensitively. An ssh user other than the conventional
+# `git` is kept, because a relative path resolves under that account; other userinfo is a
+# credential and is dropped, as are the scheme's default port, a trailing `.git` and a trailing
+# slash. Any other port is kept: it can name a different server. Anything else is a local path,
+# kept as `path:<as written>`, so a relative path shaped like `host/owner/repo` never equals a
+# network URL.
 normalized_remote() {
-  local url="$1" scheme="ssh" before authority path port
+  local url="$1" scheme="ssh" before authority path port user=""
   url="${url%/}"
   case "$url" in
     file://*)
@@ -576,7 +579,19 @@ normalized_remote() {
   url="${url%.git}"
   authority="${url%%/*}"
   path="${url#"$authority"}"
-  authority="${authority##*@}"
+  case "$authority" in
+    *@*)
+      user="${authority%@*}"
+      authority="${authority##*@}"
+      ;;
+  esac
+  case "$scheme" in
+    ssh | git+ssh | ssh+git)
+      user="${user%%:*}"
+      [ "$user" != "git" ] || user=""
+      ;;
+    *) user="" ;;
+  esac
   case "$authority" in
     *:*)
       port="${authority##*:}"
@@ -592,7 +607,8 @@ normalized_remote() {
       esac
       ;;
   esac
-  printf 'net:%s%s\n' "$authority" "$path" | tr '[:upper:]' '[:lower:]'
+  authority="$(printf '%s' "$authority" | tr '[:upper:]' '[:lower:]')"
+  printf 'net:%s%s%s\n' "${user:+$user@}" "$authority" "$path"
 }
 
 # redact_url prints a URL for a diagnostic with any userinfo (`user:token@`) replaced by `***@`, so a
@@ -617,7 +633,7 @@ redact_url() {
 # superproject's remote the way `git submodule init` does: the remote of the current branch, else
 # origin, else the superproject's own path. Any other URL is printed unchanged.
 resolve_submodule_url() {
-  local super="$1" url="$2" branch remote base sep="/" slash colon
+  local super="$1" url="$2" branch remote base sep="/"
   case "$url" in
     ./* | ../*) ;;
     *)
@@ -636,15 +652,12 @@ resolve_submodule_url() {
       ./*) url="${url#./}" ;;
       ../*)
         url="${url#../}"
-        # Drop the last component at whichever separator comes later; an scp-like base ends its
-        # host with ':'.
-        slash="${base%/*}"
-        colon="${base%:*}"
-        if [ "$slash" != "$base" ] && { [ "$colon" = "$base" ] || [ "${#slash}" -ge "${#colon}" ]; }; then
-          base="$slash"
-          sep="/"
-        elif [ "$colon" != "$base" ]; then
-          base="$colon"
+        # As git does: drop the last component at the last '/', and only when none is left at the
+        # last ':' (an scp-like host), after which the join uses ':'. A ':' inside a path is data.
+        if [ "${base%/*}" != "$base" ]; then
+          base="${base%/*}"
+        elif [ "${base%:*}" != "$base" ]; then
+          base="${base%:*}"
           sep=":"
         fi
         ;;
@@ -699,10 +712,11 @@ registering_superproject() {
 # Such a checkout is its own top level, so refuse_uninitialized_repo admits it, and every commit made
 # there would target the wrong repository while every message names the submodule. Every fetch and
 # push destination of origin must match, as git resolves it after any url.<base>.insteadOf or
-# pushInsteadOf rewrite: a rewrite decides where commits actually go. A repository that is not a
-# submodule is not checked: nothing names what it should be.
+# pushInsteadOf rewrite: a rewrite decides where commits actually go. For the same reason origin may
+# not set a custom receive-pack or upload-pack command. A repository that is not a submodule is not
+# checked: nothing names what it should be.
 refuse_foreign_submodule_origin_checked() {
-  local repo_abs="$1" super rel name="" key record common found admin expected="" shown_expected url actual="" matched=0 foreign=0
+  local repo_abs="$1" super rel name="" key record common found admin expected="" shown_expected url actual="" matched=0 foreign=0 packs=""
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
     super="$(cd "$super" && pwd -P)"
@@ -757,6 +771,13 @@ refuse_foreign_submodule_origin_checked() {
     fi
   done < <(git -C "$repo_abs" remote get-url --all origin 2>/dev/null
     git -C "$repo_abs" remote get-url --push --all origin 2>/dev/null || true)
+  # A custom pack command is what fetch and push actually run, whatever the URL says.
+  for key in receivepack uploadpack; do
+    if git -C "$repo_abs" config --get-all "remote.origin.$key" >/dev/null 2>&1; then
+      packs="$packs${packs:+, }remote.origin.$key"
+      foreign=1
+    fi
+  done
   if [ "$foreign" -eq 1 ] || [ "$matched" -eq 0 ]; then
     shown_expected="<not registered at $rel>"
     [ -z "$expected" ] || shown_expected="$(redact_url "$expected")"
@@ -764,9 +785,11 @@ refuse_foreign_submodule_origin_checked() {
     echo "  .gitmodules url: ${shown_expected}" >&2
     echo "  origin urls:     ${actual:-<none>}" >&2
     echo "  (origin urls are where git fetches and pushes, after any url.<base>.insteadOf rewrite.)" >&2
+    [ -z "$packs" ] || echo "  custom pack commands: ${packs} (they decide what fetch and push reach, whatever the url)" >&2
     echo "  Work committed here would land in the wrong repository. Point origin at the registered URL:" >&2
     echo "    git -C $(shquote "$super") submodule sync -- $(shquote "$rel")" >&2
-    echo "  and remove any remote.origin.pushurl or url.<base>.insteadOf rule that names another repository." >&2
+    echo "  and remove any remote.origin.pushurl, remote.origin.receivepack, remote.origin.uploadpack or" >&2
+    echo "  url.<base>.insteadOf setting that points somewhere else." >&2
     exit 1
   fi
 }

@@ -141,7 +141,7 @@ check "origin refusal creates no branch" 1 "$(git -C "$super/mod" show-ref --ver
 
 # The same repository spelled over ssh in .gitmodules and https in origin is not a mismatch.
 # GIT_ALLOW_PROTOCOL=file keeps the test offline: the advisory remote calls fail at once.
-git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:Example/Sub.git"
+git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:example/sub.git"
 git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
 rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-https" "claim-branch-sub-https" "session-sub-https" 2>&1)" || rc=$?
@@ -159,6 +159,28 @@ rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-port" "claim-branch-sub-port" "session-sub-port" 2>&1)" || rc=$?
 check "add refuses an origin on another non-default port" 1 "$rc" "$out" "ssh://git.example.invalid:3333/org/repo"
 
+# Only the host is case-folded: a server may treat repository paths case-sensitively.
+git -C "$super" config -f .gitmodules submodule.mod.url "ssh://git@Git.Example.invalid/Org/Repo"
+git -C "$super/mod" config remote.origin.url "ssh://git@git.example.invalid/Org/Repo"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-hostcase" "claim-branch-sub-hostcase" "session-sub-hostcase" 2>&1)" || rc=$?
+check "add treats host names case-insensitively" 0 "$rc" "$out" "owner=session-sub-hostcase"
+git -C "$super/mod" config remote.origin.url "ssh://git@git.example.invalid/org/repo"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-pathcase" "claim-branch-sub-pathcase" "session-sub-pathcase" 2>&1)" || rc=$?
+check "add refuses an origin whose repository path differs only in case" 1 "$rc" "$out" "ssh://***@git.example.invalid/org/repo"
+
+# An ssh user other than the conventional git decides whose account a relative path resolves under.
+git -C "$super" config -f .gitmodules submodule.mod.url "alice@git.example.invalid:repo"
+git -C "$super/mod" config remote.origin.url "mallory@git.example.invalid:repo"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-sshuser" "claim-branch-sub-sshuser" "session-sub-sshuser" 2>&1)" || rc=$?
+check "add refuses an origin under another ssh user" 1 "$rc" "$out" "submodule sync"
+git -C "$super/mod" config remote.origin.url "alice@git.example.invalid:repo"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-sshuser-ok" "claim-branch-sub-sshuser-ok" "session-sub-sshuser-ok" 2>&1)" || rc=$?
+check "add admits an origin under the same ssh user" 0 "$rc" "$out" "owner=session-sub-sshuser-ok"
+
 # A refusal never echoes a credential carried in a remote URL.
 git -C "$super" config -f .gitmodules submodule.mod.url "https://agent:gm-s3cr3t@github.com/example/sub"
 git -C "$super/mod" config remote.origin.url "https://agent:s3cr3t-token@github.com/example/other"
@@ -171,7 +193,7 @@ rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' bash -x "$script" add "$super/mod" "$tmp/wt-sub-cred-x" "claim-branch-sub-cred-x" "session-sub-cred-x" 2>&1)" || rc=$?
 check "a traced refusal still refuses" 1 "$rc" "$out" "origin urls:     https://***@github.com/example/other"
 check "xtrace never shows a remote credential" 1 "$(grep -qE 's3cr3t' <<<"$out" && echo 0 || echo 1)"
-git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:Example/Sub.git"
+git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:example/sub.git"
 git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
 
 # Stray content in a registered path that was never populated resolves to the superproject.
@@ -190,6 +212,15 @@ rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-pushurl" "claim-branch-sub-pushurl" "session-sub-pushurl" 2>&1)" || rc=$?
 check "add refuses a submodule whose push URL is another repository" 1 "$rc" "$out" "$other_sub"
 git -C "$super/mod" config --unset remote.origin.pushurl
+
+# A custom pack command is what fetch and push run, so it can reach another repository whatever the URL says.
+for key in receivepack uploadpack; do
+  git -C "$super/mod" config "remote.origin.$key" "git-$key '$other_sub' #"
+  rc=0
+  out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-$key" "claim-branch-sub-$key" "session-sub-$key" 2>&1)" || rc=$?
+  check "add refuses an origin with a custom $key command" 1 "$rc" "$out" "custom pack commands: remote.origin.$key"
+  git -C "$super/mod" config --unset "remote.origin.$key"
+done
 
 # A relative path shaped like host/owner/repo is a local repository, not the network URL it resembles.
 git -C "$super/mod" config remote.origin.url "github.com/example/sub"
@@ -213,6 +244,21 @@ git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
 rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-relative" "claim-branch-sub-relative" "session-sub-relative" 2>&1)" || rc=$?
 check "add resolves a relative .gitmodules URL before comparing" 0 "$rc" "$out" "owner=session-sub-relative"
+
+# A ':' inside the superproject's path is data: git drops the last component at the last '/'.
+git -C "$super" config remote.origin.url "https://git.example.invalid/org/super:variant.git"
+git -C "$super" config -f .gitmodules submodule.mod.url "../sub.git"
+git -C "$super/mod" config remote.origin.url "https://git.example.invalid/org/sub.git"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-relcolon" "claim-branch-sub-relcolon" "session-sub-relcolon" 2>&1)" || rc=$?
+check "add resolves a relative URL past a ':' in the superproject's path as git does" 0 "$rc" "$out" "owner=session-sub-relcolon"
+git -C "$super/mod" config remote.origin.url "https://git.example.invalid/org/super:sub.git"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-relcolon-wrong" "claim-branch-sub-relcolon-wrong" "session-sub-relcolon-wrong" 2>&1)" || rc=$?
+check "add refuses the origin a ':' split would resolve to" 1 "$rc" "$out" "https://git.example.invalid/org/super:sub.git"
+git -C "$super" config remote.origin.url "$tmp/remote-root/super"
+git -C "$super" config -f .gitmodules submodule.mod.url "../upstream-sub"
+git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
 
 # A linked worktree of the submodule outside the superproject shares origin, so it is checked too.
 git -C "$super/mod" worktree add -q --detach "$tmp/linked-mod"
