@@ -1617,6 +1617,20 @@ expect_exempt \
   '["Casks/world-at-ruin.rb"]' \
   "${war_cask_commits}"
 
+# A caller following the documented recipe adds a boolean `verified` to every commit; the exact
+# release comparisons must still match (#3126).
+expect_exempt \
+  "World at Ruin CD cask with the verified field" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/world-at-ruin" \
+  "chore(cask): update world-at-ruin to v0.36.0" \
+  "${war_cask_head}" \
+  '["Casks/world-at-ruin.rb"]' \
+  "$(jq -c 'map(. + {verified: true})' <<<"${war_cask_commits}")"
+expect_exempt "KSail plugin release with the verified field" "devantler-tech/ksail" "${ksail_args[@]:1}" \
+  "$(jq -c 'map(. + {verified: true})' <<<"${ksail_commits}")"
+
 # #2291. The tap token commits under the maintainer's own identity, so a `git commit --amend` that
 # rewrites the cask body leaves every login, name, email, message, branch and path identical to a
 # genuine release — the exemption used to survive it. The author/committer date pair is what an

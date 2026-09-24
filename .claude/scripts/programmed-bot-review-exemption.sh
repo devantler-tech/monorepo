@@ -338,7 +338,7 @@ matches_ksail_provenance() {
   jq -e \
     --arg head "${head}" \
     --arg version "${version}" \
-    'map(del(.author_date, .committer_date)) == [{
+    'map(del(.author_date, .committer_date, .verified)) == [{
       sha: $head,
       author_login: "",
       author_name: "devantler-tech-bot[bot]",
@@ -429,7 +429,7 @@ matches_war_cask_provenance() {
     --arg version "${version}" \
     'length == 1 and
      (.[0].author_date == .[0].committer_date) and
-     (map(del(.author_date, .committer_date)) == [{
+     (map(del(.author_date, .committer_date, .verified)) == [{
       sha: $head,
       author_login: "devantler",
       author_name: "Nikolai Emil Damm",
