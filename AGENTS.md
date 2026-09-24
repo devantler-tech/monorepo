@@ -4253,7 +4253,8 @@ that contains it: the session write guard refuses every Edit/Write under the sha
 `.claude/worktrees/<your-slug>`, so `<shared>/.claude/worktrees/maint-<runid>` or a shared submodule's
 `.claude/worktrees/` builds a tree the run cannot edit. The helper refuses both, and refuses a
 `<repo_path>` that is not its own repository's root — an uninitialized submodule — so populate it with
-`submodule-init.sh` first (monorepo#2755). Work there, open the PR, then
+`submodule-init.sh` first (monorepo#2755). It also refuses a populated submodule whose `origin` is not
+the repository `.gitmodules` names, and names `git submodule sync` as the fix (monorepo#3010). Work there, open the PR, then
 `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local filesystem path such as
 `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the slug only for `gh`
 commands). **Immediately before editing any worktree this session did not create**, atomically

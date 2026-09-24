@@ -543,6 +543,58 @@ refuse_uninitialized_repo() {
   fi
 }
 
+# normalized_remote prints a remote URL as lowercase host/path, so the ssh (`git@host:owner/repo.git`)
+# and https (`https://host/owner/repo`) spellings of one repository compare equal. Userinfo, a port, a
+# trailing `.git` and a trailing slash are dropped; anything else is compared as written.
+normalized_remote() {
+  local url="$1" host path
+  url="${url%/}"
+  url="${url%.git}"
+  case "$url" in
+    *://*)
+      url="${url#*://}"
+      url="${url#*@}"
+      ;;
+    *@*:*)
+      url="${url#*@}"
+      url="${url/://}"
+      ;;
+  esac
+  host="${url%%/*}"
+  path="${url#"$host"}"
+  host="${host%:[0-9]*}"
+  printf '%s%s\n' "$host" "$path" | tr '[:upper:]' '[:lower:]'
+}
+
+# refuse_foreign_submodule_origin stops `add` when <repo_path> is a populated submodule whose `origin`
+# is not the repository its superproject's .gitmodules names (monorepo#3010). Such a checkout is its own
+# top level, so refuse_uninitialized_repo admits it, and every commit made there would target the wrong
+# repository while every message names the submodule. A repository that is not a submodule is not
+# checked: nothing names what it should be.
+refuse_foreign_submodule_origin() {
+  local repo_abs="$1" super rel entry key expected actual
+  super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
+  [ -n "$super" ] || return 0
+  super="$(cd "$super" && pwd -P)"
+  rel="${repo_abs#"$super"/}"
+  expected=""
+  while IFS= read -r entry; do
+    [ "${entry#* }" = "$rel" ] || continue
+    key="${entry%% *}"
+    expected="$(git config -f "$super/.gitmodules" --get "${key%.path}.url" 2>/dev/null)" || expected=""
+    break
+  done < <(git config -f "$super/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null || true)
+  actual="$(git -C "$repo_abs" config --get remote.origin.url 2>/dev/null)" || actual=""
+  if [ -z "$expected" ] || [ -z "$actual" ] || [ "$(normalized_remote "$expected")" != "$(normalized_remote "$actual")" ]; then
+    echo "worktree-claim: $repo_abs is a submodule of $super whose origin is not the repository .gitmodules names." >&2
+    echo "  .gitmodules url: ${expected:-<not registered at $rel>}" >&2
+    echo "  origin url:      ${actual:-<none>}" >&2
+    echo "  Work committed here would land in the wrong repository. Point origin at the registered URL:" >&2
+    echo "    git -C $super submodule sync -- $rel" >&2
+    exit 1
+  fi
+}
+
 # refuse_unwritable_location stops `add` from building a worktree the caller cannot edit (monorepo#2755).
 # A harness session runs inside <checkout>/.claude/worktrees/<slug>, and its write guard refuses every
 # Edit/Write into <checkout> outside that directory — including a sibling <checkout>/.claude/worktrees/
@@ -588,6 +640,7 @@ cmd_add() {
     fail "worktree path already exists: $wt"
   fi
   refuse_uninitialized_repo "$repo_abs"
+  refuse_foreign_submodule_origin "$repo_abs"
   refuse_unwritable_location "$wt"
   # Create parent so git worktree add can place the tree.
   mkdir -p "$(dirname "$wt")"

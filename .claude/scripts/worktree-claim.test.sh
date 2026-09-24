@@ -98,6 +98,51 @@ out="$("$script" add "$repo/empty-submodule" "$tmp/wt-empty-sub" "claim-branch-e
 check "add refuses an uninitialized submodule path" 1 "$rc" "$out" "submodule-init.sh"
 check "uninitialized refusal creates nothing" 1 "$([ -e "$tmp/wt-empty-sub" ] && echo 0 || echo 1)"
 
+# ── add checks a populated submodule is the repository .gitmodules names (monorepo#3010) ──
+# A real superproject with a real submodule, because the defect lives in how `git -C` resolves a
+# submodule path: a standalone repository cannot show it.
+upstream_sub="$tmp/upstream-sub"
+git init -q -b main "$upstream_sub"
+git -C "$upstream_sub" -c user.name=t -c user.email=t@example.com commit --allow-empty -qm "sub init"
+other_sub="$tmp/other-sub"
+git init -q -b main "$other_sub"
+git -C "$other_sub" -c user.name=t -c user.email=t@example.com commit --allow-empty -qm "other init"
+super="$tmp/super"
+git init -q -b main "$super"
+git -C "$super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod 2>/dev/null
+git -C "$super" -c user.name=t -c user.email=t@example.com commit -qm "add submodule"
+
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-ok" "claim-branch-sub-ok" "session-sub-ok" 2>&1)" || rc=$?
+check "add succeeds on a correctly populated submodule" 0 "$rc" "$out" "owner=session-sub-ok"
+
+git -C "$super/mod" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-wrong" "claim-branch-sub-wrong" "session-sub-wrong" 2>&1)" || rc=$?
+check "add refuses a submodule whose origin is not its .gitmodules URL" 1 "$rc" "$out" "git -C $super submodule sync -- mod"
+check "origin refusal names both repositories" 1 "$rc" "$out" "$other_sub"
+check "origin refusal creates no worktree" 1 "$([ -e "$tmp/wt-sub-wrong" ] && echo 0 || echo 1)"
+check "origin refusal creates no branch" 1 "$(git -C "$super/mod" show-ref --verify --quiet refs/heads/claim-branch-sub-wrong && echo 0 || echo 1)"
+
+# The same repository spelled over ssh in .gitmodules and https in origin is not a mismatch. The
+# rewrite keeps the test offline: git fetches from the local upstream whatever the URL says.
+git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:Example/Sub.git"
+git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
+git -C "$super/mod" config url."$upstream_sub".insteadOf "https://github.com/example/sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-https" "claim-branch-sub-https" "session-sub-https" 2>&1)" || rc=$?
+check "add treats ssh and https spellings of one repository as the same" 0 "$rc" "$out" "owner=session-sub-https"
+
+# Stray content in a registered path that was never populated resolves to the superproject.
+mkdir -p "$super/stray"
+printf 'stray\n' >"$super/stray/leftover.txt"
+git -C "$super" config -f .gitmodules submodule.stray.path stray
+git -C "$super" config -f .gitmodules submodule.stray.url "$upstream_sub"
+rc=0
+out="$("$script" add "$super/stray" "$tmp/wt-stray" "claim-branch-stray" "session-stray" 2>&1)" || rc=$?
+check "add refuses a registered path whose stray content resolves to the superproject" 1 "$rc" "$out" "submodule-init.sh"
+check "stray refusal creates no branch in the superproject" 1 "$(git -C "$super" show-ref --verify --quiet refs/heads/claim-branch-stray && echo 0 || echo 1)"
+
 # ── check: mine ────────────────────────────────────────────────────────────
 rc=0
 out="$("$script" check "$wt" "session-alpha" 2>&1)" || rc=$?
