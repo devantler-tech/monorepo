@@ -93,7 +93,17 @@ expect "the informational section is not a finding" 0 "GREEN" "$(payload "${clea
 <summary>🔇 Additional comments (3)</summary><blockquote>
 </blockquote></details>")"
 
+expect "only the exact informational title is excluded" 1 "FINDINGS 2" "$(payload "${clean}
+<summary>🔇 Security comments (2)</summary>")"
+
 # Did-not-run marker: blocks the green, never discards a finding.
+expect "a service-shell heading blocks the green" 1 "NONE did-not-run" \
+  "$(payload "${clean}
+> ## Review limit reached")"
+expect "review prose quoting a service phrase is still green" 0 "GREEN" \
+  "$(payload "${clean}
+<summary>🔇 Additional comments (1)</summary>
+The retry path logs Review failed when the upstream call errors.")"
 expect "a did-not-run marker blocks the green" 1 "NONE did-not-run" \
   "$(payload "${clean}
 <!-- rate limited by coderabbit.ai -->")"
@@ -157,7 +167,14 @@ ablate "unanchored marker" 'test("^\\*\\*Actionable comments posted: [0-9]+\\*\\
   "$(payload "Thanks. **Actionable comments posted: 0**")" "NONE not-a-review"
 ablate "no outside-diff shape" ') as $outside' ' and false) as $outside' \
   "$(payload "${outside_body}")" "FINDINGS 1"
-ablate "no informational exclusion" 'select(.[0] | startswith("🔇") | not)' 'select(true)' \
+ablate "emoji-only informational exclusion" 'test("^🔇 Additional comments \\(")' 'startswith("🔇")' \
+  "$(payload "${clean}
+<summary>🔇 Security comments (2)</summary>")" "FINDINGS 2"
+ablate "unanchored service heading" '(\\A|\\n)(> )?#+ (Review limit reached|Review failed|Review skipped)' \
+  'Review limit reached|Review failed|Review skipped' \
+  "$(payload "${clean}
+The retry path logs Review failed when the upstream call errors.")" "GREEN"
+ablate "no informational exclusion" 'select(.[0] | test("^🔇 Additional comments \\(") | not)' 'select(true)' \
   "$(payload "${clean}
 <summary>🔇 Additional comments (3)</summary>")" "GREEN"
 ablate "no author bind" 'if .author != "coderabbitai[bot]"' 'if false' \

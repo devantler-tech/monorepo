@@ -77,9 +77,11 @@ result="$(jq -r '
   # the $marker test above, so an unknown count can never read as zero.
   | ([$lead | scan("^\\*\\*Actionable comments posted: ([0-9]+)\\*\\*") | .[0] | tonumber] | first // 0) as $actionable
   | ([$body | scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
-      | select(.[0] | startswith("🔇") | not) | .[1] | tonumber] | add // 0) as $sections
+      | select(.[0] | test("^🔇 Additional comments \\(") | not) | .[1] | tonumber] | add // 0) as $sections
   | ($actionable + $sections) as $n
-  | ($body | test("rate limited by coderabbit\\.ai -->|Review limit reached|couldn.t start this review|Review skipped|Review failed"; "i")) as $notrun
+  # Only did-not-run markers owned by CodeRabbit count: its structural comment, or a service-shell
+  # heading at the start of a line. Prose anywhere in a review can quote those phrases.
+  | ($body | test("rate limited by coderabbit\\.ai -->|(\\A|\\n)(> )?#+ (Review limit reached|Review failed|Review skipped)")) as $notrun
   | if .author != "coderabbitai[bot]" then "NONE not-coderabbit"
     elif .commit_id != .head then "NONE other-head"
     elif ($lead | length) == 0 then "NONE empty-container"
