@@ -116,6 +116,19 @@ rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-ok" "claim-branch-sub-ok" "session-sub-ok" 2>&1)" || rc=$?
 check "add succeeds on a correctly populated submodule" 0 "$rc" "$out" "owner=session-sub-ok"
 
+# A URL rewrite decides where git really fetches and pushes, so an origin configured with the
+# registered URL is still refused when a rewrite sends it to another repository.
+git -C "$super/mod" config url."$other_sub".insteadOf "$upstream_sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-insteadof" "claim-branch-sub-insteadof" "session-sub-insteadof" 2>&1)" || rc=$?
+check "add refuses an origin that insteadOf rewrites to another repository" 1 "$rc" "$out" "origin urls:     $other_sub"
+git -C "$super/mod" config --unset url."$other_sub".insteadOf
+git -C "$super/mod" config url."$other_sub".pushInsteadOf "$upstream_sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-pushinsteadof" "claim-branch-sub-pushinsteadof" "session-sub-pushinsteadof" 2>&1)" || rc=$?
+check "add refuses an origin that pushInsteadOf rewrites to another repository" 1 "$rc" "$out" "$upstream_sub, $other_sub"
+git -C "$super/mod" config --unset url."$other_sub".pushInsteadOf
+
 git -C "$super/mod" config remote.origin.url "$other_sub"
 # The helper names the superproject by its physical path; on macOS $TMPDIR sits under a symlink.
 super_phys="$(cd "$super" && pwd -P)"
@@ -126,14 +139,36 @@ check "origin refusal names both repositories" 1 "$rc" "$out" "$other_sub"
 check "origin refusal creates no worktree" 1 "$([ -e "$tmp/wt-sub-wrong" ] && echo 0 || echo 1)"
 check "origin refusal creates no branch" 1 "$(git -C "$super/mod" show-ref --verify --quiet refs/heads/claim-branch-sub-wrong && echo 0 || echo 1)"
 
-# The same repository spelled over ssh in .gitmodules and https in origin is not a mismatch. The
-# rewrite keeps the test offline: git fetches from the local upstream whatever the URL says.
+# The same repository spelled over ssh in .gitmodules and https in origin is not a mismatch.
+# GIT_ALLOW_PROTOCOL=file keeps the test offline: the advisory remote calls fail at once.
 git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:Example/Sub.git"
 git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
-git -C "$super/mod" config url."$upstream_sub".insteadOf "https://github.com/example/sub"
 rc=0
-out="$("$script" add "$super/mod" "$tmp/wt-sub-https" "claim-branch-sub-https" "session-sub-https" 2>&1)" || rc=$?
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-https" "claim-branch-sub-https" "session-sub-https" 2>&1)" || rc=$?
 check "add treats ssh and https spellings of one repository as the same" 0 "$rc" "$out" "owner=session-sub-https"
+
+# A scheme's default port is the same server; any other port can be a different one.
+git -C "$super" config -f .gitmodules submodule.mod.url "ssh://git@git.example.invalid:22/org/repo.git"
+git -C "$super/mod" config remote.origin.url "git@git.example.invalid:org/repo"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-port22" "claim-branch-sub-port22" "session-sub-port22" 2>&1)" || rc=$?
+check "add treats a default port as the same server" 0 "$rc" "$out" "owner=session-sub-port22"
+git -C "$super" config -f .gitmodules submodule.mod.url "ssh://git.example.invalid:2222/org/repo"
+git -C "$super/mod" config remote.origin.url "ssh://git.example.invalid:3333/org/repo"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-port" "claim-branch-sub-port" "session-sub-port" 2>&1)" || rc=$?
+check "add refuses an origin on another non-default port" 1 "$rc" "$out" "ssh://git.example.invalid:3333/org/repo"
+
+# A refusal never echoes a credential carried in a remote URL.
+git -C "$super" config -f .gitmodules submodule.mod.url "https://agent:gm-s3cr3t@github.com/example/sub"
+git -C "$super/mod" config remote.origin.url "https://agent:s3cr3t-token@github.com/example/other"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-cred" "claim-branch-sub-cred" "session-sub-cred" 2>&1)" || rc=$?
+check "add refuses a credential-bearing foreign origin" 1 "$rc" "$out" "origin urls:     https://***@github.com/example/other"
+check "origin refusal prints the registered URL redacted" 1 "$rc" "$out" ".gitmodules url: https://***@github.com/example/sub"
+check "origin refusal redacts both credentials" 1 "$(printf '%s' "$out" | grep -qE 's3cr3t' && echo 0 || echo 1)"
+git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:Example/Sub.git"
+git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
 
 # Stray content in a registered path that was never populated resolves to the superproject.
 mkdir -p "$super/stray"
@@ -184,6 +219,24 @@ git -C "$super" -c protocol.file.allow=always submodule add -q "$upstream_sub" "
 rc=0
 out="$("$script" add "$super/mod space" "$tmp/wt-sub-space" "claim-branch-sub-space" "session-sub-space" 2>&1)" || rc=$?
 check "add finds a submodule whose name contains a space" 0 "$rc" "$out" "owner=session-sub-space"
+
+# A linked worktree of a NESTED submodule is registered by its immediate parent, not the top level.
+outer_sub="$tmp/outer-sub"
+git init -q -b main "$outer_sub"
+git -C "$outer_sub" -c protocol.file.allow=always submodule add -q "$upstream_sub" inner 2>/dev/null
+git -C "$outer_sub" -c user.name=t -c user.email=t@example.com commit -qm "add inner"
+nest_super="$tmp/nest-super"
+git init -q -b main "$nest_super"
+git -C "$nest_super" -c protocol.file.allow=always submodule add -q "$outer_sub" outer 2>/dev/null
+git -C "$nest_super" -c protocol.file.allow=always submodule update -q --init --recursive 2>/dev/null
+git -C "$nest_super/outer/inner" worktree add -q --detach "$tmp/linked-inner"
+rc=0
+out="$("$script" add "$tmp/linked-inner" "$tmp/wt-linked-inner" "claim-branch-linked-inner" "session-linked-inner" 2>&1)" || rc=$?
+check "add admits a linked worktree of a nested submodule" 0 "$rc" "$out" "owner=session-linked-inner"
+git -C "$nest_super/outer/inner" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" add "$tmp/linked-inner" "$tmp/wt-linked-inner-wrong" "claim-branch-linked-inner-wrong" "session-linked-inner-wrong" 2>&1)" || rc=$?
+check "add refuses a nested linked worktree whose origin is another repository" 1 "$rc" "$out" "submodule sync -- inner"
 
 # ── check: mine ────────────────────────────────────────────────────────────
 rc=0
