@@ -1325,6 +1325,57 @@ expect_exempt \
   "${platform_skills_commits}" \
   "${allowed_skills_owners}"
 
+# The updater signs its commit through the GitHub API, so an unadapted head is authored by the
+# updater App itself and committed by `web-flow` (#3126). That shape is recognised only with the exact
+# App login, name and numeric-ID email for the repository.
+signed_skills_commit() {
+  jq -cn --arg head "$1" --arg login "$2" --arg id "$3" --arg committer "${4:-web-flow}" '[{
+    sha: $head,
+    author_login: $login,
+    author_name: $login,
+    author_email: "\($id)+\($login)@users.noreply.github.com",
+    committer_login: $committer,
+    committer_name: "GitHub",
+    committer_email: "noreply@github.com",
+    message: "chore(deps): update agent skills"
+  }]' | with_commit_dates
+}
+platform_signed_commits="$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876")"
+ksail_signed_commits="$(signed_skills_commit "${ksail_skills_head}" "ksail-bot[bot]" "262010955")"
+
+expect_exempt \
+  "Platform App-signed update touching only an allowlisted suite-owned skill" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" "${platform_signed_commits}" \
+  "${allowed_skills_owners}"
+
+expect_review_required \
+  "KSail App-signed update touching a third-party skill" \
+  "ksail" "app/ksail-bot" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${ksail_skills_head}" "${ksail_skills_files}" "${ksail_signed_commits}" \
+  "${ksail_skills_owners}"
+
+expect_review_gated \
+  "Platform update signed as the KSail App" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "ksail-bot[bot]" "262010955")" \
+  "${allowed_skills_owners}"
+
+expect_review_gated \
+  "Platform App-authored update with a numeric ID that is not the App's" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "1")" \
+  "${allowed_skills_owners}"
+
+expect_review_gated \
+  "Platform App-authored update not committed by web-flow" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876" "devantler")" \
+  "${allowed_skills_owners}"
+
 # The corroborator is what catches an upstream handover on a root we still allowlist, so a caller
 # that omits it must NOT be handed the carve-out — a tripwire the caller may skip never fires.
 expect_review_required \

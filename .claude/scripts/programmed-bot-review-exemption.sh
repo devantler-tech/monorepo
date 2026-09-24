@@ -249,8 +249,32 @@ matches_suite_owned_skills() {
     <<<"${files_json}" >/dev/null
 }
 
+# The updater signs its commit by creating it through the GitHub API (`sign-commits: true`,
+# devantler-tech/.github#142), so an unadapted head is authored by the updater App itself and
+# committed by GitHub's `web-flow` identity (#3126). The App login and its numeric user ID are exact
+# per repository, so this arm is as specific as the two below it rather than a loosened match.
 matches_agent_skills_provenance() {
-  jq -e '
+  local app_login="" app_id=""
+  case "${repo}" in
+  platform)
+    app_login="botantler-1[bot]"
+    app_id="185060876"
+    ;;
+  ksail)
+    app_login="ksail-bot[bot]"
+    app_id="262010955"
+    ;;
+  esac
+  jq -e --arg app_login "${app_login}" --arg app_id "${app_id}" '
+    def signed_app_authored:
+      $app_login != "" and
+      .author_login == $app_login and
+      .author_name == $app_login and
+      .author_email == "\($app_id)+\($app_login)@users.noreply.github.com" and
+      .committer_login == "web-flow" and
+      .committer_name == "GitHub" and
+      .committer_email == "noreply@github.com" and
+      .message == "chore(deps): update agent skills";
     def app_authored:
       .author_login == "devantler" and
       .author_name == "devantler" and
@@ -260,12 +284,12 @@ matches_agent_skills_provenance() {
       .author_name == "github-merge-queue" and
       .author_email == "118344674+github-merge-queue@users.noreply.github.com";
     length == 1 and
-    all(.[];
+    ((.[0] | signed_app_authored) or all(.[];
       (app_authored or merge_queue_authored) and
       .committer_login == "github-actions[bot]" and
       .committer_name == "github-actions[bot]" and
       .committer_email == "41898282+github-actions[bot]@users.noreply.github.com" and
-      .message == "chore(deps): update agent skills")
+      .message == "chore(deps): update agent skills"))
   ' <<<"${commits_json}" >/dev/null
 }
 
