@@ -23,6 +23,7 @@ keeping them healthy *and* moving them forward.
 | AWS config tenant | `devantler-tech/aws` | `applications/aws` | [AGENTS.md](https://github.com/devantler-tech/aws/blob/main/AGENTS.md) |
 | devantler.tech site | `devantler-tech/monorepo` | `docs/` + repo root | this file |
 | GitHub organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | [AGENTS.md](https://github.com/devantler-tech/.github/blob/main/AGENTS.md) |
+| GitHub organization maintenance reports | `devantler-tech/maintenance` | `github/devantler-tech/maintenance` | [AGENTS.md](https://github.com/devantler-tech/maintenance/blob/main/AGENTS.md) |
 | Go template | `devantler-tech/go-template` | `templates/go-template` | [AGENTS.md](https://github.com/devantler-tech/go-template/blob/main/AGENTS.md) |
 | .NET template | `devantler-tech/dotnet-template` | `templates/dotnet-template` | [AGENTS.md](https://github.com/devantler-tech/dotnet-template/blob/main/AGENTS.md) |
 | Platform-tenant template | `devantler-tech/platform-tenant-template` | `templates/platform-tenant-template` | [AGENTS.md](https://github.com/devantler-tech/platform-tenant-template/blob/main/AGENTS.md) |
