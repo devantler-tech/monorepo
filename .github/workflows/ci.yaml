@@ -56,6 +56,7 @@ jobs:
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
       claude-lane-liveness: ${{ steps.filter.outputs.claude-lane-liveness }}
       review-lane-health: ${{ steps.filter.outputs.review-lane-health }}
+      platform-live-health: ${{ steps.filter.outputs.platform-live-health }}
       lane-draft-count: ${{ steps.filter.outputs.lane-draft-count }}
       improver-role-disclosure: ${{ steps.filter.outputs.improver-role-disclosure }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
@@ -508,6 +509,11 @@ jobs:
             review-lane-health:
               - '.claude/scripts/review-lane-health.sh'
               - '.claude/scripts/review-lane-health.test.sh'
+              - '.github/workflows/ci.yaml'
+            platform-live-health:
+              - '.claude/scripts/platform-live-health.sh'
+              - '.claude/scripts/platform-live-health.test.sh'
+              - '.claude/scripts/prod-kube-context.sh'
               - '.github/workflows/ci.yaml'
             lane-draft-count:
               # AGENTS.md carries the cap the suite compares the script's default against, so a
@@ -2000,6 +2006,25 @@ jobs:
       - name: Verify the review lane health check
         run: bash .claude/scripts/review-lane-health.test.sh
 
+  test-platform-live-health:
+    name: Test platform live health
+    needs: changes
+    if: needs.changes.outputs.platform-live-health == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the platform live health check
+        run: bash .claude/scripts/platform-live-health.test.sh
+
   test-lane-draft-count:
     name: Test lane draft count
     needs: changes
@@ -2449,6 +2474,7 @@ jobs:
       - test-codex-lane-liveness
       - test-claude-lane-liveness
       - test-review-lane-health
+      - test-platform-live-health
       - test-lane-draft-count
       - test-self-review-contract
       - test-review-provider-loop-contract
@@ -2527,6 +2553,7 @@ jobs:
             ${{ needs.test-codex-lane-liveness.result }}
             ${{ needs.test-claude-lane-liveness.result }}
             ${{ needs.test-review-lane-health.result }}
+            ${{ needs.test-platform-live-health.result }}
             ${{ needs.test-lane-draft-count.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}

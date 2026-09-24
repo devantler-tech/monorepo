@@ -1390,6 +1390,16 @@ actionable work**:
 | **3** | **Bugs** | `type:Bug`, regardless of age. |
 | **4** | **Oldest actionable issue** | Everything else, oldest-first (see *Drain oldest-first*). |
 
+🔴 **Rung 0 includes the live prod cluster, and GitHub cannot show it.** On 2026-08-27 a merged
+platform change took cluster DNS down, every Flux source went `False`, and the survey still reported
+`nothing_on_fire: true`, because every repository was green (#3090). So every run also runs
+[`.claude/scripts/platform-live-health.sh`](.claude/scripts/platform-live-health.sh) on a host with
+the scoped prod context. It reads Flux readiness and crash-looping or image-pull-failing pods, and
+takes a few seconds. `0` is healthy, `1` is live breakage and belongs on rung 0, and `2` is
+**UNKNOWN** — an unreadable cluster, never a healthy one. `nothing_on_fire` can be `true` only
+when this check reads `0` in the same run. A host with no prod context reports `2`: the run carries
+on and says so.
+
 🔴 **Write that type filter UNQUOTED — `gh search issues` returns ZERO rows for the quoted
 form, and exits 0 while doing it.** Measured across the portfolio 2026-08-18:
 `gh search issues --owner devantler-tech --state open 'type:"Security"'` returns **0** while the
