@@ -103,7 +103,7 @@ quoted="${clean}
 <summary>🧹 Nitpick comments (2)</summary>
 </blockquote></details>
 </blockquote></details>"
-expect "summaries quoted inside the informational section are not findings" 0 "GREEN" "$(payload "${quoted}")"
+expect "a summary quoted inside the informational section is not a finding, but never green" 1 "NONE hidden-finding-sections" "$(payload "${quoted}")"
 expect "a finding section after the informational section still counts" 1 "FINDINGS 4" "$(payload "${quoted}
 <details>
 <summary>🧹 Nitpick comments (4)</summary><blockquote>
@@ -135,6 +135,18 @@ expect "an unmatched quoted tag never reads green" 1 "NONE unbalanced-sections" 
 underflow="${clean}
 The template closes a </details> and reopens a <details> here."
 expect "a walk that dips below zero never reads green" 1 "NONE unbalanced-sections" "$(payload "${underflow}")"
+# Balanced quoted tags can pull a real finding section inside the informational skip: an extra
+# quoted <details> keeps the skip open over it, and a later quoted </details> restores depth zero.
+hidden_real="${clean}
+<details>
+<summary>🔇 Additional comments (1)</summary><blockquote>
+The template opens a <details> block here.
+</blockquote></details>
+<details>
+<summary>🧹 Nitpick comments (2)</summary><blockquote>
+</blockquote></details>
+The template closes it with </details> here."
+expect "a real section hidden by balanced quoted tags never reads green" 1 "NONE hidden-finding-sections" "$(payload "${hidden_real}")"
 
 expect "only the exact informational title is excluded" 1 "FINDINGS 2" "$(payload "${clean}
 <summary>🔇 Security comments (2)</summary>")"
@@ -231,7 +243,9 @@ ablate "no informational exclusion" 'elif ($t | test("^<summary>🔇 Additional 
   "$(payload "${clean}
 <summary>🔇 Additional comments (3)</summary>")" "GREEN"
 ablate "no skip inside the informational section" '(if .d > 0 then .skip = .d else . end)' '.' \
-  "$(payload "${quoted}")" "GREEN"
+  "$(payload "${quoted}")" "NONE hidden-finding-sections"
+ablate "no hidden-section check" 'elif $walk.hidden > 0 then' 'elif false then' \
+  "$(payload "${hidden_real}")" "NONE hidden-finding-sections"
 ablate "no author bind" 'if .author != "coderabbitai[bot]"' 'if false' \
   "$(payload "${clean}" "${head}" "coderabbitai")" "NONE not-coderabbit"
 ablate "no head bind" 'elif .commit_id != .head then' 'elif false then' \

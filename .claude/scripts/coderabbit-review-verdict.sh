@@ -14,6 +14,8 @@
 #     - a review whose findings all sit outside the diff opens with the outside-diff CAUTION block
 #       and carries no marker at all, and always carries a finding (monorepo#2748);
 #     - a finding in a collapsed section counts, except `🔇 Additional comments` (informational);
+#     - a finding-shaped title inside that informational section blocks the green: balanced quoted
+#       tags can pull a real section inside it, and no tag walk can tell (monorepo#3571 review);
 #     - a did-not-run marker blocks the green but never discards a finding (monorepo#2764).
 #
 # USAGE
@@ -29,7 +31,8 @@
 #   GREEN            an identified CodeRabbit review of --head with zero actionable findings
 #   FINDINGS <n>     an identified review carrying <n> findings (actionable + finding sections)
 #   NONE <reason>    not a review result for this head; <reason> is one of not-coderabbit,
-#                    other-head, empty-container, not-a-review, did-not-run, unbalanced-sections
+#                    other-head, empty-container, not-a-review, did-not-run, unbalanced-sections,
+#                    hidden-finding-sections
 #
 # EXIT CODES
 #   0  GREEN
@@ -80,11 +83,13 @@ result="$(jq -r '
   # Sections are read from $lead: leading comments are metadata. The did-not-run scan below keeps
   # the full $body, because the CodeRabbit rate-limit marker is itself a comment.
   | ([$lead | scan("<details[^>]*>|</details>|<summary>[^<]*</summary>")]
-      | reduce .[] as $t ({d: 0, skip: null, n: 0, under: false};
+      | reduce .[] as $t ({d: 0, skip: null, n: 0, under: false, hidden: 0};
           if ($t | startswith("</details")) then
             (if .skip != null and .d <= .skip then .skip = null else . end) | .d -= 1 | (if .d < 0 then .under = true else . end)
           elif ($t | startswith("<details")) then .d += 1
-          elif .skip != null then .
+          # Inside the skipped section, a finding-shaped title is only COUNTED, never trusted: it may be
+          # quoted text, or a real section that balanced quoted tags pulled inside the skip.
+          elif .skip != null then .hidden += ([$t | scan("^<summary>[^<]*comments \\(([0-9]+)\\)</summary>$") | .[0] | tonumber] | add // 0)
           elif ($t | test("^<summary>🔇 Additional comments \\(")) then
             (if .d > 0 then .skip = .d else . end)
           else .n += ([$t | scan("^<summary>[^<]*comments \\(([0-9]+)\\)</summary>$") | .[0] | tonumber] | add // 0)
@@ -107,6 +112,8 @@ result="$(jq -r '
     elif $outside then "FINDINGS 1"
     elif $notrun then "NONE did-not-run"
     elif ($balanced | not) then "NONE unbalanced-sections"
+    # No tag walk can tell quoted tags from real ones, so GREEN needs no finding-shaped title anywhere.
+    elif $walk.hidden > 0 then "NONE hidden-finding-sections"
     else "GREEN" end
 ' <<<"$payload")" || exit 2
 
