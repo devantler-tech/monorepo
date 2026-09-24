@@ -12,6 +12,11 @@ fail() { echo "platform-live-health test: $*" >&2; exit 1; }
 # $FAKE/<first resource>.json, or fails when $FAKE/<first resource>.fail exists.
 cat >"$tmp/kubectl" <<'EOF'
 #!/usr/bin/env bash
+if [ "$1" = config ]; then
+  [ -e "$FAKE/config.fail" ] && exit 1
+  printf '{"contexts":[{"name":"admin-ctx","context":{"cluster":"prod","user":"admin"}},{"name":"prod-ctx","context":{"cluster":"prod","user":"oidc-user"}}]}'
+  exit 0
+fi
 [ "$1" = --context ] && [ "$2" = prod-ctx ] || { echo "stub: unexpected context '$2'" >&2; exit 64; }
 [ "$4" = get ] || { echo "stub: not a get" >&2; exit 64; }
 resource="${5%%,*}"
@@ -29,6 +34,15 @@ list() { printf '{"items":[%s]}' "$(IFS=,; echo "$*")"; }
 healthy_pod='{"metadata":{"namespace":"kube-system","name":"coredns-1"},"status":{"phase":"Running","containerStatuses":[{"name":"coredns","restartCount":0,"state":{"running":{}}}]}}'
 crashloop_pod='{"metadata":{"namespace":"kube-system","name":"hubble-relay-1"},"status":{"phase":"Running","containerStatuses":[{"name":"hubble-relay","restartCount":49,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}'
 pullback_init='{"metadata":{"namespace":"apps","name":"web-1"},"status":{"phase":"Pending","initContainerStatuses":[{"name":"migrate","restartCount":0,"state":{"waiting":{"reason":"ImagePullBackOff"}}}]}}'
+# deployments <name:replicas:available>... — the flux-system controller Deployments
+deployments() {
+  local items=() d n r a
+  for d in "$@"; do
+    IFS=: read -r n r a <<<"$d"
+    items+=("{\"metadata\":{\"namespace\":\"flux-system\",\"name\":\"$n\"},\"spec\":{\"replicas\":$r},\"status\":{\"availableReplicas\":$a}}")
+  done
+  list "${items[@]}"
+}
 oci_helmrepo='{"kind":"HelmRepository","metadata":{"namespace":"flux-system","name":"flux-operator"},"spec":{"type":"oci"}}'
 
 scenario() { # <name> — fresh fixture dir populated with a healthy baseline
@@ -37,6 +51,7 @@ scenario() { # <name> — fresh fixture dir populated with a healthy baseline
   mkdir -p "$FAKE"
   list "$(ready Kustomization flux-system infrastructure True)" "$(ready Kustomization flux-system apps True)" >"$FAKE/kustomizations.json"
   list "$(ready OCIRepository flux-system flux-system True)" "$oci_helmrepo" >"$FAKE/ocirepositories.json"
+  deployments source-controller:1:1 kustomize-controller:2:2 helm-controller:2:2 notification-controller:2:2 >"$FAKE/deployments.json"
   list "$healthy_pod" >"$FAKE/pods.json"
 }
 run() { set +e; KUBECTL="$tmp/kubectl" "$checker" --context prod-ctx >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
@@ -127,11 +142,48 @@ run
 expect "known failure beats an unknown" 1 "PLATFORM-HEALTH=UNHEALTHY failing=1"
 grep -qF "UNREADABLE kustomizations" "$tmp/out" || fail "the unreadable surface must still be reported beside the failure"
 
-# No context resolvable is UNKNOWN (the default path goes through prod-kube-context.sh).
-set +e
-KUBECTL="$tmp/kubectl" KUBECONFIG="$tmp/no-such-kubeconfig" "$checker" >"$tmp/out" 2>"$tmp/err"
-rc=$?
-set -e
-[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "unresolvable context: rc=$rc, want 2"; }
+# 🔴 A stored Ready=True outlives its controller: every object above stays green while nothing applies.
+scenario controller-down
+deployments source-controller:1:1 kustomize-controller:0:0 helm-controller:2:2 notification-controller:2:2 >"$FAKE/deployments.json"
+run
+expect "a controller scaled to zero" 1 "FAILING Deployment flux-system/kustomize-controller reason=scaled-to-zero"
+
+scenario controller-missing
+deployments source-controller:1:1 kustomize-controller:2:2 notification-controller:2:2 >"$FAKE/deployments.json"
+run
+expect "a deleted controller" 1 "FAILING Deployment flux-system/helm-controller reason=missing"
+
+scenario controller-unavailable
+deployments source-controller:1:0 kustomize-controller:2:2 helm-controller:2:2 notification-controller:2:2 >"$FAKE/deployments.json"
+run
+expect "a controller with no available replica" 1 "FAILING Deployment flux-system/source-controller reason=unavailable"
+
+scenario neverpull
+list '{"metadata":{"namespace":"apps","name":"web-2"},"status":{"phase":"Pending","containerStatuses":[{"name":"web","restartCount":0,"state":{"waiting":{"reason":"ErrImageNeverPull"}}}]}}' >"$FAKE/pods.json"
+run
+expect "an image that may never be pulled" 1 "FAILING Pod apps/web-2 container=web reason=ErrImageNeverPull"
+
+# One malformed object must neither pass as healthy nor hide a failing object after it.
+malformed_ks='{"kind":"Kustomization","metadata":{"namespace":"flux-system","name":"odd"},"status":{"conditions":"not-a-list"}}'
+scenario malformed
+list "$malformed_ks" "$(ready Kustomization flux-system apps True)" >"$FAKE/kustomizations.json"
+run
+expect "a malformed object is unknown" 2 "MALFORMED kustomizations flux-system/odd"
+
+scenario malformed-then-failing
+list "$malformed_ks" "$(ready Kustomization flux-system infrastructure False BuildFailed)" >"$FAKE/kustomizations.json"
+run
+expect "a failing object after a malformed one is still found" 1 "FAILING Kustomization flux-system/infrastructure reason=BuildFailed"
+
+# Without --context the context is resolved through the SAME kubectl override, choosing the scoped one.
+runresolve() { set +e; KUBECTL="$tmp/kubectl" "$checker" >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
+scenario resolve
+runresolve
+expect "the context resolves through the kubectl override" 0 "PLATFORM-HEALTH=OK"
+
+scenario resolve-fails
+touch "$FAKE/config.fail"
+runresolve
+expect "an unreadable kubeconfig is unknown" 2 "PLATFORM-HEALTH=UNKNOWN (no prod context resolved)"
 
 echo "platform-live-health test: OK"
