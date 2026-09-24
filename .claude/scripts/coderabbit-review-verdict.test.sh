@@ -130,6 +130,11 @@ The template opens a <details> block here without closing it.
 <summary>🧹 Nitpick comments (2)</summary><blockquote>
 </blockquote></details>"
 expect "an unmatched quoted tag never reads green" 1 "NONE unbalanced-sections" "$(payload "${unbalanced}")"
+# A quoted close-then-open takes the depth below zero and back, so the final depth alone reads
+# balanced. A walk that ever underflows is unbalanced.
+underflow="${clean}
+The template closes a </details> and reopens a <details> here."
+expect "a walk that dips below zero never reads green" 1 "NONE unbalanced-sections" "$(payload "${underflow}")"
 
 expect "only the exact informational title is excluded" 1 "FINDINGS 2" "$(payload "${clean}
 <summary>🔇 Security comments (2)</summary>")"
@@ -205,8 +210,10 @@ ablate "comment strip by byte offset" \
   'if test("^<!--[\\s\\S]*?-->") then sub("^<!--[\\s\\S]*?-->"; "") | strip else . end' \
   'if startswith("<!--") then (index("-->")) as $i | if $i == null then . else (.[$i + 3:] | strip) end else . end' \
   "$(payload "${multibyte_comment}")" "GREEN"
-ablate "no balance check" '($walk.d == 0 and $walk.skip == null) as $balanced' 'true as $balanced' \
+ablate "no balance check" '($walk.d == 0 and $walk.skip == null and ($walk.under | not)) as $balanced' 'true as $balanced' \
   "$(payload "${unbalanced}")" "NONE unbalanced-sections"
+ablate "no underflow check" ' and ($walk.under | not)) as $balanced' ') as $balanced' \
+  "$(payload "${underflow}")" "NONE unbalanced-sections"
 ablate "no empty-container check" 'elif ($lead | length) == 0 then "NONE empty-container"' \
   'elif false then "NONE empty-container"' "$(payload "")" "NONE empty-container"
 ablate "unanchored marker" 'test("^\\*\\*Actionable comments posted: [0-9]+\\*\\*")' 'test("\\*\\*Actionable comments posted: [0-9]+\\*\\*")' \

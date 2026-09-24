@@ -80,9 +80,9 @@ result="$(jq -r '
   # Sections are read from $lead: leading comments are metadata. The did-not-run scan below keeps
   # the full $body, because the CodeRabbit rate-limit marker is itself a comment.
   | ([$lead | scan("<details[^>]*>|</details>|<summary>[^<]*</summary>")]
-      | reduce .[] as $t ({d: 0, skip: null, n: 0};
+      | reduce .[] as $t ({d: 0, skip: null, n: 0, under: false};
           if ($t | startswith("</details")) then
-            (if .skip != null and .d <= .skip then .skip = null else . end) | .d -= 1
+            (if .skip != null and .d <= .skip then .skip = null else . end) | .d -= 1 | (if .d < 0 then .under = true else . end)
           elif ($t | startswith("<details")) then .d += 1
           elif .skip != null then .
           elif ($t | test("^<summary>🔇 Additional comments \\(")) then
@@ -92,7 +92,8 @@ result="$(jq -r '
   | $walk.n as $sections
   # Quoted code can carry an unmatched literal tag, which leaves the walk unbalanced. A skip that
   # never closed may have hidden a real section after it, so an unbalanced walk is never GREEN.
-  | ($walk.d == 0 and $walk.skip == null) as $balanced
+  # A close before its open (depth below zero) is unbalanced too, even if the depth returns to zero.
+  | ($walk.d == 0 and $walk.skip == null and ($walk.under | not)) as $balanced
   | ($actionable + $sections) as $n
   # Only did-not-run markers owned by CodeRabbit count: its structural comment, or a service-shell
   # heading at the start of a line. Prose anywhere in a review can quote those phrases.
