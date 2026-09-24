@@ -94,7 +94,7 @@ verify_asset "${thread_counter_relative}"
 # surveyor's environment widen the read-only allowlist to a program of its
 # choosing, which is exactly the bypass the SCOPE and GUARD pins above close.
 #
-# Five programs are declared, and all are READS. pr-ownership-disclosure.sh
+# Six programs are declared, and all are READS. pr-ownership-disclosure.sh
 # classifies a `devantler` PR body as the maintainer's interactive work or the
 # routine's own output. Without a route for it the surveyor falls back to
 # hand-deriving that verdict, and that substitution has already misread live
@@ -116,6 +116,10 @@ verify_asset "${thread_counter_relative}"
 # local review round at one exact head. The contract prescribes it (monorepo#3487);
 # undeclared, 3 of the first 5 surveyor dispatches after that were refused and
 # fell back to judging the round by eye (monorepo#2697).
+# coderabbit-review-verdict.sh judges ONE CodeRabbit review object on stdin against
+# one exact head. The contract names it (monorepo#3571); undeclared, the surveyor
+# kept judging review objects by eye, which is how empty reply containers were read
+# as reviews (monorepo#3572).
 #
 # Absence fails CLOSED, consistently with DESIRED_STATE above: a checkout that
 # cannot present its own reviewed files does not get a survey. Exiting 0 with
@@ -127,7 +131,8 @@ for consumer_classifier in \
   "${REPO_ROOT}/.claude/scripts/programmed-bot-review-exemption.sh" \
   "${REPO_ROOT}/.claude/scripts/pr-unresolved-threads.sh" \
   "${REPO_ROOT}/.claude/scripts/coderabbit-summary-verdict.sh" \
-  "${REPO_ROOT}/.claude/scripts/local-review-verdict.sh"; do
+  "${REPO_ROOT}/.claude/scripts/local-review-verdict.sh" \
+  "${REPO_ROOT}/.claude/scripts/coderabbit-review-verdict.sh"; do
   if [ ! -f "${consumer_classifier}" ] ||
     [ ! -x "${consumer_classifier}" ] ||
     [ -L "${consumer_classifier}" ]; then
