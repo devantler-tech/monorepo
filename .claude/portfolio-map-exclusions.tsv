@@ -1,0 +1,3 @@
+# Tracked devantler-tech submodules deliberately left out of the AGENTS.md Portfolio map.
+# One row per repository: <repo> TAB <reason>. Checked by .claude/scripts/portfolio-map-drift.sh.
+maintenance	Organization tooling rather than a product: the survey still covers it through the live repository list, but it gets no strategy review or product card (see .claude/agents/portfolio-surveyor.md).
