@@ -1329,7 +1329,8 @@ expect_exempt \
 # updater App itself and committed by `web-flow` (#3126). That shape is recognised only with the exact
 # App login, name and numeric-ID email for the repository.
 signed_skills_commit() {
-  jq -cn --arg head "$1" --arg login "$2" --arg id "$3" --arg committer "${4:-web-flow}" '[{
+  jq -cn --arg head "$1" --arg login "$2" --arg id "$3" --arg committer "${4:-web-flow}" \
+    --arg verified "${5:-true}" '[{
     sha: $head,
     author_login: $login,
     author_name: $login,
@@ -1338,7 +1339,7 @@ signed_skills_commit() {
     committer_name: "GitHub",
     committer_email: "noreply@github.com",
     message: "chore(deps): update agent skills"
-  }]' | with_commit_dates
+  } + (if $verified == "absent" then {} else {verified: ($verified == "true")} end)]' | with_commit_dates
 }
 platform_signed_commits="$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876")"
 ksail_signed_commits="$(signed_skills_commit "${ksail_skills_head}" "ksail-bot[bot]" "262010955")"
@@ -1367,6 +1368,22 @@ expect_review_gated \
   "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
   "${platform_skills_head}" "${allowed_skills_files}" \
   "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "1")" \
+  "${allowed_skills_owners}"
+
+# The identities are claims anyone who can push can write; only GitHub's signature verdict proves
+# GitHub made the commit. An unverified or unreported verdict must not reach the signed arm.
+expect_review_gated \
+  "Platform App-shaped update whose signature GitHub did not verify" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876" "web-flow" "false")" \
+  "${allowed_skills_owners}"
+
+expect_review_gated \
+  "Platform App-shaped update whose caller did not report the signature verdict" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876" "web-flow" "absent")" \
   "${allowed_skills_owners}"
 
 expect_review_gated \
