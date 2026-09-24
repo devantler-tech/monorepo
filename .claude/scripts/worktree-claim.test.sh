@@ -134,7 +134,7 @@ git -C "$super/mod" config remote.origin.url "$other_sub"
 super_phys="$(cd "$super" && pwd -P)"
 rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-wrong" "claim-branch-sub-wrong" "session-sub-wrong" 2>&1)" || rc=$?
-check "add refuses a submodule whose origin is not its .gitmodules URL" 1 "$rc" "$out" "git -C $super_phys submodule sync -- mod"
+check "add refuses a submodule whose origin is not its .gitmodules URL" 1 "$rc" "$out" "git -C '$super_phys' submodule sync -- 'mod'"
 check "origin refusal names both repositories" 1 "$rc" "$out" "$other_sub"
 check "origin refusal creates no worktree" 1 "$([ -e "$tmp/wt-sub-wrong" ] && echo 0 || echo 1)"
 check "origin refusal creates no branch" 1 "$(git -C "$super/mod" show-ref --verify --quiet refs/heads/claim-branch-sub-wrong && echo 0 || echo 1)"
@@ -167,6 +167,10 @@ out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-cred" "
 check "add refuses a credential-bearing foreign origin" 1 "$rc" "$out" "origin urls:     https://***@github.com/example/other"
 check "origin refusal prints the registered URL redacted" 1 "$rc" "$out" ".gitmodules url: https://***@github.com/example/sub"
 check "origin refusal redacts both credentials" 1 "$(grep -qE 's3cr3t' <<<"$out" && echo 0 || echo 1)"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' bash -x "$script" add "$super/mod" "$tmp/wt-sub-cred-x" "claim-branch-sub-cred-x" "session-sub-cred-x" 2>&1)" || rc=$?
+check "a traced refusal still refuses" 1 "$rc" "$out" "origin urls:     https://***@github.com/example/other"
+check "xtrace never shows a remote credential" 1 "$(grep -qE 's3cr3t' <<<"$out" && echo 0 || echo 1)"
 git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:Example/Sub.git"
 git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
 
@@ -193,6 +197,13 @@ rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-localpath" "claim-branch-sub-localpath" "session-sub-localpath" 2>&1)" || rc=$?
 check "add refuses a local path that merely looks like the registered URL" 1 "$rc" "$out" "origin urls:     github.com/example/sub"
 
+# `.git` is a network spelling; on a local path it names a different directory.
+git -C "$super" config -f .gitmodules submodule.mod.url "$upstream_sub.git"
+git -C "$super/mod" config remote.origin.url "$upstream_sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-dotgit" "claim-branch-sub-dotgit" "session-sub-dotgit" 2>&1)" || rc=$?
+check "add refuses a local path that differs only by a .git suffix" 1 "$rc" "$out" ".gitmodules url: $upstream_sub.git"
+
 # A relative .gitmodules URL resolves against the superproject's remote, as `git submodule init` does.
 mkdir -p "$tmp/remote-root"
 ln -s "$upstream_sub" "$tmp/remote-root/upstream-sub"
@@ -213,6 +224,16 @@ git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
 rc=0
 out="$("$script" add "$tmp/linked-mod" "$tmp/wt-linked-ok" "claim-branch-linked-ok" "session-linked-ok" 2>&1)" || rc=$?
 check "add admits a linked submodule worktree whose origin is registered" 0 "$rc" "$out" "owner=session-linked-ok"
+
+# acquire applies the same check to an existing submodule worktree.
+git -C "$super/mod" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" acquire "$tmp/wt-linked-ok" "session-linked-ok" 2>&1)" || rc=$?
+check "acquire refuses a submodule worktree whose origin is another repository" 1 "$rc" "$out" "$other_sub"
+git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
+rc=0
+out="$("$script" acquire "$tmp/wt-linked-ok" "session-linked-ok" 2>&1)" || rc=$?
+check "acquire renews a submodule worktree whose origin is registered" 0 "$rc" "$out" "renewed"
 
 # A submodule name may contain a space; the registration must still be found.
 git -C "$super" -c protocol.file.allow=always submodule add -q "$upstream_sub" "mod space" 2>/dev/null
@@ -236,7 +257,7 @@ check "add admits a linked worktree of a nested submodule" 0 "$rc" "$out" "owner
 git -C "$nest_super/outer/inner" config remote.origin.url "$other_sub"
 rc=0
 out="$("$script" add "$tmp/linked-inner" "$tmp/wt-linked-inner-wrong" "claim-branch-linked-inner-wrong" "session-linked-inner-wrong" 2>&1)" || rc=$?
-check "add refuses a nested linked worktree whose origin is another repository" 1 "$rc" "$out" "submodule sync -- inner"
+check "add refuses a nested linked worktree whose origin is another repository" 1 "$rc" "$out" "submodule sync -- 'inner'"
 
 # ── check: mine ────────────────────────────────────────────────────────────
 rc=0

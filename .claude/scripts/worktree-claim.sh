@@ -218,6 +218,8 @@ cmd_acquire() {
   [ -d "$wt" ] || fail "worktree path is not a directory: $wt"
   [ -n "$owner" ] || usage
   wt="$(cd "$wt" && pwd -P)" || fail "cannot resolve worktree path: $wt"
+  # An existing submodule worktree must pass the same origin check `add` applies before creating one.
+  [ "$fresh" = "fresh" ] || refuse_foreign_submodule_origin "$wt"
   acquire_lock "$wt"
   ignore_marker "$wt"
   local marker="$wt/$WORKTREE_CLAIM_MARKER_NAME" action="acquired"
@@ -552,7 +554,6 @@ refuse_uninitialized_repo() {
 normalized_remote() {
   local url="$1" scheme="ssh" before authority path port
   url="${url%/}"
-  url="${url%.git}"
   case "$url" in
     file://*)
       printf 'path:%s\n' "${url#file://}"
@@ -572,6 +573,7 @@ normalized_remote() {
       url="${url/://}"
       ;;
   esac
+  url="${url%.git}"
   authority="${url%%/*}"
   path="${url#"$authority"}"
   authority="${authority##*@}"
@@ -692,7 +694,7 @@ registering_superproject() {
 # match, as git resolves it after any url.<base>.insteadOf or pushInsteadOf rewrite: a rewrite decides
 # where commits actually go. A repository that is not a submodule is not checked: nothing names what it
 # should be.
-refuse_foreign_submodule_origin() {
+refuse_foreign_submodule_origin_checked() {
   local repo_abs="$1" super rel name="" key record common found expected="" shown_expected url actual="" matched=0 foreign=0
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
@@ -743,9 +745,21 @@ refuse_foreign_submodule_origin() {
     echo "  origin urls:     ${actual:-<none>}" >&2
     echo "  (origin urls are where git fetches and pushes, after any url.<base>.insteadOf rewrite.)" >&2
     echo "  Work committed here would land in the wrong repository. Point origin at the registered URL:" >&2
-    echo "    git -C $super submodule sync -- $rel" >&2
+    echo "    git -C $(shquote "$super") submodule sync -- $(shquote "$rel")" >&2
     echo "  and remove any remote.origin.pushurl or url.<base>.insteadOf rule that names another repository." >&2
     exit 1
+  fi
+}
+
+# refuse_foreign_submodule_origin runs the check with xtrace off: remote URLs can carry credentials,
+# and `bash -x` would print them before they are redacted.
+refuse_foreign_submodule_origin() {
+  if [[ $- == *x* ]]; then
+    set +x
+    refuse_foreign_submodule_origin_checked "$@"
+    set -x
+  else
+    refuse_foreign_submodule_origin_checked "$@"
   fi
 }
 
