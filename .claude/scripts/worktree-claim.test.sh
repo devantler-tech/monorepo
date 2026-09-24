@@ -116,17 +116,17 @@ rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-ok" "claim-branch-sub-ok" "session-sub-ok" 2>&1)" || rc=$?
 check "add succeeds on a correctly populated submodule" 0 "$rc" "$out" "owner=session-sub-ok"
 
-# A URL rewrite decides where git really fetches and pushes, so an origin configured with the
-# registered URL is still refused when a rewrite sends it to another repository.
+# The submodule's own URL rewrite decides where git really fetches and pushes, so an origin
+# configured with the registered URL is still refused when such a rewrite sends it elsewhere.
 git -C "$super/mod" config url."$other_sub".insteadOf "$upstream_sub"
 rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-insteadof" "claim-branch-sub-insteadof" "session-sub-insteadof" 2>&1)" || rc=$?
-check "add refuses an origin that insteadOf rewrites to another repository" 1 "$rc" "$out" "origin urls:     $other_sub"
+check "add refuses an origin its own insteadOf rewrites to another repository" 1 "$rc" "$out" "redirected by:   url.<base>.insteadOf"
 git -C "$super/mod" config --unset url."$other_sub".insteadOf
 git -C "$super/mod" config url."$other_sub".pushInsteadOf "$upstream_sub"
 rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-pushinsteadof" "claim-branch-sub-pushinsteadof" "session-sub-pushinsteadof" 2>&1)" || rc=$?
-check "add refuses an origin that pushInsteadOf rewrites to another repository" 1 "$rc" "$out" "$upstream_sub, $other_sub"
+check "add refuses an origin its own pushInsteadOf rewrites to another repository" 1 "$rc" "$out" "redirected by:   url.<base>.pushInsteadOf"
 git -C "$super/mod" config --unset url."$other_sub".pushInsteadOf
 
 git -C "$super/mod" config remote.origin.url "$other_sub"
@@ -139,32 +139,38 @@ check "origin refusal names both repositories" 1 "$rc" "$out" "$other_sub"
 check "origin refusal creates no worktree" 1 "$([ -e "$tmp/wt-sub-wrong" ] && echo 0 || echo 1)"
 check "origin refusal creates no branch" 1 "$(git -C "$super/mod" show-ref --verify --quiet refs/heads/claim-branch-sub-wrong && echo 0 || echo 1)"
 
-# The same repository spelled over ssh in .gitmodules and https in origin is not a mismatch.
+# origin must be the registered URL itself. A spelling git may treat as the same repository is still
+# refused, because whether it is depends on the server, and `submodule sync` restores the exact URL.
 # GIT_ALLOW_PROTOCOL=file keeps the test offline: the advisory remote calls fail at once.
-git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:example/sub.git"
-git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
+spelling=0
+for pair in \
+  "git@github.com:example/sub.git|https://github.com/example/sub" \
+  "ssh://git@git.example.invalid:22/org/repo.git|git@git.example.invalid:org/repo" \
+  "ssh://git@Git.Example.invalid/org/repo|ssh://git@git.example.invalid/org/repo" \
+  "git@git.example.invalid:repos/app.git|ssh://git@git.example.invalid/repos/app.git" \
+  "ssh://git@git.example.invalid/repos/app.git|ssh://git@git.example.invalid/repos/app" \
+  "file://localhost$upstream_sub|$upstream_sub"; do
+  git -C "$super" config -f .gitmodules submodule.mod.url "${pair%%|*}"
+  git -C "$super/mod" config remote.origin.url "${pair#*|}"
+  rc=0
+  spelling=$((spelling + 1))
+  out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-spelling-$spelling" "claim-branch-sub-spelling-$spelling" "session-sub-spelling" 2>&1)" || rc=$?
+  check "add refuses origin ${pair#*|} for registered ${pair%%|*}" 1 "$rc" "$out" "submodule sync -- 'mod'"
+done
+git -C "$super/mod" config remote.origin.url "file://localhost$upstream_sub"
 rc=0
-out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-https" "claim-branch-sub-https" "session-sub-https" 2>&1)" || rc=$?
-check "add treats ssh and https spellings of one repository as the same" 0 "$rc" "$out" "owner=session-sub-https"
+out="$("$script" add "$super/mod" "$tmp/wt-sub-fileurl" "claim-branch-sub-fileurl" "session-sub-fileurl" 2>&1)" || rc=$?
+check "add admits an origin that is exactly the registered file URL" 0 "$rc" "$out" "owner=session-sub-fileurl"
 
-# A scheme's default port is the same server; any other port can be a different one.
-git -C "$super" config -f .gitmodules submodule.mod.url "ssh://git@git.example.invalid:22/org/repo.git"
-git -C "$super/mod" config remote.origin.url "git@git.example.invalid:org/repo"
-rc=0
-out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-port22" "claim-branch-sub-port22" "session-sub-port22" 2>&1)" || rc=$?
-check "add treats a default port as the same server" 0 "$rc" "$out" "owner=session-sub-port22"
+# Any other port can be a different server.
 git -C "$super" config -f .gitmodules submodule.mod.url "ssh://git.example.invalid:2222/org/repo"
 git -C "$super/mod" config remote.origin.url "ssh://git.example.invalid:3333/org/repo"
 rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-port" "claim-branch-sub-port" "session-sub-port" 2>&1)" || rc=$?
 check "add refuses an origin on another non-default port" 1 "$rc" "$out" "ssh://git.example.invalid:3333/org/repo"
 
-# Only the host is case-folded: a server may treat repository paths case-sensitively.
-git -C "$super" config -f .gitmodules submodule.mod.url "ssh://git@Git.Example.invalid/Org/Repo"
-git -C "$super/mod" config remote.origin.url "ssh://git@git.example.invalid/Org/Repo"
-rc=0
-out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-hostcase" "claim-branch-sub-hostcase" "session-sub-hostcase" 2>&1)" || rc=$?
-check "add treats host names case-insensitively" 0 "$rc" "$out" "owner=session-sub-hostcase"
+# A server may treat repository paths case-sensitively.
+git -C "$super" config -f .gitmodules submodule.mod.url "ssh://git@git.example.invalid/Org/Repo"
 git -C "$super/mod" config remote.origin.url "ssh://git@git.example.invalid/org/repo"
 rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-pathcase" "claim-branch-sub-pathcase" "session-sub-pathcase" 2>&1)" || rc=$?
@@ -181,7 +187,7 @@ rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-sshuser-ok" "claim-branch-sub-sshuser-ok" "session-sub-sshuser-ok" 2>&1)" || rc=$?
 check "add admits an origin under the same ssh user" 0 "$rc" "$out" "owner=session-sub-sshuser-ok"
 
-# Outside github.com, ssh and https on one host can serve different repositories.
+# ssh and https on one host can serve different repositories.
 git -C "$super" config -f .gitmodules submodule.mod.url "ssh://git@git.example.invalid:22/org/repo"
 git -C "$super/mod" config remote.origin.url "https://git.example.invalid:443/org/repo"
 rc=0
@@ -196,16 +202,20 @@ out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-hostgit
 check "add refuses an origin whose host differs only by a .git suffix" 1 "$rc" "$out" "origin urls:     ssh://forge/"
 
 # git reads `file://<host>/<path>` as /<path>, so a relative path that repeats the host is another
-# repository, and the absolute path is the same one.
+# repository.
 git -C "$super" config -f .gitmodules submodule.mod.url "file://localhost$upstream_sub"
 git -C "$super/mod" config remote.origin.url "localhost$upstream_sub"
 rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-filehost" "claim-branch-sub-filehost" "session-sub-filehost" 2>&1)" || rc=$?
 check "add refuses a relative path that repeats a file URL's host" 1 "$rc" "$out" "origin urls:     localhost$upstream_sub"
-git -C "$super/mod" config remote.origin.url "$upstream_sub"
+
+# A query or fragment can carry a credential too.
+git -C "$super" config -f .gitmodules submodule.mod.url "https://github.com/example/sub"
+git -C "$super/mod" config remote.origin.url "https://github.com/example/other?access_token=q-s3cr3t#f-s3cr3t"
 rc=0
-out="$("$script" add "$super/mod" "$tmp/wt-sub-fileabs" "claim-branch-sub-fileabs" "session-sub-fileabs" 2>&1)" || rc=$?
-check "add treats a file URL as the absolute path git reads it as" 0 "$rc" "$out" "owner=session-sub-fileabs"
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-query" "claim-branch-sub-query" "session-sub-query" 2>&1)" || rc=$?
+check "add refuses an origin with a credential in its query" 1 "$rc" "$out" "origin urls:     https://github.com/example/other?***"
+check "origin refusal redacts a query credential" 1 "$(grep -qE 's3cr3t' <<<"$out" && echo 0 || echo 1)"
 
 # A refusal never echoes a credential carried in a remote URL.
 git -C "$super" config -f .gitmodules submodule.mod.url "https://agent:gm-s3cr3t@github.com/example/sub"
@@ -219,8 +229,20 @@ rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' bash -x "$script" add "$super/mod" "$tmp/wt-sub-cred-x" "claim-branch-sub-cred-x" "session-sub-cred-x" 2>&1)" || rc=$?
 check "a traced refusal still refuses" 1 "$rc" "$out" "origin urls:     https://***@github.com/example/other"
 check "xtrace never shows a remote credential" 1 "$(grep -qE 's3cr3t' <<<"$out" && echo 0 || echo 1)"
-git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:example/sub.git"
+git -C "$super" config -f .gitmodules submodule.mod.url "https://github.com/example/sub"
 git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
+
+# The submodule's own ssh command is what fetch and push run. A global one applies to every
+# repository, the superproject included, so it is not this check's concern.
+git -C "$super/mod" config core.sshCommand "ssh -o ProxyCommand=true"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-sshcmd" "claim-branch-sub-sshcmd" "session-sub-sshcmd" 2>&1)" || rc=$?
+check "add refuses a submodule whose own config sets core.sshCommand" 1 "$rc" "$out" "redirected by:   core.sshCommand"
+git -C "$super/mod" config --unset core.sshCommand
+printf '[core]\n\tsshCommand = ssh -v\n' >"$tmp/global-ssh.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-ssh.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-sshcmd-global" "claim-branch-sub-sshcmd-global" "session-sub-sshcmd-global" 2>&1)" || rc=$?
+check "add admits a submodule when only global config sets core.sshCommand" 0 "$rc" "$out" "owner=session-sub-sshcmd-global"
 
 # Stray content in a registered path that was never populated resolves to the superproject.
 mkdir -p "$super/stray"
@@ -299,6 +321,18 @@ git -C "$super" config -f .gitmodules submodule.mod.url "../../../../sub.git"
 rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-relroot-over" "claim-branch-sub-relroot-over" "session-sub-relroot-over" 2>&1)" || rc=$?
 check "add refuses a relative URL that climbs further than git can resolve" 1 "$rc" "$out" "climbs past the root of the superproject's remote"
+
+# A global rewrite applies to every repository, so an origin written exactly as `submodule sync`
+# resolves the relative URL is admitted even though the rewrite changes where it fetches.
+mkdir -p "$tmp/mirror"
+ln -s "$upstream_sub" "$tmp/mirror/sub.git"
+printf '[url "%s/"]\n\tinsteadOf = alias:\n' "$tmp/mirror" >"$tmp/global-mirror.gitconfig"
+git -C "$super" config remote.origin.url "alias:super.git"
+git -C "$super" config -f .gitmodules submodule.mod.url "../sub.git"
+git -C "$super/mod" config remote.origin.url "alias:sub.git"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-mirror.gitconfig" "$script" add "$super/mod" "$tmp/wt-sub-mirror" "claim-branch-sub-mirror" "session-sub-mirror" 2>&1)" || rc=$?
+check "add admits an origin a global rewrite sends to a mirror" 0 "$rc" "$out" "owner=session-sub-mirror"
 git -C "$super" config remote.origin.url "$tmp/remote-root/super"
 git -C "$super" config -f .gitmodules submodule.mod.url "../upstream-sub"
 git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
@@ -377,6 +411,21 @@ git -C "$sep_super/mod" config remote.origin.url "$other_sub"
 rc=0
 out="$("$script" add "$tmp/sep-linked" "$tmp/wt-sep-wrong" "claim-branch-sep-wrong" "session-sep-wrong" 2>&1)" || rc=$?
 check "add refuses a separate-git-dir superproject's linked submodule with a foreign origin" 1 "$rc" "$out" "submodule sync -- 'mod'"
+# With extensions.worktreeConfig, core.worktree can live in config.worktree instead of config.
+sep_common="$(git -C "$sep_super/mod" rev-parse --path-format=absolute --git-common-dir)"
+sep_worktree="$(git --git-dir="$sep_common" config --get core.worktree)"
+git --git-dir="$sep_common" config extensions.worktreeConfig true
+git --git-dir="$sep_common" config --unset core.worktree
+git --git-dir="$sep_common" config --worktree core.worktree "$sep_worktree"
+rc=0
+out="$("$script" add "$tmp/sep-linked" "$tmp/wt-sep-wtconfig" "claim-branch-sep-wtconfig" "session-sep-wtconfig" 2>&1)" || rc=$?
+check "add refuses a foreign origin when core.worktree lives in config.worktree" 1 "$rc" "$out" "submodule sync -- 'mod'"
+# Without its main checkout nothing leads to the superproject, so the worktree is refused, not waved through.
+mv "$sep_super/mod" "$tmp/sep-mod-away"
+rc=0
+out="$("$script" add "$tmp/sep-linked" "$tmp/wt-sep-orphan" "claim-branch-sep-orphan" "session-sep-orphan" 2>&1)" || rc=$?
+check "add refuses a submodule worktree whose superproject cannot be found" 1 "$rc" "$out" "no superproject registers it"
+mv "$tmp/sep-mod-away" "$sep_super/mod"
 
 # When two .gitmodules sections claim one path, git initializes it from the later one.
 git -C "$super" config -f .gitmodules submodule.dup.path mod
