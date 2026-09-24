@@ -166,7 +166,7 @@ rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-cred" "claim-branch-sub-cred" "session-sub-cred" 2>&1)" || rc=$?
 check "add refuses a credential-bearing foreign origin" 1 "$rc" "$out" "origin urls:     https://***@github.com/example/other"
 check "origin refusal prints the registered URL redacted" 1 "$rc" "$out" ".gitmodules url: https://***@github.com/example/sub"
-check "origin refusal redacts both credentials" 1 "$(printf '%s' "$out" | grep -qE 's3cr3t' && echo 0 || echo 1)"
+check "origin refusal redacts both credentials" 1 "$(grep -qE 's3cr3t' <<<"$out" && echo 0 || echo 1)"
 git -C "$super" config -f .gitmodules submodule.mod.url "git@github.com:Example/Sub.git"
 git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
 
