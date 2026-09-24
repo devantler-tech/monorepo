@@ -38,6 +38,9 @@ native ask tool in an interactive session. An issue comment alone is not an ask.
 Sources (exactly one): --org <org> or --input <file>|-
 Options: --today <YYYY-MM-DD> (default UTC today)
          --ask-max-age-days <n> (default 14)
+         --verify-max-age-days <n> (default 7; an otherwise conforming record
+                       whose last-verified date is older is reported STALE,
+                       because skipping a blocked issue needs a live check)
          --quiet (findings only)
          --ask-digest (emit declared authority blockers with missing or stale
                        ask records, oldest first, for verification before
@@ -55,11 +58,12 @@ var (
 )
 
 type options struct {
-	org, input string
-	today      time.Time
-	maxAge     int64
-	quiet      bool
-	askDigest  bool
+	org, input   string
+	today        time.Time
+	maxAge       int64
+	verifyMaxAge int64
+	quiet        bool
+	askDigest    bool
 }
 
 func civilDate(value string) (time.Time, error) {
@@ -70,7 +74,7 @@ func civilDate(value string) (time.Time, error) {
 }
 
 func arguments(args []string) (options, bool, error) {
-	o := options{maxAge: 14}
+	o := options{maxAge: 14, verifyMaxAge: 7}
 	today := time.Now().UTC().Format("2006-01-02")
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -81,7 +85,7 @@ func arguments(args []string) (options, bool, error) {
 			o.quiet = true
 		case "--ask-digest":
 			o.askDigest = true
-		case "--org", "--input", "--today", "--ask-max-age-days":
+		case "--org", "--input", "--today", "--ask-max-age-days", "--verify-max-age-days":
 			i++
 			if i == len(args) {
 				return o, false, fmt.Errorf("%s requires a value", arg)
@@ -94,14 +98,19 @@ func arguments(args []string) (options, bool, error) {
 				o.input = value
 			case "--today":
 				today = value
-			case "--ask-max-age-days":
+			case "--ask-max-age-days", "--verify-max-age-days":
 				if len(value) > 9 {
-					return o, false, errors.New("--ask-max-age-days must have at most 9 digits")
+					return o, false, fmt.Errorf("%s must have at most 9 digits", arg)
 				}
 				if value == "" || strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-					return o, false, errors.New("--ask-max-age-days must be a non-negative integer")
+					return o, false, fmt.Errorf("%s must be a non-negative integer", arg)
 				}
-				o.maxAge, _ = strconv.ParseInt(value, 10, 64)
+				days, _ := strconv.ParseInt(value, 10, 64)
+				if arg == "--ask-max-age-days" {
+					o.maxAge = days
+				} else {
+					o.verifyMaxAge = days
+				}
 			}
 		default:
 			return o, false, fmt.Errorf("unknown argument %q", arg)
@@ -240,7 +249,8 @@ func classify(line string, today time.Time, maxAge int64) (string, bool) {
 	if verification == nil {
 		return "MALFORMED", false
 	}
-	if _, err := civilDate(verification[1]); err != nil {
+	// A future verification date cannot be fresh evidence, so it is never read as one.
+	if verified, err := civilDate(verification[1]); err != nil || verified.After(today) {
 		return "MALFORMED", false
 	}
 	result := strings.SplitN(verification[2], "| asked ", 2)[0]
@@ -264,6 +274,28 @@ func classify(line string, today time.Time, maxAge int64) (string, bool) {
 		return "STALE-ASK", legacy
 	}
 	return "CONFORMS", legacy
+}
+
+// staleVerification reports whether an otherwise conforming record was last
+// verified more than maxAge days before today. A blocker skip requires a live
+// re-verification on every run, and a `blocked` label never expires, so a
+// record nobody has re-checked can park an issue indefinitely while its shape
+// still conforms (#3161). Callers apply it only to records classify accepted,
+// which already rejects an unparseable or future date.
+func staleVerification(line string, today time.Time, maxAge int64) bool {
+	parts := strings.Split(line, " | last-verified ")
+	if len(parts) != 2 {
+		return false
+	}
+	verification := verificationRE.FindStringSubmatch(parts[1])
+	if verification == nil {
+		return false
+	}
+	verified, err := civilDate(verification[1])
+	if err != nil {
+		return false
+	}
+	return today.Unix()/86400-verified.Unix()/86400 > maxAge
 }
 
 // askRow is one declared authority blocker with a missing or stale ask record.
@@ -550,6 +582,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	for _, item := range issues {
 		line := visibleRecord(item.Body)
 		verdict, legacy := classify(line, o.today, o.maxAge)
+		if verdict == "CONFORMS" && staleVerification(line, o.today, o.verifyMaxAge) {
+			verdict = "STALE"
+		}
 		// Include stale ask records so their current need is verified alongside
 		// missing records, without treating either as proof the maintainer must act.
 		if verdict == "NO-ASK" || verdict == "STALE-ASK" {
@@ -607,7 +642,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if bad > 0 {
 		if !o.quiet {
-			_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: %d of %d open blocked-labelled issue(s) need repair (missing, malformed, or an unraised authority blocker).\n", bad, len(issues))
+			_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: %d of %d open blocked-labelled issue(s) need repair (missing, malformed, not re-verified recently, or an unraised authority blocker).\n", bad, len(issues))
 		}
 		return emit(report.String(), 1)
 	}

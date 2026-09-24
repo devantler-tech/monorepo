@@ -20,7 +20,13 @@ trap 'rm -rf "$TMP"' EXIT
 
 go -C "$HERE/blocked-label-blocker-line-go" test ./... || exit 2
 go -C "$HERE/blocked-label-blocker-line-go" build -o "$TMP/guard" . || exit 2
-CHECK="$TMP/guard"
+# The fixtures below pin record SHAPES and carry fixed dates, so they run with the
+# verification-age bound switched off; the STALE cases at the end pass --today and
+# test the bound itself. Without this the suite would turn red as the calendar moves.
+GUARD="$TMP/guard"
+printf '#!/usr/bin/env bash\nexec "%s" --verify-max-age-days 999999999 "$@"\n' "$GUARD" >"$TMP/guard-shapes"
+chmod +x "$TMP/guard-shapes"
+CHECK="$TMP/guard-shapes"
 
 pass=0
 fail=0
@@ -302,7 +308,7 @@ expect_rc "month 13 is MALFORMED" 1 "$TMP/baddate2.json"
 # CONTROL: a boundary date that IS real must still pass, so the range check is not simply
 # rejecting everything.
 cat >"$TMP/gooddate.json" <<'EOF'
-[{"repo":"p","number":25,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-12-31: nope"}]
+[{"repo":"p","number":25,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2025-12-31: nope"}]
 EOF
 expect_rc "control: a real boundary date conforms" 0 "$TMP/gooddate.json"
 
@@ -624,8 +630,8 @@ if [ "$RC" = 2 ]; then ok "--today on an impossible date is a usage error"; else
 if grep -q -- '--today must be a real' <<<"$OUT"; then ok "and names --today as the cause"; else bad "and names --today as the cause" "out=${OUT:0:200}"; fi
 
 # CONTROL: the well-formed shape is still what is rejected -- a real boundary date is accepted
-# (on an upstream record, so no ask date can read as future against a February clock).
-OUT="$("$CHECK" --input "$TMP/cls-upstream.json" --today 2026-02-28 2>&1)"; RC=$?
+# (on an upstream record verified before it, so no date can read as future against the clock).
+OUT="$("$CHECK" --input "$TMP/cls-upstream.json" --today 2026-12-31 2>&1)"; RC=$?
 if [ "$RC" = 0 ]; then ok "CONTROL: --today on a real boundary date is accepted"; else bad "CONTROL: --today on a real boundary date is accepted" "rc=$RC out=${OUT:0:200}"; fi
 
 # ------------------------------------------------------------------ 36. year zero is outside the arithmetic domain
@@ -757,10 +763,23 @@ fi
 # Exercise the installed entrypoint as a caller, including stdin/argument forwarding
 # and both successful and findings exit codes. Keep the large fixture suite fast
 # by running its individual cases through the compiled binary above.
-OUT="$("$WRAPPER" --quiet --input "$TMP/good.json" 2>&1)"; RC=$?
+OUT="$("$WRAPPER" --quiet --verify-max-age-days 999999999 --input "$TMP/good.json" 2>&1)"; RC=$?
 if [ "$RC" = 0 ] && [ -z "$OUT" ]; then ok "shell entrypoint forwards quiet success"; else bad "shell entrypoint forwards quiet success" "rc=$RC out=$OUT"; fi
 OUT="$("$WRAPPER" --quiet --input - <"$TMP/missing.json" 2>&1)"; RC=$?
 if [ "$RC" = 1 ] && [ "$OUT" = 'MISSING    b#2' ]; then ok "shell entrypoint forwards stdin and findings status"; else bad "shell entrypoint forwards stdin and findings status" "rc=$RC out=$OUT"; fi
+
+# A record whose shape conforms but whose last verification is older than the bound
+# is a finding (#3161): skipping a blocked issue needs a live re-check, and a label
+# never expires. These run the unwrapped guard, so the default bound applies.
+printf '[{"repo":"s","number":1,"body":"**Blocker:** o/r#7 | upstream | last-verified 2026-09-01: pending"}]' >"$TMP/verify-age.json"
+OUT="$("$GUARD" --input "$TMP/verify-age.json" --today 2026-09-08 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && grep -q '^CONFORMS' <<<"$OUT"; then ok "a record verified exactly 7 days ago conforms"; else bad "a record verified exactly 7 days ago conforms" "rc=$RC out=$OUT"; fi
+OUT="$("$GUARD" --input "$TMP/verify-age.json" --today 2026-09-09 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && grep -q '^STALE      s#1' <<<"$OUT"; then ok "a record verified 8 days ago is STALE by default"; else bad "a record verified 8 days ago is STALE by default" "rc=$RC out=$OUT"; fi
+OUT="$("$GUARD" --input "$TMP/verify-age.json" --today 2026-09-09 --verify-max-age-days 30 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "the verification bound is a flag"; else bad "the verification bound is a flag" "rc=$RC out=$OUT"; fi
+OUT="$("$GUARD" --input "$TMP/verify-age.json" --today 2026-08-31 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && grep -q '^MALFORMED' <<<"$OUT"; then ok "a future verification date is never fresh"; else bad "a future verification date is never fresh" "rc=$RC out=$OUT"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1

@@ -123,7 +123,7 @@ func TestQuietEmitsOnlyFindingRecords(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, stderr bytes.Buffer
-			code := run([]string{"--quiet", "--input", "-"}, strings.NewReader(tc.input), &out, &stderr)
+			code := run([]string{"--quiet", "--today", "2026-09-02", "--input", "-"}, strings.NewReader(tc.input), &out, &stderr)
 			if code != tc.code || out.String() != tc.want || stderr.Len() != 0 {
 				t.Fatalf("code=%d output=%q stderr=%q; want code=%d output=%q", code, out.String(), stderr.String(), tc.code, tc.want)
 			}
@@ -537,6 +537,47 @@ func TestAskDigestFlagsLegacyAndActionlessRows(t *testing.T) {
 	for identifier, flagged := range opaqueRows {
 		if !flagged {
 			t.Errorf("identifier-only row %q must be flagged; got %q", identifier, got)
+		}
+	}
+}
+
+// A record re-verified long ago still has a conforming shape, but a blocker
+// skip needs a live check, so it is reported STALE (#3161).
+func TestStaleVerificationIsAFinding(t *testing.T) {
+	record := func(date string) string {
+		return `[{"repo":"r","number":1,"body":"**Blocker:** o/r#7 | upstream | last-verified ` + date + `: pending"}]`
+	}
+	for _, tc := range []struct {
+		name, input string
+		args        []string
+		want        string
+		code        int
+	}{
+		{"fresh today", record("2026-09-10"), nil, "CONFORMS", 0},
+		{"exactly at the bound", record("2026-09-03"), nil, "CONFORMS", 0},
+		{"one day past the bound", record("2026-09-02"), nil, "STALE", 1},
+		{"bound is a flag", record("2026-09-02"), []string{"--verify-max-age-days", "8"}, "CONFORMS", 0},
+		{"zero bound flags yesterday", record("2026-09-09"), []string{"--verify-max-age-days", "0"}, "STALE", 1},
+		{"future date is never fresh", record("2026-09-11"), nil, "MALFORMED", 1},
+		{"stale authority without an ask stays NO-ASK", `[{"repo":"r","number":1,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-08-01: pending"}]`, nil, "NO-ASK", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, stderr bytes.Buffer
+			args := append([]string{"--today", "2026-09-10", "--input", "-"}, tc.args...)
+			code := run(args, strings.NewReader(tc.input), &out, &stderr)
+			if code != tc.code || !strings.HasPrefix(out.String(), tc.want+" ") {
+				t.Fatalf("code=%d output=%q stderr=%q; want code=%d verdict=%s", code, out.String(), stderr.String(), tc.code, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyMaxAgeRejectsNonIntegers(t *testing.T) {
+	for _, value := range []string{"", "-1", "7d", "1234567890"} {
+		var out, stderr bytes.Buffer
+		code := run([]string{"--verify-max-age-days", value, "--input", "-"}, strings.NewReader(`[]`), &out, &stderr)
+		if code != 2 || !strings.Contains(stderr.String(), "--verify-max-age-days") {
+			t.Fatalf("value %q: code=%d stderr=%q; want UNKNOWN naming the flag", value, code, stderr.String())
 		}
 	}
 }
