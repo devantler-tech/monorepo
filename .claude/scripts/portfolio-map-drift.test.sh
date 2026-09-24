@@ -114,6 +114,13 @@ asserts=$(( asserts + 1 ))
 d=$(mkroot "$MODULES" "$MAP_KSAIL_ONLY")
 expect "repo outside the map section" 1 '^MISSING platform \(platform\)' "$d"
 
+# GitHub owners are case-insensitive: a mixed-case owner is still a tracked devantler-tech repo.
+d=$(mkroot "$MODULES
+[submodule \"docs-x\"]
+	path = docs-x
+	url = https://github.com/Devantler-Tech/docs-x.git" "$MAP_BOTH")
+expect "mixed-case owner" 1 '^MISSING docs-x \(docs-x\)' "$d"
+
 # An unrecognised URL spelling is UNKNOWN, never skipped.
 d=$(mkroot "$MODULES
 [submodule \"x\"]

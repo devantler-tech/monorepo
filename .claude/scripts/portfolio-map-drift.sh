@@ -79,7 +79,7 @@ while IFS=' ' read -r key url; do
   case "$repo" in
     ''|*/*) die_unknown "unrecognised submodule URL for $path" ;;
   esac
-  [ "$owner" = "devantler-tech" ] || continue
+  [ "$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]')" = "devantler-tech" ] || continue
   submodules="$submodules$path $repo
 "
 done <<EOF
