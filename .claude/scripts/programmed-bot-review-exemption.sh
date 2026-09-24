@@ -200,13 +200,25 @@ matches_agent_skills_files() {
 # copy, not whether its prose preserves the consumer's authority boundaries. Exit 3 distinguishes a
 # genuine, trusted updater PR that requires review from both the no-review exemption (0) and an
 # untrusted lookalike (1).
+# With no argument, any bundled skill may change. With a per-skill path (`plugins/<plugin>/skills/<skill>`,
+# agent-plugins#241), the skill files must all sit under that one skill, and the generated files must
+# belong to its own plugin — so a per-skill PR cannot carry a second skill's update past review routing.
 matches_agent_plugins_review_files() {
-  jq -e '
+  local skill_path="${1-}" skill_re plugin_re
+  if [[ -n "${skill_path}" ]]; then
+    skill_re="^${skill_path}/.+"
+    plugin_re="${skill_path%%/skills/*}"
+  else
+    skill_re="^plugins/[^/]+/skills/[^/]+/.+"
+    plugin_re="plugins/[^/]+"
+  fi
+  jq -e --arg skill "${skill_re}" --arg plugin "${plugin_re}" '
     length > 0 and
-    any(.[]; test("^plugins/[^/]+/skills/[^/]+/.+")) and
+    any(.[]; test($skill)) and
     all(.[];
-      test("^plugins/[^/]+/skills/[^/]+/.+") or
-      test("^plugins/[^/]+/(\\.claude-plugin/)?plugin\\.json$") or
+      test($skill) or
+      test("^\($plugin)/(\\.claude-plugin/)?plugin\\.json$") or
+      test("^\($plugin)/resources/provider-neutral\\.desired-state\\.json$") or
       . == ".claude-plugin/marketplace.json" or
       . == ".github/plugin/marketplace.json")
   ' <<<"${files_json}" >/dev/null
@@ -303,26 +315,47 @@ matches_agent_skills_provenance() {
   ' <<<"${commits_json}" >/dev/null
 }
 
+# The sync commit comes first, carrying the exact expected message. It is either the legacy shape or
+# the App-signed one the updater writes once it signs through the API, which is recognised only with
+# GitHub's own signature verdict, as in the consumer arm above. After it, the caller's follow-up jobs
+# may add a digest refresh and a version bump, each at most once and in either order; anything else,
+# an adaptation commit included, is not the updater's head.
 matches_agent_plugins_review_provenance() {
-  jq -e '
-    def skill_update:
+  local sync_message="$1"
+  jq -e --arg sync_message "${sync_message}" '
+    def actions_bot_authored:
+      .author_login == "github-actions[bot]" and
+      .author_name == "github-actions[bot]" and
+      .author_email == "41898282+github-actions[bot]@users.noreply.github.com";
+    def actions_bot_committed:
+      .committer_login == "github-actions[bot]" and
+      .committer_name == "github-actions[bot]" and
+      .committer_email == "41898282+github-actions[bot]@users.noreply.github.com";
+    def legacy_skill_update:
       .author_login == "devantler" and
       .author_name == "devantler" and
       .author_email == "26203420+devantler@users.noreply.github.com" and
-      .committer_login == "github-actions[bot]" and
-      .committer_name == "github-actions[bot]" and
-      .committer_email == "41898282+github-actions[bot]@users.noreply.github.com" and
-      .message == "chore(deps): update agent skills";
-    def version_bump:
-      .author_login == "github-actions[bot]" and
-      .author_name == "github-actions[bot]" and
-      .author_email == "41898282+github-actions[bot]@users.noreply.github.com" and
-      .committer_login == "github-actions[bot]" and
-      .committer_name == "github-actions[bot]" and
-      .committer_email == "41898282+github-actions[bot]@users.noreply.github.com" and
-      .message == "chore(deps): bump versions of changed plugins";
-    (length == 1 and (.[0] | skill_update)) or
-    (length == 2 and (.[0] | skill_update) and (.[1] | version_bump))
+      actions_bot_committed;
+    def signed_skill_update:
+      .verified == true and
+      .author_login == "botantler-1[bot]" and
+      .author_name == "botantler-1[bot]" and
+      .author_email == "185060876+botantler-1[bot]@users.noreply.github.com" and
+      .committer_login == "web-flow" and
+      .committer_name == "GitHub" and
+      .committer_email == "noreply@github.com";
+    def skill_update:
+      (legacy_skill_update or signed_skill_update) and .message == $sync_message;
+    def follow_up($message):
+      actions_bot_authored and actions_bot_committed and .message == $message;
+    def follow_ups: [
+      "chore(deps): refresh desired-state digests for synced content",
+      "chore(deps): bump versions of changed plugins"
+    ];
+    length >= 1 and
+    (.[0] | skill_update) and
+    (.[1:] | map(.message) | (unique | length) == length) and
+    all(.[1:][]; . as $c | any(follow_ups[]; . as $m | $c | follow_up($m)))
   ' <<<"${commits_json}" >/dev/null
 }
 
@@ -456,7 +489,7 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
   if [[ -n "${expected_author}" && "${author}" == "${expected_author}" ]]; then
     if [[ "${repo}" == "agent-plugins" ]] &&
       matches_agent_plugins_review_files &&
-      matches_agent_plugins_review_provenance; then
+      matches_agent_plugins_review_provenance "chore(deps): update agent skills"; then
       exit 3
     fi
     if [[ "${repo}" != "agent-plugins" ]] &&
@@ -470,6 +503,31 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
     # not mistaken for "not the updater" — a silent exit 1 hid a changed updater for weeks (#3126).
     printf 'programmed-bot-review-exemption: %s updater PR with unexpected files or commit provenance; treated as untrusted\n' \
       "${repo}" >&2
+  fi
+fi
+
+# agent-plugins opts into one updater PR per skill (agent-plugins#241). Each comes from
+# `deps/agent-skills-update-<slug>`, where the slug is the skill's path under `plugins/` with `/`
+# replaced by `-`, and its title and sync commit carry `(<path>)`. The slug is derived from the
+# title's path and compared exactly, so a branch, title and commit naming different skills never
+# match. A genuine one still needs semantic review (3), never the exemption.
+per_skill_title_prefix="chore(deps): update agent skills ("
+if [[ "${repo}" == "agent-plugins" &&
+  "${author}" == "app/botantler-1" &&
+  "${title}" == "${per_skill_title_prefix}"*")" ]]; then
+  skill_path="${title#"${per_skill_title_prefix}"}"
+  skill_path="${skill_path%")"}"
+  if [[ "${skill_path}" =~ ^plugins/[a-z0-9][a-z0-9-]*/skills/[a-z0-9][a-z0-9-]*$ ]]; then
+    skill_slug="${skill_path#plugins/}"
+    skill_slug="${skill_slug//\//-}"
+    if [[ "${branch}" == "deps/agent-skills-update-${skill_slug}" ]]; then
+      if matches_agent_plugins_review_files "${skill_path}" &&
+        matches_agent_plugins_review_provenance "${title}"; then
+        exit 3
+      fi
+      printf 'programmed-bot-review-exemption: %s per-skill updater PR with unexpected files or commit provenance; treated as untrusted\n' \
+        "${repo}" >&2
+    fi
   fi
 fi
 
