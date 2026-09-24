@@ -1325,6 +1325,90 @@ expect_exempt \
   "${platform_skills_commits}" \
   "${allowed_skills_owners}"
 
+# The updater signs its commit through the GitHub API, so an unadapted head is authored by the
+# updater App itself and committed by `web-flow` (#3126). That shape is recognised only with the exact
+# App login, name and numeric-ID email for the repository.
+signed_skills_commit() {
+  jq -cn --arg head "$1" --arg login "$2" --arg id "$3" --arg committer "${4:-web-flow}" \
+    --arg verified "${5:-true}" '[{
+    sha: $head,
+    author_login: $login,
+    author_name: $login,
+    author_email: "\($id)+\($login)@users.noreply.github.com",
+    committer_login: $committer,
+    committer_name: "GitHub",
+    committer_email: "noreply@github.com",
+    message: "chore(deps): update agent skills"
+  } + (if $verified == "absent" then {} else {verified: ($verified == "true")} end)]' | with_commit_dates
+}
+platform_signed_commits="$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876")"
+ksail_signed_commits="$(signed_skills_commit "${ksail_skills_head}" "ksail-bot[bot]" "262010955")"
+
+expect_exempt \
+  "Platform App-signed update touching only an allowlisted suite-owned skill" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" "${platform_signed_commits}" \
+  "${allowed_skills_owners}"
+
+expect_review_required \
+  "KSail App-signed update touching a third-party skill" \
+  "ksail" "app/ksail-bot" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${ksail_skills_head}" "${ksail_skills_files}" "${ksail_signed_commits}" \
+  "${ksail_skills_owners}"
+
+expect_review_gated \
+  "Platform update signed as the KSail App" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "ksail-bot[bot]" "262010955")" \
+  "${allowed_skills_owners}"
+
+expect_review_gated \
+  "Platform App-authored update with a numeric ID that is not the App's" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "1")" \
+  "${allowed_skills_owners}"
+
+# The identities are claims anyone who can push can write; only GitHub's signature verdict proves
+# GitHub made the commit. An unverified or unreported verdict must not reach the signed arm.
+expect_review_gated \
+  "Platform App-shaped update whose signature GitHub did not verify" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876" "web-flow" "false")" \
+  "${allowed_skills_owners}"
+
+expect_review_gated \
+  "Platform App-shaped update whose caller did not report the signature verdict" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876" "web-flow" "absent")" \
+  "${allowed_skills_owners}"
+
+expect_review_gated \
+  "Platform App-authored update not committed by web-flow" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876" "devantler")" \
+  "${allowed_skills_owners}"
+
+# "The updater with unexpected provenance" and "not the updater" are both exit 1, but only the
+# first names itself on stderr, so a changed updater is not mistaken for an unrelated PR (#3126).
+unexpected_updater_stderr="$("${classifier}" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" \
+  "$(signed_skills_commit "${platform_skills_head}" "botantler-1[bot]" "185060876" "devantler")" \
+  "${allowed_skills_owners}" 2>&1 >/dev/null)" || true
+[[ "${unexpected_updater_stderr}" == *"platform updater PR with unexpected files or commit provenance"* ]] ||
+  fail "an updater PR with unexpected provenance is indistinguishable from a non-updater PR: ${unexpected_updater_stderr}"
+not_updater_stderr="$("${classifier}" \
+  "platform" "app/botantler-1" "claude/not-the-updater" "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" "${platform_signed_commits}" \
+  "${allowed_skills_owners}" 2>&1 >/dev/null)" || true
+[[ -z "${not_updater_stderr}" ]] ||
+  fail "a PR that is not the updater must not be reported as an unexpected updater: ${not_updater_stderr}"
+
 # The corroborator is what catches an upstream handover on a root we still allowlist, so a caller
 # that omits it must NOT be handed the carve-out — a tripwire the caller may skip never fires.
 expect_review_required \
@@ -1532,6 +1616,20 @@ expect_exempt \
   "${war_cask_head}" \
   '["Casks/world-at-ruin.rb"]' \
   "${war_cask_commits}"
+
+# A caller following the documented recipe adds a boolean `verified` to every commit; the exact
+# release comparisons must still match (#3126).
+expect_exempt \
+  "World at Ruin CD cask with the verified field" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/world-at-ruin" \
+  "chore(cask): update world-at-ruin to v0.36.0" \
+  "${war_cask_head}" \
+  '["Casks/world-at-ruin.rb"]' \
+  "$(jq -c 'map(. + {verified: true})' <<<"${war_cask_commits}")"
+expect_exempt "KSail plugin release with the verified field" "devantler-tech/ksail" "${ksail_args[@]:1}" \
+  "$(jq -c 'map(. + {verified: true})' <<<"${ksail_commits}")"
 
 # #2291. The tap token commits under the maintainer's own identity, so a `git commit --amend` that
 # rewrites the cask body leaves every login, name, email, message, branch and path identical to a

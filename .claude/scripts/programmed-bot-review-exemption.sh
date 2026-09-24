@@ -10,12 +10,14 @@
 #   head-oid          full 40-hex head SHA
 #   files-json        JSON array of changed paths
 #   commits-json      JSON array, oldest first, ending at head-oid; each commit has exactly these ten string keys
-#                     (logins are null for unlinked accounts, so coalesce them):
+#                     plus an optional boolean `verified` (logins are null for unlinked accounts, so coalesce
+#                     them). Without `verified`, an App-signed updater commit cannot be recognised (exit 1):
 #     gh api --paginate --slurp repos/devantler-tech/<repo>/pulls/<n>/commits | jq -c 'add | map({sha,
 #       author_login: (.author.login // ""), author_name: .commit.author.name, author_email: .commit.author.email,
 #       author_date: .commit.author.date, committer_login: (.committer.login // ""),
 #       committer_name: .commit.committer.name, committer_email: .commit.committer.email,
-#       committer_date: .commit.committer.date, message: .commit.message})'
+#       committer_date: .commit.committer.date, message: .commit.message,
+#       verified: (.commit.verification.verified == true)})'
 #   skill-owners-json optional JSON object: changed `.agents/skills/<name>` root -> its `metadata.github-repo` or null
 #
 # Exit 0: no-review exemption; 1: untrusted/non-matching; 2: invalid input or environment, with the reason
@@ -110,7 +112,7 @@ suite_skill_owner="https://github.com/devantler-tech/agent-skills"
 
 commit_schema='type == "array" and length > 0 and all(.[];
   type == "object" and
-  keys == [
+  ((keys - ["verified"]) == [
     "author_date",
     "author_email",
     "author_login",
@@ -121,8 +123,9 @@ commit_schema='type == "array" and length > 0 and all(.[];
     "committer_name",
     "message",
     "sha"
-  ] and
-  all(.[]; type == "string") and
+  ]) and
+  (del(.verified) | all(.[]; type == "string")) and
+  ((has("verified") | not) or (.verified | type == "boolean")) and
   (.sha | test("^[0-9a-f]{40}$")) and
   (.author_date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
   (.committer_date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
@@ -143,7 +146,9 @@ if ! jq -e "${commit_schema}" <<<"${commits_json}" >/dev/null 2>&1; then
         | if ($c | type) != "object" then "commit[\($i)] is \($c | type), not an object"
           else
             ($keys[] | select(. as $k | $c | has($k) | not) | "commit[\($i)] is missing key \(.)"),
-            ($c | keys[] | select(IN($keys[]) | not) | "commit[\($i)] has unexpected key \(.)"),
+            ($c | keys[] | select(IN($keys[], "verified") | not) | "commit[\($i)] has unexpected key \(.)"),
+            (select($c | has("verified") and (.verified | type) != "boolean")
+              | "commit[\($i)].verified is \($c.verified | type), not a boolean"),
             ($keys[] | select(($c[.] | type) != "string") | "commit[\($i)].\(.) is \($c[.] | type), not a string"),
             (select($c.sha | test("^[0-9a-f]{40}$") | not) | "commit[\($i)].sha is not a 40-character lowercase hex SHA"),
             ("author_date", "committer_date"
@@ -249,8 +254,37 @@ matches_suite_owned_skills() {
     <<<"${files_json}" >/dev/null
 }
 
+# The updater signs its commit by creating it through the GitHub API (`sign-commits: true`,
+# devantler-tech/.github#142), so an unadapted head is authored by the updater App itself and
+# committed by GitHub's `web-flow` identity (#3126). The App login and its numeric user ID are exact
+# per repository, so this arm is as specific as the two below it rather than a loosened match.
+# Those identities are only what the commit CLAIMS: anyone who can push can write the App's public
+# email and `GitHub <noreply@github.com>` into a commit, and REST maps them back to the same logins.
+# So this arm also requires GitHub's own signature verdict (`verified: true`), which only a commit
+# GitHub signed can carry. A caller that omits `verified` never reaches this arm.
 matches_agent_skills_provenance() {
-  jq -e '
+  local app_login="" app_id=""
+  case "${repo}" in
+  platform)
+    app_login="botantler-1[bot]"
+    app_id="185060876"
+    ;;
+  ksail)
+    app_login="ksail-bot[bot]"
+    app_id="262010955"
+    ;;
+  esac
+  jq -e --arg app_login "${app_login}" --arg app_id "${app_id}" '
+    def signed_app_authored:
+      $app_login != "" and
+      .verified == true and
+      .author_login == $app_login and
+      .author_name == $app_login and
+      .author_email == "\($app_id)+\($app_login)@users.noreply.github.com" and
+      .committer_login == "web-flow" and
+      .committer_name == "GitHub" and
+      .committer_email == "noreply@github.com" and
+      .message == "chore(deps): update agent skills";
     def app_authored:
       .author_login == "devantler" and
       .author_name == "devantler" and
@@ -260,12 +294,12 @@ matches_agent_skills_provenance() {
       .author_name == "github-merge-queue" and
       .author_email == "118344674+github-merge-queue@users.noreply.github.com";
     length == 1 and
-    all(.[];
+    ((.[0] | signed_app_authored) or all(.[];
       (app_authored or merge_queue_authored) and
       .committer_login == "github-actions[bot]" and
       .committer_name == "github-actions[bot]" and
       .committer_email == "41898282+github-actions[bot]@users.noreply.github.com" and
-      .message == "chore(deps): update agent skills")
+      .message == "chore(deps): update agent skills"))
   ' <<<"${commits_json}" >/dev/null
 }
 
@@ -304,7 +338,7 @@ matches_ksail_provenance() {
   jq -e \
     --arg head "${head}" \
     --arg version "${version}" \
-    'map(del(.author_date, .committer_date)) == [{
+    'map(del(.author_date, .committer_date, .verified)) == [{
       sha: $head,
       author_login: "",
       author_name: "devantler-tech-bot[bot]",
@@ -395,7 +429,7 @@ matches_war_cask_provenance() {
     --arg version "${version}" \
     'length == 1 and
      (.[0].author_date == .[0].committer_date) and
-     (map(del(.author_date, .committer_date)) == [{
+     (map(del(.author_date, .committer_date, .verified)) == [{
       sha: $head,
       author_login: "devantler",
       author_name: "Nikolai Emil Damm",
@@ -431,6 +465,11 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
       matches_suite_owned_skills && exit 0
       exit 3
     fi
+    # The branch, title and App all name the updater, yet its files or commits do not match any
+    # known shape. That stays exit 1 (untrusted, review-gated), but it is said on stderr so it is
+    # not mistaken for "not the updater" — a silent exit 1 hid a changed updater for weeks (#3126).
+    printf 'programmed-bot-review-exemption: %s updater PR with unexpected files or commit provenance; treated as untrusted\n' \
+      "${repo}" >&2
   fi
 fi
 
