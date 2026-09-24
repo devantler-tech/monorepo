@@ -77,6 +77,8 @@ expect "a marker further in is not a review" 1 "NONE not-a-review" \
 expect "an unterminated leading comment stops the strip" 1 "NONE not-a-review" \
   "$(payload "<!-- never closed
 **Actionable comments posted: 0**")"
+expect "a marker whose count cannot be parsed is not a review" 1 "NONE not-a-review" \
+  "$(payload "**Actionable comments posted: 2")"
 expect "other CAUTION text is not the outside-diff shape" 1 "NONE not-a-review" \
   "$(payload "> [!CAUTION]
 > This is a different warning.")"
@@ -122,7 +124,8 @@ fi
 ablate() { # ablate <name> <exact-phrase> <replacement> <payload> <want-line-with-rule>
   local phrase="$2" count
   checks=$((checks + 1))
-  count="$(grep -cF -- "${phrase}" "${tool}" || true)"
+  # Count occurrences, not matching lines: a phrase twice on one line must still fail.
+  count="$( { grep -oF -- "${phrase}" "${tool}" || true; } | wc -l | tr -d " ")"
   if [ "${count}" != 1 ]; then
     echo "FAIL ablation $1: pinned phrase occurs ${count} times, want exactly 1" >&2
     failures=$((failures + 1))
@@ -150,7 +153,7 @@ ablate "no leading-comment strip" '($body | strip) as $lead' '$body as $lead' \
   "$(payload "${hint_body}")" "FINDINGS 2"
 ablate "no empty-container check" 'elif ($lead | length) == 0 then "NONE empty-container"' \
   'elif false then "NONE empty-container"' "$(payload "")" "NONE empty-container"
-ablate "unanchored marker" 'test("^\\*\\*Actionable comments posted:")' 'test("\\*\\*Actionable comments posted:")' \
+ablate "unanchored marker" 'test("^\\*\\*Actionable comments posted: [0-9]+\\*\\*")' 'test("\\*\\*Actionable comments posted: [0-9]+\\*\\*")' \
   "$(payload "Thanks. **Actionable comments posted: 0**")" "NONE not-a-review"
 ablate "no outside-diff shape" ') as $outside' ' and false) as $outside' \
   "$(payload "${outside_body}")" "FINDINGS 1"

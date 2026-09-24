@@ -71,9 +71,11 @@ result="$(jq -r '
 
   .body as $body
   | ($body | strip) as $lead
-  | ($lead | test("^\\*\\*Actionable comments posted:")) as $marker
+  | ($lead | test("^\\*\\*Actionable comments posted: [0-9]+\\*\\*")) as $marker
   | ($lead | test("^> \\[!CAUTION\\][ \\t]*\\r?\\n> Some comments are outside the diff")) as $outside
-  | ([$body | scan("\\*\\*Actionable comments posted: ([0-9]+)\\*\\*") | .[0] | tonumber] | first // 0) as $actionable
+  # The count is read from the anchored marker only; a marker whose count cannot be parsed fails
+  # the $marker test above, so an unknown count can never read as zero.
+  | ([$lead | scan("^\\*\\*Actionable comments posted: ([0-9]+)\\*\\*") | .[0] | tonumber] | first // 0) as $actionable
   | ([$body | scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
       | select(.[0] | startswith("🔇") | not) | .[1] | tonumber] | add // 0) as $sections
   | ($actionable + $sections) as $n
