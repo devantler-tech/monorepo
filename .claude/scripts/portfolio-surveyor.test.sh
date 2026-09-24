@@ -1359,10 +1359,11 @@ expect_review_required "agent-plugins single-PR update with a digest refresh" \
 expect_review_gated "agent-plugins per-skill branch naming another skill" \
   agent-plugins app/botantler-1 "deps/agent-skills-update-agentic-engineering-skills-agent-instructions" \
   "${per_skill_title}" "${per_skill_head}" "${per_skill_files}" "${per_skill_commits_json}"
+# Branch, title and files all name agent-instructions, so only the sync commit's message disagrees.
 expect_review_gated "agent-plugins per-skill title naming another skill than its commit" \
   agent-plugins app/botantler-1 "deps/agent-skills-update-agentic-engineering-skills-agent-instructions" \
   "chore(deps): update agent skills (plugins/agentic-engineering/skills/agent-instructions)" \
-  "${per_skill_head}" "${per_skill_files}" "${per_skill_commits_json}"
+  "${per_skill_head}" "${per_skill_files//agent-improvement/agent-instructions}" "${per_skill_commits_json}"
 expect_review_gated "agent-plugins per-skill update touching a second skill" \
   "${per_skill_args[@]}" \
   "$(jq -c '. + ["plugins/agentic-engineering/skills/agent-instructions/SKILL.md"]' <<<"${per_skill_files}")" \
