@@ -76,8 +76,19 @@ result="$(jq -r '
   # The count is read from the anchored marker only; a marker whose count cannot be parsed fails
   # the $marker test above, so an unknown count can never read as zero.
   | ([$lead | scan("^\\*\\*Actionable comments posted: ([0-9]+)\\*\\*") | .[0] | tonumber] | first // 0) as $actionable
-  | ([$body | scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
-      | select(.[0] | test("^🔇 Additional comments \\(") | not) | .[1] | tonumber] | add // 0) as $sections
+  # Walk the <details> nesting: everything inside the informational section is skipped, because it
+  # can quote changed code carrying finding-shaped summaries. Counting resumes once it closes.
+  | ([$body | scan("<details[^>]*>|</details>|<summary>[^<]*</summary>")]
+      | reduce .[] as $t ({d: 0, skip: null, n: 0};
+          if ($t | startswith("</details")) then
+            (if .skip != null and .d <= .skip then .skip = null else . end) | .d -= 1
+          elif ($t | startswith("<details")) then .d += 1
+          elif .skip != null then .
+          elif ($t | test("^<summary>🔇 Additional comments \\(")) then
+            (if .d > 0 then .skip = .d else . end)
+          else .n += ([$t | scan("^<summary>[^<]*comments \\(([0-9]+)\\)</summary>$") | .[0] | tonumber] | add // 0)
+          end)
+      | .n) as $sections
   | ($actionable + $sections) as $n
   # Only did-not-run markers owned by CodeRabbit count: its structural comment, or a service-shell
   # heading at the start of a line. Prose anywhere in a review can quote those phrases.

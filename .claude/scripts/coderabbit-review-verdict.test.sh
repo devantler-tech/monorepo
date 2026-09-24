@@ -93,6 +93,22 @@ expect "the informational section is not a finding" 0 "GREEN" "$(payload "${clea
 <summary>🔇 Additional comments (3)</summary><blockquote>
 </blockquote></details>")"
 
+# The informational section can quote changed code that contains finding-shaped summaries; those
+# are data, not findings. A real finding section after it closes still counts.
+quoted="${clean}
+<details>
+<summary>🔇 Additional comments (1)</summary><blockquote>
+<details>
+<summary>scripts/check.sh (1)</summary><blockquote>
+<summary>🧹 Nitpick comments (2)</summary>
+</blockquote></details>
+</blockquote></details>"
+expect "summaries quoted inside the informational section are not findings" 0 "GREEN" "$(payload "${quoted}")"
+expect "a finding section after the informational section still counts" 1 "FINDINGS 4" "$(payload "${quoted}
+<details>
+<summary>🧹 Nitpick comments (4)</summary><blockquote>
+</blockquote></details>")"
+
 expect "only the exact informational title is excluded" 1 "FINDINGS 2" "$(payload "${clean}
 <summary>🔇 Security comments (2)</summary>")"
 
@@ -167,16 +183,18 @@ ablate "unanchored marker" 'test("^\\*\\*Actionable comments posted: [0-9]+\\*\\
   "$(payload "Thanks. **Actionable comments posted: 0**")" "NONE not-a-review"
 ablate "no outside-diff shape" ') as $outside' ' and false) as $outside' \
   "$(payload "${outside_body}")" "FINDINGS 1"
-ablate "emoji-only informational exclusion" 'test("^🔇 Additional comments \\(")' 'startswith("🔇")' \
+ablate "emoji-only informational exclusion" 'test("^<summary>🔇 Additional comments \\(")' 'startswith("<summary>🔇")' \
   "$(payload "${clean}
 <summary>🔇 Security comments (2)</summary>")" "FINDINGS 2"
 ablate "unanchored service heading" '(\\A|\\n)(> )?#+ (Review limit reached|Review failed|Review skipped)' \
   'Review limit reached|Review failed|Review skipped' \
   "$(payload "${clean}
 The retry path logs Review failed when the upstream call errors.")" "GREEN"
-ablate "no informational exclusion" 'select(.[0] | test("^🔇 Additional comments \\(") | not)' 'select(true)' \
+ablate "no informational exclusion" 'elif ($t | test("^<summary>🔇 Additional comments \\(")) then' 'elif false then' \
   "$(payload "${clean}
 <summary>🔇 Additional comments (3)</summary>")" "GREEN"
+ablate "no skip inside the informational section" '(if .d > 0 then .skip = .d else . end)' '.' \
+  "$(payload "${quoted}")" "GREEN"
 ablate "no author bind" 'if .author != "coderabbitai[bot]"' 'if false' \
   "$(payload "${clean}" "${head}" "coderabbitai")" "NONE not-coderabbit"
 ablate "no head bind" 'elif .commit_id != .head then' 'elif false then' \
