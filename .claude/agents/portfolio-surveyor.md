@@ -243,7 +243,8 @@ public and private — no per-repo loop needed to enumerate):
    never gates the classification.
    **`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier**:
    run the classifier only when the PR has branch `deps/agent-skills-update` and
-   exact title `chore(deps): update agent skills`.
+   exact title `chore(deps): update agent skills`, or, on `agent-plugins` only, a branch starting
+   `deps/agent-skills-update-` and a title `chore(deps): update agent skills (<skill path>)`.
    🔴 **Apply that test AFTER the deepening read, not to the discovery result — the discovery call
    cannot answer it.** `gh search prs` has its own field vocabulary and **rejects `headRefName`**
    outright (verified 2026-08-13: `Unknown JSON field: "headRefName"`), and the discovery call above

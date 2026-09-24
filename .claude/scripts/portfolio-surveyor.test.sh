@@ -1289,6 +1289,107 @@ expect_review_required \
   "${agent_plugins_versioned_files}" \
   "${agent_plugins_versioned_commits}"
 
+# agent-plugins opens one updater PR per skill (agent-plugins#241). This fixture is the shape of
+# agent-plugins#245 before any adaptation: the App-signed sync commit, then the caller's digest
+# refresh and version bump. It is a genuine updater PR, so it takes the review path (3), never 0.
+per_skill_path="plugins/agentic-engineering/skills/agent-improvement"
+per_skill_branch="deps/agent-skills-update-agentic-engineering-skills-agent-improvement"
+per_skill_title="chore(deps): update agent skills (${per_skill_path})"
+per_skill_head="7bd0bb68d7090b002e0b01e6e79868e32158f2ca"
+per_skill_files="$(jq -cn --arg p "${per_skill_path}" '[
+  ".claude-plugin/marketplace.json", ".github/plugin/marketplace.json",
+  "plugins/agentic-engineering/.claude-plugin/plugin.json", "plugins/agentic-engineering/plugin.json",
+  "plugins/agentic-engineering/resources/provider-neutral.desired-state.json",
+  "\($p)/SKILL.md", "\($p)/references/prioritization-flow.md"
+]')"
+per_skill_sync="$(jq -cn --arg m "${per_skill_title}" '{
+  sha: "98c87eba2e84c1b96da4fd22e922c7bace4ecd7c",
+  author_login: "botantler-1[bot]",
+  author_name: "botantler-1[bot]",
+  author_email: "185060876+botantler-1[bot]@users.noreply.github.com",
+  committer_login: "web-flow",
+  committer_name: "GitHub",
+  committer_email: "noreply@github.com",
+  message: $m,
+  verified: true
+}')"
+per_skill_follow_up() {
+  jq -cn --arg sha "$1" --arg m "$2" '{
+    sha: $sha,
+    author_login: "github-actions[bot]",
+    author_name: "github-actions[bot]",
+    author_email: "41898282+github-actions[bot]@users.noreply.github.com",
+    committer_login: "github-actions[bot]",
+    committer_name: "github-actions[bot]",
+    committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+    message: $m
+  }'
+}
+per_skill_digest="$(per_skill_follow_up d43631355a99f180f419715b10c00b496dd7e379 \
+  "chore(deps): refresh desired-state digests for synced content")"
+per_skill_bump="$(per_skill_follow_up "${per_skill_head}" "chore(deps): bump versions of changed plugins")"
+# The classifier requires the list to end at the head the PR names, whatever the commit order.
+per_skill_commits() {
+  jq -s -c --arg head "${per_skill_head}" '.[-1].sha = $head' | with_commit_dates
+}
+per_skill_commits_json="$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" "${per_skill_bump}" | per_skill_commits)"
+per_skill_args=(agent-plugins app/botantler-1 "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}")
+
+expect_review_required "agent-plugins per-skill update" \
+  "${per_skill_args[@]}" "${per_skill_files}" "${per_skill_commits_json}"
+expect_review_required "agent-plugins per-skill update, bump before digest refresh" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_bump}" "${per_skill_digest}" | per_skill_commits)"
+expect_review_required "agent-plugins per-skill update, sync commit only" \
+  "${per_skill_args[@]}" "[\"${per_skill_path}/SKILL.md\"]" \
+  "$(printf '%s\n' "${per_skill_sync}" | per_skill_commits)"
+expect_review_required "agent-plugins per-skill update, legacy unsigned sync commit" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "$(jq -c '.author_login = "devantler" | .author_name = "devantler"
+    | .author_email = "26203420+devantler@users.noreply.github.com"
+    | .committer_login = "github-actions[bot]" | .committer_name = "github-actions[bot]"
+    | .committer_email = "41898282+github-actions[bot]@users.noreply.github.com"
+    | del(.verified)' <<<"${per_skill_sync}")" "${per_skill_digest}" "${per_skill_bump}" | per_skill_commits)"
+expect_review_required "agent-plugins single-PR update with a digest refresh" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" "${agent_plugins_versioned_files}" \
+  "$(jq -c --argjson d "${per_skill_digest}" '.[:1] + [$d] + .[1:]' <<<"${agent_plugins_versioned_commits}" | with_commit_dates)"
+
+# Negative controls: each one breaks a single conjunct of the fixture above.
+expect_review_gated "agent-plugins per-skill branch naming another skill" \
+  agent-plugins app/botantler-1 "deps/agent-skills-update-agentic-engineering-skills-agent-instructions" \
+  "${per_skill_title}" "${per_skill_head}" "${per_skill_files}" "${per_skill_commits_json}"
+# Branch, title and files all name agent-instructions, so only the sync commit's message disagrees.
+expect_review_gated "agent-plugins per-skill title naming another skill than its commit" \
+  agent-plugins app/botantler-1 "deps/agent-skills-update-agentic-engineering-skills-agent-instructions" \
+  "chore(deps): update agent skills (plugins/agentic-engineering/skills/agent-instructions)" \
+  "${per_skill_head}" "${per_skill_files//agent-improvement/agent-instructions}" "${per_skill_commits_json}"
+expect_review_gated "agent-plugins per-skill update touching a second skill" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/skills/agent-instructions/SKILL.md"]' <<<"${per_skill_files}")" \
+  "${per_skill_commits_json}"
+expect_review_gated "agent-plugins per-skill update touching another plugin's manifest" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/github/plugin.json"]' <<<"${per_skill_files}")" "${per_skill_commits_json}"
+expect_review_gated "agent-plugins per-skill sync commit without the suffixed message" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "$(jq -c '.message = "chore(deps): update agent skills"' <<<"${per_skill_sync}")" \
+    "${per_skill_digest}" "${per_skill_bump}" | per_skill_commits)"
+expect_review_gated "agent-plugins per-skill App-shaped sync commit GitHub did not sign" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "$(jq -c '.verified = false' <<<"${per_skill_sync}")" \
+    "${per_skill_digest}" "${per_skill_bump}" | per_skill_commits)"
+expect_review_gated "agent-plugins per-skill update with an adaptation commit" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" "${per_skill_bump}" \
+    "$(per_skill_follow_up 1111111111111111111111111111111111111111 "docs: record the release")" | per_skill_commits)"
+expect_review_gated "agent-plugins per-skill update with a repeated follow-up commit" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_bump}" "${per_skill_bump}" | per_skill_commits)"
+expect_review_gated "agent-plugins per-skill update from another author" \
+  agent-plugins app/ksail-bot "${per_skill_branch}" "${per_skill_title}" "${per_skill_head}" \
+  "${per_skill_files}" "${per_skill_commits_json}"
+
 # An installed skill root holds copies from many upstreams, and the copied frontmatter naming the
 # upstream is written by that upstream. So authorization comes from the reviewed allowlist beside the
 # classifier, and the frontmatter is only a corroborator that can withdraw the carve-out, never grant
