@@ -181,6 +181,32 @@ rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-sshuser-ok" "claim-branch-sub-sshuser-ok" "session-sub-sshuser-ok" 2>&1)" || rc=$?
 check "add admits an origin under the same ssh user" 0 "$rc" "$out" "owner=session-sub-sshuser-ok"
 
+# Outside github.com, ssh and https on one host can serve different repositories.
+git -C "$super" config -f .gitmodules submodule.mod.url "ssh://git@git.example.invalid:22/org/repo"
+git -C "$super/mod" config remote.origin.url "https://git.example.invalid:443/org/repo"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-transport" "claim-branch-sub-transport" "session-sub-transport" 2>&1)" || rc=$?
+check "add refuses an origin that reaches the same path over another transport" 1 "$rc" "$out" "origin urls:     https://git.example.invalid:443/org/repo"
+
+# `.git` is a suffix of a repository path; on a host name it names another host.
+git -C "$super" config -f .gitmodules submodule.mod.url "ssh://forge.git/"
+git -C "$super/mod" config remote.origin.url "ssh://forge/"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-hostgit" "claim-branch-sub-hostgit" "session-sub-hostgit" 2>&1)" || rc=$?
+check "add refuses an origin whose host differs only by a .git suffix" 1 "$rc" "$out" "origin urls:     ssh://forge/"
+
+# git reads `file://<host>/<path>` as /<path>, so a relative path that repeats the host is another
+# repository, and the absolute path is the same one.
+git -C "$super" config -f .gitmodules submodule.mod.url "file://localhost$upstream_sub"
+git -C "$super/mod" config remote.origin.url "localhost$upstream_sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-filehost" "claim-branch-sub-filehost" "session-sub-filehost" 2>&1)" || rc=$?
+check "add refuses a relative path that repeats a file URL's host" 1 "$rc" "$out" "origin urls:     localhost$upstream_sub"
+git -C "$super/mod" config remote.origin.url "$upstream_sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-fileabs" "claim-branch-sub-fileabs" "session-sub-fileabs" 2>&1)" || rc=$?
+check "add treats a file URL as the absolute path git reads it as" 0 "$rc" "$out" "owner=session-sub-fileabs"
+
 # A refusal never echoes a credential carried in a remote URL.
 git -C "$super" config -f .gitmodules submodule.mod.url "https://agent:gm-s3cr3t@github.com/example/sub"
 git -C "$super/mod" config remote.origin.url "https://agent:s3cr3t-token@github.com/example/other"
@@ -256,6 +282,23 @@ git -C "$super/mod" config remote.origin.url "https://git.example.invalid/org/su
 rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-relcolon-wrong" "claim-branch-sub-relcolon-wrong" "session-sub-relcolon-wrong" 2>&1)" || rc=$?
 check "add refuses the origin a ':' split would resolve to" 1 "$rc" "$out" "https://git.example.invalid/org/super:sub.git"
+
+# A `..` that climbs past an scp-like remote's host leaves `.` in its place, as git does; one more
+# `..` is an error git cannot resolve.
+git -C "$super" config remote.origin.url "git@git.example.invalid:org/super.git"
+git -C "$super" config -f .gitmodules submodule.mod.url "../../../sub.git"
+git -C "$super/mod" config remote.origin.url ".:sub.git"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-relroot" "claim-branch-sub-relroot" "session-sub-relroot" 2>&1)" || rc=$?
+check "add resolves a relative URL that climbs past an scp host as git does" 0 "$rc" "$out" "owner=session-sub-relroot"
+git -C "$super/mod" config remote.origin.url "git@git.example.invalid:sub.git"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-relroot-wrong" "claim-branch-sub-relroot-wrong" "session-sub-relroot-wrong" 2>&1)" || rc=$?
+check "add refuses the origin a relative URL would reach if it stopped at the host" 1 "$rc" "$out" "origin urls:     ***@git.example.invalid:sub.git"
+git -C "$super" config -f .gitmodules submodule.mod.url "../../../../sub.git"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-relroot-over" "claim-branch-sub-relroot-over" "session-sub-relroot-over" 2>&1)" || rc=$?
+check "add refuses a relative URL that climbs further than git can resolve" 1 "$rc" "$out" "climbs past the root of the superproject's remote"
 git -C "$super" config remote.origin.url "$tmp/remote-root/super"
 git -C "$super" config -f .gitmodules submodule.mod.url "../upstream-sub"
 git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
@@ -318,6 +361,35 @@ git -C "$session/mod" config remote.origin.url "$other_sub"
 rc=0
 out="$("$script" add "$session/per-run" "$tmp/wt-session-wrong" "claim-branch-session-wrong" "session-session-wrong" 2>&1)" || rc=$?
 check "add refuses a linked superproject's submodule whose origin is another repository" 1 "$rc" "$out" "submodule sync -- 'mod'"
+
+# A superproject created with --separate-git-dir keeps its submodules' git directories there too, so
+# their location never names the superproject; the submodule's main checkout still does.
+mkdir -p "$tmp/sep-admin" "$tmp/sep-work"
+sep_super="$tmp/sep-work/super"
+git init -q -b main --separate-git-dir "$tmp/sep-admin/super" "$sep_super"
+git -C "$sep_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$sep_super" -c user.name=t -c user.email=t@example.com commit -qm "add submodule"
+git -C "$sep_super/mod" worktree add -q --detach "$tmp/sep-linked"
+rc=0
+out="$("$script" add "$tmp/sep-linked" "$tmp/wt-sep-ok" "claim-branch-sep-ok" "session-sep-ok" 2>&1)" || rc=$?
+check "add admits a linked worktree of a separate-git-dir superproject's submodule" 0 "$rc" "$out" "owner=session-sep-ok"
+git -C "$sep_super/mod" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" add "$tmp/sep-linked" "$tmp/wt-sep-wrong" "claim-branch-sep-wrong" "session-sep-wrong" 2>&1)" || rc=$?
+check "add refuses a separate-git-dir superproject's linked submodule with a foreign origin" 1 "$rc" "$out" "submodule sync -- 'mod'"
+
+# When two .gitmodules sections claim one path, git initializes it from the later one.
+git -C "$super" config -f .gitmodules submodule.dup.path mod
+git -C "$super" config -f .gitmodules submodule.dup.url "$other_sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-dup-first" "claim-branch-sub-dup-first" "session-sub-dup-first" 2>&1)" || rc=$?
+check "add refuses an origin that only an earlier duplicate section registers" 1 "$rc" "$out" ".gitmodules url: $other_sub"
+git -C "$super/mod" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-dup-last" "claim-branch-sub-dup-last" "session-sub-dup-last" 2>&1)" || rc=$?
+check "add admits the origin the later duplicate section registers" 0 "$rc" "$out" "owner=session-sub-dup-last"
+git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
+git -C "$super" config -f .gitmodules --remove-section submodule.dup
 
 # ── check: mine ────────────────────────────────────────────────────────────
 rc=0

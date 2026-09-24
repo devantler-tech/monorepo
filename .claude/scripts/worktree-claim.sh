@@ -546,20 +546,26 @@ refuse_uninitialized_repo() {
 }
 
 # normalized_remote prints a remote URL as a comparable identity. A network URL becomes
-# `net:[user@]<lowercase host[:port]><path>`, so the ssh (`git@host:owner/repo.git`) and https
-# (`https://host/owner/repo`) spellings of one repository compare equal. Only the host is
-# case-folded: a server may treat paths case-sensitively. An ssh user other than the conventional
-# `git` is kept, because a relative path resolves under that account; other userinfo is a
-# credential and is dropped, as are the scheme's default port, a trailing `.git` and a trailing
-# slash. Any other port is kept: it can name a different server. Anything else is a local path,
-# kept as `path:<as written>`, so a relative path shaped like `host/owner/repo` never equals a
-# network URL.
+# `net:<transport>://[user@]<lowercase host[:port]><path>`, where the scp-like `[user@]host:path`
+# is ssh. Only the host is case-folded: a server may treat paths case-sensitively. An ssh user
+# other than the conventional `git` is kept, because a relative path resolves under that account;
+# other userinfo is a credential and is dropped, as are the transport's default port and a trailing
+# `.git` or slash on the repository path. Any other port is kept: it can name a different server.
+# The transport is kept too, because ssh and https on one host can serve different repositories,
+# except on github.com, where both reach the same one. A `file://` URL names the absolute path after
+# its host, as git reads it. Anything else is a local path, kept as `path:<as written>`, so a
+# relative path shaped like `host/owner/repo` never equals a network URL.
 normalized_remote() {
-  local url="$1" scheme="ssh" before authority path port user=""
+  local url="$1" scheme="ssh" before authority path port user="" transport
   url="${url%/}"
   case "$url" in
     file://*)
-      printf 'path:%s\n' "${url#file://}"
+      # git ignores a file URL's host: `file://<host>/<path>` and `file:///<path>` both name /<path>.
+      url="${url#file://}"
+      case "$url" in
+        */*) printf 'path:/%s\n' "${url#*/}" ;;
+        *) printf 'file:%s\n' "$url" ;;
+      esac
       return 0
       ;;
     *://*)
@@ -576,9 +582,10 @@ normalized_remote() {
       url="${url/://}"
       ;;
   esac
-  url="${url%.git}"
   authority="${url%%/*}"
   path="${url#"$authority"}"
+  # `.git` is a suffix of the repository path only; on a host name it names another host.
+  path="${path%.git}"
   case "$authority" in
     *@*)
       user="${authority%@*}"
@@ -587,10 +594,14 @@ normalized_remote() {
   esac
   case "$scheme" in
     ssh | git+ssh | ssh+git)
+      transport="ssh"
       user="${user%%:*}"
       [ "$user" != "git" ] || user=""
       ;;
-    *) user="" ;;
+    *)
+      transport="$scheme"
+      user=""
+      ;;
   esac
   case "$authority" in
     *:*)
@@ -608,7 +619,10 @@ normalized_remote() {
       ;;
   esac
   authority="$(printf '%s' "$authority" | tr '[:upper:]' '[:lower:]')"
-  printf 'net:%s%s%s\n' "${user:+$user@}" "$authority" "$path"
+  case "$authority:$transport" in
+    github.com:ssh | github.com:https) transport="github" ;;
+  esac
+  printf 'net:%s://%s%s%s\n' "$transport" "${user:+$user@}" "$authority" "$path"
 }
 
 # redact_url prints a URL for a diagnostic with any userinfo (`user:token@`) replaced by `***@`, so a
@@ -631,9 +645,10 @@ redact_url() {
 
 # resolve_submodule_url resolves a relative .gitmodules URL (`./x`, `../x`) against the
 # superproject's remote the way `git submodule init` does: the remote of the current branch, else
-# origin, else the superproject's own path. Any other URL is printed unchanged.
+# origin, else the superproject's own path. Any other URL is printed unchanged. It prints nothing
+# when git itself cannot resolve the URL, because more `..` components remain than it can drop.
 resolve_submodule_url() {
-  local super="$1" url="$2" branch remote base sep="/"
+  local super="$1" url="$2" branch remote base sep="/" relative=0 before
   case "$url" in
     ./* | ../*) ;;
     *)
@@ -647,6 +662,16 @@ resolve_submodule_url() {
   base="$(git -C "$super" config --get "remote.${remote:-origin}.url" 2>/dev/null)" || base=""
   [ -n "$base" ] || base="$super"
   base="${base%/}"
+  # git reads a remote as a relative local path when it has no ':' before its first '/', and is
+  # not absolute; it then resolves from `./<remote>`.
+  before="${base%%:*}"
+  if [ "${base#/}" = "$base" ] && { [ "$before" = "$base" ] || [ "${before#*/}" != "$before" ]; }; then
+    relative=1
+    case "$base" in
+      ./* | ../*) ;;
+      *) base="./$base" ;;
+    esac
+  fi
   while :; do
     case "$url" in
       ./*) url="${url#./}" ;;
@@ -654,11 +679,16 @@ resolve_submodule_url() {
         url="${url#../}"
         # As git does: drop the last component at the last '/', and only when none is left at the
         # last ':' (an scp-like host), after which the join uses ':'. A ':' inside a path is data.
+        # With neither left, an absolute remote becomes `.`, and a relative one, or `.`, is an error.
         if [ "${base%/*}" != "$base" ]; then
           base="${base%/*}"
         elif [ "${base%:*}" != "$base" ]; then
           base="${base%:*}"
           sep=":"
+        elif [ "$relative" -eq 1 ] || [ "$base" = "." ]; then
+          return 0
+        else
+          base="."
         fi
         ;;
       *) break ;;
@@ -707,6 +737,20 @@ registering_superproject() {
   done
 }
 
+# submodule_name_at prints the name <super>/.gitmodules registers for path <rel>. When several
+# sections claim one path, git uses the last, so this does too.
+submodule_name_at() {
+  local super="$1" rel="$2" record key name=""
+  # NUL-delimited, key and value split by a newline: a submodule name may contain spaces.
+  while IFS= read -r -d '' record; do
+    [ "${record#*$'\n'}" = "$rel" ] || continue
+    key="${record%%$'\n'*}"
+    name="${key#submodule.}"
+    name="${name%.path}"
+  done < <(git config -f "$super/.gitmodules" -z --get-regexp '^submodule\..*\.path$' 2>/dev/null || true)
+  printf '%s\n' "$name"
+}
+
 # refuse_foreign_submodule_origin_checked stops `add` or `acquire` when <repo_path> is a populated
 # submodule whose `origin` is not the repository its superproject's .gitmodules names (monorepo#3010).
 # Such a checkout is its own top level, so refuse_uninitialized_repo admits it, and every commit made
@@ -716,23 +760,34 @@ registering_superproject() {
 # not set a custom receive-pack or upload-pack command. A repository that is not a submodule is not
 # checked: nothing names what it should be.
 refuse_foreign_submodule_origin_checked() {
-  local repo_abs="$1" super rel name="" key record common found admin expected="" shown_expected url actual="" matched=0 foreign=0 packs=""
+  local repo_abs="$1" super rel name="" common main found admin raw="" expected="" shown_expected url actual="" matched=0 foreign=0 packs="" key
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
     super="$(cd "$super" && pwd -P)"
     rel="${repo_abs#"$super"/}"
-    # NUL-delimited, key and value split by a newline: a submodule name may contain spaces.
-    while IFS= read -r -d '' record; do
-      [ "${record#*$'\n'}" = "$rel" ] || continue
-      key="${record%%$'\n'*}"
-      name="${key#submodule.}"
-      name="${name%.path}"
-      break
-    done < <(git config -f "$super/.gitmodules" -z --get-regexp '^submodule\..*\.path$' 2>/dev/null || true)
+    name="$(submodule_name_at "$super" "$rel")"
   else
     # A linked worktree of a submodule can sit outside its superproject, where git reports none. Its
-    # shared git directory still records which superproject registered it, and under which name.
+    # shared git directory records the submodule's main checkout in core.worktree, and that checkout
+    # sits in the superproject wherever the superproject keeps its own git directory.
     common="$(git -C "$repo_abs" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
+    main=""
+    [ -z "$common" ] || main="$(git config -f "$common/config" --get core.worktree 2>/dev/null)" || main=""
+    case "$main" in
+      '' | /*) ;;
+      *) main="$common/$main" ;;
+    esac
+    [ -z "$main" ] || main="$(cd "$main" 2>/dev/null && pwd -P)" || main=""
+    [ -z "$main" ] || super="$(git -C "$main" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
+    if [ -n "$super" ]; then
+      super="$(cd "$super" && pwd -P)"
+      rel="${main#"$super"/}"
+      name="$(submodule_name_at "$super" "$rel")"
+    fi
+  fi
+  if [ -z "$super" ]; then
+    # Without a main checkout, the shared git directory's own path still records which superproject
+    # registered it, and under which name.
     case "$common" in
       */.git/modules/* | */.git/worktrees/*/modules/*) ;;
       *) return 0 ;;
@@ -759,8 +814,8 @@ refuse_foreign_submodule_origin_checked() {
     fi
     rel="$(git config -f "$super/.gitmodules" --get "submodule.$name.path" 2>/dev/null)" || rel="$name"
   fi
-  [ -z "$name" ] || expected="$(git config -f "$super/.gitmodules" --get "submodule.$name.url" 2>/dev/null)" || expected=""
-  [ -z "$expected" ] || expected="$(resolve_submodule_url "$super" "$expected")"
+  [ -z "$name" ] || raw="$(git config -f "$super/.gitmodules" --get "submodule.$name.url" 2>/dev/null)" || raw=""
+  [ -z "$raw" ] || expected="$(resolve_submodule_url "$super" "$raw")"
   while IFS= read -r url; do
     [ -n "$url" ] || continue
     actual="$actual${actual:+, }$(redact_url "$url")"
@@ -780,7 +835,11 @@ refuse_foreign_submodule_origin_checked() {
   done
   if [ "$foreign" -eq 1 ] || [ "$matched" -eq 0 ]; then
     shown_expected="<not registered at $rel>"
-    [ -z "$expected" ] || shown_expected="$(redact_url "$expected")"
+    if [ -n "$expected" ]; then
+      shown_expected="$(redact_url "$expected")"
+    elif [ -n "$raw" ]; then
+      shown_expected="<$(redact_url "$raw") climbs past the root of the superproject's remote, so git cannot resolve it>"
+    fi
     echo "worktree-claim: $repo_abs is a submodule of $super whose origin is not the repository .gitmodules names." >&2
     echo "  .gitmodules url: ${shown_expected}" >&2
     echo "  origin urls:     ${actual:-<none>}" >&2
