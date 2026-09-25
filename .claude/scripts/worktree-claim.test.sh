@@ -1007,6 +1007,52 @@ rc=0
 out="$("$script" acquire "$nl_super/mod"$'\n' "session-nl-acquire" 2>&1)" || rc=$?
 check "acquire refuses a worktree path whose trailing newline would resolve it to another directory" 1 "$rc" "$out" "resolves to a different directory"
 
+# A registered path beneath a symlinked directory is reached through the symlink as well.
+nest_link_super="$tmp/nest-link-super"
+git init -q -b main "$nest_link_super"
+git -C "$nest_link_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" nested/mod
+git -C "$nest_link_super" -c user.name=t -c user.email=t@example.com commit -qm "add nested submodule"
+mkdir -p "$tmp/nest-link-target"
+git clone -q "$other_sub" "$tmp/nest-link-target/mod"
+rm -rf "$nest_link_super/nested"
+ln -s "$tmp/nest-link-target" "$nest_link_super/nested"
+rc=0
+out="$("$script" add "$nest_link_super/nested/mod" "$tmp/wt-nest-link" "claim-branch-nest-link" "session-nest-link" 2>&1)" || rc=$?
+check "add refuses a registered submodule path beneath a symlinked directory" 1 "$rc" "$out" "through the symlink"
+
+# core.worktree names this repository's checkout only when that checkout's own git directory is this
+# one. A separate git directory whose core.worktree names another repository says nothing about where
+# its real checkout sits, here at a registered submodule path with a foreign origin.
+decoy_super="$tmp/decoy-super"
+git init -q -b main "$decoy_super"
+git -C "$decoy_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$decoy_super" -c user.name=t -c user.email=t@example.com commit -qm "add submodule"
+rm -rf "$decoy_super/mod"
+mkdir -p "$tmp/decoy-admin"
+git clone -q --separate-git-dir "$tmp/decoy-admin/repo" "$other_sub" "$decoy_super/mod"
+git -C "$decoy_super/mod" worktree add -q --detach "$tmp/decoy-linked"
+git init -q -b main "$tmp/decoy-standalone"
+git --git-dir="$tmp/decoy-admin/repo" config core.worktree "$tmp/decoy-standalone"
+rc=0
+out="$("$script" acquire "$tmp/decoy-linked" "session-decoy" 2>&1)" || rc=$?
+check "acquire refuses a linked worktree whose core.worktree names another repository's checkout" 1 "$rc" "$out" "no superproject registers it"
+
+# An in-place clone registered at a path ending in a newline sits beside the registration of that path
+# without it; its origin matching only that other registration proves nothing.
+nlin_super="$tmp/nlin-super"
+git init -q -b main "$nlin_super"
+git -C "$nlin_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$nlin_super" -c protocol.file.allow=always submodule add -q "$other_sub" mod2
+git -C "$nlin_super" -c user.name=t -c user.email=t@example.com commit -qm "add submodules"
+git -C "$nlin_super" mv mod2 "mod"$'\n'
+rm -rf "$nlin_super/mod"$'\n'
+git clone -q "$other_sub" "$nlin_super/mod"$'\n'
+git -C "$nlin_super/mod"$'\n' config remote.origin.url "$upstream_sub"
+git -C "$nlin_super/mod"$'\n' worktree add -q --detach "$tmp/nlin-linked"
+rc=0
+out="$("$script" acquire "$tmp/nlin-linked" "session-nlin" 2>&1)" || rc=$?
+check "acquire refuses a linked worktree of an in-place clone whose registered path ends in a newline" 1 "$rc" "$out"
+
 # A submodule cloned in place keeps its git directory at <checkout>/.git with no core.worktree, so its
 # main checkout is that directory's parent, and a linked worktree of it is still that submodule's.
 inplace_super="$tmp/inplace-super"

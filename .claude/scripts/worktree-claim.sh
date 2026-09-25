@@ -657,9 +657,9 @@ refuse_other_directory() {
 }
 
 # refuse_symlinked_submodule_path exits 1 when <path>, as given, passes through a symlink that sits where
-# a superproject registers a submodule. git never checks a submodule out through a symlink, so the link's
-# target is not that submodule's checkout, and resolving <path> first would check the target as the
-# standalone repository it looks like on its own.
+# a superproject registers a submodule, or above such a path. git never checks a submodule out through a
+# symlink, so the link's target holds no checkout of that submodule, and resolving <path> first would
+# check the target as the standalone repository it looks like on its own.
 refuse_symlinked_submodule_path() {
   local path="$1" rest comp prefix="" parent top rel name
   case "$path" in
@@ -690,12 +690,12 @@ refuse_symlinked_submodule_path() {
     rel="${parent%/}/$comp"
     rel="${rel#"$top"/}"
     [ "$rel" != "${parent%/}/$comp" ] || continue
-    name="$(submodule_name_at "$top" "$rel")"
+    name="$(submodule_name_under "$top" "$rel")"
     [ -n "$name" ] || continue
-    echo "worktree-claim: $1 passes through the symlink $prefix, where $top registers submodule '$name'." >&2
-    echo "  git never checks a submodule out through a symlink, so the link's target is not that submodule's" >&2
-    echo "  checkout, and it is not claimed. Replace the symlink with the submodule itself:" >&2
-    echo "    rm $(shquote "$prefix") && .claude/scripts/submodule-init.sh $(shquote "$rel")  (from $(shquote "$top"))" >&2
+    echo "worktree-claim: $1 passes through the symlink $prefix, at or above where $top registers submodule '$name'." >&2
+    echo "  git never checks a submodule out through a symlink, so the link's target holds no checkout of that" >&2
+    echo "  submodule, and it is not claimed. Remove the symlink, then populate the submodule from $(shquote "$top")" >&2
+    echo "  with .claude/scripts/submodule-init.sh." >&2
     exit 1
   done
 }
@@ -918,13 +918,30 @@ refuse_unlocated_main() {
   exit 1
 }
 
+# submodule_name_under prints the name of a submodule <super>/.gitmodules registers at <rel> or beneath
+# it, and prints nothing when there is none.
+submodule_name_under() {
+  local super="$1" rel="$2" record path
+  while IFS= read -r -d '' record; do
+    path="${record#*$'\n'}"
+    case "$path" in
+      "$rel" | "$rel"/*) ;;
+      *) continue ;;
+    esac
+    record="${record%%$'\n'*}"
+    record="${record#submodule.}"
+    printf '%s\n' "${record%.path}"
+    return 0
+  done < <(git config -f "$super/.gitmodules" -z --get-regexp '^submodule\..*\.path$' 2>/dev/null || true)
+}
+
 # registration_around prints the superproject around <dir>, <dir>'s path within it, and the submodule
 # name that superproject registers at that path, one per line. It fails when no superproject registers it.
 registration_around() {
   local dir top found
-  dir="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  dir="$(resolved_dir "$1")" || return 1
   top="$(git -C "${dir%/*}" rev-parse --show-toplevel 2>/dev/null)" || return 1
-  top="$(cd "$top" && pwd -P)" || return 1
+  top="$(resolved_dir "$top")" || return 1
   [ "${dir#"$top"/}" != "$dir" ] || return 1
   found="$(submodule_name_at "$top" "${dir#"$top"/}")"
   [ -n "$found" ] || return 1
@@ -1173,7 +1190,7 @@ origin_redirects() (
 # `add` passes, as <verified>, the checkout it has already checked and created the new worktree from.
 refuse_foreign_submodule_origin_checked() {
   local repo_abs="$1" verified="${2:-}" super rel name="" common="" worktree="" main="" found admin raw="" expected="" resolved=0 shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
-  local inplace head_branch push_remote="" pushto="" gitdir common_phys verified_common selector
+  local inplace head_branch push_remote="" pushto="" gitdir common_phys verified_common selector main_common
   local -a selectors
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
@@ -1223,6 +1240,16 @@ refuse_foreign_submodule_origin_checked() {
       *) main="$common/$main" ;;
     esac
     [ -z "$main" ] || main="$(resolved_dir "$main")" || main=""
+    # core.worktree can name any directory. It names this repository's checkout only when that checkout's
+    # own git directory is this one; otherwise the real checkout is unlocated, wherever it sits.
+    if [ -n "$main" ] && [ -n "$worktree" ]; then
+      main_common="$(git -C "$main" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || main_common=""
+      [ -z "$main_common" ] || main_common="$(resolved_dir "$main_common")" || main_common=""
+      common_phys="$(resolved_dir "$common")" || common_phys=""
+      if [ -z "$main_common" ] || [ "$main_common" != "$common_phys" ]; then
+        main=""
+      fi
+    fi
     [ -z "$main" ] || super="$(git -C "$main" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
     if [ -n "$super" ]; then
       super="$(cd "$super" && pwd -P)"
