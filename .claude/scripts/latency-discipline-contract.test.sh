@@ -115,8 +115,25 @@ assert_bullet '`TaskStop`, not merely a' \
   "latency bullet states the stop requirement without naming TaskStop as the mechanism"
 
 # ---------------------------------------------------------------------------
-# PORTABLE HALF — rule 7 of the pinned engineer definition, flattened the same way.
-engineer_flat="$(tr '\n' ' ' < "${engineer}" | tr -s '[:space:]' ' ')"
+# PORTABLE HALF — rule 7 of the pinned engineer definition, flattened the same way. Scoped to that
+# rule for the same reason the deployment half is scoped to its bullet: a whole-file check passes
+# while rule 7 itself is weakened, as long as the phrases survive in some other paragraph.
+engineer_flat="$(
+  awk '
+    /^7\. \*\*Give expected-to-run-long local commands/ { inr = 1 }
+    inr && /^8\. \*\*/                                   { inr = 0 }
+    inr                                                  { print }
+  ' "${engineer}" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+
+[ -n "${engineer_flat}" ] ||
+  fail "could not locate rule 7 ('Give expected-to-run-long local commands') in the pinned engineer definition — the extraction anchor moved, so every portable assertion would be vacuous"
+
+# Rule 7 is ~560 words; a runaway extraction (the '8. **' end anchor gone) runs to end of file and
+# measures thousands, which would reopen the scope hole this extraction exists to close.
+engineer_words="$(printf '%s' "${engineer_flat}" | wc -w | tr -d ' ')"
+[ "${engineer_words}" -lt 1500 ] ||
+  fail "rule 7 extracted as ${engineer_words} words, which is runaway-extraction size — the '8. **' end anchor was probably renamed or removed, so the portable assertions would no longer be scoped to rule 7"
 
 assert_engineer() {
   case "${engineer_flat}" in
