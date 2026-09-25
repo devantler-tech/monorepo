@@ -4383,7 +4383,9 @@ contents-API rule has no mechanical backstop yet.
 short source does not match the remote's `refs/heads/*`, so git deletes the destination ref and then
 fails to update it (`cannot lock ref`, exit 1). Run it again and it "succeeds", because the ref is
 gone and gets recreated. That is why the short form looks like a working fallback. It does the same
-against a URL remote. A plain `git fetch origin main` is also safe. Measured 2026-09-18 to 2026-09-25:
+against a URL remote. A plain `git fetch origin main` does not delete the ref either, but it updates
+`refs/remotes/origin/main` only through the configured `remote.origin.fetch` mapping. Without that
+mapping it writes only `FETCH_HEAD`, so use the full refspec whenever you read the ref. Measured 2026-09-18 to 2026-09-25:
 13 of 536 Codex sessions deleted `origin/main` this way ([#3596](https://github.com/devantler-tech/monorepo/issues/3596)).
 `drifted-lane-escalation-contract.test.sh` pins the git behaviour.
 
