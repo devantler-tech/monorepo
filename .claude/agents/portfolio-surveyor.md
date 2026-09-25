@@ -1343,7 +1343,11 @@ public and private — no per-repo loop needed to enumerate):
    urgent security hotfix jumps, under the normal breakage rule.
    **Exclude a `Kata` whose named measurement date is still in the FUTURE** — contract skip reason (d)
    makes it not-yet-actionable, and listing it as ready work makes runs either re-skip it every tick or
-   measure before the agreed date. Report future-dated Katas separately, with their date.
+   measure before the agreed date. Read the date ONLY with
+   `gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // "")}' | <repo-root>/.claude/scripts/kata-measure-date.sh --input -`
+   (the guard's only admitted form; monorepo#2838), never from `createdAt` or prose: `NOT-DUE <date>`
+   excludes it (report it separately, with the date), `DUE` keeps it, and `UNKNOWN` or a failed call
+   reports it as a Kata whose `**Measure on:**` line needs repair.
    Before nominating any issue as actionable, deepen that candidate once with the exact in-scope
    issue's server-side dependency summary:
 

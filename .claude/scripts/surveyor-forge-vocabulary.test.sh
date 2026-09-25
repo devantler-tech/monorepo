@@ -218,6 +218,7 @@ deny	gh api graphql --paginate -F number=PLACEHOLDER -f query='query($number:Int
 deny	gh api repos/devantler-tech/PLACEHOLDER/issues/comments/PLACEHOLDER --jq '{head:"PLACEHOLDER",body:.body}' | PLACEHOLDER/.claude/scripts/coderabbit-summary-verdict.sh --input -
 deny	gh api repos/devantler-tech/PLACEHOLDER/pulls/PLACEHOLDER/reviews/PLACEHOLDER --jq '{head:"PLACEHOLDER",author:.user.login,commit_id:.commit_id,body:(.body // "")}' | PLACEHOLDER/.claude/scripts/coderabbit-review-verdict.sh --input -
 deny	gh api graphql --paginate -F number=PLACEHOLDER -f query='query($number:Int!,$endCursor:String){repository(owner:"devantler-tech",name:"PLACEHOLDER"){pullRequest(number:$number){headRefOid reviews(first:100,after:$endCursor){totalCount nodes{author{login} state body submittedAt commit{oid}} pageInfo{hasNextPage endCursor}}}}}' | PLACEHOLDER/.claude/scripts/local-review-verdict.sh --input -
+deny	gh api repos/devantler-tech/PLACEHOLDER/issues/PLACEHOLDER --jq '{body:(.body // "")}' | PLACEHOLDER/.claude/scripts/kata-measure-date.sh --input -
 CORPUS
 )
 
