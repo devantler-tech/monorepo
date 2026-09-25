@@ -106,11 +106,13 @@ write_marker() {
 PENDING_REPO=""
 PENDING_WT=""
 PENDING_BRANCH=""
+PENDING_OWNER=""
 PENDING_NOTE=""
 # discard_pending_worktree runs that rollback from the note, once, and reports what it removed.
 discard_pending_worktree() {
   [ -n "$PENDING_NOTE" ] || return 0
-  local repo="$PENDING_REPO" wt="$PENDING_WT" branch="$PENDING_BRANCH" note="$PENDING_NOTE" created="" oid="" what
+  local repo="$PENDING_REPO" wt="$PENDING_WT" branch="$PENDING_BRANCH" owner="$PENDING_OWNER"
+  local note="$PENDING_NOTE" created="" oid="" what rc=0
   PENDING_NOTE=""
   if [ -r "$note" ]; then
     { IFS= read -r created || true; IFS= read -r oid || true; } <"$note"
@@ -122,19 +124,37 @@ discard_pending_worktree() {
   else
     what="the new branch $branch"
   fi
-  if branch_op_lock_run "$repo" --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" -- \
-    remove_new_worktree "$repo" "$wt" "$branch" "$oid" "$created"; then
-    echo "worktree-claim: removed $what" >&2
-  else
-    echo "worktree-claim: could not remove $what; remove it before reusing $branch" >&2
-  fi
+  branch_op_lock_run "$repo" --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" -- \
+    remove_new_worktree "$repo" "$wt" "$branch" "$oid" "$created" "$owner" || rc=$?
+  case "$rc" in
+    0) echo "worktree-claim: removed $what" >&2 ;;
+    5) echo "worktree-claim: left $wt in place with its branch $branch: another session claimed it first" >&2 ;;
+    *) echo "worktree-claim: could not remove $what; remove it before reusing $branch" >&2 ;;
+  esac
 }
 # remove_new_worktree removes <wt> when the note says `add` created it, then the branch `add` created
-# while it still points at <oid>.
+# while it still points at <oid>. It holds the worktree's ownership lock while it reads the marker and
+# removes the tree, and returns 5 without removing anything when a marker names another owner: a
+# concurrent `acquire` can claim the tree between its creation and `add`'s own claim.
 remove_new_worktree() {
-  local repo="$1" wt="$2" branch="$3" oid="$4" created="$5"
+  local repo="$1" wt="$2" branch="$3" oid="$4" created="$5" owner="$6" wt_phys=""
   if [ "$created" = "created" ]; then
-    git -C "$repo" worktree remove --force "$wt" || return
+    # A tree that no longer exists cannot be claimed, and git can still remove its record.
+    if [ -d "$wt" ]; then
+      wt_phys="$(cd "$wt" && pwd -P)" || return 1
+      worktree_claim_lock_acquire "$wt_phys" || return 1
+      read_marker "$wt_phys/$WORKTREE_CLAIM_MARKER_NAME"
+      if [ -n "$MARKER_OWNER" ] && [ "$MARKER_OWNER" != "$owner" ]; then
+        worktree_claim_lock_release || true
+        return 5
+      fi
+    fi
+    if ! git -C "$repo" worktree remove --force "$wt"; then
+      [ -z "$wt_phys" ] || worktree_claim_lock_release || true
+      return 1
+    fi
+    # Removing the linked worktree deleted its private refs, the lock among them.
+    [ -z "$wt_phys" ] || worktree_claim_lock_forget
   elif [ -e "$wt" ]; then
     # Something add did not record as its worktree is at <wt>, and the branch may be checked out there.
     return 1
@@ -1326,6 +1346,7 @@ cmd_add() {
   PENDING_REPO="$repo"
   PENDING_BRANCH="$branch"
   PENDING_WT="$wt"
+  PENDING_OWNER="$owner"
   PENDING_NOTE="$note"
   if ! branch_op_lock_run "$repo" \
     --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" \

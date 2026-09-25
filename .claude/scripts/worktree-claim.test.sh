@@ -581,6 +581,22 @@ check "a new worktree add could not claim loses its new branch" 1 "$(git -C "$re
 [ ! -e "$tmp/wt-claim-fail" ] || git -C "$repo" worktree remove --force "$tmp/wt-claim-fail"
 git -C "$repo" branch -D -q claim-branch-claim-fail 2>/dev/null || true
 
+# Another session can claim the new worktree before `add` does. `add` then stands down, and its rollback
+# leaves that session's worktree and branch in place. Here a post-checkout hook stands in for that session.
+cat >"$repo_hooks/post-checkout" <<'HOOK'
+#!/bin/sh
+printf 'owner=other-session\ncreated_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >.claude-worktree-owner
+HOOK
+chmod +x "$repo_hooks/post-checkout"
+rc=0
+out="$("$script" add "$repo" "$tmp/wt-claimed-first" "claim-branch-claimed-first" "session-claimed-first" 2>&1)" || rc=$?
+rm -f "$repo_hooks/post-checkout"
+check "add stands down when another session claims its new worktree first" 3 "$rc" "$out" "left $tmp/wt-claimed-first in place"
+check "a new worktree another session claimed first is kept" 0 "$([ -e "$tmp/wt-claimed-first/.claude-worktree-owner" ] && echo 0 || echo 1)"
+check "a new worktree another session claimed first keeps its branch" 0 "$(git -C "$repo" show-ref --verify --quiet refs/heads/claim-branch-claimed-first && echo 0 || echo 1)"
+[ ! -e "$tmp/wt-claimed-first" ] || git -C "$repo" worktree remove --force "$tmp/wt-claimed-first"
+git -C "$repo" branch -D -q claim-branch-claimed-first 2>/dev/null || true
+
 # A post-checkout hook that deletes the new checkout and fails leaves git's record of the worktree
 # behind. `add` removes that record along with its new branch, so the path is reusable without a prune.
 cat >"$repo_hooks/post-checkout" <<'HOOK'
@@ -1279,6 +1295,12 @@ grep -qiF 'only exit 0 authorizes' "$maintenance_contract" || fail_closed_rc=1
 grep -qF 'every non-zero status' "$root_contract" || fail_closed_rc=1
 grep -qF 'every non-zero status' "$maintenance_contract" || fail_closed_rc=1
 check "contracts fail closed on every acquisition error" 0 "$fail_closed_rc"
+
+# ── the caller contract names the recovery the origin refusal prints (monorepo#3010) ──
+origin_contract_rc=0
+grep -qF 'submodule sync -- <path>' "$root_contract" || origin_contract_rc=1
+grep -qF 'submodule sync -- ' "$script" || origin_contract_rc=1
+check "contract names the submodule-origin recovery the helper prints" 0 "$origin_contract_rc"
 
 # ── stale-base warning (the pinned-gitlink trap) ───────────────────────────────
 # A submodule worktree is created at the pinned gitlink, not at the remote default branch. git is

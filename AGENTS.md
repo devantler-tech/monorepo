@@ -4259,9 +4259,10 @@ only to that repository sends elsewhere: a `pushurl`, a URL rewrite, `core.sshCo
 an HTTP proxy, `http.curloptResolve` or `http.extraHeader` (including through a global `includeIf`), or
 a custom `receivepack`, `uploadpack` or `vcs` transport. A plain push from the checked-out branch must
 go to `origin` too. A linked worktree whose git directory records no main checkout (a
-`--separate-git-dir` clone) is refused, because nothing shows whether a superproject registers it. It
-checks the new worktree too before claiming it, and removes it when refused. Fix it with
-`git -C <superproject> submodule sync -- <path>` and by removing that setting (monorepo#3010). Work
+`--separate-git-dir` clone) is refused, because nothing shows whether a superproject registers it. The
+helper checks the new worktree too before claiming it, and removes that worktree when refused. Fix a
+refusal with `git -C <superproject> submodule sync -- <path>` and by removing that setting
+(monorepo#3010). Work
 there, open the PR, then
 `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local filesystem path such as
 `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the slug only for `gh`
