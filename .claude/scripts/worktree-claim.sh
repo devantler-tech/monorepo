@@ -745,9 +745,12 @@ submodule_name_at() {
 # config file directly rather than passed on a command line, where other processes could read it, and
 # the body runs in its own subshell so the throwaway repository is removed however the run ends.
 origin_redirects() (
-  local repo="$1" url="$2" probe="" esc urls pushurls i
+  local repo="$1" url="$2" esc urls pushurls i
+  # probe is not local, so both traps still see it wherever the function is left; the subshell keeps it
+  # from reaching the caller. A signal removes it directly rather than relying on the EXIT trap.
+  probe=""
   trap '[ -z "$probe" ] || rm -rf "$probe"' EXIT
-  trap 'exit 2' HUP INT TERM PIPE
+  trap '[ -z "$probe" ] || rm -rf "$probe"; exit 2' HUP INT TERM PIPE
   case "$url" in
     *$'\n'*)
       echo "unverifiable"
@@ -759,6 +762,8 @@ origin_redirects() (
     return 0
   }
   if ! git init -q "$probe" >/dev/null 2>&1; then
+    rm -rf "$probe"
+    probe=""
     echo "unverifiable"
     return 0
   fi
@@ -784,6 +789,8 @@ origin_redirects() (
   if [ "$(git -C "$repo" config --get-all core.gitProxy 2>/dev/null || true)" != "$(git -C "$probe" config --get-all core.gitProxy 2>/dev/null || true)" ]; then
     echo "core.gitProxy"
   fi
+  rm -rf "$probe"
+  probe=""
   echo "checked"
 )
 

@@ -290,6 +290,13 @@ out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-gmnewli
 check "add refuses when the registered URL ends in a newline origin lacks" 1 "$rc" "$out" "contains a newline"
 git -C "$super" config -f .gitmodules submodule.mod.url "https://github.com/example/sub"
 
+# A completed check removes its probe repository as well.
+mkdir -p "$tmp/probe-done"
+rc=0
+out="$(TMPDIR="$tmp/probe-done" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-probe-done" "claim-branch-sub-probe-done" "session-sub-probe-done" 2>&1)" || rc=$?
+check "a completed origin check still claims" 0 "$rc" "$out" "owner=session-sub-probe-done"
+check "a completed origin check leaves no probe repository behind" 1 "$(compgen -G "$tmp/probe-done/worktree-claim-probe.*" >/dev/null && echo 0 || echo 1)"
+
 # The probe repository holds the registered URL, which can carry a credential, so an interrupted check
 # must not leave it behind. The shim holds the check inside the probe until the job is signalled; it
 # replaces itself with the sleep, so the process holding the check's pipe is one the signal reaches.
