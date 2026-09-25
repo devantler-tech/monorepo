@@ -156,4 +156,21 @@ assert_section '(`gh api --method PUT …/contents/…`)' \
 assert_section 'Run [`unsigned-push-guard.sh <repo-dir>`](.claude/scripts/unsigned-push-guard.sh) as its own call immediately before `git push`' \
   "the Git safety section no longer requires the pre-push signature check — without it the rule has no mechanical backstop"
 
+# 7. FETCH REFSPECS NAME THEIR SOURCE IN FULL (monorepo#3596). This host sets `fetch.prune=true`
+#    globally, and under pruning a short source such as `main:refs/remotes/origin/main` deletes the
+#    destination ref, exits 1, and "succeeds" on the retry. That is how it came to look like a working
+#    fallback. 13 of 536 Codex sessions deleted origin/main this way in one week, after the warning
+#    here had been cut down to a clause elsewhere. `drifted-lane-escalation-contract.test.sh` pins the
+#    git behaviour; this pins the rule where runs look for it. Both halves are asserted: the ban
+#    without the safe form leaves the run nothing to use instead, and the safe form without the ban
+#    lets the short form back in.
+# shellcheck disable=SC2016
+assert_section 'never `main:refs/remotes/origin/main`' \
+  "the Git safety section no longer bans the short-source fetch refspec — under this host's global fetch.prune it deletes origin/main, and a retry makes it look like it worked"
+# shellcheck disable=SC2016
+assert_section '`+refs/heads/main:refs/remotes/origin/main`' \
+  "the Git safety section no longer names the fully qualified fetch refspec as the safe form — a ban with no alternative sends runs back to whatever their memory recorded"
+assert_section 'fetch.prune=true' \
+  "the Git safety section no longer states the host fact (global fetch.prune=true) that makes the short form destructive — without it the rule reads as style and gets simplified away"
+
 echo "git safety contract: OK (${section_words} words scoped)"
