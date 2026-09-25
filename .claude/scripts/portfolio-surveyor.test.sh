@@ -1359,6 +1359,13 @@ expect_review_required "agent-plugins single-PR update with a digest refresh" \
   "$(jq -c --argjson d "${per_skill_digest}" '.[:1] + [$d] + .[1:]' <<<"${agent_plugins_versioned_commits}" | with_commit_dates)"
 
 # Negative controls: each one breaks a single conjunct of the fixture above.
+expect_review_gated "agent-plugins per-skill update carrying both bump wordings" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "${per_skill_sync}" \
+    "$(per_skill_follow_up 1111111111111111111111111111111111111111 \
+      "chore(deps): bump versions of changed plugins")" \
+    "$(per_skill_follow_up "${per_skill_head}" \
+      "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
 expect_review_gated "agent-plugins per-skill update carrying another plugin's release notes" \
   "${per_skill_args[@]}" \
   "$(jq -c '. + ["plugins/engineering-practices/CHANGELOG.md"]' <<<"${per_skill_files}")" \

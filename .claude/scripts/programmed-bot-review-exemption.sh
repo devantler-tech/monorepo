@@ -347,20 +347,19 @@ matches_agent_plugins_review_provenance() {
       .committer_email == "noreply@github.com";
     def skill_update:
       (legacy_skill_update or signed_skill_update) and .message == $sync_message;
-    def follow_up($message):
-      actions_bot_authored and actions_bot_committed and .message == $message;
-    # The updater writes the version bump as "bump plugin versions and record skill updates" since
+    # Each follow-up is identified by its KIND, so two wordings of one kind still count once. The
+    # updater writes the version bump as "bump plugin versions and record skill updates" since
     # agent-plugins#247 added release notes to it; the earlier wording stays accepted for PRs
-    # opened before that change.
-    def follow_ups: [
-      "chore(deps): refresh desired-state digests for synced content",
-      "chore(deps): bump versions of changed plugins",
-      "chore(deps): bump plugin versions and record skill updates"
-    ];
+    # opened before that change, but never alongside it.
+    def follow_up_kind:
+      if .message == "chore(deps): refresh desired-state digests for synced content" then "digest"
+      elif .message == "chore(deps): bump versions of changed plugins" or
+           .message == "chore(deps): bump plugin versions and record skill updates" then "bump"
+      else null end;
     length >= 1 and
     (.[0] | skill_update) and
-    (.[1:] | map(.message) | (unique | length) == length) and
-    all(.[1:][]; . as $c | any(follow_ups[]; . as $m | $c | follow_up($m)))
+    all(.[1:][]; actions_bot_authored and actions_bot_committed and follow_up_kind != null) and
+    (.[1:] | map(follow_up_kind) | (unique | length) == length)
   ' <<<"${commits_json}" >/dev/null
 }
 
