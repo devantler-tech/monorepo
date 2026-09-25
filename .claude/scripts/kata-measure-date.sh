@@ -38,7 +38,9 @@ usage() {
   exit 2
 }
 
-[ "$#" -eq 2 ] && [ "$1" = "--input" ] && [ "$2" = "-" ] || usage
+if [ "$#" -ne 2 ] || [ "$1" != "--input" ] || [ "$2" != "-" ]; then
+  usage
+fi
 command -v jq >/dev/null 2>&1 || {
   echo "kata-measure-date: jq is required" >&2
   exit 2
