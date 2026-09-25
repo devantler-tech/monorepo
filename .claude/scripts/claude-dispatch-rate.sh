@@ -17,6 +17,10 @@
 #   to dispatch yet and is never counted as dropped.
 #
 # WHAT IT CANNOT SEE
+#   The store keeps only the CURRENT cron, with no edit history. A window is always judged against
+#   it, and the output says so (`cron_source=current`). A schedule edited during the window is
+#   invisible here, so measure only windows you know the schedule held for. Windows starting before
+#   the task's `createdAt` are refused.
 #   A dispatch that dies before the run's first user message carries no task marker, so it cannot
 #   be attributed and counts as dropped. That is the honest reading: such a run did no work. It is
 #   also why `claude-lane-liveness.sh` answers whether the NEWEST dispatch produced work, while this
@@ -42,7 +46,7 @@ STORE_ROOT="${CLAUDE_SCHEDULE_STORE_ROOT:-$HOME/Library/Application Support/Clau
 PROJECTS="${CLAUDE_PROJECTS_ROOT:-$HOME/.claude/projects}"
 TASK=""; SINCE=""; UNTIL=""; NOW_EPOCH=""; SLOTS=0
 
-usage() { sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; }
 die_unknown() { printf 'claude-dispatch-rate: UNKNOWN -- %s\n' "$1" >&2; exit 2; }
 
 while [ "$#" -gt 0 ]; do
@@ -73,8 +77,15 @@ fi
 # Strict UTC instants only. BSD and GNU date parse differently, so both are tried and validated;
 # an unparsable instant returns empty and every caller treats that as UNKNOWN.
 iso_to_epoch() {
-  local raw=$1 base out
-  base=${raw%%.*}; base=${base%Z}
+  local raw=$1 base out frac
+  # The whole value is validated, including the trailing Z, before anything is stripped. Stripping
+  # first would turn `...00.000+02:00` into a UTC instant two hours off and still report a rate.
+  case "$raw" in *Z) : ;; *) return 0 ;; esac
+  base=${raw%Z}
+  case "$base" in
+    *.*) frac=${base#*.}; base=${base%%.*}
+         case "$frac" in ''|*[!0-9]*) return 0 ;; esac ;;
+  esac
   case "$base" in
     [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]) : ;;
     *) return 0 ;;
@@ -133,6 +144,12 @@ n=$(jq -r --arg t "$TASK" '[.scheduledTasks[]? | select(.id == $t and .enabled =
 [ "$n" = "1" ] || die_unknown "task $TASK is not a single enabled task in $STORE"
 CRON=$(jq -r --arg t "$TASK" 'first(.scheduledTasks[] | select(.id == $t and .enabled == true)) | .cronExpression | strings' "$STORE") || CRON=""
 [ -n "$CRON" ] || die_unknown "task $TASK has no cronExpression"
+# The store keeps no schedule history, so a window can only be judged against the task's CURRENT
+# cron. Before the task existed there is nothing to judge at all: those slots would all read dropped.
+CREATED_MS=$(jq -r --arg t "$TASK" 'first(.scheduledTasks[] | select(.id == $t and .enabled == true)) | .createdAt | numbers' "$STORE") || CREATED_MS=""
+case "$CREATED_MS" in ''|*[!0-9]*) die_unknown "task $TASK has no numeric createdAt, so the window cannot be bounded" ;; esac
+[ "$SINCE_E" -ge $(( CREATED_MS / 1000 )) ] \
+  || die_unknown "--since predates task $TASK's creation at $(epoch_to_iso $(( CREATED_MS / 1000 )))"
 
 # Supported shapes are the two the deployment uses: `M * * * *` and `M H1,H2,... * * *`.
 # Anything else is UNKNOWN rather than a guessed schedule.
@@ -217,6 +234,10 @@ while IFS= read -r f; do
   [ -n "$f" ] || continue
   line1=$(head -n 1 "$f" 2>/dev/null) || die_unknown "could not read a transcript header"
   case "$line1" in *'<scheduled-task name='*) : ;; *) continue ;; esac
+  # A header that carries the marker but is not valid JSON may be a dispatch in this window.
+  # Skipping it would count its slot as dropped and still report a rate, so it is UNKNOWN.
+  printf '%s' "$line1" | jq -e 'true' >/dev/null 2>&1 \
+    || die_unknown "a task-marker transcript header is not valid JSON: $f"
   # Same anchored attribution as claude-lane-liveness.sh: the marker must OPEN the first user
   # message (after complete leading system reminders), so a quoted marker attributes nothing.
   nm=$(printf '%s' "$line1" | jq -er '
@@ -254,6 +275,6 @@ done
 
 dropped=$(( scheduled - dispatched ))
 rate=$(awk -v d="$dropped" -v n="$scheduled" 'BEGIN { printf "%.1f", 100 * d / n }')
-printf 'DISPATCH-RATE task=%s cron="%s" window=%s..%s scheduled=%d dispatched=%d dropped=%d drop_rate=%s%%\n' \
+printf 'DISPATCH-RATE task=%s cron="%s" cron_source=current window=%s..%s scheduled=%d dispatched=%d dropped=%d drop_rate=%s%%\n' \
   "$TASK" "$CRON" "$(epoch_to_iso "$SINCE_E")" "$(epoch_to_iso "$UNTIL_E")" "$scheduled" "$dispatched" "$dropped" "$rate"
 [ "$SLOTS" -eq 0 ] || printf '%s' "$slot_lines"

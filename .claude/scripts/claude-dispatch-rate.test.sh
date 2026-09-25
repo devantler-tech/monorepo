@@ -40,8 +40,8 @@ touch_at() {
 mkcase() {
   CASE="$TMP/$1"; mkdir -p "$CASE/projects/proj"
   STORE="$CASE/store.json"; PROJECTS="$CASE/projects"
-  printf '{"scheduledTasks":[{"id":"eng","enabled":true,"lastRunAt":"x","cronExpression":"%s"},{"id":"imp","enabled":true,"lastRunAt":"x","cronExpression":"0 0,12 * * *"}]}\n' \
-    "${2:-50 * * * *}" > "$STORE"
+  printf '{"scheduledTasks":[{"id":"eng","enabled":true,"lastRunAt":"x","createdAt":%s,"cronExpression":"%s"},{"id":"imp","enabled":true,"lastRunAt":"x","createdAt":%s,"cronExpression":"0 0,12 * * *"}]}\n' \
+    "${CREATED_MS:-$(( (BASE - 86400) * 1000 ))}" "${2:-50 * * * *}" "$(( (BASE - 86400) * 1000 ))" > "$STORE"
 }
 
 # A transcript whose first line opens with the task marker, exactly as the runtime writes it.
@@ -54,7 +54,9 @@ mksession() {
   else
     content="<scheduled-task name=${bsq}${id}${bsq} file=${bsq}/x${bsq}>go</scheduled-task>"
   fi
-  if [ "$shape" = untimed ]; then
+  if [ "$shape" = malformed ]; then
+    printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"%s"}\n' "$(iso_at "$start")" "$content" > "$f"
+  elif [ "$shape" = untimed ]; then
     printf '{"type":"user","message":{"role":"user","content":"%s"}}\n' "$content" > "$f"
   else
     printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"%s"}}\n' "$(iso_at "$start")" "$content" > "$f"
@@ -130,6 +132,13 @@ mksession eng $(( BASE + 5 ))
 expect 2 "unsupported cron hour list" "an out-of-range hour is UNKNOWN even after a valid one" \
   --task eng --since "$(iso_at "$BASE")" --until "$(iso_at "$NOW")"
 
+mkcase malformed-header
+mksession eng $(( BASE + 3000 + 5 )) malformed
+expect 2 "not valid JSON" "a marker-bearing header that is not JSON is UNKNOWN, not a drop" "${W[@]}"
+
+CREATED_MS=$(( (BASE + 3600) * 1000 )) mkcase before-created
+expect 2 "predates task" "a window starting before the task existed is UNKNOWN" "${W[@]}"
+
 mkcase args
 expect 2 "later than now" "--until past now is UNKNOWN" \
   --task eng --since "$(iso_at "$BASE")" --until "$(iso_at $(( NOW + 60 )))"
@@ -137,6 +146,9 @@ expect 2 "not a single enabled task" "an unknown task is UNKNOWN" \
   --task nope --since "$(iso_at "$BASE")" --until "$(iso_at "$NOW")"
 expect 2 "--since is required" "a missing --since is UNKNOWN" --task eng
 expect 2 "not a UTC instant" "a malformed --since is UNKNOWN" --task eng --since yesterday
+expect 2 "not a UTC instant" "an offset-bearing --since is UNKNOWN, never read as UTC" \
+  --task eng --since "2026-09-01T02:00:00.000+02:00" --until "$(iso_at "$NOW")"
+expect 2 "not a UTC instant" "a non-numeric fraction is UNKNOWN" --task eng --since "2026-09-01T00:00:00.x1Z"
 
 if [ "$fails" -gt 0 ]; then
   echo "claude-dispatch-rate.test.sh: $fails of $asserts assertions FAILED" >&2
