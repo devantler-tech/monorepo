@@ -52,6 +52,7 @@ jobs:
       drifted-lane-escalation-contract: ${{ steps.filter.outputs.drifted-lane-escalation-contract }}
       skill-owner: ${{ steps.filter.outputs.skill-owner }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
+      run-affected-tests: ${{ steps.filter.outputs.run-affected-tests }}
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
       claude-lane-liveness: ${{ steps.filter.outputs.claude-lane-liveness }}
@@ -496,6 +497,10 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/plugin-definition-currency.sh'
               - '.claude/scripts/plugin-definition-currency.test.sh'
+              - '.github/workflows/ci.yaml'
+            run-affected-tests:
+              - '.claude/scripts/run-affected-tests.sh'
+              - '.claude/scripts/run-affected-tests.test.sh'
               - '.github/workflows/ci.yaml'
             plugin-definition-refresh:
               - 'AGENTS.md'
@@ -1986,6 +1991,29 @@ jobs:
       - name: Verify the plugin definition currency check
         run: bash .claude/scripts/plugin-definition-currency.test.sh
 
+  test-run-affected-tests:
+    name: Test the affected-tests runner
+    needs: changes
+    if: needs.changes.outputs.run-affected-tests == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Both OSes: agents run the runner locally on macOS, where the process-group timeout and
+      # BSD tools behave differently from the Linux runner.
+      - name: Self-test the affected-tests runner
+        run: bash .claude/scripts/run-affected-tests.test.sh
+      - name: Select from this repository's real workflow
+        run: bash .claude/scripts/run-affected-tests.sh --all --list
+
   test-codex-lane-liveness:
     name: Test codex lane liveness
     needs: changes
@@ -2528,6 +2556,7 @@ jobs:
       - test-egress-third-party-qualifier-contract
       - test-skill-owner
       - test-plugin-definition-currency
+      - test-run-affected-tests
       - test-plugin-definition-refresh
       - test-codex-lane-liveness
       - test-claude-lane-liveness
@@ -2608,6 +2637,7 @@ jobs:
             ${{ needs.test-egress-third-party-qualifier-contract.result }}
             ${{ needs.test-skill-owner.result }}
             ${{ needs.test-plugin-definition-currency.result }}
+            ${{ needs.test-run-affected-tests.result }}
             ${{ needs.test-plugin-definition-refresh.result }}
             ${{ needs.test-codex-lane-liveness.result }}
             ${{ needs.test-claude-lane-liveness.result }}
