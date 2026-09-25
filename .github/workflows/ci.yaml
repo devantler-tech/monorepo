@@ -405,6 +405,9 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/latency-discipline-contract.test.sh'
               - '.github/workflows/ci.yaml'
+              # The portable half of the rule is asserted in the pinned plugin, so a pin bump
+              # that drops it must run this job.
+              - 'libraries/agent-plugins'
             control-character-command-contract:
               - 'AGENTS.md'
               - '.claude/scripts/control-character-command-contract.test.sh'
@@ -1729,6 +1732,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The portable half of the rule lives in the pinned agentic-engineer definition, so the
+      # agent-plugins submodule must be present; without it the test fails closed. Same form as the
+      # agent-role delivery contract job: HTTPS rewrite scoped to the command (agent-plugins is
+      # public, so no credential), and a full fetch so a pin behind the upstream tip still resolves.
+      - name: Initialise the agent-plugins submodule
+        run: |
+          git -c 'url.https://github.com/.insteadOf=git@github.com:' \
+            submodule update --init libraries/agent-plugins
       - name: Verify the latency discipline contract
         run: bash .claude/scripts/latency-discipline-contract.test.sh
 
