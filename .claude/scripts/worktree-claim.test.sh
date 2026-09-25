@@ -481,7 +481,8 @@ check "add refuses a setting a global include repeats for this repository alone"
 # A TMPDIR inside the superproject's git directory would put the probe under the same gitdir: include
 # as the submodule, so a rewrite for that scope would look shared. The probe is made elsewhere instead.
 mkdir -p "$super/.git/modules/probe-scope-tmp"
-printf '[includeIf "gitdir:%s/.git/modules/**"]\n\tpath = %s\n' "$super" "$tmp/only-mod.gitconfig" >"$tmp/global-modules-scope.gitconfig"
+# git matches gitdir: against the resolved path, which differs from $super where the temp dir is a symlink.
+printf '[includeIf "gitdir:%s/modules/**"]\n\tpath = %s\n' "$(git -C "$super" rev-parse --absolute-git-dir)" "$tmp/only-mod.gitconfig" >"$tmp/global-modules-scope.gitconfig"
 rc=0
 out="$(TMPDIR="$super/.git/modules/probe-scope-tmp" GIT_CONFIG_GLOBAL="$tmp/global-modules-scope.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-probe-scope" "claim-branch-sub-probe-scope" "session-sub-probe-scope" 2>&1)" || rc=$?
 check "add refuses a rewrite scoped to the git directory TMPDIR also sits in" 1 "$rc" "$out" "redirected by:   URL rewrite"
