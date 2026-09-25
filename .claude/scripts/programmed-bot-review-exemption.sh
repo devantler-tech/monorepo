@@ -227,12 +227,14 @@ matches_agent_plugins_review_files() {
       <<<"${files_json}")" <<<"${files_json}" >/dev/null
 }
 
-# A plugin changelog is written only by the release-notes bump (agent-plugins#247), so a head that
-# changes one must carry that commit. Without this, a sync commit alone, or the legacy bump, could
-# bring a changelog edit through the trusted path.
+# A plugin changelog is written only by the release-notes bump (agent-plugins#247), and that bump
+# always writes one, so the two appear together or not at all. Without the first direction a sync
+# commit alone, or the legacy bump, could bring a changelog edit through the trusted path; without the
+# second, a head carrying the release-notes bump but no changelog would pass as untouched updater
+# output, which it cannot be.
 matches_changelog_bump() {
   jq -e --argjson commits "${commits_json}" '
-    (any(.[]; test("/CHANGELOG\\.md$")) | not) or
+    any(.[]; test("/CHANGELOG\\.md$")) ==
     any($commits[1:][];
       .message == "chore(deps): bump plugin versions and record skill updates")
   ' <<<"${files_json}" >/dev/null

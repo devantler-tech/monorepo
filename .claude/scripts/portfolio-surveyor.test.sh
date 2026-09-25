@@ -1370,6 +1370,10 @@ expect_review_gated "agent-plugins per-skill update with a changelog but no rele
   "${per_skill_args[@]}" \
   "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
   "$(printf '%s\n' "${per_skill_sync}" | per_skill_commits)"
+expect_review_gated "agent-plugins per-skill update with the release-notes bump but no changelog" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "${per_skill_sync}" "$(per_skill_follow_up "${per_skill_head}" \
+    "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
 expect_review_gated "agent-plugins per-skill update with a changelog and the legacy bump" \
   "${per_skill_args[@]}" \
   "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
