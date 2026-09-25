@@ -310,8 +310,8 @@ rung 1, why type filters are written unquoted — is in the
   copy; a planned rotation sweeps every copy first. Changes to shared credentials or the other
   agent's runtime are prepared for the maintainer to apply.
 - **Git safety.** Work in your own per-run worktree; never `reset --hard`, stash, force-push or discard
-  work you did not author; stage explicit paths only; never push unsigned commits or to a protected
-  branch.
+  work you did not author; stage explicit paths only; fetch with a full `+refs/heads/…` refspec; never
+  push unsigned commits or to a protected branch.
 - **Fix at the root cause.** Never skip, disable or silence a check, and never hand-edit generated files.
 - **Scripting is bash or Go, never Python.**
 - **Conventions.** Conventional-Commit PR titles; open work as drafts; a scheduled role begins every
