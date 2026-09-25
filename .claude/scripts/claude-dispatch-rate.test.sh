@@ -125,7 +125,7 @@ mksession eng $(( BASE + 3000 + 5 )) untimed
 expect 2 "no readable start timestamp" "an attributed but untimed transcript is UNKNOWN" "${W[@]}"
 
 mkcase bad-cron '*/5 * * * *'
-expect 2 "unsupported cron" "an unsupported cron is UNKNOWN" "${W[@]}"
+expect 2 "supported shape" "an unsupported cron is UNKNOWN" "${W[@]}"
 
 mkcase bad-hour '0 0,25 * * *'
 mksession eng $(( BASE + 5 ))
@@ -140,7 +140,7 @@ CREATED_MS=$(( (BASE + 3600) * 1000 )) mkcase before-created
 expect 2 "predates task" "a window starting before the task existed is UNKNOWN" "${W[@]}"
 
 mkcase multiline-cron '50 * * * *\nINVALID'
-expect 2 "more than one line" "a multi-line cron is UNKNOWN, never judged by its first line" "${W[@]}"
+expect 2 "supported shape" "a multi-line cron is UNKNOWN, never judged by its first line" "${W[@]}"
 
 mkcase future-start
 for h in 0 1 2 3 4; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
@@ -155,6 +155,35 @@ mksession eng $(( DST + 1800 + 5 ))            # 10-24 02:30 CEST
 mksession eng $(( DST + 86400 + 1800 + 5 ))    # 10-25 02:30 CEST (first occurrence)
 NOW=$(( DST + 3 * 86400 )) TZ=Europe/Copenhagen expect 0 "scheduled=2 dispatched=2 dropped=0" "a DST-repeated local hour is one slot" \
   --task eng --since "$(iso_at "$DST")" --until "$(iso_at $(( DST + 2 * 86400 + 12 * 3600 )))"
+
+mkcase trailing-newline-cron '50 * * * *\n'
+mksession eng $(( BASE + 3000 + 5 ))
+expect 2 "supported shape" "a cron with a trailing newline is UNKNOWN, not trimmed into shape" "${W[@]}"
+
+# --since between the two 02:30 occurrences on the fallback day: the first already fired, so the
+# repeat is not a slot.
+mkcase dst-since-between '30 2 * * *'
+mksession eng $(( DST + 86400 + 1800 + 5 ))
+mksession eng $(( DST + 2 * 86400 + 5400 + 5 ))   # 10-26 02:30 CET
+NOW=$(( DST + 4 * 86400 )) TZ=Europe/Copenhagen expect 0 "scheduled=1 dispatched=1 dropped=0" \
+  "a fallback repeat after --since is not a slot when its first occurrence preceded --since" \
+  --task eng --since "$(iso_at $(( DST + 86400 + 3600 )))" --until "$(iso_at $(( DST + 3 * 86400 + 12 * 3600 )))"
+
+mkcase no-evidence
+expect 2 "attributable to any scheduled task" "an empty projects root is UNKNOWN, never a 100% drop" "${W[@]}"
+
+mkcase unreadable-candidate
+mksession eng $(( BASE + 3000 + 5 ))
+mkdir -p "$CASE/root/a/good" "$CASE/root/b/bad"
+cp "$STORE" "$CASE/root/a/good/scheduled-tasks.json"
+printf '{not json\n' > "$CASE/root/b/bad/scheduled-tasks.json"
+asserts=$(( asserts + 1 ))
+rc=0; OUT=$(CLAUDE_SCHEDULE_STORE_ROOT="$CASE/root" "$SCRIPT" --projects "$PROJECTS" --now-epoch "$NOW" "${W[@]}" 2>&1) || rc=$?
+case "$rc:$OUT" in 2:*"not readable JSON"*) : ;; *) note_fail "an unreadable candidate store is UNKNOWN: exit $rc -- $OUT" ;; esac
+rm "$CASE/root/b/bad/scheduled-tasks.json"
+asserts=$(( asserts + 1 ))
+rc=0; OUT=$(CLAUDE_SCHEDULE_STORE_ROOT="$CASE/root" "$SCRIPT" --projects "$PROJECTS" --now-epoch "$NOW" "${W[@]}" 2>&1) || rc=$?
+case "$rc:$OUT" in 0:*"scheduled=5"*) : ;; *) note_fail "discovery control: a single readable store is used: exit $rc -- $OUT" ;; esac
 
 mkcase args
 expect 2 "later than now" "--until past now is UNKNOWN" \

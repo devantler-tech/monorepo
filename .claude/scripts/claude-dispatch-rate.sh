@@ -137,6 +137,8 @@ if [ -z "$STORE" ]; then
   matches=0; selected=""
   for candidate in "$STORE_ROOT"/*/*/scheduled-tasks.json; do
     [ -f "$candidate" ] || continue
+    # An unreadable candidate could be the current store. Skipping it would let a stale sibling win.
+    jq -e . "$candidate" >/dev/null 2>&1 || die_unknown "candidate store is not readable JSON: $candidate"
     jq -e '[.scheduledTasks[]? | select(.enabled == true) | .id] | length > 0' "$candidate" >/dev/null 2>&1 || continue
     selected="$candidate"; matches=$((matches + 1))
   done
@@ -149,8 +151,10 @@ fi
 n=$(jq -r --arg t "$TASK" '[.scheduledTasks[]? | select(.id == $t and .enabled == true)] | length' "$STORE" 2>/dev/null) \
   || die_unknown "scheduled-tasks store is not valid JSON: $STORE"
 [ "$n" = "1" ] || die_unknown "task $TASK is not a single enabled task in $STORE"
-CRON=$(jq -r --arg t "$TASK" 'first(.scheduledTasks[] | select(.id == $t and .enabled == true)) | .cronExpression | strings' "$STORE") || CRON=""
-[ -n "$CRON" ] || die_unknown "task $TASK has no cronExpression"
+CRON=$(jq -r --arg t "$TASK" 'first(.scheduledTasks[] | select(.id == $t and .enabled == true)) | .cronExpression | strings
+  | select(test("\\A[0-9]{1,2} (\\*|[0-9]{1,2}(,[0-9]{1,2})*) \\* \\* \\*\\z"))' "$STORE") || CRON=""
+# Whitelisted in jq, on the raw value, before command substitution can strip a trailing newline.
+[ -n "$CRON" ] || die_unknown "task $TASK has no cronExpression in a supported shape (M * * * * or M H1,H2 * * *)"
 # The store keeps no schedule history, so a window can only be judged against the task's CURRENT
 # cron. Before the task existed there is nothing to judge at all: those slots would all read dropped.
 CREATED_MS=$(jq -r --arg t "$TASK" 'first(.scheduledTasks[] | select(.id == $t and .enabled == true)) | .createdAt | numbers' "$STORE") || CREATED_MS=""
@@ -207,7 +211,9 @@ done
 [ -n "$first" ] || die_unknown "no local minute matched the cron minute; the timezone offset is not whole-minute"
 
 SLOT_LIST=""; SEEN_KEYS=""
-e=$first
+# The walk starts a day early so a fixed hour that already fired before --since (the first half of a
+# DST fallback) is remembered. Only slots at or after --since are measured.
+e=$(( first - 25 * 3600 ))
 while [ "$e" -le "$UNTIL_E" ]; do
   clk=$(local_clock "$e"); [ -n "$clk" ] || die_unknown "could not render local time"
   read -r hh _ _ <<EOF
@@ -223,7 +229,7 @@ EOF
       case " $SEEN_KEYS " in *" $key "*) e=$(( e + 3600 )); continue ;; esac
       SEEN_KEYS="$SEEN_KEYS $key"
     fi
-    SLOT_LIST="$SLOT_LIST $e"
+    [ "$e" -lt "$SINCE_E" ] || SLOT_LIST="$SLOT_LIST $e"
   fi
   e=$(( e + 3600 ))
 done
@@ -243,6 +249,7 @@ done
 
 # Attributable sessions for this task that started in the window. `-newer` keeps BSD find working;
 # a transcript's mtime is at or after its start, so this never drops an in-window session.
+ANY_ATTRIBUTED=0
 TIMEREF=$(mktemp); FILELIST=$(mktemp); STARTS=$(mktemp)
 trap 'rm -f "$TIMEREF" "$FILELIST" "$STARTS"' EXIT
 stamp=$(epoch_to_touch "$SINCE_E"); [ -n "$stamp" ] || die_unknown "could not render --since as a touch stamp"
@@ -269,6 +276,7 @@ while IFS= read -r f; do
     | sub("^(<system-reminder>[\\s\\S]*?</system-reminder>[[:space:]]*)+"; "")
     | capture("^<scheduled-task name=\"(?<id>[A-Za-z0-9._-]+)\"([[:space:]]|>)").id
   ' 2>/dev/null) || nm=""
+  [ -z "$nm" ] || ANY_ATTRIBUTED=$(( ANY_ATTRIBUTED + 1 ))
   [ "$nm" = "$TASK" ] || continue
   ts=$(printf '%s' "$line1" | jq -r '.timestamp // empty' 2>/dev/null) || ts=""
   se=$(iso_to_epoch "$ts")
@@ -280,6 +288,11 @@ while IFS= read -r f; do
   [ "$se" -le $(( NOW_EPOCH + 120 )) ] || die_unknown "a $TASK transcript starts after now: $f"
   printf '%s\n' "$se" >> "$STARTS"
 done < "$FILELIST"
+
+# No attributable transcript for ANY task means the projects root or its layout is wrong, not that
+# every slot was dropped. A total outage lasting the whole window reads UNKNOWN too, which is the
+# same trade claude-lane-liveness.sh makes: neither case is ever reported as a measured rate.
+[ "$ANY_ATTRIBUTED" -gt 0 ] || die_unknown "no transcript under $PROJECTS in the window is attributable to any scheduled task"
 
 scheduled=0; dispatched=0; slot_lines=""
 prev=""
