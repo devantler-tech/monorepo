@@ -25,7 +25,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/cadence.md"
 
 fail() {
   echo "codex-dispatch-supersession contract: FAIL — $*" >&2

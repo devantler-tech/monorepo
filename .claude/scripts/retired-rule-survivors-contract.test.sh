@@ -29,7 +29,17 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${CONTRACT_DOC:-${repo_root}/AGENTS.md}"
+# The document under test is the whole contract — AGENTS.md plus every guide it indexes — unless
+# CONTRACT_DOC names another. The scratch directory also holds the self-test's mutated copies.
+if [ -n "${CONTRACT_DOC:-}" ]; then
+  constitution="${CONTRACT_DOC}"
+else
+  scratch="$(mktemp -d)"
+  trap 'rm -rf "${scratch}"' EXIT
+  constitution="${scratch}/contract.md"
+  "${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
+    { echo "retired-rule-survivors contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
+fi
 
 fail() {
   echo "retired-rule-survivors contract: FAIL — $*" >&2
@@ -98,9 +108,6 @@ result="$(check_document "${constitution}")" || fail "${result}"
 # Self-test, skipped when checking an override. A negative guard that never fires is not a guard, so
 # prove each row fails on the two ways a retired rule comes back.
 if [ -z "${CONTRACT_DOC:-}" ]; then
-  scratch="$(mktemp -d)"
-  trap 'rm -rf "${scratch}"' EXIT
-
   while IFS=$'\t' read -r phrase notice _; do
     [ -n "${phrase}" ] || continue
 

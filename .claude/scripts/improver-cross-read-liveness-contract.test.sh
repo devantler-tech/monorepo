@@ -38,7 +38,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/durable-memory.md"
+surfaces_guide="${repo_root}/.claude/guides/definition-surfaces.md"
 
 fail() {
   echo "improver cross-read liveness contract: FAIL — $*" >&2
@@ -168,7 +169,7 @@ assert_contains "${clause}" 'Agent definition locations' \
 # section is a fail-open: this contract has renamed sections before (the actor was renamed twice),
 # and a rename would leave the clause pointing at nothing while this test stayed green — silently
 # un-wiring the two halves it exists to keep together. Verified against the heading itself.
-grep -q '^### Agent definition locations' "${constitution}" ||
-  fail 'the clause cross-references "### Agent definition locations" but no such section exists — the reference has rotted'
+grep -q '^## Agent definition locations' "${surfaces_guide}" ||
+  fail 'the clause cross-references *Agent definition locations*, but the definition-surfaces guide has no such section — the reference has rotted'
 
 echo "improver cross-read liveness contract: PASS — precondition, handling, non-blocking guarantee and cross-reference all present at the point of use"

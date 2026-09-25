@@ -21,7 +21,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="${repo_root}/.claude/scripts/plugin-definition-currency.sh"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/definition-and-plugin.md"
 portable_loader="${repo_root}/.claude/loaders/portable-agentic-engineer.md"
 
 pass_count=0
@@ -941,12 +941,12 @@ esac
 # section said nothing. Flattened because every sentence wraps across source lines.
 section="$(
   awk '
-    /^### Agentic engineering plugin contract$/ { ins = 1; next }
-    ins && /^### / { exit }
+    /^## Agentic engineering plugin contract$/ { ins = 1; next }
+    ins && /^## / { exit }
     ins { print }
   ' "${constitution}" | tr '\n' ' '
 )"
-[ -n "${section}" ] || fail "could not extract the plugin contract section from AGENTS.md"
+[ -n "${section}" ] || fail "could not extract the plugin contract section from the definition-and-plugin guide"
 
 case "${section}" in
   *"plugin-definition-currency.sh"*) ok "the contract names the check" ;;

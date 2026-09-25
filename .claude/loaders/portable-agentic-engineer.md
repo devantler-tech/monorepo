@@ -5,7 +5,8 @@ provider identity, schedule, credentials, model selection, or mutation authority
 
 1. Read the checkout's [AGENTS.md](../../AGENTS.md). It is authoritative for deployment facts,
    including the instance registry, authority, trust, cadence, inference routing, and delivery gates.
-   If that contract is unavailable, report the missing contract before acting.
+   It indexes the agent guides under `.claude/guides/`; read a guide before the work it covers. If
+   that contract is unavailable, report the missing contract before acting.
 2. Resolve this instance and its capabilities from the consumer contract and the native harness's
    verified state. Use the deployment's authenticated identity and ownership rules; do not infer
    permissions, branch namespaces, or billing from a provider name or an installed application.
@@ -20,7 +21,8 @@ provider identity, schedule, credentials, model selection, or mutation authority
 4. Check definition currency with the adapter supported by this deployment, comparing its loaded
    or declared source evidence against the consumer pin. On `DRIFT` or `UNKNOWN`, report the result
    and follow the contract's recovery and reviewed fallback at the **consumer's pinned gitlink**.
-   Use the *Agentic engineering plugin contract* procedure to materialize and read that revision
+   Use the *Agentic engineering plugin contract* procedure in the
+   [definition-and-plugin guide](../guides/definition-and-plugin.md) to materialize and read that revision
    without replacement objects. The `git-ref` backend accepts an explicit full commit ID or fully
    qualified source ref through `--loaded-ref`; it attests **source parity only** and does not attest the loaded session.
    Missing loaded-state evidence remains unknown. Never edit runtime caches or describe a successful

@@ -22,7 +22,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/tool-call-discipline.md"
 
 fail() {
   echo "one-verb-per-bash-call contract: FAIL — $*" >&2

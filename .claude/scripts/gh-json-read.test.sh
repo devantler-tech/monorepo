@@ -13,7 +13,7 @@ set -uo pipefail
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SCRIPT="$SCRIPT_DIR/gh-json-read.sh"
 REPO_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
-CONSTITUTION="${AGENTS_FILE:-$REPO_ROOT/AGENTS.md}"
+CONSTITUTION="${AGENTS_FILE:-$REPO_ROOT/.claude/guides/merge-policy.md}"
 [ -f "$SCRIPT" ] || {
   echo "FAIL: script not found at $SCRIPT" >&2
   exit 1
@@ -106,7 +106,7 @@ run 0 "[]" ""
 check "no arguments is a usage error" '[ "$RC" -eq 2 ] && [ -z "$OUT" ]'
 
 # 10. The contract names this helper where the vocabulary rule lives, so the rule has a tool.
-check "AGENTS.md names the helper" 'grep -Fq ".claude/scripts/gh-json-read.sh" "$CONSTITUTION"'
+check "the merge-policy guide names the helper" 'grep -Fq ".claude/scripts/gh-json-read.sh" "$CONSTITUTION"'
 
 echo "gh-json-read: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

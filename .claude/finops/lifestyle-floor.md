@@ -5,7 +5,8 @@
 This file names the outcomes that are **never traded for money**. The Agentic Engineer reads it on
 every [cost pass](../skills/finops/SKILL.md) and vetoes any proposal that would deliver *less* of
 anything below. It is the deployment's **protected-outcomes floor** under
-[`AGENTS.md` → *Spend contract*](../../AGENTS.md).
+[*Spend contract*](../guides/spend-and-inference.md#spend-contract--the-money-side-of-the-same-portfolio)
+(summarised in [`AGENTS.md`](../../AGENTS.md#spend-contract--the-money-side-of-the-same-portfolio)).
 
 **How to read an entry:** each names an **outcome**, not an implementation. "Everything is reachable
 at its own name over HTTPS" is protected; *how* that is delivered is fair game — a cheaper

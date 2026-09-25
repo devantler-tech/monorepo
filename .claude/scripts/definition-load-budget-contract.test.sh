@@ -18,26 +18,26 @@
 # (+146%) as measured on 2026-08-19, because generic refinements were appended here instead of
 # upstreamed, re-opening the gap #78 had just closed. That endpoint is a DATED measurement and is
 # deliberately not chased on every raise: `CEILING_OVERLAY_BYTES` below is always the current figure,
-# and assertion 5 is what keeps it agreeing with AGENTS.md.
+# and assertion 5 is what keeps it agreeing with the tool-call-discipline guide.
 # Growth in a file whose declared destination is deletion is always worth a
-# deliberate decision. AGENTS.md is deliberately NOT gated: rules legitimately accrete there, and a
+# deliberate decision. The guides are deliberately NOT byte-gated: rules legitimately accrete there, and a
 # ratchet firing on every definition PR — safety fixes included — would train the raise into a
 # reflex and destroy the signal this guard exists to produce.
 #
 # This guard never vetoes mandated work. Raising the ceiling in the same pull request is always
 # available; the ceiling's only job is to make the cost a decision somebody made rather than one
 # nobody saw. Assertion 5 is what keeps a raise honest: the ceiling here and the figure quoted in
-# AGENTS.md must agree, so a raise cannot land without updating the evidence the next reader weighs
-# it against.
+# the tool-call-discipline guide must agree, so a raise cannot land without updating the evidence the
+# next reader weighs it against.
 
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/tool-call-discipline.md"
 overlay="${repo_root}/.claude/agents/portfolio-surveyor.md"
 
 # The recorded high-water mark, in bytes. Raise this ONLY together with the figure quoted in
-# AGENTS.md's *Context & token discipline* section (assertion 5 enforces that pairing).
+# the tool-call-discipline guide's *Context & token discipline* section (assertion 5 enforces that pairing).
 CEILING_OVERLAY_BYTES=167982
 
 fail() {
@@ -51,7 +51,7 @@ fail() {
 # the guard fighting its own goal. The contract assertions below are skipped with it, because they
 # describe a file that no longer exists; retiring this test is then the follow-up.
 if [ ! -e "${overlay}" ]; then
-  echo "definition-load budget contract: PASS — the temporary surveyor overlay is GONE, which is its declared destination. Retire this guard and its AGENTS.md paragraph in the same pull request that removed the file."
+  echo "definition-load budget contract: PASS — the temporary surveyor overlay is GONE, which is its declared destination. Retire this guard and its guide paragraph in the same pull request that removed the file."
   exit 0
 fi
 
@@ -77,27 +77,27 @@ the temporary surveyor overlay grew to ${overlay_bytes} B, over its ${CEILING_OV
         temporary overlay. That is the routing rule in *Agent definition locations*, and it also
         moves the overlay closer to the deletion its own checklist describes.
     (b) RAISE the ceiling in THIS pull request, and say why in the PR body. Also update the byte
-        figure quoted in AGENTS.md's *Context & token discipline* section — assertion 5 requires
+        figure quoted in the tool-call-discipline guide's *Context & token discipline* section — assertion 5 requires
         the two to agree, so the next reader can weigh the raise against real evidence.
   This guard never blocks mandated work; it only makes the cost visible at the moment it is made.")"
 
 # 2. The measurement must stay in the contract. Without this the ceiling decays into an unexplained
 # number and nobody can judge whether a raise is reasonable.
 grep -qF '191,397' "${constitution}" ||
-  fail "AGENTS.md no longer records the measured surveyor first-turn median (191,397 tokens) — the ceiling would become an unexplained constant"
+  fail "the tool-call-discipline guide no longer records the measured surveyor first-turn median (191,397 tokens) — the ceiling would become an unexplained constant"
 grep -qF '157 of 182 subagent dispatches' "${constitution}" ||
-  fail "AGENTS.md no longer records the dispatch share the cost is multiplied by — a raise could not be weighed without it"
+  fail "the tool-call-discipline guide no longer records the dispatch share the cost is multiplied by — a raise could not be weighed without it"
 
 # 3. Both remedies must stay named, so the guard keeps failing WITH the fix rather than just failing.
 grep -qF 'goes UPSTREAM unless it is a genuine deployment fact' "${constitution}" ||
-  fail "AGENTS.md no longer names the upstream remedy in the routing sentence. NOTE: do not weaken this to a bare 'upstream' match — that word appears ~49 times in this contract, so the assertion would pass with this whole section deleted."
+  fail "the tool-call-discipline guide no longer names the upstream remedy in the routing sentence. NOTE: do not weaken this to a bare 'upstream' match — that word appears ~49 times in this contract, so the assertion would pass with this whole section deleted."
 grep -qF 'raise the ceiling' "${constitution}" ||
-  fail "AGENTS.md no longer names the deliberate-raise remedy, leaving the ceiling looking like a hard veto"
+  fail "the tool-call-discipline guide no longer names the deliberate-raise remedy, leaving the ceiling looking like a hard veto"
 
 # 4. The DevEx guarantee must stay stated. A ceiling read as a veto is the failure mode that turns a
 # visibility guard into the friction tax *Security hardening without a DevEx tax* forbids.
 grep -qF 'never vetoes mandated' "${constitution}" ||
-  fail "AGENTS.md no longer states that the ceiling never vetoes mandated work"
+  fail "the tool-call-discipline guide no longer states that the ceiling never vetoes mandated work"
 
 # 5. CONSERVATION: keep the dated measurement distinct from the current enforced high-water mark,
 # and require that current mark to agree with this file's ceiling. Otherwise each raise rewrites the
@@ -106,11 +106,11 @@ grep -qF 'never vetoes mandated' "${constitution}" ||
 # substitution non-zero, which killed the script BEFORE the explicit check below could report it —
 # a guard that cannot announce its own failure. Caught by ablation A5b.
 grep -qF '61,144 B → 150,495 B (+146%)' "${constitution}" ||
-  fail "AGENTS.md no longer preserves the dated 2026-08-19 overlay measurement separately from the live ceiling"
+  fail "the tool-call-discipline guide no longer preserves the dated 2026-08-19 overlay measurement separately from the live ceiling"
 documented="$(grep -oE 'enforced high-water mark is now [0-9,]+ B' "${constitution}" | head -1 | sed -E 's/.*now ([0-9,]+) B/\1/' | tr -d ',' || true)"
 [ -n "${documented}" ] ||
-  fail "could not find the current enforced high-water mark in AGENTS.md — assertions 2-4 anchor on that section, so its loss makes this guard unverifiable"
+  fail "could not find the current enforced high-water mark in the tool-call-discipline guide — assertions 2-4 anchor on that section, so its loss makes this guard unverifiable"
 [ "${documented}" = "${CEILING_OVERLAY_BYTES}" ] ||
-  fail "ceiling drift: this test allows ${CEILING_OVERLAY_BYTES} B but AGENTS.md documents ${documented} B. Raise both together, or the recorded evidence stops describing the enforced limit."
+  fail "ceiling drift: this test allows ${CEILING_OVERLAY_BYTES} B but the tool-call-discipline guide documents ${documented} B. Raise both together, or the recorded evidence stops describing the enforced limit."
 
 echo "definition-load budget contract: PASS — overlay ${overlay_bytes} B / ceiling ${CEILING_OVERLAY_BYTES} B; contract evidence and both remedies intact"
