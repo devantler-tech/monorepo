@@ -862,6 +862,14 @@ printf '[init]\n\tdefaultBranch = claim-branch-linked-ok\n[includeIf "onbranch:c
 rc=0
 out="$(GIT_CONFIG_GLOBAL="$tmp/global-probe-branch.gitconfig" "$script" acquire "$tmp/wt-linked-ok" "session-linked-ok" 2>&1)" || rc=$?
 check "acquire refuses a redirect keyed to the branch a new repository starts on" 1 "$rc" "$out" "redirected by:   core.sshCommand"
+# A glob include can match the probe's branch whatever it is named, so the probe must be on no branch.
+rc=0
+out="$("$script" add "$tmp/linked-mod" "$tmp/wt-probe-glob" "worktree-claim-probe-target" "session-probe-glob" 2>&1)" || rc=$?
+check "add admits a submodule worktree on a branch named like the probe" 0 "$rc" "$out" "owner=session-probe-glob"
+printf '[includeIf "onbranch:worktree-claim-probe-*"]\n\tpath = %s\n' "$tmp/onbranch-ssh.gitconfig" >"$tmp/global-probe-glob.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-probe-glob.gitconfig" "$script" acquire "$tmp/wt-probe-glob" "session-probe-glob" 2>&1)" || rc=$?
+check "acquire refuses a redirect keyed to a branch glob the probe's branch also matches" 1 "$rc" "$out" "redirected by:   core.sshCommand"
 
 # A submodule name may contain a space; the registration must still be found.
 git -C "$super" -c protocol.file.allow=always submodule add -q "$upstream_sub" "mod space"

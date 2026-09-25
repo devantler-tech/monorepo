@@ -1030,9 +1030,11 @@ origin_redirects() (
       return 0
     fi
   fi
-  # An empty template keeps a user's init template, and any config it carries, out of the probe. A branch
-  # of its own keeps an include keyed to <repo>'s branch name from applying to the probe as well.
-  if ! git init -q --template= --initial-branch="worktree-claim-probe-${probe##*.}" "$probe" >/dev/null 2>&1; then
+  # An empty template keeps a user's init template, and any config it carries, out of the probe. HEAD
+  # points outside refs/heads/, so no onbranch include applies to the probe: a branch of any name could
+  # match a glob that also matches <repo>'s branch, and the redirect would then look shared.
+  if ! git init -q --template= "$probe" >/dev/null 2>&1 ||
+    ! git -C "$probe" symbolic-ref HEAD refs/worktree-claim-probe >/dev/null 2>&1; then
     rm -rf "$probe"
     probe=""
     echo "unverifiable"
