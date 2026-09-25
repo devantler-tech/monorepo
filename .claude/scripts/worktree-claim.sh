@@ -819,6 +819,10 @@ origin_redirects() (
   if [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?curloptresolve$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?curloptresolve$' 2>/dev/null || true)" ]; then
     echo "http.curloptResolve"
   fi
+  # An extra header such as Host can make the same URL reach another repository on that server.
+  if [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?extraheader$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?extraheader$' 2>/dev/null || true)" ]; then
+    echo "http.extraHeader"
+  fi
   rm -rf "$probe"
   probe=""
   echo "checked"
@@ -833,12 +837,14 @@ origin_redirects() (
 # resolves a relative one, byte for byte. Two spellings git might treat as one repository are not
 # accepted as equal, because whether they are depends on the server; `submodule sync` restores the
 # exact URL. Nothing that applies only to this repository may send origin elsewhere either: a
-# pushurl, a URL rewrite, core.sshCommand, core.gitProxy, a curl proxy or http.curloptResolve in its own
-# config or in a global file included only for it, or a custom receive-pack, upload-pack or remote helper.
+# pushurl, a URL rewrite, core.sshCommand, core.gitProxy, a curl proxy, http.curloptResolve or
+# http.extraHeader in its own config or in a global file included only for it, or a custom receive-pack,
+# upload-pack or remote helper. A plain push from the checked-out branch must go to origin as well.
 # Settings that apply to every repository, the superproject included, are not this check's concern. A
 # repository that is not a submodule is not checked: nothing names what it should be.
 refuse_foreign_submodule_origin_checked() {
   local repo_abs="$1" super rel name="" common="" worktree="" main="" found admin raw="" expected="" resolved=0 shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
+  local top inplace head_branch push_remote="" pushto=""
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
     super="$(cd "$super" && pwd -P)"
@@ -875,6 +881,26 @@ refuse_foreign_submodule_origin_checked() {
       super="$(cd "$super" && pwd -P)"
       rel="${main#"$super"/}"
       name="$(submodule_name_at "$super" "$rel")"
+    fi
+    # An in-place clone's checkout is where its git directory sits, whatever core.worktree names now,
+    # so the superproject around that directory decides whether it is a registered submodule.
+    if [ -z "$name" ]; then
+      case "$common" in
+        */.git)
+          inplace="$(cd "${common%/.git}" 2>/dev/null && pwd -P)" || inplace=""
+          top=""
+          [ -z "$inplace" ] || top="$(git -C "${inplace%/*}" rev-parse --show-toplevel 2>/dev/null)" || top=""
+          [ -z "$top" ] || top="$(cd "$top" && pwd -P)" || top=""
+          if [ -n "$top" ] && [ "${inplace#"$top"/}" != "$inplace" ]; then
+            found="$(submodule_name_at "$top" "${inplace#"$top"/}")"
+            if [ -n "$found" ]; then
+              super="$top"
+              rel="${inplace#"$top"/}"
+              name="$found"
+            fi
+          fi
+          ;;
+      esac
     fi
   fi
   if [ -z "$super" ]; then
@@ -966,6 +992,23 @@ refuse_foreign_submodule_origin_checked() {
       foreign=1
     fi
   done
+  # A plain push goes to the branch's push remote, which only defaults to origin. Pushing to "." stays in
+  # this repository.
+  head_branch="$(git -C "$repo_abs" symbolic-ref -q --short HEAD 2>/dev/null)" || head_branch=""
+  if [ -n "$head_branch" ]; then
+    push_remote="$(git -C "$repo_abs" config --get "branch.$head_branch.pushRemote" 2>/dev/null)" || push_remote=""
+  fi
+  [ -n "$push_remote" ] || push_remote="$(git -C "$repo_abs" config --get remote.pushDefault 2>/dev/null)" || push_remote=""
+  if [ -z "$push_remote" ] && [ -n "$head_branch" ]; then
+    push_remote="$(git -C "$repo_abs" config --get "branch.$head_branch.remote" 2>/dev/null)" || push_remote=""
+  fi
+  case "$push_remote" in
+    '' | origin | .) ;;
+    *)
+      pushto="$(redact_url "$push_remote")"
+      foreign=1
+      ;;
+  esac
   if [ "$foreign" -eq 1 ] || [ "$matched" -eq 0 ]; then
     shown_expected="<not registered at $rel>"
     if [ -n "$expected" ]; then
@@ -983,12 +1026,14 @@ refuse_foreign_submodule_origin_checked() {
     echo "  (origin must be exactly the registered URL, as \`git submodule sync\` writes it.)" >&2
     [ -z "$redirects" ] || echo "  redirected by:   ${redirects} (config that applies only to this repository)" >&2
     [ -z "$packs" ] || echo "  custom transport: ${packs} (it decides what fetch and push reach, whatever the url)" >&2
+    [ -z "$pushto" ] || echo "  push remote:      ${pushto} (a plain git push from ${head_branch:-HEAD} goes there, not to origin)" >&2
     echo "  Work committed here would land in the wrong repository. Point origin at the registered URL:" >&2
     echo "    git -C $(shquote "$super") submodule sync -- $(shquote "$rel")" >&2
     echo "  and remove any remote.origin.pushurl, receivepack, uploadpack or vcs, and any url.<base>.insteadOf," >&2
-    echo "  url.<base>.pushInsteadOf, core.sshCommand, core.gitProxy, remote.origin.proxy, http.proxy or" >&2
-    echo "  http.curloptResolve that applies only to this repository, including through an includeIf in a" >&2
-    echo "  global config." >&2
+    echo "  url.<base>.pushInsteadOf, core.sshCommand, core.gitProxy, remote.origin.proxy, http.proxy," >&2
+    echo "  http.curloptResolve or http.extraHeader that applies only to this repository, including through" >&2
+    echo "  an includeIf in a global config. A remote.pushDefault, branch.<name>.pushRemote or" >&2
+    echo "  branch.<name>.remote must name origin." >&2
     exit 1
   fi
 }

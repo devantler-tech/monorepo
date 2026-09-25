@@ -355,6 +355,53 @@ rc=0
 out="$(GIT_TEMPLATE_DIR="$tmp/init-template" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-template" "claim-branch-sub-template" "session-sub-template" 2>&1)" || rc=$?
 check "add admits a correct submodule when the user's init template sets core.sshCommand" 0 "$rc" "$out" "owner=session-sub-template"
 
+# A Host header can make the registered URL reach another repository on the same server.
+i=0
+for key in "http.extraHeader" "http.https://github.com/.extraHeader"; do
+  i=$((i + 1))
+  git -C "$super/mod" config "$key" "Host: foreign.invalid"
+  rc=0
+  out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-header-$i" "claim-branch-sub-header-$i" "session-sub-header-$i" 2>&1)" || rc=$?
+  check "add refuses a submodule whose own config sets $key" 1 "$rc" "$out" "redirected by:   http.extraHeader"
+  git -C "$super/mod" config --unset "$key"
+done
+printf '[http]\n\textraHeader = X-Trace: on\n' >"$tmp/global-header.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-header.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-header-global" "claim-branch-sub-header-global" "session-sub-header-global" 2>&1)" || rc=$?
+check "add admits a submodule when only global config sets http.extraHeader" 0 "$rc" "$out" "owner=session-sub-header-global"
+
+# A plain push goes to the branch's push remote, which only defaults to origin.
+git -C "$super/mod" config remote.pushDefault other
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-pushdefault" "claim-branch-sub-pushdefault" "session-sub-pushdefault" 2>&1)" || rc=$?
+check "add refuses a submodule whose remote.pushDefault names another remote" 1 "$rc" "$out" "push remote:      other"
+git -C "$super/mod" config branch.claim-branch-sub-pushremote-origin.pushRemote origin
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-pushremote-origin" "claim-branch-sub-pushremote-origin" "session-sub-pushremote-origin" 2>&1)" || rc=$?
+check "add refuses remote.pushDefault in the main checkout even when the new branch pushes to origin" 1 "$rc" "$out" "push remote:      other"
+git -C "$super/mod" config --unset remote.pushDefault
+git -C "$super/mod" config --unset branch.claim-branch-sub-pushremote-origin.pushRemote
+git -C "$super/mod" config branch.claim-branch-sub-pushremote.pushRemote other
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-pushremote" "claim-branch-sub-pushremote" "session-sub-pushremote" 2>&1)" || rc=$?
+check "add refuses a new branch whose pushRemote names another remote" 1 "$rc" "$out" "push remote:      other"
+check "a new branch set to push elsewhere loses its worktree" 1 "$([ -e "$tmp/wt-sub-pushremote" ] && echo 0 || echo 1)"
+[ ! -e "$tmp/wt-sub-pushremote" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-pushremote"
+git -C "$super/mod" config --unset branch.claim-branch-sub-pushremote.pushRemote
+git -C "$super/mod" branch -D -q claim-branch-sub-pushremote 2>/dev/null || true
+# A branch that tracks another remote pushes there too; "." keeps pushes in this repository.
+git -C "$super/mod" branch claim-branch-sub-tracks-other
+git -C "$super/mod" config branch.claim-branch-sub-tracks-other.remote other
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-tracks-other" "claim-branch-sub-tracks-other" "session-sub-tracks-other" 2>&1)" || rc=$?
+check "add refuses a branch that tracks another remote" 1 "$rc" "$out" "push remote:      other"
+check "a refused tracking branch loses its worktree" 1 "$([ -e "$tmp/wt-sub-tracks-other" ] && echo 0 || echo 1)"
+[ ! -e "$tmp/wt-sub-tracks-other" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-tracks-other"
+git -C "$super/mod" config branch.claim-branch-sub-tracks-other.remote .
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-tracks-local" "claim-branch-sub-tracks-other" "session-sub-tracks-local" 2>&1)" || rc=$?
+check "add admits a branch that tracks this repository" 0 "$rc" "$out" "owner=session-sub-tracks-local"
+
 # `submodule sync` writes a registered URL byte for byte, trailing newline included, so an origin
 # without it is not that URL; a URL carrying a newline cannot be verified either way.
 git -C "$super" config -f .gitmodules submodule.mod.url "https://github.com/example/sub"$'\n'
@@ -679,6 +726,13 @@ git -C "$inplace_super/indep" config remote.origin.url "$other_sub"
 rc=0
 out="$("$script" add "$tmp/linked-indep" "$tmp/wt-indep-wrong" "claim-branch-indep-wrong" "session-indep-wrong" 2>&1)" || rc=$?
 check "add refuses a linked worktree of an in-place submodule clone with a foreign origin" 1 "$rc" "$out" "submodule sync -- 'indep'"
+# Repointing the in-place clone's core.worktree at a standalone checkout does not move where it lives.
+git config -f "$inplace_super/indep/.git/config" core.worktree "$tmp/standalone"
+rc=0
+out="$("$script" acquire "$tmp/linked-indep" "session-indep-repointed" 2>&1)" || rc=$?
+check "acquire refuses an in-place clone whose core.worktree points at a standalone checkout" 1 "$rc" "$out" "submodule sync -- 'indep'"
+git config -f "$inplace_super/indep/.git/config" --unset core.worktree
+rm -f "$tmp/linked-indep/.claude-worktree-owner"
 git -C "$inplace_super/indep" config remote.origin.url "$upstream_sub"
 
 # When two .gitmodules sections claim one path, git initializes it from the later one.
