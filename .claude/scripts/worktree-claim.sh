@@ -921,6 +921,38 @@ refuse_unlocated_main() {
   exit 1
 }
 
+# superproject_owns succeeds when <super> is still a git working tree and, where the git directory of
+# <repo> sits in a git directory's modules/, that git directory is <super>'s own. git, and a git
+# directory's own path, can both name a superproject worktree that has since been deleted, and its
+# path can hold anything now, so its .gitmodules says nothing about <repo> unless both hold.
+superproject_owns() {
+  local super="$1" repo="$2" common="$3" top super_git
+  super="$(resolved_dir "$super")" || return 1
+  top="$(git -C "$super" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  top="$(resolved_dir "$top")" || return 1
+  [ "$top" = "$super" ] || return 1
+  if [ -z "$common" ]; then
+    common="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  fi
+  common="$(resolved_dir "$common")" || return 1
+  under_git_modules "$common" || return 0
+  super_git="$(git -C "$super" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  super_git="$(resolved_dir "$super_git")" || return 1
+  case "$common" in
+    "$super_git"/modules/*) return 0 ;;
+  esac
+  return 1
+}
+
+# refuse_stale_superproject exits 1 because <super>, named as the superproject of <repo>, is not a
+# git working tree whose git directory holds <repo>'s own.
+refuse_stale_superproject() {
+  echo "worktree-claim: $1 names $2 as its superproject, but $2 is no longer the git working tree that registered it." >&2
+  echo "  Its .gitmodules cannot say what $1 should be, so it is not claimed. Run this from a checkout" >&2
+  echo "  inside the live superproject, and remove a deleted worktree's leftover record with git worktree prune." >&2
+  exit 1
+}
+
 # superproject_of prints the physical path of the superproject whose working tree holds <dir>, and
 # nothing when there is none. It returns 2 when that path cannot be resolved to the same directory: git
 # ends the path with a newline, and command substitution would drop one the path itself ends in too.
@@ -1383,6 +1415,9 @@ refuse_foreign_submodule_origin_checked() {
     fi
     IFS= read -r -d '' rel < <(git config -z -f "$super/.gitmodules" --get "submodule.$name.path" 2>/dev/null) || rel="$name"
   fi
+  if [ -n "$super" ] && ! superproject_owns "$super" "$repo_abs" "$common"; then
+    refuse_stale_superproject "$repo_abs" "$super"
+  fi
   # Read NUL-delimited: command substitution would drop a trailing newline that `submodule sync` keeps.
   if [ -n "$name" ]; then
     IFS= read -r -d '' raw < <(git config -z -f "$super/.gitmodules" --get "submodule.$name.url" 2>/dev/null) || raw=""
@@ -1561,14 +1596,16 @@ cmd_add() {
   # whole function means every internal add inherits the one lock.
   local note
   note="$(mktemp "${TMPDIR:-/tmp}/worktree-claim-branch.XXXXXX")" || fail "cannot create a temporary file"
-  PENDING_REPO="$repo"
+  # The resolved path, not <repo> as given: a hook can repoint a symlinked <repo> during creation, and
+  # rollback must still act on the repository the worktree was created in.
+  PENDING_REPO="$repo_abs"
   PENDING_BRANCH="$branch"
   PENDING_WT="$wt"
   PENDING_OWNER="$owner"
   PENDING_NOTE="$note"
-  if ! branch_op_lock_run "$repo" \
+  if ! branch_op_lock_run "$repo_abs" \
     --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" \
-    -- add_worktree_noting_new_branch "$repo" "$wt" "$branch" "$note"; then
+    -- add_worktree_noting_new_branch "$repo_abs" "$wt" "$branch" "$note"; then
     fail "git worktree add failed for $wt (branch $branch)"
   fi
   # Config can apply to the new worktree alone, through an includeIf onbranch: for its branch or a
@@ -1590,7 +1627,7 @@ cmd_add() {
   # succeeded. Every path in it returns 0 today, but relying on that couples the claim's exit code to
   # the internals of a NOTE -- one future `return 1` on an unresolvable comparison would abort the
   # claim under `set -e`, after the worktree and branch were already created.
-  warn_if_base_is_stale "$repo" "$wt" || true
+  warn_if_base_is_stale "$repo_abs" "$wt" || true
   echo "worktree-claim: added $wt on $branch owner=$owner"
 }
 

@@ -4254,7 +4254,8 @@ that contains it: the session write guard refuses every Edit/Write under the sha
 `.claude/worktrees/` builds a tree the run cannot edit. The helper refuses both, and refuses a
 `<repo_path>` that is not its own repository's root — an uninitialized submodule — so populate it with
 `submodule-init.sh` first (monorepo#2755). The helper also refuses a populated submodule whose `origin`
-is not exactly the URL `git submodule sync` writes for it. It also refuses one that a setting applying
+is not exactly the URL `git submodule sync` writes for it, and reads that URL only from a superproject
+that is still the git working tree holding the submodule's git directory. It also refuses one that a setting applying
 only to that repository sends elsewhere: a `pushurl`, a URL rewrite, `core.sshCommand`, `core.gitProxy`,
 an HTTP proxy, `http.curloptResolve` or `http.extraHeader` (including through a global `includeIf`), or
 a custom `receivepack`, `uploadpack` or `vcs` transport. A plain push from the checked-out branch must

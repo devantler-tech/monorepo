@@ -931,6 +931,25 @@ rc=0
 out="$("$script" add "$session/per-run" "$tmp/wt-session-wrong" "claim-branch-session-wrong" "session-session-wrong" 2>&1)" || rc=$?
 check "add refuses a linked superproject's submodule whose origin is another repository" 1 "$rc" "$out" "submodule sync -- 'mod'"
 
+# A deleted superproject worktree leaves its path free, and a .gitmodules found there later says nothing
+# about the submodule: not in a plain directory, and not in a repository that does not own its git directory.
+stale_session="$tmp/stale-session"
+git -C "$super" worktree add -q --detach "$stale_session"
+git -C "$stale_session" -c protocol.file.allow=always submodule update -q --init mod
+git -C "$stale_session/mod" worktree add -q --detach "$tmp/stale-ext"
+git -C "$stale_session/mod" config remote.origin.url "$other_sub"
+rm -rf "$stale_session"
+mkdir -p "$stale_session"
+printf '[submodule "mod"]\n\tpath = mod\n\turl = %s\n' "$other_sub" >"$stale_session/.gitmodules"
+rc=0
+out="$("$script" add "$tmp/stale-ext" "$tmp/wt-stale-plain" "claim-branch-stale-plain" "session-stale-plain" 2>&1)" || rc=$?
+check "add refuses a submodule whose superproject worktree is now a plain directory" 1 "$rc" "$out" "is no longer the git working tree"
+check "that refusal creates no worktree" 1 "$([ -e "$tmp/wt-stale-plain" ] && echo 0 || echo 1)"
+git init -q -b main "$stale_session"
+rc=0
+out="$("$script" add "$tmp/stale-ext" "$tmp/wt-stale-repo" "claim-branch-stale-repo" "session-stale-repo" 2>&1)" || rc=$?
+check "add refuses a submodule whose superproject worktree is now another repository" 1 "$rc" "$out" "is no longer the git working tree"
+
 # A superproject created with --separate-git-dir keeps its submodules' git directories there too, so
 # their location never names the superproject; the submodule's main checkout still does.
 mkdir -p "$tmp/sep-admin" "$tmp/sep-work"
@@ -1013,6 +1032,26 @@ ln -s "$tmp/link-standalone" "$tmp/links/standalone"
 rc=0
 out="$("$script" add "$tmp/links/standalone" "$tmp/wt-link-plain" "claim-branch-link-plain" "session-link-plain" 2>&1)" || rc=$?
 check "add admits a standalone repository reached through an unregistered symlink" 0 "$rc" "$out" "owner=session-link-plain"
+# A hook can repoint that symlink while the worktree is created. A failed creation is still taken back
+# from the repository the worktree was created in, not from wherever the symlink points afterwards.
+git init -q -b main "$tmp/link-elsewhere"
+git -C "$tmp/link-elsewhere" -c user.name=t -c user.email=t@example.com commit --allow-empty -qm "elsewhere"
+ln -s "$tmp/link-standalone" "$tmp/links/repointed"
+link_hooks="$(git -C "$tmp/link-standalone" rev-parse --path-format=absolute --git-path hooks)"
+mkdir -p "$link_hooks"
+cat >"$link_hooks/post-checkout" <<HOOK
+#!/bin/sh
+ln -sfn '$tmp/link-elsewhere' '$tmp/links/repointed'
+exit 1
+HOOK
+chmod +x "$link_hooks/post-checkout"
+rc=0
+out="$("$script" add "$tmp/links/repointed" "$tmp/wt-link-repointed" "claim-branch-link-repointed" "session-link-repointed" 2>&1)" || rc=$?
+rm -f "$link_hooks/post-checkout"
+check "add fails when creation fails after a hook repoints the path it was given" 2 "$rc" "$out" "git worktree add failed"
+check "that failure removes the new worktree" 1 "$([ -e "$tmp/wt-link-repointed" ] && echo 0 || echo 1)"
+check "that failure removes the new branch from the repository it was created in" 1 \
+  "$(git -C "$tmp/link-standalone" show-ref --verify --quiet refs/heads/claim-branch-link-repointed && echo 0 || echo 1)"
 
 # A path ending in a newline names another directory than the one it resolves to once command
 # substitution drops the newline, so the check must not inspect that other directory in its place.
