@@ -27,7 +27,8 @@ captured, and killed afterwards even on failure, so port 4321 is freed.
   KSail gets a short description and a link to ksail.devantler.tech — never a copy of its docs.
 - **CV:** `src/data/cv.ts` is the single source; the PDF is rendered at build time (see the README).
 - **Architecture decisions:** every ADR for this repository lives in `adr/`, numbered `NNNN-title.md`.
-- **Scripts:** `scripts/`, in bash or JavaScript modules — never Python.
+- **Scripts:** `scripts/`, in bash (the existing `.mjs` checks parse MDX with the site's own
+  toolchain) — never Python.
 
 ## Content rules
 

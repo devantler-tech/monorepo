@@ -40,7 +40,7 @@
   the passing file with `gh pr create --body-file` or `gh pr edit --body-file` — never bypass the
   template with an inline `--body`. Immediately read the published body back from GitHub and pipe it
   through the same `check --body-file -` command before requesting review or continuing the delivery
-  loop. Only the explicit trivial-fix no-issue carve-out above may replace the seeded issue placeholder
+  loop. Only the explicit trivial-fix no-issue carve-out (work-selection guide, *Issue-driven*) may replace the seeded issue placeholder
   with the exact visible line `No issue: trivial fix.` and add `--allow-no-issue` to both checks;
   ordinary delivery work may not use that flag. The required PR-body CI recognises that exact line so
   the carve-out remains explicit and auditable after publication. A missing

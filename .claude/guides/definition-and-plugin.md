@@ -44,7 +44,7 @@ Its deployed definition is assembled from deliberately separate primitives:
 - **Per-product skills:** [`.claude/skills/products/`](../skills/products/) — thin cards that
   defer to each submodule's `AGENTS.md` `## Maintenance` section and name the product's roadmap home.
 - **Durable memory:** the runtime's **native persistent memory** + the end-of-run report (see
-  *Durable memory* below). Roadmaps are **GitHub Issues** (`roadmap`-labelled epics + milestones), not
+  *Durable memory*, in the durable-memory guide). Roadmaps are **GitHub Issues** (`roadmap`-labelled epics + milestones), not
   a file; no version-controlled status board, no bespoke `state.json`.
 
 ## Design principles — portable roles, native adapters
@@ -96,7 +96,7 @@ contract sections resolve:
 
 > **Entrypoint name — verify against the bundled agent, never from memory.** The entrypoint was
 > `automated-ai-engineer` until [agent-plugins#89](https://github.com/devantler-tech/agent-plugins/pull/89)
-> renamed it to **`agentic-engineer`** (plugin **4.0.0**), superseding ADR 0004's decision to keep the
+> renamed it to **`agentic-engineer`** (plugin **4.0.0**), superseding agent-plugins ADR 0004's decision to keep the
 > old name. Both the plugin's validator and this consumer's delivery-contract test pin the current
 > name, so the two cannot drift. Before changing any machine-readable pointer, confirm the target
 > exists in `libraries/agent-plugins/plugins/agentic-engineering/agents/` **at the merged upstream

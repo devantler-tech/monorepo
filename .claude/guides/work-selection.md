@@ -263,7 +263,7 @@ governs the issue work that follows.) Two rules enforce that:
    about an *issue's* label or its bot author. **A bare
    assignee does *not* reserve an issue INDEFINITELY:** an `agent-claim/<issue>` tip inside its lease,
    or a **`devantler`** assignment paired with a **pushed lane branch**, is a *live claim* for ~2 hours
-   (see *Claim protocol* below); with no live tip/branch, or once that window has elapsed with no open
+   (see *Claim protocol*, in the claim-protocol guide); with no live tip/branch, or once that window has elapsed with no open
    PR, you may pick the issue up — a stale assignment is never work-in-progress. **Only the agent
    account's own assignment is a claim.** An issue assigned to
    a **human collaborator** (or `Copilot`) is not an agent lease and must never be taken over on this

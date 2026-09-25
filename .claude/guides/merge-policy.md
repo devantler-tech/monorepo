@@ -43,7 +43,7 @@ Conventional-Commit title, then **merge with the command that matches the author
   author-scoped list, which is what made the unsafe arming look prescribed.
   For an unconditional author, use
   `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
-  tap cask PRs, and KSail release bumps — the carve-out above) the review parts are intentionally absent and
+  tap cask PRs, and KSail release bumps — the carve-out below) the review parts are intentionally absent and
   are NOT required — their required checks, zero threads, and no-conflict state alone gate the merge,
   which for the exit-0 updater is the head-pinned **direct** merge above, never `--auto`;
 - a **human-trusted author** (`devantler`, i.e. **every machine-local agent-own PR**) **cannot use `--auto`**
@@ -125,7 +125,7 @@ This **supersedes** the previous split where a PR you did not author got hygiene
 promoted it. Every open PR in `devantler-tech` is now yours to carry to a **terminal state**, whoever
 opened it: your own lane, a sibling registered lane, the maintainer's own interactive
 sessions, our bots, and external contributors. Exact Renovate/Dependabot PRs may remain temporarily
-self-progressing under the evidence-bound rule above; once that evidence fails or expires, they are
+self-progressing under the evidence-bound rule below; once that evidence fails or expires, they are
 yours too.
 
 **Three terminal states, and CLOSING is first-class.** A PR is done when it is **merged**, **closed

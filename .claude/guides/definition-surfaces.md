@@ -294,7 +294,7 @@ skill's provenance-recorded upstream; deployment facts live in this contract, `p
 compatibility overlays, the scheduled-task loaders, and each submodule's `AGENTS.md ## Maintenance`.
 The [`daily-maintainer`](../agents/daily-maintainer.md) file is a legacy provider alias only.
 Treat the assembled definition as a product you maintain — for capability, performance, security,
-and reliability — and route every edit by *Definition routing* above. The `self-improvement` skill is
+and reliability — and route every edit by *Definition routing* (definition-and-plugin guide). The `self-improvement` skill is
 the procedure; the rules:
 
 - **Evidence from your OWN runs only.** Propose a definition change only from observed operational

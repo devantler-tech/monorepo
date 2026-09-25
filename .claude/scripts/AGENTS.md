@@ -33,5 +33,5 @@ code in this directory.
 A test runs in CI only after five coordinated edits to `.github/workflows/ci.yaml`: a paths-filter
 entry, a `changes` job output, the job itself, and the `status` job's `needs:` and `job-results`
 entries. The filter must list every file the test reads — for a contract test that is `AGENTS.md`,
-`.claude/guides/**` and the test itself. `ci-job-wiring.sh` and `contract-test-invocation.sh` verify
-the wiring; run both after adding a job.
+`.claude/guides/**`, `contract-text.sh` when it reads the assembled contract, and the test itself.
+`ci-job-wiring.sh` and `contract-test-invocation.sh` verify the wiring; run both after adding a job.
