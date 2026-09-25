@@ -152,19 +152,19 @@ card.
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
 
 ## 1. Survey (delegate to a read-only subagent — keep the JSON out of your context)
-**Spawn the `portfolio-surveyor` agent from the installed `agentic-engineering` plugin**
-(declared in [`.claude/settings.json`](../../settings.json) as
-`agentic-engineering@devantler-plugins`) — read-only — to run the whole portfolio survey and
-return **one compact digest** — so the ~40 calls of raw `gh` JSON accumulate in *its* throwaway
-context, not yours; you receive only the digest. **Compatibility overlay — required until digest
-parity:** the spawn prompt must tell the plugin agent to read and follow the local
-[`.claude/agents/portfolio-surveyor.md`](../../agents/portfolio-surveyor.md) before it queries
-GitHub. The plugin supplies the agent entry point; the local file preserves the deployment-hardened
-procedure and output grammar that agent-plugins#78 has not upstreamed yet. Remove this overlay only
-after a side-by-side run proves parity against the checklist in
-[`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](../../plugin-consumption/agentic-engineering-surveyor-diff.md)).
-Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*Portfolio map*,
-*Trust gate*, *Cadence*, *Memory*, *Maintainer channels*). The surveyor:
+**Spawn the local `portfolio-surveyor` subagent** — `subagent_type: portfolio-surveyor`,
+unqualified — read-only, to run the whole portfolio survey and return **one compact digest**, so the
+~40 calls of raw `gh` JSON accumulate in *its* throwaway context, not yours; you receive only the
+digest. The unqualified name resolves to
+[`.claude/agents/portfolio-surveyor.md`](../../agents/portfolio-surveyor.md), and that file is the
+definition this run loop loads (monorepo#3180). The plugin's
+`agentic-engineering:portfolio-surveyor` is the **parity target**, not what runs: a rule that exists
+only upstream is not live until it is also in the local file, so land every surveyor refinement
+upstream **and** in that file. Remove the local file only after a side-by-side run proves parity
+against the checklist in
+[`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](../../plugin-consumption/agentic-engineering-surveyor-diff.md).
+The surveyor reads this repo's `AGENTS.md` contract sections (*Portfolio map*, *Trust gate*,
+*Cadence*, *Memory*, *Maintainer channels*). The surveyor:
 - enumerates org-wide in two calls (`gh search prs/issues --owner devantler-tech --state open …`)
   instead of looping `gh pr/issue list` per repo. This **cheap exhaustive enumeration** establishes
   the complete actionable-PR queue and its contract priority before expensive joins begin. Exact

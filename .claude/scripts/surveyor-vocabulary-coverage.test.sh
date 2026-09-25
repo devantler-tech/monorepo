@@ -58,9 +58,10 @@ corpus_file="$repo_root/.claude/scripts/surveyor-forge-vocabulary.test.sh"
 
 # Every file that PRESCRIBES a survey command, with a per-source candidate floor.
 #
-# The plugin's own surveyor definition is here because the run loop sources that
-# entry point and only THEN reads the local file as a compatibility overlay, so a
-# gitlink bump can introduce a command that no local file mentions. It lives in
+# The plugin's own surveyor definition is here because the guard admits both
+# surveyor names: the run loop dispatches the local overlay (monorepo#3526), but a
+# dispatch can still load the plugin entry point, and a gitlink bump can introduce
+# a command that no local file mentions. It lives in
 # the same submodule as the guard, so it adds no failure mode this script did not
 # already have: no submodule, no verdict, exit 2.
 #

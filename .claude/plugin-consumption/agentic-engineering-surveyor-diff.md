@@ -132,12 +132,15 @@ surveyor change does not reach the calling path until it is also here.** Measure
 transcript under `~/.claude/projects` modified in the prior 9 days (496 files): **28 of 29** root-session
 surveyor dispatches since 2026-09-02T12:00Z used the unqualified `subagent_type: portfolio-surveyor`,
 which resolves to this local agent; one used `agentic-engineering:portfolio-surveyor`. The run loop's
-prose (spawn the plugin agent, have it read this file) describes a topology that is not what runs. The
+prose at the time (spawn the plugin agent, have it read this file) described a topology that was not
+what ran; monorepo#3526 aligned it with the dispatch, pinned by round 19 of
+`portfolio-surveyor.test.sh`. The
 measured casualty is agent-plugins#182's admitted-call-shape rule: installed on the Claude lane since
 2026-09-02 and absent from this file, it left the five deny families it targets flat at 5.84 → 5.52 per
 dispatch. It is now ported into the Safety block above (monorepo#3179, pinned by round 10 of
-`portfolio-surveyor.test.sh`). **Until monorepo#3180 decides the topology, route every surveyor
-refinement to BOTH places** — upstream for the target definition, and here for the loaded one — and
+`portfolio-surveyor.test.sh`). **monorepo#3180 decided the topology: the run loop dispatches this
+overlay until digest parity, so route every surveyor refinement to BOTH places** — upstream for the
+target definition, and here for the loaded one — and
 treat "merged upstream + gitlink bumped + install CURRENT" as *not* evidence a surveyor rule is live. Second measured casualty, 2026-09-05: the CI classifier's argument shape. Over 7 days, **19 of 20**
 classifier-calling surveyor dispatches read this file rather than the plugin agent, and 3 of the 19 that
 reached the helper invoked it positionally and lost 24 reads to the guard. The flag-form sentence from
