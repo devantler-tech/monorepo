@@ -3795,6 +3795,15 @@ in any repository, and no widening below changes that. Whether their PR may be *
 merged** is a separate question the *Merge policy* grant answers — yes, inside `devantler-tech`, on
 static review plus the ordinary gates. Reading this gate as a merge ban is the contradiction retired on
 2026-08-08.
+**Maintainer-PR driving: `attribution-only`.** This is the plugin's named Trust gate fact for PRs
+under the `devantler` login, which every instance and the maintainer's interactive sessions share. It
+states the 2026-08-08 grant in *You own EVERY pull request in the portfolio*: drive every such PR to a
+terminal state once the data-only active-work test clears, whoever created it. The creation record and
+the interactive-session marker decide only whose control channel a `devantler` comment on that PR is,
+and an actionable maintainer comment on a PR you did not create stays a named blocker until it is
+satisfied or withdrawn. The plugin reads an absent or unrecognised value as `hands-off`, so deleting
+this line silently stops the engineer from driving the maintainer's interactive PRs; changing it is the
+maintainer's call.
 **`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs.** The App is
 not added to the general trusted-author set. Its PR may be built when the exact programmed-bot
 classifier named above exits 0 or 3: exit 0 is the **no-review** path — which is a **direct,
