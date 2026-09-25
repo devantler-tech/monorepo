@@ -188,6 +188,14 @@ printf '{not json\n' > "$CASE/root/b/bad/scheduled-tasks.json"
 asserts=$(( asserts + 1 ))
 rc=0; OUT=$(CLAUDE_SCHEDULE_STORE_ROOT="$CASE/root" "$SCRIPT" --projects "$PROJECTS" --now-epoch "$NOW" "${W[@]}" 2>&1) || rc=$?
 case "$rc:$OUT" in 2:*"not readable JSON"*) : ;; *) note_fail "an unreadable candidate store is UNKNOWN: exit $rc -- $OUT" ;; esac
+printf '{"renamedTasks":[]}\n' > "$CASE/root/b/bad/scheduled-tasks.json"
+asserts=$(( asserts + 1 ))
+rc=0; OUT=$(CLAUDE_SCHEDULE_STORE_ROOT="$CASE/root" "$SCRIPT" --projects "$PROJECTS" --now-epoch "$NOW" "${W[@]}" 2>&1) || rc=$?
+case "$rc:$OUT" in 2:*"scheduledTasks array"*) : ;; *) note_fail "a schema-drifted candidate store is UNKNOWN: exit $rc -- $OUT" ;; esac
+printf '{"scheduledTasks":[]}\n' > "$CASE/root/b/bad/scheduled-tasks.json"
+asserts=$(( asserts + 1 ))
+rc=0; OUT=$(CLAUDE_SCHEDULE_STORE_ROOT="$CASE/root" "$SCRIPT" --projects "$PROJECTS" --now-epoch "$NOW" "${W[@]}" 2>&1) || rc=$?
+case "$rc:$OUT" in 0:*"scheduled=5"*) : ;; *) note_fail "discovery control: a well-formed store with no tasks is skipped: exit $rc -- $OUT" ;; esac
 rm "$CASE/root/b/bad/scheduled-tasks.json"
 asserts=$(( asserts + 1 ))
 rc=0; OUT=$(CLAUDE_SCHEDULE_STORE_ROOT="$CASE/root" "$SCRIPT" --projects "$PROJECTS" --now-epoch "$NOW" "${W[@]}" 2>&1) || rc=$?

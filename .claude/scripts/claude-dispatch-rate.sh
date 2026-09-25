@@ -137,8 +137,10 @@ if [ -z "$STORE" ]; then
   matches=0; selected=""
   for candidate in "$STORE_ROOT"/*/*/scheduled-tasks.json; do
     [ -f "$candidate" ] || continue
-    # An unreadable candidate could be the current store. Skipping it would let a stale sibling win.
-    jq -e . "$candidate" >/dev/null 2>&1 || die_unknown "candidate store is not readable JSON: $candidate"
+    # An unreadable or schema-drifted candidate could be the current store. Skipping it would let a
+    # stale sibling win, so anything without a `scheduledTasks` array is UNKNOWN, not "no tasks".
+    jq -e 'type == "object" and (.scheduledTasks | type == "array")' "$candidate" >/dev/null 2>&1 \
+      || die_unknown "candidate store is not readable JSON with a scheduledTasks array: $candidate"
     jq -e '[.scheduledTasks[]? | select(.enabled == true) | .id] | length > 0' "$candidate" >/dev/null 2>&1 || continue
     selected="$candidate"; matches=$((matches + 1))
   done
