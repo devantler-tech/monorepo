@@ -4258,8 +4258,9 @@ is not exactly the URL `git submodule sync` writes for it. It also refuses one t
 only to that repository sends elsewhere: a `pushurl`, a URL rewrite, `core.sshCommand`, `core.gitProxy`,
 an HTTP proxy, `http.curloptResolve` or `http.extraHeader` (including through a global `includeIf`), or
 a custom `receivepack`, `uploadpack` or `vcs` transport. A plain push from the checked-out branch must
-go to `origin` too. A linked worktree whose git directory records no main checkout (a
-`--separate-git-dir` clone) is refused, because nothing shows whether a superproject registers it. The
+go to `origin` too. A linked worktree of a `--separate-git-dir` clone is refused, because that clone's
+git directory records no main checkout, so nothing shows whether a superproject registers it; run the
+helper from the clone's own checkout instead. The
 helper checks the new worktree too before claiming it, and removes that worktree when refused. Fix a
 refusal with `git -C <superproject> submodule sync -- <path>` and by removing that setting
 (monorepo#3010). Work
