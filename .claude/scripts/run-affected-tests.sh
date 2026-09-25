@@ -28,8 +28,8 @@
 #
 #   --list      print the selected scripts, run nothing
 #   --all       select every script any gated job runs. Slow: run it in the background.
-#   --timeout   per-script deadline in seconds (default 300). A script past it is killed
-#               and reported TIMEOUT.
+#   --timeout   per-script deadline in seconds (default 300). A script past it is sent TERM,
+#               then KILL five seconds later, and reported TIMEOUT.
 #
 # Some scripts need setup their CI job performs first, such as an initialised submodule.
 # Such a script fails here the same way it would in a job missing that step; the log tail
@@ -37,7 +37,8 @@
 #
 # EXIT: 0 every selected script passed (including when none was selected — the count of
 #       changed files is printed so an empty selection is visible), 1 at least one FAILED
-#       or TIMED OUT, 2 cannot tell (bad usage, unreadable workflow, git failure).
+#       or TIMED OUT, 2 cannot tell (bad usage, unreadable workflow, git failure, or a
+#       selected script that does not exist, which CI would fail running).
 set -uo pipefail
 
 me="$(basename "$0")"
@@ -47,6 +48,7 @@ base="origin/main"
 list_only=0
 select_all=0
 timeout_s=300
+kill_grace_s=5
 ci_file=".github/workflows/ci.yaml"
 root=""
 
@@ -139,14 +141,26 @@ selected="$(jq -r --argjson hits "${hits_json}" '
   | [$wd, .] | @tsv' <<<"${jobs_json}")" || die "cannot read the gated jobs in ${ci_file}"
 
 scripts=""
+missing=""
 while IFS=$'\t' read -r wd s; do
   [ -n "${s}" ] || continue
   s="${s#./}"
-  if [ -f "${wd}/${s}" ]; then p="${wd}/${s}"; elif [ -f "${s}" ]; then p="${s}"; else continue; fi
+  if [ -f "${wd}/${s}" ]; then p="${wd}/${s}"; elif [ -f "${s}" ]; then p="${s}"; else
+    # CI would fail trying to run it, so a selected script that does not exist is never
+    # silently dropped from the selection.
+    missing+="${s} (working-directory ${wd})"$'\n'
+    continue
+  fi
   p="${p#./}"
   case $'\n'"${scripts}" in *$'\n'"${p}"$'\n'*) continue ;; esac
   scripts+="${p}"$'\n'
 done <<<"${selected}"
+
+if [ -n "${missing}" ]; then
+  printf '%s: a selected script does not exist, so CI would fail running it:\n%s' \
+    "${me}" "${missing}" >&2
+  exit 2
+fi
 
 n_scripts="$(printf '%s' "${scripts}" | grep -c . || true)"
 printf '%s: changed=%s filters_hit=%s scripts=%s\n' "${me}" "${changed_count}" \
@@ -171,7 +185,9 @@ while IFS= read -r s; do
   start="$(date +%s)"
   bash "${s}" >"${log}" 2>&1 &
   pid=$!
-  ( sleep "${timeout_s}"; kill -TERM -- "-${pid}" 2>/dev/null ) &
+  # TERM first, then KILL after a short grace, so a script that ignores TERM cannot outlive
+  # its deadline.
+  ( sleep "${timeout_s}"; kill -TERM -- "-${pid}" 2>/dev/null; sleep "${kill_grace_s}"; kill -KILL -- "-${pid}" 2>/dev/null ) &
   watchdog=$!
   wait "${pid}"
   rc=$?

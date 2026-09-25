@@ -78,6 +78,30 @@ printf 'sleep 30\n' > docs/scripts/gamma.test.sh
 printf 'exit 0\n' > scripts/always.test.sh
 : > other/readme.txt
 sed '/^  ungated:/,$d' .github/workflows/ci.yaml > .github/workflows/gated-only.yaml
+# A second workflow for the two hostile cases: a job naming a script that does not exist,
+# and a script that ignores TERM.
+cat > .github/workflows/extra.yaml <<'EOF'
+jobs:
+  changes:
+    steps:
+      - uses: dorny/paths-filter@0000000000000000000000000000000000000000
+        with:
+          filters: |
+            ghost:
+              - 'missing/**'
+            stubborn:
+              - 'stubborn/**'
+  test-ghost:
+    if: needs.changes.outputs.ghost == 'true'
+    steps:
+      - run: bash scripts/ghost.test.sh
+  test-stubborn:
+    if: needs.changes.outputs.stubborn == 'true'
+    steps:
+      - run: bash scripts/stubborn.test.sh
+EOF
+printf "trap '' TERM\nsleep 60\n" > scripts/stubborn.test.sh
+mkdir -p missing stubborn
 git add -A && git commit -q -m base
 
 run() { "${runner}" --root "${repo}" --base main "$@"; }
@@ -146,7 +170,22 @@ if [ "${rc}" -eq 0 ] && grep -q '^PASS .*scripts/alpha.test.sh' <<<"${out}"; the
 else bad "passing run: ${out} (rc=${rc})"; fi
 git checkout -q -- scripts/alpha.test.sh
 
+: > stubborn/x
+start="$(date +%s)"
+out="$(run --ci-file .github/workflows/extra.yaml --timeout 2 2>&1)"; rc=$?
+took=$(( $(date +%s) - start ))
+if [ "${rc}" -eq 1 ] && grep -q '^TIMEOUT' <<<"${out}" && [ "${took}" -lt 20 ]; then
+  ok "a script that ignores TERM is killed after the grace period (${took}s)"
+else bad "TERM-ignoring script: ${out} (rc=${rc}, took=${took}s)"; fi
+rm -f stubborn/x
+
 # --- cannot tell ---------------------------------------------------------------------------
+: > missing/x
+out="$(run --ci-file .github/workflows/extra.yaml --list 2>&1)"; rc=$?
+if [ "${rc}" -eq 2 ] && grep -q 'scripts/ghost.test.sh' <<<"${out}"; then
+  ok "a selected script that does not exist is exit 2 and named"
+else bad "missing script: ${out} (rc=${rc})"; fi
+rm -f missing/x
 "${runner}" --root "${repo}" --base main --ci-file missing.yaml --list >/dev/null 2>&1
 if [ $? -eq 2 ]; then ok "an unreadable workflow is exit 2"; else bad "unreadable workflow was not exit 2"; fi
 "${runner}" --root "${repo}" --base no-such-ref --list >/dev/null 2>&1
