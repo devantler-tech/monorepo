@@ -83,6 +83,10 @@ expect "a single red after a green is the exempt FIRST failure" 0 "FIRST since=2
 expect "a red that a newer green already recovered is CLEAR" 0 "CLEAR" \
   "$(payload 1 "$(r 1 "$d" failure 2026-09-09T05:00:00Z)" "$(r 2 "$d" success 2026-09-10T05:00:00Z)")"
 
+expect "a recovered red stays CLEAR when a newer streak has since started" 0 "CLEAR" \
+  "$(payload 1 "$(r 1 "$d" failure 2026-09-09T05:00:00Z)" "$(r 2 "$d" success 2026-09-10T05:00:00Z)" \
+    "$(r 3 "$d" failure 2026-09-11T05:00:00Z)")"
+
 expect "since is the OLDEST red of the streak, not the previous run" 1 "REPEATED runs=3 since=2026-09-01" \
   "$(payload 4 "$(r 0 "$d" success 2026-08-31T05:00:00Z)" "$(r 1 "$d" failure 2026-09-01T05:00:00Z)" \
     "$(r 3 "$d" failure 2026-09-05T05:00:00Z)" "$(r 4 "$d" failure 2026-09-09T05:00:00Z)")"

@@ -90,7 +90,9 @@ result="$(jq -rs '
       | [$runs[] | select(.head_branch == "main" and .status == "completed" and (unit == $u))]
       | sort_by(.created_at, .id) | reverse
       | (map(red) | index(false) // length) as $n
-      | if $n == 0 then "CLEAR"
+      # A judged run older than the current streak was already recovered by a newer green.
+      | (map(.id) | index($target.id)) as $j
+      | if $n == 0 or $j >= $n then "CLEAR"
         elif $n == 1 then "FIRST since=\(.[0].created_at[0:10])"
         else "REPEATED runs=\($n) since=\(.[$n - 1].created_at[0:10])" end
     end
