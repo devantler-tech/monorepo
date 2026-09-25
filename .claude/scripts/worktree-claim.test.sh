@@ -517,6 +517,32 @@ check "a group signal during creation still removes the branch add created" 1 "$
 [ ! -e "$tmp/wt-group-sig" ] || git -C "$repo" worktree remove --force "$tmp/wt-group-sig"
 git -C "$repo" branch -D -q claim-branch-group-sig 2>/dev/null || true
 
+# A signal that arrives before the creation step starts means `add` made nothing, so its cleanup must not
+# remove what another process creates at that path meanwhile. The shim signals the step during its
+# branch check, then stands in for that other process.
+mkdir -p "$tmp/git-presig"
+cat >"$tmp/git-presig/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" show-ref --verify --quiet refs/heads/claim-branch-presig ")
+    if [ ! -e "$tmp/presig-fired" ]; then
+      : >"$tmp/presig-fired"
+      kill -TERM "\$PPID"
+      "$real_git" -C "$repo" worktree add -q -b claim-branch-presig-other "$tmp/wt-presig" >/dev/null 2>&1
+    fi
+    ;;
+esac
+exec "$real_git" "\$@"
+SHIM
+chmod +x "$tmp/git-presig/git"
+rc=0
+out="$(PATH="$tmp/git-presig:$PATH" "$script" add "$repo" "$tmp/wt-presig" "claim-branch-presig" "session-presig" 2>&1)" || rc=$?
+check "a signal before creation starts was sent" 0 "$([ -e "$tmp/presig-fired" ] && echo 0 || echo 1)"
+check "a signal before creation starts fails add" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+check "a signal before creation starts leaves another process's worktree in place" 0 "$([ -e "$tmp/wt-presig" ] && echo 0 || echo 1)"
+[ ! -e "$tmp/wt-presig" ] || git -C "$repo" worktree remove --force "$tmp/wt-presig"
+git -C "$repo" branch -D -q claim-branch-presig-other 2>/dev/null || true
+
 # One configured value that repeats the registered URL across a newline is one URL to git, not two.
 git -C "$super/mod" config remote.origin.url "$(printf '%s\n%s' "https://github.com/example/sub" "https://github.com/example/sub")"
 rc=0

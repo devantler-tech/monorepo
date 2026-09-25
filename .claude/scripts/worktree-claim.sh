@@ -400,9 +400,9 @@ add_worktree_noting_new_branch() {
   if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
     existed=1
   fi
-  if [ "$signalled" -eq 0 ]; then
-    add_worktree_on "$repo" "$wt" "$branch" || rc=$?
-  fi
+  # A signal before the creation starts means nothing here is ours; the note stays empty.
+  [ "$signalled" -eq 0 ] || return 2
+  add_worktree_on "$repo" "$wt" "$branch" || rc=$?
   if [ "$rc" -eq 0 ] || worktree_registered "$repo" "$wt"; then
     created="created"
   fi
