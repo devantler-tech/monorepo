@@ -354,26 +354,9 @@ belongs here only if every session needs it; the rest goes in a guide or next to
 
 ## Maintenance
 
-**Validate a change to this repository's scripts and definitions with the affected-tests runner:**
-
-```sh
-.claude/scripts/run-affected-tests.sh            # runs only the self-tests your change affects
-.claude/scripts/run-affected-tests.sh --list     # shows the selection without running anything
-```
-
-It reads the path filters and the jobs they gate from `.github/workflows/ci.yaml`, so it selects the
-same `*.test.sh` scripts CI would run for your change, and runs them one at a time with a per-script
-deadline (`--timeout`, default 300 seconds). Each script reports `PASS`, `FAIL` or `TIMEOUT` as soon as
-it finishes. Exit `0` means every selected script passed, `1` means at least one did not, and `2`
-means it could not tell.
-
-⚠️ **Never loop over every `.claude/scripts/*.test.sh` in one foreground call.** CI never runs the
-whole suite, and it does not fit in one: a single script can take minutes. A change to
-`.github/workflows/ci.yaml` selects nearly every script, because CI's jobs gate on that file too. For
-that case, and for `--all`, run the runner with `run_in_background` rather than raising the call's
-timeout.
-
-The documentation site under `docs/` validates with `npm --prefix docs run build`.
+Validate a change with `.claude/scripts/run-affected-tests.sh`: it runs only the self-tests CI would
+run for it (`--list` shows them). Never loop over every `.claude/scripts/*.test.sh` in one call. See
+[running the tests](.claude/scripts/AGENTS.md#running-the-tests).
 
 ## Review guidelines
 

@@ -35,3 +35,11 @@ entry, a `changes` job output, the job itself, and the `status` job's `needs:` a
 entries. The filter must list every file the test reads — for a contract test that is `AGENTS.md`,
 `.claude/guides/**`, `contract-text.sh` when it reads the assembled contract, and the test itself.
 `ci-job-wiring.sh` and `contract-test-invocation.sh` verify the wiring; run both after adding a job.
+
+## Running the tests
+
+Run `run-affected-tests.sh` (`--list` to preview). It picks the `*.test.sh` scripts CI would run for
+your change from `ci.yaml`'s path filters and runs each from its step's working directory under a
+deadline, reporting `PASS`, `FAIL` or `TIMEOUT`: exit `0` all passed, `1` one did not, `2` unknown.
+Never loop over every script in one foreground call: one can take minutes. A `ci.yaml` change selects
+nearly all of them, so run that, and `--all`, with `run_in_background`.
