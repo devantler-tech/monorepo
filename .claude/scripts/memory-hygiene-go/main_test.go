@@ -634,7 +634,8 @@ func TestRepositoryContracts(t *testing.T) {
 		return string(data)
 	}
 
-	constitution := read(filepath.Join("..", "..", "..", "AGENTS.md"))
+	// The memory rules live in the durable-memory guide, which AGENTS.md indexes.
+	constitution := read(filepath.Join("..", "..", "guides", "durable-memory.md"))
 	normalizedConstitution := strings.Join(strings.Fields(constitution), " ")
 	for _, required := range []string{
 		"An exit 1 makes repairing the over-threshold boot-loaded file",
@@ -647,7 +648,7 @@ func TestRepositoryContracts(t *testing.T) {
 		"That recovery is scoped to `--phase preflight`",
 	} {
 		if !strings.Contains(normalizedConstitution, required) {
-			t.Fatalf("AGENTS.md is missing %q", required)
+			t.Fatalf("the durable-memory guide is missing %q", required)
 		}
 	}
 
@@ -687,6 +688,7 @@ func TestRepositoryContracts(t *testing.T) {
 	filter := workflow[start : start+end]
 	for _, required := range []string{
 		"- 'AGENTS.md'",
+		"- '.claude/guides/**'",
 		"- '.claude/scripts/memory-hygiene-go/**'",
 	} {
 		if !strings.Contains(filter, required) {

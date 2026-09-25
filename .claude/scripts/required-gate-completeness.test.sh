@@ -218,8 +218,8 @@ fi
 
 # The contract must route exception (a) through this check, and every prescribed branch update must
 # carry its head pin. Scoped to the Merge policy section so a phrase surviving elsewhere does not count.
-merge_policy="$(awk '/^### Merge policy/ { inside = 1 } inside && /^### / && !/Merge policy/ { exit } inside' \
-  "${here}/../../AGENTS.md")"
+merge_policy="$(awk '/^## Merge policy/ { inside = 1 } inside && /^## / && !/Merge policy/ { exit } inside' \
+  "${here}/../guides/merge-policy.md")"
 contract() { # contract <label> <fixed string>
   checks=$((checks + 1))
   if grep -Fq -- "$2" <<<"${merge_policy}"; then echo "ok   contract: $1"; else
@@ -235,7 +235,7 @@ contract "the branch-update remedy is pinned" \
   'gh api --method PUT repos/devantler-tech/<repo>/pulls/<n>/update-branch -f expected_head_sha=<headRefOid>'
 checks=$((checks + 1))
 grep_status=0
-update_branch_lines="$(grep -E 'pulls/[^ `]*/update-branch' "${here}/../../AGENTS.md")" || grep_status=$?
+update_branch_lines="$(grep -E 'pulls/[^ `]*/update-branch' "${here}/../guides/merge-policy.md")" || grep_status=$?
 if [ "${grep_status}" -gt 1 ]; then
   echo "FAIL contract: could not read the prescribed update-branch calls (grep exit ${grep_status})" >&2
   failures=$((failures + 1))

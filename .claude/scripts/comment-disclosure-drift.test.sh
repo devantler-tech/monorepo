@@ -12,7 +12,8 @@ set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 guard="$script_dir/comment-disclosure-drift.sh"
-constitution="$script_dir/../../AGENTS.md"
+untrusted_input_guide="$script_dir/../guides/trust-and-input.md"
+artifacts_guide="$script_dir/../guides/github-artifacts.md"
 
 failures=0
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/comment-disclosure-drift-test.XXXXXX")"
@@ -68,7 +69,7 @@ disambiguator="$({
     /^\*\*Distinguish the human maintainer from yourself/ { in_section = 1 }
     in_section && /^\*\*Not every `claude\/\*` PR is yours/ { exit }
     in_section { print }
-  ' "$constitution"
+  ' "$untrusted_input_guide"
 } | tr '\n' ' ' | tr -s '[:space:]' ' ')"
 legacy_shape="\`> Requested by the 🤖 Daily AI Engineer\`"
 permanent_rule='permanently own-output only when it begins the body'
@@ -88,7 +89,7 @@ sweep_rule="$({
     /^  🔴 \*\*On `--since`, read the findings/ { in_section = 1 }
     in_section && /^  It reports \*\*positive evidence of agent authorship only\*\*/ { exit }
     in_section { print }
-  ' "$constitution"
+  ' "$artifacts_guide"
 } | tr '\n' ' ' | tr -s '[:space:]' ' ')"
 reverify_scope='a bare `@cursor review` is **never paired on the sweep itself**'
 non_bugbot_scope='A bare `@coderabbitai review` or `@codex review` is a violation on sight'

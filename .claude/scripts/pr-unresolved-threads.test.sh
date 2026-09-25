@@ -174,12 +174,12 @@ done
 
 # The merge preflight names the helper, so the run's final thread read is the tested one.
 checks=$((checks + 1))
-merge_policy="$(awk '/^### Merge policy/{i=1} i' "${root}/AGENTS.md")"
+merge_policy="$(awk '/^## Merge policy/{i=1} i' "${root}/.claude/guides/merge-policy.md")"
 # A here-string, not a pipe: under pipefail an early-exiting grep -q reads a match as a miss.
 if grep -Fq 'pr-unresolved-threads.sh devantler-tech/' <<<"${merge_policy}"; then
   echo "ok   contract: the Merge policy preflight names pr-unresolved-threads.sh"
 else
-  echo "FAIL contract: AGENTS.md Merge policy must name pr-unresolved-threads.sh" >&2
+  echo "FAIL contract: the merge-policy guide must name pr-unresolved-threads.sh" >&2
   failures=$((failures + 1))
 fi
 

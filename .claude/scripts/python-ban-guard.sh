@@ -2,7 +2,7 @@
 # python-ban-guard.sh — keep Python off this repository's executable surfaces.
 #
 # WHY THIS EXISTS
-#   AGENTS.md → *Scripting stack — bash or Go, never Python* is constitutional: every script
+#   .claude/guides/advance-work.md → *Scripting stack — bash or Go, never Python* is constitutional: every script
 #   surface here is bash or Go. The rule had no standing enforcement, so three weeks after the
 #   last `.py` file was removed (#2231) a `python3 -c` harness landed in an agent-authored
 #   contract test, passed CI and two review rounds, and was found only by chance (#2769). The
@@ -90,7 +90,7 @@ if ! git -C "$top" ls-files -z >"$tracked_paths"; then
   exit 2
 fi
 
-rule='AGENTS.md → "Scripting stack — bash or Go, never Python": write it in bash (jq for data shaping) and migrate it to Go when it grows. The one carve-out is an embedded interpreter that admits only Python, recognised by its invocation (`blender --background --python …`), never by file extension. A file that is ABOUT the offending form may declare `python-ban-guard: allow-file — <reason>`.'
+rule='.claude/guides/advance-work.md → "Scripting stack — bash or Go, never Python": write it in bash (jq for data shaping) and migrate it to Go when it grows. The one carve-out is an embedded interpreter that admits only Python, recognised by its invocation (`blender --background --python …`), never by file extension. A file that is ABOUT the offending form may declare `python-ban-guard: allow-file — <reason>`.'
 
 findings=0
 # Emit one finding and include it in the final failure count.

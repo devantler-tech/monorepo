@@ -264,10 +264,10 @@ else echo "ok   graphql: a file without --head is refused"; fi
 
 # The contract names the helper where the local round is defined, so a reader finds it.
 checks=$((checks + 1))
-if grep -Fq 'local-review-verdict.sh' "${root}/AGENTS.md"; then
-  echo "ok   contract: AGENTS.md names local-review-verdict.sh"
+if grep -Fq 'local-review-verdict.sh' "${root}/.claude/guides/review-lanes.md"; then
+  echo "ok   contract: the review-lanes guide names local-review-verdict.sh"
 else
-  echo "FAIL contract: AGENTS.md must name local-review-verdict.sh" >&2
+  echo "FAIL contract: the review-lanes guide must name local-review-verdict.sh" >&2
   failures=$((failures + 1))
 fi
 

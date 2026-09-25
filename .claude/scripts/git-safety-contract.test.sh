@@ -27,7 +27,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/git-and-worktrees.md"
 
 fail() {
   echo "git safety contract: FAIL — $*" >&2
@@ -41,17 +41,17 @@ fail() {
 # test would be always-red regardless of the contract's content.
 if ! section="$(
   awk '
-    /^### Git safety$/                              { ins = 1; next }
+    /^## Git safety$/                               { ins = 1; next }
     ins && /^\*\*Worktree hygiene is SCHEDULED/     { found_end = 1; exit }
     ins                                              { print }
     END                                              { if (!found_end) exit 42 }
   ' "${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' '
 )"; then
-  fail "could not find the 'Worktree hygiene is SCHEDULED' end anchor after '### Git safety' — refusing an unscoped whole-file assertion"
+  fail "could not find the 'Worktree hygiene is SCHEDULED' end anchor after '## Git safety' — refusing an unscoped whole-file assertion"
 fi
 
 [ -n "${section}" ] ||
-  fail "could not locate the '### Git safety' section — the extraction anchor moved, so every assertion below would be vacuous"
+  fail "could not locate the '## Git safety' section — the extraction anchor moved, so every assertion below would be vacuous"
 
 # Report the scoped size for diagnostics only. End-anchor detection above, not a content-size proxy,
 # is the guard against runaway extraction; legitimate additions therefore cannot trip a false
@@ -153,7 +153,7 @@ assert_section '`-c commit.gpgsign=false` belongs **only** in a throwaway fixtur
 assert_section '(`gh api --method PUT …/contents/…`)' \
   "the Git safety section no longer forbids authoring work-branch commits through the REST contents API — commits made that way are unsigned"
 # shellcheck disable=SC2016
-assert_section 'Run [`unsigned-push-guard.sh <repo-dir>`](.claude/scripts/unsigned-push-guard.sh) as its own call immediately before `git push`' \
+assert_section 'Run [`unsigned-push-guard.sh <repo-dir>`](../scripts/unsigned-push-guard.sh) as its own call immediately before `git push`' \
   "the Git safety section no longer requires the pre-push signature check — without it the rule has no mechanical backstop"
 
 echo "git safety contract: OK (${section_words} words scoped)"

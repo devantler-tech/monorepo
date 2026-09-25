@@ -6,7 +6,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 classifier="${repo_root}/.claude/scripts/programmed-bot-review-exemption.sh"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 surveyor_diff="${repo_root}/.claude/plugin-consumption/agentic-engineering-surveyor-diff.md"
-constitution="${repo_root}/AGENTS.md"
+# The contract is AGENTS.md plus every guide it indexes; these assertions span several guides.
+constitution="$(mktemp)"
+trap 'rm -f "${constitution}"' EXIT
+"${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
+  { echo "portfolio surveyor contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 monorepo_skill="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
 product_engineering_skill="${repo_root}/.claude/skills/product-engineering/SKILL.md"
