@@ -14,6 +14,8 @@
 #   2. Flux sources and HelmReleases — an unreachable registry shows here first.
 #   3. The Flux controllers themselves. A stored Ready=True outlives a stopped controller.
 #   4. Pods whose containers are WAITING in a crash or image-pull state.
+#   5. HTTPRoutes whose status has not caught up with their spec for 10 minutes — a gateway
+#      controller that stopped applying routes, which every read above reports as healthy.
 #
 #   🔴 A pod-phase filter CANNOT see a crash loop. A crash-looping pod's phase stays `Running`;
 #   only the container's `state.waiting.reason` says `CrashLoopBackOff`. The obvious health query,
@@ -171,6 +173,72 @@ if read_json pods pods -A; then
              | test("^(CrashLoopBackOff|ImagePullBackOff|ErrImagePull|ErrImageNeverPull|CreateContainerConfigError|CreateContainerError|InvalidImageName)$"))
     | "FAILING Pod \($pod.metadata.namespace)/\($pod.metadata.name) container=\(.name) reason=\(.state.waiting.reason) restarts=\(.restartCount // 0)"
   '
+fi
+
+# 🔴 A gateway controller that has stopped APPLYING routes is invisible to every read above. The
+# gateway keeps serving its last configuration, Flux applies each HTTPRoute and reports Ready, and
+# the controller's pods run — but the route's status keeps the generation it last processed
+# (platform#4198: Cilium's Gateway API controller never started after an operator restart, and
+# route changes stopped reaching the gateway for almost 15 hours). So a route whose status lags its spec
+# is the signal. A lag is normal for the seconds after an edit, so it fails only once the spec has
+# been unchanged for ROUTE_GRACE_SECONDS; before that it is progress. The last spec change is the
+# newest managedFields entry that owns spec fields, which is why this read asks for managed
+# fields: a metadata-only edit (a label, an annotation) must not restart the grace period, or
+# repeated ones would keep a stalled route PROGRESSING forever. Every parent's observedGeneration
+# counts, and a missing one means that parent never observed the route.
+readonly ROUTE_GRACE_SECONDS=600
+now="${PLATFORM_HEALTH_NOW:-$(date -u +%s)}"
+case "$now" in
+  '' | *[!0-9]*) usage_die "PLATFORM_HEALTH_NOW must be a Unix timestamp, got '$now'" ;;
+esac
+# Per route: every DECLARED parent (spec.parentRefs) must have a status entry whose conditions all
+# observed the current generation — a parent whose controller stopped may add no entry at all, so
+# scanning only the entries that exist would read as current. Parents are matched on their whole
+# reference (group, kind, namespace, name, sectionName, port, with the Gateway API defaults), so
+# two parents that differ only in, say, port are two parents. A route declaring no parent is
+# attached to no gateway, so nothing is expected to apply it and it is skipped. An Accepted=False or
+# ResolvedRefs=False condition that itself observed the current generation is a route the gateway
+# rejected — live breakage, not lag — and is reported before, and regardless of, any lag; judging it
+# by its own generation keeps a stale sibling condition on the same parent from hiding it.
+#
+# ⚠️ The grace clock is the newest spec-owning managed-field time. The API records one time per
+# field manager, so a metadata-only apply by the manager that also owns the spec moves it too. That
+# can only postpone a FAILING by one grace period per such apply, and a frozen gateway lags every
+# route it is sent, so concealing it would need that edit on every lagging route every ten minutes.
+# shellcheck disable=SC2016  # the $-names below are jq variables
+route_rows='
+  .metadata.namespace as $ns
+  | .metadata.generation as $gen
+  | "HTTPRoute \($ns)/\(.metadata.name)" as $id
+  | def parent_ref: { group: (.group // "gateway.networking.k8s.io"), kind: (.kind // "Gateway"),
+                      namespace: (.namespace // $ns), name, sectionName: (.sectionName // null),
+                      port: (.port // null) };
+  [ .spec.parentRefs[]? | parent_ref ] as $declared
+  | select(($declared | length) > 0)
+  | [ .status.parents[]?
+      | { ref: (.parentRef | parent_ref),
+          seen: ([.conditions[]?.observedGeneration] | min),
+          rejected: [ .conditions[]?
+                      | select((.type == "Accepted" or .type == "ResolvedRefs") and .status == "False"
+                               and (.observedGeneration // -1) >= $gen)
+                      | "\(.type)/\(.reason // "none")" ] } ] as $status
+  | ([ $declared[] as $d | ([ $status[] | select(.ref == $d) | .seen ] | max) ] | min) as $seen
+  | ([ .metadata.managedFields[]?
+       | select((.subresource // "") != "status" and ((.fieldsV1 // {}) | has("f:spec")))
+       | .time ]
+     + [ .metadata.creationTimestamp ] | map(select(. != null)) | max) as $changed
+  | ([ $status[].rejected[] ] | unique) as $rejections
+  | if ($rejections | length) > 0 then
+      "FAILING \($id) reason=route-rejected conditions=\($rejections | join(","))"
+    elif ($seen != null and $seen >= $gen) then empty
+    elif (__NOW__ - ($changed | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) > __GRACE__ then
+      "FAILING \($id) reason=gateway-not-applying generation=\($gen) applied=\($seen // "none")"
+    else "PROGRESSING \($id)" end
+'
+route_rows="${route_rows//__NOW__/$now}"
+route_rows="${route_rows//__GRACE__/$ROUTE_GRACE_SECONDS}"
+if read_json httproutes httproutes.gateway.networking.k8s.io -A --show-managed-fields; then
+  extract httproutes "$route_rows"
 fi
 
 cat "$tmp/rows"
