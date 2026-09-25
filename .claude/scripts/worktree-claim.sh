@@ -918,6 +918,25 @@ refuse_unlocated_main() {
   exit 1
 }
 
+# superproject_of prints the physical path of the superproject whose working tree holds <dir>, and
+# nothing when there is none. It returns 2 when that path cannot be resolved to the same directory: git
+# ends the path with a newline, and command substitution would drop one the path itself ends in too.
+superproject_of() {
+  local out
+  out="$(git -C "$1" rev-parse --show-superproject-working-tree 2>/dev/null && printf x)" || return 0
+  out="${out%x}"
+  out="${out%$'\n'}"
+  [ -n "$out" ] || return 0
+  resolved_dir "$out" || return 2
+}
+
+# refuse_unresolvable_superproject exits 1 because the superproject around <dir> cannot be resolved.
+refuse_unresolvable_superproject() {
+  echo "worktree-claim: the superproject around $1 has a path that cannot be resolved to the same directory." >&2
+  echo "  A path ending in a newline loses it when it is resolved, so its .gitmodules cannot be read; it is not claimed." >&2
+  exit 1
+}
+
 # submodule_name_under prints the name of a submodule <super>/.gitmodules registers at <rel> or beneath
 # it, and prints nothing when there is none.
 submodule_name_under() {
@@ -1072,7 +1091,8 @@ config_values() {
 # origin_redirects prints, one per line, what sends <repo>'s origin somewhere other than where <url>
 # goes from a neutral repository: `URL rewrite` when the effective fetch or push URLs differ, and
 # the name of any connection setting that differs: `core.sshCommand` or `core.gitProxy` (the command git
-# runs to connect), or a curl proxy or pinned address. The neutral repository is a throwaway one whose
+# runs to connect), or a curl proxy or pinned address, and `pack:remote.origin.<key>` for a pack command
+# or remote helper of origin's own. The neutral repository is a throwaway one whose
 # remote has origin's shape, so settings every repository shares give both the same answer, while one
 # that applies only to <repo> (its own config, or a global file included only for it) shows up. One that
 # applies only to the throwaway repository, such as an include keyed to its temporary path, does not.
@@ -1167,6 +1187,15 @@ origin_redirects() (
     origin_config_own "$repo" "$probe" '^http\.(.+\.)?extraheader$' "$url"; then
     echo "http.extraHeader"
   fi
+  # A custom pack command or remote helper is what fetch and push actually run, whatever the URL says.
+  # One set for every repository in the global or system config reaches the same place from anywhere.
+  local key
+  for key in receivepack uploadpack vcs; do
+    if { [ "$(config_values "$repo" --get-all "remote.origin.$key")" != "$(config_values "$probe" --get-all "remote.origin.$key")" ]; } &&
+      origin_config_own "$repo" "$probe" "^remote\\.origin\\.$key\$" "$url"; then
+      echo "pack:remote.origin.$key"
+    fi
+  done
   rm -rf "$probe"
   probe=""
   echo "checked"
@@ -1192,9 +1221,8 @@ refuse_foreign_submodule_origin_checked() {
   local repo_abs="$1" verified="${2:-}" super rel name="" common="" worktree="" main="" found admin raw="" expected="" resolved=0 shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
   local inplace head_branch push_remote="" pushto="" gitdir common_phys verified_common selector main_common
   local -a selectors
-  super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
+  super="$(superproject_of "$repo_abs")" || refuse_unresolvable_superproject "$repo_abs"
   if [ -n "$super" ]; then
-    super="$(cd "$super" && pwd -P)"
     rel="${repo_abs#"$super"/}"
     name="$(submodule_name_at "$super" "$rel")"
   else
@@ -1251,9 +1279,10 @@ refuse_foreign_submodule_origin_checked() {
         main=""
       fi
     fi
-    [ -z "$main" ] || super="$(git -C "$main" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
+    if [ -n "$main" ]; then
+      super="$(superproject_of "$main")" || refuse_unresolvable_superproject "$main"
+    fi
     if [ -n "$super" ]; then
-      super="$(cd "$super" && pwd -P)"
       rel="${main#"$super"/}"
       name="$(submodule_name_at "$super" "$rel")"
     fi
@@ -1307,12 +1336,25 @@ refuse_foreign_submodule_origin_checked() {
           [ "$(git config -f "$common/config" --type=bool --get core.bare 2>/dev/null)" != "true" ] || return 0
           refuse_unlocated_main "$repo_abs" "$common"
         fi
-        if ! under_git_modules "$common"; then
-          [ -z "$main" ] || return 0
+        # A .git file can point any directory at this git directory, so the checkout core.worktree
+        # names proves nothing when looked for from a linked worktree. It is trusted only from the
+        # primary checkout itself, where git resolves to this directory, or for a worktree `add` has
+        # just created from a checkout it checked.
+        if ! under_git_modules "$common" && [ -n "$main" ]; then
+          gitdir="$(git -C "$repo_abs" rev-parse --absolute-git-dir 2>/dev/null)" || gitdir=""
+          [ -z "$gitdir" ] || gitdir="$(resolved_dir "$gitdir")" || gitdir=""
+          common_phys="$(resolved_dir "$common")" || common_phys=""
+          if [ -n "$gitdir" ] && [ "$gitdir" = "$common_phys" ]; then
+            return 0
+          fi
+          if [ -n "$verified" ] && [ "$main" = "$(resolved_dir "$verified" || true)" ]; then
+            return 0
+          fi
         fi
         echo "worktree-claim: $repo_abs shares a git directory with a separate checkout, but no superproject registers it." >&2
         echo "  Its origin cannot be checked against a .gitmodules entry, so it is not claimed." >&2
-        echo "  If it is a submodule, run this from a checkout inside its superproject instead." >&2
+        echo "  If it is a submodule, run this from a checkout inside its superproject instead;" >&2
+        echo "  otherwise run this from the repository's own checkout." >&2
         exit 1
         ;;
     esac
@@ -1366,6 +1408,10 @@ refuse_foreign_submodule_origin_checked() {
       case "$setting" in
         '') ;;
         checked) checked=1 ;;
+        pack:*)
+          packs="$packs${packs:+, }${setting#pack:}"
+          foreign=1
+          ;;
         *)
           redirects="$redirects${redirects:+, }$setting"
           foreign=1
@@ -1377,13 +1423,6 @@ refuse_foreign_submodule_origin_checked() {
       foreign=1
     fi
   fi
-  # A custom pack command or remote helper is what fetch and push actually run, whatever the URL says.
-  for key in receivepack uploadpack vcs; do
-    if git -C "$repo_abs" config --get-all "remote.origin.$key" >/dev/null 2>&1; then
-      packs="$packs${packs:+, }remote.origin.$key"
-      foreign=1
-    fi
-  done
   # A plain push goes to the branch's push remote, which only defaults to origin. "." names this
   # repository itself, so a push there never reaches origin either. A selector set to an empty value is
   # not an unset one: some git versions pick the empty remote and the push fails, so it is refused too.

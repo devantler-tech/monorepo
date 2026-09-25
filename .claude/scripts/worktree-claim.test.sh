@@ -692,6 +692,17 @@ for key in receivepack uploadpack vcs; do
   check "add refuses an origin with a custom $key setting" 1 "$rc" "$out" "custom transport: remote.origin.$key"
   git -C "$super/mod" config --unset "remote.origin.$key"
 done
+# A pack command set globally applies to every repository alike, so it sends nothing elsewhere.
+printf '[remote "origin"]\n\tuploadpack = git-upload-pack\n\treceivepack = git-receive-pack\n' >"$tmp/global-pack.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-pack.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-pack-global" "claim-branch-sub-pack-global" "session-sub-pack-global" 2>&1)" || rc=$?
+check "add admits pack commands set for every repository in the global config" 0 "$rc" "$out" "owner=session-sub-pack-global"
+# An include written for this repository alone is still its own setting.
+printf '[includeIf "gitdir:%s/"]\n\tpath = %s\n' "$(git -C "$super/mod" rev-parse --path-format=absolute --git-dir)" "$tmp/scoped-pack.gitconfig" >"$tmp/global-pack-scoped.gitconfig"
+printf '[remote "origin"]\n\tuploadpack = git-upload-pack\n' >"$tmp/scoped-pack.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-pack-scoped.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-pack-scoped" "claim-branch-sub-pack-scoped" "session-sub-pack-scoped" 2>&1)" || rc=$?
+check "add refuses a pack command included for this repository alone" 1 "$rc" "$out" "custom transport: remote.origin.uploadpack"
 
 # A relative path shaped like host/owner/repo is a local repository, not the network URL it resembles.
 git -C "$super/mod" config remote.origin.url "github.com/example/sub"
@@ -1068,6 +1079,31 @@ rc=0
 out="$("$script" add "$tmp/decoy2-linked" "$tmp/wt-decoy2" "claim-branch-decoy2" "session-decoy2" 2>&1)" || rc=$?
 check "add refuses a linked worktree named by core.worktree in place of the primary checkout" 1 "$rc" "$out" "no superproject registers it"
 check "a decoy linked checkout creates no worktree" 1 "$([ -e "$tmp/wt-decoy2" ] && echo 0 || echo 1)"
+# A .git file can point any directory at the shared git directory, so from a linked worktree nothing
+# proves which directory is the primary checkout; the one core.worktree names is not trusted.
+mkdir -p "$tmp/decoy2-gitfile"
+printf 'gitdir: %s\n' "$tmp/decoy2-admin/repo" >"$tmp/decoy2-gitfile/.git"
+git --git-dir="$tmp/decoy2-admin/repo" config core.worktree "$tmp/decoy2-gitfile"
+rc=0
+out="$("$script" acquire "$tmp/decoy2-linked" "session-decoy2-gitfile" 2>&1)" || rc=$?
+check "acquire refuses a linked worktree whose core.worktree names a directory with a manufactured .git file" 1 "$rc" "$out" "no superproject registers it"
+
+# A superproject whose path ends in a newline is not the directory beside it without one, whatever that
+# directory's .gitmodules registers.
+nlsup="$tmp/nlsup"$'\n'
+# git submodule cannot run in such a directory, so the superproject is built elsewhere and moved there.
+git init -q -b main "$tmp/nlsup-build"
+git -C "$tmp/nlsup-build" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$tmp/nlsup-build" -c user.name=t -c user.email=t@example.com commit -qm "add submodule"
+mv "$tmp/nlsup-build" "$nlsup"
+git -C "$nlsup/mod" config remote.origin.url "$other_sub"
+mkdir -p "$tmp/nlsup"
+git config -f "$tmp/nlsup/.gitmodules" submodule.decoy.path "$(cd "$nlsup/mod" && pwd -P)"
+git config -f "$tmp/nlsup/.gitmodules" submodule.decoy.url "$other_sub"
+rc=0
+out="$("$script" add "$nlsup/mod" "$tmp/wt-nlsup" "claim-branch-nlsup" "session-nlsup" 2>&1)" || rc=$?
+check "add refuses a submodule of a superproject whose path ends in a newline" 1 "$rc" "$out"
+check "a newline superproject creates no worktree" 1 "$([ -e "$tmp/wt-nlsup" ] && echo 0 || echo 1)"
 
 # A new worktree path ending in a newline is refused before anything is created: once created, it
 # could not be resolved to take it back.
@@ -1252,8 +1288,12 @@ git --git-dir="$tmp/admin-mods/modules/repo" config core.worktree "$tmp/standalo
 git -C "$tmp/standalone-mods" -c user.name=t -c user.email=t@example.com commit --allow-empty -qm init
 git -C "$tmp/standalone-mods" worktree add -q --detach "$tmp/standalone-mods-linked"
 rc=0
-out="$("$script" add "$tmp/standalone-mods-linked" "$tmp/wt-standalone-mods" "claim-branch-standalone-mods" "session-standalone-mods" 2>&1)" || rc=$?
+out="$("$script" add "$tmp/standalone-mods" "$tmp/wt-standalone-mods" "claim-branch-standalone-mods" "session-standalone-mods" 2>&1)" || rc=$?
 check "add admits a standalone repository whose git directory sits in a folder named modules" 0 "$rc" "$out" "owner=session-standalone-mods"
+# From one of its linked worktrees, nothing proves where that clone's main checkout is.
+rc=0
+out="$("$script" add "$tmp/standalone-mods-linked" "$tmp/wt-standalone-mods-linked" "claim-branch-standalone-mods-linked" "session-standalone-mods-linked" 2>&1)" || rc=$?
+check "add refuses a linked worktree of a standalone repository with a separate git directory" 1 "$rc" "$out" "run this from the repository's own checkout"
 
 # When two .gitmodules sections claim one path, git initializes it from the later one.
 git -C "$super" config -f .gitmodules submodule.dup.path mod
