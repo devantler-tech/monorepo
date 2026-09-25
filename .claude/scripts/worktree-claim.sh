@@ -52,6 +52,9 @@
 #   3  live foreign claim or live unmarked occupant (check or acquire mode)
 
 set -euo pipefail
+# A caller such as a git hook can export these, and they override the path every `git -C` here is given.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_NAMESPACE
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=worktree-claim-lib.sh
@@ -96,7 +99,73 @@ write_marker() {
   mv -f "$tmp" "$marker"
 }
 
-trap 'worktree_claim_lock_release >/dev/null 2>&1 || true' EXIT
+# `add` arms these before it creates the worktree, and keeps them until it owns that worktree, so any
+# exit in between (the origin check refusing it, a failed claim, an error, a signal) takes back what `add`
+# created. Only what the note records counts: it is written under the branch-operation lock once the
+# creation step has finished, however it ended, so a path something else created is never removed.
+# Removal is forced, because a post-checkout hook can leave files in the new worktree that would stop a
+# plain `worktree remove`. The branch is removed only when `add` created it, and only while it still
+# points where `add` left it; that holds even when git was stopped before it made the worktree.
+PENDING_REPO=""
+PENDING_WT=""
+PENDING_BRANCH=""
+PENDING_OWNER=""
+PENDING_NOTE=""
+# discard_pending_worktree runs that rollback from the note, once, and reports what it removed.
+discard_pending_worktree() {
+  [ -n "$PENDING_NOTE" ] || return 0
+  local repo="$PENDING_REPO" wt="$PENDING_WT" branch="$PENDING_BRANCH" owner="$PENDING_OWNER"
+  local note="$PENDING_NOTE" created="" oid="" what rc=0
+  PENDING_NOTE=""
+  if [ -r "$note" ]; then
+    { IFS= read -r created || true; IFS= read -r oid || true; } <"$note"
+  fi
+  rm -f "$note"
+  [ "$created" = "created" ] || [ -n "$oid" ] || return 0
+  if [ "$created" = "created" ]; then
+    what="the unclaimed new worktree $wt${oid:+ and its new branch $branch}"
+  else
+    what="the new branch $branch"
+  fi
+  branch_op_lock_run "$repo" --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" -- \
+    remove_new_worktree "$repo" "$wt" "$branch" "$oid" "$created" "$owner" || rc=$?
+  case "$rc" in
+    0) echo "worktree-claim: removed $what" >&2 ;;
+    5) echo "worktree-claim: left $wt in place with its branch $branch: another session claimed it first" >&2 ;;
+    *) echo "worktree-claim: could not remove $what; remove it before reusing $branch" >&2 ;;
+  esac
+}
+# remove_new_worktree removes <wt> when the note says `add` created it, then the branch `add` created
+# while it still points at <oid>. It holds the worktree's ownership lock while it reads the marker and
+# removes the tree, and returns 5 without removing anything when a marker names another owner: a
+# concurrent `acquire` can claim the tree between its creation and `add`'s own claim.
+remove_new_worktree() {
+  local repo="$1" wt="$2" branch="$3" oid="$4" created="$5" owner="$6" wt_phys=""
+  if [ "$created" = "created" ]; then
+    # A tree that no longer exists cannot be claimed, and git can still remove its record.
+    if [ -d "$wt" ]; then
+      wt_phys="$(cd "$wt" && pwd -P)" || return 1
+      worktree_claim_lock_acquire "$wt_phys" || return 1
+      read_marker "$wt_phys/$WORKTREE_CLAIM_MARKER_NAME"
+      if [ -n "$MARKER_OWNER" ] && [ "$MARKER_OWNER" != "$owner" ]; then
+        worktree_claim_lock_release || true
+        return 5
+      fi
+    fi
+    if ! git -C "$repo" worktree remove --force "$wt"; then
+      [ -z "$wt_phys" ] || worktree_claim_lock_release || true
+      return 1
+    fi
+    # Removing the linked worktree deleted its private refs, the lock among them.
+    [ -z "$wt_phys" ] || worktree_claim_lock_forget
+  elif [ -e "$wt" ]; then
+    # Something add did not record as its worktree is at <wt>, and the branch may be checked out there.
+    return 1
+  fi
+  [ -z "$oid" ] || git -C "$repo" update-ref -d "refs/heads/$branch" "$oid"
+}
+
+trap 'worktree_claim_lock_release >/dev/null 2>&1 || true; discard_pending_worktree' EXIT
 trap 'exit 2' HUP INT TERM
 
 acquire_lock() {
@@ -217,7 +286,12 @@ cmd_acquire() {
   local wt="$1" owner="$2" fresh="${3:-}"
   [ -d "$wt" ] || fail "worktree path is not a directory: $wt"
   [ -n "$owner" ] || usage
+  [ "$fresh" = "fresh" ] || refuse_symlinked_submodule_path "$wt"
+  local given="$wt"
   wt="$(cd "$wt" && pwd -P)" || fail "cannot resolve worktree path: $wt"
+  [ "$wt" -ef "$given" ] || refuse_other_directory worktree "$given" "$wt"
+  # An existing submodule worktree must pass the same origin check `add` applies to the worktree it creates.
+  [ "$fresh" = "fresh" ] || refuse_foreign_submodule_origin "$wt"
   acquire_lock "$wt"
   ignore_marker "$wt"
   local marker="$wt/$WORKTREE_CLAIM_MARKER_NAME" action="acquired"
@@ -339,6 +413,46 @@ warn_if_local_branch_is_behind() {
   # itself.
   echo "worktree-claim:      Reconcile before working:  git -C $(shquote "$wt") merge --ff-only $(shquote "origin/$branch")" >&2
   return 0
+}
+
+# add_worktree_noting_new_branch runs add_worktree_on and records in <note> what it left behind, whether
+# or not it succeeded: `created` when <wt> is now a worktree of <repo>, and the new branch's object id when
+# <branch> did not exist before. git keeps both when only a post-checkout hook fails, and a signal to the
+# whole process group can land after git finishes but before the note is written, so the record comes
+# from the repository's state rather than the exit status, and a signal waits until it is written. It runs
+# under the branch-operation lock, in its subshell, so no cooperating operation creates the branch or
+# path meanwhile and the signal trap it sets goes no further.
+add_worktree_noting_new_branch() {
+  local repo="$1" wt="$2" branch="$3" note="$4" existed=0 oid="" created="" rc=0 signalled=0
+  trap 'signalled=1' HUP INT TERM
+  [ ! -e "$wt" ] || return 1
+  if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
+    existed=1
+  fi
+  # A signal before the creation starts means nothing here is ours; the note stays empty.
+  [ "$signalled" -eq 0 ] || return 2
+  add_worktree_on "$repo" "$wt" "$branch" || rc=$?
+  if [ "$rc" -eq 0 ] || worktree_registered "$repo" "$wt"; then
+    created="created"
+  fi
+  [ "$existed" -eq 1 ] || oid="$(git -C "$repo" rev-parse --verify --quiet "refs/heads/$branch" || true)"
+  printf '%s\n%s\n' "$created" "$oid" >"$note"
+  [ "$signalled" -eq 0 ] || return 2
+  return "$rc"
+}
+
+# worktree_registered succeeds when git lists <wt> among <repo>'s worktrees, even after something
+# deleted its directory: git keeps that record until it is pruned.
+worktree_registered() {
+  local repo="$1" wt="$2" wt_phys entry
+  wt_phys="$(physical_path "$wt" 2>/dev/null)" || return 1
+  [ -n "$wt_phys" ] || return 1
+  while IFS= read -r -d '' entry; do
+    case "$entry" in
+      "worktree "?*) [ "$(physical_path "${entry#worktree }" 2>/dev/null)" != "$wt_phys" ] || return 0 ;;
+    esac
+  done < <(git -C "$repo" worktree list --porcelain -z 2>/dev/null)
+  return 1
 }
 
 add_worktree_on() {
@@ -527,6 +641,68 @@ physical_path() {
   printf '%s\n' "$resolved"
 }
 
+# resolved_dir prints the physical path of directory <dir>, and fails when <dir> cannot be entered or the
+# result is another directory: command substitution drops a trailing newline, so a path ending in one
+# would otherwise come back as the path of a different directory.
+resolved_dir() {
+  local resolved
+  resolved="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  [ "$resolved" -ef "$1" ] || return 1
+  printf '%s\n' "$resolved"
+}
+
+# refuse_other_directory exits 1 because <path>, given as the <kind> path, resolves to the physical path
+# of a different directory, <resolved>, so every check would inspect that directory in its place.
+refuse_other_directory() {
+  echo "worktree-claim: the $1 path $(shquote "${2//$'\n'/\\n}") resolves to a different directory, $3." >&2
+  echo "  A path ending in a newline loses it when it is resolved, so it cannot be checked; it is not claimed." >&2
+  exit 1
+}
+
+# refuse_symlinked_submodule_path exits 1 when <path>, as given, passes through a symlink that sits where
+# a superproject registers a submodule, or above such a path. git never checks a submodule out through a
+# symlink, so the link's target holds no checkout of that submodule, and resolving <path> first would
+# check the target as the standalone repository it looks like on its own.
+refuse_symlinked_submodule_path() {
+  local path="$1" rest comp prefix="" parent top rel name
+  case "$path" in
+    /*) ;;
+    *) path="$PWD/$path" ;;
+  esac
+  rest="${path#/}"
+  # Components are applied the way `cd` applies them: `..` removes the previous component, symlink or not.
+  while [ -n "$rest" ]; do
+    comp="${rest%%/*}"
+    if [ "$comp" = "$rest" ]; then
+      rest=""
+    else
+      rest="${rest#*/}"
+    fi
+    case "$comp" in
+      '' | .) continue ;;
+      ..)
+        prefix="${prefix%/*}"
+        continue
+        ;;
+    esac
+    prefix="$prefix/$comp"
+    [ -L "$prefix" ] || continue
+    parent="$(resolved_dir "${prefix%/*}/")" || continue
+    top="$(git -C "$parent" rev-parse --show-toplevel 2>/dev/null)" || continue
+    top="$(resolved_dir "$top")" || continue
+    rel="${parent%/}/$comp"
+    rel="${rel#"$top"/}"
+    [ "$rel" != "${parent%/}/$comp" ] || continue
+    name="$(submodule_name_under "$top" "$rel")"
+    [ -n "$name" ] || continue
+    echo "worktree-claim: $1 passes through the symlink $prefix, at or above where $top registers submodule '$name'." >&2
+    echo "  git never checks a submodule out through a symlink, so the link's target holds no checkout of that" >&2
+    echo "  submodule, and it is not claimed. Remove the symlink, then populate the submodule from $(shquote "$top")" >&2
+    echo "  with .claude/scripts/submodule-init.sh." >&2
+    exit 1
+  done
+}
+
 # refuse_uninitialized_repo stops `add` when <repo_path> is not the root of its own repository
 # (monorepo#2755). An uninitialized submodule is an empty directory, and `git -C` on it resolves to the
 # PARENT repository, so the helper used to report success while building a worktree of the wrong repo
@@ -540,6 +716,815 @@ refuse_uninitialized_repo() {
     echo "  An uninitialized submodule looks exactly like this. Populate it first:" >&2
     echo "    .claude/scripts/submodule-init.sh <path>" >&2
     exit 1
+  fi
+}
+
+# redact_url prints a URL for a diagnostic with any userinfo (`user:token@`) replaced by `***@`, and
+# any query or fragment by `?***`, so a credential-bearing remote is never echoed. A config value can
+# carry several URLs, separated by whitespace or control characters, and each is redacted; a separator
+# other than a space is shown as an octal escape such as `\012`.
+redact_url() {
+  local value="$1" out="" segment sep code
+  while :; do
+    segment="${value%%[[:space:][:cntrl:]]*}"
+    out="$out$(redact_url_segment "$segment")"
+    value="${value:${#segment}}"
+    [ -n "$value" ] || break
+    sep="${value:0:1}"
+    value="${value:1}"
+    if [ "$sep" = " " ]; then
+      out="$out "
+    else
+      printf -v code '%03o' "'$sep"
+      out="$out\\$code"
+    fi
+  done
+  printf '%s\n' "$out"
+}
+
+# redact_url_segment redacts one URL, and any URL embedded later in it, for redact_url.
+redact_url_segment() {
+  local url="$1" scheme="" authority rest
+  case "$url" in
+    *://*)
+      scheme="${url%%://*}://"
+      url="${url#*://}"
+      ;;
+  esac
+  authority="${url%%/*}"
+  rest="${url#"$authority"}"
+  case "$authority" in
+    *@*) authority="***@${authority##*@}" ;;
+  esac
+  case "$authority$rest" in
+    *\?* | *\#*)
+      rest="$authority$rest"
+      authority=""
+      rest="${rest%%[?#]*}?***"
+      ;;
+  esac
+  case "$rest" in
+    *://*) rest="${rest%%://*}$(redact_url_segment "://${rest#*://}")" ;;
+  esac
+  printf '%s%s%s\n' "$scheme" "$authority" "$rest"
+}
+
+# resolve_submodule_url prints the origin URL `git submodule sync` writes for the submodule at <path>
+# whose .gitmodules URL is <url>. A relative URL (`./x`, `../x`) resolves against the superproject's
+# remote: the remote the current branch names (an explicitly empty name names none), else origin; a
+# remote with no URL falls back to the superproject's own path. Any other URL is printed unchanged.
+# It prints nothing when git itself cannot resolve the URL, because more `..` components remain than it
+# can drop, returns 3 when the remote's name or URL contains a newline, which git can carry into the
+# result, and returns 4 when the remote's URL is set but empty, which git refuses to resolve against.
+resolve_submodule_url() {
+  local super="$1" url="$2" path="$3" branch remote configured base sep="/" relative=0 before result up rest
+  case "$url" in
+    ./* | ../*) ;;
+    *)
+      printf '%s\n' "$url"
+      return 0
+      ;;
+  esac
+  branch="$(git -C "$super" symbolic-ref --short -q HEAD 2>/dev/null)" || branch=""
+  remote="origin"
+  # Read NUL-delimited: command substitution would drop a trailing newline that git keeps. A remote
+  # name with a newline names no configured remote, so it is refused rather than resolved.
+  if [ -n "$branch" ] && IFS= read -r -d '' configured < <(git -C "$super" config -z --get "branch.$branch.remote" 2>/dev/null); then
+    case "$configured" in
+      *$'\n'*) return 3 ;;
+    esac
+    remote="$configured"
+  fi
+  # A URL that is set but empty is not an absent one: git aborts rather than resolve against it.
+  base=""
+  if IFS= read -r -d '' base < <(git -C "$super" config -z --get "remote.$remote.url" 2>/dev/null); then
+    [ -n "$base" ] || return 4
+  else
+    base=""
+  fi
+  case "$base" in
+    *$'\n'*) return 3 ;;
+  esac
+  [ -n "$base" ] || base="$super"
+  base="${base%/}"
+  # git reads a remote as a relative local path when it has no ':' before its first '/', and is
+  # not absolute; it then resolves from `./<remote>`.
+  before="${base%%:*}"
+  if [ "${base#/}" = "$base" ] && { [ "$before" = "$base" ] || [ "${before#*/}" != "$before" ]; }; then
+    relative=1
+    case "$base" in
+      ./* | ../*) ;;
+      *) base="./$base" ;;
+    esac
+  fi
+  while :; do
+    case "$url" in
+      ./*) url="${url#./}" ;;
+      ../*)
+        url="${url#../}"
+        # As git does: drop the last component at the last '/', and only when none is left at the
+        # last ':' (an scp-like host), after which the join uses ':'. A ':' inside a path is data.
+        # With neither left, an absolute remote becomes `.`, and a relative one, or `.`, is an error.
+        if [ "${base%/*}" != "$base" ]; then
+          base="${base%/*}"
+        elif [ "${base%:*}" != "$base" ]; then
+          base="${base%:*}"
+          sep=":"
+        elif [ "$relative" -eq 1 ] || [ "$base" = "." ]; then
+          return 0
+        else
+          base="."
+        fi
+        ;;
+      *) break ;;
+    esac
+  done
+  result="$base$sep$url"
+  # Then, as `git submodule sync` writes it: without a trailing '/' or a leading `./`, and, when the
+  # remote is a relative path, relative to the submodule's own directory instead of the superproject.
+  case "$url" in
+    */) result="${result%/}" ;;
+  esac
+  result="${result#./}"
+  if [ "$relative" -eq 1 ]; then
+    up="../"
+    rest="$path"
+    while [ "${rest#*/}" != "$rest" ]; do
+      rest="${rest#*/}"
+      up="../$up"
+    done
+    result="$up$result"
+  fi
+  printf '%s\n' "$result"
+}
+
+# registering_superproject finds which superproject registered the submodule whose shared git
+# directory is <common> (`<parent-gitdir>/modules/<name>`), printing `<superproject>\n<name>`. A nested
+# submodule lives under its immediate parent's git directory, so the innermost parent that registers
+# the remaining name wins; a name may itself contain `/`, so an outer split is still tried after it.
+registering_superproject() {
+  local common="$1" rest="$1" parent name tree
+  while :; do
+    case "$rest" in
+      */modules/*) ;;
+      *) return 1 ;;
+    esac
+    parent="${rest%/modules/*}"
+    name="${common#"$parent"/modules/}"
+    case "$parent" in
+      */.git) tree="${parent%/.git}" ;;
+      *)
+        # A linked worktree's admin directory names its working tree in `gitdir`; a submodule's git
+        # directory names it in core.worktree.
+        if [ -f "$parent/gitdir" ]; then
+          tree="$(cat "$parent/gitdir" 2>/dev/null)" || tree=""
+          tree="${tree%/.git}"
+        else
+          IFS= read -r -d '' tree < <(git config -z -f "$parent/config" --get core.worktree 2>/dev/null) || tree=""
+        fi
+        case "$tree" in
+          '') ;;
+          /*) ;;
+          *) tree="$parent/$tree" ;;
+        esac
+        [ -z "$tree" ] || tree="$(resolved_dir "$tree")" || tree=""
+        ;;
+    esac
+    if [ -n "$tree" ] && git config -f "$tree/.gitmodules" --get "submodule.$name.path" >/dev/null 2>&1; then
+      printf '%s\n%s\n' "$tree" "$name"
+      return 0
+    fi
+    rest="$parent"
+  done
+}
+
+# submodule_name_at prints the name <super>/.gitmodules registers for path <rel>. When several
+# sections claim one path, git uses the last, so this does too.
+submodule_name_at() {
+  local super="$1" rel="$2" record key name=""
+  # NUL-delimited, key and value split by a newline: a submodule name may contain spaces.
+  while IFS= read -r -d '' record; do
+    [ "${record#*$'\n'}" = "$rel" ] || continue
+    key="${record%%$'\n'*}"
+    name="${key#submodule.}"
+    name="${name%.path}"
+  done < <(git config -f "$super/.gitmodules" -z --get-regexp '^submodule\..*\.path$' 2>/dev/null || true)
+  printf '%s\n' "$name"
+}
+
+# refuse_unlocated_main exits 1 because the git directory <common> of linked worktree <repo> records no
+# main checkout, so whether a superproject registers that checkout cannot be checked.
+refuse_unlocated_main() {
+  echo "worktree-claim: $1 is a linked worktree whose main checkout cannot be located from its git directory $2." >&2
+  echo "  Whether a superproject registers that checkout cannot be checked, so it is not claimed." >&2
+  echo "  Run this from the main checkout, or set core.worktree in $2/config to it." >&2
+  exit 1
+}
+
+# superproject_owns succeeds when <super> is still a git working tree and, where the git directory of
+# <repo> sits in a git directory's modules/, that git directory is <super>'s own. git, and a git
+# directory's own path, can both name a superproject worktree that has since been deleted, and its
+# path can hold anything now, so its .gitmodules says nothing about <repo> unless both hold.
+superproject_owns() {
+  local super="$1" repo="$2" common="$3" top super_git
+  super="$(resolved_dir "$super")" || return 1
+  top="$(git -C "$super" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  top="$(resolved_dir "$top")" || return 1
+  [ "$top" = "$super" ] || return 1
+  if [ -z "$common" ]; then
+    common="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  fi
+  common="$(resolved_dir "$common")" || return 1
+  under_git_modules "$common" || return 0
+  super_git="$(git -C "$super" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  super_git="$(resolved_dir "$super_git")" || return 1
+  case "$common" in
+    "$super_git"/modules/*) return 0 ;;
+  esac
+  return 1
+}
+
+# refuse_stale_superproject exits 1 because <super>, named as the superproject of <repo>, is not a
+# git working tree whose git directory holds <repo>'s own.
+refuse_stale_superproject() {
+  echo "worktree-claim: $1 names $2 as its superproject, but $2 is no longer the git working tree that registered it." >&2
+  echo "  Its .gitmodules cannot say what $1 should be, so it is not claimed. Run this from a checkout" >&2
+  echo "  inside the live superproject, and remove a deleted worktree's leftover record with git worktree prune." >&2
+  exit 1
+}
+
+# superproject_of prints the physical path of the superproject whose working tree holds <dir>, and
+# nothing when there is none. It returns 2 when that path cannot be resolved to the same directory: git
+# ends the path with a newline, and command substitution would drop one the path itself ends in too.
+superproject_of() {
+  local out
+  out="$(git -C "$1" rev-parse --show-superproject-working-tree 2>/dev/null && printf x)" || return 0
+  out="${out%x}"
+  out="${out%$'\n'}"
+  [ -n "$out" ] || return 0
+  resolved_dir "$out" || return 2
+}
+
+# refuse_unresolvable_superproject exits 1 because the superproject around <dir> cannot be resolved.
+refuse_unresolvable_superproject() {
+  echo "worktree-claim: the superproject around $1 has a path that cannot be resolved to the same directory." >&2
+  echo "  A path ending in a newline loses it when it is resolved, so its .gitmodules cannot be read; it is not claimed." >&2
+  exit 1
+}
+
+# submodule_name_under prints the name of a submodule <super>/.gitmodules registers at <rel> or beneath
+# it, and prints nothing when there is none.
+submodule_name_under() {
+  local super="$1" rel="$2" record path
+  while IFS= read -r -d '' record; do
+    path="${record#*$'\n'}"
+    case "$path" in
+      "$rel" | "$rel"/*) ;;
+      *) continue ;;
+    esac
+    record="${record%%$'\n'*}"
+    record="${record#submodule.}"
+    printf '%s\n' "${record%.path}"
+    return 0
+  done < <(git config -f "$super/.gitmodules" -z --get-regexp '^submodule\..*\.path$' 2>/dev/null || true)
+}
+
+# registration_around prints the superproject around <dir>, <dir>'s path within it, and the submodule
+# name that superproject registers at that path, one per line. It fails when no superproject registers it.
+registration_around() {
+  local dir top found
+  dir="$(resolved_dir "$1")" || return 1
+  top="$(git -C "${dir%/*}" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  top="$(resolved_dir "$top")" || return 1
+  [ "${dir#"$top"/}" != "$dir" ] || return 1
+  found="$(submodule_name_at "$top" "${dir#"$top"/}")"
+  [ -n "$found" ] || return 1
+  printf '%s\n%s\n%s' "$top" "${dir#"$top"/}" "$found"
+}
+
+# checkout_unproven succeeds when <dir> cannot be shown to be the checkout the index of the git directory
+# <common> was written from: none of the first 50 files that index tracks outside a sparse checkout's
+# exclusions is, under <dir>, the very file the index recorded (the same inode, with no second name), or
+# the index cannot be read. The parent of a separate git directory that is merely named .git can hold a
+# tracked file by chance, but a copy has an inode of its own, and a hard link to the checkout's file gives
+# that inode a second name. An index that tracks nothing proves nothing, so it counts as unproven too.
+checkout_unproven() {
+  local dir="$1" common="$2" entry path listed=0 recorded actual links stat_line
+  git --git-dir="$common" ls-files -z -t >/dev/null 2>&1 || return 0
+  while IFS= read -r -d '' entry; do
+    case "$entry" in
+      "H "*) ;;
+      *) continue ;;
+    esac
+    path="${entry#H }"
+    listed=$((listed + 1))
+    if [ -e "$dir/$path" ] || [ -L "$dir/$path" ]; then
+      recorded="$(GIT_LITERAL_PATHSPECS=1 git --git-dir="$common" ls-files --debug -- "$path" 2>/dev/null |
+        sed -n 's/.*[[:space:]]ino: \([0-9][0-9]*\).*/\1/p' | head -n 1)" || recorded=""
+      # shellcheck disable=SC2012 # only the inode number and link count, the first and third fields, are read
+      stat_line="$(ls -ldi -- "$dir/$path" 2>/dev/null | awk '{ print $1, $3; exit }')" || stat_line=""
+      actual="${stat_line%% *}"
+      links="${stat_line#* }"
+      case "$recorded$actual$links" in
+        '' | *[!0-9]*) ;;
+        *)
+          # The index keeps the low 32 bits of the inode number. A hard link shares the inode, so only a
+          # file with no other name is the one the index recorded.
+          if [ -n "$recorded" ] && [ -n "$actual" ] && [ "$recorded" -ne 0 ] && [ "$links" = 1 ] &&
+            [ "$((actual % 4294967296))" -eq "$recorded" ]; then
+            return 1
+          fi
+          ;;
+      esac
+    fi
+    [ "$listed" -lt 50 ] || break
+  done < <(git --git-dir="$common" ls-files -z -t 2>/dev/null)
+  return 0
+}
+
+# under_git_modules succeeds when <common> sits in the `modules/` directory of a git directory, which is
+# where git keeps a submodule's own git directory. A path that merely has a `modules` component does not.
+under_git_modules() {
+  local rest="$1" prefix
+  while [ "${rest%/modules/*}" != "$rest" ]; do
+    prefix="${rest%/modules/*}"
+    if [ -n "$prefix" ] && git --git-dir="$prefix" rev-parse --git-dir >/dev/null 2>&1; then
+      return 0
+    fi
+    rest="$prefix"
+  done
+  return 1
+}
+
+# origin_config_own <repo> <probe> <regexp> <url> succeeds when <repo> sees a setting matching <regexp>
+# that the neutral <probe> does not: an entry from the repository's own config (other than an origin
+# url or pushurl equal to the registered <url>), or shared entries that are not, in order, among the
+# probe's. A setting only the probe sees, such as one a global includeIf "gitdir:/tmp/**" adds for its
+# temporary path, never counts. A read that fails counts, so an error never looks like a clean result.
+origin_config_own() {
+  local repo="$1" probe="$2" re="$3" url="$4" scope origin entry i=0 rc=0
+  local -a seen=()
+  git -C "$probe" config --show-scope --show-origin -z --get-regexp "$re" >"$probe/.claim-probe-entries" 2>/dev/null || rc=$?
+  [ "$rc" -le 1 ] || return 0
+  git -C "$repo" config --show-scope --show-origin -z --get-regexp "$re" >"$probe/.claim-repo-entries" 2>/dev/null || rc=$?
+  [ "$rc" -le 1 ] || return 0
+  while IFS= read -r -d '' scope && IFS= read -r -d '' origin && IFS= read -r -d '' entry; do
+    case "$scope" in
+      local | worktree) ;;
+      *) seen+=("$scope" "$origin" "$entry") ;;
+    esac
+  done <"$probe/.claim-probe-entries"
+  while IFS= read -r -d '' scope && IFS= read -r -d '' origin && IFS= read -r -d '' entry; do
+    case "$scope" in
+      local | worktree)
+        case "$entry" in
+          "remote.origin.url"$'\n'"$url" | "remote.origin.pushurl"$'\n'"$url") continue ;;
+        esac
+        return 0
+        ;;
+    esac
+    while [ "$i" -lt "${#seen[@]}" ] && { [ "${seen[i]}" != "$scope" ] || [ "${seen[i + 1]}" != "$origin" ] || [ "${seen[i + 2]}" != "$entry" ]; }; do
+      i=$((i + 3))
+    done
+    [ "$i" -lt "${#seen[@]}" ] || return 0
+    i=$((i + 3))
+  done <"$probe/.claim-repo-entries"
+  return 1
+}
+
+# probe_shares_scope succeeds when the throwaway repository <probe> sits where a gitdir-conditioned include
+# written for <repo> could match it too: inside any git directory, or inside <repo>'s checkout, its
+# superproject or its shared git directory.
+probe_shares_scope() {
+  local probe="$1" repo="$2" dir anchor
+  dir="$(cd "$probe" 2>/dev/null && pwd -P)" || return 0
+  case "$dir/" in
+    */.git/*) return 0 ;;
+  esac
+  for anchor in \
+    "$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" \
+    "$(git -C "$repo" rev-parse --show-superproject-working-tree 2>/dev/null)" \
+    "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; do
+    [ -n "$anchor" ] || continue
+    anchor="$(cd "$anchor" 2>/dev/null && pwd -P)" || continue
+    case "$dir/" in
+      "$anchor"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# config_values prints what `git config -z <args>` reports for <repo>, hex-encoded. Command substitution
+# drops trailing empty lines, so compared as plain text an empty value that overrides a shared one would
+# read as absent.
+config_values() {
+  local repo="$1"
+  shift
+  { git -C "$repo" config -z "$@" 2>/dev/null || true; } | od -An -tx1 | tr -d ' \n'
+}
+
+# origin_redirects prints, one per line, what sends <repo>'s origin somewhere other than where <url>
+# goes from a neutral repository: `URL rewrite` when the effective fetch or push URLs differ, and
+# the name of any connection setting that differs: `core.sshCommand` or `core.gitProxy` (the command git
+# runs to connect), or a curl proxy or pinned address, and `pack:remote.origin.<key>` for a pack command
+# or remote helper of origin's own. The neutral repository is a throwaway one whose
+# remote has origin's shape, so settings every repository shares give both the same answer, while one
+# that applies only to <repo> (its own config, or a global file included only for it) shows up. One that
+# applies only to the throwaway repository, such as an include keyed to its temporary path, does not.
+# A rewrite keyed to the registered URL itself (a global insteadOf, or an include conditioned on
+# hasconfig:remote.*.url) applies to every clone of that repository, like a mirror, so it is shared too.
+# It prints `unverifiable` when the comparison cannot be made, and `checked` last once it has finished,
+# so a caller never mistakes an aborted run for a clean one. The URL is written to the throwaway
+# config file directly rather than passed on a command line, where other processes could read it, and
+# the body runs in its own subshell so the throwaway repository is removed however the run ends.
+origin_redirects() (
+  local repo="$1" url="$2" esc urls pushurls i
+  # probe is not local, so both traps still see it wherever the function is left; the subshell keeps it
+  # from reaching the caller. A signal removes it directly rather than relying on the EXIT trap.
+  probe=""
+  trap '[ -z "$probe" ] || rm -rf "$probe"' EXIT
+  trap '[ -z "$probe" ] || rm -rf "$probe"; exit 2' HUP INT TERM PIPE
+  case "$url" in
+    *$'\n'*)
+      echo "unverifiable"
+      return 0
+      ;;
+  esac
+  probe="$(mktemp -d "${TMPDIR:-/tmp}/worktree-claim-probe.XXXXXX")" || {
+    echo "unverifiable"
+    return 0
+  }
+  # A probe inside the scope of an include written for <repo> would see what <repo> sees, so it is made
+  # in /tmp instead, and the check is unverifiable when that is no better.
+  if probe_shares_scope "$probe" "$repo"; then
+    rm -rf "$probe"
+    probe=""
+    probe="$(mktemp -d /tmp/worktree-claim-probe.XXXXXX)" || probe=""
+    if [ -z "$probe" ] || probe_shares_scope "$probe" "$repo"; then
+      [ -z "$probe" ] || rm -rf "$probe"
+      probe=""
+      echo "unverifiable"
+      return 0
+    fi
+  fi
+  # An empty template keeps a user's init template, and any config it carries, out of the probe. HEAD
+  # points outside refs/heads/, so no onbranch include applies to the probe: a branch of any name could
+  # match a glob that also matches <repo>'s branch, and the redirect would then look shared.
+  if ! git init -q --template= "$probe" >/dev/null 2>&1 ||
+    ! git -C "$probe" symbolic-ref HEAD refs/worktree-claim-probe >/dev/null 2>&1; then
+    rm -rf "$probe"
+    probe=""
+    echo "unverifiable"
+    return 0
+  fi
+  esc="${url//\\/\\\\}"
+  esc="${esc//\"/\\\"}"
+  urls=0
+  pushurls=0
+  while IFS= read -r -d '' _; do urls=$((urls + 1)); done < <(git -C "$repo" config -z --get-all remote.origin.url 2>/dev/null || true)
+  while IFS= read -r -d '' _; do pushurls=$((pushurls + 1)); done < <(git -C "$repo" config -z --get-all remote.origin.pushurl 2>/dev/null || true)
+  {
+    printf '[remote "probe"]\n'
+    for ((i = 0; i < urls; i++)); do printf '\turl = "%s"\n' "$esc"; done
+    for ((i = 0; i < pushurls; i++)); do printf '\tpushurl = "%s"\n' "$esc"; done
+  } >>"$probe/.git/config"
+  if { [ "$(git -C "$repo" remote get-url --all origin 2>&1)" != "$(git -C "$probe" remote get-url --all probe 2>&1)" ] ||
+    [ "$(git -C "$repo" remote get-url --push --all origin 2>&1)" != "$(git -C "$probe" remote get-url --push --all probe 2>&1)" ]; } &&
+    origin_config_own "$repo" "$probe" '^(url\..+\.(insteadof|pushinsteadof)|remote\.origin\.(url|pushurl))$' "$url"; then
+    echo "URL rewrite"
+  fi
+  # git uses the last core.sshCommand, but tries every core.gitProxy in order.
+  if { [ "$(config_values "$repo" --get core.sshCommand)" != "$(config_values "$probe" --get core.sshCommand)" ]; } &&
+    origin_config_own "$repo" "$probe" '^core\.sshcommand$' "$url"; then
+    echo "core.sshCommand"
+  fi
+  if { [ "$(config_values "$repo" --get-all core.gitProxy)" != "$(config_values "$probe" --get-all core.gitProxy)" ]; } &&
+    origin_config_own "$repo" "$probe" '^core\.gitproxy$' "$url"; then
+    echo "core.gitProxy"
+  fi
+  # For a curl remote, a proxy or a pinned address for its host decides which server answers. Every
+  # http.*proxy and http.*curloptResolve entry is compared, URL-scoped ones included, not only the one
+  # matching origin, so the URL stays off command lines.
+  if { [ "$(config_values "$repo" --get-all remote.origin.proxy)" != "$(config_values "$probe" --get-all remote.origin.proxy)" ]; } &&
+    origin_config_own "$repo" "$probe" '^remote\.origin\.proxy$' "$url"; then
+    echo "remote.origin.proxy"
+  fi
+  if { [ "$(config_values "$repo" --get-regexp '^http\.(.+\.)?proxy$')" != "$(config_values "$probe" --get-regexp '^http\.(.+\.)?proxy$')" ]; } &&
+    origin_config_own "$repo" "$probe" '^http\.(.+\.)?proxy$' "$url"; then
+    echo "http.proxy"
+  fi
+  if { [ "$(config_values "$repo" --get-regexp '^http\.(.+\.)?curloptresolve$')" != "$(config_values "$probe" --get-regexp '^http\.(.+\.)?curloptresolve$')" ]; } &&
+    origin_config_own "$repo" "$probe" '^http\.(.+\.)?curloptresolve$' "$url"; then
+    echo "http.curloptResolve"
+  fi
+  # An extra header such as Host can make the same URL reach another repository on that server.
+  if { [ "$(config_values "$repo" --get-regexp '^http\.(.+\.)?extraheader$')" != "$(config_values "$probe" --get-regexp '^http\.(.+\.)?extraheader$')" ]; } &&
+    origin_config_own "$repo" "$probe" '^http\.(.+\.)?extraheader$' "$url"; then
+    echo "http.extraHeader"
+  fi
+  # A custom pack command or remote helper is what fetch and push actually run, whatever the URL says.
+  # One set for every repository in the global or system config reaches the same place from anywhere.
+  local key
+  for key in receivepack uploadpack vcs; do
+    if { [ "$(config_values "$repo" --get-all "remote.origin.$key")" != "$(config_values "$probe" --get-all "remote.origin.$key")" ]; } &&
+      origin_config_own "$repo" "$probe" "^remote\\.origin\\.$key\$" "$url"; then
+      echo "pack:remote.origin.$key"
+    fi
+  done
+  rm -rf "$probe"
+  probe=""
+  echo "checked"
+)
+
+# refuse_foreign_submodule_origin_checked stops `add` or `acquire` when <repo_path> is a populated
+# submodule whose `origin` is not the repository its superproject's .gitmodules names (monorepo#3010).
+# Such a checkout is its own top level, so refuse_uninitialized_repo admits it, and every commit made
+# there would target the wrong repository while every message names the submodule.
+#
+# origin must be exactly what `git submodule sync` writes: the registered URL, resolved as git
+# resolves a relative one, byte for byte. Two spellings git might treat as one repository are not
+# accepted as equal, because whether they are depends on the server; `submodule sync` restores the
+# exact URL. Nothing that applies only to this repository may send origin elsewhere either: a
+# pushurl, a URL rewrite, core.sshCommand, core.gitProxy, a curl proxy, http.curloptResolve or
+# http.extraHeader in its own config or in a global file included only for it, or a custom receive-pack,
+# upload-pack or remote helper. A plain push from the checked-out branch must go to origin as well.
+# Settings that apply to every repository, the superproject included, are not this check's concern. A
+# repository that is not a submodule is not checked: nothing names what it should be.
+#
+# `add` passes, as <verified>, the checkout it has already checked and created the new worktree from.
+refuse_foreign_submodule_origin_checked() {
+  local repo_abs="$1" verified="${2:-}" super rel name="" common="" worktree="" main="" found admin raw="" expected="" resolved=0 shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
+  local inplace head_branch push_remote="" pushto="" gitdir common_phys verified_common selector main_common
+  local -a selectors
+  super="$(superproject_of "$repo_abs")" || refuse_unresolvable_superproject "$repo_abs"
+  if [ -n "$super" ]; then
+    rel="${repo_abs#"$super"/}"
+    name="$(submodule_name_at "$super" "$rel")"
+  else
+    # A linked worktree of a submodule can sit outside its superproject, where git reports none. Its
+    # shared git directory records the submodule's main checkout in core.worktree, and that checkout
+    # sits in the superproject wherever the superproject keeps its own git directory.
+    common="$(git -C "$repo_abs" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
+    # With extensions.worktreeConfig the setting can live in config.worktree. Both files are read
+    # directly, because git itself refuses to run once core.worktree names a missing directory.
+    # Read NUL-delimited: command substitution would drop a trailing newline and name another checkout.
+    if [ -n "$common" ]; then
+      IFS= read -r -d '' worktree < <(git config -z -f "$common/config" --get core.worktree 2>/dev/null) || worktree=""
+      if [ -z "$worktree" ] && [ "$(git config -f "$common/config" --type=bool --get extensions.worktreeConfig 2>/dev/null)" = "true" ]; then
+        IFS= read -r -d '' worktree < <(git config -z -f "$common/config.worktree" --get core.worktree 2>/dev/null) || worktree=""
+      fi
+    fi
+    main="$worktree"
+    # A submodule cloned in place keeps its git directory at <checkout>/.git and sets no core.worktree,
+    # so its main checkout is that directory's parent. A separate git directory that is merely named
+    # .git keeps its checkout elsewhere, recorded nowhere, so the parent counts only when it holds the
+    # files the index was written from.
+    if [ -z "$main" ]; then
+      case "$common" in
+        */.git) main="${common%/.git}" ;;
+      esac
+      if [ -n "$main" ] && checkout_unproven "$main" "$common"; then
+        main=""
+      fi
+    fi
+    # A git directory kept apart from its checkout records no main checkout, but a worktree `add` has
+    # just created from a checked checkout of the same repository sits wherever that checkout does. Its
+    # own config is still compared below.
+    if [ -z "$main" ] && [ -n "$verified" ] && [ -n "$common" ]; then
+      verified_common="$(git -C "$verified" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || verified_common=""
+      [ -z "$verified_common" ] || verified_common="$(cd "$verified_common" 2>/dev/null && pwd -P)" || verified_common=""
+      common_phys="$(cd "$common" 2>/dev/null && pwd -P)" || common_phys=""
+      if [ -n "$verified_common" ] && [ "$verified_common" = "$common_phys" ]; then
+        main="$verified"
+      fi
+    fi
+    case "$main" in
+      '' | /*) ;;
+      *) main="$common/$main" ;;
+    esac
+    [ -z "$main" ] || main="$(resolved_dir "$main")" || main=""
+    # core.worktree can name any directory. It names this repository's primary checkout only when that
+    # checkout's own git directory is this one. Every linked checkout shares this directory as its common
+    # directory, so that is not compared; otherwise the real checkout is unlocated, wherever it sits.
+    if [ -n "$main" ] && [ -n "$worktree" ]; then
+      main_common="$(git -C "$main" rev-parse --absolute-git-dir 2>/dev/null)" || main_common=""
+      [ -z "$main_common" ] || main_common="$(resolved_dir "$main_common")" || main_common=""
+      common_phys="$(resolved_dir "$common")" || common_phys=""
+      if [ -z "$main_common" ] || [ "$main_common" != "$common_phys" ]; then
+        main=""
+      fi
+    fi
+    if [ -n "$main" ]; then
+      super="$(superproject_of "$main")" || refuse_unresolvable_superproject "$main"
+    fi
+    if [ -n "$super" ]; then
+      rel="${main#"$super"/}"
+      name="$(submodule_name_at "$super" "$rel")"
+    fi
+    # An in-place clone's checkout is where its git directory sits, whatever core.worktree names now,
+    # so the superproject around that directory decides whether it is a registered submodule. A bare
+    # repository has no checkout, but its git directory can itself sit at a registered path.
+    if [ -z "$name" ] && [ -n "$common" ]; then
+      inplace=""
+      case "$common" in
+        */.git) inplace="${common%/.git}" ;;
+        *)
+          if [ "$(git config -f "$common/config" --type=bool --get core.bare 2>/dev/null)" = "true" ]; then
+            inplace="$common"
+          fi
+          ;;
+      esac
+      if [ -n "$inplace" ] && found="$(registration_around "$inplace")"; then
+        super="${found%%$'\n'*}"
+        found="${found#*$'\n'}"
+        rel="${found%%$'\n'*}"
+        name="${found#*$'\n'}"
+      fi
+    fi
+  fi
+  if [ -z "$super" ]; then
+    # Without a main checkout, the shared git directory's own path still records which superproject
+    # registered it, and under which name.
+    case "$common" in
+      */.git/modules/* | */.git/worktrees/*/modules/*)
+        # A submodule's git directory records its checkout in core.worktree. One that records none is a
+        # separate git directory that merely sits under modules/, so its path proves no registration.
+        [ -n "$worktree" ] || refuse_unlocated_main "$repo_abs" "$common"
+        ;;
+      *)
+        # A standalone repository may keep its git directory elsewhere and point core.worktree back at
+        # its checkout; nothing registers it, so there is nothing to check. A git directory under another
+        # git directory's `modules/` is a submodule's, wherever core.worktree points, and a core.worktree
+        # that names a checkout which no longer exists may be one too, so neither is waved through.
+        if [ -z "$worktree" ]; then
+          # Without core.worktree, a git directory kept outside its checkout (--separate-git-dir)
+          # records no main checkout at all, so a linked worktree cannot show whether that checkout sits
+          # at a registered submodule path. The main checkout itself is where git just looked, and a
+          # bare repository has none.
+          [ -z "$main" ] || return 0
+          gitdir="$(git -C "$repo_abs" rev-parse --absolute-git-dir 2>/dev/null)" || gitdir=""
+          [ -z "$gitdir" ] || gitdir="$(cd "$gitdir" 2>/dev/null && pwd -P)" || gitdir=""
+          common_phys="$(cd "$common" 2>/dev/null && pwd -P)" || common_phys=""
+          if [ -n "$gitdir" ] && [ "$gitdir" = "$common_phys" ]; then
+            return 0
+          fi
+          [ "$(git config -f "$common/config" --type=bool --get core.bare 2>/dev/null)" != "true" ] || return 0
+          refuse_unlocated_main "$repo_abs" "$common"
+        fi
+        # A .git file can point any directory at this git directory, so the checkout core.worktree
+        # names proves nothing when looked for from a linked worktree. It is trusted only from the
+        # primary checkout itself, where git resolves to this directory, or for a worktree `add` has
+        # just created from a checkout it checked.
+        if ! under_git_modules "$common" && [ -n "$main" ]; then
+          gitdir="$(git -C "$repo_abs" rev-parse --absolute-git-dir 2>/dev/null)" || gitdir=""
+          [ -z "$gitdir" ] || gitdir="$(resolved_dir "$gitdir")" || gitdir=""
+          common_phys="$(resolved_dir "$common")" || common_phys=""
+          if [ -n "$gitdir" ] && [ "$gitdir" = "$common_phys" ]; then
+            return 0
+          fi
+          if [ -n "$verified" ] && [ "$main" = "$(resolved_dir "$verified" || true)" ]; then
+            return 0
+          fi
+        fi
+        echo "worktree-claim: $repo_abs shares a git directory with a separate checkout, but no superproject registers it." >&2
+        echo "  Its origin cannot be checked against a .gitmodules entry, so it is not claimed." >&2
+        echo "  If it is a submodule, run this from a checkout inside its superproject instead;" >&2
+        echo "  otherwise run this from the repository's own checkout." >&2
+        exit 1
+        ;;
+    esac
+    if found="$(registering_superproject "$common")"; then
+      super="${found%%$'\n'*}"
+      name="${found#*$'\n'}"
+    else
+      case "$common" in
+        */.git/worktrees/*/modules/*)
+          # A submodule of a linked superproject worktree: <top>/.git/worktrees/<id>/modules/<name>.
+          super="${common%%/.git/worktrees/*}"
+          admin="${common#"$super"/.git/worktrees/}"
+          name="${admin#*/modules/}"
+          admin="$super/.git/worktrees/${admin%%/*}"
+          super="$(cat "$admin/gitdir" 2>/dev/null)" || super=""
+          super="${super%/.git}"
+          ;;
+        *)
+          super="${common%%/.git/modules/*}"
+          name="${common#*/.git/modules/}"
+          ;;
+      esac
+    fi
+    IFS= read -r -d '' rel < <(git config -z -f "$super/.gitmodules" --get "submodule.$name.path" 2>/dev/null) || rel="$name"
+  fi
+  if [ -n "$super" ] && ! superproject_owns "$super" "$repo_abs" "$common"; then
+    refuse_stale_superproject "$repo_abs" "$super"
+  fi
+  # Read NUL-delimited: command substitution would drop a trailing newline that `submodule sync` keeps.
+  if [ -n "$name" ]; then
+    IFS= read -r -d '' raw < <(git config -z -f "$super/.gitmodules" --get "submodule.$name.url" 2>/dev/null) || raw=""
+  fi
+  case "$raw" in
+    '' | *$'\n'*) ;;
+    *) expected="$(resolve_submodule_url "$super" "$raw" "$rel")" || resolved=$? ;;
+  esac
+  # Every configured url and pushurl of origin must be the registered URL itself. Values are read
+  # NUL-delimited, because a value can contain a newline.
+  while IFS= read -r -d '' url; do
+    [ -n "$url" ] || continue
+    configured="$configured${configured:+, }$(redact_url "$url")"
+    if [ -n "$expected" ] && [ "$url" = "$expected" ]; then
+      matched=$((matched + 1))
+    else
+      foreign=1
+    fi
+  done < <(git -C "$repo_abs" config -z --get-all remote.origin.url 2>/dev/null
+    git -C "$repo_abs" config -z --get-all remote.origin.pushurl 2>/dev/null || true)
+  # A setting that applies only to this repository can still send fetch and push elsewhere.
+  # A comparison that did not finish is not a clean one.
+  if [ "$matched" -gt 0 ] && [ "$foreign" -eq 0 ]; then
+    checked=0
+    while IFS= read -r setting; do
+      case "$setting" in
+        '') ;;
+        checked) checked=1 ;;
+        pack:*)
+          packs="$packs${packs:+, }${setting#pack:}"
+          foreign=1
+          ;;
+        *)
+          redirects="$redirects${redirects:+, }$setting"
+          foreign=1
+          ;;
+      esac
+    done < <(origin_redirects "$repo_abs" "$expected")
+    if [ "$checked" -eq 0 ]; then
+      redirects="$redirects${redirects:+, }unverifiable"
+      foreign=1
+    fi
+  fi
+  # A plain push goes to the branch's push remote, which only defaults to origin. "." names this
+  # repository itself, so a push there never reaches origin either. A selector set to an empty value is
+  # not an unset one: some git versions pick the empty remote and the push fails, so it is refused too.
+  # Selectors are read NUL-delimited: git keeps a trailing newline that command substitution would drop.
+  head_branch="$(git -C "$repo_abs" symbolic-ref -q --short HEAD 2>/dev/null)" || head_branch=""
+  selectors=()
+  [ -z "$head_branch" ] || selectors+=("branch.$head_branch.pushRemote")
+  selectors+=(remote.pushDefault)
+  [ -z "$head_branch" ] || selectors+=("branch.$head_branch.remote")
+  for selector in "${selectors[@]}"; do
+    IFS= read -r -d '' push_remote < <(git -C "$repo_abs" config -z --get "$selector" 2>/dev/null) || continue
+    case "$push_remote" in
+      origin) ;;
+      '')
+        pushto="<empty, from $selector>"
+        foreign=1
+        ;;
+      *)
+        pushto="$(redact_url "${push_remote//$'\n'/\\n}")"
+        foreign=1
+        ;;
+    esac
+    break
+  done
+  if [ "$foreign" -eq 1 ] || [ "$matched" -eq 0 ]; then
+    shown_expected="<not registered at $rel>"
+    if [ -n "$expected" ]; then
+      shown_expected="$(redact_url "$expected")"
+    elif [[ $raw == *$'\n'* ]]; then
+      shown_expected="<$(redact_url "${raw//$'\n'/\\n}") contains a newline, so origin cannot be verified against it>"
+    elif [ "$resolved" -eq 3 ]; then
+      shown_expected="<$(redact_url "$raw") is relative to a superproject remote whose name or URL contains a newline, so origin cannot be verified against it>"
+    elif [ "$resolved" -eq 4 ]; then
+      shown_expected="<$(redact_url "$raw") is relative to a superproject remote URL that is set but empty, so git cannot resolve it>"
+    elif [ -n "$raw" ]; then
+      shown_expected="<$(redact_url "$raw") climbs past the root of the superproject's remote, so git cannot resolve it>"
+    fi
+    echo "worktree-claim: $repo_abs is a submodule of $super whose origin is not the repository .gitmodules names." >&2
+    echo "  .gitmodules url: ${shown_expected}" >&2
+    echo "  origin urls:     ${configured:-<none>}" >&2
+    echo "  (origin must be exactly the registered URL, as \`git submodule sync\` writes it.)" >&2
+    [ -z "$redirects" ] || echo "  redirected by:   ${redirects} (config that applies only to this repository)" >&2
+    [ -z "$packs" ] || echo "  custom transport: ${packs} (it decides what fetch and push reach, whatever the url)" >&2
+    [ -z "$pushto" ] || echo "  push remote:      ${pushto} (a plain git push from ${head_branch:-HEAD} goes there, not to origin)" >&2
+    echo "  Work committed here would land in the wrong repository. Point origin at the registered URL:" >&2
+    echo "    git -C $(shquote "$super") submodule sync -- $(shquote "$rel")" >&2
+    echo "  and remove any remote.origin.pushurl, receivepack, uploadpack or vcs, and any url.<base>.insteadOf," >&2
+    echo "  url.<base>.pushInsteadOf, core.sshCommand, core.gitProxy, remote.origin.proxy, http.proxy," >&2
+    echo "  http.curloptResolve or http.extraHeader that applies only to this repository, including through" >&2
+    echo "  an includeIf in a global config. A remote.pushDefault, branch.<name>.pushRemote or" >&2
+    echo "  branch.<name>.remote must name origin." >&2
+    exit 1
+  fi
+}
+
+# refuse_foreign_submodule_origin runs the check with xtrace off: remote URLs can carry credentials,
+# and `bash -x` would print them before they are redacted.
+refuse_foreign_submodule_origin() {
+  if [[ $- == *x* ]]; then
+    set +x
+    refuse_foreign_submodule_origin_checked "$@"
+    set -x
+  else
+    refuse_foreign_submodule_origin_checked "$@"
   fi
 }
 
@@ -579,15 +1564,26 @@ cmd_add() {
   [ -d "$repo" ] || fail "repo path is not a directory: $repo"
   [ -n "$wt" ] && [ -n "$branch" ] && [ -n "$owner" ] || usage
   local repo_abs
+  refuse_symlinked_submodule_path "$repo"
   repo_abs="$(cd "$repo" && pwd -P)" || fail "cannot resolve repo path: $repo"
+  [ "$repo_abs" -ef "$repo" ] || refuse_other_directory repo "$repo" "$repo_abs"
   case "$wt" in
     /*) ;;
     *) wt="$repo_abs/$wt" ;;
+  esac
+  # Refused before anything is created: a path whose newline is dropped on resolution could not be
+  # resolved again to take the new worktree back.
+  case "$wt" in
+    *$'\n'*)
+      echo "worktree-claim: the new worktree path $(shquote "${wt//$'\n'/\\n}") contains a newline; it is not created." >&2
+      exit 1
+      ;;
   esac
   if [ -e "$wt" ]; then
     fail "worktree path already exists: $wt"
   fi
   refuse_uninitialized_repo "$repo_abs"
+  refuse_foreign_submodule_origin "$repo_abs"
   refuse_unwritable_location "$wt"
   # Create parent so git worktree add can place the tree.
   mkdir -p "$(dirname "$wt")"
@@ -598,22 +1594,40 @@ cmd_add() {
   # add_worktree_on needs no caller-visible shell state — it works through its own locals, the
   # repository's on-disk worktree state, diagnostics on stderr, and its exit status. Wrapping the
   # whole function means every internal add inherits the one lock.
-  if ! branch_op_lock_run "$repo" \
+  local note
+  note="$(mktemp "${TMPDIR:-/tmp}/worktree-claim-branch.XXXXXX")" || fail "cannot create a temporary file"
+  # The resolved path, not <repo> as given: a hook can repoint a symlinked <repo> during creation, and
+  # rollback must still act on the repository the worktree was created in.
+  PENDING_REPO="$repo_abs"
+  PENDING_BRANCH="$branch"
+  PENDING_WT="$wt"
+  PENDING_OWNER="$owner"
+  PENDING_NOTE="$note"
+  if ! branch_op_lock_run "$repo_abs" \
     --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" \
-    -- add_worktree_on "$repo" "$wt" "$branch"; then
+    -- add_worktree_noting_new_branch "$repo_abs" "$wt" "$branch" "$note"; then
     fail "git worktree add failed for $wt (branch $branch)"
   fi
+  # Config can apply to the new worktree alone, through an includeIf onbranch: for its branch or a
+  # gitdir: pattern that matches its own git directory, so the check on <repo> above could not see it.
+  local wt_phys
+  wt_phys="$(cd "$wt" && pwd -P)" || fail "cannot resolve the new worktree path: $wt"
+  [ "$wt_phys" -ef "$wt" ] || refuse_other_directory "new worktree" "$wt" "$wt_phys"
+  refuse_foreign_submodule_origin "$wt_phys" "$repo_abs"
   # Claim BEFORE the advisory freshness check, not after. That check makes up to two bounded remote
   # calls, so it can hold the newly-created tree unclaimed for the length of both timeouts — a window
   # in which a concurrent run can take the marker, leaving this invocation to create the worktree and
   # branch and then exit 3 without the lane it just built. Ownership is the point of `add`; freshness
   # is a NOTE, so the note waits.
   cmd_acquire "$wt" "$owner" fresh
+  # Rollback stays armed until add owns the worktree, so a failed claim takes it back too.
+  rm -f "$note"
+  PENDING_NOTE=""
   # `|| true`: the check is advisory by contract, so its status must never decide whether `add`
   # succeeded. Every path in it returns 0 today, but relying on that couples the claim's exit code to
   # the internals of a NOTE -- one future `return 1` on an unresolvable comparison would abort the
   # claim under `set -e`, after the worktree and branch were already created.
-  warn_if_base_is_stale "$repo" "$wt" || true
+  warn_if_base_is_stale "$repo_abs" "$wt" || true
   echo "worktree-claim: added $wt on $branch owner=$owner"
 }
 

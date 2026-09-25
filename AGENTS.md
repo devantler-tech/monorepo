@@ -4291,7 +4291,21 @@ that contains it: the session write guard refuses every Edit/Write under the sha
 `.claude/worktrees/<your-slug>`, so `<shared>/.claude/worktrees/maint-<runid>` or a shared submodule's
 `.claude/worktrees/` builds a tree the run cannot edit. The helper refuses both, and refuses a
 `<repo_path>` that is not its own repository's root — an uninitialized submodule — so populate it with
-`submodule-init.sh` first (monorepo#2755). Work there, open the PR, then
+`submodule-init.sh` first (monorepo#2755). The helper also refuses a populated submodule whose `origin`
+is not exactly the URL `git submodule sync` writes for it, and reads that URL only from a superproject
+that is still the git working tree holding the submodule's git directory. It also refuses one that a setting applying
+only to that repository sends elsewhere: a `pushurl`, a URL rewrite, `core.sshCommand`, `core.gitProxy`,
+an HTTP proxy, `http.curloptResolve` or `http.extraHeader` (including through a global `includeIf`), or
+a custom `receivepack`, `uploadpack` or `vcs` transport. A plain push from the checked-out branch must
+go to `origin` too. A linked worktree of a `--separate-git-dir` clone is refused, because nothing in
+that clone's git directory proves where its main checkout is, even a `core.worktree`, so nothing shows
+whether a superproject registers it; run the helper from the clone's own checkout instead. The
+helper checks the new worktree too before claiming it, and removes that worktree when refused. Fix an
+origin or redirect refusal with `git -C <superproject> submodule sync -- <path>` and by removing that
+setting (monorepo#3010). A registered submodule path that is a symlink is refused too, because git
+never checks a submodule out through one; replace the symlink with the real checkout by removing it
+and running `submodule-init.sh`. Work
+there, open the PR, then
 `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local filesystem path such as
 `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the slug only for `gh`
 commands). **Immediately before editing any worktree this session did not create**, atomically
