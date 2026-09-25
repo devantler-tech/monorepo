@@ -1318,5 +1318,24 @@ refute_prose "interactive-PR HANDS-OFF rule" \
   "Issue-driven still calls the interactive-PR rule a hands-off rule, contradicting 'Maintainer-PR driving: attribution-only'"
 refute_prose "the maintainer's interactive ones (HANDS-OFF)" \
   "Untrusted input still labels the interactive-PR distinction hands-off, contradicting 'Maintainer-PR driving: attribution-only'"
+# The surveyor runs the ownership classifier and reads its documented verdicts, so a helper that
+# still calls `interactive` hands-off, or says its verdict decides whether a PR may be acted on,
+# tells the same reader the opposite through a surface the prose checks above never read.
+for ownership_doc in \
+  "${repo_root}/.claude/scripts/pr-ownership-disclosure.sh" \
+  "${repo_root}/.claude/scripts/pr-ownership-disclosure-go/main.go"; do
+  [ -r "${ownership_doc}" ] ||
+    fail "cannot read ${ownership_doc}, so its verdict wording cannot be checked against 'Maintainer-PR driving: attribution-only'"
+  ownership_doc_flat="$(flatten "${ownership_doc}")"
+  ownership_doc_name="${ownership_doc#"${repo_root}/"}"
+  case "${ownership_doc_flat}" in
+    *[Hh][Aa][Nn][Dd][Ss]-[Oo][Ff][Ff]* | *"may be acted on"*)
+      fail "${ownership_doc_name} still describes the interactive verdict as hands-off, contradicting 'Maintainer-PR driving: attribution-only'" ;;
+  esac
+  case "${ownership_doc_flat}" in
+    *'`attribution-only`'*) ;;
+    *) fail "${ownership_doc_name} no longer says the deployment's maintainer-PR driving is \`attribution-only\`, so nothing in it tells a reader an interactive PR is still driven" ;;
+  esac
+done
 
 echo "agent-role delivery contract: all assertions passed"
