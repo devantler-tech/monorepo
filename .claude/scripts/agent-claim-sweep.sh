@@ -22,7 +22,8 @@
 #   agent-claim-sweep.sh --repo <owner/repo> [--repo-dir DIR] [--remote NAME] [--apply]
 #
 # Output: one line per tip — `KEEP <n> open`, `REMOVE <n> closed <sha>`
-# (dry-run: `WOULD-REMOVE`), `UNKNOWN <n> <reason>`, `RACED <n> <sha>` — then a
+# (dry-run: `WOULD-REMOVE`), `UNKNOWN <n> <reason>`, `RACED <n> <sha>` (the tip moved),
+# `FAILED <n> <sha>` (the delete could not be confirmed) — then a
 # summary line.
 #
 # Exit codes:
@@ -56,32 +57,38 @@ done
 [[ -d "$REPO_DIR" ]] || die "--repo-dir '$REPO_DIR' is not a directory"
 
 # Issue numbers are repository-scoped: the issue read must be about the same
-# repository the claim tips are deleted from. Bind --repo to the remote's
-# configured URL (never printed — it may carry credentials; only slugs are).
-remote_url="$(git -C "$REPO_DIR" config --get "remote.${REMOTE}.url" 2>/dev/null)" ||
-  die "UNKNOWN — remote '$REMOTE' has no configured URL in '$REPO_DIR'"
-remote_url="${remote_url%/}"
-remote_url="${remote_url%.git}"
-if [[ "$remote_url" =~ github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
-  remote_slug="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
-else
-  die "UNKNOWN — remote '$REMOTE' is not a GitHub repository URL"
-fi
-shopt -s nocasematch
-[[ "$remote_slug" == "$REPO" ]] ||
-  die "--repo $REPO does not match remote '$REMOTE' ($remote_slug); refusing to judge one repository's claims by another's issues"
-shopt -u nocasematch
-
-# The listing reads the effective fetch URL while `retire` deletes through the
-# effective push URL; `remote.<r>.pushurl` or `url.*.pushInsteadOf` can point
-# them at different repositories. Require the two effective URL sets to be equal
-# (compared, never printed).
+# repository the listing reads and `retire` deletes from. Git contacts the
+# EFFECTIVE URLs — after `insteadOf`, `pushurl` and `pushInsteadOf` — so every
+# effective fetch AND push URL must name --repo on GitHub. A URL that is not a
+# GitHub repository URL has no identity and is refused, unless the caller
+# explicitly exports AGENT_CLAIM_SWEEP_TRUSTED_REMOTE='<exact-url>=<owner/repo>'
+# (a test-only escape: git config can never set it). URLs are compared, never
+# printed — they may carry credentials; only slugs are.
+url_slug() {
+  local url="${1%/}"
+  url="${url%.git}"
+  if [[ "$url" =~ ^(https://github\.com/|ssh://git@github\.com/|git@github\.com:)([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
+    printf '%s/%s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+  elif [[ -n "${AGENT_CLAIM_SWEEP_TRUSTED_REMOTE:-}" && "$1" == "${AGENT_CLAIM_SWEEP_TRUSTED_REMOTE%=*}" ]]; then
+    printf '%s\n' "${AGENT_CLAIM_SWEEP_TRUSTED_REMOTE##*=}"
+  fi
+}
 if ! fetch_urls="$(git -C "$REPO_DIR" remote get-url --all "$REMOTE" 2>/dev/null)" ||
-  ! push_urls="$(git -C "$REPO_DIR" remote get-url --push --all "$REMOTE" 2>/dev/null)"; then
-  die "UNKNOWN — could not resolve the effective URLs of remote '$REMOTE'"
+  ! push_urls="$(git -C "$REPO_DIR" remote get-url --push --all "$REMOTE" 2>/dev/null)" ||
+  [[ -z "$fetch_urls" || -z "$push_urls" ]]; then
+  die "UNKNOWN — could not resolve the effective URLs of remote '$REMOTE' in '$REPO_DIR'"
 fi
-[[ -n "$fetch_urls" && "$fetch_urls" == "$push_urls" ]] ||
-  die "remote '$REMOTE' pushes somewhere other than it fetches from; refusing to delete claims from a repository the listing did not read"
+while IFS= read -r url; do
+  slug="$(url_slug "$url")"
+  [[ -n "$slug" ]] ||
+    die "UNKNOWN — an effective URL of remote '$REMOTE' is not a GitHub repository URL; refusing to judge claims whose repository cannot be identified"
+  shopt -s nocasematch
+  [[ "$slug" == "$REPO" ]] || {
+    shopt -u nocasematch
+    die "--repo $REPO does not match an effective URL of remote '$REMOTE' ($slug); refusing to judge one repository's claims by another's issues"
+  }
+  shopt -u nocasematch
+done <<<"$fetch_urls"$'\n'"$push_urls"
 
 # Capture the listing and check its status: an empty listing from a failed read
 # must never look like "no tips".
@@ -89,7 +96,7 @@ if ! listing="$(git -C "$REPO_DIR" ls-remote "$REMOTE" 'refs/heads/agent-claim/*
   die "UNKNOWN — could not list agent-claim tips on '$REMOTE'"
 fi
 
-kept=0 removed=0 unknown=0 raced=0
+kept=0 removed=0 unknown=0 raced=0 failed=0
 while IFS=$'\t' read -r sha ref; do
   [[ -n "$sha" ]] || continue
   n="${ref#refs/heads/agent-claim/}"
@@ -112,12 +119,16 @@ while IFS=$'\t' read -r sha ref; do
       if ((APPLY == 0)); then
         echo "WOULD-REMOVE $n closed $sha"
         removed=$((removed + 1))
-      elif "$claim_tool" retire "$n" "$sha" --repo-dir "$REPO_DIR" --remote "$REMOTE" >/dev/null 2>&1; then
-        echo "REMOVE $n closed $sha"
-        removed=$((removed + 1))
       else
-        echo "RACED $n $sha"
-        raced=$((raced + 1))
+        # agent-claim.sh retire: 1 = LOST (the tip moved), 2 = the query, push or
+        # confirmation failed. Its diagnostics stay on stderr.
+        retire_rc=0
+        "$claim_tool" retire "$n" "$sha" --repo-dir "$REPO_DIR" --remote "$REMOTE" >/dev/null || retire_rc=$?
+        case "$retire_rc" in
+          0) echo "REMOVE $n closed $sha"; removed=$((removed + 1)) ;;
+          1) echo "RACED $n $sha"; raced=$((raced + 1)) ;;
+          *) echo "FAILED $n $sha"; failed=$((failed + 1)) ;;
+        esac
       fi
       ;;
     *)
@@ -129,7 +140,7 @@ done <<<"$listing"
 
 mode=dry-run
 ((APPLY == 1)) && mode=apply
-echo "agent-claim-sweep: repo=$REPO mode=$mode kept=$kept removed=$removed raced=$raced unknown=$unknown"
+echo "agent-claim-sweep: repo=$REPO mode=$mode kept=$kept removed=$removed raced=$raced failed=$failed unknown=$unknown"
 ((unknown > 0)) && exit 2
-((raced > 0)) && exit 1
+((raced + failed > 0)) && exit 1
 exit 0

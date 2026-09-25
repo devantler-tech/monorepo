@@ -31,10 +31,12 @@ git clone --quiet "$bare" "$work" 2>/dev/null
 git -C "$work" config user.email sweep-test@example.com
 git -C "$work" config user.name sweep-test
 git -C "$work" config commit.gpgsign false
-# The sweep binds --repo to the remote's configured URL, so give the fixture a
-# GitHub-shaped URL and route it to the local bare remote.
+# The sweep binds --repo to the remote's EFFECTIVE URLs. Route a GitHub URL to
+# the local bare remote and vouch for that local path explicitly — the only way
+# a non-GitHub effective URL is accepted.
 git -C "$work" remote set-url origin https://github.com/devantler-tech/example.git
 git -C "$work" config "url.$bare.insteadOf" https://github.com/devantler-tech/example.git
+export AGENT_CLAIM_SWEEP_TRUSTED_REMOTE="$bare=devantler-tech/example"
 git -C "$work" commit --quiet --allow-empty -m seed
 git -C "$work" push --quiet origin HEAD:refs/heads/main
 
@@ -52,6 +54,7 @@ remote_tip() { git --git-dir="$bare" rev-parse --verify --quiet "refs/heads/agen
 mkdir -p "$tmp/bin" "$tmp/state"
 cat >"$tmp/bin/gh" <<EOF
 #!/usr/bin/env bash
+[[ "\$2" == repos/devantler-tech/example/issues/* ]] || { echo "unexpected request \$2" >&2; exit 1; }
 n="\${2##*/}"
 if [[ "\$n" == 5 ]]; then
   sha="\$(git -C "$work" commit-tree -m "reacquire 5" "\$(git -C "$work" rev-parse 'HEAD^{tree}')")"
@@ -139,8 +142,37 @@ out="$("$tool" --repo devantler-tech/example --repo-dir "$work" --apply 2>&1)" |
 check "diverging pushInsteadOf exits 2" 2 "$rc"
 check "diverging pushInsteadOf deletes nothing" "$t7" "$(remote_tip 7)"
 git -C "$work" config --unset "url.$other.pushInsteadOf"
+git -C "$work" config remote.origin.pushurl https://github.com/devantler-tech/other.git
+rc=0
+out="$("$tool" --repo devantler-tech/example --repo-dir "$work" --apply 2>&1)" || rc=$?
+check "pushurl naming another GitHub repo exits 2" 2 "$rc"
+check "pushurl naming another GitHub repo deletes nothing" "$t7" "$(remote_tip 7)"
+git -C "$work" config --unset remote.origin.pushurl
 run --apply
 check "matching push destination removes the closed tip" "" "$(remote_tip 7)"
+
+# --- a non-GitHub effective URL has no identity unless explicitly vouched for --
+t8="$(new_tip 8)"; echo closed >"$tmp/state/8"
+rc=0
+out="$(env -u AGENT_CLAIM_SWEEP_TRUSTED_REMOTE "$tool" --repo devantler-tech/example --repo-dir "$work" --apply 2>&1)" || rc=$?
+check "unvouched local target exits 2" 2 "$rc"
+check "unvouched local target deletes nothing" "$t8" "$(remote_tip 8)"
+
+# --- a delete that fails for a reason other than a race is FAILED, not RACED ---
+cat >"$tmp/bin/retire-fails" <<'EOF'
+#!/usr/bin/env bash
+echo "agent-claim: push could not be confirmed" >&2
+exit 2
+EOF
+chmod +x "$tmp/bin/retire-fails"
+rc=0
+out="$(AGENT_CLAIM_TOOL="$tmp/bin/retire-fails" "$tool" --repo devantler-tech/example --repo-dir "$work" --apply 2>&1)" || rc=$?
+check "failed delete exits 1" 1 "$rc"
+check "failed delete reported as FAILED" 1 "$(grep -c "^FAILED 8 $t8$" <<<"$out")"
+check "failed delete keeps its diagnostics" 1 "$(grep -c 'push could not be confirmed' <<<"$out")"
+check "failed delete is not reported as RACED" 0 "$(grep -c '^RACED 8' <<<"$out" || true)"
+run --apply
+check "vouched local target removes the closed tip" "" "$(remote_tip 8)"
 
 # --- usage --------------------------------------------------------------------
 rc=0
