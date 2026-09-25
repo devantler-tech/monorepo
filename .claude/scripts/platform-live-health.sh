@@ -182,7 +182,10 @@ fi
 # route changes stopped reaching the gateway for 12 hours). So a route whose status lags its spec
 # is the signal. A lag is normal for the seconds after an edit, so it fails only once the spec has
 # been unchanged for ROUTE_GRACE_SECONDS; before that it is progress. The last spec change is the
-# newest non-status managedFields entry, which is why this read asks for managed fields.
+# newest managedFields entry that owns spec fields, which is why this read asks for managed
+# fields: a metadata-only edit (a label, an annotation) must not restart the grace period, or
+# repeated ones would keep a stalled route PROGRESSING forever. Every parent's observedGeneration
+# counts, and a missing one means that parent never observed the route.
 readonly ROUTE_GRACE_SECONDS=600
 now="${PLATFORM_HEALTH_NOW:-$(date -u +%s)}"
 case "$now" in
@@ -192,8 +195,10 @@ if read_json httproutes httproutes.gateway.networking.k8s.io -A --show-managed-f
   # shellcheck disable=SC2016  # $gen, $seen and $changed are jq variables
   extract httproutes "
     .metadata.generation as \$gen
-    | ([.status.parents[]?.conditions[]?.observedGeneration | select(. != null)] | min) as \$seen
-    | ([.metadata.managedFields[]? | select((.subresource // \"\") != \"status\") | .time]
+    | ([.status.parents[]?.conditions[]?.observedGeneration] | min) as \$seen
+    | ([.metadata.managedFields[]?
+        | select((.subresource // \"\") != \"status\" and ((.fieldsV1 // {}) | has(\"f:spec\")))
+        | .time]
        + [.metadata.creationTimestamp] | map(select(. != null)) | max) as \$changed
     | \"HTTPRoute \(.metadata.namespace)/\(.metadata.name)\" as \$id
     | if (\$seen != null and \$seen >= \$gen) then empty

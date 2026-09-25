@@ -46,13 +46,23 @@ deployments() {
 oci_helmrepo='{"kind":"HelmRepository","metadata":{"namespace":"flux-system","name":"flux-operator"},"spec":{"type":"oci"}}'
 # The fixed clock every run uses: 2026-09-25T18:00:00Z.
 readonly now=1790359200
-# route <ns> <name> <generation> <observed|none> <last spec change> — an HTTPRoute with its
-# managed fields; the status manager's newer entry must never count as a spec change.
+# route <ns> <name> <generation> <observed|none|unobserved-parent> <last spec change>
+#       [<later metadata-only change>]
+# An HTTPRoute with its managed fields. Neither the status manager's entry nor a metadata-only
+# entry is a spec change, and both are newer than the spec change so that counting either
+# would visibly move the clock. `unobserved-parent` adds a second parent that never observed it.
 route() {
-  local parents='[]'
-  [ "$4" = none ] || parents="[{\"parentRef\":{\"name\":\"platform\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$4}]}]"
-  printf '{"kind":"HTTPRoute","metadata":{"namespace":"%s","name":"%s","generation":%s,"creationTimestamp":"2026-06-01T00:00:00Z","managedFields":[{"manager":"kustomize-controller","operation":"Apply","time":"%s"},{"manager":"cilium-operator-generic","operation":"Update","subresource":"status","time":"2026-09-25T17:59:59Z"}]},"status":{"parents":%s}}' \
-    "$1" "$2" "$3" "$5" "$parents"
+  local parents='[]' seen="{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$3}"
+  case "$4" in
+    none) ;;
+    unobserved-parent)
+      parents="[{\"parentRef\":{\"name\":\"platform\"},\"conditions\":[$seen]},{\"parentRef\":{\"name\":\"internal\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"Unknown\"}]}]" ;;
+    *) parents="[{\"parentRef\":{\"name\":\"platform\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$4}]}]" ;;
+  esac
+  local meta=''
+  [ -z "${6:-}" ] || meta=",{\"manager\":\"kubectl-label\",\"operation\":\"Update\",\"time\":\"$6\",\"fieldsV1\":{\"f:metadata\":{\"f:labels\":{}}}}"
+  printf '{"kind":"HTTPRoute","metadata":{"namespace":"%s","name":"%s","generation":%s,"creationTimestamp":"2026-06-01T00:00:00Z","managedFields":[{"manager":"kustomize-controller","operation":"Apply","time":"%s","fieldsV1":{"f:metadata":{"f:labels":{}},"f:spec":{"f:rules":{}}}},{"manager":"cilium-operator-generic","operation":"Update","subresource":"status","time":"2026-09-25T17:59:59Z","fieldsV1":{"f:status":{}}}%s]},"status":{"parents":%s}}' \
+    "$1" "$2" "$3" "$5" "$meta" "$parents"
 }
 
 scenario() { # <name> — fresh fixture dir populated with a healthy baseline
@@ -201,6 +211,19 @@ scenario gateway-catching-up
 list "$(route observability coroot 6 5 2026-09-25T17:55:00Z)" >"$FAKE/httproutes.json"
 run
 expect "a fresh lag is progress" 0 "PROGRESSING HTTPRoute observability/coroot"
+
+# A metadata-only edit after the stall must not restart the grace period, or repeated label or
+# annotation edits would keep a stalled route PROGRESSING forever.
+scenario gateway-frozen-relabelled
+list "$(route observability coroot 6 5 2026-09-25T17:12:00Z 2026-09-25T17:58:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a metadata-only edit does not reset the clock" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=5"
+
+# One parent that never observed the route must not hide behind one that did.
+scenario gateway-unobserved-parent
+list "$(route observability coroot 6 unobserved-parent 2026-09-25T17:12:00Z)" >"$FAKE/httproutes.json"
+run
+expect "an unobserved parent is not applying" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=none"
 
 scenario gateway-never-applied
 list "$(route tenant web 1 none 2026-09-25T17:00:00Z)" >"$FAKE/httproutes.json"
