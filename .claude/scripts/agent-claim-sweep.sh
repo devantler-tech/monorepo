@@ -55,6 +55,23 @@ done
 [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "--repo must be <owner>/<repo> (got '$REPO')"
 [[ -d "$REPO_DIR" ]] || die "--repo-dir '$REPO_DIR' is not a directory"
 
+# Issue numbers are repository-scoped: the issue read must be about the same
+# repository the claim tips are deleted from. Bind --repo to the remote's
+# configured URL (never printed — it may carry credentials; only slugs are).
+remote_url="$(git -C "$REPO_DIR" config --get "remote.${REMOTE}.url" 2>/dev/null)" ||
+  die "UNKNOWN — remote '$REMOTE' has no configured URL in '$REPO_DIR'"
+remote_url="${remote_url%/}"
+remote_url="${remote_url%.git}"
+if [[ "$remote_url" =~ github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
+  remote_slug="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+else
+  die "UNKNOWN — remote '$REMOTE' is not a GitHub repository URL"
+fi
+shopt -s nocasematch
+[[ "$remote_slug" == "$REPO" ]] ||
+  die "--repo $REPO does not match remote '$REMOTE' ($remote_slug); refusing to judge one repository's claims by another's issues"
+shopt -u nocasematch
+
 # Capture the listing and check its status: an empty listing from a failed read
 # must never look like "no tips".
 if ! listing="$(git -C "$REPO_DIR" ls-remote "$REMOTE" 'refs/heads/agent-claim/*')"; then

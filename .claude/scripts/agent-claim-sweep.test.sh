@@ -31,6 +31,10 @@ git clone --quiet "$bare" "$work" 2>/dev/null
 git -C "$work" config user.email sweep-test@example.com
 git -C "$work" config user.name sweep-test
 git -C "$work" config commit.gpgsign false
+# The sweep binds --repo to the remote's configured URL, so give the fixture a
+# GitHub-shaped URL and route it to the local bare remote.
+git -C "$work" remote set-url origin https://github.com/devantler-tech/example.git
+git -C "$work" config "url.$bare.insteadOf" https://github.com/devantler-tech/example.git
 git -C "$work" commit --quiet --allow-empty -m seed
 git -C "$work" push --quiet origin HEAD:refs/heads/main
 
@@ -107,6 +111,15 @@ git -C "$work" push --quiet origin ":refs/heads/agent-claim/5"
 rc=0
 out="$("$tool" --repo devantler-tech/example --repo-dir "$work" --remote nowhere 2>&1)" || rc=$?
 check "failed listing exits 2" 2 "$rc"
+
+# --- --repo must name the repository the tips live in --------------------------
+t6="$(new_tip 6)"; echo closed >"$tmp/state/6"
+rc=0
+out="$("$tool" --repo devantler-tech/other --repo-dir "$work" --apply 2>&1)" || rc=$?
+check "mismatched --repo exits 2" 2 "$rc"
+check "mismatched --repo deletes nothing" "$t6" "$(remote_tip 6)"
+run --apply
+check "matching --repo removes the closed tip" "" "$(remote_tip 6)"
 
 # --- usage --------------------------------------------------------------------
 rc=0
