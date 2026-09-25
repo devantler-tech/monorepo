@@ -1305,7 +1305,7 @@ refute_prose "works from **unattended runs too**, via each agent's Slack tooling
 # Scoped to the Maintainer channels section, which is what an agent loads when it escalates: the
 # same words in another guide would not reach it there.
 maintainer_channels_flat="$(
-  awk '/^## Maintainer channels/ { inside = 1; next } inside && /^## / { exit } inside' \
+  awk '$0 == "## Maintainer channels" { inside = 1; next } inside && /^## / { exit } inside' \
     "${repo_root}/.claude/guides/maintainer-channels.md" | tr '\n' ' ' | tr -s '[:space:]' ' '
 )"
 [ -n "${maintainer_channels_flat}" ] ||
