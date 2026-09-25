@@ -121,6 +121,27 @@ check "mismatched --repo deletes nothing" "$t6" "$(remote_tip 6)"
 run --apply
 check "matching --repo removes the closed tip" "" "$(remote_tip 6)"
 
+# --- deletions must go where the listing came from -----------------------------
+# A push URL that differs from the fetch URL (remote.<r>.pushurl or
+# url.*.pushInsteadOf) would judge one repository's tips and delete another's.
+other="$tmp/other.git"
+git init --quiet --bare "$other"
+t7="$(new_tip 7)"; echo closed >"$tmp/state/7"
+git -C "$work" config remote.origin.pushurl "$other"
+rc=0
+out="$("$tool" --repo devantler-tech/example --repo-dir "$work" --apply 2>&1)" || rc=$?
+check "diverging pushurl exits 2" 2 "$rc"
+check "diverging pushurl deletes nothing" "$t7" "$(remote_tip 7)"
+git -C "$work" config --unset remote.origin.pushurl
+git -C "$work" config "url.$other.pushInsteadOf" https://github.com/devantler-tech/example.git
+rc=0
+out="$("$tool" --repo devantler-tech/example --repo-dir "$work" --apply 2>&1)" || rc=$?
+check "diverging pushInsteadOf exits 2" 2 "$rc"
+check "diverging pushInsteadOf deletes nothing" "$t7" "$(remote_tip 7)"
+git -C "$work" config --unset "url.$other.pushInsteadOf"
+run --apply
+check "matching push destination removes the closed tip" "" "$(remote_tip 7)"
+
 # --- usage --------------------------------------------------------------------
 rc=0
 "$tool" --repo not-a-slug --repo-dir "$work" >/dev/null 2>&1 || rc=$?

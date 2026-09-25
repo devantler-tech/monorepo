@@ -72,6 +72,17 @@ shopt -s nocasematch
   die "--repo $REPO does not match remote '$REMOTE' ($remote_slug); refusing to judge one repository's claims by another's issues"
 shopt -u nocasematch
 
+# The listing reads the effective fetch URL while `retire` deletes through the
+# effective push URL; `remote.<r>.pushurl` or `url.*.pushInsteadOf` can point
+# them at different repositories. Require the two effective URL sets to be equal
+# (compared, never printed).
+if ! fetch_urls="$(git -C "$REPO_DIR" remote get-url --all "$REMOTE" 2>/dev/null)" ||
+  ! push_urls="$(git -C "$REPO_DIR" remote get-url --push --all "$REMOTE" 2>/dev/null)"; then
+  die "UNKNOWN — could not resolve the effective URLs of remote '$REMOTE'"
+fi
+[[ -n "$fetch_urls" && "$fetch_urls" == "$push_urls" ]] ||
+  die "remote '$REMOTE' pushes somewhere other than it fetches from; refusing to delete claims from a repository the listing did not read"
+
 # Capture the listing and check its status: an empty listing from a failed read
 # must never look like "no tips".
 if ! listing="$(git -C "$REPO_DIR" ls-remote "$REMOTE" 'refs/heads/agent-claim/*')"; then
