@@ -14,6 +14,8 @@
 #   2. Flux sources and HelmReleases — an unreachable registry shows here first.
 #   3. The Flux controllers themselves. A stored Ready=True outlives a stopped controller.
 #   4. Pods whose containers are WAITING in a crash or image-pull state.
+#   5. HTTPRoutes whose status has not caught up with their spec for 10 minutes — a gateway
+#      controller that stopped applying routes, which every read above reports as healthy.
 #
 #   🔴 A pod-phase filter CANNOT see a crash loop. A crash-looping pod's phase stays `Running`;
 #   only the container's `state.waiting.reason` says `CrashLoopBackOff`. The obvious health query,
@@ -171,6 +173,34 @@ if read_json pods pods -A; then
              | test("^(CrashLoopBackOff|ImagePullBackOff|ErrImagePull|ErrImageNeverPull|CreateContainerConfigError|CreateContainerError|InvalidImageName)$"))
     | "FAILING Pod \($pod.metadata.namespace)/\($pod.metadata.name) container=\(.name) reason=\(.state.waiting.reason) restarts=\(.restartCount // 0)"
   '
+fi
+
+# 🔴 A gateway controller that has stopped APPLYING routes is invisible to every read above. The
+# gateway keeps serving its last configuration, Flux applies each HTTPRoute and reports Ready, and
+# the controller's pods run — but the route's status keeps the generation it last processed
+# (platform#4198: Cilium's Gateway API controller never started after an operator restart, and
+# route changes stopped reaching the gateway for 12 hours). So a route whose status lags its spec
+# is the signal. A lag is normal for the seconds after an edit, so it fails only once the spec has
+# been unchanged for ROUTE_GRACE_SECONDS; before that it is progress. The last spec change is the
+# newest non-status managedFields entry, which is why this read asks for managed fields.
+readonly ROUTE_GRACE_SECONDS=600
+now="${PLATFORM_HEALTH_NOW:-$(date -u +%s)}"
+case "$now" in
+  '' | *[!0-9]*) usage_die "PLATFORM_HEALTH_NOW must be a Unix timestamp, got '$now'" ;;
+esac
+if read_json httproutes httproutes.gateway.networking.k8s.io -A --show-managed-fields; then
+  # shellcheck disable=SC2016  # $gen, $seen and $changed are jq variables
+  extract httproutes "
+    .metadata.generation as \$gen
+    | ([.status.parents[]?.conditions[]?.observedGeneration | select(. != null)] | min) as \$seen
+    | ([.metadata.managedFields[]? | select((.subresource // \"\") != \"status\") | .time]
+       + [.metadata.creationTimestamp] | map(select(. != null)) | max) as \$changed
+    | \"HTTPRoute \(.metadata.namespace)/\(.metadata.name)\" as \$id
+    | if (\$seen != null and \$seen >= \$gen) then empty
+      elif ($now - (\$changed | sub(\"\\\\.[0-9]+Z$\"; \"Z\") | fromdateiso8601)) > $ROUTE_GRACE_SECONDS then
+        \"FAILING \(\$id) reason=gateway-not-applying generation=\(\$gen) applied=\(\$seen // \"none\")\"
+      else \"PROGRESSING \(\$id)\" end
+  "
 fi
 
 cat "$tmp/rows"

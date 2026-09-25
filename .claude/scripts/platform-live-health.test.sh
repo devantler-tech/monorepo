@@ -44,6 +44,16 @@ deployments() {
   list "${items[@]}"
 }
 oci_helmrepo='{"kind":"HelmRepository","metadata":{"namespace":"flux-system","name":"flux-operator"},"spec":{"type":"oci"}}'
+# The fixed clock every run uses: 2026-09-25T18:00:00Z.
+readonly now=1790359200
+# route <ns> <name> <generation> <observed|none> <last spec change> — an HTTPRoute with its
+# managed fields; the status manager's newer entry must never count as a spec change.
+route() {
+  local parents='[]'
+  [ "$4" = none ] || parents="[{\"parentRef\":{\"name\":\"platform\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$4}]}]"
+  printf '{"kind":"HTTPRoute","metadata":{"namespace":"%s","name":"%s","generation":%s,"creationTimestamp":"2026-06-01T00:00:00Z","managedFields":[{"manager":"kustomize-controller","operation":"Apply","time":"%s"},{"manager":"cilium-operator-generic","operation":"Update","subresource":"status","time":"2026-09-25T17:59:59Z"}]},"status":{"parents":%s}}' \
+    "$1" "$2" "$3" "$5" "$parents"
+}
 
 scenario() { # <name> — fresh fixture dir populated with a healthy baseline
   FAKE="$tmp/$1"
@@ -53,8 +63,9 @@ scenario() { # <name> — fresh fixture dir populated with a healthy baseline
   list "$(ready OCIRepository flux-system flux-system True)" "$oci_helmrepo" >"$FAKE/ocirepositories.json"
   deployments source-controller:1:1 kustomize-controller:2:2 helm-controller:2:2 notification-controller:2:2 >"$FAKE/deployments.json"
   list "$healthy_pod" >"$FAKE/pods.json"
+  list "$(route observability coroot 6 6 2026-09-25T12:00:00Z)" >"$FAKE/httproutes.json"
 }
-run() { set +e; KUBECTL="$tmp/kubectl" "$checker" --context prod-ctx >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
+run() { set +e; PLATFORM_HEALTH_NOW="$now" KUBECTL="$tmp/kubectl" "$checker" --context prod-ctx >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
 expect() { # <label> <rc> <line fragment>
   [ "$rc" -eq "$2" ] || { cat "$tmp/out" "$tmp/err" >&2; fail "$1: rc=$rc, want $2"; }
   grep -qF -- "$3" "$tmp/out" || { cat "$tmp/out" "$tmp/err" >&2; fail "$1: missing '$3'"; }
@@ -175,8 +186,41 @@ list "$malformed_ks" "$(ready Kustomization flux-system infrastructure False Bui
 run
 expect "a failing object after a malformed one is still found" 1 "FAILING Kustomization flux-system/infrastructure reason=BuildFailed"
 
+# 🔴 platform#4198: the gateway controller stopped applying routes. Flux, the pods and every
+# stored condition stayed green, so only the route status lagging its spec shows it.
+scenario gateway-frozen
+list "$(route observability coroot 6 5 2026-09-25T17:12:00Z)" "$(route umami umami-umami 117 116 2026-09-25T17:29:00.123456Z)" >"$FAKE/httproutes.json"
+run
+expect "a route the gateway stopped applying" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=5"
+expect "fractional managed-field times parse" 1 "FAILING HTTPRoute umami/umami-umami reason=gateway-not-applying generation=117 applied=116"
+expect "frozen gateway verdict" 1 "PLATFORM-HEALTH=UNHEALTHY failing=2"
+
+# The seconds after an edit are progress, not a failure: every deploy passes through them. The
+# status manager's newer entry is not a spec change, so it must not reset the clock either way.
+scenario gateway-catching-up
+list "$(route observability coroot 6 5 2026-09-25T17:55:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a fresh lag is progress" 0 "PROGRESSING HTTPRoute observability/coroot"
+
+scenario gateway-never-applied
+list "$(route tenant web 1 none 2026-09-25T17:00:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a route the gateway never accepted" 1 "FAILING HTTPRoute tenant/web reason=gateway-not-applying generation=1 applied=none"
+
+scenario noroutes
+list >"$FAKE/httproutes.json"
+run
+expect "no HTTPRoute at all" 2 "UNREADABLE httproutes: the read returned nothing"
+
+scenario badclock
+set +e; PLATFORM_HEALTH_NOW='1; halt' KUBECTL="$tmp/kubectl" "$checker" --context prod-ctx >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e
+if [ "$rc" -ne 2 ] || ! grep -qF "must be a Unix timestamp" "$tmp/err"; then
+  cat "$tmp/out" "$tmp/err" >&2
+  fail "a non-numeric clock must be refused before it reaches jq, rc=$rc"
+fi
+
 # Without --context the context is resolved through the SAME kubectl override, choosing the scoped one.
-runresolve() { set +e; KUBECTL="$tmp/kubectl" "$checker" >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
+runresolve() { set +e; PLATFORM_HEALTH_NOW="$now" KUBECTL="$tmp/kubectl" "$checker" >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
 scenario resolve
 runresolve
 expect "the context resolves through the kubectl override" 0 "PLATFORM-HEALTH=OK"
