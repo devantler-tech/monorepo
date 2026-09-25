@@ -230,6 +230,14 @@ NOW=$(( SF + 5 * 86400 )) TZ=Europe/Copenhagen expect 0 "scheduled=1 dispatched=
   "the successor search crosses a skipped spring-forward occurrence" \
   --task eng --since "$(iso_at "$SF")" --until "$(iso_at $(( SF + 86400 + 3 * 3600 )))"
 
+# Lord Howe shifts by 30 minutes at 2026-04-04T15:00Z; walking whole hours would drift off :50.
+LH=1775304000    # 2026-04-04T12:00:00Z
+CREATED_MS=$(( (LH - 86400) * 1000 )) mkcase half-hour-dst
+mksession eng $(( LH + 3000 + 5 ))
+NOW=$(( LH + 86400 )) TZ=Australia/Lord_Howe expect 2 "non-whole hour" \
+  "a half-hour DST shift inside the window is UNKNOWN, never a drifted rate" \
+  --task eng --since "$(iso_at "$LH")" --until "$(iso_at $(( LH + 6 * 3600 )))"
+
 mkcase args
 expect 2 "later than now" "--until past now is UNKNOWN" \
   --task eng --since "$(iso_at "$BASE")" --until "$(iso_at $(( NOW + 60 )))"
@@ -240,6 +248,10 @@ expect 2 "not a UTC instant" "a malformed --since is UNKNOWN" --task eng --since
 expect 2 "not a UTC instant" "an offset-bearing --since is UNKNOWN, never read as UTC" \
   --task eng --since "2026-09-01T02:00:00.000+02:00" --until "$(iso_at "$NOW")"
 expect 2 "not a UTC instant" "a non-numeric fraction is UNKNOWN" --task eng --since "2026-09-01T00:00:00.x1Z"
+mkcase fractional-bound
+for h in 0 1 2 3; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
+expect 2 "whole-second" "a fractional --since is refused, never rounded into the window" \
+  --task eng --since "2026-09-01T00:50:00.500Z" --until "$(iso_at "$NOW")"
 
 if [ "$fails" -gt 0 ]; then
   echo "claude-dispatch-rate.test.sh: $fails of $asserts assertions FAILED" >&2

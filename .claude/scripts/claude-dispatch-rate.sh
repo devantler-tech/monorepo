@@ -122,6 +122,15 @@ epoch_to_touch() {
   printf '%s\n' "$out"
 }
 
+# Command-line bounds are whole seconds only. A fraction would be dropped by the conversion and move
+# the window, so it is refused rather than rounded. (Transcript timestamps may carry fractions; they
+# are only ever compared against whole-second slot boundaries, where flooring is exact.)
+for bound in "$SINCE" "${UNTIL:-2000-01-01T00:00:00Z}"; do
+  case "$bound" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) : ;;
+    *) die_unknown "--since/--until must be a whole-second UTC instant (YYYY-MM-DDTHH:MM:SSZ), not a UTC instant: $bound" ;;
+  esac
+done
 SINCE_E=$(iso_to_epoch "$SINCE"); [ -n "$SINCE_E" ] || die_unknown "--since is not a UTC instant: $SINCE"
 if [ -n "$UNTIL" ]; then
   UNTIL_E=$(iso_to_epoch "$UNTIL"); [ -n "$UNTIL_E" ] || die_unknown "--until is not a UTC instant: $UNTIL"
@@ -219,9 +228,13 @@ SLOT_LIST=""; SEEN_KEYS=""
 e=$(( first - 25 * 3600 ))
 while [ "$e" -le "$UNTIL_E" ]; do
   clk=$(local_clock "$e"); [ -n "$clk" ] || die_unknown "could not render local time"
-  read -r hh _ _ <<EOF
+  read -r hh mm _ <<EOF
 $clk
 EOF
+  # Walking absolute hours keeps the cron minute only while every offset change is a whole hour.
+  # A zone with a half-hour DST shift would silently drift off it, so that is UNKNOWN.
+  [ "$((10#$mm))" -eq "$((10#$C_MIN))" ] \
+    || die_unknown "the host timezone offset changed by a non-whole hour inside the window; unsupported"
   if hour_matches "$hh"; then
     # A fixed-hour schedule fires once per wall-clock hour. During a DST fallback the same local
     # hour occurs twice in absolute time; counting both would invent a dropped slot. An hourly
@@ -243,9 +256,11 @@ end_bound=""
 limit=$(( e + 49 * 3600 ))
 while [ "$e" -le "$limit" ]; do
   clk=$(local_clock "$e"); [ -n "$clk" ] || die_unknown "could not render local time"
-  read -r hh _ _ <<EOF
+  read -r hh mm _ <<EOF
 $clk
 EOF
+  [ "$((10#$mm))" -eq "$((10#$C_MIN))" ] \
+    || die_unknown "the host timezone offset changed by a non-whole hour after the window; unsupported"
   if hour_matches "$hh"; then end_bound=$e; break; fi
   e=$(( e + 3600 ))
 done
