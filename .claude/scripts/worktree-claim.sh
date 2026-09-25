@@ -844,14 +844,27 @@ submodule_name_at() {
   printf '%s\n' "$name"
 }
 
+# registration_around prints the superproject around <dir>, <dir>'s path within it, and the submodule
+# name that superproject registers at that path, one per line. It fails when no superproject registers it.
+registration_around() {
+  local dir top found
+  dir="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  top="$(git -C "${dir%/*}" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  top="$(cd "$top" && pwd -P)" || return 1
+  [ "${dir#"$top"/}" != "$dir" ] || return 1
+  found="$(submodule_name_at "$top" "${dir#"$top"/}")"
+  [ -n "$found" ] || return 1
+  printf '%s\n%s\n%s' "$top" "${dir#"$top"/}" "$found"
+}
+
 # checkout_unproven succeeds when <dir> cannot be shown to be the checkout the index of the git directory
 # <common> was written from: none of the first 50 files that index tracks outside a sparse checkout's
-# exclusions is, under <dir>, the very file the index recorded (the same inode), or the index cannot be
-# read. The parent of a separate git directory that is merely named .git can hold a tracked file by
-# chance, but a copy has an inode of its own. An index that tracks nothing proves nothing, so it counts
-# as unproven too.
+# exclusions is, under <dir>, the very file the index recorded (the same inode, with no second name), or
+# the index cannot be read. The parent of a separate git directory that is merely named .git can hold a
+# tracked file by chance, but a copy has an inode of its own, and a hard link to the checkout's file gives
+# that inode a second name. An index that tracks nothing proves nothing, so it counts as unproven too.
 checkout_unproven() {
-  local dir="$1" common="$2" entry path listed=0 recorded actual
+  local dir="$1" common="$2" entry path listed=0 recorded actual links stat_line
   git --git-dir="$common" ls-files -z -t >/dev/null 2>&1 || return 0
   while IFS= read -r -d '' entry; do
     case "$entry" in
@@ -863,13 +876,16 @@ checkout_unproven() {
     if [ -e "$dir/$path" ] || [ -L "$dir/$path" ]; then
       recorded="$(GIT_LITERAL_PATHSPECS=1 git --git-dir="$common" ls-files --debug -- "$path" 2>/dev/null |
         sed -n 's/.*[[:space:]]ino: \([0-9][0-9]*\).*/\1/p' | head -n 1)" || recorded=""
-      # shellcheck disable=SC2012 # only the inode number, the first field, is read
-      actual="$(ls -di -- "$dir/$path" 2>/dev/null | awk '{ print $1; exit }')" || actual=""
-      case "$recorded$actual" in
+      # shellcheck disable=SC2012 # only the inode number and link count, the first and third fields, are read
+      stat_line="$(ls -ldi -- "$dir/$path" 2>/dev/null | awk '{ print $1, $3; exit }')" || stat_line=""
+      actual="${stat_line%% *}"
+      links="${stat_line#* }"
+      case "$recorded$actual$links" in
         '' | *[!0-9]*) ;;
         *)
-          # The index keeps the low 32 bits of the inode number.
-          if [ -n "$recorded" ] && [ -n "$actual" ] && [ "$recorded" -ne 0 ] &&
+          # The index keeps the low 32 bits of the inode number. A hard link shares the inode, so only a
+          # file with no other name is the one the index recorded.
+          if [ -n "$recorded" ] && [ -n "$actual" ] && [ "$recorded" -ne 0 ] && [ "$links" = 1 ] &&
             [ "$((actual % 4294967296))" -eq "$recorded" ]; then
             return 1
           fi
@@ -1045,7 +1061,7 @@ origin_redirects() (
 # `add` passes, as <verified>, the checkout it has already checked and created the new worktree from.
 refuse_foreign_submodule_origin_checked() {
   local repo_abs="$1" verified="${2:-}" super rel name="" common="" worktree="" main="" found admin raw="" expected="" resolved=0 shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
-  local top inplace head_branch push_remote="" pushto="" gitdir common_phys verified_common
+  local inplace head_branch push_remote="" pushto="" gitdir common_phys verified_common
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
     super="$(cd "$super" && pwd -P)"
@@ -1100,24 +1116,24 @@ refuse_foreign_submodule_origin_checked() {
       name="$(submodule_name_at "$super" "$rel")"
     fi
     # An in-place clone's checkout is where its git directory sits, whatever core.worktree names now,
-    # so the superproject around that directory decides whether it is a registered submodule.
-    if [ -z "$name" ]; then
+    # so the superproject around that directory decides whether it is a registered submodule. A bare
+    # repository has no checkout, but its git directory can itself sit at a registered path.
+    if [ -z "$name" ] && [ -n "$common" ]; then
+      inplace=""
       case "$common" in
-        */.git)
-          inplace="$(cd "${common%/.git}" 2>/dev/null && pwd -P)" || inplace=""
-          top=""
-          [ -z "$inplace" ] || top="$(git -C "${inplace%/*}" rev-parse --show-toplevel 2>/dev/null)" || top=""
-          [ -z "$top" ] || top="$(cd "$top" && pwd -P)" || top=""
-          if [ -n "$top" ] && [ "${inplace#"$top"/}" != "$inplace" ]; then
-            found="$(submodule_name_at "$top" "${inplace#"$top"/}")"
-            if [ -n "$found" ]; then
-              super="$top"
-              rel="${inplace#"$top"/}"
-              name="$found"
-            fi
+        */.git) inplace="${common%/.git}" ;;
+        *)
+          if [ "$(git config -f "$common/config" --type=bool --get core.bare 2>/dev/null)" = "true" ]; then
+            inplace="$common"
           fi
           ;;
       esac
+      if [ -n "$inplace" ] && found="$(registration_around "$inplace")"; then
+        super="${found%%$'\n'*}"
+        found="${found#*$'\n'}"
+        rel="${found%%$'\n'*}"
+        name="${found#*$'\n'}"
+      fi
     fi
   fi
   if [ -z "$super" ]; then

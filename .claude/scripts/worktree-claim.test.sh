@@ -941,6 +941,23 @@ git -C "$tmp/bare-admin" worktree add -q --detach "$tmp/bare-linked"
 rc=0
 out="$("$script" add "$tmp/bare-linked" "$tmp/wt-bare-linked" "claim-branch-bare-linked" "session-bare-linked" 2>&1)" || rc=$?
 check "add admits a linked worktree of a bare repository" 0 "$rc" "$out" "owner=session-bare-linked"
+# A bare repository has no checkout, but its git directory can itself sit at a registered submodule path,
+# so a linked worktree of it is checked against that registration.
+bare_super="$tmp/bare-super"
+git init -q -b main "$bare_super"
+git -C "$bare_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$bare_super" -c user.name=t -c user.email=t@example.com commit -qm "add mod"
+rm -rf "$bare_super/mod"
+git clone -q --bare "$other_sub" "$bare_super/mod"
+git -C "$bare_super/mod" worktree add -q --detach "$tmp/bare-reg-linked"
+rc=0
+out="$("$script" add "$tmp/bare-reg-linked" "$tmp/wt-bare-reg" "claim-branch-bare-reg" "session-bare-reg" 2>&1)" || rc=$?
+check "add refuses a linked worktree of a bare repository at a registered path with a foreign origin" 1 "$rc" "$out" "submodule sync -- 'mod'"
+check "a refused bare-repository linked worktree gets no new worktree" 1 "$([ -e "$tmp/wt-bare-reg" ] && echo 0 || echo 1)"
+git -C "$bare_super/mod" config remote.origin.url "$upstream_sub"
+rc=0
+out="$("$script" add "$tmp/bare-reg-linked" "$tmp/wt-bare-reg-ok" "claim-branch-bare-reg-ok" "session-bare-reg-ok" 2>&1)" || rc=$?
+check "add admits a linked worktree of a bare repository at a registered path with the registered origin" 0 "$rc" "$out" "owner=session-bare-reg-ok"
 # Run from the checkout itself, a separate git directory's owner is known, so the worktree `add` creates
 # from it is checked against that checkout's registration: a correct origin is admitted, and an include
 # that applies only on the new branch is still refused.
@@ -987,6 +1004,13 @@ cp "$sgd2_super/mod/tracked.txt" "$tmp/sgd2-admin/tracked.txt"
 rc=0
 out="$("$script" add "$tmp/sgd2-linked" "$tmp/wt-sgd2-copy" "claim-branch-sgd2-copy" "session-sgd2-copy" 2>&1)" || rc=$?
 check "add refuses a separate git directory named .git whose parent holds a copy of a tracked file" 1 "$rc" "$out" "main checkout cannot be located"
+rm -f "$tmp/sgd2-admin/tracked.txt"
+# A hard link does share the recorded inode, but the file then has a second name, so the parent is still
+# not taken for the checkout.
+ln "$sgd2_super/mod/tracked.txt" "$tmp/sgd2-admin/tracked.txt"
+rc=0
+out="$("$script" add "$tmp/sgd2-linked" "$tmp/wt-sgd2-hardlink" "claim-branch-sgd2-hardlink" "session-sgd2-hardlink" 2>&1)" || rc=$?
+check "add refuses a separate git directory named .git whose parent holds a hard link to a tracked file" 1 "$rc" "$out" "main checkout cannot be located"
 rm -f "$tmp/sgd2-admin/tracked.txt"
 # An index that tracks nothing proves nothing either, so a .git-named separate git directory of an empty
 # commit is not taken for an in-place clone.
