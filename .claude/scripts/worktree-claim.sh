@@ -844,6 +844,15 @@ submodule_name_at() {
   printf '%s\n' "$name"
 }
 
+# refuse_unlocated_main exits 1 because the git directory <common> of linked worktree <repo> records no
+# main checkout, so whether a superproject registers that checkout cannot be checked.
+refuse_unlocated_main() {
+  echo "worktree-claim: $1 is a linked worktree whose main checkout cannot be located from its git directory $2." >&2
+  echo "  Whether a superproject registers that checkout cannot be checked, so it is not claimed." >&2
+  echo "  Run this from the main checkout, or set core.worktree in $2/config to it." >&2
+  exit 1
+}
+
 # registration_around prints the superproject around <dir>, <dir>'s path within it, and the submodule
 # name that superproject registers at that path, one per line. It fails when no superproject registers it.
 registration_around() {
@@ -947,6 +956,28 @@ origin_config_own() {
   return 1
 }
 
+# probe_shares_scope succeeds when the throwaway repository <probe> sits where a gitdir-conditioned include
+# written for <repo> could match it too: inside any git directory, or inside <repo>'s checkout, its
+# superproject or its shared git directory.
+probe_shares_scope() {
+  local probe="$1" repo="$2" dir anchor
+  dir="$(cd "$probe" 2>/dev/null && pwd -P)" || return 0
+  case "$dir/" in
+    */.git/*) return 0 ;;
+  esac
+  for anchor in \
+    "$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" \
+    "$(git -C "$repo" rev-parse --show-superproject-working-tree 2>/dev/null)" \
+    "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; do
+    [ -n "$anchor" ] || continue
+    anchor="$(cd "$anchor" 2>/dev/null && pwd -P)" || continue
+    case "$dir/" in
+      "$anchor"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # config_values prints what `git config -z <args>` reports for <repo>, hex-encoded. Command substitution
 # drops trailing empty lines, so compared as plain text an empty value that overrides a shared one would
 # read as absent.
@@ -986,6 +1017,19 @@ origin_redirects() (
     echo "unverifiable"
     return 0
   }
+  # A probe inside the scope of an include written for <repo> would see what <repo> sees, so it is made
+  # in /tmp instead, and the check is unverifiable when that is no better.
+  if probe_shares_scope "$probe" "$repo"; then
+    rm -rf "$probe"
+    probe=""
+    probe="$(mktemp -d /tmp/worktree-claim-probe.XXXXXX)" || probe=""
+    if [ -z "$probe" ] || probe_shares_scope "$probe" "$repo"; then
+      [ -z "$probe" ] || rm -rf "$probe"
+      probe=""
+      echo "unverifiable"
+      return 0
+    fi
+  fi
   # An empty template keeps a user's init template, and any config it carries, out of the probe.
   if ! git init -q --template= "$probe" >/dev/null 2>&1; then
     rm -rf "$probe"
@@ -1061,7 +1105,8 @@ origin_redirects() (
 # `add` passes, as <verified>, the checkout it has already checked and created the new worktree from.
 refuse_foreign_submodule_origin_checked() {
   local repo_abs="$1" verified="${2:-}" super rel name="" common="" worktree="" main="" found admin raw="" expected="" resolved=0 shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
-  local inplace head_branch push_remote="" pushto="" gitdir common_phys verified_common
+  local inplace head_branch push_remote="" pushto="" gitdir common_phys verified_common selector
+  local -a selectors
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
     super="$(cd "$super" && pwd -P)"
@@ -1140,7 +1185,11 @@ refuse_foreign_submodule_origin_checked() {
     # Without a main checkout, the shared git directory's own path still records which superproject
     # registered it, and under which name.
     case "$common" in
-      */.git/modules/* | */.git/worktrees/*/modules/*) ;;
+      */.git/modules/* | */.git/worktrees/*/modules/*)
+        # A submodule's git directory records its checkout in core.worktree. One that records none is a
+        # separate git directory that merely sits under modules/, so its path proves no registration.
+        [ -n "$worktree" ] || refuse_unlocated_main "$repo_abs" "$common"
+        ;;
       *)
         # A standalone repository may keep its git directory elsewhere and point core.worktree back at
         # its checkout; nothing registers it, so there is nothing to check. A git directory under another
@@ -1159,10 +1208,7 @@ refuse_foreign_submodule_origin_checked() {
             return 0
           fi
           [ "$(git config -f "$common/config" --type=bool --get core.bare 2>/dev/null)" != "true" ] || return 0
-          echo "worktree-claim: $repo_abs is a linked worktree whose main checkout cannot be located from its git directory $common." >&2
-          echo "  Whether a superproject registers that checkout cannot be checked, so it is not claimed." >&2
-          echo "  Run this from the main checkout, or set core.worktree in $common/config to it." >&2
-          exit 1
+          refuse_unlocated_main "$repo_abs" "$common"
         fi
         if ! under_git_modules "$common"; then
           [ -z "$main" ] || return 0
@@ -1242,22 +1288,28 @@ refuse_foreign_submodule_origin_checked() {
     fi
   done
   # A plain push goes to the branch's push remote, which only defaults to origin. "." names this
-  # repository itself, so a push there never reaches origin either.
+  # repository itself, so a push there never reaches origin either. A selector set to an empty value is
+  # not an unset one: some git versions pick the empty remote and the push fails, so it is refused too.
   head_branch="$(git -C "$repo_abs" symbolic-ref -q --short HEAD 2>/dev/null)" || head_branch=""
-  if [ -n "$head_branch" ]; then
-    push_remote="$(git -C "$repo_abs" config --get "branch.$head_branch.pushRemote" 2>/dev/null)" || push_remote=""
-  fi
-  [ -n "$push_remote" ] || push_remote="$(git -C "$repo_abs" config --get remote.pushDefault 2>/dev/null)" || push_remote=""
-  if [ -z "$push_remote" ] && [ -n "$head_branch" ]; then
-    push_remote="$(git -C "$repo_abs" config --get "branch.$head_branch.remote" 2>/dev/null)" || push_remote=""
-  fi
-  case "$push_remote" in
-    '' | origin) ;;
-    *)
-      pushto="$(redact_url "$push_remote")"
-      foreign=1
-      ;;
-  esac
+  selectors=()
+  [ -z "$head_branch" ] || selectors+=("branch.$head_branch.pushRemote")
+  selectors+=(remote.pushDefault)
+  [ -z "$head_branch" ] || selectors+=("branch.$head_branch.remote")
+  for selector in "${selectors[@]}"; do
+    push_remote="$(git -C "$repo_abs" config --get "$selector" 2>/dev/null)" || continue
+    case "$push_remote" in
+      origin) ;;
+      '')
+        pushto="<empty, from $selector>"
+        foreign=1
+        ;;
+      *)
+        pushto="$(redact_url "$push_remote")"
+        foreign=1
+        ;;
+    esac
+    break
+  done
   if [ "$foreign" -eq 1 ] || [ "$matched" -eq 0 ]; then
     shown_expected="<not registered at $rel>"
     if [ -n "$expected" ]; then

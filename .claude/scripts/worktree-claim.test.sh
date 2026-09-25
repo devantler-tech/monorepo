@@ -426,6 +426,27 @@ check "add refuses a branch that tracks this repository" 1 "$rc" "$out" "push re
 check "a refused branch that tracks this repository loses its worktree" 1 "$([ -e "$tmp/wt-sub-tracks-local" ] && echo 0 || echo 1)"
 [ ! -e "$tmp/wt-sub-tracks-local" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-tracks-local"
 git -C "$super/mod" branch -D -q claim-branch-sub-tracks-other
+# A selector set to an empty value is not an unset one: depending on the git version, git picks the
+# empty remote and a plain push fails, so every explicitly empty selector is refused.
+git -C "$super/mod" config remote.pushDefault ""
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-empty-pushdefault" "claim-branch-sub-empty-pushdefault" "session-sub-empty-pushdefault" 2>&1)" || rc=$?
+check "add refuses an explicitly empty remote.pushDefault" 1 "$rc" "$out" "push remote:      <empty, from remote.pushDefault>"
+git -C "$super/mod" config --unset remote.pushDefault
+git -C "$super/mod" config branch.claim-branch-sub-empty-pushremote.pushRemote ""
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-empty-pushremote" "claim-branch-sub-empty-pushremote" "session-sub-empty-pushremote" 2>&1)" || rc=$?
+check "add refuses a new branch whose pushRemote is explicitly empty" 1 "$rc" "$out" "push remote:      <empty, from branch.claim-branch-sub-empty-pushremote.pushRemote>"
+[ ! -e "$tmp/wt-sub-empty-pushremote" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-empty-pushremote"
+git -C "$super/mod" config --unset branch.claim-branch-sub-empty-pushremote.pushRemote
+git -C "$super/mod" branch -D -q claim-branch-sub-empty-pushremote 2>/dev/null || true
+git -C "$super/mod" branch claim-branch-sub-empty-remote
+git -C "$super/mod" config branch.claim-branch-sub-empty-remote.remote ""
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-empty-remote" "claim-branch-sub-empty-remote" "session-sub-empty-remote" 2>&1)" || rc=$?
+check "add refuses a branch whose remote is explicitly empty" 1 "$rc" "$out" "push remote:      <empty, from branch.claim-branch-sub-empty-remote.remote>"
+[ ! -e "$tmp/wt-sub-empty-remote" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-empty-remote"
+git -C "$super/mod" branch -D -q claim-branch-sub-empty-remote
 
 # `submodule sync` writes a registered URL byte for byte, trailing newline included, so an origin
 # without it is not that URL; a URL carrying a newline cannot be verified either way.
@@ -457,6 +478,15 @@ printf '[includeIf "gitdir:%s"]\n\tpath = %s\n' "$mod_gitdir" "$tmp/probe-only.g
 rc=0
 out="$(GIT_CONFIG_GLOBAL="$tmp/global-reordered.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-reordered" "claim-branch-sub-reordered" "session-sub-reordered" 2>&1)" || rc=$?
 check "add refuses a setting a global include repeats for this repository alone" 1 "$rc" "$out" "redirected by:   core.sshCommand"
+# A TMPDIR inside the superproject's git directory would put the probe under the same gitdir: include
+# as the submodule, so a rewrite for that scope would look shared. The probe is made elsewhere instead.
+mkdir -p "$super/.git/modules/probe-scope-tmp"
+printf '[includeIf "gitdir:%s/.git/modules/**"]\n\tpath = %s\n' "$super" "$tmp/only-mod.gitconfig" >"$tmp/global-modules-scope.gitconfig"
+rc=0
+out="$(TMPDIR="$super/.git/modules/probe-scope-tmp" GIT_CONFIG_GLOBAL="$tmp/global-modules-scope.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-probe-scope" "claim-branch-sub-probe-scope" "session-sub-probe-scope" 2>&1)" || rc=$?
+check "add refuses a rewrite scoped to the git directory TMPDIR also sits in" 1 "$rc" "$out" "redirected by:   URL rewrite"
+check "a probe made outside the shared scope is removed too" 1 "$(compgen -G "$super/.git/modules/probe-scope-tmp/worktree-claim-probe.*" >/dev/null && echo 0 || echo 1)"
+rm -rf "$super/.git/modules/probe-scope-tmp"
 
 # The probe repository holds the registered URL, which can carry a credential, so an interrupted check
 # must not leave it behind. The shim holds the check inside the probe until the job is signalled; it
@@ -958,6 +988,25 @@ git -C "$bare_super/mod" config remote.origin.url "$upstream_sub"
 rc=0
 out="$("$script" add "$tmp/bare-reg-linked" "$tmp/wt-bare-reg-ok" "claim-branch-bare-reg-ok" "session-bare-reg-ok" 2>&1)" || rc=$?
 check "add admits a linked worktree of a bare repository at a registered path with the registered origin" 0 "$rc" "$out" "owner=session-bare-reg-ok"
+# A separate git directory can also be placed under another superproject's .git/modules/, where its path
+# looks like that superproject's submodule. It still records no main checkout, so a linked worktree of it
+# is refused rather than checked against the registration its path happens to match.
+dis_a="$tmp/dis-a"
+git init -q -b main "$dis_a"
+git -C "$dis_a" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$dis_a" -c user.name=t -c user.email=t@example.com commit -qm "add mod"
+rm -rf "$dis_a/mod"
+dis_b="$tmp/dis-b"
+git init -q -b main "$dis_b"
+git -C "$dis_b" config -f .gitmodules submodule.alias.path alias
+git -C "$dis_b" config -f .gitmodules submodule.alias.url "$other_sub"
+mkdir -p "$dis_b/.git/modules"
+git clone -q --separate-git-dir "$dis_b/.git/modules/alias" "$other_sub" "$dis_a/mod"
+git -C "$dis_a/mod" worktree add -q --detach "$tmp/dis-linked"
+rc=0
+out="$("$script" add "$tmp/dis-linked" "$tmp/wt-dis-linked" "claim-branch-dis-linked" "session-dis-linked" 2>&1)" || rc=$?
+check "add refuses a linked worktree whose separate git directory sits under another superproject's modules" 1 "$rc" "$out" "main checkout cannot be located"
+check "a refused disguised separate-git-dir worktree gets no new worktree" 1 "$([ -e "$tmp/wt-dis-linked" ] && echo 0 || echo 1)"
 # Run from the checkout itself, a separate git directory's owner is known, so the worktree `add` creates
 # from it is checked against that checkout's registration: a correct origin is admitted, and an include
 # that applies only on the new branch is still refused.
