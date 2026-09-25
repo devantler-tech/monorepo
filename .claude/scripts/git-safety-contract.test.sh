@@ -158,8 +158,8 @@ assert_section 'Run [`unsigned-push-guard.sh <repo-dir>`](.claude/scripts/unsign
 
 # 7. FETCH REFSPECS NAME THEIR SOURCE IN FULL (monorepo#3596). This host sets `fetch.prune=true`
 #    globally, and under pruning a short source such as `main:refs/remotes/origin/main` deletes the
-#    destination ref, exits 1, and "succeeds" on the retry. That is how it came to look like a working
-#    fallback. 13 of 536 Codex sessions deleted origin/main this way in one week, after the warning
+#    destination ref whether git then exits 1 or 0, and the next run recreates it. That is how it came
+#    to look like a working fallback. 13 of 536 Codex sessions deleted origin/main this way in one week, after the warning
 #    here had been cut down to a clause elsewhere. `drifted-lane-escalation-contract.test.sh` pins the
 #    git behaviour; this pins the rule where runs look for it. Both halves are asserted: the ban
 #    without the safe form leaves the run nothing to use instead, and the safe form without the ban
