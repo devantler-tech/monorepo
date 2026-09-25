@@ -96,8 +96,8 @@ write_marker() {
   mv -f "$tmp" "$marker"
 }
 
-# `add` arms these before it creates the worktree, and keeps them until that worktree passes its own
-# origin check, so any exit in between (the check refusing it, an error, a signal) takes back what `add`
+# `add` arms these before it creates the worktree, and keeps them until it owns that worktree, so any
+# exit in between (the origin check refusing it, a failed claim, an error, a signal) takes back what `add`
 # created. Only what the note records counts: it is written under the branch-operation lock once the
 # creation step has finished, however it ended, so a path something else created is never removed.
 # Removal is forced, because a post-checkout hook can leave files in the new worktree that would stop a
@@ -784,6 +784,42 @@ submodule_name_at() {
   printf '%s\n' "$name"
 }
 
+# tracked_files_absent succeeds when the index of the git directory <common> tracks files outside a
+# sparse checkout's exclusions and <dir> holds none of the first 200 of them, or when that index cannot
+# be read. An in-place clone's checkout holds them; the parent of a separate git directory that is
+# merely named .git does not. An index that tracks nothing cannot tell the two apart, so it does not count.
+tracked_files_absent() {
+  local dir="$1" common="$2" entry path checked=0
+  git --git-dir="$common" ls-files -z -t >/dev/null 2>&1 || return 0
+  while IFS= read -r -d '' entry; do
+    case "$entry" in
+      "H "*) ;;
+      *) continue ;;
+    esac
+    path="$dir/${entry#H }"
+    if [ -e "$path" ] || [ -L "$path" ]; then
+      return 1
+    fi
+    checked=$((checked + 1))
+    [ "$checked" -lt 200 ] || break
+  done < <(git --git-dir="$common" ls-files -z -t 2>/dev/null)
+  [ "$checked" -gt 0 ]
+}
+
+# under_git_modules succeeds when <common> sits in the `modules/` directory of a git directory, which is
+# where git keeps a submodule's own git directory. A path that merely has a `modules` component does not.
+under_git_modules() {
+  local rest="$1" prefix
+  while [ "${rest%/modules/*}" != "$rest" ]; do
+    prefix="${rest%/modules/*}"
+    if [ -n "$prefix" ] && git --git-dir="$prefix" rev-parse --git-dir >/dev/null 2>&1; then
+      return 0
+    fi
+    rest="$prefix"
+  done
+  return 1
+}
+
 # origin_config_own <repo> <probe> <regexp> <url> succeeds when <repo> sees a setting matching <regexp>
 # that the neutral <probe> does not: an entry from the repository's own config (other than an origin
 # url or pushurl equal to the registered <url>), or shared entries that are not, in order, among the
@@ -944,11 +980,16 @@ refuse_foreign_submodule_origin_checked() {
     fi
     main="$worktree"
     # A submodule cloned in place keeps its git directory at <checkout>/.git and sets no core.worktree,
-    # so its main checkout is that directory's parent.
+    # so its main checkout is that directory's parent. A separate git directory that is merely named
+    # .git keeps its checkout elsewhere, recorded nowhere, so the parent does not count when it holds
+    # none of the files the index tracks.
     if [ -z "$main" ]; then
       case "$common" in
         */.git) main="${common%/.git}" ;;
       esac
+      if [ -n "$main" ] && tracked_files_absent "$main" "$common"; then
+        main=""
+      fi
     fi
     case "$main" in
       '' | /*) ;;
@@ -989,9 +1030,9 @@ refuse_foreign_submodule_origin_checked() {
       */.git/modules/* | */.git/worktrees/*/modules/*) ;;
       *)
         # A standalone repository may keep its git directory elsewhere and point core.worktree back at
-        # its checkout; nothing registers it, so there is nothing to check. A git directory under a
-        # `modules/` directory is a submodule's, wherever core.worktree points, and a core.worktree that
-        # names a checkout which no longer exists may be one too, so neither is waved through.
+        # its checkout; nothing registers it, so there is nothing to check. A git directory under another
+        # git directory's `modules/` is a submodule's, wherever core.worktree points, and a core.worktree
+        # that names a checkout which no longer exists may be one too, so neither is waved through.
         if [ -z "$worktree" ]; then
           # Without core.worktree, a git directory kept outside its checkout (--separate-git-dir)
           # records no main checkout at all, so a linked worktree cannot show whether that checkout sits
@@ -1010,10 +1051,9 @@ refuse_foreign_submodule_origin_checked() {
           echo "  Run this from the main checkout, or set core.worktree in $common/config to it." >&2
           exit 1
         fi
-        case "$common" in
-          */modules/*) ;;
-          *) [ -z "$main" ] || return 0 ;;
-        esac
+        if ! under_git_modules "$common"; then
+          [ -z "$main" ] || return 0
+        fi
         echo "worktree-claim: $repo_abs shares a git directory with a separate checkout, but no superproject registers it." >&2
         echo "  Its origin cannot be checked against a .gitmodules entry, so it is not claimed." >&2
         echo "  If it is a submodule, run this from a checkout inside its superproject instead." >&2
@@ -1218,14 +1258,15 @@ cmd_add() {
   local wt_phys
   wt_phys="$(cd "$wt" && pwd -P)" || fail "cannot resolve the new worktree path: $wt"
   refuse_foreign_submodule_origin "$wt_phys"
-  rm -f "$note"
-  PENDING_NOTE=""
   # Claim BEFORE the advisory freshness check, not after. That check makes up to two bounded remote
   # calls, so it can hold the newly-created tree unclaimed for the length of both timeouts — a window
   # in which a concurrent run can take the marker, leaving this invocation to create the worktree and
   # branch and then exit 3 without the lane it just built. Ownership is the point of `add`; freshness
   # is a NOTE, so the note waits.
   cmd_acquire "$wt" "$owner" fresh
+  # Rollback stays armed until add owns the worktree, so a failed claim takes it back too.
+  rm -f "$note"
+  PENDING_NOTE=""
   # `|| true`: the check is advisory by contract, so its status must never decide whether `add`
   # succeeded. Every path in it returns 0 today, but relying on that couples the claim's exit code to
   # the internals of a NOTE -- one future `return 1` on an unresolvable comparison would abort the

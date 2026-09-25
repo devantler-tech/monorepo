@@ -543,6 +543,22 @@ check "a signal before creation starts leaves another process's worktree in plac
 [ ! -e "$tmp/wt-presig" ] || git -C "$repo" worktree remove --force "$tmp/wt-presig"
 git -C "$repo" branch -D -q claim-branch-presig-other 2>/dev/null || true
 
+# Rollback stays armed until `add` owns the new worktree, so a failed claim (here a malformed marker a
+# post-checkout hook leaves in it) still takes back the worktree and branch.
+cat >"$repo_hooks/post-checkout" <<'HOOK'
+#!/bin/sh
+printf 'not a marker\n' >.claude-worktree-owner
+HOOK
+chmod +x "$repo_hooks/post-checkout"
+rc=0
+out="$("$script" add "$repo" "$tmp/wt-claim-fail" "claim-branch-claim-fail" "session-claim-fail" 2>&1)" || rc=$?
+rm -f "$repo_hooks/post-checkout"
+check "add fails when it cannot claim its new worktree" 2 "$rc" "$out" "malformed ownership marker"
+check "a new worktree add could not claim is removed" 1 "$([ -e "$tmp/wt-claim-fail" ] && echo 0 || echo 1)"
+check "a new worktree add could not claim loses its new branch" 1 "$(git -C "$repo" show-ref --verify --quiet refs/heads/claim-branch-claim-fail && echo 0 || echo 1)"
+[ ! -e "$tmp/wt-claim-fail" ] || git -C "$repo" worktree remove --force "$tmp/wt-claim-fail"
+git -C "$repo" branch -D -q claim-branch-claim-fail 2>/dev/null || true
+
 # One configured value that repeats the registered URL across a newline is one URL to git, not two.
 git -C "$super/mod" config remote.origin.url "$(printf '%s\n%s' "https://github.com/example/sub" "https://github.com/example/sub")"
 rc=0
@@ -847,6 +863,40 @@ git -C "$tmp/bare-admin" worktree add -q --detach "$tmp/bare-linked"
 rc=0
 out="$("$script" add "$tmp/bare-linked" "$tmp/wt-bare-linked" "claim-branch-bare-linked" "session-bare-linked" 2>&1)" || rc=$?
 check "add admits a linked worktree of a bare repository" 0 "$rc" "$out" "owner=session-bare-linked"
+# A separate git directory can itself be named .git. Its parent then holds none of the files the index
+# tracks, so it is not taken for the checkout; an in-place clone's checkout holds them.
+tracked_up="$tmp/tracked-up"
+git init -q -b main "$tracked_up"
+printf 'tracked\n' >"$tracked_up/tracked.txt"
+git -C "$tracked_up" add tracked.txt
+git -C "$tracked_up" -c user.name=t -c user.email=t@example.com commit -qm "tracked"
+sgd2_super="$tmp/sgd2-super"
+git init -q -b main "$sgd2_super"
+git -C "$sgd2_super" -c protocol.file.allow=always submodule add -q "$tracked_up" mod
+git -C "$sgd2_super" -c user.name=t -c user.email=t@example.com commit -qm "add mod"
+rm -rf "$sgd2_super/mod"
+mkdir -p "$tmp/sgd2-admin"
+git clone -q --separate-git-dir "$tmp/sgd2-admin/.git" "$tracked_up" "$sgd2_super/mod"
+git -C "$sgd2_super/mod" worktree add -q --detach "$tmp/sgd2-linked"
+git -C "$sgd2_super/mod" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" add "$tmp/sgd2-linked" "$tmp/wt-sgd2-linked" "claim-branch-sgd2-linked" "session-sgd2-linked" 2>&1)" || rc=$?
+check "add refuses a linked worktree whose separate git directory is named .git" 1 "$rc" "$out" "main checkout cannot be located"
+git clone -q "$tracked_up" "$tmp/tracked-inplace"
+git -C "$tmp/tracked-inplace" worktree add -q --detach "$tmp/tracked-inplace-linked"
+rc=0
+out="$("$script" add "$tmp/tracked-inplace-linked" "$tmp/wt-tracked-inplace" "claim-branch-tracked-inplace" "session-tracked-inplace" 2>&1)" || rc=$?
+check "add admits a linked worktree of an in-place clone that holds its files" 0 "$rc" "$out" "owner=session-tracked-inplace"
+# A standalone repository may keep its git directory under a folder that happens to be named modules.
+# Only another git directory's modules/ holds submodule git directories.
+mkdir -p "$tmp/admin-mods/modules"
+git init -q -b main --separate-git-dir "$tmp/admin-mods/modules/repo" "$tmp/standalone-mods"
+git --git-dir="$tmp/admin-mods/modules/repo" config core.worktree "$tmp/standalone-mods"
+git -C "$tmp/standalone-mods" -c user.name=t -c user.email=t@example.com commit --allow-empty -qm init
+git -C "$tmp/standalone-mods" worktree add -q --detach "$tmp/standalone-mods-linked"
+rc=0
+out="$("$script" add "$tmp/standalone-mods-linked" "$tmp/wt-standalone-mods" "claim-branch-standalone-mods" "session-standalone-mods" 2>&1)" || rc=$?
+check "add admits a standalone repository whose git directory sits in a folder named modules" 0 "$rc" "$out" "owner=session-standalone-mods"
 
 # When two .gitmodules sections claim one path, git initializes it from the later one.
 git -C "$super" config -f .gitmodules submodule.dup.path mod
