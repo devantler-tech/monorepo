@@ -37,11 +37,11 @@ r() {
     }'
 }
 
-# payload <judged-id> <run>...  -> the helper's stdin
+# payload <judged-id> <run>...  -> the helper's stdin: one run object per line, the judged one marked
 payload() {
   local id="$1"
   shift
-  printf '%s\n' "$@" | jq -sc --argjson id "${id}" '{run: $id, runs: .}'
+  printf '%s\n' "$@" | jq -c --argjson id "${id}" '. + {judged: (.id == $id)}'
 }
 
 run() { # run <tool> <payload> [args...] -> sets got, rc
@@ -74,7 +74,7 @@ dep_b="docker in /pkg/svc/installer/kyverno"
 # --- the rules --------------------------------------------------------------------------------
 
 # Live corpus, ksail 2026-09-24: four consecutive red CodeQL runs on main after a green.
-live="$(jq -c '{run: .[0].id, runs: .}' "${live_fixture}")"
+live="$(jq -c '.[0].id as $id | .[] | . + {judged: (.id == $id)}' "${live_fixture}")"
 expect "live ksail streak is REPEATED" 1 "REPEATED runs=4 since=2026-09-24" "${live}"
 
 expect "a single red after a green is the exempt FIRST failure" 0 "FIRST since=2026-09-10" \
@@ -144,9 +144,10 @@ expect "a judged run that is not red is refused" 2 "" \
   "$(payload 1 "$(r 1 "$d" success 2026-09-01T05:00:00Z)")"
 expect "a judged run off main is refused" 2 "" \
   "$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z feature)")"
-expect "a run missing a field is refused" 2 "" '{"run":1,"runs":[{"id":1,"name":"x","status":"completed","conclusion":"failure","created_at":"2026-09-01T05:00:00Z"}]}'
-expect "an extra top-level key is refused" 2 "" '{"run":1,"runs":[],"extra":true}'
-expect "two JSON values are refused" 2 "" '{"run":1,"runs":[]} {"run":1,"runs":[]}'
+expect "a run missing a field is refused" 2 "" '{"id":1,"name":"x","status":"completed","conclusion":"failure","created_at":"2026-09-01T05:00:00Z","judged":true}'
+expect "two judged runs are refused" 2 "" "$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z)") $(payload 1 "$(r 1 "$d" failure 2026-09-02T05:00:00Z)")"
+expect "a non-object value is refused" 2 "" "$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z)") [1]"
+expect "an array instead of a stream is refused" 2 "" "[$(payload 1 "$(r 1 "$d" failure 2026-09-01T05:00:00Z)")]"
 expect "an empty stdin is refused" 2 "" ''
 expect "a missing --input is refused" 2 "" "${live}" --run 1
 

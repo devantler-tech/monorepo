@@ -22,13 +22,16 @@
 #
 # USAGE
 #   managed-run-streak.sh --input -
-#   stdin: ONE JSON object {"run": <id>, "runs": [<run>, ...]}, where `run` is the numeric id of
-#          the red run being judged and `runs` is that workflow's run history on main, e.g. every
-#          `.workflow_runs[]` from
-#          `gh api --paginate "repos/<o>/<r>/actions/workflows/<id>/runs?branch=main&per_page=100"`.
-#          Each run needs `id` (number), `name` (string or null), `status` (string),
-#          `conclusion` (string or null), `created_at` (string) and `head_branch` (string or null).
-#          The run name is read only from this data; it never enters a command line.
+#   stdin: a STREAM of JSON run objects, one per run of that workflow on main, exactly one of them
+#          marked `"judged": true` (the red run being judged), e.g.
+#          gh api --paginate "repos/<o>/<r>/actions/workflows/<id>/runs?branch=main&per_page=100" \
+#            --jq '.workflow_runs[] | {id, name, status, conclusion, created_at, head_branch,
+#                  judged: (.id == <red-run-id>)}' | managed-run-streak.sh --input -
+#          A stream, not an array: `--paginate` applies `--jq` per page, so one array per page
+#          would split the history. Each run needs `id` (number), `name` (string or null),
+#          `status` (string), `conclusion` (string or null), `created_at` (string),
+#          `head_branch` (string or null) and `judged` (boolean). The run name is read only from
+#          this data; it never enters a command line.
 #
 # OUTPUT (one line on stdout)
 #   CLEAR                          the newest finished run of this unit on main is not red
@@ -43,7 +46,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '23,42p' "$0" >&2
+  sed -n '23,45p' "$0" >&2
   exit 2
 }
 
@@ -54,34 +57,32 @@ command -v jq >/dev/null 2>&1 || {
 }
 
 payload="$(cat)" || exit 2
-jq -se 'length == 1 and (.[0] | type == "object"
-    and (keys == ["run", "runs"])
-    and (.run | type == "number")
-    and (.runs | type == "array")
-    and (.runs | all(type == "object"
+jq -se 'length > 0
+    and ([.[] | select(type == "object" and .judged == true)] | length == 1)
+    and (all(type == "object"
       and (.id | type == "number")
       and ((.name | type) as $t | $t == "string" or $t == "null")
       and (.status | type == "string")
       and ((.conclusion | type) as $t | $t == "string" or $t == "null")
       and (.created_at | type == "string")
-      and ((.head_branch | type) as $t | $t == "string" or $t == "null"))))' \
+      and ((.head_branch | type) as $t | $t == "string" or $t == "null")
+      and (.judged | type == "boolean")))' \
   <<<"$payload" >/dev/null 2>&1 || {
-  echo "managed-run-streak: stdin must be one JSON object {run: <id>, runs: [...]} whose runs carry id, name, status, conclusion, created_at and head_branch" >&2
+  echo "managed-run-streak: stdin must be a stream of run objects carrying id, name, status, conclusion, created_at, head_branch and a boolean judged, exactly one of them judged" >&2
   exit 2
 }
 
-result="$(jq -r '
+result="$(jq -rs '
   def unit: (.name // "") | sub("( - Update)? #[0-9]+$"; "");
   def red: .status == "completed" and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure");
 
-  .run as $id
-  | ([.runs[] | select(.id == $id)] | first) as $target
-  | if $target == null then "UNKNOWN judged run not in input"
-    elif ($target.head_branch != "main") then "UNKNOWN judged run is not on main"
+  . as $runs
+  | ([.[] | select(.judged)] | first) as $target
+  | if ($target.head_branch != "main") then "UNKNOWN judged run is not on main"
     elif ($target | red | not) then "UNKNOWN judged run is not red"
     else
       ($target | unit) as $u
-      | [.runs[] | select(.head_branch == "main" and .status == "completed" and (unit == $u))]
+      | [$runs[] | select(.head_branch == "main" and .status == "completed" and (unit == $u))]
       | sort_by(.created_at, .id) | reverse
       | (map(red) | index(false) // length) as $n
       | if $n == 0 then "CLEAR"
