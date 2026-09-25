@@ -119,6 +119,13 @@ rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-ok" "claim-branch-sub-ok" "session-sub-ok" 2>&1)" || rc=$?
 check "add succeeds on a correctly populated submodule" 0 "$rc" "$out" "owner=session-sub-ok"
 
+# A caller such as a git hook can export GIT_DIR, which overrides the path every `git -C` is given.
+rc=0
+out="$(GIT_DIR="$other_sub/.git" "$script" add "$super/mod" "$tmp/wt-sub-envdir" "claim-branch-sub-envdir" "session-sub-envdir" 2>&1)" || rc=$?
+check "add ignores an inherited GIT_DIR" 0 "$rc" "$out" "owner=session-sub-envdir"
+check "an inherited GIT_DIR does not decide which repository gets the worktree" 0 \
+  "$([ "$(cd "$(git -C "$tmp/wt-sub-envdir" rev-parse --git-common-dir)" && pwd -P)" = "$(cd "$super/.git/modules/mod" && pwd -P)" ] && echo 0 || echo 1)"
+
 # The submodule's own URL rewrite decides where git really fetches and pushes, so an origin
 # configured with the registered URL is still refused when such a rewrite sends it elsewhere.
 git -C "$super/mod" config url."$other_sub".insteadOf "$upstream_sub"
@@ -141,6 +148,10 @@ check "add refuses a submodule whose origin is not its .gitmodules URL" 1 "$rc" 
 check "origin refusal names both repositories" 1 "$rc" "$out" "$other_sub"
 check "origin refusal creates no worktree" 1 "$([ -e "$tmp/wt-sub-wrong" ] && echo 0 || echo 1)"
 check "origin refusal creates no branch" 1 "$(git -C "$super/mod" show-ref --verify --quiet refs/heads/claim-branch-sub-wrong && echo 0 || echo 1)"
+rc=0
+out="$(GIT_DIR="$upstream_sub/.git" GIT_WORK_TREE="$upstream_sub" "$script" add "$super/mod" "$tmp/wt-sub-envwrong" "claim-branch-sub-envwrong" "session-sub-envwrong" 2>&1)" || rc=$?
+check "an inherited GIT_DIR and GIT_WORK_TREE do not hide a foreign origin" 1 "$rc" "$out" "git -C '$super_phys' submodule sync -- 'mod'"
+check "that refusal creates no worktree" 1 "$([ -e "$tmp/wt-sub-envwrong" ] && echo 0 || echo 1)"
 
 # origin must be the registered URL itself. A spelling git may treat as the same repository is still
 # refused, because whether it is depends on the server, and `submodule sync` restores the exact URL.

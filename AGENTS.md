@@ -4260,11 +4260,12 @@ an HTTP proxy, `http.curloptResolve` or `http.extraHeader` (including through a 
 a custom `receivepack`, `uploadpack` or `vcs` transport. A plain push from the checked-out branch must
 go to `origin` too. A linked worktree of a `--separate-git-dir` clone is refused, because nothing in
 that clone's git directory proves where its main checkout is, even a `core.worktree`, so nothing shows
-whether a superproject registers it; run the helper from the clone's own checkout instead. A registered submodule path that is a symlink is refused
-too, because git never checks a submodule out through one. The
-helper checks the new worktree too before claiming it, and removes that worktree when refused. Fix a
-refusal with `git -C <superproject> submodule sync -- <path>` and by removing that setting
-(monorepo#3010). Work
+whether a superproject registers it; run the helper from the clone's own checkout instead. The
+helper checks the new worktree too before claiming it, and removes that worktree when refused. Fix an
+origin or redirect refusal with `git -C <superproject> submodule sync -- <path>` and by removing that
+setting (monorepo#3010). A registered submodule path that is a symlink is refused too, because git
+never checks a submodule out through one; replace the symlink with the real checkout by removing it
+and running `submodule-init.sh`. Work
 there, open the PR, then
 `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local filesystem path such as
 `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the slug only for `gh`

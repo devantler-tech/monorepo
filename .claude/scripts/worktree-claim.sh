@@ -52,6 +52,9 @@
 #   3  live foreign claim or live unmarked occupant (check or acquire mode)
 
 set -euo pipefail
+# A caller such as a git hook can export these, and they override the path every `git -C` here is given.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_NAMESPACE
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=worktree-claim-lib.sh
