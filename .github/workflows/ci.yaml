@@ -263,6 +263,8 @@ jobs:
             agent-claim:
               - '.claude/scripts/agent-claim.sh'
               - '.claude/scripts/agent-claim.test.sh'
+              - '.claude/scripts/agent-claim-sweep.sh'
+              - '.claude/scripts/agent-claim-sweep.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1655,6 +1657,10 @@ jobs:
       # capability-failure classification.
       - name: Self-test agent-claim traps
         run: bash .claude/scripts/agent-claim.test.sh
+      # Leaked claim tips on closed issues are removed compare-and-swap; open,
+      # unreadable and re-acquired tips survive (monorepo#3589).
+      - name: Self-test agent-claim sweep
+        run: bash .claude/scripts/agent-claim-sweep.test.sh
 
   test-memory-backup:
     name: Test memory backup helper (${{ matrix.os }})
