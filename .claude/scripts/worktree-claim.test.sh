@@ -447,6 +447,19 @@ out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-empty-r
 check "add refuses a branch whose remote is explicitly empty" 1 "$rc" "$out" "push remote:      <empty, from branch.claim-branch-sub-empty-remote.remote>"
 [ ! -e "$tmp/wt-sub-empty-remote" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-empty-remote"
 git -C "$super/mod" branch -D -q claim-branch-sub-empty-remote
+# git keeps a trailing newline in a selector, so `origin` followed by one names a different remote.
+git -C "$super/mod" config remote.pushDefault "origin"$'\n'
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-nl-pushdefault" "claim-branch-sub-nl-pushdefault" "session-sub-nl-pushdefault" 2>&1)" || rc=$?
+check "add refuses a remote.pushDefault that is origin followed by a newline" 1 "$rc" "$out" 'push remote:      origin\n'
+git -C "$super/mod" config --unset remote.pushDefault
+git -C "$super/mod" branch claim-branch-sub-nl-remote
+git -C "$super/mod" config branch.claim-branch-sub-nl-remote.remote "origin"$'\n'
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-nl-remote" "claim-branch-sub-nl-remote" "session-sub-nl-remote" 2>&1)" || rc=$?
+check "add refuses a branch whose remote is origin followed by a newline" 1 "$rc" "$out" 'push remote:      origin\n'
+[ ! -e "$tmp/wt-sub-nl-remote" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-nl-remote"
+git -C "$super/mod" branch -D -q claim-branch-sub-nl-remote
 
 # `submodule sync` writes a registered URL byte for byte, trailing newline included, so an origin
 # without it is not that URL; a URL carrying a newline cannot be verified either way.
@@ -842,6 +855,13 @@ git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
 rc=0
 out="$("$script" acquire "$tmp/wt-linked-ok" "session-linked-ok" 2>&1)" || rc=$?
 check "acquire renews a submodule worktree whose origin is registered" 0 "$rc" "$out" "renewed"
+# An include keyed to the worktree's branch must not also apply to the probe through the branch a new
+# repository starts on, or the redirect would look shared.
+printf '[core]\n\tsshCommand = ssh -o ProxyCommand=true\n' >"$tmp/onbranch-ssh.gitconfig"
+printf '[init]\n\tdefaultBranch = claim-branch-linked-ok\n[includeIf "onbranch:claim-branch-linked-ok"]\n\tpath = %s\n' "$tmp/onbranch-ssh.gitconfig" >"$tmp/global-probe-branch.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-probe-branch.gitconfig" "$script" acquire "$tmp/wt-linked-ok" "session-linked-ok" 2>&1)" || rc=$?
+check "acquire refuses a redirect keyed to the branch a new repository starts on" 1 "$rc" "$out" "redirected by:   core.sshCommand"
 
 # A submodule name may contain a space; the registration must still be found.
 git -C "$super" -c protocol.file.allow=always submodule add -q "$upstream_sub" "mod space"

@@ -1030,8 +1030,9 @@ origin_redirects() (
       return 0
     fi
   fi
-  # An empty template keeps a user's init template, and any config it carries, out of the probe.
-  if ! git init -q --template= "$probe" >/dev/null 2>&1; then
+  # An empty template keeps a user's init template, and any config it carries, out of the probe. A branch
+  # of its own keeps an include keyed to <repo>'s branch name from applying to the probe as well.
+  if ! git init -q --template= --initial-branch="worktree-claim-probe-${probe##*.}" "$probe" >/dev/null 2>&1; then
     rm -rf "$probe"
     probe=""
     echo "unverifiable"
@@ -1290,13 +1291,14 @@ refuse_foreign_submodule_origin_checked() {
   # A plain push goes to the branch's push remote, which only defaults to origin. "." names this
   # repository itself, so a push there never reaches origin either. A selector set to an empty value is
   # not an unset one: some git versions pick the empty remote and the push fails, so it is refused too.
+  # Selectors are read NUL-delimited: git keeps a trailing newline that command substitution would drop.
   head_branch="$(git -C "$repo_abs" symbolic-ref -q --short HEAD 2>/dev/null)" || head_branch=""
   selectors=()
   [ -z "$head_branch" ] || selectors+=("branch.$head_branch.pushRemote")
   selectors+=(remote.pushDefault)
   [ -z "$head_branch" ] || selectors+=("branch.$head_branch.remote")
   for selector in "${selectors[@]}"; do
-    push_remote="$(git -C "$repo_abs" config --get "$selector" 2>/dev/null)" || continue
+    IFS= read -r -d '' push_remote < <(git -C "$repo_abs" config -z --get "$selector" 2>/dev/null) || continue
     case "$push_remote" in
       origin) ;;
       '')
@@ -1304,7 +1306,7 @@ refuse_foreign_submodule_origin_checked() {
         foreign=1
         ;;
       *)
-        pushto="$(redact_url "$push_remote")"
+        pushto="$(redact_url "${push_remote//$'\n'/\\n}")"
         foreign=1
         ;;
     esac
