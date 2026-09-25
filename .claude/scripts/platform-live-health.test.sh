@@ -46,23 +46,35 @@ deployments() {
 oci_helmrepo='{"kind":"HelmRepository","metadata":{"namespace":"flux-system","name":"flux-operator"},"spec":{"type":"oci"}}'
 # The fixed clock every run uses: 2026-09-25T18:00:00Z.
 readonly now=1790359200
-# route <ns> <name> <generation> <observed|none|unobserved-parent> <last spec change>
-#       [<later metadata-only change>]
-# An HTTPRoute with its managed fields. Neither the status manager's entry nor a metadata-only
-# entry is a spec change, and both are newer than the spec change so that counting either
-# would visibly move the clock. `unobserved-parent` adds a second parent that never observed it.
+# route <ns> <name> <generation> <mode> <last spec change> [<later metadata-only change>]
+# An HTTPRoute with its managed fields and declared parents. Neither the status manager's entry
+# nor a metadata-only entry is a spec change, and both are newer than the spec change so that
+# counting either would visibly move the clock. <mode> is the generation the one declared parent
+# observed, or:
+#   none               no parent has a status entry
+#   unobserved-parent  a second declared parent's entry carries no observedGeneration
+#   missing-parent     a second declared parent has no status entry at all
+#   rejected           the parent observed the current generation and reports Accepted=False
 route() {
-  local parents='[]' seen="{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$3}"
+  local current="{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$3}"
+  local declared='[{"name":"platform","namespace":"kube-system"}]' parents='[]'
+  local platform="{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[$current]}"
   case "$4" in
     none) ;;
     unobserved-parent)
-      parents="[{\"parentRef\":{\"name\":\"platform\"},\"conditions\":[$seen]},{\"parentRef\":{\"name\":\"internal\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"Unknown\"}]}]" ;;
-    *) parents="[{\"parentRef\":{\"name\":\"platform\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$4}]}]" ;;
+      declared='[{"name":"platform","namespace":"kube-system"},{"name":"internal","namespace":"kube-system"}]'
+      parents="[$platform,{\"parentRef\":{\"name\":\"internal\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"Unknown\"}]}]" ;;
+    missing-parent)
+      declared='[{"name":"platform","namespace":"kube-system"},{"name":"internal","namespace":"kube-system"}]'
+      parents="[$platform]" ;;
+    rejected)
+      parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"False\",\"reason\":\"NotAllowedByListeners\",\"observedGeneration\":$3},{\"type\":\"ResolvedRefs\",\"status\":\"True\",\"observedGeneration\":$3}]}]" ;;
+    *) parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$4}]}]" ;;
   esac
   local meta=''
   [ -z "${6:-}" ] || meta=",{\"manager\":\"kubectl-label\",\"operation\":\"Update\",\"time\":\"$6\",\"fieldsV1\":{\"f:metadata\":{\"f:labels\":{}}}}"
-  printf '{"kind":"HTTPRoute","metadata":{"namespace":"%s","name":"%s","generation":%s,"creationTimestamp":"2026-06-01T00:00:00Z","managedFields":[{"manager":"kustomize-controller","operation":"Apply","time":"%s","fieldsV1":{"f:metadata":{"f:labels":{}},"f:spec":{"f:rules":{}}}},{"manager":"cilium-operator-generic","operation":"Update","subresource":"status","time":"2026-09-25T17:59:59Z","fieldsV1":{"f:status":{}}}%s]},"status":{"parents":%s}}' \
-    "$1" "$2" "$3" "$5" "$meta" "$parents"
+  printf '{"kind":"HTTPRoute","metadata":{"namespace":"%s","name":"%s","generation":%s,"creationTimestamp":"2026-06-01T00:00:00Z","managedFields":[{"manager":"kustomize-controller","operation":"Apply","time":"%s","fieldsV1":{"f:metadata":{"f:labels":{}},"f:spec":{"f:rules":{}}}},{"manager":"cilium-operator-generic","operation":"Update","subresource":"status","time":"2026-09-25T17:59:59Z","fieldsV1":{"f:status":{}}}%s]},"spec":{"parentRefs":%s},"status":{"parents":%s}}' \
+    "$1" "$2" "$3" "$5" "$meta" "$declared" "$parents"
 }
 
 scenario() { # <name> — fresh fixture dir populated with a healthy baseline
@@ -224,6 +236,19 @@ scenario gateway-unobserved-parent
 list "$(route observability coroot 6 unobserved-parent 2026-09-25T17:12:00Z)" >"$FAKE/httproutes.json"
 run
 expect "an unobserved parent is not applying" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=none"
+
+# A declared parent whose controller stopped may write no status entry at all; scanning only the
+# entries that exist would read the route as current.
+scenario gateway-missing-parent
+list "$(route observability coroot 6 missing-parent 2026-09-25T17:12:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a declared parent with no status entry" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=none"
+
+# A current status that rejects the route is live breakage, not lag: the gateway will not serve it.
+scenario gateway-rejected
+list "$(route observability coroot 6 rejected 2026-09-25T17:59:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a route the gateway rejected" 1 "FAILING HTTPRoute observability/coroot reason=route-rejected conditions=Accepted/NotAllowedByListeners"
 
 scenario gateway-never-applied
 list "$(route tenant web 1 none 2026-09-25T17:00:00Z)" >"$FAKE/httproutes.json"

@@ -191,21 +191,50 @@ now="${PLATFORM_HEALTH_NOW:-$(date -u +%s)}"
 case "$now" in
   '' | *[!0-9]*) usage_die "PLATFORM_HEALTH_NOW must be a Unix timestamp, got '$now'" ;;
 esac
+# Per route: every DECLARED parent (spec.parentRefs) must have a status entry whose conditions all
+# observed the current generation — a parent whose controller stopped may add no entry at all, so
+# scanning only the entries that exist would read as current. Once current, an Accepted=False or
+# ResolvedRefs=False on a parent is a route the gateway rejected: live breakage, not lag.
+#
+# ⚠️ The grace clock is the newest spec-owning managed-field time. The API records one time per
+# field manager, so a metadata-only apply by the manager that also owns the spec moves it too. That
+# can only postpone a FAILING by one grace period per such apply, and a frozen gateway lags every
+# route it is sent, so concealing it would need that edit on every lagging route every ten minutes.
+# shellcheck disable=SC2016  # the $-names below are jq variables
+route_rows='
+  .metadata.namespace as $ns
+  | .metadata.generation as $gen
+  | "HTTPRoute \($ns)/\(.metadata.name)" as $id
+  | [ .spec.parentRefs[]?
+      | {name, namespace: (.namespace // $ns), sectionName: (.sectionName // null)} ] as $declared
+  | [ .status.parents[]?
+      | { ref: { name: .parentRef.name, namespace: (.parentRef.namespace // $ns),
+                 sectionName: (.parentRef.sectionName // null) },
+          seen: ([.conditions[]?.observedGeneration] | min),
+          rejected: [ .conditions[]?
+                      | select((.type == "Accepted" or .type == "ResolvedRefs") and .status == "False")
+                      | "\(.type)/\(.reason // "none")" ] } ] as $status
+  | ( if ($declared | length) > 0
+      then [ $declared[] as $d | ([ $status[] | select(.ref == $d) | .seen ] | max) ]
+      else [ $status[].seen ] end
+      | min ) as $seen
+  | ([ .metadata.managedFields[]?
+       | select((.subresource // "") != "status" and ((.fieldsV1 // {}) | has("f:spec")))
+       | .time ]
+     + [ .metadata.creationTimestamp ] | map(select(. != null)) | max) as $changed
+  | ([ $status[] | select(.seen != null and .seen >= $gen) | .rejected[] ] | unique) as $rejections
+  | if ($seen != null and $seen >= $gen) then
+      if ($rejections | length) > 0
+      then "FAILING \($id) reason=route-rejected conditions=\($rejections | join(","))"
+      else empty end
+    elif (__NOW__ - ($changed | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) > __GRACE__ then
+      "FAILING \($id) reason=gateway-not-applying generation=\($gen) applied=\($seen // "none")"
+    else "PROGRESSING \($id)" end
+'
+route_rows="${route_rows//__NOW__/$now}"
+route_rows="${route_rows//__GRACE__/$ROUTE_GRACE_SECONDS}"
 if read_json httproutes httproutes.gateway.networking.k8s.io -A --show-managed-fields; then
-  # shellcheck disable=SC2016  # $gen, $seen and $changed are jq variables
-  extract httproutes "
-    .metadata.generation as \$gen
-    | ([.status.parents[]?.conditions[]?.observedGeneration] | min) as \$seen
-    | ([.metadata.managedFields[]?
-        | select((.subresource // \"\") != \"status\" and ((.fieldsV1 // {}) | has(\"f:spec\")))
-        | .time]
-       + [.metadata.creationTimestamp] | map(select(. != null)) | max) as \$changed
-    | \"HTTPRoute \(.metadata.namespace)/\(.metadata.name)\" as \$id
-    | if (\$seen != null and \$seen >= \$gen) then empty
-      elif ($now - (\$changed | sub(\"\\\\.[0-9]+Z$\"; \"Z\") | fromdateiso8601)) > $ROUTE_GRACE_SECONDS then
-        \"FAILING \(\$id) reason=gateway-not-applying generation=\(\$gen) applied=\(\$seen // \"none\")\"
-      else \"PROGRESSING \(\$id)\" end
-  "
+  extract httproutes "$route_rows"
 fi
 
 cat "$tmp/rows"
