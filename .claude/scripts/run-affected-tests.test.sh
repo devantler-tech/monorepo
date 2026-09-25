@@ -70,13 +70,14 @@ jobs:
   ungated:
     runs-on: ubuntu-latest
     steps:
-      - run: bash scripts/never.test.sh
+      - run: bash scripts/always.test.sh
 EOF
 printf 'exit 0\n' > scripts/alpha.test.sh
 printf 'echo beta-broke-here; exit 3\n' > scripts/beta.test.sh
 printf 'sleep 30\n' > docs/scripts/gamma.test.sh
-printf 'exit 0\n' > scripts/never.test.sh
+printf 'exit 0\n' > scripts/always.test.sh
 : > other/readme.txt
+sed '/^  ungated:/,$d' .github/workflows/ci.yaml > .github/workflows/gated-only.yaml
 git add -A && git commit -q -m base
 
 run() { "${runner}" --root "${repo}" --base main "$@"; }
@@ -85,18 +86,19 @@ run() { "${runner}" --root "${repo}" --base main "$@"; }
 git switch -q -c work
 : > other/notes.txt
 out="$(run --list)"; rc=$?
-if [ "${rc}" -eq 0 ] && ! printf '%s\n' "${out}" | grep -q '\.test\.sh'; then
-  ok "an unrelated change selects nothing"
+if [ "${rc}" -eq 0 ] && [ "$(printf '%s\n' "${out}" | grep '\.test\.sh')" = "scripts/always.test.sh" ]; then
+  ok "an unrelated change selects only the job CI runs on every change"
 else bad "an unrelated change selected: ${out} (rc=${rc})"; fi
-out="$(run)"; rc=$?
+out="$(run --ci-file .github/workflows/gated-only.yaml)"; rc=$?
 if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'no affected test scripts'; then
   ok "an empty selection exits 0 and says so"
 else bad "empty selection: ${out} (rc=${rc})"; fi
 
 printf 'x\n' >> scripts/alpha.test.sh
 out="$(run --list)"
-if [ "$(printf '%s\n' "${out}" | grep '\.test\.sh')" = "scripts/alpha.test.sh" ]; then
-  ok "a change to alpha selects only alpha"
+if [ "$(printf '%s\n' "${out}" | grep '\.test\.sh')" = "scripts/alpha.test.sh
+scripts/always.test.sh" ]; then
+  ok "a change to alpha selects alpha and the always-run job only"
 else bad "alpha selection: ${out}"; fi
 git checkout -q -- scripts/alpha.test.sh
 
@@ -115,9 +117,9 @@ else bad "working-directory resolution: ${out}"; fi
 rm -f docs/page.md
 
 out="$(run --list --all)"
-if printf '%s\n' "${out}" | grep -q never.test.sh; then
-  bad "--all selected a script no gated job runs"
-else ok "--all selects only scripts that gated jobs run"; fi
+if [ "$(printf '%s\n' "${out}" | grep -c '\.test\.sh')" -eq 4 ]; then
+  ok "--all selects every script a CI job runs"
+else bad "--all selection: ${out}"; fi
 
 # --- execution -----------------------------------------------------------------------------
 printf 'x\n' >> scripts/beta.test.sh

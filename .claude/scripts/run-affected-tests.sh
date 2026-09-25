@@ -15,7 +15,8 @@
 #   1. Changed files = everything that differs from the merge base with --base (default
 #      origin/main), committed or not, plus untracked files.
 #   2. A filter is hit when any changed file matches any of its globs.
-#   3. A job is selected when its `if:` names a hit filter as needs.changes.outputs.<name>.
+#   3. A job is selected when its `if:` names a hit filter as needs.changes.outputs.<name>,
+#      or names no filter at all — CI runs such a job on every change.
 #   4. Its scripts are every `*.test.sh` named in its steps' `run:` text, resolved against
 #      the step's (or job's) working-directory.
 #   Other parts of a job's `if:` (event checks) are ignored, so the local selection can be
@@ -127,9 +128,10 @@ hits_json="$(printf '%s' "${hit_filters}" | jq -R -s 'split("\n") | map(select(l
 selected="$(jq -r --argjson hits "${hits_json}" '
   to_entries[]
   | .value as $job
-  | select(($job["if"] // "") | type == "string")
-  | select([(($job["if"] // "") | scan("needs\\.changes\\.outputs\\.([A-Za-z0-9_-]+)") | .[0])]
-           | any(. as $f | $hits | index($f)))
+  | (($job["if"] // "") | tostring) as $cond
+  | [$cond | scan("needs\\.changes\\.outputs\\.([A-Za-z0-9_-]+)") | .[0]] as $gates
+  # A job with no filter gate runs on every change in CI, so it is always selected.
+  | select(($gates | length) == 0 or ($gates | any(. as $f | $hits | index($f))))
   | ($job.defaults.run["working-directory"] // ".") as $jobwd
   | $job.steps[]?
   | (.["working-directory"] // $jobwd) as $wd
