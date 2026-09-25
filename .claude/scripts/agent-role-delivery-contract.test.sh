@@ -1292,4 +1292,50 @@ assert_prose "the ask must be the last thing in that paragraph, followed by a bl
 refute_prose "works from **unattended runs too**, via each agent's Slack tooling" \
   "Issue-driven still claims Slack works unattended without the destination and caveats"
 
+# The plugin's maintainer-PR driving fact (agent-plugins#201) is read from the Trust gate
+# section and defaults to hands-off when that section does not declare it. This deployment
+# hands the engineer every PR, the maintainer's interactive ones included, so a missing
+# declaration would silently stop it driving those. Pin the line INSIDE the section: the same
+# words anywhere else in the file are not where the plugin looks.
+trust_gate_flat="$(
+  awk '/^### Trust gate/ { inside = 1; print; next } inside && /^### / { exit } inside' "${constitution}" |
+    tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${trust_gate_flat}" ] ||
+  fail "could not locate the '### Trust gate' section, so the maintainer-PR driving declaration cannot be checked"
+# The section is ~1000 words; running to end-of-file (the next heading renamed) measures tens of
+# thousands and would let a declaration elsewhere in the file pass as if it were in the section.
+trust_gate_words="$(printf '%s' "${trust_gate_flat}" | wc -w | tr -d ' ')"
+[ "${trust_gate_words}" -lt 4000 ] ||
+  fail "Trust gate section extracted as ${trust_gate_words} words — its end anchor (the next '### ' heading) is missing, so the declaration check is no longer scoped to the section"
+case "${trust_gate_flat}" in
+  *'**Maintainer-PR driving: `attribution-only`.**'*) ;;
+  *) fail "Trust gate does not declare 'Maintainer-PR driving: \`attribution-only\`' — the plugin would default to hands-off and stop driving the maintainer's interactive PRs this contract hands the engineer" ;;
+esac
+# The declaration is only as strong as the prose around it: wording that still calls the
+# interactive-PR rule a hands-off rule tells the same reader the opposite.
+refute_prose "interactive-PR HANDS-OFF rule" \
+  "Issue-driven still calls the interactive-PR rule a hands-off rule, contradicting 'Maintainer-PR driving: attribution-only'"
+refute_prose "the maintainer's interactive ones (HANDS-OFF)" \
+  "Untrusted input still labels the interactive-PR distinction hands-off, contradicting 'Maintainer-PR driving: attribution-only'"
+# The surveyor runs the ownership classifier and reads its documented verdicts, so a helper that
+# still calls `interactive` hands-off, or says its verdict decides whether a PR may be acted on,
+# tells the same reader the opposite through a surface the prose checks above never read.
+for ownership_doc in \
+  "${repo_root}/.claude/scripts/pr-ownership-disclosure.sh" \
+  "${repo_root}/.claude/scripts/pr-ownership-disclosure-go/main.go"; do
+  [ -r "${ownership_doc}" ] ||
+    fail "cannot read ${ownership_doc}, so its verdict wording cannot be checked against 'Maintainer-PR driving: attribution-only'"
+  ownership_doc_flat="$(flatten "${ownership_doc}")"
+  ownership_doc_name="${ownership_doc#"${repo_root}/"}"
+  case "${ownership_doc_flat}" in
+    *[Hh][Aa][Nn][Dd][Ss]-[Oo][Ff][Ff]* | *"may be acted on"*)
+      fail "${ownership_doc_name} still describes the interactive verdict as hands-off, contradicting 'Maintainer-PR driving: attribution-only'" ;;
+  esac
+  case "${ownership_doc_flat}" in
+    *'`attribution-only`'*) ;;
+    *) fail "${ownership_doc_name} no longer says the deployment's maintainer-PR driving is \`attribution-only\`, so nothing in it tells a reader an interactive PR is still driven" ;;
+  esac
+done
+
 echo "agent-role delivery contract: all assertions passed"
