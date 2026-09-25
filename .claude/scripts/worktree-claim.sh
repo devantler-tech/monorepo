@@ -96,17 +96,24 @@ write_marker() {
   mv -f "$tmp" "$marker"
 }
 
-# `add` names the worktree it just created here until that worktree passes its own origin check, so any
-# exit in between (the check refusing it, an error, a signal) takes back what `add` created. The branch
+# `add` arms these before it creates the worktree, and keeps them until that worktree passes its own
+# origin check, so any exit in between (the check refusing it, an error, a signal) takes back what `add`
+# created. Only a creation recorded in the note counts: the note is written under the branch-operation
+# lock right after the worktree exists, so a path something else created is never removed. The branch
 # is removed only when `add` created it, and only while it still points where `add` left it.
 PENDING_REPO=""
 PENDING_WT=""
 PENDING_BRANCH=""
-PENDING_OID=""
+PENDING_NOTE=""
 discard_pending_worktree() {
-  [ -n "$PENDING_WT" ] || return 0
-  local repo="$PENDING_REPO" wt="$PENDING_WT" branch="$PENDING_BRANCH" oid="$PENDING_OID"
-  PENDING_WT=""
+  [ -n "$PENDING_NOTE" ] || return 0
+  local repo="$PENDING_REPO" wt="$PENDING_WT" branch="$PENDING_BRANCH" note="$PENDING_NOTE" created="" oid=""
+  PENDING_NOTE=""
+  if [ -r "$note" ]; then
+    { IFS= read -r created || true; IFS= read -r oid || true; } <"$note"
+  fi
+  rm -f "$note"
+  [ "$created" = "created" ] || return 0
   if branch_op_lock_run "$repo" --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" -- \
     remove_new_worktree "$repo" "$wt" "$branch" "$oid"; then
     echo "worktree-claim: removed the unclaimed new worktree $wt${oid:+ and its new branch $branch}" >&2
@@ -371,13 +378,13 @@ warn_if_local_branch_is_behind() {
 # the new branch's object id to <note>. It runs under the branch-operation lock, so no cooperating branch
 # operation can create the branch between the check and the add.
 add_worktree_noting_new_branch() {
-  local repo="$1" wt="$2" branch="$3" note="$4"
+  local repo="$1" wt="$2" branch="$3" note="$4" existed=0 oid=""
   if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
-    add_worktree_on "$repo" "$wt" "$branch"
-    return
+    existed=1
   fi
   add_worktree_on "$repo" "$wt" "$branch" || return
-  git -C "$repo" rev-parse --verify --quiet "refs/heads/$branch" >"$note" || true
+  [ "$existed" -eq 1 ] || oid="$(git -C "$repo" rev-parse --verify --quiet "refs/heads/$branch" || true)"
+  printf 'created\n%s\n' "$oid" >"$note"
 }
 
 add_worktree_on() {
@@ -609,11 +616,12 @@ redact_url() {
 
 # resolve_submodule_url prints the origin URL `git submodule sync` writes for the submodule at <path>
 # whose .gitmodules URL is <url>. A relative URL (`./x`, `../x`) resolves against the superproject's
-# remote: the remote of the current branch, else origin, else the superproject's own path. Any other
-# URL is printed unchanged. It prints nothing when git itself cannot resolve the URL, because more
-# `..` components remain than it can drop.
+# remote: the remote the current branch names (an explicitly empty name names none), else origin; a
+# remote with no URL falls back to the superproject's own path. Any other URL is printed unchanged.
+# It prints nothing when git itself cannot resolve the URL, because more `..` components remain than it
+# can drop, and returns 3 when the remote's URL contains a newline, which git can carry into the result.
 resolve_submodule_url() {
-  local super="$1" url="$2" path="$3" branch remote base sep="/" relative=0 before result up rest
+  local super="$1" url="$2" path="$3" branch remote configured base sep="/" relative=0 before result up rest
   case "$url" in
     ./* | ../*) ;;
     *)
@@ -622,9 +630,16 @@ resolve_submodule_url() {
       ;;
   esac
   branch="$(git -C "$super" symbolic-ref --short -q HEAD 2>/dev/null)" || branch=""
-  remote=""
-  [ -z "$branch" ] || remote="$(git -C "$super" config --get "branch.$branch.remote" 2>/dev/null)" || remote=""
-  base="$(git -C "$super" config --get "remote.${remote:-origin}.url" 2>/dev/null)" || base=""
+  remote="origin"
+  if [ -n "$branch" ] && configured="$(git -C "$super" config --get "branch.$branch.remote" 2>/dev/null)"; then
+    remote="$configured"
+  fi
+  # Read NUL-delimited: command substitution would drop a trailing newline that git keeps.
+  base=""
+  IFS= read -r -d '' base < <(git -C "$super" config -z --get "remote.$remote.url" 2>/dev/null) || base=""
+  case "$base" in
+    *$'\n'*) return 3 ;;
+  esac
   [ -n "$base" ] || base="$super"
   base="${base%/}"
   # git reads a remote as a relative local path when it has no ':' before its first '/', and is
@@ -734,10 +749,10 @@ submodule_name_at() {
 
 # origin_redirects prints, one per line, what sends <repo>'s origin somewhere other than where <url>
 # goes from a neutral repository: `URL rewrite` when the effective fetch or push URLs differ, and
-# `core.sshCommand` or `core.gitProxy` when the command git runs to connect differs. The neutral
-# repository is a throwaway one whose remote has origin's shape, so settings every repository shares
-# give both the same answer, while one that applies only to <repo> (its own config, or a global file
-# included only for it) shows up.
+# the name of any connection setting that differs: `core.sshCommand` or `core.gitProxy` (the command git
+# runs to connect), or a curl proxy or pinned address. The neutral repository is a throwaway one whose
+# remote has origin's shape, so settings every repository shares give both the same answer, while one
+# that applies only to <repo> (its own config, or a global file included only for it) shows up.
 # A rewrite keyed to the registered URL itself (a global insteadOf, or an include conditioned on
 # hasconfig:remote.*.url) applies to every clone of that repository, like a mirror, so it is shared too.
 # It prints `unverifiable` when the comparison cannot be made, and `checked` last once it has finished,
@@ -789,6 +804,17 @@ origin_redirects() (
   if [ "$(git -C "$repo" config --get-all core.gitProxy 2>/dev/null || true)" != "$(git -C "$probe" config --get-all core.gitProxy 2>/dev/null || true)" ]; then
     echo "core.gitProxy"
   fi
+  # For a curl remote, a proxy or a pinned address for its host decides which server answers. Every
+  # http.*proxy entry is compared, not only the one matching origin, so the URL stays off command lines.
+  if [ "$(git -C "$repo" config --get-all remote.origin.proxy 2>/dev/null || true)" != "$(git -C "$probe" config --get-all remote.origin.proxy 2>/dev/null || true)" ]; then
+    echo "remote.origin.proxy"
+  fi
+  if [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?proxy$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?proxy$' 2>/dev/null || true)" ]; then
+    echo "http.proxy"
+  fi
+  if [ "$(git -C "$repo" config --get-all http.curloptResolve 2>/dev/null || true)" != "$(git -C "$probe" config --get-all http.curloptResolve 2>/dev/null || true)" ]; then
+    echo "http.curloptResolve"
+  fi
   rm -rf "$probe"
   probe=""
   echo "checked"
@@ -803,12 +829,12 @@ origin_redirects() (
 # resolves a relative one, byte for byte. Two spellings git might treat as one repository are not
 # accepted as equal, because whether they are depends on the server; `submodule sync` restores the
 # exact URL. Nothing that applies only to this repository may send origin elsewhere either: a
-# pushurl, a URL rewrite, core.sshCommand or core.gitProxy in its own config or in a global file
-# included only for it, or a custom receive-pack, upload-pack or remote helper. Settings that apply to
-# every repository, the superproject included, are not this check's concern. A repository that is not
-# a submodule is not checked: nothing names what it should be.
+# pushurl, a URL rewrite, core.sshCommand, core.gitProxy, a curl proxy or http.curloptResolve in its own
+# config or in a global file included only for it, or a custom receive-pack, upload-pack or remote helper.
+# Settings that apply to every repository, the superproject included, are not this check's concern. A
+# repository that is not a submodule is not checked: nothing names what it should be.
 refuse_foreign_submodule_origin_checked() {
-  local repo_abs="$1" super rel name="" common="" worktree="" main="" found admin raw="" expected="" shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
+  local repo_abs="$1" super rel name="" common="" worktree="" main="" found admin raw="" expected="" resolved=0 shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
     super="$(cd "$super" && pwd -P)"
@@ -896,7 +922,7 @@ refuse_foreign_submodule_origin_checked() {
   fi
   case "$raw" in
     '' | *$'\n'*) ;;
-    *) expected="$(resolve_submodule_url "$super" "$raw" "$rel")" ;;
+    *) expected="$(resolve_submodule_url "$super" "$raw" "$rel")" || resolved=$? ;;
   esac
   # Every configured url and pushurl of origin must be the registered URL itself. Values are read
   # NUL-delimited, because a value can contain a newline.
@@ -942,6 +968,8 @@ refuse_foreign_submodule_origin_checked() {
       shown_expected="$(redact_url "$expected")"
     elif [[ $raw == *$'\n'* ]]; then
       shown_expected="<$(redact_url "${raw//$'\n'/\\n}") contains a newline, so origin cannot be verified against it>"
+    elif [ "$resolved" -eq 3 ]; then
+      shown_expected="<$(redact_url "$raw") is relative to a superproject remote URL that contains a newline, so origin cannot be verified against it>"
     elif [ -n "$raw" ]; then
       shown_expected="<$(redact_url "$raw") climbs past the root of the superproject's remote, so git cannot resolve it>"
     fi
@@ -954,8 +982,9 @@ refuse_foreign_submodule_origin_checked() {
     echo "  Work committed here would land in the wrong repository. Point origin at the registered URL:" >&2
     echo "    git -C $(shquote "$super") submodule sync -- $(shquote "$rel")" >&2
     echo "  and remove any remote.origin.pushurl, receivepack, uploadpack or vcs, and any url.<base>.insteadOf," >&2
-    echo "  url.<base>.pushInsteadOf, core.sshCommand or core.gitProxy that applies only to this repository," >&2
-    echo "  including through an includeIf in a global config." >&2
+    echo "  url.<base>.pushInsteadOf, core.sshCommand, core.gitProxy, remote.origin.proxy, http.proxy or" >&2
+    echo "  http.curloptResolve that applies only to this repository, including through an includeIf in a" >&2
+    echo "  global config." >&2
     exit 1
   fi
 }
@@ -1030,23 +1059,22 @@ cmd_add() {
   # whole function means every internal add inherits the one lock.
   local note
   note="$(mktemp "${TMPDIR:-/tmp}/worktree-claim-branch.XXXXXX")" || fail "cannot create a temporary file"
-  if ! branch_op_lock_run "$repo" \
-    --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" \
-    -- add_worktree_noting_new_branch "$repo" "$wt" "$branch" "$note"; then
-    rm -f "$note"
-    fail "git worktree add failed for $wt (branch $branch)"
-  fi
   PENDING_REPO="$repo"
   PENDING_BRANCH="$branch"
   PENDING_WT="$wt"
-  PENDING_OID="$(cat "$note")"
-  rm -f "$note"
+  PENDING_NOTE="$note"
+  if ! branch_op_lock_run "$repo" \
+    --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" \
+    -- add_worktree_noting_new_branch "$repo" "$wt" "$branch" "$note"; then
+    fail "git worktree add failed for $wt (branch $branch)"
+  fi
   # Config can apply to the new worktree alone, through an includeIf onbranch: for its branch or a
   # gitdir: pattern that matches its own git directory, so the check on <repo> above could not see it.
   local wt_phys
   wt_phys="$(cd "$wt" && pwd -P)" || fail "cannot resolve the new worktree path: $wt"
   refuse_foreign_submodule_origin "$wt_phys"
-  PENDING_WT=""
+  rm -f "$note"
+  PENDING_NOTE=""
   # Claim BEFORE the advisory freshness check, not after. That check makes up to two bounded remote
   # calls, so it can hold the newly-created tree unclaimed for the length of both timeouts — a window
   # in which a concurrent run can take the marker, leaving this invocation to create the worktree and

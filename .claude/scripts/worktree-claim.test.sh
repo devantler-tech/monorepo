@@ -271,6 +271,33 @@ check "a refused worktree keeps a branch that existed before add" 0 "$(git -C "$
 [ ! -e "$tmp/wt-sub-onbranch-kept" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-onbranch-kept"
 git -C "$super/mod" branch -D -q claim-branch-sub-onbranch-kept
 
+# A signal that lands once the worktree exists, but before `add` has checked and claimed it, still takes
+# back what `add` created. The shim holds the creation step open after the real `git worktree add`, and
+# only the main process is signalled, so its handler runs as soon as that step returns.
+mkdir -p "$tmp/git-slow-add"
+cat >"$tmp/git-slow-add/git" <<SHIM
+#!/usr/bin/env bash
+rc=0
+"$(command -v git)" "\$@" || rc=\$?
+case " \$* " in
+  *" worktree add "*"claim-branch-sig-window"*) : >"$tmp/sig-window-created"; sleep 3 ;;
+esac
+exit \$rc
+SHIM
+chmod +x "$tmp/git-slow-add/git"
+PATH="$tmp/git-slow-add:$PATH" "$script" add "$repo" "$tmp/wt-sig-window" "claim-branch-sig-window" "session-sig-window" >/dev/null 2>&1 &
+sig_window=$!
+waited=0
+until [ -e "$tmp/sig-window-created" ] || [ "$waited" -ge 100 ]; do
+  sleep 0.1
+  waited=$((waited + 1))
+done
+kill -TERM "$sig_window" 2>/dev/null || true
+wait "$sig_window" 2>/dev/null || true
+check "a signal during creation arrived after the worktree existed" 0 "$([ -e "$tmp/sig-window-created" ] && echo 0 || echo 1)"
+check "a signal after creation still removes the unclaimed worktree" 1 "$([ -e "$tmp/wt-sig-window" ] && echo 0 || echo 1)"
+check "a signal after creation still removes the branch add created" 1 "$(git -C "$repo" show-ref --verify --quiet refs/heads/claim-branch-sig-window && echo 0 || echo 1)"
+
 # git runs core.gitProxy for git:// connections, so a repository-local one decides what they reach.
 git -C "$super/mod" config core.gitProxy "proxy-cmd for example.invalid"
 rc=0
@@ -281,6 +308,20 @@ printf '[core]\n\tgitProxy = proxy-cmd\n' >"$tmp/global-gitproxy.gitconfig"
 rc=0
 out="$(GIT_CONFIG_GLOBAL="$tmp/global-gitproxy.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-gitproxy-global" "claim-branch-sub-gitproxy-global" "session-sub-gitproxy-global" 2>&1)" || rc=$?
 check "add admits a submodule when only global config sets core.gitProxy" 0 "$rc" "$out" "owner=session-sub-gitproxy-global"
+
+# A curl remote's proxy, or a pinned address for its host, decides which server answers.
+for setting in "remote.origin.proxy=http://proxy.example.invalid:3128" "http.proxy=http://proxy.example.invalid:3128" "http.curloptResolve=github.com:443:192.0.2.1"; do
+  key="${setting%%=*}"
+  git -C "$super/mod" config "$key" "${setting#*=}"
+  rc=0
+  out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-$key" "claim-branch-sub-$key" "session-sub-$key" 2>&1)" || rc=$?
+  check "add refuses a submodule whose own config sets $key" 1 "$rc" "$out" "redirected by:   $key"
+  git -C "$super/mod" config --unset "$key"
+done
+printf '[http]\n\tproxy = http://proxy.example.invalid:3128\n' >"$tmp/global-proxy.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-proxy.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-proxy-global" "claim-branch-sub-proxy-global" "session-sub-proxy-global" 2>&1)" || rc=$?
+check "add admits a submodule when only global config sets http.proxy" 0 "$rc" "$out" "owner=session-sub-proxy-global"
 
 # `submodule sync` writes a registered URL byte for byte, trailing newline included, so an origin
 # without it is not that URL; a URL carrying a newline cannot be verified either way.
@@ -405,6 +446,31 @@ git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
 rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-relative" "claim-branch-sub-relative" "session-sub-relative" 2>&1)" || rc=$?
 check "add resolves a relative .gitmodules URL before comparing" 0 "$rc" "$out" "owner=session-sub-relative"
+
+# git keeps a newline at the end of the superproject's remote URL inside the URL it resolves for `./x`,
+# so an origin written without it is not what `submodule sync` writes.
+git -C "$super" config remote.origin.url "$tmp/remote-root/super"$'\n'
+git -C "$super" config -f .gitmodules submodule.mod.url "./child"
+git -C "$super/mod" config remote.origin.url "$tmp/remote-root/super/child"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-basenewline" "claim-branch-sub-basenewline" "session-sub-basenewline" 2>&1)" || rc=$?
+check "add refuses a relative URL against a superproject remote that ends in a newline" 1 "$rc" "$out" "remote URL that contains a newline"
+git -C "$super" config remote.origin.url "$tmp/remote-root/super"
+git -C "$super" config -f .gitmodules submodule.mod.url "../upstream-sub"
+git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
+
+# An explicitly empty branch remote names no remote, so git resolves against the superproject's own
+# path, not origin.
+git -C "$super" config branch.main.remote ""
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-emptyremote" "claim-branch-sub-emptyremote" "session-sub-emptyremote" 2>&1)" || rc=$?
+check "add refuses an origin resolved against origin when the branch remote is empty" 1 "$rc" "$out" ".gitmodules url: ${super_phys%/*}/upstream-sub"
+git -C "$super/mod" config remote.origin.url "${super_phys%/*}/upstream-sub"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-emptyremote-ok" "claim-branch-sub-emptyremote-ok" "session-sub-emptyremote-ok" 2>&1)" || rc=$?
+check "add admits the origin sync writes when the branch remote is empty" 0 "$rc" "$out" "owner=session-sub-emptyremote-ok"
+git -C "$super" config --unset branch.main.remote
+git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
 
 # A ':' inside the superproject's path is data: git drops the last component at the last '/'.
 git -C "$super" config remote.origin.url "https://git.example.invalid/org/super:variant.git"
