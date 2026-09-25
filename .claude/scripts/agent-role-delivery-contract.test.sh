@@ -1312,5 +1312,11 @@ case "${trust_gate_flat}" in
   *'**Maintainer-PR driving: `attribution-only`.**'*) ;;
   *) fail "Trust gate does not declare 'Maintainer-PR driving: \`attribution-only\`' — the plugin would default to hands-off and stop driving the maintainer's interactive PRs this contract hands the engineer" ;;
 esac
+# The declaration is only as strong as the prose around it: wording that still calls the
+# interactive-PR rule a hands-off rule tells the same reader the opposite.
+refute_prose "interactive-PR HANDS-OFF rule" \
+  "Issue-driven still calls the interactive-PR rule a hands-off rule, contradicting 'Maintainer-PR driving: attribution-only'"
+refute_prose "the maintainer's interactive ones (HANDS-OFF)" \
+  "Untrusted input still labels the interactive-PR distinction hands-off, contradicting 'Maintainer-PR driving: attribution-only'"
 
 echo "agent-role delivery contract: all assertions passed"
