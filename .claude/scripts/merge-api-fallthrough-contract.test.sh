@@ -20,7 +20,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${AGENTS_FILE:-${repo_root}/AGENTS.md}"
+constitution="${AGENTS_FILE:-${repo_root}/.claude/guides/merge-policy.md}"
 
 fail() {
   echo "merge-api fall-through contract: FAIL — $*" >&2
@@ -30,11 +30,11 @@ fail() {
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
 
 merge_policy="$(awk '
-  /^### Merge policy/ { inside = 1; print; next }
-  inside && /^### /   { exit }
+  /^## Merge policy/ { inside = 1; print; next }
+  inside && /^## /    { exit }
   inside              { print }
 ' "${constitution}")"
-[ -n "${merge_policy}" ] || fail "no '### Merge policy' section in ${constitution}"
+[ -n "${merge_policy}" ] || fail "no '## Merge policy' section in ${constitution}"
 
 has() { grep -Fq -- "$1" <<<"${merge_policy}"; }
 
@@ -58,8 +58,8 @@ has 'never on a merge-queue repository' ||
 # 5. Negative control across every definition surface: each prescribed PUT merge is pinned.
 # An unreadable root would make this sweep read clean over it, so each root must exist and yield
 # at least one file — an empty sweep is a claim about the enumeration, never a clean result.
-surfaces=("${constitution}")
-for root in "${repo_root}/.claude/agents" "${repo_root}/.claude/skills"; do
+surfaces=("${repo_root}/AGENTS.md")
+for root in "${repo_root}/.claude/guides" "${repo_root}/.claude/agents" "${repo_root}/.claude/skills"; do
   [ -d "${root}" ] ||
     fail "definition surface is missing, so the sweep below would read clean over it: ${root#"${repo_root}"/}"
   found=0

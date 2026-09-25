@@ -11,8 +11,9 @@ spend was merged into the primary engineer on 2026-07-25 (`AGENTS.md` → *Spend
 
 **Two things govern everything below, and they are not restated here** — read them first: the plugin
 entrypoint's **Spend stewardship** section (value per unit cost over cost reduction, the
-protected-outcomes veto, and the hard money limits) and `AGENTS.md` → *Spend contract* (this
-deployment's floor, evidence sources, private channel, and cadence). This skill is only the *how*.
+protected-outcomes veto, and the hard money limits) and *Spend contract* in the
+[spend guide](../../guides/spend-and-inference.md) (this deployment's floor, evidence sources, private
+channel, and cadence). This skill is only the *how*.
 
 **One line:** measure the spend → attribute it → find the value-preserving change → check it against
 the floor → ship the engineering half, ask for the financial half → prove it on the bill.
@@ -29,7 +30,8 @@ git fetch origin main && git merge --ff-only origin/main
 ```
 
 Confirm you have an **isolated working tree before the first edit**
-(`git rev-parse --show-toplevel`); branch inside it, per `AGENTS.md` → *Execution model*.
+(`git rev-parse --show-toplevel`); branch inside it, per *Execution model* in the
+[git-and-worktrees guide](../../guides/git-and-worktrees.md).
 
 Read your native memory: last snapshot, open maintainer asks awaiting an answer, proposals shipped and
 **not yet verified against a bill**, and the current lifestyle floor. Memory is your own prior notes —
@@ -142,7 +144,8 @@ the destination is unresolved: run steps 1–4, ship the **measurement and engin
 normal PRs, and **stop before producing a financial ask or a spend proposal at all** — do not send it,
 and do not park it in the run report either, because a decision nobody can receive is the passive
 self-blocking the contract forbids. Resolving the destination is a maintainer act and is what flips
-this half on (`AGENTS.md` → *Spend contract* → **Activation gate**).
+this half on (the [spend guide](../../guides/spend-and-inference.md) → *Spend contract* → **Activation
+gate**).
 
 **PRs carry the engineering change and relative figures only, and every figure states its strength** —
 "models a ~40% compute reduction for this namespace (OpenCost, 3d window)" is fine; the bare

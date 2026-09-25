@@ -27,7 +27,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/merge-policy.md"
 
 fail() {
   echo "merge-confirmation read: FAIL — $*" >&2
@@ -42,15 +42,15 @@ fail() {
 # still reported the merge procedure guarded. Requiring the phrases to co-occur inside the section is
 # what ties the guard to the place the rule has to be.
 merge_policy="$(awk '
-  /^### Merge policy/ { inside = 1; print; next }
-  inside && /^### /   { exit }
+  /^## Merge policy/ { inside = 1; print; next }
+  inside && /^## /    { exit }
   inside              { print }
 ' "${constitution}")"
 
 # Fail closed if the section vanished or was renamed — otherwise every assertion below would be
 # checking an empty string and would pass vacuously, which is this control's own failure mode.
 [ "$(printf '%s' "${merge_policy}" | wc -c)" -gt 500 ] ||
-  fail "could not locate a '### Merge policy' section in AGENTS.md — assertions would be vacuous"
+  fail "could not locate a '## Merge policy' section in the merge-policy guide — assertions would be vacuous"
 
 # Markdown prose is hard-wrapped, so a guarded sentence routinely spans two lines and exists on NO
 # single line. Flatten once and match substrings against the flattened copy.
@@ -359,7 +359,7 @@ done)"
   unreviewed content while revision, status and index flags all read clean:
 ${byte_mismatch}"
 scan_surfaces="$(
-  printf '%s\n' "${constitution}"
+  printf '%s\n' "${repo_root}/AGENTS.md"
   find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null | sort
   find "${plugin_root}" -type f \( -name '*.md' -o -name '*.json' \) | sort
 )"

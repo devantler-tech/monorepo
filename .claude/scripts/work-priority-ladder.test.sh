@@ -27,7 +27,11 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+# The contract is AGENTS.md plus every guide it indexes; these assertions span several guides.
+constitution="$(mktemp)"
+trap 'rm -f "${constitution}"' EXIT
+"${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
+  { echo "work-priority ladder: FAIL — cannot assemble the agent contract" >&2; exit 1; }
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 product_skill="${repo_root}/.claude/skills/product-engineering/SKILL.md"
 portable_loader="${repo_root}/.claude/loaders/portable-agentic-engineer.md"
@@ -152,6 +156,27 @@ for rung in \
   grep -Fq "${rung}" "${constitution}" ||
     fail "ladder is missing rung row ${rung}"
 done
+
+# The ladder exists twice by design: a short form in the always-on AGENTS.md and the full rung
+# definitions in the work-selection guide. Each must carry every rung on its own — a check over the
+# assembled contract would let one table satisfy the other while the second one regressed.
+for ladder_file in "${repo_root}/AGENTS.md" "${repo_root}/.claude/guides/work-selection.md"; do
+  for rung in '| **0** | **Live breakage** |' '| **1** | **Open PRs — INCLUDING your own drafts** |' \
+    '| **2** | **Security issues** |' '| **3** | **Bugs** |' '| **4** | **Oldest actionable issue** |'; do
+    grep -Fq "${rung}" "${ladder_file}" ||
+      fail "${ladder_file#"${repo_root}"/} is missing rung row ${rung}"
+  done
+  grep -Fq 'draft and non-draft alike' "${ladder_file}" ||
+    fail "${ladder_file#"${repo_root}"/} does not state that rung 1 covers drafts and non-drafts alike"
+done
+# The full definitions carry what the short form leaves out; pin those clauses in the guide itself.
+ladder_guide_flat="$(tr '\n' ' ' <"${repo_root}/.claude/guides/work-selection.md" | tr -s '[:space:]' ' ')"
+assert_prose 'GITHUB-MANAGED (NO-ACTION)' "${ladder_guide_flat}" \
+  "the full rung-0 definition no longer separates GitHub-managed runs from breakage"
+assert_prose 'become actionable here as soon as live evidence shows that automation cannot carry the current head to merge' \
+  "${ladder_guide_flat}" "the full rung-1 definition no longer brings stalled dependency-bot PRs into rung 1"
+assert_prose 'Everything else, oldest-first (see *Drain oldest-first*)' "${ladder_guide_flat}" \
+  "the full rung-4 definition no longer points at the oldest-first drain rule"
 
 # ── 2. rung 1 covers own drafts, and `non-draft` is scoped to the merge command ──
 assert_prose 'Rung 1 includes your own DRAFTS' \

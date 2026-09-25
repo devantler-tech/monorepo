@@ -6,7 +6,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 classifier="${repo_root}/.claude/scripts/programmed-bot-review-exemption.sh"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 surveyor_diff="${repo_root}/.claude/plugin-consumption/agentic-engineering-surveyor-diff.md"
-constitution="${repo_root}/AGENTS.md"
+# The contract is AGENTS.md plus every guide it indexes; these assertions span several guides.
+constitution="$(mktemp)"
+trap 'rm -f "${constitution}"' EXIT
+"${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
+  { echo "portfolio surveyor contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 monorepo_skill="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
 product_engineering_skill="${repo_root}/.claude/skills/product-engineering/SKILL.md"
@@ -3838,9 +3842,10 @@ for _stale in 'from the installed `agentic-engineering` plugin' \
 done
 
 # The contract sentence and the diff record must describe the same topology as the run loop.
-_contract_section="$(awk '/^### Agentic engineering plugin contract/{inb=1;print;next} inb && /^### /{exit} inb{print}' "${constitution}")"
+# The contract sentence lives in the definition guide's section of the same name.
+_contract_section="$(awk '/^## Agentic engineering plugin contract/{inb=1;print;next} inb && /^## /{exit} inb{print}' "${repo_root}/.claude/guides/definition-and-plugin.md")"
 [ -n "${_contract_section}" ] ||
-  fail "cannot extract AGENTS.md's '### Agentic engineering plugin contract' section (monorepo#3526)"
+  fail "cannot extract the definition guide's '## Agentic engineering plugin contract' section (monorepo#3526)"
 _contract_flat="$(tr '\n' ' ' <<<"${_contract_section}" | tr -s '[:space:]' ' ')"
 grep -Fq 'The run loop dispatches the local, unqualified `portfolio-surveyor` subagent' <<<"${_contract_flat}" ||
   fail "the plugin contract does not say the run loop dispatches the local surveyor (monorepo#3526)"

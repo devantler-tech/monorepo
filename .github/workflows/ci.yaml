@@ -86,6 +86,7 @@ jobs:
       surveyor-forge-vocabulary: ${{ steps.filter.outputs.surveyor-forge-vocabulary }}
       submodule-agents-drift: ${{ steps.filter.outputs.submodule-agents-drift }}
       portfolio-map-drift: ${{ steps.filter.outputs.portfolio-map-drift }}
+      agent-instructions-layout: ${{ steps.filter.outputs.agent-instructions-layout }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -160,6 +161,8 @@ jobs:
               - '.claude/scripts/worktree-cleanup.sh'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -204,12 +207,16 @@ jobs:
               - '.claude/scripts/submodule-init.test.sh'
             submodule-pin-currency:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/submodule-pin-currency.sh'
               - '.claude/scripts/submodule-pin-currency.test.sh'
               - '.github/workflows/ci.yaml'
             blocked-label-blocker-line:
               - '.claude/scripts/blocked-label-blocker-line-go/**'
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/blocked-label-blocker-line.sh'
               - '.claude/scripts/blocked-label-blocker-line.test.sh'
               - '.github/workflows/ci.yaml'
@@ -236,6 +243,8 @@ jobs:
               - '.github/workflows/ci.yaml'
             memory-hygiene:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-hygiene.test.sh'
               - '.claude/scripts/memory-hygiene-go/**'
@@ -268,6 +277,8 @@ jobs:
               - '.claude/scripts/agent-claim-sweep.test.sh'
               # The Claim protocol's assignee lease-clock read is executed by its own test.
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/claim-lease-timeline-contract.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
@@ -316,12 +327,26 @@ jobs:
               # The two lists being compared.
               - '.gitmodules'
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
+              - '.github/workflows/ci.yaml'
+            agent-instructions-layout:
+              # Every file whose size, index or links the layout contract checks, including every
+              # link target under .claude/ and docs/.
+              - 'AGENTS.md'
+              - 'CLAUDE.md'
+              - '**/AGENTS.md'
+              - '**/CLAUDE.md'
+              - '.claude/**'
+              - 'docs/**'
               - '.github/workflows/ci.yaml'
             comment-disclosure-drift:
               # AGENTS.md carries the disclosure contract this guard enforces, so a
               # PR that edits only those rules must still run the job — otherwise
               # the changed contract ships without its check ever executing.
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/comment-disclosure-drift.sh'
               - '.claude/scripts/comment-disclosure-drift.test.sh'
               - '.claude/scripts/comment-disclosure-drift-go/**'
@@ -347,6 +372,8 @@ jobs:
               # implements, so a PR editing only those rules must still run the
               # job — otherwise the changed contract ships unchecked.
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/scripts/pr-ownership-disclosure.sh'
               - '.claude/scripts/pr-ownership-disclosure.test.sh'
@@ -403,6 +430,8 @@ jobs:
               - '.claude/scripts/maintainer-preflight.test.sh'
             latency-discipline-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/latency-discipline-contract.test.sh'
               - '.github/workflows/ci.yaml'
               # The portable half of the rule is asserted in the pinned plugin, so a pin bump
@@ -410,34 +439,50 @@ jobs:
               - 'libraries/agent-plugins'
             control-character-command-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/control-character-command-contract.test.sh'
               - '.github/workflows/ci.yaml'
             dotfile-glob-fanout-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/dotfile-glob-fanout-contract.test.sh'
               - '.github/workflows/ci.yaml'
             one-verb-per-bash-call-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/one-verb-per-bash-call-contract.test.sh'
               - '.github/workflows/ci.yaml'
             retired-rule-survivors-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/retired-rule-survivors-contract.test.sh'
               - '.github/workflows/ci.yaml'
             bash-call-timeout-budget-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/bash-call-timeout-budget-contract.test.sh'
               - '.github/workflows/ci.yaml'
             codex-dispatch-supersession-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/codex-dispatch-supersession-contract.test.sh'
               - '.github/workflows/ci.yaml'
             lane-outage-disclosure-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/lane-outage-disclosure-contract.test.sh'
               - '.github/workflows/ci.yaml'
             improver-cross-read-liveness-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               # The PRODUCER of the 0/1/2 verdict contract this policy consumes. Without
               # it a change to the exit codes could land while this consumer-contract job
               # skipped, leaving the clause describing semantics that no longer exist.
@@ -447,14 +492,20 @@ jobs:
               - '.github/workflows/ci.yaml'
             git-safety-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/git-safety-contract.test.sh'
               - '.github/workflows/ci.yaml'
             rung-type-filter-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/rung-type-filter-contract.test.sh'
               - '.github/workflows/ci.yaml'
             definition-load-budget-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               # The overlay itself MUST be here: a pull request that grows it without
               # touching AGENTS.md is precisely the case this guard exists to catch, and
               # would otherwise skip the job entirely.
@@ -463,6 +514,8 @@ jobs:
               - '.github/workflows/ci.yaml'
             drifted-lane-escalation-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               # Both scripts are listed because assertion 5 checks the contract's PREMISE against
               # them: a pull request that gives the refresh path a --runtime selector, or removes it
               # from the currency check, must run this job and update the prose in the same change.
@@ -479,6 +532,8 @@ jobs:
               # AGENTS.md carries the provenance rule this helper answers, so a PR editing only
               # those rules must still run the job — otherwise the changed contract ships unchecked.
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/skill-owner.sh'
               - '.claude/scripts/skill-owner.test.sh'
               # The reviewed mapping is what --check-reviewed compares the bundle against, so a
@@ -494,11 +549,15 @@ jobs:
             plugin-definition-currency:
               - '.claude/loaders/portable-agentic-engineer.md'
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/plugin-definition-currency.sh'
               - '.claude/scripts/plugin-definition-currency.test.sh'
               - '.github/workflows/ci.yaml'
             plugin-definition-refresh:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/plugin-definition-refresh.sh'
               - '.claude/scripts/plugin-definition-refresh.test.sh'
               # The refresh script's DEFAULT post-apply verifier. Its exit codes are the verdict, so
@@ -507,11 +566,15 @@ jobs:
               - '.github/workflows/ci.yaml'
             codex-lane-liveness:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/codex-lane-liveness.sh'
               - '.claude/scripts/codex-lane-liveness.test.sh'
               - '.github/workflows/ci.yaml'
             claude-lane-liveness:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/claude-lane-liveness.sh'
               - '.claude/scripts/claude-lane-liveness.test.sh'
               - '.github/workflows/ci.yaml'
@@ -532,6 +595,8 @@ jobs:
               # AGENTS.md carries the cap the suite compares the script's default against, so a
               # threshold change must run this test.
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/lane-draft-count.sh'
               - '.claude/scripts/lane-draft-count.test.sh'
               # The run loop's fail-closed intake check is pinned by this suite.
@@ -539,6 +604,8 @@ jobs:
               - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.coderabbit.yaml'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
@@ -546,6 +613,8 @@ jobs:
               - '.github/workflows/ci.yaml'
             review-provider-loop-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/agents/daily-maintainer.md'
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md'
@@ -572,6 +641,8 @@ jobs:
             agent-role-delivery-contract:
               - '.claude/plugin-consumption/agent-instances.json'
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/agents/daily-maintainer.md'
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/loaders/portable-agentic-engineer.md'
@@ -610,6 +681,8 @@ jobs:
             work-priority-ladder:
               - '.claude/loaders/portable-agentic-engineer.md'
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/agents/portfolio-surveyor.md'
@@ -617,6 +690,8 @@ jobs:
               - '.github/workflows/ci.yaml'
             merge-confirmation-read:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               # every Markdown definition surface, matching the test's own discovery — an enumerated
               # subset would let a change to an unlisted surface skip the check that guards it
               - '.claude/**/*.md'
@@ -628,6 +703,8 @@ jobs:
             gh-json-read:
               # AGENTS.md must keep naming the helper, which the suite asserts.
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/gh-json-read.sh'
               - '.claude/scripts/gh-json-read.test.sh'
               - '.github/workflows/ci.yaml'
@@ -637,11 +714,15 @@ jobs:
               - '.github/workflows/ci.yaml'
             gh-json-vocabulary-contract:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/gh-json-vocabulary-contract.test.sh'
               - '.github/workflows/ci.yaml'
               - '.claude/agents/portfolio-surveyor.md'
             improver-role-disclosure:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/improver-role-disclosure-contract.test.sh'
               # the behavioural assertion runs the REAL guard, so a change to it can make
               # this test pass or fail without AGENTS.md moving at all
@@ -650,6 +731,8 @@ jobs:
               - '.github/workflows/ci.yaml'
             merge-preflight-thread-gate:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               # every Markdown/JSON definition surface, matching the test's own discovery — an
               # enumerated subset would let a change to an unlisted surface skip the negative control
               - '.claude/**/*.md'
@@ -665,6 +748,8 @@ jobs:
             portfolio-surveyor:
               - '.claude/plugin-consumption/agent-instances.json'
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '.claude/agents/daily-maintainer.md'
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/agents/platform-security-surveyor.md'
@@ -708,6 +793,8 @@ jobs:
               - '**'
             product-value:
               - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/contract-text.sh'
               - '**/[Aa][Dd][Rr]/**'
               - '**/[Aa][Dd][Rr][Ss]/**'
               - '.claude/agents/daily-maintainer.md'
@@ -2472,6 +2559,30 @@ jobs:
       - name: Self-test the drift check
         run: bash .claude/scripts/portfolio-map-drift.test.sh
 
+  test-agent-instructions-layout:
+    name: Test agent instructions layout contract
+    needs: changes
+    if: needs.changes.outputs.agent-instructions-layout == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # Agents run this on macOS, whose bash 3.2 and BSD userland differ from the Linux runners.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint the layout contract
+        if: matrix.os == 'ubuntu-latest'
+        run: shellcheck .claude/scripts/contract-text.sh .claude/scripts/agent-instructions-layout-contract.test.sh
+      - name: Verify the agent instructions layout
+        run: bash .claude/scripts/agent-instructions-layout-contract.test.sh
+
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
@@ -2551,10 +2662,11 @@ jobs:
       - test-ci-job-wiring
       - test-submodule-agents-drift
       - test-portfolio-map-drift
+      - test-agent-instructions-layout
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/actions/aggregate-job-checks@da153eb43b8333f13094abb151a48dc11e431988 # v13.7.4
+        uses: devantler-tech/actions/aggregate-job-checks@df7fd4f83edade31c121a9de563d9a7b9b1f900d # v13.10.3
         with:
           job-results: >-
             ${{ needs.changes.result }}
@@ -2631,3 +2743,4 @@ jobs:
             ${{ needs.test-ci-job-wiring.result }}
             ${{ needs.test-submodule-agents-drift.result }}
             ${{ needs.test-portfolio-map-drift.result }}
+            ${{ needs.test-agent-instructions-layout.result }}

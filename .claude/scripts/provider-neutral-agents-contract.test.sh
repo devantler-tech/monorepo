@@ -19,7 +19,7 @@ fail() { printf 'FAIL provider-neutral agents: %s\n' "$*" >&2; exit 1; }
 # not look" into "found nothing" is what made this vacuous.
 scan_status=0
 grep -nE 'Cursor (cloud|Automation)|cursor-daily|cursor-issue-board|cursor/\*|--runtime cursor|Antigravity' \
-  "$ROOT/AGENTS.md" "$ROOT/.claude/skills/portfolio-maintenance/SKILL.md" \
+  "$ROOT/AGENTS.md" "$ROOT"/.claude/guides/*.md "$ROOT/.claude/skills/portfolio-maintenance/SKILL.md" \
   "$ROOT/.claude/agents/portfolio-surveyor.md" "$ROOT/.claude/plugin-consumption/inference-routing-runtime.md" \
   >/dev/null || scan_status=$?
 case "$scan_status" in

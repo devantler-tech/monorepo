@@ -25,7 +25,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/tool-call-discipline.md"
 
 fail() {
   echo "control-character command contract: FAIL — $*" >&2
@@ -108,7 +108,7 @@ assert_bullet 'jq string escape' \
 assert_bullet 'comments included' \
   "the bullet does not warn that the guard scans comments too, so a command whose code is fixed can still fail on its own annotation"
 
-# 8. WHOLE-FILE, and deliberately so. The contract must not itself contain a raw control byte: it is
+# 8. WHOLE-CONTRACT, and deliberately so. No contract file may itself contain a raw control byte: each is
 #    quoted, copied and grepped constantly, and a non-printing byte is invisible in review. This is
 #    not hypothetical — the first draft of this very bullet embedded a raw 0x1F inside the backticks
 #    meant to display the jq escape, so the rule forbidding raw control bytes was itself written with
@@ -117,8 +117,22 @@ assert_bullet 'comments included' \
 if ! command -v perl >/dev/null 2>&1; then
   fail "perl is required for the raw-control-byte scan; without it assertion 8 would silently pass"
 fi
-raw_count="$(perl -ne '$n++ if /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/; END{print $n+0}' "${constitution}")"
+# The contract is AGENTS.md plus every guide it indexes, so all of them are scanned.
+contract_listing="$("${repo_root}/.claude/scripts/contract-text.sh" --files)" ||
+  fail "cannot list the contract files, so assertion 8 would check nothing"
+contract_files=()
+while IFS= read -r contract_file; do
+  contract_files+=("${repo_root}/${contract_file}")
+done <<<"${contract_listing}"
+# Nested AGENTS.md files are instructions too, loaded when an agent works in their directory.
+nested_listing="$(git -C "${repo_root}" ls-files --cached --others --exclude-standard -- ':(glob)**/AGENTS.md')" ||
+  fail "cannot list the nested AGENTS.md files, so assertion 8 would miss them"
+while IFS= read -r nested_file; do
+  [ -n "${nested_file}" ] && [ "${nested_file}" != AGENTS.md ] && contract_files+=("${repo_root}/${nested_file}")
+done <<<"${nested_listing}"
+[ "${#contract_files[@]}" -gt 1 ] || fail "the contract listing is implausibly short: ${contract_listing}"
+raw_count="$(perl -ne '$n++ if /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/; END{print $n+0}' "${contract_files[@]}")"
 [ "${raw_count}" = "0" ] ||
-  fail "AGENTS.md contains ${raw_count} line(s) with a raw control byte — invisible in review, and the non-whitespace C0 bytes among them are rejected outright by the Bash guard; write the byte as an escape (\$'\\x1f', or the jq \\u001f form)"
+  fail "the contract contains ${raw_count} line(s) with a raw control byte — invisible in review, and the non-whitespace C0 bytes among them are rejected outright by the Bash guard; write the byte as an escape (\$'\\x1f', or the jq \\u001f form)"
 
 echo "control-character command contract: OK — 8 assertions passed"
