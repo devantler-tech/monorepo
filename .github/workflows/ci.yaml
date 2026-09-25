@@ -265,6 +265,9 @@ jobs:
               - '.claude/scripts/agent-claim.test.sh'
               - '.claude/scripts/agent-claim-sweep.sh'
               - '.claude/scripts/agent-claim-sweep.test.sh'
+              # The Claim protocol's assignee lease-clock read is executed by its own test.
+              - 'AGENTS.md'
+              - '.claude/scripts/claim-lease-timeline-contract.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1661,6 +1664,10 @@ jobs:
       # unreadable and re-acquired tips survive (monorepo#3589).
       - name: Self-test agent-claim sweep
         run: bash .claude/scripts/agent-claim-sweep.test.sh
+      # Runs the Claim protocol's prescribed lease-clock read against a fake gh: a failed timeline
+      # read must be UNKNOWN, never "unassigned" (monorepo#2798).
+      - name: Verify the claim-lease timeline read
+        run: bash .claude/scripts/claim-lease-timeline-contract.test.sh
 
   test-memory-backup:
     name: Test memory backup helper (${{ matrix.os }})

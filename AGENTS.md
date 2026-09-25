@@ -1557,13 +1557,23 @@ the fifteen proven traps live in `agent-claim.test.sh`).
      `assigned` timeline event** for `devantler` — never a work-branch commit date (those usually
      point at the base commit and would make every fresh claim look long expired):
      ```sh
-     gh api repos/<o>/<r>/issues/<n>/timeline --paginate \
-       --jq '.[]|select(.event=="assigned" and .assignee.login=="devantler")|.created_at' | sort | tail -1
+     lease=$(
+       set -o pipefail   # WITHOUT this a failed read prints NOTHING and exits 0, i.e. "never assigned"
+       gh api repos/<o>/<r>/issues/<n>/timeline --paginate \
+         --jq '.[]|select(.event=="assigned" and .assignee.login=="devantler")|.created_at' | sort | tail -1
+     ) || { echo "timeline read FAILED — UNKNOWN, never unassigned" >&2; exit 1; }
      ```
      Filter to **`devantler`**: an issue can carry several assignees, and a later assignment of
      someone else would otherwise set your lease clock. Under `--paginate` each page is a **separate
      JSON array**, so an aggregate like `'[…]|last'` runs *per page* — emit every match as its own
      line and take the max in the shell.
+     🔴 **A FAILED timeline read is UNKNOWN — never "unassigned", and never a live claim.** Without
+     `pipefail` the pipeline's status is `tail`'s, so a server error prints nothing and exits `0`,
+     which reads exactly like an issue nobody assigned. That happened: every assignment-timing
+     surface returned HTTP 500 for `platform` alone on 2026-08-12 (#2798). A *successful* empty read
+     still means no assignment. On UNKNOWN, decide skip reason (e) from the `agent-claim/<issue>` tip
+     alone. An unreadable timeline can never park an issue, because the takeover gates below never
+     consult it.
    - **Taking over a stale claim** needs BOTH evidence gates: (1) no open PR whose body references
      `#<issue>`, and (2) the `agent-claim/<issue>` tip past the lease (`is-stale` exits 0). Then
      `.claude/scripts/agent-claim.sh acquire <issue> --takeover --repo-dir <product-path>`. Also unassign-then-re-assign when your identity can
