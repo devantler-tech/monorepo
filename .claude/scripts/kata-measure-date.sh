@@ -23,7 +23,7 @@
 #   DUE <date>                 the named date is today or earlier: measuring is actionable now
 #   NOT-DUE <date>             the named date is still in the future: skip reason (d) applies
 #   UNKNOWN missing            no `**Measure on:**` line (a quoted `> ` line does not count)
-#   UNKNOWN malformed          a line whose value is not exactly one YYYY-MM-DD date
+#   UNKNOWN malformed          a line whose value is not one real calendar date as YYYY-MM-DD
 #   UNKNOWN conflicting <a,b>  two different dates; the helper never picks one
 #
 # EXIT CODES
@@ -56,7 +56,25 @@ jq -se 'length == 1 and (.[0] | type == "object"
   exit 2
 }
 
+# is_calendar_date <value> — true only for a YYYY-MM-DD date that exists on the calendar, so a
+# well-shaped impossible date such as 2026-02-30 is never compared as if it were one.
+is_calendar_date() {
+  [[ "$1" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})$ ]] || return 1
+  local y=$((10#${BASH_REMATCH[1]})) m=$((10#${BASH_REMATCH[2]})) d=$((10#${BASH_REMATCH[3]})) last
+  case "$m" in
+    1 | 3 | 5 | 7 | 8 | 10 | 12) last=31 ;;
+    4 | 6 | 9 | 11) last=30 ;;
+    2) if { [ $((y % 4)) -eq 0 ] && [ $((y % 100)) -ne 0 ]; } || [ $((y % 400)) -eq 0 ]; then last=29; else last=28; fi ;;
+    *) return 1 ;;
+  esac
+  [ "$d" -ge 1 ] && [ "$d" -le "$last" ]
+}
+
 today="$(jq -r '.today // empty' <<<"${payload}")"
+if [ -n "${today}" ] && ! is_calendar_date "${today}"; then
+  echo "kata-measure-date: today is not a calendar date: ${today}" >&2
+  exit 2
+fi
 [ -n "${today}" ] || today="$(date -u +%Y-%m-%d)"
 
 # Every value on a `**Measure on:**` line, CRLF endings removed. A line quoted with `>` is not one.
@@ -73,9 +91,8 @@ if [ -z "${values}" ]; then
   echo "UNKNOWN missing"
   exit 2
 fi
-date_re='^[0-9][0-9][0-9][0-9]-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
 while IFS= read -r value; do
-  [[ "${value}" =~ ${date_re} ]] || {
+  is_calendar_date "${value}" || {
     echo "UNKNOWN malformed"
     exit 2
   }

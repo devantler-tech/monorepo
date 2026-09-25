@@ -53,6 +53,15 @@ expect "an empty body is UNKNOWN" 2 "UNKNOWN missing" "$(kata '' 2026-09-25)"
 expect "two different dates are UNKNOWN, not the earlier or the later" 2 "UNKNOWN conflicting 2026-09-01,2026-10-20" \
   "$(kata $'**Measure on:** 2026-10-20\n**Measure on:** 2026-09-01' 2026-09-25)"
 expect "a date that is not a date is UNKNOWN" 2 "UNKNOWN malformed" "$(kata $'**Measure on:** 2026-13-40' 2026-09-25)"
+# Shaped like a date but never on the calendar: classifying it would postpone or trigger a
+# measurement on a day that does not exist.
+expect "February 30 is UNKNOWN" 2 "UNKNOWN malformed" "$(kata $'**Measure on:** 2026-02-30' 2026-09-25)"
+expect "April 31 is UNKNOWN" 2 "UNKNOWN malformed" "$(kata $'**Measure on:** 2026-04-31' 2026-09-25)"
+expect "February 29 outside a leap year is UNKNOWN" 2 "UNKNOWN malformed" "$(kata $'**Measure on:** 2026-02-29' 2026-09-25)"
+expect "February 29 in a leap year is a date" 1 "NOT-DUE 2028-02-29" "$(kata $'**Measure on:** 2028-02-29' 2026-09-25)"
+expect "February 29 in a century year not divisible by 400 is UNKNOWN" 2 "UNKNOWN malformed" \
+  "$(kata $'**Measure on:** 2100-02-29' 2026-09-25)"
+expect "February 29 in a year divisible by 400 is a date" 1 "NOT-DUE 2400-02-29" "$(kata $'**Measure on:** 2400-02-29' 2026-09-25)"
 expect "a line without a date is UNKNOWN" 2 "UNKNOWN malformed" "$(kata $'**Measure on:** after the next release' 2026-09-25)"
 expect "trailing words after the date are UNKNOWN" 2 "UNKNOWN malformed" "$(kata $'**Measure on:** 2026-10-20 or later' 2026-09-25)"
 
@@ -66,6 +75,7 @@ expect "two JSON documents" 2 "" '{"body":"a"}{"body":"b"}'
 expect "a body that is not a string" 2 "" '{"body":42}'
 expect "an unexpected key" 2 "" '{"body":"x","createdAt":"2026-07-19T00:00:00Z"}'
 expect "a malformed today" 2 "" '{"body":"**Measure on:** 2026-10-20","today":"25/09/2026"}'
+expect "an impossible today" 2 "" '{"body":"**Measure on:** 2026-10-20","today":"2026-02-30"}'
 
 checks=$((checks + 1))
 if "${tool}" --input /dev/null >/dev/null 2>&1 || "${tool}" >/dev/null 2>&1 </dev/null; then
