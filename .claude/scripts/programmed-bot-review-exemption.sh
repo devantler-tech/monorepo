@@ -246,6 +246,17 @@ matches_changelog_bump() {
   ' <<<"${files_json}" >/dev/null
 }
 
+# The digest refresh job commits only when the sync moved a declared digest, and it is the only job
+# that writes a desired-state file. So a desired-state change and the refresh commit come together
+# or not at all: a head changing that file without the refresh, or carrying the refresh without the
+# file, is not untouched updater output.
+matches_digest_refresh() {
+  jq -e --argjson commits "${commits_json}" '
+    any(.[]; test("^plugins/[^/]+/resources/provider-neutral\\.desired-state\\.json$")) ==
+      any($commits[1:][]; .message == "chore(deps): refresh desired-state digests for synced content")
+  ' <<<"${files_json}" >/dev/null
+}
+
 # Every changed skill root must be listed for this repository in the reviewed allowlist, and — when
 # the caller supplies the corroborating map — the copied frontmatter must still agree with it. A root
 # that is absent, or whose declared owner has drifted from the reviewed one, takes the semantic-review
@@ -516,7 +527,8 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
     if [[ "${repo}" == "agent-plugins" ]] &&
       matches_agent_plugins_review_files &&
       matches_agent_plugins_review_provenance "chore(deps): update agent skills" &&
-      matches_changelog_bump; then
+      matches_changelog_bump &&
+      matches_digest_refresh; then
       exit 3
     fi
     if [[ "${repo}" != "agent-plugins" ]] &&
@@ -550,7 +562,8 @@ if [[ "${repo}" == "agent-plugins" &&
     if [[ "${branch}" == "deps/agent-skills-update-${skill_slug}" ]]; then
       if matches_agent_plugins_review_files "${skill_path}" &&
         matches_agent_plugins_review_provenance "${title}" &&
-        matches_changelog_bump; then
+        matches_changelog_bump &&
+        matches_digest_refresh; then
         exit 3
       fi
       printf 'programmed-bot-review-exemption: %s per-skill updater PR with unexpected files or commit provenance; treated as untrusted\n' \

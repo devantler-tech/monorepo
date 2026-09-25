@@ -1342,7 +1342,7 @@ expect_review_required "agent-plugins per-skill update" \
 expect_review_required "agent-plugins per-skill update, bump carrying release notes" \
   "${per_skill_args[@]}" \
   "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
-  "$(printf '%s\n' "${per_skill_sync}" "$(per_skill_follow_up "${per_skill_head}" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" "$(per_skill_follow_up "${per_skill_head}" \
     "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
 # The updater job always refreshes digests before it bumps, so the reverse order is not its output.
 expect_review_gated "agent-plugins per-skill update, bump before digest refresh" \
@@ -1359,6 +1359,16 @@ expect_review_required "agent-plugins per-skill update, legacy unsigned sync com
     | .committer_email = "41898282+github-actions[bot]@users.noreply.github.com"
     | del(.verified)' <<<"${per_skill_sync}")" "${per_skill_digest}" "${per_skill_bump}" | per_skill_commits)"
 expect_review_required "agent-plugins single-PR update with a digest refresh" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/github/resources/provider-neutral.desired-state.json"]' <<<"${agent_plugins_versioned_files}")" \
+  "$(jq -c --argjson d "${per_skill_digest}" '.[:1] + [$d] + .[1:]' <<<"${agent_plugins_versioned_commits}" | with_commit_dates)"
+# The refresh job is the only writer of a desired-state file and commits only when it changed one,
+# so the file and the refresh commit arrive together or not at all.
+expect_review_gated "agent-plugins per-skill update changing desired state without the digest refresh" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_bump}" | per_skill_commits)"
+expect_review_gated "agent-plugins single-PR update with a digest refresh but no desired-state change" \
   agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
   "${agent_plugins_versioned_head}" "${agent_plugins_versioned_files}" \
   "$(jq -c --argjson d "${per_skill_digest}" '.[:1] + [$d] + .[1:]' <<<"${agent_plugins_versioned_commits}" | with_commit_dates)"
@@ -1382,7 +1392,7 @@ expect_review_required "agent-plugins per-skill update whose skill ships its own
   "${per_skill_args[@]}" \
   "$(jq -c --arg p "${per_skill_path}" \
     '. + ["plugins/agentic-engineering/CHANGELOG.md", ($p + "/CHANGELOG.md")]' <<<"${per_skill_files}")" \
-  "$(printf '%s\n' "${per_skill_sync}" "$(per_skill_follow_up "${per_skill_head}" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" "$(per_skill_follow_up "${per_skill_head}" \
     "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
 expect_review_gated "agent-plugins per-skill update with the release-notes bump but no changelog" \
   "${per_skill_args[@]}" "${per_skill_files}" \
