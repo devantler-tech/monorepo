@@ -121,12 +121,12 @@ check "add succeeds on a correctly populated submodule" 0 "$rc" "$out" "owner=se
 git -C "$super/mod" config url."$other_sub".insteadOf "$upstream_sub"
 rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-insteadof" "claim-branch-sub-insteadof" "session-sub-insteadof" 2>&1)" || rc=$?
-check "add refuses an origin its own insteadOf rewrites to another repository" 1 "$rc" "$out" "redirected by:   url.<base>.insteadOf"
+check "add refuses an origin its own insteadOf rewrites to another repository" 1 "$rc" "$out" "redirected by:   URL rewrite"
 git -C "$super/mod" config --unset url."$other_sub".insteadOf
 git -C "$super/mod" config url."$other_sub".pushInsteadOf "$upstream_sub"
 rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-pushinsteadof" "claim-branch-sub-pushinsteadof" "session-sub-pushinsteadof" 2>&1)" || rc=$?
-check "add refuses an origin its own pushInsteadOf rewrites to another repository" 1 "$rc" "$out" "redirected by:   url.<base>.pushInsteadOf"
+check "add refuses an origin its own pushInsteadOf rewrites to another repository" 1 "$rc" "$out" "redirected by:   URL rewrite"
 git -C "$super/mod" config --unset url."$other_sub".pushInsteadOf
 
 git -C "$super/mod" config remote.origin.url "$other_sub"
@@ -244,6 +244,14 @@ rc=0
 out="$(GIT_CONFIG_GLOBAL="$tmp/global-ssh.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-sshcmd-global" "claim-branch-sub-sshcmd-global" "session-sub-sshcmd-global" 2>&1)" || rc=$?
 check "add admits a submodule when only global config sets core.sshCommand" 0 "$rc" "$out" "owner=session-sub-sshcmd-global"
 
+# A global file can still apply a rewrite to this repository alone, through includeIf.
+mod_gitdir="$(git -C "$super/mod" rev-parse --absolute-git-dir)"
+printf '[url "https://github.com/example/other"]\n\tinsteadOf = https://github.com/example/sub\n' >"$tmp/only-mod.gitconfig"
+printf '[includeIf "gitdir:%s"]\n\tpath = %s\n' "$mod_gitdir" "$tmp/only-mod.gitconfig" >"$tmp/global-include.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-include.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-includeif" "claim-branch-sub-includeif" "session-sub-includeif" 2>&1)" || rc=$?
+check "add refuses an origin a global include rewrites for this repository alone" 1 "$rc" "$out" "redirected by:   URL rewrite"
+
 # Stray content in a registered path that was never populated resolves to the superproject.
 mkdir -p "$super/stray"
 printf 'stray\n' >"$super/stray/leftover.txt"
@@ -261,12 +269,13 @@ out="$("$script" add "$super/mod" "$tmp/wt-sub-pushurl" "claim-branch-sub-pushur
 check "add refuses a submodule whose push URL is another repository" 1 "$rc" "$out" "$other_sub"
 git -C "$super/mod" config --unset remote.origin.pushurl
 
-# A custom pack command is what fetch and push run, so it can reach another repository whatever the URL says.
-for key in receivepack uploadpack; do
+# A custom pack command or remote helper is what fetch and push run, so it can reach another repository
+# whatever the URL says.
+for key in receivepack uploadpack vcs; do
   git -C "$super/mod" config "remote.origin.$key" "git-$key '$other_sub' #"
   rc=0
   out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-$key" "claim-branch-sub-$key" "session-sub-$key" 2>&1)" || rc=$?
-  check "add refuses an origin with a custom $key command" 1 "$rc" "$out" "custom pack commands: remote.origin.$key"
+  check "add refuses an origin with a custom $key setting" 1 "$rc" "$out" "custom transport: remote.origin.$key"
   git -C "$super/mod" config --unset "remote.origin.$key"
 done
 
@@ -333,6 +342,16 @@ git -C "$super/mod" config remote.origin.url "alias:sub.git"
 rc=0
 out="$(GIT_CONFIG_GLOBAL="$tmp/global-mirror.gitconfig" "$script" add "$super/mod" "$tmp/wt-sub-mirror" "claim-branch-sub-mirror" "session-sub-mirror" 2>&1)" || rc=$?
 check "add admits an origin a global rewrite sends to a mirror" 0 "$rc" "$out" "owner=session-sub-mirror"
+
+# A relative superproject remote resolves relative to the submodule's own directory, as sync writes it.
+mkdir -p "$super/foo"
+ln -s "$upstream_sub" "$super/foo/sub.git"
+git -C "$super" config remote.origin.url "foo/super.git"
+git -C "$super/mod" config remote.origin.url "../foo/sub.git"
+rc=0
+out="$("$script" add "$super/mod" "$tmp/wt-sub-relremote" "claim-branch-sub-relremote" "session-sub-relremote" 2>&1)" || rc=$?
+check "add admits the origin sync writes for a relative superproject remote" 0 "$rc" "$out" "owner=session-sub-relremote"
+rm -rf "$super/foo"
 git -C "$super" config remote.origin.url "$tmp/remote-root/super"
 git -C "$super" config -f .gitmodules submodule.mod.url "../upstream-sub"
 git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
@@ -426,6 +445,16 @@ rc=0
 out="$("$script" add "$tmp/sep-linked" "$tmp/wt-sep-orphan" "claim-branch-sep-orphan" "session-sep-orphan" 2>&1)" || rc=$?
 check "add refuses a submodule worktree whose superproject cannot be found" 1 "$rc" "$out" "no superproject registers it"
 mv "$tmp/sep-mod-away" "$sep_super/mod"
+
+# A standalone repository may keep its git directory elsewhere, with core.worktree pointing back at its
+# checkout; nothing registers it, so it is not refused.
+mkdir -p "$tmp/standalone-admin"
+git init -q -b main --separate-git-dir "$tmp/standalone-admin/repo" "$tmp/standalone"
+git --git-dir="$tmp/standalone-admin/repo" config core.worktree "$tmp/standalone"
+git -C "$tmp/standalone" -c user.name=t -c user.email=t@example.com commit --allow-empty -qm init
+rc=0
+out="$("$script" add "$tmp/standalone" "$tmp/wt-standalone" "claim-branch-standalone" "session-standalone" 2>&1)" || rc=$?
+check "add admits a standalone repository whose core.worktree points back at its checkout" 0 "$rc" "$out" "owner=session-standalone"
 
 # When two .gitmodules sections claim one path, git initializes it from the later one.
 git -C "$super" config -f .gitmodules submodule.dup.path mod

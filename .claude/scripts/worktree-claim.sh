@@ -570,12 +570,13 @@ redact_url() {
   printf '%s%s%s\n' "$scheme" "$authority" "$rest"
 }
 
-# resolve_submodule_url resolves a relative .gitmodules URL (`./x`, `../x`) against the
-# superproject's remote the way `git submodule init` does: the remote of the current branch, else
-# origin, else the superproject's own path. Any other URL is printed unchanged. It prints nothing
-# when git itself cannot resolve the URL, because more `..` components remain than it can drop.
+# resolve_submodule_url prints the origin URL `git submodule sync` writes for the submodule at <path>
+# whose .gitmodules URL is <url>. A relative URL (`./x`, `../x`) resolves against the superproject's
+# remote: the remote of the current branch, else origin, else the superproject's own path. Any other
+# URL is printed unchanged. It prints nothing when git itself cannot resolve the URL, because more
+# `..` components remain than it can drop.
 resolve_submodule_url() {
-  local super="$1" url="$2" branch remote base sep="/" relative=0 before
+  local super="$1" url="$2" path="$3" branch remote base sep="/" relative=0 before result up rest
   case "$url" in
     ./* | ../*) ;;
     *)
@@ -621,7 +622,23 @@ resolve_submodule_url() {
       *) break ;;
     esac
   done
-  printf '%s%s%s\n' "$base" "$sep" "$url"
+  result="$base$sep$url"
+  # Then, as `git submodule sync` writes it: without a trailing '/' or a leading `./`, and, when the
+  # remote is a relative path, relative to the submodule's own directory instead of the superproject.
+  case "$url" in
+    */) result="${result%/}" ;;
+  esac
+  result="${result#./}"
+  if [ "$relative" -eq 1 ]; then
+    up="../"
+    rest="$path"
+    while [ "${rest#*/}" != "$rest" ]; do
+      rest="${rest#*/}"
+      up="../$up"
+    done
+    result="$up$result"
+  fi
+  printf '%s\n' "$result"
 }
 
 # registering_superproject finds which superproject registered the submodule whose shared git
@@ -678,6 +695,53 @@ submodule_name_at() {
   printf '%s\n' "$name"
 }
 
+# origin_redirects prints, one per line, what sends <repo>'s origin somewhere other than where <url>
+# goes from a neutral repository: `URL rewrite` when the effective fetch or push URLs differ, and
+# `core.sshCommand` when the ssh command differs. The neutral repository is a throwaway one whose
+# remote has origin's shape, so settings every repository shares give both the same answer, while
+# one that applies only to <repo> (its own config, or a global file included only for it) shows up.
+# It prints `unverifiable` when the comparison cannot be made, and `checked` last once it has finished,
+# so a caller never mistakes an aborted run for a clean one. The URL is written to the throwaway
+# config file directly rather than passed on a command line, where other processes could read it.
+origin_redirects() {
+  local repo="$1" url="$2" probe esc urls pushurls i
+  case "$url" in
+    *$'\n'*)
+      echo "unverifiable"
+      return 0
+      ;;
+  esac
+  probe="$(mktemp -d "${TMPDIR:-/tmp}/worktree-claim-probe.XXXXXX")" || {
+    echo "unverifiable"
+    return 0
+  }
+  if ! git init -q "$probe" >/dev/null 2>&1; then
+    rm -rf "$probe"
+    echo "unverifiable"
+    return 0
+  fi
+  esc="${url//\\/\\\\}"
+  esc="${esc//\"/\\\"}"
+  urls=0
+  pushurls=0
+  while IFS= read -r _; do urls=$((urls + 1)); done < <(git -C "$repo" config --get-all remote.origin.url 2>/dev/null || true)
+  while IFS= read -r _; do pushurls=$((pushurls + 1)); done < <(git -C "$repo" config --get-all remote.origin.pushurl 2>/dev/null || true)
+  {
+    printf '[remote "probe"]\n'
+    for ((i = 0; i < urls; i++)); do printf '\turl = "%s"\n' "$esc"; done
+    for ((i = 0; i < pushurls; i++)); do printf '\tpushurl = "%s"\n' "$esc"; done
+  } >>"$probe/.git/config"
+  if [ "$(git -C "$repo" remote get-url --all origin 2>&1)" != "$(git -C "$probe" remote get-url --all probe 2>&1)" ] ||
+    [ "$(git -C "$repo" remote get-url --push --all origin 2>&1)" != "$(git -C "$probe" remote get-url --push --all probe 2>&1)" ]; then
+    echo "URL rewrite"
+  fi
+  if [ "$(git -C "$repo" config --get core.sshCommand 2>/dev/null || true)" != "$(git -C "$probe" config --get core.sshCommand 2>/dev/null || true)" ]; then
+    echo "core.sshCommand"
+  fi
+  rm -rf "$probe"
+  echo "checked"
+}
+
 # refuse_foreign_submodule_origin_checked stops `add` or `acquire` when <repo_path> is a populated
 # submodule whose `origin` is not the repository its superproject's .gitmodules names (monorepo#3010).
 # Such a checkout is its own top level, so refuse_uninitialized_repo admits it, and every commit made
@@ -686,13 +750,13 @@ submodule_name_at() {
 # origin must be exactly what `git submodule sync` writes: the registered URL, resolved as git
 # resolves a relative one, byte for byte. Two spellings git might treat as one repository are not
 # accepted as equal, because whether they are depends on the server; `submodule sync` restores the
-# exact URL. Nothing in the submodule's own configuration may send origin elsewhere either: a
-# pushurl, a url.<base>.insteadOf or pushInsteadOf rewrite, a custom receive-pack or upload-pack
-# command, or core.sshCommand. Global, system and command-line settings are out of scope: they apply
-# to every repository, the superproject included. A repository that is not a submodule is not
-# checked: nothing names what it should be.
+# exact URL. Nothing that applies only to this repository may send origin elsewhere either: a
+# pushurl, a URL rewrite or core.sshCommand in its own config or in a global file included only for
+# it, or a custom receive-pack, upload-pack or remote helper. Settings that apply to every repository,
+# the superproject included, are not this check's concern. A repository that is not a submodule is
+# not checked: nothing names what it should be.
 refuse_foreign_submodule_origin_checked() {
-  local repo_abs="$1" super rel name="" common="" worktree="" main found admin raw="" expected="" shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key scope setting
+  local repo_abs="$1" super rel name="" common="" worktree="" main="" found admin raw="" expected="" shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
     super="$(cd "$super" && pwd -P)"
@@ -730,9 +794,12 @@ refuse_foreign_submodule_origin_checked() {
     case "$common" in
       */.git/modules/* | */.git/worktrees/*/modules/*) ;;
       *)
-        # A git directory that names a separate working tree but leads to no superproject may be a
-        # submodule whose registration cannot be found, so it is not waved through.
+        # A standalone repository may keep its git directory elsewhere and point core.worktree back at
+        # its checkout; nothing registers it, so there is nothing to check. A core.worktree that names a
+        # checkout which no longer exists may be a submodule whose registration cannot be found, so
+        # that is not waved through.
         [ -n "$worktree" ] || return 0
+        [ -z "$main" ] || return 0
         echo "worktree-claim: $repo_abs shares a git directory with a separate checkout, but no superproject registers it." >&2
         echo "  Its origin cannot be checked against a .gitmodules entry, so it is not claimed." >&2
         echo "  If it is a submodule, run this from a checkout inside its superproject instead." >&2
@@ -762,7 +829,7 @@ refuse_foreign_submodule_origin_checked() {
     rel="$(git config -f "$super/.gitmodules" --get "submodule.$name.path" 2>/dev/null)" || rel="$name"
   fi
   [ -z "$name" ] || raw="$(git config -f "$super/.gitmodules" --get "submodule.$name.url" 2>/dev/null)" || raw=""
-  [ -z "$raw" ] || expected="$(resolve_submodule_url "$super" "$raw")"
+  [ -z "$raw" ] || expected="$(resolve_submodule_url "$super" "$raw" "$rel")"
   # Every configured url and pushurl of origin must be the registered URL itself.
   while IFS= read -r url; do
     [ -n "$url" ] || continue
@@ -774,26 +841,27 @@ refuse_foreign_submodule_origin_checked() {
     fi
   done < <(git -C "$repo_abs" config --get-all remote.origin.url 2>/dev/null
     git -C "$repo_abs" config --get-all remote.origin.pushurl 2>/dev/null || true)
-  # The submodule's own rewrites and ssh command decide where fetch and push go, whatever origin
-  # says. Only the setting's kind is shown: a url.<base> key can itself carry a credential.
-  while IFS=$'\t' read -r scope setting; do
-    case "$scope" in
-      local | worktree) ;;
-      *) continue ;;
-    esac
-    case "$setting" in
-      *.pushinsteadof) setting="url.<base>.pushInsteadOf" ;;
-      *.insteadof) setting="url.<base>.insteadOf" ;;
-      *) setting="core.sshCommand" ;;
-    esac
-    case ", $redirects," in
-      *", $setting,"*) ;;
-      *) redirects="$redirects${redirects:+, }$setting" ;;
-    esac
-    foreign=1
-  done < <(git -C "$repo_abs" config --show-scope --name-only --get-regexp '^(url\..*\.(insteadof|pushinsteadof)|core\.sshcommand)$' 2>/dev/null || true)
-  # A custom pack command is what fetch and push actually run, whatever the URL says.
-  for key in receivepack uploadpack; do
+  # A setting that applies only to this repository can still send fetch and push elsewhere.
+  # A comparison that did not finish is not a clean one.
+  if [ "$matched" -gt 0 ] && [ "$foreign" -eq 0 ]; then
+    checked=0
+    while IFS= read -r setting; do
+      case "$setting" in
+        '') ;;
+        checked) checked=1 ;;
+        *)
+          redirects="$redirects${redirects:+, }$setting"
+          foreign=1
+          ;;
+      esac
+    done < <(origin_redirects "$repo_abs" "$expected")
+    if [ "$checked" -eq 0 ]; then
+      redirects="$redirects${redirects:+, }unverifiable"
+      foreign=1
+    fi
+  fi
+  # A custom pack command or remote helper is what fetch and push actually run, whatever the URL says.
+  for key in receivepack uploadpack vcs; do
     if git -C "$repo_abs" config --get-all "remote.origin.$key" >/dev/null 2>&1; then
       packs="$packs${packs:+, }remote.origin.$key"
       foreign=1
@@ -810,12 +878,13 @@ refuse_foreign_submodule_origin_checked() {
     echo "  .gitmodules url: ${shown_expected}" >&2
     echo "  origin urls:     ${configured:-<none>}" >&2
     echo "  (origin must be exactly the registered URL, as \`git submodule sync\` writes it.)" >&2
-    [ -z "$redirects" ] || echo "  redirected by:   ${redirects} (in the submodule's own config)" >&2
-    [ -z "$packs" ] || echo "  custom pack commands: ${packs} (they decide what fetch and push reach, whatever the url)" >&2
+    [ -z "$redirects" ] || echo "  redirected by:   ${redirects} (config that applies only to this repository)" >&2
+    [ -z "$packs" ] || echo "  custom transport: ${packs} (it decides what fetch and push reach, whatever the url)" >&2
     echo "  Work committed here would land in the wrong repository. Point origin at the registered URL:" >&2
     echo "    git -C $(shquote "$super") submodule sync -- $(shquote "$rel")" >&2
-    echo "  and remove any remote.origin.pushurl, remote.origin.receivepack, remote.origin.uploadpack," >&2
-    echo "  url.<base>.insteadOf, url.<base>.pushInsteadOf or core.sshCommand set in the submodule's own config." >&2
+    echo "  and remove any remote.origin.pushurl, receivepack, uploadpack or vcs, and any url.<base>.insteadOf," >&2
+    echo "  url.<base>.pushInsteadOf or core.sshCommand that applies only to this repository, including through" >&2
+    echo "  an includeIf in a global config." >&2
     exit 1
   fi
 }
