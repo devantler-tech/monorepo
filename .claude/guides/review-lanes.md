@@ -283,10 +283,9 @@ the account and that **an admin must raise the limit in the Cursor dashboard**. 
   (#3124), so the lane stays healthy elsewhere and the exit status is unchanged. Do not request
   CodeRabbit on that PR again: record its no-gate and go to the next lane. Only the maintainer can
   remove the learning.
-- **Do not sweep review requests across a large batch of drafts in one pass.** It converts a shared,
-  budgeted resource into a burst, and the tail of the batch is recorded as "reviewed" when none of it
-  was. Request against the drafts a run is actually going to finish, and **re-read each check-run's
-  `output.title` afterwards** rather than trusting that the request was served.
+- **Do not sweep review requests across a large batch of drafts in one pass** — the lane-agnostic rule
+  under *Requesting reviews* applies to Bugbot with its spend limit on top. For Bugbot, **re-read each
+  check-run's `output.title` afterwards** rather than trusting that the request was served.
 
 Sweep all three surfaces, and **verify the reviewed sha against the PR head** — a green from any
 reviewer on a stale commit is not a green; re-secure it after pushes. A current-head result carrying
@@ -312,7 +311,7 @@ result at the current head — self-promotion is forbidden before that. Request 
 
   | Priority | Lane | Renewal | Trigger comment |
   |---|---|---|---|
-  | 1 | CodeRabbit | **free on OSS repos** | `@coderabbitai review` — or `@coderabbitai full review` to escape the incremental wedge |
+  | 1 | CodeRabbit | **free on OSS repos**, but **one included review at a time**, refilled on a stated timer | `@coderabbitai review` — or `@coderabbitai full review` to escape the incremental wedge |
   | 2 | Codex | **weekly** limit | `@codex review` (optional focus suffix: `@codex review for <topic>`) |
   | 3 | Cursor Bugbot | **monthly** limit | **`@cursor review`, in a comment containing NOTHING else** — see the carve-out below |
 
@@ -502,6 +501,16 @@ result at the current head — self-promotion is forbidden before that. Request 
   short no-reaction window or generous acknowledged window, another instance owns that in-flight
   request: do not post any trigger. A substantive success/finding/service failure, a newer head, or
   recorded expiry of the applicable window releases it.
+- **Never request reviews across a batch of PRs in one pass, on any lane.** Every lane is budgeted:
+  CodeRabbit's free OSS plan holds **one included review at a time** and refills it on a stated timer
+  (about an hour), Codex is weekly-limited and Bugbot monthly-limited. A batch therefore serves only what
+  the lane has left and refuses the rest — measured twice: five first-ever CodeRabbit requests in one
+  pass on ksail served two, and four across platform and monorepo on 2026-08-16 served one (#2830).
+  A refused request is acked like a served one, so judge each PR by its artifact, never the ack:
+  CodeRabbit refuses with a `Review limit reached` comment stating
+  `Next review available in: N minutes`, or with the `Review rate limited` status. Record
+  `cr:no-gate@<sha>` for every head a batch left unserved, rather than letting it read as reviewed,
+  and request only for the PRs this run will actually finish.
 - **A provider reaction emoji on the trigger is positive in-flight evidence.** Once the provider
   reacts, be patient: it accepted the request, so do not duplicate the trigger or open the next lane
   during its normal response envelope. **A reaction earns a generous bounded wait, not an infinite lease**:
