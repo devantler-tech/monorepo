@@ -56,6 +56,9 @@ mksession() {
   fi
   if [ "$shape" = malformed ]; then
     printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"%s"}\n' "$(iso_at "$start")" "$content" > "$f"
+  elif [ "$shape" = array ]; then
+    printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"text","text":"%s"}]}}\n' \
+      "$(iso_at "$start")" "$content" > "$f"
   elif [ "$shape" = double ]; then
     printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"%s"}}{"type":"user","timestamp":"%s","message":{"role":"user","content":"%s"}}\n' \
       "$(iso_at "$start")" "$content" "$(iso_at "$start")" "$content" > "$f"
@@ -200,6 +203,32 @@ rm "$CASE/root/b/bad/scheduled-tasks.json"
 asserts=$(( asserts + 1 ))
 rc=0; OUT=$(CLAUDE_SCHEDULE_STORE_ROOT="$CASE/root" "$SCRIPT" --projects "$PROJECTS" --now-epoch "$NOW" "${W[@]}" 2>&1) || rc=$?
 case "$rc:$OUT" in 0:*"scheduled=5"*) : ;; *) note_fail "discovery control: a single readable store is used: exit $rc -- $OUT" ;; esac
+
+CREATED_MS=$(( BASE * 1000 + 500 )) mkcase created-mid-second
+mksession eng $(( BASE + 3000 + 5 ))
+expect 2 "predates task" "a createdAt half a second after --since is not truncated into the window" "${W[@]}"
+
+mkcase array-content
+for h in 0 1 3 4; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
+mksession eng $(( BASE + 2 * 3600 + 3000 + 5 )) array
+expect 0 "dispatched=5 dropped=0" "array-form message content is attributed like a string" "${W[@]}"
+
+# --since inside the FIRST 02:45 of the fallback day: the mtime cutoff must not jump to the second one.
+FB=1792889100    # 2026-10-25T00:45:00Z
+mkcase dst-mtime-cutoff
+mksession eng $(( FB + 360 ))     # 00:51Z, transcript ends 01:01Z
+mksession eng $(( FB + 3960 ))    # 01:51Z
+NOW=$(( FB + 86400 )) TZ=Europe/Copenhagen expect 0 "scheduled=2 dispatched=2 dropped=0" \
+  "the transcript cutoff is exact across a DST fallback" \
+  --task eng --since "$(iso_at "$FB")" --until "$(iso_at $(( FB + 9900 )))"
+
+# 2026-03-29 02:30 does not exist in Copenhagen, so the slot after 03-28 is 03-30, ~47h later.
+SF=1774569600    # 2026-03-27T00:00:00Z
+CREATED_MS=$(( (SF - 86400) * 1000 )) mkcase spring-forward '30 2 * * *'
+mksession eng $(( SF + 5400 + 5 ))  # 03-27 02:30 CET
+NOW=$(( SF + 5 * 86400 )) TZ=Europe/Copenhagen expect 0 "scheduled=1 dispatched=1 dropped=0" \
+  "the successor search crosses a skipped spring-forward occurrence" \
+  --task eng --since "$(iso_at "$SF")" --until "$(iso_at $(( SF + 86400 + 3 * 3600 )))"
 
 mkcase args
 expect 2 "later than now" "--until past now is UNKNOWN" \

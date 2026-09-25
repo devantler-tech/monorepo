@@ -161,7 +161,8 @@ CRON=$(jq -r --arg t "$TASK" 'first(.scheduledTasks[] | select(.id == $t and .en
 # cron. Before the task existed there is nothing to judge at all: those slots would all read dropped.
 CREATED_MS=$(jq -r --arg t "$TASK" 'first(.scheduledTasks[] | select(.id == $t and .enabled == true)) | .createdAt | numbers' "$STORE") || CREATED_MS=""
 case "$CREATED_MS" in ''|*[!0-9]*) die_unknown "task $TASK has no numeric createdAt, so the window cannot be bounded" ;; esac
-[ "$SINCE_E" -ge $(( CREATED_MS / 1000 )) ] \
+# Compared in milliseconds: truncating createdAt would admit a slot a fraction of a second before it.
+[ $(( SINCE_E * 1000 )) -ge "$CREATED_MS" ] \
   || die_unknown "--since predates task $TASK's creation at $(epoch_to_iso $(( CREATED_MS / 1000 )))"
 
 # Supported shapes are the two the deployment uses: `M * * * *` and `M H1,H2,... * * *`.
@@ -235,10 +236,11 @@ EOF
   fi
   e=$(( e + 3600 ))
 done
-# One more matching slot beyond --until bounds the last settled interval. It is capped at 24 hours
-# ahead, since a supported cron always fires at least once a day.
+# One more matching slot beyond --until bounds the last settled interval. A supported cron fires at
+# least once a day, but a fixed hour inside a skipped spring-forward hour does not exist that day, so
+# the next real occurrence can be nearly two days out. The search covers 49 hours.
 end_bound=""
-limit=$(( e + 25 * 3600 ))
+limit=$(( e + 49 * 3600 ))
 while [ "$e" -le "$limit" ]; do
   clk=$(local_clock "$e"); [ -n "$clk" ] || die_unknown "could not render local time"
   read -r hh _ _ <<EOF
@@ -254,8 +256,10 @@ done
 ANY_ATTRIBUTED=0
 TIMEREF=$(mktemp); FILELIST=$(mktemp); STARTS=$(mktemp)
 trap 'rm -f "$TIMEREF" "$FILELIST" "$STARTS"' EXIT
-stamp=$(epoch_to_touch "$SINCE_E"); [ -n "$stamp" ] || die_unknown "could not render --since as a touch stamp"
-touch -t "$stamp" "$TIMEREF" || die_unknown "could not stamp the window reference file"
+# Built in UTC: a local wall-clock stamp is ambiguous during a DST fallback, and `touch` may pick the
+# later occurrence and hide transcripts from the earlier one.
+stamp=$(TZ=UTC epoch_to_touch "$SINCE_E"); [ -n "$stamp" ] || die_unknown "could not render --since as a touch stamp"
+TZ=UTC touch -t "$stamp" "$TIMEREF" || die_unknown "could not stamp the window reference file"
 find "$PROJECTS" -maxdepth 2 -name '*.jsonl' -type f -newer "$TIMEREF" > "$FILELIST" 2>/dev/null \
   || die_unknown "could not enumerate transcripts under $PROJECTS"
 
@@ -275,6 +279,9 @@ while IFS= read -r f; do
     | if .type == "queue-operation" and .operation == "enqueue" then .content
       elif .type == "user" and .message.role == "user" then .message.content
       else empty end
+    # Content is either a string or an array of blocks; the marker opens the first text block.
+    | if type == "array" then (map(select(type == "object" and .type == "text") | .text) | first // empty)
+      else . end
     | select(type == "string")
     | sub("^(<system-reminder>[\\s\\S]*?</system-reminder>[[:space:]]*)+"; "")
     | capture("^<scheduled-task name=\"(?<id>[A-Za-z0-9._-]+)\"([[:space:]]|>)").id
