@@ -90,7 +90,7 @@ if [ "${rc}" -eq 0 ] && [ "$(printf '%s\n' "${out}" | grep '\.test\.sh')" = "scr
   ok "an unrelated change selects only the job CI runs on every change"
 else bad "an unrelated change selected: ${out} (rc=${rc})"; fi
 out="$(run --ci-file .github/workflows/gated-only.yaml)"; rc=$?
-if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q 'no affected test scripts'; then
+if [ "${rc}" -eq 0 ] && grep -q 'no affected test scripts' <<<"${out}"; then
   ok "an empty selection exits 0 and says so"
 else bad "empty selection: ${out} (rc=${rc})"; fi
 
@@ -104,14 +104,14 @@ git checkout -q -- scripts/alpha.test.sh
 
 : > root.beta
 out="$(run --list)"
-if printf '%s\n' "${out}" | grep -qx 'scripts/beta.test.sh'; then
+if grep -qx 'scripts/beta.test.sh' <<<"${out}"; then
   ok "a leading **/ matches a file at the repository root"
 else bad "root **/ match: ${out}"; fi
 rm -f root.beta
 
 : > docs/page.md
 out="$(run --list)"
-if printf '%s\n' "${out}" | grep -qx 'docs/scripts/gamma.test.sh'; then
+if grep -qx 'docs/scripts/gamma.test.sh' <<<"${out}"; then
   ok "a step working-directory resolves the script path"
 else bad "working-directory resolution: ${out}"; fi
 rm -f docs/page.md
@@ -124,8 +124,8 @@ else bad "--all selection: ${out}"; fi
 # --- execution -----------------------------------------------------------------------------
 printf 'x\n' >> scripts/beta.test.sh
 out="$(run)"; rc=$?
-if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q '^FAIL .*scripts/beta.test.sh' \
-   && printf '%s' "${out}" | grep -q 'beta-broke-here'; then
+if [ "${rc}" -eq 1 ] && grep -q '^FAIL .*scripts/beta.test.sh' <<<"${out}" \
+   && grep -q 'beta-broke-here' <<<"${out}"; then
   ok "a failing script exits 1 and shows its log tail"
 else bad "failing script: ${out} (rc=${rc})"; fi
 git checkout -q -- scripts/beta.test.sh
@@ -134,14 +134,14 @@ git checkout -q -- scripts/beta.test.sh
 start="$(date +%s)"
 out="$(run --timeout 2)"; rc=$?
 took=$(( $(date +%s) - start ))
-if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -q '^TIMEOUT' && [ "${took}" -lt 20 ]; then
+if [ "${rc}" -eq 1 ] && grep -q '^TIMEOUT' <<<"${out}" && [ "${took}" -lt 20 ]; then
   ok "a script past --timeout is killed and reported TIMEOUT (${took}s)"
 else bad "timeout: ${out} (rc=${rc}, took=${took}s)"; fi
 rm -f docs/page.md
 
 printf 'x\n' >> scripts/alpha.test.sh
 out="$(run)"; rc=$?
-if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -q '^PASS .*scripts/alpha.test.sh'; then
+if [ "${rc}" -eq 0 ] && grep -q '^PASS .*scripts/alpha.test.sh' <<<"${out}"; then
   ok "a passing selection exits 0"
 else bad "passing run: ${out} (rc=${rc})"; fi
 git checkout -q -- scripts/alpha.test.sh
