@@ -91,22 +91,27 @@ if [ "${select_all}" -eq 1 ]; then
   changed_count="all"
 else
   mb="$(git merge-base "${base}" HEAD 2>/dev/null)" || die "no merge base between ${base} and HEAD (fetch ${base} first)"
-  changed="$( { git diff --name-only --no-renames "${mb}" || exit 2; git ls-files --others --exclude-standard || exit 2; } | sort -u )" \
+  changed="$( { git -c core.quotePath=false diff --name-only --no-renames "${mb}" || exit 2; git -c core.quotePath=false ls-files --others --exclude-standard || exit 2; } | sort -u )" \
     || die "cannot list changed files"
   changed_count="$(printf '%s\n' "${changed}" | grep -c . || true)"
 
-  # Glob semantics: inside [[ ]], `*` crosses `/`, so `**` behaves as dorny's `**`. A
-  # leading `**/` must also match zero directories, so try the pattern without it too.
-  matches() {
-    local file="$1" pat="$2"
-    # shellcheck disable=SC2053 # the right-hand side is a glob on purpose
-    [[ "${file}" == ${pat} ]] && return 0
-    # shellcheck disable=SC2053 # the right-hand side is a glob on purpose
-    case "${pat}" in
-      '**/'*) [[ "${file}" == ${pat#'**/'} ]] && return 0 ;;
+  # Glob semantics: inside [[ ]], `*` crosses `/`, so `**` behaves as dorny's `**`. Every
+  # `**/` — leading or embedded — may also match zero directories, so each one is tried both
+  # kept and dropped (`a/**/b` must match `a/b`, and `**/x` must match `x`).
+  glob_match() {
+    local file="$1" done_part="$2" rest="$3" head tail
+    case "${rest}" in
+      *'**/'*)
+        head="${rest%%'**/'*}"
+        tail="${rest#*'**/'}"
+        glob_match "${file}" "${done_part}${head}**/" "${tail}" && return 0
+        glob_match "${file}" "${done_part}${head}" "${tail}" && return 0
+        return 1 ;;
     esac
-    return 1
+    # shellcheck disable=SC2053 # the right-hand side is a glob on purpose
+    [[ "${file}" == ${done_part}${rest} ]]
   }
+  matches() { glob_match "$1" "" "$2"; }
 
   while IFS= read -r name; do
     [ -n "${name}" ] || continue
@@ -141,11 +146,13 @@ selected="$(jq -r --argjson hits "${hits_json}" '
   | [$wd, .] | @tsv' <<<"${jobs_json}")" || die "cannot read the gated jobs in ${ci_file}"
 
 scripts=""
+runs=""
 missing=""
 while IFS=$'\t' read -r wd s; do
   [ -n "${s}" ] || continue
   s="${s#./}"
-  if [ -f "${wd}/${s}" ]; then p="${wd}/${s}"; elif [ -f "${s}" ]; then p="${s}"; else
+  # CI launches the script from the step's working-directory, so the runner does too.
+  if [ -f "${wd}/${s}" ]; then run_wd="${wd}"; p="${wd}/${s}"; elif [ -f "${s}" ]; then run_wd="."; p="${s}"; else
     # CI would fail trying to run it, so a selected script that does not exist is never
     # silently dropped from the selection.
     missing+="${s} (working-directory ${wd})"$'\n'
@@ -154,6 +161,7 @@ while IFS=$'\t' read -r wd s; do
   p="${p#./}"
   case $'\n'"${scripts}" in *$'\n'"${p}"$'\n'*) continue ;; esac
   scripts+="${p}"$'\n'
+  runs+="${run_wd}"$'\t'"${s}"$'\t'"${p}"$'\n'
 done <<<"${selected}"
 
 if [ -n "${missing}" ]; then
@@ -178,30 +186,31 @@ trap 'rm -rf "${logdir}"' EXIT
 set -m   # each background script gets its own process group, so a timeout kills its children too
 failed=0
 i=0
-while IFS= read -r s; do
+while IFS=$'\t' read -r run_wd rel s; do
   [ -n "${s}" ] || continue
   i=$((i + 1))
   log="${logdir}/${i}.log"
   start="$(date +%s)"
-  bash "${s}" >"${log}" 2>&1 &
+  ( cd "${run_wd}" && exec bash "${rel}" ) >"${log}" 2>&1 &
   pid=$!
   # TERM first, then KILL after a short grace, so a script that ignores TERM cannot outlive
   # its deadline.
-  ( sleep "${timeout_s}"; kill -TERM -- "-${pid}" 2>/dev/null; sleep "${kill_grace_s}"; kill -KILL -- "-${pid}" 2>/dev/null ) &
+  # The marker records that the deadline fired, so a script that exits 0 on TERM is still a TIMEOUT.
+  ( sleep "${timeout_s}"; : >"${log}.timeout"; kill -TERM -- "-${pid}" 2>/dev/null; sleep "${kill_grace_s}"; kill -KILL -- "-${pid}" 2>/dev/null ) &
   watchdog=$!
   wait "${pid}"
   rc=$?
   kill -TERM -- "-${watchdog}" 2>/dev/null
   wait "${watchdog}" 2>/dev/null
   secs=$(( $(date +%s) - start ))
-  if [ "${rc}" -eq 0 ]; then
+  if [ "${rc}" -eq 0 ] && [ ! -e "${log}.timeout" ]; then
     printf 'PASS     %4ss  %s\n' "${secs}" "${s}"
   else
     failed=1
-    if [ "${secs}" -ge "${timeout_s}" ]; then state=TIMEOUT; else state=FAIL; fi
+    if [ -e "${log}.timeout" ]; then state=TIMEOUT; else state=FAIL; fi
     printf '%-8s %4ss  %s (exit %s) — last lines:\n' "${state}" "${secs}" "${s}" "${rc}"
     tail -n 20 "${log}" | sed 's/^/    /'
   fi
-done <<<"${scripts}"
+done <<<"${runs}"
 
 exit "${failed}"

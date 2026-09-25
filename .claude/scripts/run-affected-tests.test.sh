@@ -7,9 +7,11 @@
 #   - selection follows the workflow: a change hits only the filters whose globs match it
 #   - a change no filter matches selects nothing (the negative control), and still exits 0
 #   - `**/` also matches at the repository root, as dorny/paths-filter does
-#   - a step's working-directory resolves the script path
+#   - an embedded **/ also matches zero directories
+#   - a step's working-directory resolves the script path, and the script runs from it
 #   - a failing script makes the run exit 1 and prints its log tail
-#   - a script past --timeout is killed and reported TIMEOUT, not left running
+#   - a script past --timeout is killed and reported TIMEOUT, not left running — even when it
+#     exits 0 on TERM
 #   - an unreadable workflow or a missing merge base is exit 2, never a clean pass
 set -uo pipefail
 
@@ -91,6 +93,12 @@ jobs:
               - 'missing/**'
             stubborn:
               - 'stubborn/**'
+            nested:
+              - 'conf/**/*.json'
+            graceful:
+              - 'graceful/**'
+            wdcheck:
+              - 'wdcheck/**'
   test-ghost:
     if: needs.changes.outputs.ghost == 'true'
     steps:
@@ -99,9 +107,27 @@ jobs:
     if: needs.changes.outputs.stubborn == 'true'
     steps:
       - run: bash scripts/stubborn.test.sh
+  test-nested:
+    if: needs.changes.outputs.nested == 'true'
+    steps:
+      - run: bash scripts/nested.test.sh
+  test-graceful:
+    if: needs.changes.outputs.graceful == 'true'
+    steps:
+      - run: bash scripts/graceful.test.sh
+  test-wdcheck:
+    if: needs.changes.outputs.wdcheck == 'true'
+    steps:
+      - working-directory: docs
+        run: bash scripts/where.test.sh
 EOF
 printf "trap '' TERM\nsleep 60\n" > scripts/stubborn.test.sh
-mkdir -p missing stubborn
+printf 'exit 0\n' > scripts/nested.test.sh
+# Exits cleanly on TERM, so only the deadline itself can mark it as timed out.
+printf "trap 'exit 0' TERM\nsleep 60\n" > scripts/graceful.test.sh
+# Passes only when launched from the step's working-directory, as CI launches it.
+printf '[ "$(basename "$PWD")" = docs ] || { echo "ran from $PWD"; exit 4; }\n' > docs/scripts/where.test.sh
+mkdir -p missing stubborn conf graceful wdcheck
 git add -A && git commit -q -m base
 
 run() { "${runner}" --root "${repo}" --base main "$@"; }
@@ -132,6 +158,15 @@ if grep -qx 'scripts/beta.test.sh' <<<"${out}"; then
   ok "a leading **/ matches a file at the repository root"
 else bad "root **/ match: ${out}"; fi
 rm -f root.beta
+
+# git quotes non-ASCII paths by default, which would make them match no filter.
+nonascii="scripts/alpha-$(printf '\303\270').md"
+: > "${nonascii}"
+out="$(run --list)"
+if grep -qx 'scripts/alpha.test.sh' <<<"${out}"; then
+  ok "a non-ASCII changed path still matches its filter"
+else bad "non-ASCII path: ${out}"; fi
+rm -f "${nonascii}"
 
 : > docs/page.md
 out="$(run --list)"
@@ -178,6 +213,27 @@ if [ "${rc}" -eq 1 ] && grep -q '^TIMEOUT' <<<"${out}" && [ "${took}" -lt 20 ]; 
   ok "a script that ignores TERM is killed after the grace period (${took}s)"
 else bad "TERM-ignoring script: ${out} (rc=${rc}, took=${took}s)"; fi
 rm -f stubborn/x
+
+: > conf/settings.json
+out="$(run --ci-file .github/workflows/extra.yaml --list 2>&1)"
+if grep -qx 'scripts/nested.test.sh' <<<"${out}"; then
+  ok "an embedded **/ also matches zero directories"
+else bad "embedded **/ zero-depth match: ${out}"; fi
+rm -f conf/settings.json
+
+: > graceful/x
+out="$(run --ci-file .github/workflows/extra.yaml --timeout 2 2>&1)"; rc=$?
+if [ "${rc}" -eq 1 ] && grep -q '^TIMEOUT .*scripts/graceful.test.sh' <<<"${out}"; then
+  ok "a script that exits 0 on TERM at the deadline is still reported TIMEOUT"
+else bad "clean exit on TERM: ${out} (rc=${rc})"; fi
+rm -f graceful/x
+
+: > wdcheck/x
+out="$(run --ci-file .github/workflows/extra.yaml 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && grep -q '^PASS .*docs/scripts/where.test.sh' <<<"${out}"; then
+  ok "a script runs from its step's working-directory"
+else bad "working-directory launch: ${out} (rc=${rc})"; fi
+rm -f wdcheck/x
 
 # --- cannot tell ---------------------------------------------------------------------------
 : > missing/x
