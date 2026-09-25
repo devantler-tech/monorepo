@@ -20,6 +20,12 @@ Three channels actually get the maintainer's attention, and all are *active* (ne
    - **Destination:** his self-DM (the connector's `channel_id` set to his own Slack user id, which
      the connector reports), never a channel. Every channel in the workspace is public, and the self-DM
      is the one private destination, so an ask that names a weakness can go there.
+   - **Surface:** the Slack connector that is already signed in, whose tools are named
+     `slack_send_message`, `slack_read_user_profile` and so on. A connector that asks for an
+     interactive sign-in, such as the `slack-by-salesforce` plugin's, which an unattended run cannot
+     complete, is a different surface, not evidence that the channel is closed. Try the signed-in one
+     before concluding Slack is unavailable, and a run that reports it unavailable names each surface it
+     tried and what that surface returned (monorepo#2900).
    - **Unattended runs may send it** (maintainer direction, interactive session 2026-09-13: *"figure
      out how to reach me on slack on your own"*, resolving #3014). Because an unattended run takes a
      write action only when its task file names it, the machine-local scheduler pointer must name this

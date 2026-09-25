@@ -1298,6 +1298,16 @@ assert_prose "the ask must be the last thing in that paragraph, followed by a bl
   "Maintainer channels lets a Slack ask be recorded where the blocker check cannot see it"
 refute_prose "works from **unattended runs too**, via each agent's Slack tooling" \
   "Issue-driven still claims Slack works unattended without the destination and caveats"
+# Two Slack surfaces exist: an already signed-in connector, and a plugin connector that needs an
+# interactive sign-in no unattended run can complete. Checked the obvious way, the second makes the
+# only unattended escalation channel look closed (monorepo#2900). Name the working surface, say an
+# auth failure elsewhere proves nothing, and make an "unavailable" report name what it tried.
+assert_prose "the Slack connector that is already signed in" \
+  "Maintainer channels does not name which Slack surface is the channel (monorepo#2900)"
+assert_prose "is a different surface, not evidence that the channel is closed" \
+  "Maintainer channels lets a sign-in prompt on one Slack surface read as the channel being closed (monorepo#2900)"
+assert_prose "names each surface it tried and what that surface returned" \
+  "Maintainer channels lets a run report Slack unavailable without saying what it tried (monorepo#2900)"
 
 # The plugin's maintainer-PR driving fact (agent-plugins#201) is read from the Trust gate
 # section and defaults to hands-off when that section does not declare it. This deployment
