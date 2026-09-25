@@ -179,7 +179,7 @@ fi
 # gateway keeps serving its last configuration, Flux applies each HTTPRoute and reports Ready, and
 # the controller's pods run — but the route's status keeps the generation it last processed
 # (platform#4198: Cilium's Gateway API controller never started after an operator restart, and
-# route changes stopped reaching the gateway for 12 hours). So a route whose status lags its spec
+# route changes stopped reaching the gateway for almost 15 hours). So a route whose status lags its spec
 # is the signal. A lag is normal for the seconds after an edit, so it fails only once the spec has
 # been unchanged for ROUTE_GRACE_SECONDS; before that it is progress. The last spec change is the
 # newest managedFields entry that owns spec fields, which is why this read asks for managed

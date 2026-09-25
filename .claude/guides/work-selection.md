@@ -297,7 +297,7 @@ platform change took cluster DNS down, every Flux source went `False`, and the s
 the scoped prod context. It reads Flux readiness, crash-looping or image-pull-failing pods, and
 HTTPRoutes the gateway has stopped applying, and takes a few seconds. The last is the one every
 other signal misses: on 2026-09-25 Cilium's Gateway API controller did not start after an operator
-restart, and route changes stopped reaching the gateway for 12 hours while Flux, the pods and this
+restart, and route changes stopped reaching the gateway for almost 15 hours while Flux, the pods and this
 check all read healthy (platform#4198). `0` is healthy, `1` is live breakage and belongs on rung 0, and `2` is
 **UNKNOWN** — an unreadable cluster, never a healthy one. `nothing_on_fire` can be `true` only
 when this check reads `0` in the same run. A host with no prod context reports `2`: the run carries
