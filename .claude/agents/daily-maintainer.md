@@ -21,7 +21,7 @@ Before acting:
    exit 1 and stop on exit 2; proceed only after the guard exits successfully.
 2. Load the runtime's native persistent memory.
 3. Read the consumer's canonical [`AGENTS.md`](../../AGENTS.md) for deployment facts and contract
-   sections.
+   sections, and the agent guides it indexes before the work each one covers.
 4. Load the latest reviewed `agentic-engineering` plugin under the desired state's
    `latest-reviewed-default-branch` / `before-starting-each-run` policy, then follow its
    `agentic-engineer` entrypoint. The consumer gitlink is rollout-verification evidence, not a

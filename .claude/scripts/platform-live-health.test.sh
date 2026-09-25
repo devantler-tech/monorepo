@@ -44,6 +44,49 @@ deployments() {
   list "${items[@]}"
 }
 oci_helmrepo='{"kind":"HelmRepository","metadata":{"namespace":"flux-system","name":"flux-operator"},"spec":{"type":"oci"}}'
+# The fixed clock every run uses: 2026-09-25T18:00:00Z.
+readonly now=1790359200
+# route <ns> <name> <generation> <mode> <last spec change> [<later metadata-only change>]
+# An HTTPRoute with its managed fields and declared parents. Neither the status manager's entry
+# nor a metadata-only entry is a spec change, and both are newer than the spec change so that
+# counting either would visibly move the clock. <mode> is the generation the one declared parent
+# observed, or:
+#   none               no parent has a status entry
+#   unobserved-parent  a second declared parent's entry carries no observedGeneration
+#   missing-parent     a second declared parent has no status entry at all
+#   rejected           the parent observed the current generation and reports Accepted=False
+#   other-port         a second declared parent differs only by port and has no status entry
+#   rejected-and-lag   one parent currently rejects the route while a second has no entry
+route() {
+  local current="{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$3}"
+  local declared='[{"name":"platform","namespace":"kube-system"}]' parents='[]'
+  local platform="{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[$current]}"
+  case "$4" in
+    none) ;;
+    unobserved-parent)
+      declared='[{"name":"platform","namespace":"kube-system"},{"name":"internal","namespace":"kube-system"}]'
+      parents="[$platform,{\"parentRef\":{\"name\":\"internal\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"Unknown\"}]}]" ;;
+    missing-parent)
+      declared='[{"name":"platform","namespace":"kube-system"},{"name":"internal","namespace":"kube-system"}]'
+      parents="[$platform]" ;;
+    rejected)
+      parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"False\",\"reason\":\"NotAllowedByListeners\",\"observedGeneration\":$3},{\"type\":\"ResolvedRefs\",\"status\":\"True\",\"observedGeneration\":$3}]}]" ;;
+    other-port)
+      declared='[{"name":"platform","namespace":"kube-system","port":443},{"name":"platform","namespace":"kube-system","port":80}]'
+      parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\",\"port\":443},\"conditions\":[$current]}]" ;;
+    unattached) declared='[]' ;;
+    rejected-mixed)
+      parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"False\",\"reason\":\"NotAllowedByListeners\",\"observedGeneration\":$3},{\"type\":\"ResolvedRefs\",\"status\":\"True\",\"observedGeneration\":$(($3 - 1))}]}]" ;;
+    rejected-and-lag)
+      declared='[{"name":"platform","namespace":"kube-system"},{"name":"internal","namespace":"kube-system"}]'
+      parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"ResolvedRefs\",\"status\":\"False\",\"reason\":\"BackendNotFound\",\"observedGeneration\":$3}]}]" ;;
+    *) parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$4}]}]" ;;
+  esac
+  local meta=''
+  [ -z "${6:-}" ] || meta=",{\"manager\":\"kubectl-label\",\"operation\":\"Update\",\"time\":\"$6\",\"fieldsV1\":{\"f:metadata\":{\"f:labels\":{}}}}"
+  printf '{"kind":"HTTPRoute","metadata":{"namespace":"%s","name":"%s","generation":%s,"creationTimestamp":"2026-06-01T00:00:00Z","managedFields":[{"manager":"kustomize-controller","operation":"Apply","time":"%s","fieldsV1":{"f:metadata":{"f:labels":{}},"f:spec":{"f:rules":{}}}},{"manager":"cilium-operator-generic","operation":"Update","subresource":"status","time":"2026-09-25T17:59:59Z","fieldsV1":{"f:status":{}}}%s]},"spec":{"parentRefs":%s},"status":{"parents":%s}}' \
+    "$1" "$2" "$3" "$5" "$meta" "$declared" "$parents"
+}
 
 scenario() { # <name> — fresh fixture dir populated with a healthy baseline
   FAKE="$tmp/$1"
@@ -53,8 +96,9 @@ scenario() { # <name> — fresh fixture dir populated with a healthy baseline
   list "$(ready OCIRepository flux-system flux-system True)" "$oci_helmrepo" >"$FAKE/ocirepositories.json"
   deployments source-controller:1:1 kustomize-controller:2:2 helm-controller:2:2 notification-controller:2:2 >"$FAKE/deployments.json"
   list "$healthy_pod" >"$FAKE/pods.json"
+  list "$(route observability coroot 6 6 2026-09-25T12:00:00Z)" >"$FAKE/httproutes.json"
 }
-run() { set +e; KUBECTL="$tmp/kubectl" "$checker" --context prod-ctx >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
+run() { set +e; PLATFORM_HEALTH_NOW="$now" KUBECTL="$tmp/kubectl" "$checker" --context prod-ctx >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
 expect() { # <label> <rc> <line fragment>
   [ "$rc" -eq "$2" ] || { cat "$tmp/out" "$tmp/err" >&2; fail "$1: rc=$rc, want $2"; }
   grep -qF -- "$3" "$tmp/out" || { cat "$tmp/out" "$tmp/err" >&2; fail "$1: missing '$3'"; }
@@ -175,8 +219,92 @@ list "$malformed_ks" "$(ready Kustomization flux-system infrastructure False Bui
 run
 expect "a failing object after a malformed one is still found" 1 "FAILING Kustomization flux-system/infrastructure reason=BuildFailed"
 
+# 🔴 platform#4198: the gateway controller stopped applying routes. Flux, the pods and every
+# stored condition stayed green, so only the route status lagging its spec shows it.
+scenario gateway-frozen
+list "$(route observability coroot 6 5 2026-09-25T17:12:00Z)" "$(route umami umami-umami 117 116 2026-09-25T17:29:00.123456Z)" >"$FAKE/httproutes.json"
+run
+expect "a route the gateway stopped applying" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=5"
+expect "fractional managed-field times parse" 1 "FAILING HTTPRoute umami/umami-umami reason=gateway-not-applying generation=117 applied=116"
+expect "frozen gateway verdict" 1 "PLATFORM-HEALTH=UNHEALTHY failing=2"
+
+# The seconds after an edit are progress, not a failure: every deploy passes through them. The
+# status manager's newer entry is not a spec change, so it must not reset the clock either way.
+scenario gateway-catching-up
+list "$(route observability coroot 6 5 2026-09-25T17:55:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a fresh lag is progress" 0 "PROGRESSING HTTPRoute observability/coroot"
+
+# A metadata-only edit after the stall must not restart the grace period, or repeated label or
+# annotation edits would keep a stalled route PROGRESSING forever.
+scenario gateway-frozen-relabelled
+list "$(route observability coroot 6 5 2026-09-25T17:12:00Z 2026-09-25T17:58:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a metadata-only edit does not reset the clock" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=5"
+
+# One parent that never observed the route must not hide behind one that did.
+scenario gateway-unobserved-parent
+list "$(route observability coroot 6 unobserved-parent 2026-09-25T17:12:00Z)" >"$FAKE/httproutes.json"
+run
+expect "an unobserved parent is not applying" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=none"
+
+# A declared parent whose controller stopped may write no status entry at all; scanning only the
+# entries that exist would read the route as current.
+scenario gateway-missing-parent
+list "$(route observability coroot 6 missing-parent 2026-09-25T17:12:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a declared parent with no status entry" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=none"
+
+# A current status that rejects the route is live breakage, not lag: the gateway will not serve it.
+scenario gateway-rejected
+list "$(route observability coroot 6 rejected 2026-09-25T17:59:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a route the gateway rejected" 1 "FAILING HTTPRoute observability/coroot reason=route-rejected conditions=Accepted/NotAllowedByListeners"
+
+# Two parents that differ only by port are two parents; one current entry must not satisfy both.
+scenario gateway-other-port
+list "$(route observability coroot 6 other-port 2026-09-25T17:12:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a parent differing only by port" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=none"
+
+# A current rejection is breakage now, even while another parent is still inside the grace period.
+scenario gateway-rejected-while-lagging
+list "$(route observability coroot 6 rejected-and-lag 2026-09-25T17:59:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a rejection beside a lagging parent" 1 "FAILING HTTPRoute observability/coroot reason=route-rejected conditions=ResolvedRefs/BackendNotFound"
+
+# A current rejection is live breakage even when another condition on that parent is stale.
+scenario gateway-rejected-mixed-generations
+list "$(route observability coroot 6 rejected-mixed 2026-09-25T17:59:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a current rejection beside a stale condition" 1 "FAILING HTTPRoute observability/coroot reason=route-rejected conditions=Accepted/NotAllowedByListeners"
+
+# A route declaring no parent is attached to no gateway, so none is expected to apply it.
+scenario unattached-route
+list "$(route observability coroot 6 6 2026-09-25T12:00:00Z)" "$(route tenant draft 1 unattached 2026-09-25T17:00:00Z)" >"$FAKE/httproutes.json"
+run
+expect "an unattached route" 0 "PLATFORM-HEALTH=OK"
+grep -qF "tenant/draft" "$tmp/out" && fail "a route with no parentRefs was reported"
+
+scenario gateway-never-applied
+list "$(route tenant web 1 none 2026-09-25T17:00:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a route the gateway never accepted" 1 "FAILING HTTPRoute tenant/web reason=gateway-not-applying generation=1 applied=none"
+
+scenario noroutes
+list >"$FAKE/httproutes.json"
+run
+expect "no HTTPRoute at all" 2 "UNREADABLE httproutes: the read returned nothing"
+
+scenario badclock
+set +e; PLATFORM_HEALTH_NOW='1; halt' KUBECTL="$tmp/kubectl" "$checker" --context prod-ctx >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e
+if [ "$rc" -ne 2 ] || ! grep -qF "must be a Unix timestamp" "$tmp/err"; then
+  cat "$tmp/out" "$tmp/err" >&2
+  fail "a non-numeric clock must be refused before it reaches jq, rc=$rc"
+fi
+
 # Without --context the context is resolved through the SAME kubectl override, choosing the scoped one.
-runresolve() { set +e; KUBECTL="$tmp/kubectl" "$checker" >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
+runresolve() { set +e; PLATFORM_HEALTH_NOW="$now" KUBECTL="$tmp/kubectl" "$checker" >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
 scenario resolve
 runresolve
 expect "the context resolves through the kubectl override" 0 "PLATFORM-HEALTH=OK"

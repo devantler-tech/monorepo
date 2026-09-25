@@ -12,8 +12,11 @@ description: "The ADVANCE playbook for the Agentic Engineer (the products' prima
 
 This is the *advance* half of the role. The **operate** half (keep everything healthy) and the run
 loop live in [`portfolio-maintenance`](../portfolio-maintenance/SKILL.md); the binding rules live in
-the monorepo [`AGENTS.md`](../../../AGENTS.md) (*Mandate*, *Product strategy & roadmaps*, *Enhancement
-work*, the trust gate and all guardrails). Read those first — this skill is the how-to, not the rules.
+the monorepo [`AGENTS.md`](../../../AGENTS.md) and the agent guides it indexes — for advance work the
+[advance-work](../../guides/advance-work.md) guide (*Build the right thing*, *Enhancement work*,
+*Security hardening*, feature flags), [issues-and-board](../../guides/issues-and-board.md) (*Product
+strategy & roadmaps*, issue hierarchy) and [work-selection](../../guides/work-selection.md) (*Mandate*,
+the ladder). Read those first — this skill is the how-to, not the rules.
 
 You are the **primary engineer**: own each product's direction, quality, growth **and security
 posture**, not just its uptime — and harden on the standing principle that **good developer experience

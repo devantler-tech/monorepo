@@ -4758,9 +4758,11 @@ if want drift; then
            "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER"; do
     [ -f "$L" ] || continue
     if grep -qiE 'NEVER self-promote those|promotion stays the maintainer' "$L" 2>/dev/null; then
-      if [ -f "$AGENTS_MD" ] && grep -qiE 'promotion gate .{0,40}retired|retired by maintainer direction' "$AGENTS_MD" 2>/dev/null; then
+      # The contract is AGENTS.md plus the guides it indexes; the retirement is recorded in a guide.
+      if [ -f "$AGENTS_MD" ] && grep -qiE 'promotion gate .{0,40}retired|retired by maintainer direction' \
+        "$AGENTS_MD" "$MONOREPO"/.claude/guides/*.md 2>/dev/null; then
         echo "    ⚠️  DRIFT: $(basename "$(dirname "$L")") still asserts the definition-PR promotion gate,"
-        echo "        but AGENTS.md records it as RETIRED."
+        echo "        but the contract (AGENTS.md and its guides) records it as RETIRED."
       fi
     fi
   done

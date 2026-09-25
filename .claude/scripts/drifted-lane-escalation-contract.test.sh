@@ -12,7 +12,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${1:-${repo_root}/AGENTS.md}"
+constitution="${1:-${repo_root}/.claude/guides/definition-and-plugin.md}"
 refresh="${repo_root}/.claude/scripts/plugin-definition-refresh.sh"
 currency="${repo_root}/.claude/scripts/plugin-definition-currency.sh"
 
@@ -28,7 +28,8 @@ fail() {
 # proves the END anchor was actually seen: without it a missing anchor lets the capture run to EOF
 # and match text belonging to entirely different sections. Anchors are compared as LITERAL line
 # prefixes via index(), never as regexes — `awk -v` applies its own escape processing, so an anchor
-# containing `[` or `.` arrives mangled and silently matches nothing.
+# containing `[` or `.` arrives mangled and silently matches nothing. An empty END anchor means the
+# section runs to the next `## ` heading, or to the end of the file for a guide's last section.
 extract_section() {
   start_lit="$1"
   end_lit="$2"
@@ -37,8 +38,10 @@ extract_section() {
   raw="$(
     awk -v s="${sentinel}" -v st="${start_lit}" -v en="${end_lit}" '
       index($0, st) == 1 { ins = 1 }
-      ins && seen_first && index($0, en) == 1 { ins = 0; print s }
+      ins && seen_first && en != "" && index($0, en) == 1 { ins = 0; print s }
+      ins && seen_first && en == "" && /^## / { ins = 0; print s }
       ins { seen_first = 1; print }
+      END { if (ins && en == "") print s }
     ' "${constitution}"
   )"
 
@@ -85,7 +88,7 @@ assert_not_contains() {
   esac
 }
 
-section="$(extract_section 'Refresh only through the runtime' '### Agent definition locations')"
+section="$(extract_section 'Refresh only through the runtime' '')"
 
 # A flattened empty capture collapses to a single space, which would satisfy nothing below while
 # reporting a pass on the FIRST assertion's failure message rather than on extraction. Assert real

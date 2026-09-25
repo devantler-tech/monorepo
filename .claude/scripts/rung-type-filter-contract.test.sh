@@ -23,7 +23,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/work-selection.md"
 
 fail() {
   echo "rung type-filter contract: FAIL — $*" >&2
@@ -32,50 +32,56 @@ fail() {
 
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
 
-# Extract ONLY the ladder's rung rows. Anchored on the table's own row markers so an unrelated
-# section mentioning a type filter cannot satisfy — or break — these assertions.
-rows="$(
-  awk '
-    /^\| \*\*2\*\* \| \*\*Security issues\*\*/ { print }
-    /^\| \*\*3\*\* \| \*\*Bugs\*\*/            { print }
-  ' "${constitution}"
-)"
+# Each file carrying the ladder is checked on its own: AGENTS.md holds the always-on short form and the
+# work-selection guide the full rung definitions, and either one alone could regress.
+check_rows() {
+  # Extract ONLY the ladder's rung rows. Anchored on the table's own row markers so an unrelated
+  # section mentioning a type filter cannot satisfy — or break — these assertions.
+  rows="$(
+    awk '
+      /^\| \*\*2\*\* \| \*\*Security issues\*\*/ { print }
+      /^\| \*\*3\*\* \| \*\*Bugs\*\*/            { print }
+    ' "$1"
+  )"
 
-[ -n "${rows}" ] ||
-  fail "could not locate the rung-2/rung-3 ladder rows — the anchor moved, so every assertion below would be vacuous"
+  [ -n "${rows}" ] ||
+    fail "could not locate the rung-2/rung-3 ladder rows in ${1#"${repo_root}"/} — the anchor moved, so every assertion below would be vacuous"
 
-# Both rows, and only those two. A changed table shape that matched more rows would widen the scope
-# silently; one that matched fewer would make an assertion pass by absence.
-row_count="$(printf '%s\n' "${rows}" | wc -l | tr -d ' ')"
-[ "${row_count}" = "2" ] ||
-  fail "expected exactly 2 ladder rows (rung 2 and rung 3), found ${row_count} — the extraction anchor is wrong"
+  # Both rows, and only those two. A changed table shape that matched more rows would widen the scope
+  # silently; one that matched fewer would make an assertion pass by absence.
+  row_count="$(printf '%s\n' "${rows}" | wc -l | tr -d ' ')"
+  [ "${row_count}" = "2" ] ||
+    fail "expected exactly 2 ladder rows (rung 2 and rung 3), found ${row_count} — the extraction anchor is wrong"
 
-# 1. The rung rows must not carry a quoted type filter. This is the regression itself.
-case "${rows}" in
-  *'type:"'*)
-    fail 'a rung row writes a QUOTED type filter (type:"X"). gh search issues returns 0 rows for that form and exits 0, so a run following the ladder skips every open Security and Bug issue. Use the unquoted type:Security / type:Bug.'
-    ;;
-esac
+  # 1. The rung rows must not carry a quoted type filter. This is the regression itself.
+  case "${rows}" in
+    *'type:"'*)
+      fail 'a rung row writes a QUOTED type filter (type:"X"). gh search issues returns 0 rows for that form and exits 0, so a run following the ladder skips every open Security and Bug issue. Use the unquoted type:Security / type:Bug.'
+      ;;
+  esac
 
-# 2. Each row must name ITS OWN filter. Searching the combined output would accept the two filters
-# swapped between the rungs — a table that still contains both strings, still satisfies assertion 1,
-# and inverts the Security-before-Bug order the ladder exists to impose.
-rung2_row="$(printf '%s\n' "${rows}" | grep -F '| **2** | **Security issues**')"
-rung3_row="$(printf '%s\n' "${rows}" | grep -F '| **3** | **Bugs**')"
-[ -n "${rung2_row}" ] || fail "could not isolate the rung-2 row"
-[ -n "${rung3_row}" ] || fail "could not isolate the rung-3 row"
+  # 2. Each row must name ITS OWN filter. Searching the combined output would accept the two filters
+  # swapped between the rungs — a table that still contains both strings, still satisfies assertion 1,
+  # and inverts the Security-before-Bug order the ladder exists to impose.
+  rung2_row="$(printf '%s\n' "${rows}" | grep -F '| **2** | **Security issues**')"
+  rung3_row="$(printf '%s\n' "${rows}" | grep -F '| **3** | **Bugs**')"
+  [ -n "${rung2_row}" ] || fail "could not isolate the rung-2 row"
+  [ -n "${rung3_row}" ] || fail "could not isolate the rung-3 row"
 
-grep -q 'type:Security' <<<"${rung2_row}" ||
-  fail "the rung-2 row no longer names type:Security, so assertion 1 would pass with no filter present at all"
-grep -q 'type:Bug' <<<"${rung3_row}" ||
-  fail "the rung-3 row no longer names type:Bug, so assertion 1 would pass with no filter present at all"
+  grep -q 'type:Security' <<<"${rung2_row}" ||
+    fail "the rung-2 row no longer names type:Security, so assertion 1 would pass with no filter present at all"
+  grep -q 'type:Bug' <<<"${rung3_row}" ||
+    fail "the rung-3 row no longer names type:Bug, so assertion 1 would pass with no filter present at all"
 
-# ...and only its own. Without these, a row naming BOTH filters satisfies the two assertions above
-# while still pointing that rung at the wrong type.
-! grep -q 'type:Bug' <<<"${rung2_row}" ||
-  fail "the rung-2 (Security) row also names type:Bug — the rung filters are crossed"
-! grep -q 'type:Security' <<<"${rung3_row}" ||
-  fail "the rung-3 (Bug) row also names type:Security — the rung filters are crossed"
+  # ...and only its own. Without these, a row naming BOTH filters satisfies the two assertions above
+  # while still pointing that rung at the wrong type.
+  ! grep -q 'type:Bug' <<<"${rung2_row}" ||
+    fail "the rung-2 (Security) row also names type:Bug — the rung filters are crossed"
+  ! grep -q 'type:Security' <<<"${rung3_row}" ||
+    fail "the rung-3 (Bug) row also names type:Security — the rung filters are crossed"
+}
+check_rows "${repo_root}/AGENTS.md"
+check_rows "${constitution}"
 
 # 3. The warning that explains WHY must survive, with its measurement. Flattened, because the
 # sentences wrap across source lines.

@@ -4,7 +4,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 subject="${repo_root}/.claude/scripts/pr-body-contract.sh"
-contract="${repo_root}/AGENTS.md"
+contract="${repo_root}/.claude/guides/github-artifacts.md"
 maintenance_overlay="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 engineering_overlay="${repo_root}/.claude/skills/product-engineering/SKILL.md"
 workflow="${repo_root}/.github/workflows/ci.yaml"
@@ -67,13 +67,17 @@ for authoring_surface in "${contract}" "${maintenance_overlay}" "${engineering_o
     fail "${authoring_surface#"${repo_root}/"} does not require validating the completed body"
 done
 grep -Fq 'read the published body back' "${contract}" ||
-  fail "AGENTS.md does not require validation of GitHub's published body"
+  fail "the github-artifacts guide does not require validation of GitHub's published body"
 grep -Fq 'Before every Agentic Engineer or Agent Improver PR creation or body edit' "${contract}" ||
-  fail "AGENTS.md does not scope the executable write gate to its supported routine roles"
+  fail "the github-artifacts guide does not scope the executable write gate to its supported routine roles"
 grep -Fq -- '--allow-no-issue' "${contract}" ||
-  fail "AGENTS.md does not bind the no-issue flag to the documented trivial-fix carve-out"
-if grep -Fq 'Before every agent-authored PR creation or body edit' "${contract}"; then
-  fail "AGENTS.md incorrectly applies the routine-role disclosure gate to interactive PRs"
+  fail "the github-artifacts guide does not bind the no-issue flag to the documented trivial-fix carve-out"
+# A NEGATIVE check scans the whole contract — AGENTS.md and every guide — so the wrong scope cannot
+# return in a file this test does not otherwise read, such as the always-on root.
+whole_contract="$("${repo_root}/.claude/scripts/contract-text.sh")" ||
+  fail "cannot assemble the agent contract, so the negative check below would prove nothing"
+if grep -Fq 'Before every agent-authored PR creation or body edit' <<<"${whole_contract}"; then
+  fail "the contract incorrectly applies the routine-role disclosure gate to interactive PRs"
 fi
 grep -Fq "'.claude/scripts/pr-body-contract.sh'" "${workflow}" ||
   fail "CI change detection does not include the PR-body guard"

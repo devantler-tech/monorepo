@@ -8,7 +8,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${AGENTS_FILE:-${repo_root}/AGENTS.md}"
+constitution="${AGENTS_FILE:-${repo_root}/.claude/guides/merge-policy.md}"
 workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
@@ -20,8 +20,8 @@ fail() {
 command -v gh >/dev/null 2>&1 || fail "gh is required to exercise the local vocabulary boundary"
 
 merge_policy="$(awk '
-  /^### Merge policy/ { inside = 1; print; next }
-  inside && /^### /   { exit }
+  /^## Merge policy/ { inside = 1; print; next }
+  inside && /^## /    { exit }
   inside              { print }
 ' "${constitution}")"
 [ "$(printf '%s' "${merge_policy}" | wc -c)" -gt 500 ] ||
@@ -159,6 +159,7 @@ filter_block="$(awk '
   fail "could not isolate the gh-json-vocabulary-contract paths filter"
 for trigger in \
   "              - 'AGENTS.md'" \
+  "              - '.claude/guides/**'" \
   "              - '.claude/scripts/gh-json-vocabulary-contract.test.sh'" \
   "              - '.github/workflows/ci.yaml'" \
   "              - '.claude/agents/portfolio-surveyor.md'"; do

@@ -3,7 +3,11 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-contract="${repo_root}/AGENTS.md"
+# The contract is AGENTS.md plus every guide it indexes; these assertions span several guides.
+contract="$(mktemp)"
+trap 'rm -f "${contract}"' EXIT
+"${repo_root}/.claude/scripts/contract-text.sh" >"${contract}" ||
+  { echo "product value contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
 run_loop="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 engineering="${repo_root}/.claude/skills/product-engineering/SKILL.md"
 site_card="${repo_root}/.claude/skills/products/monorepo/SKILL.md"

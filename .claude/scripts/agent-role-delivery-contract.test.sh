@@ -9,7 +9,13 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+# The contract is AGENTS.md plus every guide it indexes; most assertions below span several guides.
+contract_tmp="$(mktemp -d)"
+trap 'rm -rf "${contract_tmp}"' EXIT
+constitution="${contract_tmp}/contract.md"
+"${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
+  { echo "agent-role delivery contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
+spend_guide="${repo_root}/.claude/guides/spend-and-inference.md"
 settings="${repo_root}/.claude/settings.json"
 desired_state="${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.json"
 engineer_agent="${repo_root}/.claude/agents/daily-maintainer.md"
@@ -666,15 +672,16 @@ grep -Fq '### Spend contract' "${constitution}" ||
 grep -Fq '| **Spend contract** |' "${constitution}" ||
   fail "plugin contract table does not map the Spend contract section"
 
-# Resolve the source from the Spend contract itself. The same desired-state path
-# appears elsewhere in AGENTS.md, which must not satisfy a missing declaration.
+# Resolve the source from the Spend contract itself, in the spend guide that carries its facts
+# table. The same desired-state path appears elsewhere in the contract, which must not satisfy a
+# missing declaration. The link is relative to .claude/guides/.
 assert_spend_configuration() {
   local contract="$1" state="$2" declared_source
   jq -e '.spec.roles["agentic-engineer"].spendStewardshipEnabled
     | type == "boolean" and . == false' "${state}" >/dev/null 2>&1 ||
     fail "consumer spend stewardship must remain explicitly boolean false"
   declared_source="$(awk -F '|' '
-    /^### Spend contract( |$)/ { in_spend = 1; next }
+    /^## Spend contract( |$)/ { in_spend = 1; next }
     in_spend && /^#/ { in_spend = 0 }
     in_spend && $2 ~ /^[[:space:]]*\*\*Effective desired state\*\*[[:space:]]*$/ {
       sources++
@@ -684,10 +691,10 @@ assert_spend_configuration() {
     END { if (sources != 1) exit 1; print source }
   ' "${contract}")" ||
     fail "Spend contract must declare exactly one effective desired-state document"
-  [ "${declared_source}" = '.claude/plugin-consumption/agentic-engineering.desired-state.json' ] ||
+  [ "${declared_source}" = '../plugin-consumption/agentic-engineering.desired-state.json' ] ||
     fail "Spend contract effective desired-state document must resolve to the consumer mirror"
 }
-assert_spend_configuration "${constitution}" "${desired_state}"
+assert_spend_configuration "${spend_guide}" "${desired_state}"
 cmp -s "${desired_state}" "${plugin_root}/resources/provider-neutral.desired-state.json" ||
   fail "consumer desired-state mirror differs from the pinned canonical document"
 
@@ -705,7 +712,7 @@ cmp -s "${desired_state}" "${plugin_root}/resources/provider-neutral.desired-sta
         '.spec.roles["agentic-engineer"].spendStewardshipEnabled = $flag' \
         "${desired_state}" > "${spend_tmp}/state.json"
     fi
-    if (assert_spend_configuration "${constitution}" "${spend_tmp}/state.json") \
+    if (assert_spend_configuration "${spend_guide}" "${spend_tmp}/state.json") \
       > "${spend_tmp}/failure" 2>&1; then
       fail "spend configuration accepted invalid flag ${invalid_flag}"
     fi
@@ -720,10 +727,10 @@ cmp -s "${desired_state}" "${plugin_root}/resources/provider-neutral.desired-sta
         if (scenario == "duplicate") print
       }
       { print }
-    ' "${constitution}" > "${spend_tmp}/AGENTS.md"
+    ' "${spend_guide}" > "${spend_tmp}/AGENTS.md"
     if [ "${invalid_source}" = outside ]; then
       printf '\n### Unrelated example\n' >> "${spend_tmp}/AGENTS.md"
-      awk '/^\| \*\*Effective desired state\*\* \|/' "${constitution}" \
+      awk '/^\| \*\*Effective desired state\*\* \|/' "${spend_guide}" \
         >> "${spend_tmp}/AGENTS.md"
     fi
     if (assert_spend_configuration "${spend_tmp}/AGENTS.md" "${desired_state}") \
@@ -837,7 +844,7 @@ fi
 # initialised by this contract's CI job. The real adapter and real guard then classify
 # one read and one write, so a resolver that merely finds a file cannot satisfy this.
 hook_tmp="$(mktemp -d)"
-trap 'rm -rf "${hook_tmp}"' EXIT
+trap 'rm -rf "${hook_tmp}" "${contract_tmp}"' EXIT
 hook_config="${hook_tmp}/claude"
 hook_registry="${hook_config}/plugins/installed_plugins.json"
 mkdir -p "$(dirname "${hook_registry}")"
@@ -1291,6 +1298,27 @@ assert_prose "the ask must be the last thing in that paragraph, followed by a bl
   "Maintainer channels lets a Slack ask be recorded where the blocker check cannot see it"
 refute_prose "works from **unattended runs too**, via each agent's Slack tooling" \
   "Issue-driven still claims Slack works unattended without the destination and caveats"
+# Two Slack surfaces exist: an already signed-in connector, and a plugin connector that needs an
+# interactive sign-in no unattended run can complete. Checked the obvious way, the second makes the
+# only unattended escalation channel look closed (monorepo#2900). Name the working surface, say an
+# auth failure elsewhere proves nothing, and make an "unavailable" report name what it tried.
+# Scoped to the Maintainer channels section, which is what an agent loads when it escalates: the
+# same words in another guide would not reach it there.
+maintainer_channels_flat="$(
+  awk '$0 == "## Maintainer channels" { inside = 1; next } inside && /^## / { exit } inside' \
+    "${repo_root}/.claude/guides/maintainer-channels.md" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${maintainer_channels_flat}" ] ||
+  fail "could not extract the maintainer-channels guide's '## Maintainer channels' section (monorepo#2900)"
+for surface_rule in \
+  "the Slack connector that is already signed in, whose tools are named \`slack_send_message\`" \
+  "is a different surface, not evidence that the channel is closed" \
+  "names each surface it tried and what that surface returned"; do
+  case "${maintainer_channels_flat}" in
+    *"${surface_rule}"*) ;;
+    *) fail "Maintainer channels no longer says '${surface_rule}' — the escalation surface is ambiguous again (monorepo#2900)" ;;
+  esac
+done
 
 # The plugin's maintainer-PR driving fact (agent-plugins#201) is read from the Trust gate
 # section and defaults to hands-off when that section does not declare it. This deployment
