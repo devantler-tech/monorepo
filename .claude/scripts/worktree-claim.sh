@@ -98,34 +98,44 @@ write_marker() {
 
 # `add` arms these before it creates the worktree, and keeps them until that worktree passes its own
 # origin check, so any exit in between (the check refusing it, an error, a signal) takes back what `add`
-# created. Only a creation recorded in the note counts: the note is written under the branch-operation
-# lock right after the worktree exists, so a path something else created is never removed. Removal is
-# forced, because a post-checkout hook can leave files in the new worktree that would stop a plain
-# `worktree remove`. The branch is removed only when `add` created it, and only while it still points
-# where `add` left it.
+# created. Only what the note records counts: it is written under the branch-operation lock once the
+# creation step has finished, however it ended, so a path something else created is never removed.
+# Removal is forced, because a post-checkout hook can leave files in the new worktree that would stop a
+# plain `worktree remove`. The branch is removed only when `add` created it, and only while it still
+# points where `add` left it; that holds even when git was stopped before it made the worktree.
 PENDING_REPO=""
 PENDING_WT=""
 PENDING_BRANCH=""
 PENDING_NOTE=""
 discard_pending_worktree() {
   [ -n "$PENDING_NOTE" ] || return 0
-  local repo="$PENDING_REPO" wt="$PENDING_WT" branch="$PENDING_BRANCH" note="$PENDING_NOTE" created="" oid=""
+  local repo="$PENDING_REPO" wt="$PENDING_WT" branch="$PENDING_BRANCH" note="$PENDING_NOTE" created="" oid="" what
   PENDING_NOTE=""
   if [ -r "$note" ]; then
     { IFS= read -r created || true; IFS= read -r oid || true; } <"$note"
   fi
   rm -f "$note"
-  [ "$created" = "created" ] || return 0
-  if branch_op_lock_run "$repo" --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" -- \
-    remove_new_worktree "$repo" "$wt" "$branch" "$oid"; then
-    echo "worktree-claim: removed the unclaimed new worktree $wt${oid:+ and its new branch $branch}" >&2
+  [ "$created" = "created" ] || [ -n "$oid" ] || return 0
+  if [ "$created" = "created" ]; then
+    what="the unclaimed new worktree $wt${oid:+ and its new branch $branch}"
   else
-    echo "worktree-claim: could not remove the unclaimed new worktree $wt; remove it before reusing $branch" >&2
+    what="the new branch $branch"
+  fi
+  if branch_op_lock_run "$repo" --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" -- \
+    remove_new_worktree "$repo" "$wt" "$branch" "$oid" "$created"; then
+    echo "worktree-claim: removed $what" >&2
+  else
+    echo "worktree-claim: could not remove $what; remove it before reusing $branch" >&2
   fi
 }
 remove_new_worktree() {
-  local repo="$1" wt="$2" branch="$3" oid="$4"
-  git -C "$repo" worktree remove --force "$wt" || return
+  local repo="$1" wt="$2" branch="$3" oid="$4" created="$5"
+  if [ "$created" = "created" ]; then
+    git -C "$repo" worktree remove --force "$wt" || return
+  elif [ -e "$wt" ]; then
+    # Something add did not record as its worktree is at <wt>, and the branch may be checked out there.
+    return 1
+  fi
   [ -z "$oid" ] || git -C "$repo" update-ref -d "refs/heads/$branch" "$oid"
 }
 
@@ -376,17 +386,42 @@ warn_if_local_branch_is_behind() {
   return 0
 }
 
-# add_worktree_noting_new_branch runs add_worktree_on and, when <branch> did not exist before it, writes
-# the new branch's object id to <note>. It runs under the branch-operation lock, so no cooperating branch
-# operation can create the branch between the check and the add.
+# add_worktree_noting_new_branch runs add_worktree_on and records in <note> what it left behind, whether
+# or not it succeeded: `created` when <wt> is now a worktree of <repo>, and the new branch's object id when
+# <branch> did not exist before. git keeps both when only a post-checkout hook fails, and a signal to the
+# whole process group can land after git finishes but before the note is written, so the record comes
+# from the repository's state rather than the exit status, and a signal waits until it is written. It runs
+# under the branch-operation lock, in its subshell, so no cooperating operation creates the branch or
+# path meanwhile and the signal trap it sets goes no further.
 add_worktree_noting_new_branch() {
-  local repo="$1" wt="$2" branch="$3" note="$4" existed=0 oid=""
+  local repo="$1" wt="$2" branch="$3" note="$4" existed=0 oid="" created="" rc=0 signalled=0
+  trap 'signalled=1' HUP INT TERM
+  [ ! -e "$wt" ] || return 1
   if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
     existed=1
   fi
-  add_worktree_on "$repo" "$wt" "$branch" || return
+  if [ "$signalled" -eq 0 ]; then
+    add_worktree_on "$repo" "$wt" "$branch" || rc=$?
+  fi
+  if [ "$rc" -eq 0 ] || worktree_registered "$repo" "$wt"; then
+    created="created"
+  fi
   [ "$existed" -eq 1 ] || oid="$(git -C "$repo" rev-parse --verify --quiet "refs/heads/$branch" || true)"
-  printf 'created\n%s\n' "$oid" >"$note"
+  printf '%s\n%s\n' "$created" "$oid" >"$note"
+  [ "$signalled" -eq 0 ] || return 2
+  return "$rc"
+}
+
+# worktree_registered succeeds when <wt> exists and git lists it among <repo>'s worktrees.
+worktree_registered() {
+  local repo="$1" wt="$2" wt_phys entry
+  wt_phys="$(cd "$wt" 2>/dev/null && pwd -P)" || return 1
+  while IFS= read -r -d '' entry; do
+    case "$entry" in
+      "worktree "?*) [ "$(cd "${entry#worktree }" 2>/dev/null && pwd -P)" != "$wt_phys" ] || return 0 ;;
+    esac
+  done < <(git -C "$repo" worktree list --porcelain -z 2>/dev/null)
+  return 1
 }
 
 add_worktree_on() {
@@ -749,12 +784,49 @@ submodule_name_at() {
   printf '%s\n' "$name"
 }
 
+# origin_config_own <repo> <probe> <regexp> <url> succeeds when <repo> sees a setting matching <regexp>
+# that the neutral <probe> does not: an entry from the repository's own config (other than an origin
+# url or pushurl equal to the registered <url>), or shared entries that are not, in order, among the
+# probe's. A setting only the probe sees, such as one a global includeIf "gitdir:/tmp/**" adds for its
+# temporary path, never counts. A read that fails counts, so an error never looks like a clean result.
+origin_config_own() {
+  local repo="$1" probe="$2" re="$3" url="$4" scope origin entry i=0 rc=0
+  local -a seen=()
+  git -C "$probe" config --show-scope --show-origin -z --get-regexp "$re" >"$probe/.claim-probe-entries" 2>/dev/null || rc=$?
+  [ "$rc" -le 1 ] || return 0
+  git -C "$repo" config --show-scope --show-origin -z --get-regexp "$re" >"$probe/.claim-repo-entries" 2>/dev/null || rc=$?
+  [ "$rc" -le 1 ] || return 0
+  while IFS= read -r -d '' scope && IFS= read -r -d '' origin && IFS= read -r -d '' entry; do
+    case "$scope" in
+      local | worktree) ;;
+      *) seen+=("$scope" "$origin" "$entry") ;;
+    esac
+  done <"$probe/.claim-probe-entries"
+  while IFS= read -r -d '' scope && IFS= read -r -d '' origin && IFS= read -r -d '' entry; do
+    case "$scope" in
+      local | worktree)
+        case "$entry" in
+          "remote.origin.url"$'\n'"$url" | "remote.origin.pushurl"$'\n'"$url") continue ;;
+        esac
+        return 0
+        ;;
+    esac
+    while [ "$i" -lt "${#seen[@]}" ] && { [ "${seen[i]}" != "$scope" ] || [ "${seen[i + 1]}" != "$origin" ] || [ "${seen[i + 2]}" != "$entry" ]; }; do
+      i=$((i + 3))
+    done
+    [ "$i" -lt "${#seen[@]}" ] || return 0
+    i=$((i + 3))
+  done <"$probe/.claim-repo-entries"
+  return 1
+}
+
 # origin_redirects prints, one per line, what sends <repo>'s origin somewhere other than where <url>
 # goes from a neutral repository: `URL rewrite` when the effective fetch or push URLs differ, and
 # the name of any connection setting that differs: `core.sshCommand` or `core.gitProxy` (the command git
 # runs to connect), or a curl proxy or pinned address. The neutral repository is a throwaway one whose
 # remote has origin's shape, so settings every repository shares give both the same answer, while one
-# that applies only to <repo> (its own config, or a global file included only for it) shows up.
+# that applies only to <repo> (its own config, or a global file included only for it) shows up. One that
+# applies only to the throwaway repository, such as an include keyed to its temporary path, does not.
 # A rewrite keyed to the registered URL itself (a global insteadOf, or an include conditioned on
 # hasconfig:remote.*.url) applies to every clone of that repository, like a mirror, so it is shared too.
 # It prints `unverifiable` when the comparison cannot be made, and `checked` last once it has finished,
@@ -796,31 +868,38 @@ origin_redirects() (
     for ((i = 0; i < urls; i++)); do printf '\turl = "%s"\n' "$esc"; done
     for ((i = 0; i < pushurls; i++)); do printf '\tpushurl = "%s"\n' "$esc"; done
   } >>"$probe/.git/config"
-  if [ "$(git -C "$repo" remote get-url --all origin 2>&1)" != "$(git -C "$probe" remote get-url --all probe 2>&1)" ] ||
-    [ "$(git -C "$repo" remote get-url --push --all origin 2>&1)" != "$(git -C "$probe" remote get-url --push --all probe 2>&1)" ]; then
+  if { [ "$(git -C "$repo" remote get-url --all origin 2>&1)" != "$(git -C "$probe" remote get-url --all probe 2>&1)" ] ||
+    [ "$(git -C "$repo" remote get-url --push --all origin 2>&1)" != "$(git -C "$probe" remote get-url --push --all probe 2>&1)" ]; } &&
+    origin_config_own "$repo" "$probe" '^(url\..+\.(insteadof|pushinsteadof)|remote\.origin\.(url|pushurl))$' "$url"; then
     echo "URL rewrite"
   fi
   # git uses the last core.sshCommand, but tries every core.gitProxy in order.
-  if [ "$(git -C "$repo" config --get core.sshCommand 2>/dev/null || true)" != "$(git -C "$probe" config --get core.sshCommand 2>/dev/null || true)" ]; then
+  if { [ "$(git -C "$repo" config --get core.sshCommand 2>/dev/null || true)" != "$(git -C "$probe" config --get core.sshCommand 2>/dev/null || true)" ]; } &&
+    origin_config_own "$repo" "$probe" '^core\.sshcommand$' "$url"; then
     echo "core.sshCommand"
   fi
-  if [ "$(git -C "$repo" config --get-all core.gitProxy 2>/dev/null || true)" != "$(git -C "$probe" config --get-all core.gitProxy 2>/dev/null || true)" ]; then
+  if { [ "$(git -C "$repo" config --get-all core.gitProxy 2>/dev/null || true)" != "$(git -C "$probe" config --get-all core.gitProxy 2>/dev/null || true)" ]; } &&
+    origin_config_own "$repo" "$probe" '^core\.gitproxy$' "$url"; then
     echo "core.gitProxy"
   fi
   # For a curl remote, a proxy or a pinned address for its host decides which server answers. Every
   # http.*proxy and http.*curloptResolve entry is compared, URL-scoped ones included, not only the one
   # matching origin, so the URL stays off command lines.
-  if [ "$(git -C "$repo" config --get-all remote.origin.proxy 2>/dev/null || true)" != "$(git -C "$probe" config --get-all remote.origin.proxy 2>/dev/null || true)" ]; then
+  if { [ "$(git -C "$repo" config --get-all remote.origin.proxy 2>/dev/null || true)" != "$(git -C "$probe" config --get-all remote.origin.proxy 2>/dev/null || true)" ]; } &&
+    origin_config_own "$repo" "$probe" '^remote\.origin\.proxy$' "$url"; then
     echo "remote.origin.proxy"
   fi
-  if [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?proxy$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?proxy$' 2>/dev/null || true)" ]; then
+  if { [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?proxy$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?proxy$' 2>/dev/null || true)" ]; } &&
+    origin_config_own "$repo" "$probe" '^http\.(.+\.)?proxy$' "$url"; then
     echo "http.proxy"
   fi
-  if [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?curloptresolve$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?curloptresolve$' 2>/dev/null || true)" ]; then
+  if { [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?curloptresolve$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?curloptresolve$' 2>/dev/null || true)" ]; } &&
+    origin_config_own "$repo" "$probe" '^http\.(.+\.)?curloptresolve$' "$url"; then
     echo "http.curloptResolve"
   fi
   # An extra header such as Host can make the same URL reach another repository on that server.
-  if [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?extraheader$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?extraheader$' 2>/dev/null || true)" ]; then
+  if { [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?extraheader$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?extraheader$' 2>/dev/null || true)" ]; } &&
+    origin_config_own "$repo" "$probe" '^http\.(.+\.)?extraheader$' "$url"; then
     echo "http.extraHeader"
   fi
   rm -rf "$probe"
@@ -844,7 +923,7 @@ origin_redirects() (
 # repository that is not a submodule is not checked: nothing names what it should be.
 refuse_foreign_submodule_origin_checked() {
   local repo_abs="$1" super rel name="" common="" worktree="" main="" found admin raw="" expected="" resolved=0 shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
-  local top inplace head_branch push_remote="" pushto=""
+  local top inplace head_branch push_remote="" pushto="" gitdir common_phys
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
     super="$(cd "$super" && pwd -P)"
@@ -913,7 +992,24 @@ refuse_foreign_submodule_origin_checked() {
         # its checkout; nothing registers it, so there is nothing to check. A git directory under a
         # `modules/` directory is a submodule's, wherever core.worktree points, and a core.worktree that
         # names a checkout which no longer exists may be one too, so neither is waved through.
-        [ -n "$worktree" ] || return 0
+        if [ -z "$worktree" ]; then
+          # Without core.worktree, a git directory kept outside its checkout (--separate-git-dir)
+          # records no main checkout at all, so a linked worktree cannot show whether that checkout sits
+          # at a registered submodule path. The main checkout itself is where git just looked, and a
+          # bare repository has none.
+          [ -z "$main" ] || return 0
+          gitdir="$(git -C "$repo_abs" rev-parse --absolute-git-dir 2>/dev/null)" || gitdir=""
+          [ -z "$gitdir" ] || gitdir="$(cd "$gitdir" 2>/dev/null && pwd -P)" || gitdir=""
+          common_phys="$(cd "$common" 2>/dev/null && pwd -P)" || common_phys=""
+          if [ -n "$gitdir" ] && [ "$gitdir" = "$common_phys" ]; then
+            return 0
+          fi
+          [ "$(git config -f "$common/config" --type=bool --get core.bare 2>/dev/null)" != "true" ] || return 0
+          echo "worktree-claim: $repo_abs is a linked worktree whose main checkout cannot be located from its git directory $common." >&2
+          echo "  Whether a superproject registers that checkout cannot be checked, so it is not claimed." >&2
+          echo "  Run this from the main checkout, or set core.worktree in $common/config to it." >&2
+          exit 1
+        fi
         case "$common" in
           */modules/*) ;;
           *) [ -z "$main" ] || return 0 ;;
@@ -992,8 +1088,8 @@ refuse_foreign_submodule_origin_checked() {
       foreign=1
     fi
   done
-  # A plain push goes to the branch's push remote, which only defaults to origin. Pushing to "." stays in
-  # this repository.
+  # A plain push goes to the branch's push remote, which only defaults to origin. "." names this
+  # repository itself, so a push there never reaches origin either.
   head_branch="$(git -C "$repo_abs" symbolic-ref -q --short HEAD 2>/dev/null)" || head_branch=""
   if [ -n "$head_branch" ]; then
     push_remote="$(git -C "$repo_abs" config --get "branch.$head_branch.pushRemote" 2>/dev/null)" || push_remote=""
@@ -1003,7 +1099,7 @@ refuse_foreign_submodule_origin_checked() {
     push_remote="$(git -C "$repo_abs" config --get "branch.$head_branch.remote" 2>/dev/null)" || push_remote=""
   fi
   case "$push_remote" in
-    '' | origin | .) ;;
+    '' | origin) ;;
     *)
       pushto="$(redact_url "$push_remote")"
       foreign=1

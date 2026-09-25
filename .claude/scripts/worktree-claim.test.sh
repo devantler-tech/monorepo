@@ -389,7 +389,7 @@ check "a new branch set to push elsewhere loses its worktree" 1 "$([ -e "$tmp/wt
 [ ! -e "$tmp/wt-sub-pushremote" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-pushremote"
 git -C "$super/mod" config --unset branch.claim-branch-sub-pushremote.pushRemote
 git -C "$super/mod" branch -D -q claim-branch-sub-pushremote 2>/dev/null || true
-# A branch that tracks another remote pushes there too; "." keeps pushes in this repository.
+# A branch that tracks another remote pushes there too, and "." names this repository, not origin.
 git -C "$super/mod" branch claim-branch-sub-tracks-other
 git -C "$super/mod" config branch.claim-branch-sub-tracks-other.remote other
 rc=0
@@ -400,7 +400,10 @@ check "a refused tracking branch loses its worktree" 1 "$([ -e "$tmp/wt-sub-trac
 git -C "$super/mod" config branch.claim-branch-sub-tracks-other.remote .
 rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-tracks-local" "claim-branch-sub-tracks-other" "session-sub-tracks-local" 2>&1)" || rc=$?
-check "add admits a branch that tracks this repository" 0 "$rc" "$out" "owner=session-sub-tracks-local"
+check "add refuses a branch that tracks this repository" 1 "$rc" "$out" "push remote:      ."
+check "a refused branch that tracks this repository loses its worktree" 1 "$([ -e "$tmp/wt-sub-tracks-local" ] && echo 0 || echo 1)"
+[ ! -e "$tmp/wt-sub-tracks-local" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-tracks-local"
+git -C "$super/mod" branch -D -q claim-branch-sub-tracks-other
 
 # `submodule sync` writes a registered URL byte for byte, trailing newline included, so an origin
 # without it is not that URL; a URL carrying a newline cannot be verified either way.
@@ -416,6 +419,22 @@ rc=0
 out="$(TMPDIR="$tmp/probe-done" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-probe-done" "claim-branch-sub-probe-done" "session-sub-probe-done" 2>&1)" || rc=$?
 check "a completed origin check still claims" 0 "$rc" "$out" "owner=session-sub-probe-done"
 check "a completed origin check leaves no probe repository behind" 1 "$(compgen -G "$tmp/probe-done/worktree-claim-probe.*" >/dev/null && echo 0 || echo 1)"
+
+# A global include can apply to the temporary probe alone, through a gitdir: pattern that matches where
+# it is created. Only what the repository itself sees can send its origin elsewhere, so a setting only
+# the probe sees does not count.
+mkdir -p "$tmp/probe-only-tmp"
+printf '[core]\n\tsshCommand = ssh -o ProxyCommand=true\n[url "https://github.com/example/other"]\n\tinsteadOf = https://github.com/example/sub\n' >"$tmp/probe-only.gitconfig"
+printf '[includeIf "gitdir:**/probe-only-tmp/**"]\n\tpath = %s\n' "$tmp/probe-only.gitconfig" >"$tmp/global-probe-only.gitconfig"
+rc=0
+out="$(TMPDIR="$tmp/probe-only-tmp" GIT_CONFIG_GLOBAL="$tmp/global-probe-only.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-probe-only" "claim-branch-sub-probe-only" "session-sub-probe-only" 2>&1)" || rc=$?
+check "add admits a submodule when a global include applies only to the probe" 0 "$rc" "$out" "owner=session-sub-probe-only"
+# The same settings still count when the repository sees them too, in an order the probe does not.
+printf '[include]\n\tpath = %s\n[core]\n\tsshCommand = ssh -v\n' "$tmp/probe-only.gitconfig" >"$tmp/global-reordered.gitconfig"
+printf '[includeIf "gitdir:%s"]\n\tpath = %s\n' "$mod_gitdir" "$tmp/probe-only.gitconfig" >>"$tmp/global-reordered.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-reordered.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-reordered" "claim-branch-sub-reordered" "session-sub-reordered" 2>&1)" || rc=$?
+check "add refuses a setting a global include repeats for this repository alone" 1 "$rc" "$out" "redirected by:   core.sshCommand"
 
 # The probe repository holds the registered URL, which can carry a credential, so an interrupted check
 # must not leave it behind. The shim holds the check inside the probe until the job is signalled; it
@@ -468,6 +487,35 @@ if compgen -G "$tmp/probe-tmp/worktree-claim-probe.*" >/dev/null; then
   ps -o pid= -o ppid= -o command= -p "$(echo $interrupted_tree | tr ' ' ',')" >&2 || true
 fi
 check "an interrupted origin check leaves no probe repository behind" 1 "$(compgen -G "$tmp/probe-tmp/worktree-claim-probe.*" >/dev/null && echo 0 || echo 1)"
+
+# A signal sent to the whole process group also reaches the creation step itself. git runs the
+# post-checkout hook once the worktree is complete, so the hook holds open the gap before `add` has
+# recorded what it created.
+repo_hooks="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/hooks"
+mkdir -p "$repo_hooks"
+cat >"$repo_hooks/post-checkout" <<HOOK
+#!/bin/sh
+: >"$tmp/group-sig-hook"
+exec sleep 30
+HOOK
+chmod +x "$repo_hooks/post-checkout"
+"$script" add "$repo" "$tmp/wt-group-sig" "claim-branch-group-sig" "session-group-sig" >/dev/null 2>&1 &
+group_sig=$!
+waited=0
+until [ -e "$tmp/group-sig-hook" ] || [ "$waited" -ge 100 ]; do
+  sleep 0.1
+  waited=$((waited + 1))
+done
+group_sig_tree="$(process_tree "$group_sig")"
+# shellcheck disable=SC2086 # one pid per word
+kill -TERM $group_sig_tree 2>/dev/null || true
+wait "$group_sig" 2>/dev/null || true
+rm -f "$repo_hooks/post-checkout"
+check "a group signal reached the creation step inside its hook" 0 "$([ -e "$tmp/group-sig-hook" ] && echo 0 || echo 1)"
+check "a group signal during creation still removes the unclaimed worktree" 1 "$([ -e "$tmp/wt-group-sig" ] && echo 0 || echo 1)"
+check "a group signal during creation still removes the branch add created" 1 "$(git -C "$repo" show-ref --verify --quiet refs/heads/claim-branch-group-sig && echo 0 || echo 1)"
+[ ! -e "$tmp/wt-group-sig" ] || git -C "$repo" worktree remove --force "$tmp/wt-group-sig"
+git -C "$repo" branch -D -q claim-branch-group-sig 2>/dev/null || true
 
 # One configured value that repeats the registered URL across a newline is one URL to git, not two.
 git -C "$super/mod" config remote.origin.url "$(printf '%s\n%s' "https://github.com/example/sub" "https://github.com/example/sub")"
@@ -601,6 +649,24 @@ rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-relremote" "claim-branch-sub-relremote" "session-sub-relremote" 2>&1)" || rc=$?
 check "add admits the origin sync writes for a relative superproject remote" 0 "$rc" "$out" "owner=session-sub-relremote"
 rm -rf "$super/foo"
+# Each `..` drops one component of a relative superproject remote, and the result is relative to the
+# submodule's own directory however deep it sits. A URL that climbs past that remote's root is one
+# `git submodule sync` itself refuses to resolve, so no origin matches it.
+deep_super="$tmp/deep-super"
+git init -q -b main "$deep_super"
+git -C "$deep_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" deep/mod
+git -C "$deep_super" -c user.name=t -c user.email=t@example.com commit -qm "add deep/mod"
+git -C "$deep_super" config remote.origin.url "foo/super.git"
+git -C "$deep_super" config -f .gitmodules submodule.deep/mod.url "../../sub.git"
+ln -s "$upstream_sub" "$deep_super/sub.git"
+git -C "$deep_super/deep/mod" config remote.origin.url "../../sub.git"
+rc=0
+out="$("$script" add "$deep_super/deep/mod" "$tmp/wt-deep-rel" "claim-branch-deep-rel" "session-deep-rel" 2>&1)" || rc=$?
+check "add admits the origin sync writes for a deeper submodule of a relative remote" 0 "$rc" "$out" "owner=session-deep-rel"
+git -C "$deep_super" config -f .gitmodules submodule.deep/mod.url "../../../sub.git"
+rc=0
+out="$("$script" add "$deep_super/deep/mod" "$tmp/wt-deep-rel-past" "claim-branch-deep-rel-past" "session-deep-rel-past" 2>&1)" || rc=$?
+check "add refuses a URL that climbs past a relative remote's root, as sync does" 1 "$rc" "$out" "climbs past the root"
 git -C "$super" config remote.origin.url "$tmp/remote-root/super"
 git -C "$super" config -f .gitmodules submodule.mod.url "../upstream-sub"
 git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
@@ -734,6 +800,27 @@ check "acquire refuses an in-place clone whose core.worktree points at a standal
 git config -f "$inplace_super/indep/.git/config" --unset core.worktree
 rm -f "$tmp/linked-indep/.claude-worktree-owner"
 git -C "$inplace_super/indep" config remote.origin.url "$upstream_sub"
+
+# A clone made with --separate-git-dir records no main checkout; git itself reports the git directory
+# in its place. A linked worktree of one therefore cannot be traced to where that checkout sits, which
+# may be a registered submodule path, so it is not claimed. A bare repository has no main checkout.
+sgd_super="$tmp/sgd-super"
+git init -q -b main "$sgd_super"
+git -C "$sgd_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$sgd_super" -c user.name=t -c user.email=t@example.com commit -qm "add mod"
+rm -rf "$sgd_super/mod"
+git clone -q --separate-git-dir "$tmp/sgd-admin" "$upstream_sub" "$sgd_super/mod"
+git -C "$sgd_super/mod" worktree add -q --detach "$tmp/sgd-linked"
+git -C "$sgd_super/mod" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" add "$tmp/sgd-linked" "$tmp/wt-sgd-linked" "claim-branch-sgd-linked" "session-sgd-linked" 2>&1)" || rc=$?
+check "add refuses a linked worktree whose separate git directory records no main checkout" 1 "$rc" "$out" "main checkout cannot be located"
+check "a refused separate-git-dir linked worktree gets no new worktree" 1 "$([ -e "$tmp/wt-sgd-linked" ] && echo 0 || echo 1)"
+git clone -q --bare "$upstream_sub" "$tmp/bare-admin"
+git -C "$tmp/bare-admin" worktree add -q --detach "$tmp/bare-linked"
+rc=0
+out="$("$script" add "$tmp/bare-linked" "$tmp/wt-bare-linked" "claim-branch-bare-linked" "session-bare-linked" 2>&1)" || rc=$?
+check "add admits a linked worktree of a bare repository" 0 "$rc" "$out" "owner=session-bare-linked"
 
 # When two .gitmodules sections claim one path, git initializes it from the later one.
 git -C "$super" config -f .gitmodules submodule.dup.path mod
@@ -2146,6 +2233,11 @@ check "a refused pinned creation does not announce ownership" 0 \
   "$(grep -qF 'owner=session-pinfail' <<<"$pinfail_out" && echo 1 || echo 0)"
 check "a refused pinned creation says the worktree add failed" 0 0 \
   "$pinfail_out" "git worktree add failed"
+# git keeps the worktree and its new branch when only the hook failed, so `add` takes both back.
+check "a refused pinned creation leaves no worktree behind" 1 \
+  "$([ -e "$tmp/wt-pinfail" ] && echo 0 || echo 1)"
+check "a refused pinned creation leaves no new branch behind" 1 \
+  "$(git -C "$pinfail_consumer" show-ref --verify --quiet refs/heads/claim-pinfail && echo 0 || echo 1)"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
