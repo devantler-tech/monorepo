@@ -55,6 +55,8 @@ readonly now=1790359200
 #   unobserved-parent  a second declared parent's entry carries no observedGeneration
 #   missing-parent     a second declared parent has no status entry at all
 #   rejected           the parent observed the current generation and reports Accepted=False
+#   other-port         a second declared parent differs only by port and has no status entry
+#   rejected-and-lag   one parent currently rejects the route while a second has no entry
 route() {
   local current="{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$3}"
   local declared='[{"name":"platform","namespace":"kube-system"}]' parents='[]'
@@ -69,6 +71,12 @@ route() {
       parents="[$platform]" ;;
     rejected)
       parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"False\",\"reason\":\"NotAllowedByListeners\",\"observedGeneration\":$3},{\"type\":\"ResolvedRefs\",\"status\":\"True\",\"observedGeneration\":$3}]}]" ;;
+    other-port)
+      declared='[{"name":"platform","namespace":"kube-system","port":443},{"name":"platform","namespace":"kube-system","port":80}]'
+      parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\",\"port\":443},\"conditions\":[$current]}]" ;;
+    rejected-and-lag)
+      declared='[{"name":"platform","namespace":"kube-system"},{"name":"internal","namespace":"kube-system"}]'
+      parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"ResolvedRefs\",\"status\":\"False\",\"reason\":\"BackendNotFound\",\"observedGeneration\":$3}]}]" ;;
     *) parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"True\",\"observedGeneration\":$4}]}]" ;;
   esac
   local meta=''
@@ -249,6 +257,18 @@ scenario gateway-rejected
 list "$(route observability coroot 6 rejected 2026-09-25T17:59:00Z)" >"$FAKE/httproutes.json"
 run
 expect "a route the gateway rejected" 1 "FAILING HTTPRoute observability/coroot reason=route-rejected conditions=Accepted/NotAllowedByListeners"
+
+# Two parents that differ only by port are two parents; one current entry must not satisfy both.
+scenario gateway-other-port
+list "$(route observability coroot 6 other-port 2026-09-25T17:12:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a parent differing only by port" 1 "FAILING HTTPRoute observability/coroot reason=gateway-not-applying generation=6 applied=none"
+
+# A current rejection is breakage now, even while another parent is still inside the grace period.
+scenario gateway-rejected-while-lagging
+list "$(route observability coroot 6 rejected-and-lag 2026-09-25T17:59:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a rejection beside a lagging parent" 1 "FAILING HTTPRoute observability/coroot reason=route-rejected conditions=ResolvedRefs/BackendNotFound"
 
 scenario gateway-never-applied
 list "$(route tenant web 1 none 2026-09-25T17:00:00Z)" >"$FAKE/httproutes.json"

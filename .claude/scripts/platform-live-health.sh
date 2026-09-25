@@ -193,8 +193,11 @@ case "$now" in
 esac
 # Per route: every DECLARED parent (spec.parentRefs) must have a status entry whose conditions all
 # observed the current generation — a parent whose controller stopped may add no entry at all, so
-# scanning only the entries that exist would read as current. Once current, an Accepted=False or
-# ResolvedRefs=False on a parent is a route the gateway rejected: live breakage, not lag.
+# scanning only the entries that exist would read as current. Parents are matched on their whole
+# reference (group, kind, namespace, name, sectionName, port, with the Gateway API defaults), so
+# two parents that differ only in, say, port are two parents. An Accepted=False or
+# ResolvedRefs=False from any parent that observed the current generation is a route the gateway
+# rejected — live breakage, not lag — and is reported before, and regardless of, other parents' lag.
 #
 # ⚠️ The grace clock is the newest spec-owning managed-field time. The API records one time per
 # field manager, so a metadata-only apply by the manager that also owns the spec moves it too. That
@@ -205,11 +208,12 @@ route_rows='
   .metadata.namespace as $ns
   | .metadata.generation as $gen
   | "HTTPRoute \($ns)/\(.metadata.name)" as $id
-  | [ .spec.parentRefs[]?
-      | {name, namespace: (.namespace // $ns), sectionName: (.sectionName // null)} ] as $declared
+  | def parent_ref: { group: (.group // "gateway.networking.k8s.io"), kind: (.kind // "Gateway"),
+                      namespace: (.namespace // $ns), name, sectionName: (.sectionName // null),
+                      port: (.port // null) };
+  [ .spec.parentRefs[]? | parent_ref ] as $declared
   | [ .status.parents[]?
-      | { ref: { name: .parentRef.name, namespace: (.parentRef.namespace // $ns),
-                 sectionName: (.parentRef.sectionName // null) },
+      | { ref: (.parentRef | parent_ref),
           seen: ([.conditions[]?.observedGeneration] | min),
           rejected: [ .conditions[]?
                       | select((.type == "Accepted" or .type == "ResolvedRefs") and .status == "False")
@@ -223,10 +227,9 @@ route_rows='
        | .time ]
      + [ .metadata.creationTimestamp ] | map(select(. != null)) | max) as $changed
   | ([ $status[] | select(.seen != null and .seen >= $gen) | .rejected[] ] | unique) as $rejections
-  | if ($seen != null and $seen >= $gen) then
-      if ($rejections | length) > 0
-      then "FAILING \($id) reason=route-rejected conditions=\($rejections | join(","))"
-      else empty end
+  | if ($rejections | length) > 0 then
+      "FAILING \($id) reason=route-rejected conditions=\($rejections | join(","))"
+    elif ($seen != null and $seen >= $gen) then empty
     elif (__NOW__ - ($changed | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) > __GRACE__ then
       "FAILING \($id) reason=gateway-not-applying generation=\($gen) applied=\($seen // "none")"
     else "PROGRESSING \($id)" end
