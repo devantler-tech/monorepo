@@ -159,8 +159,9 @@ digest. The unqualified name resolves to
 [`.claude/agents/portfolio-surveyor.md`](../../agents/portfolio-surveyor.md), and that file is the
 definition this run loop loads (monorepo#3180). The plugin's
 `agentic-engineering:portfolio-surveyor` is the **parity target**, not what runs: a rule that exists
-only upstream is not live until it is also in the local file, so land every surveyor refinement
-upstream **and** in that file. Remove the local file only after a side-by-side run proves parity
+only upstream is not live until it is also in the local file. Author a surveyor refinement upstream
+first; port it into the local file only when it must be live before parity, and raise that file's
+byte ceiling in the same PR. Remove the local file only after a side-by-side run proves parity
 against the checklist in
 [`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](../../plugin-consumption/agentic-engineering-surveyor-diff.md).
 The surveyor reads this repo's `AGENTS.md` contract sections (*Portfolio map*, *Trust gate*,

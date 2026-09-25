@@ -139,8 +139,9 @@ measured casualty is agent-plugins#182's admitted-call-shape rule: installed on 
 2026-09-02 and absent from this file, it left the five deny families it targets flat at 5.84 → 5.52 per
 dispatch. It is now ported into the Safety block above (monorepo#3179, pinned by round 10 of
 `portfolio-surveyor.test.sh`). **monorepo#3180 decided the topology: the run loop dispatches this
-overlay until digest parity, so route every surveyor refinement to BOTH places** — upstream for the
-target definition, and here for the loaded one — and
+overlay until digest parity, so a surveyor refinement is authored upstream first and reaches the loaded
+definition only when it is also ported here** — deliberately, when it must be live before parity, with
+the overlay's byte ceiling raised in the same PR — and
 treat "merged upstream + gitlink bumped + install CURRENT" as *not* evidence a surveyor rule is live. Second measured casualty, 2026-09-05: the CI classifier's argument shape. Over 7 days, **19 of 20**
 classifier-calling surveyor dispatches read this file rather than the plugin agent, and 3 of the 19 that
 reached the helper invoked it positionally and lost 24 reads to the guard. The flag-form sentence from
@@ -153,8 +154,8 @@ round 13 of `portfolio-surveyor.test.sh`).
 
 ## Equivalence status (this slice)
 
-Plugin-only parity is not claimed. This slice uses the plugin agent plus the local compatibility
-overlay, so the numbered refinements remain active instead of disappearing from the authoritative
-survey digest. Next slice: upstream those refinements into `devantler-tech/agent-plugins`
+Plugin-only parity is not claimed. The run loop dispatches the local overlay directly
+(monorepo#3180), so the numbered refinements stay in the survey digest; the plugin agent is the
+parity target and is not part of what runs. Next slice: upstream those refinements into `devantler-tech/agent-plugins`
 ([agent-plugins#78](https://github.com/devantler-tech/agent-plugins/issues/78)), re-run both surveyors,
 then remove the overlay only when the digests match on the checklist in monorepo#2363.
