@@ -4378,6 +4378,18 @@ worktree you will push; and never author a work-branch commit through the REST c
 immediately before `git push`, and do not push on a non-zero exit. It sees only local commits, so the
 contents-API rule has no mechanical backstop yet.
 
+🔴 **Name a fetch refspec's source in full: `+refs/heads/main:refs/remotes/origin/main`, never
+`main:refs/remotes/origin/main`.** This host sets `fetch.prune=true` globally. With pruning on, a
+short source does not match the remote's `refs/heads/*`, so git deletes the destination ref. Depending on
+the git version and the ref's state, the fetch then exits 1 with `cannot lock ref`, or exits 0 with
+the ref gone, and the next run recreates it. So neither the exit status nor a retry proves the ref is
+intact, which is why the short form looks like a working fallback. It does the same
+against a URL remote. A plain `git fetch origin main` does not delete the ref either, but it updates
+`refs/remotes/origin/main` only through the configured `remote.origin.fetch` mapping. Without that
+mapping it writes only `FETCH_HEAD`, so use the full refspec whenever you read the ref. Measured 2026-09-18 to 2026-09-25:
+13 of 536 Codex sessions deleted `origin/main` this way ([#3596](https://github.com/devantler-tech/monorepo/issues/3596)).
+`drifted-lane-escalation-contract.test.sh` pins the git behaviour.
+
 **The permitted way to put a worktree on a specific commit is
 `git --no-replace-objects -C <wt> checkout --no-overwrite-ignore --detach <sha>`, issued as its OWN
 call after the `fetch`.** Both global protections are load-bearing: `--no-overwrite-ignore` stops the
