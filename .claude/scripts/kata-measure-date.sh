@@ -77,12 +77,20 @@ if [ -n "${today}" ] && ! is_calendar_date "${today}"; then
 fi
 [ -n "${today}" ] || today="$(date -u +%Y-%m-%d)"
 
-# Every value on a `**Measure on:**` line, CRLF endings removed. A line quoted with `>` is not one.
+# Every value on a `**Measure on:**` line, CRLF endings removed. Only rendered text counts: a line
+# quoted with `>`, indented four spaces or a tab (a code block), inside a ``` or ~~~ fence, or inside
+# an HTML comment is an example or an instruction, never this Kata's date. The patterns spell out
+# "up to three spaces" as ` ? ? ?` because the awk on CI's runners has no {n,m} intervals.
 values="$(jq -r '.body' <<<"${payload}" | awk '
   { sub(/\r$/, "") }
-  /^[ \t]*\*\*Measure on:\*\*/ {
+  in_comment { if (index($0, "-->") > 0) in_comment = 0; next }
+  fence != "" { if ($0 ~ ("^ ? ? ?" fence)) fence = ""; next }
+  /^ ? ? ?```/ { fence = "```"; next }
+  /^ ? ? ?~~~/ { fence = "~~~"; next }
+  index($0, "<!--") > 0 && index(substr($0, index($0, "<!--") + 4), "-->") == 0 { in_comment = 1; next }
+  /^ ? ? ?\*\*Measure on:\*\*/ {
     v = $0
-    sub(/^[ \t]*\*\*Measure on:\*\*[ \t]*/, "", v)
+    sub(/^ ? ? ?\*\*Measure on:\*\*[ \t]*/, "", v)
     sub(/[ \t]+$/, "", v)
     # An empty value becomes a placeholder: command substitution would strip a trailing empty line,
     # and validation must still see it.

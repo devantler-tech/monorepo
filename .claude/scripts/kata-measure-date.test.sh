@@ -72,6 +72,27 @@ expect "a valid line followed by a blank one is UNKNOWN" 2 "UNKNOWN malformed" \
 expect "an empty line on its own is malformed, not missing" 2 "UNKNOWN malformed" "$(kata $'**Measure on:**' 2026-09-25)"
 expect "trailing words after the date are UNKNOWN" 2 "UNKNOWN malformed" "$(kata $'**Measure on:** 2026-10-20 or later' 2026-09-25)"
 
+# Text that does not render — code blocks and HTML comments — is an example or an instruction,
+# never this Kata's date.
+fence='```'
+expect "a fenced example alone is not the line" 2 "UNKNOWN missing" \
+  "$(kata "Write it like this:"$'\n'"${fence}"$'\n**Measure on:** 2026-10-20\n'"${fence}" 2026-09-25)"
+expect "a fenced example does not conflict with the real line" 1 "NOT-DUE 2026-11-01" \
+  "$(kata "${fence}md"$'\n**Measure on:** 2026-10-20\n'"${fence}"$'\n\n**Measure on:** 2026-11-01' 2026-09-25)"
+expect "a tilde fence is a fence too" 2 "UNKNOWN missing" \
+  "$(kata $'~~~\n**Measure on:** 2026-10-20\n~~~' 2026-09-25)"
+expect "a backtick fence is not closed by a tilde line" 2 "UNKNOWN missing" \
+  "$(kata "${fence}"$'\n~~~\n**Measure on:** 2026-10-20\n'"${fence}" 2026-09-25)"
+expect "an indented code block is not the line" 2 "UNKNOWN missing" \
+  "$(kata $'Example:\n\n    **Measure on:** 2026-10-20' 2026-09-25)"
+expect "a tab-indented line is code, not the line" 2 "UNKNOWN missing" "$(kata $'\t**Measure on:** 2026-10-20' 2026-09-25)"
+expect "a multi-line HTML comment is not the line" 2 "UNKNOWN missing" \
+  "$(kata $'<!--\n**Measure on:** YYYY-MM-DD\n-->' 2026-09-25)"
+expect "the line after a closed HTML comment counts" 1 "NOT-DUE 2026-10-20" \
+  "$(kata $'<!-- template:\n**Measure on:** 2026-01-01\n-->\n**Measure on:** 2026-10-20' 2026-09-25)"
+expect "a one-line HTML comment changes nothing after it" 1 "NOT-DUE 2026-10-20" \
+  "$(kata $'<!-- note -->\n**Measure on:** 2026-10-20' 2026-09-25)"
+
 # Without `today` the helper uses the current UTC date; far past and far future are stable.
 expect "without today, a far-past date is DUE" 0 "DUE 2000-01-01" "$(kata $'**Measure on:** 2000-01-01')"
 expect "without today, a far-future date is NOT-DUE" 1 "NOT-DUE 2999-12-31" "$(kata $'**Measure on:** 2999-12-31')"

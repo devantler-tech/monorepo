@@ -1346,8 +1346,8 @@ public and private — no per-repo loop needed to enumerate):
    measure before the agreed date. Read the date ONLY with
    `gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // "")}' | <repo-root>/.claude/scripts/kata-measure-date.sh --input -`
    (the guard's only admitted form; monorepo#2838), never from `createdAt` or prose: `NOT-DUE <date>`
-   excludes it (report it separately, with the date), `DUE` keeps it, and `UNKNOWN` or a failed call
-   reports it as a Kata whose `**Measure on:**` line needs repair.
+   excludes it (report it separately, with the date), `DUE` keeps it, `UNKNOWN missing|malformed|conflicting`
+   reports its `**Measure on:**` line for repair, and a failed call is `QUERY-UNKNOWN` for that Kata, never a repair.
    Before nominating any issue as actionable, deepen that candidate once with the exact in-scope
    issue's server-side dependency summary:
 
