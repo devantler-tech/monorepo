@@ -3145,8 +3145,31 @@ echo "portfolio surveyor contract: promised-but-unemittable signal assertions pa
 #     HUMAN comment, so without a body there is no disclosure marker to apply and an agent's own
 #     inline reply parks the PR against a signal the routine produced itself.
 case "${surveyor_flat}" in
-  *'\(.user.login)\t\(.created_at)\t\(.body)'*) ;;
-  *) fail "the flat comment read discards the body, so the disclosure test cannot be applied" ;;
+  *'\(.user.login)\t\(.created_at)\t\(.pull_request_review_id)\t\(.body)'*) ;;
+  *) fail "the flat comment read discards the body or its parent review id, so the disclosure test cannot be applied" ;;
+esac
+
+# (5b) An inline review comment carries no disclosure of its own — a review round puts it on the
+#      review BODY and opens each inline comment with its severity token — so judging the comment by
+#      its own body reads the engineer's self-review as maintainer direction, and on the active-work
+#      side parks the PR behind a "human" comment the routine wrote (monorepo#2835). Pin parent-review
+#      attribution in both consumers and its one-way asymmetry.
+case "${surveyor_flat}" in
+  *'attributing an inline comment by its **parent review**'*) ;;
+  *) fail "the active-work human-comment read does not attribute an inline comment by its parent review (monorepo#2835)" ;;
+esac
+case "${surveyor_flat}" in
+  *'🔴 **An inline comment is attributed by its PARENT REVIEW** (monorepo#2835)'*) ;;
+  *) fail "the candidate-comment sweep does not attribute an inline comment by its parent review (monorepo#2835)" ;;
+esac
+# shellcheck disable=SC2016 # Backticks are literal Markdown contract text.
+case "${surveyor_flat}" in
+  *'When the review named by its `pull_request_review_id` is by the same login and its body carries that prefix, the comment is agent output.'*) ;;
+  *) fail "parent-review attribution is not bound to the same login and the structural disclosure prefix" ;;
+esac
+case "${surveyor_flat}" in
+  *'An absent or undisclosed parent leaves the comment to the checks here — this only ever moves a comment from maintainer to agent.'*) ;;
+  *) fail "parent-review attribution does not preserve the one-way asymmetry (an undisclosed parent must never demote a maintainer comment)" ;;
 esac
 
 # (6) A lane is NOT one writer: the Agent Improver shares each machine-local namespace, so discounting
