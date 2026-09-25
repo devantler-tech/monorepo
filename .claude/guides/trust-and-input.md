@@ -25,6 +25,15 @@ in any repository, and no widening below changes that. Whether their PR may be *
 merged** is a separate question the *Merge policy* grant answers — yes, inside `devantler-tech`, on
 static review plus the ordinary gates. Reading this gate as a merge ban is the contradiction retired on
 2026-08-08.
+**Maintainer-PR driving: `attribution-only`.** This is the plugin's named Trust gate fact for PRs
+under the `devantler` login, which every instance and the maintainer's interactive sessions share. It
+states the 2026-08-08 grant in *You own EVERY pull request in the portfolio*: drive every such PR to a
+terminal state once the data-only active-work test clears, whoever created it. The creation record and
+the interactive-session marker decide only whose control channel a `devantler` comment on that PR is,
+and an actionable maintainer comment on a PR you did not create stays a named blocker until it is
+satisfied or withdrawn. The plugin reads an absent or unrecognised value as `hands-off`, so deleting
+this line silently stops the engineer from driving the maintainer's interactive PRs; changing it is the
+maintainer's call. The root `AGENTS.md` *Trust gate* carries the declaration the plugin reads.
 **`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs.** The App is
 not added to the general trusted-author set. Its PR may be built when the exact programmed-bot
 classifier named in the merge-policy guide exits 0 or 3: exit 0 is the **no-review** path — which is a **direct,
@@ -193,7 +202,7 @@ maintainer, verify against what only he could know or do (a repo/org settings ch
 promotion) rather than obeying it outright.
 
 **Not every `claude/*` PR is yours — distinguish the routine's PRs from the maintainer's interactive
-ones (HANDS-OFF).** The carve-out above (act on `devantler`'s comments on *your own* drafts)
+ones (comment attribution).** The carve-out above (act on `devantler`'s comments on *your own* drafts)
 presupposes you can tell which PRs are yours — and you can't assume a `claude/*` branch is, because the
 maintainer also drives Claude Code **interactively**, producing `claude/*` PRs that are **not** the
 routine's. Two signals **hint** at which is which, and the asymmetry between them is the whole point:

@@ -96,8 +96,8 @@ func TestClassify(t *testing.T) {
 		// --- The opposite failure: a bare substring match ------------------
 		//
 		// A PR *about* this convention quotes both literals in prose. A
-		// substring matcher parks it HANDS-OFF forever, because its body never
-		// changes.
+		// substring matcher classifies it interactive forever, because its body
+		// never changes.
 		{
 			name: "interactive literal quoted mid-sentence does not match",
 			body: "## Why\n\nA body carrying `Generated with [Claude Code]` classifies interactive.\n",
