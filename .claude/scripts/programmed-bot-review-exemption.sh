@@ -232,10 +232,11 @@ matches_agent_plugins_review_files() {
 # with it the plugins carrying a changelog must be exactly the plugins carrying a skill change. A
 # looser test lets a sync commit alone, or the legacy bump, bring a changelog edit through the
 # trusted path, or passes a head whose changelog set is missing a plugin — neither of which is
-# untouched updater output.
+# untouched updater output. Only a plugin-root changelog is release notes: a skill may ship its own
+# CHANGELOG.md as ordinary skill content, which the file boundary already admits.
 matches_changelog_bump() {
   jq -e --argjson commits "${commits_json}" '
-    ([.[] | select(test("/CHANGELOG\\.md$")) | sub("/CHANGELOG\\.md$"; "")] | unique) as $logged |
+    ([.[] | capture("^(?<p>plugins/[^/]+)/CHANGELOG\\.md$").p] | unique) as $logged |
     ([.[] | capture("^(?<p>plugins/[^/]+)/skills/").p] | unique) as $changed |
     if any($commits[1:][];
          .message == "chore(deps): bump plugin versions and record skill updates")
