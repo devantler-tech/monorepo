@@ -1334,6 +1334,12 @@ per_skill_args=(agent-plugins app/botantler-1 "${per_skill_branch}" "${per_skill
 
 expect_review_required "agent-plugins per-skill update" \
   "${per_skill_args[@]}" "${per_skill_files}" "${per_skill_commits_json}"
+# Since agent-plugins#247 the bump commit also writes the plugin's release notes.
+expect_review_required "agent-plugins per-skill update, bump carrying release notes" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
+  "$(printf '%s\n' "${per_skill_sync}" "$(per_skill_follow_up "${per_skill_head}" \
+    "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
 expect_review_required "agent-plugins per-skill update, bump before digest refresh" \
   "${per_skill_args[@]}" "${per_skill_files}" \
   "$(printf '%s\n' "${per_skill_sync}" "${per_skill_bump}" "${per_skill_digest}" | per_skill_commits)"
@@ -1353,6 +1359,10 @@ expect_review_required "agent-plugins single-PR update with a digest refresh" \
   "$(jq -c --argjson d "${per_skill_digest}" '.[:1] + [$d] + .[1:]' <<<"${agent_plugins_versioned_commits}" | with_commit_dates)"
 
 # Negative controls: each one breaks a single conjunct of the fixture above.
+expect_review_gated "agent-plugins per-skill update carrying another plugin's release notes" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/engineering-practices/CHANGELOG.md"]' <<<"${per_skill_files}")" \
+  "${per_skill_commits_json}"
 expect_review_gated "agent-plugins per-skill branch naming another skill" \
   agent-plugins app/botantler-1 "deps/agent-skills-update-agentic-engineering-skills-agent-instructions" \
   "${per_skill_title}" "${per_skill_head}" "${per_skill_files}" "${per_skill_commits_json}"

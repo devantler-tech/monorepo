@@ -219,6 +219,7 @@ matches_agent_plugins_review_files() {
       test($skill) or
       test("^\($plugin)/(\\.claude-plugin/)?plugin\\.json$") or
       test("^\($plugin)/resources/provider-neutral\\.desired-state\\.json$") or
+      test("^\($plugin)/CHANGELOG\\.md$") or
       . == ".claude-plugin/marketplace.json" or
       . == ".github/plugin/marketplace.json")
   ' <<<"${files_json}" >/dev/null
@@ -348,9 +349,13 @@ matches_agent_plugins_review_provenance() {
       (legacy_skill_update or signed_skill_update) and .message == $sync_message;
     def follow_up($message):
       actions_bot_authored and actions_bot_committed and .message == $message;
+    # The updater writes the version bump as "bump plugin versions and record skill updates" since
+    # agent-plugins#247 added release notes to it; the earlier wording stays accepted for PRs
+    # opened before that change.
     def follow_ups: [
       "chore(deps): refresh desired-state digests for synced content",
-      "chore(deps): bump versions of changed plugins"
+      "chore(deps): bump versions of changed plugins",
+      "chore(deps): bump plugin versions and record skill updates"
     ];
     length >= 1 and
     (.[0] | skill_update) and
