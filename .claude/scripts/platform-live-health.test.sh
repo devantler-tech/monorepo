@@ -74,6 +74,9 @@ route() {
     other-port)
       declared='[{"name":"platform","namespace":"kube-system","port":443},{"name":"platform","namespace":"kube-system","port":80}]'
       parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\",\"port\":443},\"conditions\":[$current]}]" ;;
+    unattached) declared='[]' ;;
+    rejected-mixed)
+      parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"Accepted\",\"status\":\"False\",\"reason\":\"NotAllowedByListeners\",\"observedGeneration\":$3},{\"type\":\"ResolvedRefs\",\"status\":\"True\",\"observedGeneration\":$(($3 - 1))}]}]" ;;
     rejected-and-lag)
       declared='[{"name":"platform","namespace":"kube-system"},{"name":"internal","namespace":"kube-system"}]'
       parents="[{\"parentRef\":{\"name\":\"platform\",\"namespace\":\"kube-system\"},\"conditions\":[{\"type\":\"ResolvedRefs\",\"status\":\"False\",\"reason\":\"BackendNotFound\",\"observedGeneration\":$3}]}]" ;;
@@ -269,6 +272,19 @@ scenario gateway-rejected-while-lagging
 list "$(route observability coroot 6 rejected-and-lag 2026-09-25T17:59:00Z)" >"$FAKE/httproutes.json"
 run
 expect "a rejection beside a lagging parent" 1 "FAILING HTTPRoute observability/coroot reason=route-rejected conditions=ResolvedRefs/BackendNotFound"
+
+# A current rejection is live breakage even when another condition on that parent is stale.
+scenario gateway-rejected-mixed-generations
+list "$(route observability coroot 6 rejected-mixed 2026-09-25T17:59:00Z)" >"$FAKE/httproutes.json"
+run
+expect "a current rejection beside a stale condition" 1 "FAILING HTTPRoute observability/coroot reason=route-rejected conditions=Accepted/NotAllowedByListeners"
+
+# A route declaring no parent is attached to no gateway, so none is expected to apply it.
+scenario unattached-route
+list "$(route observability coroot 6 6 2026-09-25T12:00:00Z)" "$(route tenant draft 1 unattached 2026-09-25T17:00:00Z)" >"$FAKE/httproutes.json"
+run
+expect "an unattached route" 0 "PLATFORM-HEALTH=OK"
+grep -qF "tenant/draft" "$tmp/out" && fail "a route with no parentRefs was reported"
 
 scenario gateway-never-applied
 list "$(route tenant web 1 none 2026-09-25T17:00:00Z)" >"$FAKE/httproutes.json"

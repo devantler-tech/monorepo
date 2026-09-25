@@ -195,9 +195,11 @@ esac
 # observed the current generation — a parent whose controller stopped may add no entry at all, so
 # scanning only the entries that exist would read as current. Parents are matched on their whole
 # reference (group, kind, namespace, name, sectionName, port, with the Gateway API defaults), so
-# two parents that differ only in, say, port are two parents. An Accepted=False or
-# ResolvedRefs=False from any parent that observed the current generation is a route the gateway
-# rejected — live breakage, not lag — and is reported before, and regardless of, other parents' lag.
+# two parents that differ only in, say, port are two parents. A route declaring no parent is
+# attached to no gateway, so nothing is expected to apply it and it is skipped. An Accepted=False or
+# ResolvedRefs=False condition that itself observed the current generation is a route the gateway
+# rejected — live breakage, not lag — and is reported before, and regardless of, any lag; judging it
+# by its own generation keeps a stale sibling condition on the same parent from hiding it.
 #
 # ⚠️ The grace clock is the newest spec-owning managed-field time. The API records one time per
 # field manager, so a metadata-only apply by the manager that also owns the spec moves it too. That
@@ -212,21 +214,20 @@ route_rows='
                       namespace: (.namespace // $ns), name, sectionName: (.sectionName // null),
                       port: (.port // null) };
   [ .spec.parentRefs[]? | parent_ref ] as $declared
+  | select(($declared | length) > 0)
   | [ .status.parents[]?
       | { ref: (.parentRef | parent_ref),
           seen: ([.conditions[]?.observedGeneration] | min),
           rejected: [ .conditions[]?
-                      | select((.type == "Accepted" or .type == "ResolvedRefs") and .status == "False")
+                      | select((.type == "Accepted" or .type == "ResolvedRefs") and .status == "False"
+                               and (.observedGeneration // -1) >= $gen)
                       | "\(.type)/\(.reason // "none")" ] } ] as $status
-  | ( if ($declared | length) > 0
-      then [ $declared[] as $d | ([ $status[] | select(.ref == $d) | .seen ] | max) ]
-      else [ $status[].seen ] end
-      | min ) as $seen
+  | ([ $declared[] as $d | ([ $status[] | select(.ref == $d) | .seen ] | max) ] | min) as $seen
   | ([ .metadata.managedFields[]?
        | select((.subresource // "") != "status" and ((.fieldsV1 // {}) | has("f:spec")))
        | .time ]
      + [ .metadata.creationTimestamp ] | map(select(. != null)) | max) as $changed
-  | ([ $status[] | select(.seen != null and .seen >= $gen) | .rejected[] ] | unique) as $rejections
+  | ([ $status[].rejected[] ] | unique) as $rejections
   | if ($rejections | length) > 0 then
       "FAILING \($id) reason=route-rejected conditions=\($rejections | join(","))"
     elif ($seen != null and $seen >= $gen) then empty
