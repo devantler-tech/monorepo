@@ -8,9 +8,12 @@
 #
 # It reads only what the lanes publish on GitHub: CodeRabbit and Codex comments and reviews, the
 # Cursor Bugbot check-run at each head, and cursor[bot] comments. Each artifact becomes one event:
-#   ok    a completed review (with or without findings)
-#   fail  a refusal: rate-limit (states a retry window, clears on its own), usage-limit (only an
-#         account admin can lift it), or error (a run that did not happen, e.g. Bugbot neutral+Error)
+#   ok        a completed review (with or without findings)
+#   fail      a refusal: rate-limit (states a retry window, clears on its own), usage-limit (only an
+#             account admin can lift it), or error (a run that did not happen, e.g. Bugbot neutral+Error)
+#   declined  CodeRabbit refused a disclosed request as context rather than an instruction. A learning
+#             it stored on ONE pull request causes this (monorepo#3124), so it never moves the lane
+#             verdict; its fourth field names that pull request.
 #
 # Verdict per lane, from its newest events:
 #   OK           the newest event is a completed review
@@ -18,6 +21,11 @@
 #   DOWN         the newest event is a usage-limit refusal (MAINTAINER-ONLY), or a refusal/error with
 #                no completed review within --stale-hours
 #   NO-EVIDENCE  no artifact from this lane in the window (not requested; says nothing about health)
+#
+# Then one CR-DECLINED line per pull request where CodeRabbit declined a disclosed request. The lane is
+# serving elsewhere, so this is neither an outage nor a rate limit: record that pull request's no-gate
+# and advance it to the next lane. Only the maintainer can remove the learning (CodeRabbit app,
+# Learnings). Without this line every run rediscovers the refusal by spending a request there.
 #
 # DETECTION ONLY. A DOWN line is the cue to escalate a maintainer-only limit and to stop spending
 # requests on that lane. It is NOT admissible evidence for the Local review round fallback, which
@@ -27,9 +35,10 @@
 #   review-lane-health.sh [--org ORG] [--since YYYY-MM-DD] [--limit N] [--stale-hours N] [--now EPOCH]
 #   review-lane-health.sh --events FILE [--stale-hours N] [--now EPOCH]   # classify recorded events
 #
-# Events are tab-separated: lane (cr|codex|bugbot), ISO-8601 UTC time, ok|fail, cause (- when ok).
+# Events are tab-separated: lane (cr|codex|bugbot), ISO-8601 UTC time, ok|fail|declined, cause (- when
+# ok; <repo>#<number> when declined).
 #
-# Exit 0  no lane is DOWN
+# Exit 0  no lane is DOWN (a CR-DECLINED line never changes the exit status)
 #      1  at least one lane is DOWN
 #      2  UNKNOWN — usage error, or a GitHub read failed (a partial sweep is never reported as healthy)
 set -euo pipefail
@@ -70,7 +79,7 @@ collect_pr() {
   gh api "repos/$org/$repo/commits/$head/check-runs?check_name=Cursor%20Bugbot&per_page=100" \
     --jq '.check_runs[] | {app: .app.slug, at: .completed_at, conclusion: .conclusion, title: .output.title}' \
     >"$tmp/checks" || unknown "cannot read $repo#$n check-runs"
-  jq -r -f "$tmp/classify-comments.jq" "$tmp/comments" "$tmp/reviews" >>"$tmp/events"
+  jq -r --arg pr "$repo#$n" -f "$tmp/classify-comments.jq" "$tmp/comments" "$tmp/reviews" >>"$tmp/events"
   # Only the Cursor app's run, and only the three documented conclusion/title pairs, count.
   jq -r 'select(.at != null and .app == "cursor") |
     if (.conclusion == "success" or .conclusion == "neutral") and .title == "Bugbot Review" then
@@ -94,6 +103,13 @@ if .login == "coderabbitai[bot]" then
   if (body | contains("<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->"))
     or (invocation and (body | contains("Review rate limited")))
   then "cr\t\(.at)\tfail\trate-limit"
+  # A chat reply (never a review or command reply) that calls a disclosed request context and says it
+  # started nothing. The wording varies per reply, so both halves are matched loosely but required.
+  elif .kind == "comment" and (invocation | not)
+    and (body | contains("<!-- This is an auto-generated reply by CodeRabbit -->"))
+    and (body | test("disclosed[^\n]*\\bcontext\\b"; "i"))
+    and (body | test("did not (start|trigger)|does not authorize|not a maintainer instruction|maintainer-authenticated"; "i"))
+  then "cr\t\(.at)\tdeclined\t\($pr)"
   elif (.kind == "review" and review_body)
     or (invocation and (body | test("Full review is complete for [0-9a-f]{7,40}|Reviewed pull request .* at `?[0-9a-f]{7,40}")))
   then "cr\t\(.at)\tok\t-"
@@ -170,4 +186,11 @@ for lane in cr codex bugbot; do
     down=1
   fi
 done
+
+# Pull-request-scoped refusals, newest per pull request, after the lane verdicts they do not affect.
+awk -F'\t' '$1 == "cr" && $3 == "declined" && $2 > at[$4] { at[$4] = $2 }
+  END { for (pr in at) print pr "\t" at[pr] }' "$tmp/events" | sort |
+  while IFS=$'\t' read -r pr at; do
+    echo "CR-DECLINED $pr at $at — PR-scoped learning; advance this PR to the next lane (MAINTAINER-ONLY removal)"
+  done
 exit "$down"

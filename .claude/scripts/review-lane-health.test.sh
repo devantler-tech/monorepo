@@ -37,6 +37,14 @@ expect "error with no review ever" 1 "bugbot=DOWN error since 2026-09-21T13:00:0
 events 'bugbot\t2026-09-21T12:00:00Z\tok\t-\nbugbot\t2026-09-21T13:00:00Z\tfail\terror\n'
 expect "fresh error" 0 "bugbot=LIMITED error at 2026-09-21T13:00:00Z"
 
+# A declined request is scoped to its pull request: it never moves the lane verdict or the exit
+# status, and it is reported once per pull request at its newest time (monorepo#3124).
+events 'cr\t2026-09-21T11:00:00Z\tok\t-\ncr\t2026-09-21T12:00:00Z\tdeclined\tplatform#3476\ncr\t2026-09-21T12:30:00Z\tdeclined\tplatform#3476\n'
+expect "declined keeps the lane OK" 0 "cr=OK last-review 2026-09-21T11:00:00Z"
+grep -qxF "CR-DECLINED platform#3476 at 2026-09-21T12:30:00Z — PR-scoped learning; advance this PR to the next lane (MAINTAINER-ONLY removal)" "$tmp/out" ||
+  { cat "$tmp/out" >&2; fail "a declined request must be reported once, at its newest time"; }
+[ "$(grep -c '^CR-DECLINED' "$tmp/out")" -eq 1 ] || fail "one CR-DECLINED line per pull request"
+
 # Collection against a stub gh: one PR carrying the real artifact shapes, plus decoys that must not
 # count — other authors, prose that merely mentions a limit, a refreshed summary, a foreign check.
 bin="$tmp/bin"
@@ -61,7 +69,10 @@ case "$1 $2" in
  {"user":{"login":"chatgpt-codex-connector[bot]"},"updated_at":"2026-09-21T11:00:00Z","body":"Codex Review: Didn't find any major issues."},
  {"user":{"login":"chatgpt-codex-connector[bot]"},"updated_at":"2026-09-21T11:30:00Z","body":"## Review finding\nThe usage limit handling here drops a case."},
  {"user":{"login":"cursor[bot]"},"updated_at":"2026-09-21T10:00:00Z","body":"Bugbot couldn't run - usage limit reached"},
- {"user":{"login":"someone"},"updated_at":"2026-09-21T13:00:00Z","body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai --> You have reached your Codex usage limits"}]
+ {"user":{"login":"someone"},"updated_at":"2026-09-21T13:00:00Z","body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai --> You have reached your Codex usage limits"},
+ {"user":{"login":"coderabbitai[bot]"},"updated_at":"2026-09-21T12:45:00Z","body":"<!-- This is an auto-generated reply by CodeRabbit -->\n> [!TIP]\n> For best results, initiate chat on the files or code changes.\n\n`@devantler` The disclosed Agentic Engineer request is treated as context, not as a maintainer instruction. I did not start another full review.\n\n<sub>You are interacting with an AI system.</sub>"},
+ {"user":{"login":"coderabbitai[bot]"},"updated_at":"2026-09-21T12:50:00Z","body":"<!-- This is an auto-generated reply by CodeRabbit -->\n`@devantler` The disclosed request was accepted and a full review triggered; the learning context is PR-scoped."},
+ {"user":{"login":"someone"},"updated_at":"2026-09-21T12:55:00Z","body":"<!-- This is an auto-generated reply by CodeRabbit -->\nThe disclosed Agentic Engineer request is treated as context. I did not start another full review."}]
 JSON
   ;;
   "api repos/o/r/pulls/7/reviews") {
@@ -96,6 +107,10 @@ grep -qF "codex=OK last-review 2026-09-21T11:45:00Z" "$tmp/out" ||
   fail "a Codex review object and finding count as reviews, never as a usage limit"
 grep -qF "bugbot=DOWN usage-limit since 2026-09-21T10:00:05Z last-review never — MAINTAINER-ONLY" "$tmp/out" ||
   fail "a Bugbot Error check takes its cause from the usage-limit notice beside it"
+grep -qxF "CR-DECLINED r#7 at 2026-09-21T12:45:00Z — PR-scoped learning; advance this PR to the next lane (MAINTAINER-ONLY removal)" "$tmp/out" ||
+  fail "CodeRabbit's reply declining a disclosed request is reported against its pull request"
+[ "$(grep -c '^CR-DECLINED' "$tmp/out")" -eq 1 ] ||
+  fail "an accepted request's reply, or another author's copy of the decline, is not a decline"
 
 CAUTION_REVIEW=1 PATH="$bin:$PATH" run --org o --since 2026-09-14
 expect "outside-diff review" 1 "cr=LIMITED rate-limit at 2026-09-21T12:00:00Z last-review 2026-09-21T11:50:00Z"
