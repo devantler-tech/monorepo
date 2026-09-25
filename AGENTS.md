@@ -1539,8 +1539,10 @@ the fifteen proven traps live in `agent-claim.test.sh`).
      `.claude/scripts/agent-claim.sh retire <issue> <acquired-sha> --repo-dir <product-path>` so the shared tip cannot lock the issue after
      coordination has succeeded. The acquired SHA is mandatory: a stale holder must never observe and
      delete a takeover winner's replacement tip. An unretired `agent-claim/*` tip is a **permanent
-     lock** (nothing else sweeps that namespace) — trap 4 of #2302; retirement is mandatory, not
-     optional hygiene.
+     lock** on an open issue — trap 4 of #2302; retirement is mandatory, not optional hygiene.
+     [`agent-claim-sweep.sh`](.claude/scripts/agent-claim-sweep.sh) `--repo <owner>/<repo>
+     --repo-dir <product-path> [--apply]` removes only tips whose issue is **closed**,
+     compare-and-swap; it never touches an open issue's tip.
    - **Project Board API-only work:** the board has no product checkout, but its roadmap issue lives
      in `devantler-tech/monorepo`. Acquire against the monorepo root, retain the SHA, and retire that
      exact SHA after the board/API mutation is read back and verified. **Atomically renew the retained

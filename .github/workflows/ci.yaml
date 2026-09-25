@@ -264,6 +264,8 @@ jobs:
             agent-claim:
               - '.claude/scripts/agent-claim.sh'
               - '.claude/scripts/agent-claim.test.sh'
+              - '.claude/scripts/agent-claim-sweep.sh'
+              - '.claude/scripts/agent-claim-sweep.test.sh'
               # The Claim protocol's assignee lease-clock read is executed by its own test.
               - 'AGENTS.md'
               - '.claude/scripts/claim-lease-timeline-contract.test.sh'
@@ -1665,6 +1667,10 @@ jobs:
       # capability-failure classification.
       - name: Self-test agent-claim traps
         run: bash .claude/scripts/agent-claim.test.sh
+      # Leaked claim tips on closed issues are removed compare-and-swap; open,
+      # unreadable and re-acquired tips survive (monorepo#3589).
+      - name: Self-test agent-claim sweep
+        run: bash .claude/scripts/agent-claim-sweep.test.sh
       # Runs the Claim protocol's prescribed lease-clock read against a fake gh: a failed timeline
       # read must be UNKNOWN, never "unassigned" (monorepo#2798).
       - name: Verify the claim-lease timeline read
