@@ -42,7 +42,10 @@ mkdir -p "$repo"
 git -C "$repo" init -q -b main
 git -C "$repo" config user.name "worktree-claim-test"
 git -C "$repo" config user.email "worktree-claim-test@example.com"
-git -C "$repo" commit --allow-empty -qm "init"
+# A tracked file, as every real repository has: a linked worktree's main checkout is proven by it.
+printf 'readme\n' >"$repo/README"
+git -C "$repo" add README
+git -C "$repo" commit -qm "init"
 
 wt="$tmp/wt-a"
 
@@ -229,8 +232,27 @@ rc=0
 out="$(GIT_ALLOW_PROTOCOL='file' bash -x "$script" add "$super/mod" "$tmp/wt-sub-cred-x" "claim-branch-sub-cred-x" "session-sub-cred-x" 2>&1)" || rc=$?
 check "a traced refusal still refuses" 1 "$rc" "$out" "origin urls:     https://***@github.com/example/other"
 check "xtrace never shows a remote credential" 1 "$(grep -qE 's3cr3t' <<<"$out" && echo 0 || echo 1)"
+# A value can carry further URLs after a newline or a space, and each is redacted.
+git -C "$super/mod" config remote.origin.url "https://github.com/example/other
+https://alice:nl-s3cr3t@evil.invalid/repo https://bob:sp-s3cr3t@evil.invalid/x/https://carol:in-s3cr3t@evil.invalid"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-cred-multi" "claim-branch-sub-cred-multi" "session-sub-cred-multi" 2>&1)" || rc=$?
+check "add refuses an origin that carries several URLs" 1 "$rc" "$out" 'https://github.com/example/other\012https://***@evil.invalid/repo'
+check "origin refusal redacts every URL in a value" 1 "$(grep -qE 's3cr3t' <<<"$out" && echo 0 || echo 1)"
 git -C "$super" config -f .gitmodules submodule.mod.url "https://github.com/example/sub"
 git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
+
+# An empty value in the submodule's own config overrides a shared one: git then connects without the
+# proxy every other repository uses, so it counts as a redirect.
+printf '[remote "origin"]\n\tproxy = http://proxy.example.invalid:3128\n' >"$tmp/global-proxy.gitconfig"
+git -C "$super/mod" config remote.origin.proxy ""
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-proxy.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-proxy-empty" "claim-branch-sub-proxy-empty" "session-sub-proxy-empty" 2>&1)" || rc=$?
+check "add refuses a submodule whose empty proxy overrides the shared one" 1 "$rc" "$out" "redirected by:   remote.origin.proxy"
+git -C "$super/mod" config --unset remote.origin.proxy
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-proxy.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-proxy-shared" "claim-branch-sub-proxy-shared" "session-sub-proxy-shared" 2>&1)" || rc=$?
+check "add admits a submodule when only the shared config sets a proxy" 0 "$rc" "$out" "owner=session-sub-proxy-shared"
 
 # The submodule's own ssh command is what fetch and push run. A global one applies to every
 # repository, the superproject included, so it is not this check's concern.
@@ -641,7 +663,7 @@ git -C "$super" config -f .gitmodules submodule.mod.url "./child"
 git -C "$super/mod" config remote.origin.url "$tmp/remote-root/super/child"
 rc=0
 out="$("$script" add "$super/mod" "$tmp/wt-sub-basenewline" "claim-branch-sub-basenewline" "session-sub-basenewline" 2>&1)" || rc=$?
-check "add refuses a relative URL against a superproject remote that ends in a newline" 1 "$rc" "$out" "remote URL that contains a newline"
+check "add refuses a relative URL against a superproject remote that ends in a newline" 1 "$rc" "$out" "remote whose name or URL contains a newline"
 git -C "$super" config remote.origin.url "$tmp/remote-root/super"
 git -C "$super" config -f .gitmodules submodule.mod.url "../upstream-sub"
 git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
@@ -739,6 +761,16 @@ git -C "$deep_super" config --unset remote.origin.url
 rc=0
 out="$("$script" add "$deep_super/deep/mod" "$tmp/wt-deep-unset" "claim-branch-deep-unset" "session-deep-unset" 2>&1)" || rc=$?
 check "add resolves a relative URL against the superproject itself when its remote has no URL" 0 "$rc" "$out" "owner=session-deep-unset"
+# A branch remote named with a trailing newline names no configured remote to git, so the name is not
+# trimmed to `origin` and resolved against that remote's URL.
+git -C "$deep_super" config remote.origin.url "https://git.example.invalid/org/super.git"
+git -C "$deep_super" config branch.main.remote "origin
+"
+git -C "$deep_super/deep/mod" config remote.origin.url "https://git.example.invalid/org/super.git/sub.git"
+rc=0
+out="$("$script" add "$deep_super/deep/mod" "$tmp/wt-deep-nlremote" "claim-branch-deep-nlremote" "session-deep-nlremote" 2>&1)" || rc=$?
+check "add refuses a relative URL when the branch's remote name carries a newline" 1 "$rc" "$out" "contains a newline"
+git -C "$deep_super" config --unset branch.main.remote
 git -C "$super" config remote.origin.url "$tmp/remote-root/super"
 git -C "$super" config -f .gitmodules submodule.mod.url "../upstream-sub"
 git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
@@ -940,6 +972,33 @@ rc=0
 out="$("$script" add "$tmp/sgd2-linked" "$tmp/wt-sgd2-copy" "claim-branch-sgd2-copy" "session-sgd2-copy" 2>&1)" || rc=$?
 check "add refuses a separate git directory named .git whose parent holds a copy of a tracked file" 1 "$rc" "$out" "main checkout cannot be located"
 rm -f "$tmp/sgd2-admin/tracked.txt"
+# An index that tracks nothing proves nothing either, so a .git-named separate git directory of an empty
+# commit is not taken for an in-place clone.
+empty_up="$tmp/empty-up"
+git init -q -b main "$empty_up"
+git -C "$empty_up" -c user.name=t -c user.email=t@example.com commit --allow-empty -qm empty
+sgd3_super="$tmp/sgd3-super"
+git init -q -b main "$sgd3_super"
+git -C "$sgd3_super" -c protocol.file.allow=always submodule add -q "$empty_up" mod
+git -C "$sgd3_super" -c user.name=t -c user.email=t@example.com commit -qm "add mod"
+rm -rf "$sgd3_super/mod"
+mkdir -p "$tmp/sgd3-admin"
+git clone -q --separate-git-dir "$tmp/sgd3-admin/.git" "$empty_up" "$sgd3_super/mod"
+git -C "$sgd3_super/mod" worktree add -q --detach "$tmp/sgd3-linked"
+git -C "$sgd3_super/mod" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" add "$tmp/sgd3-linked" "$tmp/wt-sgd3-linked" "claim-branch-sgd3-linked" "session-sgd3-linked" 2>&1)" || rc=$?
+check "add refuses a .git-named separate git directory whose index tracks nothing" 1 "$rc" "$out" "main checkout cannot be located"
+# That holds for an in-place clone with nothing tracked too: from a linked worktree nothing shows where
+# its main checkout sits, while `add` from that checkout itself still works.
+git clone -q "$empty_up" "$tmp/empty-inplace" 2>/dev/null
+git -C "$tmp/empty-inplace" worktree add -q --detach "$tmp/empty-inplace-linked"
+rc=0
+out="$("$script" add "$tmp/empty-inplace-linked" "$tmp/wt-empty-linked" "claim-branch-empty-linked" "session-empty-linked" 2>&1)" || rc=$?
+check "add refuses a linked worktree of a clone that tracks nothing" 1 "$rc" "$out" "main checkout cannot be located"
+rc=0
+out="$("$script" add "$tmp/empty-inplace" "$tmp/wt-empty-main" "claim-branch-empty-main" "session-empty-main" 2>&1)" || rc=$?
+check "add admits a worktree created from the main checkout of a clone that tracks nothing" 0 "$rc" "$out" "owner=session-empty-main"
 git clone -q "$tracked_up" "$tmp/tracked-inplace"
 git -C "$tmp/tracked-inplace" worktree add -q --detach "$tmp/tracked-inplace-linked"
 rc=0

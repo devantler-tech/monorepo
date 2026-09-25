@@ -632,8 +632,30 @@ refuse_uninitialized_repo() {
 }
 
 # redact_url prints a URL for a diagnostic with any userinfo (`user:token@`) replaced by `***@`, and
-# any query or fragment by `?***`, so a credential-bearing remote is never echoed.
+# any query or fragment by `?***`, so a credential-bearing remote is never echoed. A config value can
+# carry several URLs, separated by whitespace or control characters, and each is redacted; a separator
+# other than a space is shown as an octal escape such as `\012`.
 redact_url() {
+  local value="$1" out="" segment sep code
+  while :; do
+    segment="${value%%[[:space:][:cntrl:]]*}"
+    out="$out$(redact_url_segment "$segment")"
+    value="${value:${#segment}}"
+    [ -n "$value" ] || break
+    sep="${value:0:1}"
+    value="${value:1}"
+    if [ "$sep" = " " ]; then
+      out="$out "
+    else
+      printf -v code '%03o' "'$sep"
+      out="$out\\$code"
+    fi
+  done
+  printf '%s\n' "$out"
+}
+
+# redact_url_segment redacts one URL, and any URL embedded later in it, for redact_url.
+redact_url_segment() {
   local url="$1" scheme="" authority rest
   case "$url" in
     *://*)
@@ -653,6 +675,9 @@ redact_url() {
       rest="${rest%%[?#]*}?***"
       ;;
   esac
+  case "$rest" in
+    *://*) rest="${rest%%://*}$(redact_url_segment "://${rest#*://}")" ;;
+  esac
   printf '%s%s%s\n' "$scheme" "$authority" "$rest"
 }
 
@@ -661,8 +686,8 @@ redact_url() {
 # remote: the remote the current branch names (an explicitly empty name names none), else origin; a
 # remote with no URL falls back to the superproject's own path. Any other URL is printed unchanged.
 # It prints nothing when git itself cannot resolve the URL, because more `..` components remain than it
-# can drop, returns 3 when the remote's URL contains a newline, which git can carry into the result, and
-# returns 4 when the remote's URL is set but empty, which git refuses to resolve against.
+# can drop, returns 3 when the remote's name or URL contains a newline, which git can carry into the
+# result, and returns 4 when the remote's URL is set but empty, which git refuses to resolve against.
 resolve_submodule_url() {
   local super="$1" url="$2" path="$3" branch remote configured base sep="/" relative=0 before result up rest
   case "$url" in
@@ -674,10 +699,14 @@ resolve_submodule_url() {
   esac
   branch="$(git -C "$super" symbolic-ref --short -q HEAD 2>/dev/null)" || branch=""
   remote="origin"
-  if [ -n "$branch" ] && configured="$(git -C "$super" config --get "branch.$branch.remote" 2>/dev/null)"; then
+  # Read NUL-delimited: command substitution would drop a trailing newline that git keeps. A remote
+  # name with a newline names no configured remote, so it is refused rather than resolved.
+  if [ -n "$branch" ] && IFS= read -r -d '' configured < <(git -C "$super" config -z --get "branch.$branch.remote" 2>/dev/null); then
+    case "$configured" in
+      *$'\n'*) return 3 ;;
+    esac
     remote="$configured"
   fi
-  # Read NUL-delimited: command substitution would drop a trailing newline that git keeps.
   # A URL that is set but empty is not an absent one: git aborts rather than resolve against it.
   base=""
   if IFS= read -r -d '' base < <(git -C "$super" config -z --get "remote.$remote.url" 2>/dev/null); then
@@ -799,8 +828,8 @@ submodule_name_at() {
 # <common> was written from: none of the first 50 files that index tracks outside a sparse checkout's
 # exclusions is, under <dir>, the very file the index recorded (the same inode), or the index cannot be
 # read. The parent of a separate git directory that is merely named .git can hold a tracked file by
-# chance, but a copy has an inode of its own. An index that tracks nothing cannot tell the two apart, so
-# it does not count.
+# chance, but a copy has an inode of its own. An index that tracks nothing proves nothing, so it counts
+# as unproven too.
 checkout_unproven() {
   local dir="$1" common="$2" entry path listed=0 recorded actual
   git --git-dir="$common" ls-files -z -t >/dev/null 2>&1 || return 0
@@ -829,7 +858,7 @@ checkout_unproven() {
     fi
     [ "$listed" -lt 50 ] || break
   done < <(git --git-dir="$common" ls-files -z -t 2>/dev/null)
-  [ "$listed" -gt 0 ]
+  return 0
 }
 
 # under_git_modules succeeds when <common> sits in the `modules/` directory of a git directory, which is
@@ -880,6 +909,15 @@ origin_config_own() {
     i=$((i + 3))
   done <"$probe/.claim-repo-entries"
   return 1
+}
+
+# config_values prints what `git config -z <args>` reports for <repo>, hex-encoded. Command substitution
+# drops trailing empty lines, so compared as plain text an empty value that overrides a shared one would
+# read as absent.
+config_values() {
+  local repo="$1"
+  shift
+  { git -C "$repo" config -z "$@" 2>/dev/null || true; } | od -An -tx1 | tr -d ' \n'
 }
 
 # origin_redirects prints, one per line, what sends <repo>'s origin somewhere other than where <url>
@@ -936,31 +974,31 @@ origin_redirects() (
     echo "URL rewrite"
   fi
   # git uses the last core.sshCommand, but tries every core.gitProxy in order.
-  if { [ "$(git -C "$repo" config --get core.sshCommand 2>/dev/null || true)" != "$(git -C "$probe" config --get core.sshCommand 2>/dev/null || true)" ]; } &&
+  if { [ "$(config_values "$repo" --get core.sshCommand)" != "$(config_values "$probe" --get core.sshCommand)" ]; } &&
     origin_config_own "$repo" "$probe" '^core\.sshcommand$' "$url"; then
     echo "core.sshCommand"
   fi
-  if { [ "$(git -C "$repo" config --get-all core.gitProxy 2>/dev/null || true)" != "$(git -C "$probe" config --get-all core.gitProxy 2>/dev/null || true)" ]; } &&
+  if { [ "$(config_values "$repo" --get-all core.gitProxy)" != "$(config_values "$probe" --get-all core.gitProxy)" ]; } &&
     origin_config_own "$repo" "$probe" '^core\.gitproxy$' "$url"; then
     echo "core.gitProxy"
   fi
   # For a curl remote, a proxy or a pinned address for its host decides which server answers. Every
   # http.*proxy and http.*curloptResolve entry is compared, URL-scoped ones included, not only the one
   # matching origin, so the URL stays off command lines.
-  if { [ "$(git -C "$repo" config --get-all remote.origin.proxy 2>/dev/null || true)" != "$(git -C "$probe" config --get-all remote.origin.proxy 2>/dev/null || true)" ]; } &&
+  if { [ "$(config_values "$repo" --get-all remote.origin.proxy)" != "$(config_values "$probe" --get-all remote.origin.proxy)" ]; } &&
     origin_config_own "$repo" "$probe" '^remote\.origin\.proxy$' "$url"; then
     echo "remote.origin.proxy"
   fi
-  if { [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?proxy$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?proxy$' 2>/dev/null || true)" ]; } &&
+  if { [ "$(config_values "$repo" --get-regexp '^http\.(.+\.)?proxy$')" != "$(config_values "$probe" --get-regexp '^http\.(.+\.)?proxy$')" ]; } &&
     origin_config_own "$repo" "$probe" '^http\.(.+\.)?proxy$' "$url"; then
     echo "http.proxy"
   fi
-  if { [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?curloptresolve$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?curloptresolve$' 2>/dev/null || true)" ]; } &&
+  if { [ "$(config_values "$repo" --get-regexp '^http\.(.+\.)?curloptresolve$')" != "$(config_values "$probe" --get-regexp '^http\.(.+\.)?curloptresolve$')" ]; } &&
     origin_config_own "$repo" "$probe" '^http\.(.+\.)?curloptresolve$' "$url"; then
     echo "http.curloptResolve"
   fi
   # An extra header such as Host can make the same URL reach another repository on that server.
-  if { [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?extraheader$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?extraheader$' 2>/dev/null || true)" ]; } &&
+  if { [ "$(config_values "$repo" --get-regexp '^http\.(.+\.)?extraheader$')" != "$(config_values "$probe" --get-regexp '^http\.(.+\.)?extraheader$')" ]; } &&
     origin_config_own "$repo" "$probe" '^http\.(.+\.)?extraheader$' "$url"; then
     echo "http.extraHeader"
   fi
@@ -1191,7 +1229,7 @@ refuse_foreign_submodule_origin_checked() {
     elif [[ $raw == *$'\n'* ]]; then
       shown_expected="<$(redact_url "${raw//$'\n'/\\n}") contains a newline, so origin cannot be verified against it>"
     elif [ "$resolved" -eq 3 ]; then
-      shown_expected="<$(redact_url "$raw") is relative to a superproject remote URL that contains a newline, so origin cannot be verified against it>"
+      shown_expected="<$(redact_url "$raw") is relative to a superproject remote whose name or URL contains a newline, so origin cannot be verified against it>"
     elif [ "$resolved" -eq 4 ]; then
       shown_expected="<$(redact_url "$raw") is relative to a superproject remote URL that is set but empty, so git cannot resolve it>"
     elif [ -n "$raw" ]; then
