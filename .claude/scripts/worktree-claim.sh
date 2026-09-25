@@ -99,8 +99,10 @@ write_marker() {
 # `add` arms these before it creates the worktree, and keeps them until that worktree passes its own
 # origin check, so any exit in between (the check refusing it, an error, a signal) takes back what `add`
 # created. Only a creation recorded in the note counts: the note is written under the branch-operation
-# lock right after the worktree exists, so a path something else created is never removed. The branch
-# is removed only when `add` created it, and only while it still points where `add` left it.
+# lock right after the worktree exists, so a path something else created is never removed. Removal is
+# forced, because a post-checkout hook can leave files in the new worktree that would stop a plain
+# `worktree remove`. The branch is removed only when `add` created it, and only while it still points
+# where `add` left it.
 PENDING_REPO=""
 PENDING_WT=""
 PENDING_BRANCH=""
@@ -123,7 +125,7 @@ discard_pending_worktree() {
 }
 remove_new_worktree() {
   local repo="$1" wt="$2" branch="$3" oid="$4"
-  git -C "$repo" worktree remove "$wt" || return
+  git -C "$repo" worktree remove --force "$wt" || return
   [ -z "$oid" ] || git -C "$repo" update-ref -d "refs/heads/$branch" "$oid"
 }
 
@@ -776,7 +778,8 @@ origin_redirects() (
     echo "unverifiable"
     return 0
   }
-  if ! git init -q "$probe" >/dev/null 2>&1; then
+  # An empty template keeps a user's init template, and any config it carries, out of the probe.
+  if ! git init -q --template= "$probe" >/dev/null 2>&1; then
     rm -rf "$probe"
     probe=""
     echo "unverifiable"
@@ -805,14 +808,15 @@ origin_redirects() (
     echo "core.gitProxy"
   fi
   # For a curl remote, a proxy or a pinned address for its host decides which server answers. Every
-  # http.*proxy entry is compared, not only the one matching origin, so the URL stays off command lines.
+  # http.*proxy and http.*curloptResolve entry is compared, URL-scoped ones included, not only the one
+  # matching origin, so the URL stays off command lines.
   if [ "$(git -C "$repo" config --get-all remote.origin.proxy 2>/dev/null || true)" != "$(git -C "$probe" config --get-all remote.origin.proxy 2>/dev/null || true)" ]; then
     echo "remote.origin.proxy"
   fi
   if [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?proxy$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?proxy$' 2>/dev/null || true)" ]; then
     echo "http.proxy"
   fi
-  if [ "$(git -C "$repo" config --get-all http.curloptResolve 2>/dev/null || true)" != "$(git -C "$probe" config --get-all http.curloptResolve 2>/dev/null || true)" ]; then
+  if [ "$(git -C "$repo" config --get-regexp '^http\.(.+\.)?curloptresolve$' 2>/dev/null || true)" != "$(git -C "$probe" config --get-regexp '^http\.(.+\.)?curloptresolve$' 2>/dev/null || true)" ]; then
     echo "http.curloptResolve"
   fi
   rm -rf "$probe"

@@ -271,6 +271,21 @@ check "a refused worktree keeps a branch that existed before add" 0 "$(git -C "$
 [ ! -e "$tmp/wt-sub-onbranch-kept" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-onbranch-kept"
 git -C "$super/mod" branch -D -q claim-branch-sub-onbranch-kept
 
+# A post-checkout hook can leave files in the new worktree, which a plain `worktree remove` refuses.
+mod_hooks="$(git -C "$super/mod" rev-parse --git-common-dir)/hooks"
+mkdir -p "$mod_hooks"
+printf '#!/bin/sh\ntouch hook-made-file\n' >"$mod_hooks/post-checkout"
+chmod +x "$mod_hooks/post-checkout"
+printf '[includeIf "onbranch:claim-branch-sub-onbranch-hook"]\n\tpath = %s\n' "$tmp/only-mod.gitconfig" >"$tmp/global-onbranch-hook.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-onbranch-hook.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-onbranch-hook" "claim-branch-sub-onbranch-hook" "session-sub-onbranch-hook" 2>&1)" || rc=$?
+rm -f "$mod_hooks/post-checkout"
+check "add refuses a new worktree its hook dirtied" 1 "$rc" "$out" "redirected by:   URL rewrite"
+check "a refused new worktree a hook dirtied is removed" 1 "$([ -e "$tmp/wt-sub-onbranch-hook" ] && echo 0 || echo 1)"
+check "a refused new worktree a hook dirtied loses its new branch" 1 "$(git -C "$super/mod" show-ref --verify --quiet refs/heads/claim-branch-sub-onbranch-hook && echo 0 || echo 1)"
+[ ! -e "$tmp/wt-sub-onbranch-hook" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-onbranch-hook"
+git -C "$super/mod" branch -D -q claim-branch-sub-onbranch-hook 2>/dev/null || true
+
 # A signal that lands once the worktree exists, but before `add` has checked and claimed it, still takes
 # back what `add` created. The shim holds the creation step open after the real `git worktree add`, and
 # only the main process is signalled, so its handler runs as soon as that step returns.
@@ -322,6 +337,23 @@ printf '[http]\n\tproxy = http://proxy.example.invalid:3128\n' >"$tmp/global-pro
 rc=0
 out="$(GIT_CONFIG_GLOBAL="$tmp/global-proxy.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-proxy-global" "claim-branch-sub-proxy-global" "session-sub-proxy-global" 2>&1)" || rc=$?
 check "add admits a submodule when only global config sets http.proxy" 0 "$rc" "$out" "owner=session-sub-proxy-global"
+# git applies an http setting scoped to a URL to every remote that URL matches.
+for setting in "http.https://github.com/.proxy=http://proxy.example.invalid:3128" "http.https://github.com/.curloptResolve=github.com:443:192.0.2.1"; do
+  key="${setting%%=*}"
+  name="${key##*.}"
+  git -C "$super/mod" config "$key" "${setting#*=}"
+  rc=0
+  out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-scoped-$name" "claim-branch-sub-scoped-$name" "session-sub-scoped-$name" 2>&1)" || rc=$?
+  check "add refuses a submodule whose own config sets $name for origin's URL" 1 "$rc" "$out" "redirected by:   http.$name"
+  git -C "$super/mod" config --unset "$key"
+done
+
+# The probe repository is compared as neutral ground, so a user's init template must not reach it.
+mkdir -p "$tmp/init-template"
+printf '[core]\n\tsshCommand = ssh -o ProxyCommand=true\n' >"$tmp/init-template/config"
+rc=0
+out="$(GIT_TEMPLATE_DIR="$tmp/init-template" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-template" "claim-branch-sub-template" "session-sub-template" 2>&1)" || rc=$?
+check "add admits a correct submodule when the user's init template sets core.sshCommand" 0 "$rc" "$out" "owner=session-sub-template"
 
 # `submodule sync` writes a registered URL byte for byte, trailing newline included, so an origin
 # without it is not that URL; a URL carrying a newline cannot be verified either way.
