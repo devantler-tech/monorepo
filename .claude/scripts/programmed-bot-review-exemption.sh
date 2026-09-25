@@ -340,8 +340,8 @@ matches_agent_skills_provenance() {
 # The sync commit comes first, carrying the exact expected message. It is either the legacy shape or
 # the App-signed one the updater writes once it signs through the API, which is recognised only with
 # GitHub's own signature verdict, as in the consumer arm above. After it, the caller's follow-up jobs
-# may add a digest refresh and a version bump, each at most once and in either order; anything else,
-# an adaptation commit included, is not the updater's head.
+# may add a digest refresh and a version bump, each at most once and in the order its job writes them
+# (refresh first, then bump); anything else, an adaptation commit included, is not the updater's head.
 matches_agent_plugins_review_provenance() {
   local sync_message="$1"
   jq -e --arg sync_message "${sync_message}" '
@@ -380,7 +380,8 @@ matches_agent_plugins_review_provenance() {
     length >= 1 and
     (.[0] | skill_update) and
     all(.[1:][]; actions_bot_authored and actions_bot_committed and follow_up_kind != null) and
-    (.[1:] | map(follow_up_kind) | (unique | length) == length)
+    (.[1:] | map(follow_up_kind) | (unique | length) == length) and
+    (.[1:] | map(follow_up_kind) | IN([], ["digest"], ["bump"], ["digest", "bump"]))
   ' <<<"${commits_json}" >/dev/null
 }
 

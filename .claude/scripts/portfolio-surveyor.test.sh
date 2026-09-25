@@ -1340,7 +1340,8 @@ expect_review_required "agent-plugins per-skill update, bump carrying release no
   "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
   "$(printf '%s\n' "${per_skill_sync}" "$(per_skill_follow_up "${per_skill_head}" \
     "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
-expect_review_required "agent-plugins per-skill update, bump before digest refresh" \
+# The updater job always refreshes digests before it bumps, so the reverse order is not its output.
+expect_review_gated "agent-plugins per-skill update, bump before digest refresh" \
   "${per_skill_args[@]}" "${per_skill_files}" \
   "$(printf '%s\n' "${per_skill_sync}" "${per_skill_bump}" "${per_skill_digest}" | per_skill_commits)"
 expect_review_required "agent-plugins per-skill update, sync commit only" \
@@ -1360,7 +1361,8 @@ expect_review_required "agent-plugins single-PR update with a digest refresh" \
 
 # Negative controls: each one breaks a single conjunct of the fixture above.
 expect_review_gated "agent-plugins per-skill update carrying both bump wordings" \
-  "${per_skill_args[@]}" "${per_skill_files}" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
   "$(printf '%s\n' "${per_skill_sync}" \
     "$(per_skill_follow_up 1111111111111111111111111111111111111111 \
       "chore(deps): bump versions of changed plugins")" \
@@ -1419,6 +1421,25 @@ expect_review_gated "agent-plugins per-skill update carrying another plugin's re
   "${per_skill_args[@]}" \
   "$(jq -c '. + ["plugins/engineering-practices/CHANGELOG.md"]' <<<"${per_skill_files}")" \
   "${per_skill_commits_json}"
+# End to end, matches_changelog_bump rejects a foreign changelog before the file boundary is the
+# deciding check, so a regression in the per-skill file predicate would go unseen there. Exercise
+# that predicate on its own.
+files_predicate_src="$(sed -n '/^matches_agent_plugins_review_files()/,/^}/p' "${classifier}")"
+[[ -n "${files_predicate_src}" ]] || fail "could not extract matches_agent_plugins_review_files"
+files_predicate() {
+  (
+    eval "${files_predicate_src}"
+    files_json="$2"
+    matches_agent_plugins_review_files "$1"
+  )
+}
+files_predicate "${per_skill_path}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" ||
+  fail "per-skill file boundary rejects its own plugin's changelog"
+if files_predicate "${per_skill_path}" \
+  "$(jq -c '. + ["plugins/engineering-practices/CHANGELOG.md"]' <<<"${per_skill_files}")"; then
+  fail "per-skill file boundary admits another plugin's changelog"
+fi
 expect_review_gated "agent-plugins per-skill branch naming another skill" \
   agent-plugins app/botantler-1 "deps/agent-skills-update-agentic-engineering-skills-agent-instructions" \
   "${per_skill_title}" "${per_skill_head}" "${per_skill_files}" "${per_skill_commits_json}"
