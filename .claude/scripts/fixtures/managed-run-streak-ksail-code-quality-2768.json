@@ -1,0 +1,98 @@
+[
+  {
+    "conclusion": "failure",
+    "created_at": "2026-09-24T20:57:04Z",
+    "head_branch": "main",
+    "id": 36058281553,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "failure",
+    "created_at": "2026-09-24T20:09:44Z",
+    "head_branch": "main",
+    "id": 36052991017,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "failure",
+    "created_at": "2026-09-24T19:35:55Z",
+    "head_branch": "main",
+    "id": 36049233190,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "failure",
+    "created_at": "2026-09-24T19:21:15Z",
+    "head_branch": "main",
+    "id": 36047566304,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "success",
+    "created_at": "2026-09-24T18:59:37Z",
+    "head_branch": "main",
+    "id": 36045069300,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "success",
+    "created_at": "2026-09-24T18:37:20Z",
+    "head_branch": "main",
+    "id": 36042511530,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "failure",
+    "created_at": "2026-09-24T18:28:16Z",
+    "head_branch": "main",
+    "id": 36041451933,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "success",
+    "created_at": "2026-09-24T18:26:53Z",
+    "head_branch": "main",
+    "id": 36041291491,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "success",
+    "created_at": "2026-09-24T17:35:33Z",
+    "head_branch": "main",
+    "id": 36035380142,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "failure",
+    "created_at": "2026-09-24T17:31:28Z",
+    "head_branch": "main",
+    "id": 36034903623,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "success",
+    "created_at": "2026-09-24T16:04:56Z",
+    "head_branch": "main",
+    "id": 36024833844,
+    "name": "Code Quality: Push on main",
+    "status": "completed"
+  },
+  {
+    "conclusion": "success",
+    "created_at": "2026-09-24T15:40:48Z",
+    "head_branch": "main",
+    "id": 36021932703,
+    "name": "Code Quality: CodeQL Setup",
+    "status": "completed"
+  }
+]
