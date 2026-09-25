@@ -23,7 +23,7 @@
 #   DUE <date>                 the named date is today or earlier: measuring is actionable now
 #   NOT-DUE <date>             the named date is still in the future: skip reason (d) applies
 #   UNKNOWN missing            no `**Measure on:**` line (a quoted `> ` line does not count)
-#   UNKNOWN malformed          a line whose value is not one real calendar date as YYYY-MM-DD
+#   UNKNOWN malformed          a line whose value is empty or not one real calendar date as YYYY-MM-DD
 #   UNKNOWN conflicting <a,b>  two different dates; the helper never picks one
 #
 # EXIT CODES
@@ -84,7 +84,9 @@ values="$(jq -r '.body' <<<"${payload}" | awk '
     v = $0
     sub(/^[ \t]*\*\*Measure on:\*\*[ \t]*/, "", v)
     sub(/[ \t]+$/, "", v)
-    print v
+    # An empty value becomes a placeholder: command substitution would strip a trailing empty line,
+    # and validation must still see it.
+    print (v == "" ? "(empty)" : v)
   }')"
 
 if [ -z "${values}" ]; then

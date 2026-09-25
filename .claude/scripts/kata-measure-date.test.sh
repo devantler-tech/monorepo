@@ -63,6 +63,13 @@ expect "February 29 in a century year not divisible by 400 is UNKNOWN" 2 "UNKNOW
   "$(kata $'**Measure on:** 2100-02-29' 2026-09-25)"
 expect "February 29 in a year divisible by 400 is a date" 1 "NOT-DUE 2400-02-29" "$(kata $'**Measure on:** 2400-02-29' 2026-09-25)"
 expect "a line without a date is UNKNOWN" 2 "UNKNOWN malformed" "$(kata $'**Measure on:** after the next release' 2026-09-25)"
+# An empty value must survive to validation: command substitution strips trailing newlines, so a
+# final empty line would otherwise vanish and the earlier date would be classified alone.
+expect "a valid line followed by an empty one is UNKNOWN" 2 "UNKNOWN malformed" \
+  "$(kata $'**Measure on:** 2026-10-20\n**Measure on:**' 2026-09-25)"
+expect "a valid line followed by a blank one is UNKNOWN" 2 "UNKNOWN malformed" \
+  "$(kata $'**Measure on:** 2026-10-20\n**Measure on:**   \n' 2026-09-25)"
+expect "an empty line on its own is malformed, not missing" 2 "UNKNOWN malformed" "$(kata $'**Measure on:**' 2026-09-25)"
 expect "trailing words after the date are UNKNOWN" 2 "UNKNOWN malformed" "$(kata $'**Measure on:** 2026-10-20 or later' 2026-09-25)"
 
 # Without `today` the helper uses the current UTC date; far past and far future are stable.
