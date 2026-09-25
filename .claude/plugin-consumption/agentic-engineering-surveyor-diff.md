@@ -4,10 +4,11 @@
 
 Record for monorepo#2387 / Part of #2363; plugin identity updated for #2403 after
 `agent-plugins` ADR 0004 consolidated the former `automated-ai-engineer` marketplace entry into
-`agentic-engineering` v2.0.0. The run loop **sources the agent entry point** from the installed
-`agentic-engineering` plugin and tells that subagent to read the local
-`.claude/agents/portfolio-surveyor.md` as a compatibility overlay. The overlay stays required until
-digest parity lands (follow-up on `agent-plugins`).
+`agentic-engineering` v2.0.0. The run loop **dispatches the local overlay**: the unqualified
+`portfolio-surveyor` resolves to `.claude/agents/portfolio-surveyor.md`, which is the surveyor
+definition this deployment loads (monorepo#3180). The plugin's `portfolio-surveyor` is its parity
+target, not what runs. The overlay stays required until digest parity lands (follow-up on
+`agent-plugins`).
 
 | Measure | Local (monorepo) | Plugin (`agentic-engineering` v2.0.0) |
 |---|---|---|
@@ -132,12 +133,16 @@ surveyor change does not reach the calling path until it is also here.** Measure
 transcript under `~/.claude/projects` modified in the prior 9 days (496 files): **28 of 29** root-session
 surveyor dispatches since 2026-09-02T12:00Z used the unqualified `subagent_type: portfolio-surveyor`,
 which resolves to this local agent; one used `agentic-engineering:portfolio-surveyor`. The run loop's
-prose (spawn the plugin agent, have it read this file) describes a topology that is not what runs. The
+prose at the time (spawn the plugin agent, have it read this file) described a topology that was not
+what ran; monorepo#3526 aligned it with the dispatch, pinned by round 19 of
+`portfolio-surveyor.test.sh`. The
 measured casualty is agent-plugins#182's admitted-call-shape rule: installed on the Claude lane since
 2026-09-02 and absent from this file, it left the five deny families it targets flat at 5.84 → 5.52 per
 dispatch. It is now ported into the Safety block above (monorepo#3179, pinned by round 10 of
-`portfolio-surveyor.test.sh`). **Until monorepo#3180 decides the topology, route every surveyor
-refinement to BOTH places** — upstream for the target definition, and here for the loaded one — and
+`portfolio-surveyor.test.sh`). **monorepo#3180 decided the topology: the run loop dispatches this
+overlay until digest parity, so a surveyor refinement is authored upstream first and reaches the loaded
+definition only when it is also ported here** — deliberately, when it must be live before parity, with
+the overlay's byte ceiling raised in the same PR — and
 treat "merged upstream + gitlink bumped + install CURRENT" as *not* evidence a surveyor rule is live. Second measured casualty, 2026-09-05: the CI classifier's argument shape. Over 7 days, **19 of 20**
 classifier-calling surveyor dispatches read this file rather than the plugin agent, and 3 of the 19 that
 reached the helper invoked it positionally and lost 24 reads to the guard. The flag-form sentence from
@@ -150,8 +155,8 @@ round 13 of `portfolio-surveyor.test.sh`).
 
 ## Equivalence status (this slice)
 
-Plugin-only parity is not claimed. This slice uses the plugin agent plus the local compatibility
-overlay, so the numbered refinements remain active instead of disappearing from the authoritative
-survey digest. Next slice: upstream those refinements into `devantler-tech/agent-plugins`
+Plugin-only parity is not claimed. The run loop dispatches the local overlay directly
+(monorepo#3180), so the numbered refinements stay in the survey digest; the plugin agent is the
+parity target and is not part of what runs. Next slice: upstream those refinements into `devantler-tech/agent-plugins`
 ([agent-plugins#78](https://github.com/devantler-tech/agent-plugins/issues/78)), re-run both surveyors,
 then remove the overlay only when the digests match on the checklist in monorepo#2363.

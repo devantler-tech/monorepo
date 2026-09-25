@@ -736,10 +736,7 @@ grep -Fq '`agent-plugins` updater PRs require semantic review' "${maintenance_sk
   fail "portfolio-maintenance skill can still exempt marketplace instruction updates from review"
 grep -Fq 'convert it to draft before the first adaptation push' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not draft-fence dependency-PR adaptations"
-grep -Fq 'Compatibility overlay' "${maintenance_skill}" ||
-  fail "plugin surveyor can run without the hardened local behavior before digest parity"
-grep -Fq 'read and follow the local' "${maintenance_skill}" ||
-  fail "plugin surveyor is not explicitly required to load the local compatibility overlay"
+# That the survey loads the hardened local overlay is pinned by round 19 (monorepo#3526).
 if grep -Fq '**Do not load** the local reference copy' "${maintenance_skill}"; then
   fail "run loop forbids the compatibility overlay even though plugin digest parity is not proven"
 fi
@@ -3713,3 +3710,70 @@ if _agg_out="$(_agg_page '2' | jq -ce "${_agg_filter}" 2>&1)"; then
   fail "a non-object row was counted instead of failing: ${_agg_out} (monorepo#3561)"
 fi
 echo "portfolio surveyor contract: round-18 aggregation execution assertions passed"
+
+# ---------------------------------------------------------------------------------------------------
+# Round 19 — the run loop dispatches the LOCAL surveyor overlay, and says so (monorepo#3526).
+# monorepo#3180 decided that the unqualified `portfolio-surveyor` — this repository's
+# .claude/agents/portfolio-surveyor.md — is the definition the survey loads until digest parity, and
+# 28 of 29 measured dispatches already used it. Prose telling a run to spawn the plugin-qualified agent
+# either names an agent some runtimes do not expose, or lets a run believe a plugin-only surveyor rule
+# is live when it is not (#3179, #3223, #3338). The read-only guard keeps admitting both names; that
+# is pinned by surveyor-hook-dispatch.test.sh and is deliberately not asserted here.
+# ---------------------------------------------------------------------------------------------------
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+_survey_section="$(awk '/^## 1\. Survey/{inb=1} inb && /^## 2\./{exit} inb{print}' "${maintenance_skill}")"
+[ -n "${_survey_section}" ] ||
+  fail "cannot extract the '## 1. Survey' section of the run loop (monorepo#3526)"
+_survey_dispatch="$(awk '/^\*\*Spawn the /{inb=1} inb{print} inb && /The surveyor:$/{exit}' <<<"${_survey_section}")"
+[ -n "${_survey_dispatch}" ] ||
+  fail "cannot extract the Survey step's dispatch paragraph ('**Spawn the …' up to 'The surveyor:') (monorepo#3526)"
+_survey_dispatch="$(tr '\n' ' ' <<<"${_survey_dispatch}" | tr -s '[:space:]' ' ')"
+# The dispatch paragraph is a few hundred words; a runaway extraction would scope the positive
+# assertions to the whole section, where an unrelated sentence could satisfy them.
+[ "$(wc -w <<<"${_survey_dispatch}" | tr -d ' ')" -lt 300 ] ||
+  fail "the Survey dispatch paragraph extracted at runaway size — its 'The surveyor:' end anchor moved (monorepo#3526)"
+grep -Fq '**Spawn the local `portfolio-surveyor` subagent** — `subagent_type: portfolio-surveyor`, unqualified' <<<"${_survey_dispatch}" ||
+  fail "the Survey step does not dispatch the local, unqualified \`portfolio-surveyor\` (monorepo#3526)"
+grep -Fq 'that file is the definition this run loop loads (monorepo#3180)' <<<"${_survey_dispatch}" ||
+  fail "the Survey step does not name the local overlay as the loaded definition (monorepo#3526)"
+grep -Fq '`agentic-engineering:portfolio-surveyor` is the **parity target**, not what runs' <<<"${_survey_dispatch}" ||
+  fail "the Survey step does not name the plugin surveyor as the parity target (monorepo#3526)"
+grep -Fq 'a rule that exists only upstream is not live until it is also in the local file' <<<"${_survey_dispatch}" ||
+  fail "the Survey step does not say a plugin-only surveyor rule is not live (monorepo#3526)"
+_survey_flat="$(tr '\n' ' ' <<<"${_survey_section}" | tr -s '[:space:]' ' ')"
+for _stale in 'from the installed `agentic-engineering` plugin' \
+  'subagent_type: agentic-engineering:portfolio-surveyor' \
+  'tell the plugin agent to read and follow the local'; do
+  if grep -Fq -- "${_stale}" <<<"${_survey_flat}"; then
+    fail "the Survey step still instructs the plugin-qualified dispatch (${_stale}) (monorepo#3526)"
+  fi
+done
+
+# The contract sentence and the diff record must describe the same topology as the run loop.
+_contract_section="$(awk '/^### Agentic engineering plugin contract/{inb=1;print;next} inb && /^### /{exit} inb{print}' "${constitution}")"
+[ -n "${_contract_section}" ] ||
+  fail "cannot extract AGENTS.md's '### Agentic engineering plugin contract' section (monorepo#3526)"
+_contract_flat="$(tr '\n' ' ' <<<"${_contract_section}" | tr -s '[:space:]' ' ')"
+grep -Fq 'The run loop dispatches the local, unqualified `portfolio-surveyor` subagent' <<<"${_contract_flat}" ||
+  fail "the plugin contract does not say the run loop dispatches the local surveyor (monorepo#3526)"
+if grep -Fq 'The run loop sources the `portfolio-surveyor` agent entry point from the plugin' <<<"${_contract_flat}"; then
+  fail "the plugin contract still says the surveyor entry point is sourced from the plugin (monorepo#3526)"
+fi
+# The desired state pins the plugin surveyor's digest; saying which definition that digest covers is
+# what stops a reader taking it as an integrity check on the overlay that actually runs.
+grep -Fq "The desired state's \`portfolio-surveyor\` digest identifies that parity target, not the loaded overlay" <<<"${_contract_flat}" ||
+  fail "the plugin contract does not say the desired-state surveyor digest covers the parity target, not the loaded overlay (monorepo#3526)"
+if grep -Fq 'Until monorepo#3180 decides the topology' "${surveyor_diff}"; then
+  fail "the surveyor diff record still treats the dispatch topology as undecided (monorepo#3526)"
+fi
+_diff_flat="$(tr '\n' ' ' <"${surveyor_diff}" | tr -s '[:space:]' ' ')"
+grep -Fq 'monorepo#3180 decided the topology: the run loop dispatches this overlay until digest parity' <<<"${_diff_flat}" ||
+  fail "the surveyor diff record does not record the decided topology (monorepo#3526)"
+# The record's introduction is read first, so it must describe the same topology as its body.
+grep -Fq 'The run loop **dispatches the local overlay**' <<<"${_diff_flat}" ||
+  fail "the surveyor diff record's introduction does not say the run loop dispatches the local overlay (monorepo#3526)"
+if grep -Fq 'The run loop **sources the agent entry point**' <<<"${_diff_flat}"; then
+  fail "the surveyor diff record's introduction still says the entry point is sourced from the plugin (monorepo#3526)"
+fi
+echo "portfolio surveyor contract: round-19 dispatch-topology assertions passed"
