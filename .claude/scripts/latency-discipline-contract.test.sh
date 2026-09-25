@@ -31,7 +31,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 constitution="${repo_root}/AGENTS.md"
-engineer="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/agents/agentic-engineer.agent.md"
+plugin_dir="${repo_root}/libraries/agent-plugins"
+engineer_path='plugins/agentic-engineering/agents/agentic-engineer.agent.md'
 
 fail() {
   echo "latency discipline contract: FAIL — $*" >&2
@@ -39,11 +40,20 @@ fail() {
 }
 
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
+
+# The portable half is read from the gitlink this commit pins, never from the submodule's working
+# tree. A populated checkout can sit on another revision or carry edited bytes, and a working-tree
+# read would then vouch for rule text the pin does not contain. Reading the blob by the pinned commit
+# is content-addressed, so it returns the reviewed bytes whatever the checkout holds.
+pin="$(git -C "${repo_root}" --no-replace-objects rev-parse HEAD:libraries/agent-plugins)" ||
+  fail "cannot resolve the libraries/agent-plugins gitlink at HEAD"
 # An UNINITIALISED submodule is a normal local state, but it leaves the portable half unchecked, so
 # it fails closed with the fix rather than passing on the deployment half alone.
-[ -r "${engineer}" ] ||
-  fail "cannot read the pinned agentic-engineer definition at ${engineer} — initialise it with
+engineer_text="$(git -C "${plugin_dir}" --no-replace-objects cat-file blob "${pin}:${engineer_path}")" ||
+  fail "cannot read ${engineer_path} at the pinned ${pin} — initialise the submodule with
        .claude/scripts/submodule-init.sh libraries/agent-plugins"
+[ -n "${engineer_text}" ] ||
+  fail "the pinned ${engineer_path} at ${pin} is empty, so every portable assertion would be vacuous"
 
 # ---------------------------------------------------------------------------
 # DEPLOYMENT HALF — the "NEVER foreground-block on a remote wait" bullet, flattened so a sentence that
@@ -123,7 +133,7 @@ engineer_flat="$(
     /^7\. \*\*Give expected-to-run-long local commands/ { inr = 1 }
     inr && /^8\. \*\*/                                   { inr = 0 }
     inr                                                  { print }
-  ' "${engineer}" | tr '\n' ' ' | tr -s '[:space:]' ' '
+  ' <<<"${engineer_text}" | tr '\n' ' ' | tr -s '[:space:]' ' '
 )"
 
 [ -n "${engineer_flat}" ] ||
@@ -142,8 +152,14 @@ assert_engineer() {
   esac
 }
 
+# Each anchor carries its requirement's own verb or quantifier, so a revision that keeps the words but
+# negates the rule ("no longer holds that session open", "need not stop every such watcher") fails.
+assert_engineer 'Bounded one-shot remote reads or mutations are allowed.' \
+  "the pinned engineer no longer limits remote state to bounded one-shot reads"
 assert_engineer 'Never foreground-poll remote state' \
   "the pinned engineer no longer forbids foreground-polling remote state"
+assert_engineer 'arm at most one detached watcher' \
+  "the pinned engineer no longer caps a run at one detached watcher"
 assert_engineer 'A hand-rolled poll loop is a busy-wait wherever it runs.' \
   "the pinned engineer no longer treats a backgrounded poll loop as a busy-wait"
 assert_engineer 'never out of the run' \
@@ -152,9 +168,11 @@ assert_engineer 'Never sleep for a result the runtime will report to you' \
   "the pinned engineer no longer scopes the sleep prohibition by whether the runtime reports completion"
 assert_engineer 'a local timer for a process whose completion nothing will report' \
   "the pinned engineer no longer limits a bare sleep to a process whose completion nothing reports"
-assert_engineer 'holds that session open' \
+assert_engineer 'it counts as your one watcher' \
+  "the pinned engineer no longer counts a backgrounded poll loop against the one-watcher cap"
+assert_engineer 're-invokes the current session holds that session open' \
   "the pinned engineer no longer states that a session-re-invoking watcher keeps the run open"
-assert_engineer 'stop every such watcher before ending the run' \
+assert_engineer 'while one is armed: stop every such watcher before ending the run' \
   "the pinned engineer no longer requires session-holding watchers to be stopped before the run ends"
 assert_engineer 'Never arm a watcher and then end your turn with nothing else to do' \
   "the pinned engineer no longer forbids arming a watcher and then ending the turn idle"
