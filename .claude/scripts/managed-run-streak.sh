@@ -24,9 +24,14 @@
 #   managed-run-streak.sh --input -
 #   stdin: a STREAM of JSON run objects, one per run of that workflow on main, exactly one of them
 #          marked `"judged": true` (the red run being judged), e.g.
-#          gh api --paginate "repos/<o>/<r>/actions/workflows/<id>/runs?branch=main&per_page=100" \
-#            --jq '.workflow_runs[] | {id, name, status, conclusion, created_at, head_branch,
-#                  judged: (.id == <red-run-id>)}' | managed-run-streak.sh --input -
+#          runs=$(set -o pipefail
+#            gh api --paginate "repos/<o>/<r>/actions/workflows/<id>/runs?branch=main&per_page=100" \
+#              --jq '.workflow_runs[] | {id, name, status, conclusion, created_at, head_branch,
+#                    judged: (.id == <red-run-id>)}') || { echo UNKNOWN; exit 2; }
+#          printf '%s\n' "$runs" | managed-run-streak.sh --input -
+#          Capture the read and check its status BEFORE classifying: this helper sees only the
+#          runs it is given, so a `gh` that fails after emitting some pages would otherwise hand
+#          it a partial history, and a missing earlier red run turns REPEATED into FIRST.
 #          A stream, not an array: `--paginate` applies `--jq` per page, so one array per page
 #          would split the history. Each run needs `id` (number), `name` (string or null),
 #          `status` (string), `conclusion` (string or null), `created_at` (string),
