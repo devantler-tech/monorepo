@@ -1433,6 +1433,7 @@ files_predicate_src="$(sed -n '/^matches_agent_plugins_review_files()/,/^}/p' "$
 files_predicate() {
   (
     eval "${files_predicate_src}"
+    # shellcheck disable=SC2034  # read by the eval'd predicate
     files_json="$2"
     matches_agent_plugins_review_files "$1"
   )
