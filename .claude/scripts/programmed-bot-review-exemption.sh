@@ -219,9 +219,22 @@ matches_agent_plugins_review_files() {
       test($skill) or
       test("^\($plugin)/(\\.claude-plugin/)?plugin\\.json$") or
       test("^\($plugin)/resources/provider-neutral\\.desired-state\\.json$") or
-      test("^\($plugin)/CHANGELOG\\.md$") or
+      (. as $f | [$changed[] | "\(.)/CHANGELOG.md"] | index($f) != null) or
       . == ".claude-plugin/marketplace.json" or
       . == ".github/plugin/marketplace.json")
+  ' --argjson changed "$(jq -c --arg skill "${skill_re}" \
+      '[.[] | select(test($skill)) | capture("^(?<p>plugins/[^/]+)/skills/").p] | unique' \
+      <<<"${files_json}")" <<<"${files_json}" >/dev/null
+}
+
+# A plugin changelog is written only by the release-notes bump (agent-plugins#247), so a head that
+# changes one must carry that commit. Without this, a sync commit alone, or the legacy bump, could
+# bring a changelog edit through the trusted path.
+matches_changelog_bump() {
+  jq -e --argjson commits "${commits_json}" '
+    (any(.[]; test("/CHANGELOG\\.md$")) | not) or
+    any($commits[1:][];
+      .message == "chore(deps): bump plugin versions and record skill updates")
   ' <<<"${files_json}" >/dev/null
 }
 
@@ -493,7 +506,8 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
   if [[ -n "${expected_author}" && "${author}" == "${expected_author}" ]]; then
     if [[ "${repo}" == "agent-plugins" ]] &&
       matches_agent_plugins_review_files &&
-      matches_agent_plugins_review_provenance "chore(deps): update agent skills"; then
+      matches_agent_plugins_review_provenance "chore(deps): update agent skills" &&
+      matches_changelog_bump; then
       exit 3
     fi
     if [[ "${repo}" != "agent-plugins" ]] &&
@@ -526,7 +540,8 @@ if [[ "${repo}" == "agent-plugins" &&
     skill_slug="${skill_slug//\//-}"
     if [[ "${branch}" == "deps/agent-skills-update-${skill_slug}" ]]; then
       if matches_agent_plugins_review_files "${skill_path}" &&
-        matches_agent_plugins_review_provenance "${title}"; then
+        matches_agent_plugins_review_provenance "${title}" &&
+        matches_changelog_bump; then
         exit 3
       fi
       printf 'programmed-bot-review-exemption: %s per-skill updater PR with unexpected files or commit provenance; treated as untrusted\n' \

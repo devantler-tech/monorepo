@@ -1366,6 +1366,27 @@ expect_review_gated "agent-plugins per-skill update carrying both bump wordings"
       "chore(deps): bump versions of changed plugins")" \
     "$(per_skill_follow_up "${per_skill_head}" \
       "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
+expect_review_gated "agent-plugins per-skill update with a changelog but no release-notes bump" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
+  "$(printf '%s\n' "${per_skill_sync}" | per_skill_commits)"
+expect_review_gated "agent-plugins per-skill update with a changelog and the legacy bump" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
+  "${per_skill_commits_json}"
+agent_plugins_release_notes_commits="$(jq -c \
+  '.[-1].message = "chore(deps): bump plugin versions and record skill updates"' \
+  <<<"${agent_plugins_versioned_commits}")"
+expect_review_required "agent-plugins single-PR update with its own plugin's release notes" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/github/CHANGELOG.md"]' <<<"${agent_plugins_versioned_files}")" \
+  "${agent_plugins_release_notes_commits}"
+expect_review_gated "agent-plugins single-PR update with another plugin's release notes" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${agent_plugins_versioned_files}")" \
+  "${agent_plugins_release_notes_commits}"
 expect_review_gated "agent-plugins per-skill update carrying another plugin's release notes" \
   "${per_skill_args[@]}" \
   "$(jq -c '. + ["plugins/engineering-practices/CHANGELOG.md"]' <<<"${per_skill_files}")" \
