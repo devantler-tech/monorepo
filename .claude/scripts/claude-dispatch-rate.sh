@@ -108,6 +108,13 @@ local_clock() {
   [ -n "$out" ] || out=$(date -d "@$1" '+%H %M %S' 2>/dev/null) || out=""
   case "$out" in [0-2][0-9]' '[0-5][0-9]' '[0-5][0-9]) printf '%s\n' "$out" ;; *) return 0 ;; esac
 }
+# Local "YYYYMMDDHH", used to count a fixed wall-clock hour once per day.
+local_hour_key() {
+  local out
+  out=$(date -r "$1" +%Y%m%d%H 2>/dev/null) || out=""
+  [ -n "$out" ] || out=$(date -d "@$1" +%Y%m%d%H 2>/dev/null) || out=""
+  case "$out" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) printf '%s\n' "$out" ;; *) return 0 ;; esac
+}
 epoch_to_touch() {
   local out
   out=$(date -r "$1" +%Y%m%d%H%M.%S 2>/dev/null) || out=""
@@ -153,6 +160,8 @@ case "$CREATED_MS" in ''|*[!0-9]*) die_unknown "task $TASK has no numeric create
 
 # Supported shapes are the two the deployment uses: `M * * * *` and `M H1,H2,... * * *`.
 # Anything else is UNKNOWN rather than a guessed schedule.
+# `read` consumes one physical line, so a multi-line value would be judged by its first line alone.
+case "$CRON" in *$'\n'*|*$'\r'*) die_unknown "cron expression spans more than one line" ;; esac
 read -r C_MIN C_HOUR C_DOM C_MON C_DOW C_EXTRA <<EOF
 $CRON
 EOF
@@ -197,14 +206,25 @@ EOF
 done
 [ -n "$first" ] || die_unknown "no local minute matched the cron minute; the timezone offset is not whole-minute"
 
-SLOT_LIST=""
+SLOT_LIST=""; SEEN_KEYS=""
 e=$first
 while [ "$e" -le "$UNTIL_E" ]; do
   clk=$(local_clock "$e"); [ -n "$clk" ] || die_unknown "could not render local time"
   read -r hh _ _ <<EOF
 $clk
 EOF
-  if hour_matches "$hh"; then SLOT_LIST="$SLOT_LIST $e"; fi
+  if hour_matches "$hh"; then
+    # A fixed-hour schedule fires once per wall-clock hour. During a DST fallback the same local
+    # hour occurs twice in absolute time; counting both would invent a dropped slot. An hourly
+    # schedule fires every absolute hour, so it is not deduplicated.
+    key=""
+    if [ "$C_HOUR" != "*" ]; then
+      key=$(local_hour_key "$e"); [ -n "$key" ] || die_unknown "could not render local time"
+      case " $SEEN_KEYS " in *" $key "*) e=$(( e + 3600 )); continue ;; esac
+      SEEN_KEYS="$SEEN_KEYS $key"
+    fi
+    SLOT_LIST="$SLOT_LIST $e"
+  fi
   e=$(( e + 3600 ))
 done
 # One more matching slot beyond --until bounds the last settled interval. It is capped at 24 hours
@@ -255,6 +275,9 @@ while IFS= read -r f; do
   # Attributed to THIS task but untimed: dropping it would count its slot as dropped on evidence
   # that was malformed rather than absent.
   [ -n "$se" ] || die_unknown "a $TASK transcript has no readable start timestamp: $f"
+  # A start later than the observer clock is corrupted evidence. It would match no settled interval
+  # and silently read as a dropped slot.
+  [ "$se" -le $(( NOW_EPOCH + 120 )) ] || die_unknown "a $TASK transcript starts after now: $f"
   printf '%s\n' "$se" >> "$STARTS"
 done < "$FILELIST"
 

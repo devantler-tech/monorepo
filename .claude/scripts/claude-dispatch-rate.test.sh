@@ -139,6 +139,23 @@ expect 2 "not valid JSON" "a marker-bearing header that is not JSON is UNKNOWN, 
 CREATED_MS=$(( (BASE + 3600) * 1000 )) mkcase before-created
 expect 2 "predates task" "a window starting before the task existed is UNKNOWN" "${W[@]}"
 
+mkcase multiline-cron '50 * * * *\nINVALID'
+expect 2 "more than one line" "a multi-line cron is UNKNOWN, never judged by its first line" "${W[@]}"
+
+mkcase future-start
+for h in 0 1 2 3 4; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
+mksession eng $(( NOW + 3600 ))
+expect 2 "starts after now" "a transcript starting after now is UNKNOWN, not a drop" "${W[@]}"
+
+# Europe/Copenhagen falls back at 2026-10-25T01:00Z, so local 02:30 happens at 00:30Z AND 01:30Z that
+# day. A daily 02:30 schedule fires once, so the repeated hour must not become an invented drop.
+DST=1792800000   # 2026-10-24T00:00:00Z
+mkcase dst-fallback '30 2 * * *'
+mksession eng $(( DST + 1800 + 5 ))            # 10-24 02:30 CEST
+mksession eng $(( DST + 86400 + 1800 + 5 ))    # 10-25 02:30 CEST (first occurrence)
+NOW=$(( DST + 3 * 86400 )) TZ=Europe/Copenhagen expect 0 "scheduled=2 dispatched=2 dropped=0" "a DST-repeated local hour is one slot" \
+  --task eng --since "$(iso_at "$DST")" --until "$(iso_at $(( DST + 2 * 86400 + 12 * 3600 )))"
+
 mkcase args
 expect 2 "later than now" "--until past now is UNKNOWN" \
   --task eng --since "$(iso_at "$BASE")" --until "$(iso_at $(( NOW + 60 )))"
