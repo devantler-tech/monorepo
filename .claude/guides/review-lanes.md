@@ -503,8 +503,8 @@ result at the current head — self-promotion is forbidden before that. Request 
   recorded expiry of the applicable window releases it.
 - **Never request reviews across a batch of PRs in one pass, on any lane.** Every lane is budgeted:
   CodeRabbit's free OSS plan holds **one included review at a time** and refills it on a stated timer
-  (about an hour), Codex is weekly-limited and Bugbot monthly-limited. A batch therefore serves its
-  first request and refuses the rest — measured twice: five first-ever CodeRabbit requests in one
+  (about an hour), Codex is weekly-limited and Bugbot monthly-limited. A batch therefore serves only what
+  the lane has left and refuses the rest — measured twice: five first-ever CodeRabbit requests in one
   pass on ksail served two, and four across platform and monorepo on 2026-08-16 served one (#2830).
   A refused request is acked like a served one, so judge each PR by its artifact, never the ack:
   CodeRabbit refuses with a `Review limit reached` comment stating
