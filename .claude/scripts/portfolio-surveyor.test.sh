@@ -1386,6 +1386,22 @@ expect_review_required "agent-plugins single-PR update with its own plugin's rel
   "${agent_plugins_versioned_head}" \
   "$(jq -c '. + ["plugins/github/CHANGELOG.md"]' <<<"${agent_plugins_versioned_files}")" \
   "${agent_plugins_release_notes_commits}"
+# The release-notes bump writes a changelog for EVERY plugin whose skills changed, so a two-plugin
+# batch carrying only one of them is not updater output (a positive control carries both).
+agent_plugins_two_plugin_files="$(jq -c '. + ["plugins/engineering-practices/.claude-plugin/plugin.json",
+  "plugins/engineering-practices/plugin.json", "plugins/engineering-practices/skills/refactor/SKILL.md"]' \
+  <<<"${agent_plugins_versioned_files}")"
+expect_review_required "agent-plugins single-PR two-plugin update with both plugins' release notes" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/github/CHANGELOG.md", "plugins/engineering-practices/CHANGELOG.md"]' \
+    <<<"${agent_plugins_two_plugin_files}")" \
+  "${agent_plugins_release_notes_commits}"
+expect_review_gated "agent-plugins single-PR two-plugin update with one plugin's release notes missing" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/github/CHANGELOG.md"]' <<<"${agent_plugins_two_plugin_files}")" \
+  "${agent_plugins_release_notes_commits}"
 expect_review_gated "agent-plugins single-PR update with another plugin's release notes" \
   agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
   "${agent_plugins_versioned_head}" \

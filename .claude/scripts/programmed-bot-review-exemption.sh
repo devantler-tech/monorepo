@@ -228,15 +228,20 @@ matches_agent_plugins_review_files() {
 }
 
 # A plugin changelog is written only by the release-notes bump (agent-plugins#247), and that bump
-# always writes one, so the two appear together or not at all. Without the first direction a sync
-# commit alone, or the legacy bump, could bring a changelog edit through the trusted path; without the
-# second, a head carrying the release-notes bump but no changelog would pass as untouched updater
-# output, which it cannot be.
+# writes one for every plugin whose skills changed. So without the bump no changelog may change, and
+# with it the plugins carrying a changelog must be exactly the plugins carrying a skill change. A
+# looser test lets a sync commit alone, or the legacy bump, bring a changelog edit through the
+# trusted path, or passes a head whose changelog set is missing a plugin — neither of which is
+# untouched updater output.
 matches_changelog_bump() {
   jq -e --argjson commits "${commits_json}" '
-    any(.[]; test("/CHANGELOG\\.md$")) ==
-    any($commits[1:][];
-      .message == "chore(deps): bump plugin versions and record skill updates")
+    ([.[] | select(test("/CHANGELOG\\.md$")) | sub("/CHANGELOG\\.md$"; "")] | unique) as $logged |
+    ([.[] | capture("^(?<p>plugins/[^/]+)/skills/").p] | unique) as $changed |
+    if any($commits[1:][];
+         .message == "chore(deps): bump plugin versions and record skill updates")
+    then $logged == $changed
+    else $logged == []
+    end
   ' <<<"${files_json}" >/dev/null
 }
 
