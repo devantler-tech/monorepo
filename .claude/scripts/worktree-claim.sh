@@ -283,7 +283,10 @@ cmd_acquire() {
   local wt="$1" owner="$2" fresh="${3:-}"
   [ -d "$wt" ] || fail "worktree path is not a directory: $wt"
   [ -n "$owner" ] || usage
+  [ "$fresh" = "fresh" ] || refuse_symlinked_submodule_path "$wt"
+  local given="$wt"
   wt="$(cd "$wt" && pwd -P)" || fail "cannot resolve worktree path: $wt"
+  [ "$wt" -ef "$given" ] || refuse_other_directory worktree "$given" "$wt"
   # An existing submodule worktree must pass the same origin check `add` applies to the worktree it creates.
   [ "$fresh" = "fresh" ] || refuse_foreign_submodule_origin "$wt"
   acquire_lock "$wt"
@@ -635,6 +638,68 @@ physical_path() {
   printf '%s\n' "$resolved"
 }
 
+# resolved_dir prints the physical path of directory <dir>, and fails when <dir> cannot be entered or the
+# result is another directory: command substitution drops a trailing newline, so a path ending in one
+# would otherwise come back as the path of a different directory.
+resolved_dir() {
+  local resolved
+  resolved="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  [ "$resolved" -ef "$1" ] || return 1
+  printf '%s\n' "$resolved"
+}
+
+# refuse_other_directory exits 1 because <path>, given as the <kind> path, resolves to the physical path
+# of a different directory, <resolved>, so every check would inspect that directory in its place.
+refuse_other_directory() {
+  echo "worktree-claim: the $1 path $(shquote "${2//$'\n'/\\n}") resolves to a different directory, $3." >&2
+  echo "  A path ending in a newline loses it when it is resolved, so it cannot be checked; it is not claimed." >&2
+  exit 1
+}
+
+# refuse_symlinked_submodule_path exits 1 when <path>, as given, passes through a symlink that sits where
+# a superproject registers a submodule. git never checks a submodule out through a symlink, so the link's
+# target is not that submodule's checkout, and resolving <path> first would check the target as the
+# standalone repository it looks like on its own.
+refuse_symlinked_submodule_path() {
+  local path="$1" rest comp prefix="" parent top rel name
+  case "$path" in
+    /*) ;;
+    *) path="$PWD/$path" ;;
+  esac
+  rest="${path#/}"
+  # Components are applied the way `cd` applies them: `..` removes the previous component, symlink or not.
+  while [ -n "$rest" ]; do
+    comp="${rest%%/*}"
+    if [ "$comp" = "$rest" ]; then
+      rest=""
+    else
+      rest="${rest#*/}"
+    fi
+    case "$comp" in
+      '' | .) continue ;;
+      ..)
+        prefix="${prefix%/*}"
+        continue
+        ;;
+    esac
+    prefix="$prefix/$comp"
+    [ -L "$prefix" ] || continue
+    parent="$(resolved_dir "${prefix%/*}/")" || continue
+    top="$(git -C "$parent" rev-parse --show-toplevel 2>/dev/null)" || continue
+    top="$(resolved_dir "$top")" || continue
+    rel="${parent%/}/$comp"
+    rel="${rel#"$top"/}"
+    [ "$rel" != "${parent%/}/$comp" ] || continue
+    name="$(submodule_name_at "$top" "$rel")"
+    [ -n "$name" ] || continue
+    echo "worktree-claim: $1 passes through the symlink $prefix, where $top registers submodule '$name'." >&2
+    echo "  git never checks a submodule out through a symlink, so the link's target is not that submodule's" >&2
+    echo "  checkout, and it is not claimed. Replace the symlink with the submodule itself:" >&2
+    echo "    rm $(shquote "$prefix") && .claude/scripts/submodule-init.sh $(shquote "$rel")  (from $(shquote "$top"))" >&2
+    exit 1
+  done
+}
+
 # refuse_uninitialized_repo stops `add` when <repo_path> is not the root of its own repository
 # (monorepo#2755). An uninitialized submodule is an empty directory, and `git -C` on it resolves to the
 # PARENT repository, so the helper used to report success while building a worktree of the wrong repo
@@ -812,14 +877,14 @@ registering_superproject() {
           tree="$(cat "$parent/gitdir" 2>/dev/null)" || tree=""
           tree="${tree%/.git}"
         else
-          tree="$(git config -f "$parent/config" --get core.worktree 2>/dev/null)" || tree=""
+          IFS= read -r -d '' tree < <(git config -z -f "$parent/config" --get core.worktree 2>/dev/null) || tree=""
         fi
         case "$tree" in
           '') ;;
           /*) ;;
           *) tree="$parent/$tree" ;;
         esac
-        [ -z "$tree" ] || tree="$(cd "$tree" 2>/dev/null && pwd -P)" || tree=""
+        [ -z "$tree" ] || tree="$(resolved_dir "$tree")" || tree=""
         ;;
     esac
     if [ -n "$tree" ] && git config -f "$tree/.gitmodules" --get "submodule.$name.path" >/dev/null 2>&1; then
@@ -1122,10 +1187,11 @@ refuse_foreign_submodule_origin_checked() {
     common="$(git -C "$repo_abs" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
     # With extensions.worktreeConfig the setting can live in config.worktree. Both files are read
     # directly, because git itself refuses to run once core.worktree names a missing directory.
+    # Read NUL-delimited: command substitution would drop a trailing newline and name another checkout.
     if [ -n "$common" ]; then
-      worktree="$(git config -f "$common/config" --get core.worktree 2>/dev/null)" || worktree=""
+      IFS= read -r -d '' worktree < <(git config -z -f "$common/config" --get core.worktree 2>/dev/null) || worktree=""
       if [ -z "$worktree" ] && [ "$(git config -f "$common/config" --type=bool --get extensions.worktreeConfig 2>/dev/null)" = "true" ]; then
-        worktree="$(git config -f "$common/config.worktree" --get core.worktree 2>/dev/null)" || worktree=""
+        IFS= read -r -d '' worktree < <(git config -z -f "$common/config.worktree" --get core.worktree 2>/dev/null) || worktree=""
       fi
     fi
     main="$worktree"
@@ -1156,7 +1222,7 @@ refuse_foreign_submodule_origin_checked() {
       '' | /*) ;;
       *) main="$common/$main" ;;
     esac
-    [ -z "$main" ] || main="$(cd "$main" 2>/dev/null && pwd -P)" || main=""
+    [ -z "$main" ] || main="$(resolved_dir "$main")" || main=""
     [ -z "$main" ] || super="$(git -C "$main" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
     if [ -n "$super" ]; then
       super="$(cd "$super" && pwd -P)"
@@ -1242,7 +1308,7 @@ refuse_foreign_submodule_origin_checked() {
           ;;
       esac
     fi
-    rel="$(git config -f "$super/.gitmodules" --get "submodule.$name.path" 2>/dev/null)" || rel="$name"
+    IFS= read -r -d '' rel < <(git config -z -f "$super/.gitmodules" --get "submodule.$name.path" 2>/dev/null) || rel="$name"
   fi
   # Read NUL-delimited: command substitution would drop a trailing newline that `submodule sync` keeps.
   if [ -n "$name" ]; then
@@ -1393,7 +1459,9 @@ cmd_add() {
   [ -d "$repo" ] || fail "repo path is not a directory: $repo"
   [ -n "$wt" ] && [ -n "$branch" ] && [ -n "$owner" ] || usage
   local repo_abs
+  refuse_symlinked_submodule_path "$repo"
   repo_abs="$(cd "$repo" && pwd -P)" || fail "cannot resolve repo path: $repo"
+  [ "$repo_abs" -ef "$repo" ] || refuse_other_directory repo "$repo" "$repo_abs"
   case "$wt" in
     /*) ;;
     *) wt="$repo_abs/$wt" ;;
@@ -1429,6 +1497,7 @@ cmd_add() {
   # gitdir: pattern that matches its own git directory, so the check on <repo> above could not see it.
   local wt_phys
   wt_phys="$(cd "$wt" && pwd -P)" || fail "cannot resolve the new worktree path: $wt"
+  [ "$wt_phys" -ef "$wt" ] || refuse_other_directory "new worktree" "$wt" "$wt_phys"
   refuse_foreign_submodule_origin "$wt_phys" "$repo_abs"
   # Claim BEFORE the advisory freshness check, not after. That check makes up to two bounded remote
   # calls, so it can hold the newly-created tree unclaimed for the length of both timeouts — a window

@@ -955,6 +955,57 @@ rc=0
 out="$("$script" add "$tmp/sep-linked" "$tmp/wt-sep-repointed" "claim-branch-sep-repointed" "session-sep-repointed" 2>&1)" || rc=$?
 check "add refuses a submodule worktree whose core.worktree points at a standalone checkout" 1 "$rc" "$out" "no superproject registers it"
 git --git-dir="$sep_common" config --worktree core.worktree "$sep_worktree"
+# A submodule registered at a path ending in a newline records that path in core.worktree. Dropping the
+# newline names the checkout of another registered submodule, whose URL says nothing about this one.
+nlreg_super="$tmp/nlreg-super"
+git init -q -b main "$nlreg_super"
+git -C "$nlreg_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$nlreg_super" -c protocol.file.allow=always submodule add -q "$other_sub" mod2
+git -C "$nlreg_super" -c user.name=t -c user.email=t@example.com commit -qm "add submodules"
+git -C "$nlreg_super" mv mod2 "mod"$'\n'
+git -C "$nlreg_super/mod"$'\n' worktree add -q --detach "$tmp/nlreg-linked"
+git -C "$nlreg_super/mod"$'\n' config remote.origin.url "$upstream_sub"
+rc=0
+out="$("$script" add "$tmp/nlreg-linked" "$tmp/wt-nlreg" "claim-branch-nlreg" "session-nlreg" 2>&1)" || rc=$?
+check "add refuses a linked worktree whose registered path ends in a newline and whose origin is another submodule's" 1 "$rc" "$out" "submodule sync"
+
+# A registered submodule path replaced by a symlink leads to another checkout. git never checks a
+# submodule out through a symlink, so the target is not the submodule, whatever it looks like on its own.
+link_super="$tmp/link-super"
+git init -q -b main "$link_super"
+git -C "$link_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$link_super" -c user.name=t -c user.email=t@example.com commit -qm "add submodule"
+git clone -q "$other_sub" "$tmp/link-standalone"
+rm -rf "$link_super/mod"
+ln -s "$tmp/link-standalone" "$link_super/mod"
+rc=0
+out="$("$script" add "$link_super/mod" "$tmp/wt-link" "claim-branch-link" "session-link" 2>&1)" || rc=$?
+check "add refuses a registered submodule path that is a symlink to another checkout" 1 "$rc" "$out" "through the symlink"
+check "a symlinked submodule path creates no worktree" 1 "$([ -e "$tmp/wt-link" ] && echo 0 || echo 1)"
+rc=0
+out="$("$script" acquire "$link_super/mod" "session-link-acquire" 2>&1)" || rc=$?
+check "acquire refuses a registered submodule path that is a symlink to another checkout" 1 "$rc" "$out" "through the symlink"
+# A symlink that no superproject registers is only a way to reach the repository.
+mkdir -p "$tmp/links"
+ln -s "$tmp/link-standalone" "$tmp/links/standalone"
+rc=0
+out="$("$script" add "$tmp/links/standalone" "$tmp/wt-link-plain" "claim-branch-link-plain" "session-link-plain" 2>&1)" || rc=$?
+check "add admits a standalone repository reached through an unregistered symlink" 0 "$rc" "$out" "owner=session-link-plain"
+
+# A path ending in a newline names another directory than the one it resolves to once command
+# substitution drops the newline, so the check must not inspect that other directory in its place.
+nl_super="$tmp/nl-super"
+git init -q -b main "$nl_super"
+git -C "$nl_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$nl_super" -c user.name=t -c user.email=t@example.com commit -qm "add submodule"
+git clone -q "$other_sub" "$nl_super/mod"$'\n'
+rc=0
+out="$("$script" add "$nl_super/mod"$'\n' "$tmp/wt-nl" "claim-branch-nl" "session-nl" 2>&1)" || rc=$?
+check "add refuses a repo path whose trailing newline would resolve it to another directory" 1 "$rc" "$out" "resolves to a different directory"
+check "a newline repo path creates no worktree" 1 "$([ -e "$tmp/wt-nl" ] && echo 0 || echo 1)"
+rc=0
+out="$("$script" acquire "$nl_super/mod"$'\n' "session-nl-acquire" 2>&1)" || rc=$?
+check "acquire refuses a worktree path whose trailing newline would resolve it to another directory" 1 "$rc" "$out" "resolves to a different directory"
 
 # A submodule cloned in place keeps its git directory at <checkout>/.git with no core.worktree, so its
 # main checkout is that directory's parent, and a linked worktree of it is still that submodule's.
