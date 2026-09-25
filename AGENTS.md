@@ -145,6 +145,9 @@ The plugin's agents and skills fail closed unless these named sections resolve:
   Codex or Cursor Bugbot review can satisfy the green-review gate; `copilot-pull-request-reviewer[bot]`
   threads are engaged and resolved but never count. `app/botantler-1` is trusted only for the
   programmed updater PRs that `.claude/scripts/programmed-bot-review-exemption.sh` validates.
+- **Maintainer-PR driving: `attribution-only`.** Drive the maintainer's interactive PRs to a terminal
+  state like any other; the interactive marker only attributes his comments, and an actionable one
+  stays a named blocker. The plugin reads a missing value as `hands-off`; changing it is his call.
 - **Merge mechanics:** `--auto` only for `github-actions` and `ksail-bot`; every other author merges
   directly with `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>` once
   `CLEAN` (merge-queue repositories drop `--squash`). Never `--admin`.

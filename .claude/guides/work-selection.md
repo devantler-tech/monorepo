@@ -259,7 +259,7 @@ governs the issue work that follows.) Two rules enforce that:
    it) and a **GitHub `@devantler` mention** (it does not notify him) are **NOT** attention channels.
    Never leave a silent "awaiting maintainer" note and move on to easier work. **"Repo Assist"/`automation` roadmap issues are
    KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
-   interactive-PR HANDS-OFF rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
+   interactive-PR attribution rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
    about an *issue's* label or its bot author. **A bare
    assignee does *not* reserve an issue INDEFINITELY:** an `agent-claim/<issue>` tip inside its lease,
    or a **`devantler`** assignment paired with a **pushed lane branch**, is a *live claim* for ~2 hours
