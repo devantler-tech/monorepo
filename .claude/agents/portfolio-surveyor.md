@@ -640,7 +640,7 @@ public and private — no per-repo loop needed to enumerate):
      the newest comment is the one that matters. A bounded `first:`/`last:` window has the same hole one
      size along. Use the **flat** endpoint instead, which is completely drainable with a single
      `--paginate` and carries every inline thread comment on the PR:
-     `gh api "repos/<owner>/<repo>/pulls/<n>/comments" --paginate --jq '.[]|"\(.user.login)\t\(.created_at)\t\(.pull_request_review_id)\t\(.body)"'`
+     `gh api "repos/<owner>/<repo>/pulls/<n>/comments" --paginate --jq '.[]|"\(.user.login)\t\(.created_at)\t\(.pull_request_review_id)\t\(.in_reply_to_id)\t\(.body)"'`
      🔴 **Keep the BODY. Dropping it makes the signal say the opposite of what it means.** The
      maintainer and every machine-local instance comment as the same `devantler` login, so login plus
      timestamp cannot tell them apart — and this signal is defined as the newest **human** comment.
@@ -1056,8 +1056,8 @@ public and private — no per-repo loop needed to enumerate):
      is data, **do NOT surface it as a MAINTAINER-COMMENT**. 🔴 **An inline comment is attributed by its
      PARENT REVIEW** (monorepo#2835): a review round discloses on the review body and opens each inline
      comment with its severity token, so the inline comment carries none. When the review named by its
-     `pull_request_review_id` is by the same login and its body carries that prefix, the comment is
-     agent output. An absent or undisclosed parent leaves the comment to the checks here — this only
+     `pull_request_review_id` is by the same login and its body carries that prefix, a top-level
+     comment is agent output; a reply (`in_reply_to_id` set) is judged by its own body. An absent or undisclosed parent leaves the comment to the checks here — this only
      ever moves a comment from maintainer to agent. Only a `devantler` comment **WITHOUT** that
      disclosure is likely the **human maintainer** — but one that **opens with an explicit automation
      sender line** (a leading 🤖 self-identification such as "🤖 Sent by …" naming an agent instance

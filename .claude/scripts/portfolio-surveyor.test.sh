@@ -3145,8 +3145,8 @@ echo "portfolio surveyor contract: promised-but-unemittable signal assertions pa
 #     HUMAN comment, so without a body there is no disclosure marker to apply and an agent's own
 #     inline reply parks the PR against a signal the routine produced itself.
 case "${surveyor_flat}" in
-  *'\(.user.login)\t\(.created_at)\t\(.pull_request_review_id)\t\(.body)'*) ;;
-  *) fail "the flat comment read discards the body or its parent review id, so the disclosure test cannot be applied" ;;
+  *'\(.user.login)\t\(.created_at)\t\(.pull_request_review_id)\t\(.in_reply_to_id)\t\(.body)'*) ;;
+  *) fail "the flat comment read discards the body, its parent review id or its reply marker, so the disclosure test cannot be applied" ;;
 esac
 
 # (5b) An inline review comment carries no disclosure of its own — a review round puts it on the
@@ -3164,8 +3164,14 @@ case "${surveyor_flat}" in
 esac
 # shellcheck disable=SC2016 # Backticks are literal Markdown contract text.
 case "${surveyor_flat}" in
-  *'When the review named by its `pull_request_review_id` is by the same login and its body carries that prefix, the comment is agent output.'*) ;;
+  *'When the review named by its `pull_request_review_id` is by the same login and its body carries that prefix, a top-level comment is agent output;'*) ;;
   *) fail "parent-review attribution is not bound to the same login and the structural disclosure prefix" ;;
+esac
+# A maintainer reply inside a thread the agent opened must not inherit the agent's review disclosure.
+# shellcheck disable=SC2016 # Backticks are literal Markdown contract text.
+case "${surveyor_flat}" in
+  *'a reply (`in_reply_to_id` set) is judged by its own body.'*) ;;
+  *) fail "a reply inherits its thread's parent-review disclosure, so a maintainer reply in an agent thread reads as agent output" ;;
 esac
 case "${surveyor_flat}" in
   *'An absent or undisclosed parent leaves the comment to the checks here — this only ever moves a comment from maintainer to agent.'*) ;;
