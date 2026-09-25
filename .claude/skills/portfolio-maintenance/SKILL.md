@@ -10,11 +10,12 @@ description: The run procedure for the Agentic Engineer (the products' primary e
 > repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
 > deltas here; never add a second copy of generic behaviour.
 
-This is the procedure the `daily-maintainer` agent follows each run. The **shared contract** lives in
-the monorepo [`AGENTS.md`](../../../AGENTS.md) — the maintain-*and*-advance mandate, autonomy, merge
-policy, product strategy & roadmaps, enhancement work, trust gate, untrusted input, per-run worktrees,
-git safety, PR conventions, cadence/focus, durable memory. It's already in your context via the
-`CLAUDE.md` shim (don't re-read it — see §0.1); it is not repeated here. The
+This is the procedure the `daily-maintainer` agent follows each run. The **shared contract** is the
+monorepo [`AGENTS.md`](../../../AGENTS.md) plus the [agent guides](../../guides/) it indexes — the
+maintain-*and*-advance mandate, autonomy, merge policy, product strategy & roadmaps, enhancement work,
+trust gate, untrusted input, per-run worktrees, git safety, PR conventions, cadence/focus, durable
+memory. The always-on core is already in your context via the `CLAUDE.md` shim (don't re-read it —
+see §0.1); each step below names the guides it needs. Neither is repeated here. The
 *advance* half (strategy, roadmaps, coverage, performance, refactoring, implementation) has its own
 how-to in the [`product-engineering`](../product-engineering/SKILL.md) skill. Per-repo specifics live
 in each product's `AGENTS.md` `## Maintenance` section (those files live in the submodule repos — see
@@ -22,9 +23,11 @@ the portfolio map in the monorepo `AGENTS.md`) and in the matching [`products/<n
 card.
 
 ## 0. Pre-flight
-1. **The contract is already in context** — `AGENTS.md` is loaded via the project's `CLAUDE.md`
-   (`@AGENTS.md` shim). Follow it; **don't re-read it** (a redundant read just burns ~6–7K tokens).
-   Only if it is somehow *not* already in your context should you read it once.
+1. **The contract's core is already in context** — `AGENTS.md` is loaded via the project's `CLAUDE.md`
+   (`@AGENTS.md` shim). Follow it; **don't re-read it**. Only if it is somehow *not* already in your
+   context should you read it once. The detailed rules live in the agent guides under
+   `.claude/guides/`: read a guide once, when a step below (or the AGENTS.md index) names it, and
+   before the work it covers — never skip one because its topic feels familiar.
 2. **Working checkout — use YOUR deployment's, not a hard-coded one.** The machine-local instances
    run from the fixed checkout `cd /Users/homelab-mac-mini/git-personal/monorepo` (adjust if
    relocated). A **cloud instance has no such path** and must use its sandbox's checkout root
@@ -152,6 +155,9 @@ card.
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
 
 ## 1. Survey (delegate to a read-only subagent — keep the JSON out of your context)
+> **Guides:** [work-selection](../../guides/work-selection.md) (rung details the digest is read
+> against).
+
 **Spawn the `portfolio-surveyor` agent from the installed `agentic-engineering` plugin**
 (declared in [`.claude/settings.json`](../../settings.json) as
 `agentic-engineering@devantler-plugins`) — read-only — to run the whole portfolio survey and
@@ -298,7 +304,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   newest authenticated `<!-- review-request-head: <sha> provider=cr -->` marker at this head; one
   older than that marker belongs to an earlier round and is spent, so it cannot veto a genuine later
   green. The artifact-timestamp comparison stays where it works — the **transient commit status**,
-  whose `updated_at` is judged against the artifact per the status table in `AGENTS.md`.
+  whose `updated_at` is judged against the artifact per the status table in the review-lanes guide.
   Report an older completion as stale, and a current-head CodeRabbit review carrying
   findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual
@@ -563,6 +569,10 @@ status-less card count regressed 0 → 4 → 0 → 16 across ticks while the rep
 and idempotent (monorepo#2402).
 
 ## 2. Select (the heart of it)
+> **Guides:** [work-selection](../../guides/work-selection.md),
+> [claim-protocol](../../guides/claim-protocol.md), [cadence](../../guides/cadence.md), and for a PR
+> [merge-policy](../../guides/merge-policy.md).
+
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
 rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and
 sprawl, not value). **PRs come first:** driving **every actionable PR, whoever authored it,** to a
@@ -739,7 +749,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    KSail release bumps are check-gated, need NO review, and are never review-chased;
    `agent-plugins` updater PRs require semantic review when their classifier returns the trusted
    exit-3 state) is the contract's
-   **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
+   **green-review gate** (review-lanes guide, *AUTO-REVIEW IS
    DISABLED*) — follow it, don't re-derive it here. When a draft reaches the full pentad AND you have
    tried and evaluated it as a user, **self-promote it and drive it to merge** (contract *Autonomy*;
    definition PRs included — their separate gate was retired by maintainer direction 2026-07-18, so
@@ -913,6 +923,13 @@ timestamps; never spin up real clusters more than once/day portfolio-wide.
 A second run the same day → more selective, dedupe vs the earlier run.
 
 ## 3. Act (per selected product, via a per-run worktree)
+> **Guides:** [git-and-worktrees](../../guides/git-and-worktrees.md),
+> [github-artifacts](../../guides/github-artifacts.md), [pr-readiness](../../guides/pr-readiness.md),
+> [review-lanes](../../guides/review-lanes.md), [merge-policy](../../guides/merge-policy.md), and
+> [trust-and-input](../../guides/trust-and-input.md) whenever you act on content you did not write;
+> [advance-work](../../guides/advance-work.md) for advance work; [egress-and-privacy](../../guides/egress-and-privacy.md)
+> before publishing anything.
+
 For each selected product:
 1. **Isolate:** `cd` to **your deployment's checkout** — the fixed
    `/Users/homelab-mac-mini/git-personal/monorepo` for the machine-local instances, the sandbox root
@@ -1006,6 +1023,8 @@ For each selected product:
    duty actually run in a scheduled tick — the paragraph alone does not.
 
 ## 4. Always: update native memory + one consolidated report
+> **Guides:** [durable-memory](../../guides/durable-memory.md).
+
 - **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
   back what changed so the next run picks up cleanly — `last_run`, `rotation_cursor`, each touched
   product's `last_worked`/`weekly`/roadmap cursor/`last_research`/`needs_attention`, the CI & link caches (prune CI
@@ -1092,6 +1111,9 @@ For each selected product:
   you'll pick up next run; don't let "nothing actionable" become a habit.
 
 ## 5. Reflect & improve (self-learning)
+> **Guides:** [definition-surfaces](../../guides/definition-surfaces.md) (self-improvement rules and the
+> definition surfaces), [definition-and-plugin](../../guides/definition-and-plugin.md).
+
 At the end of every run, record operational **`learnings`** in native memory (`learnings.md`) — steps
 that failed / were flaky / slow / wasted effort, coverage gaps, stale or ambiguous instructions,
 security/reliability weaknesses in your own workflow. **Also sanity-check the machine-local
