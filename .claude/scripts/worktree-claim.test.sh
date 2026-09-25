@@ -302,16 +302,31 @@ esac
 exec "$real_git" "\$@"
 EOF
 chmod +x "$tmp/git-slow-probe/git"
-set -m
+# Signal the run and every process under it, as a terminal or supervisor signals a process group.
+# The tree is walked explicitly: job control, which would give the run its own group, needs a terminal
+# that CI does not have.
+process_tree() {
+  local all queue=("$1") pid child parent tree=""
+  all="$(ps -A -o pid= -o ppid=)"
+  while [ "${#queue[@]}" -gt 0 ]; do
+    pid="${queue[0]}"
+    queue=("${queue[@]:1}")
+    tree="$tree $pid"
+    while read -r child parent; do
+      [ "$parent" != "$pid" ] || queue+=("$child")
+    done <<<"$all"
+  done
+  printf '%s\n' "$tree"
+}
 PATH="$tmp/git-slow-probe:$PATH" TMPDIR="$tmp/probe-tmp" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-interrupt" "claim-branch-sub-interrupt" "session-sub-interrupt" >/dev/null 2>&1 &
 interrupted=$!
-set +m
 waited=0
 until [ -e "$tmp/probe-reached" ] || [ "$waited" -ge 100 ]; do
   sleep 0.1
   waited=$((waited + 1))
 done
-kill -TERM -- "-$interrupted" 2>/dev/null || true
+# shellcheck disable=SC2046 # one pid per word
+kill -TERM $(process_tree "$interrupted") 2>/dev/null || true
 wait "$interrupted" 2>/dev/null || true
 waited=0
 while compgen -G "$tmp/probe-tmp/worktree-claim-probe.*" >/dev/null && [ "$waited" -lt 50 ]; do
