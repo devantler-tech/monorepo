@@ -5091,6 +5091,13 @@ scheduler refuses none, which bounds *that* lane's refusal cause and says nothin
 ⚠️ **Re-derive this ONLY by comparing actual dispatches to scheduled slots** — never by counting skip
 records. Counting them is what produced five mutually-inconsistent readings (32.9%, 36.6%, 44.0%,
 50.0%, 58.3%) across both instances, each re-measured because the last one looked wrong.
+Run [`claude-dispatch-rate.sh --task <id> --since <UTC> [--until <UTC>] [--slots]`](.claude/scripts/claude-dispatch-rate.sh)
+for that comparison instead of measuring by hand: a slot counts as dispatched when an attributable
+session for the task starts before the next slot, an open slot is never counted, and exit `2` is
+UNKNOWN, never a rate. Measured with it for 2026-09-18T00Z → 2026-09-24T23Z: **165 of 166** engineer
+slots and **13 of 13** Improver slots dispatched, against 28 hours carrying a refusal record. So the
+one-in-five figure below describes its own August window, not a standing property of the lane.
+Re-measure before relying on either.
 **So never time anything off "the next tick."** A carry-forward, a claim-expiry judgement, or a "the
 next run will collect this" decision is wrong roughly one time in five on Claude, and always in the
 direction of waiting **longer** than planned — so prefer finishing inside the current run over handing

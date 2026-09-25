@@ -55,6 +55,7 @@ jobs:
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
       claude-lane-liveness: ${{ steps.filter.outputs.claude-lane-liveness }}
+      claude-dispatch-rate: ${{ steps.filter.outputs.claude-dispatch-rate }}
       review-lane-health: ${{ steps.filter.outputs.review-lane-health }}
       platform-live-health: ${{ steps.filter.outputs.platform-live-health }}
       lane-draft-count: ${{ steps.filter.outputs.lane-draft-count }}
@@ -505,6 +506,10 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/claude-lane-liveness.sh'
               - '.claude/scripts/claude-lane-liveness.test.sh'
+              - '.github/workflows/ci.yaml'
+            claude-dispatch-rate:
+              - '.claude/scripts/claude-dispatch-rate.sh'
+              - '.claude/scripts/claude-dispatch-rate.test.sh'
               - '.github/workflows/ci.yaml'
             review-lane-health:
               - '.claude/scripts/review-lane-health.sh'
@@ -1989,6 +1994,25 @@ jobs:
       - name: Verify the claude lane liveness check
         run: bash .claude/scripts/claude-lane-liveness.test.sh
 
+  test-claude-dispatch-rate:
+    name: Test claude dispatch rate
+    needs: changes
+    if: needs.changes.outputs.claude-dispatch-rate == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the claude dispatch rate
+        run: bash .claude/scripts/claude-dispatch-rate.test.sh
+
   test-review-lane-health:
     name: Test review lane health
     needs: changes
@@ -2478,6 +2502,7 @@ jobs:
       - test-plugin-definition-refresh
       - test-codex-lane-liveness
       - test-claude-lane-liveness
+      - test-claude-dispatch-rate
       - test-review-lane-health
       - test-platform-live-health
       - test-lane-draft-count
@@ -2557,6 +2582,7 @@ jobs:
             ${{ needs.test-plugin-definition-refresh.result }}
             ${{ needs.test-codex-lane-liveness.result }}
             ${{ needs.test-claude-lane-liveness.result }}
+            ${{ needs.test-claude-dispatch-rate.result }}
             ${{ needs.test-review-lane-health.result }}
             ${{ needs.test-platform-live-health.result }}
             ${{ needs.test-lane-draft-count.result }}

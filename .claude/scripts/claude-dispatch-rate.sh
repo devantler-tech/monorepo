@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# claude-dispatch-rate.sh — how many of a Claude task's scheduled slots actually dispatched?
+#
+# AGENTS.md#Cadence & focus says the Claude scheduler refuses a dispatch that would overlap the
+# previous run of the same task, so "scheduled every hour" is not "ran every hour". It also says the
+# drop rate may be re-derived ONLY by comparing actual dispatches to scheduled slots -- never by
+# counting `per_task_limit` skip records, which the scheduler re-writes every minute a run stays open.
+# Counting those records produced five mutually inconsistent readings. Every reading so far was a
+# one-off hand measurement, so none could be repeated (monorepo#2716). This helper is that comparison.
+#
+# THE RULE
+#   Slots come from the task's `cronExpression`, evaluated in host local time. A slot is DISPATCHED
+#   when an attributable session for that task starts in [slot, next slot). A delayed dispatch that
+#   starts after its own slot but before the next one therefore still counts. That is the
+#   "delayed into the next hour is not dropped" correction the contract records.
+#   A slot is SETTLED only once its successor is at or before --until. An open slot has had no chance
+#   to dispatch yet and is never counted as dropped.
+#
+# WHAT IT CANNOT SEE
+#   A dispatch that dies before the run's first user message carries no task marker, so it cannot
+#   be attributed and counts as dropped. That is the honest reading: such a run did no work. It is
+#   also why `claude-lane-liveness.sh` answers whether the NEWEST dispatch produced work, while this
+#   reports a RATE over a window. The two answer different questions.
+#
+# READ-ONLY, and as narrow as claude-lane-liveness.sh: from each transcript it reads only the
+# first line's task marker and timestamp. It never reads run content.
+#
+# Usage: claude-dispatch-rate.sh --task ID --since ISO [--until ISO] [--store PATH] [--projects PATH]
+#                               [--now-epoch S] [--slots]
+#   --since/--until  UTC instants, YYYY-MM-DDTHH:MM:SSZ. --until defaults to now and may not be later.
+#   --slots          also print one line per settled slot: `<slot-utc> dispatched|dropped`.
+#
+# Exit 0  measured; prints `DISPATCH-RATE task=<id> scheduled=<n> dispatched=<d> dropped=<n-d> ...`
+#      2  UNKNOWN -- bad arguments, no jq, absent/ambiguous store, unsupported cron, an unreadable
+#         transcript, or no settled slot in the window. Never a rate computed from a partial read.
+
+set -Eeuo pipefail
+trap 'exit 2' ERR
+
+STORE="${CLAUDE_SCHEDULE_STORE_PATH:-}"
+STORE_ROOT="${CLAUDE_SCHEDULE_STORE_ROOT:-$HOME/Library/Application Support/Claude/claude-code-sessions}"
+PROJECTS="${CLAUDE_PROJECTS_ROOT:-$HOME/.claude/projects}"
+TASK=""; SINCE=""; UNTIL=""; NOW_EPOCH=""; SLOTS=0
+
+usage() { sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; }
+die_unknown() { printf 'claude-dispatch-rate: UNKNOWN -- %s\n' "$1" >&2; exit 2; }
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help|-h) usage; exit 0 ;;
+    --task) [ "$#" -ge 2 ] || die_unknown "--task needs a value"; TASK="$2"; shift 2 ;;
+    --since) [ "$#" -ge 2 ] || die_unknown "--since needs a value"; SINCE="$2"; shift 2 ;;
+    --until) [ "$#" -ge 2 ] || die_unknown "--until needs a value"; UNTIL="$2"; shift 2 ;;
+    --store) [ "$#" -ge 2 ] || die_unknown "--store needs a value"; STORE="$2"; shift 2 ;;
+    --projects) [ "$#" -ge 2 ] || die_unknown "--projects needs a value"; PROJECTS="$2"; shift 2 ;;
+    --now-epoch) [ "$#" -ge 2 ] || die_unknown "--now-epoch needs a value"; NOW_EPOCH="$2"; shift 2 ;;
+    --slots) SLOTS=1; shift ;;
+    *) die_unknown "unrecognised argument: $1" ;;
+  esac
+done
+
+command -v jq >/dev/null 2>&1 || die_unknown "jq is not available"
+[ -n "$TASK" ] || die_unknown "--task is required"
+case "$TASK" in *[!A-Za-z0-9._-]*) die_unknown "unusable task id: $TASK" ;; esac
+[ -n "$SINCE" ] || die_unknown "--since is required"
+
+if [ -n "$NOW_EPOCH" ]; then
+  case "$NOW_EPOCH" in *[!0-9]*) die_unknown "--now-epoch must be a non-negative integer" ;; esac
+else
+  NOW_EPOCH=$(date +%s)
+fi
+
+# Strict UTC instants only. BSD and GNU date parse differently, so both are tried and validated;
+# an unparsable instant returns empty and every caller treats that as UNKNOWN.
+iso_to_epoch() {
+  local raw=$1 base out
+  base=${raw%%.*}; base=${base%Z}
+  case "$base" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]) : ;;
+    *) return 0 ;;
+  esac
+  out=$(date -u -d "${base}Z" +%s 2>/dev/null) || out=""
+  [ -n "$out" ] || out=$(date -u -j -f '%Y-%m-%dT%H:%M:%S' "$base" +%s 2>/dev/null) || out=""
+  case "$out" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s\n' "$out"
+}
+epoch_to_iso() {
+  local out
+  out=$(date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || out=""
+  [ -n "$out" ] || out=$(date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || out=""
+  printf '%s\n' "$out"
+}
+# Local wall clock as "HH MM SS"; cron expressions use the host timezone.
+local_clock() {
+  local out
+  out=$(date -r "$1" '+%H %M %S' 2>/dev/null) || out=""
+  [ -n "$out" ] || out=$(date -d "@$1" '+%H %M %S' 2>/dev/null) || out=""
+  case "$out" in [0-2][0-9]' '[0-5][0-9]' '[0-5][0-9]) printf '%s\n' "$out" ;; *) return 0 ;; esac
+}
+epoch_to_touch() {
+  local out
+  out=$(date -r "$1" +%Y%m%d%H%M.%S 2>/dev/null) || out=""
+  [ -n "$out" ] || out=$(date -d "@$1" +%Y%m%d%H%M.%S 2>/dev/null) || out=""
+  printf '%s\n' "$out"
+}
+
+SINCE_E=$(iso_to_epoch "$SINCE"); [ -n "$SINCE_E" ] || die_unknown "--since is not a UTC instant: $SINCE"
+if [ -n "$UNTIL" ]; then
+  UNTIL_E=$(iso_to_epoch "$UNTIL"); [ -n "$UNTIL_E" ] || die_unknown "--until is not a UTC instant: $UNTIL"
+else
+  UNTIL_E=$NOW_EPOCH
+fi
+# A window reaching past now would settle slots whose dispatch window has not closed yet.
+[ "$UNTIL_E" -le "$NOW_EPOCH" ] || die_unknown "--until is later than now"
+[ "$SINCE_E" -lt "$UNTIL_E" ] || die_unknown "--since must be earlier than --until"
+
+# Store discovery matches claude-lane-liveness.sh: EXACTLY one enabled store, or UNKNOWN.
+if [ -z "$STORE" ]; then
+  matches=0; selected=""
+  for candidate in "$STORE_ROOT"/*/*/scheduled-tasks.json; do
+    [ -f "$candidate" ] || continue
+    jq -e '[.scheduledTasks[]? | select(.enabled == true) | .id] | length > 0' "$candidate" >/dev/null 2>&1 || continue
+    selected="$candidate"; matches=$((matches + 1))
+  done
+  [ "$matches" -eq 1 ] || die_unknown "expected exactly one Claude scheduled-tasks store under $STORE_ROOT, found $matches"
+  STORE="$selected"
+fi
+[ -r "$STORE" ] || die_unknown "scheduled-tasks store is not readable: $STORE"
+[ -d "$PROJECTS" ] || die_unknown "projects root not found: $PROJECTS"
+
+n=$(jq -r --arg t "$TASK" '[.scheduledTasks[]? | select(.id == $t and .enabled == true)] | length' "$STORE" 2>/dev/null) \
+  || die_unknown "scheduled-tasks store is not valid JSON: $STORE"
+[ "$n" = "1" ] || die_unknown "task $TASK is not a single enabled task in $STORE"
+CRON=$(jq -r --arg t "$TASK" 'first(.scheduledTasks[] | select(.id == $t and .enabled == true)) | .cronExpression | strings' "$STORE") || CRON=""
+[ -n "$CRON" ] || die_unknown "task $TASK has no cronExpression"
+
+# Supported shapes are the two the deployment uses: `M * * * *` and `M H1,H2,... * * *`.
+# Anything else is UNKNOWN rather than a guessed schedule.
+read -r C_MIN C_HOUR C_DOM C_MON C_DOW C_EXTRA <<EOF
+$CRON
+EOF
+{ [ -z "${C_EXTRA:-}" ] && [ "$C_DOM" = "*" ] && [ "$C_MON" = "*" ] && [ "$C_DOW" = "*" ]; } \
+  || die_unknown "unsupported cron expression: $CRON"
+case "$C_MIN" in ''|*[!0-9]*) die_unknown "unsupported cron minute: $CRON" ;; esac
+[ "$((10#$C_MIN))" -le 59 ] || die_unknown "unsupported cron minute: $CRON"
+if [ "$C_HOUR" != "*" ]; then
+  case "$C_HOUR" in ''|,*|*,|*,,*|*[!0-9,]*) die_unknown "unsupported cron hour list: $CRON" ;; esac
+fi
+hour_matches() {
+  local h=$1 v
+  [ "$C_HOUR" = "*" ] && return 0
+  local IFS=,
+  for v in $C_HOUR; do
+    [ "$((10#$v))" -le 23 ] || return 1
+    [ "$((10#$v))" -eq "$((10#$h))" ] && return 0
+  done
+  return 1
+}
+
+# Enumerate slots. Find the first minute boundary at or after --since whose local minute is the
+# cron minute, then walk absolute hours: every local hour boundary falls on one of them, including
+# across a DST change, because offsets here move in whole hours.
+start=$(( SINCE_E + (60 - SINCE_E % 60) % 60 ))
+i=0; first=""
+while [ "$i" -lt 60 ]; do
+  clk=$(local_clock $(( start + i * 60 ))); [ -n "$clk" ] || die_unknown "could not render local time"
+  read -r _ mm _ <<EOF
+$clk
+EOF
+  if [ "$((10#$mm))" -eq "$((10#$C_MIN))" ]; then first=$(( start + i * 60 )); break; fi
+  i=$(( i + 1 ))
+done
+[ -n "$first" ] || die_unknown "no local minute matched the cron minute; the timezone offset is not whole-minute"
+
+SLOT_LIST=""
+e=$first
+while [ "$e" -le "$UNTIL_E" ]; do
+  clk=$(local_clock "$e"); [ -n "$clk" ] || die_unknown "could not render local time"
+  read -r hh _ _ <<EOF
+$clk
+EOF
+  if hour_matches "$hh"; then SLOT_LIST="$SLOT_LIST $e"; fi
+  e=$(( e + 3600 ))
+done
+# One more matching slot beyond --until bounds the last settled interval. It is capped at 24 hours
+# ahead, since a supported cron always fires at least once a day.
+end_bound=""
+limit=$(( e + 25 * 3600 ))
+while [ "$e" -le "$limit" ]; do
+  clk=$(local_clock "$e"); [ -n "$clk" ] || die_unknown "could not render local time"
+  read -r hh _ _ <<EOF
+$clk
+EOF
+  if hour_matches "$hh"; then end_bound=$e; break; fi
+  e=$(( e + 3600 ))
+done
+[ -n "$end_bound" ] || die_unknown "could not find the slot after --until for $CRON"
+
+# Attributable sessions for this task that started in the window. `-newer` keeps BSD find working;
+# a transcript's mtime is at or after its start, so this never drops an in-window session.
+TIMEREF=$(mktemp); FILELIST=$(mktemp); STARTS=$(mktemp)
+trap 'rm -f "$TIMEREF" "$FILELIST" "$STARTS"' EXIT
+stamp=$(epoch_to_touch "$SINCE_E"); [ -n "$stamp" ] || die_unknown "could not render --since as a touch stamp"
+touch -t "$stamp" "$TIMEREF" || die_unknown "could not stamp the window reference file"
+find "$PROJECTS" -maxdepth 2 -name '*.jsonl' -type f -newer "$TIMEREF" > "$FILELIST" 2>/dev/null \
+  || die_unknown "could not enumerate transcripts under $PROJECTS"
+
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  line1=$(head -n 1 "$f" 2>/dev/null) || die_unknown "could not read a transcript header"
+  case "$line1" in *'<scheduled-task name='*) : ;; *) continue ;; esac
+  # Same anchored attribution as claude-lane-liveness.sh: the marker must OPEN the first user
+  # message (after complete leading system reminders), so a quoted marker attributes nothing.
+  nm=$(printf '%s' "$line1" | jq -er '
+    select(type == "object")
+    | if .type == "queue-operation" and .operation == "enqueue" then .content
+      elif .type == "user" and .message.role == "user" then .message.content
+      else empty end
+    | select(type == "string")
+    | sub("^(<system-reminder>[\\s\\S]*?</system-reminder>[[:space:]]*)+"; "")
+    | capture("^<scheduled-task name=\"(?<id>[A-Za-z0-9._-]+)\"([[:space:]]|>)").id
+  ' 2>/dev/null) || nm=""
+  [ "$nm" = "$TASK" ] || continue
+  ts=$(printf '%s' "$line1" | jq -r '.timestamp // empty' 2>/dev/null) || ts=""
+  se=$(iso_to_epoch "$ts")
+  # Attributed to THIS task but untimed: dropping it would count its slot as dropped on evidence
+  # that was malformed rather than absent.
+  [ -n "$se" ] || die_unknown "a $TASK transcript has no readable start timestamp: $f"
+  printf '%s\n' "$se" >> "$STARTS"
+done < "$FILELIST"
+
+scheduled=0; dispatched=0; slot_lines=""
+prev=""
+for s in $SLOT_LIST $end_bound; do
+  if [ -n "$prev" ] && [ "$s" -le "$UNTIL_E" ]; then
+    hit=$(awk -v a="$prev" -v b="$s" '$1 >= a && $1 < b { print "y"; exit }' "$STARTS")
+    scheduled=$(( scheduled + 1 ))
+    if [ "$hit" = "y" ]; then dispatched=$(( dispatched + 1 )); st=dispatched; else st=dropped; fi
+    slot_lines="$slot_lines$(epoch_to_iso "$prev") $st
+"
+  fi
+  prev=$s
+done
+
+[ "$scheduled" -gt 0 ] || die_unknown "no settled slot between --since and --until for $CRON"
+
+dropped=$(( scheduled - dispatched ))
+rate=$(awk -v d="$dropped" -v n="$scheduled" 'BEGIN { printf "%.1f", 100 * d / n }')
+printf 'DISPATCH-RATE task=%s cron="%s" window=%s..%s scheduled=%d dispatched=%d dropped=%d drop_rate=%s%%\n' \
+  "$TASK" "$CRON" "$(epoch_to_iso "$SINCE_E")" "$(epoch_to_iso "$UNTIL_E")" "$scheduled" "$dispatched" "$dropped" "$rate"
+[ "$SLOTS" -eq 0 ] || printf '%s' "$slot_lines"
