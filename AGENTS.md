@@ -357,7 +357,10 @@ The run loop dispatches the local, unqualified `portfolio-surveyor` subagent, wh
 `.claude/agents/portfolio-surveyor.md`: that compatibility overlay is the surveyor definition this
 deployment loads (monorepo#3180), and the plugin's `agentic-engineering:portfolio-surveyor` is its
 parity target. A surveyor rule that exists only upstream is therefore not live until the overlay
-carries it too. The overlay preserves the deployment-hardened procedure and output grammar
+carries it too. The desired state's `portfolio-surveyor` digest identifies that parity target, not
+the loaded overlay: it lets a runtime verify the plugin copy it installed, while the overlay is
+integrity-bound by its reviewed revision in this repository, at the same commit as this contract.
+The overlay preserves the deployment-hardened procedure and output grammar
 that the generic plugin does not carry yet; remove it only after the side-by-side checklist in
 [`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md)
 passes.

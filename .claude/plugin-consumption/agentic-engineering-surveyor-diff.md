@@ -4,10 +4,11 @@
 
 Record for monorepo#2387 / Part of #2363; plugin identity updated for #2403 after
 `agent-plugins` ADR 0004 consolidated the former `automated-ai-engineer` marketplace entry into
-`agentic-engineering` v2.0.0. The run loop **sources the agent entry point** from the installed
-`agentic-engineering` plugin and tells that subagent to read the local
-`.claude/agents/portfolio-surveyor.md` as a compatibility overlay. The overlay stays required until
-digest parity lands (follow-up on `agent-plugins`).
+`agentic-engineering` v2.0.0. The run loop **dispatches the local overlay**: the unqualified
+`portfolio-surveyor` resolves to `.claude/agents/portfolio-surveyor.md`, which is the surveyor
+definition this deployment loads (monorepo#3180). The plugin's `portfolio-surveyor` is its parity
+target, not what runs. The overlay stays required until digest parity lands (follow-up on
+`agent-plugins`).
 
 | Measure | Local (monorepo) | Plugin (`agentic-engineering` v2.0.0) |
 |---|---|---|

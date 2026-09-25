@@ -3731,10 +3731,20 @@ grep -Fq 'The run loop dispatches the local, unqualified `portfolio-surveyor` su
 if grep -Fq 'The run loop sources the `portfolio-surveyor` agent entry point from the plugin' <<<"${_contract_flat}"; then
   fail "the plugin contract still says the surveyor entry point is sourced from the plugin (monorepo#3526)"
 fi
+# The desired state pins the plugin surveyor's digest; saying which definition that digest covers is
+# what stops a reader taking it as an integrity check on the overlay that actually runs.
+grep -Fq "The desired state's \`portfolio-surveyor\` digest identifies that parity target, not the loaded overlay" <<<"${_contract_flat}" ||
+  fail "the plugin contract does not say the desired-state surveyor digest covers the parity target, not the loaded overlay (monorepo#3526)"
 if grep -Fq 'Until monorepo#3180 decides the topology' "${surveyor_diff}"; then
   fail "the surveyor diff record still treats the dispatch topology as undecided (monorepo#3526)"
 fi
 _diff_flat="$(tr '\n' ' ' <"${surveyor_diff}" | tr -s '[:space:]' ' ')"
 grep -Fq 'monorepo#3180 decided the topology: the run loop dispatches this overlay until digest parity' <<<"${_diff_flat}" ||
   fail "the surveyor diff record does not record the decided topology (monorepo#3526)"
+# The record's introduction is read first, so it must describe the same topology as its body.
+grep -Fq 'The run loop **dispatches the local overlay**' <<<"${_diff_flat}" ||
+  fail "the surveyor diff record's introduction does not say the run loop dispatches the local overlay (monorepo#3526)"
+if grep -Fq 'The run loop **sources the agent entry point**' <<<"${_diff_flat}"; then
+  fail "the surveyor diff record's introduction still says the entry point is sourced from the plugin (monorepo#3526)"
+fi
 echo "portfolio surveyor contract: round-19 dispatch-topology assertions passed"
