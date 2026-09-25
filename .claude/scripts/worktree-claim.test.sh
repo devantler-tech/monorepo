@@ -893,6 +893,27 @@ git -C "$tmp/bare-admin" worktree add -q --detach "$tmp/bare-linked"
 rc=0
 out="$("$script" add "$tmp/bare-linked" "$tmp/wt-bare-linked" "claim-branch-bare-linked" "session-bare-linked" 2>&1)" || rc=$?
 check "add admits a linked worktree of a bare repository" 0 "$rc" "$out" "owner=session-bare-linked"
+# Run from the checkout itself, a separate git directory's owner is known, so the worktree `add` creates
+# from it is checked against that checkout's registration: a correct origin is admitted, and an include
+# that applies only on the new branch is still refused.
+git -C "$sgd_super/mod" config remote.origin.url "$upstream_sub"
+rc=0
+out="$("$script" add "$sgd_super/mod" "$tmp/wt-sgd-main" "claim-branch-sgd-main" "session-sgd-main" 2>&1)" || rc=$?
+check "add admits a worktree created from a separate-git-dir submodule's own checkout" 0 "$rc" "$out" "owner=session-sgd-main"
+printf '[url "%s"]\n\tinsteadOf = %s\n' "$other_sub" "$upstream_sub" >"$tmp/sgd-rewrite.gitconfig"
+printf '[includeIf "onbranch:claim-branch-sgd-onbranch"]\n\tpath = %s\n' "$tmp/sgd-rewrite.gitconfig" >"$tmp/global-sgd-onbranch.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-sgd-onbranch.gitconfig" "$script" add "$sgd_super/mod" "$tmp/wt-sgd-onbranch" "claim-branch-sgd-onbranch" "session-sgd-onbranch" 2>&1)" || rc=$?
+check "add refuses a new separate-git-dir worktree its branch's include rewrites" 1 "$rc" "$out" "redirected by:   URL rewrite"
+check "a refused separate-git-dir worktree is removed" 1 "$([ -e "$tmp/wt-sgd-onbranch" ] && echo 0 || echo 1)"
+git -C "$sgd_super/mod" config remote.origin.url "$other_sub"
+# A standalone repository kept with --separate-git-dir has no superproject, so a worktree `add` creates
+# from its own checkout needs no registration.
+git init -q -b main --separate-git-dir "$tmp/sgd-std-admin" "$tmp/sgd-std"
+git -C "$tmp/sgd-std" -c user.name=t -c user.email=t@example.com commit --allow-empty -qm init
+rc=0
+out="$("$script" add "$tmp/sgd-std" "$tmp/wt-sgd-std" "claim-branch-sgd-std" "session-sgd-std" 2>&1)" || rc=$?
+check "add admits a worktree created from a standalone separate-git-dir checkout" 0 "$rc" "$out" "owner=session-sgd-std"
 # A separate git directory can itself be named .git. Its parent then holds none of the files the index
 # was written from, so it is not taken for the checkout; an in-place clone's checkout holds them.
 tracked_up="$tmp/tracked-up"

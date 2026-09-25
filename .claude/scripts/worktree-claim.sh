@@ -107,6 +107,7 @@ PENDING_REPO=""
 PENDING_WT=""
 PENDING_BRANCH=""
 PENDING_NOTE=""
+# discard_pending_worktree runs that rollback from the note, once, and reports what it removed.
 discard_pending_worktree() {
   [ -n "$PENDING_NOTE" ] || return 0
   local repo="$PENDING_REPO" wt="$PENDING_WT" branch="$PENDING_BRANCH" note="$PENDING_NOTE" created="" oid="" what
@@ -128,6 +129,8 @@ discard_pending_worktree() {
     echo "worktree-claim: could not remove $what; remove it before reusing $branch" >&2
   fi
 }
+# remove_new_worktree removes <wt> when the note says `add` created it, then the branch `add` created
+# while it still points at <oid>.
 remove_new_worktree() {
   local repo="$1" wt="$2" branch="$3" oid="$4" created="$5"
   if [ "$created" = "created" ]; then
@@ -980,9 +983,11 @@ origin_redirects() (
 # upload-pack or remote helper. A plain push from the checked-out branch must go to origin as well.
 # Settings that apply to every repository, the superproject included, are not this check's concern. A
 # repository that is not a submodule is not checked: nothing names what it should be.
+#
+# `add` passes, as <verified>, the checkout it has already checked and created the new worktree from.
 refuse_foreign_submodule_origin_checked() {
-  local repo_abs="$1" super rel name="" common="" worktree="" main="" found admin raw="" expected="" resolved=0 shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
-  local top inplace head_branch push_remote="" pushto="" gitdir common_phys
+  local repo_abs="$1" verified="${2:-}" super rel name="" common="" worktree="" main="" found admin raw="" expected="" resolved=0 shown_expected url configured="" redirects="" matched=0 foreign=0 packs="" key setting checked
+  local top inplace head_branch push_remote="" pushto="" gitdir common_phys verified_common
   super="$(git -C "$repo_abs" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=""
   if [ -n "$super" ]; then
     super="$(cd "$super" && pwd -P)"
@@ -1012,6 +1017,17 @@ refuse_foreign_submodule_origin_checked() {
       esac
       if [ -n "$main" ] && checkout_unproven "$main" "$common"; then
         main=""
+      fi
+    fi
+    # A git directory kept apart from its checkout records no main checkout, but a worktree `add` has
+    # just created from a checked checkout of the same repository sits wherever that checkout does. Its
+    # own config is still compared below.
+    if [ -z "$main" ] && [ -n "$verified" ] && [ -n "$common" ]; then
+      verified_common="$(git -C "$verified" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || verified_common=""
+      [ -z "$verified_common" ] || verified_common="$(cd "$verified_common" 2>/dev/null && pwd -P)" || verified_common=""
+      common_phys="$(cd "$common" 2>/dev/null && pwd -P)" || common_phys=""
+      if [ -n "$verified_common" ] && [ "$verified_common" = "$common_phys" ]; then
+        main="$verified"
       fi
     fi
     case "$main" in
@@ -1282,7 +1298,7 @@ cmd_add() {
   # gitdir: pattern that matches its own git directory, so the check on <repo> above could not see it.
   local wt_phys
   wt_phys="$(cd "$wt" && pwd -P)" || fail "cannot resolve the new worktree path: $wt"
-  refuse_foreign_submodule_origin "$wt_phys"
+  refuse_foreign_submodule_origin "$wt_phys" "$repo_abs"
   # Claim BEFORE the advisory freshness check, not after. That check makes up to two bounded remote
   # calls, so it can hold the newly-created tree unclaimed for the length of both timeouts — a window
   # in which a concurrent run can take the marker, leaving this invocation to create the worktree and
