@@ -86,7 +86,7 @@ values="$(jq -r '.body' <<<"${payload}" | awk '
   # three spaces, closed only by a run of the same character at least as long, with nothing after it
   # but whitespace.
   function unindent(s) { sub(/^ ? ? ?/, "", s); return s }
-  function run(s, c,    k) { k = 0; while (substr(s, k + 1, 1) == c) k++; return k }
+  function run(s, c,    k) { k = 0; if (c == "") return 0; while (substr(s, k + 1, 1) == c) k++; return k }
   { sub(/\r$/, "") }
   in_comment { if (index($0, "-->") > 0) in_comment = 0; next }
   fence_len > 0 {
@@ -98,7 +98,11 @@ values="$(jq -r '.body' <<<"${payload}" | awk '
   {
     t = unindent($0)
     c = substr(t, 1, 1)
-    if ((c == "`" || c == "~") && run(t, c) >= 3) { fence_char = c; fence_len = run(t, c); next }
+    n = run(t, c)
+    # A backtick fence info string cannot contain a backtick; such a line is inline code.
+    if ((c == "`" || c == "~") && n >= 3 && !(c == "`" && index(substr(t, n + 1), "`") > 0)) {
+      fence_char = c; fence_len = n; next
+    }
   }
   index($0, "<!--") > 0 && index(substr($0, index($0, "<!--") + 4), "-->") == 0 { in_comment = 1; next }
   /^ ? ? ?\*\*Measure on:\*\*/ {

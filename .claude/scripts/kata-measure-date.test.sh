@@ -93,6 +93,10 @@ expect "a longer run closes a fence" 1 "NOT-DUE 2026-10-20" \
   "$(kata "${fence}"$'\nexample\n'"\`\`\`\`\`"$'\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "a fence line followed by text does not close the fence" 2 "UNKNOWN missing" \
   "$(kata "${fence}"$'\n'"${fence} not a close"$'\n**Measure on:** 2026-10-20\n'"${fence}" 2026-09-25)"
+expect "a backtick run whose info string holds a backtick is inline code, not a fence" 1 "NOT-DUE 2026-10-20" \
+  "$(kata "${fence} aa ${fence}"$'\n**Measure on:** 2026-10-20' 2026-09-25)"
+expect "a tilde fence's info string may hold a backtick" 2 "UNKNOWN missing" \
+  "$(kata $'~~~ a`b\n**Measure on:** 2026-10-20\n~~~' 2026-09-25)"
 expect "a fence indented four spaces is code, not a fence" 1 "NOT-DUE 2026-10-20" \
   "$(kata $'    '"${fence}"$'\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "an indented code block is not the line" 2 "UNKNOWN missing" \
