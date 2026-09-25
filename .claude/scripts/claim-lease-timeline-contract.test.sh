@@ -19,7 +19,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${AGENTS_FILE:-${repo_root}/AGENTS.md}"
+constitution="${AGENTS_FILE:-${repo_root}/.claude/guides/claim-protocol.md}"
 
 fail() {
   echo "claim-lease timeline contract: FAIL — $*" >&2

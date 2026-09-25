@@ -20,7 +20,11 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+# The contract is AGENTS.md plus every guide it indexes; these assertions span several guides.
+constitution="$(mktemp)"
+trap 'rm -f "${constitution}"' EXIT
+"${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
+  { echo "self-review contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 product_engineering_skill="${repo_root}/.claude/skills/product-engineering/SKILL.md"
 

@@ -30,7 +30,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/tool-call-discipline.md"
 plugin_dir="${repo_root}/libraries/agent-plugins"
 engineer_path='plugins/agentic-engineering/agents/agentic-engineer.agent.md'
 

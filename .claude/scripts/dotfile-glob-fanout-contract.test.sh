@@ -16,7 +16,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/tool-call-discipline.md"
 
 fail() {
   echo "dotfile glob fan-out contract: FAIL — $*" >&2
@@ -66,7 +66,7 @@ bullet="$(
 )"
 
 [ -n "${bullet}" ] ||
-  fail "could not locate the per-repository fan-out bullet in AGENTS.md *Latency discipline*"
+  fail "could not locate the per-repository fan-out bullet in the tool-call-discipline guide *Latency discipline*"
 
 bullet_words="$(printf '%s' "${bullet}" | wc -w | tr -d ' ')"
 [ "${bullet_words}" -lt 400 ] ||

@@ -30,7 +30,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${1:-${repo_root}/AGENTS.md}"
+constitution="${1:-${repo_root}/.claude/guides/egress-and-privacy.md}"
+surfaces_guide="${2:-${repo_root}/.claude/guides/definition-surfaces.md}"
 
 fail() {
   echo "lane-outage-disclosure contract: FAIL — $*" >&2
@@ -52,6 +53,7 @@ fail() {
 extract_section() {
   start_lit="$1"
   end_lit="$2"
+  file="${3:-${constitution}}"
   sentinel='@@END-ANCHOR-SEEN@@'
 
   raw="$(
@@ -59,7 +61,7 @@ extract_section() {
       index($0, st) == 1 { ins = 1 }
       ins && seen_first && index($0, en) == 1 { ins = 0; print s }
       ins { seen_first = 1; print }
-    ' "${constitution}"
+    ' "${file}"
   )"
 
   case "${raw}" in
@@ -83,7 +85,7 @@ assert_contains() {
 # ---------------------------------------------------------------------------
 # 1. The doctrine itself, inside *Sensitive information stays private*.
 # ---------------------------------------------------------------------------
-privacy="$(extract_section '### Sensitive information stays private' '### Local agent host')"
+privacy="$(extract_section '## Sensitive information stays private' '## Local agent host')"
 
 # A flattened empty capture becomes a single space, which would silently satisfy nothing below;
 # assert real content was captured before testing it.
@@ -131,7 +133,7 @@ assert_contains "${privacy}" 'under-specified for **skip clause (b)**' \
 #    while its factual description of the script stays accurate.
 # ---------------------------------------------------------------------------
 liveness="$(extract_section 'Run [`.claude/scripts/codex-lane-liveness.sh`]' \
-                            '### Authority model')"
+                            '## Authority model' "${surfaces_guide}")"
 
 [ "${#liveness}" -gt 200 ] || fail "liveness paragraph captured only ${#liveness} chars — extraction is broken"
 

@@ -7,7 +7,6 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 parity_checklist="${repo_root}/.claude/plugin-consumption/agentic-engineering-surveyor-diff.md"
@@ -68,6 +67,13 @@ if (assert_section_prose "${section_fixture}" 'OPERATIVE START' 'OPERATIVE END' 
 fi
 rm -f "${section_fixture}"
 trap - EXIT
+
+# The contract is AGENTS.md plus every guide it indexes; the assertions below span several guides.
+# Assembled here, after the fixture's own trap is released, so this cleanup is the one in force.
+constitution="$(mktemp)"
+trap 'rm -f "${constitution}"' EXIT
+"${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
+  fail "cannot assemble the agent contract"
 
 grep -Fq 'CodeRabbit > Codex > Cursor Bugbot' "${constitution}" ||
   fail "constitution does not preserve the provider order"

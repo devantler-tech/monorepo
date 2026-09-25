@@ -41,7 +41,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/egress-and-privacy.md"
+conventions_guide="${repo_root}/.claude/guides/github-artifacts.md"
 passed=0
 
 fail() {
@@ -55,15 +56,18 @@ ok() { passed=$((passed + 1)); }
 # Extract ONLY the named section, then flatten it: sentences wrap across source lines, so a fragment
 # spanning a line break would never match and the test would be always-red regardless of content.
 # A sentinel proves the END anchor was actually seen, so a missing anchor is detected DIRECTLY
-# rather than inferred from how much text got captured.
+# rather than inferred from how much text got captured. An empty END anchor means the section runs to
+# the next `## ` heading, or to the end of the file for a guide's last section.
 extract() {
-  local start="$1" end="$2" sentinel='@@END-ANCHOR-SEEN@@' out
+  local start="$1" end="$2" file="${3:-${constitution}}" sentinel='@@END-ANCHOR-SEEN@@' out
   out="$(
     awk -v s="${sentinel}" -v a="${start}" -v b="${end}" '
       index($0, a) { ins = 1 }
-      ins && index($0, b) && !index($0, a) { ins = 0; print s }
+      ins && b != "" && index($0, b) && !index($0, a) { ins = 0; print s }
+      ins && b == "" && /^## / && !index($0, a) { ins = 0; print s }
       ins { print }
-    ' "${constitution}"
+      END { if (ins && b == "") print s }
+    ' "${file}"
   )"
   case "${out}" in
     *'@@END-ANCHOR-SEEN@@'*) ;;
@@ -72,11 +76,11 @@ extract() {
   printf '%s' "${out}" | tr '\n' ' ' | tr -s ' '
 }
 
-egress="$(extract '### Egress' '### Sensitive information stays private')"
+egress="$(extract '## Egress' '## Sensitive information stays private')"
 # Anchored on STRUCTURAL SECTION HEADINGS at both ends, never on a neighbouring bullet's prose. The CI
 # filter runs this test on every AGENTS.md edit, so an anchor on any bullet's wording turns an
 # unrelated reword into a required-check failure — measured for both the start and the end anchor.
-conventions="$(extract '### GitHub artifact conventions' '### Cadence & focus')"
+conventions="$(extract '## GitHub artifact conventions' '' "${conventions_guide}")"
 
 # Assertions 1 and 3 match CONTIGUOUS literals with grep -qF, never a `case` glob. A glob written as
 # *'third-party'*'upstream issue/PR'* permits arbitrary text between the fragments, which is fail-open
@@ -148,7 +152,7 @@ ok
 # ONE line, deliberately: `has` is a fixed-string grep, and grep -F reads a multi-line pattern as
 # one alternative per line — so a pattern spanning the wrapped sentence would be satisfied by any
 # single line of it, including lines the previous wording shares.
-has 'reviewed mapping [`.claude/bundled-skill-ownership.tsv`](.claude/bundled-skill-ownership.tsv),' "${egress}" || \
+has 'reviewed mapping [`.claude/bundled-skill-ownership.tsv`](../bundled-skill-ownership.tsv),' "${egress}" || \
   fail "the Egress entry no longer routes skill ownership to the reviewed mapping and away from the self-attesting metadata.github-repo — a third-party skill declaring a devantler-tech URL could exempt itself from this very gate"
 ok
 has '`.claude/scripts/skill-owner.sh --check-reviewed` proves the two still agree' "${egress}" || \

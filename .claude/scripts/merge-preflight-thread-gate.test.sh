@@ -42,7 +42,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 self_basename="$(basename "${BASH_SOURCE[0]}")"
-constitution="${repo_root}/AGENTS.md"
+constitution="${repo_root}/.claude/guides/merge-policy.md"
 
 fail() {
   echo "merge-preflight thread gate: FAIL — $*" >&2
@@ -55,15 +55,15 @@ fail() {
 # as it survives anywhere — an example, a telemetry note — so a later edit could delete the instruction
 # from its point of use while this job still reported the merge procedure guarded.
 merge_policy="$(awk '
-  /^### Merge policy/ { inside = 1; print; next }
-  inside && /^### /   { exit }
+  /^## Merge policy/ { inside = 1; print; next }
+  inside && /^## /    { exit }
   inside              { print }
 ' "${constitution}")"
 
 # Fail closed if the section vanished or was renamed — otherwise every assertion below checks an empty
 # string and passes vacuously, which is this control's own failure mode.
 [ "$(printf '%s' "${merge_policy}" | wc -c)" -gt 500 ] ||
-  fail "could not locate a '### Merge policy' section in AGENTS.md — assertions would be vacuous"
+  fail "could not locate a '## Merge policy' section in the merge-policy guide — assertions would be vacuous"
 
 # Markdown prose is hard-wrapped, so a guarded sentence routinely spans two lines and exists on NO
 # single line. Flatten once and match substrings against the flattened copy.
@@ -402,7 +402,7 @@ while IFS= read -r surface; do
 # exact rather than a basename guess.
 done < <(
   {
-    printf '%s\n' "${constitution}" "${workflow}"
+    printf '%s\n' "${repo_root}/AGENTS.md" "${workflow}"
     find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null
     find "${repo_root}/.claude/scripts" -type f -name '*.sh' \
       ! -path "${repo_root}/.claude/scripts/${self_basename}" 2>/dev/null

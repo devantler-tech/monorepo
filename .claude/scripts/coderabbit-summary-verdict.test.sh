@@ -204,7 +204,7 @@ if [ "${rc}" = "2" ]; then echo "ok   json mode refuses a file path"; else
 fi
 
 # The contract names the requirement and the helper, so a reader of either finds the other.
-for surface in "${root}/AGENTS.md" "${root}/.claude/agents/portfolio-surveyor.md"; do
+for surface in "${root}/.claude/guides/review-lanes.md" "${root}/.claude/agents/portfolio-surveyor.md"; do
   checks=$((checks + 1))
   if grep -Fq 'coderabbit-summary-verdict.sh' "${surface}" &&
     grep -Fq 'No actionable comments were generated in the recent review' "${surface}"; then

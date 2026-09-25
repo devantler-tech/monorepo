@@ -597,14 +597,14 @@ cleanup
 # that makes the gate look like needless friction if it is not written down. Scoped to the plugin
 # contract section, matching the currency suite: these phrases also appear in this file and in the
 # script header, so a file-wide match would pass while the operative section said nothing.
-CONSTITUTION="$(cd "$HERE/../.." && pwd)/AGENTS.md"
+CONSTITUTION="$(cd "$HERE/../.." && pwd)/.claude/guides/definition-and-plugin.md"
 if [ -r "$CONSTITUTION" ]; then
   section="$(awk '
-      /^### Agentic engineering plugin contract$/ { ins = 1; next }
-      ins && /^### / { exit }
+      /^## Agentic engineering plugin contract$/ { ins = 1; next }
+      ins && /^## / { exit }
       ins { print }
     ' "$CONSTITUTION" | tr '\n' ' ')"
-  [ -n "$section" ] || bad "A9-A11 could not extract the plugin contract section from AGENTS.md"
+  [ -n "$section" ] || bad "A9-A11 could not extract the plugin contract section from the definition-and-plugin guide"
 
   case "$section" in
     *"plugin-definition-refresh.sh"*) ok "A9 the contract names the gated refresh script" ;;
@@ -621,7 +621,7 @@ if [ -r "$CONSTITUTION" ]; then
     *) bad "A11 the contract states the restart semantics of an apply" "an apply-time exit 0 could be read as 'this run is current'" ;;
   esac
 else
-  bad "A9-A11 AGENTS.md is unreadable at $CONSTITUTION"
+  bad "A9-A11 the definition-and-plugin guide is unreadable at $CONSTITUTION"
 fi
 
 printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"
