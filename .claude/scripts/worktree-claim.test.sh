@@ -252,6 +252,75 @@ rc=0
 out="$(GIT_CONFIG_GLOBAL="$tmp/global-include.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-includeif" "claim-branch-sub-includeif" "session-sub-includeif" 2>&1)" || rc=$?
 check "add refuses an origin a global include rewrites for this repository alone" 1 "$rc" "$out" "redirected by:   URL rewrite"
 
+# An include conditioned on the new branch applies only once the worktree is on it, so `add` checks the
+# new worktree before claiming it, and takes back down what it created when that check refuses.
+printf '[includeIf "onbranch:claim-branch-sub-onbranch"]\n\tpath = %s\n' "$tmp/only-mod.gitconfig" >"$tmp/global-onbranch.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-onbranch.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-onbranch" "claim-branch-sub-onbranch" "session-sub-onbranch" 2>&1)" || rc=$?
+check "add refuses a new worktree its branch's include rewrites" 1 "$rc" "$out" "redirected by:   URL rewrite"
+check "a refused new worktree is removed" 1 "$([ -e "$tmp/wt-sub-onbranch" ] && echo 0 || echo 1)"
+check "a refused new worktree's new branch is removed" 1 "$(git -C "$super/mod" show-ref --verify --quiet refs/heads/claim-branch-sub-onbranch && echo 0 || echo 1)"
+# A branch that existed before `add` is not add's to delete.
+git -C "$super/mod" branch claim-branch-sub-onbranch-kept
+printf '[includeIf "onbranch:claim-branch-sub-onbranch-kept"]\n\tpath = %s\n' "$tmp/only-mod.gitconfig" >"$tmp/global-onbranch-kept.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-onbranch-kept.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-onbranch-kept" "claim-branch-sub-onbranch-kept" "session-sub-onbranch-kept" 2>&1)" || rc=$?
+check "add refuses an existing branch its include rewrites" 1 "$rc" "$out" "redirected by:   URL rewrite"
+check "a refused worktree on an existing branch is removed" 1 "$([ -e "$tmp/wt-sub-onbranch-kept" ] && echo 0 || echo 1)"
+check "a refused worktree keeps a branch that existed before add" 0 "$(git -C "$super/mod" show-ref --verify --quiet refs/heads/claim-branch-sub-onbranch-kept && echo 0 || echo 1)"
+[ ! -e "$tmp/wt-sub-onbranch-kept" ] || git -C "$super/mod" worktree remove --force "$tmp/wt-sub-onbranch-kept"
+git -C "$super/mod" branch -D -q claim-branch-sub-onbranch-kept
+
+# git runs core.gitProxy for git:// connections, so a repository-local one decides what they reach.
+git -C "$super/mod" config core.gitProxy "proxy-cmd for example.invalid"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-gitproxy" "claim-branch-sub-gitproxy" "session-sub-gitproxy" 2>&1)" || rc=$?
+check "add refuses a submodule whose own config sets core.gitProxy" 1 "$rc" "$out" "redirected by:   core.gitProxy"
+git -C "$super/mod" config --unset core.gitProxy
+printf '[core]\n\tgitProxy = proxy-cmd\n' >"$tmp/global-gitproxy.gitconfig"
+rc=0
+out="$(GIT_CONFIG_GLOBAL="$tmp/global-gitproxy.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-gitproxy-global" "claim-branch-sub-gitproxy-global" "session-sub-gitproxy-global" 2>&1)" || rc=$?
+check "add admits a submodule when only global config sets core.gitProxy" 0 "$rc" "$out" "owner=session-sub-gitproxy-global"
+
+# `submodule sync` writes a registered URL byte for byte, trailing newline included, so an origin
+# without it is not that URL; a URL carrying a newline cannot be verified either way.
+git -C "$super" config -f .gitmodules submodule.mod.url "https://github.com/example/sub"$'\n'
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-gmnewline" "claim-branch-sub-gmnewline" "session-sub-gmnewline" 2>&1)" || rc=$?
+check "add refuses when the registered URL ends in a newline origin lacks" 1 "$rc" "$out" "contains a newline"
+git -C "$super" config -f .gitmodules submodule.mod.url "https://github.com/example/sub"
+
+# The probe repository holds the registered URL, which can carry a credential, so an interrupted check
+# must not leave it behind. The shim holds the check inside the probe until the job is signalled.
+real_git="$(command -v git)"
+mkdir -p "$tmp/git-slow-probe" "$tmp/probe-tmp"
+cat >"$tmp/git-slow-probe/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" get-url --all probe "*) : >"$tmp/probe-reached"; sleep 30 ;;
+esac
+exec "$real_git" "\$@"
+EOF
+chmod +x "$tmp/git-slow-probe/git"
+set -m
+PATH="$tmp/git-slow-probe:$PATH" TMPDIR="$tmp/probe-tmp" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-interrupt" "claim-branch-sub-interrupt" "session-sub-interrupt" >/dev/null 2>&1 &
+interrupted=$!
+set +m
+waited=0
+until [ -e "$tmp/probe-reached" ] || [ "$waited" -ge 100 ]; do
+  sleep 0.1
+  waited=$((waited + 1))
+done
+kill -TERM -- "-$interrupted" 2>/dev/null || true
+wait "$interrupted" 2>/dev/null || true
+waited=0
+while compgen -G "$tmp/probe-tmp/worktree-claim-probe.*" >/dev/null && [ "$waited" -lt 50 ]; do
+  sleep 0.1
+  waited=$((waited + 1))
+done
+check "an interrupted origin check was inside its probe" 0 "$([ -e "$tmp/probe-reached" ] && echo 0 || echo 1)"
+check "an interrupted origin check leaves no probe repository behind" 1 "$(compgen -G "$tmp/probe-tmp/worktree-claim-probe.*" >/dev/null && echo 0 || echo 1)"
+
 # One configured value that repeats the registered URL across a newline is one URL to git, not two.
 git -C "$super/mod" config remote.origin.url "$(printf '%s\n%s' "https://github.com/example/sub" "https://github.com/example/sub")"
 rc=0
@@ -468,6 +537,23 @@ rc=0
 out="$("$script" add "$tmp/sep-linked" "$tmp/wt-sep-repointed" "claim-branch-sep-repointed" "session-sep-repointed" 2>&1)" || rc=$?
 check "add refuses a submodule worktree whose core.worktree points at a standalone checkout" 1 "$rc" "$out" "no superproject registers it"
 git --git-dir="$sep_common" config --worktree core.worktree "$sep_worktree"
+
+# A submodule cloned in place keeps its git directory at <checkout>/.git with no core.worktree, so its
+# main checkout is that directory's parent, and a linked worktree of it is still that submodule's.
+inplace_super="$tmp/inplace-super"
+git init -q -b main "$inplace_super"
+git clone -q "$upstream_sub" "$inplace_super/indep"
+git -C "$inplace_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" indep
+git -C "$inplace_super" -c user.name=t -c user.email=t@example.com commit -qm "add in-place submodule"
+git -C "$inplace_super/indep" worktree add -q --detach "$tmp/linked-indep"
+rc=0
+out="$("$script" add "$tmp/linked-indep" "$tmp/wt-indep-ok" "claim-branch-indep-ok" "session-indep-ok" 2>&1)" || rc=$?
+check "add admits a linked worktree of an in-place submodule clone" 0 "$rc" "$out" "owner=session-indep-ok"
+git -C "$inplace_super/indep" config remote.origin.url "$other_sub"
+rc=0
+out="$("$script" add "$tmp/linked-indep" "$tmp/wt-indep-wrong" "claim-branch-indep-wrong" "session-indep-wrong" 2>&1)" || rc=$?
+check "add refuses a linked worktree of an in-place submodule clone with a foreign origin" 1 "$rc" "$out" "submodule sync -- 'indep'"
+git -C "$inplace_super/indep" config remote.origin.url "$upstream_sub"
 
 # When two .gitmodules sections claim one path, git initializes it from the later one.
 git -C "$super" config -f .gitmodules submodule.dup.path mod

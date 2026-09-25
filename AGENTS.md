@@ -4255,9 +4255,11 @@ that contains it: the session write guard refuses every Edit/Write under the sha
 `<repo_path>` that is not its own repository's root — an uninitialized submodule — so populate it with
 `submodule-init.sh` first (monorepo#2755). The helper also refuses a populated submodule whose `origin`
 is not exactly the URL `git submodule sync` writes for it. It also refuses one that a setting applying
-only to that repository sends elsewhere: a `pushurl`, a URL rewrite or `core.sshCommand` (including
-through a global `includeIf`), or a custom `receivepack`, `uploadpack` or `vcs` transport. Fix it with
-`git -C <superproject> submodule sync -- <path>` and by removing that setting (monorepo#3010). Work
+only to that repository sends elsewhere: a `pushurl`, a URL rewrite, `core.sshCommand` or
+`core.gitProxy` (including through a global `includeIf`), or a custom `receivepack`, `uploadpack` or
+`vcs` transport. It checks the new worktree too before claiming it, and removes it when refused.
+Fix it with `git -C <superproject> submodule sync -- <path>` and by removing that setting
+(monorepo#3010). Work
 there, open the PR, then
 `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local filesystem path such as
 `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the slug only for `gh`
