@@ -571,7 +571,8 @@ rc=0
 out="$("$script" add "$repo" "$tmp/wt-hook-gone" "claim-branch-hook-gone" "session-hook-gone" 2>&1)" || rc=$?
 rm -f "$repo_hooks/post-checkout"
 check "add fails when a hook deletes its new worktree" 1 "$([ "$rc" -eq 0 ] && echo 0 || echo 1)"
-check "a new worktree a hook deleted leaves no record in git" 1 "$(git -C "$repo" worktree list --porcelain | grep -q 'wt-hook-gone' && echo 0 || echo 1)"
+hook_gone_list="$(git -C "$repo" worktree list --porcelain)"
+check "a new worktree a hook deleted leaves no record in git" 1 "$(grep -q 'wt-hook-gone' <<<"$hook_gone_list" && echo 0 || echo 1)"
 check "a new worktree a hook deleted loses its new branch" 1 "$(git -C "$repo" show-ref --verify --quiet refs/heads/claim-branch-hook-gone && echo 0 || echo 1)"
 git -C "$repo" worktree prune
 git -C "$repo" branch -D -q claim-branch-hook-gone 2>/dev/null || true
