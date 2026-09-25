@@ -1298,6 +1298,27 @@ assert_prose "the ask must be the last thing in that paragraph, followed by a bl
   "Maintainer channels lets a Slack ask be recorded where the blocker check cannot see it"
 refute_prose "works from **unattended runs too**, via each agent's Slack tooling" \
   "Issue-driven still claims Slack works unattended without the destination and caveats"
+# Two Slack surfaces exist: an already signed-in connector, and a plugin connector that needs an
+# interactive sign-in no unattended run can complete. Checked the obvious way, the second makes the
+# only unattended escalation channel look closed (monorepo#2900). Name the working surface, say an
+# auth failure elsewhere proves nothing, and make an "unavailable" report name what it tried.
+# Scoped to the Maintainer channels section, which is what an agent loads when it escalates: the
+# same words in another guide would not reach it there.
+maintainer_channels_flat="$(
+  awk '$0 == "## Maintainer channels" { inside = 1; next } inside && /^## / { exit } inside' \
+    "${repo_root}/.claude/guides/maintainer-channels.md" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${maintainer_channels_flat}" ] ||
+  fail "could not extract the maintainer-channels guide's '## Maintainer channels' section (monorepo#2900)"
+for surface_rule in \
+  "the Slack connector that is already signed in, whose tools are named \`slack_send_message\`" \
+  "is a different surface, not evidence that the channel is closed" \
+  "names each surface it tried and what that surface returned"; do
+  case "${maintainer_channels_flat}" in
+    *"${surface_rule}"*) ;;
+    *) fail "Maintainer channels no longer says '${surface_rule}' — the escalation surface is ambiguous again (monorepo#2900)" ;;
+  esac
+done
 
 # The plugin's maintainer-PR driving fact (agent-plugins#201) is read from the Trust gate
 # section and defaults to hands-off when that section does not declare it. This deployment
