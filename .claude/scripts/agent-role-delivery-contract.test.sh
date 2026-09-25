@@ -1302,12 +1302,23 @@ refute_prose "works from **unattended runs too**, via each agent's Slack tooling
 # interactive sign-in no unattended run can complete. Checked the obvious way, the second makes the
 # only unattended escalation channel look closed (monorepo#2900). Name the working surface, say an
 # auth failure elsewhere proves nothing, and make an "unavailable" report name what it tried.
-assert_prose "the Slack connector that is already signed in" \
-  "Maintainer channels does not name which Slack surface is the channel (monorepo#2900)"
-assert_prose "is a different surface, not evidence that the channel is closed" \
-  "Maintainer channels lets a sign-in prompt on one Slack surface read as the channel being closed (monorepo#2900)"
-assert_prose "names each surface it tried and what that surface returned" \
-  "Maintainer channels lets a run report Slack unavailable without saying what it tried (monorepo#2900)"
+# Scoped to the Maintainer channels section, which is what an agent loads when it escalates: the
+# same words in another guide would not reach it there.
+maintainer_channels_flat="$(
+  awk '/^## Maintainer channels/ { inside = 1; next } inside && /^## / { exit } inside' \
+    "${repo_root}/.claude/guides/maintainer-channels.md" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${maintainer_channels_flat}" ] ||
+  fail "could not extract the maintainer-channels guide's '## Maintainer channels' section (monorepo#2900)"
+for surface_rule in \
+  "the Slack connector that is already signed in, whose tools are named \`slack_send_message\`" \
+  "is a different surface, not evidence that the channel is closed" \
+  "names each surface it tried and what that surface returned"; do
+  case "${maintainer_channels_flat}" in
+    *"${surface_rule}"*) ;;
+    *) fail "Maintainer channels no longer says '${surface_rule}' — the escalation surface is ambiguous again (monorepo#2900)" ;;
+  esac
+done
 
 # The plugin's maintainer-PR driving fact (agent-plugins#201) is read from the Trust gate
 # section and defaults to hands-off when that section does not declare it. This deployment
