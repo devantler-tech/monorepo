@@ -125,6 +125,11 @@ expect 2 "no readable start timestamp" "an attributed but untimed transcript is 
 mkcase bad-cron '*/5 * * * *'
 expect 2 "unsupported cron" "an unsupported cron is UNKNOWN" "${W[@]}"
 
+mkcase bad-hour '0 0,25 * * *'
+mksession eng $(( BASE + 5 ))
+expect 2 "unsupported cron hour list" "an out-of-range hour is UNKNOWN even after a valid one" \
+  --task eng --since "$(iso_at "$BASE")" --until "$(iso_at "$NOW")"
+
 mkcase args
 expect 2 "later than now" "--until past now is UNKNOWN" \
   --task eng --since "$(iso_at "$BASE")" --until "$(iso_at $(( NOW + 60 )))"

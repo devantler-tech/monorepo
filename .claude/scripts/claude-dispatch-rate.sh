@@ -145,6 +145,14 @@ case "$C_MIN" in ''|*[!0-9]*) die_unknown "unsupported cron minute: $CRON" ;; es
 [ "$((10#$C_MIN))" -le 59 ] || die_unknown "unsupported cron minute: $CRON"
 if [ "$C_HOUR" != "*" ]; then
   case "$C_HOUR" in ''|,*|*,|*,,*|*[!0-9,]*) die_unknown "unsupported cron hour list: $CRON" ;; esac
+  # Every value is checked up front. Checking lazily would let `3,25` pass as `3`, because the
+  # match loop returns on the first hit before it reaches the invalid value.
+  IFS=, read -r -a C_HOURS <<EOF
+$C_HOUR
+EOF
+  for v in "${C_HOURS[@]}"; do
+    { [ "${#v}" -le 2 ] && [ "$((10#$v))" -le 23 ]; } || die_unknown "unsupported cron hour list: $CRON"
+  done
 fi
 hour_matches() {
   local h=$1 v

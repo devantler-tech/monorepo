@@ -5099,7 +5099,9 @@ slots and **13 of 13** Improver slots dispatched, against 28 hours carrying a re
 one-in-five figure below describes its own August window, not a standing property of the lane.
 Re-measure before relying on either.
 **So never time anything off "the next tick."** A carry-forward, a claim-expiry judgement, or a "the
-next run will collect this" decision is wrong roughly one time in five on Claude, and always in the
+next run will collect this" decision is wrong whenever that tick is dropped. That was roughly one
+time in five on Claude in August and far less in the September reading above, so measure the current
+rate rather than assuming either. The error is always in the
 direction of waiting **longer** than planned — so prefer finishing inside the current run over handing
 work to a tick that may not come. The Agent Improver's four daily starts are additional work, not
 replacement slots. The scheduled interval is the gap **between runs, not a per-run time budget**; it
