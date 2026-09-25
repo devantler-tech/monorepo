@@ -700,6 +700,8 @@ submodule_name_at() {
 # `core.sshCommand` when the ssh command differs. The neutral repository is a throwaway one whose
 # remote has origin's shape, so settings every repository shares give both the same answer, while
 # one that applies only to <repo> (its own config, or a global file included only for it) shows up.
+# A rewrite keyed to the registered URL itself (a global insteadOf, or an include conditioned on
+# hasconfig:remote.*.url) applies to every clone of that repository, like a mirror, so it is shared too.
 # It prints `unverifiable` when the comparison cannot be made, and `checked` last once it has finished,
 # so a caller never mistakes an aborted run for a clean one. The URL is written to the throwaway
 # config file directly rather than passed on a command line, where other processes could read it.
@@ -724,8 +726,8 @@ origin_redirects() {
   esc="${esc//\"/\\\"}"
   urls=0
   pushurls=0
-  while IFS= read -r _; do urls=$((urls + 1)); done < <(git -C "$repo" config --get-all remote.origin.url 2>/dev/null || true)
-  while IFS= read -r _; do pushurls=$((pushurls + 1)); done < <(git -C "$repo" config --get-all remote.origin.pushurl 2>/dev/null || true)
+  while IFS= read -r -d '' _; do urls=$((urls + 1)); done < <(git -C "$repo" config -z --get-all remote.origin.url 2>/dev/null || true)
+  while IFS= read -r -d '' _; do pushurls=$((pushurls + 1)); done < <(git -C "$repo" config -z --get-all remote.origin.pushurl 2>/dev/null || true)
   {
     printf '[remote "probe"]\n'
     for ((i = 0; i < urls; i++)); do printf '\turl = "%s"\n' "$esc"; done
@@ -795,11 +797,14 @@ refuse_foreign_submodule_origin_checked() {
       */.git/modules/* | */.git/worktrees/*/modules/*) ;;
       *)
         # A standalone repository may keep its git directory elsewhere and point core.worktree back at
-        # its checkout; nothing registers it, so there is nothing to check. A core.worktree that names a
-        # checkout which no longer exists may be a submodule whose registration cannot be found, so
-        # that is not waved through.
+        # its checkout; nothing registers it, so there is nothing to check. A git directory under a
+        # `modules/` directory is a submodule's, wherever core.worktree points, and a core.worktree that
+        # names a checkout which no longer exists may be one too, so neither is waved through.
         [ -n "$worktree" ] || return 0
-        [ -z "$main" ] || return 0
+        case "$common" in
+          */modules/*) ;;
+          *) [ -z "$main" ] || return 0 ;;
+        esac
         echo "worktree-claim: $repo_abs shares a git directory with a separate checkout, but no superproject registers it." >&2
         echo "  Its origin cannot be checked against a .gitmodules entry, so it is not claimed." >&2
         echo "  If it is a submodule, run this from a checkout inside its superproject instead." >&2
@@ -830,8 +835,9 @@ refuse_foreign_submodule_origin_checked() {
   fi
   [ -z "$name" ] || raw="$(git config -f "$super/.gitmodules" --get "submodule.$name.url" 2>/dev/null)" || raw=""
   [ -z "$raw" ] || expected="$(resolve_submodule_url "$super" "$raw" "$rel")"
-  # Every configured url and pushurl of origin must be the registered URL itself.
-  while IFS= read -r url; do
+  # Every configured url and pushurl of origin must be the registered URL itself. Values are read
+  # NUL-delimited, because a value can contain a newline.
+  while IFS= read -r -d '' url; do
     [ -n "$url" ] || continue
     configured="$configured${configured:+, }$(redact_url "$url")"
     if [ -n "$expected" ] && [ "$url" = "$expected" ]; then
@@ -839,8 +845,8 @@ refuse_foreign_submodule_origin_checked() {
     else
       foreign=1
     fi
-  done < <(git -C "$repo_abs" config --get-all remote.origin.url 2>/dev/null
-    git -C "$repo_abs" config --get-all remote.origin.pushurl 2>/dev/null || true)
+  done < <(git -C "$repo_abs" config -z --get-all remote.origin.url 2>/dev/null
+    git -C "$repo_abs" config -z --get-all remote.origin.pushurl 2>/dev/null || true)
   # A setting that applies only to this repository can still send fetch and push elsewhere.
   # A comparison that did not finish is not a clean one.
   if [ "$matched" -gt 0 ] && [ "$foreign" -eq 0 ]; then

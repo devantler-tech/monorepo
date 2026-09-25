@@ -252,6 +252,13 @@ rc=0
 out="$(GIT_CONFIG_GLOBAL="$tmp/global-include.gitconfig" GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-includeif" "claim-branch-sub-includeif" "session-sub-includeif" 2>&1)" || rc=$?
 check "add refuses an origin a global include rewrites for this repository alone" 1 "$rc" "$out" "redirected by:   URL rewrite"
 
+# One configured value that repeats the registered URL across a newline is one URL to git, not two.
+git -C "$super/mod" config remote.origin.url "$(printf '%s\n%s' "https://github.com/example/sub" "https://github.com/example/sub")"
+rc=0
+out="$(GIT_ALLOW_PROTOCOL='file' "$script" add "$super/mod" "$tmp/wt-sub-newline" "claim-branch-sub-newline" "session-sub-newline" 2>&1)" || rc=$?
+check "add refuses an origin value that embeds a newline" 1 "$rc" "$out" "submodule sync -- 'mod'"
+git -C "$super/mod" config remote.origin.url "https://github.com/example/sub"
+
 # Stray content in a registered path that was never populated resolves to the superproject.
 mkdir -p "$super/stray"
 printf 'stray\n' >"$super/stray/leftover.txt"
@@ -455,6 +462,12 @@ git -C "$tmp/standalone" -c user.name=t -c user.email=t@example.com commit --all
 rc=0
 out="$("$script" add "$tmp/standalone" "$tmp/wt-standalone" "claim-branch-standalone" "session-standalone" 2>&1)" || rc=$?
 check "add admits a standalone repository whose core.worktree points back at its checkout" 0 "$rc" "$out" "owner=session-standalone"
+# A submodule's git directory stays a submodule's even when its core.worktree points at a standalone checkout.
+git --git-dir="$sep_common" config --worktree core.worktree "$tmp/standalone"
+rc=0
+out="$("$script" add "$tmp/sep-linked" "$tmp/wt-sep-repointed" "claim-branch-sep-repointed" "session-sep-repointed" 2>&1)" || rc=$?
+check "add refuses a submodule worktree whose core.worktree points at a standalone checkout" 1 "$rc" "$out" "no superproject registers it"
+git --git-dir="$sep_common" config --worktree core.worktree "$sep_worktree"
 
 # When two .gitmodules sections claim one path, git initializes it from the later one.
 git -C "$super" config -f .gitmodules submodule.dup.path mod
