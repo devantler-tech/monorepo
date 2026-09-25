@@ -1053,6 +1053,31 @@ rc=0
 out="$("$script" acquire "$tmp/nlin-linked" "session-nlin" 2>&1)" || rc=$?
 check "acquire refuses a linked worktree of an in-place clone whose registered path ends in a newline" 1 "$rc" "$out"
 
+# Every linked checkout shares the common git directory, so only the primary checkout's own git
+# directory is that directory. A core.worktree naming a linked checkout leaves the real one unlocated.
+decoy2_super="$tmp/decoy2-super"
+git init -q -b main "$decoy2_super"
+git -C "$decoy2_super" -c protocol.file.allow=always submodule add -q "$upstream_sub" mod
+git -C "$decoy2_super" -c user.name=t -c user.email=t@example.com commit -qm "add submodule"
+rm -rf "$decoy2_super/mod"
+mkdir -p "$tmp/decoy2-admin"
+git clone -q --separate-git-dir "$tmp/decoy2-admin/repo" "$other_sub" "$decoy2_super/mod"
+git -C "$decoy2_super/mod" worktree add -q --detach "$tmp/decoy2-linked"
+git --git-dir="$tmp/decoy2-admin/repo" config core.worktree "$tmp/decoy2-linked"
+rc=0
+out="$("$script" add "$tmp/decoy2-linked" "$tmp/wt-decoy2" "claim-branch-decoy2" "session-decoy2" 2>&1)" || rc=$?
+check "add refuses a linked worktree named by core.worktree in place of the primary checkout" 1 "$rc" "$out" "no superproject registers it"
+check "a decoy linked checkout creates no worktree" 1 "$([ -e "$tmp/wt-decoy2" ] && echo 0 || echo 1)"
+
+# A new worktree path ending in a newline is refused before anything is created: once created, it
+# could not be resolved to take it back.
+rc=0
+out="$("$script" add "$nl_super/mod" "$tmp/wt-nltarget"$'\n' "claim-branch-nltarget" "session-nltarget" 2>&1)" || rc=$?
+check "add refuses a new worktree path ending in a newline" 1 "$rc" "$out" "contains a newline"
+check "a newline worktree path creates no directory" 1 "$([ -e "$tmp/wt-nltarget"$'\n' ] && echo 0 || echo 1)"
+check "a newline worktree path creates no branch" 1 \
+  "$(git -C "$nl_super/mod" show-ref --verify --quiet refs/heads/claim-branch-nltarget && echo 0 || echo 1)"
+
 # A submodule cloned in place keeps its git directory at <checkout>/.git with no core.worktree, so its
 # main checkout is that directory's parent, and a linked worktree of it is still that submodule's.
 inplace_super="$tmp/inplace-super"

@@ -1240,10 +1240,11 @@ refuse_foreign_submodule_origin_checked() {
       *) main="$common/$main" ;;
     esac
     [ -z "$main" ] || main="$(resolved_dir "$main")" || main=""
-    # core.worktree can name any directory. It names this repository's checkout only when that checkout's
-    # own git directory is this one; otherwise the real checkout is unlocated, wherever it sits.
+    # core.worktree can name any directory. It names this repository's primary checkout only when that
+    # checkout's own git directory is this one. Every linked checkout shares this directory as its common
+    # directory, so that is not compared; otherwise the real checkout is unlocated, wherever it sits.
     if [ -n "$main" ] && [ -n "$worktree" ]; then
-      main_common="$(git -C "$main" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || main_common=""
+      main_common="$(git -C "$main" rev-parse --absolute-git-dir 2>/dev/null)" || main_common=""
       [ -z "$main_common" ] || main_common="$(resolved_dir "$main_common")" || main_common=""
       common_phys="$(resolved_dir "$common")" || common_phys=""
       if [ -z "$main_common" ] || [ "$main_common" != "$common_phys" ]; then
@@ -1492,6 +1493,14 @@ cmd_add() {
   case "$wt" in
     /*) ;;
     *) wt="$repo_abs/$wt" ;;
+  esac
+  # Refused before anything is created: a path whose newline is dropped on resolution could not be
+  # resolved again to take the new worktree back.
+  case "$wt" in
+    *$'\n'*)
+      echo "worktree-claim: the new worktree path $(shquote "${wt//$'\n'/\\n}") contains a newline; it is not created." >&2
+      exit 1
+      ;;
   esac
   if [ -e "$wt" ]; then
     fail "worktree path already exists: $wt"
