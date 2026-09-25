@@ -2098,6 +2098,11 @@ the account and that **an admin must raise the limit in the Cursor dashboard**. 
   `1` when any lane is `DOWN` and `2` when it could not read everything. Stop requesting a `DOWN` lane
   and escalate a `MAINTAINER-ONLY` one. ⚠️ It is detection only: the *Local review round* still needs
   the direct per-PR check of all three lanes at the current head.
+  It also prints a `CR-DECLINED <repo>#<n>` line for each PR where CodeRabbit refused a disclosed
+  request as "context, not a maintainer instruction". A learning it stored on that one PR causes this
+  (#3124), so the lane stays healthy elsewhere and the exit status is unchanged. Do not request
+  CodeRabbit on that PR again: record its no-gate and go to the next lane. Only the maintainer can
+  remove the learning.
 - **Do not sweep review requests across a large batch of drafts in one pass.** It converts a shared,
   budgeted resource into a burst, and the tail of the batch is recorded as "reviewed" when none of it
   was. Request against the drafts a run is actually going to finish, and **re-read each check-run's

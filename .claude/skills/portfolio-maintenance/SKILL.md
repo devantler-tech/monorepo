@@ -462,6 +462,8 @@ beyond the two classifiers it declares — and without them a review lane that i
 reads as many PRs that simply have no review yet. Act on them as the contract's review-lane rules say:
 stop requesting a `DOWN` lane, escalate a `MAINTAINER-ONLY` one, and read exit `2` as UNKNOWN, never
 as healthy. They are detection only; the *Local review round* still needs the direct per-PR check.
+A `CR-DECLINED <repo>#<n>` line names a PR where CodeRabbit refuses our disclosed requests (#3124):
+skip CodeRabbit on that PR and go to the next lane.
 **Overlay your native-memory cadence cursors yourself** — each product's `last_worked`,
 `roadmap` (last strategy review + current theme), `last_research`, `weekly` timestamps,
 `needs_attention`, and the
