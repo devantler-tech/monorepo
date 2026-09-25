@@ -559,6 +559,23 @@ check "a new worktree add could not claim loses its new branch" 1 "$(git -C "$re
 [ ! -e "$tmp/wt-claim-fail" ] || git -C "$repo" worktree remove --force "$tmp/wt-claim-fail"
 git -C "$repo" branch -D -q claim-branch-claim-fail 2>/dev/null || true
 
+# A post-checkout hook that deletes the new checkout and fails leaves git's record of the worktree
+# behind. `add` removes that record along with its new branch, so the path is reusable without a prune.
+cat >"$repo_hooks/post-checkout" <<'HOOK'
+#!/bin/sh
+rm -rf "$(pwd)"
+exit 1
+HOOK
+chmod +x "$repo_hooks/post-checkout"
+rc=0
+out="$("$script" add "$repo" "$tmp/wt-hook-gone" "claim-branch-hook-gone" "session-hook-gone" 2>&1)" || rc=$?
+rm -f "$repo_hooks/post-checkout"
+check "add fails when a hook deletes its new worktree" 1 "$([ "$rc" -eq 0 ] && echo 0 || echo 1)"
+check "a new worktree a hook deleted leaves no record in git" 1 "$(git -C "$repo" worktree list --porcelain | grep -q 'wt-hook-gone' && echo 0 || echo 1)"
+check "a new worktree a hook deleted loses its new branch" 1 "$(git -C "$repo" show-ref --verify --quiet refs/heads/claim-branch-hook-gone && echo 0 || echo 1)"
+git -C "$repo" worktree prune
+git -C "$repo" branch -D -q claim-branch-hook-gone 2>/dev/null || true
+
 # One configured value that repeats the registered URL across a newline is one URL to git, not two.
 git -C "$super/mod" config remote.origin.url "$(printf '%s\n%s' "https://github.com/example/sub" "https://github.com/example/sub")"
 rc=0
@@ -709,6 +726,18 @@ git -C "$deep_super" config -f .gitmodules submodule.deep/mod.url "../../../sub.
 rc=0
 out="$("$script" add "$deep_super/deep/mod" "$tmp/wt-deep-rel-past" "claim-branch-deep-rel-past" "session-deep-rel-past" 2>&1)" || rc=$?
 check "add refuses a URL that climbs past a relative remote's root, as sync does" 1 "$rc" "$out" "climbs past the root"
+# An explicitly empty superproject remote URL is not an absent one: `git submodule sync` aborts on it
+# and writes nothing, so the superproject's own path is not put in its place.
+git -C "$deep_super" config -f .gitmodules submodule.deep/mod.url "./sub.git"
+git -C "$deep_super" config remote.origin.url ""
+git -C "$deep_super/deep/mod" config remote.origin.url "$(cd "$deep_super" && pwd -P)/sub.git"
+rc=0
+out="$("$script" add "$deep_super/deep/mod" "$tmp/wt-deep-empty" "claim-branch-deep-empty" "session-deep-empty" 2>&1)" || rc=$?
+check "add refuses a relative URL when the superproject's remote URL is set but empty" 1 "$rc" "$out" "set but empty"
+git -C "$deep_super" config --unset remote.origin.url
+rc=0
+out="$("$script" add "$deep_super/deep/mod" "$tmp/wt-deep-unset" "claim-branch-deep-unset" "session-deep-unset" 2>&1)" || rc=$?
+check "add resolves a relative URL against the superproject itself when its remote has no URL" 0 "$rc" "$out" "owner=session-deep-unset"
 git -C "$super" config remote.origin.url "$tmp/remote-root/super"
 git -C "$super" config -f .gitmodules submodule.mod.url "../upstream-sub"
 git -C "$super/mod" config remote.origin.url "$tmp/remote-root/upstream-sub"
@@ -864,7 +893,7 @@ rc=0
 out="$("$script" add "$tmp/bare-linked" "$tmp/wt-bare-linked" "claim-branch-bare-linked" "session-bare-linked" 2>&1)" || rc=$?
 check "add admits a linked worktree of a bare repository" 0 "$rc" "$out" "owner=session-bare-linked"
 # A separate git directory can itself be named .git. Its parent then holds none of the files the index
-# tracks, so it is not taken for the checkout; an in-place clone's checkout holds them.
+# was written from, so it is not taken for the checkout; an in-place clone's checkout holds them.
 tracked_up="$tmp/tracked-up"
 git init -q -b main "$tracked_up"
 printf 'tracked\n' >"$tracked_up/tracked.txt"
@@ -882,6 +911,13 @@ git -C "$sgd2_super/mod" config remote.origin.url "$other_sub"
 rc=0
 out="$("$script" add "$tmp/sgd2-linked" "$tmp/wt-sgd2-linked" "claim-branch-sgd2-linked" "session-sgd2-linked" 2>&1)" || rc=$?
 check "add refuses a linked worktree whose separate git directory is named .git" 1 "$rc" "$out" "main checkout cannot be located"
+# That parent can hold a tracked file by chance. A copy is not the file the index recorded, so the
+# parent is still not taken for the checkout.
+cp "$sgd2_super/mod/tracked.txt" "$tmp/sgd2-admin/tracked.txt"
+rc=0
+out="$("$script" add "$tmp/sgd2-linked" "$tmp/wt-sgd2-copy" "claim-branch-sgd2-copy" "session-sgd2-copy" 2>&1)" || rc=$?
+check "add refuses a separate git directory named .git whose parent holds a copy of a tracked file" 1 "$rc" "$out" "main checkout cannot be located"
+rm -f "$tmp/sgd2-admin/tracked.txt"
 git clone -q "$tracked_up" "$tmp/tracked-inplace"
 git -C "$tmp/tracked-inplace" worktree add -q --detach "$tmp/tracked-inplace-linked"
 rc=0

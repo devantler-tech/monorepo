@@ -412,13 +412,15 @@ add_worktree_noting_new_branch() {
   return "$rc"
 }
 
-# worktree_registered succeeds when <wt> exists and git lists it among <repo>'s worktrees.
+# worktree_registered succeeds when git lists <wt> among <repo>'s worktrees, even after something
+# deleted its directory: git keeps that record until it is pruned.
 worktree_registered() {
   local repo="$1" wt="$2" wt_phys entry
-  wt_phys="$(cd "$wt" 2>/dev/null && pwd -P)" || return 1
+  wt_phys="$(physical_path "$wt" 2>/dev/null)" || return 1
+  [ -n "$wt_phys" ] || return 1
   while IFS= read -r -d '' entry; do
     case "$entry" in
-      "worktree "?*) [ "$(cd "${entry#worktree }" 2>/dev/null && pwd -P)" != "$wt_phys" ] || return 0 ;;
+      "worktree "?*) [ "$(physical_path "${entry#worktree }" 2>/dev/null)" != "$wt_phys" ] || return 0 ;;
     esac
   done < <(git -C "$repo" worktree list --porcelain -z 2>/dev/null)
   return 1
@@ -656,7 +658,8 @@ redact_url() {
 # remote: the remote the current branch names (an explicitly empty name names none), else origin; a
 # remote with no URL falls back to the superproject's own path. Any other URL is printed unchanged.
 # It prints nothing when git itself cannot resolve the URL, because more `..` components remain than it
-# can drop, and returns 3 when the remote's URL contains a newline, which git can carry into the result.
+# can drop, returns 3 when the remote's URL contains a newline, which git can carry into the result, and
+# returns 4 when the remote's URL is set but empty, which git refuses to resolve against.
 resolve_submodule_url() {
   local super="$1" url="$2" path="$3" branch remote configured base sep="/" relative=0 before result up rest
   case "$url" in
@@ -672,8 +675,13 @@ resolve_submodule_url() {
     remote="$configured"
   fi
   # Read NUL-delimited: command substitution would drop a trailing newline that git keeps.
+  # A URL that is set but empty is not an absent one: git aborts rather than resolve against it.
   base=""
-  IFS= read -r -d '' base < <(git -C "$super" config -z --get "remote.$remote.url" 2>/dev/null) || base=""
+  if IFS= read -r -d '' base < <(git -C "$super" config -z --get "remote.$remote.url" 2>/dev/null); then
+    [ -n "$base" ] || return 4
+  else
+    base=""
+  fi
   case "$base" in
     *$'\n'*) return 3 ;;
   esac
@@ -784,26 +792,41 @@ submodule_name_at() {
   printf '%s\n' "$name"
 }
 
-# tracked_files_absent succeeds when the index of the git directory <common> tracks files outside a
-# sparse checkout's exclusions and <dir> holds none of the first 200 of them, or when that index cannot
-# be read. An in-place clone's checkout holds them; the parent of a separate git directory that is
-# merely named .git does not. An index that tracks nothing cannot tell the two apart, so it does not count.
-tracked_files_absent() {
-  local dir="$1" common="$2" entry path checked=0
+# checkout_unproven succeeds when <dir> cannot be shown to be the checkout the index of the git directory
+# <common> was written from: none of the first 50 files that index tracks outside a sparse checkout's
+# exclusions is, under <dir>, the very file the index recorded (the same inode), or the index cannot be
+# read. The parent of a separate git directory that is merely named .git can hold a tracked file by
+# chance, but a copy has an inode of its own. An index that tracks nothing cannot tell the two apart, so
+# it does not count.
+checkout_unproven() {
+  local dir="$1" common="$2" entry path listed=0 recorded actual
   git --git-dir="$common" ls-files -z -t >/dev/null 2>&1 || return 0
   while IFS= read -r -d '' entry; do
     case "$entry" in
       "H "*) ;;
       *) continue ;;
     esac
-    path="$dir/${entry#H }"
-    if [ -e "$path" ] || [ -L "$path" ]; then
-      return 1
+    path="${entry#H }"
+    listed=$((listed + 1))
+    if [ -e "$dir/$path" ] || [ -L "$dir/$path" ]; then
+      recorded="$(GIT_LITERAL_PATHSPECS=1 git --git-dir="$common" ls-files --debug -- "$path" 2>/dev/null |
+        sed -n 's/.*[[:space:]]ino: \([0-9][0-9]*\).*/\1/p' | head -n 1)" || recorded=""
+      # shellcheck disable=SC2012 # only the inode number, the first field, is read
+      actual="$(ls -di -- "$dir/$path" 2>/dev/null | awk '{ print $1; exit }')" || actual=""
+      case "$recorded$actual" in
+        '' | *[!0-9]*) ;;
+        *)
+          # The index keeps the low 32 bits of the inode number.
+          if [ -n "$recorded" ] && [ -n "$actual" ] && [ "$recorded" -ne 0 ] &&
+            [ "$((actual % 4294967296))" -eq "$recorded" ]; then
+            return 1
+          fi
+          ;;
+      esac
     fi
-    checked=$((checked + 1))
-    [ "$checked" -lt 200 ] || break
+    [ "$listed" -lt 50 ] || break
   done < <(git --git-dir="$common" ls-files -z -t 2>/dev/null)
-  [ "$checked" -gt 0 ]
+  [ "$listed" -gt 0 ]
 }
 
 # under_git_modules succeeds when <common> sits in the `modules/` directory of a git directory, which is
@@ -981,13 +1004,13 @@ refuse_foreign_submodule_origin_checked() {
     main="$worktree"
     # A submodule cloned in place keeps its git directory at <checkout>/.git and sets no core.worktree,
     # so its main checkout is that directory's parent. A separate git directory that is merely named
-    # .git keeps its checkout elsewhere, recorded nowhere, so the parent does not count when it holds
-    # none of the files the index tracks.
+    # .git keeps its checkout elsewhere, recorded nowhere, so the parent counts only when it holds the
+    # files the index was written from.
     if [ -z "$main" ]; then
       case "$common" in
         */.git) main="${common%/.git}" ;;
       esac
-      if [ -n "$main" ] && tracked_files_absent "$main" "$common"; then
+      if [ -n "$main" ] && checkout_unproven "$main" "$common"; then
         main=""
       fi
     fi
@@ -1153,6 +1176,8 @@ refuse_foreign_submodule_origin_checked() {
       shown_expected="<$(redact_url "${raw//$'\n'/\\n}") contains a newline, so origin cannot be verified against it>"
     elif [ "$resolved" -eq 3 ]; then
       shown_expected="<$(redact_url "$raw") is relative to a superproject remote URL that contains a newline, so origin cannot be verified against it>"
+    elif [ "$resolved" -eq 4 ]; then
+      shown_expected="<$(redact_url "$raw") is relative to a superproject remote URL that is set but empty, so git cannot resolve it>"
     elif [ -n "$raw" ]; then
       shown_expected="<$(redact_url "$raw") climbs past the root of the superproject's remote, so git cannot resolve it>"
     fi
