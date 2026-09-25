@@ -4637,58 +4637,35 @@ promotion). Measured on the 744th tick: a 105-minute run authored everything it 
 produced nothing** while foreground-polling one PR's CI. A trusted-bot PR merged *inside* that
 window, unnoticed. The work was never the bottleneck; the **scheduling** was.
 
-- **NEVER foreground-block on a remote wait.** `sleep`/poll loops that produce no artifact are the
-  single biggest waste. **Push → arm ONE background watcher → immediately start the next item.** Come
-  back when it fires. If you have armed a watcher, **do not also poll** — doing both is pure
-  duplication (a real 744th miss: a background watcher was armed *and* the run busy-waited anyway).
-  **Unchaining the sleep does not comply.** The enforcement hook blocks `sleep N && <poll>` chains,
-  and sessions measurably adapt by issuing the bare `sleep N` as its **own** tool call and polling in
-  the next one (telemetry 2026-07-18: **442 standalone sleeps in one day, all on this instance**, vs
-  ~10 blocked chained forms). That is the **same busy-wait** — the hook marks the *class*, not the
-  edge of what is allowed. If the thing you are waiting on is **remote state** (CI, a review, a
-  merge, a deploy), any `sleep` — chained, standalone, or split across calls — is the wrong tool:
-  arm the watcher, do other actionable work, or end the run and let the next tick collect the
-  result. 🔴 **A `sleep` is never the tool for anything the runtime will report to you.** That is
-  the test — **not** who started the process, and **not** whether the state is local. A backgrounded
-  tool call satisfies both of those: you started it, and its output file is on this disk — yet the
-  runtime **announces its completion**, so polling that file is precisely the duplication this
-  bullet forbids two sentences up. Measured over the 7 days to 2026-08-09T22Z, counting only structurally
-  anchored firings: **76 of 141 blocked actions were `sleep N && <poll>`, and 27 of those polled a
-  backgrounded task's own output file** — which is why the report test is stated first rather than
-  left to be inferred from the local/remote split.
-  Wait on an announced result with the runtime's own waiter — **`Monitor` with an
-  until-loop**, which the guard's own refusal already names — or simply do other work until the
-  notification arrives. A bare `sleep` is legitimate only as a **local timer for a process whose
-  completion nothing will report** (e.g. bounding a backgrounded windowed render before killing
-  it), never as a wait for a remote system to change state.
-  🔴 **A hand-rolled poll loop is this same busy-wait wherever it runs — including inside a
-  `run_in_background` call.** Read the rule as the CLASS, never as any one spelling: each narrower
-  reading has in turn been worked around, so a shape-specific rule is what lets this return. The
-  live shape is `run_in_background: true` wrapping `for i in $(seq 1 40); do gh pr view …; sleep 30;
-  done` over CI, a review, or a merge state. It satisfies every sentence above — not a foreground
-  `sleep`, not a poll of a backgrounded task's output file — while reproducing the identical waste,
-  and the enforcement hook does not stop it: all 560 ran. **`run_in_background` moves the wait
-  out of the guard's VIEW, never out of the RUN.** Measured over the 7 days to 2026-08-23:
-  **560 of 904 backgrounded Bash launches (62%)** carried such a loop.
-  🔴 **Its real cost is the NEXT dispatch, not its own wait.** A backgrounded poller's completion
-  notification **resurrects the session**, so the run cannot end while one is in flight: the agent
-  ends its turn, idles until the poller reports, and the run stays open across that whole window.
-  Measured across 176 Engineer runs in that window: **240 such idles totalling 28.0h** (mean 7.0min);
-  runs using a poll loop ran a **median 62.8min against 42.4min** for runs using none, overrunning
+- **NEVER foreground-block on a remote wait.** The portable rule is rule 7 of the pinned
+  `agentic-engineer` definition: bounded one-shot reads, at most one watcher, and that watcher's
+  lifecycle — a hand-rolled poll loop is a busy-wait wherever it runs, a watcher that re-invokes the
+  session is stopped before the run ends, and a watcher is never armed only to end the turn idle.
+  This bullet carries what that rule looks like on the Claude lane, and the evidence behind it.
+  **Push → arm ONE background watcher → immediately start the next item**, and never also poll what
+  you armed (a real 744th miss: a watcher was armed *and* the run busy-waited anyway).
+  **The waiter is `Monitor` with an until-loop**, which the busy-wait guard's own refusal names. The
+  enforcement hook blocks `sleep N && <poll>` chains, and unchaining does not comply: sessions adapted
+  by issuing the bare `sleep N` as its own call instead (**442 standalone sleeps in one day**,
+  2026-07-18). A bare `sleep` bounds a local process nothing will report on (e.g. a backgrounded
+  windowed render before killing it); it never polls a backgrounded task's output file, whose
+  completion the runtime announces — **27 of 76** blocked `sleep N && <poll>` actions did exactly
+  that (7 days to 2026-08-09).
+  🔴 **`run_in_background` is this lane's live busy-wait shape.** Wrapping
+  `for i in $(seq 1 40); do gh pr view …; sleep 30; done` in a backgrounded call moves the wait out of
+  the guard's VIEW, never out of the RUN, and the hook does not stop it: **560 of 904** backgrounded
+  Bash launches carried such a loop (7 days to 2026-08-23).
+  🔴 **A backgrounded task's completion notification resurrects the session**, so the run stays open
+  until it fires and the cost lands on the NEXT dispatch. Across 176 Engineer runs in that window:
+  **240 idles totalling 28.0h**; polling runs took a median **62.8min against 42.4min** and overran
   the hourly slot **54% against 29%**; and **all 9 dropped dispatches (of 179 slots) were
-  overlap-blocked by a still-open run**. The idle measured on polling runs (≈36min each) is larger
-  than the +20.4min median gap, so the waiting is sufficient to explain it. A poller does not merely
-  waste its own seven minutes — it spends the tick behind it.
-  ⚠️ **So never launch a poller and then end your turn** — that one combination gets neither the work
-  nor the run-end. If something else is actionable, arm `Monitor` and go do it. If nothing is,
+  overlap-blocked by a still-open run**.
+  ⚠️ So if something else is actionable, arm `Monitor` and go do it. If nothing is,
   **end the run**: rung 1 of *The work-selection ladder* guarantees the next tick collects the PR,
   and a run that ends on time is what makes that tick exist.
   🔴 **Ending the run REQUIRES stopping every in-flight watcher first — `TaskStop`, not merely a
-  closing message.** The resurrection above is unconditional, so a watcher left armed reopens the
-  session after you believed the run was over, rebuilding the same idle window and taking the next
-  slot with it; measured in the same window, **6 idles (1.09h, mean 10.9min) woke on a watcher that
-  had simply TIMED OUT**, having taught the run nothing. Either `TaskStop` the watcher before the
-  final turn, or do not arm one when no follow-up work depends on it.
+  closing message.** A watcher left armed reopens the session after the run believed it was over;
+  **6 idles (1.09h)** in the same window woke on a watcher that had merely TIMED OUT.
 - **Long-pole first.** Push the change with the **slowest CI first** so its bake overlaps everything
   else; do the fast-CI and no-CI work (issue triage, review-thread replies, memory, reports) during
   the bake. Reversing this — fast item first, slow item last — buys a guaranteed idle tail, which is
