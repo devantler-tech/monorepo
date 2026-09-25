@@ -263,7 +263,8 @@ while IFS= read -r f; do
   case "$line1" in *'<scheduled-task name='*) : ;; *) continue ;; esac
   # A header that carries the marker but is not valid JSON may be a dispatch in this window.
   # Skipping it would count its slot as dropped and still report a rate, so it is UNKNOWN.
-  printf '%s' "$line1" | jq -e 'true' >/dev/null 2>&1 \
+  # Exactly ONE object: two objects on one line would each yield a task name.
+  printf '%s' "$line1" | jq -se 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 \
     || die_unknown "a task-marker transcript header is not valid JSON: $f"
   # Same anchored attribution as claude-lane-liveness.sh: the marker must OPEN the first user
   # message (after complete leading system reminders), so a quoted marker attributes nothing.

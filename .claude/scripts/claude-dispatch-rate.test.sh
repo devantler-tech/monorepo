@@ -56,6 +56,9 @@ mksession() {
   fi
   if [ "$shape" = malformed ]; then
     printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"%s"}\n' "$(iso_at "$start")" "$content" > "$f"
+  elif [ "$shape" = double ]; then
+    printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"%s"}}{"type":"user","timestamp":"%s","message":{"role":"user","content":"%s"}}\n' \
+      "$(iso_at "$start")" "$content" "$(iso_at "$start")" "$content" > "$f"
   elif [ "$shape" = untimed ]; then
     printf '{"type":"user","message":{"role":"user","content":"%s"}}\n' "$content" > "$f"
   else
@@ -135,6 +138,11 @@ expect 2 "unsupported cron hour list" "an out-of-range hour is UNKNOWN even afte
 mkcase malformed-header
 mksession eng $(( BASE + 3000 + 5 )) malformed
 expect 2 "not valid JSON" "a marker-bearing header that is not JSON is UNKNOWN, not a drop" "${W[@]}"
+
+mkcase double-object-header
+for h in 0 1 3 4; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
+mksession eng $(( BASE + 2 * 3600 + 3000 + 5 )) double
+expect 2 "not valid JSON" "a header carrying two JSON objects is UNKNOWN, not a drop" "${W[@]}"
 
 CREATED_MS=$(( (BASE + 3600) * 1000 )) mkcase before-created
 expect 2 "predates task" "a window starting before the task existed is UNKNOWN" "${W[@]}"
