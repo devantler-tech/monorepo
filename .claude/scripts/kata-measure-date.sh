@@ -82,11 +82,24 @@ fi
 # an HTML comment is an example or an instruction, never this Kata's date. The patterns spell out
 # "up to three spaces" as ` ? ? ?` because the awk on CI's runners has no {n,m} intervals.
 values="$(jq -r '.body' <<<"${payload}" | awk '
+  # Fences follow CommonMark: an opening run of three or more backticks or tildes indented at most
+  # three spaces, closed only by a run of the same character at least as long, with nothing after it
+  # but whitespace.
+  function unindent(s) { sub(/^ ? ? ?/, "", s); return s }
+  function run(s, c,    k) { k = 0; while (substr(s, k + 1, 1) == c) k++; return k }
   { sub(/\r$/, "") }
   in_comment { if (index($0, "-->") > 0) in_comment = 0; next }
-  fence != "" { if ($0 ~ ("^ ? ? ?" fence)) fence = ""; next }
-  /^ ? ? ?```/ { fence = "```"; next }
-  /^ ? ? ?~~~/ { fence = "~~~"; next }
+  fence_len > 0 {
+    t = unindent($0)
+    n = run(t, fence_char)
+    if (n >= fence_len && substr(t, n + 1) ~ /^[ \t]*$/) fence_len = 0
+    next
+  }
+  {
+    t = unindent($0)
+    c = substr(t, 1, 1)
+    if ((c == "`" || c == "~") && run(t, c) >= 3) { fence_char = c; fence_len = run(t, c); next }
+  }
   index($0, "<!--") > 0 && index(substr($0, index($0, "<!--") + 4), "-->") == 0 { in_comment = 1; next }
   /^ ? ? ?\*\*Measure on:\*\*/ {
     v = $0

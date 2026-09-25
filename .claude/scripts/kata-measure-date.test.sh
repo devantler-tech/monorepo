@@ -83,6 +83,18 @@ expect "a tilde fence is a fence too" 2 "UNKNOWN missing" \
   "$(kata $'~~~\n**Measure on:** 2026-10-20\n~~~' 2026-09-25)"
 expect "a backtick fence is not closed by a tilde line" 2 "UNKNOWN missing" \
   "$(kata "${fence}"$'\n~~~\n**Measure on:** 2026-10-20\n'"${fence}" 2026-09-25)"
+# The full CommonMark fence rule: a closing fence repeats the opening character at least as many
+# times, with nothing after it but whitespace.
+expect "a shorter run inside a longer fence does not close it" 2 "UNKNOWN missing" \
+  "$(kata "\`\`\`\`"$'\n'"${fence}"$'\n**Measure on:** 2099-01-01\n'"\`\`\`\`" 2026-09-25)"
+expect "a shorter tilde run inside a longer tilde fence does not close it" 2 "UNKNOWN missing" \
+  "$(kata $'~~~~\n~~~\n**Measure on:** 2099-01-01\n~~~~' 2026-09-25)"
+expect "a longer run closes a fence" 1 "NOT-DUE 2026-10-20" \
+  "$(kata "${fence}"$'\nexample\n'"\`\`\`\`\`"$'\n**Measure on:** 2026-10-20' 2026-09-25)"
+expect "a fence line followed by text does not close the fence" 2 "UNKNOWN missing" \
+  "$(kata "${fence}"$'\n'"${fence} not a close"$'\n**Measure on:** 2026-10-20\n'"${fence}" 2026-09-25)"
+expect "a fence indented four spaces is code, not a fence" 1 "NOT-DUE 2026-10-20" \
+  "$(kata $'    '"${fence}"$'\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "an indented code block is not the line" 2 "UNKNOWN missing" \
   "$(kata $'Example:\n\n    **Measure on:** 2026-10-20' 2026-09-25)"
 expect "a tab-indented line is code, not the line" 2 "UNKNOWN missing" "$(kata $'\t**Measure on:** 2026-10-20' 2026-09-25)"
