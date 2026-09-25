@@ -291,13 +291,14 @@ check "add refuses when the registered URL ends in a newline origin lacks" 1 "$r
 git -C "$super" config -f .gitmodules submodule.mod.url "https://github.com/example/sub"
 
 # The probe repository holds the registered URL, which can carry a credential, so an interrupted check
-# must not leave it behind. The shim holds the check inside the probe until the job is signalled.
+# must not leave it behind. The shim holds the check inside the probe until the job is signalled; it
+# replaces itself with the sleep, so the process holding the check's pipe is one the signal reaches.
 real_git="$(command -v git)"
 mkdir -p "$tmp/git-slow-probe" "$tmp/probe-tmp"
 cat >"$tmp/git-slow-probe/git" <<EOF
 #!/usr/bin/env bash
 case " \$* " in
-  *" get-url --all probe "*) : >"$tmp/probe-reached"; sleep 30 ;;
+  *" get-url --all probe "*) : >"$tmp/probe-reached"; exec sleep 30 ;;
 esac
 exec "$real_git" "\$@"
 EOF
@@ -325,8 +326,9 @@ until [ -e "$tmp/probe-reached" ] || [ "$waited" -ge 100 ]; do
   sleep 0.1
   waited=$((waited + 1))
 done
-# shellcheck disable=SC2046 # one pid per word
-kill -TERM $(process_tree "$interrupted") 2>/dev/null || true
+interrupted_tree="$(process_tree "$interrupted")"
+# shellcheck disable=SC2086 # one pid per word
+kill -TERM $interrupted_tree 2>/dev/null || true
 wait "$interrupted" 2>/dev/null || true
 waited=0
 while compgen -G "$tmp/probe-tmp/worktree-claim-probe.*" >/dev/null && [ "$waited" -lt 50 ]; do
@@ -334,6 +336,10 @@ while compgen -G "$tmp/probe-tmp/worktree-claim-probe.*" >/dev/null && [ "$waite
   waited=$((waited + 1))
 done
 check "an interrupted origin check was inside its probe" 0 "$([ -e "$tmp/probe-reached" ] && echo 0 || echo 1)"
+if compgen -G "$tmp/probe-tmp/worktree-claim-probe.*" >/dev/null; then
+  # shellcheck disable=SC2086 # one pid per word
+  ps -o pid= -o ppid= -o command= -p "$(echo $interrupted_tree | tr ' ' ',')" >&2 || true
+fi
 check "an interrupted origin check leaves no probe repository behind" 1 "$(compgen -G "$tmp/probe-tmp/worktree-claim-probe.*" >/dev/null && echo 0 || echo 1)"
 
 # One configured value that repeats the registered URL across a newline is one URL to git, not two.
