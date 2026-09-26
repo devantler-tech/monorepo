@@ -219,8 +219,41 @@ matches_agent_plugins_review_files() {
       test($skill) or
       test("^\($plugin)/(\\.claude-plugin/)?plugin\\.json$") or
       test("^\($plugin)/resources/provider-neutral\\.desired-state\\.json$") or
+      (. as $f | [$changed[] | "\(.)/CHANGELOG.md"] | index($f) != null) or
       . == ".claude-plugin/marketplace.json" or
       . == ".github/plugin/marketplace.json")
+  ' --argjson changed "$(jq -c --arg skill "${skill_re}" \
+      '[.[] | select(test($skill)) | capture("^(?<p>plugins/[^/]+)/skills/").p] | unique' \
+      <<<"${files_json}")" <<<"${files_json}" >/dev/null
+}
+
+# A plugin changelog is written only by the release-notes bump (agent-plugins#247), and that bump
+# writes one for every plugin whose skills changed. So without the bump no changelog may change, and
+# with it the plugins carrying a changelog must be exactly the plugins carrying a skill change. A
+# looser test lets a sync commit alone, or the legacy bump, bring a changelog edit through the
+# trusted path, or passes a head whose changelog set is missing a plugin — neither of which is
+# untouched updater output. Only a plugin-root changelog is release notes: a skill may ship its own
+# CHANGELOG.md as ordinary skill content, which the file boundary already admits.
+matches_changelog_bump() {
+  jq -e --argjson commits "${commits_json}" '
+    ([.[] | capture("^(?<p>plugins/[^/]+)/CHANGELOG\\.md$").p] | unique) as $logged |
+    ([.[] | capture("^(?<p>plugins/[^/]+)/skills/").p] | unique) as $changed |
+    if any($commits[1:][];
+         .message == "chore(deps): bump plugin versions and record skill updates")
+    then $logged == $changed
+    else $logged == []
+    end
+  ' <<<"${files_json}" >/dev/null
+}
+
+# The digest refresh job commits only when the sync moved a declared digest, and it is the only job
+# that writes a desired-state file. So a desired-state change and the refresh commit come together
+# or not at all: a head changing that file without the refresh, or carrying the refresh without the
+# file, is not untouched updater output.
+matches_digest_refresh() {
+  jq -e --argjson commits "${commits_json}" '
+    any(.[]; test("^plugins/[^/]+/resources/provider-neutral\\.desired-state\\.json$")) ==
+      any($commits[1:][]; .message == "chore(deps): refresh desired-state digests for synced content")
   ' <<<"${files_json}" >/dev/null
 }
 
@@ -318,8 +351,8 @@ matches_agent_skills_provenance() {
 # The sync commit comes first, carrying the exact expected message. It is either the legacy shape or
 # the App-signed one the updater writes once it signs through the API, which is recognised only with
 # GitHub's own signature verdict, as in the consumer arm above. After it, the caller's follow-up jobs
-# may add a digest refresh and a version bump, each at most once and in either order; anything else,
-# an adaptation commit included, is not the updater's head.
+# may add a digest refresh and a version bump, each at most once and in the order its job writes them
+# (refresh first, then bump); anything else, an adaptation commit included, is not the updater's head.
 matches_agent_plugins_review_provenance() {
   local sync_message="$1"
   jq -e --arg sync_message "${sync_message}" '
@@ -346,16 +379,20 @@ matches_agent_plugins_review_provenance() {
       .committer_email == "noreply@github.com";
     def skill_update:
       (legacy_skill_update or signed_skill_update) and .message == $sync_message;
-    def follow_up($message):
-      actions_bot_authored and actions_bot_committed and .message == $message;
-    def follow_ups: [
-      "chore(deps): refresh desired-state digests for synced content",
-      "chore(deps): bump versions of changed plugins"
-    ];
+    # Each follow-up is identified by its KIND, so two wordings of one kind still count once. The
+    # updater writes the version bump as "bump plugin versions and record skill updates" since
+    # agent-plugins#247 added release notes to it; the earlier wording stays accepted for PRs
+    # opened before that change, but never alongside it.
+    def follow_up_kind:
+      if .message == "chore(deps): refresh desired-state digests for synced content" then "digest"
+      elif .message == "chore(deps): bump versions of changed plugins" or
+           .message == "chore(deps): bump plugin versions and record skill updates" then "bump"
+      else null end;
     length >= 1 and
     (.[0] | skill_update) and
-    (.[1:] | map(.message) | (unique | length) == length) and
-    all(.[1:][]; . as $c | any(follow_ups[]; . as $m | $c | follow_up($m)))
+    all(.[1:][]; actions_bot_authored and actions_bot_committed and follow_up_kind != null) and
+    (.[1:] | map(follow_up_kind) | (unique | length) == length) and
+    (.[1:] | map(follow_up_kind) | IN([], ["digest"], ["bump"], ["digest", "bump"]))
   ' <<<"${commits_json}" >/dev/null
 }
 
@@ -489,7 +526,9 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
   if [[ -n "${expected_author}" && "${author}" == "${expected_author}" ]]; then
     if [[ "${repo}" == "agent-plugins" ]] &&
       matches_agent_plugins_review_files &&
-      matches_agent_plugins_review_provenance "chore(deps): update agent skills"; then
+      matches_agent_plugins_review_provenance "chore(deps): update agent skills" &&
+      matches_changelog_bump &&
+      matches_digest_refresh; then
       exit 3
     fi
     if [[ "${repo}" != "agent-plugins" ]] &&
@@ -522,7 +561,9 @@ if [[ "${repo}" == "agent-plugins" &&
     skill_slug="${skill_slug//\//-}"
     if [[ "${branch}" == "deps/agent-skills-update-${skill_slug}" ]]; then
       if matches_agent_plugins_review_files "${skill_path}" &&
-        matches_agent_plugins_review_provenance "${title}"; then
+        matches_agent_plugins_review_provenance "${title}" &&
+        matches_changelog_bump &&
+        matches_digest_refresh; then
         exit 3
       fi
       printf 'programmed-bot-review-exemption: %s per-skill updater PR with unexpected files or commit provenance; treated as untrusted\n' \

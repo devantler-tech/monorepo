@@ -1338,7 +1338,14 @@ per_skill_args=(agent-plugins app/botantler-1 "${per_skill_branch}" "${per_skill
 
 expect_review_required "agent-plugins per-skill update" \
   "${per_skill_args[@]}" "${per_skill_files}" "${per_skill_commits_json}"
-expect_review_required "agent-plugins per-skill update, bump before digest refresh" \
+# Since agent-plugins#247 the bump commit also writes the plugin's release notes.
+expect_review_required "agent-plugins per-skill update, bump carrying release notes" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" "$(per_skill_follow_up "${per_skill_head}" \
+    "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
+# The updater job always refreshes digests before it bumps, so the reverse order is not its output.
+expect_review_gated "agent-plugins per-skill update, bump before digest refresh" \
   "${per_skill_args[@]}" "${per_skill_files}" \
   "$(printf '%s\n' "${per_skill_sync}" "${per_skill_bump}" "${per_skill_digest}" | per_skill_commits)"
 expect_review_required "agent-plugins per-skill update, sync commit only" \
@@ -1353,10 +1360,101 @@ expect_review_required "agent-plugins per-skill update, legacy unsigned sync com
     | del(.verified)' <<<"${per_skill_sync}")" "${per_skill_digest}" "${per_skill_bump}" | per_skill_commits)"
 expect_review_required "agent-plugins single-PR update with a digest refresh" \
   agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/github/resources/provider-neutral.desired-state.json"]' <<<"${agent_plugins_versioned_files}")" \
+  "$(jq -c --argjson d "${per_skill_digest}" '.[:1] + [$d] + .[1:]' <<<"${agent_plugins_versioned_commits}" | with_commit_dates)"
+# The refresh job is the only writer of a desired-state file and commits only when it changed one,
+# so the file and the refresh commit arrive together or not at all.
+expect_review_gated "agent-plugins per-skill update changing desired state without the digest refresh" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_bump}" | per_skill_commits)"
+expect_review_gated "agent-plugins single-PR update with a digest refresh but no desired-state change" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
   "${agent_plugins_versioned_head}" "${agent_plugins_versioned_files}" \
   "$(jq -c --argjson d "${per_skill_digest}" '.[:1] + [$d] + .[1:]' <<<"${agent_plugins_versioned_commits}" | with_commit_dates)"
 
 # Negative controls: each one breaks a single conjunct of the fixture above.
+expect_review_gated "agent-plugins per-skill update carrying both bump wordings" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
+  "$(printf '%s\n' "${per_skill_sync}" \
+    "$(per_skill_follow_up 1111111111111111111111111111111111111111 \
+      "chore(deps): bump versions of changed plugins")" \
+    "$(per_skill_follow_up "${per_skill_head}" \
+      "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
+expect_review_gated "agent-plugins per-skill update with a changelog but no release-notes bump" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" | per_skill_commits)"
+# A skill may ship its own CHANGELOG.md as ordinary skill content; only the plugin-root one is
+# release notes, so the skill's own file must not count against the plugin set.
+expect_review_required "agent-plugins per-skill update whose skill ships its own changelog" \
+  "${per_skill_args[@]}" \
+  "$(jq -c --arg p "${per_skill_path}" \
+    '. + ["plugins/agentic-engineering/CHANGELOG.md", ($p + "/CHANGELOG.md")]' <<<"${per_skill_files}")" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" "$(per_skill_follow_up "${per_skill_head}" \
+    "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
+expect_review_gated "agent-plugins per-skill update with the release-notes bump but no changelog" \
+  "${per_skill_args[@]}" "${per_skill_files}" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" "$(per_skill_follow_up "${per_skill_head}" \
+    "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
+expect_review_gated "agent-plugins per-skill update with a changelog and the legacy bump" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
+  "${per_skill_commits_json}"
+agent_plugins_release_notes_commits="$(jq -c \
+  '.[-1].message = "chore(deps): bump plugin versions and record skill updates"' \
+  <<<"${agent_plugins_versioned_commits}")"
+expect_review_required "agent-plugins single-PR update with its own plugin's release notes" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/github/CHANGELOG.md"]' <<<"${agent_plugins_versioned_files}")" \
+  "${agent_plugins_release_notes_commits}"
+# The release-notes bump writes a changelog for EVERY plugin whose skills changed, so a two-plugin
+# batch carrying only one of them is not updater output (a positive control carries both).
+agent_plugins_two_plugin_files="$(jq -c '. + ["plugins/engineering-practices/.claude-plugin/plugin.json",
+  "plugins/engineering-practices/plugin.json", "plugins/engineering-practices/skills/refactor/SKILL.md"]' \
+  <<<"${agent_plugins_versioned_files}")"
+expect_review_required "agent-plugins single-PR two-plugin update with both plugins' release notes" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/github/CHANGELOG.md", "plugins/engineering-practices/CHANGELOG.md"]' \
+    <<<"${agent_plugins_two_plugin_files}")" \
+  "${agent_plugins_release_notes_commits}"
+expect_review_gated "agent-plugins single-PR two-plugin update with one plugin's release notes missing" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/github/CHANGELOG.md"]' <<<"${agent_plugins_two_plugin_files}")" \
+  "${agent_plugins_release_notes_commits}"
+expect_review_gated "agent-plugins single-PR update with another plugin's release notes" \
+  agent-plugins app/botantler-1 deps/agent-skills-update "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${agent_plugins_versioned_files}")" \
+  "${agent_plugins_release_notes_commits}"
+expect_review_gated "agent-plugins per-skill update carrying another plugin's release notes" \
+  "${per_skill_args[@]}" \
+  "$(jq -c '. + ["plugins/engineering-practices/CHANGELOG.md"]' <<<"${per_skill_files}")" \
+  "${per_skill_commits_json}"
+# End to end, matches_changelog_bump rejects a foreign changelog before the file boundary is the
+# deciding check, so a regression in the per-skill file predicate would go unseen there. Exercise
+# that predicate on its own.
+files_predicate_src="$(sed -n '/^matches_agent_plugins_review_files()/,/^}/p' "${classifier}")"
+[[ -n "${files_predicate_src}" ]] || fail "could not extract matches_agent_plugins_review_files"
+files_predicate() {
+  (
+    eval "${files_predicate_src}"
+    # shellcheck disable=SC2034  # read by the eval'd predicate
+    files_json="$2"
+    matches_agent_plugins_review_files "$1"
+  )
+}
+files_predicate "${per_skill_path}" \
+  "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" ||
+  fail "per-skill file boundary rejects its own plugin's changelog"
+if files_predicate "${per_skill_path}" \
+  "$(jq -c '. + ["plugins/engineering-practices/CHANGELOG.md"]' <<<"${per_skill_files}")"; then
+  fail "per-skill file boundary admits another plugin's changelog"
+fi
 expect_review_gated "agent-plugins per-skill branch naming another skill" \
   agent-plugins app/botantler-1 "deps/agent-skills-update-agentic-engineering-skills-agent-instructions" \
   "${per_skill_title}" "${per_skill_head}" "${per_skill_files}" "${per_skill_commits_json}"
