@@ -352,6 +352,12 @@ change updates both in one PR. A section cited as "AGENTS.md → *X*" resolves t
 belongs here only if every session needs it; the rest goes in a guide or next to its code
 (`.claude/scripts/agent-instructions-layout-contract.test.sh` enforces this).
 
+## Maintenance
+
+Validate a change with `.claude/scripts/run-affected-tests.sh`: it runs only the self-tests CI would
+run for it (`--list` shows them). Never loop over every `.claude/scripts/*.test.sh` in one call. See
+[running the tests](.claude/scripts/AGENTS.md#running-the-tests).
+
 ## Review guidelines
 
 For review providers (CodeRabbit, Codex, Cursor Bugbot) and for an agent's own local review round.
