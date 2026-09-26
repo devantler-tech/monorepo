@@ -893,6 +893,43 @@ report "advance removed-nested retry: still fails closed at the recorded pin" \
 report "advance removed-nested retry: still names the residual checkout" \
   "$(grep -q 'embedded repository residue after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
+# --- Origin identity (monorepo#2941): a checkout that resolves to itself can still be the wrong
+# repository. The submodule must have, as its origin, the repository .gitmodules registers.
+c30="$tmp/c30"
+mk_super "$c30"
+git init -q "$c30/other-repo"
+out="$(cd "$c30/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity control: the matching origin passes --check" \
+  "$([[ $rc -eq 0 ]] && grep -q 'sub — isolated' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+git -C "$c30/super/sub" remote set-url origin "$c30/other-repo"
+out="$(cd "$c30/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a foreign origin fails --check" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "origin identity: names the wrong repository" \
+  "$(grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "$out"
+report "origin identity: never prints isolated for it" \
+  "$(grep -q 'sub — isolated' <<<"$out" && echo no || echo yes)" "$out"
+out="$(cd "$c30/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "origin identity: init mode also refuses a foreign origin" \
+  "$([[ $rc -ne 0 ]] && grep -q 'WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+git -C "$c30/super/sub" remote remove origin
+out="$(cd "$c30/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a missing origin fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q 'cannot verify which repository' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+norm() {
+  # shellcheck source=/dev/null
+  . "$helper" >/dev/null 2>&1
+  normalize_url "$1"
+}
+report "normalize_url: SSH and HTTPS spellings of one repository compare equal" \
+  "$([[ "$(norm git@github.com:devantler-tech/World-At-Ruin.git)" == "$(norm https://github.com/devantler-tech/world-at-ruin)" ]] && echo yes || echo no)" \
+  "$(norm git@github.com:devantler-tech/World-At-Ruin.git) vs $(norm https://github.com/devantler-tech/world-at-ruin)"
+report "normalize_url: ssh:// and credentialed https:// reduce to host/owner/repo" \
+  "$([[ "$(norm ssh://git@github.com/devantler-tech/ksail.git)" == "github.com/devantler-tech/ksail" && "$(norm https://x@github.com/devantler-tech/ksail/)" == "github.com/devantler-tech/ksail" ]] && echo yes || echo no)"
+report "normalize_url: a different repository stays different" \
+  "$([[ "$(norm git@github.com:devantler-tech/monorepo.git)" != "$(norm git@github.com:devantler-tech/agent-plugins.git)" ]] && echo yes || echo no)"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

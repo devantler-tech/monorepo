@@ -233,6 +233,13 @@ probe() {
     rc=1
   fi
 
+  # A tree that resolves to itself can still be the WRONG repository: a registered path is only this
+  # submodule if its origin is the repository `.gitmodules` names for it (monorepo#2941). Nested
+  # checkouts reach `probe` by absolute path and are not registered here, so they are not checked.
+  if is_registered_submodule "$path" && ! origin_is_own "$path"; then
+    rc=1
+  fi
+
   # A fresh probe passing does not clear existing live worktrees — enumerate and verify those too.
   # This MUST run BEFORE any cleanup below. `git worktree prune` deletes the admin entry of any
   # worktree whose tree is missing OR merely unverifiable, so pruning first destroyed the very
@@ -301,6 +308,45 @@ is_registered_submodule() {
   local p=$1 x
   while read -r x; do [ "$x" = "$p" ] && return 0; done < <(all_paths)
   return 1
+}
+
+# Reduce a remote URL to host/owner/repo (or a bare path) so the SSH, HTTPS and `.git`-suffixed
+# spellings of one repository compare equal. Case is folded because GitHub names are case-blind.
+normalize_url() {
+  local u=${1%/}
+  u=${u%.git}
+  case "$u" in
+    *://*) u=${u#*://}; u=${u#*@} ;;
+    *@*:*) u=${u#*@}; u="${u%%:*}/${u#*:}" ;;
+  esac
+  printf '%s' "$u" | tr '[:upper:]' '[:lower:]'
+}
+
+# Does the submodule at $1 have, as its origin, the repository `.gitmodules` registers for that path?
+# Directory content and a self-resolving toplevel say where a checkout IS, not WHICH repository it
+# is: a stray or misplaced clone passes both (monorepo#2941). A relative `.gitmodules` URL is resolved
+# by git at init time and recorded as `submodule.<name>.url` in the superproject's config, so that
+# recorded value is the expectation there. Fails closed: an unreadable origin or expectation is a
+# mismatch, never a pass.
+origin_is_own() {
+  local path=$1 key name want got
+  key=$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' |
+    awk -v p="$path" '$2 == p { print $1; exit }')
+  name=${key#submodule.}
+  name=${name%.path}
+  want=$(git config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || want=''
+  case "$want" in
+    ./* | ../*) want=$(git config --get "submodule.$name.url" 2>/dev/null) || want='' ;;
+  esac
+  got=$(git -C "$path" config --get remote.origin.url 2>/dev/null) || got=''
+  if [ -z "$key" ] || [ -z "$want" ] || [ -z "$got" ]; then
+    warn "$path — cannot verify which repository it is: origin '${got:-<none>}', expected '${want:-<unknown>}'. Do not read or edit it."
+    return 1
+  fi
+  if [ "$(normalize_url "$got")" != "$(normalize_url "$want")" ]; then
+    warn "$path — WRONG REPOSITORY: its origin is '$got', but .gitmodules registers '$want' for this path. Do not read or edit it. If the repository was only renamed, 'git submodule sync -- $path' updates the origin."
+    return 1
+  fi
 }
 
 init_repair_probe() {
