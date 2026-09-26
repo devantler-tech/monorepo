@@ -268,7 +268,7 @@ REGISTERED=$(printf '%s\n' "$WT_LIST" | awk '/^worktree /{print substr($0,10)}' 
   | while IFS= read -r p; do (cd "$p" 2>/dev/null && pwd -P); done)
 
 now=$(date +%s)
-reaped=0; kept=0; freed_kb=0
+reaped=0; kept=0; stuck=0; freed_kb=0
 
 # record <path> <branch> <sha> <evidence> <outcome>
 # The outcome column is what stops a row claiming a removal that never happened. The
@@ -294,6 +294,13 @@ record() { # path branch sha evidence outcome
 # to the basename for a direct child, which is every pre-existing case.
 wt_label() { local l=${1#"$WT_ROOT"/}; printf '%s' "${l:-$(basename "$1")}"; }
 keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(wt_label "$1")" "$2"; }
+# keep_stuck: a KEEP this sweep can never turn into a REAP by itself (#2831). It is used only
+# past every transient gate (claim, live process, lock, age), for a tree that holds its only
+# copy of some work: unpushed or reflog-only commits, uncommitted changes, or edits hidden by
+# index flags. Nothing clears those except a person or agent salvaging the work, so they are
+# counted separately; otherwise `kept` mixes them with trees that will age out and a growing
+# pile of abandoned work reads as "nothing to do".
+keep_stuck() { stuck=$((stuck+1)); keep "$1" "$2"; }
 
 trap 'worktree_claim_lock_release >/dev/null 2>&1 || true' EXIT
 trap 'exit 2' HUP INT TERM
@@ -677,7 +684,7 @@ while IFS= read -r wt <&3; do
     pr_proves_spent "$branch" "$sha"; pr_rc=$?
     if [ "$pr_rc" -ne 0 ]; then
       note=""; [ -n "$PR_EVIDENCE_NOTE" ] && note=" ($PR_EVIDENCE_NOTE)"
-      keep "$wt" "$unpushed unpushed commit(s) on $branch$note"; continue
+      keep_stuck "$wt" "$unpushed unpushed commit(s) on $branch$note"; continue
     fi
     merged_head=$sha
   fi
@@ -707,12 +714,12 @@ while IFS= read -r wt <&3; do
   # here-string for the same SIGPIPE+pipefail reason — as a pipe this gate silently
   # FAILED OPEN whenever ls-files -v output exceeded the pipe buffer.
   if grep -q '^[a-zS]' <<< "$idx_flags"; then
-    keep "$wt" "assume-unchanged/skip-worktree files present (status cannot see edits)"
+    keep_stuck "$wt" "assume-unchanged/skip-worktree files present (status cannot see edits)"
     continue
   fi
   count_real_changes "$wt" "$status"
   if [ "$REAL_CHANGES" -gt 0 ]; then
-    keep "$wt" "$REAL_CHANGES uncommitted change(s)"; continue
+    keep_stuck "$wt" "$REAL_CHANGES uncommitted change(s)"; continue
   fi
 
   # KEEP: a registered worktree nested INSIDE this one. The untracked-directory signal
@@ -749,7 +756,7 @@ while IFS= read -r wt <&3; do
     # shellcheck disable=SC2086  # merged_head is empty or one sha
     orphaned=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog_shas --not --remotes $merged_head 2>/dev/null | head -1)
     if [ -n "$orphaned" ]; then
-      keep "$wt" "HEAD reflog holds commit(s) reachable from nowhere else (${orphaned:0:12})"
+      keep_stuck "$wt" "HEAD reflog holds commit(s) reachable from nowhere else (${orphaned:0:12})"
       continue
     fi
   fi
@@ -879,5 +886,8 @@ if [ "$MODE" = "apply" ]; then
     || die "reaped $reaped worktree(s) but 'git worktree prune' failed — stale registrations remain and will pin their branches in branch-cleanup.sh"
 fi
 
-printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d freed=%d MB\n' \
-  "$MODE" "$reaped" "$kept" "$((freed_kb/1024))"
+printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d stuck=%d freed=%d MB\n' \
+  "$MODE" "$reaped" "$kept" "$stuck" "$((freed_kb/1024))"
+if [ "$stuck" -gt 0 ]; then
+  printf 'worktree-cleanup: %d of the kept worktree(s) hold abandoned work that no sweep will reap; salvage or discard it (#2831)\n' "$stuck"
+fi
