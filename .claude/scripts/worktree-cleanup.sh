@@ -296,10 +296,11 @@ wt_label() { local l=${1#"$WT_ROOT"/}; printf '%s' "${l:-$(basename "$1")}"; }
 keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(wt_label "$1")" "$2"; }
 # keep_stuck: a KEEP this sweep can never turn into a REAP by itself (#2831). It is used only
 # past every transient gate (claim, live process, lock, age), for a tree that holds its only
-# copy of some work: unpushed or reflog-only commits, uncommitted changes, or edits hidden by
-# index flags. Nothing clears those except a person or agent salvaging the work, so they are
-# counted separately; otherwise `kept` mixes them with trees that will age out and a growing
-# pile of abandoned work reads as "nothing to do".
+# copy of some work: unpushed or reflog-only commits, or uncommitted changes. Nothing clears
+# those except a person or agent salvaging the work, so they are counted separately;
+# otherwise `kept` mixes them with trees that will age out and a growing pile of abandoned
+# work reads as "nothing to do". A keep that a later sweep may still resolve (PR evidence
+# unavailable) or that may hold no work at all (index flags on a clean file) is not stuck.
 keep_stuck() { stuck=$((stuck+1)); keep "$1" "$2"; }
 
 trap 'worktree_claim_lock_release >/dev/null 2>&1 || true' EXIT
@@ -684,6 +685,11 @@ while IFS= read -r wt <&3; do
     pr_proves_spent "$branch" "$sha"; pr_rc=$?
     if [ "$pr_rc" -ne 0 ]; then
       note=""; [ -n "$PR_EVIDENCE_NOTE" ] && note=" ($PR_EVIDENCE_NOTE)"
+      # rc 2 is "PR evidence unavailable": a later sweep may still prove the branch
+      # spent, so it is not stuck.
+      if [ "$pr_rc" -eq 2 ]; then
+        keep "$wt" "$unpushed unpushed commit(s) on $branch$note"; continue
+      fi
       keep_stuck "$wt" "$unpushed unpushed commit(s) on $branch$note"; continue
     fi
     merged_head=$sha
@@ -714,7 +720,7 @@ while IFS= read -r wt <&3; do
   # here-string for the same SIGPIPE+pipefail reason — as a pipe this gate silently
   # FAILED OPEN whenever ls-files -v output exceeded the pipe buffer.
   if grep -q '^[a-zS]' <<< "$idx_flags"; then
-    keep_stuck "$wt" "assume-unchanged/skip-worktree files present (status cannot see edits)"
+    keep "$wt" "assume-unchanged/skip-worktree files present (status cannot see edits)"
     continue
   fi
   count_real_changes "$wt" "$status"

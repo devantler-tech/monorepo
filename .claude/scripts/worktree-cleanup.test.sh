@@ -1054,6 +1054,12 @@ t_keeps_when_pr_query_fails() {
   else
     bad "KEEPs (fail closed) when the PR query fails" "$out"
   fi
+  # A later sweep may still get the evidence, so this keep is not stuck (#2831).
+  if grep -q ' stuck=0 ' <<<"$out"; then
+    ok "does not count a keep on unavailable PR evidence as stuck"
+  else
+    bad "does not count a keep on unavailable PR evidence as stuck" "$out"
+  fi
   rm -rf "$root"
 }
 
