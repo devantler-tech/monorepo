@@ -83,28 +83,61 @@ fi
 # "up to three spaces" as ` ? ? ?` because the awk on CI's runners has no {n,m} intervals.
 values="$(jq -r '.body' <<<"${payload}" | awk '
   # Fences follow CommonMark: an opening run of three or more backticks or tildes indented at most
-  # three spaces, closed only by a run of the same character at least as long, with nothing after it
-  # but whitespace.
+  # three spaces (or opened within a list item), closed only by a run of the same character at
+  # least as long, with nothing after it but whitespace.
   function unindent(s) { sub(/^ ? ? ?/, "", s); return s }
+  function unindent_fence(s, extra,    k) {
+    k = 3 + extra
+    while (k > 0 && substr(s, 1, 1) == " ") {
+      s = substr(s, 2)
+      k--
+    }
+    return s
+  }
   function run(s, c,    k) { k = 0; if (c == "") return 0; while (substr(s, k + 1, 1) == c) k++; return k }
+  function unclosed_comment(rem,    p, q) {
+    while ((p = index(rem, "<!--")) > 0) {
+      rem = substr(rem, p + 4)
+      q = index(rem, "-->")
+      if (q == 0) return 1
+      rem = substr(rem, q + 3)
+    }
+    return 0
+  }
   { sub(/\r$/, "") }
-  in_comment { if (index($0, "-->") > 0) in_comment = 0; next }
+  in_comment {
+    p = index($0, "-->")
+    if (p > 0) in_comment = unclosed_comment(substr($0, p + 3))
+    next
+  }
   fence_len > 0 {
-    t = unindent($0)
+    t = unindent_fence($0, fence_indent)
     n = run(t, fence_char)
-    if (n >= fence_len && substr(t, n + 1) ~ /^[ \t]*$/) fence_len = 0
+    if (n >= fence_len && substr(t, n + 1) ~ /^[ \t]*$/) { fence_len = 0; fence_indent = 0 }
     next
   }
   {
-    t = unindent($0)
-    c = substr(t, 1, 1)
-    n = run(t, c)
+    t = $0
+    pfx = 0
+    while (pfx < 3 && substr(t, 1, 1) == " ") {
+      t = substr(t, 2)
+      pfx++
+    }
+    extra = 0
+    u = t
+    if (u ~ /^([-+*]|[0-9]+[.)])[ \t]+/) {
+      match(u, /^([-+*]|[0-9]+[.)])[ \t]+/)
+      extra = RLENGTH
+      u = substr(u, RLENGTH + 1)
+    }
+    c = substr(u, 1, 1)
+    n = run(u, c)
     # A backtick fence info string cannot contain a backtick; such a line is inline code.
-    if ((c == "`" || c == "~") && n >= 3 && !(c == "`" && index(substr(t, n + 1), "`") > 0)) {
-      fence_char = c; fence_len = n; next
+    if ((c == "`" || c == "~") && n >= 3 && !(c == "`" && index(substr(u, n + 1), "`") > 0)) {
+      fence_char = c; fence_len = n; fence_indent = pfx + extra; next
     }
   }
-  index($0, "<!--") > 0 && index(substr($0, index($0, "<!--") + 4), "-->") == 0 { in_comment = 1; next }
+  unclosed_comment($0) { in_comment = 1; next }
   /^ ? ? ?\*\*Measure on:\*\*/ {
     v = $0
     sub(/^ ? ? ?\*\*Measure on:\*\*[ \t]*/, "", v)

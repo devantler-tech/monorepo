@@ -102,12 +102,22 @@ expect "a fence indented four spaces is code, not a fence" 1 "NOT-DUE 2026-10-20
 expect "an indented code block is not the line" 2 "UNKNOWN missing" \
   "$(kata $'Example:\n\n    **Measure on:** 2026-10-20' 2026-09-25)"
 expect "a tab-indented line is code, not the line" 2 "UNKNOWN missing" "$(kata $'\t**Measure on:** 2026-10-20' 2026-09-25)"
+expect "a fenced example opened by a list item is not the line" 2 "UNKNOWN missing" \
+  "$(kata "- ${fence}"$'\n  **Measure on:** 2099-01-01\n  '"${fence}" 2026-09-25)"
+expect "a fenced example opened by an ordered list item is not the line" 2 "UNKNOWN missing" \
+  "$(kata "1. ${fence}"$'\n   **Measure on:** 2099-01-01\n   '"${fence}" 2026-09-25)"
+expect "a list-contained fenced example does not conflict with the real line" 1 "NOT-DUE 2026-10-20" \
+  "$(kata "- ${fence}"$'\n  **Measure on:** 2099-01-01\n  '"${fence}"$'\n\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "a multi-line HTML comment is not the line" 2 "UNKNOWN missing" \
   "$(kata $'<!--\n**Measure on:** YYYY-MM-DD\n-->' 2026-09-25)"
 expect "the line after a closed HTML comment counts" 1 "NOT-DUE 2026-10-20" \
   "$(kata $'<!-- template:\n**Measure on:** 2026-01-01\n-->\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "a one-line HTML comment changes nothing after it" 1 "NOT-DUE 2026-10-20" \
   "$(kata $'<!-- note -->\n**Measure on:** 2026-10-20' 2026-09-25)"
+expect "a comment reopened on a closing line hides subsequent markers" 2 "UNKNOWN missing" \
+  "$(kata $'<!-- first\n--> <!-- second\n**Measure on:** 2099-01-01\n-->' 2026-09-25)"
+expect "a comment closed and reopened on a closing line does not conflict with the real line" 1 "NOT-DUE 2026-10-20" \
+  "$(kata $'<!-- first\n--> <!-- second\n**Measure on:** 2099-01-01\n-->\n**Measure on:** 2026-10-20' 2026-09-25)"
 
 # Without `today` the helper uses the current UTC date; far past and far future are stable.
 expect "without today, a far-past date is DUE" 0 "DUE 2000-01-01" "$(kata $'**Measure on:** 2000-01-01')"
