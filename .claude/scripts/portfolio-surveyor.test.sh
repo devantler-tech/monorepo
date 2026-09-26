@@ -1385,7 +1385,7 @@ expect_review_gated "agent-plugins per-skill update carrying both bump wordings"
 expect_review_gated "agent-plugins per-skill update with a changelog but no release-notes bump" \
   "${per_skill_args[@]}" \
   "$(jq -c '. + ["plugins/agentic-engineering/CHANGELOG.md"]' <<<"${per_skill_files}")" \
-  "$(printf '%s\n' "${per_skill_sync}" | per_skill_commits)"
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" | per_skill_commits)"
 # A skill may ship its own CHANGELOG.md as ordinary skill content; only the plugin-root one is
 # release notes, so the skill's own file must not count against the plugin set.
 expect_review_required "agent-plugins per-skill update whose skill ships its own changelog" \
@@ -1396,7 +1396,7 @@ expect_review_required "agent-plugins per-skill update whose skill ships its own
     "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
 expect_review_gated "agent-plugins per-skill update with the release-notes bump but no changelog" \
   "${per_skill_args[@]}" "${per_skill_files}" \
-  "$(printf '%s\n' "${per_skill_sync}" "$(per_skill_follow_up "${per_skill_head}" \
+  "$(printf '%s\n' "${per_skill_sync}" "${per_skill_digest}" "$(per_skill_follow_up "${per_skill_head}" \
     "chore(deps): bump plugin versions and record skill updates")" | per_skill_commits)"
 expect_review_gated "agent-plugins per-skill update with a changelog and the legacy bump" \
   "${per_skill_args[@]}" \
