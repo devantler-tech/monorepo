@@ -94,7 +94,7 @@ verify_asset "${thread_counter_relative}"
 # surveyor's environment widen the read-only allowlist to a program of its
 # choosing, which is exactly the bypass the SCOPE and GUARD pins above close.
 #
-# Six programs are declared, and all are READS. pr-ownership-disclosure.sh
+# Seven programs are declared, and all are READS. pr-ownership-disclosure.sh
 # classifies a `devantler` PR body as the maintainer's interactive work or the
 # routine's own output. Without a route for it the surveyor falls back to
 # hand-deriving that verdict, and that substitution has already misread live
@@ -120,6 +120,9 @@ verify_asset "${thread_counter_relative}"
 # one exact head. The contract names it (monorepo#3571); undeclared, the surveyor
 # kept judging review objects by eye, which is how empty reply containers were read
 # as reviews (monorepo#3572).
+# kata-measure-date.sh reads ONE Kata issue body on stdin and says whether its structured
+# `**Measure on:**` date has arrived. Undeclared, the surveyor read the date by eye and reported
+# both open Katas as past due from their createdAt (monorepo#2838).
 #
 # Absence fails CLOSED, consistently with DESIRED_STATE above: a checkout that
 # cannot present its own reviewed files does not get a survey. Exiting 0 with
@@ -132,7 +135,8 @@ for consumer_classifier in \
   "${REPO_ROOT}/.claude/scripts/pr-unresolved-threads.sh" \
   "${REPO_ROOT}/.claude/scripts/coderabbit-summary-verdict.sh" \
   "${REPO_ROOT}/.claude/scripts/local-review-verdict.sh" \
-  "${REPO_ROOT}/.claude/scripts/coderabbit-review-verdict.sh"; do
+  "${REPO_ROOT}/.claude/scripts/coderabbit-review-verdict.sh" \
+  "${REPO_ROOT}/.claude/scripts/kata-measure-date.sh"; do
   if [ ! -f "${consumer_classifier}" ] ||
     [ ! -x "${consumer_classifier}" ] ||
     [ -L "${consumer_classifier}" ]; then

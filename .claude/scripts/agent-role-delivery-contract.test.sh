@@ -1126,6 +1126,32 @@ object_sites="$(grep -o '[^[:space:]"`'"'"']*coderabbit-review-verdict\.sh[^[:sp
 [ -z "${object_sites}" ] ||
   fail "surveyor overlay calls coderabbit-review-verdict.sh by a form the guard refuses: ${object_sites}"
 
+# The Kata measurement-date classifier likewise (monorepo#2838): read by eye, the survey reported
+# Katas as past due from their createdAt. Run the overlay's OWN pipeline through the hook, and
+# prove a relative-path call is refused.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+kata_command="$(grep -o '`gh api [^`]*kata-measure-date\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${kata_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded kata-measure-date.sh pipeline (monorepo#2838)"
+kata_command="${kata_command//<repo-root>/${repo_root}}"
+kata_command="${kata_command//<repo>/monorepo}"
+kata_command="${kata_command//<n>/3407}"
+kata_payload="$(jq -nc --arg cmd "${kata_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${kata_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's Kata measurement-date pipeline (monorepo#2838)"
+relative_kata_command="${kata_command//${repo_root}\/.claude\/scripts\//.claude/scripts/}"
+[ "${relative_kata_command}" != "${kata_command}" ] ||
+  fail "negative control did not rewrite the Kata helper path (monorepo#2838)"
+relative_kata_payload="$(jq -nc --arg cmd "${relative_kata_command}" '{tool_input: {command: $cmd}}')"
+if run_surveyor_hook "${relative_kata_payload}" >/dev/null 2>&1; then
+  fail "consumer surveyor hook admitted a RELATIVE kata-measure-date.sh call (monorepo#2838)"
+fi
+kata_sites="$(grep -o '[^[:space:]"`'"'"']*kata-measure-date\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/kata-measure-date.sh' || true)"
+[ -z "${kata_sites}" ] ||
+  fail "surveyor overlay calls kata-measure-date.sh by a form the guard refuses: ${kata_sites}"
+
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
 # shellcheck disable=SC2016  # fixture must inspect its own child environment

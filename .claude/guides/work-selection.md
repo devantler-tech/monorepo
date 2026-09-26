@@ -131,7 +131,10 @@ governs the issue work that follows.) Two rules enforce that:
    *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
    external dependency (a specific upstream PR/release you can cite) — see *External-blocker
    verification* below; or (c) it is too under-specified to even begin; or (d) a delivered experiment is
-   awaiting its **named, future measurement date**, which is recorded on the issue and has not elapsed.
+   awaiting its **named, future measurement date**, recorded in the issue body as a
+   `**Measure on:** YYYY-MM-DD` line (moved in place when the date moves) and not yet reached.
+   Read it with `.claude/scripts/kata-measure-date.sh`, never from the issue's creation date or a date
+   in prose; its `UNKNOWN` is a line to repair, never a skip.
    Once that date arrives, measuring and recording the decision is actionable work; or (e) another
    instance holds a **live claim** on it — an `agent-claim/<issue>` tip within the ~2h lease, or an
    assignment **and** lane branch within that window, with no PR yet (see *Claim protocol*). (e) is

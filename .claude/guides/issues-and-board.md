@@ -118,7 +118,7 @@ deserves a type rather than a label, and it is why the type tells you what "next
 | **Refactor** | Behaviour-preserving quality | **Never mixed with a behaviour change**; existing tests pass unmodified |
 | **Docs** | Documentation | **Generated** docs are re-run, never hand-edited (authored prose is of course edited by hand); examples actually run |
 | **Spike** | Timeboxed investigation | Output is a **recorded decision + follow-up issues**, not a PR |
-| **Kata** | Improvement Kata | Target condition + **named measurement date**; stays open until the outcome is decided |
+| **Kata** | Improvement Kata | Target condition + **named measurement date**, as a `**Measure on:** YYYY-MM-DD` line in the body; stays open until the outcome is decided |
 | **Chore** | Mechanical upkeep | No flag required |
 
 **Spike execution path (#2267) — how a Spike clears the floor without a delivery PR.** A Spike's

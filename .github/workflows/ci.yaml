@@ -764,6 +764,10 @@ jobs:
               - '.claude/scripts/surveyor-hook-dispatch.sh'
               - '.claude/scripts/surveyor-hook-dispatch.test.sh'
               - '.claude/settings.json'
+              # The overlay reads a Kata's measurement date only through this helper
+              # (monorepo#2838), so a change to it or its test re-runs this job.
+              - '.claude/scripts/kata-measure-date.sh'
+              - '.claude/scripts/kata-measure-date.test.sh'
               - '.claude/scripts/programmed-bot-review-exemption.sh'
               - '.claude/skill-ownership-allowlist.tsv'
               # The contract test asserts the ownership classifier exists and
@@ -2458,6 +2462,11 @@ jobs:
         run: |
           shellcheck .claude/scripts/surveyor-hook-dispatch.sh .claude/scripts/surveyor-hook-dispatch.test.sh
           bash .claude/scripts/surveyor-hook-dispatch.test.sh
+      # Hermetic: judges synthetic Kata bodies, no API call (monorepo#2838).
+      - name: Verify the Kata measurement-date classifier
+        run: |
+          shellcheck .claude/scripts/kata-measure-date.sh .claude/scripts/kata-measure-date.test.sh
+          bash .claude/scripts/kata-measure-date.test.sh
 
   test-ci-aggregate-contract:
     name: Test independent CI aggregate contract
