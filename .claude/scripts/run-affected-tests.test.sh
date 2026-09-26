@@ -74,10 +74,11 @@ jobs:
     steps:
       - run: bash scripts/always.test.sh
 EOF
-printf 'exit 0\n' > scripts/alpha.test.sh
-printf 'echo beta-broke-here; exit 3\n' > scripts/beta.test.sh
-printf 'sleep 30\n' > docs/scripts/gamma.test.sh
-printf 'exit 0\n' > scripts/always.test.sh
+printf '#!/usr/bin/env bash\nexit 0\n' > scripts/alpha.test.sh
+printf '#!/usr/bin/env bash\necho beta-broke-here; exit 3\n' > scripts/beta.test.sh
+printf '#!/usr/bin/env bash\nsleep 30\n' > docs/scripts/gamma.test.sh
+printf '#!/usr/bin/env bash\nexit 0\n' > scripts/always.test.sh
+chmod +x scripts/alpha.test.sh scripts/beta.test.sh docs/scripts/gamma.test.sh scripts/always.test.sh
 : > other/readme.txt
 sed '/^  ungated:/,$d' .github/workflows/ci.yaml > .github/workflows/gated-only.yaml
 # A second workflow for the two hostile cases: a job naming a script that does not exist,
@@ -235,6 +236,15 @@ if [ "${rc}" -eq 0 ] && grep -q '^PASS .*docs/scripts/where.test.sh' <<<"${out}"
 else bad "working-directory launch: ${out} (rc=${rc})"; fi
 rm -f wdcheck/x
 
+chmod -x docs/scripts/gamma.test.sh
+: > docs/page.md
+out="$(run 2>&1)"; rc=$?
+if [ "${rc}" -eq 1 ] && grep -q '^FAIL .*docs/scripts/gamma.test.sh' <<<"${out}"; then
+  ok "a directly-invoked script without executable bit fails"
+else bad "unexecutable direct script did not fail: ${out} (rc=${rc})"; fi
+chmod +x docs/scripts/gamma.test.sh
+rm -f docs/page.md
+
 # --- cannot tell ---------------------------------------------------------------------------
 : > missing/x
 out="$(run --ci-file .github/workflows/extra.yaml --list 2>&1)"; rc=$?
@@ -242,6 +252,72 @@ if [ "${rc}" -eq 2 ] && grep -q 'scripts/ghost.test.sh' <<<"${out}"; then
   ok "a selected script that does not exist is exit 2 and named"
 else bad "missing script: ${out} (rc=${rc})"; fi
 rm -f missing/x
+
+cat > .github/workflows/fallback.yaml <<'EOF'
+jobs:
+  changes:
+    steps:
+      - uses: dorny/paths-filter@0000000000000000000000000000000000000000
+        with:
+          filters: |
+            fb:
+              - 'fb/**'
+  test-fb:
+    if: needs.changes.outputs.fb == 'true'
+    steps:
+      - working-directory: docs
+        run: bash scripts/rootonly.test.sh
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' > scripts/rootonly.test.sh
+chmod +x scripts/rootonly.test.sh
+mkdir -p fb && : > fb/x
+out="$(run --ci-file .github/workflows/fallback.yaml --list 2>&1)"; rc=$?
+if [ "${rc}" -eq 2 ] && grep -q 'scripts/rootonly.test.sh (working-directory docs)' <<<"${out}"; then
+  ok "a script absent from a step working-directory does not fall back to root"
+else bad "root fallback occurred: ${out} (rc=${rc})"; fi
+rm -rf fb .github/workflows/fallback.yaml scripts/rootonly.test.sh
+
+cat > .github/workflows/negcond.yaml <<'EOF'
+jobs:
+  changes:
+    steps:
+      - uses: dorny/paths-filter@0000000000000000000000000000000000000000
+        with:
+          filters: |
+            nc:
+              - 'nc/**'
+  test-nc:
+    if: needs.changes.outputs.nc != 'true'
+    steps:
+      - run: bash scripts/always.test.sh
+EOF
+mkdir -p nc && : > nc/x
+out="$(run --ci-file .github/workflows/negcond.yaml --list 2>&1)"; rc=$?
+if [ "${rc}" -eq 2 ]; then
+  ok "unsupported negative condition != 'true' is exit 2"
+else bad "negative condition was not exit 2: ${out} (rc=${rc})"; fi
+rm -rf nc .github/workflows/negcond.yaml
+
+cat > .github/workflows/badfilter.yaml <<'EOF'
+jobs:
+  changes:
+    steps:
+      - uses: dorny/paths-filter@0000000000000000000000000000000000000000
+        with:
+          filters: |
+            bad: 12345
+  test-bad:
+    if: needs.changes.outputs.bad == 'true'
+    steps:
+      - run: bash scripts/always.test.sh
+EOF
+mkdir -p bad && : > bad/x
+out="$(run --ci-file .github/workflows/badfilter.yaml --list 2>&1)"; rc=$?
+if [ "${rc}" -eq 2 ]; then
+  ok "unsupported filter shape is exit 2"
+else bad "bad filter shape was not exit 2: ${out} (rc=${rc})"; fi
+rm -rf bad .github/workflows/badfilter.yaml
+
 "${runner}" --root "${repo}" --base main --ci-file missing.yaml --list >/dev/null 2>&1
 if [ $? -eq 2 ]; then ok "an unreadable workflow is exit 2"; else bad "unreadable workflow was not exit 2"; fi
 "${runner}" --root "${repo}" --base no-such-ref --list >/dev/null 2>&1

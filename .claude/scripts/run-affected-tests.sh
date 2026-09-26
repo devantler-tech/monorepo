@@ -113,9 +113,18 @@ else
   }
   matches() { glob_match "$1" "" "$2"; }
 
+  filter_keys="$(jq -e -r 'keys[]' <<<"${filters_json}")" || die "cannot list filter names in ${ci_file}"
   while IFS= read -r name; do
     [ -n "${name}" ] || continue
     hit=0
+    pats="$(jq -e -r --arg n "${name}" '
+      .[$n]
+      | if type == "string" then [.]
+        elif type == "array" then flatten
+        else error("filter " + $n + " has unsupported shape") end
+      | .[]
+      | if type != "string" then error("filter " + $n + " contains non-string rule") else . end
+    ' <<<"${filters_json}")" || die "failed to decode filter patterns for ${name}"
     while IFS= read -r pat; do
       [ -n "${pat}" ] || continue
       while IFS= read -r f; do
@@ -123,9 +132,9 @@ else
         if matches "${f}" "${pat}"; then hit=1; break; fi
       done <<<"${changed}"
       [ "${hit}" -eq 1 ] && break
-    done < <(jq -r --arg n "${name}" '.[$n] | flatten[] | select(type == "string")' <<<"${filters_json}")
+    done <<<"${pats}"
     [ "${hit}" -eq 1 ] && hit_filters+="${name}"$'\n'
-  done < <(jq -r 'keys[]' <<<"${filters_json}")
+  done <<<"${filter_keys}"
 fi
 
 # --- the scripts the hit filters' jobs run -------------------------------------------------
@@ -134,25 +143,36 @@ hits_json="$(printf '%s' "${hit_filters}" | jq -R -s 'split("\n") | map(select(l
 
 selected="$(jq -r --argjson hits "${hits_json}" '
   to_entries[]
+  | .key as $job_name
   | .value as $job
   | (($job["if"] // "") | tostring) as $cond
+  | if ($cond | test("needs\\.changes\\.outputs\\.[A-Za-z0-9_-]+[ \t]*(!=|==[ \t]*[\u0027\"]false[\u0027\"])") or ($cond | test("![ \t]*needs\\.changes\\.outputs"))) then
+      error("job " + $job_name + " contains unsupported negative filter condition in if: " + $cond)
+    else . end
   | [$cond | scan("needs\\.changes\\.outputs\\.([A-Za-z0-9_-]+)") | .[0]] as $gates
   # A job with no filter gate runs on every change in CI, so it is always selected.
   | select(($gates | length) == 0 or ($gates | any(. as $f | $hits | index($f))))
   | ($job.defaults.run["working-directory"] // ".") as $jobwd
   | $job.steps[]?
   | (.["working-directory"] // $jobwd) as $wd
-  | (.run // "") | scan("[A-Za-z0-9_./-]+\\.test\\.sh")
-  | [$wd, .] | @tsv' <<<"${jobs_json}")" || die "cannot read the gated jobs in ${ci_file}"
+  | (.run // "") as $run
+  | ($run | scan("[A-Za-z0-9_./-]+\\.test\\.sh")) as $script
+  | (if ($run | test("(^|[ \t\n;&|])(bash|sh)[ \t]+" + ($script | gsub("\\."; "\\.")))) then "bash" else "direct" end) as $how
+  | [$wd, $script, $how] | @tsv' <<<"${jobs_json}")" || die "cannot read the gated jobs in ${ci_file}"
 
 scripts=""
 runs=""
 missing=""
-while IFS=$'\t' read -r wd s; do
+while IFS=$'\t' read -r wd s how; do
   [ -n "${s}" ] || continue
   s="${s#./}"
   # CI launches the script from the step's working-directory, so the runner does too.
-  if [ -f "${wd}/${s}" ]; then run_wd="${wd}"; p="${wd}/${s}"; elif [ -f "${s}" ]; then run_wd="."; p="${s}"; else
+  target="${wd}/${s}"
+  target="${target#./}"
+  if [ -f "${target}" ]; then
+    run_wd="${wd}"
+    p="${target}"
+  else
     # CI would fail trying to run it, so a selected script that does not exist is never
     # silently dropped from the selection.
     missing+="${s} (working-directory ${wd})"$'\n'
@@ -161,7 +181,7 @@ while IFS=$'\t' read -r wd s; do
   p="${p#./}"
   case $'\n'"${scripts}" in *$'\n'"${p}"$'\n'*) continue ;; esac
   scripts+="${p}"$'\n'
-  runs+="${run_wd}"$'\t'"${s}"$'\t'"${p}"$'\n'
+  runs+="${run_wd}"$'\t'"${s}"$'\t'"${p}"$'\t'"${how}"$'\n'
 done <<<"${selected}"
 
 if [ -n "${missing}" ]; then
@@ -186,12 +206,17 @@ trap 'rm -rf "${logdir}"' EXIT
 set -m   # each background script gets its own process group, so a timeout kills its children too
 failed=0
 i=0
-while IFS=$'\t' read -r run_wd rel s; do
+while IFS=$'\t' read -r run_wd rel s how; do
   [ -n "${s}" ] || continue
   i=$((i + 1))
   log="${logdir}/${i}.log"
   start="$(date +%s)"
-  ( cd "${run_wd}" && exec bash "${rel}" ) >"${log}" 2>&1 &
+  if [ "${how}" = "direct" ]; then
+    cmd=( "./${rel#./}" )
+  else
+    cmd=( bash "${rel}" )
+  fi
+  ( cd "${run_wd}" && exec "${cmd[@]}" ) >"${log}" 2>&1 &
   pid=$!
   # TERM first, then KILL after a short grace, so a script that ignores TERM cannot outlive
   # its deadline.
