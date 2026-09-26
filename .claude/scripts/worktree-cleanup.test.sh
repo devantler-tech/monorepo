@@ -176,6 +176,43 @@ t_keeps_young() {
   rm -rf "$root"
 }
 
+
+# #2831: the summary separates abandoned work (a KEEP no sweep will ever turn into a REAP)
+# from trees that are only waiting to age out, so a growing unreapable pile is visible.
+# Controls: a spent tree still reaps, and a YOUNG dirty tree is kept for its age, which is
+# transient, so it must NOT count as stuck.
+t_counts_stuck_work_separately() {
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  add_wt "$root" work unpushed
+  add_wt "$root" dirty pushed
+  echo edited >> "$root/repo/.claude/worktrees/dirty/file.txt"
+  touch -t 202001010000 "$root/repo/.claude/worktrees/dirty"
+  add_wt "$root" fresh pushed
+  echo edited >> "$root/repo/.claude/worktrees/fresh/file.txt"
+  touch "$root/repo/.claude/worktrees/fresh"
+  local out; out=$(run "$root")
+  if grep -q '^REAP  .*spent' <<<"$out" \
+     && grep -q 'KEEP .*fresh .*age .*< 24h' <<<"$out" \
+     && grep -q 'reaped=1 kept=3 stuck=2 ' <<<"$out" \
+     && grep -q '2 of the kept worktree(s) hold abandoned work' <<<"$out"; then
+    ok "counts abandoned work as stuck, apart from trees still ageing out"
+  else
+    bad "counts abandoned work as stuck, apart from trees still ageing out" "$out"
+  fi
+  rm -rf "$root"
+
+  root=$(make_repo)
+  add_wt "$root" spent pushed
+  out=$(run "$root")
+  if grep -q 'reaped=1 kept=0 stuck=0 ' <<<"$out" && ! grep -q 'abandoned work' <<<"$out"; then
+    ok "reports stuck=0 and no salvage hint when nothing is stuck"
+  else
+    bad "reports stuck=0 and no salvage hint when nothing is stuck" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_keeps_active_ownership_claim() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -1017,6 +1054,12 @@ t_keeps_when_pr_query_fails() {
   else
     bad "KEEPs (fail closed) when the PR query fails" "$out"
   fi
+  # A later sweep may still get the evidence, so this keep is not stuck (#2831).
+  if grep -q ' stuck=0 ' <<<"$out"; then
+    ok "does not count a keep on unavailable PR evidence as stuck"
+  else
+    bad "does not count a keep on unavailable PR evidence as stuck" "$out"
+  fi
   rm -rf "$root"
 }
 
@@ -1142,6 +1185,7 @@ t_keeps_dirty
 t_ignores_tool_noise
 t_keeps_untracked_real_file
 t_keeps_young
+t_counts_stuck_work_separately
 t_keeps_active_ownership_claim
 t_reaps_expired_ownership_claim
 t_keeps_active_claim_mutex
