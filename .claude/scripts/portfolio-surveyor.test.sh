@@ -3906,14 +3906,35 @@ echo "portfolio surveyor contract: round-19 dispatch-topology assertions passed"
 # `ls <repo-root>/.claude/scripts | grep` to confirm a named helper exists), and every one was refused
 # `a read must begin with a forge command`. The guard is right; the definition named the file but not
 # the tool. The rule lives in the Safety block because that block is what the dispatched overlay
-# carries, and the empty-extraction check above has already rejected a missing block.
-grep -Fq 'Local files are read with the Read, Grep and Glob tools, never through Bash.' <<<"${_safety_block}" ||
-  fail "portfolio-surveyor.md Safety block must say local files are read with the Read, Grep and Glob tools, never through Bash (#3638)"
-# The rule must name the files it covers and the refusal a Bash read gets, so the survey can recognise
-# the denial as its own mistake instead of reporting it as missing evidence.
-for _clause in 'the instance registry' 'whether a named helper exists' 'a read must begin with a forge command'; do
-  _local_rule=$(grep -A6 -F 'Local files are read with the Read, Grep and Glob tools' <<<"${_safety_block}" | tr '\n' ' ' | tr -s '[:space:]' ' ')
-  grep -Fq "${_clause}" <<<"${_local_rule}" ||
-    fail "the local-file read rule must name '${_clause}' (#3638)"
-done
+# carries. It is scoped to the delegated survey because the Codex inline survey reads this same
+# overlay with no surveyor guard and no Read tool, so an unscoped rule would strand its registry read.
+_local_read_rule_error() {
+  local block="$1" rule clause
+  grep -Fq 'Local files are read with the Read, Grep and Glob tools, never through Bash.' <<<"${block}" || {
+    echo "the Safety block must say local files are read with the Read, Grep and Glob tools, never through Bash"
+    return
+  }
+  rule=$(grep -A4 -F 'Local files are read with the Read, Grep and Glob tools' <<<"${block}" | tr '\n' ' ' | tr -s '[:space:]' ' ')
+  for clause in 'In a delegated survey' 'the instance registry' 'whether a named helper exists' \
+    'a read must begin with a forge command' 'An inline survey with no surveyor guard may read them with its shell.'; do
+    grep -Fq "${clause}" <<<"${rule}" || {
+      echo "the local-file read rule must name '${clause}'"
+      return
+    }
+  done
+}
+_err=$(_local_read_rule_error "${_safety_block}")
+[ -z "${_err}" ] || fail "portfolio-surveyor.md: ${_err} (#3638)"
+# Negative controls: the same check must reject a block with the rule removed, and one with a single
+# required clause removed, each for that specific reason. Without them a check that matched nothing
+# would pass as silently as one that matched everything.
+_mut_removed=$(grep -vF 'Local files are read with the Read, Grep and Glob tools' <<<"${_safety_block}")
+[[ "$(_local_read_rule_error "${_mut_removed}")" == *'must say local files are read with the Read, Grep and Glob tools'* ]] ||
+  fail "round-20 control: the local-read check did not reject a Safety block with the rule removed (#3638)"
+_mut_scope=$(sed 's/In a delegated/In any/' <<<"${_safety_block}")
+[[ "$(_local_read_rule_error "${_mut_scope}")" == *"must name 'In a delegated survey'"* ]] ||
+  fail "round-20 control: the local-read check did not reject a rule that lost its delegated-survey scope (#3638)"
+_mut_inline=$(sed 's/may read them with its shell\./reads them the same way./' <<<"${_safety_block}")
+[[ "$(_local_read_rule_error "${_mut_inline}")" == *"must name 'An inline survey"* ]] ||
+  fail "round-20 control: the local-read check did not reject a rule that dropped the inline-survey carve-out (#3638)"
 echo "portfolio surveyor contract: round-20 local-file read assertions passed"
