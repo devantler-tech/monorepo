@@ -2251,10 +2251,74 @@ t_salvage_judges_a_conversion_by_its_bytes() {
   printf 'echo hi\r\n' > "$wt/a.sh"
   touch -t 202001010000 "$wt"
   out=$(run_salvage "$root" dry-run 1)
+  if ! grep -q 'KEEP .*eolwt .*conversion that changes its bytes' <<<"$out" || grep -q '^SALVAGE .*eolwt ' <<<"$out"; then
+    bad "$name" "CRLF: $out"; rm -rf "$root"; return
+  fi
+  # No attribute is enumerated, so one the check does not name still counts: the legacy
+  # `crlf` attribute converts CRLF with text and eol both unspecified.
+  printf 'echo hi\n' > "$wt/a.sh"; printf 'x\r\n' > "$wt/legacy.bat"
+  echo '*.bat crlf' > "$wt/.git-info-attrs"
+  git -C "$wt" config core.attributesFile "$wt/.git-info-attrs"
+  touch -t 202001010000 "$wt"
+  out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*eolwt .*conversion that changes its bytes' <<<"$out" && ! grep -q '^SALVAGE .*eolwt ' <<<"$out"; then
     ok "$name"
   else
-    bad "$name" "CRLF: $out"
+    bad "$name" "legacy crlf: $out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_populated_uninitialised_submodule_directory() {
+  # A worktree added from a branch with a gitlink leaves the submodule uninitialised; files
+  # dropped into that directory are invisible to status and would die with the removal.
+  local name="salvage KEEPs a worktree whose uninitialised submodule directory holds files"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subsrcwt || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/uninit"
+  git -C "$root/repo" worktree add -q -b claude/uninit "$wt" claude/subsrcwt \
+    && git -C "$wt" push -q origin claude/uninit || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  [ -d "$wt/sub" ] && [ ! -e "$wt/sub/.git" ] || { bad "$name" "FIXTURE: submodule initialised"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if ! grep -q '^SALVAGE .*uninit ' <<<"$out"; then
+    bad "$name" "empty control: $out"; rm -rf "$root"; return
+  fi
+  echo stray > "$wt/sub/stray.txt"
+  [ -z "$(git -C "$wt" status --porcelain sub)" ] || { bad "$name" "FIXTURE: stray file visible"; rm -rf "$root"; return; }
+  touch -t 202001010000 "$wt"
+  out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*uninit .*uninitialised submodule directory sub is not empty' <<<"$out" && ! grep -q '^SALVAGE .*uninit ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_an_admin_submodule_with_an_external_checkout() {
+  # The removal deletes the repository in the admin directory; a checkout outside the
+  # worktree would survive it with a .git file pointing at nothing.
+  local name="salvage KEEPs an admin submodule repository whose checkout is outside the worktree"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subext || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subext" g
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  cp -R "$g" "${g%/sub}/other" && mkdir -p "$root/external/co" \
+    && git --git-dir="${g%/sub}/other" config core.worktree "$root/external/co" \
+    && cp "$wt/sub/f" "$root/external/co/f" \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  # Clean, so nothing but its location can block it.
+  [ -z "$(git --git-dir="${g%/sub}/other" --work-tree="$root/external/co" status --porcelain 2>&1)" ] \
+    || { bad "$name" "FIXTURE: external checkout is not clean"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subext .*modules/other has a checkout outside the worktree' <<<"$out" && ! grep -q '^SALVAGE .*subext ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
   fi
   rm -rf "$root"
 }
@@ -2407,5 +2471,7 @@ t_salvage_keeps_a_submodule_with_a_custom_hook
 t_salvage_keeps_a_submodule_tag_only_fetch_head_names
 t_salvage_keeps_a_submodule_checkout_it_cannot_enter
 t_salvage_judges_a_conversion_by_its_bytes
+t_salvage_keeps_a_populated_uninitialised_submodule_directory
+t_salvage_keeps_an_admin_submodule_with_an_external_checkout
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

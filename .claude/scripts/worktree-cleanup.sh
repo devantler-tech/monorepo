@@ -66,6 +66,11 @@
 #           only, not the files), or more than SALVAGE_MAX_KB of changed/untracked data
 #   KEEP  - any failure to build, write or verify a salvage ref, and any change to the
 #           working tree or index between the snapshot and the removal
+# What salvage preserves is content: commits, tag objects, and working-tree and index
+# bytes. A submodule repository's local branch or lightweight tag NAME that points at a
+# commit a remote already has is not kept: the commit survives on the remote, and a fetch
+# brings every remote tag back, so the only thing lost is a local label. Blocking on it
+# would keep nearly every submodule, since fetched tags are indistinguishable offline.
 #
 # Submodule gitlink drift (` M applications/ksail`) and stray tool dirs (`?? .codex/`)
 # are NOT authored work — they are an artifact of the submodule checkout sitting at a
@@ -785,10 +790,6 @@ worktree_state_blocker() {
   return 1
 }
 
-# conversion_blocker <worktree> -> 0, with SALVAGE_NOTE, when `git add` might not store a
-# changed path's exact working-tree bytes: a clean filter, ident, an encoding, or a line-ending
-# conversion (attribute or core.autocrlf) rewrites them, and the removal then deletes the only
-# copy of the original. Checked over every changed, staged and untracked path.
 gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE when it holds state
   # The same whitelist as the worktree's own admin directory, for a submodule repository the
   # removal deletes: every entry must be ordinary repository content. A bisect, sequencer,
@@ -849,13 +850,14 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   return 1
 }
 
+# conversion_blocker <worktree> -> 0, with SALVAGE_NOTE, unless `git add` would store every
+# present path's exact working-tree bytes and see every change. A whitelist over the bytes,
+# not a list of the things that rewrite them: for every tracked, staged or untracked path,
+# the object `git add` would write (every filter, ident, encoding, text/eol/crlf attribute
+# and core.autocrlf applied) must equal the object of the raw file. A lossy clean filter
+# that maps an edit back to the indexed bytes fails this too, although status cannot see it.
 conversion_blocker() {
-  local wt=$1 autocrlf paths attrs
-  autocrlf=$(git -C "$wt" config --get core.autocrlf 2>/dev/null) || autocrlf=""
-  case "$autocrlf" in
-    ''|false) ;;
-    *) SALVAGE_NOTE="core.autocrlf=$autocrlf converts line endings (salvage would not keep the exact bytes)"; return 0 ;;
-  esac
+  local wt=$1 paths present filtered raw p
   # With core.fileMode=false an executable-bit change is invisible to `add`. With
   # core.ignoreCase=true on a case-SENSITIVE filesystem a case-only rename reads as a
   # deletion and the renamed file is never added. The admin dir's HEAD, looked up as
@@ -873,33 +875,21 @@ conversion_blocker() {
       SALVAGE_NOTE="core.ignoreCase=true on a case-sensitive filesystem (salvage could lose a case-only rename)"; return 0
     fi
   fi
-  # Every tracked path, not only the ones git reports changed: a lossy filter can map an
-  # edit back to the indexed bytes and hide it from status altogether.
   paths=$( { git -C "$wt" ls-files -z -c -o --exclude-standard \
              && git -C "$wt" diff --cached --name-only -z; } 2>/dev/null | tr '\0\n' '\n\001') \
-    || { SALVAGE_NOTE="cannot list changed paths for the conversion check"; return 0; }
-  case "$paths" in *$'\001'*) SALVAGE_NOTE="a path holds a newline (cannot check its attributes)"; return 0 ;; esac
-  [ -n "$paths" ] || return 1
-  # check-attr -z prints path NUL attribute NUL value NUL; keep each path that has any value.
-  attrs=$(printf '%s\n' "$paths" | tr '\n' '\0' | git -C "$wt" check-attr --stdin -z filter ident working-tree-encoding text eol 2>/dev/null \
-          | tr '\0' '\n' | awk 'NR % 3 == 1 { p = $0 } NR % 3 == 0 && $0 != "unspecified" && $0 != "unset" { print p }' | sort -u) \
-    || { SALVAGE_NOTE="cannot read the attributes of the changed paths"; return 0; }
-  [ -n "$attrs" ] || return 1
-  # A conversion attribute alone loses nothing: `eol=lf` on a file with no CR stores it
-  # byte for byte. What must hold is the stored bytes equal the working-tree bytes, so
-  # compare the object `git add` would write with the raw file's, for every such path that
-  # still exists. A deleted path has no bytes left to lose.
-  # A symlink stores its target unconverted; anything else present is hashed (and a
-  # directory standing where a file was makes the hash fail, which blocks).
-  local present filtered raw p
+    || { SALVAGE_NOTE="cannot list the paths for the conversion check"; return 0; }
+  case "$paths" in *$'\001'*) SALVAGE_NOTE="a path holds a newline (cannot check its bytes)"; return 0 ;; esac
+  # A symlink stores its target unconverted and a deleted path has no bytes left to lose;
+  # a directory is a gitlink (a submodule, checked on its own) or a replaced file whose
+  # contents `add -A` snapshots path by path; every other present path is hashed.
   present=$(while IFS= read -r p; do
-              [ -L "$wt/$p" ] || [ ! -e "$wt/$p" ] || printf '%s\n' "$p"
-            done <<< "$attrs")
+              [ -n "$p" ] && [ ! -L "$wt/$p" ] && [ -e "$wt/$p" ] && [ ! -d "$wt/$p" ] && printf '%s\n' "$p"
+            done <<< "$paths" | sort -u)
   [ -n "$present" ] || return 1
   filtered=$(git -C "$wt" hash-object --stdin-paths <<< "$present" 2>/dev/null) \
     && raw=$(git -C "$wt" hash-object --no-filters --stdin-paths <<< "$present" 2>/dev/null) \
     && [ "$(wc -l <<< "$filtered")" = "$(wc -l <<< "$present")" ] \
-    || { SALVAGE_NOTE="cannot hash the converted paths"; return 0; }
+    || { SALVAGE_NOTE="cannot hash the working tree for the conversion check"; return 0; }
   if [ "$filtered" != "$raw" ]; then
     SALVAGE_NOTE="a path has a filter or conversion that changes its bytes (salvage would not keep the exact bytes)"; return 0
   fi
@@ -912,10 +902,12 @@ conversion_blocker() {
 # tree still exists, is clean with no hidden-index flags. It checks what the removal would
 # actually delete, not what the index happens to list.
 admin_modules_blocker() {
-  local wt=$1 admin heads h g w wpath wdir st flags label local_only rc
+  local wt=$1 admin heads h g w wpath wdir st flags label local_only rc wt_real
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
     || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
   [ -d "$admin/modules" ] || return 1
+  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) && [ -n "$wt_real" ] \
+    || { SALVAGE_NOTE="cannot resolve the worktree path"; return 0; }
   heads=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-heads.XXXXXX") \
     || { SALVAGE_NOTE="cannot create a temporary list"; return 0; }
   # NUL-delimited: a repository path holding a newline must not be split and skipped.
@@ -948,6 +940,12 @@ admin_modules_blocker() {
       path_is_absent "$wpath" && continue
       SALVAGE_NOTE="cannot enter the checkout of submodule repository $label"; return 0
     fi
+    # The removal deletes this repository; a checkout outside the worktree would survive it
+    # and be left without the repository it depends on.
+    case "$wdir/" in
+      "$wt_real"/?*) ;;
+      *) SALVAGE_NOTE="submodule repository $label has a checkout outside the worktree ($wdir)"; return 0 ;;
+    esac
     # A clean status proves nothing where a filter or conversion hides an edit from git.
     if GIT_DIR=$g GIT_WORK_TREE=$wdir conversion_blocker "$wdir"; then
       SALVAGE_NOTE="submodule ${wdir#"$wt"/}: $SALVAGE_NOTE"; return 0
@@ -981,7 +979,14 @@ submodule_local_only_blocker() {
   while IFS= read -r line; do
     case "$line" in 160000\ *) ;; *) continue ;; esac
     path=${line#*$'\t'}
-    [ -e "$repo/$path/.git" ] || continue          # not initialised: nothing local to lose
+    if [ ! -e "$repo/$path/.git" ] && [ ! -L "$repo/$path/.git" ]; then
+      # Not initialised: nothing local to lose only when the directory is empty (or gone).
+      # Status reports a populated uninitialised gitlink directory as clean, and the removal
+      # would delete whatever files sit in it.
+      [ -e "$repo/$path" ] || [ -L "$repo/$path" ] || continue
+      [ -z "$(ls -A "$repo/$path" 2>/dev/null || echo unreadable)" ] && continue
+      SALVAGE_NOTE="uninitialised submodule directory $path is not empty (cannot be salvaged)"; return 0
+    fi
     local_only=$(git -C "$repo/$path" rev-list -n 1 --all --reflog --not --remotes 2>/dev/null) \
       || { SALVAGE_NOTE="cannot list the local commits of submodule $path"; return 0; }
     if [ -n "$local_only" ]; then
