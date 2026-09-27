@@ -3899,3 +3899,21 @@ if grep -Fq 'The run loop **sources the agent entry point**' <<<"${_diff_flat}";
   fail "the surveyor diff record's introduction still says the entry point is sourced from the plugin (monorepo#3526)"
 fi
 echo "portfolio surveyor contract: round-19 dispatch-topology assertions passed"
+
+# ── Round 20: local files are read with the Read/Grep/Glob tools, never through Bash ──
+# Measured 2026-09-23..27 (monorepo#3638): 18 of 65 local surveyor dispatches spent a call on a Bash
+# read of a local path (`jq`/`cat` on the instance registry step 2b tells them to resolve, or
+# `ls <repo-root>/.claude/scripts | grep` to confirm a named helper exists), and every one was refused
+# `a read must begin with a forge command`. The guard is right; the definition named the file but not
+# the tool. The rule lives in the Safety block because that block is what the dispatched overlay
+# carries, and the empty-extraction check above has already rejected a missing block.
+grep -Fq 'Local files are read with the Read, Grep and Glob tools, never through Bash.' <<<"${_safety_block}" ||
+  fail "portfolio-surveyor.md Safety block must say local files are read with the Read, Grep and Glob tools, never through Bash (#3638)"
+# The rule must name the files it covers and the refusal a Bash read gets, so the survey can recognise
+# the denial as its own mistake instead of reporting it as missing evidence.
+for _clause in 'the instance registry' 'whether a named helper exists' 'a read must begin with a forge command'; do
+  _local_rule=$(grep -A6 -F 'Local files are read with the Read, Grep and Glob tools' <<<"${_safety_block}" | tr '\n' ' ' | tr -s '[:space:]' ' ')
+  grep -Fq "${_clause}" <<<"${_local_rule}" ||
+    fail "the local-file read rule must name '${_clause}' (#3638)"
+done
+echo "portfolio surveyor contract: round-20 local-file read assertions passed"
