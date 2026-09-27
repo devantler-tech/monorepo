@@ -1381,45 +1381,44 @@ public and private — no per-repo loop needed to enumerate):
      same path `flow-scorecard.sh` uses, so it stays on the uncontended core REST budget rather than
      the shared GraphQL 5,000/hr pool:
 
+     Two plain reads, each run as its **own** command so the read-only forge guard classifies the read
+     itself. The guard refuses a shell capture (`x=$(gh api …)`) and a `;`-chained `set -o pipefail`
+     line, so a census built from them fails closed mid-run (monorepo#2943). A pipe into `jq` is
+     allowed but, without that options line, reports `jq`'s exit status rather than the read's.
+     Every guard below is applied by **you**, reading each command's exit status and output.
+
+     **1. The Status field id:**
+
      ```sh
-     set -o pipefail   # REQUIRED — see below; without it a half-walked census reports `measured:`
-     fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" \
-       --jq '.[]|select(.name=="Status")|.id') \
-       || { echo "board_coverage=unknown:field-lookup-failed"; exit 0; }
-     # An empty id is NOT a failure exit: `--jq` selecting nothing still exits 0, and the item read
-     # would then run with `fields=`, returning no field data — so every item looks status-less and
-     # `status_less` reports the whole board.
-     [ -n "$fid_status" ] \
-       || { echo "board_coverage=unknown:status-field-not-found"; exit 0; }
-     # open Issue items only; --paginate walks every page to exhaustion
-     census=$(gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid_status" \
-       --paginate --jq '.[]' | jq -s '
-         map(select(.content_type=="Issue" and .archived_at==null
-                    and .content.repository.private == false
-                    and .content.repository.archived == false))
-         | {on_board: length,
-            status_less: map(select(([.fields[]?|select(.name=="Status")|.value] | length)==0)) | length}') \
-       || { echo "board_coverage=unknown:items-census-failed"; exit 0; }
-     # An empty or fully-filtered payload is NEVER a measured zero: project 5 is never empty, so
-     # on_board=0 means the read returned nothing, not that coverage is 0%. `jq -s` turns an empty
-     # stream into `[]` and exits 0, so neither pipefail nor the guard above catches it — and a 0
-     # numerator sends the orchestrator into a full backfill against an already-complete board.
-     [ "$(printf '%s' "$census" | jq '.on_board')" -gt 0 ] \
-       || { echo "board_coverage=unknown:empty-payload"; exit 0; }
-     printf '%s\n' "$census"
+     gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id'
      ```
 
-     🔴 **`set -o pipefail` and both guards are load-bearing — without them a FAILED census emits a
-     `measured:` row.** `gh api --paginate` that dies partway through still delivers the pages it
-     already fetched, and `jq -s` consumes them and exits 0, so the pipeline's status is `jq`'s and
-     the run reports a confident, smaller `on_board`. That is the truncation defect this whole
-     section exists to prevent, reintroduced by the shell rather than by the query — and it fails in
-     the gap-hiding direction, because a short numerator reads as *missing coverage* and sends the
-     orchestrator into a backfill against a board that is already complete.
-     **This is not hypothetical:** on 2026-08-16 the denominator call below returned **HTTP 403
-     rate-limited** partway through a verification run, in the same minutes as the census. The
-     `unknown:<reason>` tokens already existed for exactly this case; nothing in the prescribed
-     command reached them.
+     - Non-zero exit → emit `board_coverage=unknown:field-lookup-failed` and stop the census.
+     - Exit 0 with **empty** output → emit `board_coverage=unknown:status-field-not-found`. An empty id
+       is not a failure exit (`--jq` selecting nothing still exits 0), and the items read would then
+       run with `fields=`, return no field data, and make every item look status-less.
+
+     **2. The items census**, with the id from step 1 written literally in place of
+     `<status-field-id>`:
+
+     ```sh
+     gh api --paginate "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=<status-field-id>" --jq '[.[] | select(.content_type=="Issue" and .archived_at==null and .content.repository.private == false and .content.repository.archived == false)] | "page on_board=\(length) status_less=\(map(select(([.fields[]?|select(.name=="Status")|.value] | length)==0)) | length)"'
+     ```
+
+     `--paginate` walks every page, and `--jq` runs **once per page**, so the read prints one
+     `page on_board=<a> status_less=<b>` line per page. Sum both numbers over all lines.
+
+     - Non-zero exit → emit `board_coverage=unknown:items-census-failed`, **whatever lines were
+       printed**. `gh api --paginate` that dies partway still prints the pages it already fetched, so
+       those lines are a truncated census; summing them would report a confident, smaller `on_board`
+       and send the orchestrator into a backfill against a board that is already complete. Because
+       there is no pipe, the exit status you read is `gh`'s own: that is what the earlier
+       `set -o pipefail` form existed to recover, and a pipefail line cannot be run under the guard.
+       **This is not hypothetical:** on 2026-08-16 the denominator call below returned **HTTP 403
+       rate-limited** partway through a verification run, in the same minutes as the census.
+     - A summed `on_board` of **0** → emit `board_coverage=unknown:empty-payload`. Project 5 is never
+       empty, so a zero means the read returned nothing, not that coverage is 0%, and a 0 numerator
+       sends the orchestrator into a full backfill against an already-complete board.
 
      🔴 **The two repository predicates are not optional — without them the ratio compares two
      different populations and overstates coverage.** The denominator below is explicitly

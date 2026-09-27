@@ -704,34 +704,53 @@ grep -Fq '.content.repository.private == false' "${surveyor}" ||
   fail "surveyor on_board census does not exclude private-repo items the denominator cannot contain"
 grep -Fq '.content.repository.archived == false' "${surveyor}" ||
   fail "surveyor on_board census does not exclude archived-repo items the denominator cannot contain"
-# Error propagation: `gh api --paginate | jq -s` hands jq whatever pages it fetched before dying, and
-# jq exits 0 on them — so without pipefail a half-walked census emits a confident smaller on_board as
-# `measured:`. Same truncation defect as a single-page read, reintroduced by the shell. And an empty
-# Status field id does not fail: `--jq` selecting nothing exits 0, the items read then runs with
-# `fields=`, and every item looks status-less.
-# Anchored to the COMMAND form, not a bare substring: the same file explains `set -o pipefail` in
-# backticked prose one paragraph below, so an unanchored grep stays green while the prescribed
-# command itself loses the setting — verified by ablating one of the two occurrences and watching
-# this assertion pass. Prose never begins a line with the bare command.
-grep -Eq '^ *set -o pipefail' "${surveyor}" ||
-  fail "surveyor board-coverage census does not run under pipefail, so a partial paginated read can report measured:"
-grep -Fq 'board_coverage=unknown:items-census-failed' "${surveyor}" ||
-  fail "surveyor has no unknown token for a failed or partially-walked items census"
+# The census must be runnable under the read-only forge guard (monorepo#2943). The guard refuses a
+# shell capture (`x=$(gh api …)`) and a `;`-chained `set -o pipefail` line, so the census is two plain
+# reads and the surveyor applies every guard itself. Anchored to the COMMAND form: prose in the same
+# section names the refused capture in backticks, and prose never begins a line with it.
+if grep -Eq '^ *[A-Za-z_][A-Za-z0-9_]*=\$\(gh api "orgs/devantler-tech/projectsV2/5/' "${surveyor}"; then
+  fail "surveyor board-coverage census captures a read in a command substitution the forge guard refuses"
+fi
+grep -Eq '^ *gh api "orgs/devantler-tech/projectsV2/5/fields\?per_page=100" --jq ' "${surveyor}" ||
+  fail "surveyor board-coverage census does not look up the Status field id as a plain read"
+# Error propagation: `gh api --paginate` that dies partway still prints the pages it already fetched.
+# Emitting one aggregate line per page and reading gh's OWN exit status (no pipe) is what makes a
+# half-walked census detectable; the surveyor must then discard the printed lines, not sum them.
+grep -Eq '^ *gh api --paginate "orgs/devantler-tech/projectsV2/5/items\?per_page=100&q=is:open&fields=<status-field-id>" --jq ' "${surveyor}" ||
+  fail "surveyor items census is not a plain paginated read, so its exit status may not be the read's"
+# shellcheck disable=SC2016 # literal jq string interpolation, not a shell expansion
+grep -Fq '"page on_board=\(length) status_less=' "${surveyor}" ||
+  fail "surveyor items census does not emit one aggregate line per page to sum"
+grep -Fq 'board_coverage=unknown:items-census-failed`, **whatever lines were' "${surveyor}" ||
+  fail "surveyor does not discard the lines a failed paginated census already printed"
 grep -Fq 'board_coverage=unknown:status-field-not-found' "${surveyor}" ||
   fail "surveyor does not reject an empty Status field id before computing status_less"
-# Empty payload: neither pipefail nor the census-failed guard catches it, because `jq -s` turns an
-# empty stream into `[]` and exits 0 — measured, the prescribed pipeline emits
-# {"on_board":0,"status_less":0} on empty input. Against a live open_public of 621 that is a 0%
-# coverage row, and it fails in the gap-INVENTING direction: it sends the orchestrator into a full
-# backfill against an already-complete board, the exact failure this section opens by describing.
-# The prose bullet already declared the unknown token; only the command was missing the guard.
-# Anchored to the COMMAND form for the same reason as pipefail above: the fail-closed bullet
-# discusses `board_coverage=unknown:empty-payload` in prose, so a bare token grep stays green while
-# the prescribed command still emits a measured zero.
-grep -Fq 'board_coverage=unknown:empty-payload' "${surveyor}" ||
-  fail "surveyor has no unknown token for an empty or fully-filtered items payload"
-grep -Eq '^ *\[ .*on_board.* -gt 0 \]' "${surveyor}" ||
+# Empty payload: an all-zero sum is not a measured 0% — project 5 is never empty. Against a live
+# open_public of 621 a zero row fails in the gap-INVENTING direction: it sends the orchestrator into
+# a full backfill against an already-complete board.
+grep -Fq 'A summed `on_board` of **0** → emit `board_coverage=unknown:empty-payload`' "${surveyor}" ||
   fail "surveyor board-coverage census does not fail closed on a zero on_board, so an empty payload reports a measured 0%"
+# EXECUTE the items census filter on one fixture page rather than trusting its wording: an issue with
+# a Status and two without one (one has no `fields` key at all) count; a pull request, an archived
+# repository's issue and a private repository's issue do not. A filter that stopped excluding one of
+# them, or miscounted status-less items, would change the page line.
+_board_line="$(grep -F 'gh api --paginate "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=<status-field-id>" --jq' "${surveyor}" | head -1)"
+_board_filter="${_board_line#*--jq \'}"
+_board_filter="${_board_filter%\'*}"
+[ -n "${_board_line}" ] && [ "${_board_filter}" != "${_board_line}" ] ||
+  fail "could not extract the board items census jq filter (monorepo#2943)"
+_board_page='[
+  {"content_type":"Issue","archived_at":null,"content":{"repository":{"private":false,"archived":false}},"fields":[{"name":"Status","value":{"name":"Backlog"}}]},
+  {"content_type":"Issue","archived_at":null,"content":{"repository":{"private":false,"archived":false}},"fields":[]},
+  {"content_type":"Issue","archived_at":null,"content":{"repository":{"private":false,"archived":false}}},
+  {"content_type":"PullRequest","archived_at":null,"content":{"repository":{"private":false,"archived":false}},"fields":[]},
+  {"content_type":"Issue","archived_at":null,"content":{"repository":{"private":false,"archived":true}},"fields":[]},
+  {"content_type":"Issue","archived_at":null,"content":{"repository":{"private":true,"archived":false}},"fields":[]}
+]'
+_board_out="$(jq -r "${_board_filter}" <<<"${_board_page}" 2>&1)" ||
+  fail "the board items census filter aborts on a fixture page: ${_board_out} (monorepo#2943)"
+[ "${_board_out}" = 'page on_board=3 status_less=2' ] ||
+  fail "the board items census filter miscounts a page: got '${_board_out}', want 'page on_board=3 status_less=2' (monorepo#2943)"
 grep -Fq 'dependency-automation PR that lacks positive self-progressing evidence' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not intervene when dependency automation cannot finish its PR"
 # Literal Markdown code spans; command substitution is intentionally disabled.
