@@ -371,6 +371,29 @@ report "empty-init: the failure NAMES the empty submodule (fails at init, not la
 out="$(cd "$c11/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "empty-init: --check still SKIPS a legitimately deinitialised submodule" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+# Gitdir-only checkout: `update --init` writes the `.git` link and then no files. The directory is
+# not empty, so the STILL EMPTY guard cannot see it, and isolation alone would pass. The pinned
+# commit has a tracked file, so a correct checkout would contain it.
+c11b="$tmp/c11b"
+mk_super "$c11b"
+git -C "$c11b/super" submodule --quiet deinit -f sub >/dev/null
+gitdir_only_shim="$tmp/shim-gitdir-only"
+mkdir -p "$gitdir_only_shim"
+cat >"$gitdir_only_shim/git" <<SHIM
+#!/usr/bin/env bash
+# Run 'submodule update' for real, then strip every checked-out entry except the .git link.
+for a in "\$@"; do [[ "\$a" == "submodule" ]] && seen_sub=1; [[ "\$a" == "update" ]] && seen_upd=1; done
+"$real_git" "\$@" || exit \$?
+if [[ -n "\${seen_sub:-}" && -n "\${seen_upd:-}" ]]; then
+  find sub -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+fi
+SHIM
+chmod +x "$gitdir_only_shim/git"
+out="$(cd "$c11b/super" && PATH="$gitdir_only_shim:$PATH" "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "gitdir-only init precondition: only the .git link was left" \
+  "$([[ "$(ls -A "$c11b/super/sub")" == ".git" ]] && echo yes || echo no)" "$(ls -A "$c11b/super/sub" | tr '\n' ' ')"
+report "gitdir-only init: fails, names the incomplete checkout, and never reports isolated" \
+  "$([[ $rc -ne 0 ]] && grep -q 'INCOMPLETE' <<<"$out" && ! grep -q 'isolated ✓' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 # 12. --advance: move a populated checkout to a newer recorded pin WITHOUT
 #    `git submodule update` (which rewrites shared core.worktree). Hermetic
 #    fixture: bump the gitlink in the index while leaving the working tree on

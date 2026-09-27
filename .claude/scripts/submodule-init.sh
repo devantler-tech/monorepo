@@ -468,6 +468,15 @@ init_repair_probe() {
     is_populated "$path" ||
       die "'$path' is STILL EMPTY after 'git submodule update --init' (which exited 0) — do not read or edit it"
     repair "$path"
+    # A `.git` entry alone also makes the directory non-empty, so a checkout that wrote its gitdir
+    # link and then no files passes the emptiness test above, and `probe` checks isolation, not
+    # content. A fresh checkout at its pin has no tracked changes, so any tracked difference means
+    # the pinned files are not all here.
+    local fresh_status
+    fresh_status=$(git --no-replace-objects -C "$path" status --porcelain --untracked-files=no 2>/dev/null) ||
+      die "could not read the status of freshly populated '$path' — do not read or edit it"
+    [ -z "$fresh_status" ] ||
+      die "'$path' is INCOMPLETE after 'git submodule update --init': its tracked files do not match the pinned commit — do not read or edit it"
   fi
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
 }
