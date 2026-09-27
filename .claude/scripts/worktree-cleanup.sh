@@ -63,8 +63,8 @@
 # `restore` runs checkout-side conversions (smudge filters, eol=crlf) on the way out; for a
 # byte-exact copy of one path read the blob raw: `git cat-file blob refs/salvaged/<id>/worktree:<path>`.
 # Every other gate is unchanged, and salvage fails closed to the old KEEP:
-#   KEEP  - a salvage candidate whose submodule holds uncommitted or unpushed work (the
-#           submodule's repository lives inside the worktree's admin dir and dies with it)
+#   KEEP  - a salvage candidate holding any repository besides its own (an initialised
+#           submodule, or an embedded repository even when ignored): removal deletes it
 #   KEEP  - untracked content git would record as an embedded repository (a gitlink
 #           only, not the files), or more than SALVAGE_MAX_KB of changed/untracked data
 #   KEEP  - any failure to build, write or verify a salvage ref, and any change to the
@@ -75,10 +75,7 @@
 # no user-space check can close that without a filesystem lock git does not take. Salvage
 # only runs on a worktree abandoned for the salvage age, so such a writer is not expected.
 # What salvage preserves is content: commits, tag objects, and working-tree and index
-# bytes. A submodule repository's local branch or lightweight tag NAME that points at a
-# commit a remote already has is not kept: the commit survives on the remote, and a fetch
-# brings every remote tag back, so the only thing lost is a local label. Blocking on it
-# would keep nearly every submodule, since fetched tags are indistinguishable offline.
+# bytes, for single-repository worktrees only.
 #
 # Submodule gitlink drift (` M applications/ksail`) and stray tool dirs (`?? .codex/`)
 # are NOT authored work — they are an artifact of the submodule checkout sitting at a
@@ -497,11 +494,12 @@ recheck_mutable_gates() {
       [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$SALVAGE_REF/reflog/$o" 2>/dev/null)" = "$o" ] \
         || { keep "$wt" "a reflog-only commit appeared after the salvage snapshot ($SALVAGE_REF)"; return 1; }
     done <<< "$now_orphans"
-    # The same for a submodule: a commit made there and reset back to the gitlink changes
-    # nothing the checks above compare, and the removal deletes the submodule's repository.
-    # The configuration that decides whether status can see an edit (conversion_blocker) can
+    # A repository initialised after the snapshot (a submodule, or one the parent ignores),
+    # or a file dropped into an uninitialised submodule's directory, changes nothing the
+    # checks above compare, and the removal would delete it. The
+    # configuration that decides whether status can see an edit (conversion_blocker) can
     # change after the snapshot too, and then every comparison above is blind to the edit.
-    if submodule_local_only_blocker "$wt" || admin_modules_blocker "$wt" || worktree_state_blocker "$wt" \
+    if nested_repository_blocker "$wt" || gitlink_blocker "$wt" || worktree_state_blocker "$wt" \
        || conversion_blocker "$wt"; then
       keep "$wt" "$SALVAGE_NOTE, after the salvage snapshot ($SALVAGE_REF)"; return 1
     fi
@@ -678,6 +676,7 @@ salvage_eligible() {
 salvage_blocker() {
   local wt=$1 list rc f total_kb=0 sz
   SALVAGE_NOTE=""
+  nested_repository_blocker "$wt" && return 0
   # A conflicted index cannot be written as a tree, so apply would fail at salvage_write
   # and KEEP the worktree. The operation markers are not a reliable witness (conflict
   # entries survive a removed MERGE_HEAD), so ask the index itself, or dry-run would
@@ -735,10 +734,32 @@ salvage_blocker() {
   gitlink_blocker "$wt" && return 0
   worktree_state_blocker "$wt" && return 0
   conversion_blocker "$wt" && return 0
-  # A linked worktree's submodule repositories live in its admin directory and are deleted
-  # with it, and salvage records only their gitlinks.
-  submodule_local_only_blocker "$wt" && return 0
-  admin_modules_blocker "$wt" && return 0
+  return 1
+}
+
+# nested_repository_blocker <worktree> -> 0, with SALVAGE_NOTE, when the worktree holds any
+# repository besides its own: an initialised submodule (whose repository lives under the
+# admin directory's modules/) or any other .git entry below its top level, including one the
+# parent ignores or one inside a tracked directory. Salvage records only the parent
+# repository, and the removal deletes the others with every commit, ref, index and reflog
+# they hold, so salvage covers single-repository worktrees only. Found by walking the
+# filesystem, never through git's own listing, which is exactly what an ignore rule hides
+# from. Any read failure blocks.
+nested_repository_blocker() {
+  local wt=$1 admin found
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
+    || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
+  if [ -e "$admin/modules" ] || [ -L "$admin/modules" ]; then
+    SALVAGE_NOTE="holds submodule repositories (salvage covers single-repository worktrees only)"
+    return 0
+  fi
+  if ! found=$(find "$wt" -mindepth 2 -name .git -prune -print 2>/dev/null); then
+    SALVAGE_NOTE="cannot search the worktree for nested repositories"; return 0
+  fi
+  if [ -n "$found" ]; then
+    SALVAGE_NOTE="holds a nested repository (${found%%$'\n'*}; salvage covers single-repository worktrees only)"
+    return 0
+  fi
   return 1
 }
 
@@ -758,6 +779,12 @@ gitlink_blocker() {
     [ -n "$p" ] || continue
     if [ -L "$wt/$p" ] || [ ! -d "$wt/$p" ]; then
       SALVAGE_NOTE="submodule directory $p was deleted or replaced (the snapshot cannot record it)"; return 0
+    fi
+    # Only an uninitialised submodule gets this far (nested_repository_blocker keeps an
+    # initialised one). Status reports files dropped into its directory as clean, the
+    # snapshot records only the gitlink, and the removal would delete them.
+    if [ -n "$(ls -A "$wt/$p" 2>/dev/null || echo unreadable)" ]; then
+      SALVAGE_NOTE="uninitialised submodule directory $p is not empty (cannot be salvaged)"; return 0
     fi
   done <<< "$head_links"
   return 1
@@ -810,35 +837,6 @@ worktree_state_blocker() {
   return 1
 }
 
-# unclassified_module_content <modules-dir> -> prints the first non-directory entry below
-# <modules-dir> that lies in no repository (a directory holding HEAD and objects/), searching
-# each repository's own modules/ the same way. Prints nothing when every file is accounted
-# for; non-zero on a read failure, so the caller fails closed.
-unclassified_module_content() {
-  local dir=$1 list entry nested
-  [ -d "$dir" ] || return 0
-  list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-modules.XXXXXX") || return 1
-  # Repositories are printed and pruned; any other non-directory is stray. NUL-delimited, so
-  # a path holding a newline is neither split nor skipped.
-  if ! find "$dir" -mindepth 1 \
-         \( -type d -exec test -f '{}/HEAD' \; -exec test -d '{}/objects' \; -print0 -prune \) \
-         -o \( ! -type d -print0 \) > "$list" 2>/dev/null; then
-    rm -f "$list"; return 1
-  fi
-  local entries=()
-  while IFS= read -r -d '' entry; do entries+=("$entry"); done < "$list"
-  rm -f "$list"
-  for entry in ${entries[@]+"${entries[@]}"}; do
-    if [ -d "$entry" ] && [ ! -L "$entry" ]; then
-      nested=$(unclassified_module_content "$entry/modules") || return 1
-      [ -z "$nested" ] || { printf '%s\n' "$nested"; return 0; }
-    else
-      printf '%s\n' "$entry"; return 0
-    fi
-  done
-  return 0
-}
-
 # entry_type_ok <path> -> 0 when a whitelisted git-directory entry has the type git gives it:
 # the directory-shaped names are real directories, everything else a file (a symlink to a
 # file counts, as git reads through it). Anything else is state the checks never inspect.
@@ -857,83 +855,6 @@ pseudo_ref_tag() {
   for sha in $2; do
     [ "$(git --git-dir="$g" --work-tree="$g" cat-file -t "$sha" 2>/dev/null)" = commit ] || return 0
   done
-  return 1
-}
-
-gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE when it holds state
-  # The same whitelist as the worktree's own admin directory, for a submodule repository the
-  # removal deletes: every entry must be ordinary repository content. A bisect, sequencer,
-  # rebase or merge state, a linked worktree's admin dir, or anything unknown blocks.
-  local g=$1 label=$2 entry
-  for entry in "$g"/* "$g"/.[!.]* "$g"/..?*; do
-    [ -e "$entry" ] || [ -L "$entry" ] || continue
-    case "${entry##*/}" in
-      HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|config|config.worktree|description|objects|refs|packed-refs|logs|index|modules|shallow|branches)
-        entry_type_ok "$entry" || { SALVAGE_NOTE="submodule $label has ${entry##*/} of an unexpected type (salvage cannot carry it)"; return 0; } ;;
-      hooks|info)
-        # A hook someone wrote may exist nowhere else (see custom_git_metadata).
-        custom_git_metadata "$entry" \
-          && { SALVAGE_NOTE="submodule $label has a customized ${entry##*/}/ ($SALVAGE_NOTE)"; return 0; } ;;
-      worktrees)
-        if [ -n "$(ls -A "$entry" 2>/dev/null || echo unreadable)" ]; then
-          SALVAGE_NOTE="submodule $label has linked worktrees (removing it would orphan them)"; return 0
-        fi ;;
-      *) SALVAGE_NOTE="submodule $label holds ${entry##*/} (salvage cannot carry it)"; return 0 ;;
-    esac
-  done
-  if [ -e "$g/refs/bisect" ]; then
-    SALVAGE_NOTE="submodule $label is mid-bisect (salvage cannot carry it)"; return 0
-  fi
-  # `rev-list` checks commits only: an annotated tag (its message or signature), or a ref
-  # straight to a tree or blob, is not covered by "every commit is on a remote". Measured on
-  # the host, 1 of 284 retained submodule repositories holds such a ref, so refusing costs
-  # almost nothing.
-  local types
-  types=$(git --git-dir="$g" --work-tree="$g" for-each-ref --format='%(objecttype)' 2>/dev/null) \
-    || { SALVAGE_NOTE="cannot list the refs of submodule $label"; return 0; }
-  if grep -qvx commit <<< "$types" && [ -n "$types" ]; then
-    SALVAGE_NOTE="submodule $label has a ref to a tag, tree or blob (salvage cannot carry it)"; return 0
-  fi
-  # A whitelist of ref namespaces: a branch, tag or remote-tracking name is a label a fetch
-  # restores, but a ref elsewhere (refs/replace, refs/notes, …) carries meaning in its name.
-  local names
-  names=$(git --git-dir="$g" --work-tree="$g" for-each-ref --format='%(refname)' 2>/dev/null) \
-    || { SALVAGE_NOTE="cannot list the refs of submodule $label"; return 0; }
-  if grep -qvE '^refs/(heads|tags|remotes)/' <<< "$names" && [ -n "$names" ]; then
-    SALVAGE_NOTE="submodule $label has a ref outside refs/heads, refs/tags and refs/remotes (salvage cannot carry it)"; return 0
-  fi
-  # ORIG_HEAD and FETCH_HEAD are outside `rev-list --all --reflog`; a commit only they name
-  # would die with the repository.
-  # A reflog can hold the only reference to a tag object a ref once pointed at; `rev-list
-  # --reflog` peels it. Every object any reflog names must therefore be a commit (a missing
-  # object has nothing left to lose).
-  local reflog_types
-  reflog_types=$( { find "$g/logs" ! -type d -exec cat {} + 2>/dev/null || [ ! -d "$g/logs" ]; } \
-                  | awk '{ for (i = 1; i <= 2; i++) if ((length($i) == 40 || length($i) == 64) && $i ~ /^[0-9a-f]+$/ && $i !~ /^0+$/) print $i }' \
-                  | sort -u | git --git-dir="$g" --work-tree="$g" cat-file --batch-check='%(objecttype)' 2>/dev/null) \
-    || { SALVAGE_NOTE="cannot read the reflogs of submodule $label"; return 0; }
-  if grep -qvE '^(commit|.* missing)$' <<< "$reflog_types" && [ -n "$reflog_types" ]; then
-    SALVAGE_NOTE="submodule $label has a reflog naming a tag, tree or blob (salvage cannot carry it)"; return 0
-  fi
-  local pseudo left sha
-  pseudo=$(pseudo_ref_commits "$g") || { SALVAGE_NOTE="cannot read the pseudo-refs of submodule $label"; return 0; }
-  if pseudo_ref_tag "$g" "$pseudo"; then
-    SALVAGE_NOTE="submodule $label has ORIG_HEAD or FETCH_HEAD naming a tag (salvage cannot carry it)"; return 0
-  fi
-  if [ -n "$pseudo" ]; then
-    # shellcheck disable=SC2086  # one sha per word
-    left=$(git --git-dir="$g" --work-tree="$g" rev-list -n 1 $pseudo --not --remotes 2>/dev/null || echo unreadable)
-    if [ -n "$left" ]; then
-      SALVAGE_NOTE="submodule $label has a commit only ORIG_HEAD or FETCH_HEAD names (cannot be salvaged)"; return 0
-    fi
-  fi
-  # A clean status proves nothing where `git` cannot see the change (see conversion_blocker).
-  if [ "$(git --git-dir="$g" --work-tree="$g" config --bool --get core.fileMode 2>/dev/null)" = false ]; then
-    SALVAGE_NOTE="submodule $label has core.fileMode=false (mode changes are invisible)"; return 0
-  fi
-  if [ "$(git --git-dir="$g" --work-tree="$g" config --bool --get core.ignoreCase 2>/dev/null)" = true ] && [ ! -e "$g/head" ]; then
-    SALVAGE_NOTE="submodule $label has core.ignoreCase=true on a case-sensitive filesystem"; return 0
-  fi
   return 1
 }
 
@@ -990,152 +911,6 @@ conversion_blocker() {
   if [ "$filtered" != "$raw" ]; then
     SALVAGE_NOTE="a path has a filter or conversion that changes its bytes (salvage would not keep the exact bytes)"; return 0
   fi
-  return 1
-}
-
-# admin_modules_blocker <worktree> -> 0, with SALVAGE_NOTE, unless every submodule repository
-# stored under the worktree's admin directory — including one whose gitlink was removed, which
-# no index enumeration can find — holds only remote-reachable commits and, when its working
-# tree still exists, is clean with no hidden-index flags. It checks what the removal would
-# actually delete, not what the index happens to list.
-admin_modules_blocker() {
-  local wt=$1 admin heads h g w wpath wdir st flags label local_only rc wt_real
-  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
-    || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
-  [ -d "$admin/modules" ] || return 1
-  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) && [ -n "$wt_real" ] \
-    || { SALVAGE_NOTE="cannot resolve the worktree path"; return 0; }
-  heads=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-heads.XXXXXX") \
-    || { SALVAGE_NOTE="cannot create a temporary list"; return 0; }
-  # A whitelist over what the removal deletes: every file below modules/ must belong to a
-  # repository this function then inspects. An interrupted clone or a damaged repository with
-  # no HEAD would otherwise be deleted without ever being looked at.
-  local stray
-  if ! stray=$(unclassified_module_content "$admin/modules"); then
-    rm -f "$heads"; SALVAGE_NOTE="cannot inspect the submodule repositories of $wt"; return 0
-  fi
-  if [ -n "$stray" ]; then
-    rm -f "$heads"; SALVAGE_NOTE="the worktree's modules/ holds content outside any repository (${stray#"$admin"/})"; return 0
-  fi
-  # NUL-delimited: a repository path holding a newline must not be split and skipped.
-  find "$admin/modules" \( -type f -o -type l \) -name HEAD -print0 > "$heads" 2>/dev/null \
-    || { rm -f "$heads"; SALVAGE_NOTE="cannot list the submodule repositories of $wt"; return 0; }
-  local hs=()
-  while IFS= read -r -d '' h; do hs+=("$h"); done < "$heads"
-  rm -f "$heads"
-  for h in ${hs[@]+"${hs[@]}"}; do
-    [ -n "$h" ] || continue
-    g=${h%/HEAD}
-    [ -d "$g/objects" ] || continue                  # a reflog's logs/HEAD, not a repository
-    label=${g#"$admin"/}; label=${label//$'\n'/?}   # one output line, even for a newline path
-    gitdir_state_blocker "$g" "$label" && return 0
-    # --work-tree pins a directory that exists: a removed submodule's core.worktree points at a
-    # path that no longer does, and git would refuse every read of the repository.
-    local_only=$(git --git-dir="$g" --work-tree="$g" rev-list -n 1 --all --reflog --not --remotes 2>/dev/null) \
-      || { SALVAGE_NOTE="cannot read submodule repository $label"; return 0; }
-    if [ -n "$local_only" ]; then
-      SALVAGE_NOTE="submodule repository $label holds commits no remote has (cannot be salvaged)"; return 0
-    fi
-    # The index is deleted with the repository whether or not a checkout remains, and a staged
-    # blob no commit holds lives only there: it must match HEAD exactly.
-    if [ -e "$g/index" ] || [ -L "$g/index" ]; then
-      git --git-dir="$g" --work-tree="$g" diff-index --cached --quiet HEAD -- 2>/dev/null; rc=$?
-      if [ "$rc" -ne 0 ]; then
-        SALVAGE_NOTE="submodule repository $label has staged changes or an unreadable index (cannot be salvaged)"; return 0
-      fi
-    fi
-    # Exit 1 is the one "no checkout configured" answer; any other failure is unreadable.
-    w=$(git --git-dir="$g" --work-tree="$g" config core.worktree 2>/dev/null); rc=$?
-    [ "$rc" -eq 1 ] && continue
-    [ "$rc" -eq 0 ] && [ -n "$w" ] || { SALVAGE_NOTE="cannot read the checkout of submodule repository $label"; return 0; }
-    case "$w" in /*) wpath=$w ;; *) wpath=$g/$w ;; esac
-    if ! wdir=$(cd "$wpath" 2>/dev/null && pwd -P); then
-      # Only a checkout proven absent carries nothing to lose; one that exists but cannot be
-      # entered right now may hold the only copy of its edits.
-      path_is_absent "$wpath" && continue
-      SALVAGE_NOTE="cannot enter the checkout of submodule repository $label"; return 0
-    fi
-    # The removal deletes this repository; a checkout outside the worktree would survive it
-    # and be left without the repository it depends on.
-    case "$wdir/" in
-      "$wt_real"/?*) ;;
-      *) SALVAGE_NOTE="submodule repository $label has a checkout outside the worktree ($wdir)"; return 0 ;;
-    esac
-    # A clean status proves nothing where a filter or conversion hides an edit from git.
-    if GIT_DIR=$g GIT_WORK_TREE=$wdir conversion_blocker "$wdir"; then
-      SALVAGE_NOTE="submodule ${wdir#"$wt"/}: $SALVAGE_NOTE"; return 0
-    fi
-    st=$(git --git-dir="$g" --work-tree="$wdir" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
-      || { SALVAGE_NOTE="cannot read the status of submodule ${wdir#"$wt"/}"; return 0; }
-    flags=$(git --git-dir="$g" --work-tree="$wdir" ls-files -v 2>/dev/null) \
-      || { SALVAGE_NOTE="cannot read the index flags of submodule ${wdir#"$wt"/}"; return 0; }
-    if [ -n "$st" ] || grep -q '^[a-zS]' <<< "$flags"; then
-      SALVAGE_NOTE="submodule ${wdir#"$wt"/} has uncommitted or hidden-index changes (cannot be salvaged)"; return 0
-    fi
-    flags=$(git --git-dir="$g" --work-tree="$wdir" ls-files --resolve-undo 2>/dev/null) \
-      || { SALVAGE_NOTE="cannot read the resolve-undo entries of submodule ${wdir#"$wt"/}"; return 0; }
-    if [ -n "$flags" ]; then
-      SALVAGE_NOTE="submodule ${wdir#"$wt"/} has resolve-undo index entries (cannot be salvaged)"; return 0
-    fi
-  done
-  return 1
-}
-
-# submodule_local_only_blocker <repo> -> 0, with SALVAGE_NOTE set, when an initialised
-# submodule of <repo> (recursively) holds any commit that no remote-tracking ref reaches, or
-# cannot be read; 1 otherwise. Salvage keeps only a submodule's gitlink, so the rule is a
-# whitelist: every commit a submodule knows locally — through HEAD, any branch or tag, or any
-# reflog — must already be on a remote. A submodule clean at its gitlink shows no status
-# entry at all, so status cannot answer this. Submodules are enumerated from the index's
-# gitlinks, not `git submodule foreach`, which skips a populated submodule that is not
-# registered as active and would fail open on it.
-submodule_local_only_blocker() {
-  local repo=$1 links line path local_only sub_st sub_flags sub_gitdir
-  links=$(git -C "$repo" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') \
-    || { SALVAGE_NOTE="cannot list the gitlinks of $repo for salvage"; return 0; }
-  case "$links" in
-    *$'\001'*) SALVAGE_NOTE="a tracked path in $repo holds a newline (cannot classify it)"; return 0 ;;
-  esac
-  while IFS= read -r line; do
-    case "$line" in 160000\ *) ;; *) continue ;; esac
-    path=${line#*$'\t'}
-    if [ ! -e "$repo/$path/.git" ] && [ ! -L "$repo/$path/.git" ]; then
-      # Not initialised: nothing local to lose only when the directory is empty (or gone).
-      # Status reports a populated uninitialised gitlink directory as clean, and the removal
-      # would delete whatever files sit in it.
-      [ -e "$repo/$path" ] || [ -L "$repo/$path" ] || continue
-      [ -z "$(ls -A "$repo/$path" 2>/dev/null || echo unreadable)" ] && continue
-      SALVAGE_NOTE="uninitialised submodule directory $path is not empty (cannot be salvaged)"; return 0
-    fi
-    local_only=$(git -C "$repo/$path" rev-list -n 1 --all --reflog --not --remotes 2>/dev/null) \
-      || { SALVAGE_NOTE="cannot list the local commits of submodule $path"; return 0; }
-    if [ -n "$local_only" ]; then
-      SALVAGE_NOTE="submodule $path holds commits no remote has (cannot be salvaged)"; return 0
-    fi
-    sub_gitdir=$(git -C "$repo/$path" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$sub_gitdir" ] \
-      || { SALVAGE_NOTE="cannot locate the repository of submodule $path"; return 0; }
-    gitdir_state_blocker "$sub_gitdir" "$path" && return 0
-    # Wherever its repository is stored (absorbed or an embedded .git directory), an
-    # initialised submodule must be clean and carry no hidden-index flags: salvage keeps
-    # only its gitlink, so an edit status cannot see would be deleted unrecorded.
-    sub_st=$(git -C "$repo/$path" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
-      || { SALVAGE_NOTE="cannot read the status of submodule $path"; return 0; }
-    sub_flags=$(git -C "$repo/$path" ls-files -v 2>/dev/null) \
-      || { SALVAGE_NOTE="cannot read the index flags of submodule $path"; return 0; }
-    if [ -n "$sub_st" ] || grep -q '^[a-zS]' <<< "$sub_flags"; then
-      SALVAGE_NOTE="submodule $path has uncommitted or hidden-index changes (cannot be salvaged)"; return 0
-    fi
-    sub_flags=$(git -C "$repo/$path" ls-files --resolve-undo 2>/dev/null) \
-      || { SALVAGE_NOTE="cannot read the resolve-undo entries of submodule $path"; return 0; }
-    if [ -n "$sub_flags" ]; then
-      SALVAGE_NOTE="submodule $path has resolve-undo index entries (cannot be salvaged)"; return 0
-    fi
-    # A clean status proves nothing where a filter or conversion hides an edit from git.
-    if conversion_blocker "$repo/$path"; then
-      SALVAGE_NOTE="submodule $path: $SALVAGE_NOTE"; return 0
-    fi
-    submodule_local_only_blocker "$repo/$path" && return 0
-  done <<< "$links"
   return 1
 }
 
@@ -1212,20 +987,48 @@ snapshot_kb() {
     | awk 'NF != 1 { bad = 1 } { kb += int(($1 + 1023) / 1024) } END { if (bad) exit 1; print kb + 0 }'
 }
 
-# reflog_orphans <repo> -> prints every HEAD-reflog commit of <repo> that no remote-tracking
-# ref reaches, one per line. Non-zero on any read failure, so callers fail closed. Used for a
-# worktree and for each of its initialised submodules.
+# reflog_orphans <repo> -> prints every commit only <repo>'s admin directory references (see
+# worktree_ref_ids) that no remote-tracking ref reaches, one per line. Non-zero on any read
+# failure, so callers fail closed.
 reflog_orphans() {
-  local reflog gitdir pseudo
-  reflog=$(git -C "$1" reflog show --format=%H HEAD 2>/dev/null) || return 1
-  # ORIG_HEAD and FETCH_HEAD live in the same admin directory and can name the only
-  # reference to a commit (a fetched ref deleted upstream, a reset-away tip), so they are
-  # preserved like the reflog.
-  gitdir=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$gitdir" ] || return 1
-  pseudo=$(pseudo_ref_commits "$gitdir") || return 1
-  [ -n "$reflog$pseudo" ] || return 0
+  local ids out
+  ids=$(worktree_ref_ids "$1") || return 1
+  [ -n "$ids" ] || return 0
   # shellcheck disable=SC2086  # one sha per word
-  git -C "$1" rev-list --no-walk $reflog $pseudo --not --remotes 2>/dev/null | sort -u
+  out=$(git -C "$1" rev-list --no-walk $ids --not --remotes 2>/dev/null) || return 1
+  [ -n "$out" ] || return 0
+  sort -u <<< "$out"
+}
+
+# worktree_ref_ids <repo> -> prints every commit that only <repo>'s admin directory may
+# reference: both sides of each HEAD-reflog entry, plus ORIG_HEAD and FETCH_HEAD (a fetched
+# ref deleted upstream, a reset-away tip). The admin directory dies with the worktree, so
+# each is a commit the removal can orphan. Non-zero on any read failure.
+worktree_ref_ids() {
+  local gitdir reflog pseudo
+  gitdir=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$gitdir" ] || return 1
+  reflog=$(head_reflog_ids "$1" "$gitdir") || return 1
+  pseudo=$(pseudo_ref_commits "$gitdir") || return 1
+  printf '%s\n%s\n' "$reflog" "$pseudo" | awk 'NF && !seen[$0]++'
+}
+
+# head_reflog_ids <repo> <gitdir> -> prints the object id on EITHER side of every HEAD-reflog
+# entry that the object store still holds. `reflog show` prints only the new side, and an
+# expired or truncated reflog can keep an entry whose old side is named nowhere else. An id
+# the store no longer has is skipped: an expired entry's object has nothing left to lose.
+# Non-zero on any read failure or a malformed entry.
+head_reflog_ids() {
+  local repo=$1 log="$2/logs/HEAD" ids out
+  if [ ! -e "$log" ] && [ ! -L "$log" ]; then return 0; fi
+  [ -f "$log" ] && [ -r "$log" ] || return 1
+  ids=$(awk '{ print tolower($1); print tolower($2) }' "$log") || return 1
+  [ -n "$ids" ] || return 0
+  if grep -Evq '^([0-9a-f]{40}|[0-9a-f]{64})$' <<< "$ids"; then return 1; fi
+  ids=$(grep -Ev '^0+$' <<< "$ids" | awk '!seen[$0]++')
+  [ -n "$ids" ] || return 0
+  out=$(git -C "$repo" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" 2>/dev/null) \
+    || return 1
+  awk 'NF != 2 { bad = 1; next } $2 != "missing" { print $1 } END { if (bad) exit 1 }' <<< "$out"
 }
 
 # pseudo_ref_commits <gitdir> -> prints each commit ORIG_HEAD or FETCH_HEAD in <gitdir> names
@@ -1246,41 +1049,6 @@ pseudo_ref_commits() {
     done < "$g/$f"
   done
   return 0
-}
-
-# path_is_absent <path> -> 0 only when <path> provably does not exist: its nearest existing
-# ancestor can be searched, so the missing entry is a real ENOENT and not a permission or
-# transient failure that hides an existing directory.
-path_is_absent() {
-  local p=$1 d
-  [ -e "$p" ] || [ -L "$p" ] && return 1
-  d=$(dirname "$p")
-  while [ ! -e "$d" ]; do
-    [ "$d" != / ] && [ "$d" != . ] || return 1
-    d=$(dirname "$d")
-  done
-  [ -d "$d" ] && [ -x "$d" ]
-}
-
-# custom_git_metadata <dir> -> 0, with SALVAGE_NOTE, when a repository's hooks/ or info/
-# directory holds anything but ordinary scaffolding: `*.sample` hooks, and info/exclude. A
-# hook is code someone may have written nowhere else; an exclude rule only hides files and
-# holds no work, and tooling appends to it (worktree-claim.sh's owner marker). Anything
-# else, or a read failure, counts as customized.
-custom_git_metadata() {
-  local dir=$1 f
-  # An unreadable directory would glob to nothing and read as pristine.
-  if [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
-    SALVAGE_NOTE="unreadable or not a directory"; return 0
-  fi
-  for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
-    [ -e "$f" ] || [ -L "$f" ] || continue
-    case "${dir##*/}/${f##*/}" in
-      hooks/*.sample|info/exclude) [ -f "$f" ] && [ ! -L "$f" ] && continue ;;
-    esac
-    SALVAGE_NOTE=${f##*/}; return 0
-  done
-  return 1
 }
 
 # salvage_write <worktree> <sha> -> writes and verifies refs/salvaged/<id>/*, setting
@@ -1558,19 +1326,25 @@ while IFS= read -r wt <&3; do
     keep "$wt" "contains a submodule-owned worktree (${sub_nested#"$wt_real"/})"; continue
   fi
 
-  # KEEP: commits in this worktree's own HEAD reflog that exist nowhere else. HEAD may be
-  # remotely reachable while the reflog still holds an earlier unpushed commit (commit,
-  # then reset back to a pushed one). The per-worktree reflog dies with the directory, so
-  # that commit's only reference would go with it.
-  reflog_shas=$(git -C "$wt" reflog show --format=%H HEAD 2>/dev/null); reflog_rc=$?
-  if [ "$reflog_rc" -eq 0 ] && [ -n "$reflog_shas" ]; then
+  # KEEP: commits that only this worktree's admin directory references — its HEAD reflog
+  # (either side of an entry), ORIG_HEAD or FETCH_HEAD. HEAD may be remotely reachable while
+  # the reflog still holds an earlier unpushed commit (commit, then reset back to a pushed
+  # one). The admin directory dies with the worktree, so that commit's only reference would
+  # go with it. An unreadable one is not proof there is nothing to lose.
+  if ! reflog_shas=$(worktree_ref_ids "$wt"); then
+    keep_stuck "$wt" "cannot read the HEAD reflog, ORIG_HEAD or FETCH_HEAD"; continue
+  fi
+  if [ -n "$reflog_shas" ]; then
     # On a proven squash-merged branch, ancestors of the PR head are accounted for too;
     # a commit reset away from that history is not, and still keeps the worktree.
     # shellcheck disable=SC2086  # merged_head is empty or one sha
-    orphaned=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog_shas --not --remotes $merged_head 2>/dev/null | head -1)
+    if ! orphaned=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog_shas --not --remotes $merged_head 2>/dev/null); then
+      keep "$wt" "cannot check whether reflog or pseudo-ref commits are reachable"; continue
+    fi
+    orphaned=$(head -1 <<< "$orphaned")
     if [ -n "$orphaned" ]; then
       if ! salvage_eligible "$age_h"; then
-        keep_stuck "$wt" "HEAD reflog holds commit(s) reachable from nowhere else (${orphaned:0:12})"
+        keep_stuck "$wt" "reflog or pseudo-ref holds commit(s) reachable from nowhere else (${orphaned:0:12})"
         continue
       fi
       salvage_reason="${salvage_reason:+$salvage_reason; }reflog-only commit(s)"

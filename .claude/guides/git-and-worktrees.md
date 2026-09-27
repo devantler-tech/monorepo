@@ -284,8 +284,9 @@ any infrastructure failure aborts rather than reaping. Work is never discarded, 
 forever either (#2831): once a worktree whose only KEEP reason is abandoned work passes
 `salvage_age_hours` (14 days in the scheduled sweep), its commits, reflog-only commits, index and
 working tree are first preserved under `refs/salvaged/<id>/…` and verified, and only then is the
-worktree reaped. Submodule work, embedded repositories and oversized data still KEEP, as does any
-change made after the snapshot. The restore steps are in the script's header. **Do not add a per-run worktree sweep** to
+worktree reaped. Salvage covers single-repository worktrees only: one holding any other repository
+(an initialised submodule, or an embedded one even when ignored) still KEEPs, as do oversized data
+and any change made after the snapshot. The restore steps are in the script's header. **Do not add a per-run worktree sweep** to
 compensate; a session removing its *own* worktree is exactly the thing that cannot work.
 Measured 2026-07-29, the run that introduced this: **124 leaked monorepo worktrees, ~15.7 GB across
 `.claude` and `.codex`, disk at 99%, and new sessions failing to start** for want of 5.4 GB. Because a

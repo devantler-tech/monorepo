@@ -852,7 +852,7 @@ t_keeps_worktree_with_orphaned_reflog_commit() {
   git -C "$w" reset -q --hard HEAD~1          # HEAD back to the pushed commit
   touch -t 202001010000 "$w"
   local out; out=$(run "$root")
-  if grep -q 'KEEP .*reflog .*reflog holds commit' <<<"$out" \
+  if grep -q 'KEEP .*reflog .*reflog or pseudo-ref holds commit' <<<"$out" \
      && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a worktree whose reflog holds an otherwise-unreachable commit"
   else
@@ -1169,7 +1169,7 @@ t_keeps_merged_branch_with_orphaned_reflog_commit() {
   printf 'MERGED\t%s\n' "$(git -C "$wt" rev-parse HEAD)" > "$root/gh-out"
   local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
   local out; out=$(run_gh "$root" "$shim")
-  if grep -q 'KEEP .*rewound .*HEAD reflog holds commit' <<<"$out"; then
+  if grep -q 'KEEP .*rewound .*reflog or pseudo-ref holds commit' <<<"$out"; then
     ok "KEEPs a merged branch whose reflog holds a commit outside the PR"
   else
     bad "KEEPs a merged branch whose reflog holds a commit outside the PR" "$out"
@@ -1292,7 +1292,7 @@ t_salvage_keeps_an_embedded_repository() {
   git init -q "$wt/inner"; echo x > "$wt/inner/x"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*emb .*embedded repository' <<<"$out" && [ -f "$wt/inner/x" ] \
+  if grep -Eq 'KEEP .*emb .*(nested repository|submodule repositories)' <<<"$out" && [ -f "$wt/inner/x" ] \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
     ok "salvage KEEPs untracked content git would record as an embedded repository"
   else
@@ -1566,7 +1566,7 @@ t_salvage_keeps_a_submodule_reflog_only_commit() {
   git -C "$wt/sub" reset -q --hard "$base"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subr .*holds commits no remote has' <<<"$out" \
+  if grep -Eq 'KEEP .*subr .*(nested repository|submodule repositories)' <<<"$out" \
      && git -C "$wt/sub" cat-file -e "$lost" 2>/dev/null \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
     ok "$name"
@@ -1586,7 +1586,7 @@ t_salvage_keeps_a_submodule_branch_only_commit() {
   side=$(git -C "$wt/sub" commit-tree "$tree" -p HEAD -m "only on a local branch")
   git -C "$wt/sub" update-ref refs/heads/side "$side"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subb .*holds commits no remote has' <<<"$out" \
+  if grep -Eq 'KEEP .*subb .*(nested repository|submodule repositories)' <<<"$out" \
      && [ "$(git -C "$wt/sub" rev-parse refs/heads/side 2>/dev/null)" = "$side" ] \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
     ok "$name"
@@ -1596,21 +1596,22 @@ t_salvage_keeps_a_submodule_branch_only_commit() {
   rm -rf "$root"
 }
 
-t_salvage_keeps_a_submodule_commit_made_after_the_snapshot() {
-  # A submodule commit reset back to the gitlink after the snapshot changes nothing the
-  # superproject can compare, and the removal deletes the submodule's repository.
-  local name="salvage KEEPs a worktree whose submodule gained a commit after the snapshot"
+t_salvage_keeps_a_repository_created_after_the_snapshot() {
+  # An ignored repository initialised after the snapshot changes nothing the snapshot
+  # comparisons can see, and the removal would delete it with its commit.
+  local name="salvage KEEPs a worktree that gained an ignored repository after the snapshot"
   local root; root=$(make_repo)
-  clean_submodule_wt "$root" subl || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
-  local wt="$root/repo/.claude/worktrees/subl" shim
-  shim=$(lsof_hook_shim "$root" 3 "git -C '$wt/sub' commit -q --allow-empty -m late >/dev/null 2>&1 && git -C '$wt/sub' reset -q --soft HEAD~1") \
+  add_wt "$root" latere pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/latere" shim
+  printf 'late/\n' >> "$(git -C "$wt" rev-parse --git-path info/exclude)"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  shim=$(lsof_hook_shim "$root" 3 "git init -q '$wt/late' && git -C '$wt/late' -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m late") \
     || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
   local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
-  if [ ! -d "$wt/sub" ]; then
-    bad "$name" "submodule removed: $out"
-  elif [ "$(git -C "$wt/sub" log -1 --format=%s 'HEAD@{1}' 2>/dev/null)" != late ]; then
-    bad "$name" "FIXTURE: no late submodule commit: $out"
-  elif grep -q 'KEEP .*subl .*holds commits no remote has.*after the salvage snapshot' <<<"$out"; then
+  if [ ! -d "$wt/late/.git" ]; then
+    bad "$name" "late repository missing: $out"
+  elif grep -q 'KEEP .*latere .*nested repository.*after the salvage snapshot' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -1763,7 +1764,7 @@ t_salvage_keeps_a_removed_submodules_local_commit() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subgone .*holds commits no remote has' <<<"$out" && [ -d "$wt" ] \
+  if grep -Eq 'KEEP .*subgone .*(nested repository|submodule repositories)' <<<"$out" && [ -d "$wt" ] \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
     ok "$name"
   else
@@ -1781,7 +1782,7 @@ t_salvage_keeps_a_hidden_index_edit_in_a_submodule() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subhide .*hidden-index' <<<"$out" && grep -q hidden "$wt/sub/f" \
+  if grep -Eq 'KEEP .*subhide .*(nested repository|submodule repositories)' <<<"$out" && grep -q hidden "$wt/sub/f" \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
     ok "$name"
   else
@@ -1790,16 +1791,18 @@ t_salvage_keeps_a_hidden_index_edit_in_a_submodule() {
   rm -rf "$root"
 }
 
-t_salvage_still_salvages_beside_a_clean_admin_submodule() {
-  # Control for the two above: a clean, remote-reachable submodule does not block salvage.
-  local name="salvage still salvages a worktree whose admin-dir submodule is clean"
+t_salvage_keeps_beside_even_a_clean_admin_submodule() {
+  # Salvage covers single-repository worktrees only: even a clean, remote-reachable
+  # submodule keeps the worktree, so no submodule state has to be classified at all.
+  local name="salvage KEEPs a worktree whose only other repository is a clean submodule"
   local root; root=$(make_repo)
   admin_sub_wt "$root" subok || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/subok"
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q '^SALVAGED .*subok ' <<<"$out" && [ ! -e "$wt" ]; then
+  if grep -q 'KEEP .*subok .*submodule repositories' <<<"$out" && [ -d "$wt" ] \
+     && ! grep -q '^SALVAGED .*subok ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -1850,7 +1853,7 @@ t_salvage_dry_run_refuses_an_unsnappable_gitlink_change() {
   rm -rf "$wt/sub"; echo now-a-file > "$wt/sub"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subdry .*deleted or replaced' <<<"$out" && ! grep -q '^SALVAGE .*subdry ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subdry .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subdry ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -1869,7 +1872,7 @@ t_salvage_keeps_a_hidden_edit_in_an_embedded_submodule() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subemb .*hidden-index' <<<"$out" && grep -q hidden "$wt/sub/f" \
+  if grep -Eq 'KEEP .*subemb .*(nested repository|submodule repositories)' <<<"$out" && grep -q hidden "$wt/sub/f" \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
     ok "$name"
   else
@@ -1927,7 +1930,7 @@ t_salvage_keeps_a_submodule_mid_bisect() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -qE 'KEEP .*subbis .*submodule .*(BISECT|mid-bisect)' <<<"$out" && ! grep -q '^SALVAGE .*subbis ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subbis .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subbis ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -1983,7 +1986,7 @@ t_salvage_keeps_a_submodule_that_ignores_file_modes() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*submode .*submodule .*core.fileMode=false' <<<"$out" && ! grep -q '^SALVAGE .*submode ' <<<"$out"; then
+  if grep -Eq 'KEEP .*submode .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*submode ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2008,6 +2011,78 @@ t_salvage_preserves_a_commit_only_fetch_head_names() {
     ok "$name"
   else
     bad "$name" "$out :: $(git -C "$root/repo" for-each-ref refs/salvaged)"
+  fi
+  rm -rf "$root"
+}
+
+t_pseudo_ref_only_commit_alone_triggers_salvage() {
+  # Nothing else in the tree asks for salvage: the FETCH_HEAD commit is the only thing to
+  # lose, so it must start the salvage (or keep the worktree) on its own.
+  local name="a commit only FETCH_HEAD names triggers salvage with no other change"
+  local root; root=$(make_repo)
+  add_wt "$root" fetchonly pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/fetchonly" c admin
+  c=$(git -C "$wt" commit-tree 'HEAD^{tree}' -p HEAD -m fetched) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '%s\t\tbranch '"'"'gone'"'"' of origin\n' "$c" > "$admin/FETCH_HEAD"
+  touch -t 202001010000 "$wt"
+  local off; off=$(run_salvage "$root" dry-run 0)
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*fetchonly .*pseudo-ref holds commit' <<<"$off" \
+     && grep -q '^SALVAGED .*fetchonly ' <<<"$out" && [ ! -e "$wt" ] \
+     && [ -n "$(git -C "$root/repo" for-each-ref --format='%(objectname)' "refs/salvaged/*/reflog/$c")" ]; then
+    ok "$name"
+  else
+    bad "$name" "off: $off :: apply: $out :: $(git -C "$root/repo" for-each-ref refs/salvaged)"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_preserves_the_old_side_of_a_reflog_entry() {
+  # A truncated reflog whose oldest entry is `unpushed -> HEAD`: the unpushed commit is named
+  # only on the OLD side, which `reflog show` never prints.
+  local name="salvage preserves a commit named only on the old side of a reflog entry"
+  local root; root=$(make_repo)
+  add_wt "$root" oldside pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/oldside" c head admin
+  c=$(git -C "$wt" commit-tree 'HEAD^{tree}' -p HEAD -m lost) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  head=$(git -C "$wt" rev-parse HEAD); admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '%s %s t <t@t.t> 1577836800 +0000\treset: moving to HEAD\n' "$c" "$head" > "$admin/logs/HEAD"
+  if git -C "$wt" reflog show --format=%H HEAD | grep -q "$c"; then
+    bad "$name" "FIXTURE: reflog show already prints the old side"; rm -rf "$root"; return
+  fi
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED .*oldside ' <<<"$out" && [ ! -e "$wt" ] \
+     && [ -n "$(git -C "$root/repo" for-each-ref --format='%(objectname)' "refs/salvaged/*/reflog/$c")" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out :: $(git -C "$root/repo" for-each-ref refs/salvaged)"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_an_ignored_embedded_repository() {
+  # git's own listing never shows an ignored directory, so only a filesystem walk finds it.
+  local name="salvage KEEPs a worktree holding an ignored embedded repository"
+  local root; root=$(make_repo)
+  add_wt "$root" ignrepo pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/ignrepo"
+  mkdir -p "$wt/vendor/lib" && git init -q "$wt/vendor/lib" \
+    && git -C "$wt/vendor/lib" -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m only-here \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  printf 'vendor/\n' >> "$(git -C "$wt" rev-parse --git-path info/exclude)"
+  if [ -n "$(git -C "$wt" ls-files -o --exclude-standard vendor)" ]; then
+    bad "$name" "FIXTURE: vendor/ is not ignored"; rm -rf "$root"; return
+  fi
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*ignrepo .*nested repository' <<<"$out" && [ -d "$wt/vendor/lib/.git" ] \
+     && ! grep -q '^SALVAGED .*ignrepo' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
   fi
   rm -rf "$root"
 }
@@ -2044,7 +2119,7 @@ t_salvage_finds_an_admin_repository_at_a_newline_path() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*nlrepo .*modules/we?ird holds commits no remote has' <<<"$out" && ! grep -q '^SALVAGE .*nlrepo ' <<<"$out"; then
+  if grep -Eq 'KEEP .*nlrepo .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*nlrepo ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2092,7 +2167,7 @@ t_salvage_finds_an_admin_repository_with_a_symlinked_head() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*symhead .*modules/legacy holds commits no remote has' <<<"$out" && ! grep -q '^SALVAGE .*symhead ' <<<"$out"; then
+  if grep -Eq 'KEEP .*symhead .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*symhead ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2128,7 +2203,7 @@ t_salvage_keeps_when_a_pseudo_ref_commit_is_unreadable() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*badfetch .*not salvaged' <<<"$out" && [ -d "$wt" ] && ! grep -q '^SALVAGED .*badfetch' <<<"$out"; then
+  if grep -q 'KEEP .*badfetch .*cannot read the HEAD reflog, ORIG_HEAD or FETCH_HEAD' <<<"$out" && [ -d "$wt" ] && ! grep -q '^SALVAGED .*badfetch' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2147,7 +2222,7 @@ t_salvage_keeps_a_submodule_annotated_tag() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subtag .*ref to a tag, tree or blob' <<<"$out" && ! grep -q '^SALVAGE .*subtag ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subtag .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subtag ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2171,7 +2246,7 @@ t_salvage_keeps_a_filter_hidden_edit_in_a_submodule() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subfilt .*submodule sub: a path has a filter or conversion' <<<"$out" \
+  if grep -Eq 'KEEP .*subfilt .*(nested repository|submodule repositories)' <<<"$out" \
      && [ "$(cat "$wt/sub/f")" = uno ] && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
     ok "$name"
   else
@@ -2201,9 +2276,8 @@ t_salvage_rechecks_conversion_settings_after_the_snapshot() {
 }
 
 t_salvage_keeps_a_submodule_with_a_custom_hook() {
-  # A hook someone wrote lives only in the submodule repository the removal deletes. The
-  # sample hooks and default exclude file `git init` copies in are the control: the clean
-  # admin-submodule test above salvages beside exactly that scaffolding.
+  # A hook someone wrote lives only in the submodule repository the removal deletes. Any
+  # submodule repository keeps the worktree, customized or not.
   local name="salvage KEEPs a submodule repository holding a customized hook or info file"
   local root; root=$(make_repo)
   admin_sub_wt "$root" subhook || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
@@ -2213,21 +2287,21 @@ t_salvage_keeps_a_submodule_with_a_custom_hook() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if ! grep -q 'KEEP .*subhook .*customized hooks/ (pre-commit)' <<<"$out" || grep -q '^SALVAGE .*subhook ' <<<"$out"; then
+  if ! grep -Eq 'KEEP .*subhook .*(nested repository|submodule repositories)' <<<"$out" || grep -q '^SALVAGE .*subhook ' <<<"$out"; then
     bad "$name" "hook: $out"; rm -rf "$root"; return
   fi
   rm -f "$g/hooks/pre-commit"; mkdir -p "$g/info"; echo '*.local' >> "$g/info/exclude"   # an exclude rule holds no work: allowed
   echo 'f -text' > "$g/info/attributes"
   out=$(run_salvage "$root" dry-run 1)
-  if ! grep -q 'KEEP .*subhook .*customized info/ (attributes)' <<<"$out" || grep -q '^SALVAGE .*subhook ' <<<"$out"; then
+  if ! grep -Eq 'KEEP .*subhook .*(nested repository|submodule repositories)' <<<"$out" || grep -q '^SALVAGE .*subhook ' <<<"$out"; then
     bad "$name" "attributes: $out"; rm -rf "$root"; return
   fi
   rm -f "$g/info/attributes"
   out=$(run_salvage "$root" dry-run 1)
-  if grep -q '^SALVAGE .*subhook ' <<<"$out"; then
+  if grep -q 'KEEP .*subhook .*submodule repositories' <<<"$out" && ! grep -q '^SALVAGE .*subhook ' <<<"$out"; then
     ok "$name"
   else
-    bad "$name" "custom exclude control: $out"
+    bad "$name" "plain submodule: $out"
   fi
   rm -rf "$root"
 }
@@ -2315,7 +2389,7 @@ t_salvage_keeps_an_admin_submodule_with_an_external_checkout() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subext .*modules/other has a checkout outside the worktree' <<<"$out" && ! grep -q '^SALVAGE .*subext ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subext .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subext ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2337,7 +2411,7 @@ t_salvage_keeps_a_submodule_tag_only_fetch_head_names() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subftag .*FETCH_HEAD naming a tag' <<<"$out" && ! grep -q '^SALVAGE .*subftag ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subftag .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subftag ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2347,7 +2421,7 @@ t_salvage_keeps_a_submodule_tag_only_fetch_head_names() {
 
 t_salvage_keeps_a_submodule_checkout_it_cannot_enter() {
   # An admin-dir submodule repository whose checkout exists but cannot be entered must not
-  # read as "no checkout"; one whose checkout is provably gone still salvages (the control).
+  # read as "no checkout"; one whose checkout is gone keeps the worktree too.
   local name="salvage KEEPs an admin submodule repository whose checkout cannot be entered"
   local root; root=$(make_repo)
   admin_sub_wt "$root" subenter || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
@@ -2364,16 +2438,16 @@ t_salvage_keeps_a_submodule_checkout_it_cannot_enter() {
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   chmod 755 "$root/locked"
-  if ! grep -q 'KEEP .*subenter .*cannot enter the checkout of submodule repository modules/other' <<<"$out" \
+  if ! grep -Eq 'KEEP .*subenter .*(nested repository|submodule repositories)' <<<"$out" \
      || grep -q '^SALVAGE .*subenter ' <<<"$out"; then
     bad "$name" "locked: $out"; rm -rf "$root"; return
   fi
   git --git-dir="${g%/sub}/other" config core.worktree "$root/gone/co"
   out=$(run_salvage "$root" dry-run 1)
-  if grep -q '^SALVAGE .*subenter ' <<<"$out"; then
+  if grep -q 'KEEP .*subenter .*submodule repositories' <<<"$out" && ! grep -q '^SALVAGE .*subenter ' <<<"$out"; then
     ok "$name"
   else
-    bad "$name" "absent control: $out"
+    bad "$name" "absent checkout: $out"
   fi
   rm -rf "$root"
 }
@@ -2428,13 +2502,13 @@ t_salvage_keeps_unclassified_content_under_admin_modules() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if ! grep -q '^SALVAGE .*subpart ' <<<"$out"; then
-    bad "$name" "clean control: $out"; rm -rf "$root"; return
+  if ! grep -q 'KEEP .*subpart .*submodule repositories' <<<"$out"; then
+    bad "$name" "clean submodule: $out"; rm -rf "$root"; return
   fi
   mkdir -p "$admin/modules/partial/objects/ab" && echo blob > "$admin/modules/partial/objects/ab/cdef"
   touch -t 202001010000 "$wt"
   out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subpart .*content outside any repository (modules/partial/objects/ab/cdef)' <<<"$out" \
+  if grep -Eq 'KEEP .*subpart .*(nested repository|submodule repositories)' <<<"$out" \
      && ! grep -q '^SALVAGE .*subpart ' <<<"$out"; then
     ok "$name"
   else
@@ -2477,7 +2551,7 @@ t_salvage_keeps_a_submodule_tag_only_a_reflog_names() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subrltag .*reflog naming a tag, tree or blob' <<<"$out" && ! grep -q '^SALVAGE .*subrltag ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subrltag .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subrltag ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2539,7 +2613,7 @@ t_salvage_keeps_a_module_repository_whose_head_is_a_directory() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subhd .*content outside any repository' <<<"$out" && ! grep -q '^SALVAGE .*subhd ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subhd .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subhd ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2567,7 +2641,7 @@ t_salvage_keeps_resolve_undo_entries_in_a_submodule() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subreuc .*resolve-undo' <<<"$out" && ! grep -q '^SALVAGE .*subreuc ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subreuc .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subreuc ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2626,7 +2700,7 @@ t_salvage_keeps_a_submodule_replace_ref() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subrepl .*ref outside refs/heads' <<<"$out" && ! grep -q '^SALVAGE .*subrepl ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subrepl .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subrepl ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2644,7 +2718,7 @@ t_salvage_keeps_a_whitelisted_admin_name_of_the_wrong_type() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*modfile .*modules is not the kind of entry' <<<"$out" && ! grep -q '^SALVAGE .*modfile ' <<<"$out"; then
+  if grep -Eq 'KEEP .*modfile .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*modfile ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2666,7 +2740,7 @@ t_salvage_keeps_a_tag_a_symlinked_submodule_reflog_names() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subrlsym .*reflog naming a tag, tree or blob' <<<"$out" && ! grep -q '^SALVAGE .*subrlsym ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subrlsym .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subrlsym ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2692,7 +2766,7 @@ t_salvage_keeps_a_staged_blob_in_a_checkout_less_submodule_repository() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
-  if grep -q 'KEEP .*subidx .*staged changes or an unreadable index' <<<"$out" && ! grep -q '^SALVAGE .*subidx ' <<<"$out"; then
+  if grep -Eq 'KEEP .*subidx .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subidx ' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2780,7 +2854,7 @@ t_salvage_namespaces_are_unique_per_worktree
 t_salvage_keeps_submodule_work_at_a_newline_path
 t_salvage_keeps_a_submodule_reflog_only_commit
 t_salvage_keeps_a_submodule_branch_only_commit
-t_salvage_keeps_a_submodule_commit_made_after_the_snapshot
+t_salvage_keeps_a_repository_created_after_the_snapshot
 t_salvage_keeps_a_reflog_commit_made_after_the_snapshot
 t_salvage_rechecks_its_cap_under_the_mutex
 t_salvage_dry_run_keeps_a_conflicted_index
@@ -2788,7 +2862,7 @@ t_salvage_preserves_ignored_tracked_paths
 t_salvage_reports_why_a_snapshot_failed
 t_salvage_keeps_a_removed_submodules_local_commit
 t_salvage_keeps_a_hidden_index_edit_in_a_submodule
-t_salvage_still_salvages_beside_a_clean_admin_submodule
+t_salvage_keeps_beside_even_a_clean_admin_submodule
 t_salvage_keeps_a_per_worktree_ref
 t_salvage_keeps_an_intent_to_add_entry
 t_salvage_dry_run_refuses_an_unsnappable_gitlink_change
@@ -2831,5 +2905,8 @@ t_salvage_keeps_a_whitelisted_admin_name_of_the_wrong_type
 t_salvage_keeps_a_tag_a_symlinked_submodule_reflog_names
 t_salvage_keeps_a_staged_blob_in_a_checkout_less_submodule_repository
 t_salvage_reads_an_unterminated_fetch_head_line
+t_pseudo_ref_only_commit_alone_triggers_salvage
+t_salvage_preserves_the_old_side_of_a_reflog_entry
+t_salvage_keeps_an_ignored_embedded_repository
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
