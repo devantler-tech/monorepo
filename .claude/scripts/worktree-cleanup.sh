@@ -753,9 +753,19 @@ nested_repository_blocker() {
     SALVAGE_NOTE="holds submodule repositories (salvage covers single-repository worktrees only)"
     return 0
   fi
-  if ! found=$(find "$wt" -mindepth 2 -name .git -prune -print 2>/dev/null); then
+  # A .git entry marks a repository with a working tree; a bare repository has none, so it
+  # is recognised by its own layout: an objects/ directory beside a HEAD file and refs/.
+  local objs o
+  if ! found=$(find "$wt" -mindepth 2 -name .git -prune -print 2>/dev/null) \
+     || ! objs=$(find "$wt" -mindepth 2 -type d -name objects -prune -print 2>/dev/null); then
     SALVAGE_NOTE="cannot search the worktree for nested repositories"; return 0
   fi
+  while IFS= read -r o; do
+    [ -n "$o" ] || continue
+    if [ -f "${o%/objects}/HEAD" ] && [ -d "${o%/objects}/refs" ]; then
+      found=${found:-${o%/objects}}
+    fi
+  done <<< "$objs"
   if [ -n "$found" ]; then
     SALVAGE_NOTE="holds a nested repository (${found%%$'\n'*}; salvage covers single-repository worktrees only)"
     return 0
@@ -810,6 +820,15 @@ worktree_state_blocker() {
       *) SALVAGE_NOTE="the worktree's git state holds ${entry##*/} (salvage cannot carry it)"; return 0 ;;
     esac
   done
+  if [ -d "$admin/logs" ]; then
+    # Only the HEAD reflog is read (worktree_ref_ids) and preserved; any other entry under
+    # logs/ would be deleted unread.
+    refs=$(find "$admin/logs" -mindepth 1 ! -path "$admin/logs/HEAD" 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot list the worktree's reflogs"; return 0; }
+    if [ -n "$refs" ]; then
+      SALVAGE_NOTE="the worktree's logs/ holds more than the HEAD reflog (salvage cannot carry it)"; return 0
+    fi
+  fi
   if [ -d "$admin/refs" ]; then
     # The ownership mutex this sweep holds is itself a per-worktree ref; it guards the
     # removal and carries no work, so it is the one ref excluded.
@@ -1036,8 +1055,9 @@ head_reflog_ids() {
 pseudo_ref_commits() {
   local g=$1 f sha
   for f in ORIG_HEAD FETCH_HEAD; do
-    [ -e "$g/$f" ] || continue
-    [ -r "$g/$f" ] || return 1
+    [ -e "$g/$f" ] || [ -L "$g/$f" ] || continue
+    # A regular file only (following a symlink): reading a FIFO would block the sweep.
+    [ -f "$g/$f" ] && [ -r "$g/$f" ] || return 1
     while IFS= read -r sha || [ -n "$sha" ]; do
       sha=$(printf '%s' "${sha%%[[:space:]]*}" | tr 'A-F' 'a-f')
       [ -n "$sha" ] || continue

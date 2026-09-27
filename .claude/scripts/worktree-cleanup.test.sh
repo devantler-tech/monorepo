@@ -2087,6 +2087,68 @@ t_salvage_keeps_an_ignored_embedded_repository() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_an_ignored_bare_repository() {
+  # A bare repository has no .git entry; its own layout is what marks it.
+  local name="salvage KEEPs a worktree holding an ignored bare repository"
+  local root; root=$(make_repo)
+  add_wt "$root" bare pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/bare"
+  git init -q --bare "$wt/unique.git" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  printf 'unique.git/\n' >> "$(git -C "$wt" rev-parse --git-path info/exclude)"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*bare .*nested repository' <<<"$out" && [ -f "$wt/unique.git/HEAD" ] \
+     && ! grep -q '^SALVAGED .*bare' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_an_unknown_admin_log() {
+  local name="salvage KEEPs a worktree whose admin logs/ holds more than the HEAD reflog"
+  local root; root=$(make_repo)
+  add_wt "$root" oddlog pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/oddlog" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  echo note > "$admin/logs/custom"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*oddlog .*logs/ holds more than the HEAD reflog' <<<"$out" && [ -f "$admin/logs/custom" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_a_fifo_fetch_head_keeps_without_blocking() {
+  # Reading a FIFO blocks for a writer; the sweep must refuse it instead of hanging.
+  local name="a FIFO FETCH_HEAD keeps the worktree without blocking the sweep"
+  local root; root=$(make_repo)
+  add_wt "$root" fifofh pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/fifofh" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  mkfifo "$admin/FETCH_HEAD" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  touch -t 202001010000 "$wt"
+  local out pid i=0
+  run_salvage "$root" dry-run 1 > "$root/out.txt" & pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 60 ]; do sleep 1; i=$((i+1)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null; : > "$admin/FETCH_HEAD" & sleep 1; bad "$name" "sweep blocked on the FIFO"; rm -rf "$root"; return
+  fi
+  out=$(cat "$root/out.txt")
+  if grep -q 'KEEP .*fifofh .*cannot read the HEAD reflog, ORIG_HEAD or FETCH_HEAD' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_deleted_intent_to_add_entry() {
   # `git add -N` then `rm`: the worktree diff calls it D, but the index entry remains.
   local name="salvage dry-run KEEPs an intent-to-add entry whose file was deleted"
@@ -2908,5 +2970,8 @@ t_salvage_reads_an_unterminated_fetch_head_line
 t_pseudo_ref_only_commit_alone_triggers_salvage
 t_salvage_preserves_the_old_side_of_a_reflog_entry
 t_salvage_keeps_an_ignored_embedded_repository
+t_salvage_keeps_an_ignored_bare_repository
+t_salvage_keeps_an_unknown_admin_log
+t_a_fifo_fetch_head_keeps_without_blocking
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
