@@ -1394,6 +1394,94 @@ SHIM
   rm -rf "$root"
 }
 
+t_salvage_keeps_oversized_staged_only_work() {
+  # A staged addition whose working-tree copy matches the index is invisible to
+  # `ls-files -m -o`, yet the salvage index ref would make its blob permanent.
+  local root; root=$(make_repo)
+  add_wt "$root" bigstaged pushed
+  local wt="$root/repo/.claude/worktrees/bigstaged"
+  head -c 20480 /dev/zero > "$wt/blob.bin"; git -C "$wt" add blob.bin
+  touch -t 202001010000 "$wt"
+  local out; out=$(WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*bigstaged .*more than 8 KB' <<<"$out" && [ -f "$wt/blob.bin" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "salvage KEEPs a tree whose STAGED-only data exceeds the salvage cap"
+  else
+    bad "salvage KEEPs a tree whose STAGED-only data exceeds the salvage cap" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_submodule_work_at_a_quoted_path() {
+  # Porcelain C-quotes a non-ASCII path, and a quoted submodule path fails the `.git`
+  # lookup — so its uncommitted files were treated as salvageable, then deleted.
+  local name="salvage KEEPs dirty submodule work at a path porcelain would quote"
+  local root; root=$(make_repo)
+  local sub="$root/subq.git" seed="$root/seedq" subA wt
+  git init -q --bare "$sub"; git init -q -b main "$seed"
+  git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
+  echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one
+  subA=$(git -C "$seed" rev-parse HEAD); git -C "$seed" push -q "$sub" main
+  add_wt "$root" subq pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  wt="$root/repo/.claude/worktrees/subq"
+  git clone -q "$sub" "$wt/süb"
+  git -C "$wt" update-index --add --cacheinfo "160000,$subA,süb"
+  git -C "$wt" commit -qm "track süb"; git -C "$wt" push -q origin claude/subq
+  echo dirty >> "$wt/süb/f"
+  touch -t 202001010000 "$wt"
+  # Control: the fixture really produces a QUOTED porcelain path.
+  if ! git -C "$wt" status --porcelain --ignore-submodules=none | grep -q '"'; then
+    bad "$name" "FIXTURE: porcelain did not quote the path"; rm -rf "$root"; return
+  fi
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subq .*in a submodule (cannot be salvaged)' <<<"$out" \
+     && [ "$(tail -1 "$wt/süb/f" 2>/dev/null)" = dirty ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_namespaces_are_unique_per_worktree() {
+  # Two nested worktrees share a basename and a HEAD. The date shim pins the salvage
+  # timestamp, so both are salvaged "in the same second" deterministically.
+  local name="salvage gives same-basename, same-HEAD worktrees distinct namespaces"
+  local root; root=$(make_repo)
+  local p1 p2 real_date shim
+  add_wt "$root" pa pushed; add_wt "$root" pb pushed
+  p1="$root/repo/.claude/worktrees/pa"; p2="$root/repo/.claude/worktrees/pb"
+  if ! git -C "$root/repo" worktree add -q -b claude/dupa "$p1/.claude/worktrees/dup" main \
+     || ! git -C "$root/repo" worktree add -q -b claude/dupb "$p2/.claude/worktrees/dup" main; then
+    bad "$name" "FIXTURE: nested worktree add failed"; rm -rf "$root"; return
+  fi
+  git -C "$root/repo" push -q origin claude/dupa claude/dupb
+  echo first > "$p1/.claude/worktrees/dup/work.txt"
+  echo second > "$p2/.claude/worktrees/dup/work.txt"
+  touch -t 202001010000 "$p1/.claude/worktrees/dup" "$p2/.claude/worktrees/dup" "$p1" "$p2"
+  real_date=$(command -v date); shim="$root/shim"; mkdir -p "$shim"
+  cat > "$shim/date" <<SHIM
+#!/usr/bin/env bash
+[ "\$*" = "-u +%Y%m%dT%H%M%SZ" ] && { echo 20200101T000000Z; exit 0; }
+exec "$real_date" "\$@"
+SHIM
+  chmod +x "$shim/date"
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  local bases; bases=$(git -C "$root/repo" for-each-ref --format='%(refname)' 'refs/salvaged/*/head' | sed 's#/head$##')
+  local contents="" b
+  while IFS= read -r b; do
+    [ -n "$b" ] && contents="$contents $(git -C "$root/repo" show "$b/worktree:work.txt" 2>/dev/null)"
+  done <<<"$bases"
+  if [ "$(grep -c . <<<"$bases")" -eq 2 ] && grep -qw first <<<"$contents" \
+     && grep -qw second <<<"$contents" \
+     && [ ! -e "$p1/.claude/worktrees/dup" ] && [ ! -e "$p2/.claude/worktrees/dup" ]; then
+    ok "$name"
+  else
+    bad "$name" "bases=[$bases] contents=[$contents] :: $out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -1448,5 +1536,8 @@ t_salvage_keeps_oversized_work
 t_salvage_keeps_submodule_work
 t_salvage_rejects_a_bad_age
 t_salvage_keeps_work_written_after_the_snapshot
+t_salvage_keeps_oversized_staged_only_work
+t_salvage_keeps_submodule_work_at_a_quoted_path
+t_salvage_namespaces_are_unique_per_worktree
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

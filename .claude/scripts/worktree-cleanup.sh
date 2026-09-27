@@ -456,7 +456,7 @@ recheck_mutable_gates() {
     2) die "lsof re-check failed for $target — refusing to continue on an unverifiable live set" ;;
   esac
 
-  st=$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
+  st=$(porcelain_status "$wt") \
     || { keep "$wt" "cannot re-read status before removal"; return 1; }
   count_real_changes "$wt" "$st"
   if [ -n "$SALVAGE_TREE" ]; then
@@ -530,6 +530,19 @@ submodule_owned_worktree() {
     done <<< "$wts"
   done <<< "$subs"
   return 0
+}
+
+# porcelain_status <worktree> -> prints one porcelain entry per line (`XY path`), with
+# every path VERBATIM. The default porcelain output C-quotes a path holding non-ASCII or
+# other unusual bytes, and a quoted submodule path then fails the `$wt/$path/.git` test
+# in count_real_changes — so its uncommitted files were counted as ordinary work that
+# salvage can capture, and deleted with the worktree. `-z` never quotes. The rename and
+# copy SOURCE path that `-z` emits as a separate field is dropped, so every line keeps
+# the `XY path` shape. Non-zero when status cannot be read (pipefail is set).
+porcelain_status() {
+  git -C "$1" status --porcelain -z --untracked-files=all --ignore-submodules=none 2>/dev/null \
+    | tr '\0' '\n' \
+    | awk 'skip { skip = 0; next } { print } /^([RC].|.[RC]) / { skip = 1 }'
 }
 
 # count_real_changes <worktree> <porcelain-status> -> sets $REAL_CHANGES
@@ -640,6 +653,29 @@ salvage_blocker() {
       return 0
     fi
   done <<< "$list"
+  # The STAGED index is salvaged too (refs/salvaged/<id>/index), and `ls-files -m -o`
+  # sees neither index-versus-HEAD changes nor a staged blob the working tree has since
+  # overwritten. Size each changed index blob from the object store instead, so a large
+  # staged-only addition cannot slip under the cap and be made permanent by a salvage ref.
+  # --raw -z alternates a `:modes shas status` field with its path field.
+  list=$(git -C "$wt" diff --cached --raw --no-renames --no-abbrev -z 2>/dev/null | tr '\0' '\n'); rc=$?
+  if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot list staged changes for salvage"; return 0; fi
+  local meta newmode newsha
+  while IFS= read -r meta; do
+    [ -n "$meta" ] || continue
+    IFS= read -r f || { SALVAGE_NOTE="cannot parse staged changes for salvage"; return 0; }
+    # meta: `:oldmode newmode oldsha newsha status`
+    # shellcheck disable=SC2086  # split the space-separated metadata field on purpose
+    set -- $meta
+    newmode=$2; newsha=$4
+    case "$newmode" in 000000|160000) continue ;; esac   # a deletion, or a gitlink (no bytes here)
+    sz=$(git -C "$wt" cat-file -s "$newsha" 2>/dev/null) || { SALVAGE_NOTE="cannot size staged $f for salvage"; return 0; }
+    total_kb=$((total_kb + (sz + 1023) / 1024))
+    if [ "$total_kb" -gt "$SALVAGE_MAX_KB" ]; then
+      SALVAGE_NOTE="more than ${SALVAGE_MAX_KB} KB of changed or untracked data to salvage"
+      return 0
+    fi
+  done <<< "$list"
   return 1
 }
 
@@ -683,9 +719,17 @@ salvage_commit() {
 # Returns non-zero, with SALVAGE_NOTE, on any failure; refs already written stay (they
 # only preserve data) and the caller KEEPs the worktree.
 salvage_write() {
-  local wt=$1 sha=$2 id base idx_tree wt_tree idx_commit wt_commit reflog orphans o
+  local wt=$1 sha=$2 id base idx_tree wt_tree idx_commit wt_commit reflog orphans o path_id
   SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""
-  id="$(date -u +%Y%m%dT%H%M%SZ)-$(basename "$wt")-${sha:0:12}"
+  # The namespace must be unique per WORKTREE, not per basename: two registered nested
+  # worktrees can share a basename and a HEAD, and salvaged in the same second they would
+  # otherwise derive one namespace and the second would overwrite the first's refs —
+  # leaving its uncommitted work unreferenced after both are reaped. A digest of the full
+  # path separates them, and every ref below is created with an empty old value, so a
+  # collision that still happens fails (and KEEPs the worktree) instead of overwriting.
+  path_id=$(printf '%s' "$wt" | git hash-object --stdin 2>/dev/null) && [ -n "$path_id" ] \
+    || { SALVAGE_NOTE="cannot derive a salvage namespace for $wt"; return 1; }
+  id="$(date -u +%Y%m%dT%H%M%SZ)-$(basename "$wt")-${path_id:0:12}-${sha:0:12}"
   base="refs/salvaged/$id"
   git check-ref-format "$base/head" 2>/dev/null || { SALVAGE_NOTE="unusable salvage ref name $base"; return 1; }
   idx_tree=$(git -C "$wt" write-tree 2>/dev/null) || { SALVAGE_NOTE="cannot write the staged index as a tree"; return 1; }
@@ -701,13 +745,13 @@ salvage_write() {
     || { SALVAGE_NOTE="cannot commit the staged index"; return 1; }
   wt_commit=$(salvage_commit "$wt" "$wt_tree" "$sha" "salvage: working tree of $(basename "$wt")") \
     || { SALVAGE_NOTE="cannot commit the working tree"; return 1; }
-  git -C "$TOPLEVEL" update-ref "$base/head" "$sha" 2>/dev/null \
-    && git -C "$TOPLEVEL" update-ref "$base/index" "$idx_commit" 2>/dev/null \
-    && git -C "$TOPLEVEL" update-ref "$base/worktree" "$wt_commit" 2>/dev/null \
+  git -C "$TOPLEVEL" update-ref "$base/head" "$sha" "" 2>/dev/null \
+    && git -C "$TOPLEVEL" update-ref "$base/index" "$idx_commit" "" 2>/dev/null \
+    && git -C "$TOPLEVEL" update-ref "$base/worktree" "$wt_commit" "" 2>/dev/null \
     || { SALVAGE_NOTE="cannot write $base refs"; return 1; }
   while IFS= read -r o; do
     [ -n "$o" ] || continue
-    git -C "$TOPLEVEL" update-ref "$base/reflog/$o" "$o" 2>/dev/null \
+    git -C "$TOPLEVEL" update-ref "$base/reflog/$o" "$o" "" 2>/dev/null \
       || { SALVAGE_NOTE="cannot write $base/reflog/$o"; return 1; }
     [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/reflog/$o" 2>/dev/null)" = "$o" ] \
       || { SALVAGE_NOTE="$base/reflog/$o does not verify"; return 1; }
@@ -882,7 +926,7 @@ while IFS= read -r wt <&3; do
   # --untracked-files=all is EXPLICIT: a repo inheriting status.showUntrackedFiles=no
   # reports a clean worktree while holding non-ignored untracked authored files, and
   # apply mode would delete their only copy.
-  status=$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) || {
+  status=$(porcelain_status "$wt") || {
     keep "$wt" "cannot read status"; continue; }
 
   # `git status` cannot see edits to files carrying the assume-unchanged or
