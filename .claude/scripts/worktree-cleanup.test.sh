@@ -2510,6 +2510,71 @@ t_salvage_keeps_resolve_undo_entries() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_symlinked_per_worktree_ref() {
+  local name="salvage KEEPs a worktree whose per-worktree ref is a symlink"
+  local root; root=$(make_repo)
+  add_wt "$root" symref pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/symref" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  mkdir -p "$admin/refs/worktree" && git -C "$wt" rev-parse HEAD > "$root/ref-target" \
+    && ln -s "$root/ref-target" "$admin/refs/worktree/linked" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*symref .*per-worktree refs exist' <<<"$out" && ! grep -q '^SALVAGE .*symref ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_module_repository_whose_head_is_a_directory() {
+  local name="salvage KEEPs an admin modules/ repository whose HEAD is not a file"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subhd || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subhd" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  mkdir -p "$admin/modules/broken/HEAD" "$admin/modules/broken/objects/ab" && echo blob > "$admin/modules/broken/objects/ab/cd"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subhd .*content outside any repository' <<<"$out" && ! grep -q '^SALVAGE .*subhd ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_resolve_undo_entries_in_a_submodule() {
+  local name="salvage KEEPs a worktree whose submodule index holds resolve-undo entries"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subreuc || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sub="$root/repo/.claude/worktrees/subreuc/sub" wt="$root/repo/.claude/worktrees/subreuc"
+  # Both branches are pushed, and the conflict is resolved back to HEAD, so the submodule is
+  # clean, fully pushed and at its gitlink: only the resolve-undo data is left to lose.
+  git -C "$sub" checkout -q -b side && echo side > "$sub/f" && git -C "$sub" commit -qam side \
+    && git -C "$sub" checkout -q -b ours main && echo ours > "$sub/f" && git -C "$sub" commit -qam ours \
+    && git -C "$sub" push -q origin side ours && git -C "$sub" fetch -q origin \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$sub" merge -q side >/dev/null 2>&1
+  git -C "$sub" checkout -q HEAD -- f 2>/dev/null; git -C "$sub" add f; git -C "$sub" merge --quit
+  git -C "$wt" add sub && git -C "$wt" commit -qm "sub at ours" && git -C "$wt" push -q origin claude/subreuc \
+    || { bad "$name" "FIXTURE: gitlink"; rm -rf "$root"; return; }
+  [ -n "$(git -C "$sub" ls-files --resolve-undo)" ] && [ -z "$(git -C "$sub" status --porcelain)" ] \
+    || { bad "$name" "FIXTURE: no resolve-undo or not clean"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subreuc .*resolve-undo' <<<"$out" && ! grep -q '^SALVAGE .*subreuc ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -2611,5 +2676,8 @@ t_salvage_keeps_unclassified_content_under_admin_modules
 t_salvage_keeps_a_double_dot_admin_entry
 t_salvage_keeps_a_submodule_tag_only_a_reflog_names
 t_salvage_keeps_resolve_undo_entries
+t_salvage_keeps_a_symlinked_per_worktree_ref
+t_salvage_keeps_a_module_repository_whose_head_is_a_directory
+t_salvage_keeps_resolve_undo_entries_in_a_submodule
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

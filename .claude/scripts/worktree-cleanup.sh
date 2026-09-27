@@ -69,6 +69,11 @@
 #           only, not the files), or more than SALVAGE_MAX_KB of changed/untracked data
 #   KEEP  - any failure to build, write or verify a salvage ref, and any change to the
 #           working tree or index between the snapshot and the removal
+# Residual window: the last comparison against the snapshot runs under the ownership mutex
+# immediately before the removal, and a process whose CWD is inside the worktree keeps it.
+# A process writing in from OUTSIDE between that comparison and the removal is not seen;
+# no user-space check can close that without a filesystem lock git does not take. Salvage
+# only runs on a worktree abandoned for the salvage age, so such a writer is not expected.
 # What salvage preserves is content: commits, tag objects, and working-tree and index
 # bytes. A submodule repository's local branch or lightweight tag NAME that points at a
 # commit a remote already has is not kept: the commit survives on the remote, and a fetch
@@ -780,7 +785,7 @@ worktree_state_blocker() {
   if [ -d "$admin/refs" ]; then
     # The ownership mutex this sweep holds is itself a per-worktree ref; it guards the
     # removal and carries no work, so it is the one ref excluded.
-    refs=$(find "$admin/refs" -type f ! -path "$admin/$WORKTREE_CLAIM_LOCK_REF_PREFIX/*" 2>/dev/null) \
+    refs=$(find "$admin/refs" ! -type d ! -path "$admin/$WORKTREE_CLAIM_LOCK_REF_PREFIX/*" 2>/dev/null) \
       || { SALVAGE_NOTE="cannot list per-worktree refs"; return 0; }
     if [ -n "$refs" ]; then
       SALVAGE_NOTE="per-worktree refs exist (salvage cannot carry them)"; return 0
@@ -815,7 +820,7 @@ unclassified_module_content() {
   # Repositories are printed and pruned; any other non-directory is stray. NUL-delimited, so
   # a path holding a newline is neither split nor skipped.
   if ! find "$dir" -mindepth 1 \
-         \( -type d -exec test -e '{}/HEAD' \; -exec test -d '{}/objects' \; -print0 -prune \) \
+         \( -type d -exec test -f '{}/HEAD' \; -exec test -d '{}/objects' \; -print0 -prune \) \
          -o \( ! -type d -print0 \) > "$list" 2>/dev/null; then
     rm -f "$list"; return 1
   fi
@@ -1039,6 +1044,11 @@ admin_modules_blocker() {
     if [ -n "$st" ] || grep -q '^[a-zS]' <<< "$flags"; then
       SALVAGE_NOTE="submodule ${wdir#"$wt"/} has uncommitted or hidden-index changes (cannot be salvaged)"; return 0
     fi
+    flags=$(git --git-dir="$g" --work-tree="$wdir" ls-files --resolve-undo 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot read the resolve-undo entries of submodule ${wdir#"$wt"/}"; return 0; }
+    if [ -n "$flags" ]; then
+      SALVAGE_NOTE="submodule ${wdir#"$wt"/} has resolve-undo index entries (cannot be salvaged)"; return 0
+    fi
   done
   return 1
 }
@@ -1086,6 +1096,11 @@ submodule_local_only_blocker() {
       || { SALVAGE_NOTE="cannot read the index flags of submodule $path"; return 0; }
     if [ -n "$sub_st" ] || grep -q '^[a-zS]' <<< "$sub_flags"; then
       SALVAGE_NOTE="submodule $path has uncommitted or hidden-index changes (cannot be salvaged)"; return 0
+    fi
+    sub_flags=$(git -C "$repo/$path" ls-files --resolve-undo 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot read the resolve-undo entries of submodule $path"; return 0; }
+    if [ -n "$sub_flags" ]; then
+      SALVAGE_NOTE="submodule $path has resolve-undo index entries (cannot be salvaged)"; return 0
     fi
     # A clean status proves nothing where a filter or conversion hides an edit from git.
     if conversion_blocker "$repo/$path"; then
