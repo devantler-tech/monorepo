@@ -64,7 +64,7 @@ REF_PREFIX="refs/heads/agent-claim"
 fail() { echo "agent-claim: $*" >&2; exit 2; }
 
 usage() {
-  sed -n '/^# Usage:/,/^# Exit codes:/p' "$0" | sed 's/^# \{0,1\}//' | head -n -1
+  sed -n '/^# Usage:/,/^# Exit codes:/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'
 }
 
 # Portable entropy — fail closed when none is available (trap 3). Prefer
