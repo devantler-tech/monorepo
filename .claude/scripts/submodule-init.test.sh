@@ -893,6 +893,80 @@ report "advance removed-nested retry: still fails closed at the recorded pin" \
 report "advance removed-nested retry: still names the residual checkout" \
   "$(grep -q 'embedded repository residue after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
+# --- --sync (monorepo#2833): after the superproject moves from <from> to a PR head, every changed
+# gitlink must end on HEAD's pin. Detaching moves only the superproject; these cases prove the
+# submodule half: a changed pin is advanced, an added submodule is populated, a removed one that
+# left content behind is refused, and every failure is loud.
+c40="$tmp/c40"
+mk_super "$c40"
+c40_from="$(git -C "$c40/super" rev-parse HEAD)"
+(
+  cd "$c40/remote-sub"
+  echo next >file.txt
+  git add file.txt
+  git commit -q -m next
+)
+c40_new="$(git -C "$c40/remote-sub" rev-parse HEAD)"
+(
+  cd "$c40/super"
+  git update-index --cacheinfo "160000,$c40_new,sub"
+  git commit -q -m "bump sub"
+)
+report "sync fixture: the superproject is on the bump while sub is still on the old pin" \
+  "$([[ "$(git -C "$c40/super" submodule status -- sub)" == +* ]] && echo yes || echo no)"
+out="$(cd "$c40/super" && "$helper" --sync HEAD 2>&1)" && rc=0 || rc=$?
+report "sync: no change since <from> is a no-op that exits 0" \
+  "$([[ $rc -eq 0 ]] && grep -q 'in sync with HEAD' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+echo dirt >"$c40/super/sub/dirt.txt"
+out="$(cd "$c40/super" && "$helper" --sync "$c40_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a dirty checkout on a changed pin fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q 'dirty working tree' <<<"$out" && ! grep -q 'in sync with HEAD' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+rm "$c40/super/sub/dirt.txt"
+out="$(cd "$c40/super" && "$helper" --sync "$c40_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a changed pin is advanced and the run exits 0" \
+  "$([[ $rc -eq 0 ]] && [[ "$(git -C "$c40/super/sub" rev-parse HEAD)" == "$c40_new" ]] && echo yes || echo no)" "rc=$rc $out"
+report "sync: the changed path reads as in sync afterwards" \
+  "$([[ "$(git -C "$c40/super" submodule status -- sub)" == ' '* ]] && echo yes || echo no)"
+out="$(cd "$c40/super" && "$helper" --sync not-a-commit 2>&1)" && rc=0 || rc=$?
+report "sync: an unknown <from> fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q 'is not a commit' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# Added and removed submodules, driven from a linked superproject worktree (the agent execution
+# model), where a detach onto a commit that introduces a submodule leaves an empty directory.
+c41="$tmp/c41"
+mk_super "$c41"
+git init -q "$c41/remote-sub2"
+(
+  cd "$c41/remote-sub2"
+  echo two >two.txt
+  git add two.txt
+  git commit -q -m init
+)
+c41_from="$(git -C "$c41/super" rev-parse HEAD)"
+(
+  cd "$c41/super"
+  git submodule add -q ../remote-sub2 sub2
+  git commit -q -m "add sub2"
+)
+c41_target="$(git -C "$c41/super" rev-parse HEAD)"
+git -C "$c41/super" worktree add -q --detach "$c41/wt" "$c41_from"
+git -C "$c41/wt" checkout -q --detach "$c41_target"
+report "sync add fixture: the detach leaves the new submodule empty" \
+  "$([[ -d "$c41/wt/sub2" && -z "$(ls -A "$c41/wt/sub2")" ]] && echo yes || echo no)"
+out="$(cd "$c41/wt" && "$helper" --sync "$c41_from" 2>&1)" && rc=0 || rc=$?
+report "sync: an added submodule is populated at HEAD's pin" \
+  "$([[ $rc -eq 0 && -f "$c41/wt/sub2/two.txt" ]] && [[ "$(git -C "$c41/wt/sub2" rev-parse HEAD)" == "$(git -C "$c41/wt" rev-parse HEAD:sub2)" ]] && echo yes || echo no)" "rc=$rc $out"
+report "sync: the added submodule is isolated in the linked worktree" \
+  "$(grep -q 'sub2 — isolated' <<<"$out" && echo yes || echo no)" "$out"
+report "sync: an unchanged uninitialised submodule is left alone" \
+  "$([[ -z "$(ls -A "$c41/wt/sub" 2>/dev/null)" ]] && echo yes || echo no)"
+git -C "$c41/wt" checkout -q --detach "$c41_from" 2>/dev/null || true
+report "sync remove fixture: the old submodule's content is left behind" \
+  "$([[ -f "$c41/wt/sub2/two.txt" ]] && echo yes || echo no)"
+out="$(cd "$c41/wt" && "$helper" --sync "$c41_target" 2>&1)" && rc=0 || rc=$?
+report "sync: a removed submodule that left content behind fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q "'sub2' is no longer a submodule at HEAD" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

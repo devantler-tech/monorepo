@@ -280,9 +280,9 @@ fallback needs all four assertions to reach the same confidence the forge read h
 
 🔴 **A mismatch is a STOP, not a retry — re-running that command cannot fix it.** The same in-place
 repair means it exits `isolated ✓` with the stale revision still checked out — the warning *Git
-safety* already carries. Moving a populated submodule onto a pin has **no procedure yet**
-([#2833](https://github.com/devantler-tech/monorepo/issues/2833)), so on a mismatch use the forge
-read above, or materialise in a fresh isolated worktree and repeat the comparison. Never read a
+safety* already carries. Move a populated submodule onto its pin with
+`submodule-init.sh --advance <path>`, which refuses dirt and ahead-of-pin work; when it refuses, use
+the forge read above, or materialise in a fresh isolated worktree and repeat the comparison. Never read a
 definition out of an already-populated submodule until its `HEAD` equals the pinned revision **and
 its tree is clean**.
 

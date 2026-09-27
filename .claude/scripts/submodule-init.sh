@@ -15,6 +15,8 @@
 #   .claude/scripts/submodule-init.sh --all           # init + repair + probe every submodule (first clone)
 #   .claude/scripts/submodule-init.sh --check         # non-destructive probe of every initialised submodule
 #   .claude/scripts/submodule-init.sh --advance <path>  # move a populated checkout to HEAD's recorded pin
+#   .claude/scripts/submodule-init.sh --sync <from-sha>  # after detaching onto a PR head: bring every gitlink
+#                                                       # that changed since <from-sha> onto HEAD's pin
 #
 # `--check` never modifies submodule content, tracked files, or other sessions' worktrees, but it is
 # NOT strictly read-only: to prove isolation empirically it adds and then removes a throwaway,
@@ -438,6 +440,59 @@ advance() {
   printf 'submodule-init: %s — advanced to %s\n' "$path" "$target"
 }
 
+# Bring every submodule the superproject's move from <from> to HEAD touched onto HEAD's gitlinks —
+# the submodule half of landing a worktree on a PR head (monorepo#2833). `git checkout --detach`
+# moves only the superproject, and `--recurse-submodules` is unsafe here (see *Git safety*), so this
+# composes the modes above per changed gitlink instead:
+#   - changed pin, populated here   → `advance` (fetches the pin, refuses dirt and ahead-of-pin work)
+#   - added, or changed but not populated here
+#                                   → `init_repair_probe` (populates at the pin, repairs, probes),
+#                                     because the change under review lives in that checkout
+#   - removed by the move           → refuse if its directory still holds content: that is old code
+#                                     the reviewed tree no longer declares
+# Fails closed: an unreadable <from>, a diff that cannot be read, or any failed step stops the run,
+# and a final `submodule status` must show every changed path on HEAD's pin.
+sync_from() {
+  local from=$1 diff line meta path old_mode new_mode status changed='' st
+  from=$(git --no-replace-objects rev-parse --verify --quiet "${from}^{commit}") ||
+    die "'$1' is not a commit in this repository — pass the superproject HEAD from before the move"
+  diff=$(git --no-replace-objects diff-tree -r --no-renames --raw "$from" HEAD) ||
+    die "could not diff $from..HEAD — refusing to sync"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    meta=${line%%$'\t'*}
+    path=${line#*$'\t'}
+    old_mode=${meta%% *}
+    old_mode=${old_mode#:}
+    new_mode=$(printf '%s' "$meta" | awk '{print $2}')
+    status=${meta##* }
+    [ "$old_mode" = 160000 ] || [ "$new_mode" = 160000 ] || continue
+    if [ "$new_mode" != 160000 ]; then
+      if is_populated "$path"; then
+        die "'$path' is no longer a submodule at HEAD but still holds content — preserve or remove it before evaluating this tree"
+      fi
+      printf 'submodule-init: %s — removed at HEAD, nothing left behind\n' "$path"
+      continue
+    fi
+    changed="${changed}${path}"$'\n'
+    if [ "$status" != A ] && [ "$old_mode" = 160000 ] && is_populated "$path"; then
+      advance "$path"
+    else
+      init_repair_probe "$path"
+    fi
+  done <<< "$diff"
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    st=$(git --no-replace-objects submodule status -- "$path" 2>/dev/null) ||
+      die "could not read submodule status for '$path' after syncing"
+    case "$st" in
+      ' '*) ;;
+      *) die "'$path' is not on HEAD's recorded pin after syncing ($st)" ;;
+    esac
+  done <<< "$changed"
+  printf 'submodule-init: submodules in sync with HEAD (changes since %s)\n' "$from"
+}
+
 # Stop here when SOURCED, so the self-test can exercise the path-comparison helpers directly. The
 # case-only false positive `same_dir` fixes needs a case-insensitive volume, so an end-to-end
 # reproduction cannot run on the filesystem CI uses — unit-testing the comparison itself is what
@@ -459,7 +514,7 @@ advance() {
 super_root=$(git rev-parse --show-toplevel) || die 'not inside a git repository'
 cd "$super_root"
 
-[ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check | --advance <path>'
+[ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check | --advance <path> | --sync <from-sha>'
 
 case "$1" in
   # NON-DESTRUCTIVE probe (see the header note): never touches content or other sessions' trees, but
@@ -477,6 +532,10 @@ case "$1" in
   --advance)
     [ $# -eq 2 ] || die 'usage: submodule-init.sh --advance <submodule-path>'
     advance "$2"
+    ;;
+  --sync)
+    [ $# -eq 2 ] || die 'usage: submodule-init.sh --sync <from-sha>'
+    sync_from "$2"
     ;;
   *)
     for path in "$@"; do init_repair_probe "$path"; done

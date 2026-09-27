@@ -235,12 +235,19 @@ target paths are preserved.
 the detach, so a non-zero exit can leave the named checkout already on the new pin. Treat the refusal
 as "do not use this tree yet", not "nothing changed": handle the reported condition, re-run
 `--advance`, and require exit 0 before evaluating anything.
-📌 **Landing a worktree on a PR head *including newly introduced or mismatched nested submodules*
-therefore still needs a complete procedure — fetch, initialise additions, repair isolation, advance
-each populated checkout, then probe — not a recursive checkout flag. That is
-[#2833](https://github.com/devantler-tech/monorepo/issues/2833).** Until it exists, detect those
-conditions and stop; never paper over them with a flag that fails closed at exit 128 or, worse, fails
-open with a clean-looking status.
+📌 **To land a worktree on a PR head *including its submodules*, record the superproject's `HEAD`
+before detaching, then run `.claude/scripts/submodule-init.sh --sync <that-sha>` as its own call
+right after the detach and before the post-detach checks above
+([#2833](https://github.com/devantler-tech/monorepo/issues/2833)).** It walks every gitlink that
+changed between the two commits. A populated checkout on a changed pin goes through `--advance`, with
+all of that mode's refusals. A submodule the target adds, or one whose pin changed but that is not
+checked out here, is populated at its pin through the fail-closed init path, because the change under
+review lives in it. A submodule the target removed is refused while its directory still holds
+content. Any failed step exits non-zero, and the run ends by requiring every changed path to read as
+on its pin. It does not recurse: nested submodules inside a changed checkout are validated by
+`--advance` but never initialised, so the `submodule status --recursive` check above still decides.
+Never replace this with a recursive checkout flag, which fails closed at exit 128 or, worse, fails open
+with a clean-looking status.
 ⚠️ **The pre-check cannot see IGNORED paths, and checkout overwrites them by default — which is why
 `--no-overwrite-ignore` is in the command above.** `git checkout` documents `--overwrite-ignore` as
 the default and `status --porcelain` never lists ignored files, so when the target commit starts
