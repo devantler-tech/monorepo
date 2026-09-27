@@ -955,7 +955,7 @@ report "normalize_url: a different repository stays different" \
 report "normalize_url: cleartext http:// never equals the https:// or SSH spelling" \
   "$([[ "$(norm http://github.com/devantler-tech/ksail)" != "$(norm https://github.com/devantler-tech/ksail)" && "$(norm git://github.com/devantler-tech/ksail)" != "$(norm git@github.com:devantler-tech/ksail.git)" ]] && echo yes || echo no)"
 report "normalize_url: a non-GitHub host keeps its path case, and folds its host" \
-  "$([[ "$(norm https://Git.Example.com/Org/Repo)" == "git.example.com/Org/Repo" ]] && echo yes || echo no)" \
+  "$([[ "$(norm https://Git.Example.com/Org/Repo)" == "https://git.example.com/Org/Repo" ]] && echo yes || echo no)" \
   "$(norm https://Git.Example.com/Org/Repo)"
 
 # Origin identity is checked BEFORE repair: a foreign checkout is refused untouched. Control: the
@@ -1103,6 +1103,34 @@ git -C "$c47/super/sub" remote set-url origin "https://someone:not-a-real-token@
 out="$(cd "$c47/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "origin identity: a mismatching credentialed origin is reported without its credential" \
   "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && ! grep -q 'not-a-real-token' <<<"$out" && grep -q 'https://example.invalid/org/repo' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# Round 4 of review on #3624.
+report "normalize_url: a non-GitHub host keeps its transport (HTTPS and SSH stay distinct)" \
+  "$([[ "$(norm https://git.example.com/org/repo)" != "$(norm git@git.example.com:org/repo)" ]] && echo yes || echo no)"
+report "normalize_url: a local path keeps its .git suffix" \
+  "$([[ "$(norm "$tmp/absent/product.git")" != "$(norm "$tmp/absent/product")" ]] && echo yes || echo no)"
+c52="$tmp/c52"
+mk_super "$c52"
+git -C "$c52/super/sub" remote set-url origin "https://example.invalid/org/repo?access_token=not-a-real-secret#frag"
+out="$(cd "$c52/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a query or fragment in a mismatching origin is not printed" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && ! grep -q 'not-a-real-secret' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# A relative registration resolves against the branch's tracking remote, as git resolves it, not
+# against `origin` when the branch tracks something else.
+c53="$tmp/c53"
+mk_super "$c53"
+git -C "$c53/super" remote add upstream "$c53/up/super"
+git -C "$c53/super" remote add origin "$c53/fork/super"
+git -C "$c53/super" config branch.main.remote upstream
+git -C "$c53/super/sub" remote set-url origin "$c53/fork/remote-sub"
+out="$(cd "$c53/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a relative URL resolves against the tracking remote, not origin" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+git -C "$c53/super/sub" remote set-url origin "$c53/up/remote-sub"
+out="$(cd "$c53/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity control: the tracking remote's sibling passes" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2

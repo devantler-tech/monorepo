@@ -335,59 +335,67 @@ is_registered_submodule() {
   return 1
 }
 
-# Reduce a remote URL to host/owner/repo (or a bare path) so the SSH, HTTPS and `.git`-suffixed
-# spellings of one repository compare equal. Only the encrypted transports git uses for GitHub —
-# `https://`, `ssh://` and the scp-like `user@host:path` form — drop their scheme; every other
-# scheme (`http://`, `git://`, `file://`, `ftp://`, anything new) keeps it, so it can never equal a
-# registered spelling it merely shares a host and path with. An allow-list, not a deny-list: a new
-# scheme stays distinct by default. Host names are case-blind; the path is folded only for
-# github.com, whose owner and repository names are case-blind too. An existing local path is
-# resolved physically so symlinked spellings of one directory compare equal.
+# Reduce a remote URL to a comparable form. Only for github.com, where the SSH and HTTPS namespaces
+# are known to name the same repository, do `https://`, `ssh://` and the scp-like `user@host:path`
+# form collapse to `github.com/owner/repo` (with the `.git` suffix dropped and the case-blind owner
+# and repository folded). Every other host keeps its transport, and every other scheme
+# (`http://`, `git://`, `file://`, anything new) stays distinct: an allow-list, not a deny-list. A
+# local path is compared as a path, `.git` suffix included, resolved physically when it exists so
+# symlinked spellings of one directory compare equal.
 normalize_url() {
-  local u=${1%/} scheme='' host path prefix=''
+  local u=${1%/} scheme='' host path
+  case "$u" in
+    /*) [ -d "$u" ] && u=$(cd "$u" && pwd -P); printf '%s' "$u"; return ;;
+  esac
   u=${u%.git}
   case "$u" in
     *://*) scheme=$(printf '%s' "${u%%://*}" | tr '[:upper:]' '[:lower:]'); u=${u#*://}; u=${u#*@} ;;
-    *@*:*) u=${u#*@}; u="${u%%:*}/${u#*:}" ;;
-    /*) [ -d "$u" ] && u=$(cd "$u" && pwd -P); printf '%s' "$u"; return ;;
-  esac
-  case "$scheme" in
-    '' | https | ssh) ;;
-    *) prefix="$scheme://" ;;
+    *@*:*) scheme=ssh; u=${u#*@}; u="${u%%:*}/${u#*:}" ;;
   esac
   host=$(printf '%s' "${u%%/*}" | tr '[:upper:]' '[:lower:]')
   path=${u#*/}
-  [ "$host" = "github.com" ] && path=$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')
-  printf '%s%s/%s' "$prefix" "$host" "$path"
+  if [ "$host" = github.com ] && { [ "$scheme" = https ] || [ "$scheme" = ssh ]; }; then
+    printf 'github.com/%s' "$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
+    return
+  fi
+  printf '%s://%s/%s' "${scheme:-none}" "$host" "$path"
 }
 
-# A URL fit for a diagnostic: userinfo (`https://user:token@host/…`) is dropped, so a credential
-# embedded in a remote never reaches a terminal, CI log or run report.
+# A URL fit for a diagnostic: userinfo (`https://user:token@host/…`) and any query or fragment
+# (`?access_token=…`) are dropped, so a credential embedded in a remote never reaches a terminal,
+# CI log or run report.
 redact_url() {
-  printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@#\1#'
+  printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@#\1#; s#[?#].*$##'
 }
 
-# The single origin fetch URL of the repository at $1. Git fetches from the FIRST of several
-# values while `config --get` returns the LAST, so a second value could hide the URL git really
-# uses; several values are ambiguous and print nothing (a mismatch for the caller).
+# The single fetch URL of remote $2 (default `origin`) of the repository at $1. Git fetches from the
+# FIRST of several values while `config --get` returns the LAST, so a second value could hide the URL
+# git really uses; several values are ambiguous and print nothing (a mismatch for the caller).
 single_origin_url() {
-  local urls
+  local urls remote=${2:-origin}
   # `remote get-url` applies `url.<base>.insteadOf` rewrites, so this is the URL git would really
   # fetch from — a rewrite cannot make a foreign repository read as the registered one.
-  urls=$(git -C "$1" remote get-url --all origin 2>/dev/null) || return 0
+  urls=$(git -C "$1" remote get-url --all "$remote" 2>/dev/null) || return 0
   [ "$(printf '%s\n' "$urls" | grep -c .)" -eq 1 ] && printf '%s' "$urls"
 }
 
-# Resolve a relative `.gitmodules` URL (arg 2) the way git does: against the origin of the
-# superproject at $1, or its top-level directory when it has no origin. The recorded
+# Resolve a relative `.gitmodules` URL (arg 2) the way git does: against the default remote of the
+# superproject at $1 (its branch's tracking remote, else `origin`), or its top-level directory when
+# that remote has no URL. The recorded
 # `submodule.<name>.url` is deliberately NOT used — it is per-checkout config that can be rewritten
 # to name any repository, and a check that reads its expectation from there compares the submodule
 # with whatever it was told to expect. Prints nothing (a mismatch for the caller) when the URL climbs
 # above the base or the base is ambiguous.
 resolve_relative_url() {
-  local super=$1 rel=$2 base
-  if git -C "$super" config --get remote.origin.url >/dev/null 2>&1; then
-    base=$(single_origin_url "$super")
+  local super=$1 rel=$2 base remote=origin branch
+  # Git's default remote: the checked-out branch's tracking remote, else `origin`. A branch that
+  # tracks itself (`.`) has no remote URL to resolve against, so it resolves to nothing.
+  if branch=$(git -C "$super" symbolic-ref --quiet --short HEAD 2>/dev/null); then
+    remote=$(git -C "$super" config --get "branch.$branch.remote" 2>/dev/null) || remote=origin
+  fi
+  [ "$remote" != . ] || return 0
+  if git -C "$super" config --get "remote.$remote.url" >/dev/null 2>&1; then
+    base=$(single_origin_url "$super" "$remote")
   else
     base=$(git -C "$super" rev-parse --show-toplevel 2>/dev/null) || base=''
   fi
