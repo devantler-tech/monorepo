@@ -2443,6 +2443,73 @@ t_salvage_keeps_unclassified_content_under_admin_modules() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_double_dot_admin_entry() {
+  # `*` and `.[!.]*` both skip a name starting with two dots.
+  local name="salvage KEEPs a worktree whose admin directory holds a ..-prefixed entry"
+  local root; root=$(make_repo)
+  add_wt "$root" dotdot pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/dotdot" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  echo keep > "$admin/..unique-metadata"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*dotdot .*holds \.\.unique-metadata' <<<"$out" && ! grep -q '^SALVAGE .*dotdot ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_tag_only_a_reflog_names() {
+  # The branch now points at a commit, but its reflog still names the tag object it held.
+  local name="salvage KEEPs a submodule whose reflog is the only reference to a tag object"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subrltag || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subrltag" t
+  git -C "$wt/sub" tag -a v-reflog -m "only here" && t=$(git -C "$wt/sub" rev-parse v-reflog) \
+    && git -C "$wt/sub" update-ref --create-reflog refs/tags/held "$t" \
+    && git -C "$wt/sub" update-ref refs/tags/held HEAD \
+    && git -C "$wt/sub" tag -d v-reflog >/dev/null \
+    && grep -q "^[0-9a-f]* $t " "$(git -C "$wt/sub" rev-parse --absolute-git-dir)/logs/refs/tags/held" \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subrltag .*reflog naming a tag, tree or blob' <<<"$out" && ! grep -q '^SALVAGE .*subrltag ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_resolve_undo_entries() {
+  # A resolved conflict whose merge was quit keeps its stages only as resolve-undo data.
+  local name="salvage KEEPs a worktree whose index holds resolve-undo entries"
+  local root; root=$(make_repo)
+  add_wt "$root" reuc pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/reuc"
+  git -C "$wt" config user.email t@t.t; git -C "$wt" config user.name t
+  git -C "$wt" checkout -q -b side && echo side > "$wt/file.txt" && git -C "$wt" commit -qam side \
+    && git -C "$wt" checkout -q claude/reuc && echo ours > "$wt/file.txt" && git -C "$wt" commit -qam ours \
+    && git -C "$wt" push -q origin claude/reuc side \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$wt" merge -q side >/dev/null 2>&1
+  echo resolved > "$wt/file.txt"; git -C "$wt" add file.txt; git -C "$wt" merge --quit
+  [ -n "$(git -C "$wt" ls-files --resolve-undo)" ] && [ -z "$(git -C "$wt" ls-files -u)" ] \
+    || { bad "$name" "FIXTURE: no resolve-undo"; rm -rf "$root"; return; }
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*reuc .*resolve-undo entries' <<<"$out" && ! grep -q '^SALVAGE .*reuc ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -2541,5 +2608,8 @@ t_salvage_keeps_an_admin_submodule_with_an_external_checkout
 t_salvage_keeps_a_special_file_without_reading_it
 t_salvage_keeps_a_tag_only_the_worktree_fetch_head_names
 t_salvage_keeps_unclassified_content_under_admin_modules
+t_salvage_keeps_a_double_dot_admin_entry
+t_salvage_keeps_a_submodule_tag_only_a_reflog_names
+t_salvage_keeps_resolve_undo_entries
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

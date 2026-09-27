@@ -59,6 +59,9 @@
 # `git -C <path> read-tree refs/salvaged/<id>/index` for the staged index and
 # `git -C <path> restore --source=refs/salvaged/<id>/worktree --worktree -- .` for the working
 # tree. `restore` does not overlay, so paths the salvaged tree deleted are deleted again.
+# The salvaged blobs are the working tree's exact bytes (conversion_blocker checks that), but
+# `restore` runs checkout-side conversions (smudge filters, eol=crlf) on the way out; for a
+# byte-exact copy of one path read the blob raw: `git cat-file blob refs/salvaged/<id>/worktree:<path>`.
 # Every other gate is unchanged, and salvage fails closed to the old KEEP:
 #   KEEP  - a salvage candidate whose submodule holds uncommitted or unpushed work (the
 #           submodule's repository lives inside the worktree's admin dir and dies with it)
@@ -677,6 +680,10 @@ salvage_blocker() {
   list=$(git -C "$wt" ls-files -u 2>/dev/null); rc=$?
   if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot read the index for conflicts"; return 0; fi
   if [ -n "$list" ]; then SALVAGE_NOTE="the index holds unmerged (conflicted) entries"; return 0; fi
+  # A resolved conflict keeps its three stages as resolve-undo data, which write-tree drops.
+  list=$(git -C "$wt" ls-files --resolve-undo 2>/dev/null); rc=$?
+  if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot read the index for resolve-undo entries"; return 0; fi
+  if [ -n "$list" ]; then SALVAGE_NOTE="the index holds resolve-undo entries (salvage cannot carry them)"; return 0; fi
   # NUL-delimited: the default output C-quotes unusual names, which would hide them from
   # both the embedded-repository test and the size sum. tr keeps NULs out of $( ).
   list=$(git -C "$wt" ls-files -z -m -o --exclude-standard 2>/dev/null | tr '\0' '\n'); rc=$?
@@ -763,7 +770,7 @@ worktree_state_blocker() {
   # one salvage either captures or can lose. Anything else — a sequencer, rebase or merge
   # state, a bisect log, a split index — is state the salvage refs cannot carry, so an
   # unlisted entry blocks rather than each operation's markers being enumerated.
-  for entry in "$admin"/* "$admin"/.[!.]*; do
+  for entry in "$admin"/* "$admin"/.[!.]* "$admin"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     case "${entry##*/}" in
       HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|commondir|gitdir|index|config.worktree|logs|refs|modules) ;;
@@ -842,7 +849,7 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   # removal deletes: every entry must be ordinary repository content. A bisect, sequencer,
   # rebase or merge state, a linked worktree's admin dir, or anything unknown blocks.
   local g=$1 label=$2 entry
-  for entry in "$g"/* "$g"/.[!.]*; do
+  for entry in "$g"/* "$g"/.[!.]* "$g"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     case "${entry##*/}" in
       HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|config|config.worktree|description|objects|refs|packed-refs|logs|index|modules|shallow|branches) ;;
@@ -872,6 +879,17 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   fi
   # ORIG_HEAD and FETCH_HEAD are outside `rev-list --all --reflog`; a commit only they name
   # would die with the repository.
+  # A reflog can hold the only reference to a tag object a ref once pointed at; `rev-list
+  # --reflog` peels it. Every object any reflog names must therefore be a commit (a missing
+  # object has nothing left to lose).
+  local reflog_types
+  reflog_types=$( { find "$g/logs" -type f -exec cat {} + 2>/dev/null || [ ! -d "$g/logs" ]; } \
+                  | awk '{ for (i = 1; i <= 2; i++) if ((length($i) == 40 || length($i) == 64) && $i ~ /^[0-9a-f]+$/ && $i !~ /^0+$/) print $i }' \
+                  | sort -u | git --git-dir="$g" --work-tree="$g" cat-file --batch-check='%(objecttype)' 2>/dev/null) \
+    || { SALVAGE_NOTE="cannot read the reflogs of submodule $label"; return 0; }
+  if grep -qvE '^(commit|.* missing)$' <<< "$reflog_types" && [ -n "$reflog_types" ]; then
+    SALVAGE_NOTE="submodule $label has a reflog naming a tag, tree or blob (salvage cannot carry it)"; return 0
+  fi
   local pseudo left sha
   pseudo=$(pseudo_ref_commits "$g") || { SALVAGE_NOTE="cannot read the pseudo-refs of submodule $label"; return 0; }
   if pseudo_ref_tag "$g" "$pseudo"; then
@@ -1210,7 +1228,7 @@ custom_git_metadata() {
   if [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
     SALVAGE_NOTE="unreadable or not a directory"; return 0
   fi
-  for f in "$dir"/* "$dir"/.[!.]*; do
+  for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
     [ -e "$f" ] || [ -L "$f" ] || continue
     case "${dir##*/}/${f##*/}" in
       hooks/*.sample|info/exclude) [ -f "$f" ] && [ ! -L "$f" ] && continue ;;
