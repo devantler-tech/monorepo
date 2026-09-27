@@ -486,7 +486,10 @@ recheck_mutable_gates() {
     done <<< "$now_orphans"
     # The same for a submodule: a commit made there and reset back to the gitlink changes
     # nothing the checks above compare, and the removal deletes the submodule's repository.
-    if submodule_local_only_blocker "$wt" || admin_modules_blocker "$wt" || worktree_state_blocker "$wt"; then
+    # The configuration that decides whether status can see an edit (conversion_blocker) can
+    # change after the snapshot too, and then every comparison above is blind to the edit.
+    if submodule_local_only_blocker "$wt" || admin_modules_blocker "$wt" || worktree_state_blocker "$wt" \
+       || conversion_blocker "$wt"; then
       keep "$wt" "$SALVAGE_NOTE, after the salvage snapshot ($SALVAGE_REF)"; return 1
     fi
   elif [ -n "$salvage_reason" ]; then
@@ -794,7 +797,11 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   for entry in "$g"/* "$g"/.[!.]*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     case "${entry##*/}" in
-      HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|config|config.worktree|description|hooks|info|objects|refs|packed-refs|logs|index|modules|shallow|branches) ;;
+      HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|config|config.worktree|description|objects|refs|packed-refs|logs|index|modules|shallow|branches) ;;
+      hooks|info)
+        # A hook someone wrote may exist nowhere else (see custom_git_metadata).
+        custom_git_metadata "$entry" \
+          && { SALVAGE_NOTE="submodule $label has a customized ${entry##*/}/ ($SALVAGE_NOTE)"; return 0; } ;;
       worktrees)
         if [ -n "$(ls -A "$entry" 2>/dev/null || echo unreadable)" ]; then
           SALVAGE_NOTE="submodule $label has linked worktrees (removing it would orphan them)"; return 0
@@ -817,8 +824,14 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   fi
   # ORIG_HEAD and FETCH_HEAD are outside `rev-list --all --reflog`; a commit only they name
   # would die with the repository.
-  local pseudo left
+  local pseudo left sha
   pseudo=$(pseudo_ref_commits "$g") || { SALVAGE_NOTE="cannot read the pseudo-refs of submodule $label"; return 0; }
+  # The same holds for them: `rev-list` peels an annotated tag to its commit, so the tag
+  # object itself (its message or signature) must be refused, not only its target.
+  for sha in $pseudo; do
+    [ "$(git --git-dir="$g" --work-tree="$g" cat-file -t "$sha" 2>/dev/null)" = commit ] \
+      || { SALVAGE_NOTE="submodule $label has ORIG_HEAD or FETCH_HEAD naming a tag (salvage cannot carry it)"; return 0; }
+  done
   if [ -n "$pseudo" ]; then
     # shellcheck disable=SC2086  # one sha per word
     left=$(git --git-dir="$g" --work-tree="$g" rev-list -n 1 $pseudo --not --remotes 2>/dev/null || echo unreadable)
@@ -867,12 +880,28 @@ conversion_blocker() {
     || { SALVAGE_NOTE="cannot list changed paths for the conversion check"; return 0; }
   case "$paths" in *$'\001'*) SALVAGE_NOTE="a path holds a newline (cannot check its attributes)"; return 0 ;; esac
   [ -n "$paths" ] || return 1
-  # check-attr -z prints path NUL attribute NUL value NUL; keep only the values.
+  # check-attr -z prints path NUL attribute NUL value NUL; keep each path that has any value.
   attrs=$(printf '%s\n' "$paths" | tr '\n' '\0' | git -C "$wt" check-attr --stdin -z filter ident working-tree-encoding text eol 2>/dev/null \
-          | tr '\0' '\n' | awk 'NR % 3 == 0') \
+          | tr '\0' '\n' | awk 'NR % 3 == 1 { p = $0 } NR % 3 == 0 && $0 != "unspecified" && $0 != "unset" { print p }' | sort -u) \
     || { SALVAGE_NOTE="cannot read the attributes of the changed paths"; return 0; }
-  if grep -qvxE 'unspecified|unset' <<< "$attrs"; then
-    SALVAGE_NOTE="a path has a filter or conversion attribute (salvage would not keep the exact bytes)"; return 0
+  [ -n "$attrs" ] || return 1
+  # A conversion attribute alone loses nothing: `eol=lf` on a file with no CR stores it
+  # byte for byte. What must hold is the stored bytes equal the working-tree bytes, so
+  # compare the object `git add` would write with the raw file's, for every such path that
+  # still exists. A deleted path has no bytes left to lose.
+  # A symlink stores its target unconverted; anything else present is hashed (and a
+  # directory standing where a file was makes the hash fail, which blocks).
+  local present filtered raw p
+  present=$(while IFS= read -r p; do
+              [ -L "$wt/$p" ] || [ ! -e "$wt/$p" ] || printf '%s\n' "$p"
+            done <<< "$attrs")
+  [ -n "$present" ] || return 1
+  filtered=$(git -C "$wt" hash-object --stdin-paths <<< "$present" 2>/dev/null) \
+    && raw=$(git -C "$wt" hash-object --no-filters --stdin-paths <<< "$present" 2>/dev/null) \
+    && [ "$(wc -l <<< "$filtered")" = "$(wc -l <<< "$present")" ] \
+    || { SALVAGE_NOTE="cannot hash the converted paths"; return 0; }
+  if [ "$filtered" != "$raw" ]; then
+    SALVAGE_NOTE="a path has a filter or conversion that changes its bytes (salvage would not keep the exact bytes)"; return 0
   fi
   return 1
 }
@@ -883,7 +912,7 @@ conversion_blocker() {
 # tree still exists, is clean with no hidden-index flags. It checks what the removal would
 # actually delete, not what the index happens to list.
 admin_modules_blocker() {
-  local wt=$1 admin heads h g w wdir st flags label local_only
+  local wt=$1 admin heads h g w wpath wdir st flags label local_only rc
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
     || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
   [ -d "$admin/modules" ] || return 1
@@ -908,8 +937,21 @@ admin_modules_blocker() {
     if [ -n "$local_only" ]; then
       SALVAGE_NOTE="submodule repository $label holds commits no remote has (cannot be salvaged)"; return 0
     fi
-    w=$(git --git-dir="$g" --work-tree="$g" config core.worktree 2>/dev/null) || continue
-    wdir=$(cd "$g" 2>/dev/null && cd "$w" 2>/dev/null && pwd -P) || continue
+    # Exit 1 is the one "no checkout configured" answer; any other failure is unreadable.
+    w=$(git --git-dir="$g" --work-tree="$g" config core.worktree 2>/dev/null); rc=$?
+    [ "$rc" -eq 1 ] && continue
+    [ "$rc" -eq 0 ] && [ -n "$w" ] || { SALVAGE_NOTE="cannot read the checkout of submodule repository $label"; return 0; }
+    case "$w" in /*) wpath=$w ;; *) wpath=$g/$w ;; esac
+    if ! wdir=$(cd "$wpath" 2>/dev/null && pwd -P); then
+      # Only a checkout proven absent carries nothing to lose; one that exists but cannot be
+      # entered right now may hold the only copy of its edits.
+      path_is_absent "$wpath" && continue
+      SALVAGE_NOTE="cannot enter the checkout of submodule repository $label"; return 0
+    fi
+    # A clean status proves nothing where a filter or conversion hides an edit from git.
+    if GIT_DIR=$g GIT_WORK_TREE=$wdir conversion_blocker "$wdir"; then
+      SALVAGE_NOTE="submodule ${wdir#"$wt"/}: $SALVAGE_NOTE"; return 0
+    fi
     st=$(git --git-dir="$g" --work-tree="$wdir" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
       || { SALVAGE_NOTE="cannot read the status of submodule ${wdir#"$wt"/}"; return 0; }
     flags=$(git --git-dir="$g" --work-tree="$wdir" ls-files -v 2>/dev/null) \
@@ -957,6 +999,10 @@ submodule_local_only_blocker() {
       || { SALVAGE_NOTE="cannot read the index flags of submodule $path"; return 0; }
     if [ -n "$sub_st" ] || grep -q '^[a-zS]' <<< "$sub_flags"; then
       SALVAGE_NOTE="submodule $path has uncommitted or hidden-index changes (cannot be salvaged)"; return 0
+    fi
+    # A clean status proves nothing where a filter or conversion hides an edit from git.
+    if conversion_blocker "$repo/$path"; then
+      SALVAGE_NOTE="submodule $path: $SALVAGE_NOTE"; return 0
     fi
     submodule_local_only_blocker "$repo/$path" && return 0
   done <<< "$links"
@@ -1068,6 +1114,41 @@ pseudo_ref_commits() {
     done < "$g/$f"
   done
   return 0
+}
+
+# path_is_absent <path> -> 0 only when <path> provably does not exist: its nearest existing
+# ancestor can be searched, so the missing entry is a real ENOENT and not a permission or
+# transient failure that hides an existing directory.
+path_is_absent() {
+  local p=$1 d
+  [ -e "$p" ] || [ -L "$p" ] && return 1
+  d=$(dirname "$p")
+  while [ ! -e "$d" ]; do
+    [ "$d" != / ] && [ "$d" != . ] || return 1
+    d=$(dirname "$d")
+  done
+  [ -d "$d" ] && [ -x "$d" ]
+}
+
+# custom_git_metadata <dir> -> 0, with SALVAGE_NOTE, when a repository's hooks/ or info/
+# directory holds anything but ordinary scaffolding: `*.sample` hooks, and info/exclude. A
+# hook is code someone may have written nowhere else; an exclude rule only hides files and
+# holds no work, and tooling appends to it (worktree-claim.sh's owner marker). Anything
+# else, or a read failure, counts as customized.
+custom_git_metadata() {
+  local dir=$1 f
+  # An unreadable directory would glob to nothing and read as pristine.
+  if [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
+    SALVAGE_NOTE="unreadable or not a directory"; return 0
+  fi
+  for f in "$dir"/* "$dir"/.[!.]*; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    case "${dir##*/}/${f##*/}" in
+      hooks/*.sample|info/exclude) [ -f "$f" ] && [ ! -L "$f" ] && continue ;;
+    esac
+    SALVAGE_NOTE=${f##*/}; return 0
+  done
+  return 1
 }
 
 # salvage_write <worktree> <sha> -> writes and verifies refs/salvaged/<id>/*, setting

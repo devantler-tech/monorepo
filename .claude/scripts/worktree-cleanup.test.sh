@@ -2155,6 +2155,165 @@ t_salvage_keeps_a_submodule_annotated_tag() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_filter_hidden_edit_in_a_submodule() {
+  # The submodule's clean filter maps its local edit back to the committed bytes, so its
+  # status is empty and only its attributes reveal that the checkout holds unrecorded bytes.
+  local name="salvage KEEPs a submodule whose filter hides an edit from status"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subfilt || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subfilt"
+  echo 'f filter=pub' > "$root/sub-attrs"
+  git -C "$wt/sub" config core.attributesFile "$root/sub-attrs"
+  git -C "$wt/sub" config filter.pub.clean 'sed s/uno/one/'
+  git -C "$wt/sub" config filter.pub.smudge cat
+  echo uno > "$wt/sub/f"   # same size as the committed bytes, so status must run the filter
+  [ -z "$(git -C "$wt/sub" status --porcelain)" ] || { bad "$name" "FIXTURE: edit is visible"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subfilt .*submodule sub: a path has a filter or conversion' <<<"$out" \
+     && [ "$(cat "$wt/sub/f")" = uno ] && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_rechecks_conversion_settings_after_the_snapshot() {
+  # core.fileMode=false plus a mode change after the snapshot leaves status, the index and
+  # the re-snapshot identical, so only re-reading the configuration can see the change.
+  local name="salvage KEEPs a worktree whose conversion settings changed after the snapshot"
+  local root; root=$(make_repo)
+  abandoned_wt "$root" latemode || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/latemode" shim
+  shim=$(lsof_hook_shim "$root" 3 "git -C '$wt' config core.fileMode false && chmod +x '$wt/file.txt'") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if [ ! -x "$wt/file.txt" ]; then
+    bad "$name" "mode change missing (never made, or worktree removed): $out"
+  elif grep -q 'KEEP .*latemode .*core.fileMode=false.*after the salvage snapshot' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_with_a_custom_hook() {
+  # A hook someone wrote lives only in the submodule repository the removal deletes. The
+  # sample hooks and default exclude file `git init` copies in are the control: the clean
+  # admin-submodule test above salvages beside exactly that scaffolding.
+  local name="salvage KEEPs a submodule repository holding a customized hook or info file"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subhook || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subhook" g
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  mkdir -p "$g/hooks"; printf '#!/bin/sh\nexit 0\n' > "$g/hooks/pre-commit"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if ! grep -q 'KEEP .*subhook .*customized hooks/ (pre-commit)' <<<"$out" || grep -q '^SALVAGE .*subhook ' <<<"$out"; then
+    bad "$name" "hook: $out"; rm -rf "$root"; return
+  fi
+  rm -f "$g/hooks/pre-commit"; mkdir -p "$g/info"; echo '*.local' >> "$g/info/exclude"   # an exclude rule holds no work: allowed
+  echo 'f -text' > "$g/info/attributes"
+  out=$(run_salvage "$root" dry-run 1)
+  if ! grep -q 'KEEP .*subhook .*customized info/ (attributes)' <<<"$out" || grep -q '^SALVAGE .*subhook ' <<<"$out"; then
+    bad "$name" "attributes: $out"; rm -rf "$root"; return
+  fi
+  rm -f "$g/info/attributes"
+  out=$(run_salvage "$root" dry-run 1)
+  if grep -q '^SALVAGE .*subhook ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "custom exclude control: $out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_judges_a_conversion_by_its_bytes() {
+  # `eol=lf` on a file that holds no CR stores it byte for byte, so salvage proceeds; the
+  # same file with CRLF endings would be stored without its CRs, so salvage refuses.
+  local name="salvage refuses only a conversion that would change the stored bytes"
+  local root; root=$(make_repo)
+  add_wt "$root" eolwt pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/eolwt"
+  echo '*.sh text eol=lf' > "$wt/.gitattributes"; printf 'echo hi\n' > "$wt/a.sh"
+  git -C "$wt" add .gitattributes a.sh && git -C "$wt" commit -qm eol \
+    && git -C "$wt" push -q origin claude/eolwt || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if ! grep -q '^SALVAGE .*eolwt ' <<<"$out"; then
+    bad "$name" "lossless control: $out"; rm -rf "$root"; return
+  fi
+  printf 'echo hi\r\n' > "$wt/a.sh"
+  touch -t 202001010000 "$wt"
+  out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*eolwt .*conversion that changes its bytes' <<<"$out" && ! grep -q '^SALVAGE .*eolwt ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "CRLF: $out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_tag_only_fetch_head_names() {
+  # The tag's target commit is on a remote, so the peeled commit passes, but the tag object
+  # FETCH_HEAD names is referenced nowhere else and dies with the submodule repository.
+  local name="salvage KEEPs a submodule whose FETCH_HEAD names an annotated tag"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subftag || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subftag" g t
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  git -C "$wt/sub" tag -a v-fetched -m "only here" && t=$(git -C "$wt/sub" rev-parse v-fetched) \
+    && git -C "$wt/sub" tag -d v-fetched >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  printf '%s\t\ttag '"'"'v-fetched'"'"' of origin\n' "$t" > "$g/FETCH_HEAD"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subftag .*FETCH_HEAD naming a tag' <<<"$out" && ! grep -q '^SALVAGE .*subftag ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_checkout_it_cannot_enter() {
+  # An admin-dir submodule repository whose checkout exists but cannot be entered must not
+  # read as "no checkout"; one whose checkout is provably gone still salvages (the control).
+  local name="salvage KEEPs an admin submodule repository whose checkout cannot be entered"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subenter || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subenter" g
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  cp -R "$g" "${g%/sub}/other" && mkdir -p "$root/locked/co" \
+    && git --git-dir="${g%/sub}/other" config core.worktree "$root/locked/co" \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  chmod 000 "$root/locked"
+  if [ -x "$root/locked" ]; then
+    chmod 755 "$root/locked"; bad "$name" "FIXTURE: chmod 000 did not revoke search (root?)"; rm -rf "$root"; return
+  fi
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  chmod 755 "$root/locked"
+  if ! grep -q 'KEEP .*subenter .*cannot enter the checkout of submodule repository modules/other' <<<"$out" \
+     || grep -q '^SALVAGE .*subenter ' <<<"$out"; then
+    bad "$name" "locked: $out"; rm -rf "$root"; return
+  fi
+  git --git-dir="${g%/sub}/other" config core.worktree "$root/gone/co"
+  out=$(run_salvage "$root" dry-run 1)
+  if grep -q '^SALVAGE .*subenter ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "absent control: $out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -2242,5 +2401,11 @@ t_salvage_finds_an_admin_repository_with_a_symlinked_head
 t_salvage_handles_a_basename_with_a_space
 t_salvage_keeps_when_a_pseudo_ref_commit_is_unreadable
 t_salvage_keeps_a_submodule_annotated_tag
+t_salvage_keeps_a_filter_hidden_edit_in_a_submodule
+t_salvage_rechecks_conversion_settings_after_the_snapshot
+t_salvage_keeps_a_submodule_with_a_custom_hook
+t_salvage_keeps_a_submodule_tag_only_fetch_head_names
+t_salvage_keeps_a_submodule_checkout_it_cannot_enter
+t_salvage_judges_a_conversion_by_its_bytes
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
