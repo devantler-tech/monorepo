@@ -1659,6 +1659,78 @@ t_salvage_rechecks_its_cap_under_the_mutex() {
   rm -rf "$root"
 }
 
+t_salvage_dry_run_keeps_a_conflicted_index() {
+  # Conflict entries with no operation marker left (MERGE_HEAD removed): the index cannot
+  # be written as a tree, so apply could never salvage it and dry-run must not promise to.
+  local name="salvage dry-run KEEPs an index holding unmerged entries"
+  local root; root=$(make_repo)
+  add_wt "$root" conflicted pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/conflicted" a b
+  a=$(printf 'ours\n' | git -C "$wt" hash-object -w --stdin)
+  b=$(printf 'theirs\n' | git -C "$wt" hash-object -w --stdin)
+  git -C "$wt" rm -q --cached file.txt
+  printf '100644 %s 1\tfile.txt\n100644 %s 2\tfile.txt\n100644 %s 3\tfile.txt\n' "$a" "$a" "$b" \
+    | git -C "$wt" update-index --index-info
+  [ -n "$(git -C "$wt" ls-files -u)" ] || { bad "$name" "FIXTURE: no unmerged entries"; rm -rf "$root"; return; }
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*conflicted .*unmerged' <<<"$out" && ! grep -q '^SALVAGE .*conflicted' <<<"$out" \
+     && grep -q 'salvaged=0 ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_preserves_ignored_tracked_paths() {
+  # A force-added ignored file edited after staging, and a `rm --cached` file now ignored:
+  # `add -A` from HEAD skips both, so their working-tree bytes would die with the removal.
+  local name="salvage captures the working-tree bytes of every tracked path, ignored or not"
+  local root; root=$(make_repo)
+  add_wt "$root" ign pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/ign"
+  printf 'forced.log\nfile.txt\n' > "$wt/.gitignore"
+  echo v1 > "$wt/forced.log"; git -C "$wt" add -f forced.log
+  echo v2 > "$wt/forced.log"                           # newer, unstaged bytes
+  echo edited > "$wt/file.txt"; git -C "$wt" rm -q --cached file.txt
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  local base; base=$(git -C "$root/repo" for-each-ref --format='%(refname)' 'refs/salvaged/*/head' | sed 's#/head$##')
+  local problems=""
+  [ -n "$base" ] || problems="$problems no-salvage-ref"
+  [ "$(git -C "$root/repo" show "$base/index:forced.log" 2>/dev/null)" = v1 ] || problems="$problems staged-forced"
+  [ "$(git -C "$root/repo" show "$base/worktree:forced.log" 2>/dev/null)" = v2 ] || problems="$problems unstaged-forced"
+  [ "$(git -C "$root/repo" show "$base/worktree:file.txt" 2>/dev/null)" = edited ] || problems="$problems rm-cached"
+  [ ! -e "$wt" ] || problems="$problems not-reaped"
+  if [ -z "$problems" ]; then ok "$name"; else bad "$name" "$problems :: $out"; fi
+  rm -rf "$root"
+}
+
+t_salvage_reports_why_a_snapshot_failed() {
+  # A staged submodule-to-file replacement makes the snapshot's gitlinks differ from HEAD's.
+  # The reason is set inside snapshot_tree and must reach the KEEP line, not be lost.
+  local name="salvage names the snapshot failure instead of a blank reason"
+  local root; root=$(make_repo)
+  local r="$root/repo" sub
+  sub=$(git -C "$r" rev-parse HEAD)
+  git -C "$r" update-index --add --cacheinfo "160000,$sub,sub"
+  git -C "$r" commit -qm "add a gitlink"; git -C "$r" push -q origin main
+  add_wt "$root" subfile pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$r/.claude/worktrees/subfile"
+  git -C "$wt" rm -q --cached sub; rm -rf "$wt/sub"
+  echo now-a-file > "$wt/sub"; git -C "$wt" add sub
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subfile .*not salvaged: [^ ]' <<<"$out" && [ -f "$wt/sub" ] \
+     && ! grep -q 'not salvaged: *$' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -1722,5 +1794,8 @@ t_salvage_keeps_a_submodule_branch_only_commit
 t_salvage_keeps_a_submodule_commit_made_after_the_snapshot
 t_salvage_keeps_a_reflog_commit_made_after_the_snapshot
 t_salvage_rechecks_its_cap_under_the_mutex
+t_salvage_dry_run_keeps_a_conflicted_index
+t_salvage_preserves_ignored_tracked_paths
+t_salvage_reports_why_a_snapshot_failed
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

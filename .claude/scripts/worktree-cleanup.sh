@@ -468,7 +468,8 @@ recheck_mutable_gates() {
     if [ "$REAL_SUBMODULE_CHANGES" -gt 0 ]; then
       keep "$wt" "submodule work appeared after the salvage snapshot"; return 1
     fi
-    now_tree=$(snapshot_tree "$wt") || { keep "$wt" "cannot re-snapshot the working tree before removal"; return 1; }
+    snapshot_tree "$wt" || { keep "$wt" "cannot re-snapshot the working tree before removal ($SALVAGE_NOTE)"; return 1; }
+    now_tree=$SNAPSHOT_TREE
     now_index=$(git -C "$wt" write-tree 2>/dev/null) || { keep "$wt" "cannot re-read the index before removal"; return 1; }
     if [ "$now_tree" != "$SALVAGE_TREE" ] || [ "$now_index" != "$SALVAGE_INDEX_TREE" ]; then
       keep "$wt" "working tree or index changed after the salvage snapshot ($SALVAGE_REF)"; return 1
@@ -661,6 +662,13 @@ salvage_eligible() {
 salvage_blocker() {
   local wt=$1 list rc f total_kb=0 sz
   SALVAGE_NOTE=""
+  # A conflicted index cannot be written as a tree, so apply would fail at salvage_write
+  # and KEEP the worktree. The operation markers are not a reliable witness (conflict
+  # entries survive a removed MERGE_HEAD), so ask the index itself, or dry-run would
+  # report a SALVAGE that apply can never perform.
+  list=$(git -C "$wt" ls-files -u 2>/dev/null); rc=$?
+  if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot read the index for conflicts"; return 0; fi
+  if [ -n "$list" ]; then SALVAGE_NOTE="the index holds unmerged (conflicted) entries"; return 0; fi
   # NUL-delimited: the default output C-quotes unusual names, which would hide them from
   # both the embedded-repository test and the size sum. tr keeps NULs out of $( ).
   list=$(git -C "$wt" ls-files -z -m -o --exclude-standard 2>/dev/null | tr '\0' '\n'); rc=$?
@@ -737,20 +745,45 @@ submodule_local_only_blocker() {
   return 1
 }
 
-# snapshot_tree <worktree> -> prints the tree of the WHOLE working tree (tracked edits,
-# deletions, untracked non-ignored files), built in a throwaway index so the worktree's
-# own index is never touched. Returns non-zero, with SALVAGE_NOTE, when the snapshot would
-# not be faithful: a gitlink that HEAD does not have means git staged an embedded
-# repository as a pointer instead of its files.
+# snapshot_tree <worktree> -> sets SNAPSHOT_TREE to the tree of the WHOLE working tree
+# (tracked edits, deletions, untracked non-ignored files), built in a throwaway index so the
+# worktree's own index is never touched. Returns non-zero, with SALVAGE_NOTE, when the
+# snapshot would not be faithful: a gitlink that HEAD does not have means git staged an
+# embedded repository as a pointer instead of its files. It sets globals rather than
+# printing, so a caller never runs it in a $( ) subshell that would discard SALVAGE_NOTE.
+#
+# Every path HEAD or the worktree's real index tracks is captured, ignored or not: `add -A`
+# skips an ignored path the throwaway index does not already hold, so a force-added ignored
+# file (in the real index, not in HEAD) and a `rm --cached` one (in HEAD, not in the index)
+# would otherwise lose their working-tree bytes with the removal.
 snapshot_tree() {
-  local wt=$1 idx tree head_links snap_links
-  SALVAGE_NOTE=""
+  local wt=$1 idx tree head_links snap_links tracked p
+  SALVAGE_NOTE=""; SNAPSHOT_TREE=""
   idx=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-index.XXXXXX") || { SALVAGE_NOTE="cannot create a temporary index"; return 1; }
+  tracked=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-paths.XXXXXX") || { rm -f "$idx"; SALVAGE_NOTE="cannot create a temporary path list"; return 1; }
   rm -f "$idx"
   if ! GIT_INDEX_FILE=$idx git -C "$wt" read-tree HEAD 2>/dev/null \
      || ! GIT_INDEX_FILE=$idx git -C "$wt" add -A -- . 2>/dev/null; then
-    rm -f "$idx"; SALVAGE_NOTE="cannot stage the working tree for salvage"; return 1
+    rm -f "$idx" "$tracked"; SALVAGE_NOTE="cannot stage the working tree for salvage"; return 1
   fi
+  # NUL-delimited end to end, and only files or symlinks still present: a deletion is
+  # already recorded by `add -A`, and a directory is a gitlink the check below compares.
+  if ! { git -C "$wt" ls-tree -r -z --name-only HEAD && git -C "$wt" ls-files -z; } \
+         > "$tracked.all" 2>/dev/null; then
+    rm -f "$idx" "$tracked" "$tracked.all"; SALVAGE_NOTE="cannot list the tracked paths for salvage"; return 1
+  fi
+  while IFS= read -r -d '' p; do
+    if [ -L "$wt/$p" ] || [ -f "$wt/$p" ]; then
+      printf '%s\0' "$p"
+    fi
+  done < "$tracked.all" > "$tracked"
+  rm -f "$tracked.all"
+  if [ -s "$tracked" ] \
+     && ! GIT_LITERAL_PATHSPECS=1 GIT_INDEX_FILE=$idx git -C "$wt" add -f \
+            --pathspec-from-file="$tracked" --pathspec-file-nul 2>/dev/null; then
+    rm -f "$idx" "$tracked"; SALVAGE_NOTE="cannot stage the tracked paths for salvage"; return 1
+  fi
+  rm -f "$tracked"
   head_links=$(git -C "$wt" ls-tree -r HEAD 2>/dev/null | awk -F'\t' '$1 ~ /^160000 /{print $2}') \
     || { rm -f "$idx"; SALVAGE_NOTE="cannot list HEAD gitlinks"; return 1; }
   snap_links=$(GIT_INDEX_FILE=$idx git -C "$wt" ls-files -s 2>/dev/null | awk -F'\t' '$1 ~ /^160000 /{print $2}') \
@@ -761,7 +794,7 @@ snapshot_tree() {
   tree=$(GIT_INDEX_FILE=$idx git -C "$wt" write-tree 2>/dev/null) \
     || { rm -f "$idx"; SALVAGE_NOTE="cannot write the snapshot tree"; return 1; }
   rm -f "$idx"
-  printf '%s' "$tree"
+  SNAPSHOT_TREE=$tree
 }
 
 # salvage_commit <worktree> <tree> <parent> <message> -> prints a commit. Local-only
@@ -815,7 +848,8 @@ salvage_write() {
   base="refs/salvaged/$id"
   git check-ref-format "$base/head" 2>/dev/null || { SALVAGE_NOTE="unusable salvage ref name $base"; return 1; }
   idx_tree=$(git -C "$wt" write-tree 2>/dev/null) || { SALVAGE_NOTE="cannot write the staged index as a tree"; return 1; }
-  wt_tree=$(snapshot_tree "$wt") || return 1
+  snapshot_tree "$wt" || return 1
+  wt_tree=$SNAPSHOT_TREE
   # The cap is enforced on what is actually captured, not only on the earlier listing: a
   # file written between that check and this snapshot is inside these trees, and the later
   # comparisons accept it because it matches the snapshot.
