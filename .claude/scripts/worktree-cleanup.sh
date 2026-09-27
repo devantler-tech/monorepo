@@ -771,9 +771,12 @@ worktree_state_blocker() {
       SALVAGE_NOTE="per-worktree refs exist (salvage cannot carry them)"; return 0
     fi
   fi
-  ita=$(git -C "$wt" diff --name-only --diff-filter=A 2>/dev/null) \
+  # Read the index flag itself (CE_INTENT_TO_ADD, bit 29 of the --debug flags): a worktree
+  # diff calls a deleted intent-to-add path D, not A, yet write-tree still drops it.
+  ita=$(git -C "$wt" ls-files --debug 2>/dev/null \
+        | awk '/^  size: .*flags: / { f = $NF; if (length(f) == 8 && substr(f, 1, 1) ~ /[2367abef]/) n++ } END { print n + 0 }') \
     || { SALVAGE_NOTE="cannot list intent-to-add entries"; return 0; }
-  if [ -n "$ita" ]; then
+  if [ "$ita" != 0 ]; then
     SALVAGE_NOTE="intent-to-add index entries exist (salvage cannot carry them)"; return 0
   fi
   return 1
@@ -868,19 +871,26 @@ conversion_blocker() {
 # tree still exists, is clean with no hidden-index flags. It checks what the removal would
 # actually delete, not what the index happens to list.
 admin_modules_blocker() {
-  local wt=$1 admin heads h g w wdir st flags
+  local wt=$1 admin heads h g w wdir st flags label
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
     || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
   [ -d "$admin/modules" ] || return 1
-  heads=$(find "$admin/modules" -type f -name HEAD 2>/dev/null) \
-    || { SALVAGE_NOTE="cannot list the submodule repositories of $wt"; return 0; }
-  while IFS= read -r h; do
+  heads=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-heads.XXXXXX") \
+    || { SALVAGE_NOTE="cannot create a temporary list"; return 0; }
+  # NUL-delimited: a repository path holding a newline must not be split and skipped.
+  find "$admin/modules" -type f -name HEAD -print0 > "$heads" 2>/dev/null \
+    || { rm -f "$heads"; SALVAGE_NOTE="cannot list the submodule repositories of $wt"; return 0; }
+  local hs=()
+  while IFS= read -r -d '' h; do hs+=("$h"); done < "$heads"
+  rm -f "$heads"
+  for h in ${hs[@]+"${hs[@]}"}; do
     [ -n "$h" ] || continue
     g=${h%/HEAD}
     [ -d "$g/objects" ] || continue                  # a reflog's logs/HEAD, not a repository
-    gitdir_state_blocker "$g" "${g#"$admin"/}" && return 0
+    label=${g#"$admin"/}; label=${label//$'\n'/?}   # one output line, even for a newline path
+    gitdir_state_blocker "$g" "$label" && return 0
     if [ -n "$(git --git-dir="$g" rev-list -n 1 --all --reflog --not --remotes 2>/dev/null || echo unreadable)" ]; then
-      SALVAGE_NOTE="submodule repository ${g#"$admin"/} holds commits no remote has (cannot be salvaged)"; return 0
+      SALVAGE_NOTE="submodule repository $label holds commits no remote has (cannot be salvaged)"; return 0
     fi
     w=$(git --git-dir="$g" config core.worktree 2>/dev/null) || continue
     wdir=$(cd "$g" 2>/dev/null && cd "$w" 2>/dev/null && pwd -P) || continue
@@ -891,7 +901,7 @@ admin_modules_blocker() {
     if [ -n "$st" ] || grep -q '^[a-zS]' <<< "$flags"; then
       SALVAGE_NOTE="submodule ${wdir#"$wt"/} has uncommitted or hidden-index changes (cannot be salvaged)"; return 0
     fi
-  done <<< "$heads"
+  done
   return 1
 }
 

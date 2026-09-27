@@ -2012,6 +2012,46 @@ t_salvage_preserves_a_commit_only_fetch_head_names() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_deleted_intent_to_add_entry() {
+  # `git add -N` then `rm`: the worktree diff calls it D, but the index entry remains.
+  local name="salvage dry-run KEEPs an intent-to-add entry whose file was deleted"
+  local root; root=$(make_repo)
+  add_wt "$root" itadel pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/itadel"
+  echo planned > "$wt/planned.txt"; git -C "$wt" add -N planned.txt; rm "$wt/planned.txt"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*itadel .*intent-to-add' <<<"$out" && ! grep -q '^SALVAGE .*itadel ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_finds_an_admin_repository_at_a_newline_path() {
+  # A retained submodule repository whose path holds a newline must not be split and skipped.
+  local name="salvage KEEPs an admin-dir submodule repository at a newline path"
+  local root; root=$(make_repo)
+  add_wt "$root" nlrepo pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/nlrepo" admin g t c
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  g="$admin/modules/we"$'\n'"ird"
+  git init -q --bare "$g" && t=$(git --git-dir="$g" mktree < /dev/null) \
+    && c=$(git --git-dir="$g" -c user.email=t@t.t -c user.name=t commit-tree "$t" -m local) \
+    && git --git-dir="$g" update-ref refs/heads/main "$c" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*nlrepo .*modules/we?ird holds commits no remote has' <<<"$out" && ! grep -q '^SALVAGE .*nlrepo ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -2092,5 +2132,7 @@ t_salvage_keeps_when_file_modes_are_ignored
 t_salvage_ignorecase_blocks_only_on_a_case_sensitive_filesystem
 t_salvage_keeps_a_submodule_that_ignores_file_modes
 t_salvage_preserves_a_commit_only_fetch_head_names
+t_salvage_keeps_a_deleted_intent_to_add_entry
+t_salvage_finds_an_admin_repository_at_a_newline_path
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
