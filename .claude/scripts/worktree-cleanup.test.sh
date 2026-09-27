@@ -1422,7 +1422,7 @@ t_salvage_keeps_submodule_work_at_a_quoted_path() {
   local name="salvage KEEPs dirty submodule work at a path porcelain would quote"
   local root; root=$(make_repo)
   local sub="$root/subq.git" seed="$root/seedq" subA wt
-  git init -q --bare "$sub"; git init -q -b main "$seed"
+  git init -q --bare -b main "$sub"; git init -q -b main "$seed"
   git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
   echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one
   subA=$(git -C "$seed" rev-parse HEAD); git -C "$seed" push -q "$sub" main
@@ -1510,7 +1510,7 @@ t_salvage_keeps_submodule_work_at_a_newline_path() {
   local name="salvage KEEPs a worktree whose changed path holds a newline"
   local root; root=$(make_repo)
   local sub="$root/subn.git" seed="$root/seedn" subA wt sp=$'sub\nline'
-  git init -q --bare "$sub"; git init -q -b main "$seed"
+  git init -q --bare -b main "$sub"; git init -q -b main "$seed"
   git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
   echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one
   subA=$(git -C "$seed" rev-parse HEAD); git -C "$seed" push -q "$sub" main
@@ -1537,7 +1537,7 @@ t_salvage_keeps_submodule_work_at_a_newline_path() {
 # only in .gitmodules. Its submodule repository is at <worktree>/sub.
 clean_submodule_wt() {
   local root=$1 name=$2 sub="$1/sub-$2.git" seed="$1/seed-$2" subA wt
-  git init -q --bare "$sub"; git init -q -b main "$seed"
+  git init -q --bare -b main "$sub"; git init -q -b main "$seed"
   git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
   echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one
   subA=$(git -C "$seed" rev-parse HEAD); git -C "$seed" push -q "$sub" main
