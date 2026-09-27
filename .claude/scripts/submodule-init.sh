@@ -165,6 +165,12 @@ repair() {
     die "'$path' resolves to the SUPERPROJECT's gitdir ('$mdir'), not its own — refusing to repair, because that would redirect the parent repository's checkout at '$path'. The directory has content but no usable '.git', so nothing here is a real submodule checkout: remove its stray contents, then re-run 'submodule-init.sh $path' to populate it at the pinned commit"
   fi
 
+  # Verify WHICH repository this is before rewriting any of its configuration: a foreign checkout must
+  # be refused untouched, not repaired and only then rejected by `probe` (monorepo#2941). This runs
+  # after the parent-escape guard, which names the more specific failure when `.git` points outward.
+  origin_is_own "$path" ||
+    die "'$path' is not the repository .gitmodules registers — refusing to repair it"
+
   git config -f "$mdir/config" extensions.worktreeConfig true
   # Pin the tree this gitdir is actually checked out in — not a path we guessed.
   git config -f "$mdir/config.worktree" core.worktree "$tree"
@@ -311,23 +317,58 @@ is_registered_submodule() {
 }
 
 # Reduce a remote URL to host/owner/repo (or a bare path) so the SSH, HTTPS and `.git`-suffixed
-# spellings of one repository compare equal. Case is folded because GitHub names are case-blind.
+# spellings of one repository compare equal. Cleartext transports (http://, git://) keep a marker, so
+# they never equal an encrypted spelling of the same repository. Host names are case-blind; the path
+# is folded only for github.com, whose owner and repository names are case-blind too. An existing
+# local path is resolved physically so symlinked spellings of one directory compare equal.
 normalize_url() {
-  local u=${1%/}
+  local u=${1%/} scheme='' host path
   u=${u%.git}
   case "$u" in
-    *://*) u=${u#*://}; u=${u#*@} ;;
+    *://*) scheme=${u%%://*}; u=${u#*://}; u=${u#*@} ;;
     *@*:*) u=${u#*@}; u="${u%%:*}/${u#*:}" ;;
+    /*) [ -d "$u" ] && u=$(cd "$u" && pwd -P); printf '%s' "$u"; return ;;
   esac
-  printf '%s' "$u" | tr '[:upper:]' '[:lower:]'
+  host=$(printf '%s' "${u%%/*}" | tr '[:upper:]' '[:lower:]')
+  path=${u#*/}
+  [ "$host" = "github.com" ] && path=$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')
+  case "$scheme" in
+    http | git) printf 'cleartext:%s/%s' "$host" "$path" ;;
+    *) printf '%s/%s' "$host" "$path" ;;
+  esac
+}
+
+# Resolve a relative `.gitmodules` URL the way git does: against the superproject's origin, or its
+# top-level directory when it has no origin. The recorded `submodule.<name>.url` is deliberately NOT
+# used — it is per-checkout config that can be rewritten to name any repository, and a check that
+# reads its expectation from there compares the submodule with whatever it was told to expect.
+# Prints nothing (a mismatch for the caller) when the URL climbs above the base.
+resolve_relative_url() {
+  local rel=$1 base
+  base=$(git config --get remote.origin.url 2>/dev/null) || base=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+  base=${base%/}
+  while :; do
+    case "$rel" in
+      ./*) rel=${rel#./} ;;
+      ../*)
+        rel=${rel#../}
+        case "$base" in
+          */*) base=${base%/*} ;;
+          *) return 0 ;;
+        esac
+        ;;
+      *) break ;;
+    esac
+  done
+  [ -n "$base" ] && printf '%s/%s' "$base" "$rel"
 }
 
 # Does the submodule at $1 have, as its origin, the repository `.gitmodules` registers for that path?
 # Directory content and a self-resolving toplevel say where a checkout IS, not WHICH repository it
-# is: a stray or misplaced clone passes both (monorepo#2941). A relative `.gitmodules` URL is resolved
-# by git at init time and recorded as `submodule.<name>.url` in the superproject's config, so that
-# recorded value is the expectation there. Fails closed: an unreadable origin or expectation is a
-# mismatch, never a pass.
+# is: a stray or misplaced clone passes both (monorepo#2941). The expectation comes only from the
+# committed `.gitmodules` (a relative URL resolved as git resolves it), never from mutable
+# per-checkout submodule config. Fails closed: an unreadable origin or expectation is a mismatch,
+# never a pass.
 origin_is_own() {
   local path=$1 key name want got
   key=$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' |
@@ -336,7 +377,7 @@ origin_is_own() {
   name=${name%.path}
   want=$(git config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || want=''
   case "$want" in
-    ./* | ../*) want=$(git config --get "submodule.$name.url" 2>/dev/null) || want='' ;;
+    ./* | ../*) want=$(resolve_relative_url "$want") ;;
   esac
   got=$(git -C "$path" config --get remote.origin.url 2>/dev/null) || got=''
   if [ -z "$key" ] || [ -z "$want" ] || [ -z "$got" ]; then

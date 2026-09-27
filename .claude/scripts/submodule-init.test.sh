@@ -929,6 +929,40 @@ report "normalize_url: ssh:// and credentialed https:// reduce to host/owner/rep
   "$([[ "$(norm ssh://git@github.com/devantler-tech/ksail.git)" == "github.com/devantler-tech/ksail" && "$(norm https://x@github.com/devantler-tech/ksail/)" == "github.com/devantler-tech/ksail" ]] && echo yes || echo no)"
 report "normalize_url: a different repository stays different" \
   "$([[ "$(norm git@github.com:devantler-tech/monorepo.git)" != "$(norm git@github.com:devantler-tech/agent-plugins.git)" ]] && echo yes || echo no)"
+report "normalize_url: cleartext http:// never equals the https:// or SSH spelling" \
+  "$([[ "$(norm http://github.com/devantler-tech/ksail)" != "$(norm https://github.com/devantler-tech/ksail)" && "$(norm git://github.com/devantler-tech/ksail)" != "$(norm git@github.com:devantler-tech/ksail.git)" ]] && echo yes || echo no)"
+report "normalize_url: a non-GitHub host keeps its path case, and folds its host" \
+  "$([[ "$(norm https://Git.Example.com/Org/Repo)" == "git.example.com/Org/Repo" ]] && echo yes || echo no)" \
+  "$(norm https://Git.Example.com/Org/Repo)"
+
+# Origin identity is checked BEFORE repair: a foreign checkout is refused untouched. Control: the
+# matching checkout is repaired (repair pins core.worktree into config.worktree).
+c31="$tmp/c31"
+mk_super "$c31"
+out="$(cd "$c31/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "origin before repair control: the matching checkout is repaired" \
+  "$([[ $rc -eq 0 ]] && [[ -n "$(git config -f "$c31/super/.git/modules/sub/config.worktree" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)" "rc=$rc $out"
+c32="$tmp/c32"
+mk_super "$c32"
+git init -q "$c32/other-repo"
+git -C "$c32/super/sub" remote set-url origin "$c32/other-repo"
+out="$(cd "$c32/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "origin before repair: a foreign checkout is refused" \
+  "$([[ $rc -ne 0 ]] && grep -q 'refusing to repair it' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+report "origin before repair: the foreign checkout's config is left untouched" \
+  "$([[ ! -e "$c32/super/.git/modules/sub/config.worktree" ]] && echo yes || echo no)"
+
+# The expectation for a relative registration comes from .gitmodules, never from the mutable
+# recorded submodule.<name>.url: pointing both that value and the origin at a foreign repository
+# must still fail.
+c33="$tmp/c33"
+mk_super "$c33"
+git init -q "$c33/other-repo"
+git -C "$c33/super" config submodule.sub.url "$c33/other-repo"
+git -C "$c33/super/sub" remote set-url origin "$c33/other-repo"
+out="$(cd "$c33/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "relative registration: a rewritten submodule.<name>.url cannot vouch for a foreign origin" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
