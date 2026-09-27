@@ -1438,6 +1438,50 @@ out="$(cd "$c60/super" && "$helper" --sync "$c60_from" 2>&1)" && rc=0 || rc=$?
 report "sync: a dangling .git symlink in a removed path fails closed" \
   "$([[ $rc -ne 0 ]] && grep -q "still holds its old repository" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
+# 4. Nested submodule removal with accessible ancestor terminates and syncs
+c61="$tmp/c61"
+mk_super "$c61"
+mkdir -p "$c61/super/parent"
+(
+  cd "$c61/super"
+  git submodule add -q ../remote-sub parent/sub
+  git commit -q -m "add parent/sub"
+)
+c61_from="$(git -C "$c61/super" rev-parse HEAD)"
+(
+  cd "$c61/super"
+  git rm -q parent/sub
+  git config -f .gitmodules --remove-section submodule.parent/sub 2>/dev/null || true
+  git add .gitmodules
+  git commit -q -m "remove parent/sub"
+  rm -rf parent
+)
+out="$(cd "$c61/super" && "$helper" --sync "$c61_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a clean nested removal terminates and reports nothing left behind" \
+  "$([[ $rc -eq 0 ]] && grep -q "nothing left behind" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# 5. Retained submodule repository with foreign remote under .git/modules fails closed
+c62="$tmp/c62"
+mk_super "$c62"
+c62_from="$(git -C "$c62/super" rev-parse HEAD)"
+(
+  cd "$c62/super"
+  # Add a portfolio-registered submodule
+  git config -f .gitmodules "submodule.retained.path" "retained"
+  git config -f .gitmodules "submodule.retained.url" "https://github.com/devantler-tech/allowed-repo"
+  # Add commit tree entry for gitlink
+  git update-index --add --cacheinfo "160000,$(git -C "$c62/remote-sub" rev-parse HEAD),retained"
+  git add .gitmodules
+  git commit -q -m "add retained"
+  # Simulate retained module repository in .git/modules/retained with foreign remote
+  mkdir -p .git/modules/retained
+  git init -q --bare .git/modules/retained
+  git -C .git/modules/retained remote add origin "https://example.invalid/outside/repo"
+)
+out="$(cd "$c62/super" && "$helper" --sync "$c62_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a retained submodule repository with foreign origin remote is refused before init" \
+  "$([[ $rc -ne 0 ]] && grep -q "registered to a repository outside devantler-tech" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

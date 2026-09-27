@@ -667,6 +667,23 @@ sync_url_allowed() {
   if configured=$(git config --get "submodule.$name.url" 2>/dev/null); then
     sync_url_is_portfolio "$configured" || return 1
   fi
+  # If a deinitialized or re-added submodule retains its repository under .git/modules, `submodule update --init`
+  # reuses that repository and fetches its origin remote. Validate that retained module repository's
+  # effective fetch URL before initialization touches it.
+  local super_common super_git mdir mod_url
+  super_common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git rev-parse --git-dir 2>/dev/null)
+  super_git=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)
+  for mdir in \
+    ${super_common:+"$super_common/modules/$name"} \
+    ${super_common:+"$super_common/modules/$path"} \
+    ${super_git:+"$super_git/modules/$name"} \
+    ${super_git:+"$super_git/modules/$path"}; do
+    [ -d "$mdir" ] || continue
+    while IFS= read -r mod_url; do
+      [ -n "$mod_url" ] || continue
+      sync_url_is_portfolio "$mod_url" || return 1
+    done < <(git --git-dir="$mdir" config --get-all remote.origin.url 2>/dev/null || true)
+  done
   return 0
 }
 
@@ -735,6 +752,9 @@ sync_from() {
       while [ "$cur_dir" != "$path" ] && [ -n "$cur_dir" ] && [ "$cur_dir" != "." ]; do
         if [ -e "$cur_dir" ] && { ! ls -A "$cur_dir" > /dev/null 2>&1 || { [ -d "$cur_dir" ] && [ ! -x "$cur_dir" ]; }; }; then
           die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+        fi
+        if [ "$cur_dir" = "${cur_dir%/*}" ]; then
+          break
         fi
         cur_dir="${cur_dir%/*}"
       done
