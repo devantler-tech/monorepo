@@ -55,8 +55,10 @@
 #   refs/salvaged/<id>/worktree   - a commit of the whole working tree (tracked edits,
 #                                   deletions and untracked non-ignored files), parent HEAD
 #   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog commit reachable from no remote
-# Restore: `git worktree add <path> refs/salvaged/<id>/head`, then
-# `git -C <path> checkout refs/salvaged/<id>/worktree -- .` (or read-tree the index ref).
+# Restore: `git worktree add --detach <path> refs/salvaged/<id>/head`, then
+# `git -C <path> read-tree refs/salvaged/<id>/index` for the staged index and
+# `git -C <path> restore --source=refs/salvaged/<id>/worktree --worktree -- .` for the working
+# tree. `restore` does not overlay, so paths the salvaged tree deleted are deleted again.
 # Every other gate is unchanged, and salvage fails closed to the old KEEP:
 #   KEEP  - a salvage candidate whose submodule holds uncommitted or unpushed work (the
 #           submodule's repository lives inside the worktree's admin dir and dies with it)
@@ -481,6 +483,11 @@ recheck_mutable_gates() {
       [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$SALVAGE_REF/reflog/$o" 2>/dev/null)" = "$o" ] \
         || { keep "$wt" "a reflog-only commit appeared after the salvage snapshot ($SALVAGE_REF)"; return 1; }
     done <<< "$now_orphans"
+    # The same for a submodule: a commit made there and reset back to the gitlink changes
+    # nothing the checks above compare, and the removal deletes the submodule's repository.
+    if submodule_local_only_blocker "$wt"; then
+      keep "$wt" "$SALVAGE_NOTE, after the salvage snapshot ($SALVAGE_REF)"; return 1
+    fi
   elif [ -n "$salvage_reason" ]; then
     # Salvage candidate before its snapshot: its changes are expected and are about to be
     # preserved, but not work in a submodule, which salvage cannot capture.
@@ -696,19 +703,21 @@ salvage_blocker() {
     fi
   done <<< "$list"
   # A linked worktree's submodule repositories live in its admin directory and are deleted
-  # with it, and salvage records only their gitlinks. A submodule whose HEAD matches the
-  # recorded gitlink shows no status entry at all, yet its reflog can hold the only
-  # reference to a commit it made and reset away. Block salvage on any such commit.
-  submodule_reflog_blocker "$wt" && return 0
+  # with it, and salvage records only their gitlinks.
+  submodule_local_only_blocker "$wt" && return 0
   return 1
 }
 
-# submodule_reflog_blocker <repo> -> 0, with SALVAGE_NOTE set, when an initialised submodule
-# of <repo> (recursively) holds a commit only in its reflog, or cannot be read; 1 otherwise.
-# Submodules are enumerated from the index's gitlinks, not `git submodule foreach`, which
-# skips a populated submodule that is not registered as active and would fail open on it.
-submodule_reflog_blocker() {
-  local repo=$1 links line path orphans
+# submodule_local_only_blocker <repo> -> 0, with SALVAGE_NOTE set, when an initialised
+# submodule of <repo> (recursively) holds any commit that no remote-tracking ref reaches, or
+# cannot be read; 1 otherwise. Salvage keeps only a submodule's gitlink, so the rule is a
+# whitelist: every commit a submodule knows locally — through HEAD, any branch or tag, or any
+# reflog — must already be on a remote. A submodule clean at its gitlink shows no status
+# entry at all, so status cannot answer this. Submodules are enumerated from the index's
+# gitlinks, not `git submodule foreach`, which skips a populated submodule that is not
+# registered as active and would fail open on it.
+submodule_local_only_blocker() {
+  local repo=$1 links line path local_only
   links=$(git -C "$repo" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') \
     || { SALVAGE_NOTE="cannot list the gitlinks of $repo for salvage"; return 0; }
   case "$links" in
@@ -718,12 +727,12 @@ submodule_reflog_blocker() {
     case "$line" in 160000\ *) ;; *) continue ;; esac
     path=${line#*$'\t'}
     [ -e "$repo/$path/.git" ] || continue          # not initialised: nothing local to lose
-    orphans=$(reflog_orphans "$repo/$path") \
-      || { SALVAGE_NOTE="cannot read the reflog of submodule $path"; return 0; }
-    if [ -n "$orphans" ]; then
-      SALVAGE_NOTE="submodule $path holds commits only in its reflog (cannot be salvaged)"; return 0
+    local_only=$(git -C "$repo/$path" rev-list -n 1 --all --reflog --not --remotes 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot list the local commits of submodule $path"; return 0; }
+    if [ -n "$local_only" ]; then
+      SALVAGE_NOTE="submodule $path holds commits no remote has (cannot be salvaged)"; return 0
     fi
-    submodule_reflog_blocker "$repo/$path" && return 0
+    submodule_local_only_blocker "$repo/$path" && return 0
   done <<< "$links"
   return 1
 }
@@ -763,6 +772,19 @@ salvage_commit() {
     git -C "$1" commit-tree --no-gpg-sign "$2" -p "$3" -m "$4" 2>/dev/null
 }
 
+# snapshot_kb <worktree> <head> <index-tree> <worktree-tree> -> prints the KB of the blobs
+# the two salvage trees add or change relative to <head>, each distinct blob counted once.
+# Non-zero on any read failure or a missing object, so the caller fails closed.
+snapshot_kb() {
+  local wt=$1 head=$2 shas
+  shas=$( { git -C "$wt" diff-tree -r --no-renames --no-abbrev "$head" "$3" \
+            && git -C "$wt" diff-tree -r --no-renames --no-abbrev "$head" "$4"; } 2>/dev/null \
+          | awk '$2 != "160000" && $4 !~ /^0+$/ { print $4 }' | sort -u) || return 1
+  [ -n "$shas" ] || { echo 0; return 0; }
+  git -C "$wt" cat-file --batch-check='%(objectsize)' <<< "$shas" 2>/dev/null \
+    | awk 'NF != 1 { bad = 1 } { kb += int(($1 + 1023) / 1024) } END { if (bad) exit 1; print kb + 0 }'
+}
+
 # reflog_orphans <repo> -> prints every HEAD-reflog commit of <repo> that no remote-tracking
 # ref reaches, one per line. Non-zero on any read failure, so callers fail closed. Used for a
 # worktree and for each of its initialised submodules.
@@ -794,6 +816,15 @@ salvage_write() {
   git check-ref-format "$base/head" 2>/dev/null || { SALVAGE_NOTE="unusable salvage ref name $base"; return 1; }
   idx_tree=$(git -C "$wt" write-tree 2>/dev/null) || { SALVAGE_NOTE="cannot write the staged index as a tree"; return 1; }
   wt_tree=$(snapshot_tree "$wt") || return 1
+  # The cap is enforced on what is actually captured, not only on the earlier listing: a
+  # file written between that check and this snapshot is inside these trees, and the later
+  # comparisons accept it because it matches the snapshot.
+  local captured_kb
+  captured_kb=$(snapshot_kb "$wt" "$sha" "$idx_tree" "$wt_tree") \
+    || { SALVAGE_NOTE="cannot size the salvage snapshot"; return 1; }
+  if [ "$captured_kb" -gt "$SALVAGE_MAX_KB" ]; then
+    SALVAGE_NOTE="the snapshot holds more than ${SALVAGE_MAX_KB} KB of changed data"; return 1
+  fi
   orphans=$(reflog_orphans "$wt") || { SALVAGE_NOTE="cannot find reflog-only commits"; return 1; }
   idx_commit=$(salvage_commit "$wt" "$idx_tree" "$sha" "salvage: staged index of $(basename "$wt")") \
     || { SALVAGE_NOTE="cannot commit the staged index"; return 1; }

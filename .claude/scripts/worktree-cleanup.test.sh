@@ -1253,10 +1253,14 @@ t_salvage_apply_preserves_every_kind_of_work() {
   grep -q "salvaged=$base" "$root/manifest.tsv" 2>/dev/null || problems="$problems manifest"
   # The documented restore works: a new worktree at head plus the working-tree commit.
   local rs="$root/restore"
+  # The documented sequence, exactly as the script header states it.
   if git -C "$root/repo" worktree add -q --detach "$rs" "$base/head" 2>/dev/null \
-     && git -C "$rs" checkout -q "$base/worktree" -- . 2>/dev/null; then
+     && git -C "$rs" read-tree "$base/index" 2>/dev/null \
+     && git -C "$rs" restore --source="$base/worktree" --worktree -- . 2>/dev/null; then
     [ "$(cat "$rs/untracked.txt" 2>/dev/null)" = draft ] && [ "$(cat "$rs/file.txt")" = unstaged ] \
       || problems="$problems restore-content"
+    [ ! -e "$rs/new.txt" ] || problems="$problems restore-kept-a-deleted-file"
+    [ "$(git -C "$rs" show :file.txt 2>/dev/null)" = staged ] || problems="$problems restore-index"
   else
     problems="$problems restore-failed"
   fi
@@ -1528,33 +1532,85 @@ t_salvage_keeps_submodule_work_at_a_newline_path() {
   rm -rf "$root"
 }
 
-t_salvage_keeps_a_submodule_reflog_only_commit() {
-  # The submodule is back at its recorded gitlink, so the parent's status has no entry
-  # for it, but its reflog holds the only reference to a commit it made and reset away.
-  local name="salvage KEEPs a submodule whose reflog holds the only copy of a commit"
-  local root; root=$(make_repo)
-  local sub="$root/subr.git" seed="$root/seedr" subA wt lost
+# clean_submodule_wt <root> <name> — an old worktree with ordinary salvageable work (an
+# untracked file) and an initialised submodule clean at its recorded gitlink, registered
+# only in .gitmodules. Its submodule repository is at <worktree>/sub.
+clean_submodule_wt() {
+  local root=$1 name=$2 sub="$1/sub-$2.git" seed="$1/seed-$2" subA wt
   git init -q --bare "$sub"; git init -q -b main "$seed"
   git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
   echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one
   subA=$(git -C "$seed" rev-parse HEAD); git -C "$seed" push -q "$sub" main
-  add_wt "$root" subr pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
-  wt="$root/repo/.claude/worktrees/subr"
+  add_wt "$root" "$name" pushed || return 1
+  wt="$root/repo/.claude/worktrees/$name"
   git clone -q "$sub" "$wt/sub"
   git -C "$wt/sub" config user.email t@t.t; git -C "$wt/sub" config user.name t
   git -C "$wt" update-index --add --cacheinfo "160000,$subA,sub"
   printf '[submodule "sub"]\n\tpath = sub\n\turl = %s\n' "$sub" > "$wt/.gitmodules"
   git -C "$wt" add .gitmodules
-  git -C "$wt" commit -qm "track sub"; git -C "$wt" push -q origin claude/subr
+  git -C "$wt" commit -qm "track sub"; git -C "$wt" push -q origin "claude/$name"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+}
+
+t_salvage_keeps_a_submodule_reflog_only_commit() {
+  # The submodule is back at its recorded gitlink, so the parent's status has no entry
+  # for it, but its reflog holds the only reference to a commit it made and reset away.
+  local name="salvage KEEPs a submodule whose reflog holds the only copy of a commit"
+  local root; root=$(make_repo)
+  clean_submodule_wt "$root" subr || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subr" base lost
+  base=$(git -C "$wt/sub" rev-parse HEAD)
   echo two >> "$wt/sub/f"; git -C "$wt/sub" commit -qam "only in the reflog"
   lost=$(git -C "$wt/sub" rev-parse HEAD)
-  git -C "$wt/sub" reset -q --hard "$subA"
-  echo draft > "$wt/untracked.txt"                   # ordinary salvageable work in the parent
+  git -C "$wt/sub" reset -q --hard "$base"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subr .*holds commits only in its reflog' <<<"$out" \
+  if grep -q 'KEEP .*subr .*holds commits no remote has' <<<"$out" \
      && git -C "$wt/sub" cat-file -e "$lost" 2>/dev/null \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_branch_only_commit() {
+  # A commit reachable only from a local submodule branch never touches HEAD's reflog.
+  local name="salvage KEEPs a submodule whose local branch holds the only copy of a commit"
+  local root; root=$(make_repo)
+  clean_submodule_wt "$root" subb || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subb" tree side
+  tree=$(git -C "$wt/sub" rev-parse 'HEAD^{tree}')
+  side=$(git -C "$wt/sub" commit-tree "$tree" -p HEAD -m "only on a local branch")
+  git -C "$wt/sub" update-ref refs/heads/side "$side"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subb .*holds commits no remote has' <<<"$out" \
+     && [ "$(git -C "$wt/sub" rev-parse refs/heads/side 2>/dev/null)" = "$side" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_commit_made_after_the_snapshot() {
+  # A submodule commit reset back to the gitlink after the snapshot changes nothing the
+  # superproject can compare, and the removal deletes the submodule's repository.
+  local name="salvage KEEPs a worktree whose submodule gained a commit after the snapshot"
+  local root; root=$(make_repo)
+  clean_submodule_wt "$root" subl || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subl" shim
+  shim=$(lsof_hook_shim "$root" 3 "git -C '$wt/sub' commit -q --allow-empty -m late >/dev/null 2>&1 && git -C '$wt/sub' reset -q --soft HEAD~1") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if [ ! -d "$wt/sub" ]; then
+    bad "$name" "submodule removed: $out"
+  elif [ "$(git -C "$wt/sub" log -1 --format=%s 'HEAD@{1}' 2>/dev/null)" != late ]; then
+    bad "$name" "FIXTURE: no late submodule commit: $out"
+  elif grep -q 'KEEP .*subl .*holds commits no remote has.*after the salvage snapshot' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -1662,6 +1718,8 @@ t_salvage_keeps_submodule_work_at_a_quoted_path
 t_salvage_namespaces_are_unique_per_worktree
 t_salvage_keeps_submodule_work_at_a_newline_path
 t_salvage_keeps_a_submodule_reflog_only_commit
+t_salvage_keeps_a_submodule_branch_only_commit
+t_salvage_keeps_a_submodule_commit_made_after_the_snapshot
 t_salvage_keeps_a_reflog_commit_made_after_the_snapshot
 t_salvage_rechecks_its_cap_under_the_mutex
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
