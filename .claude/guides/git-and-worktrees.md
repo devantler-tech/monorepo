@@ -269,7 +269,7 @@ session **structurally cannot remove it**: that directory is the session's own w
 sessions routinely end abruptly (crash, timeout, closed window) with no teardown. So the sweep must
 come from **outside** any session. It does, via the `tech.devantler.worktree-cleanup` LaunchAgent
 (runtime-local, `~/Library/LaunchAgents/`), which runs
-[`.claude/scripts/worktree-cleanup-all.sh [apply|dry-run] [min_age_hours]`](../scripts/worktree-cleanup-all.sh)
+[`.claude/scripts/worktree-cleanup-all.sh [apply|dry-run] [min_age_hours] [salvage_age_hours]`](../scripts/worktree-cleanup-all.sh)
 every 6 hours and at login across the monorepo and every submodule discovered from `.gitmodules`.
 Per-repo safety lives in [`worktree-cleanup.sh`](../scripts/worktree-cleanup.sh) and is
 **fail-closed**: it KEEPs any worktree that is a **live process CWD**, is **locked**, is **younger
@@ -280,7 +280,12 @@ gitlink drift — and only once that submodule is itself proven clean and pushed
 authored intent living solely in that worktree's index, so it always counts as work) — and the stray
 tool dirs `?? .codex/` / `?? .agents/`, which are filtered unconditionally. Every removal is recorded to a
 restore manifest **outside the repo** (`~/.claude/worktree-cleanup-manifests/`) before it happens, and
-any infrastructure failure aborts rather than reaping. **Do not add a per-run worktree sweep** to
+any infrastructure failure aborts rather than reaping. Work is never discarded, but it is not kept
+forever either (#2831): once a worktree whose only KEEP reason is abandoned work passes
+`salvage_age_hours` (14 days in the scheduled sweep), its commits, reflog-only commits, index and
+working tree are first preserved under `refs/salvaged/<id>/…` and verified, and only then is the
+worktree reaped. Submodule work, embedded repositories and oversized data still KEEP, as does any
+change made after the snapshot. The restore steps are in the script's header. **Do not add a per-run worktree sweep** to
 compensate; a session removing its *own* worktree is exactly the thing that cannot work.
 Measured 2026-07-29, the run that introduced this: **124 leaked monorepo worktrees, ~15.7 GB across
 `.claude` and `.codex`, disk at 99%, and new sessions failing to start** for want of 5.4 GB. Because a
