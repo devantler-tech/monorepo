@@ -332,13 +332,13 @@ all_paths() {
 # sweep — the fail-open this script must never have.
 initialised_paths() {
   local p
-  while read -r p; do is_populated "$p" && printf '%s\n' "$p"; done < <(all_paths)
+  while IFS= read -r p; do is_populated "$p" && printf '%s\n' "$p"; done < <(all_paths)
 }
 
 # Is $1 one of the paths declared in .gitmodules? Only these may have their config rewritten.
 is_registered_submodule() {
   local p=$1 x
-  while read -r x; do [ "$x" = "$p" ] && return 0; done < <(all_paths)
+  while IFS= read -r x; do [ "$x" = "$p" ] && return 0; done < <(all_paths)
   return 1
 }
 
@@ -495,8 +495,9 @@ init_repair_probe() {
     # Fresh (empty) submodule: populate it at its pinned commit, then relocate the `core.worktree`
     # that `git submodule update` writes into the shared config.
     # `--checkout` overrides a configured `submodule.<name>.update` (which can name a shell command),
-    # and no replace refs may substitute a different tree for the pinned commit.
-    GIT_NO_REPLACE_OBJECTS=1 git submodule update --init --checkout "$path"
+    # and no replace refs may substitute a different tree for the pinned commit. The path is a
+    # literal pathspec: a registered name like `:(glob)*` would otherwise select other submodules.
+    GIT_NO_REPLACE_OBJECTS=1 git submodule update --init --checkout -- ":(literal)$path"
     # It can exit 0 having populated NOTHING — observed 2026-07-26 running from a linked superproject
     # worktree while a sibling worktree already held that submodule: git printed `checked out '<sha>'`,
     # exited 0, and left the directory empty. `probe` below verifies ISOLATION, not content, so it
@@ -835,12 +836,12 @@ case "$1" in
   # first: a check that fixes what it is checking can never fail.
   --check)
     broken=0
-    while read -r path; do probe "$path" || broken=1; done < <(initialised_paths)
+    while IFS= read -r path; do probe "$path" || broken=1; done < <(initialised_paths)
     [ "$broken" -eq 0 ] ||
       die 'one or more submodules are NOT isolated — run submodule-init.sh <path> to repair before editing them'
     ;;
   --all)
-    while read -r path; do init_repair_probe "$path"; done < <(all_paths)
+    while IFS= read -r path; do init_repair_probe "$path"; done < <(all_paths)
     ;;
   --advance)
     [ $# -eq 2 ] || die 'usage: submodule-init.sh --advance <submodule-path>'

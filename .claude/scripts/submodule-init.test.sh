@@ -1482,6 +1482,54 @@ out="$(cd "$c62/super" && "$helper" --sync "$c62_from" 2>&1)" && rc=0 || rc=$?
 report "sync: a retained submodule repository with foreign origin remote is refused before init" \
   "$([[ $rc -ne 0 ]] && grep -q "registered to a repository outside devantler-tech" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
+# Round 7 of review on #3625.
+# 6. An added submodule whose path begins with a space keeps it through every path consumer.
+c63="$tmp/c63"
+mk_super "$c63"
+c63_from="$(git -C "$c63/super" rev-parse HEAD)"
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c63/remote-sub.insteadOf" https://github.com/devantler-tech/remote-sub-c63
+(
+  cd "$c63/super"
+  git config -f .gitmodules "submodule.leading.path" " leading"
+  git config -f .gitmodules "submodule.leading.url" https://github.com/devantler-tech/remote-sub-c63
+  git update-index --add --cacheinfo "160000,$(git -C "$c63/remote-sub" rev-parse HEAD), leading"
+  git add .gitmodules
+  git commit -q -m "add a submodule whose path starts with a space"
+)
+out="$(cd "$c63/super" && "$helper" --sync "$c63_from" 2>&1)" && rc=0 || rc=$?
+report "sync: an added submodule path with a leading space is populated" \
+  "$([[ $rc -eq 0 && -f "$c63/super/ leading/file.txt" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# 7. An added path spelled as pathspec magic populates only itself, never another registration.
+c64="$tmp/c64"
+mk_super "$c64"
+git init -q "$c64/foreign"
+(
+  cd "$c64/foreign"
+  echo foreign >file.txt
+  git add file.txt
+  git commit -q -m init
+  cd "$c64/super"
+  git config -f .gitmodules submodule.foreign.path foreign
+  git config -f .gitmodules submodule.foreign.url "$c64/foreign"
+  git update-index --add --cacheinfo "160000,$(git -C "$c64/foreign" rev-parse HEAD),foreign"
+  git add .gitmodules
+  git commit -q -m "register a submodule outside the portfolio, never initialised"
+)
+c64_from="$(git -C "$c64/super" rev-parse HEAD)"
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c64/remote-sub.insteadOf" https://github.com/devantler-tech/remote-sub-c64
+(
+  cd "$c64/super"
+  git config -f .gitmodules "submodule.magic.path" ':(glob)*'
+  git config -f .gitmodules "submodule.magic.url" https://github.com/devantler-tech/remote-sub-c64
+  git update-index --add --cacheinfo "160000,$(git -C "$c64/remote-sub" rev-parse HEAD),:(glob)*"
+  git add .gitmodules
+  git commit -q -m "add a submodule whose path is pathspec magic"
+)
+out="$(cd "$c64/super" && "$helper" --sync "$c64_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a pathspec-magic path never initialises another submodule" \
+  "$([[ -z "$(ls -A "$c64/super/foreign" 2>/dev/null)" ]] && echo yes || echo no)" "rc=$rc $out"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1
