@@ -277,6 +277,46 @@ if [ "${rc}" -eq 2 ] && grep -q 'scripts/rootonly.test.sh (working-directory doc
 else bad "root fallback occurred: ${out} (rc=${rc})"; fi
 rm -rf fb .github/workflows/fallback.yaml scripts/rootonly.test.sh
 
+# A job that lints a test before running it through bash (#3629): the runner must run it the
+# way the running step does, not the way the lint step names it. The script has no execute
+# bit, so running it directly would fail where CI passes.
+cat > .github/workflows/lintfirst.yaml <<'EOF'
+jobs:
+  changes:
+    steps:
+      - uses: dorny/paths-filter@0000000000000000000000000000000000000000
+        with:
+          filters: |
+            lf:
+              - 'lf/**'
+            lo:
+              - 'lo/**'
+  test-lf:
+    if: needs.changes.outputs.lf == 'true'
+    steps:
+      - run: shellcheck scripts/lintfirst.test.sh
+      - run: bash scripts/lintfirst.test.sh
+  test-lo:
+    if: needs.changes.outputs.lo == 'true'
+    steps:
+      - run: shellcheck scripts/lintonly.test.sh
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' > scripts/lintfirst.test.sh
+printf '#!/usr/bin/env bash\nexit 0\n' > scripts/lintonly.test.sh
+chmod -x scripts/lintfirst.test.sh scripts/lintonly.test.sh
+mkdir -p lf lo && : > lf/x
+out="$(run --ci-file .github/workflows/lintfirst.yaml 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && grep -q '^PASS .*scripts/lintfirst.test.sh' <<<"${out}"; then
+  ok "a test linted before its bash step runs through bash"
+else bad "lint step chose how to run the test: ${out} (rc=${rc})"; fi
+rm -f lf/x && : > lo/x
+out="$(run --ci-file .github/workflows/lintfirst.yaml --list 2>&1)"; rc=$?
+if [ "${rc}" -eq 2 ] && grep -q 'cannot tell how CI runs' <<<"${out}" \
+  && grep -q 'scripts/lintonly.test.sh' <<<"${out}"; then
+  ok "a test the selected jobs only name, never run, is exit 2 and named"
+else bad "lint-only test was not exit 2: ${out} (rc=${rc})"; fi
+rm -rf lf lo .github/workflows/lintfirst.yaml scripts/lintfirst.test.sh scripts/lintonly.test.sh
+
 cat > .github/workflows/negcond.yaml <<'EOF'
 jobs:
   changes:

@@ -142,7 +142,7 @@ jobs_json="$(yq -o=json '.jobs' "${ci_file}")" || die "cannot parse jobs in ${ci
 hits_json="$(printf '%s' "${hit_filters}" | jq -R -s 'split("\n") | map(select(length > 0))')"
 
 selected="$(jq -r --argjson hits "${hits_json}" '
-  to_entries[]
+  [ to_entries[]
   | .key as $job_name
   | .value as $job
   | (($job["if"] // "") | tostring) as $cond
@@ -157,12 +157,23 @@ selected="$(jq -r --argjson hits "${hits_json}" '
   | (.["working-directory"] // $jobwd) as $wd
   | (.run // "") as $run
   | ($run | scan("[A-Za-z0-9_./-]+\\.test\\.sh")) as $script
-  | (if ($run | test("(^|[ \t\n;&|])(bash|sh)[ \t]+" + ($script | gsub("\\."; "\\.")))) then "bash" else "direct" end) as $how
-  | [$wd, $script, $how] | @tsv' <<<"${jobs_json}")" || die "cannot read the gated jobs in ${ci_file}"
+  | ($script | gsub("\\."; "\\.")) as $escaped
+  # A step runs the script through a shell ("bash"), runs it as a command of its own
+  # ("direct"), or only names it, as a lint step does ("mention"). Only the first two say how
+  # CI runs it (#3629).
+  | (if ($run | test("(^|[ \t\n;&|])(bash|sh)[ \t]+" + $escaped)) then "bash"
+     elif ($run | test("(^|[\n;&|(])[ \t]*" + $escaped + "([ \t\n;&|)]|$)")) then "direct"
+     else "mention" end) as $how
+  | [$wd, $script, $how] ]
+  # Steps that run a script come before steps that only name it (sort_by is stable), so the
+  # first row kept for each script below is the one that says how CI runs it.
+  | sort_by(if .[2] == "mention" then 1 else 0 end)[]
+  | @tsv' <<<"${jobs_json}")" || die "cannot read the gated jobs in ${ci_file}"
 
 scripts=""
 runs=""
 missing=""
+unrunnable=""
 while IFS=$'\t' read -r wd s how; do
   [ -n "${s}" ] || continue
   s="${s#./}"
@@ -180,6 +191,11 @@ while IFS=$'\t' read -r wd s how; do
   fi
   p="${p#./}"
   case $'\n'"${scripts}" in *$'\n'"${p}"$'\n'*) continue ;; esac
+  if [ "${how}" = "mention" ]; then
+    # Only named, never run, by the selected jobs: running it either way would be a guess.
+    unrunnable+="${p}"$'\n'
+    continue
+  fi
   scripts+="${p}"$'\n'
   runs+="${run_wd}"$'\t'"${s}"$'\t'"${p}"$'\t'"${how}"$'\n'
 done <<<"${selected}"
@@ -187,6 +203,12 @@ done <<<"${selected}"
 if [ -n "${missing}" ]; then
   printf '%s: a selected script does not exist, so CI would fail running it:\n%s' \
     "${me}" "${missing}" >&2
+  exit 2
+fi
+
+if [ -n "${unrunnable}" ]; then
+  printf '%s: cannot tell how CI runs these scripts; a selected step names them but none runs them:\n%s' \
+    "${me}" "${unrunnable}" >&2
   exit 2
 fi
 
