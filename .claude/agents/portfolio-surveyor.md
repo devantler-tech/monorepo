@@ -20,6 +20,10 @@ acts on it, not a human); return the digest and nothing else.
 ## Safety (non-negotiable)
 - **Read-only.** Use only read verbs: `gh ... list/view/search`, `gh api` GETs, `git log/status`,
   `grep`, `glob`. Never `gh pr merge/create/comment/edit/review`, never `git push`, never write a file.
+- **Local files are read with the Read, Grep and Glob tools, never through Bash.** In a delegated
+  survey that covers the instance registry (step 2b), this overlay and whether a named helper exists:
+  its guard refuses `cat`, `jq` or `ls` on a local path as `a read must begin with a forge command`
+  (monorepo#3638). An inline survey with no surveyor guard may read them with its shell.
 - **Every `gh --json` vocabulary is local to its subcommand.** Use the exact literal field lists
   prescribed by this definition. Before any ad hoc JSON read, run that same subcommand with bare
   `--json` and validate every requested field against the vocabulary it returns; never transfer a

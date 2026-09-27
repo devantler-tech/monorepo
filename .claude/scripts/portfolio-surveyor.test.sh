@@ -3899,3 +3899,42 @@ if grep -Fq 'The run loop **sources the agent entry point**' <<<"${_diff_flat}";
   fail "the surveyor diff record's introduction still says the entry point is sourced from the plugin (monorepo#3526)"
 fi
 echo "portfolio surveyor contract: round-19 dispatch-topology assertions passed"
+
+# ── Round 20: local files are read with the Read/Grep/Glob tools, never through Bash ──
+# Measured 2026-09-23..27 (monorepo#3638): 18 of 65 local surveyor dispatches spent a call on a Bash
+# read of a local path (`jq`/`cat` on the instance registry step 2b tells them to resolve, or
+# `ls <repo-root>/.claude/scripts | grep` to confirm a named helper exists), and every one was refused
+# `a read must begin with a forge command`. The guard is right; the definition named the file but not
+# the tool. The rule lives in the Safety block because that block is what the dispatched overlay
+# carries. It is scoped to the delegated survey because the Codex inline survey reads this same
+# overlay with no surveyor guard and no Read tool, so an unscoped rule would strand its registry read.
+_local_read_rule_error() {
+  local block="$1" rule clause
+  grep -Fq 'Local files are read with the Read, Grep and Glob tools, never through Bash.' <<<"${block}" || {
+    echo "the Safety block must say local files are read with the Read, Grep and Glob tools, never through Bash"
+    return
+  }
+  rule=$(grep -A4 -F 'Local files are read with the Read, Grep and Glob tools' <<<"${block}" | tr '\n' ' ' | tr -s '[:space:]' ' ')
+  for clause in 'In a delegated survey' 'the instance registry' 'whether a named helper exists' \
+    'a read must begin with a forge command' 'An inline survey with no surveyor guard may read them with its shell.'; do
+    grep -Fq "${clause}" <<<"${rule}" || {
+      echo "the local-file read rule must name '${clause}'"
+      return
+    }
+  done
+}
+_err=$(_local_read_rule_error "${_safety_block}")
+[ -z "${_err}" ] || fail "portfolio-surveyor.md: ${_err} (#3638)"
+# Negative controls: the same check must reject a block with the rule removed, and one with a single
+# required clause removed, each for that specific reason. Without them a check that matched nothing
+# would pass as silently as one that matched everything.
+_mut_removed=$(grep -vF 'Local files are read with the Read, Grep and Glob tools' <<<"${_safety_block}")
+[[ "$(_local_read_rule_error "${_mut_removed}")" == *'must say local files are read with the Read, Grep and Glob tools'* ]] ||
+  fail "round-20 control: the local-read check did not reject a Safety block with the rule removed (#3638)"
+_mut_scope=$(sed 's/In a delegated/In any/' <<<"${_safety_block}")
+[[ "$(_local_read_rule_error "${_mut_scope}")" == *"must name 'In a delegated survey'"* ]] ||
+  fail "round-20 control: the local-read check did not reject a rule that lost its delegated-survey scope (#3638)"
+_mut_inline=$(sed 's/may read them with its shell\./reads them the same way./' <<<"${_safety_block}")
+[[ "$(_local_read_rule_error "${_mut_inline}")" == *"must name 'An inline survey"* ]] ||
+  fail "round-20 control: the local-read check did not reject a rule that dropped the inline-survey carve-out (#3638)"
+echo "portfolio surveyor contract: round-20 local-file read assertions passed"
