@@ -288,7 +288,12 @@ probe_nested_checkouts() {
   return "$rc"
 }
 
-all_paths() { git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}'; }
+# NUL-separated records, so a registered path containing spaces is returned whole.
+all_paths() {
+  local rec
+  while IFS= read -r -d '' rec; do printf '%s\n' "${rec#*$'\n'}"; done \
+    < <(git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$')
+}
 # "Initialised" means git actually treats it as its own repository here — again, asked, not assumed.
 # Select every submodule that is CHECKED OUT here. Deliberately NOT "every submodule git resolves
 # correctly": a colliding submodule resolves elsewhere, and filtering on that would drop it from the
@@ -461,16 +466,31 @@ advance() {
 # devantler-tech repository before anything contacts it. Spelled literally, as an allow-list: an
 # unrecognised spelling, a relative URL or a doubled registration is refused, never guessed at.
 sync_url_allowed() {
-  local path=$1 names name url
-  names=$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null |
-    awk -v p="$path" '$2 == p { print $1 }')
-  [ "$(printf '%s\n' "$names" | grep -c .)" -eq 1 ] || return 1
-  name=${names#submodule.}
+  local path=$1 rec key value names='' name url configured
+  # NUL-separated `key\nvalue` records, so a path containing spaces is compared whole.
+  while IFS= read -r -d '' rec; do
+    key=${rec%%$'\n'*}
+    value=${rec#*$'\n'}
+    [ "$value" = "$path" ] && names="${names}${key}"$'\n'
+  done < <(git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
+  [ "$(printf '%s' "$names" | grep -c .)" -eq 1 ] || return 1
+  name=${names%$'\n'}
+  name=${name#submodule.}
   name=${name%.path}
   url=$(git config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || return 1
-  case "$url" in
+  sync_url_is_portfolio "$url" || return 1
+  # `submodule update --init` keeps a URL already recorded in this repository's config rather than
+  # re-reading `.gitmodules`, so that recorded value is the one that would really be cloned.
+  if configured=$(git config --get "submodule.$name.url" 2>/dev/null); then
+    sync_url_is_portfolio "$configured" || return 1
+  fi
+  return 0
+}
+
+sync_url_is_portfolio() {
+  case "$1" in
     git@github.com:devantler-tech/?* | ssh://git@github.com/devantler-tech/?* | https://github.com/devantler-tech/?*)
-      case "$url" in
+      case "$1" in
         *..* | *'?'* | *'#'* | *' '*) return 1 ;;
       esac
       return 0
@@ -498,8 +518,9 @@ sync_from() {
     new_mode=$(printf '%s' "$meta" | awk '{print $2}')
     [ "$old_mode" = 160000 ] || [ "$new_mode" = 160000 ] || continue
     if [ "$new_mode" != 160000 ]; then
-      # A directory that exists but cannot be listed is unexamined, never "nothing left behind".
-      if [ -e "$path" ] && ! ls -A "$path" > /dev/null 2>&1; then
+      # A directory that cannot be listed, or listed but not searched, is unexamined — never "nothing
+      # left behind".
+      if [ -e "$path" ] && { ! ls -A "$path" > /dev/null 2>&1 || { [ -d "$path" ] && [ ! -x "$path" ]; }; }; then
         die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
       fi
       if [ -e "$path/.git" ]; then

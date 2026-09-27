@@ -949,6 +949,7 @@ c41_from="$(git -C "$c41/super" rev-parse HEAD)"
   # Register it the way a portfolio submodule is registered; the test config maps that URL to the
   # local fixture, so --sync's devantler-tech allow-list is exercised without any network.
   git config -f .gitmodules submodule.sub2.url https://github.com/devantler-tech/remote-sub2
+  git config submodule.sub2.url https://github.com/devantler-tech/remote-sub2
   git add .gitmodules
   git commit -q -m "add sub2"
 )
@@ -1082,6 +1083,62 @@ c49_from="$(git -C "$c49/super" rev-parse HEAD)"
 out="$(cd "$c49/super" && "$helper" --sync "$c49_from" 2>&1)" && rc=0 || rc=$?
 report "sync: an added submodule outside devantler-tech is refused before cloning" \
   "$([[ $rc -ne 0 ]] && grep -q "outside devantler-tech" <<<"$out" && [[ -z "$(ls -A "$c49/super/outside" 2>/dev/null)" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# Round 4 of review on #3625.
+# An added submodule whose path contains a space is compared whole and populated.
+c54="$tmp/c54"
+mk_super "$c54"
+c54_from="$(git -C "$c54/super" rev-parse HEAD)"
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c54/remote-sub.insteadOf" https://github.com/devantler-tech/remote-sub-c54
+(
+  cd "$c54/super"
+  git config -f .gitmodules "submodule.with space.path" "with space"
+  git config -f .gitmodules "submodule.with space.url" https://github.com/devantler-tech/remote-sub-c54
+  git update-index --add --cacheinfo "160000,$(git -C "$c54/remote-sub" rev-parse HEAD),with space"
+  git add .gitmodules
+  git commit -q -m "add a submodule whose path has a space"
+)
+mkdir -p "$c54/super/with space"
+out="$(cd "$c54/super" && "$helper" --sync "$c54_from" 2>&1)" && rc=0 || rc=$?
+report "sync: an added submodule path containing a space is populated" \
+  "$([[ $rc -eq 0 && -f "$c54/super/with space/file.txt" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# `submodule update --init` clones a URL already recorded in the superproject's config, so a stale
+# recorded URL outside the portfolio is refused even when .gitmodules names a portfolio repository.
+c55="$tmp/c55"
+mk_super "$c55"
+c55_from="$(git -C "$c55/super" rev-parse HEAD)"
+(
+  cd "$c55/super"
+  git config -f .gitmodules submodule.extra.path extra
+  git config -f .gitmodules submodule.extra.url https://github.com/devantler-tech/remote-sub-c55
+  git update-index --add --cacheinfo "160000,$(git -C "$c55/remote-sub" rev-parse HEAD),extra"
+  git add .gitmodules
+  git commit -q -m "add a portfolio submodule"
+  git config submodule.extra.url https://example.invalid/someone-else/stale
+)
+out="$(cd "$c55/super" && "$helper" --sync "$c55_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a stale recorded submodule URL outside devantler-tech is refused" \
+  "$([[ $rc -ne 0 ]] && grep -q "outside devantler-tech" <<<"$out" && [[ -z "$(ls -A "$c55/super/extra" 2>/dev/null)" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# A removed submodule's directory that can be listed but not searched hides its `.git`.
+c56="$tmp/c56"
+mk_super "$c56"
+c56_from="$(git -C "$c56/super" rev-parse HEAD)"
+(
+  cd "$c56/super"
+  git rm -q --cached sub
+  git config -f .gitmodules --remove-section submodule.sub
+  git add .gitmodules
+  git commit -q -m "remove sub but leave the checkout"
+)
+chmod 444 "$c56/super/sub"
+out="$(cd "$c56/super" && "$helper" --sync "$c56_from" 2>&1)" && rc=0 || rc=$?
+chmod 755 "$c56/super/sub"
+if [ "$(id -u)" -ne 0 ]; then
+  report "sync: a listable but unsearchable removed-submodule directory fails closed" \
+    "$([[ $rc -ne 0 ]] && grep -q "cannot inspect 'sub'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+fi
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
