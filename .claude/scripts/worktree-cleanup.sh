@@ -54,7 +54,7 @@
 #   refs/salvaged/<id>/index      - a commit of the staged index, parent HEAD
 #   refs/salvaged/<id>/worktree   - a commit of the whole working tree (tracked edits,
 #                                   deletions and untracked non-ignored files), parent HEAD
-#   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog commit reachable from no remote
+#   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog, ORIG_HEAD or FETCH_HEAD commit reachable from no remote
 # Restore: `git worktree add --detach <path> refs/salvaged/<id>/head`, then
 # `git -C <path> read-tree refs/salvaged/<id>/index` for the staged index and
 # `git -C <path> restore --source=refs/salvaged/<id>/worktree --worktree -- .` for the working
@@ -802,6 +802,24 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   if [ -e "$g/refs/bisect" ]; then
     SALVAGE_NOTE="submodule $label is mid-bisect (salvage cannot carry it)"; return 0
   fi
+  # ORIG_HEAD and FETCH_HEAD are outside `rev-list --all --reflog`; a commit only they name
+  # would die with the repository.
+  local pseudo left
+  pseudo=$(pseudo_ref_commits "$g") || { SALVAGE_NOTE="cannot read the pseudo-refs of submodule $label"; return 0; }
+  if [ -n "$pseudo" ]; then
+    # shellcheck disable=SC2086  # one sha per word
+    left=$(git --git-dir="$g" rev-list -n 1 $pseudo --not --remotes 2>/dev/null || echo unreadable)
+    if [ -n "$left" ]; then
+      SALVAGE_NOTE="submodule $label has a commit only ORIG_HEAD or FETCH_HEAD names (cannot be salvaged)"; return 0
+    fi
+  fi
+  # A clean status proves nothing where `git` cannot see the change (see conversion_blocker).
+  if [ "$(git --git-dir="$g" config --bool --get core.fileMode 2>/dev/null)" = false ]; then
+    SALVAGE_NOTE="submodule $label has core.fileMode=false (mode changes are invisible)"; return 0
+  fi
+  if [ "$(git --git-dir="$g" config --bool --get core.ignoreCase 2>/dev/null)" = true ] && [ ! -e "$g/head" ]; then
+    SALVAGE_NOTE="submodule $label has core.ignoreCase=true on a case-sensitive filesystem"; return 0
+  fi
   return 1
 }
 
@@ -996,11 +1014,32 @@ snapshot_kb() {
 # ref reaches, one per line. Non-zero on any read failure, so callers fail closed. Used for a
 # worktree and for each of its initialised submodules.
 reflog_orphans() {
-  local reflog
+  local reflog gitdir pseudo
   reflog=$(git -C "$1" reflog show --format=%H HEAD 2>/dev/null) || return 1
-  [ -n "$reflog" ] || return 0
+  # ORIG_HEAD and FETCH_HEAD live in the same admin directory and can name the only
+  # reference to a commit (a fetched ref deleted upstream, a reset-away tip), so they are
+  # preserved like the reflog.
+  gitdir=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$gitdir" ] || return 1
+  pseudo=$(pseudo_ref_commits "$gitdir") || return 1
+  [ -n "$reflog$pseudo" ] || return 0
   # shellcheck disable=SC2086  # one sha per word
-  git -C "$1" rev-list --no-walk $reflog --not --remotes 2>/dev/null
+  git -C "$1" rev-list --no-walk $reflog $pseudo --not --remotes 2>/dev/null | sort -u
+}
+
+# pseudo_ref_commits <gitdir> -> prints each commit ORIG_HEAD or FETCH_HEAD in <gitdir> names
+# that still exists (a missing object has nothing left to lose). Non-zero on a read failure.
+pseudo_ref_commits() {
+  local g=$1 f sha
+  for f in ORIG_HEAD FETCH_HEAD; do
+    [ -e "$g/$f" ] || continue
+    [ -r "$g/$f" ] || return 1
+    while IFS= read -r sha; do
+      sha=${sha%%[[:space:]]*}
+      case "$sha" in *[!0-9a-f]*|'') continue ;; esac
+      git --git-dir="$g" cat-file -e "$sha^{commit}" 2>/dev/null && printf '%s\n' "$sha"
+    done < "$g/$f"
+  done
+  return 0
 }
 
 # salvage_write <worktree> <sha> -> writes and verifies refs/salvaged/<id>/*, setting

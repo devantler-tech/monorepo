@@ -1974,6 +1974,44 @@ t_salvage_ignorecase_blocks_only_on_a_case_sensitive_filesystem() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_submodule_that_ignores_file_modes() {
+  local name="salvage KEEPs a worktree whose submodule ignores file modes"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" submode || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/submode"
+  git -C "$wt/sub" config core.fileMode false; chmod +x "$wt/sub/f"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*submode .*submodule .*core.fileMode=false' <<<"$out" && ! grep -q '^SALVAGE .*submode ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_preserves_a_commit_only_fetch_head_names() {
+  # FETCH_HEAD sits in the admin directory the removal deletes and is not a reflog.
+  local name="salvage preserves a commit only FETCH_HEAD names"
+  local root; root=$(make_repo)
+  add_wt "$root" fetched pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/fetched" c admin
+  c=$(git -C "$wt" commit-tree 'HEAD^{tree}' -p HEAD -m fetched) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '%s\t\tbranch '"'"'gone'"'"' of origin\n' "$c" > "$admin/FETCH_HEAD"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED .*fetched ' <<<"$out" && [ ! -e "$wt" ] \
+     && [ -n "$(git -C "$root/repo" for-each-ref --format='%(objectname)' "refs/salvaged/*/reflog/$c")" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out :: $(git -C "$root/repo" for-each-ref refs/salvaged)"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -2052,5 +2090,7 @@ t_salvage_keeps_a_filtered_path
 t_salvage_keeps_a_submodule_mid_bisect
 t_salvage_keeps_when_file_modes_are_ignored
 t_salvage_ignorecase_blocks_only_on_a_case_sensitive_filesystem
+t_salvage_keeps_a_submodule_that_ignores_file_modes
+t_salvage_preserves_a_commit_only_fetch_head_names
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
