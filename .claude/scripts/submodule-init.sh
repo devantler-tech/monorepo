@@ -167,6 +167,12 @@ repair() {
     die "'$path' resolves to the SUPERPROJECT's gitdir ('$mdir'), not its own — refusing to repair, because that would redirect the parent repository's checkout at '$path'. The directory has content but no usable '.git', so nothing here is a real submodule checkout: remove its stray contents, then re-run 'submodule-init.sh $path' to populate it at the pinned commit"
   fi
 
+  # Verify WHICH repository this is before rewriting any of its configuration: a foreign checkout must
+  # be refused untouched, not repaired and only then rejected by `probe` (monorepo#2941). This runs
+  # after the parent-escape guard, which names the more specific failure when `.git` points outward.
+  origin_is_own "$path" ||
+    die "'$path' is not the repository .gitmodules registers — refusing to repair it"
+
   git config -f "$mdir/config" extensions.worktreeConfig true
   # Pin the tree this gitdir is actually checked out in — not a path we guessed.
   git config -f "$mdir/config.worktree" core.worktree "$tree"
@@ -199,6 +205,16 @@ probe() {
   # script exists to catch, and `--check` then exited 0 on a colliding tree.
   if ! resolves_to_itself "$path"; then
     warn "$path — ISOLATION BROKEN: git resolves it to '$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)', not '$(module_tree "$path")'. Another checkout is sharing this working tree — do not edit it."
+    return 1
+  fi
+
+  # A tree that resolves to itself can still be the WRONG repository: a registered path is only this
+  # submodule if its origin is the repository `.gitmodules` names for it (monorepo#2941). Check it
+  # BEFORE creating the probe worktree: `worktree add` checks files out and runs that repository's
+  # `post-checkout` hook, so probing first would execute code from a repository about to be rejected.
+  # Nested checkouts are not registered here; `probe_nested_checkouts` checks each against its own
+  # parent's `.gitmodules` before probing it.
+  if is_registered_submodule "$path" && ! origin_is_own "$path"; then
     return 1
   fi
 
@@ -266,13 +282,29 @@ probe() {
 # another session. `submodule foreach` visits initialized checkouts only; uninitialized/mismatched
 # entries are rejected separately by the recursive status gate in `advance`.
 probe_nested_checkouts() {
-  local path=$1 nested_paths nested idx_flags rc=0
-  nested_paths=$(git --no-replace-objects -C "$path" submodule foreach --quiet --recursive 'pwd -P') || {
+  local path=$1 nested_rows row parent sm nested idx_flags rc=0
+  # One row per initialized nested checkout: its parent's top level and its path inside that parent,
+  # so each can be checked against the `.gitmodules` of the repository that actually declares it.
+  # shellcheck disable=SC2016 # $toplevel and $sm_path are expanded by `submodule foreach`.
+  nested_rows=$(git --no-replace-objects -C "$path" submodule foreach --quiet --recursive \
+    'printf "%s\t%s\n" "$toplevel" "$sm_path"') || {
     warn "$path — could not enumerate initialized nested submodules"
     return 1
   }
-  while IFS= read -r nested; do
-    [ -n "$nested" ] || continue
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    parent=${row%%$'\t'*}
+    sm=${row#*$'\t'}
+    nested=$(cd "$parent/$sm" 2>/dev/null && pwd -P) || {
+      warn "$parent/$sm — could not resolve the nested submodule checkout"
+      rc=1
+      continue
+    }
+    # WHICH repository first, before any command that could run its hooks (see `probe`).
+    origin_is_own -C "$parent" "$sm" || {
+      rc=1
+      continue
+    }
     idx_flags=$(git --no-replace-objects -C "$nested" ls-files -v 2>/dev/null) || {
       warn "$nested — could not read nested submodule index flags"
       rc=1
@@ -284,7 +316,7 @@ probe_nested_checkouts() {
       continue
     fi
     probe "$nested" || rc=1
-  done <<< "$nested_paths"
+  done <<< "$nested_rows"
   return "$rc"
 }
 
@@ -308,6 +340,139 @@ is_registered_submodule() {
   local p=$1 x
   while read -r x; do [ "$x" = "$p" ] && return 0; done < <(all_paths)
   return 1
+}
+
+# Reduce a remote URL to a comparable form. Only for github.com, where the SSH and HTTPS namespaces
+# are known to name the same repository, do `https://`, `ssh://` and the scp-like `user@host:path`
+# form collapse to `github.com/owner/repo` (with the `.git` suffix dropped and the case-blind owner
+# and repository folded). Every other host keeps its transport, and every other scheme
+# (`http://`, `git://`, `file://`, anything new) stays distinct: an allow-list, not a deny-list. A
+# local path is compared as a path, `.git` suffix included, resolved physically when it exists so
+# symlinked spellings of one directory compare equal.
+normalize_url() {
+  local u=${1%/} scheme='' host path
+  case "$u" in
+    /*) [ -d "$u" ] && u=$(cd "$u" && pwd -P); printf '%s' "$u"; return ;;
+  esac
+  u=${u%.git}
+  case "$u" in
+    *://*) scheme=$(printf '%s' "${u%%://*}" | tr '[:upper:]' '[:lower:]'); u=${u#*://}; u=${u#*@} ;;
+    *@*:*) scheme=ssh; u=${u#*@}; u="${u%%:*}/${u#*:}" ;;
+  esac
+  host=$(printf '%s' "${u%%/*}" | tr '[:upper:]' '[:lower:]')
+  path=${u#*/}
+  if [ "$host" = github.com ] && { [ "$scheme" = https ] || [ "$scheme" = ssh ]; }; then
+    printf 'github.com/%s' "$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
+    return
+  fi
+  printf '%s://%s/%s' "${scheme:-none}" "$host" "$path"
+}
+
+# A URL fit for a diagnostic: userinfo (`https://user:token@host/…`) and any query or fragment
+# (`?access_token=…`) are dropped, so a credential embedded in a remote never reaches a terminal,
+# CI log or run report.
+redact_url() {
+  printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@#\1#; s#[?#].*$##'
+}
+
+# The single fetch URL of remote $2 (default `origin`) of the repository at $1. Git fetches from the
+# FIRST of several values while `config --get` returns the LAST, so a second value could hide the URL
+# git really uses; several values are ambiguous and print nothing (a mismatch for the caller).
+single_origin_url() {
+  local urls remote=${2:-origin}
+  # `remote get-url` applies `url.<base>.insteadOf` rewrites, so this is the URL git would really
+  # fetch from — a rewrite cannot make a foreign repository read as the registered one.
+  urls=$(git -C "$1" remote get-url --all "$remote" 2>/dev/null) || return 0
+  [ "$(printf '%s\n' "$urls" | grep -c .)" -eq 1 ] && printf '%s' "$urls"
+}
+
+# Resolve a relative `.gitmodules` URL (arg 2) the way git does: against the default remote of the
+# superproject at $1 (its branch's tracking remote, else `origin`), or its top-level directory when
+# that remote has no URL. The recorded
+# `submodule.<name>.url` is deliberately NOT used — it is per-checkout config that can be rewritten
+# to name any repository, and a check that reads its expectation from there compares the submodule
+# with whatever it was told to expect. Prints nothing (a mismatch for the caller) when the URL climbs
+# above the base or the base is ambiguous.
+resolve_relative_url() {
+  local super=$1 rel=$2 base remote=origin branch
+  # Git's default remote: the checked-out branch's tracking remote, else `origin`. A branch that
+  # tracks itself (`.`) has no remote URL to resolve against, so it resolves to nothing.
+  if branch=$(git -C "$super" symbolic-ref --quiet --short HEAD 2>/dev/null); then
+    remote=$(git -C "$super" config --get "branch.$branch.remote" 2>/dev/null) || remote=origin
+  fi
+  [ "$remote" != . ] || return 0
+  if git -C "$super" config --get "remote.$remote.url" >/dev/null 2>&1; then
+    base=$(single_origin_url "$super" "$remote")
+  else
+    base=$(git -C "$super" rev-parse --show-toplevel 2>/dev/null) || base=''
+  fi
+  [ -n "$base" ] || return 0
+  base=${base%/}
+  while :; do
+    case "$rel" in
+      ./*) rel=${rel#./} ;;
+      ../*)
+        rel=${rel#../}
+        case "$base" in
+          */*) base=${base%/*} ;;
+          *) return 0 ;;
+        esac
+        ;;
+      *) break ;;
+    esac
+  done
+  [ -n "$base" ] && printf '%s/%s' "$base" "$rel"
+}
+
+# Does the submodule at path $1 — relative to the superproject at `-C <dir>` (default: here) — have,
+# as its origin, the repository that superproject's `.gitmodules` registers for that path?
+# Directory content and a self-resolving toplevel say where a checkout IS, not WHICH repository it
+# is: a stray or misplaced clone passes both (monorepo#2941). The expectation comes only from the
+# superproject's `.gitmodules` (a relative URL resolved as git resolves it), never from the
+# per-checkout `submodule.<name>.url`, which git itself rewrites on `submodule sync`. Fails closed:
+# an unreadable, missing or ambiguous origin or expectation is a mismatch, never a pass.
+#
+# Trust boundary: this detects a MISPLACED or MIS-WIRED checkout, the way the collisions this script
+# exists for actually happen. It is not a defence against a hostile local repository. Whoever can
+# write this machine's git config, hooks or working tree can already run code through any git
+# command, so a check that assumed otherwise would protect nothing and could never be finished.
+origin_is_own() {
+  local super=. path key name want got shown
+  if [ "$1" = -C ]; then
+    super=$2
+    shift 2
+  fi
+  path=$1
+  shown=$path
+  [ "$super" = . ] || shown="$super/$path"
+  local rec rec_key rec_val keys=()
+  while IFS= read -r -d '' rec; do
+    rec_key=${rec%%$'\n'*}
+    rec_val=${rec#*$'\n'}
+    [ "$rec_val" = "$path" ] && keys+=("$rec_key")
+  done < <(git -C "$super" config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
+  # Two sections declaring one path register two repositories for it; neither is proven.
+  if [ "${#keys[@]}" -gt 1 ]; then
+    warn "$shown — .gitmodules registers this path more than once, so which repository it should be is ambiguous. Do not read or edit it."
+    return 1
+  fi
+  key="${keys[0]:-}"
+  name=${key#submodule.}
+  name=${name%.path}
+  want=$(git -C "$super" config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || want=''
+  case "$want" in
+    ./* | ../*) want=$(resolve_relative_url "$super" "$want") ;;
+    *) want=$(git -C "$super" ls-remote --get-url "$want" 2>/dev/null || printf '%s' "$want") ;;
+  esac
+  got=$(single_origin_url "$super/$path")
+  if [ -z "$key" ] || [ -z "$want" ] || [ -z "$got" ]; then
+    warn "$shown — cannot verify which repository it is: origin '$(redact_url "${got:-<none or several>}")', expected '$(redact_url "${want:-<unknown>}")'. Do not read or edit it."
+    return 1
+  fi
+  if [ "$(normalize_url "$got")" != "$(normalize_url "$want")" ]; then
+    warn "$shown — WRONG REPOSITORY: its origin is '$(redact_url "$got")', but .gitmodules registers '$(redact_url "$want")' for this path. Do not read or edit it. If the repository was only renamed, 'git submodule sync -- $path' updates the origin."
+    return 1
+  fi
 }
 
 init_repair_probe() {
@@ -344,6 +509,23 @@ init_repair_probe() {
     is_populated "$path" ||
       die "'$path' is STILL EMPTY after 'git submodule update --init' (which exited 0) — do not read or edit it"
     repair "$path"
+    # A `.git` entry alone also makes the directory non-empty, so a checkout that wrote its gitdir
+    # link and then no files passes the emptiness test above, and `probe` checks isolation, not
+    # content. A fresh checkout at its pin has no tracked changes, so any tracked difference means
+    # the pinned files are not all here.
+    local fresh_status
+    fresh_status=$(git --no-replace-objects -C "$path" status --porcelain --untracked-files=no 2>/dev/null) ||
+      die "could not read the status of freshly populated '$path' — do not read or edit it"
+    [ -z "$fresh_status" ] ||
+      die "'$path' is INCOMPLETE after 'git submodule update --init': its tracked files do not match the pinned commit — do not read or edit it"
+    # `status` cannot see a tracked file hidden by skip-worktree or assume-unchanged, which is how a
+    # sparse checkout leaves pinned files out. A fresh checkout at its pin has neither flag.
+    local fresh_flags
+    fresh_flags=$(git --no-replace-objects -C "$path" ls-files -v 2>/dev/null) ||
+      die "could not read the index flags of freshly populated '$path' — do not read or edit it"
+    if grep -q '^[a-zS]' <<< "$fresh_flags"; then
+      die "'$path' is INCOMPLETE after 'git submodule update --init': tracked files are hidden by skip-worktree or assume-unchanged (a sparse checkout?) — do not read or edit it"
+    fi
   fi
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
 }
@@ -364,6 +546,7 @@ advance() {
   # WRITE — into that other tree before this function ever repaired the configuration.
   repair "$path"
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
+  origin_is_own "$path" || die "'$path' origin does not match its registered repository — refusing to advance"
 
   local status
   status=$(git --no-replace-objects -C "$path" status --porcelain --untracked-files=all 2>/dev/null) ||
@@ -501,7 +684,7 @@ sync_url_is_portfolio() {
 
 sync_from() {
   local from=$1 diff_file meta path old_mode new_mode st residue
-  local -a changed=()
+  local -a changed=() added_paths=() removed_paths=() records=()
   from=$(git --no-replace-objects rev-parse --verify --quiet "${from}^{commit}") ||
     die "'$1' is not a commit in this repository — pass the superproject HEAD from before the move"
   # NUL-terminated raw records: a path git would otherwise quote (non-ASCII, tabs, quotes) arrives
@@ -517,15 +700,57 @@ sync_from() {
     old_mode=${old_mode#:}
     new_mode=$(printf '%s' "$meta" | awk '{print $2}')
     [ "$old_mode" = 160000 ] || [ "$new_mode" = 160000 ] || continue
+    records+=("$meta" "$path")
+    if [ "$new_mode" = 160000 ]; then
+      added_paths+=("$path")
+    else
+      removed_paths+=("$path")
+    fi
+  done < "$diff_file"
+
+  local i a_path is_rename cur_dir
+  for ((i=0; i<${#records[@]}; i+=2)); do
+    meta="${records[i]}"
+    path="${records[i+1]}"
+    old_mode=${meta%% *}
+    old_mode=${old_mode#:}
+    new_mode=$(printf '%s' "$meta" | awk '{print $2}')
     if [ "$new_mode" != 160000 ]; then
+      # If this removed path is filesystem-equivalent to an added submodule (case-only rename on
+      # a case-insensitive filesystem), the checkout belongs to the new submodule and is not residue.
+      is_rename=0
+      for a_path in "${added_paths[@]+"${added_paths[@]}"}"; do
+        if same_dir "$path" "$a_path"; then
+          is_rename=1
+          break
+        fi
+      done
+      if [ "$is_rename" -eq 1 ]; then
+        printf 'submodule-init: %s — renamed to %s at HEAD\n' "$path" "$a_path"
+        continue
+      fi
+
+      # Check all ancestor components of $path. An unsearchable ancestor conceals everything below it.
+      cur_dir="${path%/*}"
+      while [ "$cur_dir" != "$path" ] && [ -n "$cur_dir" ] && [ "$cur_dir" != "." ]; do
+        if [ -e "$cur_dir" ] && { ! ls -A "$cur_dir" > /dev/null 2>&1 || { [ -d "$cur_dir" ] && [ ! -x "$cur_dir" ]; }; }; then
+          die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+        fi
+        cur_dir="${cur_dir%/*}"
+      done
+
       # A directory that cannot be listed, or listed but not searched, is unexamined — never "nothing
       # left behind".
       if [ -e "$path" ] && { ! ls -A "$path" > /dev/null 2>&1 || { [ -d "$path" ] && [ ! -x "$path" ]; }; }; then
         die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
       fi
-      if [ -e "$path/.git" ]; then
+
+      # A dangling symlink at .git is missed by [ -e "$path/.git" ] and ignored by git status,
+      # but still represents repository residue.
+      if [ -e "$path/.git" ] || [ -L "$path/.git" ]; then
         die "'$path' is no longer a submodule at HEAD but still holds its old repository — preserve or remove it before evaluating this tree"
       fi
+
       # Anything there that HEAD does not track — untracked or ignored — is residue, including
       # beside the files of a tracked directory that replaced the gitlink.
       if ! residue=$(git --no-replace-objects status --porcelain --untracked-files=all --ignored \

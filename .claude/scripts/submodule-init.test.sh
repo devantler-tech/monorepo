@@ -371,6 +371,29 @@ report "empty-init: the failure NAMES the empty submodule (fails at init, not la
 out="$(cd "$c11/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "empty-init: --check still SKIPS a legitimately deinitialised submodule" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+# Gitdir-only checkout: `update --init` writes the `.git` link and then no files. The directory is
+# not empty, so the STILL EMPTY guard cannot see it, and isolation alone would pass. The pinned
+# commit has a tracked file, so a correct checkout would contain it.
+c11b="$tmp/c11b"
+mk_super "$c11b"
+git -C "$c11b/super" submodule --quiet deinit -f sub >/dev/null
+gitdir_only_shim="$tmp/shim-gitdir-only"
+mkdir -p "$gitdir_only_shim"
+cat >"$gitdir_only_shim/git" <<SHIM
+#!/usr/bin/env bash
+# Run 'submodule update' for real, then strip every checked-out entry except the .git link.
+for a in "\$@"; do [[ "\$a" == "submodule" ]] && seen_sub=1; [[ "\$a" == "update" ]] && seen_upd=1; done
+"$real_git" "\$@" || exit \$?
+if [[ -n "\${seen_sub:-}" && -n "\${seen_upd:-}" ]]; then
+  find sub -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+fi
+SHIM
+chmod +x "$gitdir_only_shim/git"
+out="$(cd "$c11b/super" && PATH="$gitdir_only_shim:$PATH" "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "gitdir-only init precondition: only the .git link was left" \
+  "$([[ "$(ls -A "$c11b/super/sub")" == ".git" ]] && echo yes || echo no)" "$(ls -A "$c11b/super/sub" | tr '\n' ' ')"
+report "gitdir-only init: fails, names the incomplete checkout, and never reports isolated" \
+  "$([[ $rc -ne 0 ]] && grep -q 'INCOMPLETE' <<<"$out" && ! grep -q 'isolated ✓' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 # 12. --advance: move a populated checkout to a newer recorded pin WITHOUT
 #    `git submodule update` (which rewrites shared core.worktree). Hermetic
 #    fixture: bump the gitlink in the index while leaving the working tree on
@@ -943,17 +966,12 @@ git init -q "$c41/remote-sub2"
   git commit -q -m init
 )
 c41_from="$(git -C "$c41/super" rev-parse HEAD)"
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c41/remote-sub2.insteadOf" https://github.com/devantler-tech/remote-sub2
 (
   cd "$c41/super"
-  git submodule add -q ../remote-sub2 sub2
-  # Register it the way a portfolio submodule is registered; the test config maps that URL to the
-  # local fixture, so --sync's devantler-tech allow-list is exercised without any network.
-  git config -f .gitmodules submodule.sub2.url https://github.com/devantler-tech/remote-sub2
-  git config submodule.sub2.url https://github.com/devantler-tech/remote-sub2
-  git add .gitmodules
+  git submodule add -q https://github.com/devantler-tech/remote-sub2 sub2
   git commit -q -m "add sub2"
 )
-git config --file "$GIT_CONFIG_GLOBAL" "url.$c41/remote-sub2.insteadOf" https://github.com/devantler-tech/remote-sub2
 c41_target="$(git -C "$c41/super" rev-parse HEAD)"
 git -C "$c41/super" worktree add -q --detach "$c41/wt" "$c41_from"
 git -C "$c41/wt" checkout -q --detach "$c41_target"
@@ -1139,6 +1157,286 @@ if [ "$(id -u)" -ne 0 ]; then
   report "sync: a listable but unsearchable removed-submodule directory fails closed" \
     "$([[ $rc -ne 0 ]] && grep -q "cannot inspect 'sub'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 fi
+
+# --- Origin identity (monorepo#2941): a checkout that resolves to itself can still be the wrong
+# repository. The submodule must have, as its origin, the repository .gitmodules registers.
+c30="$tmp/c30"
+mk_super "$c30"
+git init -q "$c30/other-repo"
+out="$(cd "$c30/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity control: the matching origin passes --check" \
+  "$([[ $rc -eq 0 ]] && grep -q 'sub — isolated' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+git -C "$c30/super/sub" remote set-url origin "$c30/other-repo"
+out="$(cd "$c30/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a foreign origin fails --check" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "origin identity: names the wrong repository" \
+  "$(grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "$out"
+report "origin identity: never prints isolated for it" \
+  "$(grep -q 'sub — isolated' <<<"$out" && echo no || echo yes)" "$out"
+out="$(cd "$c30/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "origin identity: init mode also refuses a foreign origin" \
+  "$([[ $rc -ne 0 ]] && grep -q 'WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+git -C "$c30/super/sub" remote remove origin
+out="$(cd "$c30/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a missing origin fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q 'cannot verify which repository' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+norm() {
+  # shellcheck source=/dev/null
+  . "$helper" >/dev/null 2>&1
+  normalize_url "$1"
+}
+report "normalize_url: SSH and HTTPS spellings of one repository compare equal" \
+  "$([[ "$(norm git@github.com:devantler-tech/World-At-Ruin.git)" == "$(norm https://github.com/devantler-tech/world-at-ruin)" ]] && echo yes || echo no)" \
+  "$(norm git@github.com:devantler-tech/World-At-Ruin.git) vs $(norm https://github.com/devantler-tech/world-at-ruin)"
+report "normalize_url: ssh:// and credentialed https:// reduce to host/owner/repo" \
+  "$([[ "$(norm ssh://git@github.com/devantler-tech/ksail.git)" == "github.com/devantler-tech/ksail" && "$(norm https://x@github.com/devantler-tech/ksail/)" == "github.com/devantler-tech/ksail" ]] && echo yes || echo no)"
+report "normalize_url: a different repository stays different" \
+  "$([[ "$(norm git@github.com:devantler-tech/monorepo.git)" != "$(norm git@github.com:devantler-tech/agent-plugins.git)" ]] && echo yes || echo no)"
+report "normalize_url: cleartext http:// never equals the https:// or SSH spelling" \
+  "$([[ "$(norm http://github.com/devantler-tech/ksail)" != "$(norm https://github.com/devantler-tech/ksail)" && "$(norm git://github.com/devantler-tech/ksail)" != "$(norm git@github.com:devantler-tech/ksail.git)" ]] && echo yes || echo no)"
+report "normalize_url: a non-GitHub host keeps its path case, and folds its host" \
+  "$([[ "$(norm https://Git.Example.com/Org/Repo)" == "https://git.example.com/Org/Repo" ]] && echo yes || echo no)" \
+  "$(norm https://Git.Example.com/Org/Repo)"
+
+# Origin identity is checked BEFORE repair: a foreign checkout is refused untouched. Control: the
+# matching checkout is repaired (repair pins core.worktree into config.worktree).
+c31="$tmp/c31"
+mk_super "$c31"
+out="$(cd "$c31/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "origin before repair control: the matching checkout is repaired" \
+  "$([[ $rc -eq 0 ]] && [[ -n "$(git config -f "$c31/super/.git/modules/sub/config.worktree" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)" "rc=$rc $out"
+c32="$tmp/c32"
+mk_super "$c32"
+git init -q "$c32/other-repo"
+git -C "$c32/super/sub" remote set-url origin "$c32/other-repo"
+out="$(cd "$c32/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "origin before repair: a foreign checkout is refused" \
+  "$([[ $rc -ne 0 ]] && grep -q 'refusing to repair it' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+report "origin before repair: the foreign checkout's config is left untouched" \
+  "$([[ ! -e "$c32/super/.git/modules/sub/config.worktree" ]] && echo yes || echo no)"
+
+# The expectation for a relative registration comes from .gitmodules, never from the mutable
+# recorded submodule.<name>.url: pointing both that value and the origin at a foreign repository
+# must still fail.
+c33="$tmp/c33"
+mk_super "$c33"
+git init -q "$c33/other-repo"
+git -C "$c33/super" config submodule.sub.url "$c33/other-repo"
+git -C "$c33/super/sub" remote set-url origin "$c33/other-repo"
+out="$(cd "$c33/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "relative registration: a rewritten submodule.<name>.url cannot vouch for a foreign origin" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+report "normalize_url: only https, ssh and scp-like spellings drop their scheme (file://, ftp:// stay distinct)" \
+  "$([[ "$(norm file://github.com/devantler-tech/ksail)" != "$(norm https://github.com/devantler-tech/ksail)" && "$(norm ftp://github.com/devantler-tech/ksail)" != "$(norm https://github.com/devantler-tech/ksail)" && "$(norm SSH://git@github.com/devantler-tech/ksail)" == "$(norm https://github.com/devantler-tech/ksail)" ]] && echo yes || echo no)"
+
+# Several origin URLs are ambiguous: git fetches from the first, `config --get` reads the last, so
+# a matching last value could hide a foreign first one.
+c36="$tmp/c36"
+mk_super "$c36"
+c36_own="$(git -C "$c36/super/sub" config --get remote.origin.url)"
+git init -q "$c36/other-repo"
+git -C "$c36/super/sub" config --replace-all remote.origin.url "$c36/other-repo"
+git -C "$c36/super/sub" config --add remote.origin.url "$c36_own"
+out="$(cd "$c36/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: several origin URLs fail closed even when the last one matches" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — cannot verify which repository' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# The origin is checked BEFORE the probe worktree is created, so a rejected repository's hooks never
+# run. Control first: with the right origin, the probe's checkout does run post-checkout.
+c37="$tmp/c37"
+mk_super "$c37"
+c37_hook="$(git -C "$c37/super/sub" rev-parse --path-format=absolute --git-common-dir)/hooks/post-checkout"
+printf '#!/bin/sh\ntouch "%s"\n' "$c37/hook-ran" >"$c37_hook"
+chmod +x "$c37_hook"
+out="$(cd "$c37/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin before probe control: the probe's checkout runs the submodule's post-checkout hook" \
+  "$([[ $rc -eq 0 && -e "$c37/hook-ran" ]] && echo yes || echo no)" "rc=$rc $out"
+rm -f "$c37/hook-ran"
+git init -q "$c37/other-repo"
+git -C "$c37/super/sub" remote set-url origin "$c37/other-repo"
+out="$(cd "$c37/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin before probe: a foreign checkout is rejected without running its hooks" \
+  "$([[ $rc -ne 0 && ! -e "$c37/hook-ran" ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# A nested checkout is checked against the .gitmodules of the parent that declares it.
+c38="$tmp/c38"
+mkdir -p "$c38"
+git init -q "$c38/remote-nested"
+(
+  cd "$c38/remote-nested"
+  echo n >n.txt
+  git add n.txt
+  git commit -q -m init
+)
+git init -q "$c38/remote-sub"
+(
+  cd "$c38/remote-sub"
+  echo outer >outer.txt
+  git add outer.txt
+  git commit -q -m init
+  git submodule add -q ../remote-nested nested
+  git commit -q -m "add nested"
+)
+git init -q "$c38/super"
+(
+  cd "$c38/super"
+  echo root >root.txt
+  git add root.txt
+  git commit -q -m init
+  git submodule add -q ../remote-sub sub
+  git -C sub submodule update -q --init nested
+  git commit -q -m "add sub"
+)
+out="$(cd "$c38/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "nested origin control: a nested checkout of the declared repository passes --advance" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+git init -q "$c38/other-repo"
+git -C "$c38/super/sub/nested" remote set-url origin "$c38/other-repo"
+out="$(cd "$c38/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "nested origin: a nested checkout of a foreign repository fails --advance" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub/nested — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# Round 3 of review on #3624: a sparse fresh checkout, an insteadOf rewrite, a doubly-registered
+# path, and a credential in a mismatching origin URL.
+c11c="$tmp/c11c"
+mk_super "$c11c"
+git -C "$c11c/super" submodule --quiet deinit -f sub >/dev/null
+sparse_shim="$tmp/shim-sparse"
+mkdir -p "$sparse_shim"
+cat >"$sparse_shim/git" <<SHIM
+#!/usr/bin/env bash
+# Run 'submodule update' for real, then hide the pinned file behind skip-worktree and delete it.
+for a in "\$@"; do [[ "\$a" == "submodule" ]] && seen_sub=1; [[ "\$a" == "update" ]] && seen_upd=1; done
+"$real_git" "\$@" || exit \$?
+if [[ -n "\${seen_sub:-}" && -n "\${seen_upd:-}" ]]; then
+  "$real_git" -C sub update-index --skip-worktree file.txt && rm -f sub/file.txt
+fi
+SHIM
+chmod +x "$sparse_shim/git"
+out="$(cd "$c11c/super" && PATH="$sparse_shim:$PATH" "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "sparse init precondition: status hides the missing pinned file" \
+  "$([[ ! -e "$c11c/super/sub/file.txt" && -z "$(git -C "$c11c/super/sub" status --porcelain --untracked-files=no)" ]] && echo yes || echo no)"
+report "sparse init: a fresh checkout with skip-worktree files fails and never reports isolated" \
+  "$([[ $rc -ne 0 ]] && grep -q 'hidden by skip-worktree' <<<"$out" && ! grep -q 'isolated ✓' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+c45="$tmp/c45"
+mk_super "$c45"
+c45_own="$(git -C "$c45/super/sub" config --get remote.origin.url)"
+git init -q "$c45/other-repo"
+git -C "$c45/super/sub" config "url.$c45/other-repo.insteadOf" "$c45_own"
+out="$(cd "$c45/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: an insteadOf rewrite to a foreign repository fails --check" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+c46="$tmp/c46"
+mk_super "$c46"
+git -C "$c46/super" config -f .gitmodules submodule.dup.path sub
+git -C "$c46/super" config -f .gitmodules submodule.dup.url ../elsewhere
+out="$(cd "$c46/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a path registered twice in .gitmodules fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q 'registers this path more than once' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+c47="$tmp/c47"
+mk_super "$c47"
+git -C "$c47/super/sub" remote set-url origin "https://someone:not-a-real-token@example.invalid/org/repo"
+out="$(cd "$c47/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a mismatching credentialed origin is reported without its credential" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && ! grep -q 'not-a-real-token' <<<"$out" && grep -q 'https://example.invalid/org/repo' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# Round 4 of review on #3624.
+report "normalize_url: a non-GitHub host keeps its transport (HTTPS and SSH stay distinct)" \
+  "$([[ "$(norm https://git.example.com/org/repo)" != "$(norm git@git.example.com:org/repo)" ]] && echo yes || echo no)"
+report "normalize_url: a local path keeps its .git suffix" \
+  "$([[ "$(norm "$tmp/absent/product.git")" != "$(norm "$tmp/absent/product")" ]] && echo yes || echo no)"
+c52="$tmp/c52"
+mk_super "$c52"
+git -C "$c52/super/sub" remote set-url origin "https://example.invalid/org/repo?access_token=not-a-real-secret#frag"
+out="$(cd "$c52/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a query or fragment in a mismatching origin is not printed" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && ! grep -q 'not-a-real-secret' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# A relative registration resolves against the branch's tracking remote, as git resolves it, not
+# against `origin` when the branch tracks something else.
+c53="$tmp/c53"
+mk_super "$c53"
+git -C "$c53/super" remote add upstream "$c53/up/super"
+git -C "$c53/super" remote add origin "$c53/fork/super"
+git -C "$c53/super" config branch.main.remote upstream
+git -C "$c53/super/sub" remote set-url origin "$c53/fork/remote-sub"
+out="$(cd "$c53/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a relative URL resolves against the tracking remote, not origin" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+git -C "$c53/super/sub" remote set-url origin "$c53/up/remote-sub"
+out="$(cd "$c53/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity control: the tracking remote's sibling passes" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+
+# Round 5 of review on #3625.
+# 1. Check ancestors before declaring removed paths clean
+c57="$tmp/c57"
+mk_super "$c57"
+(
+  cd "$c57/super"
+  mkdir -p parent
+  git config -f .gitmodules submodule.nested.path parent/sub
+  git config -f .gitmodules submodule.nested.url ../remote-sub
+  git update-index --add --cacheinfo "160000,$(git -C "$c57/remote-sub" rev-parse HEAD),parent/sub"
+  git add .gitmodules
+  git commit -q -m "add parent/sub"
+)
+c57_from="$(git -C "$c57/super" rev-parse HEAD)"
+(
+  cd "$c57/super"
+  git rm -q --cached parent/sub
+  git config -f .gitmodules --remove-section submodule.nested
+  git add .gitmodules
+  git commit -q -m "remove parent/sub"
+)
+chmod 000 "$c57/super/parent"
+out="$(cd "$c57/super" && "$helper" --sync "$c57_from" 2>&1)" && rc=0 || rc=$?
+chmod 755 "$c57/super/parent"
+if [ "$(id -u)" -ne 0 ]; then
+  report "sync: an unsearchable ancestor of a removed path fails closed" \
+    "$([[ $rc -ne 0 ]] && grep -q "cannot inspect 'parent/sub'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+fi
+
+# 2. Validate the populated checkout's remote before advancing
+c58="$tmp/c58"
+mk_super "$c58"
+c58_from="$(git -C "$c58/super" rev-parse HEAD)"
+(
+  cd "$c58/remote-sub"
+  echo v2 >file.txt
+  git commit -q -a -m v2
+)
+c58_new="$(git -C "$c58/remote-sub" rev-parse HEAD)"
+(
+  cd "$c58/super"
+  git update-index --cacheinfo "160000,$c58_new,sub"
+  git commit -q -m "bump sub"
+)
+git -C "$c58/super/sub" remote set-url origin "https://example.invalid/outside/repo"
+out="$(cd "$c58/super" && "$helper" --sync "$c58_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a populated submodule with foreign origin remote is refused before advance" \
+  "$([[ $rc -ne 0 ]] && grep -q "WRONG REPOSITORY" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# 3. Dangling .git entries as removal residue
+c60="$tmp/c60"
+mk_super "$c60"
+c60_from="$(git -C "$c60/super" rev-parse HEAD)"
+(
+  cd "$c60/super"
+  git rm -q sub
+  git commit -q -m "remove sub"
+)
+mkdir -p "$c60/super/sub"
+ln -s "$tmp/absent-target" "$c60/super/sub/.git"
+out="$(cd "$c60/super" && "$helper" --sync "$c60_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a dangling .git symlink in a removed path fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q "still holds its old repository" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
