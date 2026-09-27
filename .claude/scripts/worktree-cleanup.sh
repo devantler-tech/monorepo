@@ -805,22 +805,32 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   if [ -e "$g/refs/bisect" ]; then
     SALVAGE_NOTE="submodule $label is mid-bisect (salvage cannot carry it)"; return 0
   fi
+  # `rev-list` checks commits only: an annotated tag (its message or signature), or a ref
+  # straight to a tree or blob, is not covered by "every commit is on a remote". Measured on
+  # the host, 1 of 284 retained submodule repositories holds such a ref, so refusing costs
+  # almost nothing.
+  local types
+  types=$(git --git-dir="$g" --work-tree="$g" for-each-ref --format='%(objecttype)' 2>/dev/null) \
+    || { SALVAGE_NOTE="cannot list the refs of submodule $label"; return 0; }
+  if grep -qvx commit <<< "$types" && [ -n "$types" ]; then
+    SALVAGE_NOTE="submodule $label has a ref to a tag, tree or blob (salvage cannot carry it)"; return 0
+  fi
   # ORIG_HEAD and FETCH_HEAD are outside `rev-list --all --reflog`; a commit only they name
   # would die with the repository.
   local pseudo left
   pseudo=$(pseudo_ref_commits "$g") || { SALVAGE_NOTE="cannot read the pseudo-refs of submodule $label"; return 0; }
   if [ -n "$pseudo" ]; then
     # shellcheck disable=SC2086  # one sha per word
-    left=$(git --git-dir="$g" rev-list -n 1 $pseudo --not --remotes 2>/dev/null || echo unreadable)
+    left=$(git --git-dir="$g" --work-tree="$g" rev-list -n 1 $pseudo --not --remotes 2>/dev/null || echo unreadable)
     if [ -n "$left" ]; then
       SALVAGE_NOTE="submodule $label has a commit only ORIG_HEAD or FETCH_HEAD names (cannot be salvaged)"; return 0
     fi
   fi
   # A clean status proves nothing where `git` cannot see the change (see conversion_blocker).
-  if [ "$(git --git-dir="$g" config --bool --get core.fileMode 2>/dev/null)" = false ]; then
+  if [ "$(git --git-dir="$g" --work-tree="$g" config --bool --get core.fileMode 2>/dev/null)" = false ]; then
     SALVAGE_NOTE="submodule $label has core.fileMode=false (mode changes are invisible)"; return 0
   fi
-  if [ "$(git --git-dir="$g" config --bool --get core.ignoreCase 2>/dev/null)" = true ] && [ ! -e "$g/head" ]; then
+  if [ "$(git --git-dir="$g" --work-tree="$g" config --bool --get core.ignoreCase 2>/dev/null)" = true ] && [ ! -e "$g/head" ]; then
     SALVAGE_NOTE="submodule $label has core.ignoreCase=true on a case-sensitive filesystem"; return 0
   fi
   return 1
@@ -850,17 +860,19 @@ conversion_blocker() {
       SALVAGE_NOTE="core.ignoreCase=true on a case-sensitive filesystem (salvage could lose a case-only rename)"; return 0
     fi
   fi
-  paths=$( { git -C "$wt" ls-files -z -m -o --exclude-standard \
+  # Every tracked path, not only the ones git reports changed: a lossy filter can map an
+  # edit back to the indexed bytes and hide it from status altogether.
+  paths=$( { git -C "$wt" ls-files -z -c -o --exclude-standard \
              && git -C "$wt" diff --cached --name-only -z; } 2>/dev/null | tr '\0\n' '\n\001') \
     || { SALVAGE_NOTE="cannot list changed paths for the conversion check"; return 0; }
-  case "$paths" in *$'\001'*) SALVAGE_NOTE="a changed path holds a newline (cannot check its attributes)"; return 0 ;; esac
+  case "$paths" in *$'\001'*) SALVAGE_NOTE="a path holds a newline (cannot check its attributes)"; return 0 ;; esac
   [ -n "$paths" ] || return 1
   # check-attr -z prints path NUL attribute NUL value NUL; keep only the values.
   attrs=$(printf '%s\n' "$paths" | tr '\n' '\0' | git -C "$wt" check-attr --stdin -z filter ident working-tree-encoding text eol 2>/dev/null \
           | tr '\0' '\n' | awk 'NR % 3 == 0') \
     || { SALVAGE_NOTE="cannot read the attributes of the changed paths"; return 0; }
   if grep -qvxE 'unspecified|unset' <<< "$attrs"; then
-    SALVAGE_NOTE="a changed path has a filter or conversion attribute (salvage would not keep the exact bytes)"; return 0
+    SALVAGE_NOTE="a path has a filter or conversion attribute (salvage would not keep the exact bytes)"; return 0
   fi
   return 1
 }
@@ -871,14 +883,14 @@ conversion_blocker() {
 # tree still exists, is clean with no hidden-index flags. It checks what the removal would
 # actually delete, not what the index happens to list.
 admin_modules_blocker() {
-  local wt=$1 admin heads h g w wdir st flags label
+  local wt=$1 admin heads h g w wdir st flags label local_only
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
     || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
   [ -d "$admin/modules" ] || return 1
   heads=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-heads.XXXXXX") \
     || { SALVAGE_NOTE="cannot create a temporary list"; return 0; }
   # NUL-delimited: a repository path holding a newline must not be split and skipped.
-  find "$admin/modules" -type f -name HEAD -print0 > "$heads" 2>/dev/null \
+  find "$admin/modules" \( -type f -o -type l \) -name HEAD -print0 > "$heads" 2>/dev/null \
     || { rm -f "$heads"; SALVAGE_NOTE="cannot list the submodule repositories of $wt"; return 0; }
   local hs=()
   while IFS= read -r -d '' h; do hs+=("$h"); done < "$heads"
@@ -889,10 +901,14 @@ admin_modules_blocker() {
     [ -d "$g/objects" ] || continue                  # a reflog's logs/HEAD, not a repository
     label=${g#"$admin"/}; label=${label//$'\n'/?}   # one output line, even for a newline path
     gitdir_state_blocker "$g" "$label" && return 0
-    if [ -n "$(git --git-dir="$g" rev-list -n 1 --all --reflog --not --remotes 2>/dev/null || echo unreadable)" ]; then
+    # --work-tree pins a directory that exists: a removed submodule's core.worktree points at a
+    # path that no longer does, and git would refuse every read of the repository.
+    local_only=$(git --git-dir="$g" --work-tree="$g" rev-list -n 1 --all --reflog --not --remotes 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot read submodule repository $label"; return 0; }
+    if [ -n "$local_only" ]; then
       SALVAGE_NOTE="submodule repository $label holds commits no remote has (cannot be salvaged)"; return 0
     fi
-    w=$(git --git-dir="$g" config core.worktree 2>/dev/null) || continue
+    w=$(git --git-dir="$g" --work-tree="$g" config core.worktree 2>/dev/null) || continue
     wdir=$(cd "$g" 2>/dev/null && cd "$w" 2>/dev/null && pwd -P) || continue
     st=$(git --git-dir="$g" --work-tree="$wdir" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
       || { SALVAGE_NOTE="cannot read the status of submodule ${wdir#"$wt"/}"; return 0; }
@@ -1046,7 +1062,9 @@ pseudo_ref_commits() {
     while IFS= read -r sha; do
       sha=${sha%%[[:space:]]*}
       case "$sha" in *[!0-9a-f]*|'') continue ;; esac
-      git --git-dir="$g" cat-file -e "$sha^{commit}" 2>/dev/null && printf '%s\n' "$sha"
+      # A commit the object store cannot read right now is not proof there is nothing to lose.
+      git --git-dir="$g" --work-tree="$g" cat-file -e "$sha^{commit}" 2>/dev/null || return 1
+      printf '%s\n' "$sha"
     done < "$g/$f"
   done
   return 0
@@ -1067,7 +1085,11 @@ salvage_write() {
   # collision that still happens fails (and KEEPs the worktree) instead of overwriting.
   path_id=$(printf '%s' "$wt" | git hash-object --stdin 2>/dev/null) && [ -n "$path_id" ] \
     || { SALVAGE_NOTE="cannot derive a salvage namespace for $wt"; return 1; }
-  id="$(date -u +%Y%m%dT%H%M%SZ)-$(basename "$wt")-${path_id:0:12}-${sha:0:12}"
+  # Only ref-safe characters from the basename, so the namespace is always valid and dry-run
+  # never promises a salvage apply would refuse; the path digest keeps it unique.
+  local bn
+  bn=$(printf '%s' "$(basename "$wt")" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
+  id="$(date -u +%Y%m%dT%H%M%SZ)-${bn}-${path_id:0:12}-${sha:0:12}"
   base="refs/salvaged/$id"
   git check-ref-format "$base/head" 2>/dev/null || { SALVAGE_NOTE="unusable salvage ref name $base"; return 1; }
   idx_tree=$(git -C "$wt" write-tree 2>/dev/null) || { SALVAGE_NOTE="cannot write the staged index as a tree"; return 1; }

@@ -2052,6 +2052,109 @@ t_salvage_finds_an_admin_repository_at_a_newline_path() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_an_edit_a_filter_hides_from_status() {
+  # The clean filter maps the local edit back to the committed bytes, so status and the
+  # cached diff never list the path; its attributes must still be seen.
+  local name="salvage dry-run KEEPs a tracked path whose filter hides its edit"
+  local root; root=$(make_repo)
+  add_wt "$root" hidfilt pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/hidfilt"
+  git -C "$wt" config filter.pub.clean 'sed s/secret/public/'
+  git -C "$wt" config filter.pub.smudge cat
+  echo '*.txt filter=pub' > "$wt/.gitattributes"
+  echo public > "$wt/notes.txt"; git -C "$wt" add .gitattributes notes.txt && git -C "$wt" commit -qm notes \
+    && git -C "$wt" push -q origin claude/hidfilt || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo secret > "$wt/notes.txt"
+  [ -z "$(git -C "$wt" status --porcelain notes.txt)" ] || { bad "$name" "FIXTURE: edit is visible"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.md"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*hidfilt .*filter or conversion' <<<"$out" && ! grep -q '^SALVAGE .*hidfilt ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_finds_an_admin_repository_with_a_symlinked_head() {
+  local name="salvage KEEPs an admin-dir repository whose HEAD is a symbolic link"
+  local root; root=$(make_repo)
+  add_wt "$root" symhead pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/symhead" admin g t c
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  g="$admin/modules/legacy"
+  git init -q --bare -b main "$g" && t=$(git --git-dir="$g" mktree < /dev/null) \
+    && c=$(git --git-dir="$g" -c user.email=t@t.t -c user.name=t commit-tree "$t" -m local) \
+    && git --git-dir="$g" update-ref refs/heads/main "$c" \
+    && rm "$g/HEAD" && ln -s refs/heads/main "$g/HEAD" \
+    && [ "$(git --git-dir="$g" rev-parse HEAD)" = "$c" ] || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*symhead .*modules/legacy holds commits no remote has' <<<"$out" && ! grep -q '^SALVAGE .*symhead ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_handles_a_basename_with_a_space() {
+  local name="salvage apply succeeds for a worktree whose basename holds a space"
+  local root; root=$(make_repo)
+  local wt="$root/repo/.claude/worktrees/has space"
+  git -C "$root/repo" worktree add -q -b claude/spc "$wt" main && git -C "$wt" push -q origin claude/spc \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED .*has space' <<<"$out" && [ ! -e "$wt" ] \
+     && [ "$(git -C "$root/repo" for-each-ref --format='%(refname)' 'refs/salvaged/*/worktree' | grep -c 'has_space')" = 1 ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_when_a_pseudo_ref_commit_is_unreadable() {
+  local name="salvage KEEPs a worktree whose FETCH_HEAD names a commit it cannot read"
+  local root; root=$(make_repo)
+  add_wt "$root" badfetch pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/badfetch" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '%s\t\tbranch x of origin\n' 1111111111111111111111111111111111111111 > "$admin/FETCH_HEAD"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*badfetch .*not salvaged' <<<"$out" && [ -d "$wt" ] && ! grep -q '^SALVAGED .*badfetch' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_annotated_tag() {
+  # The tag's target commit is on a remote, so a commit-only check passes, but the tag
+  # object (its message) exists only in the repository the removal deletes.
+  local name="salvage KEEPs a submodule repository holding an annotated tag"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subtag || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subtag"
+  git -C "$wt/sub" tag -a v-local -m "only here" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subtag .*ref to a tag, tree or blob' <<<"$out" && ! grep -q '^SALVAGE .*subtag ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -2134,5 +2237,10 @@ t_salvage_keeps_a_submodule_that_ignores_file_modes
 t_salvage_preserves_a_commit_only_fetch_head_names
 t_salvage_keeps_a_deleted_intent_to_add_entry
 t_salvage_finds_an_admin_repository_at_a_newline_path
+t_salvage_keeps_an_edit_a_filter_hides_from_status
+t_salvage_finds_an_admin_repository_with_a_symlinked_head
+t_salvage_handles_a_basename_with_a_space
+t_salvage_keeps_when_a_pseudo_ref_commit_is_unreadable
+t_salvage_keeps_a_submodule_annotated_tag
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
