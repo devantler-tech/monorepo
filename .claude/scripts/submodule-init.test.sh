@@ -964,6 +964,76 @@ out="$(cd "$c33/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "relative registration: a rewritten submodule.<name>.url cannot vouch for a foreign origin" \
   "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
+report "normalize_url: only https, ssh and scp-like spellings drop their scheme (file://, ftp:// stay distinct)" \
+  "$([[ "$(norm file://github.com/devantler-tech/ksail)" != "$(norm https://github.com/devantler-tech/ksail)" && "$(norm ftp://github.com/devantler-tech/ksail)" != "$(norm https://github.com/devantler-tech/ksail)" && "$(norm SSH://git@github.com/devantler-tech/ksail)" == "$(norm https://github.com/devantler-tech/ksail)" ]] && echo yes || echo no)"
+
+# Several origin URLs are ambiguous: git fetches from the first, `config --get` reads the last, so
+# a matching last value could hide a foreign first one.
+c36="$tmp/c36"
+mk_super "$c36"
+c36_own="$(git -C "$c36/super/sub" config --get remote.origin.url)"
+git init -q "$c36/other-repo"
+git -C "$c36/super/sub" config --replace-all remote.origin.url "$c36/other-repo"
+git -C "$c36/super/sub" config --add remote.origin.url "$c36_own"
+out="$(cd "$c36/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: several origin URLs fail closed even when the last one matches" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — cannot verify which repository' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# The origin is checked BEFORE the probe worktree is created, so a rejected repository's hooks never
+# run. Control first: with the right origin, the probe's checkout does run post-checkout.
+c37="$tmp/c37"
+mk_super "$c37"
+c37_hook="$(git -C "$c37/super/sub" rev-parse --path-format=absolute --git-common-dir)/hooks/post-checkout"
+printf '#!/bin/sh\ntouch "%s"\n' "$c37/hook-ran" >"$c37_hook"
+chmod +x "$c37_hook"
+out="$(cd "$c37/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin before probe control: the probe's checkout runs the submodule's post-checkout hook" \
+  "$([[ $rc -eq 0 && -e "$c37/hook-ran" ]] && echo yes || echo no)" "rc=$rc $out"
+rm -f "$c37/hook-ran"
+git init -q "$c37/other-repo"
+git -C "$c37/super/sub" remote set-url origin "$c37/other-repo"
+out="$(cd "$c37/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin before probe: a foreign checkout is rejected without running its hooks" \
+  "$([[ $rc -ne 0 && ! -e "$c37/hook-ran" ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# A nested checkout is checked against the .gitmodules of the parent that declares it.
+c38="$tmp/c38"
+mkdir -p "$c38"
+git init -q "$c38/remote-nested"
+(
+  cd "$c38/remote-nested"
+  echo n >n.txt
+  git add n.txt
+  git commit -q -m init
+)
+git init -q "$c38/remote-sub"
+(
+  cd "$c38/remote-sub"
+  echo outer >outer.txt
+  git add outer.txt
+  git commit -q -m init
+  git submodule add -q ../remote-nested nested
+  git commit -q -m "add nested"
+)
+git init -q "$c38/super"
+(
+  cd "$c38/super"
+  echo root >root.txt
+  git add root.txt
+  git commit -q -m init
+  git submodule add -q ../remote-sub sub
+  git -C sub submodule update -q --init nested
+  git commit -q -m "add sub"
+)
+out="$(cd "$c38/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "nested origin control: a nested checkout of the declared repository passes --advance" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+git init -q "$c38/other-repo"
+git -C "$c38/super/sub/nested" remote set-url origin "$c38/other-repo"
+out="$(cd "$c38/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "nested origin: a nested checkout of a foreign repository fails --advance" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub/nested — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

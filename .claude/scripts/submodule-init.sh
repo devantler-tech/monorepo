@@ -206,6 +206,16 @@ probe() {
     return 1
   fi
 
+  # A tree that resolves to itself can still be the WRONG repository: a registered path is only this
+  # submodule if its origin is the repository `.gitmodules` names for it (monorepo#2941). Check it
+  # BEFORE creating the probe worktree: `worktree add` checks files out and runs that repository's
+  # `post-checkout` hook, so probing first would execute code from a repository about to be rejected.
+  # Nested checkouts are not registered here; `probe_nested_checkouts` checks each against its own
+  # parent's `.gitmodules` before probing it.
+  if is_registered_submodule "$path" && ! origin_is_own "$path"; then
+    return 1
+  fi
+
   # A unique probe dir per invocation: a fixed `.probe-iso` could collide with — and `rm -rf` — a
   # concurrent session's probe or a user's scratch dir. This script exists FOR overlapping sessions.
   local name="probe-iso-$$-${RANDOM}"
@@ -236,13 +246,6 @@ probe() {
     rc=1
   elif ! same_dir "$got" "$want"; then
     warn "$path — ISOLATION BROKEN: a worktree there resolves to '$got', not its own path ('$want'). Do not edit it — parallel sessions would collide."
-    rc=1
-  fi
-
-  # A tree that resolves to itself can still be the WRONG repository: a registered path is only this
-  # submodule if its origin is the repository `.gitmodules` names for it (monorepo#2941). Nested
-  # checkouts reach `probe` by absolute path and are not registered here, so they are not checked.
-  if is_registered_submodule "$path" && ! origin_is_own "$path"; then
     rc=1
   fi
 
@@ -277,13 +280,29 @@ probe() {
 # another session. `submodule foreach` visits initialized checkouts only; uninitialized/mismatched
 # entries are rejected separately by the recursive status gate in `advance`.
 probe_nested_checkouts() {
-  local path=$1 nested_paths nested idx_flags rc=0
-  nested_paths=$(git --no-replace-objects -C "$path" submodule foreach --quiet --recursive 'pwd -P') || {
+  local path=$1 nested_rows row parent sm nested idx_flags rc=0
+  # One row per initialized nested checkout: its parent's top level and its path inside that parent,
+  # so each can be checked against the `.gitmodules` of the repository that actually declares it.
+  # shellcheck disable=SC2016 # $toplevel and $sm_path are expanded by `submodule foreach`.
+  nested_rows=$(git --no-replace-objects -C "$path" submodule foreach --quiet --recursive \
+    'printf "%s\t%s\n" "$toplevel" "$sm_path"') || {
     warn "$path — could not enumerate initialized nested submodules"
     return 1
   }
-  while IFS= read -r nested; do
-    [ -n "$nested" ] || continue
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    parent=${row%%$'\t'*}
+    sm=${row#*$'\t'}
+    nested=$(cd "$parent/$sm" 2>/dev/null && pwd -P) || {
+      warn "$parent/$sm — could not resolve the nested submodule checkout"
+      rc=1
+      continue
+    }
+    # WHICH repository first, before any command that could run its hooks (see `probe`).
+    origin_is_own -C "$parent" "$sm" || {
+      rc=1
+      continue
+    }
     idx_flags=$(git --no-replace-objects -C "$nested" ls-files -v 2>/dev/null) || {
       warn "$nested — could not read nested submodule index flags"
       rc=1
@@ -295,7 +314,7 @@ probe_nested_checkouts() {
       continue
     fi
     probe "$nested" || rc=1
-  done <<< "$nested_paths"
+  done <<< "$nested_rows"
   return "$rc"
 }
 
@@ -317,35 +336,54 @@ is_registered_submodule() {
 }
 
 # Reduce a remote URL to host/owner/repo (or a bare path) so the SSH, HTTPS and `.git`-suffixed
-# spellings of one repository compare equal. Cleartext transports (http://, git://) keep a marker, so
-# they never equal an encrypted spelling of the same repository. Host names are case-blind; the path
-# is folded only for github.com, whose owner and repository names are case-blind too. An existing
-# local path is resolved physically so symlinked spellings of one directory compare equal.
+# spellings of one repository compare equal. Only the encrypted transports git uses for GitHub —
+# `https://`, `ssh://` and the scp-like `user@host:path` form — drop their scheme; every other
+# scheme (`http://`, `git://`, `file://`, `ftp://`, anything new) keeps it, so it can never equal a
+# registered spelling it merely shares a host and path with. An allow-list, not a deny-list: a new
+# scheme stays distinct by default. Host names are case-blind; the path is folded only for
+# github.com, whose owner and repository names are case-blind too. An existing local path is
+# resolved physically so symlinked spellings of one directory compare equal.
 normalize_url() {
-  local u=${1%/} scheme='' host path
+  local u=${1%/} scheme='' host path prefix=''
   u=${u%.git}
   case "$u" in
-    *://*) scheme=${u%%://*}; u=${u#*://}; u=${u#*@} ;;
+    *://*) scheme=$(printf '%s' "${u%%://*}" | tr '[:upper:]' '[:lower:]'); u=${u#*://}; u=${u#*@} ;;
     *@*:*) u=${u#*@}; u="${u%%:*}/${u#*:}" ;;
     /*) [ -d "$u" ] && u=$(cd "$u" && pwd -P); printf '%s' "$u"; return ;;
+  esac
+  case "$scheme" in
+    '' | https | ssh) ;;
+    *) prefix="$scheme://" ;;
   esac
   host=$(printf '%s' "${u%%/*}" | tr '[:upper:]' '[:lower:]')
   path=${u#*/}
   [ "$host" = "github.com" ] && path=$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')
-  case "$scheme" in
-    http | git) printf 'cleartext:%s/%s' "$host" "$path" ;;
-    *) printf '%s/%s' "$host" "$path" ;;
-  esac
+  printf '%s%s/%s' "$prefix" "$host" "$path"
 }
 
-# Resolve a relative `.gitmodules` URL the way git does: against the superproject's origin, or its
-# top-level directory when it has no origin. The recorded `submodule.<name>.url` is deliberately NOT
-# used — it is per-checkout config that can be rewritten to name any repository, and a check that
-# reads its expectation from there compares the submodule with whatever it was told to expect.
-# Prints nothing (a mismatch for the caller) when the URL climbs above the base.
+# The single `remote.origin.url` of the repository at $1. Git fetches from the FIRST of several
+# values while `config --get` returns the LAST, so a second value could hide the URL git really
+# uses; several values are ambiguous and print nothing (a mismatch for the caller).
+single_origin_url() {
+  local urls
+  urls=$(git -C "$1" config --get-all remote.origin.url 2>/dev/null) || return 0
+  [ "$(printf '%s\n' "$urls" | grep -c .)" -eq 1 ] && printf '%s' "$urls"
+}
+
+# Resolve a relative `.gitmodules` URL (arg 2) the way git does: against the origin of the
+# superproject at $1, or its top-level directory when it has no origin. The recorded
+# `submodule.<name>.url` is deliberately NOT used — it is per-checkout config that can be rewritten
+# to name any repository, and a check that reads its expectation from there compares the submodule
+# with whatever it was told to expect. Prints nothing (a mismatch for the caller) when the URL climbs
+# above the base or the base is ambiguous.
 resolve_relative_url() {
-  local rel=$1 base
-  base=$(git config --get remote.origin.url 2>/dev/null) || base=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+  local super=$1 rel=$2 base
+  if git -C "$super" config --get remote.origin.url >/dev/null 2>&1; then
+    base=$(single_origin_url "$super")
+  else
+    base=$(git -C "$super" rev-parse --show-toplevel 2>/dev/null) || base=''
+  fi
+  [ -n "$base" ] || return 0
   base=${base%/}
   while :; do
     case "$rel" in
@@ -363,29 +401,37 @@ resolve_relative_url() {
   [ -n "$base" ] && printf '%s/%s' "$base" "$rel"
 }
 
-# Does the submodule at $1 have, as its origin, the repository `.gitmodules` registers for that path?
+# Does the submodule at path $1 — relative to the superproject at `-C <dir>` (default: here) — have,
+# as its origin, the repository that superproject's `.gitmodules` registers for that path?
 # Directory content and a self-resolving toplevel say where a checkout IS, not WHICH repository it
 # is: a stray or misplaced clone passes both (monorepo#2941). The expectation comes only from the
 # committed `.gitmodules` (a relative URL resolved as git resolves it), never from mutable
-# per-checkout submodule config. Fails closed: an unreadable origin or expectation is a mismatch,
-# never a pass.
+# per-checkout submodule config. Fails closed: an unreadable, missing or ambiguous origin or
+# expectation is a mismatch, never a pass.
 origin_is_own() {
-  local path=$1 key name want got
-  key=$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' |
+  local super=. path key name want got shown
+  if [ "$1" = -C ]; then
+    super=$2
+    shift 2
+  fi
+  path=$1
+  shown=$path
+  [ "$super" = . ] || shown="$super/$path"
+  key=$(git -C "$super" config -f .gitmodules --get-regexp '^submodule\..*\.path$' |
     awk -v p="$path" '$2 == p { print $1; exit }')
   name=${key#submodule.}
   name=${name%.path}
-  want=$(git config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || want=''
+  want=$(git -C "$super" config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || want=''
   case "$want" in
-    ./* | ../*) want=$(resolve_relative_url "$want") ;;
+    ./* | ../*) want=$(resolve_relative_url "$super" "$want") ;;
   esac
-  got=$(git -C "$path" config --get remote.origin.url 2>/dev/null) || got=''
+  got=$(single_origin_url "$super/$path")
   if [ -z "$key" ] || [ -z "$want" ] || [ -z "$got" ]; then
-    warn "$path — cannot verify which repository it is: origin '${got:-<none>}', expected '${want:-<unknown>}'. Do not read or edit it."
+    warn "$shown — cannot verify which repository it is: origin '${got:-<none or several>}', expected '${want:-<unknown>}'. Do not read or edit it."
     return 1
   fi
   if [ "$(normalize_url "$got")" != "$(normalize_url "$want")" ]; then
-    warn "$path — WRONG REPOSITORY: its origin is '$got', but .gitmodules registers '$want' for this path. Do not read or edit it. If the repository was only renamed, 'git submodule sync -- $path' updates the origin."
+    warn "$shown — WRONG REPOSITORY: its origin is '$got', but .gitmodules registers '$want' for this path. Do not read or edit it. If the repository was only renamed, 'git submodule sync -- $path' updates the origin."
     return 1
   fi
 }
