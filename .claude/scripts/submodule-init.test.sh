@@ -946,13 +946,20 @@ c41_from="$(git -C "$c41/super" rev-parse HEAD)"
 (
   cd "$c41/super"
   git submodule add -q ../remote-sub2 sub2
+  # Register it the way a portfolio submodule is registered; the test config maps that URL to the
+  # local fixture, so --sync's devantler-tech allow-list is exercised without any network.
+  git config -f .gitmodules submodule.sub2.url https://github.com/devantler-tech/remote-sub2
+  git add .gitmodules
   git commit -q -m "add sub2"
 )
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c41/remote-sub2.insteadOf" https://github.com/devantler-tech/remote-sub2
 c41_target="$(git -C "$c41/super" rev-parse HEAD)"
 git -C "$c41/super" worktree add -q --detach "$c41/wt" "$c41_from"
 git -C "$c41/wt" checkout -q --detach "$c41_target"
 report "sync add fixture: the detach leaves the new submodule empty" \
   "$([[ -d "$c41/wt/sub2" && -z "$(ls -A "$c41/wt/sub2")" ]] && echo yes || echo no)"
+# A configured update command must not run: --sync initialises with --checkout.
+git -C "$c41/wt" config submodule.sub2.update "!touch $c41/update-command-ran"
 out="$(cd "$c41/wt" && "$helper" --sync "$c41_from" 2>&1)" && rc=0 || rc=$?
 report "sync: an added submodule is populated at HEAD's pin" \
   "$([[ $rc -eq 0 && -f "$c41/wt/sub2/two.txt" ]] && [[ "$(git -C "$c41/wt/sub2" rev-parse HEAD)" == "$(git -C "$c41/wt" rev-parse HEAD:sub2)" ]] && echo yes || echo no)" "rc=$rc $out"
@@ -1026,6 +1033,55 @@ if ls -A "$c44/super/sub" >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
   report "sync: an unreadable removed-submodule directory fails closed" \
     "$([[ $rc -ne 0 ]] && grep -q "cannot inspect 'sub'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 fi
+
+# Round 3 of review on #3625.
+report "sync: a configured submodule update command does not run" \
+  "$([[ ! -e "$c41/update-command-ran" ]] && echo yes || echo no)"
+
+# Anything HEAD does not track beside a tracked directory that replaced the gitlink is residue.
+echo leftover >"$c43/super/sub/leftover.txt"
+out="$(cd "$c43/super" && "$helper" --sync "$c43_from" 2>&1)" && rc=0 || rc=$?
+report "sync: an untracked leftover beside a replacing tracked directory fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q "content HEAD does not track" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+rm -f "$c43/super/sub/leftover.txt"
+
+# A path git would quote in plain raw output (here non-ASCII) is checked at its real location.
+c48="$tmp/c48"
+mk_super "$c48"
+(
+  cd "$c48/super"
+  git submodule add -q ../remote-sub "mód"
+  git commit -q -m "add a non-ASCII submodule path"
+)
+c48_from="$(git -C "$c48/super" rev-parse HEAD)"
+(
+  cd "$c48/super"
+  git rm -q --cached "mód"
+  git config -f .gitmodules --remove-section "submodule.mód"
+  git add .gitmodules
+  git commit -q -m "remove it but leave the checkout"
+)
+out="$(cd "$c48/super" && "$helper" --sync "$c48_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a removed non-ASCII submodule that left its repository behind fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q "still holds its old repository" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# A PR can register any URL. An added submodule outside devantler-tech is refused before anything
+# contacts it. The URL uses the reserved `.invalid` domain, so even a regression cannot reach a real
+# host.
+c49="$tmp/c49"
+mk_super "$c49"
+c49_from="$(git -C "$c49/super" rev-parse HEAD)"
+(
+  cd "$c49/super"
+  git config -f .gitmodules submodule.outside.path outside
+  git config -f .gitmodules submodule.outside.url https://example.invalid/someone-else/outside
+  git update-index --add --cacheinfo "160000,$(git -C "$c49/remote-sub" rev-parse HEAD),outside"
+  git add .gitmodules
+  git commit -q -m "add a submodule outside the portfolio"
+)
+out="$(cd "$c49/super" && "$helper" --sync "$c49_from" 2>&1)" && rc=0 || rc=$?
+report "sync: an added submodule outside devantler-tech is refused before cloning" \
+  "$([[ $rc -ne 0 ]] && grep -q "outside devantler-tech" <<<"$out" && [[ -z "$(ls -A "$c49/super/outside" 2>/dev/null)" ]] && echo yes || echo no)" "rc=$rc $out"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2

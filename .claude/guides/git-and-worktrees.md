@@ -242,8 +242,10 @@ right after the detach and before the post-detach checks above
 changed between the two commits. A populated checkout on a changed pin goes through `--advance`, with
 all of that mode's refusals. A submodule the target adds, or one whose pin changed but that is not
 checked out here, is populated at its pin through the fail-closed init path, because the change under
-review lives in it. A submodule the target removed is refused while its directory still holds
-content. Any failed step exits non-zero, and the run ends by requiring every changed path to read as
+review lives in it. It is cloned only when `.gitmodules` registers it to a `devantler-tech`
+repository, since a pull request can name any URL there. A submodule the target removed is refused
+while its directory cannot be listed, still holds the old repository, or holds anything the target
+does not track. Any failed step exits non-zero, and the run ends by requiring every changed path to read as
 on its pin. It does not recurse: nested submodules inside a changed checkout are validated by
 `--advance` but never initialised, so the `submodule status --recursive` check above still decides.
 Never replace this with a recursive checkout flag, which fails closed at exit 128 or, worse, fails open

@@ -324,7 +324,9 @@ init_repair_probe() {
   else
     # Fresh (empty) submodule: populate it at its pinned commit, then relocate the `core.worktree`
     # that `git submodule update` writes into the shared config.
-    git submodule update --init "$path"
+    # `--checkout` overrides a configured `submodule.<name>.update` (which can name a shell command),
+    # and no replace refs may substitute a different tree for the pinned commit.
+    GIT_NO_REPLACE_OBJECTS=1 git submodule update --init --checkout "$path"
     # It can exit 0 having populated NOTHING — observed 2026-07-26 running from a linked superproject
     # worktree while a sibling worktree already held that submodule: git printed `checked out '<sha>'`,
     # exited 0, and left the directory empty. `probe` below verifies ISOLATION, not content, so it
@@ -447,22 +449,50 @@ advance() {
 #   - changed or re-added, populated → `advance` (fetches the pin, refuses dirt and ahead-of-pin work)
 #   - added, or changed but not populated here
 #                                   → `init_repair_probe` (populates at the pin, repairs, probes),
-#                                     because the change under review lives in that checkout
-#   - removed by the move           → refuse if its old repository is still there, or if content
-#                                     remains where HEAD tracks nothing; an unreadable directory is
-#                                     refused too
+#                                     because the change under review lives in that checkout — but
+#                                     only for a repository in the devantler-tech organisation
+#   - removed by the move           → refuse if the directory cannot be listed, still holds the old
+#                                     repository, or holds anything HEAD does not track there
 # Fails closed: an unreadable <from>, a diff that cannot be read, or any failed step stops the run,
 # and a final `submodule status` must show every changed path on HEAD's pin.
+
+# Would populating the submodule at $1 clone a repository inside the portfolio? A PR can register
+# any URL in `.gitmodules`, and populating it clones that URL, so an added submodule must name a
+# devantler-tech repository before anything contacts it. Spelled literally, as an allow-list: an
+# unrecognised spelling, a relative URL or a doubled registration is refused, never guessed at.
+sync_url_allowed() {
+  local path=$1 names name url
+  names=$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null |
+    awk -v p="$path" '$2 == p { print $1 }')
+  [ "$(printf '%s\n' "$names" | grep -c .)" -eq 1 ] || return 1
+  name=${names#submodule.}
+  name=${name%.path}
+  url=$(git config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || return 1
+  case "$url" in
+    git@github.com:devantler-tech/?* | ssh://git@github.com/devantler-tech/?* | https://github.com/devantler-tech/?*)
+      case "$url" in
+        *..* | *'?'* | *'#'* | *' '*) return 1 ;;
+      esac
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 sync_from() {
-  local from=$1 diff line meta path old_mode new_mode changed='' st
+  local from=$1 diff_file meta path old_mode new_mode st residue
+  local -a changed=()
   from=$(git --no-replace-objects rev-parse --verify --quiet "${from}^{commit}") ||
     die "'$1' is not a commit in this repository — pass the superproject HEAD from before the move"
-  diff=$(git --no-replace-objects diff-tree -r --no-renames --raw "$from" HEAD) ||
+  # NUL-terminated raw records: a path git would otherwise quote (non-ASCII, tabs, quotes) arrives
+  # verbatim, so every check below looks at the real directory.
+  diff_file=$(mktemp) || die "could not create a temporary file — refusing to sync"
+  # shellcheck disable=SC2064 # expand the path now: the variable is local to this function
+  trap "rm -f '$diff_file'" EXIT
+  if ! git --no-replace-objects diff-tree -z -r --no-renames --raw "$from" HEAD > "$diff_file"; then
     die "could not diff $from..HEAD — refusing to sync"
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    meta=${line%%$'\t'*}
-    path=${line#*$'\t'}
+  fi
+  while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
     old_mode=${meta%% *}
     old_mode=${old_mode#:}
     new_mode=$(printf '%s' "$meta" | awk '{print $2}')
@@ -472,36 +502,41 @@ sync_from() {
       if [ -e "$path" ] && ! ls -A "$path" > /dev/null 2>&1; then
         die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
       fi
-      # The old checkout's repository is residue whatever else is there. Other content is residue
-      # only when HEAD tracks nothing at that path: a gitlink replaced by a tracked directory
-      # legitimately leaves HEAD's own files there.
       if [ -e "$path/.git" ]; then
         die "'$path' is no longer a submodule at HEAD but still holds its old repository — preserve or remove it before evaluating this tree"
       fi
-      if [ "$(git --no-replace-objects ls-tree HEAD -- "$path" | awk '{print $2}')" != tree ] && is_populated "$path"; then
-        die "'$path' is no longer a submodule at HEAD but still holds content — preserve or remove it before evaluating this tree"
+      # Anything there that HEAD does not track — untracked or ignored — is residue, including
+      # beside the files of a tracked directory that replaced the gitlink.
+      if ! residue=$(git --no-replace-objects status --porcelain --untracked-files=all --ignored \
+        -- ":(literal)$path" 2>/dev/null); then
+        die "could not read the status of '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+      fi
+      if [ -n "$residue" ]; then
+        die "'$path' is no longer a submodule at HEAD but still holds content HEAD does not track — preserve or remove it before evaluating this tree"
       fi
       printf 'submodule-init: %s — removed at HEAD, nothing left behind\n' "$path"
       continue
     fi
-    changed="${changed}${path}"$'\n'
+    changed+=("$path")
     # A populated checkout moves with `advance` whether the gitlink changed or was re-added: `init`
     # only repairs a populated tree and would leave it on its old commit.
     if is_populated "$path"; then
       advance "$path"
     else
+      if ! sync_url_allowed "$path"; then
+        die "'$path' is registered to a repository outside devantler-tech (or to one this check cannot read) — refusing to clone it"
+      fi
       init_repair_probe "$path"
     fi
-  done <<< "$diff"
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    st=$(git --no-replace-objects submodule status -- "$path" 2>/dev/null) ||
+  done < "$diff_file"
+  for path in "${changed[@]+"${changed[@]}"}"; do
+    st=$(git --no-replace-objects submodule status -- ":(literal)$path" 2>/dev/null) ||
       die "could not read submodule status for '$path' after syncing"
     case "$st" in
       ' '*) ;;
       *) die "'$path' is not on HEAD's recorded pin after syncing ($st)" ;;
     esac
-  done <<< "$changed"
+  done
   printf 'submodule-init: submodules in sync with HEAD (changes since %s)\n' "$from"
 }
 
