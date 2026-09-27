@@ -486,7 +486,7 @@ recheck_mutable_gates() {
     done <<< "$now_orphans"
     # The same for a submodule: a commit made there and reset back to the gitlink changes
     # nothing the checks above compare, and the removal deletes the submodule's repository.
-    if submodule_local_only_blocker "$wt"; then
+    if submodule_local_only_blocker "$wt" || admin_modules_blocker "$wt" || worktree_state_blocker "$wt"; then
       keep "$wt" "$SALVAGE_NOTE, after the salvage snapshot ($SALVAGE_REF)"; return 1
     fi
   elif [ -n "$salvage_reason" ]; then
@@ -710,9 +710,92 @@ salvage_blocker() {
       return 0
     fi
   done <<< "$list"
+  # The snapshot must record exactly HEAD's gitlinks (snapshot_tree refuses otherwise), so
+  # check the same thing read-only here and dry-run cannot promise a salvage apply refuses.
+  gitlink_blocker "$wt" && return 0
+  worktree_state_blocker "$wt" && return 0
   # A linked worktree's submodule repositories live in its admin directory and are deleted
   # with it, and salvage records only their gitlinks.
   submodule_local_only_blocker "$wt" && return 0
+  admin_modules_blocker "$wt" && return 0
+  return 1
+}
+
+# gitlink_blocker <worktree> -> 0, with SALVAGE_NOTE, unless every gitlink in HEAD is still a
+# gitlink in the index and a directory in the working tree, and the index has no gitlink HEAD
+# lacks. Those are the conditions under which the snapshot keeps HEAD's gitlink set.
+gitlink_blocker() {
+  local wt=$1 head_links idx_links p
+  head_links=$(git -C "$wt" ls-tree -r HEAD 2>/dev/null | awk -F'\t' '$1 ~ /^160000 /{print $2}') \
+    || { SALVAGE_NOTE="cannot list HEAD gitlinks"; return 0; }
+  idx_links=$(git -C "$wt" ls-files -s 2>/dev/null | awk -F'\t' '$1 ~ /^160000 /{print $2}') \
+    || { SALVAGE_NOTE="cannot list staged gitlinks"; return 0; }
+  if [ "$head_links" != "$idx_links" ]; then
+    SALVAGE_NOTE="a submodule was added, removed or replaced (the snapshot cannot record it)"; return 0
+  fi
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ -L "$wt/$p" ] || [ ! -d "$wt/$p" ]; then
+      SALVAGE_NOTE="submodule directory $p was deleted or replaced (the snapshot cannot record it)"; return 0
+    fi
+  done <<< "$head_links"
+  return 1
+}
+
+# worktree_state_blocker <worktree> -> 0, with SALVAGE_NOTE, when the worktree holds state the
+# salvage refs cannot carry: a per-worktree ref (refs/worktree/*, refs/bisect/*, …) lives in
+# the admin directory the removal deletes and need not be in HEAD's reflog; an intent-to-add
+# entry has no blob, so the staged-index tree silently drops it.
+worktree_state_blocker() {
+  local wt=$1 admin refs ita
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
+    || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
+  if [ -d "$admin/refs" ]; then
+    # The ownership mutex this sweep holds is itself a per-worktree ref; it guards the
+    # removal and carries no work, so it is the one ref excluded.
+    refs=$(find "$admin/refs" -type f ! -path "$admin/$WORKTREE_CLAIM_LOCK_REF_PREFIX/*" 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot list per-worktree refs"; return 0; }
+    if [ -n "$refs" ]; then
+      SALVAGE_NOTE="per-worktree refs exist (salvage cannot carry them)"; return 0
+    fi
+  fi
+  ita=$(git -C "$wt" diff --name-only --diff-filter=A 2>/dev/null) \
+    || { SALVAGE_NOTE="cannot list intent-to-add entries"; return 0; }
+  if [ -n "$ita" ]; then
+    SALVAGE_NOTE="intent-to-add index entries exist (salvage cannot carry them)"; return 0
+  fi
+  return 1
+}
+
+# admin_modules_blocker <worktree> -> 0, with SALVAGE_NOTE, unless every submodule repository
+# stored under the worktree's admin directory — including one whose gitlink was removed, which
+# no index enumeration can find — holds only remote-reachable commits and, when its working
+# tree still exists, is clean with no hidden-index flags. It checks what the removal would
+# actually delete, not what the index happens to list.
+admin_modules_blocker() {
+  local wt=$1 admin heads h g w wdir st flags
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
+    || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
+  [ -d "$admin/modules" ] || return 1
+  heads=$(find "$admin/modules" -type f -name HEAD 2>/dev/null) \
+    || { SALVAGE_NOTE="cannot list the submodule repositories of $wt"; return 0; }
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    g=${h%/HEAD}
+    [ -d "$g/objects" ] || continue                  # a reflog's logs/HEAD, not a repository
+    if [ -n "$(git --git-dir="$g" rev-list -n 1 --all --reflog --not --remotes 2>/dev/null || echo unreadable)" ]; then
+      SALVAGE_NOTE="submodule repository ${g#"$admin"/} holds commits no remote has (cannot be salvaged)"; return 0
+    fi
+    w=$(git --git-dir="$g" config core.worktree 2>/dev/null) || continue
+    wdir=$(cd "$g" 2>/dev/null && cd "$w" 2>/dev/null && pwd -P) || continue
+    st=$(git --git-dir="$g" --work-tree="$wdir" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot read the status of submodule ${wdir#"$wt"/}"; return 0; }
+    flags=$(git --git-dir="$g" --work-tree="$wdir" ls-files -v 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot read the index flags of submodule ${wdir#"$wt"/}"; return 0; }
+    if [ -n "$st" ] || grep -q '^[a-zS]' <<< "$flags"; then
+      SALVAGE_NOTE="submodule ${wdir#"$wt"/} has uncommitted or hidden-index changes (cannot be salvaged)"; return 0
+    fi
+  done <<< "$heads"
   return 1
 }
 

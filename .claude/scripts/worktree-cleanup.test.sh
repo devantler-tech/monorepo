@@ -1731,6 +1731,133 @@ t_salvage_reports_why_a_snapshot_failed() {
   rm -rf "$root"
 }
 
+# admin_sub_wt <root> <name> — a pushed worktree whose submodule was added with
+# `git submodule add`, so its repository lives in the worktree's admin modules/ dir.
+admin_sub_wt() {
+  local root=$1 name=$2 wt="$1/repo/.claude/worktrees/$2"
+  git init -q -b main "$root/subsrc" && echo one > "$root/subsrc/f" \
+    && git -C "$root/subsrc" add f && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm one || return 1
+  add_wt "$root" "$name" pushed || return 1
+  git -C "$wt" -c protocol.file.allow=always submodule add -q "$root/subsrc" sub >/dev/null 2>&1 || return 1
+  git -C "$wt" commit -qm "add sub" && git -C "$wt" push -q origin "claude/$name" || return 1
+  [ -d "$(git -C "$wt" rev-parse --absolute-git-dir)/modules/sub" ] || return 1
+  git -C "$wt/sub" config user.email t@t.t && git -C "$wt/sub" config user.name t
+}
+
+t_salvage_keeps_a_removed_submodules_local_commit() {
+  # The gitlink is gone from the index, but the submodule repository stays in the admin
+  # directory the removal deletes, holding a commit no remote has.
+  local name="salvage KEEPs a removed submodule's repository that holds a local-only commit"
+  local root; root=$(make_repo)
+  git init -q -b main "$root/subsrc" && echo one > "$root/subsrc/f" \
+    && git -C "$root/subsrc" add f && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm one \
+    && add_wt "$root" subgone pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subgone"
+  # Added and removed before any parent commit: neither HEAD nor the index has a gitlink.
+  git -C "$wt" -c protocol.file.allow=always submodule add -q "$root/subsrc" sub >/dev/null 2>&1 \
+    || { bad "$name" "FIXTURE: submodule add"; rm -rf "$root"; return; }
+  echo two >> "$wt/sub/f"; git -C "$wt/sub" -c user.email=t@t.t -c user.name=t commit -qam "local only"
+  git -C "$wt" rm -qf sub
+  [ -d "$(git -C "$wt" rev-parse --absolute-git-dir)/modules/sub" ] \
+    || { bad "$name" "FIXTURE: no retained submodule repository"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subgone .*holds commits no remote has' <<<"$out" && [ -d "$wt" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_hidden_index_edit_in_a_submodule() {
+  local name="salvage KEEPs a submodule with an edit hidden by assume-unchanged"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subhide || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subhide"
+  git -C "$wt/sub" update-index --assume-unchanged f; echo hidden >> "$wt/sub/f"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subhide .*hidden-index' <<<"$out" && grep -q hidden "$wt/sub/f" \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_still_salvages_beside_a_clean_admin_submodule() {
+  # Control for the two above: a clean, remote-reachable submodule does not block salvage.
+  local name="salvage still salvages a worktree whose admin-dir submodule is clean"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subok || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subok"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED .*subok ' <<<"$out" && [ ! -e "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_per_worktree_ref() {
+  local name="salvage KEEPs a commit held only by a per-worktree ref"
+  local root; root=$(make_repo)
+  add_wt "$root" wtref pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/wtref" c
+  c=$(git -C "$wt" commit-tree 'HEAD^{tree}' -p HEAD -m wip) && git -C "$wt" update-ref refs/worktree/wip "$c" \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*wtref .*per-worktree refs' <<<"$out" && [ -d "$wt" ] \
+     && [ "$(git -C "$wt" rev-parse refs/worktree/wip)" = "$c" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_an_intent_to_add_entry() {
+  local name="salvage KEEPs an intent-to-add index entry"
+  local root; root=$(make_repo)
+  add_wt "$root" ita pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/ita"
+  echo new > "$wt/later.txt"; git -C "$wt" add -N later.txt
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*ita .*intent-to-add' <<<"$out" && ! grep -q '^SALVAGE .*ita ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_dry_run_refuses_an_unsnappable_gitlink_change() {
+  local name="salvage dry-run KEEPs a submodule replaced by a file (apply could not snapshot it)"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subdry || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subdry"
+  rm -rf "$wt/sub"; echo now-a-file > "$wt/sub"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subdry .*deleted or replaced' <<<"$out" && ! grep -q '^SALVAGE .*subdry ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -1797,5 +1924,11 @@ t_salvage_rechecks_its_cap_under_the_mutex
 t_salvage_dry_run_keeps_a_conflicted_index
 t_salvage_preserves_ignored_tracked_paths
 t_salvage_reports_why_a_snapshot_failed
+t_salvage_keeps_a_removed_submodules_local_commit
+t_salvage_keeps_a_hidden_index_edit_in_a_submodule
+t_salvage_still_salvages_beside_a_clean_admin_submodule
+t_salvage_keeps_a_per_worktree_ref
+t_salvage_keeps_an_intent_to_add_entry
+t_salvage_dry_run_refuses_an_unsnappable_gitlink_change
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
