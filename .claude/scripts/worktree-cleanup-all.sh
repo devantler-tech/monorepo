@@ -3,9 +3,11 @@
 # submodule, in one invocation. This is the entry point the scheduled LaunchAgent
 # calls; worktree-cleanup.sh holds the per-repo safety contract.
 #
-# Usage: worktree-cleanup-all.sh [dry-run|apply] [min_age_hours]
+# Usage: worktree-cleanup-all.sh [dry-run|apply] [min_age_hours] [salvage_age_hours]
 #   dry-run (default) — report only
 #   apply             — reap, recording every removal to a timestamped manifest
+#   salvage_age_hours (default 336 = 14 days; 0 = off) — preserve abandoned work to
+#     refs/salvaged/* and then reap, so the sweep converges (#2831; see worktree-cleanup.sh)
 #
 # Manifests live OUTSIDE the repository (they name local paths and branches and must
 # never be committed): ~/.claude/worktree-cleanup-manifests/<repo>-<utc>.tsv
@@ -16,6 +18,7 @@ set -uo pipefail
 
 MODE=${1:-dry-run}
 MIN_AGE_HOURS=${2:-24}
+SALVAGE_AGE_HOURS=${3:-336}
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SUT="$SCRIPT_DIR/worktree-cleanup.sh"
@@ -33,6 +36,10 @@ esac
 case "$MIN_AGE_HOURS" in
   ''|*[!0-9]*) printf "worktree-cleanup-all: min_age_hours must be a non-negative integer, got '%s'\n" \
                  "$MIN_AGE_HOURS" >&2; exit 2 ;;
+esac
+case "$SALVAGE_AGE_HOURS" in
+  ''|*[!0-9]*) printf "worktree-cleanup-all: salvage_age_hours must be a non-negative integer, got '%s'\n" \
+                 "$SALVAGE_AGE_HOURS" >&2; exit 2 ;;
 esac
 
 # Repo root. WORKTREE_CLEANUP_ROOT lets the script run from outside the checkout
@@ -68,8 +75,8 @@ MANIFEST_DIR="$HOME/.claude/worktree-cleanup-manifests"
 mkdir -p "$MANIFEST_DIR" || { printf 'cannot create %s\n' "$MANIFEST_DIR" >&2; exit 2; }
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 
-printf '=== worktree-cleanup-all  mode=%s  min_age=%sh  root=%s ===\n' \
-  "$MODE" "$MIN_AGE_HOURS" "$ROOT"
+printf '=== worktree-cleanup-all  mode=%s  min_age=%sh  salvage_age=%sh  root=%s ===\n' \
+  "$MODE" "$MIN_AGE_HOURS" "$SALVAGE_AGE_HOURS" "$ROOT"
 
 sweep() { # <repo_path>
   local path=$1 label toplevel expected
@@ -118,7 +125,7 @@ sweep() { # <repo_path>
   # the scheduled entrypoint — and must stop the run rather than continuing into the
   # remaining repositories, since the same failure very likely applies to them too.
   local out rc
-  out=$("$SUT" "$path" "$MANIFEST_DIR/$label-$TS.tsv" "$MODE" "$MIN_AGE_HOURS" 2>&1); rc=$?
+  out=$("$SUT" "$path" "$MANIFEST_DIR/$label-$TS.tsv" "$MODE" "$MIN_AGE_HOURS" "$SALVAGE_AGE_HOURS" 2>&1); rc=$?
   # dry-run writes no manifest, so its per-worktree REAP/KEEP lines are the ONLY record
   # of what an apply run would touch — never truncate them. apply has the manifest, so
   # a summary is enough there.

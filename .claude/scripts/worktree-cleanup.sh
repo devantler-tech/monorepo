@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Reap abandoned per-session worktrees under <repo>/.claude/worktrees/.
 #
-# Usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours]
+# Usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours] [salvage_age_hours]
 #   dry-run (default) — report what WOULD be reaped; write NOTHING to the manifest
 #   apply             — record each removal to the manifest, then remove
 #   Any other MODE value exits non-zero: a typo must not silently mean "delete", and
 #   must not pollute the restore ledger (same contract as branch-cleanup.sh).
 #   min_age_hours (default 24) — never reap a worktree younger than this.
+#   salvage_age_hours (default 0 = off) — preserve, then reap, a worktree whose only KEEP
+#     reason is abandoned work once it is at least this old (see SALVAGE below).
 #
 # WHY THIS EXISTS
 #   The harness creates a per-session worktree at <repo>/.claude/worktrees/<slug> and
@@ -42,6 +44,27 @@
 # Every reaped commit also gets a refs/reaped/<sha> ref, so the manifest's SHA stays
 # restorable even if a stale remote-tracking ref is later pruned and gc runs.
 #
+# SALVAGE (#2831) — only when salvage_age_hours > 0. A worktree whose ONLY remaining KEEP
+# reason is abandoned work (unpushed or reflog-only commits, or uncommitted changes) is
+# otherwise kept forever, so the sweep never converges and the disk fills. Past the
+# salvage age such a worktree is preserved first, then reaped: its work is written to
+# local refs in the repository that outlives the worktree, the refs are verified, the
+# manifest names them, and only then is the directory removed.
+#   refs/salvaged/<id>/head       - the worktree's HEAD commit (covers unpushed commits)
+#   refs/salvaged/<id>/index      - a commit of the staged index, parent HEAD
+#   refs/salvaged/<id>/worktree   - a commit of the whole working tree (tracked edits,
+#                                   deletions and untracked non-ignored files), parent HEAD
+#   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog commit reachable from no remote
+# Restore: `git worktree add <path> refs/salvaged/<id>/head`, then
+# `git -C <path> checkout refs/salvaged/<id>/worktree -- .` (or read-tree the index ref).
+# Every other gate is unchanged, and salvage fails closed to the old KEEP:
+#   KEEP  - a salvage candidate whose submodule holds uncommitted or unpushed work (the
+#           submodule's repository lives inside the worktree's admin dir and dies with it)
+#   KEEP  - untracked content git would record as an embedded repository (a gitlink
+#           only, not the files), or more than SALVAGE_MAX_KB of changed/untracked data
+#   KEEP  - any failure to build, write or verify a salvage ref, and any change to the
+#           working tree or index between the snapshot and the removal
+#
 # Submodule gitlink drift (` M applications/ksail`) and stray tool dirs (`?? .codex/`)
 # are NOT authored work — they are an artifact of the submodule checkout sitting at a
 # different, already-committed commit. They are treated as noise ONLY after the
@@ -69,6 +92,10 @@ REPO_PATH=${1:-}
 MANIFEST=${2:-}
 MODE=${3:-dry-run}
 MIN_AGE_HOURS=${4:-24}
+SALVAGE_AGE_HOURS=${5:-0}
+# Changed plus untracked bytes above which a tree is kept rather than copied into the
+# object store: a stray multi-gigabyte artifact would otherwise become permanent history.
+SALVAGE_MAX_KB=${WORKTREE_SALVAGE_MAX_KB:-102400}
 
 die() { printf 'worktree-cleanup: %s\n' "$1" >&2; exit 2; }
 
@@ -77,8 +104,8 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) \
 # shellcheck source=worktree-claim-lib.sh
 . "$SCRIPT_DIR/worktree-claim-lib.sh" || die "cannot load shared claim protocol"
 
-[ -n "$REPO_PATH" ] || die "usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours]"
-[ -n "$MANIFEST" ] || die "usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours]"
+[ -n "$REPO_PATH" ] || die "usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours] [salvage_age_hours]"
+[ -n "$MANIFEST" ] || die "usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours] [salvage_age_hours]"
 [ -d "$REPO_PATH" ] || die "repo_path is not a directory: $REPO_PATH"
 
 case "$MODE" in
@@ -88,6 +115,12 @@ esac
 
 case "$MIN_AGE_HOURS" in
   ''|*[!0-9]*) die "min_age_hours must be a non-negative integer, got '$MIN_AGE_HOURS'" ;;
+esac
+case "$SALVAGE_AGE_HOURS" in
+  ''|*[!0-9]*) die "salvage_age_hours must be a non-negative integer, got '$SALVAGE_AGE_HOURS'" ;;
+esac
+case "$SALVAGE_MAX_KB" in
+  ''|*[!0-9]*) die "WORKTREE_SALVAGE_MAX_KB must be a non-negative integer, got '$SALVAGE_MAX_KB'" ;;
 esac
 
 TOPLEVEL=$(git -C "$REPO_PATH" rev-parse --show-toplevel 2>/dev/null) \
@@ -268,7 +301,7 @@ REGISTERED=$(printf '%s\n' "$WT_LIST" | awk '/^worktree /{print substr($0,10)}' 
   | while IFS= read -r p; do (cd "$p" 2>/dev/null && pwd -P); done)
 
 now=$(date +%s)
-reaped=0; kept=0; stuck=0; freed_kb=0
+reaped=0; kept=0; stuck=0; salvaged=0; freed_kb=0
 
 # record <path> <branch> <sha> <evidence> <outcome>
 # The outcome column is what stops a row claiming a removal that never happened. The
@@ -426,7 +459,25 @@ recheck_mutable_gates() {
   st=$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
     || { keep "$wt" "cannot re-read status before removal"; return 1; }
   count_real_changes "$wt" "$st"
-  if [ "$REAL_CHANGES" -gt 0 ]; then
+  if [ -n "$SALVAGE_TREE" ]; then
+    # Salvaged: the work may be uncommitted, so compare it with the snapshot instead.
+    # Anything written after the snapshot is not in the salvage refs and must not be lost.
+    local now_tree now_index
+    if [ "$REAL_SUBMODULE_CHANGES" -gt 0 ]; then
+      keep "$wt" "submodule work appeared after the salvage snapshot"; return 1
+    fi
+    now_tree=$(snapshot_tree "$wt") || { keep "$wt" "cannot re-snapshot the working tree before removal"; return 1; }
+    now_index=$(git -C "$wt" write-tree 2>/dev/null) || { keep "$wt" "cannot re-read the index before removal"; return 1; }
+    if [ "$now_tree" != "$SALVAGE_TREE" ] || [ "$now_index" != "$SALVAGE_INDEX_TREE" ]; then
+      keep "$wt" "working tree or index changed after the salvage snapshot ($SALVAGE_REF)"; return 1
+    fi
+  elif [ -n "$salvage_reason" ]; then
+    # Salvage candidate before its snapshot: its changes are expected and are about to be
+    # preserved, but not work in a submodule, which salvage cannot capture.
+    if [ "$REAL_SUBMODULE_CHANGES" -gt 0 ]; then
+      keep "$wt" "submodule work appeared during the sweep (cannot be salvaged)"; return 1
+    fi
+  elif [ "$REAL_CHANGES" -gt 0 ]; then
     keep "$wt" "$REAL_CHANGES uncommitted change(s) appeared during the sweep"; return 1
   fi
 
@@ -492,6 +543,9 @@ submodule_owned_worktree() {
 count_real_changes() {
   local wt=$1 status=$2 line code path sub_status sub_sha sub_unpushed
   REAL_CHANGES=0
+  # The subset of REAL_CHANGES held in a submodule. Salvage cannot preserve those: a
+  # linked worktree's submodule repository lives in its admin dir and dies with it.
+  REAL_SUBMODULE_CHANGES=0
   [ -n "$status" ] || return 0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -527,7 +581,7 @@ count_real_changes() {
           sub_unpushed=$(git -C "$wt/$path" rev-list --count "$sub_sha" --not --remotes 2>/dev/null)
           if [ "$sub_status_rc" -ne 0 ] || [ -n "$sub_status" ] \
              || [ -z "$sub_unpushed" ] || [ "$sub_unpushed" -gt 0 ]; then
-            REAL_CHANGES=$((REAL_CHANGES+1))
+            REAL_CHANGES=$((REAL_CHANGES+1)); REAL_SUBMODULE_CHANGES=$((REAL_SUBMODULE_CHANGES+1))
           fi
           # ACCEPTED LIMITATION, stated rather than papered over: this treats the drift as
           # disposable because the submodule commit is reachable from a remote-tracking
@@ -545,9 +599,125 @@ count_real_changes() {
           REAL_CHANGES=$((REAL_CHANGES+1))
         fi
         ;;
-      *) REAL_CHANGES=$((REAL_CHANGES+1)) ;;
+      *)
+        REAL_CHANGES=$((REAL_CHANGES+1))
+        # A staged gitlink update (or any other change on a submodule path) is submodule state.
+        [ -e "$wt/$path/.git" ] && REAL_SUBMODULE_CHANGES=$((REAL_SUBMODULE_CHANGES+1))
+        ;;
     esac
   done <<< "$status"
+  return 0
+}
+
+# --- salvage (#2831) ----------------------------------------------------------------
+# salvage_eligible <age_h> — 0 when salvage is on and the worktree is old enough for it.
+salvage_eligible() {
+  [ "$SALVAGE_AGE_HOURS" -gt 0 ] && [ "$1" -ge "$SALVAGE_AGE_HOURS" ]
+}
+
+# salvage_blocker <worktree> -> 0 and SALVAGE_NOTE set when the tree must NOT be salvaged;
+# 1 when nothing blocks it. Read-only, so dry-run reports what apply would actually do.
+# An untracked directory listed with a trailing `/` holds its own .git: `git add` would
+# record a bare gitlink and none of its files. Any read failure blocks.
+salvage_blocker() {
+  local wt=$1 list rc f total_kb=0 sz
+  SALVAGE_NOTE=""
+  # NUL-delimited: the default output C-quotes unusual names, which would hide them from
+  # both the embedded-repository test and the size sum. tr keeps NULs out of $( ).
+  list=$(git -C "$wt" ls-files -z -m -o --exclude-standard 2>/dev/null | tr '\0' '\n'); rc=$?
+  if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot list changed files for salvage"; return 0; fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+      */) SALVAGE_NOTE="untracked embedded repository ($f) cannot be salvaged"; return 0 ;;
+    esac
+    [ -f "$wt/$f" ] || continue          # a deletion or a directory holds no bytes here
+    sz=$(wc -c < "$wt/$f" 2>/dev/null) || { SALVAGE_NOTE="cannot size $f for salvage"; return 0; }
+    sz=$(printf '%s' "$sz" | tr -d ' ')
+    total_kb=$((total_kb + (sz + 1023) / 1024))
+    if [ "$total_kb" -gt "$SALVAGE_MAX_KB" ]; then
+      SALVAGE_NOTE="more than ${SALVAGE_MAX_KB} KB of changed or untracked data to salvage"
+      return 0
+    fi
+  done <<< "$list"
+  return 1
+}
+
+# snapshot_tree <worktree> -> prints the tree of the WHOLE working tree (tracked edits,
+# deletions, untracked non-ignored files), built in a throwaway index so the worktree's
+# own index is never touched. Returns non-zero, with SALVAGE_NOTE, when the snapshot would
+# not be faithful: a gitlink that HEAD does not have means git staged an embedded
+# repository as a pointer instead of its files.
+snapshot_tree() {
+  local wt=$1 idx tree head_links snap_links
+  SALVAGE_NOTE=""
+  idx=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-index.XXXXXX") || { SALVAGE_NOTE="cannot create a temporary index"; return 1; }
+  rm -f "$idx"
+  if ! GIT_INDEX_FILE=$idx git -C "$wt" read-tree HEAD 2>/dev/null \
+     || ! GIT_INDEX_FILE=$idx git -C "$wt" add -A -- . 2>/dev/null; then
+    rm -f "$idx"; SALVAGE_NOTE="cannot stage the working tree for salvage"; return 1
+  fi
+  head_links=$(git -C "$wt" ls-tree -r HEAD 2>/dev/null | awk -F'\t' '$1 ~ /^160000 /{print $2}') \
+    || { rm -f "$idx"; SALVAGE_NOTE="cannot list HEAD gitlinks"; return 1; }
+  snap_links=$(GIT_INDEX_FILE=$idx git -C "$wt" ls-files -s 2>/dev/null | awk -F'\t' '$1 ~ /^160000 /{print $2}') \
+    || { rm -f "$idx"; SALVAGE_NOTE="cannot list staged gitlinks"; return 1; }
+  if [ "$head_links" != "$snap_links" ]; then
+    rm -f "$idx"; SALVAGE_NOTE="the snapshot would record an embedded repository as a gitlink"; return 1
+  fi
+  tree=$(GIT_INDEX_FILE=$idx git -C "$wt" write-tree 2>/dev/null) \
+    || { rm -f "$idx"; SALVAGE_NOTE="cannot write the snapshot tree"; return 1; }
+  rm -f "$idx"
+  printf '%s' "$tree"
+}
+
+# salvage_commit <worktree> <tree> <parent> <message> -> prints a commit. Local-only
+# bookkeeping, so it is never signed and never depends on the user's identity config.
+salvage_commit() {
+  GIT_AUTHOR_NAME=worktree-cleanup GIT_AUTHOR_EMAIL=worktree-cleanup@localhost \
+  GIT_COMMITTER_NAME=worktree-cleanup GIT_COMMITTER_EMAIL=worktree-cleanup@localhost \
+    git -C "$1" commit-tree --no-gpg-sign "$2" -p "$3" -m "$4" 2>/dev/null
+}
+
+# salvage_write <worktree> <sha> -> writes and verifies refs/salvaged/<id>/*, setting
+# SALVAGE_REF, SALVAGE_TREE (whole working tree) and SALVAGE_INDEX_TREE (staged index).
+# Returns non-zero, with SALVAGE_NOTE, on any failure; refs already written stay (they
+# only preserve data) and the caller KEEPs the worktree.
+salvage_write() {
+  local wt=$1 sha=$2 id base idx_tree wt_tree idx_commit wt_commit reflog orphans o
+  SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""
+  id="$(date -u +%Y%m%dT%H%M%SZ)-$(basename "$wt")-${sha:0:12}"
+  base="refs/salvaged/$id"
+  git check-ref-format "$base/head" 2>/dev/null || { SALVAGE_NOTE="unusable salvage ref name $base"; return 1; }
+  idx_tree=$(git -C "$wt" write-tree 2>/dev/null) || { SALVAGE_NOTE="cannot write the staged index as a tree"; return 1; }
+  wt_tree=$(snapshot_tree "$wt") || return 1
+  reflog=$(git -C "$wt" reflog show --format=%H HEAD 2>/dev/null) || { SALVAGE_NOTE="cannot read the HEAD reflog"; return 1; }
+  orphans=""
+  if [ -n "$reflog" ]; then
+    # shellcheck disable=SC2086  # one sha per word
+    orphans=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog --not --remotes 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot find reflog-only commits"; return 1; }
+  fi
+  idx_commit=$(salvage_commit "$wt" "$idx_tree" "$sha" "salvage: staged index of $(basename "$wt")") \
+    || { SALVAGE_NOTE="cannot commit the staged index"; return 1; }
+  wt_commit=$(salvage_commit "$wt" "$wt_tree" "$sha" "salvage: working tree of $(basename "$wt")") \
+    || { SALVAGE_NOTE="cannot commit the working tree"; return 1; }
+  git -C "$TOPLEVEL" update-ref "$base/head" "$sha" 2>/dev/null \
+    && git -C "$TOPLEVEL" update-ref "$base/index" "$idx_commit" 2>/dev/null \
+    && git -C "$TOPLEVEL" update-ref "$base/worktree" "$wt_commit" 2>/dev/null \
+    || { SALVAGE_NOTE="cannot write $base refs"; return 1; }
+  while IFS= read -r o; do
+    [ -n "$o" ] || continue
+    git -C "$TOPLEVEL" update-ref "$base/reflog/$o" "$o" 2>/dev/null \
+      || { SALVAGE_NOTE="cannot write $base/reflog/$o"; return 1; }
+    [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/reflog/$o" 2>/dev/null)" = "$o" ] \
+      || { SALVAGE_NOTE="$base/reflog/$o does not verify"; return 1; }
+  done <<< "$orphans"
+  # Verify through the repository that outlives the worktree, not the worktree itself.
+  [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/head" 2>/dev/null)" = "$sha" ] \
+    && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/index^{tree}" 2>/dev/null)" = "$idx_tree" ] \
+    && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/worktree^{tree}" 2>/dev/null)" = "$wt_tree" ] \
+    || { SALVAGE_NOTE="$base refs do not verify"; return 1; }
+  SALVAGE_REF=$base; SALVAGE_TREE=$wt_tree; SALVAGE_INDEX_TREE=$idx_tree
   return 0
 }
 
@@ -598,6 +768,9 @@ while IFS= read -r wt <&3; do
   wt_real=$(cd "$wt" 2>/dev/null && pwd -P) \
     || die "cannot resolve candidate worktree $wt — refusing to continue on an uninspectable tree"
   name=$(wt_label "$wt")
+  # Per-candidate salvage state; recheck_mutable_gates reads it, so it must never leak
+  # from the previous candidate.
+  salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_NOTE=""
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
   # here-string, NOT a pipe: grep -q exits at its first match, printf then takes SIGPIPE,
@@ -690,9 +863,15 @@ while IFS= read -r wt <&3; do
       if [ "$pr_rc" -eq 2 ]; then
         keep "$wt" "$unpushed unpushed commit(s) on $branch$note"; continue
       fi
-      keep_stuck "$wt" "$unpushed unpushed commit(s) on $branch$note"; continue
+      if ! salvage_eligible "$age_h"; then
+        keep_stuck "$wt" "$unpushed unpushed commit(s) on $branch$note"; continue
+      fi
+      # Old enough to salvage: the later gates still run, and refs/salvaged/<id>/head
+      # preserves these commits before any removal.
+      salvage_reason="$unpushed unpushed commit(s) on $branch"
+    else
+      merged_head=$sha
     fi
-    merged_head=$sha
   fi
 
   # KEEP: real working-tree changes. Submodule gitlinks and known tool-noise dirs are
@@ -725,7 +904,14 @@ while IFS= read -r wt <&3; do
   fi
   count_real_changes "$wt" "$status"
   if [ "$REAL_CHANGES" -gt 0 ]; then
-    keep_stuck "$wt" "$REAL_CHANGES uncommitted change(s)"; continue
+    if ! salvage_eligible "$age_h"; then
+      keep_stuck "$wt" "$REAL_CHANGES uncommitted change(s)"; continue
+    fi
+    if [ "$REAL_SUBMODULE_CHANGES" -gt 0 ]; then
+      keep_stuck "$wt" "$REAL_CHANGES uncommitted change(s), $REAL_SUBMODULE_CHANGES in a submodule (cannot be salvaged)"
+      continue
+    fi
+    salvage_reason="${salvage_reason:+$salvage_reason; }$REAL_CHANGES uncommitted change(s)"
   fi
 
   # KEEP: a registered worktree nested INSIDE this one. The untracked-directory signal
@@ -762,8 +948,11 @@ while IFS= read -r wt <&3; do
     # shellcheck disable=SC2086  # merged_head is empty or one sha
     orphaned=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog_shas --not --remotes $merged_head 2>/dev/null | head -1)
     if [ -n "$orphaned" ]; then
-      keep_stuck "$wt" "HEAD reflog holds commit(s) reachable from nowhere else (${orphaned:0:12})"
-      continue
+      if ! salvage_eligible "$age_h"; then
+        keep_stuck "$wt" "HEAD reflog holds commit(s) reachable from nowhere else (${orphaned:0:12})"
+        continue
+      fi
+      salvage_reason="${salvage_reason:+$salvage_reason; }reflog-only commit(s)"
     fi
   fi
 
@@ -778,8 +967,16 @@ while IFS= read -r wt <&3; do
   ign=$(git -C "$wt" status --porcelain --ignored=matching --untracked-files=all 2>/dev/null \
         | grep -c '^!!' ) || ign=0
   ign_note=""; [ "${ign:-0}" -gt 0 ] && ign_note=" +${ign} ignored"
+  if [ -n "$salvage_reason" ] && salvage_blocker "$wt"; then
+    keep_stuck "$wt" "$salvage_reason; not salvaged: $SALVAGE_NOTE"; continue
+  fi
   if [ "$MODE" = "dry-run" ]; then
-    printf 'REAP   %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
+    if [ -n "$salvage_reason" ]; then
+      printf 'SALVAGE %-51s %s (%s; %s MB%s)\n' "$name" "$branch" "$salvage_reason" "$((sz_kb/1024))" "$ign_note"
+      salvaged=$((salvaged+1))
+    else
+      printf 'REAP   %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
+    fi
     reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
     continue
   fi
@@ -791,6 +988,25 @@ while IFS= read -r wt <&3; do
     2) keep "$wt" "cannot verify/acquire ownership mutex"; continue ;;
   esac
 
+  # SALVAGE: preserve the abandoned work BEFORE the manifest row and the removal, under
+  # the mutex and after the mutable gates and identity re-check, so the snapshot is of the
+  # tree that is about to be removed. recheck_mutable_gates then compares the tree against
+  # this snapshot at every later point, so a change made after it is never deleted.
+  if [ -n "$salvage_reason" ]; then
+    if ! recheck_mutable_gates "$wt" "$wt_real"; then
+      worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+      continue
+    fi
+    if ! still_the_reviewed_worktree "$wt" "$branch" "$sha" "$merged_head"; then
+      worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+      keep "$wt" "$IDENTITY_NOTE"; continue
+    fi
+    if ! salvage_write "$wt" "$sha"; then
+      worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+      keep_stuck "$wt" "$salvage_reason; not salvaged: $SALVAGE_NOTE"; continue
+    fi
+  fi
+
   # A manifest write failure is an INFRASTRUCTURE failure, not a per-worktree verdict:
   # the ledger is unwritable, so every subsequent removal would be unrecorded too.
   # Aborting (rather than keeping and carrying on) is what stops the wrapper reporting
@@ -799,6 +1015,7 @@ while IFS= read -r wt <&3; do
   # PR head ref, so the ledger must say which of the two made the removal safe.
   reach_evidence="reachable-from-remote"
   [ -n "$merged_head" ] && reach_evidence="merged-pr-head"
+  [ -n "$SALVAGE_REF" ] && reach_evidence="salvaged=$SALVAGE_REF ($salvage_reason)"
   if ! record "$wt_real" "$branch" "$sha" "$reach_evidence;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
     die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"
   fi
@@ -879,7 +1096,12 @@ while IFS= read -r wt <&3; do
   # that looks like an aborted attempt.
   record "$wt_real" "$branch" "$sha" "removed" reaped \
     || die "REMOVED $wt_real but could not append its 'reaped' row. The deletion DID happen: a 'pending' row whose path no longer exists means deleted, not aborted (restore ref: refs/reaped/$sha)"
-  printf 'REAPED %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
+  if [ -n "$SALVAGE_REF" ]; then
+    printf 'SALVAGED %-50s %s -> %s (%s MB%s)\n' "$name" "$branch" "$SALVAGE_REF" "$((sz_kb/1024))" "$ign_note"
+    salvaged=$((salvaged+1))
+  else
+    printf 'REAPED %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
+  fi
   reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
 done 3<<< "$CANDIDATES"
 
@@ -892,8 +1114,8 @@ if [ "$MODE" = "apply" ]; then
     || die "reaped $reaped worktree(s) but 'git worktree prune' failed — stale registrations remain and will pin their branches in branch-cleanup.sh"
 fi
 
-printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d stuck=%d freed=%d MB\n' \
-  "$MODE" "$reaped" "$kept" "$stuck" "$((freed_kb/1024))"
+printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d stuck=%d salvaged=%d freed=%d MB\n' \
+  "$MODE" "$reaped" "$kept" "$stuck" "$salvaged" "$((freed_kb/1024))"
 if [ "$stuck" -gt 0 ]; then
   printf 'worktree-cleanup: %d of the kept worktree(s) hold abandoned work that no sweep will reap; salvage or discard it (#2831)\n' "$stuck"
 fi

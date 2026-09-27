@@ -1177,6 +1177,223 @@ t_keeps_merged_branch_with_orphaned_reflog_commit() {
   rm -rf "$root"
 }
 
+
+# --- salvage (#2831) ------------------------------------------------------------------
+run_salvage() { # <root> <mode> <salvage_age_hours> -> stdout
+  "$SUT" "$1/repo" "$1/manifest.tsv" "$2" 24 "$3" 2>&1
+}
+
+# abandoned_wt <root> <name> — every kind of work salvage must preserve: an unpushed
+# commit, a reflog-only commit, a staged edit, a different unstaged edit on top of it, a
+# deletion and an untracked file. Prints nothing; the fixture is asserted by the tests.
+abandoned_wt() {
+  local root=$1 name=$2 wt
+  add_wt "$root" "$name" unpushed || return 1
+  wt="$root/repo/.claude/worktrees/$name"
+  echo lost > "$wt/lost.txt"; git -C "$wt" add lost.txt; git -C "$wt" commit -qm "reflog only"
+  git -C "$wt" reset -q --hard HEAD~1                  # that commit now lives only in the reflog
+  echo staged > "$wt/file.txt"; git -C "$wt" add file.txt
+  echo unstaged > "$wt/file.txt"                       # working tree differs from the index
+  rm -f "$wt/new.txt"                                # an unstaged deletion
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+}
+
+t_salvage_is_off_by_default() {
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  abandoned_wt "$root" aband || { bad "salvage is off by default" "FIXTURE"; rm -rf "$root"; return; }
+  local out; out=$("$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1)
+  if grep -q 'KEEP .*aband ' <<<"$out" && [ -d "$root/repo/.claude/worktrees/aband" ] \
+     && grep -q '^REAPED .*spent' <<<"$out" \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "salvage is off by default: abandoned work stays a KEEP"
+  else
+    bad "salvage is off by default: abandoned work stays a KEEP" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_dry_run_reports_and_writes_nothing() {
+  local root; root=$(make_repo)
+  abandoned_wt "$root" aband || { bad "salvage dry-run" "FIXTURE"; rm -rf "$root"; return; }
+  local before; before=$(find "$root/repo/.git/objects" -type f | wc -l)
+  local out; out=$(run_salvage "$root" dry-run 1)
+  local after; after=$(find "$root/repo/.git/objects" -type f | wc -l)
+  if grep -q '^SALVAGE .*aband ' <<<"$out" && grep -q 'salvaged=1 ' <<<"$out" \
+     && [ -d "$root/repo/.claude/worktrees/aband" ] && [ ! -e "$root/manifest.tsv" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ] && [ "$before" = "$after" ]; then
+    ok "salvage dry-run reports SALVAGE and writes no ref, object or manifest"
+  else
+    bad "salvage dry-run reports SALVAGE and writes no ref, object or manifest" "objects $before->$after $out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_apply_preserves_every_kind_of_work() {
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed                       # control: an ordinary reap still happens
+  abandoned_wt "$root" aband || { bad "salvage apply" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/aband"
+  local head; head=$(git -C "$wt" rev-parse HEAD)
+  local lost; lost=$(git -C "$wt" rev-parse 'HEAD@{1}')
+  local out; out=$(run_salvage "$root" apply 1)
+  local base; base=$(git -C "$root/repo" for-each-ref --format='%(refname)' 'refs/salvaged/*/head' | sed 's#/head$##')
+  local problems=""
+  [ -e "$wt" ] && problems="$problems worktree-still-present"
+  grep -q '^SALVAGED .*aband .*refs/salvaged/' <<<"$out" || problems="$problems no-SALVAGED-line"
+  grep -q '^REAPED .*spent' <<<"$out" || problems="$problems control-not-reaped"
+  [ -n "$base" ] || problems="$problems no-salvage-ref"
+  [ "$(git -C "$root/repo" rev-parse "$base/head" 2>/dev/null)" = "$head" ] || problems="$problems head"
+  [ "$(git -C "$root/repo" rev-parse "$base/reflog/$lost" 2>/dev/null)" = "$lost" ] || problems="$problems reflog"
+  [ "$(git -C "$root/repo" show "$base/index:file.txt" 2>/dev/null)" = staged ] || problems="$problems index"
+  [ "$(git -C "$root/repo" show "$base/worktree:file.txt" 2>/dev/null)" = unstaged ] || problems="$problems worktree-edit"
+  [ "$(git -C "$root/repo" show "$base/worktree:untracked.txt" 2>/dev/null)" = draft ] || problems="$problems untracked"
+  git -C "$root/repo" cat-file -e "$base/worktree:new.txt" 2>/dev/null && problems="$problems deletion-lost"
+  grep -q "salvaged=$base" "$root/manifest.tsv" 2>/dev/null || problems="$problems manifest"
+  # The documented restore works: a new worktree at head plus the working-tree commit.
+  local rs="$root/restore"
+  if git -C "$root/repo" worktree add -q --detach "$rs" "$base/head" 2>/dev/null \
+     && git -C "$rs" checkout -q "$base/worktree" -- . 2>/dev/null; then
+    [ "$(cat "$rs/untracked.txt" 2>/dev/null)" = draft ] && [ "$(cat "$rs/file.txt")" = unstaged ] \
+      || problems="$problems restore-content"
+  else
+    problems="$problems restore-failed"
+  fi
+  if [ -z "$problems" ]; then
+    ok "salvage apply preserves commits, reflog, index, edits, deletions and untracked files, then reaps"
+  else
+    bad "salvage apply preserves commits, reflog, index, edits, deletions and untracked files, then reaps" "$problems :: $out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_respects_its_age() {
+  local root; root=$(make_repo)
+  abandoned_wt "$root" aband || { bad "salvage age" "FIXTURE"; rm -rf "$root"; return; }
+  local out; out=$(run_salvage "$root" apply 9999999)     # older than 2020, younger than this
+  if grep -q 'KEEP .*aband .*unpushed commit' <<<"$out" && grep -q 'stuck=1 ' <<<"$out" \
+     && [ -d "$root/repo/.claude/worktrees/aband" ]; then
+    ok "salvage waits for salvage_age_hours; a younger stuck tree stays a KEEP"
+  else
+    bad "salvage waits for salvage_age_hours; a younger stuck tree stays a KEEP" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_an_embedded_repository() {
+  local root; root=$(make_repo)
+  add_wt "$root" emb pushed
+  local wt="$root/repo/.claude/worktrees/emb"
+  git init -q "$wt/inner"; echo x > "$wt/inner/x"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*emb .*embedded repository' <<<"$out" && [ -f "$wt/inner/x" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "salvage KEEPs untracked content git would record as an embedded repository"
+  else
+    bad "salvage KEEPs untracked content git would record as an embedded repository" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_oversized_work() {
+  local root; root=$(make_repo)
+  add_wt "$root" big pushed
+  local wt="$root/repo/.claude/worktrees/big"
+  head -c 20480 /dev/zero > "$wt/blob.bin"
+  touch -t 202001010000 "$wt"
+  local out; out=$(WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*big .*more than 8 KB' <<<"$out" && [ -f "$wt/blob.bin" ]; then
+    ok "salvage KEEPs a tree with more changed data than the salvage cap"
+  else
+    bad "salvage KEEPs a tree with more changed data than the salvage cap" "$out"
+  fi
+  rm -rf "$root"
+}
+
+# submodule_wt <root> <name> <dirty|staged> — a worktree whose submodule holds work
+# salvage cannot capture. Hermetic form, as in t_keeps_staged_gitlink_update.
+submodule_wt() {
+  local root=$1 name=$2 kind=$3 sub seed subA subB wt
+  sub="$root/sub.git"; [ -d "$sub" ] || git init -q --bare "$sub"
+  seed="$root/seed-$name"
+  git init -q -b main "$seed"; git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
+  echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one; subA=$(git -C "$seed" rev-parse HEAD)
+  echo two > "$seed/f"; git -C "$seed" commit -qam two; subB=$(git -C "$seed" rev-parse HEAD)
+  git -C "$seed" push -q "$sub" main
+  add_wt "$root" "$name" pushed || return 1
+  wt="$root/repo/.claude/worktrees/$name"
+  git clone -q "$sub" "$wt/sub"
+  git -C "$wt" update-index --add --cacheinfo "160000,$subA,sub"
+  git -C "$wt" commit -qm "track sub at A"; git -C "$wt" push -q origin "claude/$name"
+  if [ "$kind" = staged ]; then
+    git -C "$wt" update-index --cacheinfo "160000,$subB,sub"
+  else
+    echo dirty >> "$wt/sub/f"                        # uncommitted work inside the submodule
+  fi
+  touch -t 202001010000 "$wt"
+}
+
+t_salvage_keeps_submodule_work() {
+  local root; root=$(make_repo)
+  if ! { submodule_wt "$root" subdirty dirty && submodule_wt "$root" substaged staged; }; then
+    bad "salvage keeps submodule work" "FIXTURE"; rm -rf "$root"; return
+  fi
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subdirty .*in a submodule (cannot be salvaged)' <<<"$out" \
+     && grep -q 'KEEP .*substaged .*in a submodule (cannot be salvaged)' <<<"$out" \
+     && [ "$(tail -1 "$root/repo/.claude/worktrees/subdirty/sub/f")" = dirty ] \
+     && [ -d "$root/repo/.claude/worktrees/substaged" ]; then
+    ok "salvage KEEPs dirty and staged submodule work it cannot capture"
+  else
+    bad "salvage KEEPs dirty and staged submodule work it cannot capture" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_rejects_a_bad_age() {
+  local root; root=$(make_repo)
+  local out rc; out=$(run_salvage "$root" dry-run 1x); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q 'salvage_age_hours must be a non-negative integer' <<<"$out"; then
+    ok "rejects a non-numeric salvage_age_hours"
+  else
+    bad "rejects a non-numeric salvage_age_hours" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+
+t_salvage_keeps_work_written_after_the_snapshot() {
+  # The snapshot is taken under the mutex, but a process whose CWD is outside the worktree
+  # can still write into it before the removal. The lsof shim does exactly that on its
+  # third call: the first is the initial scan, the second the pre-snapshot re-check, the
+  # third the post-snapshot re-check that must compare the tree against the snapshot.
+  local name="salvage KEEPs work written after its snapshot"
+  local root; root=$(make_repo)
+  abandoned_wt "$root" aband || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/aband"
+  local real_lsof; real_lsof=$(command -v lsof) || real_lsof=
+  [ -n "$real_lsof" ] || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  local shim="$root/shim" count="$root/lsof-calls"; mkdir -p "$shim"
+  cat > "$shim/lsof" <<SHIM
+#!/usr/bin/env bash
+n=\$(( \$(cat "$count" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$count"
+[ "\$n" -eq 3 ] && echo "written late" > "$wt/late.txt"
+exec "$real_lsof" "\$@"
+SHIM
+  chmod +x "$shim/lsof"
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if [ ! -e "$wt/late.txt" ]; then
+    bad "$name" "late file missing (never written, or deleted): $out"
+  elif grep -q 'KEEP .*aband .*changed after the salvage snapshot' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -1222,5 +1439,14 @@ t_keeps_branch_whose_open_pr_is_beyond_history
 t_keeps_when_pr_reopens_before_removal
 t_keeps_merged_branch_on_non_github_origin
 t_keeps_merged_branch_with_orphaned_reflog_commit
+t_salvage_is_off_by_default
+t_salvage_dry_run_reports_and_writes_nothing
+t_salvage_apply_preserves_every_kind_of_work
+t_salvage_respects_its_age
+t_salvage_keeps_an_embedded_repository
+t_salvage_keeps_oversized_work
+t_salvage_keeps_submodule_work
+t_salvage_rejects_a_bad_age
+t_salvage_keeps_work_written_after_the_snapshot
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
