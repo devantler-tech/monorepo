@@ -714,6 +714,7 @@ salvage_blocker() {
   # check the same thing read-only here and dry-run cannot promise a salvage apply refuses.
   gitlink_blocker "$wt" && return 0
   worktree_state_blocker "$wt" && return 0
+  conversion_blocker "$wt" && return 0
   # A linked worktree's submodule repositories live in its admin directory and are deleted
   # with it, and salvage records only their gitlinks.
   submodule_local_only_blocker "$wt" && return 0
@@ -747,9 +748,20 @@ gitlink_blocker() {
 # the admin directory the removal deletes and need not be in HEAD's reflog; an intent-to-add
 # entry has no blob, so the staged-index tree silently drops it.
 worktree_state_blocker() {
-  local wt=$1 admin refs ita
+  local wt=$1 admin refs ita entry
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
     || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
+  # A whitelist over what the removal deletes: every entry of the admin directory must be
+  # one salvage either captures or can lose. Anything else — a sequencer, rebase or merge
+  # state, a bisect log, a split index — is state the salvage refs cannot carry, so an
+  # unlisted entry blocks rather than each operation's markers being enumerated.
+  for entry in "$admin"/* "$admin"/.[!.]*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    case "${entry##*/}" in
+      HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|commondir|gitdir|index|config.worktree|logs|refs|modules) ;;
+      *) SALVAGE_NOTE="the worktree's git state holds ${entry##*/} (salvage cannot carry it)"; return 0 ;;
+    esac
+  done
   if [ -d "$admin/refs" ]; then
     # The ownership mutex this sweep holds is itself a per-worktree ref; it guards the
     # removal and carries no work, so it is the one ref excluded.
@@ -763,6 +775,32 @@ worktree_state_blocker() {
     || { SALVAGE_NOTE="cannot list intent-to-add entries"; return 0; }
   if [ -n "$ita" ]; then
     SALVAGE_NOTE="intent-to-add index entries exist (salvage cannot carry them)"; return 0
+  fi
+  return 1
+}
+
+# conversion_blocker <worktree> -> 0, with SALVAGE_NOTE, when `git add` might not store a
+# changed path's exact working-tree bytes: a clean filter, ident, an encoding, or a line-ending
+# conversion (attribute or core.autocrlf) rewrites them, and the removal then deletes the only
+# copy of the original. Checked over every changed, staged and untracked path.
+conversion_blocker() {
+  local wt=$1 autocrlf paths attrs
+  autocrlf=$(git -C "$wt" config --get core.autocrlf 2>/dev/null) || autocrlf=""
+  case "$autocrlf" in
+    ''|false) ;;
+    *) SALVAGE_NOTE="core.autocrlf=$autocrlf converts line endings (salvage would not keep the exact bytes)"; return 0 ;;
+  esac
+  paths=$( { git -C "$wt" ls-files -z -m -o --exclude-standard \
+             && git -C "$wt" diff --cached --name-only -z; } 2>/dev/null | tr '\0\n' '\n\001') \
+    || { SALVAGE_NOTE="cannot list changed paths for the conversion check"; return 0; }
+  case "$paths" in *$'\001'*) SALVAGE_NOTE="a changed path holds a newline (cannot check its attributes)"; return 0 ;; esac
+  [ -n "$paths" ] || return 1
+  # check-attr -z prints path NUL attribute NUL value NUL; keep only the values.
+  attrs=$(printf '%s\n' "$paths" | tr '\n' '\0' | git -C "$wt" check-attr --stdin -z filter ident working-tree-encoding text eol 2>/dev/null \
+          | tr '\0' '\n' | awk 'NR % 3 == 0') \
+    || { SALVAGE_NOTE="cannot read the attributes of the changed paths"; return 0; }
+  if grep -qvxE 'unspecified|unset' <<< "$attrs"; then
+    SALVAGE_NOTE="a changed path has a filter or conversion attribute (salvage would not keep the exact bytes)"; return 0
   fi
   return 1
 }
@@ -808,7 +846,7 @@ admin_modules_blocker() {
 # gitlinks, not `git submodule foreach`, which skips a populated submodule that is not
 # registered as active and would fail open on it.
 submodule_local_only_blocker() {
-  local repo=$1 links line path local_only
+  local repo=$1 links line path local_only sub_st sub_flags
   links=$(git -C "$repo" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') \
     || { SALVAGE_NOTE="cannot list the gitlinks of $repo for salvage"; return 0; }
   case "$links" in
@@ -822,6 +860,16 @@ submodule_local_only_blocker() {
       || { SALVAGE_NOTE="cannot list the local commits of submodule $path"; return 0; }
     if [ -n "$local_only" ]; then
       SALVAGE_NOTE="submodule $path holds commits no remote has (cannot be salvaged)"; return 0
+    fi
+    # Wherever its repository is stored (absorbed or an embedded .git directory), an
+    # initialised submodule must be clean and carry no hidden-index flags: salvage keeps
+    # only its gitlink, so an edit status cannot see would be deleted unrecorded.
+    sub_st=$(git -C "$repo/$path" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot read the status of submodule $path"; return 0; }
+    sub_flags=$(git -C "$repo/$path" ls-files -v 2>/dev/null) \
+      || { SALVAGE_NOTE="cannot read the index flags of submodule $path"; return 0; }
+    if [ -n "$sub_st" ] || grep -q '^[a-zS]' <<< "$sub_flags"; then
+      SALVAGE_NOTE="submodule $path has uncommitted or hidden-index changes (cannot be salvaged)"; return 0
     fi
     submodule_local_only_blocker "$repo/$path" && return 0
   done <<< "$links"

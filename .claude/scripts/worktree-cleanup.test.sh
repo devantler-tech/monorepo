@@ -1858,6 +1858,64 @@ t_salvage_dry_run_refuses_an_unsnappable_gitlink_change() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_hidden_edit_in_an_embedded_submodule() {
+  # The submodule keeps its repository in an embedded .git directory, not the admin dir.
+  local name="salvage KEEPs a hidden-index edit in a submodule with an embedded .git"
+  local root; root=$(make_repo)
+  clean_submodule_wt "$root" subemb || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subemb"
+  [ -d "$wt/sub/.git" ] || { bad "$name" "FIXTURE: .git is not a directory"; rm -rf "$root"; return; }
+  git -C "$wt/sub" update-index --assume-unchanged f; echo hidden >> "$wt/sub/f"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subemb .*hidden-index' <<<"$out" && grep -q hidden "$wt/sub/f" \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_unlisted_git_state() {
+  # A sequencer left between cherry-picks carries no operation marker; the admin-dir
+  # whitelist refuses it because the salvage refs cannot carry it.
+  local name="salvage dry-run KEEPs a worktree whose git state holds a sequencer"
+  local root; root=$(make_repo)
+  add_wt "$root" seq pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/seq" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  mkdir -p "$admin/sequencer" && echo "pick deadbeef x" > "$admin/sequencer/todo"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*seq .*holds sequencer' <<<"$out" && ! grep -q '^SALVAGE .*seq ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_filtered_path() {
+  local name="salvage dry-run KEEPs a changed path with a clean filter"
+  local root; root=$(make_repo)
+  add_wt "$root" filt pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/filt"
+  echo '*.secret filter=strip' > "$wt/.gitattributes"
+  git -C "$wt" config filter.strip.clean 'grep -v PRIVATE'
+  printf 'public\nPRIVATE line\n' > "$wt/notes.secret"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*filt .*filter or conversion' <<<"$out" && ! grep -q '^SALVAGE .*filt ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -1930,5 +1988,8 @@ t_salvage_still_salvages_beside_a_clean_admin_submodule
 t_salvage_keeps_a_per_worktree_ref
 t_salvage_keeps_an_intent_to_add_entry
 t_salvage_dry_run_refuses_an_unsnappable_gitlink_change
+t_salvage_keeps_a_hidden_edit_in_an_embedded_submodule
+t_salvage_keeps_unlisted_git_state
+t_salvage_keeps_a_filtered_path
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
