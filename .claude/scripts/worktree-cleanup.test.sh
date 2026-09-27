@@ -2634,6 +2634,92 @@ t_salvage_keeps_a_submodule_replace_ref() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_whitelisted_admin_name_of_the_wrong_type() {
+  local name="salvage KEEPs a worktree whose admin modules is a file, not a directory"
+  local root; root=$(make_repo)
+  add_wt "$root" modfile pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/modfile" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  echo unique > "$admin/modules"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*modfile .*modules is not the kind of entry' <<<"$out" && ! grep -q '^SALVAGE .*modfile ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_tag_a_symlinked_submodule_reflog_names() {
+  local name="salvage KEEPs a submodule whose symlinked reflog names a tag object"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subrlsym || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subrlsym" t g
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  git -C "$wt/sub" tag -a v-reflog -m "only here" && t=$(git -C "$wt/sub" rev-parse v-reflog) \
+    && git -C "$wt/sub" update-ref --create-reflog refs/tags/held "$t" \
+    && git -C "$wt/sub" update-ref refs/tags/held HEAD && git -C "$wt/sub" tag -d v-reflog >/dev/null \
+    && mv "$g/logs/refs/tags/held" "$root/held.log" && ln -s "$root/held.log" "$g/logs/refs/tags/held" \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subrlsym .*reflog naming a tag, tree or blob' <<<"$out" && ! grep -q '^SALVAGE .*subrlsym ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_staged_blob_in_a_checkout_less_submodule_repository() {
+  # The checkout is gone with the gitlink, but the retained repository's index still holds a
+  # staged blob no commit references.
+  local name="salvage KEEPs a removed submodule repository whose index holds a staged change"
+  local root; root=$(make_repo)
+  git init -q -b main "$root/subsrc" && echo one > "$root/subsrc/f" \
+    && git -C "$root/subsrc" add f && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm one \
+    && add_wt "$root" subidx pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subidx" g
+  git -C "$wt" -c protocol.file.allow=always submodule add -q "$root/subsrc" sub >/dev/null 2>&1 \
+    || { bad "$name" "FIXTURE: submodule add"; rm -rf "$root"; return; }
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  echo staged > "$wt/sub/g" && git -C "$wt/sub" add g
+  git -C "$wt" rm -qf sub
+  [ -d "$g" ] && [ ! -e "$wt/sub" ] || { bad "$name" "FIXTURE: repository not retained"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subidx .*staged changes or an unreadable index' <<<"$out" && ! grep -q '^SALVAGE .*subidx ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_reads_an_unterminated_fetch_head_line() {
+  local name="salvage preserves a commit named on an unterminated last FETCH_HEAD line"
+  local root; root=$(make_repo)
+  add_wt "$root" noeol pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/noeol" c admin
+  c=$(git -C "$wt" commit-tree 'HEAD^{tree}' -p HEAD -m fetched) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '%s\t\tbranch x of origin' "$c" > "$admin/FETCH_HEAD"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED .*noeol ' <<<"$out" \
+     && [ -n "$(git -C "$root/repo" for-each-ref --format='%(objectname)' "refs/salvaged/*/reflog/$c")" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out :: $(git -C "$root/repo" for-each-ref refs/salvaged)"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -2741,5 +2827,9 @@ t_salvage_keeps_resolve_undo_entries_in_a_submodule
 t_salvage_preserves_an_uppercase_fetch_head_commit
 t_salvage_handles_a_very_long_basename
 t_salvage_keeps_a_submodule_replace_ref
+t_salvage_keeps_a_whitelisted_admin_name_of_the_wrong_type
+t_salvage_keeps_a_tag_a_symlinked_submodule_reflog_names
+t_salvage_keeps_a_staged_blob_in_a_checkout_less_submodule_repository
+t_salvage_reads_an_unterminated_fetch_head_line
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -778,7 +778,8 @@ worktree_state_blocker() {
   for entry in "$admin"/* "$admin"/.[!.]* "$admin"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     case "${entry##*/}" in
-      HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|commondir|gitdir|index|config.worktree|logs|refs|modules) ;;
+      HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|commondir|gitdir|index|config.worktree|logs|refs|modules)
+        entry_type_ok "$entry" || { SALVAGE_NOTE="the worktree's ${entry##*/} is not the kind of entry git writes there"; return 0; } ;;
       *) SALVAGE_NOTE="the worktree's git state holds ${entry##*/} (salvage cannot carry it)"; return 0 ;;
     esac
   done
@@ -838,6 +839,16 @@ unclassified_module_content() {
   return 0
 }
 
+# entry_type_ok <path> -> 0 when a whitelisted git-directory entry has the type git gives it:
+# the directory-shaped names are real directories, everything else a file (a symlink to a
+# file counts, as git reads through it). Anything else is state the checks never inspect.
+entry_type_ok() {
+  case "${1##*/}" in
+    logs|refs|modules|objects|branches) [ -d "$1" ] && [ ! -L "$1" ] ;;
+    *) [ -f "$1" ] ;;
+  esac
+}
+
 # pseudo_ref_tag <gitdir> <shas> -> 0 when any of the (pseudo-ref) objects is not a commit, or
 # its type cannot be read. `rev-list` would peel an annotated tag to its commit and preserve
 # only that, losing the tag object's message or signature.
@@ -857,7 +868,8 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   for entry in "$g"/* "$g"/.[!.]* "$g"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     case "${entry##*/}" in
-      HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|config|config.worktree|description|objects|refs|packed-refs|logs|index|modules|shallow|branches) ;;
+      HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|config|config.worktree|description|objects|refs|packed-refs|logs|index|modules|shallow|branches)
+        entry_type_ok "$entry" || { SALVAGE_NOTE="submodule $label has ${entry##*/} of an unexpected type (salvage cannot carry it)"; return 0; } ;;
       hooks|info)
         # A hook someone wrote may exist nowhere else (see custom_git_metadata).
         custom_git_metadata "$entry" \
@@ -896,7 +908,7 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   # --reflog` peels it. Every object any reflog names must therefore be a commit (a missing
   # object has nothing left to lose).
   local reflog_types
-  reflog_types=$( { find "$g/logs" -type f -exec cat {} + 2>/dev/null || [ ! -d "$g/logs" ]; } \
+  reflog_types=$( { find "$g/logs" ! -type d -exec cat {} + 2>/dev/null || [ ! -d "$g/logs" ]; } \
                   | awk '{ for (i = 1; i <= 2; i++) if ((length($i) == 40 || length($i) == 64) && $i ~ /^[0-9a-f]+$/ && $i !~ /^0+$/) print $i }' \
                   | sort -u | git --git-dir="$g" --work-tree="$g" cat-file --batch-check='%(objecttype)' 2>/dev/null) \
     || { SALVAGE_NOTE="cannot read the reflogs of submodule $label"; return 0; }
@@ -1023,6 +1035,14 @@ admin_modules_blocker() {
       || { SALVAGE_NOTE="cannot read submodule repository $label"; return 0; }
     if [ -n "$local_only" ]; then
       SALVAGE_NOTE="submodule repository $label holds commits no remote has (cannot be salvaged)"; return 0
+    fi
+    # The index is deleted with the repository whether or not a checkout remains, and a staged
+    # blob no commit holds lives only there: it must match HEAD exactly.
+    if [ -e "$g/index" ] || [ -L "$g/index" ]; then
+      git --git-dir="$g" --work-tree="$g" diff-index --cached --quiet HEAD -- 2>/dev/null; rc=$?
+      if [ "$rc" -ne 0 ]; then
+        SALVAGE_NOTE="submodule repository $label has staged changes or an unreadable index (cannot be salvaged)"; return 0
+      fi
     fi
     # Exit 1 is the one "no checkout configured" answer; any other failure is unreadable.
     w=$(git --git-dir="$g" --work-tree="$g" config core.worktree 2>/dev/null); rc=$?
@@ -1215,7 +1235,7 @@ pseudo_ref_commits() {
   for f in ORIG_HEAD FETCH_HEAD; do
     [ -e "$g/$f" ] || continue
     [ -r "$g/$f" ] || return 1
-    while IFS= read -r sha; do
+    while IFS= read -r sha || [ -n "$sha" ]; do
       sha=$(printf '%s' "${sha%%[[:space:]]*}" | tr 'A-F' 'a-f')
       [ -n "$sha" ] || continue
       # A token that is not an object id means the file cannot be read as expected.
