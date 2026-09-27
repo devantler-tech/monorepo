@@ -457,7 +457,7 @@ recheck_mutable_gates() {
   esac
 
   st=$(porcelain_status "$wt") \
-    || { keep "$wt" "cannot re-read status before removal"; return 1; }
+    || { keep "$wt" "cannot re-read or classify status before removal"; return 1; }
   count_real_changes "$wt" "$st"
   if [ -n "$SALVAGE_TREE" ]; then
     # Salvaged: the work may be uncommitted, so compare it with the snapshot instead.
@@ -471,6 +471,16 @@ recheck_mutable_gates() {
     if [ "$now_tree" != "$SALVAGE_TREE" ] || [ "$now_index" != "$SALVAGE_INDEX_TREE" ]; then
       keep "$wt" "working tree or index changed after the salvage snapshot ($SALVAGE_REF)"; return 1
     fi
+    # A commit made and reset away after the snapshot lives only in this worktree's reflog,
+    # which the removal deletes. Every reflog-only commit must already be under the salvage
+    # refs; any other means the worktree was touched after the snapshot.
+    local now_orphans o
+    now_orphans=$(reflog_orphans "$wt") || { keep "$wt" "cannot re-read the reflog before removal"; return 1; }
+    while IFS= read -r o; do
+      [ -n "$o" ] || continue
+      [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$SALVAGE_REF/reflog/$o" 2>/dev/null)" = "$o" ] \
+        || { keep "$wt" "a reflog-only commit appeared after the salvage snapshot ($SALVAGE_REF)"; return 1; }
+    done <<< "$now_orphans"
   elif [ -n "$salvage_reason" ]; then
     # Salvage candidate before its snapshot: its changes are expected and are about to be
     # preserved, but not work in a submodule, which salvage cannot capture.
@@ -538,10 +548,19 @@ submodule_owned_worktree() {
 # in count_real_changes — so its uncommitted files were counted as ordinary work that
 # salvage can capture, and deleted with the worktree. `-z` never quotes. The rename and
 # copy SOURCE path that `-z` emits as a separate field is dropped, so every line keeps
-# the `XY path` shape. Non-zero when status cannot be read (pipefail is set).
+# the `XY path` shape. Non-zero when status cannot be read
+# (pipefail is set) or cannot be split faithfully: a path holding a newline would be cut
+# into several records here, so it fails closed instead of being classified by a
+# truncated path. NUL becomes the record separator and a real newline becomes \001, so
+# either kind of path is detected rather than split.
 porcelain_status() {
-  git -C "$1" status --porcelain -z --untracked-files=all --ignore-submodules=none 2>/dev/null \
-    | tr '\0' '\n' \
+  local out
+  out=$(git -C "$1" status --porcelain -z --untracked-files=all --ignore-submodules=none 2>/dev/null \
+        | tr '\0\n' '\n\001') || return 1
+  case "$out" in
+    *$'\001'*) return 1 ;;
+  esac
+  printf '%s\n' "$out" \
     | awk 'skip { skip = 0; next } { print } /^([RC].|.[RC]) / { skip = 1 }'
 }
 
@@ -676,6 +695,23 @@ salvage_blocker() {
       return 0
     fi
   done <<< "$list"
+  # A linked worktree's submodule repositories live in its admin directory and are deleted
+  # with it, and salvage records only their gitlinks. A submodule whose HEAD matches the
+  # recorded gitlink shows no status entry at all, yet its reflog can hold the only
+  # reference to a commit it made and reset away. Block salvage on any such commit.
+  local subs sub sub_orphans
+  # shellcheck disable=SC2016  # $toplevel/$sm_path are expanded by `submodule foreach`
+  subs=$(git -C "$wt" submodule foreach --quiet --recursive \
+           'printf "%s\n" "$toplevel/$sm_path"' 2>/dev/null) \
+    || { SALVAGE_NOTE="cannot enumerate initialised submodules for salvage"; return 0; }
+  while IFS= read -r sub; do
+    [ -n "$sub" ] || continue
+    sub_orphans=$(reflog_orphans "$sub") \
+      || { SALVAGE_NOTE="cannot read the reflog of submodule $sub"; return 0; }
+    if [ -n "$sub_orphans" ]; then
+      SALVAGE_NOTE="a submodule holds commits only in its reflog ($sub; cannot be salvaged)"; return 0
+    fi
+  done <<< "$subs"
   return 1
 }
 
@@ -714,12 +750,23 @@ salvage_commit() {
     git -C "$1" commit-tree --no-gpg-sign "$2" -p "$3" -m "$4" 2>/dev/null
 }
 
-# salvage_write <worktree> <sha> -> writes and verifies refs/salvaged/<id>/*, setting
+# reflog_orphans <repo> -> prints every HEAD-reflog commit of <repo> that no remote-tracking
+# ref reaches, one per line. Non-zero on any read failure, so callers fail closed. Used for a
+# worktree and for each of its initialised submodules.
+reflog_orphans() {
+  local reflog
+  reflog=$(git -C "$1" reflog show --format=%H HEAD 2>/dev/null) || return 1
+  [ -n "$reflog" ] || return 0
+  # shellcheck disable=SC2086  # one sha per word
+  git -C "$1" rev-list --no-walk $reflog --not --remotes 2>/dev/null
+}
+
+$1 refs/salvaged/<id>/*, setting
 # SALVAGE_REF, SALVAGE_TREE (whole working tree) and SALVAGE_INDEX_TREE (staged index).
 # Returns non-zero, with SALVAGE_NOTE, on any failure; refs already written stay (they
 # only preserve data) and the caller KEEPs the worktree.
 salvage_write() {
-  local wt=$1 sha=$2 id base idx_tree wt_tree idx_commit wt_commit reflog orphans o path_id
+  local wt=$1 sha=$2 id base idx_tree wt_tree idx_commit wt_commit orphans o path_id
   SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""
   # The namespace must be unique per WORKTREE, not per basename: two registered nested
   # worktrees can share a basename and a HEAD, and salvaged in the same second they would
@@ -734,13 +781,7 @@ salvage_write() {
   git check-ref-format "$base/head" 2>/dev/null || { SALVAGE_NOTE="unusable salvage ref name $base"; return 1; }
   idx_tree=$(git -C "$wt" write-tree 2>/dev/null) || { SALVAGE_NOTE="cannot write the staged index as a tree"; return 1; }
   wt_tree=$(snapshot_tree "$wt") || return 1
-  reflog=$(git -C "$wt" reflog show --format=%H HEAD 2>/dev/null) || { SALVAGE_NOTE="cannot read the HEAD reflog"; return 1; }
-  orphans=""
-  if [ -n "$reflog" ]; then
-    # shellcheck disable=SC2086  # one sha per word
-    orphans=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog --not --remotes 2>/dev/null) \
-      || { SALVAGE_NOTE="cannot find reflog-only commits"; return 1; }
-  fi
+  orphans=$(reflog_orphans "$wt") || { SALVAGE_NOTE="cannot find reflog-only commits"; return 1; }
   idx_commit=$(salvage_commit "$wt" "$idx_tree" "$sha" "salvage: staged index of $(basename "$wt")") \
     || { SALVAGE_NOTE="cannot commit the staged index"; return 1; }
   wt_commit=$(salvage_commit "$wt" "$wt_tree" "$sha" "salvage: working tree of $(basename "$wt")") \
@@ -927,7 +968,7 @@ while IFS= read -r wt <&3; do
   # reports a clean worktree while holding non-ignored untracked authored files, and
   # apply mode would delete their only copy.
   status=$(porcelain_status "$wt") || {
-    keep "$wt" "cannot read status"; continue; }
+    keep "$wt" "cannot read or classify status (unreadable, or a path holds a newline)"; continue; }
 
   # `git status` cannot see edits to files carrying the assume-unchanged or
   # skip-worktree index bits, so a worktree holding only such edits reads as clean.
@@ -1044,6 +1085,13 @@ while IFS= read -r wt <&3; do
     if ! still_the_reviewed_worktree "$wt" "$branch" "$sha" "$merged_head"; then
       worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
       keep "$wt" "$IDENTITY_NOTE"; continue
+    fi
+    # Re-apply the salvage blockers under the mutex: the first check ran before the lock,
+    # so data written since then (a large file, a new submodule commit) would otherwise be
+    # snapshotted past the cap, or deleted with the worktree.
+    if salvage_blocker "$wt"; then
+      worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+      keep_stuck "$wt" "$salvage_reason; not salvaged: $SALVAGE_NOTE"; continue
     fi
     if ! salvage_write "$wt" "$sha"; then
       worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"

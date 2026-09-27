@@ -1483,6 +1483,126 @@ SHIM
   rm -rf "$root"
 }
 
+# lsof_hook_shim <root> <call-number> <command> — prints a PATH dir whose lsof runs
+# <command> on its <call-number>th invocation, then defers to the real lsof. Call 1 is
+# the initial scan, 2 the pre-snapshot re-check, 3 the post-snapshot re-check.
+lsof_hook_shim() {
+  local root=$1 n=$2 cmd=$3 real_lsof shim="$1/shim" count="$1/lsof-calls"
+  real_lsof=$(command -v lsof) || return 1
+  mkdir -p "$shim"
+  cat > "$shim/lsof" <<SHIM
+#!/usr/bin/env bash
+n=\$(( \$(cat "$count" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$count"
+[ "\$n" -eq $n ] && { $cmd; }
+exec "$real_lsof" "\$@"
+SHIM
+  chmod +x "$shim/lsof"
+  printf '%s' "$shim"
+}
+
+t_salvage_keeps_submodule_work_at_a_newline_path() {
+  # -z output is NUL-delimited, but a path holding a newline would still be cut in two
+  # once the records are read line by line, hiding the submodule behind a truncated path.
+  local name="salvage KEEPs a worktree whose changed path holds a newline"
+  local root; root=$(make_repo)
+  local sub="$root/subn.git" seed="$root/seedn" subA wt sp=$'sub\nline'
+  git init -q --bare "$sub"; git init -q -b main "$seed"
+  git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
+  echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one
+  subA=$(git -C "$seed" rev-parse HEAD); git -C "$seed" push -q "$sub" main
+  add_wt "$root" subn pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  wt="$root/repo/.claude/worktrees/subn"
+  git clone -q "$sub" "$wt/$sp"
+  git -C "$wt" update-index --add --cacheinfo "160000,$subA,$sp"
+  git -C "$wt" commit -qm "track a newline submodule"; git -C "$wt" push -q origin claude/subn
+  echo dirty >> "$wt/$sp/f"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subn .*classify status' <<<"$out" \
+     && [ "$(tail -1 "$wt/$sp/f" 2>/dev/null)" = dirty ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_reflog_only_commit() {
+  # The submodule is back at its recorded gitlink, so the parent's status has no entry
+  # for it, but its reflog holds the only reference to a commit it made and reset away.
+  local name="salvage KEEPs a submodule whose reflog holds the only copy of a commit"
+  local root; root=$(make_repo)
+  local sub="$root/subr.git" seed="$root/seedr" subA wt lost
+  git init -q --bare "$sub"; git init -q -b main "$seed"
+  git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
+  echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one
+  subA=$(git -C "$seed" rev-parse HEAD); git -C "$seed" push -q "$sub" main
+  add_wt "$root" subr pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  wt="$root/repo/.claude/worktrees/subr"
+  git clone -q "$sub" "$wt/sub"
+  git -C "$wt/sub" config user.email t@t.t; git -C "$wt/sub" config user.name t
+  git -C "$wt" update-index --add --cacheinfo "160000,$subA,sub"
+  printf '[submodule "sub"]\n\tpath = sub\n\turl = %s\n' "$sub" > "$wt/.gitmodules"
+  git -C "$wt" add .gitmodules
+  git -C "$wt" commit -qm "track sub"; git -C "$wt" push -q origin claude/subr
+  echo two >> "$wt/sub/f"; git -C "$wt/sub" commit -qam "only in the reflog"
+  lost=$(git -C "$wt/sub" rev-parse HEAD)
+  git -C "$wt/sub" reset -q --hard "$subA"
+  echo draft > "$wt/untracked.txt"                   # ordinary salvageable work in the parent
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subr .*holds commits only in its reflog' <<<"$out" \
+     && git -C "$wt/sub" cat-file -e "$lost" 2>/dev/null \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_reflog_commit_made_after_the_snapshot() {
+  # A commit made and reset away after the snapshot leaves HEAD, index and tree exactly as
+  # snapshotted, so only a reflog comparison can see it.
+  local name="salvage KEEPs a worktree that gained a reflog-only commit after its snapshot"
+  local root; root=$(make_repo)
+  abandoned_wt "$root" aband || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/aband" shim
+  shim=$(lsof_hook_shim "$root" 3 "git -C '$wt' commit -qm late >/dev/null 2>&1 && git -C '$wt' reset -q --soft HEAD~1") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  local late; late=$(git -C "$wt" rev-parse 'HEAD@{1}' 2>/dev/null)
+  if [ ! -d "$wt" ]; then
+    bad "$name" "worktree removed: $out"
+  elif [ "$(git -C "$wt" log -1 --format=%s "$late" 2>/dev/null)" != late ]; then
+    bad "$name" "FIXTURE: no late reflog commit: $out"
+  elif grep -q 'KEEP .*aband .*reflog-only commit appeared after the salvage snapshot' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_rechecks_its_cap_under_the_mutex() {
+  # Data written between the first blocker check and the snapshot must still meet the cap.
+  local name="salvage re-applies its size cap immediately before the snapshot"
+  local root; root=$(make_repo)
+  abandoned_wt "$root" aband || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/aband" shim
+  shim=$(lsof_hook_shim "$root" 2 "head -c 20480 /dev/zero > '$wt/late.bin'") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  local out; out=$(PATH="$shim:$PATH" WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*aband .*more than 8 KB' <<<"$out" && [ -f "$wt/late.bin" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -1540,5 +1660,9 @@ t_salvage_keeps_work_written_after_the_snapshot
 t_salvage_keeps_oversized_staged_only_work
 t_salvage_keeps_submodule_work_at_a_quoted_path
 t_salvage_namespaces_are_unique_per_worktree
+t_salvage_keeps_submodule_work_at_a_newline_path
+t_salvage_keeps_a_submodule_reflog_only_commit
+t_salvage_keeps_a_reflog_commit_made_after_the_snapshot
+t_salvage_rechecks_its_cap_under_the_mutex
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
