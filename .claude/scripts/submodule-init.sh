@@ -15,6 +15,8 @@
 #   .claude/scripts/submodule-init.sh --all           # init + repair + probe every submodule (first clone)
 #   .claude/scripts/submodule-init.sh --check         # non-destructive probe of every initialised submodule
 #   .claude/scripts/submodule-init.sh --advance <path>  # move a populated checkout to HEAD's recorded pin
+#   .claude/scripts/submodule-init.sh --sync <from-sha>  # after detaching onto a PR head: bring every gitlink
+#                                                       # that changed since <from-sha> onto HEAD's pin
 #
 # `--check` never modifies submodule content, tracked files, or other sessions' worktrees, but it is
 # NOT strictly read-only: to prove isolation empirically it adds and then removes a throwaway,
@@ -318,20 +320,25 @@ probe_nested_checkouts() {
   return "$rc"
 }
 
-all_paths() { git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}'; }
+# NUL-separated records, so a registered path containing spaces or newlines is returned whole.
+all_paths() {
+  local rec
+  while IFS= read -r -d '' rec; do printf '%s\0' "${rec#*$'\n'}"; done \
+    < <(git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$')
+}
 # "Initialised" means git actually treats it as its own repository here — again, asked, not assumed.
 # Select every submodule that is CHECKED OUT here. Deliberately NOT "every submodule git resolves
 # correctly": a colliding submodule resolves elsewhere, and filtering on that would drop it from the
 # sweep — the fail-open this script must never have.
 initialised_paths() {
   local p
-  while read -r p; do is_populated "$p" && printf '%s\n' "$p"; done < <(all_paths)
+  while IFS= read -r -d '' p; do is_populated "$p" && printf '%s\0' "$p"; done < <(all_paths)
 }
 
 # Is $1 one of the paths declared in .gitmodules? Only these may have their config rewritten.
 is_registered_submodule() {
   local p=$1 x
-  while read -r x; do [ "$x" = "$p" ] && return 0; done < <(all_paths)
+  while IFS= read -r -d '' x; do [ "$x" = "$p" ] && return 0; done < <(all_paths)
   return 1
 }
 
@@ -438,18 +445,24 @@ origin_is_own() {
   path=$1
   shown=$path
   [ "$super" = . ] || shown="$super/$path"
-  key=$(git -C "$super" config -f .gitmodules --get-regexp '^submodule\..*\.path$' |
-    awk -v p="$path" '$2 == p { print $1 }')
+  local rec rec_key rec_val keys=()
+  while IFS= read -r -d '' rec; do
+    rec_key=${rec%%$'\n'*}
+    rec_val=${rec#*$'\n'}
+    [ "$rec_val" = "$path" ] && keys+=("$rec_key")
+  done < <(git -C "$super" config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
   # Two sections declaring one path register two repositories for it; neither is proven.
-  if [ "$(printf '%s\n' "$key" | grep -c .)" -gt 1 ]; then
+  if [ "${#keys[@]}" -gt 1 ]; then
     warn "$shown — .gitmodules registers this path more than once, so which repository it should be is ambiguous. Do not read or edit it."
     return 1
   fi
+  key="${keys[0]:-}"
   name=${key#submodule.}
   name=${name%.path}
   want=$(git -C "$super" config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || want=''
   case "$want" in
     ./* | ../*) want=$(resolve_relative_url "$super" "$want") ;;
+    *) want=$(git -C "$super" ls-remote --get-url "$want" 2>/dev/null || printf '%s' "$want") ;;
   esac
   got=$(single_origin_url "$super/$path")
   if [ -z "$key" ] || [ -z "$want" ] || [ -z "$got" ]; then
@@ -481,7 +494,10 @@ init_repair_probe() {
   else
     # Fresh (empty) submodule: populate it at its pinned commit, then relocate the `core.worktree`
     # that `git submodule update` writes into the shared config.
-    git submodule update --init "$path"
+    # `--checkout` overrides a configured `submodule.<name>.update` (which can name a shell command),
+    # and no replace refs may substitute a different tree for the pinned commit. The path is a
+    # literal pathspec: a registered name like `:(glob)*` would otherwise select other submodules.
+    GIT_NO_REPLACE_OBJECTS=1 git submodule update --init --checkout -- ":(literal)$path"
     # It can exit 0 having populated NOTHING — observed 2026-07-26 running from a linked superproject
     # worktree while a sibling worktree already held that submodule: git printed `checked out '<sha>'`,
     # exited 0, and left the directory empty. `probe` below verifies ISOLATION, not content, so it
@@ -531,6 +547,7 @@ advance() {
   # WRITE — into that other tree before this function ever repaired the configuration.
   repair "$path"
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
+  origin_is_own "$path" || die "'$path' origin does not match its registered repository — refusing to advance"
 
   local status
   status=$(git --no-replace-objects -C "$path" status --porcelain --untracked-files=all 2>/dev/null) ||
@@ -614,6 +631,196 @@ advance() {
   printf 'submodule-init: %s — advanced to %s\n' "$path" "$target"
 }
 
+# Bring every submodule the superproject's move from <from> to HEAD touched onto HEAD's gitlinks —
+# the submodule half of landing a worktree on a PR head (monorepo#2833). `git checkout --detach`
+# moves only the superproject, and `--recurse-submodules` is unsafe here (see *Git safety*), so this
+# composes the modes above per changed gitlink instead:
+#   - changed or re-added, populated → `advance` (fetches the pin, refuses dirt and ahead-of-pin work)
+#   - added, or changed but not populated here
+#                                   → `init_repair_probe` (populates at the pin, repairs, probes),
+#                                     because the change under review lives in that checkout — but
+#                                     only for a repository in the devantler-tech organisation
+#   - removed by the move           → refuse if the directory cannot be listed, still holds the old
+#                                     repository, or holds anything HEAD does not track there
+# Fails closed: an unreadable <from>, a diff that cannot be read, or any failed step stops the run,
+# and a final `submodule status` must show every changed path on HEAD's pin.
+
+# Would populating the submodule at $1 clone a repository inside the portfolio? A PR can register
+# any URL in `.gitmodules`, and populating it clones that URL, so an added submodule must name a
+# devantler-tech repository before anything contacts it. Spelled literally, as an allow-list: an
+# unrecognised spelling, a relative URL or a doubled registration is refused, never guessed at.
+sync_url_allowed() {
+  local path=$1 rec key value names='' name url configured
+  # NUL-separated `key\nvalue` records, so a path containing spaces is compared whole.
+  while IFS= read -r -d '' rec; do
+    key=${rec%%$'\n'*}
+    value=${rec#*$'\n'}
+    [ "$value" = "$path" ] && names="${names}${key}"$'\n'
+  done < <(git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
+  [ "$(printf '%s' "$names" | grep -c .)" -eq 1 ] || return 1
+  name=${names%$'\n'}
+  name=${name#submodule.}
+  name=${name%.path}
+  url=$(git config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || return 1
+  sync_url_is_portfolio "$url" || return 1
+  # `submodule update --init` keeps a URL already recorded in this repository's config rather than
+  # re-reading `.gitmodules`, so that recorded value is the one that would really be cloned.
+  if configured=$(git config --get "submodule.$name.url" 2>/dev/null); then
+    sync_url_is_portfolio "$configured" || return 1
+  fi
+  # If a deinitialized or re-added submodule retains its repository under .git/modules, `submodule update --init`
+  # reuses that repository and fetches its origin remote. Validate that retained module repository's
+  # effective fetch URL before initialization touches it.
+  local super_common super_git mdir mod_url
+  super_common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git rev-parse --git-dir 2>/dev/null)
+  super_git=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)
+  for mdir in \
+    ${super_common:+"$super_common/modules/$name"} \
+    ${super_common:+"$super_common/modules/$path"} \
+    ${super_git:+"$super_git/modules/$name"} \
+    ${super_git:+"$super_git/modules/$path"}; do
+    [ -d "$mdir" ] || continue
+    while IFS= read -r mod_url; do
+      [ -n "$mod_url" ] || continue
+      sync_url_is_portfolio "$mod_url" || return 1
+    done < <(git --git-dir="$mdir" config --get-all remote.origin.url 2>/dev/null || true)
+  done
+  return 0
+}
+
+sync_url_is_portfolio() {
+  case "$1" in
+    git@github.com:devantler-tech/?* | ssh://git@github.com/devantler-tech/?* | https://github.com/devantler-tech/?*)
+      case "$1" in
+        *..* | *'?'* | *'#'* | *' '*) return 1 ;;
+      esac
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+sync_from() {
+  local from=$1 diff_file meta path old_mode new_mode st residue
+  local -a changed=() added_paths=() removed_paths=() records=()
+  from=$(git --no-replace-objects rev-parse --verify --quiet "${from}^{commit}") ||
+    die "'$1' is not a commit in this repository — pass the superproject HEAD from before the move"
+  # NUL-terminated raw records: a path git would otherwise quote (non-ASCII, tabs, quotes) arrives
+  # verbatim, so every check below looks at the real directory.
+  diff_file=$(mktemp) || die "could not create a temporary file — refusing to sync"
+  sync_completed=0
+  on_sync_exit() {
+    local status=$?
+    rm -f "$diff_file"
+    if [ "$sync_completed" != 1 ] && [ "$status" = 0 ]; then
+      exit 1
+    fi
+    exit "$status"
+  }
+  trap on_sync_exit EXIT
+  if ! git --no-replace-objects diff-tree -z -r --no-renames --raw "$from" HEAD > "$diff_file"; then
+    die "could not diff $from..HEAD — refusing to sync"
+  fi
+  while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
+    old_mode=${meta%% *}
+    old_mode=${old_mode#:}
+    new_mode=$(printf '%s' "$meta" | awk '{print $2}')
+    [ "$old_mode" = 160000 ] || [ "$new_mode" = 160000 ] || continue
+    records+=("$meta" "$path")
+    if [ "$new_mode" = 160000 ]; then
+      added_paths+=("$path")
+    else
+      removed_paths+=("$path")
+    fi
+  done < "$diff_file"
+
+  local i a_path is_rename cur_dir
+  for ((i=0; i<${#records[@]}; i+=2)); do
+    meta="${records[i]}"
+    path="${records[i+1]}"
+    old_mode=${meta%% *}
+    old_mode=${old_mode#:}
+    new_mode=$(printf '%s' "$meta" | awk '{print $2}')
+    if [ "$new_mode" != 160000 ]; then
+      # If this removed path is filesystem-equivalent to an added submodule (case-only rename on
+      # a case-insensitive filesystem), the checkout belongs to the new submodule and is not residue.
+      is_rename=0
+      for a_path in "${added_paths[@]+"${added_paths[@]}"}"; do
+        if same_dir "$path" "$a_path"; then
+          is_rename=1
+          break
+        fi
+      done
+      if [ "$is_rename" -eq 1 ]; then
+        printf 'submodule-init: %s — renamed to %s at HEAD\n' "$path" "$a_path"
+        continue
+      fi
+
+      # Check all ancestor components of $path. An unsearchable ancestor conceals everything below it.
+      cur_dir="${path%/*}"
+      while [ "$cur_dir" != "$path" ] && [ -n "$cur_dir" ] && [ "$cur_dir" != "." ]; do
+        if [ -e "$cur_dir" ] && { ! ls -A "$cur_dir" > /dev/null 2>&1 || { [ -d "$cur_dir" ] && [ ! -x "$cur_dir" ]; }; }; then
+          die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+        fi
+        if [ "$cur_dir" = "${cur_dir%/*}" ]; then
+          break
+        fi
+        cur_dir="${cur_dir%/*}"
+      done
+
+      # A directory that cannot be listed, or listed but not searched, is unexamined — never "nothing
+      # left behind". A replacement symlink at HEAD is inspected as a link directly; dereferencing it
+      # would inspect its target rather than the removed path.
+      if [ ! -L "$path" ]; then
+        if [ -e "$path" ] && { ! ls -A "$path" > /dev/null 2>&1 || { [ -d "$path" ] && [ ! -x "$path" ]; }; }; then
+          die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+        fi
+
+        # A dangling symlink at .git is missed by [ -e "$path/.git" ] and ignored by git status,
+        # but still represents repository residue.
+        if [ -e "$path/.git" ] || [ -L "$path/.git" ]; then
+          die "'$path' is no longer a submodule at HEAD but still holds its old repository — preserve or remove it before evaluating this tree"
+        fi
+      fi
+
+      # Anything there that HEAD does not track — untracked or ignored — is residue, including
+      # beside the files of a tracked directory that replaced the gitlink.
+      if ! residue=$(git --no-replace-objects status --porcelain --untracked-files=all --ignored \
+        -- ":(literal)$path" 2>/dev/null); then
+        die "could not read the status of '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+      fi
+      if [ -n "$residue" ]; then
+        die "'$path' is no longer a submodule at HEAD but still holds content HEAD does not track — preserve or remove it before evaluating this tree"
+      fi
+      printf 'submodule-init: %s — removed at HEAD, nothing left behind\n' "$path"
+      continue
+    fi
+    changed+=("$path")
+    # A populated checkout moves with `advance` whether the gitlink changed or was re-added: `init`
+    # only repairs a populated tree and would leave it on its old commit.
+    if is_populated "$path"; then
+      advance "$path"
+    else
+      if ! sync_url_allowed "$path"; then
+        die "'$path' is registered to a repository outside devantler-tech (or to one this check cannot read) — refusing to clone it"
+      fi
+      init_repair_probe "$path"
+    fi
+  done < "$diff_file"
+  for path in "${changed[@]+"${changed[@]}"}"; do
+    st=$(git --no-replace-objects submodule status -- ":(literal)$path" 2>/dev/null) ||
+      die "could not read submodule status for '$path' after syncing"
+    case "$st" in
+      ' '*) ;;
+      *) die "'$path' is not on HEAD's recorded pin after syncing ($st)" ;;
+    esac
+  done
+  printf 'submodule-init: submodules in sync with HEAD (changes since %s)\n' "$from"
+  sync_completed=1
+  rm -f "$diff_file"
+  trap - EXIT
+}
+
 # Stop here when SOURCED, so the self-test can exercise the path-comparison helpers directly. The
 # case-only false positive `same_dir` fixes needs a case-insensitive volume, so an end-to-end
 # reproduction cannot run on the filesystem CI uses — unit-testing the comparison itself is what
@@ -635,7 +842,7 @@ advance() {
 super_root=$(git rev-parse --show-toplevel) || die 'not inside a git repository'
 cd "$super_root"
 
-[ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check | --advance <path>'
+[ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check | --advance <path> | --sync <from-sha>'
 
 case "$1" in
   # NON-DESTRUCTIVE probe (see the header note): never touches content or other sessions' trees, but
@@ -643,16 +850,20 @@ case "$1" in
   # first: a check that fixes what it is checking can never fail.
   --check)
     broken=0
-    while read -r path; do probe "$path" || broken=1; done < <(initialised_paths)
+    while IFS= read -r -d '' path; do probe "$path" || broken=1; done < <(initialised_paths)
     [ "$broken" -eq 0 ] ||
       die 'one or more submodules are NOT isolated — run submodule-init.sh <path> to repair before editing them'
     ;;
   --all)
-    while read -r path; do init_repair_probe "$path"; done < <(all_paths)
+    while IFS= read -r -d '' path; do init_repair_probe "$path"; done < <(all_paths)
     ;;
   --advance)
     [ $# -eq 2 ] || die 'usage: submodule-init.sh --advance <submodule-path>'
     advance "$2"
+    ;;
+  --sync)
+    [ $# -eq 2 ] || die 'usage: submodule-init.sh --sync <from-sha>'
+    sync_from "$2"
     ;;
   *)
     for path in "$@"; do init_repair_probe "$path"; done

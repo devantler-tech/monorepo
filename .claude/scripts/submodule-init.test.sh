@@ -916,6 +916,248 @@ report "advance removed-nested retry: still fails closed at the recorded pin" \
 report "advance removed-nested retry: still names the residual checkout" \
   "$(grep -q 'embedded repository residue after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
+# --- --sync (monorepo#2833): after the superproject moves from <from> to a PR head, every changed
+# gitlink must end on HEAD's pin. Detaching moves only the superproject; these cases prove the
+# submodule half: a changed pin is advanced, an added submodule is populated, a removed one that
+# left content behind is refused, and every failure is loud.
+c40="$tmp/c40"
+mk_super "$c40"
+c40_from="$(git -C "$c40/super" rev-parse HEAD)"
+(
+  cd "$c40/remote-sub"
+  echo next >file.txt
+  git add file.txt
+  git commit -q -m next
+)
+c40_new="$(git -C "$c40/remote-sub" rev-parse HEAD)"
+(
+  cd "$c40/super"
+  git update-index --cacheinfo "160000,$c40_new,sub"
+  git commit -q -m "bump sub"
+)
+report "sync fixture: the superproject is on the bump while sub is still on the old pin" \
+  "$([[ "$(git -C "$c40/super" submodule status -- sub)" == +* ]] && echo yes || echo no)"
+out="$(cd "$c40/super" && "$helper" --sync HEAD 2>&1)" && rc=0 || rc=$?
+report "sync: no change since <from> is a no-op that exits 0" \
+  "$([[ $rc -eq 0 ]] && grep -q 'in sync with HEAD' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+echo dirt >"$c40/super/sub/dirt.txt"
+out="$(cd "$c40/super" && "$helper" --sync "$c40_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a dirty checkout on a changed pin fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q 'dirty working tree' <<<"$out" && ! grep -q 'in sync with HEAD' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+rm "$c40/super/sub/dirt.txt"
+out="$(cd "$c40/super" && "$helper" --sync "$c40_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a changed pin is advanced and the run exits 0" \
+  "$([[ $rc -eq 0 ]] && [[ "$(git -C "$c40/super/sub" rev-parse HEAD)" == "$c40_new" ]] && echo yes || echo no)" "rc=$rc $out"
+report "sync: the changed path reads as in sync afterwards" \
+  "$([[ "$(git -C "$c40/super" submodule status -- sub)" == ' '* ]] && echo yes || echo no)"
+out="$(cd "$c40/super" && "$helper" --sync not-a-commit 2>&1)" && rc=0 || rc=$?
+report "sync: an unknown <from> fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q 'is not a commit' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# Added and removed submodules, driven from a linked superproject worktree (the agent execution
+# model), where a detach onto a commit that introduces a submodule leaves an empty directory.
+c41="$tmp/c41"
+mk_super "$c41"
+git init -q "$c41/remote-sub2"
+(
+  cd "$c41/remote-sub2"
+  echo two >two.txt
+  git add two.txt
+  git commit -q -m init
+)
+c41_from="$(git -C "$c41/super" rev-parse HEAD)"
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c41/remote-sub2.insteadOf" https://github.com/devantler-tech/remote-sub2
+(
+  cd "$c41/super"
+  git submodule add -q https://github.com/devantler-tech/remote-sub2 sub2
+  git commit -q -m "add sub2"
+)
+c41_target="$(git -C "$c41/super" rev-parse HEAD)"
+git -C "$c41/super" worktree add -q --detach "$c41/wt" "$c41_from"
+git -C "$c41/wt" checkout -q --detach "$c41_target"
+report "sync add fixture: the detach leaves the new submodule empty" \
+  "$([[ -d "$c41/wt/sub2" && -z "$(ls -A "$c41/wt/sub2")" ]] && echo yes || echo no)"
+# A configured update command must not run: --sync initialises with --checkout.
+git -C "$c41/wt" config submodule.sub2.update "!touch $c41/update-command-ran"
+out="$(cd "$c41/wt" && "$helper" --sync "$c41_from" 2>&1)" && rc=0 || rc=$?
+report "sync: an added submodule is populated at HEAD's pin" \
+  "$([[ $rc -eq 0 && -f "$c41/wt/sub2/two.txt" ]] && [[ "$(git -C "$c41/wt/sub2" rev-parse HEAD)" == "$(git -C "$c41/wt" rev-parse HEAD:sub2)" ]] && echo yes || echo no)" "rc=$rc $out"
+report "sync: the added submodule is isolated in the linked worktree" \
+  "$(grep -q 'sub2 — isolated' <<<"$out" && echo yes || echo no)" "$out"
+report "sync: an unchanged uninitialised submodule is left alone" \
+  "$([[ -z "$(ls -A "$c41/wt/sub" 2>/dev/null)" ]] && echo yes || echo no)"
+git -C "$c41/wt" checkout -q --detach "$c41_from" 2>/dev/null || true
+report "sync remove fixture: the old submodule's content is left behind" \
+  "$([[ -f "$c41/wt/sub2/two.txt" ]] && echo yes || echo no)"
+out="$(cd "$c41/wt" && "$helper" --sync "$c41_target" 2>&1)" && rc=0 || rc=$?
+report "sync: a removed submodule that left content behind fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q "'sub2' is no longer a submodule at HEAD" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# A submodule re-added at a newer pin, while this worktree still holds the old checkout, is moved
+# with --advance: init mode would only repair it and leave it on the old commit.
+c42="$tmp/c42"
+mk_super "$c42"
+(
+  cd "$c42/super"
+  git rm -q --cached sub
+  git commit -q -m "stop tracking sub"
+)
+c42_from="$(git -C "$c42/super" rev-parse HEAD)"
+(
+  cd "$c42/remote-sub"
+  echo newer >file.txt
+  git add file.txt
+  git commit -q -m newer
+)
+c42_new="$(git -C "$c42/remote-sub" rev-parse HEAD)"
+(
+  cd "$c42/super"
+  git update-index --add --cacheinfo "160000,$c42_new,sub"
+  git commit -q -m "re-add sub at a newer pin"
+)
+out="$(cd "$c42/super" && "$helper" --sync "$c42_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a re-added submodule still checked out here is advanced to the new pin" \
+  "$([[ $rc -eq 0 ]] && [[ "$(git -C "$c42/super/sub" rev-parse HEAD)" == "$c42_new" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# A gitlink replaced by a tracked directory leaves HEAD's own files there, which is not residue.
+c43="$tmp/c43"
+mk_super "$c43"
+c43_from="$(git -C "$c43/super" rev-parse HEAD)"
+(
+  cd "$c43/super"
+  git rm -q sub
+  mkdir sub
+  echo tracked >sub/plain.txt
+  git add sub/plain.txt
+  git commit -q -m "replace the submodule with a tracked directory"
+)
+out="$(cd "$c43/super" && "$helper" --sync "$c43_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a gitlink replaced by a tracked directory is not refused as residue" \
+  "$([[ $rc -eq 0 ]] && grep -q 'sub — removed at HEAD' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# A removed submodule's directory that cannot be listed is unexamined, so the run must fail.
+c44="$tmp/c44"
+mk_super "$c44"
+c44_from="$(git -C "$c44/super" rev-parse HEAD)"
+(
+  cd "$c44/super"
+  git rm -q sub
+  git commit -q -m "remove sub"
+)
+mkdir -p "$c44/super/sub/leftover"
+chmod 000 "$c44/super/sub"
+out="$(cd "$c44/super" && "$helper" --sync "$c44_from" 2>&1)" && rc=0 || rc=$?
+chmod 755 "$c44/super/sub"
+if ls -A "$c44/super/sub" >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+  report "sync: an unreadable removed-submodule directory fails closed" \
+    "$([[ $rc -ne 0 ]] && grep -q "cannot inspect 'sub'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+fi
+
+# Round 3 of review on #3625.
+report "sync: a configured submodule update command does not run" \
+  "$([[ ! -e "$c41/update-command-ran" ]] && echo yes || echo no)"
+
+# Anything HEAD does not track beside a tracked directory that replaced the gitlink is residue.
+echo leftover >"$c43/super/sub/leftover.txt"
+out="$(cd "$c43/super" && "$helper" --sync "$c43_from" 2>&1)" && rc=0 || rc=$?
+report "sync: an untracked leftover beside a replacing tracked directory fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q "content HEAD does not track" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+rm -f "$c43/super/sub/leftover.txt"
+
+# A path git would quote in plain raw output (here non-ASCII) is checked at its real location.
+c48="$tmp/c48"
+mk_super "$c48"
+(
+  cd "$c48/super"
+  git submodule add -q ../remote-sub "mód"
+  git commit -q -m "add a non-ASCII submodule path"
+)
+c48_from="$(git -C "$c48/super" rev-parse HEAD)"
+(
+  cd "$c48/super"
+  git rm -q --cached "mód"
+  git config -f .gitmodules --remove-section "submodule.mód"
+  git add .gitmodules
+  git commit -q -m "remove it but leave the checkout"
+)
+out="$(cd "$c48/super" && "$helper" --sync "$c48_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a removed non-ASCII submodule that left its repository behind fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q "still holds its old repository" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# A PR can register any URL. An added submodule outside devantler-tech is refused before anything
+# contacts it. The URL uses the reserved `.invalid` domain, so even a regression cannot reach a real
+# host.
+c49="$tmp/c49"
+mk_super "$c49"
+c49_from="$(git -C "$c49/super" rev-parse HEAD)"
+(
+  cd "$c49/super"
+  git config -f .gitmodules submodule.outside.path outside
+  git config -f .gitmodules submodule.outside.url https://example.invalid/someone-else/outside
+  git update-index --add --cacheinfo "160000,$(git -C "$c49/remote-sub" rev-parse HEAD),outside"
+  git add .gitmodules
+  git commit -q -m "add a submodule outside the portfolio"
+)
+out="$(cd "$c49/super" && "$helper" --sync "$c49_from" 2>&1)" && rc=0 || rc=$?
+report "sync: an added submodule outside devantler-tech is refused before cloning" \
+  "$([[ $rc -ne 0 ]] && grep -q "outside devantler-tech" <<<"$out" && [[ -z "$(ls -A "$c49/super/outside" 2>/dev/null)" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# Round 4 of review on #3625.
+# An added submodule whose path contains a space is compared whole and populated.
+c54="$tmp/c54"
+mk_super "$c54"
+c54_from="$(git -C "$c54/super" rev-parse HEAD)"
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c54/remote-sub.insteadOf" https://github.com/devantler-tech/remote-sub-c54
+(
+  cd "$c54/super"
+  git config -f .gitmodules "submodule.with space.path" "with space"
+  git config -f .gitmodules "submodule.with space.url" https://github.com/devantler-tech/remote-sub-c54
+  git update-index --add --cacheinfo "160000,$(git -C "$c54/remote-sub" rev-parse HEAD),with space"
+  git add .gitmodules
+  git commit -q -m "add a submodule whose path has a space"
+)
+mkdir -p "$c54/super/with space"
+out="$(cd "$c54/super" && "$helper" --sync "$c54_from" 2>&1)" && rc=0 || rc=$?
+report "sync: an added submodule path containing a space is populated" \
+  "$([[ $rc -eq 0 && -f "$c54/super/with space/file.txt" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# `submodule update --init` clones a URL already recorded in the superproject's config, so a stale
+# recorded URL outside the portfolio is refused even when .gitmodules names a portfolio repository.
+c55="$tmp/c55"
+mk_super "$c55"
+c55_from="$(git -C "$c55/super" rev-parse HEAD)"
+(
+  cd "$c55/super"
+  git config -f .gitmodules submodule.extra.path extra
+  git config -f .gitmodules submodule.extra.url https://github.com/devantler-tech/remote-sub-c55
+  git update-index --add --cacheinfo "160000,$(git -C "$c55/remote-sub" rev-parse HEAD),extra"
+  git add .gitmodules
+  git commit -q -m "add a portfolio submodule"
+  git config submodule.extra.url https://example.invalid/someone-else/stale
+)
+out="$(cd "$c55/super" && "$helper" --sync "$c55_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a stale recorded submodule URL outside devantler-tech is refused" \
+  "$([[ $rc -ne 0 ]] && grep -q "outside devantler-tech" <<<"$out" && [[ -z "$(ls -A "$c55/super/extra" 2>/dev/null)" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# A removed submodule's directory that can be listed but not searched hides its `.git`.
+c56="$tmp/c56"
+mk_super "$c56"
+c56_from="$(git -C "$c56/super" rev-parse HEAD)"
+(
+  cd "$c56/super"
+  git rm -q --cached sub
+  git config -f .gitmodules --remove-section submodule.sub
+  git add .gitmodules
+  git commit -q -m "remove sub but leave the checkout"
+)
+chmod 444 "$c56/super/sub"
+out="$(cd "$c56/super" && "$helper" --sync "$c56_from" 2>&1)" && rc=0 || rc=$?
+chmod 755 "$c56/super/sub"
+if [ "$(id -u)" -ne 0 ]; then
+  report "sync: a listable but unsearchable removed-submodule directory fails closed" \
+    "$([[ $rc -ne 0 ]] && grep -q "cannot inspect 'sub'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+fi
+
 # --- Origin identity (monorepo#2941): a checkout that resolves to itself can still be the wrong
 # repository. The submodule must have, as its origin, the repository .gitmodules registers.
 c30="$tmp/c30"
@@ -1131,6 +1373,224 @@ git -C "$c53/super/sub" remote set-url origin "$c53/up/remote-sub"
 out="$(cd "$c53/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "origin identity control: the tracking remote's sibling passes" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+
+# Round 5 of review on #3625.
+# 1. Check ancestors before declaring removed paths clean
+c57="$tmp/c57"
+mk_super "$c57"
+(
+  cd "$c57/super"
+  mkdir -p parent
+  git config -f .gitmodules submodule.nested.path parent/sub
+  git config -f .gitmodules submodule.nested.url ../remote-sub
+  git update-index --add --cacheinfo "160000,$(git -C "$c57/remote-sub" rev-parse HEAD),parent/sub"
+  git add .gitmodules
+  git commit -q -m "add parent/sub"
+)
+c57_from="$(git -C "$c57/super" rev-parse HEAD)"
+(
+  cd "$c57/super"
+  git rm -q --cached parent/sub
+  git config -f .gitmodules --remove-section submodule.nested
+  git add .gitmodules
+  git commit -q -m "remove parent/sub"
+)
+chmod 000 "$c57/super/parent"
+out="$(cd "$c57/super" && "$helper" --sync "$c57_from" 2>&1)" && rc=0 || rc=$?
+chmod 755 "$c57/super/parent"
+if [ "$(id -u)" -ne 0 ]; then
+  report "sync: an unsearchable ancestor of a removed path fails closed" \
+    "$([[ $rc -ne 0 ]] && grep -q "cannot inspect 'parent/sub'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+fi
+
+# 2. Validate the populated checkout's remote before advancing
+c58="$tmp/c58"
+mk_super "$c58"
+c58_from="$(git -C "$c58/super" rev-parse HEAD)"
+(
+  cd "$c58/remote-sub"
+  echo v2 >file.txt
+  git commit -q -a -m v2
+)
+c58_new="$(git -C "$c58/remote-sub" rev-parse HEAD)"
+(
+  cd "$c58/super"
+  git update-index --cacheinfo "160000,$c58_new,sub"
+  git commit -q -m "bump sub"
+)
+git -C "$c58/super/sub" remote set-url origin "https://example.invalid/outside/repo"
+out="$(cd "$c58/super" && "$helper" --sync "$c58_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a populated submodule with foreign origin remote is refused before advance" \
+  "$([[ $rc -ne 0 ]] && grep -q "WRONG REPOSITORY" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# 3. Dangling .git entries as removal residue
+c60="$tmp/c60"
+mk_super "$c60"
+c60_from="$(git -C "$c60/super" rev-parse HEAD)"
+(
+  cd "$c60/super"
+  git rm -q sub
+  git commit -q -m "remove sub"
+)
+mkdir -p "$c60/super/sub"
+ln -s "$tmp/absent-target" "$c60/super/sub/.git"
+out="$(cd "$c60/super" && "$helper" --sync "$c60_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a dangling .git symlink in a removed path fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q "still holds its old repository" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# 4. Nested submodule removal with accessible ancestor terminates and syncs
+c61="$tmp/c61"
+mk_super "$c61"
+mkdir -p "$c61/super/parent"
+(
+  cd "$c61/super"
+  git submodule add -q ../remote-sub parent/sub
+  git commit -q -m "add parent/sub"
+)
+c61_from="$(git -C "$c61/super" rev-parse HEAD)"
+(
+  cd "$c61/super"
+  git rm -q parent/sub
+  git config -f .gitmodules --remove-section submodule.parent/sub 2>/dev/null || true
+  git add .gitmodules
+  git commit -q -m "remove parent/sub"
+  rm -rf parent
+)
+out="$(cd "$c61/super" && "$helper" --sync "$c61_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a clean nested removal terminates and reports nothing left behind" \
+  "$([[ $rc -eq 0 ]] && grep -q "nothing left behind" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# 5. Retained submodule repository with foreign remote under .git/modules fails closed
+c62="$tmp/c62"
+mk_super "$c62"
+c62_from="$(git -C "$c62/super" rev-parse HEAD)"
+(
+  cd "$c62/super"
+  # Add a portfolio-registered submodule
+  git config -f .gitmodules "submodule.retained.path" "retained"
+  git config -f .gitmodules "submodule.retained.url" "https://github.com/devantler-tech/allowed-repo"
+  # Add commit tree entry for gitlink
+  git update-index --add --cacheinfo "160000,$(git -C "$c62/remote-sub" rev-parse HEAD),retained"
+  git add .gitmodules
+  git commit -q -m "add retained"
+  # Simulate retained module repository in .git/modules/retained with foreign remote
+  mkdir -p .git/modules/retained
+  git init -q --bare .git/modules/retained
+  git -C .git/modules/retained remote add origin "https://example.invalid/outside/repo"
+)
+out="$(cd "$c62/super" && "$helper" --sync "$c62_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a retained submodule repository with foreign origin remote is refused before init" \
+  "$([[ $rc -ne 0 ]] && grep -q "registered to a repository outside devantler-tech" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# Round 7 of review on #3625.
+# 6. An added submodule whose path begins with a space keeps it through every path consumer.
+c63="$tmp/c63"
+mk_super "$c63"
+c63_from="$(git -C "$c63/super" rev-parse HEAD)"
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c63/remote-sub.insteadOf" https://github.com/devantler-tech/remote-sub-c63
+(
+  cd "$c63/super"
+  git config -f .gitmodules "submodule.leading.path" " leading"
+  git config -f .gitmodules "submodule.leading.url" https://github.com/devantler-tech/remote-sub-c63
+  git update-index --add --cacheinfo "160000,$(git -C "$c63/remote-sub" rev-parse HEAD), leading"
+  git add .gitmodules
+  git commit -q -m "add a submodule whose path starts with a space"
+)
+out="$(cd "$c63/super" && "$helper" --sync "$c63_from" 2>&1)" && rc=0 || rc=$?
+report "sync: an added submodule path with a leading space is populated" \
+  "$([[ $rc -eq 0 && -f "$c63/super/ leading/file.txt" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# 7. An added path spelled as pathspec magic populates only itself, never another registration.
+c64="$tmp/c64"
+mk_super "$c64"
+git init -q "$c64/foreign"
+(
+  cd "$c64/foreign"
+  echo foreign >file.txt
+  git add file.txt
+  git commit -q -m init
+  cd "$c64/super"
+  git config -f .gitmodules submodule.foreign.path foreign
+  git config -f .gitmodules submodule.foreign.url "$c64/foreign"
+  git update-index --add --cacheinfo "160000,$(git -C "$c64/foreign" rev-parse HEAD),foreign"
+  git add .gitmodules
+  git commit -q -m "register a submodule outside the portfolio, never initialised"
+)
+c64_from="$(git -C "$c64/super" rev-parse HEAD)"
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c64/remote-sub.insteadOf" https://github.com/devantler-tech/remote-sub-c64
+(
+  cd "$c64/super"
+  git config -f .gitmodules "submodule.magic.path" ':(glob)*'
+  git config -f .gitmodules "submodule.magic.url" https://github.com/devantler-tech/remote-sub-c64
+  git update-index --add --cacheinfo "160000,$(git -C "$c64/remote-sub" rev-parse HEAD),:(glob)*"
+  git add .gitmodules
+  git commit -q -m "add a submodule whose path is pathspec magic"
+)
+out="$(cd "$c64/super" && "$helper" --sync "$c64_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a pathspec-magic path never initialises another submodule" \
+  "$([[ -z "$(ls -A "$c64/super/foreign" 2>/dev/null)" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# Round 8 of review on #3625.
+# 8. An added submodule whose path contains a newline is preserved without record splitting.
+c65="$tmp/c65"
+mk_super "$c65"
+c65_from="$(git -C "$c65/super" rev-parse HEAD)"
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c65/remote-sub.insteadOf" https://github.com/devantler-tech/remote-sub-c65
+nl_path=$'path\nwith\nnewline'
+(
+  cd "$c65/super"
+  git config -f .gitmodules "submodule.nl.path" "$nl_path"
+  git config -f .gitmodules "submodule.nl.url" https://github.com/devantler-tech/remote-sub-c65
+  git update-index --add --cacheinfo "160000,$(git -C "$c65/remote-sub" rev-parse HEAD),$nl_path"
+  git add .gitmodules
+  git commit -q -m "add a submodule whose path has a newline"
+)
+out="$(cd "$c65/super" && "$helper" --sync "$c65_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a submodule path with a newline is populated whole" \
+  "$([[ $rc -eq 0 && -f "$c65/super/$nl_path/file.txt" ]] && echo yes || echo no)" "rc=$rc $out"
+check_out="$(cd "$c65/super" && "$helper" --check 2>&1)" && check_rc=0 || check_rc=$?
+report "check: a populated submodule with a newline passes worktree isolation check" \
+  "$([[ $check_rc -eq 0 ]] && echo yes || echo no)" "rc=$check_rc $check_out"
+
+# 9. A removed submodule replaced by a tracked symlink pointing to another repo is not flagged as .git residue
+c66="$tmp/c66"
+mk_super "$c66"
+(
+  cd "$c66/super"
+  git submodule add -q ../remote-sub sub-target
+  git submodule add -q ../remote-sub sub-old
+  git commit -q -m "add two submodules"
+)
+c66_from="$(git -C "$c66/super" rev-parse HEAD)"
+(
+  cd "$c66/super"
+  git rm -q sub-old
+  git config -f .gitmodules --remove-section submodule.sub-old 2>/dev/null || true
+  rm -rf .git/modules/sub-old sub-old
+  ln -s sub-target sub-old
+  git add sub-old .gitmodules
+  git commit -q -m "replace sub-old with symlink to sub-target"
+)
+out="$(cd "$c66/super" && "$helper" --sync "$c66_from" 2>&1)" && rc=0 || rc=$?
+report "sync: removed submodule replaced by symlink to another repo is clean" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+
+# 10. Abort during sync preserves failure exit code
+c67="$tmp/c67"
+mk_super "$c67"
+c67_from="$(git -C "$c67/super" rev-parse HEAD)"
+(
+  cd "$c67/super"
+  git rm -q sub
+  git config -f .gitmodules --remove-section submodule.sub 2>/dev/null || true
+  git add .gitmodules
+  git commit -q -m "remove sub"
+  mkdir -p sub
+  echo "dirty" > sub/untracked.txt
+)
+out="$(cd "$c67/super" && "$helper" --sync "$c67_from" 2>&1)" && rc=0 || rc=$?
+report "sync: abort on dirty removed submodule preserves non-zero exit code" \
+  "$([[ $rc -ne 0 ]] && grep -q "still holds content HEAD does not track" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
