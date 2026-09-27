@@ -1430,7 +1430,8 @@ t_salvage_keeps_submodule_work_at_a_quoted_path() {
   echo dirty >> "$wt/süb/f"
   touch -t 202001010000 "$wt"
   # Control: the fixture really produces a QUOTED porcelain path.
-  if ! git -C "$wt" status --porcelain --ignore-submodules=none | grep -q '"'; then
+  local plain; plain=$(git -C "$wt" status --porcelain --ignore-submodules=none)
+  if ! grep -q '"' <<<"$plain"; then
     bad "$name" "FIXTURE: porcelain did not quote the path"; rm -rf "$root"; return
   fi
   local out; out=$(run_salvage "$root" apply 1)
