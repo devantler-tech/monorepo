@@ -444,16 +444,17 @@ advance() {
 # the submodule half of landing a worktree on a PR head (monorepo#2833). `git checkout --detach`
 # moves only the superproject, and `--recurse-submodules` is unsafe here (see *Git safety*), so this
 # composes the modes above per changed gitlink instead:
-#   - changed pin, populated here   → `advance` (fetches the pin, refuses dirt and ahead-of-pin work)
+#   - changed or re-added, populated → `advance` (fetches the pin, refuses dirt and ahead-of-pin work)
 #   - added, or changed but not populated here
 #                                   → `init_repair_probe` (populates at the pin, repairs, probes),
 #                                     because the change under review lives in that checkout
-#   - removed by the move           → refuse if its directory still holds content: that is old code
-#                                     the reviewed tree no longer declares
+#   - removed by the move           → refuse if its old repository is still there, or if content
+#                                     remains where HEAD tracks nothing; an unreadable directory is
+#                                     refused too
 # Fails closed: an unreadable <from>, a diff that cannot be read, or any failed step stops the run,
 # and a final `submodule status` must show every changed path on HEAD's pin.
 sync_from() {
-  local from=$1 diff line meta path old_mode new_mode status changed='' st
+  local from=$1 diff line meta path old_mode new_mode changed='' st
   from=$(git --no-replace-objects rev-parse --verify --quiet "${from}^{commit}") ||
     die "'$1' is not a commit in this repository — pass the superproject HEAD from before the move"
   diff=$(git --no-replace-objects diff-tree -r --no-renames --raw "$from" HEAD) ||
@@ -465,17 +466,28 @@ sync_from() {
     old_mode=${meta%% *}
     old_mode=${old_mode#:}
     new_mode=$(printf '%s' "$meta" | awk '{print $2}')
-    status=${meta##* }
     [ "$old_mode" = 160000 ] || [ "$new_mode" = 160000 ] || continue
     if [ "$new_mode" != 160000 ]; then
-      if is_populated "$path"; then
+      # A directory that exists but cannot be listed is unexamined, never "nothing left behind".
+      if [ -e "$path" ] && ! ls -A "$path" > /dev/null 2>&1; then
+        die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+      fi
+      # The old checkout's repository is residue whatever else is there. Other content is residue
+      # only when HEAD tracks nothing at that path: a gitlink replaced by a tracked directory
+      # legitimately leaves HEAD's own files there.
+      if [ -e "$path/.git" ]; then
+        die "'$path' is no longer a submodule at HEAD but still holds its old repository — preserve or remove it before evaluating this tree"
+      fi
+      if [ "$(git --no-replace-objects ls-tree HEAD -- "$path" | awk '{print $2}')" != tree ] && is_populated "$path"; then
         die "'$path' is no longer a submodule at HEAD but still holds content — preserve or remove it before evaluating this tree"
       fi
       printf 'submodule-init: %s — removed at HEAD, nothing left behind\n' "$path"
       continue
     fi
     changed="${changed}${path}"$'\n'
-    if [ "$status" != A ] && [ "$old_mode" = 160000 ] && is_populated "$path"; then
+    # A populated checkout moves with `advance` whether the gitlink changed or was re-added: `init`
+    # only repairs a populated tree and would leave it on its old commit.
+    if is_populated "$path"; then
       advance "$path"
     else
       init_repair_probe "$path"

@@ -967,6 +967,66 @@ out="$(cd "$c41/wt" && "$helper" --sync "$c41_target" 2>&1)" && rc=0 || rc=$?
 report "sync: a removed submodule that left content behind fails closed" \
   "$([[ $rc -ne 0 ]] && grep -q "'sub2' is no longer a submodule at HEAD" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
+# A submodule re-added at a newer pin, while this worktree still holds the old checkout, is moved
+# with --advance: init mode would only repair it and leave it on the old commit.
+c42="$tmp/c42"
+mk_super "$c42"
+(
+  cd "$c42/super"
+  git rm -q --cached sub
+  git commit -q -m "stop tracking sub"
+)
+c42_from="$(git -C "$c42/super" rev-parse HEAD)"
+(
+  cd "$c42/remote-sub"
+  echo newer >file.txt
+  git add file.txt
+  git commit -q -m newer
+)
+c42_new="$(git -C "$c42/remote-sub" rev-parse HEAD)"
+(
+  cd "$c42/super"
+  git update-index --add --cacheinfo "160000,$c42_new,sub"
+  git commit -q -m "re-add sub at a newer pin"
+)
+out="$(cd "$c42/super" && "$helper" --sync "$c42_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a re-added submodule still checked out here is advanced to the new pin" \
+  "$([[ $rc -eq 0 ]] && [[ "$(git -C "$c42/super/sub" rev-parse HEAD)" == "$c42_new" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# A gitlink replaced by a tracked directory leaves HEAD's own files there, which is not residue.
+c43="$tmp/c43"
+mk_super "$c43"
+c43_from="$(git -C "$c43/super" rev-parse HEAD)"
+(
+  cd "$c43/super"
+  git rm -q sub
+  mkdir sub
+  echo tracked >sub/plain.txt
+  git add sub/plain.txt
+  git commit -q -m "replace the submodule with a tracked directory"
+)
+out="$(cd "$c43/super" && "$helper" --sync "$c43_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a gitlink replaced by a tracked directory is not refused as residue" \
+  "$([[ $rc -eq 0 ]] && grep -q 'sub — removed at HEAD' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# A removed submodule's directory that cannot be listed is unexamined, so the run must fail.
+c44="$tmp/c44"
+mk_super "$c44"
+c44_from="$(git -C "$c44/super" rev-parse HEAD)"
+(
+  cd "$c44/super"
+  git rm -q sub
+  git commit -q -m "remove sub"
+)
+mkdir -p "$c44/super/sub/leftover"
+chmod 000 "$c44/super/sub"
+out="$(cd "$c44/super" && "$helper" --sync "$c44_from" 2>&1)" && rc=0 || rc=$?
+chmod 755 "$c44/super/sub"
+if ls -A "$c44/super/sub" >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+  report "sync: an unreadable removed-submodule directory fails closed" \
+    "$([[ $rc -ne 0 ]] && grep -q "cannot inspect 'sub'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+fi
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1
