@@ -2575,6 +2575,65 @@ t_salvage_keeps_resolve_undo_entries_in_a_submodule() {
   rm -rf "$root"
 }
 
+t_salvage_preserves_an_uppercase_fetch_head_commit() {
+  # Git resolves an uppercase object id, so the pseudo-ref still protects the commit.
+  local name="salvage preserves a commit FETCH_HEAD names in uppercase"
+  local root; root=$(make_repo)
+  add_wt "$root" upfetch pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/upfetch" c admin
+  c=$(git -C "$wt" commit-tree 'HEAD^{tree}' -p HEAD -m fetched) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '%s\t\tbranch x of origin\n' "$(printf '%s' "$c" | tr 'a-f' 'A-F')" > "$admin/FETCH_HEAD"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED .*upfetch ' <<<"$out" \
+     && [ -n "$(git -C "$root/repo" for-each-ref --format='%(objectname)' "refs/salvaged/*/reflog/$c")" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out :: $(git -C "$root/repo" for-each-ref refs/salvaged)"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_handles_a_very_long_basename() {
+  # A basename near the 255-byte component limit must not produce a ref git cannot create.
+  local name="salvage applies for a worktree with a very long basename"
+  local root; root=$(make_repo)
+  local long; long=$(printf 'w%.0s' $(seq 1 220))
+  add_wt "$root" "$long" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/$long"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED ' <<<"$out" && [ ! -e "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_replace_ref() {
+  # Both commits are on a remote, but the replacement mapping lives only in the ref name.
+  local name="salvage KEEPs a submodule holding a ref outside heads, tags and remotes"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subrepl || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subrepl" h
+  h=$(git -C "$wt/sub" rev-parse HEAD)
+  # A custom namespace stands in for refs/replace: replacing a commit with itself loops.
+  git -C "$wt/sub" update-ref refs/keep/pinned "$h" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subrepl .*ref outside refs/heads' <<<"$out" && ! grep -q '^SALVAGE .*subrepl ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -2679,5 +2738,8 @@ t_salvage_keeps_resolve_undo_entries
 t_salvage_keeps_a_symlinked_per_worktree_ref
 t_salvage_keeps_a_module_repository_whose_head_is_a_directory
 t_salvage_keeps_resolve_undo_entries_in_a_submodule
+t_salvage_preserves_an_uppercase_fetch_head_commit
+t_salvage_handles_a_very_long_basename
+t_salvage_keeps_a_submodule_replace_ref
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

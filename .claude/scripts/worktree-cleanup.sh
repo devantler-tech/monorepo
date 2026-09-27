@@ -882,6 +882,14 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   if grep -qvx commit <<< "$types" && [ -n "$types" ]; then
     SALVAGE_NOTE="submodule $label has a ref to a tag, tree or blob (salvage cannot carry it)"; return 0
   fi
+  # A whitelist of ref namespaces: a branch, tag or remote-tracking name is a label a fetch
+  # restores, but a ref elsewhere (refs/replace, refs/notes, …) carries meaning in its name.
+  local names
+  names=$(git --git-dir="$g" --work-tree="$g" for-each-ref --format='%(refname)' 2>/dev/null) \
+    || { SALVAGE_NOTE="cannot list the refs of submodule $label"; return 0; }
+  if grep -qvE '^refs/(heads|tags|remotes)/' <<< "$names" && [ -n "$names" ]; then
+    SALVAGE_NOTE="submodule $label has a ref outside refs/heads, refs/tags and refs/remotes (salvage cannot carry it)"; return 0
+  fi
   # ORIG_HEAD and FETCH_HEAD are outside `rev-list --all --reflog`; a commit only they name
   # would die with the repository.
   # A reflog can hold the only reference to a tag object a ref once pointed at; `rev-list
@@ -1208,8 +1216,10 @@ pseudo_ref_commits() {
     [ -e "$g/$f" ] || continue
     [ -r "$g/$f" ] || return 1
     while IFS= read -r sha; do
-      sha=${sha%%[[:space:]]*}
-      case "$sha" in *[!0-9a-f]*|'') continue ;; esac
+      sha=$(printf '%s' "${sha%%[[:space:]]*}" | tr 'A-F' 'a-f')
+      [ -n "$sha" ] || continue
+      # A token that is not an object id means the file cannot be read as expected.
+      case "$sha" in *[!0-9a-f]*) return 1 ;; esac
       # A commit the object store cannot read right now is not proof there is nothing to lose.
       git --git-dir="$g" --work-tree="$g" cat-file -e "$sha^{commit}" 2>/dev/null || return 1
       printf '%s\n' "$sha"
@@ -1271,7 +1281,7 @@ salvage_write() {
   # Only ref-safe characters from the basename, so the namespace is always valid and dry-run
   # never promises a salvage apply would refuse; the path digest keeps it unique.
   local bn
-  bn=$(printf '%s' "$(basename "$wt")" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_')
+  bn=$(printf '%s' "$(basename "$wt")" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_' | cut -c1-64)
   id="$(date -u +%Y%m%dT%H%M%SZ)-${bn}-${path_id:0:12}-${sha:0:12}"
   base="refs/salvaged/$id"
   git check-ref-format "$base/head" 2>/dev/null || { SALVAGE_NOTE="unusable salvage ref name $base"; return 1; }
