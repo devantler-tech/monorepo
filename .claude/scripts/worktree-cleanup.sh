@@ -699,19 +699,32 @@ salvage_blocker() {
   # with it, and salvage records only their gitlinks. A submodule whose HEAD matches the
   # recorded gitlink shows no status entry at all, yet its reflog can hold the only
   # reference to a commit it made and reset away. Block salvage on any such commit.
-  local subs sub sub_orphans
-  # shellcheck disable=SC2016  # $toplevel/$sm_path are expanded by `submodule foreach`
-  subs=$(git -C "$wt" submodule foreach --quiet --recursive \
-           'printf "%s\n" "$toplevel/$sm_path"' 2>/dev/null) \
-    || { SALVAGE_NOTE="cannot enumerate initialised submodules for salvage"; return 0; }
-  while IFS= read -r sub; do
-    [ -n "$sub" ] || continue
-    sub_orphans=$(reflog_orphans "$sub") \
-      || { SALVAGE_NOTE="cannot read the reflog of submodule $sub"; return 0; }
-    if [ -n "$sub_orphans" ]; then
-      SALVAGE_NOTE="a submodule holds commits only in its reflog ($sub; cannot be salvaged)"; return 0
+  submodule_reflog_blocker "$wt" && return 0
+  return 1
+}
+
+# submodule_reflog_blocker <repo> -> 0, with SALVAGE_NOTE set, when an initialised submodule
+# of <repo> (recursively) holds a commit only in its reflog, or cannot be read; 1 otherwise.
+# Submodules are enumerated from the index's gitlinks, not `git submodule foreach`, which
+# skips a populated submodule that is not registered as active and would fail open on it.
+submodule_reflog_blocker() {
+  local repo=$1 links line path orphans
+  links=$(git -C "$repo" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') \
+    || { SALVAGE_NOTE="cannot list the gitlinks of $repo for salvage"; return 0; }
+  case "$links" in
+    *$'\001'*) SALVAGE_NOTE="a tracked path in $repo holds a newline (cannot classify it)"; return 0 ;;
+  esac
+  while IFS= read -r line; do
+    case "$line" in 160000\ *) ;; *) continue ;; esac
+    path=${line#*$'\t'}
+    [ -e "$repo/$path/.git" ] || continue          # not initialised: nothing local to lose
+    orphans=$(reflog_orphans "$repo/$path") \
+      || { SALVAGE_NOTE="cannot read the reflog of submodule $path"; return 0; }
+    if [ -n "$orphans" ]; then
+      SALVAGE_NOTE="submodule $path holds commits only in its reflog (cannot be salvaged)"; return 0
     fi
-  done <<< "$subs"
+    submodule_reflog_blocker "$repo/$path" && return 0
+  done <<< "$links"
   return 1
 }
 
@@ -761,7 +774,7 @@ reflog_orphans() {
   git -C "$1" rev-list --no-walk $reflog --not --remotes 2>/dev/null
 }
 
-$1 refs/salvaged/<id>/*, setting
+# salvage_write <worktree> <sha> -> writes and verifies refs/salvaged/<id>/*, setting
 # SALVAGE_REF, SALVAGE_TREE (whole working tree) and SALVAGE_INDEX_TREE (staged index).
 # Returns non-zero, with SALVAGE_NOTE, on any failure; refs already written stay (they
 # only preserve data) and the caller KEEPs the worktree.
