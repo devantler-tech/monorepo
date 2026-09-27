@@ -72,9 +72,10 @@
 # refuses BOTH substitution forms (backtick and dollar-paren) as a category, which
 # is a deliberate rule rather than an oversight: proving a whole compound shell
 # line is a read means parsing shell. So this is NOT a `gap` — promoting it to
-# `allow` is not the outcome being waited on. The caller-side fix is to hand the
-# guard the inner read rather than the shell that captures it; tracked as
-# monorepo#2943.
+# `allow` is not the outcome being waited on. The caller-side fix landed in
+# monorepo#2943: the census now runs the inner reads as plain commands (the two
+# `allow` rows after these) and the surveyor applies each guard itself. These
+# rows stay pinned `deny` as the recorded decision.
 #
 # `gh --json` — NOT a prescribed command at all, but a noun phrase. The surveyor
 # definition names the flag when it says every `gh --json` vocabulary is local to its
@@ -86,16 +87,16 @@
 # because no caller ever runs this. It surfaces only at consumer rollout, which is why
 # it appears the moment the pin picks up the prose that names the flag.
 
-# `set -o pipefail; fid_status=$(gh api ...)` — the board-coverage census, which the
-# surveyor definition opens with a load-bearing options line. Two statements, so the
+# `set -o pipefail; fid_status=$(gh api ...)` — the board-coverage census as the
+# surveyor definition prescribed it before monorepo#2943, opening with an options line. Two statements, so the
 # guard refuses the pair as `chaining with ; can carry a write` — a DIFFERENT verdict
 # from the `fid_status=$(...)` row above, which is what the sub-statement alone draws.
 # That difference is the point: extraction used to drop the options line and pin only
 # the narrower verdict, so the script the deployment actually runs was never
 # classified (monorepo#2963). Pinned `deny` for the same reason as the sweep above —
 # proving a whole shell construct is read-only means parsing shell inside a security
-# boundary — so this is NOT a `gap`. The caller-side fix is to hand the guard the
-# inner read and set the shell option outside the classified command.
+# boundary — so this is NOT a `gap`. The caller-side fix (monorepo#2943) handed the
+# guard the inner reads instead, with no options line.
 #
 # On `git status`: the surveyor definition names `git log/status` among its read
 # verbs, but only the hardened invocation is actually a read, and the guard is
@@ -213,6 +214,8 @@ deny	RUN_NAME="$run_name" gh api --paginate "repos/devantler-tech/monorepo/actio
 allow	gh api --paginate "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" --jq '.workflow_runs[] | [((.name // "") | sub("( - Update)? #[0-9]+$"; "")), (.conclusion // "none"), .created_at, .id] | @tsv'
 deny	fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
 deny	set -o pipefail; fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
+allow	gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id'
+allow	gh api --paginate "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=<status-field-id>" --jq '[.[] | select(.content_type=="Issue" and .archived_at==null and .content.repository.private == false and .content.repository.archived == false)] | "page on_board=\(length) status_less=\(map(select(([.fields[]?|select(.name=="Status")|.value] | length)==0)) | length)"'
 deny	gh api --paginate --slurp repos/devantler-tech/PLACEHOLDER/pulls/PLACEHOLDER/commits | jq -c '{repo:"PLACEHOLDER",author:"PLACEHOLDER",head_ref:"PLACEHOLDER",title:"PLACEHOLDER",head_oid:"PLACEHOLDER",files:PLACEHOLDER,skill_owners:PLACEHOLDER,commits:(add | map({sha, author_login:(.author.login // ""), author_name:.commit.author.name, author_email:.commit.author.email, author_date:.commit.author.date, committer_login:(.committer.login // ""), committer_name:.commit.committer.name, committer_email:.commit.committer.email, committer_date:.commit.committer.date, message:.commit.message, verified:(.commit.verification.verified == true)}))}' | PLACEHOLDER/.claude/scripts/programmed-bot-review-exemption.sh --input -
 deny	gh api graphql --paginate -F number=PLACEHOLDER -f query='query($number:Int!,$endCursor:String){repository(owner:"devantler-tech",name:"PLACEHOLDER"){pullRequest(number:$number){reviewThreads(first:100,after:$endCursor){totalCount nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}' | PLACEHOLDER/.claude/scripts/pr-unresolved-threads.sh --input -
 deny	gh api repos/devantler-tech/PLACEHOLDER/issues/comments/PLACEHOLDER --jq '{head:"PLACEHOLDER",body:.body}' | PLACEHOLDER/.claude/scripts/coderabbit-summary-verdict.sh --input -

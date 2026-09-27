@@ -411,15 +411,14 @@ extract_fenced() {
                 > (countw(t, "done") + countw(t, "fi") + countw(t, "esac")))
       }
       function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
-      # A prescription may also open with a shell OPTIONS line. `set -o pipefail` heads the
-      # board-coverage census in the surveyor definition and is load-bearing there -- the
-      # block says so in as many words. Anchored on a forge verb, the buffer starts at the
+      # A prescription may also open with a shell OPTIONS line. `set -o pipefail` headed the
+      # board-coverage census in the surveyor definition until monorepo#2943, where it was
+      # load-bearing. Anchored on a forge verb, the buffer starts at the
       # NEXT line, so the guard is asked about a sub-statement while the deployment runs the
       # options line too, and the two draw DIFFERENT verdicts: measured, the sub-statement
       # alone draws `dollar-paren command substitution is not a read` while the script draws
       # `chaining with ; can carry a write`. Recording the narrower verdict is the same
-      # fail-open the verb-less substitution and the compound loop above close, on the one
-      # census `board_coverage` is derived from.
+      # fail-open the verb-less substitution and the compound loop above close.
       function opts_starter(s) { return (s ~ /^[[:space:]]*set[[:space:]]+[-+][A-Za-z]/) }
       # Joining a statement behind a line that ends in a COMMENT hands the guard a command
       # that exists only as a join artifact: the shell discards a comment to end of line, but
@@ -450,9 +449,9 @@ extract_fenced() {
       function flush(   keep) {
         keep = (!pend || has_forge(buf))
         # A shell option stays in effect for the REST of the script, not just the next
-        # statement. The census block is the proof: `pipefail` is load-bearing for the
-        # LATER `census=$(gh api … | jq -s …)` pipeline -- the one that actually has a pipe --
-        # while the statement immediately after `set -o pipefail` has none. Attaching it to
+        # statement. The pre-monorepo#2943 census block was the proof: `pipefail` governed the
+        # LATER `census=$(gh api … | jq -s …)` pipeline -- the one that actually had a pipe --
+        # while the statement immediately after `set -o pipefail` had none. Attaching it to
         # only the next statement therefore prefixes the one case it does not govern and
         # drops it from the one it does, so the guard still never classifies the runtime
         # form of the pipeline. Prefix every candidate the block yields instead.
@@ -882,8 +881,8 @@ cn_extracted=$(extract_commands "$fixdir/compound-nonforge.md" | grep -c .)
 [ "${cn_extracted:-0}" -eq 0 ] \
   || die_unknown "self-test: a construct wrapping no forge verb yielded $cn_extracted candidate(s), expected 0 (false finding)"
 
-# A shell OPTIONS line must not be DROPPED. `set -o pipefail` heads the board-coverage
-# census in the surveyor definition and is load-bearing there; anchored on a forge verb
+# A shell OPTIONS line must not be DROPPED. `set -o pipefail` headed the board-coverage
+# census in the surveyor definition until monorepo#2943; anchored on a forge verb
 # the buffer used to start at the NEXT line, so the guard was asked about a sub-statement
 # while the deployment ran the options line too -- and the two draw different verdicts
 # (measured: `dollar-paren command substitution is not a read` for the sub-statement,
