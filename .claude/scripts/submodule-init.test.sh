@@ -1530,6 +1530,68 @@ out="$(cd "$c64/super" && "$helper" --sync "$c64_from" 2>&1)" && rc=0 || rc=$?
 report "sync: a pathspec-magic path never initialises another submodule" \
   "$([[ -z "$(ls -A "$c64/super/foreign" 2>/dev/null)" ]] && echo yes || echo no)" "rc=$rc $out"
 
+# Round 8 of review on #3625.
+# 8. An added submodule whose path contains a newline is preserved without record splitting.
+c65="$tmp/c65"
+mk_super "$c65"
+c65_from="$(git -C "$c65/super" rev-parse HEAD)"
+git config --file "$GIT_CONFIG_GLOBAL" "url.$c65/remote-sub.insteadOf" https://github.com/devantler-tech/remote-sub-c65
+nl_path=$'path\nwith\nnewline'
+(
+  cd "$c65/super"
+  git config -f .gitmodules "submodule.nl.path" "$nl_path"
+  git config -f .gitmodules "submodule.nl.url" https://github.com/devantler-tech/remote-sub-c65
+  git update-index --add --cacheinfo "160000,$(git -C "$c65/remote-sub" rev-parse HEAD),$nl_path"
+  git add .gitmodules
+  git commit -q -m "add a submodule whose path has a newline"
+)
+out="$(cd "$c65/super" && "$helper" --sync "$c65_from" 2>&1)" && rc=0 || rc=$?
+report "sync: a submodule path with a newline is populated whole" \
+  "$([[ $rc -eq 0 && -f "$c65/super/$nl_path/file.txt" ]] && echo yes || echo no)" "rc=$rc $out"
+check_out="$(cd "$c65/super" && "$helper" --check 2>&1)" && check_rc=0 || check_rc=$?
+report "check: a populated submodule with a newline passes worktree isolation check" \
+  "$([[ $check_rc -eq 0 ]] && echo yes || echo no)" "rc=$check_rc $check_out"
+
+# 9. A removed submodule replaced by a tracked symlink pointing to another repo is not flagged as .git residue
+c66="$tmp/c66"
+mk_super "$c66"
+(
+  cd "$c66/super"
+  git submodule add -q ../remote-sub sub-target
+  git submodule add -q ../remote-sub sub-old
+  git commit -q -m "add two submodules"
+)
+c66_from="$(git -C "$c66/super" rev-parse HEAD)"
+(
+  cd "$c66/super"
+  git rm -q sub-old
+  git config -f .gitmodules --remove-section submodule.sub-old 2>/dev/null || true
+  rm -rf .git/modules/sub-old sub-old
+  ln -s sub-target sub-old
+  git add sub-old .gitmodules
+  git commit -q -m "replace sub-old with symlink to sub-target"
+)
+out="$(cd "$c66/super" && "$helper" --sync "$c66_from" 2>&1)" && rc=0 || rc=$?
+report "sync: removed submodule replaced by symlink to another repo is clean" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+
+# 10. Abort during sync preserves failure exit code
+c67="$tmp/c67"
+mk_super "$c67"
+c67_from="$(git -C "$c67/super" rev-parse HEAD)"
+(
+  cd "$c67/super"
+  git rm -q sub
+  git config -f .gitmodules --remove-section submodule.sub 2>/dev/null || true
+  git add .gitmodules
+  git commit -q -m "remove sub"
+  mkdir -p sub
+  echo "dirty" > sub/untracked.txt
+)
+out="$(cd "$c67/super" && "$helper" --sync "$c67_from" 2>&1)" && rc=0 || rc=$?
+report "sync: abort on dirty removed submodule preserves non-zero exit code" \
+  "$([[ $rc -ne 0 ]] && grep -q "still holds content HEAD does not track" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

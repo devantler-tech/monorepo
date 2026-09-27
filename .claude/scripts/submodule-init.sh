@@ -320,10 +320,10 @@ probe_nested_checkouts() {
   return "$rc"
 }
 
-# NUL-separated records, so a registered path containing spaces is returned whole.
+# NUL-separated records, so a registered path containing spaces or newlines is returned whole.
 all_paths() {
   local rec
-  while IFS= read -r -d '' rec; do printf '%s\n' "${rec#*$'\n'}"; done \
+  while IFS= read -r -d '' rec; do printf '%s\0' "${rec#*$'\n'}"; done \
     < <(git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$')
 }
 # "Initialised" means git actually treats it as its own repository here — again, asked, not assumed.
@@ -332,13 +332,13 @@ all_paths() {
 # sweep — the fail-open this script must never have.
 initialised_paths() {
   local p
-  while IFS= read -r p; do is_populated "$p" && printf '%s\n' "$p"; done < <(all_paths)
+  while IFS= read -r -d '' p; do is_populated "$p" && printf '%s\0' "$p"; done < <(all_paths)
 }
 
 # Is $1 one of the paths declared in .gitmodules? Only these may have their config rewritten.
 is_registered_submodule() {
   local p=$1 x
-  while IFS= read -r x; do [ "$x" = "$p" ] && return 0; done < <(all_paths)
+  while IFS= read -r -d '' x; do [ "$x" = "$p" ] && return 0; done < <(all_paths)
   return 1
 }
 
@@ -708,8 +708,16 @@ sync_from() {
   # NUL-terminated raw records: a path git would otherwise quote (non-ASCII, tabs, quotes) arrives
   # verbatim, so every check below looks at the real directory.
   diff_file=$(mktemp) || die "could not create a temporary file — refusing to sync"
-  # shellcheck disable=SC2064 # expand the path now: the variable is local to this function
-  trap "rm -f '$diff_file'" EXIT
+  sync_completed=0
+  on_sync_exit() {
+    local status=$?
+    rm -f "$diff_file"
+    if [ "$sync_completed" != 1 ] && [ "$status" = 0 ]; then
+      exit 1
+    fi
+    exit "$status"
+  }
+  trap on_sync_exit EXIT
   if ! git --no-replace-objects diff-tree -z -r --no-renames --raw "$from" HEAD > "$diff_file"; then
     die "could not diff $from..HEAD — refusing to sync"
   fi
@@ -761,15 +769,18 @@ sync_from() {
       done
 
       # A directory that cannot be listed, or listed but not searched, is unexamined — never "nothing
-      # left behind".
-      if [ -e "$path" ] && { ! ls -A "$path" > /dev/null 2>&1 || { [ -d "$path" ] && [ ! -x "$path" ]; }; }; then
-        die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
-      fi
+      # left behind". A replacement symlink at HEAD is inspected as a link directly; dereferencing it
+      # would inspect its target rather than the removed path.
+      if [ ! -L "$path" ]; then
+        if [ -e "$path" ] && { ! ls -A "$path" > /dev/null 2>&1 || { [ -d "$path" ] && [ ! -x "$path" ]; }; }; then
+          die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+        fi
 
-      # A dangling symlink at .git is missed by [ -e "$path/.git" ] and ignored by git status,
-      # but still represents repository residue.
-      if [ -e "$path/.git" ] || [ -L "$path/.git" ]; then
-        die "'$path' is no longer a submodule at HEAD but still holds its old repository — preserve or remove it before evaluating this tree"
+        # A dangling symlink at .git is missed by [ -e "$path/.git" ] and ignored by git status,
+        # but still represents repository residue.
+        if [ -e "$path/.git" ] || [ -L "$path/.git" ]; then
+          die "'$path' is no longer a submodule at HEAD but still holds its old repository — preserve or remove it before evaluating this tree"
+        fi
       fi
 
       # Anything there that HEAD does not track — untracked or ignored — is residue, including
@@ -805,6 +816,9 @@ sync_from() {
     esac
   done
   printf 'submodule-init: submodules in sync with HEAD (changes since %s)\n' "$from"
+  sync_completed=1
+  rm -f "$diff_file"
+  trap - EXIT
 }
 
 # Stop here when SOURCED, so the self-test can exercise the path-comparison helpers directly. The
@@ -836,12 +850,12 @@ case "$1" in
   # first: a check that fixes what it is checking can never fail.
   --check)
     broken=0
-    while IFS= read -r path; do probe "$path" || broken=1; done < <(initialised_paths)
+    while IFS= read -r -d '' path; do probe "$path" || broken=1; done < <(initialised_paths)
     [ "$broken" -eq 0 ] ||
       die 'one or more submodules are NOT isolated — run submodule-init.sh <path> to repair before editing them'
     ;;
   --all)
-    while IFS= read -r path; do init_repair_probe "$path"; done < <(all_paths)
+    while IFS= read -r -d '' path; do init_repair_probe "$path"; done < <(all_paths)
     ;;
   --advance)
     [ $# -eq 2 ] || die 'usage: submodule-init.sh --advance <submodule-path>'
