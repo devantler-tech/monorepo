@@ -342,6 +342,16 @@ check "trap4: retire is idempotent" "0" "$rc_r2"
 # We cannot unmount /dev/urandom here; instead assert the nonce function's
 # contract by checking the script refuses a non-integer issue (usage fail-closed).
 # ---------------------------------------------------------------------------
+# --help prints the usage block and exits 0 on BSD userlands too: a GNU-only
+# `head -n -1` made it print nothing and exit 1 on macOS under pipefail.
+rc_help=0
+out_help="$tmp/out-help"
+"$tool" --help >"$out_help" 2>&1 || rc_help=$?
+check "usage: --help exits 0" "0" "$rc_help"
+check "usage: --help prints the acquire synopsis" "1" \
+  "$(grep -c '^  agent-claim.sh acquire <issue>' "$out_help" || true)"
+check "usage: --help stops before the exit codes" "0" \
+  "$(grep -c 'Exit codes:' "$out_help" || true)"
 rc_bad=0
 "$tool" acquire not-a-number --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || rc_bad=$?
 check "usage: non-integer issue exits 2" "2" "$rc_bad"
