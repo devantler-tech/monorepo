@@ -1057,6 +1057,53 @@ out="$(cd "$c38/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 report "nested origin: a nested checkout of a foreign repository fails --advance" \
   "$([[ $rc -ne 0 ]] && grep -q 'sub/nested — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
+# Round 3 of review on #3624: a sparse fresh checkout, an insteadOf rewrite, a doubly-registered
+# path, and a credential in a mismatching origin URL.
+c11c="$tmp/c11c"
+mk_super "$c11c"
+git -C "$c11c/super" submodule --quiet deinit -f sub >/dev/null
+sparse_shim="$tmp/shim-sparse"
+mkdir -p "$sparse_shim"
+cat >"$sparse_shim/git" <<SHIM
+#!/usr/bin/env bash
+# Run 'submodule update' for real, then hide the pinned file behind skip-worktree and delete it.
+for a in "\$@"; do [[ "\$a" == "submodule" ]] && seen_sub=1; [[ "\$a" == "update" ]] && seen_upd=1; done
+"$real_git" "\$@" || exit \$?
+if [[ -n "\${seen_sub:-}" && -n "\${seen_upd:-}" ]]; then
+  "$real_git" -C sub update-index --skip-worktree file.txt && rm -f sub/file.txt
+fi
+SHIM
+chmod +x "$sparse_shim/git"
+out="$(cd "$c11c/super" && PATH="$sparse_shim:$PATH" "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "sparse init precondition: status hides the missing pinned file" \
+  "$([[ ! -e "$c11c/super/sub/file.txt" && -z "$(git -C "$c11c/super/sub" status --porcelain --untracked-files=no)" ]] && echo yes || echo no)"
+report "sparse init: a fresh checkout with skip-worktree files fails and never reports isolated" \
+  "$([[ $rc -ne 0 ]] && grep -q 'hidden by skip-worktree' <<<"$out" && ! grep -q 'isolated ✓' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+c45="$tmp/c45"
+mk_super "$c45"
+c45_own="$(git -C "$c45/super/sub" config --get remote.origin.url)"
+git init -q "$c45/other-repo"
+git -C "$c45/super/sub" config "url.$c45/other-repo.insteadOf" "$c45_own"
+out="$(cd "$c45/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: an insteadOf rewrite to a foreign repository fails --check" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+c46="$tmp/c46"
+mk_super "$c46"
+git -C "$c46/super" config -f .gitmodules submodule.dup.path sub
+git -C "$c46/super" config -f .gitmodules submodule.dup.url ../elsewhere
+out="$(cd "$c46/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a path registered twice in .gitmodules fails closed" \
+  "$([[ $rc -ne 0 ]] && grep -q 'registers this path more than once' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+c47="$tmp/c47"
+mk_super "$c47"
+git -C "$c47/super/sub" remote set-url origin "https://someone:not-a-real-token@example.invalid/org/repo"
+out="$(cd "$c47/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "origin identity: a mismatching credentialed origin is reported without its credential" \
+  "$([[ $rc -ne 0 ]] && grep -q 'sub — WRONG REPOSITORY' <<<"$out" && ! grep -q 'not-a-real-token' <<<"$out" && grep -q 'https://example.invalid/org/repo' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

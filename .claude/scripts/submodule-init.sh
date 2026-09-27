@@ -361,12 +361,20 @@ normalize_url() {
   printf '%s%s/%s' "$prefix" "$host" "$path"
 }
 
-# The single `remote.origin.url` of the repository at $1. Git fetches from the FIRST of several
+# A URL fit for a diagnostic: userinfo (`https://user:token@host/…`) is dropped, so a credential
+# embedded in a remote never reaches a terminal, CI log or run report.
+redact_url() {
+  printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@#\1#'
+}
+
+# The single origin fetch URL of the repository at $1. Git fetches from the FIRST of several
 # values while `config --get` returns the LAST, so a second value could hide the URL git really
 # uses; several values are ambiguous and print nothing (a mismatch for the caller).
 single_origin_url() {
   local urls
-  urls=$(git -C "$1" config --get-all remote.origin.url 2>/dev/null) || return 0
+  # `remote get-url` applies `url.<base>.insteadOf` rewrites, so this is the URL git would really
+  # fetch from — a rewrite cannot make a foreign repository read as the registered one.
+  urls=$(git -C "$1" remote get-url --all origin 2>/dev/null) || return 0
   [ "$(printf '%s\n' "$urls" | grep -c .)" -eq 1 ] && printf '%s' "$urls"
 }
 
@@ -405,9 +413,14 @@ resolve_relative_url() {
 # as its origin, the repository that superproject's `.gitmodules` registers for that path?
 # Directory content and a self-resolving toplevel say where a checkout IS, not WHICH repository it
 # is: a stray or misplaced clone passes both (monorepo#2941). The expectation comes only from the
-# committed `.gitmodules` (a relative URL resolved as git resolves it), never from mutable
-# per-checkout submodule config. Fails closed: an unreadable, missing or ambiguous origin or
-# expectation is a mismatch, never a pass.
+# superproject's `.gitmodules` (a relative URL resolved as git resolves it), never from the
+# per-checkout `submodule.<name>.url`, which git itself rewrites on `submodule sync`. Fails closed:
+# an unreadable, missing or ambiguous origin or expectation is a mismatch, never a pass.
+#
+# Trust boundary: this detects a MISPLACED or MIS-WIRED checkout, the way the collisions this script
+# exists for actually happen. It is not a defence against a hostile local repository. Whoever can
+# write this machine's git config, hooks or working tree can already run code through any git
+# command, so a check that assumed otherwise would protect nothing and could never be finished.
 origin_is_own() {
   local super=. path key name want got shown
   if [ "$1" = -C ]; then
@@ -418,7 +431,12 @@ origin_is_own() {
   shown=$path
   [ "$super" = . ] || shown="$super/$path"
   key=$(git -C "$super" config -f .gitmodules --get-regexp '^submodule\..*\.path$' |
-    awk -v p="$path" '$2 == p { print $1; exit }')
+    awk -v p="$path" '$2 == p { print $1 }')
+  # Two sections declaring one path register two repositories for it; neither is proven.
+  if [ "$(printf '%s\n' "$key" | grep -c .)" -gt 1 ]; then
+    warn "$shown — .gitmodules registers this path more than once, so which repository it should be is ambiguous. Do not read or edit it."
+    return 1
+  fi
   name=${key#submodule.}
   name=${name%.path}
   want=$(git -C "$super" config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || want=''
@@ -427,11 +445,11 @@ origin_is_own() {
   esac
   got=$(single_origin_url "$super/$path")
   if [ -z "$key" ] || [ -z "$want" ] || [ -z "$got" ]; then
-    warn "$shown — cannot verify which repository it is: origin '${got:-<none or several>}', expected '${want:-<unknown>}'. Do not read or edit it."
+    warn "$shown — cannot verify which repository it is: origin '$(redact_url "${got:-<none or several>}")', expected '$(redact_url "${want:-<unknown>}")'. Do not read or edit it."
     return 1
   fi
   if [ "$(normalize_url "$got")" != "$(normalize_url "$want")" ]; then
-    warn "$shown — WRONG REPOSITORY: its origin is '$got', but .gitmodules registers '$want' for this path. Do not read or edit it. If the repository was only renamed, 'git submodule sync -- $path' updates the origin."
+    warn "$shown — WRONG REPOSITORY: its origin is '$(redact_url "$got")', but .gitmodules registers '$(redact_url "$want")' for this path. Do not read or edit it. If the repository was only renamed, 'git submodule sync -- $path' updates the origin."
     return 1
   fi
 }
@@ -477,6 +495,14 @@ init_repair_probe() {
       die "could not read the status of freshly populated '$path' — do not read or edit it"
     [ -z "$fresh_status" ] ||
       die "'$path' is INCOMPLETE after 'git submodule update --init': its tracked files do not match the pinned commit — do not read or edit it"
+    # `status` cannot see a tracked file hidden by skip-worktree or assume-unchanged, which is how a
+    # sparse checkout leaves pinned files out. A fresh checkout at its pin has neither flag.
+    local fresh_flags
+    fresh_flags=$(git --no-replace-objects -C "$path" ls-files -v 2>/dev/null) ||
+      die "could not read the index flags of freshly populated '$path' — do not read or edit it"
+    if grep -q '^[a-zS]' <<< "$fresh_flags"; then
+      die "'$path' is INCOMPLETE after 'git submodule update --init': tracked files are hidden by skip-worktree or assume-unchanged (a sparse checkout?) — do not read or edit it"
+    fi
   fi
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
 }
