@@ -783,6 +783,28 @@ worktree_state_blocker() {
 # changed path's exact working-tree bytes: a clean filter, ident, an encoding, or a line-ending
 # conversion (attribute or core.autocrlf) rewrites them, and the removal then deletes the only
 # copy of the original. Checked over every changed, staged and untracked path.
+gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE when it holds state
+  # The same whitelist as the worktree's own admin directory, for a submodule repository the
+  # removal deletes: every entry must be ordinary repository content. A bisect, sequencer,
+  # rebase or merge state, a linked worktree's admin dir, or anything unknown blocks.
+  local g=$1 label=$2 entry
+  for entry in "$g"/* "$g"/.[!.]*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    case "${entry##*/}" in
+      HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|config|config.worktree|description|hooks|info|objects|refs|packed-refs|logs|index|modules|shallow|branches) ;;
+      worktrees)
+        if [ -n "$(ls -A "$entry" 2>/dev/null || echo unreadable)" ]; then
+          SALVAGE_NOTE="submodule $label has linked worktrees (removing it would orphan them)"; return 0
+        fi ;;
+      *) SALVAGE_NOTE="submodule $label holds ${entry##*/} (salvage cannot carry it)"; return 0 ;;
+    esac
+  done
+  if [ -e "$g/refs/bisect" ]; then
+    SALVAGE_NOTE="submodule $label is mid-bisect (salvage cannot carry it)"; return 0
+  fi
+  return 1
+}
+
 conversion_blocker() {
   local wt=$1 autocrlf paths attrs
   autocrlf=$(git -C "$wt" config --get core.autocrlf 2>/dev/null) || autocrlf=""
@@ -790,6 +812,23 @@ conversion_blocker() {
     ''|false) ;;
     *) SALVAGE_NOTE="core.autocrlf=$autocrlf converts line endings (salvage would not keep the exact bytes)"; return 0 ;;
   esac
+  # With core.fileMode=false an executable-bit change is invisible to `add`. With
+  # core.ignoreCase=true on a case-SENSITIVE filesystem a case-only rename reads as a
+  # deletion and the renamed file is never added. The admin dir's HEAD, looked up as
+  # `head`, tells the filesystem's case sensitivity without writing anything.
+  local filemode ignorecase admin
+  filemode=$(git -C "$wt" config --bool --get core.fileMode 2>/dev/null) || filemode=""
+  if [ "$filemode" = false ]; then
+    SALVAGE_NOTE="core.fileMode=false hides mode changes (salvage would not keep them)"; return 0
+  fi
+  ignorecase=$(git -C "$wt" config --bool --get core.ignoreCase 2>/dev/null) || ignorecase=""
+  if [ "$ignorecase" = true ]; then
+    admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
+      || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
+    if [ ! -e "$admin/head" ]; then
+      SALVAGE_NOTE="core.ignoreCase=true on a case-sensitive filesystem (salvage could lose a case-only rename)"; return 0
+    fi
+  fi
   paths=$( { git -C "$wt" ls-files -z -m -o --exclude-standard \
              && git -C "$wt" diff --cached --name-only -z; } 2>/dev/null | tr '\0\n' '\n\001') \
     || { SALVAGE_NOTE="cannot list changed paths for the conversion check"; return 0; }
@@ -821,6 +860,7 @@ admin_modules_blocker() {
     [ -n "$h" ] || continue
     g=${h%/HEAD}
     [ -d "$g/objects" ] || continue                  # a reflog's logs/HEAD, not a repository
+    gitdir_state_blocker "$g" "${g#"$admin"/}" && return 0
     if [ -n "$(git --git-dir="$g" rev-list -n 1 --all --reflog --not --remotes 2>/dev/null || echo unreadable)" ]; then
       SALVAGE_NOTE="submodule repository ${g#"$admin"/} holds commits no remote has (cannot be salvaged)"; return 0
     fi
@@ -846,7 +886,7 @@ admin_modules_blocker() {
 # gitlinks, not `git submodule foreach`, which skips a populated submodule that is not
 # registered as active and would fail open on it.
 submodule_local_only_blocker() {
-  local repo=$1 links line path local_only sub_st sub_flags
+  local repo=$1 links line path local_only sub_st sub_flags sub_gitdir
   links=$(git -C "$repo" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') \
     || { SALVAGE_NOTE="cannot list the gitlinks of $repo for salvage"; return 0; }
   case "$links" in
@@ -861,6 +901,9 @@ submodule_local_only_blocker() {
     if [ -n "$local_only" ]; then
       SALVAGE_NOTE="submodule $path holds commits no remote has (cannot be salvaged)"; return 0
     fi
+    sub_gitdir=$(git -C "$repo/$path" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$sub_gitdir" ] \
+      || { SALVAGE_NOTE="cannot locate the repository of submodule $path"; return 0; }
+    gitdir_state_blocker "$sub_gitdir" "$path" && return 0
     # Wherever its repository is stored (absorbed or an embedded .git directory), an
     # initialised submodule must be clean and carry no hidden-index flags: salvage keeps
     # only its gitlink, so an edit status cannot see would be deleted unrecorded.

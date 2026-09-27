@@ -1916,6 +1916,64 @@ t_salvage_keeps_a_filtered_path() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_submodule_mid_bisect() {
+  # A clean bisect in a submodule: status is clean and every commit is on a remote, but
+  # the submodule repository the removal deletes holds the bisect state.
+  local name="salvage KEEPs a worktree whose submodule is mid-bisect"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subbis || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subbis"
+  git -C "$wt/sub" bisect start >/dev/null 2>&1 || { bad "$name" "FIXTURE: bisect start"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -qE 'KEEP .*subbis .*submodule .*(BISECT|mid-bisect)' <<<"$out" && ! grep -q '^SALVAGE .*subbis ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_when_file_modes_are_ignored() {
+  local name="salvage dry-run KEEPs a worktree whose repository ignores file modes"
+  local root; root=$(make_repo)
+  add_wt "$root" nomode pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/nomode"
+  git -C "$wt" config core.fileMode false
+  chmod +x "$wt/file.txt"; echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*nomode .*core.fileMode=false' <<<"$out" && ! grep -q '^SALVAGE .*nomode ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_ignorecase_blocks_only_on_a_case_sensitive_filesystem() {
+  # core.ignoreCase=true loses a case-only rename only where the filesystem distinguishes
+  # case. The test asserts whichever branch this machine's filesystem exercises.
+  local name="salvage refuses core.ignoreCase=true only on a case-sensitive filesystem"
+  local root; root=$(make_repo)
+  add_wt "$root" icase pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/icase" sensitive=yes
+  git -C "$wt" config core.ignoreCase true
+  echo draft > "$wt/untracked.txt"
+  [ -e "$wt/UNTRACKED.TXT" ] && sensitive=no
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if { [ "$sensitive" = yes ] && grep -q 'KEEP .*icase .*core.ignoreCase=true' <<<"$out" \
+         && ! grep -q '^SALVAGE .*icase ' <<<"$out"; } \
+     || { [ "$sensitive" = no ] && grep -q '^SALVAGE .*icase ' <<<"$out"; }; then
+    ok "$name (case-sensitive=$sensitive)"
+  else
+    bad "$name (case-sensitive=$sensitive)" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -1991,5 +2049,8 @@ t_salvage_dry_run_refuses_an_unsnappable_gitlink_change
 t_salvage_keeps_a_hidden_edit_in_an_embedded_submodule
 t_salvage_keeps_unlisted_git_state
 t_salvage_keeps_a_filtered_path
+t_salvage_keeps_a_submodule_mid_bisect
+t_salvage_keeps_when_file_modes_are_ignored
+t_salvage_ignorecase_blocks_only_on_a_case_sensitive_filesystem
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
