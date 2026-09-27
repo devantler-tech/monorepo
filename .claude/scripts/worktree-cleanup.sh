@@ -787,6 +787,53 @@ worktree_state_blocker() {
   if [ "$ita" != 0 ]; then
     SALVAGE_NOTE="intent-to-add index entries exist (salvage cannot carry them)"; return 0
   fi
+  # The salvage refs keep only commits, so a tag object only ORIG_HEAD or FETCH_HEAD names
+  # would lose its only reference with the admin directory.
+  local pseudo
+  pseudo=$(pseudo_ref_commits "$admin") || { SALVAGE_NOTE="cannot read the worktree's pseudo-refs"; return 0; }
+  if pseudo_ref_tag "$admin" "$pseudo"; then
+    SALVAGE_NOTE="ORIG_HEAD or FETCH_HEAD names a tag (salvage cannot carry it)"; return 0
+  fi
+  return 1
+}
+
+# unclassified_module_content <modules-dir> -> prints the first non-directory entry below
+# <modules-dir> that lies in no repository (a directory holding HEAD and objects/), searching
+# each repository's own modules/ the same way. Prints nothing when every file is accounted
+# for; non-zero on a read failure, so the caller fails closed.
+unclassified_module_content() {
+  local dir=$1 list entry nested
+  [ -d "$dir" ] || return 0
+  list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-modules.XXXXXX") || return 1
+  # Repositories are printed and pruned; any other non-directory is stray. NUL-delimited, so
+  # a path holding a newline is neither split nor skipped.
+  if ! find "$dir" -mindepth 1 \
+         \( -type d -exec test -e '{}/HEAD' \; -exec test -d '{}/objects' \; -print0 -prune \) \
+         -o \( ! -type d -print0 \) > "$list" 2>/dev/null; then
+    rm -f "$list"; return 1
+  fi
+  local entries=()
+  while IFS= read -r -d '' entry; do entries+=("$entry"); done < "$list"
+  rm -f "$list"
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    if [ -d "$entry" ] && [ ! -L "$entry" ]; then
+      nested=$(unclassified_module_content "$entry/modules") || return 1
+      [ -z "$nested" ] || { printf '%s\n' "$nested"; return 0; }
+    else
+      printf '%s\n' "$entry"; return 0
+    fi
+  done
+  return 0
+}
+
+# pseudo_ref_tag <gitdir> <shas> -> 0 when any of the (pseudo-ref) objects is not a commit, or
+# its type cannot be read. `rev-list` would peel an annotated tag to its commit and preserve
+# only that, losing the tag object's message or signature.
+pseudo_ref_tag() {
+  local g=$1 sha
+  for sha in $2; do
+    [ "$(git --git-dir="$g" --work-tree="$g" cat-file -t "$sha" 2>/dev/null)" = commit ] || return 0
+  done
   return 1
 }
 
@@ -827,12 +874,9 @@ gitdir_state_blocker() { # <submodule-gitdir> <label> -> 0 with SALVAGE_NOTE whe
   # would die with the repository.
   local pseudo left sha
   pseudo=$(pseudo_ref_commits "$g") || { SALVAGE_NOTE="cannot read the pseudo-refs of submodule $label"; return 0; }
-  # The same holds for them: `rev-list` peels an annotated tag to its commit, so the tag
-  # object itself (its message or signature) must be refused, not only its target.
-  for sha in $pseudo; do
-    [ "$(git --git-dir="$g" --work-tree="$g" cat-file -t "$sha" 2>/dev/null)" = commit ] \
-      || { SALVAGE_NOTE="submodule $label has ORIG_HEAD or FETCH_HEAD naming a tag (salvage cannot carry it)"; return 0; }
-  done
+  if pseudo_ref_tag "$g" "$pseudo"; then
+    SALVAGE_NOTE="submodule $label has ORIG_HEAD or FETCH_HEAD naming a tag (salvage cannot carry it)"; return 0
+  fi
   if [ -n "$pseudo" ]; then
     # shellcheck disable=SC2086  # one sha per word
     left=$(git --git-dir="$g" --work-tree="$g" rev-list -n 1 $pseudo --not --remotes 2>/dev/null || echo unreadable)
@@ -882,9 +926,19 @@ conversion_blocker() {
   # A symlink stores its target unconverted and a deleted path has no bytes left to lose;
   # a directory is a gitlink (a submodule, checked on its own) or a replaced file whose
   # contents `add -A` snapshots path by path; every other present path is hashed.
+  # Only a regular file is hashed: a FIFO would block hash-object forever, and a socket or
+  # device holds no bytes `add` can store, so any other file type blocks.
+  local special=""
   present=$(while IFS= read -r p; do
-              [ -n "$p" ] && [ ! -L "$wt/$p" ] && [ -e "$wt/$p" ] && [ ! -d "$wt/$p" ] && printf '%s\n' "$p"
+              [ -n "$p" ] && [ ! -L "$wt/$p" ] && [ -f "$wt/$p" ] && printf '%s\n' "$p"
             done <<< "$paths" | sort -u)
+  special=$(while IFS= read -r p; do
+              [ -n "$p" ] || continue
+              [ -L "$wt/$p" ] || [ -d "$wt/$p" ] || [ -f "$wt/$p" ] || [ ! -e "$wt/$p" ] || printf '%s\n' "$p"
+            done <<< "$paths" | head -1)
+  if [ -n "$special" ]; then
+    SALVAGE_NOTE="$special is a special file (salvage cannot carry it)"; return 0
+  fi
   [ -n "$present" ] || return 1
   filtered=$(git -C "$wt" hash-object --stdin-paths <<< "$present" 2>/dev/null) \
     && raw=$(git -C "$wt" hash-object --no-filters --stdin-paths <<< "$present" 2>/dev/null) \
@@ -910,6 +964,16 @@ admin_modules_blocker() {
     || { SALVAGE_NOTE="cannot resolve the worktree path"; return 0; }
   heads=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-heads.XXXXXX") \
     || { SALVAGE_NOTE="cannot create a temporary list"; return 0; }
+  # A whitelist over what the removal deletes: every file below modules/ must belong to a
+  # repository this function then inspects. An interrupted clone or a damaged repository with
+  # no HEAD would otherwise be deleted without ever being looked at.
+  local stray
+  if ! stray=$(unclassified_module_content "$admin/modules"); then
+    rm -f "$heads"; SALVAGE_NOTE="cannot inspect the submodule repositories of $wt"; return 0
+  fi
+  if [ -n "$stray" ]; then
+    rm -f "$heads"; SALVAGE_NOTE="the worktree's modules/ holds content outside any repository (${stray#"$admin"/})"; return 0
+  fi
   # NUL-delimited: a repository path holding a newline must not be split and skipped.
   find "$admin/modules" \( -type f -o -type l \) -name HEAD -print0 > "$heads" 2>/dev/null \
     || { rm -f "$heads"; SALVAGE_NOTE="cannot list the submodule repositories of $wt"; return 0; }

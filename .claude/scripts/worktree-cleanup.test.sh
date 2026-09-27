@@ -2378,6 +2378,71 @@ t_salvage_keeps_a_submodule_checkout_it_cannot_enter() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_special_file_without_reading_it() {
+  # A FIFO standing where a tracked file was would block any read of its contents forever.
+  local name="salvage KEEPs a worktree holding a FIFO, without blocking on it"
+  local root; root=$(make_repo)
+  add_wt "$root" fifowt pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/fifowt"
+  rm -f "$wt/file.txt" && mkfifo "$wt/file.txt" || { bad "$name" "FIXTURE: mkfifo"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*fifowt .*file.txt is a special file' <<<"$out" && ! grep -q '^SALVAGE .*fifowt ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_tag_only_the_worktree_fetch_head_names() {
+  # The tag's target commit is on a remote, but the tag object has no other reference.
+  local name="salvage KEEPs a worktree whose FETCH_HEAD names an annotated tag"
+  local root; root=$(make_repo)
+  add_wt "$root" wtftag pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/wtftag" admin t
+  git -C "$wt" -c user.email=t@t.t -c user.name=t tag -a v-fetched -m "only here" \
+    && t=$(git -C "$wt" rev-parse v-fetched) && git -C "$wt" tag -d v-fetched >/dev/null \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '%s\t\ttag '"'"'v-fetched'"'"' of origin\n' "$t" > "$admin/FETCH_HEAD"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*wtftag .*FETCH_HEAD names a tag' <<<"$out" && ! grep -q '^SALVAGE .*wtftag ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_unclassified_content_under_admin_modules() {
+  # An interrupted clone under modules/ has objects but no HEAD, so a HEAD search skips it.
+  local name="salvage KEEPs a worktree whose admin modules/ holds a repository without HEAD"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subpart || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subpart" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if ! grep -q '^SALVAGE .*subpart ' <<<"$out"; then
+    bad "$name" "clean control: $out"; rm -rf "$root"; return
+  fi
+  mkdir -p "$admin/modules/partial/objects/ab" && echo blob > "$admin/modules/partial/objects/ab/cdef"
+  touch -t 202001010000 "$wt"
+  out=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*subpart .*content outside any repository (modules/partial/objects/ab/cdef)' <<<"$out" \
+     && ! grep -q '^SALVAGE .*subpart ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -2473,5 +2538,8 @@ t_salvage_keeps_a_submodule_checkout_it_cannot_enter
 t_salvage_judges_a_conversion_by_its_bytes
 t_salvage_keeps_a_populated_uninitialised_submodule_directory
 t_salvage_keeps_an_admin_submodule_with_an_external_checkout
+t_salvage_keeps_a_special_file_without_reading_it
+t_salvage_keeps_a_tag_only_the_worktree_fetch_head_names
+t_salvage_keeps_unclassified_content_under_admin_modules
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
