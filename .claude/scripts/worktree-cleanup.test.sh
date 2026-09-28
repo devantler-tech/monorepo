@@ -1725,6 +1725,42 @@ t_salvage_preserves_ignored_tracked_paths() {
   rm -rf "$root"
 }
 
+t_salvage_leaves_untracked_tool_noise_out() {
+  # #3641: a large untracked `.codex/` cache beside one real edit must neither be made
+  # permanent by the salvage ref nor push the tree over the cap. A tracked `.agents/` file
+  # is still work: its edit and a tracked deletion there are both captured. A nested
+  # `sub/.codex/` is not the top-level noise directory, so it is captured too.
+  local name="salvage leaves untracked .codex/.agents noise out and keeps tracked files there"
+  local root; root=$(make_repo)
+  add_wt "$root" noisy pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/noisy"
+  mkdir -p "$wt/.agents" "$wt/sub/.codex"
+  echo v1 > "$wt/.agents/tracked"; echo v1 > "$wt/.agents/doomed"
+  git -C "$wt" add .agents; git -C "$wt" commit -qm "track .agents"
+  git -C "$wt" push -q origin "claude/noisy"
+  mkdir -p "$wt/.codex/cache"
+  head -c 20480 /dev/zero > "$wt/.codex/cache/blob.bin"    # over the 8 KB cap on its own
+  echo scratch > "$wt/.agents/untracked"
+  echo v2 > "$wt/.agents/tracked"                          # tracked edit under the noise dir
+  rm -f "$wt/.agents/doomed"                               # tracked deletion there
+  echo nested > "$wt/sub/.codex/keep"
+  echo real > "$wt/real.txt"                               # the one real edit
+  age_tree "$wt"
+  local out; out=$(WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
+  local base; base=$(git -C "$root/repo" for-each-ref --format='%(refname)' 'refs/salvaged/*/head' | sed 's#/head$##')
+  local problems=""
+  [ -n "$base" ] || problems="$problems no-salvage-ref"
+  [ "$(git -C "$root/repo" show "$base/worktree:real.txt" 2>/dev/null)" = real ] || problems="$problems real-edit"
+  [ "$(git -C "$root/repo" show "$base/worktree:.agents/tracked" 2>/dev/null)" = v2 ] || problems="$problems tracked-agents-edit"
+  git -C "$root/repo" cat-file -e "$base/worktree:.agents/doomed" 2>/dev/null && problems="$problems tracked-deletion-lost"
+  [ "$(git -C "$root/repo" show "$base/worktree:sub/.codex/keep" 2>/dev/null)" = nested ] || problems="$problems nested-codex"
+  git -C "$root/repo" cat-file -e "$base/worktree:.codex/cache/blob.bin" 2>/dev/null && problems="$problems cache-captured"
+  git -C "$root/repo" cat-file -e "$base/worktree:.agents/untracked" 2>/dev/null && problems="$problems agents-noise-captured"
+  [ ! -e "$wt" ] || problems="$problems not-reaped"
+  if [ -z "$problems" ]; then ok "$name"; else bad "$name" "$problems :: $out"; fi
+  rm -rf "$root"
+}
+
 t_salvage_reports_why_a_snapshot_failed() {
   # A staged submodule-to-file replacement makes the snapshot's gitlinks differ from HEAD's.
   # The reason is set inside snapshot_tree and must reach the KEEP line, not be lost.
@@ -3340,6 +3376,7 @@ t_salvage_keeps_a_reflog_commit_made_after_the_snapshot
 t_salvage_rechecks_its_cap_under_the_mutex
 t_salvage_dry_run_keeps_a_conflicted_index
 t_salvage_preserves_ignored_tracked_paths
+t_salvage_leaves_untracked_tool_noise_out
 t_salvage_reports_why_a_snapshot_failed
 t_salvage_keeps_a_removed_submodules_local_commit
 t_salvage_keeps_a_hidden_index_edit_in_a_submodule
