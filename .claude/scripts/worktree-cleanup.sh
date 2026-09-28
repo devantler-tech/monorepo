@@ -101,6 +101,11 @@
 # propagates it. Tooling that keys solely on `reaped` would misread that case as an
 # abort and leave a real deletion unaccounted for.
 set -uo pipefail
+# Every git call names its repository explicitly. An inherited location variable would
+# silently redirect those calls (a hook's GIT_INDEX_FILE, say), so the snapshot would
+# describe one repository's state while the removal deletes another's.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_NAMESPACE
 
 REPO_PATH=${1:-}
 MANIFEST=${2:-}
@@ -1102,7 +1107,13 @@ pseudo_ref_commits() {
       [ -n "$sha" ] || continue
       # A token that is not an object id means the file cannot be read as expected.
       case "$sha" in *[!0-9a-f]*) return 1 ;; esac
-      # A commit the object store cannot read right now is not proof there is nothing to lose.
+      case ${#sha} in 40|64) ;; *) return 1 ;; esac
+      # An object the store no longer holds has nothing left to lose, as in head_reflog_ids.
+      local type
+      type=$(git --git-dir="$g" --work-tree="$g" cat-file --batch-check='%(objecttype)' \
+        <<< "$sha" 2>/dev/null) || return 1
+      case "$type" in *missing) continue ;; esac
+      # Anything the store does hold must peel to a commit, or salvage cannot carry it.
       git --git-dir="$g" --work-tree="$g" cat-file -e "$sha^{commit}" 2>/dev/null || return 1
       printf '%s\n' "$sha"
     done < "$g/$f"

@@ -2038,6 +2038,44 @@ t_pseudo_ref_only_commit_alone_triggers_salvage() {
   rm -rf "$root"
 }
 
+t_a_missing_fetch_head_object_does_not_keep_a_clean_worktree() {
+  # An object the store no longer holds has nothing left to lose, so a stale FETCH_HEAD
+  # naming one must not strand a clean, pushed worktree as stuck on every sweep.
+  local name="a FETCH_HEAD naming a pruned object does not keep a clean pushed worktree"
+  local root; root=$(make_repo)
+  add_wt "$root" stalefh pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/stalefh" admin gone
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  gone=0123456789abcdef0123456789abcdef01234567
+  git -C "$wt" cat-file -e "$gone" 2>/dev/null && { bad "$name" "FIXTURE: object exists"; rm -rf "$root"; return; }
+  printf '%s\t\tbranch '"'"'gone'"'"' of origin\n' "$gone" > "$admin/FETCH_HEAD"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" dry-run 0)
+  if grep -q '^REAP  .*stalefh' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_inherited_git_location_variables_do_not_redirect_the_sweep() {
+  # A caller's GIT_DIR / GIT_INDEX_FILE must not decide which repository the sweep reads.
+  local name="inherited GIT_DIR and GIT_INDEX_FILE do not change the sweep's verdicts"
+  local root; root=$(make_repo)
+  abandoned_wt "$root" inherit || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local clean redirected
+  clean=$(run_salvage "$root" dry-run 1 | grep -v '^worktree-cleanup: ')
+  redirected=$(GIT_DIR="$root/origin.git" GIT_INDEX_FILE="$root/bogus.index" \
+    run_salvage "$root" dry-run 1 | grep -v '^worktree-cleanup: ')
+  if [ -n "$clean" ] && [ "$clean" = "$redirected" ]; then
+    ok "$name"
+  else
+    bad "$name" "clean: $clean :: redirected: $redirected"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_preserves_the_old_side_of_a_reflog_entry() {
   # A truncated reflog whose oldest entry is `unpushed -> HEAD`: the unpushed commit is named
   # only on the OLD side, which `reflog show` never prints.
@@ -2448,12 +2486,15 @@ t_salvage_handles_a_basename_with_a_space() {
 }
 
 t_salvage_keeps_when_a_pseudo_ref_commit_is_unreadable() {
-  local name="salvage KEEPs a worktree whose FETCH_HEAD names a commit it cannot read"
+  # An object the store holds but cannot peel to a commit is state salvage cannot carry.
+  # (A MISSING object is different: it has nothing left to lose, and does not block.)
+  local name="salvage KEEPs a worktree whose FETCH_HEAD names an object that is not a commit"
   local root; root=$(make_repo)
   add_wt "$root" badfetch pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
-  local wt="$root/repo/.claude/worktrees/badfetch" admin
+  local wt="$root/repo/.claude/worktrees/badfetch" admin blob
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
-  printf '%s\t\tbranch x of origin\n' 1111111111111111111111111111111111111111 > "$admin/FETCH_HEAD"
+  blob=$(printf 'not a commit\n' | git -C "$wt" hash-object -w --stdin) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  printf '%s\t\tbranch x of origin\n' "$blob" > "$admin/FETCH_HEAD"
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
@@ -3160,6 +3201,8 @@ t_salvage_keeps_a_tag_a_symlinked_submodule_reflog_names
 t_salvage_keeps_a_staged_blob_in_a_checkout_less_submodule_repository
 t_salvage_reads_an_unterminated_fetch_head_line
 t_pseudo_ref_only_commit_alone_triggers_salvage
+t_a_missing_fetch_head_object_does_not_keep_a_clean_worktree
+t_inherited_git_location_variables_do_not_redirect_the_sweep
 t_salvage_preserves_the_old_side_of_a_reflog_entry
 t_salvage_keeps_an_ignored_embedded_repository
 t_salvage_keeps_an_ignored_bare_repository
