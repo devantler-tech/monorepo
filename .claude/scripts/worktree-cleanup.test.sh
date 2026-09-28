@@ -2257,9 +2257,9 @@ t_staging_old_bytes_in_an_old_worktree_is_not_salvaged() {
   echo "old edit" > "$wt/file.txt"
   age_tree "$wt"
   local admin; admin=$(git -C "$wt" rev-parse --absolute-git-dir)
-  local before; before=$("$REAL_STAT" -f %m "$wt/file.txt" 2>/dev/null || "$REAL_STAT" -c %Y "$wt/file.txt")
+  local before; before=$("$REAL_STAT" -c %Y "$wt/file.txt" 2>/dev/null || "$REAL_STAT" -f %m "$wt/file.txt")
   git -C "$wt" add file.txt
-  local after; after=$("$REAL_STAT" -f %m "$wt/file.txt" 2>/dev/null || "$REAL_STAT" -c %Y "$wt/file.txt")
+  local after; after=$("$REAL_STAT" -c %Y "$wt/file.txt" 2>/dev/null || "$REAL_STAT" -f %m "$wt/file.txt")
   [ "$before" = "$after" ] || { bad "$name" "FIXTURE: git add moved the file mtime"; rm -rf "$root"; return; }
   local out; out=$(run_salvage "$root" apply 1)
   if ! grep -q 'KEEP .*freshstage .*uncommitted change' <<<"$out" || grep -q '^SALVAGED .*freshstage' <<<"$out" \
@@ -2288,9 +2288,9 @@ t_the_sweep_never_rewrites_a_worktree_index() {
   echo "old edit" > "$wt/file.txt"; git -C "$wt" add file.txt
   age_tree "$wt"
   local admin; admin=$(git -C "$wt" rev-parse --absolute-git-dir)
-  local before; before=$("$REAL_STAT" -f %m "$admin/index" 2>/dev/null || "$REAL_STAT" -c %Y "$admin/index")
+  local before; before=$("$REAL_STAT" -c %Y "$admin/index" 2>/dev/null || "$REAL_STAT" -f %m "$admin/index")
   local out; out=$(run_salvage "$root" dry-run 1)
-  local after; after=$("$REAL_STAT" -f %m "$admin/index" 2>/dev/null || "$REAL_STAT" -c %Y "$admin/index")
+  local after; after=$("$REAL_STAT" -c %Y "$admin/index" 2>/dev/null || "$REAL_STAT" -f %m "$admin/index")
   if [ "$before" = "$after" ] && grep -q '^SALVAGE .*noidx' <<<"$out"; then
     ok "$name"
   else
