@@ -511,6 +511,11 @@ result at the current head — self-promotion is forbidden before that. Request 
 - **Only one provider request may be active at a time.** Never fan out or request two reviewers
   concurrently. The priority above sets the order: request one, wait for its substantive outcome,
   then either stop on success, restart after fixes, or advance after a provider/service failure.
+  **That wait is the *Latency discipline* wait, never a loop in the foreground:** arm one watcher
+  and start the next item, or make one bounded one-shot read and, if no review has landed, leave the
+  PR on rung 1 and move on. A loop that re-reads the PR's comments or reviews between sleeps is the
+  busy-wait that section forbids, whatever its iteration cap: foreground review waits across Claude
+  Engineer runs grew from 4 to 215 minutes a day between 09-24 and 09-28 (monorepo#3660).
   Track serving state (rate-limit responses, unserved requests, stall times) so a demonstrably
   unavailable lane can be skipped without wasting its tokens, but never skip a serving higher lane
   merely because a lower lane may be faster.
@@ -534,7 +539,9 @@ result at the current head — self-promotion is forbidden before that. Request 
   reacts, be patient: it accepted the request, so do not duplicate the trigger or open the next lane
   during its normal response envelope. **A reaction earns a generous bounded wait, not an infinite lease**:
   only after that provider's measured envelope expires with no substantive artifact may the run
-  record concrete stall evidence and advance. With **no reaction emoji**, be impatient: after
+  record concrete stall evidence and advance. The envelope runs from the request marker's timestamp,
+  so any later read can judge it; it never licenses holding this run open to watch it. With **no
+  reaction emoji**, be impatient: after
   a short bounded wait, inspect the exact trigger shape and app availability, correct/repost a
   malformed trigger, or advance on concrete stall/unavailability evidence. The ack or reaction is
   not itself a successful review; it decides how patiently to wait for the substantive artifact.
