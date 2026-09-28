@@ -2149,6 +2149,25 @@ t_a_fifo_fetch_head_keeps_without_blocking() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_non_mutex_ref_in_the_claim_lock_namespace() {
+  local name="salvage KEEPs a hand-made ref under the claim-lock namespace"
+  local root; root=$(make_repo)
+  add_wt "$root" lockns pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/lockns" c
+  c=$(git -C "$wt" commit-tree 'HEAD^{tree}' -p HEAD -m only-here) \
+    && git -C "$wt" update-ref refs/worktree/claim-locks/manual "$c" \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*lockns .*claim-locks/manual is not an ownership mutex' <<<"$out" && [ -d "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_deleted_intent_to_add_entry() {
   # `git add -N` then `rm`: the worktree diff calls it D, but the index entry remains.
   local name="salvage dry-run KEEPs an intent-to-add entry whose file was deleted"
@@ -2973,5 +2992,6 @@ t_salvage_keeps_an_ignored_embedded_repository
 t_salvage_keeps_an_ignored_bare_repository
 t_salvage_keeps_an_unknown_admin_log
 t_a_fifo_fetch_head_keeps_without_blocking
+t_salvage_keeps_a_non_mutex_ref_in_the_claim_lock_namespace
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

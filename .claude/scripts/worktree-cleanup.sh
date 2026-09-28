@@ -830,13 +830,28 @@ worktree_state_blocker() {
     fi
   fi
   if [ -d "$admin/refs" ]; then
-    # The ownership mutex this sweep holds is itself a per-worktree ref; it guards the
-    # removal and carries no work, so it is the one ref excluded.
-    refs=$(find "$admin/refs" ! -type d ! -path "$admin/$WORKTREE_CLAIM_LOCK_REF_PREFIX/*" 2>/dev/null) \
+    # The ownership mutex is itself a per-worktree ref; it guards the removal and carries no
+    # work, so it is the one ref excluded — and only in its exact shape: a hash-named ref
+    # under the claim-lock namespace pointing at a blob that holds nothing but the lock's
+    # own pid= and created_at= lines. Any other ref there (a commit, a hand-made name) blocks.
+    refs=$(find "$admin/refs" ! -type d 2>/dev/null) \
       || { SALVAGE_NOTE="cannot list per-worktree refs"; return 0; }
-    if [ -n "$refs" ]; then
-      SALVAGE_NOTE="per-worktree refs exist (salvage cannot carry them)"; return 0
-    fi
+    local r name body
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      name=${r#"$admin"/}
+      case "$name" in
+        "$WORKTREE_CLAIM_LOCK_REF_PREFIX"/*) ;;
+        *) SALVAGE_NOTE="per-worktree refs exist (salvage cannot carry them)"; return 0 ;;
+      esac
+      body=""
+      if ! printf '%s\n' "${name##*/}" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' \
+         || [ "$(git -C "$wt" cat-file -t "$name" 2>/dev/null)" != blob ] \
+         || ! body=$(git -C "$wt" cat-file blob "$name" 2>/dev/null) || [ -z "$body" ] \
+         || grep -Evq '^(pid|created_at)=' <<< "$body"; then
+        SALVAGE_NOTE="per-worktree ref $name is not an ownership mutex (salvage cannot carry it)"; return 0
+      fi
+    done <<< "$refs"
   fi
   # Read the index flag itself (CE_INTENT_TO_ADD, bit 29 of the --debug flags): a worktree
   # diff calls a deleted intent-to-add path D, not A, yet write-tree still drops it.
