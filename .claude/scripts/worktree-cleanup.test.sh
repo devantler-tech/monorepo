@@ -2108,6 +2108,30 @@ t_salvage_keeps_an_ignored_bare_repository() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_bare_repository_with_a_symlinked_object_store() {
+  # Git resolves a bare repository whose objects/ is a symlink, so the layout check must see
+  # the symlink too, or the removal deletes the repository's refs and object store.
+  local name="salvage KEEPs a worktree holding a bare repository whose objects/ is a symlink"
+  local root; root=$(make_repo)
+  add_wt "$root" symbare pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/symbare"
+  { git init -q --bare "$wt/unique.git" && mv "$wt/unique.git/objects" "$wt/store" \
+      && ln -s ../store "$wt/unique.git/objects" \
+      && git --git-dir="$wt/unique.git" rev-parse --git-dir >/dev/null; } \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  printf 'unique.git/\nstore/\n' >> "$(git -C "$wt" rev-parse --git-path info/exclude)"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*symbare .*nested repository' <<<"$out" && [ -f "$wt/unique.git/HEAD" ] \
+     && ! grep -q '^SALVAGED .*symbare' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_an_unknown_admin_log() {
   local name="salvage KEEPs a worktree whose admin logs/ holds more than the HEAD reflog"
   local root; root=$(make_repo)
@@ -3139,6 +3163,7 @@ t_pseudo_ref_only_commit_alone_triggers_salvage
 t_salvage_preserves_the_old_side_of_a_reflog_entry
 t_salvage_keeps_an_ignored_embedded_repository
 t_salvage_keeps_an_ignored_bare_repository
+t_salvage_keeps_a_bare_repository_with_a_symlinked_object_store
 t_salvage_keeps_an_unknown_admin_log
 t_a_fifo_fetch_head_keeps_without_blocking
 t_salvage_keeps_a_non_mutex_ref_in_the_claim_lock_namespace

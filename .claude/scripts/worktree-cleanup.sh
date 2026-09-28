@@ -767,10 +767,11 @@ nested_repository_blocker() {
     return 0
   fi
   # A .git entry marks a repository with a working tree; a bare repository has none, so it
-  # is recognised by its own layout: an objects/ directory beside a HEAD file and refs/.
+  # is recognised by its own layout: an objects/ entry beside a HEAD file and refs/. Git
+  # resolves an objects/ symlink normally, so a symlink counts as well as a directory.
   local objs o
   if ! found=$(find "$wt" -mindepth 2 -name .git -prune -print 2>/dev/null) \
-     || ! objs=$(find "$wt" -mindepth 2 -type d -name objects -prune -print 2>/dev/null); then
+     || ! objs=$(find "$wt" -mindepth 2 -name objects \( -type d -o -type l \) -prune -print 2>/dev/null); then
     SALVAGE_NOTE="cannot search the worktree for nested repositories"; return 0
   fi
   while IFS= read -r o; do
