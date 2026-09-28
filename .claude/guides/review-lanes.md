@@ -331,12 +331,14 @@ result at the current head — self-promotion is forbidden before that. Request 
   4 seconds apart (#2894). Run
   [`review-request-lock.sh acquire --repo <owner>/<repo> --pr <n> --head <headRefOid> --provider <cr|codex|bugbot> --owner <session-owner-token>`](../scripts/review-request-lock.sh)
   after the marker re-read and before the comment. It creates the ref
-  `refs/agent-review-lock/<pr>/<head>/<provider>` through the REST API, and GitHub refuses to create
-  a ref that already exists, so exactly one instance wins each head and provider. Exit `0` means
+  `refs/agent-review-lock/<pr>/<head>/<provider>/<generation>` through the REST API, pointing at an
+  annotated tag object on the PR head (no commit is created). GitHub refuses to create a ref that
+  already exists, so exactly one instance wins each head and provider. Exit `0` means
   post the request — including when the lock is already yours, so your own bounded retry is never
   blocked. Exit `1` means another instance is requesting that review: do not post, and move to the
   next rung-1 item. Exit `2` is UNKNOWN and authorizes no request this run. The lock expires after
-  30 minutes, by which time the winner's marker is visible and the re-read governs again. It is a
+  30 minutes and is then taken over by creating the next generation, which is just as atomic; by
+  then the winner's marker is visible and the re-read governs again. It is a
   ref, not a comment, so it is not the retired reservation comment below. Remove locks left by
   closed PRs with `review-request-lock.sh sweep --repo <owner>/<repo> [--apply]`.
   [`bugbot-request-marker.sh --repo <owner>/<repo> --pr <n> [--head <headRefOid>]`](../scripts/bugbot-request-marker.sh)

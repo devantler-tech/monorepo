@@ -16,11 +16,14 @@
 #   already exists (HTTP 422). The create IS the read, so exactly one instance wins a key.
 #
 # MECHANISM
-#   ref   refs/agent-review-lock/<pr>/<head>/<provider>   (outside refs/heads and refs/tags, so it
-#         triggers no workflow, matches no ruleset and never shows up as a branch)
-#   value a parentless commit whose message records `owner=<token>` and `created_epoch=<seconds>`
-#   A lock older than the lease may be taken over. After the lease, the request marker the winner
-#   posted is visible to every sibling, so the marker re-read governs from then on.
+#   ref   refs/agent-review-lock/<pr>/<head>/<provider>/<generation>
+#         (outside refs/heads and refs/tags, so it triggers no workflow, matches no ruleset and
+#         never shows up as a branch)
+#   value an annotated tag object on the PR head whose message records `owner=<token>` and
+#         `created_epoch=<seconds>` (no commit is created)
+#   A lock older than the lease is taken over by creating the next generation, never by updating
+#   a ref, so a takeover is as atomic as the first acquire. By then the request marker the
+#   winner posted is visible to every sibling, so the marker re-read also governs.
 #
 # USAGE
 #   review-request-lock.sh acquire --repo <owner/repo> --pr <n> --head <40-hex sha>
@@ -46,7 +49,7 @@ die() {
 }
 
 usage() {
-  sed -n '25,38p' "$0" >&2
+  sed -n '28,41p' "$0" >&2
   exit 2
 }
 
@@ -66,35 +69,45 @@ api() {
   return "${rc}"
 }
 
-new_lock_commit() {
-  local content tree
+# new_lock_object — an annotated tag object on the PR head whose message records the owner and the
+# creation time. It adds no commit anywhere: the object it points at is the PR's own head commit.
+new_lock_object() {
+  local content
   content="$(printf '%s\nowner=%s\ncreated_epoch=%s\npr=%s\nhead=%s\nprovider=%s\n' \
     "${PREFIX}" "${owner}" "$(now_epoch)" "${pr}" "${head}" "${provider}")"
-  # GitHub documents refs as pointing at commits, so the record is a parentless commit whose
-  # message holds it (its one-file tree carries the same text for anyone browsing the ref).
-  api -X POST "repos/${repo}/git/trees" -f "tree[][path]=lock" -f "tree[][mode]=100644" \
-    -f "tree[][type]=blob" -f "tree[][content]=${content}" --jq .sha ||
-    die "could not create the lock tree: ${api_out}"
-  [[ "${api_out}" =~ ^[0-9a-f]{40}$ ]] || die "unexpected tree sha: ${api_out}"
-  tree="${api_out}"
-  api -X POST "repos/${repo}/git/commits" -f message="${content}" -f tree="${tree}" --jq .sha ||
-    die "could not create the lock commit: ${api_out}"
-  [[ "${api_out}" =~ ^[0-9a-f]{40}$ ]] || die "unexpected commit sha: ${api_out}"
+  api -X POST "repos/${repo}/git/tags" -f tag="${PREFIX}" -f message="${content}" \
+    -f object="${head}" -f type=commit --jq .sha ||
+    die "could not create the lock object: ${api_out}"
+  [[ "${api_out}" =~ ^[0-9a-f]{40}$ ]] || die "unexpected lock object sha: ${api_out}"
   printf '%s' "${api_out}"
 }
 
-# read_lock — sets lock_owner and lock_created from the current lock value.
+# read_lock <key> — sets lock_owner and lock_created from that lock's record.
 read_lock() {
   local sha content
-  api "repos/${repo}/git/ref/${key}" --jq .object.sha || die "could not read ${key}: ${api_out}"
+  api "repos/${repo}/git/ref/$1" --jq .object.sha || die "could not read $1: ${api_out}"
   sha="${api_out}"
-  [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || die "unexpected lock sha for ${key}: ${sha}"
-  api "repos/${repo}/git/commits/${sha}" --jq .message || die "could not read lock commit ${sha}: ${api_out}"
+  [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || die "unexpected lock sha for $1: ${sha}"
+  api "repos/${repo}/git/tags/${sha}" --jq .message || die "could not read lock object ${sha}: ${api_out}"
   content="${api_out}"
   lock_owner="$(printf '%s\n' "${content}" | sed -n 's/^owner=//p' | head -n 1)"
   lock_created="$(printf '%s\n' "${content}" | sed -n 's/^created_epoch=//p' | head -n 1)"
   [ -n "${lock_owner}" ] && [[ "${lock_created}" =~ ^[0-9]+$ ]] ||
-    die "lock ${key} carries no owner/created_epoch — refusing to guess"
+    die "lock $1 carries no owner/created_epoch — refusing to guess"
+}
+
+# latest_generation — prints the highest lock generation for this PR, head and provider (0 = none).
+latest_generation() {
+  local refs ref g max=0
+  api "repos/${repo}/git/matching-refs/${base}/" --jq '.[].ref' || die "could not list ${base}: ${api_out}"
+  refs="${api_out}"
+  while IFS= read -r ref; do
+    [ -n "${ref}" ] || continue
+    g="${ref#refs/"${base}"/}"
+    [[ "${g}" =~ ^[1-9][0-9]*$ ]] || die "unrecognised lock ref ${ref}"
+    [ "${g}" -gt "${max}" ] && max="${g}"
+  done <<<"${refs}"
+  printf '%s' "${max}"
 }
 
 # prune_other_heads — delete this PR's locks for heads other than the current one. Best effort:
@@ -111,43 +124,46 @@ prune_other_heads() {
   done <<<"${refs}"
 }
 
+# Every state change is a CREATE of a new ref, never an update: the REST API has no
+# compare-and-swap on update, so an expired lock is taken over by creating the next generation
+# `<base>/<n+1>`, which exactly one contender can do.
 acquire() {
-  local lock age
-  key="${PREFIX}/${pr}/${head}/${provider}"
-  lock="$(new_lock_commit)"
+  local gen next key age=0 lock
+  base="${PREFIX}/${pr}/${head}/${provider}"
+  gen="$(latest_generation)"
+  next=1
+  if [ "${gen}" -gt 0 ]; then
+    read_lock "${base}/${gen}"
+    if [ "${lock_owner}" = "${owner}" ]; then
+      echo "HELD ${base}/${gen} owner=${owner}"
+      return 0
+    fi
+    age=$(($(now_epoch) - lock_created))
+    if [ "${age}" -lt $((lease_minutes * 60)) ]; then
+      echo "LOCKED ${base}/${gen} owner=${lock_owner} age=${age}s lease=$((lease_minutes * 60))s"
+      return 1
+    fi
+    next=$((gen + 1))
+  fi
+
+  key="${base}/${next}"
+  lock="$(new_lock_object)"
   if api -X POST "repos/${repo}/git/refs" -f ref="refs/${key}" -f sha="${lock}" --jq .ref; then
     prune_other_heads
-    echo "ACQUIRED ${key} owner=${owner}"
+    if [ "${next}" -gt 1 ]; then
+      echo "ACQUIRED ${key} owner=${owner} takeover-after=${age}s"
+    else
+      echo "ACQUIRED ${key} owner=${owner}"
+    fi
     return 0
   fi
   case "${api_out}" in
     *"Reference already exists"*) ;;
     *) die "could not create ${key}: ${api_out}" ;;
   esac
-
-  read_lock
-  if [ "${lock_owner}" = "${owner}" ]; then
-    echo "HELD ${key} owner=${owner}"
-    return 0
-  fi
-  age=$(($(now_epoch) - lock_created))
-  if [ "${age}" -lt $((lease_minutes * 60)) ]; then
-    echo "LOCKED ${key} owner=${lock_owner} age=${age}s lease=$((lease_minutes * 60))s"
-    return 1
-  fi
-
-  # Expired: take it over, then read back. The REST API offers no compare-and-swap on update, so
-  # two simultaneous takeovers can both win; by then the first request's marker is visible and the
-  # caller's marker re-read is what arbitrates.
-  api -X PATCH "repos/${repo}/git/refs/${key}" -f sha="${lock}" -F force=true --jq .ref ||
-    die "could not take over expired ${key}: ${api_out}"
-  read_lock
-  if [ "${lock_owner}" != "${owner}" ]; then
-    echo "LOCKED ${key} owner=${lock_owner} (lost the takeover)"
-    return 1
-  fi
-  prune_other_heads
-  echo "ACQUIRED ${key} owner=${owner} takeover-after=${age}s"
+  read_lock "${key}"
+  echo "LOCKED ${key} owner=${lock_owner} (another instance created it first)"
+  return 1
 }
 
 sweep() {

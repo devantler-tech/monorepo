@@ -26,7 +26,7 @@ store="$tmp/store"
 mkdir -p "$tmp/bin" "$store/refs" "$store/blobs" "$store/pulls"
 cat >"$tmp/bin/gh" <<'STUB'
 #!/usr/bin/env bash
-# Minimal GitHub REST stand-in for the git refs, trees, commits and pulls endpoints.
+# Minimal GitHub REST stand-in for the git refs, tags and pulls endpoints.
 set -euo pipefail
 store="${GH_STUB_STORE:?}"
 [ "$1" = api ] || { echo "stub: only 'gh api' is supported" >&2; exit 1; }
@@ -54,11 +54,8 @@ if [ -n "${GH_STUB_FAIL:-}" ] && [[ "${method} ${path}" == *${GH_STUB_FAIL}* ]];
 fi
 rest="${path#repos/o/r/}"
 case "${method} ${rest}" in
-  "POST git/trees")
-    sha="$(printf 'tree %s' "$content" | shasum | cut -c1-40)"
-    echo "$sha" ;;
-  "POST git/commits")
-    sha="$(printf 'commit %s %s' "$content" "$RANDOM$RANDOM" | shasum | cut -c1-40)"
+  "POST git/tags")
+    sha="$(printf 'tag %s %s' "$content" "$RANDOM$RANDOM" | shasum | cut -c1-40)"
     printf '%s' "$content" >"$store/blobs/$sha"
     echo "$sha" ;;
   "POST git/refs")
@@ -83,8 +80,8 @@ case "${method} ${rest}" in
     f="$store/refs/${rest#git/ref/}"
     [ -f "$f" ] || { echo '{"message":"Not Found","status":"404"}'; exit 1; }
     cat "$f"; echo ;;
-  "GET git/commits/"*)
-    f="$store/blobs/${rest#git/commits/}"
+  "GET git/tags/"*)
+    f="$store/blobs/${rest#git/tags/}"
     [ -f "$f" ] || { echo '{"message":"Not Found"}'; exit 1; }
     cat "$f" ;;
   "GET git/matching-refs/"*)
@@ -136,9 +133,20 @@ run_acq() { # run_acq <label> <want-exit> <want> <pr> <head> <provider> <owner> 
   while IFS= read -r a; do args+=("$a"); done < <(acq "$@")
   expect "$label" "$rc" "$want" "${args[@]}"
 }
+# latest_ref <pr> <head> <provider> — the highest-generation lock file for that key.
+latest_ref() {
+  local d="$store/refs/agent-review-lock/$1/$2/$3"
+  local g
+  g="$(find "$d" -type f 2>/dev/null | sed 's#.*/##' | sort -n | tail -n 1)"
+  printf '%s/%s' "$d" "$g"
+}
+# has_lock <pr> <head> <provider> — succeeds when any generation of that key exists.
+has_lock() {
+  [ -n "$(find "$store/refs/agent-review-lock/$1/$2/$3" -type f 2>/dev/null)" ]
+}
 lock_owner_of() { # lock_owner_of <pr> <head> <provider>
   local sha
-  sha="$(cat "$store/refs/agent-review-lock/$1/$2/$3")"
+  sha="$(cat "$(latest_ref "$1" "$2" "$3")")"
   sed -n 's/^owner=//p' "$store/blobs/$sha"
 }
 
@@ -146,23 +154,23 @@ export REVIEW_LOCK_NOW=1000000
 
 echo "acquire:"
 run_acq "a fresh key is acquired" 0 "ACQUIRED agent-review-lock/7/${head_a}/cr" 7 "$head_a" cr claude-run1
-[ "$(lock_owner_of 7 "$head_a" cr)" = claude-run1 ] || bad "the lock blob does not record its owner"
+[ "$(lock_owner_of 7 "$head_a" cr)" = claude-run1 ] || bad "the lock object does not record its owner"
 run_acq "the owner re-acquiring its own lock proceeds (a retry is not a duplicate)" 0 "HELD" 7 "$head_a" cr claude-run1
-run_acq "another instance inside the lease stands down" 1 "LOCKED agent-review-lock/7/${head_a}/cr owner=claude-run1 age=0s" 7 "$head_a" cr codex-run9
+run_acq "another instance inside the lease stands down" 1 "LOCKED agent-review-lock/7/${head_a}/cr/1 owner=claude-run1 age=0s" 7 "$head_a" cr codex-run9
 REVIEW_LOCK_NOW=$((1000000 + 29 * 60)) run_acq "still locked one minute before the lease ends" 1 "LOCKED" 7 "$head_a" cr codex-run9
 run_acq "another provider on the same head is a different key" 0 "ACQUIRED agent-review-lock/7/${head_a}/codex" 7 "$head_a" codex codex-run9
 run_acq "the same head on another PR is a different key" 0 "ACQUIRED" 8 "$head_a" cr codex-run9
-REVIEW_LOCK_NOW=$((1000000 + 30 * 60)) run_acq "an expired lock is taken over" 0 "takeover-after=1800s" 7 "$head_a" cr codex-run9
+REVIEW_LOCK_NOW=$((1000000 + 30 * 60)) run_acq "an expired lock is taken over" 0 "ACQUIRED agent-review-lock/7/${head_a}/cr/2 owner=codex-run9 takeover-after=1800s" 7 "$head_a" cr codex-run9
 [ "$(lock_owner_of 7 "$head_a" cr)" = codex-run9 ] || bad "takeover did not rewrite the owner"
 run_acq "a shorter --lease-minutes is honoured" 1 "lease=60s" 7 "$head_a" cr claude-run1 --lease-minutes 1
 REVIEW_LOCK_NOW=$((1000000 + 30 * 60 + 61)) run_acq "…and expires on it" 0 "ACQUIRED" 7 "$head_a" cr claude-run1 --lease-minutes 1
 
 echo "pruning:"
 run_acq "a new head is acquired" 0 "ACQUIRED agent-review-lock/7/${head_b}/cr" 7 "$head_b" cr claude-run2
-[ ! -e "$store/refs/agent-review-lock/7/${head_a}/cr" ] || bad "old-head cr lock on PR 7 was not pruned"
-[ ! -e "$store/refs/agent-review-lock/7/${head_a}/codex" ] || bad "old-head codex lock on PR 7 was not pruned"
-[ -e "$store/refs/agent-review-lock/8/${head_a}/cr" ] || bad "pruning PR 7 deleted PR 8's lock"
-[ -e "$store/refs/agent-review-lock/7/${head_b}/cr" ] || bad "pruning deleted the lock it had just acquired"
+! has_lock 7 "$head_a" cr || bad "old-head cr lock on PR 7 was not pruned"
+! has_lock 7 "$head_a" codex || bad "old-head codex lock on PR 7 was not pruned"
+has_lock 8 "$head_a" cr || bad "pruning PR 7 deleted PR 8's lock"
+has_lock 7 "$head_b" cr || bad "pruning deleted the lock it had just acquired"
 
 echo "race:"
 # Eight instances race one key at the same instant; exactly one may win.
@@ -186,16 +194,40 @@ else
   bad "race: winners=${winners} losers=${losers}"
 fi
 
+# Eight instances race to take over the same EXPIRED lock. A read-back after an update could let
+# several win; creating the next generation lets exactly one.
+for i in 1 2 3 4 5 6 7 8; do
+  ( rc=0
+    REVIEW_LOCK_NOW=$((1000000 + 31 * 60)) "$lock" acquire --repo o/r --pr 42 --head "$head_a" --provider cr \
+      --owner "taker-$i" >"$tmp/take-$i.out" 2>&1 || rc=$?
+    echo "$rc" >"$tmp/take-$i.rc" ) &
+done
+wait
+winners=0 losers=0
+for i in 1 2 3 4 5 6 7 8; do
+  case "$(cat "$tmp/take-$i.rc")" in
+    0) winners=$((winners + 1)); winner="taker-$i" ;;
+    1) losers=$((losers + 1)) ;;
+    *) bad "taker-$i exited unexpectedly: $(cat "$tmp/take-$i.out")" ;;
+  esac
+done
+if [ "$winners" -eq 1 ] && [ "$losers" -eq 7 ] && [ "$(lock_owner_of 42 "$head_a" cr)" = "$winner" ] &&
+  [ "$(basename "$(latest_ref 42 "$head_a" cr)")" = 2 ]; then
+  echo "  ok   eight simultaneous takeovers of an expired lock produce exactly one winner, at generation 2"
+else
+  bad "takeover race: winners=${winners} losers=${losers}"
+fi
+
 echo "fail closed:"
 GH_STUB_FAIL="POST repos/o/r/git/refs" run_acq "a non-422 create failure is UNKNOWN, never a win" 2 "could not create" 9 "$head_a" cr claude-run1
-GH_STUB_FAIL="POST repos/o/r/git/commits" run_acq "a failed lock-commit write is UNKNOWN" 2 "could not create the lock commit" 9 "$head_a" cr claude-run1
+GH_STUB_FAIL="POST repos/o/r/git/tags" run_acq "a failed lock-object write is UNKNOWN" 2 "could not create the lock object" 9 "$head_a" cr claude-run1
 GH_STUB_FAIL="GET repos/o/r/git/ref/" run_acq "an unreadable existing lock is UNKNOWN, never a loss or a win" 2 "could not read" 7 "$head_b" cr codex-run3
 junk="$(printf 'no owner here' | shasum | cut -c1-40)"
 printf 'no owner here' >"$store/blobs/$junk"
-mkdir -p "$store/refs/agent-review-lock/10/${head_a}"
-printf '%s' "$junk" >"$store/refs/agent-review-lock/10/${head_a}/cr"
+mkdir -p "$store/refs/agent-review-lock/10/${head_a}/cr"
+printf '%s' "$junk" >"$store/refs/agent-review-lock/10/${head_a}/cr/1"
 run_acq "a lock with no owner is UNKNOWN, never taken over" 2 "carries no owner" 10 "$head_a" cr claude-run1
-[ "$(cat "$store/refs/agent-review-lock/10/${head_a}/cr")" = "$junk" ] || bad "a malformed lock was overwritten"
+[ "$(find "$store/refs/agent-review-lock/10/${head_a}/cr" -type f | wc -l | tr -d " ")" = 1 ] || bad "a malformed lock was taken over"
 
 echo "usage:"
 run_acq "an abbreviated head is refused" 2 "full 40-character" 7 0123456 cr claude-run1
@@ -209,15 +241,15 @@ rm -rf "$store/refs/agent-review-lock/10"
 printf 'open' >"$store/pulls/7"
 printf 'closed' >"$store/pulls/8"
 printf 'closed' >"$store/pulls/42"
-expect "dry-run lists locks of closed PRs and keeps open ones" 0 "kept=1 would-delete=2" sweep --repo o/r
-[ -e "$store/refs/agent-review-lock/8/${head_a}/cr" ] || bad "dry-run deleted a lock"
-expect "--apply deletes only closed PRs' locks" 0 "kept=1 deleted=2" sweep --repo o/r --apply
-[ ! -e "$store/refs/agent-review-lock/8/${head_a}/cr" ] || bad "--apply left a closed PR's lock"
-[ -e "$store/refs/agent-review-lock/7/${head_b}/cr" ] || bad "--apply deleted an open PR's lock"
-mkdir -p "$store/refs/agent-review-lock/11/${head_a}"
-printf 'x' >"$store/refs/agent-review-lock/11/${head_a}/cr"
+expect "dry-run lists locks of closed PRs and keeps open ones" 0 "kept=1 would-delete=3" sweep --repo o/r
+has_lock 8 "$head_a" cr || bad "dry-run deleted a lock"
+expect "--apply deletes only closed PRs' locks" 0 "kept=1 deleted=3" sweep --repo o/r --apply
+! has_lock 8 "$head_a" cr || bad "--apply left a closed PR's lock"
+has_lock 7 "$head_b" cr || bad "--apply deleted an open PR's lock"
+mkdir -p "$store/refs/agent-review-lock/11/${head_a}/cr"
+printf x >"$store/refs/agent-review-lock/11/${head_a}/cr/1"
 expect "an unreadable PR state is UNKNOWN, never swept" 2 "could not read PR #11" sweep --repo o/r --apply
-[ -e "$store/refs/agent-review-lock/11/${head_a}/cr" ] || bad "a lock with an unknown PR state was deleted"
+[ -e "$store/refs/agent-review-lock/11/${head_a}/cr/1" ] || bad "a lock with an unknown PR state was deleted"
 
 review_lock_test_finished=1
 if [ "$fails" -gt 0 ]; then
