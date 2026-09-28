@@ -140,7 +140,7 @@ assert_bullet 'never `--watch`, which polls in the foreground' \
   "latency bullet does not forbid the foreground --watch poll as a delegated run's gating check"
 assert_bullet 'with no watcher armed beside it' \
   "latency bullet does not forbid pairing the delegated run's gating read with a background watcher"
-assert_bullet 'or the read shows it unresolved, `TaskStop` every watcher you armed and return' \
+assert_bullet 'If no result gates a terminal step, or the read shows it unresolved, `TaskStop` every watcher you armed and return' \
   "latency bullet does not tell a delegated run to stop its watchers and return when the gate is absent or unresolved"
 assert_bullet 'never a promised next tick' \
   "latency bullet promises that the next tick collects an abandoned PR, which the cadence contract forbids"
