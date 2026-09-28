@@ -15,6 +15,21 @@ pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; }
 
+# age_tree <path> — backdate a path to 2020. For a worktree, every entry in it and the
+# admin index and HEAD reflog too: salvage measures age from the newest work, not the
+# directory alone.
+age_tree() {
+  local p admin f
+  for p in "$@"; do
+    if [ -d "$p" ] && admin=$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null) \
+       && [ "$(git -C "$p" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$p" && pwd -P)" ]; then
+      find "$p" -mindepth 1 -exec touch -h -t 202001010000 {} + 2>/dev/null
+      for f in "$admin/index" "$admin/logs/HEAD"; do [ -e "$f" ] && touch -t 202001010000 "$f"; done
+    fi
+    touch -t 202001010000 "$p"
+  done
+}
+
 # --- fixture ----------------------------------------------------------------------
 # Builds: origin (bare) + repo with `main` pushed. Worktrees are added per-test.
 make_repo() {
@@ -52,7 +67,7 @@ add_wt() {
     git -C "$root/repo" push -q origin "claude/$name"
   fi
   # age it past the default threshold
-  touch -t 202001010000 "$root/repo/.claude/worktrees/$name"
+  age_tree "$root/repo/.claude/worktrees/$name"
 }
 
 run() { # <root> [mode] -> stdout
@@ -101,7 +116,7 @@ t_keeps_detached_orphan() {
   git -C "$root/repo/.claude/worktrees/orph" checkout -q --detach "$sha"
   # committing + detaching bumped the dir mtime; re-age so the AGE gate cannot mask
   # the gate under test (it did exactly that before this line existed)
-  touch -t 202001010000 "$root/repo/.claude/worktrees/orph"
+  age_tree "$root/repo/.claude/worktrees/orph"
   local out; out=$(run "$root")
   if grep -q 'KEEP .*orph .*unpushed commit' <<<"$out" \
      && grep -q '^REAP  .*spent' <<<"$out"; then
@@ -135,7 +150,7 @@ t_ignores_tool_noise() {
   echo x > "$root/repo/.claude/worktrees/noisy/.codex/x"
   echo y > "$root/repo/.claude/worktrees/noisy/.agents/y"
   # writing into the worktree bumped its mtime — re-age it past the threshold
-  touch -t 202001010000 "$root/repo/.claude/worktrees/noisy"
+  age_tree "$root/repo/.claude/worktrees/noisy"
   local out; out=$(run "$root")
   if grep -q '^REAP  .*noisy' <<<"$out"; then
     ok "treats .codex/ and .agents/ as noise, not work"
@@ -150,7 +165,7 @@ t_keeps_untracked_real_file() {
   add_wt "$root" spent pushed
   add_wt "$root" untracked pushed
   echo real > "$root/repo/.claude/worktrees/untracked/notes.md"
-  touch -t 202001010000 "$root/repo/.claude/worktrees/untracked"
+  age_tree "$root/repo/.claude/worktrees/untracked"
   local out; out=$(run "$root")
   if grep -q 'KEEP .*untracked .*uncommitted change' <<<"$out" \
      && grep -q '^REAP  .*spent' <<<"$out"; then
@@ -187,7 +202,7 @@ t_counts_stuck_work_separately() {
   add_wt "$root" work unpushed
   add_wt "$root" dirty pushed
   echo edited >> "$root/repo/.claude/worktrees/dirty/file.txt"
-  touch -t 202001010000 "$root/repo/.claude/worktrees/dirty"
+  age_tree "$root/repo/.claude/worktrees/dirty"
   add_wt "$root" fresh pushed
   echo edited >> "$root/repo/.claude/worktrees/fresh/file.txt"
   touch "$root/repo/.claude/worktrees/fresh"
@@ -219,7 +234,7 @@ t_keeps_active_ownership_claim() {
   add_wt "$root" claimed pushed
   local w="$root/repo/.claude/worktrees/claimed"
   "$CLAIM_SUT" mark "$w" "codex-run-unique-123" >/dev/null
-  touch -t 202001010000 "$w"
+  age_tree "$w"
   local out; out=$(run "$root")
   if grep -q 'KEEP .*claimed .*active ownership claim' <<<"$out" \
      && grep -q '^REAP  .*spent' <<<"$out"; then
@@ -236,7 +251,7 @@ t_reaps_expired_ownership_claim() {
   local w="$root/repo/.claude/worktrees/expired-claim"
   "$CLAIM_SUT" mark "$w" "codex-run-expired-123" >/dev/null
   printf 'owner=codex-run-expired-123\ncreated_at=2020-01-01T00:00:00Z\n' >"$w/.claude-worktree-owner"
-  touch -t 202001010000 "$w"
+  age_tree "$w"
   local out; out=$(run "$root")
   if grep -q '^REAP  .*expired-claim' <<<"$out"; then
     ok "allows an expired ownership claim to be reaped"
@@ -257,7 +272,7 @@ t_keeps_active_claim_mutex() {
   now_utc=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   blob=$(printf 'pid=%s\ncreated_at=%s\n' "$$" "$now_utc" | git -C "$w" hash-object -w --stdin)
   git -C "$w" update-ref "$ref" "$blob"
-  touch -t 202001010000 "$w"
+  age_tree "$w"
   local out; out=$(run "$root" apply)
   if [ -d "$w" ] \
      && grep -q 'KEEP .*mutex-held .*ownership mutex' <<<"$out" \
@@ -299,7 +314,7 @@ t_keeps_live_cwd_in_subdir_with_regex_metachars() {
       "$root/repo/.claude/worktrees/$odd" main 2>/dev/null
   git -C "$root/repo" push -q origin "claude/odd"
   mkdir -p "$root/repo/.claude/worktrees/$odd/nested/deep"
-  touch -t 202001010000 "$root/repo/.claude/worktrees/$odd"
+  age_tree "$root/repo/.claude/worktrees/$odd"
   ( cd "$root/repo/.claude/worktrees/$odd/nested/deep" && exec sleep 30 ) &
   local pid=$!
   sleep 1
@@ -402,7 +417,7 @@ t_keeps_staged_gitlink_update() {
   git -C "$wt" commit -qm "track sub at A"
   git -C "$wt" push -q origin claude/staged
   git -C "$wt" update-index --cacheinfo "160000,$subB,sub"     # STAGED gitlink update
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local st; st=$(git -C "$wt" status --porcelain | head -1)
   local out; out=$(run "$root")
   if grep -q 'KEEP .*staged .*uncommitted change' <<<"$out"; then
@@ -446,7 +461,7 @@ t_keeps_parent_of_a_nested_worktree() {
   local p="$root/repo/.claude/worktrees/parent"
   git -C "$root/repo" worktree add -q -b claude/nested "$p/.claude/worktrees/nested" main
   echo "sole copy" > "$p/.claude/worktrees/nested/precious.txt"
-  touch -t 202001010000 "$p"
+  age_tree "$p"
   local st; st=$(git -C "$p" status --porcelain)
   case "$st" in
     *".claude/worktrees/"*) ;;
@@ -479,7 +494,7 @@ add_sub_wt() {
     git -C "$wt" update-index --add --cacheinfo "160000,$subsha,sub" &&
     git -C "$wt" commit -qm "add sub" &&
     git -C "$wt" push -q origin "claude/$name" || return 1
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
 }
 
 
@@ -557,7 +572,7 @@ t_keeps_parent_of_a_submodule_owned_worktree() {
     bad "KEEPs a worktree that contains a submodule-owned worktree" "FIXTURE: nested add failed"
     rm -rf "$root" "$seed"; return; }
   echo "sole copy" > "$nested/precious.txt"
-  touch -t 202001010000 "$p"
+  age_tree "$p"
 
   # Preconditions that keep the test honest (see #2588's acceptance criteria): the
   # parent repo must NOT know the nested worktree, or the existing gate would pass this;
@@ -682,7 +697,7 @@ t_never_touches_an_unregistered_directory() {
   add_wt "$root" spent pushed
   local junk="$root/repo/.claude/worktrees/not-a-worktree"
   mkdir -p "$junk"; echo "important" > "$junk/data.txt"
-  touch -t 202001010000 "$junk"
+  age_tree "$junk"
   local out; out=$(run "$root" apply)
   if [ -f "$junk/data.txt" ] \
      && grep -q 'KEEP .*not-a-worktree .*not a registered worktree' <<<"$out"; then
@@ -743,7 +758,7 @@ t_index_flag_gate_survives_a_large_index() {
   git -C "$b" push -q origin claude/bigidx >/dev/null 2>&1
   git -C "$b" update-index --skip-worktree 000-flagged.txt
   echo "invisible edit" >> "$b/000-flagged.txt"
-  touch -t 202001010000 "$b"
+  age_tree "$b"
   local bytes; bytes=$(git -C "$b" ls-files -v | wc -c | tr -d ' ')
   local out; out=$(run "$root")
   if [ "${bytes:-0}" -lt 65536 ]; then
@@ -763,7 +778,7 @@ t_keeps_untracked_when_showUntrackedFiles_is_no() {
   add_wt "$root" hushed pushed
   git -C "$root/repo" config status.showUntrackedFiles no
   echo "only copy" > "$root/repo/.claude/worktrees/hushed/notes.md"
-  touch -t 202001010000 "$root/repo/.claude/worktrees/hushed"
+  age_tree "$root/repo/.claude/worktrees/hushed"
   local out; out=$(run "$root")
   if grep -q 'KEEP .*hushed .*uncommitted change' <<<"$out"; then
     ok "KEEPs untracked files even under status.showUntrackedFiles=no"
@@ -788,7 +803,7 @@ t_keeps_parent_of_nested_worktree_even_when_ignored() {
   local p="$root/repo/.claude/worktrees/parent2"
   git -C "$root/repo" worktree add -q -b claude/nested2 "$p/.claude/worktrees/nested2" main
   echo "sole copy" > "$p/.claude/worktrees/nested2/precious.txt"
-  touch -t 202001010000 "$p"
+  age_tree "$p"
   # Prove the fixture really does hide it from status, or the test proves nothing.
   local st; st=$(git -C "$p" status --porcelain --untracked-files=all)
   local out; out=$(run "$root")
@@ -818,7 +833,7 @@ t_reaps_a_spent_nested_worktree() {
       bad "reaps a spent NESTED worktree" "FIXTURE: nested worktree add failed"
       rm -rf "$root"; return; }
   git -C "$root/repo" push -q origin claude/nested3
-  touch -t 202001010000 "$p/.claude/worktrees/nested3" "$p"
+  age_tree "$p/.claude/worktrees/nested3" "$p"
   local out; out=$(run "$root")
   # The label is WT_ROOT-relative, so the nested path is what identifies it: two nested
   # worktrees under different parents share a basename.
@@ -850,7 +865,7 @@ t_keeps_worktree_with_orphaned_reflog_commit() {
   git -C "$w" commit -qm "unpushed wip"
   local lost; lost=$(git -C "$w" rev-parse HEAD)
   git -C "$w" reset -q --hard HEAD~1          # HEAD back to the pushed commit
-  touch -t 202001010000 "$w"
+  age_tree "$w"
   local out; out=$(run "$root")
   if grep -q 'KEEP .*reflog .*reflog or pseudo-ref holds commit' <<<"$out" \
      && grep -q '^REAP  .*spent' <<<"$out"; then
@@ -876,7 +891,7 @@ t_keeps_worktree_with_operation_in_progress() {
   echo two > "$w/file.txt"; git -C "$w" commit -qam "other side"
   git -C "$w" rebase "claude/rebasing" >/dev/null 2>&1 || true   # expected to conflict
   local gd; gd=$(git -C "$w" rev-parse --absolute-git-dir 2>/dev/null)
-  touch -t 202001010000 "$w"
+  age_tree "$w"
   local out; out=$(run "$root")
   if [ ! -e "$gd/rebase-merge" ] && [ ! -e "$gd/rebase-apply" ]; then
     bad "KEEPs a worktree with a git operation in progress" \
@@ -952,7 +967,7 @@ add_merged_wt() {
   local wt="$root/repo/.claude/worktrees/$name"
   git -C "$wt" push -q origin "claude/$name" || return 1
   git -C "$wt" push -q origin --delete "claude/$name" || return 1
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
 }
 
 # gh_shim <root> — an OPEN-only query prints the Nth line of $root/gh-open for its Nth call
@@ -994,7 +1009,7 @@ t_reaps_squash_merged_worktree() {
   echo distinct > "$root/repo/.claude/worktrees/work/distinct.txt"
   git -C "$root/repo/.claude/worktrees/work" add distinct.txt
   git -C "$root/repo/.claude/worktrees/work" commit -qm distinct
-  touch -t 202001010000 "$root/repo/.claude/worktrees/work"
+  age_tree "$root/repo/.claude/worktrees/work"
   github_origin "$root"
   local sha; sha=$(git -C "$root/repo/.claude/worktrees/merged" rev-parse HEAD)
   printf 'MERGED\t%s\n' "$sha" > "$root/gh-out"
@@ -1164,7 +1179,7 @@ t_keeps_merged_branch_with_orphaned_reflog_commit() {
   if ! { git -C "$wt" push -q origin claude/rewound && git -C "$wt" push -q origin --delete claude/rewound; }; then
     bad "keeps merged+orphan reflog" "FIXTURE: push-then-delete failed"; rm -rf "$root"; return
   fi
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   github_origin "$root"
   printf 'MERGED\t%s\n' "$(git -C "$wt" rev-parse HEAD)" > "$root/gh-out"
   local shim; shim=$(gh_shim "$root") || { bad "gh shim setup" "FIXTURE: shim not executable"; rm -rf "$root"; return; }
@@ -1196,7 +1211,7 @@ abandoned_wt() {
   echo unstaged > "$wt/file.txt"                       # working tree differs from the index
   rm -f "$wt/new.txt"                                # an unstaged deletion
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
 }
 
 t_salvage_is_off_by_default() {
@@ -1290,7 +1305,7 @@ t_salvage_keeps_an_embedded_repository() {
   add_wt "$root" emb pushed
   local wt="$root/repo/.claude/worktrees/emb"
   git init -q "$wt/inner"; echo x > "$wt/inner/x"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -Eq 'KEEP .*emb .*(nested repository|submodule repositories)' <<<"$out" && [ -f "$wt/inner/x" ] \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
@@ -1306,7 +1321,7 @@ t_salvage_keeps_oversized_work() {
   add_wt "$root" big pushed
   local wt="$root/repo/.claude/worktrees/big"
   head -c 20480 /dev/zero > "$wt/blob.bin"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
   if grep -q 'KEEP .*big .*more than 8 KB' <<<"$out" && [ -f "$wt/blob.bin" ]; then
     ok "salvage KEEPs a tree with more changed data than the salvage cap"
@@ -1336,7 +1351,7 @@ submodule_wt() {
   else
     echo dirty >> "$wt/sub/f"                        # uncommitted work inside the submodule
   fi
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
 }
 
 t_salvage_keeps_submodule_work() {
@@ -1405,7 +1420,7 @@ t_salvage_keeps_oversized_staged_only_work() {
   add_wt "$root" bigstaged pushed
   local wt="$root/repo/.claude/worktrees/bigstaged"
   head -c 20480 /dev/zero > "$wt/blob.bin"; git -C "$wt" add blob.bin
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
   if grep -q 'KEEP .*bigstaged .*more than 8 KB' <<<"$out" && [ -f "$wt/blob.bin" ] \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
@@ -1432,7 +1447,7 @@ t_salvage_keeps_submodule_work_at_a_quoted_path() {
   git -C "$wt" update-index --add --cacheinfo "160000,$subA,süb"
   git -C "$wt" commit -qm "track süb"; git -C "$wt" push -q origin claude/subq
   echo dirty >> "$wt/süb/f"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   # Control: the fixture really produces a QUOTED porcelain path.
   local plain; plain=$(git -C "$wt" status --porcelain --ignore-submodules=none)
   if ! grep -q '"' <<<"$plain"; then
@@ -1463,7 +1478,7 @@ t_salvage_namespaces_are_unique_per_worktree() {
   git -C "$root/repo" push -q origin claude/dupa claude/dupb
   echo first > "$p1/.claude/worktrees/dup/work.txt"
   echo second > "$p2/.claude/worktrees/dup/work.txt"
-  touch -t 202001010000 "$p1/.claude/worktrees/dup" "$p2/.claude/worktrees/dup" "$p1" "$p2"
+  age_tree "$p1/.claude/worktrees/dup" "$p2/.claude/worktrees/dup" "$p1" "$p2"
   real_date=$(command -v date); shim="$root/shim"; mkdir -p "$shim"
   cat > "$shim/date" <<SHIM
 #!/usr/bin/env bash
@@ -1520,7 +1535,7 @@ t_salvage_keeps_submodule_work_at_a_newline_path() {
   git -C "$wt" update-index --add --cacheinfo "160000,$subA,$sp"
   git -C "$wt" commit -qm "track a newline submodule"; git -C "$wt" push -q origin claude/subn
   echo dirty >> "$wt/$sp/f"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*subn .*classify status' <<<"$out" \
      && [ "$(tail -1 "$wt/$sp/f" 2>/dev/null)" = dirty ] \
@@ -1550,7 +1565,7 @@ clean_submodule_wt() {
   git -C "$wt" add .gitmodules
   git -C "$wt" commit -qm "track sub"; git -C "$wt" push -q origin "claude/$name"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
 }
 
 t_salvage_keeps_a_submodule_reflog_only_commit() {
@@ -1564,7 +1579,7 @@ t_salvage_keeps_a_submodule_reflog_only_commit() {
   echo two >> "$wt/sub/f"; git -C "$wt/sub" commit -qam "only in the reflog"
   lost=$(git -C "$wt/sub" rev-parse HEAD)
   git -C "$wt/sub" reset -q --hard "$base"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -Eq 'KEEP .*subr .*(nested repository|submodule repositories)' <<<"$out" \
      && git -C "$wt/sub" cat-file -e "$lost" 2>/dev/null \
@@ -1605,7 +1620,7 @@ t_salvage_keeps_a_repository_created_after_the_snapshot() {
   local wt="$root/repo/.claude/worktrees/latere" shim
   printf 'late/\n' >> "$(git -C "$wt" rev-parse --git-path info/exclude)"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   shim=$(lsof_hook_shim "$root" 3 "git init -q '$wt/late' && git -C '$wt/late' -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m late") \
     || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
   local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
@@ -1673,7 +1688,7 @@ t_salvage_dry_run_keeps_a_conflicted_index() {
   printf '100644 %s 1\tfile.txt\n100644 %s 2\tfile.txt\n100644 %s 3\tfile.txt\n' "$a" "$a" "$b" \
     | git -C "$wt" update-index --index-info
   [ -n "$(git -C "$wt" ls-files -u)" ] || { bad "$name" "FIXTURE: no unmerged entries"; rm -rf "$root"; return; }
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*conflicted .*unmerged' <<<"$out" && ! grep -q '^SALVAGE .*conflicted' <<<"$out" \
      && grep -q 'salvaged=0 ' <<<"$out"; then
@@ -1695,7 +1710,7 @@ t_salvage_preserves_ignored_tracked_paths() {
   echo v1 > "$wt/forced.log"; git -C "$wt" add -f forced.log
   echo v2 > "$wt/forced.log"                           # newer, unstaged bytes
   echo edited > "$wt/file.txt"; git -C "$wt" rm -q --cached file.txt
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   local base; base=$(git -C "$root/repo" for-each-ref --format='%(refname)' 'refs/salvaged/*/head' | sed 's#/head$##')
   local problems=""
@@ -1721,7 +1736,7 @@ t_salvage_reports_why_a_snapshot_failed() {
   local wt="$r/.claude/worktrees/subfile"
   git -C "$wt" rm -q --cached sub; rm -rf "$wt/sub"
   echo now-a-file > "$wt/sub"; git -C "$wt" add sub
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*subfile .*not salvaged: [^ ]' <<<"$out" && [ -f "$wt/sub" ] \
      && ! grep -q 'not salvaged: *$' <<<"$out"; then
@@ -1762,7 +1777,7 @@ t_salvage_keeps_a_removed_submodules_local_commit() {
   [ -d "$(git -C "$wt" rev-parse --absolute-git-dir)/modules/sub" ] \
     || { bad "$name" "FIXTURE: no retained submodule repository"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -Eq 'KEEP .*subgone .*(nested repository|submodule repositories)' <<<"$out" && [ -d "$wt" ] \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
@@ -1780,7 +1795,7 @@ t_salvage_keeps_a_hidden_index_edit_in_a_submodule() {
   local wt="$root/repo/.claude/worktrees/subhide"
   git -C "$wt/sub" update-index --assume-unchanged f; echo hidden >> "$wt/sub/f"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -Eq 'KEEP .*subhide .*(nested repository|submodule repositories)' <<<"$out" && grep -q hidden "$wt/sub/f" \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
@@ -1799,7 +1814,7 @@ t_salvage_keeps_beside_even_a_clean_admin_submodule() {
   admin_sub_wt "$root" subok || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/subok"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*subok .*submodule repositories' <<<"$out" && [ -d "$wt" ] \
      && ! grep -q '^SALVAGED .*subok ' <<<"$out"; then
@@ -1818,7 +1833,7 @@ t_salvage_keeps_a_per_worktree_ref() {
   c=$(git -C "$wt" commit-tree 'HEAD^{tree}' -p HEAD -m wip) && git -C "$wt" update-ref refs/worktree/wip "$c" \
     || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*wtref .*per-worktree refs' <<<"$out" && [ -d "$wt" ] \
      && [ "$(git -C "$wt" rev-parse refs/worktree/wip)" = "$c" ]; then
@@ -1835,7 +1850,7 @@ t_salvage_keeps_an_intent_to_add_entry() {
   add_wt "$root" ita pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/ita"
   echo new > "$wt/later.txt"; git -C "$wt" add -N later.txt
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*ita .*intent-to-add' <<<"$out" && ! grep -q '^SALVAGE .*ita ' <<<"$out"; then
     ok "$name"
@@ -1851,7 +1866,7 @@ t_salvage_dry_run_refuses_an_unsnappable_gitlink_change() {
   admin_sub_wt "$root" subdry || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/subdry"
   rm -rf "$wt/sub"; echo now-a-file > "$wt/sub"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subdry .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subdry ' <<<"$out"; then
     ok "$name"
@@ -1870,7 +1885,7 @@ t_salvage_keeps_a_hidden_edit_in_an_embedded_submodule() {
   [ -d "$wt/sub/.git" ] || { bad "$name" "FIXTURE: .git is not a directory"; rm -rf "$root"; return; }
   git -C "$wt/sub" update-index --assume-unchanged f; echo hidden >> "$wt/sub/f"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -Eq 'KEEP .*subemb .*(nested repository|submodule repositories)' <<<"$out" && grep -q hidden "$wt/sub/f" \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
@@ -1891,7 +1906,7 @@ t_salvage_keeps_unlisted_git_state() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   mkdir -p "$admin/sequencer" && echo "pick deadbeef x" > "$admin/sequencer/todo"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*seq .*holds sequencer' <<<"$out" && ! grep -q '^SALVAGE .*seq ' <<<"$out"; then
     ok "$name"
@@ -1909,7 +1924,7 @@ t_salvage_keeps_a_filtered_path() {
   echo '*.secret filter=strip' > "$wt/.gitattributes"
   git -C "$wt" config filter.strip.clean 'grep -v PRIVATE'
   printf 'public\nPRIVATE line\n' > "$wt/notes.secret"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*filt .*filter or conversion' <<<"$out" && ! grep -q '^SALVAGE .*filt ' <<<"$out"; then
     ok "$name"
@@ -1928,7 +1943,7 @@ t_salvage_keeps_a_submodule_mid_bisect() {
   local wt="$root/repo/.claude/worktrees/subbis"
   git -C "$wt/sub" bisect start >/dev/null 2>&1 || { bad "$name" "FIXTURE: bisect start"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subbis .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subbis ' <<<"$out"; then
     ok "$name"
@@ -1945,7 +1960,7 @@ t_salvage_keeps_when_file_modes_are_ignored() {
   local wt="$root/repo/.claude/worktrees/nomode"
   git -C "$wt" config core.fileMode false
   chmod +x "$wt/file.txt"; echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*nomode .*core.fileMode=false' <<<"$out" && ! grep -q '^SALVAGE .*nomode ' <<<"$out"; then
     ok "$name"
@@ -1965,7 +1980,7 @@ t_salvage_ignorecase_blocks_only_on_a_case_sensitive_filesystem() {
   git -C "$wt" config core.ignoreCase true
   echo draft > "$wt/untracked.txt"
   [ -e "$wt/UNTRACKED.TXT" ] && sensitive=no
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if { [ "$sensitive" = yes ] && grep -q 'KEEP .*icase .*core.ignoreCase=true' <<<"$out" \
          && ! grep -q '^SALVAGE .*icase ' <<<"$out"; } \
@@ -1984,7 +1999,7 @@ t_salvage_keeps_a_submodule_that_ignores_file_modes() {
   local wt="$root/repo/.claude/worktrees/submode"
   git -C "$wt/sub" config core.fileMode false; chmod +x "$wt/sub/f"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*submode .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*submode ' <<<"$out"; then
     ok "$name"
@@ -2004,7 +2019,7 @@ t_salvage_preserves_a_commit_only_fetch_head_names() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   printf '%s\t\tbranch '"'"'gone'"'"' of origin\n' "$c" > "$admin/FETCH_HEAD"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q '^SALVAGED .*fetched ' <<<"$out" && [ ! -e "$wt" ] \
      && [ -n "$(git -C "$root/repo" for-each-ref --format='%(objectname)' "refs/salvaged/*/reflog/$c")" ]; then
@@ -2025,7 +2040,7 @@ t_pseudo_ref_only_commit_alone_triggers_salvage() {
   c=$(git -C "$wt" commit-tree 'HEAD^{tree}' -p HEAD -m fetched) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   printf '%s\t\tbranch '"'"'gone'"'"' of origin\n' "$c" > "$admin/FETCH_HEAD"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local off; off=$(run_salvage "$root" dry-run 0)
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*fetchonly .*pseudo-ref holds commit' <<<"$off" \
@@ -2048,7 +2063,7 @@ t_salvage_keeps_a_bare_repository_without_refs() {
     || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   printf 'unique.git/\n' >> "$(git -C "$wt" rev-parse --git-path info/exclude)"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*norefs .*nested repository' <<<"$out" && [ -f "$wt/unique.git/HEAD" ] \
      && ! grep -q '^SALVAGED .*norefs' <<<"$out"; then
@@ -2069,7 +2084,7 @@ pseudo_tag_wt() {
     "$(git -C "$wt" rev-parse HEAD)" | git -C "$wt" hash-object -t tag -w --stdin) || return 1
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   printf '%s\t\ttag '"'"'only-fetched'"'"' of origin\n' "$tag" > "$admin/FETCH_HEAD"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   printf '%s\n' "$tag"
 }
 
@@ -2102,6 +2117,47 @@ t_a_pseudo_ref_tag_a_ref_holds_does_not_keep() {
   rm -rf "$root"
 }
 
+t_a_fresh_tracked_edit_in_an_old_worktree_is_not_salvaged() {
+  # Editing a tracked file does not touch the worktree directory's mtime, so the directory
+  # alone would make this edit look years old and salvage it at once.
+  local name="a fresh edit to a tracked file in an old worktree is kept, not salvaged"
+  local root; root=$(make_repo)
+  add_wt "$root" freshedit pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/freshedit"
+  age_tree "$wt"
+  local dir_m; dir_m=$(stat -f %m "$wt" 2>/dev/null || stat -c %Y "$wt")
+  echo "edited just now" > "$wt/file.txt"
+  local after; after=$(stat -f %m "$wt" 2>/dev/null || stat -c %Y "$wt")
+  [ "$dir_m" = "$after" ] || { bad "$name" "FIXTURE: editing a tracked file moved the directory mtime"; rm -rf "$root"; return; }
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*freshedit .*uncommitted change' <<<"$out" && ! grep -q '^SALVAGED .*freshedit' <<<"$out" \
+     && [ "$(cat "$wt/file.txt")" = "edited just now" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_a_referenced_pseudo_ref_tag_does_not_block_salvage() {
+  # A tag object a durable ref also holds survives the admin directory, so it must not
+  # block salvaging an unrelated abandoned edit.
+  local name="a FETCH_HEAD tag object a ref also holds does not block salvage"
+  local root; root=$(make_repo)
+  local tag; tag=$(pseudo_tag_wt "$root" tagsalv) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/tagsalv"
+  git -C "$root/repo" update-ref refs/tags/only-fetched "$tag" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  age_tree "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED .*tagsalv ' <<<"$out" && [ ! -e "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_a_missing_fetch_head_object_does_not_keep_a_clean_worktree() {
   # An object the store no longer holds has nothing left to lose, so a stale FETCH_HEAD
   # naming one must not strand a clean, pushed worktree as stuck on every sweep.
@@ -2113,7 +2169,7 @@ t_a_missing_fetch_head_object_does_not_keep_a_clean_worktree() {
   gone=0123456789abcdef0123456789abcdef01234567
   git -C "$wt" cat-file -e "$gone" 2>/dev/null && { bad "$name" "FIXTURE: object exists"; rm -rf "$root"; return; }
   printf '%s\t\tbranch '"'"'gone'"'"' of origin\n' "$gone" > "$admin/FETCH_HEAD"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 0)
   if grep -q '^REAP  .*stalefh' <<<"$out"; then
     ok "$name"
@@ -2154,7 +2210,7 @@ t_salvage_preserves_the_old_side_of_a_reflog_entry() {
   if grep -q "$c" <<<"$shown"; then
     bad "$name" "FIXTURE: reflog show already prints the old side"; rm -rf "$root"; return
   fi
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q '^SALVAGED .*oldside ' <<<"$out" && [ ! -e "$wt" ] \
      && [ -n "$(git -C "$root/repo" for-each-ref --format='%(objectname)' "refs/salvaged/*/reflog/$c")" ]; then
@@ -2179,7 +2235,7 @@ t_salvage_keeps_an_ignored_embedded_repository() {
     bad "$name" "FIXTURE: vendor/ is not ignored"; rm -rf "$root"; return
   fi
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*ignrepo .*nested repository' <<<"$out" && [ -d "$wt/vendor/lib/.git" ] \
      && ! grep -q '^SALVAGED .*ignrepo' <<<"$out"; then
@@ -2199,7 +2255,7 @@ t_salvage_keeps_an_ignored_bare_repository() {
   git init -q --bare "$wt/unique.git" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   printf 'unique.git/\n' >> "$(git -C "$wt" rev-parse --git-path info/exclude)"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*bare .*nested repository' <<<"$out" && [ -f "$wt/unique.git/HEAD" ] \
      && ! grep -q '^SALVAGED .*bare' <<<"$out"; then
@@ -2223,7 +2279,7 @@ t_salvage_keeps_a_bare_repository_with_a_symlinked_object_store() {
     || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   printf 'unique.git/\nstore/\n' >> "$(git -C "$wt" rev-parse --git-path info/exclude)"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*symbare .*nested repository' <<<"$out" && [ -f "$wt/unique.git/HEAD" ] \
      && ! grep -q '^SALVAGED .*symbare' <<<"$out"; then
@@ -2242,7 +2298,7 @@ t_salvage_keeps_an_unknown_admin_log() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   echo note > "$admin/logs/custom"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*oddlog .*logs/ holds more than the HEAD reflog' <<<"$out" && [ -f "$admin/logs/custom" ]; then
     ok "$name"
@@ -2260,7 +2316,7 @@ t_a_fifo_fetch_head_keeps_without_blocking() {
   local wt="$root/repo/.claude/worktrees/fifofh" admin
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   mkfifo "$admin/FETCH_HEAD" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out pid i=0
   run_salvage "$root" dry-run 1 > "$root/out.txt" & pid=$!
   while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 60 ]; do sleep 1; i=$((i+1)); done
@@ -2285,7 +2341,7 @@ t_salvage_keeps_a_non_mutex_ref_in_the_claim_lock_namespace() {
     && git -C "$wt" update-ref refs/worktree/claim-locks/manual "$c" \
     || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if ! grep -q 'KEEP .*lockns .*claim-locks/manual is not an ownership mutex' <<<"$out" || [ ! -d "$wt" ]; then
     bad "$name" "manual: $out"; rm -rf "$root"; return
@@ -2296,7 +2352,7 @@ t_salvage_keeps_a_non_mutex_ref_in_the_claim_lock_namespace() {
   h=$(printf 'elsewhere' | git -C "$wt" hash-object --stdin)
   b=$(printf 'pid=1\n' | git -C "$wt" hash-object -w --stdin)
   git -C "$wt" update-ref "refs/worktree/claim-locks/$h" "$b" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   out=$(run_salvage "$root" apply 1)
   if grep -q "KEEP .*lockns .*claim-locks/$h is not an ownership mutex" <<<"$out" && [ -d "$wt" ]; then
     ok "$name"
@@ -2324,7 +2380,7 @@ EOF
   head=$(git -C "$wt" rev-parse HEAD); admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   printf '%s %s t <t@t.t> 1577836800 +0000\tcheckout: odd\n' "$t" "$head" >> "$admin/logs/HEAD"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*rltag .*cannot read or classify the HEAD reflog' <<<"$out" && [ -d "$wt" ]; then
     ok "$name"
@@ -2344,7 +2400,7 @@ t_a_fifo_mutex_ref_keeps_without_blocking() {
   mkdir -p "$admin/refs/worktree/claim-locks" && mkfifo "$admin/refs/worktree/claim-locks/$h" \
     || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local pid i=0
   run_salvage "$root" dry-run 1 > "$root/out.txt" 2>&1 & pid=$!
   while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 60 ]; do sleep 1; i=$((i+1)); done
@@ -2372,7 +2428,7 @@ t_salvage_preserves_commit_editmsg() {
   printf 'feat: a message a hook rejected\n\nwith a body\n' > "$admin/COMMIT_EDITMSG"
   blob=$(git -C "$wt" hash-object "$admin/COMMIT_EDITMSG")
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q '^SALVAGED .*editmsg ' <<<"$out" && [ ! -e "$wt" ] \
      && [ "$(git -C "$root/repo" for-each-ref --format='%(objectname)' 'refs/salvaged/*/commit-editmsg')" = "$blob" ]; then
@@ -2392,7 +2448,7 @@ t_salvage_preserves_config_worktree() {
   printf '[user]\n\tname = only-here\n' > "$admin/config.worktree"
   blob=$(git -C "$wt" hash-object "$admin/config.worktree")
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q '^SALVAGED .*wtcfg ' <<<"$out" && [ ! -e "$wt" ] \
      && [ "$(git -C "$root/repo" for-each-ref --format='%(objectname)' 'refs/salvaged/*/config-worktree')" = "$blob" ]; then
@@ -2411,7 +2467,7 @@ t_salvage_caps_an_oversized_commit_editmsg() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   head -c 20480 /dev/zero | tr '\0' 'm' > "$admin/COMMIT_EDITMSG"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
   if grep -q 'KEEP .*bigmsg .*more than 8 KB' <<<"$out" && [ -d "$wt" ] \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
@@ -2431,7 +2487,7 @@ t_salvage_keeps_a_redirected_gitfile() {
   other=$(git -C "$root/repo/.claude/worktrees/decoy" rev-parse --absolute-git-dir)
   printf 'gitdir: %s\n' "$other" > "$wt/.git"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt" "$root/repo/.claude/worktrees/decoy"
+  age_tree "$wt" "$root/repo/.claude/worktrees/decoy"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q '^SALVAGE .*redir ' <<<"$out"; then
     bad "$name" "$out"
@@ -2451,7 +2507,7 @@ t_salvage_keeps_a_deleted_intent_to_add_entry() {
   local wt="$root/repo/.claude/worktrees/itadel"
   echo planned > "$wt/planned.txt"; git -C "$wt" add -N planned.txt; rm "$wt/planned.txt"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*itadel .*intent-to-add' <<<"$out" && ! grep -q '^SALVAGE .*itadel ' <<<"$out"; then
     ok "$name"
@@ -2473,7 +2529,7 @@ t_salvage_finds_an_admin_repository_at_a_newline_path() {
     && c=$(git --git-dir="$g" -c user.email=t@t.t -c user.name=t commit-tree "$t" -m local) \
     && git --git-dir="$g" update-ref refs/heads/main "$c" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*nlrepo .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*nlrepo ' <<<"$out"; then
     ok "$name"
@@ -2498,7 +2554,7 @@ t_salvage_keeps_an_edit_a_filter_hides_from_status() {
   echo secret > "$wt/notes.txt"
   [ -z "$(git -C "$wt" status --porcelain notes.txt)" ] || { bad "$name" "FIXTURE: edit is visible"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.md"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*hidfilt .*filter or conversion' <<<"$out" && ! grep -q '^SALVAGE .*hidfilt ' <<<"$out"; then
     ok "$name"
@@ -2521,7 +2577,7 @@ t_salvage_finds_an_admin_repository_with_a_symlinked_head() {
     && rm "$g/HEAD" && ln -s refs/heads/main "$g/HEAD" \
     && [ "$(git --git-dir="$g" rev-parse HEAD)" = "$c" ] || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*symhead .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*symhead ' <<<"$out"; then
     ok "$name"
@@ -2538,7 +2594,7 @@ t_salvage_handles_a_basename_with_a_space() {
   git -C "$root/repo" worktree add -q -b claude/spc "$wt" main && git -C "$wt" push -q origin claude/spc \
     || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q '^SALVAGED .*has space' <<<"$out" && [ ! -e "$wt" ] \
      && [ "$(git -C "$root/repo" for-each-ref --format='%(refname)' 'refs/salvaged/*/worktree' | grep -c 'has_space')" = 1 ]; then
@@ -2560,7 +2616,7 @@ t_salvage_keeps_when_a_pseudo_ref_commit_is_unreadable() {
   blob=$(printf 'not a commit\n' | git -C "$wt" hash-object -w --stdin) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   printf '%s\t\tbranch x of origin\n' "$blob" > "$admin/FETCH_HEAD"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*badfetch .*cannot read or classify the HEAD reflog, ORIG_HEAD or FETCH_HEAD' <<<"$out" && [ -d "$wt" ] && ! grep -q '^SALVAGED .*badfetch' <<<"$out"; then
     ok "$name"
@@ -2579,7 +2635,7 @@ t_salvage_keeps_a_submodule_annotated_tag() {
   local wt="$root/repo/.claude/worktrees/subtag"
   git -C "$wt/sub" tag -a v-local -m "only here" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subtag .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subtag ' <<<"$out"; then
     ok "$name"
@@ -2603,7 +2659,7 @@ t_salvage_keeps_a_filter_hidden_edit_in_a_submodule() {
   echo uno > "$wt/sub/f"   # same size as the committed bytes, so status must run the filter
   [ -z "$(git -C "$wt/sub" status --porcelain)" ] || { bad "$name" "FIXTURE: edit is visible"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -Eq 'KEEP .*subfilt .*(nested repository|submodule repositories)' <<<"$out" \
      && [ "$(cat "$wt/sub/f")" = uno ] && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
@@ -2644,7 +2700,7 @@ t_salvage_keeps_a_submodule_with_a_custom_hook() {
   g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
   mkdir -p "$g/hooks"; printf '#!/bin/sh\nexit 0\n' > "$g/hooks/pre-commit"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if ! grep -Eq 'KEEP .*subhook .*(nested repository|submodule repositories)' <<<"$out" || grep -q '^SALVAGE .*subhook ' <<<"$out"; then
     bad "$name" "hook: $out"; rm -rf "$root"; return
@@ -2676,13 +2732,13 @@ t_salvage_judges_a_conversion_by_its_bytes() {
   git -C "$wt" add .gitattributes a.sh && git -C "$wt" commit -qm eol \
     && git -C "$wt" push -q origin claude/eolwt || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if ! grep -q '^SALVAGE .*eolwt ' <<<"$out"; then
     bad "$name" "lossless control: $out"; rm -rf "$root"; return
   fi
   printf 'echo hi\r\n' > "$wt/a.sh"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   out=$(run_salvage "$root" dry-run 1)
   if ! grep -q 'KEEP .*eolwt .*conversion that changes its bytes' <<<"$out" || grep -q '^SALVAGE .*eolwt ' <<<"$out"; then
     bad "$name" "CRLF: $out"; rm -rf "$root"; return
@@ -2692,7 +2748,7 @@ t_salvage_judges_a_conversion_by_its_bytes() {
   printf 'echo hi\n' > "$wt/a.sh"; printf 'x\r\n' > "$wt/legacy.bat"
   echo '*.bat crlf' > "$wt/.git-info-attrs"
   git -C "$wt" config core.attributesFile "$wt/.git-info-attrs"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*eolwt .*conversion that changes its bytes' <<<"$out" && ! grep -q '^SALVAGE .*eolwt ' <<<"$out"; then
     ok "$name"
@@ -2713,14 +2769,14 @@ t_salvage_keeps_a_populated_uninitialised_submodule_directory() {
     && git -C "$wt" push -q origin claude/uninit || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   [ -d "$wt/sub" ] && [ ! -e "$wt/sub/.git" ] || { bad "$name" "FIXTURE: submodule initialised"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if ! grep -q '^SALVAGE .*uninit ' <<<"$out"; then
     bad "$name" "empty control: $out"; rm -rf "$root"; return
   fi
   echo stray > "$wt/sub/stray.txt"
   [ -z "$(git -C "$wt" status --porcelain sub)" ] || { bad "$name" "FIXTURE: stray file visible"; rm -rf "$root"; return; }
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*uninit .*uninitialised submodule directory sub is not empty' <<<"$out" && ! grep -q '^SALVAGE .*uninit ' <<<"$out"; then
     ok "$name"
@@ -2746,7 +2802,7 @@ t_salvage_keeps_an_admin_submodule_with_an_external_checkout() {
   [ -z "$(git --git-dir="${g%/sub}/other" --work-tree="$root/external/co" status --porcelain 2>&1)" ] \
     || { bad "$name" "FIXTURE: external checkout is not clean"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subext .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subext ' <<<"$out"; then
     ok "$name"
@@ -2768,7 +2824,7 @@ t_salvage_keeps_a_submodule_tag_only_fetch_head_names() {
     && git -C "$wt/sub" tag -d v-fetched >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   printf '%s\t\ttag '"'"'v-fetched'"'"' of origin\n' "$t" > "$g/FETCH_HEAD"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subftag .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subftag ' <<<"$out"; then
     ok "$name"
@@ -2794,7 +2850,7 @@ t_salvage_keeps_a_submodule_checkout_it_cannot_enter() {
     chmod 755 "$root/locked"; bad "$name" "FIXTURE: chmod 000 did not revoke search (root?)"; rm -rf "$root"; return
   fi
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   chmod 755 "$root/locked"
   if ! grep -Eq 'KEEP .*subenter .*(nested repository|submodule repositories)' <<<"$out" \
@@ -2819,7 +2875,7 @@ t_salvage_keeps_a_special_file_without_reading_it() {
   local wt="$root/repo/.claude/worktrees/fifowt"
   rm -f "$wt/file.txt" && mkfifo "$wt/file.txt" || { bad "$name" "FIXTURE: mkfifo"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*fifowt .*file.txt is a special file' <<<"$out" && ! grep -q '^SALVAGE .*fifowt ' <<<"$out"; then
     ok "$name"
@@ -2841,7 +2897,7 @@ t_salvage_keeps_a_tag_only_the_worktree_fetch_head_names() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   printf '%s\t\ttag '"'"'v-fetched'"'"' of origin\n' "$t" > "$admin/FETCH_HEAD"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*wtftag .*FETCH_HEAD names a tag' <<<"$out" && ! grep -q '^SALVAGE .*wtftag ' <<<"$out"; then
     ok "$name"
@@ -2859,13 +2915,13 @@ t_salvage_keeps_unclassified_content_under_admin_modules() {
   local wt="$root/repo/.claude/worktrees/subpart" admin
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if ! grep -q 'KEEP .*subpart .*submodule repositories' <<<"$out"; then
     bad "$name" "clean submodule: $out"; rm -rf "$root"; return
   fi
   mkdir -p "$admin/modules/partial/objects/ab" && echo blob > "$admin/modules/partial/objects/ab/cdef"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subpart .*(nested repository|submodule repositories)' <<<"$out" \
      && ! grep -q '^SALVAGE .*subpart ' <<<"$out"; then
@@ -2885,7 +2941,7 @@ t_salvage_keeps_a_double_dot_admin_entry() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   echo keep > "$admin/..unique-metadata"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*dotdot .*holds \.\.unique-metadata' <<<"$out" && ! grep -q '^SALVAGE .*dotdot ' <<<"$out"; then
     ok "$name"
@@ -2908,7 +2964,7 @@ t_salvage_keeps_a_submodule_tag_only_a_reflog_names() {
     && grep -q "^[0-9a-f]* $t " "$(git -C "$wt/sub" rev-parse --absolute-git-dir)/logs/refs/tags/held" \
     || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subrltag .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subrltag ' <<<"$out"; then
     ok "$name"
@@ -2933,7 +2989,7 @@ t_salvage_keeps_resolve_undo_entries() {
   echo resolved > "$wt/file.txt"; git -C "$wt" add file.txt; git -C "$wt" merge --quit
   [ -n "$(git -C "$wt" ls-files --resolve-undo)" ] && [ -z "$(git -C "$wt" ls-files -u)" ] \
     || { bad "$name" "FIXTURE: no resolve-undo"; rm -rf "$root"; return; }
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*reuc .*resolve-undo entries' <<<"$out" && ! grep -q '^SALVAGE .*reuc ' <<<"$out"; then
     ok "$name"
@@ -2952,7 +3008,7 @@ t_salvage_keeps_a_symlinked_per_worktree_ref() {
   mkdir -p "$admin/refs/worktree" && git -C "$wt" rev-parse HEAD > "$root/ref-target" \
     && ln -s "$root/ref-target" "$admin/refs/worktree/linked" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*symref .*per-worktree refs exist' <<<"$out" && ! grep -q '^SALVAGE .*symref ' <<<"$out"; then
     ok "$name"
@@ -2970,7 +3026,7 @@ t_salvage_keeps_a_module_repository_whose_head_is_a_directory() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   mkdir -p "$admin/modules/broken/HEAD" "$admin/modules/broken/objects/ab" && echo blob > "$admin/modules/broken/objects/ab/cd"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subhd .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subhd ' <<<"$out"; then
     ok "$name"
@@ -2998,7 +3054,7 @@ t_salvage_keeps_resolve_undo_entries_in_a_submodule() {
   [ -n "$(git -C "$sub" ls-files --resolve-undo)" ] && [ -z "$(git -C "$sub" status --porcelain)" ] \
     || { bad "$name" "FIXTURE: no resolve-undo or not clean"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subreuc .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subreuc ' <<<"$out"; then
     ok "$name"
@@ -3018,7 +3074,7 @@ t_salvage_preserves_an_uppercase_fetch_head_commit() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   printf '%s\t\tbranch x of origin\n' "$(printf '%s' "$c" | tr 'a-f' 'A-F')" > "$admin/FETCH_HEAD"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q '^SALVAGED .*upfetch ' <<<"$out" \
      && [ -n "$(git -C "$root/repo" for-each-ref --format='%(objectname)' "refs/salvaged/*/reflog/$c")" ]; then
@@ -3037,7 +3093,7 @@ t_salvage_handles_a_very_long_basename() {
   add_wt "$root" "$long" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/$long"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q '^SALVAGED ' <<<"$out" && [ ! -e "$wt" ]; then
     ok "$name"
@@ -3057,7 +3113,7 @@ t_salvage_keeps_a_submodule_replace_ref() {
   # A custom namespace stands in for refs/replace: replacing a commit with itself loops.
   git -C "$wt/sub" update-ref refs/keep/pinned "$h" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subrepl .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subrepl ' <<<"$out"; then
     ok "$name"
@@ -3075,7 +3131,7 @@ t_salvage_keeps_a_whitelisted_admin_name_of_the_wrong_type() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   echo unique > "$admin/modules"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*modfile .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*modfile ' <<<"$out"; then
     ok "$name"
@@ -3097,7 +3153,7 @@ t_salvage_keeps_a_tag_a_symlinked_submodule_reflog_names() {
     && mv "$g/logs/refs/tags/held" "$root/held.log" && ln -s "$root/held.log" "$g/logs/refs/tags/held" \
     || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subrlsym .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subrlsym ' <<<"$out"; then
     ok "$name"
@@ -3123,7 +3179,7 @@ t_salvage_keeps_a_staged_blob_in_a_checkout_less_submodule_repository() {
   git -C "$wt" rm -qf sub
   [ -d "$g" ] && [ ! -e "$wt/sub" ] || { bad "$name" "FIXTURE: repository not retained"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subidx .*(nested repository|submodule repositories)' <<<"$out" && ! grep -q '^SALVAGE .*subidx ' <<<"$out"; then
     ok "$name"
@@ -3142,7 +3198,7 @@ t_salvage_reads_an_unterminated_fetch_head_line() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   printf '%s\t\tbranch x of origin' "$c" > "$admin/FETCH_HEAD"
   echo draft > "$wt/untracked.txt"
-  touch -t 202001010000 "$wt"
+  age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -q '^SALVAGED .*noeol ' <<<"$out" \
      && [ -n "$(git -C "$root/repo" for-each-ref --format='%(objectname)' "refs/salvaged/*/reflog/$c")" ]; then
@@ -3266,6 +3322,8 @@ t_salvage_keeps_a_staged_blob_in_a_checkout_less_submodule_repository
 t_salvage_reads_an_unterminated_fetch_head_line
 t_pseudo_ref_only_commit_alone_triggers_salvage
 t_a_missing_fetch_head_object_does_not_keep_a_clean_worktree
+t_a_referenced_pseudo_ref_tag_does_not_block_salvage
+t_a_fresh_tracked_edit_in_an_old_worktree_is_not_salvaged
 t_salvage_keeps_a_bare_repository_without_refs
 t_a_pseudo_ref_only_tag_keeps_a_clean_worktree
 t_a_pseudo_ref_tag_a_ref_holds_does_not_keep

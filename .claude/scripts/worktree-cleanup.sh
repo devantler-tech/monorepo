@@ -678,9 +678,49 @@ count_real_changes() {
 }
 
 # --- salvage (#2831) ----------------------------------------------------------------
-# salvage_eligible <age_h> — 0 when salvage is on and the worktree is old enough for it.
+# salvage_eligible <age_h> <worktree> — 0 when salvage is on and the worktree is old enough
+# for it: both its directory and its newest work (see work_age_h).
 salvage_eligible() {
-  [ "$SALVAGE_AGE_HOURS" -gt 0 ] && [ "$1" -ge "$SALVAGE_AGE_HOURS" ]
+  [ "$SALVAGE_AGE_HOURS" -gt 0 ] && [ "$1" -ge "$SALVAGE_AGE_HOURS" ] || return 1
+  local work
+  work=$(work_age_h "$2") || return 1
+  [ "$work" -ge "$SALVAGE_AGE_HOURS" ]
+}
+
+# file_mtime <path> -> seconds since the epoch, GNU form first, BSD second, digits only.
+file_mtime() {
+  local m
+  m=$(stat -c %Y "$1" 2>/dev/null || true)
+  case "$m" in ''|*[!0-9]*) m=$(stat -f %m "$1" 2>/dev/null || true) ;; esac
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$m"
+}
+
+# work_age_h <worktree> -> whole hours since the newest work salvage would carry: every
+# staged, modified or untracked (non-ignored) path, and the HEAD reflog. Editing a tracked
+# file does not touch the worktree directory's mtime, so the directory alone can make a
+# fresh edit look weeks old. The index is not a signal: the sweep's own `git status`
+# refreshes it. Non-zero on a read failure (the caller then keeps).
+work_age_h() {
+  local wt=$1 admin list p m newest=0
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
+  list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
+  if ! { git -C "$wt" diff -z --name-only HEAD && git -C "$wt" ls-files -z -o --exclude-standard; } \
+       > "$list" 2>/dev/null; then
+    rm -f "$list"; return 1
+  fi
+  while IFS= read -r -d '' p; do
+    # A deleted path has no mtime; its parent directory's changed when it went.
+    m=$(file_mtime "$wt/$p") || m=$(file_mtime "$(dirname "$wt/$p")") || m=0
+    [ "$m" -gt "$newest" ] && newest=$m
+  done < "$list"
+  rm -f "$list"
+  if [ -e "$admin/logs/HEAD" ]; then
+    m=$(file_mtime "$admin/logs/HEAD") || return 1
+    [ "$m" -gt "$newest" ] && newest=$m
+  fi
+  [ "$newest" -gt 0 ] || { echo 999999; return 0; }
+  echo $(( (now - newest) / 3600 ))
 }
 
 # salvage_blocker <worktree> -> 0 and SALVAGE_NOTE set when the tree must NOT be salvaged;
@@ -889,10 +929,10 @@ worktree_state_blocker() {
     SALVAGE_NOTE="intent-to-add index entries exist (salvage cannot carry them)"; return 0
   fi
   # The salvage refs keep only commits, so a tag object only ORIG_HEAD or FETCH_HEAD names
-  # would lose its only reference with the admin directory.
-  local pseudo
-  pseudo=$(pseudo_ref_commits "$admin") || { SALVAGE_NOTE="cannot read the worktree's pseudo-refs"; return 0; }
-  if pseudo_ref_tag "$admin" "$pseudo"; then
+  # would lose its only reference with the admin directory. One a ref also holds would not.
+  local pseudo_tags
+  pseudo_tags=$(pseudo_ref_unreferenced_tags "$wt") || { SALVAGE_NOTE="cannot read the worktree's pseudo-refs"; return 0; }
+  if [ -n "$pseudo_tags" ]; then
     SALVAGE_NOTE="ORIG_HEAD or FETCH_HEAD names a tag (salvage cannot carry it)"; return 0
   fi
   return 1
@@ -906,17 +946,6 @@ entry_type_ok() {
     logs|refs|modules|objects|branches) [ -d "$1" ] && [ ! -L "$1" ] ;;
     *) [ -f "$1" ] ;;
   esac
-}
-
-# pseudo_ref_tag <gitdir> <shas> -> 0 when any of the (pseudo-ref) objects is not a commit, or
-# its type cannot be read. `rev-list` would peel an annotated tag to its commit and preserve
-# only that, losing the tag object's message or signature.
-pseudo_ref_tag() {
-  local g=$1 sha
-  for sha in $2; do
-    [ "$(git --git-dir="$g" --work-tree="$g" cat-file -t "$sha" 2>/dev/null)" = commit ] || return 0
-  done
-  return 1
 }
 
 # conversion_blocker <worktree> -> 0, with SALVAGE_NOTE, unless `git add` would store every
@@ -1402,7 +1431,7 @@ while IFS= read -r wt <&3; do
       if [ "$pr_rc" -eq 2 ]; then
         keep "$wt" "$unpushed unpushed commit(s) on $branch$note"; continue
       fi
-      if ! salvage_eligible "$age_h"; then
+      if ! salvage_eligible "$age_h" "$wt"; then
         keep_stuck "$wt" "$unpushed unpushed commit(s) on $branch$note"; continue
       fi
       # Old enough to salvage: the later gates still run, and refs/salvaged/<id>/head
@@ -1443,7 +1472,7 @@ while IFS= read -r wt <&3; do
   fi
   count_real_changes "$wt" "$status"
   if [ "$REAL_CHANGES" -gt 0 ]; then
-    if ! salvage_eligible "$age_h"; then
+    if ! salvage_eligible "$age_h" "$wt"; then
       keep_stuck "$wt" "$REAL_CHANGES uncommitted change(s)"; continue
     fi
     if [ "$REAL_SUBMODULE_CHANGES" -gt 0 ]; then
@@ -1493,7 +1522,7 @@ while IFS= read -r wt <&3; do
     fi
     orphaned=$(head -1 <<< "$orphaned")
     if [ -n "$orphaned" ]; then
-      if ! salvage_eligible "$age_h"; then
+      if ! salvage_eligible "$age_h" "$wt"; then
         keep_stuck "$wt" "reflog or pseudo-ref holds commit(s) reachable from nowhere else (${orphaned:0:12})"
         continue
       fi
