@@ -7149,6 +7149,122 @@ else
   fi
 fi
 
+echo
+echo "── extraction canary: every other per-file walk states a broken extractor (#2916) ──"
+# The efficiency canary above covers one walk. Reliability, the two safety walks
+# and the collision walk each run their own extraction with stderr suppressed, so
+# a jq PROGRAM error there printed zero errors, zero denials, zero races — good
+# news, in the direction a broken instrument should never point. Each walk is
+# ablated on its own, and each arm asserts BOTH that its number collapsed (the
+# mutation really broke that walk) AND that the canary named the walk.
+WX="$FIX/walkcanary"
+WX_SLUG=$(printf '%s' "$WX/nest" | sed 's|/|-|g')
+mkdir -p "$WX/projects/$WX_SLUG" "$WX/codex" "$WX/nest"
+WX_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
+# One session carrying something every walk counts: two errored results
+# (reliability), a harness denial (blocked-action), a checkout of a PR ref
+# followed by a build (checkout-then-build) and a two-writer race (collision).
+cat > "$WX/projects/$WX_SLUG/s.jsonl" <<JSONL
+{"type":"assistant","timestamp":"$WX_TS","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"gh pr checkout 7"}},{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"npm ci"}}]}}
+{"type":"user","timestamp":"$WX_TS","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"File has been modified since read"}]}}
+{"type":"user","timestamp":"$WX_TS","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"Blocked: denied by a hook"}]}}
+JSONL
+
+wx_run() { # $1 = script, $2 = section
+  TZ=UTC CLAUDE_PROJECTS_DIR="$WX/projects" CODEX_HOME="$WX/codex" MONOREPO_DIR="$WX/nest" \
+    HOME="$WX" bash "$1" --since-days 3650 --section "$2" 2>&1
+}
+
+# Mutate the first occurrence of one literal in a copy of the script. awk's
+# index() so neither side is read as a pattern, and the literals travel through
+# the environment because `awk -v` would process their backslashes. Not bash's
+# `${var/old/new}`: over this 5k-line file it is quadratic and ran for minutes.
+# The caller checks exactly one line changed.
+wx_mutate() { # $1 = out file, $2 = old literal, $3 = new literal
+  WX_OLD="$2" WX_NEW="$3" awk '
+    !done && (i = index($0, ENVIRON["WX_OLD"])) {
+      $0 = substr($0, 1, i - 1) ENVIRON["WX_NEW"] substr($0, i + length(ENVIRON["WX_OLD"]))
+      done = 1
+    }
+    { print }
+  ' "$TARGET" > "$1"
+}
+
+# Healthy baseline: every walk reads its signal, and no canary fires anywhere.
+WX_REL=$(wx_run "$TARGET" reliability)
+WX_SAFE=$(wx_run "$TARGET" safety)
+WX_A2A=$(wx_run "$TARGET" a2a)
+if grep -qE 'tool errors in window: 2 ' <<<"$WX_REL" \
+   && grep -qE '^ +1 Blocked: denied by a hook' <<<"$WX_SAFE" \
+   && grep -qE '^ +1 npm ci' <<<"$WX_SAFE" \
+   && grep -qE 'two-writer races \.+ 1 ' <<<"$WX_A2A" \
+   && ! grep -qiE 'EXTRACTION FAILED|extraction failed' <<<"$WX_REL$WX_SAFE$WX_A2A"; then
+  ok "healthy walks read their signals and raise no canary"
+else
+  bad "healthy walks read their signals and raise no canary" \
+      "got: $(grep -hE 'tool errors in window|Blocked:|npm ci|two-writer|xtraction' <<<"$WX_REL$WX_SAFE$WX_A2A" | head -6)"
+fi
+
+# walk ~ section ~ literal to break ~ its mutation ~ line proving the walk read something
+while IFS='~' read -r wx_walk wx_sec wx_old wx_new wx_signal; do
+  wx_ab="$FIX/wx_ablate_${wx_walk}.sh"
+  wx_mutate "$wx_ab" "$wx_old" "$wx_new"
+  wx_changed=$(diff "$TARGET" "$wx_ab" | grep -c '^<' || true)
+  if [ "$wx_changed" -ne 1 ]; then
+    bad "ablation ($wx_walk): a broken extractor raises the canary" \
+        "mutation changed $wx_changed lines, expected 1 — VACUOUS MUTATION, arm cannot judge"
+    continue
+  fi
+  wx_out=$(wx_run "$wx_ab" "$wx_sec")
+  if ! grep -qE "$wx_signal" <<<"$wx_out" \
+     && grep -qF "EXTRACTION FAILED on ALL 1 read(s) in the $wx_walk walk" <<<"$wx_out" \
+     && grep -qF 'Do not record these as a measurement' <<<"$wx_out"; then
+    ok "ablation ($wx_walk): a broken extractor collapses its count AND raises the canary"
+  else
+    bad "ablation ($wx_walk): a broken extractor collapses its count AND raises the canary" \
+        "got: $(grep -E "$wx_signal|xtraction" <<<"$wx_out" | head -3)"
+  fi
+done <<'CASES'
+reliability~reliability~(.timestamp // "") as $rts~(.timestamp // "") as rts~tool errors in window: [1-9]
+blocked-action~safety~| select(test($never_ran))~| select(test($never_ran)~^ +1 Blocked: denied by a hook
+checkout-then-build~safety~| .input?.command? // empty),~| .input?.command? // empty)),~^ +1 npm ci
+CASES
+
+# The collision walk reads every file twice (races, then push collisions), so
+# its canary counts reads, not files: one file is two reads.
+wx_ab="$FIX/wx_ablate_collision.sh"
+wx_mutate "$wx_ab" '| select(((.is_error? // false) == true) or ((.status? // "") == "error"))' \
+                   '| select(((.is_error? // false) == true) or ((.status? // "") == "error")'
+wx_changed=$(diff "$TARGET" "$wx_ab" | grep -c '^<' || true)
+if [ "$wx_changed" -ne 1 ]; then
+  bad "ablation (collision): a broken extractor raises the canary" \
+      "mutation changed $wx_changed lines, expected 1 — VACUOUS MUTATION, arm cannot judge"
+else
+  wx_out=$(wx_run "$wx_ab" a2a)
+  if grep -qE 'two-writer races \.+ 0 ' <<<"$wx_out" \
+     && grep -qF 'EXTRACTION FAILED on ALL 2 read(s) in the collision walk' <<<"$wx_out"; then
+    ok "ablation (collision): a broken extractor collapses its count AND raises the canary"
+  else
+    bad "ablation (collision): a broken extractor collapses its count AND raises the canary" \
+        "got: $(grep -E 'two-writer|xtraction' <<<"$wx_out" | head -3)"
+  fi
+fi
+
+# A PARTIAL failure is an under-count, not a broken program: one malformed
+# session beside a healthy one must say so without claiming nothing was read.
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,' \
+  > "$WX/projects/$WX_SLUG/torn.jsonl"
+wx_out=$(wx_run "$TARGET" a2a)
+if grep -qF 'extraction failed on 2 of 4 read(s) in the collision walk' <<<"$wx_out" \
+   && ! grep -qF 'EXTRACTION FAILED on ALL' <<<"$wx_out" \
+   && grep -qE 'two-writer races \.+ 1 ' <<<"$wx_out"; then
+  ok "a torn session beside a healthy one reads as an under-count, not a broken program"
+else
+  bad "a torn session beside a healthy one reads as an under-count, not a broken program" \
+      "got: $(grep -E 'two-writer|xtraction' <<<"$wx_out" | head -3)"
+fi
+rm -f "$WX/projects/$WX_SLUG/torn.jsonl"
+
 
 # ── 6d⁴. credential values never reach a scratch file (#2712) ─────────────────
 # The traps that remove the credential scratch run on EXIT and on HUP/INT/TERM.

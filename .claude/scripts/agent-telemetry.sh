@@ -367,6 +367,13 @@ CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot 
 # would read 0 and the run would report the agent had stopped busy-waiting.
 # The walk runs in a pipeline subshell, so the count must survive on disk.
 XFTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_xf.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# The same counter for every other walk that extracts once per file (#2916):
+# reliability, the two safety walks, and the cross-instance walk. One file per
+# walk, because each canary compares its OWN failures with its OWN reads.
+XFREL=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfrel.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+XFDENY=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfdeny.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+XFBUILD=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfbuild.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+XFA2A=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfa2a.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # The credential-table working sets are held IN MEMORY, never in a scratch file
 # (#2712). Every other scratch here holds derived or already-redacted text; these
 # three would hold credential VALUES — the raw matches from the decode pass, and
@@ -392,8 +399,28 @@ cred_blob_set=''
 SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFBUILD" "$XFA2A"' EXIT
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFBUILD" "$XFA2A"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+
+# extraction_canary <failure-file> <reads> <walk>
+# States how many of a walk's per-file extractions failed (#2916). Each failed
+# read appends one byte to <failure-file>. A jq PROGRAM error fails every read at
+# once and the walk then prints zeros — zero errors, zero denials, zero races —
+# which is the most flattering misreading available. Silent when nothing failed:
+# a canary that always fires guards nothing. A single failed read is ordinary (a
+# session being appended while it is read) and is reported as an under-count.
+extraction_canary() {
+  local failed reads="$2"
+  failed=$(wc -c < "$1" | tr -d ' ')
+  [ "${failed:-0}" -gt 0 ] || return 0
+  if [ "${reads:-0}" -gt 0 ] && [ "$failed" -ge "$reads" ]; then
+    echo "  ⚠️  EXTRACTION FAILED on ALL ${reads} read(s) in the $3 walk — its embedded jq program is broken."
+    echo "      Its numbers are 0 because NOTHING WAS READ, not because nothing happened."
+    echo "      Do not record these as a measurement."
+  else
+    echo "  ⚠️  extraction failed on ${failed} of ${reads} read(s) in the $3 walk — its numbers UNDER-COUNT."
+  fi
+}
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -2761,7 +2788,7 @@ if want reliability; then
             # every message rather than sanitising it.
             | "D\t\($tool)\t\($msg | gsub("[[:cntrl:]]+";" ") | .[0:100])"
           else empty end
-      ' "$f" 2>/dev/null
+      ' "$f" 2>/dev/null || printf x >> "$XFREL"
     done | redact > "$RAWTMP" || true
 
     # An errored result carrying no timestamp is EXCLUDED by the filter above,
@@ -2786,6 +2813,7 @@ if want reliability; then
     UNTAGGED_ERR=$(grep -cvE '^(U|D	)' "$RAWTMP" || true)
 
     TOTAL_ERR=$(wc -l < "$ERRTMP" | tr -d ' ')
+    extraction_canary "$XFREL" "$(printf '%s\n' "$SF_CACHE" | grep -cv '^$' || true)" reliability
     echo "  tool errors in window: ${TOTAL_ERR}   [Claude instance only — see note]"
     echo "  window: records at or after ${WINDOW_SINCE}   (record timestamps, not file mtime)"
     echo "  undated errored results (excluded, expect 0): ${UNDATED_ERR}"
@@ -3525,8 +3553,9 @@ if want safety; then
         | select(type=="string")
         | select(test($never_ran))
         | .[0:80]
-      ' "$f" 2>/dev/null
+      ' "$f" 2>/dev/null || printf x >> "$XFDENY"
     done | redact | sed -E 's/[0-9]+/<n>/g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
+    extraction_canary "$XFDENY" "$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true)" "blocked-action"
     echo "    NOTE: denial detection is CLAUDE-SCHEMA ONLY. Codex output records carry no"
     echo "          error/status flag, 40 live sessions showed no harness-style denial text,"
     echo "          and that instance runs approval-policy=never. A zero here says nothing"
@@ -4106,12 +4135,13 @@ if want safety; then
     # repository's own guard rejects.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
-          cmds="$(commands_in "$f" 2>/dev/null)" || continue
+          cmds="$(commands_in "$f" 2>/dev/null)" || { printf x >> "$XFBUILD"; continue; }
           [[ -n "$cmds" ]] || continue
           if grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))' <<<"$cmds"; then
             grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|make [a-z]+)' <<<"$cmds"
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
+    extraction_canary "$XFBUILD" "$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true)" "checkout-then-build"
     echo "    (empty = no session both checked out a non-own ref and built)"
   fi
 fi
@@ -4137,12 +4167,14 @@ if want a2a; then
   # the very interaction being measured — was invisible. Structural (tool results),
   # so quoted prose cannot inflate it, and across both corpora.
   if [ $((SF_COUNT + CX_COUNT)) -gt 0 ]; then
+    # Both walks read every file, so the canary counts reads, not files.
     RACES=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
-            | while IFS= read -r f; do tool_result_failure_text "$f"; done \
+            | while IFS= read -r f; do tool_result_failure_text "$f" || printf x >> "$XFA2A"; done \
             | grep -cE 'has been modified since read' || true)
     NONFF=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
-            | while IFS= read -r f; do tool_result_failure_text "$f"; done \
+            | while IFS= read -r f; do tool_result_failure_text "$f" || printf x >> "$XFA2A"; done \
             | grep -ciE '(non-fast-forward|rejected.*fetch first|would be overwritten by merge)' || true)
+    extraction_canary "$XFA2A" "$(( 2 * $(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true) ))" "collision"
     echo "  file two-writer races ...... ${RACES}   (CLAUDE ONLY — see note)"
     echo "  push/merge collisions ...... ${NONFF}   (CLAUDE ONLY — see note)"
     echo "    NOTE: collisions read errored tool results, and Codex records carry no"
