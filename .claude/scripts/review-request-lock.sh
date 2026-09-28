@@ -16,23 +16,26 @@
 #   already exists (HTTP 422). The create IS the read, so exactly one instance wins a key.
 #
 # MECHANISM
-#   ref   refs/agent-review-lock/<pr>/<head>/<provider>/<generation>
+#   ref   refs/agent-review-lock/<pr>/<head>/<generation>
 #         (outside refs/heads and refs/tags, so it triggers no workflow, matches no ruleset and
 #         never shows up as a branch)
-#   value an annotated tag object on the PR head whose message records `owner=<token>` and
-#         `created_epoch=<seconds>` (no commit is created)
-#   A lock older than the lease is taken over by creating the next generation, never by updating
-#   a ref, so a takeover is as atomic as the first acquire. By then the request marker the
-#   winner posted is visible to every sibling, so the marker re-read also governs.
+#   value an annotated tag object on the PR head whose message records `owner=<token>`,
+#         `created_epoch=<seconds>` and the provider (no commit is created)
+#   One lock per PR head, whatever the provider: only one review request may be in flight per head,
+#   and the holder moves to the next provider under the same lock. Every state change is the
+#   CREATE of a ref, never an update — the REST API has no compare-and-swap on update — so an
+#   expired lock is taken over by creating the next generation, which exactly one contender can do.
+#   acquire never deletes a lock: a stale worker must not remove a newer head's live lock. Locks
+#   for closed PRs and superseded heads are removed by `sweep`, which reads the PR's live head.
 #
 # USAGE
 #   review-request-lock.sh acquire --repo <owner/repo> --pr <n> --head <40-hex sha>
 #                                  --provider <cr|codex|bugbot> --owner <token> [--lease-minutes N]
 #   review-request-lock.sh sweep   --repo <owner/repo> [--apply]
 #
-#   acquire  run immediately BEFORE posting a review-request comment. It also deletes this PR's
-#            locks for other heads, which can no longer matter.
-#   sweep    lists (or with --apply deletes) every lock whose PR is no longer open.
+#   acquire  run immediately BEFORE posting a review-request comment.
+#   sweep    lists (or with --apply deletes) every lock whose PR is closed or whose head is no
+#            longer the PR's head.
 #
 # EXIT CODES
 #   acquire: 0 this owner holds the lock — post the request
@@ -49,7 +52,7 @@ die() {
 }
 
 usage() {
-  sed -n '28,41p' "$0" >&2
+  sed -n '31,44p' "$0" >&2
   exit 2
 }
 
@@ -69,8 +72,8 @@ api() {
   return "${rc}"
 }
 
-# new_lock_object — an annotated tag object on the PR head whose message records the owner and the
-# creation time. It adds no commit anywhere: the object it points at is the PR's own head commit.
+# new_lock_object — an annotated tag object on the PR head whose message is the lock record. It
+# creates no commit: the object it points at is the PR's own head commit.
 new_lock_object() {
   local content
   content="$(printf '%s\nowner=%s\ncreated_epoch=%s\npr=%s\nhead=%s\nprovider=%s\n' \
@@ -82,7 +85,7 @@ new_lock_object() {
   printf '%s' "${api_out}"
 }
 
-# read_lock <key> — sets lock_owner and lock_created from that lock's record.
+# read_lock <key> — sets lock_owner, lock_created and lock_provider from that lock's record.
 read_lock() {
   local sha content
   api "repos/${repo}/git/ref/$1" --jq .object.sha || die "could not read $1: ${api_out}"
@@ -92,55 +95,43 @@ read_lock() {
   content="${api_out}"
   lock_owner="$(printf '%s\n' "${content}" | sed -n 's/^owner=//p' | head -n 1)"
   lock_created="$(printf '%s\n' "${content}" | sed -n 's/^created_epoch=//p' | head -n 1)"
+  lock_provider="$(printf '%s\n' "${content}" | sed -n 's/^provider=//p' | head -n 1)"
   [ -n "${lock_owner}" ] && [[ "${lock_created}" =~ ^[0-9]+$ ]] ||
     die "lock $1 carries no owner/created_epoch — refusing to guess"
 }
 
-# latest_generation — prints the highest lock generation for this PR, head and provider (0 = none).
+# latest_generation — prints the highest lock generation for this PR head (0 = none). Paginated:
+# a key that outgrew one page must never hide its newest generation.
 latest_generation() {
   local refs ref g max=0
-  api "repos/${repo}/git/matching-refs/${base}/" --jq '.[].ref' || die "could not list ${base}: ${api_out}"
+  api --paginate "repos/${repo}/git/matching-refs/${base}/" --jq '.[].ref' ||
+    die "could not list ${base}: ${api_out}"
   refs="${api_out}"
   while IFS= read -r ref; do
     [ -n "${ref}" ] || continue
     g="${ref#refs/"${base}"/}"
     [[ "${g}" =~ ^[1-9][0-9]*$ ]] || die "unrecognised lock ref ${ref}"
-    [ "${g}" -gt "${max}" ] && max="${g}"
+    if [ "${g}" -gt "${max}" ]; then
+      max="${g}"
+    fi
   done <<<"${refs}"
   printf '%s' "${max}"
 }
 
-# prune_other_heads — delete this PR's locks for heads other than the current one. Best effort:
-# a stale-head lock arbitrates nothing, so a failure here never changes the verdict.
-prune_other_heads() {
-  local refs ref
-  api "repos/${repo}/git/matching-refs/${PREFIX}/${pr}/" --jq '.[].ref' || return 0
-  refs="${api_out}"
-  while IFS= read -r ref; do
-    case "${ref}" in
-      "refs/${PREFIX}/${pr}/${head}/"*) ;;
-      "refs/${PREFIX}/${pr}/"*) api -X DELETE "repos/${repo}/git/${ref}" || true ;;
-    esac
-  done <<<"${refs}"
-}
-
-# Every state change is a CREATE of a new ref, never an update: the REST API has no
-# compare-and-swap on update, so an expired lock is taken over by creating the next generation
-# `<base>/<n+1>`, which exactly one contender can do.
 acquire() {
   local gen next key age=0 lock
-  base="${PREFIX}/${pr}/${head}/${provider}"
+  base="${PREFIX}/${pr}/${head}"
   gen="$(latest_generation)"
   next=1
   if [ "${gen}" -gt 0 ]; then
     read_lock "${base}/${gen}"
     if [ "${lock_owner}" = "${owner}" ]; then
-      echo "HELD ${base}/${gen} owner=${owner}"
+      echo "HELD ${base}/${gen} owner=${owner} provider=${provider}"
       return 0
     fi
     age=$(($(now_epoch) - lock_created))
     if [ "${age}" -lt $((lease_minutes * 60)) ]; then
-      echo "LOCKED ${base}/${gen} owner=${lock_owner} age=${age}s lease=$((lease_minutes * 60))s"
+      echo "LOCKED ${base}/${gen} owner=${lock_owner} provider=${lock_provider} age=${age}s lease=$((lease_minutes * 60))s"
       return 1
     fi
     next=$((gen + 1))
@@ -149,11 +140,10 @@ acquire() {
   key="${base}/${next}"
   lock="$(new_lock_object)"
   if api -X POST "repos/${repo}/git/refs" -f ref="refs/${key}" -f sha="${lock}" --jq .ref; then
-    prune_other_heads
     if [ "${next}" -gt 1 ]; then
-      echo "ACQUIRED ${key} owner=${owner} takeover-after=${age}s"
+      echo "ACQUIRED ${key} owner=${owner} provider=${provider} takeover-after=${age}s"
     else
-      echo "ACQUIRED ${key} owner=${owner}"
+      echo "ACQUIRED ${key} owner=${owner} provider=${provider}"
     fi
     return 0
   fi
@@ -162,46 +152,54 @@ acquire() {
     *) die "could not create ${key}: ${api_out}" ;;
   esac
   read_lock "${key}"
-  echo "LOCKED ${key} owner=${lock_owner} (another instance created it first)"
+  echo "LOCKED ${key} owner=${lock_owner} provider=${lock_provider} (another instance created it first)"
   return 1
 }
 
 sweep() {
-  local refs ref n state kept=0 swept=0
+  local refs ref rest n h verdict pr_state pr_head kept=0 swept=0
   local seen=" "
   api --paginate "repos/${repo}/git/matching-refs/${PREFIX}/" --jq '.[].ref' ||
     die "could not list locks: ${api_out}"
   refs="${api_out}"
   while IFS= read -r ref; do
     [ -n "${ref}" ] || continue
-    n="${ref#refs/"${PREFIX}"/}"
-    n="${n%%/*}"
+    rest="${ref#refs/"${PREFIX}"/}"
+    n="${rest%%/*}"
+    rest="${rest#*/}"
+    h="${rest%%/*}"
     [[ "${n}" =~ ^[0-9]+$ ]] || die "unrecognised lock ref ${ref}"
-    state=""
     case "${seen}" in
-      *" ${n}=open "*) state=open ;;
-      *" ${n}=closed "*) state=closed ;;
+      *" ${n}="*)
+        pr_state="${seen#*" ${n}="}"
+        pr_state="${pr_state%% *}"
+        ;;
+      *)
+        api "repos/${repo}/pulls/${n}" --jq '.state + ":" + .head.sha' ||
+          die "could not read PR #${n}: ${api_out}"
+        pr_state="${api_out}"
+        seen="${seen}${n}=${pr_state} "
+        ;;
     esac
-    if [ -z "${state}" ]; then
-      api "repos/${repo}/pulls/${n}" --jq .state || die "could not read PR #${n}: ${api_out}"
-      state="${api_out}"
-      seen="${seen}${n}=${state} "
-    fi
-    case "${state}" in
+    pr_head="${pr_state#*:}"
+    case "${pr_state%%:*}" in
       open)
-        kept=$((kept + 1))
+        if [ "${h}" = "${pr_head}" ]; then verdict=keep; else verdict=superseded; fi
         ;;
-      closed)
-        swept=$((swept + 1))
-        if [ "${apply}" -eq 1 ]; then
-          api -X DELETE "repos/${repo}/git/${ref}" || die "could not delete ${ref}: ${api_out}"
-          echo "deleted ${ref}"
-        else
-          echo "would-delete ${ref}"
-        fi
-        ;;
-      *) die "PR #${n} has unrecognised state '${state}'" ;;
+      closed) verdict=closed ;;
+      *) die "PR #${n} has unrecognised state '${pr_state}'" ;;
     esac
+    if [ "${verdict}" = keep ]; then
+      kept=$((kept + 1))
+      continue
+    fi
+    swept=$((swept + 1))
+    if [ "${apply}" -eq 1 ]; then
+      api -X DELETE "repos/${repo}/git/${ref}" || die "could not delete ${ref}: ${api_out}"
+      echo "deleted (${verdict}) ${ref}"
+    else
+      echo "would-delete (${verdict}) ${ref}"
+    fi
   done <<<"${refs}"
   echo "review-request-lock sweep ${repo}: kept=${kept} $([ "${apply}" -eq 1 ] && echo deleted || echo would-delete)=${swept}"
 }

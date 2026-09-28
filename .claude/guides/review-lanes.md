@@ -331,16 +331,18 @@ result at the current head — self-promotion is forbidden before that. Request 
   4 seconds apart (#2894). Run
   [`review-request-lock.sh acquire --repo <owner>/<repo> --pr <n> --head <headRefOid> --provider <cr|codex|bugbot> --owner <session-owner-token>`](../scripts/review-request-lock.sh)
   after the marker re-read and before the comment. It creates the ref
-  `refs/agent-review-lock/<pr>/<head>/<provider>/<generation>` through the REST API, pointing at an
-  annotated tag object on the PR head (no commit is created). GitHub refuses to create a ref that
-  already exists, so exactly one instance wins each head and provider. Exit `0` means
+  `refs/agent-review-lock/<pr>/<head>/<generation>` through the REST API, pointing at an annotated
+  tag object on the PR head (no commit is created). GitHub refuses to create a ref that already
+  exists, so exactly one instance wins each head. There is one lock per head, whatever the
+  provider, because only one review request may be in flight per head: the holder walks the
+  provider order under its own lock. Exit `0` means
   post the request — including when the lock is already yours, so your own bounded retry is never
   blocked. Exit `1` means another instance is requesting that review: do not post, and move to the
   next rung-1 item. Exit `2` is UNKNOWN and authorizes no request this run. The lock expires after
   30 minutes and is then taken over by creating the next generation, which is just as atomic; by
   then the winner's marker is visible and the re-read governs again. It is a
   ref, not a comment, so it is not the retired reservation comment below. Remove locks left by
-  closed PRs with `review-request-lock.sh sweep --repo <owner>/<repo> [--apply]`.
+  closed PRs and superseded heads with `review-request-lock.sh sweep --repo <owner>/<repo> [--apply]`.
   [`bugbot-request-marker.sh --repo <owner>/<repo> --pr <n> [--head <headRefOid>]`](../scripts/bugbot-request-marker.sh)
   checks that pairing for every bare `@cursor review` on a PR and reports it apart from disclosure
   drift: `0` paired, `1` an unpaired trigger or a latest request naming another head, `2` unknown.
