@@ -547,7 +547,7 @@ public and private — no per-repo loop needed to enumerate):
 
      ```sh
      # Start at the forge and type the classifier's ABSOLUTE path: both are guard invariants.
-     gh pr view <n> --repo devantler-tech/<repo> --json body --jq .body | <repo-root>/.claude/scripts/pr-ownership-disclosure.sh --input -   # → interactive|routine|none
+     gh pr view <n> --repo devantler-tech/<repo> --json body --jq .body | <repo-root>/.claude/scripts/pr-ownership-disclosure.sh --input -
      ```
 
      This deliberately repeats the bounded body read for each `devantler` candidate even though the

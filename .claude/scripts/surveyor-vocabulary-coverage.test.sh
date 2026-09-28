@@ -56,6 +56,15 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd) || exit 2
 guard="$repo_root/libraries/agent-plugins/plugins/agentic-engineering/scripts/forge-readonly-guard.sh"
 corpus_file="$repo_root/.claude/scripts/surveyor-forge-vocabulary.test.sh"
 
+# The byte that stands for a newline INSIDE a shell compound while a candidate travels as one
+# line through extraction, normalisation and sorting. check_sources restores the newline
+# before the guard is asked, so a compound is classified exactly as it is prescribed.
+LINE_SEP=$'\036'
+# ...and the byte that stands for a TAB inside a compound. normalize folds every whitespace run
+# into one space, which is harmless between words but not where the shell reads the tab itself:
+# a `<<-EOF` here-document strips leading TABS only, so its closing ` EOF` no longer ends it.
+LINE_TAB=$'\037'
+
 # Every file that PRESCRIBES a survey command, with a per-source candidate floor.
 #
 # The plugin's own surveyor definition is here because the guard admits both
@@ -298,7 +307,7 @@ extract_fenced() {
     # operand (and `"` inside a single-quoted one) is a literal, so counting either
     # delimiter alone would leave an apostrophe in `--jq "won'"'"'t"` permanently
     # unbalanced and swallow the rest of the block into one candidate.
-    awk '
+    awk -v SEP="$LINE_SEP" -v TAB="$LINE_TAB" '
       function unbalanced(s,   i, c, sq, dq) {
         for (i = 1; i <= length(s); i++) {
           c = substr(s, i, 1)
@@ -369,7 +378,7 @@ extract_fenced() {
       # buffer is provisional: kept only if the joined text turns out to wrap a forge
       # verb. Without this every `x=$(date)` would reach the guard and stand as a
       # permanent false finding.
-      function has_forge(s) { return (s ~ /(^|[[:space:]]|[;&|(])(gh|git)[[:space:]]/) }
+      function has_forge(s) { return (s ~ ("(^|[[:space:]]|[;&|(]|" SEP ")(gh|git)[[:space:]]")) }
       # A forge read can also be prescribed INSIDE a shell compound construct, such as
       # a `for T in …; do gh api …; done` loop.
       # Anchored on the verb, the buffer starts at the nested `gh api` line and the
@@ -377,7 +386,7 @@ extract_fenced() {
       # submits the whole loop, which it refuses (`chaining with ; can carry a
       # write`). Same fail-open shape as the verb-less substitution above.
       function compound_starter(s) {
-        return (s ~ /^[[:space:]]*(for|while|until|if|case)[[:space:]]/)
+        return (s ~ /^[[:space:]]*(for|while|until|if|case)([[:space:]]|$)/)
       }
       # Quoted spans blanked, so a keyword inside a jq filter or a message cannot
       # open or close a construct. Same reasoning as `unbalanced`: quote state is a
@@ -445,6 +454,15 @@ extract_fenced() {
         sub(/[[:space:]]+$/, "", s)
         return s
       }
+      # Columns of leading indentation, a TAB counting four. A closing fence may sit at
+      # most three columns past its OPENER, not past column 0: inside a list item the
+      # opener is itself indented, and measured from column 0 such a block never closed,
+      # so every later line of the file was read as fenced content (monorepo#3648).
+      function icol(ind,   i, c) {
+        c = 0
+        for (i = 1; i <= length(ind); i++) c += (substr(ind, i, 1) == "\t") ? 4 : 1
+        return c
+      }
       function candidate(s) { return (opens(s) || opens(strip_assigns(s)) || opens(strip_subst(s))) }
       function flush(   keep) {
         keep = (!pend || has_forge(buf))
@@ -456,6 +474,10 @@ extract_fenced() {
         # drops it from the one it does, so the guard still never classifies the runtime
         # form of the pipeline. Prefix every candidate the block yields instead.
         if (optspfx != "" && buf != "" && keep) buf = optspfx "; " buf
+        # A compound keeps its TABS, encoded so normalize cannot fold them (see LINE_TAB). Done
+        # here, after every keyword test has read the real whitespace, and only for a compound:
+        # a one-line candidate has no here-document body for a tab to matter to.
+        if (index(buf, SEP)) { sub(/^[[:space:]]+/, "", buf); gsub(/\t/, TAB, buf) }
         if (buf != "" && keep) print buf
         buf = ""; pend = 0
       }
@@ -476,7 +498,7 @@ extract_fenced() {
         fd = substr(fline, 1, 1)
         flen = 0
         while (substr(fline, flen + 1, 1) == fd) flen++
-        if (!inb) { inb = 1; fence = fd; fencelen = flen; optspfx = "" }
+        if (!inb) { inb = 1; fence = fd; fencelen = flen; fcol = icol(ind); optspfx = "" }
         # A closer may carry only spaces or tabs after its run. `` ```example `` inside a
         # block is CONTENT: checking the delimiter and its length alone ends the block
         # there, and `!inb { next }` then drops every later line, so a prescription after
@@ -490,7 +512,7 @@ extract_fenced() {
         # dropping its commands -- a NEW fail-open of the exact class this file guards.
         # An over-permissive opener can only over-extract, which surfaces as a visible
         # finding rather than a silent miss.
-        else if (fd == fence && flen >= fencelen && substr(fline, flen + 1) ~ /^[[:blank:]]*$/ && length(ind) <= 3 && ind !~ /\t/) { inb = 0; fence = ""; fencelen = 0; flush(); optspfx = "" }
+        else if (fd == fence && flen >= fencelen && substr(fline, flen + 1) ~ /^[[:blank:]]*$/ && icol(ind) <= fcol + 3) { inb = 0; fence = ""; fencelen = 0; flush(); optspfx = "" }
         next
       }
       !inb { next }
@@ -506,6 +528,16 @@ extract_fenced() {
         # An options prefix is a COMPLETE statement, so the line after it is a NEW one. Joined
         # with a space it reads as ARGUMENTS to `set` -- measured, `a read must begin with a
         # forge command, not 'set'`, with the verb never seen at all. `; ` is what the shell runs.
+        #
+        # Inside a shell COMPOUND the newline is kept, as SEP, and restored before the guard is
+        # asked. A newline there is a statement separator, a continuation, part of a quoted
+        # operand or the end of a comment, depending on grammar no join can reproduce: joined
+        # with a space the terminator of the prescribed sweep became a trailing word
+        # (`… | sed "s/^/$T\t/" done`, which `bash -n` rejects), and a rule per spelling kept
+        # finding one more (monorepo#2964). So the guard is asked about the block EXACTLY as
+        # the source prescribes it. That includes a backslash-newline: kept, the shell joins
+        # it; removed and replaced by a space, `--method P\` + `OST` became two words.
+        else if (compound_open(buf)) buf = buf SEP line
         else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
         # A trailing pipe or boolean is a shell CONTINUATION exactly as a backslash is,
         # and the operand it joins is often where the real verdict lives. Flushing there
@@ -596,6 +628,8 @@ check_sources() {
       # UNCLASSIFIED row and made the script exit 1 instead of its documented UNKNOWN 2 --
       # reporting a verdict it could not actually obtain. Capture the status ONCE (which
       # also halves guard invocations) and accept only 1-with-deny as a refusal.
+      cand=${cand//"$LINE_SEP"/$'\n'}   # a compound reaches the guard with its newlines
+      cand=${cand//"$LINE_TAB"/$'\t'}   # ...and its tabs
       guard_out=$(GH_TELEMETRY=0 "$guard" --command "$cand" 2>&1); guard_status=$?
       [ "$guard_status" -eq 0 ] && continue
       reason=$(printf '%s\n' "$guard_out" | head -1)
@@ -796,6 +830,22 @@ if check_sources "$fixdir/fenceindent.md" >/dev/null 2>&1; then
   die_unknown "self-test: a four-space-indented-delimiter command's unclassified refusal was NOT detected (fail-open)"
 fi
 
+# ...but that bound is measured from the OPENER, not column 0. Inside a list item a block
+# opens and closes at the item's content column; measured from column 0 it never closed,
+# so the prose after it was read as fenced content and fenced blocks after that as prose,
+# and a prescription in a later block never reached the guard at all (monorepo#3648).
+# The first block's closer must end it, the prose after it must yield no candidate, and
+# the second block's command must be extracted.
+printf '%s\n' '- A list item:' '' '     ```sh' '     gh pr view 1 --repo devantler-tech/monorepo' '     ```' \
+  '     gh release create v4 --repo devantler-tech/monorepo is prose here.' '' \
+  '     ```sh' '     gh release create v5 --repo devantler-tech/monorepo' '     ```' > "$fixdir/fencelist.md"
+fl_all=$(extract_commands "$fixdir/fencelist.md")
+grep -q '^fenced gh release create v5 ' <<<"$fl_all" \
+  || die_unknown "self-test: a command in a fenced block after a list-item block was never extracted (fail-open)"
+if grep -q '^fenced gh release create v4 ' <<<"$fl_all"; then
+  die_unknown "self-test: prose after a list-item fenced block was extracted as a fenced prescription"
+fi
+
 # A corpus row whose guard status is 2 must make the run UNKNOWN, not vanish. The old
 # corpus reader emitted no reason for such a row, and because other rows keep
 # CORPUS_REASONS non-empty the emptiness check still passed -- so if no source candidate
@@ -855,23 +905,89 @@ if check_sources "$fixdir/multibacktick.md" >/dev/null 2>&1; then
   die_unknown "self-test: a multi-backtick span's unclassified refusal was NOT detected (fail-open)"
 fi
 
-# A shell COMPOUND CONSTRUCT must reach the guard whole. The mandated issue-type
-# sweep is a `for … do … done` loop, and anchored on the verb the buffer starts at
-# the nested read: the guard ALLOWs that, while the deployment submits the loop,
-# which it refuses. The fixture omits the semicolon so the refusal is
-# `a read must begin with a forge command, not .for.` -- a reason no corpus row
-# acknowledges, so the detection half cannot pass merely because the real sweep is
-# now classified. Asserts extraction AND detection.
+# A shell COMPOUND CONSTRUCT must reach the guard whole, and exactly as prescribed. The
+# mandated issue-type sweep is a `for … do … done` loop: anchored on the verb, the buffer
+# would start at the nested read, which the guard ALLOWs, while the deployment submits the
+# whole loop. Joined with spaces instead, the loop's terminator became a trailing word that
+# the shell rejects (monorepo#2964). So the candidate must be the prescribed lines with their
+# newlines, and must parse. Asserts extraction AND detection: the guard refuses the loop
+# (`a newline can carry a second command`), a reason no one-line corpus row can acknowledge.
 printf '%s\n' 'The type sweep runs:' '' '```sh' \
   'for T in Epic Feature' 'do' \
   '  gh release create "v-$T" --repo devantler-tech/monorepo' \
   'done' '```' > "$fixdir/compound.md"
-cp_extracted=$(extract_commands "$fixdir/compound.md" | grep -c "^fenced for T in Epic Feature do gh release create ")
-[ "${cp_extracted:-0}" -ge 1 ] \
-  || die_unknown "self-test: a shell compound construct did not reach the guard as prescribed (fail-open)"
-if check_sources "$fixdir/compound.md" >/dev/null 2>&1; then
-  die_unknown "self-test: a compound construct's unclassified refusal was NOT detected (fail-open)"
-fi
+cp_want=$'for T in Epic Feature\ndo\n gh release create "v-$T" --repo devantler-tech/monorepo\ndone'
+cp_rows=$(extract_commands "$fixdir/compound.md" | grep '^fenced ')
+cp_got=${cp_rows#fenced }
+cp_got=${cp_got//"$LINE_SEP"/$'\n'}; cp_got=${cp_got//"$LINE_TAB"/$'\t'}
+[ "$cp_got" = "$cp_want" ] \
+  || die_unknown "self-test: a shell compound construct did not reach the guard as the lines it prescribes (fail-open): $cp_got"
+bash -n <<<"$cp_got" 2>/dev/null \
+  || die_unknown "self-test: the compound candidate is not parseable shell, so the guard is asked about a command nobody runs"
+# Only status 1 is a detection. A guard error makes check_sources call die_unknown, which
+# exits the SUBSHELL with 2 -- read as merely "not 0" that would pass this control on a
+# verdict nobody obtained, so 2 is propagated as UNKNOWN and every other status fails.
+# The REASON is checked too: the guard must be judging the restored newlines. Handed the
+# separator byte instead, it refuses for some other reason and the status alone still reads 1.
+cp_out=$( check_sources "$fixdir/compound.md" 2>&1 )
+cp_status=$?
+case "$cp_status" in
+  1) grep -qF 'reason: deny: a newline can carry a second command' <<<"$cp_out" \
+       || die_unknown "self-test: the compound was refused, but not for its newlines, so the guard never saw the restored block" ;;
+  2) die_unknown "self-test: the compound negative control could not obtain a guard verdict (status 2)" ;;
+  *) die_unknown "self-test: a compound construct's unclassified refusal was NOT detected (status $cp_status, fail-open)" ;;
+esac
+
+# Every compound shape must survive extraction as the shell it is. The fixture holds the
+# spellings a one-line join got wrong: a bare `elif` or `while` whose condition follows, `in`
+# on the line after `for`, `case` patterns alone and with a first command, a multi-line
+# array, a pipe across lines, a multi-line quoted operand holding a `#`, a function head whose
+# body opens on the next line, comments after words and after an operator, and blank and
+# comment-only lines, and a body line with no indentation. Each candidate must open with its keyword -- a starter the recogniser
+# misses yields only the nested read, which parses fine -- and must parse once restored.
+printf '%s\n' 'Shapes:' '' '```sh' \
+  'if gh pr view 1 --repo devantler-tech/monorepo' 'then' '  gh pr view 2 --repo devantler-tech/monorepo' \
+  'elif' '  gh pr view 3 --repo devantler-tech/monorepo' 'then' '  gh pr view 4 --repo devantler-tech/monorepo' \
+  'else' '  args=(' '    --repo' '    devantler-tech/monorepo' '  )' '  gh pr view 5 "${args[@]}"' 'fi' '' \
+  'case "$R" in' '  a)' '    v=$(gh pr view 6 --repo devantler-tech/monorepo)' '    gh pr view "$v" --repo devantler-tech/monorepo' '    ;;' \
+  '  "c d") w=$(gh pr view 7 --repo devantler-tech/monorepo)' '    gh pr view "$w" --repo devantler-tech/monorepo' '    ;;' 'esac' '' \
+  'while' '  read -r n' 'do' '  gh pr view "$n" --repo devantler-tech/monorepo |' '    jq -r .title;# after an operator' 'done' '' \
+  'for T  # every type' 'in Epic Feature' 'do  # one read each' '' '  # a full-line note' '  gh pr view "$T" --repo devantler-tech/monorepo' 'done' '' \
+  'for r in a' 'do' "gh api x --jq '.[]" "    | .a # not a comment'" 'done' '' \
+  'if true' 'then' '  f()' '  { gh pr view 8 --repo devantler-tech/monorepo; }' '  echo ready!' '  f' 'fi' '```' > "$fixdir/compound-shapes.md"
+cs_n=0
+while IFS= read -r cs_row; do
+  [ -n "$cs_row" ] || continue
+  cs_n=$((cs_n+1))
+  cs_cmd=${cs_row#fenced }
+  cs_cmd=${cs_cmd//"$LINE_SEP"/$'\n'}; cs_cmd=${cs_cmd//"$LINE_TAB"/$'\t'}
+  case "$cs_cmd" in
+    'if '*|'case '*|'while'*|'for '*) ;;
+    *) die_unknown "self-test: a compound construct reached the guard without its opening keyword: $cs_cmd" ;;
+  esac
+  bash -n <<<"$cs_cmd" 2>/dev/null \
+    || die_unknown "self-test: a compound candidate is not parseable shell, so the guard is asked about a command nobody runs: $cs_cmd"
+done <<<"$(extract_commands "$fixdir/compound-shapes.md" | grep '^fenced ')"
+[ "$cs_n" -eq 6 ] \
+  || die_unknown "self-test: the compound-shapes fixture yielded $cs_n fenced candidate(s), expected 6 (if, case, while, for, for, if)"
+
+# Two things a compound carries that the shell reads and whitespace folding destroys: a
+# backslash-newline (the shell joins `P\` + `OST` into one word; dropping the backslash for a
+# space made two) and the leading TABS of a `<<-EOF` here-document (folded to a space, the
+# closing ` EOF` no longer ends it, so the guard was asked about a block that does not parse).
+# The candidate must equal the prescribed block and parse with no warning at all -- `bash -n`
+# only WARNS about an unterminated here-document and still exits 0.
+printf '%s\n' 'Tabs and continuations:' '' '```sh' \
+  'for T in a' 'do' '  gh api repos/x --method P\' 'OST --input - <<-EOF' \
+  "$(printf '\tv=%s' '$T')" "$(printf '\tEOF')" 'done' '```' > "$fixdir/compound-ws.md"
+cw_want=$'for T in a\ndo\n gh api repos/x --method P\\\nOST --input - <<-EOF\n\tv=$T\n\tEOF\ndone'
+cw_rows=$(extract_commands "$fixdir/compound-ws.md" | grep '^fenced ')
+cw_got=${cw_rows#fenced }
+cw_got=${cw_got//"$LINE_SEP"/$'\n'}; cw_got=${cw_got//"$LINE_TAB"/$'\t'}
+[ "$cw_got" = "$cw_want" ] \
+  || die_unknown "self-test: a compound lost a backslash-newline or a here-document tab on its way to the guard (fail-open): $cw_got"
+cw_parse=$(bash -n <<<"$cw_got" 2>&1) && [ -z "$cw_parse" ] \
+  || die_unknown "self-test: the whitespace-bearing compound does not parse cleanly as restored: $cw_parse"
 
 # ...and a construct wrapping no forge verb must not become a candidate, or every
 # `for`/`if` in a fenced block would reach the guard as a false finding.
