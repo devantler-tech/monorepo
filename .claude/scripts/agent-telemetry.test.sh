@@ -7533,6 +7533,49 @@ else
   bad "bounded values stay distinct and a token after a long fragment is still counted" "$CB_TABLE"
 fi
 
+# A leg that dies part-way must not read as a short, clean table. The shim
+# fails the blob leg's LAST stage, after its sort has run, so only pipefail in
+# the leg and the close() status check in awk can notice.
+mkdir -p "$FIX/credlegfail" "$FIX/credlegsed" "$FIX/credclean"
+cat > "$FIX/credlegsed/sed" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *'s/^/B /'*) cat >/dev/null; exit 1 ;;
+esac
+exec "$REAL_SED" "$@"
+EOF
+chmod +x "$FIX/credlegsed/sed"
+cp "$FIX/credbound/s.jsonl" "$FIX/credlegfail/s.jsonl"
+# Resolved BEFORE the shim is on PATH: resolving it in the same prefix can find
+# the shim itself, which then execs itself forever.
+real_sed=$(command -v sed)
+LF_OUT=$(PATH="$FIX/credlegsed:$PATH" REAL_SED="$real_sed" \
+  CLAUDE_PROJECTS_DIR="$FIX/credlegfail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+# Control: the same corpus with no failure reaches the table and is NOT marked.
+if grep -q 'credential-shaped' <<<"$CB_OUT" && ! grep -q 'credential scan did not complete' <<<"$CB_OUT"; then
+  ok "control: a complete credential scan is not marked UNKNOWN"
+else
+  bad "control: a complete credential scan is not marked UNKNOWN" "$CB_TABLE"
+fi
+if grep -q 'UNKNOWN: the credential scan did not complete' <<<"$LF_OUT"; then
+  ok "a credential leg that fails part-way marks the table UNKNOWN"
+else
+  bad "a credential leg that fails part-way marks the table UNKNOWN" \
+      "$(printf '%s' "$LF_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
+fi
+# No match at all starts neither leg; that ordinary empty result is complete.
+printf '{"type":"user","message":{"content":[{"type":"text","text":"nothing sensitive here"}]}}\n' \
+  > "$FIX/credclean/s.jsonl"
+CL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credclean" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if grep -q 'credential-shaped' <<<"$CL_OUT" && ! grep -q 'credential scan did not complete' <<<"$CL_OUT"; then
+  ok "a corpus with no credential matches is complete, not UNKNOWN"
+else
+  bad "a corpus with no credential matches is complete, not UNKNOWN" \
+      "$(printf '%s' "$CL_OUT" | sed -n '/SAFETY/,$p' | head -20)"
+fi
+
 
 # ── snapshot drift is checked even when the class totals AGREE ────────────────
 # Agreement between the two walks is not evidence that the corpus was stable.

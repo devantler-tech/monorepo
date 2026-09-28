@@ -393,6 +393,7 @@ XFA2A=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfa2a.XXXXXXXX") || { echo "cannot create
 # a filesystem object or in argv.
 cred_sets=''
 cred_blob_norm=''
+cred_scan_complete=0
 cred_plain_set=''
 cred_blob_set=''
 # Its OWN scratch, never $CONCTMP. The injection-concentration pass owns that
@@ -3871,12 +3872,21 @@ if want safety; then
     # It ends in cred_bound BEFORE `sort -u`, so no stage downstream of the
     # extraction, sort included, ever holds a value longer than the cap.
     cred_normalise() {
-      tr ';&|' '\n' | grep -v '^$' \
+      tr ';&|' '\n' | cred_grep -v '^$' \
         | sed -E -e 's/^[^A-Za-z0-9_-]//' \
           -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
           -e "s/^[^:=]*[:=][[:space:]]*[\"']?([^=].*)$/\1/" \
           -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
-        | grep -E . | cred_bound | sort -u
+        | cred_grep -E . | cred_bound | sort -u
+    }
+    # grep exits 1 when nothing matches, and an empty leg is an ordinary result
+    # (most corpora carry no blob-embedded token). Only a status above 1 is a
+    # failure, so the legs can run under pipefail without reading "no matches"
+    # as a broken scan.
+    cred_grep() {
+      local s=0
+      grep "$@" || s=$?
+      [ "$s" -le 1 ]
     }
     # BOUND EACH VALUE AT CRED_VALUE_MAX (#2980). A value longer than the cap
     # keeps its first CRED_VALUE_MAX bytes and gains `~` plus a 64-bit checksum
@@ -3910,11 +3920,14 @@ if want safety; then
     # A blob match carries its run; stripping run+boundary yields the identical
     # string the plain leg produces for the same credential (whose single
     # boundary char cred_normalise removes), so the two sets are comparable.
-    cred_blob_matches() { grep -aEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null \
+    cred_blob_matches() { cred_grep -aEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null \
                           | sed -E "s|$CRED_BLOB_STRIP_RE||"; }
-    cred_plain_matches() { grep -avEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null; }
-    cred_blob_leg() { cred_blob_matches | cred_normalise | sed 's/^/B /'; }
-    cred_plain_leg() { cred_plain_matches | cred_normalise | sed 's/^/P /'; }
+    cred_plain_matches() { cred_grep -avEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null; }
+    # pipefail in each leg: a bound or sort that dies part-way (out of memory,
+    # no temp space) must fail the leg, not hand back a shorter set that reads
+    # as fewer credentials.
+    cred_blob_leg() { set -o pipefail; cred_blob_matches | cred_normalise | sed 's/^/B /'; }
+    cred_plain_leg() { set -o pipefail; cred_plain_matches | cred_normalise | sed 's/^/P /'; }
     # 🔴 THE RAW MATCHES ARE NEVER HELD (#2980). They used to be captured whole
     # into one variable and then partitioned, so the scan's resident set grew
     # with the total matched bytes. Now the single extraction streams into awk,
@@ -3932,8 +3945,18 @@ if want safety; then
     # pass exported bash FUNCTIONS on. So each leg travels as a script in an
     # ordinary variable, which any sh passes through; it holds function bodies
     # and regexes, never a matched value.
-    CRED_BLOB_LEG_SH="$(declare -f cred_normalise cred_bound cred_blob_matches cred_blob_leg); cred_blob_leg"
-    CRED_PLAIN_LEG_SH="$(declare -f cred_normalise cred_bound cred_plain_matches cred_plain_leg); cred_plain_leg"
+    #
+    # COMPLETION IS PROVEN, NOT ASSUMED. Each leg prints its own `BOK`/`POK`
+    # only when its pipefail pipeline succeeded, and awk prints `OK` only once
+    # it has closed both legs; the table below reports UNKNOWN unless all three
+    # arrived. Positive markers rather than failure markers, so a stage that
+    # dies without a word still reads as UNKNOWN. awk's close() is not used for
+    # this: the one-true-awk shipped with macOS reports only whether pclose()
+    # itself failed, never the command's exit status. Both legs are opened in
+    # BEGIN, so a corpus with no matches at all still runs them (on empty input)
+    # and still proves they completed.
+    CRED_BLOB_LEG_SH="$(declare -f cred_grep cred_normalise cred_bound cred_blob_matches cred_blob_leg); cred_blob_leg && echo BOK"
+    CRED_PLAIN_LEG_SH="$(declare -f cred_grep cred_normalise cred_bound cred_plain_matches cred_plain_leg); cred_plain_leg && echo POK"
     export CRED_BLOB_LEG_SH CRED_PLAIN_LEG_SH CRED_BLOB_ANCHORED_RE CRED_BLOB_STRIP_RE CRED_VALUE_MAX
     cred_sets=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
       | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
@@ -3942,9 +3965,12 @@ if want safety; then
       | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null \
       | tr '\000' '\n' \
       | awk '
-          BEGIN { blob = "bash -c \"$CRED_BLOB_LEG_SH\""; plain = "bash -c \"$CRED_PLAIN_LEG_SH\"" }
+          BEGIN {
+            blob = "bash -c \"$CRED_BLOB_LEG_SH\""; plain = "bash -c \"$CRED_PLAIN_LEG_SH\""
+            printf "" | blob; printf "" | plain
+          }
           { print | blob; print | plain }
-          END { close(blob); close(plain) }')
+          END { close(blob); close(plain); print "OK" }')
     export -n CRED_BLOB_LEG_SH CRED_PLAIN_LEG_SH CRED_BLOB_ANCHORED_RE CRED_BLOB_STRIP_RE CRED_VALUE_MAX
     # NUL is translated to a newline BEFORE the capture, never left to the
     # command substitution. A decoded string can legitimately carry `\u0000`,
@@ -3957,9 +3983,19 @@ if want safety; then
     # compound-value handling below already chose for `;&|` — a fragment only
     # ever reaches a high-signal row by passing a FULL shape regex on its own,
     # so a split costs no true positive while a splice invents a false one.
+    # Read with awk, which consumes the whole stream: `printf | grep -q` would
+    # stop reading at the first hit and, under pipefail, turn the writer's
+    # SIGPIPE into a false UNKNOWN on a large set.
+    cred_scan_complete=$(printf '%s\n' "$cred_sets" | awk '
+      $0 == "BOK" { b = 1 } $0 == "POK" { p = 1 } { last = $0 }
+      END { print ((b && p && last == "OK") ? 1 : 0) }')
     cred_plain_set=$(printf '%s\n' "$cred_sets" | sed -n 's/^P //p')
     cred_blob_norm=$(printf '%s\n' "$cred_sets" | sed -n 's/^B //p')
     cred_sets=''
+    if [ "$cred_scan_complete" != 1 ]; then
+      echo "    UNKNOWN: the credential scan did not complete (a value-set stage failed)."
+      echo "    Any rows below are a PARTIAL count — an empty or short table here is NOT clean."
+    fi
     # The label needs the ABSENCE of a plain occurrence, not the presence of a
     # blob one. `cred_normalise` ends in `sort -u`, so a credential seen both
     # inside an encoded blob and plainly collapses to ONE row; membership in the
