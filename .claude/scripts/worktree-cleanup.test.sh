@@ -1472,7 +1472,8 @@ t_salvage_keeps_submodule_work_at_a_quoted_path() {
   echo dirty >> "$wt/süb/f"
   age_tree "$wt"
   # Control: the fixture really produces a QUOTED porcelain path.
-  local plain; plain=$(git -C "$wt" status --porcelain --ignore-submodules=none)
+  # Optional locks off: a status that refreshed the index would read as fresh work (#3642).
+  local plain; plain=$(GIT_OPTIONAL_LOCKS=0 git -C "$wt" status --porcelain --ignore-submodules=none)
   if ! grep -q '"' <<<"$plain"; then
     bad "$name" "FIXTURE: porcelain did not quote the path"; rm -rf "$root"; return
   fi
