@@ -428,23 +428,37 @@ extract_fenced() {
       #   - the text is still open: a pending backslash, open quotes, an open `(` or `$(`
       #     (a multi-line array or substitution);
       #   - the previous line ends in an operator or opener: `|` `&&` `||` `;` `;;` `&`
-      #     `!` `(` `{`;
+      #     `(` `{`, or in a standalone `!` (in `echo ready!` the bang is part of a word);
       #   - the previous line ends in a keyword whose body or condition follows: `do`,
       #     `then`, `else`, `in`, or a bare `if`, `elif`, `while` or `until`;
       #   - the previous line is a function head (`name()`) or ONLY a `case` pattern (`a)`,
-      #     `a|b)`, `(a)`) -- a pattern followed by its first command on the same line is
-      #     a statement like any other;
+      #     `a|b)`, `(a)`, a quoted or escaped one such as `"foo bar")`) -- a pattern
+      #     followed by its first command on the same line is a statement like any other;
       #   - the next line opens with `in`, which belongs to the `for` or `case` above it.
       # Outside a compound nothing changes, so a block whose join was already right stays
       # byte-identical.
+      # Like `unquoted`, but every quoted or escaped character becomes a WORD character
+      # (`q`) instead of a blank, so a quoted `case` pattern still has a pattern to see and
+      # a quoted `)` or `(` can never count as a delimiter.
+      function masked(s,   i, c, sq, dq, out) {
+        out = ""
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          if (c == "\\" && !sq) { i++; out = out "qq"; continue }
+          else if (c == "'"'"'" && !dq) { sq = !sq; out = out "q"; continue }
+          else if (c == "\"" && !sq) { dq = !dq; out = out "q"; continue }
+          out = out ((sq || dq) ? "q" : c)
+        }
+        return out
+      }
       function join_sep(s, last, next_line,   t, lt, n, arr, w) {
         if (!compound_open(s) || unbalanced(s) || subst_open(s) || s ~ /\\[[:space:]]*$/) return " "
         if (next_line ~ /^[[:space:]]*in([[:space:]]|$)/) return " "
         t = unquoted(s); sub(/[[:space:]]+$/, "", t)
-        if (t == "" || t ~ /[|&;({!]$/) return " "
+        if (t == "" || t ~ /[|&;({]$/) return " "
         n = split(t, arr, /[[:space:]]+/); w = arr[n]
-        if (w ~ /^(do|then|else|elif|if|while|until|in)$/) return " "
-        lt = unquoted(last); sub(/[[:space:]]+$/, "", lt)
+        if (w ~ /^(do|then|else|elif|if|while|until|in|!)$/) return " "
+        lt = masked(last); sub(/[[:space:]]+$/, "", lt)
         if (lt ~ /\(\)$/) return " "
         if (lt ~ /^[[:space:]]*\(?[^()[:space:]][^()]*\)$/) return " "
         return "; "
@@ -945,10 +959,11 @@ printf '%s\n' 'Shapes:' '' '```sh' \
   'elif' '  gh pr view 3 --repo devantler-tech/monorepo' 'then' '  gh pr view 4 --repo devantler-tech/monorepo' \
   'else' '  args=(' '    --repo' '    devantler-tech/monorepo' '  )' '  gh pr view 5 "${args[@]}"' 'fi' '' \
   'case "$R" in' '  a)' '    v=$(gh pr view 6 --repo devantler-tech/monorepo)' '    gh pr view "$v" --repo devantler-tech/monorepo' '    ;;' \
-  '  b) w=$(gh pr view 7 --repo devantler-tech/monorepo)' '    gh pr view "$w" --repo devantler-tech/monorepo' '    ;;' 'esac' '' \
+  '  b) w=$(gh pr view 7 --repo devantler-tech/monorepo)' '    gh pr view "$w" --repo devantler-tech/monorepo' '    ;;' \
+  '  "c d")' '    gh pr view 9 --repo devantler-tech/monorepo' '    ;;' 'esac' '' \
   'while' '  read -r n' 'do' '  gh pr view "$n" --repo devantler-tech/monorepo |' '    jq -r .title' 'done' '' \
   'for T' 'in Epic Feature' 'do' '  gh pr view "$T" --repo devantler-tech/monorepo' 'done' '' \
-  'if true' 'then' '  f()' '  { gh pr view 8 --repo devantler-tech/monorepo; }' '  f' 'fi' '```' > "$fixdir/compound-shapes.md"
+  'if true' 'then' '  f()' '  { gh pr view 8 --repo devantler-tech/monorepo; }' '  echo ready!' '  f' 'fi' '```' > "$fixdir/compound-shapes.md"
 cs_n=0
 while IFS= read -r cs_row; do
   [ -n "$cs_row" ] || continue
@@ -969,7 +984,9 @@ done <<<"$(extract_commands "$fixdir/compound-shapes.md" | grep '^fenced ')"
 # `gh …` still parses, as an assignment PREFIX to that second command. A `case` arm is
 # where this happens, because its pattern ends in a surplus `)` -- whether the pattern is
 # alone on its line or followed by the arm's first command. A multi-line array's closing
-# `)` alone on its line looks like a pattern too. Each must stay two statements.
+# `)` alone on its line looks like a pattern too, and a word ending in `!` (`echo ready!`) is
+# not the `!` operator. Each must stay two statements,
+# and a QUOTED pattern (`"c d")`) must still keep its arm body joined by a space.
 # Captured ONCE, then searched: piping the extraction into `grep -q` lets grep exit on the
 # first match, and under pipefail the writer's SIGPIPE then fails the pipeline -- a race
 # that reads as a missing statement on a run where the statement is present.
@@ -977,9 +994,11 @@ cs_all=$(extract_commands "$fixdir/compound-shapes.md")
 for cs_case in \
   '); gh pr view 5 "${args[@]}"' \
   'v=$(gh pr view 6 --repo devantler-tech/monorepo); gh pr view "$v" --repo devantler-tech/monorepo' \
-  'b) w=$(gh pr view 7 --repo devantler-tech/monorepo); gh pr view "$w" --repo devantler-tech/monorepo'; do
+  'b) w=$(gh pr view 7 --repo devantler-tech/monorepo); gh pr view "$w" --repo devantler-tech/monorepo' \
+  '"c d") gh pr view 9 --repo devantler-tech/monorepo' \
+  'echo ready!; f'; do
   grep -qF -- "$cs_case" <<<"$cs_all" \
-    || die_unknown "self-test: two statements in a case arm were joined into one command (the second became an assignment prefix): $cs_case"
+    || die_unknown "self-test: a statement boundary or continuation was joined wrongly: $cs_case"
 done
 
 # ...and a construct wrapping no forge verb must not become a candidate, or every
