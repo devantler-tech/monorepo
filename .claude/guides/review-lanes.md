@@ -324,6 +324,25 @@ result at the current head — self-promotion is forbidden before that. Request 
   `@cursor review` command, ignoring interleaved comments from other authors; another authenticated
   Bugbot request marker or bare trigger ends the pairing window. The request marker is what lets
   overlapping instances distinguish a live request from a stale-head request.
+  🔴 **Take the review-request lock immediately before posting, and stand down when it is held.**
+  The marker re-read is not atomic with the post: an instance that read the comments seconds before a
+  sibling posted cannot see that request, and rung 1 sends every instance to the same PR. Measured
+  2026-09-14 → 09-28: 13 of 2,001 request keys were requested twice within 60 seconds, the closest
+  4 seconds apart (#2894). Run
+  [`review-request-lock.sh acquire --repo <owner>/<repo> --pr <n> --head <headRefOid> --provider <cr|codex|bugbot> --owner <session-owner-token>`](../scripts/review-request-lock.sh)
+  after the marker re-read and before the comment. It creates the ref
+  `refs/agent-review-lock/<pr>/<head>/<generation>` through the REST API, pointing at an annotated
+  tag object on the PR head (no commit is created). GitHub refuses to create a ref that already
+  exists, so exactly one instance wins each head. There is one lock per head, whatever the
+  provider, because only one review request may be in flight per head: the holder walks the
+  provider order under its own lock. Exit `0` means
+  post the request — including when the lock is already yours, so your own bounded retry is never
+  blocked. Exit `1` means another instance is requesting that review: do not post, and move to the
+  next rung-1 item. Exit `2` is UNKNOWN and authorizes no request this run. The lock expires after
+  30 minutes and is then taken over by creating the next generation, which is just as atomic; by
+  then the winner's marker is visible and the re-read governs again. It is a
+  ref, not a comment, so it is not the retired reservation comment below. Remove locks left by
+  closed PRs and superseded heads with `review-request-lock.sh sweep --repo <owner>/<repo> [--apply]`.
   [`bugbot-request-marker.sh --repo <owner>/<repo> --pr <n> [--head <headRefOid>]`](../scripts/bugbot-request-marker.sh)
   checks that pairing for every bare `@cursor review` on a PR and reports it apart from disclosure
   drift: `0` paired, `1` an unpaired trigger or a latest request naming another head, `2` unknown.

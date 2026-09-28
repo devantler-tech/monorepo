@@ -285,6 +285,8 @@ jobs:
               - '.claude/scripts/agent-claim.test.sh'
               - '.claude/scripts/agent-claim-sweep.sh'
               - '.claude/scripts/agent-claim-sweep.test.sh'
+              - '.claude/scripts/review-request-lock.sh'
+              - '.claude/scripts/review-request-lock.test.sh'
               # The Claim protocol's assignee lease-clock read is executed by its own test.
               - 'AGENTS.md'
               - '.claude/guides/**'
@@ -1806,6 +1808,10 @@ jobs:
       # unreadable and re-acquired tips survive (monorepo#3589).
       - name: Self-test agent-claim sweep
         run: bash .claude/scripts/agent-claim-sweep.test.sh
+      # PR review requests are arbitrated across instances by an atomic ref create;
+      # eight simultaneous acquires must yield exactly one winner (monorepo#2894).
+      - name: Self-test review-request lock
+        run: bash .claude/scripts/review-request-lock.test.sh
       # Runs the Claim protocol's prescribed lease-clock read against a fake gh: a failed timeline
       # read must be UNKNOWN, never "unassigned" (monorepo#2798).
       - name: Verify the claim-lease timeline read
