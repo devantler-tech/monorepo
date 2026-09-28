@@ -410,12 +410,6 @@ extract_fenced() {
                  + countw(t, "if") + countw(t, "case")) \
                 > (countw(t, "done") + countw(t, "fi") + countw(t, "esac")))
       }
-      # Occurrences of one character in `t`, for the case-pattern test in `join_sep`.
-      function countc(t, ch,   i, c) {
-        c = 0
-        for (i = 1; i <= length(t); i++) if (substr(t, i, 1) == ch) c++
-        return c
-      }
       # The separator a newline stands for when the NEXT line is joined behind `s`.
       #
       # Inside an open compound a newline is a statement SEPARATOR to the shell, so joining
@@ -428,24 +422,31 @@ extract_fenced() {
       # parseable shell (`bash -n`: unexpected end of file) -- a command nobody runs
       # (monorepo#2964). So at a statement boundary inside a compound the join is `; `.
       #
-      # It stays a SPACE wherever the shell itself continues the statement, since a `; `
-      # there is a syntax error or a different command: a pending backslash, open quotes,
-      # a trailing operator (`|`, `&&`, `||`, `;`, `;;`, `&`, `!`) or opener (`(`, `{`),
-      # a keyword whose body follows on the next line (`do`, `then`, `else`, `in`), a bare
-      # `if`, `elif`, `while` or `until` whose condition follows on the next line, and a
-      # `case` pattern (`a)`: the LAST line joined ends in `)` and holds more unquoted `)`
-      # than `(`). That is judged on the last line alone: the whole buffer keeps the first
-      # surplus `)` of a pattern, and would misread every later `v=$(…)` statement as one.
-      # Outside a compound nothing
-      # changes, so a block whose join was already right stays byte-identical.
-      function join_sep(s, last,   t, lt, n, arr, w) {
-        if (!compound_open(s) || unbalanced(s) || s ~ /\\[[:space:]]*$/) return " "
+      # The newline is a separator BY DEFAULT, as it is to the shell, and a space is kept
+      # only where the shell grammar says the statement continues -- a closed list, so a
+      # new shape falls to the default rather than to a guess:
+      #   - the text is still open: a pending backslash, open quotes, an open `(` or `$(`
+      #     (a multi-line array or substitution);
+      #   - the previous line ends in an operator or opener: `|` `&&` `||` `;` `;;` `&`
+      #     `!` `(` `{`;
+      #   - the previous line ends in a keyword whose body or condition follows: `do`,
+      #     `then`, `else`, `in`, or a bare `if`, `elif`, `while` or `until`;
+      #   - the previous line is a function head (`name()`) or ONLY a `case` pattern (`a)`,
+      #     `a|b)`, `(a)`) -- a pattern followed by its first command on the same line is
+      #     a statement like any other;
+      #   - the next line opens with `in`, which belongs to the `for` or `case` above it.
+      # Outside a compound nothing changes, so a block whose join was already right stays
+      # byte-identical.
+      function join_sep(s, last, next_line,   t, lt, n, arr, w) {
+        if (!compound_open(s) || unbalanced(s) || subst_open(s) || s ~ /\\[[:space:]]*$/) return " "
+        if (next_line ~ /^[[:space:]]*in([[:space:]]|$)/) return " "
         t = unquoted(s); sub(/[[:space:]]+$/, "", t)
         if (t == "" || t ~ /[|&;({!]$/) return " "
         n = split(t, arr, /[[:space:]]+/); w = arr[n]
         if (w ~ /^(do|then|else|elif|if|while|until|in)$/) return " "
         lt = unquoted(last); sub(/[[:space:]]+$/, "", lt)
-        if (lt ~ /\)$/ && countc(lt, ")") > countc(lt, "(")) return " "
+        if (lt ~ /\(\)$/) return " "
+        if (lt ~ /^[[:space:]]*\(?[^()[:space:]][^()]*\)$/) return " "
         return "; "
       }
       function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
@@ -544,7 +545,7 @@ extract_fenced() {
         # An options prefix is a COMPLETE statement, so the line after it is a NEW one. Joined
         # with a space it reads as ARGUMENTS to `set` -- measured, `a read must begin with a
         # forge command, not 'set'`, with the verb never seen at all. `; ` is what the shell runs.
-        else { js = join_sep(buf, last); sub(/\\[[:space:]]*$/, "", buf); buf = buf js line; last = line }
+        else { js = join_sep(buf, last, line); sub(/\\[[:space:]]*$/, "", buf); buf = buf js line; last = line }
         # A trailing pipe or boolean is a shell CONTINUATION exactly as a backslash is,
         # and the operand it joins is often where the real verdict lives. Flushing there
         # hands the guard a command ending in `|`, which it rightly refuses as an empty
@@ -932,19 +933,22 @@ case "$cp_status" in
   *) die_unknown "self-test: a compound construct's unclassified refusal was NOT detected (status $cp_status, fail-open)" ;;
 esac
 
-# Every compound shape a prescription can take must parse once joined: `then`/`else`
-# bodies, a bare `elif` or `while` whose condition is on the next line, a `case` with
-# patterns and `;;`, and a pipe continuing a statement
-# across lines. Each spot where the shell CONTINUES a statement must stay a space -- a
-# `; ` after `do`, `then`, `in`, `|` or a `case` pattern is a syntax error -- and each
-# statement boundary must become `; `. `bash -n` on every candidate is the check that
-# notices either mistake, so a regression in any branch of the join fails here.
+# Every compound shape a prescription can take must parse once joined. The fixture holds
+# one of each place where the shell CONTINUES a statement across a newline, where a `; `
+# is a syntax error: a bare `elif` or `while` whose condition is on the next line, `in` on
+# the line after `for`, a `case` pattern alone on its line, a multi-line array, a pipe,
+# and a function head `f()` whose body opens on the next line. Every other newline in it
+# is a statement boundary and must become `; `. `bash -n` on every candidate notices a
+# mistake in either direction, so a regression in any branch of the join fails here.
 printf '%s\n' 'Shapes:' '' '```sh' \
   'if gh pr view 1 --repo devantler-tech/monorepo' 'then' '  gh pr view 2 --repo devantler-tech/monorepo' \
   'elif' '  gh pr view 3 --repo devantler-tech/monorepo' 'then' '  gh pr view 4 --repo devantler-tech/monorepo' \
-  'else' '  gh pr view 5 --repo devantler-tech/monorepo' 'fi' '' \
-  'case "$R" in' '  a)' '    v=$(gh pr view 6 --repo devantler-tech/monorepo)' '    gh pr view "$v" --repo devantler-tech/monorepo' '    ;;' '  b) gh pr view 7 --repo devantler-tech/monorepo ;;' 'esac' '' \
-  'while' '  read -r n' 'do' '  gh pr view "$n" --repo devantler-tech/monorepo |' '    jq -r .title' 'done' '```' > "$fixdir/compound-shapes.md"
+  'else' '  args=(' '    --repo' '    devantler-tech/monorepo' '  )' '  gh pr view 5 "${args[@]}"' 'fi' '' \
+  'case "$R" in' '  a)' '    v=$(gh pr view 6 --repo devantler-tech/monorepo)' '    gh pr view "$v" --repo devantler-tech/monorepo' '    ;;' \
+  '  b) w=$(gh pr view 7 --repo devantler-tech/monorepo)' '    gh pr view "$w" --repo devantler-tech/monorepo' '    ;;' 'esac' '' \
+  'while' '  read -r n' 'do' '  gh pr view "$n" --repo devantler-tech/monorepo |' '    jq -r .title' 'done' '' \
+  'for T' 'in Epic Feature' 'do' '  gh pr view "$T" --repo devantler-tech/monorepo' 'done' '' \
+  'if true' 'then' '  f()' '  { gh pr view 8 --repo devantler-tech/monorepo; }' '  f' 'fi' '```' > "$fixdir/compound-shapes.md"
 cs_n=0
 while IFS= read -r cs_row; do
   [ -n "$cs_row" ] || continue
@@ -953,21 +957,26 @@ while IFS= read -r cs_row; do
   # `while` on its own line) yields only the nested read, which parses fine -- so parsing
   # alone cannot notice it, and the opening keyword is asserted too.
   case "${cs_row#fenced }" in
-    'if '*|'case '*|'while '*) ;;
+    'if '*|'case '*|'while '*|'for '*) ;;
     *) die_unknown "self-test: a compound construct reached the guard without its opening keyword: ${cs_row#fenced }" ;;
   esac
   bash -n <<<"${cs_row#fenced }" 2>/dev/null \
     || die_unknown "self-test: a joined compound candidate is not parseable shell, so the guard is asked about a command nobody runs: ${cs_row#fenced }"
 done <<<"$(extract_commands "$fixdir/compound-shapes.md" | grep '^fenced ')"
-[ "$cs_n" -eq 3 ] \
-  || die_unknown "self-test: the compound-shapes fixture yielded $cs_n fenced candidate(s), expected 3 (if, case, while)"
+[ "$cs_n" -eq 5 ] \
+  || die_unknown "self-test: the compound-shapes fixture yielded $cs_n fenced candidate(s), expected 5 (if, case, while, for, if)"
 # Parsing cannot catch one wrong space: a `v=$(…)` statement followed by a space-joined
 # `gh …` still parses, as an assignment PREFIX to that second command. A `case` arm is
-# where this happens, because its pattern leaves a surplus `)` in the buffer. So the two
-# statements must stay separated by `; `.
-cs_case='v=$(gh pr view 6 --repo devantler-tech/monorepo); gh pr view "$v" --repo devantler-tech/monorepo'
-extract_commands "$fixdir/compound-shapes.md" | grep -qF -- "$cs_case" \
-  || die_unknown "self-test: two statements in a case arm were joined into one command (the second became an assignment prefix)"
+# where this happens, because its pattern ends in a surplus `)` -- whether the pattern is
+# alone on its line or followed by the arm's first command. A multi-line array's closing
+# `)` alone on its line looks like a pattern too. Each must stay two statements.
+for cs_case in \
+  '); gh pr view 5 "${args[@]}"' \
+  'v=$(gh pr view 6 --repo devantler-tech/monorepo); gh pr view "$v" --repo devantler-tech/monorepo' \
+  'b) w=$(gh pr view 7 --repo devantler-tech/monorepo); gh pr view "$w" --repo devantler-tech/monorepo'; do
+  extract_commands "$fixdir/compound-shapes.md" | grep -qF -- "$cs_case" \
+    || die_unknown "self-test: two statements in a case arm were joined into one command (the second became an assignment prefix): $cs_case"
+done
 
 # ...and a construct wrapping no forge verb must not become a candidate, or every
 # `for`/`if` in a fenced block would reach the guard as a false finding.
