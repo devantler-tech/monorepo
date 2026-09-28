@@ -201,6 +201,23 @@ t_validates_args_even_with_no_worktree_dirs() {
   rm -rf "$root"
 }
 
+
+t_passes_salvage_age_and_validates_it() {
+  # The scheduled launcher passes only MODE and min_age, so the wrapper's own default is
+  # what turns salvage on for the real sweep (#2831). A malformed value must stop the run.
+  local root; root=$(make_root)
+  local out rc out_bad rc_bad
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 2>&1); rc=$?
+  out_bad=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 2w 2>&1); rc_bad=$?
+  if [ "$rc" -eq 0 ] && grep -q 'salvage_age=336h' <<<"$out" \
+     && [ "$rc_bad" -eq 2 ] && grep -q 'salvage_age_hours must be a non-negative integer' <<<"$out_bad"; then
+    ok "defaults salvage_age to 336h and rejects a malformed value"
+  else
+    bad "defaults salvage_age to 336h and rejects a malformed value" "rc=$rc rc_bad=$rc_bad $out $out_bad"
+  fi
+  rm -rf "$root"
+}
+
 t_aborts_on_malformed_gitmodules() {
   # Both the --get-regexp and the --list probe fail on a malformed file, producing no
   # output; testing only the probe's emptiness read that as "no submodules" and
@@ -282,6 +299,7 @@ t_skips_broken_isolation
 t_aborts_and_exits_nonzero_on_sweep_failure
 t_per_repo_manifest_isolation
 t_validates_args_even_with_no_worktree_dirs
+t_passes_salvage_age_and_validates_it
 t_aborts_on_malformed_gitmodules
 t_skips_a_gitmodules_entry_that_is_not_a_gitlink
 t_gitlink_validation_uses_a_literal_pathspec
