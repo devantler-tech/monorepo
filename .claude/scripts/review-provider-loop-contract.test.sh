@@ -87,7 +87,7 @@ grep -Fq 'A provider reaction emoji on the trigger is positive in-flight evidenc
 # acknowledged-request window on it, or reads its verdict-like prose as a review result.
 grep -Fq 'A CodeRabbit CHAT reply to a review trigger is a trigger-parse failure' "${constitution}" ||
   fail "constitution does not classify a CodeRabbit chat reply as a trigger-parse failure"
-grep -Fq 'with `reason=chat-reply` and advance to' "${constitution}" ||
+grep -Fq '`reason=chat-reply` and advance to Codex' "${constitution}" ||
   fail "constitution gives a repeated CodeRabbit chat reply no bounded exit to the next lane"
 grep -Fq 'the first chat reply at a head → repost once immediately in the composed' "${constitution}" ||
   fail "constitution does not require one immediate composed repost after the first chat reply"
