@@ -83,11 +83,24 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   the hourly slot **54% against 29%**; and **all 9 dropped dispatches (of 179 slots) were
   overlap-blocked by a still-open run**.
   ⚠️ So if something else is actionable, arm `Monitor` and go do it. If nothing is,
-  **end the run**: rung 1 of *The work-selection ladder* guarantees the next tick collects the PR,
-  and a run that ends on time is what makes that tick exist.
+  **end the run**: rung 1 of *The work-selection ladder* puts the PR first for whichever run is
+  dispatched next, and a run that ends on time is what keeps that dispatch from being dropped.
   🔴 **Ending the run REQUIRES stopping every in-flight watcher first — `TaskStop`, not merely a
   closing message.** A watcher left armed reopens the session after the run believed it was over;
   **6 idles (1.09h)** in the same window woke on a watcher that had merely TIMED OUT.
+  🔴 In a **delegated run** (you were dispatched as a subagent), **nothing resurrects you.** Your
+  background tasks end when you return, and the runtime's launch message tells you to wait for them
+  first. That message tells you the result is lost if you return. It does not require you to wait. So
+  never poll a backgrounded task's output file. Where a result gates this run's terminal step (a
+  merge you make right after it), make at most **one** bounded one-shot read of the condition itself
+  (for example `gh pr checks <n>`, never `--watch`, which polls in the foreground), with no watcher
+  armed beside it. If that read shows the condition resolved, finish the step. If no result gates a
+  terminal step, or the read shows it unresolved, `TaskStop` every watcher you armed and return,
+  reporting the PR's state to your parent: the PR stays on rung 1 for whichever run is dispatched
+  next, never a promised next tick. Measured 09-25 to 09-28:
+  **31 delegated Engineer runs averaged 69.0 min and 45% overran the slot, against 43.7 min and 29%
+  for 38 inline runs**. Most of the gap was watchers polled through their own output file
+  (monorepo#3645).
 - **Long-pole first.** Push the change with the **slowest CI first** so its bake overlaps everything
   else; do the fast-CI and no-CI work (issue triage, review-thread replies, memory, reports) during
   the bake. Reversing this — fast item first, slow item last — buys a guaranteed idle tail, which is
@@ -97,7 +110,8 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
 - **There is always non-blocking work.** A portfolio this size always has a review thread to resolve,
   an issue to triage, a finding to verify, or memory to sharpen. "Waiting for CI" is never a reason
   to do nothing — if a wait is truly unavoidable and nothing else is actionable, **end the run and
-  let the next tick collect the result** (the watcher/carry-forward exists for exactly this). A run
+  let a later run collect the result** (rung 1 puts the PR first for whichever run is dispatched
+  next; the carry-forward exists for exactly this). A run
   is measured by what it ships, not by how long it stays open.
 - **Re-read state after any long wait — don't assume it stood still.** Both your own PRs and the
   sibling's move while you wait; a PR can merge, a head can advance, a thread can be resolved by the

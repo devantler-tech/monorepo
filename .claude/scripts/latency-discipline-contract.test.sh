@@ -30,7 +30,10 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-constitution="${repo_root}/.claude/guides/tool-call-discipline.md"
+guide="${repo_root}/.claude/guides/tool-call-discipline.md"
+# The negative controls at the end re-run this file against a mutated COPY of the guide. The override
+# exists only for that re-entry; a normal run always reads the real guide.
+constitution="${LATENCY_CONTRACT_FIXTURE_GUIDE:-${guide}}"
 plugin_dir="${repo_root}/libraries/agent-plugins"
 engineer_path='plugins/agentic-engineering/agents/agentic-engineer.agent.md'
 
@@ -124,6 +127,45 @@ assert_bullet 'Ending the run REQUIRES stopping every in-flight watcher first' \
 assert_bullet '`TaskStop`, not merely a' \
   "latency bullet states the stop requirement without naming TaskStop as the mechanism"
 
+# 8. The DELEGATED-run case (monorepo#3645). Item 5's resurrection mechanism holds only for a
+#    top-level session: a run dispatched as a subagent loses its background tasks when it returns, and
+#    the runtime's launch message tells it to wait first. Without its own clause, delegated runs armed a
+#    watcher and then foreground-polled that watcher's output file — 31 delegated Engineer runs averaged
+#    69.0 min against 43.7 for 38 inline runs (09-25 to 09-28). Each anchor carries its own verb, so a
+#    revision that keeps the words but licenses the poll fails.
+assert_bullet 'In a **delegated run**' \
+  "latency bullet does not name the delegated-run case, where nothing resurrects the session"
+assert_bullet 'never poll a backgrounded task'"'"'s output file' \
+  "latency bullet does not forbid a delegated run from polling its own backgrounded task's output file"
+assert_bullet 'at most **one** bounded one-shot read of the condition itself' \
+  "latency bullet does not cap a delegated run's gating check at one bounded one-shot read of the condition"
+assert_bullet 'never `--watch`, which polls in the foreground' \
+  "latency bullet does not forbid the foreground --watch poll as a delegated run's gating check"
+assert_bullet 'with no watcher armed beside it' \
+  "latency bullet does not forbid pairing the delegated run's gating read with a background watcher"
+assert_bullet 'If no result gates a terminal step, or the read shows it unresolved, `TaskStop` every watcher you armed and return' \
+  "latency bullet does not tell a delegated run to stop its watchers and return when the gate is absent or unresolved"
+assert_bullet 'reporting the PR'"'"'s state to your parent' \
+  "latency bullet does not tell an abandoning delegated run to hand the PR's state back to its parent"
+assert_bullet 'never a promised next tick' \
+  "latency bullet promises that the next tick collects an abandoned PR, which the cadence contract forbids"
+refute_bullet 'a delegated run may poll' \
+  "latency bullet licenses a delegated run to poll"
+assert_bullet 'If that read shows the condition resolved, finish the step.' \
+  "latency bullet does not tell a delegated run to finish its terminal step when the one-shot read shows the gate resolved"
+refute_bullet 'guarantees the next tick' \
+  "latency bullet guarantees next-tick collection, but the Claude scheduler drops overlapping dispatches"
+refute_bullet 'rung 1 collects the PR next tick' \
+  "latency bullet promises next-tick collection of an abandoned PR"
+
+# A next-tick promise anywhere in the guide contradicts the scheduler rule, not only inside the
+# bullet, so these two refutations read the whole guide (a refutation cannot pass by relocation).
+guide_flat="$(tr '\n' ' ' <"${constitution}" | tr -s '[:space:]' ' ')"
+case "${guide_flat}" in
+  *'next tick collect'* | *'guarantees the next tick'*)
+    fail "the latency guide promises that the next tick collects a PR, but the Claude scheduler drops overlapping dispatches" ;;
+esac
+
 # ---------------------------------------------------------------------------
 # PORTABLE HALF — rule 7 of the pinned engineer definition, flattened the same way. Scoped to that
 # rule for the same reason the deployment half is scoped to its bullet: a whole-file check passes
@@ -176,5 +218,53 @@ assert_engineer 'while one is armed: stop every such watcher before ending the r
   "the pinned engineer no longer requires session-holding watchers to be stopped before the run ends"
 assert_engineer 'Never arm a watcher and then end your turn with nothing else to do' \
   "the pinned engineer no longer forbids arming a watcher and then ending the turn idle"
+
+# ---------------------------------------------------------------------------
+# NEGATIVE CONTROLS for item 8 (monorepo#3645). Each one breaks a single delegated-run clause in a
+# copy of the guide and re-runs this file against it; the run must fail with THAT clause's diagnostic,
+# not merely exit non-zero. The phrase is matched across line wraps, and a mutation that changes
+# nothing is itself a failure, so a reworded guide cannot turn a control into a silent no-op.
+if [ -z "${LATENCY_CONTRACT_FIXTURE_GUIDE:-}" ]; then
+  # No EXIT trap for the cleanup: macOS bash 3.2 can report an abort as exit 0 from one. A failing
+  # control leaves its temporary directory behind, which is the cheaper failure.
+  fixture_dir="$(mktemp -d)"
+
+  expect_rejected() { # <phrase in the guide> <replacement> <expected diagnostic substring>
+    local mutated="${fixture_dir}/guide.md" err="${fixture_dir}/err"
+    FROM="$1" TO="$2" perl -0pe '
+      my $re = join("\\s+", map { quotemeta } split(/ /, $ENV{FROM}));
+      s/$re/$ENV{TO}/;
+    ' "${guide}" >"${mutated}" || fail "negative control could not mutate the guide for: $1"
+    ! cmp -s "${guide}" "${mutated}" ||
+      fail "negative control for '$1' changed nothing — the phrase is no longer in the guide"
+    if LATENCY_CONTRACT_FIXTURE_GUIDE="${mutated}" bash "${BASH_SOURCE[0]}" >/dev/null 2>"${err}"; then
+      fail "negative control: the guide still passed with '$1' broken"
+    fi
+    grep -Fq -- "$3" "${err}" ||
+      fail "negative control for '$1' failed for the wrong reason: $(cat "${err}")"
+  }
+
+  expect_rejected 'never poll a backgrounded task'"'"'s output file' 'poll a backgrounded task'"'"'s output file' \
+    'does not forbid a delegated run from polling'
+  expect_rejected 'bounded one-shot read of the condition itself' 'bounded wait on the condition itself' \
+    'one bounded one-shot read of the condition'
+  expect_rejected 'never `--watch`, which polls in the foreground' '`--watch` is fine' \
+    'does not forbid the foreground --watch poll'
+  expect_rejected 'with no watcher armed beside it' 'with a watcher armed beside it' \
+    'does not forbid pairing the delegated run'
+  expect_rejected 'If that read shows the condition resolved, finish the step.' '' \
+    'finish its terminal step when the one-shot read shows the gate resolved'
+  expect_rejected 'If no result gates a terminal step, or' 'If no result gates a terminal step or' \
+    'stop its watchers and return when the gate is absent or unresolved'
+  expect_rejected 'reporting the PR'"'"'s state to your parent' 'keeping the PR'"'"'s state to yourself' \
+    'hand the PR'"'"'s state back to its parent'
+  expect_rejected 'puts the PR first for whichever run is dispatched next' 'guarantees the next tick collects the PR' \
+    'guarantees next-tick collection'
+  expect_rejected 'never a promised next tick' 'and the next tick collects it' \
+    'promises that the next tick collects an abandoned PR'
+  expect_rejected 'let a later run collect the result' 'let the next tick collect the result' \
+    'the latency guide promises that the next tick collects a PR'
+  rm -rf "${fixture_dir}"
+fi
 
 echo "latency discipline contract: OK"
