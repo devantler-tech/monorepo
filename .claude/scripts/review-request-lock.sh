@@ -18,7 +18,7 @@
 # MECHANISM
 #   ref   refs/agent-review-lock/<pr>/<head>/<provider>   (outside refs/heads and refs/tags, so it
 #         triggers no workflow, matches no ruleset and never shows up as a branch)
-#   value a blob recording `owner=<token>` and `created_epoch=<seconds>`
+#   value a parentless commit whose message records `owner=<token>` and `created_epoch=<seconds>`
 #   A lock older than the lease may be taken over. After the lease, the request marker the winner
 #   posted is visible to every sibling, so the marker re-read governs from then on.
 #
@@ -66,13 +66,20 @@ api() {
   return "${rc}"
 }
 
-new_lock_blob() {
-  local content
+new_lock_commit() {
+  local content tree
   content="$(printf '%s\nowner=%s\ncreated_epoch=%s\npr=%s\nhead=%s\nprovider=%s\n' \
     "${PREFIX}" "${owner}" "$(now_epoch)" "${pr}" "${head}" "${provider}")"
-  api -X POST "repos/${repo}/git/blobs" -f content="${content}" -f encoding=utf-8 --jq .sha ||
-    die "could not create the lock blob: ${api_out}"
-  [[ "${api_out}" =~ ^[0-9a-f]{40}$ ]] || die "unexpected blob sha: ${api_out}"
+  # GitHub documents refs as pointing at commits, so the record is a parentless commit whose
+  # message holds it (its one-file tree carries the same text for anyone browsing the ref).
+  api -X POST "repos/${repo}/git/trees" -f "tree[][path]=lock" -f "tree[][mode]=100644" \
+    -f "tree[][type]=blob" -f "tree[][content]=${content}" --jq .sha ||
+    die "could not create the lock tree: ${api_out}"
+  [[ "${api_out}" =~ ^[0-9a-f]{40}$ ]] || die "unexpected tree sha: ${api_out}"
+  tree="${api_out}"
+  api -X POST "repos/${repo}/git/commits" -f message="${content}" -f tree="${tree}" --jq .sha ||
+    die "could not create the lock commit: ${api_out}"
+  [[ "${api_out}" =~ ^[0-9a-f]{40}$ ]] || die "unexpected commit sha: ${api_out}"
   printf '%s' "${api_out}"
 }
 
@@ -82,9 +89,8 @@ read_lock() {
   api "repos/${repo}/git/ref/${key}" --jq .object.sha || die "could not read ${key}: ${api_out}"
   sha="${api_out}"
   [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || die "unexpected lock sha for ${key}: ${sha}"
-  api "repos/${repo}/git/blobs/${sha}" --jq .content || die "could not read lock blob ${sha}: ${api_out}"
-  content="$(printf '%s' "${api_out}" | tr -d '\n' | base64 --decode 2>/dev/null)" ||
-    die "lock blob ${sha} is not base64"
+  api "repos/${repo}/git/commits/${sha}" --jq .message || die "could not read lock commit ${sha}: ${api_out}"
+  content="${api_out}"
   lock_owner="$(printf '%s\n' "${content}" | sed -n 's/^owner=//p' | head -n 1)"
   lock_created="$(printf '%s\n' "${content}" | sed -n 's/^created_epoch=//p' | head -n 1)"
   [ -n "${lock_owner}" ] && [[ "${lock_created}" =~ ^[0-9]+$ ]] ||
@@ -106,10 +112,10 @@ prune_other_heads() {
 }
 
 acquire() {
-  local blob age
+  local lock age
   key="${PREFIX}/${pr}/${head}/${provider}"
-  blob="$(new_lock_blob)"
-  if api -X POST "repos/${repo}/git/refs" -f ref="refs/${key}" -f sha="${blob}" --jq .ref; then
+  lock="$(new_lock_commit)"
+  if api -X POST "repos/${repo}/git/refs" -f ref="refs/${key}" -f sha="${lock}" --jq .ref; then
     prune_other_heads
     echo "ACQUIRED ${key} owner=${owner}"
     return 0
@@ -133,7 +139,7 @@ acquire() {
   # Expired: take it over, then read back. The REST API offers no compare-and-swap on update, so
   # two simultaneous takeovers can both win; by then the first request's marker is visible and the
   # caller's marker re-read is what arbitrates.
-  api -X PATCH "repos/${repo}/git/refs/${key}" -f sha="${blob}" -F force=true --jq .ref ||
+  api -X PATCH "repos/${repo}/git/refs/${key}" -f sha="${lock}" -F force=true --jq .ref ||
     die "could not take over expired ${key}: ${api_out}"
   read_lock
   if [ "${lock_owner}" != "${owner}" ]; then

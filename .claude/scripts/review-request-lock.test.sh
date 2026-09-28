@@ -26,7 +26,7 @@ store="$tmp/store"
 mkdir -p "$tmp/bin" "$store/refs" "$store/blobs" "$store/pulls"
 cat >"$tmp/bin/gh" <<'STUB'
 #!/usr/bin/env bash
-# Minimal GitHub REST stand-in for the git refs, blobs and pulls endpoints.
+# Minimal GitHub REST stand-in for the git refs, trees, commits and pulls endpoints.
 set -euo pipefail
 store="${GH_STUB_STORE:?}"
 [ "$1" = api ] || { echo "stub: only 'gh api' is supported" >&2; exit 1; }
@@ -42,6 +42,8 @@ while [ "$#" -gt 0 ]; do
         ref=*) declare_ref="${2#ref=}" ;;
         sha=*) declare_sha="${2#sha=}" ;;
         content=*) content="${2#content=}" ;;
+        "tree[][content]="*) content="${2#"tree[][content]="}" ;;
+        message=*) content="${2#message=}" ;;
       esac
       shift 2 ;;
     *) path="$1"; shift ;;
@@ -52,8 +54,11 @@ if [ -n "${GH_STUB_FAIL:-}" ] && [[ "${method} ${path}" == *${GH_STUB_FAIL}* ]];
 fi
 rest="${path#repos/o/r/}"
 case "${method} ${rest}" in
-  "POST git/blobs")
-    sha="$(printf '%s' "$content" | shasum | cut -c1-40)"
+  "POST git/trees")
+    sha="$(printf 'tree %s' "$content" | shasum | cut -c1-40)"
+    echo "$sha" ;;
+  "POST git/commits")
+    sha="$(printf 'commit %s %s' "$content" "$RANDOM$RANDOM" | shasum | cut -c1-40)"
     printf '%s' "$content" >"$store/blobs/$sha"
     echo "$sha" ;;
   "POST git/refs")
@@ -78,10 +83,10 @@ case "${method} ${rest}" in
     f="$store/refs/${rest#git/ref/}"
     [ -f "$f" ] || { echo '{"message":"Not Found","status":"404"}'; exit 1; }
     cat "$f"; echo ;;
-  "GET git/blobs/"*)
-    f="$store/blobs/${rest#git/blobs/}"
+  "GET git/commits/"*)
+    f="$store/blobs/${rest#git/commits/}"
     [ -f "$f" ] || { echo '{"message":"Not Found"}'; exit 1; }
-    base64 <"$f" ;;
+    cat "$f" ;;
   "GET git/matching-refs/"*)
     prefix="${rest#git/matching-refs/}"
     (cd "$store" && find refs -type f | sort | while IFS= read -r r; do
@@ -183,7 +188,7 @@ fi
 
 echo "fail closed:"
 GH_STUB_FAIL="POST repos/o/r/git/refs" run_acq "a non-422 create failure is UNKNOWN, never a win" 2 "could not create" 9 "$head_a" cr claude-run1
-GH_STUB_FAIL="POST repos/o/r/git/blobs" run_acq "a failed blob write is UNKNOWN" 2 "could not create the lock blob" 9 "$head_a" cr claude-run1
+GH_STUB_FAIL="POST repos/o/r/git/commits" run_acq "a failed lock-commit write is UNKNOWN" 2 "could not create the lock commit" 9 "$head_a" cr claude-run1
 GH_STUB_FAIL="GET repos/o/r/git/ref/" run_acq "an unreadable existing lock is UNKNOWN, never a loss or a win" 2 "could not read" 7 "$head_b" cr codex-run3
 junk="$(printf 'no owner here' | shasum | cut -c1-40)"
 printf 'no owner here' >"$store/blobs/$junk"
