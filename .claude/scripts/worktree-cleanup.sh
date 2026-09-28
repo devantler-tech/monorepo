@@ -111,6 +111,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 # otherwise refreshes the index opportunistically, which moves its mtime and would make the
 # sweep's own reads look like fresh work to work_age_h (#3642). Optional locks off stops
 # exactly that write; required writes (the salvage snapshot's own GIT_INDEX_FILE) are unaffected.
+# Porcelain `git diff` against the worktree rewrites the index even so: use diff-index.
 export GIT_OPTIONAL_LOCKS=0
 
 REPO_PATH=${1:-}
@@ -753,7 +754,11 @@ work_age_h() {
   local wt=$1 admin list p m newest=0
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
   list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
-  if ! { git -C "$wt" diff -z --name-only HEAD && git -C "$wt" ls-files -z -o --exclude-standard; } \
+  # Plumbing diff-index, never porcelain `git diff`: the porcelain refreshes and rewrites
+  # the index whatever GIT_OPTIONAL_LOCKS says, so every sweep would restart the age it is
+  # measuring. Without that refresh a stat-only change is listed too, which can only make a
+  # tree look newer, never older.
+  if ! { git -C "$wt" diff-index -z --name-only HEAD && git -C "$wt" ls-files -z -o --exclude-standard; } \
        > "$list" 2>/dev/null; then
     rm -f "$list"; return 1
   fi
