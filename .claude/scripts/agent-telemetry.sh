@@ -3950,7 +3950,8 @@ if want safety; then
     # COMPLETION IS PROVEN, NOT ASSUMED. Each leg prints its own `BOK`/`POK`
     # only when its pipefail pipeline succeeded, and awk prints `OK` only once
     # it has closed both legs; the table below reports UNKNOWN unless all three
-    # arrived. Positive markers rather than failure markers, so a stage that
+    # arrived, followed by the extraction's own `XOK` (see the pipeline below).
+    # Positive markers rather than failure markers, so a stage that
     # dies without a word still reads as UNKNOWN. awk's close() is not used for
     # this: the one-true-awk shipped with macOS reports only whether pclose()
     # itself failed, never the command's exit status. Both legs are opened in
@@ -3959,9 +3960,15 @@ if want safety; then
     CRED_BLOB_LEG_SH="$(declare -f cred_grep cred_normalise cred_bound cred_blob_matches cred_blob_leg); cred_blob_leg && echo BOK"
     CRED_PLAIN_LEG_SH="$(declare -f cred_grep cred_normalise cred_bound cred_plain_matches cred_plain_leg); cred_plain_leg && echo POK"
     export CRED_BLOB_LEG_SH CRED_PLAIN_LEG_SH CRED_BLOB_ANCHORED_RE CRED_BLOB_STRIP_RE CRED_VALUE_MAX
+    # The EXTRACTION is part of the proof too: a batch that cannot read a
+    # transcript, or a jq that dies, feeds the legs a shorter stream they would
+    # happily finish. So each batch runs under pipefail (xargs then exits
+    # non-zero), and right after the pipeline its per-stage statuses decide a
+    # last `XOK` marker. The two greps may return 1 — nothing matched — and
+    # still be complete; every other stage must return 0.
     cred_sets=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
       | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
-          'awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
+          'set -o pipefail; awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
       | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
       | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null \
       | tr '\000' '\n' \
@@ -3971,7 +3978,13 @@ if want safety; then
             printf "" | blob; printf "" | plain
           }
           { print | blob; print | plain }
-          END { close(blob); close(plain); print "OK" }')
+          END { close(blob); close(plain); print "OK" }'
+      cred_ps=("${PIPESTATUS[@]}")
+      if [ "${#cred_ps[@]}" -eq 8 ] && [ "${cred_ps[0]}" -eq 0 ] && [ "${cred_ps[1]}" -le 1 ] \
+         && [ "${cred_ps[2]}" -eq 0 ] && [ "${cred_ps[3]}" -eq 0 ] && [ "${cred_ps[4]}" -eq 0 ] \
+         && [ "${cred_ps[5]}" -le 1 ] && [ "${cred_ps[6]}" -eq 0 ] && [ "${cred_ps[7]}" -eq 0 ]; then
+        echo XOK
+      fi)
     export -n CRED_BLOB_LEG_SH CRED_PLAIN_LEG_SH CRED_BLOB_ANCHORED_RE CRED_BLOB_STRIP_RE CRED_VALUE_MAX
     # NUL is translated to a newline BEFORE the capture, never left to the
     # command substitution. A decoded string can legitimately carry `\u0000`,
@@ -3988,8 +4001,8 @@ if want safety; then
     # stop reading at the first hit and, under pipefail, turn the writer's
     # SIGPIPE into a false UNKNOWN on a large set.
     cred_scan_complete=$(printf '%s\n' "$cred_sets" | awk '
-      $0 == "BOK" { b = 1 } $0 == "POK" { p = 1 } { last = $0 }
-      END { print ((b && p && last == "OK") ? 1 : 0) }')
+      $0 == "BOK" { b = 1 } $0 == "POK" { p = 1 } $0 == "OK" { o = 1 } { last = $0 }
+      END { print ((b && p && o && last == "XOK") ? 1 : 0) }')
     # Every later stage that turns those sets into the table can fail too, so
     # each one clears the flag, and UNKNOWN is decided only once the rows exist.
     # (No stage here exits early, so pipefail cannot misread a SIGPIPE.)
@@ -4118,7 +4131,7 @@ if want safety; then
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /') || cred_scan_complete=0
     if [ "$cred_scan_complete" != 1 ]; then
-      echo "    UNKNOWN: the credential scan did not complete (a value-set stage failed)."
+      echo "    UNKNOWN: the credential scan did not complete (a stage failed or was cut short)."
       echo "    Any rows below are a PARTIAL count — an empty or short table here is NOT clean."
     fi
     [ -z "$cred_rows" ] || printf '%s\n' "$cred_rows"

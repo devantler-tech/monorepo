@@ -7579,6 +7579,29 @@ else
   bad "a failed split of the legs' output marks the table UNKNOWN" \
       "$(printf '%s' "$PF_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
 fi
+# And one step EARLIER, in the extraction feeding both legs: a decode that dies
+# hands the legs an empty stream they complete without complaint, so only the
+# extraction's own stage statuses can mark the table.
+mkdir -p "$FIX/credjqshim"
+cat > "$FIX/credjqshim/jq" <<'EOF'
+#!/usr/bin/env bash
+# Fails only the credential table's decode, recognised by its filter text.
+case "$*" in
+  *decoded_strings*) cat >/dev/null; exit 5 ;;
+esac
+exec "$REAL_JQ" "$@"
+EOF
+chmod +x "$FIX/credjqshim/jq"
+real_jq=$(command -v jq)
+XF_OUT=$(PATH="$FIX/credjqshim:$PATH" REAL_JQ="$real_jq" \
+  CLAUDE_PROJECTS_DIR="$FIX/credlegfail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if grep -q 'UNKNOWN: the credential scan did not complete' <<<"$XF_OUT"; then
+  ok "a failed extraction marks the table UNKNOWN"
+else
+  bad "a failed extraction marks the table UNKNOWN" \
+      "$(printf '%s' "$XF_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
+fi
 # No match at all still starts both legs (awk opens them in BEGIN), on empty
 # input, and both print their marker: an ordinary empty result is complete.
 printf '{"type":"user","message":{"content":[{"type":"text","text":"nothing sensitive here"}]}}\n' \
