@@ -523,6 +523,11 @@ recheck_mutable_gates() {
     if [ "$REAL_SUBMODULE_CHANGES" -gt 0 ]; then
       keep "$wt" "submodule work appeared during the sweep (cannot be salvaged)"; return 1
     fi
+    # The salvage age is measured from the newest work, and new work since the initial
+    # scan resets it: never salvage-and-remove a worktree someone is using again.
+    if ! salvage_eligible "$age_h" "$wt"; then
+      keep "$wt" "work changed during the sweep (newer than the salvage age)"; return 1
+    fi
   elif [ "$REAL_CHANGES" -gt 0 ]; then
     keep "$wt" "$REAL_CHANGES uncommitted change(s) appeared during the sweep"; return 1
   fi
@@ -1149,6 +1154,12 @@ pseudo_ref_commits() {
     # A regular file only (following a symlink): reading a FIFO would block the sweep.
     [ -f "$g/$f" ] && [ -r "$g/$f" ] || return 1
     while IFS= read -r sha || [ -n "$sha" ]; do
+      # A plain `git fetch` records every other remote branch's tip as not-for-merge. Those
+      # are not this worktree's work, and a squash-merged, deleted one would otherwise pin
+      # it (or be salvaged) forever. Only the entries a merge of FETCH_HEAD acts on count.
+      if [ "$f" = FETCH_HEAD ]; then
+        case "$sha" in *"	not-for-merge	"*) continue ;; esac
+      fi
       sha=$(printf '%s' "${sha%%[[:space:]]*}" | tr 'A-F' 'a-f')
       [ -n "$sha" ] || continue
       # A token that is not an object id means the file cannot be read as expected.

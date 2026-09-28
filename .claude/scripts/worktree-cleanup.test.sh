@@ -1663,7 +1663,9 @@ t_salvage_rechecks_its_cap_under_the_mutex() {
   local root; root=$(make_repo)
   abandoned_wt "$root" aband || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/aband" shim
-  shim=$(lsof_hook_shim "$root" 2 "head -c 20480 /dev/zero > '$wt/late.bin'") \
+  # Backdated (with its directory, which dates the fixture's deleted path), so the
+  # pre-snapshot age re-check passes and the cap is what must catch it.
+  shim=$(lsof_hook_shim "$root" 2 "head -c 20480 /dev/zero > '$wt/late.bin' && touch -t 202001010000 '$wt/late.bin' '$wt'") \
     || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
   local out; out=$(PATH="$shim:$PATH" WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
   if grep -q 'KEEP .*aband .*more than 8 KB' <<<"$out" && [ -f "$wt/late.bin" ] \
@@ -2172,6 +2174,70 @@ t_a_missing_fetch_head_object_does_not_keep_a_clean_worktree() {
   age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 0)
   if grep -q '^REAP  .*stalefh' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_a_not_for_merge_fetch_head_commit_does_not_keep_a_clean_worktree() {
+  # A plain `git fetch` records every other remote branch's tip as not-for-merge. One from
+  # a squash-merged, deleted branch is reachable from no remote, but it is not this
+  # worktree's work: with salvage off, a clean pushed worktree must still reap.
+  local name="a not-for-merge FETCH_HEAD commit does not keep a clean pushed worktree"
+  local root; root=$(make_repo)
+  add_wt "$root" nfm pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/nfm" admin c
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  c=$(git -C "$wt" commit-tree -m "another branch" "$(git -C "$wt" rev-parse 'HEAD^{tree}')") \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  printf '%s\tnot-for-merge\tbranch '"'"'gone'"'"' of origin\n' "$c" > "$admin/FETCH_HEAD"
+  age_tree "$wt"
+  local out; out=$(run_salvage "$root" dry-run 0)
+  if grep -q '^REAP  .*nfm' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  # Control: the same commit on a merge-eligible line is this worktree's and keeps it.
+  printf '%s\t\tbranch '"'"'gone'"'"' of origin\n' "$c" > "$admin/FETCH_HEAD"
+  age_tree "$wt"
+  out=$(run_salvage "$root" dry-run 0)
+  if grep -q '^KEEP.*nfm.*reachable from nowhere else' <<<"$out"; then
+    ok "$name (control: merge-eligible entry keeps)"
+  else
+    bad "$name (control: merge-eligible entry keeps)" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_new_work_during_the_sweep_resets_the_salvage_age() {
+  # A candidate that qualifies by its old unpushed commit alone must not be salvaged and
+  # removed when fresh work appears after the initial scan: the lsof shim writes a new
+  # untracked file from inside the pre-snapshot re-check's live-process read.
+  local name="new work during the sweep resets the salvage age"
+  local root; root=$(make_repo)
+  add_wt "$root" fresh unpushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local p="$root/repo/.claude/worktrees/fresh"
+  age_tree "$p"
+  local real_lsof; real_lsof=$(command -v lsof) || real_lsof=
+  if [ -z "$real_lsof" ]; then
+    bad "$name" "FIXTURE: no lsof on PATH to pass through to"; rm -rf "$root"; return
+  fi
+  local shim="$root/shim" flag="$root/lsof-calls"; mkdir -p "$shim"
+  cat > "$shim/lsof" <<SHIM
+#!/usr/bin/env bash
+# First call is the initial snapshot; every later one is a pre-removal re-check.
+if [ -e "$flag" ] && [ ! -e "$p/today.txt" ]; then echo today > "$p/today.txt"; fi
+: > "$flag"
+exec "$real_lsof" "\$@"
+SHIM
+  chmod +x "$shim/lsof"
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if [ ! -e "$p/today.txt" ]; then
+    bad "$name" "FIXTURE: the shim never wrote the new file, or it was deleted: $out"
+  elif grep -q '^KEEP  *fresh .*work changed during the sweep' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -3322,6 +3388,8 @@ t_salvage_keeps_a_staged_blob_in_a_checkout_less_submodule_repository
 t_salvage_reads_an_unterminated_fetch_head_line
 t_pseudo_ref_only_commit_alone_triggers_salvage
 t_a_missing_fetch_head_object_does_not_keep_a_clean_worktree
+t_a_not_for_merge_fetch_head_commit_does_not_keep_a_clean_worktree
+t_new_work_during_the_sweep_resets_the_salvage_age
 t_a_referenced_pseudo_ref_tag_does_not_block_salvage
 t_a_fresh_tracked_edit_in_an_old_worktree_is_not_salvaged
 t_salvage_keeps_a_bare_repository_without_refs
