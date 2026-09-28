@@ -7532,6 +7532,22 @@ if grep -qE '^[[:space:]]+3 generic-assignment' <<<"$CB_TABLE" \
 else
   bad "bounded values stay distinct and a token after a long fragment is still counted" "$CB_TABLE"
 fi
+# The cap counts BYTES, so a value of two-byte characters offset by one ASCII
+# byte puts the cut inside a character. A half character is an illegal byte
+# sequence to the `sort` that follows, which would fail the scan.
+mkdir -p "$FIX/credutf8"
+CB_UTF8=$(printf 'é%.0s' $(seq 1 600))
+printf '{"type":"user","message":{"content":[{"type":"text","text":"token=A%s"}]}}\n' "$CB_UTF8" \
+  > "$FIX/credutf8/s.jsonl"
+U8_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credutf8" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if grep -qE '^[[:space:]]+1 generic-assignment' <<<"$U8_OUT" \
+   && ! grep -q 'credential scan did not complete' <<<"$U8_OUT"; then
+  ok "a value cut inside a multibyte character still completes the scan"
+else
+  bad "a value cut inside a multibyte character still completes the scan" \
+      "$(printf '%s' "$U8_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
+fi
 
 # A leg that dies part-way must not read as a short, clean table. The shim
 # fails the blob leg's LAST stage, after its sort has run: pipefail fails the

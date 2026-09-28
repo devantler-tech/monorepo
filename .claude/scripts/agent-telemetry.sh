@@ -3915,7 +3915,18 @@ if want safety; then
             h1 = (h1 * 31 + c) % 2147483647
             h2 = (h2 * 131 + c) % 2147483629
           }
-          printf "%s~%08x%08x\n", substr($0, 1, cap), h1, h2
+          # Never split a UTF-8 character. The kept bytes 1..k end on a
+          # character boundary exactly when byte k+1 is not a continuation
+          # byte (0x80-0xBF), and a character has at most 3 of those, so at
+          # most 3 steps back. A half character fails the leg: a later `sort`
+          # rejects it as an illegal byte sequence.
+          k = cap
+          for (step = 0; step < 3; step++) {
+            c = ord[substr($0, k + 1, 1)]
+            if (c < 128 || c >= 192) break
+            k--
+          }
+          printf "%s~%08x%08x\n", substr($0, 1, k), h1, h2
         }'
     }
     # A blob match carries its run; stripping run+boundary yields the identical
