@@ -55,6 +55,7 @@
 #   refs/salvaged/<id>/worktree   - a commit of the whole working tree (tracked edits,
 #                                   deletions and untracked non-ignored files), parent HEAD
 #   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog, ORIG_HEAD or FETCH_HEAD commit reachable from no remote
+#   refs/salvaged/<id>/commit-editmsg - the COMMIT_EDITMSG bytes, when present (a message a hook rejected)
 # Restore: `git worktree add --detach <path> refs/salvaged/<id>/head`, then
 # `git -C <path> read-tree refs/salvaged/<id>/index` for the staged index and
 # `git -C <path> restore --source=refs/salvaged/<id>/worktree --worktree -- .` for the working
@@ -494,6 +495,10 @@ recheck_mutable_gates() {
       [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$SALVAGE_REF/reflog/$o" 2>/dev/null)" = "$o" ] \
         || { keep "$wt" "a reflog-only commit appeared after the salvage snapshot ($SALVAGE_REF)"; return 1; }
     done <<< "$now_orphans"
+    local now_msg
+    if ! now_msg=$(editmsg_blob "$wt") || [ "$now_msg" != "$SALVAGE_EDITMSG" ]; then
+      keep "$wt" "COMMIT_EDITMSG changed after the salvage snapshot ($SALVAGE_REF)"; return 1
+    fi
     # A repository initialised after the snapshot (a submodule, or one the parent ignores),
     # or a file dropped into an uninitialised submodule's directory, changes nothing the
     # checks above compare, and the removal would delete it. The
@@ -849,7 +854,8 @@ worktree_state_blocker() {
         mutex_ref="$WORKTREE_CLAIM_LOCK_REF_PREFIX/$(printf '%s' "$wt" | git -C "$wt" hash-object --stdin 2>/dev/null)" \
           || mutex_ref="unresolvable"
       fi
-      if [ "$name" != "$mutex_ref" ] \
+      # A regular, non-symlink loose ref only: git would block reading a FIFO.
+      if [ "$name" != "$mutex_ref" ] || [ -L "$r" ] || [ ! -f "$r" ] \
          || [ "$(git -C "$wt" cat-file -t "$name" 2>/dev/null)" != blob ] \
          || ! body=$(git -C "$wt" cat-file blob "$name" 2>/dev/null) \
          || ! printf '%s\n' "$body" | awk 'NR == 1 && /^pid=[0-9]+$/ { p = 1; next }
@@ -1068,7 +1074,10 @@ head_reflog_ids() {
   [ -n "$ids" ] || return 0
   out=$(git -C "$repo" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" 2>/dev/null) \
     || return 1
-  awk 'NF != 2 { bad = 1; next } $2 != "missing" { print $1 } END { if (bad) exit 1 }' <<< "$out"
+  # HEAD only ever names commits. Anything else (a tag object, which rev-list would peel and
+  # the salvage refs would then drop) is state salvage cannot carry: fail closed.
+  awk 'NF != 2 { bad = 1; next } $2 == "missing" { next } $2 != "commit" { bad = 1; next } { print $1 }
+       END { if (bad) exit 1 }' <<< "$out"
 }
 
 # pseudo_ref_commits <gitdir> -> prints each commit ORIG_HEAD or FETCH_HEAD in <gitdir> names
@@ -1098,7 +1107,7 @@ pseudo_ref_commits() {
 # only preserve data) and the caller KEEPs the worktree.
 salvage_write() {
   local wt=$1 sha=$2 id base idx_tree wt_tree idx_commit wt_commit orphans o path_id
-  SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""
+  SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_EDITMSG=""
   # The namespace must be unique per WORKTREE, not per basename: two registered nested
   # worktrees can share a basename and a HEAD, and salvaged in the same second they would
   # otherwise derive one namespace and the second would overwrite the first's refs —
@@ -1147,8 +1156,31 @@ salvage_write() {
     && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/index^{tree}" 2>/dev/null)" = "$idx_tree" ] \
     && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/worktree^{tree}" 2>/dev/null)" = "$wt_tree" ] \
     || { SALVAGE_NOTE="$base refs do not verify"; return 1; }
-  SALVAGE_REF=$base; SALVAGE_TREE=$wt_tree; SALVAGE_INDEX_TREE=$idx_tree
+  # A commit a hook rejected leaves its drafted message only in COMMIT_EDITMSG, which the
+  # removal deletes, so the file's bytes are kept too.
+  local msg_blob msg_path
+  msg_blob=$(editmsg_blob "$wt" -w) || { SALVAGE_NOTE="cannot preserve COMMIT_EDITMSG"; return 1; }
+  if [ -n "$msg_blob" ]; then
+    msg_path="$base/commit-editmsg"
+    git -C "$TOPLEVEL" update-ref "$msg_path" "$msg_blob" "" 2>/dev/null \
+      && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$msg_path" 2>/dev/null)" = "$msg_blob" ] \
+      || { SALVAGE_NOTE="cannot write or verify $msg_path"; return 1; }
+  fi
+  SALVAGE_REF=$base; SALVAGE_TREE=$wt_tree; SALVAGE_INDEX_TREE=$idx_tree; SALVAGE_EDITMSG=$msg_blob
   return 0
+}
+
+# editmsg_blob <worktree> [-w] -> prints the blob id of the worktree's COMMIT_EDITMSG (writing
+# the object with -w), or nothing when there is none. Non-zero when it exists but is not a
+# regular file, or cannot be read.
+editmsg_blob() {
+  local admin f
+  admin=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
+  f="$admin/COMMIT_EDITMSG"
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then return 0; fi
+  [ -f "$f" ] && [ -r "$f" ] || return 1
+  # shellcheck disable=SC2086  # $2 is empty or -w
+  git -C "$1" hash-object ${2:-} -- "$f" 2>/dev/null
 }
 
 # The candidate set is every directory directly under WT_ROOT, PLUS every registered worktree
@@ -1200,7 +1232,7 @@ while IFS= read -r wt <&3; do
   name=$(wt_label "$wt")
   # Per-candidate salvage state; recheck_mutable_gates reads it, so it must never leak
   # from the previous candidate.
-  salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_NOTE=""
+  salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_EDITMSG=""; SALVAGE_NOTE=""
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
   # here-string, NOT a pipe: grep -q exits at its first match, printf then takes SIGPIPE,
@@ -1373,7 +1405,7 @@ while IFS= read -r wt <&3; do
   # one). The admin directory dies with the worktree, so that commit's only reference would
   # go with it. An unreadable one is not proof there is nothing to lose.
   if ! reflog_shas=$(worktree_ref_ids "$wt"); then
-    keep_stuck "$wt" "cannot read the HEAD reflog, ORIG_HEAD or FETCH_HEAD"; continue
+    keep_stuck "$wt" "cannot read or classify the HEAD reflog, ORIG_HEAD or FETCH_HEAD"; continue
   fi
   if [ -n "$reflog_shas" ]; then
     # On a proven squash-merged branch, ancestors of the PR head are accounted for too;

@@ -2048,7 +2048,8 @@ t_salvage_preserves_the_old_side_of_a_reflog_entry() {
   c=$(git -C "$wt" commit-tree 'HEAD^{tree}' -p HEAD -m lost) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   head=$(git -C "$wt" rev-parse HEAD); admin=$(git -C "$wt" rev-parse --absolute-git-dir)
   printf '%s %s t <t@t.t> 1577836800 +0000\treset: moving to HEAD\n' "$c" "$head" > "$admin/logs/HEAD"
-  if git -C "$wt" reflog show --format=%H HEAD | grep -q "$c"; then
+  local shown; shown=$(git -C "$wt" reflog show --format=%H HEAD) || { bad "$name" "FIXTURE: reflog unreadable"; rm -rf "$root"; return; }
+  if grep -q "$c" <<<"$shown"; then
     bad "$name" "FIXTURE: reflog show already prints the old side"; rm -rf "$root"; return
   fi
   touch -t 202001010000 "$wt"
@@ -2141,7 +2142,7 @@ t_a_fifo_fetch_head_keeps_without_blocking() {
     kill "$pid" 2>/dev/null; : > "$admin/FETCH_HEAD" & sleep 1; bad "$name" "sweep blocked on the FIFO"; rm -rf "$root"; return
   fi
   out=$(cat "$root/out.txt")
-  if grep -q 'KEEP .*fifofh .*cannot read the HEAD reflog, ORIG_HEAD or FETCH_HEAD' <<<"$out"; then
+  if grep -q 'KEEP .*fifofh .*cannot read or classify the HEAD reflog, ORIG_HEAD or FETCH_HEAD' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2175,6 +2176,83 @@ t_salvage_keeps_a_non_mutex_ref_in_the_claim_lock_namespace() {
     ok "$name"
   else
     bad "$name" "sibling hash: $out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_tag_object_in_the_head_reflog() {
+  # rev-list would peel the tag to its (remote-reachable) commit and the tag would be lost.
+  local name="salvage KEEPs a worktree whose HEAD reflog names an annotated tag"
+  local root; root=$(make_repo)
+  add_wt "$root" rltag pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/rltag" t head admin
+  t=$(git -C "$wt" mktag <<EOF
+object $(git -C "$wt" rev-parse HEAD)
+type commit
+tag only-here
+tagger t <t@t.t> 1577836800 +0000
+
+signed words
+EOF
+) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  head=$(git -C "$wt" rev-parse HEAD); admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '%s %s t <t@t.t> 1577836800 +0000\tcheckout: odd\n' "$t" "$head" >> "$admin/logs/HEAD"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*rltag .*cannot read or classify the HEAD reflog' <<<"$out" && [ -d "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_a_fifo_mutex_ref_keeps_without_blocking() {
+  local name="a FIFO at the ownership-mutex ref path keeps the worktree without blocking"
+  local root; root=$(make_repo)
+  add_wt "$root" fifomx pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/fifomx" admin h
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  h=$(printf '%s' "$wt" | git -C "$wt" hash-object --stdin)
+  mkdir -p "$admin/refs/worktree/claim-locks" && mkfifo "$admin/refs/worktree/claim-locks/$h" \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local pid i=0
+  run_salvage "$root" dry-run 1 > "$root/out.txt" 2>&1 & pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 60 ]; do sleep 1; i=$((i+1)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null; : > "$admin/refs/worktree/claim-locks/$h" & sleep 1
+    bad "$name" "sweep blocked on the FIFO"; rm -rf "$root"; return
+  fi
+  if grep -q '^SALVAGE .*fifomx ' "$root/out.txt"; then
+    bad "$name" "$(cat "$root/out.txt")"
+  elif grep -q 'KEEP .*fifomx ' "$root/out.txt"; then
+    ok "$name"
+  else
+    bad "$name" "$(cat "$root/out.txt")"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_preserves_commit_editmsg() {
+  # A hook-rejected commit leaves its drafted message only in COMMIT_EDITMSG.
+  local name="salvage preserves the bytes of COMMIT_EDITMSG"
+  local root; root=$(make_repo)
+  add_wt "$root" editmsg pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/editmsg" admin blob
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf 'feat: a message a hook rejected\n\nwith a body\n' > "$admin/COMMIT_EDITMSG"
+  blob=$(git -C "$wt" hash-object "$admin/COMMIT_EDITMSG")
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED .*editmsg ' <<<"$out" && [ ! -e "$wt" ] \
+     && [ "$(git -C "$root/repo" for-each-ref --format='%(objectname)' 'refs/salvaged/*/commit-editmsg')" = "$blob" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out :: $(git -C "$root/repo" for-each-ref refs/salvaged)"
   fi
   rm -rf "$root"
 }
@@ -2295,7 +2373,7 @@ t_salvage_keeps_when_a_pseudo_ref_commit_is_unreadable() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*badfetch .*cannot read the HEAD reflog, ORIG_HEAD or FETCH_HEAD' <<<"$out" && [ -d "$wt" ] && ! grep -q '^SALVAGED .*badfetch' <<<"$out"; then
+  if grep -q 'KEEP .*badfetch .*cannot read or classify the HEAD reflog, ORIG_HEAD or FETCH_HEAD' <<<"$out" && [ -d "$wt" ] && ! grep -q '^SALVAGED .*badfetch' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -3004,5 +3082,8 @@ t_salvage_keeps_an_ignored_bare_repository
 t_salvage_keeps_an_unknown_admin_log
 t_a_fifo_fetch_head_keeps_without_blocking
 t_salvage_keeps_a_non_mutex_ref_in_the_claim_lock_namespace
+t_salvage_keeps_a_tag_object_in_the_head_reflog
+t_a_fifo_mutex_ref_keeps_without_blocking
+t_salvage_preserves_commit_editmsg
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
