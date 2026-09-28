@@ -146,6 +146,10 @@ assert_bullet 'never a promised next tick' \
   "latency bullet promises that the next tick collects an abandoned PR, which the cadence contract forbids"
 refute_bullet 'a delegated run may poll' \
   "latency bullet licenses a delegated run to poll"
+assert_bullet 'If that read shows the condition resolved, finish the step.' \
+  "latency bullet does not tell a delegated run to finish its terminal step when the one-shot read shows the gate resolved"
+refute_bullet 'guarantees the next tick' \
+  "latency bullet guarantees next-tick collection, but the Claude scheduler drops overlapping dispatches"
 refute_bullet 'rung 1 collects the PR next tick' \
   "latency bullet promises next-tick collection of an abandoned PR"
 

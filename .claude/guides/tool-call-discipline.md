@@ -83,8 +83,8 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   the hourly slot **54% against 29%**; and **all 9 dropped dispatches (of 179 slots) were
   overlap-blocked by a still-open run**.
   ⚠️ So if something else is actionable, arm `Monitor` and go do it. If nothing is,
-  **end the run**: rung 1 of *The work-selection ladder* guarantees the next tick collects the PR,
-  and a run that ends on time is what makes that tick exist.
+  **end the run**: rung 1 of *The work-selection ladder* puts the PR first for whichever run is
+  dispatched next, and a run that ends on time is what keeps that dispatch from being dropped.
   🔴 **Ending the run REQUIRES stopping every in-flight watcher first — `TaskStop`, not merely a
   closing message.** A watcher left armed reopens the session after the run believed it was over;
   **6 idles (1.09h)** in the same window woke on a watcher that had merely TIMED OUT.
