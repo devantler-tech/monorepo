@@ -7462,6 +7462,175 @@ else
       "no trace lines at the end of the run — the guard left tracing off"
 fi
 
+# ── credential values are bounded before they are retained (#2980) ───────────
+# The generic `token=`/`secret=` alternative has an unbounded value class, and
+# transcripts carry long encoded payloads, so the scan used to hold every match
+# whole and its memory grew with the total matched bytes. Each value is now cut
+# at CRED_VALUE_MAX and fingerprinted before anything retains it.
+#
+# Observed on the reporting awk's STDIN: that stream is the union of the two
+# retained sets, so its longest line is the longest value the scan held.
+echo
+echo "credential values are bounded before they are retained (#2980)"
+
+CB_MAX=$(sed -n 's/^CRED_VALUE_MAX=\([0-9][0-9]*\)$/\1/p' "$TARGET")
+mkdir -p "$FIX/credbound" "$FIX/credboundawk"
+CB_LONG=$(printf 'Q%.0s' $(seq 1 3000))
+# Two long values that share their first 3000 bytes, and a long compound value
+# with a real token in its SECOND fragment.
+{
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"token=%sAAA"}]}}\n' "$CB_LONG"
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"token=%sBBB"}]}}\n' "$CB_LONG"
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"token=%s;GITHUB_TOKEN=__GHPA__"}]}}\n' "$CB_LONG"
+} > "$FIX/credbound/s.jsonl"
+subst "$FIX/credbound/s.jsonl"
+
+cat > "$FIX/credboundawk/awk" <<'EOF'
+#!/usr/bin/env bash
+# Records the longest line the reporting awk receives, then runs it unchanged.
+case " $* " in
+  *'blobfile='*)
+    cb_in=$(cat)
+    printf '%s\n' "$cb_in" | LC_ALL=C "$REAL_AWK" \
+      '{ if (length($0) > m) m = length($0) } END { print m + 0 }' >> "$CRED_BOUND_TRACE"
+    printf '%s\n' "$cb_in" | "$REAL_AWK" "$@"
+    exit
+    ;;
+esac
+exec "$REAL_AWK" "$@"
+EOF
+chmod +x "$FIX/credboundawk/awk"
+: > "$FIX/cred-bound-trace"
+CB_OUT=$(PATH="$FIX/credboundawk:$PATH" REAL_AWK="$real_awk" CRED_BOUND_TRACE="$FIX/cred-bound-trace" \
+  CLAUDE_PROJECTS_DIR="$FIX/credbound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CB_TABLE=$(printf '%s' "$CB_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+CB_SEEN=$(head -1 "$FIX/cred-bound-trace" 2>/dev/null)
+
+# POSITIVE CONTROLS FIRST: the cap was read, and the reporting pass was observed
+# receiving a value that was actually cut. A longest line at or under the cap
+# would mean the long values never reached the table, and the bound assertion
+# below would pass having bounded nothing.
+if [ -n "$CB_MAX" ] && [ -n "$CB_SEEN" ] && [ "$CB_SEEN" -gt "$CB_MAX" ]; then
+  ok "control: a value longer than the cap reached the credential table"
+else
+  bad "control: a value longer than the cap reached the credential table" \
+      "cap='$CB_MAX' longest='$CB_SEEN' — the bound assertion below would be VACUOUS"
+fi
+# The cap plus `~` and a 16-hex-digit fingerprint, never the 3000-byte value.
+if [ -n "$CB_SEEN" ] && [ -n "$CB_MAX" ] && [ "$CB_SEEN" -le $((CB_MAX + 17)) ]; then
+  ok "no retained credential value exceeds the cap"
+else
+  bad "no retained credential value exceeds the cap" "cap='$CB_MAX' longest='$CB_SEEN'"
+fi
+# Truncation alone would merge the two values that share a 3000-byte prefix,
+# and cutting a compound value before its `;` split would drop the token after
+# it. Exactly three weak rows and the one token row rule out both.
+if grep -qE '^[[:space:]]+3 generic-assignment' <<<"$CB_TABLE" \
+   && grep -qE '^[[:space:]]+1 github-token \(classic/app\)$' <<<"$CB_TABLE"; then
+  ok "bounded values stay distinct and a token after a long fragment is still counted"
+else
+  bad "bounded values stay distinct and a token after a long fragment is still counted" "$CB_TABLE"
+fi
+# The cap counts BYTES, so a value of two-byte characters offset by one ASCII
+# byte puts the cut inside a character. A half character is an illegal byte
+# sequence to the `sort` that follows, which would fail the scan.
+mkdir -p "$FIX/credutf8"
+CB_UTF8=$(printf 'é%.0s' $(seq 1 600))
+printf '{"type":"user","message":{"content":[{"type":"text","text":"token=A%s"}]}}\n' "$CB_UTF8" \
+  > "$FIX/credutf8/s.jsonl"
+U8_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credutf8" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if grep -qE '^[[:space:]]+1 generic-assignment' <<<"$U8_OUT" \
+   && ! grep -q 'credential scan did not complete' <<<"$U8_OUT"; then
+  ok "a value cut inside a multibyte character still completes the scan"
+else
+  bad "a value cut inside a multibyte character still completes the scan" \
+      "$(printf '%s' "$U8_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
+fi
+
+# A leg that dies part-way must not read as a short, clean table. The shim
+# fails the blob leg's LAST stage, after its sort has run: pipefail fails the
+# leg, so its `BOK` completion marker never arrives, and only that missing
+# marker can tell this partial table from a clean one.
+mkdir -p "$FIX/credlegfail" "$FIX/credlegsed" "$FIX/credclean"
+cat > "$FIX/credlegsed/sed" <<'EOF'
+#!/usr/bin/env bash
+# Fails only the one sed call whose script is $CRED_SED_FAIL, after reading
+# its whole input; every other sed runs normally.
+case " $* " in
+  *" $CRED_SED_FAIL "*) cat >/dev/null; exit 1 ;;
+esac
+exec "$REAL_SED" "$@"
+EOF
+chmod +x "$FIX/credlegsed/sed"
+cp "$FIX/credbound/s.jsonl" "$FIX/credlegfail/s.jsonl"
+# Resolved BEFORE the shim is on PATH: resolving it in the same prefix can find
+# the shim itself, which then execs itself forever.
+real_sed=$(command -v sed)
+cred_sed_fail_run() {
+  PATH="$FIX/credlegsed:$PATH" REAL_SED="$real_sed" CRED_SED_FAIL="$1" \
+    CLAUDE_PROJECTS_DIR="$FIX/credlegfail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    bash "$TARGET" --since-days 3650 --section safety 2>&1
+}
+LF_OUT=$(cred_sed_fail_run 's/^/B /')
+# The same kind of failure one step later, in the parse that splits the legs'
+# output into the two sets — after the completion markers were already read.
+PF_OUT=$(cred_sed_fail_run 's/^P //p')
+# Control: the same corpus with no failure reaches the table and is NOT marked.
+if grep -q 'credential-shaped' <<<"$CB_OUT" && ! grep -q 'credential scan did not complete' <<<"$CB_OUT"; then
+  ok "control: a complete credential scan is not marked UNKNOWN"
+else
+  bad "control: a complete credential scan is not marked UNKNOWN" "$CB_TABLE"
+fi
+if grep -q 'UNKNOWN: the credential scan did not complete' <<<"$LF_OUT"; then
+  ok "a credential leg that fails part-way marks the table UNKNOWN"
+else
+  bad "a credential leg that fails part-way marks the table UNKNOWN" \
+      "$(printf '%s' "$LF_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
+fi
+if grep -q 'UNKNOWN: the credential scan did not complete' <<<"$PF_OUT"; then
+  ok "a failed split of the legs' output marks the table UNKNOWN"
+else
+  bad "a failed split of the legs' output marks the table UNKNOWN" \
+      "$(printf '%s' "$PF_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
+fi
+# And one step EARLIER, in the extraction feeding both legs: a decode that dies
+# hands the legs an empty stream they complete without complaint, so only the
+# extraction's own stage statuses can mark the table.
+mkdir -p "$FIX/credjqshim"
+cat > "$FIX/credjqshim/jq" <<'EOF'
+#!/usr/bin/env bash
+# Fails only the credential table's decode, recognised by its filter text.
+case "$*" in
+  *decoded_strings*) cat >/dev/null; exit 5 ;;
+esac
+exec "$REAL_JQ" "$@"
+EOF
+chmod +x "$FIX/credjqshim/jq"
+real_jq=$(command -v jq)
+XF_OUT=$(PATH="$FIX/credjqshim:$PATH" REAL_JQ="$real_jq" \
+  CLAUDE_PROJECTS_DIR="$FIX/credlegfail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if grep -q 'UNKNOWN: the credential scan did not complete' <<<"$XF_OUT"; then
+  ok "a failed extraction marks the table UNKNOWN"
+else
+  bad "a failed extraction marks the table UNKNOWN" \
+      "$(printf '%s' "$XF_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
+fi
+# No match at all still starts both legs (awk opens them in BEGIN), on empty
+# input, and both print their marker: an ordinary empty result is complete.
+printf '{"type":"user","message":{"content":[{"type":"text","text":"nothing sensitive here"}]}}\n' \
+  > "$FIX/credclean/s.jsonl"
+CL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credclean" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if grep -q 'credential-shaped' <<<"$CL_OUT" && ! grep -q 'credential scan did not complete' <<<"$CL_OUT"; then
+  ok "a corpus with no credential matches is complete, not UNKNOWN"
+else
+  bad "a corpus with no credential matches is complete, not UNKNOWN" \
+      "$(printf '%s' "$CL_OUT" | sed -n '/SAFETY/,$p' | head -20)"
+fi
+
 
 # ── snapshot drift is checked even when the class totals AGREE ────────────────
 # Agreement between the two walks is not evidence that the corpus was stable.
