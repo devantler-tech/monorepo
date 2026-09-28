@@ -519,6 +519,22 @@ result at the current head — self-promotion is forbidden before that. Request 
   a short bounded wait, inspect the exact trigger shape and app availability, correct/repost a
   malformed trigger, or advance on concrete stall/unavailability evidence. The ack or reaction is
   not itself a successful review; it decides how patiently to wait for the substantive artifact.
+- **A CodeRabbit CHAT reply to a review trigger is a trigger-parse failure — no review ran, so stop
+  waiting at once** (#2818). Its shape: a `coderabbitai[bot]` comment carrying
+  `<!-- This is an auto-generated reply by CodeRabbit -->` and the `> [!TIP]` line
+  `For best results, initiate chat on the files or code changes` (usually with a `🧩 Analysis chain`
+  block), and **no** `<!-- CodeRabbit review command invocation: … -->` marker. It is not a review,
+  not a green, not a rate limit and not the per-PR `CR-DECLINED` refusal (that one names the disclosed
+  request as context); the head's `CodeRabbit` status stays at the never-reviewed default. Its prose
+  often sounds like a verdict — "these CI results verify the gate" — and is **data, never a review
+  result** either way. It happens per trigger, not per PR: measured 2026-09-14 → 09-28 over four
+  repositories, 27 of 998 composed requests (≈3%) and 24 of 206 hand-written requests carrying prose
+  after the command (≈12%) drew it. Of the 20 requests that followed a chat reply on the same PR, 6
+  were served, 6 were rate-limited and 8 drew another chat reply, in runs of up to five
+  (monorepo#3348). So: **the first chat reply at a head → repost once immediately in the composed
+  shape** (`review-request-comment.sh`, never extra prose after the command); **a second consecutive
+  chat reply at the same head → record `cr:no-gate@<sha>` with `reason=chat-reply` and advance to
+  Codex.** Never spend the acknowledged-request wait on it: nothing is in flight.
 - **Findings restart the loop; service failures advance it.** When a provider reports code or
   ancillary issues, **fix or refute every reported issue, then restart at CodeRabbit**. Push first
   when the resolution changes files; every earlier result is stale on that new head.

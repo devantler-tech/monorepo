@@ -83,6 +83,12 @@ grep -Fq 'never request a second provider after the first success' "${constituti
   fail "constitution permits redundant reviews after the gate is already satisfied"
 grep -Fq 'A provider reaction emoji on the trigger is positive in-flight evidence' "${constitution}" ||
   fail "constitution does not distinguish an acknowledged request from a silent trigger"
+# A CodeRabbit chat reply means no review ran (#2818): without the rule, a run waits out the
+# acknowledged-request window on it, or reads its verdict-like prose as a review result.
+grep -Fq 'A CodeRabbit CHAT reply to a review trigger is a trigger-parse failure' "${constitution}" ||
+  fail "constitution does not classify a CodeRabbit chat reply as a trigger-parse failure"
+grep -Fq 'with `reason=chat-reply` and advance to' "${constitution}" ||
+  fail "constitution gives a repeated CodeRabbit chat reply no bounded exit to the next lane"
 grep -Fq 'fix or refute every reported issue, then restart at CodeRabbit' "${constitution}" ||
   fail "constitution does not restart the ordered loop after review findings"
 grep -Fq 'A refutation that changes no file restarts at the same head; never create an empty commit' "${constitution}" ||
