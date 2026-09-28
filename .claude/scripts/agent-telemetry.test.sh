@@ -7534,8 +7534,9 @@ else
 fi
 
 # A leg that dies part-way must not read as a short, clean table. The shim
-# fails the blob leg's LAST stage, after its sort has run, so only pipefail in
-# the leg and the close() status check in awk can notice.
+# fails the blob leg's LAST stage, after its sort has run: pipefail fails the
+# leg, so its `BOK` completion marker never arrives, and only that missing
+# marker can tell this partial table from a clean one.
 mkdir -p "$FIX/credlegfail" "$FIX/credlegsed" "$FIX/credclean"
 cat > "$FIX/credlegsed/sed" <<'EOF'
 #!/usr/bin/env bash
@@ -7564,7 +7565,8 @@ else
   bad "a credential leg that fails part-way marks the table UNKNOWN" \
       "$(printf '%s' "$LF_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
 fi
-# No match at all starts neither leg; that ordinary empty result is complete.
+# No match at all still starts both legs (awk opens them in BEGIN), on empty
+# input, and both print their marker: an ordinary empty result is complete.
 printf '{"type":"user","message":{"content":[{"type":"text","text":"nothing sensitive here"}]}}\n' \
   > "$FIX/credclean/s.jsonl"
 CL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credclean" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
