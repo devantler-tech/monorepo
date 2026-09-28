@@ -970,11 +970,15 @@ done <<<"$(extract_commands "$fixdir/compound-shapes.md" | grep '^fenced ')"
 # where this happens, because its pattern ends in a surplus `)` -- whether the pattern is
 # alone on its line or followed by the arm's first command. A multi-line array's closing
 # `)` alone on its line looks like a pattern too. Each must stay two statements.
+# Captured ONCE, then searched: piping the extraction into `grep -q` lets grep exit on the
+# first match, and under pipefail the writer's SIGPIPE then fails the pipeline -- a race
+# that reads as a missing statement on a run where the statement is present.
+cs_all=$(extract_commands "$fixdir/compound-shapes.md")
 for cs_case in \
   '); gh pr view 5 "${args[@]}"' \
   'v=$(gh pr view 6 --repo devantler-tech/monorepo); gh pr view "$v" --repo devantler-tech/monorepo' \
   'b) w=$(gh pr view 7 --repo devantler-tech/monorepo); gh pr view "$w" --repo devantler-tech/monorepo'; do
-  extract_commands "$fixdir/compound-shapes.md" | grep -qF -- "$cs_case" \
+  grep -qF -- "$cs_case" <<<"$cs_all" \
     || die_unknown "self-test: two statements in a case arm were joined into one command (the second became an assignment prefix): $cs_case"
 done
 
