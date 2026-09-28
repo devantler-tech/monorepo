@@ -533,8 +533,11 @@ result at the current head — self-promotion is forbidden before that. Request 
   were served, 6 were rate-limited and 8 drew another chat reply, in runs of up to five
   (monorepo#3348). So: **the first chat reply at a head → repost once immediately in the composed
   shape** (`review-request-comment.sh`, never extra prose after the command); **a second consecutive
-  chat reply at the same head → record `cr:no-gate@<sha>` with `reason=chat-reply` and advance to
-  Codex.** Never spend the acknowledged-request wait on it: nothing is in flight.
+  chat reply at the same head, in the same CodeRabbit round → record `cr:no-gate@<sha>` with
+  `reason=chat-reply` and advance to Codex.** The count starts again whenever findings restart the
+  loop at CodeRabbit, including a same-head refutation. Never spend the acknowledged-request wait on
+  it: nothing is in flight. Because a later request usually recovers, this is handled on our side and
+  is not reported to CodeRabbit each time.
 - **Findings restart the loop; service failures advance it.** When a provider reports code or
   ancillary issues, **fix or refute every reported issue, then restart at CodeRabbit**. Push first
   when the resolution changes files; every earlier result is stale on that new head.

@@ -89,6 +89,10 @@ grep -Fq 'A CodeRabbit CHAT reply to a review trigger is a trigger-parse failure
   fail "constitution does not classify a CodeRabbit chat reply as a trigger-parse failure"
 grep -Fq 'with `reason=chat-reply` and advance to' "${constitution}" ||
   fail "constitution gives a repeated CodeRabbit chat reply no bounded exit to the next lane"
+grep -Fq 'the first chat reply at a head → repost once immediately in the composed' "${constitution}" ||
+  fail "constitution does not require one immediate composed repost after the first chat reply"
+grep -Fq 'The count starts again whenever findings restart the' "${constitution}" ||
+  fail "constitution carries a chat-reply count across CodeRabbit rounds"
 grep -Fq 'fix or refute every reported issue, then restart at CodeRabbit' "${constitution}" ||
   fail "constitution does not restart the ordered loop after review findings"
 grep -Fq 'A refutation that changes no file restarts at the same head; never create an empty commit' "${constitution}" ||
