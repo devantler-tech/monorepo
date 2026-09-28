@@ -2038,6 +2038,70 @@ t_pseudo_ref_only_commit_alone_triggers_salvage() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_bare_repository_without_refs() {
+  # A bare repository whose empty refs/ was lost still holds packed-refs and objects.
+  local name="salvage KEEPs a worktree holding a bare repository whose refs/ is missing"
+  local root; root=$(make_repo)
+  add_wt "$root" norefs pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/norefs"
+  { git init -q --bare "$wt/unique.git" && rm -rf "$wt/unique.git/refs"; } \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  printf 'unique.git/\n' >> "$(git -C "$wt" rev-parse --git-path info/exclude)"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*norefs .*nested repository' <<<"$out" && [ -f "$wt/unique.git/HEAD" ] \
+     && ! grep -q '^SALVAGED .*norefs' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+# pseudo_tag_wt <root> <name> -> a clean, pushed worktree whose FETCH_HEAD names an annotated
+# tag object on its pushed HEAD; prints the tag object's id.
+pseudo_tag_wt() {
+  local root=$1 name=$2 wt admin tag
+  add_wt "$root" "$name" pushed || return 1
+  wt="$root/repo/.claude/worktrees/$name"
+  tag=$(printf 'object %s\ntype commit\ntag only-fetched\ntagger t <t@t.t> 0 +0000\n\nmessage\n' \
+    "$(git -C "$wt" rev-parse HEAD)" | git -C "$wt" hash-object -t tag -w --stdin) || return 1
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '%s\t\ttag '"'"'only-fetched'"'"' of origin\n' "$tag" > "$admin/FETCH_HEAD"
+  touch -t 202001010000 "$wt"
+  printf '%s\n' "$tag"
+}
+
+t_a_pseudo_ref_only_tag_keeps_a_clean_worktree() {
+  local name="a tag object only FETCH_HEAD names keeps a clean pushed worktree"
+  local root; root=$(make_repo)
+  pseudo_tag_wt "$root" tagonly >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*tagonly .*only reference to a tag object' <<<"$out" \
+     && [ -d "$root/repo/.claude/worktrees/tagonly" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_a_pseudo_ref_tag_a_ref_holds_does_not_keep() {
+  # Control: once a ref names the tag object, the admin directory is not its only reference.
+  local name="a FETCH_HEAD tag object that a ref also names does not keep the worktree"
+  local root; root=$(make_repo)
+  local tag; tag=$(pseudo_tag_wt "$root" tagheld) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" update-ref refs/tags/only-fetched "$tag" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local out; out=$(run_salvage "$root" dry-run 0)
+  if grep -q '^REAP  .*tagheld' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_a_missing_fetch_head_object_does_not_keep_a_clean_worktree() {
   # An object the store no longer holds has nothing left to lose, so a stale FETCH_HEAD
   # naming one must not strand a clean, pushed worktree as stuck on every sweep.
@@ -3202,6 +3266,9 @@ t_salvage_keeps_a_staged_blob_in_a_checkout_less_submodule_repository
 t_salvage_reads_an_unterminated_fetch_head_line
 t_pseudo_ref_only_commit_alone_triggers_salvage
 t_a_missing_fetch_head_object_does_not_keep_a_clean_worktree
+t_salvage_keeps_a_bare_repository_without_refs
+t_a_pseudo_ref_only_tag_keeps_a_clean_worktree
+t_a_pseudo_ref_tag_a_ref_holds_does_not_keep
 t_inherited_git_location_variables_do_not_redirect_the_sweep
 t_salvage_preserves_the_old_side_of_a_reflog_entry
 t_salvage_keeps_an_ignored_embedded_repository

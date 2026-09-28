@@ -772,8 +772,9 @@ nested_repository_blocker() {
     return 0
   fi
   # A .git entry marks a repository with a working tree; a bare repository has none, so it
-  # is recognised by its own layout: an objects/ entry beside a HEAD file and refs/. Git
-  # resolves an objects/ symlink normally, so a symlink counts as well as a directory.
+  # is recognised by its own layout: an objects/ entry beside a HEAD entry. Git resolves an
+  # objects/ symlink normally, so a symlink counts as well as a directory, and refs/ is not
+  # required: a repository whose empty refs/ was lost still holds packed-refs and objects.
   local objs o
   if ! found=$(find "$wt" -mindepth 2 -name .git -prune -print 2>/dev/null) \
      || ! objs=$(find "$wt" -mindepth 2 -name objects \( -type d -o -type l \) -prune -print 2>/dev/null); then
@@ -781,7 +782,7 @@ nested_repository_blocker() {
   fi
   while IFS= read -r o; do
     [ -n "$o" ] || continue
-    if [ -f "${o%/objects}/HEAD" ] && [ -d "${o%/objects}/refs" ]; then
+    if [ -e "${o%/objects}/HEAD" ] || [ -L "${o%/objects}/HEAD" ]; then
       found=${found:-${o%/objects}}
     fi
   done <<< "$objs"
@@ -1064,6 +1065,22 @@ reflog_orphans() {
 # reference: both sides of each HEAD-reflog entry, plus ORIG_HEAD and FETCH_HEAD (a fetched
 # ref deleted upstream, a reset-away tip). The admin directory dies with the worktree, so
 # each is a commit the removal can orphan. Non-zero on any read failure.
+# pseudo_ref_unreferenced_tags <worktree> -> prints each object ORIG_HEAD or FETCH_HEAD names
+# that is not a commit and that no ref in the main repository points at (an unreadable type
+# counts). Non-zero on a read failure.
+pseudo_ref_unreferenced_tags() {
+  local gitdir pseudo refd sha
+  gitdir=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$gitdir" ] || return 1
+  pseudo=$(pseudo_ref_commits "$gitdir") || return 1
+  [ -n "$pseudo" ] || return 0
+  refd=$(git -C "$TOPLEVEL" for-each-ref --format='%(objectname)' 2>/dev/null) || return 1
+  for sha in $pseudo; do
+    [ "$(git --git-dir="$gitdir" --work-tree="$gitdir" cat-file -t "$sha" 2>/dev/null)" = commit ] \
+      && continue
+    grep -qxF -- "$sha" <<< "$refd" || printf '%s\n' "$sha"
+  done
+}
+
 worktree_ref_ids() {
   local gitdir reflog pseudo
   gitdir=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$gitdir" ] || return 1
@@ -1481,6 +1498,20 @@ while IFS= read -r wt <&3; do
         continue
       fi
       salvage_reason="${salvage_reason:+$salvage_reason; }reflog-only commit(s)"
+    fi
+  fi
+
+  # KEEP: a tag object only ORIG_HEAD or FETCH_HEAD names. rev-list above peels it to its
+  # commit, so a remotely reachable target reads as nothing to lose, but the tag's message
+  # and signature die with the admin directory. Salvage cannot carry it either, so keep.
+  # (When salvage is already wanted, its own blocker check refuses the tag with its reason.)
+  if [ -z "$salvage_reason" ]; then
+    if ! pseudo_tags=$(pseudo_ref_unreferenced_tags "$wt"); then
+      keep_stuck "$wt" "cannot read or classify the HEAD reflog, ORIG_HEAD or FETCH_HEAD"; continue
+    fi
+    if [ -n "$pseudo_tags" ]; then
+      keep_stuck "$wt" "ORIG_HEAD or FETCH_HEAD is the only reference to a tag object (${pseudo_tags:0:12})"
+      continue
     fi
   fi
 
