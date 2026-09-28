@@ -498,6 +498,15 @@ extract_fenced() {
         sub(/[[:space:]]+$/, "", s)
         return s
       }
+      # Columns of leading indentation, a TAB counting four. A closing fence may sit at
+      # most three columns past its OPENER, not past column 0: inside a list item the
+      # opener is itself indented, and measured from column 0 such a block never closed,
+      # so every later line of the file was read as fenced content (monorepo#3648).
+      function icol(ind,   i, c) {
+        c = 0
+        for (i = 1; i <= length(ind); i++) c += (substr(ind, i, 1) == "\t") ? 4 : 1
+        return c
+      }
       function candidate(s) { return (opens(s) || opens(strip_assigns(s)) || opens(strip_subst(s))) }
       function flush(   keep) {
         keep = (!pend || has_forge(buf))
@@ -529,7 +538,7 @@ extract_fenced() {
         fd = substr(fline, 1, 1)
         flen = 0
         while (substr(fline, flen + 1, 1) == fd) flen++
-        if (!inb) { inb = 1; fence = fd; fencelen = flen; optspfx = "" }
+        if (!inb) { inb = 1; fence = fd; fencelen = flen; fcol = icol(ind); optspfx = "" }
         # A closer may carry only spaces or tabs after its run. `` ```example `` inside a
         # block is CONTENT: checking the delimiter and its length alone ends the block
         # there, and `!inb { next }` then drops every later line, so a prescription after
@@ -543,7 +552,7 @@ extract_fenced() {
         # dropping its commands -- a NEW fail-open of the exact class this file guards.
         # An over-permissive opener can only over-extract, which surfaces as a visible
         # finding rather than a silent miss.
-        else if (fd == fence && flen >= fencelen && substr(fline, flen + 1) ~ /^[[:blank:]]*$/ && length(ind) <= 3 && ind !~ /\t/) { inb = 0; fence = ""; fencelen = 0; flush(); optspfx = "" }
+        else if (fd == fence && flen >= fencelen && substr(fline, flen + 1) ~ /^[[:blank:]]*$/ && icol(ind) <= fcol + 3) { inb = 0; fence = ""; fencelen = 0; flush(); optspfx = "" }
         next
       }
       !inb { next }
@@ -563,7 +572,7 @@ extract_fenced() {
         # every statement joined after it (`do # note; gh ...` runs nothing), and a blank or
         # comment-only line would add an empty statement (`a; ; b` is a syntax error). The
         # shell reads neither, so neither is joined.
-        else if (compound_open(buf) && (line = strip_comment(line)) ~ /^[[:space:]]*$/) next
+        else if (compound_open(buf) && !unbalanced(buf) && (line = strip_comment(line)) ~ /^[[:space:]]*$/) next
         else { js = join_sep(buf, last, line); sub(/\\[[:space:]]*$/, "", buf); buf = buf js line; last = line }
         # A trailing pipe or boolean is a shell CONTINUATION exactly as a backslash is,
         # and the operand it joins is often where the real verdict lives. Flushing there
@@ -854,6 +863,22 @@ if check_sources "$fixdir/fenceindent.md" >/dev/null 2>&1; then
   die_unknown "self-test: a four-space-indented-delimiter command's unclassified refusal was NOT detected (fail-open)"
 fi
 
+# ...but that bound is measured from the OPENER, not column 0. Inside a list item a block
+# opens and closes at the item's content column; measured from column 0 it never closed,
+# so the prose after it was read as fenced content and fenced blocks after that as prose,
+# and a prescription in a later block never reached the guard at all (monorepo#3648).
+# The first block's closer must end it, the prose after it must yield no candidate, and
+# the second block's command must be extracted.
+printf '%s\n' '- A list item:' '' '     ```sh' '     gh pr view 1 --repo devantler-tech/monorepo' '     ```' \
+  '     gh release create v4 --repo devantler-tech/monorepo is prose here.' '' \
+  '     ```sh' '     gh release create v5 --repo devantler-tech/monorepo' '     ```' > "$fixdir/fencelist.md"
+fl_all=$(extract_commands "$fixdir/fencelist.md")
+grep -q '^fenced gh release create v5 ' <<<"$fl_all" \
+  || die_unknown "self-test: a command in a fenced block after a list-item block was never extracted (fail-open)"
+if grep -q '^fenced gh release create v4 ' <<<"$fl_all"; then
+  die_unknown "self-test: prose after a list-item fenced block was extracted as a fenced prescription"
+fi
+
 # A corpus row whose guard status is 2 must make the run UNKNOWN, not vanish. The old
 # corpus reader emitted no reason for such a row, and because other rows keep
 # CORPUS_REASONS non-empty the emptiness check still passed -- so if no source candidate
@@ -968,6 +993,7 @@ printf '%s\n' 'Shapes:' '' '```sh' \
   '  "c d")' '    gh pr view 9 --repo devantler-tech/monorepo' '    ;;' 'esac' '' \
   'while' '  read -r n' 'do' '  gh pr view "$n" --repo devantler-tech/monorepo |' '    jq -r .title' 'done' '' \
   'for T  # every type' 'in Epic Feature' 'do  # one read each' '' '  # a full-line note' '  gh pr view "$T" --repo devantler-tech/monorepo' 'done' '' \
+  'for r in a' 'do' "  gh api x --jq '.[]" "    | .a # not a comment'" 'done' '' \
   'if true' 'then' '  f()' '  { gh pr view 8 --repo devantler-tech/monorepo; }' '  echo ready!' '  f' 'fi' '```' > "$fixdir/compound-shapes.md"
 cs_n=0
 while IFS= read -r cs_row; do
@@ -983,8 +1009,8 @@ while IFS= read -r cs_row; do
   bash -n <<<"${cs_row#fenced }" 2>/dev/null \
     || die_unknown "self-test: a joined compound candidate is not parseable shell, so the guard is asked about a command nobody runs: ${cs_row#fenced }"
 done <<<"$(extract_commands "$fixdir/compound-shapes.md" | grep '^fenced ')"
-[ "$cs_n" -eq 5 ] \
-  || die_unknown "self-test: the compound-shapes fixture yielded $cs_n fenced candidate(s), expected 5 (if, case, while, for, if)"
+[ "$cs_n" -eq 6 ] \
+  || die_unknown "self-test: the compound-shapes fixture yielded $cs_n fenced candidate(s), expected 6 (if, case, while, for, for, if)"
 # Parsing cannot catch one wrong space: a `v=$(…)` statement followed by a space-joined
 # `gh …` still parses, as an assignment PREFIX to that second command. A `case` arm is
 # where this happens, because its pattern ends in a surplus `)` -- whether the pattern is
