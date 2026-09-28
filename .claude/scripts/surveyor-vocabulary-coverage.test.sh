@@ -377,7 +377,7 @@ extract_fenced() {
       # submits the whole loop, which it refuses (`chaining with ; can carry a
       # write`). Same fail-open shape as the verb-less substitution above.
       function compound_starter(s) {
-        return (s ~ /^[[:space:]]*(for|while|until|if|case)[[:space:]]/)
+        return (s ~ /^[[:space:]]*(for|while|until|if|case)([[:space:]]|$)/)
       }
       # Quoted spans blanked, so a keyword inside a jq filter or a message cannot
       # open or close a construct. Same reasoning as `unbalanced`: quote state is a
@@ -430,16 +430,17 @@ extract_fenced() {
       #
       # It stays a SPACE wherever the shell itself continues the statement, since a `; `
       # there is a syntax error or a different command: a pending backslash, open quotes,
-      # a trailing operator (`|`, `&&`, `||`, `;`, `;;`, `&`) or opener (`(`, `{`), a
-      # keyword that takes its body on the next line (`do`, `then`, `else`, `in`), and a
+      # a trailing operator (`|`, `&&`, `||`, `;`, `;;`, `&`, `!`) or opener (`(`, `{`),
+      # a keyword whose body follows on the next line (`do`, `then`, `else`, `in`), a bare
+      # `if`, `elif`, `while` or `until` whose condition follows on the next line, and a
       # `case` pattern (`a)`, more unquoted `)` than `(`). Outside a compound nothing
       # changes, so a block whose join was already right stays byte-identical.
       function join_sep(s,   t, n, arr, w) {
         if (!compound_open(s) || unbalanced(s) || s ~ /\\[[:space:]]*$/) return " "
         t = unquoted(s); sub(/[[:space:]]+$/, "", t)
-        if (t == "" || t ~ /[|&;({]$/) return " "
+        if (t == "" || t ~ /[|&;({!]$/) return " "
         n = split(t, arr, /[[:space:]]+/); w = arr[n]
-        if (w == "do" || w == "then" || w == "else" || w == "in") return " "
+        if (w ~ /^(do|then|else|elif|if|while|until|in)$/) return " "
         if (t ~ /\)$/ && countc(t, ")") > countc(t, "(")) return " "
         return "; "
       }
@@ -916,26 +917,41 @@ bash -n <<<"$cp_want" 2>/dev/null \
 cp_chain='deny: chaining with ; can carry a write'
 grep -qxF -- "$cp_chain" <<<"$CORPUS_REASONS" \
   || die_unknown "self-test: the corpus no longer acknowledges '$cp_chain', so the withdrawal below is vacuous"
-if ( CORPUS_REASONS=$(grep -vxF -- "$cp_chain" <<<"$CORPUS_REASONS"); check_sources "$fixdir/compound.md" ) >/dev/null 2>&1; then
-  die_unknown "self-test: a compound construct's unclassified refusal was NOT detected (fail-open)"
-fi
+# Only status 1 is a detection. A guard error makes check_sources call die_unknown, which
+# exits the SUBSHELL with 2 -- read as merely "not 0" that would pass this control on a
+# verdict nobody obtained, so 2 is propagated as UNKNOWN and every other status fails.
+( CORPUS_REASONS=$(grep -vxF -- "$cp_chain" <<<"$CORPUS_REASONS"); check_sources "$fixdir/compound.md" ) >/dev/null 2>&1
+cp_status=$?
+case "$cp_status" in
+  1) ;;
+  2) die_unknown "self-test: the compound negative control could not obtain a guard verdict (status 2)" ;;
+  *) die_unknown "self-test: a compound construct's unclassified refusal was NOT detected (status $cp_status, fail-open)" ;;
+esac
 
 # Every compound shape a prescription can take must parse once joined: `then`/`else`
-# bodies, an `elif`, a `case` with patterns and `;;`, and a pipe continuing a statement
+# bodies, a bare `elif` or `while` whose condition is on the next line, a `case` with
+# patterns and `;;`, and a pipe continuing a statement
 # across lines. Each spot where the shell CONTINUES a statement must stay a space -- a
 # `; ` after `do`, `then`, `in`, `|` or a `case` pattern is a syntax error -- and each
 # statement boundary must become `; `. `bash -n` on every candidate is the check that
 # notices either mistake, so a regression in any branch of the join fails here.
 printf '%s\n' 'Shapes:' '' '```sh' \
   'if gh pr view 1 --repo devantler-tech/monorepo' 'then' '  gh pr view 2 --repo devantler-tech/monorepo' \
-  'elif gh pr view 3 --repo devantler-tech/monorepo' 'then' '  gh pr view 4 --repo devantler-tech/monorepo' \
+  'elif' '  gh pr view 3 --repo devantler-tech/monorepo' 'then' '  gh pr view 4 --repo devantler-tech/monorepo' \
   'else' '  gh pr view 5 --repo devantler-tech/monorepo' 'fi' '' \
   'case "$R" in' '  a)' '    gh pr view 6 --repo devantler-tech/monorepo' '    ;;' '  b) gh pr view 7 --repo devantler-tech/monorepo ;;' 'esac' '' \
-  'while read -r n; do' '  gh pr view "$n" --repo devantler-tech/monorepo |' '    jq -r .title' 'done' '```' > "$fixdir/compound-shapes.md"
+  'while' '  read -r n' 'do' '  gh pr view "$n" --repo devantler-tech/monorepo |' '    jq -r .title' 'done' '```' > "$fixdir/compound-shapes.md"
 cs_n=0
 while IFS= read -r cs_row; do
   [ -n "$cs_row" ] || continue
   cs_n=$((cs_n+1))
+  # Each candidate must be the WHOLE construct. A starter the recogniser misses (a bare
+  # `while` on its own line) yields only the nested read, which parses fine -- so parsing
+  # alone cannot notice it, and the opening keyword is asserted too.
+  case "${cs_row#fenced }" in
+    'if '*|'case '*|'while '*) ;;
+    *) die_unknown "self-test: a compound construct reached the guard without its opening keyword: ${cs_row#fenced }" ;;
+  esac
   bash -n <<<"${cs_row#fenced }" 2>/dev/null \
     || die_unknown "self-test: a joined compound candidate is not parseable shell, so the guard is asked about a command nobody runs: ${cs_row#fenced }"
 done <<<"$(extract_commands "$fixdir/compound-shapes.md" | grep '^fenced ')"
