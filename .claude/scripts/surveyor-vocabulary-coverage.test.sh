@@ -482,8 +482,10 @@ extract_fenced() {
       # Walks `s` ITSELF rather than reusing `unquoted()`. That helper drops a backslash and
       # the character after it, emitting nothing for two input characters, so its output is
       # NOT index-aligned with its input and a position found there would cut the wrong
-      # column. Only a line being JOINED behind an options prefix is stripped; every
-      # single-line candidate still reaches the guard verbatim, so no existing verdict moves.
+      # column. Only a line being JOINED behind an options prefix or inside a compound is
+      # stripped; every single-line candidate still reaches the guard verbatim, so no existing
+      # verdict moves. A `#` opens a comment wherever a WORD starts: after a blank, and also
+      # right after a control operator (`cmd;# note`), or the comment would survive the join.
       function strip_comment(s,   i, c, sq, dq, n) {
         n = length(s)
         for (i = 1; i <= n; i++) {
@@ -491,7 +493,7 @@ extract_fenced() {
           if (c == "\\" && !sq) { i++; continue }
           else if (c == "'"'"'" && !dq) { sq = !sq; continue }
           else if (c == "\"" && !sq) { dq = !dq; continue }
-          else if (c == "#" && !sq && !dq && (i == 1 || substr(s, i - 1, 1) ~ /[[:space:]]/)) {
+          else if (c == "#" && !sq && !dq && (i == 1 || substr(s, i - 1, 1) ~ /[[:space:];&|()]/)) {
             s = substr(s, 1, i - 1); break
           }
         }
@@ -991,7 +993,7 @@ printf '%s\n' 'Shapes:' '' '```sh' \
   'case "$R" in' '  a)' '    v=$(gh pr view 6 --repo devantler-tech/monorepo)' '    gh pr view "$v" --repo devantler-tech/monorepo' '    ;;' \
   '  b) w=$(gh pr view 7 --repo devantler-tech/monorepo)' '    gh pr view "$w" --repo devantler-tech/monorepo' '    ;;' \
   '  "c d")' '    gh pr view 9 --repo devantler-tech/monorepo' '    ;;' 'esac' '' \
-  'while' '  read -r n' 'do' '  gh pr view "$n" --repo devantler-tech/monorepo |' '    jq -r .title' 'done' '' \
+  'while' '  read -r n' 'do' '  gh pr view "$n" --repo devantler-tech/monorepo |' '    jq -r .title;# a comment after an operator' 'done' '' \
   'for T  # every type' 'in Epic Feature' 'do  # one read each' '' '  # a full-line note' '  gh pr view "$T" --repo devantler-tech/monorepo' 'done' '' \
   'for r in a' 'do' "  gh api x --jq '.[]" "    | .a # not a comment'" 'done' '' \
   'if true' 'then' '  f()' '  { gh pr view 8 --repo devantler-tech/monorepo; }' '  echo ready!' '  f' 'fi' '```' > "$fixdir/compound-shapes.md"
