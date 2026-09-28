@@ -391,7 +391,8 @@ XFA2A=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfa2a.XXXXXXXX") || { echo "cannot create
 # consumers below read them through process substitution, so the awk programs
 # keep their existing `getline < file` idiom and the values still never land in
 # a filesystem object or in argv.
-cred_match_data=''
+cred_sets=''
+cred_blob_norm=''
 cred_plain_set=''
 cred_blob_set=''
 # Its OWN scratch, never $CONCTMP. The injection-concentration pass owns that
@@ -1277,6 +1278,12 @@ CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([!-,.-`
 # over-labelling buries a live credential. The two directions are never
 # symmetric, and every threshold choice here resolves toward reporting.
 CRED_BLOB_RUN_MIN=40
+# The longest value the table retains in full (#2980). Real credentials are
+# far shorter — a fine-grained GitHub PAT is under 100 bytes, and the JWT shape
+# stops before the signature — so a longer "value" is a payload the generic
+# alternative swallowed. Longer values are cut here and fingerprinted, never
+# dropped: see cred_bound().
+CRED_VALUE_MAX=512
 CRED_BLOB_TABLE_RE='[A-Za-z0-9+=]{'"$CRED_BLOB_RUN_MIN"',}[+/]'"$CRED_PREFIX_SHAPES_RE"
 # Strips the run and its boundary char so a blob leg value normalises to the
 # SAME string the table leg produces (whose single boundary char is removed by
@@ -3858,12 +3865,87 @@ if want safety; then
     # would silently turn tracing ON for a caller that never asked for it.
     cred_trace_was=off
     case $- in *x*) cred_trace_was=on; set +x ;; esac
-    cred_match_data=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
+    # Shared normaliser. BOTH the value list and the blob set run through THIS
+    # function, so the two can never normalise differently — a divergence would
+    # attach the label to the wrong row, which is worse than no label at all.
+    # It ends in cred_bound BEFORE `sort -u`, so no stage downstream of the
+    # extraction, sort included, ever holds a value longer than the cap.
+    cred_normalise() {
+      tr ';&|' '\n' | grep -v '^$' \
+        | sed -E -e 's/^[^A-Za-z0-9_-]//' \
+          -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
+          -e "s/^[^:=]*[:=][[:space:]]*[\"']?([^=].*)$/\1/" \
+          -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
+        | grep -E . | cred_bound | sort -u
+    }
+    # BOUND EACH VALUE AT CRED_VALUE_MAX (#2980). A value longer than the cap
+    # keeps its first CRED_VALUE_MAX bytes and gains `~` plus a 64-bit checksum
+    # of the WHOLE value, so:
+    #   - retention is bounded by distinct values x the cap, never by matched
+    #     bytes (one generic assignment can carry a multi-megabyte payload);
+    #   - two long values sharing a prefix stay two rows — truncation alone
+    #     would merge them, and a merge hides a credential behind another;
+    #   - the prefix every classifier reads is untouched: shape_of() needs at
+    #     most ~30 bytes, and the masked-display test changes only for a value
+    #     whose run before `***` is itself longer than the cap — not a tool's
+    #     prefix-and-mask display, so it correctly loses that label;
+    #   - it runs on ONE value at a time, after the `;&|` split, so it can never
+    #     join fragments into a value that was not in the corpus.
+    # `~` and hex digits appear in no shape class and in none of `:=;&|*`, so the
+    # suffix cannot change what the table later makes of the value.
+    cred_bound() {
+      LC_ALL=C awk -v cap="$CRED_VALUE_MAX" '
+        BEGIN { for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i }
+        length($0) <= cap { print; next }
+        {
+          h1 = 0; h2 = 0; n = length($0)
+          for (i = 1; i <= n; i++) {
+            c = ord[substr($0, i, 1)]
+            h1 = (h1 * 31 + c) % 2147483647
+            h2 = (h2 * 131 + c) % 2147483629
+          }
+          printf "%s~%08x%08x\n", substr($0, 1, cap), h1, h2
+        }'
+    }
+    # A blob match carries its run; stripping run+boundary yields the identical
+    # string the plain leg produces for the same credential (whose single
+    # boundary char cred_normalise removes), so the two sets are comparable.
+    cred_blob_matches() { grep -aEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null \
+                          | sed -E "s|$CRED_BLOB_STRIP_RE||"; }
+    cred_plain_matches() { grep -avEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null; }
+    cred_blob_leg() { cred_blob_matches | cred_normalise | sed 's/^/B /'; }
+    cred_plain_leg() { cred_plain_matches | cred_normalise | sed 's/^/P /'; }
+    # 🔴 THE RAW MATCHES ARE NEVER HELD (#2980). They used to be captured whole
+    # into one variable and then partitioned, so the scan's resident set grew
+    # with the total matched bytes. Now the single extraction streams into awk,
+    # which hands every line to BOTH legs; each leg partitions, normalises and
+    # bounds as it reads, and only the bounded, de-duplicated sets come back.
+    # Still no scratch file (#2712): the legs are pipes.
+    #
+    # The two legs share this command substitution's stdout, so they must not
+    # write at the same time. They cannot: each ends in `sort -u`, which prints
+    # nothing until its input closes, and awk closes the blob leg — waiting for
+    # it to exit — before it closes the plain leg. The output is every `B ` row,
+    # then every `P ` row, with no interleaving.
+    #
+    # awk starts each leg through /bin/sh, which is dash on Ubuntu and does not
+    # pass exported bash FUNCTIONS on. So each leg travels as a script in an
+    # ordinary variable, which any sh passes through; it holds function bodies
+    # and regexes, never a matched value.
+    CRED_BLOB_LEG_SH="$(declare -f cred_normalise cred_bound cred_blob_matches cred_blob_leg); cred_blob_leg"
+    CRED_PLAIN_LEG_SH="$(declare -f cred_normalise cred_bound cred_plain_matches cred_plain_leg); cred_plain_leg"
+    export CRED_BLOB_LEG_SH CRED_PLAIN_LEG_SH CRED_BLOB_ANCHORED_RE CRED_BLOB_STRIP_RE CRED_VALUE_MAX
+    cred_sets=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
       | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
           'awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
       | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
       | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null \
-      | tr '\000' '\n')
+      | tr '\000' '\n' \
+      | awk '
+          BEGIN { blob = "bash -c \"$CRED_BLOB_LEG_SH\""; plain = "bash -c \"$CRED_PLAIN_LEG_SH\"" }
+          { print | blob; print | plain }
+          END { close(blob); close(plain) }')
+    export -n CRED_BLOB_LEG_SH CRED_PLAIN_LEG_SH CRED_BLOB_ANCHORED_RE CRED_BLOB_STRIP_RE CRED_VALUE_MAX
     # NUL is translated to a newline BEFORE the capture, never left to the
     # command substitution. A decoded string can legitimately carry `\u0000`,
     # which jq emits as a real NUL byte, and `$(...)` DELETES NUL rather than
@@ -3875,25 +3957,9 @@ if want safety; then
     # compound-value handling below already chose for `;&|` — a fragment only
     # ever reaches a high-signal row by passing a FULL shape regex on its own,
     # so a split costs no true positive while a splice invents a false one.
-    # Shared normaliser. BOTH the value list and the blob set run through THIS
-    # function, so the two can never normalise differently — a divergence would
-    # attach the label to the wrong row, which is worse than no label at all.
-    cred_normalise() {
-      tr ';&|' '\n' | grep -v '^$' \
-        | sed -E -e 's/^[^A-Za-z0-9_-]//' \
-          -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
-          -e "s/^[^:=]*[:=][[:space:]]*[\"']?([^=].*)$/\1/" \
-          -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
-        | grep -E . | sort -u
-    }
-    # A blob match carries its run; stripping run+boundary yields the identical
-    # string the plain leg produces for the same credential (whose single
-    # boundary char cred_normalise removes), so the two sets are comparable.
-    cred_blob_matches() { printf '%s\n' "$cred_match_data" \
-                          | grep -aEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null \
-                          | sed -E "s|$CRED_BLOB_STRIP_RE||"; }
-    cred_plain_matches() { printf '%s\n' "$cred_match_data" \
-                          | grep -avEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null; }
+    cred_plain_set=$(printf '%s\n' "$cred_sets" | sed -n 's/^P //p')
+    cred_blob_norm=$(printf '%s\n' "$cred_sets" | sed -n 's/^B //p')
+    cred_sets=''
     # The label needs the ABSENCE of a plain occurrence, not the presence of a
     # blob one. `cred_normalise` ends in `sort -u`, so a credential seen both
     # inside an encoded blob and plainly collapses to ONE row; membership in the
@@ -3904,7 +3970,6 @@ if want safety; then
     # the set what its name claims: values whose occurrences are ALL blob-embedded.
     # This is the ambiguity-falls-through-to-the-plain-row rule the label's own
     # contract states, enforced rather than assumed.
-    cred_plain_set=$(cred_plain_matches | cred_normalise)
     # Derived from the SAME extracted matches as the table — so a complete image
     # payload, excluded upstream by the decode filter, can no more manufacture a
     # blob label than it can manufacture a table row.
@@ -3916,7 +3981,7 @@ if want safety; then
     # on an empty or missing file simply yields nothing, whereas the NR==FNR
     # idiom would silently eat the first data line when the plain set is empty —
     # which here would drop a real credential's label).
-    cred_blob_set=$(cred_blob_matches | cred_normalise \
+    cred_blob_set=$(printf '%s\n' "$cred_blob_norm" | grep -E . \
       | awk -v plainfile=<(printf '%s\n' "$cred_plain_set") '
           BEGIN {
             while ((getline _p < plainfile) > 0) if (_p != "") plain[_p] = 1
@@ -3924,9 +3989,11 @@ if want safety; then
           }
           !($0 in plain)
         ')
-    { cred_blob_matches; cred_plain_matches; } \
-      | cred_normalise |
-      # Normalise every match to its UNDERLYING VALUE before any dedup:
+    # Both legs are already normalised and bounded, so their union needs only
+    # the de-duplication cred_normalise would have applied to the joined input.
+    printf '%s\n%s\n' "$cred_blob_norm" "$cred_plain_set" | grep -E . | sort -u |
+      # cred_normalise (in each leg above) reduced every match to its
+      # UNDERLYING VALUE before any dedup:
       # (1) split compound assignments on `;` — the generic alternative's value
       #     class includes `;`, so `GITHUB_TOKEN=ghp_…;AWS_…=AKIA…` is ONE
       #     greedy match and the second credential's shape would vanish;

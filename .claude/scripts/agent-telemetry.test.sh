@@ -7462,6 +7462,77 @@ else
       "no trace lines at the end of the run — the guard left tracing off"
 fi
 
+# ── credential values are bounded before they are retained (#2980) ───────────
+# The generic `token=`/`secret=` alternative has an unbounded value class, and
+# transcripts carry long encoded payloads, so the scan used to hold every match
+# whole and its memory grew with the total matched bytes. Each value is now cut
+# at CRED_VALUE_MAX and fingerprinted before anything retains it.
+#
+# Observed on the reporting awk's STDIN: that stream is the union of the two
+# retained sets, so its longest line is the longest value the scan held.
+echo
+echo "credential values are bounded before they are retained (#2980)"
+
+CB_MAX=$(sed -n 's/^CRED_VALUE_MAX=\([0-9][0-9]*\)$/\1/p' "$TARGET")
+mkdir -p "$FIX/credbound" "$FIX/credboundawk"
+CB_LONG=$(printf 'Q%.0s' $(seq 1 3000))
+# Two long values that share their first 3000 bytes, and a long compound value
+# with a real token in its SECOND fragment.
+{
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"token=%sAAA"}]}}\n' "$CB_LONG"
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"token=%sBBB"}]}}\n' "$CB_LONG"
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"token=%s;GITHUB_TOKEN=__GHPA__"}]}}\n' "$CB_LONG"
+} > "$FIX/credbound/s.jsonl"
+subst "$FIX/credbound/s.jsonl"
+
+cat > "$FIX/credboundawk/awk" <<'EOF'
+#!/usr/bin/env bash
+# Records the longest line the reporting awk receives, then runs it unchanged.
+case " $* " in
+  *'blobfile='*)
+    cb_in=$(cat)
+    printf '%s\n' "$cb_in" | LC_ALL=C "$REAL_AWK" \
+      '{ if (length($0) > m) m = length($0) } END { print m + 0 }' >> "$CRED_BOUND_TRACE"
+    printf '%s\n' "$cb_in" | "$REAL_AWK" "$@"
+    exit
+    ;;
+esac
+exec "$REAL_AWK" "$@"
+EOF
+chmod +x "$FIX/credboundawk/awk"
+: > "$FIX/cred-bound-trace"
+CB_OUT=$(PATH="$FIX/credboundawk:$PATH" REAL_AWK="$real_awk" CRED_BOUND_TRACE="$FIX/cred-bound-trace" \
+  CLAUDE_PROJECTS_DIR="$FIX/credbound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CB_TABLE=$(printf '%s' "$CB_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+CB_SEEN=$(head -1 "$FIX/cred-bound-trace" 2>/dev/null)
+
+# POSITIVE CONTROLS FIRST: the cap was read, and the reporting pass was observed
+# receiving a value that was actually cut. A longest line at or under the cap
+# would mean the long values never reached the table, and the bound assertion
+# below would pass having bounded nothing.
+if [ -n "$CB_MAX" ] && [ -n "$CB_SEEN" ] && [ "$CB_SEEN" -gt "$CB_MAX" ]; then
+  ok "control: a value longer than the cap reached the credential table"
+else
+  bad "control: a value longer than the cap reached the credential table" \
+      "cap='$CB_MAX' longest='$CB_SEEN' — the bound assertion below would be VACUOUS"
+fi
+# The cap plus `~` and a 16-hex-digit fingerprint, never the 3000-byte value.
+if [ -n "$CB_SEEN" ] && [ -n "$CB_MAX" ] && [ "$CB_SEEN" -le $((CB_MAX + 17)) ]; then
+  ok "no retained credential value exceeds the cap"
+else
+  bad "no retained credential value exceeds the cap" "cap='$CB_MAX' longest='$CB_SEEN'"
+fi
+# Truncation alone would merge the two values that share a 3000-byte prefix,
+# and cutting a compound value before its `;` split would drop the token after
+# it. Exactly three weak rows and the one token row rule out both.
+if grep -qE '^[[:space:]]+3 generic-assignment' <<<"$CB_TABLE" \
+   && grep -qE '^[[:space:]]+1 github-token \(classic/app\)$' <<<"$CB_TABLE"; then
+  ok "bounded values stay distinct and a token after a long fragment is still counted"
+else
+  bad "bounded values stay distinct and a token after a long fragment is still counted" "$CB_TABLE"
+fi
+
 
 # ── snapshot drift is checked even when the class totals AGREE ────────────────
 # Agreement between the two walks is not evidence that the corpus was stable.
