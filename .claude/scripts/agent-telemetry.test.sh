@@ -7540,8 +7540,10 @@ fi
 mkdir -p "$FIX/credlegfail" "$FIX/credlegsed" "$FIX/credclean"
 cat > "$FIX/credlegsed/sed" <<'EOF'
 #!/usr/bin/env bash
+# Fails only the one sed call whose script is $CRED_SED_FAIL, after reading
+# its whole input; every other sed runs normally.
 case " $* " in
-  *'s/^/B /'*) cat >/dev/null; exit 1 ;;
+  *" $CRED_SED_FAIL "*) cat >/dev/null; exit 1 ;;
 esac
 exec "$REAL_SED" "$@"
 EOF
@@ -7550,9 +7552,15 @@ cp "$FIX/credbound/s.jsonl" "$FIX/credlegfail/s.jsonl"
 # Resolved BEFORE the shim is on PATH: resolving it in the same prefix can find
 # the shim itself, which then execs itself forever.
 real_sed=$(command -v sed)
-LF_OUT=$(PATH="$FIX/credlegsed:$PATH" REAL_SED="$real_sed" \
-  CLAUDE_PROJECTS_DIR="$FIX/credlegfail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+cred_sed_fail_run() {
+  PATH="$FIX/credlegsed:$PATH" REAL_SED="$real_sed" CRED_SED_FAIL="$1" \
+    CLAUDE_PROJECTS_DIR="$FIX/credlegfail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    bash "$TARGET" --since-days 3650 --section safety 2>&1
+}
+LF_OUT=$(cred_sed_fail_run 's/^/B /')
+# The same kind of failure one step later, in the parse that splits the legs'
+# output into the two sets — after the completion markers were already read.
+PF_OUT=$(cred_sed_fail_run 's/^P //p')
 # Control: the same corpus with no failure reaches the table and is NOT marked.
 if grep -q 'credential-shaped' <<<"$CB_OUT" && ! grep -q 'credential scan did not complete' <<<"$CB_OUT"; then
   ok "control: a complete credential scan is not marked UNKNOWN"
@@ -7564,6 +7572,12 @@ if grep -q 'UNKNOWN: the credential scan did not complete' <<<"$LF_OUT"; then
 else
   bad "a credential leg that fails part-way marks the table UNKNOWN" \
       "$(printf '%s' "$LF_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
+fi
+if grep -q 'UNKNOWN: the credential scan did not complete' <<<"$PF_OUT"; then
+  ok "a failed split of the legs' output marks the table UNKNOWN"
+else
+  bad "a failed split of the legs' output marks the table UNKNOWN" \
+      "$(printf '%s' "$PF_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')"
 fi
 # No match at all still starts both legs (awk opens them in BEGIN), on empty
 # input, and both print their marker: an ordinary empty result is complete.

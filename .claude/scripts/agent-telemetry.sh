@@ -394,6 +394,7 @@ XFA2A=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfa2a.XXXXXXXX") || { echo "cannot create
 cred_sets=''
 cred_blob_norm=''
 cred_scan_complete=0
+cred_rows=''
 cred_plain_set=''
 cred_blob_set=''
 # Its OWN scratch, never $CONCTMP. The injection-concentration pass owns that
@@ -3989,13 +3990,12 @@ if want safety; then
     cred_scan_complete=$(printf '%s\n' "$cred_sets" | awk '
       $0 == "BOK" { b = 1 } $0 == "POK" { p = 1 } { last = $0 }
       END { print ((b && p && last == "OK") ? 1 : 0) }')
-    cred_plain_set=$(printf '%s\n' "$cred_sets" | sed -n 's/^P //p')
-    cred_blob_norm=$(printf '%s\n' "$cred_sets" | sed -n 's/^B //p')
+    # Every later stage that turns those sets into the table can fail too, so
+    # each one clears the flag, and UNKNOWN is decided only once the rows exist.
+    # (No stage here exits early, so pipefail cannot misread a SIGPIPE.)
+    cred_plain_set=$(printf '%s\n' "$cred_sets" | sed -n 's/^P //p') || cred_scan_complete=0
+    cred_blob_norm=$(printf '%s\n' "$cred_sets" | sed -n 's/^B //p') || cred_scan_complete=0
     cred_sets=''
-    if [ "$cred_scan_complete" != 1 ]; then
-      echo "    UNKNOWN: the credential scan did not complete (a value-set stage failed)."
-      echo "    Any rows below are a PARTIAL count — an empty or short table here is NOT clean."
-    fi
     # The label needs the ABSENCE of a plain occurrence, not the presence of a
     # blob one. `cred_normalise` ends in `sort -u`, so a credential seen both
     # inside an encoded blob and plainly collapses to ONE row; membership in the
@@ -4017,17 +4017,19 @@ if want safety; then
     # on an empty or missing file simply yields nothing, whereas the NR==FNR
     # idiom would silently eat the first data line when the plain set is empty —
     # which here would drop a real credential's label).
-    cred_blob_set=$(printf '%s\n' "$cred_blob_norm" | grep -E . \
+    cred_blob_set=$(printf '%s\n' "$cred_blob_norm" | cred_grep -E . \
       | awk -v plainfile=<(printf '%s\n' "$cred_plain_set") '
           BEGIN {
             while ((getline _p < plainfile) > 0) if (_p != "") plain[_p] = 1
             close(plainfile)
           }
           !($0 in plain)
-        ')
+        ') || cred_scan_complete=0
     # Both legs are already normalised and bounded, so their union needs only
     # the de-duplication cred_normalise would have applied to the joined input.
-    printf '%s\n%s\n' "$cred_blob_norm" "$cred_plain_set" | grep -E . | sort -u |
+    # The rows are captured before printing — they hold shape labels and counts,
+    # never a value — so a stage that fails here can still mark them UNKNOWN.
+    cred_rows=$(printf '%s\n%s\n' "$cred_blob_norm" "$cred_plain_set" | cred_grep -E . | sort -u |
       # cred_normalise (in each leg above) reduced every match to its
       # UNDERLYING VALUE before any dedup:
       # (1) split compound assignments on `;` — the generic alternative's value
@@ -4114,7 +4116,12 @@ if want safety; then
         # credential.
         if ($0 in blob) s = s " [blob-embedded: inside a base64 run, likely a chance substring]"
         print s
-      }' | sort | uniq -c | sort -rn | sed 's/^/    /'
+      }' | sort | uniq -c | sort -rn | sed 's/^/    /') || cred_scan_complete=0
+    if [ "$cred_scan_complete" != 1 ]; then
+      echo "    UNKNOWN: the credential scan did not complete (a value-set stage failed)."
+      echo "    Any rows below are a PARTIAL count — an empty or short table here is NOT clean."
+    fi
+    [ -z "$cred_rows" ] || printf '%s\n' "$cred_rows"
     # End of the credential-value region — restore the caller's tracing exactly.
     if [ "$cred_trace_was" = on ]; then set -x; fi
     cred_trace_was=off
