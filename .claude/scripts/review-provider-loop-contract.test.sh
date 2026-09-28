@@ -775,6 +775,15 @@ assert_prose "${constitution}" 'Compose every review-request comment with' \
   "the constitution does not require the review-request composer, so bare triggers can return"
 assert_prose "${maintenance_skill}" 'compose it with `.claude/scripts/review-request-comment.sh`, never by hand' \
   "the run loop does not route review requests through the composer"
+# #2894: the marker re-read is not atomic with the post, so two instances requested the same head
+# and provider seconds apart (13 of 2,001 keys within 60 s, 2026-09-14 → 09-28). The atomic ref lock
+# must be named where the request is made, in both the constitution and the run loop.
+assert_prose "${constitution}" "Take the review-request lock immediately before posting, and stand down when it is held." \
+  "the constitution does not require the atomic review-request lock before a request"
+assert_prose "${constitution}" "Exit \`1\` means another instance is requesting that review: do not post" \
+  "the constitution does not tell a lock loser to stand down"
+assert_prose "${maintenance_skill}" "taking \`.claude/scripts/review-request-lock.sh acquire\` and standing down on its exit \`1\`" \
+  "the run loop does not take the review-request lock before posting"
 # #2737: CodeRabbit published `success — Review completed` one second after its summary recorded
 # `## Review failed`, with no review object at the head. The status therefore proves only that an
 # attempt ended; the artifact decides, and an errored review advances the lane as a service failure.

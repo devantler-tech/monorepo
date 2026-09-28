@@ -730,7 +730,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    trigger** — compose it with `.claude/scripts/review-request-comment.sh`, never by hand (#3319) —
    re-reading the repository-visible current-head request markers immediately before
    posting it (each marker names its provider; pair Cursor's marker to the next exact-author bare
-   trigger, ignoring interleaved other-author comments); accept markers only from exact author `devantler`
+   trigger, ignoring interleaved other-author comments), then taking
+   `.claude/scripts/review-request-lock.sh acquire` and standing down on its exit `1` (#2894);
+   accept markers only from exact author `devantler`
    with the structural agent disclosure; **never post a separate pre-trigger reservation comment** —
    that two-phase step was retired on measurement 2026-07-25, having posted a blank-rendering comment
    1–2 seconds before its own trigger and closed zero races in 75 elections;
