@@ -158,6 +158,14 @@ refute_bullet 'guarantees the next tick' \
 refute_bullet 'rung 1 collects the PR next tick' \
   "latency bullet promises next-tick collection of an abandoned PR"
 
+# A next-tick promise anywhere in the guide contradicts the scheduler rule, not only inside the
+# bullet, so these two refutations read the whole guide (a refutation cannot pass by relocation).
+guide_flat="$(tr '\n' ' ' <"${constitution}" | tr -s '[:space:]' ' ')"
+case "${guide_flat}" in
+  *'next tick collect'* | *'guarantees the next tick'*)
+    fail "the latency guide promises that the next tick collects a PR, but the Claude scheduler drops overlapping dispatches" ;;
+esac
+
 # ---------------------------------------------------------------------------
 # PORTABLE HALF — rule 7 of the pinned engineer definition, flattened the same way. Scoped to that
 # rule for the same reason the deployment half is scoped to its bullet: a whole-file check passes
@@ -252,6 +260,10 @@ if [ -z "${LATENCY_CONTRACT_FIXTURE_GUIDE:-}" ]; then
     'hand the PR'"'"'s state back to its parent'
   expect_rejected 'puts the PR first for whichever run is dispatched next' 'guarantees the next tick collects the PR' \
     'guarantees next-tick collection'
+  expect_rejected 'never a promised next tick' 'and the next tick collects it' \
+    'promises that the next tick collects an abandoned PR'
+  expect_rejected 'let a later run collect the result' 'let the next tick collect the result' \
+    'the latency guide promises that the next tick collects a PR'
   rm -rf "${fixture_dir}"
 fi
 

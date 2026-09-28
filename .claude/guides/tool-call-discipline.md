@@ -110,7 +110,8 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
 - **There is always non-blocking work.** A portfolio this size always has a review thread to resolve,
   an issue to triage, a finding to verify, or memory to sharpen. "Waiting for CI" is never a reason
   to do nothing — if a wait is truly unavoidable and nothing else is actionable, **end the run and
-  let the next tick collect the result** (the watcher/carry-forward exists for exactly this). A run
+  let a later run collect the result** (rung 1 puts the PR first for whichever run is dispatched
+  next; the carry-forward exists for exactly this). A run
   is measured by what it ships, not by how long it stays open.
 - **Re-read state after any long wait — don't assume it stood still.** Both your own PRs and the
   sibling's move while you wait; a PR can merge, a head can advance, a thread can be resolved by the
