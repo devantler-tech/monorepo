@@ -124,6 +124,23 @@ assert_bullet 'Ending the run REQUIRES stopping every in-flight watcher first' \
 assert_bullet '`TaskStop`, not merely a' \
   "latency bullet states the stop requirement without naming TaskStop as the mechanism"
 
+# 8. The DELEGATED-run case (monorepo#3645). Item 5's resurrection mechanism holds only for a
+#    top-level session: a run dispatched as a subagent loses its background tasks when it returns, and
+#    the runtime's launch message tells it to wait first. Without its own clause, delegated runs armed a
+#    watcher and then foreground-polled that watcher's output file — 31 delegated Engineer runs averaged
+#    69.0 min against 43.7 for 38 inline runs (09-25 to 09-28). Each anchor carries its own verb, so a
+#    revision that keeps the words but licenses the poll fails.
+assert_bullet 'In a **delegated run**' \
+  "latency bullet does not name the delegated-run case, where nothing resurrects the session"
+assert_bullet 'never poll a backgrounded task'"'"'s output file' \
+  "latency bullet does not forbid a delegated run from polling its own backgrounded task's output file"
+assert_bullet 'at most **one** bounded foreground call on the condition itself' \
+  "latency bullet does not cap a delegated run's gating wait at one bounded foreground call on the condition"
+assert_bullet 'otherwise `TaskStop` it and return' \
+  "latency bullet does not tell a delegated run to stop its watcher and return when no wait is justified"
+refute_bullet 'a delegated run may poll' \
+  "latency bullet licenses a delegated run to poll"
+
 # ---------------------------------------------------------------------------
 # PORTABLE HALF — rule 7 of the pinned engineer definition, flattened the same way. Scoped to that
 # rule for the same reason the deployment half is scoped to its bullet: a whole-file check passes

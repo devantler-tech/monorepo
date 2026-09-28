@@ -88,6 +88,17 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   🔴 **Ending the run REQUIRES stopping every in-flight watcher first — `TaskStop`, not merely a
   closing message.** A watcher left armed reopens the session after the run believed it was over;
   **6 idles (1.09h)** in the same window woke on a watcher that had merely TIMED OUT.
+  🔴 In a **delegated run** (you were dispatched as a subagent), **nothing resurrects you.** Your
+  background tasks end when you return, and the runtime's launch message tells you to wait for them
+  first. That message tells you the result is lost if you return. It does not require you to wait. So
+  never poll a backgrounded task's output file. Where a result gates this run's terminal step (a
+  merge you make right after it), make at most **one** bounded foreground call on the condition itself
+  (for example `gh pr checks <n> --watch` within the 10-minute ceiling), with no watcher. If there is
+  no such result, or the call ends unresolved, the watcher has nothing left to deliver: otherwise
+  `TaskStop` it and return, and rung 1 collects the PR next tick. Measured 09-25 to 09-28:
+  **31 delegated Engineer runs averaged 69.0 min and 45% overran the slot, against 43.7 min and 29%
+  for 38 inline runs**. Most of the gap was watchers polled through their own output file
+  (monorepo#3645).
 - **Long-pole first.** Push the change with the **slowest CI first** so its bake overlaps everything
   else; do the fast-CI and no-CI work (issue triage, review-thread replies, memory, reports) during
   the bake. Reversing this — fast item first, slow item last — buys a guaranteed idle tail, which is
