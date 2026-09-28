@@ -83,6 +83,29 @@ grep -Fq 'never request a second provider after the first success' "${constituti
   fail "constitution permits redundant reviews after the gate is already satisfied"
 grep -Fq 'A provider reaction emoji on the trigger is positive in-flight evidence' "${constitution}" ||
   fail "constitution does not distinguish an acknowledged request from a silent trigger"
+# A CodeRabbit chat reply means no review ran (#2818): without the rule, a run waits out the
+# acknowledged-request window on it, or reads its verdict-like prose as a review result. Scoped to
+# the request discipline, where the next request is actually chosen.
+chat_start='## Requesting reviews — lane order and request discipline'
+chat_end='**Findings restart the loop; service failures advance it.**'
+assert_section_prose "${constitution}" "${chat_start}" "${chat_end}" \
+  'A CodeRabbit CHAT reply to a review trigger is a trigger-parse failure' \
+  "the request discipline does not classify a CodeRabbit chat reply as a trigger-parse failure"
+assert_section_prose "${constitution}" "${chat_start}" "${chat_end}" \
+  'the first chat reply at a head → repost once immediately in the composed shape' \
+  "the request discipline does not require one immediate composed repost after the first chat reply"
+assert_section_prose "${constitution}" "${chat_start}" "${chat_end}" \
+  'record `cr:no-gate@<sha>` with `reason=service-failure` and advance to Codex' \
+  "the request discipline gives a repeated CodeRabbit chat reply no bounded, surveyor-readable exit"
+assert_section_prose "${constitution}" "${chat_start}" "${chat_end}" \
+  'first** `coderabbitai[bot]` reply after that request' \
+  "the request discipline does not bind a chat reply to the request that drew it"
+assert_section_prose "${constitution}" "${chat_start}" "${chat_end}" \
+  'is the per-PR `CR-DECLINED` refusal instead' \
+  "the request discipline lets a declined chat reply be reposted as a parse failure"
+assert_section_prose "${constitution}" "${chat_start}" "${chat_end}" \
+  'The count starts again whenever findings restart the loop at CodeRabbit' \
+  "the request discipline carries a chat-reply count across CodeRabbit rounds"
 grep -Fq 'fix or refute every reported issue, then restart at CodeRabbit' "${constitution}" ||
   fail "constitution does not restart the ordered loop after review findings"
 grep -Fq 'A refutation that changes no file restarts at the same head; never create an empty commit' "${constitution}" ||
