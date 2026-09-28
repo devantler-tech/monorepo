@@ -30,6 +30,29 @@ age_tree() {
   done
 }
 
+# Salvage age counts a path's ctime (#3642), and `touch` cannot backdate a ctime, so every
+# fixture's ctime is "now". This `stat` shim, first on PATH for the whole file, reports a
+# ctime query (`-c %Z` / `-f %c`) as the path's mtime, which makes age_tree's backdating
+# cover ctime too. A path listed in $CTIME_FRESH (one per line) reports its real ctime,
+# which is how a test says "this inode changed just now". Every other query passes through.
+REAL_STAT=$(command -v stat)
+CTIME_SHIM_DIR=$(mktemp -d)
+CTIME_FRESH="$CTIME_SHIM_DIR/fresh"
+: > "$CTIME_FRESH"
+trap 'rm -rf "$CTIME_SHIM_DIR"' EXIT
+cat > "$CTIME_SHIM_DIR/stat" <<EOF
+#!/usr/bin/env bash
+path="\${!#}"
+if grep -qxF -- "\$path" '$CTIME_FRESH'; then exec '$REAL_STAT' "\$@"; fi
+args=()
+for a in "\$@"; do
+  case "\$a" in %Z) args+=(%Y) ;; %c) args+=(%m) ;; *) args+=("\$a") ;; esac
+done
+exec '$REAL_STAT' "\${args[@]}"
+EOF
+chmod +x "$CTIME_SHIM_DIR/stat"
+export PATH="$CTIME_SHIM_DIR:$PATH"
+
 # --- fixture ----------------------------------------------------------------------
 # Builds: origin (bare) + repo with `main` pushed. Worktrees are added per-test.
 make_repo() {
@@ -2199,6 +2222,82 @@ t_a_fresh_tracked_edit_in_an_old_worktree_is_not_salvaged() {
   rm -rf "$root"
 }
 
+t_a_fresh_chmod_in_an_old_worktree_is_not_salvaged() {
+  # `chmod +x` moves ctime, never mtime, so an mtime-only age reads it as years old (#3642).
+  local name="a fresh chmod of an old edit is kept, not salvaged"
+  local root; root=$(make_repo)
+  add_wt "$root" freshmode pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/freshmode"
+  echo "old edit" > "$wt/file.txt"
+  chmod +x "$wt/file.txt"
+  age_tree "$wt"
+  # Control: with the chmod reported as old too, the same tree IS salvage-eligible.
+  local ctl; ctl=$(run_salvage "$root" dry-run 1)
+  grep -q '^SALVAGE .*freshmode' <<<"$ctl" \
+    || { bad "$name" "FIXTURE: the aged tree is not salvage-eligible :: $ctl"; rm -rf "$root"; return; }
+  printf '%s\n' "$wt/file.txt" > "$CTIME_FRESH"
+  local out; out=$(run_salvage "$root" apply 1)
+  : > "$CTIME_FRESH"
+  if grep -q 'KEEP .*freshmode .*uncommitted change' <<<"$out" && ! grep -q '^SALVAGED .*freshmode' <<<"$out" \
+     && [ -x "$wt/file.txt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_staging_old_bytes_in_an_old_worktree_is_not_salvaged() {
+  # `git add` of bytes that are already old moves no file time, only the index (#3642).
+  local name="staging old bytes just now is kept, not salvaged"
+  local root; root=$(make_repo)
+  add_wt "$root" freshstage pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/freshstage"
+  echo "old edit" > "$wt/file.txt"
+  age_tree "$wt"
+  local admin; admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  local before; before=$("$REAL_STAT" -f %m "$wt/file.txt" 2>/dev/null || "$REAL_STAT" -c %Y "$wt/file.txt")
+  git -C "$wt" add file.txt
+  local after; after=$("$REAL_STAT" -f %m "$wt/file.txt" 2>/dev/null || "$REAL_STAT" -c %Y "$wt/file.txt")
+  [ "$before" = "$after" ] || { bad "$name" "FIXTURE: git add moved the file mtime"; rm -rf "$root"; return; }
+  local out; out=$(run_salvage "$root" apply 1)
+  if ! grep -q 'KEEP .*freshstage .*uncommitted change' <<<"$out" || grep -q '^SALVAGED .*freshstage' <<<"$out" \
+     || [ "$(git -C "$wt" show :file.txt 2>/dev/null)" != "old edit" ]; then
+    bad "$name" "$out"; rm -rf "$root"; return
+  fi
+  # Control: once the staging is old as well, the same tree IS salvage-eligible. This
+  # also proves the sweep's own reads above left the index mtime where it was.
+  touch -t 202001010000 "$admin/index"
+  local ctl; ctl=$(run_salvage "$root" dry-run 1)
+  if grep -q '^SALVAGE .*freshstage' <<<"$ctl"; then
+    ok "$name"
+  else
+    bad "$name" "control: an old staged edit is not salvage-eligible :: $ctl"
+  fi
+  rm -rf "$root"
+}
+
+t_the_sweep_never_rewrites_a_worktree_index() {
+  # age_tree leaves the index's cached stat data stale, so a status that may write would
+  # refresh the index and turn its mtime into "work done now" (#3642).
+  local name="the sweep's own reads never rewrite a worktree's index"
+  local root; root=$(make_repo)
+  add_wt "$root" noidx pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/noidx"
+  echo "old edit" > "$wt/file.txt"; git -C "$wt" add file.txt
+  age_tree "$wt"
+  local admin; admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  local before; before=$("$REAL_STAT" -f %m "$admin/index" 2>/dev/null || "$REAL_STAT" -c %Y "$admin/index")
+  local out; out=$(run_salvage "$root" dry-run 1)
+  local after; after=$("$REAL_STAT" -f %m "$admin/index" 2>/dev/null || "$REAL_STAT" -c %Y "$admin/index")
+  if [ "$before" = "$after" ] && grep -q '^SALVAGE .*noidx' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "index mtime $before -> $after :: $out"
+  fi
+  rm -rf "$root"
+}
+
 t_a_referenced_pseudo_ref_tag_does_not_block_salvage() {
   # A tag object a durable ref also holds survives the admin directory, so it must not
   # block salvaging an unrelated abandoned edit.
@@ -3452,6 +3551,9 @@ t_a_not_for_merge_fetch_head_commit_does_not_keep_a_clean_worktree
 t_new_work_during_the_sweep_resets_the_salvage_age
 t_a_referenced_pseudo_ref_tag_does_not_block_salvage
 t_a_fresh_tracked_edit_in_an_old_worktree_is_not_salvaged
+t_a_fresh_chmod_in_an_old_worktree_is_not_salvaged
+t_staging_old_bytes_in_an_old_worktree_is_not_salvaged
+t_the_sweep_never_rewrites_a_worktree_index
 t_salvage_keeps_a_bare_repository_without_refs
 t_a_pseudo_ref_only_tag_keeps_a_clean_worktree
 t_a_pseudo_ref_tag_a_ref_holds_does_not_keep
