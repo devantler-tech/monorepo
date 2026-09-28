@@ -2257,6 +2257,66 @@ t_salvage_preserves_commit_editmsg() {
   rm -rf "$root"
 }
 
+t_salvage_preserves_config_worktree() {
+  local name="salvage preserves the bytes of config.worktree"
+  local root; root=$(make_repo)
+  add_wt "$root" wtcfg pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/wtcfg" admin blob
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  printf '[user]\n\tname = only-here\n' > "$admin/config.worktree"
+  blob=$(git -C "$wt" hash-object "$admin/config.worktree")
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED .*wtcfg ' <<<"$out" && [ ! -e "$wt" ] \
+     && [ "$(git -C "$root/repo" for-each-ref --format='%(objectname)' 'refs/salvaged/*/config-worktree')" = "$blob" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out :: $(git -C "$root/repo" for-each-ref refs/salvaged)"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_caps_an_oversized_commit_editmsg() {
+  local name="salvage counts COMMIT_EDITMSG toward the size cap"
+  local root; root=$(make_repo)
+  add_wt "$root" bigmsg pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/bigmsg" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  head -c 20480 /dev/zero | tr '\0' 'm' > "$admin/COMMIT_EDITMSG"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt"
+  local out; out=$(WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*bigmsg .*more than 8 KB' <<<"$out" && [ -d "$wt" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_redirected_gitfile() {
+  # The gitfile names another worktree's admin: every check would read the decoy.
+  local name="salvage KEEPs a worktree whose gitfile names another worktree's admin"
+  local root; root=$(make_repo)
+  add_wt "$root" decoy pushed && add_wt "$root" redir pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/redir" other
+  other=$(git -C "$root/repo/.claude/worktrees/decoy" rev-parse --absolute-git-dir)
+  printf 'gitdir: %s\n' "$other" > "$wt/.git"
+  echo draft > "$wt/untracked.txt"
+  touch -t 202001010000 "$wt" "$root/repo/.claude/worktrees/decoy"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if grep -q '^SALVAGE .*redir ' <<<"$out"; then
+    bad "$name" "$out"
+  elif grep -q 'KEEP .*redir ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_deleted_intent_to_add_entry() {
   # `git add -N` then `rm`: the worktree diff calls it D, but the index entry remains.
   local name="salvage dry-run KEEPs an intent-to-add entry whose file was deleted"
@@ -3085,5 +3145,8 @@ t_salvage_keeps_a_non_mutex_ref_in_the_claim_lock_namespace
 t_salvage_keeps_a_tag_object_in_the_head_reflog
 t_a_fifo_mutex_ref_keeps_without_blocking
 t_salvage_preserves_commit_editmsg
+t_salvage_preserves_config_worktree
+t_salvage_caps_an_oversized_commit_editmsg
+t_salvage_keeps_a_redirected_gitfile
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

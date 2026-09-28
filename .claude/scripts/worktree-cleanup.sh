@@ -56,6 +56,7 @@
 #                                   deletions and untracked non-ignored files), parent HEAD
 #   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog, ORIG_HEAD or FETCH_HEAD commit reachable from no remote
 #   refs/salvaged/<id>/commit-editmsg - the COMMIT_EDITMSG bytes, when present (a message a hook rejected)
+#   refs/salvaged/<id>/config-worktree - the config.worktree bytes, when present (per-worktree settings)
 # Restore: `git worktree add --detach <path> refs/salvaged/<id>/head`, then
 # `git -C <path> read-tree refs/salvaged/<id>/index` for the staged index and
 # `git -C <path> restore --source=refs/salvaged/<id>/worktree --worktree -- .` for the working
@@ -496,8 +497,11 @@ recheck_mutable_gates() {
         || { keep "$wt" "a reflog-only commit appeared after the salvage snapshot ($SALVAGE_REF)"; return 1; }
     done <<< "$now_orphans"
     local now_msg
-    if ! now_msg=$(editmsg_blob "$wt") || [ "$now_msg" != "$SALVAGE_EDITMSG" ]; then
-      keep "$wt" "COMMIT_EDITMSG changed after the salvage snapshot ($SALVAGE_REF)"; return 1
+    if ! now_msg=$(admin_file_blobs "$wt") || [ "$now_msg" != "$SALVAGE_ADMIN_BLOBS" ]; then
+      keep "$wt" "COMMIT_EDITMSG or config.worktree changed after the salvage snapshot ($SALVAGE_REF)"; return 1
+    fi
+    if ! admin_backpointer_ok "$wt"; then
+      keep "$wt" "the worktree's gitfile no longer names its own admin directory ($SALVAGE_REF)"; return 1
     fi
     # A repository initialised after the snapshot (a submodule, or one the parent ignores),
     # or a file dropped into an uninitialised submodule's directory, changes nothing the
@@ -681,7 +685,11 @@ salvage_eligible() {
 salvage_blocker() {
   local wt=$1 list rc f total_kb=0 sz
   SALVAGE_NOTE=""
+  if ! admin_backpointer_ok "$wt"; then
+    SALVAGE_NOTE="the worktree's gitfile does not name its own admin directory"; return 0
+  fi
   nested_repository_blocker "$wt" && return 0
+  total_kb=$(admin_files_kb "$wt") || { SALVAGE_NOTE="cannot size the admin directory's files"; return 0; }
   # A conflicted index cannot be written as a tree, so apply would fail at salvage_write
   # and KEEP the worktree. The operation markers are not a reliable witness (conflict
   # entries survive a removed MERGE_HEAD), so ask the index itself, or dry-run would
@@ -1107,7 +1115,7 @@ pseudo_ref_commits() {
 # only preserve data) and the caller KEEPs the worktree.
 salvage_write() {
   local wt=$1 sha=$2 id base idx_tree wt_tree idx_commit wt_commit orphans o path_id
-  SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_EDITMSG=""
+  SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""
   # The namespace must be unique per WORKTREE, not per basename: two registered nested
   # worktrees can share a basename and a HEAD, and salvaged in the same second they would
   # otherwise derive one namespace and the second would overwrite the first's refs —
@@ -1132,6 +1140,9 @@ salvage_write() {
   local captured_kb
   captured_kb=$(snapshot_kb "$wt" "$sha" "$idx_tree" "$wt_tree") \
     || { SALVAGE_NOTE="cannot size the salvage snapshot"; return 1; }
+  local admin_kb
+  admin_kb=$(admin_files_kb "$wt") || { SALVAGE_NOTE="cannot size the admin directory's files"; return 1; }
+  captured_kb=$((captured_kb + admin_kb))
   if [ "$captured_kb" -gt "$SALVAGE_MAX_KB" ]; then
     SALVAGE_NOTE="the snapshot holds more than ${SALVAGE_MAX_KB} KB of changed data"; return 1
   fi
@@ -1156,31 +1167,68 @@ salvage_write() {
     && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/index^{tree}" 2>/dev/null)" = "$idx_tree" ] \
     && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/worktree^{tree}" 2>/dev/null)" = "$wt_tree" ] \
     || { SALVAGE_NOTE="$base refs do not verify"; return 1; }
-  # A commit a hook rejected leaves its drafted message only in COMMIT_EDITMSG, which the
-  # removal deletes, so the file's bytes are kept too.
-  local msg_blob msg_path
-  msg_blob=$(editmsg_blob "$wt" -w) || { SALVAGE_NOTE="cannot preserve COMMIT_EDITMSG"; return 1; }
-  if [ -n "$msg_blob" ]; then
-    msg_path="$base/commit-editmsg"
-    git -C "$TOPLEVEL" update-ref "$msg_path" "$msg_blob" "" 2>/dev/null \
-      && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$msg_path" 2>/dev/null)" = "$msg_blob" ] \
-      || { SALVAGE_NOTE="cannot write or verify $msg_path"; return 1; }
-  fi
-  SALVAGE_REF=$base; SALVAGE_TREE=$wt_tree; SALVAGE_INDEX_TREE=$idx_tree; SALVAGE_EDITMSG=$msg_blob
+  # COMMIT_EDITMSG and config.worktree die with the admin directory and are in no tree, so
+  # their bytes are kept too (see SALVAGE_ADMIN_FILES).
+  local kept line kref kblob
+  kept=$(admin_file_blobs "$wt" -w) || { SALVAGE_NOTE="cannot preserve the admin directory's files"; return 1; }
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    kref="$base/${line%% *}"; kblob=${line#* }
+    git -C "$TOPLEVEL" update-ref "$kref" "$kblob" "" 2>/dev/null \
+      && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$kref" 2>/dev/null)" = "$kblob" ] \
+      || { SALVAGE_NOTE="cannot write or verify $kref"; return 1; }
+  done <<< "$kept"
+  SALVAGE_REF=$base; SALVAGE_TREE=$wt_tree; SALVAGE_INDEX_TREE=$idx_tree; SALVAGE_ADMIN_BLOBS=$kept
   return 0
 }
 
-# editmsg_blob <worktree> [-w] -> prints the blob id of the worktree's COMMIT_EDITMSG (writing
-# the object with -w), or nothing when there is none. Non-zero when it exists but is not a
-# regular file, or cannot be read.
-editmsg_blob() {
-  local admin f
+# The admin-directory files salvage keeps byte-for-byte, with the ref name each is kept under:
+# a drafted message a hook rejected (COMMIT_EDITMSG) and per-worktree settings
+# (config.worktree). Both die with the admin directory and neither is in any tree.
+SALVAGE_ADMIN_FILES="COMMIT_EDITMSG:commit-editmsg config.worktree:config-worktree"
+
+# admin_file_blobs <worktree> [-w] -> prints one `<ref-name> <blob>` line per kept admin file
+# that exists (writing the objects with -w). Non-zero when one exists but is not a regular
+# file, or cannot be read.
+admin_file_blobs() {
+  local admin pair f blob
   admin=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
-  f="$admin/COMMIT_EDITMSG"
-  if [ ! -e "$f" ] && [ ! -L "$f" ]; then return 0; fi
-  [ -f "$f" ] && [ -r "$f" ] || return 1
-  # shellcheck disable=SC2086  # $2 is empty or -w
-  git -C "$1" hash-object ${2:-} -- "$f" 2>/dev/null
+  for pair in $SALVAGE_ADMIN_FILES; do
+    f="$admin/${pair%%:*}"
+    if [ ! -e "$f" ] && [ ! -L "$f" ]; then continue; fi
+    [ -f "$f" ] && [ -r "$f" ] || return 1
+    # shellcheck disable=SC2086  # $2 is empty or -w
+    blob=$(git -C "$1" hash-object ${2:-} -- "$f" 2>/dev/null) && [ -n "$blob" ] || return 1
+    printf '%s %s\n' "${pair#*:}" "$blob"
+  done
+}
+
+# admin_files_kb <worktree> -> prints the kept admin files' size in KB, rounded up per file,
+# so the salvage cap covers them too. Non-zero on a read failure.
+admin_files_kb() {
+  local admin pair f sz kb=0
+  admin=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
+  for pair in $SALVAGE_ADMIN_FILES; do
+    f="$admin/${pair%%:*}"
+    [ -f "$f" ] || continue
+    sz=$(wc -c < "$f" 2>/dev/null) || return 1
+    sz=$(printf '%s' "$sz" | tr -d ' ')
+    kb=$((kb + (sz + 1023) / 1024))
+  done
+  printf '%s\n' "$kb"
+}
+
+# admin_backpointer_ok <worktree> -> 0 only when the admin directory the worktree's .git file
+# names points back at this worktree. A damaged or redirected gitfile would otherwise make
+# every check inspect another worktree's admin while removal deletes this one's unexamined.
+admin_backpointer_ok() {
+  local wt=$1 admin back wt_real back_real
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
+  [ -f "$admin/gitdir" ] && [ -r "$admin/gitdir" ] || return 1
+  back=$(head -n 1 "$admin/gitdir") && [ -n "$back" ] || return 1
+  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || return 1
+  back_real=$(cd "$(dirname "$back")" 2>/dev/null && pwd -P) || return 1
+  [ "$back_real" = "$wt_real" ] && [ "$(basename "$back")" = .git ]
 }
 
 # The candidate set is every directory directly under WT_ROOT, PLUS every registered worktree
@@ -1232,7 +1280,7 @@ while IFS= read -r wt <&3; do
   name=$(wt_label "$wt")
   # Per-candidate salvage state; recheck_mutable_gates reads it, so it must never leak
   # from the previous candidate.
-  salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_EDITMSG=""; SALVAGE_NOTE=""
+  salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_NOTE=""
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
   # here-string, NOT a pipe: grep -q exits at its first match, printf then takes SIGPIPE,
