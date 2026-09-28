@@ -53,7 +53,8 @@
 #   refs/salvaged/<id>/head       - the worktree's HEAD commit (covers unpushed commits)
 #   refs/salvaged/<id>/index      - a commit of the staged index, parent HEAD
 #   refs/salvaged/<id>/worktree   - a commit of the whole working tree (tracked edits,
-#                                   deletions and untracked non-ignored files), parent HEAD
+#                                   deletions and untracked non-ignored files outside the
+#                                   top-level .codex/ and .agents/ tool noise), parent HEAD
 #   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog, ORIG_HEAD or FETCH_HEAD commit reachable from no remote
 #   refs/salvaged/<id>/commit-editmsg - the COMMIT_EDITMSG bytes, when present (a message a hook rejected)
 #   refs/salvaged/<id>/config-worktree - the config.worktree bytes, when present (per-worktree settings)
@@ -683,6 +684,26 @@ count_real_changes() {
 }
 
 # --- salvage (#2831) ----------------------------------------------------------------
+# salvage_pathspec <worktree> -> sets SALVAGE_PATHSPEC: `.` plus excludes that leave
+# UNTRACKED top-level tool noise out of salvage (#3641) — the same `.codex/` and `.agents/`
+# directories count_real_changes treats as disposable. A runtime cache there is not the
+# author's work, and a salvage ref would make it permanent. Tracked paths below them are
+# still captured, since they are listed by other means.
+# Only a real DIRECTORY gets an exclude, and the `/**` glob matches only its contents: a
+# file or symlink named `.codex` is authored work to count_real_changes (its noise patterns
+# need the slash), so it is salvaged. A symlink also must not get one, because `git add`
+# refuses any pathspec "beyond a symbolic link" and salvage would then always KEEP.
+# Never empty, so the expansion is safe under `set -u` on bash 3.2.
+salvage_pathspec() {
+  local d
+  SALVAGE_PATHSPEC=(.)
+  for d in .codex .agents; do
+    if [ -d "$1/$d" ] && [ ! -L "$1/$d" ]; then
+      SALVAGE_PATHSPEC+=(":(exclude,top,glob)$d/**")
+    fi
+  done
+}
+
 # salvage_eligible <age_h> <worktree> — 0 when salvage is on and the worktree is old enough
 # for it: both its directory and its newest work (see work_age_h).
 salvage_eligible() {
@@ -753,7 +774,11 @@ salvage_blocker() {
   if [ -n "$list" ]; then SALVAGE_NOTE="the index holds resolve-undo entries (salvage cannot carry them)"; return 0; fi
   # NUL-delimited: the default output C-quotes unusual names, which would hide them from
   # both the embedded-repository test and the size sum. tr keeps NULs out of $( ).
-  list=$(git -C "$wt" ls-files -z -m -o --exclude-standard 2>/dev/null | tr '\0' '\n'); rc=$?
+  # Untracked tool noise is sized as the snapshot takes it: not at all (salvage_pathspec).
+  salvage_pathspec "$wt"
+  list=$( { git -C "$wt" ls-files -z -m \
+            && git -C "$wt" ls-files -z -o --exclude-standard -- "${SALVAGE_PATHSPEC[@]}"; } \
+          2>/dev/null | tr '\0' '\n'); rc=$?
   if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot list changed files for salvage"; return 0; fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -978,7 +1003,9 @@ conversion_blocker() {
       SALVAGE_NOTE="core.ignoreCase=true on a case-sensitive filesystem (salvage could lose a case-only rename)"; return 0
     fi
   fi
-  paths=$( { git -C "$wt" ls-files -z -c -o --exclude-standard \
+  salvage_pathspec "$wt"
+  paths=$( { git -C "$wt" ls-files -z -c \
+             && git -C "$wt" ls-files -z -o --exclude-standard -- "${SALVAGE_PATHSPEC[@]}" \
              && git -C "$wt" diff --cached --name-only -z; } 2>/dev/null | tr '\0\n' '\n\001') \
     || { SALVAGE_NOTE="cannot list the paths for the conversion check"; return 0; }
   case "$paths" in *$'\001'*) SALVAGE_NOTE="a path holds a newline (cannot check its bytes)"; return 0 ;; esac
@@ -1010,7 +1037,8 @@ conversion_blocker() {
 }
 
 # snapshot_tree <worktree> -> sets SNAPSHOT_TREE to the tree of the WHOLE working tree
-# (tracked edits, deletions, untracked non-ignored files), built in a throwaway index so the
+# (tracked edits, deletions, untracked non-ignored files except salvage_pathspec noise),
+# built in a throwaway index so the
 # worktree's own index is never touched. Returns non-zero, with SALVAGE_NOTE, when the
 # snapshot would not be faithful: a gitlink that HEAD does not have means git staged an
 # embedded repository as a pointer instead of its files. It sets globals rather than
@@ -1026,8 +1054,12 @@ snapshot_tree() {
   idx=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-index.XXXXXX") || { SALVAGE_NOTE="cannot create a temporary index"; return 1; }
   tracked=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-paths.XXXXXX") || { rm -f "$idx"; SALVAGE_NOTE="cannot create a temporary path list"; return 1; }
   rm -f "$idx"
+  # Untracked tool noise stays out of the snapshot (salvage_pathspec). `add -u` then
+  # records edits and deletions of every TRACKED path, the noise directories included.
+  salvage_pathspec "$wt"
   if ! GIT_INDEX_FILE=$idx git -C "$wt" read-tree HEAD 2>/dev/null \
-     || ! GIT_INDEX_FILE=$idx git -C "$wt" add -A -- . 2>/dev/null; then
+     || ! GIT_INDEX_FILE=$idx git -C "$wt" add -A -- "${SALVAGE_PATHSPEC[@]}" 2>/dev/null \
+     || ! GIT_INDEX_FILE=$idx git -C "$wt" add -u -- . 2>/dev/null; then
     rm -f "$idx" "$tracked"; SALVAGE_NOTE="cannot stage the working tree for salvage"; return 1
   fi
   # NUL-delimited end to end, and only files or symlinks still present: a deletion is
