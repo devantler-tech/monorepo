@@ -134,12 +134,20 @@ assert_bullet 'In a **delegated run**' \
   "latency bullet does not name the delegated-run case, where nothing resurrects the session"
 assert_bullet 'never poll a backgrounded task'"'"'s output file' \
   "latency bullet does not forbid a delegated run from polling its own backgrounded task's output file"
-assert_bullet 'at most **one** bounded foreground call on the condition itself' \
-  "latency bullet does not cap a delegated run's gating wait at one bounded foreground call on the condition"
-assert_bullet 'otherwise `TaskStop` it and return' \
-  "latency bullet does not tell a delegated run to stop its watcher and return when no wait is justified"
+assert_bullet 'at most **one** bounded one-shot read of the condition itself' \
+  "latency bullet does not cap a delegated run's gating check at one bounded one-shot read of the condition"
+assert_bullet 'never `--watch`, which polls in the foreground' \
+  "latency bullet does not forbid the foreground --watch poll as a delegated run's gating check"
+assert_bullet 'with no watcher armed beside it' \
+  "latency bullet does not forbid pairing the delegated run's gating read with a background watcher"
+assert_bullet 'or the read shows it unresolved, `TaskStop` every watcher you armed and return' \
+  "latency bullet does not tell a delegated run to stop its watchers and return when the gate is absent or unresolved"
+assert_bullet 'never a promised next tick' \
+  "latency bullet promises that the next tick collects an abandoned PR, which the cadence contract forbids"
 refute_bullet 'a delegated run may poll' \
   "latency bullet licenses a delegated run to poll"
+refute_bullet 'rung 1 collects the PR next tick' \
+  "latency bullet promises next-tick collection of an abandoned PR"
 
 # ---------------------------------------------------------------------------
 # PORTABLE HALF — rule 7 of the pinned engineer definition, flattened the same way. Scoped to that

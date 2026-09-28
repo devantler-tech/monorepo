@@ -92,10 +92,12 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   background tasks end when you return, and the runtime's launch message tells you to wait for them
   first. That message tells you the result is lost if you return. It does not require you to wait. So
   never poll a backgrounded task's output file. Where a result gates this run's terminal step (a
-  merge you make right after it), make at most **one** bounded foreground call on the condition itself
-  (for example `gh pr checks <n> --watch` within the 10-minute ceiling), with no watcher. If there is
-  no such result, or the call ends unresolved, the watcher has nothing left to deliver: otherwise
-  `TaskStop` it and return, and rung 1 collects the PR next tick. Measured 09-25 to 09-28:
+  merge you make right after it), make at most **one** bounded one-shot read of the condition itself
+  (for example `gh pr checks <n>`, never `--watch`, which polls in the foreground), with no watcher
+  armed beside it. If that read shows the condition resolved, finish the step. If no result gates a
+  terminal step, or the read shows it unresolved, `TaskStop` every watcher you armed and return,
+  reporting the PR's state to your parent: the PR stays on rung 1 for whichever run is dispatched
+  next, never a promised next tick. Measured 09-25 to 09-28:
   **31 delegated Engineer runs averaged 69.0 min and 45% overran the slot, against 43.7 min and 29%
   for 38 inline runs**. Most of the gap was watchers polled through their own output file
   (monorepo#3645).
