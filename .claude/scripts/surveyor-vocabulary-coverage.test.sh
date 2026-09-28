@@ -552,13 +552,18 @@ extract_fenced() {
         sub(/^[[:space:]]*\$[[:space:]]+/, "", line)
         if (buf == "") {
           if (candidate(line)) { buf = line; last = line; pend = 0 }
-          else if (opens_subst(line) || compound_starter(line)) { buf = line; last = line; pend = 1 }
+          else if (opens_subst(line) || compound_starter(line)) { if (compound_starter(line)) line = strip_comment(line); buf = line; last = line; pend = 1 }
           else if (opts_starter(line)) { optspfx = (optspfx == "" ? strip_comment(line) : optspfx "; " strip_comment(line)); next }
           else next
         }
         # An options prefix is a COMPLETE statement, so the line after it is a NEW one. Joined
         # with a space it reads as ARGUMENTS to `set` -- measured, `a read must begin with a
         # forge command, not 'set'`, with the verb never seen at all. `; ` is what the shell runs.
+        # Inside a compound every later line is JOINED, so a comment on one would swallow
+        # every statement joined after it (`do # note; gh ...` runs nothing), and a blank or
+        # comment-only line would add an empty statement (`a; ; b` is a syntax error). The
+        # shell reads neither, so neither is joined.
+        else if (compound_open(buf) && (line = strip_comment(line)) ~ /^[[:space:]]*$/) next
         else { js = join_sep(buf, last, line); sub(/\\[[:space:]]*$/, "", buf); buf = buf js line; last = line }
         # A trailing pipe or boolean is a shell CONTINUATION exactly as a backslash is,
         # and the operand it joins is often where the real verdict lives. Flushing there
@@ -962,7 +967,7 @@ printf '%s\n' 'Shapes:' '' '```sh' \
   '  b) w=$(gh pr view 7 --repo devantler-tech/monorepo)' '    gh pr view "$w" --repo devantler-tech/monorepo' '    ;;' \
   '  "c d")' '    gh pr view 9 --repo devantler-tech/monorepo' '    ;;' 'esac' '' \
   'while' '  read -r n' 'do' '  gh pr view "$n" --repo devantler-tech/monorepo |' '    jq -r .title' 'done' '' \
-  'for T' 'in Epic Feature' 'do' '  gh pr view "$T" --repo devantler-tech/monorepo' 'done' '' \
+  'for T  # every type' 'in Epic Feature' 'do  # one read each' '' '  # a full-line note' '  gh pr view "$T" --repo devantler-tech/monorepo' 'done' '' \
   'if true' 'then' '  f()' '  { gh pr view 8 --repo devantler-tech/monorepo; }' '  echo ready!' '  f' 'fi' '```' > "$fixdir/compound-shapes.md"
 cs_n=0
 while IFS= read -r cs_row; do
