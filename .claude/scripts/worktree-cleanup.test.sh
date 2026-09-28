@@ -1761,6 +1761,28 @@ t_salvage_leaves_untracked_tool_noise_out() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_file_shaped_noise_names() {
+  # Only the CONTENTS of the noise directories are noise. An untracked FILE named `.codex`
+  # and a symlink named `.agents` are authored work, so both must reach the salvage ref
+  # before the removal deletes them.
+  local name="salvage captures a file or symlink named like a noise directory"
+  local root; root=$(make_repo)
+  add_wt "$root" named pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/named"
+  echo notes > "$wt/.codex"
+  ln -s file.txt "$wt/.agents"
+  age_tree "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  local base; base=$(git -C "$root/repo" for-each-ref --format='%(refname)' 'refs/salvaged/*/head' | sed 's#/head$##')
+  local problems=""
+  [ -n "$base" ] || problems="$problems no-salvage-ref"
+  [ "$(git -C "$root/repo" show "$base/worktree:.codex" 2>/dev/null)" = notes ] || problems="$problems file-lost"
+  [ "$(git -C "$root/repo" cat-file -p "$base/worktree:.agents" 2>/dev/null)" = file.txt ] || problems="$problems symlink-lost"
+  [ ! -e "$wt" ] || problems="$problems not-reaped"
+  if [ -z "$problems" ]; then ok "$name"; else bad "$name" "$problems :: $out"; fi
+  rm -rf "$root"
+}
+
 t_salvage_reports_why_a_snapshot_failed() {
   # A staged submodule-to-file replacement makes the snapshot's gitlinks differ from HEAD's.
   # The reason is set inside snapshot_tree and must reach the KEEP line, not be lost.
@@ -3377,6 +3399,7 @@ t_salvage_rechecks_its_cap_under_the_mutex
 t_salvage_dry_run_keeps_a_conflicted_index
 t_salvage_preserves_ignored_tracked_paths
 t_salvage_leaves_untracked_tool_noise_out
+t_salvage_keeps_file_shaped_noise_names
 t_salvage_reports_why_a_snapshot_failed
 t_salvage_keeps_a_removed_submodules_local_commit
 t_salvage_keeps_a_hidden_index_edit_in_a_submodule
