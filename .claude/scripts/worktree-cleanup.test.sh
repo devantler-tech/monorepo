@@ -2160,10 +2160,21 @@ t_salvage_keeps_a_non_mutex_ref_in_the_claim_lock_namespace() {
   echo draft > "$wt/untracked.txt"
   touch -t 202001010000 "$wt"
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*lockns .*claim-locks/manual is not an ownership mutex' <<<"$out" && [ -d "$wt" ]; then
+  if ! grep -q 'KEEP .*lockns .*claim-locks/manual is not an ownership mutex' <<<"$out" || [ ! -d "$wt" ]; then
+    bad "$name" "manual: $out"; rm -rf "$root"; return
+  fi
+  # A hash-named sibling whose blob merely looks like a lock payload is not this mutex.
+  local h b
+  git -C "$wt" update-ref -d refs/worktree/claim-locks/manual
+  h=$(printf 'elsewhere' | git -C "$wt" hash-object --stdin)
+  b=$(printf 'pid=1\n' | git -C "$wt" hash-object -w --stdin)
+  git -C "$wt" update-ref "refs/worktree/claim-locks/$h" "$b" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  touch -t 202001010000 "$wt"
+  out=$(run_salvage "$root" apply 1)
+  if grep -q "KEEP .*lockns .*claim-locks/$h is not an ownership mutex" <<<"$out" && [ -d "$wt" ]; then
     ok "$name"
   else
-    bad "$name" "$out"
+    bad "$name" "sibling hash: $out"
   fi
   rm -rf "$root"
 }
