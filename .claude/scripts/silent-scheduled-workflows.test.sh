@@ -416,6 +416,19 @@ runs o/x 1 1 "schedule:$((now - 5 * d))"
 run --repo o/x
 [ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a star-derived day-of-month must leave the weekday in control, got $rc"; }
 
+# A malformed envelope (an object where the array belongs) is UNKNOWN, never "no workflows".
+put "repos/o/y" '{"default_branch":"main"}'
+put "repos/o/y/actions/workflows?per_page=100" '{"total_count":0,"workflows":{}}'
+run --repo o/y
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed workflow-list envelope must exit 2, got $rc"; }
+# …and a malformed run-page envelope is UNKNOWN, never "no runs, so silent".
+put "repos/o/y/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/y .github/workflows/daily.yaml "$daily"
+put "repos/o/y/actions/workflows/1/runs?per_page=100&page=1" '{"total_count":0,"workflow_runs":{}}'
+run --repo o/y
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed run-page envelope must exit 2, got $rc"; }
+
 # A directory listing at the Contents API's 1,000-entry cap may be truncated: absence proves nothing.
 put "repos/o/w" '{"default_branch":"main"}'
 put "repos/o/w/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[

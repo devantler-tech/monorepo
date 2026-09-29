@@ -119,7 +119,7 @@ crons_of() {
 read_run_page() { # <repo> <workflow id> <page>
   local out total rows expected got
   out="$(gh api "repos/$1/actions/workflows/$2/runs?per_page=100&page=$3" \
-    --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflow_runs[] | if (.event | type) == \"string\" and (.event | test(\"^[a-z_]+$\")) and (.created_at | type) == \"string\" then [.event, (.created_at | epoch), .created_at] | @tsv else \"BAD\" end)")" ||
+    --jq "${jq_epoch} if (.total_count | type) == \"number\" and (.total_count | floor) == .total_count and (.workflow_runs | type) == \"array\" then (\"TOTAL\t\(.total_count)\", (.workflow_runs[] | if (.event | type) == \"string\" and (.event | test(\"^[a-z_]+$\")) and (.created_at | type) == \"string\" then [.event, (.created_at | epoch), .created_at] | @tsv else \"BAD\" end)) else \"BAD\" end")" ||
     return 1
   total="$(awk -F'\t' '$1 == "TOTAL" { print $2; exit }' <<<"$out")"
   is_epoch "${total:-x}" || return 1
@@ -168,7 +168,7 @@ for repo in "${repos[@]}"; do
   # Each page also emits its `total_count`, so a successful but short or empty listing is caught
   # rather than read as a repository with nothing scheduled.
   if ! listing="$(gh api --paginate "repos/${repo}/actions/workflows?per_page=100" \
-    --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflows[] | if (.id | type) == \"number\" and (.state | type) == \"string\" and (.path | type) == \"string\" and (.path | test(\"^[^\\t\\n]+$\")) and (.path | contains(\"\\\\\") | not) and (.created_at | type) == \"string\" then [.id, .state, .path, (.created_at | epoch)] | @tsv else \"BAD\" end)")"; then
+    --jq "${jq_epoch} if (.total_count | type) == \"number\" and (.total_count | floor) == .total_count and (.workflows | type) == \"array\" then (\"TOTAL\t\(.total_count)\", (.workflows[] | if (.id | type) == \"number\" and (.state | type) == \"string\" and (.path | type) == \"string\" and (.path | test(\"^[^\\t\\n]+$\")) and (.path | contains(\"\\\\\") | not) and (.created_at | type) == \"string\" then [.id, .state, .path, (.created_at | epoch)] | @tsv else \"BAD\" end)) else \"BAD\" end")"; then
     echo "QUERY-UNKNOWN ${repo} — workflow list read failed"
     unknown=1
     continue
