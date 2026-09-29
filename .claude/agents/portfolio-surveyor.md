@@ -1369,8 +1369,9 @@ public and private — no per-repo loop needed to enumerate):
    portfolio boundary. A missing or malformed summary makes that candidate `QUERY-UNKNOWN`, never
    unblocked.
    `subIssuesSummary` is **delivery evidence, never a skip reason** (monorepo#2994). Report
-   `subissues=<completed>/<total>` on every Advance candidate you rank. When `total` is positive and
-   `completed` equals it, also report `DELIVERY-CHECK`: every child is closed, so the orchestrator's
+   `subissues=<completed>/<total>` on every Advance candidate this query deepens. A ranked candidate
+   you never deepen has no counts: leave the field off its row rather than inventing one or running
+   this query only to fill it. When `total` is positive and `completed` equals it, also report `DELIVERY-CHECK`: every child is closed, so the orchestrator's
    completion check (work-selection guide) decides whether starting the parent is still right.
    Never drop, down-rank or close that candidate yourself. A closed child proves only that the child
    closed, and the parent can carry acceptance criteria no child covered. A `total` of zero claims

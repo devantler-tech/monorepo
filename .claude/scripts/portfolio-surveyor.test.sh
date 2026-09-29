@@ -2460,6 +2460,15 @@ grep -Fq '`subIssuesSummary` is **delivery evidence, never a skip reason**' "${s
   fail "surveyor must state the sub-issue summary is delivery evidence, never a skip reason (#2994)"
 grep -Fq 'Never drop, down-rank or close that candidate yourself.' "${surveyor}" ||
   fail "surveyor must forbid acting on DELIVERY-CHECK itself (#2994)"
+# Only a deepened candidate has counts (agent-plugins#264): asking for them on every ranked row
+# would make a surveyor invent one or run the query only to fill the field.
+grep -Fq 'on every Advance candidate this query deepens.' "${surveyor}" ||
+  fail "surveyor must scope sub-issue counts to the candidates its dependency query deepens (agent-plugins#264)"
+grep -Fq 'you never deepen has no counts: leave the field off its row' "${surveyor}" ||
+  fail "surveyor must leave the sub-issue field off a candidate it never deepens (agent-plugins#264)"
+if grep -Fq 'on every Advance candidate you rank' "${surveyor}"; then
+  fail "surveyor still asks for sub-issue counts on every ranked candidate (agent-plugins#264)"
+fi
 grep -Fq '— subissues=<completed>/<total> DELIVERY-CHECK' "${surveyor}" ||
   fail "surveyor digest must define the DELIVERY-CHECK row (#2994)"
 subissue_jq="$(sed -n "/subIssuesSummary{total completed}}}}' \\\\\$/{n;s/^[[:space:]]*--jq '\\(.*\\)'\$/\\1/p;}" "${surveyor}")"
