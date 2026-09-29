@@ -7210,7 +7210,7 @@ echo "── checkout-then-build: \`make\` counts only as a command, not as pros
 # through `rtk`, after `&&` with options before the target, behind `VAR=value`
 # assignments, and inside `"$(…)"` — must still be listed, and so must a non-Make
 # build beside them (the control that the walk read the session at all). The
-# section prints at most five distinct commands, so the cases split over three runs.
+# section prints at most five distinct commands, so the cases split over four runs.
 MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 mk_cmd() { # $1 = id, $2 = command
   jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
@@ -7278,6 +7278,24 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
   ok "nested-shell and compound-command make still count; interpolated echo prose does not"
 else
   bad "nested-shell and compound-command make still count; interpolated echo prose does not" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+# Only a PROVABLY text-only line is dropped: a remote command after ssh's own `-m`
+# and prose piped into a shell both run Make, while a chained commit is still text.
+MK_OUT=$({
+  mk_cmd p1 'gh pr checkout 10'
+  mk_cmd p2 "ssh -m 'hmac-sha2-256' 'host' 'make test'"
+  mk_cmd p3 "printf 'make test\\n' | sh"
+  mk_cmd p4 'git add a && git commit -m "fix: make it pass"'
+  mk_cmd p5 'npm ci'
+} | mk_run maketextonly)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE "^ +1 ssh -m 'hmac-sha2-256' 'host' 'make test'$" <<<"$MK_OUT" \
+   && grep -qE "^ +1 printf 'make test.n' \| sh$" <<<"$MK_OUT" \
+   && ! grep -qE 'make it pass' <<<"$MK_OUT"; then
+  ok "only a provably text-only line is dropped; ssh and pipe-to-shell make still count"
+else
+  bad "only a provably text-only line is dropped; ssh and pipe-to-shell make still count" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 

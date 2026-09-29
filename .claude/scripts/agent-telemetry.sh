@@ -4268,15 +4268,17 @@ if want safety; then
     # here would be the exact writer-into-early-exiting-grep hazard this
     # repository's own guard rejects.
     #
-    # `make` is a common English word, so a `make <word>` inside the quoted TEXT
-    # of a text-only command — `printf`, `echo`, or a `-m`, `--message`,
-    # `--body` or `--title` value — is dropped before the test: matched as is,
-    # `printf 'make the report clearer'` was a Make execution candidate (#2988).
-    # Everything else still counts wherever `make` appears as a word, so every
-    # spelling this list does not name errs toward REPORTING a build
-    # (`sh -c 'make x'`, `if make x`, `{ make x; }`, `CC=cc make x`) rather than
-    # toward a clean-looking empty result. A double-quoted value holding `$(` or
-    # a backtick runs code, so it is never dropped.
+    # `make` is a common English word, so a line that is PROVABLY text-only is
+    # not a Make candidate: matched as is, `printf 'make the report clearer'`
+    # and `git commit -m "fix: make it pass"` were (#2988). Provable means that
+    # once quoted text is removed (a "…" holding `$(` or a backtick runs code, so
+    # it stays), no pipe, redirect or command substitution is left, and every
+    # `;`/`&`-separated segment starts with a command that executes no project
+    # code — `printf`, `echo`, `cd`, a read-or-record `git` subcommand, or a
+    # text-only `gh pr`/`gh issue` subcommand. Every other line counts wherever
+    # `make` appears as a word, so a spelling this list does not name
+    # (`sh -c 'make x'`, `if make x`, `printf 'make x' | sh`, `ssh h 'make x'`)
+    # errs toward REPORTING a build rather than toward a clean-looking result.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
           cmds="$(commands_in "$f" 2>/dev/null)" || { printf x >> "$XFBUILD"; continue; }
@@ -4285,15 +4287,23 @@ if want safety; then
             LC_ALL=C awk '
               BEGIN {
                 sq = sprintf("%c", 39)
-                q = "(" sq "[^" sq "]*" sq "|\"([^\"`$]|[$][^(\"])*\")"
-                text = "(printf|echo|-m|--message|--body|--title)([[:space:]]+(-[A-Za-z]+|" q "))+"
+                inert = "^(rtk[[:space:]]+)?(printf|echo|cd|git[[:space:]]+(add|commit|status|diff|log|show)|gh[[:space:]]+(pr|issue)[[:space:]]+(create|edit|comment|view))([[:space:]]|$)"
+              }
+              function text_only(line,   s, n, i, seg) {
+                s = line
+                gsub(sq "[^" sq "]*" sq, " ", s)
+                gsub(/"([^"`$]|[$][^("])*"/, " ", s)
+                if (s ~ /[|<>`"]|[$][(]/) return 0
+                n = split(s, seg, /[;&]+/)
+                for (i = 1; i <= n; i++) {
+                  sub(/^[[:space:]]+/, "", seg[i])
+                  if (seg[i] != "" && seg[i] !~ inert) return 0
+                }
+                return 1
               }
               {
-                s = $0; kept = ""
-                while (match(s, text)) { kept = kept substr(s, 1, RSTART - 1) " "; s = substr(s, RSTART + RLENGTH) }
-                s = kept s
                 if ($0 ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
-                    || s ~ /(^|[^A-Za-z0-9_-])make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/) print
+                    || ($0 ~ /(^|[^A-Za-z0-9_-])make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/ && !text_only($0))) print
               }' <<<"$cmds"
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
