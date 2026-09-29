@@ -151,6 +151,9 @@ t_nested_failure_does_not_block_the_root_sweep() {
   local root; root=$(make_root)
   add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local inner="$root/repo/.claude/worktrees/sess/nested/.claude/worktrees/inner" out rc
+  if [ "$(id -u)" -eq 0 ]; then
+    printf '  skip %s (chmod cannot deny root)\n' "$name"; rm -rf "$root"; return
+  fi
   chmod 000 "$inner"   # the per-repo sweep cannot resolve this candidate and aborts
   out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 2>&1); rc=$?
   chmod 755 "$inner"
@@ -192,6 +195,109 @@ EOF
     ok "$name"
   else
     bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+t_nested_resolution_failure_continues() {
+  # A nested repository that stops resolving between listing and sweeping (a concurrent
+  # session removed it) must not abort the run before the root: that is the disk-fill mode
+  # the nested pass's continue policy exists to prevent.
+  local name="a nested repository that cannot be resolved does not abort the run"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local shim="$root/git-shim" real_git out rc
+  real_git=$(command -v git)
+  mkdir -p "$shim"
+  cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = '$root/repo/.claude/worktrees/sess/nested' ] \\
+   && [ "\${3:-}" = rev-parse ] && [ "\${4:-}" = --show-toplevel ]; then
+  exit 128
+fi
+exec '$real_git' "\$@"
+EOF
+  chmod +x "$shim/git"
+  out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+        bash "$SUT" dry-run 24 2>&1); rc=$?
+  if [ "$rc" -eq 2 ] && ! grep -q 'ABORTING' <<<"$out" \
+     && grep -q 'cannot resolve repository at .*/sess/nested — continuing' <<<"$out" \
+     && grep -q 'REAP  .*spent-root' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+t_nested_pass_skips_an_emptied_worktree_dir() {
+  # The emptied .claude/worktrees a reap leaves behind must not cost a per-repo pass per run.
+  local name="a submodule whose .claude/worktrees holds no linked worktree gets no nested pass"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.claude/worktrees/sess" out
+  git -C "$sess/nested" worktree remove -f "$sess/nested/.claude/worktrees/inner" \
+    && [ -d "$sess/nested/.claude/worktrees" ] || { bad "$name" "FIXTURE: remove inner"; rm -rf "$root"; return; }
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 2>&1)
+  if ! grep -q '^### .claude/worktrees/sess/nested$' <<<"$out" && grep -q 'REAP  .*spent-root' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_nested_pass_leaves_a_live_session_alone() {
+  # The repo's own sweep keeps a session worktree a live process works in. Its nested
+  # worktrees must be left with it, even when they alone would qualify.
+  local name="the nested pass leaves a session worktree a live process works in alone"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.claude/worktrees/sess" pid out rc
+  ( cd "$sess" && exec sleep 120 ) &
+  pid=$!
+  sleep 1
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  if [ "$rc" -eq 0 ] && [ -d "$sess/nested/.claude/worktrees/inner" ] \
+     && grep -q 'SKIP .claude/worktrees/sess (a live process works inside it' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc inner=$([ -d "$sess/nested/.claude/worktrees/inner" ] && echo present || echo GONE) $out"
+  fi
+  rm -rf "$root"
+}
+
+t_nested_pass_covers_submodule_session_worktrees() {
+  # The same leak one level down: a session worktree of a main-checkout SUBMODULE whose own
+  # submodule holds a nested worktree. The nested pass runs before every repository's sweep,
+  # not only the root's.
+  local name="the nested pass also covers session worktrees of the main checkout's submodules"
+  local root; root=$(make_root)
+  local nested="$root/repo/nested" nsess="$root/repo/nested/.claude/worktrees/nsess"
+  local inner2="$nsess/deep/.claude/worktrees/inner2" out rc
+  if ! { git init -q -b main "$root/deepsrc" && echo d > "$root/deepsrc/d" \
+         && git -C "$root/deepsrc" add d \
+         && git -C "$root/deepsrc" -c user.email=t@t.t -c user.name=t commit -qm base \
+         && git clone -q --bare "$root/deepsrc" "$root/deep.git" \
+         && git -C "$nested" -c protocol.file.allow=always submodule add -q "$root/deep.git" deep >/dev/null 2>&1 \
+         && git -C "$nested" commit -qm "add deep" && git -C "$nested" push -q origin main \
+         && git -C "$nested" worktree add -q -b claude/nsess "$nsess" main \
+         && git -C "$nested" push -q origin claude/nsess \
+         && git -C "$nsess" -c protocol.file.allow=always submodule update --init -q deep >/dev/null 2>&1 \
+         && mkdir -p "$nsess/deep/.claude/worktrees" \
+         && git -C "$nsess/deep" worktree add -q -b claude/inner2 "$inner2" HEAD \
+         && git -C "$nsess/deep" push -q origin claude/inner2; }; then
+    bad "$name" "FIXTURE"; rm -rf "$root"; return
+  fi
+  touch -t 202001010000 "$inner2" "$nsess"
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -e "$inner2" ] \
+     && grep -qx '### nested/.claude/worktrees/nsess/deep' <<<"$out" \
+     && ls "$root/home/.claude/worktree-cleanup-manifests/"nested-nested-nsess-deep-*.tsv >/dev/null 2>&1; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc inner2=$([ -e "$inner2" ] && echo present || echo gone) $out"
   fi
   rm -rf "$root"
 }
@@ -448,6 +554,10 @@ t_sweeps_worktrees_nested_in_session_submodules
 t_nested_sweep_never_salvages
 t_nested_failure_does_not_block_the_root_sweep
 t_nested_listing_failure_exits_non_zero
+t_nested_pass_leaves_a_live_session_alone
+t_nested_pass_covers_submodule_session_worktrees
+t_nested_resolution_failure_continues
+t_nested_pass_skips_an_emptied_worktree_dir
 t_rejects_bad_mode
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

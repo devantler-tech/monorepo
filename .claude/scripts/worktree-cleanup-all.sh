@@ -12,8 +12,8 @@
 # Manifests live OUTSIDE the repository (they name local paths and branches and must
 # never be committed): ~/.claude/worktree-cleanup-manifests/<repo>-<utc>.tsv
 #
-# Before the root, it also sweeps worktrees NESTED in a session worktree's submodules
-# (<root>/.claude/worktrees/<slug>/<sub>/.claude/worktrees/*), with salvage off (#3673).
+# Before each repository, it also sweeps worktrees NESTED in its session worktrees' submodules
+# (<repo>/.claude/worktrees/<slug>/<sub>/.claude/worktrees/*), with salvage off (#3673).
 #
 # The Codex sibling's worktrees under ~/.codex/worktrees are deliberately NOT swept:
 # that lane is owned by the sibling instance (AGENTS.md, Writer namespaces).
@@ -81,7 +81,15 @@ TS=$(date -u +%Y%m%dT%H%M%SZ)
 printf '=== worktree-cleanup-all  mode=%s  min_age=%sh  salvage_age=%sh  root=%s ===\n' \
   "$MODE" "$MIN_AGE_HOURS" "$SALVAGE_AGE_HOURS" "$ROOT"
 
+# nested_failed <what> — a nested pass failed. Say so, keep going, and exit 2 at the end: the
+# failure is confined to one session worktree, and 2 is this directory's UNKNOWN code, where
+# the per-repo script's own exit code could read as a finding (1).
 NESTED_FAILED=0
+nested_failed() {
+  printf 'worktree-cleanup-all: %s — continuing; this run will exit non-zero\n' "$1" >&2
+  NESTED_FAILED=2
+}
+
 sweep() { # <repo_path> [salvage_age_hours, default the wrapper's] [abort|continue on failure]
   local path=$1 salvage=${2:-$SALVAGE_AGE_HOURS} on_fail=${3:-abort} label toplevel expected
   # NOTE: no early return for a missing .claude/worktrees. The per-repo script has its
@@ -94,11 +102,14 @@ sweep() { # <repo_path> [salvage_age_hours, default the wrapper's] [abort|contin
   # alias would operate on the wrong tree (AGENTS.md, Execution model).
   # These ABORT rather than `return 0`. A repository that has a .claude/worktrees/ but
   # whose metadata cannot be read is an infrastructure failure, and silently skipping it
-  # let the scheduled wrapper print "done" and exit 0 with that repo never swept.
+  # let the scheduled wrapper print "done" and exit 0 with that repo never swept. A nested
+  # pass (on_fail=continue) records the failure instead, for the reason given further down.
   toplevel=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || {
+    if [ "$on_fail" = continue ]; then nested_failed "cannot resolve repository at $path"; return 0; fi
     printf 'worktree-cleanup-all: ABORTING — cannot resolve repository at %s\n' "$path" >&2
     exit 2; }
   expected=$(cd "$path" && pwd -P) || {
+    if [ "$on_fail" = continue ]; then nested_failed "cannot resolve physical path of $path"; return 0; fi
     printf 'worktree-cleanup-all: ABORTING — cannot resolve physical path of %s\n' "$path" >&2
     exit 2; }
   if [ "$toplevel" != "$expected" ]; then
@@ -123,10 +134,11 @@ sweep() { # <repo_path> [salvage_age_hours, default the wrapper's] [abort|contin
   local rel=${path#"$ROOT"/}
   if [ "$path" = "$ROOT" ]; then rel="(root)"; label=monorepo
   else
-    # A nested pass's path starts with .claude/worktrees/; label it without the leading
-    # dot, which would otherwise make every such manifest a hidden file.
+    # A nested pass's path runs through .claude/worktrees/ (the root's, or a submodule's).
+    # Drop those segments: a leading one would make every such manifest a hidden file.
     case "$rel" in
-      .claude/worktrees/*) label="nested-$(printf '%s' "${rel#.claude/worktrees/}" | tr '/' '-')" ;;
+      *.claude/worktrees/*)
+        label="nested-$(printf '%s' "$rel" | sed 's#\.claude/worktrees/##g' | tr '/' '-')" ;;
       *) label=$(printf '%s' "$rel" | tr '/' '-') ;;
     esac
   fi
@@ -156,9 +168,7 @@ sweep() { # <repo_path> [salvage_age_hours, default the wrapper's] [abort|contin
     # worktrees stay (the root sweep keeps the parent that holds them), the run goes on,
     # and the wrapper still exits non-zero at the end so the failure is never silent.
     if [ "$on_fail" = continue ]; then
-      printf 'worktree-cleanup-all: sweep of %s failed (exit %d) — continuing; this run will exit non-zero\n' \
-        "$rel" "$rc" >&2
-      NESTED_FAILED=$rc
+      nested_failed "sweep of $rel failed (exit $rc)"
       return 0
     fi
     printf 'worktree-cleanup-all: ABORTING — sweep of %s failed (exit %d)\n' "$rel" "$rc" >&2
@@ -166,49 +176,71 @@ sweep() { # <repo_path> [salvage_age_hours, default the wrapper's] [abort|contin
   fi
 }
 
-# sweep_nested_submodule_worktrees — sweep the worktrees nested in each session worktree's
-# initialised submodules, BEFORE the root sweep (#3673).
+# nested_live_cwds — the working directory of every live process, read once per run for the
+# nested passes. Fails when lsof fails or reports nothing: an empty set would read as "no
+# session is live", so the caller then runs no nested pass at all.
+NESTED_LIVE=""; NESTED_LIVE_READ=0
+nested_live_cwds() {
+  [ "$NESTED_LIVE_READ" -eq 1 ] && return 0
+  local raw
+  raw=$(lsof -a -d cwd -F n 2>/dev/null) || return 1
+  NESTED_LIVE=$(printf '%s\n' "$raw" | sed -n 's/^n//p' | sort -u)
+  [ -n "$NESTED_LIVE" ] || return 1
+  NESTED_LIVE_READ=1
+}
+
+# sweep_nested_submodule_worktrees <repo> — sweep the worktrees nested in the initialised
+# submodules of each of <repo>'s session worktrees, BEFORE <repo> itself is swept (#3673).
 #
 # A run inside a session worktree can populate a submodule there and add a linked worktree
 # of that submodule's repository under <session>/<sub>/.claude/worktrees/. That repository
 # lives in the session worktree's own admin directory, so no other sweep ever visits it, and
-# the root sweep rightly keeps the parent: the nested worktree would die with it. The parent
-# was therefore kept forever (about 20 of 84 kept worktrees on 2026-09-29). Reaping the
-# nested one first lets this run's root sweep reconsider the parent.
+# the repo's own sweep rightly keeps the parent: the nested worktree would die with it. The
+# parent was therefore kept forever (about 20 of 84 kept worktrees on 2026-09-29). Reaping
+# the nested one first lets the same run's sweep reconsider the parent.
 #
 # Salvage is OFF for these passes. Its refs would be written into the session worktree's own
 # submodule repository, which is deleted with the parent, so it would promise preservation it
 # cannot deliver. Only a nested worktree with nothing to lose is reaped; every other per-repo
-# KEEP rule applies unchanged.
+# KEEP rule applies unchanged. A session worktree a live process works in is left whole, the
+# same protection the repo's own sweep gives it. Every failure here is confined to one session
+# worktree, so it is recorded (nested_failed) rather than aborting the run.
 sweep_nested_submodule_worktrees() {
-  local session_root="$ROOT/.claude/worktrees" session_real wts wt wt_real subs sub sub_real
+  local repo=$1 session_root="$1/.claude/worktrees" session_real wts wt wt_real cwd live
+  local subs sub sub_real sub_wts
   [ -d "$session_root" ] || return 0
   session_real=$(cd "$session_root" 2>/dev/null && pwd -P) || {
-    printf 'worktree-cleanup-all: ABORTING — cannot resolve %s\n' "$session_root" >&2; exit 2; }
-  wts=$(git -C "$ROOT" worktree list --porcelain 2>/dev/null) || {
-    printf 'worktree-cleanup-all: ABORTING — cannot list worktrees of %s\n' "$ROOT" >&2; exit 2; }
+    nested_failed "cannot resolve $session_root"; return 0; }
+  wts=$(git -C "$repo" worktree list --porcelain 2>/dev/null) || {
+    nested_failed "cannot list the worktrees of $repo"; return 0; }
+  nested_live_cwds || { nested_failed "cannot read live process CWDs (lsof) for the nested pass of $repo"; return 0; }
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
-    # A registration whose directory is gone has nothing nested; the root sweep prunes it.
+    # A registration whose directory is gone has nothing nested; the repo's sweep prunes it.
     [ -d "$wt" ] || continue
-    wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || {
-      printf 'worktree-cleanup-all: ABORTING — %s exists but cannot be resolved\n' "$wt" >&2; exit 2; }
+    wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || { nested_failed "cannot resolve $wt"; continue; }
     case "$wt_real" in
       "$session_real"/?*) ;;
       *) continue ;;          # the main checkout, or a worktree outside the session root
     esac
+    live=0
+    while IFS= read -r cwd; do
+      [ -n "$cwd" ] || continue
+      if [ "$cwd" = "$wt_real" ] || [ "${cwd#"$wt_real"/}" != "$cwd" ]; then live=1; break; fi
+    done <<< "$NESTED_LIVE"
+    if [ "$live" -eq 1 ]; then
+      printf '\n### SKIP %s (a live process works inside it — its nested worktrees are left alone)\n' \
+        "${wt_real#"$ROOT"/}"
+      continue
+    fi
     # Populated submodules only, recursively. A session worktree whose submodules cannot be
-    # listed is not swept here; the root sweep's own gates still keep it, so nothing is
-    # deleted on the strength of a listing that failed. It is a nested failure like any
-    # other, so the run goes on and exits non-zero rather than leaving only a stdout SKIP
-    # that the scheduled log truncates.
+    # listed is not swept here; the repo's own gates still keep it, so nothing is deleted on
+    # the strength of a listing that failed.
     # shellcheck disable=SC2016  # $toplevel and $sm_path are expanded by `submodule foreach`
     if ! subs=$(git -C "$wt_real" submodule foreach --quiet --recursive \
                   'printf "%s\n" "$toplevel/$sm_path"' 2>/dev/null); then
       printf '\n### SKIP %s (cannot list its submodules)\n' "${wt_real#"$ROOT"/}"
-      printf 'worktree-cleanup-all: cannot list the submodules of %s — continuing; this run will exit non-zero\n' \
-        "${wt_real#"$ROOT"/}" >&2
-      NESTED_FAILED=2
+      nested_failed "cannot list the submodules of ${wt_real#"$ROOT"/}"
       continue
     fi
     while IFS= read -r sub; do
@@ -218,19 +250,24 @@ sweep_nested_submodule_worktrees() {
         printf '\n### SKIP %s (submodule path is a symlink — refusing to follow it)\n' "${sub#"$ROOT"/}"
         continue
       fi
-      sub_real=$(cd "$sub" 2>/dev/null && pwd -P) || {
-        printf 'worktree-cleanup-all: ABORTING — %s exists but cannot be resolved\n' "$sub" >&2; exit 2; }
+      sub_real=$(cd "$sub" 2>/dev/null && pwd -P) || { nested_failed "cannot resolve $sub"; continue; }
       case "$sub_real" in
         "$wt_real"/?*) ;;
         *) printf '\n### SKIP %s (escapes its session worktree: %s)\n' "${sub#"$ROOT"/}" "$sub_real"
            continue ;;
       esac
+      # Sweep only a repository that has a linked worktree to sweep. The emptied
+      # .claude/worktrees stays behind after a reap, and would otherwise cost a full per-repo
+      # pass (lsof, worktree list) on every later run.
+      sub_wts=$(git -C "$sub_real" worktree list --porcelain 2>/dev/null) || {
+        nested_failed "cannot list the worktrees of ${sub_real#"$ROOT"/}"; continue; }
+      [ "$(grep -c '^worktree ' <<< "$sub_wts")" -gt 1 ] || continue
       sweep "$sub_real" 0 continue
     done <<< "$subs"
   done <<< "$(printf '%s\n' "$wts" | awk '/^worktree /{print substr($0,10)}')"
 }
 
-sweep_nested_submodule_worktrees
+sweep_nested_submodule_worktrees "$ROOT"
 sweep "$ROOT"
 
 # Every submodule, from .gitmodules (never a hard-coded list — the portfolio gains and
@@ -311,13 +348,13 @@ if [ -f "$ROOT/.gitmodules" ]; then
       printf '\n### SKIP %s (not a gitlink in the index — not a portfolio submodule)\n' "$sub"
       continue
     fi
+    sweep_nested_submodule_worktrees "$sub_real"
     sweep "$sub_real"
   done <<< "$submodules"
 fi
 
 printf '\n=== done (manifests in %s) ===\n' "$MANIFEST_DIR"
 if [ "$NESTED_FAILED" -ne 0 ]; then
-  printf 'worktree-cleanup-all: a nested submodule sweep failed (last exit %d) — see above\n' \
-    "$NESTED_FAILED" >&2
+  printf 'worktree-cleanup-all: a nested submodule sweep failed — see above\n' >&2
   exit "$NESTED_FAILED"
 fi
