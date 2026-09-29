@@ -4319,6 +4319,9 @@ if want safety; then
                 for (i = 1; i <= n; i++) {
                   sub(/^[[:space:]]+/, "", seg[i])
                   if (seg[i] != "" && seg[i] !~ inert) return 0
+                  # `printf -v` evaluates its (possibly quoted) destination name,
+                  # so printf with any option is not provably inert.
+                  if (seg[i] ~ /^(rtk[[:space:]]+)?printf[[:space:]]+-/) return 0
                 }
                 return 1
               }

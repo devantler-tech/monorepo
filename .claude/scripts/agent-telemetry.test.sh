@@ -7309,14 +7309,16 @@ MK_OUT=$({
   mk_cmd r3 'echo () { make test'
   mk_cmd r4 "echo \"it's time to make the change\""
   mk_cmd r5 'npm ci'
+  mk_cmd r6 "printf -v 'x[\$(make test)]' v"
 } | mk_run makescan)
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qF "1 printf -v 'x[\$(make test)]' v" <<<"$MK_OUT" \
    && grep -qF "1 echo \"'\$(make test)'\"" <<<"$MK_OUT" \
    && grep -qF '1 echo () { make test' <<<"$MK_OUT" \
    && ! grep -qE 'make the change' <<<"$MK_OUT"; then
-  ok "quote-aware scan: wrapped substitutions and function definitions count; prose apostrophes do not"
+  ok "quote-aware scan: wrapped substitutions, printf -v and function definitions count; prose apostrophes do not"
 else
-  bad "quote-aware scan: wrapped substitutions and function definitions count; prose apostrophes do not" \
+  bad "quote-aware scan: wrapped substitutions, printf -v and function definitions count; prose apostrophes do not" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 
