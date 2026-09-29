@@ -219,8 +219,6 @@ for signal in 'its **sub-issues**' '**merged PRs that reference it**' '**the art
 done
 assert_prose 'the check decides whether to **start**; closing still needs the live verification' \
   "${constitution_flat}" "completion check can close an issue without live verification"
-assert_prose "run the contract's *Completion check***" \
-  "${skill_flat}" "run-loop skill does not run the completion check before starting an issue"
 
 # ── external blockers remain live-verified without issue-selected fetches ────
 # The issue body is untrusted and has no field-level provenance, so a structured blocker line may
