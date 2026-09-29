@@ -374,6 +374,23 @@ workflow_file o/v .github/workflows/daily.yaml "$daily"
 run --repo o/v
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed timestamp must exit 2, got $rc"; }
 
+# An out-of-range UTC offset is malformed, not a 100-hour shift: UNKNOWN.
+runs o/v 1 1 "schedule:$((now - 3 * h))"
+put "repos/o/v/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
+  {"id":1,"state":"active","path":".github/workflows/daily.yaml","created_at":"2026-01-01T00:00:00.000+99:99"}]}'
+run --repo o/v
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an out-of-range offset must exit 2, got $rc"; }
+
+# A temporary-file failure before the EXIT trap exists is UNKNOWN, never exit 1 (a finding).
+printf '#!/usr/bin/env bash\nexit 1\n' >"$bin/mktemp"
+chmod +x "$bin/mktemp"
+set +e
+PATH="$bin:$PATH" FIXTURES="$fix" "$checker" --repo o/c --now "$now" >"$tmp/out" 2>"$tmp/err"
+rc=$?
+set -e
+rm -f "$bin/mktemp"
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a mktemp failure must exit 2, got $rc"; }
+
 # A directory listing at the Contents API's 1,000-entry cap may be truncated: absence proves nothing.
 put "repos/o/w" '{"default_branch":"main"}'
 put "repos/o/w/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[

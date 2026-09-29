@@ -101,7 +101,7 @@ cron_gap_days() { jq -rn --arg c "$1" "$cron_gap_jq"; } # $1: the cron lines, on
 # (`2024-04-14T02:42:29.000+02:00`) but run timestamps in `Z` form, and BSD and GNU `date` parse
 # neither the same way. Convert in jq, where both shapes are handled identically, and check every
 # result is an integer before comparing it — a failed conversion must never read as "recent".
-jq_epoch='def epoch: if test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$") then . else error("timestamp") end | (.[0:19] + "Z" | fromdate) - ((capture("(?<s>[+-])(?<h>[0-9]{2}):(?<m>[0-9]{2})$") // {s: "+", h: "0", m: "0"}) | ((.h | tonumber) * 3600 + (.m | tonumber) * 60) * (if .s == "+" then 1 else -1 end));'
+jq_epoch='def epoch: if test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$") then . else error("timestamp") end | (.[0:19] + "Z" | fromdate) - ((capture("(?<s>[+-])(?<h>[0-9]{2}):(?<m>[0-9]{2})$") // {s: "+", h: "0", m: "0"}) | ((.h | tonumber) * 3600 + (.m | tonumber) * 60) * (if .s == "+" then 1 else -1 end));'
 is_epoch() { [[ "$1" =~ ^[0-9]+$ ]]; }
 
 # The cron lines a workflow file declares (empty when it has no schedule). `on:` parses as the
@@ -138,7 +138,8 @@ silent=0
 checked=0
 repos_read=0
 max_pages=5
-err="$(mktemp)"
+# Before the EXIT trap exists, so a failure here must choose its own UNKNOWN exit.
+err="$(mktemp)" || { echo "silent-scheduled-workflows: cannot create a temporary file; reporting UNKNOWN" >&2; exit 2; }
 # An abort before the end must never read as a verdict: bash 3.2 reports it as 0 (clean) and bash 5
 # as 1 (a finding). So any exit before the end is UNKNOWN; only reaching it may report 0 or 1.
 finished=0
