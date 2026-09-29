@@ -3626,7 +3626,8 @@ t_custom_root_matches_a_registration_spelled_in_another_case() {
     add_wt_at "$root" "$root/repo/.Codex/worktrees/$w" "codex/$w" \
       || { bad "$name" "FIXTURE: worktree add failed"; rm -rf "$root"; return; }
   done
-  if ! git -C "$root/repo" worktree list --porcelain | grep -q '/\.Codex/worktrees/cv$'; then
+  local wt_list; wt_list=$(git -C "$root/repo" worktree list --porcelain)
+  if ! grep -q '/\.Codex/worktrees/cv$' <<<"$wt_list"; then
     bad "$name" "FIXTURE: git did not record the .Codex spelling"; rm -rf "$root"; return
   fi
   git -C "$root/repo" worktree lock "$root/repo/.Codex/worktrees/locked"

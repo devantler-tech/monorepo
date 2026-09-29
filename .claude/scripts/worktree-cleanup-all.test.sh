@@ -362,12 +362,17 @@ t_lane_manifests_never_share_a_file() {
   HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane codex >/dev/null 2>&1
   HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane claude >/dev/null 2>&1
   local dir="$root/home/.claude/worktree-cleanup-manifests" claude_rows codex_rows
+  local claude_paths codex_paths
   claude_rows=$(cat "$dir"/*.tsv 2>/dev/null)
   codex_rows=$(cat "$dir"/codex/*.tsv 2>/dev/null)
   # Every row of a lane's manifests names a path in that lane's roots, and each lane has rows.
+  # The paths are captured first: piping `cut` into a negated `grep -qv` lets a SIGPIPE'd
+  # writer fail the pipeline, which the `!` would read as "no stray row".
+  claude_paths=$(cut -f1 <<<"$claude_rows")
+  codex_paths=$(cut -f1 <<<"$codex_rows")
   if [ -n "$claude_rows" ] && [ -n "$codex_rows" ] \
-     && ! cut -f1 <<<"$claude_rows" | grep -qv '/\.claude/worktrees/' \
-     && ! cut -f1 <<<"$codex_rows" | grep -qv '/\.codex/worktrees/'; then
+     && ! grep -qv '/\.claude/worktrees/' <<<"$claude_paths" \
+     && ! grep -qv '/\.codex/worktrees/' <<<"$codex_paths"; then
     ok "$name"
   else
     bad "$name" "claude=[$claude_rows] codex=[$codex_rows]"
