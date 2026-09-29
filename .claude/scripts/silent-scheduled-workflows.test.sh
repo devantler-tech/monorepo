@@ -381,7 +381,17 @@ put "repos/o/v/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
 run --repo o/v
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an out-of-range offset must exit 2, got $rc"; }
 
-# A temporary-file failure before the EXIT trap exists is UNKNOWN, never exit 1 (a finding).
+# The trap is installed before any work, so even a failing `date` during start-up is UNKNOWN.
+printf '#!/usr/bin/env bash\nexit 1\n' >"$bin/date"
+chmod +x "$bin/date"
+set +e
+PATH="$bin:$PATH" FIXTURES="$fix" "$checker" --repo o/c --now "$now" >"$tmp/out" 2>"$tmp/err"
+rc=$?
+set -e
+rm -f "$bin/date"
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a start-up date failure must exit 2, got $rc"; }
+
+# A temporary-file failure is UNKNOWN, never exit 1 (a finding).
 printf '#!/usr/bin/env bash\nexit 1\n' >"$bin/mktemp"
 chmod +x "$bin/mktemp"
 set +e

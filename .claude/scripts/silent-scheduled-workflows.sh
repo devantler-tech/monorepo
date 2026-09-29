@@ -33,6 +33,22 @@
 
 set -euo pipefail
 
+# Installed first, before ANY work (argument parsing, `date`, `mktemp`): an abort before the end
+# must never read as a verdict: bash 3.2 reports it as 0 (clean) and bash 5
+# as 1 (a finding). So any exit before the end is UNKNOWN; only reaching it may report 0 or 1.
+finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+cleanup() {
+  local rc=$?
+  rm -f "${err:-}"
+  if [ "$finished" != 1 ]; then
+    echo "silent-scheduled-workflows: aborted before finishing; reporting UNKNOWN" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+
 usage() {
   sed -n '/^# Usage:/,/^# Exit codes:/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2
   exit 2
@@ -139,22 +155,7 @@ silent=0
 checked=0
 repos_read=0
 max_pages=5
-# Before the EXIT trap exists, so a failure here must choose its own UNKNOWN exit.
-err="$(mktemp)" || { echo "silent-scheduled-workflows: cannot create a temporary file; reporting UNKNOWN" >&2; exit 2; }
-# An abort before the end must never read as a verdict: bash 3.2 reports it as 0 (clean) and bash 5
-# as 1 (a finding). So any exit before the end is UNKNOWN; only reaching it may report 0 or 1.
-finished=0
-# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
-cleanup() {
-  local rc=$?
-  rm -f "$err"
-  if [ "$finished" != 1 ]; then
-    echo "silent-scheduled-workflows: aborted before finishing; reporting UNKNOWN" >&2
-    rc=2
-  fi
-  exit "$rc"
-}
-trap cleanup EXIT
+err="$(mktemp)"
 unknown=0
 
 for repo in "${repos[@]}"; do
