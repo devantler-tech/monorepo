@@ -21,14 +21,21 @@ mkdir -p "$fix" "$bin"
 cat >"$bin/gh" <<'STUB'
 #!/usr/bin/env bash
 # Serve fixtures keyed by the request path; honour --jq by running it through jq, as gh does.
-args=("$@"); jqexpr=""; url=""
+# `-f k=v` fields become the query string in the order given, as `--method GET` sends them.
+args=("$@"); jqexpr=""; url=""; query=""
 for ((i = 0; i < ${#args[@]}; i++)); do
   case "${args[i]}" in
     --jq) jqexpr="${args[i + 1]}"; i=$((i + 1)) ;;
+    --method) i=$((i + 1)) ;;
+    -f) query="${query:+$query&}${args[i + 1]}"; i=$((i + 1)) ;;
     api | --paginate) ;;
     *) url="${args[i]}" ;;
   esac
 done
+# A branch name comes from the API and may hold URL metacharacters: it must travel as an encoded
+# field, never spliced into the URL.
+case "$url" in *"ref="* | *"sha="*) echo "gh stub: branch spliced into the URL: $url" >&2; exit 1 ;; esac
+[ -z "$query" ] || url="$url?$query"
 [ -n "${FAIL_ON:-}" ] && [[ "$url" == *"$FAIL_ON"* ]] && { echo "gh: HTTP 502" >&2; exit 1; }
 key="$(printf '%s' "$url" | tr '/?&=' '____')"
 f="$FIXTURES/$key.json"
@@ -156,6 +163,35 @@ runs o/c 1 1 "schedule:$((now - 3 * h))"
 run --repo o/c
 [ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a healthy repository must exit 0, got $rc"; }
 has "CHECKED 1 scheduled workflow(s) across 1 repositor(ies)" "healthy summary"
+
+# Only 29 February skips years: 31 January fires every year, so four years of silence is a stop.
+put "repos/o/d" '{"default_branch":"main"}'
+put "repos/o/d/actions/workflows?per_page=100" '{"workflows":[
+  {"id":1,"state":"active","path":".github/workflows/annual.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
+workflow_file o/d .github/workflows/annual.yaml 'on:
+  schedule:
+    - cron: "0 0 31 1 *"' "$((now - 5 * 366 * d))"
+runs o/d 1 1 "schedule:$((now - 4 * 366 * d))"
+run --repo o/d
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a 31 January schedule silent for four years must be reported, got $rc"; }
+
+# An abort mid-scan (here a `set -u` expansion of an unset name, injected through a stub `yq`)
+# must surface as UNKNOWN, never as the cleanup trap's successful status.
+cat >"$bin/yq" <<'STUB'
+#!/usr/bin/env bash
+echo 'on_unset_var_marker'
+STUB
+chmod +x "$bin/yq"
+abort_checker="$tmp/abort-checker.sh"
+# shellcheck disable=SC2016 # the replacement is literal shell text for the copied checker
+sed 's/^    \[ -n "\$crons" \] || continue.*$/    : "${deliberately_unset_for_abort_test}"/' "$checker" >"$abort_checker"
+grep -qF 'deliberately_unset_for_abort_test' "$abort_checker" || fail "abort injection did not apply"
+set +e
+PATH="$bin:$PATH" FIXTURES="$fix" bash "$abort_checker" --repo o/c --now "$now" >"$tmp/out" 2>"$tmp/err"
+rc=$?
+set -e
+rm -f "$bin/yq"
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an aborted scan must exit 2, got $rc"; }
 
 # Usage errors are UNKNOWN.
 run

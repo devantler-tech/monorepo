@@ -56,19 +56,21 @@ day=$((24 * hour))
 # Coarse is the safe direction here: overestimating the gap can only delay a report, never
 # invent one.
 cron_interval() {
-  local hr dom mon dow late
+  local hr dom mon dow late leap
   read -r _ hr dom mon dow _ <<<"$1"
   if [ -z "${dow:-}" ]; then
     echo 0
     return
   fi
-  # Day 29-31 does not exist in every month: a fixed month with one of them can skip years
-  # (29 February fires only in leap years, up to 8 years apart across a skipped century leap
-  # year), and without a fixed month it can skip a month.
+  # Day 29-31 does not exist in every month. Only 29 February can skip YEARS (it fires in leap
+  # years only, up to 8 years apart across a skipped century leap year), so only a February field
+  # with day 29 gets the multi-year bound; without a fixed month a late day can skip a month.
+  leap=0
   late=0
   [[ "$dom" =~ (^|[,-])(29|30|31)([,/-]|$) ]] && late=1
+  [[ "$dom" =~ (^|[,-])29([,/-]|$) && "$mon" =~ (^|[,-])(2|[Ff][Ee][Bb])([,/-]|$) ]] && leap=1
   if [ "$mon" != "*" ]; then
-    if [ "$late" -eq 1 ]; then echo $((8 * 366 * day)); else echo $((366 * day)); fi
+    if [ "$leap" -eq 1 ]; then echo $((8 * 366 * day)); else echo $((366 * day)); fi
   elif [ "$dom" != "*" ]; then
     if [ "$late" -eq 1 ]; then echo $((62 * day)); else echo $((31 * day)); fi
   elif [ "$dow" != "*" ]; then echo $((7 * day))
@@ -89,7 +91,20 @@ checked=0
 repos_read=0
 max_pages=5
 err="$(mktemp)"
-trap 'rm -f "$err"' EXIT
+# Bash 3.2 reports $? as 0 to an EXIT trap after a `set -u` abort, so a successful `rm` would
+# become the exit status and an aborted scan would read as clean. Only reaching the end may exit 0.
+finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+cleanup() {
+  local rc=$?
+  rm -f "$err"
+  if [ "$finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "silent-scheduled-workflows: aborted before finishing; reporting UNKNOWN" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
 unknown=0
 
 for repo in "${repos[@]}"; do
@@ -113,7 +128,10 @@ for repo in "${repos[@]}"; do
     # A workflow can stay listed `active` after its file left the default branch (it ran on some
     # other ref). Only a file ON the default branch can fire a schedule, so a 404 is a skip — but
     # only a 404; any other failure is UNKNOWN.
-    if ! raw="$(gh api "repos/${repo}/contents/${path}?ref=${branch}" --jq '.content' 2>"$err")"; then
+    # Branch names come from the API and may hold URL metacharacters, so send them as encoded
+    # GET fields rather than concatenating them into the path.
+    if ! raw="$(gh api --method GET "repos/${repo}/contents/${path}" -f ref="${branch}" \
+      --jq '.content' 2>"$err")"; then
       grep -q 'HTTP 404' "$err" && continue
       echo "QUERY-UNKNOWN ${repo} ${path} — workflow file read failed"
       unknown=1
@@ -162,7 +180,7 @@ for repo in "${repos[@]}"; do
       unknown=1
       continue
     fi
-    if ! changed="$(gh api "repos/${repo}/commits?path=${path}&sha=${branch}&per_page=1" \
+    if ! changed="$(gh api --method GET "repos/${repo}/commits" -f path="${path}" -f sha="${branch}" -f per_page=1 \
       --jq "${jq_epoch} .[0].commit.committer.date // \"\" | if . == \"\" then \"\" else epoch end")" ||
       ! is_epoch "$changed"; then
       echo "QUERY-UNKNOWN ${repo} ${path} — last change on the default branch unreadable"
@@ -212,6 +230,7 @@ for repo in "${repos[@]}"; do
 done
 
 echo "CHECKED ${checked} scheduled workflow(s) across ${repos_read} repositor(ies)"
+finished=1
 [ "$unknown" -eq 0 ] || exit 2
 [ "$silent" -eq 0 ] || exit 1
 exit 0
