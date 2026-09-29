@@ -51,33 +51,43 @@ done
 hour=3600
 day=$((24 * hour))
 
-# Longest gap between two firings of one cron expression, coarsely: a fixed month is yearly, a
-# fixed day-of-month is monthly, a fixed weekday is weekly, a fixed hour is daily, else hourly.
-# Coarse is the safe direction here: overestimating the gap can only delay a report, never
-# invent one.
-cron_interval() {
-  local hr dom mon dow late leap
-  read -r _ hr dom mon dow _ <<<"$1"
-  if [ -z "${dow:-}" ]; then
-    echo 0
-    return
-  fi
-  # Day 29-31 does not exist in every month. Only 29 February can skip YEARS (it fires in leap
-  # years only, up to 8 years apart across a skipped century leap year), so only a February field
-  # with day 29 gets the multi-year bound; without a fixed month a late day can skip a month.
-  leap=0
-  late=0
-  [[ "$dom" =~ (^|[,-])(29|30|31)([,/-]|$) ]] && late=1
-  [[ "$dom" == "29" && "$mon" =~ ^(2|[Ff][Ee][Bb])$ && "$dow" == "*" ]] && leap=1
-  if [ "$mon" != "*" ]; then
-    if [ "$leap" -eq 1 ]; then echo $((8 * 366 * day)); else echo $((366 * day)); fi
-  elif [ "$dom" != "*" ]; then
-    if [ "$late" -eq 1 ]; then echo $((62 * day)); else echo $((31 * day)); fi
-  elif [ "$dow" != "*" ]; then echo $((7 * day))
-  elif [ "$hr" != "*" ]; then echo "$day"
-  else echo "$hour"
-  fi
-}
+# Longest gap, in whole days, between two firing DAYS of one 5-field cron expression, measured by
+# evaluating the day-of-month, month and day-of-week fields (lists, ranges, steps, names, and cron's
+# rule that a restricted day-of-month and day-of-week are ALTERNATIVES) on every day of an 8-year span
+# from 2024-01-01, so leap years are covered. Prints 0 when the expression never fires in that span
+# or cannot be parsed. Computing the gap replaced a field-literal estimate after review kept finding
+# spellings it misjudged (`1-12` for every month, `29 2 1` for February Mondays, `1,29 2`).
+# shellcheck disable=SC2016 # a jq program: its `$` are jq variables
+cron_gap_jq='
+def names($n): if $n == "mon" then {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,"JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
+  else {"SUN":0,"MON":1,"TUE":2,"WED":3,"THU":4,"FRI":5,"SAT":6} end;
+def num($s; $n): ($s | ascii_upcase) as $u | (names($n)[$u] // ($u | tonumber));
+def field($f; $lo; $hi; $n):
+  [ $f | split(",")[] | split("/") as $p
+    | ($p[1] // "1" | tonumber) as $step
+    | (if $p[0] == "*" or $p[0] == "?" then [$lo, $hi]
+       elif ($p[0] | test("-")) then ($p[0] | split("-") | map(num(.; $n)))
+       elif $p[1] != null then [num($p[0]; $n), $hi]
+       else [num($p[0]; $n), num($p[0]; $n)] end) as $r
+    | if $step < 1 then error("step") else range($r[0]; $r[1] + 1; $step) end ]
+  | map(if $n == "dow" and . == 7 then 0 else . end) | unique;
+($c | split(" ") | map(select(. != ""))) as $f
+| if ($f | length) != 5 then 0 else
+  (try field($f[2]; 1; 31; "dom") catch null) as $dom
+  | (try field($f[3]; 1; 12; "mon") catch null) as $mon
+  | (try field($f[4]; 0; 6; "dow") catch null) as $dow
+  | if $dom == null or $mon == null or $dow == null then 0 else
+    ($f[2] != "*" and $f[2] != "?") as $domr | ($f[4] != "*" and $f[4] != "?") as $dowr
+    | [ range(0; 8 * 366) as $i | (1704067200 + $i * 86400 | gmtime) as $t
+        | select(($mon | index($t[1] + 1)) != null)
+        | select(if $domr and $dowr then (($dom | index($t[2])) != null or ($dow | index($t[6])) != null)
+                 elif $domr then ($dom | index($t[2])) != null
+                 elif $dowr then ($dow | index($t[6])) != null
+                 else true end)
+        | $i ]
+    | if length < 2 then 0 else [range(1; length) as $k | .[$k] - .[$k - 1]] | max end
+  end end'
+cron_gap_days() { jq -rn --arg c "$1" "$cron_gap_jq"; }
 
 # GitHub returns workflow timestamps with a UTC offset and milliseconds
 # (`2024-04-14T02:42:29.000+02:00`) but run timestamps in `Z` form, and BSD and GNU `date` parse
@@ -114,7 +124,9 @@ trap cleanup EXIT
 unknown=0
 
 for repo in "${repos[@]}"; do
-  if ! branch="$(gh api "repos/${repo}" --jq '.default_branch')" || [ -z "$branch" ]; then
+  # A null or missing default_branch reads as the string "null" through a bare filter; require a
+  # non-empty string, or every content read 404s and is skipped as though the file were gone.
+  if ! branch="$(gh api "repos/${repo}" --jq 'if (.default_branch | type) == "string" and .default_branch != "" then .default_branch else "" end')" || [ -z "$branch" ]; then
     echo "QUERY-UNKNOWN ${repo} — default branch read failed"
     unknown=1
     continue
@@ -122,7 +134,7 @@ for repo in "${repos[@]}"; do
   # Each page also emits its `total_count`, so a successful but short or empty listing is caught
   # rather than read as a repository with nothing scheduled.
   if ! listing="$(gh api --paginate "repos/${repo}/actions/workflows?per_page=100" \
-    --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflows[] | [.id, .state, .path, (.created_at | epoch)] | @tsv)")"; then
+    --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflows[] | if (.id | type) == \"number\" and (.state | type) == \"string\" and (.path | type) == \"string\" and (.path | test(\"^[^\\t\\n]+$\")) and (.created_at | type) == \"string\" then [.id, .state, .path, (.created_at | epoch)] | @tsv else \"BAD\" end)")"; then
     echo "QUERY-UNKNOWN ${repo} — workflow list read failed"
     unknown=1
     continue
@@ -132,6 +144,13 @@ for repo in "${repos[@]}"; do
   listed="$(grep -c . <<<"$workflows" || true)"
   if ! is_epoch "${total:-x}" || [ "$listed" -ne "$total" ]; then
     echo "QUERY-UNKNOWN ${repo} — workflow list incomplete (${listed} of ${total:-unknown})"
+    unknown=1
+    continue
+  fi
+  # A record missing a required field would shift the TSV columns and be skipped by the path
+  # guard below, so any malformed record makes the whole listing UNKNOWN.
+  if grep -qx 'BAD' <<<"$workflows"; then
+    echo "QUERY-UNKNOWN ${repo} — workflow list holds a malformed record"
     unknown=1
     continue
   fi
@@ -167,16 +186,25 @@ for repo in "${repos[@]}"; do
     fi
     [ -n "$crons" ] || continue # no schedule: silence is not evidence
 
-    window=0
+    # Several cron lines fire on the union of their days, whose longest gap is at most the SHORTEST
+    # single-line gap, so that bound is safe. A line that never fires, or cannot be parsed, is UNKNOWN.
+    gap_days=0
+    bad_cron=""
     while IFS= read -r cron; do
-      interval="$(cron_interval "$cron")"
-      [ "$interval" -gt "$window" ] && window="$interval"
+      g="$(cron_gap_days "$cron")" || g=0
+      if ! is_epoch "$g" || [ "$g" -eq 0 ]; then
+        bad_cron="$cron"
+        break
+      fi
+      if [ "$gap_days" -eq 0 ] || [ "$g" -lt "$gap_days" ]; then gap_days="$g"; fi
     done <<<"$crons"
-    if [ "$window" -eq 0 ]; then
-      echo "QUERY-UNKNOWN ${repo} ${path} — cron expression unparseable"
+    if [ -n "$bad_cron" ]; then
+      echo "QUERY-UNKNOWN ${repo} ${path} — cron '${bad_cron}' unparseable or never fires"
       unknown=1
       continue
     fi
+    # The extra day covers where in its day the firing falls; the grace hour covers queueing delay.
+    window=$(((gap_days + 1) * day))
     limit=$((2 * window + hour))
     checked=$((checked + 1))
 
@@ -273,7 +301,7 @@ for repo in "${repos[@]}"; do
       echo "QUERY-UNKNOWN ${repo} ${path} — window not reached within ${max_pages} pages of runs"
       unknown=1
     elif [ -z "$found" ]; then
-      echo "SILENT-WORKFLOW ${repo} ${path} — no scheduled run in the last $((limit / hour))h (longest cron gap $((window / hour))h)"
+      echo "SILENT-WORKFLOW ${repo} ${path} — no scheduled run in the last $((limit / hour))h (its cron fires at least every ${gap_days}d)"
       silent=1
     fi
   done <<<"$workflows"

@@ -126,7 +126,7 @@ lacks() { ! grep -qF -- "$1" "$tmp/out" || { cat "$tmp/out" >&2; fail "$2"; }; }
 
 run --repo o/a
 [ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "silent schedules must exit 1, got $rc"; }
-has "SILENT-WORKFLOW o/a .github/workflows/stale.yaml — no scheduled run in the last 49h (longest cron gap 24h)" \
+has "SILENT-WORKFLOW o/a .github/workflows/stale.yaml — no scheduled run in the last 97h (its cron fires at least every 1d)" \
   "a daily schedule silent for 40 days must be reported"
 lacks "dispatch.yaml" "a dispatch-only workflow's silence must never be reported"
 has "SILENT-WORKFLOW o/a .github/workflows/inactive.yaml — schedule disabled by GitHub for repository inactivity" \
@@ -245,6 +245,38 @@ run --repo o/j
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed history payload must exit 2, got $rc"; }
 has "QUERY-UNKNOWN o/j .github/workflows/daily.yaml — history at the window start unreadable" \
   "a malformed history payload must be named"
+
+# The gap is computed, not guessed from spelling: `* 1-12 *` is every day, so 40 days is a stop.
+put "repos/o/k" '{"default_branch":"main"}'
+put "repos/o/k/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/range.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/k .github/workflows/range.yaml 'on:
+  schedule:
+    - cron: "0 0 * 1-12 *"'
+runs o/k 1 1 "schedule:$((now - 40 * d))"
+run --repo o/k
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a daily schedule spelled with a month range must be judged daily, got $rc"; }
+
+# A cron that can never fire (31 February) is UNKNOWN, not a years-long grace.
+workflow_file o/k .github/workflows/range.yaml 'on:
+  schedule:
+    - cron: "0 0 31 2 *"'
+run --repo o/k
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a never-firing cron must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/k .github/workflows/range.yaml — cron '0 0 31 2 *' unparseable or never fires" \
+  "a never-firing cron must be named"
+
+# A null default branch, or a malformed workflow record, is UNKNOWN — never a clean skip.
+put "repos/o/l" '{"default_branch":null}'
+run --repo o/l
+[ "$rc" -eq 2 ] || fail "a null default branch must exit 2, got $rc"
+has "QUERY-UNKNOWN o/l — default branch read failed" "a null default branch must be named"
+put "repos/o/m" '{"default_branch":"main"}'
+put "repos/o/m/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":null,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+run --repo o/m
+[ "$rc" -eq 2 ] || fail "a malformed workflow record must exit 2, got $rc"
+has "QUERY-UNKNOWN o/m — workflow list holds a malformed record" "a malformed record must be named"
 
 # An empty run page is the end only when total_count says so; a short payload is UNKNOWN.
 put "repos/o/g" '{"default_branch":"main"}'
