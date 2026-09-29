@@ -81,17 +81,17 @@ runs() { # <repo> <id> <page> <event:epoch>...
 old="2026-01-01T10:00:00.000+02:00" # the offset form GitHub actually returns for workflows
 put "repos/o/a" '{"default_branch":"main"}'
 put "repos/o/a/actions/workflows?per_page=100" "{\"total_count\":11,\"workflows\":[
-  {\"id\":11,\"state\":\"active\",\"path\":\".github/workflows/moved.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"},
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"},
-  {\"id\":2,\"state\":\"active\",\"path\":\".github/workflows/dispatch.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"},
-  {\"id\":3,\"state\":\"active\",\"path\":\".github/workflows/stale.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"},
-  {\"id\":4,\"state\":\"disabled_manually\",\"path\":\".github/workflows/off.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"},
-  {\"id\":5,\"state\":\"disabled_inactivity\",\"path\":\".github/workflows/inactive.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"},
-  {\"id\":6,\"state\":\"active\",\"path\":\".github/workflows/gone.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"},
-  {\"id\":7,\"state\":\"active\",\"path\":\".github/workflows/monthly.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"},
-  {\"id\":9,\"state\":\"active\",\"path\":\".github/workflows/leap.yaml\",\"created_at\":\"2019-01-01T00:00:00.000+02:00\",\"updated_at\":\"2019-01-01T00:00:00.000+02:00\"},
-  {\"id\":10,\"state\":\"active\",\"path\":\".github/workflows/gained.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"},
-  {\"id\":8,\"state\":\"active\",\"path\":\"dynamic/github-code-scanning/codeql\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}
+  {\"id\":11,\"state\":\"active\",\"path\":\".github/workflows/moved.yaml\",\"created_at\":\"$old\"},
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"},
+  {\"id\":2,\"state\":\"active\",\"path\":\".github/workflows/dispatch.yaml\",\"created_at\":\"$old\"},
+  {\"id\":3,\"state\":\"active\",\"path\":\".github/workflows/stale.yaml\",\"created_at\":\"$old\"},
+  {\"id\":4,\"state\":\"disabled_manually\",\"path\":\".github/workflows/off.yaml\",\"created_at\":\"$old\"},
+  {\"id\":5,\"state\":\"disabled_inactivity\",\"path\":\".github/workflows/inactive.yaml\",\"created_at\":\"$old\"},
+  {\"id\":6,\"state\":\"active\",\"path\":\".github/workflows/gone.yaml\",\"created_at\":\"$old\"},
+  {\"id\":7,\"state\":\"active\",\"path\":\".github/workflows/monthly.yaml\",\"created_at\":\"$old\"},
+  {\"id\":9,\"state\":\"active\",\"path\":\".github/workflows/leap.yaml\",\"created_at\":\"2019-01-01T00:00:00.000+02:00\"},
+  {\"id\":10,\"state\":\"active\",\"path\":\".github/workflows/gained.yaml\",\"created_at\":\"$old\"},
+  {\"id\":8,\"state\":\"active\",\"path\":\"dynamic/github-code-scanning/codeql\",\"created_at\":\"$old\"}
 ]}"
 daily='on:
   schedule:
@@ -172,7 +172,7 @@ has "CHECKED 0 scheduled workflow(s) across 0 repositor(ies)" "the summary must 
 # An unparseable creation time is UNKNOWN, not "too new to judge".
 put "repos/o/b" '{"default_branch":"main"}'
 put "repos/o/b/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
-  {"id":9,"state":"active","path":".github/workflows/daily.yaml","created_at":"yesterday","updated_at":"yesterday"}]}'
+  {"id":9,"state":"active","path":".github/workflows/daily.yaml","created_at":"yesterday"}]}'
 workflow_file o/b .github/workflows/daily.yaml "$daily"
 run --repo o/b
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an unparseable timestamp must exit 2, got $rc"; }
@@ -180,7 +180,7 @@ run --repo o/b
 # A healthy repository exits 0.
 put "repos/o/c" '{"default_branch":"main"}'
 put "repos/o/c/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/c .github/workflows/daily.yaml "$daily"
 runs o/c 1 1 "schedule:$((now - 3 * h))"
 run --repo o/c
@@ -191,9 +191,9 @@ has "CHECKED 1 scheduled workflow(s) across 1 repositor(ies)" "healthy summary"
 # fires every March, so four years of silence is a stop for both.
 put "repos/o/d" '{"default_branch":"main"}'
 put "repos/o/d/actions/workflows?per_page=100" '{"total_count":3,"workflows":[
-  {"id":1,"state":"active","path":".github/workflows/annual.yaml","created_at":"2019-01-01T00:00:00.000+02:00","updated_at":"2019-01-01T00:00:00.000+02:00"},
-  {"id":2,"state":"active","path":".github/workflows/febmar.yaml","created_at":"2019-01-01T00:00:00.000+02:00","updated_at":"2019-01-01T00:00:00.000+02:00"},
-  {"id":3,"state":"active","path":".github/workflows/feb1and29.yaml","created_at":"2019-01-01T00:00:00.000+02:00","updated_at":"2019-01-01T00:00:00.000+02:00"}]}'
+  {"id":1,"state":"active","path":".github/workflows/annual.yaml","created_at":"2019-01-01T00:00:00.000+02:00"},
+  {"id":2,"state":"active","path":".github/workflows/febmar.yaml","created_at":"2019-01-01T00:00:00.000+02:00"},
+  {"id":3,"state":"active","path":".github/workflows/feb1and29.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
 # annual.yaml's file was edited recently (a pin bump, say) but its schedule was not: the fixture's
 # window-start content equals today's, so the silence is judged rather than excused.
 workflow_file o/d .github/workflows/annual.yaml 'on:
@@ -223,8 +223,8 @@ grep -qF "feb1and29.yaml" "$tmp/out" || fail "a 1 and 29 February schedule silen
 # workflow GitHub disabled because the repository is a fork is a policy, not a stopped schedule.
 put "repos/o/h" '{"default_branch":"main"}'
 put "repos/o/h/actions/workflows?per_page=100" '{"total_count":2,"workflows":[
-  {"id":1,"state":"active","path":".github/workflows/febmon.yaml","created_at":"2019-01-01T00:00:00.000+02:00","updated_at":"2019-01-01T00:00:00.000+02:00"},
-  {"id":2,"state":"disabled_fork","path":".github/workflows/forked.yaml","created_at":"2019-01-01T00:00:00.000+02:00","updated_at":"2019-01-01T00:00:00.000+02:00"}]}'
+  {"id":1,"state":"active","path":".github/workflows/febmon.yaml","created_at":"2019-01-01T00:00:00.000+02:00"},
+  {"id":2,"state":"disabled_fork","path":".github/workflows/forked.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
 workflow_file o/h .github/workflows/febmon.yaml 'on:
   schedule:
     - cron: "0 0 29 2 1"'
@@ -238,17 +238,17 @@ lacks "forked.yaml" "a fork-disabled workflow is a policy, not a finding"
 # A non-empty page shorter than its total implies is a partial payload: UNKNOWN, not silence.
 put "repos/o/i" '{"default_branch":"main"}'
 put "repos/o/i/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/i .github/workflows/daily.yaml "$daily"
 put "repos/o/i/actions/workflows/1/runs?per_page=100&page=1" \
-  "{\"total_count\":5,\"workflow_runs\":[{\"event\":\"push\",\"created_at\":\"$(iso $((now - 40 * d)))\",\"updated_at\":\"$(iso $((now - 40 * d)))\"}]}"
+  "{\"total_count\":5,\"workflow_runs\":[{\"event\":\"push\",\"created_at\":\"$(iso $((now - 40 * d)))\"}]}"
 run --repo o/i
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a short non-empty run page must exit 2, got $rc"; }
 
 # A malformed history payload must not grant the new-file grace.
 put "repos/o/j" '{"default_branch":"main"}'
 put "repos/o/j/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/j .github/workflows/daily.yaml "$daily"
 put "repos/o/j/commits?path=.github/workflows/daily.yaml&sha=main&until&per_page=1" '[{"sha":null}]'
 runs o/j 1 1 "schedule:$((now - 40 * d))"
@@ -260,7 +260,7 @@ has "QUERY-UNKNOWN o/j .github/workflows/daily.yaml — history at the window st
 # The gap is computed, not guessed from spelling: `* 1-12 *` is every day, so 40 days is a stop.
 put "repos/o/k" '{"default_branch":"main"}'
 put "repos/o/k/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/range.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/range.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/k .github/workflows/range.yaml 'on:
   schedule:
     - cron: "0 0 * 1-12 *"'
@@ -284,7 +284,7 @@ run --repo o/l
 has "QUERY-UNKNOWN o/l — default branch read failed" "a null default branch must be named"
 put "repos/o/m" '{"default_branch":"main"}'
 put "repos/o/m/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":null,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":null,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
 run --repo o/m
 [ "$rc" -eq 2 ] || fail "a malformed workflow record must exit 2, got $rc"
 has "QUERY-UNKNOWN o/m — workflow list holds a malformed record" "a malformed record must be named"
@@ -292,7 +292,7 @@ has "QUERY-UNKNOWN o/m — workflow list holds a malformed record" "a malformed 
 # A window-start version that cannot be parsed is UNKNOWN, never the new-schedule grace.
 put "repos/o/n" '{"default_branch":"main"}'
 put "repos/o/n/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/n .github/workflows/daily.yaml "$daily" 'on: [unclosed'
 runs o/n 1 1 "schedule:$((now - 40 * d))"
 run --repo o/n
@@ -308,7 +308,7 @@ run --repo o/n
 
 # A run record whose event is not a string is malformed data: UNKNOWN, never a silence verdict.
 put "repos/o/n/actions/workflows/1/runs?per_page=100&page=1" \
-  "{\"total_count\":1,\"workflow_runs\":[{\"event\":5,\"created_at\":\"$(iso $((now - 40 * d)))\",\"updated_at\":\"$(iso $((now - 40 * d)))\"}]}"
+  "{\"total_count\":1,\"workflow_runs\":[{\"event\":5,\"created_at\":\"$(iso $((now - 40 * d)))\"}]}"
 workflow_file o/n .github/workflows/daily.yaml "$daily"
 run --repo o/n
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed run record must exit 2, got $rc"; }
@@ -317,7 +317,7 @@ has "QUERY-UNKNOWN o/n .github/workflows/daily.yaml — run list read failed" "a
 # Two annual lines (1 January + 1 July) fire every six months: 13 months of silence is a stop.
 put "repos/o/r" '{"default_branch":"main"}'
 put "repos/o/r/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
-  {"id":1,"state":"active","path":".github/workflows/halfyear.yaml","created_at":"2019-01-01T00:00:00.000+02:00","updated_at":"2019-01-01T00:00:00.000+02:00"}]}'
+  {"id":1,"state":"active","path":".github/workflows/halfyear.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
 workflow_file o/r .github/workflows/halfyear.yaml 'on:
   schedule:
     - cron: "0 0 1 1 *"
@@ -329,7 +329,7 @@ run --repo o/r
 # An unrecognised workflow state is never assumed active: UNKNOWN.
 put "repos/o/s" '{"default_branch":"main"}'
 put "repos/o/s/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"disabled_someday\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"disabled_someday\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/s .github/workflows/daily.yaml "$daily"
 runs o/s 1 1 "schedule:$((now - 40 * d))"
 run --repo o/s
@@ -340,7 +340,7 @@ has "QUERY-UNKNOWN o/s .github/workflows/daily.yaml — unrecognised workflow st
 # UNKNOWN, not "removed"; an unreadable directory makes every workflow UNKNOWN.
 put "repos/o/t" '{"default_branch":"main"}'
 put "repos/o/t/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/hidden.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/hidden.yaml\",\"created_at\":\"$old\"}]}"
 put "repos/o/t/contents/.github/workflows?ref=main" '[{"type":"file","path":".github/workflows/hidden.yaml"}]'
 run --repo o/t
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a listed but unreadable file must exit 2, got $rc"; }
@@ -361,7 +361,7 @@ has "QUERY-UNKNOWN o/t .github/workflows/hidden.yaml — workflow directory on t
 # GitHub's documented `deleted` state is a removed workflow: skipped, not UNKNOWN.
 put "repos/o/u" '{"default_branch":"main"}'
 put "repos/o/u/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"deleted\",\"path\":\".github/workflows/gone.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"deleted\",\"path\":\".github/workflows/gone.yaml\",\"created_at\":\"$old\"}]}"
 put "repos/o/u/contents/.github/workflows?ref=main" '[]'
 run --repo o/u
 [ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a deleted workflow must be skipped, got $rc"; }
@@ -369,7 +369,7 @@ run --repo o/u
 # A timestamp with trailing garbage must not parse as its valid-looking prefix: UNKNOWN.
 put "repos/o/v" '{"default_branch":"main"}'
 put "repos/o/v/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
-  {"id":1,"state":"active","path":".github/workflows/daily.yaml","created_at":"2026-09-21T00:00:00garbage","updated_at":"2026-09-21T00:00:00garbage"}]}'
+  {"id":1,"state":"active","path":".github/workflows/daily.yaml","created_at":"2026-09-21T00:00:00garbage"}]}'
 workflow_file o/v .github/workflows/daily.yaml "$daily"
 run --repo o/v
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed timestamp must exit 2, got $rc"; }
@@ -377,7 +377,7 @@ run --repo o/v
 # An out-of-range UTC offset is malformed, not a 100-hour shift: UNKNOWN.
 runs o/v 1 1 "schedule:$((now - 3 * h))"
 put "repos/o/v/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
-  {"id":1,"state":"active","path":".github/workflows/daily.yaml","created_at":"2026-01-01T00:00:00.000+99:99","updated_at":"2026-01-01T00:00:00.000+99:99"}]}'
+  {"id":1,"state":"active","path":".github/workflows/daily.yaml","created_at":"2026-01-01T00:00:00.000+99:99"}]}'
 run --repo o/v
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an out-of-range offset must exit 2, got $rc"; }
 
@@ -403,13 +403,13 @@ rm -f "$bin/mktemp"
 
 # An impossible calendar date (31 February) is malformed, not 3 March: UNKNOWN.
 put "repos/o/v/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
-  {"id":1,"state":"active","path":".github/workflows/daily.yaml","created_at":"2026-02-31T00:00:00Z","updated_at":"2026-02-31T00:00:00Z"}]}'
+  {"id":1,"state":"active","path":".github/workflows/daily.yaml","created_at":"2026-02-31T00:00:00Z"}]}'
 run --repo o/v
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an impossible calendar date must exit 2, got $rc"; }
 
 # A path holding a backslash would be escaped by @tsv and then never match the listing: UNKNOWN.
 put "repos/o/v/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a\\\\\\\\b.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a\\\\\\\\b.yaml\",\"created_at\":\"$old\"}]}"
 run --repo o/v
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a backslash in a workflow path must exit 2, got $rc"; }
 has "QUERY-UNKNOWN o/v — workflow list holds a malformed record" "a backslash path must be a malformed record"
@@ -417,7 +417,7 @@ has "QUERY-UNKNOWN o/v — workflow list holds a malformed record" "a backslash 
 # Workflow paths are allowlisted, not blocklisted: a carriage return (or any character outside
 # [A-Za-z0-9._#-]) makes the record malformed rather than silently unmatched.
 put "repos/o/v/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a\\rb.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a\\rb.yaml\",\"created_at\":\"$old\"}]}"
 run --repo o/v
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a carriage return in a workflow path must exit 2, got $rc"; }
 
@@ -425,7 +425,7 @@ run --repo o/v
 # and a Monday schedule last seen 5 days ago is not silent.
 put "repos/o/x" '{"default_branch":"main"}'
 put "repos/o/x/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/weekly.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/weekly.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/x .github/workflows/weekly.yaml 'on:
   schedule:
     - cron: "0 0 */1 * MON"'
@@ -440,7 +440,7 @@ run --repo o/y
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed workflow-list envelope must exit 2, got $rc"; }
 # …and a malformed run-page envelope is UNKNOWN, never "no runs, so silent".
 put "repos/o/y/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/y .github/workflows/daily.yaml "$daily"
 put "repos/o/y/actions/workflows/1/runs?per_page=100&page=1" '{"total_count":0,"workflow_runs":{}}'
 run --repo o/y
@@ -449,24 +449,15 @@ run --repo o/y
 # A directory listing at the Contents API's 1,000-entry cap may be truncated: absence proves nothing.
 put "repos/o/w" '{"default_branch":"main"}'
 put "repos/o/w/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/zz.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/zz.yaml\",\"created_at\":\"$old\"}]}"
 jq -n '[range(0; 1000) | {type: "file", path: ".github/workflows/w\(.).yaml"}]' >"$fix/$(printf '%s' 'repos/o/w/contents/.github/workflows?ref=main' | tr '/?&=' '____').json"
 run --repo o/w
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a capped directory listing must exit 2, got $rc"; }
 
-# A workflow re-enabled 10 hours ago (its updated_at moved) gets a fresh grace, like a new one.
-put "repos/o/z" '{"default_branch":"main"}'
-put "repos/o/z/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/reenabled.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$(iso $((now - 10 * h)))\"}]}"
-workflow_file o/z .github/workflows/reenabled.yaml "$daily"
-runs o/z 1 1 "schedule:$((now - 40 * d))"
-run --repo o/z
-[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a workflow re-enabled 10h ago must not be reported, got $rc"; }
-
 # An empty run page is the end only when total_count says so; a short payload is UNKNOWN.
 put "repos/o/g" '{"default_branch":"main"}'
 put "repos/o/g/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/g .github/workflows/daily.yaml "$daily"
 put "repos/o/g/actions/workflows/1/runs?per_page=100&page=1" '{"total_count":5,"workflow_runs":[]}'
 run --repo o/g
@@ -483,7 +474,7 @@ has "QUERY-UNKNOWN o/e — workflow list incomplete (0 of 3)" "a short listing m
 # A path with a URL metacharacter is percent-encoded, so the request reaches the file.
 put "repos/o/f" '{"default_branch":"main"}'
 put "repos/o/f/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
-  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a#b.yaml\",\"created_at\":\"$old\",\"updated_at\":\"$old\"}]}"
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a#b.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/f .github/workflows/a%23b.yaml "$daily"
 put "repos/o/f/commits?path=.github/workflows/a#b.yaml&sha=main&until&per_page=1" '[{"sha":"b4f0e1ab"}]'
 runs o/f 1 1 "schedule:$((now - 40 * d))"
