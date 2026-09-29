@@ -4268,24 +4268,25 @@ if want safety; then
     # here would be the exact writer-into-early-exiting-grep hazard this
     # repository's own guard rejects.
     #
-    # `make` is a common English word, so a line that is PROVABLY text-only is
-    # not a Make candidate: matched as is, `printf 'make the report clearer'`
-    # was (#2988). Provable means that once quoted text is removed (a "…"
-    # holding `$`, a backtick or an escape runs or may run code, so it stays),
-    # no pipe, redirect, substitution, group or function syntax is left, and
-    # every `;`/`&`-separated segment starts with `printf` (no options), `echo`,
-    # `cd` or a text-only `gh pr`/`gh issue` subcommand. `git` is never inert:
-    # a commit runs hooks the checkout may have replaced. A session that can
-    # change what a name runs or run code implicitly — `alias`, `eval`, `source`,
+    # `make` is a common English word, so `printf 'make the report clearer'`
+    # matches the Make predicate (#2988). No line is ever DROPPED for that:
+    # over a shell, no per-line rule can prove a line inert (review found a new
+    # counter-example — escapes, traps, sourcing, multi-line substitutions — in
+    # every round), so hiding a line can hide a build. Instead a line that looks
+    # like prose is LABELLED `[prose?]` and RANKED after every other candidate,
+    # so it can no longer push a likely build out of the five rows shown, and a
+    # wrong label changes only the order. Looks like prose means: once quoted
+    # text is removed (a "…" holding `$`, a backtick or an escape stays), no
+    # pipe, redirect, substitution, group or function syntax is left; every
+    # `;`/`&`-separated segment starts with `printf` (no options), `echo`, `cd`
+    # or a text-only `gh pr`/`gh issue` subcommand; and the session never
+    # mentions a way to change what a name runs — `alias`, `eval`, `source`,
     # `enable`, `shopt`, `function`, `trap`, `builtin`, `BASH_ENV`, `BASH_FUNC`,
-    # `PROMPT_COMMAND`, `command_not_found_handle`, a `name()` definition, or a
-    # `.` word (`command . f`) anywhere in its raw text —
-    # gets no exemption at all, and such a line is listed whenever it mentions
-    # `make`. Every other line is matched on its raw text exactly as before,
-    # with no boundary before `make` (`gmake`, `/usr/bin/make`), so a spelling
-    # this list does not name (`sh -c 'make x'`, `if make x`,
-    # `printf 'make x' | sh`, `ssh h 'make x'`) errs toward REPORTING a build.
-    # The exemption's false positives are tracked in #3666.
+    # `PROMPT_COMMAND`, `command_not_found_handle`, a `name()` definition or a
+    # `.` word. Such a mention is itself listed whenever it names `make`.
+    # Matching is on the raw line with no boundary before `make` (`gmake`), so
+    # the candidate set is the original predicate's, never smaller. Label
+    # precision is tracked in #3666.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
           cmds="$(commands_in "$f" 2>/dev/null)" || { printf x >> "$XFBUILD"; continue; }
@@ -4346,12 +4347,14 @@ if want safety; then
               END {
                 for (i = 1; i <= n; i++) {
                   if (line[i] ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
-                      || (renames[i] && line[i] ~ /make/) \
-                      || (line[i] ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/ && (redefined || !text_only(res[i])))) print line[i]
+                      || (renames[i] && line[i] ~ /make/)) print "0\t" substr(line[i], 1, 70)
+                  else if (line[i] ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/)
+                    print (!redefined && text_only(res[i]) ? "1" : "0") "\t" substr(line[i], 1, 70)
                 }
               }' <<<"$cmds"
           fi
-        done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
+        done | sort | uniq -c | sort -k2,2n -k1,1rn | head -5 \
+        | awk '{ n = $1; k = $2; sub(/^[[:space:]]*[0-9]+[[:space:]]+[01]\t/, ""); printf "    %7d %s%s\n", n, (k == 1 ? "[prose?] " : ""), $0 }'
     extraction_canary "$XFBUILD" "$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true)" "checkout-then-build"
     echo "    (empty = no session both checked out a non-own ref and built)"
   fi

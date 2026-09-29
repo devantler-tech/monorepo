@@ -7210,7 +7210,7 @@ echo "── checkout-then-build: \`make\` counts only as a command, not as pros
 # through `rtk`, after `&&` with options before the target, behind `VAR=value`
 # assignments, and inside `"$(…)"` — must still be listed, and so must a non-Make
 # build beside them (the control that the walk read the session at all). The
-# section prints at most five distinct commands, so the cases split over twelve runs.
+# section prints at most five distinct commands, so the cases split over fourteen runs.
 MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 mk_cmd() { # $1 = id, $2 = command
   jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
@@ -7237,10 +7237,10 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qE '^ +1 make test$' <<<"$MK_OUT" \
    && grep -qE '^ +1 rtk make build$' <<<"$MK_OUT" \
    && grep -qE '^ +1 cd sub && make -C x lint$' <<<"$MK_OUT" \
-   && ! grep -qE 'make the' <<<"$MK_OUT"; then
-  ok "prose containing 'make the' is not a build candidate; real make invocations still are"
+   && ! grep -qE '^ +[0-9]+ [^[].*make the' <<<"$MK_OUT"; then
+  ok "prose containing 'make the' is only ever a labelled [prose?] row; real make invocations are builds"
 else
-  bad "prose containing 'make the' is not a build candidate; real make invocations still are" \
+  bad "prose containing 'make the' is only ever a labelled [prose?] row; real make invocations are builds" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 MK_OUT=$({
@@ -7253,10 +7253,10 @@ MK_OUT=$({
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qE '^ +1 CC=clang MAKEFLAGS=-j2 make check$' <<<"$MK_OUT" \
    && grep -qE '^ +1 echo "run it; make sure" && echo "\$\(make version\)"$' <<<"$MK_OUT" \
-   && ! grep -qE 'make -n deploy' <<<"$MK_OUT"; then
-  ok "assignment-prefixed make counts; a separator inside quoted prose is not a command boundary"
+   && ! grep -qE '^ +[0-9]+ [^[].*make -n deploy' <<<"$MK_OUT"; then
+  ok "assignment-prefixed make counts; a separator inside quoted prose is not a command boundary (labelled prose)"
 else
-  bad "assignment-prefixed make counts; a separator inside quoted prose is not a command boundary" \
+  bad "assignment-prefixed make counts; a separator inside quoted prose is not a command boundary (labelled prose)" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # Spellings the text-only list does not name must err toward REPORTING: a nested
@@ -7274,7 +7274,7 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qE "^ +1 sh -c 'make test'$" <<<"$MK_OUT" \
    && grep -qE '^ +1 if make check; then :; fi$' <<<"$MK_OUT" \
    && grep -qE '^ +1 \{ make lint; \}$' <<<"$MK_OUT" \
-   && ! grep -qE 'make -n deploy' <<<"$MK_OUT"; then
+   && ! grep -qE '^ +[0-9]+ [^[].*make -n deploy' <<<"$MK_OUT"; then
   ok "nested-shell and compound-command make still count; a separator inside echo prose does not"
 else
   bad "nested-shell and compound-command make still count; a separator inside echo prose does not" \
@@ -7296,9 +7296,9 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qE "^ +1 ssh -m 'hmac-sha2-256' 'host' 'make test'$" <<<"$MK_OUT" \
    && grep -qE "^ +1 printf 'make test.n' \| sh$" <<<"$MK_OUT" \
    && grep -qF '1 git add a && git commit -m "fix: make it pass"' <<<"$MK_OUT"; then
-  ok "only a provably text-only line is dropped; ssh, pipe-to-shell, gmake and git commit still count"
+  ok "only a text-only-looking line is labelled prose; ssh, pipe-to-shell, gmake and git commit still count"
 else
-  bad "only a provably text-only line is dropped; ssh, pipe-to-shell, gmake and git commit still count" \
+  bad "only a text-only-looking line is labelled prose; ssh, pipe-to-shell, gmake and git commit still count" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # Quotes are scanned, not pattern-matched: an apostrophe inside "…" is literal, so
@@ -7314,7 +7314,7 @@ MK_OUT=$({
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qF "1 printf -v 'x[\$(make test)]' v" <<<"$MK_OUT" \
    && grep -qF "1 echo \"'\$(make test)'\"" <<<"$MK_OUT" \
-   && ! grep -qE 'make the change' <<<"$MK_OUT"; then
+   && ! grep -qE '^ +[0-9]+ [^[].*make the change' <<<"$MK_OUT"; then
   ok "quote-aware scan: wrapped substitutions and printf -v count; prose apostrophes do not"
 else
   bad "quote-aware scan: wrapped substitutions and printf -v count; prose apostrophes do not" \
@@ -7331,9 +7331,9 @@ MK_OUT=$({
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qE '^ +1 echo make test$' <<<"$MK_OUT" \
    && grep -qF '1 echo () { make lint' <<<"$MK_OUT"; then
-  ok "a redefined inert name loses the exemption"
+  ok "a redefined inert name loses the prose label"
 else
-  bad "a redefined inert name loses the exemption" \
+  bad "a redefined inert name loses the prose label" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # Quote state carries across the lines of one command: a `#` line inside a
@@ -7350,10 +7350,10 @@ MK_OUT=$({
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qF "1 # \$(make test)" <<<"$MK_OUT" \
    && grep -qF "1 make test\\'" <<<"$MK_OUT" \
-   && ! grep -qE 'make the report' <<<"$MK_OUT"; then
-  ok "quote state carries across lines; a line starting inside a carried quote is never exempt"
+   && ! grep -qE '^ +[0-9]+ [^[].*make the report' <<<"$MK_OUT"; then
+  ok "quote state carries across lines; a line starting inside a carried quote is never labelled prose"
 else
-  bad "quote state carries across lines; a line starting inside a carried quote is never exempt" \
+  bad "quote state carries across lines; a line starting inside a carried quote is never labelled prose" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # A definition built from text and run by `eval` hides inside quotes, so a session
@@ -7366,9 +7366,9 @@ MK_OUT=$({
 } | mk_run makeeval)
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qE '^ +1 echo make test$' <<<"$MK_OUT"; then
-  ok "a session that evaluates text loses the text-only exemption"
+  ok "a session that evaluates text loses the prose label"
 else
-  bad "a session that evaluates text loses the text-only exemption" \
+  bad "a session that evaluates text loses the prose label" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # An alias can point an innocent-looking later line at make, so the alias line is
@@ -7407,9 +7407,9 @@ MK_OUT2=$({
 } | mk_run makedot)
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" && grep -qE '^ +1 echo make test$' <<<"$MK_OUT" \
    && grep -qE '^ +1 npm ci$' <<<"$MK_OUT2" && grep -qE '^ +1 echo make lint$' <<<"$MK_OUT2"; then
-  ok "a DEBUG trap or a command-dot source removes the exemption"
+  ok "a DEBUG trap or a command-dot source removes the prose label"
 else
-  bad "a DEBUG trap or a command-dot source removes the exemption" \
+  bad "a DEBUG trap or a command-dot source removes the prose label" \
       "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -8)"
 fi
 # Any `$` in "…" may expand to code (`${x@P}` prompt expansion), so it is never
@@ -7424,11 +7424,34 @@ MK_OUT=$({
 } | mk_run makeprompt)
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qF "1 echo \"make test \${x@P}\"" <<<"$MK_OUT" \
-   && ! grep -qE 'make the report' <<<"$MK_OUT"; then
-  ok "a \$ inside double-quoted prose is not exempt; command -v and export do not poison"
+   && ! grep -qE '^ +[0-9]+ [^[].*make the report' <<<"$MK_OUT"; then
+  ok "a \$ inside double-quoted prose is never labelled prose; command -v and export keep the label"
 else
-  bad "a \$ inside double-quoted prose is not exempt; command -v and export do not poison" \
+  bad "a \$ inside double-quoted prose is never labelled prose; command -v and export keep the label" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+# The label is the #2988 fix: frequent prose must not push a build out of the five
+# rows, and when there is room it is still shown, labelled and after the builds.
+MK_OUT=$({
+  mk_cmd z0 'gh pr checkout 19'
+  for z in 1 2 3; do mk_cmd "zp$z" "printf 'make the report clearer'"; done
+  for z in a b c d e; do mk_cmd "zb$z" "make build$z"; done
+} | mk_run makerank)
+MK_OUT2=$({
+  mk_cmd z0 'gh pr checkout 20'
+  for z in 1 2 3; do mk_cmd "zp$z" "printf 'make the report clearer'"; done
+  mk_cmd zb 'make lint'
+} | mk_run makerank2)
+MK_ROWS2=$(grep -E '^ +[0-9]+ ' <<<"$MK_OUT2" | grep -E 'make ' || true)
+if [ "$(grep -cE '^ +1 make build[a-e]$' <<<"$MK_OUT")" -eq 5 ] \
+   && ! grep -qE 'make the report' <<<"$MK_OUT" \
+   && [ "$(printf '%s\n' "$MK_ROWS2" | sed -n 1p)" != "" ] \
+   && grep -qE '^ +1 make lint$' <<<"$(printf '%s\n' "$MK_ROWS2" | sed -n 1p)" \
+   && grep -qE "^ +3 \[prose\?\] printf 'make the report clearer'$" <<<"$(printf '%s\n' "$MK_ROWS2" | sed -n 2p)"; then
+  ok "prose ranks after every build, labelled [prose?], and never displaces one"
+else
+  bad "prose ranks after every build, labelled [prose?], and never displaces one" \
+      "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -12)"
 fi
 
 # walk ~ section ~ literal to break ~ its mutation ~ line proving the walk read something
