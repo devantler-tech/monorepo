@@ -7344,13 +7344,16 @@ MK_OUT=$({
   mk_cmd t2 "$(printf 'echo "\n# %s\n"' "\$(make test)")"
   mk_cmd t4 'echo "please make the report clearer"'
   mk_cmd t5 'npm ci'
+  mk_cmd t6 "echo 'unfinished"
+  mk_cmd t7 "make test\\'"
 } | mk_run makecarry)
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qF "1 # \$(make test)" <<<"$MK_OUT" \
+   && grep -qF "1 make test\\'" <<<"$MK_OUT" \
    && ! grep -qE 'make the report' <<<"$MK_OUT"; then
-  ok "quote state carries across lines; prose after the string stays exempt"
+  ok "quote state carries across lines; a line starting inside a carried quote is never exempt"
 else
-  bad "quote state carries across lines; prose after the string stays exempt" \
+  bad "quote state carries across lines; a line starting inside a carried quote is never exempt" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # A definition built from text and run by `eval` hides inside quotes, so a session

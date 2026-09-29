@@ -4300,8 +4300,11 @@ if want safety; then
               # stays a string. It returns the line with quoted text blanked; a
               # "…" holding `$(`, a backtick or an escape, or a quote still open
               # at the end of the line, leaves a backtick, which text_only rejects.
-              function unquoted(line,   out, n, i, c) {
-                out = ""; n = length(line)
+              function unquoted(line,   out, n, i, c, open) {
+                # A line that STARTS inside a carried quote is never exempt, so
+                # carried state (which may span two unrelated tool calls) can
+                # only add a candidate, never blank one away.
+                out = ""; n = length(line); open = st != 0
                 for (i = 1; i <= n; i++) {
                   c = substr(line, i, 1)
                   if (st == 0) {
@@ -4315,7 +4318,7 @@ if want safety; then
                   else if (c == "\"") { st = 0; out = out (buf ~ /[$][(]|`|\\/ ? "`" : " ") }
                   else buf = buf c
                 }
-                return st == 0 ? out : out "`"
+                return st == 0 && !open ? out : out "`"
               }
               function text_only(s,   n, i, seg) {
                 if (s ~ /[|<>`(){}]|[$][(]/) return 0
