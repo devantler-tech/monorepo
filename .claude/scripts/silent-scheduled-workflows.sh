@@ -68,7 +68,7 @@ cron_interval() {
   leap=0
   late=0
   [[ "$dom" =~ (^|[,-])(29|30|31)([,/-]|$) ]] && late=1
-  [[ "$dom" =~ (^|[,-])29([,/-]|$) && "$mon" =~ ^(2|[Ff][Ee][Bb])$ ]] && leap=1
+  [[ "$dom" == "29" && "$mon" =~ ^(2|[Ff][Ee][Bb])$ ]] && leap=1
   if [ "$mon" != "*" ]; then
     if [ "$leap" -eq 1 ]; then echo $((8 * 366 * day)); else echo $((366 * day)); fi
   elif [ "$dom" != "*" ]; then
@@ -85,6 +85,12 @@ cron_interval() {
 # result is an integer before comparing it — a failed conversion must never read as "recent".
 jq_epoch='def epoch: (.[0:19] + "Z" | fromdate) - ((capture("(?<s>[+-])(?<h>[0-9]{2}):(?<m>[0-9]{2})$") // {s: "+", h: "0", m: "0"}) | ((.h | tonumber) * 3600 + (.m | tonumber) * 60) * (if .s == "+" then 1 else -1 end));'
 is_epoch() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
+# The cron lines a workflow file declares (empty when it has no schedule). `on:` parses as the
+# boolean key `true` under YAML 1.1, so read both spellings.
+crons_of() {
+  yq -r '(.on // .true // {}) | select(tag == "!!map") | .schedule // [] | .[].cron' <<<"$1" 2>/dev/null
+}
 
 silent=0
 checked=0
@@ -154,9 +160,7 @@ for repo in "${repos[@]}"; do
       unknown=1
       continue
     fi
-    # `on:` parses as the boolean key `true` under YAML 1.1, so read both spellings.
-    if ! crons="$(yq -r '(.on // .true // {}) | select(tag == "!!map") | .schedule // [] | .[].cron' \
-      <<<"$content" 2>/dev/null)"; then
+    if ! crons="$(crons_of "$content")"; then
       echo "QUERY-UNKNOWN ${repo} ${path} — workflow triggers unparseable"
       unknown=1
       continue
@@ -183,24 +187,38 @@ for repo in "${repos[@]}"; do
     fi
 
     cutoff=$((now - limit))
-    # Too new to have missed a firing yet. The workflow's creation time is not enough: an old
-    # dispatch-only workflow that GAINS a schedule was created long ago, yet its first firing may
-    # not be due. So the schedule counts as active only from the file's newest commit on the default
-    # branch — later than the real activation at worst, which can only delay a report.
+    # Too new to have missed a firing yet?
     if ! is_epoch "$created"; then
       echo "QUERY-UNKNOWN ${repo} ${path} — workflow creation time unparseable"
       unknown=1
       continue
     fi
-    if ! changed="$(gh api --method GET "repos/${repo}/commits" -f path="${path}" -f sha="${branch}" -f per_page=1 \
-      --jq "${jq_epoch} .[0].commit.committer.date // \"\" | if . == \"\" then \"\" else epoch end")" ||
-      ! is_epoch "$changed"; then
-      echo "QUERY-UNKNOWN ${repo} ${path} — last change on the default branch unreadable"
+    [ "$created" -gt "$cutoff" ] && continue
+    # The creation time is not enough: an old dispatch-only workflow that GAINS a schedule was
+    # created long ago, yet its first firing may not be due. And the file's newest commit is not
+    # enough either, because unrelated edits (a pin bump every month) would renew that grace
+    # forever. So compare the schedule itself: read the file as it stood at the window's start and
+    # judge silence only when its crons then equal its crons now. A file with no commit before the
+    # window is new, and gets the grace.
+    cutoff_iso="$(jq -rn --argjson e "$cutoff" '$e | todate')"
+    if ! before_sha="$(gh api --method GET "repos/${repo}/commits" -f path="${path}" -f sha="${branch}" \
+      -f until="${cutoff_iso}" -f per_page=1 --jq '.[0].sha // ""')"; then
+      echo "QUERY-UNKNOWN ${repo} ${path} — history at the window start unreadable"
       unknown=1
       continue
     fi
-    [ "$created" -gt "$cutoff" ] && continue
-    [ "$changed" -gt "$cutoff" ] && continue
+    [ -n "$before_sha" ] || continue
+    if ! before="$(gh api --method GET -H 'Accept: application/vnd.github.raw' \
+      "repos/${repo}/contents/${encoded_path}" -f ref="${before_sha}" 2>"$err")"; then
+      if grep -q 'HTTP 404' "$err"; then continue; fi # the file was elsewhere then: new here
+      echo "QUERY-UNKNOWN ${repo} ${path} — file at the window start unreadable"
+      unknown=1
+      continue
+    fi
+    if ! before_crons="$(crons_of "$before")"; then
+      continue # unparseable then, so the current schedule is newer than the window
+    fi
+    [ "$before_crons" = "$crons" ] || continue
 
     # 🔴 Never filter the run list by `event=schedule`: that filtered listing is INCOMPLETE —
     # measured 2026-09-29 on a monthly workflow, it returned 3 runs (newest July) while the
@@ -209,12 +227,20 @@ for repo in "${repos[@]}"; do
     found=""
     verdict=""
     for ((page = 1; page <= max_pages; page++)); do
-      if ! rows="$(gh api "repos/${repo}/actions/workflows/${id}/runs?per_page=100&page=${page}" \
-        --jq "${jq_epoch} .workflow_runs[] | [.event, (.created_at | epoch), .created_at] | @tsv")"; then
+      if ! page_out="$(gh api "repos/${repo}/actions/workflows/${id}/runs?per_page=100&page=${page}" \
+        --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflow_runs[] | [.event, (.created_at | epoch), .created_at] | @tsv)")"; then
         verdict="unknown"
         break
       fi
-      [ -n "$rows" ] || { verdict="edge"; break; }
+      run_total="$(awk -F'\t' '$1 == "TOTAL" { print $2; exit }' <<<"$page_out")"
+      rows="$(grep -v $'^TOTAL\t' <<<"$page_out" || true)"
+      is_epoch "${run_total:-x}" || { verdict="unknown"; break; }
+      if [ -z "$rows" ]; then
+        # An empty page is the end only when the total says every run was already listed;
+        # otherwise the payload was short and the silence is unproven.
+        if [ "$run_total" -le $(((page - 1) * 100)) ]; then verdict="edge"; else verdict="unknown"; fi
+        break
+      fi
       oldest=""
       while IFS=$'\t' read -r event at stamp; do
         is_epoch "$at" || { verdict="unknown"; break; }

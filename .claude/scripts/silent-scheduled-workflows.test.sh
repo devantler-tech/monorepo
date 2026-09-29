@@ -37,7 +37,8 @@ done
 case "$url" in *"ref="* | *"sha="*) echo "gh stub: branch spliced into the URL: $url" >&2; exit 1 ;; esac
 [ -z "$query" ] || url="$url?$query"
 [ -n "${FAIL_ON:-}" ] && [[ "$url" == *"$FAIL_ON"* ]] && { echo "gh: HTTP 502" >&2; exit 1; }
-key="$(printf '%s' "$url" | tr '/?&=' '____')"
+# The window start (`until=`) depends on each workflow's cron, so fixtures key on its presence only.
+key="$(printf '%s' "$url" | sed 's/until=[^&]*/until/' | tr '/?&=' '____')"
 f="$FIXTURES/$key.json"
 [ -f "$f" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
 if [ -n "$jqexpr" ]; then jq -r "$jqexpr" "$f"; else cat "$f"; fi
@@ -45,10 +46,14 @@ STUB
 chmod +x "$bin/gh"
 
 put() { printf '%s' "$2" >"$fix/$(printf '%s' "$1" | tr '/?&=' '____').json"; }
-workflow_file() { # <repo> <path> <yaml> [<epoch of the file's newest commit on main>]
+workflow_file() { # <repo> <path> <yaml> [<yaml at the window start, or NONE if the file was new>]
   put "repos/$1/contents/$2?ref=main" "$3" # raw media type: the file itself
-  put "repos/$1/commits?path=$2&sha=main&per_page=1" \
-    "[{\"commit\":{\"committer\":{\"date\":\"$(iso "${4:-$((now - 300 * d))}")\"}}}]"
+  if [ "${4-}" = NONE ]; then
+    put "repos/$1/commits?path=$2&sha=main&until&per_page=1" '[]'
+  else
+    put "repos/$1/commits?path=$2&sha=main&until&per_page=1" '[{"sha":"before"}]'
+    put "repos/$1/contents/$2?ref=before" "${4:-$3}"
+  fi
 }
 runs() { # <repo> <id> <page> <event:epoch>...
   local repo="$1" id="$2" page="$3" rows="" e t
@@ -57,13 +62,15 @@ runs() { # <repo> <id> <page> <event:epoch>...
     e="${r%%:*}"; t="${r#*:}"
     rows="${rows:+$rows,}{\"event\":\"$e\",\"created_at\":\"$(iso "$t")\"}"
   done
-  put "repos/$repo/actions/workflows/$id/runs?per_page=100&page=$page" "{\"workflow_runs\":[${rows}]}"
+  local total=$(((page - 1) * 100 + $#))
+  put "repos/$repo/actions/workflows/$id/runs?per_page=100&page=$page" "{\"total_count\":${total},\"workflow_runs\":[${rows}]}"
 }
 
 # Repository o/a — every shape the checker must decide.
 old="2026-01-01T10:00:00.000+02:00" # the offset form GitHub actually returns for workflows
 put "repos/o/a" '{"default_branch":"main"}'
-put "repos/o/a/actions/workflows?per_page=100" "{\"total_count\":10,\"workflows\":[
+put "repos/o/a/actions/workflows?per_page=100" "{\"total_count\":11,\"workflows\":[
+  {\"id\":11,\"state\":\"active\",\"path\":\".github/workflows/moved.yaml\",\"created_at\":\"$old\"},
   {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"},
   {\"id\":2,\"state\":\"active\",\"path\":\".github/workflows/dispatch.yaml\",\"created_at\":\"$old\"},
   {\"id\":3,\"state\":\"active\",\"path\":\".github/workflows/stale.yaml\",\"created_at\":\"$old\"},
@@ -103,11 +110,15 @@ runs o/a 7 2 "schedule:$((now - 20 * d))"
 # 29 February fires only in leap years: three years of silence is not a stopped schedule.
 workflow_file o/a .github/workflows/leap.yaml 'on:
   schedule:
-    - cron: "0 0 29 2 *"' "$((now - 5 * 366 * d))"
+    - cron: "0 0 29 2 *"'
 runs o/a 9 1 "schedule:$((now - 3 * 365 * d))"
-# An old dispatch-only workflow that GAINED a daily schedule 10h ago: not yet due, not silent.
-workflow_file o/a .github/workflows/gained.yaml "$daily" "$((now - 10 * h))"
+# An old dispatch-only workflow that GAINED a daily schedule inside the window: not yet due.
+workflow_file o/a .github/workflows/gained.yaml "$daily" 'on:
+  workflow_dispatch: {}'
 runs o/a 10 1 "workflow_dispatch:$((now - 40 * d))"
+# A file with no commit before the window (added or moved there recently) is new: not yet due.
+workflow_file o/a .github/workflows/moved.yaml "$daily" NONE
+runs o/a 11 1 "workflow_dispatch:$((now - 40 * d))"
 
 run() { set +e; PATH="$bin:$PATH" FIXTURES="$fix" "$checker" "$@" --now "$now" >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
 has() { grep -qxF -- "$1" "$tmp/out" || { cat "$tmp/out" "$tmp/err" >&2; fail "$2"; }; }
@@ -127,7 +138,8 @@ lacks "monthly.yaml" "a schedule run on the second page must be found"
 lacks "codeql" "a dynamic GitHub-managed workflow is out of scope"
 lacks "leap.yaml" "a 29 February schedule silent for three years is not stopped"
 lacks "gained.yaml" "a schedule added 10h ago to an old workflow is not yet due"
-has "CHECKED 6 scheduled workflow(s) across 1 repositor(ies)" "the summary must count what was examined"
+lacks "moved.yaml" "a file with no commit before the window is new, not silent"
+has "CHECKED 7 scheduled workflow(s) across 1 repositor(ies)" "the summary must count what was examined"
 [ "$(grep -c '^SILENT-WORKFLOW' "$tmp/out")" -eq 2 ] || fail "exactly two findings expected"
 
 # A failed run-list read is UNKNOWN — never "silent", never clean.
@@ -167,21 +179,44 @@ has "CHECKED 1 scheduled workflow(s) across 1 repositor(ies)" "healthy summary"
 # Only a February-ONLY day-29 schedule skips years: 31 January fires every year, and `29 2,3`
 # fires every March, so four years of silence is a stop for both.
 put "repos/o/d" '{"default_branch":"main"}'
-put "repos/o/d/actions/workflows?per_page=100" '{"total_count":2,"workflows":[
+put "repos/o/d/actions/workflows?per_page=100" '{"total_count":3,"workflows":[
   {"id":1,"state":"active","path":".github/workflows/annual.yaml","created_at":"2019-01-01T00:00:00.000+02:00"},
-  {"id":2,"state":"active","path":".github/workflows/febmar.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
+  {"id":2,"state":"active","path":".github/workflows/febmar.yaml","created_at":"2019-01-01T00:00:00.000+02:00"},
+  {"id":3,"state":"active","path":".github/workflows/feb1and29.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
+# annual.yaml's file was edited recently (a pin bump, say) but its schedule was not: the fixture's
+# window-start content equals today's, so the silence is judged rather than excused.
 workflow_file o/d .github/workflows/annual.yaml 'on:
   schedule:
-    - cron: "0 0 31 1 *"' "$((now - 5 * 366 * d))"
+    - cron: "0 0 31 1 *"
+jobs: {}'
+put "repos/o/d/contents/.github/workflows/annual.yaml?ref=before" 'on:
+  schedule:
+    - cron: "0 0 31 1 *"
+jobs: {old: {}}'
 runs o/d 1 1 "schedule:$((now - 4 * 366 * d))"
 workflow_file o/d .github/workflows/febmar.yaml 'on:
   schedule:
-    - cron: "0 0 29 2,3 *"' "$((now - 5 * 366 * d))"
+    - cron: "0 0 29 2,3 *"'
 runs o/d 2 1 "schedule:$((now - 4 * 366 * d))"
+workflow_file o/d .github/workflows/feb1and29.yaml 'on:
+  schedule:
+    - cron: "0 0 1,29 2 *"'
+runs o/d 3 1 "schedule:$((now - 4 * 366 * d))"
 run --repo o/d
 [ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "annual schedules silent for four years must be reported, got $rc"; }
-grep -qF "annual.yaml" "$tmp/out" || fail "a 31 January schedule silent for four years must be reported"
+grep -qF "annual.yaml" "$tmp/out" || fail "a 31 January schedule silent for four years must be reported, even after an unrelated edit"
 grep -qF "febmar.yaml" "$tmp/out" || fail "a 29 Feb/March schedule silent for four years must be reported"
+grep -qF "feb1and29.yaml" "$tmp/out" || fail "a 1 and 29 February schedule silent for four years must be reported"
+
+# An empty run page is the end only when total_count says so; a short payload is UNKNOWN.
+put "repos/o/g" '{"default_branch":"main"}'
+put "repos/o/g/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/g .github/workflows/daily.yaml "$daily"
+put "repos/o/g/actions/workflows/1/runs?per_page=100&page=1" '{"total_count":5,"workflow_runs":[]}'
+run --repo o/g
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a short run page must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/g .github/workflows/daily.yaml — run list read failed" "a short run page must be named"
 
 # A listing that succeeds but is short of its own total_count is UNKNOWN, never an empty repository.
 put "repos/o/e" '{"default_branch":"main"}'
@@ -195,8 +230,7 @@ put "repos/o/f" '{"default_branch":"main"}'
 put "repos/o/f/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
   {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a#b.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/f .github/workflows/a%23b.yaml "$daily"
-put "repos/o/f/commits?path=.github/workflows/a#b.yaml&sha=main&per_page=1" \
-  "[{\"commit\":{\"committer\":{\"date\":\"$(iso $((now - 300 * d)))\"}}}]"
+put "repos/o/f/commits?path=.github/workflows/a#b.yaml&sha=main&until&per_page=1" '[{"sha":"before"}]'
 runs o/f 1 1 "schedule:$((now - 40 * d))"
 run --repo o/f
 [ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an encoded path must be read and judged, got $rc"; }
