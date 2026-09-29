@@ -7205,6 +7205,42 @@ else
       "got: $(grep -hE 'tool errors in window|Blocked:|npm ci|two-writer|xtraction' <<<"$WX_REL$WX_SAFE$WX_A2A" | head -6)"
 fi
 
+echo
+echo "── checkout-then-build: \`make\` counts only as a command, not as prose (#2988) ──"
+# The word `make` inside quoted prose is not a Make invocation. Real ones — bare,
+# through `rtk`, and after `&&` with options before the target — must still be
+# listed, and so must a non-Make build beside them (the control that the walk
+# read this session at all).
+MK="$FIX/makeprose"
+MK_SLUG=$(printf '%s' "$MK/nest" | sed 's|/|-|g')
+mkdir -p "$MK/projects/$MK_SLUG" "$MK/codex" "$MK/nest"
+MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
+mk_cmd() { # $1 = id, $2 = command
+  jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
+    '{type:"assistant",timestamp:$ts,message:{content:[{type:"tool_use",id:$id,name:"Bash",input:{command:$c}}]}}'
+}
+{
+  mk_cmd m1 'gh pr checkout 7'
+  mk_cmd m2 "printf 'make the report clearer'"
+  mk_cmd m3 'git commit -m "fix: make the build pass"'
+  mk_cmd m4 'make test'
+  mk_cmd m5 'rtk make build'
+  mk_cmd m6 'cd sub && make -C x lint'
+  mk_cmd m7 'npm ci'
+} > "$MK/projects/$MK_SLUG/s.jsonl"
+MK_OUT=$(TZ=UTC CLAUDE_PROJECTS_DIR="$MK/projects" CODEX_HOME="$MK/codex" MONOREPO_DIR="$MK/nest" \
+  HOME="$MK" bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 make test$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 rtk make build$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 cd sub && make -C x lint$' <<<"$MK_OUT" \
+   && ! grep -qE 'make the' <<<"$MK_OUT"; then
+  ok "prose containing 'make the' is not a build candidate; real make invocations still are"
+else
+  bad "prose containing 'make the' is not a build candidate; real make invocations still are" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+
 # walk ~ section ~ literal to break ~ its mutation ~ line proving the walk read something
 while IFS='~' read -r wx_walk wx_sec wx_old wx_new wx_signal; do
   wx_ab="$FIX/wx_ablate_${wx_walk}.sh"

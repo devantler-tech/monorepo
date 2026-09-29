@@ -4267,12 +4267,18 @@ if want safety; then
     # Both greps read the captured value from a here-string. A `… | grep -qE`
     # here would be the exact writer-into-early-exiting-grep hazard this
     # repository's own guard rejects.
+    #
+    # `make` is a common English word, so it counts only in COMMAND position —
+    # at the start of a line or after `;`, `&`, `|` or `(` (which covers `&&`,
+    # `||` and `$(`), optionally through the `rtk` wrapper, with options before
+    # the target. Matched anywhere, `printf 'make the report clearer'` was a
+    # Make execution candidate (#2988).
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
           cmds="$(commands_in "$f" 2>/dev/null)" || { printf x >> "$XFBUILD"; continue; }
           [[ -n "$cmds" ]] || continue
           if grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))' <<<"$cmds"; then
-            grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|make [a-z]+)' <<<"$cmds"
+            grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|(^|[;&|(])[[:space:]]*(rtk[[:space:]]+)?make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z])' <<<"$cmds"
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
     extraction_canary "$XFBUILD" "$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true)" "checkout-then-build"
