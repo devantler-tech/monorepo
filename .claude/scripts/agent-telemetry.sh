@@ -4268,26 +4268,33 @@ if want safety; then
     # here would be the exact writer-into-early-exiting-grep hazard this
     # repository's own guard rejects.
     #
-    # `make` is a common English word, so it counts only in COMMAND position —
-    # at the start of a line or after `;`, `&`, `|` or `(` (which covers `&&`,
-    # `||` and `$(`), optionally through the `rtk` wrapper and leading
-    # `VAR=value` assignments, with options before the target. Matched anywhere,
+    # `make` is a common English word, so a `make <word>` inside the quoted TEXT
+    # of a text-only command — `printf`, `echo`, or a `-m`, `--message`,
+    # `--body` or `--title` value — is dropped before the test: matched as is,
     # `printf 'make the report clearer'` was a Make execution candidate (#2988).
-    # Quoted text is dropped before that test, so a separator inside prose
-    # (`printf '(make -n deploy)'`) is not a command boundary: single-quoted
-    # text never runs, and a double-quoted string is dropped only when it holds
-    # no `$` or backtick, so `"$(make x)"` still counts.
+    # Everything else still counts wherever `make` appears as a word, so every
+    # spelling this list does not name errs toward REPORTING a build
+    # (`sh -c 'make x'`, `if make x`, `{ make x; }`, `CC=cc make x`) rather than
+    # toward a clean-looking empty result. A double-quoted value holding `$(` or
+    # a backtick runs code, so it is never dropped.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
           cmds="$(commands_in "$f" 2>/dev/null)" || { printf x >> "$XFBUILD"; continue; }
           [[ -n "$cmds" ]] || continue
           if grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))' <<<"$cmds"; then
-            LC_ALL=C awk '{
-              s = $0; sq = sprintf("%c", 39)
-              gsub(sq "[^" sq "]*" sq, "", s); gsub(/"[^"$`]*"/, "", s)
-              if ($0 ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
-                  || s ~ /(^|[;&|(])[[:space:]]*(rtk[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/) print
-            }' <<<"$cmds"
+            LC_ALL=C awk '
+              BEGIN {
+                sq = sprintf("%c", 39)
+                q = "(" sq "[^" sq "]*" sq "|\"([^\"`$]|[$][^(\"])*\")"
+                text = "(printf|echo|-m|--message|--body|--title)([[:space:]]+(-[A-Za-z]+|" q "))+"
+              }
+              {
+                s = $0; kept = ""
+                while (match(s, text)) { kept = kept substr(s, 1, RSTART - 1) " "; s = substr(s, RSTART + RLENGTH) }
+                s = kept s
+                if ($0 ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
+                    || s ~ /(^|[^A-Za-z0-9_-])make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/) print
+              }' <<<"$cmds"
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
     extraction_canary "$XFBUILD" "$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true)" "checkout-then-build"

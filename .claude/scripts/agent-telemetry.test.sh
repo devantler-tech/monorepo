@@ -7210,7 +7210,7 @@ echo "── checkout-then-build: \`make\` counts only as a command, not as pros
 # through `rtk`, after `&&` with options before the target, behind `VAR=value`
 # assignments, and inside `"$(…)"` — must still be listed, and so must a non-Make
 # build beside them (the control that the walk read the session at all). The
-# section prints at most five distinct commands, so the cases split over two runs.
+# section prints at most five distinct commands, so the cases split over three runs.
 MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 mk_cmd() { # $1 = id, $2 = command
   jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
@@ -7257,6 +7257,27 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
   ok "assignment-prefixed make counts; a separator inside quoted prose is not a command boundary"
 else
   bad "assignment-prefixed make counts; a separator inside quoted prose is not a command boundary" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+# Spellings the text-only list does not name must err toward REPORTING: a nested
+# shell's code argument and a compound-command prefix are real Make runs, while an
+# interpolated echo string is still prose.
+MK_OUT=$({
+  mk_cmd n1 'gh pr checkout 9'
+  mk_cmd n2 "sh -c 'make test'"
+  mk_cmd n3 'if make check; then :; fi'
+  mk_cmd n4 '{ make lint; }'
+  mk_cmd n5 'echo "status $x; make -n deploy"'
+  mk_cmd n6 'npm ci'
+} | mk_run makenested)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE "^ +1 sh -c 'make test'$" <<<"$MK_OUT" \
+   && grep -qE '^ +1 if make check; then :; fi$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 \{ make lint; \}$' <<<"$MK_OUT" \
+   && ! grep -qE 'make -n deploy' <<<"$MK_OUT"; then
+  ok "nested-shell and compound-command make still count; interpolated echo prose does not"
+else
+  bad "nested-shell and compound-command make still count; interpolated echo prose does not" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 
