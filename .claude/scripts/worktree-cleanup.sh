@@ -35,6 +35,8 @@
 #   KEEP  - a worktree with modified TRACKED files, other than UNSTAGED gitlink drift
 #   KEEP  - a worktree with untracked files outside the known tool-noise set
 #   KEEP  - a worktree whose modified submodule itself has uncommitted or unpushed work
+#           (a submodule HEAD that is exactly a merged PR's head in its own devantler-tech
+#           repository is spent, not unpushed work: #3674)
 #   KEEP  - a worktree locked at removal time, re-checked live (never overridden by
 #           --force, and never removed by the rm -rf fallback either)
 #   ABORT - on any infrastructure failure (worktree list, lsof — including a partial
@@ -169,19 +171,22 @@ WT_ROOT="$TOPLEVEL/.claude/worktrees"
 #
 # The repository is derived from origin and must be devantler-tech on github.com;
 # anything else yields no evidence (KEEP) without a query.
-GH_REPO=""
+# portfolio_repo <origin-url> -> prints devantler-tech/<name>, or nothing for any other URL.
+portfolio_repo() {
+  local url=$1 name=""
+  case "$url" in
+    https://github.com/devantler-tech/*)       name=${url#https://github.com/devantler-tech/} ;;
+    git@github.com:devantler-tech/*)           name=${url#git@github.com:devantler-tech/} ;;
+    ssh://git@github.com/devantler-tech/*)     name=${url#ssh://git@github.com/devantler-tech/} ;;
+  esac
+  name=${name%.git}
+  case "$name" in
+    ''|*[!A-Za-z0-9._-]*) ;;
+    *) printf 'devantler-tech/%s\n' "$name" ;;
+  esac
+}
 origin_url=$(git -C "$TOPLEVEL" remote get-url origin 2>/dev/null || true)
-gh_repo_name=""
-case "$origin_url" in
-  https://github.com/devantler-tech/*)       gh_repo_name=${origin_url#https://github.com/devantler-tech/} ;;
-  git@github.com:devantler-tech/*)           gh_repo_name=${origin_url#git@github.com:devantler-tech/} ;;
-  ssh://git@github.com/devantler-tech/*)     gh_repo_name=${origin_url#ssh://git@github.com/devantler-tech/} ;;
-esac
-gh_repo_name=${gh_repo_name%.git}
-case "$gh_repo_name" in
-  ''|*[!A-Za-z0-9._-]*) ;;
-  *) GH_REPO="devantler-tech/$gh_repo_name" ;;
-esac
+GH_REPO=$(portfolio_repo "$origin_url")
 
 # The scheduled sweep runs under launchd, whose default PATH (/usr/bin:/bin:/usr/sbin:/sbin)
 # holds no Homebrew directory. Without this fallback every query would fail and the
@@ -279,6 +284,38 @@ pr_proves_spent() {
     case "$state" in
       OPEN) return 1 ;;
       MERGED|CLOSED) [ "$head" = "$sha" ] && proven=0 ;;
+    esac
+  done <<< "$rows"
+  return "$proven"
+}
+
+# submodule_head_spent <submodule-checkout> <sha> — exit 0 only when GitHub records a MERGED
+# pull request in the submodule's own devantler-tech repository whose head commit is exactly
+# <sha>, and no OPEN one with that head (#3674). A submodule's squash-merged commit sits on
+# no remote-tracking ref once its branch is deleted, so the graph test alone kept every such
+# worktree forever (10 of 13 submodule-unpushed KEEPs on 2026-09-29). The lookup is by
+# commit, not branch, because a submodule checkout is usually detached. GitHub keeps the head
+# under refs/pull/<n>/head, so the commit stays recoverable after the worktree goes.
+# Anything else (a non-portfolio remote, a malformed SHA, a failed or timed-out query, a
+# closed-unmerged PR) proves nothing, and the caller keeps the worktree.
+submodule_head_spent() {
+  local sub=$1 sha=$2 repo rows state merged_at head proven=1
+  [ -n "$GH_BIN" ] || return 1
+  case "$sha" in *[!0-9a-f]*|'') return 1 ;; esac
+  [ "${#sha}" -eq 40 ] || return 1
+  repo=$(portfolio_repo "$(git -C "$sub" remote get-url origin 2>/dev/null || true)")
+  [ -n "$repo" ] || return 1
+  # merged_at is null on an open or closed-unmerged PR. It is printed as `-`, never as an
+  # empty field: tab is IFS whitespace, so `read` would collapse the empty field and shift
+  # the head SHA into merged_at, and an OPEN PR's veto would be silently skipped.
+  rows=$(gh_bounded api --paginate "repos/$repo/commits/$sha/pulls" \
+         --jq '.[] | "\(.state)\t\(.merged_at // "-")\t\(.head.sha)"') || return 1
+  while IFS=$'\t' read -r state merged_at head; do
+    [ -n "$state" ] || continue
+    [ "$head" = "$sha" ] || continue
+    case "$state" in
+      open) return 1 ;;
+      closed) [ "$merged_at" != "-" ] && proven=0 ;;
     esac
   done <<< "$rows"
   return "$proven"
@@ -659,8 +696,11 @@ count_real_changes() {
           sub_status_rc=$?
           sub_sha=$(git -C "$wt/$path" rev-parse HEAD 2>/dev/null)
           sub_unpushed=$(git -C "$wt/$path" rev-list --count "$sub_sha" --not --remotes 2>/dev/null)
-          if [ "$sub_status_rc" -ne 0 ] || [ -n "$sub_status" ] \
-             || [ -z "$sub_unpushed" ] || [ "$sub_unpushed" -gt 0 ]; then
+          if [ "$sub_status_rc" -ne 0 ] || [ -n "$sub_status" ] || [ -z "$sub_unpushed" ]; then
+            REAL_CHANGES=$((REAL_CHANGES+1)); REAL_SUBMODULE_CHANGES=$((REAL_SUBMODULE_CHANGES+1))
+          elif [ "$sub_unpushed" -gt 0 ] && ! submodule_head_spent "$wt/$path" "$sub_sha"; then
+            # A clean submodule whose HEAD no remote reaches is work, unless that HEAD is
+            # exactly a merged PR's head in the submodule's own repository (#3674).
             REAL_CHANGES=$((REAL_CHANGES+1)); REAL_SUBMODULE_CHANGES=$((REAL_SUBMODULE_CHANGES+1))
           fi
           # ACCEPTED LIMITATION, stated rather than papered over: this treats the drift as

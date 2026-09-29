@@ -3493,6 +3493,61 @@ t_salvage_reads_an_unterminated_fetch_head_line() {
   rm -rf "$root"
 }
 
+# --- a submodule sitting on a squash-merged PR head (#3674) --------------------------
+# drifted_sub_wt <root> <name> <origin-url> — a pushed worktree whose submodule has moved
+# to a clean commit no remote reaches (unstaged gitlink drift), with the submodule's origin
+# then pointed at <origin-url>. Prints that commit's SHA.
+drifted_sub_wt() {
+  local root=$1 name=$2 url=$3 wt="$1/repo/.claude/worktrees/$2"
+  admin_sub_wt "$root" "$name" || return 1
+  git -C "$wt/sub" commit -q --allow-empty -m "the PR head" || return 1
+  git -C "$wt/sub" remote set-url origin "$url" || return 1
+  [ "$(git -C "$wt" status --porcelain)" = " M sub" ] || return 1
+  [ "$(git -C "$wt/sub" rev-list --count HEAD --not --remotes)" = 1 ] || return 1
+  age_tree "$wt"
+  git -C "$wt/sub" rev-parse HEAD
+}
+
+t_submodule_on_a_merged_pr_head() {
+  # One fixture per GitHub answer. The shim prints gh-out verbatim, in the shape the
+  # script's --jq produces: state<TAB>merged_at (or `-` when null)<TAB>head.sha.
+  local name="a submodule on a merged PR head is spent; every other answer keeps the worktree"
+  local failures="" case_name url rows want root sha shim out
+  for case_name in merged moved open unmerged failed foreign; do
+    root=$(make_repo)
+    url=https://github.com/devantler-tech/subfix.git
+    [ "$case_name" = foreign ] && url=https://github.com/someone-else/subfix.git
+    sha=$(drifted_sub_wt "$root" "sub$case_name" "$url") \
+      || { failures="$failures $case_name(FIXTURE)"; rm -rf "$root"; continue; }
+    case "$case_name" in
+      merged)   rows="closed	2026-09-01T00:00:00Z	$sha" ;;
+      moved)    rows="closed	2026-09-01T00:00:00Z	0123456789abcdef0123456789abcdef01234567" ;;
+      open)     rows="closed	2026-09-01T00:00:00Z	$sha
+open	-	$sha" ;;
+      unmerged) rows="closed	-	$sha" ;;
+      failed|foreign) rows="closed	2026-09-01T00:00:00Z	$sha" ;;
+    esac
+    printf '%s\n' "$rows" > "$root/gh-out"
+    [ "$case_name" = failed ] && touch "$root/gh-fail"
+    shim=$(gh_shim "$root") || { failures="$failures $case_name(SHIM)"; rm -rf "$root"; continue; }
+    out=$(run_gh "$root" "$shim")
+    want=KEEP; [ "$case_name" = merged ] && want=REAP
+    if [ "$want" = REAP ]; then
+      grep -q "^REAP  .*sub$case_name" <<<"$out" \
+        && grep -qF "api --paginate repos/devantler-tech/subfix/commits/$sha/pulls" "$root/gh-args" \
+        || failures="$failures $case_name:[$out]"
+    elif [ "$case_name" = foreign ]; then
+      # A non-portfolio remote is never even queried.
+      grep -q "KEEP .*sub$case_name .*uncommitted" <<<"$out" && ! grep -q 'commits/' "$root/gh-args" 2>/dev/null \
+        || failures="$failures $case_name:[$out]"
+    else
+      grep -q "KEEP .*sub$case_name .*uncommitted" <<<"$out" || failures="$failures $case_name:[$out]"
+    fi
+    rm -rf "$root"
+  done
+  if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -3634,5 +3689,6 @@ t_salvage_preserves_commit_editmsg
 t_salvage_preserves_config_worktree
 t_salvage_caps_an_oversized_commit_editmsg
 t_salvage_keeps_a_redirected_gitfile
+t_submodule_on_a_merged_pr_head
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
