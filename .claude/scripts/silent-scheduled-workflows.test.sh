@@ -62,7 +62,7 @@ runs() { # <repo> <id> <page> <event:epoch>...
     e="${r%%:*}"; t="${r#*:}"
     rows="${rows:+$rows,}{\"event\":\"$e\",\"created_at\":\"$(iso "$t")\"}"
   done
-  local total=$(((page - 1) * 100 + $#))
+  local total="${RUNS_TOTAL:-$(((page - 1) * 100 + $#))}" # every page of one listing reports the same total
   put "repos/$repo/actions/workflows/$id/runs?per_page=100&page=$page" "{\"total_count\":${total},\"workflow_runs\":[${rows}]}"
 }
 
@@ -105,8 +105,8 @@ workflow_file o/a .github/workflows/monthly.yaml 'on:
 # A full first page (per_page=100) of newer push runs, as the API would really return it.
 page1=()
 for ((i = 1; i <= 100; i++)); do page1+=("push:$((now - i * h))"); done
-runs o/a 7 1 "${page1[@]}"
-runs o/a 7 2 "schedule:$((now - 20 * d))"
+RUNS_TOTAL=101 runs o/a 7 1 "${page1[@]}"
+RUNS_TOTAL=101 runs o/a 7 2 "schedule:$((now - 20 * d))"
 # 29 February fires only in leap years: three years of silence is not a stopped schedule.
 workflow_file o/a .github/workflows/leap.yaml 'on:
   schedule:
@@ -277,6 +277,17 @@ put "repos/o/m/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\"
 run --repo o/m
 [ "$rc" -eq 2 ] || fail "a malformed workflow record must exit 2, got $rc"
 has "QUERY-UNKNOWN o/m — workflow list holds a malformed record" "a malformed record must be named"
+
+# A window-start version that cannot be parsed is UNKNOWN, never the new-schedule grace.
+put "repos/o/n" '{"default_branch":"main"}'
+put "repos/o/n/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/n .github/workflows/daily.yaml "$daily" 'on: [unclosed'
+runs o/n 1 1 "schedule:$((now - 40 * d))"
+run --repo o/n
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an unparseable window-start version must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/n .github/workflows/daily.yaml — file at the window start unparseable" \
+  "an unparseable window-start version must be named"
 
 # An empty run page is the end only when total_count says so; a short payload is UNKNOWN.
 put "repos/o/g" '{"default_branch":"main"}'

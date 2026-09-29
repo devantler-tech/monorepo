@@ -248,7 +248,10 @@ for repo in "${repos[@]}"; do
       continue
     fi
     if ! before_crons="$(crons_of "$before")"; then
-      continue # unparseable then, so the current schedule is newer than the window
+      # A parse failure could be the tool, not the file, so it never grants the grace.
+      echo "QUERY-UNKNOWN ${repo} ${path} — file at the window start unparseable"
+      unknown=1
+      continue
     fi
     [ "$before_crons" = "$crons" ] || continue
 
