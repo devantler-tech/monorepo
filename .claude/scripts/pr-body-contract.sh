@@ -745,8 +745,15 @@ validate_body() {
   previous_line=0
   while IFS= read -r structure_line; do
     if [[ "${structure_line}" == '@RELATIONSHIP:'*'@' ]]; then
+      # A `Fixes #` slot also takes `Part of #N`: a partial delivery must be able to say
+      # so without closing its issue (#3695). A `Part of #` slot stays `Part of` only, so
+      # a template that never auto-closes issues cannot be made to. How many
+      # relationships a body may carry is checked separately.
       required_relationship="${structure_line#@RELATIONSHIP:}"
       required_relationship="${required_relationship%@}"
+      if [ "${required_relationship}" = "Fixes" ]; then
+        required_relationship="(Fixes|Part of)"
+      fi
       line_number="$(awk -v after="${previous_line}" -v keyword="${required_relationship}" '
         NR > after && ($0 ~ ("^" keyword " #[1-9][0-9]*$") || /^No issue: trivial fix[.]$/) {
           print NR
