@@ -27,6 +27,7 @@ jobs:
       branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
       worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
       build-cache-reclaim: ${{ steps.filter.outputs.build-cache-reclaim }}
+      disk-preflight: ${{ steps.filter.outputs.disk-preflight }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
@@ -201,6 +202,12 @@ jobs:
             build-cache-reclaim:
               - '.claude/scripts/build-cache-reclaim.sh'
               - '.claude/scripts/build-cache-reclaim.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            disk-preflight:
+              - '.claude/scripts/disk-preflight.sh'
+              - '.claude/scripts/disk-preflight.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1190,6 +1197,28 @@ jobs:
       # probes actually run in production.
       - name: Self-test build-cache-reclaim safety gates
         run: bash .claude/scripts/build-cache-reclaim.test.sh
+
+  test-disk-preflight:
+    name: Test disk pre-flight
+    needs: changes
+    if: needs.changes.outputs.disk-preflight == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A fake df on PATH replays each report, so no verdict depends on the runner's disk.
+      # Every failed or unreadable measurement must exit 2, never 0. The macos leg is
+      # load-bearing: the host ships bash 3.2 and BSD df, which is where runs check.
+      - name: Self-test disk-preflight verdicts
+        run: bash .claude/scripts/disk-preflight.test.sh
 
   test-worktree-cleanup:
     name: Test worktree cleanup
@@ -2713,6 +2742,7 @@ jobs:
       - test-branch-cleanup
       - test-worktree-cleanup
       - test-build-cache-reclaim
+      - test-disk-preflight
       - test-submodule-init
       - test-submodule-pin-currency
       - test-blocked-label-blocker-line
@@ -2797,6 +2827,7 @@ jobs:
             ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-build-cache-reclaim.result }}
+            ${{ needs.test-disk-preflight.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-blocked-label-blocker-line.result }}

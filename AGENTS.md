@@ -112,9 +112,10 @@ role behaviour changes in its owning upstream first** (resolve a bundled skill's
 - **Codex runs the portfolio survey inline** and never dispatches a surveyor subagent (monorepo#3057).
 - Run `.claude/scripts/platform-live-health.sh`: `nothing_on_fire` holds only when it exits `0`.
   Run `.claude/scripts/review-lane-health.sh` before requesting any review.
+- Sweep your own lane's worktrees, then run `.claude/scripts/disk-preflight.sh` (git-and-worktrees
+  guide).
 
-How the definition is assembled and how the pin is read:
-[definition guide](.claude/guides/definition-and-plugin.md).
+Assembly and pin reading: [definition guide](.claude/guides/definition-and-plugin.md).
 
 ### Agentic engineering plugin contract
 
@@ -198,8 +199,7 @@ UNKNOWN, which means not permitted). Hotfixes and filing issues are exempt. Full
   `~/.claude/projects/`, Codex's `automations/<id>/memory.md`) — never to a `memory/` directory inside
   a checkout. The end-of-run report is a per-run record, not a way to reach the maintainer.
 
-Store paths, the Agent Improver's ledgers and the sibling cross-read:
-[durable memory guide](.claude/guides/durable-memory.md).
+Store paths, ledgers and the sibling cross-read: [durable memory guide](.claude/guides/durable-memory.md).
 
 ### Maintainer channels
 
@@ -244,8 +244,7 @@ The Agent Improver may change only these surfaces; an installed or cached plugin
 - **Runtime-local** (back up first, verify after a dispatch, record before and after): the Claude and
   Codex schedule pointers and their permission and hook settings.
 
-Paths, verification rules and lane liveness checks:
-[definition surfaces guide](.claude/guides/definition-surfaces.md).
+Details: [definition surfaces guide](.claude/guides/definition-surfaces.md).
 
 ### Authority model
 
