@@ -572,12 +572,25 @@ validate_body() {
       rendered_record = $0
       while (match(rendered_record, /"([^"\\]|\\.)*"@[[:alnum:]-]+([.][[:alnum:]-]+)+/)) {
         quoted_suffix = substr(rendered_record, RSTART + RLENGTH)
-        quoted_kind = quoted_suffix ~ /^[[:space:]]+(file|filename|path)([^[:alnum:]_]|$)/ \
-          ? "file.name" : "email"
+        # A quoted filename is marked here and turned into the placeholder by
+        # the field loop, so its original is logged in document order.
+        if (quoted_suffix ~ /^[[:space:]]+(file|filename|path)([^[:alnum:]_]|$)/) {
+          quoted_original[++quoted_count] = substr(rendered_record, RSTART, RLENGTH)
+          quoted_kind = "\034" quoted_count "\034"
+        } else {
+          quoted_kind = "email"
+        }
         rendered_record = substr(rendered_record, 1, RSTART - 1) quoted_kind quoted_suffix
       }
       $0 = rendered_record
       for (field = 1; field <= NF; field++) {
+        if (match($field, /\034[0-9]+\034/)) {
+          quoted_index = substr($field, RSTART + 1, RLENGTH - 2)
+          $field = substr($field, 1, RSTART - 1) \
+            file_name_placeholder(quoted_original[quoted_index]) \
+            substr($field, RSTART + RLENGTH)
+          continue
+        }
         prefixed_implementation = $field ~ /^([.][.]?\/|--)[[:alnum:]_.-]+([^[:alnum:]_.-]|$)/
         if (prefixed_implementation) {
           $field = file_name_placeholder($field)

@@ -4978,7 +4978,7 @@ Restore the document journey for users.
 Fixes #3402
 EOF
 expect_fail "quoted email shape does not hide explicit file context" \
-  "PR body must not contain implementation or validation detail" env \
+  "PR body must not contain implementation or validation detail (matched: config.yaml\"@example.com)" env \
   PATH="${fixture_root}/bin:${PATH}" GH_MODE=repo \
   GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
   "${subject}" check --repo devantler-tech/platform \
