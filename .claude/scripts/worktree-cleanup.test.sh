@@ -2280,6 +2280,34 @@ t_an_unreadable_ctime_keeps_an_old_worktree() {
   rm -rf "$root"
 }
 
+t_a_fresh_nested_rename_in_an_old_worktree_is_not_salvaged() {
+  # `mv a/old a/new` moves no child's times and leaves no `a/old`, so only the surviving
+  # ancestor `a` records the rename; a deleted path is dated by it, not by nothing (#3642).
+  local name="a fresh nested directory rename is kept, not salvaged"
+  local root; root=$(make_repo)
+  add_wt "$root" freshmv pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/freshmv"
+  mkdir -p "$wt/a/old"; echo nested > "$wt/a/old/x.txt"
+  git -C "$wt" add a && git -C "$wt" commit -qm nested && git -C "$wt" push -q origin claude/freshmv \
+    || { bad "$name" "FIXTURE: nested commit"; rm -rf "$root"; return; }
+  mv "$wt/a/old" "$wt/a/new"
+  age_tree "$wt"
+  # Control: with the rename reported as old too, the same tree IS salvage-eligible.
+  local ctl; ctl=$(run_salvage "$root" dry-run 1)
+  grep -q '^SALVAGE .*freshmv' <<<"$ctl" \
+    || { bad "$name" "FIXTURE: the aged tree is not salvage-eligible :: $ctl"; rm -rf "$root"; return; }
+  printf '%s\n' "$wt/a" > "$CTIME_FRESH"
+  local out; out=$(run_salvage "$root" apply 1)
+  : > "$CTIME_FRESH"
+  if grep -q 'KEEP .*freshmv .*uncommitted change' <<<"$out" && ! grep -q '^SALVAGED .*freshmv' <<<"$out" \
+     && [ "$(cat "$wt/a/new/x.txt")" = nested ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_staging_old_bytes_in_an_old_worktree_is_not_salvaged() {
   # `git add` of bytes that are already old moves no file time, only the index (#3642).
   local name="staging old bytes just now is kept, not salvaged"
@@ -3586,6 +3614,7 @@ t_a_referenced_pseudo_ref_tag_does_not_block_salvage
 t_a_fresh_tracked_edit_in_an_old_worktree_is_not_salvaged
 t_a_fresh_chmod_in_an_old_worktree_is_not_salvaged
 t_an_unreadable_ctime_keeps_an_old_worktree
+t_a_fresh_nested_rename_in_an_old_worktree_is_not_salvaged
 t_staging_old_bytes_in_an_old_worktree_is_not_salvaged
 t_the_sweep_never_rewrites_a_worktree_index
 t_salvage_keeps_a_bare_repository_without_refs

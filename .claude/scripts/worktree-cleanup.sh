@@ -751,7 +751,7 @@ file_changed() {
 # moves only with someone's git activity in that worktree (#3642). Non-zero on a read
 # failure (the caller then keeps).
 work_age_h() {
-  local wt=$1 admin list p m newest=0 unreadable=0
+  local wt=$1 admin list p d m newest=0 unreadable=0
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
   list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
   # Plumbing diff-index, never porcelain `git diff`: the porcelain refreshes and rewrites
@@ -763,13 +763,13 @@ work_age_h() {
     rm -f "$list"; return 1
   fi
   while IFS= read -r -d '' p; do
-    # A deleted path has no mtime; its parent directory's changed when it went. A path
+    # A deleted path has no mtime; its nearest surviving ancestor changed when it went.
+    # The parent alone is not enough: `mv a/old a/new` leaves no `a/old`, and the moved
+    # children keep their old times, so only `a` records the rename. A path (or ancestor)
     # that exists but cannot be read is a failure, never an old path.
-    if [ -e "$wt/$p" ] || [ -L "$wt/$p" ]; then
-      m=$(file_changed "$wt/$p") || { unreadable=1; break; }
-    else
-      m=$(file_changed "$(dirname "$wt/$p")") || m=0
-    fi
+    d="$wt/$p"
+    until [ -e "$d" ] || [ -L "$d" ]; do d=$(dirname "$d"); done
+    m=$(file_changed "$d") || { unreadable=1; break; }
     [ "$m" -gt "$newest" ] && newest=$m
   done < "$list"
   rm -f "$list"
