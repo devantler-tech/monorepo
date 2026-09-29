@@ -2448,6 +2448,39 @@ if grep -Fq -- '--json issueType,blockedBy,assignees' "${surveyor}"; then
   fail "surveyor dependency reads still enumerate blocker nodes through gh issue view (#3189)"
 fi
 
+# ── Sub-issue counts are delivery evidence, never a skip reason (#2994) ────
+#
+# A parent whose children all closed looks identical to an untouched issue unless the survey
+# reports the counts; the same query carries them. Negative control: #2994 itself, at 1/1 once
+# its only child shipped, must come back with the counts rather than be rejected or hidden.
+grep -Fq 'issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed}' "${surveyor}" ||
+  fail "surveyor dependency read must also request the sub-issue summary (#2994)"
+# shellcheck disable=SC2016 # Backticks are literal Markdown contract text.
+grep -Fq '`subIssuesSummary` is **delivery evidence, never a skip reason**' "${surveyor}" ||
+  fail "surveyor must state the sub-issue summary is delivery evidence, never a skip reason (#2994)"
+grep -Fq 'Never drop, down-rank or close that candidate yourself.' "${surveyor}" ||
+  fail "surveyor must forbid acting on DELIVERY-CHECK itself (#2994)"
+# Only a deepened candidate has counts (agent-plugins#264): asking for them on every ranked row
+# would make a surveyor invent one or run the query only to fill the field.
+grep -Fq 'on every Advance candidate this query deepens.' "${surveyor}" ||
+  fail "surveyor must scope sub-issue counts to the candidates its dependency query deepens (agent-plugins#264)"
+grep -Fq 'you never deepen has no counts: leave the field off its row' "${surveyor}" ||
+  fail "surveyor must leave the sub-issue field off a candidate it never deepens (agent-plugins#264)"
+if grep -Fq 'on every Advance candidate you rank' "${surveyor}"; then
+  fail "surveyor still asks for sub-issue counts on every ranked candidate (agent-plugins#264)"
+fi
+grep -Fq '— subissues=<completed>/<total> DELIVERY-CHECK' "${surveyor}" ||
+  fail "surveyor digest must define the DELIVERY-CHECK row (#2994)"
+subissue_jq="$(sed -n "/subIssuesSummary{total completed}}}}' \\\\\$/{n;s/^[[:space:]]*--jq '\\(.*\\)'\$/\\1/p;}" "${surveyor}")"
+[ -n "${subissue_jq}" ] || fail "could not extract the dependency/sub-issue jq filter (#2994)"
+subissue_out="$(jq -c "${subissue_jq}" <<<'{"data":{"repository":{"issue":{"number":2994,"issueDependenciesSummary":{"blockedBy":0,"totalBlockedBy":0},"subIssuesSummary":{"total":1,"completed":1}}}}}')" ||
+  fail "the delivered-parent negative control was rejected (#2994)"
+[ "${subissue_out}" = '{"number":2994,"openBlockedBy":0,"totalBlockedBy":0,"completedSubIssues":1,"totalSubIssues":1}' ] ||
+  fail "the delivered-parent negative control projected ${subissue_out} (#2994)"
+if jq -c "${subissue_jq}" <<<'{"data":{"repository":{"issue":{"number":2994,"issueDependenciesSummary":{"blockedBy":0,"totalBlockedBy":0},"subIssuesSummary":{"total":1,"completed":2}}}}}' >/dev/null 2>&1; then
+  fail "a sub-issue summary with completed > total must be QUERY-UNKNOWN (#2994)"
+fi
+
 # --- GitHub-managed code scanning is not repository breakage (#2536) ----------
 #
 # A default-setup code-scanning run has no workflow file to fix and GitHub refuses to re-run it, so
