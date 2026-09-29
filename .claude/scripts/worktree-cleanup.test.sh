@@ -34,16 +34,23 @@ age_tree() {
 # fixture's ctime is "now". This `stat` shim, first on PATH for the whole file, reports a
 # ctime query (`-c %Z` / `-f %c`) as the path's mtime, which makes age_tree's backdating
 # cover ctime too. A path listed in $CTIME_FRESH (one per line) reports its real ctime,
-# which is how a test says "this inode changed just now". Every other query passes through.
+# which is how a test says "this inode changed just now". A path listed in
+# $CTIME_BROKEN answers a ctime query with a non-number, as an unreadable ctime would.
+# Every other query passes through.
 REAL_STAT=$(command -v stat)
 CTIME_SHIM_DIR=$(mktemp -d)
 CTIME_FRESH="$CTIME_SHIM_DIR/fresh"
 : > "$CTIME_FRESH"
+CTIME_BROKEN="$CTIME_SHIM_DIR/broken"
+: > "$CTIME_BROKEN"
 trap 'rm -rf "$CTIME_SHIM_DIR"' EXIT
 cat > "$CTIME_SHIM_DIR/stat" <<EOF
 #!/usr/bin/env bash
 path="\${!#}"
 if grep -qxF -- "\$path" '$CTIME_FRESH'; then exec '$REAL_STAT' "\$@"; fi
+if grep -qxF -- "\$path" '$CTIME_BROKEN'; then
+  case " \$* " in *" %Z "*|*" %c "*) echo "?"; exit 0 ;; esac
+fi
 args=()
 for a in "\$@"; do
   case "\$a" in %Z) args+=(%Y) ;; %c) args+=(%m) ;; *) args+=("\$a") ;; esac
@@ -2248,6 +2255,31 @@ t_a_fresh_chmod_in_an_old_worktree_is_not_salvaged() {
   rm -rf "$root"
 }
 
+t_an_unreadable_ctime_keeps_an_old_worktree() {
+  # mtime alone cannot see a fresh chmod, so a ctime that cannot be read is a failed age
+  # read, and a failed read keeps the tree (#3642).
+  local name="an unreadable ctime keeps an old worktree, not salvaged"
+  local root; root=$(make_repo)
+  add_wt "$root" noctime pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/noctime"
+  echo "old edit" > "$wt/file.txt"
+  age_tree "$wt"
+  # Control: with ctime readable, the same tree IS salvage-eligible.
+  local ctl; ctl=$(run_salvage "$root" dry-run 1)
+  grep -q '^SALVAGE .*noctime' <<<"$ctl" \
+    || { bad "$name" "FIXTURE: the aged tree is not salvage-eligible :: $ctl"; rm -rf "$root"; return; }
+  printf '%s\n' "$wt/file.txt" > "$CTIME_BROKEN"
+  local out; out=$(run_salvage "$root" apply 1)
+  : > "$CTIME_BROKEN"
+  if grep -q 'KEEP .*noctime .*uncommitted change' <<<"$out" && ! grep -q '^SALVAGED .*noctime' <<<"$out" \
+     && [ "$(cat "$wt/file.txt")" = "old edit" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_staging_old_bytes_in_an_old_worktree_is_not_salvaged() {
   # `git add` of bytes that are already old moves no file time, only the index (#3642).
   local name="staging old bytes just now is kept, not salvaged"
@@ -3553,6 +3585,7 @@ t_new_work_during_the_sweep_resets_the_salvage_age
 t_a_referenced_pseudo_ref_tag_does_not_block_salvage
 t_a_fresh_tracked_edit_in_an_old_worktree_is_not_salvaged
 t_a_fresh_chmod_in_an_old_worktree_is_not_salvaged
+t_an_unreadable_ctime_keeps_an_old_worktree
 t_staging_old_bytes_in_an_old_worktree_is_not_salvaged
 t_the_sweep_never_rewrites_a_worktree_index
 t_salvage_keeps_a_bare_repository_without_refs

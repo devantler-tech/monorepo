@@ -731,13 +731,13 @@ file_mtime() {
 # file_changed <path> -> the later of the path's mtime and its inode-change time (ctime).
 # Metadata-only activity (`chmod +x`, a rename, a hard link) moves ctime but not mtime, and
 # `touch` can set an mtime in the past but never a ctime (#3642). Fails when mtime cannot
-# be read; an unreadable ctime falls back to mtime alone.
+# be read and when ctime cannot: mtime alone would let a fresh chmod read as old.
 file_changed() {
   local m c
   m=$(file_mtime "$1") || return 1
   c=$(stat -c %Z "$1" 2>/dev/null || true)
   case "$c" in ''|*[!0-9]*) c=$(stat -f %c "$1" 2>/dev/null || true) ;; esac
-  case "$c" in ''|*[!0-9]*) c=0 ;; esac
+  case "$c" in ''|*[!0-9]*) return 1 ;; esac
   [ "$c" -gt "$m" ] && m=$c
   printf '%s\n' "$m"
 }
@@ -751,7 +751,7 @@ file_changed() {
 # moves only with someone's git activity in that worktree (#3642). Non-zero on a read
 # failure (the caller then keeps).
 work_age_h() {
-  local wt=$1 admin list p m newest=0
+  local wt=$1 admin list p m newest=0 unreadable=0
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
   list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
   # Plumbing diff-index, never porcelain `git diff`: the porcelain refreshes and rewrites
@@ -763,11 +763,17 @@ work_age_h() {
     rm -f "$list"; return 1
   fi
   while IFS= read -r -d '' p; do
-    # A deleted path has no mtime; its parent directory's changed when it went.
-    m=$(file_changed "$wt/$p") || m=$(file_changed "$(dirname "$wt/$p")") || m=0
+    # A deleted path has no mtime; its parent directory's changed when it went. A path
+    # that exists but cannot be read is a failure, never an old path.
+    if [ -e "$wt/$p" ] || [ -L "$wt/$p" ]; then
+      m=$(file_changed "$wt/$p") || { unreadable=1; break; }
+    else
+      m=$(file_changed "$(dirname "$wt/$p")") || m=0
+    fi
     [ "$m" -gt "$newest" ] && newest=$m
   done < "$list"
   rm -f "$list"
+  [ "$unreadable" -eq 0 ] || return 1
   for p in "$admin/index" "$admin/logs/HEAD"; do
     [ -e "$p" ] || continue
     m=$(file_changed "$p") || return 1
