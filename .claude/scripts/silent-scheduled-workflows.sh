@@ -73,23 +73,29 @@ def field($f; $lo; $hi; $n):
        else [num($p[0]; $n), num($p[0]; $n)] end) as $r
     | if $step < 1 then error("step") else range($r[0]; $r[1] + 1; $step) end ]
   | map(if $n == "dow" and . == 7 then 0 else . end) | unique;
-($c | split(" ") | map(select(. != ""))) as $f
-| if ($f | length) != 5 then 0 else
-  (try field($f[2]; 1; 31; "dom") catch null) as $dom
-  | (try field($f[3]; 1; 12; "mon") catch null) as $mon
-  | (try field($f[4]; 0; 6; "dow") catch null) as $dow
-  | if $dom == null or $mon == null or $dow == null then 0 else
-    ($f[2] != "*" and $f[2] != "?") as $domr | ($f[4] != "*" and $f[4] != "?") as $dowr
-    | [ range(0; 8 * 366) as $i | (1704067200 + $i * 86400 | gmtime) as $t
-        | select(($mon | index($t[1] + 1)) != null)
-        | select(if $domr and $dowr then (($dom | index($t[2])) != null or ($dow | index($t[6])) != null)
-                 elif $domr then ($dom | index($t[2])) != null
-                 elif $dowr then ($dow | index($t[6])) != null
-                 else true end)
-        | $i ]
-    | if length < 2 then 0 else [range(1; length) as $k | .[$k] - .[$k - 1]] | max end
-  end end'
-cron_gap_days() { jq -rn --arg c "$1" "$cron_gap_jq"; }
+def parsed($c):
+  ($c | split(" ") | map(select(. != ""))) as $f
+  | if ($f | length) != 5 then null else
+    { dom: (try field($f[2]; 1; 31; "dom") catch null),
+      mon: (try field($f[3]; 1; 12; "mon") catch null),
+      dow: (try field($f[4]; 0; 6; "dow") catch null),
+      domr: ($f[2] != "*" and $f[2] != "?"), dowr: ($f[4] != "*" and $f[4] != "?") }
+    | if .dom == null or .mon == null or .dow == null then null else . end end;
+def hit($p; $t):
+  ($p.mon | index($t[1] + 1)) != null
+  and (if $p.domr and $p.dowr then (($p.dom | index($t[2])) != null or ($p.dow | index($t[6])) != null)
+       elif $p.domr then ($p.dom | index($t[2])) != null
+       elif $p.dowr then ($p.dow | index($t[6])) != null
+       else true end);
+# Several cron lines fire on the UNION of their days (Jan 1 + Jul 1 is every six months, though each
+# line alone is annual), so the gap is measured on the union.
+[$c | split("\n")[] | select(length > 0) | parsed(.)] as $ps
+| if ($ps | length) == 0 or any($ps[]; . == null) then 0 else
+  [ range(0; 8 * 366) as $i | (1704067200 + $i * 86400 | gmtime) as $t
+    | select(any($ps[]; hit(.; $t))) | $i ]
+  | if length < 2 then 0 else [range(1; length) as $k | .[$k] - .[$k - 1]] | max end
+  end'
+cron_gap_days() { jq -rn --arg c "$1" "$cron_gap_jq"; } # $1: the cron lines, one per line
 
 # GitHub returns workflow timestamps with a UTC offset and milliseconds
 # (`2024-04-14T02:42:29.000+02:00`) but run timestamps in `Z` form, and BSD and GNU `date` parse
@@ -156,22 +162,45 @@ for repo in "${repos[@]}"; do
     unknown=1
     continue
   fi
+  # Which workflow files exist on the default branch, from the directory listing. A workflow can stay
+  # listed `active` after its file left the default branch (it ran on some other ref), and only a
+  # file ON the default branch can fire a schedule. A single file's 404 cannot tell "removed" from
+  # "this token cannot read contents", so the directory listing decides: absent from it means
+  # removed; present but unreadable is UNKNOWN. An unreadable directory leaves every file unknown.
+  if wf_files="$(gh api --method GET "repos/${repo}/contents/.github/workflows" -f ref="${branch}" \
+    --jq 'if type == "array" then (.[] | select(.type == "file") | .path) else "BAD" end' 2>"$err")" &&
+    ! grep -qx 'BAD' <<<"$wf_files"; then
+    wf_dir=readable
+  else
+    wf_dir=unreadable
+  fi
   repos_read=$((repos_read + 1))
   while IFS=$'\t' read -r id state path created; do
     [ -n "$id" ] || continue
     case "$path" in .github/workflows/*) ;; *) continue ;; esac # dynamic / GitHub-managed
-    case "$state" in disabled_manually | disabled_fork) continue ;; esac # a recorded decision
+    # Whitelist the documented states: an unknown or future one is never assumed to be active.
+    case "$state" in
+      active | disabled_inactivity) ;;
+      disabled_manually | disabled_fork) continue ;; # a recorded decision or a policy
+      *)
+        echo "QUERY-UNKNOWN ${repo} ${path} — unrecognised workflow state '${state}'"
+        unknown=1
+        continue
+        ;;
+    esac
+    if [ "$wf_dir" != readable ]; then
+      echo "QUERY-UNKNOWN ${repo} ${path} — workflow directory on the default branch unreadable"
+      unknown=1
+      continue
+    fi
+    grep -qxF -- "$path" <<<"$wf_files" || continue # removed from the default branch
 
-    # A workflow can stay listed `active` after its file left the default branch (it ran on some
-    # other ref). Only a file ON the default branch can fire a schedule, so a 404 is a skip — but
-    # only a 404; any other failure is UNKNOWN. The path and branch come from the API and may hold
-    # URL metacharacters: each path segment is percent-encoded and the branch travels as an encoded
-    # GET field. The raw media type returns the file itself, so no base64 decoder (whose flags
-    # differ between BSD and GNU) is involved.
+    # The path and branch come from the API and may hold URL metacharacters: each path segment is
+    # percent-encoded and the branch travels as an encoded GET field. The raw media type returns
+    # the file itself, so no base64 decoder (whose flags differ between BSD and GNU) is involved.
     encoded_path="$(jq -rn --arg p "$path" '$p | split("/") | map(@uri) | join("/")')"
     if ! content="$(gh api --method GET -H 'Accept: application/vnd.github.raw' \
       "repos/${repo}/contents/${encoded_path}" -f ref="${branch}" 2>"$err")"; then
-      grep -q 'HTTP 404' "$err" && continue
       echo "QUERY-UNKNOWN ${repo} ${path} — workflow file read failed"
       unknown=1
       continue
@@ -188,20 +217,11 @@ for repo in "${repos[@]}"; do
     fi
     [ -n "$crons" ] || continue # no schedule: silence is not evidence
 
-    # Several cron lines fire on the union of their days, whose longest gap is at most the SHORTEST
-    # single-line gap, so that bound is safe. A line that never fires, or cannot be parsed, is UNKNOWN.
-    gap_days=0
-    bad_cron=""
-    while IFS= read -r cron; do
-      g="$(cron_gap_days "$cron")" || g=0
-      if ! is_epoch "$g" || [ "$g" -eq 0 ]; then
-        bad_cron="$cron"
-        break
-      fi
-      if [ "$gap_days" -eq 0 ] || [ "$g" -lt "$gap_days" ]; then gap_days="$g"; fi
-    done <<<"$crons"
-    if [ -n "$bad_cron" ]; then
-      echo "QUERY-UNKNOWN ${repo} ${path} — cron '${bad_cron}' unparseable or never fires"
+    # The gap is measured on the union of every cron line's firing days. A line that cannot be
+    # parsed, or a schedule that never fires, is UNKNOWN.
+    gap_days="$(cron_gap_days "$crons")" || gap_days=0
+    if ! is_epoch "$gap_days" || [ "$gap_days" -eq 0 ]; then
+      echo "QUERY-UNKNOWN ${repo} ${path} — schedule '$(tr '\n' ';' <<<"$crons" | sed 's/;$//')' unparseable or never fires"
       unknown=1
       continue
     fi
@@ -306,8 +326,17 @@ for repo in "${repos[@]}"; do
       echo "QUERY-UNKNOWN ${repo} ${path} — window not reached within ${max_pages} pages of runs"
       unknown=1
     elif [ -z "$found" ]; then
-      echo "SILENT-WORKFLOW ${repo} ${path} — no scheduled run in the last $((limit / hour))h (its cron fires at least every ${gap_days}d)"
-      silent=1
+      # Offset pagination shifts if a run is created mid-scan, so a scheduled run that landed after
+      # page 1 was read could be skipped. Re-read page 1 before reporting a stop.
+      if ! newest="$(gh api "repos/${repo}/actions/workflows/${id}/runs?per_page=100&page=1" \
+        --jq "${jq_epoch} [.workflow_runs[] | select(.event == \"schedule\") | (.created_at | epoch)] | max // 0")" ||
+        ! is_epoch "$newest"; then
+        echo "QUERY-UNKNOWN ${repo} ${path} — run list re-read failed"
+        unknown=1
+      elif [ "$newest" -lt "$cutoff" ]; then
+        echo "SILENT-WORKFLOW ${repo} ${path} — no scheduled run in the last $((limit / hour))h (its cron fires at least every ${gap_days}d)"
+        silent=1
+      fi
     fi
   done <<<"$workflows"
 done

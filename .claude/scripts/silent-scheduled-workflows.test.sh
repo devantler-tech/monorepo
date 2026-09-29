@@ -40,6 +40,17 @@ case "$url" in *"ref="* | *"sha="*) echo "gh stub: branch spliced into the URL: 
 # The window start (`until=`) depends on each workflow's cron, so fixtures key on its presence only.
 key="$(printf '%s' "$url" | sed 's/until=[^&]*/until/' | tr '/?&=' '____')"
 f="$FIXTURES/$key.json"
+# The default branch's workflow directory lists every workflow file that has a content fixture at
+# `ref=main`, unless a test supplies the listing itself.
+if [ ! -f "$f" ] && [[ "$url" =~ ^repos/([^/]+/[^/]+)/contents/\.github/workflows\?ref=main$ ]]; then
+  prefix="$(printf '%s' "repos/${BASH_REMATCH[1]}/contents/.github/workflows/" | tr '/?&=' '____')"
+  for g in "$FIXTURES/$prefix"*_ref_main.json; do
+    [ -e "$g" ] || continue
+    name="${g##*/}"; name="${name#"$prefix"}"; name="${name%_ref_main.json}"
+    printf '%s\n' ".github/workflows/${name//%23/#}"
+  done | jq -R '{type: "file", path: .}' | jq -s . >"$FIXTURES/.synth.json"
+  f="$FIXTURES/.synth.json"
+fi
 [ -f "$f" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
 if [ -n "$jqexpr" ]; then jq -r "$jqexpr" "$f"; else cat "$f"; fi
 STUB
@@ -263,7 +274,7 @@ workflow_file o/k .github/workflows/range.yaml 'on:
     - cron: "0 0 31 2 *"'
 run --repo o/k
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a never-firing cron must exit 2, got $rc"; }
-has "QUERY-UNKNOWN o/k .github/workflows/range.yaml — cron '0 0 31 2 *' unparseable or never fires" \
+has "QUERY-UNKNOWN o/k .github/workflows/range.yaml — schedule '0 0 31 2 *' unparseable or never fires" \
   "a never-firing cron must be named"
 
 # A null default branch, or a malformed workflow record, is UNKNOWN — never a clean skip.
@@ -302,6 +313,43 @@ workflow_file o/n .github/workflows/daily.yaml "$daily"
 run --repo o/n
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed run record must exit 2, got $rc"; }
 has "QUERY-UNKNOWN o/n .github/workflows/daily.yaml — run list read failed" "a malformed run record must be named"
+
+# Two annual lines (1 January + 1 July) fire every six months: 13 months of silence is a stop.
+put "repos/o/r" '{"default_branch":"main"}'
+put "repos/o/r/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
+  {"id":1,"state":"active","path":".github/workflows/halfyear.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
+workflow_file o/r .github/workflows/halfyear.yaml 'on:
+  schedule:
+    - cron: "0 0 1 1 *"
+    - cron: "0 0 1 7 *"'
+runs o/r 1 1 "schedule:$((now - 400 * d))"
+run --repo o/r
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a six-monthly union silent for 400 days must be reported, got $rc"; }
+
+# An unrecognised workflow state is never assumed active: UNKNOWN.
+put "repos/o/s" '{"default_branch":"main"}'
+put "repos/o/s/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"disabled_someday\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/s .github/workflows/daily.yaml "$daily"
+runs o/s 1 1 "schedule:$((now - 40 * d))"
+run --repo o/s
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an unknown workflow state must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/s .github/workflows/daily.yaml — unrecognised workflow state 'disabled_someday'" "an unknown state must be named"
+
+# A file the directory lists but whose content 404s (e.g. a token without contents access) is
+# UNKNOWN, not "removed"; an unreadable directory makes every workflow UNKNOWN.
+put "repos/o/t" '{"default_branch":"main"}'
+put "repos/o/t/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/hidden.yaml\",\"created_at\":\"$old\"}]}"
+put "repos/o/t/contents/.github/workflows?ref=main" '[{"type":"file","path":".github/workflows/hidden.yaml"}]'
+run --repo o/t
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a listed but unreadable file must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/t .github/workflows/hidden.yaml — workflow file read failed" "a listed but unreadable file must be named"
+put "repos/o/t/contents/.github/workflows?ref=main" '{"message":"Not Found"}'
+run --repo o/t
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an unreadable workflow directory must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/t .github/workflows/hidden.yaml — workflow directory on the default branch unreadable" \
+  "an unreadable workflow directory must be named"
 
 # An empty run page is the end only when total_count says so; a short payload is UNKNOWN.
 put "repos/o/g" '{"default_branch":"main"}'
