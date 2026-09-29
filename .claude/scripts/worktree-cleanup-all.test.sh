@@ -55,6 +55,115 @@ make_root() {
   printf '%s' "$root"
 }
 
+# add_session_with_nested <root> <pushed|unpushed> — a pushed session worktree `sess` whose
+# submodule `nested` is populated (so its repository lives in the session's own admin dir)
+# and holds a linked worktree `inner` of that submodule's repository. `unpushed` gives
+# `inner` a commit no remote has. Both are aged past every threshold.
+add_session_with_nested() {
+  local root=$1 state=$2 sess="$1/repo/.claude/worktrees/sess"
+  local inner="$sess/nested/.claude/worktrees/inner"
+  git -C "$root/repo" worktree add -q -b claude/sess "$sess" main || return 1
+  git -C "$root/repo" push -q origin claude/sess || return 1
+  git -C "$sess" -c protocol.file.allow=always submodule update --init -q nested >/dev/null 2>&1 \
+    || return 1
+  [ -d "$(git -C "$sess" rev-parse --absolute-git-dir)/modules/nested" ] || return 1
+  git -C "$sess/nested" config user.email t@t.t && git -C "$sess/nested" config user.name t
+  mkdir -p "$sess/nested/.claude/worktrees"
+  git -C "$sess/nested" worktree add -q -b claude/inner "$inner" HEAD || return 1
+  if [ "$state" = unpushed ]; then
+    echo local > "$inner/h" && git -C "$inner" add h && git -C "$inner" commit -qm "local only" \
+      || return 1
+  else
+    git -C "$sess/nested" push -q origin claude/inner || return 1
+  fi
+  touch -t 202001010000 "$inner" "$sess"
+}
+
+t_sweeps_worktrees_nested_in_session_submodules() {
+  # #3673: nothing visited a worktree nested in a session worktree's submodule, so the
+  # parent session worktree was kept forever. The nested pass must reap it (dry-run only
+  # reports), and the same run's root sweep must then reap the freed parent.
+  local name="sweeps a worktree nested in a session worktree's submodule, then its parent"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.claude/worktrees/sess" dry out rc dry_kept
+  dry=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 2>&1)
+  [ -d "$sess/nested/.claude/worktrees/inner" ] && dry_kept=yes || dry_kept=NO
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?
+  if grep -qx '### .claude/worktrees/sess/nested' <<<"$dry" && grep -q 'REAP  .*inner' <<<"$dry" \
+     && [ "$dry_kept" = yes ] && [ "$rc" -eq 0 ] \
+     && [ ! -e "$sess/nested/.claude/worktrees/inner" ] && [ ! -e "$sess" ] \
+     && ls "$root/home/.claude/worktree-cleanup-manifests/"nested-sess-nested-*.tsv >/dev/null 2>&1; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc dry_kept=$dry_kept inner=$([ -e "$sess/nested/.claude/worktrees/inner" ] && echo present || echo gone) sess=$([ -e "$sess" ] && echo present || echo gone)
+$dry
+---
+$out"
+  fi
+  rm -rf "$root"
+}
+
+t_nested_sweep_never_salvages() {
+  # A nested worktree's salvage refs would live in the session worktree's own submodule
+  # repository, which dies with the parent. So the nested pass runs with salvage off: a
+  # nested worktree holding a local-only commit is KEPT, even far past the salvage age,
+  # and its parent stays with it.
+  #
+  # The work must look old enough to salvage, or this passes with salvage on too. Salvage
+  # age counts ctime (#3642), which `touch` cannot backdate, so this test (only) runs with
+  # a `stat` shim that answers a ctime query with the mtime, as worktree-cleanup.test.sh
+  # does for its salvage fixtures.
+  local name="the nested pass never salvages: a nested worktree with local-only work is kept"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" unpushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.claude/worktrees/sess" out rc admin f
+  local inner="$sess/nested/.claude/worktrees/inner" shim="$root/stat-shim"
+  admin=$(git -C "$inner" rev-parse --absolute-git-dir)
+  find "$inner" -mindepth 1 -exec touch -h -t 202001010000 {} + 2>/dev/null
+  for f in "$admin/index" "$admin/logs/HEAD" "$inner"; do touch -t 202001010000 "$f"; done
+  mkdir -p "$shim"
+  cat > "$shim/stat" <<EOF
+#!/usr/bin/env bash
+args=()
+for a in "\$@"; do
+  case "\$a" in %Z) args+=(%Y) ;; %c) args+=(%m) ;; *) args+=("\$a") ;; esac
+done
+exec '$(command -v stat)' "\${args[@]}"
+EOF
+  chmod +x "$shim/stat"
+  out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+        bash "$SUT" apply 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && [ -d "$sess/nested/.claude/worktrees/inner" ] && [ -d "$sess" ] \
+     && [ -z "$(git -C "$sess/nested" for-each-ref refs/salvaged 2>/dev/null)" ] \
+     && [ "$(git -C "$sess/nested/.claude/worktrees/inner" log -1 --format=%s 2>/dev/null)" = "local only" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+t_nested_failure_does_not_block_the_root_sweep() {
+  # One session worktree's broken submodule repository must not stop every later sweep:
+  # the run carries on to the root, and still exits non-zero so the failure is seen.
+  local name="a failed nested sweep is reported, the root is still swept, and the run exits non-zero"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local inner="$root/repo/.claude/worktrees/sess/nested/.claude/worktrees/inner" out rc
+  chmod 000 "$inner"   # the per-repo sweep cannot resolve this candidate and aborts
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 2>&1); rc=$?
+  chmod 755 "$inner"
+  if [ "$rc" -ne 0 ] && grep -q 'sweep of .claude/worktrees/sess/nested failed .* continuing' <<<"$out" \
+     && grep -q 'REAP  .*spent-root' <<<"$out" && grep -q 'REAP  .*spent-sub' <<<"$out" \
+     && grep -q 'a nested submodule sweep failed' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
 t_sweeps_root_and_submodules() {
   local root; root=$(make_root)
   local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
@@ -303,6 +412,9 @@ t_passes_salvage_age_and_validates_it
 t_aborts_on_malformed_gitmodules
 t_skips_a_gitmodules_entry_that_is_not_a_gitlink
 t_gitlink_validation_uses_a_literal_pathspec
+t_sweeps_worktrees_nested_in_session_submodules
+t_nested_sweep_never_salvages
+t_nested_failure_does_not_block_the_root_sweep
 t_rejects_bad_mode
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
