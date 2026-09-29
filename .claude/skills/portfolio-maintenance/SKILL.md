@@ -471,6 +471,15 @@ stop requesting a `DOWN` lane, escalate a `MAINTAINER-ONLY` one, and read exit `
 as healthy. They are detection only; the *Local review round* still needs the direct per-PR check.
 A `CR-DECLINED <repo>#<n>` line names a PR where CodeRabbit refuses our disclosed requests (#3124):
 skip CodeRabbit on that PR and go to the next lane.
+**About daily, also sweep for silent schedules** (monorepo#2928), tracked by a
+`last_silent_schedule_sweep` cursor in memory: run
+`.claude/scripts/silent-scheduled-workflows.sh` with one `--repo` per active repository (derive the
+list as the disclosure-drift sweep does, never from a literal list). The surveyor judges default-branch
+health only from runs at the current head, so a schedule that stopped firing is invisible to it; this
+reads each workflow's declared triggers and judges silence only where `schedule` can start a run, so a
+dispatch-only workflow is never reported. Each `SILENT-WORKFLOW` line is rung-0 breakage in its
+repository; exit `2` is UNKNOWN, never clean, and the closing `CHECKED` line shows what was examined.
+It makes a few hundred API reads, which is why it is daily rather than every run.
 **Overlay your native-memory cadence cursors yourself** — each product's `last_worked`,
 `roadmap` (last strategy review + current theme), `last_research`, `weekly` timestamps,
 `needs_attention`, and the
