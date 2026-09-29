@@ -68,7 +68,7 @@ cron_interval() {
   leap=0
   late=0
   [[ "$dom" =~ (^|[,-])(29|30|31)([,/-]|$) ]] && late=1
-  [[ "$dom" =~ (^|[,-])29([,/-]|$) && "$mon" =~ (^|[,-])(2|[Ff][Ee][Bb])([,/-]|$) ]] && leap=1
+  [[ "$dom" =~ (^|[,-])29([,/-]|$) && "$mon" =~ ^(2|[Ff][Ee][Bb])$ ]] && leap=1
   if [ "$mon" != "*" ]; then
     if [ "$leap" -eq 1 ]; then echo $((8 * 366 * day)); else echo $((366 * day)); fi
   elif [ "$dom" != "*" ]; then
@@ -113,9 +113,19 @@ for repo in "${repos[@]}"; do
     unknown=1
     continue
   fi
-  if ! workflows="$(gh api --paginate "repos/${repo}/actions/workflows?per_page=100" \
-    --jq "${jq_epoch} .workflows[] | [.id, .state, .path, (.created_at | epoch)] | @tsv")"; then
+  # Each page also emits its `total_count`, so a successful but short or empty listing is caught
+  # rather than read as a repository with nothing scheduled.
+  if ! listing="$(gh api --paginate "repos/${repo}/actions/workflows?per_page=100" \
+    --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflows[] | [.id, .state, .path, (.created_at | epoch)] | @tsv)")"; then
     echo "QUERY-UNKNOWN ${repo} — workflow list read failed"
+    unknown=1
+    continue
+  fi
+  total="$(awk -F'\t' '$1 == "TOTAL" { print $2; exit }' <<<"$listing")"
+  workflows="$(grep -v $'^TOTAL\t' <<<"$listing" || true)"
+  listed="$(grep -c . <<<"$workflows" || true)"
+  if ! is_epoch "${total:-x}" || [ "$listed" -ne "$total" ]; then
+    echo "QUERY-UNKNOWN ${repo} — workflow list incomplete (${listed} of ${total:-unknown})"
     unknown=1
     continue
   fi
@@ -127,18 +137,20 @@ for repo in "${repos[@]}"; do
 
     # A workflow can stay listed `active` after its file left the default branch (it ran on some
     # other ref). Only a file ON the default branch can fire a schedule, so a 404 is a skip — but
-    # only a 404; any other failure is UNKNOWN.
-    # Branch names come from the API and may hold URL metacharacters, so send them as encoded
-    # GET fields rather than concatenating them into the path.
-    if ! raw="$(gh api --method GET "repos/${repo}/contents/${path}" -f ref="${branch}" \
-      --jq '.content' 2>"$err")"; then
+    # only a 404; any other failure is UNKNOWN. The path and branch come from the API and may hold
+    # URL metacharacters: each path segment is percent-encoded and the branch travels as an encoded
+    # GET field. The raw media type returns the file itself, so no base64 decoder (whose flags
+    # differ between BSD and GNU) is involved.
+    encoded_path="$(jq -rn --arg p "$path" '$p | split("/") | map(@uri) | join("/")')"
+    if ! content="$(gh api --method GET -H 'Accept: application/vnd.github.raw' \
+      "repos/${repo}/contents/${encoded_path}" -f ref="${branch}" 2>"$err")"; then
       grep -q 'HTTP 404' "$err" && continue
       echo "QUERY-UNKNOWN ${repo} ${path} — workflow file read failed"
       unknown=1
       continue
     fi
-    if ! content="$(base64 --decode <<<"$raw")" || [ -z "$content" ]; then
-      echo "QUERY-UNKNOWN ${repo} ${path} — workflow file unreadable"
+    if [ -z "$content" ]; then
+      echo "QUERY-UNKNOWN ${repo} ${path} — workflow file empty"
       unknown=1
       continue
     fi

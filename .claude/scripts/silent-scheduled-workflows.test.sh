@@ -26,7 +26,7 @@ args=("$@"); jqexpr=""; url=""; query=""
 for ((i = 0; i < ${#args[@]}; i++)); do
   case "${args[i]}" in
     --jq) jqexpr="${args[i + 1]}"; i=$((i + 1)) ;;
-    --method) i=$((i + 1)) ;;
+    --method | -H) i=$((i + 1)) ;;
     -f) query="${query:+$query&}${args[i + 1]}"; i=$((i + 1)) ;;
     api | --paginate) ;;
     *) url="${args[i]}" ;;
@@ -46,7 +46,7 @@ chmod +x "$bin/gh"
 
 put() { printf '%s' "$2" >"$fix/$(printf '%s' "$1" | tr '/?&=' '____').json"; }
 workflow_file() { # <repo> <path> <yaml> [<epoch of the file's newest commit on main>]
-  put "repos/$1/contents/$2?ref=main" "{\"content\":\"$(printf '%s' "$3" | base64 | tr -d '\n')\"}"
+  put "repos/$1/contents/$2?ref=main" "$3" # raw media type: the file itself
   put "repos/$1/commits?path=$2&sha=main&per_page=1" \
     "[{\"commit\":{\"committer\":{\"date\":\"$(iso "${4:-$((now - 300 * d))}")\"}}}]"
 }
@@ -63,7 +63,7 @@ runs() { # <repo> <id> <page> <event:epoch>...
 # Repository o/a — every shape the checker must decide.
 old="2026-01-01T10:00:00.000+02:00" # the offset form GitHub actually returns for workflows
 put "repos/o/a" '{"default_branch":"main"}'
-put "repos/o/a/actions/workflows?per_page=100" "{\"workflows\":[
+put "repos/o/a/actions/workflows?per_page=100" "{\"total_count\":10,\"workflows\":[
   {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"},
   {\"id\":2,\"state\":\"active\",\"path\":\".github/workflows/dispatch.yaml\",\"created_at\":\"$old\"},
   {\"id\":3,\"state\":\"active\",\"path\":\".github/workflows/stale.yaml\",\"created_at\":\"$old\"},
@@ -148,7 +148,7 @@ has "CHECKED 0 scheduled workflow(s) across 0 repositor(ies)" "the summary must 
 
 # An unparseable creation time is UNKNOWN, not "too new to judge".
 put "repos/o/b" '{"default_branch":"main"}'
-put "repos/o/b/actions/workflows?per_page=100" '{"workflows":[
+put "repos/o/b/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
   {"id":9,"state":"active","path":".github/workflows/daily.yaml","created_at":"yesterday"}]}'
 workflow_file o/b .github/workflows/daily.yaml "$daily"
 run --repo o/b
@@ -156,7 +156,7 @@ run --repo o/b
 
 # A healthy repository exits 0.
 put "repos/o/c" '{"default_branch":"main"}'
-put "repos/o/c/actions/workflows?per_page=100" "{\"workflows\":[
+put "repos/o/c/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
   {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/c .github/workflows/daily.yaml "$daily"
 runs o/c 1 1 "schedule:$((now - 3 * h))"
@@ -164,16 +164,42 @@ run --repo o/c
 [ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a healthy repository must exit 0, got $rc"; }
 has "CHECKED 1 scheduled workflow(s) across 1 repositor(ies)" "healthy summary"
 
-# Only 29 February skips years: 31 January fires every year, so four years of silence is a stop.
+# Only a February-ONLY day-29 schedule skips years: 31 January fires every year, and `29 2,3`
+# fires every March, so four years of silence is a stop for both.
 put "repos/o/d" '{"default_branch":"main"}'
-put "repos/o/d/actions/workflows?per_page=100" '{"workflows":[
-  {"id":1,"state":"active","path":".github/workflows/annual.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
+put "repos/o/d/actions/workflows?per_page=100" '{"total_count":2,"workflows":[
+  {"id":1,"state":"active","path":".github/workflows/annual.yaml","created_at":"2019-01-01T00:00:00.000+02:00"},
+  {"id":2,"state":"active","path":".github/workflows/febmar.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
 workflow_file o/d .github/workflows/annual.yaml 'on:
   schedule:
     - cron: "0 0 31 1 *"' "$((now - 5 * 366 * d))"
 runs o/d 1 1 "schedule:$((now - 4 * 366 * d))"
+workflow_file o/d .github/workflows/febmar.yaml 'on:
+  schedule:
+    - cron: "0 0 29 2,3 *"' "$((now - 5 * 366 * d))"
+runs o/d 2 1 "schedule:$((now - 4 * 366 * d))"
 run --repo o/d
-[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a 31 January schedule silent for four years must be reported, got $rc"; }
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "annual schedules silent for four years must be reported, got $rc"; }
+grep -qF "annual.yaml" "$tmp/out" || fail "a 31 January schedule silent for four years must be reported"
+grep -qF "febmar.yaml" "$tmp/out" || fail "a 29 Feb/March schedule silent for four years must be reported"
+
+# A listing that succeeds but is short of its own total_count is UNKNOWN, never an empty repository.
+put "repos/o/e" '{"default_branch":"main"}'
+put "repos/o/e/actions/workflows?per_page=100" '{"total_count":3,"workflows":[]}'
+run --repo o/e
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a short workflow listing must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/e — workflow list incomplete (0 of 3)" "a short listing must be named"
+
+# A path with a URL metacharacter is percent-encoded, so the request reaches the file.
+put "repos/o/f" '{"default_branch":"main"}'
+put "repos/o/f/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a#b.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/f .github/workflows/a%23b.yaml "$daily"
+put "repos/o/f/commits?path=.github/workflows/a#b.yaml&sha=main&per_page=1" \
+  "[{\"commit\":{\"committer\":{\"date\":\"$(iso $((now - 300 * d)))\"}}}]"
+runs o/f 1 1 "schedule:$((now - 40 * d))"
+run --repo o/f
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an encoded path must be read and judged, got $rc"; }
 
 # An abort mid-scan (here a `set -u` expansion of an unset name, injected through a stub `yq`)
 # must surface as UNKNOWN, never as the cleanup trap's successful status.
