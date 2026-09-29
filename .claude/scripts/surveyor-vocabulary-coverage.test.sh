@@ -307,7 +307,7 @@ extract_fenced() {
     # operand (and `"` inside a single-quoted one) is a literal, so counting either
     # delimiter alone would leave an apostrophe in `--jq "won'"'"'t"` permanently
     # unbalanced and swallow the rest of the block into one candidate.
-    awk -v SEP="$LINE_SEP" -v TAB="$LINE_TAB" '
+    awk -v SEP="$LINE_SEP" -v TAB="$LINE_TAB" -v PF="$PARSE_SCRATCH" '
       function unbalanced(s,   i, c, sq, dq) {
         for (i = 1; i <= length(s); i++) {
           c = substr(s, i, 1)
@@ -410,14 +410,35 @@ extract_fenced() {
         for (i = 1; i <= n; i++) if (arr[i] == w) c++
         return c
       }
-      # Block STARTERS against TERMINATORS -- deliberately not `do`/`then`, because
-      # an `if/elif/else/fi` carries several `then` and exactly one `fi`, which
-      # would leave the construct permanently open.
-      function compound_open(s,   t) {
+      # Whether a compound is still open is a question about shell GRAMMAR, so the shell
+      # answers it. Counting words cannot: a reserved word is legal in non-structural
+      # positions, and `for done in a` read as an opener already closed, so the provisional
+      # buffer was dropped and the guard was asked about the nested read alone, which it
+      # ALLOWS (monorepo#3651). The buffer is restored to its newline form and handed to
+      # `bash -n`, which parses without executing anything: a clean parse is closed, an
+      # unexpected end of input is open.
+      #
+      # The word count survives only as a GATE and a FALLBACK. With no starter word the
+      # buffer holds no compound and the shell is not consulted, so no one-line candidate
+      # changes shape. Any other parser verdict -- a genuine syntax error mid-block -- falls
+      # back to comparing block STARTERS against TERMINATORS (deliberately not `do`/`then`:
+      # an `if/elif/else/fi` carries several `then` and exactly one `fi`), which is exactly
+      # the behaviour before the parser was asked.
+      function compound_open(s,   t, nst, nte, r, cmd, ln, out) {
         t = unquoted(s)
-        return ((countw(t, "for") + countw(t, "while") + countw(t, "until") \
-                 + countw(t, "if") + countw(t, "case")) \
-                > (countw(t, "done") + countw(t, "fi") + countw(t, "esac")))
+        nst = countw(t, "for") + countw(t, "while") + countw(t, "until") \
+              + countw(t, "if") + countw(t, "case")
+        if (nst == 0) return 0
+        nte = countw(t, "done") + countw(t, "fi") + countw(t, "esac")
+        r = s; gsub(SEP, "\n", r)
+        printf "%s\n", r > PF; close(PF)
+        cmd = "LC_ALL=C bash -n \"" PF "\" 2>&1"
+        out = ""
+        while ((cmd | getline ln) > 0) out = out ln "\n"
+        close(cmd)
+        if (out == "") return 0
+        if (out ~ /unexpected end of file|looking for matching/) return 1
+        return (nst > nte)
       }
       function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
       # A prescription may also open with a shell OPTIONS line. `set -o pipefail` headed the
@@ -481,6 +502,24 @@ extract_fenced() {
         if (buf != "" && keep) print buf
         buf = ""; pend = 0
       }
+      # The CONTAINER a fence sits in. Markdown measures the three-column allowance of a closer
+      # from the CONTENT column of the enclosing list item, not from the opener: with the item
+      # content at column 2 and the opener at column 5, a delimiter-looking line at column 8
+      # is content, yet measured from the opener it closed the block and dropped every
+      # prescription before the real closer (monorepo#3651). Outside a block, a list-marker
+      # line records its content column -- the marker plus one to four following spaces, or
+      # the marker plus one when five or more follow (an indented code block starts there) --
+      # and a non-blank line indented less than that column ends the item.
+      !inb && /^[[:space:]]*([-*+]|[0-9]+[.)])[[:blank:]]+[^[:blank:]]/ {
+        lm = $0
+        match(lm, /^[[:space:]]*([-*+]|[0-9]+[.)])/); mk = icol(substr(lm, 1, RLENGTH))
+        lm = substr(lm, RLENGTH + 1); match(lm, /^[[:blank:]]+/)
+        lcol = mk + ((icol(substr(lm, 1, RLENGTH)) > 4) ? 1 : icol(substr(lm, 1, RLENGTH)))
+      }
+      !inb && lcol > 0 && /[^[:space:]]/ && !/^[[:space:]]*([-*+]|[0-9]+[.)])[[:blank:]]/ {
+        lm = $0; sub(/[^[:space:]].*$/, "", lm)
+        if (icol(lm) < lcol) lcol = 0
+      }
       # Fences are DELIMITER- AND LENGTH-aware. `~~~` is a valid Markdown fence, and
       # a machine knowing only backticks never ENTERS such a block: the command
       # inside is dropped before classification and its refusal never surfaces --
@@ -498,7 +537,9 @@ extract_fenced() {
         fd = substr(fline, 1, 1)
         flen = 0
         while (substr(fline, flen + 1, 1) == fd) flen++
-        if (!inb) { inb = 1; fence = fd; fencelen = flen; fcol = icol(ind); optspfx = "" }
+        # Inside a list item the allowance is measured from the item content column; an
+        # opener outside every item keeps its own column, as before.
+        if (!inb) { inb = 1; fence = fd; fencelen = flen; fcol = (lcol > 0 && icol(ind) >= lcol) ? lcol : icol(ind); optspfx = "" }
         # A closer may carry only spaces or tabs after its run. `` ```example `` inside a
         # block is CONTENT: checking the delimiter and its length alone ends the block
         # there, and `!inb { next }` then drops every later line, so a prescription after
@@ -664,6 +705,9 @@ CORPUS_REASONS=$(corpus_deny_reasons) \
 # ── Self-tests: planted fixtures, before any real verdict is trusted ──────────
 fixdir=$(mktemp -d) || die_unknown "cannot create fixture dir"
 trap 'rm -rf "$fixdir"' EXIT
+# Scratch file the fenced extractor hands a restored compound to `bash -n` through; parsed only,
+# never executed. Inside fixdir, so the EXIT trap removes it.
+PARSE_SCRATCH="$fixdir/compound-parse.sh"
 
 printf '%s\n' 'Prose: run `gh api` then `gh pr view`, never `gh pr merge/create/comment/edit/review`.' \
   '' 'Also `git log/status` and `gh search prs --help` are families, not commands.' > "$fixdir/prose.md"
@@ -846,6 +890,17 @@ if grep -q '^fenced gh release create v4 ' <<<"$fl_all"; then
   die_unknown "self-test: prose after a list-item fenced block was extracted as a fenced prescription"
 fi
 
+# ...and inside a list item the three-column allowance is measured from the CONTAINER's
+# content column, not from the opener. With the item's content at column 2 and the opener at
+# column 5, a delimiter-looking line at column 8 is six columns into the container, so it is
+# CONTENT; measured from the opener it closed the block and every prescription before the
+# real closer was dropped (monorepo#3651).
+printf '%s\n' '- A list item:' '' '     ```sh' '        ```' \
+  '     gh release create v6 --repo devantler-tech/monorepo' '     ```' > "$fixdir/fencecontainer.md"
+fc_all=$(extract_commands "$fixdir/fencecontainer.md")
+grep -q '^fenced gh release create v6 ' <<<"$fc_all" \
+  || die_unknown "self-test: a command after a container-relative content delimiter was never extracted (fail-open)"
+
 # A corpus row whose guard status is 2 must make the run UNKNOWN, not vanish. The old
 # corpus reader emitted no reason for such a row, and because other rows keep
 # CORPUS_REASONS non-empty the emptiness check still passed -- so if no source candidate
@@ -996,6 +1051,20 @@ printf '%s\n' 'Loop over files:' '' '```sh' \
 cn_extracted=$(extract_commands "$fixdir/compound-nonforge.md" | grep -c .)
 [ "${cn_extracted:-0}" -eq 0 ] \
   || die_unknown "self-test: a construct wrapping no forge verb yielded $cn_extracted candidate(s), expected 0 (false finding)"
+
+# A reserved word in a legal NON-structural position must not close the construct. Bash
+# accepts `for done in a`, but counting words read its `done` as the terminator, dropped the
+# provisional buffer, and handed the guard the nested read alone -- which it ALLOWS, while the
+# deployment submits the whole loop (monorepo#3651). Closure is decided by the shell's own
+# parser instead, so the loop must arrive whole and parse.
+printf '%s\n' 'Loop:' '' '```sh' \
+  'for done in a' 'do' '  gh release create "v-$done" --repo devantler-tech/monorepo' 'done' '```' > "$fixdir/compound-reserved.md"
+cr_want=$'for done in a\ndo\n gh release create "v-$done" --repo devantler-tech/monorepo\ndone'
+cr_rows=$(extract_commands "$fixdir/compound-reserved.md" | grep '^fenced ')
+cr_got=${cr_rows#fenced }
+cr_got=${cr_got//"$LINE_SEP"/$'\n'}; cr_got=${cr_got//"$LINE_TAB"/$'\t'}
+[ "$cr_got" = "$cr_want" ] \
+  || die_unknown "self-test: a loop whose variable is a reserved word did not reach the guard whole (fail-open): $cr_got"
 
 # A shell OPTIONS line must not be DROPPED. `set -o pipefail` headed the board-coverage
 # census in the surveyor definition until monorepo#2943; anchored on a forge verb
