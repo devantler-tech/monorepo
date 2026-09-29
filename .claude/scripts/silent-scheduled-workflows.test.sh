@@ -38,8 +38,10 @@ STUB
 chmod +x "$bin/gh"
 
 put() { printf '%s' "$2" >"$fix/$(printf '%s' "$1" | tr '/?&=' '____').json"; }
-workflow_file() { # <repo> <path> <yaml>
+workflow_file() { # <repo> <path> <yaml> [<epoch of the file's newest commit on main>]
   put "repos/$1/contents/$2?ref=main" "{\"content\":\"$(printf '%s' "$3" | base64 | tr -d '\n')\"}"
+  put "repos/$1/commits?path=$2&sha=main&per_page=1" \
+    "[{\"commit\":{\"committer\":{\"date\":\"$(iso "${4:-$((now - 300 * d))}")\"}}}]"
 }
 runs() { # <repo> <id> <page> <event:epoch>...
   local repo="$1" id="$2" page="$3" rows="" e t
@@ -62,6 +64,8 @@ put "repos/o/a/actions/workflows?per_page=100" "{\"workflows\":[
   {\"id\":5,\"state\":\"disabled_inactivity\",\"path\":\".github/workflows/inactive.yaml\",\"created_at\":\"$old\"},
   {\"id\":6,\"state\":\"active\",\"path\":\".github/workflows/gone.yaml\",\"created_at\":\"$old\"},
   {\"id\":7,\"state\":\"active\",\"path\":\".github/workflows/monthly.yaml\",\"created_at\":\"$old\"},
+  {\"id\":9,\"state\":\"active\",\"path\":\".github/workflows/leap.yaml\",\"created_at\":\"2019-01-01T00:00:00.000+02:00\"},
+  {\"id\":10,\"state\":\"active\",\"path\":\".github/workflows/gained.yaml\",\"created_at\":\"$old\"},
   {\"id\":8,\"state\":\"active\",\"path\":\"dynamic/github-code-scanning/codeql\",\"created_at\":\"$old\"}
 ]}"
 daily='on:
@@ -84,8 +88,19 @@ workflow_file o/a .github/workflows/inactive.yaml "$daily"
 workflow_file o/a .github/workflows/monthly.yaml 'on:
   schedule:
     - cron: "3 2 1 * *"'
-runs o/a 7 1 "push:$((now - 1 * h))" "push:$((now - 2 * d))"
+# A full first page (per_page=100) of newer push runs, as the API would really return it.
+page1=()
+for ((i = 1; i <= 100; i++)); do page1+=("push:$((now - i * h))"); done
+runs o/a 7 1 "${page1[@]}"
 runs o/a 7 2 "schedule:$((now - 20 * d))"
+# 29 February fires only in leap years: three years of silence is not a stopped schedule.
+workflow_file o/a .github/workflows/leap.yaml 'on:
+  schedule:
+    - cron: "0 0 29 2 *"' "$((now - 5 * 366 * d))"
+runs o/a 9 1 "schedule:$((now - 3 * 365 * d))"
+# An old dispatch-only workflow that GAINED a daily schedule 10h ago: not yet due, not silent.
+workflow_file o/a .github/workflows/gained.yaml "$daily" "$((now - 10 * h))"
+runs o/a 10 1 "workflow_dispatch:$((now - 40 * d))"
 
 run() { set +e; PATH="$bin:$PATH" FIXTURES="$fix" "$checker" "$@" --now "$now" >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
 has() { grep -qxF -- "$1" "$tmp/out" || { cat "$tmp/out" "$tmp/err" >&2; fail "$2"; }; }
@@ -103,7 +118,9 @@ lacks "gone.yaml" "a workflow whose file left the default branch cannot fire and
 lacks "daily.yaml" "a schedule that ran 10h ago is healthy"
 lacks "monthly.yaml" "a schedule run on the second page must be found"
 lacks "codeql" "a dynamic GitHub-managed workflow is out of scope"
-has "CHECKED 4 scheduled workflow(s) across 1 repositor(ies)" "the summary must count what was examined"
+lacks "leap.yaml" "a 29 February schedule silent for three years is not stopped"
+lacks "gained.yaml" "a schedule added 10h ago to an old workflow is not yet due"
+has "CHECKED 6 scheduled workflow(s) across 1 repositor(ies)" "the summary must count what was examined"
 [ "$(grep -c '^SILENT-WORKFLOW' "$tmp/out")" -eq 2 ] || fail "exactly two findings expected"
 
 # A failed run-list read is UNKNOWN — never "silent", never clean.

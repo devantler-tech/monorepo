@@ -56,14 +56,21 @@ day=$((24 * hour))
 # Coarse is the safe direction here: overestimating the gap can only delay a report, never
 # invent one.
 cron_interval() {
-  local hr dom mon dow
+  local hr dom mon dow late
   read -r _ hr dom mon dow _ <<<"$1"
   if [ -z "${dow:-}" ]; then
     echo 0
     return
   fi
-  if [ "$mon" != "*" ]; then echo $((366 * day))
-  elif [ "$dom" != "*" ]; then echo $((31 * day))
+  # Day 29-31 does not exist in every month: a fixed month with one of them can skip years
+  # (29 February fires only in leap years, up to 8 years apart across a skipped century leap
+  # year), and without a fixed month it can skip a month.
+  late=0
+  [[ "$dom" =~ (^|[,-])(29|30|31)([,/-]|$) ]] && late=1
+  if [ "$mon" != "*" ]; then
+    if [ "$late" -eq 1 ]; then echo $((8 * 366 * day)); else echo $((366 * day)); fi
+  elif [ "$dom" != "*" ]; then
+    if [ "$late" -eq 1 ]; then echo $((62 * day)); else echo $((31 * day)); fi
   elif [ "$dow" != "*" ]; then echo $((7 * day))
   elif [ "$hr" != "*" ]; then echo "$day"
   else echo "$hour"
@@ -146,13 +153,24 @@ for repo in "${repos[@]}"; do
     fi
 
     cutoff=$((now - limit))
-    # Too new to have missed a firing yet.
+    # Too new to have missed a firing yet. The workflow's creation time is not enough: an old
+    # dispatch-only workflow that GAINS a schedule was created long ago, yet its first firing may
+    # not be due. So the schedule counts as active only from the file's newest commit on the default
+    # branch — later than the real activation at worst, which can only delay a report.
     if ! is_epoch "$created"; then
       echo "QUERY-UNKNOWN ${repo} ${path} — workflow creation time unparseable"
       unknown=1
       continue
     fi
+    if ! changed="$(gh api "repos/${repo}/commits?path=${path}&sha=${branch}&per_page=1" \
+      --jq "${jq_epoch} .[0].commit.committer.date // \"\" | if . == \"\" then \"\" else epoch end")" ||
+      ! is_epoch "$changed"; then
+      echo "QUERY-UNKNOWN ${repo} ${path} — last change on the default branch unreadable"
+      unknown=1
+      continue
+    fi
     [ "$created" -gt "$cutoff" ] && continue
+    [ "$changed" -gt "$cutoff" ] && continue
 
     # 🔴 Never filter the run list by `event=schedule`: that filtered listing is INCOMPLETE —
     # measured 2026-09-29 on a monthly workflow, it returned 3 runs (newest July) while the
