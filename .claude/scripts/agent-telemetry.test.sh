@@ -7210,7 +7210,7 @@ echo "── checkout-then-build: \`make\` counts only as a command, not as pros
 # through `rtk`, after `&&` with options before the target, behind `VAR=value`
 # assignments, and inside `"$(…)"` — must still be listed, and so must a non-Make
 # build beside them (the control that the walk read the session at all). The
-# section prints at most five distinct commands, so the cases split over six runs.
+# section prints at most five distinct commands, so the cases split over seven runs.
 MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 mk_cmd() { # $1 = id, $2 = command
   jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
@@ -7336,6 +7336,24 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
   ok "a redefined inert name loses the exemption; a comment line is not a build"
 else
   bad "a redefined inert name loses the exemption; a comment line is not a build" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+# Quote state carries across the lines of one command: a `#` line inside a
+# multi-line "…" is string content (its substitution runs), and definition-shaped
+# text inside quotes redefines nothing.
+MK_OUT=$({
+  mk_cmd t1 'gh pr checkout 13'
+  mk_cmd t2 "$(printf 'echo "\n# %s\n"' "\$(make test)")"
+  mk_cmd t3 "printf 'alias echo=x'"
+  mk_cmd t4 'echo "please make the report clearer"'
+  mk_cmd t5 'npm ci'
+} | mk_run makecarry)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qF "1 # \$(make test)" <<<"$MK_OUT" \
+   && ! grep -qE 'make the report' <<<"$MK_OUT"; then
+  ok "quote state carries across lines; quoted definition text redefines nothing"
+else
+  bad "quote state carries across lines; quoted definition text redefines nothing" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 

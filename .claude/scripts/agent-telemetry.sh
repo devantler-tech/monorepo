@@ -4290,30 +4290,38 @@ if want safety; then
                 sq = sprintf("%c", 39)
                 inert = "^(rtk[[:space:]]+)?(printf|echo|cd|git[[:space:]]+(add|commit|status|diff|log|show)|gh[[:space:]]+(pr|issue)[[:space:]]+(create|edit|comment|view))([[:space:]]|$)"
               }
-              # unquoted(line): the line with quoted text blanked, scanned left to
-              # right so a quote character inside the other kind of quote is
-              # literal. A "…" holding `$(` or a backtick, an escape inside it,
-              # or an unterminated quote leaves a backtick behind, which
-              # text_only rejects.
-              function unquoted(line,   out, n, i, c, st, buf) {
-                out = ""; st = 0; n = length(line)
+              # scan(line) reads one line left to right with the quote state
+              # (st, buf) CARRIED from the previous line, so a quote character
+              # inside the other kind of quote is literal and a multi-line
+              # string stays a string. It sets CODE, the line without an
+              # unquoted `#` comment, and RES, CODE with quoted text blanked. A
+              # "…" holding `$(`, a backtick or an escape, or a quote still open
+              # at the end of the line, leaves a backtick in RES, which text_only
+              # rejects.
+              function scan(line,   n, i, c) {
+                CODE = ""; RES = ""; n = length(line)
                 for (i = 1; i <= n; i++) {
                   c = substr(line, i, 1)
                   if (st == 0) {
+                    if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[[:space:];&|(]/)) break
+                    CODE = CODE c
                     if (c == sq) st = 1
                     else if (c == "\"") { st = 2; buf = "" }
-                    else if (c == "\\") { out = out " "; i++ }
-                    else out = out c
+                    else if (c == "\\") { RES = RES " "; i++; CODE = CODE substr(line, i, 1) }
+                    else RES = RES c
                   } else if (st == 1) {
-                    if (c == sq) { st = 0; out = out " " }
-                  } else if (c == "\"") {
-                    st = 0; out = out (buf ~ /[$][(]|`|\\/ ? "`" : " ")
-                  } else buf = buf c
+                    CODE = CODE c
+                    if (c == sq) { st = 0; RES = RES " " }
+                  } else {
+                    CODE = CODE c
+                    if (c == "\\") { buf = buf c; i++; CODE = CODE substr(line, i, 1) }
+                    else if (c == "\"") { st = 0; RES = RES (buf ~ /[$][(]|`|\\/ ? "`" : " ") }
+                    else buf = buf c
+                  }
                 }
-                return st == 0 ? out : out "`"
+                if (st != 0) RES = RES "`"
               }
-              function text_only(line,   s, n, i, seg) {
-                s = unquoted(line)
+              function text_only(s,   n, i, seg) {
                 if (s ~ /[|<>`(){}]|[$][(]/) return 0
                 n = split(s, seg, /[;&]+/)
                 for (i = 1; i <= n; i++) {
@@ -4325,21 +4333,21 @@ if want safety; then
                 }
                 return 1
               }
-              # A full-line comment runs nothing. Lines are decided at the end,
-              # because a session that redefines an inert name as a function or
-              # alias (`echo() { "$@"; }`, then `echo make test`) anywhere loses
-              # the exemption for all of its lines.
-              /^[[:space:]]*#/ { next }
+              # Lines are decided at the end, because a session that redefines
+              # an inert name as a function or alias in unquoted code
+              # (`echo() { "$@"; }`, then `echo make test`) anywhere loses the
+              # exemption for all of its lines.
               {
-                line[++n] = $0
-                if ($0 ~ /(^|[^A-Za-z0-9_-])(printf|echo|cd|git|gh|rtk)[[:space:]]*[(][[:space:]]*[)]/ \
-                    || $0 ~ /function[[:space:]]+(printf|echo|cd|git|gh|rtk)([^A-Za-z0-9_-]|$)/ \
-                    || $0 ~ /alias[[:space:]]+([^=]*[[:space:]])?(printf|echo|cd|git|gh|rtk)=/) redefined = 1
+                scan($0)
+                line[++n] = $0; code[n] = CODE; res[n] = RES
+                if (RES ~ /(^|[^A-Za-z0-9_-])(printf|echo|cd|git|gh|rtk)[[:space:]]*[(][[:space:]]*[)]/ \
+                    || RES ~ /function[[:space:]]+(printf|echo|cd|git|gh|rtk)([^A-Za-z0-9_-]|$)/ \
+                    || RES ~ /alias[[:space:]]+([^=]*[[:space:]])?(printf|echo|cd|git|gh|rtk)=/) redefined = 1
               }
               END {
                 for (i = 1; i <= n; i++) {
-                  if (line[i] ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
-                      || (line[i] ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/ && (redefined || !text_only(line[i])))) print line[i]
+                  if (code[i] ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
+                      || (code[i] ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/ && (redefined || !text_only(res[i])))) print line[i]
                 }
               }' <<<"$cmds"
           fi
