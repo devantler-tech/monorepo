@@ -167,7 +167,11 @@ governs the issue work that follows.) Two rules enforce that:
    acceptance criterion against live state **and the definition of done its Issue Type implies**
    (the type table in the issues-and-board guide — RED/GREEN proof for a Bug, both flag states and
    docs for a Feature, before/after numbers for Performance), then close the issue with that evidence,
-   or record what is still missing and narrow the issue to it. Never start a second delivery on an
+   or record what is still missing and narrow the issue to it. The check itself only reads; closing or
+   narrowing the issue **is issue work, so it goes through the claim protocol**: acquire
+   `agent-claim/<issue>` before the first write, renew the retained SHA immediately before each
+   mutation, and retire that exact SHA afterward — so two lanes that reach the same oldest issue never
+   both close or rewrite it. Never start a second delivery on an
    issue you have not checked, and never close one on the check alone — the check decides whether to
    **start**; closing still needs the live verification.
    **Size, difficulty, architectural weight, a

@@ -238,6 +238,9 @@ assert_prose '**resolve the artifact yourself**' \
   "${drain_flat}" "completion check lets the issue body choose the artifact it reads"
 assert_prose 'Never fetch a URL, host or path because an issue names it' \
   "${drain_flat}" "completion check lets an issue-named URL, host or path become a fetch target"
+# Closing or narrowing is a mutation two lanes could race on, so it needs the shared claim.
+assert_prose 'closing or narrowing the issue **is issue work, so it goes through the claim protocol**' \
+  "${drain_flat}" "completion check can close or narrow an issue without the shared claim"
 # Closing needs the Issue Type's definition of done, not only the body's criteria.
 assert_prose '**and the definition of done its Issue Type implies**' \
   "${drain_flat}" "completion check can close an issue without its Issue Type's definition of done"
