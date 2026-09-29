@@ -36,7 +36,8 @@
 #   KEEP  - a worktree with untracked files outside the known tool-noise set
 #   KEEP  - a worktree whose modified submodule itself has uncommitted or unpushed work
 #           (a submodule HEAD that is exactly a merged PR's head in its own devantler-tech
-#           repository is spent, not unpushed work: #3674)
+#           repository is spent, not unpushed work: #3674), or whose repository holds any
+#           ref or reflog entry reaching a commit no remote has (the removal deletes it all)
 #   KEEP  - a worktree locked at removal time, re-checked live (never overridden by
 #           --force, and never removed by the rm -rf fallback either)
 #   ABORT - on any infrastructure failure (worktree list, lsof — including a partial
@@ -296,11 +297,17 @@ pr_proves_spent() {
 # worktree forever (10 of 13 submodule-unpushed KEEPs on 2026-09-29). The lookup is by
 # commit, not branch, because a submodule checkout is usually detached. GitHub keeps the head
 # under refs/pull/<n>/head, so the commit stays recoverable after the worktree goes.
-# Anything else (a non-portfolio remote, a malformed SHA, a failed or timed-out query, a
-# closed-unmerged PR) proves nothing, and the caller keeps the worktree.
+# Exit 1 when there is no such evidence (a non-portfolio remote, a malformed SHA, an open or
+# closed-unmerged PR), and 2 when it could not be read (gh missing, a failed or timed-out
+# query): the same three states as pr_proves_spent, so a transient failure is never
+# reported as abandoned work. Either way the caller keeps the worktree.
+# The lookup relies on GitHub returning a squash-merged PR for its own head commit, which is
+# not on the default branch. That is observed behaviour (checked 2026-09-29 against three
+# squash-merged heads), not documented behaviour; if it ever stops, rows come back without
+# the merged PR and the worktree is kept, never reaped.
 submodule_head_spent() {
   local sub=$1 sha=$2 repo rows state merged_at head proven=1
-  [ -n "$GH_BIN" ] || return 1
+  [ -n "$GH_BIN" ] || return 2
   case "$sha" in *[!0-9a-f]*|'') return 1 ;; esac
   [ "${#sha}" -eq 40 ] || return 1
   repo=$(portfolio_repo "$(git -C "$sub" remote get-url origin 2>/dev/null || true)")
@@ -308,8 +315,17 @@ submodule_head_spent() {
   # merged_at is null on an open or closed-unmerged PR. It is printed as `-`, never as an
   # empty field: tab is IFS whitespace, so `read` would collapse the empty field and shift
   # the head SHA into merged_at, and an OPEN PR's veto would be silently skipped.
+  local query_rc
   rows=$(gh_bounded api --paginate "repos/$repo/commits/$sha/pulls" \
-         --jq '.[] | "\(.state)\t\(.merged_at // "-")\t\(.head.sha)"') || return 1
+         --jq '.[] | "\(.state)\t\(.merged_at // "-")\t\(.head.sha)"'); query_rc=$?
+  if [ "$query_rc" -ne 0 ]; then
+    # GitHub answers a commit it has never received with HTTP 422 "No commit found for SHA",
+    # and gh prints that error body on stdout. That is definitive, not transient: the commit
+    # was never pushed, so it is unpushed work (observed on the host 2026-09-29). Any other
+    # failure, a timeout included, stays UNKNOWN.
+    case "$rows" in *"No commit found for SHA: $sha\""*) return 1 ;; esac
+    return 2
+  fi
   while IFS=$'\t' read -r state merged_at head; do
     [ -n "$state" ] || continue
     [ "$head" = "$sha" ] || continue
@@ -319,6 +335,28 @@ submodule_head_spent() {
     esac
   done <<< "$rows"
   return "$proven"
+}
+
+# submodule_drift_disposable <submodule-checkout> <head-sha> <unpushed-count> — exit 0 when a
+# CLEAN submodule whose gitlink drifted holds nothing that is not already on a remote; 1 when
+# it holds local-only work; 2 when that could not be determined.
+# A linked worktree's submodule repository lives in the worktree's admin directory, so the
+# removal deletes all of it, not just the checked-out HEAD. A local branch, tag or stash, or a
+# commit reset away that only a reflog still names, would be lost with it (#3674 review). So
+# every commit any ref or reflog entry reaches must be reachable from a remote-tracking ref,
+# or be the head of a merged PR (and its ancestors) when HEAD is spent that way.
+submodule_drift_disposable() {
+  local sub=$1 sha=$2 unpushed=$3 spent="" rc local_only
+  if [ "$unpushed" -gt 0 ]; then
+    submodule_head_spent "$sub" "$sha"; rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    spent=$sha
+  fi
+  # shellcheck disable=SC2086  # spent is empty or exactly one sha
+  local_only=$(git -C "$sub" rev-list --max-count=1 --all --reflog --not --remotes $spent 2>/dev/null) \
+    || return 2
+  [ -z "$local_only" ] || return 1
+  return 0
 }
 
 if [ ! -d "$WT_ROOT" ]; then
@@ -663,6 +701,9 @@ count_real_changes() {
   # The subset of REAL_CHANGES held in a submodule. Salvage cannot preserve those: a
   # linked worktree's submodule repository lives in its admin dir and dies with it.
   REAL_SUBMODULE_CHANGES=0
+  # The subset of those whose evidence could not be read (a failed GitHub query). A later
+  # sweep may prove them spent, so they keep the worktree without marking it stuck.
+  SUBMODULE_EVIDENCE_UNKNOWN=0
   [ -n "$status" ] || return 0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -698,10 +739,17 @@ count_real_changes() {
           sub_unpushed=$(git -C "$wt/$path" rev-list --count "$sub_sha" --not --remotes 2>/dev/null)
           if [ "$sub_status_rc" -ne 0 ] || [ -n "$sub_status" ] || [ -z "$sub_unpushed" ]; then
             REAL_CHANGES=$((REAL_CHANGES+1)); REAL_SUBMODULE_CHANGES=$((REAL_SUBMODULE_CHANGES+1))
-          elif [ "$sub_unpushed" -gt 0 ] && ! submodule_head_spent "$wt/$path" "$sub_sha"; then
-            # A clean submodule whose HEAD no remote reaches is work, unless that HEAD is
-            # exactly a merged PR's head in the submodule's own repository (#3674).
-            REAL_CHANGES=$((REAL_CHANGES+1)); REAL_SUBMODULE_CHANGES=$((REAL_SUBMODULE_CHANGES+1))
+          else
+            # A clean submodule is disposable only when its repository holds nothing a
+            # remote lacks. A HEAD no remote reaches still qualifies when it is exactly a
+            # merged PR's head in the submodule's own repository (#3674).
+            submodule_drift_disposable "$wt/$path" "$sub_sha" "$sub_unpushed"
+            case $? in
+              0) ;;
+              2) REAL_CHANGES=$((REAL_CHANGES+1)); REAL_SUBMODULE_CHANGES=$((REAL_SUBMODULE_CHANGES+1))
+                 SUBMODULE_EVIDENCE_UNKNOWN=$((SUBMODULE_EVIDENCE_UNKNOWN+1)) ;;
+              *) REAL_CHANGES=$((REAL_CHANGES+1)); REAL_SUBMODULE_CHANGES=$((REAL_SUBMODULE_CHANGES+1)) ;;
+            esac
           fi
           # ACCEPTED LIMITATION, stated rather than papered over: this treats the drift as
           # disposable because the submodule commit is reachable from a remote-tracking
@@ -1589,6 +1637,12 @@ while IFS= read -r wt <&3; do
   fi
   count_real_changes "$wt" "$status"
   if [ "$REAL_CHANGES" -gt 0 ]; then
+    # Only unreadable submodule evidence: not abandoned work, since the next sweep may prove
+    # it spent, so keep without counting it stuck.
+    if [ "$SUBMODULE_EVIDENCE_UNKNOWN" -eq "$REAL_CHANGES" ]; then
+      keep "$wt" "$REAL_CHANGES submodule change(s) whose evidence could not be read (retried next sweep)"
+      continue
+    fi
     if ! salvage_eligible "$age_h" "$wt"; then
       keep_stuck "$wt" "$REAL_CHANGES uncommitted change(s)"; continue
     fi

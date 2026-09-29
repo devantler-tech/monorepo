@@ -1002,13 +1002,16 @@ add_merged_wt() {
 
 # gh_shim <root> — an OPEN-only query prints the Nth line of $root/gh-open for its Nth call
 # (a count; "0" when absent), so a PR can reopen between two queries. Otherwise `gh` prints $root/gh-out (TSV state<TAB>headRefOid per line), or
-# fails when $root/gh-fail exists. Every invocation's argv is appended to $root/gh-args.
+# fails when $root/gh-fail exists. $root/gh-error-body makes it fail the way `gh api` does on
+# an HTTP error: the error body on stdout, exit 1. Every invocation's argv is appended to
+# $root/gh-args.
 gh_shim() {
   local root=$1 shim="$1/ghshim"; mkdir -p "$shim"
   cat > "$shim/gh" <<SHIM
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$root/gh-args"
 [ -e "$root/gh-fail" ] && { echo "HTTP 502" >&2; exit 1; }
+[ -e "$root/gh-error-body" ] && { cat "$root/gh-error-body"; exit 1; }
 [ -e "$root/gh-hang" ] && sleep 30
 case "\$*" in
   *"--state open"*)
@@ -3512,39 +3515,90 @@ t_submodule_on_a_merged_pr_head() {
   # One fixture per GitHub answer. The shim prints gh-out verbatim, in the shape the
   # script's --jq produces: state<TAB>merged_at (or `-` when null)<TAB>head.sha.
   local name="a submodule on a merged PR head is spent; every other answer keeps the worktree"
-  local failures="" case_name url rows want root sha shim out
-  for case_name in merged moved open unmerged failed foreign; do
+  local failures="" case_name url rows root sha shim out wt
+  for case_name in merged moved open unmerged failed foreign hidden absent; do
     root=$(make_repo)
+    wt="$root/repo/.claude/worktrees/sub$case_name"
     url=https://github.com/devantler-tech/subfix.git
     [ "$case_name" = foreign ] && url=https://github.com/someone-else/subfix.git
     sha=$(drifted_sub_wt "$root" "sub$case_name" "$url") \
       || { failures="$failures $case_name(FIXTURE)"; rm -rf "$root"; continue; }
+    if [ "$case_name" = hidden ]; then
+      # HEAD is back on the merged head, but a commit reset away is still in the submodule
+      # repository's reflog, and the removal would delete it (#3674 review).
+      git -C "$wt/sub" commit -q --allow-empty -m "local only" && git -C "$wt/sub" reset -q --hard "$sha" \
+        && age_tree "$wt" || { failures="$failures $case_name(FIXTURE)"; rm -rf "$root"; continue; }
+    fi
     case "$case_name" in
-      merged)   rows="closed	2026-09-01T00:00:00Z	$sha" ;;
+      merged|hidden) rows="closed	2026-09-01T00:00:00Z	$sha" ;;
       moved)    rows="closed	2026-09-01T00:00:00Z	0123456789abcdef0123456789abcdef01234567" ;;
       open)     rows="closed	2026-09-01T00:00:00Z	$sha
 open	-	$sha" ;;
       unmerged) rows="closed	-	$sha" ;;
-      failed|foreign) rows="closed	2026-09-01T00:00:00Z	$sha" ;;
+      failed|foreign|absent) rows="closed	2026-09-01T00:00:00Z	$sha" ;;
     esac
     printf '%s\n' "$rows" > "$root/gh-out"
     [ "$case_name" = failed ] && touch "$root/gh-fail"
+    # GitHub has never seen the commit: definitive unpushed work, so kept AND stuck.
+    [ "$case_name" = absent ] && printf '{"message":"No commit found for SHA: %s","status":"422"}\n' "$sha" \
+      > "$root/gh-error-body"
     shim=$(gh_shim "$root") || { failures="$failures $case_name(SHIM)"; rm -rf "$root"; continue; }
     out=$(run_gh "$root" "$shim")
-    want=KEEP; [ "$case_name" = merged ] && want=REAP
-    if [ "$want" = REAP ]; then
-      grep -q "^REAP  .*sub$case_name" <<<"$out" \
-        && grep -qF "api --paginate repos/devantler-tech/subfix/commits/$sha/pulls" "$root/gh-args" \
-        || failures="$failures $case_name:[$out]"
-    elif [ "$case_name" = foreign ]; then
-      # A non-portfolio remote is never even queried.
-      grep -q "KEEP .*sub$case_name .*uncommitted" <<<"$out" && ! grep -q 'commits/' "$root/gh-args" 2>/dev/null \
-        || failures="$failures $case_name:[$out]"
-    else
-      grep -q "KEEP .*sub$case_name .*uncommitted" <<<"$out" || failures="$failures $case_name:[$out]"
-    fi
+    case "$case_name" in
+      merged)
+        grep -q "^REAP  .*sub$case_name" <<<"$out" \
+          && grep -qF "api --paginate repos/devantler-tech/subfix/commits/$sha/pulls" "$root/gh-args" \
+          || failures="$failures $case_name:[$out]" ;;
+      foreign)
+        # A non-portfolio remote is never even queried.
+        grep -q "KEEP .*sub$case_name .*uncommitted" <<<"$out" && ! grep -q 'commits/' "$root/gh-args" 2>/dev/null \
+          || failures="$failures $case_name:[$out]" ;;
+      failed)
+        # An unreadable answer is not abandoned work: kept, but not counted stuck.
+        grep -q "KEEP .*sub$case_name .*evidence could not be read" <<<"$out" && grep -q ' stuck=0 ' <<<"$out" \
+          || failures="$failures $case_name:[$out]" ;;
+      *)
+        grep -q "KEEP .*sub$case_name .*uncommitted" <<<"$out" && grep -q ' stuck=1 ' <<<"$out" \
+          || failures="$failures $case_name:[$out]" ;;
+    esac
     rm -rf "$root"
   done
+  if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
+}
+
+# pushed_drift_wt <root> <name> — a pushed worktree whose submodule sits clean on a newer
+# commit its remote already has (unstaged gitlink drift to a pushed commit).
+pushed_drift_wt() {
+  local root=$1 name=$2 wt="$1/repo/.claude/worktrees/$2"
+  admin_sub_wt "$root" "$name" || return 1
+  git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m upstream || return 1
+  git -C "$wt/sub" fetch -q origin && git -C "$wt/sub" checkout -q --detach origin/main || return 1
+  [ "$(git -C "$wt" status --porcelain)" = " M sub" ] || return 1
+  [ "$(git -C "$wt/sub" rev-list --count HEAD --not --remotes)" = 0 ] || return 1
+  age_tree "$wt"
+}
+
+t_submodule_drift_keeps_local_only_refs() {
+  # Drift to a pushed commit was already disposable. It still is, unless the submodule's
+  # repository holds a commit no remote has: here only a local branch names it (the reflog is
+  # expired), so the removal would delete its sole copy.
+  local name="a drifted submodule is disposable only when no ref in its repository is local-only"
+  local root out failures=""
+  root=$(make_repo)
+  pushed_drift_wt "$root" subpushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  out=$(run "$root")
+  grep -q '^REAP  .*subpushed' <<<"$out" || failures="$failures control:[$out]"
+  rm -rf "$root"
+  root=$(make_repo)
+  pushed_drift_wt "$root" subside || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subside" base
+  base=$(git -C "$wt/sub" rev-parse HEAD)
+  git -C "$wt/sub" checkout -q -b side && git -C "$wt/sub" commit -q --allow-empty -m "local only" \
+    && git -C "$wt/sub" checkout -q --detach "$base" && git -C "$wt/sub" reflog expire --expire=now --all \
+    && age_tree "$wt" || { bad "$name" "FIXTURE: side branch"; rm -rf "$root"; return; }
+  out=$(run "$root")
+  grep -q 'KEEP .*subside .*uncommitted' <<<"$out" && [ -d "$wt" ] || failures="$failures side:[$out]"
+  rm -rf "$root"
   if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
 }
 
@@ -3690,5 +3744,6 @@ t_salvage_preserves_config_worktree
 t_salvage_caps_an_oversized_commit_editmsg
 t_salvage_keeps_a_redirected_gitfile
 t_submodule_on_a_merged_pr_head
+t_submodule_drift_keeps_local_only_refs
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
