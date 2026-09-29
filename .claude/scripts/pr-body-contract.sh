@@ -10,6 +10,28 @@ fail() {
   exit 1
 }
 
+# Reject implementation detail and name the first matching word, so the author
+# does not have to bisect the body to find it (#3680). Reads body_symbols from
+# the caller. When the match is the normalizer's placeholder (file.name followed
+# by the \034 marker, which authored text cannot contain), report the word the
+# normalizer replaced first, which it logs in file_name_words. A literal
+# file.name the author wrote carries no marker and is reported as itself.
+fail_detail() {
+  local case_flag="$1"
+  local pattern="$2"
+  local raw_match match
+  raw_match="$(grep -Eo ${case_flag:+"${case_flag}"} -- "${pattern}" "${body_symbols}" |
+    head -n 1 || true)"
+  match="$(printf '%s\n' "${raw_match}" |
+    sed -E 's/^[^[:alnum:]./~-]+//; s/[^[:alnum:]]+$//' || true)"
+  if [[ "${raw_match}" == *"file.name"$'\034'* ]]; then
+    match="$(head -n 1 "${file_name_words}" 2>/dev/null |
+      sed -E 's/^[^[:alnum:]./~-]+//; s/[^[:alnum:]]+$//' || true)"
+    match="${match:-a word read as a file name}"
+  fi
+  fail "PR body must not contain implementation or validation detail${match:+ (matched: ${match})}"
+}
+
 usage() {
   cat >&2 <<'EOF'
 Usage:
@@ -73,6 +95,7 @@ esac
 
 work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
+file_name_words="${work_dir}/file-name-words"
 
 strip_comments() {
   awk '
@@ -504,13 +527,21 @@ validate_body() {
     -e 's/(^|[^[:alnum:]_.])(v?[[:digit:]]+([.][[:digit:]]+)+([.]?([dD][eE][vV]|[pP][oO][sS][tT])[[:digit:]]+))([^[:alnum:]_-]|$)/\1version\6/g' \
     -e 's#https?://[^[:space:])}>]+#url#g' \
     "${body_prose}" >>"${body_symbols}"
+  : >"${file_name_words}"
   # A dotted token can be a filename, email address, measurement, or public
   # hostname. Normalize only the non-filename forms whose syntax or surrounding
   # product prose identifies them; filename evidence takes precedence.
   # Curly quotes are literal Markdown delimiters in the AWK regex.
   # shellcheck disable=SC1112
-  awk -v public_tld_file="${public_tlds}" '
+  awk -v public_tld_file="${public_tlds}" -v file_name_words="${file_name_words}" '
     BEGIN { RS = "" }
+    # Record the word a placeholder replaces, so a rejection can name it. The
+    # trailing \034 marks the placeholder, which authored text cannot contain,
+    # so a literal file.name in the body is still reported as itself.
+    function file_name_placeholder(word) {
+      print word >file_name_words
+      return "file.name\034"
+    }
     function normalized_word(text, value) {
       value = tolower(text)
       gsub(/^[^[:alnum:]]+/, "", value)
@@ -547,15 +578,28 @@ validate_body() {
       rendered_record = $0
       while (match(rendered_record, /"([^"\\]|\\.)*"@[[:alnum:]-]+([.][[:alnum:]-]+)+/)) {
         quoted_suffix = substr(rendered_record, RSTART + RLENGTH)
-        quoted_kind = quoted_suffix ~ /^[[:space:]]+(file|filename|path)([^[:alnum:]_]|$)/ \
-          ? "file.name" : "email"
+        # A quoted filename is marked here and turned into the placeholder by
+        # the field loop, so its original is logged in document order.
+        if (quoted_suffix ~ /^[[:space:]]+(file|filename|path)([^[:alnum:]_]|$)/) {
+          quoted_original[++quoted_count] = substr(rendered_record, RSTART, RLENGTH)
+          quoted_kind = "\034" quoted_count "\034"
+        } else {
+          quoted_kind = "email"
+        }
         rendered_record = substr(rendered_record, 1, RSTART - 1) quoted_kind quoted_suffix
       }
       $0 = rendered_record
       for (field = 1; field <= NF; field++) {
+        if (match($field, /\034[0-9]+\034/)) {
+          quoted_index = substr($field, RSTART + 1, RLENGTH - 2)
+          $field = substr($field, 1, RSTART - 1) \
+            file_name_placeholder(quoted_original[quoted_index]) \
+            substr($field, RSTART + RLENGTH)
+          continue
+        }
         prefixed_implementation = $field ~ /^([.][.]?\/|--)[[:alnum:]_.-]+([^[:alnum:]_.-]|$)/
         if (prefixed_implementation) {
-          $field = "file.name"
+          $field = file_name_placeholder($field)
           continue
         }
         raw_domain_candidate = tolower($field)
@@ -632,14 +676,17 @@ validate_body() {
         reserved_file_subject = following ~ /^(is|was)$/ && \
           after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
         dependency_context = previous == "dependency" && before_previous == "new"
-        reserved_name = toupper(candidate) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)$/
+        # An all-lowercase word ("security", "notice") is plain English; the
+        # repository files these name are written with a capital (#3680).
+        reserved_name = toupper(candidate) ~ /^(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)$/ && \
+          $field ~ /[[:upper:]]/
         if ((file_context && candidate !~ /^(a|an|any|each|every|no|one|that|the|these|this|those)$/ && \
               (candidate ~ /[.]/ || token ~ /^[.]/ || (file_action && !product_file_phrase) || file_subject)) || \
             (path_context && (candidate ~ /[.]/ || token ~ /^[.]/ || file_action)) || \
             (reserved_name && \
               (file_action || reserved_file_subject || explicit_file_context || dependency_context)) || \
             (file_action && token ~ /[.][[:digit:]]+$/ && !decimal_number) || numeric_file_subject) {
-          $field = "file.name"
+          $field = file_name_placeholder($field)
           continue
         }
         if (reserved_name) {
@@ -662,7 +709,7 @@ validate_body() {
             after_following ~ /^(broken|corrupt|corrupted|invalid|malformed|missing|unreadable)$/
           numeric_terminal_label = token ~ /@[[:alnum:]-]+([.][[:alnum:]-]+)*[.][[:digit:]][[:alnum:]-]*$/
           email_filename = known_filename && !mailbox_public_domain
-          $field = (email_filename || numeric_terminal_label || file_action || bare_file_subject) ? "file.name" : "email"
+          $field = (email_filename || numeric_terminal_label || file_action || bare_file_subject) ? file_name_placeholder($field) : "email"
           continue
         }
         if (previous ~ /^(group|option|phase|plan|section|stage|step|tier)$/ && \
@@ -928,28 +975,28 @@ validate_body() {
   if grep -Fq '`' "${body_validation}"; then
     fail "PR body must not contain code or command snippets"
   fi
-  if grep -Eiq '(^|[^[:alnum:]_])CI[[:space:]]+(is[[:space:]]+)?(green|red|passing|failing|passed|failed|succeeded|successful)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(the[[:space:]]+)?(build|pipeline|workflow)[[:space:]]+(is[[:space:]]+)?(green|red|passing|failing|passed|failed|succeeded|successful)([[:space:]]+in[[:space:]]+CI)?([^[:alnum:]_]|$)' \
-    "${body_symbols}"; then
-    fail "PR body must not contain implementation or validation detail"
+  detail_pattern='(^|[^[:alnum:]_])CI[[:space:]]+(is[[:space:]]+)?(green|red|passing|failing|passed|failed|succeeded|successful)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(the[[:space:]]+)?(build|pipeline|workflow)[[:space:]]+(is[[:space:]]+)?(green|red|passing|failing|passed|failed|succeeded|successful)([[:space:]]+in[[:space:]]+CI)?([^[:alnum:]_]|$)'
+  if grep -Eiq -- "${detail_pattern}" "${body_symbols}"; then
+    fail_detail "-i" "${detail_pattern}"
   fi
-  if grep -Eq '(^|[^[:alnum:]_])([A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*|[A-Z]{2,}[a-z][A-Za-z0-9]*)([^[:alnum:]_]|$)' \
-    "${body_symbols}"; then
-    fail "PR body must not contain implementation or validation detail"
+  detail_pattern='(^|[^[:alnum:]_])([A-Za-z][A-Za-z0-9]*[a-z][A-Z][A-Za-z0-9]*|[A-Z]{2,}[a-z][A-Za-z0-9]*)([^[:alnum:]_]|$)'
+  if grep -Eq -- "${detail_pattern}" "${body_symbols}"; then
+    fail_detail "" "${detail_pattern}"
   fi
   # Reject arbitrary filename extensions and dotfiles rather than maintaining
   # a partial portfolio extension list. Unit-suffixed fractions and hostnames
   # have already been normalized above.
-  if grep -Eiq '(^|[^[:alnum:]_.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+([[:alpha:]_][[:alnum:]_.-]*|[.-][[:alnum:]_.-]+))|[[:alnum:]_.-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)|[[:alpha:]_][[:alnum:]_.-]*[.][[:digit:]]+)([^[:alnum:]_.-]|[.]+([^[:alnum:]_.-]|$)|$)' \
-    "${body_symbols}"; then
-    fail "PR body must not contain implementation or validation detail"
+  detail_pattern='(^|[^[:alnum:]_.-])([.]([[:alpha:]_][[:alnum:]_.-]*|[[:digit:]]+([[:alpha:]_][[:alnum:]_.-]*|[.-][[:alnum:]_.-]+))|[[:alnum:]_.-]+[.]([[:alpha:]_][[:alnum:]_-]*|[[:digit:]]+[[:alpha:]_][[:alnum:]_-]*)|[[:alpha:]_][[:alnum:]_.-]*[.][[:digit:]]+)([^[:alnum:]_.-]|[.]+([^[:alnum:]_.-]|$)|$)'
+  if grep -Eiq -- "${detail_pattern}" "${body_symbols}"; then
+    fail_detail "-i" "${detail_pattern}"
   fi
-  if grep -Eq '(^|[^[:alnum:]_])(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([^[:alnum:]_]|$)' \
-    "${body_symbols}"; then
-    fail "PR body must not contain implementation or validation detail"
+  detail_pattern='(^|[^[:alnum:]_])(AUTHORS|CHANGELOG|CNAME|CODEOWNERS|CONTRIBUTING|LICENSE|NOTICE|README|SECURITY)([^[:alnum:]_]|$)'
+  if grep -Eq -- "${detail_pattern}" "${body_symbols}"; then
+    fail_detail "" "${detail_pattern}"
   fi
-  if grep -Eiq '(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])(Dockerfile|Makefile|Taskfile|Justfile|Procfile|Gemfile|Rakefile|Jenkinsfile|Vagrantfile|Tiltfile|Brewfile)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|rb|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl|mod|sum|toml|lock|ini|conf|cfg|env|properties|gradle|xml|sql|proto)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[[:space:]])--[[:alnum:]][[:alnum:]-]*([^[:alnum:]-]|$)|(^|[^[:alnum:]_])(kubectl[[:space:]]+(apply|create|delete|describe|exec|get|logs|patch|rollout|scale|set|wait)|helm[[:space:]]+(dependency|install|lint|list|package|repo|rollback|status|template|test|uninstall|upgrade)|docker[[:space:]]+(build|compose|exec|images|inspect|logs|ps|pull|push|run|stop)|git[[:space:]]+(add|branch|checkout|cherry-pick|clone|commit|diff|fetch|log|merge|pull|push|rebase|reset|restore|show|status|switch|tag|worktree)|gh[[:space:]]+(api|auth|issue|pr|repo|run|workflow)|(terraform|tofu)[[:space:]]+(apply|destroy|fmt|import|init|output|plan|providers|refresh|show|state|taint|test|validate|workspace)|(curl|wget)[[:space:]]+url|ansible(-playbook|-galaxy)?[[:space:]]+(all|localhost|install|playbook|run))([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(go[[:space:]]+(test|build|run|mod|generate|install|get)|npm[[:space:]]+(run|test|install)|pnpm[[:space:]]+(run|test|install)|cargo[[:space:]]+(test|build|run)|dotnet[[:space:]]+(test|build|run))([^[:alnum:]_]|$)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)' \
-    "${body_symbols}"; then
-    fail "PR body must not contain implementation or validation detail"
+  detail_pattern='(^|[^[:alnum:]_])(([.]{1,2}/|/)[[:alnum:]_./-]+|(src|test|tests|internal|cmd|pkg|docs|[.]github)/[[:alnum:]_./-]+)|(^|[^[:alnum:]_])(Dockerfile|Makefile|Taskfile|Justfile|Procfile|Gemfile|Rakefile|Jenkinsfile|Vagrantfile|Tiltfile|Brewfile)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])[[:alnum:]_.-]+\.(go|sh|py|rb|ts|tsx|js|jsx|yaml|yml|json|md|cs|rs|java|kt|tf|hcl|mod|sum|toml|lock|ini|conf|cfg|env|properties|gradle|xml|sql|proto)([^[:alnum:]_]|$)|[[:alnum:]]+_[[:alnum:]_]+|(^|[^[:alnum:]])SC[0-9]{4}([^[:alnum:]]|$)|(^|[^[:alnum:]_])[[:alnum:]_]+\(\)|(^|[[:space:]])--[[:alnum:]][[:alnum:]-]*([^[:alnum:]-]|$)|(^|[^[:alnum:]_])(kubectl[[:space:]]+(apply|create|delete|describe|exec|get|logs|patch|rollout|scale|set|wait)|helm[[:space:]]+(dependency|install|lint|list|package|repo|rollback|status|template|test|uninstall|upgrade)|docker[[:space:]]+(build|compose|exec|images|inspect|logs|ps|pull|push|run|stop)|git[[:space:]]+(add|branch|checkout|cherry-pick|clone|commit|diff|fetch|log|merge|pull|push|rebase|reset|restore|show|status|switch|tag|worktree)|gh[[:space:]]+(api|auth|issue|pr|repo|run|workflow)|(terraform|tofu)[[:space:]]+(apply|destroy|fmt|import|init|output|plan|providers|refresh|show|state|taint|test|validate|workspace)|(curl|wget)[[:space:]]+url|ansible(-playbook|-galaxy)?[[:space:]]+(all|localhost|install|playbook|run))([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(go[[:space:]]+(test|build|run|mod|generate|install|get)|npm[[:space:]]+(run|test|install)|pnpm[[:space:]]+(run|test|install)|cargo[[:space:]]+(test|build|run)|dotnet[[:space:]]+(test|build|run))([^[:alnum:]_]|$)|(^|[^[:alnum:]])(shellcheck|pytest|ruff|mypy|golangci-lint|go test|cargo test|npm (run )?test|pnpm (run )?test)([^[:alnum:]]|$)|(^|[^[:alnum:]_])(all[[:space:]]+)?(tests?|lint([[:space:]]+checks?)?|checks?)([[:space:]]+and[[:space:]]+(tests?|lint([[:space:]]+checks?)?|checks?))*[[:space:]]+(passed|failed|succeeded)([^[:alnum:]_]|$)|[0-9]+[[:space:]]+(tests?|checks?)([[:space:]]+|$)'
+  if grep -Eiq -- "${detail_pattern}" "${body_symbols}"; then
+    fail_detail "-i" "${detail_pattern}"
   fi
 
   visible_chars="$(wc -c <"${visible_body}" | tr -d '[:space:]')"
