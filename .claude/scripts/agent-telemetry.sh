@@ -4270,15 +4270,24 @@ if want safety; then
     #
     # `make` is a common English word, so it counts only in COMMAND position —
     # at the start of a line or after `;`, `&`, `|` or `(` (which covers `&&`,
-    # `||` and `$(`), optionally through the `rtk` wrapper, with options before
-    # the target. Matched anywhere, `printf 'make the report clearer'` was a
-    # Make execution candidate (#2988).
+    # `||` and `$(`), optionally through the `rtk` wrapper and leading
+    # `VAR=value` assignments, with options before the target. Matched anywhere,
+    # `printf 'make the report clearer'` was a Make execution candidate (#2988).
+    # Quoted text is dropped before that test, so a separator inside prose
+    # (`printf '(make -n deploy)'`) is not a command boundary: single-quoted
+    # text never runs, and a double-quoted string is dropped only when it holds
+    # no `$` or backtick, so `"$(make x)"` still counts.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
           cmds="$(commands_in "$f" 2>/dev/null)" || { printf x >> "$XFBUILD"; continue; }
           [[ -n "$cmds" ]] || continue
           if grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))' <<<"$cmds"; then
-            grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|(^|[;&|(])[[:space:]]*(rtk[[:space:]]+)?make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z])' <<<"$cmds"
+            LC_ALL=C awk '{
+              s = $0; sq = sprintf("%c", 39)
+              gsub(sq "[^" sq "]*" sq, "", s); gsub(/"[^"$`]*"/, "", s)
+              if ($0 ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
+                  || s ~ /(^|[;&|(])[[:space:]]*(rtk[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/) print
+            }' <<<"$cmds"
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
     extraction_canary "$XFBUILD" "$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true)" "checkout-then-build"

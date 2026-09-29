@@ -7204,22 +7204,27 @@ else
   bad "healthy walks read their signals and raise no canary" \
       "got: $(grep -hE 'tool errors in window|Blocked:|npm ci|two-writer|xtraction' <<<"$WX_REL$WX_SAFE$WX_A2A" | head -6)"
 fi
-
 echo
 echo "── checkout-then-build: \`make\` counts only as a command, not as prose (#2988) ──"
 # The word `make` inside quoted prose is not a Make invocation. Real ones — bare,
-# through `rtk`, and after `&&` with options before the target — must still be
-# listed, and so must a non-Make build beside them (the control that the walk
-# read this session at all).
-MK="$FIX/makeprose"
-MK_SLUG=$(printf '%s' "$MK/nest" | sed 's|/|-|g')
-mkdir -p "$MK/projects/$MK_SLUG" "$MK/codex" "$MK/nest"
+# through `rtk`, after `&&` with options before the target, behind `VAR=value`
+# assignments, and inside `"$(…)"` — must still be listed, and so must a non-Make
+# build beside them (the control that the walk read the session at all). The
+# section prints at most five distinct commands, so the cases split over two runs.
 MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 mk_cmd() { # $1 = id, $2 = command
   jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
     '{type:"assistant",timestamp:$ts,message:{content:[{type:"tool_use",id:$id,name:"Bash",input:{command:$c}}]}}'
 }
-{
+mk_run() { # $1 = fixture name; stdin = the session's records; prints the safety section
+  local mk="$FIX/$1" slug
+  slug=$(printf '%s' "$mk/nest" | sed 's|/|-|g')
+  mkdir -p "$mk/projects/$slug" "$mk/codex" "$mk/nest"
+  cat > "$mk/projects/$slug/s.jsonl"
+  TZ=UTC CLAUDE_PROJECTS_DIR="$mk/projects" CODEX_HOME="$mk/codex" MONOREPO_DIR="$mk/nest" \
+    HOME="$mk" bash "$TARGET" --since-days 3650 --section safety 2>&1
+}
+MK_OUT=$({
   mk_cmd m1 'gh pr checkout 7'
   mk_cmd m2 "printf 'make the report clearer'"
   mk_cmd m3 'git commit -m "fix: make the build pass"'
@@ -7227,9 +7232,7 @@ mk_cmd() { # $1 = id, $2 = command
   mk_cmd m5 'rtk make build'
   mk_cmd m6 'cd sub && make -C x lint'
   mk_cmd m7 'npm ci'
-} > "$MK/projects/$MK_SLUG/s.jsonl"
-MK_OUT=$(TZ=UTC CLAUDE_PROJECTS_DIR="$MK/projects" CODEX_HOME="$MK/codex" MONOREPO_DIR="$MK/nest" \
-  HOME="$MK" bash "$TARGET" --since-days 3650 --section safety 2>&1)
+} | mk_run makeprose)
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qE '^ +1 make test$' <<<"$MK_OUT" \
    && grep -qE '^ +1 rtk make build$' <<<"$MK_OUT" \
@@ -7238,6 +7241,22 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
   ok "prose containing 'make the' is not a build candidate; real make invocations still are"
 else
   bad "prose containing 'make the' is not a build candidate; real make invocations still are" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+MK_OUT=$({
+  mk_cmd q1 'gh pr checkout 8'
+  mk_cmd q2 'CC=clang MAKEFLAGS=-j2 make check'
+  mk_cmd q3 "printf 'Dry-run with (make -n deploy)'"
+  mk_cmd q4 'echo "run it; make sure" && echo "$(make version)"'
+  mk_cmd q5 'npm ci'
+} | mk_run makequoted)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 CC=clang MAKEFLAGS=-j2 make check$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 echo "run it; make sure" && echo "\$\(make version\)"$' <<<"$MK_OUT" \
+   && ! grep -qE 'make -n deploy' <<<"$MK_OUT"; then
+  ok "assignment-prefixed make counts; a separator inside quoted prose is not a command boundary"
+else
+  bad "assignment-prefixed make counts; a separator inside quoted prose is not a command boundary" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 
