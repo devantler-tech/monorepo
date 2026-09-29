@@ -198,6 +198,11 @@ case "${review_bullet}" in
   *'whatever its iteration cap'*) ;;
   *) fail "the review-lanes wait lets an iteration cap make a foreground review-poll loop acceptable" ;;
 esac
+# The loop ban must not swallow the watcher it prescribes: the Latency discipline watcher IS a loop.
+case "${review_bullet}" in
+  *'The one watcher that section prescribes is the only loop allowed'*) ;;
+  *) fail "the review-lanes wait no longer exempts the prescribed Latency discipline watcher from its loop ban" ;;
+esac
 
 # ---------------------------------------------------------------------------
 # PORTABLE HALF — rule 7 of the pinned engineer definition, flattened the same way. Scoped to that
@@ -321,6 +326,8 @@ if [ -z "${LATENCY_CONTRACT_FIXTURE_GUIDE:-}" ]; then
     'leaving the PR on rung 1'
   expect_review_rejected 'whatever its iteration cap' 'unless it has an iteration cap' \
     'iteration cap make a foreground review-poll loop acceptable'
+  expect_review_rejected 'The one watcher that section prescribes is the only loop allowed' \
+    'Every loop is forbidden' 'exempts the prescribed Latency discipline watcher'
   rm -rf "${fixture_dir}"
 fi
 
