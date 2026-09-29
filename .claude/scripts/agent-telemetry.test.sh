@@ -7210,7 +7210,7 @@ echo "── checkout-then-build: \`make\` counts only as a command, not as pros
 # through `rtk`, after `&&` with options before the target, behind `VAR=value`
 # assignments, and inside `"$(…)"` — must still be listed, and so must a non-Make
 # build beside them (the control that the walk read the session at all). The
-# section prints at most five distinct commands, so the cases split over seven runs.
+# section prints at most five distinct commands, so the cases split over eight runs.
 MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 mk_cmd() { # $1 = id, $2 = command
   jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
@@ -7354,6 +7354,21 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
   ok "quote state carries across lines; quoted definition text redefines nothing"
 else
   bad "quote state carries across lines; quoted definition text redefines nothing" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+# A definition built from text and run by `eval` hides inside quotes, so a session
+# that evaluates text loses the exemption too.
+MK_OUT=$({
+  mk_cmd u1 "eval 'echo() { \"\$@\"; }'"
+  mk_cmd u2 'gh pr checkout 14'
+  mk_cmd u3 'echo make test'
+  mk_cmd u4 'npm ci'
+} | mk_run makeeval)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 echo make test$' <<<"$MK_OUT"; then
+  ok "a session that evaluates text loses the text-only exemption"
+else
+  bad "a session that evaluates text loses the text-only exemption" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 

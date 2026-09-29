@@ -4336,11 +4336,15 @@ if want safety; then
               # Lines are decided at the end, because a session that redefines
               # an inert name as a function or alias in unquoted code
               # (`echo() { "$@"; }`, then `echo make test`) anywhere loses the
-              # exemption for all of its lines.
+              # exemption for all of its lines. So does a session that runs code
+              # it builds from text — `eval`, `source`, `.` or `enable` — since a
+              # definition can hide inside a quoted argument.
               {
                 scan($0)
                 line[++n] = $0; code[n] = CODE; res[n] = RES
-                if (RES ~ /(^|[^A-Za-z0-9_-])(printf|echo|cd|git|gh|rtk)[[:space:]]*[(][[:space:]]*[)]/ \
+                if (CODE ~ /(^|[^A-Za-z0-9_.-])(eval|source|enable)([^A-Za-z0-9_-]|$)/ \
+                    || RES ~ /(^|[;&|(])[[:space:]]*[.][[:space:]]/ \
+                    || RES ~ /(^|[^A-Za-z0-9_-])(printf|echo|cd|git|gh|rtk)[[:space:]]*[(][[:space:]]*[)]/ \
                     || RES ~ /function[[:space:]]+(printf|echo|cd|git|gh|rtk)([^A-Za-z0-9_-]|$)/ \
                     || RES ~ /alias[[:space:]]+([^=]*[[:space:]])?(printf|echo|cd|git|gh|rtk)=/) redefined = 1
               }
