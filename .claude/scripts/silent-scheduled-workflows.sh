@@ -110,6 +110,30 @@ crons_of() {
   yq -r '(.on // .true // {}) | select(tag == "!!map") | .schedule // [] | .[].cron' <<<"$1" 2>/dev/null
 }
 
+# One page of a workflow's runs, newest first, as `event<TAB>epoch<TAB>created_at` rows. Every read
+# of run history goes through here, so every one is validated the same way: the page must hold
+# exactly the rows its `total_count` implies for its offset (100, or the remainder on the last page),
+# and every record must carry a lowercase string event and a parseable time. Anything else — a
+# failed read, a short page, a malformed record — returns 1, which callers treat as UNKNOWN.
+read_run_page() { # <repo> <workflow id> <page>
+  local out total rows expected got
+  out="$(gh api "repos/$1/actions/workflows/$2/runs?per_page=100&page=$3" \
+    --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflow_runs[] | if (.event | type) == \"string\" and (.event | test(\"^[a-z_]+$\")) and (.created_at | type) == \"string\" then [.event, (.created_at | epoch), .created_at] | @tsv else \"BAD\" end)")" ||
+    return 1
+  total="$(awk -F'\t' '$1 == "TOTAL" { print $2; exit }' <<<"$out")"
+  is_epoch "${total:-x}" || return 1
+  rows="$(grep -v $'^TOTAL\t' <<<"$out" || true)"
+  expected=$((total - ($3 - 1) * 100))
+  [ "$expected" -gt 100 ] && expected=100
+  [ "$expected" -lt 0 ] && expected=0
+  got="$(grep -c . <<<"$rows" || true)"
+  [ "$got" -eq "$expected" ] || return 1
+  if [ -n "$rows" ] && ! awk -F'\t' 'NF != 3 || $2 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }' <<<"$rows"; then
+    return 1
+  fi
+  printf '%s' "$rows"
+}
+
 silent=0
 checked=0
 repos_read=0
@@ -168,7 +192,7 @@ for repo in "${repos[@]}"; do
   # "this token cannot read contents", so the directory listing decides: absent from it means
   # removed; present but unreadable is UNKNOWN. An unreadable directory leaves every file unknown.
   if wf_files="$(gh api --method GET "repos/${repo}/contents/.github/workflows" -f ref="${branch}" \
-    --jq 'if type == "array" then (.[] | select(.type == "file") | .path) else "BAD" end' 2>"$err")" &&
+    --jq 'if type != "array" then "BAD" else (.[] | if (.type | type) != "string" then "BAD" elif .type != "file" then empty elif (.path | type) == "string" and (.path | test("^[^\\n]+$")) then .path else "BAD" end) end' 2>"$err")" &&
     ! grep -qx 'BAD' <<<"$wf_files"; then
     wf_dir=readable
   else
@@ -181,7 +205,7 @@ for repo in "${repos[@]}"; do
     # Whitelist the documented states: an unknown or future one is never assumed to be active.
     case "$state" in
       active | disabled_inactivity) ;;
-      disabled_manually | disabled_fork) continue ;; # a recorded decision or a policy
+      disabled_manually | disabled_fork | deleted) continue ;; # a decision, a policy, or gone
       *)
         echo "QUERY-UNKNOWN ${repo} ${path} — unrecognised workflow state '${state}'"
         unknown=1
@@ -284,21 +308,7 @@ for repo in "${repos[@]}"; do
     found=""
     verdict=""
     for ((page = 1; page <= max_pages; page++)); do
-      if ! page_out="$(gh api "repos/${repo}/actions/workflows/${id}/runs?per_page=100&page=${page}" \
-        --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflow_runs[] | if (.event | type) == \"string\" and (.event | test(\"^[a-z_]+$\")) and (.created_at | type) == \"string\" then [.event, (.created_at | epoch), .created_at] | @tsv else \"BAD\" end)")"; then
-        verdict="unknown"
-        break
-      fi
-      run_total="$(awk -F'\t' '$1 == "TOTAL" { print $2; exit }' <<<"$page_out")"
-      rows="$(grep -v $'^TOTAL\t' <<<"$page_out" || true)"
-      is_epoch "${run_total:-x}" || { verdict="unknown"; break; }
-      # Every page must hold exactly the rows its total implies (100, or the remainder on the last
-      # page). A short page — empty or not — is a partial payload, so the silence is unproven.
-      expected=$((run_total - (page - 1) * 100))
-      [ "$expected" -gt 100 ] && expected=100
-      [ "$expected" -lt 0 ] && expected=0
-      got="$(grep -c . <<<"$rows" || true)"
-      if [ "$got" -ne "$expected" ]; then
+      if ! rows="$(read_run_page "$repo" "$id" "$page")"; then
         verdict="unknown"
         break
       fi
@@ -308,7 +318,6 @@ for repo in "${repos[@]}"; do
       fi
       oldest=""
       while IFS=$'\t' read -r event at stamp; do
-        is_epoch "$at" || { verdict="unknown"; break; }
         oldest="$at"
         if [ "$event" = "schedule" ] && [ "$at" -ge "$cutoff" ]; then
           found="$stamp"
@@ -316,7 +325,6 @@ for repo in "${repos[@]}"; do
         fi
       done <<<"$rows"
       [ -n "$found" ] && break
-      [ "$verdict" = "unknown" ] && break
       [ "$oldest" -lt "$cutoff" ] && { verdict="edge"; break; }
     done
     if [ "$verdict" = "unknown" ]; then
@@ -328,12 +336,12 @@ for repo in "${repos[@]}"; do
     elif [ -z "$found" ]; then
       # Offset pagination shifts if a run is created mid-scan, so a scheduled run that landed after
       # page 1 was read could be skipped. Re-read page 1 before reporting a stop.
-      if ! newest="$(gh api "repos/${repo}/actions/workflows/${id}/runs?per_page=100&page=1" \
-        --jq "${jq_epoch} [.workflow_runs[] | select(.event == \"schedule\") | (.created_at | epoch)] | max // 0")" ||
-        ! is_epoch "$newest"; then
+      # The re-read goes through the same validated reader as the scan.
+      if ! recheck="$(read_run_page "$repo" "$id" 1)"; then
         echo "QUERY-UNKNOWN ${repo} ${path} — run list re-read failed"
         unknown=1
-      elif [ "$newest" -lt "$cutoff" ]; then
+      elif ! awk -F'\t' -v c="$cutoff" '$1 == "schedule" && $2 >= c { hit = 1 } END { exit hit ? 0 : 1 }' \
+        <<<"$recheck"; then
         echo "SILENT-WORKFLOW ${repo} ${path} — no scheduled run in the last $((limit / hour))h (its cron fires at least every ${gap_days}d)"
         silent=1
       fi

@@ -351,6 +351,21 @@ run --repo o/t
 has "QUERY-UNKNOWN o/t .github/workflows/hidden.yaml — workflow directory on the default branch unreadable" \
   "an unreadable workflow directory must be named"
 
+# A malformed directory entry would make every listed file look removed: the listing is UNKNOWN.
+put "repos/o/t/contents/.github/workflows?ref=main" '[{"type":"file","path":null}]'
+run --repo o/t
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed directory entry must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/t .github/workflows/hidden.yaml — workflow directory on the default branch unreadable" \
+  "a malformed directory entry must make the directory unreadable"
+
+# GitHub's documented `deleted` state is a removed workflow: skipped, not UNKNOWN.
+put "repos/o/u" '{"default_branch":"main"}'
+put "repos/o/u/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"deleted\",\"path\":\".github/workflows/gone.yaml\",\"created_at\":\"$old\"}]}"
+put "repos/o/u/contents/.github/workflows?ref=main" '[]'
+run --repo o/u
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a deleted workflow must be skipped, got $rc"; }
+
 # An empty run page is the end only when total_count says so; a short payload is UNKNOWN.
 put "repos/o/g" '{"default_branch":"main"}'
 put "repos/o/g/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
