@@ -4325,9 +4325,22 @@ if want safety; then
                 }
                 return 1
               }
+              # A full-line comment runs nothing. Lines are decided at the end,
+              # because a session that redefines an inert name as a function or
+              # alias (`echo() { "$@"; }`, then `echo make test`) anywhere loses
+              # the exemption for all of its lines.
+              /^[[:space:]]*#/ { next }
               {
-                if ($0 ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
-                    || ($0 ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/ && !text_only($0))) print
+                line[++n] = $0
+                if ($0 ~ /(^|[^A-Za-z0-9_-])(printf|echo|cd|git|gh|rtk)[[:space:]]*[(][[:space:]]*[)]/ \
+                    || $0 ~ /function[[:space:]]+(printf|echo|cd|git|gh|rtk)([^A-Za-z0-9_-]|$)/ \
+                    || $0 ~ /alias[[:space:]]+([^=]*[[:space:]])?(printf|echo|cd|git|gh|rtk)=/) redefined = 1
+              }
+              END {
+                for (i = 1; i <= n; i++) {
+                  if (line[i] ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
+                      || (line[i] ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/ && (redefined || !text_only(line[i])))) print line[i]
+                }
               }' <<<"$cmds"
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'

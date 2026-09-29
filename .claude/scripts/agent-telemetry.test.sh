@@ -7210,7 +7210,7 @@ echo "── checkout-then-build: \`make\` counts only as a command, not as pros
 # through `rtk`, after `&&` with options before the target, behind `VAR=value`
 # assignments, and inside `"$(…)"` — must still be listed, and so must a non-Make
 # build beside them (the control that the walk read the session at all). The
-# section prints at most five distinct commands, so the cases split over five runs.
+# section prints at most five distinct commands, so the cases split over six runs.
 MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 mk_cmd() { # $1 = id, $2 = command
   jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
@@ -7302,11 +7302,10 @@ else
 fi
 # Quotes are scanned, not pattern-matched: an apostrophe inside "…" is literal, so
 # a substitution it wraps still runs while an apostrophe in prose stays prose; and
-# a function definition named after an inert command is not a simple command.
+# `printf -v` evaluates its destination name, so it is not a text-only command.
 MK_OUT=$({
   mk_cmd r1 'gh pr checkout 11'
   mk_cmd r2 "echo \"'\$(make test)'\""
-  mk_cmd r3 'echo () { make test'
   mk_cmd r4 "echo \"it's time to make the change\""
   mk_cmd r5 'npm ci'
   mk_cmd r6 "printf -v 'x[\$(make test)]' v"
@@ -7314,11 +7313,29 @@ MK_OUT=$({
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qF "1 printf -v 'x[\$(make test)]' v" <<<"$MK_OUT" \
    && grep -qF "1 echo \"'\$(make test)'\"" <<<"$MK_OUT" \
-   && grep -qF '1 echo () { make test' <<<"$MK_OUT" \
    && ! grep -qE 'make the change' <<<"$MK_OUT"; then
-  ok "quote-aware scan: wrapped substitutions, printf -v and function definitions count; prose apostrophes do not"
+  ok "quote-aware scan: wrapped substitutions and printf -v count; prose apostrophes do not"
 else
-  bad "quote-aware scan: wrapped substitutions, printf -v and function definitions count; prose apostrophes do not" \
+  bad "quote-aware scan: wrapped substitutions and printf -v count; prose apostrophes do not" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+# A session that redefines an inert name loses the exemption on every line, and a
+# full-line comment is never a build.
+MK_OUT=$({
+  mk_cmd s1 'echo() { "$@"; }'
+  mk_cmd s2 'gh pr checkout 12'
+  mk_cmd s3 'echo make test'
+  mk_cmd s6 'echo () { make lint'
+  mk_cmd s4 '# document: make -n deploy'
+  mk_cmd s5 'npm ci'
+} | mk_run makeredef)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 echo make test$' <<<"$MK_OUT" \
+   && grep -qF '1 echo () { make lint' <<<"$MK_OUT" \
+   && ! grep -qE 'make -n deploy' <<<"$MK_OUT"; then
+  ok "a redefined inert name loses the exemption; a comment line is not a build"
+else
+  bad "a redefined inert name loses the exemption; a comment line is not a build" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 
