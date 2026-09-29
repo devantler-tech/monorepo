@@ -79,7 +79,7 @@ def parsed($c):
     { dom: (try field($f[2]; 1; 31; "dom") catch null),
       mon: (try field($f[3]; 1; 12; "mon") catch null),
       dow: (try field($f[4]; 0; 6; "dow") catch null),
-      domr: ($f[2] != "*" and $f[2] != "?"), dowr: ($f[4] != "*" and $f[4] != "?") }
+      domr: (($f[2] | startswith("*") | not) and $f[2] != "?"), dowr: (($f[4] | startswith("*") | not) and $f[4] != "?") }
     | if .dom == null or .mon == null or .dow == null then null else . end end;
 def hit($p; $t):
   ($p.mon | index($t[1] + 1)) != null
@@ -101,7 +101,8 @@ cron_gap_days() { jq -rn --arg c "$1" "$cron_gap_jq"; } # $1: the cron lines, on
 # (`2024-04-14T02:42:29.000+02:00`) but run timestamps in `Z` form, and BSD and GNU `date` parse
 # neither the same way. Convert in jq, where both shapes are handled identically, and check every
 # result is an integer before comparing it — a failed conversion must never read as "recent".
-jq_epoch='def epoch: if test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$") then . else error("timestamp") end | (.[0:19] + "Z" | fromdate) - ((capture("(?<s>[+-])(?<h>[0-9]{2}):(?<m>[0-9]{2})$") // {s: "+", h: "0", m: "0"}) | ((.h | tonumber) * 3600 + (.m | tonumber) * 60) * (if .s == "+" then 1 else -1 end));'
+# shellcheck disable=SC2016 # a jq program: its `$` are jq variables
+jq_epoch='def epoch: if test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$") then . else error("timestamp") end | ((.[0:19] + "Z" | fromdate) as $u | if ($u | todate)[0:19] == .[0:19] then $u else error("calendar") end) - ((capture("(?<s>[+-])(?<h>[0-9]{2}):(?<m>[0-9]{2})$") // {s: "+", h: "0", m: "0"}) | ((.h | tonumber) * 3600 + (.m | tonumber) * 60) * (if .s == "+" then 1 else -1 end));'
 is_epoch() { [[ "$1" =~ ^[0-9]+$ ]]; }
 
 # The cron lines a workflow file declares (empty when it has no schedule). `on:` parses as the
@@ -167,7 +168,7 @@ for repo in "${repos[@]}"; do
   # Each page also emits its `total_count`, so a successful but short or empty listing is caught
   # rather than read as a repository with nothing scheduled.
   if ! listing="$(gh api --paginate "repos/${repo}/actions/workflows?per_page=100" \
-    --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflows[] | if (.id | type) == \"number\" and (.state | type) == \"string\" and (.path | type) == \"string\" and (.path | test(\"^[^\\t\\n]+$\")) and (.created_at | type) == \"string\" then [.id, .state, .path, (.created_at | epoch)] | @tsv else \"BAD\" end)")"; then
+    --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflows[] | if (.id | type) == \"number\" and (.state | type) == \"string\" and (.path | type) == \"string\" and (.path | test(\"^[^\\t\\n]+$\")) and (.path | contains(\"\\\\\") | not) and (.created_at | type) == \"string\" then [.id, .state, .path, (.created_at | epoch)] | @tsv else \"BAD\" end)")"; then
     echo "QUERY-UNKNOWN ${repo} — workflow list read failed"
     unknown=1
     continue

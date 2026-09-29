@@ -391,6 +391,31 @@ set -e
 rm -f "$bin/mktemp"
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a mktemp failure must exit 2, got $rc"; }
 
+# An impossible calendar date (31 February) is malformed, not 3 March: UNKNOWN.
+put "repos/o/v/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
+  {"id":1,"state":"active","path":".github/workflows/daily.yaml","created_at":"2026-02-31T00:00:00Z"}]}'
+run --repo o/v
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an impossible calendar date must exit 2, got $rc"; }
+
+# A path holding a backslash would be escaped by @tsv and then never match the listing: UNKNOWN.
+put "repos/o/v/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a\\\\\\\\b.yaml\",\"created_at\":\"$old\"}]}"
+run --repo o/v
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a backslash in a workflow path must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/v — workflow list holds a malformed record" "a backslash path must be a malformed record"
+
+# `*/1` in the day-of-month field is star-derived, so the weekday alone decides: `*/1 * MON` is weekly,
+# and a Monday schedule last seen 5 days ago is not silent.
+put "repos/o/x" '{"default_branch":"main"}'
+put "repos/o/x/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/weekly.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/x .github/workflows/weekly.yaml 'on:
+  schedule:
+    - cron: "0 0 */1 * MON"'
+runs o/x 1 1 "schedule:$((now - 5 * d))"
+run --repo o/x
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a star-derived day-of-month must leave the weekday in control, got $rc"; }
+
 # A directory listing at the Contents API's 1,000-entry cap may be truncated: absence proves nothing.
 put "repos/o/w" '{"default_branch":"main"}'
 put "repos/o/w/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
