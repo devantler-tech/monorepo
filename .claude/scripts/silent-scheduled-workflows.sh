@@ -101,7 +101,7 @@ cron_gap_days() { jq -rn --arg c "$1" "$cron_gap_jq"; } # $1: the cron lines, on
 # (`2024-04-14T02:42:29.000+02:00`) but run timestamps in `Z` form, and BSD and GNU `date` parse
 # neither the same way. Convert in jq, where both shapes are handled identically, and check every
 # result is an integer before comparing it — a failed conversion must never read as "recent".
-jq_epoch='def epoch: (.[0:19] + "Z" | fromdate) - ((capture("(?<s>[+-])(?<h>[0-9]{2}):(?<m>[0-9]{2})$") // {s: "+", h: "0", m: "0"}) | ((.h | tonumber) * 3600 + (.m | tonumber) * 60) * (if .s == "+" then 1 else -1 end));'
+jq_epoch='def epoch: if test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$") then . else error("timestamp") end | (.[0:19] + "Z" | fromdate) - ((capture("(?<s>[+-])(?<h>[0-9]{2}):(?<m>[0-9]{2})$") // {s: "+", h: "0", m: "0"}) | ((.h | tonumber) * 3600 + (.m | tonumber) * 60) * (if .s == "+" then 1 else -1 end));'
 is_epoch() { [[ "$1" =~ ^[0-9]+$ ]]; }
 
 # The cron lines a workflow file declares (empty when it has no schedule). `on:` parses as the
@@ -190,9 +190,10 @@ for repo in "${repos[@]}"; do
   # listed `active` after its file left the default branch (it ran on some other ref), and only a
   # file ON the default branch can fire a schedule. A single file's 404 cannot tell "removed" from
   # "this token cannot read contents", so the directory listing decides: absent from it means
-  # removed; present but unreadable is UNKNOWN. An unreadable directory leaves every file unknown.
+  # removed; present but unreadable is UNKNOWN. An unreadable directory leaves every file unknown,
+  # and so does a listing at the Contents API's 1,000-entry cap, which may be truncated.
   if wf_files="$(gh api --method GET "repos/${repo}/contents/.github/workflows" -f ref="${branch}" \
-    --jq 'if type != "array" then "BAD" else (.[] | if (.type | type) != "string" then "BAD" elif .type != "file" then empty elif (.path | type) == "string" and (.path | test("^[^\\n]+$")) then .path else "BAD" end) end' 2>"$err")" &&
+    --jq 'if type != "array" or length >= 1000 then "BAD" else (.[] | if (.type | type) != "string" then "BAD" elif .type != "file" then empty elif (.path | type) == "string" and (.path | test("^[^\\n]+$")) then .path else "BAD" end) end' 2>"$err")" &&
     ! grep -qx 'BAD' <<<"$wf_files"; then
     wf_dir=readable
   else

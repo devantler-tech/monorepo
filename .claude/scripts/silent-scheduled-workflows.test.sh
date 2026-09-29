@@ -366,6 +366,22 @@ put "repos/o/u/contents/.github/workflows?ref=main" '[]'
 run --repo o/u
 [ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a deleted workflow must be skipped, got $rc"; }
 
+# A timestamp with trailing garbage must not parse as its valid-looking prefix: UNKNOWN.
+put "repos/o/v" '{"default_branch":"main"}'
+put "repos/o/v/actions/workflows?per_page=100" '{"total_count":1,"workflows":[
+  {"id":1,"state":"active","path":".github/workflows/daily.yaml","created_at":"2026-09-21T00:00:00garbage"}]}'
+workflow_file o/v .github/workflows/daily.yaml "$daily"
+run --repo o/v
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed timestamp must exit 2, got $rc"; }
+
+# A directory listing at the Contents API's 1,000-entry cap may be truncated: absence proves nothing.
+put "repos/o/w" '{"default_branch":"main"}'
+put "repos/o/w/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/zz.yaml\",\"created_at\":\"$old\"}]}"
+jq -n '[range(0; 1000) | {type: "file", path: ".github/workflows/w\(.).yaml"}]' >"$fix/$(printf '%s' 'repos/o/w/contents/.github/workflows?ref=main' | tr '/?&=' '____').json"
+run --repo o/w
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a capped directory listing must exit 2, got $rc"; }
+
 # An empty run page is the end only when total_count says so; a short payload is UNKNOWN.
 put "repos/o/g" '{"default_branch":"main"}'
 put "repos/o/g/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
