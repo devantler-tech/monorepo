@@ -68,7 +68,7 @@ cron_interval() {
   leap=0
   late=0
   [[ "$dom" =~ (^|[,-])(29|30|31)([,/-]|$) ]] && late=1
-  [[ "$dom" == "29" && "$mon" =~ ^(2|[Ff][Ee][Bb])$ ]] && leap=1
+  [[ "$dom" == "29" && "$mon" =~ ^(2|[Ff][Ee][Bb])$ && "$dow" == "*" ]] && leap=1
   if [ "$mon" != "*" ]; then
     if [ "$leap" -eq 1 ]; then echo $((8 * 366 * day)); else echo $((366 * day)); fi
   elif [ "$dom" != "*" ]; then
@@ -139,7 +139,7 @@ for repo in "${repos[@]}"; do
   while IFS=$'\t' read -r id state path created; do
     [ -n "$id" ] || continue
     case "$path" in .github/workflows/*) ;; *) continue ;; esac # dynamic / GitHub-managed
-    [ "$state" = "disabled_manually" ] && continue               # a recorded decision
+    case "$state" in disabled_manually | disabled_fork) continue ;; esac # a recorded decision
 
     # A workflow can stay listed `active` after its file left the default branch (it ran on some
     # other ref). Only a file ON the default branch can fire a schedule, so a 404 is a skip — but
@@ -202,7 +202,11 @@ for repo in "${repos[@]}"; do
     # window is new, and gets the grace.
     cutoff_iso="$(jq -rn --argjson e "$cutoff" '$e | todate')"
     if ! before_sha="$(gh api --method GET "repos/${repo}/commits" -f path="${path}" -f sha="${branch}" \
-      -f until="${cutoff_iso}" -f per_page=1 --jq '.[0].sha // ""')"; then
+      -f until="${cutoff_iso}" -f per_page=1 \
+      --jq 'if type != "array" then "BAD" elif length == 0 then "" elif (.[0].sha | type) == "string" and (.[0].sha | test("^[0-9a-f]{7,40}$")) then .[0].sha else "BAD" end')" ||
+      [ "$before_sha" = BAD ]; then
+      # Only a well-formed empty array means "no commit before the window"; any other shape is
+      # a partial payload and must not grant the new-file grace.
       echo "QUERY-UNKNOWN ${repo} ${path} — history at the window start unreadable"
       unknown=1
       continue
@@ -235,10 +239,18 @@ for repo in "${repos[@]}"; do
       run_total="$(awk -F'\t' '$1 == "TOTAL" { print $2; exit }' <<<"$page_out")"
       rows="$(grep -v $'^TOTAL\t' <<<"$page_out" || true)"
       is_epoch "${run_total:-x}" || { verdict="unknown"; break; }
+      # Every page must hold exactly the rows its total implies (100, or the remainder on the last
+      # page). A short page — empty or not — is a partial payload, so the silence is unproven.
+      expected=$((run_total - (page - 1) * 100))
+      [ "$expected" -gt 100 ] && expected=100
+      [ "$expected" -lt 0 ] && expected=0
+      got="$(grep -c . <<<"$rows" || true)"
+      if [ "$got" -ne "$expected" ]; then
+        verdict="unknown"
+        break
+      fi
       if [ -z "$rows" ]; then
-        # An empty page is the end only when the total says every run was already listed;
-        # otherwise the payload was short and the silence is unproven.
-        if [ "$run_total" -le $(((page - 1) * 100)) ]; then verdict="edge"; else verdict="unknown"; fi
+        verdict="edge"
         break
       fi
       oldest=""

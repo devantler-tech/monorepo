@@ -51,8 +51,8 @@ workflow_file() { # <repo> <path> <yaml> [<yaml at the window start, or NONE if 
   if [ "${4-}" = NONE ]; then
     put "repos/$1/commits?path=$2&sha=main&until&per_page=1" '[]'
   else
-    put "repos/$1/commits?path=$2&sha=main&until&per_page=1" '[{"sha":"before"}]'
-    put "repos/$1/contents/$2?ref=before" "${4:-$3}"
+    put "repos/$1/commits?path=$2&sha=main&until&per_page=1" '[{"sha":"b4f0e1ab"}]'
+    put "repos/$1/contents/$2?ref=b4f0e1ab" "${4:-$3}"
   fi
 }
 runs() { # <repo> <id> <page> <event:epoch>...
@@ -189,7 +189,7 @@ workflow_file o/d .github/workflows/annual.yaml 'on:
   schedule:
     - cron: "0 0 31 1 *"
 jobs: {}'
-put "repos/o/d/contents/.github/workflows/annual.yaml?ref=before" 'on:
+put "repos/o/d/contents/.github/workflows/annual.yaml?ref=b4f0e1ab" 'on:
   schedule:
     - cron: "0 0 31 1 *"
 jobs: {old: {}}'
@@ -207,6 +207,44 @@ run --repo o/d
 grep -qF "annual.yaml" "$tmp/out" || fail "a 31 January schedule silent for four years must be reported, even after an unrelated edit"
 grep -qF "febmar.yaml" "$tmp/out" || fail "a 29 Feb/March schedule silent for four years must be reported"
 grep -qF "feb1and29.yaml" "$tmp/out" || fail "a 1 and 29 February schedule silent for four years must be reported"
+
+# A restricted weekday makes `29 2 1` fire every Monday in February too: no multi-year gap. And a
+# workflow GitHub disabled because the repository is a fork is a policy, not a stopped schedule.
+put "repos/o/h" '{"default_branch":"main"}'
+put "repos/o/h/actions/workflows?per_page=100" '{"total_count":2,"workflows":[
+  {"id":1,"state":"active","path":".github/workflows/febmon.yaml","created_at":"2019-01-01T00:00:00.000+02:00"},
+  {"id":2,"state":"disabled_fork","path":".github/workflows/forked.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
+workflow_file o/h .github/workflows/febmon.yaml 'on:
+  schedule:
+    - cron: "0 0 29 2 1"'
+runs o/h 1 1 "schedule:$((now - 4 * 366 * d))"
+workflow_file o/h .github/workflows/forked.yaml "$daily"
+run --repo o/h
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a February-Mondays schedule silent for four years must be reported, got $rc"; }
+grep -qF "febmon.yaml" "$tmp/out" || fail "a restricted weekday must not get the leap-year gap"
+lacks "forked.yaml" "a fork-disabled workflow is a policy, not a finding"
+
+# A non-empty page shorter than its total implies is a partial payload: UNKNOWN, not silence.
+put "repos/o/i" '{"default_branch":"main"}'
+put "repos/o/i/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/i .github/workflows/daily.yaml "$daily"
+put "repos/o/i/actions/workflows/1/runs?per_page=100&page=1" \
+  "{\"total_count\":5,\"workflow_runs\":[{\"event\":\"push\",\"created_at\":\"$(iso $((now - 40 * d)))\"}]}"
+run --repo o/i
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a short non-empty run page must exit 2, got $rc"; }
+
+# A malformed history payload must not grant the new-file grace.
+put "repos/o/j" '{"default_branch":"main"}'
+put "repos/o/j/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/j .github/workflows/daily.yaml "$daily"
+put "repos/o/j/commits?path=.github/workflows/daily.yaml&sha=main&until&per_page=1" '[{"sha":null}]'
+runs o/j 1 1 "schedule:$((now - 40 * d))"
+run --repo o/j
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed history payload must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/j .github/workflows/daily.yaml — history at the window start unreadable" \
+  "a malformed history payload must be named"
 
 # An empty run page is the end only when total_count says so; a short payload is UNKNOWN.
 put "repos/o/g" '{"default_branch":"main"}'
@@ -230,7 +268,7 @@ put "repos/o/f" '{"default_branch":"main"}'
 put "repos/o/f/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
   {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a#b.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/f .github/workflows/a%23b.yaml "$daily"
-put "repos/o/f/commits?path=.github/workflows/a#b.yaml&sha=main&until&per_page=1" '[{"sha":"before"}]'
+put "repos/o/f/commits?path=.github/workflows/a#b.yaml&sha=main&until&per_page=1" '[{"sha":"b4f0e1ab"}]'
 runs o/f 1 1 "schedule:$((now - 40 * d))"
 run --repo o/f
 [ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an encoded path must be read and judged, got $rc"; }
