@@ -4275,10 +4275,11 @@ if want safety; then
     # it stays), no pipe, redirect or command substitution is left, and every
     # `;`/`&`-separated segment starts with a command that executes no project
     # code — `printf`, `echo`, `cd`, a read-or-record `git` subcommand, or a
-    # text-only `gh pr`/`gh issue` subcommand. Every other line counts wherever
-    # `make` appears as a word, so a spelling this list does not name
-    # (`sh -c 'make x'`, `if make x`, `printf 'make x' | sh`, `ssh h 'make x'`)
-    # errs toward REPORTING a build rather than toward a clean-looking result.
+    # text-only `gh pr`/`gh issue` subcommand. Every other line is matched
+    # exactly as before, with no boundary before `make` (`gmake`, `/usr/bin/make`),
+    # so a spelling this list does not name (`sh -c 'make x'`, `if make x`,
+    # `printf 'make x' | sh`, `ssh h 'make x'`) errs toward REPORTING a build
+    # rather than toward a clean-looking result.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
           cmds="$(commands_in "$f" 2>/dev/null)" || { printf x >> "$XFBUILD"; continue; }
@@ -4303,7 +4304,7 @@ if want safety; then
               }
               {
                 if ($0 ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
-                    || ($0 ~ /(^|[^A-Za-z0-9_-])make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/ && !text_only($0))) print
+                    || ($0 ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/ && !text_only($0))) print
               }' <<<"$cmds"
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'

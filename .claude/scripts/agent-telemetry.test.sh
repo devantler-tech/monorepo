@@ -7288,14 +7288,16 @@ MK_OUT=$({
   mk_cmd p3 "printf 'make test\\n' | sh"
   mk_cmd p4 'git add a && git commit -m "fix: make it pass"'
   mk_cmd p5 'npm ci'
+  mk_cmd p6 'gmake test'
 } | mk_run maketextonly)
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 gmake test$' <<<"$MK_OUT" \
    && grep -qE "^ +1 ssh -m 'hmac-sha2-256' 'host' 'make test'$" <<<"$MK_OUT" \
    && grep -qE "^ +1 printf 'make test.n' \| sh$" <<<"$MK_OUT" \
    && ! grep -qE 'make it pass' <<<"$MK_OUT"; then
-  ok "only a provably text-only line is dropped; ssh and pipe-to-shell make still count"
+  ok "only a provably text-only line is dropped; ssh, pipe-to-shell and gmake still count"
 else
-  bad "only a provably text-only line is dropped; ssh and pipe-to-shell make still count" \
+  bad "only a provably text-only line is dropped; ssh, pipe-to-shell and gmake still count" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 
