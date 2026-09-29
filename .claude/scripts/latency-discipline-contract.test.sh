@@ -167,6 +167,44 @@ case "${guide_flat}" in
 esac
 
 # ---------------------------------------------------------------------------
+# 9. The REVIEW WAIT (monorepo#3660). The review-lanes guide tells a run to "wait for its substantive
+#    outcome", and without saying how, runs waited in foreground loops that re-read the PR between
+#    sleeps: foreground review-wait time across Claude Engineer runs went 4, 43, 71, 59, 215 min/day
+#    from 09-24 to 09-28. The runtime's guard only catches a sleep chained straight into a poll, so a
+#    loop with the sleep inside passes it. Scoped to the one bullet that prescribes the wait.
+review_guide="${LATENCY_CONTRACT_FIXTURE_REVIEW_GUIDE:-${repo_root}/.claude/guides/review-lanes.md}"
+[ -r "${review_guide}" ] || fail "cannot read ${review_guide}"
+review_bullet="$(
+  awk '
+    /Only one provider request may be active at a time/ { inb = 1; print; next }
+    inb && /^- \*\*/                                    { inb = 0 }
+    inb                                                  { print }
+  ' "${review_guide}" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${review_bullet}" ] ||
+  fail "could not locate the review-lanes 'Only one provider request may be active at a time' bullet — the extraction anchor moved, so the review-wait assertions would be vacuous"
+review_words="$(printf '%s' "${review_bullet}" | wc -w | tr -d ' ')"
+[ "${review_words}" -lt 600 ] ||
+  fail "review-wait bullet extracted as ${review_words} words, which is runaway-extraction size — the next bullet's '- **' anchor is gone"
+case "${review_bullet}" in
+  *'That wait is the *Latency discipline* wait, never a loop in the foreground'*) ;;
+  *) fail "the review-lanes wait does not say it is the Latency discipline wait and never a foreground loop" ;;
+esac
+case "${review_bullet}" in
+  *'leave the PR on rung 1'*) ;;
+  *) fail "the review-lanes wait does not name leaving the PR on rung 1 when one read shows no review yet" ;;
+esac
+case "${review_bullet}" in
+  *'whatever its iteration cap'*) ;;
+  *) fail "the review-lanes wait lets an iteration cap make a foreground review-poll loop acceptable" ;;
+esac
+# The loop ban must not swallow the watcher it prescribes: the Latency discipline watcher IS a loop.
+case "${review_bullet}" in
+  *'The one watcher that section prescribes is the only loop allowed'*) ;;
+  *) fail "the review-lanes wait no longer exempts the prescribed Latency discipline watcher from its loop ban" ;;
+esac
+
+# ---------------------------------------------------------------------------
 # PORTABLE HALF — rule 7 of the pinned engineer definition, flattened the same way. Scoped to that
 # rule for the same reason the deployment half is scoped to its bullet: a whole-file check passes
 # while rule 7 itself is weakened, as long as the phrases survive in some other paragraph.
@@ -264,6 +302,32 @@ if [ -z "${LATENCY_CONTRACT_FIXTURE_GUIDE:-}" ]; then
     'promises that the next tick collects an abandoned PR'
   expect_rejected 'let a later run collect the result' 'let the next tick collect the result' \
     'the latency guide promises that the next tick collects a PR'
+
+  # Item 9's controls mutate a copy of the REVIEW guide, the same way.
+  expect_review_rejected() { # <phrase in the review guide> <replacement> <expected diagnostic substring>
+    local review_src="${repo_root}/.claude/guides/review-lanes.md"
+    local mutated="${fixture_dir}/review.md" err="${fixture_dir}/err"
+    FROM="$1" TO="$2" perl -0pe '
+      my $re = join("\\s+", map { quotemeta } split(/ /, $ENV{FROM}));
+      s/$re/$ENV{TO}/;
+    ' "${review_src}" >"${mutated}" || fail "negative control could not mutate the review guide for: $1"
+    ! cmp -s "${review_src}" "${mutated}" ||
+      fail "negative control for '$1' changed nothing — the phrase is no longer in the review guide"
+    if LATENCY_CONTRACT_FIXTURE_REVIEW_GUIDE="${mutated}" LATENCY_CONTRACT_FIXTURE_GUIDE="${guide}" \
+      bash "${BASH_SOURCE[0]}" >/dev/null 2>"${err}"; then
+      fail "negative control: the review guide still passed with '$1' broken"
+    fi
+    grep -Fq -- "$3" "${err}" ||
+      fail "negative control for '$1' failed for the wrong reason: $(cat "${err}")"
+  }
+  expect_review_rejected 'never a loop in the foreground' 'which may loop in the foreground' \
+    'Latency discipline wait and never a foreground loop'
+  expect_review_rejected 'leave the PR on rung 1' 'keep polling' \
+    'leaving the PR on rung 1'
+  expect_review_rejected 'whatever its iteration cap' 'unless it has an iteration cap' \
+    'iteration cap make a foreground review-poll loop acceptable'
+  expect_review_rejected 'The one watcher that section prescribes is the only loop allowed' \
+    'Every loop is forbidden' 'exempts the prescribed Latency discipline watcher'
   rm -rf "${fixture_dir}"
 fi
 

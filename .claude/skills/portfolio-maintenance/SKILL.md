@@ -726,7 +726,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    every push) is your duty; the full request discipline (**one provider request at a time**, in
    CodeRabbit > Codex > Cursor Bugbot order, and **stop on its first successful current-head review**;
    a reaction emoji earns a generous bounded wait for the substantive response, while no reaction
-   means inspect or retry promptly; put the current-head request marker in the **same comment as the
+   means inspect or retry promptly; either wait is a watcher or one read, never a foreground loop (#3660); put the current-head request marker in the **same comment as the
    trigger** — compose it with `.claude/scripts/review-request-comment.sh`, never by hand (#3319) —
    re-reading the repository-visible current-head request markers immediately before
    posting it (each marker names its provider; pair Cursor's marker to the next exact-author bare
