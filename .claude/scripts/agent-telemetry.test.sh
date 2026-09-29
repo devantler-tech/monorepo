@@ -7210,7 +7210,7 @@ echo "── checkout-then-build: \`make\` counts only as a command, not as pros
 # through `rtk`, after `&&` with options before the target, behind `VAR=value`
 # assignments, and inside `"$(…)"` — must still be listed, and so must a non-Make
 # build beside them (the control that the walk read the session at all). The
-# section prints at most five distinct commands, so the cases split over eight runs.
+# section prints at most five distinct commands, so the cases split over nine runs.
 MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 mk_cmd() { # $1 = id, $2 = command
   jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
@@ -7227,7 +7227,7 @@ mk_run() { # $1 = fixture name; stdin = the session's records; prints the safety
 MK_OUT=$({
   mk_cmd m1 'gh pr checkout 7'
   mk_cmd m2 "printf 'make the report clearer'"
-  mk_cmd m3 'git commit -m "fix: make the build pass"'
+  mk_cmd m3 'gh pr comment 7 --body "we should make the build pass"'
   mk_cmd m4 'make test'
   mk_cmd m5 'rtk make build'
   mk_cmd m6 'cd sub && make -C x lint'
@@ -7281,7 +7281,8 @@ else
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # Only a PROVABLY text-only line is dropped: a remote command after ssh's own `-m`
-# and prose piped into a shell both run Make, while a chained commit is still text.
+# and prose piped into a shell both run Make, and so can a commit, whose hooks the
+# checkout may have replaced.
 MK_OUT=$({
   mk_cmd p1 'gh pr checkout 10'
   mk_cmd p2 "ssh -m 'hmac-sha2-256' 'host' 'make test'"
@@ -7294,10 +7295,10 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qE '^ +1 gmake test$' <<<"$MK_OUT" \
    && grep -qE "^ +1 ssh -m 'hmac-sha2-256' 'host' 'make test'$" <<<"$MK_OUT" \
    && grep -qE "^ +1 printf 'make test.n' \| sh$" <<<"$MK_OUT" \
-   && ! grep -qE 'make it pass' <<<"$MK_OUT"; then
-  ok "only a provably text-only line is dropped; ssh, pipe-to-shell and gmake still count"
+   && grep -qF '1 git add a && git commit -m "fix: make it pass"' <<<"$MK_OUT"; then
+  ok "only a provably text-only line is dropped; ssh, pipe-to-shell, gmake and git commit still count"
 else
-  bad "only a provably text-only line is dropped; ssh, pipe-to-shell and gmake still count" \
+  bad "only a provably text-only line is dropped; ssh, pipe-to-shell, gmake and git commit still count" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # Quotes are scanned, not pattern-matched: an apostrophe inside "…" is literal, so
@@ -7319,41 +7320,37 @@ else
   bad "quote-aware scan: wrapped substitutions and printf -v count; prose apostrophes do not" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
-# A session that redefines an inert name loses the exemption on every line, and a
-# full-line comment is never a build.
+# A session that redefines an inert name loses the exemption on every line.
 MK_OUT=$({
   mk_cmd s1 'echo() { "$@"; }'
   mk_cmd s2 'gh pr checkout 12'
   mk_cmd s3 'echo make test'
   mk_cmd s6 'echo () { make lint'
-  mk_cmd s4 '# document: make -n deploy'
   mk_cmd s5 'npm ci'
 } | mk_run makeredef)
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qE '^ +1 echo make test$' <<<"$MK_OUT" \
-   && grep -qF '1 echo () { make lint' <<<"$MK_OUT" \
-   && ! grep -qE 'make -n deploy' <<<"$MK_OUT"; then
-  ok "a redefined inert name loses the exemption; a comment line is not a build"
+   && grep -qF '1 echo () { make lint' <<<"$MK_OUT"; then
+  ok "a redefined inert name loses the exemption"
 else
-  bad "a redefined inert name loses the exemption; a comment line is not a build" \
+  bad "a redefined inert name loses the exemption" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # Quote state carries across the lines of one command: a `#` line inside a
-# multi-line "…" is string content (its substitution runs), and definition-shaped
-# text inside quotes redefines nothing.
+# multi-line "…" is string content whose substitution runs, while plain prose after
+# the string closes stays exempt.
 MK_OUT=$({
   mk_cmd t1 'gh pr checkout 13'
   mk_cmd t2 "$(printf 'echo "\n# %s\n"' "\$(make test)")"
-  mk_cmd t3 "printf 'alias echo=x'"
   mk_cmd t4 'echo "please make the report clearer"'
   mk_cmd t5 'npm ci'
 } | mk_run makecarry)
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qF "1 # \$(make test)" <<<"$MK_OUT" \
    && ! grep -qE 'make the report' <<<"$MK_OUT"; then
-  ok "quote state carries across lines; quoted definition text redefines nothing"
+  ok "quote state carries across lines; prose after the string stays exempt"
 else
-  bad "quote state carries across lines; quoted definition text redefines nothing" \
+  bad "quote state carries across lines; prose after the string stays exempt" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # A definition built from text and run by `eval` hides inside quotes, so a session
@@ -7369,6 +7366,25 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
   ok "a session that evaluates text loses the text-only exemption"
 else
   bad "a session that evaluates text loses the text-only exemption" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+# An alias can point an innocent-looking later line at make, so the alias line is
+# listed itself; and the raw line is matched, so a `#` that is not a comment (an
+# extended glob) cannot hide the substitution after it.
+MK_OUT=$({
+  mk_cmd v1 'shopt -s expand_aliases'
+  mk_cmd v2 "alias 'echo=make'"
+  mk_cmd v3 'gh pr checkout 15'
+  mk_cmd v4 'echo test'
+  mk_cmd v5 "[[ foo == ?(#|\$(make test)) ]]"
+  mk_cmd v6 'npm ci'
+} | mk_run makealias)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qF "1 alias 'echo=make'" <<<"$MK_OUT" \
+   && grep -qF "1 [[ foo == ?(#|\$(make test)) ]]" <<<"$MK_OUT"; then
+  ok "an alias line that names make is listed; a non-comment # hides nothing"
+else
+  bad "an alias line that names make is listed; a non-comment # hides nothing" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 

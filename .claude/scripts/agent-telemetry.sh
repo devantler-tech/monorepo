@@ -4270,16 +4270,20 @@ if want safety; then
     #
     # `make` is a common English word, so a line that is PROVABLY text-only is
     # not a Make candidate: matched as is, `printf 'make the report clearer'`
-    # and `git commit -m "fix: make it pass"` were (#2988). Provable means that
-    # once quoted text is removed (a "…" holding `$(` or a backtick runs code, so
-    # it stays), no pipe, redirect, substitution, group or function syntax is left, and every
-    # `;`/`&`-separated segment starts with a command that executes no project
-    # code — `printf`, `echo`, `cd`, a read-or-record `git` subcommand, or a
-    # text-only `gh pr`/`gh issue` subcommand. Every other line is matched
-    # exactly as before, with no boundary before `make` (`gmake`, `/usr/bin/make`),
-    # so a spelling this list does not name (`sh -c 'make x'`, `if make x`,
-    # `printf 'make x' | sh`, `ssh h 'make x'`) errs toward REPORTING a build
-    # rather than toward a clean-looking result.
+    # was (#2988). Provable means that once quoted text is removed (a "…"
+    # holding `$(`, a backtick or an escape runs or may run code, so it stays),
+    # no pipe, redirect, substitution, group or function syntax is left, and
+    # every `;`/`&`-separated segment starts with `printf` (no options), `echo`,
+    # `cd` or a text-only `gh pr`/`gh issue` subcommand. `git` is never inert:
+    # a commit runs hooks the checkout may have replaced. A session that can
+    # change what a name means — `alias`, `eval`, `source`, `.`, `enable`,
+    # `shopt`, `function` or a `name()` definition anywhere in its raw text —
+    # gets no exemption at all, and such a line is listed whenever it mentions
+    # `make`. Every other line is matched on its raw text exactly as before,
+    # with no boundary before `make` (`gmake`, `/usr/bin/make`), so a spelling
+    # this list does not name (`sh -c 'make x'`, `if make x`,
+    # `printf 'make x' | sh`, `ssh h 'make x'`) errs toward REPORTING a build.
+    # The exemption's false positives are tracked in #3666.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
           cmds="$(commands_in "$f" 2>/dev/null)" || { printf x >> "$XFBUILD"; continue; }
@@ -4288,38 +4292,30 @@ if want safety; then
             LC_ALL=C awk '
               BEGIN {
                 sq = sprintf("%c", 39)
-                inert = "^(rtk[[:space:]]+)?(printf|echo|cd|git[[:space:]]+(add|commit|status|diff|log|show)|gh[[:space:]]+(pr|issue)[[:space:]]+(create|edit|comment|view))([[:space:]]|$)"
+                inert = "^(rtk[[:space:]]+)?(printf|echo|cd|gh[[:space:]]+(pr|issue)[[:space:]]+(create|edit|comment|view))([[:space:]]|$)"
               }
-              # scan(line) reads one line left to right with the quote state
+              # unquoted(line) reads one line left to right with the quote state
               # (st, buf) CARRIED from the previous line, so a quote character
-              # inside the other kind of quote is literal and a multi-line
-              # string stays a string. It sets CODE, the line without an
-              # unquoted `#` comment, and RES, CODE with quoted text blanked. A
+              # inside the other kind of quote is literal and a multi-line string
+              # stays a string. It returns the line with quoted text blanked; a
               # "…" holding `$(`, a backtick or an escape, or a quote still open
-              # at the end of the line, leaves a backtick in RES, which text_only
-              # rejects.
-              function scan(line,   n, i, c) {
-                CODE = ""; RES = ""; n = length(line)
+              # at the end of the line, leaves a backtick, which text_only rejects.
+              function unquoted(line,   out, n, i, c) {
+                out = ""; n = length(line)
                 for (i = 1; i <= n; i++) {
                   c = substr(line, i, 1)
                   if (st == 0) {
-                    if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[[:space:];&|(]/)) break
-                    CODE = CODE c
                     if (c == sq) st = 1
                     else if (c == "\"") { st = 2; buf = "" }
-                    else if (c == "\\") { RES = RES " "; i++; CODE = CODE substr(line, i, 1) }
-                    else RES = RES c
+                    else if (c == "\\") { out = out " "; i++ }
+                    else out = out c
                   } else if (st == 1) {
-                    CODE = CODE c
-                    if (c == sq) { st = 0; RES = RES " " }
-                  } else {
-                    CODE = CODE c
-                    if (c == "\\") { buf = buf c; i++; CODE = CODE substr(line, i, 1) }
-                    else if (c == "\"") { st = 0; RES = RES (buf ~ /[$][(]|`|\\/ ? "`" : " ") }
-                    else buf = buf c
-                  }
+                    if (c == sq) { st = 0; out = out " " }
+                  } else if (c == "\\") { buf = buf c; i++ }
+                  else if (c == "\"") { st = 0; out = out (buf ~ /[$][(]|`|\\/ ? "`" : " ") }
+                  else buf = buf c
                 }
-                if (st != 0) RES = RES "`"
+                return st == 0 ? out : out "`"
               }
               function text_only(s,   n, i, seg) {
                 if (s ~ /[|<>`(){}]|[$][(]/) return 0
@@ -4333,25 +4329,20 @@ if want safety; then
                 }
                 return 1
               }
-              # Lines are decided at the end, because a session that redefines
-              # an inert name as a function or alias in unquoted code
-              # (`echo() { "$@"; }`, then `echo make test`) anywhere loses the
-              # exemption for all of its lines. So does a session that runs code
-              # it builds from text — `eval`, `source`, `.` or `enable` — since a
-              # definition can hide inside a quoted argument.
+              # Lines are decided at the end, because a name-changing line
+              # anywhere in the session removes the exemption for all of them.
               {
-                scan($0)
-                line[++n] = $0; code[n] = CODE; res[n] = RES
-                if (CODE ~ /(^|[^A-Za-z0-9_.-])(eval|source|enable)([^A-Za-z0-9_-]|$)/ \
-                    || RES ~ /(^|[;&|(])[[:space:]]*[.][[:space:]]/ \
-                    || RES ~ /(^|[^A-Za-z0-9_-])(printf|echo|cd|git|gh|rtk)[[:space:]]*[(][[:space:]]*[)]/ \
-                    || RES ~ /function[[:space:]]+(printf|echo|cd|git|gh|rtk)([^A-Za-z0-9_-]|$)/ \
-                    || RES ~ /alias[[:space:]]+([^=]*[[:space:]])?(printf|echo|cd|git|gh|rtk)=/) redefined = 1
+                line[++n] = $0; res[n] = unquoted($0)
+                if ($0 ~ /(^|[^A-Za-z0-9_-])(alias|eval|source|enable|shopt|function)([^A-Za-z0-9_-]|$)/ \
+                    || $0 ~ /[(][[:space:]]*[)]/ || $0 ~ /(^|[;&|({])[[:space:]]*[.][[:space:]]/) {
+                  redefined = 1; renames[n] = 1
+                }
               }
               END {
                 for (i = 1; i <= n; i++) {
-                  if (code[i] ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
-                      || (code[i] ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/ && (redefined || !text_only(res[i])))) print line[i]
+                  if (line[i] ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
+                      || (renames[i] && line[i] ~ /make/) \
+                      || (line[i] ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/ && (redefined || !text_only(res[i])))) print line[i]
                 }
               }' <<<"$cmds"
           fi
