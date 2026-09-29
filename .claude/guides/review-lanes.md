@@ -513,9 +513,11 @@ result at the current head — self-promotion is forbidden before that. Request 
   then either stop on success, restart after fixes, or advance after a provider/service failure.
   **That wait is the *Latency discipline* wait, never a loop in the foreground:** arm one watcher
   and start the next item, or make one bounded one-shot read and, if no review has landed, leave the
-  PR on rung 1 and move on. A loop that re-reads the PR's comments or reviews between sleeps is the
-  busy-wait that section forbids, whatever its iteration cap: foreground review waits across Claude
-  Engineer runs grew from 4 to 215 minutes a day between 09-24 and 09-28 (monorepo#3660).
+  PR on rung 1 and move on. The one watcher that section prescribes is the only loop allowed; any
+  other loop, in the foreground or hand-rolled in the background, that re-reads the PR's comments or
+  reviews between sleeps is the busy-wait that section forbids, whatever its iteration cap:
+  foreground review waits across Claude Engineer runs grew from 4 to 215 minutes a day between 09-24
+  and 09-28 (monorepo#3660).
   Track serving state (rate-limit responses, unserved requests, stall times) so a demonstrably
   unavailable lane can be skipped without wasting its tokens, but never skip a serving higher lane
   merely because a lower lane may be faster.
@@ -534,7 +536,8 @@ result at the current head — self-promotion is forbidden before that. Request 
   CodeRabbit refuses with a `Review limit reached` comment stating
   `Next review available in: N minutes`, or with the `Review rate limited` status. Record
   `cr:no-gate@<sha>` for every head a batch left unserved, rather than letting it read as reviewed,
-  and request only for the PRs this run will actually finish.
+  and request only for the PRs this run will actually drive. A single request whose outcome a later
+  run judges is driving (the wait above); a batch the lane cannot serve is not.
 - **A provider reaction emoji on the trigger is positive in-flight evidence.** Once the provider
   reacts, be patient: it accepted the request, so do not duplicate the trigger or open the next lane
   during its normal response envelope. **A reaction earns a generous bounded wait, not an infinite lease**:
