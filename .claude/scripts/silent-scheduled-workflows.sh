@@ -107,14 +107,14 @@ checked=0
 repos_read=0
 max_pages=5
 err="$(mktemp)"
-# Bash 3.2 reports $? as 0 to an EXIT trap after a `set -u` abort, so a successful `rm` would
-# become the exit status and an aborted scan would read as clean. Only reaching the end may exit 0.
+# An abort before the end must never read as a verdict: bash 3.2 reports it as 0 (clean) and bash 5
+# as 1 (a finding). So any exit before the end is UNKNOWN; only reaching it may report 0 or 1.
 finished=0
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {
   local rc=$?
   rm -f "$err"
-  if [ "$finished" != 1 ] && [ "$rc" -eq 0 ]; then
+  if [ "$finished" != 1 ]; then
     echo "silent-scheduled-workflows: aborted before finishing; reporting UNKNOWN" >&2
     rc=2
   fi
