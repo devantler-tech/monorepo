@@ -13,8 +13,10 @@
 # decides: a `disabled_manually` workflow is a recorded decision and is skipped, while
 # `disabled_inactivity` is exactly the silent stop this exists to catch.
 #
-# A schedule is SILENT when its newest `schedule`-event run is older than twice its longest cron
-# interval plus a grace hour — or it has never run and the workflow is older than that.
+# A schedule is SILENT when it has had no `schedule`-event run for twice its longest gap between
+# firing DAYS plus one day, plus a grace hour. The granularity is deliberately a day: the sweep runs
+# about daily, so a sub-daily schedule (`*/5 * * * *`) is still reported within a few days, and a
+# coarser bound can only delay a report, never invent one.
 #
 # Usage:
 #   silent-scheduled-workflows.sh --repo <owner/repo> [--repo …] [--now <epoch>]
@@ -247,7 +249,7 @@ for repo in "${repos[@]}"; do
       unknown=1
       continue
     fi
-    if ! before_crons="$(crons_of "$before")"; then
+    if [ -z "$before" ] || ! before_crons="$(crons_of "$before")"; then
       # A parse failure could be the tool, not the file, so it never grants the grace.
       echo "QUERY-UNKNOWN ${repo} ${path} — file at the window start unparseable"
       unknown=1
@@ -263,7 +265,7 @@ for repo in "${repos[@]}"; do
     verdict=""
     for ((page = 1; page <= max_pages; page++)); do
       if ! page_out="$(gh api "repos/${repo}/actions/workflows/${id}/runs?per_page=100&page=${page}" \
-        --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflow_runs[] | [.event, (.created_at | epoch), .created_at] | @tsv)")"; then
+        --jq "${jq_epoch} \"TOTAL\t\(.total_count)\", (.workflow_runs[] | if (.event | type) == \"string\" and (.event | test(\"^[a-z_]+$\")) and (.created_at | type) == \"string\" then [.event, (.created_at | epoch), .created_at] | @tsv else \"BAD\" end)")"; then
         verdict="unknown"
         break
       fi

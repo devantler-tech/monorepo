@@ -289,6 +289,20 @@ run --repo o/n
 has "QUERY-UNKNOWN o/n .github/workflows/daily.yaml — file at the window start unparseable" \
   "an unparseable window-start version must be named"
 
+# An EMPTY window-start body parses as "no schedule", so it too must be UNKNOWN, never the grace.
+workflow_file o/n .github/workflows/daily.yaml "$daily"
+put "repos/o/n/contents/.github/workflows/daily.yaml?ref=b4f0e1ab" ''
+run --repo o/n
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an empty window-start body must exit 2, got $rc"; }
+
+# A run record whose event is not a string is malformed data: UNKNOWN, never a silence verdict.
+put "repos/o/n/actions/workflows/1/runs?per_page=100&page=1" \
+  "{\"total_count\":1,\"workflow_runs\":[{\"event\":5,\"created_at\":\"$(iso $((now - 40 * d)))\"}]}"
+workflow_file o/n .github/workflows/daily.yaml "$daily"
+run --repo o/n
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed run record must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/n .github/workflows/daily.yaml — run list read failed" "a malformed run record must be named"
+
 # An empty run page is the end only when total_count says so; a short payload is UNKNOWN.
 put "repos/o/g" '{"default_branch":"main"}'
 put "repos/o/g/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
