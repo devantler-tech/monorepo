@@ -12,15 +12,19 @@ fail() {
 
 # Reject implementation detail and name the first matching word, so the author
 # does not have to bisect the body to find it (#3680). Reads body_symbols from
-# the caller. When the match is the file.name placeholder, report the word the
-# normalizer replaced first, which it logs in file_name_words.
+# the caller. When the match is the normalizer's placeholder (file.name followed
+# by the \034 marker, which authored text cannot contain), report the word the
+# normalizer replaced first, which it logs in file_name_words. A literal
+# file.name the author wrote carries no marker and is reported as itself.
 fail_detail() {
   local case_flag="$1"
   local pattern="$2"
-  local match
-  match="$(grep -Eo ${case_flag:+"${case_flag}"} -- "${pattern}" "${body_symbols}" |
-    head -n 1 | sed -E 's/^[^[:alnum:]./~-]+//; s/[^[:alnum:]]+$//' || true)"
-  if [ "${match}" = "file.name" ]; then
+  local raw_match match
+  raw_match="$(grep -Eo ${case_flag:+"${case_flag}"} -- "${pattern}" "${body_symbols}" |
+    head -n 1 || true)"
+  match="$(printf '%s\n' "${raw_match}" |
+    sed -E 's/^[^[:alnum:]./~-]+//; s/[^[:alnum:]]+$//' || true)"
+  if [[ "${raw_match}" == *"file.name"$'\034'* ]]; then
     match="$(head -n 1 "${file_name_words}" 2>/dev/null |
       sed -E 's/^[^[:alnum:]./~-]+//; s/[^[:alnum:]]+$//' || true)"
     match="${match:-a word read as a file name}"
@@ -531,10 +535,12 @@ validate_body() {
   # shellcheck disable=SC1112
   awk -v public_tld_file="${public_tlds}" -v file_name_words="${file_name_words}" '
     BEGIN { RS = "" }
-    # Record the word a placeholder replaces, so a rejection can name it.
+    # Record the word a placeholder replaces, so a rejection can name it. The
+    # trailing \034 marks the placeholder, which authored text cannot contain,
+    # so a literal file.name in the body is still reported as itself.
     function file_name_placeholder(word) {
       print word >file_name_words
-      return "file.name"
+      return "file.name\034"
     }
     function normalized_word(text, value) {
       value = tolower(text)
