@@ -7210,7 +7210,7 @@ echo "── checkout-then-build: \`make\` counts only as a command, not as pros
 # through `rtk`, after `&&` with options before the target, behind `VAR=value`
 # assignments, and inside `"$(…)"` — must still be listed, and so must a non-Make
 # build beside them (the control that the walk read the session at all). The
-# section prints at most five distinct commands, so the cases split over four runs.
+# section prints at most five distinct commands, so the cases split over five runs.
 MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 mk_cmd() { # $1 = id, $2 = command
   jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
@@ -7298,6 +7298,25 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
   ok "only a provably text-only line is dropped; ssh, pipe-to-shell and gmake still count"
 else
   bad "only a provably text-only line is dropped; ssh, pipe-to-shell and gmake still count" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+# Quotes are scanned, not pattern-matched: an apostrophe inside "…" is literal, so
+# a substitution it wraps still runs while an apostrophe in prose stays prose; and
+# a function definition named after an inert command is not a simple command.
+MK_OUT=$({
+  mk_cmd r1 'gh pr checkout 11'
+  mk_cmd r2 "echo \"'\$(make test)'\""
+  mk_cmd r3 'echo () { make test'
+  mk_cmd r4 "echo \"it's time to make the change\""
+  mk_cmd r5 'npm ci'
+} | mk_run makescan)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qF "1 echo \"'\$(make test)'\"" <<<"$MK_OUT" \
+   && grep -qF '1 echo () { make test' <<<"$MK_OUT" \
+   && ! grep -qE 'make the change' <<<"$MK_OUT"; then
+  ok "quote-aware scan: wrapped substitutions and function definitions count; prose apostrophes do not"
+else
+  bad "quote-aware scan: wrapped substitutions and function definitions count; prose apostrophes do not" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 

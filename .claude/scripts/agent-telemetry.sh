@@ -4272,7 +4272,7 @@ if want safety; then
     # not a Make candidate: matched as is, `printf 'make the report clearer'`
     # and `git commit -m "fix: make it pass"` were (#2988). Provable means that
     # once quoted text is removed (a "…" holding `$(` or a backtick runs code, so
-    # it stays), no pipe, redirect or command substitution is left, and every
+    # it stays), no pipe, redirect, substitution, group or function syntax is left, and every
     # `;`/`&`-separated segment starts with a command that executes no project
     # code — `printf`, `echo`, `cd`, a read-or-record `git` subcommand, or a
     # text-only `gh pr`/`gh issue` subcommand. Every other line is matched
@@ -4290,11 +4290,31 @@ if want safety; then
                 sq = sprintf("%c", 39)
                 inert = "^(rtk[[:space:]]+)?(printf|echo|cd|git[[:space:]]+(add|commit|status|diff|log|show)|gh[[:space:]]+(pr|issue)[[:space:]]+(create|edit|comment|view))([[:space:]]|$)"
               }
+              # unquoted(line): the line with quoted text blanked, scanned left to
+              # right so a quote character inside the other kind of quote is
+              # literal. A "…" holding `$(` or a backtick, an escape inside it,
+              # or an unterminated quote leaves a backtick behind, which
+              # text_only rejects.
+              function unquoted(line,   out, n, i, c, st, buf) {
+                out = ""; st = 0; n = length(line)
+                for (i = 1; i <= n; i++) {
+                  c = substr(line, i, 1)
+                  if (st == 0) {
+                    if (c == sq) st = 1
+                    else if (c == "\"") { st = 2; buf = "" }
+                    else if (c == "\\") { out = out " "; i++ }
+                    else out = out c
+                  } else if (st == 1) {
+                    if (c == sq) { st = 0; out = out " " }
+                  } else if (c == "\"") {
+                    st = 0; out = out (buf ~ /[$][(]|`|\\/ ? "`" : " ")
+                  } else buf = buf c
+                }
+                return st == 0 ? out : out "`"
+              }
               function text_only(line,   s, n, i, seg) {
-                s = line
-                gsub(sq "[^" sq "]*" sq, " ", s)
-                gsub(/"([^"`$]|[$][^("])*"/, " ", s)
-                if (s ~ /[|<>`"]|[$][(]/) return 0
+                s = unquoted(line)
+                if (s ~ /[|<>`(){}]|[$][(]/) return 0
                 n = split(s, seg, /[;&]+/)
                 for (i = 1; i <= n; i++) {
                   sub(/^[[:space:]]+/, "", seg[i])
