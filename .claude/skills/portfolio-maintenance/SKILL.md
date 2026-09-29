@@ -820,7 +820,11 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    work). A `blocked` label or blocker prose
    is never sufficient: apply the contract's *External-blocker verification* rule before every
    external-blocker skip, including its structured record and fresh per-run non-repository check. A
-   missing, malformed, or inherited blocker record is not a skip. A **bare `devantler` assignee does
+   missing, malformed, or inherited blocker record is not a skip. **Before starting an issue that
+   clears every skip reason, run the contract's *Completion check*** — sub-issues, merged PRs that
+   reference it, and the artifact its acceptance criteria name — because none of the skip reasons can
+   see that the work already shipped; when it may have, verifying and closing it with evidence *is*
+   the work (monorepo#2994). A **bare `devantler` assignee does
    *not* reserve** an issue
    **indefinitely** — an `agent-claim/<issue>` tip inside its lease, or a `devantler` assignment plus
    a **pushed lane branch**, is a live claim for ~2h (contract *Claim protocol*), and with neither

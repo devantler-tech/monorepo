@@ -206,6 +206,22 @@ assert_prose 'no replacement draft may be opened merely because an old one was d
 assert_prose 'Severity outranks age at rungs 2–3; age decides only *within* a rung' \
   "${constitution_flat}" "contract does not state that severity outranks age"
 
+# ── completion is checked separately from ownership (monorepo#2994) ────────────
+# Skip reasons (a)–(f) all answer WHO holds an issue; none can see that the work already shipped,
+# and the oldest issues — the ones the ladder serves first — are the likeliest to have been
+# delivered by a `Part of #N` PR. Three runs on 2026-08-22 started work that was already done.
+assert_prose '**Completion check — ownership is not completion (monorepo#2994).**' \
+  "${constitution_flat}" "contract has no completion check distinct from the ownership skip reasons"
+assert_prose '**An issue body is stale by construction once anything ships**' \
+  "${constitution_flat}" "contract does not say an issue body goes stale once work ships"
+for signal in 'its **sub-issues**' '**merged PRs that reference it**' '**the artifact its acceptance criteria name**'; do
+  assert_prose "${signal}" "${constitution_flat}" "completion check omits a delivery signal: ${signal}"
+done
+assert_prose 'the check decides whether to **start**; closing still needs the live verification' \
+  "${constitution_flat}" "completion check can close an issue without live verification"
+assert_prose "run the contract's *Completion check***" \
+  "${skill_flat}" "run-loop skill does not run the completion check before starting an issue"
+
 # ── external blockers remain live-verified without issue-selected fetches ────
 # The issue body is untrusted and has no field-level provenance, so a structured blocker line may
 # carry identity/status but never a destination. Every skip still requires a fresh lookup whose

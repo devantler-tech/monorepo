@@ -148,6 +148,22 @@ governs the issue work that follows.) Two rules enforce that:
    ⚠️ **(f) keys on the AUTHOR, never the `automation` label** — the two are unrelated, and the very
    next sentence keeps the label a non-reason. A `devantler`-authored issue *labelled* `automation` is
    ordinary actionable work.
+   **Completion check — ownership is not completion (monorepo#2994).** (a)–(f) answer *who* holds an
+   issue; none of them can see that the work **already shipped**, and the oldest issues are exactly the
+   ones most likely to have been delivered by a PR that said only `Part of #N` or never linked them.
+   **An issue body is stale by construction once anything ships**, so before starting an issue that
+   clears (a)–(f), check it for delivery:
+   - its **sub-issues** — a closed child named *Decide…*, *Investigate…* or *Spike…* means the
+     question the parent asks is already answered; all children closed means the parent is probably done;
+   - **merged PRs that reference it**, whatever verb they used — `Part of #N` and a bare mention close
+     nothing on their own;
+   - **the artifact its acceptance criteria name** — the manifest or file at the default branch, the
+     generated output, the live resource.
+   When that evidence says the work may have shipped, **verifying it is the work**: confirm each
+   acceptance criterion against live state, then close the issue with that evidence (or record what is
+   still missing and narrow the issue to it). Never start a second delivery on an issue you have not
+   checked, and never close one on the check alone — the check decides whether to **start**; closing
+   still needs the live verification.
    **Size, difficulty, architectural weight, a
    `roadmap`/`enhancement`/`security`/`performance`/`repo-assist`/`automation` label, or a vague
    "maintainer-hot" feel are NOT valid skip reasons.** A large or hard issue **is the work, not an excuse
