@@ -8,6 +8,10 @@
 # trimming only evicts entries unused for ~5 days, and with hourly lanes touching the
 # same packages those entries never go cold.
 #
+# On 2026-09-29 the host reached 99% again (monorepo#3675) from two consumers this sweep
+# could not see: 15.7 GB of Go's own orphaned work dirs, left in the per-user temp dir by
+# go commands that were killed, and a 3.3 GB golangci-lint cache that nothing budgeted.
+#
 # This is the sibling of worktree-cleanup-all.sh, which reaps abandoned worktrees. That
 # one covers ~4% of the agent's disk churn; this covers the rest.
 #
@@ -16,14 +20,33 @@
 #
 # Defaults: dry-run, 3 days, 10 GB.
 #
+# What it covers, in the order it runs:
+#   1. GOCACHE and GOMODCACHE, each cleaned only when it exceeds cache_budget_gb.
+#   2. Per-run agent trees (codex-*, war-*, dpc-*, ksail-*) under the temp root, older
+#      than min_age_days.
+#   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
+#   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
+#      per-user temp dir, older than a threshold counted in HOURS.
+#
+# Environment (all optional):
+#   BUILD_CACHE_RECLAIM_TMPDIR                temp root for (2); default /private/tmp
+#   BUILD_CACHE_RECLAIM_LINT_BUDGET_GB        budget for (3); default 2
+#   GOLANGCI_LINT_CACHE                       golangci-lint's own cache-dir override
+#   BUILD_CACHE_RECLAIM_GO_TMPDIR             temp dir for (4); default `getconf
+#                                             DARWIN_USER_TEMP_DIR`, else ${TMPDIR:-/tmp}
+#   BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS  age threshold for (4); default 6
+#
 # SAFETY — this deletes, so every rule below fails closed:
 #   * Only trees matching a known agent-generated name pattern are ever considered.
-#   * A tree younger than min_age_days is KEPT.
+#   * A tree younger than its age threshold is KEPT.
 #   * A tree any running process holds open is KEPT.
 #   * The caller's own session tree is KEPT.
+#   * A Go work dir is KEPT while a Go toolchain process that could own it is running.
+#   * The golangci-lint cache is KEPT while golangci-lint runs, and is emptied only when
+#     it carries golangci-lint's own README marker.
 #   * Anything that cannot be positively classified is KEPT.
-# The Go caches are content-addressed and fully regenerable; removing them costs a
-# rebuild, never data.
+# The Go and golangci-lint caches are content-addressed and fully regenerable; removing
+# them costs a rebuild, never data.
 set -uo pipefail
 
 MODE=${1:-dry-run}
@@ -43,15 +66,12 @@ case "$MIN_AGE_DAYS" in
     exit 2
     ;;
 esac
-case "$CACHE_BUDGET_GB" in
-  '' | *[!0-9]*)
-    printf 'build-cache-reclaim: cache_budget_gb must be a non-negative integer\n' >&2
-    exit 2
-    ;;
-esac
-# Bound the DIGITS before any arithmetic, then read them as decimal.
+# uint_setting validates one numeric setting and prints it as a decimal integer, or
+# prints why not and returns 1. Every budget and threshold that reaches arithmetic goes
+# through it.
 #
-# Two distinct failures live here and the digits-only guard above catches neither:
+# Bound the DIGITS before any arithmetic, then read them as decimal. Two distinct failures
+# live here and a digits-only guard catches neither:
 #   * a leading zero makes bash read the value as octal, so `08` is not mis-scaled -- it
 #     is a hard parse error that aborts the GOCACHE branch, which is the reclaim that
 #     actually recovers the space. `10#` forces base ten.
@@ -60,13 +80,57 @@ esac
 #     Seven digits caps the budget near 9.5 PB, whose product with 1024 is nowhere near
 #     the int64 limit. Unbounded, a wrapped negative budget makes every cache read as
 #     over budget and be cleaned on every single sweep.
-if [ "${#CACHE_BUDGET_GB}" -gt 7 ]; then
-  printf 'build-cache-reclaim: cache_budget_gb is too large (max 7 digits)\n' >&2
-  exit 2
-fi
-CACHE_BUDGET_GB=$((10#$CACHE_BUDGET_GB))
+uint_setting() {
+  local label=$1 value=$2
+  case "$value" in
+    '' | *[!0-9]*)
+      printf 'build-cache-reclaim: %s must be a non-negative integer\n' "$label" >&2
+      return 1
+      ;;
+  esac
+  if [ "${#value}" -gt 7 ]; then
+    printf 'build-cache-reclaim: %s is too large (max 7 digits)\n' "$label" >&2
+    return 1
+  fi
+  printf '%s' "$((10#$value))"
+}
+
+CACHE_BUDGET_GB=$(uint_setting cache_budget_gb "$CACHE_BUDGET_GB") || exit 2
+# The golangci-lint cache gets its OWN budget rather than cache_budget_gb. That argument is
+# sized for the Go build cache, the largest and most valuable cache here; at 10 GB it
+# would never have touched the 3.3 GB lint cache measured when the host filled, so the
+# gap would have stayed open. A lint cache is cheap to rebuild, so it is held smaller.
+LINT_BUDGET_GB=$(uint_setting BUILD_CACHE_RECLAIM_LINT_BUDGET_GB \
+  "${BUILD_CACHE_RECLAIM_LINT_BUDGET_GB:-2}") || exit 2
+# Go's work dirs are aged in HOURS, not min_age_days. A go command's work dir is live only
+# while that command runs, and every holder check below still applies, so waiting three
+# days only lets orphans pile up: 15.7 GB of them were 0-2 days old when the host filled.
+GO_TMP_MIN_AGE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS \
+  "${BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS:-6}") || exit 2
 
 TMPDIR_ROOT=${BUILD_CACHE_RECLAIM_TMPDIR:-/private/tmp}
+
+# resolve_go_tmpdir prints the directory the go command puts its work dirs in.
+#
+# The go command uses TMPDIR, and in a macOS session TMPDIR is the per-user dir under
+# /var/folders, NOT /private/tmp -- which is why the per-run sweep never saw these dirs.
+# `getconf` asks the OS for that dir rather than reading the environment, so a LaunchAgent
+# started with launchd's minimal environment still finds the directory the lanes' go
+# commands wrote into. Elsewhere getconf fails and TMPDIR decides, as it does for go.
+resolve_go_tmpdir() {
+  local dir
+  if [ -n "${BUILD_CACHE_RECLAIM_GO_TMPDIR:-}" ]; then
+    dir=$BUILD_CACHE_RECLAIM_GO_TMPDIR
+  else
+    dir=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) || dir=''
+    [ -n "$dir" ] || dir=${TMPDIR:-/tmp}
+  fi
+  # getconf answers with a trailing slash; strip it so logged paths read cleanly.
+  [ "$dir" = / ] || dir=${dir%/}
+  printf '%s' "$dir"
+}
+GO_TMP_ROOT=$(resolve_go_tmpdir)
+
 reclaimed_mb=0
 kept=0
 removed=0
@@ -86,6 +150,7 @@ size_mb() {
 
 printf '\n===== %s  build-cache-reclaim (%s) =====\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MODE"
 log "temp root=${TMPDIR_ROOT} min_age_days=${MIN_AGE_DAYS} cache_budget_gb=${CACHE_BUDGET_GB}"
+log "go temp dir=${GO_TMP_ROOT} go_tmp_min_age_hours=${GO_TMP_MIN_AGE_HOURS} lint_budget_gb=${LINT_BUDGET_GB}"
 
 # ---------------------------------------------------------------------------
 # 0. Liveness probe, shared by the cache gate below and the tree sweep further down.
@@ -180,6 +245,94 @@ dir_in_use() {
   # Scanning to EOF costs microseconds and is the only form whose status means what it says.
   printf "%s\n" "$LSOF_PATHS" |
     awk -v p="$canon" 'index($0, p "/") == 1 || $0 == p { found = 1 } END { exit !found }'
+}
+
+# PS_TABLE holds one "<elapsed-seconds> <name>" line per process on this host, captured
+# ONCE. Open files alone cannot prove a Go work dir or the golangci-lint cache is idle: a
+# running go command need not hold anything under its work dir between build steps, and
+# golangci-lint opens cache entries only for the instant it reads or writes one. So both
+# of those rules also ask which processes are running, and for how long.
+#
+# `comm` is read with -ww and cut to its last path component. macOS reports a full path
+# and truncates it at the terminal width without -ww (measured here: a framework daemon's
+# path ended in "Sup..."), and a truncated toolchain path would never match its name.
+# Linux reports the bare name, so the cut is a no-op there.
+#
+# An elapsed time that does not parse is recorded as -1, which every reader treats as
+# "cannot tell" -- never as young. PS_OK is tracked apart from the contents for the same
+# reason LSOF_OK is: a failed ps must keep everything, not read as "nothing is running".
+#
+# PS_EPOCH is taken just BEFORE ps, so a process's age "now" is its elapsed time plus the
+# seconds since PS_EPOCH -- an over-estimate by the ps call's own duration, which is the
+# direction that keeps more, not less.
+read_process_table() {
+  local raw
+  raw=$(ps -A -ww -o etime= -o comm= 2>/dev/null) || return 1
+  [ -n "$raw" ] || return 1
+  # etime is [[dd-]hh:]mm:ss on both BSD and procps ps.
+  printf '%s\n' "$raw" | awk '
+    {
+      t = $1
+      name = $0
+      sub(/^[ \t]*[^ \t]+[ \t]*/, "", name)
+      sub(/[ \t]+$/, "", name)
+      sub(/.*\//, "", name)
+      if (name == "") next
+      d = 0
+      if (t ~ /^[0-9]+-/) {
+        d = substr(t, 1, index(t, "-") - 1)
+        t = substr(t, index(t, "-") + 1)
+      }
+      secs = -1
+      if (t ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+        split(t, f, ":")
+        secs = d * 86400 + f[1] * 3600 + f[2] * 60 + f[3]
+      } else if (t ~ /^[0-9]+:[0-9]+$/) {
+        split(t, f, ":")
+        secs = d * 86400 + f[1] * 60 + f[2]
+      }
+      print secs, name
+    }'
+}
+
+PS_OK=0
+PS_TABLE=''
+PS_EPOCH=$(date +%s 2>/dev/null) || PS_EPOCH=''
+case "$PS_EPOCH" in
+  '' | *[!0-9]*) PS_EPOCH='' ;;
+esac
+if [ -n "$PS_EPOCH" ] && PS_TABLE=$(read_process_table) && [ -n "$PS_TABLE" ]; then
+  PS_OK=1
+fi
+[ "$PS_OK" -eq 1 ] ||
+  log 'WARNING: ps produced no usable process table — every Go work dir and the golangci-lint cache will be KEPT'
+
+# oldest_in_table prints the longest elapsed time, in seconds, of any process in table $1
+# with one of the names that follow, or -1 when none of them is running. It returns 1 when
+# that cannot be told: an empty table, or a matching process whose elapsed time did not
+# parse. Callers read a 1 as "a holder may exist" and keep what they were asked about.
+oldest_in_table() {
+  local table=$1
+  shift
+  [ -n "$table" ] || return 1
+  # Scans to EOF with no early `exit` in the rules, for the SIGPIPE reason documented on
+  # dir_in_use: under pipefail an awk that quits early turns a real answer into a 141.
+  printf '%s\n' "$table" | awk -v names="$*" '
+    BEGIN { n = split(names, w, " "); for (i = 1; i <= n; i++) want[w[i]] = 1; max = -1 }
+    {
+      name = $0
+      sub(/^[^ ]+ /, "", name)
+      if (!(name in want)) next
+      if ($1 < 0) bad = 1
+      else if ($1 > max) max = $1
+    }
+    END { if (bad) exit 1; print max }'
+}
+
+# oldest_process_secs asks the same question of the up-front table.
+oldest_process_secs() {
+  [ "$PS_OK" -eq 1 ] || return 1
+  oldest_in_table "$PS_TABLE" "$@"
 }
 # ---------------------------------------------------------------------------
 # 1. Go build cache, trimmed only when it exceeds its budget.
@@ -405,54 +558,285 @@ own_session_tree() {
   return 1
 }
 
-if [ -d "$TMPDIR_ROOT" ]; then
-  while IFS= read -r tree; do
-    [ -n "$tree" ] || continue
-    [ -d "$tree" ] || continue
-    if own_session_tree "$tree"; then
+# tree_in_use asks the liveness snapshot about one tree, at the scope its root needs.
+#   temp-root  holds_open: the snapshot narrowed to TMPDIR_ROOT, for the per-run sweep.
+#   host       dir_in_use: the whole snapshot. The Go work-dir sweep MUST use this one:
+#              the per-user temp dir is not under TMPDIR_ROOT, so the narrowed snapshot
+#              would report every tree there as idle.
+# An unknown scope reports "in use", so a caller's typo keeps the tree.
+tree_in_use() {
+  case "$2" in
+    temp-root) holds_open "$1" ;;
+    host) dir_in_use "$1" ;;
+    *) return 0 ;;
+  esac
+}
+
+# sweep_candidate reaps or keeps ONE candidate tree under the rules every sweep shares.
+# Both sweeps go through it, so their guards cannot drift apart.
+#
+#   $1  the candidate tree
+#   $2  the liveness scope for tree_in_use: temp-root or host
+sweep_candidate() {
+  local tree=$1 scope=$2 tree_mb
+  [ -n "$tree" ] || return 0
+  [ -d "$tree" ] || return 0
+  if own_session_tree "$tree"; then
+    kept=$((kept + 1))
+    return 0
+  fi
+  if tree_in_use "$tree" "$scope"; then
+    kept=$((kept + 1))
+    log "KEEP  (in use)        $tree"
+    return 0
+  fi
+  if ! tree_mb=$(size_mb "$tree"); then
+    kept=$((kept + 1))
+    log "KEEP  (unmeasurable)  $tree"
+    return 0
+  fi
+  if [ "$MODE" = apply ]; then
+    # Everything above was decided from the up-front snapshot, which by now is minutes
+    # old. Ask once more, about this tree alone, before destroying it.
+    if ! still_idle "$tree"; then
       kept=$((kept + 1))
-      continue
+      log "KEEP  (in use, late)  $tree"
+      return 0
     fi
-    if holds_open "$tree"; then
-      kept=$((kept + 1))
-      log "KEEP  (in use)        $tree"
-      continue
-    fi
-    if ! tree_mb=$(size_mb "$tree"); then
-      kept=$((kept + 1))
-      log "KEEP  (unmeasurable)  $tree"
-      continue
-    fi
-    if [ "$MODE" = apply ]; then
-      # Everything above was decided from the up-front snapshot, which by now is minutes
-      # old. Ask once more, about this tree alone, before destroying it.
-      if ! still_idle "$tree"; then
-        kept=$((kept + 1))
-        log "KEEP  (in use, late)  $tree"
-        continue
-      fi
-      # Go marks every file under a module cache read-only, so a plain `rm -rf` stops
-      # partway. That is worse than skipping the tree: the partial delete bumps its
-      # mtime, the age filter then never selects it again, and the remnant is orphaned
-      # forever. Restore write permission first so removal is all-or-nothing in practice.
-      chmod -R u+w -- "$tree" 2>/dev/null || true
-      if rm -rf -- "$tree" 2>/dev/null && [ ! -e "$tree" ]; then
-        removed=$((removed + 1))
-        reclaimed_mb=$((reclaimed_mb + tree_mb))
-        log "REAP  ${tree_mb} MB  $tree"
-      else
-        kept=$((kept + 1))
-        log "KEEP  (remove failed) $tree"
-      fi
-    else
+    # Go marks every file under a module cache read-only, so a plain `rm -rf` stops
+    # partway. That is worse than skipping the tree: the partial delete bumps its
+    # mtime, the age filter then never selects it again, and the remnant is orphaned
+    # forever. Restore write permission first so removal is all-or-nothing in practice.
+    chmod -R u+w -- "$tree" 2>/dev/null || true
+    if rm -rf -- "$tree" 2>/dev/null && [ ! -e "$tree" ]; then
       removed=$((removed + 1))
       reclaimed_mb=$((reclaimed_mb + tree_mb))
-      log "WOULD REAP ${tree_mb} MB  $tree"
+      log "REAP  ${tree_mb} MB  $tree"
+    else
+      kept=$((kept + 1))
+      log "KEEP  (remove failed) $tree"
     fi
+  else
+    removed=$((removed + 1))
+    reclaimed_mb=$((reclaimed_mb + tree_mb))
+    log "WOULD REAP ${tree_mb} MB  $tree"
+  fi
+}
+
+if [ -d "$TMPDIR_ROOT" ]; then
+  while IFS= read -r tree; do
+    sweep_candidate "$tree" temp-root
   done <<EOF
 $(find "$TMPDIR_ROOT" -maxdepth 1 -type d \
   \( -name 'codex-*' -o -name 'war-*' -o -name 'dpc-*' -o -name 'ksail-*' \) \
   -mtime "+${MIN_AGE_DAYS}" 2>/dev/null)
+EOF
+fi
+
+# ---------------------------------------------------------------------------
+# 3. golangci-lint cache, emptied only when it exceeds its own budget.
+#
+# golangci-lint keeps a content-addressed cache of its own, built from a copy of Go's
+# build cache, and nothing here bounded it: 3.3 GB when the host filled. The binary is
+# usually NOT on PATH on the host (it runs via `go run` or in containers), so this cannot
+# lean on `golangci-lint cache clean` the way the Go caches lean on `go clean`.
+# ---------------------------------------------------------------------------
+# golangci-lint writes this README into every cache dir it opens, whenever it is missing.
+LINT_CACHE_MARKER='This directory holds cached build artifacts from golangci-lint.'
+
+# lint_cache_dir prints the cache dir golangci-lint would use, resolved the way it does
+# (internal/go/cache.DefaultDir): GOLANGCI_LINT_CACHE when set, which golangci-lint only
+# honours as an absolute path, else os.UserCacheDir()/golangci-lint -- ~/Library/Caches on
+# macOS, ${XDG_CACHE_HOME:-~/.cache} elsewhere. Returns 1 when golangci-lint would run
+# with no cache at all ("off", a relative path, no home), so there is nothing to reclaim.
+lint_cache_dir() {
+  local base
+  if [ -n "${GOLANGCI_LINT_CACHE:-}" ]; then
+    case "$GOLANGCI_LINT_CACHE" in
+      /*) printf '%s' "$GOLANGCI_LINT_CACHE" ;;
+      *) return 1 ;;
+    esac
+    return 0
+  fi
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) base=${HOME:+${HOME}/Library/Caches} ;;
+    *) base=${XDG_CACHE_HOME:-${HOME:+${HOME}/.cache}} ;;
+  esac
+  case "$base" in
+    /*) printf '%s/golangci-lint' "$base" ;;
+    *) return 1 ;;
+  esac
+}
+
+# reclaim_lint_cache follows reclaim_go_cache's rules -- budget first, then liveness,
+# with every "I could not tell" keeping the cache -- plus two of its own:
+#   * the directory must carry golangci-lint's README marker. The override is a free-form
+#     path, and this empties whatever it names; the marker is what proves it names a
+#     golangci-lint cache rather than, say, a home directory.
+#   * a running golangci-lint keeps it. The open-file check alone cannot see a linter
+#     between two cache reads, and emptying the cache under it costs that run its results.
+# The README itself is kept, so the directory still identifies itself on the next sweep.
+reclaim_lint_cache() {
+  local label=GOLANGCI_LINT_CACHE dir canon cache_mb budget_mb oldest fresh leftover after_mb
+
+  if ! dir=$(lint_cache_dir); then
+    log "${label} disabled or not an absolute path — nothing to reclaim"
+    return 0
+  fi
+  if [ ! -d "$dir" ]; then
+    log "${label} ${dir} absent — nothing to do"
+    return 0
+  fi
+  # Work on the PHYSICAL path: lsof reports physical paths, and `find` does not descend
+  # through a symlinked starting point, so the removal below would silently do nothing.
+  canon=$(cd -- "$dir" 2>/dev/null && pwd -P) || canon=''
+  if [ -z "$canon" ]; then
+    log "${label} ${dir} cannot be resolved — keeping"
+    return 0
+  fi
+  if ! grep -qF -- "$LINT_CACHE_MARKER" "${canon}/README" 2>/dev/null; then
+    log "${label} ${canon} carries no golangci-lint README marker — keeping"
+    return 0
+  fi
+
+  if ! cache_mb=$(size_mb "$canon"); then
+    log "${label} size unmeasurable — keeping"
+    return 0
+  fi
+  budget_mb=$((LINT_BUDGET_GB * 1024))
+  log "${label} ${canon} = ${cache_mb} MB (budget ${budget_mb} MB)"
+  if [ "$cache_mb" -le "$budget_mb" ]; then
+    log "${label} within budget — keeping (a warm cache is worth more than the space)"
+    return 0
+  fi
+
+  # Liveness, checked BEFORE the mode branch so the dry-run projection matches apply.
+  if ! oldest=$(oldest_process_secs golangci-lint); then
+    log "${label} cannot tell whether golangci-lint is running — keeping"
+    return 0
+  fi
+  if [ "$oldest" != -1 ]; then
+    log "${label} golangci-lint process running — keeping"
+    return 0
+  fi
+  if dir_in_use "$canon"; then
+    log "${label} ${canon} in use by a live process — keeping"
+    return 0
+  fi
+
+  if [ "$MODE" != apply ]; then
+    reclaimed_mb=$((reclaimed_mb + cache_mb))
+    log "${label} would be cleaned (over budget), ~${cache_mb} MB"
+    return 0
+  fi
+
+  # Both answers above come from snapshots taken at the start of the run, before the Go
+  # caches and the per-run trees were measured, and `du` over one multi-gigabyte cache
+  # alone takes minutes -- ample time for a lint run to start. Ask again, fresh,
+  # immediately before emptying: the same late re-check the tree sweep makes.
+  if ! fresh=$(read_process_table) || ! oldest=$(oldest_in_table "$fresh" golangci-lint) ||
+    [ "$oldest" != -1 ]; then
+    log "${label} golangci-lint running or unknown at removal time — keeping"
+    return 0
+  fi
+  if ! still_idle "$canon"; then
+    log "${label} ${canon} in use at removal time — keeping"
+    return 0
+  fi
+
+  chmod -R u+w -- "$canon" 2>/dev/null || true
+  find "$canon" -mindepth 1 -maxdepth 1 ! -name README -exec rm -rf -- {} + 2>/dev/null
+  # Judge the result by what is LEFT, not by find's status: a partial removal still frees
+  # space, and an unreadable leftover must not be reported as a clean sweep.
+  if leftover=$(find "$canon" -mindepth 1 -maxdepth 1 ! -name README 2>/dev/null) &&
+    [ -z "$leftover" ]; then
+    reclaimed_mb=$((reclaimed_mb + cache_mb))
+    log "${label} cleaned, reclaimed ~${cache_mb} MB"
+  elif after_mb=$(size_mb "$canon") && [ "$after_mb" -lt "$cache_mb" ]; then
+    reclaimed_mb=$((reclaimed_mb + cache_mb - after_mb))
+    log "${label} clean INCOMPLETE, reclaimed ~$((cache_mb - after_mb)) MB"
+  else
+    log "${label} clean FAILED — keeping"
+  fi
+}
+
+reclaim_lint_cache
+
+# ---------------------------------------------------------------------------
+# 4. Go's own orphaned work dirs under the per-user temp dir.
+#
+# The go command makes a `go-build<digits>` work dir (the linker a `go-link-<digits>` one)
+# in the temp dir and deletes it when it exits normally. A go command that is KILLED -- a
+# timeout, a cancelled agent run -- leaves it behind for good, and each one holds a whole
+# build's objects and binaries: five of them, 0.9-4.75 GB each, held 15.7 GB when the
+# host filled on 2026-09-29, with no Go process running.
+#
+# Matched by exact name shape AND an hours-scale age AND liveness, where liveness is both
+# the open-file check and the toolchain check below.
+# ---------------------------------------------------------------------------
+# The toolchain processes that create or write into a Go work dir. A killed go command's
+# children can outlive it, so the tools are listed as well as the go command itself.
+GO_TOOLCHAIN_NAMES=(go compile link asm cgo vet)
+
+# GO_TOOLCHAIN_OLDEST is how long the longest-running toolchain process has run, in
+# seconds: -1 when none is running, "unknown" when the process table cannot say.
+GO_TOOLCHAIN_OLDEST=unknown
+if oldest=$(oldest_process_secs "${GO_TOOLCHAIN_NAMES[@]}"); then
+  case "$oldest" in
+    -1) GO_TOOLCHAIN_OLDEST=-1 ;;
+    '' | *[!0-9]*) ;;
+    *) GO_TOOLCHAIN_OLDEST=$oldest ;;
+  esac
+fi
+
+# go_toolchain_could_own reports whether a running toolchain process could own `tree`.
+#
+# A go command creates its work dir when it starts, so a dir last modified BEFORE every
+# running toolchain process started cannot belong to any of them -- and that is the only
+# case this lets through. Open files alone cannot make that call: a go command holds
+# nothing under its work dir between build steps, so a live build can look idle to lsof.
+#
+# The table was read at the start of the run, which by now can be many minutes ago, so
+# each process is aged to the present before comparing; otherwise a dir modified in that
+# gap would read as older than a process that in fact predates it. The comparison runs in
+# whole minutes with a margin of two, and every unknown keeps the tree.
+go_toolchain_could_own() {
+  local tree=$1 now age_s hit
+  [ "$GO_TOOLCHAIN_OLDEST" != unknown ] || return 0
+  [ "$GO_TOOLCHAIN_OLDEST" -ge 0 ] || return 1
+  now=$(date +%s 2>/dev/null) || return 0
+  case "$now" in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  age_s=$((GO_TOOLCHAIN_OLDEST + now - PS_EPOCH))
+  hit=$(find "$tree" -maxdepth 0 -mmin "-$((age_s / 60 + 2))" 2>/dev/null) || return 0
+  [ -n "$hit" ]
+}
+
+if [ -d "$GO_TMP_ROOT" ]; then
+  while IFS= read -r tree; do
+    [ -n "$tree" ] || continue
+    # `find -name` cannot say "digits only", so check the suffix here. Only the exact shape
+    # the go command creates is ever considered; `go-buildcache` or `go-build-x` are not it.
+    name=${tree##*/}
+    case "$name" in
+      go-build*) suffix=${name#go-build} ;;
+      go-link-*) suffix=${name#go-link-} ;;
+      *) continue ;;
+    esac
+    case "$suffix" in
+      '' | *[!0-9]*) continue ;;
+    esac
+    if go_toolchain_could_own "$tree"; then
+      kept=$((kept + 1))
+      log "KEEP  (go running)    $tree"
+      continue
+    fi
+    sweep_candidate "$tree" host
+  done <<EOF
+$(find "$GO_TMP_ROOT" -mindepth 1 -maxdepth 1 -type d \
+  \( -name 'go-build[0-9]*' -o -name 'go-link-[0-9]*' \) \
+  -mmin "+$((GO_TMP_MIN_AGE_HOURS * 60))" 2>/dev/null)
 EOF
 fi
 
@@ -466,7 +850,13 @@ if [ "$MODE" = apply ]; then
 else
   log "summary: would reap=${removed} kept=${kept} would reclaim=~${reclaimed_mb} MB (dry-run: nothing deleted)"
 fi
+# Measure the volume the reclaimed space lives on, which `/` is not on macOS: there `/` is
+# the sealed, read-only system volume, and the caches and temp dirs live on the data volume
+# that holds $HOME. APFS volumes share their container's free space, so the free figure
+# happened to agree (both read 74Gi on 2026-09-29) while the fullness did not (15% vs 83%),
+# and on a host with a separate /home even the free figure differs. -P stops GNU df from
+# wrapping a long device name onto a second line, where NR==2 would read the wrong row.
 if command -v df >/dev/null 2>&1; then
-  log "free now: $(df -h / 2>/dev/null | awk 'NR==2{print $4}')"
+  log "free now: $(df -P -h "${HOME:-/}" 2>/dev/null | awk 'NR==2{print $4 " (" $5 " used)"}')"
 fi
 exit 0

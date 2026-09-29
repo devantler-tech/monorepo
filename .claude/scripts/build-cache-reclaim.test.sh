@@ -25,6 +25,23 @@ fixture_root=$(mktemp -d) || {
   exit 2
 }
 trap 'rm -rf -- "$fixture_root"' EXIT
+# Go's work dirs are swept from a SEPARATE root, deliberately outside fixture_root: the
+# real per-user temp dir is not under the per-run temp root either, and a fixture inside
+# it would let a liveness check that only reads the narrowed snapshot pass (case 15).
+go_tmp_root=$(mktemp -d) || {
+  printf 'cannot create Go temp fixture root\n' >&2
+  exit 2
+}
+trap 'rm -rf -- "$fixture_root" "$go_tmp_root"' EXIT
+
+# EXPORTED, not passed per call, so no invocation -- including the ones that call the
+# script directly below -- can reach the host's real per-user temp dir or real
+# golangci-lint cache. The Go work-dir sweep ages in hours, so an unsandboxed apply run
+# would delete a real orphaned work dir on the developer's machine. The default lint
+# cache is a path that does not exist ("nothing to do"); case 16 sets its own.
+export BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root"
+export GOLANGCI_LINT_CACHE="${fixture_root}/golangci-lint-absent"
+export BUILD_CACHE_RECLAIM_LINT_BUDGET_GB="$NEVER_CLEAN_BUDGET"
 
 make_tree() {
   # make_tree <name> <age-days>
@@ -47,7 +64,7 @@ make_tree() {
 # caches: `du` over a multi-gigabyte module cache took minutes per call, and the suite
 # calls this many times. It is also a stronger safety guarantee than the absurd budget
 # below -- that only stops a cache being CLEANED; this stops one being touched at all.
-# The three cases that invoke the script DIRECTLY (10, 11, 12) must set both variables
+# The cases that invoke the script DIRECTLY (10, 11, 12, 14) must set both variables
 # themselves for the same reason. Without them each of those runs `du` over the real
 # multi-gigabyte module cache, which dominated this suite's runtime.
 GO_BUILD_FIXTURE="$fixture_root/go-build-cache"
@@ -470,6 +487,340 @@ PATH="${sigpipe_stub}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$sigpipe_root" \
   bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
 [ -e "$sigpipe_tree" ] ||
   fail "a tree named in a LARGE liveness snapshot was reaped (matcher failed open on SIGPIPE): $sigpipe_tree"
+
+# --- shared helpers for cases 15-16 -----------------------------------------------
+# age_path <path> <hours> moves a path's mtime <hours> into the past. LOCAL time on
+# purpose: `touch -t` reads its stamp as local time, so a UTC stamp would shift an
+# hours-scale age by the host's UTC offset -- enough to carry a fixture across the
+# 6-hour threshold in either direction.
+age_path() {
+  local stamp
+  stamp=$(date -v-"$2"H +%Y%m%d%H%M 2>/dev/null) ||
+    stamp=$(date -d "$2 hours ago" +%Y%m%d%H%M 2>/dev/null) || return 1
+  touch -t "$stamp" "$1"
+}
+
+# make_go_dir <root> <name> <age-hours> builds a dir shaped like a go command's work dir.
+make_go_dir() {
+  local dir="$1/$2"
+  mkdir -p "${dir}/b001" || return 1
+  printf 'payload\n' > "${dir}/b001/file"
+  age_path "$dir" "$3" || return 1
+  printf '%s' "$dir"
+}
+
+# make_ps_stub <dir> [<table-file>] installs a `ps` that prints exactly that table, or --
+# with no table -- one that fails with no output. The process-table rules are exercised
+# through stubs because a toolchain process that has run for days cannot be conjured on
+# demand; case 16 proves the same parser against the REAL ps.
+make_ps_stub() {
+  mkdir -p "$1" || return 1
+  if [ -n "${2:-}" ]; then
+    printf '#!/bin/sh\ncat "%s"\n' "$2" > "$1/ps"
+  else
+    printf '#!/bin/sh\nexit 1\n' > "$1/ps"
+  fi
+  chmod +x "$1/ps"
+}
+
+# said <output> <path> <pattern> succeeds when a log line that ENDS in exactly <path>
+# contains <pattern>, so go-build1111 can never be confused with a sibling sharing its
+# prefix. The lines are captured before grep sees them: `grep -q` quits on its first hit,
+# and under pipefail a writer still feeding it would turn that hit into a SIGPIPE failure.
+said() {
+  local lines
+  lines=$(printf '%s\n' "$1" |
+    awk -v p="$2" 'length($0) >= length(p) && substr($0, length($0) - length(p) + 1) == p')
+  grep -q -- "$3" <<<"$lines"
+}
+
+# run_iso <go-temp-root> <path-prefix> <args...> runs the script over an EMPTY per-run temp
+# root, so the debris of cases 1-14 cannot add lines or reaps to what is asserted here.
+# An empty <path-prefix> runs against the real `ps` and `lsof`.
+iso_tmp="${fixture_root}/iso-tmp"
+mkdir -p "$iso_tmp" || fail 'fixture: isolated temp root'
+run_iso() {
+  local root=$1 prefix=$2
+  shift 2
+  PATH="${prefix:+${prefix}:}$PATH" BUILD_CACHE_RECLAIM_GO_TMPDIR="$root" \
+    BUILD_CACHE_RECLAIM_TMPDIR="$iso_tmp" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" \
+    bash "$impl" "$@" 2>&1
+}
+
+# A process table naming no toolchain and no linter, for every case whose subject is not
+# the process table itself. Stubbed rather than real so a long-running go command on the
+# developer's machine cannot turn a reap assertion into a spurious failure.
+quiet_table="${fixture_root}/ps-quiet.txt"
+printf '%s\n' '00:05 /bin/sh' '400-00:00:00 /sbin/launchd' > "$quiet_table"
+quiet_ps="${fixture_root}/ps-quiet"
+make_ps_stub "$quiet_ps" "$quiet_table" || fail 'fixture: quiet ps stub'
+
+# --- 15. Go's orphaned work dirs are swept from the per-user temp dir --------------
+# The go command leaves its `go-build<digits>` work dir (the linker a `go-link-<digits>`
+# one) behind whenever it is killed, and those held 15.7 GB when the host filled on
+# 2026-09-29. They live in the per-user temp dir, which the per-run sweep never scanned.
+#
+# The fixtures differ from the reapable ones in exactly one dimension each: age (1 h
+# against the 6 h default), name shape, file-vs-dir, and a live holder. The 12 h fixture
+# pins the threshold to HOURS: with min_age_days=3 applied instead it would be kept.
+g_root="${go_tmp_root}/sweep"
+mkdir -p "$g_root" || fail 'fixture: Go temp sweep root'
+g_stale=$(make_go_dir "$g_root" go-build1111 240) || fail 'fixture: stale go-build'
+g_link=$(make_go_dir "$g_root" go-link-2222 240) || fail 'fixture: stale go-link'
+g_hours=$(make_go_dir "$g_root" go-build3333 12) || fail 'fixture: 12h go-build'
+g_young=$(make_go_dir "$g_root" go-build4444 1) || fail 'fixture: young go-build'
+g_held=$(make_go_dir "$g_root" go-build7777 240) || fail 'fixture: held go-build'
+g_foreign=()
+for name in go-buildcache go-build12x go-link-9x gopls-5555 codex-5556; do
+  d=$(make_go_dir "$g_root" "$name" 240) || fail "fixture: $name"
+  g_foreign+=("$d")
+done
+g_file="${g_root}/go-build6666"
+printf 'payload\n' > "$g_file" || fail 'fixture: go-build file'
+age_path "$g_file" 240 || fail 'fixture: age go-build file'
+
+# Hold a NESTED file of g_held open, never the top dir, as a running build would.
+/bin/sh -c "exec 9<'${g_held}/b001/file'; sleep 30" &
+g_holder=$!
+sleep 1
+kill -0 "$g_holder" 2>/dev/null ||
+  fail 'fixture: Go work-dir holder did not stay alive; liveness assertion not exercised'
+
+# 15a. dry-run: selects exactly the reapable three, deletes nothing.
+out=$(run_iso "$g_root" "$quiet_ps" dry-run 3 "$NEVER_CLEAN_BUDGET")
+for d in "$g_stale" "$g_link" "$g_hours"; do
+  said "$out" "$d" 'WOULD REAP' ||
+    fail "dry-run did not select an orphaned Go work dir: $d"
+done
+for d in "$g_young" "$g_held" "${g_foreign[@]}" "$g_file"; do
+  said "$out" "$d" 'REAP' &&
+    fail "dry-run selected a Go temp entry it must keep: $d"
+done
+for d in "$g_stale" "$g_link" "$g_hours" "$g_young" "$g_held" "${g_foreign[@]}" "$g_file"; do
+  [ -e "$d" ] || fail "dry-run deleted a Go temp entry: $d"
+done
+# The held dir must be kept by the LIVENESS check, and in dry-run, where the late
+# per-tree re-probe never runs. That is what makes this discriminate: the fixture sits
+# outside the per-run temp root, so a sweep reading only the snapshot narrowed to that
+# root would call it idle -- and in apply the late re-probe would hide that by keeping
+# it anyway.
+said "$out" "$g_held" 'KEEP  (in use)' ||
+  fail "a Go work dir held open by a live process was not kept as in use: $g_held"
+
+# 15b. apply: reaps exactly the reapable three.
+out=$(run_iso "$g_root" "$quiet_ps" apply 3 "$NEVER_CLEAN_BUDGET")
+for d in "$g_stale" "$g_link" "$g_hours"; do
+  [ -e "$d" ] && fail "apply did not reap an orphaned Go work dir: $d"
+done
+for d in "$g_young" "$g_held" "${g_foreign[@]}" "$g_file"; do
+  [ -e "$d" ] || fail "apply removed a Go temp entry it must keep: $d"
+done
+kill "$g_holder" 2>/dev/null
+wait "$g_holder" 2>/dev/null
+
+# 15c. a running toolchain process that COULD own a dir keeps it. A go command need not
+# hold any file under its work dir between build steps, so lsof alone can miss a live
+# build; a dir last modified before every toolchain process started cannot be theirs.
+# Each variant sweeps one 10-day-old work dir while `ps` reports only the given lines.
+go_proc_case() {
+  local label=$1 table stub="${fixture_root}/ps-$1" root="${go_tmp_root}/proc-$1"
+  shift
+  mkdir -p "$root" || return 1
+  proc_dir=$(make_go_dir "$root" go-build424242 240) || return 1
+  if [ "$#" -gt 0 ]; then
+    table="${fixture_root}/ps-${label}.txt"
+    printf '%s\n' "$@" > "$table" || return 1
+    make_ps_stub "$stub" "$table" || return 1
+  else
+    make_ps_stub "$stub" || return 1
+  fi
+  proc_out=$(run_iso "$root" "$stub" apply 3 "$NEVER_CLEAN_BUDGET")
+}
+# Running for 11 days, so it could have created a 10-day-old dir: KEEP.
+go_proc_case old '11-00:00:00 /usr/local/go/bin/go' '00:05 /bin/sh' ||
+  fail 'fixture: old-toolchain case'
+[ -e "$proc_dir" ] || fail 'a Go work dir was reaped while a go command that could own it ran'
+said "$proc_out" "$proc_dir" 'KEEP  (go running)' ||
+  fail 'a Go work dir kept for a running go command did not say why'
+# ABLATION PARTNER: a toolchain process that started AFTER the dir was last modified, and
+# a non-toolchain process older than the dir. Neither can own it, so it IS reaped.
+go_proc_case young '23:59:59 /usr/local/go/pkg/tool/linux_amd64/compile' \
+  '400-00:00:00 /sbin/launchd' || fail 'fixture: young-toolchain case'
+[ -e "$proc_dir" ] &&
+  fail 'ablation partner: a Go work dir no running process could own was not reaped'
+# ps fails: nothing can be ruled out, so KEEP.
+go_proc_case failed || fail 'fixture: failed-ps case'
+[ -e "$proc_dir" ] || fail 'a Go work dir was reaped although ps produced no process table'
+# A toolchain process whose elapsed time does not parse is "cannot tell", never "young".
+go_proc_case garbled 'bogus /usr/local/go/bin/go' '00:05 /bin/sh' ||
+  fail 'fixture: garbled-etime case'
+[ -e "$proc_dir" ] ||
+  fail 'a Go work dir was reaped although a go process had an unparsable elapsed time'
+# The table is read at the START of the run and the work dirs are swept LAST, possibly
+# many minutes later, so a process must be aged to the moment of the comparison. A `date`
+# stub makes that gap deterministic: the table is read at T, the comparison happens at
+# T + 2 days. A go command 9 days old at T is 11 days old by then, so it predates this
+# 10-day-old dir and could own it. Read without the gap it looks younger than the dir --
+# exactly the young-toolchain ablation above, which is reaped.
+aged_stub="${fixture_root}/ps-aged"
+aged_root="${go_tmp_root}/proc-aged"
+mkdir -p "$aged_root" || fail 'fixture: aged-table root'
+aged_dir=$(make_go_dir "$aged_root" go-build434343 240) || fail 'fixture: aged-table dir'
+printf '%s\n' '9-00:00:00 /usr/local/go/bin/go' > "${fixture_root}/ps-aged.txt"
+make_ps_stub "$aged_stub" "${fixture_root}/ps-aged.txt" || fail 'fixture: aged ps stub'
+real_date=$(command -v date)
+cat > "${aged_stub}/date" <<STUB
+#!/bin/sh
+# The first epoch read (when the table is taken) is now; every later one is 2 days on.
+if [ "\$1" = "+%s" ]; then
+  c="${fixture_root}/aged-date-calls"
+  n=\$(cat "\$c" 2>/dev/null || echo 0)
+  echo \$((n + 1)) > "\$c"
+  t=\$("${real_date}" +%s)
+  [ "\$n" -eq 0 ] || t=\$((t + 172800))
+  echo "\$t"
+  exit 0
+fi
+exec "${real_date}" "\$@"
+STUB
+chmod +x "${aged_stub}/date" || fail 'fixture: chmod date stub'
+run_iso "$aged_root" "$aged_stub" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$aged_dir" ] ||
+  fail 'a Go work dir was reaped because the process table was not aged to the present'
+
+# 15d. bad settings fail closed, before anything is deleted.
+bad_root="${go_tmp_root}/bad-settings"
+bad_dir=$(make_go_dir "$bad_root" go-build515151 240) || fail 'fixture: bad-settings dir'
+BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS=six \
+  run_iso "$bad_root" "$quiet_ps" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
+[ $? -eq 2 ] || fail 'a non-numeric Go work-dir age threshold did not exit 2'
+BUILD_CACHE_RECLAIM_LINT_BUDGET_GB=-1 \
+  run_iso "$bad_root" "$quiet_ps" apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null 2>&1
+[ $? -eq 2 ] || fail 'a negative golangci-lint budget did not exit 2'
+[ -e "$bad_dir" ] || fail "an invalid setting still deleted a Go work dir: $bad_dir"
+
+# --- 16. the golangci-lint cache is budget-gated, marker-gated and liveness-gated ---
+# 3.3 GB of it sat unbudgeted when the host filled. The cache is emptied, not deleted:
+# golangci-lint's own README marker stays, so the dir still identifies itself.
+lint_cache="${fixture_root}/lint-cache"
+lint_marker='This directory holds cached build artifacts from golangci-lint.'
+mkdir -p "${lint_cache}/00" || fail 'fixture: lint cache'
+printf '%s\n' "$lint_marker" > "${lint_cache}/README"
+dd if=/dev/zero of="${lint_cache}/00/blob-d" bs=1024 count=2048 2> /dev/null
+run_lint() {
+  GOLANGCI_LINT_CACHE="$lint_cache" run_iso "$go_tmp_root" "$@"
+}
+
+# 16a. within budget: reported and kept. The ablation partner for 16b.
+out=$(run_lint "$quiet_ps" dry-run 3 "$NEVER_CLEAN_BUDGET")
+line=$(grep -E '^build-cache-reclaim: GOLANGCI_LINT_CACHE ' <<<"$out") ||
+  fail 'the golangci-lint cache was never reported'
+grep -q 'within budget' <<<"$line" ||
+  fail 'the golangci-lint cache was not reported within budget at an absurdly high budget'
+grep -q 'GOLANGCI_LINT_CACHE would be cleaned' <<<"$out" &&
+  fail 'the golangci-lint cache would be cleaned despite being within budget'
+
+# 16b. over budget, dry-run: selected, counted in the summary, and left on disk.
+out=$(BUILD_CACHE_RECLAIM_LINT_BUDGET_GB=0 run_lint "$quiet_ps" dry-run 3 "$NEVER_CLEAN_BUDGET")
+grep -q 'GOLANGCI_LINT_CACHE would be cleaned' <<<"$out" ||
+  fail 'an over-budget golangci-lint cache was not selected for cleaning'
+lint_summary=$(printf '%s\n' "$out" | sed -n 's/.*would reclaim=~\([0-9]*\) MB.*/\1/p' | tail -1)
+case "$lint_summary" in
+  '' | *[!0-9]*) fail 'dry-run summary reported no parsable would-reclaim total' ;;
+  *) [ "$lint_summary" -ge 2 ] ||
+    fail "dry-run summary omitted the golangci-lint cache: would reclaim=~${lint_summary} MB" ;;
+esac
+[ -e "${lint_cache}/00/blob-d" ] || fail 'dry-run emptied the golangci-lint cache'
+
+# 16c. no README marker: KEPT, whatever the budget says. The override is a free-form
+# path; the marker is what proves it names a golangci-lint cache and not a home dir.
+mv "${lint_cache}/README" "${lint_cache}/README.away" || fail 'fixture: hide lint marker'
+out=$(BUILD_CACHE_RECLAIM_LINT_BUDGET_GB=0 run_lint "$quiet_ps" apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${lint_cache}/00/blob-d" ] || fail 'apply emptied a directory with no golangci-lint marker'
+grep -q 'carries no golangci-lint README marker' <<<"$out" ||
+  fail 'an unmarked golangci-lint cache dir was not reported as unmarked'
+mv "${lint_cache}/README.away" "${lint_cache}/README" || fail 'fixture: restore lint marker'
+
+# 16d. a RUNNING golangci-lint keeps it -- against the REAL ps, which also proves the
+# process-table parser on this platform. A symlink named golangci-lint to `sleep` shows
+# under that name on both macOS and Linux (a copied macOS system binary is killed on exec).
+procs="${fixture_root}/procs"
+mkdir -p "$procs" || fail 'fixture: procs dir'
+ln -s "$(command -v sleep)" "${procs}/golangci-lint" || fail 'fixture: golangci-lint link'
+"${procs}/golangci-lint" 30 &
+lint_pid=$!
+sleep 1
+# Captured first, then matched: see `said` for why `grep -q` never reads from a pipe here.
+ps_names=$(ps -A -ww -o comm= | sed 's|.*/||')
+if kill -0 "$lint_pid" 2>/dev/null && grep -qx 'golangci-lint' <<<"$ps_names"; then
+  out=$(BUILD_CACHE_RECLAIM_LINT_BUDGET_GB=0 run_lint '' apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "${lint_cache}/00/blob-d" ] ||
+    fail 'apply emptied the golangci-lint cache while golangci-lint was running'
+  grep -q 'GOLANGCI_LINT_CACHE golangci-lint process running' <<<"$out" ||
+    fail 'a golangci-lint cache kept for a running linter did not say why'
+else
+  fail 'fixture: fake golangci-lint process not visible to ps; liveness assertion not exercised'
+fi
+kill "$lint_pid" 2>/dev/null
+wait "$lint_pid" 2>/dev/null
+
+# 16e. a linter that starts AFTER the up-front process table still keeps it. The table is
+# read at the start of the run, and measuring the Go caches alone can take minutes before
+# the lint cache is reached. This `ps` answers "no linter" to its first call (the table)
+# and "linter running" to every later one, so only a fresh re-check at removal time can
+# see it -- the same ordering case 11 pins for the tree sweep's late re-probe.
+late_ps="${fixture_root}/ps-late-lint"
+mkdir -p "$late_ps" || fail 'fixture: late-lint stub dir'
+cat > "${late_ps}/ps" <<STUB
+#!/bin/sh
+c="${fixture_root}/late-lint-calls"
+n=\$(cat "\$c" 2>/dev/null || echo 0)
+echo \$((n + 1)) > "\$c"
+echo '00:05 /bin/sh'
+[ "\$n" -eq 0 ] || echo '00:01 /opt/tools/golangci-lint'
+exit 0
+STUB
+chmod +x "${late_ps}/ps" || fail 'fixture: chmod late-lint stub'
+out=$(BUILD_CACHE_RECLAIM_LINT_BUDGET_GB=0 run_lint "$late_ps" apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${lint_cache}/00/blob-d" ] ||
+  fail 'apply emptied the golangci-lint cache while a linter started after the snapshot ran'
+grep -q 'GOLANGCI_LINT_CACHE golangci-lint running or unknown at removal time' <<<"$out" ||
+  fail 'a golangci-lint cache kept by the late re-check did not say why'
+# ...and the same for an open-file holder that appears after the lsof snapshot: the
+# snapshot names an unrelated path, and only the late `+D` probe names the holder.
+lint_canon=$(cd -- "$lint_cache" && pwd -P) || fail 'fixture: resolve lint cache'
+late_lsof="${fixture_root}/lsof-late-lint"
+make_ps_stub "$late_lsof" "$quiet_table" || fail 'fixture: late-lsof ps stub'
+cat > "${late_lsof}/lsof" <<STUB
+#!/bin/sh
+for a in "\$@"; do
+  [ "\$a" = "+D" ] && { printf 'n%s\n' "${lint_canon}/00/blob-d"; exit 1; }
+done
+printf 'n%s\n' "${fixture_root}/unrelated-path"
+exit 0
+STUB
+chmod +x "${late_lsof}/lsof" || fail 'fixture: chmod late-lsof stub'
+out=$(BUILD_CACHE_RECLAIM_LINT_BUDGET_GB=0 run_lint "$late_lsof" apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${lint_cache}/00/blob-d" ] ||
+  fail 'apply emptied the golangci-lint cache while a late holder had it open'
+grep -q 'GOLANGCI_LINT_CACHE .* in use at removal time' <<<"$out" ||
+  fail 'a golangci-lint cache kept by the late open-file re-check did not say why'
+
+# 16f. over budget, idle, marked, apply: emptied, marker kept.
+out=$(BUILD_CACHE_RECLAIM_LINT_BUDGET_GB=0 run_lint "$quiet_ps" apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${lint_cache}/00" ] && fail 'apply did not empty an idle over-budget golangci-lint cache'
+[ -e "${lint_cache}/README" ] || fail 'emptying the golangci-lint cache removed its marker'
+grep -q 'GOLANGCI_LINT_CACHE cleaned' <<<"$out" ||
+  fail 'an emptied golangci-lint cache was not reported as cleaned'
+
+# 16g. no cache is nothing to do: an absent dir, and golangci-lint's own "off".
+out=$(run_iso "$go_tmp_root" "$quiet_ps" dry-run 3 "$NEVER_CLEAN_BUDGET")
+grep -q 'GOLANGCI_LINT_CACHE .* absent — nothing to do' <<<"$out" ||
+  fail 'an absent golangci-lint cache was not reported as nothing to do'
+out=$(GOLANGCI_LINT_CACHE=off run_iso "$go_tmp_root" "$quiet_ps" dry-run 3 "$NEVER_CLEAN_BUDGET")
+grep -q 'GOLANGCI_LINT_CACHE disabled or not an absolute path' <<<"$out" ||
+  fail 'GOLANGCI_LINT_CACHE=off was not reported as disabled'
 
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
