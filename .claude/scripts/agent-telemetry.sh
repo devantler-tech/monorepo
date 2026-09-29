@@ -4271,13 +4271,15 @@ if want safety; then
     # `make` is a common English word, so a line that is PROVABLY text-only is
     # not a Make candidate: matched as is, `printf 'make the report clearer'`
     # was (#2988). Provable means that once quoted text is removed (a "…"
-    # holding `$(`, a backtick or an escape runs or may run code, so it stays),
+    # holding `$`, a backtick or an escape runs or may run code, so it stays),
     # no pipe, redirect, substitution, group or function syntax is left, and
     # every `;`/`&`-separated segment starts with `printf` (no options), `echo`,
     # `cd` or a text-only `gh pr`/`gh issue` subcommand. `git` is never inert:
     # a commit runs hooks the checkout may have replaced. A session that can
-    # change what a name means — `alias`, `eval`, `source`, `.`, `enable`,
-    # `shopt`, `function` or a `name()` definition anywhere in its raw text —
+    # change what a name runs or run code implicitly — `alias`, `eval`, `source`,
+    # `enable`, `shopt`, `function`, `trap`, `builtin`, `BASH_ENV`, `BASH_FUNC`,
+    # `PROMPT_COMMAND`, `command_not_found_handle`, a `name()` definition, or a
+    # `.` word (`command . f`) anywhere in its raw text —
     # gets no exemption at all, and such a line is listed whenever it mentions
     # `make`. Every other line is matched on its raw text exactly as before,
     # with no boundary before `make` (`gmake`, `/usr/bin/make`), so a spelling
@@ -4298,7 +4300,7 @@ if want safety; then
               # (st, buf) CARRIED from the previous line, so a quote character
               # inside the other kind of quote is literal and a multi-line string
               # stays a string. It returns the line with quoted text blanked; a
-              # "…" holding `$(`, a backtick or an escape, or a quote still open
+              # "…" holding `$`, a backtick or an escape, or a quote still open
               # at the end of the line, leaves a backtick, which text_only rejects.
               function unquoted(line,   out, n, i, c, open) {
                 # A line that STARTS inside a carried quote is never exempt, so
@@ -4315,7 +4317,7 @@ if want safety; then
                   } else if (st == 1) {
                     if (c == sq) { st = 0; out = out " " }
                   } else if (c == "\\") { buf = buf c; i++ }
-                  else if (c == "\"") { st = 0; out = out (buf ~ /[$][(]|`|\\/ ? "`" : " ") }
+                  else if (c == "\"") { st = 0; out = out (buf ~ /[$]|`|\\/ ? "`" : " ") }
                   else buf = buf c
                 }
                 return st == 0 && !open ? out : out "`"
@@ -4336,8 +4338,8 @@ if want safety; then
               # anywhere in the session removes the exemption for all of them.
               {
                 line[++n] = $0; res[n] = unquoted($0)
-                if ($0 ~ /(^|[^A-Za-z0-9_-])(alias|eval|source|enable|shopt|function)([^A-Za-z0-9_-]|$)/ \
-                    || $0 ~ /[(][[:space:]]*[)]/ || $0 ~ /(^|[;&|({])[[:space:]]*[.][[:space:]]/) {
+                if ($0 ~ /(^|[^A-Za-z0-9_-])(alias|eval|source|enable|shopt|function|trap|builtin|BASH_ENV|BASH_FUNC[A-Za-z0-9_%]*|PROMPT_COMMAND|command_not_found_handle)([^A-Za-z0-9_-]|$)/ \
+                    || $0 ~ /[(][[:space:]]*[)]/ || $0 ~ /(^|[^A-Za-z0-9_.\/-])[.][[:space:]]/) {
                   redefined = 1; renames[n] = 1
                 }
               }

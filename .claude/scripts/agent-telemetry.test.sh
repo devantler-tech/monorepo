@@ -7210,7 +7210,7 @@ echo "── checkout-then-build: \`make\` counts only as a command, not as pros
 # through `rtk`, after `&&` with options before the target, behind `VAR=value`
 # assignments, and inside `"$(…)"` — must still be listed, and so must a non-Make
 # build beside them (the control that the walk read the session at all). The
-# section prints at most five distinct commands, so the cases split over nine runs.
+# section prints at most five distinct commands, so the cases split over twelve runs.
 MK_TS=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
 mk_cmd() { # $1 = id, $2 = command
   jq -cn --arg ts "$MK_TS" --arg id "$1" --arg c "$2" \
@@ -7260,14 +7260,14 @@ else
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # Spellings the text-only list does not name must err toward REPORTING: a nested
-# shell's code argument and a compound-command prefix are real Make runs, while an
-# interpolated echo string is still prose.
+# shell's code argument and a compound-command prefix are real Make runs, while a
+# separator inside a plain echo string is still prose.
 MK_OUT=$({
   mk_cmd n1 'gh pr checkout 9'
   mk_cmd n2 "sh -c 'make test'"
   mk_cmd n3 'if make check; then :; fi'
   mk_cmd n4 '{ make lint; }'
-  mk_cmd n5 'echo "status $x; make -n deploy"'
+  mk_cmd n5 'echo "status; make -n deploy"'
   mk_cmd n6 'npm ci'
 } | mk_run makenested)
 if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
@@ -7275,9 +7275,9 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
    && grep -qE '^ +1 if make check; then :; fi$' <<<"$MK_OUT" \
    && grep -qE '^ +1 \{ make lint; \}$' <<<"$MK_OUT" \
    && ! grep -qE 'make -n deploy' <<<"$MK_OUT"; then
-  ok "nested-shell and compound-command make still count; interpolated echo prose does not"
+  ok "nested-shell and compound-command make still count; a separator inside echo prose does not"
 else
-  bad "nested-shell and compound-command make still count; interpolated echo prose does not" \
+  bad "nested-shell and compound-command make still count; a separator inside echo prose does not" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 # Only a PROVABLY text-only line is dropped: a remote command after ssh's own `-m`
@@ -7388,6 +7388,46 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
   ok "an alias line that names make is listed; a non-comment # hides nothing"
 else
   bad "an alias line that names make is listed; a non-comment # hides nothing" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+# A DEBUG trap runs code before every command, and `command .` sources a file that
+# may redefine echo: either removes the exemption for the session.
+MK_OUT=$({
+  mk_cmd w1 'm=make'
+  mk_cmd w2 "trap '\$m test' DEBUG"
+  mk_cmd w3 'gh pr checkout 16'
+  mk_cmd w4 'echo make test'
+  mk_cmd w5 'npm ci'
+} | mk_run maketrap)
+MK_OUT2=$({
+  mk_cmd x1 'command . ./helpers.sh'
+  mk_cmd x2 'gh pr checkout 17'
+  mk_cmd x3 'echo make lint'
+  mk_cmd x4 'npm ci'
+} | mk_run makedot)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" && grep -qE '^ +1 echo make test$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 npm ci$' <<<"$MK_OUT2" && grep -qE '^ +1 echo make lint$' <<<"$MK_OUT2"; then
+  ok "a DEBUG trap or a command-dot source removes the exemption"
+else
+  bad "a DEBUG trap or a command-dot source removes the exemption" \
+      "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -8)"
+fi
+# Any `$` in "…" may expand to code (`${x@P}` prompt expansion), so it is never
+# prose; ordinary `command -v` and `export` lines leave the exemption in place.
+MK_OUT=$({
+  mk_cmd y1 'command -v jq'
+  mk_cmd y2 'export A=1'
+  mk_cmd y3 'gh pr checkout 18'
+  mk_cmd y4 "echo \"make test \${x@P}\""
+  mk_cmd y5 "printf 'make the report clearer'"
+  mk_cmd y6 'npm ci'
+} | mk_run makeprompt)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qF "1 echo \"make test \${x@P}\"" <<<"$MK_OUT" \
+   && ! grep -qE 'make the report' <<<"$MK_OUT"; then
+  ok "a \$ inside double-quoted prose is not exempt; command -v and export do not poison"
+else
+  bad "a \$ inside double-quoted prose is not exempt; command -v and export do not poison" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 
