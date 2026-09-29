@@ -198,12 +198,17 @@ sweep_nested_submodule_worktrees() {
       *) continue ;;          # the main checkout, or a worktree outside the session root
     esac
     # Populated submodules only, recursively. A session worktree whose submodules cannot be
-    # listed is not swept here, and says so; the root sweep's own gates still keep it, so
-    # nothing is deleted on the strength of a listing that failed.
+    # listed is not swept here; the root sweep's own gates still keep it, so nothing is
+    # deleted on the strength of a listing that failed. It is a nested failure like any
+    # other, so the run goes on and exits non-zero rather than leaving only a stdout SKIP
+    # that the scheduled log truncates.
     # shellcheck disable=SC2016  # $toplevel and $sm_path are expanded by `submodule foreach`
     if ! subs=$(git -C "$wt_real" submodule foreach --quiet --recursive \
                   'printf "%s\n" "$toplevel/$sm_path"' 2>/dev/null); then
       printf '\n### SKIP %s (cannot list its submodules)\n' "${wt_real#"$ROOT"/}"
+      printf 'worktree-cleanup-all: cannot list the submodules of %s — continuing; this run will exit non-zero\n' \
+        "${wt_real#"$ROOT"/}" >&2
+      NESTED_FAILED=2
       continue
     fi
     while IFS= read -r sub; do

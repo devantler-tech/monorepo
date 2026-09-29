@@ -164,6 +164,38 @@ t_nested_failure_does_not_block_the_root_sweep() {
   rm -rf "$root"
 }
 
+t_nested_listing_failure_exits_non_zero() {
+  # A session worktree whose submodules cannot be listed is skipped, but that is a failure,
+  # not a verdict: the root is still swept and the run must exit non-zero, or the scheduled
+  # log (which keeps only a summary on success) would hide that the pass never ran there.
+  local name="a session worktree whose submodules cannot be listed makes the run exit non-zero"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local shim="$root/git-shim" real_git out rc
+  real_git=$(command -v git)
+  mkdir -p "$shim"
+  # Fail only `git -C <…/sess> submodule foreach`; every other git call passes through.
+  cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = '$root/repo/.claude/worktrees/sess' ] \\
+   && [ "\${3:-}" = submodule ] && [ "\${4:-}" = foreach ]; then
+  exit 128
+fi
+exec '$real_git' "\$@"
+EOF
+  chmod +x "$shim/git"
+  out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+        bash "$SUT" dry-run 24 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && grep -q 'SKIP .claude/worktrees/sess (cannot list its submodules)' <<<"$out" \
+     && grep -q 'cannot list the submodules of .claude/worktrees/sess .* exit non-zero' <<<"$out" \
+     && grep -q 'REAP  .*spent-root' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
 t_sweeps_root_and_submodules() {
   local root; root=$(make_root)
   local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
@@ -415,6 +447,7 @@ t_gitlink_validation_uses_a_literal_pathspec
 t_sweeps_worktrees_nested_in_session_submodules
 t_nested_sweep_never_salvages
 t_nested_failure_does_not_block_the_root_sweep
+t_nested_listing_failure_exits_non_zero
 t_rejects_bad_mode
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
