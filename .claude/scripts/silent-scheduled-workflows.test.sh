@@ -404,6 +404,13 @@ run --repo o/v
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a backslash in a workflow path must exit 2, got $rc"; }
 has "QUERY-UNKNOWN o/v — workflow list holds a malformed record" "a backslash path must be a malformed record"
 
+# Workflow paths are allowlisted, not blocklisted: a carriage return (or any character outside
+# [A-Za-z0-9._#-]) makes the record malformed rather than silently unmatched.
+put "repos/o/v/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a\\rb.yaml\",\"created_at\":\"$old\"}]}"
+run --repo o/v
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a carriage return in a workflow path must exit 2, got $rc"; }
+
 # `*/1` in the day-of-month field is star-derived, so the weekday alone decides: `*/1 * MON` is weekly,
 # and a Monday schedule last seen 5 days ago is not silent.
 put "repos/o/x" '{"default_branch":"main"}'

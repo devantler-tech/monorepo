@@ -168,7 +168,7 @@ for repo in "${repos[@]}"; do
   # Each page also emits its `total_count`, so a successful but short or empty listing is caught
   # rather than read as a repository with nothing scheduled.
   if ! listing="$(gh api --paginate "repos/${repo}/actions/workflows?per_page=100" \
-    --jq "${jq_epoch} if (.total_count | type) == \"number\" and (.total_count | floor) == .total_count and (.workflows | type) == \"array\" then (\"TOTAL\t\(.total_count)\", (.workflows[] | if (.id | type) == \"number\" and (.state | type) == \"string\" and (.path | type) == \"string\" and (.path | test(\"^[^\\t\\n]+$\")) and (.path | contains(\"\\\\\") | not) and (.created_at | type) == \"string\" then [.id, .state, .path, (.created_at | epoch)] | @tsv else \"BAD\" end)) else \"BAD\" end")"; then
+    --jq "${jq_epoch} if (.total_count | type) == \"number\" and (.total_count | floor) == .total_count and (.workflows | type) == \"array\" then (\"TOTAL\t\(.total_count)\", (.workflows[] | if (.id | type) == \"number\" and (.state | type) == \"string\" and (.path | type) == \"string\" and (if (.path | startswith(\".github/workflows/\")) then (.path | test(\"^[.]github/workflows/[A-Za-z0-9._#-]+$\")) else (.path | test(\"^[!-~]+$\")) end) and (.created_at | type) == \"string\" then [.id, .state, .path, (.created_at | epoch)] | @tsv else \"BAD\" end)) else \"BAD\" end")"; then
     echo "QUERY-UNKNOWN ${repo} — workflow list read failed"
     unknown=1
     continue
