@@ -970,6 +970,20 @@ out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$linked" ] || fail 'a dir whose README is a symlink was reaped as a marked cache'
 rm -rf -- "$linked"
 
+# 17n. with no override, golangci-lint's DEFAULT cache can resolve to a direct child of the temp
+# root (XDG_CACHE_HOME there on Linux; ~/Library/Caches there on macOS). It is budget-managed by
+# (3), so the marker sweep leaves it alone even though it is idle and marked.
+default_home="${fixture_root}/home-17n"
+mkdir -p "${default_home}/Library" || fail 'fixture: 17n home'
+ln -s "$cache_root" "${default_home}/Library/Caches" || fail 'fixture: 17n caches link'
+default_lint=$(make_run_cache 'golangci-lint' "$lint_marker" 7) || fail 'fixture: 17n'
+out=$(env -u GOLANGCI_LINT_CACHE HOME="$default_home" XDG_CACHE_HOME="$cache_root" \
+  BUILD_CACHE_RECLAIM_TMPDIR="$cache_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root" \
+  GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" PATH="${quiet_ps}:$PATH" \
+  bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" 2>&1)
+[ -e "${default_lint}/00/a1-d" ] || fail 'the marker sweep reaped the default, within-budget lint cache'
+rm -rf -- "$default_lint" "$default_home"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0

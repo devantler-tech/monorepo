@@ -600,7 +600,7 @@ tree_in_use() {
 #   $2  the liveness scope for tree_in_use: temp-root or host
 #   $3  optional: run-cache, which repeats the marked-cache hold check just before removal
 sweep_candidate() {
-  local tree=$1 scope=$2 tree_mb
+  local tree=$1 scope=$2 tree_mb late_hold
   [ -n "$tree" ] || return 0
   [ -d "$tree" ] || return 0
   if own_session_tree "$tree"; then
@@ -627,10 +627,21 @@ sweep_candidate() {
     fi
     # A marked cache can be written to without any file staying open across both lsof probes,
     # so its own recency (and, for a lint cache, a running linter) is asked again here too.
-    if [ "${3:-}" = run-cache ] && [ -n "$(run_cache_hold "$tree")" ]; then
-      kept=$((kept + 1))
-      log "KEEP  (busy, late)    $tree"
-      return 0
+    if [ "${3:-}" = run-cache ]; then
+      late_hold=$(run_cache_hold "$tree")
+      case "$late_hold" in
+        '') ;;
+        unknown)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (scan failed, cache not examined) $tree"
+          return 0
+          ;;
+        *)
+          kept=$((kept + 1))
+          log "KEEP  (busy, late)    $tree"
+          return 0
+          ;;
+      esac
     fi
     # Go marks every file under a module cache read-only, so a plain `rm -rf` stops
     # partway. That is worse than skipping the tree: the partial delete bumps its
@@ -721,12 +732,37 @@ run_cache_hold() {
   return 0
 }
 
-# The caches GOCACHE and GOLANGCI_LINT_CACHE name are budget-managed by (1) and (3): a
-# configured cache within its budget is kept on purpose, so this sweep must not reap it for
-# idleness. Compared on resolved paths, like every other tree test here.
+# lint_cache_dir prints the cache dir golangci-lint would use, resolved the way it does
+# (internal/go/cache.DefaultDir): GOLANGCI_LINT_CACHE when set, which golangci-lint only
+# honours as an absolute path, else os.UserCacheDir()/golangci-lint -- ~/Library/Caches on
+# macOS, ${XDG_CACHE_HOME:-~/.cache} elsewhere. Returns 1 when golangci-lint would run
+# with no cache at all ("off", a relative path, no home), so there is nothing to reclaim.
+lint_cache_dir() {
+  local base
+  if [ -n "${GOLANGCI_LINT_CACHE:-}" ]; then
+    case "$GOLANGCI_LINT_CACHE" in
+      /*) printf '%s' "$GOLANGCI_LINT_CACHE" ;;
+      *) return 1 ;;
+    esac
+    return 0
+  fi
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) base=${HOME:+${HOME}/Library/Caches} ;;
+    *) base=${XDG_CACHE_HOME:-${HOME:+${HOME}/.cache}} ;;
+  esac
+  case "$base" in
+    /*) printf '%s/golangci-lint' "$base" ;;
+    *) return 1 ;;
+  esac
+}
+
+# The Go build cache and the golangci-lint cache (its override, or the default it resolves to)
+# are budget-managed by (1) and (3): a configured cache within its budget is kept on purpose,
+# so this sweep must not reap it for idleness. Compared on resolved paths, like every other tree
+# test here.
 configured_caches=''
 for configured in "$([ -n "${go_bin:-}" ] && "$go_bin" env GOCACHE 2>/dev/null)" \
-  "${GOLANGCI_LINT_CACHE:-}"; do
+  "$(lint_cache_dir)"; do
   case "$configured" in
     /*) ;;
     *) continue ;;
@@ -786,29 +822,6 @@ fi
 # usually NOT on PATH on the host (it runs via `go run` or in containers), so this cannot
 # lean on `golangci-lint cache clean` the way the Go caches lean on `go clean`.
 # ---------------------------------------------------------------------------
-# lint_cache_dir prints the cache dir golangci-lint would use, resolved the way it does
-# (internal/go/cache.DefaultDir): GOLANGCI_LINT_CACHE when set, which golangci-lint only
-# honours as an absolute path, else os.UserCacheDir()/golangci-lint -- ~/Library/Caches on
-# macOS, ${XDG_CACHE_HOME:-~/.cache} elsewhere. Returns 1 when golangci-lint would run
-# with no cache at all ("off", a relative path, no home), so there is nothing to reclaim.
-lint_cache_dir() {
-  local base
-  if [ -n "${GOLANGCI_LINT_CACHE:-}" ]; then
-    case "$GOLANGCI_LINT_CACHE" in
-      /*) printf '%s' "$GOLANGCI_LINT_CACHE" ;;
-      *) return 1 ;;
-    esac
-    return 0
-  fi
-  case "$(uname -s 2>/dev/null)" in
-    Darwin) base=${HOME:+${HOME}/Library/Caches} ;;
-    *) base=${XDG_CACHE_HOME:-${HOME:+${HOME}/.cache}} ;;
-  esac
-  case "$base" in
-    /*) printf '%s/golangci-lint' "$base" ;;
-    *) return 1 ;;
-  esac
-}
 
 # reclaim_lint_cache follows reclaim_go_cache's rules -- budget first, then liveness,
 # with every "I could not tell" keeping the cache -- plus two of its own:
