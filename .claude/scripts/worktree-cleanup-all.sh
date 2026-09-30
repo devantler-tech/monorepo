@@ -176,17 +176,24 @@ sweep() { # <repo_path> [salvage_age_hours, default the wrapper's] [abort|contin
   fi
 }
 
-# nested_live_cwds — the working directory of every live process, read once per run for the
-# nested passes. Fails when lsof fails or reports nothing: an empty set would read as "no
-# session is live", so the caller then runs no nested pass at all.
-NESTED_LIVE=""; NESTED_LIVE_READ=0
+# nested_live_cwds — refresh the working directory of every live process. A
+# snapshot from an earlier session worktree may be stale by the time a later
+# nested sweep starts. An empty or failed read must never permit a sweep.
+NESTED_LIVE=""
 nested_live_cwds() {
-  [ "$NESTED_LIVE_READ" -eq 1 ] && return 0
   local raw
   raw=$(lsof -a -d cwd -F n 2>/dev/null) || return 1
   NESTED_LIVE=$(printf '%s\n' "$raw" | sed -n 's/^n//p' | sort -u)
   [ -n "$NESTED_LIVE" ] || return 1
-  NESTED_LIVE_READ=1
+}
+
+nested_session_is_live() { # <physical session worktree>
+  local wt_real=$1 cwd
+  while IFS= read -r cwd; do
+    [ -n "$cwd" ] || continue
+    if [ "$cwd" = "$wt_real" ] || [ "${cwd#"$wt_real"/}" != "$cwd" ]; then return 0; fi
+  done <<< "$NESTED_LIVE"
+  return 1
 }
 
 # sweep_nested_submodule_worktrees <repo> — sweep the worktrees nested in the initialised
@@ -206,14 +213,13 @@ nested_live_cwds() {
 # same protection the repo's own sweep gives it. Every failure here is confined to one session
 # worktree, so it is recorded (nested_failed) rather than aborting the run.
 sweep_nested_submodule_worktrees() {
-  local repo=$1 session_root="$1/.claude/worktrees" session_real wts wt wt_real cwd live
+  local repo=$1 session_root="$1/.claude/worktrees" session_real wts wt wt_real
   local subs sub sub_real sub_wts
   [ -d "$session_root" ] || return 0
   session_real=$(cd "$session_root" 2>/dev/null && pwd -P) || {
     nested_failed "cannot resolve $session_root"; return 0; }
   wts=$(git -C "$repo" worktree list --porcelain 2>/dev/null) || {
     nested_failed "cannot list the worktrees of $repo"; return 0; }
-  nested_live_cwds || { nested_failed "cannot read live process CWDs (lsof) for the nested pass of $repo"; return 0; }
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
     # A registration whose directory is gone has nothing nested; the repo's sweep prunes it.
@@ -223,12 +229,8 @@ sweep_nested_submodule_worktrees() {
       "$session_real"/?*) ;;
       *) continue ;;          # the main checkout, or a worktree outside the session root
     esac
-    live=0
-    while IFS= read -r cwd; do
-      [ -n "$cwd" ] || continue
-      if [ "$cwd" = "$wt_real" ] || [ "${cwd#"$wt_real"/}" != "$cwd" ]; then live=1; break; fi
-    done <<< "$NESTED_LIVE"
-    if [ "$live" -eq 1 ]; then
+    nested_live_cwds || { nested_failed "cannot read live process CWDs (lsof) for $wt_real"; continue; }
+    if nested_session_is_live "$wt_real"; then
       printf '\n### SKIP %s (a live process works inside it — its nested worktrees are left alone)\n' \
         "${wt_real#"$ROOT"/}"
       continue
@@ -262,6 +264,14 @@ sweep_nested_submodule_worktrees() {
       sub_wts=$(git -C "$sub_real" worktree list --porcelain 2>/dev/null) || {
         nested_failed "cannot list the worktrees of ${sub_real#"$ROOT"/}"; continue; }
       [ "$(grep -c '^worktree ' <<< "$sub_wts")" -gt 1 ] || continue
+      # Recheck after submodule enumeration: a process may have entered the
+      # parent since the earlier check, and this call is about to delete below it.
+      nested_live_cwds || { nested_failed "cannot refresh live process CWDs (lsof) for $wt_real"; break; }
+      if nested_session_is_live "$wt_real"; then
+        printf '\n### SKIP %s (a live process works inside it — its nested worktrees are left alone)\n' \
+          "${wt_real#"$ROOT"/}"
+        break
+      fi
       sweep "$sub_real" 0 continue
     done <<< "$subs"
   done <<< "$(printf '%s\n' "$wts" | awk '/^worktree /{print substr($0,10)}')"

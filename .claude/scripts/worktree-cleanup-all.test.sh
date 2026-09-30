@@ -268,6 +268,40 @@ t_nested_pass_leaves_a_live_session_alone() {
   rm -rf "$root"
 }
 
+t_nested_pass_refreshes_liveness_before_sweep() {
+  # A process can enter the parent session after the first lsof read. The nested
+  # worktree must remain when the latest read sees that session in use.
+  local name="the nested pass rechecks parent liveness before sweeping its submodule"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.claude/worktrees/sess" inner
+  inner="$sess/nested/.claude/worktrees/inner"
+  local shim="$root/shim" out rc
+  mkdir -p "$shim"
+  cat > "$shim/lsof" <<'EOF'
+#!/usr/bin/env bash
+count_file=${LSOF_COUNT_FILE:?}
+count=$(cat "$count_file" 2>/dev/null || echo 0)
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+if [ "$count" -eq 1 ]; then
+  printf 'n/tmp\n'
+else
+  printf 'n%s\n' "$LIVE_SESSION"
+fi
+EOF
+  chmod +x "$shim/lsof"
+  out=$(PATH="$shim:$PATH" LSOF_COUNT_FILE="$root/lsof-count" LIVE_SESSION="$sess" \
+        HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && [ -d "$inner" ] \
+     && grep -q 'SKIP .claude/worktrees/sess (a live process works inside it' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc inner=$([ -d "$inner" ] && echo present || echo GONE) $out"
+  fi
+  rm -rf "$root"
+}
+
 t_nested_pass_covers_submodule_session_worktrees() {
   # The same leak one level down: a session worktree of a main-checkout SUBMODULE whose own
   # submodule holds a nested worktree. The nested pass runs before every repository's sweep,
@@ -555,6 +589,7 @@ t_nested_sweep_never_salvages
 t_nested_failure_does_not_block_the_root_sweep
 t_nested_listing_failure_exits_non_zero
 t_nested_pass_leaves_a_live_session_alone
+t_nested_pass_refreshes_liveness_before_sweep
 t_nested_pass_covers_submodule_session_worktrees
 t_nested_resolution_failure_continues
 t_nested_pass_skips_an_emptied_worktree_dir
