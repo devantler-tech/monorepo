@@ -134,10 +134,14 @@ Go build cache.
 - Use the defaults: `go env GOCACHE`, `go env GOMODCACHE` and golangci-lint's own cache. The go
   command's cache is safe for concurrent use by parallel runs, and
   [`build-cache-reclaim.sh`](../scripts/build-cache-reclaim.sh) keeps those defaults within budget.
-- If your runtime's sandbox cannot write the default location, point `GOCACHE` (and
-  `GOLANGCI_LINT_CACHE`) at the ONE stable path for your lane, `/private/tmp/<lane>-go-cache`
-  (`/private/tmp/<lane>-golangci-cache`). Never use a path with a run, PR or issue suffix: each suffix
-  is a fresh multi-gigabyte copy.
+- If your runtime's sandbox cannot write the default locations, point all three at ONE stable path
+  per lane under the host's shared temp root (`/private/tmp` on macOS, `/tmp` on Linux):
+  `GOCACHE=<tmp>/go-cache-<lane>`, `GOMODCACHE=<tmp>/go-mod-<lane>` and
+  `GOLANGCI_LINT_CACHE=<tmp>/golangci-cache-<lane>`. Moving `GOCACHE` alone still leaves the module
+  cache at its unwritable default. Start the name with the cache, not the lane: `build-cache-reclaim.sh`
+  reaps `codex-*` and the other per-run tree names by the age of the directory itself, which a
+  busy cache never refreshes. Never use a path with a run, PR or issue suffix: each suffix is a
+  fresh multi-gigabyte copy.
 - A test fixture that needs an isolated cache keeps it inside its own temp dir and removes it on exit.
 
 Measured 2026-09-30: about 90 per-run caches under `/private/tmp`, 6–12 GB each for a full product
