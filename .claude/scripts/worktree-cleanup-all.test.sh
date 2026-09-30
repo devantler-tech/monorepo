@@ -675,6 +675,48 @@ t_gitlink_validation_uses_a_literal_pathspec() {
   rm -rf "$root"
 }
 
+# --- lanes (#3676) ----------------------------------------------------------------
+# Maintainer direction 2026-09-29: "Claude runs should clean up claude, and Codex runs
+# should clean up codex." Each lane sweeps its own roots and NEVER another lane's.
+
+# add_codex_wts <root> — one spent Codex worktree in each codex root: the monorepo's
+# .codex/worktrees, the submodule's, a SUBMODULE's worktree kept in the monorepo's (where
+# Codex runs put them), and the Codex app's dir (<id>/<repo>, under the fake HOME the tests
+# pass).
+add_codex_wts() {
+  local root=$1 spec repo path branch
+  for spec in "repo|$root/repo/.codex/worktrees/codex-root|codex/root" \
+              "repo/nested|$root/repo/nested/.codex/worktrees/codex-sub|codex/sub" \
+              "repo/nested|$root/repo/.codex/worktrees/codex-sub-in-root|codex/sub-in-root" \
+              "repo|$root/home/.codex/worktrees/ab12/repo|codex/app"; do
+    IFS='|' read -r repo path branch <<<"$spec"
+    mkdir -p "$(dirname "$path")"
+    git -C "$root/$repo" worktree add -q -b "$branch" "$path" main || return 1
+    git -C "$root/$repo" push -q origin "$branch" || return 1
+    touch -t 202001010000 "$path"
+  done
+}
+
+t_claude_lane_leaves_codex_roots_untouched() {
+  local name="the claude lane (the default) sweeps no codex root"
+  local root; root=$(make_root)
+  add_codex_wts "$root" || { bad "$name" "FIXTURE: codex worktree add failed"; rm -rf "$root"; return; }
+  local out rc
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q 'lane=claude' <<<"$out" \
+     && grep -q 'REAPED .*spent-root' <<<"$out" && grep -q 'REAPED .*spent-sub' <<<"$out" \
+     && [ -d "$root/repo/.codex/worktrees/codex-root" ] \
+     && [ -d "$root/repo/nested/.codex/worktrees/codex-sub" ] \
+     && [ -d "$root/repo/.codex/worktrees/codex-sub-in-root" ] \
+     && [ -d "$root/home/.codex/worktrees/ab12/repo" ] \
+     && ! grep -q 'codex-root\|codex-sub\|ab12/repo' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
 # give_inner_its_own_pushed_commit <sess> — a commit on `inner` that no other worktree in the
 # fixture sits on, so a refs/reaped ref for it can only come from reaping `inner`.
 give_inner_its_own_pushed_commit() {
@@ -701,6 +743,28 @@ t_nested_pass_hands_off_recovery_refs() {
   else
     bad "$name" "rc=$rc sess=$([ -e "$sess" ] && echo present || echo gone) ref=$(git -C "$root/repo/nested" rev-parse -q --verify "refs/reaped/$sha" 2>&1)
 $out"
+  fi
+  rm -rf "$root"
+}
+
+t_codex_lane_leaves_claude_roots_untouched() {
+  local name="the codex lane sweeps every codex root and no claude root"
+  local root; root=$(make_root)
+  add_codex_wts "$root" || { bad "$name" "FIXTURE: codex worktree add failed"; rm -rf "$root"; return; }
+  local out rc
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane codex 2>&1); rc=$?
+  # apply prints only each repository's summary tail, so the removals are asserted on disk.
+  if [ "$rc" -eq 0 ] && grep -q 'lane=codex' <<<"$out" \
+     && [ ! -e "$root/repo/.codex/worktrees/codex-root" ] \
+     && [ ! -e "$root/repo/nested/.codex/worktrees/codex-sub" ] \
+     && [ ! -e "$root/repo/.codex/worktrees/codex-sub-in-root" ] \
+     && [ ! -e "$root/home/.codex/worktrees/ab12/repo" ] \
+     && [ -d "$root/repo/.claude/worktrees/spent-root" ] \
+     && [ -d "$root/repo/nested/.claude/worktrees/spent-sub" ] \
+     && ! grep -q 'spent-root\|spent-sub' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
   fi
   rm -rf "$root"
 }
@@ -734,6 +798,70 @@ t_nested_pass_retains_parent_until_handoff() {
 $out
 ---
 $out2"
+  fi
+  rm -rf "$root"
+}
+
+t_lane_manifests_never_share_a_file() {
+  local name="each lane records its removals in its own manifests"
+  local root; root=$(make_root)
+  add_codex_wts "$root" || { bad "$name" "FIXTURE: codex worktree add failed"; rm -rf "$root"; return; }
+  HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane codex >/dev/null 2>&1
+  HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane claude >/dev/null 2>&1
+  local dir="$root/home/.claude/worktree-cleanup-manifests" claude_rows codex_rows
+  local claude_paths codex_paths
+  claude_rows=$(cat "$dir"/*.tsv 2>/dev/null)
+  codex_rows=$(cat "$dir"/codex/*.tsv 2>/dev/null)
+  # Every row of a lane's manifests names a path in that lane's roots, and each lane has rows.
+  # The paths are captured first: piping `cut` into a negated `grep -qv` lets a SIGPIPE'd
+  # writer fail the pipeline, which the `!` would read as "no stray row".
+  claude_paths=$(cut -f1 <<<"$claude_rows")
+  codex_paths=$(cut -f1 <<<"$codex_rows")
+  if [ -n "$claude_rows" ] && [ -n "$codex_rows" ] \
+     && ! grep -qv '/\.claude/worktrees/' <<<"$claude_paths" \
+     && ! grep -qv '/\.codex/worktrees/' <<<"$codex_paths"; then
+    ok "$name"
+  else
+    bad "$name" "claude=[$claude_rows] codex=[$codex_rows]"
+  fi
+  rm -rf "$root"
+}
+
+t_codex_lane_from_a_codex_app_worktree_sweeps_the_main_checkout() {
+  # A Codex run starts in its own worktree, which the Codex app keeps OUTSIDE the main
+  # checkout, so the .claude/worktrees path rewrite cannot find the main checkout. HOME points
+  # elsewhere, so the app root can only come from WORKTREE_CLEANUP_CODEX_APP_ROOT; and
+  # --lane= leads the positionals.
+  local name="run from a Codex app worktree, the codex lane sweeps the main checkout"
+  local root; root=$(make_root)
+  add_codex_wts "$root" || { bad "$name" "FIXTURE: codex worktree add failed"; rm -rf "$root"; return; }
+  local out rc
+  out=$(HOME="$root/otherhome" WORKTREE_CLEANUP_CODEX_APP_ROOT="$root/home/.codex/worktrees" \
+        WORKTREE_CLEANUP_ROOT="$root/home/.codex/worktrees/ab12/repo" \
+        bash "$SUT" --lane=codex dry-run 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && grep -qF "root=$root/repo ===" <<<"$out" \
+     && grep -q 'REAP  *codex-root ' <<<"$out" && grep -q 'REAP  *ab12/repo ' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+t_rejects_a_bad_lane_or_extra_argument() {
+  local name="an unknown lane, a missing lane value or an extra argument stops the run"
+  local root; root=$(make_root)
+  local o1 r1 o2 r2 o3 r3
+  o1=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane cursor 2>&1); r1=$?
+  o2=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane 2>&1); r2=$?
+  o3=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 336 codex 2>&1); r3=$?
+  if [ "$r1" -eq 2 ] && grep -q "invalid --lane 'cursor'" <<<"$o1" \
+     && [ "$r2" -eq 2 ] && grep -q -- '--lane needs a value' <<<"$o2" \
+     && [ "$r3" -eq 2 ] && grep -q "unexpected argument 'codex'" <<<"$o3" \
+     && [ -d "$root/repo/.claude/worktrees/spent-root" ]; then
+    ok "$name"
+  else
+    bad "$name" "r1=$r1 r2=$r2 r3=$r3 :: $o1 :: $o2 :: $o3"
   fi
   rm -rf "$root"
 }
@@ -806,5 +934,10 @@ t_nested_pass_hands_off_recovery_refs
 t_nested_pass_retains_parent_until_handoff
 t_nested_failure_before_handoff_retains_parent
 t_rejects_bad_mode
+t_claude_lane_leaves_codex_roots_untouched
+t_codex_lane_leaves_claude_roots_untouched
+t_lane_manifests_never_share_a_file
+t_codex_lane_from_a_codex_app_worktree_sweeps_the_main_checkout
+t_rejects_a_bad_lane_or_extra_argument
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

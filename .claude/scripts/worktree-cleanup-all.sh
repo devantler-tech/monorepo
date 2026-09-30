@@ -1,27 +1,53 @@
 #!/usr/bin/env bash
 # Sweep abandoned per-session worktrees across the monorepo AND every initialised
-# submodule, in one invocation. This is the entry point the scheduled LaunchAgent
-# calls; worktree-cleanup.sh holds the per-repo safety contract.
+# submodule, in one invocation. This is the entry point the scheduled LaunchAgent and
+# every run's pre-flight call; worktree-cleanup.sh holds the per-repo safety contract.
 #
-# Usage: worktree-cleanup-all.sh [dry-run|apply] [min_age_hours] [salvage_age_hours]
+# Usage: worktree-cleanup-all.sh [dry-run|apply] [min_age_hours] [salvage_age_hours] [--lane claude|codex]
 #   dry-run (default) — report only
 #   apply             — reap, recording every removal to a timestamped manifest
 #   salvage_age_hours (default 336 = 14 days; 0 = off) — preserve abandoned work to
 #     refs/salvaged/* and then reap, so the sweep converges (#2831; see worktree-cleanup.sh)
+#   --lane (default claude) — whose worktrees to sweep. Each lane sweeps ONLY its own roots
+#     (maintainer direction 2026-09-29: "Claude runs should clean up claude, and Codex runs
+#     should clean up codex." — #3676):
+#       claude — <repo>/.claude/worktrees of the monorepo and every submodule
+#       codex  — <repo>/.codex/worktrees of the monorepo and every submodule (and each
+#                submodule's worktrees in the monorepo's), plus the monorepo's worktrees in
+#                the Codex app's worktree dir
+#                (WORKTREE_CLEANUP_CODEX_APP_ROOT, default ~/.codex/worktrees)
 #
 # Manifests live OUTSIDE the repository (they name local paths and branches and must
-# never be committed): ~/.claude/worktree-cleanup-manifests/<repo>-<utc>.tsv
+# never be committed): ~/.claude/worktree-cleanup-manifests/<repo>-<utc>.tsv for the claude
+# lane, and the codex/ subdirectory of it for the codex lane, so the two never share a file.
 #
-# Before each repository, it also sweeps worktrees NESTED in its session worktrees' submodules
-# (<repo>/.claude/worktrees/<slug>/<sub>/.claude/worktrees/*), with salvage off (#3673).
-#
-# The Codex sibling's worktrees under ~/.codex/worktrees are deliberately NOT swept:
-# that lane is owned by the sibling instance (AGENTS.md, Writer namespaces).
+# In the claude lane, before each repository, it also sweeps worktrees NESTED in its session
+# worktrees' submodules (<repo>/.claude/worktrees/<slug>/<sub>/.claude/worktrees/*), with
+# salvage off (#3673).
 set -uo pipefail
 
-MODE=${1:-dry-run}
-MIN_AGE_HOURS=${2:-24}
-SALVAGE_AGE_HOURS=${3:-336}
+# Positional arguments keep their old meaning and order; --lane may appear anywhere. An empty
+# positional still means its default, as it did before the lane selector existed.
+LANE=claude; P1=""; P2=""; P3=""; npos=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --lane)
+      [ "$#" -ge 2 ] || { printf 'worktree-cleanup-all: --lane needs a value (claude or codex)\n' >&2; exit 2; }
+      LANE=$2; shift 2; continue ;;
+    --lane=*) LANE=${1#--lane=}; shift; continue ;;
+  esac
+  npos=$((npos + 1))
+  case "$npos" in
+    1) P1=$1 ;;
+    2) P2=$1 ;;
+    3) P3=$1 ;;
+    *) printf "worktree-cleanup-all: unexpected argument '%s'\n" "$1" >&2; exit 2 ;;
+  esac
+  shift
+done
+MODE=${P1:-dry-run}
+MIN_AGE_HOURS=${P2:-24}
+SALVAGE_AGE_HOURS=${P3:-336}
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SUT="$SCRIPT_DIR/worktree-cleanup.sh"
@@ -48,6 +74,10 @@ esac
 case "$SALVAGE_AGE_HOURS" in
   ''|*[!0-9]*) printf "worktree-cleanup-all: salvage_age_hours must be a non-negative integer, got '%s'\n" \
                  "$SALVAGE_AGE_HOURS" >&2; exit 2 ;;
+esac
+case "$LANE" in
+  claude|codex) ;;
+  *) printf "worktree-cleanup-all: invalid --lane '%s' (expected 'claude' or 'codex')\n" "$LANE" >&2; exit 2 ;;
 esac
 
 # Repo root. WORKTREE_CLEANUP_ROOT lets the script run from outside the checkout
@@ -78,13 +108,38 @@ if [ "$ROOT_TOPLEVEL" != "$ROOT" ]; then
     "$ROOT" "$ROOT_TOPLEVEL" >&2
   ROOT="$ROOT_TOPLEVEL"
 fi
+# A linked worktree the rewrite above cannot see — a Codex run's own checkout, which may not
+# even sit under the main checkout — names its main checkout through its common git
+# directory. Sweep that. A layout that proves nothing (a submodule's modules/ gitdir, a
+# separate git dir) leaves ROOT as it was.
+if ! COMMON=$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null) \
+   || ! COMMON=$(cd "$ROOT" && cd "$COMMON" && pwd -P); then
+  printf 'worktree-cleanup-all: cannot resolve the common git directory of %s\n' "$ROOT" >&2
+  exit 2
+fi
+case "$COMMON" in
+  */.git)
+    MAIN=${COMMON%/.git}
+    if ! MAIN_TOPLEVEL=$(git -C "$MAIN" rev-parse --show-toplevel 2>/dev/null) \
+       || ! MAIN_TOPLEVEL=$(cd "$MAIN_TOPLEVEL" && pwd -P); then
+      MAIN_TOPLEVEL=""
+    fi
+    if [ "$MAIN" != "$ROOT" ] && [ "$MAIN_TOPLEVEL" = "$MAIN" ]; then
+      printf 'worktree-cleanup-all: %s is a linked worktree — using its main checkout %s\n' \
+        "$ROOT" "$MAIN" >&2
+      ROOT=$MAIN
+    fi
+    ;;
+esac
 
 MANIFEST_DIR="$HOME/.claude/worktree-cleanup-manifests"
+[ "$LANE" = claude ] || MANIFEST_DIR="$MANIFEST_DIR/$LANE"
 mkdir -p "$MANIFEST_DIR" || { printf 'cannot create %s\n' "$MANIFEST_DIR" >&2; exit 2; }
 TS=$(date -u +%Y%m%dT%H%M%SZ)
+CODEX_APP_ROOT=${WORKTREE_CLEANUP_CODEX_APP_ROOT:-$HOME/.codex/worktrees}
 
-printf '=== worktree-cleanup-all  mode=%s  min_age=%sh  salvage_age=%sh  root=%s ===\n' \
-  "$MODE" "$MIN_AGE_HOURS" "$SALVAGE_AGE_HOURS" "$ROOT"
+printf '=== worktree-cleanup-all  lane=%s  mode=%s  min_age=%sh  salvage_age=%sh  root=%s ===\n' \
+  "$LANE" "$MODE" "$MIN_AGE_HOURS" "$SALVAGE_AGE_HOURS" "$ROOT"
 
 # nested_failed <what> — a nested pass failed. Say so, keep going, and exit 2 at the end: the
 # failure is confined to one session worktree, and 2 is this directory's UNKNOWN code, where
@@ -102,8 +157,8 @@ nested_failed() {
   NESTED_FAILED=2
 }
 
-sweep() { # <repo_path> [salvage_age_hours, default the wrapper's] [abort|continue on failure]
-  local path=$1 salvage=${2:-$SALVAGE_AGE_HOURS} on_fail=${3:-abort} label toplevel expected
+sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [salvage_age_hours] [abort|continue]
+  local path=$1 wt_root=${2:-} salvage=${3:-$SALVAGE_AGE_HOURS} on_fail=${4:-abort} label toplevel expected
   # NOTE: no early return for a missing .claude/worktrees. The per-repo script has its
   # own no-root path that still prunes stale registrations — returning here made that
   # path unreachable through the wrapper, the only way it is ever invoked. A path that is
@@ -154,13 +209,16 @@ sweep() { # <repo_path> [salvage_age_hours, default the wrapper's] [abort|contin
       *) label=$(printf '%s' "$rel" | tr '/' '-') ;;
     esac
   fi
-  printf '\n### %s\n' "$rel"
+  if [ -n "$wt_root" ]; then printf '\n### %s  [%s]\n' "$rel" "$wt_root"
+  else printf '\n### %s\n' "$rel"; fi
   # Capture the sweep's OWN status, not the pipeline's tail. An infrastructure abort
   # (lsof, worktree list, manifest write) must not be reported as a successful sweep by
   # the scheduled entrypoint — and must stop the run rather than continuing into the
   # remaining repositories, since the same failure very likely applies to them too.
+  # The root is always passed explicitly, so an inherited WORKTREE_CLEANUP_WT_ROOT can never
+  # point one lane's sweep at another lane's root.
   local out rc
-  out=$(WORKTREE_CLEANUP_RETAIN="$RETAIN" \
+  out=$(WORKTREE_CLEANUP_WT_ROOT="$wt_root" WORKTREE_CLEANUP_RETAIN="$RETAIN" \
     "$SUT" "$path" "$MANIFEST_DIR/$label-$TS.tsv" "$MODE" "$MIN_AGE_HOURS" "$salvage" 2>&1); rc=$?
   # dry-run writes no manifest, so its per-worktree REAP/KEEP lines are the ONLY record
   # of what an apply run would touch — never truncate them. apply has the manifest, so
@@ -353,7 +411,7 @@ sweep_nested_submodule_worktrees() {
                "${wt_real#"$ROOT"/}" "$CLAIM_DETAIL"
              break ;;
         esac
-        sweep "$sub_real" 0 continue
+        sweep "$sub_real" "" 0 continue
       fi
       # Runs whether or not this run reaped anything here: refs left by an earlier run whose
       # handoff failed are handed off as soon as it can succeed. dry-run writes nothing.
@@ -367,8 +425,27 @@ sweep_nested_submodule_worktrees() {
   done <<< "$(printf '%s\n' "$wts" | awk '/^worktree /{print substr($0,10)}')"
 }
 
-sweep_nested_submodule_worktrees "$ROOT"
-sweep "$ROOT"
+# sweep_lane <repo_path> — every worktree root the selected lane owns, for that repository's
+# registrations, and no other root. The claude lane first sweeps the worktrees nested in its
+# session worktrees' submodules, which only its own sweep can reach (#3673). Codex runs also
+# keep a submodule's worktrees in the MONOREPO's .codex/worktrees (measured on the reference
+# host), so each submodule is swept there too; the Codex app's worktree dir holds monorepo
+# worktrees only.
+sweep_lane() {
+  case "$LANE" in
+    claude)
+      sweep_nested_submodule_worktrees "$1"
+      sweep "$1"
+      ;;
+    codex)
+      sweep "$1" "$1/.codex/worktrees"
+      if [ "$1" = "$ROOT" ]; then sweep "$1" "$CODEX_APP_ROOT"
+      else sweep "$1" "$ROOT/.codex/worktrees"; fi
+      ;;
+  esac
+}
+
+sweep_lane "$ROOT"
 
 # Every submodule, from .gitmodules (never a hard-coded list — the portfolio gains and
 # loses submodules over time).
@@ -448,8 +525,7 @@ if [ -f "$ROOT/.gitmodules" ]; then
       printf '\n### SKIP %s (not a gitlink in the index — not a portfolio submodule)\n' "$sub"
       continue
     fi
-    sweep_nested_submodule_worktrees "$sub_real"
-    sweep "$sub_real"
+    sweep_lane "$sub_real"
   done <<< "$submodules"
 fi
 

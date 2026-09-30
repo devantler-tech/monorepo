@@ -9,6 +9,11 @@
 #   min_age_hours (default 24) — never reap a worktree younger than this.
 #   salvage_age_hours (default 0 = off) — preserve, then reap, a worktree whose only KEEP
 #     reason is abandoned work once it is at least this old (see SALVAGE below).
+#   WORKTREE_CLEANUP_WT_ROOT (env, default <repo>/.claude/worktrees) — the absolute path of
+#     the worktree root to sweep. Each agent lane owns its own roots and sweeps only those
+#     (maintainer direction 2026-09-29, #3676); worktree-cleanup-all.sh --lane passes them.
+#     Every rule below applies unchanged to any root. A symlinked root, and a root holding
+#     the repository's own checkout, are refused.
 #
 # WHY THIS EXISTS
 #   The harness creates a per-session worktree at <repo>/.claude/worktrees/<slug> and
@@ -22,7 +27,7 @@
 #
 # SAFETY CONTRACT (fail-closed — every ambiguity resolves to KEEP, every
 # infrastructure failure ABORTS before anything is removed):
-#   KEEP  - the main worktree, and anything outside <repo>/.claude/worktrees/
+#   KEEP  - the main worktree, and anything outside the worktree root
 #   KEEP  - a worktree that is the CWD of a LIVE process (a running session)
 #   KEEP  - a worktree younger than min_age_hours
 #   KEEP  - a LOCKED worktree (git locks mean "in use"; we never override)
@@ -40,6 +45,8 @@
 #           ref or reflog entry reaching a commit no remote has (the removal deletes it all)
 #   KEEP  - a worktree locked at removal time, re-checked live (never overridden by
 #           --force, and never removed by the rm -rf fallback either)
+#   ABORT - a caller-chosen root that is relative, a symlink, or holds the checkout being
+#           swept or the main worktree
 #   ABORT - on any infrastructure failure (worktree list, lsof — including a partial
 #           enumeration that exits nonzero — or a manifest write), and the multi-repo
 #           wrapper propagates that abort instead of reporting a successful sweep
@@ -128,6 +135,17 @@ SALVAGE_MAX_KB=${WORKTREE_SALVAGE_MAX_KB:-102400}
 
 die() { printf 'worktree-cleanup: %s\n' "$1" >&2; exit 2; }
 
+# physical_path <dir> — the directory's canonical path, from the kernel (getcwd). bash's
+# builtin `pwd -P` resolves symlinks but keeps the letter case it was handed, so on a
+# case-insensitive filesystem a worktree git registered as `.Codex/worktrees/x` never equals
+# the on-disk `.codex/worktrees/x` it names (the reference host had dozens of Codex
+# worktrees spelled that way, #3676). The external pwd reports the on-disk spelling.
+physical_path() { (cd "$1" 2>/dev/null && /bin/pwd -P); }
+# fold_case — lower-cases stdin, for the comparisons that must err towards a MATCH (a live
+# CWD, a lock): two spellings can name one directory, and a missed match there would read as
+# "no session" or "not locked". A spurious match only ever keeps a worktree.
+fold_case() { tr '[:upper:]' '[:lower:]'; }
+
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) \
   || die "cannot resolve script directory"
 # shellcheck source=worktree-claim-lib.sh
@@ -157,8 +175,54 @@ TOPLEVEL=$(git -C "$REPO_PATH" rev-parse --show-toplevel 2>/dev/null) \
 # Resolve through symlinks so the lsof CWD comparison below is apples-to-apples
 # (/tmp is a symlink to /private/tmp on macOS; an unresolved prefix would silently
 # match nothing and every worktree would read as "no live process").
-TOPLEVEL=$(cd "$TOPLEVEL" && pwd -P) || die "cannot resolve toplevel"
-WT_ROOT="$TOPLEVEL/.claude/worktrees"
+TOPLEVEL=$(physical_path "$TOPLEVEL") || die "cannot resolve toplevel"
+if [ -n "${WORKTREE_CLEANUP_WT_ROOT:-}" ]; then
+  WT_ROOT=$WORKTREE_CLEANUP_WT_ROOT
+  while [ "${WT_ROOT%/}" != "$WT_ROOT" ]; do WT_ROOT=${WT_ROOT%/}; done
+  case "$WT_ROOT" in
+    /?*) ;;
+    *) die "WORKTREE_CLEANUP_WT_ROOT must be an absolute path other than /, got '$WORKTREE_CLEANUP_WT_ROOT'" ;;
+  esac
+  # A `.` or `..` component would let the lexical checks below pass on one directory while
+  # canonicalisation lands on another (`.codex/../.claude/worktrees`), so it is refused outright.
+  case "/$WT_ROOT/" in
+    */./* | */../*) die "worktree root must not contain . or .. components, got '$WORKTREE_CLEANUP_WT_ROOT'" ;;
+  esac
+  # Refused, never followed: the root bounds every removal, so it must be the directory it
+  # names (the same rule worktree-cleanup-all.sh applies to a symlinked submodule path).
+  if [ -L "$WT_ROOT" ]; then
+    die "worktree root is a symlink — refusing to follow it: $WT_ROOT"
+  fi
+  # The lane directory above it is checked the same way: `.codex` linked to `.claude`, or to
+  # another `.codex` elsewhere, would move the sweep outside the root the caller named. Deeper
+  # ancestors (/tmp -> /private/tmp) do not choose the lane, so they may resolve.
+  if [ -L "${WT_ROOT%/*}" ]; then
+    die "worktree root's lane directory is a symlink — refusing to follow it: ${WT_ROOT%/*}"
+  fi
+  # An absent root is a clean "nothing to sweep"; one that cannot be inspected is not. Find the
+  # nearest existing ancestor: it must be a directory this run can read and search.
+  if [ ! -e "$WT_ROOT" ]; then
+    probe=${WT_ROOT%/*}
+    while [ -n "$probe" ] && [ ! -e "$probe" ]; do probe=${probe%/*}; done
+    [ -n "$probe" ] || probe=/
+    if [ ! -d "$probe" ] || [ ! -r "$probe" ] || [ ! -x "$probe" ]; then
+      die "worktree root $WT_ROOT cannot be inspected: $probe is not a readable directory"
+    fi
+  fi
+  # Canonical, like every candidate and registration below (physical_path): /tmp is
+  # /private/tmp on macOS, and the caller may spell the directory in another case.
+  if [ -e "$WT_ROOT" ]; then
+    WT_ROOT=$(physical_path "$WT_ROOT") \
+      || die "cannot resolve worktree root $WORKTREE_CLEANUP_WT_ROOT"
+  fi
+else
+  WT_ROOT="$TOPLEVEL/.claude/worktrees"
+fi
+# The fixed default root can never hold the checkout being swept from; a caller-chosen one
+# could, and every git call below runs through that checkout.
+case "$TOPLEVEL/" in
+  "$WT_ROOT"/*) die "worktree root $WT_ROOT holds the checkout being swept ($TOPLEVEL) — refusing" ;;
+esac
 
 # --- squash-merge evidence (#2678) ---------------------------------------------------
 # The portfolio squash-merges and deletes the merged branch, so a merged branch's own
@@ -383,7 +447,8 @@ LIVE_RAW=$(lsof -a -d cwd -F n 2>/dev/null); lsof_rc=$?
 if [ "$lsof_rc" -ne 0 ]; then
   die "lsof exited $lsof_rc — refusing to run on a possibly partial CWD list"
 fi
-LIVE_CWDS=$(printf '%s\n' "$LIVE_RAW" | grep '^n' | sed 's/^n//' | sort -u)
+# Case-folded: lsof reports whatever spelling a process reached its directory by.
+LIVE_CWDS=$(printf '%s\n' "$LIVE_RAW" | grep '^n' | sed 's/^n//' | fold_case | sort -u)
 if [ -z "$LIVE_CWDS" ]; then
   die "lsof returned no CWDs at all — refusing to run (cannot prove which worktrees are live)"
 fi
@@ -399,7 +464,17 @@ WT_LIST=$(git -C "$TOPLEVEL" worktree list --porcelain 2>/dev/null) \
 # walks up to the main checkout, whose clean+pushed state then makes the directory look
 # eligible — and the rm -rf fallback deletes its arbitrary contents.
 REGISTERED=$(printf '%s\n' "$WT_LIST" | awk '/^worktree /{print substr($0,10)}' \
-  | while IFS= read -r p; do (cd "$p" 2>/dev/null && pwd -P); done)
+  | while IFS= read -r p; do physical_path "$p"; done)
+
+# The repository's main worktree (git always lists it first) is never a candidate either. It
+# is registered, so under a caller-chosen root that held it every gate could pass, and
+# `git worktree remove` refuses a main worktree, which would leave only the rm -rf fallback.
+MAIN_WT=$(awk '/^worktree /{print substr($0,10); exit}' <<< "$WT_LIST")
+[ -n "$MAIN_WT" ] || die "cannot identify the main worktree of $TOPLEVEL"
+MAIN_WT_REAL=$(physical_path "$MAIN_WT") || MAIN_WT_REAL=$MAIN_WT
+case "$MAIN_WT_REAL/" in
+  "$WT_ROOT"/*) die "worktree root $WT_ROOT holds the main worktree ($MAIN_WT_REAL) — refusing" ;;
+esac
 
 now=$(date +%s)
 reaped=0; kept=0; stuck=0; salvaged=0; freed_kb=0
@@ -447,7 +522,7 @@ trap 'exit 2' HUP INT TERM
 # before `rm -rf`, so "I could not tell" must never resolve to "safe to delete".
 #
 # Compares the recorded path BOTH raw and symlink-resolved. git prints worktree paths
-# as they were recorded at `worktree add` time, while $wt_real is pwd -P normalised; if
+# as they were recorded at `worktree add` time, while $wt_real is physical_path normalised; if
 # the repo was ever reached through a symlinked prefix the two differ and a plain
 # comparison would silently miss the lock.
 # is_live_now <resolved-worktree-path> — re-enumerates live CWDs instead of trusting
@@ -464,6 +539,9 @@ is_live_now() {
   raw=$(lsof -a -d cwd -F n 2>/dev/null); rc=$?
   [ "$rc" -eq 0 ] || return 2
   [ -n "$raw" ] || return 2
+  # Case-folded on both sides, like the startup snapshot.
+  raw=$(printf '%s\n' "$raw" | fold_case) || return 2
+  target=$(printf '%s' "$target" | fold_case) || return 2
   while IFS= read -r cwd; do
     case "$cwd" in
       n*) cwd=${cwd#n} ;;
@@ -491,8 +569,12 @@ is_locked_now() {
       "worktree "*) p=${line#worktree } ;;
       locked*)
         [ "$p" = "$target" ] && return 0
-        resolved=$(cd "$p" 2>/dev/null && pwd -P) || resolved=""
+        resolved=$(physical_path "$p") || resolved=""
         if [ -n "$resolved" ] && [ "$resolved" = "$target" ]; then return 0; fi
+        # Two spellings of one directory on a case-insensitive filesystem (`.Codex`/`.codex`).
+        if [ "$(printf '%s' "$p" | fold_case)" = "$(printf '%s' "$target" | fold_case)" ]; then
+          return 0
+        fi
         ;;
     esac
   done <<< "$out"
@@ -616,7 +698,7 @@ submodule_owned_worktree() {
            'printf "%s\n" "$toplevel/$sm_path"' 2>/dev/null) || return 1
   while IFS= read -r sub; do
     [ -n "$sub" ] || continue
-    sub_real=$(cd "$sub" 2>/dev/null && pwd -P) || return 1
+    sub_real=$(physical_path "$sub") || return 1
     wts=$(git -C "$sub" worktree list --porcelain 2>/dev/null) || return 1
     while IFS= read -r line; do
       case "$line" in
@@ -625,7 +707,7 @@ submodule_owned_worktree() {
       esac
       # A pruned-but-registered path no longer resolves; compare it as written, which is
       # still enough to see that it sits inside the candidate.
-      path_real=$(cd "$path" 2>/dev/null && pwd -P) || path_real=$path
+      path_real=$(physical_path "$path") || path_real=$path
       [ "$path_real" = "$sub_real" ] && continue
       case "$path_real/" in
         "$wt_real"/*) printf '%s\n' "$path_real"; return 0 ;;
@@ -1419,8 +1501,8 @@ admin_backpointer_ok() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
   [ -f "$admin/gitdir" ] && [ -r "$admin/gitdir" ] || return 1
   back=$(head -n 1 "$admin/gitdir") && [ -n "$back" ] || return 1
-  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || return 1
-  back_real=$(cd "$(dirname "$back")" 2>/dev/null && pwd -P) || return 1
+  wt_real=$(physical_path "$wt") || return 1
+  back_real=$(physical_path "$(dirname "$back")") || return 1
   [ "$back_real" = "$wt_real" ] && [ "$(basename "$back")" = .git ]
 }
 
@@ -1468,7 +1550,7 @@ while IFS= read -r wt <&3; do
   # infrastructure failure — permissions, a broken mount — not a verdict about this
   # worktree. Reporting it as an ordinary KEEP let the run exit 0 while silently unable
   # to inspect part of the tree.
-  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) \
+  wt_real=$(physical_path "$wt") \
     || die "cannot resolve candidate worktree $wt — refusing to continue on an uninspectable tree"
   name=$(wt_label "$wt")
   # Per-candidate salvage state; recheck_mutable_gates reads it, so it must never leak
@@ -1503,10 +1585,12 @@ while IFS= read -r wt <&3; do
   # an unbalanced '[' made grep error out, the descendant check silently reported "no
   # match", and a live session working in a SUBDIRECTORY fell through to the reap
   # gates — a fail-OPEN on the one signal that protects running sessions.
+  # Case-folded, like LIVE_CWDS: a spurious match only keeps.
   live=0
+  wt_fold=$(printf '%s' "$wt_real" | fold_case)
   while IFS= read -r cwd; do
     [ -n "$cwd" ] || continue
-    if [ "$cwd" = "$wt_real" ] || [ "${cwd#"$wt_real"/}" != "$cwd" ]; then
+    if [ "$cwd" = "$wt_fold" ] || [ "${cwd#"$wt_fold"/}" != "$cwd" ]; then
       live=1; break
     fi
   done <<< "$LIVE_CWDS"

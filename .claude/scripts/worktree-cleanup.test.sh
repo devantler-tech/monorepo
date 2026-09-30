@@ -3496,6 +3496,220 @@ t_salvage_reads_an_unterminated_fetch_head_line() {
   rm -rf "$root"
 }
 
+# --- a caller-chosen worktree root (#3676) -----------------------------------------
+# Each agent lane sweeps only its own roots, so the root is the caller's choice
+# (WORKTREE_CLEANUP_WT_ROOT). Every gate above is root-independent; these pin what the
+# fixed default root used to guarantee structurally.
+
+# add_wt_at <root> <path> <branch> — a pushed, aged worktree of repo at any path.
+add_wt_at() {
+  local root=$1 path=$2 branch=$3
+  mkdir -p "$(dirname "$path")"
+  if ! git -C "$root/repo" worktree add -q -b "$branch" "$path" main; then
+    printf 'FIXTURE FAILURE: worktree add %s\n' "$path" >&2
+    return 1
+  fi
+  git -C "$root/repo" push -q origin "$branch" || return 1
+  age_tree "$path"
+}
+
+run_root() { # <root> <worktree_root> [mode] -> stdout
+  WORKTREE_CLEANUP_WT_ROOT="$2" "$SUT" "$1/repo" "$1/manifest.tsv" "${3:-dry-run}" 24 2>&1
+}
+
+# case_insensitive_fs <dir> — 0 when the filesystem holding <dir> folds letter case.
+case_insensitive_fs() {
+  local probe; probe=$(mktemp -d "$1/caseprobe.XXXXXX") || return 1
+  mkdir "$probe/lower" && [ -d "$probe/LOWER" ]
+  local rc=$?; rm -rf "$probe"; return "$rc"
+}
+
+t_custom_root_sweeps_only_that_root() {
+  local name="a caller-chosen root is swept, and the default root is not"
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  add_wt_at "$root" "$root/repo/.codex/worktrees/lane" codex/lane \
+    || { bad "$name" "FIXTURE: worktree add failed"; rm -rf "$root"; return; }
+  # Control first: the default root still sweeps the default root and nothing else.
+  local out_default out_custom
+  out_default=$(run "$root")
+  out_custom=$(run_root "$root" "$root/repo/.codex/worktrees" apply)
+  if grep -q '^REAP  *spent ' <<<"$out_default" && ! grep -q 'lane' <<<"$out_default" \
+     && grep -q '^REAPED *lane ' <<<"$out_custom" && [ ! -e "$root/repo/.codex/worktrees/lane" ] \
+     && ! grep -q 'spent' <<<"$out_custom" && [ -d "$root/repo/.claude/worktrees/spent" ]; then
+    ok "$name"
+  else
+    bad "$name" "default: $out_default :: custom: $out_custom"
+  fi
+  rm -rf "$root"
+}
+
+t_custom_root_finds_the_worktree_inside_an_id_directory() {
+  # The Codex app keeps one worktree per id directory: <app>/<id>/<repo>. The id directory is
+  # not a worktree (KEEP, never removed), and the worktree inside it is a candidate.
+  local name="a root's id directories are kept and the worktree inside one is swept"
+  local root; root=$(make_repo)
+  add_wt_at "$root" "$root/app/ab12/repo" codex/app \
+    || { bad "$name" "FIXTURE: worktree add failed"; rm -rf "$root"; return; }
+  echo ab12 > "$root/app/ab12/.codex-worktree-name"
+  mkdir -p "$root/app/cd34"; echo cd34 > "$root/app/cd34/.codex-worktree-name"
+  local out; out=$(run_root "$root" "$root/app/" apply)
+  if grep -q '^REAPED *ab12/repo ' <<<"$out" && [ ! -e "$root/app/ab12/repo" ] \
+     && grep -q '^KEEP *cd34 .*not a registered worktree' <<<"$out" \
+     && [ -f "$root/app/ab12/.codex-worktree-name" ] && [ -f "$root/app/cd34/.codex-worktree-name" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_custom_root_never_holds_a_checkout() {
+  # The fixed default root could never hold the repository's own checkout; a chosen one can.
+  # The main worktree is registered, so every gate could pass, `git worktree remove` refuses
+  # it, and only the rm -rf fallback would be left. Both shapes must refuse the whole run.
+  local name="a root holding the swept checkout or the main worktree is refused"
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  touch -t 202001010000 "$root/repo"                     # old enough to pass the age gate
+  local out_a rc_a out_b rc_b other
+  out_a=$(run_root "$root" "$root" apply); rc_a=$?
+  # Swept FROM a linked worktree elsewhere, so only the main worktree sits under the root.
+  other=$(mktemp -d); other=$(cd "$other" && pwd -P)
+  git -C "$root/repo" worktree add -q -b claude/linked "$other/linked" main 2>/dev/null
+  out_b=$(WORKTREE_CLEANUP_WT_ROOT="$root" "$SUT" "$other/linked" "$root/manifest.tsv" apply 24 2>&1); rc_b=$?
+  if [ "$rc_a" -eq 2 ] && grep -q 'holds the checkout being swept' <<<"$out_a" \
+     && [ "$rc_b" -eq 2 ] && grep -q 'holds the main worktree' <<<"$out_b" \
+     && [ -f "$root/repo/file.txt" ] && [ -d "$root/repo/.git" ] \
+     && [ -d "$root/repo/.claude/worktrees/spent" ] && [ ! -s "$root/manifest.tsv" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc_a=$rc_a rc_b=$rc_b :: $out_a :: $out_b"
+  fi
+  rm -rf "$root" "$other"
+}
+
+t_custom_root_rejects_a_symlink_a_relative_path_and_slash() {
+  local name="a symlinked, relative or / root is refused before anything is removed"
+  local root; root=$(make_repo)
+  add_wt_at "$root" "$root/real/lane" codex/lane \
+    || { bad "$name" "FIXTURE: worktree add failed"; rm -rf "$root"; return; }
+  ln -s "$root/real" "$root/link"
+  local out1 rc1 out2 rc2 out3 rc3
+  out1=$(run_root "$root" "$root/link/" apply); rc1=$?    # trailing slash must not hide the link
+  out2=$(run_root "$root" "real" apply); rc2=$?
+  out3=$(run_root "$root" "/" apply); rc3=$?
+  if [ "$rc1" -eq 2 ] && grep -q 'symlink' <<<"$out1" \
+     && [ "$rc2" -eq 2 ] && grep -q 'absolute path' <<<"$out2" \
+     && [ "$rc3" -eq 2 ] && grep -q 'absolute path' <<<"$out3" \
+     && [ -d "$root/real/lane" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc1=$rc1 rc2=$rc2 rc3=$rc3 :: $out1 :: $out2 :: $out3"
+  fi
+  rm -rf "$root"
+}
+
+t_custom_root_rejects_a_symlinked_ancestor() {
+  local name="a root whose lane directory is a symlink, into another lane or a same-named dir, is refused"
+  local root; root=$(make_repo)
+  add_wt_at "$root" "$root/repo/.claude/worktrees/claude-lane" claude/lane \
+    || { bad "$name" "FIXTURE: worktree add failed"; rm -rf "$root"; return; }
+  add_wt_at "$root" "$root/elsewhere/.codex/worktrees/other-lane" codex/other \
+    || { bad "$name" "FIXTURE: second worktree add failed"; rm -rf "$root"; return; }
+  ln -s .claude "$root/repo/.codex"
+  mkdir -p "$root/repo2"
+  ln -s "$root/elsewhere/.codex" "$root/repo2/.codex"
+  local out1 rc1 out2 rc2
+  out1=$(run_root "$root" "$root/repo/.codex/worktrees" apply); rc1=$?
+  out2=$(run_root "$root" "$root/repo2/.codex/worktrees" apply); rc2=$?
+  if [ "$rc1" -eq 2 ] && grep -q 'lane directory is a symlink' <<<"$out1" \
+     && [ "$rc2" -eq 2 ] && grep -q 'lane directory is a symlink' <<<"$out2" \
+     && [ -d "$root/repo/.claude/worktrees/claude-lane" ] \
+     && [ -d "$root/elsewhere/.codex/worktrees/other-lane" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc1=$rc1 rc2=$rc2 :: $out1 :: $out2"
+  fi
+  rm -rf "$root"
+}
+
+t_custom_root_that_cannot_be_inspected_is_unknown() {
+  local name="a root beneath a regular file is UNKNOWN (exit 2), never a clean \"no root\""
+  local root; root=$(make_repo)
+  printf x > "$root/plainfile"
+  local out rc
+  out=$(run_root "$root" "$root/plainfile/.codex/worktrees" apply); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q 'cannot be inspected' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out"
+  fi
+  rm -rf "$root"
+}
+
+t_custom_root_rejects_dot_components() {
+  local name="a root with a .. component that lands in another lane is refused"
+  local root; root=$(make_repo)
+  add_wt_at "$root" "$root/repo/.claude/worktrees/claude-lane" claude/lane \
+    || { bad "$name" "FIXTURE: worktree add failed"; rm -rf "$root"; return; }
+  mkdir -p "$root/repo/.codex"
+  local out rc
+  out=$(run_root "$root" "$root/repo/.codex/../.claude/worktrees" apply); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q 'must not contain' <<<"$out" \
+     && [ -d "$root/repo/.claude/worktrees/claude-lane" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out"
+  fi
+  rm -rf "$root"
+}
+
+t_custom_root_matches_a_registration_spelled_in_another_case() {
+  # Git recorded some Codex worktrees as `.Codex/worktrees/<x>` while the directory on disk
+  # is `.codex`. bash's builtin `pwd -P` keeps the spelling it is handed, so the
+  # registration never matched its directory and the worktree was kept forever as "not a
+  # registered worktree". A lock recorded under the other spelling must still hold, and a
+  # process working there under that spelling must still count as live. On the reference
+  # host lsof reports the on-disk spelling whatever path a process used, so an lsof shim
+  # reports the other one: the live gate must not depend on which spelling lsof chooses.
+  local name="a worktree registered under another letter case is swept, and its lock and live CWD still hold"
+  local root; root=$(make_repo)
+  if ! case_insensitive_fs "$root"; then
+    ok "$name (not applicable: case-sensitive filesystem)"; rm -rf "$root"; return
+  fi
+  mkdir -p "$root/repo/.codex/worktrees"
+  local w
+  for w in cv locked live; do
+    add_wt_at "$root" "$root/repo/.Codex/worktrees/$w" "codex/$w" \
+      || { bad "$name" "FIXTURE: worktree add failed"; rm -rf "$root"; return; }
+  done
+  local wt_list; wt_list=$(git -C "$root/repo" worktree list --porcelain)
+  if ! grep -q '/\.Codex/worktrees/cv$' <<<"$wt_list"; then
+    bad "$name" "FIXTURE: git did not record the .Codex spelling"; rm -rf "$root"; return
+  fi
+  git -C "$root/repo" worktree lock "$root/repo/.Codex/worktrees/locked"
+  local real_lsof; real_lsof=$(command -v lsof) \
+    || { bad "$name" "FIXTURE: no lsof on PATH to pass through to"; rm -rf "$root"; return; }
+  local shim="$root/shim"; mkdir -p "$shim"
+  cat > "$shim/lsof" <<SHIM
+#!/usr/bin/env bash
+'$real_lsof' "\$@" || exit \$?
+printf 'p1\nfcwd\nn%s\n' '$root/repo/.CODEX/worktrees/live/sub'
+SHIM
+  chmod +x "$shim/lsof"
+  local out; out=$(PATH="$shim:$PATH" WORKTREE_CLEANUP_WT_ROOT="$root/repo/.codex/worktrees" \
+                   "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1)
+  if grep -q '^REAPED *cv ' <<<"$out" && [ ! -e "$root/repo/.codex/worktrees/cv" ] \
+     && grep -q '^KEEP *locked .*locked' <<<"$out" && [ -d "$root/repo/.codex/worktrees/locked" ] \
+     && grep -q '^KEEP *live .*live process CWD' <<<"$out" && [ -d "$root/repo/.codex/worktrees/live" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 # --- a submodule sitting on a squash-merged PR head (#3674) --------------------------
 # drifted_sub_wt <root> <name> <origin-url> — a pushed worktree whose submodule has moved
 # to a clean commit no remote reaches (unstaged gitlink drift), with the submodule's origin
@@ -3743,6 +3957,14 @@ t_salvage_preserves_commit_editmsg
 t_salvage_preserves_config_worktree
 t_salvage_caps_an_oversized_commit_editmsg
 t_salvage_keeps_a_redirected_gitfile
+t_custom_root_sweeps_only_that_root
+t_custom_root_finds_the_worktree_inside_an_id_directory
+t_custom_root_never_holds_a_checkout
+t_custom_root_rejects_a_symlink_a_relative_path_and_slash
+t_custom_root_rejects_a_symlinked_ancestor
+t_custom_root_that_cannot_be_inspected_is_unknown
+t_custom_root_rejects_dot_components
+t_custom_root_matches_a_registration_spelled_in_another_case
 t_submodule_on_a_merged_pr_head
 t_submodule_drift_keeps_local_only_refs
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

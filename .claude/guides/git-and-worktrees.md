@@ -281,18 +281,30 @@ would have produced, and wherever it *does* refuse it preserves what `reset --ha
 destroyed. It is never weaker than the banned form; the abort is simply a partial backstop rather than
 the check itself, which is why the cleanliness test above is the operative rule.
 
-**Worktree hygiene is SCHEDULED, not per-run — never rely on a session to remove its own worktree.**
+**Worktree hygiene is SCHEDULED and lane-owned — never rely on a session to remove its own worktree.**
 The harness creates a per-session worktree at `<repo>/.claude/worktrees/<slug>`, and the owning
 session **structurally cannot remove it**: that directory is the session's own working directory, and
 sessions routinely end abruptly (crash, timeout, closed window) with no teardown. So the sweep must
-come from **outside** any session. It does, via the `tech.devantler.worktree-cleanup` LaunchAgent
-(runtime-local, `~/Library/LaunchAgents/`), which runs
-[`.claude/scripts/worktree-cleanup-all.sh [apply|dry-run] [min_age_hours] [salvage_age_hours]`](../scripts/worktree-cleanup-all.sh)
-every 6 hours and at login across the monorepo and every submodule discovered from `.gitmodules`.
-Before each repository it sweeps the worktrees **nested in its session worktrees' populated
-submodules** (`<session>/<sub>/.claude/worktrees/*`), with salvage off because their repository
-dies with the parent, and never inside a session worktree a live process works in. Nothing else
-visits them, and each one kept its parent forever (#3673).
+come from **outside** that session, and **each lane sweeps only its own worktrees** (maintainer
+direction 2026-09-29: *"Claude runs should clean up claude, and Codex runs should clean up codex."*,
+[#3676](https://github.com/devantler-tech/monorepo/issues/3676)).
+[`.claude/scripts/worktree-cleanup-all.sh [apply|dry-run] [min_age_hours] [salvage_age_hours] [--lane claude|codex]`](../scripts/worktree-cleanup-all.sh)
+covers the monorepo and every submodule discovered from `.gitmodules`. `--lane claude` (the default)
+sweeps `<repo>/.claude/worktrees`; `--lane codex` sweeps `<repo>/.codex/worktrees` (including a
+submodule's worktrees kept in the monorepo's) and the monorepo's worktrees in the Codex app's
+worktree dir. Two things run it: the `tech.devantler.worktree-cleanup` LaunchAgent (runtime-local,
+`~/Library/LaunchAgents/`) sweeps the claude lane every 6 hours and at login, and **every run starts a
+sweep of its own lane at pre-flight** (below). **Never pass another lane's `--lane`**: an
+instance never sweeps worktrees another instance owns. The run's sweep cannot remove the run's own
+worktree, or any other live session's, because the **live process CWD** rule below keeps it — the
+sweep itself works from inside it. Measured 2026-09-29: the only sweep was the Claude-side one, so
+~63 Codex worktrees (~16 GB) had piled up unreaped, the disk reached 99%, and new sessions could not
+start.
+In the claude lane, before each repository, it also sweeps the worktrees **nested in its session
+worktrees' populated submodules** (`<session>/<sub>/.claude/worktrees/*`), with salvage off because
+their repository dies with the parent, and never inside a session worktree a live process works in
+or one that carries an ownership claim. Nothing else visits them, and each one kept its parent
+forever (#3673).
 Per-repo safety lives in [`worktree-cleanup.sh`](../scripts/worktree-cleanup.sh) and is
 **fail-closed**: it KEEPs any worktree that is a **live process CWD**, is **locked**, is **younger
 than `min_age_hours`**, holds **commits not reachable from any remote** (one
@@ -308,13 +320,33 @@ forever either (#2831): once a worktree whose only KEEP reason is abandoned work
 working tree are first preserved under `refs/salvaged/<id>/…` and verified, and only then is the
 worktree reaped. Salvage covers single-repository worktrees only: one holding any other repository
 (an initialised submodule, or an embedded one even when ignored) still KEEPs, as do oversized data
-and any change made after the snapshot. The restore steps are in the script's header. **Do not add a per-run worktree sweep** to
-compensate; a session removing its *own* worktree is exactly the thing that cannot work.
+and any change made after the snapshot. The restore steps are in the script's header. The same
+rules apply to every lane's roots; the codex lane's manifests go to that directory's `codex/`
+subdirectory, so the two lanes never share a ledger.
 Measured 2026-07-29, the run that introduced this: **124 leaked monorepo worktrees, ~15.7 GB across
 `.claude` and `.codex`, disk at 99%, and new sessions failing to start** for want of 5.4 GB. Because a
 branch checked out by a worktree is permanently in `branch-cleanup.sh`'s keep-set, the same leak had
 also pinned **84 of 422** local `claude/*` branches — so leaked worktrees silently disable branch
 cleanup too, and this sweep is what unblocks it.
+
+**Pre-flight, every run: start your lane's sweep, then check free disk space before heavy work.**
+`<lane>` is your instance's namespace from the
+[instance registry](../plugin-consumption/agent-instances.json) (`claude` or `codex`). Issue each
+command as its own call:
+
+```sh
+mkdir -p ~/.claude/worktree-cleanup-manifests   # the redirect below needs it before the sweep runs
+nohup .claude/scripts/worktree-cleanup-all.sh apply 24 --lane <lane> \
+  >>~/.claude/worktree-cleanup-manifests/cleanup-<lane>.log 2>&1 </dev/null &
+.claude/scripts/disk-preflight.sh   # 0 enough free · 1 below the threshold (20 GB) · 2 UNKNOWN
+```
+
+The sweep is **detached**: it takes minutes, so the run never waits on it or polls it, and the log
+holds the result for the next reader. On a disk-preflight `1`, run
+`.claude/scripts/build-cache-reclaim.sh apply` once and check again. If it still exits `1`, or exits
+`2` at any point (`2` is never "enough"), do **no builds, tests or cluster work this run** — GitHub-only
+work such as reviews, triage and merges can go on — record it in `needs_attention`, and escalate per
+*Maintainer channels* when it persists after you have tried to resolve it.
 
 **End-of-tick branch hygiene — reap spent branches and return to the default branch, EVERY run**
 (maintainer direction 2026-07-16: *"You never clean up old branches locally or on the remote. I expect
@@ -325,9 +357,10 @@ local; `.github` had **35** stale remote). Run
 for each repo touched. **If you created an EXTRA worktree of your own during the run — one you are not
 running inside — remove that first**, because a branch still checked out by a worktree sits in the
 keep-set and would be spared. **Your own SESSION worktree is the exception and needs no action here:**
-you cannot remove the directory you are running in, and per *Worktree hygiene is SCHEDULED* above the
-LaunchAgent reaps it (and frees its branch for a later sweep) once it is idle and aged. Expect your own
-session branch to survive the tick that spent it; that is the scheduled sweep's job, not yours.
+you cannot remove the directory you are running in, and per *Worktree hygiene is SCHEDULED and
+lane-owned* above a later sweep of your lane reaps it (and frees its branch for a later sweep) once it
+is idle and aged. Expect your own session branch to survive the tick that spent it; that is a later
+sweep's job, not this run's.
 **`<repo-name>` is the BARE repository name** (`monorepo`, `platform`) — the script prepends
 `devantler-tech/` itself. It is **not** your session/worktree slug and **not** `owner/repo`; both are
 rejected, and passing the owner-qualified form is the likelier mistake because the first rejection
