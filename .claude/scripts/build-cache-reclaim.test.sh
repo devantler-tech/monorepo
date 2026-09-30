@@ -822,6 +822,69 @@ out=$(GOLANGCI_LINT_CACHE=off run_iso "$go_tmp_root" "$quiet_ps" dry-run 3 "$NEV
 grep -q 'GOLANGCI_LINT_CACHE disabled or not an absolute path' <<<"$out" ||
   fail 'GOLANGCI_LINT_CACHE=off was not reported as disabled'
 
+# --- 17. per-run build caches under the temp root are recognised by their marker -----
+# Lanes point GOCACHE at fresh dirs under the temp root with names no pattern in case 1
+# matches (daily-ai-engineer-gocache-*), 6-12 GB each; 75 GB of them filled the host on
+# 2026-09-30. Every reap below has an ablation partner that differs in exactly one
+# dimension -- the marker, the last write, a live holder -- and must be KEPT.
+cache_root="${fixture_root}/cache-tmp"
+mkdir -p "$cache_root" || fail 'fixture: per-run cache temp root'
+# make_run_cache <name> <marker-text> <idle-hours> builds a dir shaped like a Go build cache
+# (README + a fan-out dir holding an entry) whose every entry was last written <idle-hours>
+# ago. An empty <marker-text> writes no README.
+make_run_cache() {
+  local dir="${cache_root}/$1"
+  mkdir -p "${dir}/00" || return 1
+  printf 'entry\n' > "${dir}/00/a1-d"
+  [ -z "$2" ] || printf '%s\nRun "go clean -cache" if the directory is getting too large.\n' "$2" \
+    > "${dir}/README"
+  age_path "${dir}/00/a1-d" "$3" && age_path "${dir}/00" "$3" && age_path "$dir" "$3" || return 1
+  [ -z "$2" ] || age_path "${dir}/README" "$3" || return 1
+  printf '%s' "$dir"
+}
+run_cache() {
+  BUILD_CACHE_RECLAIM_TMPDIR="$cache_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" PATH="${quiet_ps}:$PATH" \
+    bash "$impl" "$@" 2>&1
+}
+go_marker='This directory holds cached build artifacts from the Go build system.'
+lint_marker='This directory holds cached build artifacts from golangci-lint.'
+idle_go=$(make_run_cache 'daily-ai-engineer-gocache-17a' "$go_marker" 7) || fail 'fixture: 17a'
+idle_lint=$(make_run_cache 'lane-golangci-cache-17b' "$lint_marker" 7) || fail 'fixture: 17b'
+fresh_go=$(make_run_cache 'daily-ai-engineer-gocache-17c' "$go_marker" 7) || fail 'fixture: 17c'
+printf 'entry\n' > "${fresh_go}/00/b2-d"   # a write moments ago: the fan-out dir's mtime moves
+unmarked=$(make_run_cache 'daily-ai-engineer-gocache-17d' '' 7) || fail 'fixture: 17d'
+
+# 17a-d, dry-run: the idle marked caches are selected, the rest are not, and nothing goes.
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+said "$out" "$idle_go" 'WOULD REAP' || fail 'an idle per-run Go cache was not selected by its marker'
+said "$out" "$idle_lint" 'WOULD REAP' || fail 'an idle per-run golangci-lint cache was not selected'
+said "$out" "$fresh_go" 'KEEP  (written within 6h)' ||
+  fail 'a per-run Go cache written moments ago was not kept for being recent'
+grep -qF "$unmarked" <<<"$out" && fail 'a dir with no cache marker was considered at all'
+[ -e "$idle_go" ] || fail 'dry-run deleted a per-run Go cache'
+
+# 17e. the same idle marked cache, held open by a live process, is KEPT by apply.
+held=$(make_run_cache 'codex-held-gocache-17e' "$go_marker" 7) || fail 'fixture: 17e'
+/bin/sh -c "exec 9<'${held}/00/a1-d'; sleep 30" &
+cache_holder_pid=$!
+sleep 1
+if kill -0 "$cache_holder_pid" 2>/dev/null; then
+  out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "${held}/00/a1-d" ] || fail 'apply removed a per-run Go cache a live process held open'
+  kill "$cache_holder_pid" 2>/dev/null
+  wait "$cache_holder_pid" 2>/dev/null
+else
+  fail 'fixture: per-run cache holder did not stay alive; liveness assertion not exercised'
+  out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+fi
+
+# 17a-d, apply: the idle marked caches are gone; the recent and unmarked ones remain.
+[ -e "$idle_go" ] && fail "apply did not reap an idle per-run Go cache: $idle_go"
+[ -e "$idle_lint" ] && fail "apply did not reap an idle per-run golangci-lint cache: $idle_lint"
+[ -e "$fresh_go" ] || fail 'apply reaped a per-run Go cache written moments ago'
+[ -e "$unmarked" ] || fail 'apply reaped a dir that carries no cache marker'
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0

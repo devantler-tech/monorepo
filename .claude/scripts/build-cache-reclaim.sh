@@ -24,6 +24,9 @@
 #   1. GOCACHE and GOMODCACHE, each cleaned only when it exceeds cache_budget_gb.
 #   2. Per-run agent trees (codex-*, war-*, dpc-*, ksail-*) under the temp root, older
 #      than min_age_days.
+#   2b. Per-run Go and golangci-lint caches directly under the temp root, whatever they are
+#      named, recognised by the README each tool writes into its cache and reclaimed once
+#      nothing was written to them for a threshold counted in HOURS (2026-09-30: 75 GB).
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
 #   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
 #      per-user temp dir, older than a threshold counted in HOURS.
@@ -35,9 +38,11 @@
 #   BUILD_CACHE_RECLAIM_GO_TMPDIR             temp dir for (4); default `getconf
 #                                             DARWIN_USER_TEMP_DIR`, else ${TMPDIR:-/tmp}
 #   BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS  age threshold for (4); default 6
+#   BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS  idle threshold for (2b); default 6
 #
 # SAFETY — this deletes, so every rule below fails closed:
-#   * Only trees matching a known agent-generated name pattern are ever considered.
+#   * Only trees matching a known agent-generated name pattern, or carrying a Go or
+#     golangci-lint cache README marker (2b), are ever considered.
 #   * A tree younger than its age threshold is KEPT.
 #   * A tree any running process holds open is KEPT.
 #   * The caller's own session tree is KEPT.
@@ -107,6 +112,16 @@ LINT_BUDGET_GB=$(uint_setting BUILD_CACHE_RECLAIM_LINT_BUDGET_GB \
 # days only lets orphans pile up: 15.7 GB of them were 0-2 days old when the host filled.
 GO_TMP_MIN_AGE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS \
   "${BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS:-6}") || exit 2
+# A per-run build cache under the temp root is idle once nothing has been WRITTEN to it for
+# this many hours. Hours, not min_age_days, for the same reason: lanes create several a
+# day at 6-12 GB each, and 75 GB of them filled the host before any reached four days.
+RUN_CACHE_IDLE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS \
+  "${BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS:-6}") || exit 2
+
+# The README each tool writes into every cache dir it opens, whenever it is missing. These
+# are what prove a directory IS such a cache, whatever it is called (2b, 3).
+GO_CACHE_MARKER='This directory holds cached build artifacts from the Go build system.'
+LINT_CACHE_MARKER='This directory holds cached build artifacts from golangci-lint.'
 
 TMPDIR_ROOT=${BUILD_CACHE_RECLAIM_TMPDIR:-/private/tmp}
 
@@ -634,6 +649,49 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# 2b. Per-run Go and golangci-lint caches under the temp root, recognised by marker.
+#
+# Agent runs point GOCACHE (and golangci-lint's cache) at a fresh directory under the temp
+# root, and each fills to 6-12 GB. On 2026-09-30 the host reached 100% again with 75 GB of
+# them. The name patterns in (2) never match `daily-ai-engineer-gocache-*`, and
+# `-mtime +3` (whole days, so four in practice) keeps every other one for days while lanes
+# create several a day. So they are recognised by what they ARE -- the README each tool
+# writes into its cache dir -- whatever the directory is called, and are reclaimed once
+# nothing has been written to them for RUN_CACHE_IDLE_HOURS. Every guard in
+# sweep_candidate still applies, and a cache is regenerable: removing one costs a rebuild.
+# ---------------------------------------------------------------------------
+
+# run_cache_idle <dir> succeeds when neither the cache dir nor any entry directly inside it
+# has changed within RUN_CACHE_IDLE_HOURS. The Go cache adds each entry to one of 256
+# fan-out dirs, so a write always moves one of their mtimes even though the top dir's does
+# not. A read failure counts as recent, so an unreadable cache is kept.
+run_cache_idle() {
+  local recent
+  recent=$(find "$1" -maxdepth 1 -mmin "-$((RUN_CACHE_IDLE_HOURS * 60))" -print 2>/dev/null) ||
+    return 1
+  [ -z "$recent" ]
+}
+
+if [ -d "$TMPDIR_ROOT" ]; then
+  while IFS= read -r tree; do
+    [ -n "$tree" ] || continue
+    # A symlink could make the marker check and the removal act on another tree.
+    [ -L "$tree" ] && continue
+    if ! grep -qF -e "$GO_CACHE_MARKER" -e "$LINT_CACHE_MARKER" "${tree}/README" 2>/dev/null; then
+      continue
+    fi
+    if ! run_cache_idle "$tree"; then
+      kept=$((kept + 1))
+      log "KEEP  (written within ${RUN_CACHE_IDLE_HOURS}h) $tree"
+      continue
+    fi
+    sweep_candidate "$tree" temp-root
+  done <<EOF
+$(find "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+EOF
+fi
+
+# ---------------------------------------------------------------------------
 # 3. golangci-lint cache, emptied only when it exceeds its own budget.
 #
 # golangci-lint keeps a content-addressed cache of its own, built from a copy of Go's
@@ -641,9 +699,6 @@ fi
 # usually NOT on PATH on the host (it runs via `go run` or in containers), so this cannot
 # lean on `golangci-lint cache clean` the way the Go caches lean on `go clean`.
 # ---------------------------------------------------------------------------
-# golangci-lint writes this README into every cache dir it opens, whenever it is missing.
-LINT_CACHE_MARKER='This directory holds cached build artifacts from golangci-lint.'
-
 # lint_cache_dir prints the cache dir golangci-lint would use, resolved the way it does
 # (internal/go/cache.DefaultDir): GOLANGCI_LINT_CACHE when set, which golangci-lint only
 # honours as an absolute path, else os.UserCacheDir()/golangci-lint -- ~/Library/Caches on
