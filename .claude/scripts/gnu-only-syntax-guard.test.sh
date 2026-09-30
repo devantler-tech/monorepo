@@ -148,6 +148,33 @@ expect_finding "an arithmetic shift is not a here-document" date-d-without-bsd 3
 f="$(fixture multiline-string 'msg="first line' 'date -r is BSD"' 'now=$(date -d yesterday)')"
 expect_finding "a multi-line string is data across its lines" date-d-without-bsd 4 "$f"
 
+# --- Command boundaries, command positions and nested code ----------------------------------------
+f="$(fixture date-attached 'out=$(date -dtomorrow +%s)')"
+expect_finding "attached -dSTRING does not excuse itself" date-d-without-bsd 2 "$f"
+f="$(fixture backtick-in-dq 'out="prefix `date -d yesterday +%s`"')"
+expect_finding "a backtick substitution inside double quotes is code" date-d-without-bsd 2 "$f"
+f="$(fixture semicolons 'date -r "$e"; a=1; b=2; c=3; d=4; date -d tomorrow')"
+expect_finding "semicolons separate commands in the window" date-d-without-bsd 2 "$f"
+f="$(fixture and-or-list 'out=$(date -r "$e") || out="" && w=1' 'y=2' 'z=3' '[ -n "$out" ] || out=$(date -d "@$e")')"
+expect_clean "|| and && join one command" "$f"
+f="$(fixture if-else 'if t="$(date -u -v-3H +%s 2>/dev/null)"; then' '  :' 'else' \
+  '  t="$(date -u -d "3 hours ago" +%s)"' 'fi')"
+expect_clean "then, else and : are not commands in the window" "$f"
+f="$(fixture arithmetic-shift-name 'x=$((1 << bits))' 'now=$(date -d yesterday)')"
+expect_finding "a shift by a named operand is not a here-document" date-d-without-bsd 3 "$f"
+f="$(fixture bsd-as-argument "printf '%s\\n' date -r epoch" 'now=$(date -d yesterday)')"
+expect_finding "date -r as a plain argument is not a fallback" date-d-without-bsd 3 "$f"
+f="$(fixture quoted-find-example "printf '%s\\n' 'find . -newermt @0'")"
+expect_clean "a quoted find example is data" "$f"
+f="$(fixture numeric-heredoc 'cat <<123' 'now=$(date -d yesterday)' '123' 'x=1')"
+expect_clean "a numeric here-document delimiter is honoured" "$f"
+f="$(fixture bash-c "bash -c 'date -d yesterday +%s'")"
+expect_finding "a bash -c payload is code" date-d-without-bsd 2 "$f"
+f="$(fixture eval-find 'eval "find . -newermt @0"')"
+expect_finding "an eval payload is code" find-newermt-epoch 2 "$f"
+f="$(fixture sh-c-fallback "sh -c 'date -r 1 2>/dev/null || date -d @1'")"
+expect_clean "a fallback inside the same payload counts" "$f"
+
 # --- Comments and the opt-out marker --------------------------------------------------------------
 f="$(fixture comment '  # find . -newermt @1 and date -d "x" are GNU-only')"
 expect_clean "comment lines are ignored" "$f"
