@@ -800,6 +800,10 @@ jobs:
               # (monorepo#2838), so a change to it or its test re-runs this job.
               - '.claude/scripts/kata-measure-date.sh'
               - '.claude/scripts/kata-measure-date.test.sh'
+              # A cask PR's draft fence is cleared only on this helper's RIPE verdict
+              # (monorepo#2992), so a change to it or its test re-runs this job.
+              - '.claude/scripts/release-cask-ripeness.sh'
+              - '.claude/scripts/release-cask-ripeness.test.sh'
               - '.claude/scripts/programmed-bot-review-exemption.sh'
               - '.claude/skill-ownership-allowlist.tsv'
               # The contract test asserts the ownership classifier exists and
@@ -2613,6 +2617,11 @@ jobs:
         run: |
           shellcheck .claude/scripts/kata-measure-date.sh .claude/scripts/kata-measure-date.test.sh
           bash .claude/scripts/kata-measure-date.test.sh
+      # Hermetic: judges synthetic casks and release objects, no API call (monorepo#2992).
+      - name: Verify the release cask ripeness classifier
+        run: |
+          shellcheck .claude/scripts/release-cask-ripeness.sh .claude/scripts/release-cask-ripeness.test.sh
+          bash .claude/scripts/release-cask-ripeness.test.sh
 
   test-ci-aggregate-contract:
     name: Test independent CI aggregate contract
