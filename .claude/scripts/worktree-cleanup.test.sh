@@ -3611,15 +3611,36 @@ t_custom_root_rejects_a_symlink_a_relative_path_and_slash() {
 }
 
 t_custom_root_rejects_a_symlinked_ancestor() {
-  local name="a root whose lane directory is a symlink into another lane is refused"
+  local name="a root whose lane directory is a symlink, into another lane or a same-named dir, is refused"
   local root; root=$(make_repo)
   add_wt_at "$root" "$root/repo/.claude/worktrees/claude-lane" claude/lane \
     || { bad "$name" "FIXTURE: worktree add failed"; rm -rf "$root"; return; }
+  add_wt_at "$root" "$root/elsewhere/.codex/worktrees/other-lane" codex/other \
+    || { bad "$name" "FIXTURE: second worktree add failed"; rm -rf "$root"; return; }
   ln -s .claude "$root/repo/.codex"
+  mkdir -p "$root/repo2"
+  ln -s "$root/elsewhere/.codex" "$root/repo2/.codex"
+  local out1 rc1 out2 rc2
+  out1=$(run_root "$root" "$root/repo/.codex/worktrees" apply); rc1=$?
+  out2=$(run_root "$root" "$root/repo2/.codex/worktrees" apply); rc2=$?
+  if [ "$rc1" -eq 2 ] && grep -q 'lane directory is a symlink' <<<"$out1" \
+     && [ "$rc2" -eq 2 ] && grep -q 'lane directory is a symlink' <<<"$out2" \
+     && [ -d "$root/repo/.claude/worktrees/claude-lane" ] \
+     && [ -d "$root/elsewhere/.codex/worktrees/other-lane" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc1=$rc1 rc2=$rc2 :: $out1 :: $out2"
+  fi
+  rm -rf "$root"
+}
+
+t_custom_root_that_cannot_be_inspected_is_unknown() {
+  local name="a root beneath a regular file is UNKNOWN (exit 2), never a clean \"no root\""
+  local root; root=$(make_repo)
+  printf x > "$root/plainfile"
   local out rc
-  out=$(run_root "$root" "$root/repo/.codex/worktrees" apply); rc=$?
-  if [ "$rc" -eq 2 ] && grep -q 'symlinked ancestor' <<<"$out" \
-     && [ -d "$root/repo/.claude/worktrees/claude-lane" ]; then
+  out=$(run_root "$root" "$root/plainfile/.codex/worktrees" apply); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q 'cannot be inspected' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "rc=$rc :: $out"
@@ -3924,6 +3945,7 @@ t_custom_root_finds_the_worktree_inside_an_id_directory
 t_custom_root_never_holds_a_checkout
 t_custom_root_rejects_a_symlink_a_relative_path_and_slash
 t_custom_root_rejects_a_symlinked_ancestor
+t_custom_root_that_cannot_be_inspected_is_unknown
 t_custom_root_matches_a_registration_spelled_in_another_case
 t_submodule_on_a_merged_pr_head
 t_submodule_drift_keeps_local_only_refs

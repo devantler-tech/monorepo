@@ -188,21 +188,27 @@ if [ -n "${WORKTREE_CLEANUP_WT_ROOT:-}" ]; then
   if [ -L "$WT_ROOT" ]; then
     die "worktree root is a symlink — refusing to follow it: $WT_ROOT"
   fi
+  # The lane directory above it is checked the same way: `.codex` linked to `.claude`, or to
+  # another `.codex` elsewhere, would move the sweep outside the root the caller named. Deeper
+  # ancestors (/tmp -> /private/tmp) do not choose the lane, so they may resolve.
+  if [ -L "${WT_ROOT%/*}" ]; then
+    die "worktree root's lane directory is a symlink — refusing to follow it: ${WT_ROOT%/*}"
+  fi
+  # An absent root is a clean "nothing to sweep"; one that cannot be inspected is not. Find the
+  # nearest existing ancestor: it must be a directory this run can read and search.
+  if [ ! -e "$WT_ROOT" ]; then
+    probe=${WT_ROOT%/*}
+    while [ -n "$probe" ] && [ ! -e "$probe" ]; do probe=${probe%/*}; done
+    [ -n "$probe" ] || probe=/
+    if [ ! -d "$probe" ] || [ ! -r "$probe" ] || [ ! -x "$probe" ]; then
+      die "worktree root $WT_ROOT cannot be inspected: $probe is not a readable directory"
+    fi
+  fi
   # Canonical, like every candidate and registration below (physical_path): /tmp is
   # /private/tmp on macOS, and the caller may spell the directory in another case.
-  lexical_root=$WT_ROOT
   if [ -e "$WT_ROOT" ]; then
     WT_ROOT=$(physical_path "$WT_ROOT") \
       || die "cannot resolve worktree root $WORKTREE_CLEANUP_WT_ROOT"
-    # A symlinked ANCESTOR is not caught by the -L test above: `.codex` linked to `.claude`
-    # would canonicalise a Codex root to the Claude one, and an apply run would sweep the
-    # other lane. The last two components (lane dir and `worktrees`) must survive
-    # canonicalisation; a resolved prefix such as /tmp -> /private/tmp above them is fine.
-    lexical_tail=${lexical_root#"${lexical_root%/*/*}"}
-    canonical_tail=${WT_ROOT#"${WT_ROOT%/*/*}"}
-    if [ "$(printf '%s' "$lexical_tail" | fold_case)" != "$(printf '%s' "$canonical_tail" | fold_case)" ]; then
-      die "worktree root $lexical_root resolves to $WT_ROOT through a symlinked ancestor — refusing"
-    fi
   fi
 else
   WT_ROOT="$TOPLEVEL/.claude/worktrees"
