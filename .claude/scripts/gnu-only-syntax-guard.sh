@@ -9,38 +9,42 @@
 # claude-lane-liveness.sh: BSD find rejects it, the enumeration came back empty, and a healthy lane
 # was reported NOT-PRODUCING. Hand-verification cannot catch this class, so a static check does.
 #
-# Rules (extend the awk block below when a new instance is measured):
+# Rules (extend the rule block in the awk program when a new instance is measured):
 #   find-newermt-epoch  `-newer?t @…` — BSD find cannot parse an `@<epoch>` date. Use a `touch -t`
 #                       reference file with `-newer` instead.
 #   date-d-without-bsd  `date … -d` / `--date` with no BSD form (`date … -v`, `-j` or `-r`) within
 #                       three commands. The dual-dialect idiom tries one form and falls back to the
 #                       other; a GNU form on its own fails on macOS.
 #
-# Rules are judged per logical command: a line ending in `\` is joined with the next, as the shell
-# joins it, and a finding is reported at the command's first line.
+# How a script is read. A small lexer splits each script into commands the way the shell does: a
+# backslash-newline or an open quote joins the next line, a `#` that starts a word begins a comment,
+# single, double and $'…' quotes and backslash escapes are tracked, a `$(…)` inside double quotes
+# is code again, and here-document bodies are data and skipped. Each command then has three views:
+# its code (quoted data removed), its text without the comment, and its comment. The `date` rules
+# and the BSD fallback read only code, so a fallback mentioned in a string or comment excuses
+# nothing; the `find` rule reads the text, because the `@` is usually quoted. A finding is reported
+# at the command's first line. A quote or here-document left open at the end of a file is unknown.
 #
-# A command may opt out with a trailing shell comment `# gnu-only-ok: <reason>` when it only ever runs
-# on GNU (for example a Linux-only CI step). The marker counts only as a real comment — after
-# whitespace and outside quotes — so quoted data cannot switch the check off. Comment lines are
-# ignored.
+# A command may opt out with a trailing comment `# gnu-only-ok: <reason>` when it only ever runs on
+# GNU (for example a Linux-only CI step). Only a real comment counts, never quoted data.
 #
 # Usage: gnu-only-syntax-guard.sh [FILE...]
 #   With no FILE, scans every bash-shebanged .claude/scripts/*.sh except this guard and its test,
 #   whose fixtures contain the flagged constructs on purpose.
 # Exit: 0 no finding, 1 findings (one `path:line: rule: text` each), 2 unknown (usage error, an
-# unreadable or empty file, or nothing to scan).
+# unreadable, empty or unterminated file, nothing to scan, or any abort before the scan finished).
 
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# A guard that exits 0 without having run is worse than one that errors: bash 3.2 can report a
-# `set -u` abort as 0 to an EXIT trap. Reaching the end is the only way a zero status leaves.
+# Only reaching a verdict may leave with 0 or 1. Any other exit — a failed command under `set -e`,
+# or bash 3.2 reporting a `set -u` abort as 0 to the trap — is unknown, never a finding or a pass.
 gnu_only_guard_finished=0
 cleanup() {
   local rc=$?
-  if [[ "$gnu_only_guard_finished" != 1 && $rc -eq 0 ]]; then
-    echo "gnu-only-syntax-guard: aborted before finishing; reporting unknown rather than a clean pass" >&2
+  if [[ "$gnu_only_guard_finished" != 1 ]]; then
+    [[ $rc -eq 2 ]] || echo "gnu-only-syntax-guard: aborted before finishing (status $rc); reporting unknown" >&2
     rc=2
   fi
   exit "$rc"
@@ -56,7 +60,7 @@ files=()
 if [[ $# -gt 0 ]]; then
   case "$1" in
     -h | --help)
-      sed -n '2,31p' "${BASH_SOURCE[0]}"
+      sed -n '2,35p' "${BASH_SOURCE[0]}"
       gnu_only_guard_finished=1
       exit 0
       ;;
@@ -83,13 +87,19 @@ if [[ ${#files[@]} -eq 0 ]]; then
   unknown "no bash scripts to scan — refusing to report a clean pass"
 fi
 
+operands=()
 for f in "${files[@]}"; do
   [[ -f "$f" && -r "$f" ]] || unknown "cannot read $f"
   # An empty file has no content to examine, so it cannot be reported clean.
   [[ -s "$f" ]] || unknown "$f is empty — nothing was examined"
+  # awk reads an operand shaped like `name=value` as an assignment, not a file; `./` prevents that.
+  case "$f" in
+    /*) operands+=("$f") ;;
+    *) operands+=("./$f") ;;
+  esac
 done
 
-findings="$(
+scan="$(
   awk -v q="'" '
     BEGIN {
       newer_epoch = "-newer[A-Za-z]t[ \t]+[\"" q "]?@"
@@ -98,65 +108,166 @@ findings="$(
       gnu_date_re = date_opts "(-[A-Za-z]*d|--date)"
       bsd_date_re = date_opts "-[A-Za-z]*[vjr]"
     }
-    function is_code(s) { return s !~ /^[ \t]*#/ }
-    # A marker counts only as a real trailing comment: preceded by whitespace (or the line start) and
-    # with balanced single and double quotes before it, so a quoted "# gnu-only-ok:" is data.
-    function opted_out(s,   pre, sq, dq) {
-      if (!match(s, /(^|[ \t])#[ \t]*gnu-only-ok:[ \t]*[^ \t]/)) return 0
-      pre = substr(s, 1, RSTART - 1)
-      sq = gsub(q, "", pre)
-      dq = gsub(/"/, "", pre)
-      return (sq % 2 == 0 && dq % 2 == 0)
+
+    function reset_file() {
+      count = 0; joining = 0; hn = 0; hcur = 0; in_heredoc = 0
+      sd = 0; st[0] = "N"
+      delete nc; delete co; delete cm; delete raw; delete start; delete pd
     }
-    function report(file, n, rule, s) {
-      sub(/^[ \t]+/, "", s)
-      printf "%s:%d: %s: %s\n", file, n, rule, s
+    function begin_command() {
+      count++
+      nc[count] = ""; co[count] = ""; cm[count] = ""; raw[count] = ""; start[count] = FNR
     }
-    function flush(file,   i, j, lo, hi, has_bsd) {
-      for (i = 1; i <= count; i++) {
-        if (!code[i] || opted_out(text[i])) continue
-        if (text[i] ~ newer_epoch) report(file, start[i], "find-newermt-epoch", text[i])
-        if (text[i] ~ gnu_date_re) {
+    # A `#` starts a comment only at the start of a word.
+    function word_start(s) { return s == "" || substr(s, length(s), 1) ~ /[ \t\n;&|()]/ }
+
+    # Read a here-document operator at line position i (just past `<<`); queue its delimiter and
+    # return the position after it.
+    function heredoc_op(line, i,   n, c, d, dash) {
+      n = length(line); dash = 0
+      if (substr(line, i, 1) == "-") { dash = 1; i++ }
+      while (i <= n && substr(line, i, 1) ~ /[ \t]/) i++
+      d = ""
+      while (i <= n) {
+        c = substr(line, i, 1)
+        if (c ~ /[ \t;&|()<>]/) break
+        if (c != q && c != "\"" && c != "\\") d = d c
+        i++
+      }
+      if (d ~ /^[A-Za-z_]/) { hn++; hq[hn] = d; hdash[hn] = dash }
+      return i
+    }
+
+    # Lex one physical line into the current command. Returns 1 when the command continues on the
+    # next line (backslash-newline, or an open quote or substitution), 0 when it ends here.
+    function lex(line,   i, n, c, m) {
+      n = length(line); i = 1
+      while (i <= n) {
+        c = substr(line, i, 1); m = st[sd]
+        if (m == "S") {
+          nc[count] = nc[count] c
+          if (c == q) sd--
+          i++; continue
+        }
+        if (m == "A" || m == "D") {
+          if (c == "\\") { nc[count] = nc[count] substr(line, i, 2); i += 2; continue }
+          nc[count] = nc[count] c
+          if ((m == "A" && c == q) || (m == "D" && c == "\"")) { sd--; i++; continue }
+          if (m == "D" && c == "$" && substr(line, i + 1, 1) == "(") {
+            # A command substitution inside double quotes is code again.
+            nc[count] = nc[count] "("; co[count] = co[count] " $("
+            sd++; st[sd] = "N"; pd[sd] = 0; i += 2; continue
+          }
+          i++; continue
+        }
+        # Unquoted code.
+        if (c == "\\") {
+          if (i == n) return 1
+          nc[count] = nc[count] substr(line, i, 2); co[count] = co[count] substr(line, i, 2)
+          i += 2; continue
+        }
+        if (c == "#" && word_start(nc[count])) { cm[count] = substr(line, i); return 0 }
+        if (c == q || c == "\"" || (c == "$" && substr(line, i + 1, 1) == q)) {
+          if (c == "$") { nc[count] = nc[count] "$"; i++; st[sd + 1] = "A" }
+          else st[sd + 1] = (c == q ? "S" : "D")
+          sd++
+          nc[count] = nc[count] substr(line, i, 1); co[count] = co[count] "Q"
+          i++; continue
+        }
+        if (sd > 0 && c == "(") pd[sd]++
+        if (sd > 0 && c == ")") {
+          if (pd[sd] == 0) { nc[count] = nc[count] c; co[count] = co[count] c; sd--; i++; continue }
+          pd[sd]--
+        }
+        if (substr(line, i, 3) == "<<<") {
+          # A here-string, not a here-document.
+          nc[count] = nc[count] "<<<"; co[count] = co[count] "<<<"; i += 3; continue
+        }
+        if (c == "<" && substr(line, i, 2) == "<<" && substr(line, i + 2, 1) != "<") {
+          nc[count] = nc[count] "<<"; co[count] = co[count] "<<"
+          i = heredoc_op(line, i + 2); continue
+        }
+        nc[count] = nc[count] c; co[count] = co[count] c
+        i++
+      }
+      if (sd > 0) { nc[count] = nc[count] "\n"; co[count] = co[count] "\n"; return 1 }
+      return 0
+    }
+
+    function is_command(k,   s) { s = nc[k]; gsub(/[ \t\n]/, "", s); return s != "" }
+    function opted_out(k) { return cm[k] ~ /^#[ \t]*gnu-only-ok:[ \t]*[^ \t]/ }
+    function report(file, k, rule,   s) {
+      s = raw[k]; sub(/^[ \t]+/, "", s)
+      printf "F\t%s:%d: %s: %s\n", file, start[k], rule, s
+    }
+
+    function flush(file,   k, i, j, n, idx, lo, hi, has_bsd) {
+      if (joining || in_heredoc) {
+        printf "U\t%s: a quote, continuation or here-document is still open at the end of the file\n", file
+      }
+      # Index the commands, so the fallback window counts commands rather than lines.
+      n = 0
+      for (k = 1; k <= count; k++) if (is_command(k)) { n++; idx[n] = k }
+      for (j = 1; j <= n; j++) {
+        k = idx[j]
+        if (opted_out(k)) continue
+        if (nc[k] ~ newer_epoch) report(file, k, "find-newermt-epoch")
+        if (co[k] ~ gnu_date_re) {
           has_bsd = 0
-          lo = i - 3; if (lo < 1) lo = 1
-          hi = i + 3; if (hi > count) hi = count
-          for (j = lo; j <= hi; j++) if (code[j] && text[j] ~ bsd_date_re) has_bsd = 1
-          if (!has_bsd) report(file, start[i], "date-d-without-bsd", text[i])
+          lo = j - 3; if (lo < 1) lo = 1
+          hi = j + 3; if (hi > n) hi = n
+          for (i = lo; i <= hi; i++) if (co[idx[i]] ~ bsd_date_re) has_bsd = 1
+          if (!has_bsd) report(file, k, "date-d-without-bsd")
         }
       }
+      printf "S\t%s\n", file
     }
+
     FNR == 1 {
       if (NR > 1) flush(prev)
-      count = 0
-      continuing = 0
-      delete text; delete code; delete start
+      reset_file()
     }
     {
       prev = FILENAME
       line = $0
-      if (continuing) {
-        # Join a continued command the way the shell does: drop the backslash-newline.
-        text[count] = text[count] line
-      } else {
-        count++
-        text[count] = line
-        start[count] = FNR
-        code[count] = is_code(line)
+      if (in_heredoc) {
+        # A here-document body is data. It ends at a line equal to its delimiter (tabs stripped
+        # first for `<<-`); several queued here-documents are read in order.
+        term = line
+        if (hdash[hcur]) sub(/^\t+/, "", term)
+        if (term == hq[hcur]) {
+          hcur++
+          if (hcur > hn) { in_heredoc = 0; hn = 0 }
+        }
+        next
       }
-      # An odd run of trailing backslashes escapes the newline; an even run is literal backslashes.
-      continuing = 0
-      if (code[count] && match(line, /\\+$/) && RLENGTH % 2 == 1) {
-        continuing = 1
-        sub(/\\$/, "", text[count])
-      }
+      if (!joining) begin_command()
+      raw[count] = raw[count] (joining ? " " : "") line
+      joining = lex(line)
+      if (!joining && hn > 0) { in_heredoc = 1; hcur = 1 }
     }
     END { if (NR > 0) flush(prev) }
-  ' "${files[@]}"
+  ' "${operands[@]}"
 )" || unknown "the scan itself failed"
+
+# Every file must have been read to the end, or a clean result would cover content never examined.
+scanned=0
+findings=""
+while IFS= read -r row; do
+  case "$row" in
+    S$'\t'*) scanned=$((scanned + 1)) ;;
+    F$'\t'*) findings+="${row#F$'\t'}"$'\n' ;;
+    U$'\t'*) unknown "${row#U$'\t'}" ;;
+    '') ;;
+    *) unknown "unexpected scanner output: $row" ;;
+  esac
+done <<<"$scan"
+[[ $scanned -eq ${#operands[@]} ]] ||
+  unknown "scanned ${scanned} of ${#operands[@]} file(s) — refusing to report on the rest"
 
 gnu_only_guard_finished=1
 if [[ -n "$findings" ]]; then
-  printf '%s\n' "$findings"
+  printf '%s' "$findings"
   echo "gnu-only-syntax-guard: GNU-only syntax found — probe the way the script runs (bash -c), not the interactive shell" >&2
   exit 1
 fi

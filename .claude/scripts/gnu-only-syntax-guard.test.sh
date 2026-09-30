@@ -126,6 +126,28 @@ expect_clean "BSD fallback split across a continuation" "$f"
 f="$(fixture even-backslashes 'printf "%s\n" "a\\\\"' 'find . -newermt @1')"
 expect_finding "an escaped backslash does not continue the line" find-newermt-epoch 3 "$f"
 
+# --- A fallback counts only when it is code, and the window counts commands -----------------------
+f="$(fixture bsd-in-comment 'x=1 # BSD uses date -r' 'now=$(date -d yesterday)')"
+expect_finding "a BSD form in a trailing comment is not a fallback" date-d-without-bsd 3 "$f"
+f="$(fixture bsd-in-string 'echo "BSD uses date -v-1d"' 'now=$(date -d yesterday)')"
+expect_finding "a BSD form in a quoted string is not a fallback" date-d-without-bsd 3 "$f"
+f="$(fixture bsd-in-dq-substitution 'out="$(date -r "$e" +%H 2>/dev/null)" ||' \
+  '  out="$(date -d "@$e" +%H)"')"
+expect_clean "a BSD form inside a double-quoted substitution is code" "$f"
+f="$(fixture window-skips-blanks 'out=$(date -r "$e" +%H 2>/dev/null) || out=""' 'x=1' '' \
+  '# a comment line' '' 'y=2' '[ -n "$out" ] || out=$(date -d "@$e" +%H)')"
+expect_clean "blank and comment lines do not count toward the window" "$f"
+f="$(fixture gnu-in-heredoc 'cat <<EOF' 'now=$(date -d yesterday)' 'EOF' 'x=1')"
+expect_clean "a here-document body is data" "$f"
+f="$(fixture after-heredoc 'cat <<-"EOF"' '	body' '	EOF' 'now=$(date -d yesterday)')"
+expect_finding "code after a <<- here-document is scanned" date-d-without-bsd 5 "$f"
+f="$(fixture here-string 'read -r x <<<"$y"' 'now=$(date -d yesterday)')"
+expect_finding "a here-string is not a here-document" date-d-without-bsd 3 "$f"
+f="$(fixture arithmetic-shift 'x=$(( 1 << 2 ))' 'now=$(date -d yesterday)')"
+expect_finding "an arithmetic shift is not a here-document" date-d-without-bsd 3 "$f"
+f="$(fixture multiline-string 'msg="first line' 'date -r is BSD"' 'now=$(date -d yesterday)')"
+expect_finding "a multi-line string is data across its lines" date-d-without-bsd 4 "$f"
+
 # --- Comments and the opt-out marker --------------------------------------------------------------
 f="$(fixture comment '  # find . -newermt @1 and date -d "x" are GNU-only')"
 expect_clean "comment lines are ignored" "$f"
@@ -139,6 +161,12 @@ f="$(fixture opt-out-double-quoted 'label=" # gnu-only-ok: display"; now=$(date 
 expect_finding "a double-quoted marker is data, not an opt-out" date-d-without-bsd 2 "$f"
 f="$(fixture opt-out-after-quotes "now=\$(date -d '@1' +%s) # gnu-only-ok: Linux-only CI step")"
 expect_clean "a real comment after balanced quotes is honoured" "$f"
+f="$(fixture opt-out-escaped-quote 'label="\" # gnu-only-ok: display"; now=$(date -d yesterday)')"
+expect_finding "an escaped quote does not end the string before a marker" date-d-without-bsd 2 "$f"
+f="$(fixture opt-out-ansi-c "label=\$'\\' # gnu-only-ok: display'; now=\$(date -d yesterday)")"
+expect_finding "a marker inside \$'…' quotes is data" date-d-without-bsd 2 "$f"
+f="$(fixture hash-not-comment 'n=${#arr[@]}; now=$(date -d yesterday) # gnu-only-ok: Linux-only')"
+expect_clean "\${#…} is not a comment, and the real trailing comment still counts" "$f"
 
 # --- Several files in one run: findings keep their own file and line ------------------------------
 a="$(fixture multi-a 'x=1' 'find . -newermt @1')"
@@ -170,6 +198,30 @@ ok
 f="$(fixture clean-partner 'x=1')"
 run "$f" "$tmp/empty.sh"
 [[ $rc -eq 2 ]] || fail "a clean file next to an empty one: expected exit 2, got $rc (out: $out)"
+ok
+f="$(fixture unterminated 'msg="never closed' 'now=$(date -d yesterday)')"
+run "$f"
+[[ $rc -eq 2 ]] || fail "an unterminated quote: expected exit 2, got $rc (out: $out)"
+ok
+f="$(fixture unterminated-heredoc 'cat <<EOF' 'now=$(date -d yesterday)')"
+run "$f"
+[[ $rc -eq 2 ]] || fail "an unterminated here-document: expected exit 2, got $rc (out: $out)"
+ok
+# An operand shaped like an awk assignment is still read as a file.
+mkdir "$tmp/assign"
+printf '%s\n' '#!/usr/bin/env bash' 'now=$(date -d yesterday)' >"$tmp/assign/input=bad"
+rc=0
+(cd "$tmp/assign" && bash "$guard" 'input=bad') >"$tmp/out" 2>"$tmp/err" </dev/null || rc=$?
+[[ $rc -eq 1 ]] || fail "an assignment-shaped operand: expected exit 1, got $rc ($(cat "$tmp/out") $(cat "$tmp/err"))"
+grep -q 'input=bad:2: date-d-without-bsd' "$tmp/out" || fail "an assignment-shaped operand was not scanned: $(cat "$tmp/out")"
+ok
+# Any abort before the verdict is unknown (2), never a finding (1): a failing `sed` under --help.
+mkdir "$tmp/nosed"
+printf '%s\n' '#!/bin/sh' 'exit 1' >"$tmp/nosed/sed"
+chmod +x "$tmp/nosed/sed"
+rc=0
+PATH="$tmp/nosed:$PATH" bash "$guard" --help >"$tmp/out" 2>"$tmp/err" || rc=$?
+[[ $rc -eq 2 ]] || fail "an abort under --help: expected exit 2, got $rc"
 ok
 mkdir "$tmp/empty-scripts"
 cp "$guard" "$tmp/empty-scripts/gnu-only-syntax-guard.sh"
