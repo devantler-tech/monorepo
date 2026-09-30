@@ -41,6 +41,7 @@ jobs:
       latency-discipline-contract: ${{ steps.filter.outputs.latency-discipline-contract }}
       control-character-command-contract: ${{ steps.filter.outputs.control-character-command-contract }}
       dotfile-glob-fanout-contract: ${{ steps.filter.outputs.dotfile-glob-fanout-contract }}
+      gnu-only-syntax-guard: ${{ steps.filter.outputs.gnu-only-syntax-guard }}
       one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
       retired-rule-survivors-contract: ${{ steps.filter.outputs.retired-rule-survivors-contract }}
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
@@ -462,6 +463,10 @@ jobs:
               - '.claude/guides/**'
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/dotfile-glob-fanout-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            gnu-only-syntax-guard:
+              - '.claude/scripts/*.sh'
+              - '.claude/scripts/AGENTS.md'
               - '.github/workflows/ci.yaml'
             one-verb-per-bash-call-contract:
               - 'AGENTS.md'
@@ -1924,6 +1929,21 @@ jobs:
       - name: Verify the dotfile glob fan-out contract
         run: bash .claude/scripts/dotfile-glob-fanout-contract.test.sh
 
+  test-gnu-only-syntax-guard:
+    name: Test GNU-only syntax guard
+    needs: changes
+    if: needs.changes.outputs.gnu-only-syntax-guard == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the GNU-only syntax guard
+        run: bash .claude/scripts/gnu-only-syntax-guard.test.sh
+
   test-rung-type-filter-contract:
     name: Test rung type filter contract
     needs: changes
@@ -2762,6 +2782,7 @@ jobs:
       - test-latency-discipline-contract
       - test-control-character-command-contract
       - test-dotfile-glob-fanout-contract
+      - test-gnu-only-syntax-guard
       - test-one-verb-per-bash-call-contract
       - test-retired-rule-survivors-contract
       - test-bash-call-timeout-budget-contract
@@ -2847,6 +2868,7 @@ jobs:
             ${{ needs.test-latency-discipline-contract.result }}
             ${{ needs.test-control-character-command-contract.result }}
             ${{ needs.test-dotfile-glob-fanout-contract.result }}
+            ${{ needs.test-gnu-only-syntax-guard.result }}
             ${{ needs.test-one-verb-per-bash-call-contract.result }}
             ${{ needs.test-retired-rule-survivors-contract.result }}
             ${{ needs.test-bash-call-timeout-budget-contract.result }}

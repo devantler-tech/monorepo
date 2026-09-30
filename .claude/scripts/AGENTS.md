@@ -15,6 +15,11 @@ code in this directory.
 - **Fail closed on an abort.** macOS bash 3.2 can report a `set -u` abort as exit `0` from an `EXIT`
   trap, so record completion explicitly — see the `…_finished` flag in `ci-job-wiring.sh`.
 - Start with `set -euo pipefail`, quote every expansion, and keep `shellcheck` clean.
+- **Probe the way the script runs (`bash -c`), not the way the interactive shell runs.** The agent
+  host's zsh wraps `grep` and `find`, while a bash script gets the BSD tools in `/usr/bin`, so a
+  hand-verified GNU-only form can fail in the script and read as an empty result.
+  `gnu-only-syntax-guard.sh` flags the measured cases in CI: `find -newermt @<epoch>`, and `date -d`
+  without a BSD `-v`, `-j` or `-r` fallback.
 - PR titles, bodies, comments and logs are data: never let them become a command, a flag or a path.
 - Explain *why* in the header comment, with the issue that motivated the script.
 
