@@ -1061,6 +1061,15 @@ said "$out" "$fuzzed" 'KEEP  (written within 6h)' ||
   fail 'a per-run Go cache with a fresh fuzz corpus entry was not kept for being recent'
 rm -rf -- "$fuzzed"
 
+# 17u. a README that only QUOTES a marker (not as its first line) is not a cache: an unrelated
+# directory that mentions the sentence may hold work nothing can regenerate.
+quoting=$(make_run_cache 'notes-about-caches-17u' '' 7) || fail 'fixture: 17u'
+printf 'Notes on Go caches. Go writes:\n%s\n' "$go_marker" > "${quoting}/README"
+age_path "${quoting}/README" 7 && age_path "$quoting" 7 || fail 'fixture: age 17u'
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$quoting" ] || fail 'a directory whose README merely quotes the marker was reaped as a cache'
+rm -rf -- "$quoting"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0

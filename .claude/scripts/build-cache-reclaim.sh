@@ -663,18 +663,37 @@ sweep_candidate() {
   fi
 }
 
-# is_run_cache <dir> succeeds when <dir> carries a Go or golangci-lint cache README marker. The
-# README must be a regular file that is not a symlink: a FIFO, a device or a link to a stream
-# would block the read, and any temp-root entry could plant one to stall the whole sweep.
-# Only the first 512 bytes are read: each tool writes its marker as the README's first line, and
-# an unrelated README may be huge or still growing. Returns 0 for a marker, 1 for none, and 2 when
-# the README could not be read: a cache whose marker was never read was never examined, so
-# callers count it UNKNOWN and keep it.
-is_run_cache() {
-  local readme="$1/README" prefix
-  [ -f "$readme" ] && [ ! -L "$readme" ] || return 1
+# run_cache_kind <dir> prints `go` or `lint` when <dir>'s README opens with that tool's cache marker
+# as its exact first line, and `none` otherwise; it returns 2 when the README could not be read.
+# This is the ONE place a marker is read, so every decision uses the same fail-closed, bounded
+# answer:
+#   * the README must be a regular file that is not a symlink: a FIFO, a device or a link to a
+#     stream would block the read, and any temp-root entry could plant one to stall the sweep;
+#   * only the first 512 bytes are read: an unrelated README may be huge or still growing;
+#   * the first line must BE the marker, not merely quote it: an unrelated directory whose README
+#     mentions the sentence is not a regenerable cache.
+# A cache whose marker was never read was never examined, so callers count a 2 as UNKNOWN.
+run_cache_kind() {
+  local readme="$1/README" prefix first
+  if [ ! -f "$readme" ] || [ -L "$readme" ]; then
+    printf none
+    return 0
+  fi
   prefix=$(head -c 512 -- "$readme" 2>/dev/null) || return 2
-  grep -qF -e "$GO_CACHE_MARKER" -e "$LINT_CACHE_MARKER" <<<"$prefix"
+  first=${prefix%%$'\n'*}
+  case "$first" in
+    "$GO_CACHE_MARKER") printf go ;;
+    "$LINT_CACHE_MARKER") printf lint ;;
+    *) printf none ;;
+  esac
+}
+
+# is_run_cache <dir> returns 0 for a marked cache, 1 for none, and 2 when the README could not
+# be read (run_cache_kind).
+is_run_cache() {
+  local kind
+  kind=$(run_cache_kind "$1") || return 2
+  [ "$kind" != none ]
 }
 
 if [ -d "$TMPDIR_ROOT" ]; then
@@ -730,14 +749,20 @@ run_cache_idle() {
 #            A linter can sit between two cache reads with no file open, so the lsof probes
 #            cannot see it -- the same rule reclaim_lint_cache applies to the configured cache.
 run_cache_hold() {
-  local tree=$1 when=${2:-early} rc oldest table
+  local tree=$1 when=${2:-early} rc oldest table kind
   if run_cache_idle "$tree"; then rc=0; else rc=$?; fi
   case "$rc" in
     0) ;;
     1) printf recent; return 0 ;;
     *) printf unknown; return 0 ;;
   esac
-  if grep -qF -e "$LINT_CACHE_MARKER" -- "${tree}/README" 2>/dev/null; then
+  # The kind is read again through the same bounded, typed reader: a README that can no longer be
+  # read, or no longer carries a marker, is a changed tree and is kept.
+  if ! kind=$(run_cache_kind "$tree") || [ "$kind" = none ]; then
+    printf unknown
+    return 0
+  fi
+  if [ "$kind" = lint ]; then
     if [ "$when" = late ]; then
       # The startup snapshot is minutes old by removal time; a linter started since then is
       # only in a fresh table (the same late read reclaim_lint_cache makes).
