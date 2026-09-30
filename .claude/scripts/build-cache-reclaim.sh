@@ -20,6 +20,9 @@
 #
 # Defaults: dry-run, 3 days, 10 GB.
 #
+# Exit: 0 every sweep read its input; 2 a usage or setting error, or a scan that could not be
+# read (logged as UNKNOWN -- the summary is then partial, never clean).
+#
 # What it covers, in the order it runs:
 #   1. GOCACHE and GOMODCACHE, each cleaned only when it exceeds cache_budget_gb.
 #   2. Per-run agent trees (codex-*, war-*, dpc-*, ksail-*) under the temp root, older
@@ -149,6 +152,10 @@ GO_TMP_ROOT=$(resolve_go_tmpdir)
 reclaimed_mb=0
 kept=0
 removed=0
+# name_swept lists (one per line) the trees sweep (2) already decided; unknown counts scans
+# that could not be read, so the summary and the exit status never call a partial pass clean.
+name_swept=''
+unknown=0
 
 log() { printf 'build-cache-reclaim: %s\n' "$*"; }
 
@@ -640,6 +647,8 @@ sweep_candidate() {
 
 if [ -d "$TMPDIR_ROOT" ]; then
   while IFS= read -r tree; do
+    # Remember every tree this sweep decided, so (2b) never decides -- and counts -- it again.
+    [ -n "$tree" ] && name_swept="${name_swept}${tree}"$'\n'
     sweep_candidate "$tree" temp-root
   done <<EOF
 $(find "$TMPDIR_ROOT" -maxdepth 1 -type d \
@@ -661,22 +670,37 @@ fi
 # sweep_candidate still applies, and a cache is regenerable: removing one costs a rebuild.
 # ---------------------------------------------------------------------------
 
-# run_cache_idle <dir> succeeds when neither the cache dir nor any entry directly inside it
-# has changed within RUN_CACHE_IDLE_HOURS. The Go cache adds each entry to one of 256
-# fan-out dirs, so a write always moves one of their mtimes even though the top dir's does
-# not. A read failure counts as recent, so an unreadable cache is kept.
+# run_cache_idle <dir> succeeds when neither the cache dir, its fan-out dirs, nor any entry in
+# them has changed within RUN_CACHE_IDLE_HOURS. Depth 2 reaches the entries (00/<hash>-a):
+# Go overwrites an existing entry in place and refreshes an entry's mtime on a cache hit,
+# and neither moves the fan-out dir's mtime, so a cache busy with hits would look idle at
+# depth 1. A read failure counts as recent, so an unreadable cache is kept.
 run_cache_idle() {
   local recent
-  recent=$(find "$1" -maxdepth 1 -mmin "-$((RUN_CACHE_IDLE_HOURS * 60))" -print 2>/dev/null) ||
+  recent=$(find "$1" -maxdepth 2 -mmin "-$((RUN_CACHE_IDLE_HOURS * 60))" -print 2>/dev/null) ||
     return 1
   [ -z "$recent" ]
 }
 
+run_cache_trees=''
 if [ -d "$TMPDIR_ROOT" ]; then
+  # Read the listing on its own, so a failed scan is seen: inside a heredoc substitution its
+  # status is lost, and a partial listing would end in a clean-looking summary.
+  if ! run_cache_trees=$(find "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null); then
+    run_cache_trees=''
+    unknown=$((unknown + 1))
+    log "UNKNOWN (scan failed) $TMPDIR_ROOT: per-run caches not examined"
+  fi
+fi
+if [ -n "$run_cache_trees" ]; then
   while IFS= read -r tree; do
     [ -n "$tree" ] || continue
     # A symlink could make the marker check and the removal act on another tree.
     [ -L "$tree" ] && continue
+    # Sweep (2) already decided this tree; deciding it again would count it twice.
+    case $'\n'"$name_swept" in
+      *$'\n'"$tree"$'\n'*) continue ;;
+    esac
     if ! grep -qF -e "$GO_CACHE_MARKER" -e "$LINT_CACHE_MARKER" "${tree}/README" 2>/dev/null; then
       continue
     fi
@@ -687,7 +711,7 @@ if [ -d "$TMPDIR_ROOT" ]; then
     fi
     sweep_candidate "$tree" temp-root
   done <<EOF
-$(find "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+$run_cache_trees
 EOF
 fi
 
@@ -913,5 +937,9 @@ fi
 # wrapping a long device name onto a second line, where NR==2 would read the wrong row.
 if command -v df >/dev/null 2>&1; then
   log "free now: $(df -P -h "${HOME:-/}" 2>/dev/null | awk 'NR==2{print $4 " (" $5 " used)"}')"
+fi
+if [ "$unknown" -gt 0 ]; then
+  log "UNKNOWN: ${unknown} scan(s) could not be read; the summary above is partial"
+  exit 2
 fi
 exit 0

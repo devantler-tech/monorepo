@@ -885,6 +885,33 @@ fi
 [ -e "$fresh_go" ] || fail 'apply reaped a per-run Go cache written moments ago'
 [ -e "$unmarked" ] || fail 'apply reaped a dir that carries no cache marker'
 
+# 17f-g share one dry-run, which also serves as 17h's readable control (exit 0).
+# 17f. a marked cache that ALSO matches the name-and-age sweep (an old codex-* Go cache) is
+# decided once: a dry-run that leaves it in place must not select or count it twice.
+both=$(make_run_cache 'codex-old-gocache-17f' "$go_marker" 120) || fail 'fixture: 17f'
+# 17g. a cache whose only recent write is an entry refreshed in place (a Go cache hit) is
+# KEPT: the fan-out dir's mtime does not move, so a depth-1 idle check would miss it.
+hit=$(make_run_cache 'daily-ai-engineer-gocache-17g' "$go_marker" 7) || fail 'fixture: 17g'
+touch "${hit}/00/a1-d"
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$(grep -cF "$both" <<<"$out")" -eq 1 ] ||
+  fail 'a cache matching both the name sweep and the marker sweep was decided more than once'
+said "$out" "$hit" 'KEEP  (written within 6h)' ||
+  fail 'a per-run Go cache refreshed by a cache hit was not kept for being recent'
+[ "$rc" -eq 0 ] || fail "a readable temp root exited ${rc}, not 0"
+rm -rf -- "$both" "$hit"
+
+# 17h. a temp root the marker sweep cannot list is UNKNOWN (exit 2), never a clean summary.
+chmod 311 "$cache_root"
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 755 "$cache_root"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "an unreadable temp root exited ${rc}, not 2 (UNKNOWN)"
+  grep -q 'UNKNOWN (scan failed)' <<<"$out" || fail 'an unreadable temp root was not reported UNKNOWN'
+fi
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0
