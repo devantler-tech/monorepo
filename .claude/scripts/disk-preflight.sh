@@ -13,17 +13,19 @@
 # Exit codes: 0 enough space · 1 below the threshold · 2 UNKNOWN (usage error, or the free
 # space could not be measured). 2 is never "enough": a failed or unparseable read is not a
 # disk with room on it.
-set -uo pipefail
+set -euo pipefail
 
 prog=disk-preflight
 disk_preflight_finished=0
 # A guard that exits 0 without having run is worse than one that errors. Bash 3.2 reports $?
 # as 0 to an EXIT trap after a `set -u` abort, so completion is recorded explicitly: reaching
-# the end is the only way a zero status leaves this script (the ci-job-wiring.sh pattern).
+# the end is the only way a verdict leaves this script (the ci-job-wiring.sh pattern). Any
+# other exit is UNKNOWN, including an errexit abort whose own status is 1, which would
+# otherwise read as a LOW verdict nobody measured.
 # shellcheck disable=SC2329  # invoked by the EXIT trap below
 on_exit() {
   local rc=$?
-  if [ "$disk_preflight_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+  if [ "$disk_preflight_finished" != 1 ] && [ "$rc" -ne 2 ]; then
     printf '%s: aborted before finishing — UNKNOWN\n' "$prog" >&2
     rc=2
   fi
@@ -56,14 +58,17 @@ target=$(CDPATH='' cd -- "$target" && pwd -P) || unknown "cannot resolve $target
 # POSIX output (-P) in 1024-byte blocks (-k): one header line, then one data line whose
 # numeric run is total, used, available and capacity%, followed by the mount point. It is
 # matched as that run rather than by field number, so a filesystem name holding spaces
-# cannot shift the columns.
+# cannot shift the columns. A line with more than one such run (a filesystem or mount name
+# that itself looks like the columns) cannot be attributed, so it is UNKNOWN, never a guess.
 if ! out=$(LC_ALL=C df -Pk -- "$target" 2>&1); then
   unknown "df failed for $target: $(printf '%s' "$out" | head -n 1)"
 fi
-lines=$(printf '%s\n' "$out" | grep -c .)
+lines=$(printf '%s\n' "$out" | grep -c .) || lines=0
 [ "$lines" -eq 2 ] || unknown "unexpected df output ($lines lines) for $target"
 data=$(printf '%s\n' "$out" | sed -n '2p')
 numeric='[[:space:]]([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)%[[:space:]]+/'
+runs=$(printf '%s\n' "$data" | grep -oE "$numeric" | grep -c .) || runs=0
+[ "$runs" -le 1 ] || unknown "ambiguous df output for $target ($runs column runs): $data"
 [[ "$data" =~ $numeric ]] || unknown "cannot parse df output for $target: $data"
 avail_kb=${BASH_REMATCH[3]}
 # Same digit bound as the threshold: a wrapped value must not read as plenty of room.

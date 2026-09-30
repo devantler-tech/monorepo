@@ -131,6 +131,19 @@ run 20 "$fixture/vol"
 if [ "$rc" -eq 2 ]; then ok "an implausibly large free figure exits 2 instead of wrapping"
 else bad "an implausibly large free figure exits 2 instead of wrapping" "rc=$rc $out"; fi
 
+# #3681 review: a name that itself looks like the columns must not be read as the columns.
+fake_df_raw 'printf "Filesystem 1024-blocks Used Available Capacity Mounted on\nmap 1 2 999999999 1%% /name 500000000 499000000 1024 99%% /\n"'
+run 20 "$fixture/vol"
+if [ "$rc" -eq 2 ] && grep -q "ambiguous" <<<"$out"; then ok "a data line with two column runs exits 2"
+else bad "a data line with two column runs exits 2" "rc=$rc $out"; fi
+
+# #3681 review: an abort after the measurement (here the verdict cannot be written) is
+# UNKNOWN, never the 1 that errexit would otherwise report as a LOW verdict.
+fake_df $((25 * GB))
+out=$(PATH="$fixture/bin:$PATH" bash "$impl" 20 "$fixture/vol" 2>&1 >&-); rc=$?
+if [ "$rc" -eq 2 ] && grep -q "aborted before finishing" <<<"$out"; then ok "a verdict that cannot be written exits 2"
+else bad "a verdict that cannot be written exits 2" "rc=$rc $out"; fi
+
 fake_df $((25 * GB))
 run 20 "$fixture/does-not-exist"
 if [ "$rc" -eq 2 ] && grep -q 'not a directory' <<<"$out"; then ok "a missing path exits 2"
