@@ -628,7 +628,7 @@ sweep_candidate() {
     # A marked cache can be written to without any file staying open across both lsof probes,
     # so its own recency (and, for a lint cache, a running linter) is asked again here too.
     if [ "${3:-}" = run-cache ]; then
-      late_hold=$(run_cache_hold "$tree")
+      late_hold=$(run_cache_hold "$tree" late)
       case "$late_hold" in
         '') ;;
         unknown)
@@ -666,6 +666,8 @@ sweep_candidate() {
 # is_run_cache <dir> succeeds when <dir> carries a Go or golangci-lint cache README marker. The
 # README must be a regular file that is not a symlink: a FIFO, a device or a link to a stream
 # would block the read, and any temp-root entry could plant one to stall the whole sweep.
+# Returns 0 for a marker, 1 for none, and 2 when the README could not be read: a cache whose
+# marker was never read was never examined, so callers count it UNKNOWN and keep it.
 is_run_cache() {
   local readme="$1/README"
   [ -f "$readme" ] && [ ! -L "$readme" ] || return 1
@@ -676,7 +678,13 @@ if [ -d "$TMPDIR_ROOT" ]; then
   while IFS= read -r tree; do
     # A marked cache is left to (2b), whose idle rule looks at its entries: the day-based
     # mtime of the root alone can be old while the cache was written minutes ago.
-    [ -n "$tree" ] && is_run_cache "$tree" && continue
+    [ -n "$tree" ] || continue
+    if is_run_cache "$tree"; then continue; else marker_rc=$?; fi
+    if [ "$marker_rc" -eq 2 ]; then
+      unknown=$((unknown + 1))
+      log "UNKNOWN (marker unreadable, cache not examined) $tree"
+      continue
+    fi
     sweep_candidate "$tree" temp-root
   done <<EOF
 $(find "$TMPDIR_ROOT" -maxdepth 1 -type d \
@@ -710,14 +718,15 @@ run_cache_idle() {
   [ -z "$recent" ]
 }
 
-# run_cache_hold <dir> prints why a marked cache must be kept, and nothing when it may go:
+# run_cache_hold <dir> [late] prints why a marked cache must be kept, and nothing when it may go.
+# `late` (the removal-time recheck) reads a fresh process table instead of the startup one.
 #   recent   written within RUN_CACHE_IDLE_HOURS
 #   unknown  the recency scan failed
 #   linting  a golangci-lint cache while a golangci-lint runs, or the process table cannot say.
 #            A linter can sit between two cache reads with no file open, so the lsof probes
 #            cannot see it -- the same rule reclaim_lint_cache applies to the configured cache.
 run_cache_hold() {
-  local tree=$1 rc oldest
+  local tree=$1 when=${2:-early} rc oldest table
   if run_cache_idle "$tree"; then rc=0; else rc=$?; fi
   case "$rc" in
     0) ;;
@@ -725,7 +734,14 @@ run_cache_hold() {
     *) printf unknown; return 0 ;;
   esac
   if grep -qF -e "$LINT_CACHE_MARKER" -- "${tree}/README" 2>/dev/null; then
-    if ! oldest=$(oldest_process_secs golangci-lint) || [ "$oldest" != -1 ]; then
+    if [ "$when" = late ]; then
+      # The startup snapshot is minutes old by removal time; a linter started since then is
+      # only in a fresh table (the same late read reclaim_lint_cache makes).
+      if ! table=$(read_process_table) || ! oldest=$(oldest_in_table "$table" golangci-lint) ||
+        [ "$oldest" != -1 ]; then
+        printf linting
+      fi
+    elif ! oldest=$(oldest_process_secs golangci-lint) || [ "$oldest" != -1 ]; then
       printf linting
     fi
   fi
@@ -786,7 +802,14 @@ if [ -n "$run_cache_trees" ]; then
     [ -n "$tree" ] || continue
     # A symlink could make the marker check and the removal act on another tree.
     [ -L "$tree" ] && continue
-    is_run_cache "$tree" || continue
+    if ! is_run_cache "$tree"; then
+      marker_rc=$?
+      if [ "$marker_rc" -eq 2 ]; then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (marker unreadable, cache not examined) $tree"
+      fi
+      continue
+    fi
     canon=$(cd -- "$tree" 2>/dev/null && pwd -P) || canon=''
     case $'\n'"$configured_caches" in
       *$'\n'"$canon"$'\n'*)

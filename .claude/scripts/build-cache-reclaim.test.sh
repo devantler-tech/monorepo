@@ -984,6 +984,31 @@ out=$(env -u GOLANGCI_LINT_CACHE HOME="$default_home" XDG_CACHE_HOME="$cache_roo
 [ -e "${default_lint}/00/a1-d" ] || fail 'the marker sweep reaped the default, within-budget lint cache'
 rm -rf -- "$default_lint" "$default_home"
 
+# 17o. a README that cannot be read is UNKNOWN (exit 2), never "not a cache": an old-named
+# cache must not then fall through to the name sweep and be reaped on its root mtime alone.
+unreadable=$(make_run_cache 'codex-old-gocache-17o' "$go_marker" 120) || fail 'fixture: 17o'
+chmod 000 "${unreadable}/README"
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 644 "${unreadable}/README"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "a cache whose marker could not be read exited ${rc}, not 2 (UNKNOWN)"
+  said "$out" "$unreadable" 'UNKNOWN (marker unreadable, cache not examined)' ||
+    fail 'a cache whose marker could not be read was not reported UNKNOWN'
+  [ -e "${unreadable}/00/a1-d" ] || fail 'a cache whose marker could not be read was reaped'
+fi
+rm -rf -- "$unreadable"
+
+# 17p. a golangci-lint that starts after the startup process snapshot keeps an idle lint cache
+# at removal time: the late recheck must read a fresh process table, not the startup one.
+rm -f "${fixture_root}/late-lint-calls"
+late_linted=$(make_run_cache 'lane-golangci-cache-17p' "$lint_marker" 7) || fail 'fixture: 17p'
+out=$(RUN_CACHE_PS="$late_ps" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$late_linted" ] || fail 'apply reaped a per-run lint cache whose linter started after the snapshot'
+said "$out" "$late_linted" 'KEEP  (busy, late)' ||
+  fail 'a per-run lint cache was not kept at removal time for a linter started after the snapshot'
+rm -rf -- "$late_linted"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0
