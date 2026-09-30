@@ -365,7 +365,7 @@ t_nested_pass_honours_a_parent_ownership_claim() {
   # when no process works inside it. Its nested worktree must stay, although it alone
   # would qualify: the repo's own sweep keeps the parent only after this pass has run.
   local marker state name root sess inner out rc
-  for state in active malformed; do
+  for state in active malformed symlink; do
     name="the nested pass leaves a parent alone when its ownership claim is $state"
     root=$(make_root)
     add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
@@ -373,8 +373,10 @@ t_nested_pass_honours_a_parent_ownership_claim() {
     marker="$sess/.claude-worktree-owner"
     if [ "$state" = active ]; then
       printf 'owner=other-session\ncreated_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$marker"
-    else
+    elif [ "$state" = malformed ]; then
       printf 'owner=other-session\n' > "$marker"
+    else
+      ln -s "$root/no-such-marker" "$marker"   # dangling: `-e` alone reads it as absent
     fi
     touch -t 202001010000 "$sess"
     out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?

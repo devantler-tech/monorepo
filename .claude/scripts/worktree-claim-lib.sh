@@ -129,6 +129,9 @@ worktree_claim_lock_acquire() {
 ownership_claim_state() {
   local wt=$1 marker="$1/$WORKTREE_CLAIM_MARKER_NAME" owner="" created_at="" key val created_epoch now_epoch age
   CLAIM_DETAIL=""
+  # Before the absence test: `-e` follows a symlink, so a dangling marker link would read as
+  # "no marker" and permit a reap. A marker is never legitimately a link.
+  [ ! -L "$marker" ] || { CLAIM_DETAIL="marker is a symlink"; return 2; }
   [ -e "$marker" ] || return 1
   [ -f "$marker" ] || { CLAIM_DETAIL="marker is not a regular file"; return 2; }
   while IFS='=' read -r key val; do
