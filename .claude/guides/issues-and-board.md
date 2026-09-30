@@ -108,8 +108,10 @@ open issue** (monorepo#3436 — the org-wide count matched the unfiltered total,
 -type:Performance -type:Refactor -type:Docs -type:Spike -type:Kata -type:Chore` (or `repo:…` for one
 repository; `archived:false` keeps archived repositories, outside every census, out of the result).
 A `0` from this query is also what a broken filter returns, so **pin a positive control in the same
-sweep**: drop one negation (say `-type:Bug`) and assert the count rises by exactly that type's
-`type:Bug` count (measured 2026-09-30: all ten terms → 0; without `-type:Bug` → 163 = `type:Bug`). If the control fails, the sweep is
+sweep**: drop one negation (say `-type:Bug`) and assert the **delta**, `control = residual +
+type:Bug count` — never that the control equals `type:Bug` alone, which fails whenever real untyped
+issues exist (measured 2026-09-30: all ten terms → 0; without `-type:Bug` → 163 = 0 + 163
+`type:Bug`). If the control fails, the sweep is
 UNKNOWN, not clean. Re-read the enabled type list (`organization.issueTypes`) before trusting the
 ten terms — a new type left out of the conjunction reads as untyped. Set it at
 creation — `gh issue create --repo devantler-tech/<repo> --type "Feature"` — or retrofit with
