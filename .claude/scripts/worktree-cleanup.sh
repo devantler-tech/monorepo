@@ -190,9 +190,19 @@ if [ -n "${WORKTREE_CLEANUP_WT_ROOT:-}" ]; then
   fi
   # Canonical, like every candidate and registration below (physical_path): /tmp is
   # /private/tmp on macOS, and the caller may spell the directory in another case.
+  lexical_root=$WT_ROOT
   if [ -e "$WT_ROOT" ]; then
     WT_ROOT=$(physical_path "$WT_ROOT") \
       || die "cannot resolve worktree root $WORKTREE_CLEANUP_WT_ROOT"
+    # A symlinked ANCESTOR is not caught by the -L test above: `.codex` linked to `.claude`
+    # would canonicalise a Codex root to the Claude one, and an apply run would sweep the
+    # other lane. The last two components (lane dir and `worktrees`) must survive
+    # canonicalisation; a resolved prefix such as /tmp -> /private/tmp above them is fine.
+    lexical_tail=${lexical_root#"${lexical_root%/*/*}"}
+    canonical_tail=${WT_ROOT#"${WT_ROOT%/*/*}"}
+    if [ "$(printf '%s' "$lexical_tail" | fold_case)" != "$(printf '%s' "$canonical_tail" | fold_case)" ]; then
+      die "worktree root $lexical_root resolves to $WT_ROOT through a symlinked ancestor — refusing"
+    fi
   fi
 else
   WT_ROOT="$TOPLEVEL/.claude/worktrees"
