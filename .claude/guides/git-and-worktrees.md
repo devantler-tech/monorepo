@@ -129,6 +129,20 @@ what it names rather than proceeding as if the pin were fresh. This is about **n
 only**: an existing branch is landed on its own `headRefOid` per *Git safety*, and a pinned definition
 is still read at the gitlink.
 
+**Build caches are shared, never per-run** (#3708). A per-run worktree does NOT need its own
+Go build cache.
+- Use the defaults: `go env GOCACHE`, `go env GOMODCACHE` and golangci-lint's own cache. The go
+  command's cache is safe for concurrent use by parallel runs, and
+  [`build-cache-reclaim.sh`](../scripts/build-cache-reclaim.sh) keeps those defaults within budget.
+- If your runtime's sandbox cannot write the default location, point `GOCACHE` (and
+  `GOLANGCI_LINT_CACHE`) at the ONE stable path for your lane, `/private/tmp/<lane>-go-cache`
+  (`/private/tmp/<lane>-golangci-cache`). Never use a path with a run, PR or issue suffix: each suffix
+  is a fresh multi-gigabyte copy.
+- A test fixture that needs an isolated cache keeps it inside its own temp dir and removes it on exit.
+
+Measured 2026-09-30: about 90 per-run caches under `/private/tmp`, 6–12 GB each for a full product
+build, filled the host twice in two days (#3706).
+
 ## Git safety
 Never `git reset --hard`, `git stash`, force-push, or discard changes you did not author. Never
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
