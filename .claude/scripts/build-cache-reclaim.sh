@@ -709,14 +709,15 @@ fi
 # sweep_candidate still applies, and a cache is regenerable: removing one costs a rebuild.
 # ---------------------------------------------------------------------------
 
-# run_cache_idle <dir> succeeds (0) when neither the cache dir, its fan-out dirs, nor any entry
-# in them has changed within RUN_CACHE_IDLE_HOURS, and returns 1 when something has. Depth 2
-# reaches the entries (00/<hash>-a): Go overwrites an existing entry in place and refreshes an
-# entry's mtime on a cache hit, and neither moves the fan-out dir's mtime, so a cache busy with
-# hits would look idle at depth 1. A scan that fails returns 2: that cache was not examined.
+# run_cache_idle <dir> succeeds (0) when nothing anywhere in the cache has changed within
+# RUN_CACHE_IDLE_HOURS, and returns 1 when something has. The whole tree is scanned: Go overwrites
+# an entry in place and refreshes its mtime on a cache hit without moving the fan-out dir's mtime,
+# and a fuzz corpus entry (fuzz/<import-path>/<target>/<hash>) sits deeper still, so no fixed
+# depth sees every write. The scan stops at the first recent node (-quit), so a busy cache costs
+# little. A scan that fails before deciding returns 2: that cache was not examined.
 run_cache_idle() {
   local recent
-  recent=$(find "$1" -maxdepth 2 -mmin "-$((RUN_CACHE_IDLE_HOURS * 60))" -print 2>/dev/null) ||
+  recent=$(find "$1" -mmin "-$((RUN_CACHE_IDLE_HOURS * 60))" -print -quit 2>/dev/null) ||
     return 2
   [ -z "$recent" ]
 }

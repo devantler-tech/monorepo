@@ -1046,6 +1046,21 @@ out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$padded" ] || fail 'a README whose marker sits past the read bound was treated as a cache'
 rm -rf -- "$padded"
 
+# 17t. a write deep in the cache (a fuzz corpus entry, fuzz/<import-path>/<target>/<hash>) keeps it:
+# once those directories exist, a new entry moves no node at depth 1 or 2.
+fuzzed=$(make_run_cache 'daily-ai-engineer-gocache-17t' "$go_marker" 7) || fail 'fixture: 17t'
+mkdir -p "${fuzzed}/fuzz/example.com/pkg/FuzzX" || fail 'fixture: 17t fuzz dirs'
+age_path "${fuzzed}/fuzz/example.com/pkg/FuzzX" 7 && age_path "${fuzzed}/fuzz/example.com/pkg" 7 &&
+  age_path "${fuzzed}/fuzz/example.com" 7 && age_path "${fuzzed}/fuzz" 7 && age_path "$fuzzed" 7 ||
+  fail 'fixture: age 17t dirs'
+printf 'corpus\n' > "${fuzzed}/fuzz/example.com/pkg/FuzzX/0123abcd"
+age_path "${fuzzed}/fuzz/example.com/pkg/FuzzX" 7 || fail 'fixture: age 17t target dir'
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$fuzzed" ] || fail 'apply reaped a per-run Go cache with a fresh fuzz corpus entry'
+said "$out" "$fuzzed" 'KEEP  (written within 6h)' ||
+  fail 'a per-run Go cache with a fresh fuzz corpus entry was not kept for being recent'
+rm -rf -- "$fuzzed"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0
