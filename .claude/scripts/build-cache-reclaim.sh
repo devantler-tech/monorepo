@@ -613,8 +613,9 @@ sweep_candidate() {
     return 0
   fi
   if ! tree_mb=$(size_mb "$tree"); then
-    kept=$((kept + 1))
-    log "KEEP  (unmeasurable)  $tree"
+    # Kept, but not examined: a tree whose size could not be read is UNKNOWN, never a clean KEEP.
+    unknown=$((unknown + 1))
+    log "UNKNOWN (unmeasurable) $tree"
     return 0
   fi
   if [ "$MODE" = apply ]; then
@@ -709,7 +710,7 @@ if [ -d "$TMPDIR_ROOT" ]; then
     fi
     sweep_candidate "$tree" temp-root
   done <<EOF
-$(find "$TMPDIR_ROOT" -maxdepth 1 -type d \
+$(find -H "$TMPDIR_ROOT" -maxdepth 1 -type d \
   \( -name 'codex-*' -o -name 'war-*' -o -name 'dpc-*' -o -name 'ksail-*' \) \
   -mtime "+${MIN_AGE_DAYS}" 2>/dev/null)
 EOF
@@ -809,11 +810,15 @@ configured_caches=''
 # Without the configured Go cache's path the exclusion is incomplete, so a failed read skips the
 # marker sweep as UNKNOWN rather than risk reaping the budget-managed cache for idleness.
 configured_gocache=''
-run_caches_readable=1
-if [ -n "${go_bin:-}" ] && ! configured_gocache=$("$go_bin" env GOCACHE 2>/dev/null); then
-  run_caches_readable=0
+run_caches_readable=0
+if [ -z "${go_bin:-}" ]; then
+  unknown=$((unknown + 1))
+  log "UNKNOWN (no go binary, GOCACHE unknown) $TMPDIR_ROOT: per-run caches not examined"
+elif ! configured_gocache=$("$go_bin" env GOCACHE 2>/dev/null); then
   unknown=$((unknown + 1))
   log "UNKNOWN (go env GOCACHE failed) $TMPDIR_ROOT: per-run caches not examined"
+else
+  run_caches_readable=1
 fi
 for configured in "$configured_gocache" "$(lint_cache_dir)"; do
   case "$configured" in
@@ -828,7 +833,9 @@ run_cache_trees=''
 if [ "$run_caches_readable" -eq 1 ] && [ -d "$TMPDIR_ROOT" ]; then
   # Read the listing on its own, so a failed scan is seen: inside a heredoc substitution its
   # status is lost, and a partial listing would end in a clean-looking summary.
-  if ! run_cache_trees=$(find "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null); then
+  # -H follows the root itself when it is a symlink (/tmp on macOS); without it find lists
+  # nothing and reports success.
+  if ! run_cache_trees=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null); then
     run_cache_trees=''
     unknown=$((unknown + 1))
     log "UNKNOWN (scan failed) $TMPDIR_ROOT: per-run caches not examined"

@@ -1070,6 +1070,18 @@ out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$quoting" ] || fail 'a directory whose README merely quotes the marker was reaped as a cache'
 rm -rf -- "$quoting"
 
+# 17v. a temp root given as a SYMLINK to the real directory (/tmp on macOS) is still listed: a
+# listing that does not follow it finds nothing and reports success.
+linked_root="${fixture_root}/tmp-link-17v"
+ln -s "$cache_root" "$linked_root" || fail 'fixture: 17v link'
+via_link=$(make_run_cache 'daily-ai-engineer-gocache-17v' "$go_marker" 7) || fail 'fixture: 17v'
+out=$(BUILD_CACHE_RECLAIM_TMPDIR="$linked_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root" \
+  GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" PATH="${quiet_ps}:$PATH" \
+  bash "$impl" dry-run 3 "$NEVER_CLEAN_BUDGET" 2>&1)
+said "$out" "${linked_root}/daily-ai-engineer-gocache-17v" 'WOULD REAP' ||
+  fail 'an idle per-run cache under a symlinked temp root was not selected'
+rm -rf -- "$via_link" "$linked_root"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0
