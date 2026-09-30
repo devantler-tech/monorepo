@@ -89,7 +89,8 @@ a live `completed/total` + percent rollup per epic; and the filters `parent-issu
 interchangeable:** *repo issue search* uses `has:sub-issue`, while a *project view filter* keys off the
 project field name — **`has:sub-issues-progress` / `no:sub-issues-progress`**. GitHub **silently
 ignores** an unrecognised qualifier in a project filter, so the wrong spelling looks like it worked
-while filtering nothing. Projects' **hierarchy view** — [GA since 2026-03-19](https://github.blog/changelog/2026-03-19-hierarchy-view-in-github-projects-is-now-generally-available/)
+while filtering nothing. Repo and org **issue search** does the same to `no:type` — see the untyped
+sweep below. Projects' **hierarchy view** — [GA since 2026-03-19](https://github.blog/changelog/2026-03-19-hierarchy-view-in-github-projects-is-now-generally-available/)
 and **enabled by default on new views** — renders the full nesting inline in table views, up to 8
 levels, preserved through grouping, slicing and filtering. On an existing view, turn it on with
 *View → Show hierarchy*.
@@ -99,7 +100,20 @@ parent is **not documented** to cascade to children in either direction — neve
 
 **EVERY issue carries an Issue Type — no exceptions** (maintainer direction 2026-07-18). Types are
 org-wide, exactly **one per issue**, filterable as `type:Bug` (unquoted — see the ladder's warning), and they are the structured
-replacement for type-labels. An untyped issue is an incomplete issue: fix it at triage. Set it at
+replacement for type-labels. An untyped issue is an incomplete issue: fix it at triage.
+⚠️ **Never sweep for untyped issues with `no:type`: issue search silently ignores it and returns every
+open issue** (monorepo#3436 — the org-wide count matched the unfiltered total, 635 = 635). Negation
+*is* honoured, so enumerate the untyped residual with one `-type:` term per enabled org type:
+`org:devantler-tech is:issue is:open archived:false -type:Epic -type:Feature -type:Bug -type:Security
+-type:Performance -type:Refactor -type:Docs -type:Spike -type:Kata -type:Chore` (or `repo:…` for one
+repository; `archived:false` keeps archived repositories, outside every census, out of the result).
+A `0` from this query is also what a broken filter returns, so **pin a positive control in the same
+sweep**: drop one negation (say `-type:Bug`) and assert the **delta**, `control = residual +
+type:Bug count` — never that the control equals `type:Bug` alone, which fails whenever real untyped
+issues exist (measured 2026-09-30: all ten terms → 0; without `-type:Bug` → 163 = 0 + 163
+`type:Bug`). If the control fails, the sweep is
+UNKNOWN, not clean. Re-read the enabled type list (`organization.issueTypes`) before trusting the
+ten terms — a new type left out of the conjunction reads as untyped. Set it at
 creation — `gh issue create --repo devantler-tech/<repo> --type "Feature"` — or retrofit with
 `gh issue edit <N> --repo devantler-tech/<repo> --type "Bug"`. **Always name the repo** (or pass the
 issue URL): a bare number resolves in the *current* repo, so triaging a submodule's issue from the
