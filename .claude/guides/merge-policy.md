@@ -770,3 +770,28 @@ Never infer it from the title alone. Qualifying PRs run through required CI and 
 request CodeRabbit, Codex, Cursor Bugbot, or a local review, chase ancillary reviewer output, or count
 a missing review as a hygiene gap. Their checks, threads, and conflict state still gate auto-merge.
 Any adaptation commit or out-of-bound file revokes the exemption and restores the normal review gate.
+
+🔴 **The exemption proves provenance, never ripeness: a cask PR's DRAFT state is the CD's release
+fence, and only the release clears it** (monorepo#2992). A product's CD opens its Homebrew-tap cask PR
+as a draft so the tap cannot merge it while the GitHub release is still a draft, and leaves it a draft
+when its own hand-off fails. Exit 0 plus a clear pentad cannot see either state, so "draft + exempt +
+CLEAN" is **not** "promote me": an agent promoted and merged `homebrew-tap#1496` over exactly that
+fence. Before promoting a draft cask PR, judge its release at the PR head:
+
+```sh
+cask=$(gh api "repos/devantler-tech/homebrew-tap/contents/Casks/<name>.rb?ref=<headRefOid>" \
+  -H "Accept: application/vnd.github.raw") || { echo "cask read FAILED — UNKNOWN" >&2; exit 2; }
+if release=$(gh api repos/devantler-tech/<repo>/releases/tags/v<version> 2>release.err); then :
+elif grep -q '(HTTP 404)' release.err; then release=null   # absent, or still a draft
+else echo "release read FAILED — UNKNOWN" >&2; exit 2; fi
+jq -n --arg cask "$cask" --argjson release "$release" '{cask:$cask, release:$release}' |
+  .claude/scripts/release-cask-ripeness.sh --input -
+```
+
+`release` is `null` only when that read returned **404**: a draft release is not readable by tag, so a
+draft and an absent release both arrive as `null`. On a 404, `gh api` still prints the error body on
+stdout, so never pass its output through unchecked; any other failed read is UNKNOWN. Promote only
+on exit **0** (`RIPE`): the release is published, carries every asset the cask installs, and each
+pinned `sha256` equals the digest GitHub records for that asset. On exit **1** keep the draft and park
+the PR on the release; on exit **2** keep the draft and report it UNKNOWN. The CD run's conclusion is
+not the test: a published release can sit behind a CD run reported `cancelled`.
