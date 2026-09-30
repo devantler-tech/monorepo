@@ -336,6 +336,79 @@ t_nested_pass_covers_submodule_session_worktrees() {
   rm -rf "$root"
 }
 
+t_nested_pass_keeps_uncommitted_work() {
+  # A nested worktree holding uncommitted work is kept whatever its age, with no salvage
+  # refs written (salvage is off for the nested pass), and its parent stays with it.
+  local name="the nested pass keeps a nested worktree with uncommitted work, and its parent"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.claude/worktrees/sess" out rc
+  local inner="$sess/nested/.claude/worktrees/inner"
+  if ! { echo edited > "$inner/g" && echo untracked > "$inner/u"; }; then
+    bad "$name" "FIXTURE: dirty inner"; rm -rf "$root"; return
+  fi
+  find "$inner" -mindepth 1 -exec touch -h -t 202001010000 {} + 2>/dev/null
+  touch -t 202001010000 "$inner" "$sess"
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && [ -d "$sess" ] \
+     && [ "$(cat "$inner/g" 2>/dev/null)" = edited ] && [ "$(cat "$inner/u" 2>/dev/null)" = untracked ] \
+     && [ -z "$(git -C "$sess/nested" for-each-ref refs/salvaged 2>/dev/null)" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc inner=$([ -d "$inner" ] && echo present || echo GONE) sess=$([ -d "$sess" ] && echo present || echo GONE) $out"
+  fi
+  rm -rf "$root"
+}
+
+t_nested_pass_refuses_symlinked_and_escaping_submodules() {
+  # A listed submodule path that is a symlink, or that resolves outside its session
+  # worktree, must never be swept: the repository behind it is not the session's own.
+  # A sentinel repository outside the session holds an aged, pushed worktree the per-repo
+  # sweep WOULD reap, so a sweep through either path would be visible as its removal.
+  local name="the nested pass refuses a symlinked or escaping submodule path"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.claude/worktrees/sess" ext="$root/ext"
+  local sentinel="$root/ext/.claude/worktrees/extinner" shim="$root/git-shim" real_git out rc
+  if ! { git init -q --bare "$root/ext.git" && git init -q -b main "$ext" \
+         && echo e > "$ext/e" && git -C "$ext" add e \
+         && git -C "$ext" -c user.email=t@t.t -c user.name=t commit -qm base \
+         && git -C "$ext" remote add origin "$root/ext.git" && git -C "$ext" push -q origin main \
+         && mkdir -p "$ext/.claude/worktrees" \
+         && git -C "$ext" worktree add -q -b claude/extinner "$sentinel" main \
+         && git -C "$ext" push -q origin claude/extinner \
+         && ln -s "$ext" "$sess/link"; }; then
+    bad "$name" "FIXTURE"; rm -rf "$root"; return
+  fi
+  touch -t 202001010000 "$sentinel"
+  real_git=$(command -v git)
+  mkdir -p "$shim"
+  # List only the two hostile paths for the session's submodules; pass everything else.
+  cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = '$sess' ] \\
+   && [ "\${3:-}" = submodule ] && [ "\${4:-}" = foreach ]; then
+  printf '%s\n' '$sess/link' '$sess/../../../../ext'
+  exit 0
+fi
+exec '$real_git' "\$@"
+EOF
+  chmod +x "$shim/git"
+  out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+        bash "$SUT" apply 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && [ -d "$sentinel" ] \
+     && [ "$(git -C "$ext" worktree list --porcelain | grep -c '^worktree ')" -eq 2 ] \
+     && grep -q 'submodule path is a symlink — refusing to follow it' <<<"$out" \
+     && grep -q 'escapes its session worktree' <<<"$out" \
+     && ! grep -q '^### .*ext$' <<<"$out" \
+     && ! ls "$root/home/.claude/worktree-cleanup-manifests/"*ext*.tsv >/dev/null 2>&1; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc sentinel=$([ -d "$sentinel" ] && echo present || echo GONE) $out"
+  fi
+  rm -rf "$root"
+}
+
 t_sweeps_root_and_submodules() {
   local root; root=$(make_root)
   local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
@@ -593,6 +666,8 @@ t_nested_pass_refreshes_liveness_before_sweep
 t_nested_pass_covers_submodule_session_worktrees
 t_nested_resolution_failure_continues
 t_nested_pass_skips_an_emptied_worktree_dir
+t_nested_pass_keeps_uncommitted_work
+t_nested_pass_refuses_symlinked_and_escaping_submodules
 t_rejects_bad_mode
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
