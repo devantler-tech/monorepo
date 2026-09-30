@@ -317,6 +317,7 @@ cleanup too, and this sweep is what unblocks it.
 command as its own call:
 
 ```sh
+mkdir -p ~/.claude/worktree-cleanup-manifests   # the redirect below needs it before the sweep runs
 nohup .claude/scripts/worktree-cleanup-all.sh apply 24 --lane <lane> \
   >>~/.claude/worktree-cleanup-manifests/cleanup-<lane>.log 2>&1 </dev/null &
 .claude/scripts/disk-preflight.sh   # 0 enough free · 1 below the threshold (20 GB) · 2 UNKNOWN
