@@ -1111,6 +1111,29 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 rm -rf -- "$opaque"
 
+# 17y. Go's DEFAULT build cache (os.UserCacheDir()/go-build) can resolve to a direct child of the
+# temp root (XDG_CACHE_HOME there on Linux; ~/Library/Caches there on macOS). Section 1 owns it, so
+# the marker sweep leaves it alone even when GOCACHE names somewhere else.
+go_home="${fixture_root}/home-17y"
+mkdir -p "${go_home}/Library" || fail 'fixture: 17y home'
+ln -s "$cache_root" "${go_home}/Library/Caches" || fail 'fixture: 17y caches link'
+default_go=$(make_run_cache 'go-build' "$go_marker" 7) || fail 'fixture: 17y'
+out=$(HOME="$go_home" XDG_CACHE_HOME="$cache_root" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${default_go}/00/a1-d" ] || fail 'the marker sweep reaped the default Go build cache'
+rm -rf -- "$default_go" "$go_home"
+
+# 17z. a process table that cannot be read is UNKNOWN for an idle lint cache (exit 2), never a
+# proven running linter and a clean KEEP.
+no_ps="${fixture_root}/ps-none-17z"
+make_ps_stub "$no_ps" || fail 'fixture: 17z ps stub'
+blind_lint=$(make_run_cache 'lane-golangci-cache-17z' "$lint_marker" 7) || fail 'fixture: 17z'
+out=$(RUN_CACHE_PS="$no_ps" run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "an unreadable process table exited ${rc}, not 2 (UNKNOWN)"
+said "$out" "$blind_lint" 'UNKNOWN (scan failed, cache not examined)' ||
+  fail 'an idle lint cache with an unreadable process table was not reported UNKNOWN'
+rm -rf -- "$blind_lint"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0

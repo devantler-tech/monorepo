@@ -772,11 +772,15 @@ run_cache_hold() {
     if [ "$when" = late ]; then
       # The startup snapshot is minutes old by removal time; a linter started since then is
       # only in a fresh table (the same late read reclaim_lint_cache makes).
-      if ! table=$(read_process_table) || ! oldest=$(oldest_in_table "$table" golangci-lint) ||
-        [ "$oldest" != -1 ]; then
+      # A table that cannot be read or parsed is `unknown`; only a proven process is `linting`.
+      if ! table=$(read_process_table) || ! oldest=$(oldest_in_table "$table" golangci-lint); then
+        printf unknown
+      elif [ "$oldest" != -1 ]; then
         printf linting
       fi
-    elif ! oldest=$(oldest_process_secs golangci-lint) || [ "$oldest" != -1 ]; then
+    elif ! oldest=$(oldest_process_secs golangci-lint); then
+      printf unknown
+    elif [ "$oldest" != -1 ]; then
       printf linting
     fi
   fi
@@ -811,6 +815,20 @@ lint_cache_dir() {
 # are budget-managed by (1) and (3): a configured cache within its budget is kept on purpose,
 # so this sweep must not reap it for idleness. Compared on resolved paths, like every other tree
 # test here.
+# go_default_cache_dir prints the build cache path go uses when GOCACHE is unset
+# (os.UserCacheDir()/go-build): ~/Library/Caches on macOS, ${XDG_CACHE_HOME:-~/.cache} elsewhere.
+# XDG_CACHE_HOME may point at the temp root, so this default is excluded too, whatever GOCACHE says.
+go_default_cache_dir() {
+  local base
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) base=${HOME:+${HOME}/Library/Caches} ;;
+    *) base=${XDG_CACHE_HOME:-${HOME:+${HOME}/.cache}} ;;
+  esac
+  case "$base" in
+    /*) printf '%s/go-build' "$base" ;;
+  esac
+}
+
 configured_caches=''
 # Without the configured Go cache's path the exclusion is incomplete, so a read that fails or
 # yields something other than `off` or an absolute path skips the marker sweep as UNKNOWN rather
@@ -832,7 +850,17 @@ if [ -z "${go_bin:-}" ]; then
         *) goenv_file=${XDG_CONFIG_HOME:-${HOME:+${HOME}/.config}}/go/env ;;
       esac
     fi
-    if [ "$goenv_file" != off ] && [ -e "$goenv_file" ]; then
+    if [ "$goenv_file" != off ] && [ ! -e "$goenv_file" ]; then
+      # Absent only if the nearest existing ancestor could be searched; otherwise the file may
+      # exist behind it, so the setting is unknown.
+      goenv_probe=${goenv_file%/*}
+      while [ -n "$goenv_probe" ] && [ ! -e "$goenv_probe" ]; do goenv_probe=${goenv_probe%/*}; done
+      if [ -n "$goenv_probe" ] && { [ ! -d "$goenv_probe" ] || [ ! -x "$goenv_probe" ]; }; then
+        run_caches_readable=0
+        unknown=$((unknown + 1))
+        log "UNKNOWN (go env file uninspectable) $TMPDIR_ROOT: per-run caches not examined"
+      fi
+    elif [ "$goenv_file" != off ]; then
       if goenv_line=$(grep -m1 '^GOCACHE=' -- "$goenv_file" 2>/dev/null); then
         configured_gocache=${goenv_line#GOCACHE=}
       elif [ $? -ne 1 ]; then
@@ -854,7 +882,7 @@ else
       ;;
   esac
 fi
-for configured in "$configured_gocache" "$(lint_cache_dir)"; do
+for configured in "$configured_gocache" "$(go_default_cache_dir)" "$(lint_cache_dir)"; do
   case "$configured" in
     /*) ;;
     *) continue ;;
