@@ -26,6 +26,11 @@ SALVAGE_AGE_HOURS=${3:-336}
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SUT="$SCRIPT_DIR/worktree-cleanup.sh"
 [ -x "$SUT" ] || { printf 'worktree-cleanup-all: missing %s\n' "$SUT" >&2; exit 2; }
+# The nested pass honours a parent session's ownership marker with the same rules the
+# per-repo sweep applies to the parent itself.
+# shellcheck source=worktree-claim-lib.sh
+. "$SCRIPT_DIR/worktree-claim-lib.sh" \
+  || { printf 'worktree-cleanup-all: cannot load shared claim protocol\n' >&2; exit 2; }
 
 # Validate arguments HERE, not only in the per-repo script. If no repository happens to
 # have a .claude/worktrees/ directory, every per-repo call returns before validating,
@@ -272,6 +277,18 @@ sweep_nested_submodule_worktrees() {
           "${wt_real#"$ROOT"/}"
         break
       fi
+      # A claimed parent is owned even with no process inside it. The repo's sweep keeps
+      # it, but only after this pass would already have removed the worktree below it.
+      # Check here, immediately before deleting, and treat a malformed marker as a claim.
+      ownership_claim_state "$wt_real"
+      case $? in
+        0) printf '\n### SKIP %s (active ownership claim: %s — its nested worktrees are left alone)\n' \
+             "${wt_real#"$ROOT"/}" "$CLAIM_DETAIL"
+           break ;;
+        2) printf '\n### SKIP %s (ambiguous ownership claim: %s — its nested worktrees are left alone)\n' \
+             "${wt_real#"$ROOT"/}" "$CLAIM_DETAIL"
+           break ;;
+      esac
       sweep "$sub_real" 0 continue
     done <<< "$subs"
   done <<< "$(printf '%s\n' "$wts" | awk '/^worktree /{print substr($0,10)}')"

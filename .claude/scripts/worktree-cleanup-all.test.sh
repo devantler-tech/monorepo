@@ -360,6 +360,34 @@ t_nested_pass_keeps_uncommitted_work() {
   rm -rf "$root"
 }
 
+t_nested_pass_honours_a_parent_ownership_claim() {
+  # A parent session with an active ownership marker, or a malformed one, is owned even
+  # when no process works inside it. Its nested worktree must stay, although it alone
+  # would qualify: the repo's own sweep keeps the parent only after this pass has run.
+  local marker state name root sess inner out rc
+  for state in active malformed; do
+    name="the nested pass leaves a parent alone when its ownership claim is $state"
+    root=$(make_root)
+    add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
+    sess="$root/repo/.claude/worktrees/sess"; inner="$sess/nested/.claude/worktrees/inner"
+    marker="$sess/.claude-worktree-owner"
+    if [ "$state" = active ]; then
+      printf 'owner=other-session\ncreated_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$marker"
+    else
+      printf 'owner=other-session\n' > "$marker"
+    fi
+    touch -t 202001010000 "$sess"
+    out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?
+    if [ "$rc" -eq 0 ] && [ -d "$inner" ] && [ -d "$sess" ] \
+       && grep -q "SKIP .claude/worktrees/sess ($state ownership claim\|SKIP .claude/worktrees/sess (ambiguous ownership claim" <<<"$out"; then
+      ok "$name"
+    else
+      bad "$name" "rc=$rc inner=$([ -d "$inner" ] && echo present || echo GONE) $out"
+    fi
+    rm -rf "$root"
+  done
+}
+
 t_nested_pass_refuses_symlinked_and_escaping_submodules() {
   # A listed submodule path that is a symlink, or that resolves outside its session
   # worktree, must never be swept: the repository behind it is not the session's own.
@@ -667,6 +695,7 @@ t_nested_pass_covers_submodule_session_worktrees
 t_nested_resolution_failure_continues
 t_nested_pass_skips_an_emptied_worktree_dir
 t_nested_pass_keeps_uncommitted_work
+t_nested_pass_honours_a_parent_ownership_claim
 t_nested_pass_refuses_symlinked_and_escaping_submodules
 t_rejects_bad_mode
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

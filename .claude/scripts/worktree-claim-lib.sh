@@ -123,3 +123,33 @@ worktree_claim_lock_acquire() {
   WORKTREE_CLAIM_LOCK_OID=$new_oid
   return 0
 }
+
+# ownership_claim_state <worktree> -> 0 active, 1 absent/expired, 2 malformed.
+# A malformed marker is ambiguous session state and therefore a KEEP, never a reap.
+ownership_claim_state() {
+  local wt=$1 marker="$1/$WORKTREE_CLAIM_MARKER_NAME" owner="" created_at="" key val created_epoch now_epoch age
+  CLAIM_DETAIL=""
+  [ -e "$marker" ] || return 1
+  [ -f "$marker" ] || { CLAIM_DETAIL="marker is not a regular file"; return 2; }
+  while IFS='=' read -r key val; do
+    case "$key" in
+      owner) owner=$val ;;
+      created_at) created_at=$val ;;
+    esac
+  done < "$marker"
+  if [ -z "$owner" ] || [ -z "$created_at" ]; then
+    CLAIM_DETAIL="marker lacks owner or created_at"
+    return 2
+  fi
+  created_epoch=$(worktree_claim_iso_to_epoch "$created_at") || {
+    CLAIM_DETAIL="marker has unparseable created_at"
+    return 2
+  }
+  now_epoch=$(date -u +%s)
+  age=$((now_epoch - created_epoch))
+  if [ "$age" -lt "$WORKTREE_CLAIM_TTL_SECS" ]; then
+    CLAIM_DETAIL="owner=$owner created_at=$created_at"
+    return 0
+  fi
+  return 1
+}
