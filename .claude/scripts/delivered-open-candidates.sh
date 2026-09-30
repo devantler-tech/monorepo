@@ -129,6 +129,11 @@ for ref in "${issues[@]}"; do
     [ -n "$after" ] && [ "$after" != "null" ] || unknown "$ref: a next page was promised without a cursor"
   done
   [ "$seen" = "$total" ] || unknown "$ref: read $seen of $total references"
+  # A commit can belong to more PRs than one page of its connection holds; a short list could hide an
+  # open PR, so refuse it rather than judge on part of it.
+  short=$(jq -r '[ .[] | select(.__typename == "ReferencedEvent") | .commit.associatedPullRequests // empty
+    | select((.nodes | length) != .totalCount) ] | length' <<<"$nodes") || unknown "$ref: unparseable commit references"
+  [ "$short" = "0" ] || unknown "$ref: a referencing commit belongs to more PRs than were read"
 
   # A PR whose body names the issue does not always leave a timeline event: platform#2973 delivered
   # platform#2972 and says so in its body, yet #2972 records no cross-reference. So also search the
@@ -138,6 +143,8 @@ for ref in "${issues[@]}"; do
   search=$(gh_ api -X GET search/issues -f q="$mentions_q" -f per_page=100) || unknown "$ref: mention search failed"
   [ "$(jq -r '.incomplete_results' <<<"$search")" = "false" ] || unknown "$ref: mention search reported incomplete results"
   [ "$(jq -r '.total_count' <<<"$search")" -le 100 ] 2>/dev/null || unknown "$ref: more than 100 PRs match its number"
+  jq -e '(.items | type) == "array" and (.items | length) == .total_count' >/dev/null 2>&1 <<<"$search" ||
+    unknown "$ref: mention search returned fewer items than it counted"
   mentions=$(jq -c --arg n "$number" '[ .items[]
     | select((.body // "") | test("(^|[^A-Za-z0-9_./#-])#" + $n + "([^0-9]|$)"))
     | {k: "\(.repository_url | split("/") | .[-2:] | join("/"))#\(.number)",

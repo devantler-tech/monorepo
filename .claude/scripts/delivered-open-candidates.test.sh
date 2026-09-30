@@ -146,6 +146,16 @@ jq '. + {errors: [{message: "boom"}]}' "$FIX/gql-1.json" >"$FIX/gql-11.json"
 mention 11
 check "a GraphQL error is UNKNOWN" 2 "the read returned errors" "o/r#11 state=" --issue o/r#11
 
+# 14 — a commit whose PR list is longer than the page read is UNKNOWN
+gql 14 1 "" "" "$(jq -nc '{__typename: "ReferencedEvent", commit: {associatedPullRequests: {totalCount: 6, nodes: [range(5) | {number: (140 + .), state: "MERGED", repository: {nameWithOwner: "o/r"}}]}}}')"
+mention 14
+check "a truncated commit-to-PR list is UNKNOWN" 2 "belongs to more PRs than were read" "o/r#14 state=" --issue o/r#14
+
+# 15 — a mention search that counted more items than it returned is UNKNOWN
+gql 15 1 "" "" "$(pr xref 150 MERGED)"
+jq -n '{total_count: 1, incomplete_results: false, items: []}' >"$FIX/mention-15.json"
+check "a short mention search is UNKNOWN" 2 "fewer items than it counted" "o/r#15 state=" --issue o/r#15
+
 # 12 — portfolio mode reads the organisation search, and a short search is UNKNOWN
 jq -n '{total_count: 2, incomplete_results: false, items: [
   {repository_url: "https://api.github.com/repos/o/r", number: 1},
