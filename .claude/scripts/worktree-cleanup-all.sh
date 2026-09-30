@@ -93,6 +93,10 @@ NESTED_FAILED=0
 # Session worktrees the per-repo sweep must keep, one physical path per line: a nested pass
 # left recovery refs in them that could not be handed off (see handoff_reaped_refs).
 RETAIN=""
+# retain_parent <physical session worktree> — keep it this run. Every nested-pass failure that
+# stops before handoff_reaped_refs has run for all of its submodules calls this: refs/reaped
+# left by an earlier run may still be inside it, and nothing has verified a durable copy.
+retain_parent() { RETAIN="${RETAIN}$1"$'\n'; }
 nested_failed() {
   printf 'worktree-cleanup-all: %s — continuing; this run will exit non-zero\n' "$1" >&2
   NESTED_FAILED=2
@@ -289,7 +293,8 @@ sweep_nested_submodule_worktrees() {
       "$session_real"/?*) ;;
       *) continue ;;          # the main checkout, or a worktree outside the session root
     esac
-    nested_live_cwds || { nested_failed "cannot read live process CWDs (lsof) for $wt_real"; continue; }
+    nested_live_cwds || { retain_parent "$wt_real"
+      nested_failed "cannot read live process CWDs (lsof) for $wt_real"; continue; }
     if nested_session_is_live "$wt_real"; then
       printf '\n### SKIP %s (a live process works inside it — its nested worktrees are left alone)\n' \
         "${wt_real#"$ROOT"/}"
@@ -302,6 +307,7 @@ sweep_nested_submodule_worktrees() {
     if ! subs=$(git -C "$wt_real" submodule foreach --quiet --recursive \
                   'printf "%s\n" "$toplevel/$sm_path"' 2>/dev/null); then
       printf '\n### SKIP %s (cannot list its submodules)\n' "${wt_real#"$ROOT"/}"
+      retain_parent "$wt_real"
       nested_failed "cannot list the submodules of ${wt_real#"$ROOT"/}"
       continue
     fi
@@ -312,7 +318,8 @@ sweep_nested_submodule_worktrees() {
         printf '\n### SKIP %s (submodule path is a symlink — refusing to follow it)\n' "${sub#"$ROOT"/}"
         continue
       fi
-      sub_real=$(cd "$sub" 2>/dev/null && pwd -P) || { nested_failed "cannot resolve $sub"; continue; }
+      sub_real=$(cd "$sub" 2>/dev/null && pwd -P) || { retain_parent "$wt_real"
+        nested_failed "cannot resolve $sub"; continue; }
       case "$sub_real" in
         "$wt_real"/?*) ;;
         *) printf '\n### SKIP %s (escapes its session worktree: %s)\n' "${sub#"$ROOT"/}" "$sub_real"
@@ -322,11 +329,13 @@ sweep_nested_submodule_worktrees() {
       # .claude/worktrees stays behind after a reap, and would otherwise cost a full per-repo
       # pass (lsof, worktree list) on every later run.
       sub_wts=$(git -C "$sub_real" worktree list --porcelain 2>/dev/null) || {
+        retain_parent "$wt_real"
         nested_failed "cannot list the worktrees of ${sub_real#"$ROOT"/}"; continue; }
       if [ "$(grep -c '^worktree ' <<< "$sub_wts")" -gt 1 ]; then
         # Recheck after submodule enumeration: a process may have entered the
         # parent since the earlier check, and this call is about to delete below it.
-        nested_live_cwds || { nested_failed "cannot refresh live process CWDs (lsof) for $wt_real"; break; }
+        nested_live_cwds || { retain_parent "$wt_real"
+          nested_failed "cannot refresh live process CWDs (lsof) for $wt_real"; break; }
         if nested_session_is_live "$wt_real"; then
           printf '\n### SKIP %s (a live process works inside it — its nested worktrees are left alone)\n' \
             "${wt_real#"$ROOT"/}"
@@ -351,7 +360,7 @@ sweep_nested_submodule_worktrees() {
       if [ "$MODE" = apply ] && ! handoff_reaped_refs "$repo" "$wt_real" "$sub_real"; then
         printf '\n### RETAIN %s (%s: %s — its reaped commits'"'"' recovery refs would die with it)\n' \
           "${wt_real#"$ROOT"/}" "${sub_real#"$wt_real"/}" "$HANDOFF_NOTE"
-        RETAIN="${RETAIN}${wt_real}"$'\n'
+        retain_parent "$wt_real"
         nested_failed "could not hand off the recovery refs of ${sub_real#"$ROOT"/}"
       fi
     done <<< "$subs"

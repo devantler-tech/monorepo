@@ -738,6 +738,46 @@ $out2"
   rm -rf "$root"
 }
 
+t_nested_failure_before_handoff_retains_parent() {
+  # Refs left by an earlier run whose handoff failed are handed off on a later run. If that
+  # later run's nested pass fails before reaching the handoff — here a transient lsof failure
+  # that the repo's own sweep, reading lsof again moments later, does not share — the parent
+  # must still be kept: that sweep would otherwise delete the only copy of the refs.
+  local name="a nested failure before the handoff still retains the parent holding recovery refs"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.claude/worktrees/sess" sha out rc out2 rc2 shim="$root/shim"
+  give_inner_its_own_pushed_commit "$sess" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  sha=$(git -C "$sess/nested/.claude/worktrees/inner" rev-parse HEAD)
+  mv "$root/repo/nested" "$root/nested.aside"
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?
+  mv "$root/nested.aside" "$root/repo/nested"
+  mkdir -p "$shim"
+  # Fail only the FIRST lsof call (the nested pass's); every later call is the real one.
+  cat > "$shim/lsof" <<EOF
+#!/usr/bin/env bash
+count=\$(cat '$root/lsof-count' 2>/dev/null || echo 0)
+printf '%s\n' "\$((count + 1))" > '$root/lsof-count'
+[ "\$count" -eq 0 ] && exit 1
+exec '$(command -v lsof)' "\$@"
+EOF
+  chmod +x "$shim/lsof"
+  out2=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+         bash "$SUT" apply 24 2>&1); rc2=$?
+  if [ "$rc" -eq 2 ] && [ "$rc2" -eq 2 ] && [ -d "$sess" ] \
+     && grep -q 'cannot read live process CWDs (lsof)' <<<"$out2" \
+     && grep -q 'nested recovery refs not yet handed off' <<<"$out2" \
+     && [ "$(git -C "$sess/nested" rev-parse -q --verify "refs/reaped/$sha" 2>/dev/null)" = "$sha" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc rc2=$rc2 sess=$([ -e "$sess" ] && echo present || echo gone)
+$out
+---
+$out2"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup-all.sh contract tests\n'
 t_sweeps_root_and_submodules
 t_rewrites_session_worktree_root
@@ -764,6 +804,7 @@ t_nested_pass_honours_a_parent_ownership_claim
 t_nested_pass_refuses_symlinked_and_escaping_submodules
 t_nested_pass_hands_off_recovery_refs
 t_nested_pass_retains_parent_until_handoff
+t_nested_failure_before_handoff_retains_parent
 t_rejects_bad_mode
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
