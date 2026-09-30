@@ -282,6 +282,11 @@ worktree, or any other live session's, because the **live process CWD** rule bel
 sweep itself works from inside it. Measured 2026-09-29: the only sweep was the Claude-side one, so
 ~63 Codex worktrees (~16 GB) had piled up unreaped, the disk reached 99%, and new sessions could not
 start.
+In the claude lane, before each repository, it also sweeps the worktrees **nested in its session
+worktrees' populated submodules** (`<session>/<sub>/.claude/worktrees/*`), with salvage off because
+their repository dies with the parent, and never inside a session worktree a live process works in
+or one that carries an ownership claim. Nothing else visits them, and each one kept its parent
+forever (#3673).
 Per-repo safety lives in [`worktree-cleanup.sh`](../scripts/worktree-cleanup.sh) and is
 **fail-closed**: it KEEPs any worktree that is a **live process CWD**, is **locked**, is **younger
 than `min_age_hours`**, holds **commits not reachable from any remote** (one
