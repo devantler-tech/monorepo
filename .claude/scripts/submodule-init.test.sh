@@ -93,7 +93,7 @@ git init -q "$collider"
 )
 git config -f "$c2/super/.git/modules/sub/config" core.worktree "$(abspath "$collider")"
 out="$(cd "$c2/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
-report "collision: --check exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+report "collision: --check exits 1, a finding (#3627)" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "$out"
 report "collision: reports ISOLATION BROKEN" \
   "$(grep -q 'ISOLATION BROKEN' <<<"$out" && echo yes || echo no)" "$out"
 report "collision: names the colliding checkout" \
@@ -1591,6 +1591,53 @@ c67_from="$(git -C "$c67/super" rev-parse HEAD)"
 out="$(cd "$c67/super" && "$helper" --sync "$c67_from" 2>&1)" && rc=0 || rc=$?
 report "sync: abort on dirty removed submodule preserves non-zero exit code" \
   "$([[ $rc -ne 0 ]] && grep -q "still holds content HEAD does not track" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# monorepo#3011 — an unregistered-path refusal names the repository whose `.gitmodules` it read.
+# Run from inside a submodule, the helper re-roots to THAT repository, so a path the superproject
+# registers reads as unregistered; the refusal must say where it looked and name the superproject.
+c68="$tmp/c68"
+mk_super "$c68"
+(cd "$c68/super" && git submodule update -q --init sub)
+c68_super="$(abspath "$c68/super")"
+c68_sub="$(abspath "$c68/super/sub")"
+out="$(cd "$c68/super/sub" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "#3011: run from inside a submodule, the refusal names that repository and its superproject" \
+  "$([[ $rc -eq 1 ]] && grep -qF "in '$c68_sub/.gitmodules'" <<<"$out" &&
+    grep -qF "itself a submodule of '$c68_super'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+out="$(cd "$c68/super" && "$helper" no-such-sub 2>&1)" && rc=0 || rc=$?
+report "#3011: run from the superproject, the refusal names its .gitmodules and no parent" \
+  "$([[ $rc -eq 1 ]] && grep -qF "in '$c68_super/.gitmodules'" <<<"$out" &&
+    ! grep -q "itself a submodule" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+out="$(cd "$c68/super" && "$helper" --advance no-such-sub 2>&1)" && rc=0 || rc=$?
+report "#3011: --advance's unregistered-path refusal names the repository it read" \
+  "$([[ $rc -eq 1 ]] && grep -qF "in '$c68_super/.gitmodules'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# monorepo#3627 — exit 1 is a FINDING (the tree is wrong) and exit 2 is UNKNOWN (usage error or a
+# failed read), per `.claude/scripts/AGENTS.md`. One of each per mode; the findings above that assert
+# only "non-zero" are pinned to 1 here so a regression to a blanket exit cannot pass.
+c69="$tmp/c69"
+mk_super "$c69"
+git -C "$c69/super" submodule deinit -q -f sub
+c69_nogit="$tmp/c69-nogit"
+mkdir -p "$c69_nogit"
+exit_case() {
+  local name=$1 want=$2 dir=$3
+  shift 3
+  local got=0 text
+  text="$(cd "$dir" && "$helper" "$@" 2>&1)" || got=$?
+  report "#3627: $name exits $want" "$([[ $got -eq $want ]] && echo yes || echo no)" "rc=$got $text"
+}
+exit_case "no arguments (usage)" 2 "$c69/super"
+exit_case "outside any git repository" 2 "$c69_nogit" sub
+exit_case "init: unregistered path (finding)" 1 "$c69/super" no-such-sub
+exit_case "--advance with no path (usage)" 2 "$c69/super" --advance
+exit_case "--advance: unpopulated submodule (finding)" 1 "$c69/super" --advance sub
+exit_case "--sync with no commit (usage)" 2 "$c69/super" --sync
+exit_case "--sync: a from-sha that is not a commit (failed read)" 2 "$c69/super" --sync 0000000000000000000000000000000000000000
+exit_case "--check outside any git repository (failed read)" 2 "$c69_nogit" --check
+out="$(cd "$c67/super" && "$helper" --sync "$c67_from" 2>&1)" && rc=0 || rc=$?
+report "#3627: --sync: residue in a removed submodule (finding) exits 1" \
+  "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc $out"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
