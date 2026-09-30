@@ -1601,8 +1601,8 @@ mk_super "$c68"
 c68_super="$(abspath "$c68/super")"
 c68_sub="$(abspath "$c68/super/sub")"
 out="$(cd "$c68/super/sub" && "$helper" sub 2>&1)" && rc=0 || rc=$?
-report "#3011: run from inside a submodule, the refusal names that repository and its superproject" \
-  "$([[ $rc -eq 1 ]] && grep -qF "in '$c68_sub/.gitmodules'" <<<"$out" &&
+report "#3011: run from inside a submodule, the refusal names that repository and its superproject, and exits 2 (usage)" \
+  "$([[ $rc -eq 2 ]] && grep -qF "in '$c68_sub/.gitmodules'" <<<"$out" &&
     grep -qF "itself a submodule of '$c68_super'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 out="$(cd "$c68/super" && "$helper" no-such-sub 2>&1)" && rc=0 || rc=$?
 report "#3011: run from the superproject, the refusal names its .gitmodules and no parent" \
@@ -1635,6 +1635,31 @@ exit_case "--advance: unpopulated submodule (finding)" 1 "$c69/super" --advance 
 exit_case "--sync with no commit (usage)" 2 "$c69/super" --sync
 exit_case "--sync: a from-sha that is not a commit (failed read)" 2 "$c69/super" --sync 0000000000000000000000000000000000000000
 exit_case "--check outside any git repository (failed read)" 2 "$c69_nogit" --check
+
+# Codex on #3724: a `.gitmodules` git cannot parse enumerated zero submodules, and `--check` exited 0
+# having examined none. Every mode must return UNKNOWN instead; so must an unreadable file, which
+# `git config` reports with the same exit 1 as "no submodules".
+c70="$tmp/c70"
+mk_super "$c70"
+printf '[submodule "sub"\n\tpath = sub\n' >"$c70/super/.gitmodules"
+exit_case "--check: a .gitmodules git cannot parse (failed read)" 2 "$c70/super" --check
+exit_case "--all: a .gitmodules git cannot parse (failed read)" 2 "$c70/super" --all
+exit_case "init: a .gitmodules git cannot parse (failed read)" 2 "$c70/super" sub
+if [[ "$(id -u)" -ne 0 ]]; then
+  git -C "$c70/super" checkout -q -- .gitmodules
+  chmod 000 "$c70/super/.gitmodules"
+  exit_case "--check: an unreadable .gitmodules (failed read)" 2 "$c70/super" --check
+  chmod 644 "$c70/super/.gitmodules"
+else
+  echo "NOTE: unreadable-.gitmodules case not run as root (root reads a mode-000 file)"
+fi
+
+# Codex on #3724: a registered, populated path whose gitlink HEAD no longer records is a confirmed
+# inconsistency (a finding, exit 1), not a failed read.
+c71="$tmp/c71"
+mk_super "$c71"
+(cd "$c71/super" && git rm -q --cached sub && git commit -q -m "drop the gitlink, keep the registration")
+exit_case "--advance: registered path with no gitlink at HEAD (finding)" 1 "$c71/super" --advance sub
 out="$(cd "$c67/super" && "$helper" --sync "$c67_from" 2>&1)" && rc=0 || rc=$?
 report "#3627: --sync: residue in a removed submodule (finding) exits 1" \
   "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc $out"

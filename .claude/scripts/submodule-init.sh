@@ -351,20 +351,35 @@ is_registered_submodule() {
   return 1
 }
 
-# Where `is_registered_submodule` looked, for its refusal message (monorepo#3011). The script re-roots
-# to the top level of the repository holding the CURRENT directory, so run from inside a submodule it
-# reads THAT repository's `.gitmodules`, and a path the superproject does register reads as
-# unregistered. Without the resolved root the refusal sends the reader hunting for a typo in a
-# correct path; naming it, and the superproject above it, makes the cause one line.
-registration_scope() {
-  local root parent
+# Refuse path $1 for mode $2 when `is_registered_submodule` rejected it, naming WHERE it looked
+# (monorepo#3011). The script re-roots to the top level of the repository holding the CURRENT
+# directory, so run from inside a submodule it reads THAT repository's `.gitmodules`, and a path the
+# superproject does register reads as unregistered. Without the resolved root the refusal sends the
+# reader hunting for a typo in a correct path. Run from inside a submodule, nothing was shown to be
+# wrong — the helper was run from the wrong place — so that is a usage error (UNKNOWN, exit 2); at a
+# top-level repository the path really is not registered, a finding (exit 1).
+refuse_unregistered() {
+  local path=$1 mode=$2 root parent
   root=$(pwd -P)
   parent=$(git rev-parse --show-superproject-working-tree 2>/dev/null) || parent=''
   if [ -n "$parent" ]; then
-    printf "in '%s/.gitmodules' — that repository is itself a submodule of '%s'; run from there if the path is one of its submodules" "$root" "$parent"
-  else
-    printf "in '%s/.gitmodules'" "$root"
+    unknown "'$path' is not a registered submodule in '$root/.gitmodules' — that repository is itself a submodule of '$parent'; run from there if the path is one of its submodules. Refusing to $mode"
   fi
+  die "'$path' is not a registered submodule in '$root/.gitmodules' — refusing to $mode"
+}
+
+# `all_paths` runs inside a process substitution, whose exit status is discarded, so a `.gitmodules`
+# git cannot parse would enumerate ZERO submodules and `--check` would report success without
+# examining any (Codex on #3724). Prove the file is enumerable once, before any mode reads it. `git
+# config --get-regexp` exits 1 for "no match" AND for an unreadable file (measured), so an existing
+# file must also be a readable regular file; every other non-zero status is a failed read.
+gitmodules_enumerable() {
+  local rc=0
+  if [ -e .gitmodules ] || [ -L .gitmodules ]; then
+    [ -f .gitmodules ] && [ -r .gitmodules ] || return 1
+  fi
+  git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]
 }
 
 # Reduce a remote URL to a comparable form. Only for github.com, where the SSH and HTTPS namespaces
@@ -507,7 +522,7 @@ init_repair_probe() {
   # submodule gitdir's `core.worktree` to point THERE — recreating the exact cross-session collision
   # this script exists to prevent. Validate against .gitmodules first and fail closed.
   is_registered_submodule "$path" ||
-    die "'$path' is not a registered submodule $(registration_scope) — refusing to repair"
+    refuse_unregistered "$path" repair
 
   if is_populated "$path"; then
     # Already checked out here: only its isolation can be stale, so repair the stray `core.worktree`
@@ -561,7 +576,7 @@ init_repair_probe() {
 advance() {
   local path=${1%/}
   is_registered_submodule "$path" ||
-    die "'$path' is not a registered submodule $(registration_scope) — refusing to advance"
+    refuse_unregistered "$path" advance
 
   is_populated "$path" ||
     die "'$path' is not checked out here — run submodule-init.sh $path to populate it first"
@@ -592,8 +607,17 @@ advance() {
 
   local target head ahead nested_status post_status residue ordinary_residue
   # Superproject HEAD's gitlink for this path — the pin a pin-bump PR just moved.
+  # Tell an absent gitlink (a FINDING: .gitmodules registers the path, HEAD does not) from a failed
+  # read of HEAD's tree (UNKNOWN). `rev-parse HEAD:<path>` fails the same way for both.
+  local entry
+  entry=$(git --no-replace-objects ls-tree HEAD -- ":(literal)$path" 2>/dev/null) ||
+    unknown "could not read HEAD's tree to find the gitlink for '$path'"
+  case "$entry" in
+    160000\ commit\ *) ;;
+    *) die "no gitlink recorded for '$path' at HEAD, although .gitmodules registers it" ;;
+  esac
   target=$(git --no-replace-objects rev-parse "HEAD:$path" 2>/dev/null) ||
-    unknown "no gitlink recorded for '$path' at HEAD"
+    unknown "could not read the gitlink recorded for '$path' at HEAD"
   head=$(git --no-replace-objects -C "$path" rev-parse HEAD) ||
     unknown "could not read HEAD of '$path'"
 
@@ -868,6 +892,9 @@ super_root=$(git rev-parse --show-toplevel) || unknown 'not inside a git reposit
 cd "$super_root"
 
 [ $# -gt 0 ] || unknown 'usage: submodule-init.sh <submodule-path>... | --all | --check | --advance <path> | --sync <from-sha>'
+
+gitmodules_enumerable ||
+  unknown "cannot read '$super_root/.gitmodules' — refusing to report on submodules it may register"
 
 case "$1" in
   # NON-DESTRUCTIVE probe (see the header note): never touches content or other sessions' trees, but
