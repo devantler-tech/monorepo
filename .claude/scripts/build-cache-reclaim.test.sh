@@ -822,6 +822,349 @@ out=$(GOLANGCI_LINT_CACHE=off run_iso "$go_tmp_root" "$quiet_ps" dry-run 3 "$NEV
 grep -q 'GOLANGCI_LINT_CACHE disabled or not an absolute path' <<<"$out" ||
   fail 'GOLANGCI_LINT_CACHE=off was not reported as disabled'
 
+# --- 17. per-run build caches under the temp root are recognised by their marker -----
+# Lanes point GOCACHE at fresh dirs under the temp root with names no pattern in case 1
+# matches (daily-ai-engineer-gocache-*), 6-12 GB each; 75 GB of them filled the host on
+# 2026-09-30. Every reap below has an ablation partner that differs in exactly one
+# dimension -- the marker, the last write, a live holder -- and must be KEPT.
+cache_root="${fixture_root}/cache-tmp"
+mkdir -p "$cache_root" || fail 'fixture: per-run cache temp root'
+# make_run_cache <name> <marker-text> <idle-hours> builds a dir shaped like a Go build cache
+# (README + a fan-out dir holding an entry) whose every entry was last written <idle-hours>
+# ago. An empty <marker-text> writes no README.
+make_run_cache() {
+  local dir="${cache_root}/$1"
+  mkdir -p "${dir}/00" || return 1
+  printf 'entry\n' > "${dir}/00/a1-d"
+  [ -z "$2" ] || printf '%s\nRun "go clean -cache" if the directory is getting too large.\n' "$2" \
+    > "${dir}/README"
+  age_path "${dir}/00/a1-d" "$3" && age_path "${dir}/00" "$3" && age_path "$dir" "$3" || return 1
+  [ -z "$2" ] || age_path "${dir}/README" "$3" || return 1
+  printf '%s' "$dir"
+}
+run_cache() {
+  BUILD_CACHE_RECLAIM_TMPDIR="$cache_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" PATH="${RUN_CACHE_PS:-$quiet_ps}:$PATH" \
+    bash "$impl" "$@" 2>&1
+}
+go_marker='This directory holds cached build artifacts from the Go build system.'
+lint_marker='This directory holds cached build artifacts from golangci-lint.'
+idle_go=$(make_run_cache 'daily-ai-engineer-gocache-17a' "$go_marker" 7) || fail 'fixture: 17a'
+idle_lint=$(make_run_cache 'lane-golangci-cache-17b' "$lint_marker" 7) || fail 'fixture: 17b'
+fresh_go=$(make_run_cache 'daily-ai-engineer-gocache-17c' "$go_marker" 7) || fail 'fixture: 17c'
+printf 'entry\n' > "${fresh_go}/00/b2-d"   # a write moments ago: the fan-out dir's mtime moves
+unmarked=$(make_run_cache 'daily-ai-engineer-gocache-17d' '' 7) || fail 'fixture: 17d'
+
+# 17a-d, dry-run: the idle marked caches are selected, the rest are not, and nothing goes.
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+said "$out" "$idle_go" 'WOULD REAP' || fail 'an idle per-run Go cache was not selected by its marker'
+said "$out" "$idle_lint" 'WOULD REAP' || fail 'an idle per-run golangci-lint cache was not selected'
+said "$out" "$fresh_go" 'KEEP  (written within 6h)' ||
+  fail 'a per-run Go cache written moments ago was not kept for being recent'
+grep -qF "$unmarked" <<<"$out" && fail 'a dir with no cache marker was considered at all'
+[ -e "$idle_go" ] || fail 'dry-run deleted a per-run Go cache'
+
+# 17e. the same idle marked cache, held open by a live process, is KEPT by apply.
+held=$(make_run_cache 'codex-held-gocache-17e' "$go_marker" 7) || fail 'fixture: 17e'
+/bin/sh -c "exec 9<'${held}/00/a1-d'; sleep 30" &
+cache_holder_pid=$!
+sleep 1
+if kill -0 "$cache_holder_pid" 2>/dev/null; then
+  out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+  [ -e "${held}/00/a1-d" ] || fail 'apply removed a per-run Go cache a live process held open'
+  kill "$cache_holder_pid" 2>/dev/null
+  wait "$cache_holder_pid" 2>/dev/null
+else
+  fail 'fixture: per-run cache holder did not stay alive; liveness assertion not exercised'
+  out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+fi
+
+# 17a-d, apply: the idle marked caches are gone; the recent and unmarked ones remain.
+[ -e "$idle_go" ] && fail "apply did not reap an idle per-run Go cache: $idle_go"
+[ -e "$idle_lint" ] && fail "apply did not reap an idle per-run golangci-lint cache: $idle_lint"
+[ -e "$fresh_go" ] || fail 'apply reaped a per-run Go cache written moments ago'
+[ -e "$unmarked" ] || fail 'apply reaped a dir that carries no cache marker'
+
+# 17f-g share one dry-run, which also serves as 17h's readable control (exit 0).
+# 17f. a marked cache that ALSO matches the name-and-age sweep (an old codex-* Go cache) is
+# decided once: a dry-run that leaves it in place must not select or count it twice.
+both=$(make_run_cache 'codex-old-gocache-17f' "$go_marker" 120) || fail 'fixture: 17f'
+# 17g. a cache whose only recent write is an entry refreshed in place (a Go cache hit) is
+# KEPT: the fan-out dir's mtime does not move, so a depth-1 idle check would miss it.
+hit=$(make_run_cache 'daily-ai-engineer-gocache-17g' "$go_marker" 7) || fail 'fixture: 17g'
+touch "${hit}/00/a1-d"
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$(grep -cF "$both" <<<"$out")" -eq 1 ] ||
+  fail 'a cache matching both the name sweep and the marker sweep was decided more than once'
+said "$out" "$hit" 'KEEP  (written within 6h)' ||
+  fail 'a per-run Go cache refreshed by a cache hit was not kept for being recent'
+[ "$rc" -eq 0 ] || fail "a readable temp root exited ${rc}, not 0"
+rm -rf -- "$both" "$hit"
+
+# 17h. a temp root the marker sweep cannot list is UNKNOWN (exit 2), never a clean summary.
+chmod 311 "$cache_root"
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 755 "$cache_root"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "an unreadable temp root exited ${rc}, not 2 (UNKNOWN)"
+  grep -q 'UNKNOWN (scan failed)' <<<"$out" || fail 'an unreadable temp root was not reported UNKNOWN'
+fi
+
+
+# 17i. a marked cache whose recency scan fails is UNKNOWN (exit 2), never "recent" and KEPT
+# with a clean summary: a failed scan examined nothing.
+blind=$(make_run_cache 'daily-ai-engineer-gocache-17i' "$go_marker" 7) || fail 'fixture: 17i'
+chmod 000 "${blind}/00"
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 755 "${blind}/00"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "a per-run cache whose scan failed exited ${rc}, not 2 (UNKNOWN)"
+  said "$out" "$blind" 'UNKNOWN (scan failed, cache not examined)' ||
+    fail 'a per-run cache whose scan failed was not reported UNKNOWN'
+fi
+rm -rf -- "$blind"
+
+# 17j. an old codex-* marked cache whose only recent write is an entry refreshed in place is
+# KEPT: the name sweep's day-based root mtime must not decide a marked cache.
+old_hit=$(make_run_cache 'codex-old-gocache-17j' "$go_marker" 120) || fail 'fixture: 17j'
+touch "${old_hit}/00/a1-d"
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$old_hit" ] || fail 'the name sweep reaped a marked cache written moments ago'
+said "$out" "$old_hit" 'KEEP  (written within 6h)' ||
+  fail 'an old-named marked cache with a fresh entry was not kept for being recent'
+rm -rf -- "$old_hit"
+
+# 17k. an idle cache that GOLANGCI_LINT_CACHE names is budget-managed by (3), so the marker
+# sweep leaves it alone even though it is idle and marked.
+configured=$(make_run_cache 'configured-lint-17k' "$lint_marker" 7) || fail 'fixture: 17k'
+out=$(GOLANGCI_LINT_CACHE="$configured" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${configured}/00/a1-d" ] || fail 'the marker sweep reaped the configured, within-budget lint cache'
+rm -rf -- "$configured"
+
+# 17l. an idle marked golangci-lint cache is KEPT while a golangci-lint runs: a linter can sit
+# between two cache reads with no file open, so the lsof probes cannot see it.
+busy_table="${fixture_root}/ps-busy-lint.txt"
+printf '%s\n' '00:05 /bin/sh' '03:00 /opt/bin/golangci-lint' > "$busy_table"
+busy_ps="${fixture_root}/ps-busy-lint"
+make_ps_stub "$busy_ps" "$busy_table" || fail 'fixture: busy lint ps stub'
+linted=$(make_run_cache 'lane-golangci-cache-17l' "$lint_marker" 7) || fail 'fixture: 17l'
+out=$(RUN_CACHE_PS="$busy_ps" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$linted" ] || fail 'apply reaped a per-run lint cache while golangci-lint was running'
+said "$out" "$linted" 'KEEP  (golangci-lint running or unknown)' ||
+  fail 'a per-run lint cache was not kept for a running golangci-lint'
+rm -rf -- "$linted"
+
+# 17m. a README that is a symlink is not a marker, even when it points at one: the read must
+# never follow a planted link (to a FIFO or a stream it would block on).
+linked=$(make_run_cache 'daily-ai-engineer-gocache-17m' '' 7) || fail 'fixture: 17m'
+printf '%s\n' "$go_marker" > "${fixture_root}/marker-17m"
+ln -s "${fixture_root}/marker-17m" "${linked}/README"
+# Backdate the link itself and the dir its creation touched, so recency cannot be what keeps it.
+stamp17m=$(date -v-7H +%Y%m%d%H%M 2>/dev/null) || stamp17m=$(date -d "7 hours ago" +%Y%m%d%H%M)
+touch -h -t "$stamp17m" "${linked}/README" || fail 'fixture: age 17m link'
+age_path "$linked" 7 || fail 'fixture: age 17m dir'
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$linked" ] || fail 'a dir whose README is a symlink was reaped as a marked cache'
+rm -rf -- "$linked"
+
+# 17n. with no override, golangci-lint's DEFAULT cache can resolve to a direct child of the temp
+# root (XDG_CACHE_HOME there on Linux; ~/Library/Caches there on macOS). It is budget-managed by
+# (3), so the marker sweep leaves it alone even though it is idle and marked.
+default_home="${fixture_root}/home-17n"
+mkdir -p "${default_home}/Library" || fail 'fixture: 17n home'
+ln -s "$cache_root" "${default_home}/Library/Caches" || fail 'fixture: 17n caches link'
+default_lint=$(make_run_cache 'golangci-lint' "$lint_marker" 7) || fail 'fixture: 17n'
+out=$(env -u GOLANGCI_LINT_CACHE HOME="$default_home" XDG_CACHE_HOME="$cache_root" \
+  BUILD_CACHE_RECLAIM_TMPDIR="$cache_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root" \
+  GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" PATH="${quiet_ps}:$PATH" \
+  bash "$impl" apply 3 "$NEVER_CLEAN_BUDGET" 2>&1)
+[ -e "${default_lint}/00/a1-d" ] || fail 'the marker sweep reaped the default, within-budget lint cache'
+rm -rf -- "$default_lint" "$default_home"
+
+# 17o. a README that cannot be read is UNKNOWN (exit 2), never "not a cache": an old-named
+# cache must not then fall through to the name sweep and be reaped on its root mtime alone.
+unreadable=$(make_run_cache 'codex-old-gocache-17o' "$go_marker" 120) || fail 'fixture: 17o'
+chmod 000 "${unreadable}/README"
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 644 "${unreadable}/README"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "a cache whose marker could not be read exited ${rc}, not 2 (UNKNOWN)"
+  said "$out" "$unreadable" 'UNKNOWN (marker unreadable, cache not examined)' ||
+    fail 'a cache whose marker could not be read was not reported UNKNOWN'
+  [ -e "${unreadable}/00/a1-d" ] || fail 'a cache whose marker could not be read was reaped'
+fi
+rm -rf -- "$unreadable"
+
+# 17p. a golangci-lint that starts after the startup process snapshot keeps an idle lint cache
+# at removal time: the late recheck must read a fresh process table, not the startup one.
+rm -f "${fixture_root}/late-lint-calls"
+late_linted=$(make_run_cache 'lane-golangci-cache-17p' "$lint_marker" 7) || fail 'fixture: 17p'
+out=$(RUN_CACHE_PS="$late_ps" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$late_linted" ] || fail 'apply reaped a per-run lint cache whose linter started after the snapshot'
+said "$out" "$late_linted" 'KEEP  (busy, late)' ||
+  fail 'a per-run lint cache was not kept at removal time for a linter started after the snapshot'
+rm -rf -- "$late_linted"
+
+# 17q. the marker sweep's own unreadable-README path (a name no pattern in (2) matches) is
+# UNKNOWN too, not a silent skip.
+unread2=$(make_run_cache 'daily-ai-engineer-gocache-17q' "$go_marker" 7) || fail 'fixture: 17q'
+chmod 000 "${unread2}/README"
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 644 "${unread2}/README"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "an unreadable marker in the marker sweep exited ${rc}, not 2 (UNKNOWN)"
+  said "$out" "$unread2" 'UNKNOWN (marker unreadable, cache not examined)' ||
+    fail 'an unreadable marker in the marker sweep was not reported UNKNOWN'
+fi
+rm -rf -- "$unread2"
+
+# 17r. a failed `go env GOCACHE` leaves the configured-cache exclusion incomplete, so the marker
+# sweep is skipped as UNKNOWN (exit 2) and an idle marked cache is left in place.
+broken_go="${fixture_root}/go-broken"
+mkdir -p "$broken_go" || fail 'fixture: 17r stub dir'
+cp "${quiet_ps}/ps" "${broken_go}/ps" || fail 'fixture: 17r ps'
+printf '#!/bin/sh\nexit 1\n' > "${broken_go}/go" && chmod +x "${broken_go}/go" || fail 'fixture: 17r go'
+kept_idle=$(make_run_cache 'daily-ai-engineer-gocache-17r' "$go_marker" 7) || fail 'fixture: 17r'
+out=$(RUN_CACHE_PS="$broken_go" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "a failed go env GOCACHE exited ${rc}, not 2 (UNKNOWN)"
+grep -q 'UNKNOWN (go env GOCACHE failed)' <<<"$out" || fail 'a failed go env GOCACHE was not reported UNKNOWN'
+[ -e "$kept_idle" ] || fail 'the marker sweep ran without the configured-cache exclusion'
+rm -rf -- "$kept_idle"
+
+# 17s. only a bounded prefix of README is read: a marker past the first 512 bytes is not a marker,
+# so a huge or growing unrelated README can neither stall the sweep nor get its dir reaped.
+padded=$(make_run_cache 'daily-ai-engineer-gocache-17s' '' 7) || fail 'fixture: 17s'
+{ head -c 600 /dev/zero | tr '\0' 'x'; printf '\n%s\n' "$go_marker"; } > "${padded}/README"
+age_path "${padded}/README" 7 && age_path "$padded" 7 || fail 'fixture: age 17s'
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$padded" ] || fail 'a README whose marker sits past the read bound was treated as a cache'
+rm -rf -- "$padded"
+
+# 17t. a write deep in the cache (a fuzz corpus entry, fuzz/<import-path>/<target>/<hash>) keeps it:
+# once those directories exist, a new entry moves no node at depth 1 or 2.
+fuzzed=$(make_run_cache 'daily-ai-engineer-gocache-17t' "$go_marker" 7) || fail 'fixture: 17t'
+mkdir -p "${fuzzed}/fuzz/example.com/pkg/FuzzX" || fail 'fixture: 17t fuzz dirs'
+age_path "${fuzzed}/fuzz/example.com/pkg/FuzzX" 7 && age_path "${fuzzed}/fuzz/example.com/pkg" 7 &&
+  age_path "${fuzzed}/fuzz/example.com" 7 && age_path "${fuzzed}/fuzz" 7 && age_path "$fuzzed" 7 ||
+  fail 'fixture: age 17t dirs'
+printf 'corpus\n' > "${fuzzed}/fuzz/example.com/pkg/FuzzX/0123abcd"
+age_path "${fuzzed}/fuzz/example.com/pkg/FuzzX" 7 || fail 'fixture: age 17t target dir'
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$fuzzed" ] || fail 'apply reaped a per-run Go cache with a fresh fuzz corpus entry'
+said "$out" "$fuzzed" 'KEEP  (written within 6h)' ||
+  fail 'a per-run Go cache with a fresh fuzz corpus entry was not kept for being recent'
+rm -rf -- "$fuzzed"
+
+# 17u. a README that only QUOTES a marker (not as its first line) is not a cache: an unrelated
+# directory that mentions the sentence may hold work nothing can regenerate.
+quoting=$(make_run_cache 'notes-about-caches-17u' '' 7) || fail 'fixture: 17u'
+printf 'Notes on Go caches. Go writes:\n%s\n' "$go_marker" > "${quoting}/README"
+age_path "${quoting}/README" 7 && age_path "$quoting" 7 || fail 'fixture: age 17u'
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$quoting" ] || fail 'a directory whose README merely quotes the marker was reaped as a cache'
+rm -rf -- "$quoting"
+
+# 17v. a temp root given as a SYMLINK to the real directory (/tmp on macOS) is still listed: a
+# listing that does not follow it finds nothing and reports success.
+linked_root="${fixture_root}/tmp-link-17v"
+ln -s "$cache_root" "$linked_root" || fail 'fixture: 17v link'
+via_link=$(make_run_cache 'daily-ai-engineer-gocache-17v' "$go_marker" 7) || fail 'fixture: 17v'
+out=$(BUILD_CACHE_RECLAIM_TMPDIR="$linked_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root" \
+  GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" PATH="${quiet_ps}:$PATH" \
+  bash "$impl" dry-run 3 "$NEVER_CLEAN_BUDGET" 2>&1)
+said "$out" "${linked_root}/daily-ai-engineer-gocache-17v" 'WOULD REAP' ||
+  fail 'an idle per-run cache under a symlinked temp root was not selected'
+rm -rf -- "$via_link" "$linked_root"
+
+# 17w. a go that exits 0 but prints no GOCACHE path (a broken shim) is no better than a failed
+# read: the exclusion would be incomplete, so the marker sweep is skipped as UNKNOWN.
+silent_go="${fixture_root}/go-silent"
+mkdir -p "$silent_go" || fail 'fixture: 17w stub dir'
+cp "${quiet_ps}/ps" "${silent_go}/ps" || fail 'fixture: 17w ps'
+printf '#!/bin/sh\nexit 0\n' > "${silent_go}/go" || fail 'fixture: 17w go'
+chmod +x "${silent_go}/go" || fail 'fixture: 17w chmod'
+silent_idle=$(make_run_cache 'daily-ai-engineer-gocache-17w' "$go_marker" 7) || fail 'fixture: 17w'
+out=$(RUN_CACHE_PS="$silent_go" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "a go printing no GOCACHE exited ${rc}, not 2 (UNKNOWN)"
+grep -q "UNKNOWN (go env GOCACHE gave ''" <<<"$out" || fail 'a go printing no GOCACHE was not reported UNKNOWN'
+[ -e "$silent_idle" ] || fail 'the marker sweep ran on an empty GOCACHE read'
+rm -rf -- "$silent_idle"
+
+# 17x. a temp-root child this run cannot search hides its README: that is "not examined" (UNKNOWN,
+# exit 2), never "no marker".
+opaque=$(make_run_cache 'opaque-cache-17x' "$go_marker" 7) || fail 'fixture: 17x'
+chmod 000 "$opaque"
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 755 "$opaque"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "an unsearchable temp-root child exited ${rc}, not 2 (UNKNOWN)"
+  said "$out" "$opaque" 'UNKNOWN (marker unreadable, cache not examined)' ||
+    fail 'an unsearchable temp-root child was not reported UNKNOWN'
+fi
+rm -rf -- "$opaque"
+
+# 17y. Go's DEFAULT build cache (os.UserCacheDir()/go-build) can resolve to a direct child of the
+# temp root (XDG_CACHE_HOME there on Linux; ~/Library/Caches there on macOS). Section 1 owns it, so
+# the marker sweep leaves it alone even when GOCACHE names somewhere else.
+go_home="${fixture_root}/home-17y"
+mkdir -p "${go_home}/Library" || fail 'fixture: 17y home'
+ln -s "$cache_root" "${go_home}/Library/Caches" || fail 'fixture: 17y caches link'
+default_go=$(make_run_cache 'go-build' "$go_marker" 7) || fail 'fixture: 17y'
+out=$(HOME="$go_home" XDG_CACHE_HOME="$cache_root" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${default_go}/00/a1-d" ] || fail 'the marker sweep reaped the default Go build cache'
+rm -rf -- "$default_go" "$go_home"
+
+# 17z. a process table that cannot be read is UNKNOWN for an idle lint cache (exit 2), never a
+# proven running linter and a clean KEEP.
+no_ps="${fixture_root}/ps-none-17z"
+make_ps_stub "$no_ps" || fail 'fixture: 17z ps stub'
+blind_lint=$(make_run_cache 'lane-golangci-cache-17z' "$lint_marker" 7) || fail 'fixture: 17z'
+out=$(RUN_CACHE_PS="$no_ps" run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "an unreadable process table exited ${rc}, not 2 (UNKNOWN)"
+said "$out" "$blind_lint" 'UNKNOWN (scan failed, cache not examined)' ||
+  fail 'an idle lint cache with an unreadable process table was not reported UNKNOWN'
+rm -rf -- "$blind_lint"
+
+# --- 18. no go binary at all (the macOS CI runner): GOCACHE is read where go would read it -------
+nogo_env() { # <GOENV value> <args...>
+  local goenv=$1
+  shift
+  env -u GOCACHE BUILD_CACHE_RECLAIM_GO=none GOENV="$goenv" \
+    BUILD_CACHE_RECLAIM_TMPDIR="$cache_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root" \
+    GOMODCACHE="$GO_MOD_FIXTURE" PATH="${quiet_ps}:$PATH" bash "$impl" "$@" 2>&1
+}
+
+# 18a. nothing configured: the sweep runs (exit 0) and reaps an idle marked cache, as on CI.
+nogo_idle=$(make_run_cache 'daily-ai-engineer-gocache-18a' "$go_marker" 7) || fail 'fixture: 18a'
+out=$(nogo_env off apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 0 ] || fail "with no go and nothing configured the sweep exited ${rc}, not 0: ${out}"
+[ -e "$nogo_idle" ] && fail 'with no go and nothing configured an idle marked cache was not reaped'
+rm -rf -- "$nogo_idle"
+
+# 18b. a go env file assigning GOCACHE twice: go uses the last, and every assigned path is kept.
+dup_env="${fixture_root}/go-env-18b"
+nogo_kept=$(make_run_cache 'configured-gocache-18b' "$go_marker" 7) || fail 'fixture: 18b'
+printf 'GOCACHE=%s\nGOCACHE=%s\n' "${fixture_root}/elsewhere" "$nogo_kept" > "$dup_env"
+out=$(nogo_env "$dup_env" apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${nogo_kept}/00/a1-d" ] || fail 'the last GOCACHE assignment in the go env file was not excluded'
+rm -rf -- "$nogo_kept" "$dup_env"
+
+# 18c. a relative GOENV cannot be read from here: UNKNOWN (exit 2), and the run finishes.
+out=$(nogo_env missing dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "a relative GOENV exited ${rc}, not 2 (UNKNOWN)"
+grep -q 'is not absolute' <<<"$out" || fail 'a relative GOENV was not reported UNKNOWN'
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0

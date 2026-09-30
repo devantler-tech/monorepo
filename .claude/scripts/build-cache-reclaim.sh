@@ -20,10 +20,16 @@
 #
 # Defaults: dry-run, 3 days, 10 GB.
 #
+# Exit: 0 every sweep read its input; 2 a usage or setting error, or a scan that could not be
+# read (logged as UNKNOWN -- the summary is then partial, never clean).
+#
 # What it covers, in the order it runs:
 #   1. GOCACHE and GOMODCACHE, each cleaned only when it exceeds cache_budget_gb.
 #   2. Per-run agent trees (codex-*, war-*, dpc-*, ksail-*) under the temp root, older
 #      than min_age_days.
+#   2b. Per-run Go and golangci-lint caches directly under the temp root, whatever they are
+#      named, recognised by the README each tool writes into its cache and reclaimed once
+#      nothing was written to them for a threshold counted in HOURS (2026-09-30: 75 GB).
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
 #   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
 #      per-user temp dir, older than a threshold counted in HOURS.
@@ -35,9 +41,11 @@
 #   BUILD_CACHE_RECLAIM_GO_TMPDIR             temp dir for (4); default `getconf
 #                                             DARWIN_USER_TEMP_DIR`, else ${TMPDIR:-/tmp}
 #   BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS  age threshold for (4); default 6
+#   BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS  idle threshold for (2b); default 6
 #
 # SAFETY — this deletes, so every rule below fails closed:
-#   * Only trees matching a known agent-generated name pattern are ever considered.
+#   * Only trees matching a known agent-generated name pattern, or carrying a Go or
+#     golangci-lint cache README marker (2b), are ever considered.
 #   * A tree younger than its age threshold is KEPT.
 #   * A tree any running process holds open is KEPT.
 #   * The caller's own session tree is KEPT.
@@ -107,6 +115,16 @@ LINT_BUDGET_GB=$(uint_setting BUILD_CACHE_RECLAIM_LINT_BUDGET_GB \
 # days only lets orphans pile up: 15.7 GB of them were 0-2 days old when the host filled.
 GO_TMP_MIN_AGE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS \
   "${BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS:-6}") || exit 2
+# A per-run build cache under the temp root is idle once nothing has been WRITTEN to it for
+# this many hours. Hours, not min_age_days, for the same reason: lanes create several a
+# day at 6-12 GB each, and 75 GB of them filled the host before any reached four days.
+RUN_CACHE_IDLE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS \
+  "${BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS:-6}") || exit 2
+
+# The README each tool writes into every cache dir it opens, whenever it is missing. These
+# are what prove a directory IS such a cache, whatever it is called (2b, 3).
+GO_CACHE_MARKER='This directory holds cached build artifacts from the Go build system.'
+LINT_CACHE_MARKER='This directory holds cached build artifacts from golangci-lint.'
 
 TMPDIR_ROOT=${BUILD_CACHE_RECLAIM_TMPDIR:-/private/tmp}
 
@@ -134,6 +152,9 @@ GO_TMP_ROOT=$(resolve_go_tmpdir)
 reclaimed_mb=0
 kept=0
 removed=0
+# unknown counts scans that could not be read, so the summary and the exit status never call a
+# partial pass clean.
+unknown=0
 
 log() { printf 'build-cache-reclaim: %s\n' "$*"; }
 
@@ -347,6 +368,9 @@ oldest_process_secs() {
 # live: the first scheduled run logged "go not on PATH".
 find_go() {
   local candidate
+  # BUILD_CACHE_RECLAIM_GO=none simulates a host with no go at all (the macOS CI runner is one), so
+  # the no-go path is testable on a machine that has go in a fixed location.
+  [ "${BUILD_CACHE_RECLAIM_GO:-}" != none ] || return 1
   candidate=$(command -v go 2>/dev/null) && [ -x "$candidate" ] && {
     printf '%s' "$candidate"
     return 0
@@ -577,8 +601,9 @@ tree_in_use() {
 #
 #   $1  the candidate tree
 #   $2  the liveness scope for tree_in_use: temp-root or host
+#   $3  optional: run-cache, which repeats the marked-cache hold check just before removal
 sweep_candidate() {
-  local tree=$1 scope=$2 tree_mb
+  local tree=$1 scope=$2 tree_mb late_hold
   [ -n "$tree" ] || return 0
   [ -d "$tree" ] || return 0
   if own_session_tree "$tree"; then
@@ -591,8 +616,9 @@ sweep_candidate() {
     return 0
   fi
   if ! tree_mb=$(size_mb "$tree"); then
-    kept=$((kept + 1))
-    log "KEEP  (unmeasurable)  $tree"
+    # Kept, but not examined: a tree whose size could not be read is UNKNOWN, never a clean KEEP.
+    unknown=$((unknown + 1))
+    log "UNKNOWN (unmeasurable) $tree"
     return 0
   fi
   if [ "$MODE" = apply ]; then
@@ -602,6 +628,24 @@ sweep_candidate() {
       kept=$((kept + 1))
       log "KEEP  (in use, late)  $tree"
       return 0
+    fi
+    # A marked cache can be written to without any file staying open across both lsof probes,
+    # so its own recency (and, for a lint cache, a running linter) is asked again here too.
+    if [ "${3:-}" = run-cache ]; then
+      late_hold=$(run_cache_hold "$tree" late)
+      case "$late_hold" in
+        '') ;;
+        unknown)
+          unknown=$((unknown + 1))
+          log "UNKNOWN (scan failed, cache not examined) $tree"
+          return 0
+          ;;
+        *)
+          kept=$((kept + 1))
+          log "KEEP  (busy, late)    $tree"
+          return 0
+          ;;
+      esac
     fi
     # Go marks every file under a module cache read-only, so a plain `rm -rf` stops
     # partway. That is worse than skipping the tree: the partial delete bumps its
@@ -623,26 +667,128 @@ sweep_candidate() {
   fi
 }
 
+# run_cache_kind <dir> prints `go` or `lint` when <dir>'s README opens with that tool's cache marker
+# as its exact first line, and `none` otherwise; it returns 2 when the README could not be read.
+# This is the ONE place a marker is read, so every decision uses the same fail-closed, bounded
+# answer:
+#   * the README must be a regular file that is not a symlink: a FIFO, a device or a link to a
+#     stream would block the read, and any temp-root entry could plant one to stall the sweep;
+#   * only the first 512 bytes are read: an unrelated README may be huge or still growing;
+#   * the first line must BE the marker, not merely quote it: an unrelated directory whose README
+#     mentions the sentence is not a regenerable cache.
+# A cache whose marker was never read was never examined, so callers count a 2 as UNKNOWN.
+run_cache_kind() {
+  local readme="$1/README" prefix first
+  # A directory this run cannot list or search hides its README: that is "not examined", never
+  # "no marker".
+  if [ ! -r "$1" ] || [ ! -x "$1" ]; then
+    return 2
+  fi
+  if [ ! -f "$readme" ] || [ -L "$readme" ]; then
+    printf none
+    return 0
+  fi
+  prefix=$(head -c 512 -- "$readme" 2>/dev/null) || return 2
+  first=${prefix%%$'\n'*}
+  case "$first" in
+    "$GO_CACHE_MARKER") printf go ;;
+    "$LINT_CACHE_MARKER") printf lint ;;
+    *) printf none ;;
+  esac
+}
+
+# is_run_cache <dir> returns 0 for a marked cache, 1 for none, and 2 when the README could not
+# be read (run_cache_kind).
+is_run_cache() {
+  local kind
+  kind=$(run_cache_kind "$1") || return 2
+  [ "$kind" != none ]
+}
+
 if [ -d "$TMPDIR_ROOT" ]; then
   while IFS= read -r tree; do
+    # A marked cache is left to (2b), whose idle rule looks at its entries: the day-based
+    # mtime of the root alone can be old while the cache was written minutes ago.
+    [ -n "$tree" ] || continue
+    if is_run_cache "$tree"; then continue; else marker_rc=$?; fi
+    if [ "$marker_rc" -eq 2 ]; then
+      unknown=$((unknown + 1))
+      log "UNKNOWN (marker unreadable, cache not examined) $tree"
+      continue
+    fi
     sweep_candidate "$tree" temp-root
   done <<EOF
-$(find "$TMPDIR_ROOT" -maxdepth 1 -type d \
+$(find -H "$TMPDIR_ROOT" -maxdepth 1 -type d \
   \( -name 'codex-*' -o -name 'war-*' -o -name 'dpc-*' -o -name 'ksail-*' \) \
   -mtime "+${MIN_AGE_DAYS}" 2>/dev/null)
 EOF
 fi
 
 # ---------------------------------------------------------------------------
-# 3. golangci-lint cache, emptied only when it exceeds its own budget.
+# 2b. Per-run Go and golangci-lint caches under the temp root, recognised by marker.
 #
-# golangci-lint keeps a content-addressed cache of its own, built from a copy of Go's
-# build cache, and nothing here bounded it: 3.3 GB when the host filled. The binary is
-# usually NOT on PATH on the host (it runs via `go run` or in containers), so this cannot
-# lean on `golangci-lint cache clean` the way the Go caches lean on `go clean`.
+# Agent runs point GOCACHE (and golangci-lint's cache) at a fresh directory under the temp
+# root, and each fills to 6-12 GB. On 2026-09-30 the host reached 100% again with 75 GB of
+# them. The name patterns in (2) never match `daily-ai-engineer-gocache-*`, and
+# `-mtime +3` (whole days, so four in practice) keeps every other one for days while lanes
+# create several a day. So they are recognised by what they ARE -- the README each tool
+# writes into its cache dir -- whatever the directory is called, and are reclaimed once
+# nothing has been written to them for RUN_CACHE_IDLE_HOURS. Every guard in
+# sweep_candidate still applies, and a cache is regenerable: removing one costs a rebuild.
 # ---------------------------------------------------------------------------
-# golangci-lint writes this README into every cache dir it opens, whenever it is missing.
-LINT_CACHE_MARKER='This directory holds cached build artifacts from golangci-lint.'
+
+# run_cache_idle <dir> succeeds (0) when nothing anywhere in the cache has changed within
+# RUN_CACHE_IDLE_HOURS, and returns 1 when something has. The whole tree is scanned: Go overwrites
+# an entry in place and refreshes its mtime on a cache hit without moving the fan-out dir's mtime,
+# and a fuzz corpus entry (fuzz/<import-path>/<target>/<hash>) sits deeper still, so no fixed
+# depth sees every write. The scan stops at the first recent node (-quit), so a busy cache costs
+# little. A scan that fails before deciding returns 2: that cache was not examined.
+run_cache_idle() {
+  local recent
+  recent=$(find "$1" -mmin "-$((RUN_CACHE_IDLE_HOURS * 60))" -print -quit 2>/dev/null) ||
+    return 2
+  [ -z "$recent" ]
+}
+
+# run_cache_hold <dir> [late] prints why a marked cache must be kept, and nothing when it may go.
+# `late` (the removal-time recheck) reads a fresh process table instead of the startup one.
+#   recent   written within RUN_CACHE_IDLE_HOURS
+#   unknown  the recency scan failed
+#   linting  a golangci-lint cache while a golangci-lint runs, or the process table cannot say.
+#            A linter can sit between two cache reads with no file open, so the lsof probes
+#            cannot see it -- the same rule reclaim_lint_cache applies to the configured cache.
+run_cache_hold() {
+  local tree=$1 when=${2:-early} rc oldest table kind
+  if run_cache_idle "$tree"; then rc=0; else rc=$?; fi
+  case "$rc" in
+    0) ;;
+    1) printf recent; return 0 ;;
+    *) printf unknown; return 0 ;;
+  esac
+  # The kind is read again through the same bounded, typed reader: a README that can no longer be
+  # read, or no longer carries a marker, is a changed tree and is kept.
+  if ! kind=$(run_cache_kind "$tree") || [ "$kind" = none ]; then
+    printf unknown
+    return 0
+  fi
+  if [ "$kind" = lint ]; then
+    if [ "$when" = late ]; then
+      # The startup snapshot is minutes old by removal time; a linter started since then is
+      # only in a fresh table (the same late read reclaim_lint_cache makes).
+      # A table that cannot be read or parsed is `unknown`; only a proven process is `linting`.
+      if ! table=$(read_process_table) || ! oldest=$(oldest_in_table "$table" golangci-lint); then
+        printf unknown
+      elif [ "$oldest" != -1 ]; then
+        printf linting
+      fi
+    elif ! oldest=$(oldest_process_secs golangci-lint); then
+      printf unknown
+    elif [ "$oldest" != -1 ]; then
+      printf linting
+    fi
+  fi
+  return 0
+}
 
 # lint_cache_dir prints the cache dir golangci-lint would use, resolved the way it does
 # (internal/go/cache.DefaultDir): GOLANGCI_LINT_CACHE when set, which golangci-lint only
@@ -667,6 +813,161 @@ lint_cache_dir() {
     *) return 1 ;;
   esac
 }
+
+# The Go build cache and the golangci-lint cache (its override, or the default it resolves to)
+# are budget-managed by (1) and (3): a configured cache within its budget is kept on purpose,
+# so this sweep must not reap it for idleness. Compared on resolved paths, like every other tree
+# test here.
+# go_default_cache_dir prints the build cache path go uses when GOCACHE is unset
+# (os.UserCacheDir()/go-build): ~/Library/Caches on macOS, ${XDG_CACHE_HOME:-~/.cache} elsewhere.
+# XDG_CACHE_HOME may point at the temp root, so this default is excluded too, whatever GOCACHE says.
+go_default_cache_dir() {
+  local base
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) base=${HOME:+${HOME}/Library/Caches} ;;
+    *) base=${XDG_CACHE_HOME:-${HOME:+${HOME}/.cache}} ;;
+  esac
+  case "$base" in
+    /*) printf '%s/go-build' "$base" ;;
+  esac
+}
+
+configured_caches=''
+# Without the configured Go cache's path the exclusion is incomplete, so a read that fails or
+# yields something other than `off` or an absolute path skips the marker sweep as UNKNOWN rather
+# than risk reaping the budget-managed cache for idleness. With no go binary at all, the setting
+# is read where go itself would read it: the GOCACHE variable, else a GOCACHE= line in the go env
+# file (`go env -w`; $GOENV, or its default under the user config dir). A missing or `off` env
+# file means GOCACHE is at Go's default in the user cache dir, never the temp root; an env file
+# that exists but cannot be read is UNKNOWN.
+configured_gocache=''
+goenv_caches=''
+run_caches_readable=0
+if [ -z "${go_bin:-}" ]; then
+  configured_gocache=${GOCACHE:-}
+  run_caches_readable=1
+  if [ -z "$configured_gocache" ]; then
+    goenv_file=${GOENV:-}
+    if [ -z "$goenv_file" ]; then
+      case "$(uname -s 2>/dev/null)" in
+        Darwin) goenv_file=${HOME:+${HOME}/Library/Application Support/go/env} ;;
+        *) goenv_file=${XDG_CONFIG_HOME:-${HOME:+${HOME}/.config}}/go/env ;;
+      esac
+    fi
+    if [ -n "$goenv_file" ] && [ "$goenv_file" != off ] && [ "${goenv_file#/}" = "$goenv_file" ]; then
+      # Relative GOENV resolves against whatever directory go runs in, so it cannot be read here.
+      run_caches_readable=0
+      unknown=$((unknown + 1))
+      log "UNKNOWN (GOENV '$goenv_file' is not absolute) $TMPDIR_ROOT: per-run caches not examined"
+    elif [ "$goenv_file" != off ] && [ ! -e "$goenv_file" ]; then
+      # Absent only if the nearest existing ancestor could be searched; otherwise the file may
+      # exist behind it, so the setting is unknown.
+      goenv_probe=${goenv_file%/*}
+      while [ -n "$goenv_probe" ] && [ ! -e "$goenv_probe" ]; do goenv_probe=${goenv_probe%/*}; done
+      if [ -n "$goenv_probe" ] && { [ ! -d "$goenv_probe" ] || [ ! -x "$goenv_probe" ]; }; then
+        run_caches_readable=0
+        unknown=$((unknown + 1))
+        log "UNKNOWN (go env file uninspectable) $TMPDIR_ROOT: per-run caches not examined"
+      fi
+    elif [ "$goenv_file" != off ]; then
+      # Every GOCACHE= line is excluded, not just the one go would pick (the last): excluding more
+      # only keeps more, so duplicate assignments cannot leave the effective cache unprotected.
+      if goenv_line=$(grep '^GOCACHE=' -- "$goenv_file" 2>/dev/null); then
+        goenv_caches=$(printf '%s\n' "$goenv_line" | sed 's/^GOCACHE=//')
+      elif [ $? -ne 1 ]; then
+        run_caches_readable=0
+        unknown=$((unknown + 1))
+        log "UNKNOWN (go env file unreadable) $TMPDIR_ROOT: per-run caches not examined"
+      fi
+    fi
+  fi
+elif ! configured_gocache=$("$go_bin" env GOCACHE 2>/dev/null); then
+  unknown=$((unknown + 1))
+  log "UNKNOWN (go env GOCACHE failed) $TMPDIR_ROOT: per-run caches not examined"
+else
+  case "$configured_gocache" in
+    off | /?*) run_caches_readable=1 ;;
+    *)
+      unknown=$((unknown + 1))
+      log "UNKNOWN (go env GOCACHE gave '$configured_gocache') $TMPDIR_ROOT: per-run caches not examined"
+      ;;
+  esac
+fi
+while IFS= read -r configured; do
+  case "$configured" in
+    /*) ;;
+    *) continue ;;
+  esac
+  configured=$(cd -- "$configured" 2>/dev/null && pwd -P) || continue
+  [ -n "$configured" ] && configured_caches="${configured_caches}${configured}"$'\n'
+done <<EOF
+$configured_gocache
+$(go_default_cache_dir)
+$(lint_cache_dir)
+$goenv_caches
+EOF
+
+run_cache_trees=''
+if [ "$run_caches_readable" -eq 1 ] && [ -d "$TMPDIR_ROOT" ]; then
+  # Read the listing on its own, so a failed scan is seen: inside a heredoc substitution its
+  # status is lost, and a partial listing would end in a clean-looking summary.
+  # -H follows the root itself when it is a symlink (/tmp on macOS); without it find lists
+  # nothing and reports success.
+  if ! run_cache_trees=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null); then
+    run_cache_trees=''
+    unknown=$((unknown + 1))
+    log "UNKNOWN (scan failed) $TMPDIR_ROOT: per-run caches not examined"
+  fi
+fi
+if [ -n "$run_cache_trees" ]; then
+  while IFS= read -r tree; do
+    [ -n "$tree" ] || continue
+    # A symlink could make the marker check and the removal act on another tree.
+    [ -L "$tree" ] && continue
+    # The status is read in the else branch: `if ! f` would turn f's 2 into a 0.
+    if is_run_cache "$tree"; then :; else
+      marker_rc=$?
+      if [ "$marker_rc" -eq 2 ]; then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (marker unreadable, cache not examined) $tree"
+      fi
+      continue
+    fi
+    canon=$(cd -- "$tree" 2>/dev/null && pwd -P) || canon=''
+    case $'\n'"$configured_caches" in
+      *$'\n'"$canon"$'\n'*)
+        [ -n "$canon" ] && continue
+        ;;
+    esac
+    hold=$(run_cache_hold "$tree")
+    case "$hold" in
+      '') sweep_candidate "$tree" temp-root run-cache ;;
+      recent)
+        kept=$((kept + 1))
+        log "KEEP  (written within ${RUN_CACHE_IDLE_HOURS}h) $tree"
+        ;;
+      linting)
+        kept=$((kept + 1))
+        log "KEEP  (golangci-lint running or unknown) $tree"
+        ;;
+      *)
+        unknown=$((unknown + 1))
+        log "UNKNOWN (scan failed, cache not examined) $tree"
+        ;;
+    esac
+  done <<EOF
+$run_cache_trees
+EOF
+fi
+
+# ---------------------------------------------------------------------------
+# 3. golangci-lint cache, emptied only when it exceeds its own budget.
+#
+# golangci-lint keeps a content-addressed cache of its own, built from a copy of Go's
+# build cache, and nothing here bounded it: 3.3 GB when the host filled. The binary is
+# usually NOT on PATH on the host (it runs via `go run` or in containers), so this cannot
+# lean on `golangci-lint cache clean` the way the Go caches lean on `go clean`.
+# ---------------------------------------------------------------------------
 
 # reclaim_lint_cache follows reclaim_go_cache's rules -- budget first, then liveness,
 # with every "I could not tell" keeping the cache -- plus two of its own:
@@ -858,5 +1159,9 @@ fi
 # wrapping a long device name onto a second line, where NR==2 would read the wrong row.
 if command -v df >/dev/null 2>&1; then
   log "free now: $(df -P -h "${HOME:-/}" 2>/dev/null | awk 'NR==2{print $4 " (" $5 " used)"}')"
+fi
+if [ "$unknown" -gt 0 ]; then
+  log "UNKNOWN: ${unknown} scan(s) could not be read; the summary above is partial"
+  exit 2
 fi
 exit 0
