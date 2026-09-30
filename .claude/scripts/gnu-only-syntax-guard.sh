@@ -20,13 +20,13 @@
 # backslash-newline or an open quote joins the next line, `;` and a lone `&` end a command (`&&`,
 # `||` and `|` join parts of one), a `#` that starts a word begins a comment, single, double and
 # $'…' quotes and backslash escapes are tracked, `$(…)` and backticks inside double quotes are code
-# again, `$((…))`/`((…))` is arithmetic, a quoted `bash -c`/`sh -c`/`eval` argument is code, and
-# here-document bodies are data and skipped. Rules read only a command's code (quoted data removed),
-# so a form mentioned in a string or comment is neither a finding nor a fallback. A BSD fallback
-# must also be `date` in command position; a GNU form is flagged wherever `date` appears in code,
-# which over-flags rather than under-flags. Bare keywords (`then`, `fi`, …) and `:` do not count
-# toward the window. A finding is reported at the command's first line. A quote or here-document
-# left open at the end of a file is unknown.
+# again, `$((…))`/`((…))` is arithmetic, a quoted `bash -c`/`sh -c`/`eval`/`trap` argument is code,
+# and here-document bodies are data, except the substitutions of an unquoted one, which run. Rules
+# read only a command's code (quoted data removed), so a form mentioned in a string or comment is
+# neither a finding nor a fallback. A BSD fallback must also be `date` in command position; a GNU
+# form is flagged wherever `date` appears in code, which over-flags rather than under-flags. Bare
+# keywords (`then`, `fi`, …) and `:` do not count toward the window. A finding is reported at the
+# command's first line. A quote or here-document left open at the end of a file is unknown.
 #
 # A command may opt out with a trailing comment `# gnu-only-ok: <reason>` when it only ever runs on
 # GNU (for example a Linux-only CI step). Only a real comment counts, never quoted data.
@@ -108,21 +108,22 @@ scan="$(
       # The `@` of `-newer?t @…` may be bare, quoted (`Q@` in the code view) or inside a payload.
       newer_epoch = "-newer[A-Za-z]t[ \t]+(Q|[\"" q "])?@"
       opts = "([ \t]+(-[A-Za-z]+|--[A-Za-z][A-Za-z-]*(=[^ \t]*)?))*[ \t]+"
-      # A GNU form is flagged wherever `date` appears in code (over-flagging is the safe direction);
+      # A GNU form is flagged wherever `date` appears in code (over-flagging is the safe direction),
+      # with `-d` after any options or operands (GNU permutes them, so `date +%s -d x` is valid);
       # `-[A-Za-z]*d` also covers the attached `-dSTRING` form.
-      gnu_date_re = "(^|[^A-Za-z0-9_.-])date" opts "(-[A-Za-z]*d|--date)"
+      gnu_date_re = "(^|[^A-Za-z0-9_.-])date([ \t]+[^ \t\n;&|()]+)*[ \t]+(-[A-Za-z]*d|--date)"
       # A BSD fallback counts only where the shell invokes `date` as a command, and only with the
       # BSD flags (`-v`, `-j`, `-r`, optionally after `-n`, `-u`, `-R`, `-I`).
       cmd_pos = "(^|[;&|(`!{]|\\$\\()[ \t]*(([A-Za-z_][A-Za-z0-9_]*=[^ \t]*|command|exec|env|builtin)[ \t]+)*([^ \t;&|()]*/)?date"
       bsd_date_re = cmd_pos opts "-[nuRI]*[vjr]"
-      # A quoted argument to these runs as code.
-      payload_re = "((^|[^A-Za-z0-9_.-])([bdkz]|ba|da)?sh([ \t]+-[A-Za-z]+)*[ \t]+-[A-Za-z]*c|(^|[^A-Za-z0-9_])eval)[ \t]*$"
+      # A quoted argument to these runs as code (a `trap` action runs when its signal fires).
+      payload_re = "((^|[^A-Za-z0-9_.-])([bdkz]|ba|da)?sh([ \t]+-[A-Za-z]+)*[ \t]+-[A-Za-z]*c|(^|[^A-Za-z0-9_])(eval|trap))[ \t]*$"
     }
 
     function reset_file() {
       count = 0; joining = 0; hn = 0; hcur = 0; in_heredoc = 0
       sd = 0; st[0] = "N"
-      delete nc; delete co; delete cm; delete raw; delete start; delete pd; delete bt; delete pay
+      delete nc; delete co; delete cm; delete raw; delete start; delete pd; delete bt; delete pay; delete hquo
     }
     function begin_command(text) {
       count++
@@ -135,19 +136,48 @@ scan="$(
 
     # Read a here-document operator at line position i (just past `<<`); queue its delimiter and
     # return the position after it.
-    function heredoc_op(line, i,   n, c, d, dash) {
-      n = length(line); dash = 0
+    function heredoc_op(line, i,   n, c, d, dash, quoted) {
+      n = length(line); dash = 0; quoted = 0
       if (substr(line, i, 1) == "-") { dash = 1; i++ }
       while (i <= n && substr(line, i, 1) ~ /[ \t]/) i++
       d = ""
       while (i <= n) {
         c = substr(line, i, 1)
         if (c ~ /[ \t;&|()<>]/) break
-        if (c != q && c != "\"" && c != "\\") d = d c
+        if (c == q || c == "\"" || c == "\\") quoted = 1
+        else d = d c
         i++
       }
-      if (d != "") { hn++; hq[hn] = d; hdash[hn] = dash }
+      if (d != "") { hn++; hq[hn] = d; hdash[hn] = dash; hquo[hn] = quoted }
       return i
+    }
+
+    # The command substitutions of an unquoted here-document body line, as `;`-bounded code.
+    # A backslash-escaped `\$(` or backtick is literal. A substitution left open runs to the line end.
+    function substitutions(line,   i, j, n, c, depth, out) {
+      out = ""; n = length(line); i = 1
+      while (i <= n) {
+        c = substr(line, i, 1)
+        if (c == "\\") { i += 2; continue }
+        if (substr(line, i, 2) == "$(" && substr(line, i, 3) != "$((") {
+          depth = 1; j = i + 2
+          while (j <= n && depth > 0) {
+            c = substr(line, j, 1)
+            if (c == "(") depth++
+            else if (c == ")") depth--
+            j++
+          }
+          out = out ";" substr(line, i + 2, j - i - 2 - (depth == 0 ? 1 : 0)) ";"
+          i = j; continue
+        }
+        if (c == "`") {
+          j = index(substr(line, i + 1), "`"); if (j == 0) j = n - i + 1
+          out = out ";" substr(line, i + 1, j - 1) ";"
+          i += j + 1; continue
+        }
+        i++
+      }
+      return out
     }
 
     # Lex one physical line into the current command, starting a new command at each top-level
@@ -284,6 +314,10 @@ scan="$(
         if (term == hq[hcur]) {
           hcur++
           if (hcur > hn) { in_heredoc = 0; hn = 0 }
+        } else if (!hquo[hcur]) {
+          # An unquoted delimiter still expands `$(…)` and backticks in the body: those run.
+          s = substitutions(line)
+          if (s != "") { begin_command(line); nc[count] = s; co[count] = s }
         }
         next
       }
