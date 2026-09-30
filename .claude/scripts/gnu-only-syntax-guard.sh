@@ -20,13 +20,14 @@
 # backslash-newline or an open quote joins the next line, `;` and a lone `&` end a command (`&&`,
 # `||` and `|` join parts of one), a `#` that starts a word begins a comment, single, double and
 # $'…' quotes and backslash escapes are tracked, `$(…)` and backticks inside double quotes are code
-# again, `$((…))`/`((…))` is arithmetic, a quoted `bash -c`/`sh -c`/`eval`/`trap` argument is code,
-# and here-document bodies are data, except the substitutions of an unquoted one, which run. Rules
-# read only a command's code (quoted data removed), so a form mentioned in a string or comment is
-# neither a finding nor a fallback. A BSD fallback must also be `date` in command position; a GNU
-# form is flagged wherever `date` appears in code, which over-flags rather than under-flags. Bare
-# keywords (`then`, `fi`, …) and `:` do not count toward the window. A finding is reported at the
-# command's first line. A quote or here-document left open at the end of a file is unknown.
+# again, `$((…))`/`((…))` is arithmetic, a quoted `bash -c`/`sh -c`/`eval`/`trap` argument is
+# scanned verbatim as code (over-flagging), and here-document bodies are data, except the
+# substitutions of an unquoted one, which run. Rules read only a command's code (quoted data
+# removed), so a form mentioned in a string or comment is neither a finding nor a fallback. A BSD
+# fallback must also be `date` in command position; a GNU form is flagged wherever `date` appears in
+# code, which over-flags rather than under-flags. Bare keywords (`then`, `fi`, …) and `:` do not
+# count toward the window. A finding is reported at the command's first line. A quote or
+# here-document left open at the end of a file is unknown. Shapes not yet read: monorepo#3722.
 #
 # A command may opt out with a trailing comment `# gnu-only-ok: <reason>` when it only ever runs on
 # GNU (for example a Linux-only CI step). Only a real comment counts, never quoted data.
@@ -63,7 +64,7 @@ files=()
 if [[ $# -gt 0 ]]; then
   case "$1" in
     -h | --help)
-      sed -n '2,38p' "${BASH_SOURCE[0]}"
+      sed -n '2,39p' "${BASH_SOURCE[0]}"
       gnu_only_guard_finished=1
       exit 0
       ;;
@@ -114,7 +115,7 @@ scan="$(
       gnu_date_re = "(^|[^A-Za-z0-9_.-])date([ \t]+[^ \t\n;&|()]+)*[ \t]+(-[A-Za-z]*d|--date)"
       # A BSD fallback counts only where the shell invokes `date` as a command, and only with the
       # BSD flags (`-v`, `-j`, `-r`, optionally after `-n`, `-u`, `-R`, `-I`).
-      cmd_pos = "(^|[;&|(`!{]|\\$\\()[ \t]*(([A-Za-z_][A-Za-z0-9_]*=[^ \t]*|command|exec|env|builtin)[ \t]+)*([^ \t;&|()]*/)?date"
+      cmd_pos = "(^|[;&|(`!{]|\\$\\()[ \t]*((if|then|else|elif|while|until|do)[ \t]+)*(([A-Za-z_][A-Za-z0-9_]*=[^ \t]*|command|exec|env|builtin)[ \t]+)*([^ \t;&|()]*/)?date"
       bsd_date_re = cmd_pos opts "-[nuRI]*[vjr]"
       # A quoted argument to these runs as code (a `trap` action runs when its signal fires).
       payload_re = "((^|[^A-Za-z0-9_.-])([bdkz]|ba|da)?sh([ \t]+(-[A-Za-z]+|--[A-Za-z][A-Za-z-]*))*[ \t]+-[A-Za-z]*c|(^|[^A-Za-z0-9_])(eval|trap))[ \t]*$"
@@ -134,11 +135,11 @@ scan="$(
     function word_start(s) { return s == "" || substr(s, length(s), 1) ~ /[ \t\n;&|()]/ }
     function push(mode) { sd++; st[sd] = mode; pd[sd] = 0; bt[sd] = 0; pay[sd] = 0; qs[sd] = 0; qt[sd] = "" }
     # Close the current quote. The shell removes quotes before invoking a command, so a quoted word
-    # that is a single option (`"-newermt"`, `"-d"`) is restored into the code view; anything else
-    # stays the `Q` placeholder, so a wholly quoted command example remains data.
+    # that is a single option (`"-newermt"`, `"-d"`, `"--date=x"`) is restored into the code view;
+    # anything else stays the `Q` placeholder, so a wholly quoted command example remains data.
     function close_quote() {
       if (pay[sd]) co[count] = co[count] ";"
-      else if (qs[sd] > 0 && substr(co[count], qs[sd]) ~ /^Q@?$/ && qt[sd] ~ /^-[A-Za-z][A-Za-z0-9-]*$/) {
+      else if (qs[sd] > 0 && substr(co[count], qs[sd]) ~ /^Q@?$/ && qt[sd] ~ /^--?[A-Za-z][A-Za-z0-9-]*(=.*)?$/) {
         co[count] = substr(co[count], 1, qs[sd] - 1) qt[sd]
       }
       sd--
@@ -146,15 +147,19 @@ scan="$(
 
     # Read a here-document operator at line position i (just past `<<`); queue its delimiter and
     # return the position after it.
-    function heredoc_op(line, i,   n, c, d, dash, quoted) {
+    function heredoc_op(line, i,   n, c, d, dash, quoted, inq) {
       n = length(line); dash = 0; quoted = 0
       if (substr(line, i, 1) == "-") { dash = 1; i++ }
       while (i <= n && substr(line, i, 1) ~ /[ \t]/) i++
-      d = ""
+      # The delimiter is one shell word: separators inside quotes belong to it, and quotes or a
+      # backslash anywhere in it make the body literal.
+      d = ""; inq = ""
       while (i <= n) {
         c = substr(line, i, 1)
+        if (inq != "") { if (c == inq) inq = ""; else d = d c; i++; continue }
         if (c ~ /[ \t;&|()<>]/) break
-        if (c == q || c == "\"" || c == "\\") quoted = 1
+        if (c == q || c == "\"") { quoted = 1; inq = c }
+        else if (c == "\\") { quoted = 1; d = d substr(line, i + 1, 1); i++ }
         else d = d c
         i++
       }
