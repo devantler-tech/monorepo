@@ -156,6 +156,7 @@ scan="$(
       d = ""; inq = ""
       while (i <= n) {
         c = substr(line, i, 1)
+        if (inq == "\"" && c == "\\" && substr(line, i + 1, 1) ~ /[\\$`"]/) { d = d substr(line, i + 1, 1); i += 2; continue }
         if (inq != "") { if (c == inq) inq = ""; else d = d c; i++; continue }
         if (c ~ /[ \t;&|()<>]/) break
         if (c == q || c == "\"") { quoted = 1; inq = c }
@@ -248,7 +249,9 @@ scan="$(
         # Code.
         if (c == "\\") {
           if (i == n) return 1
-          emit(substr(line, i, 2)); i += 2; continue
+          # The shell removes an unquoted escaping backslash before the command sees the word.
+          nc[count] = nc[count] substr(line, i, 2); co[count] = co[count] substr(line, i + 1, 1)
+          i += 2; continue
         }
         if (c == "#" && word_start(nc[count])) { cm[count] = substr(line, i); return 0 }
         if (c == q || c == "\"" || (c == "$" && substr(line, i + 1, 1) == q)) {
@@ -258,7 +261,8 @@ scan="$(
             push(c == "$" ? "A" : (c == q ? "S" : "D"))
             nc[count] = nc[count] run
             qs[sd] = length(co[count]) + 1
-            co[count] = co[count] "Q" (substr(line, i + length(run), 1) == "@" ? "@" : "")
+            # Keep the `@` of a quoted epoch operand, even after leading blanks (`" @0"`).
+            co[count] = co[count] "Q" (substr(line, i + length(run)) ~ /^[ \t]*@/ ? "@" : "")
           }
           i += length(run); continue
         }
