@@ -18,9 +18,9 @@
 #   lists only some archives (KSail's omits the desktop zip), while every asset carries a digest.
 #
 # USAGE
-#   jq -n --rawfile cask <Casks/<name>.rb at the PR head> \
-#         --argjson release "$(gh api repos/devantler-tech/<repo>/releases/tags/v<version> || echo null)" \
-#         '{cask:$cask, release:$release}' | release-cask-ripeness.sh --input -
+#   Resolve the release with the status-checked, 404-only lookup in
+#   .claude/guides/merge-policy.md, then build the JSON payload as shown there.
+#   release-cask-ripeness.sh --input - < payload.json
 #
 #   --input -  REQUIRED: stdin is ONE JSON object with exactly the keys
 #                cask     string — the cask file at the PR's head commit
