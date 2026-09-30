@@ -1482,6 +1482,13 @@ while IFS= read -r wt <&3; do
     keep "$wt" "not a registered worktree"; continue
   fi
 
+  # KEEP: worktree-cleanup-all.sh reaped a worktree nested in this one's submodule and could
+  # not hand that repository's refs/reaped to storage outliving this tree, so removing it
+  # would delete the only recovery refs. One physical path per line; literal match.
+  if [ -n "${WORKTREE_CLEANUP_RETAIN:-}" ] && grep -qxF -- "$wt_real" <<< "$WORKTREE_CLEANUP_RETAIN"; then
+    keep "$wt" "nested recovery refs not yet handed off (worktree-cleanup-all.sh)"; continue
+  fi
+
   # KEEP: a live per-run owner may use a clean tree without holding a process CWD.
   # Re-checked again immediately before removal by recheck_mutable_gates.
   ownership_claim_state "$wt"; claim_rc=$?

@@ -675,6 +675,69 @@ t_gitlink_validation_uses_a_literal_pathspec() {
   rm -rf "$root"
 }
 
+# give_inner_its_own_pushed_commit <sess> — a commit on `inner` that no other worktree in the
+# fixture sits on, so a refs/reaped ref for it can only come from reaping `inner`.
+give_inner_its_own_pushed_commit() {
+  local inner="$1/nested/.claude/worktrees/inner"
+  echo own > "$inner/own" && git -C "$inner" add own && git -C "$inner" commit -qm "inner only" \
+    && git -C "$inner" push -q origin claude/inner && touch -t 202001010000 "$inner" "$1"
+}
+
+t_nested_pass_hands_off_recovery_refs() {
+  # The per-repo sweep writes refs/reaped/<sha> before each removal. A nested pass writes it
+  # into the session's own submodule repository, which the root sweep then deletes with the
+  # parent, so the nested pass must copy those refs into the checkout's copy of the submodule
+  # and verify them before the parent may go.
+  local name="the nested pass hands its recovery refs to the checkout's submodule before the parent goes"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.claude/worktrees/sess" sha out rc
+  give_inner_its_own_pushed_commit "$sess" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  sha=$(git -C "$sess/nested/.claude/worktrees/inner" rev-parse HEAD)
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -e "$sess" ] \
+     && [ "$(git -C "$root/repo/nested" rev-parse -q --verify "refs/reaped/$sha" 2>/dev/null)" = "$sha" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc sess=$([ -e "$sess" ] && echo present || echo gone) ref=$(git -C "$root/repo/nested" rev-parse -q --verify "refs/reaped/$sha" 2>&1)
+$out"
+  fi
+  rm -rf "$root"
+}
+
+t_nested_pass_retains_parent_until_handoff() {
+  # With no durable copy of the submodule to hand the refs to, the parent must be KEPT (the
+  # refs would die with it) and the run must exit non-zero. Once the checkout's copy exists,
+  # a later run completes the handoff and only then reaps the parent.
+  local name="the parent is retained while its nested recovery refs cannot be handed off, then reaped"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.claude/worktrees/sess" sha out rc out2 rc2 kept
+  give_inner_its_own_pushed_commit "$sess" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  sha=$(git -C "$sess/nested/.claude/worktrees/inner" rev-parse HEAD)
+  mv "$root/repo/nested" "$root/nested.aside"
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc=$?
+  kept=NO
+  if [ -d "$sess" ] && [ ! -e "$sess/nested/.claude/worktrees/inner" ] \
+     && [ "$(git -C "$sess/nested" rev-parse -q --verify "refs/reaped/$sha" 2>/dev/null)" = "$sha" ]; then
+    kept=yes
+  fi
+  mv "$root/nested.aside" "$root/repo/nested"
+  out2=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 2>&1); rc2=$?
+  if [ "$rc" -eq 2 ] && [ "$kept" = yes ] && grep -q '^### RETAIN .claude/worktrees/sess' <<<"$out" \
+     && grep -q 'mode=apply reaped=1 kept=1 ' <<<"$out" \
+     && [ "$rc2" -eq 0 ] && [ ! -e "$sess" ] \
+     && [ "$(git -C "$root/repo/nested" rev-parse -q --verify "refs/reaped/$sha" 2>/dev/null)" = "$sha" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc kept=$kept rc2=$rc2 sess=$([ -e "$sess" ] && echo present || echo gone)
+$out
+---
+$out2"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup-all.sh contract tests\n'
 t_sweeps_root_and_submodules
 t_rewrites_session_worktree_root
@@ -699,6 +762,8 @@ t_nested_pass_skips_an_emptied_worktree_dir
 t_nested_pass_keeps_uncommitted_work
 t_nested_pass_honours_a_parent_ownership_claim
 t_nested_pass_refuses_symlinked_and_escaping_submodules
+t_nested_pass_hands_off_recovery_refs
+t_nested_pass_retains_parent_until_handoff
 t_rejects_bad_mode
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -90,6 +90,9 @@ printf '=== worktree-cleanup-all  mode=%s  min_age=%sh  salvage_age=%sh  root=%s
 # failure is confined to one session worktree, and 2 is this directory's UNKNOWN code, where
 # the per-repo script's own exit code could read as a finding (1).
 NESTED_FAILED=0
+# Session worktrees the per-repo sweep must keep, one physical path per line: a nested pass
+# left recovery refs in them that could not be handed off (see handoff_reaped_refs).
+RETAIN=""
 nested_failed() {
   printf 'worktree-cleanup-all: %s — continuing; this run will exit non-zero\n' "$1" >&2
   NESTED_FAILED=2
@@ -153,7 +156,8 @@ sweep() { # <repo_path> [salvage_age_hours, default the wrapper's] [abort|contin
   # the scheduled entrypoint — and must stop the run rather than continuing into the
   # remaining repositories, since the same failure very likely applies to them too.
   local out rc
-  out=$("$SUT" "$path" "$MANIFEST_DIR/$label-$TS.tsv" "$MODE" "$MIN_AGE_HOURS" "$salvage" 2>&1); rc=$?
+  out=$(WORKTREE_CLEANUP_RETAIN="$RETAIN" \
+    "$SUT" "$path" "$MANIFEST_DIR/$label-$TS.tsv" "$MODE" "$MIN_AGE_HOURS" "$salvage" 2>&1); rc=$?
   # dry-run writes no manifest, so its per-worktree REAP/KEEP lines are the ONLY record
   # of what an apply run would touch — never truncate them. apply has the manifest, so
   # a summary is enough there.
@@ -199,6 +203,57 @@ nested_session_is_live() { # <physical session worktree>
     if [ "$cwd" = "$wt_real" ] || [ "${cwd#"$wt_real"/}" != "$cwd" ]; then return 0; fi
   done <<< "$NESTED_LIVE"
   return 1
+}
+
+# handoff_reaped_refs <repo> <session worktree> <nested submodule> — copy the nested
+# repository's refs/reaped/* into the same submodule's repository in <repo>'s own checkout,
+# and verify every one arrived.
+#
+# The per-repo sweep writes refs/reaped/<sha> before each removal, so a reaped commit stays
+# restorable after a stale remote-tracking ref is pruned. A nested pass writes them into the
+# session worktree's own submodule repository, under the session's admin directory, which
+# the root sweep deletes with the parent. Copied here they outlive it. Returns 1, with the
+# reason in HANDOFF_NOTE, whenever that cannot be done and verified; the caller then keeps
+# the parent. The emptied nested repository is rechecked on every run, so a later run
+# completes the handoff once the checkout's copy of the submodule is populated.
+HANDOFF_NOTE=""
+handoff_reaped_refs() {
+  local repo=$1 wt_real=$2 sub_real=$3 sub_gitdir wt_gitdir refs rel durable durable_real
+  local durable_gitdir ref sha
+  sub_gitdir=$(git -C "$sub_real" rev-parse --absolute-git-dir 2>/dev/null) || {
+    HANDOFF_NOTE="cannot resolve the nested repository"; return 1; }
+  refs=$(git --git-dir="$sub_gitdir" for-each-ref --format='%(refname) %(objectname)' \
+           refs/reaped/ 2>/dev/null) || { HANDOFF_NOTE="cannot list its refs/reaped"; return 1; }
+  [ -n "$refs" ] || return 0
+  wt_gitdir=$(git -C "$wt_real" rev-parse --absolute-git-dir 2>/dev/null) || {
+    HANDOFF_NOTE="cannot resolve the session's admin directory"; return 1; }
+  case "$sub_gitdir" in
+    "$wt_gitdir"/?*) ;;
+    *) return 0 ;;   # not under the parent's admin directory, so it outlives the parent
+  esac
+  rel=${sub_real#"$wt_real"/}
+  durable="$repo/$rel"
+  if [ -L "$durable" ] || [ ! -d "$durable" ]; then
+    HANDOFF_NOTE="$rel is not populated in ${repo#"$ROOT"/}; remedy: .claude/scripts/submodule-init.sh"
+    return 1
+  fi
+  durable_real=$(cd "$durable" 2>/dev/null && pwd -P) || {
+    HANDOFF_NOTE="cannot resolve $durable"; return 1; }
+  if [ "$(git -C "$durable_real" rev-parse --show-toplevel 2>/dev/null)" != "$durable_real" ]; then
+    HANDOFF_NOTE="$rel is not a repository of its own in ${repo#"$ROOT"/}"; return 1
+  fi
+  durable_gitdir=$(git -C "$durable_real" rev-parse --absolute-git-dir 2>/dev/null) || {
+    HANDOFF_NOTE="cannot resolve the repository of $durable_real"; return 1; }
+  case "$durable_gitdir" in
+    "$wt_gitdir"|"$wt_gitdir"/*) HANDOFF_NOTE="its only copy is inside the session"; return 1 ;;
+  esac
+  git --git-dir="$durable_gitdir" fetch --quiet --no-tags --no-write-fetch-head \
+    "$sub_gitdir" 'refs/reaped/*:refs/reaped/*' 2>/dev/null || {
+    HANDOFF_NOTE="could not copy refs/reaped into $durable_real"; return 1; }
+  while read -r ref sha; do
+    [ "$(git --git-dir="$durable_gitdir" rev-parse -q --verify "$ref^{commit}" 2>/dev/null)" = "$sha" ] || {
+      HANDOFF_NOTE="$ref did not arrive in $durable_real"; return 1; }
+  done <<< "$refs"
 }
 
 # sweep_nested_submodule_worktrees <repo> — sweep the worktrees nested in the initialised
@@ -268,28 +323,37 @@ sweep_nested_submodule_worktrees() {
       # pass (lsof, worktree list) on every later run.
       sub_wts=$(git -C "$sub_real" worktree list --porcelain 2>/dev/null) || {
         nested_failed "cannot list the worktrees of ${sub_real#"$ROOT"/}"; continue; }
-      [ "$(grep -c '^worktree ' <<< "$sub_wts")" -gt 1 ] || continue
-      # Recheck after submodule enumeration: a process may have entered the
-      # parent since the earlier check, and this call is about to delete below it.
-      nested_live_cwds || { nested_failed "cannot refresh live process CWDs (lsof) for $wt_real"; break; }
-      if nested_session_is_live "$wt_real"; then
-        printf '\n### SKIP %s (a live process works inside it — its nested worktrees are left alone)\n' \
-          "${wt_real#"$ROOT"/}"
-        break
+      if [ "$(grep -c '^worktree ' <<< "$sub_wts")" -gt 1 ]; then
+        # Recheck after submodule enumeration: a process may have entered the
+        # parent since the earlier check, and this call is about to delete below it.
+        nested_live_cwds || { nested_failed "cannot refresh live process CWDs (lsof) for $wt_real"; break; }
+        if nested_session_is_live "$wt_real"; then
+          printf '\n### SKIP %s (a live process works inside it — its nested worktrees are left alone)\n' \
+            "${wt_real#"$ROOT"/}"
+          break
+        fi
+        # A claimed parent is owned even with no process inside it. The repo's sweep keeps
+        # it, but only after this pass would already have removed the worktree below it.
+        # Check here, immediately before deleting, and treat a malformed marker as a claim.
+        ownership_claim_state "$wt_real"
+        case $? in
+          0) printf '\n### SKIP %s (active ownership claim: %s — its nested worktrees are left alone)\n' \
+               "${wt_real#"$ROOT"/}" "$CLAIM_DETAIL"
+             break ;;
+          2) printf '\n### SKIP %s (ambiguous ownership claim: %s — its nested worktrees are left alone)\n' \
+               "${wt_real#"$ROOT"/}" "$CLAIM_DETAIL"
+             break ;;
+        esac
+        sweep "$sub_real" 0 continue
       fi
-      # A claimed parent is owned even with no process inside it. The repo's sweep keeps
-      # it, but only after this pass would already have removed the worktree below it.
-      # Check here, immediately before deleting, and treat a malformed marker as a claim.
-      ownership_claim_state "$wt_real"
-      case $? in
-        0) printf '\n### SKIP %s (active ownership claim: %s — its nested worktrees are left alone)\n' \
-             "${wt_real#"$ROOT"/}" "$CLAIM_DETAIL"
-           break ;;
-        2) printf '\n### SKIP %s (ambiguous ownership claim: %s — its nested worktrees are left alone)\n' \
-             "${wt_real#"$ROOT"/}" "$CLAIM_DETAIL"
-           break ;;
-      esac
-      sweep "$sub_real" 0 continue
+      # Runs whether or not this run reaped anything here: refs left by an earlier run whose
+      # handoff failed are handed off as soon as it can succeed. dry-run writes nothing.
+      if [ "$MODE" = apply ] && ! handoff_reaped_refs "$repo" "$wt_real" "$sub_real"; then
+        printf '\n### RETAIN %s (%s: %s — its reaped commits'"'"' recovery refs would die with it)\n' \
+          "${wt_real#"$ROOT"/}" "${sub_real#"$wt_real"/}" "$HANDOFF_NOTE"
+        RETAIN="${RETAIN}${wt_real}"$'\n'
+        nested_failed "could not hand off the recovery refs of ${sub_real#"$ROOT"/}"
+      fi
     done <<< "$subs"
   done <<< "$(printf '%s\n' "$wts" | awk '/^worktree /{print substr($0,10)}')"
 }
