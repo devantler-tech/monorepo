@@ -12,12 +12,12 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/markdown-satteri": "^0.4.1",
+    "@astrojs/markdown-satteri": "^0.4.2",
     "@astrojs/sitemap": "^3.7.4",
-    "@astrojs/starlight": "^0.42.2",
+    "@astrojs/starlight": "^0.42.3",
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/roboto-mono": "^0.4.2",
-    "astro": "^7.3.3",
+    "astro": "^7.3.4",
     "astro-mermaid": "^2.1.0",
     "mermaid": "^11.17.2",
     "pdfkit": "^0.20.2",

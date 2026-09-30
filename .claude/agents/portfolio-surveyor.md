@@ -1357,8 +1357,8 @@ public and private — no per-repo loop needed to enumerate):
 
    ```sh
    gh api graphql -F owner=<owner> -F name=<repo> -F number=<number> \
-     -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){number issueDependenciesSummary{blockedBy totalBlockedBy}}}}' \
-     --jq 'if ((.data.repository.issue|type)!="object" or (.data.repository.issue.number|type)!="number" or (.data.repository.issue.issueDependenciesSummary|type)!="object" or (.data.repository.issue.issueDependenciesSummary.blockedBy|type)!="number" or (.data.repository.issue.issueDependenciesSummary.totalBlockedBy|type)!="number" or .data.repository.issue.issueDependenciesSummary.blockedBy < 0 or .data.repository.issue.issueDependenciesSummary.totalBlockedBy < .data.repository.issue.issueDependenciesSummary.blockedBy) then error("QUERY-UNKNOWN: malformed issue dependency summary") else {number:.data.repository.issue.number,openBlockedBy:.data.repository.issue.issueDependenciesSummary.blockedBy,totalBlockedBy:.data.repository.issue.issueDependenciesSummary.totalBlockedBy} end'
+     -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){number issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed}}}}' \
+     --jq 'if ((.data.repository.issue|type)!="object" or (.data.repository.issue.number|type)!="number" or (.data.repository.issue.issueDependenciesSummary|type)!="object" or (.data.repository.issue.issueDependenciesSummary.blockedBy|type)!="number" or (.data.repository.issue.issueDependenciesSummary.totalBlockedBy|type)!="number" or .data.repository.issue.issueDependenciesSummary.blockedBy < 0 or .data.repository.issue.issueDependenciesSummary.totalBlockedBy < .data.repository.issue.issueDependenciesSummary.blockedBy or (.data.repository.issue.subIssuesSummary|type)!="object" or (.data.repository.issue.subIssuesSummary.total|type)!="number" or (.data.repository.issue.subIssuesSummary.completed|type)!="number" or .data.repository.issue.subIssuesSummary.completed < 0 or .data.repository.issue.subIssuesSummary.total < .data.repository.issue.subIssuesSummary.completed) then error("QUERY-UNKNOWN: malformed issue dependency or sub-issue summary") else {number:.data.repository.issue.number,openBlockedBy:.data.repository.issue.issueDependenciesSummary.blockedBy,totalBlockedBy:.data.repository.issue.issueDependenciesSummary.totalBlockedBy,completedSubIssues:.data.repository.issue.subIssuesSummary.completed,totalSubIssues:.data.repository.issue.subIssuesSummary.total} end'
    ```
 
    `issueDependenciesSummary.blockedBy` is the count of **open** blocking issues;
@@ -1368,6 +1368,14 @@ public and private — no per-repo loop needed to enumerate):
    may point at an out-of-portfolio repository, and fetching its metadata would cross this deployment's
    portfolio boundary. A missing or malformed summary makes that candidate `QUERY-UNKNOWN`, never
    unblocked.
+   `subIssuesSummary` is **delivery evidence, never a skip reason** (monorepo#2994). Report
+   `subissues=<completed>/<total>` on every Advance candidate this query deepens. A ranked candidate
+   you never deepen has no counts: leave the field off its row rather than inventing one or running
+   this query only to fill it. When `total` is positive and `completed` equals it, also report `DELIVERY-CHECK`: every child is closed, so the orchestrator's
+   completion check (work-selection guide) decides whether starting the parent is still right.
+   Never drop, down-rank or close that candidate yourself. A closed child proves only that the child
+   closed, and the parent can carry acceptance criteria no child covered. A `total` of zero claims
+   nothing. A missing or malformed sub-issue summary makes the candidate `QUERY-UNKNOWN`.
    Flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
@@ -1606,6 +1614,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
+- <repo> #<n> "<title>" — subissues=<completed>/<total> DELIVERY-CHECK (every child closed; completion check before starting, never a skip)
 - <repo> #<n> "<title>" — CLAIMED: assignee=<registered-writer>|none(verified-unavailable)|none(shared-tip), claim=agent-claim/<issue>@<sha>@<age>|branch:<name>, no open PR
 ```
 
