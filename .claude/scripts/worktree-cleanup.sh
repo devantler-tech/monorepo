@@ -183,6 +183,11 @@ if [ -n "${WORKTREE_CLEANUP_WT_ROOT:-}" ]; then
     /?*) ;;
     *) die "WORKTREE_CLEANUP_WT_ROOT must be an absolute path other than /, got '$WORKTREE_CLEANUP_WT_ROOT'" ;;
   esac
+  # A `.` or `..` component would let the lexical checks below pass on one directory while
+  # canonicalisation lands on another (`.codex/../.claude/worktrees`), so it is refused outright.
+  case "/$WT_ROOT/" in
+    */./* | */../*) die "worktree root must not contain . or .. components, got '$WORKTREE_CLEANUP_WT_ROOT'" ;;
+  esac
   # Refused, never followed: the root bounds every removal, so it must be the directory it
   # names (the same rule worktree-cleanup-all.sh applies to a symlinked submodule path).
   if [ -L "$WT_ROOT" ]; then

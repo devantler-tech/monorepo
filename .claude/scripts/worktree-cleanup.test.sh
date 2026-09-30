@@ -3648,6 +3648,23 @@ t_custom_root_that_cannot_be_inspected_is_unknown() {
   rm -rf "$root"
 }
 
+t_custom_root_rejects_dot_components() {
+  local name="a root with a .. component that lands in another lane is refused"
+  local root; root=$(make_repo)
+  add_wt_at "$root" "$root/repo/.claude/worktrees/claude-lane" claude/lane \
+    || { bad "$name" "FIXTURE: worktree add failed"; rm -rf "$root"; return; }
+  mkdir -p "$root/repo/.codex"
+  local out rc
+  out=$(run_root "$root" "$root/repo/.codex/../.claude/worktrees" apply); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q 'must not contain' <<<"$out" \
+     && [ -d "$root/repo/.claude/worktrees/claude-lane" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out"
+  fi
+  rm -rf "$root"
+}
+
 t_custom_root_matches_a_registration_spelled_in_another_case() {
   # Git recorded some Codex worktrees as `.Codex/worktrees/<x>` while the directory on disk
   # is `.codex`. bash's builtin `pwd -P` keeps the spelling it is handed, so the
@@ -3946,6 +3963,7 @@ t_custom_root_never_holds_a_checkout
 t_custom_root_rejects_a_symlink_a_relative_path_and_slash
 t_custom_root_rejects_a_symlinked_ancestor
 t_custom_root_that_cannot_be_inspected_is_unknown
+t_custom_root_rejects_dot_components
 t_custom_root_matches_a_registration_spelled_in_another_case
 t_submodule_on_a_merged_pr_head
 t_submodule_drift_keeps_local_only_refs
