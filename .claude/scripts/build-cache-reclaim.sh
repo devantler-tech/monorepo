@@ -368,6 +368,9 @@ oldest_process_secs() {
 # live: the first scheduled run logged "go not on PATH".
 find_go() {
   local candidate
+  # BUILD_CACHE_RECLAIM_GO=none simulates a host with no go at all (the macOS CI runner is one), so
+  # the no-go path is testable on a machine that has go in a fixed location.
+  [ "${BUILD_CACHE_RECLAIM_GO:-}" != none ] || return 1
   candidate=$(command -v go 2>/dev/null) && [ -x "$candidate" ] && {
     printf '%s' "$candidate"
     return 0
@@ -838,6 +841,7 @@ configured_caches=''
 # file means GOCACHE is at Go's default in the user cache dir, never the temp root; an env file
 # that exists but cannot be read is UNKNOWN.
 configured_gocache=''
+goenv_caches=''
 run_caches_readable=0
 if [ -z "${go_bin:-}" ]; then
   configured_gocache=${GOCACHE:-}
@@ -850,7 +854,12 @@ if [ -z "${go_bin:-}" ]; then
         *) goenv_file=${XDG_CONFIG_HOME:-${HOME:+${HOME}/.config}}/go/env ;;
       esac
     fi
-    if [ "$goenv_file" != off ] && [ ! -e "$goenv_file" ]; then
+    if [ -n "$goenv_file" ] && [ "$goenv_file" != off ] && [ "${goenv_file#/}" = "$goenv_file" ]; then
+      # Relative GOENV resolves against whatever directory go runs in, so it cannot be read here.
+      run_caches_readable=0
+      unknown=$((unknown + 1))
+      log "UNKNOWN (GOENV '$goenv_file' is not absolute) $TMPDIR_ROOT: per-run caches not examined"
+    elif [ "$goenv_file" != off ] && [ ! -e "$goenv_file" ]; then
       # Absent only if the nearest existing ancestor could be searched; otherwise the file may
       # exist behind it, so the setting is unknown.
       goenv_probe=${goenv_file%/*}
@@ -861,8 +870,10 @@ if [ -z "${go_bin:-}" ]; then
         log "UNKNOWN (go env file uninspectable) $TMPDIR_ROOT: per-run caches not examined"
       fi
     elif [ "$goenv_file" != off ]; then
-      if goenv_line=$(grep -m1 '^GOCACHE=' -- "$goenv_file" 2>/dev/null); then
-        configured_gocache=${goenv_line#GOCACHE=}
+      # Every GOCACHE= line is excluded, not just the one go would pick (the last): excluding more
+      # only keeps more, so duplicate assignments cannot leave the effective cache unprotected.
+      if goenv_line=$(grep '^GOCACHE=' -- "$goenv_file" 2>/dev/null); then
+        goenv_caches=$(printf '%s\n' "$goenv_line" | sed 's/^GOCACHE=//')
       elif [ $? -ne 1 ]; then
         run_caches_readable=0
         unknown=$((unknown + 1))
@@ -882,14 +893,19 @@ else
       ;;
   esac
 fi
-for configured in "$configured_gocache" "$(go_default_cache_dir)" "$(lint_cache_dir)"; do
+while IFS= read -r configured; do
   case "$configured" in
     /*) ;;
     *) continue ;;
   esac
   configured=$(cd -- "$configured" 2>/dev/null && pwd -P) || continue
   [ -n "$configured" ] && configured_caches="${configured_caches}${configured}"$'\n'
-done
+done <<EOF
+$configured_gocache
+$(go_default_cache_dir)
+$(lint_cache_dir)
+$goenv_caches
+EOF
 
 run_cache_trees=''
 if [ "$run_caches_readable" -eq 1 ] && [ -d "$TMPDIR_ROOT" ]; then

@@ -1134,6 +1134,37 @@ said "$out" "$blind_lint" 'UNKNOWN (scan failed, cache not examined)' ||
   fail 'an idle lint cache with an unreadable process table was not reported UNKNOWN'
 rm -rf -- "$blind_lint"
 
+# --- 18. no go binary at all (the macOS CI runner): GOCACHE is read where go would read it -------
+nogo_env() { # <GOENV value> <args...>
+  local goenv=$1
+  shift
+  env -u GOCACHE BUILD_CACHE_RECLAIM_GO=none GOENV="$goenv" \
+    BUILD_CACHE_RECLAIM_TMPDIR="$cache_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root" \
+    GOMODCACHE="$GO_MOD_FIXTURE" PATH="${quiet_ps}:$PATH" bash "$impl" "$@" 2>&1
+}
+
+# 18a. nothing configured: the sweep runs (exit 0) and reaps an idle marked cache, as on CI.
+nogo_idle=$(make_run_cache 'daily-ai-engineer-gocache-18a' "$go_marker" 7) || fail 'fixture: 18a'
+out=$(nogo_env off apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 0 ] || fail "with no go and nothing configured the sweep exited ${rc}, not 0: ${out}"
+[ -e "$nogo_idle" ] && fail 'with no go and nothing configured an idle marked cache was not reaped'
+rm -rf -- "$nogo_idle"
+
+# 18b. a go env file assigning GOCACHE twice: go uses the last, and every assigned path is kept.
+dup_env="${fixture_root}/go-env-18b"
+nogo_kept=$(make_run_cache 'configured-gocache-18b' "$go_marker" 7) || fail 'fixture: 18b'
+printf 'GOCACHE=%s\nGOCACHE=%s\n' "${fixture_root}/elsewhere" "$nogo_kept" > "$dup_env"
+out=$(nogo_env "$dup_env" apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${nogo_kept}/00/a1-d" ] || fail 'the last GOCACHE assignment in the go env file was not excluded'
+rm -rf -- "$nogo_kept" "$dup_env"
+
+# 18c. a relative GOENV cannot be read from here: UNKNOWN (exit 2), and the run finishes.
+out=$(nogo_env missing dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "a relative GOENV exited ${rc}, not 2 (UNKNOWN)"
+grep -q 'is not absolute' <<<"$out" || fail 'a relative GOENV was not reported UNKNOWN'
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0
