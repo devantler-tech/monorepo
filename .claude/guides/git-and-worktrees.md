@@ -271,6 +271,10 @@ come from **outside** any session. It does, via the `tech.devantler.worktree-cle
 (runtime-local, `~/Library/LaunchAgents/`), which runs
 [`.claude/scripts/worktree-cleanup-all.sh [apply|dry-run] [min_age_hours] [salvage_age_hours]`](../scripts/worktree-cleanup-all.sh)
 every 6 hours and at login across the monorepo and every submodule discovered from `.gitmodules`.
+Before each repository it sweeps the worktrees **nested in its session worktrees' populated
+submodules** (`<session>/<sub>/.claude/worktrees/*`), with salvage off because their repository
+dies with the parent, and never inside a session worktree a live process works in. Nothing else
+visits them, and each one kept its parent forever (#3673).
 Per-repo safety lives in [`worktree-cleanup.sh`](../scripts/worktree-cleanup.sh) and is
 **fail-closed**: it KEEPs any worktree that is a **live process CWD**, is **locked**, is **younger
 than `min_age_hours`**, holds **commits not reachable from any remote** (one
