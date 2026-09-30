@@ -152,9 +152,8 @@ GO_TMP_ROOT=$(resolve_go_tmpdir)
 reclaimed_mb=0
 kept=0
 removed=0
-# name_swept lists (one per line) the trees sweep (2) already decided; unknown counts scans
-# that could not be read, so the summary and the exit status never call a partial pass clean.
-name_swept=''
+# unknown counts scans that could not be read, so the summary and the exit status never call a
+# partial pass clean.
 unknown=0
 
 log() { printf 'build-cache-reclaim: %s\n' "$*"; }
@@ -599,6 +598,7 @@ tree_in_use() {
 #
 #   $1  the candidate tree
 #   $2  the liveness scope for tree_in_use: temp-root or host
+#   $3  optional: run-cache, which repeats the marked-cache hold check just before removal
 sweep_candidate() {
   local tree=$1 scope=$2 tree_mb
   [ -n "$tree" ] || return 0
@@ -625,6 +625,13 @@ sweep_candidate() {
       log "KEEP  (in use, late)  $tree"
       return 0
     fi
+    # A marked cache can be written to without any file staying open across both lsof probes,
+    # so its own recency (and, for a lint cache, a running linter) is asked again here too.
+    if [ "${3:-}" = run-cache ] && [ -n "$(run_cache_hold "$tree")" ]; then
+      kept=$((kept + 1))
+      log "KEEP  (busy, late)    $tree"
+      return 0
+    fi
     # Go marks every file under a module cache read-only, so a plain `rm -rf` stops
     # partway. That is worse than skipping the tree: the partial delete bumps its
     # mtime, the age filter then never selects it again, and the remnant is orphaned
@@ -645,10 +652,20 @@ sweep_candidate() {
   fi
 }
 
+# is_run_cache <dir> succeeds when <dir> carries a Go or golangci-lint cache README marker. The
+# README must be a regular file that is not a symlink: a FIFO, a device or a link to a stream
+# would block the read, and any temp-root entry could plant one to stall the whole sweep.
+is_run_cache() {
+  local readme="$1/README"
+  [ -f "$readme" ] && [ ! -L "$readme" ] || return 1
+  grep -qF -e "$GO_CACHE_MARKER" -e "$LINT_CACHE_MARKER" -- "$readme" 2>/dev/null
+}
+
 if [ -d "$TMPDIR_ROOT" ]; then
   while IFS= read -r tree; do
-    # Remember every tree this sweep decided, so (2b) never decides -- and counts -- it again.
-    [ -n "$tree" ] && name_swept="${name_swept}${tree}"$'\n'
+    # A marked cache is left to (2b), whose idle rule looks at its entries: the day-based
+    # mtime of the root alone can be old while the cache was written minutes ago.
+    [ -n "$tree" ] && is_run_cache "$tree" && continue
     sweep_candidate "$tree" temp-root
   done <<EOF
 $(find "$TMPDIR_ROOT" -maxdepth 1 -type d \
@@ -670,17 +687,53 @@ fi
 # sweep_candidate still applies, and a cache is regenerable: removing one costs a rebuild.
 # ---------------------------------------------------------------------------
 
-# run_cache_idle <dir> succeeds when neither the cache dir, its fan-out dirs, nor any entry in
-# them has changed within RUN_CACHE_IDLE_HOURS. Depth 2 reaches the entries (00/<hash>-a):
-# Go overwrites an existing entry in place and refreshes an entry's mtime on a cache hit,
-# and neither moves the fan-out dir's mtime, so a cache busy with hits would look idle at
-# depth 1. A read failure counts as recent, so an unreadable cache is kept.
+# run_cache_idle <dir> succeeds (0) when neither the cache dir, its fan-out dirs, nor any entry
+# in them has changed within RUN_CACHE_IDLE_HOURS, and returns 1 when something has. Depth 2
+# reaches the entries (00/<hash>-a): Go overwrites an existing entry in place and refreshes an
+# entry's mtime on a cache hit, and neither moves the fan-out dir's mtime, so a cache busy with
+# hits would look idle at depth 1. A scan that fails returns 2: that cache was not examined.
 run_cache_idle() {
   local recent
   recent=$(find "$1" -maxdepth 2 -mmin "-$((RUN_CACHE_IDLE_HOURS * 60))" -print 2>/dev/null) ||
-    return 1
+    return 2
   [ -z "$recent" ]
 }
+
+# run_cache_hold <dir> prints why a marked cache must be kept, and nothing when it may go:
+#   recent   written within RUN_CACHE_IDLE_HOURS
+#   unknown  the recency scan failed
+#   linting  a golangci-lint cache while a golangci-lint runs, or the process table cannot say.
+#            A linter can sit between two cache reads with no file open, so the lsof probes
+#            cannot see it -- the same rule reclaim_lint_cache applies to the configured cache.
+run_cache_hold() {
+  local tree=$1 rc oldest
+  if run_cache_idle "$tree"; then rc=0; else rc=$?; fi
+  case "$rc" in
+    0) ;;
+    1) printf recent; return 0 ;;
+    *) printf unknown; return 0 ;;
+  esac
+  if grep -qF -e "$LINT_CACHE_MARKER" -- "${tree}/README" 2>/dev/null; then
+    if ! oldest=$(oldest_process_secs golangci-lint) || [ "$oldest" != -1 ]; then
+      printf linting
+    fi
+  fi
+  return 0
+}
+
+# The caches GOCACHE and GOLANGCI_LINT_CACHE name are budget-managed by (1) and (3): a
+# configured cache within its budget is kept on purpose, so this sweep must not reap it for
+# idleness. Compared on resolved paths, like every other tree test here.
+configured_caches=''
+for configured in "$([ -n "${go_bin:-}" ] && "$go_bin" env GOCACHE 2>/dev/null)" \
+  "${GOLANGCI_LINT_CACHE:-}"; do
+  case "$configured" in
+    /*) ;;
+    *) continue ;;
+  esac
+  configured=$(cd -- "$configured" 2>/dev/null && pwd -P) || continue
+  [ -n "$configured" ] && configured_caches="${configured_caches}${configured}"$'\n'
+done
 
 run_cache_trees=''
 if [ -d "$TMPDIR_ROOT" ]; then
@@ -697,19 +750,29 @@ if [ -n "$run_cache_trees" ]; then
     [ -n "$tree" ] || continue
     # A symlink could make the marker check and the removal act on another tree.
     [ -L "$tree" ] && continue
-    # Sweep (2) already decided this tree; deciding it again would count it twice.
-    case $'\n'"$name_swept" in
-      *$'\n'"$tree"$'\n'*) continue ;;
+    is_run_cache "$tree" || continue
+    canon=$(cd -- "$tree" 2>/dev/null && pwd -P) || canon=''
+    case $'\n'"$configured_caches" in
+      *$'\n'"$canon"$'\n'*)
+        [ -n "$canon" ] && continue
+        ;;
     esac
-    if ! grep -qF -e "$GO_CACHE_MARKER" -e "$LINT_CACHE_MARKER" "${tree}/README" 2>/dev/null; then
-      continue
-    fi
-    if ! run_cache_idle "$tree"; then
-      kept=$((kept + 1))
-      log "KEEP  (written within ${RUN_CACHE_IDLE_HOURS}h) $tree"
-      continue
-    fi
-    sweep_candidate "$tree" temp-root
+    hold=$(run_cache_hold "$tree")
+    case "$hold" in
+      '') sweep_candidate "$tree" temp-root run-cache ;;
+      recent)
+        kept=$((kept + 1))
+        log "KEEP  (written within ${RUN_CACHE_IDLE_HOURS}h) $tree"
+        ;;
+      linting)
+        kept=$((kept + 1))
+        log "KEEP  (golangci-lint running or unknown) $tree"
+        ;;
+      *)
+        unknown=$((unknown + 1))
+        log "UNKNOWN (scan failed, cache not examined) $tree"
+        ;;
+    esac
   done <<EOF
 $run_cache_trees
 EOF

@@ -844,7 +844,7 @@ make_run_cache() {
 }
 run_cache() {
   BUILD_CACHE_RECLAIM_TMPDIR="$cache_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root" \
-    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" PATH="${quiet_ps}:$PATH" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" PATH="${RUN_CACHE_PS:-$quiet_ps}:$PATH" \
     bash "$impl" "$@" 2>&1
 }
 go_marker='This directory holds cached build artifacts from the Go build system.'
@@ -911,6 +911,64 @@ if [ "$(id -u)" -ne 0 ]; then
   [ "$rc" -eq 2 ] || fail "an unreadable temp root exited ${rc}, not 2 (UNKNOWN)"
   grep -q 'UNKNOWN (scan failed)' <<<"$out" || fail 'an unreadable temp root was not reported UNKNOWN'
 fi
+
+
+# 17i. a marked cache whose recency scan fails is UNKNOWN (exit 2), never "recent" and KEPT
+# with a clean summary: a failed scan examined nothing.
+blind=$(make_run_cache 'daily-ai-engineer-gocache-17i' "$go_marker" 7) || fail 'fixture: 17i'
+chmod 000 "${blind}/00"
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 755 "${blind}/00"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "a per-run cache whose scan failed exited ${rc}, not 2 (UNKNOWN)"
+  said "$out" "$blind" 'UNKNOWN (scan failed, cache not examined)' ||
+    fail 'a per-run cache whose scan failed was not reported UNKNOWN'
+fi
+rm -rf -- "$blind"
+
+# 17j. an old codex-* marked cache whose only recent write is an entry refreshed in place is
+# KEPT: the name sweep's day-based root mtime must not decide a marked cache.
+old_hit=$(make_run_cache 'codex-old-gocache-17j' "$go_marker" 120) || fail 'fixture: 17j'
+touch "${old_hit}/00/a1-d"
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$old_hit" ] || fail 'the name sweep reaped a marked cache written moments ago'
+said "$out" "$old_hit" 'KEEP  (written within 6h)' ||
+  fail 'an old-named marked cache with a fresh entry was not kept for being recent'
+rm -rf -- "$old_hit"
+
+# 17k. an idle cache that GOLANGCI_LINT_CACHE names is budget-managed by (3), so the marker
+# sweep leaves it alone even though it is idle and marked.
+configured=$(make_run_cache 'configured-lint-17k' "$lint_marker" 7) || fail 'fixture: 17k'
+out=$(GOLANGCI_LINT_CACHE="$configured" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "${configured}/00/a1-d" ] || fail 'the marker sweep reaped the configured, within-budget lint cache'
+rm -rf -- "$configured"
+
+# 17l. an idle marked golangci-lint cache is KEPT while a golangci-lint runs: a linter can sit
+# between two cache reads with no file open, so the lsof probes cannot see it.
+busy_table="${fixture_root}/ps-busy-lint.txt"
+printf '%s\n' '00:05 /bin/sh' '03:00 /opt/bin/golangci-lint' > "$busy_table"
+busy_ps="${fixture_root}/ps-busy-lint"
+make_ps_stub "$busy_ps" "$busy_table" || fail 'fixture: busy lint ps stub'
+linted=$(make_run_cache 'lane-golangci-cache-17l' "$lint_marker" 7) || fail 'fixture: 17l'
+out=$(RUN_CACHE_PS="$busy_ps" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$linted" ] || fail 'apply reaped a per-run lint cache while golangci-lint was running'
+said "$out" "$linted" 'KEEP  (golangci-lint running or unknown)' ||
+  fail 'a per-run lint cache was not kept for a running golangci-lint'
+rm -rf -- "$linted"
+
+# 17m. a README that is a symlink is not a marker, even when it points at one: the read must
+# never follow a planted link (to a FIFO or a stream it would block on).
+linked=$(make_run_cache 'daily-ai-engineer-gocache-17m' '' 7) || fail 'fixture: 17m'
+printf '%s\n' "$go_marker" > "${fixture_root}/marker-17m"
+ln -s "${fixture_root}/marker-17m" "${linked}/README"
+# Backdate the link itself and the dir its creation touched, so recency cannot be what keeps it.
+stamp17m=$(date -v-7H +%Y%m%d%H%M 2>/dev/null) || stamp17m=$(date -d "7 hours ago" +%Y%m%d%H%M)
+touch -h -t "$stamp17m" "${linked}/README" || fail 'fixture: age 17m link'
+age_path "$linked" 7 || fail 'fixture: age 17m dir'
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$linked" ] || fail 'a dir whose README is a symlink was reaped as a marked cache'
+rm -rf -- "$linked"
 
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
