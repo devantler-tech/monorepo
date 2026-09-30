@@ -666,12 +666,15 @@ sweep_candidate() {
 # is_run_cache <dir> succeeds when <dir> carries a Go or golangci-lint cache README marker. The
 # README must be a regular file that is not a symlink: a FIFO, a device or a link to a stream
 # would block the read, and any temp-root entry could plant one to stall the whole sweep.
-# Returns 0 for a marker, 1 for none, and 2 when the README could not be read: a cache whose
-# marker was never read was never examined, so callers count it UNKNOWN and keep it.
+# Only the first 512 bytes are read: each tool writes its marker as the README's first line, and
+# an unrelated README may be huge or still growing. Returns 0 for a marker, 1 for none, and 2 when
+# the README could not be read: a cache whose marker was never read was never examined, so
+# callers count it UNKNOWN and keep it.
 is_run_cache() {
-  local readme="$1/README"
+  local readme="$1/README" prefix
   [ -f "$readme" ] && [ ! -L "$readme" ] || return 1
-  grep -qF -e "$GO_CACHE_MARKER" -e "$LINT_CACHE_MARKER" -- "$readme" 2>/dev/null
+  prefix=$(head -c 512 -- "$readme" 2>/dev/null) || return 2
+  grep -qF -e "$GO_CACHE_MARKER" -e "$LINT_CACHE_MARKER" <<<"$prefix"
 }
 
 if [ -d "$TMPDIR_ROOT" ]; then
@@ -777,8 +780,16 @@ lint_cache_dir() {
 # so this sweep must not reap it for idleness. Compared on resolved paths, like every other tree
 # test here.
 configured_caches=''
-for configured in "$([ -n "${go_bin:-}" ] && "$go_bin" env GOCACHE 2>/dev/null)" \
-  "$(lint_cache_dir)"; do
+# Without the configured Go cache's path the exclusion is incomplete, so a failed read skips the
+# marker sweep as UNKNOWN rather than risk reaping the budget-managed cache for idleness.
+configured_gocache=''
+run_caches_readable=1
+if [ -n "${go_bin:-}" ] && ! configured_gocache=$("$go_bin" env GOCACHE 2>/dev/null); then
+  run_caches_readable=0
+  unknown=$((unknown + 1))
+  log "UNKNOWN (go env GOCACHE failed) $TMPDIR_ROOT: per-run caches not examined"
+fi
+for configured in "$configured_gocache" "$(lint_cache_dir)"; do
   case "$configured" in
     /*) ;;
     *) continue ;;
@@ -788,7 +799,7 @@ for configured in "$([ -n "${go_bin:-}" ] && "$go_bin" env GOCACHE 2>/dev/null)"
 done
 
 run_cache_trees=''
-if [ -d "$TMPDIR_ROOT" ]; then
+if [ "$run_caches_readable" -eq 1 ] && [ -d "$TMPDIR_ROOT" ]; then
   # Read the listing on its own, so a failed scan is seen: inside a heredoc substitution its
   # status is lost, and a partial listing would end in a clean-looking summary.
   if ! run_cache_trees=$(find "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null); then
@@ -802,7 +813,8 @@ if [ -n "$run_cache_trees" ]; then
     [ -n "$tree" ] || continue
     # A symlink could make the marker check and the removal act on another tree.
     [ -L "$tree" ] && continue
-    if ! is_run_cache "$tree"; then
+    # The status is read in the else branch: `if ! f` would turn f's 2 into a 0.
+    if is_run_cache "$tree"; then :; else
       marker_rc=$?
       if [ "$marker_rc" -eq 2 ]; then
         unknown=$((unknown + 1))

@@ -1009,6 +1009,43 @@ said "$out" "$late_linted" 'KEEP  (busy, late)' ||
   fail 'a per-run lint cache was not kept at removal time for a linter started after the snapshot'
 rm -rf -- "$late_linted"
 
+# 17q. the marker sweep's own unreadable-README path (a name no pattern in (2) matches) is
+# UNKNOWN too, not a silent skip.
+unread2=$(make_run_cache 'daily-ai-engineer-gocache-17q' "$go_marker" 7) || fail 'fixture: 17q'
+chmod 000 "${unread2}/README"
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 644 "${unread2}/README"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "an unreadable marker in the marker sweep exited ${rc}, not 2 (UNKNOWN)"
+  said "$out" "$unread2" 'UNKNOWN (marker unreadable, cache not examined)' ||
+    fail 'an unreadable marker in the marker sweep was not reported UNKNOWN'
+fi
+rm -rf -- "$unread2"
+
+# 17r. a failed `go env GOCACHE` leaves the configured-cache exclusion incomplete, so the marker
+# sweep is skipped as UNKNOWN (exit 2) and an idle marked cache is left in place.
+broken_go="${fixture_root}/go-broken"
+mkdir -p "$broken_go" || fail 'fixture: 17r stub dir'
+cp "${quiet_ps}/ps" "${broken_go}/ps" || fail 'fixture: 17r ps'
+printf '#!/bin/sh\nexit 1\n' > "${broken_go}/go" && chmod +x "${broken_go}/go" || fail 'fixture: 17r go'
+kept_idle=$(make_run_cache 'daily-ai-engineer-gocache-17r' "$go_marker" 7) || fail 'fixture: 17r'
+out=$(RUN_CACHE_PS="$broken_go" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "a failed go env GOCACHE exited ${rc}, not 2 (UNKNOWN)"
+grep -q 'UNKNOWN (go env GOCACHE failed)' <<<"$out" || fail 'a failed go env GOCACHE was not reported UNKNOWN'
+[ -e "$kept_idle" ] || fail 'the marker sweep ran without the configured-cache exclusion'
+rm -rf -- "$kept_idle"
+
+# 17s. only a bounded prefix of README is read: a marker past the first 512 bytes is not a marker,
+# so a huge or growing unrelated README can neither stall the sweep nor get its dir reaped.
+padded=$(make_run_cache 'daily-ai-engineer-gocache-17s' '' 7) || fail 'fixture: 17s'
+{ head -c 600 /dev/zero | tr '\0' 'x'; printf '\n%s\n' "$go_marker"; } > "${padded}/README"
+age_path "${padded}/README" 7 && age_path "$padded" 7 || fail 'fixture: age 17s'
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$padded" ] || fail 'a README whose marker sits past the read bound was treated as a cache'
+rm -rf -- "$padded"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0
