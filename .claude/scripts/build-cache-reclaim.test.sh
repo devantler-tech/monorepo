@@ -1097,6 +1097,20 @@ grep -q "UNKNOWN (go env GOCACHE gave ''" <<<"$out" || fail 'a go printing no GO
 [ -e "$silent_idle" ] || fail 'the marker sweep ran on an empty GOCACHE read'
 rm -rf -- "$silent_idle"
 
+# 17x. a temp-root child this run cannot search hides its README: that is "not examined" (UNKNOWN,
+# exit 2), never "no marker".
+opaque=$(make_run_cache 'opaque-cache-17x' "$go_marker" 7) || fail 'fixture: 17x'
+chmod 000 "$opaque"
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+chmod 755 "$opaque"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "an unsearchable temp-root child exited ${rc}, not 2 (UNKNOWN)"
+  said "$out" "$opaque" 'UNKNOWN (marker unreadable, cache not examined)' ||
+    fail 'an unsearchable temp-root child was not reported UNKNOWN'
+fi
+rm -rf -- "$opaque"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0

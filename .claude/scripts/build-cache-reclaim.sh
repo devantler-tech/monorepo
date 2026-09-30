@@ -676,6 +676,11 @@ sweep_candidate() {
 # A cache whose marker was never read was never examined, so callers count a 2 as UNKNOWN.
 run_cache_kind() {
   local readme="$1/README" prefix first
+  # A directory this run cannot list or search hides its README: that is "not examined", never
+  # "no marker".
+  if [ ! -r "$1" ] || [ ! -x "$1" ]; then
+    return 2
+  fi
   if [ ! -f "$readme" ] || [ -L "$readme" ]; then
     printf none
     return 0
@@ -809,14 +814,34 @@ lint_cache_dir() {
 configured_caches=''
 # Without the configured Go cache's path the exclusion is incomplete, so a read that fails or
 # yields something other than `off` or an absolute path skips the marker sweep as UNKNOWN rather
-# than risk reaping the budget-managed cache for idleness. With no go binary at all, only the
-# GOCACHE variable can place a Go cache under the temp root (Go's default is the user cache dir),
-# so that variable is the configured path.
+# than risk reaping the budget-managed cache for idleness. With no go binary at all, the setting
+# is read where go itself would read it: the GOCACHE variable, else a GOCACHE= line in the go env
+# file (`go env -w`; $GOENV, or its default under the user config dir). A missing or `off` env
+# file means GOCACHE is at Go's default in the user cache dir, never the temp root; an env file
+# that exists but cannot be read is UNKNOWN.
 configured_gocache=''
 run_caches_readable=0
 if [ -z "${go_bin:-}" ]; then
   configured_gocache=${GOCACHE:-}
   run_caches_readable=1
+  if [ -z "$configured_gocache" ]; then
+    goenv_file=${GOENV:-}
+    if [ -z "$goenv_file" ]; then
+      case "$(uname -s 2>/dev/null)" in
+        Darwin) goenv_file=${HOME:+${HOME}/Library/Application Support/go/env} ;;
+        *) goenv_file=${XDG_CONFIG_HOME:-${HOME:+${HOME}/.config}}/go/env ;;
+      esac
+    fi
+    if [ "$goenv_file" != off ] && [ -e "$goenv_file" ]; then
+      if goenv_line=$(grep -m1 '^GOCACHE=' -- "$goenv_file" 2>/dev/null); then
+        configured_gocache=${goenv_line#GOCACHE=}
+      elif [ $? -ne 1 ]; then
+        run_caches_readable=0
+        unknown=$((unknown + 1))
+        log "UNKNOWN (go env file unreadable) $TMPDIR_ROOT: per-run caches not examined"
+      fi
+    fi
+  fi
 elif ! configured_gocache=$("$go_bin" env GOCACHE 2>/dev/null); then
   unknown=$((unknown + 1))
   log "UNKNOWN (go env GOCACHE failed) $TMPDIR_ROOT: per-run caches not examined"
