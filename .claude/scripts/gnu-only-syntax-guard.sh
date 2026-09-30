@@ -117,11 +117,11 @@ scan="$(
       cmd_pos = "(^|[;&|(`!{]|\\$\\()[ \t]*(([A-Za-z_][A-Za-z0-9_]*=[^ \t]*|command|exec|env|builtin)[ \t]+)*([^ \t;&|()]*/)?date"
       bsd_date_re = cmd_pos opts "-[nuRI]*[vjr]"
       # A quoted argument to these runs as code (a `trap` action runs when its signal fires).
-      payload_re = "((^|[^A-Za-z0-9_.-])([bdkz]|ba|da)?sh([ \t]+-[A-Za-z]+)*[ \t]+-[A-Za-z]*c|(^|[^A-Za-z0-9_])(eval|trap))[ \t]*$"
+      payload_re = "((^|[^A-Za-z0-9_.-])([bdkz]|ba|da)?sh([ \t]+(-[A-Za-z]+|--[A-Za-z][A-Za-z-]*))*[ \t]+-[A-Za-z]*c|(^|[^A-Za-z0-9_])(eval|trap))[ \t]*$"
     }
 
     function reset_file() {
-      count = 0; joining = 0; hn = 0; hcur = 0; in_heredoc = 0
+      count = 0; joining = 0; hn = 0; hcur = 0; in_heredoc = 0; hdepth = 0; hbt = 0
       sd = 0; st[0] = "N"
       delete nc; delete co; delete cm; delete raw; delete start; delete pd; delete bt; delete pay; delete hquo
     }
@@ -132,7 +132,17 @@ scan="$(
     function emit(s) { nc[count] = nc[count] s; co[count] = co[count] s }
     # A `#` starts a comment only at the start of a word.
     function word_start(s) { return s == "" || substr(s, length(s), 1) ~ /[ \t\n;&|()]/ }
-    function push(mode) { sd++; st[sd] = mode; pd[sd] = 0; bt[sd] = 0; pay[sd] = 0 }
+    function push(mode) { sd++; st[sd] = mode; pd[sd] = 0; bt[sd] = 0; pay[sd] = 0; qs[sd] = 0; qt[sd] = "" }
+    # Close the current quote. The shell removes quotes before invoking a command, so a quoted word
+    # that is a single option (`"-newermt"`, `"-d"`) is restored into the code view; anything else
+    # stays the `Q` placeholder, so a wholly quoted command example remains data.
+    function close_quote() {
+      if (pay[sd]) co[count] = co[count] ";"
+      else if (qs[sd] > 0 && substr(co[count], qs[sd]) ~ /^Q@?$/ && qt[sd] ~ /^-[A-Za-z][A-Za-z0-9-]*$/) {
+        co[count] = substr(co[count], 1, qs[sd] - 1) qt[sd]
+      }
+      sd--
+    }
 
     # Read a here-document operator at line position i (just past `<<`); queue its delimiter and
     # return the position after it.
@@ -152,32 +162,40 @@ scan="$(
       return i
     }
 
-    # The command substitutions of an unquoted here-document body line, as `;`-bounded code.
-    # A backslash-escaped `\$(` or backtick is literal. A substitution left open runs to the line end.
-    function substitutions(line,   i, j, n, c, depth, out) {
-      out = ""; n = length(line); i = 1
+    # Capture a `$(…)` body from line position i while hdepth > 0; returns the position after it.
+    function capture_paren(line, i,   j, n, c) {
+      n = length(line); j = i
+      while (j <= n && hdepth > 0) {
+        c = substr(line, j, 1)
+        if (c == "(") hdepth++
+        else if (c == ")") hdepth--
+        j++
+      }
+      hcap = hcap ";" substr(line, i, j - i - (hdepth == 0 ? 1 : 0)) ";"
+      return j
+    }
+    # Capture a backtick body from line position i while hbt is set; returns the position after it.
+    function capture_tick(line, i,   j) {
+      j = index(substr(line, i), "`")
+      if (j == 0) { hcap = hcap ";" substr(line, i) ";"; return length(line) + 1 }
+      hcap = hcap ";" substr(line, i, j - 1) ";"; hbt = 0
+      return i + j
+    }
+    # The command substitutions of an unquoted here-document body line, as `;`-bounded code. A
+    # backslash-escaped `\$(` or backtick is literal. A substitution still open at the end of a line
+    # continues on the next body line (hdepth/hbt carry across lines).
+    function substitutions(line,   i, n, c) {
+      hcap = ""; n = length(line); i = 1
+      if (hdepth > 0) i = capture_paren(line, 1)
+      else if (hbt) i = capture_tick(line, 1)
       while (i <= n) {
         c = substr(line, i, 1)
         if (c == "\\") { i += 2; continue }
-        if (substr(line, i, 2) == "$(" && substr(line, i, 3) != "$((") {
-          depth = 1; j = i + 2
-          while (j <= n && depth > 0) {
-            c = substr(line, j, 1)
-            if (c == "(") depth++
-            else if (c == ")") depth--
-            j++
-          }
-          out = out ";" substr(line, i + 2, j - i - 2 - (depth == 0 ? 1 : 0)) ";"
-          i = j; continue
-        }
-        if (c == "`") {
-          j = index(substr(line, i + 1), "`"); if (j == 0) j = n - i + 1
-          out = out ";" substr(line, i + 1, j - 1) ";"
-          i += j + 1; continue
-        }
+        if (substr(line, i, 2) == "$(" && substr(line, i, 3) != "$((") { hdepth = 1; i = capture_paren(line, i + 2); continue }
+        if (c == "`") { hbt = 1; i = capture_tick(line, i + 1); continue }
         i++
       }
-      return out
+      return hcap
     }
 
     # Lex one physical line into the current command, starting a new command at each top-level
@@ -188,18 +206,18 @@ scan="$(
       while (i <= n) {
         c = substr(line, i, 1); m = st[sd]
         if (m == "S") {
-          if (c == q) { if (pay[sd]) co[count] = co[count] ";"; nc[count] = nc[count] c; sd--; i++; continue }
-          nc[count] = nc[count] c; if (pay[sd]) co[count] = co[count] c
+          if (c == q) { nc[count] = nc[count] c; close_quote(); i++; continue }
+          nc[count] = nc[count] c; if (pay[sd]) co[count] = co[count] c; else qt[sd] = qt[sd] c
           i++; continue
         }
         if (m == "A" || m == "D") {
           if (c == "\\") {
-            nc[count] = nc[count] substr(line, i, 2); if (pay[sd]) co[count] = co[count] substr(line, i, 2)
+            nc[count] = nc[count] substr(line, i, 2)
+            if (pay[sd]) co[count] = co[count] substr(line, i, 2); else qt[sd] = qt[sd] substr(line, i + 1, 1)
             i += 2; continue
           }
           if ((m == "A" && c == q) || (m == "D" && c == "\"")) {
-            if (pay[sd]) co[count] = co[count] ";"
-            nc[count] = nc[count] c; sd--; i++; continue
+            nc[count] = nc[count] c; close_quote(); i++; continue
           }
           if (m == "D" && !pay[sd] && c == "$" && substr(line, i + 1, 1) == "(") {
             # A command substitution inside double quotes is code again.
@@ -210,7 +228,7 @@ scan="$(
             nc[count] = nc[count] c; co[count] = co[count] " `"
             push("N"); bt[sd] = 1; i++; continue
           }
-          nc[count] = nc[count] c; if (pay[sd]) co[count] = co[count] c
+          nc[count] = nc[count] c; if (pay[sd]) co[count] = co[count] c; else qt[sd] = qt[sd] c
           i++; continue
         }
         if (m == "M") {
@@ -234,6 +252,7 @@ scan="$(
           else {
             push(c == "$" ? "A" : (c == q ? "S" : "D"))
             nc[count] = nc[count] run
+            qs[sd] = length(co[count]) + 1
             co[count] = co[count] "Q" (substr(line, i + length(run), 1) == "@" ? "@" : "")
           }
           i += length(run); continue
@@ -314,6 +333,7 @@ scan="$(
         if (term == hq[hcur]) {
           hcur++
           if (hcur > hn) { in_heredoc = 0; hn = 0 }
+          hdepth = 0; hbt = 0
         } else if (!hquo[hcur]) {
           # An unquoted delimiter still expands `$(…)` and backticks in the body: those run.
           s = substitutions(line)
