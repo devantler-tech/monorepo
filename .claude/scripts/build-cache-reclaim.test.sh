@@ -1082,6 +1082,21 @@ said "$out" "${linked_root}/daily-ai-engineer-gocache-17v" 'WOULD REAP' ||
   fail 'an idle per-run cache under a symlinked temp root was not selected'
 rm -rf -- "$via_link" "$linked_root"
 
+# 17w. a go that exits 0 but prints no GOCACHE path (a broken shim) is no better than a failed
+# read: the exclusion would be incomplete, so the marker sweep is skipped as UNKNOWN.
+silent_go="${fixture_root}/go-silent"
+mkdir -p "$silent_go" || fail 'fixture: 17w stub dir'
+cp "${quiet_ps}/ps" "${silent_go}/ps" || fail 'fixture: 17w ps'
+printf '#!/bin/sh\nexit 0\n' > "${silent_go}/go" || fail 'fixture: 17w go'
+chmod +x "${silent_go}/go" || fail 'fixture: 17w chmod'
+silent_idle=$(make_run_cache 'daily-ai-engineer-gocache-17w' "$go_marker" 7) || fail 'fixture: 17w'
+out=$(RUN_CACHE_PS="$silent_go" run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "a go printing no GOCACHE exited ${rc}, not 2 (UNKNOWN)"
+grep -q "UNKNOWN (go env GOCACHE gave ''" <<<"$out" || fail 'a go printing no GOCACHE was not reported UNKNOWN'
+[ -e "$silent_idle" ] || fail 'the marker sweep ran on an empty GOCACHE read'
+rm -rf -- "$silent_idle"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0

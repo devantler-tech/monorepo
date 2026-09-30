@@ -807,18 +807,27 @@ lint_cache_dir() {
 # so this sweep must not reap it for idleness. Compared on resolved paths, like every other tree
 # test here.
 configured_caches=''
-# Without the configured Go cache's path the exclusion is incomplete, so a failed read skips the
-# marker sweep as UNKNOWN rather than risk reaping the budget-managed cache for idleness.
+# Without the configured Go cache's path the exclusion is incomplete, so a read that fails or
+# yields something other than `off` or an absolute path skips the marker sweep as UNKNOWN rather
+# than risk reaping the budget-managed cache for idleness. With no go binary at all, only the
+# GOCACHE variable can place a Go cache under the temp root (Go's default is the user cache dir),
+# so that variable is the configured path.
 configured_gocache=''
 run_caches_readable=0
 if [ -z "${go_bin:-}" ]; then
-  unknown=$((unknown + 1))
-  log "UNKNOWN (no go binary, GOCACHE unknown) $TMPDIR_ROOT: per-run caches not examined"
+  configured_gocache=${GOCACHE:-}
+  run_caches_readable=1
 elif ! configured_gocache=$("$go_bin" env GOCACHE 2>/dev/null); then
   unknown=$((unknown + 1))
   log "UNKNOWN (go env GOCACHE failed) $TMPDIR_ROOT: per-run caches not examined"
 else
-  run_caches_readable=1
+  case "$configured_gocache" in
+    off | /?*) run_caches_readable=1 ;;
+    *)
+      unknown=$((unknown + 1))
+      log "UNKNOWN (go env GOCACHE gave '$configured_gocache') $TMPDIR_ROOT: per-run caches not examined"
+      ;;
+  esac
 fi
 for configured in "$configured_gocache" "$(lint_cache_dir)"; do
   case "$configured" in
