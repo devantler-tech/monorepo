@@ -1036,6 +1036,27 @@ conventional_only_cask_commits="$(jq -c '.[2:]' <<<"${conventional_cask_commits}
 wrong_component_cask_commits="$(jq -c '.[2].message = "chore(cask): update ksail to v7.192.7"' <<<"${conventional_cask_commits}")"
 non_semver_cask_commits="$(jq -c '.[2].message = "chore(cask): update ksail-desktop to latest"' <<<"${conventional_cask_commits}")"
 
+# Measured from homebrew-tap #1650 (#3441): ksail's release job won the race against the tap's
+# autocorrect, so its own `brew style --fix` commit follows the GoReleaser commit.
+pipeline_style_cask_head="e340342d0a1b2c3d4e5f60718293a4b5c6d7e8f9"
+pipeline_style_cask_commits="$(jq -cn \
+  --arg head "${pipeline_style_cask_head}" \
+  '[
+    {sha: "fdcdeab01b2c3d4e5f60718293a4b5c6d7e8f901",
+     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
+     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
+     message: "Brew cask update for ksail version v7.186.2"},
+    {sha: $head,
+     author_login: "github-actions[bot]", author_name: "github-actions[bot]",
+     author_email: "41898282+github-actions[bot]@users.noreply.github.com",
+     committer_login: "github-actions[bot]", committer_name: "github-actions[bot]",
+     committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+     message: "style: brew style --fix generated cask"}
+  ]' | with_commit_dates)"
+pipeline_style_wrong_identity_commits="$(jq -c '.[1].author_name = "devantler" | .[1].committer_name = "devantler"' <<<"${pipeline_style_cask_commits}")"
+pipeline_style_wrong_login_commits="$(jq -c '.[1].author_login = "devantler"' <<<"${pipeline_style_cask_commits}")"
+pipeline_style_wrong_message_commits="$(jq -c '.[1].message = "style: brew style --fix generated cask and bump sha256"' <<<"${pipeline_style_cask_commits}")"
+
 default_title_cask_head="5a5792bb83bd6b8469f10cd7e00abfe75c7f36be"
 default_title_cask_commits="$(homebrew_commits_json \
   "ksail" \
@@ -1974,6 +1995,56 @@ expect_review_gated \
   "${adapted_cask_head}" \
   '["Casks/ksail.rb"]' \
   "${adapted_cask_commits}"
+
+expect_exempt \
+  "GoReleaser cask followed by ksail's own brew style commit" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "Brew cask update for ksail version v7.186.2" \
+  "${pipeline_style_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${pipeline_style_cask_commits}"
+
+expect_review_gated \
+  "ksail brew style commit under another identity" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "Brew cask update for ksail version v7.186.2" \
+  "${pipeline_style_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${pipeline_style_wrong_identity_commits}"
+
+expect_review_gated \
+  "ksail brew style commit under another login" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "Brew cask update for ksail version v7.186.2" \
+  "${pipeline_style_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${pipeline_style_wrong_login_commits}"
+
+expect_review_gated \
+  "ksail brew style commit with another message" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "Brew cask update for ksail version v7.186.2" \
+  "${pipeline_style_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${pipeline_style_wrong_message_commits}"
+
+expect_review_gated \
+  "ksail brew style commit touching another file" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "Brew cask update for ksail version v7.186.2" \
+  "${pipeline_style_cask_head}" \
+  '["Casks/ksail.rb","Casks/ksail-desktop.rb"]' \
+  "${pipeline_style_cask_commits}"
 
 expect_review_gated \
   "World at Ruin cask claiming the wrong version in its commit" \

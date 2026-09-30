@@ -422,7 +422,8 @@ matches_ksail_provenance() {
 
 # GoReleaser's tap path (ksail, ksail-desktop). The branch is evergreen, so one open PR can
 # accumulate several release cycles, each a GoReleaser cask commit optionally followed by the tap's
-# `brew style --fix` autocorrect commit. Every commit must match one of those two identities — an
+# `brew style --fix` autocorrect commit (the tap's, or ksail's own when it wins the race). Every
+# commit must match one of those identities — an
 # agent or human adaptation commit anywhere in the list takes the PR off its programmed path and
 # makes it review-bearing again, per the constitution's carve-out.
 # GoReleaser writes either its default subject or the Conventional subject ksail's
@@ -452,10 +453,21 @@ matches_homebrew_provenance() {
         .committer_name == "generator-bot" and
         .committer_email == "generator-bot@users.noreply.github.com" and
         .message == "style: autocorrect Casks (brew style --fix)";
+      # The ksail release job commits the same `brew style --fix` itself when it wins the race against
+      # the tap autocorrect (ksail .github/scripts/style-clean-cask-branch.sh; homebrew-tap#1650,
+      # #3441). Unsigned and identified by git config only — the same trust as generator-bot above.
+      def pipeline_style_commit:
+        .author_login == "github-actions[bot]" and
+        .author_name == "github-actions[bot]" and
+        .author_email == "41898282+github-actions[bot]@users.noreply.github.com" and
+        .committer_login == "github-actions[bot]" and
+        .committer_name == "github-actions[bot]" and
+        .committer_email == "41898282+github-actions[bot]@users.noreply.github.com" and
+        .message == "style: brew style --fix generated cask";
       length > 0 and
       (.[0] | goreleaser_commit) and
       (.[-1].sha == $head) and
-      all(.[]; goreleaser_commit or autocorrect_commit) and
+      all(.[]; goreleaser_commit or autocorrect_commit or pipeline_style_commit) and
       # The title version must name one of the release cycles actually present, so a stale or
       # hand-edited title cannot smuggle an arbitrary version past the gate. It is deliberately NOT
       # pinned to the LATEST cycle: on a real multi-cycle PR (tap#1225) the title stayed at the
