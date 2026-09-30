@@ -440,36 +440,6 @@ keep_stuck() { stuck=$((stuck+1)); keep "$1" "$2"; }
 trap 'worktree_claim_lock_release >/dev/null 2>&1 || true' EXIT
 trap 'exit 2' HUP INT TERM
 
-# ownership_claim_state <worktree> -> 0 active, 1 absent/expired, 2 malformed.
-# A malformed marker is ambiguous session state and therefore a KEEP, never a reap.
-ownership_claim_state() {
-  local wt=$1 marker="$1/$WORKTREE_CLAIM_MARKER_NAME" owner="" created_at="" key val created_epoch now_epoch age
-  CLAIM_DETAIL=""
-  [ -e "$marker" ] || return 1
-  [ -f "$marker" ] || { CLAIM_DETAIL="marker is not a regular file"; return 2; }
-  while IFS='=' read -r key val; do
-    case "$key" in
-      owner) owner=$val ;;
-      created_at) created_at=$val ;;
-    esac
-  done < "$marker"
-  if [ -z "$owner" ] || [ -z "$created_at" ]; then
-    CLAIM_DETAIL="marker lacks owner or created_at"
-    return 2
-  fi
-  created_epoch=$(worktree_claim_iso_to_epoch "$created_at") || {
-    CLAIM_DETAIL="marker has unparseable created_at"
-    return 2
-  }
-  now_epoch=$(date -u +%s)
-  age=$((now_epoch - created_epoch))
-  if [ "$age" -lt "$WORKTREE_CLAIM_TTL_SECS" ]; then
-    CLAIM_DETAIL="owner=$owner created_at=$created_at"
-    return 0
-  fi
-  return 1
-}
-
 # is_locked_now <resolved-worktree-path> — re-queries git rather than consulting a
 # startup snapshot, so a lock taken DURING the sweep is still honoured.
 #
@@ -1510,6 +1480,13 @@ while IFS= read -r wt <&3; do
   # and under pipefail the pipeline reports failure — inverting this very test.
   if ! grep -qxF -- "$wt_real" <<< "$REGISTERED"; then
     keep "$wt" "not a registered worktree"; continue
+  fi
+
+  # KEEP: worktree-cleanup-all.sh reaped a worktree nested in this one's submodule and could
+  # not hand that repository's refs/reaped to storage outliving this tree, so removing it
+  # would delete the only recovery refs. One physical path per line; literal match.
+  if [ -n "${WORKTREE_CLEANUP_RETAIN:-}" ] && grep -qxF -- "$wt_real" <<< "$WORKTREE_CLEANUP_RETAIN"; then
+    keep "$wt" "nested recovery refs not yet handed off (worktree-cleanup-all.sh)"; continue
   fi
 
   # KEEP: a live per-run owner may use a clean tree without holding a process CWD.
