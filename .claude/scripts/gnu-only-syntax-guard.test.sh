@@ -4,7 +4,7 @@
 # rule on the right line, each portable equivalent passes, and every way the guard could report a
 # clean pass without having scanned anything reports unknown instead.
 #
-# shellcheck disable=SC2016 # fixture lines are literal script text; nothing in them should expand here
+# shellcheck disable=SC2016,SC1003 # fixture lines are literal script text; nothing in them should expand here
 
 set -euo pipefail
 
@@ -107,6 +107,25 @@ expect_clean "words that merely end in date are not date" "$f"
 f="$(fixture date-plain 'now=$(date -u +%Y-%m-%dT%H:%M:%SZ)')"
 expect_clean "date without -d" "$f"
 
+f="$(fixture date-long-opt-first 'out=$(date --utc -d yesterday +%s)')"
+expect_finding "long option before -d" date-d-without-bsd 2 "$f"
+f="$(fixture date-long-opt-value 'out=$(date --utc --date="$raw" +%s)')"
+expect_finding "long option before --date=" date-d-without-bsd 2 "$f"
+f="$(fixture date-long-opt-bsd 'out=$(date --utc -d "$raw" +%s 2>/dev/null) ||' \
+  '  out=$(date -u -j -f "%Y-%m-%d" "$raw" +%s)')"
+expect_clean "long option before -d with a BSD fallback" "$f"
+
+# --- Backslash-continued commands are judged as one command ---------------------------------------
+f="$(fixture newermt-continued 'x=1' 'find "$dir" -newermt \' '  @0 -print')"
+expect_finding "-newermt and @epoch split across a continuation" find-newermt-epoch 3 "$f"
+f="$(fixture date-continued 'out=$(date -u \' '  -d "@$e" +%H)')"
+expect_finding "date and -d split across a continuation" date-d-without-bsd 2 "$f"
+f="$(fixture date-continued-bsd 'out=$(date -u -d "@$e" +%H 2>/dev/null) ||' \
+  '  out=$(date -u \' '    -r "$e" +%H)')"
+expect_clean "BSD fallback split across a continuation" "$f"
+f="$(fixture even-backslashes 'printf "%s\n" "a\\\\"' 'find . -newermt @1')"
+expect_finding "an escaped backslash does not continue the line" find-newermt-epoch 3 "$f"
+
 # --- Comments and the opt-out marker --------------------------------------------------------------
 f="$(fixture comment '  # find . -newermt @1 and date -d "x" are GNU-only')"
 expect_clean "comment lines are ignored" "$f"
@@ -114,6 +133,12 @@ f="$(fixture opt-out 'out=$(date -d "@$e") # gnu-only-ok: Linux-only CI step')"
 expect_clean "opt-out marker with a reason" "$f"
 f="$(fixture opt-out-empty 'out=$(date -d "@$e") # gnu-only-ok:')"
 expect_finding "opt-out marker without a reason is not honoured" date-d-without-bsd 2 "$f"
+f="$(fixture opt-out-single-quoted "label='# gnu-only-ok: display'; now=\$(date -d yesterday)")"
+expect_finding "a single-quoted marker is data, not an opt-out" date-d-without-bsd 2 "$f"
+f="$(fixture opt-out-double-quoted 'label=" # gnu-only-ok: display"; now=$(date -d yesterday)')"
+expect_finding "a double-quoted marker is data, not an opt-out" date-d-without-bsd 2 "$f"
+f="$(fixture opt-out-after-quotes "now=\$(date -d '@1' +%s) # gnu-only-ok: Linux-only CI step")"
+expect_clean "a real comment after balanced quotes is honoured" "$f"
 
 # --- Several files in one run: findings keep their own file and line ------------------------------
 a="$(fixture multi-a 'x=1' 'find . -newermt @1')"
@@ -138,6 +163,14 @@ ok
 run --bogus
 [[ $rc -eq 2 ]] || fail "unknown option: expected exit 2, got $rc"
 ok
+: >"$tmp/empty.sh"
+run "$tmp/empty.sh"
+[[ $rc -eq 2 ]] || fail "an explicit empty file: expected exit 2, got $rc (out: $out)"
+ok
+f="$(fixture clean-partner 'x=1')"
+run "$f" "$tmp/empty.sh"
+[[ $rc -eq 2 ]] || fail "a clean file next to an empty one: expected exit 2, got $rc (out: $out)"
+ok
 mkdir "$tmp/empty-scripts"
 cp "$guard" "$tmp/empty-scripts/gnu-only-syntax-guard.sh"
 rc=0
@@ -153,6 +186,20 @@ bash "$tmp/empty-scripts/gnu-only-syntax-guard.sh" >"$tmp/out" 2>"$tmp/err" || r
 grep -q 'helper.sh:2: find-newermt-epoch' "$tmp/out" || fail "default scan: bash sibling not flagged: $(cat "$tmp/out")"
 if grep -q 'posix.sh' "$tmp/out"; then fail "default scan: scanned a non-bash script"; fi
 ok
+# An unreadable candidate next to a clean, readable one is unknown, never a clean pass. Skipped when
+# running as root, which reads a mode-000 file anyway.
+if [[ "$(id -u)" != 0 ]]; then
+  rm "$tmp/empty-scripts/posix.sh"
+  printf '%s\n' '#!/usr/bin/env bash' 'x=1' >"$tmp/empty-scripts/helper.sh"
+  printf '%s\n' '#!/usr/bin/env bash' 'find . -newermt @1' >"$tmp/empty-scripts/hidden.sh"
+  chmod 000 "$tmp/empty-scripts/hidden.sh"
+  rc=0
+  bash "$tmp/empty-scripts/gnu-only-syntax-guard.sh" >"$tmp/out" 2>"$tmp/err" || rc=$?
+  chmod 644 "$tmp/empty-scripts/hidden.sh"
+  [[ $rc -eq 2 ]] || fail "default scan with an unreadable candidate: expected exit 2, got $rc ($(cat "$tmp/out"))"
+  grep -q 'cannot read .*hidden.sh' "$tmp/err" || fail "default scan: unknown did not name the unreadable file: $(cat "$tmp/err")"
+  ok
+fi
 
 # --- The real helper suite is clean ---------------------------------------------------------------
 run
