@@ -181,7 +181,12 @@ for repo in "${repos[@]}"; do
     [ -n "$url" ] || continue
     # Only Bugbot's exact bare trigger is carve-out eligible. Everything else —
     # including a bare @coderabbitai/@codex trigger — is a violation on sight.
-    if [ "$shape" = "undisclosed-trigger" ] && [ "$body" = "@cursor review" ]; then
+    # And only on the conversation surface: the carve-out rests on the disclosure
+    # being the comment before it, which a review body or an inline review comment
+    # has no equivalent of. Re-checking one by its PR number would read only the
+    # conversation, never find the review's own id there, and CLEAR a real violation.
+    if [ "$shape" = "undisclosed-trigger" ] && [ "$body" = "@cursor review" ] &&
+      [[ "$url" == *"#issuecomment-"* ]]; then
       number="${url##*/}"
       number="${number%%#*}"
       cid="${url##*#issuecomment-}"

@@ -132,7 +132,8 @@
   for one discussion, or `--input <payload>`); exit 1 lists each offending comment
   and names its shape. **Prefer `--since` — it is the only mode that finds drift nobody suspected**,
   since `--issue` can only be aimed at a discussion someone already doubts. It reads every issue and PR
-  conversation touched since that instant in one paginated call.
+  conversation, inline review comment and PR review body touched since that instant; `--pr <n>` reads
+  all three for one pull request, and `--issue` reads only the conversation.
   The two are mutually exclusive, and the timestamp is a literal instant — the caller decides how far
   back "recent" reaches, because BSD and GNU `date` disagree on relative arithmetic.
   🔴 **On `--since`, read the findings, not the exit code.** A sweep's per-discussion history is

@@ -252,6 +252,26 @@ assert_log "the second repository reached the guard" yes "multi-second"
 assert_rc "two REAL repositories still exit 1" 1 "$RC"
 assert_contains "each repository is counted, not deduplicated" "2 real"
 
+printf '\n== exit 1: a bare @cursor review on a REVIEW surface is never re-checked away ==\n'
+# The carve-out rests on the comment before the trigger, which only the conversation
+# has. A review body or inline comment re-checked by its PR number would read only the
+# conversation, never find the review's own id there, and clear a real violation
+# (monorepo#3044). The issue-mode fixture is clean, so a re-check WOULD clear it.
+reset_stub
+{
+  finding undisclosed-trigger \
+    "https://github.com/o/r/pull/15#pullrequestreview-9000015" "@cursor review"
+  finding undisclosed-trigger \
+    "https://github.com/o/r/pull/15#discussion_r9000016" "@cursor review"
+} >"$scratch/stub/sweep.out"
+printf '1\n' >"$scratch/stub/sweep.rc"
+printf '0\n' >"$scratch/stub/issue.rc"
+run_sweep --since 2026-01-01T00:00:00Z --repo o/r
+assert_rc "a bare cursor trigger in a review stays REAL" 1 "$RC"
+assert_contains "the review body is reported" "REAL     https://github.com/o/r/pull/15#pullrequestreview-9000015"
+assert_contains "the inline comment is reported" "REAL     https://github.com/o/r/pull/15#discussion_r9000016"
+assert_log "no --issue re-verification was attempted for a review surface" no "--issue"
+
 printf '\n%d assertion(s), %d failure(s)\n' "$assertions" "$failures"
 [ "$failures" -eq 0 ] || exit 1
 printf 'disclosure-drift-sweep: OK\n'

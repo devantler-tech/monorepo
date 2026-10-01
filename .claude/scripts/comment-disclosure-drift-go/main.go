@@ -27,8 +27,9 @@
 //	UndisclosedTrigger   the first line opens a review-lane trigger and the body is
 //	                     not the one exempt bare trigger
 //	UndisclosedReviewVerdict  the first line opens a sha-bound agent review verdict
-//	                     (`Exact-head review for <40-hex sha>`), the shape agent REVIEW
-//	                     bodies take (monorepo#3457)
+//	                     (`Exact-head review for <40-hex sha>` or `Reviewed exact head
+//	                     <40-hex sha>`), the shapes agent REVIEW bodies take
+//	                     (monorepo#3457, monorepo#3044)
 //
 // All are first-line anchored because the maintainer QUOTES agent output when he
 // replies to it, and an unanchored scan reports his control-channel comment as the
@@ -140,9 +141,12 @@ var senderMarkerPattern = regexp.MustCompile(
 // with. It is anchored at the start of the FIRST line and deliberately does not look
 // inside a block quote: the maintainer quotes agent output when replying to it, and
 // a quoted verdict is his control channel, not the agent's. The full 40-character
-// commit id is the positive evidence; an abbreviated or over-long id is not.
+// commit id is the positive evidence; an abbreviated or over-long id is not. Two
+// openings are measured: `Exact-head review for <sha>` (monorepo#3457) and
+// `Reviewed exact head <sha>` (.github#161, monorepo#3044).
 var reviewVerdictPattern = regexp.MustCompile(
-	"^(?i:exact-head)[ \t]+(?:(?i:non-copilot)[ \t]+)?(?i:review)[ \t]+(?i:of|for)[ \t]+`?[0-9a-f]{40}(?:`|[^0-9A-Za-z]|$)")
+	"^(?:(?i:exact-head)[ \t]+(?:(?i:non-copilot)[ \t]+)?(?i:review)[ \t]+(?i:of|for)|(?i:reviewed)[ \t]+(?i:exact)[ \t]+(?i:head))" +
+		"[ \t]+`?[0-9a-f]{40}(?:`|[^0-9A-Za-z]|$)")
 
 // bareTriggerExemptBodies are the complete comment bodies that may carry no
 // disclosure at all, compared case-insensitively after trimming.

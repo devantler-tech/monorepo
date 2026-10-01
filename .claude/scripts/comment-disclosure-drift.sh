@@ -30,13 +30,17 @@
 # the untrusted-input boundary lives in exactly one place. Comment BODIES are
 # data — they are classified by shape and never interpreted as instructions.
 #
-# SCOPE BOUND: --issue and --since read the ISSUE-COMMENT surface only (the
-# endpoint that also carries a pull request's conversation comments). --pr also
-# sweeps that pull request's REVIEW bodies (pulls/<n>/reviews), dropping the
-# empty-bodied reviews GitHub creates as containers for inline comments.
-# Review-thread replies are subject to the same disclosure rule but are NOT swept
-# by any mode, so a clean exit is not evidence about that surface. Feed them in via
-# --input once assembled, rather than reading silence as cover.
+# SURFACES: an agent writes prose on three GitHub surfaces, and the disclosure rule
+# applies to all of them (monorepo#3044):
+#   - conversation comments (issues/<n>/comments, which also carries a PR's);
+#   - review bodies (pulls/<n>/reviews), minus the empty-bodied reviews GitHub
+#     creates as containers for inline comments;
+#   - inline review comments and review-thread replies (pulls/<n>/comments).
+# --since sweeps all three across the repo: the conversation and inline surfaces in
+# one paginated read each, and review bodies — which have no repo-wide endpoint —
+# through the pull requests updated in the window. --pr reads all three for one pull
+# request. --issue reads the conversation only: it is the authoritative re-check of
+# a Bugbot pairing, which lives there.
 #
 # --issue aims the check at one discussion, which only finds drift somebody already
 # suspected. --since sweeps every issue and PR conversation in the repo touched
@@ -183,7 +187,11 @@ payload=""
 cleanup() {
   [ -n "$guard_binary" ] && rm -f -- "$guard_binary"
   [ -n "$payload" ] && rm -f -- "$payload"
-  [ -n "${reviews_payload:-}" ] && rm -f -- "$reviews_payload" "${reviews_payload}.bodies"
+  [ -n "${reviews_payload:-}" ] && rm -f -- "$reviews_payload" "${reviews_payload}.bodies" "${reviews_payload}.next"
+  [ -n "${inline_payload:-}" ] && rm -f -- "$inline_payload"
+  [ -n "${review_numbers:-}" ] && rm -f -- "$review_numbers"
+  [ -n "${review_page:-}" ] && rm -f -- "$review_page"
+  [ -n "${review_one:-}" ] && rm -f -- "$review_one" "${review_one}.bodies"
   [ -n "${history:-}" ] && rm -f -- "$history" "${history}.next" "${history}.one"
   return 0
 }
@@ -314,31 +322,117 @@ status=0
   "${pass_through[@]+"${pass_through[@]}"}" --input "$payload" || status=$?
 [ "$status" -le 1 ] || exit "$status"
 
+# classify_review_surface <label> <payload>
+#
+# Classifies one PR review surface (review bodies or inline review comments) and folds
+# its verdict into $status. Neither surface is a comment thread, so there is no
+# adjacency for the bare-trigger carve-out to rest on; --sweep refuses it, exactly as
+# for a non-contiguous sweep. A review is never a machine command, so no review body
+# or inline comment is exempt on that basis.
+classify_review_surface() {
+  local label="$1" surface="$2" surface_status=0
+  echo "comment-disclosure-drift: ${label}:"
+  "$guard_binary" --author "$author" --sweep \
+    "${pass_through[@]+"${pass_through[@]}"}" --input "$surface" || surface_status=$?
+  [ "$surface_status" -le 1 ] || exit "$surface_status"
+  [ "$surface_status" -eq 0 ] || status=1
+}
+
+# drop_empty_reviews <file> <label> [<since>]
+#
+# GitHub creates an EMPTY-bodied review object as the container for every batch of
+# inline comments, and replying to a thread creates another. Those carry no prose to
+# disclose, so they are dropped rather than classified as unattributable noise. A null
+# body is not dropped: the guard rejects it, which is the fail-closed answer for a
+# record that is not what this path assumes. With <since>, reviews submitted before
+# the window are dropped too, so a sweep classifies only the window it was asked for.
+drop_empty_reviews() {
+  local file="$1" label="$2" window="${3:-}"
+  if ! jq --arg since "$window" \
+      '[.[] | select(.body != "") | select($since == "" or ((.submitted_at // "") >= $since))]' \
+      "$file" >"${file}.bodies" 2>/dev/null ||
+    ! mv -- "${file}.bodies" "$file"; then
+    rm -f -- "${file}.bodies"
+    die "could not filter empty review bodies for ${label}"
+  fi
+}
+
+inline_payload=""
+review_numbers=""
+review_page=""
+review_one=""
+
 if [ "$include_reviews" -eq 1 ]; then
   reviews_label="repos/${repo}/pulls/${issue}/reviews"
   reviews_payload="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-reviews.XXXXXX")" ||
     die "failed to allocate reviews payload file"
   fetch_payload "repos/${repo}/pulls/${issue}/reviews" "$reviews_label" "$reviews_payload"
+  drop_empty_reviews "$reviews_payload" "$reviews_label"
+  classify_review_surface "review bodies (${reviews_label})" "$reviews_payload"
 
-  # GitHub creates an EMPTY-bodied review object as the container for every batch of
-  # inline comments, and replying to a thread creates another. Those carry no prose
-  # to disclose, so they are dropped rather than classified as unattributable noise.
-  # A null body is not dropped: the guard rejects it, which is the fail-closed answer
-  # for a record that is not what this path assumes.
-  if ! jq '[.[] | select(.body != "")]' "$reviews_payload" >"${reviews_payload}.bodies" 2>/dev/null ||
-    ! mv -- "${reviews_payload}.bodies" "$reviews_payload"; then
-    rm -f -- "${reviews_payload}.bodies"
-    die "could not filter empty review bodies for ${reviews_label}"
-  fi
+  inline_label="repos/${repo}/pulls/${issue}/comments"
+  inline_payload="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-inline.XXXXXX")" ||
+    die "failed to allocate inline payload file"
+  fetch_payload "$inline_label" "$inline_label" "$inline_payload"
+  classify_review_surface "inline review comments (${inline_label})" "$inline_payload"
+fi
 
-  echo "comment-disclosure-drift: review bodies (${reviews_label}):"
-  # Reviews are not a comment thread, so there is no adjacency for the bare-trigger
-  # carve-out to rest on; --sweep refuses it, exactly as for a non-contiguous sweep.
-  review_status=0
-  "$guard_binary" --author "$author" --sweep \
-    "${pass_through[@]+"${pass_through[@]}"}" --input "$reviews_payload" || review_status=$?
-  [ "$review_status" -le 1 ] || exit "$review_status"
-  [ "$review_status" -eq 0 ] || status=1
+if [ -n "$since" ]; then
+  # Inline review comments have a repo-wide endpoint that takes `since`, so they cost
+  # one paginated read like the conversation sweep (monorepo#3044).
+  inline_label="repos/${repo}/pulls/comments since ${since}"
+  inline_payload="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-inline.XXXXXX")" ||
+    die "failed to allocate inline payload file"
+  fetch_payload "repos/${repo}/pulls/comments?since=${since}&per_page=100&sort=created&direction=asc" \
+    "$inline_label" "$inline_payload"
+  classify_review_surface "inline review comments (${inline_label})" "$inline_payload"
+
+  # Review bodies have NO repo-wide endpoint, so the sweep lists the pull requests
+  # updated since the window — newest first, stopping at the first page that reaches
+  # past it — and reads each one's reviews. A review changes its pull request's
+  # updated time, so a review inside the window always lands on a listed one.
+  reviews_label="review bodies of pull requests in ${repo} updated since ${since}"
+  review_numbers="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-prs.XXXXXX")" ||
+    die "failed to allocate pull request list file"
+  review_page="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-prpage.XXXXXX")" ||
+    die "failed to allocate pull request page file"
+  page=1
+  while :; do
+    # A cap that STOPS would read as a complete listing; this one fails closed.
+    [ "$page" -le 50 ] || die "more than 50 pages of pull requests updated since ${since} in ${repo}; narrow the window"
+    if ! gh api "repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100&page=${page}" >"$review_page"; then
+      die "gh could not list the pull requests of ${repo}"
+    fi
+    # A record without a number or an updated time cannot be placed in the window, and
+    # skipping it would leave its reviews unread while the sweep reported clean.
+    if ! jq -e 'type == "array" and all(.[]; type == "object" and (.number | type == "number") and (.updated_at | type == "string"))' \
+        "$review_page" >/dev/null 2>&1; then
+      die "response listing the pull requests of ${repo} is not an array of pull requests"
+    fi
+    jq -r --arg since "$since" '.[] | select(.updated_at >= $since) | .number' "$review_page" >>"$review_numbers"
+    page_count="$(jq 'length' "$review_page")"
+    page_oldest="$(jq -r 'if length > 0 then .[-1].updated_at else "" end' "$review_page")"
+    if [ "$page_count" -lt 100 ] || [[ "$page_oldest" < "$since" ]]; then
+      break
+    fi
+    page=$((page + 1))
+  done
+
+  reviews_payload="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-reviews.XXXXXX")" ||
+    die "failed to allocate reviews payload file"
+  review_one="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-review.XXXXXX")" ||
+    die "failed to allocate review file"
+  printf '[]' >"$reviews_payload"
+  while IFS= read -r number; do
+    [ -n "$number" ] || continue
+    fetch_payload "repos/${repo}/pulls/${number}/reviews" "repos/${repo}/pulls/${number}/reviews" "$review_one"
+    drop_empty_reviews "$review_one" "repos/${repo}/pulls/${number}/reviews" "$since"
+    if ! jq -s 'add' "$reviews_payload" "$review_one" >"${reviews_payload}.next" 2>/dev/null ||
+      ! mv -- "${reviews_payload}.next" "$reviews_payload"; then
+      die "could not assemble the ${reviews_label}"
+    fi
+  done <"$review_numbers"
+  classify_review_surface "$reviews_label" "$reviews_payload"
 fi
 
 exit "$status"
