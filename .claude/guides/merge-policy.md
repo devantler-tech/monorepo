@@ -784,6 +784,12 @@ Never infer it from the title alone. Qualifying PRs run through required CI and 
 request CodeRabbit, Codex, Cursor Bugbot, or a local review, chase ancillary reviewer output, or count
 a missing review as a hygiene gap. Their checks, threads, and conflict state still gate auto-merge.
 Any adaptation commit or out-of-bound file revokes the exemption and restores the normal review gate.
+A cask PR's `brew style --fix` autocorrect commits are **not** adaptations: the tap's
+`generator-bot` commit and KSail's own release-pipeline tidy-up are part of the programmed shape, and
+the classifier recognises each only by its exact author and committer identity and message, inside
+the same cask-file boundary. The tap bot's commit carries no resolvable GitHub login, so its login is
+passed as an empty string (the commit query in the classifier's usage header coalesces it); every
+other extra commit still sends the PR to review.
 
 🔴 **The exemption proves provenance, never ripeness: a cask PR's DRAFT state is the CD's release
 fence, and only the release clears it** (monorepo#2992). A product's CD opens its Homebrew-tap cask PR
