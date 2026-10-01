@@ -256,8 +256,8 @@ The surveyor reads this repo's `AGENTS.md` contract sections (*Portfolio map*, *
   *Autonomy → Local review round*; valid on any PR you may take over, including a sibling lane's,
   the maintainer's interactive and **our own bots'**, and never on an **external contributor's**). **`not-requested@<abbrev-head>`
   means every **total** review-output count on the PR is zero after checking all three surfaces
-  (any SHA — not merely zero current-head matches)** — request a first review; it is ordinary
-  post-auto-review-disabled state, not an outage. **`none` carries its evidence** — the **total**
+  (any SHA — not merely zero current-head matches)** — request a first review unless applicable
+  provider unavailability is verified; it is ordinary post-auto-review-disabled state, not an outage. **`none` carries its evidence** — the **total**
   review-output artifact counts the surveyor actually saw on the PR, **per lane**, plus the
   abbreviated head it matched against — so a real absence-of-current-head-green (artifacts exist,
   none match head) is distinguishable from a filter miss **and** from never-requested; a bare
@@ -474,8 +474,10 @@ result. **Then complete it with the per-lane review health yourself:** run
 digest (monorepo#2561). The surveyor cannot produce them — its read-only guard admits no program
 beyond the two classifiers it declares — and without them a review lane that is down everywhere still
 reads as many PRs that simply have no review yet. Act on them as the contract's review-lane rules say:
-stop requesting a `DOWN` lane, escalate a `MAINTAINER-ONLY` one, and read exit `2` as UNKNOWN, never
-as healthy. They are detection only; the *Local review round* still needs the direct per-PR check.
+verify current applicable unavailability, then stop requesting a `DOWN` lane, escalate a `MAINTAINER-ONLY` one, and read exit `2` as UNKNOWN, never
+as healthy. Their labels are discovery aids; verify the underlying provider evidence and its scope. The
+*Local review round* still needs the direct per-PR check for verdicts and findings. When every lane
+is currently unavailable, review locally immediately without waiting for quota resets.
 A `CR-DECLINED <repo>#<n>` line names a PR where CodeRabbit refuses our disclosed requests (#3124):
 skip CodeRabbit on that PR and go to the next lane.
 **About daily, also sweep for silent schedules** (monorepo#2928), tracked by a
@@ -738,8 +740,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**,
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
    force-push), **clear every threaded and non-thread review finding**, and **secure ≥1 green review at the
-   current head** — auto-review is disabled on ALL THREE reviewers, so requesting (and re-requesting after
-   every push) is your duty; the full request discipline (**one provider request at a time**, in
+   current head** — every push stales the verdict and requires a fresh substantive provider or local review; the full request discipline (**one provider request at a time**, in
    CodeRabbit > Codex > Cursor Bugbot order, and **stop on its first successful current-head review**;
    a reaction emoji earns a generous bounded wait for the substantive response, while no reaction
    means inspect or retry promptly; either wait is a watcher or one read, never a foreground loop (#3660); put the current-head request marker in the **same comment as the

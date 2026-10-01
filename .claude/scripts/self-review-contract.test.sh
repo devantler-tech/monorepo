@@ -56,6 +56,47 @@ grep -Fq 'having done it never counts toward this fallback' "${constitution}" ||
 # what blocks a finished PR. Before this, a rate limit that stated a retry window was explicitly NOT
 # a failed lane, so a throttle parked finished work indefinitely — which is what these assertions
 # stop from silently reverting.
+grep -Fq '**When all three lanes are currently unavailable, start the local review immediately.**' "${constitution}" ||
+  fail "confirmed provider unavailability does not require immediate local review (#3733)"
+grep -Fq 'Do not wait for quota resets' "${constitution}" ||
+  fail "a reset timer can still park a finished PR (#3733)"
+grep -Fq 'A new head or review round does not reset an ongoing applicable service limit' "${constitution}" ||
+  fail "a push still forces a doomed first request to an unavailable provider (#3733)"
+
+# Scope availability evidence separately from the PR's verdict/finding reads. Each
+# one-line ablation must fail for its own reason, so a guard cannot pass on other
+# sections mentioning similar review rules.
+fallback=$(sed -n '/^- \*\*Local review round/,/^- \*\*Incremental reviews/p' "${constitution}")
+check_fallback() {
+  local text=$1
+  grep -Fq 'start the local review immediately' <<<"${text}" || { echo immediate; return 1; }
+  grep -Fq 'Do not wait for quota resets' <<<"${text}" || { echo reset; return 1; }
+  grep -Fq 'Direct current-PR artifact reads remain mandatory before fallback' <<<"${text}" || { echo artifacts; return 1; }
+  grep -Fq 'A bare aggregate DOWN label is insufficient' <<<"${text}" || { echo aggregate; return 1; }
+  grep -Fq 'clean at a sha' <<<"${text}" || { echo head; return 1; }
+  grep -Fq "An EXTERNAL contributor's PR is the exception" <<<"${text}" || { echo external; return 1; }
+  if grep -Fq 'Wait-and-retrigger is still preferred' <<<"${text}"; then echo wait-preference; return 1; fi
+}
+check_fallback "${fallback}" >/dev/null || fail 'local fallback section lacks a required boundary (#3733)'
+for control in immediate reset artifacts aggregate head external; do
+  case ${control} in
+    immediate) phrase='start the local review immediately' ;;
+    reset) phrase='Do not wait for quota resets' ;;
+    artifacts) phrase='Direct current-PR artifact reads remain mandatory before fallback' ;;
+    aggregate) phrase='A bare aggregate DOWN label is insufficient' ;;
+    head) phrase='clean at a sha' ;;
+    external) phrase="An EXTERNAL contributor's PR is the exception" ;;
+  esac
+  altered=$(grep -Fv "${phrase}" <<<"${fallback}")
+  if diagnostic=$(check_fallback "${altered}"); then
+    fail "fallback negative control ${control} passed (#3733)"
+  fi
+  [ "${diagnostic}" = "${control}" ] || fail "fallback negative control ${control} failed for the wrong reason (#3733)"
+done
+if diagnostic=$(check_fallback "${fallback}"$'\nWait-and-retrigger is still preferred'); then
+  fail 'restored wait preference passed (#3733)'
+fi
+[ "${diagnostic}" = wait-preference ] || fail 'wait-preference control failed for the wrong reason (#3733)'
 grep -Fq '*including one that states a retry window*' "${constitution}" ||
   fail "a rate limit with a stated window no longer admits a local review round, so a throttle can park finished work"
 grep -Fq 'usage or spend limit' "${constitution}" ||
