@@ -421,12 +421,26 @@ for wiring in \
   '      - test-merge-confirmation-read|status job needs: entry (its absence stops the job gating the merge)' \
   '            ${{ needs.test-merge-confirmation-read.result }}|status job job-results entry'; do
   needle="${wiring%%|*}"; what="${wiring#*|}"
-  grep -Fqx -- "${needle}" "${workflow}" ||
+  # Each of these lines names this job, so it must occur EXACTLY once: a whole-file match is only
+  # sound while the needle is unique, and a duplicate would let a copy elsewhere satisfy it (#3050).
+  hits=$(grep -cFx -- "${needle}" "${workflow}" || true)
+  [ "${hits}" -ne 0 ] ||
     fail "ci.yaml is missing this job's ${what} — the guard would not gate"
+  [ "${hits}" -eq 1 ] ||
+    fail "ci.yaml carries this job's ${what} ${hits} times — a whole-file match cannot tell which copy it verified"
 done
 # the filter must cover every surface the scan discovers, or a change to an unlisted one skips the job
 # Both the discovery globs AND the three explicit trigger paths. Dropping `AGENTS.md` alone left the
 # control green while a merge-policy edit no longer ran the guard at all — the globs are not sufficient.
+# SCOPED TO THIS JOB'S FILTER BLOCK (#3050): these trigger lines are shared by many filters, so a
+# whole-file grep still passed with the entry deleted from THIS filter. The block runs from the
+# filter's key to the next line indented no deeper than that key.
+filter_block="$(awk '
+  $0 == "            merge-confirmation-read:" { f = 1; next }
+  f && $0 !~ /^ *$/ { match($0, /^ */); if (RLENGTH <= 12) exit }
+  f' "${workflow}")"
+[ -n "${filter_block}" ] ||
+  fail "could not locate the merge-confirmation-read paths-filter block in ci.yaml — its triggers cannot be verified"
 for trigger in \
   "              - 'AGENTS.md'" \
   "              - '.claude/**/*.md'" \
@@ -434,7 +448,7 @@ for trigger in \
   "              - '.claude/scripts/merge-confirmation-read.test.sh'" \
   "              - 'libraries/agent-plugins'" \
   "              - '.github/workflows/ci.yaml'"; do
-  grep -Fqx -- "${trigger}" "${workflow}" ||
+  grep -Fqx -- "${trigger}" <<<"${filter_block}" ||
     fail "ci.yaml filter is missing ${trigger# *} — an edit there would not run this guard"
 done
 # The job must initialise the submodule, or the scan above fails closed on every run. Assert the step

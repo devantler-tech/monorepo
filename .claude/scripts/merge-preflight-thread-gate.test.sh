@@ -452,8 +452,13 @@ for spec in \
   '      - test-merge-preflight-thread-gate|status job needs: entry (its absence stops the job gating the merge)' \
   '            ${{ needs.test-merge-preflight-thread-gate.result }}|status job job-results entry'; do
   line="${spec%%|*}"; what="${spec#*|}"
-  grep -qxF -- "${line}" "${workflow}" ||
+  # Each of these lines names this job, so it must occur EXACTLY once: a whole-file match is only
+  # sound while the needle is unique, and a duplicate would let a copy elsewhere satisfy it (#3050).
+  hits=$(grep -cxF -- "${line}" "${workflow}" || true)
+  [ "${hits}" -ne 0 ] ||
     fail "ci.yaml is missing this job's ${what} — the guard would not gate"
+  [ "${hits}" -eq 1 ] ||
+    fail "ci.yaml carries this job's ${what} ${hits} times — a whole-file match cannot tell which copy it verified"
 done
 
 # The scan of the pinned plugin definitions only happens if CI populates that submodule. Without the
@@ -470,6 +475,16 @@ grep -qF -- 'submodule update --init libraries/agent-plugins' <<<"${job_block}" 
   fail "this job does not initialise libraries/agent-plugins — the pinned plugin definitions could not be scanned"
 
 # The filter must cover every surface the scan discovers, or an edit to an unlisted one skips the job.
+#
+# SCOPED TO THIS JOB'S FILTER BLOCK (#3050). These trigger lines are shared — `- 'AGENTS.md'` sits in
+# ~28 filters — so a whole-file grep passed with the entry deleted from THIS filter. The block runs from
+# the filter's key to the next line indented no deeper than that key.
+filter_block=$(awk '
+  $0 == "            merge-preflight-thread-gate:" { f = 1; next }
+  f && $0 !~ /^ *$/ { match($0, /^ */); if (RLENGTH <= 12) exit }
+  f' "${workflow}")
+[ -n "${filter_block}" ] ||
+  fail "could not locate the merge-preflight-thread-gate paths-filter block in ci.yaml — its triggers cannot be verified"
 for trigger in \
   "              - 'AGENTS.md'" \
   "              - '.claude/**/*.md'" \
@@ -478,6 +493,6 @@ for trigger in \
   "              - 'libraries/agent-plugins'" \
   "              - '.gitmodules'" \
   "              - '.github/workflows/ci.yaml'"; do
-  grep -qxF -- "${trigger}" "${workflow}" ||
+  grep -qxF -- "${trigger}" <<<"${filter_block}" ||
     fail "ci.yaml filter is missing ${trigger# *} — an edit there would not run this guard"
 done
