@@ -704,6 +704,19 @@ review gate. Major-version
 bumps are included; difficulty changes the work, not ownership. If a merged dependency bump breaks
 `main`, repair that resulting breakage normally as well.
 
+🔴 **Never close a Dependabot PR to retrigger it — closing is not neutral.** Dependabot reads a close as
+"this update is not wanted" and answers *"OK, I won't notify you again about this release"*: it records
+an ignore for that release, and reopening a moment later does not withdraw it. The close/reopen also
+buys nothing: CodeQL **default setup** does not re-analyse on `pull_request: reopened` (measured
+2026-09-01 on `ksail#6814`: the unfiltered run listing at the head showed six retriggered repository
+workflows and zero new `dynamic/github-code-scanning/codeql` runs; monorepo#3137). For a stalled bot PR
+whose head carries a stale failed analysis, comment `@dependabot recreate`, which produces a genuinely
+fresh head. Recreate discards every commit on the branch, so it is the wrong lever only when the branch
+carries an agent-authored adaptation commit that must survive. A CI-generated `ksail-bot` sync commit is
+not such a commit: it is a reproducible pipeline artifact that the pipeline writes again on the new
+head (on 2026-09-01, 4 of the last 12 merged ksail Dependabot PRs carried one and merged normally). Close a Dependabot
+PR only when that release is genuinely unwanted, and record the reason on the PR.
+
 **Carve-out — trusted programmed bot PRs need NO review.** Two suite-owned paths are intentionally
 gated by required CI and auto-merge rather than an AI review:
 - **Programmed agent-skills updater PRs** (maintainer direction 2026-07-23): the shared
