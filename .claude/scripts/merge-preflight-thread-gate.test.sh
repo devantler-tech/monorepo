@@ -357,6 +357,26 @@ workflow="${repo_root}/.github/workflows/ci.yaml"
 [ -r "${workflow}" ] ||
   fail "ci.yaml is missing or unreadable at ${workflow} — this job's own wiring cannot be verified, so an OK here would be vacuous"
 
+# `.claude/worktrees` is PRUNED (monorepo#3037). The harness puts session worktrees there, and the
+# execution model nests each per-run worktree there too, so an unpruned walk scanned every other
+# session's checkout: 352 surfaces from a depth-1 worktree vs 261 from the nested one at the same
+# commit, and an offender on another session's branch could fail a correct tree.
+discover_claude_defs() {
+  find "$1/.claude" -path "$1/.claude/worktrees" -prune -o \
+    -type f \( -name '*.md' -o -name '*.json' \) -print 2>/dev/null
+}
+# Prove the prune on a fixture. CI's fresh checkout has no nested worktree, so a check on the real
+# scan alone could never see the prune go missing. The kept file is the positive control.
+prune_fixture="${self_test_dir}/prune"
+mkdir -p "${prune_fixture}/.claude/guides" "${prune_fixture}/.claude/worktrees/other/.claude"
+: >"${prune_fixture}/.claude/guides/kept.md"
+: >"${prune_fixture}/.claude/worktrees/other/.claude/nested.md"
+prune_out="$(discover_claude_defs "${prune_fixture}")"
+grep -qxF -- "${prune_fixture}/.claude/guides/kept.md" <<<"${prune_out}" ||
+  fail "the .claude walk did not find the fixture's own definition file — the prune self-test is vacuous"
+! grep -qF -- "${prune_fixture}/.claude/worktrees/" <<<"${prune_out}" ||
+  fail "the .claude walk descends into .claude/worktrees — it would judge other sessions' checkouts (monorepo#3037)"
+
 offenders=""
 scanned=0
 scanned_list=""
@@ -400,16 +420,10 @@ while IFS= read -r surface; do
 # silently matches nothing and the file reports its own fixtures as offenders. That was observed,
 # not predicted. `repo_root` is itself derived from this file location, so the constructed path is
 # exact rather than a basename guess.
-#
-# `.claude/worktrees` is PRUNED (monorepo#3037). The harness puts session worktrees there, and the
-# execution model nests each per-run worktree there too, so an unpruned walk scanned every other
-# session's checkout: 352 surfaces from a depth-1 worktree vs 261 from the nested one at the same
-# commit, and an offender on another session's branch could fail a correct tree.
 done < <(
   {
     printf '%s\n' "${repo_root}/AGENTS.md" "${workflow}"
-    find "${repo_root}/.claude" -path "${repo_root}/.claude/worktrees" -prune -o \
-      -type f \( -name '*.md' -o -name '*.json' \) -print 2>/dev/null
+    discover_claude_defs "${repo_root}"
     find "${repo_root}/.claude/scripts" -type f -name '*.sh' \
       ! -path "${repo_root}/.claude/scripts/${self_basename}" 2>/dev/null
     find "${plugin_defs}" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null
@@ -429,10 +443,6 @@ grep -qxF -- "${workflow}" <<<"${scanned_list}" ||
 # The self-exclusion above is one path; this refuses if it ever becomes the whole class. Without it,
 # a mistyped `find` or a widened `! -path` would silently scan no enforcement script at all and the
 # size check would still pass on the ~40 `.claude` Markdown files.
-nested_wt=$(printf '%s' "${scanned_list}" | grep -cF -- "${repo_root}/.claude/worktrees/" || true)
-[ "${nested_wt}" -eq 0 ] ||
-  fail "${nested_wt} scanned surface(s) lie under .claude/worktrees — another session's checkout is being judged (monorepo#3037)"
-
 other_scripts=$(printf '%s' "${scanned_list}" | grep -cE '\.claude/scripts/.*\.sh$' || true)
 [ "${other_scripts}" -gt 0 ] ||
   fail "no enforcement script under .claude/scripts was scanned — the self-exclusion has swallowed the whole surface class"
