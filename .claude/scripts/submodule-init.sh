@@ -32,9 +32,18 @@
 # move nested submodules; it validates every initialized nested checkout's pin, dirt, and isolation.
 set -euo pipefail
 
+# Exit codes follow the helper convention in `.claude/scripts/AGENTS.md` (monorepo#3627): `die` is a
+# FINDING (exit 1) — this tree is wrong, so repair it; `unknown` is UNKNOWN (exit 2) — a usage error,
+# an unreadable input or a failed read, so nothing was concluded and the caller should retry or look
+# closer. Both refuse the tree: neither is ever a pass.
 die() {
   printf 'submodule-init: %s\n' "$1" >&2
   exit 1
+}
+
+unknown() {
+  printf 'submodule-init: %s\n' "$1" >&2
+  exit 2
 }
 
 warn() { printf 'submodule-init: %s\n' "$1" >&2; }
@@ -158,11 +167,12 @@ repair() {
   # blast radius is the parent repo and every session sharing it (monorepo#2694).
   # No `|| true` and no silent fallback: `same_dir` fails closed on an empty path, which here would
   # SKIP the guard rather than trip it, so a failed probe must stop the run instead of quietly
-  # disabling the check. `errexit` covers a non-zero rev-parse; the emptiness test covers a
+  # disabling the check. A non-zero rev-parse is a failed read (UNKNOWN); so is a
   # zero-exit-no-output result.
-  super_mdir=$(git rev-parse --path-format=absolute --git-common-dir)
+  super_mdir=$(git rev-parse --path-format=absolute --git-common-dir) ||
+    unknown "cannot resolve the superproject's gitdir — refusing to repair '$path' rather than skip the parent-escape check"
   [ -n "$super_mdir" ] ||
-    die "cannot resolve the superproject's gitdir — refusing to repair '$path' rather than skip the parent-escape check"
+    unknown "cannot resolve the superproject's gitdir — refusing to repair '$path' rather than skip the parent-escape check"
   if same_dir "$mdir" "$super_mdir"; then
     die "'$path' resolves to the SUPERPROJECT's gitdir ('$mdir'), not its own — refusing to repair, because that would redirect the parent repository's checkout at '$path'. The directory has content but no usable '.git', so nothing here is a real submodule checkout: remove its stray contents, then re-run 'submodule-init.sh $path' to populate it at the pinned commit"
   fi
@@ -342,6 +352,46 @@ is_registered_submodule() {
   return 1
 }
 
+# Refuse path $1 for mode $2 when `is_registered_submodule` rejected it, naming WHERE it looked
+# (monorepo#3011). The script re-roots to the top level of the repository holding the CURRENT
+# directory, so run from inside a submodule it reads THAT repository's `.gitmodules`, and a path the
+# superproject does register reads as unregistered. Without the resolved root the refusal sends the
+# reader hunting for a typo in a correct path. Run from inside a submodule, nothing was shown to be
+# wrong — the helper was run from the wrong place — so that is a usage error (UNKNOWN, exit 2); at a
+# top-level repository the path really is not registered, a finding (exit 1).
+refuse_unregistered() {
+  local path=$1 mode=$2 root parent
+  root=$(pwd -P)
+  parent=$(git rev-parse --show-superproject-working-tree 2>/dev/null) ||
+    unknown "cannot tell whether '$root' is itself a submodule — refusing to $mode '$path'"
+  if [ -n "$parent" ]; then
+    unknown "'$path' is not a registered submodule in '$root/.gitmodules' — that repository is itself a submodule of '$parent'; run from there if the path is one of its submodules. Refusing to $mode"
+  fi
+  die "'$path' is not a registered submodule in '$root/.gitmodules' — refusing to $mode"
+}
+
+# `all_paths` runs inside a process substitution, whose exit status is discarded, so a `.gitmodules`
+# git cannot read would enumerate ZERO submodules and `--check` would report success without
+# examining any (Codex on #3724). Prove the enumeration once, before any mode relies on it:
+#   - an existing `.gitmodules` must be a readable regular file, and any `git config` status other
+#     than 0 (matches) or 1 (no match) is a failed read;
+#   - `git config` exits 1 for "no match" AND for a file it could not read (measured), so an EMPTY
+#     enumeration is accepted only against a positive control: the index records no gitlink. A
+#     missing, emptied, unreadable or redirected `.gitmodules` beside recorded submodules is UNKNOWN,
+#     whatever the spelling of the failure. Review kept finding new ways for the read to come back
+#     empty; checking the outcome against the index closes the class instead of each spelling.
+gitmodules_enumerable() {
+  local rc=0 stage
+  if [ -e .gitmodules ] || [ -L .gitmodules ]; then
+    [ -f .gitmodules ] && [ -r .gitmodules ] || return 1
+  fi
+  git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  [ "$rc" -eq 1 ] || return 1
+  stage=$(git ls-files --stage 2>/dev/null) || return 1
+  ! grep -q '^160000 ' <<<"$stage"
+}
+
 # Reduce a remote URL to a comparable form. Only for github.com, where the SSH and HTTPS namespaces
 # are known to name the same repository, do `https://`, `ssh://` and the scp-like `user@host:path`
 # form collapse to `github.com/owner/repo` (with the `.git` suffix dropped and the case-blind owner
@@ -482,7 +532,7 @@ init_repair_probe() {
   # submodule gitdir's `core.worktree` to point THERE — recreating the exact cross-session collision
   # this script exists to prevent. Validate against .gitmodules first and fail closed.
   is_registered_submodule "$path" ||
-    die "'$path' is not a registered submodule (see .gitmodules) — refusing to repair"
+    refuse_unregistered "$path" repair
 
   if is_populated "$path"; then
     # Already checked out here: only its isolation can be stale, so repair the stray `core.worktree`
@@ -516,14 +566,14 @@ init_repair_probe() {
     # the pinned files are not all here.
     local fresh_status
     fresh_status=$(git --no-replace-objects -C "$path" status --porcelain --untracked-files=no 2>/dev/null) ||
-      die "could not read the status of freshly populated '$path' — do not read or edit it"
+      unknown "could not read the status of freshly populated '$path' — do not read or edit it"
     [ -z "$fresh_status" ] ||
       die "'$path' is INCOMPLETE after 'git submodule update --init': its tracked files do not match the pinned commit — do not read or edit it"
     # `status` cannot see a tracked file hidden by skip-worktree or assume-unchanged, which is how a
     # sparse checkout leaves pinned files out. A fresh checkout at its pin has neither flag.
     local fresh_flags
     fresh_flags=$(git --no-replace-objects -C "$path" ls-files -v 2>/dev/null) ||
-      die "could not read the index flags of freshly populated '$path' — do not read or edit it"
+      unknown "could not read the index flags of freshly populated '$path' — do not read or edit it"
     if grep -q '^[a-zS]' <<< "$fresh_flags"; then
       die "'$path' is INCOMPLETE after 'git submodule update --init': tracked files are hidden by skip-worktree or assume-unchanged (a sparse checkout?) — do not read or edit it"
     fi
@@ -536,7 +586,7 @@ init_repair_probe() {
 advance() {
   local path=${1%/}
   is_registered_submodule "$path" ||
-    die "'$path' is not a registered submodule (see .gitmodules) — refusing to advance"
+    refuse_unregistered "$path" advance
 
   is_populated "$path" ||
     die "'$path' is not checked out here — run submodule-init.sh $path to populate it first"
@@ -551,7 +601,7 @@ advance() {
 
   local status
   status=$(git --no-replace-objects -C "$path" status --porcelain --untracked-files=all 2>/dev/null) ||
-    die "could not read status for '$path' — refusing to advance"
+    unknown "could not read status for '$path' — refusing to advance"
   if [ -n "$status" ]; then
     die "'$path' has a dirty working tree — commit, stash, or discard local changes before advancing"
   fi
@@ -560,17 +610,26 @@ advance() {
   # alone makes detaching unsafe: checkout can carry the invisible bytes onto the target pin.
   local idx_flags
   idx_flags=$(git --no-replace-objects -C "$path" ls-files -v 2>/dev/null) ||
-    die "could not read index flags for '$path' — refusing to advance"
+    unknown "could not read index flags for '$path' — refusing to advance"
   if grep -q '^[a-zS]' <<< "$idx_flags"; then
     die "'$path' has assume-unchanged/skip-worktree files — clear those index flags before advancing"
   fi
 
   local target head ahead nested_status post_status residue ordinary_residue
   # Superproject HEAD's gitlink for this path — the pin a pin-bump PR just moved.
+  # Tell an absent gitlink (a FINDING: .gitmodules registers the path, HEAD does not) from a failed
+  # read of HEAD's tree (UNKNOWN). `rev-parse HEAD:<path>` fails the same way for both.
+  local entry
+  entry=$(git --no-replace-objects ls-tree HEAD -- ":(literal)$path" 2>/dev/null) ||
+    unknown "could not read HEAD's tree to find the gitlink for '$path'"
+  case "$entry" in
+    160000\ commit\ *) ;;
+    *) die "no gitlink recorded for '$path' at HEAD, although .gitmodules registers it" ;;
+  esac
   target=$(git --no-replace-objects rev-parse "HEAD:$path" 2>/dev/null) ||
-    die "no gitlink recorded for '$path' at HEAD"
+    unknown "could not read the gitlink recorded for '$path' at HEAD"
   head=$(git --no-replace-objects -C "$path" rev-parse HEAD) ||
-    die "could not read HEAD of '$path'"
+    unknown "could not read HEAD of '$path'"
 
   if [ "$head" = "$target" ]; then
     warn "$path — already at recorded pin $target; validating checkout state"
@@ -582,13 +641,13 @@ advance() {
         git --no-replace-objects -C "$path" fetch --quiet origin 2>/dev/null ||
         true
       git --no-replace-objects -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null ||
-        die "recorded pin $target for '$path' is not available locally — fetch the submodule remote first"
+        unknown "recorded pin $target for '$path' is not available locally — fetch the submodule remote first"
     fi
 
     # Refuse when the checkout has commits that are not reachable from the new pin: advancing would
     # detach past them and look like a silent discard. Dirty trees are already refused above.
     ahead=$(git --no-replace-objects -C "$path" rev-list --count "${target}..HEAD" 2>/dev/null) ||
-      die "could not compare '$path' HEAD to recorded pin $target"
+      unknown "could not compare '$path' HEAD to recorded pin $target"
     if [ "$ahead" -gt 0 ]; then
       die "'$path' is $ahead commit(s) ahead of the recorded pin — push or otherwise preserve that work before advancing"
     fi
@@ -601,7 +660,7 @@ advance() {
     probe "$path" || die "advance left '$path' unisolated — do not edit it"
   fi
   nested_status=$(git --no-replace-objects -C "$path" submodule status --recursive 2>/dev/null) ||
-    die "could not verify nested submodules in '$path' — refusing to report a successful advance"
+    unknown "could not verify nested submodules in '$path' — refusing to report a successful advance"
   if grep -q '^[^ ]' <<< "$nested_status"; then
     die "nested submodule checkout does not match '$path' at $target — advance it separately before use"
   fi
@@ -609,7 +668,7 @@ advance() {
     die "nested submodule isolation is broken for '$path' — repair it from its parent before use"
   post_status=$(git --no-replace-objects -C "$path" status --porcelain \
     --untracked-files=all --ignore-submodules=none 2>/dev/null) ||
-    die "could not verify post-advance status for '$path' — refusing to report success"
+    unknown "could not verify post-advance status for '$path' — refusing to report success"
   if [ -n "$post_status" ]; then
     die "residual files after advancing '$path' to $target — preserve and handle them before use"
   fi
@@ -619,9 +678,9 @@ advance() {
   # reveal it. Comparing the probes distinguishes that hazardous residue from normal caches without
   # deleting either kind, both after a transition and on an already-at-pin retry.
   ordinary_residue=$(git --no-replace-objects -C "$path" clean -nfdx 2>/dev/null) ||
-    die "could not inspect ignored residue in '$path' — refusing to report success"
+    unknown "could not inspect ignored residue in '$path' — refusing to report success"
   residue=$(git --no-replace-objects -C "$path" clean -nffdx 2>/dev/null) ||
-    die "could not inspect embedded repository residue in '$path' — refusing to report success"
+    unknown "could not inspect embedded repository residue in '$path' — refusing to report success"
   if [ "$residue" != "$ordinary_residue" ]; then
     die "embedded repository residue after advancing '$path' to $target — preserve and handle it before use"
   fi
@@ -704,10 +763,10 @@ sync_from() {
   local from=$1 diff_file meta path old_mode new_mode st residue
   local -a changed=() added_paths=() removed_paths=() records=()
   from=$(git --no-replace-objects rev-parse --verify --quiet "${from}^{commit}") ||
-    die "'$1' is not a commit in this repository — pass the superproject HEAD from before the move"
+    unknown "'$1' is not a commit in this repository — pass the superproject HEAD from before the move"
   # NUL-terminated raw records: a path git would otherwise quote (non-ASCII, tabs, quotes) arrives
   # verbatim, so every check below looks at the real directory.
-  diff_file=$(mktemp) || die "could not create a temporary file — refusing to sync"
+  diff_file=$(mktemp) || unknown "could not create a temporary file — refusing to sync"
   sync_completed=0
   on_sync_exit() {
     local status=$?
@@ -719,7 +778,7 @@ sync_from() {
   }
   trap on_sync_exit EXIT
   if ! git --no-replace-objects diff-tree -z -r --no-renames --raw "$from" HEAD > "$diff_file"; then
-    die "could not diff $from..HEAD — refusing to sync"
+    unknown "could not diff $from..HEAD — refusing to sync"
   fi
   while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
     old_mode=${meta%% *}
@@ -760,7 +819,7 @@ sync_from() {
       cur_dir="${path%/*}"
       while [ "$cur_dir" != "$path" ] && [ -n "$cur_dir" ] && [ "$cur_dir" != "." ]; do
         if [ -e "$cur_dir" ] && { ! ls -A "$cur_dir" > /dev/null 2>&1 || { [ -d "$cur_dir" ] && [ ! -x "$cur_dir" ]; }; }; then
-          die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+          unknown "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
         fi
         if [ "$cur_dir" = "${cur_dir%/*}" ]; then
           break
@@ -773,7 +832,7 @@ sync_from() {
       # would inspect its target rather than the removed path.
       if [ ! -L "$path" ]; then
         if [ -e "$path" ] && { ! ls -A "$path" > /dev/null 2>&1 || { [ -d "$path" ] && [ ! -x "$path" ]; }; }; then
-          die "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+          unknown "cannot inspect '$path', which is no longer a submodule at HEAD — refusing to report it clean"
         fi
 
         # A dangling symlink at .git is missed by [ -e "$path/.git" ] and ignored by git status,
@@ -787,7 +846,7 @@ sync_from() {
       # beside the files of a tracked directory that replaced the gitlink.
       if ! residue=$(git --no-replace-objects status --porcelain --untracked-files=all --ignored \
         -- ":(literal)$path" 2>/dev/null); then
-        die "could not read the status of '$path', which is no longer a submodule at HEAD — refusing to report it clean"
+        unknown "could not read the status of '$path', which is no longer a submodule at HEAD — refusing to report it clean"
       fi
       if [ -n "$residue" ]; then
         die "'$path' is no longer a submodule at HEAD but still holds content HEAD does not track — preserve or remove it before evaluating this tree"
@@ -809,7 +868,7 @@ sync_from() {
   done < "$diff_file"
   for path in "${changed[@]+"${changed[@]}"}"; do
     st=$(git --no-replace-objects submodule status -- ":(literal)$path" 2>/dev/null) ||
-      die "could not read submodule status for '$path' after syncing"
+      unknown "could not read submodule status for '$path' after syncing"
     case "$st" in
       ' '*) ;;
       *) die "'$path' is not on HEAD's recorded pin after syncing ($st)" ;;
@@ -839,10 +898,13 @@ sync_from() {
 # execution model for agent runs), git puts each submodule's gitdir under
 # `.git/worktrees/<super-wt>/modules/<path>`, NOT under `.git/modules/<path>` — and that is where the
 # stray `core.worktree` lands too. Any assumed path is wrong exactly where this script matters most.
-super_root=$(git rev-parse --show-toplevel) || die 'not inside a git repository'
+super_root=$(git rev-parse --show-toplevel) || unknown 'not inside a git repository'
 cd "$super_root"
 
-[ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check | --advance <path> | --sync <from-sha>'
+[ $# -gt 0 ] || unknown 'usage: submodule-init.sh <submodule-path>... | --all | --check | --advance <path> | --sync <from-sha>'
+
+gitmodules_enumerable ||
+  unknown "cannot read '$super_root/.gitmodules' — refusing to report on submodules it may register"
 
 case "$1" in
   # NON-DESTRUCTIVE probe (see the header note): never touches content or other sessions' trees, but
@@ -858,11 +920,11 @@ case "$1" in
     while IFS= read -r -d '' path; do init_repair_probe "$path"; done < <(all_paths)
     ;;
   --advance)
-    [ $# -eq 2 ] || die 'usage: submodule-init.sh --advance <submodule-path>'
+    [ $# -eq 2 ] || unknown 'usage: submodule-init.sh --advance <submodule-path>'
     advance "$2"
     ;;
   --sync)
-    [ $# -eq 2 ] || die 'usage: submodule-init.sh --sync <from-sha>'
+    [ $# -eq 2 ] || unknown 'usage: submodule-init.sh --sync <from-sha>'
     sync_from "$2"
     ;;
   *)

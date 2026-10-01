@@ -93,7 +93,7 @@ git init -q "$collider"
 )
 git config -f "$c2/super/.git/modules/sub/config" core.worktree "$(abspath "$collider")"
 out="$(cd "$c2/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
-report "collision: --check exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+report "collision: --check exits 1, a finding (#3627)" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "$out"
 report "collision: reports ISOLATION BROKEN" \
   "$(grep -q 'ISOLATION BROKEN' <<<"$out" && echo yes || echo no)" "$out"
 report "collision: names the colliding checkout" \
@@ -1591,6 +1591,130 @@ c67_from="$(git -C "$c67/super" rev-parse HEAD)"
 out="$(cd "$c67/super" && "$helper" --sync "$c67_from" 2>&1)" && rc=0 || rc=$?
 report "sync: abort on dirty removed submodule preserves non-zero exit code" \
   "$([[ $rc -ne 0 ]] && grep -q "still holds content HEAD does not track" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# monorepo#3011 — an unregistered-path refusal names the repository whose `.gitmodules` it read.
+# Run from inside a submodule, the helper re-roots to THAT repository, so a path the superproject
+# registers reads as unregistered; the refusal must say where it looked and name the superproject.
+c68="$tmp/c68"
+mk_super "$c68"
+(cd "$c68/super" && git submodule update -q --init sub)
+c68_super="$(abspath "$c68/super")"
+c68_sub="$(abspath "$c68/super/sub")"
+out="$(cd "$c68/super/sub" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "#3011: run from inside a submodule, the refusal names that repository and its superproject, and exits 2 (usage)" \
+  "$([[ $rc -eq 2 ]] && grep -qF "in '$c68_sub/.gitmodules'" <<<"$out" &&
+    grep -qF "itself a submodule of '$c68_super'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+out="$(cd "$c68/super" && "$helper" no-such-sub 2>&1)" && rc=0 || rc=$?
+report "#3011: run from the superproject, the refusal names its .gitmodules and no parent" \
+  "$([[ $rc -eq 1 ]] && grep -qF "in '$c68_super/.gitmodules'" <<<"$out" &&
+    ! grep -q "itself a submodule" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+out="$(cd "$c68/super" && "$helper" --advance no-such-sub 2>&1)" && rc=0 || rc=$?
+report "#3011: --advance's unregistered-path refusal names the repository it read" \
+  "$([[ $rc -eq 1 ]] && grep -qF "in '$c68_super/.gitmodules'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# monorepo#3627 — exit 1 is a FINDING (the tree is wrong) and exit 2 is UNKNOWN (usage error or a
+# failed read), per `.claude/scripts/AGENTS.md`. One of each per mode; the findings above that assert
+# only "non-zero" are pinned to 1 here so a regression to a blanket exit cannot pass.
+c69="$tmp/c69"
+mk_super "$c69"
+git -C "$c69/super" submodule deinit -q -f sub
+c69_nogit="$tmp/c69-nogit"
+mkdir -p "$c69_nogit"
+# Optional EXPECT_TEXT: the case also requires that diagnostic, so an earlier refusal with the same
+# exit status cannot satisfy it ("prove a negative control fires for the right reason").
+exit_case() {
+  local name=$1 want=$2 dir=$3
+  shift 3
+  local got=0 text ok=no
+  text="$(cd "$dir" && "$helper" "$@" 2>&1)" || got=$?
+  if [[ $got -eq $want ]] && { [[ -z "${EXPECT_TEXT:-}" ]] || grep -qF -- "$EXPECT_TEXT" <<<"$text"; }; then ok=yes; fi
+  report "#3627: $name exits $want" "$ok" "rc=$got $text"
+}
+exit_case "no arguments (usage)" 2 "$c69/super"
+exit_case "outside any git repository" 2 "$c69_nogit" sub
+exit_case "init: unregistered path (finding)" 1 "$c69/super" no-such-sub
+exit_case "--advance with no path (usage)" 2 "$c69/super" --advance
+exit_case "--advance: unpopulated submodule (finding)" 1 "$c69/super" --advance sub
+exit_case "--sync with no commit (usage)" 2 "$c69/super" --sync
+exit_case "--sync: a from-sha that is not a commit (failed read)" 2 "$c69/super" --sync 0000000000000000000000000000000000000000
+exit_case "--check outside any git repository (failed read)" 2 "$c69_nogit" --check
+
+# Codex on #3724: a `.gitmodules` git cannot parse enumerated zero submodules, and `--check` exited 0
+# having examined none. Every mode must return UNKNOWN instead; so must an unreadable file, which
+# `git config` reports with the same exit 1 as "no submodules".
+c70="$tmp/c70"
+mk_super "$c70"
+printf '[submodule "sub"\n\tpath = sub\n' >"$c70/super/.gitmodules"
+exit_case "--check: a .gitmodules git cannot parse (failed read)" 2 "$c70/super" --check
+exit_case "--all: a .gitmodules git cannot parse (failed read)" 2 "$c70/super" --all
+exit_case "init: a .gitmodules git cannot parse (failed read)" 2 "$c70/super" sub
+if [[ "$(id -u)" -ne 0 ]]; then
+  git -C "$c70/super" checkout -q -- .gitmodules
+  chmod 000 "$c70/super/.gitmodules"
+  exit_case "--check: an unreadable .gitmodules (failed read)" 2 "$c70/super" --check
+  chmod 644 "$c70/super/.gitmodules"
+else
+  echo "NOTE: unreadable-.gitmodules case not run as root (root reads a mode-000 file)"
+fi
+# Codex on #3724: a tracked .gitmodules deleted from the working tree must not read as "no submodules",
+# whether the deletion is unstaged (the index still tracks it) or staged (HEAD still does).
+git -C "$c70/super" checkout -q -- .gitmodules
+rm "$c70/super/.gitmodules"
+exit_case "--check: a tracked .gitmodules missing from the working tree (failed read)" 2 "$c70/super" --check
+git -C "$c70/super" rm -q --cached .gitmodules
+exit_case "--check: a .gitmodules removed from the index but tracked at HEAD (failed read)" 2 "$c70/super" --check
+c72="$tmp/c72"
+git init -q "$c72"
+git -C "$c72" commit -q --allow-empty -m "no submodules"
+exit_case "--check: a repository that never had a .gitmodules" 0 "$c72" --check
+# Codex on #3724, round 4: a read that comes back EMPTY (git config exit 1) beside recorded submodules
+# is unproven whatever caused it (an emptied file here; an unreadable target or a redirected HEAD in
+# review). The positive control is the index: it still records the gitlink, so this is UNKNOWN.
+c74="$tmp/c74"
+mk_super "$c74"
+printf '# emptied\n' >"$c74/super/.gitmodules"
+exit_case "--check: .gitmodules registers nothing while the index records a gitlink (failed read)" 2 "$c74/super" --check
+exit_case "init: .gitmodules registers nothing while the index records a gitlink (failed read)" 2 "$c74/super" sub
+
+# Codex on #3724, round 4: a failed superproject lookup must not read as "top-level repository".
+c75_shim="$tmp/c75-shim"
+mkdir -p "$c75_shim"; c75_git="$(command -v git)"
+cat >"$c75_shim/git" <<EOF
+#!/usr/bin/env bash
+if [[ "\$*" == "rev-parse --show-superproject-working-tree" ]]; then exit 128; fi
+exec "$c75_git" "\$@"
+EOF
+chmod +x "$c75_shim/git"
+out="$(cd "$c69/super" && PATH="$c75_shim:$PATH" "$helper" no-such-sub 2>&1)" && rc=0 || rc=$?
+report "#3627: an unregistered path whose superproject lookup fails exits 2" \
+  "$([[ $rc -eq 2 ]] && grep -q "cannot tell whether" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# Codex on #3724: when repair cannot resolve the superproject's gitdir, errexit used to end the run
+# with git's own status (128). A shim fails exactly that read, so repair must report UNKNOWN (2).
+c73="$tmp/c73"
+mk_super "$c73"
+c73_shim="$tmp/c73-shim"
+mkdir -p "$c73_shim"
+c73_git="$(command -v git)"
+cat >"$c73_shim/git" <<EOF
+#!/usr/bin/env bash
+if [[ "\$*" == "rev-parse --path-format=absolute --git-common-dir" ]]; then exit 128; fi
+exec "$c73_git" "\$@"
+EOF
+chmod +x "$c73_shim/git"
+out="$(cd "$c73/super" && PATH="$c73_shim:$PATH" "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "#3627: repair: an unreadable superproject gitdir exits 2" \
+  "$([[ $rc -eq 2 ]] && grep -q "cannot resolve the superproject's gitdir" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# Codex on #3724: a registered, populated path whose gitlink HEAD no longer records is a confirmed
+# inconsistency (a finding, exit 1), not a failed read.
+c71="$tmp/c71"
+mk_super "$c71"
+(cd "$c71/super" && git rm -q --cached sub && git commit -q -m "drop the gitlink, keep the registration")
+EXPECT_TEXT="no gitlink recorded for 'sub' at HEAD" exit_case "--advance: registered path with no gitlink at HEAD (finding)" 1 "$c71/super" --advance sub
+out="$(cd "$c67/super" && "$helper" --sync "$c67_from" 2>&1)" && rc=0 || rc=$?
+report "#3627: --sync: residue in a removed submodule (finding) exits 1" \
+  "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc $out"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
