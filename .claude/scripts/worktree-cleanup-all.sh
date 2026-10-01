@@ -345,8 +345,14 @@ sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [
   # containing excluded repositories BEFORE those gates can enter them, in either lane.
   local scope_root=${wt_root:-$path/.claude/worktrees} registered candidate candidate_real
   if [ -d "$scope_root" ]; then
-    scope_root=$(cd "$scope_root" && pwd -P) || exit 2
-    registered=$(git -C "$path" worktree list --porcelain 2>/dev/null) || exit 2
+    scope_root=$(cd "$scope_root" && pwd -P) || {
+      if [ "$on_fail" = continue ]; then nested_failed "cannot resolve worktree root $scope_root"; return 0; fi
+      printf 'worktree-cleanup-all: ABORTING — cannot resolve worktree root %s\n' "$scope_root" >&2
+      exit 2; }
+    registered=$(git -C "$path" worktree list --porcelain 2>/dev/null) || {
+      if [ "$on_fail" = continue ]; then nested_failed "cannot list worktrees of $path"; return 0; fi
+      printf 'worktree-cleanup-all: ABORTING — cannot list worktrees of %s\n' "$path" >&2
+      exit 2; }
     while IFS= read -r candidate; do
       case "$candidate" in worktree\ *) candidate=${candidate#worktree } ;; *) continue ;; esac
       candidate_real=$(cd "$candidate" 2>/dev/null && pwd -P) || continue
