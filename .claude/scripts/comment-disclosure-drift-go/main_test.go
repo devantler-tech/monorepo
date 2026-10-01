@@ -1238,6 +1238,9 @@ func TestClassify_UndisclosedExactHeadReviewVerdictIsAViolation(t *testing.T) {
 		"Exact-head review for `" + sha + "`\n\n- finding\n",
 		"Exact-head non-Copilot review of `" + sha + "` found no blocking issues.\n",
 		"Exact-head non-Copilot review for `" + sha + "` found no blocking issues. More.\n",
+		// .github#161, the review monorepo#3044 measured.
+		"Reviewed exact head " + sha + ". The pinned blob is byte-identical.\n",
+		"Reviewed exact head `" + sha + "`: no findings.\n",
 	}
 	for _, body := range bodies {
 		if got := Classify(body); got != UndisclosedReviewVerdict {
@@ -1260,6 +1263,9 @@ func TestClassify_ReviewVerdictShapeNeedsLeadingPositionAndFullSha(t *testing.T)
 		"Exact-head review for " + sha + "0 is odd.\n",
 		"Please do an exact-head review for " + sha + ".\n",
 		"    Exact-head review for " + sha + "\n",
+		"> Reviewed exact head " + sha + ". Quoted by the maintainer.\n",
+		"Reviewed exact head ea434aa only.\n",
+		"I reviewed exact head " + sha + " myself.\n",
 	}
 	for _, body := range notEvidence {
 		if got := Classify(body); got.violating() {
