@@ -214,6 +214,7 @@ jobs:
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
             worktree-cleanup:
+              - 'AGENTS.md'
               - '.claude/scripts/worktree-claim-lib.sh'
               - '.claude/scripts/worktree-cleanup.sh'
               - '.claude/scripts/worktree-cleanup-all.sh'

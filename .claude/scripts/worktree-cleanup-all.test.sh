@@ -34,7 +34,7 @@ make_root() {
   git -C "$root/repo/nested" commit -qm base
   git -C "$root/repo/nested" remote add origin "$root/sub.git"
   git -C "$root/repo/nested" push -q origin main
-  printf '[submodule "nested"]\n\tpath = nested\n\turl = %s\n' "$root/sub.git" \
+  printf '[submodule "nested"]\n\tpath = nested\n\turl = %s\n' https://github.com/devantler-tech/ksail.git \
     > "$root/repo/.gitmodules"
   # Register it as a REAL gitlink (mode 160000). The orchestrator requires this: a
   # .gitmodules entry alone can name an ordinary nested repository, which is not a
@@ -60,21 +60,22 @@ make_root() {
 # and holds a linked worktree `inner` of that submodule's repository. `unpushed` gives
 # `inner` a commit no remote has. Both are aged past every threshold.
 add_session_with_nested() {
-  local root=$1 state=$2 sess="$1/repo/.claude/worktrees/sess"
-  local inner="$sess/nested/.claude/worktrees/inner"
-  git -C "$root/repo" worktree add -q -b claude/sess "$sess" main || return 1
-  git -C "$root/repo" push -q origin claude/sess || return 1
+  local root=$1 state=$2 lane=${3:-claude} sess="$1/repo/.${3:-claude}/worktrees/sess"
+  local inner="$sess/nested/.$lane/worktrees/inner"
+  git -C "$root/repo" worktree add -q -b "$lane/sess" "$sess" main || return 1
+  git -C "$root/repo" push -q origin "$lane/sess" || return 1
+  git -C "$sess" config submodule.nested.url "$root/sub.git"
   git -C "$sess" -c protocol.file.allow=always submodule update --init -q nested >/dev/null 2>&1 \
     || return 1
   [ -d "$(git -C "$sess" rev-parse --absolute-git-dir)/modules/nested" ] || return 1
   git -C "$sess/nested" config user.email t@t.t && git -C "$sess/nested" config user.name t
-  mkdir -p "$sess/nested/.claude/worktrees"
-  git -C "$sess/nested" worktree add -q -b claude/inner "$inner" HEAD || return 1
+  mkdir -p "$sess/nested/.$lane/worktrees"
+  git -C "$sess/nested" worktree add -q -b "$lane/inner" "$inner" HEAD || return 1
   if [ "$state" = unpushed ]; then
     echo local > "$inner/h" && git -C "$inner" add h && git -C "$inner" commit -qm "local only" \
       || return 1
   else
-    git -C "$sess/nested" push -q origin claude/inner || return 1
+    git -C "$sess/nested" push -q origin "$lane/inner" || return 1
   fi
   touch -t 202001010000 "$inner" "$sess"
 }
@@ -177,11 +178,11 @@ t_nested_listing_failure_exits_non_zero() {
   local shim="$root/git-shim" real_git out rc
   real_git=$(command -v git)
   mkdir -p "$shim"
-  # Fail only `git -C <…/sess> submodule foreach`; every other git call passes through.
+  # Fail the parent metadata listing; every other git call passes through.
   cat > "$shim/git" <<EOF
 #!/usr/bin/env bash
 if [ "\${1:-}" = -C ] && [ "\${2:-}" = '$root/repo/.claude/worktrees/sess' ] \\
-   && [ "\${3:-}" = submodule ] && [ "\${4:-}" = foreach ]; then
+   && [ "\${3:-}" = config ]; then
   exit 128
 fi
 exec '$real_git' "\$@"
@@ -315,9 +316,12 @@ t_nested_pass_covers_submodule_session_worktrees() {
          && git -C "$root/deepsrc" -c user.email=t@t.t -c user.name=t commit -qm base \
          && git clone -q --bare "$root/deepsrc" "$root/deep.git" \
          && git -C "$nested" -c protocol.file.allow=always submodule add -q "$root/deep.git" deep >/dev/null 2>&1 \
+         && git -C "$nested" config -f .gitmodules submodule.deep.url https://github.com/devantler-tech/platform.git \
+         && git -C "$nested" add .gitmodules \
          && git -C "$nested" commit -qm "add deep" && git -C "$nested" push -q origin main \
          && git -C "$nested" worktree add -q -b claude/nsess "$nsess" main \
          && git -C "$nested" push -q origin claude/nsess \
+         && git -C "$nsess" config submodule.deep.url "$root/deep.git" \
          && git -C "$nsess" -c protocol.file.allow=always submodule update --init -q deep >/dev/null 2>&1 \
          && mkdir -p "$nsess/deep/.claude/worktrees" \
          && git -C "$nsess/deep" worktree add -q -b claude/inner2 "$inner2" HEAD \
@@ -399,7 +403,7 @@ t_nested_pass_refuses_symlinked_and_escaping_submodules() {
   local root; root=$(make_root)
   add_session_with_nested "$root" pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local sess="$root/repo/.claude/worktrees/sess" ext="$root/ext"
-  local sentinel="$root/ext/.claude/worktrees/extinner" shim="$root/git-shim" real_git out rc
+  local sentinel="$root/ext/.claude/worktrees/extinner" out rc
   if ! { git init -q --bare "$root/ext.git" && git init -q -b main "$ext" \
          && echo e > "$ext/e" && git -C "$ext" add e \
          && git -C "$ext" -c user.email=t@t.t -c user.name=t commit -qm base \
@@ -411,20 +415,11 @@ t_nested_pass_refuses_symlinked_and_escaping_submodules() {
     bad "$name" "FIXTURE"; rm -rf "$root"; return
   fi
   touch -t 202001010000 "$sentinel"
-  real_git=$(command -v git)
-  mkdir -p "$shim"
-  # List only the two hostile paths for the session's submodules; pass everything else.
-  cat > "$shim/git" <<EOF
-#!/usr/bin/env bash
-if [ "\${1:-}" = -C ] && [ "\${2:-}" = '$sess' ] \\
-   && [ "\${3:-}" = submodule ] && [ "\${4:-}" = foreach ]; then
-  printf '%s\n' '$sess/link' '$sess/../../../../ext'
-  exit 0
-fi
-exec '$real_git' "\$@"
-EOF
-  chmod +x "$shim/git"
-  out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+  git -C "$sess" config -f .gitmodules submodule.link.path link
+  git -C "$sess" config -f .gitmodules submodule.link.url https://github.com/devantler-tech/ksail.git
+  git -C "$sess" config -f .gitmodules submodule.escape.path ../../../../ext
+  git -C "$sess" config -f .gitmodules submodule.escape.url https://github.com/devantler-tech/ksail.git
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
         bash "$SUT" apply 24 2>&1); rc=$?
   if [ "$rc" -eq 0 ] && [ -d "$sentinel" ] \
      && [ "$(git -C "$ext" worktree list --porcelain | grep -c '^worktree ')" -eq 2 ] \
@@ -649,8 +644,8 @@ t_gitlink_validation_uses_a_literal_pathspec() {
   local root; root=$(make_root)
   # Point .gitmodules at a metacharacter path that glob-matches the real gitlink, and
   # make that literal path a real (non-submodule) repository with a spent worktree.
-  printf '[submodule "x"]\n\tpath = nested[12]\n\turl = %s\n' "$root/sub.git" \
-    > "$root/repo/.gitmodules"
+  printf '[submodule "x"]\n\tpath = nested[12]\n\turl = %s\n' https://github.com/devantler-tech/ksail.git \
+    >> "$root/repo/.gitmodules"
   git init -q -b main "$root/repo/nested[12]"
   git -C "$root/repo/nested[12]" config user.email t@t.t
   git -C "$root/repo/nested[12]" config user.name t
@@ -906,7 +901,109 @@ $out2"
   rm -rf "$root"
 }
 
+t_excluded_submodule_is_never_probed() {
+  # #3723: a real gitlink and a populated checkout do not grant portfolio membership.
+  # Removing the eligibility check must expose a Git probe in BOTH modes and lanes.
+  local mode lane root shim real_git out rc url=${1:-https://github.com/fixture-excluded/fixture.git}
+  for mode in dry-run apply; do
+    for lane in claude codex; do
+      root=$(make_root)
+      add_codex_wts "$root" || { bad "excluded submodule fixture" "FIXTURE"; rm -rf "$root"; return; }
+      git -C "$root/repo" config -f .gitmodules submodule.nested.url \
+        "$url"
+      shim="$root/git-shim"; mkdir -p "$shim"
+      real_git=$(command -v git)
+      cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = '$root/repo/nested' ]; then
+  printf 'excluded repository probe\\n' >> '$root/forbidden-probes'
+  exit 99
+fi
+exec '$real_git' "\$@"
+EOF
+      chmod +x "$shim/git"
+      out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+        bash "$SUT" "$mode" 24 --lane "$lane" 2>&1); rc=$?
+      if [ "$rc" -eq 0 ] && [ ! -e "$root/forbidden-probes" ] \
+         && [ -d "$root/repo/nested/.claude/worktrees/spent-sub" ] \
+         && [ -d "$root/repo/nested/.codex/worktrees/codex-sub" ]; then
+        ok "excluded submodule is never probed ($mode, $lane)"
+      else
+        bad "excluded submodule is never probed ($mode, $lane)" \
+          "rc=$rc forbidden=$([ -e "$root/forbidden-probes" ] && echo yes || echo no) $out"
+      fi
+      rm -rf "$root"
+    done
+  done
+}
+
+t_excluded_nested_submodule_retains_parent() {
+  local mode lane root sess shim out rc real_git metadata=${1:-excluded} expected=0
+  [ "$metadata" != missing ] || expected=2
+  for mode in dry-run apply; do
+    for lane in claude codex; do
+      root=$(make_root)
+      add_session_with_nested "$root" pushed "$lane" || {
+        bad "excluded nested fixture" "FIXTURE"; rm -rf "$root"; return; }
+      sess="$root/repo/.$lane/worktrees/sess"
+      if [ "$metadata" = missing ]; then git -C "$sess" rm -q -- .gitmodules
+      else
+        git -C "$sess" config -f .gitmodules submodule.nested.url https://github.com/fixture-excluded/fixture.git
+        git -C "$sess" add .gitmodules
+      fi
+      git -C "$sess" commit -qm "exclude nested"
+      git -C "$sess" push -q origin "$lane/sess"
+      touch -t 202001010000 "$sess"
+      shim="$root/git-shim"; mkdir -p "$shim"; real_git=$(command -v git)
+      cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ]; then
+  case "\${2:-}" in '$sess/nested'|'$sess/nested/'*)
+    printf 'child probe\n' >> '$root/forbidden-probes'; exit 99 ;;
+  esac
+  if [ "\${2:-}" = '$sess' ]; then
+    case "\${3:-}" in status|submodule)
+      printf 'recursive parent probe\n' >> '$root/forbidden-probes'; exit 99 ;;
+    esac
+  fi
+fi
+exec '$real_git' "\$@"
+EOF
+      chmod +x "$shim/git"
+      out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+        bash "$SUT" "$mode" 24 --lane "$lane" 2>&1); rc=$?
+      if [ "$rc" -eq "$expected" ] && [ ! -e "$root/forbidden-probes" ] \
+         && [ -d "$sess/nested/.$lane/worktrees/inner" ]; then
+        ok "$metadata nested repository retains its parent without probes ($mode, $lane)"
+      else
+        bad "$metadata nested repository retains its parent without probes ($mode, $lane)" "rc=$rc $out"
+      fi
+      rm -rf "$root"
+    done
+  done
+}
+
+t_unknown_submodule_eligibility_fails_closed() {
+  local mode root out rc
+  for mode in dry-run apply; do
+    root=$(make_root)
+    git -C "$root/repo" config -f .gitmodules --unset submodule.nested.url
+    out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" "$mode" 24 2>&1); rc=$?
+    if [ "$rc" -eq 2 ] && [ -d "$root/repo/nested/.claude/worktrees/spent-sub" ] \
+       && grep -q 'unknown submodule eligibility' <<< "$out"; then
+      ok "unknown eligibility fails closed ($mode)"
+    else bad "unknown eligibility fails closed ($mode)" "rc=$rc $out"; fi
+    rm -rf "$root"
+  done
+}
+
 printf 'worktree-cleanup-all.sh contract tests\n'
+t_excluded_submodule_is_never_probed
+t_excluded_submodule_is_never_probed https://github.com/devantler-tech/fixture-unmapped.git
+t_excluded_submodule_is_never_probed https://github.com/devantler-tech/reusable-workflows.git
+t_excluded_nested_submodule_retains_parent
+t_excluded_nested_submodule_retains_parent missing
+t_unknown_submodule_eligibility_fails_closed
 t_sweeps_root_and_submodules
 t_rewrites_session_worktree_root
 t_skips_uninitialised_submodule
