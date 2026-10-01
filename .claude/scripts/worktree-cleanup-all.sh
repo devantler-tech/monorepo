@@ -80,6 +80,104 @@ case "$LANE" in
   *) printf "worktree-cleanup-all: invalid --lane '%s' (expected 'claude' or 'codex')\n" "$LANE" >&2; exit 2 ;;
 esac
 
+# Resolve the reviewed consumer's portfolio before visiting any submodule checkout.
+# Reading parent metadata is allowed; Git commands inside an excluded child are not.
+PORTFOLIO_CONTRACT="$SCRIPT_DIR/../../AGENTS.md"
+PORTFOLIO_REPOS=$(awk '
+  /^## Portfolio map$/ { in_map=1; found=1; next }
+  in_map && /^## / { in_map=0 }
+  in_map && /^\|/ {
+    n=split($0, col, "|")
+    if (n >= 4 && col[3] ~ /`devantler-tech\//) {
+      repo=col[3]; sub(/^.*`devantler-tech\//, "", repo)
+      sub(/`.*$/, "", repo); print repo
+    }
+  }
+  END { if (!found) exit 2 }
+' "$PORTFOLIO_CONTRACT" 2>/dev/null); portfolio_rc=$?
+if [ "$portfolio_rc" -ne 0 ] || [ -z "$PORTFOLIO_REPOS" ]; then
+  printf 'worktree-cleanup-all: cannot resolve the reviewed Portfolio map\n' >&2
+  exit 2
+fi
+
+# 0: mapped portfolio URL; 1: known exclusion; 2: unknown metadata.
+portfolio_url_state() {
+  local url=$1 slug owner repo
+  case "$url" in
+    https://github.com/*) slug=${url#https://github.com/} ;;
+    git@github.com:*) slug=${url#git@github.com:} ;;
+    *) return 2 ;;
+  esac
+  slug=${slug%.git}
+  case "$slug" in
+    */*) owner=${slug%%/*}; repo=${slug#*/} ;;
+    *) return 2 ;;
+  esac
+  case "$owner" in ''|*[!a-zA-Z0-9_.-]*) return 2 ;; esac
+  case "$repo" in
+    ''|*[!a-zA-Z0-9_.-]*) return 2 ;;
+  esac
+  [ "$owner" = devantler-tech ] || return 1
+  while IFS= read -r slug; do
+    [ "$repo" = "$slug" ] && return 0
+  done <<< "$PORTFOLIO_REPOS"
+  return 1
+}
+
+# Collect only eligible paths in ELIGIBLE. 'submodule foreach' enters every populated child
+# before its owner can be checked, so recursive discovery uses parent metadata.
+eligible_submodules() {
+  local parent=$1 recursive=$2 retain=${3:-$1} raw get_rc probe probe_rc record key sub url url_rc state
+  local child real stage stage_rc
+  [ -f "$parent/.gitmodules" ] || return 0
+  raw=$(git -C "$parent" config -f "$parent/.gitmodules" \
+    --get-regexp '^submodule\..*\.path$' 2>/dev/null); get_rc=$?
+  probe=$(git -C "$parent" config -f "$parent/.gitmodules" --list 2>/dev/null); probe_rc=$?
+  if [ "$probe_rc" -ne 0 ] || { [ "$get_rc" -ne 0 ] && [ -n "$probe" ]; }; then
+    printf 'worktree-cleanup-all: cannot list its submodules — .gitmodules is unreadable or malformed\n' >&2
+    return 2
+  fi
+  while IFS= read -r record; do
+    [ -n "$record" ] || continue
+    key=${record%% *}; sub=${record#* }
+    url=$(git -C "$parent" config -f "$parent/.gitmodules" --get-all "${key%.path}.url" 2>/dev/null); url_rc=$?
+    if [ "$url_rc" -ne 0 ] || [ "$(printf '%s\n' "$url" | grep -c .)" -ne 1 ]; then
+      printf 'worktree-cleanup-all: unknown submodule eligibility (missing or ambiguous URL)\n' >&2
+      return 2
+    fi
+    portfolio_url_state "$url"; state=$?
+    case "$state" in
+      1) printf '### SKIP %s (outside the reviewed Portfolio map)\n' "$sub" >&2
+         [ "$recursive" -eq 0 ] || retain_parent "$retain"
+         continue ;;
+      2) printf 'worktree-cleanup-all: unknown submodule eligibility (unrecognized URL)\n' >&2; return 2 ;;
+    esac
+    child="$parent/$sub"
+    if [ "$recursive" -eq 0 ]; then ELIGIBLE="${ELIGIBLE}$child"$'\n'; continue; fi
+    [ -e "$child" ] || continue
+    if [ -L "$child" ]; then
+      printf '### SKIP %s (submodule path is a symlink — refusing to follow it)\n' "$sub" >&2
+      continue
+    fi
+    real=$(cd "$child" 2>/dev/null && pwd -P) || return 2
+    case "$real" in
+      "$parent"/?*) ;;
+      *) printf '### SKIP %s (escapes its session worktree)\n' "$sub" >&2; continue ;;
+    esac
+    stage=$(git -C "$parent" ls-files --stage -- ":(literal)$sub" 2>/dev/null); stage_rc=$?
+    [ "$stage_rc" -eq 0 ] || return 2
+    if [ "$(printf '%s\n' "$stage" | grep -c .)" -ne 1 ] ||
+      [ "$(printf '%s' "$stage" | cut -f2-)" != "$sub" ] ||
+      [ "$(printf '%s' "$stage" | cut -c1-6)" != 160000 ]; then
+      printf '### SKIP %s (not a gitlink in the index — not a portfolio submodule)\n' "$sub" >&2
+      continue
+    fi
+    ELIGIBLE="${ELIGIBLE}$real"$'\n'
+    eligible_submodules "$real" 1 "$retain" || return 2
+  done <<< "$raw"
+  return 0
+}
+
 # Repo root. WORKTREE_CLEANUP_ROOT lets the script run from outside the checkout
 # (the scheduled launcher does exactly that); otherwise it is two levels up from
 # .claude/scripts.
@@ -211,6 +309,23 @@ sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [
   fi
   if [ -n "$wt_root" ]; then printf '\n### %s  [%s]\n' "$rel" "$wt_root"
   else printf '\n### %s\n' "$rel"; fi
+  # The per-repository cleanliness gates inspect descendants. Retain candidates
+  # containing excluded repositories BEFORE those gates can enter them, in either lane.
+  local scope_root=${wt_root:-$path/.claude/worktrees} registered candidate candidate_real
+  if [ -d "$scope_root" ]; then
+    scope_root=$(cd "$scope_root" && pwd -P) || exit 2
+    registered=$(git -C "$path" worktree list --porcelain 2>/dev/null) || exit 2
+    while IFS= read -r candidate; do
+      case "$candidate" in worktree\ *) candidate=${candidate#worktree } ;; *) continue ;; esac
+      candidate_real=$(cd "$candidate" 2>/dev/null && pwd -P) || continue
+      case "$candidate_real" in "$scope_root"/?*) ;; *) continue ;; esac
+      ELIGIBLE=""
+      if ! eligible_submodules "$candidate_real" 1; then
+        retain_parent "$candidate_real"
+        nested_failed "unknown submodule eligibility in a cleanup candidate"
+      fi
+    done <<< "$registered"
+  fi
   # Capture the sweep's OWN status, not the pipeline's tail. An infrastructure abort
   # (lsof, worktree list, manifest write) must not be reported as a successful sweep by
   # the scheduled entrypoint — and must stop the run rather than continuing into the
@@ -358,17 +473,15 @@ sweep_nested_submodule_worktrees() {
         "${wt_real#"$ROOT"/}"
       continue
     fi
-    # Populated submodules only, recursively. A session worktree whose submodules cannot be
-    # listed is not swept here; the repo's own gates still keep it, so nothing is deleted on
-    # the strength of a listing that failed.
-    # shellcheck disable=SC2016  # $toplevel and $sm_path are expanded by `submodule foreach`
-    if ! subs=$(git -C "$wt_real" submodule foreach --quiet --recursive \
-                  'printf "%s\n" "$toplevel/$sm_path"' 2>/dev/null); then
+    # Scope each child from parent metadata before entering its checkout.
+    ELIGIBLE=""
+    if ! eligible_submodules "$wt_real" 1; then
       printf '\n### SKIP %s (cannot list its submodules)\n' "${wt_real#"$ROOT"/}"
       retain_parent "$wt_real"
       nested_failed "cannot list the submodules of ${wt_real#"$ROOT"/}"
       continue
     fi
+    subs=$ELIGIBLE
     while IFS= read -r sub; do
       [ -n "$sub" ] || continue
       [ -d "$sub/.claude/worktrees" ] || continue
@@ -447,33 +560,17 @@ sweep_lane() {
 
 sweep_lane "$ROOT"
 
-# Every submodule, from .gitmodules (never a hard-coded list — the portfolio gains and
-# loses submodules over time).
-# The read is status-checked: an unreadable .gitmodules yields an empty list, which is
-# indistinguishable from "no submodules", and would silently degrade this to a
-# root-only sweep while still reporting success. `cut -d' ' -f2-` (not `awk '{print $2}'`)
-# so a submodule path containing whitespace is not truncated.
-if [ -f "$ROOT/.gitmodules" ]; then
-  # Two distinct statuses, checked INDEPENDENTLY. `--get-regexp` exits nonzero both when
-  # the file is unparseable AND when it simply matches nothing, so it cannot distinguish
-  # them alone. The probe below settles it — but its own status must be captured too:
-  # on a malformed .gitmodules BOTH commands fail and produce no output, and testing
-  # only the probe's emptiness would read that as "no submodules" and silently degrade
-  # the scheduled sweep to the root repository.
-  raw=$(git -C "$ROOT" config -f "$ROOT/.gitmodules" \
-          --get-regexp '^submodule\..*\.path$' 2>/dev/null); get_rc=$?
-  probe=$(git -C "$ROOT" config -f "$ROOT/.gitmodules" --list 2>/dev/null); probe_rc=$?
-  if [ "$probe_rc" -ne 0 ]; then
-    printf 'worktree-cleanup-all: ABORTING — .gitmodules is unreadable or malformed\n' >&2
-    exit 2
-  fi
-  if [ "$get_rc" -ne 0 ] && [ -n "$probe" ]; then
-    printf 'worktree-cleanup-all: ABORTING — cannot read submodule paths from .gitmodules\n' >&2
-    exit 2
-  fi
-  submodules=$(printf '%s\n' "$raw" | cut -d' ' -f2-)
+# Scope every child before checking its checkout or invoking the per-repository sweep.
+ELIGIBLE=""
+if ! eligible_submodules "$ROOT" 0; then
+  printf "worktree-cleanup-all: ABORTING — submodule eligibility is unknown\n" >&2
+  exit 2
+fi
+submodules=$ELIGIBLE
+if [ -n "$submodules" ]; then
   while IFS= read -r sub; do
     [ -n "$sub" ] || continue
+    sub=${sub#"$ROOT"/}
     # .gitmodules is repository content, and the config parser happily accepts a path
     # like `../outside`. Concatenating that escapes ROOT, and if the resulting location
     # is another repository with .claude/worktrees the scheduled apply run would reap
