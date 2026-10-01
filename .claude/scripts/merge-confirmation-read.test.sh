@@ -358,9 +358,26 @@ done)"
   fail "the plugin definition worktree bytes are not the pinned blobs, so the scan would inspect
   unreviewed content while revision, status and index flags all read clean:
 ${byte_mismatch}"
+# `.claude/worktrees` is pruned (monorepo#3037): it holds the session and per-run worktrees, so an
+# unpruned walk scans other sessions' checkouts and the surface set depends on where the test runs.
+discover_claude_defs() {
+  find "$1/.claude" -path "$1/.claude/worktrees" -prune -o \
+    -type f \( -name '*.md' -o -name '*.json' \) -print 2>/dev/null
+}
+# Prove the prune on a fixture. CI's fresh checkout has no nested worktree, so a check on the real
+# scan alone could never see the prune go missing. The kept file is the positive control.
+prune_fixture="${self_test_dir}/prune"
+mkdir -p "${prune_fixture}/.claude/guides" "${prune_fixture}/.claude/worktrees/other/.claude"
+: >"${prune_fixture}/.claude/guides/kept.md"
+: >"${prune_fixture}/.claude/worktrees/other/.claude/nested.md"
+prune_out="$(discover_claude_defs "${prune_fixture}")"
+grep -qxF -- "${prune_fixture}/.claude/guides/kept.md" <<<"${prune_out}" ||
+  fail "the .claude walk did not find the fixture's own definition file — the prune self-test is vacuous"
+! grep -qF -- "${prune_fixture}/.claude/worktrees/" <<<"${prune_out}" ||
+  fail "the .claude walk descends into .claude/worktrees — it would judge other sessions' checkouts (monorepo#3037)"
 scan_surfaces="$(
   printf '%s\n' "${repo_root}/AGENTS.md"
-  find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null | sort
+  discover_claude_defs "${repo_root}" | sort
   find "${plugin_root}" -type f \( -name '*.md' -o -name '*.json' \) | sort
 )"
 plugin_surfaces="$(printf '%s\n' "${scan_surfaces}" | grep -c "^${plugin_root}/" || true)"
