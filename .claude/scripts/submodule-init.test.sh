@@ -1664,6 +1664,27 @@ c72="$tmp/c72"
 git init -q "$c72"
 git -C "$c72" commit -q --allow-empty -m "no submodules"
 exit_case "--check: a repository that never had a .gitmodules" 0 "$c72" --check
+# Codex on #3724, round 4: a read that comes back EMPTY (git config exit 1) beside recorded submodules
+# is unproven whatever caused it (an emptied file here; an unreadable target or a redirected HEAD in
+# review). The positive control is the index: it still records the gitlink, so this is UNKNOWN.
+c74="$tmp/c74"
+mk_super "$c74"
+printf '# emptied\n' >"$c74/super/.gitmodules"
+exit_case "--check: .gitmodules registers nothing while the index records a gitlink (failed read)" 2 "$c74/super" --check
+exit_case "init: .gitmodules registers nothing while the index records a gitlink (failed read)" 2 "$c74/super" sub
+
+# Codex on #3724, round 4: a failed superproject lookup must not read as "top-level repository".
+c75_shim="$tmp/c75-shim"
+mkdir -p "$c75_shim"; c75_git="$(command -v git)"
+cat >"$c75_shim/git" <<EOF
+#!/usr/bin/env bash
+if [[ "\$*" == "rev-parse --show-superproject-working-tree" ]]; then exit 128; fi
+exec "$c75_git" "\$@"
+EOF
+chmod +x "$c75_shim/git"
+out="$(cd "$c69/super" && PATH="$c75_shim:$PATH" "$helper" no-such-sub 2>&1)" && rc=0 || rc=$?
+report "#3627: an unregistered path whose superproject lookup fails exits 2" \
+  "$([[ $rc -eq 2 ]] && grep -q "cannot tell whether" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 # Codex on #3724: when repair cannot resolve the superproject's gitdir, errexit used to end the run
 # with git's own status (128). A shim fails exactly that read, so repair must report UNKNOWN (2).
