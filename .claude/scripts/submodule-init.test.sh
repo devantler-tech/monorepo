@@ -1653,6 +1653,34 @@ if [[ "$(id -u)" -ne 0 ]]; then
 else
   echo "NOTE: unreadable-.gitmodules case not run as root (root reads a mode-000 file)"
 fi
+# Codex on #3724: a tracked .gitmodules deleted from the working tree must not read as "no submodules",
+# whether the deletion is unstaged (the index still tracks it) or staged (HEAD still does).
+git -C "$c70/super" checkout -q -- .gitmodules
+rm "$c70/super/.gitmodules"
+exit_case "--check: a tracked .gitmodules missing from the working tree (failed read)" 2 "$c70/super" --check
+git -C "$c70/super" rm -q --cached .gitmodules
+exit_case "--check: a .gitmodules removed from the index but tracked at HEAD (failed read)" 2 "$c70/super" --check
+c72="$tmp/c72"
+git init -q "$c72"
+git -C "$c72" commit -q --allow-empty -m "no submodules"
+exit_case "--check: a repository that never had a .gitmodules" 0 "$c72" --check
+
+# Codex on #3724: when repair cannot resolve the superproject's gitdir, errexit used to end the run
+# with git's own status (128). A shim fails exactly that read, so repair must report UNKNOWN (2).
+c73="$tmp/c73"
+mk_super "$c73"
+c73_shim="$tmp/c73-shim"
+mkdir -p "$c73_shim"
+c73_git="$(command -v git)"
+cat >"$c73_shim/git" <<EOF
+#!/usr/bin/env bash
+if [[ "\$*" == "rev-parse --path-format=absolute --git-common-dir" ]]; then exit 128; fi
+exec "$c73_git" "\$@"
+EOF
+chmod +x "$c73_shim/git"
+out="$(cd "$c73/super" && PATH="$c73_shim:$PATH" "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "#3627: repair: an unreadable superproject gitdir exits 2" \
+  "$([[ $rc -eq 2 ]] && grep -q "cannot resolve the superproject's gitdir" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 # Codex on #3724: a registered, populated path whose gitlink HEAD no longer records is a confirmed
 # inconsistency (a finding, exit 1), not a failed read.

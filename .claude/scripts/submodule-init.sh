@@ -167,9 +167,10 @@ repair() {
   # blast radius is the parent repo and every session sharing it (monorepo#2694).
   # No `|| true` and no silent fallback: `same_dir` fails closed on an empty path, which here would
   # SKIP the guard rather than trip it, so a failed probe must stop the run instead of quietly
-  # disabling the check. `errexit` covers a non-zero rev-parse; the emptiness test covers a
+  # disabling the check. A non-zero rev-parse is a failed read (UNKNOWN); so is a
   # zero-exit-no-output result.
-  super_mdir=$(git rev-parse --path-format=absolute --git-common-dir)
+  super_mdir=$(git rev-parse --path-format=absolute --git-common-dir) ||
+    unknown "cannot resolve the superproject's gitdir — refusing to repair '$path' rather than skip the parent-escape check"
   [ -n "$super_mdir" ] ||
     unknown "cannot resolve the superproject's gitdir — refusing to repair '$path' rather than skip the parent-escape check"
   if same_dir "$mdir" "$super_mdir"; then
@@ -372,11 +373,20 @@ refuse_unregistered() {
 # git cannot parse would enumerate ZERO submodules and `--check` would report success without
 # examining any (Codex on #3724). Prove the file is enumerable once, before any mode reads it. `git
 # config --get-regexp` exits 1 for "no match" AND for an unreadable file (measured), so an existing
-# file must also be a readable regular file; every other non-zero status is a failed read.
+# file must also be a readable regular file; every other non-zero status is a failed read. An ABSENT
+# file is "no submodules" only when neither the index nor HEAD tracks one: a tracked `.gitmodules`
+# deleted from the working tree would otherwise enumerate zero submodules too (Codex on #3724).
 gitmodules_enumerable() {
-  local rc=0
+  local rc=0 tracked
   if [ -e .gitmodules ] || [ -L .gitmodules ]; then
     [ -f .gitmodules ] && [ -r .gitmodules ] || return 1
+  else
+    tracked=$(git ls-files --cached -- ':(literal).gitmodules' 2>/dev/null) || return 1
+    [ -z "$tracked" ] || return 1
+    if git rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+      tracked=$(git ls-tree --name-only HEAD -- ':(literal).gitmodules' 2>/dev/null) || return 1
+      [ -z "$tracked" ] || return 1
+    fi
   fi
   git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]
