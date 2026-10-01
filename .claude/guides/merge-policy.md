@@ -815,3 +815,12 @@ on exit **0** (`RIPE`): the release is published, carries every asset the cask i
 pinned `sha256` equals the digest GitHub records for that asset. On exit **1** keep the draft and park
 the PR on the release; on exit **2** keep the draft and report it UNKNOWN. The CD run's conclusion is
 not the test: a published release can sit behind a CD run reported `cancelled`.
+
+**Ripeness belongs to a head, not to the PR.** The CD reuses one `goreleaser/<name>` branch, so the
+next release force-pushes a newer, possibly still-draft version into a cask PR that is already
+promoted. On 2026-10-01 this happened twice: `homebrew-tap#1767` was promoted RIPE at v7.198.8 and
+again at v7.198.9, and each time it moved to an unpublished version before it merged. So merge in
+the same sitting as the promotion, pinned to the exact head you judged RIPE
+(`--match-head-commit`). If the head moved first, the earlier verdict no longer applies: judge the
+new head again, and if it is not RIPE, convert the PR back to a draft and say which release it is
+waiting on.
