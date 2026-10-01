@@ -645,7 +645,7 @@ t_gitlink_validation_uses_a_literal_pathspec() {
   # Point .gitmodules at a metacharacter path that glob-matches the real gitlink, and
   # make that literal path a real (non-submodule) repository with a spent worktree.
   printf '[submodule "x"]\n\tpath = nested[12]\n\turl = %s\n' https://github.com/devantler-tech/ksail.git \
-    > "$root/repo/.gitmodules"
+    >> "$root/repo/.gitmodules"
   git init -q -b main "$root/repo/nested[12]"
   git -C "$root/repo/nested[12]" config user.email t@t.t
   git -C "$root/repo/nested[12]" config user.name t
@@ -904,13 +904,13 @@ $out2"
 t_excluded_submodule_is_never_probed() {
   # #3723: a real gitlink and a populated checkout do not grant portfolio membership.
   # Removing the eligibility check must expose a Git probe in BOTH modes and lanes.
-  local mode lane root shim real_git out rc
+  local mode lane root shim real_git out rc url=${1:-https://github.com/fixture-excluded/fixture.git}
   for mode in dry-run apply; do
     for lane in claude codex; do
       root=$(make_root)
       add_codex_wts "$root" || { bad "excluded submodule fixture" "FIXTURE"; rm -rf "$root"; return; }
       git -C "$root/repo" config -f .gitmodules submodule.nested.url \
-        https://github.com/fixture-excluded/fixture.git
+        "$url"
       shim="$root/git-shim"; mkdir -p "$shim"
       real_git=$(command -v git)
       cat > "$shim/git" <<EOF
@@ -938,15 +938,19 @@ EOF
 }
 
 t_excluded_nested_submodule_retains_parent() {
-  local mode lane root sess shim out rc real_git
+  local mode lane root sess shim out rc real_git metadata=${1:-excluded} expected=0
+  [ "$metadata" != missing ] || expected=2
   for mode in dry-run apply; do
     for lane in claude codex; do
       root=$(make_root)
       add_session_with_nested "$root" pushed "$lane" || {
         bad "excluded nested fixture" "FIXTURE"; rm -rf "$root"; return; }
       sess="$root/repo/.$lane/worktrees/sess"
-      git -C "$sess" config -f .gitmodules submodule.nested.url https://github.com/fixture-excluded/fixture.git
-      git -C "$sess" add .gitmodules
+      if [ "$metadata" = missing ]; then git -C "$sess" rm -q -- .gitmodules
+      else
+        git -C "$sess" config -f .gitmodules submodule.nested.url https://github.com/fixture-excluded/fixture.git
+        git -C "$sess" add .gitmodules
+      fi
       git -C "$sess" commit -qm "exclude nested"
       git -C "$sess" push -q origin "$lane/sess"
       touch -t 202001010000 "$sess"
@@ -968,11 +972,11 @@ EOF
       chmod +x "$shim/git"
       out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
         bash "$SUT" "$mode" 24 --lane "$lane" 2>&1); rc=$?
-      if [ "$rc" -eq 0 ] && [ ! -e "$root/forbidden-probes" ] \
+      if [ "$rc" -eq "$expected" ] && [ ! -e "$root/forbidden-probes" ] \
          && [ -d "$sess/nested/.$lane/worktrees/inner" ]; then
-        ok "excluded nested repository retains its parent without probes ($mode, $lane)"
+        ok "$metadata nested repository retains its parent without probes ($mode, $lane)"
       else
-        bad "excluded nested repository retains its parent without probes ($mode, $lane)" "rc=$rc $out"
+        bad "$metadata nested repository retains its parent without probes ($mode, $lane)" "rc=$rc $out"
       fi
       rm -rf "$root"
     done
@@ -995,7 +999,10 @@ t_unknown_submodule_eligibility_fails_closed() {
 
 printf 'worktree-cleanup-all.sh contract tests\n'
 t_excluded_submodule_is_never_probed
+t_excluded_submodule_is_never_probed https://github.com/devantler-tech/fixture-unmapped.git
+t_excluded_submodule_is_never_probed https://github.com/devantler-tech/reusable-workflows.git
 t_excluded_nested_submodule_retains_parent
+t_excluded_nested_submodule_retains_parent missing
 t_unknown_submodule_eligibility_fails_closed
 t_sweeps_root_and_submodules
 t_rewrites_session_worktree_root

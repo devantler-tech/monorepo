@@ -88,8 +88,9 @@ PORTFOLIO_REPOS=$(awk '
   in_map && /^## / { in_map=0 }
   in_map && /^\|/ {
     n=split($0, col, "|")
-    if (n >= 4 && col[3] ~ /`devantler-tech\//) {
-      repo=col[3]; sub(/^.*`devantler-tech\//, "", repo)
+    if (n >= 4 && col[3] ~ /^[[:space:]]*`devantler-tech\// &&
+        index(col[3], "**archived ") == 0) {
+      repo=col[3]; sub(/^[[:space:]]*`devantler-tech\//, "", repo)
       sub(/`.*$/, "", repo); print repo
     }
   }
@@ -128,8 +129,23 @@ portfolio_url_state() {
 # before its owner can be checked, so recursive discovery uses parent metadata.
 eligible_submodules() {
   local parent=$1 recursive=$2 retain=${3:-$1} raw get_rc probe probe_rc record key sub url url_rc state
-  local child real stage stage_rc
-  [ -f "$parent/.gitmodules" ] || return 0
+  local child real stage stage_rc index entry indexed_path matches
+  index=$(git -C "$parent" -c core.quotePath=false ls-files --stage 2>/dev/null) || {
+    printf 'worktree-cleanup-all: unknown submodule eligibility (cannot read the index)\n' >&2
+    return 2
+  }
+  if [ -L "$parent/.gitmodules" ] ||
+     { [ -e "$parent/.gitmodules" ] && [ ! -f "$parent/.gitmodules" ]; }; then
+    printf 'worktree-cleanup-all: unknown submodule eligibility (unsafe metadata file)\n' >&2
+    return 2
+  fi
+  if [ ! -f "$parent/.gitmodules" ]; then
+    if grep -q '^160000 ' <<< "$index"; then
+      printf 'worktree-cleanup-all: unknown submodule eligibility (gitlinks lack metadata)\n' >&2
+      return 2
+    fi
+    return 0
+  fi
   raw=$(git -C "$parent" config -f "$parent/.gitmodules" \
     --get-regexp '^submodule\..*\.path$' 2>/dev/null); get_rc=$?
   probe=$(git -C "$parent" config -f "$parent/.gitmodules" --list 2>/dev/null); probe_rc=$?
@@ -137,6 +153,19 @@ eligible_submodules() {
     printf 'worktree-cleanup-all: cannot list its submodules — .gitmodules is unreadable or malformed\n' >&2
     return 2
   fi
+  # Git's recursive status gates use the index too. Every gitlink needs exactly
+  # one metadata entry before any child may be visited, even after metadata deletion.
+  while IFS= read -r entry; do
+    case "$entry" in 160000\ *) ;; *) continue ;; esac
+    indexed_path=${entry#*$'\t'}; matches=0
+    while IFS= read -r record; do
+      [ "${record#* }" != "$indexed_path" ] || matches=$((matches + 1))
+    done <<< "$raw"
+    if [ "$matches" -ne 1 ]; then
+      printf 'worktree-cleanup-all: unknown submodule eligibility (missing or ambiguous path metadata)\n' >&2
+      return 2
+    fi
+  done <<< "$index"
   while IFS= read -r record; do
     [ -n "$record" ] || continue
     key=${record%% *}; sub=${record#* }
@@ -159,6 +188,9 @@ eligible_submodules() {
       printf '### SKIP %s (submodule path is a symlink — refusing to follow it)\n' "$sub" >&2
       continue
     fi
+    # An unpopulated submodule is an empty directory. Git would resolve its index
+    # from the parent, so do not recurse until the child has its own repository.
+    [ -e "$child/.git" ] || continue
     real=$(cd "$child" 2>/dev/null && pwd -P) || return 2
     case "$real" in
       "$parent"/?*) ;;
