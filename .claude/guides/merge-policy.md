@@ -819,8 +819,10 @@ not the test: a published release can sit behind a CD run reported `cancelled`.
 **Ripeness belongs to a head, not to the PR.** The CD reuses one `goreleaser/<name>` branch, so the
 next release force-pushes a newer, possibly still-draft version into a cask PR that is already
 promoted. On 2026-10-01 this happened twice: `homebrew-tap#1767` was promoted RIPE at v7.198.8 and
-again at v7.198.9, and each time it moved to an unpublished version before it merged. So merge in
-the same sitting as the promotion, pinned to the exact head you judged RIPE
-(`--match-head-commit`). If the head moved first, the earlier verdict no longer applies: judge the
-new head again, and if it is not RIPE, convert the PR back to a draft and say which release it is
-waiting on.
+again at v7.198.9, and each time it moved to an unpublished version before it merged. So a cask PR
+is the exception to "qualifying PRs run through auto-merge" above: **never arm `--auto` on it**,
+because the head pin then guards only the arming and a later force-push would merge a head nobody
+judged. Merge in the same sitting as the promotion: wait for the required checks to settle, then
+merge directly, pinned to the exact head you judged RIPE (`--match-head-commit <sha>`). If the head
+moved first, the earlier verdict no longer applies: judge the new head again, and if it is not RIPE,
+convert the PR back to a draft and say which release it is waiting on.
