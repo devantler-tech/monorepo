@@ -1620,12 +1620,15 @@ mk_super "$c69"
 git -C "$c69/super" submodule deinit -q -f sub
 c69_nogit="$tmp/c69-nogit"
 mkdir -p "$c69_nogit"
+# Optional EXPECT_TEXT: the case also requires that diagnostic, so an earlier refusal with the same
+# exit status cannot satisfy it ("prove a negative control fires for the right reason").
 exit_case() {
   local name=$1 want=$2 dir=$3
   shift 3
-  local got=0 text
+  local got=0 text ok=no
   text="$(cd "$dir" && "$helper" "$@" 2>&1)" || got=$?
-  report "#3627: $name exits $want" "$([[ $got -eq $want ]] && echo yes || echo no)" "rc=$got $text"
+  if [[ $got -eq $want ]] && { [[ -z "${EXPECT_TEXT:-}" ]] || grep -qF -- "$EXPECT_TEXT" <<<"$text"; }; then ok=yes; fi
+  report "#3627: $name exits $want" "$ok" "rc=$got $text"
 }
 exit_case "no arguments (usage)" 2 "$c69/super"
 exit_case "outside any git repository" 2 "$c69_nogit" sub
@@ -1708,7 +1711,7 @@ report "#3627: repair: an unreadable superproject gitdir exits 2" \
 c71="$tmp/c71"
 mk_super "$c71"
 (cd "$c71/super" && git rm -q --cached sub && git commit -q -m "drop the gitlink, keep the registration")
-exit_case "--advance: registered path with no gitlink at HEAD (finding)" 1 "$c71/super" --advance sub
+EXPECT_TEXT="no gitlink recorded for 'sub' at HEAD" exit_case "--advance: registered path with no gitlink at HEAD (finding)" 1 "$c71/super" --advance sub
 out="$(cd "$c67/super" && "$helper" --sync "$c67_from" 2>&1)" && rc=0 || rc=$?
 report "#3627: --sync: residue in a removed submodule (finding) exits 1" \
   "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc $out"
