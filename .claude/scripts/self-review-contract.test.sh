@@ -69,6 +69,8 @@ grep -Fq 'A new head or review round does not reset an ongoing applicable servic
 fallback=$(sed -n '/^- \*\*Local review round/,/^- \*\*Incremental reviews/p' "${constitution}")
 check_fallback() {
   local text=$1
+  grep -Eq '^- \*\*Local review round' <<<"${text}" || { echo boundary-start; return 1; }
+  grep -Eq '^- \*\*Incremental reviews' <<<"${text}" || { echo boundary-end; return 1; }
   grep -Fq 'start the local review immediately' <<<"${text}" || { echo immediate; return 1; }
   grep -Fq 'Do not wait for quota resets' <<<"${text}" || { echo reset; return 1; }
   grep -Fq 'Direct current-PR artifact reads remain mandatory before fallback' <<<"${text}" || { echo artifacts; return 1; }
@@ -78,8 +80,10 @@ check_fallback() {
   if grep -Fq 'Wait-and-retrigger is still preferred' <<<"${text}"; then echo wait-preference; return 1; fi
 }
 check_fallback "${fallback}" >/dev/null || fail 'local fallback section lacks a required boundary (#3733)'
-for control in immediate reset artifacts aggregate head external; do
+for control in boundary-start boundary-end immediate reset artifacts aggregate head external; do
   case ${control} in
+    boundary-start) phrase='- **Local review round' ;;
+    boundary-end) phrase='- **Incremental reviews' ;;
     immediate) phrase='start the local review immediately' ;;
     reset) phrase='Do not wait for quota resets' ;;
     artifacts) phrase='Direct current-PR artifact reads remain mandatory before fallback' ;;
@@ -87,7 +91,7 @@ for control in immediate reset artifacts aggregate head external; do
     head) phrase='clean at a sha' ;;
     external) phrase="An EXTERNAL contributor's PR is the exception" ;;
   esac
-  altered=$(grep -Fv "${phrase}" <<<"${fallback}")
+  altered=$(grep -Fv -- "${phrase}" <<<"${fallback}")
   if diagnostic=$(check_fallback "${altered}"); then
     fail "fallback negative control ${control} passed (#3733)"
   fi
