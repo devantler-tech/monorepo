@@ -27,9 +27,11 @@
 # and advance it to the next lane. Only the maintainer can remove the learning (CodeRabbit app,
 # Learnings). Without this line every run rediscovers the refusal by spending a request there.
 #
-# DETECTION ONLY. A DOWN line is the cue to escalate a maintainer-only limit and to stop spending
-# requests on that lane. It is NOT admissible evidence for the Local review round fallback, which
-# AGENTS.md requires to rest on a direct per-PR check of all three lanes at the current head.
+# DETECTION ONLY. First verify current applicable unavailability, then stop requesting a DOWN lane
+# and escalate a maintainer-only limit. Labels are discovery aids, never fallback evidence on their own. Freshly
+# verify the underlying authenticated provider evidence, scope and reset/recovery condition. The
+# Local review round still requires direct current-PR reads for all verdicts and findings; verified
+# applicable unavailability across all three lanes permits immediate fallback without quota waits.
 #
 # Usage:
 #   review-lane-health.sh [--org ORG] [--since YYYY-MM-DD] [--limit N] [--stale-hours N] [--now EPOCH]

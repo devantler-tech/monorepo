@@ -275,9 +275,10 @@ the account and that **an admin must raise the limit in the Cursor dashboard**. 
   [`.claude/scripts/review-lane-health.sh`](../scripts/review-lane-health.sh) once per run
   before requesting reviews. It prints one `LANE-HEALTH` line per lane: `OK`, `LIMITED` (a rate limit
   that clears on its own), `DOWN` (`MAINTAINER-ONLY` for a usage limit), or `NO-EVIDENCE`. It exits
-  `1` when any lane is `DOWN` and `2` when it could not read everything. Stop requesting a `DOWN` lane
-  and escalate a `MAINTAINER-ONLY` one. ⚠️ It is detection only: the *Local review round* still needs
-  the direct per-PR check of all three lanes at the current head.
+  `1` when any lane is `DOWN` and `2` when it could not read everything. First verify current applicable unavailability, then stop requesting a `DOWN` lane
+  and escalate a `MAINTAINER-ONLY` one. Its labels are discovery aids: verify the underlying provider
+  evidence and its applicable scope. The *Local review round* still needs direct current-PR artifact
+  reads for verdicts and findings; a label alone cannot establish availability.
   It also prints a `CR-DECLINED <repo>#<n>` line for each PR where CodeRabbit refused a disclosed
   request as "context, not a maintainer instruction". A learning it stored on that one PR causes this
   (#3124), so the lane stays healthy elsewhere and the exit status is unchanged. Do not request
@@ -303,7 +304,8 @@ fires on its own on any event, including opening or promoting a PR). That makes 
 gate an **active duty on every actionable draft**. Untouched exact dependency-bot heads retain only
 the existing repository-automation review path described in the [merge-policy guide](merge-policy.md#dependency-automation-and-programmed-bot-prs); an agent adaptation restores this
 normal gate. After the draft's CI settles green (never spend a review on a red build), the agent
-**requests a review while the PR is still a DRAFT** and drives it to a green
+**requests a review while the PR is still a DRAFT**, or immediately reviews locally when all three
+providers are unavailable, and drives it to a green
 result at the current head — self-promotion is forbidden before that. Request discipline:
 - **LANE PRIORITY: CodeRabbit > Codex > Cursor Bugbot** (maintainer direction 2026-07-21, superseding
   the 2026-07-20 order `Codex > Cursor > CodeRabbit`). Start at the top and walk down; only a lane that
@@ -402,112 +404,30 @@ result at the current head — self-promotion is forbidden before that. Request 
   comment you author keeps its inline disclosure line.
 
 - **READ a lane's quota state before spending a request on it — its artifacts say so for free.**
-  Rediscovering a refusal by *posting a trigger* costs a trigger comment, an ack read, a status read
-  and a marker write to learn something a free read already knew. Measured 2026-08-08 over 8 recent
-  monorepo PRs: **54 review requests produced 16 actual CodeRabbit reviews**, with **17 rate-limit
-  refusals**. On #2720 alone: **14 CodeRabbit requests across 12 distinct heads, 10 of them refused**,
-  each round re-requesting CodeRabbit first because that is what lane priority says. **Only the
-  same-head repeats are recoverable** — see the sizing note below, which is deliberately narrower than
-  those totals.
-  **A CodeRabbit REFUSAL is readable with NO write**: before each CodeRabbit trigger, read the
-  **newest same-head command-invocation reply** that postdates this round's authenticated request
-  marker, as well as the head's transient `CodeRabbit` commit-status description. The reply is the
-  durable evidence: `Review rate limited` or another explicit did-not-run marker in that positively
-  identified reply survives after the status reverts to the disabled default. The status remains a
-  secondary negative signal — `Review rate limited` is a quota refusal,
-  `Review skipped: automatic reviews are disabled` is the never-reviewed default, and
-  `Review completed` says only that an attempt ended — but it never overrides the reply. If the reply or a
-  refusal status whose `updated_at` postdates that request marker records a refusal **that this round
-  itself produced** — by the round-provenance test below, which is part of this instruction rather
-  than a later refinement of it — do not post another trigger for that round: advance to Codex for
-  that PR and record the usual `cr:no-gate@<sha>`.
-  **A refusal you cannot attribute to this round is **not** a reason to skip — ask.** The status is
-  transient while the reply is durable and outlives the quota window, so an unqualified reading of
-  this paragraph sends a same-SHA restart (a refutation that changes no files) straight to the
-  **weekly-limited** lane while the
-  **free** one has long recovered. An operative sentence is what actually gets executed, so the
-  qualification belongs here, not only in the elaboration below.
-  🔴 **This read is a NEGATIVE filter only. It can show the lane refusing HERE; it can never show the
-  lane serving.** The never-reviewed default means only that nothing has been tried at this head — it
-  is a reason to *ask*, never evidence the lane is up. Reading it as "serving" licenses the same
-  inversion from the opposite direction, and it is measured: on 2026-08-08 a run read
-  `Review skipped: automatic reviews are disabled` at 19:29:29Z, correctly asked CodeRabbit on that
-  basis, and was refused **16 seconds later**. The request was still right — asking is how a fresh
-  head learns — but the status had promised nothing, so treat a green-looking default as *unknown*,
-  and never let it override a refusal observed at this same head in this same round.
-  🔴 **Do NOT latch that refusal for the whole run — the window is SHORT, and measured.** It is
-  tempting to conclude that a rate limit is account-wide and therefore one fact per run. **It is not:**
-  on 2026-08-08 monorepo#2722 was requested at 15:10:09Z and refused `Review rate limited` at
-  15:10:24Z, while monorepo#2723 was requested at 15:38:07Z and returned `Review completed` at
-  15:42:48Z — **the window cleared inside ~28 minutes.** A run-wide latch would therefore skip the
-  **free, unmetered** CodeRabbit lane for the rest of a run over a refusal that had already expired,
-  and spend the **weekly-limited** Codex quota in its place — inverting the maintainer's own reason for
-  the lane order (spend the cheapest-to-exhaust lane first). Re-read per PR instead; the read is free,
-  which is the entire point.
-  ⚠️ **Know exactly what this probe does and does not buy.** It cannot prevent the **first** refusal at
-  a **fresh** head: a new SHA carries only the never-reviewed default until some request is spent, so
-  the probe has nothing to read there. What it prevents is every **repeat** at a head already known to
-  be refusing — a **minority** of the measured waste, not the bulk of it: on #2720, 2 of 14 requests.
-  **That residual is accepted deliberately, and the obvious "fix" for it is worse.** Carrying a
-  portfolio-wide refusal forward with a TTL would cover the fresh-head case, and it re-creates the
-  latch this rule exists to forbid: measured 2026-08-08, an agent took #2722's 19:03Z refusal as
-  portfolio-wide, skipped CodeRabbit on #2727 at 19:17Z, and spent the **weekly-limited** Codex lane —
-  while #2727's own head status said the lane had never been asked *there*. That is the whole defect:
-  the skip was justified by another PR's refusal rather than by any evidence about this head. Fourteen
-  minutes of inherited state was already too much, against a window that clears in ~28. So a
-  portfolio-wide observation may **inform** how patiently you wait; it may never **replace** the
-  per-head read, and it may never skip a head whose own status says the lane was never asked. One
-  spent request per fresh head is the price of not inverting the lane order.
-  🔴 **A refusal is scoped to its ROUND, never to the head forever.** The skip above applies to the
-  request round in which it was read. A head's status is durable, so an unconditional "this head once
-  refused, therefore never ask again" would outlive the quota window and break the mandated *restart
-  at CodeRabbit* after findings — most sharply when a finding is **refuted without changing files**,
-  which restarts at the *same* SHA by design and must not create an empty commit. That PR would then
-  advance straight to the **weekly-limited** lane on every subsequent round while the **free** one had
-  long recovered.
-  **Scope it by WHICH REQUEST produced the refusal, never by when you read it.** "Unless the refusal
-  was observed in this round" is circular and does not work: the mandatory pre-trigger read *is* an
-  observation in the new round, and the status is durable, so the old refusal reads as current every
-  time and the skip fires forever — the exact behaviour this paragraph forbids. Attribute it instead:
-  **a refusal justifies skipping only when THIS round has already posted a CodeRabbit request marker
-  at this head and the refusal postdates that marker.**
-  🔴 **A marker's id and timestamp alone do NOT identify its round — derive the boundary, or this
-  test fails in exactly the case it was written for.** At an unchanged SHA the previous round's
-  marker is indistinguishable from this round's: head, provider, comment id and timestamp are all
-  equally "at this head", and a durable refusal postdates the *old* marker just as well as it would
-  a new one. Read literally, the test then skips the restarted round's mandatory first CodeRabbit
-  request — the same-SHA refutation path, which is the one case the paragraph above exists to
-  protect. A payload carrying only `<sha>` and `provider=` cannot answer a question about rounds.
-  **The boundary is the newest RESTARTING ARTIFACT at that head, and the loop already emits one.**
-  A restart follows findings, and findings are fixed-or-refuted with their threads resolved before
-  it, so the newest authenticated disclosed resolution reply at that head is what opens the new
-  round. The test is therefore: **skip only when a CodeRabbit request marker at this head is NEWER
-  than that artifact, and the refusal postdates that marker.** Where no findings have arrived at
-  this head there has been only one round and no artifact, so the marker test stands unqualified.
-  This mirrors the same-head Codex retry rule below, which likewise supersedes findings by
-  "threads resolved → later re-request → later clean marker" rather than by timestamps alone.
-  The consequence is deliberate and worth stating plainly: **a refusal never pre-empts the FIRST
-  CodeRabbit request of a round.** What the probe kills is re-asking a head *within* a round after it
-  has already answered. **Size that saving honestly — most refusals are NOT what it eliminates.**
-  Re-measured on #2720 (2026-08-08): **14 CodeRabbit requests, 10 of them refused — and exactly 2 were
-  second-or-later requests within the same round.** Those 2 are the saving; the other 12 each open a
-  round, and this rule preserves a round's first request on purpose. Counting all 14, or all 10
-  refusals, would credit the probe with preventing exactly the requests it is written to protect.
-  ⚠️ **Classify by ROUND, not by repeated head — the two are not the same test.** A same-SHA fix or
-  refutation opens a new round at an unchanged head, so two requests on one head can be two rounds'
-  protected first attempts rather than a saved repeat; a head-based count silently overstates. Apply
-  the same boundary the skip test uses — the newest restarting artifact at that head — and count only
-  second-or-later requests inside one round. On #2720 both pairs (`0f16c3192e`, `a90875e3ac`) carry no
-  resolution reply between their two requests, so each pair is genuinely one round; the head-based
-  count happened to agree there, which is exactly why it cannot be trusted in general. The read is
-  free; that is what makes a round's first attempt cheap rather than wasteful.
-  ⚠️ **This changes WHICH LANE IS ASKED FIRST, never WHETHER A REVIEW IS REQUIRED.** The green-review
-  gate is untouched: every PR still needs one successful current-head review from some lane, or a
-  qualifying local review round. Skipping a lane that is *demonstrably refusing at that head* is
-  exactly the "advance on a service failure" the loop already prescribes — this only makes the
-  discovery free. A lane that is **serving** is never skipped, and a quota refusal is **never** evidence
-  for the *Local review round* fallback on its own: that still requires all three lanes tried at the
-  current head, per its own admissible-evidence rule.
+  Availability is readable with NO write. Before choosing an external or local review, freshly read
+  the current PR's review objects, conversation comments, threads and provider check-runs. A limit
+  never discards a finding, and a delivered current-head review stops the request loop.
+
+  Establish unavailability with freshly read, authenticated provider evidence on this PR or with
+  an explicitly applicable account/repository scope. Record the source URL, provider, observation
+  time, provider event time, scope and reset/recovery condition. A generic error on another PR is
+  not account-wide proof. A missing review, disabled auto-review, `not-requested`, `NO-EVIDENCE`,
+  `UNKNOWN` or a bare `LANE-HEALTH` label cannot establish unavailability.
+
+  **Do NOT latch that refusal for the whole run.** Re-read its underlying evidence before each
+  decision. An expired reset or a newer successful review in the same scope invalidates an older
+  refusal. Calculate a relative retry window from the provider event, never from the time you read
+  it. If freshness, scope or recovery is unknown, use the normal ordered attempt under the existing
+  request lock; uncertainty never establishes local-fallback eligibility. A PR-scoped refusal stays
+  PR-scoped. The newest same-head command-invocation reply can establish that PR's refusal, while
+  a status is only corroboration: it can never show the lane serving.
+
+  **A new head or review round does not reset an ongoing applicable service limit.** Do not send a
+  redundant first request solely to confirm verified unavailability. Findings still require repair
+  or refutation and a new substantive review at the current head. Follow CodeRabbit → Codex → Cursor
+  Bugbot, skipping only lanes whose current unavailability is established. A serving lane is never
+  skipped. When all three are unavailable, use the immediate *Local review round* below.
+  This changes which lane is asked, never WHETHER A REVIEW IS REQUIRED.
 - **Only one provider request may be active at a time.** Never fan out or request two reviewers
   concurrently. The priority above sets the order: request one, wait for its substantive outcome,
   then either stop on success, restart after fixes, or advance after a provider/service failure.
@@ -601,9 +521,8 @@ result at the current head — self-promotion is forbidden before that. Request 
 - **Local review round — when every lane is unavailable OR rate/billing limited** (maintainer
   direction 2026-07-18, widened to three lanes 2026-07-20, and widened again in an interactive
   session **2026-07-21**: *"We likely need to allow local review rounds when external review
-  providers are rate or billing limited, such that we are not blocked by it."*). When CodeRabbit,
-  Codex *and* Cursor Bugbot have **each** been tried and none of them will deliver a usable review at
-  the current head, the agent reviews the PR **itself** using its own review skills (`/review`,
+  providers are rate or billing limited, such that we are not blocked by it."*). When current unavailability is established for CodeRabbit,
+  Codex *and* Cursor Bugbot, the agent reviews the PR **itself** using its own review skills (`/review`,
   `/code-review`, `/security-review`) rather than leaving a finished change parked.
 
   **A lane counts as not-delivering when any of these holds**, and the first three are the
@@ -635,44 +554,29 @@ result at the current head — self-promotion is forbidden before that. Request 
   a bot lane (correctness, security, the repo's `## Review guidelines`), it is posted as a real
   GitHub Review with resolvable threads, and it satisfies the gate only when it is **clean at a sha
   equal to the current head**. Going easy on your own diff defeats the entire gate. Prefer a lane
-  that *is* serving: if a higher-priority lane will deliver within the run, use it — the local round
-  is what keeps a *throttle* from parking finished work, not a way to skip review. Record the
-  per-lane state that justified it in the run report.
-  **Admissible evidence is a direct per-PR check of all three surfaces only** (review objects, issue
-  comments — Codex's green is an issue COMMENT with `**Reviewed commit:** <sha>` — **and** Bugbot
-  check-runs): never declare a lane unavailable from an aggregate digest field, a portfolio-wide
-  "no greens" summary, or a surveyor's `green_review=none` / `not-requested` row alone.
-  `not-requested` means request a first review; it is ordinary post-auto-review-disabled state, not
-  an outage.
+  that is serving now, in the normal priority order. Record the verified per-lane availability
+  evidence that justified the fallback, with its source, event time, scope and recovery condition.
+  **Direct current-PR artifact reads remain mandatory before fallback.** Read review objects,
+  conversation comments (including Codex's `**Reviewed commit:** <sha>` green), threads and Bugbot
+  check-runs; keep all findings regardless of quota markers. Establish each lane's availability
+  separately using the freshly verified, applicable provider evidence described above.
+  **A bare aggregate DOWN label is insufficient.** A portfolio digest, missing green, disabled
+  auto-review or `not-requested` alone is also insufficient. `not-requested` requires the normal
+  ordered first attempt only when applicable unavailability has not been established.
   ⚠️ **Not the same thing as the pre-submission self-review** in *GitHub artifact conventions*, which
   runs before every review request whatever the lanes are doing. That one is routine hygiene and
   **satisfies nothing** — having done it never counts toward this fallback, which alone
   substitutes for a bot review and carries the posted-Review and per-lane-evidence requirements below.
-  **Wait-and-retrigger is still preferred when the wait is short and the run is staying alive** — a
-  CodeRabbit shell stating `Next review available in: N minutes` is worth scheduling a background
-  retrigger for. What changed is that it is no longer *mandatory* to wait: if the window would park
-  the work past the end of the run, review locally and move on.
-  🔴 **Read that window from the summary comment CodeRabbit edits in place — once that summary
-  exists, the newest comment by `created_at` does not carry it.** A refusal posts a short `Review rate
-  limited` reply with no window, and the window lands in the auto-generated summary, which CodeRabbit
-  creates on the first refusal and edits in place after that. It was worded `Next review available
-  in: N minutes` on 2026-08-18 and `Next included review available in N minutes` on 2026-09-22. Select
-  CodeRabbit's comments by `updated_at`, or search all of them for `available in`, which matches both;
-  reading only the newest-created one reports "no window stated" and escalates onto the weekly- and
-  monthly-limited lanes. Measured 2026-08-18 on monorepo#2892 and #2893: stated windows of 7 and 2
-  minutes, and after the 2-minute wait CodeRabbit delivered a real review. The limit is one included
-  review that refills on that stated timer, not a fixed hourly allowance. A chat-message limit is a
-  separate refusal of the trigger itself: it posts a new `Rate Limit Exceeded` comment worded `Please
-  wait N minutes and S seconds before sending another message` (measured 2026-09-22 on monorepo#3521,
-  #3522 and #3523). `available in` does not match it, so search for `before sending another message`
-  too. A stated short window is the
-  wait-and-retrigger case above; a limit that states no window (a Codex usage limit, Bugbot's
-  `Error`) never clears by waiting.
+  **When all three lanes are currently unavailable, start the local review immediately.**
+  **Do not wait for quota resets**, schedule quota retriggers or spend redundant requests on an
+  established limit. A stated retry window does not require waiting. No paid overage is authorized.
+  Read CodeRabbit's edited summary by `updated_at` for its included-review reset and command replies
+  for message limits; bind a relative timer to its provider event rather than extending it on reads.
   **Judge lane success or failure by a REAL review artifact at head, never by the tool's ack.**
   CodeRabbit's `@coderabbitai review` reply says *"✅ Action performed — Review finished"* even when
   the review never started; the *following* comment carries the truth. **SUCCESS is what requires a
   real artifact at head; FAILURE is proven by that artifact's ABSENCE plus an outage signal** — a
-  stall past the wait window, an erroring/uninstalled app, or a rate-limit with no usable retry
+  stall past the wait window, an erroring/uninstalled app, or a rate limit, including one with a stated retry
   window. (Demanding an artifact to prove failure would make the fallback unreachable in precisely
   the outages it exists for.) The artifact's **shape
   differs per lane**: a CodeRabbit approval and a *findings-bearing* Codex result are review objects
@@ -728,8 +632,8 @@ result at the current head — self-promotion is forbidden before that. Request 
     the other hygiene surfaces (CI, threads, non-thread findings, and conflicts), and never go easy on
     a diff because clearing it would finish the PR.
 - **Incremental reviews (maintainer direction 2026-07-12): EVERY push to the branch — a review-fix,
-  a missed file, a conflict resolution, anything — stales the green and requires re-requesting a
-  successful review at the new head.** Fixing a reviewer's findings is not the end of the loop; the
+  a missed file, a conflict resolution, anything — stales the green and requires a
+  fresh substantive review at the new head through the provider-or-local-review rules.** Fixing a reviewer's findings is not the end of the loop; the
   loop ends when a fresh green lands on the commit that contains the fix. Same one-tool-at-a-time
   discipline for each re-request.
 Codex reads the repo's `AGENTS.md` `## Review guidelines` and flags P0/P1 only; when either reviewer

@@ -470,7 +470,7 @@ grep -Fq '.claude/scripts/review-lane-health.sh' <<<"${survey_section}" ||
   fail "Survey step does not complete the digest with review-lane-health.sh (#2561)"
 grep -Fq 'LANE-HEALTH' <<<"${survey_section}" ||
   fail "Survey step does not name the LANE-HEALTH digest lines (#2561)"
-grep -Fq 'stop requesting a `DOWN` lane' <<<"${survey_section}" ||
+grep -Fq 'verify current applicable unavailability, then stop requesting a `DOWN` lane' <<<"${survey_section}" ||
   fail "Survey step does not stop requests to DOWN lanes (#2561)"
 grep -Fq 'escalate a `MAINTAINER-ONLY` one' <<<"${survey_section}" ||
   fail "Survey step does not escalate MAINTAINER-ONLY lanes (#2561)"
@@ -478,8 +478,8 @@ grep -Fq 'exit `2` as UNKNOWN, never' <<<"${survey_section}" ||
   fail "Survey step may read an incomplete lane-health read as healthy (#2561)"
 grep -Fq 'Local review round* still needs the direct per-PR check' <<<"${survey_section}" ||
   fail "Survey step may let lane health replace the per-PR Local review round check (#2561)"
-grep -Fq 'Admissible evidence is a direct per-PR check of all three surfaces only' "${constitution}" ||
-  fail "constitution fallback does not require per-PR three-surface evidence (#2244 AC3)"
+grep -Fq 'Direct current-PR artifact reads remain mandatory before fallback' "${constitution}" ||
+  fail "constitution fallback omits direct current-PR artifact reads (#3733)"
 grep -Fq 'Zero review-output on all three surfaces is `not-requested`, not `none`' "${surveyor}" ||
   fail "surveyor may still emit none(…0…) for the never-requested state (#2244)"
 # That state tells the surveyor to emit a LANE-SIGNAL row, so the lane and reason enums must admit
