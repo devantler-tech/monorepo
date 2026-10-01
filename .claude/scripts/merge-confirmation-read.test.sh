@@ -358,12 +358,18 @@ done)"
   fail "the plugin definition worktree bytes are not the pinned blobs, so the scan would inspect
   unreviewed content while revision, status and index flags all read clean:
 ${byte_mismatch}"
+# `.claude/worktrees` is pruned (monorepo#3037): it holds the session and per-run worktrees, so an
+# unpruned walk scans other sessions' checkouts and the surface set depends on where the test runs.
 scan_surfaces="$(
   printf '%s\n' "${repo_root}/AGENTS.md"
-  find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null | sort
+  find "${repo_root}/.claude" -path "${repo_root}/.claude/worktrees" -prune -o \
+    -type f \( -name '*.md' -o -name '*.json' \) -print 2>/dev/null | sort
   find "${plugin_root}" -type f \( -name '*.md' -o -name '*.json' \) | sort
 )"
 plugin_surfaces="$(printf '%s\n' "${scan_surfaces}" | grep -c "^${plugin_root}/" || true)"
+nested_wt="$(printf '%s\n' "${scan_surfaces}" | grep -cF -- "${repo_root}/.claude/worktrees/" || true)"
+[ "${nested_wt}" -eq 0 ] ||
+  fail "${nested_wt} scan surface(s) lie under .claude/worktrees — another session's checkout is being judged (monorepo#3037)"
 
 # PREFLIGHT, in the main shell: every JSON surface must actually parse. This cannot live inside
 # `normalise_and_extract`, which runs inside command substitution where `exit` only leaves the subshell.

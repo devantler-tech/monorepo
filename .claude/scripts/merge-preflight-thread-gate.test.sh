@@ -400,10 +400,16 @@ while IFS= read -r surface; do
 # silently matches nothing and the file reports its own fixtures as offenders. That was observed,
 # not predicted. `repo_root` is itself derived from this file location, so the constructed path is
 # exact rather than a basename guess.
+#
+# `.claude/worktrees` is PRUNED (monorepo#3037). The harness puts session worktrees there, and the
+# execution model nests each per-run worktree there too, so an unpruned walk scanned every other
+# session's checkout: 352 surfaces from a depth-1 worktree vs 261 from the nested one at the same
+# commit, and an offender on another session's branch could fail a correct tree.
 done < <(
   {
     printf '%s\n' "${repo_root}/AGENTS.md" "${workflow}"
-    find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null
+    find "${repo_root}/.claude" -path "${repo_root}/.claude/worktrees" -prune -o \
+      -type f \( -name '*.md' -o -name '*.json' \) -print 2>/dev/null
     find "${repo_root}/.claude/scripts" -type f -name '*.sh' \
       ! -path "${repo_root}/.claude/scripts/${self_basename}" 2>/dev/null
     find "${plugin_defs}" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null
@@ -423,6 +429,10 @@ grep -qxF -- "${workflow}" <<<"${scanned_list}" ||
 # The self-exclusion above is one path; this refuses if it ever becomes the whole class. Without it,
 # a mistyped `find` or a widened `! -path` would silently scan no enforcement script at all and the
 # size check would still pass on the ~40 `.claude` Markdown files.
+nested_wt=$(printf '%s' "${scanned_list}" | grep -cF -- "${repo_root}/.claude/worktrees/" || true)
+[ "${nested_wt}" -eq 0 ] ||
+  fail "${nested_wt} scanned surface(s) lie under .claude/worktrees — another session's checkout is being judged (monorepo#3037)"
+
 other_scripts=$(printf '%s' "${scanned_list}" | grep -cE '\.claude/scripts/.*\.sh$' || true)
 [ "${other_scripts}" -gt 0 ] ||
   fail "no enforcement script under .claude/scripts was scanned — the self-exclusion has swallowed the whole surface class"
