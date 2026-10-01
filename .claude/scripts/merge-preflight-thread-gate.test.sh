@@ -477,7 +477,7 @@ grep -qF -- 'submodule update --init libraries/agent-plugins' <<<"${job_block}" 
 # The filter must cover every surface the scan discovers, or an edit to an unlisted one skips the job.
 #
 # SCOPED TO THIS JOB'S FILTER BLOCK (#3050). These trigger lines are shared — `- 'AGENTS.md'` sits in
-# ~28 filters — so a whole-file grep passed with the entry deleted from THIS filter. The block runs from
+# dozens of filters — so a whole-file grep passed with the entry deleted from THIS filter. The block runs from
 # the filter's key to the next line indented no deeper than that key.
 filter_block=$(awk '
   $0 == "            merge-preflight-thread-gate:" { f = 1; next }
