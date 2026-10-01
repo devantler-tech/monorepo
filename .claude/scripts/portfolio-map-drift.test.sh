@@ -186,6 +186,28 @@ d=$(mkroot '[submodule "p"]
 	url = git@github.com:devantler/devantler.git' "$MAP_BOTH")
 expect "no devantler-tech submodules" 2 'UNKNOWN no devantler-tech submodules' "$d"
 
+# The map names products, not the census (monorepo#3055). A sweep built from the map silently
+# skips an unmapped org repository and reports it clean, so the guide the map defers to must say the
+# census is the live org list, and the map must still link to it. Each extraction fails closed: an
+# empty section passes every substring check.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+census_core=$(awk '/^## Portfolio map/{f=1;next} /^## /{f=0} f' "$REPO_ROOT/AGENTS.md" | tr '\n' ' ' | tr -s ' ')
+census_guide=$(awk '/^> \*\*The census is the live org, not this table\.\*\*/{f=1} f&&/^$/{exit} f' \
+  "$REPO_ROOT/.claude/guides/work-selection.md" | tr '\n' ' ' | tr -s ' ')
+asserts=$(( asserts + 1 ))
+if [ -z "$census_core" ]; then
+  note_fail "AGENTS.md has no Portfolio map section to check the census rule in"
+elif [[ "$census_core" != *"work-selection.md#portfolio-scope--visibility-and-archived-repositories"* ]]; then
+  note_fail "AGENTS.md Portfolio map no longer links the guide section that defines the census"
+fi
+asserts=$(( asserts + 1 ))
+if [ -z "$census_guide" ]; then
+  note_fail "work-selection guide lost its 'The census is the live org' rule"
+elif [[ "$census_guide" != *"inside every health, PR and issue census, whether or not it has a row here"* ]] ||
+  [[ "$census_guide" != *"never from > this table"* && "$census_guide" != *"never from this table"* ]]; then
+  note_fail "work-selection guide's census rule no longer requires sweeping the live org rather than the map"
+fi
+
 # The real repository must be clean: every tracked devantler-tech submodule is mapped or excluded.
 asserts=$(( asserts + 1 ))
 if ! out=$(bash "$SCRIPT" 2>&1); then
