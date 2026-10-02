@@ -204,6 +204,12 @@ history_query='query($owner: String!, $name: String!, $oid: GitObjectID!, $path:
 # <cursor>` line, where each version is `NONE` (no commit before the window), `ABSENT` (no file at that
 # commit) or `TEXT <json string>`. A node missing its `file` key, a truncated or non-text blob, or a
 # malformed envelope is `BAD`, so a partial payload can never read as "absent" and grant the grace.
+#
+# GitHub answers a version where the file does not exist with a null `file` PLUS a top-level
+# NOT_FOUND error whose path names that node's `file` (measured on monorepo at 665092ec), and gh then
+# exits 1. That is the only error tolerated: every entry must be such a NOT_FOUND for a node in
+# `before` or `window` whose `file` really is null. Any other error, or a failed request (`$failed`)
+# whose reply is not exactly such an answer, is `BAD`.
 # shellcheck disable=SC2016 # a jq program: its `$` are jq variables
 history_jq='
 def version: if type != "object" or (has("file") | not) then "BAD"
@@ -211,7 +217,18 @@ def version: if type != "object" or (has("file") | not) then "BAD"
   elif (.file.object | type) == "object" and .file.object.isTruncated == false and (.file.object.text | type) == "string"
     then "TEXT " + (.file.object.text | @json)
   else "BAD" end;
-if (.errors // null) != null then "BAD" else
+def absent_file($data): . as $e | try (
+  ($e.type == "NOT_FOUND" and ($e.path | type) == "array" and ($e.path | length) == 6
+    and $e.path[0] == "repository" and $e.path[1] == "object" and ($e.path[2] == "before" or $e.path[2] == "window")
+    and $e.path[3] == "nodes" and ($e.path[4] | type) == "number" and $e.path[4] >= 0
+    and ($e.path[4] | floor) == $e.path[4] and $e.path[5] == "file")
+  and ($data | getpath($e.path[0:5]) | type == "object" and has("file") and .file == null)
+) catch false;
+if type != "object" then "BAD"
+elif (.errors // null) != null and ((.errors | type) != "array" or (.errors | length) == 0
+    or (.data as $d | any(.errors[]; absent_file($d) | not))) then "BAD"
+elif $failed and ((.errors // []) | length) == 0 then "BAD"
+else
   .data.repository.object as $c
   | if ($c | type) != "object" or ($c.before.nodes | type) != "array" or ($c.window.nodes | type) != "array"
       or ($c.window.totalCount | type) != "number" or ($c.window.pageInfo.hasNextPage | type) != "boolean"
@@ -232,11 +249,16 @@ if (.errors // null) != null then "BAD" else
 # cannot be parsed could be the tool, not the file, and a walk that fails or does not reach the window
 # start within its bound is UNKNOWN.
 schedule_continuity() { # <repo> <path> <pinned head> <window start, ISO 8601> <current crons>
-  local after="" page out line text version_crons total count more cursor seen=0 unparseable="" args
+  local after="" page out line text version_crons total count more cursor seen=0 unparseable="" args failed
   for ((page = 1; page <= max_history_pages; page++)); do
     args=(-f query="$history_query" -f owner="${1%%/*}" -f name="${1#*/}" -f oid="$3" -f path="$2" -f since="$4")
     [ -z "$after" ] || args+=(-f after="$after")
-    if ! out="$(gh api graphql "${args[@]}" --jq "$history_jq" 2>"$err")" || grep -qE '(^| )BAD$' <<<"$out"; then
+    # A reply carrying `errors` makes gh exit 1 and skip --jq, and an absent version always carries
+    # one, so read the raw reply whatever gh's status and let the filter judge it.
+    failed=false
+    out="$(gh api graphql "${args[@]}" 2>"$err")" || failed=true
+    if [ -z "$out" ] || ! out="$(jq -r --argjson failed "$failed" "$history_jq" <<<"$out" 2>/dev/null)" ||
+      grep -qE '(^| )BAD$' <<<"$out"; then
       echo "UNKNOWN file history at the pinned head unreadable"
       return 0
     fi
@@ -393,28 +415,6 @@ scan_repo() { # <repo> <pinned head>
       continue
     fi
     [ "$created" -gt "$cutoff" ] && continue
-    # The creation time is not enough: an old dispatch-only workflow that GAINS a schedule was
-    # created long ago, yet its first firing may not be due. And the file's newest commit is not
-    # enough either, because unrelated edits (a pin bump every month) would renew that grace
-    # forever. So judge the schedule itself: only one that has held today's crons since the window
-    # start is judged on its run history.
-    cutoff_iso="$(jq -rn --argjson e "$cutoff" '$e | todate')"
-    continuity="$(schedule_continuity "$repo" "$path" "$head" "$cutoff_iso" "$crons")"
-    case "$continuity" in
-      JUDGE) ;;
-      GRACE) continue ;;
-      "UNKNOWN "*)
-        echo "QUERY-UNKNOWN ${repo} ${path} — ${continuity#UNKNOWN }"
-        scan_unknown=1
-        continue
-        ;;
-      *)
-        echo "QUERY-UNKNOWN ${repo} ${path} — schedule history gave no verdict"
-        scan_unknown=1
-        continue
-        ;;
-    esac
-
     # 🔴 Never filter the run list by `event=schedule`: that filtered listing is INCOMPLETE —
     # measured 2026-09-29 on a monthly workflow, it returned 3 runs (newest July) while the
     # unfiltered listing held September's. Read the unfiltered, newest-first listing instead and
@@ -441,13 +441,39 @@ scan_repo() { # <repo> <pinned head>
       [ -n "$found" ] && break
       [ "$oldest" -lt "$cutoff" ] && { verdict="edge"; break; }
     done
+    # A scheduled run inside the window proves the schedule fires, whenever it began, so only a
+    # missing or unproven run needs the schedule's history (and its up to 300 file versions).
+    [ -n "$found" ] && continue
+
+    # The creation time is not enough: an old dispatch-only workflow that GAINS a schedule was
+    # created long ago, yet its first firing may not be due. And the file's newest commit is not
+    # enough either, because unrelated edits (a pin bump every month) would renew that grace
+    # forever. So judge the schedule itself: only one that has held today's crons since the window
+    # start is judged on its run history.
+    cutoff_iso="$(jq -rn --argjson e "$cutoff" '$e | todate')"
+    continuity="$(schedule_continuity "$repo" "$path" "$head" "$cutoff_iso" "$crons")"
+    case "$continuity" in
+      JUDGE) ;;
+      GRACE) continue ;;
+      "UNKNOWN "*)
+        echo "QUERY-UNKNOWN ${repo} ${path} — ${continuity#UNKNOWN }"
+        scan_unknown=1
+        continue
+        ;;
+      *)
+        echo "QUERY-UNKNOWN ${repo} ${path} — schedule history gave no verdict"
+        scan_unknown=1
+        continue
+        ;;
+    esac
+
     if [ "$verdict" = "unknown" ]; then
       echo "QUERY-UNKNOWN ${repo} ${path} — run list read failed"
       scan_unknown=1
-    elif [ -z "$found" ] && [ "$verdict" != "edge" ]; then
+    elif [ "$verdict" != "edge" ]; then
       echo "QUERY-UNKNOWN ${repo} ${path} — window not reached within ${max_pages} pages of runs"
       scan_unknown=1
-    elif [ -z "$found" ]; then
+    else
       # Offset pagination shifts if a run is created mid-scan, so a scheduled run that landed after
       # page 1 was read could be skipped. Re-read page 1 before reporting a stop.
       # The re-read goes through the same validated reader as the scan.

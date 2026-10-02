@@ -104,6 +104,13 @@ if [ ! -f "$f" ] && [[ "$url" =~ ^repos/([^/]+/[^/]+)/contents/\.github/workflow
   f="$FIXTURES/.synth.json"
 fi
 [ -f "$f" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+# A GraphQL reply that carries `errors` makes real gh print the raw reply, skip --jq and exit 1.
+# GRAPHQL_EXIT1 forces that exit for any reply, to prove a failed request is never read as clean.
+if [[ "$url" == graphql* ]] && { [ -n "${GRAPHQL_EXIT1:-}" ] || jq -e '(.errors // []) | length > 0' "$f" >/dev/null 2>&1; }; then
+  cat "$f"
+  echo "gh: $(jq -r '.errors[0].message // "error"' "$f")" >&2
+  exit 1
+fi
 if [ -n "$jqexpr" ]; then jq -r "$jqexpr" "$f"; else cat "$f"; fi
 STUB
 chmod +x "$bin/gh"
@@ -118,17 +125,23 @@ node_json() {
     *) jq -nc --arg t "$1" '{file: {object: {isTruncated: false, text: $t}}}' ;;
   esac
 }
-# One page of a file's history as the GraphQL query returns it.
+# One page of a file's history as the GraphQL query returns it. As GitHub does (measured on monorepo
+# at 665092ec), every ABSENT version also adds a top-level NOT_FOUND error whose path names that node's
+# `file`, and the stub then exits 1 like real gh.
 history_json() { # <window-start version | NONE> <totalCount | -> <next cursor | -> [<version inside the window, newest first>...]
   local before="$1" total="$2" next="$3" b w="[]" v
   shift 3
   if [ "$before" = NONE ]; then b='[]'; else b="[$(node_json "$before")]"; fi
   for v in "$@"; do w="$(jq -c --argjson n "$(node_json "$v")" '. + [$n]' <<<"$w")"; done
   [ "$total" != - ] || total="$(jq length <<<"$w")"
-  jq -nc --argjson b "$b" --argjson w "$w" --argjson t "$total" --arg c "$next" \
-    '{data: {repository: {object: {before: {nodes: $b}, window: {totalCount: $t,
+  jq -nc --argjson b "$b" --argjson w "$w" --argjson t "$total" --arg c "$next" '
+    def missing($at; $nodes): $nodes | to_entries[] | select((.value | has("file")) and .value.file == null)
+      | {type: "NOT_FOUND", path: ["repository", "object", $at, "nodes", .key, "file"],
+         locations: [{line: 1, column: 1}], message: "Could not resolve file for path"};
+    {data: {repository: {object: {before: {nodes: $b}, window: {totalCount: $t,
       pageInfo: (if $c == "-" then {hasNextPage: false, endCursor: null} else {hasNextPage: true, endCursor: $c} end),
-      nodes: $w}}}}}'
+      nodes: $w}}}}}
+    + ([missing("before"; $b), missing("window"; $w)] | if length > 0 then {errors: .} else {} end)'
 }
 history() { # <repo> <path> <window-start version | NONE> [<version inside the window, newest first>...]
   local repo="$1" path="$2" before="$3"
@@ -245,6 +258,9 @@ grep -q '/contents/.*?ref=' "$tmp/log" || fail "the content reads must have been
   { cat "$tmp/log" >&2; fail "every content and history read must be pinned to the resolved head"; }
 [ "$(grep -c 'git/ref/heads/main' "$tmp/log")" -eq 2 ] ||
   { cat "$tmp/log" >&2; fail "the head must be resolved once per repository, and once more to confirm a silence"; }
+# A schedule that ran inside the window needs no history: only a missing run is walked.
+! grep -qE '^graphql oid=[0-9a-f]+ path=\.github/workflows/(daily|monthly)\.yaml$' "$tmp/log" ||
+  { cat "$tmp/log" >&2; fail "a schedule with a run inside the window must not have its history walked"; }
 
 # A failed run-list read is UNKNOWN — never "silent", never clean.
 FAIL_ON="workflows/3/runs" run --repo o/a
@@ -702,6 +718,40 @@ run --repo o/q
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a truncated version must exit 2, got $rc"; }
 has "QUERY-UNKNOWN o/q .github/workflows/late.yaml — file history at the pinned head unreadable" \
   "a truncated version must be named"
+# GitHub answers an absent version with a NOT_FOUND error and gh exits 1 (the ABSENT fixtures above).
+# Only exactly that error is tolerated: any other error, a NOT_FOUND naming a node that HAS a file or
+# naming anything but a node's `file`, an extra error beside a tolerated one, or a body that is not
+# JSON at all, is UNKNOWN — never the removal grace.
+absent_reply="$(history_json "$daily" - - "$daily" ABSENT)"
+jq -e '.errors == [{type: "NOT_FOUND", path: ["repository", "object", "window", "nodes", 1, "file"],
+  locations: [{line: 1, column: 1}], message: "Could not resolve file for path"}]' <<<"$absent_reply" >/dev/null ||
+  fail "the ABSENT fixture must carry GitHub's NOT_FOUND error for that node"
+for bad in '.errors[0].type = "FORBIDDEN"' \
+  '.errors[0].path[4] = 0' \
+  '.errors[0].path = ["repository", "object"]' \
+  '.errors[0].path[2] = "after"' \
+  '.errors += [{type: "RATE_LIMITED", path: null, message: "slow down"}]' \
+  '.errors = []' \
+  '.errors = {}'; do
+  put "graphql/o/q/.github/workflows/late.yaml" "$(jq -c "$bad" <<<"$absent_reply")"
+  run --repo o/q
+  [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a GraphQL reply edited by '$bad' must exit 2, got $rc"; }
+  has "QUERY-UNKNOWN o/q .github/workflows/late.yaml — file history at the pinned head unreadable" \
+    "a GraphQL reply edited by '$bad' must be named"
+done
+put "graphql/o/q/.github/workflows/late.yaml" '<html>Bad Gateway</html>'
+run --repo o/q
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a non-JSON history reply must exit 2, got $rc"; }
+# A failed request whose reply is well formed but carries no error to explain the failure is UNKNOWN.
+put "graphql/o/q/.github/workflows/late.yaml" "$(history_json "$daily" - - "$daily")"
+GRAPHQL_EXIT1=1 run --repo o/q
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a failed request with an error-free reply must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/q .github/workflows/late.yaml — file history at the pinned head unreadable" \
+  "a failed request with an error-free reply must be named"
+# …while the tolerated answer is read as what it is: the file removed inside the window, not yet due.
+put "graphql/o/q/.github/workflows/late.yaml" "$absent_reply"
+run --repo o/q
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "GitHub's NOT_FOUND for a removed version grants the grace, got $rc"; }
 
 # Repository o/r2 — the head every read is pinned to must resolve, or the repository is UNKNOWN.
 put "repos/o/r2" '{"default_branch":"main"}'
@@ -722,6 +772,13 @@ for reply in '{"ref":"refs/heads/main","object":{"type":"commit","sha":"c0ffee"}
   [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed head ($reply) must exit 2, got $rc"; }
   has "QUERY-UNKNOWN o/r2 — default branch head unresolvable" "a malformed head must be named"
 done
+# A schedule that ran inside the window is healthy without its history: even an unreadable history
+# is never read, so it cannot turn a proven firing into UNKNOWN.
+rm -f "$fix/$(printf '%s' "repos/o/r2/git/ref/heads/main" | tr '/?&=' '____').json"
+history o/r2 .github/workflows/daily.yaml MISSING
+run --repo o/r2
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a schedule that ran inside the window must not need its history, got $rc"; }
+has "CHECKED 1 scheduled workflow(s) across 1 repositor(ies)" "the healthy schedule is still examined"
 
 # Repository o/z — the default branch moves while it is scanned (monorepo#3672). At the first head the
 # workflow holds a daily schedule that last ran 40 days ago.
@@ -751,10 +808,14 @@ lacks "daily.yaml" "a workflow deleted mid-scan must not be reported"
 # The branch moved but the schedule did not: the silence is confirmed at the new head and reported.
 put "repos/o/z/contents/.github/workflows/daily.yaml?ref=$pin2" "$daily"
 head_sequence o/z "$pin" "$pin2"
-run --repo o/z
+rm -f "$tmp/log"
+REQUEST_LOG="$tmp/log" run --repo o/z
 [ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a silence that survives the move must be reported, got $rc"; }
 has "SILENT-WORKFLOW o/z .github/workflows/daily.yaml — no scheduled run in the last 97h (its cron fires at least every 1d)" \
   "a silence confirmed at the new head must be reported"
+# The re-judgement walks the history at the NEW head, not the one the first scan was pinned to.
+grep -qxF "graphql oid=$pin2 path=.github/workflows/daily.yaml" "$tmp/log" ||
+  { cat "$tmp/log" >&2; fail "the history must be walked again at the new head"; }
 # A branch that keeps moving, or a head that cannot be re-read, leaves the silence UNKNOWN.
 head_sequence o/z "$pin" "$pin2" "$pin3"
 run --repo o/z
