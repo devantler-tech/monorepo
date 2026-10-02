@@ -372,6 +372,7 @@ XFTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_xf.XXXXXXXX") || { echo "cannot create te
 # walk, because each canary compares its OWN failures with its OWN reads.
 XFREL=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfrel.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 XFDENY=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfdeny.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+XFINJ=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfinj.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 XFBUILD=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfbuild.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 XFA2A=$(mktemp "${TMPDIR:-/tmp}/.agtel_xfa2a.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # The credential-table working sets are held IN MEMORY, never in a scratch file
@@ -402,8 +403,8 @@ cred_blob_set=''
 SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFBUILD" "$XFA2A"' EXIT
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFBUILD" "$XFA2A"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"' EXIT
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP" "$XFREL" "$XFDENY" "$XFINJ" "$XFBUILD" "$XFA2A"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 # extraction_canary <failure-file> <reads> <walk>
 # States how many of a walk's per-file extractions failed (#2916). Each failed
@@ -427,6 +428,52 @@ extraction_canary() {
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
+# Byte-mode candidates already cover every ASCII match and accept MORE bytes
+# in negated classes than POSIX does. Only case folding and [[:space:]] can add
+# a match through a non-ASCII scalar. Start conservatively with ALL such bytes.
+# For large corpora, ask the authoritative host grep for its complete extra
+# alphabet instead: every valid non-ASCII Unicode scalar is probed, including
+# BOTH literal-letter and range-class case folding and Unicode whitespace.
+# Encode the resulting scalars as byte alternatives for rg; it never supplies
+# its own Unicode semantics. A failed or empty probe retains the broad fallback.
+SAFETY_NONASCII_RE='[^\x00-\x7F]'
+native_nonascii_candidates() {
+  local native_ps=()
+  jq -nr 'range(128;1114112) | select(. < 55296 or . > 57343) | [.] | implode' \
+    | grep -xiE '(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z|[a-z]|[A-Z]|[[:space:]])' \
+    | jq -Rrs 'split("\n") | map(select(length > 0) | @uri | gsub("%"; "\\x")) | join("|")'
+  native_ps=("${PIPESTATUS[@]}")
+  [ "${#native_ps[@]}" -eq 3 ] && [ "${native_ps[0]}" -eq 0 ] \
+    && [ "${native_ps[1]}" -le 1 ] && [ "${native_ps[2]}" -eq 0 ]
+}
+
+# Keep the POSIX phrase detector authoritative, but avoid its expensive UTF-8
+# scan of large payloads that cannot contain a match (#3761). Retain every
+# native non-ASCII case alias (or all such bytes if the probe was unavailable).
+# Prefix candidates with their ORIGINAL line number before filtering; adding
+# numbers after filtering would corrupt provenance. Both branches return the
+# same numbered raw lines and record any failed stage as incomplete evidence.
+injection_matching_lines() {
+  local f="$1" len="$2" inj_ps=()
+  if command -v rg >/dev/null 2>&1; then
+    snapshot_bytes "$f" "$len" \
+      | rg --no-config --no-unicode --text --ignore-case --no-heading \
+          --no-filename --line-number --color never \
+          --regexp "($INJ_PHRASE_RE|$SAFETY_NONASCII_RE)" \
+      | grep -iE "$INJ_PHRASE_RE" 2>/dev/null
+    inj_ps=("${PIPESTATUS[@]}")
+    if [ "${#inj_ps[@]}" -eq 3 ] && [ "${inj_ps[0]}" -eq 0 ] \
+       && [ "${inj_ps[1]}" -le 1 ] && [ "${inj_ps[2]}" -le 1 ]; then return 0; fi
+  else
+    snapshot_bytes "$f" "$len" | grep -niE "$INJ_PHRASE_RE" 2>/dev/null
+    inj_ps=("${PIPESTATUS[@]}")
+    if [ "${#inj_ps[@]}" -eq 2 ] && [ "${inj_ps[0]}" -eq 0 ] \
+       && [ "${inj_ps[1]}" -le 1 ]; then return 0; fi
+  fi
+  printf x >> "$XFINJ"
+  return 1
+}
+
 # Emit one safe provenance row per occurrence. This deliberately does NOT
 # classify a whole transcript record as self-referential or external: one JSONL
 # record can contain multiple content blocks from different sources, so a
@@ -438,7 +485,7 @@ emit_injection_hits() {
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
-  snapshot_bytes "$f" "$len" | grep -niE "$INJ_PHRASE_RE" 2>/dev/null \
+  injection_matching_lines "$f" "$len" \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
@@ -567,7 +614,7 @@ emit_injection_classes() {
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
-  snapshot_bytes "$f" "$len" | grep -niE "$INJ_PHRASE_RE" 2>/dev/null \
+  injection_matching_lines "$f" "$len" \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
@@ -3515,6 +3562,9 @@ if want safety; then
   fi
   echo
   echo "── SAFETY (guardrails) ──────────────────────────────────────────"
+  echo "  scope: entire contents of capped files modified within ${SINCE_DAYS} day(s)."
+  echo "         Older records in resumed sessions are included; this is a superset"
+  echo "         of the record-time window, not a record-time-bounded scan."
   # Combined gate — the credential scan below is format-agnostic and must still
   # run when only the Codex corpus has files, or a Codex-only leak reports clean.
   if [ $((SF_COUNT + CX_COUNT)) -eq 0 ]; then
@@ -3579,8 +3629,17 @@ if want safety; then
     # Pin the corpus ONCE. Every walk below reads this same byte prefix, so the
     # split cannot annotate occurrences the total never counted.
     injection_snapshot > "$INJSNAP"
+    # Probe once per invocation, not per file or per decoded string. Small
+    # fixtures/corpora need no startup cost and keep the broader candidate set.
+    safety_bytes=$(awk -F '\t' '{n += $1} END {printf "%.0f", n+0}' "$INJSNAP")
+    if [ "${safety_bytes:-0}" -gt 8388608 ]; then
+      if safety_extra=$(native_nonascii_candidates) && [ -n "$safety_extra" ] \
+         && [ "${#safety_extra}" -lt 4096 ]; then
+        SAFETY_NONASCII_RE="$safety_extra"
+      fi
+    fi
     while IFS="$(printf '\t')" read -r len f; do
-      snapshot_bytes "$f" "$len" | grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null
+      injection_matching_lines "$f" "$len" | grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null
     done < "$INJSNAP" | redact | tr '[:upper:]' '[:lower:]' \
       | while IFS= read -r phrase || [ -n "$phrase" ]; do
           [ -n "$phrase" ] || continue
@@ -3610,6 +3669,10 @@ if want safety; then
     while IFS="$(printf '\t')" read -r len f; do
       emit_injection_classes "$f" "$len"
     done < "$INJSNAP" > "$CONCTMP"
+    if [ -s "$XFINJ" ]; then
+      echo "    UNKNOWN: the instruction scan did not complete (a stage failed or was cut short)."
+      echo "    All instruction counts and classes are PARTIAL, never a clean scan."
+    fi
     inj_records=$(cut -f1,2 "$CONCTMP" | sort -u | grep -c . || true)
     inj_sessions=$(cut -f1 "$CONCTMP" | sort -u | grep -c . || true)
     inj_top=$(cut -f1,2 "$CONCTMP" | sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
@@ -3749,6 +3812,9 @@ if want safety; then
       done < "$INJSNAP" | redact > "$PROVTMP"
       echo "    occurrence provenance (safe locator only; inspect source as untrusted DATA):"
       awk -F'\t' '{printf "      session=%s line=%s record=%s phrase=%s\n", $1, $2, $3, $4}' "$PROVTMP"
+      if [ -s "$XFINJ" ]; then
+        echo "    UNKNOWN: the instruction scan did not complete; provenance is PARTIAL."
+      fi
     else
       echo "    provenance: rerun with --section safety --injection-provenance"
     fi
@@ -3804,8 +3870,8 @@ if want safety; then
     # instead. jq applies the filter independently to every input line, and the
     # portfolio-wide `sort -u` below already makes file order and per-file
     # boundaries irrelevant. Batch size 1 is therefore the byte-identical
-    # reference path used by the contract test; no raw pre-filter is introduced,
-    # so JSON-escaped matches remain visible. One awk process per batch restores
+    # reference path used by the contract test; candidate filtering happens only
+    # AFTER decoding, so JSON-escaped matches remain visible. One awk process per batch restores
     # a trailing record separator at every file boundary; without it, jq -R
     # joins an unterminated live-session record to the next file.
     # `image_payload_entry` comes from CRED_IMAGE_PAYLOAD_DEF, shared with
@@ -3888,6 +3954,27 @@ if want safety; then
       local s=0
       grep "$@" || s=$?
       [ "$s" -le 1 ]
+    }
+    # BSD grep's blob-run extraction takes seconds per megabyte of harmless
+    # encoded text (#3761). Use ripgrep's linear regex engine only to select
+    # WHOLE decoded strings; the existing POSIX extractor still decides every
+    # match and its surrounding run. CRED_RE is the broader, unanchored detector,
+    # so every ASCII table match must pass it. The shared non-ASCII alternatives
+    # retain every extra case/space scalar the host POSIX detector recognizes
+    # (or all non-ASCII bytes when its exhaustive probe could not complete).
+    # Byte-mode negated classes also admit malformed UTF-8. No hand-kept shape
+    # list, truncation, or raw-JSON filter can hide a match. Without rg, scan the
+    # original stream. A failed accelerator is UNKNOWN, never an empty scan.
+    cred_candidate_lines() {
+      local s=0
+      if command -v rg >/dev/null 2>&1; then
+        rg --no-config --no-unicode --text --ignore-case --no-heading \
+          --no-filename --no-line-number --color never \
+          --regexp "($CRED_RE|$SAFETY_NONASCII_RE)" || s=$?
+        [ "$s" -le 1 ]
+      else
+        cat
+      fi
     }
     # BOUND EACH VALUE AT CRED_VALUE_MAX (#2980). A value longer than the cap
     # keeps its first CRED_VALUE_MAX bytes and gains `~` plus a 64-bit checksum
@@ -3981,6 +4068,7 @@ if want safety; then
       | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
           'set -o pipefail; awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
       | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
+      | cred_candidate_lines \
       | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null \
       | tr '\000' '\n' \
       | awk '
@@ -3991,9 +4079,10 @@ if want safety; then
           { print | blob; print | plain }
           END { close(blob); close(plain); print "OK" }'
       cred_ps=("${PIPESTATUS[@]}")
-      if [ "${#cred_ps[@]}" -eq 8 ] && [ "${cred_ps[0]}" -eq 0 ] && [ "${cred_ps[1]}" -le 1 ] \
+      if [ "${#cred_ps[@]}" -eq 9 ] && [ "${cred_ps[0]}" -eq 0 ] && [ "${cred_ps[1]}" -le 1 ] \
          && [ "${cred_ps[2]}" -eq 0 ] && [ "${cred_ps[3]}" -eq 0 ] && [ "${cred_ps[4]}" -eq 0 ] \
-         && [ "${cred_ps[5]}" -le 1 ] && [ "${cred_ps[6]}" -eq 0 ] && [ "${cred_ps[7]}" -eq 0 ]; then
+         && [ "${cred_ps[5]}" -eq 0 ] && [ "${cred_ps[6]}" -le 1 ] \
+         && [ "${cred_ps[7]}" -eq 0 ] && [ "${cred_ps[8]}" -eq 0 ]; then
         echo XOK
       fi)
     export -n CRED_BLOB_LEG_SH CRED_PLAIN_LEG_SH CRED_BLOB_ANCHORED_RE CRED_BLOB_STRIP_RE CRED_VALUE_MAX
