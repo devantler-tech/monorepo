@@ -190,8 +190,10 @@ the fifteen proven traps live in `agent-claim.test.sh`).
    - **Cheap read first.** List `repos/<o>/<r>/pulls/<n>/commits` (paginate) and compare the newest
      commit's committer date with the review or check run you are acting on. A commit after it means
      someone may already have fixed it: re-read the findings at the new head before building
-     anything. `updatedAt` is no substitute — every bot comment moves it — and unresolved threads
-     look identical whether or not a fix exists.
+     anything. Record the head SHA you validated: repeat this read after `acquire` succeeds and again
+     immediately before you push, and if the head moved, re-read the findings there and rebuild on
+     the new head rather than pushing a fix for an older one. `updatedAt` is no substitute — every
+     bot comment moves it — and unresolved threads look identical whether or not a fix exists.
    - **Then claim the PR number** with the same helper and the same `--repo-dir` rules as an issue:
      `claim_sha="$(.claude/scripts/agent-claim.sh acquire <pr-number> --repo-dir <product-path>)"`.
      **Issues and pull requests share one number sequence per repository**, so `agent-claim/<n>` for
