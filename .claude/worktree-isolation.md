@@ -151,10 +151,13 @@ So the loop is: agent initialises a submodule → isolation silently breaks → 
 in that submodule resolves into the shared main checkout → parallel sessions collide. **Initialising and
 repairing must therefore be one operation**, which is what
 [`.claude/scripts/submodule-init.sh`](scripts/submodule-init.sh) does (init → repair → fail-closed
-probe). `submodule-init.sh --check` probes every initialised submodule and exits non-zero if any is
-not isolated. The probe is non-destructive — it never modifies submodule content, tracked files, or
-other sessions' worktrees — but not strictly read-only: it adds and removes a throwaway probe
-worktree to catch a dangling `core.worktree` a config read alone would miss.
+probe). `submodule-init.sh --check` probes every initialised submodule. It exits `1` when one is
+confirmed not isolated or is the wrong repository — repair it — and `2` when one could not be read
+(git cannot resolve it, or a linked worktree, its origin or the probe worktree cannot be read), so
+nothing was concluded; a confirmed break outranks an unread one. Both refuse the tree. The probe is
+non-destructive — it never modifies submodule content, tracked files, or other sessions' worktrees —
+but not strictly read-only: it adds and removes a throwaway probe worktree to catch a dangling
+`core.worktree` a config read alone would miss.
 
 ### Advancing a populated submodule to a new pin (`--advance`)
 

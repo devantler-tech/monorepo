@@ -246,7 +246,7 @@ cat >"$TMP/bin/gh" <<'EOF'
 # Emits one search page that is TRUNCATED but internally consistent: total_count equals the
 # number of items returned, so only incomplete_results reveals it.
 cat <<'JSON'
-{"total_count":1,"incomplete_results":true,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"body":"no blocker line"}]}
+{"total_count":1,"incomplete_results":true,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"labels":[{"name":"blocked"}],"body":"no blocker line"}]}
 JSON
 EOF
 chmod +x "$TMP/bin/gh"
@@ -263,7 +263,7 @@ fi
 cat >"$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 cat <<'JSON'
-{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"body":"no blocker line"}]}
+{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"labels":[{"name":"blocked"}],"body":"no blocker line"}]}
 JSON
 EOF
 chmod +x "$TMP/bin/gh"
@@ -780,6 +780,16 @@ OUT="$("$GUARD" --input "$TMP/verify-age.json" --today 2026-09-09 --verify-max-a
 if [ "$RC" = 0 ]; then ok "the verification bound is a flag"; else bad "the verification bound is a flag" "rc=$RC out=$OUT"; fi
 OUT="$("$GUARD" --input "$TMP/verify-age.json" --today 2026-08-31 2>&1)"; RC=$?
 if [ "$RC" = 1 ] && grep -q '^MALFORMED' <<<"$OUT"; then ok "a future verification date is never fresh"; else bad "a future verification date is never fresh" "rc=$RC out=$OUT"; fi
+
+# A declared blocker on an issue without the blocked label is its own finding class
+# (#3142); "**Blocker:** none" and a record-less unlabelled issue are not findings.
+cat >"$TMP/unlabelled.json" <<'EOF'
+[{"repo":"u","number":1,"labels":[{"name":"bug"}],"body":"**Blocker:** maintainer authority: sign the release"},
+ {"repo":"u","number":2,"labels":[],"body":"**Blocker:** none — agent-actionable"},
+ {"repo":"u","number":3,"labels":[],"body":"plain work"}]
+EOF
+OUT="$("$WRAPPER" --quiet --input "$TMP/unlabelled.json" 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && [ "$OUT" = 'UNLABELLED u#1  >>**Blocker:** maintainer authority: sign the release' ]; then ok "an unlabelled declared blocker is UNLABELLED, and none is skipped"; else bad "an unlabelled declared blocker is UNLABELLED, and none is skipped" "rc=$RC out=$OUT"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1

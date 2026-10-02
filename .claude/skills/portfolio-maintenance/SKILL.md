@@ -836,7 +836,9 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    named external dependency that satisfies the consumer contract, or is a delivered experiment
    awaiting its **named, future measurement date** recorded on the issue and not yet elapsed (contract
    skip clause (d) — once that date arrives, measuring and recording the decision *is* the actionable
-   work). A `blocked` label or blocker prose
+   work), or has an open native blocking-dependency count above zero (contract skip clause (g) — read
+   the count on the issue itself, never the blocker nodes' metadata; a closed blocker the issue's own
+   record names is re-verified before work builds on it). A `blocked` label or blocker prose
    is never sufficient: apply the contract's *External-blocker verification* rule before every
    external-blocker skip, including its structured record and fresh per-run non-repository check. A
    missing, malformed, or inherited blocker record is not a skip. A **bare `devantler` assignee does

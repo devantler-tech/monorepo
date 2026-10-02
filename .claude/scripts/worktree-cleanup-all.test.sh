@@ -55,13 +55,15 @@ make_root() {
   printf '%s' "$root"
 }
 
-# add_session_with_nested <root> <pushed|unpushed> — a pushed session worktree `sess` whose
-# submodule `nested` is populated (so its repository lives in the session's own admin dir)
-# and holds a linked worktree `inner` of that submodule's repository. `unpushed` gives
-# `inner` a commit no remote has. Both are aged past every threshold.
+# add_session_with_nested <root> <pushed|unpushed> [lane] [session path] — a pushed session
+# worktree (default <root>/repo/.<lane>/worktrees/sess) whose submodule `nested` is populated
+# (so its repository lives in the session's own admin dir) and holds a linked worktree `inner`
+# of that submodule's repository. `unpushed` gives `inner` a commit no remote has. Both are aged
+# past every threshold. `inner` sits in .claude/worktrees in either lane's session: that is
+# where worktree-claim.sh puts the guide's `.claude/worktrees/maint-<runid>` for a submodule.
 add_session_with_nested() {
-  local root=$1 state=$2 lane=${3:-claude} sess="$1/repo/.${3:-claude}/worktrees/sess"
-  local inner="$sess/nested/.$lane/worktrees/inner"
+  local root=$1 state=$2 lane=${3:-claude} sess=${4:-$1/repo/.${3:-claude}/worktrees/sess}
+  local inner="$sess/nested/.claude/worktrees/inner"
   git -C "$root/repo" worktree add -q -b "$lane/sess" "$sess" main || return 1
   git -C "$root/repo" push -q origin "$lane/sess" || return 1
   git -C "$sess" config submodule.nested.url "$root/sub.git"
@@ -69,7 +71,7 @@ add_session_with_nested() {
     || return 1
   [ -d "$(git -C "$sess" rev-parse --absolute-git-dir)/modules/nested" ] || return 1
   git -C "$sess/nested" config user.email t@t.t && git -C "$sess/nested" config user.name t
-  mkdir -p "$sess/nested/.$lane/worktrees"
+  mkdir -p "$sess/nested/.claude/worktrees"
   git -C "$sess/nested" worktree add -q -b "$lane/inner" "$inner" HEAD || return 1
   if [ "$state" = unpushed ]; then
     echo local > "$inner/h" && git -C "$inner" add h && git -C "$inner" commit -qm "local only" \
@@ -843,6 +845,92 @@ t_codex_lane_from_a_codex_app_worktree_sweeps_the_main_checkout() {
   rm -rf "$root"
 }
 
+t_codex_lane_sweeps_worktrees_nested_in_its_sessions() {
+  # #3713: a Codex run that works in a submodule gets its per-run worktree beneath that
+  # submodule inside its Codex session worktree, exactly as a Claude run does. The codex lane
+  # must reach it in each of its session roots — the checkout's .codex/worktrees and the Codex
+  # app's dir — and the same run must then reap the freed parent, which it kept forever before.
+  local where name root sess header label dry dry_kept out rc dir
+  for where in checkout app; do
+    name="the codex lane reaps a worktree nested in a Codex session's submodule, then its parent ($where)"
+    root=$(make_root)
+    if [ "$where" = checkout ]; then
+      sess="$root/repo/.codex/worktrees/sess"; header='.codex/worktrees/sess/nested'
+      label='nested-sess-nested'
+    else
+      sess="$root/home/.codex/worktrees/ab12/repo"; header="$sess/nested"
+      label="nested-$(printf '%s' "${root#/}" | tr '/' '-')-home-ab12-repo-nested"
+    fi
+    add_session_with_nested "$root" pushed codex "$sess" || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
+    dry=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 --lane codex 2>&1)
+    [ -d "$sess/nested/.claude/worktrees/inner" ] && dry_kept=yes || dry_kept=NO
+    out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane codex 2>&1); rc=$?
+    dir="$root/home/.claude/worktree-cleanup-manifests"
+    if grep -qxF "### $header" <<<"$dry" && grep -q 'REAP  .*inner' <<<"$dry" \
+       && [ "$dry_kept" = yes ] && [ "$rc" -eq 0 ] \
+       && [ ! -e "$sess/nested/.claude/worktrees/inner" ] && [ ! -e "$sess" ] \
+       && ls "$dir/codex/$label-"*.tsv >/dev/null 2>&1 \
+       && ! ls "$dir"/nested-*.tsv >/dev/null 2>&1; then
+      ok "$name"
+    else
+      bad "$name" "rc=$rc dry_kept=$dry_kept inner=$([ -e "$sess/nested/.claude/worktrees/inner" ] && echo present || echo gone) sess=$([ -e "$sess" ] && echo present || echo gone) manifests=$(find "$dir" -name '*.tsv' 2>&1 | tr '\n' ' ')
+$dry
+---
+$out"
+    fi
+    rm -rf "$root"
+  done
+}
+
+t_codex_nested_pass_leaves_a_live_session_alone() {
+  # The same protection the claude lane gives its sessions: a Codex session a live process
+  # works in keeps its nested worktrees, even when they alone would qualify.
+  local name="the codex lane leaves the nested worktrees of a live Codex session alone"
+  local root; root=$(make_root)
+  add_session_with_nested "$root" pushed codex || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local sess="$root/repo/.codex/worktrees/sess" pid out rc
+  ( cd "$sess" && exec sleep 120 ) &
+  pid=$!
+  sleep 1
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane codex 2>&1); rc=$?
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  if [ "$rc" -eq 0 ] && [ -d "$sess/nested/.claude/worktrees/inner" ] && [ -d "$sess" ] \
+     && grep -q 'SKIP .codex/worktrees/sess (a live process works inside it' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc inner=$([ -d "$sess/nested/.claude/worktrees/inner" ] && echo present || echo GONE) $out"
+  fi
+  rm -rf "$root"
+}
+
+t_nested_passes_never_cross_lanes() {
+  # A Claude session and a Codex session, each with a spent nested worktree. Each lane's nested
+  # pass enters only its own sessions, so each lane's run leaves the other's pair untouched.
+  local name="each lane's nested pass reaps its own sessions' nested worktrees and never the other's"
+  local root; root=$(make_root)
+  if ! add_session_with_nested "$root" pushed claude || ! add_session_with_nested "$root" pushed codex; then
+    bad "$name" "FIXTURE"; rm -rf "$root"; return
+  fi
+  local cs="$root/repo/.claude/worktrees/sess" xs="$root/repo/.codex/worktrees/sess"
+  local out1 rc1 out2 rc2 after_claude
+  out1=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane claude 2>&1); rc1=$?
+  after_claude=NO
+  if [ ! -e "$cs" ] && [ -d "$xs/nested/.claude/worktrees/inner" ] && [ -d "$xs" ]; then
+    after_claude=yes
+  fi
+  out2=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" apply 24 --lane codex 2>&1); rc2=$?
+  if [ "$rc1" -eq 0 ] && [ "$after_claude" = yes ] && [ "$rc2" -eq 0 ] && [ ! -e "$xs" ] \
+     && ! grep -q '\.codex/worktrees' <<<"$out1" && ! grep -q '\.claude/worktrees/sess' <<<"$out2"; then
+    ok "$name"
+  else
+    bad "$name" "rc1=$rc1 after_claude=$after_claude rc2=$rc2 xs=$([ -e "$xs" ] && echo present || echo gone)
+$out1
+---
+$out2"
+  fi
+  rm -rf "$root"
+}
+
 t_rejects_a_bad_lane_or_extra_argument() {
   local name="an unknown lane, a missing lane value or an extra argument stops the run"
   local root; root=$(make_root)
@@ -973,7 +1061,7 @@ EOF
       out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
         bash "$SUT" "$mode" 24 --lane "$lane" 2>&1); rc=$?
       if [ "$rc" -eq "$expected" ] && [ ! -e "$root/forbidden-probes" ] \
-         && [ -d "$sess/nested/.$lane/worktrees/inner" ]; then
+         && [ -d "$sess/nested/.claude/worktrees/inner" ]; then
         ok "$metadata nested repository retains its parent without probes ($mode, $lane)"
       else
         bad "$metadata nested repository retains its parent without probes ($mode, $lane)" "rc=$rc $out"
@@ -1035,6 +1123,9 @@ t_claude_lane_leaves_codex_roots_untouched
 t_codex_lane_leaves_claude_roots_untouched
 t_lane_manifests_never_share_a_file
 t_codex_lane_from_a_codex_app_worktree_sweeps_the_main_checkout
+t_codex_lane_sweeps_worktrees_nested_in_its_sessions
+t_codex_nested_pass_leaves_a_live_session_alone
+t_nested_passes_never_cross_lanes
 t_rejects_a_bad_lane_or_extra_argument
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
