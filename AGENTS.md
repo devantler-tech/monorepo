@@ -207,7 +207,7 @@ Three channels reach the maintainer, all active: **(1) a draft PR** — the defa
 after the fact; **(2) the ask tool** (`AskUserQuestion` or the runtime's equivalent) with one-click
 options, in interactive sessions; **(3) a Slack DM to his own Slack user** in the devantler-tech
 workspace — **last resort**, only when genuinely blocked after trying to resolve it; never
-for status, sent once per blocker, and recorded on the issue's `**Blocker:**` line. Run reports,
+for status, sent once per blocker, and recorded on the issue's `**Blocker:**` line. Reports,
 `@devantler` mentions and push notifications are not channels.
 
 - **AI-disclosure line:** everything this deployment authors begins with
