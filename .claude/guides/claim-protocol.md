@@ -180,6 +180,35 @@ the fifteen proven traps live in `agent-claim.test.sh`).
    reasoned from the diff rather than executed. Likewise, a review you obtained on your own losing PR
    **audits the winner too**: re-check its findings against `main` before discarding them (that is how
    the merged armour guard's membership-vs-mapping gap was found).
+6. **Fixing findings on an existing PR is claimed too — `agent-claim/<pr-number>`** (monorepo#2999).
+   Retiring the issue claim when the draft opens is right for the build, but a review that lands
+   later starts a fresh unit of work with no reservation: every lane sweeping rung 1 sees the same
+   unresolved findings, and a completed bot review is the cue to act, not an ownership signal. On
+   2026-08-22 that cost two complete, validated builds in one hour (`platform#3313`, `#3314`), each
+   caught only by fetch-before-push. Before you invest in a fix for review findings or a red check on
+   a PR you did not just push to:
+   - **Cheap read first.** List `repos/<o>/<r>/pulls/<n>/commits` (paginate) and compare the newest
+     commit's committer date with the review or check run you are acting on. A commit after it means
+     someone may already have fixed it: re-read the findings at the new head before building
+     anything. Record the head SHA you validated: repeat this read after `acquire` succeeds and again
+     immediately before you push, and if the head moved, re-read the findings there and rebuild on
+     the new head rather than pushing a fix for an older one. `updatedAt` is no substitute — every
+     bot comment moves it — and unresolved threads look identical whether or not a fix exists.
+   - **Then claim the PR number** with the same helper and the same `--repo-dir` rules as an issue:
+     `claim_sha="$(.claude/scripts/agent-claim.sh acquire <pr-number> --repo-dir <product-path>)"`.
+     **Issues and pull requests share one number sequence per repository**, so `agent-claim/<n>` for
+     a PR can never collide with an issue claim. A lost race (exit 1) means another lane is fixing
+     these findings: stand down under rule 5. A live tip on the PR number is a reason to leave the
+     PR's findings alone this run, never to skip the PR's other rung-1 duties (a review request, the
+     merge of a head that is already ready).
+   - **Renew immediately before you push the fix**, exactly as rule 2(d), and stand down on a failed
+     renew. **Retire the acquired SHA once the fix is pushed** and the threads are answered — the new
+     commit is now the discoverable signal. [`agent-claim-sweep.sh`](../scripts/agent-claim-sweep.sh)
+     removes the tip after the PR closes, because the issues API reports a merged PR as closed.
+   - **Takeover of a PR-number tip** needs the lease gate (`is-stale` exits 0) **and** no commit on
+     the PR newer than the tip's committer date. The "no open PR" gate of rule 3 cannot apply — the
+     PR is open by definition — so the commit check takes its place: a push after the claim means the
+     holder delivered and only failed to retire.
 
 **A live claim is a temporary skip — the one addition to the skip test.** *Drain oldest-first* lists
 when an older issue may be passed over; a **live claim** — an `agent-claim/<issue>` tip inside the
