@@ -1134,6 +1134,35 @@ said "$out" "$blind_lint" 'UNKNOWN (scan failed, cache not examined)' ||
   fail 'an idle lint cache with an unreadable process table was not reported UNKNOWN'
 rm -rf -- "$blind_lint"
 
+# 17y. a cache one level below a Claude Code session scratchpad
+# (claude-<uid>/<project>/<session>/scratchpad/<cache>) is swept like a top-level one; on
+# 2026-10-02 two of them held 8.9 GB the depth-1 listing never saw. Its ablation partners differ
+# in one dimension each and must not be considered at all: the same cache under a root not named
+# claude-*, and one under a session dir that is not the scratchpad.
+scratch_go=$(make_run_cache 'claude-501/proj-a/sess-1/scratchpad/gocache' "$go_marker" 7) ||
+  fail 'fixture: 17y scratchpad cache'
+scratch_fresh=$(make_run_cache 'claude-501/proj-a/sess-2/scratchpad/gocache' "$go_marker" 7) ||
+  fail 'fixture: 17y fresh scratchpad cache'
+printf 'entry\n' > "${scratch_fresh}/00/b2-d"
+scratch_other_root=$(make_run_cache 'notclaude-501/proj-a/sess-1/scratchpad/gocache' "$go_marker" 7) ||
+  fail 'fixture: 17y non-claude root'
+scratch_not_pad=$(make_run_cache 'claude-501/proj-a/sess-1/elsewhere/gocache' "$go_marker" 7) ||
+  fail 'fixture: 17y non-scratchpad dir'
+out=$(run_cache dry-run 3 "$NEVER_CLEAN_BUDGET")
+said "$out" "$scratch_go" 'WOULD REAP' ||
+  fail 'an idle Go cache inside a session scratchpad was not selected'
+said "$out" "$scratch_fresh" 'KEEP  (written within 6h)' ||
+  fail 'a recently written Go cache inside a session scratchpad was not kept'
+grep -qF "$scratch_other_root" <<<"$out" && fail 'a nested cache under a non-claude-* root was considered'
+grep -qF "$scratch_not_pad" <<<"$out" && fail 'a nested cache outside the scratchpad dir was considered'
+[ -e "${scratch_go}/00/a1-d" ] || fail 'dry-run deleted a scratchpad Go cache'
+out=$(run_cache apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$scratch_go" ] && fail "apply did not reap an idle scratchpad Go cache: $scratch_go"
+[ -e "$scratch_fresh" ] || fail 'apply reaped a recently written scratchpad Go cache'
+[ -e "$scratch_other_root" ] || fail 'apply reaped a nested cache under a non-claude-* root'
+[ -e "$scratch_not_pad" ] || fail 'apply reaped a nested cache outside the scratchpad dir'
+rm -rf -- "${cache_root}/claude-501" "${cache_root}/notclaude-501"
+
 # --- 18. no go binary at all (the macOS CI runner): GOCACHE is read where go would read it -------
 nogo_env() { # <GOENV value> <args...>
   local goenv=$1
