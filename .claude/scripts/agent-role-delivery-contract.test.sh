@@ -1440,6 +1440,32 @@ case "${trust_gate_flat}" in
   *'**Maintainer-PR driving: `attribution-only`.**'*) ;;
   *) fail "Trust gate does not declare 'Maintainer-PR driving: \`attribution-only\`' — the plugin would default to hands-off and stop driving the maintainer's interactive PRs this contract hands the engineer" ;;
 esac
+# The plugin surveyor reads the AI-disclosure prefix and, beside it, the interactive-session marker
+# from AGENTS.md's Maintainer channels section, and reports `none` for the maintainer's own
+# interactive PRs when that section declares no marker (monorepo#3225). Pin both declarations
+# INSIDE that section of AGENTS.md: the assembled contract would also accept a same-named heading in
+# a guide, which is not where the plugin looks.
+contract_channels_flat="$(
+  awk '/^### Maintainer channels/ { inside = 1; print; next } inside && /^##/ { exit } inside' "${repo_root}/AGENTS.md" |
+    tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${contract_channels_flat}" ] ||
+  fail "could not locate AGENTS.md's '### Maintainer channels' section, so the marker declarations cannot be checked"
+contract_channels_words="$(printf '%s' "${contract_channels_flat}" | wc -w | tr -d ' ')"
+[ "${contract_channels_words}" -lt 1500 ] ||
+  fail "Maintainer channels section extracted as ${contract_channels_words} words — its end anchor (the next heading) is missing, so the marker check is no longer scoped to the section"
+for channels_rule in \
+  '**AI-disclosure line:** everything this deployment authors begins with' \
+  '**Interactive-session marker:** the literal `Generated with [Claude Code]`'; do
+  case "${contract_channels_flat}" in
+    *"${channels_rule}"*) ;;
+    *) fail "AGENTS.md Maintainer channels no longer declares '${channels_rule}' — the plugin surveyor reads both markers there and cannot attribute the maintainer's interactive PRs without them (monorepo#3225)" ;;
+  esac
+done
+case "${contract_channels_flat}" in
+  *'how the two markers are matched: [maintainer channels guide](.claude/guides/maintainer-channels.md)'*) ;;
+  *) fail "AGENTS.md Maintainer channels no longer points at the maintainer channels guide for how the two markers are matched" ;;
+esac
 # The declaration is only as strong as the prose around it: wording that still calls the
 # interactive-PR rule a hands-off rule tells the same reader the opposite.
 refute_prose "interactive-PR HANDS-OFF rule" \
