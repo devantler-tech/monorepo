@@ -35,18 +35,20 @@
 #
 # OUTPUT (one line on stdout)
 #   GREEN            a CodeRabbit reply stating a finding-free review of --head
+#   FINDINGS <n>     a CodeRabbit reply carrying <n> severity-tagged findings (`**P1 — …**`,
+#                    `### P1: …`), or 1 for any other finding marker; a non-thread review finding
+#                    to fix or refute, never "no review" (monorepo#3004)
 #   NONE <reason>    not a green for this head; <reason> is one of not-coderabbit, not-a-reply,
-#                    did-not-run, finding-markers, no-verdict, no-sha, not-a-review,
-#                    other-head
+#                    did-not-run, no-verdict, no-sha, not-a-review, other-head
 #
 # EXIT CODES
 #   0  GREEN
-#   1  NONE
+#   1  FINDINGS or NONE
 #   2  usage error or malformed input — nothing was judged
 set -euo pipefail
 
 usage() {
-  sed -n '28,45p' "$0" >&2
+  sed -n '28,47p' "$0" >&2
   exit 2
 }
 
@@ -134,7 +136,7 @@ result="$(awk -v head="$head" '
     if (!noun || noun - start > 4 || n - noun > 4) return 0
     return 1
   }
-  BEGIN { fence = 0; depth = 0; first = ""; firstlead = ""; vlead = ""; notrun = 0; finding = 0; vsha = "none"; found = 0 }
+  BEGIN { fence = 0; depth = 0; first = ""; firstlead = ""; vlead = ""; notrun = 0; finding = 0; severities = 0; vsha = "none"; found = 0 }
   {
     line = $0
     if (line ~ /rate limited by coderabbit\.ai -->/) notrun = 1
@@ -146,6 +148,8 @@ result="$(awk -v head="$head" '
     opens = gsub(/<details/, "&", line); closes = gsub(/<\/details>/, "&", line)
     was = depth; depth += opens - closes
     if (was > 0 || depth > 0) next
+    # Each severity-tagged finding in the prose (bold or heading, any separator) counts once.
+    if (line ~ /(^[ \t]*#+ *P[0-3]([^0-9]|$)|\*\*P[0-3]([^0-9]|$))/) severities++
     stripped = line; sub(/^[ \t]+/, "", stripped); sub(/[ \t]+$/, "", stripped)
     if (stripped == "" || stripped ~ /^<!--.*-->$/) next
     if (stripped ~ /^>/) next
@@ -169,8 +173,9 @@ result="$(awk -v head="$head" '
     if (first == "") { first = sha_of(stripped); firstlead = LEAD }
   }
   END {
+    # A finding outranks a did-not-run marker: it is still an open finding at this head.
+    if (finding) { print "FINDINGS " (severities > 0 ? severities : 1); exit }
     if (notrun) { print "NONE did-not-run"; exit }
-    if (finding) { print "NONE finding-markers"; exit }
     if (!found) { print "NONE no-verdict"; exit }
     if (vsha == "") { print "NONE no-sha"; exit }
     if (!is_review_claim(vlead)) { print "NONE not-a-review"; exit }

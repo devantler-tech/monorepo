@@ -1,0 +1,71 @@
+<!-- This is an auto-generated reply by CodeRabbit -->
+> [!TIP]
+> For best results, initiate chat on the files or code changes.
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+echo '== Requested commit and HEAD =='
+git rev-parse HEAD
+git rev-parse 1cbc9b53feff1c98a77d2a19a2cebe8cfca16e01^{commit}
+
+echo '== Changed paths from merge base =='
+base="$(git merge-base HEAD origin/main)"
+git diff --name-status "$base" HEAD
+
+echo '== Validator outlines =='
+ast-grep outline scripts/validate-kubescape-frameworks/main.go --items all
+ast-grep outline scripts/validate-kubescape-frameworks/main_test.go --items all
+
+echo '== Status-masking symbols and test cases =='
+rg -n -C 12 -i \
+  'statusMask|masked|trailing operator|or.*exit|exit [0-9]+|scanInvocations|conditional|compoundToken' \
+  scripts/validate-kubescape-frameworks/main.go \
+  scripts/validate-kubescape-frameworks/main_test.go
+
+echo '== Delta at the requested commit =='
+git diff --unified=80 HEAD^ HEAD -- \
+  scripts/validate-kubescape-frameworks/main.go \
+  scripts/validate-kubescape-frameworks/main_test.go
+
+echo '== Workflow invocation integration =='
+rg -n -C 6 'validate-kubescape-frameworks|ksail workload scan|go test' \
+  .github/workflows/ci.yaml .github/workflows/validate-main.yaml
+```
+
+Length of output: 158640
+
+---
+
+</details>
+
+`@devantler` I found one blocking issue.
+
+### P1: Normalize literal `exit` statuses before accepting `|| exit <code>`
+
+In `scripts/validate-kubescape-frameworks/main.go` Line 663 through Line 665, `provablyFails` accepts every non-zero integer literal:
+
+```go
+return err == nil && code != 0
+```
+
+Bash normalizes an `exit` code modulo 256. Therefore, `exit 256` exits with status `0`.
+
+This scan passes the validator:
+
+```bash
+ksail workload scan --framework nsa,mitre || exit 256
+env ksail workload scan --framework nsa
+```
+
+If the full-framework scan fails, `exit 256` succeeds. The step can continue to the reduced `env ksail` scan. The validator accepts the first scan because `provablyFails("exit 256")` returns true, even though the failure is masked.
+
+Normalize a parsed literal exit code to the shell status range before the check. Treat values that normalize to `0` as masking. Add regression cases for at least `exit 256` and `exit -256`.
+
+<sub>You are interacting with an AI system.</sub>

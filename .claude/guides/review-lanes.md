@@ -76,9 +76,22 @@ matcher pinned to one or two of them read every other one as no review, which sp
 lanes on heads that were already green (monorepo#3008). The helper accepts a comment only when it is
 a `coderabbitai[bot]` reply carrying a standalone finding-free verdict sentence, the **first** sha its
 prose names before that verdict is a prefix (7+ characters) of `headRefOid`, the text before that sha
-claims a completed review, and no did-not-run or finding marker appears anywhere. It prints `GREEN` (exit 0) or `NONE <reason>` (exit 1). An
+claims a completed review, and no did-not-run or finding marker appears anywhere. It prints `GREEN` (exit 0), `FINDINGS <n>` or `NONE <reason>` (exit 1). An
 acknowledgement shell is still `no-verdict`, a verdict naming no sha is still `no-sha`, and a verdict
 naming another commit is `other-head`; a chat reply that merely names the head is `not-a-review`. The freshness bind stays the caller's.
+
+🔴 **A CodeRabbit reply carrying severity-tagged findings is a REVIEW WITH FINDINGS, not "no
+review".** CodeRabbit sometimes delivers a full review — its analysis chain fetches the diff and
+reads the changed files — as a conversational reply, with findings written `**P1 — <title>**` or
+`### P1: <title>` and no review object, no thread and no `Actionable comments posted:` marker. Every
+other sweep is blind to it, so on 2026-08-23 three PRs read pentad-clear while a P1 and two P2s sat
+open, one of them a fail-open in a security check (monorepo#3004). The helper prints
+`FINDINGS <n>` for such a reply (one per severity-tagged finding, or 1 for any other finding marker,
+and even beside a did-not-run marker). Count it in `body_findings` as a non-thread review finding:
+fix or refute it with a disclosed resolution reply before promotion, and never record it as
+`cr:no-gate` or re-request the lane over it — that discards a delivered review. The reply carries no
+`commit_id`, so the caller's freshness bind (posted after the authenticated request for this head)
+is what ties it to the head; never infer the head from recency alone.
 
 🔴 **This is not a rare shape — on the PR that exposed it, it was the ONLY shape.** Measured on
 `ksail#6930` (2026-09-09, head `a333b570d11d`): CodeRabbit emitted **4** `Full review is complete for

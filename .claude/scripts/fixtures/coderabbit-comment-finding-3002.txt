@@ -1,0 +1,93 @@
+<!-- This is an auto-generated reply by CodeRabbit -->
+> [!TIP]
+> For best results, initiate chat on the files or code changes.
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+head='b562e9c64d01a0731b62d731dc6a0430fc8f4ec4'
+base="$(git merge-base "$head" origin/main 2>/dev/null || git merge-base "$head" main)"
+
+printf '%s\n' "--- HEAD ---"
+git rev-parse HEAD
+printf '%s\n' "--- base: $base ---"
+printf '%s\n' "--- changed files ---"
+git diff --name-status "$base" "$head"
+
+printf '%s\n' "--- PR diff ---"
+git diff --no-ext-diff --unified=60 "$base" "$head" -- \
+  AGENTS.md \
+  .claude/scripts/latency-discipline-contract.test.sh \
+  .claude/scripts/agent-telemetry.sh \
+  .claude/scripts/agent-telemetry.test.sh
+
+printf '%s\n' "--- relevant telemetry symbols ---"
+rg -n -C6 --glob '*.sh' -- \
+  'WT_BGREM|WT_FGALL|tagged_commands_in|eff_cls|BACKGROUND.*poll|backgrounded.*poll|Monitor|TaskStop|CONTRACT-COMPLIANT|compliant watcher' \
+  .claude/scripts/agent-telemetry.sh \
+  .claude/scripts/agent-telemetry.test.sh \
+  .claude/scripts/latency-discipline-contract.test.sh
+
+printf '%s\n' "--- relevant AGENTS.md contract ---"
+rg -n -C8 -- \
+  'Long-pole first|foreground-block|backgrounded|poller|Monitor|resurrects the session|never out of the RUN|TaskStop' \
+  AGENTS.md
+```
+
+Length of output: 104066
+
+---
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+printf '%s\n' '--- telemetry comments and output: Lines 2788-2804, 3084-3135 ---'
+sed -n '2788,2804p;3084,3135p' .claude/scripts/agent-telemetry.sh
+
+printf '%s\n' '--- backgrounded telemetry tests: Lines 2970-3150 ---'
+sed -n '2970,3150p' .claude/scripts/agent-telemetry.test.sh
+
+printf '%s\n' '--- every background estimate assertion and stale terminology ---'
+rg -n -C3 --glob '*.sh' -- \
+  'BACKGROUND .*remote-adjacent|WT_BGREM|BACKGROUND.*unchained|compliant watcher|CONTRACT-COMPLIANT|compliant BACKGROUND' \
+  .claude/scripts/agent-telemetry.sh \
+  .claude/scripts/agent-telemetry.test.sh
+
+printf '%s\n' '--- detachment-related fixtures ---'
+rg -n -C5 --glob '*.sh' -- \
+  'nohup|setsid|disown|DETACH_RE|detached' \
+  .claude/scripts/agent-telemetry.test.sh \
+  .claude/scripts/agent-telemetry.sh
+```
+
+Length of output: 35497
+
+---
+
+</details>
+
+`@devantler` I found one issue.
+
+**P2 — Remove the remaining “compliant watcher” descriptions.**
+
+`.claude/scripts/agent-telemetry.sh` now sends a backgrounded remote poll to `WT_BGREM`, and `AGENTS.md` defines that shape as a violation. However, the telemetry comments still call it compliant:
+
+- Line 2742: “compliant way to arm a watcher”
+- Line 2797: “compliant watcher”
+- Line 3089: “CONTRACT-COMPLIANT backgrounded watcher”
+- Line 3125: “compliant BACKGROUND watchers”
+
+`.claude/scripts/agent-telemetry.test.sh` also retains this claim in the `wtfgnext` fixture comment.
+
+Update these comments to distinguish runtime-owned `Monitor` notifications from shell polling loops. A backgrounded remote poll must remain described as a `WT_BGREM` violation, even when it does not change the foreground baseline.
+
+<sub>You are interacting with an AI system.</sub>
