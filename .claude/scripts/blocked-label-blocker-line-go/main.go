@@ -491,14 +491,19 @@ func (i issue) blocked() bool {
 		return true
 	}
 	for _, label := range *i.Labels {
-		if label.Name == "blocked" {
+		// Search matches labels case-insensitively, so the earlier label:blocked
+		// read included a "Blocked" label; keep reading it as labelled.
+		if strings.EqualFold(label.Name, "blocked") {
 			return true
 		}
 	}
 	return false
 }
 
-var noBlockerRE = regexp.MustCompile(`(?i)^\*\*Blocker:\*\*[\t ]*none([^\p{L}\p{N}]|$)`)
+// "none" must be a whole word: followed by the end, whitespace, or prose
+// punctuation that is itself followed by whitespace. An identifier that merely
+// begins with none (none/repo#7, none.io/x, none-x) still declares a blocker.
+var noBlockerRE = regexp.MustCompile(`(?i)^\*\*Blocker:\*\*[\t ]*none([\t ]|[.,;:!—–]([\t ]|$)|$)`)
 
 // declaresBlocker reports whether a visible record names a blocker. The
 // "**Blocker:** none -- agent-actionable" form declares that there is none, and

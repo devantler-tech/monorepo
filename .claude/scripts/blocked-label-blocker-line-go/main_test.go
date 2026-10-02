@@ -635,12 +635,12 @@ func TestBlockerNoneAndRecordlessIssuesAreNotReported(t *testing.T) {
 	}
 	// Ablation: without the "none" exemption both actions issues would be
 	// flagged, which is the naive check #3142 rejects.
-	for _, line := range []string{"**Blocker:** none — agent-actionable", "**Blocker:** None. Ready to pick up.", "**Blocker:**none"} {
+	for _, line := range []string{"**Blocker:** none — agent-actionable", "**Blocker:** None. Ready to pick up.", "**Blocker:**none", "**Blocker:** none", "**Blocker:** NONE: nothing blocks this"} {
 		if declaresBlocker(line) {
 			t.Errorf("%q read as a declared blocker", line)
 		}
 	}
-	for _, line := range []string{"**Blocker:** nonexistent upstream fix", "**Blocker:** #12 | upstream | last-verified 2026-08-30: none shipped"} {
+	for _, line := range []string{"**Blocker:** nonexistent upstream fix", "**Blocker:** none/repo#7 | upstream | last-verified 2026-09-01: open", "**Blocker:** none.io/x#1 | upstream | last-verified 2026-09-01: open", "**Blocker:** none-x/r#2 | upstream | last-verified 2026-09-01: open", "**Blocker:** none_x/r#3", "**Blocker:** #12 | upstream | last-verified 2026-08-30: none shipped"} {
 		if !declaresBlocker(line) {
 			t.Errorf("%q read as declaring no blocker", line)
 		}
@@ -675,5 +675,14 @@ func TestOrgReadIsIndependentOfTheBlockedLabel(t *testing.T) {
 		if !strings.Contains(endpoint, want) {
 			t.Errorf("endpoint lost %q: %s", want, endpoint)
 		}
+	}
+}
+
+func TestBlockedLabelMatchesCaseInsensitively(t *testing.T) {
+	// The label:blocked search this replaced matched "Blocked" too, so a
+	// record-less issue labelled that way must stay MISSING, not vanish.
+	code, out := runInput(t, `[{"repo":"c","number":1,"labels":[{"name":"Blocked"}],"body":"no record"}]`)
+	if code != 1 || !strings.Contains(out, "MISSING    c#1") {
+		t.Fatalf("code=%d out:\n%s", code, out)
 	}
 }
