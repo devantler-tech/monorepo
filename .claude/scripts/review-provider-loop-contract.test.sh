@@ -617,6 +617,13 @@ for f in "${constitution}" "${surveyor}" "${maintenance_skill}" "${parity_checkl
   assert_absent "${f}" 'three artifacts' \
     "$(basename "${f}") binds the author to a FIXED COUNT of artifacts, leaving the newest verdict form outside the spoofing guard"
 done
+# monorepo#3008: CodeRabbit words one finding-free verdict many ways, so the contract judges a reply
+# comment by STRUCTURE with a helper instead of growing a phrase list that the next rewording
+# escapes. The contract must route that judgement to the helper and say the wordings are examples.
+assert_prose "${constitution}" 'coderabbit-comment-verdict.sh --input -' \
+  "the contract does not route a CodeRabbit reply comment to the structural verdict helper, so an unlisted wording of a real green reads as none"
+assert_prose "${constitution}" 'Those two wordings are examples, not the definition' \
+  "the contract presents the two verdict wordings as the definition, so an unlisted wording of a real green reads as none"
 if grep -Fq 'pre-merge summary parsing' "${parity_checklist}"; then
   fail "plugin-parity checklist can reintroduce the removed pre-merge gate"
 fi

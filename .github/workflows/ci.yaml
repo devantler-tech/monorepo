@@ -666,6 +666,8 @@ jobs:
               - '.claude/scripts/coderabbit-summary-verdict.test.sh'
               - '.claude/scripts/coderabbit-review-verdict.sh'
               - '.claude/scripts/coderabbit-review-verdict.test.sh'
+              - '.claude/scripts/coderabbit-comment-verdict.sh'
+              - '.claude/scripts/coderabbit-comment-verdict.test.sh'
               - '.claude/scripts/local-review-verdict.sh'
               - '.claude/scripts/local-review-verdict.test.sh'
               - '.claude/scripts/managed-run-streak.sh'
@@ -2414,6 +2416,9 @@ jobs:
       # Hermetic: judges captured and synthetic CodeRabbit review objects, no API call.
       - name: Verify the CodeRabbit review object verdict classifier
         run: bash .claude/scripts/coderabbit-review-verdict.test.sh
+      # Hermetic: judges captured and synthetic CodeRabbit reply comments, no API call.
+      - name: Verify the CodeRabbit reply comment verdict classifier
+        run: bash .claude/scripts/coderabbit-comment-verdict.test.sh
       # Hermetic: judges captured local review rounds, no API call.
       - name: Verify the local review round verdict classifier
         run: bash .claude/scripts/local-review-verdict.test.sh
