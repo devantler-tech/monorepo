@@ -17,7 +17,9 @@
 #
 # Verdict per lane, from its newest events:
 #   OK           the newest event is a completed review
-#   LIMITED      the newest event is a rate-limit or error refusal and the lane served within --stale-hours
+#   LIMITED      the newest event is a rate-limit or error refusal and the lane served within --stale-hours;
+#                `until=<UTC>` ends the line when that refusal stated its retry window (`elapsed`
+#                follows once --now has passed it). Do not request the lane before it (monorepo#3007).
 #   DOWN         the newest event is a usage-limit refusal (MAINTAINER-ONLY), or a refusal/error with
 #                no completed review within --stale-hours
 #   NO-EVIDENCE  no artifact from this lane in the window (not requested; says nothing about health)
@@ -38,7 +40,8 @@
 #   review-lane-health.sh --events FILE [--stale-hours N] [--now EPOCH]   # classify recorded events
 #
 # Events are tab-separated: lane (cr|codex|bugbot), ISO-8601 UTC time, ok|fail|declined, cause (- when
-# ok; <repo>#<number> when declined).
+# ok; <repo>#<number> when declined), and optionally the ISO-8601 UTC end of a refusal's stated retry
+# window (- or absent when it stated none).
 #
 # Exit 0  no lane is DOWN (a CR-DECLINED line never changes the exit status)
 #      1  at least one lane is DOWN
@@ -100,11 +103,21 @@ def invocation: body | contains("<!-- CodeRabbit review command invocation");
 # A review whose findings all sit outside the diff opens with this block instead of the marker.
 def review_body: text | startswith("**Actionable comments posted:")
   or startswith("> [!CAUTION]\n> Some comments are outside the diff");
+# The refusal's own retry window ("Next included review available in 51 minutes", "available in:
+# 16 minutes", "available in **1 hour and 5 minutes**", "available in 40 seconds") as the UTC time
+# it ends; - when it states none.
+def retry_until:
+  ([body | capture("available in:?[*\\s]*(?:(?<h>[0-9]+)\\s*hours?[,\\s]*(?:and\\s*)?)?(?:(?<m>[0-9]+)\\s*minutes?[,\\s]*(?:and\\s*)?)?(?:(?<s>[0-9]+)\\s*seconds?)?"; "i")]
+    | map(select(.h != null or .m != null or .s != null)) | first) as $w
+  | if $w == null then "-"
+    else (.at | fromdateiso8601) + (($w.h // "0" | tonumber) * 3600) + (($w.m // "0" | tonumber) * 60)
+      + ($w.s // "0" | tonumber)
+      | todateiso8601 end;
 select(.at != null) |
 if .login == "coderabbitai[bot]" then
   if (body | contains("<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->"))
     or (invocation and (body | contains("Review rate limited")))
-  then "cr\t\(.at)\tfail\trate-limit"
+  then "cr\t\(.at)\tfail\trate-limit\t\(retry_until)"
   # A chat reply (never a review or command reply) that calls a disclosed request context and says it
   # started nothing. The wording varies per reply, so both halves are matched loosely but required.
   elif .kind == "comment" and (invocation | not)
@@ -147,15 +160,19 @@ fi
 # to_epoch <ISO-8601 UTC> — BSD and GNU date spell the parse differently.
 to_epoch() { date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || date -u -d "$1" +%s; }
 
-# Classify: per lane, the newest ok, the newest fail (with its cause), and the newest usage-limit.
+# Classify: per lane, the newest ok, the newest fail (with its cause), the newest usage-limit, and the
+# latest stated retry window. CodeRabbit posts each refusal twice (summary and command reply) and only
+# one may state the window, so the window comes from the latest refusal that states one, unless it
+# ended before the newest refusal.
 down=0
 for lane in cr codex bugbot; do
   line="$(awk -F'\t' -v l="$lane" '
     $1 == l && $3 == "ok"   && $2 > ok   { ok = $2 }
     $1 == l && $3 == "fail" && $2 > fail { fail = $2; cause = $4 }
+    $1 == l && $3 == "fail" && $5 != "" && $5 != "-" && ($2 > win_at || ($2 == win_at && $5 > win)) { win_at = $2; win = $5 }
     $1 == l && $4 == "usage-limit" && $2 > ul { ul = $2 }
-    END { printf "%s|%s|%s|%s", ok, fail, cause, ul }' "$tmp/events")"
-  IFS="|" read -r ok fail cause ul <<<"$line" || true
+    END { if (win < fail) win = ""; printf "%s|%s|%s|%s|%s", ok, fail, cause, ul, win }' "$tmp/events")"
+  IFS="|" read -r ok fail cause ul win <<<"$line" || true
   if [ -z "$ok" ] && [ -z "$fail" ]; then
     echo "LANE-HEALTH $lane=NO-EVIDENCE"
     continue
@@ -182,7 +199,14 @@ for lane in cr codex bugbot; do
     echo "LANE-HEALTH $lane=DOWN usage-limit since $fail last-review $last — MAINTAINER-ONLY"
     down=1
   elif [ "$fresh" = 1 ]; then
-    echo "LANE-HEALTH $lane=LIMITED $cause at $fail last-review $last"
+    # The window the refusal stated, so a later run can tell "retry at T" from "refused an hour ago".
+    window=""
+    if [ -n "$win" ]; then
+      win_epoch="$(to_epoch "$win")" || unknown "unparseable time $win"
+      window=" until=$win"
+      [ "$now" -ge "$win_epoch" ] && window="$window elapsed"
+    fi
+    echo "LANE-HEALTH $lane=LIMITED $cause at $fail last-review $last$window"
   else
     echo "LANE-HEALTH $lane=DOWN $cause since $fail last-review $last"
     down=1
