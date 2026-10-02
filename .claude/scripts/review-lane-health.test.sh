@@ -134,6 +134,7 @@ window "colon wording" '\\n> Next review available in: 16 minutes' "until=2026-0
 window "bold hours wording" '\\n> Next review available in:** **3 hours and 5 minutes**' "until=2026-09-21T15:05:00Z"
 grep -qF "elapsed" "$tmp/out" && fail "a window ending after now must not say elapsed"
 window "hours only" '\\n> available in 1 hour.' "until=2026-09-21T13:00:00Z elapsed"
+window "seconds wording" '\\n> **Next included review available in 40 seconds.**' "until=2026-09-21T12:00:40Z elapsed"
 
 CAUTION_REVIEW=1 PATH="$bin:$PATH" run --org o --since 2026-09-14
 expect "outside-diff review" 1 "cr=LIMITED rate-limit at 2026-09-21T12:00:00Z last-review 2026-09-21T11:50:00Z"

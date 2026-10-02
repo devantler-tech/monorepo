@@ -104,12 +104,14 @@ def invocation: body | contains("<!-- CodeRabbit review command invocation");
 def review_body: text | startswith("**Actionable comments posted:")
   or startswith("> [!CAUTION]\n> Some comments are outside the diff");
 # The refusal's own retry window ("Next included review available in 51 minutes", "available in:
-# 16 minutes", "available in **1 hour and 5 minutes**") as the UTC time it ends; - when it states none.
+# 16 minutes", "available in **1 hour and 5 minutes**", "available in 40 seconds") as the UTC time
+# it ends; - when it states none.
 def retry_until:
-  ([body | capture("available in:?[*\\s]*(?:(?<h>[0-9]+)\\s*hours?[,\\s]*(?:and\\s*)?)?(?:(?<m>[0-9]+)\\s*minutes?)?"; "i")]
-    | map(select(.h != null or .m != null)) | first) as $w
+  ([body | capture("available in:?[*\\s]*(?:(?<h>[0-9]+)\\s*hours?[,\\s]*(?:and\\s*)?)?(?:(?<m>[0-9]+)\\s*minutes?[,\\s]*(?:and\\s*)?)?(?:(?<s>[0-9]+)\\s*seconds?)?"; "i")]
+    | map(select(.h != null or .m != null or .s != null)) | first) as $w
   | if $w == null then "-"
     else (.at | fromdateiso8601) + (($w.h // "0" | tonumber) * 3600) + (($w.m // "0" | tonumber) * 60)
+      + ($w.s // "0" | tonumber)
       | todateiso8601 end;
 select(.at != null) |
 if .login == "coderabbitai[bot]" then
