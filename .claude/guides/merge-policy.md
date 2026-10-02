@@ -182,8 +182,8 @@ own session and parks nothing — row 1's own-push exclusion, decided from proce
 session parks it even while idle, since nothing local can tell idle from thinking; a shell waiting
 at its prompt does not.
 **`unknown:` is never "no live holder"**: report it as a named gap, and the four published-event
-rows decide exactly as they did before this row existed. It covers lanes on this host only; a fork
-head or the Cursor cloud lane has no local process and keeps the four.
+rows decide exactly as they did before this row existed. It covers sessions on this host only; a
+fork head, or a session on another machine, has no local process and keeps the four.
 
 Nothing else parks a PR. Age, size, difficulty, an unfamiliar author, a `HANDS-OFF` note inherited from
 memory, or a branch shape you did not create are **not** reasons to skip one — re-verify against live

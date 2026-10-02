@@ -60,8 +60,8 @@
 #   direction.
 #
 # SCOPE
-#   Only lanes on this host have local processes. The Cursor cloud lane does not, so its PRs read
-#   `none` here and keep the published-event signals.
+#   Only sessions on this host have local processes. A session on another machine does not, so its
+#   PRs read `none` here and keep the published-event signals.
 #
 # EXIT CODES
 #   0  every PR was answered
@@ -88,14 +88,14 @@ done
 work="$(mktemp -d "${TMPDIR:-/tmp}/pr-worktree-holder.XXXXXX")" || exit 2
 finished=0
 # bash 3.2 can report a `set -u` abort as exit 0 from an EXIT trap, so completion is explicit.
-# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2329 # Invoked by the EXIT trap.
 on_exit() {
-  local status="$1"
+  local status=$?
   rm -rf -- "${work}"
   if [ "${finished}" != 1 ] && [ "${status}" = 0 ]; then status=2; fi
   exit "${status}"
 }
-trap 'on_exit "$?"' EXIT
+trap on_exit EXIT
 
 unreadable() {
   echo "pr-worktree-holder: $1" >&2
