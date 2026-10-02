@@ -665,8 +665,9 @@ t_no_reaped_row_when_removal_is_aborted_after_recording() {
   # worktree holds for every user, and every other git and rm call passes through.
   local root; root=$(make_repo)
   add_wt "$root" stuck pushed
-  local shim="$root/shim" real_git; mkdir -p "$shim"
+  local shim="$root/shim" real_git real_rm; mkdir -p "$shim"
   real_git=$(command -v git)
+  real_rm=$(command -v rm)
   cat > "$shim/git" <<SHIM
 #!/usr/bin/env bash
 prev=""
@@ -679,14 +680,14 @@ for arg in "\$@"; do
 done
 exec "$real_git" "\$@"
 SHIM
-  cat > "$shim/rm" <<'SHIM'
+  cat > "$shim/rm" <<SHIM
 #!/usr/bin/env bash
-for arg in "$@"; do
-  case "$arg" in
-    */.claude/worktrees/stuck) echo "shim: injected 'rm' failure for $arg" >&2; exit 1 ;;
+for arg in "\$@"; do
+  case "\$arg" in
+    */.claude/worktrees/stuck) echo "shim: injected 'rm' failure for \$arg" >&2; exit 1 ;;
   esac
 done
-exec /bin/rm "$@"
+exec "$real_rm" "\$@"
 SHIM
   chmod +x "$shim/git" "$shim/rm"
   local rc
