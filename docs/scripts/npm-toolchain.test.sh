@@ -67,25 +67,26 @@ required_filter_paths=(
 # One row per job that works in docs/: job id, setup-node step count, node-version and
 # node-version-file of the first setup-node step, and whether that step comes before the
 # job's first step in docs/. "-" stands for an absent value, because `read` collapses empty
-# tab-separated fields.
-# shellcheck disable=SC2016 # $steps, $docs and $setup are yq variables, not shell expansions.
+# tab-separated fields. It is a jq program over yq's JSON rendering of the workflow: the
+# runner's yq is older than this host's and rejects parts of the same program in yq syntax.
+# shellcheck disable=SC2016 # $steps, $docs and $setup are jq variables, not shell expansions.
 jobs_query='
-  .jobs // {} | to_entries | map(
-    ((.value.defaults.run."working-directory" // "") | test("^(\\./)?docs(/|$)")) as $default_docs |
-    (.value.steps // []) as $steps |
-    [$steps | to_entries[] | select(
-      ((.value."working-directory" // "") | test("^(\\./)?docs(/|$)")) or
-      ((.value.run // "") | test("--prefix[ =](\\./)?docs(/|\\s|$)")) or
-      ((.value.run // "") | test("(^|[\\s;&|(])cd\\s+(\\./)?docs(/|\\s|;|&|\\)|$)")) or
-      ($default_docs and .value.run != null)
-    ) | .key] as $docs |
-    select($default_docs or ($docs | length > 0)) |
-    [$steps | to_entries[] | select((.value.uses // "") | test("^actions/setup-node@")) | .key] as $setup |
-    [.key, ($setup | length),
-     (if ($setup | length) > 0 then ($steps[$setup[0]].with."node-version" // "-") else "-" end),
-     (if ($setup | length) > 0 then ($steps[$setup[0]].with."node-version-file" // "-") else "-" end),
-     (if ($setup | length) > 0 and ($docs | length) > 0 then ($setup[0] < $docs[0]) else true end)]
-  ) | .[]
+  (.jobs // {}) | to_entries[] |
+  (((.value.defaults // {}).run // {})["working-directory"] // "" | test("^(\\./)?docs(/|$)")) as $default_docs |
+  (.value.steps // []) as $steps |
+  [range(0; $steps | length) | select(
+    (($steps[.]["working-directory"] // "") | test("^(\\./)?docs(/|$)")) or
+    (($steps[.].run // "") | test("--prefix[ =](\\./)?docs(/|\\s|$)")) or
+    (($steps[.].run // "") | test("(^|[\\s;&|(])cd\\s+(\\./)?docs(/|\\s|;|&|\\)|$)")) or
+    ($default_docs and ($steps[.].run != null))
+  )] as $docs |
+  select($default_docs or ($docs | length > 0)) |
+  [range(0; $steps | length) | select(($steps[.].uses // "") | test("^actions/setup-node@"))] as $setup |
+  [.key, ($setup | length | tostring),
+   (if ($setup | length) > 0 then ($steps[$setup[0]].with["node-version"] // "-" | tostring) else "-" end),
+   (if ($setup | length) > 0 then ($steps[$setup[0]].with["node-version-file"] // "-" | tostring) else "-" end),
+   (if ($setup | length) > 0 and ($docs | length) > 0 then ($setup[0] < $docs[0]) else true end | tostring)]
+  | @tsv
 '
 
 violation() {
@@ -115,13 +116,13 @@ check() {
     return 1
   declared_major="${BASH_REMATCH[1]}"
 
-  local workflow base rows job count node_version node_version_file ordered line npm_major
+  local workflow base json rows job count node_version node_version_file ordered line npm_major
   local found=" "
   for workflow in "${workflows_dir}"/*.yaml "${workflows_dir}"/*.yml; do
     [ -f "${workflow}" ] || continue
     base="$(basename "${workflow}")"
-    rows="$(yq -o=tsv "${jobs_query}" "${workflow}")" ||
-      violation "cannot parse ${base}" || return 1
+    json="$(yq -o=json '.' "${workflow}")" || violation "cannot parse ${base}" || return 1
+    rows="$(jq -r "${jobs_query}" <<<"${json}")" || violation "cannot read the jobs of ${base}" || return 1
     while IFS=$'\t' read -r job count node_version node_version_file ordered; do
       [ -n "${job}" ] || continue
       found="${found}${base}:${job} "
@@ -165,10 +166,10 @@ check() {
   # Compared in bash, literally: yq's == treats a `*` in its right-hand string as a glob, so
   # '.github/workflows/**' would match any single workflow entry.
   local entries path
-  entries="$(FILTER="${filter}" yq '
-    .jobs.changes.steps[] | select(.id == "filter") | .with.filters | from_yaml
-    | .[strenv(FILTER)] // [] | .[]
-  ' "${ci}")" || violation "cannot read ci.yaml filter '${filter}'" || return 1
+  # shellcheck disable=SC2016 # $filter is a jq variable, not a shell expansion.
+  entries="$(yq -o=json '.jobs.changes.steps[] | select(.id == "filter") | .with.filters | from_yaml' "${ci}" |
+    jq -r --arg filter "${filter}" '.[$filter] // [] | .[]')" ||
+    violation "cannot read ci.yaml filter '${filter}'" || return 1
   for path in "${required_filter_paths[@]}"; do
     grep -qxF -- "${path}" <<<"${entries}" ||
       violation "ci.yaml filter '${filter}' does not list ${path}, so a change to it skips this test" ||
@@ -218,8 +219,10 @@ yq -i 'del(.jobs.drift-check-active-projects.steps[] | select((.uses // "") | te
 expect_failure "job without setup-node" "ci.yaml:drift-check-active-projects works in docs/ but has 0"
 
 reset_fixture
-yq -i '.jobs.build-docs.steps |= ([.[] | select((.uses // "") | test("^actions/setup-node@") | not)]
-  + [.[] | select((.uses // "") | test("^actions/setup-node@"))])' "${fixture}/.github/workflows/ci.yaml"
+yq -i 'del(.jobs.build-docs.steps[] | select((.uses // "") | test("^actions/setup-node@")))' \
+  "${fixture}/.github/workflows/ci.yaml"
+yq -i '.jobs.build-docs.steps += [{"uses": "actions/setup-node@v7", "with": {"node-version": "24"}}]' \
+  "${fixture}/.github/workflows/ci.yaml"
 expect_failure "setup-node after npm ci" "ci.yaml:build-docs sets up Node after its first step in docs/"
 
 reset_fixture
