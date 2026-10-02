@@ -1410,32 +1410,43 @@ maintainer_channels_flat="$(
 )"
 [ -n "${maintainer_channels_flat}" ] ||
   fail "could not extract the maintainer-channels guide's '## Maintainer channels' section (monorepo#2900)"
+assert_maintainer_channels_prose() {
+  case "${maintainer_channels_flat}" in
+    *"$1"*) ;;
+    *) fail "Maintainer channels no longer says '$1' — $2" ;;
+  esac
+}
 for surface_rule in \
   "the Slack connector that is already signed in, whose tools are named \`slack_send_message\`" \
   "is a different surface, not evidence that the channel is closed" \
   "names each surface it tried and what that surface returned"; do
-  case "${maintainer_channels_flat}" in
-    *"${surface_rule}"*) ;;
-    *) fail "Maintainer channels no longer says '${surface_rule}' — the escalation surface is ambiguous again (monorepo#2900)" ;;
-  esac
+  assert_maintainer_channels_prose "${surface_rule}" "the escalation surface is ambiguous again (monorepo#2900)"
 done
 # A push notification delivered an ask that the blocker check then read as never-asked, because
 # the ask-record vocabulary excluded "push" without saying which push it meant (monorepo#3243).
-# The channels section must settle it where an escalating agent reads, and the record rule must
-# say both meanings are excluded, so the exclusion is never mistaken for an accident again.
+# The channels section must settle it where an escalating agent reads — the exclusion, its
+# measured reason, and the operative instruction — and the always-on core must agree.
 for push_rule in \
-  "Nor is the runtime's push notification" \
+  "Neither is the runtime's push notification" \
   "\`Remote Control inactive\`" \
-  "So a notification never satisfies an ask"; do
-  case "${maintainer_channels_flat}" in
-    *"${push_rule}"*) ;;
-    *) fail "Maintainer channels no longer says '${push_rule}' — a push-notification ask is ambiguous again (monorepo#3243)" ;;
-  esac
+  "So a notification never satisfies an ask: deliver the ask through one of the three channels above and record that channel." \
+  "Never use it for status, and never in place of one of the three"; do
+  assert_maintainer_channels_prose "${push_rule}" "a push-notification ask is ambiguous again (monorepo#3243)"
 done
-assert_prose "whether it means a git push or the runtime's push notification" \
-  "the ask-record rule excludes 'push' without saying which push it means (monorepo#3243)"
-refute_prose "\`push\` and \`issue\` are not channel tokens:" \
-  "the ask-record rule still carries the ambiguous 'push' exclusion that read as accidental (monorepo#3243)"
+assert_prose "\`@devantler\` mentions and push notifications are not channels." \
+  "AGENTS.md's Maintainer channels summary no longer rules out the push notification (monorepo#3243)"
+# The record rule must say both meanings of `push` are excluded. A refutation of the old sentence
+# would only stop a verbatim revert, so require EVERY backticked `push` token in the contract to
+# carry the disambiguation: the ambiguous exclusion cannot come back under another spelling.
+# `|| true` inside the group: under pipefail a grep that matches nothing would otherwise abort the
+# run before the assertion below can name what is missing.
+push_tokens="$({ grep -o '`push`' <<<"${constitution_flat}" || true; } | wc -l | tr -d ' ')"
+push_disambiguated="$({ grep -o "\`push\`, whether it means a git push or the runtime's push notification" \
+  <<<"${constitution_flat}" || true; } | wc -l | tr -d ' ')"
+[ "${push_disambiguated}" -ge 1 ] ||
+  fail "the ask-record rule excludes 'push' without saying which push it means (monorepo#3243)"
+[ "${push_tokens}" = "${push_disambiguated}" ] ||
+  fail "the contract names \`push\` ${push_tokens} times but disambiguates it only ${push_disambiguated} — an ambiguous exclusion is back (monorepo#3243)"
 
 # The plugin's maintainer-PR driving fact (agent-plugins#201) is read from the Trust gate
 # section and defaults to hands-off when that section does not declare it. This deployment

@@ -35,7 +35,7 @@ func TestAuthorityGrammar(t *testing.T) {
 		{"hidden unspaced kind", "#7 |authority | upstream | last-verified 2026-09-01: pending", "MALFORMED"},
 		{"duplicate same kind", "owner/repo#1 | upstream | upstream | last-verified 2026-09-01: pending", "MALFORMED"},
 		{"draft PR is attention", "maintainer authority | authority | last-verified 2026-09-01: outage-cause=credentials/auth; pending | asked pr 2026-09-01", "CONFORMS"},
-		{"undefined push token is not attention", "maintainer authority | authority | last-verified 2026-09-01: pending | asked push 2026-09-01", "NO-ASK"},
+		{"push is excluded on purpose, git push or notification (monorepo#3243)", "maintainer authority | authority | last-verified 2026-09-01: pending | asked push 2026-09-01", "NO-ASK"},
 		{"issue alone is not attention", "maintainer authority | authority | last-verified 2026-09-01: pending | asked issue 2026-09-01", "NO-ASK"},
 		{"outage cause cannot replace kind", "owner/repo#1 | credentials/auth | last-verified 2026-09-01: pending", "MALFORMED"},
 	} {
