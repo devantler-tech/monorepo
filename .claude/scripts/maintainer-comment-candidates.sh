@@ -35,6 +35,22 @@ set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# The canonical fail-closed trap (cleanup-trap-fail-closed.test.sh): bash 3.2 hands an EXIT trap
+# a zero status for a `set -u` abort, so reaching the last line is the only way 0 leaves here.
+guard_binary=""
+candidates_finished=0
+# shellcheck disable=SC2317,SC2329 # Invoked indirectly by the EXIT trap.
+cleanup() {
+  local rc=$?
+  [ -z "${guard_binary}" ] || rm -f -- "${guard_binary}"
+  if [ "${candidates_finished}" != 1 ] && [ "${rc}" -eq 0 ]; then
+    echo "maintainer-comment-candidates: aborted before finishing; reporting UNKNOWN" >&2
+    rc=2
+  fi
+  exit "${rc}"
+}
+trap cleanup EXIT
+
 die() {
   echo "maintainer-comment-candidates: $1" >&2
   exit 2
@@ -51,6 +67,7 @@ while [ $# -gt 0 ]; do
       ;;
     -h | --help)
       sed -n '3,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      candidates_finished=1
       exit 0
       ;;
     *)
@@ -63,21 +80,12 @@ if [ "${input}" != "-" ] && [ ! -r "${input}" ]; then
   die "cannot read payload: ${input}"
 fi
 
-guard_binary=""
-# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
-cleanup() {
-  [ -n "${guard_binary}" ] && rm -f -- "${guard_binary}"
-  return 0
-}
-trap cleanup EXIT
-
 guard_binary="$(mktemp "${TMPDIR:-/tmp}/maintainer-comment-candidates.XXXXXX")" ||
   die "failed to allocate temporary binary"
 go -C "${script_dir}/comment-disclosure-drift-go" build -o "${guard_binary}" . ||
   die "failed to build the comment-disclosure-drift Go guard"
 
-# Capture the status explicitly rather than leaning on errexit through the EXIT trap: bash 3.2
-# can report an abort as success from a trap, and 2 here must stay 2.
 status=0
 "${guard_binary}" --candidates --author devantler --input "${input}" || status=$?
+candidates_finished=1
 exit "${status}"

@@ -15,7 +15,7 @@ tool="${here}/maintainer-comment-candidates.sh"
 failures=0
 checks=0
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/maintainer-comment-candidates-test.XXXXXX")"
-# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2317,SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() { rm -rf -- "${tmpdir}"; }
 trap cleanup EXIT
 
