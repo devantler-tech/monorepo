@@ -2,7 +2,9 @@
 # RED/GREEN coverage for silent-scheduled-workflows.sh (monorepo#2928) against a stub gh:
 # a dispatch-only workflow with an old failing run is NOT reported, while a scheduled workflow with
 # the same history IS; plus pagination, the manual-disable and missing-file skips, GitHub's
-# inactivity disable, offset timestamps, and every failed read reported as UNKNOWN.
+# inactivity disable, offset timestamps, and every failed read reported as UNKNOWN. Every content and
+# history read is pinned to one resolved head, and a head that moves mid-scan is re-judged
+# (monorepo#3672); a schedule removed and re-added inside the window is not yet due (monorepo#3671).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 checker="$root/.claude/scripts/silent-scheduled-workflows.sh"
@@ -14,6 +16,10 @@ now=1790000000 # 2026-09-21T13:33:20Z
 iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 h=3600
 d=$((24 * h))
+# The commit every `main` resolves to, unless a test supplies a head sequence of its own.
+export PIN
+PIN="$(printf 'c0ffee%033d1' 0)"
+pin="$PIN"
 
 fix="$tmp/fix"
 bin="$tmp/bin"
@@ -21,13 +27,26 @@ mkdir -p "$fix" "$bin"
 cat >"$bin/gh" <<'STUB'
 #!/usr/bin/env bash
 # Serve fixtures keyed by the request path; honour --jq by running it through jq, as gh does.
-# `-f k=v` fields become the query string in the order given, as `--method GET` sends them.
-args=("$@"); jqexpr=""; url=""; query=""
+# `-f k=v` fields become the query string in the order given, as `--method GET` sends them. For
+# `graphql` they are the query's variables instead, and the fixture is keyed by repository, path and
+# page cursor.
+args=("$@"); jqexpr=""; url=""; query=""; owner=""; repo_name=""; oid=""; path=""; after=""
 for ((i = 0; i < ${#args[@]}; i++)); do
   case "${args[i]}" in
     --jq) jqexpr="${args[i + 1]}"; i=$((i + 1)) ;;
     --method | -H) i=$((i + 1)) ;;
-    -f) query="${query:+$query&}${args[i + 1]}"; i=$((i + 1)) ;;
+    -f)
+      field="${args[i + 1]}"; i=$((i + 1))
+      case "$field" in
+        query=*) continue ;; # the GraphQL document itself
+        owner=*) owner="${field#owner=}" ;;
+        name=*) repo_name="${field#name=}" ;;
+        oid=*) oid="${field#oid=}" ;;
+        path=*) path="${field#path=}" ;;
+        after=*) after="${field#after=}" ;;
+      esac
+      query="${query:+$query&}${field}"
+      ;;
     api | --paginate) ;;
     *) url="${args[i]}" ;;
   esac
@@ -35,19 +54,52 @@ done
 # A branch name comes from the API and may hold URL metacharacters: it must travel as an encoded
 # field, never spliced into the URL.
 case "$url" in *"ref="* | *"sha="*) echo "gh stub: branch spliced into the URL: $url" >&2; exit 1 ;; esac
-[ -z "$query" ] || url="$url?$query"
+if [ "$url" = graphql ]; then
+  # Every history read must be pinned to a full commit SHA, never a branch name.
+  [[ "$oid" =~ ^[0-9a-f]{40}$ ]] || { echo "gh stub: unpinned history read: oid '$oid'" >&2; exit 1; }
+  logline="graphql oid=$oid path=$path${after:+ after=$after}"
+  key="$(printf 'graphql/%s/%s/%s%s' "$owner" "$repo_name" "$path" "${after:+&after=$after}" | tr '/?&=' '____')"
+  url="graphql?path=$path"
+else
+  # Every content read must be pinned to a full commit SHA, never a branch name.
+  case "$url" in
+    repos/*/contents/*)
+      [[ "$query" =~ ^ref=[0-9a-f]{40}$ ]] || { echo "gh stub: unpinned content read: $url?$query" >&2; exit 1; }
+      ;;
+  esac
+  [ -z "$query" ] || url="$url?$query"
+  logline="$url"
+  key="$(printf '%s' "$url" | tr '/?&=' '____')"
+fi
+[ -z "${REQUEST_LOG:-}" ] || printf '%s\n' "$logline" >>"$REQUEST_LOG"
 [ -n "${FAIL_ON:-}" ] && [[ "$url" == *"$FAIL_ON"* ]] && { echo "gh: HTTP 502" >&2; exit 1; }
-# The window start (`until=`) depends on each workflow's cron, so fixtures key on its presence only.
-key="$(printf '%s' "$url" | sed 's/until=[^&]*/until/' | tr '/?&=' '____')"
 f="$FIXTURES/$key.json"
-# The default branch's workflow directory lists every workflow file that has a content fixture at
-# `ref=main`, unless a test supplies the listing itself.
-if [ ! -f "$f" ] && [[ "$url" =~ ^repos/([^/]+/[^/]+)/contents/\.github/workflows\?ref=main$ ]]; then
+# A fixture sequence serves its next line on each call, repeating the last: a branch that moves
+# between reads. A FAIL line is a failed request.
+if [ -f "$FIXTURES/$key.seq" ]; then
+  n="$(cat "$FIXTURES/$key.n" 2>/dev/null || echo 0)"
+  n=$((n + 1))
+  echo "$n" >"$FIXTURES/$key.n"
+  lines="$(grep -c . "$FIXTURES/$key.seq")"
+  [ "$n" -le "$lines" ] || n="$lines"
+  sed -n "${n}p" "$FIXTURES/$key.seq" >"$FIXTURES/.seq.json"
+  f="$FIXTURES/.seq.json"
+  [ "$(cat "$f")" != FAIL ] || { echo "gh: HTTP 502" >&2; exit 1; }
+fi
+# The default branch resolves to $PIN unless a test supplies the ref itself.
+if [ ! -f "$f" ] && [[ "$url" =~ ^repos/[^/]+/[^/]+/git/ref/heads/main$ ]]; then
+  printf '{"ref":"refs/heads/main","object":{"type":"commit","sha":"%s"}}' "$PIN" >"$FIXTURES/.head.json"
+  f="$FIXTURES/.head.json"
+fi
+# The workflow directory at a commit lists every workflow file that has a content fixture at that
+# commit, unless a test supplies the listing itself.
+if [ ! -f "$f" ] && [[ "$url" =~ ^repos/([^/]+/[^/]+)/contents/\.github/workflows\?ref=([0-9a-f]{40})$ ]]; then
   prefix="$(printf '%s' "repos/${BASH_REMATCH[1]}/contents/.github/workflows/" | tr '/?&=' '____')"
-  for g in "$FIXTURES/$prefix"*_ref_main.json; do
+  at="${BASH_REMATCH[2]}"
+  for g in "$FIXTURES/$prefix"*"_ref_${at}.json"; do
     [ -e "$g" ] || continue
-    name="${g##*/}"; name="${name#"$prefix"}"; name="${name%_ref_main.json}"
-    printf '%s\n' ".github/workflows/${name//%23/#}"
+    wf="${g##*/}"; wf="${wf#"$prefix"}"; wf="${wf%_ref_"${at}".json}"
+    printf '%s\n' ".github/workflows/${wf//%23/#}"
   done | jq -R '{type: "file", path: .}' | jq -s . >"$FIXTURES/.synth.json"
   f="$FIXTURES/.synth.json"
 fi
@@ -57,14 +109,47 @@ STUB
 chmod +x "$bin/gh"
 
 put() { printf '%s' "$2" >"$fix/$(printf '%s' "$1" | tr '/?&=' '____').json"; }
-workflow_file() { # <repo> <path> <yaml> [<yaml at the window start, or NONE if the file was new>]
-  put "repos/$1/contents/$2?ref=main" "$3" # raw media type: the file itself
-  if [ "${4-}" = NONE ]; then
-    put "repos/$1/commits?path=$2&sha=main&until&per_page=1" '[]'
-  else
-    put "repos/$1/commits?path=$2&sha=main&until&per_page=1" '[{"sha":"b4f0e1ab"}]'
-    put "repos/$1/contents/$2?ref=b4f0e1ab" "${4:-$3}"
-  fi
+# One version of a workflow file in a history page: YAML text, ABSENT (no file at that commit), or
+# MISSING (a malformed node with no `file` key at all).
+node_json() {
+  case "$1" in
+    ABSENT) echo '{"file":null}' ;;
+    MISSING) echo '{}' ;;
+    *) jq -nc --arg t "$1" '{file: {object: {isTruncated: false, text: $t}}}' ;;
+  esac
+}
+# One page of a file's history as the GraphQL query returns it.
+history_json() { # <window-start version | NONE> <totalCount | -> <next cursor | -> [<version inside the window, newest first>...]
+  local before="$1" total="$2" next="$3" b w="[]" v
+  shift 3
+  if [ "$before" = NONE ]; then b='[]'; else b="[$(node_json "$before")]"; fi
+  for v in "$@"; do w="$(jq -c --argjson n "$(node_json "$v")" '. + [$n]' <<<"$w")"; done
+  [ "$total" != - ] || total="$(jq length <<<"$w")"
+  jq -nc --argjson b "$b" --argjson w "$w" --argjson t "$total" --arg c "$next" \
+    '{data: {repository: {object: {before: {nodes: $b}, window: {totalCount: $t,
+      pageInfo: (if $c == "-" then {hasNextPage: false, endCursor: null} else {hasNextPage: true, endCursor: $c} end),
+      nodes: $w}}}}}'
+}
+history() { # <repo> <path> <window-start version | NONE> [<version inside the window, newest first>...]
+  local repo="$1" path="$2" before="$3"
+  shift 3
+  put "graphql/$repo/${path//%23/#}" "$(history_json "$before" - - "$@")"
+}
+workflow_file() { # <repo> <path> <yaml> [<yaml at the window start, or NONE if the file was new> [<version inside the window>...]]
+  local repo="$1" path="$2" yaml="$3" before="${4:-$3}"
+  put "repos/$repo/contents/$path?ref=$pin" "$yaml" # raw media type: the file itself
+  shift 3
+  [ "$#" -eq 0 ] || shift
+  history "$repo" "$path" "$before" "$@"
+}
+head_sequence() { # <repo> <sha | FAIL>...: what each successive resolution of `main` returns
+  local key s
+  key="$(printf '%s' "repos/$1/git/ref/heads/main" | tr '/?&=' '____')"
+  shift
+  rm -f "$fix/$key.n"
+  for s in "$@"; do
+    if [ "$s" = FAIL ]; then echo FAIL; else printf '{"ref":"refs/heads/main","object":{"type":"commit","sha":"%s"}}\n' "$s"; fi
+  done >"$fix/$key.seq"
 }
 runs() { # <repo> <id> <page> <event:epoch>...
   local repo="$1" id="$2" page="$3" rows="" e t
@@ -135,7 +220,7 @@ run() { set +e; PATH="$bin:$PATH" FIXTURES="$fix" "$checker" "$@" --now "$now" >
 has() { grep -qxF -- "$1" "$tmp/out" || { cat "$tmp/out" "$tmp/err" >&2; fail "$2"; }; }
 lacks() { ! grep -qF -- "$1" "$tmp/out" || { cat "$tmp/out" >&2; fail "$2"; }; }
 
-run --repo o/a
+REQUEST_LOG="$tmp/log" run --repo o/a
 [ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "silent schedules must exit 1, got $rc"; }
 has "SILENT-WORKFLOW o/a .github/workflows/stale.yaml — no scheduled run in the last 97h (its cron fires at least every 1d)" \
   "a daily schedule silent for 40 days must be reported"
@@ -152,6 +237,14 @@ lacks "gained.yaml" "a schedule added 10h ago to an old workflow is not yet due"
 lacks "moved.yaml" "a file with no commit before the window is new, not silent"
 has "CHECKED 7 scheduled workflow(s) across 1 repositor(ies)" "the summary must count what was examined"
 [ "$(grep -c '^SILENT-WORKFLOW' "$tmp/out")" -eq 2 ] || fail "exactly two findings expected"
+# Every directory, file and history read named the one resolved head (monorepo#3672): the stub
+# refuses a branch name, and this proves no read used any other commit.
+grep -q '^graphql oid=' "$tmp/log" || fail "the history walk must have been exercised"
+grep -q '/contents/.*?ref=' "$tmp/log" || fail "the content reads must have been exercised"
+[ "$(grep -oE '(ref|oid)=[0-9a-f]+' "$tmp/log" | sed 's/^[a-z]*=//' | sort -u)" = "$pin" ] ||
+  { cat "$tmp/log" >&2; fail "every content and history read must be pinned to the resolved head"; }
+[ "$(grep -c 'git/ref/heads/main' "$tmp/log")" -eq 2 ] ||
+  { cat "$tmp/log" >&2; fail "the head must be resolved once per repository, and once more to confirm a silence"; }
 
 # A failed run-list read is UNKNOWN — never "silent", never clean.
 FAIL_ON="workflows/3/runs" run --repo o/a
@@ -194,16 +287,22 @@ put "repos/o/d/actions/workflows?per_page=100" '{"total_count":3,"workflows":[
   {"id":1,"state":"active","path":".github/workflows/annual.yaml","created_at":"2019-01-01T00:00:00.000+02:00"},
   {"id":2,"state":"active","path":".github/workflows/febmar.yaml","created_at":"2019-01-01T00:00:00.000+02:00"},
   {"id":3,"state":"active","path":".github/workflows/feb1and29.yaml","created_at":"2019-01-01T00:00:00.000+02:00"}]}'
-# annual.yaml's file was edited recently (a pin bump, say) but its schedule was not: the fixture's
-# window-start content equals today's, so the silence is judged rather than excused.
+# annual.yaml's file was edited inside the window (a pin bump, say) but its schedule was not: the
+# window-start content and every edit since hold today's crons, so the silence is judged rather than
+# excused.
 workflow_file o/d .github/workflows/annual.yaml 'on:
   schedule:
     - cron: "0 0 31 1 *"
-jobs: {}'
-put "repos/o/d/contents/.github/workflows/annual.yaml?ref=b4f0e1ab" 'on:
+jobs: {}' 'on:
   schedule:
     - cron: "0 0 31 1 *"
-jobs: {old: {}}'
+jobs: {old: {}}' 'on:
+  schedule:
+    - cron: "0 0 31 1 *"
+jobs: {}' 'on:
+  schedule:
+    - cron: "0 0 31 1 *"
+jobs: {older: {}}'
 runs o/d 1 1 "schedule:$((now - 4 * 366 * d))"
 workflow_file o/d .github/workflows/febmar.yaml 'on:
   schedule:
@@ -250,12 +349,27 @@ put "repos/o/j" '{"default_branch":"main"}'
 put "repos/o/j/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
   {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
 workflow_file o/j .github/workflows/daily.yaml "$daily"
-put "repos/o/j/commits?path=.github/workflows/daily.yaml&sha=main&until&per_page=1" '[{"sha":null}]'
+history o/j .github/workflows/daily.yaml MISSING
 runs o/j 1 1 "schedule:$((now - 40 * d))"
 run --repo o/j
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed history payload must exit 2, got $rc"; }
-has "QUERY-UNKNOWN o/j .github/workflows/daily.yaml — history at the window start unreadable" \
+has "QUERY-UNKNOWN o/j .github/workflows/daily.yaml — file history at the pinned head unreadable" \
   "a malformed history payload must be named"
+# …nor may a malformed version INSIDE the window read as "file absent there", the removal grace.
+history o/j .github/workflows/daily.yaml "$daily" MISSING
+run --repo o/j
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed in-window version must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/j .github/workflows/daily.yaml — file history at the pinned head unreadable" \
+  "a malformed in-window version must be named"
+# …and neither may a missing commit object (the head unknown to GraphQL) or a failed history read.
+put "graphql/o/j/.github/workflows/daily.yaml" '{"data":{"repository":{"object":null}}}'
+run --repo o/j
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a missing commit object must exit 2, got $rc"; }
+history o/j .github/workflows/daily.yaml "$daily"
+FAIL_ON="graphql?path=.github/workflows/daily.yaml" run --repo o/j
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a failed history read must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/j .github/workflows/daily.yaml — file history at the pinned head unreadable" \
+  "a failed history read must be named"
 
 # The gap is computed, not guessed from spelling: `* 1-12 *` is every day, so 40 days is a stop.
 put "repos/o/k" '{"default_branch":"main"}'
@@ -302,7 +416,7 @@ has "QUERY-UNKNOWN o/n .github/workflows/daily.yaml — file at the window start
 
 # An EMPTY window-start body parses as "no schedule", so it too must be UNKNOWN, never the grace.
 workflow_file o/n .github/workflows/daily.yaml "$daily"
-put "repos/o/n/contents/.github/workflows/daily.yaml?ref=b4f0e1ab" ''
+history o/n .github/workflows/daily.yaml ''
 run --repo o/n
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an empty window-start body must exit 2, got $rc"; }
 
@@ -341,18 +455,18 @@ has "QUERY-UNKNOWN o/s .github/workflows/daily.yaml — unrecognised workflow st
 put "repos/o/t" '{"default_branch":"main"}'
 put "repos/o/t/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
   {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/hidden.yaml\",\"created_at\":\"$old\"}]}"
-put "repos/o/t/contents/.github/workflows?ref=main" '[{"type":"file","path":".github/workflows/hidden.yaml"}]'
+put "repos/o/t/contents/.github/workflows?ref=$pin" '[{"type":"file","path":".github/workflows/hidden.yaml"}]'
 run --repo o/t
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a listed but unreadable file must exit 2, got $rc"; }
 has "QUERY-UNKNOWN o/t .github/workflows/hidden.yaml — workflow file read failed" "a listed but unreadable file must be named"
-put "repos/o/t/contents/.github/workflows?ref=main" '{"message":"Not Found"}'
+put "repos/o/t/contents/.github/workflows?ref=$pin" '{"message":"Not Found"}'
 run --repo o/t
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an unreadable workflow directory must exit 2, got $rc"; }
 has "QUERY-UNKNOWN o/t .github/workflows/hidden.yaml — workflow directory on the default branch unreadable" \
   "an unreadable workflow directory must be named"
 
 # A malformed directory entry would make every listed file look removed: the listing is UNKNOWN.
-put "repos/o/t/contents/.github/workflows?ref=main" '[{"type":"file","path":null}]'
+put "repos/o/t/contents/.github/workflows?ref=$pin" '[{"type":"file","path":null}]'
 run --repo o/t
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed directory entry must exit 2, got $rc"; }
 has "QUERY-UNKNOWN o/t .github/workflows/hidden.yaml — workflow directory on the default branch unreadable" \
@@ -362,7 +476,7 @@ has "QUERY-UNKNOWN o/t .github/workflows/hidden.yaml — workflow directory on t
 put "repos/o/u" '{"default_branch":"main"}'
 put "repos/o/u/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
   {\"id\":1,\"state\":\"deleted\",\"path\":\".github/workflows/gone.yaml\",\"created_at\":\"$old\"}]}"
-put "repos/o/u/contents/.github/workflows?ref=main" '[]'
+put "repos/o/u/contents/.github/workflows?ref=$pin" '[]'
 run --repo o/u
 [ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a deleted workflow must be skipped, got $rc"; }
 
@@ -450,7 +564,7 @@ run --repo o/y
 put "repos/o/w" '{"default_branch":"main"}'
 put "repos/o/w/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
   {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/zz.yaml\",\"created_at\":\"$old\"}]}"
-jq -n '[range(0; 1000) | {type: "file", path: ".github/workflows/w\(.).yaml"}]' >"$fix/$(printf '%s' 'repos/o/w/contents/.github/workflows?ref=main' | tr '/?&=' '____').json"
+jq -n '[range(0; 1000) | {type: "file", path: ".github/workflows/w\(.).yaml"}]' >"$fix/$(printf '%s' "repos/o/w/contents/.github/workflows?ref=$pin" | tr '/?&=' '____').json"
 run --repo o/w
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a capped directory listing must exit 2, got $rc"; }
 
@@ -475,8 +589,9 @@ has "QUERY-UNKNOWN o/e — workflow list incomplete (0 of 3)" "a short listing m
 put "repos/o/f" '{"default_branch":"main"}'
 put "repos/o/f/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
   {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/a#b.yaml\",\"created_at\":\"$old\"}]}"
+# The content fixture is keyed by the encoded URL; the history read carries the raw path as a GraphQL
+# variable, so `workflow_file` keys it by the decoded path.
 workflow_file o/f .github/workflows/a%23b.yaml "$daily"
-put "repos/o/f/commits?path=.github/workflows/a#b.yaml&sha=main&until&per_page=1" '[{"sha":"b4f0e1ab"}]'
 runs o/f 1 1 "schedule:$((now - 40 * d))"
 run --repo o/f
 [ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an encoded path must be read and judged, got $rc"; }
@@ -498,6 +613,160 @@ rc=$?
 set -e
 rm -f "$bin/yq"
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an aborted scan must exit 2, got $rc"; }
+grep -qF 'deliberately_unset_for_abort_test' "$tmp/err" ||
+  { cat "$tmp/out" "$tmp/err" >&2; fail "the scan must have aborted at the injected expansion, not earlier"; }
+
+# Repository o/p — a schedule is judged only when it has run CONTINUOUSLY since the window start
+# (monorepo#3671). Every workflow here last ran 40 days ago and its window-start version equals today's.
+dispatch='on:
+  workflow_dispatch: {}'
+weekly='on:
+  schedule:
+    - cron: "17 6 * * 1"'
+put "repos/o/p" '{"default_branch":"main"}'
+put "repos/o/p/actions/workflows?per_page=100" "{\"total_count\":5,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/readded.yaml\",\"created_at\":\"$old\"},
+  {\"id\":2,\"state\":\"active\",\"path\":\".github/workflows/recreated.yaml\",\"created_at\":\"$old\"},
+  {\"id\":3,\"state\":\"active\",\"path\":\".github/workflows/bounced.yaml\",\"created_at\":\"$old\"},
+  {\"id\":4,\"state\":\"active\",\"path\":\".github/workflows/edited.yaml\",\"created_at\":\"$old\"},
+  {\"id\":5,\"state\":\"active\",\"path\":\".github/workflows/restored.yaml\",\"created_at\":\"$old\"}]}"
+# The schedule removed and re-added with the SAME cron inside the window: it restarted at the re-add.
+workflow_file o/p .github/workflows/readded.yaml "$daily" "$daily" "$daily" "$dispatch"
+# The file deleted and re-created inside the window: the same.
+workflow_file o/p .github/workflows/recreated.yaml "$daily" "$daily" "$daily" ABSENT
+# Changed to weekly and back inside the window: the same.
+workflow_file o/p .github/workflows/bounced.yaml "$daily" "$daily" "$daily" "$weekly"
+# Edited inside the window without touching the schedule: still judged, so still reported.
+workflow_file o/p .github/workflows/edited.yaml "$daily" "$daily" "$daily
+jobs: {b: {}}" "$daily
+jobs: {a: {}}"
+# Absent at the window start (deleted by the last commit before it) and restored inside it: new.
+workflow_file o/p .github/workflows/restored.yaml "$daily" ABSENT "$daily"
+for id in 1 2 3 4 5; do runs o/p "$id" 1 "schedule:$((now - 40 * d))"; done
+run --repo o/p
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "only the continuously scheduled workflow is silent, got $rc"; }
+lacks "readded.yaml" "a schedule removed and re-added inside the window is not yet due"
+lacks "recreated.yaml" "a workflow file deleted and re-created inside the window is not yet due"
+lacks "bounced.yaml" "a schedule changed and changed back inside the window is not yet due"
+lacks "restored.yaml" "a file absent at the window start is new, not silent"
+has "SILENT-WORKFLOW o/p .github/workflows/edited.yaml — no scheduled run in the last 97h (its cron fires at least every 1d)" \
+  "edits that keep the schedule must never extend the grace"
+has "CHECKED 5 scheduled workflow(s) across 1 repositor(ies)" "every scheduled workflow is examined"
+# Only a PROVEN difference grants the grace: an unparseable version inside the window is UNKNOWN…
+workflow_file o/p .github/workflows/edited.yaml "$daily" "$daily" 'on: [unclosed'
+run --repo o/p
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an unparseable in-window version must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/p .github/workflows/edited.yaml — file version inside the window unparseable" \
+  "an unparseable in-window version must be named"
+# …unless another version inside the window proves the schedule restarted there anyway.
+workflow_file o/p .github/workflows/edited.yaml "$daily" "$daily" 'on: [unclosed' "$dispatch"
+run --repo o/p
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a proven restart inside the window grants the grace, got $rc"; }
+
+# Repository o/q — the history walk pages through the window, and is bounded and complete or UNKNOWN.
+put "repos/o/q" '{"default_branch":"main"}'
+put "repos/o/q/actions/workflows?per_page=100" "{\"total_count\":2,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/early.yaml\",\"created_at\":\"$old\"},
+  {\"id\":2,\"state\":\"active\",\"path\":\".github/workflows/late.yaml\",\"created_at\":\"$old\"}]}"
+put "repos/o/q/contents/.github/workflows/early.yaml?ref=$pin" "$daily"
+put "repos/o/q/contents/.github/workflows/late.yaml?ref=$pin" "$daily"
+for id in 1 2; do runs o/q "$id" 1 "schedule:$((now - 40 * d))"; done
+# early.yaml's removal is on the SECOND page of the window: found, so not yet due. late.yaml's two
+# pages hold only its schedule: judged, so reported.
+put "graphql/o/q/.github/workflows/early.yaml" "$(history_json "$daily" 2 c1 "$daily")"
+put "graphql/o/q/.github/workflows/early.yaml&after=c1" "$(history_json "$daily" 2 - "$dispatch")"
+put "graphql/o/q/.github/workflows/late.yaml" "$(history_json "$daily" 2 c1 "$daily")"
+put "graphql/o/q/.github/workflows/late.yaml&after=c1" "$(history_json "$daily" 2 - "$daily")"
+run --repo o/q
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a paged window must be walked to its end, got $rc"; }
+lacks "early.yaml" "a removal on the second page of the window must be found"
+has "SILENT-WORKFLOW o/q .github/workflows/late.yaml — no scheduled run in the last 97h (its cron fires at least every 1d)" \
+  "a schedule unchanged across a paged window must be judged"
+# A walk that never reaches the window start within its bound is UNKNOWN, never a verdict.
+put "graphql/o/q/.github/workflows/late.yaml" "$(history_json "$daily" 999 c "$daily")"
+put "graphql/o/q/.github/workflows/late.yaml&after=c" "$(history_json "$daily" 999 c "$daily")"
+run --repo o/q
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a walk past its bound must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/q .github/workflows/late.yaml — file history inside the window exceeds 300 commits" \
+  "a walk past its bound must be named"
+# A last page whose versions fall short of the total is a partial payload: UNKNOWN.
+put "graphql/o/q/.github/workflows/late.yaml" "$(history_json "$daily" 3 - "$daily")"
+run --repo o/q
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a short history must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/q .github/workflows/late.yaml — file history inside the window incomplete (1 of 3)" \
+  "a short history must be named"
+# A truncated text is not the file: UNKNOWN, never a difference.
+put "graphql/o/q/.github/workflows/late.yaml" "$(history_json "$daily" - - "$daily" |
+  jq -c '.data.repository.object.window.nodes[0].file.object.isTruncated = true')"
+run --repo o/q
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a truncated version must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/q .github/workflows/late.yaml — file history at the pinned head unreadable" \
+  "a truncated version must be named"
+
+# Repository o/r2 — the head every read is pinned to must resolve, or the repository is UNKNOWN.
+put "repos/o/r2" '{"default_branch":"main"}'
+put "repos/o/r2/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/r2 .github/workflows/daily.yaml "$daily"
+runs o/r2 1 1 "schedule:$((now - 3 * h))"
+FAIL_ON="git/ref/heads/main" run --repo o/r2
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an unresolvable head must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/r2 — default branch head unresolvable" "an unresolvable head must be named"
+has "CHECKED 0 scheduled workflow(s) across 0 repositor(ies)" "a repository never pinned is never counted as read"
+for reply in '{"ref":"refs/heads/main","object":{"type":"commit","sha":"c0ffee"}}' \
+  '{"ref":"refs/heads/main-old","object":{"type":"commit","sha":"'"$pin"'"}}' \
+  '{"ref":"refs/heads/main","object":{"type":"tag","sha":"'"$pin"'"}}' \
+  '{"ref":"refs/heads/main","object":{"type":"commit","sha":null}}'; do
+  put "repos/o/r2/git/ref/heads/main" "$reply"
+  run --repo o/r2
+  [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed head ($reply) must exit 2, got $rc"; }
+  has "QUERY-UNKNOWN o/r2 — default branch head unresolvable" "a malformed head must be named"
+done
+
+# Repository o/z — the default branch moves while it is scanned (monorepo#3672). At the first head the
+# workflow holds a daily schedule that last ran 40 days ago.
+pin2="$(printf 'beef%035d2' 0)"
+pin3="$(printf 'beef%035d3' 0)"
+put "repos/o/z" '{"default_branch":"main"}'
+put "repos/o/z/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+workflow_file o/z .github/workflows/daily.yaml "$daily"
+runs o/z 1 1 "schedule:$((now - 40 * d))"
+# The schedule is removed after the file was read: the silence is re-judged at the new head, where
+# the workflow is dispatch-only, so nothing is reported.
+put "repos/o/z/contents/.github/workflows/daily.yaml?ref=$pin2" "$dispatch"
+head_sequence o/z "$pin" "$pin2"
+rm -f "$tmp/log"
+REQUEST_LOG="$tmp/log" run --repo o/z
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a schedule removed mid-scan must not be reported, got $rc"; }
+lacks "daily.yaml" "a schedule removed mid-scan must not be reported"
+has "CHECKED 0 scheduled workflow(s) across 1 repositor(ies)" "the re-judgement at the new head is what counts"
+grep -qxF "repos/o/z/contents/.github/workflows/daily.yaml?ref=$pin2" "$tmp/log" ||
+  { cat "$tmp/log" >&2; fail "the file must be re-read at the new head"; }
+# The workflow FILE deleted mid-scan: absent from the new head's directory, so nothing is reported.
+head_sequence o/z "$pin" "$pin3"
+run --repo o/z
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a workflow deleted mid-scan must not be reported, got $rc"; }
+lacks "daily.yaml" "a workflow deleted mid-scan must not be reported"
+# The branch moved but the schedule did not: the silence is confirmed at the new head and reported.
+put "repos/o/z/contents/.github/workflows/daily.yaml?ref=$pin2" "$daily"
+head_sequence o/z "$pin" "$pin2"
+run --repo o/z
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a silence that survives the move must be reported, got $rc"; }
+has "SILENT-WORKFLOW o/z .github/workflows/daily.yaml — no scheduled run in the last 97h (its cron fires at least every 1d)" \
+  "a silence confirmed at the new head must be reported"
+# A branch that keeps moving, or a head that cannot be re-read, leaves the silence UNKNOWN.
+head_sequence o/z "$pin" "$pin2" "$pin3"
+run --repo o/z
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a branch that keeps moving must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/z .github/workflows/daily.yaml — silence not confirmed: default branch moved again while it was re-judged" \
+  "a branch that keeps moving must be named"
+lacks "SILENT-WORKFLOW" "an unconfirmed silence is never reported"
+head_sequence o/z "$pin" FAIL
+run --repo o/z
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a head that cannot be re-read must exit 2, got $rc"; }
+has "QUERY-UNKNOWN o/z .github/workflows/daily.yaml — silence not confirmed: default branch head unresolvable before reporting" \
+  "a head that cannot be re-read must be named"
 
 # Usage errors are UNKNOWN.
 run
