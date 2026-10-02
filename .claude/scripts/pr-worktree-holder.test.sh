@@ -19,15 +19,7 @@ checks=0
 failures=0
 finished=0
 sandbox="$(mktemp -d "${TMPDIR:-/tmp}/pr-worktree-holder-test.XXXXXX")"
-# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
-on_exit() {
-  rm -rf -- "${sandbox}"
-  if [ "${finished}" != 1 ]; then
-    echo "pr-worktree-holder.test.sh: aborted before finishing" >&2
-    exit 1
-  fi
-}
-trap on_exit EXIT
+trap 'rm -rf -- "${sandbox}"; if [ "${finished}" != 1 ]; then echo "pr-worktree-holder.test.sh: aborted before finishing" >&2; exit 1; fi' EXIT
 sandbox="$(cd "${sandbox}" && /bin/pwd -P)"
 
 [ -x "${tool}" ] || { echo "FAIL cannot execute ${tool}" >&2; exit 1; }

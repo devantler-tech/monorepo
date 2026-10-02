@@ -87,15 +87,10 @@ done
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/pr-worktree-holder.XXXXXX")" || exit 2
 finished=0
-# bash 3.2 can report a `set -u` abort as exit 0 from an EXIT trap, so completion is explicit.
-# shellcheck disable=SC2329 # Invoked by the EXIT trap.
-on_exit() {
-  local status=$?
-  rm -rf -- "${work}"
-  if [ "${finished}" != 1 ] && [ "${status}" = 0 ]; then status=2; fi
-  exit "${status}"
-}
-trap on_exit EXIT
+# bash 3.2 can report a `set -u` abort as exit 0 from an EXIT trap, so completion is explicit: any
+# exit before the verdict is printed is UNKNOWN. Inline rather than a handler function, because
+# the linter versions in CI and on the agent host disagree about a trap-only function.
+trap 'rm -rf -- "${work}"; if [ "${finished}" != 1 ]; then exit 2; fi' EXIT
 
 unreadable() {
   echo "pr-worktree-holder: $1" >&2
