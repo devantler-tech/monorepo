@@ -243,11 +243,12 @@ governs the issue work that follows.) Two rules enforce that:
    🔴 **An `authority` line MUST also record the ask: append `| asked <channel> <YYYY-MM-DD>`.**
    `<channel>` names where it actually landed — a channel that *reaches* him per *Maintainer
    channels*: `pr` means a draft PR, `slack` the declared Slack channel, and `session` the native
-   ask tool in an interactive session. `push` and `issue` are not channel tokens: a GitHub comment
-   is a durable
-   **record** of an ask and is explicitly **not** an attention channel, so a comment alone leaves
-   the issue exactly as parked as silence. Re-raise on a cadence rather than every run; the ask
-   goes stale after **14 days** by default. An authority line with no ask, or with a stale one, is
+   ask tool in an interactive session. No other word is a channel token, and the check reads any
+   other word as `NO-ASK`. That includes `push`, whether it means a git push or the runtime's push
+   notification (not an attention channel either; *Maintainer channels* says why), and `issue`: a
+   GitHub comment is a durable **record** of an ask and is explicitly **not** an attention channel,
+   so a comment alone leaves the issue exactly as parked as silence. Re-raise on a cadence rather
+   than every run; the ask goes stale after **14 days** by default. An authority line with no ask, or with a stale one, is
    a finding — `NO-ASK` / `STALE-ASK`. **The class is an explicit token; a record that predates the
    field is INFERRED rather than refused** — read as `authority` only when its identifier already
    says `maintainer authority`, otherwise `upstream` — and annotated `[legacy: no class token]` so

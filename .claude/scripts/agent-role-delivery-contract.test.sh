@@ -1419,6 +1419,23 @@ for surface_rule in \
     *) fail "Maintainer channels no longer says '${surface_rule}' — the escalation surface is ambiguous again (monorepo#2900)" ;;
   esac
 done
+# A push notification delivered an ask that the blocker check then read as never-asked, because
+# the ask-record vocabulary excluded "push" without saying which push it meant (monorepo#3243).
+# The channels section must settle it where an escalating agent reads, and the record rule must
+# say both meanings are excluded, so the exclusion is never mistaken for an accident again.
+for push_rule in \
+  "Nor is the runtime's push notification" \
+  "\`Remote Control inactive\`" \
+  "So a notification never satisfies an ask"; do
+  case "${maintainer_channels_flat}" in
+    *"${push_rule}"*) ;;
+    *) fail "Maintainer channels no longer says '${push_rule}' — a push-notification ask is ambiguous again (monorepo#3243)" ;;
+  esac
+done
+assert_prose "whether it means a git push or the runtime's push notification" \
+  "the ask-record rule excludes 'push' without saying which push it means (monorepo#3243)"
+refute_prose "\`push\` and \`issue\` are not channel tokens:" \
+  "the ask-record rule still carries the ambiguous 'push' exclusion that read as accidental (monorepo#3243)"
 
 # The plugin's maintainer-PR driving fact (agent-plugins#201) is read from the Trust gate
 # section and defaults to hands-off when that section does not declare it. This deployment

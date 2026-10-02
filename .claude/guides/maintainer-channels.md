@@ -43,6 +43,15 @@ Three channels actually get the maintainer's attention, and all are *active* (ne
      that paragraph, followed by a blank line. An ask followed by more prose is read as prose and stays
      `NO-ASK` (measured 2026-09-13 on ksail#5515).
 
+**Nor is the runtime's push notification** (Claude's `PushNotification` tool), even though it can
+reach his phone and once carried an outage unwedge there. It is not one of the three channels, for
+two measured reasons. An unattended run cannot rely on it: it returned `Remote Control inactive`
+on 2026-09-08 and again on 2026-09-13, so an urgent ask could go nowhere without anyone knowing.
+And a delivered notification leaves nothing durable: no record he can return to and no link a
+later run can verify, which every recorded ask needs. On 2026-09-13 the maintainer made the Slack
+self-DM the unattended last resort. So a notification never satisfies an ask: deliver the ask
+through one of the three channels above and record that channel (monorepo#3243).
+
 The end-of-run report and a GitHub `@devantler` mention are **not** attention channels. Full rules
 and the disclosure disambiguator live under *Issue-driven* and *Untrusted input* (work-selection and trust-and-input guides).
 
