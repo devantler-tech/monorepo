@@ -962,7 +962,7 @@ cp "${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.js
   "${session_main}/.claude/plugin-consumption/"
 for session_classifier_name in pr-ownership-disclosure.sh programmed-bot-review-exemption.sh \
   pr-unresolved-threads.sh coderabbit-summary-verdict.sh local-review-verdict.sh \
-  coderabbit-review-verdict.sh kata-measure-date.sh; do
+  coderabbit-review-verdict.sh kata-measure-date.sh maintainer-comment-candidates.sh; do
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_main}/.claude/scripts/"
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_other}/.claude/scripts/"
 done
@@ -1225,6 +1225,32 @@ kata_sites="$(grep -o '[^[:space:]"`'"'"']*kata-measure-date\.sh[^[:space:]`]*' 
   grep -vxF '<repo-root>/.claude/scripts/kata-measure-date.sh' || true)"
 [ -z "${kata_sites}" ] ||
   fail "surveyor overlay calls kata-measure-date.sh by a form the guard refuses: ${kata_sites}"
+
+# The maintainer-comment candidate classifier likewise (monorepo#3163): composed by hand, an
+# issue-sweep row named the wrong issue and the maintainer-channel finding was discarded. Run the
+# overlay's OWN pipeline through the hook, and prove a relative-path call is refused.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+candidates_command="$(grep -o '`gh issue view [^`]*maintainer-comment-candidates\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${candidates_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded maintainer-comment-candidates.sh pipeline (monorepo#3163)"
+candidates_command="${candidates_command//<repo-root>/${repo_root}}"
+candidates_command="${candidates_command//<repo>/platform}"
+candidates_command="${candidates_command//<n>/3275}"
+candidates_payload="$(jq -nc --arg cmd "${candidates_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${candidates_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's maintainer-comment-candidates pipeline (monorepo#3163)"
+relative_candidates_command="${candidates_command//${repo_root}\/.claude\/scripts\//.claude/scripts/}"
+[ "${relative_candidates_command}" != "${candidates_command}" ] ||
+  fail "negative control did not rewrite the candidates helper path (monorepo#3163)"
+relative_candidates_payload="$(jq -nc --arg cmd "${relative_candidates_command}" '{tool_input: {command: $cmd}}')"
+if run_surveyor_hook "${relative_candidates_payload}" >/dev/null 2>&1; then
+  fail "consumer surveyor hook admitted a RELATIVE maintainer-comment-candidates.sh call (monorepo#3163)"
+fi
+candidates_sites="$(grep -o '[^[:space:]"`'"'"']*maintainer-comment-candidates\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/maintainer-comment-candidates.sh' || true)"
+[ -z "${candidates_sites}" ] ||
+  fail "surveyor overlay calls maintainer-comment-candidates.sh by a form the guard refuses: ${candidates_sites}"
 
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"

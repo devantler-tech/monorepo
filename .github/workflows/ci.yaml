@@ -374,6 +374,10 @@ jobs:
               - '.claude/scripts/comment-disclosure-drift.sh'
               - '.claude/scripts/comment-disclosure-drift.test.sh'
               - '.claude/scripts/comment-disclosure-drift-go/**'
+              # The surveyor's maintainer-comment classifier is a mode of this guard
+              # (monorepo#3163), so its wrapper and test run in the same job.
+              - '.claude/scripts/maintainer-comment-candidates.sh'
+              - '.claude/scripts/maintainer-comment-candidates.test.sh'
               # The sweep wrapper consumes this guard's findings, so its own test
               # belongs to the same gate: a change to either side can break the
               # consumption rule that decides which findings are real.
@@ -1634,6 +1638,12 @@ jobs:
       # composer's real Bugbot output.
       - name: Verify the Bugbot request-marker check
         run: bash .claude/scripts/bugbot-request-marker.test.sh
+      # Hermetic: the surveyor's maintainer-comment classifier runs the guard above in its
+      # --candidates mode over local payloads, so this makes no API call (monorepo#3163).
+      - name: Verify the maintainer-comment candidate classifier
+        run: |
+          shellcheck .claude/scripts/maintainer-comment-candidates.sh .claude/scripts/maintainer-comment-candidates.test.sh
+          bash .claude/scripts/maintainer-comment-candidates.test.sh
 
   test-surveyor-forge-vocabulary:
     name: Test surveyor forge vocabulary conformance
