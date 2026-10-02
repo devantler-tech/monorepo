@@ -70,13 +70,17 @@ required_filter_paths=(
 # runner's yq is older than this host's and rejects parts of the same program in yq syntax.
 # A job works in docs/ when its own or the workflow's default working directory is docs/, a
 # step's working directory is, or a step enters it with cd, pushd or npm --prefix. Any path
-# ending in a docs component counts (./docs, ${{ github.workspace }}/docs), quoted or not.
+# with a docs component counts (./docs, ${{ github.workspace }}/docs), quoted or not. A step
+# that runs npm or npx anywhere counts too: npm is the tool whose major matters, so naming it
+# does not depend on spotting how a step reaches docs/. A false positive fails loudly here,
+# never silently.
 jobs_query=""
 IFS= read -r -d '' jobs_query <<'JQ' || true
 def docs_dir: test("(^|/)docs(/|$)");
 def enters_docs:
-  test("(^|[\\s;&|(])(cd|pushd)\\s+[\"']?([^\\s;&|\"']*/)?docs([\"'/\\s;&|)]|$)")
-  or test("--prefix[ =][\"']?([^\\s\"']*/)?docs([\"'/\\s]|$)");
+  test("(^|[\\s;&|(])(cd|pushd)\\s+([^;&|\\n]*[/\"'\\s])?docs([\"'/\\s;&|)]|$)")
+  or test("--prefix[ =]([^\\s;&|]*[/\"'])?docs([\"'/\\s;&|)]|$)");
+def runs_npm: test("(^|[\\s;&|(])(npm|npx)(\\s|$)");
 (((.defaults // {}).run // {})["working-directory"]) as $workflow_default |
 (.jobs // {}) | to_entries[] |
 (((((.value.defaults // {}).run // {})["working-directory"]) // $workflow_default // "") | docs_dir)
@@ -85,6 +89,7 @@ def enters_docs:
 [range(0; $steps | length) | select(
   (($steps[.]["working-directory"] // "") | docs_dir) or
   (($steps[.].run // "") | enters_docs) or
+  (($steps[.].run // "") | runs_npm) or
   ($default_docs and ($steps[.].run != null))
 )] as $docs |
 select($default_docs or ($docs | length > 0)) |
@@ -168,8 +173,9 @@ check() {
       .run == "bash docs/scripts/npm-toolchain.test.sh"
     )] | length > 0) | .value.if // ""] | .[0] // ""
   ' "${ci}")" || violation "cannot parse ci.yaml" || return 1
-  [[ "${gate}" =~ needs\.changes\.outputs\.([a-z0-9-]+) ]] ||
-    violation "ci.yaml has no job that runs bash docs/scripts/npm-toolchain.test.sh behind a change filter" ||
+  # The whole condition, exactly: an inverted or narrowed gate would skip the test.
+  [[ "${gate}" =~ ^needs\.changes\.outputs\.([a-z0-9-]+)\ ==\ \'true\'$ ]] ||
+    violation "ci.yaml has no job that runs bash docs/scripts/npm-toolchain.test.sh behind exactly needs.changes.outputs.<filter> == 'true' (found: '${gate}')" ||
     return 1
   filter="${BASH_REMATCH[1]}"
   # Compared in bash, literally: yq's == treats a `*` in its right-hand string as a glob, so
@@ -213,14 +219,32 @@ expect_failure "publish on Node 22" "publish-pages.yaml:build sets up Node 22, w
 reset_fixture
 yq -i '.jobs.extra = {"runs-on": "ubuntu-latest", "steps": [
   {"uses": "actions/setup-node@v7", "with": {"node-version": "22"}},
-  {"run": "cd docs && npm ci"}]}' "${fixture}/.github/workflows/publish-pages.yaml"
+  {"run": "cd docs && ./scripts/audit-dependencies.sh"}]}' "${fixture}/.github/workflows/publish-pages.yaml"
 expect_failure "new job entering docs/ with cd" "publish-pages.yaml:extra sets up Node 22"
 
 reset_fixture
 yq -i '.jobs.extra = {"runs-on": "ubuntu-latest", "steps": [
   {"uses": "actions/setup-node@v7", "with": {"node-version": "22"}},
-  {"run": "pushd \"docs\" && npm ci"}]}' "${fixture}/.github/workflows/publish-pages.yaml"
+  {"run": "pushd \"docs\" && ./scripts/audit-dependencies.sh"}]}' "${fixture}/.github/workflows/publish-pages.yaml"
 expect_failure "new job entering docs/ with a quoted pushd" "publish-pages.yaml:extra sets up Node 22"
+
+reset_fixture
+CD_STEP="cd \"\${GITHUB_WORKSPACE}\"/docs && ./scripts/audit-dependencies.sh" yq -i '.jobs.extra = {
+  "runs-on": "ubuntu-latest", "steps": [
+  {"uses": "actions/setup-node@v7", "with": {"node-version": "22"}},
+  {"run": strenv(CD_STEP)}]}' "${fixture}/.github/workflows/publish-pages.yaml"
+expect_failure "new job entering docs/ through a quoted variable" "publish-pages.yaml:extra sets up Node 22"
+
+reset_fixture
+yq -i '.jobs.extra = {"runs-on": "ubuntu-latest", "steps": [
+  {"uses": "actions/setup-node@v7", "with": {"node-version": "22"}},
+  {"run": "npx astro build"}]}' "${fixture}/.github/workflows/publish-pages.yaml"
+expect_failure "new job running npx" "publish-pages.yaml:extra sets up Node 22"
+
+reset_fixture
+yq -i '.jobs.test-docs-npm-toolchain.if = "needs.changes.outputs.docs-npm-toolchain != '"'"'true'"'"'"' \
+  "${fixture}/.github/workflows/ci.yaml"
+expect_failure "inverted gate" "behind exactly needs.changes.outputs.<filter> == 'true'"
 
 reset_fixture
 WORKSPACE_DOCS="\${{ github.workspace }}/docs" yq -i '.jobs.extra = {"runs-on": "ubuntu-latest", "steps": [
