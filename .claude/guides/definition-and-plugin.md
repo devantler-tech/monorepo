@@ -300,8 +300,10 @@ the plugin cache**; it is read-only evidence (see
 *Agent definition locations*). It exits `0` only once the install is on the pin **and an independent
 blob-identity check confirms it** — never on `plugin update`'s own exit status, which can report
 success having repaired nothing. `1` means the install is not on the pin (the marketplace could not
-supply that revision, or the apply ran and the post-apply check still does not report `CURRENT`).
-`2` is UNKNOWN — no verdict produced: no CLI, an unreadable pin or marketplace, a plugin id naming a
+supply that plugin's reviewed definition, naming the differing entry or files, or the apply ran and
+the post-apply check still does not report `CURRENT`).
+`2` is UNKNOWN — no verdict produced: no CLI, an unreadable pin or marketplace, a pinned revision in
+neither the marketplace clone nor the consumer's submodule, a plugin id naming a
 different marketplace than the clone being gated, a concurrent run holding the lock, a marketplace
 worktree whose bytes do not provably match the pinned commit, an unavailable verifier, or
 `--dry-run`, since a simulation asserts nothing about the install. **For the Claude lane only, run it
@@ -326,8 +328,11 @@ exactly what made the 2026-08-15 by-hand refresh look like it installed the pinn
 marketplace tip *was* `564a6a0f`. Measured the next day: pin `11b241cc` (4.3.4) against an upstream
 `main` already at `73109ad9` (4.3.6), so the bare commands would have installed a revision nobody
 here has reviewed. **Stale-install drift at least runs a previously reviewed definition; this would
-run one that was never read.** That is why the script gates on marketplace-HEAD **==** pin and
-refuses otherwise rather than taking the tip.
+run one that was never read.** That is why the script applies only when what it would install for
+**that plugin** is the reviewed definition: marketplace-HEAD **==** pin, or the plugin's marketplace
+entry (apart from its version) and its whole source subtree are identical at both revisions. A release
+of an unrelated plugin then no longer blocks the repair (#3197), and any change to this plugin still
+refuses rather than taking the tip.
 
 ⚠️ **A refusal is a real finding about the ROLLOUT, not a failure of the check.** It means the
 gitlink and upstream have diverged, so the fix is to bump `libraries/agent-plugins` to the revision
