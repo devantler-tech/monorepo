@@ -8,7 +8,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 fail() { echo "review-lane-health test: $*" >&2; exit 1; }
 
-now=1790000000 # 2026-09-21T13:33:20Z
+now=1790000000 # 2026-09-21T14:13:20Z
 run() { set +e; "$checker" "$@" --now "$now" >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
 expect() { # <label> <rc> <line fragment>
   [ "$rc" -eq "$2" ] || { cat "$tmp/out" "$tmp/err" >&2; fail "$1: rc=$rc, want $2"; }
@@ -25,6 +25,15 @@ expect "usage limit" 1 "codex=DOWN usage-limit since 2026-09-21T10:00:00Z last-r
 
 events 'cr\t2026-09-21T12:00:00Z\tok\t-\ncr\t2026-09-21T13:00:00Z\tfail\trate-limit\n'
 expect "fresh rate limit" 0 "cr=LIMITED rate-limit at 2026-09-21T13:00:00Z"
+grep -qF "until=" "$tmp/out" && fail "a refusal that stated no window must print no until="
+
+# A refusal that states its retry window carries the time it ends, so a later run can tell "retry at T"
+# from "refused an hour ago" (monorepo#3007); once now passes it the line says so.
+events 'cr\t2026-09-21T12:00:00Z\tok\t-\ncr\t2026-09-21T13:00:00Z\tfail\trate-limit\t2026-09-21T15:00:00Z\n'
+expect "pending window" 0 "cr=LIMITED rate-limit at 2026-09-21T13:00:00Z last-review 2026-09-21T12:00:00Z until=2026-09-21T15:00:00Z"
+grep -qF "elapsed" "$tmp/out" && fail "a window that has not ended must not say elapsed"
+events 'cr\t2026-09-21T12:00:00Z\tok\t-\ncr\t2026-09-21T13:00:00Z\tfail\trate-limit\t2026-09-21T13:30:00Z\n'
+expect "elapsed window" 0 "until=2026-09-21T13:30:00Z elapsed"
 
 # A rate limit that has outlasted the stale window is an outage, not a pause.
 events 'cr\t2026-09-17T09:00:00Z\tok\t-\ncr\t2026-09-21T13:00:00Z\tfail\trate-limit\n'
@@ -62,8 +71,8 @@ case "$1 $2" in
       { echo "stub gh: search must exclude archived repos and sort by update" >&2; exit 1; }
     echo '[{"repository":{"name":"r"},"number":7}]' | emit ;;
   "api repos/o/r/pulls/7") echo '{"head":{"sha":"abc"}}' | emit ;;
-  "api repos/o/r/issues/7/comments") cat <<'JSON' | emit
-[{"user":{"login":"coderabbitai[bot]"},"updated_at":"2026-09-21T12:00:00Z","body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached"},
+  "api repos/o/r/issues/7/comments") cat <<'JSON' | sed "s|@@RL_WINDOW@@|${RL_WINDOW:-}|" | emit
+[{"user":{"login":"coderabbitai[bot]"},"updated_at":"2026-09-21T12:00:00Z","body":"<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached@@RL_WINDOW@@"},
  {"user":{"login":"coderabbitai[bot]"},"updated_at":"2026-09-21T12:30:00Z","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nNo actionable comments were generated in the recent review."},
  {"user":{"login":"coderabbitai[bot]"},"updated_at":"2026-09-21T12:40:00Z","body":"Chat reply: a Review rate limited message would mean the lane refused."},
  {"user":{"login":"chatgpt-codex-connector[bot]"},"updated_at":"2026-09-21T11:00:00Z","body":"Codex Review: Didn't find any major issues."},
@@ -111,6 +120,20 @@ grep -qxF "CR-DECLINED r#7 at 2026-09-21T12:45:00Z — PR-scoped learning; advan
   fail "CodeRabbit's reply declining a disclosed request is reported against its pull request"
 [ "$(grep -c '^CR-DECLINED' "$tmp/out")" -eq 1 ] ||
   fail "an accepted request's reply, or another author's copy of the decline, is not a decline"
+
+grep -qF "until=" "$tmp/out" && fail "a collected refusal with no stated window must print no until="
+
+# Each measured wording of CodeRabbit's retry window is read from the refusal itself (monorepo#3007).
+# The text is a sed replacement inside a JSON string, so a newline is spelled \\n.
+window() { # <label> <refusal text appended to the stub's rate-limit comment> <expected until= fragment>
+  RL_WINDOW="$2" PATH="$bin:$PATH" run --org o --since 2026-09-14
+  expect "$1" 1 "cr=LIMITED rate-limit at 2026-09-21T12:00:00Z last-review 2026-09-21T09:00:00Z $3"
+}
+window "included-review wording" '\\n> **Next included review available in 51 minutes.**' "until=2026-09-21T12:51:00Z elapsed"
+window "colon wording" '\\n> Next review available in: 16 minutes' "until=2026-09-21T12:16:00Z elapsed"
+window "bold hours wording" '\\n> Next review available in:** **3 hours and 5 minutes**' "until=2026-09-21T15:05:00Z"
+grep -qF "elapsed" "$tmp/out" && fail "a window ending after now must not say elapsed"
+window "hours only" '\\n> available in 1 hour.' "until=2026-09-21T13:00:00Z elapsed"
 
 CAUTION_REVIEW=1 PATH="$bin:$PATH" run --org o --since 2026-09-14
 expect "outside-diff review" 1 "cr=LIMITED rate-limit at 2026-09-21T12:00:00Z last-review 2026-09-21T11:50:00Z"

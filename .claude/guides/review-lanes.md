@@ -300,7 +300,11 @@ the account and that **an admin must raise the limit in the Cursor dashboard**. 
   for weeks that way (#2561). Run
   [`.claude/scripts/review-lane-health.sh`](../scripts/review-lane-health.sh) once per run
   before requesting reviews. It prints one `LANE-HEALTH` line per lane: `OK`, `LIMITED` (a rate limit
-  that clears on its own), `DOWN` (`MAINTAINER-ONLY` for a usage limit), or `NO-EVIDENCE`. It exits
+  that clears on its own), `DOWN` (`MAINTAINER-ONLY` for a usage limit), or `NO-EVIDENCE`. A
+  `LIMITED` line ends with `until=<UTC>` when the refusal stated its retry window, and adds `elapsed`
+  once that time has passed. Do not request that lane before `until`: go to the next lane or a
+  *Local review round* instead (#3007). A `LIMITED` line without `until` says only when the lane
+  refused, not when it frees up. It exits
   `1` when any lane is `DOWN` and `2` when it could not read everything. First verify current applicable unavailability, then stop requesting a `DOWN` lane
   and escalate a `MAINTAINER-ONLY` one. Its labels are discovery aids: verify the underlying provider
   evidence and its applicable scope. The *Local review round* still needs direct current-PR artifact
