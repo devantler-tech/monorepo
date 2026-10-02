@@ -14,11 +14,10 @@
 # CHECKS
 #   1. docs/package.json declares devEngines.packageManager as npm "^<major>.0.0" with
 #      onFail "error".
-#   2. Every job in .github/workflows that works in docs/ (a step or job default with
-#      working-directory docs, `--prefix docs` or `cd docs`) has exactly one actions/setup-node step,
-#      placed before its first step in docs/, with an explicit node-version on a Node line whose
-#      bundled npm is that major. The known jobs must all be found, so an empty discovery
-#      cannot pass.
+#   2. Every job in .github/workflows that works in docs/ (see jobs_query) has exactly one
+#      actions/setup-node step, placed before its first step in docs/, with an explicit
+#      node-version on a Node line whose bundled npm is that major. The known jobs must all be
+#      found, so an empty discovery cannot pass.
 #   3. CI runs this test from a job that its own inputs gate, and that gate covers every
 #      workflow, so a new workflow that works in docs/ reruns it.
 #
@@ -69,25 +68,33 @@ required_filter_paths=(
 # job's first step in docs/. "-" stands for an absent value, because `read` collapses empty
 # tab-separated fields. It is a jq program over yq's JSON rendering of the workflow: the
 # runner's yq is older than this host's and rejects parts of the same program in yq syntax.
-# shellcheck disable=SC2016 # $steps, $docs and $setup are jq variables, not shell expansions.
-jobs_query='
-  (.jobs // {}) | to_entries[] |
-  (((.value.defaults // {}).run // {})["working-directory"] // "" | test("^(\\./)?docs(/|$)")) as $default_docs |
-  (.value.steps // []) as $steps |
-  [range(0; $steps | length) | select(
-    (($steps[.]["working-directory"] // "") | test("^(\\./)?docs(/|$)")) or
-    (($steps[.].run // "") | test("--prefix[ =](\\./)?docs(/|\\s|$)")) or
-    (($steps[.].run // "") | test("(^|[\\s;&|(])cd\\s+(\\./)?docs(/|\\s|;|&|\\)|$)")) or
-    ($default_docs and ($steps[.].run != null))
-  )] as $docs |
-  select($default_docs or ($docs | length > 0)) |
-  [range(0; $steps | length) | select(($steps[.].uses // "") | test("^actions/setup-node@"))] as $setup |
-  [.key, ($setup | length | tostring),
-   (if ($setup | length) > 0 then ($steps[$setup[0]].with["node-version"] // "-" | tostring) else "-" end),
-   (if ($setup | length) > 0 then ($steps[$setup[0]].with["node-version-file"] // "-" | tostring) else "-" end),
-   (if ($setup | length) > 0 and ($docs | length) > 0 then ($setup[0] < $docs[0]) else true end | tostring)]
-  | @tsv
-'
+# A job works in docs/ when its own or the workflow's default working directory is docs/, a
+# step's working directory is, or a step enters it with cd, pushd or npm --prefix. Any path
+# ending in a docs component counts (./docs, ${{ github.workspace }}/docs), quoted or not.
+jobs_query=""
+IFS= read -r -d '' jobs_query <<'JQ' || true
+def docs_dir: test("(^|/)docs(/|$)");
+def enters_docs:
+  test("(^|[\\s;&|(])(cd|pushd)\\s+[\"']?([^\\s;&|\"']*/)?docs([\"'/\\s;&|)]|$)")
+  or test("--prefix[ =][\"']?([^\\s\"']*/)?docs([\"'/\\s]|$)");
+(((.defaults // {}).run // {})["working-directory"]) as $workflow_default |
+(.jobs // {}) | to_entries[] |
+(((((.value.defaults // {}).run // {})["working-directory"]) // $workflow_default // "") | docs_dir)
+  as $default_docs |
+(.value.steps // []) as $steps |
+[range(0; $steps | length) | select(
+  (($steps[.]["working-directory"] // "") | docs_dir) or
+  (($steps[.].run // "") | enters_docs) or
+  ($default_docs and ($steps[.].run != null))
+)] as $docs |
+select($default_docs or ($docs | length > 0)) |
+[range(0; $steps | length) | select(($steps[.].uses // "") | test("^actions/setup-node@"))] as $setup |
+[.key, ($setup | length | tostring),
+ (if ($setup | length) > 0 then ($steps[$setup[0]].with["node-version"] // "-" | tostring) else "-" end),
+ (if ($setup | length) > 0 then ($steps[$setup[0]].with["node-version-file"] // "-" | tostring) else "-" end),
+ (if ($setup | length) > 0 and ($docs | length) > 0 then ($setup[0] < $docs[0]) else true end | tostring)]
+| @tsv
+JQ
 
 violation() {
   printf '%s\n' "$*"
@@ -154,21 +161,22 @@ check() {
   done
 
   local ci="${workflows_dir}/ci.yaml" gate filter
+  # The test runs from the repository root: a step working in docs/ would make its own job one
+  # this test requires to set up Node.
   gate="$(yq -r '
     [.jobs | to_entries[] | select([.value.steps[]? | select(
-      .run == "./scripts/npm-toolchain.test.sh" and ."working-directory" == "docs"
+      .run == "bash docs/scripts/npm-toolchain.test.sh"
     )] | length > 0) | .value.if // ""] | .[0] // ""
   ' "${ci}")" || violation "cannot parse ci.yaml" || return 1
   [[ "${gate}" =~ needs\.changes\.outputs\.([a-z0-9-]+) ]] ||
-    violation "ci.yaml has no job that runs ./scripts/npm-toolchain.test.sh in docs/ behind a change filter" ||
+    violation "ci.yaml has no job that runs bash docs/scripts/npm-toolchain.test.sh behind a change filter" ||
     return 1
   filter="${BASH_REMATCH[1]}"
   # Compared in bash, literally: yq's == treats a `*` in its right-hand string as a glob, so
   # '.github/workflows/**' would match any single workflow entry.
   local entries path
-  # shellcheck disable=SC2016 # $filter is a jq variable, not a shell expansion.
   entries="$(yq -o=json '.jobs.changes.steps[] | select(.id == "filter") | .with.filters | from_yaml' "${ci}" |
-    jq -r --arg filter "${filter}" '.[$filter] // [] | .[]')" ||
+    jq -r --arg filter "${filter}" ".[\$filter] // [] | .[]")" ||
     violation "cannot read ci.yaml filter '${filter}'" || return 1
   for path in "${required_filter_paths[@]}"; do
     grep -qxF -- "${path}" <<<"${entries}" ||
@@ -209,6 +217,36 @@ yq -i '.jobs.extra = {"runs-on": "ubuntu-latest", "steps": [
 expect_failure "new job entering docs/ with cd" "publish-pages.yaml:extra sets up Node 22"
 
 reset_fixture
+yq -i '.jobs.extra = {"runs-on": "ubuntu-latest", "steps": [
+  {"uses": "actions/setup-node@v7", "with": {"node-version": "22"}},
+  {"run": "pushd \"docs\" && npm ci"}]}' "${fixture}/.github/workflows/publish-pages.yaml"
+expect_failure "new job entering docs/ with a quoted pushd" "publish-pages.yaml:extra sets up Node 22"
+
+reset_fixture
+WORKSPACE_DOCS="\${{ github.workspace }}/docs" yq -i '.jobs.extra = {"runs-on": "ubuntu-latest", "steps": [
+  {"uses": "actions/setup-node@v7", "with": {"node-version": "22"}},
+  {"run": "npm ci", "working-directory": strenv(WORKSPACE_DOCS)}]}' \
+  "${fixture}/.github/workflows/publish-pages.yaml"
+expect_failure "new job in docs/ by workspace path" "publish-pages.yaml:extra sets up Node 22"
+
+reset_fixture
+cat >"${fixture}/.github/workflows/extra.yaml" <<'YAML'
+on: push
+defaults:
+  run:
+    working-directory: docs
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - run: npm ci
+YAML
+expect_failure "workflow-wide docs/ default" "extra.yaml:install sets up Node 22"
+
+reset_fixture
 yq -i '(.jobs.audit-docs.steps[] | select((.uses // "") | test("^actions/setup-node@")) | .with."node-version") = "23"' \
   "${fixture}/.github/workflows/audit-docs.yaml"
 expect_failure "unknown Node line" "audit-docs.yaml:audit-docs uses Node 23"
@@ -238,7 +276,7 @@ jq '.devEngines.packageManager.onFail = "warn"' "${repo_root}/docs/package.json"
 expect_failure "onFail warn" "onFail is 'warn'"
 
 reset_fixture
-yq -i '(.jobs.changes.steps[] | select(.id == "filter") | .with.filters) |= (from_yaml | .docs-deps -= [".github/workflows/**"] | to_yaml)' \
+yq -i '(.jobs.changes.steps[] | select(.id == "filter") | .with.filters) |= (from_yaml | .docs-npm-toolchain -= [".github/workflows/**"] | to_yaml)' \
   "${fixture}/.github/workflows/ci.yaml"
 expect_failure "filter misses new workflows" "does not list .github/workflows/**"
 
