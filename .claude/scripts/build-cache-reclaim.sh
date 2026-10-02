@@ -27,9 +27,11 @@
 #   1. GOCACHE and GOMODCACHE, each cleaned only when it exceeds cache_budget_gb.
 #   2. Per-run agent trees (codex-*, war-*, dpc-*, ksail-*) under the temp root, older
 #      than min_age_days.
-#   2b. Per-run Go and golangci-lint caches directly under the temp root, whatever they are
-#      named, recognised by the README each tool writes into its cache and reclaimed once
-#      nothing was written to them for a threshold counted in HOURS (2026-09-30: 75 GB).
+#   2b. Per-run Go and golangci-lint caches directly under the temp root, or one level below
+#      a Claude Code session scratchpad (claude-*/<project>/<session>/scratchpad/<cache>),
+#      whatever they are named, recognised by the README each tool writes into its cache and
+#      reclaimed once nothing was written to them for a threshold counted in HOURS
+#      (2026-09-30: 75 GB).
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
 #   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
 #      per-user temp dir, older than a threshold counted in HOURS.
@@ -918,6 +920,30 @@ if [ "$run_caches_readable" -eq 1 ] && [ -d "$TMPDIR_ROOT" ]; then
     unknown=$((unknown + 1))
     log "UNKNOWN (scan failed) $TMPDIR_ROOT: per-run caches not examined"
   fi
+fi
+# Claude Code gives each session a scratchpad at <root>/claude-<uid>/<project>/<session>/scratchpad,
+# and a run that sets GOCACHE there leaves a 3-6 GB cache one level below it, four levels deeper
+# than the listing above reaches. On 2026-10-02 two of them held 8.9 GB that this sweep never saw.
+# Only that exact depth under a claude-* root is listed; every marker and liveness guard still applies.
+scratch_cache_trees=''
+if [ -n "$run_cache_trees" ]; then
+  while IFS= read -r session_root; do
+    case "${session_root##*/}" in
+      claude-*) ;;
+      *) continue ;;
+    esac
+    [ -L "$session_root" ] && continue
+    if ! nested=$(find "$session_root" -mindepth 4 -maxdepth 4 -type d \
+      -path "${session_root}/*/*/scratchpad/*" 2>/dev/null); then
+      unknown=$((unknown + 1))
+      log "UNKNOWN (scan failed) $session_root: session scratchpad caches not examined"
+      continue
+    fi
+    [ -n "$nested" ] && scratch_cache_trees="${scratch_cache_trees}${nested}"$'\n'
+  done <<EOF
+$run_cache_trees
+EOF
+  run_cache_trees="${run_cache_trees}"$'\n'"${scratch_cache_trees}"
 fi
 if [ -n "$run_cache_trees" ]; then
   while IFS= read -r tree; do
