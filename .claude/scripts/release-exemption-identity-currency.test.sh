@@ -2,8 +2,10 @@
 # Hermetic self-test for release-exemption-identity-currency.sh.
 #
 # No network and no real PR is touched: every case is a hand-built JSON payload fed through the
-# --input seam, against a synthetic classifier fed through --classifier. The forge path shares all
-# of its comparison logic with that seam, so the behaviour proven here is the behaviour that runs.
+# --input seam, against a synthetic classifier fed through --classifier — except one case that reads
+# the real classifier against recorded production provenance, so the guard is proven to still read
+# the arm it watches. The forge path shares all of its comparison logic with that seam, so the
+# behaviour proven here is the behaviour that runs.
 #
 # The suite deliberately includes a POSITIVE control (a fixture the guard must call CURRENT). A
 # drift checker that reports DRIFT unconditionally would satisfy every negative case, so without a
@@ -319,6 +321,97 @@ expect_out "the PINNED committer email is visible" \
   "committer=pinned-bot\[bot\] <pinned-bot\[bot\]@users\.noreply\.github\.com>" "$TMP/email-only-drift.json"
 expect_out "the OBSERVED committer email is visible" \
   "<rotated-bot\[bot\]@users\.noreply\.github\.com>" "$TMP/email-only-drift.json"
+
+# ---------------------------------------------------------------------------
+# The signature verdict is part of the pin when the arm declares it (#3173). A release carrying the
+# right names but no GitHub signature fails such an arm, so it must count as a miss here — and an
+# arm that does not pin the verdict must still be judged on identity alone.
+# ---------------------------------------------------------------------------
+CLS_SIGNED="$TMP/classifier-signed.sh"
+cat > "$CLS_SIGNED" <<'EOF'
+#!/usr/bin/env bash
+matches_ksail_provenance() {
+  local version="$1"
+  jq -e \
+    'map(del(.author_date, .committer_date)) == [{
+      sha: $head,
+      author_login: "pinned-bot[bot]",
+      author_name: "pinned-bot[bot]",
+      author_email: "1+pinned-bot[bot]@users.noreply.github.com",
+      committer_login: "web-flow",
+      committer_name: "GitHub",
+      committer_email: "noreply@github.com",
+      message: "chore(copilot-plugin): release \($version)",
+      verified: true
+    }]' <<<"${commits_json}" >/dev/null
+}
+EOF
+signed_commit() { # verified value, or "absent"
+  jq -nc --arg v "$1" '{author_login: "pinned-bot[bot]", author_name: "pinned-bot[bot]",
+    author_email: "1+pinned-bot[bot]@users.noreply.github.com", committer_login: "web-flow",
+    committer_name: "GitHub", committer_email: "noreply@github.com"}
+    | if $v == "absent" then . else .verified = ($v == "true") end'
+}
+three_of() {
+  jq -n --argjson c "$1" '[
+    {number: 3, mergedAt: "2026-09-02T00:00:00Z", commits: [$c]},
+    {number: 2, mergedAt: "2026-09-01T00:00:00Z", commits: [$c]},
+    {number: 1, mergedAt: "2026-08-31T00:00:00Z", commits: [$c]}
+  ]'
+}
+three_of "$(signed_commit true)" > "$TMP/signed.json"
+three_of "$(signed_commit false)" > "$TMP/unsigned.json"
+three_of "$(signed_commit absent)" > "$TMP/signature-unread.json"
+expect_signed() { # name expected-rc file [pattern]
+  OUT="$("$CHECK" --input "$3" --classifier "$CLS_SIGNED" --days 0 2>&1)"; RC=$?
+  if [ "$RC" = "$2" ] && { [ -z "${4:-}" ] || grep -qE "$4" <<<"$OUT"; }; then ok "$1"
+  else bad "$1" "expected rc=$2${4:+ and /$4/} got rc=$RC; out: ${OUT:0:400}"; fi
+}
+expect_signed "signed pin, signed releases -> CURRENT" 0 "$TMP/signed.json" "signed=\[required\]"
+expect_signed "signed pin, the same names unsigned -> DRIFT" 1 "$TMP/unsigned.json" "signed=\[false\]"
+expect_signed "signed pin, no signature verdict in the payload -> DRIFT" 1 "$TMP/signature-unread.json" "signed=\[unknown\]"
+# The verdict comes from the arm: the identity-only pin above ignores it.
+jq -n --argjson p "$(pinned_commit)" '[
+  {number: 3, mergedAt: "2026-09-02T00:00:00Z", commits: [$p + {verified: false}]},
+  {number: 2, mergedAt: "2026-09-01T00:00:00Z", commits: [$p + {verified: false}]},
+  {number: 1, mergedAt: "2026-08-31T00:00:00Z", commits: [$p + {verified: false}]}
+]' > "$TMP/identity-only-unsigned.json"
+expect_rc "an arm that pins no verdict is judged on identity alone" 0 "$TMP/identity-only-unsigned.json"
+expect_out "and says the signature is not pinned" "signed=\[not pinned\]" "$TMP/identity-only-unsigned.json"
+sed 's/verified: true/verified: false/' "$CLS_SIGNED" > "$TMP/classifier-odd-verdict.sh"
+OUT="$("$CHECK" --input "$TMP/signed.json" --classifier "$TMP/classifier-odd-verdict.sh" --days 0 2>&1)"; RC=$?
+if [ "$RC" = 2 ] && grep -q "pins verified to something other than true" <<<"$OUT"; then
+  ok "a verdict pin the guard cannot read -> UNKNOWN"
+else
+  bad "a verdict pin the guard cannot read -> UNKNOWN" "got rc=$RC; out: ${OUT:0:300}"
+fi
+
+# ---------------------------------------------------------------------------
+# The REAL classifier against the newest real release PRs, as REST reports them (devantler-tech/ksail
+# #7249, #7245 and #7232, read 2026-10-02; #7232 also carries a maintainer's update-branch merge). This
+# is recorded evidence, not a second declaration of the pin: the live run is what re-checks it. It
+# proves the guard can still read the arm it watches, and that this pin matched production when it
+# was set — the stale `devantler-tech-bot[bot]` pin reported DRIFT on exactly this input.
+# ---------------------------------------------------------------------------
+REAL="$HERE/programmed-bot-review-exemption.sh"
+jq -n '
+  def release: {author_login: "ksail-bot[bot]", author_name: "ksail-bot[bot]",
+    author_email: "262010955+ksail-bot[bot]@users.noreply.github.com", committer_login: "web-flow",
+    committer_name: "GitHub", committer_email: "noreply@github.com", verified: true};
+  [
+    {number: 7249, mergedAt: "2026-09-24T03:25:01Z", commits: [release]},
+    {number: 7245, mergedAt: "2026-09-23T22:28:38Z", commits: [release]},
+    {number: 7232, mergedAt: "2026-09-23T17:50:02Z", commits: [release,
+      {author_login: "devantler", author_name: "Nikolai Emil Damm", author_email: "ned@devantler.tech",
+       committer_login: "web-flow", committer_name: "GitHub", committer_email: "noreply@github.com",
+       verified: true}]}
+  ]' > "$TMP/production.json"
+OUT="$("$CHECK" --input "$TMP/production.json" --classifier "$REAL" --days 0 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && grep -q "CURRENT — 3 of the newest 3" <<<"$OUT" && grep -qF "signed=[required]" <<<"$OUT"; then
+  ok "the real classifier's pin matches the newest real releases -> CURRENT"
+else
+  bad "the real classifier's pin matches the newest real releases -> CURRENT" "got rc=$RC; out: ${OUT:0:500}"
+fi
 
 printf '\n%s: %d passed, %d failed\n' "${0##*/}" "$pass" "$fail"
 [ "$fail" -eq 0 ]
