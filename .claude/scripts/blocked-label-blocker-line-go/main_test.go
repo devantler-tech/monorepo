@@ -635,7 +635,7 @@ func TestBlockerNoneAndRecordlessIssuesAreNotReported(t *testing.T) {
 	}
 	// Ablation: without the "none" exemption both actions issues would be
 	// flagged, which is the naive check #3142 rejects.
-	for _, line := range []string{"**Blocker:** none — agent-actionable", "**Blocker:** None. Ready to pick up.", "**Blocker:**none", "**Blocker:** none", "**Blocker:** NONE: nothing blocks this"} {
+	for _, line := range []string{"**Blocker:** none — agent-actionable", "**Blocker:** None. Ready to pick up.", "**Blocker:**none", "**Blocker:** none", "**Blocker:** NONE: nothing blocks this", "**Blocker:** none—agent-actionable"} {
 		if declaresBlocker(line) {
 			t.Errorf("%q read as a declared blocker", line)
 		}
@@ -684,5 +684,23 @@ func TestBlockedLabelMatchesCaseInsensitively(t *testing.T) {
 	code, out := runInput(t, `[{"repo":"c","number":1,"labels":[{"name":"Blocked"}],"body":"no record"}]`)
 	if code != 1 || !strings.Contains(out, "MISSING    c#1") {
 		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+func TestReportedSnippetDropsInvisibleFormatCharacters(t *testing.T) {
+	// A right-to-left override or zero-width space in untrusted issue text
+	// could reorder or hide part of a reported row in the operator's terminal.
+	if got := snippet("**Blocker:** a‮b​c"); strings.ContainsAny(got, "‮​") {
+		t.Fatalf("format characters survived: %q", got)
+	}
+}
+
+func TestLabelledAndUnlabelledSummariesAppearTogether(t *testing.T) {
+	code, out := runInput(t, `[{"repo":"m","number":1,"labels":[{"name":"blocked"}],"body":"no record"},
+	 {"repo":"m","number":2,"labels":[],"body":"**Blocker:** maintainer authority: sign it"}]`)
+	for _, want := range []string{"1 of 1 open blocked-labelled issue(s) need repair", "1 open issue(s) declare a blocker without the blocked label"} {
+		if code != 1 || !strings.Contains(out, want) {
+			t.Errorf("code=%d, missing %q in:\n%s", code, want, out)
+		}
 	}
 }

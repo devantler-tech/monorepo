@@ -503,7 +503,7 @@ func (i issue) blocked() bool {
 // "none" must be a whole word: followed by the end, whitespace, or prose
 // punctuation that is itself followed by whitespace. An identifier that merely
 // begins with none (none/repo#7, none.io/x, none-x) still declares a blocker.
-var noBlockerRE = regexp.MustCompile(`(?i)^\*\*Blocker:\*\*[\t ]*none([\t ]|[.,;:!—–]([\t ]|$)|$)`)
+var noBlockerRE = regexp.MustCompile(`(?i)^\*\*Blocker:\*\*[\t ]*none([\t ]|[—–]|[.,;:!]([\t ]|$)|$)`)
 
 // declaresBlocker reports whether a visible record names a blocker. The
 // "**Blocker:** none -- agent-actionable" form declares that there is none, and
@@ -587,7 +587,7 @@ func load(o options, stdin io.Reader) ([]issue, error) {
 		}
 		return inputIssues(raw)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	raw, err := exec.CommandContext(ctx, "gh", "api", searchEndpoint(o.org), "--paginate").Output()
 	if err != nil {
@@ -718,7 +718,7 @@ func snippet(line string) string {
 		runes = runes[:100]
 	}
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return unicode.ReplacementChar
 		}
 		return r
