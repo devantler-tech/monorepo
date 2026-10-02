@@ -495,12 +495,13 @@ public and private — no per-repo loop needed to enumerate):
      🔴 **`holder=` is the fifth signal, read from THIS host's processes, never a published event**
      (monorepo#3067). A session publishes nothing while it reads, builds or waits on CI: `#3053` read
      idle on all four `active=` signals, push 3h24m old, while two live sessions worked in its
-     worktree. For every deepened PR run
-     `gh pr view <n> --repo devantler-tech/<repo> --json url,headRefName,headRepositoryOwner | <repo-root>/.claude/scripts/pr-worktree-holder.sh --input -`
-     and emit its value verbatim: `live:<n>:<pid>/<cmd>,…` (a process outside the asking session works
-     in a local checkout of the head branch), `self:…` (only the asking session does), `none`, `fork`,
-     or `unknown:<reason>`; a failed call is `unknown:query`. **`unknown` is never `none`**, and every
-     PR row carries the field.
+     worktree. Run ONCE per survey (it reads the whole host, so never per PR)
+     `gh api graphql --paginate -f query='query($endCursor:String){search(query:"org:devantler-tech is:pr is:open archived:false",type:ISSUE,first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{url headRefName headRepositoryOwner{login} headRepository{name}}}}}' --jq '[.data.search.nodes[]]' | <repo-root>/.claude/scripts/pr-worktree-holder.sh --input -`
+     and copy each row's value verbatim from its `<owner>/<repo>#<n> holder=` line:
+     `live:<n>:<pid>/<cmd>,…` (a process outside the asking session works in a local checkout of the
+     head branch), `self:…` (only the asking session does), `none`, `fork`, or `unknown:<reason>`; a
+     failed call or a missing line is `unknown:query`. **`unknown` is never `none`**, and every PR row
+     carries the field.
      Keep reporting the **branch name** (`headRefName`) and the body's **disclosure** (match the
      STRUCTURAL prefix, never the actor word — it is "Agentic Engineer" now, and "Daily AI Engineer" /
      "Daily AI Assistant" before the 2026-07-21 rename). ⚠️ **The literals carry no markdown emphasis

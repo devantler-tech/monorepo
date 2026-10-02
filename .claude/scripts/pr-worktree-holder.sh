@@ -12,11 +12,11 @@
 #   directory in a checkout of the head branch.
 #
 # USAGE
-#   gh pr view <n> --repo <owner>/<repo> --json url,headRefName,headRepositoryOwner |
+#   gh pr view <n> --repo <owner>/<repo> --json url,headRefName,headRepositoryOwner,headRepository |
 #     pr-worktree-holder.sh --input -
-#   `gh pr list --json url,headRefName,headRepositoryOwner` (an array) works too. The forge JSON on
-#   stdin is the only input, which is the one shape the surveyor's read-only guard admits for a
-#   declared helper; no PR-supplied text ever becomes an argument or a path.
+#   The same fields from `gh pr list --json` (an array) work too. The forge JSON on stdin is the only
+#   input, which is the one shape the surveyor's read-only guard admits for a declared helper; no
+#   PR-supplied text ever becomes an argument or a path.
 #
 # OUTPUT (one line per PR, in input order)
 #   <owner>/<repo>#<n> holder=<value>
@@ -38,16 +38,26 @@
 #   branch is checked out in a submodule below it, so stopping at the working directory would miss
 #   most product PRs. A MAIN checkout never claims worktrees beneath it, because every per-session
 #   worktree lives inside the main checkout and one shell there would then hold every branch on the
-#   host. A checkout serves a PR when its `origin` names the PR's repository and its checked-out
-#   branch is the head branch.
+#   host. A checkout serves a PR when any of its remotes names the PR's head repository and its
+#   branch is the head branch, including a branch that is mid-rebase or mid-bisect (HEAD detached,
+#   the branch still named in the checkout's git directory).
+#   A shell holds a checkout only while something other than a shell runs below it: a terminal tab
+#   left open at its prompt in a worktree does no work, and counting it would park that worktree's
+#   PR for as long as the tab exists. Any other process holds its checkout for as long as it lives,
+#   busy or not: the process table cannot tell an idle session from a thinking one, and the report
+#   names the holder so a forgotten one is seen.
 #
 # SELF
 #   The asking session is not its own rival, the same exclusion the contract makes for its own
-#   push. A holder is `self` when it is this helper, one of its ancestors or descendants, or a
-#   descendant of the asking session's `claude`/`codex` process that works inside the asker's own
-#   checkout tree. Another session in the same worktree, or a sibling subagent in a different
-#   worktree, stays `live`. With no session process among the ancestors, only the helper's own
-#   ancestors and descendants are `self`.
+#   push. The asking session is the nearest `claude`/`codex` process above this helper. A holder is
+#   `self` when it is on this helper's ancestry (up to that session, and through the launchers above
+#   it, but never past a second session process), descends from this helper, or descends from that
+#   session process and works inside the asker's own checkout tree. Another session process in the
+#   same worktree, a sibling subagent in a different worktree, and an outer session that launched
+#   the asking one all stay `live`. Sessions that share ONE host process cannot be told apart and
+#   read as one session. With no session process among the ancestors, only this helper's ancestry
+#   and descendants are `self`, so the asker's own background work reads `live`: the conservative
+#   direction.
 #
 # SCOPE
 #   Only lanes on this host have local processes. The Cursor cloud lane does not, so its PRs read
@@ -65,7 +75,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 export GIT_OPTIONAL_LOCKS=0
 
 if [ "$#" -ne 2 ] || [ "$1" != "--input" ] || [ "$2" != "-" ]; then
-  echo "usage: gh pr view <n> --repo <owner>/<repo> --json url,headRefName,headRepositoryOwner | pr-worktree-holder.sh --input -" >&2
+  echo "usage: gh pr view <n> --repo <owner>/<repo> --json url,headRefName,headRepositoryOwner,headRepository | pr-worktree-holder.sh --input -" >&2
   exit 2
 fi
 for tool in jq git awk; do
@@ -99,7 +109,8 @@ case "${payload}" in
   *) unreadable "stdin is empty" ;;
 esac
 
-# One TSV row per PR: <id> <input|fork|key> <owner/repo, lower-cased> <head branch>.
+# One TSV row per PR: <id> <input|fork|key> <head owner/repo, lower-cased> <head branch>. The key is
+# the HEAD repository, so a cross-repository PR inside the organisation matches its own checkout.
 jq -r '
   (if type == "array" then to_entries[]
    elif type == "object" then {key: 0, value: .}
@@ -115,13 +126,22 @@ jq -r '
       elif ($p.headRepositoryOwner | type) != "object"
         or ($p.headRepositoryOwner.login | type) != "string" then [$id, "input", "", ""]
       elif ($p.headRepositoryOwner.login | ascii_downcase) != ($m.o | ascii_downcase) then [$id, "fork", "", ""]
-      else [$id, "key", ("\($m.o)/\($m.r)" | ascii_downcase), $p.headRefName] end
+      elif ($p.headRepository | type) != "object"
+        or ($p.headRepository.name | type) != "string" or $p.headRepository.name == "" then [$id, "input", "", ""]
+      else [$id, "key", ("\($m.o)/\($p.headRepository.name)" | ascii_downcase), $p.headRefName] end
     end
   | @tsv
-' <<<"${payload}" >"${work}/prs" 2>/dev/null || unreadable "stdin is not the JSON of gh pr view/list --json url,headRefName,headRepositoryOwner"
+' <<<"${payload}" >"${work}/prs" 2>/dev/null ||
+  unreadable "stdin is not the JSON of gh pr view/list --json url,headRefName,headRepositoryOwner,headRepository"
 
-# physical_path <dir> — the kernel's spelling of a directory, so two names for one checkout compare equal.
-physical_path() { (CDPATH='' cd -- "$1" 2>/dev/null && /bin/pwd -P); }
+# The head branches worth resolving remotes for, newline-delimited with sentinels at both ends.
+heads=$'\n'"$(awk -F'\t' '$2 == "key" { print $4 }' "${work}/prs")"$'\n'
+wanted() {
+  case "${heads}" in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+  esac
+  return 1
+}
 
 # repo_slug <remote-url> — `owner/name`, lower-cased, for scp-style, https, ssh and path remotes.
 repo_slug() {
@@ -140,30 +160,75 @@ repo_slug() {
   fi
 }
 
-# emit <holder-top> <checkout> — one entry: the checkout and the `owner/repo:branch` it serves, if any.
-emit() {
-  local top="$1" dir="$2" ref url slug key=''
-  ref="$(git -C "${dir}" symbolic-ref -q HEAD 2>/dev/null)" || ref=''
-  case "${ref}" in
-    refs/heads/?*)
-      url="$(git -C "${dir}" config --get remote.origin.url 2>/dev/null)" || url=''
-      slug="$(repo_slug "${url}")"
-      if [ -n "${slug}" ]; then key="${slug}:${ref#refs/heads/}"; fi
+# resolve <dir> — the checkout containing <dir>, in ONE git call (git startup dominates the cost):
+# R_TOP, R_GITDIR, R_LINKED (1 for a linked worktree) and R_BRANCH (empty when none can be named).
+resolve() {
+  local out top gitdir common head='' f
+  if ! out="$(git -C "$1" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir \
+    --symbolic-full-name HEAD 2>/dev/null)"; then
+    # An unborn branch has no HEAD to name; the checkout still exists.
+    out="$(git -C "$1" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir \
+      2>/dev/null)" || return 1
+  fi
+  {
+    IFS= read -r top || top=''
+    IFS= read -r gitdir || gitdir=''
+    IFS= read -r common || common=''
+    IFS= read -r head || head=''
+  } <<<"${out}"
+  if [ -z "${top}" ] || [ -z "${gitdir}" ]; then return 1; fi
+  R_TOP="${top}"
+  R_GITDIR="${gitdir}"
+  R_LINKED=0
+  if [ "${gitdir}" != "${common}" ]; then R_LINKED=1; fi
+  R_BRANCH=''
+  case "${head}" in
+    refs/heads/?*) R_BRANCH="${head#refs/heads/}" ;;
+    *)
+      # Detached mid-rebase or mid-bisect: the checkout is still working on the branch it names.
+      for f in rebase-merge/head-name rebase-apply/head-name; do
+        if [ -f "${gitdir}/${f}" ] && IFS= read -r head <"${gitdir}/${f}"; then
+          case "${head}" in
+            refs/heads/?*) R_BRANCH="${head#refs/heads/}" && break ;;
+          esac
+        fi
+      done
+      if [ -z "${R_BRANCH}" ] && [ -f "${gitdir}/BISECT_START" ] && IFS= read -r head <"${gitdir}/BISECT_START"; then
+        case "${head}" in
+          '' | *[!0-9a-f]*) R_BRANCH="${head}" ;;
+        esac
+      fi
       ;;
   esac
-  printf '%s\t%s\t%s\n' "${top}" "${dir}" "${key}"
+  return 0
 }
 
-# expand_nested <holder-top> <submodule> — worktrees the submodule's repository registers INSIDE it.
+# record <holder-top> <checkout> <branch> — the checkout's path line, then one key line per remote
+# when its branch is a head branch some PR asks about.
+record() {
+  local top="$1" dir="$2" branch="$3" remotes url slug
+  printf '%s\t%s\t\n' "${top}" "${dir}"
+  if [ -z "${branch}" ] || ! wanted "${branch}"; then return 0; fi
+  remotes="$(git -C "${dir}" config --get-regexp '^remote\..*\.url$' 2>/dev/null)" || return 0
+  while IFS=' ' read -r _ url; do
+    slug="$(repo_slug "${url}")"
+    if [ -n "${slug}" ]; then printf '%s\t%s\t%s\n' "${top}" "${dir}" "${slug}:${branch}"; fi
+  done <<<"${remotes}"
+}
+
+# expand_nested <holder-top> <submodule> <its git dir> — worktrees its repository registers INSIDE it.
 expand_nested() {
-  local top="$1" sub="$2" list line wt
+  local top="$1" sub="$2" gitdir="$3" list line
+  # Only a repository that has linked worktrees keeps this directory, so most submodules cost no call.
+  [ -d "${gitdir}/worktrees" ] || return 0
   list="$(git -C "${sub}" worktree list --porcelain 2>/dev/null)" || return 0
   while IFS= read -r line; do
     case "${line}" in
       'worktree '*)
-        wt="$(physical_path "${line#worktree }")" || continue
-        case "${wt}" in
-          "${sub}"/?*) emit "${top}" "${wt}" ;;
+        # Resolved by git, so the path compares in the same spelling as <sub>; a pruned one fails.
+        resolve "${line#worktree }" || continue
+        case "${R_TOP}" in
+          "${sub}"/?*) record "${top}" "${R_TOP}" "${R_BRANCH}" ;;
         esac
         ;;
     esac
@@ -172,41 +237,47 @@ expand_nested() {
 
 # expand_submodules <holder-top> <checkout> <linked> <depth> — every populated submodule below it.
 expand_submodules() {
-  local top="$1" dir="$2" linked="$3" depth="$4" paths rel sub subtop
+  local top="$1" dir="$2" linked="$3" depth="$4" paths rel sub gitdir
   [ "${depth}" -lt 4 ] || return 0
   [ -f "${dir}/.gitmodules" ] || return 0
   paths="$(git config -f "${dir}/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null | cut -d' ' -f2-)" || paths=''
   while IFS= read -r rel; do
     [ -n "${rel}" ] || continue
-    [ -e "${dir}/${rel}/.git" ] || continue
-    sub="$(physical_path "${dir}/${rel}")" || continue
-    # A `.gitmodules` path is repository content: never follow one out of the checkout.
-    case "${sub}" in
-      "${dir}"/?*) ;;
-      *) continue ;;
-    esac
-    subtop="$(git -C "${sub}" rev-parse --show-toplevel 2>/dev/null)" || continue
-    subtop="$(physical_path "${subtop}")" || continue
-    # An unpopulated submodule directory resolves to the superproject, which is not a checkout of it.
-    [ "${subtop}" = "${sub}" ] || continue
-    emit "${top}" "${sub}"
-    if [ "${linked}" = 1 ]; then expand_nested "${top}" "${sub}"; fi
+    sub="${dir}/${rel}"
+    [ -e "${sub}/.git" ] || continue
+    # An unpopulated submodule resolves to the superproject, and a `.gitmodules` path that leaves the
+    # checkout (it is repository content) resolves elsewhere: both fail this equality.
+    resolve "${sub}" || continue
+    [ "${R_TOP}" = "${sub}" ] || continue
+    gitdir="${R_GITDIR}"
+    record "${top}" "${sub}" "${R_BRANCH}"
+    if [ "${linked}" = 1 ]; then expand_nested "${top}" "${sub}" "${gitdir}"; fi
     expand_submodules "${top}" "${sub}" "${linked}" "$((depth + 1))"
   done <<<"${paths}"
 }
 
-# expand <top> — the checkout at <top> and everything it owns, as emit lines.
+# expand <dir> — the checkout containing <dir> and everything it owns, as record lines.
 expand() {
-  local top="$1" linked=0 gitdir common
-  gitdir="$(git -C "${top}" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || gitdir=''
-  common="$(git -C "${top}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=''
-  if [ -n "${gitdir}" ] && [ -n "${common}" ]; then
-    gitdir="$(physical_path "${gitdir}")" || gitdir=''
-    common="$(physical_path "${common}")" || common=''
-    if [ -n "${gitdir}" ] && [ "${gitdir}" != "${common}" ]; then linked=1; fi
-  fi
-  emit "${top}" "${top}"
+  local top linked
+  resolve "$1" || return 0
+  top="${R_TOP}"
+  linked="${R_LINKED}"
+  record "${top}" "${top}" "${R_BRANCH}"
   expand_submodules "${top}" "${top}" "${linked}" 0
+}
+
+# nearest_checkout <dir> — the nearest directory at or above <dir> that holds a `.git` entry, found
+# without starting git: most working directories on a host are in no repository at all.
+nearest_checkout() {
+  local dir="$1"
+  while [ -n "${dir}" ] && [ "${dir}" != / ]; do
+    if [ -e "${dir}/.git" ]; then
+      printf '%s\n' "${dir}"
+      return 0
+    fi
+    dir="${dir%/*}"
+  done
+  return 1
 }
 
 : >"${work}/ps"
@@ -214,7 +285,7 @@ expand() {
 : >"${work}/entries"
 : >"${work}/asker"
 probe_error=''
-if awk -F'\t' '$2 == "key" { found = 1 } END { exit found ? 0 : 1 }' "${work}/prs"; then
+if [ "${heads}" != $'\n\n' ]; then
   # lsof's own exit status is checked SEPARATELY from the parsing: a partial enumeration can print
   # plenty of working directories while exiting nonzero, and a truncated list read as complete
   # would drop a live session and report `none`.
@@ -242,21 +313,26 @@ if awk -F'\t' '$2 == "key" { found = 1 } END { exit found ? 0 : 1 }' "${work}/pr
   fi
   if [ -z "${probe_error}" ]; then
     awk -F'\t' 'NR == FNR { alive[$1] = 1; next } ($1 in alive)' "${work}/ps" "${work}/cwds" >"${work}/live"
-    : >"${work}/tops"
+    # Working directory -> nearest checkout candidate (no git), candidate -> checkout top (one git call).
+    : >"${work}/near"
     while IFS= read -r dir; do
-      [ -d "${dir}" ] || continue
-      top="$(git -C "${dir}" rev-parse --show-toplevel 2>/dev/null)" || continue
-      [ -n "${top}" ] || continue
-      top="$(physical_path "${top}")" || continue
-      printf '%s\t%s\n' "${dir}" "${top}" >>"${work}/tops"
+      if near="$(nearest_checkout "${dir}")"; then printf '%s\t%s\n' "${dir}" "${near}" >>"${work}/near"; fi
     done < <(cut -f2- "${work}/live" | LC_ALL=C sort -u)
-    awk -F'\t' 'NR == FNR { top[$1] = $2; next } ($2 in top) { print $1 "\t" top[$2] }' \
-      "${work}/tops" "${work}/live" | LC_ALL=C sort -n -k1,1 >"${work}/holders"
+    : >"${work}/tops"
+    while IFS= read -r near; do
+      if resolve "${near}"; then printf '%s\t%s\n' "${near}" "${R_TOP}" >>"${work}/tops"; fi
+    done < <(cut -f2- "${work}/near" | LC_ALL=C sort -u)
+    awk -F'\t' '
+      FILENAME == ARGV[1] { top[$1] = $2; next }
+      FILENAME == ARGV[2] { if ($2 in top) dirtop[$1] = top[$2]; next }
+      ($2 in dirtop) { print $1 "\t" dirtop[$2] }
+    ' "${work}/tops" "${work}/near" "${work}/live" | LC_ALL=C sort -n -k1,1 >"${work}/holders"
     while IFS= read -r top; do
       expand "${top}" >>"${work}/entries"
     done < <(cut -f2- "${work}/holders" | LC_ALL=C sort -u)
     # The asker's own tree, from the topmost superproject of the directory it asks from.
-    asker="$(git rev-parse --show-toplevel 2>/dev/null)" || asker=''
+    asker=''
+    if resolve "${PWD}"; then asker="${R_TOP}"; fi
     hops=0
     while [ -n "${asker}" ] && [ "${hops}" -lt 8 ]; do
       super="$(git -C "${asker}" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=''
@@ -264,9 +340,7 @@ if awk -F'\t' '$2 == "key" { found = 1 } END { exit found ? 0 : 1 }' "${work}/pr
       asker="${super}"
       hops=$((hops + 1))
     done
-    if [ -n "${asker}" ] && asker="$(physical_path "${asker}")"; then
-      expand "${asker}" | cut -f2 >"${work}/asker"
-    fi
+    if [ -n "${asker}" ]; then expand "${asker}" | cut -f2 | LC_ALL=C sort -u >"${work}/asker"; fi
   fi
 fi
 
@@ -274,6 +348,23 @@ rc=0
 awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
   -v psf="${work}/ps" -v askf="${work}/asker" -v entf="${work}/entries" -v holdf="${work}/holders" '
   function is_session(p) { return comm[p] == "claude" || comm[p] == "codex" }
+  function is_shell(p,   name) {
+    name = comm[p]
+    sub(/^-/, "", name)
+    return name ~ /^(sh|bash|zsh|fish|dash|ksh|mksh|tcsh|csh)( |$)/
+  }
+  # A shell is busy while something other than a shell runs below it. A shell waiting at its prompt
+  # (a terminal tab left open in a worktree, a prompt helper under it) does no work and holds nothing.
+  function mark_busy(   p, q, n) {
+    for (p in ppid) {
+      if (is_shell(p)) continue
+      q = ppid[p]
+      for (n = 0; q != "" && (q in ppid) && !(q in busy) && n < 256; n++) {
+        busy[q] = 1
+        q = ppid[q]
+      }
+    }
+  }
   function descends(p, a,   n) {
     for (n = 0; p != "" && n < 256; n++) {
       if (p == a) return 1
@@ -287,11 +378,18 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
     gsub(/[^A-Za-z0-9._-]/, "_", name)
     return p "/" substr(name, 1, 32)
   }
+  # The asker is this helper and its ancestry up to the nearest session process, plus the launchers
+  # above that session (its wrapper, the app). A SECOND session process further up is an outer
+  # session that launched this one: neither it nor anything above it is the asker.
   function init(   p, n) {
     inited = 1
+    mark_busy()
     for (p = me; p != "" && n < 256; n++) {
-      ancestor[p] = 1
-      if (session == "" && p != me && is_session(p)) session = p
+      if (p != me && is_session(p)) {
+        if (session != "") break
+        session = p
+      }
+      chain[p] = 1
       if (!(p in ppid) || ppid[p] == p) break
       p = ppid[p]
     }
@@ -312,8 +410,9 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
       for (i = 1; i <= holders; i++) {
         p = hpid[i]
         if (!((htop[i], key) in owns)) continue
+        if (is_shell(p) && !(p in busy)) continue
         if ((pass == 1) != is_session(p)) continue
-        if ((p in ancestor) || descends(p, me) ||
+        if ((p in chain) || descends(p, me) ||
             (session != "" && descends(p, session) && (htop[i] in asker))) {
           if (++selfs <= 3) self_names = self_names (selfs > 1 ? "," : "") label(p)
         } else if (++lives <= 3) {

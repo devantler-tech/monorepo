@@ -1230,7 +1230,7 @@ kata_sites="$(grep -o '[^[:space:]"`'"'"']*kata-measure-date\.sh[^[:space:]`]*' 
 # event, and #3053 read idle on all of them while two sessions worked in its worktree. Run the
 # overlay's OWN pipeline through the hook, and prove a relative-path call is refused.
 # shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
-holder_command="$(grep -o '`gh pr view [^`]*pr-worktree-holder\.sh --input -`' "${surveyor_agent}" |
+holder_command="$(grep -o '`gh api graphql [^`]*pr-worktree-holder\.sh --input -`' "${surveyor_agent}" |
   tr -d '`' || true)"
 [ "$(printf '%s\n' "${holder_command}" | grep -c .)" = 1 ] ||
   fail "surveyor overlay must prescribe exactly one guarded pr-worktree-holder.sh pipeline (monorepo#3067)"

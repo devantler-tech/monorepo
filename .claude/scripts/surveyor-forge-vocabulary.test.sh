@@ -225,7 +225,7 @@ deny	gh api repos/devantler-tech/PLACEHOLDER/pulls/PLACEHOLDER/reviews/PLACEHOLD
 deny	gh api graphql --paginate -F number=PLACEHOLDER -f query='query($number:Int!,$endCursor:String){repository(owner:"devantler-tech",name:"PLACEHOLDER"){pullRequest(number:$number){headRefOid reviews(first:100,after:$endCursor){totalCount nodes{author{login} state body submittedAt commit{oid}} pageInfo{hasNextPage endCursor}}}}}' | PLACEHOLDER/.claude/scripts/local-review-verdict.sh --input -
 deny	gh api repos/devantler-tech/PLACEHOLDER/issues/PLACEHOLDER --jq '{body:(.body // "")}' | PLACEHOLDER/.claude/scripts/kata-measure-date.sh --input -
 deny	gh pr view PLACEHOLDER --repo devantler-tech/PLACEHOLDER --json body --jq .body | PLACEHOLDER/.claude/scripts/pr-ownership-disclosure.sh --input -
-deny	gh pr view PLACEHOLDER --repo devantler-tech/PLACEHOLDER --json url,headRefName,headRepositoryOwner | PLACEHOLDER/.claude/scripts/pr-worktree-holder.sh --input -
+deny	gh api graphql --paginate -f query='query($endCursor:String){search(query:"org:devantler-tech is:pr is:open archived:false",type:ISSUE,first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{url headRefName headRepositoryOwner{login} headRepository{name}}}}}' --jq '[.data.search.nodes[]]' | PLACEHOLDER/.claude/scripts/pr-worktree-holder.sh --input -
 CORPUS
 )
 

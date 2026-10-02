@@ -4072,7 +4072,8 @@ _mut=$(printf '%s' "${constitution_flat}" | sed 's/is never "no live holder"/is 
 for _clause in \
   '<repo-root>/.claude/scripts/pr-worktree-holder.sh --input -' \
   '**`unknown` is never `none`**' \
-  'a failed call is `unknown:query`' \
+  'Run ONCE per survey (it reads the whole host, so never per PR)' \
+  'a failed call or a missing line is `unknown:query`' \
   'every PR row carries the field' \
   'any PR with a live `active=` signal or `holder=live:` `ACTIVELY-OWNED`' \
   'Carries the same deepened pentad, `active=`, `holder=`, merge_group_result='; do

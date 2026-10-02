@@ -176,9 +176,11 @@ reads, builds or waits on CI: `#3053` read idle on all four, its push 3h24m old,
 sessions worked in its worktree. The same miss was recorded at t1370, and each was caught only by
 a manual `lsof`. A live process is a **current** fact, so it does not expire; it is re-read
 instead, and holds only while the process lives. Every survey reports it as `holder=`, and you
-re-read it with `.claude/scripts/pr-worktree-holder.sh`, fed the PR's `gh pr view` JSON exactly as
-the survey does, immediately before your first push to a branch you did not create. `self:` is your
-own session and parks nothing — row 1's own-push exclusion, decided from process ancestry.
+re-read it for that PR with `.claude/scripts/pr-worktree-holder.sh` (its usage line gives the
+one-PR read) immediately before your first push to a branch you did not create. `self:` is your
+own session and parks nothing — row 1's own-push exclusion, decided from process ancestry. An open
+session parks it even while idle, since nothing local can tell idle from thinking; a shell waiting
+at its prompt does not.
 **`unknown:` is never "no live holder"**: report it as a named gap, and the four published-event
 rows decide exactly as they did before this row existed. It covers lanes on this host only; a fork
 head or the Cursor cloud lane has no local process and keeps the four.
