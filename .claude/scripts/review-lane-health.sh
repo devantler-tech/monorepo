@@ -168,7 +168,7 @@ for lane in cr codex bugbot; do
   line="$(awk -F'\t' -v l="$lane" '
     $1 == l && $3 == "ok"   && $2 > ok   { ok = $2 }
     $1 == l && $3 == "fail" && $2 > fail { fail = $2; cause = $4 }
-    $1 == l && $3 == "fail" && $5 != "" && $5 != "-" && $5 > win { win = $5 }
+    $1 == l && $3 == "fail" && $5 != "" && $5 != "-" && ($2 > win_at || ($2 == win_at && $5 > win)) { win_at = $2; win = $5 }
     $1 == l && $4 == "usage-limit" && $2 > ul { ul = $2 }
     END { if (win < fail) win = ""; printf "%s|%s|%s|%s|%s", ok, fail, cause, ul, win }' "$tmp/events")"
   IFS="|" read -r ok fail cause ul win <<<"$line" || true
