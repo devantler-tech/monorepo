@@ -310,6 +310,12 @@ expect "an array answers every PR in input order" \
 devantler-tech/demo#2 holder=live:3:9000003/node,9000004/sleep,9000014/-bash
 devantler-tech/demo#5 holder=fork" \
   "$(jq -sc . <<<"$(pr devantler-tech/demo 3 claude/nobody-3) $(pr devantler-tech/demo 2 claude/feature-2) $(pr devantler-tech/demo 5 x someone)")"
+expect "paginated arrays answer every PR in page order" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/demo#3 holder=none
+devantler-tech/demo#5 holder=fork" \
+  "[$(pr devantler-tech/demo 3 claude/nobody-3)]
+[$(pr devantler-tech/demo 5 x someone)]"
 expect "an empty PR list prints nothing" "${w1}" "${session}" 0 "" '[]'
 
 # ── UNKNOWN is never none ───────────────────────────────────────────────────────────────────────
