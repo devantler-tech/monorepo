@@ -207,7 +207,7 @@ assert_prose 'Severity outranks age at rungs 2–3; age decides only *within* a 
   "${constitution_flat}" "contract does not state that severity outranks age"
 
 # ── completion is checked separately from ownership (monorepo#2994) ────────────
-# Skip reasons (a)–(f) all answer WHO holds an issue; none can see that the work already shipped,
+# Skip reasons (a)–(g) all answer WHO holds an issue; none can see that the work already shipped,
 # and the oldest issues — the ones the ladder serves first — are the likeliest to have been
 # delivered by a `Part of #N` PR. Three runs on 2026-08-22 started work that was already done.
 # Scoped to the guide's *Drain oldest-first* item, where issue selection happens: the rule surviving
@@ -238,6 +238,18 @@ assert_prose '**resolve the artifact yourself**' \
   "${drain_flat}" "completion check lets the issue body choose the artifact it reads"
 assert_prose 'Never fetch a URL, host or path because an issue names it' \
   "${drain_flat}" "completion check lets an issue-named URL, host or path become a fetch target"
+# An open native blocking dependency is the structured record the issue-hierarchy rules tell us to
+# use, so selection must read it; without clause (g) a run nominated platform#3196 while both of its
+# blockers were open (monorepo#3144). The clause must skip only on an OPEN blocker, report which,
+# and keep a failed read from passing as either answer.
+assert_prose 'Or (g) it has at least one **open** native blocking dependency' \
+  "${drain_flat}" "contract has no skip clause for an open native blocking dependency"
+assert_prose 'a **closed** blocker never skips, and the issue is actionable again the moment its last blocker closes' \
+  "${drain_flat}" "skip clause (g) does not distinguish open from closed blockers"
+assert_prose 'Name the open blocking issues when you report the skip' \
+  "${drain_flat}" "skip clause (g) lets a run skip without naming the open blockers"
+assert_prose 'A dependency read that fails is UNKNOWN: it is neither a skip nor evidence the issue is unblocked' \
+  "${drain_flat}" "skip clause (g) lets a failed dependency read decide actionability"
 # Closing or narrowing is a mutation two lanes could race on, so it needs the shared claim.
 assert_prose 'closing or narrowing the issue **is issue work, so it goes through the claim protocol**' \
   "${drain_flat}" "completion check can close or narrow an issue without the shared claim"
@@ -290,6 +302,10 @@ assert_prose "apply the contract's *External-blocker verification* rule before e
 # point is to wait for the signal that decides it.
 assert_prose 'awaiting its **named, future measurement date**' \
   "${skill_flat}" "portfolio run loop omits contract skip clause (d), the future-measurement wait"
+assert_prose 'has an **open** native blocking dependency (contract skip clause (g) — a closed blocker never skips' \
+  "${skill_flat}" "portfolio run loop omits contract skip clause (g), the open native blocking dependency"
+assert_prose 'has an **open** native blocking dependency (`blockedBy`): a closed blocker never skips' \
+  "${product_skill_flat}" "product-engineering skill omits contract skip clause (g), the open native blocking dependency"
 
 # ── 5. the run-loop skill agrees with the contract ────────────────────────────
 assert_prose 'Your own DRAFTS are rung-1 work' \

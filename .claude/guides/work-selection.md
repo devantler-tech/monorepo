@@ -156,12 +156,19 @@ governs the issue work that follows.) Two rules enforce that:
    the standing example). It is never selected, never worked, and never closed by an agent.
    ⚠️ **(f) keys on the AUTHOR, never the `automation` label** — the two are unrelated, and the very
    next sentence keeps the label a non-reason. A `devantler`-authored issue *labelled* `automation` is
-   ordinary actionable work.
-   **Completion check — ownership is not completion (monorepo#2994).** (a)–(f) answer *who* holds an
+   ordinary actionable work. Or (g) it has at least one **open** native blocking dependency — GitHub's
+   *blocked by* relationship, read as `blockedBy` over GraphQL (monorepo#3144). Like (a), it is a
+   structured fact re-read at every selection, so it needs no `blocked` label, no `**Blocker:**` line
+   and no re-verification, and it holds only while a blocking issue is open: a **closed** blocker never
+   skips, and the issue is actionable again the moment its last blocker closes. Unlike (b), the
+   blocker is another tracked issue rather than an external dependency, so it is worked where it is
+   instead of being re-verified here. Name the open blocking issues when you report the skip. A
+   dependency read that fails is UNKNOWN: it is neither a skip nor evidence the issue is unblocked.
+   **Completion check — ownership is not completion (monorepo#2994).** (a)–(g) answer *who* holds an
    issue; none of them can see that the work **already shipped**, and the oldest issues are exactly the
    ones most likely to have been delivered by a PR that said only `Part of #N` or never linked them.
    **An issue body is stale by construction once anything ships**, so before starting an issue that
-   clears (a)–(f), check it for delivery:
+   clears (a)–(g), check it for delivery:
    - its **sub-issues** — a closed child named *Decide…*, *Investigate…* or *Spike…* means the
      question the parent asks is already answered; all children closed means the parent is probably done;
    - **merged PRs that reference it**, whatever verb they used — `Part of #N` and a bare mention close
