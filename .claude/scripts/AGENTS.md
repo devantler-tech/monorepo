@@ -12,9 +12,8 @@ code in this directory.
   UNKNOWN — a usage error, an unreadable input or a failed read. A failed, partial or empty read must
   never print a clean result: check every command's status, use `pipefail`, and treat an empty result
   from a filtered read as unproven until an unfiltered control agrees.
-- **Fail closed on an abort.** macOS bash 3.2 can report a `set -u` abort as exit `0` from an `EXIT`
-  trap, so record completion explicitly — see the `…_finished` flag in `ci-job-wiring.sh`. A converted
-  script joins the list in `cleanup-trap-fail-closed.test.sh`, which injects an abort after its trap.
+- **Fail closed on an abort.** bash 3.2 can exit `0` from an `EXIT` trap after a `set -u` abort: set a
+  `…_finished` flag at the end and list the script in `cleanup-trap-fail-closed.test.sh`.
 - Start with `set -euo pipefail`, quote every expansion, and keep `shellcheck` clean.
 - **Probe the way the script runs (`bash -c`),** not in the interactive zsh, whose wrapped tools
   hide BSD failures. `gnu-only-syntax-guard.sh` flags the measured GNU-only forms.

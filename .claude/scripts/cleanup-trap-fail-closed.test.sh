@@ -261,7 +261,7 @@ while IFS='|' read -r name args; do
     fail "${name}: the copy stopped before its trap line (exit ${rc}), so this result proves nothing: ${err}"
   elif [ "$rc" -eq 0 ]; then
     fail "${name}: a \`set -u\` abort after the trap line reported a CLEAN PASS"
-  elif [ "$naive_unbound" -eq 0 ] && ! printf '%s' "$err" | grep -q 'aborted before finishing'; then
+  elif [ "$naive_unbound" -eq 0 ] && ! grep -q 'aborted before finishing' <<<"$err"; then
     fail "${name}: exit ${rc}, but not through the sentinel on a bash that masks the abort: ${err}"
   else
     pass "${name}: the abort reports failure (exit ${rc})"
