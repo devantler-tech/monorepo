@@ -680,6 +680,19 @@ assert_prose 'author exactly `devantler`' \
 assert_prose 'a record is a claim, not evidence' \
   "${constitution_flat}" "the cited CI run is taken on trust instead of being read"
 
+# A closed internal blocker reads as resolved, but an issue also closes as a duplicate, as not
+# planned, or after its symptom was paused (monorepo#2996): ksail#5515 and agent-plugins#162 each
+# read unblocked through a closed target whose condition still held. Pin the rule that a closed
+# target is unproven, the close-reason check, and how a superseding issue is recorded.
+assert_prose 'A closed internal blocker proves nothing by itself' \
+  "${constitution_flat}" "a closed internal blocker target is read as a cleared blocker"
+assert_prose 'a **closed** target is *unproven*, not cleared' \
+  "${constitution_flat}" "a closed blocker target unblocks the citing issue without a condition check"
+assert_prose 'unblock only when it closed `COMPLETED` **and** the condition itself checks out live' \
+  "${constitution_flat}" "the close reason and the live condition are not both required to unblock"
+assert_prose 're-point the record at it, keeping the old reference in the result' \
+  "${constitution_flat}" "there is no recorded way to name the issue that superseded a closed blocker"
+
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.
 # shellcheck disable=SC2016

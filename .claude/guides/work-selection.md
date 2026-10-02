@@ -274,6 +274,20 @@ governs the issue work that follows.) Two rules enforce that:
    ⚠️ **Verify before repairing.** Adding a well-formed line to an issue whose dependency has already
    shipped makes the skip look *more* legitimate on every future tick, which is worse than the
    missing line was.
+   🔴 **A closed internal blocker proves nothing by itself** (monorepo#2996). When a blocker, a
+   park or a native `blockedBy` names a `devantler-tech` issue, re-verify the **condition** it
+   stands for, never only that issue's open/closed state. Closed reads as resolved, but an issue
+   also closes as a duplicate, as not planned, or because its symptom was paused rather than
+   fixed: `ksail#5515` read unblocked through `#4972`, closed after the failing schedule was
+   paused, and `agent-plugins#162` read unblocked through `#172`, closed as a duplicate of the
+   still-open `#164`. So a **closed** target is *unproven*, not cleared. Read its close reason
+   (`stateReason`) and closing comment: unblock only when it closed `COMPLETED` **and** the
+   condition itself checks out live. Otherwise find what carries the condition now (the issue it
+   duplicates, or the one the remaining work moved to) and re-point the record at it, keeping the
+   old reference in the result, for example
+   `**Blocker:** devantler-tech/ksail#6361 | upstream | last-verified 2026-08-22: open; superseded #4972 (closed after pausing the schedule)`.
+   When you cannot tell which case applies, say so and keep the work parked. Deduplicating an
+   issue that something is parked on re-points those dependents in the same step.
    **A "maintainer decision" is NOT a skip reason — don't block yourself on it.** The maintainer does
    **not** want to make issue-level decisions, and a passive "gated / awaiting-maintainer / needs a
    decision" note in a report or memory *never reaches him* — that passive parking **is** the
