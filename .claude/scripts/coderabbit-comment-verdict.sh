@@ -17,7 +17,10 @@
 #     - a standalone finding-free verdict sentence (`I found no …` / `No …` naming issues or
 #       findings, with no qualifying clause);
 #     - the FIRST sha the reply's prose names before that verdict (its opening `I reviewed <sha>`
-#       line) is a prefix (7+ chars) of the head, so a later `against <base>` never binds;
+#       line, the first sha-shaped token left to right) is a prefix (7+ chars) of the head, so a
+#       later `against <base>` never binds;
+#     - the text before that sha claims a completed review (a `review`/`reviewed` word, nothing
+#       negating or deferring it), so a chat reply that merely names a commit never counts;
 #     - no did-not-run marker and no finding marker anywhere in the prose.
 #   The protections stay: an acknowledgement shell has no verdict, a verdict naming no sha is at
 #   best stale evidence, and a verdict naming another sha is a review of another head.
@@ -33,7 +36,8 @@
 # OUTPUT (one line on stdout)
 #   GREEN            a CodeRabbit reply stating a finding-free review of --head
 #   NONE <reason>    not a green for this head; <reason> is one of not-coderabbit, not-a-reply,
-#                    did-not-run, finding-markers, no-verdict, no-sha, other-head
+#                    did-not-run, finding-markers, no-verdict, no-sha, not-a-review,
+#                    other-head
 #
 # EXIT CODES
 #   0  GREEN
@@ -42,7 +46,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '26,44p' "$0" >&2
+  sed -n '28,45p' "$0" >&2
   exit 2
 }
 
@@ -80,18 +84,34 @@ grep -Fq '<!-- This is an auto-generated reply by CodeRabbit -->' <<<"$body" || 
 result="$(awk -v head="$head" '
   function lower(s) { return tolower(s) }
   function ishex(t) { return t != "" && t !~ /[^0-9a-f]/ }
-  # The reviewed sha on a line: the FIRST backticked 7-40 hex token, else the first bare 40-hex word.
-  # Interval expressions are avoided on purpose: not every awk on the CI runners supports them.
-  function sha_of(line,   rest, t, n, w, i) {
-    rest = line
-    while (match(rest, /`[^`]*`/)) {
-      t = substr(rest, RSTART + 1, RLENGTH - 2)
-      if (ishex(t) && length(t) >= 7 && length(t) <= 40) return t
-      rest = substr(rest, RSTART + RLENGTH)
+  # The reviewed sha on a line: the FIRST sha-shaped token scanning left to right — a backticked
+  # 7-40 hex token or a bare 40-hex word, whichever comes first, so a later comparison sha can never
+  # outrank the reviewed one. Sets LEAD to the text before it. Interval expressions are avoided on
+  # purpose: not every awk on the CI runners supports them.
+  function sha_of(line,   n, w, i, t, ticked, lead) {
+    LEAD = ""
+    n = split(line, w, /[ \t]+/)
+    lead = ""
+    for (i = 1; i <= n; i++) {
+      t = w[i]
+      ticked = (t ~ /`[^`]+`/)
+      gsub(/^[`.,;:()*_\[\]]+|[`.,;:()*_\[\]]+$/, "", t)
+      if (ishex(t) && ((ticked && length(t) >= 7 && length(t) <= 40) || length(t) == 40)) {
+        LEAD = lead
+        return t
+      }
+      lead = lead " " w[i]
     }
-    n = split(line, w, /[^0-9a-f]+/)
-    for (i = 1; i <= n; i++) if (length(w[i]) == 40) return w[i]
     return ""
+  }
+  # The text before the reviewed sha must say a review was completed: a `review`/`reviewed` word,
+  # and nothing that negates or defers it. A chat reply that merely names a commit is not a review.
+  function is_review_claim(s,   l) {
+    l = " " lower(s) " "
+    gsub(/[^a-z\047]+/, " ", l)
+    if (l !~ / (review|reviewed) /) return 0
+    if (l ~ / (not|never|cannot|unable|will|would|pending|queued|reviewing|skipped|couldn\047t|didn\047t|can\047t|won\047t) /) return 0
+    return 1
   }
   # A standalone finding-free verdict: "I found no ..." or "No ..." naming issues or findings,
   # plain words only (no comma, colon or qualifying clause), at most four words on either side of
@@ -114,7 +134,7 @@ result="$(awk -v head="$head" '
     if (!noun || noun - start > 4 || n - noun > 4) return 0
     return 1
   }
-  BEGIN { fence = 0; depth = 0; first = ""; notrun = 0; finding = 0; vsha = "none"; found = 0 }
+  BEGIN { fence = 0; depth = 0; first = ""; firstlead = ""; vlead = ""; notrun = 0; finding = 0; vsha = "none"; found = 0 }
   {
     line = $0
     if (line ~ /rate limited by coderabbit\.ai -->/) notrun = 1
@@ -139,19 +159,21 @@ result="$(awk -v head="$head" '
         s = parts[i]; if (i < n) s = s "."
         if (is_verdict(s)) {
           found = 1
-          vsha = first; if (vsha == "") vsha = sha_of(before)
+          vsha = first; vlead = firstlead
+          if (vsha == "") { vsha = sha_of(before); vlead = LEAD }
           break
         }
         before = before " " s
       }
     }
-    if (first == "") first = sha_of(stripped)
+    if (first == "") { first = sha_of(stripped); firstlead = LEAD }
   }
   END {
     if (notrun) { print "NONE did-not-run"; exit }
     if (finding) { print "NONE finding-markers"; exit }
     if (!found) { print "NONE no-verdict"; exit }
     if (vsha == "") { print "NONE no-sha"; exit }
+    if (!is_review_claim(vlead)) { print "NONE not-a-review"; exit }
     if (length(vsha) < 7 || substr(head, 1, length(vsha)) != vsha) { print "NONE other-head"; exit }
     print "GREEN"
   }

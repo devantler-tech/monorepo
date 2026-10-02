@@ -115,8 +115,14 @@ expect "a quoted verdict does not count" 1 "NONE no-verdict" \
   "$(payload "$(reply "I reviewed \`${head}\`." "" "> No findings.")")"
 expect "a sha only inside the analysis chain does not bind" 1 "NONE no-sha" \
   "$(payload "$(reply '<details>' "git rev-parse \`${head}\`" '</details>' '' 'No findings.')")"
-expect "the FIRST sha binds: an older sha opening the reply is another head" 1 "NONE other-head" \
-  "$(payload "$(reply "Since \`${other}\` the loader changed; I reviewed \`${head}\`." "" "No findings.")")"
+expect "the FIRST sha by POSITION binds: a bare reviewed sha before a backticked comparison sha" 1 "NONE other-head" \
+  "$(payload "$(reply "I reviewed ${other} against \`${head:0:8}\`." "" "No findings.")")"
+expect "a chat reply that only names the head is not a review" 1 "NONE not-a-review" \
+  "$(payload "$(reply "At head \`${head:0:8}\`." "" "No findings.")")"
+expect "a negated review claim is not a review" 1 "NONE not-a-review" \
+  "$(payload "$(reply "I could not review \`${head}\` yet." "" "No findings.")")"
+expect "a deferred review claim is not a review" 1 "NONE not-a-review" \
+  "$(payload "$(reply "I will review \`${head}\` next." "" "No findings.")")"
 expect "a six-character prefix is too short to be a sha" 1 "NONE no-sha" \
   "$(payload "$(reply "I reviewed \`${head:0:6}\`." "" "No findings.")")"
 expect "a bare 40-character sha binds" 0 GREEN \

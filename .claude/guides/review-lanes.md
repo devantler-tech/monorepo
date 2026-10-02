@@ -75,10 +75,10 @@ words one finding-free verdict many ways — `I reviewed <sha>.`, `I reviewed ex
 matcher pinned to one or two of them read every other one as no review, which spent the metered
 lanes on heads that were already green (monorepo#3008). The helper accepts a comment only when it is
 a `coderabbitai[bot]` reply carrying a standalone finding-free verdict sentence, the **first** sha its
-prose names before that verdict is a prefix (7+ characters) of `headRefOid`, and no did-not-run or
-finding marker appears anywhere. It prints `GREEN` (exit 0) or `NONE <reason>` (exit 1). An
+prose names before that verdict is a prefix (7+ characters) of `headRefOid`, the text before that sha
+claims a completed review, and no did-not-run or finding marker appears anywhere. It prints `GREEN` (exit 0) or `NONE <reason>` (exit 1). An
 acknowledgement shell is still `no-verdict`, a verdict naming no sha is still `no-sha`, and a verdict
-naming another commit is `other-head`. The freshness bind stays the caller's.
+naming another commit is `other-head`; a chat reply that merely names the head is `not-a-review`. The freshness bind stays the caller's.
 
 🔴 **This is not a rare shape — on the PR that exposed it, it was the ONLY shape.** Measured on
 `ksail#6930` (2026-09-09, head `a333b570d11d`): CodeRabbit emitted **4** `Full review is complete for
