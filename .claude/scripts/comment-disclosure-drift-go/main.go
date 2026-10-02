@@ -35,6 +35,11 @@
 // replies to it, and an unanchored scan reports his control-channel comment as the
 // defect. See the note above Classify for why a trailing disclosure is NOT a shape.
 //
+// One shape is checked on DISCLOSED bodies instead: TriggerExtraText, a CodeRabbit
+// review trigger followed by more text, which CodeRabbit can parse as chat and
+// then run no review (monorepo#2942). A disclosed body is already the agent's own,
+// so this check cannot reach the maintainer's control channel.
+//
 // # Known residual gap
 //
 // A body with no leading sender marker and no leading trigger — an agent's bare
@@ -191,12 +196,24 @@ const (
 	// disclosure. Agent REVIEW bodies take this shape (monorepo#3457); the maintainer
 	// does not bind his own prose to a full commit id in sender position.
 	UndisclosedReviewVerdict Verdict = "undisclosed-review-verdict"
+	// TriggerExtraText means a DISCLOSED comment issues a CodeRabbit review trigger
+	// and then carries more text, on the trigger line or after it. CodeRabbit parses
+	// such a comment as chat, so no review runs (monorepo#2942).
+	TriggerExtraText Verdict = "trigger-extra-text"
 )
+
+// codeRabbitTriggers are the reviewTriggers that must END their comment. Codex is
+// absent because its focus suffix is part of the command, and Bugbot's trigger is
+// already required to be the whole body.
+var codeRabbitTriggers = []string{
+	"@coderabbitai full review",
+	"@coderabbitai review",
+}
 
 // violating reports whether a verdict is a defect this guard fails on.
 func (v Verdict) violating() bool {
 	switch v {
-	case SenderMarker, UndisclosedTrigger, UnexpandedFileRef, UndisclosedReviewVerdict:
+	case SenderMarker, UndisclosedTrigger, UnexpandedFileRef, UndisclosedReviewVerdict, TriggerExtraText:
 		return true
 	default:
 		return false
@@ -443,14 +460,65 @@ func isSenderMarker(firstLine string) bool {
 // addressing a different account, and reporting it would flag his control channel.
 // The command must be followed by end-of-line or whitespace.
 func triggerPrefix(line string) (string, bool) {
+	return matchTrigger(line, reviewTriggers)
+}
+
+// matchTrigger is triggerPrefix over a chosen trigger list.
+func matchTrigger(line string, triggers []string) (string, bool) {
 	lowered := strings.ToLower(line)
-	for _, trigger := range reviewTriggers {
+	for _, trigger := range triggers {
 		if !strings.HasPrefix(lowered, trigger) {
 			continue
 		}
 		rest := lowered[len(trigger):]
 		if rest == "" || rest[0] == ' ' || rest[0] == '\t' {
 			return trigger, true
+		}
+	}
+	return "", false
+}
+
+// codeRabbitTriggerWithExtraText returns the first CodeRabbit trigger line that is
+// followed by more text — on the same line, or on any later non-blank line — and
+// whether one exists (monorepo#2942).
+//
+// CodeRabbit reads such a comment as chat and runs no review, while the head's
+// status stays at the never-reviewed default, so nothing marks the request as
+// failed. Measured 2026-09-14 → 09-28: 24 of 206 requests carrying prose after the
+// command drew a chat reply (≈12%), against 27 of 998 composed requests (≈3%);
+// on platform#3439 all four requests with text on the trigger line did, and that
+// PR merged with no review. Only DISCLOSED bodies reach this check, so it can never
+// report the maintainer's control channel.
+//
+// Prose BEFORE the trigger is deliberately allowed: the composed shape misparsed
+// once with nothing after the trigger (ksail#7147), so leading text has no
+// measured effect to enforce. A trigger inside a fenced block, an indented code
+// block or a block quote is an example being discussed, not a request, and is
+// skipped; so is a mention in inline code, which never opens a line.
+func codeRabbitTriggerWithExtraText(body string) (string, bool) {
+	lines := strings.Split(body, "\n")
+	inFence := false
+	for i, raw := range lines {
+		line := expandLeadingTabs(raw)
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || isMarkdownCodeBlock(line) || strings.HasPrefix(trimmed, ">") {
+			continue
+		}
+		trigger, ok := matchTrigger(trimmed, codeRabbitTriggers)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(strings.ToLower(trimmed)[len(trigger):]) != "" {
+			return trimmed, true
+		}
+		for _, later := range lines[i+1:] {
+			if strings.TrimSpace(later) != "" {
+				return trimmed, true
+			}
 		}
 	}
 	return "", false
@@ -532,6 +600,9 @@ func Classify(body string) Verdict {
 	body = normalise(body)
 
 	if hasCanonicalPrefix(body) {
+		if _, extra := codeRabbitTriggerWithExtraText(body); extra {
+			return TriggerExtraText
+		}
 		return Compliant
 	}
 	if isBareTrigger(body) {
@@ -740,6 +811,10 @@ func analyse(comments []Comment, author string, sweep bool, pairedInHistory map[
 		first := ""
 		if len(lines) > 0 {
 			first = lines[0]
+		}
+		if verdict == TriggerExtraText {
+			// The first line is the compliant disclosure; the trigger is the defect.
+			first, _ = codeRabbitTriggerWithExtraText(normalise(comment.Body))
 		}
 		report.Findings = append(report.Findings, Finding{
 			ID:      comment.ID,
