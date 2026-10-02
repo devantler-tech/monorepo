@@ -524,7 +524,7 @@ emit_injection_hits() {
                  | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
         [ -n "$record" ] || record=malformed
         printf '%s' "$raw" | LC_ALL="$phrase_locale" grep -hoiE "$INJ_PHRASE_RE" \
-          | while IFS= read -r phrase || [ -n "$phrase" ]; do
+          | while LC_ALL=C IFS= read -r phrase || [ -n "$phrase" ]; do
               # Redact while credential prefixes still retain their original
               # case. Lowercasing first defeats case-sensitive AWS/JWT masks.
               phrase=$(printf '%s' "$phrase" | redact | tr '[:upper:]' '[:lower:]' \
@@ -546,7 +546,7 @@ emit_injection_hits() {
 # admits only [a-z0-9 ._:/@+-].
 phrase_class_keys() {
   local ph
-  while IFS= read -r ph || [ -n "$ph" ]; do
+  while LC_ALL=C IFS= read -r ph || [ -n "$ph" ]; do
     [ -n "$ph" ] || continue
     printf '%s~%s\n' \
       "$(printf '%s' "$ph" | sha256_digest)" \
@@ -3678,7 +3678,7 @@ if want safety; then
       phrase_locale=$(injection_locale "$f" "$len")
       injection_matching_lines "$f" "$len" "$phrase_locale" | LC_ALL="$phrase_locale" grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null
     done < "$INJSNAP" | redact | tr '[:upper:]' '[:lower:]' \
-      | while IFS= read -r phrase || [ -n "$phrase" ]; do
+      | while LC_ALL=C IFS= read -r phrase || [ -n "$phrase" ]; do
           [ -n "$phrase" ] || continue
           digest=$(printf '%s' "$phrase" | sha256_digest) || exit 3
           display=$(printf '%s' "$phrase" | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)
