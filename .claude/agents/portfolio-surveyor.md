@@ -555,9 +555,9 @@ public and private — no per-repo loop needed to enumerate):
      for an in-memory value, so `printf '%s' "$body" | …` is refused because its pipeline starts at
      a local producer. 🔴 **`<repo-root>` is the checkout this survey is RUNNING IN — the worktree you
      were dispatched into — never the shared main checkout.** The forge hook declares the classifier at
-     `${REPO_ROOT}/.claude/…` with `REPO_ROOT` resolved from the hook's own location, and the guard
-     compares that declaration to the invoked word by **exact string equality**; every run works in a
-     per-run worktree (*Execution model*), so the shared checkout's path matches **no** declaration.
+     the hook's own root and, for a byte-identical copy, at the payload `cwd`'s checkout (#3732), and the guard
+     compares that declaration to the invoked word by **exact string equality**; the worktree path is
+     admitted in every dispatch shape, the shared checkout's only when the hook happens to resolve there.
      Measured **five** denials after the absolute form shipped — four on 2026-08-30T20:13 and one on
      2026-08-31T07:06:27Z — each a session running in a worktree that typed the shared path instead.
      There is **no discovery-free form**: the guard expands nothing, so `$PWD/…` and `${PWD}/…` stay

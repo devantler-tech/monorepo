@@ -945,6 +945,80 @@ case "${leading_output}" in
   *) fail "leading classifier was refused for the wrong reason: ${leading_output}" ;;
 esac
 
+# The hook's own root follows "$CLAUDE_PROJECT_DIR", which the harness resolves to the shared
+# checkout in some dispatch shapes while the overlay tells the surveyor to type its session
+# worktree's path. From 2026-10-01 that left 64 of 67 worktree-path classifier calls refused
+# (monorepo#3732). The resolver therefore also declares a classifier at the payload's `cwd`
+# checkout, but only for the same repository and only for a byte-identical copy. A fixture
+# repository with a linked worktree exercises both halves against the real reviewed guard.
+session_fixture="$(cd "${hook_tmp}" && pwd -P)/session-root"
+session_main="${session_fixture}/main"
+session_wt="${session_fixture}/wt"
+session_other="${session_fixture}/other"
+mkdir -p "${session_main}/.claude/scripts" "${session_main}/.claude/plugin-consumption" \
+  "${session_other}/.claude/scripts"
+cp "${surveyor_hook_resolver}" "${session_main}/.claude/scripts/"
+cp "${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.json" \
+  "${session_main}/.claude/plugin-consumption/"
+for session_classifier_name in pr-ownership-disclosure.sh programmed-bot-review-exemption.sh \
+  pr-unresolved-threads.sh coderabbit-summary-verdict.sh local-review-verdict.sh \
+  coderabbit-review-verdict.sh kata-measure-date.sh; do
+  cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_main}/.claude/scripts/"
+  cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_other}/.claude/scripts/"
+done
+session_git() {
+  git -c user.name=fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false \
+    -c init.defaultBranch=main "$@" >/dev/null 2>&1
+}
+session_git -C "${session_main}" init -q
+session_git -C "${session_main}" add -A
+session_git -C "${session_main}" commit -q -m fixture
+session_git -C "${session_main}" worktree add -q --detach "${session_wt}"
+session_git -C "${session_other}" init -q
+[ -x "${session_wt}/.claude/scripts/pr-unresolved-threads.sh" ] ||
+  fail "session-root fixture did not check out the classifiers into its linked worktree"
+
+session_hook() {
+  local cwd="$1" cls="$2" payload
+  payload="$(jq -nc --arg cwd "${cwd}" --arg cls "${cls}" '{
+    tool_input: {
+      command: ("gh pr view 1 --repo devantler-tech/monorepo --json body --jq .body | "
+        + $cls + " --input -")
+    }
+  } + (if $cwd == "" then {} else {cwd: $cwd} end)')"
+  printf '%s\n' "${payload}" |
+    CLAUDE_CONFIG_DIR="${hook_config}" GH_TELEMETRY=0 \
+      "${session_main}/.claude/scripts/portfolio-surveyor-forge-hook.sh" 2>&1
+}
+session_wt_cls="${session_wt}/.claude/scripts/pr-unresolved-threads.sh"
+
+session_hook "${session_wt}" "${session_wt_cls}" >/dev/null ||
+  fail "surveyor hook refused a declared classifier at the session worktree's own path (monorepo#3732)"
+session_hook "${session_wt}/.claude" "${session_wt_cls}" >/dev/null ||
+  fail "surveyor hook did not resolve the session root from a cwd below the worktree top level"
+session_hook "${session_wt}" "${session_main}/.claude/scripts/pr-unresolved-threads.sh" >/dev/null ||
+  fail "surveyor hook stopped admitting the classifier at its own root"
+
+expect_session_refusal() {
+  local label="$1" output status
+  shift
+  set +e
+  output="$(session_hook "$@")"
+  status=$?
+  set -e
+  [ "${status}" -eq 2 ] || fail "surveyor hook admitted ${label} (exit ${status})"
+  case "${output}" in
+    *'is not on the read-only allowlist'*) ;;
+    *) fail "${label} was refused for the wrong reason: ${output}" ;;
+  esac
+}
+expect_session_refusal 'a session-path classifier with no payload cwd' '' "${session_wt_cls}"
+expect_session_refusal 'a classifier in a DIFFERENT repository named by the payload cwd' \
+  "${session_other}" "${session_other}/.claude/scripts/pr-unresolved-threads.sh"
+printf '\n# diverged\n' >> "${session_wt_cls}"
+expect_session_refusal 'a session-worktree classifier whose bytes differ from the declared copy' \
+  "${session_wt}" "${session_wt_cls}"
+
 # Declaring the classifier only ACTIVATES it if the overlay tells the surveyor to type the
 # same word. The guard compares the declared entry to the invoked program by exact string
 # equality and expands nothing — `$PWD/…` stays a literal and `$(…)` is refused outright —

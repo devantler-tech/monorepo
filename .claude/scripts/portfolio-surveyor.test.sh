@@ -2888,9 +2888,10 @@ grep -Fq 'gh pr view <n> --repo devantler-tech/<repo> --json body --jq .body | <
 # #3127 — the template above pins the SHAPE and says nothing about what `<repo-root>` must RESOLVE
 # to, so the substitution rule could be (and was) ambiguous with this suite fully green. The guard
 # admits the classifier only when the invoked word is byte-identical to the forge hook's declaration
-# `${REPO_ROOT}/.claude/scripts/pr-ownership-disclosure.sh`, and REPO_ROOT is resolved from the hook's
-# own location — the checkout the survey RUNS IN. Because every run works in a per-run worktree
-# (*Execution model*), the shared main checkout's path matches no declaration. Measured: five denials
+# `${REPO_ROOT}/.claude/scripts/pr-ownership-disclosure.sh`. REPO_ROOT follows "$CLAUDE_PROJECT_DIR",
+# which the harness resolves to the worktree in some dispatch shapes and to the shared checkout in
+# others, so since #3732 the hook also declares a byte-identical copy at the payload `cwd`'s checkout:
+# only the worktree path is admitted in every shape. Measured: five denials
 # of the absolute form AFTER the absolute-path fix shipped — four on 2026-08-30T20:13 and one on
 # 2026-08-31T07:06:27Z — each from a session running in a worktree that typed the shared path.
 # Scope every assertion below to the substitution rule ITSELF. Searching the whole document lets a

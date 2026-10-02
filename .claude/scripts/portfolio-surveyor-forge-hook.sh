@@ -128,15 +128,17 @@ verify_asset "${thread_counter_relative}"
 # cannot present its own reviewed files does not get a survey. Exiting 0 with
 # the capability silently missing is the worse direction — it returns the
 # surveyor to the hazardous fallback with nothing anywhere saying so.
+classifier_names='pr-ownership-disclosure.sh
+programmed-bot-review-exemption.sh
+pr-unresolved-threads.sh
+coderabbit-summary-verdict.sh
+local-review-verdict.sh
+coderabbit-review-verdict.sh
+kata-measure-date.sh'
+
 consumer_classifiers=''
-for consumer_classifier in \
-  "${REPO_ROOT}/.claude/scripts/pr-ownership-disclosure.sh" \
-  "${REPO_ROOT}/.claude/scripts/programmed-bot-review-exemption.sh" \
-  "${REPO_ROOT}/.claude/scripts/pr-unresolved-threads.sh" \
-  "${REPO_ROOT}/.claude/scripts/coderabbit-summary-verdict.sh" \
-  "${REPO_ROOT}/.claude/scripts/local-review-verdict.sh" \
-  "${REPO_ROOT}/.claude/scripts/coderabbit-review-verdict.sh" \
-  "${REPO_ROOT}/.claude/scripts/kata-measure-date.sh"; do
+for classifier_name in ${classifier_names}; do
+  consumer_classifier="${REPO_ROOT}/.claude/scripts/${classifier_name}"
   if [ ! -f "${consumer_classifier}" ] ||
     [ ! -x "${consumer_classifier}" ] ||
     [ -L "${consumer_classifier}" ]; then
@@ -148,10 +150,55 @@ for consumer_classifier in \
   consumer_classifiers="${consumer_classifiers:+${consumer_classifiers}:}${consumer_classifier}"
 done
 
+# Also declare each classifier at the checkout the session is RUNNING IN, which
+# is what the overlay tells the surveyor to type (monorepo#3732). REPO_ROOT
+# follows the hook's own location, i.e. "$CLAUDE_PROJECT_DIR", and the harness
+# resolves that to the session worktree in some dispatch shapes and to the
+# shared main checkout in others. It flipped between them twice (monorepo#3127,
+# then 2026-10-01T00Z), and each flip left one of the two paths refused: from
+# 2026-10-01 the worktree path was denied on 64 of 67 calls while it had been
+# admitted on 72 of 75 the day before, and the surveyor fell back to the
+# hand-derivation these classifiers exist to replace.
+#
+# This adds no program the guard did not already trust. The session root comes
+# from the runtime's own hook payload (`cwd`), never from the surveyor's text; it
+# must be a checkout of the SAME repository (one git common dir); and a copy is
+# declared there only when it is a regular executable byte-identical to the
+# REPO_ROOT copy declared above. Anything else — no payload cwd, another
+# repository, a diverged or missing copy — declares nothing extra, and the
+# REPO_ROOT declaration stands alone exactly as before.
+hook_input=$(cat 2>/dev/null || true)
+session_cwd=$(printf '%s' "${hook_input}" |
+  jq -r 'if (.cwd | type) == "string" then .cwd else "" end' 2>/dev/null || true)
+session_root=''
+if [ -n "${session_cwd}" ] && [ -d "${session_cwd}" ]; then
+  session_root=$(git -C "${session_cwd}" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "${session_root}" ]; then
+    session_root=$(CDPATH='' cd -- "${session_root}" 2>/dev/null && pwd -P || true)
+  fi
+fi
+if [ -n "${session_root}" ] && [ "${session_root}" != "${REPO_ROOT}" ]; then
+  repo_common=$(git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  session_common=$(git -C "${session_root}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  [ -z "${repo_common}" ] || repo_common=$(CDPATH='' cd -- "${repo_common}" 2>/dev/null && pwd -P || true)
+  [ -z "${session_common}" ] || session_common=$(CDPATH='' cd -- "${session_common}" 2>/dev/null && pwd -P || true)
+  if [ -n "${repo_common}" ] && [ "${repo_common}" = "${session_common}" ]; then
+    for classifier_name in ${classifier_names}; do
+      session_classifier="${session_root}/.claude/scripts/${classifier_name}"
+      case "${session_classifier}" in *:*) continue ;; esac
+      if [ -f "${session_classifier}" ] && [ -x "${session_classifier}" ] &&
+        [ ! -L "${session_classifier}" ] &&
+        cmp -s "${session_classifier}" "${REPO_ROOT}/.claude/scripts/${classifier_name}"; then
+        consumer_classifiers="${consumer_classifiers}:${session_classifier}"
+      fi
+    done
+  fi
+fi
+
 # The frontmatter hook is already scoped to portfolio-surveyor. Clear the
 # adapter's optional identity scope and pin its test override to the verified
 # sibling so inherited environment cannot bypass either half of the wiring.
 SURVEYOR_FORGE_READONLY_SCOPE='' \
 SURVEYOR_FORGE_READONLY_GUARD="${install_path}/${guard_relative}" \
 SURVEYOR_FORGE_READONLY_CLASSIFIERS="${consumer_classifiers}" \
-  exec "${install_path}/${adapter_relative}"
+  exec "${install_path}/${adapter_relative}" <<<"${hook_input}"
