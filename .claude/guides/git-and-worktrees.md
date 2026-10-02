@@ -335,14 +335,20 @@ cleanup too, and this sweep is what unblocks it.
 command as its own call:
 
 ```sh
-mkdir -p ~/.claude/worktree-cleanup-manifests   # the redirect below needs it before the sweep runs
-nohup .claude/scripts/worktree-cleanup-all.sh apply 24 --lane <lane> \
-  >>~/.claude/worktree-cleanup-manifests/cleanup-<lane>.log 2>&1 </dev/null &
+.claude/scripts/worktree-lane-sweep.sh start --lane <lane>   # previous sweep: 0 clean · 1 not clean · 2 UNKNOWN
 .claude/scripts/disk-preflight.sh   # 0 enough free · 1 below the threshold (20 GB) · 2 UNKNOWN
 ```
 
-The sweep is **detached**: it takes minutes, so the run never waits on it or polls it, and the log
-holds the result for the next reader. On a disk-preflight `1`, run
+The sweep is **detached**: `worktree-lane-sweep.sh` starts
+`worktree-cleanup-all.sh apply 24 --lane <lane>` in the background and returns at once, so the run
+never waits on it or polls it. Its output appends to
+`~/.claude/worktree-cleanup-manifests/cleanup-<lane>.log`, and a supervisor records how it ended next
+to that log, because an exit status only the log holds is one no run ever reads (#3714). Each start
+first reports how the **previous** sweep of the lane ended, and exits `1` when it failed, never
+finished, is still running (no second sweep is started then) or none is on record. On a sweep `1` or
+`2`, read the end of that log, record it in `needs_attention`, and escalate per
+*Maintainer channels* when it persists across runs after you have tried to resolve it; it never
+blocks the run. On a disk-preflight `1`, run
 `.claude/scripts/build-cache-reclaim.sh apply` once and check again. If it still exits `1`, or exits
 `2` at any point (`2` is never "enough"), do **no builds, tests or cluster work this run** — GitHub-only
 work such as reviews, triage and merges can go on — record it in `needs_attention`, and escalate per
