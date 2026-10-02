@@ -139,9 +139,10 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    identity** (`renovate[bot]` / `dependabot[bot]`, `app/renovate` / `app/dependabot`) — unlike the
    others that is not a deferral: such an issue is **never actionable at all**, never becomes so, and
    is never selected, worked, or closed (Renovate's Dependency Dashboard is the standing example).
-   ⚠️ (f) matches the **author**, never the `automation` **label** — see the next sentence. Or (g) it
-   has an **open** native blocking dependency (`blockedBy`): a closed blocker never skips, and a skip
-   names the open blockers (contract skip clause (g)).
+   ⚠️ (f) matches the **author**, never the `automation` **label** — see the next sentence. Or (g) its
+   open native blocking-dependency count is above zero, read on the issue itself and never through the
+   blocker nodes; a blocker that closed is re-verified before work builds on it (contract skip clause
+   (g)).
    **`type:"Spike"` is not a skip and not a delivery-PR:** when it is the oldest actionable issue,
    record the decision on the Spike and file its follow-up issues — that pair is the floor artifact;
    do not open a delivery PR (#2267; contract *Issue hierarchy → Spike*). Since no PR opens to

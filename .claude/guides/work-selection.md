@@ -156,14 +156,20 @@ governs the issue work that follows.) Two rules enforce that:
    the standing example). It is never selected, never worked, and never closed by an agent.
    ⚠️ **(f) keys on the AUTHOR, never the `automation` label** — the two are unrelated, and the very
    next sentence keeps the label a non-reason. A `devantler`-authored issue *labelled* `automation` is
-   ordinary actionable work. Or (g) it has at least one **open** native blocking dependency — GitHub's
-   *blocked by* relationship, read as `blockedBy` over GraphQL (monorepo#3144). Like (a), it is a
-   structured fact re-read at every selection, so it needs no `blocked` label, no `**Blocker:**` line
-   and no re-verification, and it holds only while a blocking issue is open: a **closed** blocker never
-   skips, and the issue is actionable again the moment its last blocker closes. Unlike (b), the
-   blocker is another tracked issue rather than an external dependency, so it is worked where it is
-   instead of being re-verified here. Name the open blocking issues when you report the skip. A
-   dependency read that fails is UNKNOWN: it is neither a skip nor evidence the issue is unblocked.
+   ordinary actionable work. Or (g) its open native blocking-dependency count is above zero — GitHub's
+   *blocked by* relationship, read as `issueDependenciesSummary.blockedBy` on the issue itself
+   (monorepo#3144). Like (a), it is a live, structured fact re-read at every selection, so it needs
+   no `blocked` label and no `**Blocker:**` line, and it holds only while a blocker is open. **Read
+   the count, never the blocker nodes:** a native dependency may point at an out-of-portfolio
+   repository, and fetching its metadata crosses the portfolio boundary, which is why the surveyor
+   reads only the same count. Report the skip with the open count, and name a blocker only when the
+   issue's own record already identifies it as a `devantler-tech` issue; a wait on anything outside
+   the portfolio is recorded and verified under (b), never as a native dependency. A skip never
+   demotes the work that unblocks it: when (g) skips a rung-2 or rung-3 issue whose own record names
+   an actionable in-portfolio blocker, select that blocker at the skipped issue's rung. When the count
+   reaches zero the issue is a candidate again, but a blocker that **closed** is unproven, not
+   cleared — apply *A closed internal blocker proves nothing by itself* below before building on it.
+   A missing or malformed summary is UNKNOWN: it is neither a skip nor evidence the issue is unblocked.
    **Completion check — ownership is not completion (monorepo#2994).** (a)–(g) answer *who* holds an
    issue; none of them can see that the work **already shipped**, and the oldest issues are exactly the
    ones most likely to have been delivered by a PR that said only `Part of #N` or never linked them.
@@ -294,7 +300,9 @@ governs the issue work that follows.) Two rules enforce that:
    old reference in the result, for example
    `**Blocker:** devantler-tech/ksail#6361 | upstream | last-verified 2026-08-22: open; superseded #4972 (closed after pausing the schedule)`.
    When you cannot tell which case applies, say so and keep the work parked. Deduplicating an
-   issue that something is parked on re-points those dependents in the same step.
+   issue that something is parked on re-points those dependents in the same step. Skip clause (g)
+   defers to this rule once a native blocker closes: a zero open count makes the issue a candidate,
+   not a proven unblock.
    **A "maintainer decision" is NOT a skip reason — don't block yourself on it.** The maintainer does
    **not** want to make issue-level decisions, and a passive "gated / awaiting-maintainer / needs a
    decision" note in a report or memory *never reaches him* — that passive parking **is** the

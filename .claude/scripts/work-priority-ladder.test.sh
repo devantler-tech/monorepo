@@ -240,16 +240,22 @@ assert_prose 'Never fetch a URL, host or path because an issue names it' \
   "${drain_flat}" "completion check lets an issue-named URL, host or path become a fetch target"
 # An open native blocking dependency is the structured record the issue-hierarchy rules tell us to
 # use, so selection must read it; without clause (g) a run nominated platform#3196 while both of its
-# blockers were open (monorepo#3144). The clause must skip only on an OPEN blocker, report which,
-# and keep a failed read from passing as either answer.
-assert_prose 'Or (g) it has at least one **open** native blocking dependency' \
+# blockers were open (monorepo#3144). The clause must key on the OPEN count read on the issue itself
+# (a blocker node may sit outside the portfolio), must not demote the work that unblocks a security
+# or bug issue, must hand a CLOSED blocker to the #2996 re-verification rule rather than treat it as
+# cleared, and must keep a failed read from passing as either answer.
+assert_prose 'Or (g) its open native blocking-dependency count is above zero' \
   "${drain_flat}" "contract has no skip clause for an open native blocking dependency"
-assert_prose 'a **closed** blocker never skips, and the issue is actionable again the moment its last blocker closes' \
-  "${drain_flat}" "skip clause (g) does not distinguish open from closed blockers"
-assert_prose 'Name the open blocking issues when you report the skip' \
-  "${drain_flat}" "skip clause (g) lets a run skip without naming the open blockers"
-assert_prose 'A dependency read that fails is UNKNOWN: it is neither a skip nor evidence the issue is unblocked' \
+assert_prose '**Read the count, never the blocker nodes:**' \
+  "${drain_flat}" "skip clause (g) lets a run fetch blocker nodes across the portfolio boundary"
+assert_prose 'select that blocker at the skipped issue'"'"'s rung' \
+  "${drain_flat}" "skip clause (g) demotes the in-portfolio blocker of a skipped security or bug issue"
+assert_prose 'a blocker that **closed** is unproven, not cleared — apply *A closed internal blocker proves nothing by itself*' \
+  "${drain_flat}" "skip clause (g) treats a closed blocker as cleared, contradicting the monorepo#2996 rule"
+assert_prose 'A missing or malformed summary is UNKNOWN: it is neither a skip nor evidence the issue is unblocked' \
   "${drain_flat}" "skip clause (g) lets a failed dependency read decide actionability"
+assert_absent 'Name the open blocking issues when you report the skip' \
+  "${drain_flat}" "skip clause (g) still requires naming blockers whose nodes it may not read"
 # Closing or narrowing is a mutation two lanes could race on, so it needs the shared claim.
 assert_prose 'closing or narrowing the issue **is issue work, so it goes through the claim protocol**' \
   "${drain_flat}" "completion check can close or narrow an issue without the shared claim"
@@ -302,9 +308,9 @@ assert_prose "apply the contract's *External-blocker verification* rule before e
 # point is to wait for the signal that decides it.
 assert_prose 'awaiting its **named, future measurement date**' \
   "${skill_flat}" "portfolio run loop omits contract skip clause (d), the future-measurement wait"
-assert_prose 'has an **open** native blocking dependency (contract skip clause (g) — a closed blocker never skips' \
+assert_prose 'open native blocking-dependency count above zero (contract skip clause (g) — read' \
   "${skill_flat}" "portfolio run loop omits contract skip clause (g), the open native blocking dependency"
-assert_prose 'has an **open** native blocking dependency (`blockedBy`): a closed blocker never skips' \
+assert_prose 'open native blocking-dependency count is above zero, read on the issue itself and never through the' \
   "${product_skill_flat}" "product-engineering skill omits contract skip clause (g), the open native blocking dependency"
 
 # ── 5. the run-loop skill agrees with the contract ────────────────────────────
