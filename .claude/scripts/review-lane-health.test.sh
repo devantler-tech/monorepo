@@ -34,6 +34,13 @@ expect "pending window" 0 "cr=LIMITED rate-limit at 2026-09-21T13:00:00Z last-re
 grep -qF "elapsed" "$tmp/out" && fail "a window that has not ended must not say elapsed"
 events 'cr\t2026-09-21T12:00:00Z\tok\t-\ncr\t2026-09-21T13:00:00Z\tfail\trate-limit\t2026-09-21T13:30:00Z\n'
 expect "elapsed window" 0 "until=2026-09-21T13:30:00Z elapsed"
+# CodeRabbit posts each refusal twice and only one may state the window: the pair keeps it.
+events 'cr\t2026-09-21T12:00:00Z\tok\t-\ncr\t2026-09-21T13:00:00Z\tfail\trate-limit\t2026-09-21T15:00:00Z\ncr\t2026-09-21T13:00:03Z\tfail\trate-limit\t-\n'
+expect "window from the paired refusal" 0 "cr=LIMITED rate-limit at 2026-09-21T13:00:03Z last-review 2026-09-21T12:00:00Z until=2026-09-21T15:00:00Z"
+# A window that ended before a later refusal says nothing about the later one.
+events 'cr\t2026-09-21T11:00:00Z\tok\t-\ncr\t2026-09-21T12:00:00Z\tfail\trate-limit\t2026-09-21T12:30:00Z\ncr\t2026-09-21T13:00:00Z\tfail\trate-limit\t-\n'
+expect "stale window" 0 "cr=LIMITED rate-limit at 2026-09-21T13:00:00Z"
+grep -qF "until=" "$tmp/out" && fail "a window that ended before the newest refusal must print no until="
 
 # A rate limit that has outlasted the stale window is an outage, not a pause.
 events 'cr\t2026-09-17T09:00:00Z\tok\t-\ncr\t2026-09-21T13:00:00Z\tfail\trate-limit\n'

@@ -160,14 +160,17 @@ fi
 # to_epoch <ISO-8601 UTC> — BSD and GNU date spell the parse differently.
 to_epoch() { date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || date -u -d "$1" +%s; }
 
-# Classify: per lane, the newest ok, the newest fail (with its cause), and the newest usage-limit.
+# Classify: per lane, the newest ok, the newest fail (with its cause), the newest usage-limit, and the
+# latest stated retry window. CodeRabbit posts each refusal twice (summary and command reply) and only
+# one may state the window, so the window comes from any refusal unless it ended before the newest one.
 down=0
 for lane in cr codex bugbot; do
   line="$(awk -F'\t' -v l="$lane" '
     $1 == l && $3 == "ok"   && $2 > ok   { ok = $2 }
-    $1 == l && $3 == "fail" && $2 > fail { fail = $2; cause = $4; win = ($5 == "-" ? "" : $5) }
+    $1 == l && $3 == "fail" && $2 > fail { fail = $2; cause = $4 }
+    $1 == l && $3 == "fail" && $5 != "" && $5 != "-" && $5 > win { win = $5 }
     $1 == l && $4 == "usage-limit" && $2 > ul { ul = $2 }
-    END { printf "%s|%s|%s|%s|%s", ok, fail, cause, ul, win }' "$tmp/events")"
+    END { if (win < fail) win = ""; printf "%s|%s|%s|%s|%s", ok, fail, cause, ul, win }' "$tmp/events")"
   IFS="|" read -r ok fail cause ul win <<<"$line" || true
   if [ -z "$ok" ] && [ -z "$fail" ]; then
     echo "LANE-HEALTH $lane=NO-EVIDENCE"
