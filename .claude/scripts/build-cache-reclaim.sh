@@ -27,10 +27,11 @@
 #   1. GOCACHE and GOMODCACHE, each cleaned only when it exceeds cache_budget_gb.
 #   2. Per-run agent trees (codex-*, war-*, dpc-*, ksail-*) under the temp root, older
 #      than min_age_days.
-#   2b. Per-run Go and golangci-lint caches directly under the temp root, or one level below a
-#      Claude Code session scratchpad (claude-*/<project>/<session>/scratchpad/<cache>), whatever they are
-#      named, recognised by the README each tool writes into its cache and reclaimed once
-#      nothing was written to them for a threshold counted in HOURS (2026-09-30: 75 GB).
+#   2b. Per-run Go and golangci-lint caches directly under the temp root, or one level below
+#      a Claude Code session scratchpad (claude-*/<project>/<session>/scratchpad/<cache>),
+#      whatever they are named, recognised by the README each tool writes into its cache and
+#      reclaimed once nothing was written to them for a threshold counted in HOURS
+#      (2026-09-30: 75 GB).
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
 #   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
 #      per-user temp dir, older than a threshold counted in HOURS.
