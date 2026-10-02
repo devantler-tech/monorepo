@@ -71,6 +71,15 @@ expect "ksail#6930 judged at its BASE sha is another head" 1 "NONE other-head" "
 expect "platform#3316 judged at a later head is stale" 1 "NONE other-head" "$(payload "${c3316}" "${other}")"
 expect "platform#3051 verdict naming no sha is never a green" 1 "NONE no-sha" "$(payload "${c3051}" "${h3051}")"
 
+# Findings delivered as a conversational reply (monorepo#3004): no review object, no thread, no
+# `Actionable comments posted:` marker. Both separator styles CodeRabbit used are real comments.
+h3002="b562e9c64d01a0731b62d731dc6a0430fc8f4ec4"
+h3312="1cbc9b53feff1c98a77d2a19a2cebe8cfca16e01"
+f3002="$(fixture coderabbit-comment-finding-3002.txt)"
+f3312="$(fixture coderabbit-comment-finding-heading-3312.txt)"
+expect "monorepo#3002 bold '**P2 — …**' reply is a finding" 1 "FINDINGS 1" "$(payload "${f3002}" "${h3002}")"
+expect "platform#3312 heading '### P1: …' reply is a finding" 1 "FINDINGS 1" "$(payload "${f3312}" "${h3312}")"
+
 # --- Wording family: the structure decides, not the sentence ----------------------------------
 for pair in \
   "I reviewed \`${head}\`.|I found no actionable issues." \
@@ -101,10 +110,16 @@ expect "the Action-not-completed rate-limit shell blocks the green even beside a
   "$(payload "$(reply "I reviewed \`${head}\`." "" "No findings." "<details>" "<summary>⚠️ Action not completed</summary>" "" "Review rate limited." "</details>")")"
 expect "service shell heading blocks the green" 1 "NONE did-not-run" \
   "$(payload "$(reply "## Review failed" "I reviewed \`${head}\`." "" "No findings.")")"
-expect "a P1 heading elsewhere blocks the green" 1 "NONE finding-markers" \
+expect "a P1 heading elsewhere is a finding, not a green" 1 "FINDINGS 1" \
   "$(payload "$(reply "I reviewed \`${head}\`." "" "### P1: Do not accept non-literal conditions" "" "No findings.")")"
-expect "a bold P2 marker blocks the green" 1 "NONE finding-markers" \
+expect "a bold P2 marker is a finding, not a green" 1 "FINDINGS 1" \
   "$(payload "$(reply "I reviewed \`${head}\`." "" "**P2 — stale cache key**" "" "I found no blocking issues.")")"
+expect "each severity-tagged finding counts once" 1 "FINDINGS 2" \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "**P1 — unchecked exit status**" "" "### P2: stale cache key")")"
+expect "a finding outranks a rate-limit marker beside it" 1 "FINDINGS 1" \
+  "$(payload "$(reply "**P1 — fail-open parse**" "<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->")")"
+expect "a severity token inside a code fence is not a finding" 1 "NONE no-verdict" \
+  "$(payload "$(reply "I reviewed \`${head}\`." '```' "**P1 — example**" '```')")"
 expect "a qualified verdict is not finding-free" 1 "NONE no-verdict" \
   "$(payload "$(reply "I reviewed \`${head}\`." "" "I found no issues except one.")")"
 expect "a verdict with a trailing clause is not standalone" 1 "NONE no-verdict" \
