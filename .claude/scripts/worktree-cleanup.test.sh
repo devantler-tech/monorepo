@@ -3744,9 +3744,13 @@ SHIM
 # another lane's registration whose directory was briefly unavailable, and that worktree
 # came back with a broken link to its repository.
 
-# registered <root> <path> — 0 when the repository still registers a worktree at <path>.
-registered() {
-  git -C "$1/repo" worktree list --porcelain | grep -qxF -- "worktree $2"
+# registration <root> <path> — prints `present` or `absent` for a worktree registration at
+# <path>, or `unknown` when the list cannot be read. A state, not an exit status, so a test
+# asserting `absent` cannot pass on a failed read.
+registration() {
+  local list
+  list=$(git -C "$1/repo" worktree list --porcelain) || { echo unknown; return; }
+  if grep -qxF -- "worktree $2" <<<"$list"; then echo present; else echo absent; fi
 }
 
 # away_sibling <root> — a worktree under another lane's root whose directory is moved
@@ -3755,7 +3759,7 @@ away_sibling() {
   local root=$1 sib="$1/repo/.codex/worktrees/sib"
   add_wt_at "$root" "$sib" codex/sib || return 1
   mv "$sib" "$root/sib-away" || return 1
-  registered "$root" "$sib" || return 1
+  [ "$(registration "$root" "$sib")" = present ] || return 1
   printf '%s' "$sib"
 }
 
@@ -3763,7 +3767,7 @@ away_sibling() {
 # and its link to the repository still resolves.
 sibling_restored() {
   mv "$1/sib-away" "$2" || return 1
-  registered "$1" "$2" && [ "$(git -C "$2" rev-parse --show-toplevel 2>/dev/null)" = "$2" ]
+  [ "$(registration "$1" "$2")" = present ] && [ "$(git -C "$2" rev-parse --show-toplevel 2>/dev/null)" = "$2" ]
 }
 
 t_apply_keeps_a_sibling_lanes_missing_registration() {
@@ -3774,7 +3778,7 @@ t_apply_keeps_a_sibling_lanes_missing_registration() {
   local out rc; out=$(run "$root" apply); rc=$?
   if [ "$rc" -eq 0 ] && grep -q '^REAPED *spent ' <<<"$out" \
      && [ ! -e "$root/repo/.claude/worktrees/spent" ] \
-     && ! registered "$root" "$root/repo/.claude/worktrees/spent" \
+     && [ "$(registration "$root" "$root/repo/.claude/worktrees/spent")" = absent ] \
      && sibling_restored "$root" "$sib"; then
     ok "$name"
   else
@@ -3824,7 +3828,7 @@ SHIM
   if [ "$rc" -eq 0 ] && grep -q '^REAPED *stuck ' <<<"$out" \
      && grep -q 'injected .* failure for .*/stuck$' "$log" 2>/dev/null \
      && [ ! -e "$root/repo/.claude/worktrees/stuck" ] \
-     && ! registered "$root" "$root/repo/.claude/worktrees/stuck" \
+     && [ "$(registration "$root" "$root/repo/.claude/worktrees/stuck")" = absent ] \
      && sibling_restored "$root" "$sib"; then
     ok "$name"
   else
