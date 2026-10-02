@@ -190,6 +190,11 @@ jobs:
               - '.claude/scripts/memory-rewrite.sh'
               - '.claude/scripts/review-lane-health.sh'
               - '.claude/scripts/claude-lane-liveness.sh'
+              - '.claude/scripts/renovate-dashboard-drift.sh'
+              - '.claude/scripts/pr-ownership-disclosure.sh'
+              - '.claude/scripts/comment-disclosure-drift.sh'
+              - '.claude/scripts/python-ban-guard.sh'
+              - '.claude/scripts/board-archive.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'

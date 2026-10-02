@@ -99,11 +99,20 @@ fi
 guard_binary=""
 body_file=""
 
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
+# cleanup then becomes the script's status. Completion is recorded explicitly, so reaching a
+# verdict is the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
+pr_ownership_disclosure_finished=0
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {
-  [ -n "$guard_binary" ] && rm -f -- "$guard_binary"
-  [ -n "$body_file" ] && rm -f -- "$body_file"
-  return 0
+  local rc=$?
+  [ -z "$guard_binary" ] || rm -f -- "$guard_binary"
+  [ -z "$body_file" ] || rm -f -- "$body_file"
+  if [ "$pr_ownership_disclosure_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "pr-ownership-disclosure: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
 }
 trap cleanup EXIT
 
@@ -116,12 +125,16 @@ fi
 
 if [ -n "$input" ]; then
   if [ "$input" = "-" ]; then
-    "$guard_binary" ${enforce:+$enforce} --input -
-    exit $?
+    rc=0
+    "$guard_binary" ${enforce:+$enforce} --input - || rc=$?
+    pr_ownership_disclosure_finished=1
+    exit "$rc"
   fi
   [ -r "$input" ] || die "cannot read body: $input"
-  "$guard_binary" ${enforce:+$enforce} --input "$input"
-  exit $?
+  rc=0
+  "$guard_binary" ${enforce:+$enforce} --input "$input" || rc=$?
+  pr_ownership_disclosure_finished=1
+  exit "$rc"
 fi
 
 # Fetch the body. Never suppress stderr here: an API failure that reads as an
@@ -134,4 +147,7 @@ if ! gh pr view "$pr" --repo "$repo" --json body --jq '.body' >"$body_file"; the
   die "failed to fetch $repo#$pr"
 fi
 
-"$guard_binary" ${enforce:+$enforce} --input "$body_file"
+rc=0
+"$guard_binary" ${enforce:+$enforce} --input "$body_file" || rc=$?
+pr_ownership_disclosure_finished=1
+exit "$rc"

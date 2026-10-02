@@ -208,6 +208,7 @@ echo
 #    script on it, fails here.
 # ---------------------------------------------------------------------------
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
 mkdir -p "$tmp/converted/projects" "$tmp/converted/backups"
 printf 'memory line\n' > "$tmp/converted/memory.md"
 printf 'replacement line\n' > "$tmp/converted/replacement.md"
@@ -221,6 +222,11 @@ memory-hygiene.sh|
 memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups
 review-lane-health.sh|--now 1
 claude-lane-liveness.sh|--store $tmp/converted/store.json --projects $tmp/converted/projects
+renovate-dashboard-drift.sh|
+pr-ownership-disclosure.sh|--input -
+comment-disclosure-drift.sh|--input -
+python-ban-guard.sh|$repo_root
+board-archive.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"
