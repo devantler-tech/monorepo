@@ -94,7 +94,7 @@ verify_asset "${thread_counter_relative}"
 # surveyor's environment widen the read-only allowlist to a program of its
 # choosing, which is exactly the bypass the SCOPE and GUARD pins above close.
 #
-# Eight programs are declared, and all are READS. pr-ownership-disclosure.sh
+# Nine programs are declared, and all are READS. pr-ownership-disclosure.sh
 # classifies a `devantler` PR body as the maintainer's interactive work or the
 # routine's own output. Without a route for it the surveyor falls back to
 # hand-deriving that verdict, and that substitution has already misread live
@@ -129,6 +129,10 @@ verify_asset "${thread_counter_relative}"
 # git metadata — but never a path or argument taken from its input. Every other
 # active-work signal is a published event, and #3053 read idle on all of them while
 # two sessions worked in its worktree (monorepo#3067).
+# maintainer-comment-candidates.sh reads ONE comment payload on stdin and prints the
+# maintainer-comment sweep's rows, each bound to the artifact named by the comment's own
+# permalink. Undeclared, the surveyor composed those rows by hand and reported a real
+# maintainer-channel comment under the wrong issue, which discarded it (monorepo#3163).
 #
 # Absence fails CLOSED, consistently with DESIRED_STATE above: a checkout that
 # cannot present its own reviewed files does not get a survey. Exiting 0 with
@@ -141,7 +145,8 @@ coderabbit-summary-verdict.sh
 local-review-verdict.sh
 coderabbit-review-verdict.sh
 kata-measure-date.sh
-pr-worktree-holder.sh'
+pr-worktree-holder.sh
+maintainer-comment-candidates.sh'
 
 consumer_classifiers=''
 for classifier_name in ${classifier_names}; do
