@@ -15,7 +15,7 @@
 #   1. docs/package.json declares devEngines.packageManager as npm "^<major>.0.0" with
 #      onFail "error".
 #   2. Every job in .github/workflows that works in docs/ (a step or job default with
-#      working-directory docs, or `--prefix docs`) has exactly one actions/setup-node step
+#      working-directory docs, `--prefix docs` or `cd docs`) has exactly one actions/setup-node step
 #      with an explicit node-version, on a Node line whose bundled npm is that major. The
 #      known jobs must all be found, so an empty discovery cannot pass.
 #   3. CI runs this test from a job that its own inputs gate.
@@ -70,10 +70,11 @@ required_filter_paths=(
 # shellcheck disable=SC2016 # $setup is a yq variable, not a shell expansion.
 jobs_query='
   .jobs // {} | to_entries | map(select(
-    ((.value.defaults.run."working-directory" // "") | test("^docs(/|$)")) or
+    ((.value.defaults.run."working-directory" // "") | test("^(\\./)?docs(/|$)")) or
     ([.value.steps[]? | select(
-      ((."working-directory" // "") | test("^docs(/|$)")) or
-      ((.run // "") | test("--prefix[ =]docs(/|\\s|$)"))
+      ((."working-directory" // "") | test("^(\\./)?docs(/|$)")) or
+      ((.run // "") | test("--prefix[ =](\\./)?docs(/|\\s|$)")) or
+      ((.run // "") | test("(^|[\\s;&|(])cd\\s+(\\./)?docs(/|\\s|;|&|\\)|$)"))
     )] | length > 0)
   )) | map(
     [.value.steps[]? | select((.uses // "") | test("^actions/setup-node@"))] as $setup |
@@ -188,6 +189,12 @@ reset_fixture
 yq -i '(.jobs.build.steps[] | select((.uses // "") | test("^actions/setup-node@")) | .with."node-version") = "22"' \
   "${fixture}/.github/workflows/publish-pages.yaml"
 expect_failure "publish on Node 22" "publish-pages.yaml:build sets up Node 22, which bundles npm 10"
+
+reset_fixture
+yq -i '.jobs.extra = {"runs-on": "ubuntu-latest", "steps": [
+  {"uses": "actions/setup-node@v7", "with": {"node-version": "22"}},
+  {"run": "cd docs && npm ci"}]}' "${fixture}/.github/workflows/publish-pages.yaml"
+expect_failure "new job entering docs/ with cd" "publish-pages.yaml:extra sets up Node 22"
 
 reset_fixture
 yq -i '(.jobs.audit-docs.steps[] | select((.uses // "") | test("^actions/setup-node@")) | .with."node-version") = "23"' \
