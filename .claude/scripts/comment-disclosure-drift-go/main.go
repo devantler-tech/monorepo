@@ -1011,8 +1011,16 @@ func main() {
 		// stays one request plus one per such discussion.
 		historyFile = flag.String("context", "", "with --sweep: full comment history of each discussion holding a bare trigger")
 		listBare    = flag.Bool("bare-trigger-discussions", false, "with --sweep: print the discussions that need --context, then exit")
+		// The surveyor's maintainer-comment sweep (monorepo#3163): one row per candidate,
+		// bound to the artifact named by the comment's OWN permalink. See candidates.go.
+		candidates = flag.Bool("candidates", false, "report candidate maintainer comments instead of disclosure violations")
 	)
 	flag.Parse()
+
+	if *candidates && (*sweep || *historyFile != "" || *listBare || *all) {
+		fmt.Fprintln(os.Stderr, "comment-disclosure-drift: --candidates takes only --input and --author")
+		os.Exit(2)
+	}
 
 	if (*historyFile != "" || *listBare) && !*sweep {
 		fmt.Fprintln(os.Stderr, "comment-disclosure-drift: --context and --bare-trigger-discussions apply only to --sweep")
@@ -1051,6 +1059,10 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "comment-disclosure-drift: cannot read comments: %v\n", err)
 		os.Exit(2)
+	}
+
+	if *candidates {
+		os.Exit(runCandidates(raw, *author, os.Stdout, os.Stderr))
 	}
 
 	comments, err := decode(raw)
