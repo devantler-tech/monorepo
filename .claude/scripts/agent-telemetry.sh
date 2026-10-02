@@ -437,16 +437,46 @@ INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (y
 # Encode the resulting scalars as byte alternatives for rg; it never supplies
 # its own Unicode semantics. A failed or empty probe retains the broad fallback.
 SAFETY_NONASCII_RE='[^\x00-\x7F]'
+INJ_CASE_PROBED=0
+INJ_CASE_RE=''
 native_nonascii_candidates() {
-  local native_ps=()
+  local native_ps=() native_re='a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z|[a-z]|[A-Z]' native_post_re='^'
+  [ "${1:-all}" != case ] || native_post_re="($native_re)"
   jq -nr 'range(128;1114112) | select(. < 55296 or . > 57343) | [.] | implode' \
-    | grep -xiE '(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z|[a-z]|[A-Z]|[[:space:]])' \
+    | grep -xiE "($native_re|[[:space:]])" \
+    | grep -iE "$native_post_re" \
     | jq -Rrs 'split("\n") | map(select(length > 0) | @uri | gsub("%"; "\\x")) | join("|")'
   native_ps=("${PIPESTATUS[@]}")
-  [ "${#native_ps[@]}" -eq 3 ] && [ "${native_ps[0]}" -eq 0 ] \
-    && [ "${native_ps[1]}" -le 1 ] && [ "${native_ps[2]}" -eq 0 ]
+  [ "${#native_ps[@]}" -eq 4 ] && [ "${native_ps[0]}" -eq 0 ] \
+    && [ "${native_ps[1]}" -le 1 ] && [ "${native_ps[2]}" -le 1 ] && [ "${native_ps[3]}" -eq 0 ]
 }
 
+# The phrase regex has no Unicode space classes. On valid UTF-8 without
+# native case aliases its matches equal byte-locale matches. Check each pinned
+# file with streaming byte regexes, not shell variables holding large records.
+# Any alias, NUL, invalid UTF-8 or failed probe keeps the original locale.
+INJ_UTF8_RE='^([\x01-\x7F]|[\xC2-\xDF][\x80-\xBF]|\xE0[\xA0-\xBF][\x80-\xBF]|[\xE1-\xEC\xEE-\xEF][\x80-\xBF]{2}|\xED[\x80-\x9F][\x80-\xBF]|\xF0[\x90-\xBF][\x80-\xBF]{2}|[\xF1-\xF3][\x80-\xBF]{3}|\xF4[\x80-\x8F][\x80-\xBF]{2})*$'
+injection_locale() {
+  local f="$1" len="$2" ps=() alias_re='\x00'
+  if [ "$INJ_CASE_PROBED" != 1 ] || ! command -v rg >/dev/null 2>&1; then
+    printf '%s\n' C.UTF-8; return 0
+  fi
+  [ -z "$INJ_CASE_RE" ] || alias_re="$INJ_CASE_RE|$alias_re"
+  snapshot_bytes "$f" "$len" \
+    | rg --no-config --no-unicode --text --count --regexp "$alias_re" >/dev/null
+  ps=("${PIPESTATUS[@]}")
+  if [ "${#ps[@]}" -ne 2 ] || [ "${ps[0]}" -ne 0 ] || [ "${ps[1]}" -ne 1 ]; then
+    printf '%s\n' C.UTF-8; return 0
+  fi
+  snapshot_bytes "$f" "$len" \
+    | rg --no-config --no-unicode --text --count --invert-match --regexp "$INJ_UTF8_RE" >/dev/null
+  ps=("${PIPESTATUS[@]}")
+  if [ "${#ps[@]}" -eq 2 ] && [ "${ps[0]}" -eq 0 ] && [ "${ps[1]}" -eq 1 ]; then
+    printf '%s\n' C
+  else
+    printf '%s\n' C.UTF-8
+  fi
+}
 # Keep the POSIX phrase detector authoritative, but avoid its expensive UTF-8
 # scan of large payloads that cannot contain a match (#3761). Retain every
 # native non-ASCII case alias (or all such bytes if the probe was unavailable).
@@ -454,13 +484,13 @@ native_nonascii_candidates() {
 # numbers after filtering would corrupt provenance. Both branches return the
 # same numbered raw lines and record any failed stage as incomplete evidence.
 injection_matching_lines() {
-  local f="$1" len="$2" inj_ps=()
+  local f="$1" len="$2" phrase_locale="${3:-C.UTF-8}" inj_ps=()
   if command -v rg >/dev/null 2>&1; then
     snapshot_bytes "$f" "$len" \
       | rg --no-config --no-unicode --text --ignore-case --no-heading \
           --no-filename --line-number --color never \
           --regexp "($INJ_PHRASE_RE|$SAFETY_NONASCII_RE)" \
-      | grep -iE "$INJ_PHRASE_RE" 2>/dev/null
+      | LC_ALL="$phrase_locale" grep -iE "$INJ_PHRASE_RE" 2>/dev/null
     inj_ps=("${PIPESTATUS[@]}")
     if [ "${#inj_ps[@]}" -eq 3 ] && [ "${inj_ps[0]}" -eq 0 ] \
        && [ "${inj_ps[1]}" -le 1 ] && [ "${inj_ps[2]}" -le 1 ]; then return 0; fi
@@ -481,18 +511,19 @@ injection_matching_lines() {
 # definition text. Provenance makes every occurrence inspectable while the
 # scorecard's existing count remains fail-closed and unchanged.
 emit_injection_hits() {
-  local f="$1" len="$2" session line raw record phrase
+  local f="$1" len="$2" session line raw record phrase phrase_locale
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
-  injection_matching_lines "$f" "$len" \
+  phrase_locale=$(injection_locale "$f" "$len")
+  injection_matching_lines "$f" "$len" "$phrase_locale" \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
         record=$(printf '%s' "$raw" | jq -r '.type // "malformed"' 2>/dev/null \
                  | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
         [ -n "$record" ] || record=malformed
-        printf '%s' "$raw" | grep -hoiE "$INJ_PHRASE_RE" \
+        printf '%s' "$raw" | LC_ALL="$phrase_locale" grep -hoiE "$INJ_PHRASE_RE" \
           | while IFS= read -r phrase || [ -n "$phrase" ]; do
               # Redact while credential prefixes still retain their original
               # case. Lowercasing first defeats case-sensitive AWS/JWT masks.
@@ -610,11 +641,12 @@ injection_snapshot_drift() {
 # both. Classify the matched STRING path, never the whole record. If parsing or
 # reconciliation is uncertain, retain every raw occurrence as other content.
 emit_injection_classes() {
-  local f="$1" len="$2" session line raw runtime_phrases
+  local f="$1" len="$2" session line raw runtime_phrases phrase_locale
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
-  injection_matching_lines "$f" "$len" \
+  phrase_locale=$(injection_locale "$f" "$len")
+  injection_matching_lines "$f" "$len" "$phrase_locale" \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
@@ -666,7 +698,7 @@ emit_injection_classes() {
         # occurrences from the class file entirely — the counts would stop
         # summing to TOTAL instead of failing loudly. `|` is safe as the
         # separator because the filter above admits only [a-z0-9 ._:/@+-].
-        printf '%s' "$raw" | grep -hoiE "$INJ_PHRASE_RE" \
+        printf '%s' "$raw" | LC_ALL="$phrase_locale" grep -hoiE "$INJ_PHRASE_RE" \
           | redact | tr '[:upper:]' '[:lower:]' \
           | phrase_class_keys \
           | awk -v S="$session" -v L="$line" -v RT="$runtime_phrases" '
@@ -3637,9 +3669,14 @@ if want safety; then
          && [ "${#safety_extra}" -lt 4096 ]; then
         SAFETY_NONASCII_RE="$safety_extra"
       fi
+      if safety_case=$(native_nonascii_candidates case) && [ "${#safety_case}" -lt 4096 ]; then
+        INJ_CASE_RE="$safety_case"
+        INJ_CASE_PROBED=1
+      fi
     fi
     while IFS="$(printf '\t')" read -r len f; do
-      injection_matching_lines "$f" "$len" | grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null
+      phrase_locale=$(injection_locale "$f" "$len")
+      injection_matching_lines "$f" "$len" "$phrase_locale" | LC_ALL="$phrase_locale" grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null
     done < "$INJSNAP" | redact | tr '[:upper:]' '[:lower:]' \
       | while IFS= read -r phrase || [ -n "$phrase" ]; do
           [ -n "$phrase" ] || continue
