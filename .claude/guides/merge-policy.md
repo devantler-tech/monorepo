@@ -143,6 +143,7 @@ owned by someone else — and leave it alone this run — when any of these hold
 | A **human** comment or review within the last **~2h** | A person is engaged right now |
 | A review request at the current head, **still inside its provider's response envelope** | That lane owns the next move |
 | An in-flight `merge_group` run for that PR | It is already being merged |
+| A live process **outside your own session** working in a local checkout of its head branch (`holder=live:`) | A session is mid-flight here, whether or not it has published anything |
 
 🔴 **A reviewer's COMPLETED output is the opposite of an ownership signal — it is your cue to act.**
 Row 2 says *human* deliberately. A finished CodeRabbit, Codex or Bugbot review is the next move having
@@ -169,6 +170,19 @@ the same asymmetry used elsewhere, since wrongly claiming a push costs a collisi
 disclaiming one costs a delay. The survey reports the branch's lane alongside the push age so this
 needs no re-derivation; the discount itself is yours to apply, because only you know what you created.
 
+🔴 **The last row is read from this host's processes, not from the forge — and it needs no window**
+(monorepo#3067). The other four are published events, and a session publishes nothing while it
+reads, builds or waits on CI: `#3053` read idle on all four, its push 3h24m old, while two live
+sessions worked in its worktree. The same miss was recorded at t1370, and each was caught only by
+a manual `lsof`. A live process is a **current** fact, so it does not expire; it is re-read
+instead, and holds only while the process lives. Every survey reports it as `holder=`, and you
+re-read it with `.claude/scripts/pr-worktree-holder.sh`, fed the PR's `gh pr view` JSON exactly as
+the survey does, immediately before your first push to a branch you did not create. `self:` is your
+own session and parks nothing — row 1's own-push exclusion, decided from process ancestry.
+**`unknown:` is never "no live holder"**: report it as a named gap, and the four published-event
+rows decide exactly as they did before this row existed. It covers lanes on this host only; a fork
+head or the Cursor cloud lane has no local process and keeps the four.
+
 Nothing else parks a PR. Age, size, difficulty, an unfamiliar author, a `HANDS-OFF` note inherited from
 memory, or a branch shape you did not create are **not** reasons to skip one — re-verify against live
 state and act.
@@ -181,7 +195,7 @@ the request is spent, not in flight: it reserves nothing, and the PR is yours to
 `no-gate` marker and continue down the lane order. Treat a reviewer that never responds as an
 unavailable lane, never as an owner.
 
-🔴 **What expires is the ACTIVITY signal, never an actionable maintainer REQUIREMENT.** The four rows
+🔴 **What expires is the ACTIVITY signal, never an actionable maintainer REQUIREMENT.** The rows
 above answer "is someone mid-flight right now", and that question is correctly time-boxed. A
 maintainer comment saying `do not merge` or asking for a redesign answers a different question —
 whether the change is wanted as it stands — and nothing about it becomes less true two hours later.

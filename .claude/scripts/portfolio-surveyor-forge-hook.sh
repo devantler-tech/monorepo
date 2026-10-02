@@ -94,7 +94,7 @@ verify_asset "${thread_counter_relative}"
 # surveyor's environment widen the read-only allowlist to a program of its
 # choosing, which is exactly the bypass the SCOPE and GUARD pins above close.
 #
-# Seven programs are declared, and all are READS. pr-ownership-disclosure.sh
+# Eight programs are declared, and all are READS. pr-ownership-disclosure.sh
 # classifies a `devantler` PR body as the maintainer's interactive work or the
 # routine's own output. Without a route for it the surveyor falls back to
 # hand-deriving that verdict, and that substitution has already misread live
@@ -123,6 +123,12 @@ verify_asset "${thread_counter_relative}"
 # kata-measure-date.sh reads ONE Kata issue body on stdin and says whether its structured
 # `**Measure on:**` date has arrived. Undeclared, the surveyor read the date by eye and reported
 # both open Katas as past due from their createdAt (monorepo#2838).
+# pr-worktree-holder.sh reads a PR's head branch from the forge JSON on stdin and says
+# whether a live process on this host works in a local checkout of it. It is the one
+# declared program that reads beyond stdin — the process table (`lsof`, `ps`) and local
+# git metadata — but never a path or argument taken from its input. Every other
+# active-work signal is a published event, and #3053 read idle on all of them while
+# two sessions worked in its worktree (monorepo#3067).
 #
 # Absence fails CLOSED, consistently with DESIRED_STATE above: a checkout that
 # cannot present its own reviewed files does not get a survey. Exiting 0 with
@@ -134,7 +140,8 @@ pr-unresolved-threads.sh
 coderabbit-summary-verdict.sh
 local-review-verdict.sh
 coderabbit-review-verdict.sh
-kata-measure-date.sh'
+kata-measure-date.sh
+pr-worktree-holder.sh'
 
 consumer_classifiers=''
 for classifier_name in ${classifier_names}; do

@@ -962,7 +962,7 @@ cp "${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.js
   "${session_main}/.claude/plugin-consumption/"
 for session_classifier_name in pr-ownership-disclosure.sh programmed-bot-review-exemption.sh \
   pr-unresolved-threads.sh coderabbit-summary-verdict.sh local-review-verdict.sh \
-  coderabbit-review-verdict.sh kata-measure-date.sh; do
+  coderabbit-review-verdict.sh kata-measure-date.sh pr-worktree-holder.sh; do
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_main}/.claude/scripts/"
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_other}/.claude/scripts/"
 done
@@ -1225,6 +1225,32 @@ kata_sites="$(grep -o '[^[:space:]"`'"'"']*kata-measure-date\.sh[^[:space:]`]*' 
   grep -vxF '<repo-root>/.claude/scripts/kata-measure-date.sh' || true)"
 [ -z "${kata_sites}" ] ||
   fail "surveyor overlay calls kata-measure-date.sh by a form the guard refuses: ${kata_sites}"
+
+# The worktree-holder probe likewise (monorepo#3067): every other active-work signal is a published
+# event, and #3053 read idle on all of them while two sessions worked in its worktree. Run the
+# overlay's OWN pipeline through the hook, and prove a relative-path call is refused.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+holder_command="$(grep -o '`gh pr view [^`]*pr-worktree-holder\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${holder_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded pr-worktree-holder.sh pipeline (monorepo#3067)"
+holder_command="${holder_command//<repo-root>/${repo_root}}"
+holder_command="${holder_command//<repo>/monorepo}"
+holder_command="${holder_command//<n>/3053}"
+holder_payload="$(jq -nc --arg cmd "${holder_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${holder_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's worktree-holder pipeline (monorepo#3067)"
+relative_holder_command="${holder_command//${repo_root}\/.claude\/scripts\//.claude/scripts/}"
+[ "${relative_holder_command}" != "${holder_command}" ] ||
+  fail "negative control did not rewrite the worktree-holder path (monorepo#3067)"
+relative_holder_payload="$(jq -nc --arg cmd "${relative_holder_command}" '{tool_input: {command: $cmd}}')"
+if run_surveyor_hook "${relative_holder_payload}" >/dev/null 2>&1; then
+  fail "consumer surveyor hook admitted a RELATIVE pr-worktree-holder.sh call (monorepo#3067)"
+fi
+holder_sites="$(grep -o '[^[:space:]"`'"'"']*pr-worktree-holder\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/pr-worktree-holder.sh' || true)"
+[ -z "${holder_sites}" ] ||
+  fail "surveyor overlay calls pr-worktree-holder.sh by a form the guard refuses: ${holder_sites}"
 
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
