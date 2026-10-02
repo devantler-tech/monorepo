@@ -162,7 +162,8 @@ to_epoch() { date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || date -u 
 
 # Classify: per lane, the newest ok, the newest fail (with its cause), the newest usage-limit, and the
 # latest stated retry window. CodeRabbit posts each refusal twice (summary and command reply) and only
-# one may state the window, so the window comes from any refusal unless it ended before the newest one.
+# one may state the window, so the window comes from the latest refusal that states one, unless it
+# ended before the newest refusal.
 down=0
 for lane in cr codex bugbot; do
   line="$(awk -F'\t' -v l="$lane" '
