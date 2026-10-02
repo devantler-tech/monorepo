@@ -51,6 +51,10 @@
 #   agent-claim.sh is-stale <issue> [--remote NAME] [--repo-dir DIR]
 #                                 [--lease-hours N]
 #
+# <issue> may also be a pull-request number: issues and PRs share one number
+# sequence per repository, so finding-fix work on an existing PR is claimed as
+# agent-claim/<pr-number> without colliding with any issue claim (monorepo#2999).
+#
 # Exit codes:
 #   0  success (acquired / renewed / tip matches / retired / is stale)
 #   1  lost the race / tip mismatch / not stale
