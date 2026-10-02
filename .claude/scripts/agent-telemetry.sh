@@ -517,7 +517,7 @@ emit_injection_hits() {
 
   phrase_locale=$(injection_locale "$f" "$len")
   injection_matching_lines "$f" "$len" "$phrase_locale" \
-    | while IFS=: read -r line raw; do
+    | while LC_ALL=C IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
         record=$(printf '%s' "$raw" | jq -r '.type // "malformed"' 2>/dev/null \
@@ -647,7 +647,7 @@ emit_injection_classes() {
 
   phrase_locale=$(injection_locale "$f" "$len")
   injection_matching_lines "$f" "$len" "$phrase_locale" \
-    | while IFS=: read -r line raw; do
+    | while LC_ALL=C IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
         # Runtime-supplied developer context as STRINGS rather than a bare
