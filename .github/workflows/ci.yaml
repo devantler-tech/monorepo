@@ -110,9 +110,12 @@ jobs:
               - 'docs/package-lock.json'
               - 'docs/scripts/audit-dependencies.sh'
               - 'docs/scripts/audit-dependencies.test.sh'
-              # The contract test compares both workflow call sites.
+              - 'docs/scripts/npm-toolchain.test.sh'
+              # The contract tests compare every workflow that installs, audits or
+              # publishes the site.
               - '.github/workflows/audit-docs.yaml'
               - '.github/workflows/ci.yaml'
+              - '.github/workflows/publish-pages.yaml'
             active-projects:
               # The retired-link guard greps the WHOLE content tree, so it must
               # run for ANY content change — gating it on the two pages the
@@ -868,7 +871,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: docs/package-lock.json
       - name: Install dependencies
@@ -895,7 +898,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
+      # Every workflow that installs, audits or publishes the site must use the npm
+      # major that writes docs/package-lock.json.
+      - name: Test npm toolchain contract
+        working-directory: docs
+        run: ./scripts/npm-toolchain.test.sh
       - name: Test audit wrapper
         working-directory: docs
         run: ./scripts/audit-dependencies.test.sh
@@ -917,7 +925,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: docs/package-lock.json
       - name: Install MDX parser dependencies

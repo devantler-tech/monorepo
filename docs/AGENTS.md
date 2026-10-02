@@ -8,7 +8,7 @@ The [devantler.tech](https://devantler.tech) website: an Astro + Starlight stati
 ## Build and validate
 
 Run these before opening any `docs/` PR. Commands are written from the repository root, exactly as
-CI runs them (Node ≥ 22.18).
+CI runs them (Node 24 with npm 11).
 
 | Check | Command |
 |---|---|
