@@ -186,14 +186,16 @@ resolve() {
     refs/heads/?*) R_BRANCH="${head#refs/heads/}" ;;
     *)
       # Detached mid-rebase or mid-bisect: the checkout is still working on the branch it names.
+      # Read with $(...), which keeps a value whose file lacks a trailing newline; `read` would not.
       for f in rebase-merge/head-name rebase-apply/head-name; do
-        if [ -f "${gitdir}/${f}" ] && IFS= read -r head <"${gitdir}/${f}"; then
+        if [ -f "${gitdir}/${f}" ] && head="$(cat -- "${gitdir}/${f}" 2>/dev/null)"; then
           case "${head}" in
             refs/heads/?*) R_BRANCH="${head#refs/heads/}" && break ;;
           esac
         fi
       done
-      if [ -z "${R_BRANCH}" ] && [ -f "${gitdir}/BISECT_START" ] && IFS= read -r head <"${gitdir}/BISECT_START"; then
+      if [ -z "${R_BRANCH}" ] && [ -f "${gitdir}/BISECT_START" ] &&
+        head="$(cat -- "${gitdir}/BISECT_START" 2>/dev/null)"; then
         case "${head}" in
           '' | *[!0-9a-f]*) R_BRANCH="${head}" ;;
         esac

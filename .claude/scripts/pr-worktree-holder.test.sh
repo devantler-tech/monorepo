@@ -70,7 +70,8 @@ g -C "${main}" worktree add -q -b claude/rebasing-10 "${w3}"
 w3_gitdir="$(g -C "${w3}" rev-parse --path-format=absolute --git-dir)"
 g -C "${w3}" switch -q --detach
 mkdir -p "${w3_gitdir}/rebase-merge"
-printf 'refs/heads/claude/rebasing-10\n' >"${w3_gitdir}/rebase-merge/head-name"
+# Written without a trailing newline: the branch must still be read.
+printf 'refs/heads/claude/rebasing-10' >"${w3_gitdir}/rebase-merge/head-name"
 # A standalone clone elsewhere on the host whose remote is not called `origin`.
 elsewhere="${sandbox}/elsewhere"
 g init -q "${elsewhere}"
