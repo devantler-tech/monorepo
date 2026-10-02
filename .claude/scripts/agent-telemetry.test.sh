@@ -2912,7 +2912,7 @@ mkdir -p "$FIX/safety-timeout-shim"
 cat > "$FIX/safety-timeout-shim/grep" <<'EOF'
 #!/usr/bin/env bash
 if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ]; then
-  printf '%s\n' "$" > "$SAFETY_TEST_STARTED"
+  printf '%s\n' "$$" > "$SAFETY_TEST_STARTED"
   sleep 4
   : > "$SAFETY_TEST_COMPLETED"
 fi
@@ -2924,15 +2924,26 @@ BOUNDED_OUT=$(PATH="$FIX/safety-timeout-shim:$PATH" SAFETY_TEST_GREP="$candidate
   CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+bounded_rc=$?
+if [ "$bounded_rc" -eq 2 ]; then
+  ok "a safety deadline exits 2 so callers cannot treat UNKNOWN as success"
+else
+  bad "a safety deadline exits 2 so callers cannot treat UNKNOWN as success" "rc=$bounded_rc"
+fi
 check "a safety deadline reports UNKNOWN instead of a clean table" "$BOUNDED_OUT" "UNKNOWN: safety scan exceeded"
 check "a safety deadline qualifies the entire selected scope" "$BOUNDED_OUT" "entire selected safety scope is UNMEASURED"
 if [ -s "$FIX/safety-worker-started" ] && [ ! -e "$FIX/safety-worker-completed" ]; then
   safety_stalled_pid=$(cat "$FIX/safety-worker-started")
-  if kill -0 "$safety_stalled_pid" 2>/dev/null; then
-    bad "the safety deadline terminates its own stalled descendants" "worker is still alive"
-  else
-    ok "the safety deadline terminates its own stalled descendants"
-  fi
+  case "$safety_stalled_pid" in
+    ''|*[!0-9]*) bad "the safety timeout fixture records the real stalled descendant PID" "pid=$safety_stalled_pid" ;;
+    *)
+      ok "the safety timeout fixture records the real stalled descendant PID"
+      if kill -0 "$safety_stalled_pid" 2>/dev/null; then
+        bad "the safety deadline terminates its own stalled descendants" "worker is still alive"
+      else
+        ok "the safety deadline terminates its own stalled descendants"
+      fi ;;
+  esac
 else
   bad "the safety deadline terminates its own stalled descendants" "stall was not reached or completed after the deadline"
 fi
