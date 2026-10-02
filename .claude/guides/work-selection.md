@@ -159,17 +159,24 @@ governs the issue work that follows.) Two rules enforce that:
    ordinary actionable work. Or (g) its open native blocking-dependency count is above zero — GitHub's
    *blocked by* relationship, read as `issueDependenciesSummary.blockedBy` on the issue itself
    (monorepo#3144). Like (a), it is a live, structured fact re-read at every selection, so it needs
-   no `blocked` label and no `**Blocker:**` line, and it holds only while a blocker is open. **Read
-   the count, never the blocker nodes:** a native dependency may point at an out-of-portfolio
-   repository, and fetching its metadata crosses the portfolio boundary, which is why the surveyor
-   reads only the same count. Report the skip with the open count, and name a blocker only when the
-   issue's own record already identifies it as a `devantler-tech` issue; a wait on anything outside
-   the portfolio is recorded and verified under (b), never as a native dependency. A skip never
-   demotes the work that unblocks it: when (g) skips a rung-2 or rung-3 issue whose own record names
-   an actionable in-portfolio blocker, select that blocker at the skipped issue's rung. When the count
-   reaches zero the issue is a candidate again, but a blocker that **closed** is unproven, not
-   cleared — apply *A closed internal blocker proves nothing by itself* below before building on it.
-   A missing or malformed summary is UNKNOWN: it is neither a skip nor evidence the issue is unblocked.
+   no `blocked` label and no `**Blocker:**` line, and it holds only while a blocker is open; for (g)
+   that live count **is** the verification the blocker rules below ask for. **Read the count, never
+   the blocker nodes' metadata:** a native dependency may point at an out-of-portfolio repository,
+   and fetching its metadata crosses the portfolio boundary, which is why the surveyor reads only the
+   same count. Report the skip with the open count, and name a blocker only when the issue's own
+   record already identifies it as a `devantler-tech` issue; when that record accounts for fewer
+   blockers than the open count, report the issue as under-recorded so the record is repaired. A wait
+   on anything outside the portfolio is recorded and verified under (b), never as a native
+   dependency. A skip never demotes the work that unblocks it: when (g) skips a rung-2 or rung-3
+   issue whose record names an in-portfolio blocker, first confirm that blocker is one of the open
+   ones by comparing opaque node ids alone — the skipped issue's `blockedBy` node `id`s against the
+   named issue's own `id`, reading no other field — and, if it is and is actionable, select it at the
+   skipped issue's rung; otherwise just report the skip. When the count reaches zero the issue is a
+   candidate again. A blocker its own record names that has since closed is unproven, not cleared —
+   apply *A closed internal blocker proves nothing by itself* below before building on it; a closed
+   blocker the record does not name clears (g) on the open count alone, because identifying it would
+   take the read this clause forbids. A missing or malformed summary is UNKNOWN: it is neither a skip
+   nor evidence the issue is unblocked.
    **Completion check — ownership is not completion (monorepo#2994).** (a)–(g) answer *who* holds an
    issue; none of them can see that the work **already shipped**, and the oldest issues are exactly the
    ones most likely to have been delivered by a PR that said only `Part of #N` or never linked them.
@@ -208,7 +215,8 @@ governs the issue work that follows.) Two rules enforce that:
    progress on the big thing across runs instead of perpetually deferring it whole. Before skipping any
    issue as "blocked"/"gated", **re-verify the blocker against live state** (memory's "gated" notes go
    stale) and **name the concrete blocker in the report**; an
-   unverifiable or merely-inherited "gated" is not a skip.
+   unverifiable or merely-inherited "gated" is not a skip. For skip clause (g), the live open count is
+   that verification, and a blocker is named only from the issue's own record.
    **External-blocker verification (skip clause (b) — monorepo#2243).** An unattended run must
    live-verify an external blocker *without* inspecting a third-party repository (that stays behind
    the *Professional-work repository boundary*). Use public **non-repository** channels only — the
@@ -301,8 +309,8 @@ governs the issue work that follows.) Two rules enforce that:
    `**Blocker:** devantler-tech/ksail#6361 | upstream | last-verified 2026-08-22: open; superseded #4972 (closed after pausing the schedule)`.
    When you cannot tell which case applies, say so and keep the work parked. Deduplicating an
    issue that something is parked on re-points those dependents in the same step. Skip clause (g)
-   defers to this rule once a native blocker closes: a zero open count makes the issue a candidate,
-   not a proven unblock.
+   defers to this rule for a closed native blocker the issue's own record names: a zero open count
+   makes the issue a candidate, not a proven unblock.
    **A "maintainer decision" is NOT a skip reason — don't block yourself on it.** The maintainer does
    **not** want to make issue-level decisions, and a passive "gated / awaiting-maintainer / needs a
    decision" note in a report or memory *never reaches him* — that passive parking **is** the
@@ -357,8 +365,8 @@ put the fire out first (open a tracking issue only if it aids follow-up), then r
 |---|---|---|
 | **0** | **Live breakage** | CI red on `main`, a broken build or site, an urgent security fix. Preempts everything and is the one exception to capture-before-you-build. **A failing GitHub-*managed* run is NOT breakage** — identify the class by the **property, never by an enumerated path**: `event: dynamic` with a `path` under `dynamic/`, meaning **no workflow file exists in the repository** to fix and GitHub refuses to re-run it (`403`). That covers `dynamic/github-code-scanning/*` **and** `dynamic/dependabot/*` and whatever GitHub adds next; each is reported `GITHUB-MANAGED (NO-ACTION)` and never counts against `nothing_on_fire`. **Only the first failure of a streak** — a managed run still red (`failure`, `timed_out` or `startup_failure`) on the next run of `main` is ours to repair (the build, the scanning or dependency configuration, or moving off default setup) and IS actionable (see the surveyor; [`managed-run-streak.sh`](../scripts/managed-run-streak.sh) implements this judgement, and wiring it into the survey is [#3586](https://github.com/devantler-tech/monorepo/issues/3586)). |
 | **1** | **Open PRs — INCLUDING your own drafts** | Every actionable open PR in the portfolio, **draft and non-draft alike**, whoever authored it — your own lane, a sibling lane, the maintainer's interactive sessions, our bots, and external contributors — driven to a terminal state: merged, closed with the reason recorded, or parked on a **named, live-verified** blocker. Exact `renovate[bot]`/`dependabot[bot]` dependency PRs may yield to healthy repository automation, but become actionable here as soon as live evidence shows that automation cannot carry the current head to merge (see *Merge policy*). An external branch is still never run locally (see *You own EVERY pull request in the portfolio*). |
-| **2** | **Security issues** | `type:Security`, regardless of age. |
-| **3** | **Bugs** | `type:Bug`, regardless of age. |
+| **2** | **Security issues** | `type:Security`, regardless of age, plus the confirmed in-portfolio blocker of one skipped under clause (g). |
+| **3** | **Bugs** | `type:Bug`, regardless of age, plus the confirmed in-portfolio blocker of one skipped under clause (g). |
 | **4** | **Oldest actionable issue** | Everything else, oldest-first (see *Drain oldest-first*). |
 
 🔴 **Rung 0 includes the live prod cluster, and GitHub cannot show it.** On 2026-08-27 a merged

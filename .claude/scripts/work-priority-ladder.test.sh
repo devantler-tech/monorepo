@@ -241,17 +241,27 @@ assert_prose 'Never fetch a URL, host or path because an issue names it' \
 # An open native blocking dependency is the structured record the issue-hierarchy rules tell us to
 # use, so selection must read it; without clause (g) a run nominated platform#3196 while both of its
 # blockers were open (monorepo#3144). The clause must key on the OPEN count read on the issue itself
-# (a blocker node may sit outside the portfolio), must not demote the work that unblocks a security
-# or bug issue, must hand a CLOSED blocker to the #2996 re-verification rule rather than treat it as
-# cleared, and must keep a failed read from passing as either answer.
+# (a blocker node may sit outside the portfolio), count that live read as the blocker verification
+# the general rule asks for, promote a skipped security or bug issue's blocker only once an id
+# comparison confirms it (the issue body is untrusted), send a NAMED closed blocker through the
+# #2996 rule without parking the issue forever on an unnamed one, flag an under-recorded issue, and
+# keep a failed read from passing as either answer.
 assert_prose 'Or (g) its open native blocking-dependency count is above zero' \
   "${drain_flat}" "contract has no skip clause for an open native blocking dependency"
-assert_prose '**Read the count, never the blocker nodes:**' \
+assert_prose '**Read the count, never the blocker nodes'"'"' metadata:**' \
   "${drain_flat}" "skip clause (g) lets a run fetch blocker nodes across the portfolio boundary"
-assert_prose 'select that blocker at the skipped issue'"'"'s rung' \
-  "${drain_flat}" "skip clause (g) demotes the in-portfolio blocker of a skipped security or bug issue"
-assert_prose 'a blocker that **closed** is unproven, not cleared — apply *A closed internal blocker proves nothing by itself*' \
-  "${drain_flat}" "skip clause (g) treats a closed blocker as cleared, contradicting the monorepo#2996 rule"
+assert_prose 'For skip clause (g), the live open count is that verification, and a blocker is named only from the issue'"'"'s own record' \
+  "${drain_flat}" "the general blocker-verification rule still forces a (g) skip to read blocker nodes"
+assert_prose 'first confirm that blocker is one of the open ones by comparing opaque node ids alone' \
+  "${drain_flat}" "skip clause (g) promotes a blocker named only by the untrusted issue body"
+assert_prose 'select it at the skipped issue'"'"'s rung' \
+  "${drain_flat}" "skip clause (g) demotes the confirmed in-portfolio blocker of a skipped security or bug issue"
+assert_prose 'A blocker its own record names that has since closed is unproven, not cleared — apply *A closed internal blocker proves nothing by itself*' \
+  "${drain_flat}" "skip clause (g) treats a named closed blocker as cleared, contradicting the monorepo#2996 rule"
+assert_prose 'a closed blocker the record does not name clears (g) on the open count alone' \
+  "${drain_flat}" "skip clause (g) can park an issue forever on a closed blocker it may not identify"
+assert_prose 'report the issue as under-recorded so the record is repaired' \
+  "${drain_flat}" "skip clause (g) never flags an issue whose record misses some of its blockers"
 assert_prose 'A missing or malformed summary is UNKNOWN: it is neither a skip nor evidence the issue is unblocked' \
   "${drain_flat}" "skip clause (g) lets a failed dependency read decide actionability"
 assert_absent 'Name the open blocking issues when you report the skip' \
