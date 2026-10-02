@@ -289,9 +289,8 @@ nested_failed() {
 
 sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [salvage_age_hours] [abort|continue]
   local path=$1 wt_root=${2:-} salvage=${3:-$SALVAGE_AGE_HOURS} on_fail=${4:-abort} label toplevel expected
-  # NOTE: no early return for a missing .claude/worktrees. The per-repo script has its
-  # own no-root path that still prunes stale registrations — returning here made that
-  # path unreachable through the wrapper, the only way it is ever invoked. A path that is
+  # NOTE: no early return for a missing .claude/worktrees. The per-repo script reports a
+  # missing root itself, and the wrapper is the only way it is ever invoked. A path that is
   # not a repository at all is handled by the toplevel check below (it resolves to the
   # parent, so the mismatch SKIPs it) rather than by a guard that pre-empts that report.
   # Only sweep a repo whose toplevel resolves to ITSELF. A submodule with broken
@@ -497,7 +496,7 @@ sweep_nested_submodule_worktrees() {
     nested_failed "cannot list the worktrees of $repo"; return 0; }
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
-    # A registration whose directory is gone has nothing nested; the repo's sweep prunes it.
+    # A registration whose directory is gone has nothing nested to sweep.
     [ -d "$wt" ] || continue
     wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || { nested_failed "cannot resolve $wt"; continue; }
     case "$wt_real" in

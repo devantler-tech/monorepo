@@ -220,7 +220,8 @@ fi
 #    `check_existing_worktrees`; prune drops the admin entry of any worktree that is missing OR merely
 #    unverifiable, so the sweep found nothing and reported `isolated ✓` on a colliding tree.
 #    The fixture makes the worktree UNSEARCHABLE (chmod 0400): `-d` still passes, so the entry is not
-#    skipped as "missing", while both `cd` and `git -C` fail — i.e. genuinely unverifiable.
+#    skipped as "missing", while both `cd` and `git -C` fail — i.e. genuinely unverifiable. Nothing was
+#    read, so it is UNKNOWN (exit 2), not a confirmed break (#3725) — but never a pass.
 c7="$tmp/c7"
 mk_super "$c7"
 live_wt="$c7/live-wt"
@@ -236,10 +237,10 @@ if (cd "$live_wt") 2>/dev/null; then
   echo "SKIP: #2460 end-to-end — this platform can still enter a 0400 directory (vacuous otherwise)"
 else
   out="$(cd "$c7/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
-  report "unverifiable worktree: --check exits non-zero (fails closed)" \
-    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
-  report "unverifiable worktree: reports ISOLATION BROKEN and names it" \
-    "$(grep -q 'ISOLATION BROKEN' <<<"$out" && grep -q 'live-wt' <<<"$out" && echo yes || echo no)" "$out"
+  report "unverifiable worktree: --check exits 2, UNKNOWN (fails closed, #3725)" \
+    "$([[ $rc -eq 2 ]] && echo yes || echo no)" "rc=$rc $out"
+  report "unverifiable worktree: reports ISOLATION UNKNOWN and names it" \
+    "$(grep -q 'ISOLATION UNKNOWN' <<<"$out" && grep -q 'live-wt' <<<"$out" && echo yes || echo no)" "$out"
   report "unverifiable worktree: never reports the submodule isolated" \
     "$(grep -q 'sub — isolated' <<<"$out" && echo no || echo yes)" "$out"
   # The evidence-destruction half: the sibling's admin entry must SURVIVE the check.
@@ -283,10 +284,10 @@ if (cd "$c9_wt") 2>/dev/null; then
   echo "SKIP: #2460 self-exclusion — this platform can still enter a 0400 directory (vacuous otherwise)"
 else
   out="$(cd "$c9/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
-  report "probe self-exclusion: an unverifiable sibling under a 'probe-iso-*' PATH still fails --check" \
-    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+  report "probe self-exclusion: an unverifiable sibling under a 'probe-iso-*' PATH still fails --check (exit 2)" \
+    "$([[ $rc -eq 2 ]] && echo yes || echo no)" "rc=$rc $out"
   report "probe self-exclusion: it is reported, not silently skipped" \
-    "$(grep -q 'ISOLATION BROKEN' <<<"$out" && echo yes || echo no)" "$out"
+    "$(grep -q 'ISOLATION UNKNOWN' <<<"$out" && echo yes || echo no)" "$out"
 fi
 
 # 10. The scoped removal must stand on its own. `worktree remove` normally deletes the admin entry, so
@@ -1715,6 +1716,164 @@ EXPECT_TEXT="no gitlink recorded for 'sub' at HEAD" exit_case "--advance: regist
 out="$(cd "$c67/super" && "$helper" --sync "$c67_from" 2>&1)" && rc=0 || rc=$?
 report "#3627: --sync: residue in a removed submodule (finding) exits 1" \
   "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc $out"
+
+# monorepo#3725 — the probe tells a CONFIRMED break or wrong repository (exit 1) from a read that
+# failed (exit 2, UNKNOWN): a 1 tells the caller to repair, which cannot help when the probe merely
+# could not look. Each failed read is injected with a PATH shim that fails exactly one git invocation,
+# so these cases hold as root too. A clean control runs first, so the shims are what changes the result.
+c76="$tmp/c76"
+mk_super "$c76"
+git -C "$c76/super/sub" worktree add -q --detach "$c76/live-wt"
+c76_git="$(command -v git)"
+# fail_shim <name> <bash condition on the git arguments> — prints a PATH dir whose git exits 128 when
+# the condition holds and runs the real git otherwise.
+fail_shim() {
+  local dir="$tmp/$1-shim"
+  mkdir -p "$dir"
+  cat >"$dir/git" <<EOF
+#!/usr/bin/env bash
+if $2; then exit 128; fi
+exec "$c76_git" "\$@"
+EOF
+  chmod +x "$dir/git"
+  printf '%s' "$dir"
+}
+# probe_run <shim dir or ""> <dir> <args...> — runs the helper there, setting `out` and `rc`.
+probe_run() {
+  local shim=$1 dir=$2
+  shift 2
+  rc=0
+  out="$(cd "$dir" && PATH="${shim:+$shim:}$PATH" "$helper" "$@" 2>&1)" || rc=$?
+}
+probe_run "" "$c76/super" --check
+report "#3725 control: the fixture with a live linked worktree passes --check" \
+  "$([[ $rc -eq 0 ]] && grep -q 'sub — isolated' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# shellcheck disable=SC2016 # the shim expands the condition, not this shell
+c76_top="$(fail_shim c76-top '[[ "$1" == -C && "$2" == sub && "$3 $4" == "rev-parse --show-toplevel" ]]')"
+probe_run "$c76_top" "$c76/super" --check
+report "#3725: --check: a failed top-level read exits 2 as UNKNOWN, not ISOLATION BROKEN" \
+  "$([[ $rc -eq 2 ]] && grep -q 'sub — ISOLATION UNKNOWN: git cannot resolve its top level' <<<"$out" &&
+    ! grep -q 'ISOLATION BROKEN' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+probe_run "$c76_top" "$c76/super" sub
+report "#3725: init: a failed top-level read after repair exits 2" \
+  "$([[ $rc -eq 2 ]] && grep -q "could not verify that 'sub' is isolated after repair" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+probe_run "$c76_top" "$c76/super" --advance sub
+report "#3725: --advance: a failed top-level read exits 2" \
+  "$([[ $rc -eq 2 ]] && grep -q "could not verify that 'sub' is isolated — refusing to advance" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# shellcheck disable=SC2016 # the shim expands the condition, not this shell
+c76_wt="$(fail_shim c76-wt '[[ "$1" == -C && "$2" == */live-wt && "$3 $4" == "rev-parse --show-toplevel" ]]')"
+probe_run "$c76_wt" "$c76/super" --check
+report "#3725: --check: a linked worktree git cannot read exits 2 and names it" \
+  "$([[ $rc -eq 2 ]] && grep -q "ISOLATION UNKNOWN: existing linked worktree '.*live-wt' cannot be read" <<<"$out" &&
+    ! grep -q 'ISOLATION BROKEN' <<<"$out" && ! grep -q 'sub — isolated' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# shellcheck disable=SC2016 # the shim expands the condition, not this shell
+c76_origin="$(fail_shim c76-origin '[[ "$1" == -C && "$2" == ./sub && "$3 $4" == "remote get-url" ]]')"
+probe_run "$c76_origin" "$c76/super" --check
+report "#3725: --check: a failed origin read exits 2, not WRONG REPOSITORY" \
+  "$([[ $rc -eq 2 ]] && grep -q 'sub — UNKNOWN: a git read failed while checking which repository it is' <<<"$out" &&
+    ! grep -q 'WRONG REPOSITORY' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+probe_run "$c76_origin" "$c76/super" sub
+report "#3725: init: a failed origin read refuses the repair with exit 2" \
+  "$([[ $rc -eq 2 ]] && grep -q "could not read which repository 'sub' is — refusing to repair it" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# shellcheck disable=SC2016 # the shim expands the condition, not this shell
+c76_add="$(fail_shim c76-add '[[ "$1" == -C && "$3 $4" == "worktree add" ]]')"
+probe_run "$c76_add" "$c76/super" --check
+report "#3725: --check: a probe worktree that cannot be created exits 2" \
+  "$([[ $rc -eq 2 ]] && grep -q 'sub — ISOLATION UNKNOWN: could not create a probe worktree' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# Confirmed problems keep exit 1. A foreign origin is the WRONG repository:
+c77="$tmp/c77"
+mk_super "$c77"
+git init -q "$c77/other-repo"
+git -C "$c77/super/sub" remote set-url origin "$c77/other-repo"
+EXPECT_TEXT="sub — WRONG REPOSITORY" exit_case "--check: a foreign origin (finding, #3725)" 1 "$c77/super" --check
+# A core.worktree in the SHARED config that names nothing: the main checkout still resolves through
+# its own config.worktree, but every new worktree inherits the dangling value. That is a confirmed
+# break that repair fixes, so it stays 1 — and the probe's own entry is not swept as an unread sibling.
+c78="$tmp/c78"
+mk_super "$c78"
+c78_m="$c78/super/.git/modules/sub"
+git config -f "$c78_m/config" extensions.worktreeConfig true
+git config -f "$c78_m/config.worktree" core.worktree "$(abspath "$c78/super/sub")"
+git config -f "$c78_m/config" core.worktree "$tmp/c78-does-not-exist"
+probe_run "" "$c78/super" --check
+report "#3725: --check: a dangling shared core.worktree is a confirmed break (exit 1)" \
+  "$([[ $rc -eq 1 ]] && grep -q 'sub — ISOLATION BROKEN: .*dangling core.worktree' <<<"$out" &&
+    ! grep -q 'probe-iso' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+shopt -s nullglob
+c78_left=("$c78_m/worktrees"/probe-iso-*)
+shopt -u nullglob
+report "#3725: --check: that probe still removes its own admin entry" \
+  "$([[ ${#c78_left[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${c78_left[*]:-none}"
+probe_run "" "$c78/super" sub
+report "#3725: init repairs it, and --check then passes" \
+  "$([[ $rc -eq 0 ]] && (cd "$c78/super" && "$helper" --check >/dev/null 2>&1) && echo yes || echo no)" "rc=$rc $out"
+
+# With one submodule broken and another unread, the confirmed finding outranks UNKNOWN and both are
+# reported.
+c79="$tmp/c79"
+mk_super "$c79"
+(cd "$c79/super" && git submodule add -q ../remote-sub sub2 && git commit -q -m "add sub2")
+git init -q "$c79/collider"
+git config -f "$c79/super/.git/modules/sub/config" core.worktree "$(abspath "$c79/collider")"
+# shellcheck disable=SC2016 # the shim expands the condition, not this shell
+c79_top="$(fail_shim c79-top '[[ "$1" == -C && "$2" == sub2 && "$3 $4" == "rev-parse --show-toplevel" ]]')"
+probe_run "$c79_top" "$c79/super" --check
+report "#3725: --check: a confirmed break outranks an unread submodule (exit 1, both reported)" \
+  "$([[ $rc -eq 1 ]] && grep -q 'sub — ISOLATION BROKEN' <<<"$out" && grep -q 'sub2 — ISOLATION UNKNOWN' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# A core.worktree naming nothing in the main checkout's own config: git cannot resolve its top level,
+# so --check cannot compare anything — UNKNOWN. When only the last component is missing git still reads
+# the gitdir, and init mode repairs it.
+c80b="$tmp/c80b"
+mk_super "$c80b"
+git config -f "$c80b/super/.git/modules/sub/config" core.worktree "$tmp/c80b-does-not-exist"
+EXPECT_TEXT="ISOLATION UNKNOWN: git cannot resolve its top level" exit_case "--check: git cannot resolve a dangling main checkout (failed read, #3725)" 2 "$c80b/super" --check
+EXPECT_TEXT="sub — isolated" exit_case "init: repairs a dangling main checkout git can still read (#3725)" 0 "$c80b/super" sub
+# With its parent missing too, every git command there fails, so git cannot read the submodule at all.
+# Init mode used to end on git's own status (128), with no message.
+c80="$tmp/c80"
+mk_super "$c80"
+git config -f "$c80/super/.git/modules/sub/config" core.worktree "$tmp/c80-does-not-exist/sub"
+EXPECT_TEXT="ISOLATION UNKNOWN: git cannot resolve its top level" exit_case "--check: git cannot read the submodule at all (failed read, #3725)" 2 "$c80/super" --check
+EXPECT_TEXT="git cannot read a gitdir for 'sub'" exit_case "init: git cannot read the submodule at all (failed read, #3725)" 2 "$c80/super" sub
+
+# Reads that failed SILENTLY before #3725 — each of these passed --check (exit 0) having examined
+# nothing. Permission-based, so each runs only where the mode is enforced (not as root).
+c81="$tmp/c81"
+mk_super "$c81"
+git -C "$c81/super/sub" worktree add -q --detach "$c81/live-wt"
+c81_rec="$c81/super/.git/modules/sub/worktrees/live-wt/gitdir"
+chmod 000 "$c81_rec"
+if cat "$c81_rec" >/dev/null 2>&1; then
+  echo "SKIP: #3725 unreadable worktree record — this platform can still read a mode-000 file"
+else
+  # The empty read made the sweep compare the CURRENT directory with itself and pass.
+  EXPECT_TEXT="cannot read where linked worktree entry" exit_case "--check: a linked worktree record that cannot be read (failed read)" 2 "$c81/super" --check
+fi
+chmod 644 "$c81_rec"
+c81_list="$c81/super/.git/modules/sub/worktrees"
+chmod 0300 "$c81_list"
+if ls "$c81_list" >/dev/null 2>&1; then
+  echo "SKIP: #3725 unlistable worktree list — this platform can still list a mode-0300 directory"
+else
+  # An unlistable list globbed to nothing, which read as "no linked worktrees".
+  EXPECT_TEXT="cannot list its linked worktrees" exit_case "--check: a linked worktree list that cannot be listed (failed read)" 2 "$c81/super" --check
+fi
+chmod 755 "$c81_list"
+chmod 000 "$c81/super/sub"
+if ls -A "$c81/super/sub" >/dev/null 2>&1; then
+  echo "SKIP: #3725 unlistable submodule — this platform can still list a mode-000 directory"
+else
+  # It read as an uninitialised submodule, and was skipped without a word.
+  EXPECT_TEXT="sub — ISOLATION UNKNOWN: cannot list its directory" exit_case "--check: a submodule directory that cannot be listed (failed read)" 2 "$c81/super" --check
+  EXPECT_TEXT="cannot list 'sub' — refusing to repair or populate" exit_case "init: a submodule directory that cannot be listed (failed read)" 2 "$c81/super" sub
+fi
+chmod 755 "$c81/super/sub"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2

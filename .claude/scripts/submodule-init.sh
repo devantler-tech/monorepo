@@ -13,7 +13,8 @@
 # Usage:
 #   .claude/scripts/submodule-init.sh <submodule-path> [<submodule-path>...]
 #   .claude/scripts/submodule-init.sh --all           # init + repair + probe every submodule (first clone)
-#   .claude/scripts/submodule-init.sh --check         # non-destructive probe of every initialised submodule
+#   .claude/scripts/submodule-init.sh --check         # non-destructive probe of every initialised submodule:
+#                                                     # 1 = one is not isolated, 2 = one could not be read
 #   .claude/scripts/submodule-init.sh --advance <path>  # move a populated checkout to HEAD's recorded pin
 #   .claude/scripts/submodule-init.sh --sync <from-sha>  # after detaching onto a PR head: bring every gitlink
 #                                                       # that changed since <from-sha> onto HEAD's pin
@@ -36,6 +37,11 @@ set -euo pipefail
 # FINDING (exit 1) — this tree is wrong, so repair it; `unknown` is UNKNOWN (exit 2) — a usage error,
 # an unreadable input or a failed read, so nothing was concluded and the caller should retry or look
 # closer. Both refuse the tree: neither is ever a pass.
+#
+# The checks behind them (`probe`, `origin_is_own` and their helpers) return the same three values —
+# 0 holds, 1 confirmed broken or wrong repository, 2 could not be read — so a probe that merely could
+# not look is never reported as a defect to repair (monorepo#3725). Where several results combine, a
+# confirmed finding outranks UNKNOWN.
 die() {
   printf 'submodule-init: %s\n' "$1" >&2
   exit 1
@@ -47,6 +53,19 @@ unknown() {
 }
 
 warn() { printf 'submodule-init: %s\n' "$1" >&2; }
+
+# Run a 0/1/2 check (`$3...`) and refuse on anything but 0: exit 1 with the finding text `$1`, or exit
+# 2 with the UNKNOWN text `$2`.
+require_check() {
+  local finding=$1 unverified=$2 rc=0
+  shift 2
+  "$@" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) die "$finding" ;;
+    *) unknown "$unverified" ;;
+  esac
+}
 
 # The gitdir git is ACTUALLY using for this submodule.
 module_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null; }
@@ -84,23 +103,70 @@ same_dir() {
   [ -e "$1" ] && [ -e "$2" ] && [ "$1" -ef "$2" ]
 }
 
+# Is $1 PROVABLY not a directory? `[ -d ]` is also false for a directory under an ancestor this user
+# cannot search, so an absent path counts only when its nearest existing ancestor is a searchable
+# directory — the one place a failed lookup means "no such entry" rather than "could not look".
+provably_not_dir() {
+  local p=$1 parent
+  [ -d "$p" ] && return 1
+  # stat succeeded on something that is not a directory.
+  [ -e "$p" ] && return 0
+  # A link whose target cannot be examined proves nothing.
+  [ -L "$p" ] && return 1
+  while :; do
+    case "$p" in
+      */*) parent=${p%/*}; [ -n "$parent" ] || parent=/ ;;
+      *) parent=. ;;
+    esac
+    [ "$parent" != "$p" ] || return 1
+    p=$parent
+    if [ -e "$p" ]; then
+      [ -d "$p" ] && [ -x "$p" ]
+      return
+    fi
+  done
+}
+
 # An UNINITIALISED submodule is an empty directory. Distinguish that (legitimately skip) from a
-# populated one (must be checked) — see `probe`, where conflating the two was a fail-open.
+# populated one (must be checked) — see `probe`, where conflating the two was a fail-open. Returns 2
+# when the directory cannot be listed: an unreadable checkout is unexamined, never "empty", and
+# `--check` used to skip one silently and pass (#3725).
 is_populated() {
-  local path=$1
-  [ -d "$path" ] && [ -n "$(ls -A "$path" 2>/dev/null)" ]
+  local path=$1 entries
+  if [ ! -d "$path" ]; then
+    provably_not_dir "$path" && return 1
+    return 2
+  fi
+  entries=$(ls -A "$path" 2>/dev/null) || return 2
+  [ -n "$entries" ]
 }
 
 # Does git, run inside the submodule, agree that the submodule IS this directory? If a stray
 # `core.worktree` points at another valid checkout — the exact collision this script exists to catch —
 # git reports THAT checkout instead. Returning "not a submodule" there would silently drop it from
-# `--check`; it must be reported as BROKEN.
+# `--check`; it must be reported as BROKEN (1). When either side cannot be read — the directory cannot
+# be entered, or git cannot resolve a top level at all (a dangling `core.worktree`, an unreadable
+# gitdir, a failed git) — nothing was compared, so that is UNKNOWN (2), never BROKEN (#3725).
 resolves_to_itself() {
   local path=$1 abs top
-  abs=$(module_tree "$path") || return 1
-  top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 1
-  top=$(cd "$top" 2>/dev/null && pwd -P) || return 1
-  same_dir "$top" "$abs"
+  abs=$(module_tree "$path") || return 2
+  [ -n "$abs" ] || return 2
+  top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 2
+  [ -n "$top" ] || return 2
+  top=$(cd "$top" 2>/dev/null && pwd -P) || return 2
+  [ -n "$top" ] || return 2
+  same_dir "$top" "$abs" || return 1
+}
+
+# Does this submodule's SHARED config (not a per-worktree `config.worktree`) set `core.worktree`? Every
+# worktree created from that gitdir inherits it, so when a fresh probe worktree cannot be resolved, a
+# shared value is the confirmed cause — the dangling form of the collision `repair` moves. Only a read
+# that FINDS the key confirms it; a failed or empty read proves nothing.
+shared_core_worktree() {
+  local mdir
+  mdir=$(module_dir "$1") || return 1
+  [ -n "$mdir" ] || return 1
+  git config -f "$mdir/config" --get-all core.worktree >/dev/null 2>&1
 }
 
 # Verify every EXISTING linked worktree of this submodule resolves to its OWN physical path. The main
@@ -114,37 +180,79 @@ resolves_to_itself() {
 # the substring `/probe-iso-`, so a genuinely unverifiable sibling living under a directory merely
 # NAMED that way was silently skipped and the submodule reported isolated ✓ — the same fail-open class
 # as #2460, one level down. A sibling's admin entry is never excluded.
+#
+# Returns 1 when a linked worktree is confirmed to resolve elsewhere, and 2 when one could not be read
+# (#3725): an unreadable gitdir, worktree list or admin entry, a worktree that cannot be entered or
+# that git cannot resolve. Unread is never "none to check" — an unreadable `gitdir` record once made
+# the sweep compare the CURRENT directory with itself and pass.
 check_existing_worktrees() {
-  local path=$1 skip_admin=${2:-} rc=0 mdir wtadmin wt got want
+  local path=$1 skip_admin=${2:-} broken=0 unverified=0 mdir wtadmin gitfile wt got want
   # Iterate the LINKED-worktree admin dirs under the submodule gitdir directly, rather than
   # `git worktree list`: the submodule's MAIN checkout legitimately resolves to itself, and so does a
   # colliding linked worktree whose stray `core.worktree` points at the shared checkout — so
   # show-toplevel alone cannot tell them apart. Only linked worktrees live under `$mdir/worktrees/*`;
   # the main checkout is never listed there, so it is excluded without a fragile self-comparison.
-  mdir=$(module_dir "$path") || return 0
-  [ -d "$mdir/worktrees" ] || return 0
+  mdir=$(module_dir "$path") || mdir=''
+  if [ -z "$mdir" ]; then
+    warn "$path — ISOLATION UNKNOWN: cannot read its git directory, so its linked worktrees were not checked. Do not edit it."
+    return 2
+  fi
+  if [ ! -d "$mdir/worktrees" ]; then
+    provably_not_dir "$mdir/worktrees" && return 0
+    warn "$path — ISOLATION UNKNOWN: cannot tell whether '$mdir/worktrees' exists, so its linked worktrees were not checked. Do not edit it."
+    return 2
+  fi
+  # A list that cannot be read or searched globs to nothing, which would read as "no linked worktrees".
+  if [ ! -r "$mdir/worktrees" ] || [ ! -x "$mdir/worktrees" ]; then
+    warn "$path — ISOLATION UNKNOWN: cannot list its linked worktrees in '$mdir/worktrees'. Do not edit it."
+    return 2
+  fi
   for wtadmin in "$mdir"/worktrees/*/; do
-    [ -f "$wtadmin/gitdir" ] || continue
+    # The unmatched pattern itself when there are no entries.
+    [ -e "$wtadmin" ] || continue
     # Skip ONLY this probe's own admin dir, by identity — see the header note above.
     if [ -n "$skip_admin" ] && [ -d "$skip_admin" ] && [ "${wtadmin%/}" -ef "$skip_admin" ]; then
       continue
     fi
+    if [ ! -f "$wtadmin/gitdir" ]; then
+      # git itself prunes an entry with no `gitdir` record, so it cannot host a live session — but an
+      # entry this user cannot search hides that record rather than lacking it.
+      [ -x "${wtadmin%/}" ] && continue
+      warn "$path — ISOLATION UNKNOWN: cannot read linked worktree entry '${wtadmin%/}'. A parallel session may be using it — do not edit it."
+      unverified=1
+      continue
+    fi
     # The `gitdir` admin file points at the worktree's own `.git` file; its parent is the worktree.
-    wt=$(dirname "$(cat "$wtadmin/gitdir" 2>/dev/null)")
-    # A pruned/missing worktree dir cannot host a live colliding session — skip it.
-    [ -d "$wt" ] || continue
-    got=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) || got=''
-    [ -n "$got" ] && got=$(cd "$got" 2>/dev/null && pwd -P)
-    # An UNSEARCHABLE worktree dir passes `-d` but cannot be entered, so this must not abort or leak
-    # to stderr: resolve it to empty and let `same_dir` fail closed below. (It survives `set -e` only
-    # because callers invoke this function under `||`, which suspends it — do not rely on that.)
+    gitfile=$(cat "$wtadmin/gitdir" 2>/dev/null) || gitfile=''
+    if [ -z "$gitfile" ]; then
+      warn "$path — ISOLATION UNKNOWN: cannot read where linked worktree entry '${wtadmin%/}' lives. A parallel session may be using it — do not edit it."
+      unverified=1
+      continue
+    fi
+    wt=$(dirname "$gitfile")
+    # A pruned/missing worktree dir cannot host a live colliding session — skip it, but only when it is
+    # provably gone: under an ancestor this user cannot search, `-d` is false for a live one too.
+    if [ ! -d "$wt" ]; then
+      provably_not_dir "$wt" && continue
+      warn "$path — ISOLATION UNKNOWN: cannot tell whether linked worktree '$wt' still exists. A parallel session may be using it — do not edit it."
+      unverified=1
+      continue
+    fi
+    # An UNSEARCHABLE worktree dir passes `-d` but cannot be entered, so neither read may abort or leak
+    # to stderr: each resolves to empty, and an empty side means nothing was compared.
     want=$(cd "$wt" 2>/dev/null && pwd -P) || want=''
-    if ! same_dir "$got" "$want"; then
-      warn "$path — ISOLATION BROKEN: existing linked worktree '$wt' resolves to '${got:-<unresolvable>}', not its own path. A parallel session there is colliding — do not edit it."
-      rc=1
+    got=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) || got=''
+    [ -z "$got" ] || got=$(cd "$got" 2>/dev/null && pwd -P) || got=''
+    if [ -z "$want" ] || [ -z "$got" ]; then
+      warn "$path — ISOLATION UNKNOWN: existing linked worktree '$wt' cannot be read (git resolves it to '${got:-<unresolvable>}'), so it was not verified. A parallel session may be using it — do not edit it."
+      unverified=1
+    elif ! same_dir "$got" "$want"; then
+      warn "$path — ISOLATION BROKEN: existing linked worktree '$wt' resolves to '$got', not its own path. A parallel session there is colliding — do not edit it."
+      broken=1
     fi
   done
-  return "$rc"
+  [ "$broken" -eq 0 ] || return 1
+  [ "$unverified" -eq 0 ] || return 2
 }
 
 # Move the stray shared core.worktree into each worktree's own per-worktree config. Idempotent.
@@ -152,10 +260,14 @@ repair() {
   local path=$1
   local mdir tree super_mdir
 
-  mdir=$(module_dir "$path")
-  tree=$(module_tree "$path")
+  # A failed read here is UNKNOWN, not a finding: a non-empty directory with no `.git` of its own still
+  # resolves (to the superproject — caught below), so git returning nothing means it could not read the
+  # submodule at all, e.g. a dangling `core.worktree`. Without the fallbacks, errexit ended the run with
+  # git's own status (128) and no message.
+  mdir=$(module_dir "$path") || mdir=''
+  tree=$(module_tree "$path") || tree=''
   { [ -n "$mdir" ] && [ -d "$mdir" ] && [ -n "$tree" ]; } ||
-    die "git does not report a gitdir for '$path' (not an initialised submodule?)"
+    unknown "git cannot read a gitdir for '$path' (a dangling core.worktree, or not an initialised submodule?) — refusing to repair it"
 
   # `git -C <dir>` walks UP when <dir> is not itself a repository, so a REGISTERED submodule path that
   # is non-empty but NOT initialised resolves to the SUPERPROJECT's gitdir — and repair would then pin
@@ -180,8 +292,9 @@ repair() {
   # Verify WHICH repository this is before rewriting any of its configuration: a foreign checkout must
   # be refused untouched, not repaired and only then rejected by `probe` (monorepo#2941). This runs
   # after the parent-escape guard, which names the more specific failure when `.git` points outward.
-  origin_is_own "$path" ||
-    die "'$path' is not the repository .gitmodules registers — refusing to repair it"
+  require_check "'$path' is not the repository .gitmodules registers — refusing to repair it" \
+    "could not read which repository '$path' is — refusing to repair it" \
+    origin_is_own "$path"
 
   git config -f "$mdir/config" extensions.worktreeConfig true
   # Pin the tree this gitdir is actually checked out in — not a path we guessed.
@@ -200,23 +313,41 @@ repair() {
 }
 
 # Fail closed: a submodule is isolated only if a throwaway worktree reports its OWN path as the
-# toplevel. Returns non-zero (never exits) so callers can probe everything before deciding.
+# toplevel. Returns (never exits) 0 isolated, 1 confirmed broken or the wrong repository, 2 could not
+# be read (#3725), so callers can probe everything before deciding.
 probe() {
-  local path=$1
+  local path=$1 res=0
 
-  if ! is_populated "$path"; then
-    warn "$path — not checked out here; nothing to probe"
-    return 1
-  fi
+  is_populated "$path" || res=$?
+  case "$res" in
+    0) ;;
+    1)
+      warn "$path — not checked out here; nothing to probe"
+      return 1
+      ;;
+    *)
+      warn "$path — ISOLATION UNKNOWN: cannot list its directory, so it was not probed. Do not edit it."
+      return 2
+      ;;
+  esac
 
   # THE collision, detected directly: the submodule is populated, but git resolves it to a DIFFERENT
   # checkout because a stray `core.worktree` points there. Report it — treating this as "not a
   # submodule" and skipping it (as an earlier version did) silently dropped the one case this whole
   # script exists to catch, and `--check` then exited 0 on a colliding tree.
-  if ! resolves_to_itself "$path"; then
-    warn "$path — ISOLATION BROKEN: git resolves it to '$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)', not '$(module_tree "$path")'. Another checkout is sharing this working tree — do not edit it."
-    return 1
-  fi
+  res=0
+  resolves_to_itself "$path" || res=$?
+  case "$res" in
+    0) ;;
+    1)
+      warn "$path — ISOLATION BROKEN: git resolves it to '$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)', not '$(module_tree "$path")'. Another checkout is sharing this working tree — do not edit it."
+      return 1
+      ;;
+    *)
+      warn "$path — ISOLATION UNKNOWN: git cannot resolve its top level (a dangling core.worktree, an unreadable gitdir or a failed git), so nothing was compared. Do not edit it."
+      return 2
+      ;;
+  esac
 
   # A tree that resolves to itself can still be the WRONG repository: a registered path is only this
   # submodule if its origin is the repository `.gitmodules` names for it (monorepo#2941). Check it
@@ -224,8 +355,8 @@ probe() {
   # `post-checkout` hook, so probing first would execute code from a repository about to be rejected.
   # Nested checkouts are not registered here; `probe_nested_checkouts` checks each against its own
   # parent's `.gitmodules` before probing it.
-  if is_registered_submodule "$path" && ! origin_is_own "$path"; then
-    return 1
+  if is_registered_submodule "$path"; then
+    origin_is_own "$path" || return "$?"
   fi
 
   # A unique probe dir per invocation: a fixed `.probe-iso` could collide with — and `rm -rf` — a
@@ -234,8 +365,8 @@ probe() {
   local probe_dir="$path/$name"
 
   if ! git -C "$path" worktree add --detach "$name" >/dev/null 2>&1; then
-    warn "$path — could not create probe worktree"
-    return 1
+    warn "$path — ISOLATION UNKNOWN: could not create a probe worktree there, so isolation was not tested. Do not edit it."
+    return 2
   fi
 
   # Capture the probe's REAL admin dir up front. `git worktree add` does NOT guarantee the admin dir
@@ -243,22 +374,35 @@ probe() {
   # `probe-iso-1-2` against an existing entry yields `probe-iso-1-21`, measured on git 2.55.0). Then
   # `worktree remove` matches by PATH and drops the counter-appended one, so removing "$name" by name
   # afterwards would delete a DIFFERENT — possibly live — worktree's entry, destroying exactly the
-  # sibling this scoping exists to protect. Resolve it, and remove that.
+  # sibling this scoping exists to protect. Resolve it, and remove that. `--work-tree` names the probe
+  # explicitly so a stray shared `core.worktree` cannot stop git reading the probe's own `.git` link —
+  # the sweep below would otherwise report the probe itself as an unreadable sibling.
   local probe_admin=''
-  probe_admin=$(git -C "$probe_dir" rev-parse --absolute-git-dir 2>/dev/null) || probe_admin=''
+  probe_admin=$(git -C "$probe_dir" --work-tree=. rev-parse --absolute-git-dir 2>/dev/null) ||
+    probe_admin=''
 
   # Resolve both sides to physical paths (/tmp vs /private/tmp, symlinked checkouts) before comparing.
-  local got want rc=0
+  local got want broken=0 unverified=0
   got=$(git -C "$probe_dir" rev-parse --show-toplevel 2>/dev/null) || got=''
-  [ -n "$got" ] && got=$(cd "$got" 2>/dev/null && pwd -P)
-  want=$(cd "$probe_dir" && pwd -P)
+  [ -z "$got" ] || got=$(cd "$got" 2>/dev/null && pwd -P) || got=''
+  want=$(cd "$probe_dir" 2>/dev/null && pwd -P) || want=''
 
-  if [ -z "$got" ]; then
-    warn "$path — ISOLATION BROKEN: git cannot resolve a worktree created there (dangling core.worktree). Do not edit it."
-    rc=1
+  if [ -z "$want" ]; then
+    warn "$path — ISOLATION UNKNOWN: cannot enter the probe worktree just created there, so isolation was not tested. Do not edit it."
+    unverified=1
+  elif [ -z "$got" ]; then
+    # git cannot resolve a worktree it just created. With a `core.worktree` in the shared config, that
+    # value is the confirmed cause (every new worktree inherits it); without one, it is a failed read.
+    if shared_core_worktree "$path"; then
+      warn "$path — ISOLATION BROKEN: git cannot resolve a worktree created there, because the submodule's shared config sets a dangling core.worktree. Do not edit it."
+      broken=1
+    else
+      warn "$path — ISOLATION UNKNOWN: git cannot resolve a worktree created there, so isolation was not tested. Do not edit it."
+      unverified=1
+    fi
   elif ! same_dir "$got" "$want"; then
     warn "$path — ISOLATION BROKEN: a worktree there resolves to '$got', not its own path ('$want'). Do not edit it — parallel sessions would collide."
-    rc=1
+    broken=1
   fi
 
   # A fresh probe passing does not clear existing live worktrees — enumerate and verify those too.
@@ -267,7 +411,13 @@ probe() {
   # evidence this sweep reads: "no linked worktrees to verify" and "a linked worktree that cannot be
   # verified" became indistinguishable, and the second was reported as isolated ✓ (#2460). The sweep
   # skips this probe's own `probe-iso-*` entry, so running it first is safe.
-  check_existing_worktrees "$path" "$probe_admin" || rc=1
+  res=0
+  check_existing_worktrees "$path" "$probe_admin" || res=$?
+  case "$res" in
+    0) ;;
+    1) broken=1 ;;
+    *) unverified=1 ;;
+  esac
 
   # Clean up ONLY this probe's own entry. A repository-wide `git worktree prune` also deletes a
   # SIBLING session's admin entry whenever that session's tree is momentarily unreadable (restrictive
@@ -283,23 +433,26 @@ probe() {
     esac
   fi
 
-  [ "$rc" -eq 0 ] && printf 'submodule-init: %s — isolated ✓\n' "$path"
-  return "$rc"
+  # A confirmed break outranks an unread worktree.
+  [ "$broken" -eq 0 ] || return 1
+  [ "$unverified" -eq 0 ] || return 2
+  printf 'submodule-init: %s — isolated ✓\n' "$path"
 }
 
 # Probe every initialized nested checkout beneath $1. Pin markers alone are insufficient: a nested
 # repository can retain the expected HEAD while a stale shared core.worktree redirects commands into
 # another session. `submodule foreach` visits initialized checkouts only; uninitialized/mismatched
-# entries are rejected separately by the recursive status gate in `advance`.
+# entries are rejected separately by the recursive status gate in `advance`. Returns like `probe`:
+# 1 for a confirmed problem in any checkout, else 2 when one could not be read.
 probe_nested_checkouts() {
-  local path=$1 nested_rows row parent sm nested idx_flags rc=0
+  local path=$1 nested_rows row parent sm nested idx_flags res broken=0 unverified=0
   # One row per initialized nested checkout: its parent's top level and its path inside that parent,
   # so each can be checked against the `.gitmodules` of the repository that actually declares it.
   # shellcheck disable=SC2016 # $toplevel and $sm_path are expanded by `submodule foreach`.
   nested_rows=$(git --no-replace-objects -C "$path" submodule foreach --quiet --recursive \
     'printf "%s\t%s\n" "$toplevel" "$sm_path"') || {
     warn "$path — could not enumerate initialized nested submodules"
-    return 1
+    return 2
   }
   while IFS= read -r row; do
     [ -n "$row" ] || continue
@@ -307,27 +460,37 @@ probe_nested_checkouts() {
     sm=${row#*$'\t'}
     nested=$(cd "$parent/$sm" 2>/dev/null && pwd -P) || {
       warn "$parent/$sm — could not resolve the nested submodule checkout"
-      rc=1
+      unverified=1
       continue
     }
     # WHICH repository first, before any command that could run its hooks (see `probe`).
-    origin_is_own -C "$parent" "$sm" || {
-      rc=1
-      continue
-    }
+    res=0
+    origin_is_own -C "$parent" "$sm" || res=$?
+    case "$res" in
+      0) ;;
+      1) broken=1; continue ;;
+      *) unverified=1; continue ;;
+    esac
     idx_flags=$(git --no-replace-objects -C "$nested" ls-files -v 2>/dev/null) || {
       warn "$nested — could not read nested submodule index flags"
-      rc=1
+      unverified=1
       continue
     }
     if grep -q '^[a-zS]' <<< "$idx_flags"; then
       warn "$nested — nested submodule has assume-unchanged/skip-worktree files"
-      rc=1
+      broken=1
       continue
     fi
-    probe "$nested" || rc=1
+    res=0
+    probe "$nested" || res=$?
+    case "$res" in
+      0) ;;
+      1) broken=1 ;;
+      *) unverified=1 ;;
+    esac
   done <<< "$nested_rows"
-  return "$rc"
+  [ "$broken" -eq 0 ] || return 1
+  [ "$unverified" -eq 0 ] || return 2
 }
 
 # NUL-separated records, so a registered path containing spaces or newlines is returned whole.
@@ -340,9 +503,16 @@ all_paths() {
 # Select every submodule that is CHECKED OUT here. Deliberately NOT "every submodule git resolves
 # correctly": a colliding submodule resolves elsewhere, and filtering on that would drop it from the
 # sweep — the fail-open this script must never have.
+#
+# A directory that cannot be listed is selected too, so `probe` reports it UNKNOWN: skipping it as
+# uninitialised let `--check` pass without examining it (#3725).
 initialised_paths() {
-  local p
-  while IFS= read -r -d '' p; do is_populated "$p" && printf '%s\0' "$p"; done < <(all_paths)
+  local p res
+  while IFS= read -r -d '' p; do
+    res=0
+    is_populated "$p" || res=$?
+    [ "$res" -eq 1 ] || printf '%s\0' "$p"
+  done < <(all_paths)
 }
 
 # Is $1 one of the paths declared in .gitmodules? Only these may have their config rewritten.
@@ -427,13 +597,20 @@ redact_url() {
 
 # The single fetch URL of remote $2 (default `origin`) of the repository at $1. Git fetches from the
 # FIRST of several values while `config --get` returns the LAST, so a second value could hide the URL
-# git really uses; several values are ambiguous and print nothing (a mismatch for the caller).
+# git really uses; several values are ambiguous and print nothing (a mismatch for the caller). So does
+# a missing remote. Returns 2, printing nothing, when git could not read the remote at all (#3725).
 single_origin_url() {
-  local urls remote=${2:-origin}
+  local urls remote=${2:-origin} rc=0
   # `remote get-url` applies `url.<base>.insteadOf` rewrites, so this is the URL git would really
   # fetch from — a rewrite cannot make a foreign repository read as the registered one.
-  urls=$(git -C "$1" remote get-url --all "$remote" 2>/dev/null) || return 0
-  [ "$(printf '%s\n' "$urls" | grep -c .)" -eq 1 ] && printf '%s' "$urls"
+  urls=$(git -C "$1" remote get-url --all "$remote" 2>/dev/null) || rc=$?
+  # git exits 2 for "No such remote" — an answer about this repository, not a failed read.
+  case "$rc" in
+    0) ;;
+    2) return 0 ;;
+    *) return 2 ;;
+  esac
+  if [ "$(printf '%s\n' "$urls" | grep -c .)" -eq 1 ]; then printf '%s' "$urls"; fi
 }
 
 # Resolve a relative `.gitmodules` URL (arg 2) the way git does: against the default remote of the
@@ -442,7 +619,7 @@ single_origin_url() {
 # `submodule.<name>.url` is deliberately NOT used — it is per-checkout config that can be rewritten
 # to name any repository, and a check that reads its expectation from there compares the submodule
 # with whatever it was told to expect. Prints nothing (a mismatch for the caller) when the URL climbs
-# above the base or the base is ambiguous.
+# above the base or the base is ambiguous, and returns 2 when the remote's URL could not be read.
 resolve_relative_url() {
   local super=$1 rel=$2 base remote=origin branch
   # Git's default remote: the checked-out branch's tracking remote, else `origin`. A branch that
@@ -452,7 +629,7 @@ resolve_relative_url() {
   fi
   [ "$remote" != . ] || return 0
   if git -C "$super" config --get "remote.$remote.url" >/dev/null 2>&1; then
-    base=$(single_origin_url "$super" "$remote")
+    base=$(single_origin_url "$super" "$remote") || return 2
   else
     base=$(git -C "$super" rev-parse --show-toplevel 2>/dev/null) || base=''
   fi
@@ -509,12 +686,33 @@ origin_is_own() {
   key="${keys[0]:-}"
   name=${key#submodule.}
   name=${name%.path}
-  want=$(git -C "$super" config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || want=''
-  case "$want" in
-    ./* | ../*) want=$(resolve_relative_url "$super" "$want") ;;
-    *) want=$(git -C "$super" ls-remote --get-url "$want" 2>/dev/null || printf '%s' "$want") ;;
-  esac
-  got=$(single_origin_url "$super/$path")
+  # Tell an ANSWER (no URL registered, no or several origins: this checkout cannot be identified, a
+  # finding) from a FAILED READ (git could not read the URL or the origin: UNKNOWN, #3725).
+  local want_rc=0 got_rc=0
+  want=''
+  if [ -n "$key" ]; then
+    want=$(git -C "$super" config -f .gitmodules --get "submodule.$name.url" 2>/dev/null) || want_rc=$?
+    # `git config --get` exits 1 for a key that is not there; anything else is a failed read.
+    if [ "$want_rc" -eq 1 ]; then
+      want=''
+      want_rc=0
+    fi
+  fi
+  if [ "$want_rc" -eq 0 ]; then
+    case "$want" in
+      ./* | ../*)
+        want=$(resolve_relative_url "$super" "$want") || want_rc=$?
+        [ "$want_rc" -eq 2 ] || want_rc=0
+        ;;
+      '') ;;
+      *) want=$(git -C "$super" ls-remote --get-url "$want" 2>/dev/null || printf '%s' "$want") ;;
+    esac
+  fi
+  got=$(single_origin_url "$super/$path") || got_rc=$?
+  if [ "$want_rc" -ne 0 ] || [ "$got_rc" -ne 0 ]; then
+    warn "$shown — UNKNOWN: a git read failed while checking which repository it is (its origin, or the URL .gitmodules registers), so nothing was concluded. Do not read or edit it."
+    return 2
+  fi
   if [ -z "$key" ] || [ -z "$want" ] || [ -z "$got" ]; then
     warn "$shown — cannot verify which repository it is: origin '$(redact_url "${got:-<none or several>}")', expected '$(redact_url "${want:-<unknown>}")'. Do not read or edit it."
     return 1
@@ -534,7 +732,13 @@ init_repair_probe() {
   is_registered_submodule "$path" ||
     refuse_unregistered "$path" repair
 
-  if is_populated "$path"; then
+  # A directory that cannot be listed is neither "populated" nor "empty": refuse it rather than
+  # repair or clone into what could not be seen.
+  local populated=0
+  is_populated "$path" || populated=$?
+  [ "$populated" -ne 2 ] ||
+    unknown "cannot list '$path' — refusing to repair or populate what cannot be seen"
+  if [ "$populated" -eq 0 ]; then
     # Already checked out here: only its isolation can be stale, so repair the stray `core.worktree`
     # IN PLACE and stop. Do NOT run `git submodule update` — its checkout update strategy would
     # detach/move this tree back to the pinned gitlink commit, silently discarding a local branch or
@@ -557,7 +761,11 @@ init_repair_probe() {
     # bundled-skill ownership audit AGENTS.md mandates before editing a synced file — pass vacuously
     # instead of erroring. Assert the post-condition: init mode was ASKED to populate, so an empty
     # tree is a FAILURE here, never the legitimate skip `--check` makes of an uninitialised submodule.
-    is_populated "$path" ||
+    populated=0
+    is_populated "$path" || populated=$?
+    [ "$populated" -ne 2 ] ||
+      unknown "cannot list '$path' after 'git submodule update --init' — do not read or edit it"
+    [ "$populated" -eq 0 ] ||
       die "'$path' is STILL EMPTY after 'git submodule update --init' (which exited 0) — do not read or edit it"
     repair "$path"
     # A `.git` entry alone also makes the directory non-empty, so a checkout that wrote its gitdir
@@ -578,7 +786,9 @@ init_repair_probe() {
       die "'$path' is INCOMPLETE after 'git submodule update --init': tracked files are hidden by skip-worktree or assume-unchanged (a sparse checkout?) — do not read or edit it"
     fi
   fi
-  probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
+  require_check "repair did not restore isolation for '$path' — do not edit it" \
+    "could not verify that '$path' is isolated after repair — do not edit it" \
+    probe "$path"
 }
 
 # Move an already-populated submodule checkout to the gitlink recorded at the superproject's HEAD.
@@ -588,7 +798,11 @@ advance() {
   is_registered_submodule "$path" ||
     refuse_unregistered "$path" advance
 
-  is_populated "$path" ||
+  local populated=0
+  is_populated "$path" || populated=$?
+  [ "$populated" -ne 2 ] ||
+    unknown "cannot list '$path' — refusing to advance what cannot be seen"
+  [ "$populated" -eq 0 ] ||
     die "'$path' is not checked out here — run submodule-init.sh $path to populate it first"
 
   # Repair and prove isolation BEFORE any other `git -C "$path"` command touches this checkout.
@@ -596,8 +810,12 @@ advance() {
   # `status`/`rev-parse`/`fetch`/`checkout --detach` first would read — and in the checkout's case
   # WRITE — into that other tree before this function ever repaired the configuration.
   repair "$path"
-  probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
-  origin_is_own "$path" || die "'$path' origin does not match its registered repository — refusing to advance"
+  require_check "repair did not restore isolation for '$path' — do not edit it" \
+    "could not verify that '$path' is isolated — refusing to advance" \
+    probe "$path"
+  require_check "'$path' origin does not match its registered repository — refusing to advance" \
+    "could not read which repository '$path' is — refusing to advance" \
+    origin_is_own "$path"
 
   local status
   status=$(git --no-replace-objects -C "$path" status --porcelain --untracked-files=all 2>/dev/null) ||
@@ -657,15 +875,18 @@ advance() {
       --no-recurse-submodules --detach "$target" ||
       die "failed to check out recorded pin $target in '$path'"
     repair "$path"
-    probe "$path" || die "advance left '$path' unisolated — do not edit it"
+    require_check "advance left '$path' unisolated — do not edit it" \
+      "could not verify that '$path' is isolated after advancing — do not edit it" \
+      probe "$path"
   fi
   nested_status=$(git --no-replace-objects -C "$path" submodule status --recursive 2>/dev/null) ||
     unknown "could not verify nested submodules in '$path' — refusing to report a successful advance"
   if grep -q '^[^ ]' <<< "$nested_status"; then
     die "nested submodule checkout does not match '$path' at $target — advance it separately before use"
   fi
-  probe_nested_checkouts "$path" ||
-    die "nested submodule isolation is broken for '$path' — repair it from its parent before use"
+  require_check "nested submodule isolation is broken for '$path' — repair it from its parent before use" \
+    "could not verify nested submodule isolation for '$path' — refusing to report a successful advance" \
+    probe_nested_checkouts "$path"
   post_status=$(git --no-replace-objects -C "$path" status --porcelain \
     --untracked-files=all --ignore-submodules=none 2>/dev/null) ||
     unknown "could not verify post-advance status for '$path' — refusing to report success"
@@ -912,9 +1133,21 @@ case "$1" in
   # first: a check that fixes what it is checking can never fail.
   --check)
     broken=0
-    while IFS= read -r -d '' path; do probe "$path" || broken=1; done < <(initialised_paths)
+    unverified=0
+    while IFS= read -r -d '' path; do
+      res=0
+      probe "$path" || res=$?
+      case "$res" in
+        0) ;;
+        1) broken=1 ;;
+        *) unverified=1 ;;
+      esac
+    done < <(initialised_paths)
+    # A confirmed break outranks a submodule that could not be read: both are reported above.
     [ "$broken" -eq 0 ] ||
       die 'one or more submodules are NOT isolated — run submodule-init.sh <path> to repair before editing them'
+    [ "$unverified" -eq 0 ] ||
+      unknown 'one or more submodules could not be verified (a failed read, reported above) — nothing was concluded about them; resolve the read and re-run before editing them'
     ;;
   --all)
     while IFS= read -r -d '' path; do init_repair_probe "$path"; done < <(all_paths)

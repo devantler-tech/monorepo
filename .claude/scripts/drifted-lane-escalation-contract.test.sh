@@ -256,6 +256,32 @@ assert_contains "${section}" 'Missing capability is not evidence that the action
 assert_contains "${section}" 'owner of an open tracker also owns collecting recovery evidence and closing it' \
   'an open occurrence needs a reachable recovery owner'
 
+# A tracker records STATE CHANGES, not sightings (monorepo#3178). Read as "record the observation on
+# it", the obligation binds every dispatch of both roles on every lane, and one unchanged drift
+# collected nine near-identical comments in two days — burying the recovery or file-set change the
+# tracker exists to surface. The rule must name what counts as a change, and must say an unreadable
+# record is NOT "unchanged": skipping a write because the comparison never ran is a fail-open.
+assert_contains "${section}" 'Record a state CHANGE, never a repeat sighting' \
+  'a tracker must record state changes only, or every dispatch re-posts an unchanged drift'
+assert_contains "${section}" 'every lane and both roles' \
+  'the no-repeat rule must cover every lane and both roles, not one lane only'
+assert_contains "${section}" '**the lane recovered**' \
+  'a recovery must remain a qualifying state change'
+assert_contains "${section}" '**the differing files changed**' \
+  'a change in the set or count of differing files must remain a qualifying state change'
+assert_contains "${section}" '**the consumer pin moved**' \
+  'a moved consumer pin must remain a qualifying state change'
+assert_contains "${section}" 'An unchanged observation writes nothing' \
+  'a repeat sighting of the recorded state must write nothing to the tracker'
+assert_contains "${section}" 'When the recorded state cannot be read or authenticated, record' \
+  'an unreadable record must not count as unchanged, or a skipped comparison suppresses a real change'
+assert_contains "${section}" 'narrows only what a REPEAT observation must do' \
+  'the rule must leave creation, lookup, reconciliation, authentication and reset unchanged'
+assert_not_contains "${section}" 'and the observation recorded on it' \
+  'the tracked-issue obligation must not mandate an observation on every sighting'
+assert_not_contains "${section}" 'record the observation on what you find' \
+  'the lookup rule must not mandate an observation on every sighting'
+
 # Scope. The clause deliberately stops short of paging, and that decision has to stay legible or a
 # later editor reads the absence as an omission and re-adds the delivery protocol this removed.
 assert_contains "${section}" 'does NOT page a maintainer channel' \

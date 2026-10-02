@@ -57,7 +57,12 @@
 #   --repo <owner/repo>    enumerate recent merged release PRs via `gh` (default: devantler-tech/ksail)
 #   --input <file>|-       a pre-assembled JSON array of {number, mergedAt, commits:[{author_login,
 #                          author_name, author_email, committer_login, committer_name,
-#                          committer_email}]}, for hermetic tests
+#                          committer_email[, verified]}]}, for hermetic tests
+#
+# THE SIGNATURE VERDICT IS PART OF THE PIN. When the arm also pins `verified: true` (GitHub signed the
+# commit), a release that carries the right names but no signature fails the arm just as surely as a
+# renamed bot, so it counts as a miss here too (#3173). The verdict is read from the same arm, never
+# assumed: an arm that does not pin it is compared on identity alone.
 #
 # Other options:
 #   --recent K   how many of the newest releases must all miss before reporting drift (default 3)
@@ -161,6 +166,15 @@ pin_declares author_login \
 pin_declares committer_login \
   || die "classifier's matches_ksail_provenance() declares no committer_login key — its own comparison cannot match a production commit, so this guard refuses to report a verdict"
 
+# The signature verdict is a bare boolean, not a string, so it has its own reader. A declared value
+# other than `true` is a pin this guard does not understand, so it refuses rather than ignore it.
+PIN_VERIFIED=0
+if grep -qE '^[[:space:]]*verified:' <<<"$arm"; then
+  grep -qE '^[[:space:]]*verified:[[:space:]]*true[[:space:]]*,?[[:space:]]*$' <<<"$arm" \
+    || die "classifier's matches_ksail_provenance() pins verified to something other than true — this guard refuses to report a verdict from a pin it cannot read"
+  PIN_VERIFIED=1
+fi
+
 # ---------------------------------------------------------------------------
 # 2. Collect candidate release PRs, newest first.
 # ---------------------------------------------------------------------------
@@ -211,7 +225,8 @@ else
         author_email:    (.commit.author.email // ""),
         committer_login: (.committer.login // ""),
         committer_name:  (.commit.committer.name // ""),
-        committer_email: (.commit.committer.email // "")
+        committer_email: (.commit.committer.email // ""),
+        verified:        (.commit.verification.verified == true)
       }]' 2>/dev/null)" \
       || die "failed to read commits for $REPO#$n"
     [ -n "$commits" ] || die "empty commit list for $REPO#$n"
@@ -245,7 +260,9 @@ candidates="$(printf '%s' "$payload" | jq 'length')" || die "failed to count can
 say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 
 say "classifier      : $CLASSIFIER"
-say "pinned identity : author=$PIN_AUTHOR_NAME <$PIN_AUTHOR_EMAIL> login=[$PIN_AUTHOR_LOGIN] committer=$PIN_COMMITTER_NAME <$PIN_COMMITTER_EMAIL> login=[$PIN_COMMITTER_LOGIN]"
+pin_signed="not pinned"
+[ "$PIN_VERIFIED" -eq 0 ] || pin_signed="required"
+say "pinned identity : author=$PIN_AUTHOR_NAME <$PIN_AUTHOR_EMAIL> login=[$PIN_AUTHOR_LOGIN] committer=$PIN_COMMITTER_NAME <$PIN_COMMITTER_EMAIL> login=[$PIN_COMMITTER_LOGIN] signed=[$pin_signed]"
 if [ -n "$cutoff" ]; then
   say "window          : merged since $cutoff (${DAYS}d)"
 else
@@ -277,11 +294,13 @@ recent="$(printf '%s' "$payload" | jq --argjson k "$RECENT" '.[0:$k]')" || die "
 
 matching="$(printf '%s' "$recent" | jq \
   --arg al "$PIN_AUTHOR_LOGIN" --arg an "$PIN_AUTHOR_NAME" --arg ae "$PIN_AUTHOR_EMAIL" \
-  --arg cl "$PIN_COMMITTER_LOGIN" --arg cn "$PIN_COMMITTER_NAME" --arg ce "$PIN_COMMITTER_EMAIL" '
+  --arg cl "$PIN_COMMITTER_LOGIN" --arg cn "$PIN_COMMITTER_NAME" --arg ce "$PIN_COMMITTER_EMAIL" \
+  --argjson pv "$PIN_VERIFIED" '
   [ .[] | select(
       [ .commits[] | select(
           .author_login == $al and .author_name == $an and .author_email == $ae and
-          .committer_login == $cl and .committer_name == $cn and .committer_email == $ce
+          .committer_login == $cl and .committer_name == $cn and .committer_email == $ce and
+          ($pv == 0 or .verified == true)
         ) ] | length > 0
     ) ] | length')" || die "failed to compare identities"
 
@@ -309,7 +328,7 @@ say ""
 say "observed identities:"
 printf '%s' "$recent" | jq -r '
   [ .[] | .commits[]
-    | "  author=\(.author_name) <\(.author_email)> login=[\(.author_login)] committer=\(.committer_name) <\(.committer_email)> login=[\(.committer_login)]" ]
+    | "  author=\(.author_name) <\(.author_email)> login=[\(.author_login)] committer=\(.committer_name) <\(.committer_email)> login=[\(.committer_login)] signed=[\(if has("verified") then .verified else "unknown" end)]" ]
   | unique | .[]'
 say ""
 say "The exemption arm is unreachable for every genuine release PR while this stands."
