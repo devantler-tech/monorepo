@@ -1,0 +1,161 @@
+<!-- This is an auto-generated reply by CodeRabbit -->
+> [!TIP]
+> For best results, initiate chat on the files or code changes.
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+repo="devantler-tech/ksail"
+pr="6930"
+previous="557d2e3b68569c03489dce10558342148e96df89"
+head="a333b570d11d9b6aa6118dda7d01665233f59bfe"
+
+echo '--- Pull request metadata ---'
+gh pr view "$pr" --repo "$repo" --json baseRefOid,headRefOid,baseRefName,headRefName,title,state,isDraft
+base="$(gh pr view "$pr" --repo "$repo" --json baseRefOid --jq .baseRefOid)"
+printf 'base=%s\nprevious=%s\nhead=%s\n' "$base" "$previous" "$head"
+
+echo '--- Revision and diagnostics ---'
+git rev-parse HEAD
+git status --short
+git merge-base "$base" "$head"
+git merge-base --is-ancestor "$base" "$head" && echo 'base-is-ancestor=true'
+git merge-base --is-ancestor "$previous" "$head" && echo 'previous-is-ancestor=true' || true
+git diff --check "$base" "$head"
+git diff --stat "$base" "$head"
+git diff --name-status "$base" "$head"
+
+echo '--- Delta since the prior reviewed head ---'
+git log --oneline --decorate "$previous..$head"
+git diff --check "$previous" "$head"
+git diff --name-status "$previous" "$head"
+git diff --find-renames --find-copies --unified=60 "$previous" "$head"
+
+echo '--- Changed Go source outlines ---'
+git diff --name-only "$base" "$head" | while IFS= read -r file; do
+  case "$file" in
+    *.go)
+      printf '\n### %s\n' "$file"
+      ast-grep outline "$file" --items all
+      ;;
+  esac
+done
+
+echo '--- Focused current implementations ---'
+for file in \
+  pkg/cli/cmd/cluster/orchestrator_eks_upgrade.go \
+  pkg/svc/provisioner/cluster/eks/upgrader_wait.go \
+  pkg/svc/provisioner/cluster/eks/upgrader.go \
+  pkg/cli/cmd/cluster/orchestrator.go \
+  pkg/client/eks/upgrade.go; do
+  printf '\n### %s\n' "$file"
+  nl -ba "$file" | sed -n '1,520p'
+done
+
+echo '--- Focused tests ---'
+for file in \
+  pkg/cli/cmd/cluster/eks_upgrade_test.go \
+  pkg/svc/provisioner/cluster/eks/upgrader_wait_retry_test.go \
+  pkg/svc/provisioner/cluster/eks/upgrader_test.go; do
+  printf '\n### %s\n' "$file"
+  ast-grep outline "$file" --items all
+  nl -ba "$file" | sed -n '1,620p'
+done
+
+echo '--- Relevant call sites and output handling ---'
+rg -n -C 8 --glob '*.go' \
+  '\b(runEKSUpdate|planEKSVersionUpgrade|validateEKSRecreation|reportEKSUpgraded|displayChangesSummary|isRetryablePollFailure|readControlPlane|waitForControlPlaneUpgrade)\b' \
+  pkg/cli/cmd/cluster pkg/svc/provisioner/cluster/eks
+```
+
+Length of output: 202783
+
+---
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+repo="devantler-tech/ksail"
+pr="6930"
+previous="557d2e3b68569c03489dce10558342148e96df89"
+head="a333b570d11d9b6aa6118dda7d01665233f59bfe"
+
+echo '--- Head and PR state ---'
+git rev-parse HEAD
+gh pr view "$pr" --repo "$repo" --json baseRefOid,headRefOid,state,isDraft
+gh pr checks "$pr" --repo "$repo" --json name,state,workflow 2>&1 || true
+
+echo '--- Diff diagnostics and delta paths ---'
+git diff --check "$previous" "$head"
+git diff --stat "$previous" "$head"
+git diff --name-status "$previous" "$head"
+git log --oneline "$previous..$head"
+
+echo '--- Delta: EKS orchestration and wait logic ---'
+git diff --unified=45 "$previous" "$head" -- \
+  pkg/cli/cmd/cluster/orchestrator_eks_upgrade.go \
+  pkg/cli/cmd/cluster/eks_upgrade_test.go \
+  pkg/svc/provisioner/cluster/eks/upgrader_wait.go \
+  pkg/svc/provisioner/cluster/eks/upgrader_wait_retry_test.go
+
+echo '--- Current EKS orchestration ---'
+sed -n '1,280p' pkg/cli/cmd/cluster/orchestrator_eks_upgrade.go | awk '{printf "%5d  %s\n", NR, $0}'
+
+echo '--- Current EKS wait logic ---'
+sed -n '80,280p' pkg/svc/provisioner/cluster/eks/upgrader_wait.go | awk '{printf "%5d  %s\n", NR+79, $0}'
+
+echo '--- Current affected test sections ---'
+rg -n -A75 -B8 --glob '*_test.go' \
+  'TestEKSRecreationAllowedWhenPinnedVersionIsReached|TestEKSUpgradeNotificationKeepsJSONOutputValid|TestEKSUpgradeNotificationReportedInTextMode|TestControlPlaneUpgradeRetriesTransientConfirmingRead|TestControlPlaneUpgradeFailsFastOnTerminalConfirmingRead' \
+  pkg/cli/cmd/cluster/eks_upgrade_test.go \
+  pkg/svc/provisioner/cluster/eks/upgrader_wait_retry_test.go
+
+echo '--- Output-mode and upgrade report call sites ---'
+rg -n -C 10 --glob '*.go' \
+  '\b(reportEKSUpgraded|displayChangesSummary|reportDryRun|OutputJSON|output.*json)\b' \
+  pkg/cli/cmd/cluster
+```
+
+Length of output: 126899
+
+---
+
+</details>
+
+`@devantler` Full review is complete for `a333b570d11d9b6aa6118dda7d01665233f59bfe` against `74e55d72cbfabe967fd5bab00c618f241d33e316`.
+
+I found no blocking issues.
+
+The recreation check now runs after EKS version planning. It rejects recreation only when a control-plane upgrade is planned. A satisfied Kubernetes version pin no longer blocks a separate recreation-required update.
+
+The JSON output fix is correct. `reportEKSUpgraded` emits no text when `--output json` is set. The version change remains in the JSON diff.
+
+The confirming-read retry is correct. Retryable AWS failures after `UpdateStatusSuccessful` continue polling. Terminal confirming-read failures still return immediately. Deadline errors retain the last transient failure without becoming transient errors themselves.
+
+The new tests cover the three corrected paths and their negative cases. `git diff --check` reports no whitespace errors. All reported GitHub checks are successful or skipped.
+
+---
+
+<details>
+<summary>🧠 Learnings used</summary>
+
+```
+Learnt from: devantler
+URL: https://github.com/devantler-tech/ksail/pull/6930
+
+Timestamp: 2026-09-08T12:30:42.052Z
+Learning: On GitHub pull requests that already have a CodeRabbit review on an earlier head, `coderabbitai review` can return only an analysis-chain response with no verdict, and `coderabbitai full review` can produce no acknowledgement or artifact. Treat this as a no-gate review-command outcome rather than a code-review result or quota refusal. In pull request `#6930` at head `557d2e3b68569c03489dce10558342148e96df89`, this occurred after two requests despite 79/79 checks green and zero unresolved threads.
+```
+
+</details>
+
+_You are interacting with an AI system._

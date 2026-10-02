@@ -1,0 +1,121 @@
+<!-- This is an auto-generated reply by CodeRabbit -->
+> [!TIP]
+> For best results, initiate chat on the files or code changes.
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+base="$(git merge-base HEAD origin/main)"
+prior="73d9630562d905fa9df5069a2970f4df1cab908b"
+
+printf '%s\n' '--- HEAD and changed files ---'
+git rev-parse HEAD
+git diff --name-status "$prior" HEAD
+git diff --name-status "$base" HEAD
+
+printf '%s\n' '--- Incremental diff since prior review ---'
+git diff --unified=40 "$prior" HEAD -- \
+  AGENTS.md \
+  .claude/scripts/drifted-lane-escalation-contract.test.sh \
+  .github/workflows/ci.yaml
+
+printf '%s\n' '--- Current policy section ---'
+start="$(rg -n '^### Refresh only through the runtime' AGENTS.md | cut -d: -f1 | head -n1)"
+end="$(rg -n '^### Agent definition locations' AGENTS.md | cut -d: -f1 | head -n1)"
+if [ -n "$start" ] && [ -n "$end" ]; then
+  awk -v start="$start" -v end="$end" \
+    'NR >= start && NR <= end { printf "%6d\t%s\n", NR, $0 }' AGENTS.md
+fi
+
+printf '%s\n' '--- Contract-test structure and relevant assertions ---'
+ast-grep outline .claude/scripts/drifted-lane-escalation-contract.test.sh --items all || true
+rg -n -C 8 -- \
+  'Cursor|fetch|main:refs/remotes/origin/main|refs/remotes/origin/main|CURRENT|UNKNOWN|DRIFT|tracker|assert_contains|mutation|ablat' \
+  .claude/scripts/drifted-lane-escalation-contract.test.sh
+
+printf '%s\n' '--- Referenced script interfaces ---'
+rg -n -C 10 -- \
+  '--runtime|--plugins-root|refs/remotes/origin/main|origin/main|fetch|CURRENT|DRIFT|UNKNOWN|exit [012]' \
+  .claude/scripts/plugin-definition-currency.sh \
+  .claude/scripts/plugin-definition-refresh.sh
+
+printf '%s\n' '--- CI integration and whitespace ---'
+rg -n -C 7 -- \
+  'drifted-lane-escalation-contract|test-drifted-lane-escalation-contract|required|needs:' \
+  .github/workflows/ci.yaml
+git diff --check "$base" HEAD
+
+printf '%s\n' '--- Current relevant checks ---'
+gh pr checks 2998 \
+  --repo devantler-tech/monorepo \
+  --json name,state,link,workflow \
+  --jq '.[] | select(.name == "Test drifted lane escalation contract" or .name == "CI - Required Checks") | "\(.name)\t\(.state)\t\(.workflow // "-")\t\(.link // "-")"' || true
+```
+
+Length of output: 17097
+
+---
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -u
+
+printf '%s\n' '--- Relevant policy lines ---'
+awk 'NR >= 610 && NR <= 670 { printf "%6d\t%s\n", NR, $0 }' AGENTS.md
+
+printf '%s\n' '--- Contract test: assertion and mutation sections ---'
+rg -n -C 6 -- \
+  'main:refs/remotes/origin/main|generic `git fetch origin main`|Fetch that ref|Cursor-filed|--runtime cursor|fresh|mutation|ablation|assert_contains' \
+  .claude/scripts/drifted-lane-escalation-contract.test.sh || true
+awk 'NR >= 300 && NR <= 520 { printf "%6d\t%s\n", NR, $0 }' \
+  .claude/scripts/drifted-lane-escalation-contract.test.sh
+
+printf '%s\n' '--- Currency script structure and Cursor ref resolution ---'
+ast-grep outline .claude/scripts/plugin-definition-currency.sh --items all 2>/dev/null || true
+rg -n -C 10 -- \
+  'cursor|refs/remotes/origin/main|origin/main|--runtime|plugins-root|git fetch|CURRENT|DRIFT|UNKNOWN|exit [012]' \
+  .claude/scripts/plugin-definition-currency.sh || true
+
+printf '%s\n' '--- Refresh script runtime interface ---'
+rg -n -C 6 -- \
+  '--runtime|--plugins-root|CURRENT|DRIFT|UNKNOWN|exit [012]' \
+  .claude/scripts/plugin-definition-refresh.sh || true
+
+printf '%s\n' '--- CI contract-test integration ---'
+rg -n -C 8 -- \
+  'drifted-lane-escalation-contract|test-drifted-lane-escalation-contract|required|needs:' \
+  .github/workflows/ci.yaml || true
+
+printf '%s\n' '--- Diff and checks ---'
+base="$(git merge-base HEAD origin/main)"
+git diff --check "$base" HEAD || true
+gh pr checks 2998 \
+  --repo devantler-tech/monorepo \
+  --json name,state,link,workflow \
+  --jq '.[] | select(.name == "Test drifted lane escalation contract" or .name == "CI - Required Checks") | "\(.name)\t\(.state)\t\(.workflow // "-")\t\(.link // "-")"' \
+  || true
+```
+
+Length of output: 111304
+
+---
+
+</details>
+
+`@devantler` I reviewed `c615dfa69a41c204216ac87fb497794a79553afa`.
+
+The Cursor reset path now updates `refs/remotes/origin/main` with the explicit `main:refs/remotes/origin/main` refspec. The currency script reads that same ref for `--runtime cursor`.
+
+The contract test requires the refspec. CI executes the contract test and includes it in required-check aggregation. `Test drifted lane escalation contract` and `CI - Required Checks` succeeded.
+
+I found no further issues.
+
+<sub>You are interacting with an AI system.</sub>

@@ -1,0 +1,59 @@
+<!-- This is an auto-generated reply by CodeRabbit -->
+> [!TIP]
+> For best results, initiate chat on the files or code changes.
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+printf '%s\n' '=== Changed files and diff ==='
+git diff --find-renames origin/HEAD...HEAD -- .mega-linter.yml k8s/bases/infrastructure/vault-config/job.yaml || \
+git diff --find-renames HEAD^...HEAD -- .mega-linter.yml k8s/bases/infrastructure/vault-config/job.yaml
+
+printf '%s\n' '=== Kubernetes Job structure ==='
+ast-grep outline k8s/bases/infrastructure/vault-config/job.yaml --items all || true
+nl -ba k8s/bases/infrastructure/vault-config/job.yaml | sed -n '1,240p'
+
+printf '%s\n' '=== MegaLinter Checkov documentation ==='
+rg -n -C 8 'checkov|CKV_K8S_40|vault-config|non blocking' .mega-linter.yml || true
+```
+
+Length of output: 6783
+
+---
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+printf '%s\n' '=== vault-config Job relevant context ==='
+sed -n '30,180p' k8s/bases/infrastructure/vault-config/job.yaml
+
+printf '%s\n' '=== Job annotations, images, and security contexts ==='
+rg -n -C 4 '^(metadata:|  annotations:|    checkov\.io/skip[0-9]+:|        image:|      securityContext:|        runAsUser:|        runAsGroup:|      runAsUser:|      runAsGroup:)' \
+  k8s/bases/infrastructure/vault-config/job.yaml
+
+printf '%s\n' '=== All CKV_K8S_40 skip directives ==='
+rg -n -C 2 'checkov\.io/skip[0-9]+:.*CKV_K8S_40' k8s .mega-linter.yml
+```
+
+Length of output: 13472
+
+---
+
+</details>
+
+`@devantler` Reviewed pull request `#3051`.
+
+I found no actionable issues.
+
+The `CKV_K8S_40` skip is scoped to the `vault-config` Job metadata. The Job still sets `runAsUser: 100`, `runAsGroup: 1000`, and `runAsNonRoot: true`. The documented Checkov counts also match the stated one-finding reduction.
+
+<sub>You are interacting with an AI system.</sub>

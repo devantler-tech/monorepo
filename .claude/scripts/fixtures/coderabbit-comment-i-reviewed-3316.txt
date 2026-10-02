@@ -1,0 +1,107 @@
+<!-- This is an auto-generated reply by CodeRabbit -->
+> [!TIP]
+> For best results, initiate chat on the files or code changes.
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+expected_head='ed7bb238485ce8f395a54841d80ec5db70558617'
+base="$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main)"
+
+echo '== Revision =='
+git rev-parse HEAD
+printf 'merge-base: %s\n' "$base"
+git status --short
+git merge-base --is-ancestor "$expected_head" HEAD \
+  && echo "requested head is reachable: $expected_head" \
+  || echo "requested head is not reachable: $expected_head"
+
+echo '== Changed paths and whitespace check =='
+git diff --name-status "$base"...HEAD
+git diff --check "$base"...HEAD
+
+echo '== Delta since previous finding head =='
+git diff --no-ext-diff --unified=100 \
+  'cb56b8d6395431c594f91ef8e7f9e82bc60d3713'...HEAD -- \
+  scripts/guard-shared-publish-workflow-pin.sh \
+  scripts/tests/test-shared-publish-workflow-pin-guard.sh
+
+echo '== Current PR patch =='
+git diff --no-ext-diff --unified=120 "$base"...HEAD -- \
+  scripts/guard-shared-publish-workflow-pin.sh \
+  scripts/tests/test-shared-publish-workflow-pin-guard.sh
+
+echo '== Shell file outlines =='
+ast-grep outline scripts/guard-shared-publish-workflow-pin.sh --items all 2>/dev/null || true
+ast-grep outline scripts/tests/test-shared-publish-workflow-pin-guard.sh --items all 2>/dev/null || true
+
+echo '== Block-scalar and subject parsing regions =='
+rg -n -C 16 \
+  'block|scalar|subject|[|>]|yaml_scalar|SUBJECT_PATTERN' \
+  scripts/guard-shared-publish-workflow-pin.sh \
+  scripts/tests/test-shared-publish-workflow-pin-guard.sh || true
+
+echo '== Test and CI references =='
+rg -n -C 4 \
+  'guard-shared-publish-workflow-pin\.sh|test-shared-publish-workflow-pin-guard\.sh' \
+  .github scripts README.md 2>/dev/null || true
+
+echo '== Static shell syntax =='
+bash -n scripts/guard-shared-publish-workflow-pin.sh
+bash -n scripts/tests/test-shared-publish-workflow-pin-guard.sh
+```
+
+Length of output: 151406
+
+---
+
+</details>
+
+`@devantler` I reviewed `ed7bb238485ce8f395a54841d80ec5db70558617`.
+
+I found no actionable issues.
+
+The block-scalar check now rejects both legal indicator orders. It covers `>-2`, `|+2`, and `>2-`. The broad check also avoids another incomplete enumeration of block-scalar header syntax.
+
+The three new regression cases exercise the affected forms. `git diff --check` and `bash -n` passed. The CI workflow invokes the suite with `bash`.
+
+🐇 ✅
+
+
+<!-- <review_comment_addressed> -->
+
+
+---
+
+<details>
+<summary>✏️ Learnings added</summary>
+
+```
+Learnt from: devantler
+URL: https://github.com/devantler-tech/platform/pull/3316
+
+Timestamp: 2026-08-23T07:16:15.742Z
+Learning: In `scripts/guard-shared-publish-workflow-pin.sh`, a YAML block-scalar header can place its chomping indicator (`+` or `-`) and indentation indicator digit in either order, for example `>-2`, `>2-`, `|+2`, and `|2+`. The line-oriented guard must reject block scalars instead of attempting to validate a matcher-looking content line.
+```
+
+> Note: Learnings are effective only in the context of similar code segments. To apply general coding guidelines, please configure [review instructions](https://docs.coderabbit.ai/guides/review-instructions). You can manage existing learnings in the [app](https://app.coderabbit.ai/learnings).
+
+</details>
+
+---
+
+<!-- This is an auto-generated comment: tweet message by coderabbit.ai -->
+
+If you found this review helpful, would you consider giving us a shout-out on [X](https://twitter.com/intent/tweet?related=CodeRabbitAI&text=%40coderabbitai%20caught%20a%20P1%20YAML%20block-scalar%20bypass%3A%20reject%20unsupported%20%60%7C%60%2F%60%3E%60%20suffixes%2C%20including%20reversed%20chomping%2Findent%20indicators.%20Regression%20tests%20now%20harden%20the%20guard.%20%F0%9F%94%92%20Try%20it!&url=https%3A%2F%2Fgithub.com%2Fdevantler-tech%2Fplatform%2Fpull%2F3316)?
+
+Thank you for using CodeRabbit!
+
+<!-- end of auto-generated comment: tweet message by coderabbit.ai -->
+
+<sub>You are interacting with an AI system.</sub>
