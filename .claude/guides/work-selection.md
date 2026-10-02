@@ -269,7 +269,10 @@ governs the issue work that follows.) Two rules enforce that:
    more than 7 days ago, `--verify-max-age-days`), re-verify the blocker and update the date and
    result, or unblock it; for `NO-ASK`, deliver an ask
    through a canonical attention channel and record it; for `STALE-ASK`, renew the ask and update
-   its channel and date to the actual delivery. Exit `1` means findings, `2` means
+   its channel and date to the actual delivery. The check reads every open issue, not only labelled
+   ones, so an `UNLABELLED` row is an issue whose `**Blocker:**` line declares a blocker while it
+   carries no `blocked` label: re-verify that blocker, then label it with a conforming line or
+   unblock it (`**Blocker:** none` declares no blocker and is never reported). Exit `1` means findings, `2` means
    UNKNOWN — a failed or timed-out read, never a clean sweep.
    ⚠️ **Verify before repairing.** Adding a well-formed line to an issue whose dependency has already
    shipped makes the skip look *more* legitimate on every future tick, which is worse than the
