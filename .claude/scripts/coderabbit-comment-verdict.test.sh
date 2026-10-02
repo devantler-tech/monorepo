@@ -97,6 +97,8 @@ expect "acknowledgement shell carries no verdict" 1 "NONE no-verdict" \
   "$(payload "$(reply '<!-- CodeRabbit review command invocation: v2:abc -->' '✅ Action performed' '' 'Review finished.')")"
 expect "rate-limit marker blocks the green" 1 "NONE did-not-run" \
   "$(payload "$(reply "I reviewed \`${head}\`." "" "No findings." "<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->")")"
+expect "the Action-not-completed rate-limit shell blocks the green even beside a verdict" 1 "NONE did-not-run" \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "No findings." "<details>" "<summary>⚠️ Action not completed</summary>" "" "Review rate limited." "</details>")")"
 expect "service shell heading blocks the green" 1 "NONE did-not-run" \
   "$(payload "$(reply "## Review failed" "I reviewed \`${head}\`." "" "No findings.")")"
 expect "a P1 heading elsewhere blocks the green" 1 "NONE finding-markers" \

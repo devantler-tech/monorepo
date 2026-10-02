@@ -140,7 +140,7 @@ result="$(awk -v head="$head" '
     if (line ~ /rate limited by coderabbit\.ai -->/) notrun = 1
     if (line ~ /^[ \t]*(```|~~~)/) { fence = !fence; next }
     if (fence) next
-    if (line ~ /(Review limit reached|[Rr]eview limit|couldn.t start this review|Review skipped|Review failed|[Rr]ate limit exceeded)/) notrun = 1
+    if (line ~ /(Review limit reached|[Rr]eview limit|couldn.t start this review|Review skipped|Review failed|[Rr]ate limit exceeded|[Rr]ate limited)/) notrun = 1
     if (line ~ /(^#+ *P[0-3]([^0-9]|$)|\*\*P[0-3]([^0-9]|$)|^#+ Review finding|Potential issue|Actionable comments posted: [1-9])/) finding = 1
     if (line ~ /<summary>[^<]*comments \([1-9][0-9]*\)<\/summary>/ && line !~ /🔇/) finding = 1
     opens = gsub(/<details/, "&", line); closes = gsub(/<\/details>/, "&", line)
