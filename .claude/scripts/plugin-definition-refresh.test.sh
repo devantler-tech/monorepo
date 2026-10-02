@@ -236,6 +236,60 @@ if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ]; then
 else bad "B5b reads the pin from the consumer's submodule and applies an identical target subtree" "exit $rc, out: $out"; fi
 cleanup
 
+# B6 — a symlink keeps the subtree's tree id while the bytes it installs change: Claude Code
+# dereferences a link into the marketplace when it copies the plugin. Only the moved TARGET
+# file differs here, so the subtree is identical and the shortcut must still refuse.
+make_fixture
+git -C "$MK" checkout -q "$MK_NEW"
+ln -s ../../frontend-design/s.md "$MK/plugins/agentic-engineering/agents/shared.md" || exit 9
+B_PIN="$(commit_on "$MK" linked)"; [ -n "$B_PIN" ] || exit 9
+set_gitlink "$B_PIN"
+git -C "$MK" checkout -q "$B_PIN"
+echo unreviewed > "$MK/plugins/frontend-design/s.md"
+B_HEAD="$(move_past_pin "$B_PIN" link-target-moved)" || exit 9
+out="$(STUB_MARKETPLACE_TARGET="$B_HEAD" run 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'plugins/agentic-engineering/agents/shared.md' <<<"$out"; then
+  ok "B6 refuses (exit 1), naming the link, when the target subtree holds a symlink"
+else bad "B6 refuses (exit 1), naming the link, when the target subtree holds a symlink" "exit $rc, out: $out"; fi
+cleanup
+
+# B7 — the pin must be an object id. `HEAD` would resolve inside the marketplace clone and the
+# gate would compare the marketplace with itself.
+make_fixture
+set_gitlink "$MK_OLD"
+for expr in HEAD main; do
+  out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --gitlink "$expr" 2>&1)"; rc=$?
+  if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'not a full object id' <<<"$out"; then
+    ok "B7 refuses --gitlink $expr as UNKNOWN (exit 2) rather than resolving it"
+  else bad "B7 refuses --gitlink $expr as UNKNOWN (exit 2) rather than resolving it" "exit $rc, out: $out"; fi
+done
+cleanup
+
+# B8 — a failed read of the marketplace subtree is UNKNOWN, never "absent" (which would say NOT-ON-PIN
+# and point the caller at a gitlink bump). The pin is read from the consumer's submodule, as on a
+# shallow runtime clone, and every object read inside the marketplace clone fails.
+make_fixture
+SIDE="$ROOT/side"
+git -c advice.detachedHead=false clone -q "$MK" "$SIDE" || { printf 'FIXTURE FAILURE: clone side\n' >&2; exit 9; }
+git -C "$SIDE" config user.email t@t; git -C "$SIDE" config user.name t
+git -C "$SIDE" checkout -q "$MK_NEW" || exit 9
+echo fd-side > "$SIDE/plugins/frontend-design/s.md"
+PIN_SIDE="$(commit_on "$SIDE" side-only)"; [ -n "$PIN_SIDE" ] || exit 9
+set_gitlink "$PIN_SIDE"
+git -c advice.detachedHead=false clone -q "$SIDE" "$CONSUMER/libraries/agent-plugins" || exit 9
+mkdir -p "$ROOT/gitshim"
+cat > "$ROOT/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+if [ "\$1" = -C ] && [ "\$2" = "$MK" ] && [ "\$4" = cat-file ]; then exit 128; fi
+exec "$(command -v git)" "\$@"
+SHIM
+chmod +x "$ROOT/gitshim/git"
+out="$(PATH="$ROOT/gitshim:$PATH" STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q "cannot read the 'agentic-engineering' subtree" <<<"$out"; then
+  ok "B8 reports a failed marketplace read as UNKNOWN (exit 2), not as an absent subtree"
+else bad "B8 reports a failed marketplace read as UNKNOWN (exit 2), not as an absent subtree" "exit $rc, out: $out"; fi
+cleanup
+
 # ── A2 — the safe case: marketplace latest == pin ⇒ apply ──────────────────────────────────────
 make_fixture
 set_gitlink "$MK_NEW"

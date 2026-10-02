@@ -165,6 +165,13 @@ if [ -z "$GITLINK" ]; then
   GITLINK="${pin_rest%%$'\t'*}"
 fi
 [ -n "$GITLINK" ] || die "no gitlink for '$SUBMODULE_PATH' at HEAD — cannot establish the pinned revision"
+# A full object id, never a revision expression: the gate below resolves the pin inside the
+# marketplace clone, where `HEAD` or a branch name would compare the marketplace with itself.
+case "$GITLINK" in
+  *[!0-9a-f]*) die "the pin '$GITLINK' is not a full object id — refusing a revision expression" ;;
+esac
+[ "${#GITLINK}" -eq 40 ] || [ "${#GITLINK}" -eq 64 ] \
+  || die "the pin '$GITLINK' is not a full object id — refusing an abbreviated or malformed one"
 
 # DERIVED, never passed in. An overridable directory is a decoy vector: a caller could point this at
 # a checkout that happens to equal the pin while both CLI commands still select the runtime
@@ -307,28 +314,57 @@ if [ "$candidate" != "$GITLINK" ] && [ "$DRY_RUN" -eq 0 ]; then
   case "/$source_path/" in
     */../*|*/./*|*//*) die "the '$PLUGIN_NAME' entry's source '$source_path' is not a plain relative path" ;;
   esac
-  tree_at() {
-    local id
-    id="$(git -C "$1" --no-replace-objects rev-parse --verify -q "$2:$source_path" 2>/dev/null)" || return 1
-    [ "$(git -C "$1" --no-replace-objects cat-file -t "$id" 2>/dev/null)" = tree ] || return 1
-    printf '%s' "$id"
+  # The subtree's own entry at a revision: prints "<type> <id>", prints nothing when the path is
+  # absent, and fails only when a read fails. An absent or non-directory subtree is a difference
+  # (exit 1); a failed read, including an object missing from the clone, is UNKNOWN (exit 2).
+  subtree_at() {
+    local entry rest kind id
+    entry="$(git -C "$1" --no-replace-objects ls-tree "$2" -- "$source_path" 2>/dev/null)" || return 1
+    [ -n "$entry" ] || return 0
+    case "$entry" in *$'\n'*) return 1 ;; esac
+    rest="${entry#* }"; kind="${rest%% *}"; rest="${rest#* }"; id="${rest%%$'\t'*}"
+    if [ "$kind" != commit ]; then
+      git -C "$1" --no-replace-objects cat-file -e "$id" 2>/dev/null || return 1
+    fi
+    printf '%s %s' "$kind" "$id"
   }
-  pin_tree="$(tree_at "$pin_repo" "$GITLINK")" || die "cannot resolve the '$PLUGIN_NAME' subtree '$source_path' at the pin $GITLINK"
-  head_tree="$(tree_at "$MARKETPLACE_DIR" "$candidate")" || head_tree=""
+  pin_sub="$(subtree_at "$pin_repo" "$GITLINK")" || die "cannot read the '$PLUGIN_NAME' subtree '$source_path' at the pin $GITLINK"
+  case "$pin_sub" in
+    tree\ *) pin_tree="${pin_sub#tree }" ;;
+    *) die "the '$PLUGIN_NAME' source '$source_path' is not a directory at the pin $GITLINK — cannot establish its reviewed definition" ;;
+  esac
+  head_sub="$(subtree_at "$MARKETPLACE_DIR" "$candidate")" || die "cannot read the '$PLUGIN_NAME' subtree '$source_path' at $candidate"
+  head_tree=""
+  case "$head_sub" in tree\ *) head_tree="${head_sub#tree }" ;; esac
+  # Tree identity covers a symlink's TEXT and a submodule's commit, not the bytes the runtime
+  # copies: Claude Code dereferences a link that resolves elsewhere in the marketplace. So an
+  # identical subtree proves the install only when it holds nothing but regular files.
+  linked=""
   if [ "$head_entry" = "$pin_entry" ] && [ "$head_tree" = "$pin_tree" ]; then
+    listing="$(git -C "$pin_repo" --no-replace-objects ls-tree -r "$pin_tree" 2>/dev/null)" \
+      || die "cannot list the '$PLUGIN_NAME' subtree at the pin $GITLINK"
+    linked="$(printf '%s\n' "$listing" | awk -F'\t' '$1 !~ /^100(644|755) blob / && NF { print $2 }')"
+  fi
+  if [ "$head_entry" = "$pin_entry" ] && [ "$head_tree" = "$pin_tree" ] && [ -z "$linked" ]; then
     say "target subtree .......... $source_path is identical at $candidate and the pin (tree $pin_tree)"
   else
     say ""
     say "NOT-ON-PIN — refusing to apply, nothing changed."
     say "  The marketplace carries $candidate; this consumer pins $GITLINK, and what it would install"
-    say "  for '$PLUGIN_NAME' differs from the reviewed definition:"
+    if [ -n "$linked" ]; then
+      say "  for '$PLUGIN_NAME' cannot be proven from its subtree, which links outside itself or to a"
+      say "  submodule — only the exact pin can be applied:"
+      printf '%s\n' "$linked" | sed "s|^|    $source_path/|" | while IFS= read -r line; do say "$line"; done
+    else
+      say "  for '$PLUGIN_NAME' differs from the reviewed definition:"
+    fi
     if [ "$head_entry" = 0 ]; then
       say "    the marketplace no longer lists '$PLUGIN_NAME'"
     elif [ "$head_entry" != "$pin_entry" ]; then
       say "    its marketplace entry"
     fi
     if [ -z "$head_tree" ]; then
-      say "    $source_path is absent at $candidate"
+      say "    $source_path is absent or not a directory at $candidate"
     elif [ "$head_tree" != "$pin_tree" ]; then
       # Naming the files is reporting only; the tree identities above are the verdict.
       { git -C "$pin_repo" --no-replace-objects ls-tree -r "$GITLINK" -- "$source_path" 2>/dev/null || true
