@@ -424,15 +424,13 @@ submodule_drift_disposable() {
 }
 
 if [ ! -d "$WT_ROOT" ]; then
-  # Still prune. A repository whose worktree directories (and .claude/worktrees itself)
-  # are already gone can retain STALE registrations, and those keep pinning their
-  # branches in branch-cleanup.sh's keep-set — the coupling this tool exists to break.
-  # Returning early here left exactly that state unrepairable.
-  if [ "$MODE" = "apply" ]; then
-    git -C "$TOPLEVEL" worktree prune 2>/dev/null \
-      || die "no worktree root at $WT_ROOT and 'git worktree prune' failed — stale registrations remain"
-  fi
-  printf 'worktree-cleanup: no worktree root at %s — pruned stale registrations only\n' "$WT_ROOT"
+  # Nothing to sweep, and nothing to unregister: a run removes the registrations of the
+  # worktrees it reaped itself, and no others (#3716). This used to run a repository-wide
+  # `git worktree prune`, which cannot be limited to one root. It also dropped another
+  # lane's registration whose directory was only briefly unavailable, and that worktree
+  # came back with a broken link to its repository. `git gc` still expires a registration
+  # whose directory stays gone (gc.worktreePruneExpire).
+  printf 'worktree-cleanup: no worktree root at %s — nothing to sweep\n' "$WT_ROOT"
   exit 0
 fi
 
@@ -1885,12 +1883,15 @@ while IFS= read -r wt <&3; do
     keep "$wt" "could not write refs/reaped/$sha — refusing to remove"; continue
   fi
 
-  # The fallback's prune is deliberately OUTSIDE the success condition: `rm -rf` can
-  # succeed while `prune` fails (git's admin dir unwritable), and folding prune into the
-  # condition sent an actually-deleted worktree down the "removal FAILED" branch — the
+  # The fallback's unregistration is deliberately OUTSIDE the success condition: `rm -rf`
+  # can succeed while unregistering fails (git's admin dir unwritable), and folding it into
+  # the condition sent an actually-deleted worktree down the "removal FAILED" branch — the
   # run then exited 0 leaving a `pending` row for a path that is already gone.
-  # Deletion success is judged by the directory being absent; a failed prune is a
-  # separate, loud error.
+  # Deletion success is judged by the directory being absent; a failed unregistration is a
+  # separate, loud error. It unregisters this worktree only: with the directory gone,
+  # `git worktree remove` deletes just its admin entry, where a repository-wide
+  # `git worktree prune` would also drop another lane's registration whose directory is
+  # briefly unavailable (#3716).
   # The fallback re-runs the FULL mutable-gate set, not just the lock: the failed
   # `worktree remove` above can take time, and a session entering the worktree in that
   # window must still stop the recursive delete.
@@ -1910,8 +1911,8 @@ while IFS= read -r wt <&3; do
     keep "$wt" "$IDENTITY_NOTE"; continue
   elif rm -rf "$wt_real" && [ ! -e "$wt_real" ]; then
     worktree_claim_lock_release || die "REMOVED $wt_real but could not release its ownership mutex"
-    git -C "$TOPLEVEL" worktree prune 2>/dev/null \
-      || die "REMOVED $wt_real but 'git worktree prune' failed — the deletion DID happen; run 'git -C $TOPLEVEL worktree prune' to clear its admin entry (restore ref: refs/reaped/$sha)"
+    git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
+      || die "REMOVED $wt_real but could not remove its registration — the deletion DID happen; run 'git -C $TOPLEVEL worktree remove --force $wt_real' to clear its admin entry (restore ref: refs/reaped/$sha)"
   else
     worktree_claim_lock_release || true
     die "removal FAILED for $wt_real after all gates passed (its manifest row is 'pending' and the directory still exists)"
@@ -1932,14 +1933,11 @@ while IFS= read -r wt <&3; do
   reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
 done 3<<< "$CANDIDATES"
 
-# Drop admin entries whose directory is already gone.
-if [ "$MODE" = "apply" ]; then
-  # Not best-effort: this prune is what clears missing-worktree registrations, and
-  # branch-cleanup.sh builds its keep-set from `git worktree list`. A silently failed
-  # prune therefore leaves stale entries pinning branches that should be sweepable.
-  git -C "$TOPLEVEL" worktree prune 2>/dev/null \
-    || die "reaped $reaped worktree(s) but 'git worktree prune' failed — stale registrations remain and will pin their branches in branch-cleanup.sh"
-fi
+# No closing `git worktree prune` (#3716). Every worktree reaped above lost its registration
+# with its directory, or the run died saying it did not. A repository-wide prune cannot be
+# limited to this root, so it would also drop another lane's registration whose directory
+# is only briefly unavailable, and that worktree would come back with a broken link to its
+# repository.
 
 printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d stuck=%d salvaged=%d freed=%d MB\n' \
   "$MODE" "$reaped" "$kept" "$stuck" "$salvaged" "$((freed_kb/1024))"
