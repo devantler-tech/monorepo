@@ -654,15 +654,44 @@ t_no_reaped_row_when_removal_is_aborted_after_recording() {
   # here the worktree is LOCKED between the pre-record gates and the removal, so the
   # run must leave a `pending` row and NO `reaped` row, and the directory must survive.
   # The failure must land AFTER record(), so an early KEEP gate cannot be what makes
-  # this pass — a read-only parent directory lets every gate succeed and then makes the
-  # removal itself fail. Asserting the `pending` row EXISTS is what rules out the
-  # vacuous case where the worktree never reached record() at all.
+  # this pass — every gate succeeds and then the removal itself fails. Asserting the
+  # `pending` row EXISTS is what rules out the vacuous case where the worktree never
+  # reached record() at all.
+  #
+  # The failure is injected with shims, not permissions (#3593). A read-only parent
+  # directory stops the unlink only for an ordinary user: root ignores it, so under
+  # uid 0 the removal succeeded and this case failed on an unchanged script. Failing
+  # both removal steps — `git worktree remove` and the `rm -rf` fallback — for this one
+  # worktree holds for every user, and every other git and rm call passes through.
   local root; root=$(make_repo)
   add_wt "$root" stuck pushed
-  chmod a-w "$root/repo/.claude/worktrees"          # entries can no longer be unlinked
+  local shim="$root/shim" real_git real_rm; mkdir -p "$shim"
+  real_git=$(command -v git)
+  real_rm=$(command -v rm)
+  cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+prev=""
+for arg in "\$@"; do
+  if [ "\$prev" = worktree ] && [ "\$arg" = remove ]; then
+    echo "shim: injected 'git worktree remove' failure" >&2
+    exit 1
+  fi
+  prev=\$arg
+done
+exec "$real_git" "\$@"
+SHIM
+  cat > "$shim/rm" <<SHIM
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  case "\$arg" in
+    */.claude/worktrees/stuck) echo "shim: injected 'rm' failure for \$arg" >&2; exit 1 ;;
+  esac
+done
+exec "$real_rm" "\$@"
+SHIM
+  chmod +x "$shim/git" "$shim/rm"
   local rc
-  "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 >/dev/null 2>&1; rc=$?
-  chmod u+w "$root/repo/.claude/worktrees"
+  PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 >/dev/null 2>&1; rc=$?
   local pending_rows reaped_rows
   pending_rows=$(awk -F'\t' '$5=="pending"' "$root/manifest.tsv" 2>/dev/null | wc -l | tr -d ' ')
   reaped_rows=$(awk -F'\t' '$5=="reaped"' "$root/manifest.tsv" 2>/dev/null | wc -l | tr -d ' ')
