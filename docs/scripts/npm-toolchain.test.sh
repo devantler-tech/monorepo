@@ -15,10 +15,12 @@
 #   1. docs/package.json declares devEngines.packageManager as npm "^<major>.0.0" with
 #      onFail "error".
 #   2. Every job in .github/workflows that works in docs/ (a step or job default with
-#      working-directory docs, `--prefix docs` or `cd docs`) has exactly one actions/setup-node step
-#      with an explicit node-version, on a Node line whose bundled npm is that major. The
-#      known jobs must all be found, so an empty discovery cannot pass.
-#   3. CI runs this test from a job that its own inputs gate.
+#      working-directory docs, `--prefix docs` or `cd docs`) has exactly one actions/setup-node step,
+#      placed before its first step in docs/, with an explicit node-version on a Node line whose
+#      bundled npm is that major. The known jobs must all be found, so an empty discovery
+#      cannot pass.
+#   3. CI runs this test from a job that its own inputs gate, and that gate covers every
+#      workflow, so a new workflow that works in docs/ reruns it.
 #
 # Fixture cases first prove each check rejects the drift it exists for.
 set -euo pipefail
@@ -59,27 +61,30 @@ required_jobs=(
 required_filter_paths=(
   docs/package.json
   docs/scripts/npm-toolchain.test.sh
-  .github/workflows/audit-docs.yaml
-  .github/workflows/ci.yaml
-  .github/workflows/publish-pages.yaml
+  '.github/workflows/**'
 )
 
 # One row per job that works in docs/: job id, setup-node step count, node-version and
-# node-version-file of the first setup-node step. "-" stands for an absent value, because
-# `read` collapses empty tab-separated fields.
-# shellcheck disable=SC2016 # $setup is a yq variable, not a shell expansion.
+# node-version-file of the first setup-node step, and whether that step comes before the
+# job's first step in docs/. "-" stands for an absent value, because `read` collapses empty
+# tab-separated fields.
+# shellcheck disable=SC2016 # $steps, $docs and $setup are yq variables, not shell expansions.
 jobs_query='
-  .jobs // {} | to_entries | map(select(
-    ((.value.defaults.run."working-directory" // "") | test("^(\\./)?docs(/|$)")) or
-    ([.value.steps[]? | select(
-      ((."working-directory" // "") | test("^(\\./)?docs(/|$)")) or
-      ((.run // "") | test("--prefix[ =](\\./)?docs(/|\\s|$)")) or
-      ((.run // "") | test("(^|[\\s;&|(])cd\\s+(\\./)?docs(/|\\s|;|&|\\)|$)"))
-    )] | length > 0)
-  )) | map(
-    [.value.steps[]? | select((.uses // "") | test("^actions/setup-node@"))] as $setup |
-    [.key, ($setup | length), ($setup[0].with."node-version" // "-"),
-     ($setup[0].with."node-version-file" // "-")]
+  .jobs // {} | to_entries | map(
+    ((.value.defaults.run."working-directory" // "") | test("^(\\./)?docs(/|$)")) as $default_docs |
+    (.value.steps // []) as $steps |
+    [$steps | to_entries[] | select(
+      ((.value."working-directory" // "") | test("^(\\./)?docs(/|$)")) or
+      ((.value.run // "") | test("--prefix[ =](\\./)?docs(/|\\s|$)")) or
+      ((.value.run // "") | test("(^|[\\s;&|(])cd\\s+(\\./)?docs(/|\\s|;|&|\\)|$)")) or
+      ($default_docs and .value.run != null)
+    ) | .key] as $docs |
+    select($default_docs or ($docs | length > 0)) |
+    [$steps | to_entries[] | select((.value.uses // "") | test("^actions/setup-node@")) | .key] as $setup |
+    [.key, ($setup | length),
+     (if ($setup | length) > 0 then ($steps[$setup[0]].with."node-version" // "-") else "-" end),
+     (if ($setup | length) > 0 then ($steps[$setup[0]].with."node-version-file" // "-") else "-" end),
+     (if ($setup | length) > 0 and ($docs | length) > 0 then ($setup[0] < $docs[0]) else true end)]
   ) | .[]
 '
 
@@ -110,18 +115,21 @@ check() {
     return 1
   declared_major="${BASH_REMATCH[1]}"
 
-  local workflow base rows job count node_version node_version_file line npm_major
+  local workflow base rows job count node_version node_version_file ordered line npm_major
   local found=" "
   for workflow in "${workflows_dir}"/*.yaml "${workflows_dir}"/*.yml; do
     [ -f "${workflow}" ] || continue
     base="$(basename "${workflow}")"
     rows="$(yq -o=tsv "${jobs_query}" "${workflow}")" ||
       violation "cannot parse ${base}" || return 1
-    while IFS=$'\t' read -r job count node_version node_version_file; do
+    while IFS=$'\t' read -r job count node_version node_version_file ordered; do
       [ -n "${job}" ] || continue
       found="${found}${base}:${job} "
       [ "${count}" = "1" ] ||
         violation "${base}:${job} works in docs/ but has ${count} actions/setup-node steps; it needs exactly one" ||
+        return 1
+      [ "${ordered}" = "true" ] ||
+        violation "${base}:${job} sets up Node after its first step in docs/, so that step runs on the runner's default Node" ||
         return 1
       [ "${node_version_file}" = "-" ] && [ "${node_version}" != "-" ] ||
         violation "${base}:${job} must pin node-version explicitly, so the npm major it installs with is reviewable" ||
@@ -154,12 +162,15 @@ check() {
     violation "ci.yaml has no job that runs ./scripts/npm-toolchain.test.sh in docs/ behind a change filter" ||
     return 1
   filter="${BASH_REMATCH[1]}"
-  local path
+  # Compared in bash, literally: yq's == treats a `*` in its right-hand string as a glob, so
+  # '.github/workflows/**' would match any single workflow entry.
+  local entries path
+  entries="$(FILTER="${filter}" yq '
+    .jobs.changes.steps[] | select(.id == "filter") | .with.filters | from_yaml
+    | .[strenv(FILTER)] // [] | .[]
+  ' "${ci}")" || violation "cannot read ci.yaml filter '${filter}'" || return 1
   for path in "${required_filter_paths[@]}"; do
-    FILTER="${filter}" REQUIRED="${path}" yq -e '
-      .jobs.changes.steps[] | select(.id == "filter") | .with.filters | from_yaml
-      | .[strenv(FILTER)] | any_c(. == strenv(REQUIRED))
-    ' "${ci}" >/dev/null 2>&1 ||
+    grep -qxF -- "${path}" <<<"${entries}" ||
       violation "ci.yaml filter '${filter}' does not list ${path}, so a change to it skips this test" ||
       return 1
   done
@@ -207,6 +218,11 @@ yq -i 'del(.jobs.drift-check-active-projects.steps[] | select((.uses // "") | te
 expect_failure "job without setup-node" "ci.yaml:drift-check-active-projects works in docs/ but has 0"
 
 reset_fixture
+yq -i '.jobs.build-docs.steps |= ([.[] | select((.uses // "") | test("^actions/setup-node@") | not)]
+  + [.[] | select((.uses // "") | test("^actions/setup-node@"))])' "${fixture}/.github/workflows/ci.yaml"
+expect_failure "setup-node after npm ci" "ci.yaml:build-docs sets up Node after its first step in docs/"
+
+reset_fixture
 yq -i 'del(.jobs.build-docs)' "${fixture}/.github/workflows/ci.yaml"
 expect_failure "job not discovered" "ci.yaml:build-docs was not found"
 
@@ -219,8 +235,8 @@ jq '.devEngines.packageManager.onFail = "warn"' "${repo_root}/docs/package.json"
 expect_failure "onFail warn" "onFail is 'warn'"
 
 reset_fixture
-yq -i '(.jobs.changes.steps[] | select(.id == "filter") | .with.filters) |= (from_yaml | .docs-deps -= [".github/workflows/publish-pages.yaml"] | to_yaml)' \
+yq -i '(.jobs.changes.steps[] | select(.id == "filter") | .with.filters) |= (from_yaml | .docs-deps -= [".github/workflows/**"] | to_yaml)' \
   "${fixture}/.github/workflows/ci.yaml"
-expect_failure "filter misses publish workflow" "does not list .github/workflows/publish-pages.yaml"
+expect_failure "filter misses new workflows" "does not list .github/workflows/**"
 
 printf 'docs npm toolchain: PASS\n'

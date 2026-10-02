@@ -112,10 +112,10 @@ jobs:
               - 'docs/scripts/audit-dependencies.test.sh'
               - 'docs/scripts/npm-toolchain.test.sh'
               # The contract tests compare every workflow that installs, audits or
-              # publishes the site.
+              # publishes the site, including one a change adds.
               - '.github/workflows/audit-docs.yaml'
               - '.github/workflows/ci.yaml'
-              - '.github/workflows/publish-pages.yaml'
+              - '.github/workflows/**'
             active-projects:
               # The retired-link guard greps the WHOLE content tree, so it must
               # run for ANY content change — gating it on the two pages the
