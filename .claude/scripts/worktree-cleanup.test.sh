@@ -3739,6 +3739,100 @@ SHIM
   rm -rf "$root"
 }
 
+# --- a run unregisters only the worktrees it reaped (#3716) --------------------------
+# A repository-wide `git worktree prune` cannot be limited to one root. It also dropped
+# another lane's registration whose directory was briefly unavailable, and that worktree
+# came back with a broken link to its repository.
+
+# registered <root> <path> — 0 when the repository still registers a worktree at <path>.
+registered() {
+  git -C "$1/repo" worktree list --porcelain | grep -qxF -- "worktree $2"
+}
+
+# away_sibling <root> — a worktree under another lane's root whose directory is moved
+# aside, as a briefly unavailable directory looks. Prints its registered path.
+away_sibling() {
+  local root=$1 sib="$1/repo/.codex/worktrees/sib"
+  add_wt_at "$root" "$sib" codex/sib || return 1
+  mv "$sib" "$root/sib-away" || return 1
+  registered "$root" "$sib" || return 1
+  printf '%s' "$sib"
+}
+
+# sibling_restored <root> <path> — moves the sibling back. 0 when it is still registered
+# and its link to the repository still resolves.
+sibling_restored() {
+  mv "$1/sib-away" "$2" || return 1
+  registered "$1" "$2" && [ "$(git -C "$2" rev-parse --show-toplevel 2>/dev/null)" = "$2" ]
+}
+
+t_apply_keeps_a_sibling_lanes_missing_registration() {
+  local name="an apply run unregisters what it reaped and keeps another lane's missing registration"
+  local root sib; root=$(make_repo)
+  add_wt "$root" spent pushed
+  sib=$(away_sibling "$root") || { bad "$name" "FIXTURE: sibling worktree setup failed"; rm -rf "$root"; return; }
+  local out rc; out=$(run "$root" apply); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q '^REAPED *spent ' <<<"$out" \
+     && [ ! -e "$root/repo/.claude/worktrees/spent" ] \
+     && ! registered "$root" "$root/repo/.claude/worktrees/spent" \
+     && sibling_restored "$root" "$sib"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out :: $(git -C "$root/repo" worktree list --porcelain)"
+  fi
+  rm -rf "$root"
+}
+
+t_absent_root_keeps_a_sibling_lanes_missing_registration() {
+  local name="an apply run with no worktree root unregisters nothing"
+  local root sib; root=$(make_repo)
+  sib=$(away_sibling "$root") || { bad "$name" "FIXTURE: sibling worktree setup failed"; rm -rf "$root"; return; }
+  rmdir "$root/repo/.claude/worktrees" || { bad "$name" "FIXTURE: root not removed"; rm -rf "$root"; return; }
+  local out rc; out=$(run "$root" apply); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q 'no worktree root at .* nothing to sweep' <<<"$out" \
+     && sibling_restored "$root" "$sib"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out :: $(git -C "$root/repo" worktree list --porcelain)"
+  fi
+  rm -rf "$root"
+}
+
+t_fallback_removal_unregisters_only_its_own_worktree() {
+  local name="the rm -rf fallback unregisters only the worktree it removed"
+  local root sib; root=$(make_repo)
+  add_wt "$root" stuck pushed
+  sib=$(away_sibling "$root") || { bad "$name" "FIXTURE: sibling worktree setup failed"; rm -rf "$root"; return; }
+  # `git worktree remove` fails while the worktree's directory exists, so the run takes the
+  # rm -rf fallback; unregistering the then-missing path passes through to the real git.
+  local shim="$root/shim" log="$root/shim.log" real_git; mkdir -p "$shim"
+  real_git=$(command -v git)
+  cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+prev=""
+for arg in "\$@"; do
+  if [ "\$prev" = worktree ] && [ "\$arg" = remove ] && [ -d "\${!#}" ]; then
+    echo "shim: injected 'git worktree remove' failure for \${!#}" >> "$log"
+    exit 1
+  fi
+  prev=\$arg
+done
+exec "$real_git" "\$@"
+SHIM
+  chmod +x "$shim/git"
+  local out rc; out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q '^REAPED *stuck ' <<<"$out" \
+     && grep -q 'injected .* failure for .*/stuck$' "$log" 2>/dev/null \
+     && [ ! -e "$root/repo/.claude/worktrees/stuck" ] \
+     && ! registered "$root" "$root/repo/.claude/worktrees/stuck" \
+     && sibling_restored "$root" "$sib"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out :: shim: $(cat "$log" 2>/dev/null) :: $(git -C "$root/repo" worktree list --porcelain)"
+  fi
+  rm -rf "$root"
+}
+
 # --- a submodule sitting on a squash-merged PR head (#3674) --------------------------
 # drifted_sub_wt <root> <name> <origin-url> — a pushed worktree whose submodule has moved
 # to a clean commit no remote reaches (unstaged gitlink drift), with the submodule's origin
@@ -3994,6 +4088,9 @@ t_custom_root_rejects_a_symlinked_ancestor
 t_custom_root_that_cannot_be_inspected_is_unknown
 t_custom_root_rejects_dot_components
 t_custom_root_matches_a_registration_spelled_in_another_case
+t_apply_keeps_a_sibling_lanes_missing_registration
+t_absent_root_keeps_a_sibling_lanes_missing_registration
+t_fallback_removal_unregisters_only_its_own_worktree
 t_submodule_on_a_merged_pr_head
 t_submodule_drift_keeps_local_only_refs
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
