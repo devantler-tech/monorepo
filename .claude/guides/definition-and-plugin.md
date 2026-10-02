@@ -300,8 +300,10 @@ the plugin cache**; it is read-only evidence (see
 *Agent definition locations*). It exits `0` only once the install is on the pin **and an independent
 blob-identity check confirms it** — never on `plugin update`'s own exit status, which can report
 success having repaired nothing. `1` means the install is not on the pin (the marketplace could not
-supply that revision, or the apply ran and the post-apply check still does not report `CURRENT`).
-`2` is UNKNOWN — no verdict produced: no CLI, an unreadable pin or marketplace, a plugin id naming a
+supply that plugin's reviewed definition, naming the differing entry or files, or the apply ran and
+the post-apply check still does not report `CURRENT`).
+`2` is UNKNOWN — no verdict produced: no CLI, an unreadable pin or marketplace, a pinned revision in
+neither the marketplace clone nor the consumer's submodule, a plugin id naming a
 different marketplace than the clone being gated, a concurrent run holding the lock, a marketplace
 worktree whose bytes do not provably match the pinned commit, an unavailable verifier, or
 `--dry-run`, since a simulation asserts nothing about the install. **For the Claude lane only, run it
@@ -326,8 +328,12 @@ exactly what made the 2026-08-15 by-hand refresh look like it installed the pinn
 marketplace tip *was* `564a6a0f`. Measured the next day: pin `11b241cc` (4.3.4) against an upstream
 `main` already at `73109ad9` (4.3.6), so the bare commands would have installed a revision nobody
 here has reviewed. **Stale-install drift at least runs a previously reviewed definition; this would
-run one that was never read.** That is why the script gates on marketplace-HEAD **==** pin and
-refuses otherwise rather than taking the tip.
+run one that was never read.** That is why the script applies only when what it would install for
+**that plugin** is the reviewed definition: marketplace-HEAD **==** pin, or the plugin's marketplace
+entry (apart from its version) and its whole source subtree are identical at both revisions, and that
+subtree holds only regular files (a symlink or submodule refuses, since its tree identity does not
+cover the bytes the runtime copies). A release of an unrelated plugin then no longer blocks the
+repair (#3197), and any change to this plugin still refuses rather than taking the tip.
 
 ⚠️ **A refusal is a real finding about the ROLLOUT, not a failure of the check.** It means the
 gitlink and upstream have diverged, so the fix is to bump `libraries/agent-plugins` to the revision
@@ -356,7 +362,8 @@ continues — every dispatch, indefinitely.
 repair is **unavailable** (no path exists for that lane), **refused**, **fenced** (declined because
 performing it now would be unsafe), or **failed** (attempted and did not leave the install on the pin —
 including an `UNKNOWN` that produced no verdict at all) gets a **tracked, repository-visible issue** for
-that lane's drift, and the observation recorded on it.
+that lane's drift, stating the observed state; later observations are recorded on it only when they
+change that state (below).
 
 🔴 **An unresolved currency `UNKNOWN` qualifies TOO, and keying only on `DRIFT` reopens the exact
 silence this clause closes.** Read literally, the trigger needs the check to *read* `DRIFT` — so a lane
@@ -394,7 +401,8 @@ nothing but a marker separates them.
 
 🔴 **FIND the lane's existing marked, authenticated issue before opening one — one occurrence, one issue.**
 Overlapping same-lane runs are normal here, so a run that only ever creates produces duplicate queue
-items and duplicate remediation for a single drift. Look first; record the observation on what you find.
+items and duplicate remediation for a single drift. Look first; reuse what you find, and record on it
+only a state change.
 Two runs can still both find nothing and both file, because check-then-create is not atomic and GitHub
 offers no uniqueness constraint — so the tie-break is deterministic rather than a lock: the
 **lowest-numbered** authenticated open issue for that lane is the one.
@@ -433,6 +441,31 @@ capability performs the scoped metadata handoff. Missing capability is not evide
 happened. Repeated unchanged observations reuse the authenticated occurrence; they never create a
 second tracker. The registered owner of an open tracker also owns collecting recovery evidence and
 closing it, so a capability gap cannot strand the issue indefinitely.
+
+🔴 **Record a state CHANGE, never a repeat sighting — on every lane and both roles.** The open tracker
+already records that the lane is drifting, so a later sighting of the same condition is the same
+information, not new information. Posting it anyway buries the observations that do carry state:
+`monorepo#3143` collected nine near-identical comments in two days from both roles across hourly
+dispatches, each restating a state an earlier comment had already recorded. So every record — the
+tracker body and each observation on it — states the verdict, the consumer pin, and the differing
+files (or their count when the list is unavailable). Before writing, read the tracker's latest
+authenticated record and write only when this run's observation differs from it in one of these ways:
+
+1. **the lane recovered** — a fresh verified recovery observation, which closes the tracker under the
+   reset rule above;
+2. **the differing files changed** — the set of files that differ, or their count;
+3. **the consumer pin moved** — so the pin the tracker states is stale;
+4. **the verdict changed** — `DRIFT` to an unresolved `UNKNOWN` or back, because neither carries the
+   other's evidence.
+
+An unchanged observation writes nothing to the tracker — no comment, no body edit — and the run
+reports the sighting only in its own report. ⚠️ **When the recorded state cannot be read or
+authenticated, record.** An older record that does not state the verdict, pin and differing files
+counts as unreadable. An unreadable record is not an unchanged one: a redundant observation costs
+noise, while a change skipped because the comparison never ran costs the signal the tracker exists to
+carry. ⚠️ **This narrows only what a REPEAT observation must do.** Creation, the marker, the
+one-issue lookup, duplicate reconciliation, authentication, and the reset on a verified recovery are
+unchanged.
 
 🔴 **This clause tracks drift; it does NOT page a maintainer channel, and that boundary is deliberate.**
 A page that could be trusted would need a delivery record that cannot be forged, an ordering whose crash
