@@ -39,10 +39,12 @@
 #           directory would destroy the sole copy of real work.
 #   KEEP  - a worktree with modified TRACKED files, other than UNSTAGED gitlink drift
 #   KEEP  - a worktree with untracked files outside the known tool-noise set
-#   KEEP  - a worktree whose modified submodule itself has uncommitted or unpushed work
-#           (a submodule HEAD that is exactly a merged PR's head in its own devantler-tech
-#           repository is spent, not unpushed work: #3674), or whose repository holds any
-#           ref or reflog entry reaching a commit no remote has (the removal deletes it all)
+#   KEEP  - a worktree whose modified submodule itself has uncommitted work, or any of whose
+#           submodule repositories — drifted or not, checked out or not (#3683) — holds a ref
+#           or reflog entry reaching a commit its remote lacks (the removal deletes them all).
+#           A commit is on the remote when a remote-tracking ref reaches it, a tag GitHub
+#           holds at the same object reaches it, or it is a merged PR's head (or an ancestor
+#           of one) in the submodule's own devantler-tech repository (#3674)
 #   KEEP  - a worktree locked at removal time, re-checked live (never overridden by
 #           --force, and never removed by the rm -rf fallback either)
 #   ABORT - a caller-chosen root that is relative, a symlink, or holds the checkout being
@@ -354,7 +356,14 @@ pr_proves_spent() {
   return "$proven"
 }
 
-# submodule_head_spent <submodule-checkout> <sha> — exit 0 only when GitHub records a MERGED
+# module_git <git-dir> <args...> — git on exactly that submodule repository. Never `git -C`:
+# when the directory is not a readable repository, discovery walks up and answers for the
+# worktree's admin directory instead, so a broken submodule repository would read as clean.
+# The work tree is pinned too, because a submodule repository's core.worktree names its
+# checkout, and git refuses to run at all once that checkout is gone (deinitialised).
+module_git() { local g=$1; shift; git --git-dir="$g" --work-tree="$g" "$@"; }
+
+# submodule_head_spent <submodule-git-dir> <sha> — exit 0 only when GitHub records a MERGED
 # pull request in the submodule's own devantler-tech repository whose head commit is exactly
 # <sha>, and no OPEN one with that head (#3674). A submodule's squash-merged commit sits on
 # no remote-tracking ref once its branch is deleted, so the graph test alone kept every such
@@ -374,7 +383,7 @@ submodule_head_spent() {
   [ -n "$GH_BIN" ] || return 2
   case "$sha" in *[!0-9a-f]*|'') return 1 ;; esac
   [ "${#sha}" -eq 40 ] || return 1
-  repo=$(portfolio_repo "$(git -C "$sub" remote get-url origin 2>/dev/null || true)")
+  repo=$(portfolio_repo "$(module_git "$sub" remote get-url origin 2>/dev/null || true)")
   [ -n "$repo" ] || return 1
   # merged_at is null on an open or closed-unmerged PR. It is printed as `-`, never as an
   # empty field: tab is IFS whitespace, so `read` would collapse the empty field and shift
@@ -401,38 +410,176 @@ submodule_head_spent() {
   return "$proven"
 }
 
-# submodule_drift_disposable <submodule-checkout> <head-sha> <unpushed-count> — exit 0 when a
-# CLEAN submodule whose gitlink drifted holds nothing that is not already on a remote; 1 when
-# it holds local-only work; 2 when that could not be determined.
+# submodule_repository_disposable <git-dir> — exit 0 when a submodule repository holds nothing
+# its remote lacks; 1 when it holds local-only work (SUBMODULE_LOCAL_ONLY names one such
+# commit, SUBMODULE_TIP_NOTE says when the tip limit stopped the search); 2 when that could not
+# be determined.
 # A linked worktree's submodule repository lives in the worktree's admin directory, so the
 # removal deletes all of it, not just the checked-out HEAD. A local branch, tag or stash, or a
 # commit reset away that only a reflog still names, would be lost with it (#3674 review). So
-# every commit any ref or reflog entry reaches must be reachable from a remote-tracking ref,
-# or be the head of a merged PR (and its ancestors) when HEAD is spent that way.
-submodule_drift_disposable() {
-  local sub=$1 sha=$2 unpushed=$3 spent="" rc local_only
-  if [ "$unpushed" -gt 0 ]; then
-    submodule_head_spent "$sub" "$sha"; rc=$?
+# every commit any ref or reflog entry reaches must be on the remote: reachable from a
+# remote-tracking ref or from a tag GitHub holds at the same object (remote_backed_tags), or
+# be the head of a merged PR, with its ancestors. That evidence is asked for tip by tip, newest
+# first, because a run that worked inside a submodule leaves each merged branch's commits in
+# the reflog after the branch is gone; at most SUBMODULE_TIP_LIMIT tips are asked about.
+SUBMODULE_LOCAL_ONLY=""
+SUBMODULE_TIP_NOTE=""
+SUBMODULE_TIP_LIMIT=20
+submodule_repository_disposable() {
+  local g=$1 tip rc asked=0 exclude
+  SUBMODULE_LOCAL_ONLY=""; SUBMODULE_TIP_NOTE=""
+  # The common case asks nothing: no ref or reflog entry reaches past the remote-tracking refs.
+  tip=$(module_git "$g" rev-list --max-count=1 --all --reflog --not --remotes 2>/dev/null) || return 2
+  [ -n "$tip" ] || return 0
+  remote_backed_tags "$g" || return 2
+  exclude=$BACKED_TAGS
+  while :; do
+    # --topo-order prints no commit before its descendants, so each one asked about is a tip
+    # whose evidence, if any, also covers the older local-only commits beneath it.
+    # shellcheck disable=SC2086  # exclude is a space-separated list of refs and shas
+    tip=$(module_git "$g" rev-list --topo-order --max-count=1 --all --reflog --not --remotes $exclude \
+          2>/dev/null) || return 2
+    [ -n "$tip" ] || return 0
+    SUBMODULE_LOCAL_ONLY=$tip
+    asked=$((asked + 1))
+    if [ "$asked" -gt "$SUBMODULE_TIP_LIMIT" ]; then
+      SUBMODULE_TIP_NOTE="; more than $SUBMODULE_TIP_LIMIT local-only tips, the rest not asked about"
+      return 1
+    fi
+    submodule_head_spent "$g" "$tip"; rc=$?
     [ "$rc" -eq 0 ] || return "$rc"
-    spent=$sha
+    exclude="$exclude $tip"
+  done
+}
+
+# remote_backed_tags <repo> -> sets BACKED_TAGS to every tag (refs/tags/<name>) whose commit no
+# remote-tracking ref reaches but that the submodule's GitHub repository holds at exactly the
+# same object. A clone fetches every tag, and a release tag on a commit no branch still
+# reaches is on the remote, not local work: every ksail clone carries five (measured on the
+# host 2026-10-02), which would otherwise keep every worktree that populated it forever. A tag
+# GitHub lacks or holds elsewhere, and any tag outside the portfolio, stays unbacked, so its
+# commits still need other evidence. Returns 2 when the tags or GitHub could not be read.
+# Sets a global rather than printing: remote_has_tag's cache must outlive the call.
+BACKED_TAGS=""
+remote_backed_tags() {
+  local g=$1 rows commits lo repo obj ref rc
+  BACKED_TAGS=""
+  # `:` cannot occur in a ref name; %(*objectname) is empty for a lightweight tag.
+  rows=$(module_git "$g" for-each-ref --format='%(objectname):%(*objectname):%(refname)' refs/tags \
+         2>/dev/null) || return 2
+  [ -n "$rows" ] || return 0
+  commits=$(awk -F: '{ print ($2 != "" ? $2 : $1) }' <<< "$rows" | sort -u) || return 2
+  # shellcheck disable=SC2086  # one object id per word
+  lo=$(module_git "$g" rev-list --no-walk $commits --not --remotes 2>/dev/null) || return 2
+  [ -n "$lo" ] || return 0
+  repo=$(portfolio_repo "$(module_git "$g" remote get-url origin 2>/dev/null || true)")
+  [ -n "$repo" ] || return 0
+  # Only the tags on a local-only commit are asked about (five of ksail's 1451).
+  rows=$(LO="$lo" awk -F: 'BEGIN { n = split(ENVIRON["LO"], a, "\n"); for (i = 1; i <= n; i++) s[a[i]] = 1 }
+                           s[($2 != "" ? $2 : $1)]' <<< "$rows") || return 2
+  while IFS=: read -r obj _ ref; do
+    [ -n "$ref" ] || continue
+    remote_has_tag "$repo" "$ref" "$obj"; rc=$?
+    case "$rc" in
+      0) BACKED_TAGS="$BACKED_TAGS $ref" ;;
+      1) ;;
+      *) return 2 ;;
+    esac
+  done <<< "$rows"
+  return 0
+}
+
+# remote_has_tag <owner/repo> <refs/tags/name> <object> — exit 0 when GitHub holds that tag at
+# exactly <object> (a tag object for an annotated tag, as for-each-ref reports it); 1 when it
+# does not, or the name holds a character that cannot be put in the request path as is; 2 when
+# the query failed. Definitive answers are kept for the run: every worktree that populated a
+# submodule carries the same tags, and asking once per worktree would cost hundreds of calls.
+TAG_ANSWERS=$'\n'
+remote_has_tag() {
+  local repo=$1 ref=$2 obj=$3 name out rc key="$1 $2 $3"
+  case "$TAG_ANSWERS" in
+    *$'\n'"$key 0"$'\n'*) return 0 ;;
+    *$'\n'"$key 1"$'\n'*) return 1 ;;
+  esac
+  [ -n "$GH_BIN" ] || return 2
+  name=${ref#refs/tags/}
+  case "$name" in ''|*[!A-Za-z0-9._/+-]*) return 1 ;; esac
+  out=$(gh_bounded api "repos/$repo/git/ref/tags/$name" --jq '.object.sha'); rc=$?
+  if [ "$rc" -eq 0 ]; then
+    if [ "$out" = "$obj" ]; then rc=0; else rc=1; fi
+  else
+    # A tag GitHub has never had is a definitive 404, whose error body gh prints on stdout.
+    case "$out" in *'"status":"404"'*) rc=1 ;; *) return 2 ;; esac
   fi
-  # shellcheck disable=SC2086  # spent is empty or exactly one sha
-  local_only=$(git -C "$sub" rev-list --max-count=1 --all --reflog --not --remotes $spent 2>/dev/null) \
-    || return 2
-  [ -z "$local_only" ] || return 1
+  TAG_ANSWERS="$TAG_ANSWERS$key $rc"$'\n'
+  return "$rc"
+}
+
+# submodule_repositories <worktree> <admin> <worktree-realpath> -> prints the git directory of
+# every submodule repository the removal deletes, one per line (#3683): every repository under
+# the admin directory's modules/, whether its checkout drifted, sits exactly on its gitlink, or
+# is gone (deinitialised), nested submodules' included; and every populated submodule's whose
+# git directory sits inside the working tree (a clone `git submodule add` adopted in place).
+# A repository is a HEAD entry beside an objects entry, the layout nested_repository_blocker
+# recognises; the HEAD files under a repository's logs/ and refs/ have no objects beside them.
+# A symlinked modules/ is not followed (the removal deletes the link, not what it names), nor
+# is a repository elsewhere listed: both outlive the removal. Non-zero when the set cannot be
+# read in full, including a path holding a newline.
+submodule_repositories() {
+  local wt=$1 admin=$2 wt_real=$3 heads h d gitdirs g g_real
+  if [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ]; then
+    heads=$(find "$admin/modules" -name HEAD -print0 2>/dev/null | tr '\0\n' '\n\001') || return 1
+    case "$heads" in *$'\001'*) return 1 ;; esac
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      d=${h%/HEAD}
+      if [ -e "$d/objects" ] || [ -L "$d/objects" ]; then printf '%s\n' "$d"; fi
+    done <<< "$heads"
+  elif [ -e "$admin/modules" ] && [ ! -L "$admin/modules" ]; then
+    return 1
+  fi
+  gitdirs=$(git -C "$wt" submodule foreach --quiet --recursive 'git rev-parse --absolute-git-dir' \
+            2>/dev/null) || return 1
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    g_real=$(physical_path "$g") || return 1
+    case "$g_real/" in "$wt_real"/*) printf '%s\n' "$g_real" ;; esac
+  done <<< "$gitdirs"
+  return 0
+}
+
+# submodule_repositories_disposable <worktree> <worktree-realpath> — exit 0 when no submodule
+# repository the removal deletes holds work its remote lacks; 1 when one does; 2 when that could
+# not be determined. SUBMODULE_NOTE names the repository, and the commit or the reason.
+SUBMODULE_NOTE=""
+submodule_repositories_disposable() {
+  local wt=$1 wt_real=$2 admin repos g label rc
+  SUBMODULE_NOTE=""
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
+    || { SUBMODULE_NOTE="cannot locate the admin directory"; return 2; }
+  repos=$(submodule_repositories "$wt" "$admin" "$wt_real") \
+    || { SUBMODULE_NOTE="cannot list the submodule repositories"; return 2; }
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    label=${g#"$admin"/}; label=${label#"$wt_real"/}
+    submodule_repository_disposable "$g"; rc=$?
+    case "$rc" in
+      0) ;;
+      1) SUBMODULE_NOTE="$label at ${SUBMODULE_LOCAL_ONLY:0:12}$SUBMODULE_TIP_NOTE"; return 1 ;;
+      *) SUBMODULE_NOTE="$label${SUBMODULE_LOCAL_ONLY:+ at ${SUBMODULE_LOCAL_ONLY:0:12}}"; return 2 ;;
+    esac
+  done <<< "$repos"
   return 0
 }
 
 if [ ! -d "$WT_ROOT" ]; then
-  # Still prune. A repository whose worktree directories (and .claude/worktrees itself)
-  # are already gone can retain STALE registrations, and those keep pinning their
-  # branches in branch-cleanup.sh's keep-set — the coupling this tool exists to break.
-  # Returning early here left exactly that state unrepairable.
-  if [ "$MODE" = "apply" ]; then
-    git -C "$TOPLEVEL" worktree prune 2>/dev/null \
-      || die "no worktree root at $WT_ROOT and 'git worktree prune' failed — stale registrations remain"
-  fi
-  printf 'worktree-cleanup: no worktree root at %s — pruned stale registrations only\n' "$WT_ROOT"
+  # Nothing to sweep, and nothing to unregister: a run removes the registrations of the
+  # worktrees it reaped itself, and no others (#3716). This used to run a repository-wide
+  # `git worktree prune`, which cannot be limited to one root. It also dropped another
+  # lane's registration whose directory was only briefly unavailable, and that worktree
+  # came back with a broken link to its repository. `git gc` still expires a registration
+  # whose directory stays gone (gc.worktreePruneExpire).
+  printf 'worktree-cleanup: no worktree root at %s — nothing to sweep\n' "$WT_ROOT"
   exit 0
 fi
 
@@ -664,6 +811,15 @@ recheck_mutable_gates() {
     fi
   elif [ "$REAL_CHANGES" -gt 0 ]; then
     keep "$wt" "$REAL_CHANGES uncommitted change(s) appeared during the sweep"; return 1
+  else
+    # A plain reap's submodule repositories, re-read like its status: a commit made in one
+    # since the initial scan dies with the removal too (#3683).
+    submodule_repositories_disposable "$wt" "$target"
+    case $? in
+      0) ;;
+      1) keep "$wt" "submodule work appeared during the sweep ($SUBMODULE_NOTE)"; return 1 ;;
+      *) keep "$wt" "cannot re-read its submodule repositories before removal ($SUBMODULE_NOTE)"; return 1 ;;
+    esac
   fi
 
   # Status alone cannot cover this: not being visible to status is exactly what the
@@ -748,7 +904,7 @@ porcelain_status() {
 # parse a `case` inside a $( ) command substitution ("syntax error near `;;'"), so this
 # logic must NOT be inlined into a command substitution.
 count_real_changes() {
-  local wt=$1 status=$2 line code path sub_status sub_sha sub_unpushed
+  local wt=$1 status=$2 line code path sub_status sub_sha sub_unpushed sub_gitdir sub_rc
   REAL_CHANGES=0
   # The subset of REAL_CHANGES held in a submodule. Salvage cannot preserve those: a
   # linked worktree's submodule repository lives in its admin dir and dies with it.
@@ -792,11 +948,15 @@ count_real_changes() {
           if [ "$sub_status_rc" -ne 0 ] || [ -n "$sub_status" ] || [ -z "$sub_unpushed" ]; then
             REAL_CHANGES=$((REAL_CHANGES+1)); REAL_SUBMODULE_CHANGES=$((REAL_SUBMODULE_CHANGES+1))
           else
-            # A clean submodule is disposable only when its repository holds nothing a
-            # remote lacks. A HEAD no remote reaches still qualifies when it is exactly a
-            # merged PR's head in the submodule's own repository (#3674).
-            submodule_drift_disposable "$wt/$path" "$sub_sha" "$sub_unpushed"
-            case $? in
+            # A clean submodule is disposable only when its repository holds nothing its
+            # remote lacks (submodule_repository_disposable). A HEAD no remote-tracking ref
+            # reaches still qualifies when it is exactly a merged PR's head (#3674).
+            sub_rc=2
+            if sub_gitdir=$(git -C "$wt/$path" rev-parse --absolute-git-dir 2>/dev/null) \
+               && [ -n "$sub_gitdir" ]; then
+              submodule_repository_disposable "$sub_gitdir"; sub_rc=$?
+            fi
+            case "$sub_rc" in
               0) ;;
               2) REAL_CHANGES=$((REAL_CHANGES+1)); REAL_SUBMODULE_CHANGES=$((REAL_SUBMODULE_CHANGES+1))
                  SUBMODULE_EVIDENCE_UNKNOWN=$((SUBMODULE_EVIDENCE_UNKNOWN+1)) ;;
@@ -1776,6 +1936,24 @@ while IFS= read -r wt <&3; do
     fi
   fi
 
+  # KEEP: a submodule repository the removal deletes holds work its remote lacks (#3683).
+  # Status compares a submodule's checkout with its gitlink, and only a drifted one is
+  # inspected above. A submodule sitting exactly on its recorded commit produces no status
+  # line at all, yet its whole repository lives in this worktree's admin directory: a run that
+  # committed on a local branch there and then returned to the gitlink commit leaves that
+  # commit in a repository the removal deletes. So every submodule repository is held to the
+  # drifted one's rule, drifted or not, checked out or not. A salvage candidate is skipped:
+  # salvage_blocker refuses any worktree that holds a submodule repository at all.
+  if [ -z "$salvage_reason" ]; then
+    submodule_repositories_disposable "$wt" "$wt_real"; sub_rc=$?
+    case "$sub_rc" in
+      0) ;;
+      1) keep_stuck "$wt" "submodule repository holds commit(s) its remote lacks ($SUBMODULE_NOTE)"; continue ;;
+      *) keep "$wt" "cannot prove its submodule repositories hold nothing local-only ($SUBMODULE_NOTE; retried next sweep)"
+         continue ;;
+    esac
+  fi
+
   # --- REAP ------------------------------------------------------------------------
   sz_kb=$(du -sk "$wt" 2>/dev/null | cut -f1); sz_kb=${sz_kb:-0}
   # Ignored files are NOT a KEEP reason — 70 of 80 worktrees on the reference host carry
@@ -1885,12 +2063,15 @@ while IFS= read -r wt <&3; do
     keep "$wt" "could not write refs/reaped/$sha — refusing to remove"; continue
   fi
 
-  # The fallback's prune is deliberately OUTSIDE the success condition: `rm -rf` can
-  # succeed while `prune` fails (git's admin dir unwritable), and folding prune into the
-  # condition sent an actually-deleted worktree down the "removal FAILED" branch — the
+  # The fallback's unregistration is deliberately OUTSIDE the success condition: `rm -rf`
+  # can succeed while unregistering fails (git's admin dir unwritable), and folding it into
+  # the condition sent an actually-deleted worktree down the "removal FAILED" branch — the
   # run then exited 0 leaving a `pending` row for a path that is already gone.
-  # Deletion success is judged by the directory being absent; a failed prune is a
-  # separate, loud error.
+  # Deletion success is judged by the directory being absent; a failed unregistration is a
+  # separate, loud error. It unregisters this worktree only: with the directory gone,
+  # `git worktree remove` deletes just its admin entry, where a repository-wide
+  # `git worktree prune` would also drop another lane's registration whose directory is
+  # briefly unavailable (#3716).
   # The fallback re-runs the FULL mutable-gate set, not just the lock: the failed
   # `worktree remove` above can take time, and a session entering the worktree in that
   # window must still stop the recursive delete.
@@ -1910,8 +2091,8 @@ while IFS= read -r wt <&3; do
     keep "$wt" "$IDENTITY_NOTE"; continue
   elif rm -rf "$wt_real" && [ ! -e "$wt_real" ]; then
     worktree_claim_lock_release || die "REMOVED $wt_real but could not release its ownership mutex"
-    git -C "$TOPLEVEL" worktree prune 2>/dev/null \
-      || die "REMOVED $wt_real but 'git worktree prune' failed — the deletion DID happen; run 'git -C $TOPLEVEL worktree prune' to clear its admin entry (restore ref: refs/reaped/$sha)"
+    git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
+      || die "REMOVED $wt_real but could not remove its registration — the deletion DID happen; run 'git -C $TOPLEVEL worktree remove --force $wt_real' to clear its admin entry (restore ref: refs/reaped/$sha)"
   else
     worktree_claim_lock_release || true
     die "removal FAILED for $wt_real after all gates passed (its manifest row is 'pending' and the directory still exists)"
@@ -1932,14 +2113,11 @@ while IFS= read -r wt <&3; do
   reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
 done 3<<< "$CANDIDATES"
 
-# Drop admin entries whose directory is already gone.
-if [ "$MODE" = "apply" ]; then
-  # Not best-effort: this prune is what clears missing-worktree registrations, and
-  # branch-cleanup.sh builds its keep-set from `git worktree list`. A silently failed
-  # prune therefore leaves stale entries pinning branches that should be sweepable.
-  git -C "$TOPLEVEL" worktree prune 2>/dev/null \
-    || die "reaped $reaped worktree(s) but 'git worktree prune' failed — stale registrations remain and will pin their branches in branch-cleanup.sh"
-fi
+# No closing `git worktree prune` (#3716). Every worktree reaped above lost its registration
+# with its directory, or the run died saying it did not. A repository-wide prune cannot be
+# limited to this root, so it would also drop another lane's registration whose directory
+# is only briefly unavailable, and that worktree would come back with a broken link to its
+# repository.
 
 printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d stuck=%d salvaged=%d freed=%d MB\n' \
   "$MODE" "$reaped" "$kept" "$stuck" "$salvaged" "$((freed_kb/1024))"

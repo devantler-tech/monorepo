@@ -30,6 +30,19 @@ bad()  { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; [ $# -ge 2 ] && printf '  
 # ── fixture ────────────────────────────────────────────────────────────────────
 # A marketplace clone with two commits, a consumer repo whose gitlink names one of them, and a
 # stub CLI that records every invocation and moves the clone on `marketplace update`.
+# write_manifest <dir> <target-version> <unrelated-version> [<extra target-entry JSON members>]
+write_manifest() {
+  printf '{"name":"devantler-plugins","metadata":{"version":"%s-%s"},"plugins":[{"name":"agentic-engineering","source":"./plugins/agentic-engineering","version":"%s"%s},{"name":"frontend-design","source":"./plugins/frontend-design","version":"%s"}]}\n' \
+    "$2" "$3" "$2" "${4:+,$4}" "$3" > "$1/.claude-plugin/marketplace.json" \
+    || { printf 'FIXTURE FAILURE: write manifest\n' >&2; exit 9; }
+}
+# commit_on <repo> <message>: commit everything staged-able under the marketplace paths, print the sha.
+commit_on() {
+  git -C "$1" add -A f .claude-plugin plugins >/dev/null 2>&1 \
+    && git -C "$1" commit -qm "$2" >/dev/null 2>&1 \
+    && git -C "$1" rev-parse HEAD \
+    || { printf 'FIXTURE FAILURE: commit %s in %s\n' "$2" "$1" >&2; exit 9; }
+}
 make_fixture() {
   ROOT="$(mktemp -d)"
   CONSUMER="$ROOT/consumer"; BIN="$ROOT/bin"
@@ -48,11 +61,19 @@ make_fixture() {
 
   g git -C "$MK" init -q -b main
   g git -C "$MK" config user.email t@t; g git -C "$MK" config user.name t
+  # A real marketplace layout: the manifest, the target plugin's subtree and an unrelated plugin.
+  # Commit two moves the TARGET plugin, so OLD vs NEW is a genuine change to what would install.
+  g mkdir -p "$MK/.claude-plugin" "$MK/plugins/agentic-engineering/agents" "$MK/plugins/frontend-design"
   echo old > "$MK/f" || { printf 'FIXTURE FAILURE: write f\n' >&2; exit 9; }
-  g git -C "$MK" add f; g git -C "$MK" commit -qm one
+  write_manifest "$MK" 1.0.0 1.0.0
+  echo old > "$MK/plugins/agentic-engineering/agents/a.md" || { printf 'FIXTURE FAILURE: write a.md\n' >&2; exit 9; }
+  echo fd > "$MK/plugins/frontend-design/s.md" || { printf 'FIXTURE FAILURE: write s.md\n' >&2; exit 9; }
+  g git -C "$MK" add f .claude-plugin plugins; g git -C "$MK" commit -qm one
   MK_OLD="$(git -C "$MK" rev-parse HEAD)" || { printf 'FIXTURE FAILURE: rev-parse OLD\n' >&2; exit 9; }
   echo new > "$MK/f" || { printf 'FIXTURE FAILURE: rewrite f\n' >&2; exit 9; }
-  g git -C "$MK" add f; g git -C "$MK" commit -qm two
+  write_manifest "$MK" 1.0.1 1.0.0
+  echo new > "$MK/plugins/agentic-engineering/agents/a.md" || { printf 'FIXTURE FAILURE: rewrite a.md\n' >&2; exit 9; }
+  g git -C "$MK" add f .claude-plugin plugins; g git -C "$MK" commit -qm two
   MK_NEW="$(git -C "$MK" rev-parse HEAD)" || { printf 'FIXTURE FAILURE: rev-parse NEW\n' >&2; exit 9; }
   g git -C "$MK" checkout -q "$MK_OLD"      # clone starts STALE, as the real one was
 
@@ -121,11 +142,175 @@ printf '\nplugin-definition-refresh contract\n'
 # ── A1 — the measured defect: marketplace latest != pin ⇒ REFUSE, and never apply ─────────────
 make_fixture
 set_gitlink "$MK_OLD"                      # pin = OLD; marketplace will refresh to NEW
-STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1; rc=$?
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
 if [ "$rc" -eq 1 ]; then ok "A1 refuses (exit 1) when the refreshed marketplace does not carry the pin"
 else bad "A1 refuses (exit 1) when the refreshed marketplace does not carry the pin" "exit was $rc"; fi
 if [ ! -e "$ROOT/APPLIED" ]; then ok "A1b does NOT invoke 'plugin update' when the pin is unavailable"
 else bad "A1b does NOT invoke 'plugin update' when the pin is unavailable" "it applied an unreviewed revision"; fi
+if grep -q 'plugins/agentic-engineering/agents/a.md' <<<"$out" && ! grep -q 'frontend-design' <<<"$out"; then
+  ok "A1c names exactly the target plugin's differing file"
+else bad "A1c names exactly the target plugin's differing file" "$out"; fi
+cleanup
+
+# ── B — the gate scope is the TARGET plugin, not the whole marketplace (monorepo#3197) ─────────
+# Each case moves the marketplace past the pin in ONE way. `plugin update` installs the latest, so
+# it may apply only when the target plugin's entry (apart from its version) and subtree are
+# identical; B2–B4 are the negative controls that stop the narrower gate becoming a fail-open.
+# move_past_pin <pin> <message> runs after the caller edits the clone, and prints the new commit.
+move_past_pin() {
+  local sha
+  sha="$(commit_on "$MK" "$2")"
+  [ -n "$sha" ] || { printf 'FIXTURE FAILURE: no commit for %s\n' "$2" >&2; exit 9; }
+  git -C "$MK" checkout -q "$MK_OLD" || { printf 'FIXTURE FAILURE: reset clone\n' >&2; exit 9; }
+  printf '%s' "$sha"
+}
+
+# B1 — the measured case: only an unrelated plugin (and the target's version string) moved.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+echo fd2 > "$MK/plugins/frontend-design/s.md"
+write_manifest "$MK" 1.0.2 1.0.1
+B_HEAD="$(move_past_pin "$MK_NEW" unrelated)" || exit 9
+out="$(STUB_MARKETPLACE_TARGET="$B_HEAD" run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ] && grep -q -- "--gitlink $MK_NEW" "$VERIFY_LOG"; then
+  ok "B1 applies when only an unrelated plugin moved past the pin, and verifies against the pin"
+else bad "B1 applies when only an unrelated plugin moved past the pin, and verifies against the pin" "exit $rc, out: $out"; fi
+cleanup
+
+# B2 — the load-bearing negative control: the target subtree moved.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+echo added > "$MK/plugins/agentic-engineering/agents/b.md"
+B_HEAD="$(move_past_pin "$MK_NEW" target-moved)" || exit 9
+out="$(STUB_MARKETPLACE_TARGET="$B_HEAD" run 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'plugins/agentic-engineering/agents/b.md' <<<"$out"; then
+  ok "B2 refuses (exit 1), naming the file, when the target plugin's subtree moved"
+else bad "B2 refuses (exit 1), naming the file, when the target plugin's subtree moved" "exit $rc, out: $out"; fi
+cleanup
+
+# B3 — the target entry moved in a field other than its version (identical subtree).
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+write_manifest "$MK" 1.0.1 1.0.0 '"strict":false'
+B_HEAD="$(move_past_pin "$MK_NEW" entry-moved)" || exit 9
+out="$(STUB_MARKETPLACE_TARGET="$B_HEAD" run 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'its marketplace entry' <<<"$out"; then
+  ok "B3 refuses (exit 1) when the target's marketplace entry changed beyond its version"
+else bad "B3 refuses (exit 1) when the target's marketplace entry changed beyond its version" "exit $rc, out: $out"; fi
+cleanup
+
+# B4 — the marketplace no longer lists the target plugin at all.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+printf '{"name":"devantler-plugins","plugins":[{"name":"frontend-design","source":"./plugins/frontend-design"}]}\n' \
+  > "$MK/.claude-plugin/marketplace.json"
+B_HEAD="$(move_past_pin "$MK_NEW" delisted)" || exit 9
+out="$(STUB_MARKETPLACE_TARGET="$B_HEAD" run 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'no longer lists' <<<"$out"; then
+  ok "B4 refuses (exit 1) when the marketplace no longer lists the target plugin"
+else bad "B4 refuses (exit 1) when the marketplace no longer lists the target plugin" "exit $rc, out: $out"; fi
+cleanup
+
+# B5 — the runtime clone is shallow, so the pin may be absent from it. A pin found nowhere is
+# UNKNOWN; the same pin read from the consumer's submodule decides the gate.
+make_fixture
+SIDE="$ROOT/side"
+git -c advice.detachedHead=false clone -q "$MK" "$SIDE" || { printf 'FIXTURE FAILURE: clone side\n' >&2; exit 9; }
+git -C "$SIDE" config user.email t@t; git -C "$SIDE" config user.name t
+git -C "$SIDE" checkout -q "$MK_NEW" || exit 9
+echo fd-side > "$SIDE/plugins/frontend-design/s.md"
+PIN_SIDE="$(commit_on "$SIDE" side-only)"; [ -n "$PIN_SIDE" ] || exit 9
+set_gitlink "$PIN_SIDE"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
+  ok "B5 is UNKNOWN (exit 2) when the pin is in neither the clone nor the consumer's submodule"
+else bad "B5 is UNKNOWN (exit 2) when the pin is in neither the clone nor the consumer's submodule" "exit $rc, out: $out"; fi
+git -c advice.detachedHead=false clone -q "$SIDE" "$CONSUMER/libraries/agent-plugins" || { printf 'FIXTURE FAILURE: clone submodule\n' >&2; exit 9; }
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ]; then
+  ok "B5b reads the pin from the consumer's submodule and applies an identical target subtree"
+else bad "B5b reads the pin from the consumer's submodule and applies an identical target subtree" "exit $rc, out: $out"; fi
+cleanup
+
+# B6 — a symlink keeps the subtree's tree id while the bytes it installs change: Claude Code
+# dereferences a link into the marketplace when it copies the plugin. Only the moved TARGET
+# file differs here, so the subtree is identical and the shortcut must still refuse.
+make_fixture
+git -C "$MK" checkout -q "$MK_NEW"
+ln -s ../../frontend-design/s.md "$MK/plugins/agentic-engineering/agents/shared.md" || exit 9
+B_PIN="$(commit_on "$MK" linked)"; [ -n "$B_PIN" ] || exit 9
+set_gitlink "$B_PIN"
+git -C "$MK" checkout -q "$B_PIN"
+echo unreviewed > "$MK/plugins/frontend-design/s.md"
+B_HEAD="$(move_past_pin "$B_PIN" link-target-moved)" || exit 9
+out="$(STUB_MARKETPLACE_TARGET="$B_HEAD" run 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'plugins/agentic-engineering/agents/shared.md' <<<"$out"; then
+  ok "B6 refuses (exit 1), naming the link, when the target subtree holds a symlink"
+else bad "B6 refuses (exit 1), naming the link, when the target subtree holds a symlink" "exit $rc, out: $out"; fi
+cleanup
+
+# B7 — the pin must be an object id. `HEAD` would resolve inside the marketplace clone and the
+# gate would compare the marketplace with itself.
+make_fixture
+set_gitlink "$MK_OLD"
+for expr in HEAD main; do
+  out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --gitlink "$expr" 2>&1)"; rc=$?
+  if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'not a full object id' <<<"$out"; then
+    ok "B7 refuses --gitlink $expr as UNKNOWN (exit 2) rather than resolving it"
+  else bad "B7 refuses --gitlink $expr as UNKNOWN (exit 2) rather than resolving it" "exit $rc, out: $out"; fi
+done
+cleanup
+
+# B8 — a failed read of the marketplace subtree is UNKNOWN, never "absent" (which would say NOT-ON-PIN
+# and point the caller at a gitlink bump). The pin is read from the consumer's submodule, as on a
+# shallow runtime clone, and every object read inside the marketplace clone fails.
+make_fixture
+SIDE="$ROOT/side"
+git -c advice.detachedHead=false clone -q "$MK" "$SIDE" || { printf 'FIXTURE FAILURE: clone side\n' >&2; exit 9; }
+git -C "$SIDE" config user.email t@t; git -C "$SIDE" config user.name t
+git -C "$SIDE" checkout -q "$MK_NEW" || exit 9
+echo fd-side > "$SIDE/plugins/frontend-design/s.md"
+PIN_SIDE="$(commit_on "$SIDE" side-only)"; [ -n "$PIN_SIDE" ] || exit 9
+set_gitlink "$PIN_SIDE"
+git -c advice.detachedHead=false clone -q "$SIDE" "$CONSUMER/libraries/agent-plugins" || exit 9
+mkdir -p "$ROOT/gitshim"
+cat > "$ROOT/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+if [ "\$1" = -C ] && [ "\$2" = "$MK" ] && [ "\$4" = cat-file ]; then exit 128; fi
+exec "$(command -v git)" "\$@"
+SHIM
+chmod +x "$ROOT/gitshim/git"
+out="$(PATH="$ROOT/gitshim:$PATH" STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q "cannot read the 'agentic-engineering' subtree" <<<"$out"; then
+  ok "B8 reports a failed marketplace read as UNKNOWN (exit 2), not as an absent subtree"
+else bad "B8 reports a failed marketplace read as UNKNOWN (exit 2), not as an absent subtree" "exit $rc, out: $out"; fi
+cleanup
+
+# B9 — git reads a path argument as a pathspec, where `:/` is top magic. A reviewed source of
+# `./:/plugins/agentic-engineering` would be compared through the `plugins/agentic-engineering`
+# decoy while the runtime copies the literal directory, so such a source is refused outright.
+make_fixture
+git -C "$MK" checkout -q "$MK_NEW"
+mkdir -p "$MK/:/plugins/agentic-engineering/agents" || exit 9
+echo reviewed > "$MK/:/plugins/agentic-engineering/agents/a.md"
+write_manifest "$MK" 1.0.1 1.0.0
+sed 's|"source":"./plugins/agentic-engineering"|"source":"./:/plugins/agentic-engineering"|' \
+  "$MK/.claude-plugin/marketplace.json" > "$MK/.claude-plugin/m.tmp" && mv "$MK/.claude-plugin/m.tmp" "$MK/.claude-plugin/marketplace.json"
+git -C "$MK" --literal-pathspecs add -- ':' >/dev/null 2>&1 || exit 9
+B_PIN="$(commit_on "$MK" magic-source)"; [ -n "$B_PIN" ] || exit 9
+set_gitlink "$B_PIN"
+git -C "$MK" checkout -q "$B_PIN"
+echo unreviewed > "$MK/:/plugins/agentic-engineering/agents/a.md"
+git -C "$MK" --literal-pathspecs add -- ':' >/dev/null 2>&1 || exit 9
+B_HEAD="$(move_past_pin "$B_PIN" magic-literal-moved)" || exit 9
+out="$(STUB_MARKETPLACE_TARGET="$B_HEAD" run 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'is not a plain relative path' <<<"$out"; then
+  ok "B9 refuses a source path git would read as pathspec magic (exit 2), never comparing a decoy"
+else bad "B9 refuses a source path git would read as pathspec magic (exit 2), never comparing a decoy" "exit $rc, out: $out"; fi
 cleanup
 
 # ── A2 — the safe case: marketplace latest == pin ⇒ apply ──────────────────────────────────────

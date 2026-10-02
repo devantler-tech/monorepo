@@ -400,6 +400,14 @@ is_semver() {
   [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
 }
 
+# The release workflow commits through the GitHub API as the ksail-bot App, so a release head is
+# authored by the App itself and committed by GitHub's `web-flow` identity — measured on every release
+# since 2026-08-29, when it replaced `devantler-tech-bot[bot]` and this arm silently stopped matching
+# (#3173). The retired identity is not kept: no release carries it, and an extra accepted identity is
+# only a wider exemption. As in the agent-skills arm, those identities are what the commit CLAIMS, so
+# the pin includes GitHub's own signature verdict (`verified: true`), which only a commit GitHub signed
+# carries; a caller that omits `verified` never reaches this arm. Every field is compared exactly, in
+# one object literal, so `release-exemption-identity-currency.sh` reads the same pin this arm enforces.
 # The date pair is dropped before the identity comparison: this arm is authored by a bot account
 # that a rewrite would replace, so it already detects an adaptation commit the way the World at Ruin
 # arm cannot, and pinning timestamps here would only make the fixture brittle.
@@ -408,15 +416,16 @@ matches_ksail_provenance() {
   jq -e \
     --arg head "${head}" \
     --arg version "${version}" \
-    'map(del(.author_date, .committer_date, .verified)) == [{
+    'map(del(.author_date, .committer_date)) == [{
       sha: $head,
-      author_login: "",
-      author_name: "devantler-tech-bot[bot]",
-      author_email: "devantler-tech-bot[bot]@users.noreply.github.com",
-      committer_login: "",
-      committer_name: "devantler-tech-bot[bot]",
-      committer_email: "devantler-tech-bot[bot]@users.noreply.github.com",
-      message: "chore(copilot-plugin): release \($version)"
+      author_login: "ksail-bot[bot]",
+      author_name: "ksail-bot[bot]",
+      author_email: "262010955+ksail-bot[bot]@users.noreply.github.com",
+      committer_login: "web-flow",
+      committer_name: "GitHub",
+      committer_email: "noreply@github.com",
+      message: "chore(copilot-plugin): release \($version)",
+      verified: true
     }]' <<<"${commits_json}" >/dev/null
 }
 

@@ -19,6 +19,7 @@ jobs:
     outputs:
       docs: ${{ steps.filter.outputs.docs }}
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
+      docs-npm-toolchain: ${{ steps.filter.outputs.docs-npm-toolchain }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
       cleanup-trap-fail-closed: ${{ steps.filter.outputs.cleanup-trap-fail-closed }}
@@ -113,6 +114,12 @@ jobs:
               # The contract test compares both workflow call sites.
               - '.github/workflows/audit-docs.yaml'
               - '.github/workflows/ci.yaml'
+            docs-npm-toolchain:
+              # The contract reads every workflow that installs, audits or publishes
+              # the site, including one a change adds.
+              - 'docs/package.json'
+              - 'docs/scripts/npm-toolchain.test.sh'
+              - '.github/workflows/**'
             active-projects:
               # The retired-link guard greps the WHOLE content tree, so it must
               # run for ANY content change — gating it on the two pages the
@@ -875,7 +882,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: docs/package-lock.json
       - name: Install dependencies
@@ -902,13 +909,31 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
       - name: Test audit wrapper
         working-directory: docs
         run: ./scripts/audit-dependencies.test.sh
       - name: Audit
         working-directory: docs
         run: ./scripts/audit-dependencies.sh
+
+  # Every workflow that installs, audits or publishes the site must use the npm major that
+  # writes docs/package-lock.json. A job of its own, so a workflow-only change runs this
+  # static contract without the live dependency audit.
+  test-docs-npm-toolchain:
+    name: Test docs npm toolchain contract
+    needs: changes
+    if: needs.changes.outputs.docs-npm-toolchain == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test npm toolchain contract
+        run: bash docs/scripts/npm-toolchain.test.sh
 
   drift-check-active-projects:
     needs: changes
@@ -924,7 +949,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: docs/package-lock.json
       - name: Install MDX parser dependencies
@@ -2798,6 +2823,7 @@ jobs:
       - changes
       - build-docs
       - audit-docs
+      - test-docs-npm-toolchain
       - drift-check-active-projects
       - drift-check-renovate-dashboard
       - test-agent-telemetry
@@ -2885,6 +2911,7 @@ jobs:
             ${{ needs.changes.result }}
             ${{ needs.build-docs.result }}
             ${{ needs.audit-docs.result }}
+            ${{ needs.test-docs-npm-toolchain.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.drift-check-renovate-dashboard.result }}
             ${{ needs.test-agent-telemetry.result }}

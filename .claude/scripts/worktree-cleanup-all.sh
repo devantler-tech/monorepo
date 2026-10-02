@@ -21,9 +21,10 @@
 # never be committed): ~/.claude/worktree-cleanup-manifests/<repo>-<utc>.tsv for the claude
 # lane, and the codex/ subdirectory of it for the codex lane, so the two never share a file.
 #
-# In the claude lane, before each repository, it also sweeps worktrees NESTED in its session
-# worktrees' submodules (<repo>/.claude/worktrees/<slug>/<sub>/.claude/worktrees/*), with
-# salvage off (#3673).
+# Before each worktree root it sweeps, in either lane, it also sweeps worktrees NESTED in the
+# submodules of that root's session worktrees (<session>/<sub>/.claude/worktrees/*), with salvage
+# off (#3673). That is where the per-run worktree helper puts a run's worktree for a submodule,
+# whichever lane the session belongs to (#3713).
 set -uo pipefail
 
 # Positional arguments keep their old meaning and order; --lane may appear anywhere. An empty
@@ -289,9 +290,8 @@ nested_failed() {
 
 sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [salvage_age_hours] [abort|continue]
   local path=$1 wt_root=${2:-} salvage=${3:-$SALVAGE_AGE_HOURS} on_fail=${4:-abort} label toplevel expected
-  # NOTE: no early return for a missing .claude/worktrees. The per-repo script has its
-  # own no-root path that still prunes stale registrations — returning here made that
-  # path unreachable through the wrapper, the only way it is ever invoked. A path that is
+  # NOTE: no early return for a missing .claude/worktrees. The per-repo script reports a
+  # missing root itself, and the wrapper is the only way it is ever invoked. A path that is
   # not a repository at all is handled by the toplevel check below (it resolves to the
   # parent, so the mismatch SKIPs it) rather than by a guard that pre-empts that report.
   # Only sweep a repo whose toplevel resolves to ITSELF. A submodule with broken
@@ -331,11 +331,14 @@ sweep() { # <repo_path> [worktree_root, empty = worktree-cleanup.sh's default] [
   local rel=${path#"$ROOT"/}
   if [ "$path" = "$ROOT" ]; then rel="(root)"; label=monorepo
   else
-    # A nested pass's path runs through .claude/worktrees/ (the root's, or a submodule's).
-    # Drop those segments: a leading one would make every such manifest a hidden file.
+    # A nested pass's path runs through a lane's worktree root: .claude/worktrees/ or
+    # .codex/worktrees/ (the root's, or a submodule's), or the Codex app's worktree dir outside
+    # the checkout, whose path stays absolute. Drop those segments and the leading slash: a
+    # leading dot or slash would make every such manifest a hidden file or an absolute path.
     case "$rel" in
-      *.claude/worktrees/*)
-        label="nested-$(printf '%s' "$rel" | sed 's#\.claude/worktrees/##g' | tr '/' '-')" ;;
+      /*|*.claude/worktrees/*|*.codex/worktrees/*)
+        label="nested-$(printf '%s' "${rel#/}" \
+          | sed -e 's#\.claude/worktrees/##g' -e 's#\.codex/worktrees/##g' | tr '/' '-')" ;;
       *) label=$(printf '%s' "$rel" | tr '/' '-') ;;
     esac
   fi
@@ -471,15 +474,18 @@ handoff_reaped_refs() {
   done <<< "$refs"
 }
 
-# sweep_nested_submodule_worktrees <repo> — sweep the worktrees nested in the initialised
-# submodules of each of <repo>'s session worktrees, BEFORE <repo> itself is swept (#3673).
+# sweep_nested_submodule_worktrees <repo> [session_root] — sweep the worktrees nested in the
+# initialised submodules of each of <repo>'s session worktrees under [session_root] (default
+# <repo>/.claude/worktrees), BEFORE <repo> itself is swept in that root (#3673).
 #
 # A run inside a session worktree can populate a submodule there and add a linked worktree
 # of that submodule's repository under <session>/<sub>/.claude/worktrees/. That repository
 # lives in the session worktree's own admin directory, so no other sweep ever visits it, and
 # the repo's own sweep rightly keeps the parent: the nested worktree would die with it. The
 # parent was therefore kept forever (about 20 of 84 kept worktrees on 2026-09-29). Reaping
-# the nested one first lets the same run's sweep reconsider the parent.
+# the nested one first lets the same run's sweep reconsider the parent. The nested root is
+# .claude/worktrees in a Codex session too: the per-run worktree helper resolves the mandated
+# `.claude/worktrees/maint-<runid>` from the submodule, whichever lane runs it (#3713).
 #
 # Salvage is OFF for these passes. Its refs would be written into the session worktree's own
 # submodule repository, which is deleted with the parent, so it would promise preservation it
@@ -488,7 +494,7 @@ handoff_reaped_refs() {
 # same protection the repo's own sweep gives it. Every failure here is confined to one session
 # worktree, so it is recorded (nested_failed) rather than aborting the run.
 sweep_nested_submodule_worktrees() {
-  local repo=$1 session_root="$1/.claude/worktrees" session_real wts wt wt_real
+  local repo=$1 session_root=${2:-$1/.claude/worktrees} session_real wts wt wt_real
   local subs sub sub_real sub_wts
   [ -d "$session_root" ] || return 0
   session_real=$(cd "$session_root" 2>/dev/null && pwd -P) || {
@@ -497,7 +503,7 @@ sweep_nested_submodule_worktrees() {
     nested_failed "cannot list the worktrees of $repo"; return 0; }
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
-    # A registration whose directory is gone has nothing nested; the repo's sweep prunes it.
+    # A registration whose directory is gone has nothing nested to sweep.
     [ -d "$wt" ] || continue
     wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || { nested_failed "cannot resolve $wt"; continue; }
     case "$wt_real" in
@@ -576,22 +582,27 @@ sweep_nested_submodule_worktrees() {
   done <<< "$(printf '%s\n' "$wts" | awk '/^worktree /{print substr($0,10)}')"
 }
 
+# sweep_root <repo_path> [worktree_root, empty = <repo_path>/.claude/worktrees] — first the
+# worktrees nested in the submodules of that root's session worktrees, which only this lane's
+# sweep can reach (#3673, #3713), then the root itself, which can then reconsider the parents.
+sweep_root() {
+  sweep_nested_submodule_worktrees "$1" "${2:-}"
+  sweep "$1" "${2:-}"
+}
+
 # sweep_lane <repo_path> — every worktree root the selected lane owns, for that repository's
-# registrations, and no other root. The claude lane first sweeps the worktrees nested in its
-# session worktrees' submodules, which only its own sweep can reach (#3673). Codex runs also
-# keep a submodule's worktrees in the MONOREPO's .codex/worktrees (measured on the reference
-# host), so each submodule is swept there too; the Codex app's worktree dir holds monorepo
-# worktrees only.
+# registrations, and no other root. Codex runs also keep a submodule's worktrees in the
+# MONOREPO's .codex/worktrees (measured on the reference host), so each submodule is swept
+# there too; the Codex app's worktree dir holds monorepo worktrees only.
 sweep_lane() {
   case "$LANE" in
     claude)
-      sweep_nested_submodule_worktrees "$1"
-      sweep "$1"
+      sweep_root "$1"
       ;;
     codex)
-      sweep "$1" "$1/.codex/worktrees"
-      if [ "$1" = "$ROOT" ]; then sweep "$1" "$CODEX_APP_ROOT"
-      else sweep "$1" "$ROOT/.codex/worktrees"; fi
+      sweep_root "$1" "$1/.codex/worktrees"
+      if [ "$1" = "$ROOT" ]; then sweep_root "$1" "$CODEX_APP_ROOT"
+      else sweep_root "$1" "$ROOT/.codex/worktrees"; fi
       ;;
   esac
 }

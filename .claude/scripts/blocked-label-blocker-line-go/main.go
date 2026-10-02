@@ -22,7 +22,8 @@ import (
 	"unicode"
 )
 
-const help = `Verify open blocked-labelled issues carry a visible **Blocker:** record.
+const help = `Verify open blocked-labelled issues carry a visible **Blocker:** record, and
+that no open issue declares a blocker without carrying the blocked label.
 
   **Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>
   **Blocker:** <what only the maintainer can do> | authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session> <YYYY-MM-DD>
@@ -35,7 +36,12 @@ The independent provider outage cause belongs in the result, for example
 Ask channels: pr = draft PR; slack = the declared Slack channel; session = the
 native ask tool in an interactive session. An issue comment alone is not an ask.
 
-Sources (exactly one): --org <org> or --input <file>|-
+An UNLABELLED row is an issue whose visible record declares a blocker while the
+issue has no blocked label; "**Blocker:** none ..." declares none and is skipped.
+
+Sources (exactly one): --org <org> (every open issue, label or not) or
+         --input <file>|- (a JSON array; a record without a "labels" array is
+                       read as blocked-labelled, the shape of earlier payloads)
 Options: --today <YYYY-MM-DD> (default UTC today)
          --ask-max-age-days <n> (default 14)
          --verify-max-age-days <n> (default 7; an otherwise conforming record
@@ -469,6 +475,41 @@ type issue struct {
 	Body          string `json:"body"`
 	RepositoryURL string `json:"repository_url"`
 	CreatedAt     string `json:"created_at"`
+	// Labels is nil when the record carries no "labels" array at all. Only an
+	// --input record may omit it (see blocked); a forge record must carry one.
+	Labels *[]struct {
+		Name string `json:"name"`
+	} `json:"labels"`
+}
+
+// blocked reports whether the issue carries the blocked label. An --input
+// record without a labels array predates the label-independent enumeration,
+// when every payload was the label:blocked search result, so it reads as
+// labelled; searchIssues refuses a forge record without one.
+func (i issue) blocked() bool {
+	if i.Labels == nil {
+		return true
+	}
+	for _, label := range *i.Labels {
+		// Search matches labels case-insensitively, so the earlier label:blocked
+		// read included a "Blocked" label; keep reading it as labelled.
+		if strings.EqualFold(label.Name, "blocked") {
+			return true
+		}
+	}
+	return false
+}
+
+// "none" must be a whole word: followed by the end, whitespace, or prose
+// punctuation that is itself followed by whitespace. An identifier that merely
+// begins with none (none/repo#7, none.io/x, none-x) still declares a blocker.
+var noBlockerRE = regexp.MustCompile(`(?i)^\*\*Blocker:\*\*[\t ]*none([\t ]|[—–]|[.,;:!]([\t ]|$)|$)`)
+
+// declaresBlocker reports whether a visible record names a blocker. The
+// "**Blocker:** none -- agent-actionable" form declares that there is none, and
+// an issue carrying it is correctly unlabelled (#3142).
+func declaresBlocker(line string) bool {
+	return line != "" && !noBlockerRE.MatchString(line)
 }
 
 func inputIssues(raw []byte) ([]issue, error) {
@@ -509,6 +550,11 @@ func searchIssues(raw []byte) ([]issue, error) {
 		}
 		expected = *page.Total
 		for _, item := range page.Items {
+			// Without labels an unlabelled issue would read as labelled and its
+			// declared blocker would never be compared against the label.
+			if item.Labels == nil {
+				return nil, errors.New("search item without labels -- UNKNOWN")
+			}
 			item.Repo = item.RepositoryURL[strings.LastIndex(item.RepositoryURL, "/")+1:]
 			issues = append(issues, item)
 		}
@@ -517,6 +563,14 @@ func searchIssues(raw []byte) ([]issue, error) {
 		return nil, errors.New("truncated search read -- UNKNOWN")
 	}
 	return issues, nil
+}
+
+// searchEndpoint reads every open issue, not only label:blocked ones: a
+// declared blocker without the label is invisible to a label-filtered read
+// (#3142). Search serves at most 1000 results, so a larger org fails
+// searchIssues' count check rather than reading as complete.
+func searchEndpoint(org string) string {
+	return "search/issues?q=org:" + org + "+is:issue+state:open+archived:false&per_page=100"
 }
 
 func load(o options, stdin io.Reader) ([]issue, error) {
@@ -533,10 +587,9 @@ func load(o options, stdin io.Reader) ([]issue, error) {
 		}
 		return inputIssues(raw)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	endpoint := "search/issues?q=org:" + o.org + "+is:issue+state:open+label:blocked+archived:false&per_page=100"
-	raw, err := exec.CommandContext(ctx, "gh", "api", endpoint, "--paginate").Output()
+	raw, err := exec.CommandContext(ctx, "gh", "api", searchEndpoint(o.org), "--paginate").Output()
 	if err != nil {
 		return nil, errors.New("forge read failed -- UNKNOWN, never zero")
 	}
@@ -578,9 +631,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// report is ready, so an undelivered report never returns a valid verdict.
 	var report strings.Builder
 	var askRows []askRow
-	bad := 0
+	bad, labelled, unlabelled := 0, 0, 0
 	for _, item := range issues {
 		line := visibleRecord(item.Body)
+		if !item.blocked() {
+			// Only a declared blocker is a finding here: an unlabelled issue with
+			// no record is ordinary work, indistinguishable by content (#3142).
+			if !declaresBlocker(line) {
+				continue
+			}
+			bad++
+			unlabelled++
+			_, _ = fmt.Fprintf(&report, "%-10s %s#%d  >>%s\n", "UNLABELLED", item.Repo, item.Number, snippet(line))
+			continue
+		}
+		labelled++
 		verdict, legacy := classify(line, o.today, o.maxAge)
 		if verdict == "CONFORMS" && staleVerification(line, o.today, o.verifyMaxAge) {
 			verdict = "STALE"
@@ -610,19 +675,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if verdict != "CONFORMS" {
 			bad++
 			if line != "" {
-				snippet := []rune(line)
-				if len(snippet) > 100 {
-					snippet = snippet[:100]
-				}
-				// Malformed bodies are still untrusted: reporting a rejected control
-				// must not execute it in the operator's terminal.
-				safe := strings.Map(func(r rune) rune {
-					if unicode.IsControl(r) {
-						return unicode.ReplacementChar
-					}
-					return r
-				}, string(snippet))
-				_, _ = fmt.Fprintf(&report, "  >>%s", safe)
+				_, _ = fmt.Fprintf(&report, "  >>%s", snippet(line))
 			}
 		}
 		_, _ = fmt.Fprintln(&report)
@@ -642,14 +695,34 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if bad > 0 {
 		if !o.quiet {
-			_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: %d of %d open blocked-labelled issue(s) need repair (missing, malformed, not re-verified recently, or an unraised authority blocker).\n", bad, len(issues))
+			if labelledBad := bad - unlabelled; labelledBad > 0 {
+				_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: %d of %d open blocked-labelled issue(s) need repair (missing, malformed, not re-verified recently, or an unraised authority blocker).\n", labelledBad, labelled)
+			}
+			if unlabelled > 0 {
+				_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: %d open issue(s) declare a blocker without the blocked label: re-verify each, then label it or unblock it.\n", unlabelled)
+			}
 		}
 		return emit(report.String(), 1)
 	}
 	if !o.quiet {
-		_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: all %d open blocked-labelled issue(s) carry a conforming **Blocker:** line.\n", len(issues))
+		_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: all %d open blocked-labelled issue(s) carry a conforming **Blocker:** line, and no unlabelled issue declares a blocker.\n", labelled)
 	}
 	return emit(report.String(), 0)
+}
+
+// snippet bounds a reported record. Bodies are untrusted: reporting a rejected
+// control must not execute it in the operator's terminal.
+func snippet(line string) string {
+	runes := []rune(line)
+	if len(runes) > 100 {
+		runes = runes[:100]
+	}
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return unicode.ReplacementChar
+		}
+		return r
+	}, string(runes))
 }
 
 func main() {

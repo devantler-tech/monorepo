@@ -22,10 +22,12 @@
 # on every dispatch, silently. Stale-install drift at least runs a PREVIOUSLY REVIEWED definition;
 # this would run one nobody has read. The cure would be worse than the disease.
 #
-# So the contract here is: refresh the marketplace, then apply the update ONLY when the revision it
-# would install is EXACTLY the pinned one. When it is not, change nothing and say why — a consumer
-# gitlink and an upstream tip that have diverged is a real, reportable condition (it tells the
-# engineer the gitlink needs bumping), not something to paper over by installing the tip.
+# So the contract here is: refresh the marketplace, then apply the update ONLY when what it would
+# install for THIS plugin is EXACTLY the pinned definition — the marketplace tip is the pin, or the
+# plugin's marketplace entry and source subtree are identical at both and the subtree holds only
+# regular files (monorepo#3197). When it is not, change nothing and say why — a consumer gitlink and
+# an upstream plugin that have diverged is a real, reportable condition (it tells the engineer the
+# gitlink needs bumping), not something to paper over by installing the tip.
 #
 # It never edits the plugin cache. The cache is read-only evidence; every mutation here goes through
 # the runtime's own control plane, which is what AGENTS.md authorises.
@@ -44,10 +46,11 @@
 #         check after the apply — never by `plugin update`'s own exit status, which can report
 #         success having repaired nothing. NOTE: `plugin update` requires a restart, so exit 0 still
 #         never means THIS run used the new definition.
-#      1  the install is NOT on the pin. Either the marketplace could not supply the pinned revision
-#         (nothing was changed), or the apply ran and the post-apply check still does not report
-#         CURRENT. The reason is named.
+#      1  the install is NOT on the pin. Either the marketplace could not supply the pinned definition
+#         of this plugin (nothing was changed; the differing entry or files are named), or the
+#         apply ran and the post-apply check still does not report CURRENT. The reason is named.
 #      2  UNKNOWN — no verdict was produced: usage error, no CLI, unreadable pin or marketplace, a
+#         pinned revision present in neither the marketplace clone nor the consumer's submodule, a
 #         marketplace/plugin-id marketplace mismatch, a concurrent run holding the lock, a
 #         marketplace worktree whose BYTES do not provably match the pinned commit, an apply whose
 #         verification command is unavailable, or --dry-run (a simulation asserts nothing).
@@ -162,6 +165,13 @@ if [ -z "$GITLINK" ]; then
   GITLINK="${pin_rest%%$'\t'*}"
 fi
 [ -n "$GITLINK" ] || die "no gitlink for '$SUBMODULE_PATH' at HEAD — cannot establish the pinned revision"
+# A full object id, never a revision expression: the gate below resolves the pin inside the
+# marketplace clone, where `HEAD` or a branch name would compare the marketplace with itself.
+case "$GITLINK" in
+  *[!0-9a-f]*) die "the pin '$GITLINK' is not a full object id — refusing a revision expression" ;;
+esac
+[ "${#GITLINK}" -eq 40 ] || [ "${#GITLINK}" -eq 64 ] \
+  || die "the pin '$GITLINK' is not a full object id — refusing an abbreviated or malformed one"
 
 # DERIVED, never passed in. An overridable directory is a decoy vector: a caller could point this at
 # a checkout that happens to equal the pin while both CLI commands still select the runtime
@@ -261,31 +271,128 @@ candidate="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" \
 say "marketplace would install $candidate"
 
 # ── the gate ───────────────────────────────────────────────────────────────────
-if [ "$candidate" != "$GITLINK" ]; then
-  if [ "$DRY_RUN" -eq 1 ]; then
-    # A dry run skipped the refresh, so this comparison is against a possibly STALE clone. An actual
-    # refresh might bring it exactly to the pin, so the simulation has not established that the
-    # marketplace cannot supply it — emitting NOT-ON-PIN here would be a false verdict pointing the
-    # caller at a gitlink bump it may not need. Same reason the dry-run success path returns 2.
-    say ""
-    say "dry-run ................. clone is at $candidate, pin is $GITLINK — but the refresh was"
-    say "                          skipped, so this is NOT evidence the marketplace lacks the pin."
-    say "dry-run ................. exiting 2 (no verdict)."
-    exit 2
+# What must hold is that `plugin update` installs the REVIEWED bytes of THIS plugin. It installs the
+# marketplace latest, so when that is not the pin, the plugin's marketplace entry and its whole source
+# subtree must be identical at both revisions — compared by tree identity, never by a version string.
+# Comparing the whole repository instead let an unrelated plugin's release block every repair
+# (monorepo#3197), while any change to this plugin's entry or subtree still refuses.
+PLUGIN_NAME="${PLUGIN_ID%@*}"
+if [ "$candidate" != "$GITLINK" ] && [ "$DRY_RUN" -eq 0 ]; then
+  command -v jq >/dev/null 2>&1 || die "jq is required to compare the '$PLUGIN_NAME' marketplace entry across revisions"
+  # The runtime's marketplace clone is shallow, so it rarely holds the pin; the consumer's submodule
+  # is the reviewed source and does. `-e .git` first: `git -C` on an uninitialised submodule path
+  # resolves to the PARENT repository.
+  pin_repo=""
+  for repo in "$MARKETPLACE_DIR" "$REPO_ROOT/$SUBMODULE_PATH"; do
+    if [ -e "$repo/.git" ] && git -C "$repo" --no-replace-objects cat-file -e "$GITLINK^{commit}" 2>/dev/null; then
+      pin_repo="$repo"
+      break
+    fi
+  done
+  [ -n "$pin_repo" ] || die "the pinned revision $GITLINK is in neither the marketplace clone nor $REPO_ROOT/$SUBMODULE_PATH — cannot compare the '$PLUGIN_NAME' subtree (populate it with .claude/scripts/submodule-init.sh $SUBMODULE_PATH)"
+  # One entry, with its version removed: the version may move while the definitions do not. Every
+  # other field (source, inline components) can change what is installed, so it must match.
+  entry_at() {
+    git -C "$1" --no-replace-objects show "$2:.claude-plugin/marketplace.json" 2>/dev/null \
+      | jq -cS --arg n "$PLUGIN_NAME" '[.plugins[]? | select(.name == $n)] | if length == 1 then .[0] | del(.version) else length end' 2>/dev/null
+  }
+  pin_entry="$(entry_at "$pin_repo" "$GITLINK")" || die "cannot read the marketplace manifest at the pin $GITLINK"
+  head_entry="$(entry_at "$MARKETPLACE_DIR" "$candidate")" || die "cannot read the marketplace manifest at $candidate"
+  case "$pin_entry" in
+    \{*) ;;
+    *) die "the marketplace manifest at the pin lists '$PLUGIN_NAME' ${pin_entry:-an unreadable number of} times, not once — cannot establish its reviewed source" ;;
+  esac
+  case "$head_entry" in
+    \{*|0) ;;
+    *) die "the marketplace manifest at $candidate lists '$PLUGIN_NAME' ${head_entry:-an unreadable number of} times — cannot tell which one would install" ;;
+  esac
+  source_path="$(printf '%s' "$pin_entry" | jq -r '.source | strings')" || source_path=""
+  case "$source_path" in
+    ./?*) source_path="${source_path#./}"; source_path="${source_path%/}" ;;
+    *) die "the '$PLUGIN_NAME' entry's source is not a path inside the marketplace — cannot compare its subtree" ;;
+  esac
+  case "/$source_path/" in
+    */../*|*/./*|*//*|*[:*?[\\]*) die "the '$PLUGIN_NAME' entry's source '$source_path' is not a plain relative path" ;;
+  esac
+  # The subtree's own entry at a revision: prints "<type> <id>", prints nothing when the path is
+  # absent, and fails only when a read fails. An absent or non-directory subtree is a difference
+  # (exit 1); a failed read, including an object missing from the clone, is UNKNOWN (exit 2).
+  subtree_at() {
+    local entry rest kind id
+    entry="$(git -C "$1" --literal-pathspecs --no-replace-objects ls-tree "$2" -- "$source_path" 2>/dev/null)" || return 1
+    [ -n "$entry" ] || return 0
+    case "$entry" in *$'\n'*) return 1 ;; esac
+    rest="${entry#* }"; kind="${rest%% *}"; rest="${rest#* }"; id="${rest%%$'\t'*}"
+    if [ "$kind" != commit ]; then
+      git -C "$1" --no-replace-objects cat-file -e "$id" 2>/dev/null || return 1
+    fi
+    printf '%s %s' "$kind" "$id"
+  }
+  pin_sub="$(subtree_at "$pin_repo" "$GITLINK")" || die "cannot read the '$PLUGIN_NAME' subtree '$source_path' at the pin $GITLINK"
+  case "$pin_sub" in
+    tree\ *) pin_tree="${pin_sub#tree }" ;;
+    *) die "the '$PLUGIN_NAME' source '$source_path' is not a directory at the pin $GITLINK — cannot establish its reviewed definition" ;;
+  esac
+  head_sub="$(subtree_at "$MARKETPLACE_DIR" "$candidate")" || die "cannot read the '$PLUGIN_NAME' subtree '$source_path' at $candidate"
+  head_tree=""
+  case "$head_sub" in tree\ *) head_tree="${head_sub#tree }" ;; esac
+  # Tree identity covers a symlink's TEXT and a submodule's commit, not the bytes the runtime
+  # copies: Claude Code dereferences a link that resolves elsewhere in the marketplace. So an
+  # identical subtree proves the install only when it holds nothing but regular files.
+  linked=""
+  if [ "$head_entry" = "$pin_entry" ] && [ "$head_tree" = "$pin_tree" ]; then
+    listing="$(git -C "$pin_repo" --no-replace-objects ls-tree -r "$pin_tree" 2>/dev/null)" \
+      || die "cannot list the '$PLUGIN_NAME' subtree at the pin $GITLINK"
+    linked="$(printf '%s\n' "$listing" | awk -F'\t' '$1 !~ /^100(644|755) blob / && NF { print $2 }')"
   fi
+  if [ "$head_entry" = "$pin_entry" ] && [ "$head_tree" = "$pin_tree" ] && [ -z "$linked" ]; then
+    say "target subtree .......... $source_path is identical at $candidate and the pin (tree $pin_tree)"
+  else
+    say ""
+    say "NOT-ON-PIN — refusing to apply, nothing changed."
+    say "  The marketplace carries $candidate; this consumer pins $GITLINK, and what it would install"
+    if [ -n "$linked" ]; then
+      say "  for '$PLUGIN_NAME' cannot be proven from its subtree, which links outside itself or to a"
+      say "  submodule — only the exact pin can be applied:"
+      printf '%s\n' "$linked" | sed "s|^|    $source_path/|" | while IFS= read -r line; do say "$line"; done
+    else
+      say "  for '$PLUGIN_NAME' differs from the reviewed definition:"
+    fi
+    if [ "$head_entry" = 0 ]; then
+      say "    the marketplace no longer lists '$PLUGIN_NAME'"
+    elif [ "$head_entry" != "$pin_entry" ]; then
+      say "    its marketplace entry"
+    fi
+    if [ -z "$head_tree" ]; then
+      say "    $source_path is absent or not a directory at $candidate"
+    elif [ "$head_tree" != "$pin_tree" ]; then
+      # Naming the files is reporting only; the tree identities above are the verdict.
+      { git -C "$pin_repo" --literal-pathspecs --no-replace-objects ls-tree -r "$GITLINK" -- "$source_path" 2>/dev/null || true
+        git -C "$MARKETPLACE_DIR" --literal-pathspecs --no-replace-objects ls-tree -r "$candidate" -- "$source_path" 2>/dev/null || true
+      } | sort | uniq -u | cut -f2- | sort -u | sed 's/^/    /' | while IFS= read -r line; do say "$line"; done
+    fi
+    say "  'plugin update' installs the marketplace LATEST and has no ref selector, so applying it"
+    say "  here would install a revision this deployment has not reviewed. That is worse than the"
+    say "  stale install it would replace, which at least runs a previously reviewed definition."
+    say "  To resolve: bump the '$SUBMODULE_PATH' gitlink to the revision you intend to run, through"
+    say "  the normal reviewed rollout, then re-run this. Until then, follow the reviewed definition"
+    say "  at the pinned gitlink per AGENTS.md and report the drift."
+    exit 1
+  fi
+fi
+if [ "$candidate" != "$GITLINK" ] && [ "$DRY_RUN" -eq 1 ]; then
+  # A dry run skipped the refresh, so this comparison is against a possibly STALE clone. An actual
+  # refresh might bring it exactly to the pin, so the simulation has not established that the
+  # marketplace cannot supply it — emitting NOT-ON-PIN here would be a false verdict pointing the
+  # caller at a gitlink bump it may not need. Same reason the dry-run success path returns 2.
   say ""
-  say "NOT-ON-PIN — refusing to apply, nothing changed."
-  say "  The marketplace carries $candidate; this consumer pins $GITLINK."
-  say "  'plugin update' installs the marketplace LATEST and has no ref selector, so applying it"
-  say "  here would install a revision this deployment has not reviewed. That is worse than the"
-  say "  stale install it would replace, which at least runs a previously reviewed definition."
-  say "  To resolve: bump the '$SUBMODULE_PATH' gitlink to the revision you intend to run, through"
-  say "  the normal reviewed rollout, then re-run this. Until then, follow the reviewed definition"
-  say "  at the pinned gitlink per AGENTS.md and report the drift."
-  exit 1
+  say "dry-run ................. clone is at $candidate, pin is $GITLINK — but the refresh was"
+  say "                          skipped, so this is NOT evidence the marketplace lacks the pin."
+  say "dry-run ................. exiting 2 (no verdict)."
+  exit 2
 fi
 
-# ── the revision matched; now prove the BYTES match too ────────────────────────
+# ── HEAD carries the reviewed definition; now prove the worktree BYTES are HEAD ──────────────────────────────────────────
 # `rev-parse HEAD` answers "which commit is checked out", which is a weaker claim than "these are
 # the reviewed bytes" — the same gap AGENTS.md documents for reading the pinned submodule. A
 # non-conflicting tracked modification, an assume-unchanged/skip-worktree entry, or a clean/smudge
@@ -397,8 +504,7 @@ fi
 # The plugin NAME is derived from the qualified id rather than left at the verifier's default:
 # under a `--plugin-id` override the verifier would otherwise locate the selected plugin's install
 # but compare it against the DEFAULT plugin's pinned subtree — a false verdict either way, and one
-# that could even validate coincidentally matching files.
-PLUGIN_NAME="${PLUGIN_ID%@*}"
+# that could even validate coincidentally matching files. PLUGIN_NAME is derived above, at the gate.
 "$VERIFY_CMD" --repo-root "$REPO_ROOT" --plugins-root "$PLUGINS_ROOT" --plugin-id "$PLUGIN_ID" \
   --plugin-name "$PLUGIN_NAME" --gitlink "$GITLINK" --submodule-path "$SUBMODULE_PATH" >/dev/null 2>&1 && vrc=0 || vrc=$?
 # `if ! cmd` would collapse the verifier's own UNKNOWN into the drift branch, turning "I could not
