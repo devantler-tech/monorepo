@@ -2907,6 +2907,56 @@ INSTRUCTION_FAILED=$(PATH="$FIX/candidate-fail:$PATH" CLAUDE_PROJECTS_DIR="$FIX/
 check "an instruction candidate filter failure is UNKNOWN" "$INSTRUCTION_FAILED" \
   "UNKNOWN: the instruction scan did not complete"
 
+# A bounded scan must never turn an interrupted worker into a clean report.
+mkdir -p "$FIX/safety-timeout-shim"
+cat > "$FIX/safety-timeout-shim/grep" <<'EOF'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ]; then
+  printf '%s\n' "$" > "$SAFETY_TEST_STARTED"
+  sleep 4
+  : > "$SAFETY_TEST_COMPLETED"
+fi
+exec "$SAFETY_TEST_GREP" "$@"
+EOF
+chmod +x "$FIX/safety-timeout-shim/grep"
+BOUNDED_OUT=$(PATH="$FIX/safety-timeout-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
+  SAFETY_TEST_STARTED="$FIX/safety-worker-started" SAFETY_TEST_COMPLETED="$FIX/safety-worker-completed" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+check "a safety deadline reports UNKNOWN instead of a clean table" "$BOUNDED_OUT" "UNKNOWN: safety scan exceeded"
+check "a safety deadline qualifies the entire selected scope" "$BOUNDED_OUT" "entire selected safety scope is UNMEASURED"
+if [ -s "$FIX/safety-worker-started" ] && [ ! -e "$FIX/safety-worker-completed" ]; then
+  safety_stalled_pid=$(cat "$FIX/safety-worker-started")
+  if kill -0 "$safety_stalled_pid" 2>/dev/null; then
+    bad "the safety deadline terminates its own stalled descendants" "worker is still alive"
+  else
+    ok "the safety deadline terminates its own stalled descendants"
+  fi
+else
+  bad "the safety deadline terminates its own stalled descendants" "stall was not reached or completed after the deadline"
+fi
+
+BOUNDED_ALL=$(PATH="$FIX/safety-timeout-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
+  SAFETY_TEST_STARTED="$FIX/safety-worker-started" SAFETY_TEST_COMPLETED="$FIX/safety-worker-completed" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 1 2>&1)
+check "the full report continues after a safety deadline" "$BOUNDED_ALL" "CROSS-INSTANCE / A2A"
+check "the full report reaches its completion footer after a safety deadline" "$BOUNDED_ALL" "END TELEMETRY"
+mkdir -p "$FIX/safety-empty-worker"
+cat > "$FIX/safety-empty-worker/bash" <<'EOF'
+#!/bin/bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ]; then exit 0; fi
+exec /bin/bash "$@"
+EOF
+chmod +x "$FIX/safety-empty-worker/bash"
+EMPTY_WORKER=$(PATH="$FIX/safety-empty-worker:$PATH" CLAUDE_PROJECTS_DIR="$FIX/credcandidate" \
+  CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  /bin/bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+check "a zero-exit worker without a completion sentinel is UNKNOWN" "$EMPTY_WORKER" "UNKNOWN: the safety worker failed"
+nocheck "a zero-exit worker without a sentinel cannot print a clean table" "$EMPTY_WORKER" "TOTAL occurrences: 0"
+
 # Interrupts must come from the structured flag, not prose quoting it.
 mkdir -p "$FIX/interrupt"
 cat > "$FIX/interrupt/s.jsonl" <<'EOF'
@@ -7734,7 +7784,9 @@ case " $* " in
   *'blobfile='*)
     printf 'fired\n' >> "$CRED_SCRATCH_TRACE"
     for _v in $CRED_SCRATCH_VALUES; do
-      if grep -rqF "$_v" "$CRED_SCRATCH_TMPDIR"/.agtel_* 2>/dev/null; then
+      # Inspect every regular file, including the redacted report. Opening a
+      # control FIFO would consume protocol data and block this observer.
+      if [ -n "$(find "$CRED_SCRATCH_TMPDIR" -type f -exec grep -qF "$_v" {} \; -print 2>/dev/null)" ]; then
         printf 'raw\n' >> "$CRED_SCRATCH_TRACE"
       fi
     done
