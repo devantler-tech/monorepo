@@ -158,6 +158,15 @@
   leading review-lane trigger is agent evidence too, because the engineer drives the review lanes and
   the maintainer does not. That leaves one documented residual: an agent's bare prose note carries no
   shape at all, so it is counted `unattributable` rather than passed off as clean.
+  🔴 **It also fails a DISCLOSED comment whose CodeRabbit trigger is followed by more text**
+  (`trigger-extra-text`, [#2942](https://github.com/devantler-tech/monorepo/issues/2942)): text on
+  the trigger line, or any non-blank line after it. CodeRabbit can parse such a comment as chat and
+  run no review, while the head's status still reads never-reviewed. Measured 09-14 → 09-28: 24 of
+  206 such requests drew a chat reply, against 27 of 998 composed ones; on platform#3439 all four
+  did, and the PR merged with no review. The fix is the composer
+  (`review-request-comment.sh`): put status notes in a separate comment before the request. Prose
+  before the trigger, Codex's `for <topic>` suffix, and triggers inside a quote or code block are
+  not reported.
 - 🔴 **A file-sourced body uses `--body-file`. `--body "@path"` POSTS THE PATH — and `gh` exits 0
   with a comment URL, so the caller gets positive confirmation for a post that carried none of its
   content.** `@`-expansion is a `gh api -F field=@file` convention and has never applied to `--body`.
