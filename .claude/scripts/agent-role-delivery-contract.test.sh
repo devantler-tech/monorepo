@@ -1424,29 +1424,39 @@ for surface_rule in \
 done
 # A push notification delivered an ask that the blocker check then read as never-asked, because
 # the ask-record vocabulary excluded "push" without saying which push it meant (monorepo#3243).
-# The channels section must settle it where an escalating agent reads — the exclusion, its
-# measured reason, and the operative instruction — and the always-on core must agree.
+# The channels section must settle it where an escalating agent reads — the exclusion, a reason
+# for it, and the operative instruction — and the always-on core must agree. The anchors are the
+# rule's load-bearing clauses, not its whole sentences, so rewording the rationale stays free.
 for push_rule in \
-  "Neither is the runtime's push notification" \
-  "\`Remote Control inactive\`" \
-  "So a notification never satisfies an ask: deliver the ask through one of the three channels above and record that channel." \
-  "Never use it for status, and never in place of one of the three"; do
+  "and the runtime's push notification are **not** attention channels" \
+  "An unattended run cannot rely on it" \
+  "a notification never satisfies an ask" \
+  "record that channel" \
+  "never use it for status, and never in place of one of the three"; do
   assert_maintainer_channels_prose "${push_rule}" "a push-notification ask is ambiguous again (monorepo#3243)"
 done
 assert_prose "\`@devantler\` mentions and push notifications are not channels." \
   "AGENTS.md's Maintainer channels summary no longer rules out the push notification (monorepo#3243)"
-# The record rule must say both meanings of `push` are excluded. A refutation of the old sentence
-# would only stop a verbatim revert, so require EVERY backticked `push` token in the contract to
-# carry the disambiguation: the ambiguous exclusion cannot come back under another spelling.
+# The ask-record rule must say both meanings of `push` are excluded. A refutation of the old
+# sentence would only stop a verbatim revert, so every backticked `push` token in THAT rule must
+# carry the disambiguation. Scoped to the rule's paragraph: `push` legitimately names other things
+# elsewhere in the contract (a git push, a workflow trigger), and those are not this rule.
+ask_rule_flat="$(
+  awk 'index($0, "**An `authority` line MUST also record the ask") { inside = 1 }
+       inside && /^[[:space:]]*$/ { exit }
+       inside { print }' "${repo_root}/.claude/guides/work-selection.md" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${ask_rule_flat}" ] ||
+  fail "could not extract the work-selection guide's ask-record rule, so the push exclusion cannot be checked (monorepo#3243)"
 # `|| true` inside the group: under pipefail a grep that matches nothing would otherwise abort the
 # run before the assertion below can name what is missing.
-push_tokens="$({ grep -o '`push`' <<<"${constitution_flat}" || true; } | wc -l | tr -d ' ')"
+push_tokens="$({ grep -o '`push`' <<<"${ask_rule_flat}" || true; } | wc -l | tr -d ' ')"
 push_disambiguated="$({ grep -o "\`push\`, whether it means a git push or the runtime's push notification" \
-  <<<"${constitution_flat}" || true; } | wc -l | tr -d ' ')"
+  <<<"${ask_rule_flat}" || true; } | wc -l | tr -d ' ')"
 [ "${push_disambiguated}" -ge 1 ] ||
   fail "the ask-record rule excludes 'push' without saying which push it means (monorepo#3243)"
 [ "${push_tokens}" = "${push_disambiguated}" ] ||
-  fail "the contract names \`push\` ${push_tokens} times but disambiguates it only ${push_disambiguated} — an ambiguous exclusion is back (monorepo#3243)"
+  fail "the ask-record rule names \`push\` ${push_tokens} times but disambiguates it only ${push_disambiguated} — an ambiguous exclusion is back (monorepo#3243)"
 
 # The plugin's maintainer-PR driving fact (agent-plugins#201) is read from the Trust gate
 # section and defaults to hands-off when that section does not declare it. This deployment
