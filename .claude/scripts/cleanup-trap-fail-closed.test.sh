@@ -195,6 +195,76 @@ else
 fi
 echo
 
+# ---------------------------------------------------------------------------
+# 4. CONVERTED SCRIPTS (acceptance criterion 3). Every script listed here uses
+#    the canonical shape. For each, a copy of the REAL script gets a `set -u`
+#    abort injected on the line right after its `trap <handler> EXIT`, and the
+#    copy must not exit 0. A reach marker written just before the abort proves
+#    the copy got that far, so a script that stops earlier (a usage error, a
+#    missing input) can never pass vacuously. On a bash that carries the defect
+#    the copy must also report through the sentinel, which is what proves the
+#    sentinel, and not some earlier failure, turned the abort into a failure.
+#    The list only grows: a script removed from it, or a sentinel removed from a
+#    script on it, fails here.
+# ---------------------------------------------------------------------------
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mkdir -p "$tmp/converted/projects" "$tmp/converted/backups"
+printf 'memory line\n' > "$tmp/converted/memory.md"
+printf 'replacement line\n' > "$tmp/converted/replacement.md"
+printf '{"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":1,"cronExpression":"0 * * * *"}]}\n' \
+  > "$tmp/converted/store.json"
+
+# <script>|<arguments that carry it past its own input checks to the trap line>
+converted_scripts="
+memory-backup.sh|
+memory-hygiene.sh|
+memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups
+review-lane-health.sh|--now 1
+claude-lane-liveness.sh|--store $tmp/converted/store.json --projects $tmp/converted/projects
+"
+
+echo "converted scripts (\`set -u\` abort injected after the trap line):"
+while IFS='|' read -r name args; do
+  [ -n "$name" ] || continue
+  src="$script_dir/$name"
+  if [ ! -f "$src" ]; then
+    fail "${name}: listed as converted but not found at ${src}"
+    continue
+  fi
+  trap_line="$(grep -n -E '^trap [A-Za-z_][A-Za-z0-9_]* EXIT$' "$src" | head -1 | cut -d: -f1 || true)"
+  if [ -z "$trap_line" ]; then
+    fail "${name}: no \`trap <handler> EXIT\` line to inject after — the canonical shape is missing"
+    continue
+  fi
+  copy="$tmp/converted/$name"
+  {
+    head -n "$trap_line" "$src"
+    # shellcheck disable=SC2016 # Written literally into the copy, expanded when it runs.
+    printf '%s\n' 'printf reached > "$CLEANUP_TRAP_TEST_REACHED"' ': "${CLEANUP_TRAP_TEST_UNSET_VAR}"'
+    tail -n "+$((trap_line + 1))" "$src"
+  } > "$copy"
+  chmod +x "$copy"
+  reached="$tmp/converted/$name.reached"
+  rm -f "$reached"
+  rc=0
+  # Word splitting of $args is intended: it is a fixed argument list with no spaces inside a word.
+  # shellcheck disable=SC2086
+  err="$(cd "$tmp/converted" && env -u CLEANUP_TRAP_TEST_UNSET_VAR CLEANUP_TRAP_TEST_REACHED="$reached" \
+    "$copy" $args 2>&1 >/dev/null)" || rc=$?
+  if [ ! -f "$reached" ]; then
+    fail "${name}: the copy stopped before its trap line (exit ${rc}), so this result proves nothing: ${err}"
+  elif [ "$rc" -eq 0 ]; then
+    fail "${name}: a \`set -u\` abort after the trap line reported a CLEAN PASS"
+  elif [ "$naive_unbound" -eq 0 ] && ! printf '%s' "$err" | grep -q 'aborted before finishing'; then
+    fail "${name}: exit ${rc}, but not through the sentinel on a bash that masks the abort: ${err}"
+  else
+    pass "${name}: the abort reports failure (exit ${rc})"
+  fi
+done <<EOF
+$converted_scripts
+EOF
+echo
+
 if [ "$fails" -ne 0 ]; then
   echo "cleanup-trap-fail-closed.test: ${fails} assertion(s) failed" >&2
   exit 1

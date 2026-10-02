@@ -67,7 +67,21 @@ done
 command -v jq >/dev/null || { echo "review-lane-health: jq is required — UNKNOWN" >&2; exit 2; }
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
+# cleanup then becomes the script's status. Completion is recorded explicitly, so reaching the end is
+# the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
+review_lane_health_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+review_lane_health_cleanup() {
+  local rc=$?
+  rm -rf "$tmp"
+  if [ "$review_lane_health_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "review-lane-health: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap review_lane_health_cleanup EXIT
 
 unknown() { echo "review-lane-health: UNKNOWN — $*" >&2; exit 2; }
 
@@ -219,4 +233,5 @@ awk -F'\t' '$1 == "cr" && $3 == "declined" && $2 > at[$4] { at[$4] = $2 }
   while IFS=$'\t' read -r pr at; do
     echo "CR-DECLINED $pr at $at — PR-scoped learning; advance this PR to the next lane (MAINTAINER-ONLY removal)"
   done
+review_lane_health_finished=1
 exit "$down"
