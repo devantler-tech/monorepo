@@ -290,6 +290,29 @@ if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q "cannot read the 'agen
 else bad "B8 reports a failed marketplace read as UNKNOWN (exit 2), not as an absent subtree" "exit $rc, out: $out"; fi
 cleanup
 
+# B9 — git reads a path argument as a pathspec, where `:/` is top magic. A reviewed source of
+# `./:/plugins/agentic-engineering` would be compared through the `plugins/agentic-engineering`
+# decoy while the runtime copies the literal directory, so such a source is refused outright.
+make_fixture
+git -C "$MK" checkout -q "$MK_NEW"
+mkdir -p "$MK/:/plugins/agentic-engineering/agents" || exit 9
+echo reviewed > "$MK/:/plugins/agentic-engineering/agents/a.md"
+write_manifest "$MK" 1.0.1 1.0.0
+sed 's|"source":"./plugins/agentic-engineering"|"source":"./:/plugins/agentic-engineering"|' \
+  "$MK/.claude-plugin/marketplace.json" > "$MK/.claude-plugin/m.tmp" && mv "$MK/.claude-plugin/m.tmp" "$MK/.claude-plugin/marketplace.json"
+git -C "$MK" --literal-pathspecs add -- ':' >/dev/null 2>&1 || exit 9
+B_PIN="$(commit_on "$MK" magic-source)"; [ -n "$B_PIN" ] || exit 9
+set_gitlink "$B_PIN"
+git -C "$MK" checkout -q "$B_PIN"
+echo unreviewed > "$MK/:/plugins/agentic-engineering/agents/a.md"
+git -C "$MK" --literal-pathspecs add -- ':' >/dev/null 2>&1 || exit 9
+B_HEAD="$(move_past_pin "$B_PIN" magic-literal-moved)" || exit 9
+out="$(STUB_MARKETPLACE_TARGET="$B_HEAD" run 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'is not a plain relative path' <<<"$out"; then
+  ok "B9 refuses a source path git would read as pathspec magic (exit 2), never comparing a decoy"
+else bad "B9 refuses a source path git would read as pathspec magic (exit 2), never comparing a decoy" "exit $rc, out: $out"; fi
+cleanup
+
 # ── A2 — the safe case: marketplace latest == pin ⇒ apply ──────────────────────────────────────
 make_fixture
 set_gitlink "$MK_NEW"

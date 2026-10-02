@@ -330,9 +330,10 @@ marketplace tip *was* `564a6a0f`. Measured the next day: pin `11b241cc` (4.3.4) 
 here has reviewed. **Stale-install drift at least runs a previously reviewed definition; this would
 run one that was never read.** That is why the script applies only when what it would install for
 **that plugin** is the reviewed definition: marketplace-HEAD **==** pin, or the plugin's marketplace
-entry (apart from its version) and its whole source subtree are identical at both revisions. A release
-of an unrelated plugin then no longer blocks the repair (#3197), and any change to this plugin still
-refuses rather than taking the tip.
+entry (apart from its version) and its whole source subtree are identical at both revisions, and that
+subtree holds only regular files (a symlink or submodule refuses, since its tree identity does not
+cover the bytes the runtime copies). A release of an unrelated plugin then no longer blocks the
+repair (#3197), and any change to this plugin still refuses rather than taking the tip.
 
 ⚠️ **A refusal is a real finding about the ROLLOUT, not a failure of the check.** It means the
 gitlink and upstream have diverged, so the fix is to bump `libraries/agent-plugins` to the revision

@@ -24,10 +24,10 @@
 #
 # So the contract here is: refresh the marketplace, then apply the update ONLY when what it would
 # install for THIS plugin is EXACTLY the pinned definition — the marketplace tip is the pin, or the
-# plugin's marketplace entry and source subtree are identical at both (monorepo#3197). When it is not,
-# change nothing and say why — a consumer gitlink and an upstream plugin that have diverged is a real,
-# reportable condition (it tells the engineer the gitlink needs bumping), not something to paper over
-# by installing the tip.
+# plugin's marketplace entry and source subtree are identical at both and the subtree holds only
+# regular files (monorepo#3197). When it is not, change nothing and say why — a consumer gitlink and
+# an upstream plugin that have diverged is a real, reportable condition (it tells the engineer the
+# gitlink needs bumping), not something to paper over by installing the tip.
 #
 # It never edits the plugin cache. The cache is read-only evidence; every mutation here goes through
 # the runtime's own control plane, which is what AGENTS.md authorises.
@@ -312,14 +312,14 @@ if [ "$candidate" != "$GITLINK" ] && [ "$DRY_RUN" -eq 0 ]; then
     *) die "the '$PLUGIN_NAME' entry's source is not a path inside the marketplace — cannot compare its subtree" ;;
   esac
   case "/$source_path/" in
-    */../*|*/./*|*//*) die "the '$PLUGIN_NAME' entry's source '$source_path' is not a plain relative path" ;;
+    */../*|*/./*|*//*|*[:*?[\\]*) die "the '$PLUGIN_NAME' entry's source '$source_path' is not a plain relative path" ;;
   esac
   # The subtree's own entry at a revision: prints "<type> <id>", prints nothing when the path is
   # absent, and fails only when a read fails. An absent or non-directory subtree is a difference
   # (exit 1); a failed read, including an object missing from the clone, is UNKNOWN (exit 2).
   subtree_at() {
     local entry rest kind id
-    entry="$(git -C "$1" --no-replace-objects ls-tree "$2" -- "$source_path" 2>/dev/null)" || return 1
+    entry="$(git -C "$1" --literal-pathspecs --no-replace-objects ls-tree "$2" -- "$source_path" 2>/dev/null)" || return 1
     [ -n "$entry" ] || return 0
     case "$entry" in *$'\n'*) return 1 ;; esac
     rest="${entry#* }"; kind="${rest%% *}"; rest="${rest#* }"; id="${rest%%$'\t'*}"
@@ -367,8 +367,8 @@ if [ "$candidate" != "$GITLINK" ] && [ "$DRY_RUN" -eq 0 ]; then
       say "    $source_path is absent or not a directory at $candidate"
     elif [ "$head_tree" != "$pin_tree" ]; then
       # Naming the files is reporting only; the tree identities above are the verdict.
-      { git -C "$pin_repo" --no-replace-objects ls-tree -r "$GITLINK" -- "$source_path" 2>/dev/null || true
-        git -C "$MARKETPLACE_DIR" --no-replace-objects ls-tree -r "$candidate" -- "$source_path" 2>/dev/null || true
+      { git -C "$pin_repo" --literal-pathspecs --no-replace-objects ls-tree -r "$GITLINK" -- "$source_path" 2>/dev/null || true
+        git -C "$MARKETPLACE_DIR" --literal-pathspecs --no-replace-objects ls-tree -r "$candidate" -- "$source_path" 2>/dev/null || true
       } | sort | uniq -u | cut -f2- | sort -u | sed 's/^/    /' | while IFS= read -r line; do say "$line"; done
     fi
     say "  'plugin update' installs the marketplace LATEST and has no ref selector, so applying it"
