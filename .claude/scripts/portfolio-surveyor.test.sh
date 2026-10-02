@@ -4075,3 +4075,65 @@ _mut_inline=$(sed 's/may read them with its shell\./reads them the same way./' <
 [[ "$(_local_read_rule_error "${_mut_inline}")" == *"must name 'An inline survey"* ]] ||
   fail "round-20 control: the local-read check did not reject a rule that dropped the inline-survey carve-out (#3638)"
 echo "portfolio surveyor contract: round-20 local-file read assertions passed"
+
+# ── monorepo#3067: the fifth active-work signal is a live process on this host ───────────────────
+# Every other active-work signal is a published event, and #3053 read idle on all four (push 3h24m
+# old) while two live sessions worked in its worktree. Pin the contract row and its discipline, and
+# bind `holder=` to EVERY PR row template that carries `active=`: a document-wide match would stay
+# green on the explanatory prose while one template silently dropped the field.
+_holder_contract_error() {
+  local flat="$1" clause
+  for clause in \
+    'A live process **outside your own session** working in a local checkout of its head branch (`holder=live:`)' \
+    'A live process is a **current** fact, so it does not expire; it is re-read instead' \
+    'immediately before your first push to a branch you did not create' \
+    '`self:` is your own session and parks nothing' \
+    '**`unknown:` is never "no live holder"**'; do
+    case "${flat}" in
+      *"${clause}"*) ;;
+      *) echo "the active-work contract must say: ${clause}"; return ;;
+    esac
+  done
+}
+_err=$(_holder_contract_error "${constitution_flat}")
+[ -z "${_err}" ] || fail "${_err} (monorepo#3067)"
+_mut=$(printf '%s' "${constitution_flat}" | sed 's/is never "no live holder"/is a pass/')
+[[ "$(_holder_contract_error "${_mut}")" == *'never "no live holder"'* ]] ||
+  fail "control: the holder contract check did not reject a contract that reads unknown as clear (monorepo#3067)"
+
+for _clause in \
+  '<repo-root>/.claude/scripts/pr-worktree-holder.sh --input -' \
+  '**`unknown` is never `none`**' \
+  'Run ONCE per survey (it reads the whole host, so never per PR)' \
+  'a failed call or a missing line is `unknown:query`' \
+  'every PR row carries the field' \
+  'any PR with a live `active=` signal or `holder=live:` `ACTIVELY-OWNED`' \
+  'Carries the same deepened pentad, `active=`, `holder=`, merge_group_result='; do
+  case "${surveyor_flat}" in
+    *"${_clause}"*) ;;
+    *) fail "portfolio-surveyor.md must say: ${_clause} (monorepo#3067)" ;;
+  esac
+done
+
+_holder_grammar='holder=<live:…|self:…|none|fork|unknown:<reason>>'
+_holder_rows_error() {
+  local file="$1" rows with
+  rows=$(grep -c 'active=<.*merge_group_result=' "${file}" || true)
+  with=$(grep 'active=<.*merge_group_result=' "${file}" | grep -c -F "${_holder_grammar}" || true)
+  if [ "${rows}" -lt 3 ]; then
+    echo "found ${rows} PR row templates, so the holder= binding would be vacuous"
+  elif [ "${rows}" != "${with}" ]; then
+    echo "only ${with} of ${rows} PR row templates carry ${_holder_grammar}"
+  fi
+}
+_err=$(_holder_rows_error "${surveyor}")
+[ -z "${_err}" ] || fail "portfolio-surveyor.md: ${_err} (monorepo#3067)"
+_holder_mutant="$(mktemp)"
+awk -v g="${_holder_grammar}, " '
+  !done && (i = index($0, g)) { $0 = substr($0, 1, i - 1) substr($0, i + length(g)); done = 1 }
+  { print }' "${surveyor}" >"${_holder_mutant}"
+_mut_err=$(_holder_rows_error "${_holder_mutant}")
+rm -f "${_holder_mutant}"
+[[ "${_mut_err}" == *'PR row templates carry'* ]] ||
+  fail "control: the holder row binding did not reject a template that dropped holder= (monorepo#3067)"
+echo "portfolio surveyor contract: monorepo#3067 worktree-holder assertions passed"

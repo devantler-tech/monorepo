@@ -724,6 +724,9 @@ jobs:
               - '.claude/scripts/pr-body-contract.test.sh'
               - '.claude/scripts/pr-body-public-tlds.txt'
               - '.claude/scripts/portfolio-surveyor-forge-hook.sh'
+              # The hook refuses to run unless every helper it declares exists, and the test
+              # runs the overlay's worktree-holder pipeline through it (monorepo#3067).
+              - '.claude/scripts/pr-worktree-holder.sh'
               # The test diffs AGENTS.md blocks against committed fixtures. Without this path a
               # fixture-only commit skips the job entirely, so the mismatch assertion never runs on
               # exactly the fixture-only tampering those whitelists exist to catch.
@@ -820,6 +823,10 @@ jobs:
               # (monorepo#2838), so a change to it or its test re-runs this job.
               - '.claude/scripts/kata-measure-date.sh'
               - '.claude/scripts/kata-measure-date.test.sh'
+              # The overlay reads whether a live process holds a PR's local checkout only
+              # through this helper (monorepo#3067), so a change to it or its test re-runs this job.
+              - '.claude/scripts/pr-worktree-holder.sh'
+              - '.claude/scripts/pr-worktree-holder.test.sh'
               # A cask PR's draft fence is cleared only on this helper's RIPE verdict
               # (monorepo#2992), so a change to it or its test re-runs this job.
               - '.claude/scripts/release-cask-ripeness.sh'
@@ -2683,6 +2690,11 @@ jobs:
         run: |
           shellcheck .claude/scripts/kata-measure-date.sh .claude/scripts/kata-measure-date.test.sh
           bash .claude/scripts/kata-measure-date.test.sh
+      # Hermetic: real git fixture checkouts, with lsof and ps shimmed (monorepo#3067).
+      - name: Verify the PR worktree-holder probe
+        run: |
+          shellcheck .claude/scripts/pr-worktree-holder.sh .claude/scripts/pr-worktree-holder.test.sh
+          bash .claude/scripts/pr-worktree-holder.test.sh
       # Hermetic: judges synthetic casks and release objects, no API call (monorepo#2992).
       - name: Verify the release cask ripeness classifier
         run: |
