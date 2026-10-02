@@ -1506,6 +1506,26 @@ admin_backpointer_ok() {
   [ "$back_real" = "$wt_real" ] && [ "$(basename "$back")" = .git ]
 }
 
+# reap_size_kb <worktree> -> prints the KB a removal frees: the working tree AND its admin
+# directory (.git/worktrees/<id>), which the removal deletes with it (#3432). The admin
+# directory holds every populated submodule's repository under modules/, so on the reference
+# host it outweighed the working trees about 3 to 1, and a working-tree-only figure
+# under-reported every sweep about 4x. It is measured here, before the removal, because it is
+# gone afterwards; dry-run and apply measure at this same point, so they report the same
+# figure. One du call, so a file hard-linked into both is counted once. An admin directory
+# whose gitdir does not name this worktree is not the one the removal deletes, so only the
+# working tree is counted then: the figure may under-count, never claim what was not freed.
+reap_size_kb() {
+  local wt=$1 admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) || admin=""
+  if [ -n "$admin" ] && [ -d "$admin" ] && admin_backpointer_ok "$wt"; then
+    set -- "$wt" "$admin"
+  else
+    set -- "$wt"
+  fi
+  du -sk "$@" 2>/dev/null | awk '{ kb += $1 } END { print kb + 0 }'
+}
+
 # The candidate set is every directory directly under WT_ROOT, PLUS every registered worktree
 # nested deeper beneath it. A session worktree can itself hold worktrees at
 # <session>/.claude/worktrees/<name> — the agent write-boundary hook requires exactly that
@@ -1777,7 +1797,8 @@ while IFS= read -r wt <&3; do
   fi
 
   # --- REAP ------------------------------------------------------------------------
-  sz_kb=$(du -sk "$wt" 2>/dev/null | cut -f1); sz_kb=${sz_kb:-0}
+  # The working tree plus its admin directory, sized before anything is removed.
+  sz_kb=$(reap_size_kb "$wt"); sz_kb=${sz_kb:-0}
   # Ignored files are NOT a KEEP reason — 70 of 80 worktrees on the reference host carry
   # build output or caches, so keeping on them would make the sweep reclaim nothing and
   # leave the disk-full condition this tool exists for unresolved. They are counted and
