@@ -195,8 +195,14 @@ emit_safety_unknown() {
 }
 
 run_safety_early() (
-  local standalone=${1:-1} worker_pid='' watchdog_pid='' worker_rc=0 watchdog_rc=0
-  local worker_tmp='' report='' status_line='' payload='' args=()
+  local standalone=${1:-1} worker_rc=0 watchdog_rc=0
+  local report='' status_line='' payload='' args=()
+  # EXIT runs after this function's local scope is gone. Keep the three handles
+  # in the already-isolated controller subshell so its trap can still clean up
+  # without tripping `set -u` or losing a live process group on a signal exit.
+  worker_pid=''
+  watchdog_pid=''
+  worker_tmp=''
   early_cleanup_async() {
     local cleanup_dir=${1:-} path
     [ -n "$cleanup_dir" ] || return 0
@@ -268,6 +274,7 @@ run_safety_early() (
   worker_pid=$!
   (
     set +m
+    trap - EXIT HUP INT TERM
     sleep "$SAFETY_TIMEOUT_SECONDS"
     kill -TERM -- "-$worker_pid" 2>/dev/null || true
     kill -KILL -- "-$worker_pid" 2>/dev/null || true
