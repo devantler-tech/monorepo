@@ -147,35 +147,75 @@ if ! root_agent_definition_locations_flat="$(
 fi
 [ -n "${root_agent_definition_locations_flat}" ] ||
   fail "could not extract root Agent definition locations, so its telemetry authority cannot be checked"
-assert_root_agent_definition_locations_prose() {
-  case "${root_agent_definition_locations_flat}" in
+extract_root_version_controlled_surfaces() {
+  awk '/^- \*\*Version-controlled\*\*/ { inside = 1; found = 1; print; next }
+       inside && /^[[:space:]]*[-*+] / { ended = 1; exit }
+       inside { print }
+       END { if (!found || !ended) exit 1 }'
+}
+if ! root_version_controlled_surfaces_flat="$(
+  extract_root_agent_definition_locations <"${constitution}" |
+    extract_root_version_controlled_surfaces | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"; then
+  fail "root Agent definition locations has no bounded Version-controlled entry"
+fi
+assert_root_version_controlled_surface_prose() {
+  case "${root_version_controlled_surfaces_flat}" in
     *"$1"*) ;;
     *) fail "$2" ;;
   esac
 }
-assert_root_agent_definition_locations_prose '.claude/scripts/agent-telemetry.sh' \
-  "root Agent definition locations does not grant the Agent Improver authority over the telemetry collector"
+assert_root_version_controlled_surface_prose '.claude/scripts/agent-telemetry.sh' \
+  "root Version-controlled surfaces do not grant the Agent Improver authority over the telemetry collector"
+
+# Negative control: a negated mention in another root entry must not satisfy the
+# Version-controlled grant.
+real_root_version_controlled_surfaces_flat="${root_version_controlled_surfaces_flat}"
+root_version_controlled_surfaces_flat="$(
+  printf '%s\n' \
+    '### Agent definition locations' \
+    '- **Version-controlled**: `AGENTS.md`.' \
+    '- **Runtime-local**: never edit `.claude/scripts/agent-telemetry.sh`.' \
+    '### Authority model' |
+    extract_root_agent_definition_locations |
+    extract_root_version_controlled_surfaces | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+if (assert_root_version_controlled_surface_prose '.claude/scripts/agent-telemetry.sh' \
+  "negative control rejected a negated telemetry mention" >/dev/null 2>&1); then
+  fail "negative control: a negated telemetry mention outside Version-controlled satisfied the root grant"
+fi
+root_version_controlled_surfaces_flat="${real_root_version_controlled_surfaces_flat}"
 
 # Negative control: a guide-level telemetry path must not mask its removal from the
 # always-on root authority list.
-real_root_agent_definition_locations_flat="${root_agent_definition_locations_flat}"
-root_agent_definition_locations_flat="$(
+real_root_version_controlled_surfaces_flat="${root_version_controlled_surfaces_flat}"
+root_version_controlled_surfaces_flat="$(
   printf '%s\n' \
     '### Agent definition locations' \
-    'No telemetry surface here.' \
+    '- **Version-controlled**: `AGENTS.md`.' \
+    '- **Runtime-local**: local settings.' \
     '### Authority model' \
     '## Agent definition locations' \
     '`.claude/scripts/agent-telemetry.sh` remains in the guide.' |
-    extract_root_agent_definition_locations | tr '\n' ' ' | tr -s '[:space:]' ' '
+    extract_root_agent_definition_locations |
+    extract_root_version_controlled_surfaces | tr '\n' ' ' | tr -s '[:space:]' ' '
 )"
-if (assert_root_agent_definition_locations_prose '.claude/scripts/agent-telemetry.sh' \
+if (assert_root_version_controlled_surface_prose '.claude/scripts/agent-telemetry.sh' \
   "negative control rejected the root authority omission" >/dev/null 2>&1); then
   fail "negative control: a guide-level telemetry path masked its removal from the root authority list"
 fi
-root_agent_definition_locations_flat="${real_root_agent_definition_locations_flat}"
+root_version_controlled_surfaces_flat="${real_root_version_controlled_surfaces_flat}"
 if printf '%s\n' '### Agent definition locations' '.claude/scripts/agent-telemetry.sh' |
   extract_root_agent_definition_locations >/dev/null; then
   fail "negative control: root Agent definition locations accepted a missing peer-heading boundary"
+fi
+if printf '%s\n' \
+  '### Agent definition locations' \
+  '- **Version-controlled**: `.claude/scripts/agent-telemetry.sh`.' \
+  '### Authority model' |
+  extract_root_agent_definition_locations |
+  extract_root_version_controlled_surfaces >/dev/null; then
+  fail "negative control: root Version-controlled entry accepted a missing sibling-bullet boundary"
 fi
 
 # The bundled SKILL.md is SYNCED from devantler-tech/agent-skills (it carries
