@@ -32,11 +32,13 @@ report() {
 #                       (rows `<id><TAB><url><TAB><kind>`) and answered by kind:
 #                         present   on the board with a Status      absent   on no project
 #                         nostatus  on the board, no Status         other    on another project
-#                         private   present, repository private    many     nothing on the first
-#                         null      the node came back null                  page, more pages exist
+#                         private   present, repository private    null     the node came back null
 #                         wrongid / wrongurl   a present node that answers for another issue
+#                       (an item beyond the first page of an issue's project items looks like
+#                       `other` or `absent` to the read, so it needs no kind of its own)
 #                       GH_BULK_EXIT fails the call; GH_BULK_MODE is errors (no data), short (one
-#                       node missing), or partial (an errors entry beside complete data).
+#                       node missing), long (one node too many), partial (an errors entry beside
+#                       complete data), garbage (not JSON) or twodocs (the answer printed twice).
 mkstub_gh() {
   mkdir -p "$tmp/bin"
   cat > "$tmp/bin/gh" <<'STUB'
@@ -76,18 +78,23 @@ case "$1 ${2:-}" in
                     nodes: (if ($row.kind | IN("present", "private", "wrongid", "wrongurl")) then [item("PVT_board"; "📥 Backlog")]
                             elif $row.kind == "nostatus" then [item("PVT_board"; null)]
                             elif $row.kind == "other" then [item("PVT_other"; "📥 Backlog")]
-                            else [] end),
-                    pageInfo: {hasNextPage: ($row.kind == "many")}
+                            else [] end)
                   }
                 } end;
             [.variables.ids[] | node(.)] as $nodes
           | if $mode == "errors" then {errors: [{type: "RATE_LIMITED", message: "stub"}]}
             elif $mode == "short" then {data: {nodes: $nodes[:-1]}}
+            elif $mode == "long" then {data: {nodes: ($nodes + [$nodes[0]])}}
             elif $mode == "partial" then {errors: [{message: "stub: one node could not be resolved"}], data: {nodes: $nodes}}
-            else {data: {nodes: $nodes}} end' <<<"$body"
+            elif $mode == "twodocs" then ({data: {nodes: $nodes}}, {data: {nodes: $nodes}})
+            else {data: {nodes: $nodes}} end' <<<"$body" > "${GH_BULK_IDS}.answer"
         # Like the real CLI (measured 2026-10-04): a response carrying `errors` is printed in full
         # and the call still exits 1, even when the data beside it is complete.
-        case "${GH_BULK_MODE:-ok}" in errors | partial) echo "gh: stub: the response carried errors" >&2; exit 1 ;; esac
+        case "${GH_BULK_MODE:-ok}" in
+          garbage) echo "<html>502 Bad Gateway</html>"; exit 0 ;;
+          errors | partial) cat "${GH_BULK_IDS}.answer"; echo "gh: stub: the response carried errors" >&2; exit 1 ;;
+        esac
+        cat "${GH_BULK_IDS}.answer"
         exit 0
         ;;
       *)
@@ -107,11 +114,13 @@ STUB
 
 # A `board-add.sh` stub logging each URL. BOARD_ADD_FAIL_ON / BOARD_ADD_PRIVATE_ON select
 # an operational failure or a private-repo refusal for one URL. BOARD_ADD_SLEEP makes each call
-# take that many seconds, so a deadline has something to cut off.
+# take that many seconds, so a deadline has something to cut off. BOARD_ADD_READS_STDIN makes it
+# drain its stdin, as a helper that prompts or pipes would.
 mkstub_board_add() {
   cat > "$tmp/board-add-stub.sh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$1" >> "${BOARD_LOG}"
+[ -z "${BOARD_ADD_READS_STDIN:-}" ] || cat > /dev/null
 [ -z "${BOARD_ADD_SLEEP:-}" ] || sleep "${BOARD_ADD_SLEEP}"
 if [ -n "${BOARD_ADD_PRIVATE_ON:-}" ] && grep -qxF "$1" <<<"${BOARD_ADD_PRIVATE_ON}"; then
   echo "board-add: devantler-tech/x is PRIVATE; project 5 is public — adding it is a maintainer decision, not an agent default"; exit 2
@@ -393,7 +402,7 @@ report "one bulk read covers the three issues" \
 # 9b. PRESENCE IS THE ONLY THING THE BULK READ PROVES. Every other answer leaves the issue to
 #     board-add.sh, which does the complete, paginated, verified read. None may read as "on the
 #     board": each case asserts the helper WAS consulted for that issue.
-for kind in nostatus other private many null wrongid wrongurl absent; do
+for kind in nostatus other private null wrongid wrongurl absent; do
   results "$U1" "$U2" "$U3"
   membership present "$U1" "$U3"
   membership "$kind" "$U2"
@@ -428,6 +437,9 @@ bulk_failure() { # bulk_failure <name> <VAR=value> — run the sweep with that f
 bulk_failure "a bulk read that fails" GH_BULK_EXIT=1
 bulk_failure "a bulk read that returns errors and no data" GH_BULK_MODE=errors
 bulk_failure "a bulk read that returns fewer nodes than it was asked for" GH_BULK_MODE=short
+bulk_failure "a bulk read that returns more nodes than it was asked for" GH_BULK_MODE=long
+bulk_failure "a bulk read that returns something that is not JSON" GH_BULK_MODE=garbage
+bulk_failure "a bulk read that returns its answer twice" GH_BULK_MODE=twodocs
 bulk_failure "a board id that cannot be resolved" GH_PROJECT_EXIT=1
 bulk_failure "a board id that comes back empty" GH_PROJECT_ID=
 # An errors entry beside COMPLETE data voids nothing by itself: each node is still validated on its
@@ -545,29 +557,50 @@ report "a checkpoint that is no longer discovered fails closed and boards nothin
 run_sweep "$sweep" --resume-from not-a-url
 report "a --resume-from that is not an issue URL is a usage error with no external call" \
   "$([ "$rc" -eq 1 ] && [ ! -s "$GH_ARGV_LOG" ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
-run_sweep "$sweep" --deadline-seconds soon
-report "a non-numeric --deadline-seconds is a usage error" "$([ "$rc" -eq 1 ] && echo yes || echo no)" "rc=$rc"
-
-# 10c. AN INTERRUPTED RUN STILL REPORTS. A TERM delivered while the helper is working lets that call
-#      finish, then stops with the checkpoint and the summary, and exits 2: its coverage is unknown.
-results "$U1" "$U2" "$U3"
-: > "$BOARD_LOG"; : > "$GH_CALL_LOG"; : > "$GH_BULK_IDS"; : > "$GH_BULK_SIZES"
-BOARD_ADD_SLEEP=3 PATH="$tmp/bin:$PATH" "$sweep" --author app/agent-fixture --board-add "$tmp/board-add-stub.sh" \
-  --pace-seconds 0 > "$tmp/interrupted.out" 2>&1 &
-sweep_pid=$!
-# Signal only once the helper is running, so the signal lands in the per-issue work.
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-  [ -s "$BOARD_LOG" ] && break
-  sleep 0.5
+for invalid_deadline in soon 007 99999999999999999999 -1; do
+  run_sweep "$sweep" --deadline-seconds "$invalid_deadline"
+  report "invalid --deadline-seconds $invalid_deadline is a usage error with no external call" \
+    "$([ "$rc" -eq 1 ] && [ ! -s "$GH_ARGV_LOG" ] && [ ! -s "$BOARD_LOG" ] && echo yes || echo no)" "rc=$rc $out"
 done
-kill -TERM "$sweep_pid"
-int_rc=0
-wait "$sweep_pid" || int_rc=$?
-int_out="$(cat "$tmp/interrupted.out")"
+
+# 10c. AN INTERRUPTED RUN STILL REPORTS. A TERM delivered to the sweep while the helper is working
+#      lets that call finish, then stops with the checkpoint and the summary, and exits 2: its
+#      coverage is unknown. The helper call is long enough that the signal cannot arrive late.
+interrupt_sweep() { # interrupt_sweep <helper sleep> <pace> — runs the sweep, TERMs it once the helper ran once
+  : > "$BOARD_LOG"; : > "$GH_CALL_LOG"; : > "$GH_BULK_IDS"; : > "$GH_BULK_SIZES"
+  BOARD_ADD_SLEEP="$1" PATH="$tmp/bin:$PATH" "$sweep" --author app/agent-fixture --board-add "$tmp/board-add-stub.sh" \
+    --pace-seconds "$2" > "$tmp/interrupted.out" 2>&1 &
+  local pid=$! _
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+    [ -s "$BOARD_LOG" ] && break
+    sleep 0.2
+  done
+  kill -TERM "$pid"
+  int_rc=0
+  wait "$pid" || int_rc=$?
+  int_out="$(cat "$tmp/interrupted.out")"
+}
+results "$U1" "$U2" "$U3"
+interrupt_sweep 6 0
 report "an interrupted run exits 2 after the call in flight" \
   "$([ "$int_rc" -eq 2 ] && [ "$(cat "$BOARD_LOG")" = "$U1" ] && echo yes || echo no)" "rc=$int_rc log=[$(tr '\n' ' ' < "$BOARD_LOG")] $int_out"
 report "an interrupted run still prints its checkpoint and counts" \
   "$(grep -q 'discovered=3 verified=0 boarded=1 wrote=1 skipped=0 failed=0 deferred=2' <<<"$int_out" && grep -qF "checkpoint=${U2}" <<<"$int_out" && echo yes || echo no)" "$int_out"
+# The same signal landing in the pause BETWEEN two writes must not be followed by the next write:
+# the helper returns at once here, so the signal arrives while the sweep is pacing.
+results "$U1" "$U2" "$U3"
+interrupt_sweep 0 4
+report "an interrupt during the pause between writes is not followed by another write" \
+  "$([ "$int_rc" -eq 2 ] && [ "$(cat "$BOARD_LOG")" = "$U1" ] && grep -qF "checkpoint=${U2}" <<<"$int_out" && echo yes || echo no)" \
+  "rc=$int_rc log=[$(tr '\n' ' ' < "$BOARD_LOG")] $int_out"
+
+# 10e. THE HELPER CANNOT EAT THE REST OF THE LIST. The loop reads its rows from stdin; a helper that
+#      read stdin too would leave every later issue neither examined nor counted, behind exit 0.
+results "$U1" "$U2" "$U3"
+BOARD_ADD_READS_STDIN=1 run_sweep "$sweep"
+report "a helper that reads its stdin still leaves every issue to the sweep" \
+  "$([ "$rc" -eq 0 ] && [ "$(sort "$BOARD_LOG")" = "$want" ] && grep -q 'discovered=3 verified=0 boarded=3' <<<"$out" && echo yes || echo no)" \
+  "rc=$rc log=[$(tr '\n' ' ' < "$BOARD_LOG")] $out"
 
 # 10d. THE DEFAULT DEADLINE MUST FIT THE CALL BUDGET, like the batch defaults above.
 def_deadline="$(awk -F= '/^deadline=[0-9]+$/{print $2; exit}' "$sweep")"
@@ -592,6 +625,22 @@ if [ "$got_abl" = "$want" ]; then
   report "ablation: dropping an issue makes the set assertion fire" no "the ablated copy still passed — assertion 1 cannot fail"
 else
   report "ablation: dropping an issue makes the set assertion fire" yes
+fi
+# The sweep itself must notice it too: an issue the loop never counted is not a clean pass.
+report "a loop that drops a discovered issue ends UNKNOWN, not clean" \
+  "$([ "$rc" -eq 2 ] && grep -q 'accounted for 2 of 3 discovered' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+# And the stdin guard is what keeps a stdin-reading helper from causing exactly that.
+stdin_copy="$tmp/sweep-stdin-ablated.sh"
+sed 's| 2>&1 </dev/null)"; then| 2>\&1)"; then|' "$sweep" > "$stdin_copy"
+chmod +x "$stdin_copy"
+if cmp -s "$sweep" "$stdin_copy"; then
+  report "ablation: the stdin guard edit landed" no "the sed edit matched nothing"
+else
+  results "$U1" "$U2" "$U3"
+  BOARD_ADD_READS_STDIN=1 run_sweep "$stdin_copy"
+  report "ablation: without the stdin guard a stdin-reading helper swallows the rest, and that is caught" \
+    "$([ "$rc" -eq 2 ] && [ "$(cat "$BOARD_LOG")" = "$U1" ] && grep -q 'accounted for 1 of 3 discovered' <<<"$out" && echo yes || echo no)" \
+    "rc=$rc log=[$(tr '\n' ' ' < "$BOARD_LOG")] $out"
 fi
 
 # 8b. ABLATION OF THE BULK PROOF. Each condition a node must meet is removed from a copy in turn, and
@@ -644,6 +693,22 @@ membership present "$U1" "$U2" "$U3"
 GH_BULK_MODE=short run_sweep "$short_copy"
 report "ablation: without the length rule, a short answer is trusted for the nodes that arrived" \
   "$([ "$(cat "$BOARD_LOG")" = "$U3" ] && grep -q 'verified=2' <<<"$out" && echo yes || echo no)" \
+  "log=[$(tr '\n' ' ' < "$BOARD_LOG")] $(tail -n 1 <<<"$out")"
+# The one-document rule is what refuses an answer that arrived twice. Without it the first copy is
+# read as if it were the whole answer.
+twodocs_copy="$tmp/sweep-twodocs-ablated.sh"
+# shellcheck disable=SC2016
+LITERAL='if length != 1 then error("no answer") else .[0] end' awk '
+  { i = index($0, ENVIRON["LITERAL"]) }
+  i { $0 = substr($0, 1, i - 1) ".[0]" substr($0, i + length(ENVIRON["LITERAL"])); hits++ }
+  { print }
+  END { exit hits == 1 ? 0 : 1 }' "$sweep" > "$twodocs_copy" || report "ablation: the one-document rule literal matched once" no
+chmod +x "$twodocs_copy"
+results "$U1" "$U2" "$U3"
+membership present "$U1" "$U2" "$U3"
+GH_BULK_MODE=twodocs run_sweep "$twodocs_copy"
+report "ablation: without the one-document rule, a doubled answer is trusted" \
+  "$([ ! -s "$BOARD_LOG" ] && grep -q 'verified=3' <<<"$out" && echo yes || echo no)" \
   "log=[$(tr '\n' ' ' < "$BOARD_LOG")] $(tail -n 1 <<<"$out")"
 
 if [ "$fail" -eq 0 ]; then echo "agent-issue-board-sweep self-test: all cases passed"; else echo "agent-issue-board-sweep self-test: FAILED" >&2; exit 1; fi

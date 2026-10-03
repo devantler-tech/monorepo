@@ -15,21 +15,21 @@
 #   indistinguishable from a finished one, which is the defect that helper exists to close.
 #
 #   BULK MEMBERSHIP (monorepo#3340). Asking board-add.sh about every issue costs three remote reads
-#   each: measured 2026-10-04 on 10 boarded issues, 30 calls in 15 s. At that rate the 572 open
-#   issues take about 14 minutes and 1,716 calls for a pass that changes nothing, against a
+#   each: measured 2026-10-04 on 20 boarded issues, 60 calls in 30 s. At that rate the 583 open
+#   issues take about 14.5 minutes and 1,750 calls for a pass that changes nothing, against a
 #   120-second call budget. So membership is read from the issue's own side for up to 100 issues per
 #   request (one GraphQL point each, about a second), and an issue is reported `already on the
 #   board` without a helper call only when that read PROVES it: the node answers for that exact
 #   issue, its repository is public, and it holds an item on THIS board (matched by id, never by
-#   number) with a Status. Every other answer — absent, no Status, a private repository, more
-#   project items than one page, a null node, a failed or short read — proves nothing, and the issue
+#   number) with a Status. Every other answer — absent, no Status, a private repository, an item
+#   beyond the first page, a null node, a failed or short read — proves nothing, and the issue
 #   goes through board-add.sh exactly as before. The bulk read can only ever skip a no-op.
 #
 #   DEADLINE AND CHECKPOINT. Per-issue work stops at --deadline-seconds: issues not yet examined are
 #   counted `deferred`, the summary names the first of them as `checkpoint=<url>`, and
-#   `--resume-from <url>` starts the next call's per-issue work there. An INT or TERM does the same
-#   after the call in flight and exits 2. Issues the bulk read verified cost nothing, so they are
-#   counted whatever the clock says.
+#   `--resume-from <url>` starts the next call's per-issue work there. An INT or TERM delivered to
+#   the sweep does the same once the call in flight returns, and exits 2. Issues the bulk read
+#   verified cost nothing, so they are counted whatever the clock says.
 #
 #   `--limit` is pinned because `gh search` defaults to 30: a lane with more open issues than
 #   that would have the remainder silently never boarded. Ordering is pinned to created-ascending
@@ -131,7 +131,11 @@ esac
 case "$pace" in ''|*[!0-9]*) echo "agent-issue-board-sweep: --pace-seconds must be a whole number of seconds: $pace" >&2; exit 1 ;; esac
 case "$max_mutations" in ''|*[!0-9]*) echo "agent-issue-board-sweep: --max-mutations must be a number: $max_mutations" >&2; exit 1 ;; esac
 [ "$max_mutations" -gt 0 ] || { echo "agent-issue-board-sweep: --max-mutations must be greater than zero" >&2; exit 1; }
-case "$deadline" in ''|*[!0-9]*) echo "agent-issue-board-sweep: --deadline-seconds must be a whole number of seconds: $deadline" >&2; exit 1 ;; esac
+# Bounded like --limit: a value the shell cannot compare would switch the deadline off silently.
+case "$deadline" in
+  [0-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]) ;;
+  *) echo "agent-issue-board-sweep: --deadline-seconds must be a whole number of seconds from 0 to 9999 without leading zeros" >&2; exit 1 ;;
+esac
 case "$resume_from" in
   ''|https://github.com/*/*/issues/*) ;;
   *) echo "agent-issue-board-sweep: --resume-from must be an issue URL printed as checkpoint= by an earlier run" >&2; exit 1 ;;
@@ -229,6 +233,9 @@ if [ "$discovered_count" -gt 0 ]; then
     }'
     offset=1
     while [ "$offset" -le "$discovered_count" ]; do
+      # An interrupt ends the reads here. The issues not yet read stay unverified, so the loop
+      # below stops at the first of them and names it as the checkpoint.
+      [ "$interrupted" -eq 0 ] || break
       chunk="$(sed -n "${offset},$((offset + BULK_SIZE - 1))p" <<<"$found")"
       offset=$((offset + BULK_SIZE))
       # The answer is trusted node by node, and by its CONTENT rather than gh's exit status: gh
@@ -261,11 +268,11 @@ if [ "$discovered_count" -gt 0 ]; then
           | $want.url' <<<"$page" 2>/dev/null)"; then
         [ -z "$proven" ] || verified_urls="${verified_urls}${proven}"$'\n'
       else
-        bulk_note "bulk membership read did not hold for $(grep -c . <<<"$chunk") issue(s); each is checked on its own instead — $(tr '\n' ' ' <"$err_file")"
+        bulk_note "bulk membership read did not hold for $(grep -c . <<<"$chunk") issue(s): none of them counts as verified, each is left to board-add.sh — $(tr '\n' ' ' <"$err_file")"
       fi
     done
   else
-    bulk_note "bulk membership read skipped: the board id could not be resolved; each issue is checked on its own instead — $(tr '\n' ' ' <"$err_file")"
+    bulk_note "bulk membership read did not hold: the board id could not be resolved, so no issue counts as verified and each is left to board-add.sh — $(tr '\n' ' ' <"$err_file")"
   fi
 fi
 
@@ -311,16 +318,7 @@ while IFS=$'\t' read -r _ url; do
     deferred=$((deferred + 1))
     continue
   fi
-  # DEADLINE OR INTERRUPT. Checked before each helper call, never during one, so a call in flight
-  # finishes and its write is counted. The first issue not examined is the checkpoint.
-  if [ -z "$stopped" ]; then
-    if [ "$interrupted" -eq 1 ]; then
-      stopped="interrupted"
-    elif [ "$SECONDS" -ge "$deadline" ]; then
-      stopped="deadline"
-    fi
-    [ -z "$stopped" ] || checkpoint="$url"
-  fi
+  # Already stopped by the deadline or an interrupt: nothing more is examined.
   if [ -n "$stopped" ]; then
     deferred=$((deferred + 1))
     continue
@@ -339,7 +337,23 @@ while IFS=$'\t' read -r _ url; do
   # between any two writes. This is deliberate throttling, not a wait for remote state to change.
   [ "$wrote_last" -eq 0 ] || [ "$pace" -eq 0 ] || sleep "$pace"
   wrote_last=0
-  if out="$("$board_add" "$url" 2>&1)"; then
+  # DEADLINE OR INTERRUPT. Decided immediately before each helper call, AFTER the pace sleep, so a
+  # signal or a deadline that arrives while sleeping is not followed by one more write. Never
+  # during a call: the one in flight finishes and its write is counted. This issue is the first
+  # one not examined, so it is the checkpoint.
+  if [ "$interrupted" -eq 1 ]; then
+    stopped="interrupted"
+  elif [ "$SECONDS" -ge "$deadline" ]; then
+    stopped="deadline"
+  fi
+  if [ -n "$stopped" ]; then
+    checkpoint="$url"
+    deferred=$((deferred + 1))
+    continue
+  fi
+  # stdin is closed for the helper: the loop reads its rows from stdin, and a helper that read it
+  # would swallow every row after this one.
+  if out="$("$board_add" "$url" 2>&1 </dev/null)"; then
     boarded=$((boarded + 1))
     # Match board-add.sh's EXACT no-op marker. A bare `already-present` substring would also match
     # its `already-present (status set)` outcome, which is a real item-edit — and a backlog of
@@ -371,6 +385,14 @@ while IFS=$'\t' read -r _ url; do
 # substitution: that leaves a child exiting while the loop prints, and its SIGCHLD is one more
 # signal that can interrupt a write on bash 3.2.
 done <<<"$found"
+
+# CONSERVATION. Every discovered issue was either verified, handed to the helper, or counted as
+# deferred. A loop that saw fewer rows than discovery returned has dropped some without a trace.
+if [ "$total" -ne "$discovered_count" ] ||
+  [ $((verified + boarded + skipped + failed + deferred)) -ne "$total" ]; then
+  echo "agent-issue-board-sweep: accounted for ${total} of ${discovered_count} discovered issue(s) (verified=${verified} boarded=${boarded} skipped=${skipped} failed=${failed} deferred=${deferred}); coverage is unknown" >&2
+  exit 2
+fi
 
 say "agent-issue-board-sweep: discovered=${total} verified=${verified} boarded=${boarded} wrote=${mutated} skipped=${skipped} failed=${failed} deferred=${deferred} author=${author} owner=${owner} limit=${limit} pace=${pace}s batch=${max_mutations} deadline=${deadline}s elapsed=${SECONDS}s${checkpoint:+ checkpoint=${checkpoint}}"
 if [ -n "$stopped" ]; then
