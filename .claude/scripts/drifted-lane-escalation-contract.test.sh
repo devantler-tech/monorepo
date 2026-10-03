@@ -120,6 +120,20 @@ assert_contains "${section}" "unresolved currency \`UNKNOWN\` qualifies" \
 assert_contains "${section}" 'this run'"'"'s prescribed recovery did not resolve' \
   'the UNKNOWN trigger must turn on the recovery NOT resolving it — a transient UNKNOWN resolved in the same tick is not tracked'
 
+# The trigger is drift against the ADOPTED pin, never a notice about the working tree the check ran
+# in (monorepo#3230). Keyed on the working tree's gitlink, a run performing a rollout filed a tracker
+# for a lane byte-identical to the adopted pin, and the reset closed it on the next ordinary check.
+assert_contains "${section}" '`DRIFT` here is drift against the ADOPTED pin, and only that verdict is a trigger' \
+  'the tracker trigger must name the adopted pin as its basis, or an unmerged bump reads as lane drift'
+assert_contains "${section}" 'never opens, updates or closes a tracker, whichever verdict it accompanies' \
+  'a working-tree notice must be excluded as a tracker trigger in every direction'
+assert_contains "${section}" 'an unmerged bump files nothing' \
+  'the clause must say outright that a rollout in progress files no tracker'
+for notice in '`ROLLOUT`' '`SUPERSEDED`' '`UNADOPTED`'; do
+  assert_contains "${section}" "${notice}" \
+    "the tracker clause must name the ${notice} notice it excludes"
+done
+
 # Source refs need fresh source evidence, while an installed or running session needs its own
 # evidence. A source comparison must never close an occurrence whose loaded state remains unknown.
 assert_contains "${section}" 'source parity only' \
