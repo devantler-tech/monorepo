@@ -119,6 +119,14 @@ expect "an untracked file the incoming commits add is FROZEN" 1 ': FROZEN .*adde
 if ff_succeeds; then bad "control: git refuses to overwrite the untracked file" "the merge succeeded"
 else ok "control: git refuses to overwrite the untracked file"; fi
 
+new_pair deleted
+advance contract.md
+rm -- "$co/contract.md"
+run --repo-dir "$co"
+expect "an incoming file that is only missing from the working tree does not block" 1 ': BEHIND '
+if ff_succeeds; then ok "control: git fast-forwards and restores the missing file"
+else bad "control: git fast-forwards and restores the missing file"; fi
+
 new_pair nested
 mkdir -p "$up/dir"; printf 'new\n' > "$up/dir/added.md"
 g "$up" add dir/added.md
@@ -192,7 +200,7 @@ expect "without --no-fetch the same checkout is BEHIND (the fetch is not inert)"
 new_pair gone
 rm -rf -- "$up"
 run --repo-dir "$co"
-expect "a failed fetch is UNKNOWN (exit 2), not CURRENT" 2 'UNKNOWN — cannot fetch origin/main'
+expect "a failed fetch is UNKNOWN (exit 2), not CURRENT" 2 'UNKNOWN — cannot fetch origin/main \(3 attempts\)'
 
 mkdir -p "$fixture/plain"
 run --repo-dir "$fixture/plain"

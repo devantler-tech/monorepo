@@ -97,8 +97,15 @@ shared=$(printf '%s\n' "$listing" | sed -n '1s/^worktree //p')
 [ -n "$shared" ] && [ -d "$shared" ] || unknown "cannot resolve the main worktree of $repo_dir"
 
 if [ "$fetch" = 1 ]; then
-  git -C "$shared" fetch --quiet "$remote" "+refs/heads/${branch}:refs/remotes/${remote}/${branch}" \
-    2>/dev/null || unknown "cannot fetch ${remote}/${branch}"
+  # Several sessions fetch this ref at the same moment on the agent host, and the loser of the
+  # ref lock fails. That is not an unreachable remote, so try again before calling it UNKNOWN.
+  attempt=0
+  until git -C "$shared" fetch --quiet "$remote" \
+    "+refs/heads/${branch}:refs/remotes/${remote}/${branch}" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 3 ] || unknown "cannot fetch ${remote}/${branch} (3 attempts)"
+    sleep 1
+  done
 fi
 
 base=$(git -C "$shared" rev-parse --verify --quiet 'HEAD^{commit}') \
@@ -165,7 +172,9 @@ is_incoming() {
 while IFS= read -r -d '' entry; do
   status=${entry:0:2}
   path=${entry:3}
-  if is_incoming "$path"; then blocking+=("$path"); fi
+  # A tracked file that is only missing from the working tree does not block: git restores it
+  # during the fast-forward. Every other state of an incoming path does.
+  if [ "$status" != ' D' ] && is_incoming "$path"; then blocking+=("$path"); fi
   # A rename or copy entry is followed by its source path as a separate field.
   case "$status" in
     *R* | *C*)
@@ -176,7 +185,7 @@ while IFS= read -r -d '' entry; do
 done < "$tmp/dirty"
 
 if [ "${#blocking[@]}" -eq 0 ]; then
-  finish 1 "BEHIND — $behind commit(s), and a fast-forward would succeed: $where; run: git -C '$shared' merge --ff-only ${remote}/${branch}"
+  finish 1 "BEHIND — $behind commit(s), and a fast-forward would succeed: $where; run: git -C $(printf '%q' "$shared") merge --ff-only ${remote}/${branch}"
 fi
 
 shown=''
