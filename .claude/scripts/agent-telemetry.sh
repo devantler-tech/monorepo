@@ -2134,10 +2134,13 @@ populate_session_cache() {
   ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
 }
 
-# Run safety in its own process group. A private FIFO carries only the worker's
-# completion status, never corpus text. The child PID remains unreaped until
-# the controller chooses completion or cancellation, so it cannot be reused
-# while its process group is signalled. Every saved report byte is redacted.
+# Run safety in its own process group. The nested worker records its report
+# status in the private controller directory, but only the wrapper relays that
+# status through the FIFO after the worker and its EXIT cleanup have finished.
+# The FIFO therefore signals completion, not merely a finished report. The
+# child PID remains unreaped until the controller chooses completion or
+# cancellation, so it cannot be reused while its process group is signalled.
+# Every saved report byte is redacted.
 run_safety_bounded() (
   local bounded_dir='' worker_pid='' worker_rc=0 result='' args=()
   umask 077
@@ -2167,7 +2170,7 @@ run_safety_bounded() (
     fi
     exec 9>&- 9<&-
     if [ -n "$bounded_dir" ]; then
-      rm -f "$bounded_dir/status" "$bounded_dir/report"
+      rm -f "$bounded_dir/status" "$bounded_dir/report" "$bounded_dir/worker-status"
       rmdir "$bounded_dir" 2>/dev/null || true
     fi
   }
@@ -2183,18 +2186,24 @@ run_safety_bounded() (
   (
     set +m
     trap - EXIT HUP INT TERM
-    AGENT_TELEMETRY_SAFETY_WORKER=1 bash +x "$0" "${args[@]}"
+    AGENT_TELEMETRY_SAFETY_WORKER=1 \
+      AGENT_TELEMETRY_SAFETY_STATUS="$bounded_dir/worker-status" \
+      bash +x "$0" "${args[@]}"
     worker_rc=$?
-    printf 'exit:%s\n' "$worker_rc" >&9
+    result='missing'
+    if [ -r "$bounded_dir/worker-status" ]; then
+      IFS= read -r result < "$bounded_dir/worker-status" || result='missing'
+    fi
+    printf '%s:%s\n' "$result" "$worker_rc" >&9
     exit "$worker_rc"
   ) > "$bounded_dir/report" 2>/dev/null &
   worker_pid=$!
   if IFS= read -r -t "$SAFETY_TIMEOUT_SECONDS" result <&9; then
     wait "$worker_pid" 2>/dev/null || worker_rc=$?
     worker_pid=''
-    if [ "$result" = 0 ] && [ "$worker_rc" -eq 0 ]; then
+    if [ "$result" = 0:0 ] && [ "$worker_rc" -eq 0 ]; then
       emit_bounded_report || exit 2
-    elif [ "$result" = 2 ] && [ "$worker_rc" -eq 2 ]; then
+    elif [ "$result" = 2:2 ] && [ "$worker_rc" -eq 2 ]; then
       emit_bounded_report || exit 2
       exit 2
     else
@@ -5661,6 +5670,6 @@ return "$main_rc"
 main | redact
 report_rc=$?
 if [ "$SAFETY_WORKER" = 1 ]; then
-  printf '%s\n' "$report_rc" >&9 || exit 3
+  printf '%s\n' "$report_rc" > "$AGENT_TELEMETRY_SAFETY_STATUS" || exit 3
 fi
 exit "$report_rc"

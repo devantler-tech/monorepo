@@ -3002,6 +3002,39 @@ else
   bad "the safety deadline terminates its own stalled descendants" "stall was not reached or completed after the deadline"
 fi
 
+# Publishing the report status is not completion: the worker still has its
+# top-level EXIT cleanup to run. A cleanup stall must remain inside the same
+# advertised deadline instead of making the controller's subsequent wait
+# unbounded.
+mkdir -p "$FIX/safety-cleanup-timeout-shim"
+safety_real_rm=$(command -v rm)
+cat > "$FIX/safety-cleanup-timeout-shim/rm" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *".agtel_err."*".agtel_raw."*)
+    if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ]; then
+      : > "$SAFETY_CLEANUP_STARTED"
+      sleep 4
+    fi ;;
+esac
+exec "$SAFETY_TEST_RM" "$@"
+EOF
+chmod +x "$FIX/safety-cleanup-timeout-shim/rm"
+rm -f "$FIX/safety-cleanup-started"
+CLEANUP_BOUNDED=$(PATH="$FIX/safety-cleanup-timeout-shim:$PATH" \
+  SAFETY_TEST_RM="$safety_real_rm" SAFETY_CLEANUP_STARTED="$FIX/safety-cleanup-started" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+cleanup_bounded_rc=$?
+if [ -e "$FIX/safety-cleanup-started" ] && [ "$cleanup_bounded_rc" -eq 2 ] \
+   && grep -qF "UNKNOWN: safety scan exceeded" <<<"$CLEANUP_BOUNDED"; then
+  ok "the safety deadline remains active through worker cleanup"
+else
+  bad "the safety deadline remains active through worker cleanup" \
+    "cleanup_started=$([ -e "$FIX/safety-cleanup-started" ] && echo yes || echo no) rc=$cleanup_bounded_rc"
+fi
+
 # The deadline starts before transcript discovery for a safety-only invocation.
 # A parent-side discovery walk would sit outside the worker process group and
 # make a permanently blocked find impossible to time out.
