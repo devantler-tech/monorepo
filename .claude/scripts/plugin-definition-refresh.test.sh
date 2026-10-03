@@ -351,6 +351,11 @@ if [ "$rc" -eq 2 ] && grep -q 'cannot resolve an executable claude CLI' <<<"$out
   ok "A5 exits 2 (UNKNOWN, named reason) when the CLI cannot be resolved"
 else bad "A5 exits 2 (UNKNOWN, named reason) when the CLI cannot be resolved" \
   "exit was $rc — 0/1 would be a fabricated verdict; out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+# A CLI that was NAMED is never looked up anywhere else, so the message names it and its source
+# instead of listing lookups that did not happen.
+if grep -qF "'$ROOT/nope' (from --cli or \$CLAUDE_CLI) is not executable" <<<"$out"; then
+  ok "A5b names the CLI that was given and where it came from"
+else bad "A5b names the CLI that was given and where it came from" "out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
 # ── A22 — --help prints the WHOLE header, including the exit-code contract ─────────────────────
@@ -594,7 +599,7 @@ if [ -n "$(git -C "$MK" status --porcelain)" ]; then
     "status=[$(git -C "$MK" status --porcelain)]"
 else
   out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
-  if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'differ from the pinned blobs' <<<"$out"; then
+  if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'differ from the blobs of the gated revision' <<<"$out"; then
     ok "A18b refuses (exit 2) when a clean filter hides differing bytes from status and the index"
   else bad "A18b refuses (exit 2) when a clean filter hides differing bytes from status and the index" \
     "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
@@ -696,6 +701,175 @@ if [ "$rc" -eq 2 ] && [ -e "$ROOT/APPLIED" ] && grep -q 'VERIFICATION IS UNKNOWN
   ok "A18e preserves the verifier's UNKNOWN (exit 2) instead of reporting a false drift"
 else bad "A18e preserves the verifier's UNKNOWN (exit 2) instead of reporting a false drift" \
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# ── C — the clone can move AFTER the gate, and nothing ungated may be applied (monorepo#3783) ──
+# The clone is shared with the runtime, whose own marketplace auto-update takes no lock of this
+# script's: started by any other session on the host, it moves the clone between the gate and the
+# apply. `plugin update` installs whatever the clone holds, so every read after the gate must be
+# bound to the revision the gate approved, and HEAD must be read again right before the apply.
+# Each shim stands in for that auto-update by moving the clone at one fixed point, once.
+
+# C1 — moved BEFORE the byte check. A worktree compared against the HEAD it just moved to always
+# matches, so a check that reads the live HEAD passes and the run installs the moved revision. The
+# reason is asserted: it must be the byte check that refuses, against the gated revision.
+make_fixture
+set_gitlink "$MK_NEW"
+REAL_GIT="$(command -v git)"
+mkdir -p "$ROOT/gitshim"
+cat > "$ROOT/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$MK" ] && [ "\${3:-}" = ls-files ] && [ ! -e "$ROOT/MOVED" ]; then
+  : > "$ROOT/MOVED"
+  "$REAL_GIT" -C "$MK" checkout -q "$MK_OLD"
+fi
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$ROOT/gitshim/git"
+out="$(PATH="$ROOT/gitshim:$PATH" STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ ! -e "$ROOT/MOVED" ]; then
+  bad "C1 fixture precondition: the clone must move after the gate" "the shim never fired; out=$(printf '%s' "$out" | tr '\n' '|')"
+elif [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && ! grep -q '^plugin update ' "$CLI_LOG" \
+  && grep -q "differ from the blobs of the gated revision $MK_NEW" <<<"$out"; then
+  ok "C1 the byte check reads the gated revision, so a clone moved after the gate is UNKNOWN (exit 2) and never applied"
+else bad "C1 the byte check reads the gated revision, so a clone moved after the gate is UNKNOWN (exit 2) and never applied" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# C2 — moved AFTER the byte check, at the last step before the apply (the registry backup's
+# timestamp). Every earlier guard has already passed for the gated revision, so only re-reading
+# HEAD immediately before `plugin update` can catch it.
+make_fixture
+set_gitlink "$MK_NEW"
+REAL_DATE="$(command -v date)"
+mkdir -p "$ROOT/dateshim"
+cat > "$ROOT/dateshim/date" <<SHIM
+#!/usr/bin/env bash
+if [ ! -e "$ROOT/MOVED" ]; then
+  : > "$ROOT/MOVED"
+  git -C "$MK" checkout -q "$MK_OLD"
+fi
+exec "$REAL_DATE" "\$@"
+SHIM
+chmod +x "$ROOT/dateshim/date"
+out="$(PATH="$ROOT/dateshim:$PATH" STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ ! -e "$ROOT/MOVED" ]; then
+  bad "C2 fixture precondition: the clone must move between the byte check and the apply" "the shim never fired; out=$(printf '%s' "$out" | tr '\n' '|')"
+elif ! grep -q "marketplace bytes ....... verified against $MK_NEW" <<<"$out"; then
+  bad "C2 fixture precondition: the byte check must have passed before the clone moved" "out=$(printf '%s' "$out" | tr '\n' '|')"
+elif [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && ! grep -q '^plugin update ' "$CLI_LOG" \
+  && grep -q "moved from $MK_NEW to $MK_OLD after the gate" <<<"$out"; then
+  ok "C2 a clone that moved after every check is UNKNOWN (exit 2), and 'plugin update' is never called"
+else bad "C2 a clone that moved after every check is UNKNOWN (exit 2), and 'plugin update' is never called" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# ── D — the app-bundle fallback finds the CLI in the layout releases install (monorepo#3783) ───
+# With no --cli, no $CLAUDE_CLI and no `claude` on PATH, the script falls back to the app bundle.
+# It looked only for <version>/claude.app/…, while the installed layout is
+# <version>/<build>/claude.app/…, so on the agent host every unattended run ended UNKNOWN before
+# doing anything. Each bundle here is a wrapper that records its own tag and then runs the stub CLI,
+# so the assertion is WHICH bundle drove the run, not merely that one was found.
+make_bundle_fixture() {
+  make_fixture
+  set_gitlink "$MK_NEW"
+  FAKE_HOME="$ROOT/home"
+  BUNDLE_BASE="$FAKE_HOME/Library/Application Support/Claude/claude-code"
+  BUNDLE_LOG="$ROOT/bundle.log"; : > "$BUNDLE_LOG"
+  mkdir -p "$BUNDLE_BASE" "$ROOT/toolbin"
+  # A PATH on which `claude` does not resolve. A tool the script needs may share a directory with
+  # it, so anything that stops resolving once that directory is dropped is linked in privately.
+  PATH_NO_CLAUDE=""
+  local dir tool old_ifs="$IFS"
+  IFS=:
+  for dir in $PATH; do
+    [ -x "$dir/claude" ] && continue
+    PATH_NO_CLAUDE="${PATH_NO_CLAUDE}${PATH_NO_CLAUDE:+:}${dir}"
+  done
+  IFS="$old_ifs"
+  for tool in bash git jq perl; do
+    PATH="$PATH_NO_CLAUDE" command -v "$tool" >/dev/null 2>&1 && continue
+    ln -s "$(command -v "$tool")" "$ROOT/toolbin/$tool" \
+      || { printf 'FIXTURE FAILURE: link %s\n' "$tool" >&2; exit 9; }
+  done
+  PATH_NO_CLAUDE="$ROOT/toolbin:$PATH_NO_CLAUDE"
+  if PATH="$PATH_NO_CLAUDE" command -v claude >/dev/null 2>&1; then
+    printf 'FIXTURE FAILURE: claude still resolves on the stripped PATH\n' >&2; exit 9
+  fi
+}
+# make_bundle <path under the bundle base> <tag>
+make_bundle() {
+  local dir="$BUNDLE_BASE/$1/claude.app/Contents/MacOS"
+  mkdir -p "$dir" || { printf 'FIXTURE FAILURE: mkdir %s\n' "$dir" >&2; exit 9; }
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s" >> "%s"\nexec "%s" "$@"\n' "$2" "$BUNDLE_LOG" "$BIN/claude" \
+    > "$dir/claude" || { printf 'FIXTURE FAILURE: write bundle %s\n' "$1" >&2; exit 9; }
+  chmod +x "$dir/claude"
+}
+run_bundled() {
+  STUB_MARKETPLACE_TARGET="$MK_NEW" env -u CLAUDE_CLI HOME="$FAKE_HOME" PATH="$PATH_NO_CLAUDE" \
+    "$SCRIPT" --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --verify-cmd "$VERIFY" 2>&1
+}
+bundles_used() { sort -u "$BUNDLE_LOG" | tr '\n' ' '; }
+
+# D1 — the current layout, two versions installed. 2.1.10 is the higher version and sorts BELOW
+# 2.1.9 lexically, so this also pins that the choice is by version, not by name.
+make_bundle_fixture
+make_bundle "2.1.9/0a1b2c3d4e5f" previous-version
+make_bundle "2.1.10/6f7e8d9c0b1a" current-version
+out="$(run_bundled)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ] && [ "$(bundles_used)" = "current-version " ]; then
+  ok "D1 resolves the CLI from <version>/<build>/claude.app, taking the highest version"
+else bad "D1 resolves the CLI from <version>/<build>/claude.app, taking the highest version" \
+  "exit was $rc, used=[$(bundles_used)], out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# D2 — one version holding two builds. Build names carry no order, so the most recently installed
+# is taken; the newer build is named to sort LAST, so a lexical pick would take the stale one.
+make_bundle_fixture
+make_bundle "2.1.10/aaaaaaaaaaaa" stale-build
+make_bundle "2.1.10/zzzzzzzzzzzz" newest-build
+touch -t 202601010000 "$BUNDLE_BASE/2.1.10/aaaaaaaaaaaa"
+touch -t 202602010000 "$BUNDLE_BASE/2.1.10/zzzzzzzzzzzz"
+out="$(run_bundled)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ] && [ "$(bundles_used)" = "newest-build " ]; then
+  ok "D2 takes the most recently installed build when one version holds several"
+else bad "D2 takes the most recently installed build when one version holds several" \
+  "exit was $rc, used=[$(bundles_used)], out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# D3 — the earlier layout still resolves, so a host that has not updated keeps working.
+make_bundle_fixture
+make_bundle "2.1.10" direct-layout
+out="$(run_bundled)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ] && [ "$(bundles_used)" = "direct-layout " ]; then
+  ok "D3 still resolves the CLI from <version>/claude.app"
+else bad "D3 still resolves the CLI from <version>/claude.app" \
+  "exit was $rc, used=[$(bundles_used)], out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# D4 — a layout this script does not know is UNKNOWN, and the message says exactly what was tried
+# and what it found, so the next layout change is diagnosable from the message alone.
+make_bundle_fixture
+make_bundle "2.3.0/channel/0a1b2c3d4e5f" unknown-layout
+out="$(run_bundled)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && [ ! -s "$BUNDLE_LOG" ] \
+  && grep -q 'cannot resolve an executable claude CLI' <<<"$out" \
+  && grep -qF '<version>/claude.app/Contents/MacOS/claude' <<<"$out" \
+  && grep -qF '<version>/<build>/claude.app/Contents/MacOS/claude' <<<"$out" \
+  && grep -q 'version directories seen: 2.3.0' <<<"$out"; then
+  ok "D4 an unrecognised bundle layout exits 2 and names both layouts tried and the versions seen"
+else bad "D4 an unrecognised bundle layout exits 2 and names both layouts tried and the versions seen" \
+  "exit was $rc, used=[$(bundles_used)], out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# D5 — no bundle at all reads the same way, with nothing seen.
+make_bundle_fixture
+rmdir "$BUNDLE_BASE"
+out="$(run_bundled)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'version directories seen: none' <<<"$out"; then
+  ok "D5 a host with no app bundle exits 2 and says no version directory was seen"
+else bad "D5 a host with no app bundle exits 2 and says no version directory was seen" \
+  "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
 # ── A19 — --dry-run asserts nothing about the install, so it is never a 0 verdict ──────────────
@@ -804,6 +978,13 @@ if [ -r "$CONSTITUTION" ]; then
   case "$section" in
     *"requires a restart"*) ok "A11 the contract states the restart semantics of an apply" ;;
     *) bad "A11 the contract states the restart semantics of an apply" "an apply-time exit 0 could be read as 'this run is current'" ;;
+  esac
+  # The gate approves a revision; the contract has to say the apply is bound to it, or the next
+  # reader takes the script's own lock for the whole protection and drops the re-read as redundant.
+  case "$section" in
+    *"never the live \`HEAD\`"*"read again immediately before the apply"*"a clone that moved is \`2\`, never an apply"*)
+      ok "A23 the contract binds the byte check and the apply to the gated revision" ;;
+    *) bad "A23 the contract binds the byte check and the apply to the gated revision" "a clone moved after the gate is not covered by the contract" ;;
   esac
 else
   bad "A9-A11 the definition-and-plugin guide is unreadable at $CONSTITUTION"

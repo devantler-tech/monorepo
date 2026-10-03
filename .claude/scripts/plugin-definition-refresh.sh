@@ -52,8 +52,9 @@
 #      2  UNKNOWN — no verdict was produced: usage error, no CLI, unreadable pin or marketplace, a
 #         pinned revision present in neither the marketplace clone nor the consumer's submodule, a
 #         marketplace/plugin-id marketplace mismatch, a concurrent run holding the lock, a
-#         marketplace worktree whose BYTES do not provably match the pinned commit, an apply whose
-#         verification command is unavailable, or --dry-run (a simulation asserts nothing).
+#         marketplace worktree whose BYTES do not provably match the gated revision, a marketplace
+#         clone that moved after the gate approved it, an apply whose verification command is
+#         unavailable, or --dry-run (a simulation asserts nothing).
 #
 # Exit 2 is deliberately not exit 1 and never exit 0: "I could not check" is a third answer, and
 # collapsing it into either of the verdicts is how a currency control becomes decoration.
@@ -117,24 +118,50 @@ esac
 # silently on the next runtime upgrade — the same unbounded-staleness class this script closes.
 # The suite asserts the absence of such a literal over the WHOLE file, comments included, because
 # a version pinned in prose is how the next reader learns to pin one in code.
+cli_source="--cli or \$CLAUDE_CLI"
 if [ -z "$CLI" ]; then
   CLI="$(command -v claude 2>/dev/null || true)"
+  cli_source="PATH"
 fi
+bundle_base="$HOME/Library/Application Support/Claude/claude-code"
+bundle_versions=""
 if [ -z "$CLI" ]; then
   # The app-bundled binary is not on PATH on this host. Pick the highest version present, by
   # version sort rather than mtime — a reinstall can touch an older directory last.
-  base="$HOME/Library/Application Support/Claude/claude-code"
-  if [ -d "$base" ]; then
+  #
+  # A version directory holds the bundle in one of two layouts: directly, or inside a build
+  # directory, which is what current releases install. Looking only for the first made this fallback
+  # find nothing on the very host it was written for, so every unattended run ended UNKNOWN
+  # (monorepo#3783). Build names carry no order, so when one version holds several the most recently
+  # installed is taken: they are builds of one release, and the verdict below never depends on which
+  # of them drove the control plane.
+  cli_source="the app bundle"
+  if [ -d "$bundle_base" ]; then
+    # Guarded: under `set -e` and `pipefail` an unreadable directory would otherwise exit with `ls`'s
+    # own status, and 1 here means "not on the pin".
+    bundle_versions="$(ls -1 "$bundle_base" 2>/dev/null | sort -t. -k1,1nr -k2,2nr -k3,3nr)" \
+      || bundle_versions=""
     while IFS= read -r v; do
       [ -n "$v" ] || continue
-      cand="$base/$v/claude.app/Contents/MacOS/claude"
-      [ -x "$cand" ] && { CLI="$cand"; break; }
-    done <<EOF
-$(ls -1 "$base" 2>/dev/null | sort -t. -k1,1nr -k2,2nr -k3,3nr)
-EOF
+      cand="$bundle_base/$v/claude.app/Contents/MacOS/claude"
+      if [ -x "$cand" ]; then CLI="$cand"; break; fi
+      builds="$(ls -1t "$bundle_base/$v" 2>/dev/null)" || builds=""
+      while IFS= read -r b; do
+        [ -n "$b" ] || continue
+        cand="$bundle_base/$v/$b/claude.app/Contents/MacOS/claude"
+        if [ -x "$cand" ]; then CLI="$cand"; break; fi
+      done <<< "$builds"
+      [ -z "$CLI" ] || break
+    done <<< "$bundle_versions"
   fi
 fi
-[ -n "$CLI" ] && [ -x "$CLI" ] || die "cannot resolve an executable claude CLI (tried --cli, \$CLAUDE_CLI, PATH, and the app bundle) — UNKNOWN, not a verdict"
+# Say exactly what was tried. "The app bundle" alone hid that only one of its layouts was searched,
+# which is what made the missing layout look like a missing install.
+if [ -z "$CLI" ]; then
+  bundle_seen="$(printf '%s' "$bundle_versions" | tr '\n' ' ')"
+  die "cannot resolve an executable claude CLI: none named by --cli or \$CLAUDE_CLI, none on PATH, and none in the app bundle under '$bundle_base' (tried <version>/claude.app/Contents/MacOS/claude and <version>/<build>/claude.app/Contents/MacOS/claude; version directories seen: ${bundle_seen:-none}) — UNKNOWN, not a verdict"
+fi
+[ -x "$CLI" ] || die "cannot resolve an executable claude CLI: '$CLI' (from $cli_source) is not executable — UNKNOWN, not a verdict"
 
 # ── the PINNED revision ────────────────────────────────────────────────────────
 if [ -z "$REPO_ROOT" ]; then
@@ -189,6 +216,10 @@ say "pinned revision ......... $GITLINK"
 # so a sibling refreshing the SAME clone between those two steps would have this run install a
 # revision it never gated on — the exact fail-open the gate exists to close. `mkdir` is the atomic
 # primitive here; a lock file written with `>` is not.
+#
+# The lock covers this script's own runs and nothing else. The runtime's own marketplace auto-update
+# does not take it, so every read after the gate is bound to `candidate` and HEAD is read again
+# immediately before the apply.
 LOCK=""
 # Release only a lock this process still OWNS. A blind rmdir lets a run that overran its lock delete
 # a SIBLING's replacement on the way out, which would hand a third run the section while the sibling
@@ -392,13 +423,18 @@ if [ "$candidate" != "$GITLINK" ] && [ "$DRY_RUN" -eq 1 ]; then
   exit 2
 fi
 
-# ── HEAD carries the reviewed definition; now prove the worktree BYTES are HEAD ──────────────────────────────────────────
+# ── the gated revision carries the reviewed definition; now prove the worktree BYTES are it ─────
 # `rev-parse HEAD` answers "which commit is checked out", which is a weaker claim than "these are
 # the reviewed bytes" — the same gap AGENTS.md documents for reading the pinned submodule. A
 # non-conflicting tracked modification, an assume-unchanged/skip-worktree entry, or a clean/smudge
 # filter all leave HEAD equal to the pin while the files `plugin update` actually copies differ. The
 # gate would then install unreviewed definitions and report success, which is the exact fail-open
 # this script exists to close, one level down.
+#
+# The bytes are compared against `candidate` — the revision the gate approved — never against the
+# live `HEAD`. The clone is shared with the runtime, whose own marketplace auto-update takes no lock
+# of ours: started by any other session on this host it can move the clone after the gate, and a
+# worktree compared against the HEAD it just moved to always matches (monorepo#3783).
 dirty="$(git -C "$MARKETPLACE_DIR" status --porcelain 2>/dev/null)" \
   || die "cannot read the marketplace worktree status: $MARKETPLACE_DIR"
 [ -z "$dirty" ] || die "marketplace worktree is not clean at $candidate — refusing to install bytes that differ from the reviewed commit"
@@ -413,7 +449,7 @@ bytes_unknown=0; bytes_differ=0
 # not plain ASCII, so `hash-object` cannot resolve it and a perfectly clean marketplace would refuse.
 # The output must NOT go through command substitution, which strips NUL bytes — stream it via a file.
 tree_list="$(mktemp)" || die "cannot create a temporary file for the marketplace tree listing"
-git -C "$MARKETPLACE_DIR" --no-replace-objects ls-tree -r -z HEAD > "$tree_list" \
+git -C "$MARKETPLACE_DIR" --no-replace-objects ls-tree -r -z "$candidate" > "$tree_list" \
   || { rm -f "$tree_list"; die "cannot enumerate the marketplace tree at $candidate"; }
 while IFS= read -r -d '' entry; do
   [ -n "$entry" ] || continue
@@ -424,7 +460,7 @@ while IFS= read -r -d '' entry; do
   [ "$mode" = "160000" ] && continue
   f="${entry#*$'\t'}"
   [ -n "$f" ] || continue
-  want="$(git -C "$MARKETPLACE_DIR" --no-replace-objects rev-parse "HEAD:$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
+  want="$(git -C "$MARKETPLACE_DIR" --no-replace-objects rev-parse "$candidate:$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
   if [ "$mode" = "120000" ]; then
     # A symlink's blob holds the TARGET PATH as text, but `hash-object` on the link follows it and
     # hashes the target FILE's contents — so the two never match and a clean marketplace containing
@@ -448,7 +484,7 @@ while IFS= read -r -d '' entry; do
   [ "$want" = "$got" ] || bytes_differ=$((bytes_differ + 1))
 done < "$tree_list"
 rm -f "$tree_list"
-[ "$bytes_differ" -eq 0 ] || die "$bytes_differ marketplace file(s) differ from the pinned blobs despite HEAD matching — refusing to install"
+[ "$bytes_differ" -eq 0 ] || die "$bytes_differ marketplace file(s) differ from the blobs of the gated revision $candidate — refusing to install"
 [ "$bytes_unknown" -eq 0 ] || die "$bytes_unknown marketplace file(s) could not be byte-verified — unproven is not proven, refusing to install"
 say "marketplace bytes ....... verified against $candidate"
 
@@ -480,6 +516,21 @@ if [ -r "$registry" ]; then
     | while IFS= read -r stale; do [ -n "$stale" ] && rm -f "$stale"; done || true
   say "backed up ............... $backup"
 fi
+
+# ── the clone must STILL be the revision that was gated ────────────────────────
+# Everything above was established for `candidate`, and `plugin update` installs whatever the clone
+# holds when it runs. The lock serialises only this script's own runs, so the last thing before the
+# apply is to read HEAD again: a clone that moved since the gate is a revision this run never
+# approved, and applying it would be the fail-open the gate exists to close. That is UNKNOWN, not a
+# verdict — nothing was installed, and nothing was learned about the install.
+#
+# What remains is the CLI's own start-up, which no check placed here can cover. The verdict does not
+# rest on it: the post-apply check below compares the install with the pin by blob identity, so an
+# install taken from a clone that moved in that window is never reported as on the pin.
+head_now="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" \
+  || die "cannot re-read the marketplace clone HEAD before applying: $MARKETPLACE_DIR"
+[ "$head_now" = "$candidate" ] \
+  || die "the marketplace clone moved from $candidate to $head_now after the gate — refusing to apply a revision this run never gated on"
 
 "$CLI" plugin update "$PLUGIN_ID" >/dev/null 2>&1 \
   || die "'plugin update $PLUGIN_ID' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
