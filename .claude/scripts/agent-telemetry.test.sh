@@ -3051,7 +3051,7 @@ case "$*" in
   *".agtel_err."*".agtel_raw."*)
     if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ]; then
       : > "$SAFETY_CLEANUP_STARTED"
-      sleep 4
+      sleep 8
     fi ;;
 esac
 exec "$SAFETY_TEST_RM" "$@"
@@ -3062,7 +3062,7 @@ CLEANUP_BOUNDED=$(PATH="$FIX/safety-cleanup-timeout-shim:$PATH" \
   SAFETY_TEST_RM="$safety_real_rm" SAFETY_CLEANUP_STARTED="$FIX/safety-cleanup-started" \
   CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 5 2>&1)
 cleanup_bounded_rc=$?
 if [ -e "$FIX/safety-cleanup-started" ] && [ "$cleanup_bounded_rc" -eq 2 ] \
    && grep -qF "UNKNOWN: safety scan exceeded" <<<"$CLEANUP_BOUNDED"; then
@@ -3141,7 +3141,7 @@ cat > "$FIX/safety-report-timeout-shim/cat" <<'EOF'
 case "${1:-}" in
   */.agtel_bounded.*/report)
     : > "$SAFETY_REPORT_READ_STARTED"
-    sleep 4 ;;
+    sleep 8 ;;
 esac
 exec "$SAFETY_TEST_CAT" "$@"
 EOF
@@ -3151,7 +3151,7 @@ REPORT_READ_BOUNDED=$(PATH="$FIX/safety-report-timeout-shim:$PATH" \
   SAFETY_TEST_CAT="$safety_real_cat" SAFETY_REPORT_READ_STARTED="$FIX/safety-report-read-started" \
   CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 1 2>&1)
+  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 5 2>&1)
 report_read_bounded_rc=$?
 if [ -e "$FIX/safety-report-read-started" ] && [ "$report_read_bounded_rc" -eq 2 ] \
    && grep -qF "UNKNOWN: safety scan exceeded" <<<"$REPORT_READ_BOUNDED"; then
@@ -3170,7 +3170,7 @@ cat > "$FIX/safety-controller-cleanup-shim/rm" <<'EOF'
 case " $* " in
   *'/.agtel_bounded.'*)
     : > "$SAFETY_CONTROLLER_CLEANUP_STARTED"
-    sleep 4 ;;
+    sleep 8 ;;
 esac
 exec "$SAFETY_TEST_RM" "$@"
 EOF
@@ -3181,7 +3181,7 @@ CONTROLLER_CLEANUP_BOUNDED=$(PATH="$FIX/safety-controller-cleanup-shim:$PATH" \
   SAFETY_CONTROLLER_CLEANUP_STARTED="$FIX/safety-controller-cleanup-started" \
   CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 1 2>&1)
+  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 5 2>&1)
 controller_cleanup_bounded_rc=$?
 if [ -e "$FIX/safety-controller-cleanup-started" ] && [ "$controller_cleanup_bounded_rc" -eq 2 ] \
    && grep -qF "UNKNOWN: safety scan exceeded" <<<"$CONTROLLER_CLEANUP_BOUNDED"; then
