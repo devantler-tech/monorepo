@@ -263,6 +263,19 @@ echo "agent-telemetry.sh"
 
 HELP_OUT=$(bash "$TARGET" --help 2>&1)
 check "help documents the bounded safety timeout" "$HELP_OUT" "--safety-timeout-seconds N"
+mkdir -p "$FIX/help-read-fail"
+cat > "$FIX/help-read-fail/awk" <<'EOF'
+#!/usr/bin/env bash
+exit 2
+EOF
+chmod +x "$FIX/help-read-fail/awk"
+PATH="$FIX/help-read-fail:$PATH" bash "$TARGET" --help >/dev/null 2>&1
+help_read_failed_rc=$?
+if [ "$help_read_failed_rc" -eq 2 ]; then
+  ok "an unreadable help source exits UNKNOWN/2"
+else
+  bad "an unreadable help source exits UNKNOWN/2" "rc=$help_read_failed_rc"
+fi
 
 # Registry joins are independent of native transcript adapters. Exercise the
 # forge response boundary with neutral names and exact CLI identities.
@@ -2924,6 +2937,31 @@ else
     "rc=$instruction_failed_rc"
 fi
 
+# The final occurrence grep can fail after consuming its input. Candidate
+# discovery succeeding does not make that later extraction complete.
+mkdir -p "$FIX/occurrence-extraction-fail"
+cat > "$FIX/occurrence-extraction-fail/grep" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -hoiE) cat >/dev/null; exit 2 ;;
+  *) exec "$OCCURRENCE_REAL_GREP" "$@" ;;
+esac
+EOF
+chmod +x "$FIX/occurrence-extraction-fail/grep"
+OCCURRENCE_FAILED=$(PATH="$FIX/occurrence-extraction-fail:$PATH" \
+  OCCURRENCE_REAL_GREP="$candidate_real_grep" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+occurrence_failed_rc=$?
+check "an occurrence-extraction failure is UNKNOWN" "$OCCURRENCE_FAILED" \
+  "UNKNOWN: the instruction scan did not complete"
+if [ "$occurrence_failed_rc" -eq 2 ]; then
+  ok "an occurrence-extraction failure exits 2"
+else
+  bad "an occurrence-extraction failure exits 2" "rc=$occurrence_failed_rc"
+fi
+
 # A failure can occur only in the final provenance walk, after the total and
 # class walks have already observed a complete candidate set. That late error
 # must still control the worker's exit status.
@@ -2959,6 +2997,29 @@ fi
 # Safety-only mode must enter the watchdog before top-level setup allocates any
 # report scratch. The first mktemp call belongs to the worker; a parent call
 # would sit outside the deadline and a permanent stall could never emit UNKNOWN.
+mkdir -p "$FIX/safety-dirname-shim"
+cat > "$FIX/safety-dirname-shim/dirname" <<'EOF'
+#!/usr/bin/env bash
+: > "$SAFETY_DIRNAME_CALLED"
+sleep 4
+exec "$SAFETY_TEST_DIRNAME" "$@"
+EOF
+chmod +x "$FIX/safety-dirname-shim/dirname"
+rm -f "$FIX/safety-dirname-called"
+DIRNAME_FREE=$(PATH="$FIX/safety-dirname-shim:$PATH" \
+  SAFETY_TEST_DIRNAME="$(command -v dirname)" SAFETY_DIRNAME_CALLED="$FIX/safety-dirname-called" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 30 2>&1)
+dirname_free_rc=$?
+if [ ! -e "$FIX/safety-dirname-called" ] && [ "$dirname_free_rc" -eq 0 ] \
+   && grep -qF "SAFETY (guardrails)" <<<"$DIRNAME_FREE"; then
+  ok "safety entry performs no external dirname resolution before its watchdog"
+else
+  bad "safety entry performs no external dirname resolution before its watchdog" \
+    "dirname_called=$([ -e "$FIX/safety-dirname-called" ] && echo yes || echo no) rc=$dirname_free_rc"
+fi
+
 mkdir -p "$FIX/safety-setup-timeout-shim"
 safety_real_mktemp=$(command -v mktemp)
 cat > "$FIX/safety-setup-timeout-shim/mktemp" <<'EOF'

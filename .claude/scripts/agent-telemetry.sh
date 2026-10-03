@@ -59,7 +59,11 @@ SAFETY_COMPLETE_SENTINEL='__AGENT_TELEMETRY_SAFETY_COMPLETE__:'
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH=${BASH_SOURCE[0]}
+case "$SCRIPT_PATH" in
+  */*) SCRIPT_DIR=${SCRIPT_PATH%/*}; [ -n "$SCRIPT_DIR" ] || SCRIPT_DIR=/ ;;
+  *) SCRIPT_DIR=. ;;
+esac
 INSTANCES="${AGENT_INSTANCES_FILE:-$SCRIPT_DIR/../plugin-consumption/agent-instances.json}"
 SIGNATURE=""
 SIGNATURE_SET=0
@@ -92,7 +96,7 @@ while [ $# -gt 0 ]; do
     --injection-provenance) INJECTION_PROVENANCE=1; shift ;;
     --credential-provenance) CREDENTIAL_PROVENANCE=1; shift ;;
     -h|--help)
-      awk 'NR >= 2 { if ($0 == "set -uo pipefail") exit; print }' "$0" || exit 3
+      awk 'NR >= 2 { if ($0 == "set -uo pipefail") exit; print }' "$0" || exit 2
       exit 0 ;;
     *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
@@ -3847,6 +3851,10 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     while IFS="$(printf '\t')" read -r len f; do
       phrase_locale=$(injection_locale "$f" "$len")
       injection_matching_lines "$f" "$len" "$phrase_locale" | LC_ALL="$phrase_locale" grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null
+      occurrence_rc=$?
+      if [ "$occurrence_rc" -gt 1 ]; then
+        printf x >> "$XFINJ"
+      fi
     done < "$INJSNAP" | redact | tr '[:upper:]' '[:lower:]' \
       | while LC_ALL=C IFS= read -r phrase || [ -n "$phrase" ]; do
           [ -n "$phrase" ] || continue
