@@ -90,6 +90,224 @@ grep -Fq '### Authority model' "${constitution}" ||
 grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constitution}" ||
   fail "consumer does not name the upstream Agent Improver source"
 
+extract_agent_definition_locations() {
+  awk '/^## Agent definition locations/ { inside = 1; found = 1; print; next }
+       inside && /^## / { ended = 1; exit }
+       inside { print }
+       END { if (!found || !ended) exit 1 }'
+}
+if ! agent_definition_locations_flat="$(
+  extract_agent_definition_locations <"${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"; then
+  fail "Agent definition locations is missing or has no peer-heading boundary"
+fi
+[ -n "${agent_definition_locations_flat}" ] ||
+  fail "could not extract Agent definition locations, so its telemetry authority cannot be checked"
+extract_guide_version_controlled_surfaces() {
+  awk '/^\*\*Version-controlled surfaces .*:\*\*$/ { inside = 1; found = 1; print; next }
+       inside && /^\*\*Runtime-local surfaces / { ended = 1; exit }
+       inside { print }
+       END { if (!found || !ended) exit 1 }'
+}
+if ! guide_version_controlled_surfaces_flat="$(
+  extract_agent_definition_locations <"${constitution}" |
+    extract_guide_version_controlled_surfaces | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"; then
+  fail "Agent definition locations has no bounded Version-controlled surfaces list"
+fi
+extract_guide_telemetry_surface_entry() {
+  awk '!inside && /^- The observation-plane implementation at `\.claude\/scripts\/agent-telemetry\.sh`/ {
+         inside = 1; found = 1; print; next
+       }
+       inside && /^- / { ended = 1; exit }
+       inside && /^\*\*Runtime-local surfaces / { ended = 1; exit }
+       inside { print }
+       END { if (!found || !ended) exit 1 }'
+}
+if ! guide_telemetry_surface_entry_flat="$(
+  extract_agent_definition_locations <"${constitution}" |
+    extract_guide_version_controlled_surfaces |
+    extract_guide_telemetry_surface_entry | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"; then
+  fail "Agent definition locations has no bounded telemetry entry in its Version-controlled surfaces list"
+fi
+assert_guide_telemetry_surface_entry_prose() {
+  case "${guide_telemetry_surface_entry_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+telemetry_grant='The observation-plane implementation at `.claude/scripts/agent-telemetry.sh` is a definition surface; no other script source is included by that grant.'
+assert_guide_telemetry_surface_entry_prose "${telemetry_grant}" \
+  "Agent definition locations does not grant the Agent Improver narrow authority to repair its observation-plane implementation"
+assert_guide_telemetry_surface_entry_prose \
+  "records the maintainer's direct interactive direction on 2026-10-03" \
+  "Agent definition locations does not record the maintainer direction that authorized the telemetry surface addition"
+
+# Negative control: the same sentence outside Agent definition locations must not satisfy
+# the authority grant.
+if printf '%s\n' \
+  '## Agent definition locations' \
+  '**Version-controlled surfaces — always ship as a draft PR and drive the reviewed head to merge:**' \
+  '- No telemetry grant here.' \
+  '**Runtime-local surfaces — back up before editing:**' \
+  '- Local settings.' \
+  '## Authority model' \
+  "- ${telemetry_grant}" |
+  extract_agent_definition_locations |
+  extract_guide_version_controlled_surfaces |
+  extract_guide_telemetry_surface_entry >/dev/null; then
+  fail "negative control: a telemetry grant outside Agent definition locations satisfied the authority assertion"
+fi
+
+# Negative control: the same grant in Runtime-local is not part of the
+# Version-controlled authority list.
+if printf '%s\n' \
+  '## Agent definition locations' \
+  '**Version-controlled surfaces — always ship as a draft PR and drive the reviewed head to merge:**' \
+  '- No telemetry grant here.' \
+  '**Runtime-local surfaces — back up before editing:**' \
+  "- ${telemetry_grant}" \
+  '## Authority model' |
+  extract_agent_definition_locations |
+  extract_guide_version_controlled_surfaces |
+  extract_guide_telemetry_surface_entry >/dev/null; then
+  fail "negative control: a Runtime-local telemetry grant satisfied the Version-controlled authority assertion"
+fi
+
+# Negative control: informational prose within the broad Version-controlled block is
+# not itself a top-level surface entry.
+if printf '%s\n' \
+  '## Agent definition locations' \
+  '**Version-controlled surfaces — always ship as a draft PR and drive the reviewed head to merge:**' \
+  '- The generic upstream source.' \
+  '  **Informational routing guidance:**' \
+  "  ${telemetry_grant}" \
+  '**Runtime-local surfaces — back up before editing:**' \
+  '- Local settings.' \
+  '## Authority model' |
+  extract_agent_definition_locations |
+  extract_guide_version_controlled_surfaces |
+  extract_guide_telemetry_surface_entry >/dev/null; then
+  fail "negative control: informational routing prose satisfied the Version-controlled telemetry entry assertion"
+fi
+if printf '%s\n' '## Agent definition locations' "${telemetry_grant}" |
+  extract_agent_definition_locations >/dev/null; then
+  fail "negative control: guide Agent definition locations accepted a missing peer-heading boundary"
+fi
+if printf '%s\n' \
+  '## Agent definition locations' \
+  '**Version-controlled surfaces — always ship as a draft PR and drive the reviewed head to merge:**' \
+  "${telemetry_grant}" |
+  extract_guide_version_controlled_surfaces >/dev/null; then
+  fail "negative control: guide Version-controlled surfaces accepted a missing Runtime-local boundary"
+fi
+
+extract_root_agent_definition_locations() {
+  awk '/^### Agent definition locations/ { inside = 1; found = 1; print; next }
+       inside && /^### / { ended = 1; exit }
+       inside { print }
+       END { if (!found || !ended) exit 1 }'
+}
+if ! root_agent_definition_locations_flat="$(
+  extract_root_agent_definition_locations <"${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"; then
+  fail "root Agent definition locations is missing or has no peer-heading boundary"
+fi
+[ -n "${root_agent_definition_locations_flat}" ] ||
+  fail "could not extract root Agent definition locations, so its telemetry authority cannot be checked"
+extract_root_version_controlled_surfaces() {
+  awk '/^- \*\*Version-controlled\*\*/ { inside = 1; found = 1; print; next }
+       inside && /^[[:space:]]*$/ { ended = 1; exit }
+       inside && /^[[:space:]]*[-*+] / { ended = 1; exit }
+       inside { print }
+       END { if (!found || !ended) exit 1 }'
+}
+if ! root_version_controlled_surfaces_flat="$(
+  extract_root_agent_definition_locations <"${constitution}" |
+    extract_root_version_controlled_surfaces | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"; then
+  fail "root Agent definition locations has no bounded Version-controlled entry"
+fi
+assert_root_version_controlled_surface_prose() {
+  case "${root_version_controlled_surfaces_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+root_telemetry_grant='`.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`; observation surface: `.claude/scripts/agent-telemetry.sh`; deployment surfaces under `.claude/`'
+assert_root_version_controlled_surface_prose "${root_telemetry_grant}" \
+  "root Version-controlled surfaces do not grant the Agent Improver authority over the telemetry collector"
+
+# Negative control: a denial inside the Version-controlled entry must not satisfy
+# the positive grant.
+real_root_version_controlled_surfaces_flat="${root_version_controlled_surfaces_flat}"
+root_version_controlled_surfaces_flat="$(
+  printf '%s\n' \
+    '### Agent definition locations' \
+    '- **Version-controlled**: `AGENTS.md`, `.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`; this grant does not include `.claude/scripts/agent-telemetry.sh`; deployment surfaces under `.claude/`.' \
+    '- **Runtime-local**: local settings.' \
+    '### Authority model' |
+    extract_root_agent_definition_locations |
+    extract_root_version_controlled_surfaces | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+if (assert_root_version_controlled_surface_prose "${root_telemetry_grant}" \
+  "negative control rejected a denied telemetry grant" >/dev/null 2>&1); then
+  fail "negative control: a denied telemetry grant inside Version-controlled satisfied the root grant"
+fi
+root_version_controlled_surfaces_flat="${real_root_version_controlled_surfaces_flat}"
+
+# Negative control: a blank line ends the entry, so later prose cannot supply the path.
+real_root_version_controlled_surfaces_flat="${root_version_controlled_surfaces_flat}"
+root_version_controlled_surfaces_flat="$(
+  printf '%s\n' \
+    '### Agent definition locations' \
+    '- **Version-controlled**: `AGENTS.md`.' \
+    '' \
+    'Never edit `.claude/scripts/agent-telemetry.sh`.' \
+    '- **Runtime-local**: local settings.' \
+    '### Authority model' |
+    extract_root_agent_definition_locations |
+    extract_root_version_controlled_surfaces | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+if (assert_root_version_controlled_surface_prose "${root_telemetry_grant}" \
+  "negative control rejected prose after the root entry" >/dev/null 2>&1); then
+  fail "negative control: prose after a blank line satisfied the root Version-controlled grant"
+fi
+root_version_controlled_surfaces_flat="${real_root_version_controlled_surfaces_flat}"
+
+# Negative control: a guide-level telemetry path must not mask its removal from the
+# always-on root authority list.
+real_root_version_controlled_surfaces_flat="${root_version_controlled_surfaces_flat}"
+root_version_controlled_surfaces_flat="$(
+  printf '%s\n' \
+    '### Agent definition locations' \
+    '- **Version-controlled**: `AGENTS.md`.' \
+    '- **Runtime-local**: local settings.' \
+    '### Authority model' \
+    '## Agent definition locations' \
+    '`.claude/scripts/agent-telemetry.sh` remains in the guide.' |
+    extract_root_agent_definition_locations |
+    extract_root_version_controlled_surfaces | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+if (assert_root_version_controlled_surface_prose "${root_telemetry_grant}" \
+  "negative control rejected the root authority omission" >/dev/null 2>&1); then
+  fail "negative control: a guide-level telemetry path masked its removal from the root authority list"
+fi
+root_version_controlled_surfaces_flat="${real_root_version_controlled_surfaces_flat}"
+if printf '%s\n' '### Agent definition locations' '.claude/scripts/agent-telemetry.sh' |
+  extract_root_agent_definition_locations >/dev/null; then
+  fail "negative control: root Agent definition locations accepted a missing peer-heading boundary"
+fi
+if printf '%s\n' \
+  '### Agent definition locations' \
+  '- **Version-controlled**: `.claude/scripts/agent-telemetry.sh`.' \
+  '### Authority model' |
+  extract_root_agent_definition_locations |
+  extract_root_version_controlled_surfaces >/dev/null; then
+  fail "negative control: root Version-controlled entry accepted a missing sibling-bullet boundary"
+fi
+
 # The bundled SKILL.md is SYNCED from devantler-tech/agent-skills (it carries
 # metadata.github-repo and the update-agent-skills workflow re-pulls it), so an edit there
 # is silently reverted. The consumer listed it as an authoring surface until 2026-07-25,
