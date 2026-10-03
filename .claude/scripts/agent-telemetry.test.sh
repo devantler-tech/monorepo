@@ -2924,6 +2924,38 @@ else
     "rc=$instruction_failed_rc"
 fi
 
+# A failure can occur only in the final provenance walk, after the total and
+# class walks have already observed a complete candidate set. That late error
+# must still control the worker's exit status.
+mkdir -p "$FIX/candidate-provenance-fail"
+cat > "$FIX/candidate-provenance-fail/rg" <<'EOF'
+#!/usr/bin/env bash
+count=0
+[ ! -r "$CANDIDATE_COUNT_FILE" ] || count=$(cat "$CANDIDATE_COUNT_FILE")
+count=$((count + 1))
+printf '%s\n' "$count" > "$CANDIDATE_COUNT_FILE"
+[ "$count" -ne 3 ] || exit 2
+case " $* " in
+  *' --line-number '*) awk '{print NR ":" $0}' ;;
+  *) cat ;;
+esac
+EOF
+chmod +x "$FIX/candidate-provenance-fail/rg"
+: > "$FIX/candidate-provenance-count"
+PROVENANCE_FAILED=$(PATH="$FIX/candidate-provenance-fail:$PATH" \
+  CANDIDATE_COUNT_FILE="$FIX/candidate-provenance-count" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --injection-provenance 2>&1)
+provenance_failed_rc=$?
+check "a provenance-only candidate failure is UNKNOWN" "$PROVENANCE_FAILED" \
+  "UNKNOWN: the instruction scan did not complete; provenance is PARTIAL"
+if [ "$provenance_failed_rc" -eq 2 ]; then
+  ok "a provenance-only candidate failure exits 2"
+else
+  bad "a provenance-only candidate failure exits 2" "rc=$provenance_failed_rc"
+fi
+
 # A bounded scan must never turn an interrupted worker into a clean report.
 mkdir -p "$FIX/safety-timeout-shim"
 cat > "$FIX/safety-timeout-shim/grep" <<'EOF'
@@ -2972,6 +3004,33 @@ BOUNDED_ALL=$(PATH="$FIX/safety-timeout-shim:$PATH" SAFETY_TEST_GREP="$candidate
   bash "$TARGET" --since-days 3650 --safety-timeout-seconds 1 2>&1)
 check "the full report continues after a safety deadline" "$BOUNDED_ALL" "CROSS-INSTANCE / A2A"
 check "the full report reaches its completion footer after a safety deadline" "$BOUNDED_ALL" "END TELEMETRY"
+
+# A completed worker report is still unmeasured if the controller cannot read
+# its private report file. Simulate only that final read; every worker-side cat
+# delegates to the real command.
+mkdir -p "$FIX/safety-report-read-shim"
+safety_real_cat=$(command -v cat)
+cat > "$FIX/safety-report-read-shim/cat" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  */.agtel_bounded.*/report) exit 1 ;;
+  *) exec "$SAFETY_TEST_CAT" "$@" ;;
+esac
+EOF
+chmod +x "$FIX/safety-report-read-shim/cat"
+REPORT_READ_FAILED=$(PATH="$FIX/safety-report-read-shim:$PATH" SAFETY_TEST_CAT="$safety_real_cat" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 30 2>&1)
+report_read_failed_rc=$?
+check "a failed completed-report read is UNKNOWN" "$REPORT_READ_FAILED" \
+  "UNKNOWN: cannot read the completed safety report"
+if [ "$report_read_failed_rc" -eq 2 ]; then
+  ok "a failed completed-report read exits 2"
+else
+  bad "a failed completed-report read exits 2" "rc=$report_read_failed_rc"
+fi
+
 mkdir -p "$FIX/safety-empty-worker"
 cat > "$FIX/safety-empty-worker/bash" <<'EOF'
 #!/bin/bash

@@ -2143,6 +2143,14 @@ run_safety_bounded() (
     echo "  Credential, instruction, denial and untrusted-build coverage are UNKNOWN."
     echo "  Partial worker output is discarded; skipped or truncated scope stays UNKNOWN."
   }
+  emit_bounded_report() {
+    local report
+    if ! report=$(cat "$bounded_dir/report"); then
+      bounded_unknown 'cannot read the completed safety report.'
+      return 2
+    fi
+    printf '%s\n' "$report"
+  }
   bounded_cleanup() {
     if [ -n "$worker_pid" ]; then
       kill -TERM -- "-$worker_pid" 2>/dev/null || true
@@ -2177,9 +2185,9 @@ run_safety_bounded() (
     wait "$worker_pid" 2>/dev/null || worker_rc=$?
     worker_pid=''
     if [ "$result" = 0 ] && [ "$worker_rc" -eq 0 ]; then
-      cat "$bounded_dir/report"
+      emit_bounded_report || exit 2
     elif [ "$result" = 2 ] && [ "$worker_rc" -eq 2 ]; then
-      cat "$bounded_dir/report"
+      emit_bounded_report || exit 2
       exit 2
     else
       bounded_unknown 'the safety worker failed; its measurements are incomplete.'
@@ -3940,6 +3948,7 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
       awk -F'\t' '{printf "      session=%s line=%s record=%s phrase=%s\n", $1, $2, $3, $4}' "$PROVTMP"
       if [ -s "$XFINJ" ]; then
         echo "    UNKNOWN: the instruction scan did not complete; provenance is PARTIAL."
+        main_rc=2
       fi
     else
       echo "    provenance: rerun with --section safety --injection-provenance"
