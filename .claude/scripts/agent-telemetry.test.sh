@@ -3019,6 +3019,8 @@ else
   bad "safety entry performs no external dirname resolution before its watchdog" \
     "dirname_called=$([ -e "$FIX/safety-dirname-called" ] && echo yes || echo no) rc=$dirname_free_rc"
 fi
+nocheck "a completed watchdog does not inherit the controller EXIT trap" \
+  "$DIRNAME_FREE" "unbound variable"
 
 mkdir -p "$FIX/safety-setup-timeout-shim"
 safety_real_mktemp=$(command -v mktemp)
