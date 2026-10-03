@@ -392,12 +392,28 @@ branch_op_lock_run() {
   # release trap instead, which leaves the caller's own handler untouched on every bash version.
   local rc=0
   (
-    # Single-quoted so `$repo` and `$token` are expanded when the trap FIRES, not when it is armed.
-    # Double-quoting bakes the values into the trap body, so a repository path containing a single
-    # quote produces a syntactically broken handler and the safety-net release never runs — the
-    # lock then leaks until its TTL expires. Both names are locals of `branch_op_lock_run` and stay
-    # visible inside this subshell, so deferring the expansion is also correct.
-    trap 'branch_op_lock_release "$repo" "$token" >/dev/null 2>&1 || true' EXIT
+    # The handler reads `$repo` and `$token` when the trap FIRES, not when it is armed. Baking the
+    # values into a trap body means a repository path containing a single quote produces a
+    # syntactically broken handler and the safety-net release never runs — the lock then leaks until
+    # its TTL expires. Both names are locals of `branch_op_lock_run` and stay visible inside this
+    # subshell, on an abort as well.
+    #
+    # The trap is armed only while the wrapped command runs, so when it fires the command never
+    # returned. Bash 3.2 hands an EXIT trap status 0 for a `set -u` abort, and the release would then
+    # become this subshell's status, so an aborted command would read as having succeeded. A zero
+    # status here is therefore reported as failure (monorepo#3414). A wrapped shell function must
+    # `return`, never `exit 0`.
+    # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+    _branch_op_lock_run_abort() {
+      local abort_rc=$?
+      branch_op_lock_release "$repo" "$token" >/dev/null 2>&1 || true
+      if [ "$abort_rc" -eq 0 ]; then
+        echo "branch-op-lock: aborted before the wrapped command returned; reporting failure rather than a clean pass" >&2
+        abort_rc=1
+      fi
+      exit "$abort_rc"
+    }
+    trap _branch_op_lock_run_abort EXIT
     inner_rc=0
     "$@" || inner_rc=$?
     # Normal completion: drop the safety net (this subshell's slot only) so the accountable release
