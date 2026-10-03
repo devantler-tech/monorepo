@@ -3583,7 +3583,7 @@ case "${external_row}" in
   *) fail "the external/Copilot row omits rd=, so a human CHANGES_REQUESTED is lost once the activity window expires" ;;
 esac
 
-# A merge queue changes the strategy, never the closed three-author `--auto` list.
+# A merge queue changes the strategy, never the closed two-author `--auto` list.
 case "${constitution_flat}" in
   *'A merge queue does NOT widen who may use `--auto`'*) ;;
   *) fail "the merge-queue path can still push a non-App author through auto-merge" ;;
