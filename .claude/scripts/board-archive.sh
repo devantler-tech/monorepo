@@ -194,7 +194,21 @@ command -v gh >/dev/null 2>&1 || die "gh CLI not found"
 command -v jq >/dev/null 2>&1 || die "jq not found"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
+# cleanup then becomes the script's status. Completion is recorded explicitly, so reaching a
+# verdict is the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
+board_archive_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+board_archive_cleanup() {
+  local rc=$?
+  rm -rf "$TMP"
+  if [ "$board_archive_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "board-archive: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap board_archive_cleanup EXIT
 GH_ERR="$TMP/gh.err"
 
 # GitHub's own error text, bounded. It comes from the API, not the board.
@@ -281,6 +295,7 @@ if [ "$MODE" = restore ]; then
     [ "$PACE" = 0 ] || sleep "$PACE"
   done <"$SNAPSHOT"
   printf 'board-archive: restored %s item(s) from %s [verified]\n' "$restored" "$MANIFEST" >&2
+  board_archive_finished=1
   exit 0
 fi
 
@@ -367,6 +382,7 @@ jq -r '"board-archive: \(.scanned) active item(s), \(.aged) closed over '"$MIN_D
 
 if [ "$MODE" = dry-run ]; then
   jq -r '.candidates[] | [.id, .ref, .type, .closedAt] | @tsv' "$SELECTION"
+  board_archive_finished=1
   exit 0
 fi
 
@@ -442,3 +458,4 @@ done < <(jq -r '.candidates[] | [.id, .ref, .type, .closedAt] | @tsv' "$SELECTIO
 
 printf 'board-archive: archived %s item(s), skipped %s changed since the read (manifest: %s) [verified]\n' \
   "$archived" "$skipped" "$MANIFEST" >&2
+board_archive_finished=1

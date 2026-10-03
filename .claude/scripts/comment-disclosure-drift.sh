@@ -183,8 +183,13 @@ fi
 guard_binary=""
 payload=""
 
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
+# cleanup then becomes the script's status. Completion is recorded explicitly, so reaching a
+# verdict is the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
+comment_disclosure_drift_finished=0
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {
+  local rc=$?
   [ -n "$guard_binary" ] && rm -f -- "$guard_binary"
   [ -n "$payload" ] && rm -f -- "$payload"
   [ -n "${reviews_payload:-}" ] && rm -f -- "$reviews_payload" "${reviews_payload}.bodies" "${reviews_payload}.next"
@@ -193,7 +198,11 @@ cleanup() {
   [ -n "${review_page:-}" ] && rm -f -- "$review_page"
   [ -n "${review_one:-}" ] && rm -f -- "$review_one" "${review_one}.bodies"
   [ -n "${history:-}" ] && rm -f -- "$history" "${history}.next" "${history}.one"
-  return 0
+  if [ "$comment_disclosure_drift_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "comment-disclosure-drift: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
 }
 trap cleanup EXIT
 
@@ -206,12 +215,16 @@ fi
 
 if [ -n "$input" ]; then
   if [ "$input" = "-" ]; then
-    "$guard_binary" --author "$author" "${pass_through[@]+"${pass_through[@]}"}" --input -
-    exit $?
+    rc=0
+    "$guard_binary" --author "$author" "${pass_through[@]+"${pass_through[@]}"}" --input - || rc=$?
+    comment_disclosure_drift_finished=1
+    exit "$rc"
   fi
   [ -r "$input" ] || die "cannot read payload: $input"
-  "$guard_binary" --author "$author" "${pass_through[@]+"${pass_through[@]}"}" --input "$input"
-  exit $?
+  rc=0
+  "$guard_binary" --author "$author" "${pass_through[@]+"${pass_through[@]}"}" --input "$input" || rc=$?
+  comment_disclosure_drift_finished=1
+  exit "$rc"
 fi
 
 payload="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-payload.XXXXXX")" ||
@@ -435,4 +448,5 @@ if [ -n "$since" ]; then
   classify_review_surface "$reviews_label" "$reviews_payload"
 fi
 
+comment_disclosure_drift_finished=1
 exit "$status"

@@ -79,7 +79,21 @@ top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" ||
 tracked_paths="$(mktemp)" || { echo "python-ban-guard: cannot allocate tracked-file list" >&2; exit 2; }
 parser_binary="$(mktemp)" || { echo "python-ban-guard: cannot allocate parser binary" >&2; rm -f -- "$tracked_paths"; exit 2; }
 utf16_scratch="$(mktemp)" || { echo "python-ban-guard: cannot allocate decode buffer" >&2; rm -f -- "$tracked_paths" "$parser_binary"; exit 2; }
-trap 'rm -f -- "$tracked_paths" "$parser_binary" "$utf16_scratch"' EXIT
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
+# cleanup then becomes the script's status. Completion is recorded explicitly, so reaching the end is
+# the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
+python_ban_guard_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+python_ban_guard_cleanup() {
+  local rc=$?
+  rm -f -- "$tracked_paths" "$parser_binary" "$utf16_scratch"
+  if [ "$python_ban_guard_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "python-ban-guard: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap python_ban_guard_cleanup EXIT
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! go -C "$script_dir/python-ban-guard-go" build -o "$parser_binary" .; then
   echo "python-ban-guard: cannot build command parser" >&2
@@ -439,3 +453,4 @@ if [ "$findings" -gt 0 ]; then
   exit 1
 fi
 echo "python-ban-guard: clean — no Python source file or invocation on a tracked executable surface in $top"
+python_ban_guard_finished=1
