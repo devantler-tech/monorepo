@@ -8042,6 +8042,74 @@ else
   bad "prose ranks after every build, labelled [prose?], and never displaces one" \
       "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -12)"
 fi
+# An escape inside "…" runs nothing: `\n` stays two characters, and `\"` and `\$`
+# are a literal quote and dollar, so escaped prose is still prose (#3666). What an
+# escape does not cover still counts. After `\\` the next character is not escaped,
+# so a substitution behind it runs; an escaped quote leaves the string open around
+# a substitution; and code after the closing quote is code.
+# shellcheck disable=SC2016 # literal command text: nothing in these fixtures is meant to expand
+MK_OUT=$({
+  mk_cmd e1 'gh pr checkout 21'
+  mk_cmd e2 'echo "please make the report clearer\n"'
+  mk_cmd e3 'echo "say \"make the change\" twice"'
+  mk_cmd e4 'echo "it costs \$5 to make the widget"'
+  mk_cmd e5 'npm ci'
+} | mk_run makeescape)
+# shellcheck disable=SC2016
+MK_OUT2=$({
+  mk_cmd f1 'gh pr checkout 22'
+  mk_cmd f2 'echo "\\$(make test)"'
+  mk_cmd f3 'echo "a\" $(make lint)"'
+  mk_cmd f4 'echo "ends in a backslash \\"; make build'
+  mk_cmd f5 'echo "\\`make check`"'
+  mk_cmd f6 'npm ci'
+} | mk_run makeescapecode)
+# shellcheck disable=SC2016
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qF '1 [prose?] echo "please make the report clearer\n"' <<<"$MK_OUT" \
+   && grep -qF '1 [prose?] echo "say \"make the change\" twice"' <<<"$MK_OUT" \
+   && grep -qF '1 [prose?] echo "it costs \$5 to make the widget"' <<<"$MK_OUT" \
+   && grep -qE '^ +1 npm ci$' <<<"$MK_OUT2" \
+   && grep -qF '1 echo "\\$(make test)"' <<<"$MK_OUT2" \
+   && grep -qF '1 echo "a\" $(make lint)"' <<<"$MK_OUT2" \
+   && grep -qF '1 echo "ends in a backslash \\"; make build' <<<"$MK_OUT2" \
+   && grep -qF '1 echo "\\`make check`"' <<<"$MK_OUT2"; then
+  ok "escaped prose in double quotes is labelled prose; a substitution or code an escape does not cover still counts"
+else
+  bad "escaped prose in double quotes is labelled prose; a substitution or code an escape does not cover still counts" \
+      "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -12)"
+fi
+# A tool call is its own shell parse, so quote state must not cross from one call
+# into the next: after a call that ends on an unmatched quote, the next call's
+# prose is still prose and its build is still a build (#3666). The boundary cannot
+# be forged from inside a command: a continuation line that begins with either
+# marker character stays inside the string it is in, so the build behind that
+# string still counts.
+MK_OUT=$({
+  mk_cmd c1 'gh pr checkout 23'
+  mk_cmd c2 "echo 'unfinished"
+  mk_cmd c3 "printf 'make the report clearer'"
+  mk_cmd c4 'echo "also unfinished'
+  mk_cmd c5 'make deploy'
+  mk_cmd c6 'npm ci'
+} | mk_run makecalls)
+MK_OUT2=$({
+  mk_cmd d1 'gh pr checkout 24'
+  mk_cmd d2 "$(printf 'printf "\n\036echo hi "; make all; echo "\n"')"
+  mk_cmd d3 "$(printf 'printf "\n\037echo hi "; make lint; echo "\n"')"
+  mk_cmd d4 'npm ci'
+} | mk_run makeforged)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 make deploy$' <<<"$MK_OUT" \
+   && grep -qE "^ +1 \[prose\?\] printf 'make the report clearer'$" <<<"$MK_OUT" \
+   && grep -qE '^ +1 npm ci$' <<<"$MK_OUT2" \
+   && grep -qE '^ +1 [^[]echo hi "; make all; echo "$' <<<"$MK_OUT2" \
+   && grep -qE '^ +1 [^[]echo hi "; make lint; echo "$' <<<"$MK_OUT2"; then
+  ok "quote state does not cross a tool-call boundary, and a command cannot forge one"
+else
+  bad "quote state does not cross a tool-call boundary, and a command cannot forge one" \
+      "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -12 | LC_ALL=C tr '\036\037' '^_')"
+fi
 
 # walk ~ section ~ literal to break ~ its mutation ~ line proving the walk read something
 while IFS='~' read -r wx_walk wx_sec wx_old wx_new wx_signal; do
