@@ -196,6 +196,7 @@ jobs:
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-rewrite.sh'
               - '.claude/scripts/review-lane-health.sh'
+              - '.claude/scripts/review-no-gate-guard.sh'
               - '.claude/scripts/claude-lane-liveness.sh'
               - '.claude/scripts/renovate-dashboard-drift.sh'
               - '.claude/scripts/pr-ownership-disclosure.sh'
@@ -691,6 +692,8 @@ jobs:
               - '.claude/scripts/coderabbit-review-verdict.test.sh'
               - '.claude/scripts/coderabbit-comment-verdict.sh'
               - '.claude/scripts/coderabbit-comment-verdict.test.sh'
+              - '.claude/scripts/review-no-gate-guard.sh'
+              - '.claude/scripts/review-no-gate-guard.test.sh'
               - '.claude/scripts/local-review-verdict.sh'
               - '.claude/scripts/local-review-verdict.test.sh'
               - '.claude/scripts/managed-run-streak.sh'
@@ -2477,6 +2480,9 @@ jobs:
       # Hermetic: judges captured and synthetic CodeRabbit reply comments, no API call.
       - name: Verify the CodeRabbit reply comment verdict classifier
         run: bash .claude/scripts/coderabbit-comment-verdict.test.sh
+      # Hermetic: judges a captured head and synthetic ones; a stub gh serves the live reads.
+      - name: Verify the no-gate guard
+        run: bash .claude/scripts/review-no-gate-guard.test.sh
       # Hermetic: judges captured local review rounds, no API call.
       - name: Verify the local review round verdict classifier
         run: bash .claude/scripts/local-review-verdict.test.sh
