@@ -159,6 +159,25 @@ plugin's `agents/` and `skills/` directories by **git blob identity, never a ver
 version can be bumped without the definitions moving, and the definitions can be superseded while the
 installed version still looks plausible. It exits `0` current, `1` drift, and `2` **UNKNOWN**.
 
+🔴 **The verdict is measured against the pin this deployment has ADOPTED — the gitlink at the tip of
+the remote's default branch, read from the remote when the check runs — never against the working
+tree's own gitlink.** The two differ in both directions without the lane drifting: a rollout branch
+holds a bump that has not merged, and a checkout taken before a rollout merged still holds the
+previous pin ([#3230](https://github.com/devantler-tech/monorepo/issues/3230)). The check prints the
+pin it used and where it read it (`pin source`). When the working tree's gitlink differs, it adds a
+notice after the verdict, with how the checked copy compares against that pin:
+
+- `ROLLOUT` — this branch changes the gitlink, and the change is not adopted until it merges;
+- `SUPERSEDED` — the default branch moved the gitlink after this checkout was taken;
+- `UNADOPTED` — the two differ and no common history shows which side moved.
+
+**A notice describes the working tree, not the lane: it never changes the verdict or the exit code.**
+An adopted pin that cannot be read is `2` UNKNOWN — the working tree's gitlink never stands in for it.
+`--adopted-ref <full-commit-id-or-qualified-ref>` names a consumer revision the caller has already
+fetched instead of asking the remote, and the caller then owns its freshness; `--gitlink <sha>` names
+the pin outright, which is how the refresh script binds its gated target. The runtime-asset
+declaration is read from the same consumer revision as the pin.
+
 | Instance | Command | What is compared |
 |---|---|---|
 | Claude machine-local | `.claude/scripts/plugin-definition-currency.sh --runtime claude` | The one install path in Claude's runtime registry. |
@@ -203,6 +222,14 @@ entry for `HEAD` makes `HEAD:libraries/agent-plugins` resolve **through the repl
 revision, and the forge read below then fetches the wrong definitions **faithfully**, reporting them
 as reviewed. That is a fail-open on the one value everything downstream trusts, and the replace ref
 lives in the shared repository, so a single stale entry reaches every worktree.
+
+⚠️ **`HEAD`'s gitlink is the reviewed pin only in a checkout that does not change it.** On a branch
+that bumps the gitlink — the check reports `ROLLOUT` — it names a proposal nobody has merged, so
+there the pin to follow is the adopted one: the `pinned revision` the check printed or, when it
+printed none, the default branch's own gitlink (`refs/remotes/origin/main:libraries/agent-plugins`
+after `git fetch origin '+refs/heads/main:refs/remotes/origin/main'`). A `SUPERSEDED` checkout needs
+no such care: its gitlink was the adopted pin when the checkout was taken, so it still names a
+reviewed revision.
 
 **Prefer the forge read: it needs no working tree, so none of the traps below can reach it.** The
 revision is named in the request, so what comes back is the reviewed content by construction — this
@@ -312,6 +339,10 @@ reviewed definition at the pinned gitlink and following it, exactly as above. On
 not invoke this Claude-only tool: proceed directly to the condition-based tracker below while using
 the reviewed definition.
 
+The refresh resolves its pin from the working tree it runs in. When the currency check carried a
+`ROLLOUT`, `SUPERSEDED` or `UNADOPTED` notice, that is not the adopted pin, so pass the refresh the
+one the check printed: `--gitlink <pinned revision>`.
+
 ⚠️ **Running the refresh never makes the pin active for THIS run — do not report it as if it had.**
 On a `1` or `2` the installed definition is unchanged by construction, so the runtime is still
 serving whatever it served before; and even a `0` only records that the install is now on the pin,
@@ -379,6 +410,13 @@ the recovery being unavailable, refused, fenced, or attempted and still not yiel
 `UNKNOWN` a run *does* resolve to `CURRENT` or `DRIFT` in the same tick is not tracked; it was a
 transient, and the resolved verdict governs. Neither state is a run-stopper, exactly as before. That issue is the artifact; it is discoverable by
 every lane and enters the ordinary work queue like anything else.
+
+🔴 **`DRIFT` here is drift against the ADOPTED pin, and only that verdict is a trigger.** A `ROLLOUT`,
+`SUPERSEDED` or `UNADOPTED` notice is a statement about the working tree the check ran in, so it
+never opens, updates or closes a tracker, whichever verdict it accompanies: a `CURRENT` that carries
+one is a current lane, and an unmerged bump files nothing. Keyed on the working tree's gitlink, a run
+performing a rollout would file a tracker for a lane that is current, and the reset would close it on
+the next ordinary check — churn that reads as a real occurrence in the issue history.
 
 🔴 **The canonical tracker repository is exactly `devantler-tech/monorepo`: creation, lookup, duplicate
 reconciliation, observation updates, and reset all use `devantler-tech/monorepo`.** Product selection
@@ -454,7 +492,8 @@ authenticated record and write only when this run's observation differs from it 
 1. **the lane recovered** — a fresh verified recovery observation, which closes the tracker under the
    reset rule above;
 2. **the differing files changed** — the set of files that differ, or their count;
-3. **the consumer pin moved** — so the pin the tracker states is stale;
+3. **the consumer pin moved** — the adopted pin the check prints, so the pin the tracker states is
+   stale;
 4. **the verdict changed** — `DRIFT` to an unresolved `UNKNOWN` or back, because neither carries the
    other's evidence.
 
