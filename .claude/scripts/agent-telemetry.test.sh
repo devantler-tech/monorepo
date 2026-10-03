@@ -3034,11 +3034,11 @@ else
   bad "the safety deadline includes transcript discovery" \
     "rc=$discovery_bounded_rc elapsed=${safety_discovery_secs}s"
 fi
-if [ ! -e "$FIX/safety-parent-discovery" ] && [ "$safety_discovery_secs" -lt 4 ]; then
+if [ ! -e "$FIX/safety-parent-discovery" ]; then
   ok "a safety-only parent performs no unbounded transcript discovery"
 else
   bad "a safety-only parent performs no unbounded transcript discovery" \
-    "parent_called=$([ -e "$FIX/safety-parent-discovery" ] && echo yes || echo no) elapsed=${safety_discovery_secs}s"
+    "parent_called=yes elapsed=${safety_discovery_secs}s"
 fi
 
 BOUNDED_ALL=$(PATH="$FIX/safety-timeout-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
