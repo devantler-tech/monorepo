@@ -89,8 +89,43 @@ grep -Fq '### Authority model' "${constitution}" ||
   fail "consumer does not define Authority model"
 grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constitution}" ||
   fail "consumer does not name the upstream Agent Improver source"
-assert_prose 'The observation-plane implementation at `.claude/scripts/agent-telemetry.sh` is a definition surface; no other script source is included by that grant.' \
-  "consumer does not grant the Agent Improver narrow authority to repair its observation-plane implementation"
+
+extract_agent_definition_locations() {
+  awk '/^## Agent definition locations/ { inside = 1; print; next }
+       inside && /^## / { exit }
+       inside { print }'
+}
+agent_definition_locations_flat="$(
+  extract_agent_definition_locations <"${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${agent_definition_locations_flat}" ] ||
+  fail "could not extract Agent definition locations, so its telemetry authority cannot be checked"
+assert_agent_definition_locations_prose() {
+  case "${agent_definition_locations_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+telemetry_grant='The observation-plane implementation at `.claude/scripts/agent-telemetry.sh` is a definition surface; no other script source is included by that grant.'
+assert_agent_definition_locations_prose "${telemetry_grant}" \
+  "Agent definition locations does not grant the Agent Improver narrow authority to repair its observation-plane implementation"
+
+# Negative control: the same sentence outside Agent definition locations must not satisfy
+# the authority grant.
+real_agent_definition_locations_flat="${agent_definition_locations_flat}"
+agent_definition_locations_flat="$(
+  printf '%s\n' \
+    '## Agent definition locations' \
+    'No telemetry grant here.' \
+    '## Authority model' \
+    "${telemetry_grant}" |
+    extract_agent_definition_locations | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+if (assert_agent_definition_locations_prose "${telemetry_grant}" \
+  "negative control rejected the misplaced telemetry grant" >/dev/null 2>&1); then
+  fail "negative control: a telemetry grant outside Agent definition locations satisfied the authority assertion"
+fi
+agent_definition_locations_flat="${real_agent_definition_locations_flat}"
 
 # The bundled SKILL.md is SYNCED from devantler-tech/agent-skills (it carries
 # metadata.github-repo and the update-agent-skills workflow re-pulls it), so an edit there
