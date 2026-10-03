@@ -149,6 +149,7 @@ fi
   fail "could not extract root Agent definition locations, so its telemetry authority cannot be checked"
 extract_root_version_controlled_surfaces() {
   awk '/^- \*\*Version-controlled\*\*/ { inside = 1; found = 1; print; next }
+       inside && /^[[:space:]]*$/ { ended = 1; exit }
        inside && /^[[:space:]]*[-*+] / { ended = 1; exit }
        inside { print }
        END { if (!found || !ended) exit 1 }'
@@ -183,6 +184,25 @@ root_version_controlled_surfaces_flat="$(
 if (assert_root_version_controlled_surface_prose '.claude/scripts/agent-telemetry.sh' \
   "negative control rejected a negated telemetry mention" >/dev/null 2>&1); then
   fail "negative control: a negated telemetry mention outside Version-controlled satisfied the root grant"
+fi
+root_version_controlled_surfaces_flat="${real_root_version_controlled_surfaces_flat}"
+
+# Negative control: a blank line ends the entry, so later prose cannot supply the path.
+real_root_version_controlled_surfaces_flat="${root_version_controlled_surfaces_flat}"
+root_version_controlled_surfaces_flat="$(
+  printf '%s\n' \
+    '### Agent definition locations' \
+    '- **Version-controlled**: `AGENTS.md`.' \
+    '' \
+    'Never edit `.claude/scripts/agent-telemetry.sh`.' \
+    '- **Runtime-local**: local settings.' \
+    '### Authority model' |
+    extract_root_agent_definition_locations |
+    extract_root_version_controlled_surfaces | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+if (assert_root_version_controlled_surface_prose '.claude/scripts/agent-telemetry.sh' \
+  "negative control rejected prose after the root entry" >/dev/null 2>&1); then
+  fail "negative control: prose after a blank line satisfied the root Version-controlled grant"
 fi
 root_version_controlled_surfaces_flat="${real_root_version_controlled_surfaces_flat}"
 
