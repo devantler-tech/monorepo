@@ -2993,6 +2993,38 @@ else
     "parent_setup=$([ -e "$FIX/safety-parent-setup-started" ] && echo yes || echo no) worker_setup=$([ -e "$FIX/safety-worker-setup-started" ] && echo yes || echo no) rc=$setup_bounded_rc"
 fi
 
+# The default report reaches safety after its own unrelated setup, but every
+# safety-specific controller operation must still sit behind the same deadline.
+mkdir -p "$FIX/safety-full-setup-timeout-shim"
+cat > "$FIX/safety-full-setup-timeout-shim/mkdir" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *'.agtel_bounded.'*|*'.agtel_worker.'*)
+    : > "$SAFETY_FULL_SETUP_STARTED"
+    sleep 4 ;;
+esac
+exec "$SAFETY_TEST_MKDIR" "$@"
+EOF
+chmod +x "$FIX/safety-full-setup-timeout-shim/mkdir"
+rm -f "$FIX/safety-full-setup-started"
+full_setup_start=$(date +%s)
+FULL_SETUP_BOUNDED=$(PATH="$FIX/safety-full-setup-timeout-shim:$PATH" \
+  SAFETY_TEST_MKDIR="$(command -v mkdir)" SAFETY_FULL_SETUP_STARTED="$FIX/safety-full-setup-started" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 1 2>&1)
+full_setup_bounded_rc=$?
+full_setup_secs=$(( $(date +%s) - full_setup_start ))
+if [ -e "$FIX/safety-full-setup-started" ] && [ "$full_setup_bounded_rc" -eq 2 ] \
+   && [ "$full_setup_secs" -lt 4 ] \
+   && grep -qF "UNKNOWN: safety scan exceeded" <<<"$FULL_SETUP_BOUNDED" \
+   && grep -qF "END TELEMETRY" <<<"$FULL_SETUP_BOUNDED"; then
+  ok "the full-report safety deadline starts before controller setup"
+else
+  bad "the full-report safety deadline starts before controller setup" \
+    "setup_started=$([ -e "$FIX/safety-full-setup-started" ] && echo yes || echo no) rc=$full_setup_bounded_rc elapsed=${full_setup_secs}s"
+fi
+
 # A bounded scan must never turn an interrupted worker into a clean report.
 mkdir -p "$FIX/safety-timeout-shim"
 cat > "$FIX/safety-timeout-shim/grep" <<'EOF'
@@ -3089,11 +3121,12 @@ exec "$SAFETY_TEST_FIND" "$@"
 EOF
 chmod +x "$FIX/safety-discovery-shim/find"
 rm -f "$FIX/safety-parent-discovery"
+mkdir -p "$FIX/safety-worker-timeout-artifacts"
 safety_discovery_start=$(date +%s)
 DISCOVERY_BOUNDED=$(PATH="$FIX/safety-discovery-shim:$PATH" \
   SAFETY_TEST_FIND="$safety_real_find" SAFETY_PARENT_DISCOVERY="$FIX/safety-parent-discovery" \
   CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
-  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/safety-worker-timeout-artifacts" \
   bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
 discovery_bounded_rc=$?
 safety_discovery_secs=$(( $(date +%s) - safety_discovery_start ))
@@ -3109,6 +3142,16 @@ if [ ! -e "$FIX/safety-parent-discovery" ]; then
 else
   bad "a safety-only parent performs no unbounded transcript discovery" \
     "parent_called=yes elapsed=${safety_discovery_secs}s"
+fi
+worker_timeout_artifact=$(find "$FIX/safety-worker-timeout-artifacts" -mindepth 1 -name '.agtel_*' -print -quit)
+if [ -n "$worker_timeout_artifact" ]; then
+  sleep 1
+  worker_timeout_artifact=$(find "$FIX/safety-worker-timeout-artifacts" -mindepth 1 -name '.agtel_*' -print -quit)
+fi
+if [ -n "$worker_timeout_artifact" ]; then
+  bad "a safety timeout removes worker scratch artifacts" "leftover=$worker_timeout_artifact"
+else
+  ok "a safety timeout removes worker scratch artifacts"
 fi
 
 mkdir -p "$FIX/safety-timeout-artifacts"
@@ -3131,89 +3174,37 @@ else
   ok "a full-report safety timeout removes controller artifacts"
 fi
 
-# Reading a completed report is still part of the advertised safety operation.
-# A stalled temporary filesystem must not bypass the deadline after the worker
-# has already signalled completion.
-mkdir -p "$FIX/safety-report-timeout-shim"
-safety_real_cat=$(command -v cat)
-cat > "$FIX/safety-report-timeout-shim/cat" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-  */.agtel_bounded.*/report)
-    : > "$SAFETY_REPORT_READ_STARTED"
-    sleep 8 ;;
-esac
-exec "$SAFETY_TEST_CAT" "$@"
-EOF
-chmod +x "$FIX/safety-report-timeout-shim/cat"
-rm -f "$FIX/safety-report-read-started"
-REPORT_READ_BOUNDED=$(PATH="$FIX/safety-report-timeout-shim:$PATH" \
-  SAFETY_TEST_CAT="$safety_real_cat" SAFETY_REPORT_READ_STARTED="$FIX/safety-report-read-started" \
-  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
-  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 5 2>&1)
-report_read_bounded_rc=$?
-if [ -e "$FIX/safety-report-read-started" ] && [ "$report_read_bounded_rc" -eq 2 ] \
-   && grep -qF "UNKNOWN: safety scan exceeded" <<<"$REPORT_READ_BOUNDED"; then
-  ok "the safety deadline includes completed-report reads"
-else
-  bad "the safety deadline includes completed-report reads" \
-    "read_started=$([ -e "$FIX/safety-report-read-started" ] && echo yes || echo no) rc=$report_read_bounded_rc"
-fi
-
-# The controller's private-artifact cleanup is part of the same operation. It
-# must finish before the terminal frame, while the watchdog can still turn a
-# stalled filesystem into UNKNOWN.
+# Controller-owned cleanup is deliberately asynchronous: a stalled temporary
+# filesystem must not extend a completed report or keep its output pipe open.
 mkdir -p "$FIX/safety-controller-cleanup-shim"
-cat > "$FIX/safety-controller-cleanup-shim/rm" <<'EOF'
+cat > "$FIX/safety-controller-cleanup-shim/rmdir" <<'EOF'
 #!/usr/bin/env bash
 case " $* " in
-  *'/.agtel_bounded.'*)
+  *'/.agtel_worker.'*)
     : > "$SAFETY_CONTROLLER_CLEANUP_STARTED"
     sleep 8 ;;
 esac
-exec "$SAFETY_TEST_RM" "$@"
+exec "$SAFETY_TEST_RMDIR" "$@"
 EOF
-chmod +x "$FIX/safety-controller-cleanup-shim/rm"
+chmod +x "$FIX/safety-controller-cleanup-shim/rmdir"
 rm -f "$FIX/safety-controller-cleanup-started"
+controller_cleanup_start=$(date +%s)
 CONTROLLER_CLEANUP_BOUNDED=$(PATH="$FIX/safety-controller-cleanup-shim:$PATH" \
-  SAFETY_TEST_RM="$safety_real_rm" \
+  SAFETY_TEST_RMDIR="$(command -v rmdir)" \
   SAFETY_CONTROLLER_CLEANUP_STARTED="$FIX/safety-controller-cleanup-started" \
   CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 5 2>&1)
-controller_cleanup_bounded_rc=$?
-if [ -e "$FIX/safety-controller-cleanup-started" ] && [ "$controller_cleanup_bounded_rc" -eq 2 ] \
-   && grep -qF "UNKNOWN: safety scan exceeded" <<<"$CONTROLLER_CLEANUP_BOUNDED"; then
-  ok "the safety deadline includes controller cleanup"
-else
-  bad "the safety deadline includes controller cleanup" \
-    "cleanup_started=$([ -e "$FIX/safety-controller-cleanup-started" ] && echo yes || echo no) rc=$controller_cleanup_bounded_rc"
-fi
-
-# A completed worker report is still unmeasured if the controller cannot read
-# its private report file. Simulate only that final read; every worker-side cat
-# delegates to the real command.
-mkdir -p "$FIX/safety-report-read-shim"
-cat > "$FIX/safety-report-read-shim/cat" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-  */.agtel_bounded.*/report) exit 1 ;;
-  *) exec "$SAFETY_TEST_CAT" "$@" ;;
-esac
-EOF
-chmod +x "$FIX/safety-report-read-shim/cat"
-REPORT_READ_FAILED=$(PATH="$FIX/safety-report-read-shim:$PATH" SAFETY_TEST_CAT="$safety_real_cat" \
-  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
-  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   bash "$TARGET" --since-days 3650 --safety-timeout-seconds 30 2>&1)
-report_read_failed_rc=$?
-check "a failed completed-report read is UNKNOWN" "$REPORT_READ_FAILED" \
-  "UNKNOWN: cannot read the completed safety report"
-if [ "$report_read_failed_rc" -eq 2 ]; then
-  ok "a failed completed-report read exits 2"
+controller_cleanup_bounded_rc=$?
+controller_cleanup_secs=$(( $(date +%s) - controller_cleanup_start ))
+if [ ! -e "$FIX/safety-controller-cleanup-started" ]; then sleep 1; fi
+if [ -e "$FIX/safety-controller-cleanup-started" ] && [ "$controller_cleanup_bounded_rc" -eq 0 ] \
+   && [ "$controller_cleanup_secs" -lt 8 ] \
+   && grep -qF "END TELEMETRY" <<<"$CONTROLLER_CLEANUP_BOUNDED"; then
+  ok "asynchronous controller cleanup cannot hold the report open"
 else
-  bad "a failed completed-report read exits 2" "rc=$report_read_failed_rc"
+  bad "asynchronous controller cleanup cannot hold the report open" \
+    "cleanup_started=$([ -e "$FIX/safety-controller-cleanup-started" ] && echo yes || echo no) rc=$controller_cleanup_bounded_rc elapsed=${controller_cleanup_secs}s"
 fi
 
 mkdir -p "$FIX/safety-empty-worker"
@@ -3228,6 +3219,33 @@ EMPTY_WORKER=$(PATH="$FIX/safety-empty-worker:$PATH" CLAUDE_PROJECTS_DIR="$FIX/c
   /bin/bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
 check "a zero-exit worker without a completion sentinel is UNKNOWN" "$EMPTY_WORKER" "UNKNOWN: the safety worker failed"
 nocheck "a zero-exit worker without a sentinel cannot print a clean table" "$EMPTY_WORKER" "TOTAL occurrences: 0"
+
+mkdir -p "$FIX/safety-empty-complete-worker"
+cat > "$FIX/safety-empty-complete-worker/bash" <<'EOF'
+#!/bin/bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ]; then
+  if [ -n "${AGENT_TELEMETRY_SAFETY_STATUS:-}" ]; then
+    printf '0\n' > "$AGENT_TELEMETRY_SAFETY_STATUS"
+  else
+    printf '__AGENT_TELEMETRY_SAFETY_COMPLETE__:0\n'
+  fi
+  exit 0
+fi
+exec /bin/bash "$@"
+EOF
+chmod +x "$FIX/safety-empty-complete-worker/bash"
+EMPTY_COMPLETE=$(PATH="$FIX/safety-empty-complete-worker:$PATH" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  /bin/bash "$TARGET" --since-days 3650 --safety-timeout-seconds 30 2>&1)
+empty_complete_rc=$?
+if [ "$empty_complete_rc" -eq 2 ] \
+   && grep -qF "UNKNOWN: the safety worker failed" <<<"$EMPTY_COMPLETE" \
+   && grep -qF "END TELEMETRY" <<<"$EMPTY_COMPLETE"; then
+  ok "a completed empty full-report safety worker is UNKNOWN"
+else
+  bad "a completed empty full-report safety worker is UNKNOWN" "rc=$empty_complete_rc"
+fi
 
 # Interrupts must come from the structured flag, not prose quoting it.
 mkdir -p "$FIX/interrupt"

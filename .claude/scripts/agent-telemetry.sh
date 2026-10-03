@@ -191,8 +191,34 @@ emit_safety_unknown() {
 }
 
 run_safety_early() (
-  local worker_pid='' watchdog_pid='' worker_rc=0 watchdog_rc=0
-  local report='' status_line='' payload='' args=()
+  local standalone=${1:-1} worker_pid='' watchdog_pid='' worker_rc=0 watchdog_rc=0
+  local worker_tmp='' report='' status_line='' payload='' args=()
+  early_cleanup_async() {
+    local cleanup_dir=${1:-} path
+    [ -n "$cleanup_dir" ] || return 0
+    case "$cleanup_dir" in
+      "${TMPDIR:-/tmp}"/.agtel_worker.*) ;;
+      *) return 1 ;;
+    esac
+    (
+      trap - EXIT INT TERM
+      trap '' HUP
+      [ -d "$cleanup_dir" ] && [ ! -L "$cleanup_dir" ] || exit 0
+      for path in "$cleanup_dir"/.agtel_* "$cleanup_dir"/xcrun_db; do
+        if [ ! -e "$path" ] && [ ! -L "$path" ]; then continue; fi
+        if [ -d "$path" ] && [ ! -L "$path" ]; then
+          case "$path" in
+            "$cleanup_dir"/.agtel_bounded.*)
+              rm -f "$path/status" "$path/report" "$path/worker-status"
+              rmdir "$path" 2>/dev/null || true ;;
+          esac
+        else
+          rm -f "$path"
+        fi
+      done
+      rmdir "$cleanup_dir" 2>/dev/null || true
+    ) >/dev/null 2>&1 &
+  }
   early_cleanup() {
     if [ -n "$watchdog_pid" ]; then
       kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
@@ -204,18 +230,25 @@ run_safety_early() (
       kill -KILL -- "-$worker_pid" 2>/dev/null || true
       wait "$worker_pid" 2>/dev/null || true
     fi
+    if [ -n "$worker_tmp" ]; then
+      early_cleanup_async "$worker_tmp" || true
+    fi
   }
   trap early_cleanup EXIT
   trap 'exit 130' HUP INT TERM
   args=(--section safety --since-days "$SINCE_DAYS" --max-files "$MAX_FILES" --instances "$INSTANCES")
   [ "$INJECTION_PROVENANCE" -eq 0 ] || args+=(--injection-provenance)
   [ "$CREDENTIAL_PROVENANCE" -eq 0 ] || args+=(--credential-provenance)
+  worker_tmp="${TMPDIR:-/tmp}/.agtel_worker.${BASHPID:-$$}.${RANDOM}${RANDOM}${RANDOM}${RANDOM}"
   set -m
   (
     set +m
     trap - EXIT HUP INT TERM
-    report=$(AGENT_TELEMETRY_SAFETY_WORKER=1 \
-      AGENT_TELEMETRY_SAFETY_STANDALONE=1 \
+    umask 077
+    AGENT_TELEMETRY_SAFETY_CONTROLLER=1 mkdir -m 700 "$worker_tmp" || exit 3
+    report=$(TMPDIR="$worker_tmp" \
+      AGENT_TELEMETRY_SAFETY_WORKER=1 \
+      AGENT_TELEMETRY_SAFETY_STANDALONE="$standalone" \
       bash +x "$0" "${args[@]}" 2>/dev/null)
     worker_rc=$?
     case "$worker_rc" in 0|2) ;; *) exit 3 ;; esac
@@ -223,6 +256,8 @@ run_safety_early() (
     [ "$status_line" = "${SAFETY_COMPLETE_SENTINEL}${worker_rc}" ] || exit 3
     payload=${report%$'\n'*}
     [ "$payload" != "$report" ] || exit 3
+    [ -n "$payload" ] || exit 3
+    case "$payload" in *'── SAFETY (guardrails)'*) ;; *) exit 3 ;; esac
     printf '%s\n' "$payload"
     exit "$worker_rc"
   ) &
@@ -240,6 +275,8 @@ run_safety_early() (
   kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
   wait "$watchdog_pid" 2>/dev/null || watchdog_rc=$?
   watchdog_pid=''
+  early_cleanup_async "$worker_tmp" || true
+  worker_tmp=''
   if [ "$watchdog_rc" -eq 0 ]; then
     exit 124
   fi
@@ -247,8 +284,8 @@ run_safety_early() (
 )
 
 run_safety_early_and_emit() {
-  local report rc
-  report=$(run_safety_early)
+  local standalone=${1:-1} report rc
+  report=$(run_safety_early "$standalone")
   rc=$?
   case "$rc" in
     0|2) printf '%s\n' "$report"; return "$rc" ;;
@@ -258,7 +295,7 @@ run_safety_early_and_emit() {
 }
 
 if [ "$SAFETY_WORKER" = 0 ] && [ "$SECTION" = safety ]; then
-  run_safety_early_and_emit
+  run_safety_early_and_emit 1
   exit $?
 fi
 
@@ -2228,181 +2265,13 @@ populate_session_cache() {
   ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
 }
 
-# Run safety in its own process group. The nested worker records its report
-# status in the private controller directory. After the worker and its EXIT
-# cleanup finish, the wrapper reads the complete redacted report into memory,
-# streams prefixed data lines, removes the private artifacts, and only then
-# sends one terminal status through the still-open FIFO. The controller does
-# not emit any line until that terminal status arrives inside the original
-# deadline, so stalled report I/O or cleanup stays bounded and partial output
-# is discarded. The child PID remains unreaped until the controller chooses
-# completion or cancellation, so it cannot be reused while its process group
-# is signalled.
-run_safety_bounded() (
-  local bounded_dir='' worker_pid='' watchdog_pid='' worker_rc=0 result=''
-  local report='' line='' current_line='' report_lines=0 args=()
-  umask 077
-  bounded_unknown() {
-    echo
-    echo "── SAFETY (guardrails) ──────────────────────────────────────────"
-    echo "  scope: capped mtime-selected files; older resumed records are included."
-    echo "         This is a superset, not a record-time-bounded scan."
-    echo "  UNKNOWN: $1"
-    echo "  The entire selected safety scope is UNMEASURED; no clean verdict follows."
-    echo "  Credential, instruction, denial and untrusted-build coverage are UNKNOWN."
-    echo "  Partial worker output is discarded; skipped or truncated scope stays UNKNOWN."
-  }
-  bounded_cleanup() {
-    if [ -n "$watchdog_pid" ]; then
-      kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
-      kill -KILL -- "-$watchdog_pid" 2>/dev/null || true
-      wait "$watchdog_pid" 2>/dev/null || true
-    fi
-    if [ -n "$worker_pid" ]; then
-      kill -TERM -- "-$worker_pid" 2>/dev/null || true
-      kill -KILL -- "-$worker_pid" 2>/dev/null || true
-      wait "$worker_pid" 2>/dev/null || true
-    fi
-    exec 9>&- 9<&-
-    if [ -n "$bounded_dir" ]; then
-      rm -f "$bounded_dir/status" "$bounded_dir/report" "$bounded_dir/worker-status"
-      rmdir "$bounded_dir" 2>/dev/null || true
-    fi
-  }
-  bounded_cleanup_async() {
-    local cleanup_dir=$1
-    (
-      trap - EXIT INT TERM
-      trap '' HUP
-      exec 9>&- 9<&-
-      rm -f "$cleanup_dir/status" "$cleanup_dir/report" "$cleanup_dir/worker-status"
-      rmdir "$cleanup_dir" 2>/dev/null || true
-    ) >/dev/null 2>&1 &
-  }
-  trap bounded_cleanup EXIT
-  trap 'exit 130' HUP INT TERM
-  bounded_dir=$(mktemp -d "${TMPDIR:-/tmp}/.agtel_bounded.XXXXXXXX") || { bounded_unknown 'cannot allocate a private safety controller.'; exit 2; }
-  mkfifo -m 600 "$bounded_dir/status" || { bounded_unknown 'cannot establish the safety completion channel.'; exit 2; }
-  exec 9<>"$bounded_dir/status" || { bounded_unknown 'cannot open the safety completion channel.'; exit 2; }
-  args=(--section safety --since-days "$SINCE_DAYS" --max-files "$MAX_FILES" --instances "$INSTANCES")
-  [ "$INJECTION_PROVENANCE" -eq 0 ] || args+=(--injection-provenance)
-  [ "$CREDENTIAL_PROVENANCE" -eq 0 ] || args+=(--credential-provenance)
-  set -m
-  (
-    set +m
-    sleep "$SAFETY_TIMEOUT_SECONDS"
-    printf 'timeout\n' >&9
-  ) &
-  watchdog_pid=$!
-  (
-    set +m
-    trap - EXIT HUP INT TERM
-    AGENT_TELEMETRY_SAFETY_WORKER=1 \
-      AGENT_TELEMETRY_SAFETY_STATUS="$bounded_dir/worker-status" \
-      bash +x "$0" "${args[@]}" > "$bounded_dir/report" 2>/dev/null
-    worker_rc=$?
-    result='missing'
-    if [ -r "$bounded_dir/worker-status" ]; then
-      IFS= read -r result < "$bounded_dir/worker-status" || result='missing'
-    fi
-    protocol="done:${result}:${worker_rc}"
-    if ! report=$(cat "$bounded_dir/report"); then
-      protocol="error:report:${result}:${worker_rc}"
-    else
-      while IFS= read -r line; do
-        while [ "${#line}" -gt 512 ]; do
-          printf 'chunk:%s\n' "${line:0:512}" >&9 || exit 3
-          line=${line:512}
-        done
-        printf 'line:%s\n' "$line" >&9 || exit 3
-      done <<< "$report"
-    fi
-    cleanup_ok=1
-    rm -f "$bounded_dir/status" "$bounded_dir/report" "$bounded_dir/worker-status" || cleanup_ok=0
-    rmdir "$bounded_dir" 2>/dev/null || cleanup_ok=0
-    if [ "$cleanup_ok" -eq 0 ]; then
-      protocol="error:cleanup:${result}:${worker_rc}"
-    fi
-    printf '%s\n' "$protocol" >&9
-    exit "$worker_rc"
-  ) &
-  worker_pid=$!
-  while :; do
-    if ! IFS= read -r result <&9; then
-      bounded_dir=''
-      bounded_unknown 'the safety completion channel failed.'
-      exit 2
-    fi
-    case "$result" in
-      timeout)
-        wait "$watchdog_pid" 2>/dev/null || true
-        watchdog_pid=''
-        kill -TERM -- "-$worker_pid" 2>/dev/null || true
-        kill -KILL -- "-$worker_pid" 2>/dev/null || true
-        wait "$worker_pid" 2>/dev/null || true
-        worker_pid=''
-        # The advertised deadline has expired, so repeating cleanup in this
-        # process would make UNKNOWN unbounded if the temporary filesystem is
-        # stalled. Hand the known private paths to a detached child instead;
-        # it closes the controller FIFO and cannot hold the report pipe open.
-        bounded_cleanup_async "$bounded_dir"
-        bounded_dir=''
-        bounded_unknown "safety scan exceeded the ${SAFETY_TIMEOUT_SECONDS}s time limit."
-        exit 2 ;;
-      chunk:*)
-        current_line="${current_line}${result#chunk:}" ;;
-      line:*)
-        current_line="${current_line}${result#line:}"
-        if [ "$report_lines" -eq 0 ]; then
-          report=$current_line
-        else
-          report="${report}"$'\n'"${current_line}"
-        fi
-        current_line=''
-        report_lines=$((report_lines + 1)) ;;
-      error:report:*)
-        kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
-        wait "$watchdog_pid" 2>/dev/null || true
-        watchdog_pid=''
-        wait "$worker_pid" 2>/dev/null || worker_rc=$?
-        worker_pid=''
-        bounded_dir=''
-        bounded_unknown 'cannot read the completed safety report.'
-        exit 2 ;;
-      error:cleanup:*)
-        kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
-        wait "$watchdog_pid" 2>/dev/null || true
-        watchdog_pid=''
-        wait "$worker_pid" 2>/dev/null || worker_rc=$?
-        worker_pid=''
-        bounded_dir=''
-        bounded_unknown 'cannot remove the completed safety report artifacts.'
-        exit 2 ;;
-      done:*)
-        kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
-        wait "$watchdog_pid" 2>/dev/null || true
-        watchdog_pid=''
-        wait "$worker_pid" 2>/dev/null || worker_rc=$?
-        worker_pid=''
-        bounded_dir=''
-        result=${result#done:}
-        if [ "$result" = 0:0 ] && [ "$worker_rc" -eq 0 ]; then
-          printf '%s\n' "$report"
-          exit 0
-        elif [ "$result" = 2:2 ] && [ "$worker_rc" -eq 2 ]; then
-          printf '%s\n' "$report"
-          exit 2
-        else
-          bounded_unknown 'the safety worker failed; its measurements are incomplete.'
-          exit 2
-        fi ;;
-      *)
-        bounded_dir=''
-        bounded_unknown 'the safety worker returned a malformed completion stream.'
-        exit 2 ;;
-    esac
-  done
-)
+# Safety-only and default reports share one controller. Re-execution puts every
+# safety-specific setup operation, scan, report capture, and worker cleanup in
+# the same killable process group. The default report asks for section-only
+# output so its surrounding banner and footer remain owned by main().
+run_safety_bounded() {
+  run_safety_early_and_emit 0
+}
 
 # Everything the report prints goes through main(), whose entire stdout is piped
 # through redact() at the single call site below.
