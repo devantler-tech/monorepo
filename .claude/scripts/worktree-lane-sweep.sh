@@ -37,6 +37,7 @@ set -euo pipefail
 prog=worktree-lane-sweep
 lane_sweep_finished=0
 launch_lock=""
+launch_lock_owner=""
 lock_held=0
 # A reporter that exits 0 without having looked is worse than one that errors. Bash 3.2 reports
 # $? as 0 to an EXIT trap after a `set -u` abort, so completion is recorded explicitly: reaching
@@ -45,6 +46,7 @@ lock_held=0
 on_exit() {
   local rc=$?
   if [ "$lock_held" = 1 ]; then
+    rm -f -- "$launch_lock_owner" 2>/dev/null || true
     if ! rmdir -- "$launch_lock" 2>/dev/null; then
       printf '%s: UNKNOWN — cannot release launcher lock %s\n' "$prog" "$launch_lock" >&2
       rc=2
@@ -90,12 +92,15 @@ log="$dir/cleanup-$lane.log"
 started="$dir/cleanup-$lane.started"
 finished="$dir/cleanup-$lane.finished"
 launch_lock="$dir/cleanup-$lane.launch.lock"
+launch_lock_owner="$launch_lock/owner"
 stuck_after_seconds=21600
+stale_lock_after_seconds=300
 
 id_re='[0-9]{8}T[0-9]{6}Z-[0-9]+'
 at_re='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
 started_re="^id=($id_re) pid=([0-9]+) at=($at_re)$"
 finished_re="^id=($id_re) rc=([0-9]+) at=($at_re)$"
+lock_owner_re="^pid=([0-9]+) at=($at_re)$"
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -107,6 +112,15 @@ write_record() {
   printf '%s\n' "$2" >"$tmp" 2>/dev/null && mv -f "$tmp" "$1" 2>/dev/null && return 0
   rm -f "$tmp" 2>/dev/null || true
   return 1
+}
+
+# record_is_safe <path> — only a small, ordinary file can be read as runtime state. A FIFO,
+# device, symlink or unbounded file must not hold a pre-flight open while its launcher lock is held.
+record_is_safe() {
+  local bytes
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  bytes=$(wc -c <"$1" 2>/dev/null) || return 1
+  [ "$bytes" -le 512 ]
 }
 
 # elapsed_seconds <etime> — parse ps' portable [[dd-]hh:]mm:ss elapsed form.
@@ -125,7 +139,7 @@ elapsed_seconds() {
   case "$days:$hours:$minutes:$seconds" in
     *[!0-9:]*) return 1 ;;
   esac
-  SUPERVISOR_AGE_SECONDS=$((days * 86400 + hours * 3600 + minutes * 60 + seconds))
+  SUPERVISOR_AGE_SECONDS=$((10#$days * 86400 + 10#$hours * 3600 + 10#$minutes * 60 + 10#$seconds))
 }
 
 # supervisor_runs <pid> <id> — 0 when <pid> is this script supervising sweep <id>, 1 when the
@@ -158,12 +172,135 @@ supervisor_runs() {
   return 1
 }
 
+# launcher_runs <pid> — the same complete process-table proof for a lock owner. A recycled pid is
+# not a launcher, and an incomplete listing never permits recovery.
+launcher_runs() {
+  local process_table listed_pid elapsed command self_seen=0 target_seen=0
+  process_table=$(ps -A -ww -o pid= -o etime= -o command= 2>/dev/null) || return 2
+  [ -n "$process_table" ] || return 2
+  while read -r listed_pid elapsed command; do
+    [ -n "${listed_pid:-}" ] || continue
+    if [ "$listed_pid" = "$$" ]; then
+      case "$command" in *"$self_name"*) self_seen=1 ;; esac
+    fi
+    if [ "$listed_pid" = "$1" ]; then
+      case "$command" in *"$self_name start --lane $lane"*) target_seen=1 ;; esac
+    fi
+  done <<<"$process_table"
+  [ "$self_seen" = 1 ] || return 2
+  [ "$target_seen" = 1 ] && return 0
+  return 1
+}
+
+lock_is_stale() {
+  local modified now_epoch
+  if modified=$(stat -f %m "$launch_lock" 2>/dev/null); then :
+  elif modified=$(stat -c %Y "$launch_lock" 2>/dev/null); then :
+  else return 2
+  fi
+  now_epoch=$(date +%s) || return 2
+  [ $((now_epoch - modified)) -ge "$stale_lock_after_seconds" ]
+}
+
+remove_launch_lock() {
+  rm -f -- "$launch_lock_owner" 2>/dev/null || return 1
+  rmdir -- "$launch_lock" 2>/dev/null
+}
+
+acquire_launch_lock() {
+  local owner owner_pid state
+  if mkdir -- "$launch_lock" 2>/dev/null; then
+    write_record "$launch_lock_owner" "pid=$$ at=$(now)" \
+      || { rmdir -- "$launch_lock" 2>/dev/null || true; unknown "cannot record launcher ownership in $launch_lock_owner"; }
+    lock_held=1
+    return 0
+  fi
+
+  if record_is_safe "$launch_lock_owner"; then
+    owner=$(cat -- "$launch_lock_owner" 2>/dev/null) \
+      || unknown "cannot read launcher ownership in $launch_lock_owner"
+    if [[ "$owner" =~ $lock_owner_re ]]; then
+      owner_pid=${BASH_REMATCH[1]}
+      if launcher_runs "$owner_pid"; then state=0; else state=$?; fi
+      case "$state" in
+        0) unknown "another $lane sweep launcher (pid $owner_pid) holds $launch_lock" ;;
+        1) remove_launch_lock || unknown "dead launcher pid $owner_pid left an unrecoverable $launch_lock" ;;
+        *) unknown "cannot read the process table completely to verify launcher pid $owner_pid" ;;
+      esac
+    elif lock_is_stale; then
+      remove_launch_lock || unknown "stale malformed launcher lock cannot be removed: $launch_lock"
+    else
+      unknown "launcher ownership in $launch_lock_owner is malformed and not old enough to recover"
+    fi
+  elif lock_is_stale; then
+    remove_launch_lock || unknown "stale launcher lock cannot be removed: $launch_lock"
+  else
+    unknown "launcher lock $launch_lock has no safe owner record and is not old enough to recover"
+  fi
+
+  mkdir -- "$launch_lock" 2>/dev/null \
+    || unknown "another $lane sweep launcher acquired $launch_lock during recovery"
+  write_record "$launch_lock_owner" "pid=$$ at=$(now)" \
+    || { rmdir -- "$launch_lock" 2>/dev/null || true; unknown "cannot record launcher ownership in $launch_lock_owner"; }
+  lock_held=1
+}
+
+await_start_record() {
+  local attempt=0 record
+  while [ "$attempt" -lt 100 ]; do
+    if record_is_safe "$started"; then
+      record=$(cat -- "$started" 2>/dev/null) || record=""
+      if [[ "$record" =~ $started_re ]] \
+        && [ "${BASH_REMATCH[1]}" = "$id" ] && [ "${BASH_REMATCH[2]}" = "$$" ]; then
+        return 0
+      fi
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+sweep_pid=""
+# shellcheck disable=SC2329  # invoked by the signal handler below
+stop_sweep_group() {
+  local attempt=0
+  [ -n "$sweep_pid" ] || return 0
+  if kill -0 "$sweep_pid" 2>/dev/null; then
+    kill -TERM -- "-$sweep_pid" 2>/dev/null || kill -TERM "$sweep_pid" 2>/dev/null || true
+    while kill -0 "$sweep_pid" 2>/dev/null && [ "$attempt" -lt 50 ]; do
+      sleep 0.1
+      attempt=$((attempt + 1))
+    done
+    if kill -0 "$sweep_pid" 2>/dev/null; then
+      kill -KILL -- "-$sweep_pid" 2>/dev/null || kill -KILL "$sweep_pid" 2>/dev/null || true
+    fi
+  fi
+  wait "$sweep_pid" 2>/dev/null || true
+}
+
+# shellcheck disable=SC2329  # invoked by the TERM/INT/HUP trap below
+stop_supervised_sweep() {
+  trap - TERM INT HUP
+  stop_sweep_group
+  printf '=== lane sweep %s stopped %s: exit 143 ===\n' "$id" "$(now)"
+  write_record "$finished" "id=$id rc=143 at=$(now)" \
+    || unknown "cannot record the stopped sweep $id in $finished"
+  finish 143
+}
+
 if [ "$cmd" = __supervise ]; then
   # Detached, with stdout and stderr appended to the lane's log by the launcher.
   [[ "$id" =~ ^$id_re$ ]] || unknown "--id is malformed: '$id'"
+  await_start_record || unknown "start record handshake for sweep $id was not completed"
   printf '=== lane sweep %s started %s (lane %s) ===\n' "$id" "$(now)" "$lane"
-  rc=0
-  "$sweeper" apply 24 --lane "$lane" </dev/null || rc=$?
+  trap stop_supervised_sweep TERM INT HUP
+  set -m
+  "$sweeper" apply 24 --lane "$lane" </dev/null &
+  sweep_pid=$!
+  set +m
+  if wait "$sweep_pid"; then rc=0; else rc=$?; fi
+  trap - TERM INT HUP
   printf '=== lane sweep %s finished %s: exit %s ===\n' "$id" "$(now)" "$rc"
   write_record "$finished" "id=$id rc=$rc at=$(now)" \
     || unknown "cannot record the end of sweep $id in $finished"
@@ -188,11 +325,16 @@ report_previous() {
     printf '%s: no %s sweep on record — nothing shows the lane was ever swept\n' "$prog" "$lane"
     VERDICT=none; return 0
   fi
+  record_is_safe "$started" \
+    || { bad_record "non-regular or oversized sweep record in $started"; return 0; }
   s=$(cat -- "$started" 2>/dev/null) || { bad_record "cannot read $started"; return 0; }
   [[ "$s" =~ $started_re ]] || { bad_record "malformed sweep record in $started"; return 0; }
   s_id=${BASH_REMATCH[1]}; s_pid=${BASH_REMATCH[2]}; s_at=${BASH_REMATCH[3]}
   if [ -e "$finished" ]; then
-    if ! f=$(cat -- "$finished" 2>/dev/null); then
+    if ! record_is_safe "$finished"; then
+      bad_record "non-regular or oversized sweep record in $finished"
+      finish_record_bad=1
+    elif ! f=$(cat -- "$finished" 2>/dev/null); then
       bad_record "cannot read $finished"
       finish_record_bad=1
     elif [[ ! "$f" =~ $finished_re ]]; then
@@ -220,7 +362,7 @@ report_previous() {
       if [ "$finish_record_bad" = 1 ]; then
         printf '%s: not replacing the unreadable %s finish record while supervisor pid %s still runs\n' \
           "$prog" "$lane" "$s_pid"
-        VERDICT=record-running
+        VERDICT="record-running"
       elif (( SUPERVISOR_AGE_SECONDS >= stuck_after_seconds )); then
         printf '%s: the last %s sweep (%s, pid %s) is STUCK — its supervisor has run for six hours or more since %s; inspect %s, then if it is not making progress run `kill %s` and start again\n' \
           "$prog" "$lane" "$s_id" "$s_pid" "$s_at" "$log" "$s_pid"
@@ -246,10 +388,7 @@ report_previous() {
 # atomic mkdir or enters after the first releases it and observes the recorded supervisor.
 if [ "$cmd" = start ]; then
   mkdir -p -- "$dir" 2>/dev/null || unknown "cannot create $dir"
-  if ! mkdir -- "$launch_lock" 2>/dev/null; then
-    unknown "another $lane sweep launcher holds $launch_lock; retry after it finishes"
-  fi
-  lock_held=1
+  acquire_launch_lock
 fi
 
 report_previous
@@ -270,8 +409,11 @@ fi
 new_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 nohup bash "$self" __supervise --lane "$lane" --id "$new_id" >>"$log" 2>&1 </dev/null &
 pid=$!
-write_record "$started" "id=$new_id pid=$pid at=$(now)" \
-  || unknown "started sweep $new_id (pid $pid) but cannot record it in $started"
+if ! write_record "$started" "id=$new_id pid=$pid at=$(now)"; then
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  unknown "started supervisor $new_id (pid $pid) but cannot record it in $started; it was stopped before cleanup began"
+fi
 printf '%s: started the %s sweep %s (pid %s) detached — its output appends to %s\n' \
   "$prog" "$lane" "$new_id" "$pid" "$log"
 finish "$rc"

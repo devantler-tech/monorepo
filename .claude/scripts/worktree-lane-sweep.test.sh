@@ -203,9 +203,53 @@ if [ "$rc" -eq 1 ] && grep -q 'STUCK.*six hours' <<<"$out" \
    && [ "$(field claude started id)" = "$hang_id" ]; then
   ok "a six-hour supervisor is reported as stuck with a clear recovery step"
 else bad "a six-hour supervisor is reported as stuck with a clear recovery step" "rc=$rc $out"; fi
+
+# ps zero-pads elapsed fields; 08 and 09 must stay decimal rather than becoming invalid octal.
+cat >"$fx/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+record=$(cat "$HOME/.claude/worktree-cleanup-manifests/cleanup-claude.started")
+target_pid=$(sed -nE 's/.* pid=([0-9]+) .*/\1/p' <<<"$record")
+target_id=$(sed -nE 's/^id=([^ ]+) .*/\1/p' <<<"$record")
+printf '%s 00:08:09 bash %s __supervise --lane claude --id %s\n' \
+  "$target_pid" "$SUT_PATH" "$target_id"
+printf '%s 00:00:01 bash %s status --lane claude\n' "$FAKE_PS_SELF_PID" "$SUT_PATH"
+EOF
+out=$(HOME="$fx/home" PATH="$fx/bin:$PATH" SUT_PATH="$sut" \
+  bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" status --lane claude' 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && grep -q 'has been running since' <<<"$out"; then
+  ok "zero-padded elapsed fields are parsed as decimal"
+else bad "zero-padded elapsed fields are parsed as decimal" "rc=$rc $out"; fi
 rm -f "$fx/bin/ps"
 
-# The supervisor dies without recording an end, as on a kill or a host restart.
+# The documented recovery signal must stop the supervisor and its cleanup child before a restart.
+live_sweep_pid=''
+for f in "$fx"/pids/sweep-*; do
+  [ -f "$f" ] || continue
+  candidate=$(cat "$f")
+  kill -0 "$candidate" 2>/dev/null && live_sweep_pid=$candidate
+done
+kill "$hang_pid" 2>/dev/null
+i=0
+while { kill -0 "$hang_pid" 2>/dev/null || kill -0 "$live_sweep_pid" 2>/dev/null; } \
+  && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+if ! kill -0 "$hang_pid" 2>/dev/null && ! kill -0 "$live_sweep_pid" 2>/dev/null; then
+  ok "stopping a supervisor also stops its cleanup process"
+else
+  bad "stopping a supervisor also stops its cleanup process" \
+    "supervisor=$hang_pid child=$live_sweep_pid"
+  touch "$fx/release"
+fi
+
+# Start another hanging sweep so an untrappable crash still proves the unfinished-record path.
+rm -f "$fx/release" "$fx/hanging"
+mode hang
+run start --lane claude
+hang_id=$(field claude started id); hang_pid=$(field claude started pid)
+track claude
+wait_for "$fx/hanging" || bad "the replacement hanging sweep started" "$(cat "$log" 2>&1)"
+
+# The supervisor dies without recording an end, as on a kill -9 or a host restart.
 kill -9 "$hang_pid" 2>/dev/null
 for f in "$fx"/pids/sweep-*; do kill -9 "$(cat "$f")" 2>/dev/null; done
 i=0; while kill -0 "$hang_pid" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
@@ -253,6 +297,25 @@ run status --lane claude
 if [ "$rc" -eq 2 ] && grep -q 'malformed sweep record' <<<"$out"; then
   ok "a malformed start record is UNKNOWN (2)"
 else bad "a malformed start record is UNKNOWN (2)" "rc=$rc $out"; fi
+
+# Non-regular records are never read: a symlink to an endless device must return promptly.
+rm -f "$records/cleanup-claude.started"
+ln -s /dev/zero "$records/cleanup-claude.started"
+HOME="$fx/home" bash "$sut" status --lane claude >"$fx/nonregular.out" 2>&1 & probe=$!
+i=0
+while kill -0 "$probe" 2>/dev/null && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
+if kill -0 "$probe" 2>/dev/null; then
+  kill -9 "$probe" 2>/dev/null
+  wait "$probe" 2>/dev/null
+  bad "a non-regular start record returns UNKNOWN without blocking" "reporter hung on a symlink"
+else
+  wait "$probe"; probe_rc=$?
+  if [ "$probe_rc" -eq 2 ] && grep -q 'non-regular or oversized sweep record' "$fx/nonregular.out"; then
+    ok "a non-regular start record returns UNKNOWN without blocking"
+  else bad "a non-regular start record returns UNKNOWN without blocking" \
+    "rc=$probe_rc $(cat "$fx/nonregular.out")"; fi
+fi
+rm -f "$records/cleanup-claude.started"
 
 printf 'id=20261002T130000Z-2 pid=%s at=2026-10-02T13:00:00Z\n' "$dead" >"$records/cleanup-claude.started"
 printf 'id=20261002T130000Z-2 rc=0 at=2026-10-02T13:05:00Z\nid=20261002T130000Z-2 rc=0 at=2026-10-02T13:05:00Z\n' \
@@ -339,6 +402,31 @@ done
 rm -f "$fx/release" "$fx/hanging"
 mode ok
 
+# A killed launcher leaves an owner record in its atomic lock. A complete process read proving that
+# owner gone allows the next launcher to recover instead of disabling the lane forever.
+stale_home="$fx/stale-lock-home"
+stale_records="$stale_home/.claude/worktree-cleanup-manifests"
+mkdir -p "$stale_records/cleanup-codex.launch.lock" "$fx/bin"
+printf 'pid=999999 at=2026-10-02T12:00:00Z\n' \
+  >"$stale_records/cleanup-codex.launch.lock/owner"
+cat >"$fx/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s 00:00:01 bash %s start --lane codex\n' "$FAKE_PS_SELF_PID" "$SUT_PATH"
+EOF
+chmod +x "$fx/bin/ps"
+out=$(HOME="$stale_home" PATH="$fx/bin:$PATH" SUT_PATH="$sut" \
+  bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" start --lane codex' 2>&1); rc=$?
+rm -f "$fx/bin/ps"
+if [ "$rc" -eq 1 ] && grep -q 'started the codex sweep' <<<"$out"; then
+  ok "a dead launcher owner does not leave a permanent lock"
+else bad "a dead launcher owner does not leave a permanent lock" "rc=$rc $out"; fi
+stale_id=$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$stale_records/cleanup-codex.started" 2>/dev/null)
+i=0
+while [ "$i" -lt 100 ] && \
+  [ "$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$stale_records/cleanup-codex.finished" 2>/dev/null)" != "$stale_id" ]; do
+  sleep 0.1; i=$((i + 1))
+done
+
 # --- lanes are separate -----------------------------------------------------------
 run status --lane codex
 if [ "$rc" -eq 1 ] && grep -q 'no codex sweep on record' <<<"$out"; then
@@ -354,18 +442,57 @@ else bad "the codex lane sweeps only --lane codex, logged and recorded apart" \
   "$(cat "$records"/cleanup-codex.* 2>&1)"; fi
 
 # --- the supervisor and launcher fail closed --------------------------------------
-# The records' directory is a FILE, so no record can be written (independent of permissions,
-# which root ignores).
-mkdir -p "$fx/blocked/.claude"
-: >"$fx/blocked/.claude/worktree-cleanup-manifests"
-out=$(HOME="$fx/blocked" bash "$sut" __supervise --lane claude --id 20261002T140000Z-3 2>&1); rc=$?
+# The supervisor has a valid launcher handshake, but a directory at .finished keeps it from
+# recording the end (independent of permissions, which root ignores).
+supervisor_blocked="$fx/supervisor-blocked"
+supervisor_records="$supervisor_blocked/.claude/worktree-cleanup-manifests"
+mkdir -p "$supervisor_records/cleanup-claude.finished"
+out=$(HOME="$supervisor_blocked" SUT_PATH="$sut" bash -c '
+  printf "id=20261002T140000Z-3 pid=%s at=2026-10-02T14:00:00Z\n" "$$" \
+    >"$HOME/.claude/worktree-cleanup-manifests/cleanup-claude.started"
+  exec bash "$SUT_PATH" __supervise --lane claude --id 20261002T140000Z-3
+' 2>&1); rc=$?
 if [ "$rc" -eq 2 ] && grep -q 'cannot record the end of sweep 20261002T140000Z-3' <<<"$out"; then
   ok "a supervisor that cannot record the end exits UNKNOWN (2)"
 else bad "a supervisor that cannot record the end exits UNKNOWN (2)" "rc=$rc $out"; fi
+
+# The records' directory is a FILE, so a launcher cannot create records.
+mkdir -p "$fx/blocked/.claude"
+: >"$fx/blocked/.claude/worktree-cleanup-manifests"
 out=$(HOME="$fx/blocked" bash "$sut" start --lane claude 2>&1); rc=$?
 if [ "$rc" -eq 2 ] && grep -q 'cannot create' <<<"$out"; then
   ok "a start that cannot keep records is UNKNOWN (2)"
 else bad "a start that cannot keep records is UNKNOWN (2)" "rc=$rc $out"; fi
+
+# A supervisor cannot begin cleanup until the launcher has durably recorded it. If .started cannot
+# be replaced, the launcher must terminate the waiting supervisor rather than leave an invisible sweep.
+handshake_home="$fx/handshake-home"
+handshake_records="$handshake_home/.claude/worktree-cleanup-manifests"
+mkdir -p "$handshake_records/cleanup-claude.started"
+mode hang
+rm -f "$fx/release" "$fx/hanging"
+before=0
+for f in "$fx"/pids/sweep-*; do
+  [ -f "$f" ] || continue
+  candidate=$(cat "$f")
+  kill -0 "$candidate" 2>/dev/null && before=$((before + 1))
+done
+out=$(HOME="$handshake_home" bash "$sut" start --lane claude 2>&1); rc=$?
+sleep 0.3
+after=0
+for f in "$fx"/pids/sweep-*; do
+  [ -f "$f" ] || continue
+  candidate=$(cat "$f")
+  kill -0 "$candidate" 2>/dev/null && after=$((after + 1))
+done
+if [ "$rc" -eq 2 ] && grep -q 'cannot record' <<<"$out" && [ "$after" -eq "$before" ]; then
+  ok "a failed start-record handshake leaves no invisible cleanup"
+else
+  bad "a failed start-record handshake leaves no invisible cleanup" \
+    "rc=$rc live-before=$before live-after=$after $out"
+  touch "$fx/release"
+fi
+mode ok
 
 # --- the run's pre-flight uses the supervised start -------------------------------
 guide="$repo_root/.claude/guides/git-and-worktrees.md"
