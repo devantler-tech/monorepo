@@ -155,11 +155,15 @@ card.
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
 5. **Sweep your own lane, then check disk space** — the
    [git-and-worktrees guide](../../guides/git-and-worktrees.md)'s *Pre-flight, every run* has the
-   commands. (a) Start `worktree-cleanup-all.sh apply 24 --lane <your lane>` **detached in the
-   background**, appending to the lane's log; never wait on it or poll it, and never pass another
-   lane. (b) Run `disk-preflight.sh`. On `1`, run `build-cache-reclaim.sh apply` once and re-check; if
-   it is still `1`, or it is `2`, do no builds, tests or cluster work this run, record it in
-   `needs_attention`, and escalate per *Maintainer channels*.
+   commands. (a) Run `worktree-lane-sweep.sh start --lane <your lane>`: it starts the sweep
+   **detached in the background** and reports how the lane's previous sweep ended. Never wait on
+   the sweep or poll it, and never pass another lane. Exit `1` means the previous sweep failed,
+   never finished, is still running or no sweep is on record; exit `2` means its state cannot be
+   read or the launcher failed. Record either in `needs_attention` and escalate when it persists;
+   it does not block the run. (b) Run `disk-preflight.sh`. On `1`, run
+   `build-cache-reclaim.sh apply` once and re-check; if it is still `1`, or it is `2`, do no builds,
+   tests or cluster work this run, record it in `needs_attention`, and escalate per
+   *Maintainer channels*.
 
 ## 1. Survey (delegate to a read-only subagent — keep the JSON out of your context)
 > **Guides:** [work-selection](../../guides/work-selection.md) (rung details the digest is read
