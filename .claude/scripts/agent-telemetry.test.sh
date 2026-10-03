@@ -2956,6 +2956,43 @@ else
   bad "a provenance-only candidate failure exits 2" "rc=$provenance_failed_rc"
 fi
 
+# Safety-only mode must enter the watchdog before top-level setup allocates any
+# report scratch. The first mktemp call belongs to the worker; a parent call
+# would sit outside the deadline and a permanent stall could never emit UNKNOWN.
+mkdir -p "$FIX/safety-setup-timeout-shim"
+safety_real_mktemp=$(command -v mktemp)
+cat > "$FIX/safety-setup-timeout-shim/mktemp" <<'EOF'
+#!/usr/bin/env bash
+if [ ! -e "$SAFETY_SETUP_ONCE" ]; then
+  : > "$SAFETY_SETUP_ONCE"
+  if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ]; then
+    : > "$SAFETY_WORKER_SETUP_STARTED"
+  else
+    : > "$SAFETY_PARENT_SETUP_STARTED"
+  fi
+  sleep 4
+fi
+exec "$SAFETY_TEST_MKTEMP" "$@"
+EOF
+chmod +x "$FIX/safety-setup-timeout-shim/mktemp"
+rm -f "$FIX/safety-setup-once" "$FIX/safety-worker-setup-started" "$FIX/safety-parent-setup-started"
+SETUP_BOUNDED=$(PATH="$FIX/safety-setup-timeout-shim:$PATH" \
+  SAFETY_TEST_MKTEMP="$safety_real_mktemp" SAFETY_SETUP_ONCE="$FIX/safety-setup-once" \
+  SAFETY_WORKER_SETUP_STARTED="$FIX/safety-worker-setup-started" \
+  SAFETY_PARENT_SETUP_STARTED="$FIX/safety-parent-setup-started" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+setup_bounded_rc=$?
+if [ "$setup_bounded_rc" -eq 2 ] && [ -e "$FIX/safety-worker-setup-started" ] \
+   && [ ! -e "$FIX/safety-parent-setup-started" ] \
+   && grep -qF "UNKNOWN: safety scan exceeded" <<<"$SETUP_BOUNDED"; then
+  ok "the safety deadline starts before top-level setup"
+else
+  bad "the safety deadline starts before top-level setup" \
+    "parent_setup=$([ -e "$FIX/safety-parent-setup-started" ] && echo yes || echo no) worker_setup=$([ -e "$FIX/safety-worker-setup-started" ] && echo yes || echo no) rc=$setup_bounded_rc"
+fi
+
 # A bounded scan must never turn an interrupted worker into a clean report.
 mkdir -p "$FIX/safety-timeout-shim"
 cat > "$FIX/safety-timeout-shim/grep" <<'EOF'
@@ -3102,7 +3139,7 @@ REPORT_READ_BOUNDED=$(PATH="$FIX/safety-report-timeout-shim:$PATH" \
   SAFETY_TEST_CAT="$safety_real_cat" SAFETY_REPORT_READ_STARTED="$FIX/safety-report-read-started" \
   CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 1 2>&1)
 report_read_bounded_rc=$?
 if [ -e "$FIX/safety-report-read-started" ] && [ "$report_read_bounded_rc" -eq 2 ] \
    && grep -qF "UNKNOWN: safety scan exceeded" <<<"$REPORT_READ_BOUNDED"; then
@@ -3132,7 +3169,7 @@ CONTROLLER_CLEANUP_BOUNDED=$(PATH="$FIX/safety-controller-cleanup-shim:$PATH" \
   SAFETY_CONTROLLER_CLEANUP_STARTED="$FIX/safety-controller-cleanup-started" \
   CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 1 2>&1)
 controller_cleanup_bounded_rc=$?
 if [ -e "$FIX/safety-controller-cleanup-started" ] && [ "$controller_cleanup_bounded_rc" -eq 2 ] \
    && grep -qF "UNKNOWN: safety scan exceeded" <<<"$CONTROLLER_CLEANUP_BOUNDED"; then
@@ -3157,7 +3194,7 @@ chmod +x "$FIX/safety-report-read-shim/cat"
 REPORT_READ_FAILED=$(PATH="$FIX/safety-report-read-shim:$PATH" SAFETY_TEST_CAT="$safety_real_cat" \
   CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 30 2>&1)
+  bash "$TARGET" --since-days 3650 --safety-timeout-seconds 30 2>&1)
 report_read_failed_rc=$?
 check "a failed completed-report read is UNKNOWN" "$REPORT_READ_FAILED" \
   "UNKNOWN: cannot read the completed safety report"
