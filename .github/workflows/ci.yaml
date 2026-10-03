@@ -19,6 +19,7 @@ jobs:
     outputs:
       docs: ${{ steps.filter.outputs.docs }}
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
+      docs-npm-toolchain: ${{ steps.filter.outputs.docs-npm-toolchain }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
       cleanup-trap-fail-closed: ${{ steps.filter.outputs.cleanup-trap-fail-closed }}
@@ -113,6 +114,12 @@ jobs:
               # The contract test compares both workflow call sites.
               - '.github/workflows/audit-docs.yaml'
               - '.github/workflows/ci.yaml'
+            docs-npm-toolchain:
+              # The contract reads every workflow that installs, audits or publishes
+              # the site, including one a change adds.
+              - 'docs/package.json'
+              - 'docs/scripts/npm-toolchain.test.sh'
+              - '.github/workflows/**'
             active-projects:
               # The retired-link guard greps the WHOLE content tree, so it must
               # run for ANY content change — gating it on the two pages the
@@ -184,6 +191,17 @@ jobs:
               - '.claude/scripts/safe-clone.test.sh'
             cleanup-trap-fail-closed:
               - '.claude/scripts/cleanup-trap-fail-closed.test.sh'
+              # The scripts the test injects an abort into, so removing a sentinel re-runs it.
+              - '.claude/scripts/memory-backup.sh'
+              - '.claude/scripts/memory-hygiene.sh'
+              - '.claude/scripts/memory-rewrite.sh'
+              - '.claude/scripts/review-lane-health.sh'
+              - '.claude/scripts/claude-lane-liveness.sh'
+              - '.claude/scripts/renovate-dashboard-drift.sh'
+              - '.claude/scripts/pr-ownership-disclosure.sh'
+              - '.claude/scripts/comment-disclosure-drift.sh'
+              - '.claude/scripts/python-ban-guard.sh'
+              - '.claude/scripts/board-archive.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -374,6 +392,10 @@ jobs:
               - '.claude/scripts/comment-disclosure-drift.sh'
               - '.claude/scripts/comment-disclosure-drift.test.sh'
               - '.claude/scripts/comment-disclosure-drift-go/**'
+              # The surveyor's maintainer-comment classifier is a mode of this guard
+              # (monorepo#3163), so its wrapper and test run in the same job.
+              - '.claude/scripts/maintainer-comment-candidates.sh'
+              - '.claude/scripts/maintainer-comment-candidates.test.sh'
               # The sweep wrapper consumes this guard's findings, so its own test
               # belongs to the same gate: a change to either side can break the
               # consumption rule that decides which findings are real.
@@ -713,6 +735,9 @@ jobs:
               - '.claude/scripts/pr-body-contract.test.sh'
               - '.claude/scripts/pr-body-public-tlds.txt'
               - '.claude/scripts/portfolio-surveyor-forge-hook.sh'
+              # The hook refuses to run unless every helper it declares exists, and the test
+              # runs the overlay's worktree-holder pipeline through it (monorepo#3067).
+              - '.claude/scripts/pr-worktree-holder.sh'
               # The test diffs AGENTS.md blocks against committed fixtures. Without this path a
               # fixture-only commit skips the job entirely, so the mismatch assertion never runs on
               # exactly the fixture-only tampering those whitelists exist to catch.
@@ -809,6 +834,10 @@ jobs:
               # (monorepo#2838), so a change to it or its test re-runs this job.
               - '.claude/scripts/kata-measure-date.sh'
               - '.claude/scripts/kata-measure-date.test.sh'
+              # The overlay reads whether a live process holds a PR's local checkout only
+              # through this helper (monorepo#3067), so a change to it or its test re-runs this job.
+              - '.claude/scripts/pr-worktree-holder.sh'
+              - '.claude/scripts/pr-worktree-holder.test.sh'
               # A cask PR's draft fence is cleared only on this helper's RIPE verdict
               # (monorepo#2992), so a change to it or its test re-runs this job.
               - '.claude/scripts/release-cask-ripeness.sh'
@@ -868,7 +897,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: docs/package-lock.json
       - name: Install dependencies
@@ -895,13 +924,31 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
       - name: Test audit wrapper
         working-directory: docs
         run: ./scripts/audit-dependencies.test.sh
       - name: Audit
         working-directory: docs
         run: ./scripts/audit-dependencies.sh
+
+  # Every workflow that installs, audits or publishes the site must use the npm major that
+  # writes docs/package-lock.json. A job of its own, so a workflow-only change runs this
+  # static contract without the live dependency audit.
+  test-docs-npm-toolchain:
+    name: Test docs npm toolchain contract
+    needs: changes
+    if: needs.changes.outputs.docs-npm-toolchain == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test npm toolchain contract
+        run: bash docs/scripts/npm-toolchain.test.sh
 
   drift-check-active-projects:
     needs: changes
@@ -917,7 +964,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: docs/package-lock.json
       - name: Install MDX parser dependencies
@@ -1634,6 +1681,12 @@ jobs:
       # composer's real Bugbot output.
       - name: Verify the Bugbot request-marker check
         run: bash .claude/scripts/bugbot-request-marker.test.sh
+      # Hermetic: the surveyor's maintainer-comment classifier runs the guard above in its
+      # --candidates mode over local payloads, so this makes no API call (monorepo#3163).
+      - name: Verify the maintainer-comment candidate classifier
+        run: |
+          shellcheck .claude/scripts/maintainer-comment-candidates.sh .claude/scripts/maintainer-comment-candidates.test.sh
+          bash .claude/scripts/maintainer-comment-candidates.test.sh
 
   test-surveyor-forge-vocabulary:
     name: Test surveyor forge vocabulary conformance
@@ -2648,6 +2701,11 @@ jobs:
         run: |
           shellcheck .claude/scripts/kata-measure-date.sh .claude/scripts/kata-measure-date.test.sh
           bash .claude/scripts/kata-measure-date.test.sh
+      # Hermetic: real git fixture checkouts, with lsof and ps shimmed (monorepo#3067).
+      - name: Verify the PR worktree-holder probe
+        run: |
+          shellcheck .claude/scripts/pr-worktree-holder.sh .claude/scripts/pr-worktree-holder.test.sh
+          bash .claude/scripts/pr-worktree-holder.test.sh
       # Hermetic: judges synthetic casks and release objects, no API call (monorepo#2992).
       - name: Verify the release cask ripeness classifier
         run: |
@@ -2786,6 +2844,7 @@ jobs:
       - changes
       - build-docs
       - audit-docs
+      - test-docs-npm-toolchain
       - drift-check-active-projects
       - drift-check-renovate-dashboard
       - test-agent-telemetry
@@ -2873,6 +2932,7 @@ jobs:
             ${{ needs.changes.result }}
             ${{ needs.build-docs.result }}
             ${{ needs.audit-docs.result }}
+            ${{ needs.test-docs-npm-toolchain.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.drift-check-renovate-dashboard.result }}
             ${{ needs.test-agent-telemetry.result }}

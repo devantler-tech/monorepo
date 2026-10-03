@@ -101,7 +101,21 @@ if [[ "$max_shrink_pct" -lt 0 || "$max_shrink_pct" -gt 99 ]]; then
 fi
 
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/memory-rewrite.XXXXXX")"
-trap 'rm -rf "$workdir"' EXIT
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
+# cleanup then becomes the script's status. Completion is recorded explicitly, so reaching the end is
+# the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
+memory_rewrite_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+memory_rewrite_cleanup() {
+  local rc=$?
+  rm -rf "$workdir"
+  if [ "$memory_rewrite_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "memory-rewrite: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap memory_rewrite_cleanup EXIT
 
 new_path="$workdir/new"
 
@@ -208,4 +222,5 @@ cp "$new_path" "$swap"
 mv "$swap" "$file"
 
 printf 'memory-rewrite: ok file=%s backup=%s new_bytes=%s\n' "$file" "$backup_path" "$new_bytes"
+memory_rewrite_finished=1
 exit 0

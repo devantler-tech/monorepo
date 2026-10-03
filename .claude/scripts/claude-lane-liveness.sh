@@ -320,7 +320,21 @@ FILELIST=$(mktemp) || die_unknown "could not create a temporary file"
 TIMEREF=$(mktemp) || die_unknown "could not create a temporary file"
 UNPARSABLE=$(mktemp) || die_unknown "could not create a temporary file"
 
-trap 'rm -f "$SESSION_INDEX" "$FILELIST" "$TIMEREF" "$UNPARSABLE"' EXIT
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
+# cleanup then becomes the script's status. Completion is recorded explicitly, so reaching the end is
+# the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
+claude_lane_liveness_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+claude_lane_liveness_cleanup() {
+  local rc=$?
+  rm -f "$SESSION_INDEX" "$FILELIST" "$TIMEREF" "$UNPARSABLE"
+  if [ "$claude_lane_liveness_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "claude-lane-liveness: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap claude_lane_liveness_cleanup EXIT
 
 # `find -newermt @<epoch>` is GNU-only syntax. BSD find -- which is what /usr/bin/find is on the
 # deployment host -- rejects it outright with "Can't parse date/time", and with stderr suppressed
@@ -638,4 +652,5 @@ if [ "$any_unknown" -eq 1 ]; then
   printf 'claude-lane-liveness: UNKNOWN -- at least one task could not be judged.\n' >&2
   exit 2
 fi
+claude_lane_liveness_finished=1
 exit 0
