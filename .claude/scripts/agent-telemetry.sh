@@ -2013,6 +2013,14 @@ commands_in() {
          | gsub("\\\\n"; "\n") | gsub("\\\\t"; " ") | gsub("\\\\\""; "\""))
       )
     | select(type=="string") | select(length > 0)
+    # Every LINE carries a one-character marker: \u001e on the first line of a
+    # tool call, \u001f on each line after it. A reader that tracks state across
+    # lines needs to know where one call ends, because each call is its own
+    # shell parse (#3666). Marking every line, as tagged_commands_in does, is
+    # what keeps the boundary from being forged: command text that itself
+    # starts a line with \u001e still sits behind the \u001f that line carries.
+    | split("\n") | to_entries
+    | map((if .key == 0 then "\u001e" else "\u001f" end) + .value) | .[]
   ' "$f" 2>/dev/null
 }
 
@@ -4590,7 +4598,8 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     # like prose is LABELLED `[prose?]` and RANKED after every other candidate,
     # so it can no longer push a likely build out of the five rows shown, and a
     # wrong label changes only the order. Looks like prose means: once quoted
-    # text is removed (a "…" holding `$`, a backtick or an escape stays), no
+    # text is removed (a "…" holding an unescaped `$` or backtick stays, and
+    # quote state never crosses from one tool call into the next), no
     # pipe, redirect, substitution, group or function syntax is left; every
     # `;`/`&`-separated segment starts with `printf` (no options), `echo`, `cd`
     # or a text-only `gh pr`/`gh issue` subcommand; and the session never
@@ -4612,15 +4621,15 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
                 inert = "^(rtk[[:space:]]+)?(printf|echo|cd|gh[[:space:]]+(pr|issue)[[:space:]]+(create|edit|comment|view))([[:space:]]|$)"
               }
               # unquoted(line) reads one line left to right with the quote state
-              # (st, buf) CARRIED from the previous line, so a quote character
-              # inside the other kind of quote is literal and a multi-line string
-              # stays a string. It returns the line with quoted text blanked; a
-              # "…" holding `$`, a backtick or an escape, or a quote still open
-              # at the end of the line, leaves a backtick, which text_only rejects.
+              # (st, buf) CARRIED from the previous line of the same tool call,
+              # so a quote character inside the other kind of quote is literal
+              # and a multi-line string stays a string. It returns the line with
+              # quoted text blanked; a "…" holding an unescaped `$` or backtick,
+              # or a quote still open at the end of the line, leaves a backtick,
+              # which text_only rejects.
               function unquoted(line,   out, n, i, c, open) {
                 # A line that STARTS inside a carried quote is never exempt, so
-                # carried state (which may span two unrelated tool calls) can
-                # only add a candidate, never blank one away.
+                # carried state can only add a candidate, never blank one away.
                 out = ""; n = length(line); open = st != 0
                 for (i = 1; i <= n; i++) {
                   c = substr(line, i, 1)
@@ -4631,8 +4640,14 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
                     else out = out c
                   } else if (st == 1) {
                     if (c == sq) { st = 0; out = out " " }
-                  } else if (c == "\\") { buf = buf c; i++ }
-                  else if (c == "\"") { st = 0; out = out (buf ~ /[$]|`|\\/ ? "`" : " ") }
+                  } else if (c == "\\") {
+                    # Inside "…" a backslash makes the next character literal and
+                    # runs nothing, so neither is kept: `\$` and an escaped
+                    # backtick must not read as an expansion, and `\\` must not
+                    # hide the unescaped character after it.
+                    i++
+                  }
+                  else if (c == "\"") { st = 0; out = out (buf ~ /[$]|`/ ? "`" : " ") }
                   else buf = buf c
                 }
                 return st == 0 && !open ? out : out "`"
@@ -4651,7 +4666,13 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
               }
               # Lines are decided at the end, because a name-changing line
               # anywhere in the session removes the exemption for all of them.
+              # commands_in marks every line: \036 opens a tool call and \037
+              # continues one. A call is its own shell parse, so the quote state
+              # starts over at \036 and at nothing a command can write itself.
               {
+                mark = substr($0, 1, 1)
+                if (mark == "\036") st = 0
+                if (mark == "\036" || mark == "\037") $0 = substr($0, 2)
                 line[++n] = $0; res[n] = unquoted($0)
                 if ($0 ~ /(^|[^A-Za-z0-9_-])(alias|eval|source|enable|shopt|function|trap|builtin|BASH_ENV|BASH_FUNC[A-Za-z0-9_%]*|PROMPT_COMMAND|command_not_found_handle)([^A-Za-z0-9_-]|$)/ \
                     || $0 ~ /[(][[:space:]]*[)]/ || $0 ~ /(^|[^A-Za-z0-9_.\/-])[.][[:space:]]/) {
