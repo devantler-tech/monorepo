@@ -8110,6 +8110,116 @@ else
   bad "quote state does not cross a tool-call boundary, and a command cannot forge one" \
       "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -12 | LC_ALL=C tr '\036\037' '^_')"
 fi
+# The Codex `custom_tool_call` shape carries the command as a JS string literal inside source
+# text. mk_xraw takes that literal exactly as it stands between the quotes; mk_xcmd encodes a
+# command the way the real shape does. mk_xrun is mk_run for a Codex-only session.
+mk_xraw() { # $1 = the cmd literal as written in the JS source
+  jq -cn --arg ts "$MK_TS" --arg l "$1" \
+    '{type:"response_item",timestamp:$ts,payload:{type:"custom_tool_call",name:"exec",input:("const r = await tools.exec_command({\n  cmd: \"" + $l + "\",\n  yield_time_ms: 1000\n});")}}'
+}
+mk_xcmd() { mk_xraw "$(jq -rn --arg c "$1" '$c | @json | .[1:-1]')"; } # $1 = command
+mk_xrun() { # $1 = fixture name; stdin = the session's records; prints the safety section
+  local mk="$FIX/$1"
+  mkdir -p "$mk/projects" "$mk/codex/sessions" "$mk/nest"
+  { jq -cn --arg ts "$MK_TS" --arg cwd "$mk/nest" '{type:"session_meta",timestamp:$ts,payload:{cwd:$cwd}}'; cat; } \
+    > "$mk/codex/sessions/rollout-1.jsonl"
+  TZ=UTC CLAUDE_PROJECTS_DIR="$mk/projects" CODEX_HOME="$mk/codex" MONOREPO_DIR="$mk/nest" \
+    HOME="$mk" bash "$TARGET" --since-days 3650 --section safety 2>&1
+}
+# A backslash is only what the shell saw if the literal was decoded as the string it is. Undoing
+# three escapes by hand left a real backslash doubled, so `echo "a \" b" ; make x ; …` read as one
+# closed string around the build (#3666 review). Decoded exactly, the build counts and both of the
+# issue's shapes are still prose in this transcript shape.
+# shellcheck disable=SC2016
+MK_OUT=$({
+  mk_xcmd 'gh pr checkout 25'
+  mk_xcmd 'echo "a \" b" ; make x ; echo "c \" d"'
+  mk_xcmd 'echo "please make the report clearer\n"'
+  mk_xcmd "echo 'unfinished"
+  mk_xcmd "printf 'make the report clearer'"
+  mk_xcmd 'npm ci'
+} | mk_xrun makecodex)
+# A literal that is not also a JSON string cannot be decoded exactly: `\$` is `$` to JS, so this
+# command runs make, and `\x21` is `!`. Such a call keeps the earlier rule, under which any
+# backslash inside "…" counts, so neither is prose.
+# shellcheck disable=SC2016
+MK_OUT2=$({
+  mk_xcmd 'gh pr checkout 26'
+  mk_xraw 'echo \"version \$(make version)\"'
+  mk_xraw 'echo \"make the report clearer\x21\"'
+  mk_xcmd 'npm ci'
+} | mk_xrun makecodexraw)
+# shellcheck disable=SC2016
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qF '1 echo "a \" b" ; make x ; echo "c \" d"' <<<"$MK_OUT" \
+   && grep -qF '1 [prose?] echo "please make the report clearer\n"' <<<"$MK_OUT" \
+   && grep -qE "^ +1 \[prose\?\] printf 'make the report clearer'$" <<<"$MK_OUT" \
+   && grep -qE '^ +1 npm ci$' <<<"$MK_OUT2" \
+   && grep -qF '1 echo "version \$(make version)"' <<<"$MK_OUT2" \
+   && grep -qF '1 echo "make the report clearer\x21"' <<<"$MK_OUT2"; then
+  ok "a Codex command is decoded as the string it is; a literal that cannot be keeps every backslash counting"
+else
+  bad "a Codex command is decoded as the string it is; a literal that cannot be keeps every backslash counting" \
+      "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -12)"
+fi
+# An escape inside "…" is prose only where the line is all one shell reads. In a call of several
+# lines a second shell can read the line again, and `\$(…)` then runs: a heredoc into a shell,
+# a continuation line holding another shell's script, a backtick block, a group piped to a shell.
+# Each ran make when tried, so each keeps counting, in both transcript shapes.
+# shellcheck disable=SC2016
+MK_HEREDOC=$(printf 'bash <<EOF\necho "version: \\$(make version)"\nEOF')
+MK_REMOTE=$(printf 'ssh build-host \\\n"cd \\"my repo\\" && make build"')
+# shellcheck disable=SC2016
+MK_BACKTICKS=$(printf 'x=`\necho "\\$(make check)"\n`')
+# shellcheck disable=SC2016
+MK_PIPED=$(printf '{\necho "\\$(make lint)"\n} | bash')
+MK_OUT=$({
+  mk_cmd l1 'gh pr checkout 27'
+  mk_cmd l2 "$MK_HEREDOC"
+  mk_cmd l3 "$MK_REMOTE"
+  mk_cmd l4 "$MK_BACKTICKS"
+  mk_cmd l5 "$MK_PIPED"
+} | mk_run makelayers)
+MK_OUT2=$({
+  mk_xcmd 'gh pr checkout 28'
+  mk_xcmd "$MK_HEREDOC"
+  mk_xcmd "$MK_REMOTE"
+  mk_xcmd "$MK_BACKTICKS"
+  mk_xcmd "$MK_PIPED"
+} | mk_xrun makecodexlayers)
+mk_layers_ok=1
+for mk_out in "$MK_OUT" "$MK_OUT2"; do
+  # shellcheck disable=SC2016
+  for mk_row in '1 echo "version: \$(make version)"' '1 "cd \"my repo\" && make build"' '1 echo "\$(make check)"' '1 echo "\$(make lint)"'; do
+    grep -qF -- "$mk_row" <<<"$mk_out" || mk_layers_ok=0
+  done
+  ! grep -qF '[prose?]' <<<"$mk_out" || mk_layers_ok=0
+done
+if [ "$mk_layers_ok" -eq 1 ]; then
+  ok "a line a second shell may read again keeps counting: heredoc, continuation, backtick block, piped group"
+else
+  bad "a line a second shell may read again keeps counting: heredoc, continuation, backtick block, piped group" \
+      "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -12)"
+fi
+# What a call of several lines does NOT change: plain prose on one of its lines is still prose,
+# as before. A line joined to the one before it by a backslash never is, even with no escape in
+# it, because it is an argument of that command; and escaped prose there keeps counting.
+MK_OUT=$({
+  mk_cmd j1 'gh pr checkout 29'
+  mk_cmd j2 "$(printf 'ssh build-host \\\n"make deploy"')"
+  mk_cmd j3 "$(printf 'cd sub\necho "please make the summary clearer\\n"')"
+  mk_cmd j4 "$(printf 'cd sub\nprintf %s' "'make the report clearer'")"
+  mk_cmd j5 'npm ci'
+} | mk_run makejoined)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 "make deploy"$' <<<"$MK_OUT" \
+   && grep -qF '1 echo "please make the summary clearer\n"' <<<"$MK_OUT" \
+   && grep -qE "^ +1 \[prose\?\] printf 'make the report clearer'$" <<<"$MK_OUT"; then
+  ok "in a call of several lines plain prose is still prose; a joined line and escaped prose keep counting"
+else
+  bad "in a call of several lines plain prose is still prose; a joined line and escaped prose keep counting" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
 
 # walk ~ section ~ literal to break ~ its mutation ~ line proving the walk read something
 while IFS='~' read -r wx_walk wx_sec wx_old wx_new wx_signal; do
