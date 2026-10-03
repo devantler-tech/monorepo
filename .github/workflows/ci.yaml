@@ -202,6 +202,11 @@ jobs:
               - '.claude/scripts/comment-disclosure-drift.sh'
               - '.claude/scripts/python-ban-guard.sh'
               - '.claude/scripts/board-archive.sh'
+              - '.claude/scripts/blocked-label-blocker-line.sh'
+              - '.claude/scripts/board-add.sh'
+              - '.claude/scripts/pr-body-contract.sh'
+              - '.claude/scripts/plugin-definition-refresh.sh'
+              - '.claude/scripts/safe-clone.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'

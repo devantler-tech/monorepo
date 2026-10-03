@@ -94,7 +94,21 @@ case "${repo}" in
 esac
 
 work_dir="$(mktemp -d)"
-trap 'rm -rf "${work_dir}"' EXIT
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
+# cleanup then becomes the script's status. Completion is recorded explicitly, so reaching a
+# verdict is the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
+pr_body_contract_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+pr_body_contract_cleanup() {
+  local rc=$?
+  rm -rf "${work_dir}"
+  if [ "$pr_body_contract_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "pr-body contract: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap pr_body_contract_cleanup EXIT
 file_name_words="${work_dir}/file-name-words"
 
 strip_comments() {
@@ -1041,3 +1055,4 @@ case "${command_name}" in
     ;;
   *) usage ;;
 esac
+pr_body_contract_finished=1
