@@ -295,7 +295,13 @@ governs the issue work that follows.) Two rules enforce that:
    its channel and date to the actual delivery. The check reads every open issue, not only labelled
    ones, so an `UNLABELLED` row is an issue whose `**Blocker:**` line declares a blocker while it
    carries no `blocked` label: re-verify that blocker, then label it with a conforming line or
-   unblock it (`**Blocker:** none` declares no blocker and is never reported). Exit `1` means findings, `2` means
+   unblock it (`**Blocker:** none` declares no blocker and is never reported). An `UNRECORDED` row
+   is an open `type:Security` issue that nobody has started for more than 7 days
+   (`--unrecorded-max-age-days`) and that carries no reason for it: no assignee, no open sub-issue
+   and no open pull request mentioning it, and no `blocked` label, `**Blocker:**` line or open
+   native blocker (monorepo#3415). Rung 2 outranks every other issue, so it was passed over, and
+   only a run's memory says why: apply the completion check and start it, or record what blocks it
+   under (b) or (g). Exit `1` means findings, `2` means
    UNKNOWN — a failed or timed-out read, never a clean sweep.
    ⚠️ **Verify before repairing.** Adding a well-formed line to an issue whose dependency has already
    shipped makes the skip look *more* legitimate on every future tick, which is worse than the

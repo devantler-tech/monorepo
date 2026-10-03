@@ -260,11 +260,13 @@ fi
 
 # CONTROL: the same mocked page WITHOUT the timeout flag must be evaluated normally, so the
 # case above is proven to turn on incomplete_results rather than on the mock being rejected.
+# The org read is two reads (#3415): the open issues, then the open pull requests.
 cat >"$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
-cat <<'JSON'
-{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"labels":[{"name":"blocked"}],"body":"no blocker line"}]}
-JSON
+case "$*" in
+  *is:pr*) echo '{"total_count":0,"incomplete_results":false,"items":[]}' ;;
+  *) echo '{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"labels":[{"name":"blocked"}],"type":null,"body":"no blocker line"}]}' ;;
+esac
 EOF
 chmod +x "$TMP/bin/gh"
 OUT="$(PATH="$TMP/bin:$PATH" "$CHECK" --org devantler-tech 2>&1)"
@@ -273,6 +275,24 @@ if [ "$RC" = 1 ] && grep -q 'MISSING' <<<"$OUT"; then
   ok "control: the same page without the flag is evaluated normally"
 else
   bad "control: the same page without the flag is evaluated normally" "rc=$RC; out: ${OUT:0:200}"
+fi
+
+# The pull-request read decides which issues are in flight, so it fails closed like the issue
+# read: a failure there is UNKNOWN, never a report built from the issues alone.
+cat >"$TMP/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *is:pr*) exit 1 ;;
+  *) echo '{"total_count":0,"incomplete_results":false,"items":[]}' ;;
+esac
+EOF
+chmod +x "$TMP/bin/gh"
+OUT="$(PATH="$TMP/bin:$PATH" "$CHECK" --org devantler-tech 2>&1)"
+RC=$?
+if [ "$RC" = 2 ] && grep -q 'UNKNOWN' <<<"$OUT"; then
+  ok "a failed pull-request read is UNKNOWN(2), not a clean sweep"
+else
+  bad "a failed pull-request read is UNKNOWN(2), not a clean sweep" "rc=$RC; out: ${OUT:0:200}"
 fi
 
 # ------------------------------------------------------------------ 15. prose that LOOKS like an id
@@ -326,10 +346,12 @@ EOF
 chmod +x "$TMP/bin2/gh"
 : >"$TMP/argv.log"
 ARGV_LOG="$TMP/argv.log" PATH="$TMP/bin2:$PATH" "$CHECK" --org devantler-tech >/dev/null 2>&1
-if grep -q 'archived:false' "$TMP/argv.log"; then
-  ok "the org query excludes archived repositories"
+# Both reads, the issues and the pull requests, must carry the qualifier.
+if [ "$(grep -c 'archived:false' "$TMP/argv.log")" = 2 ] && [ "$(grep -c . "$TMP/argv.log")" = 2 ] &&
+  grep -q 'is:issue' "$TMP/argv.log" && grep -q 'is:pr' "$TMP/argv.log"; then
+  ok "both org queries exclude archived repositories"
 else
-  bad "the org query excludes archived repositories" "argv: $(cat "$TMP/argv.log")"
+  bad "both org queries exclude archived repositories" "argv: $(cat "$TMP/argv.log")"
 fi
 
 # ------------------------------------------------------------------ 18. a URL is not an identifier
@@ -790,6 +812,30 @@ cat >"$TMP/unlabelled.json" <<'EOF'
 EOF
 OUT="$("$WRAPPER" --quiet --input "$TMP/unlabelled.json" 2>&1)"; RC=$?
 if [ "$RC" = 1 ] && [ "$OUT" = 'UNLABELLED u#1  >>**Blocker:** maintainer authority: sign the release' ]; then ok "an unlabelled declared blocker is UNLABELLED, and none is skipped"; else bad "an unlabelled declared blocker is UNLABELLED, and none is skipped" "rc=$RC out=$OUT"; fi
+
+# A Security issue nobody has started, carrying neither the label nor a record, is its own
+# finding class (#3415): the reason it is being passed over lives only in a run's memory. The
+# Bug beside it is the same in every other respect and is not reported, because only Security
+# outranks every other issue whatever its age.
+parked_security='{"repo":"s","number":1,"labels":[],"type":{"name":"Security"},"created_at":"2026-09-01T00:00:00Z","assignees":[],"body":"plain work"}'
+same_but_a_bug='{"repo":"s","number":2,"labels":[],"type":{"name":"Bug"},"created_at":"2026-09-01T00:00:00Z","assignees":[],"body":"plain work"}'
+printf '[%s,%s]\n' "$parked_security" "$same_but_a_bug" >"$TMP/unrecorded.json"
+OUT="$("$WRAPPER" --quiet --input "$TMP/unrecorded.json" --today 2026-09-20 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && [ "$OUT" = 'UNRECORDED s#1  opened 2026-09-01, unstarted for 19 day(s) with no record' ]; then ok "an unstarted Security issue with no record is UNRECORDED, and a Bug is not"; else bad "an unstarted Security issue with no record is UNRECORDED, and a Bug is not" "rc=$RC out=$OUT"; fi
+# ABLATION: give the same issue one visible reason at a time and the row goes away, so it fires
+# for being unstarted and unrecorded, not for being a Security issue.
+printf '[%s,{"repo":"s","number":9,"labels":[],"pull_request":{},"body":"Part of #1"}]\n' "$parked_security" >"$TMP/unrecorded-in-flight.json"
+OUT="$("$WRAPPER" --quiet --input "$TMP/unrecorded-in-flight.json" --today 2026-09-20 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && [ -z "$OUT" ]; then ok "ABLATION: an open pull request that mentions it clears it"; else bad "ABLATION: an open pull request that mentions it clears it" "rc=$RC out=$OUT"; fi
+OUT="$("$WRAPPER" --quiet --input "$TMP/unrecorded.json" --today 2026-09-20 --unrecorded-max-age-days 19 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && [ -z "$OUT" ]; then ok "ABLATION: within the bound it is only new"; else bad "ABLATION: within the bound it is only new" "rc=$RC out=$OUT"; fi
+printf '[%s]\n' "${parked_security/\"body\":\"plain work\"/\"body\":\"**Blocker:** none — agent-actionable\"}" >"$TMP/unrecorded-none.json"
+OUT="$("$WRAPPER" --quiet --input "$TMP/unrecorded-none.json" --today 2026-09-20 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && [ -z "$OUT" ]; then ok "ABLATION: a record that declares no blocker is a record"; else bad "ABLATION: a record that declares no blocker is a record" "rc=$RC out=$OUT"; fi
+# An age that cannot be read is not shown to be within the bound: UNKNOWN, never a clean sweep.
+printf '[%s]\n' "${parked_security/2026-09-01T00:00:00Z/}" >"$TMP/unrecorded-undated.json"
+OUT="$("$WRAPPER" --input "$TMP/unrecorded-undated.json" --today 2026-09-20 2>&1)"; RC=$?
+if [ "$RC" = 2 ] && grep -q 'UNKNOWN' <<<"$OUT" && ! grep -q 'all 0 open' <<<"$OUT"; then ok "an unstarted Security issue of unreadable age is UNKNOWN"; else bad "an unstarted Security issue of unreadable age is UNKNOWN" "rc=$RC out=$OUT"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1
