@@ -127,6 +127,43 @@ if (assert_agent_definition_locations_prose "${telemetry_grant}" \
 fi
 agent_definition_locations_flat="${real_agent_definition_locations_flat}"
 
+extract_root_agent_definition_locations() {
+  awk '/^### Agent definition locations/ { inside = 1; print; next }
+       inside && /^### / { exit }
+       inside { print }'
+}
+root_agent_definition_locations_flat="$(
+  extract_root_agent_definition_locations <"${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${root_agent_definition_locations_flat}" ] ||
+  fail "could not extract root Agent definition locations, so its telemetry authority cannot be checked"
+assert_root_agent_definition_locations_prose() {
+  case "${root_agent_definition_locations_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+assert_root_agent_definition_locations_prose '.claude/scripts/agent-telemetry.sh' \
+  "root Agent definition locations does not grant the Agent Improver authority over the telemetry collector"
+
+# Negative control: a guide-level telemetry path must not mask its removal from the
+# always-on root authority list.
+real_root_agent_definition_locations_flat="${root_agent_definition_locations_flat}"
+root_agent_definition_locations_flat="$(
+  printf '%s\n' \
+    '### Agent definition locations' \
+    'No telemetry surface here.' \
+    '### Authority model' \
+    '## Agent definition locations' \
+    '`.claude/scripts/agent-telemetry.sh` remains in the guide.' |
+    extract_root_agent_definition_locations | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+if (assert_root_agent_definition_locations_prose '.claude/scripts/agent-telemetry.sh' \
+  "negative control rejected the root authority omission" >/dev/null 2>&1); then
+  fail "negative control: a guide-level telemetry path masked its removal from the root authority list"
+fi
+root_agent_definition_locations_flat="${real_root_agent_definition_locations_flat}"
+
 # The bundled SKILL.md is SYNCED from devantler-tech/agent-skills (it carries
 # metadata.github-repo and the update-agent-skills workflow re-pulls it), so an edit there
 # is silently reverted. The consumer listed it as an authoring surface until 2026-07-25,
