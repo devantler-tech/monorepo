@@ -157,8 +157,9 @@ card.
    [git-and-worktrees guide](../../guides/git-and-worktrees.md)'s *Pre-flight, every run* has the
    commands. (a) Run `worktree-lane-sweep.sh start --lane <your lane>`: it starts the sweep
    **detached in the background** and reports how the lane's previous sweep ended. Never wait on
-   the sweep or poll it, and never pass another lane. A `1` or `2` means the previous sweep failed,
-   never finished or cannot be read: record it in `needs_attention` and escalate when it persists;
+   the sweep or poll it, and never pass another lane. Exit `1` means the previous sweep failed,
+   never finished, is still running or no sweep is on record; exit `2` means its state cannot be
+   read or the launcher failed. Record either in `needs_attention` and escalate when it persists;
    it does not block the run. (b) Run `disk-preflight.sh`. On `1`, run
    `build-cache-reclaim.sh apply` once and re-check; if it is still `1`, or it is `2`, do no builds,
    tests or cluster work this run, record it in `needs_attention`, and escalate per

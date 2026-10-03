@@ -22,23 +22,35 @@
 # Usage: worktree-lane-sweep.sh start|status --lane claude|codex
 #   start   report the previous sweep, then start a new one detached
 #           (worktree-cleanup-all.sh apply 24 --lane <lane>) and return at once. While the
-#           previous sweep is still running, report that and start no second one. An
-#           unreadable record is reported, and a sweep still starts and replaces it.
+#           previous sweep is still running, report that and start no second one. A supervisor
+#           still present after six hours is reported as stuck with a recovery command, and also
+#           blocks a second sweep. An unreadable record is reported and replaced; an unreadable
+#           process table is UNKNOWN and starts nothing because running versus gone is unproven.
 #   status  report the previous sweep only.
 #
 # Exit codes: 0 the previous sweep finished cleanly · 1 it did not: it failed, never finished,
 # is still running, or no sweep is on record · 2 UNKNOWN (a usage error, an unreadable or
-# malformed record, or the new sweep could not be started or recorded). Only 0 is a clean sweep.
+# malformed record, an unreadable process table, or the new sweep could not be started or recorded).
+# Only 0 is a clean sweep.
 set -euo pipefail
 
 prog=worktree-lane-sweep
 lane_sweep_finished=0
+launch_lock=""
+lock_held=0
 # A reporter that exits 0 without having looked is worse than one that errors. Bash 3.2 reports
 # $? as 0 to an EXIT trap after a `set -u` abort, so completion is recorded explicitly: reaching
 # a deliberate exit is the only way a verdict leaves this script (the ci-job-wiring.sh pattern).
 # shellcheck disable=SC2329  # invoked by the EXIT trap below
 on_exit() {
   local rc=$?
+  if [ "$lock_held" = 1 ]; then
+    if ! rmdir -- "$launch_lock" 2>/dev/null; then
+      printf '%s: UNKNOWN — cannot release launcher lock %s\n' "$prog" "$launch_lock" >&2
+      rc=2
+    fi
+    lock_held=0
+  fi
   if [ "$lane_sweep_finished" != 1 ] && [ "$rc" -ne 2 ]; then
     printf '%s: aborted before finishing — UNKNOWN\n' "$prog" >&2
     rc=2
@@ -76,6 +88,8 @@ dir="$HOME/.claude/worktree-cleanup-manifests"
 log="$dir/cleanup-$lane.log"
 started="$dir/cleanup-$lane.started"
 finished="$dir/cleanup-$lane.finished"
+launch_lock="$dir/cleanup-$lane.launch.lock"
+stuck_after_seconds=21600
 
 id_re='[0-9]{8}T[0-9]{6}Z-[0-9]+'
 at_re='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
@@ -94,14 +108,52 @@ write_record() {
   return 1
 }
 
-# supervisor_runs <pid> <id> — whether <pid> is still this script supervising sweep <id>. Matching
-# the command line, not just the pid, keeps a recycled pid from reading as a sweep still running.
-supervisor_runs() {
-  local command
-  command=$(ps -ww -o command= -p "$1" 2>/dev/null) || return 1
-  case "$command" in
-    *" __supervise --lane $lane --id $2") return 0 ;;
+# elapsed_seconds <etime> — parse ps' portable [[dd-]hh:]mm:ss elapsed form.
+SUPERVISOR_AGE_SECONDS=""
+elapsed_seconds() {
+  local value=$1 days=0 hours=0 minutes=0 seconds=0 first second third
+  case "$value" in
+    *-*) days=${value%%-*}; value=${value#*-} ;;
   esac
+  IFS=: read -r first second third <<<"$value"
+  if [ -n "${third:-}" ]; then
+    hours=$first; minutes=$second; seconds=$third
+  else
+    minutes=$first; seconds=$second
+  fi
+  case "$days:$hours:$minutes:$seconds" in
+    *[!0-9:]*) return 1 ;;
+  esac
+  SUPERVISOR_AGE_SECONDS=$((days * 86400 + hours * 3600 + minutes * 60 + seconds))
+}
+
+# supervisor_runs <pid> <id> — 0 when <pid> is this script supervising sweep <id>, 1 when the
+# process is absent or different, and 2 when one unfiltered process-table read cannot prove either.
+# Matching the command line, not just the pid, keeps a recycled pid from reading as running. The
+# same listing must contain this reporter with readable arguments, so a filtered or partial read
+# never becomes a "gone" verdict.
+supervisor_runs() {
+  local process_table listed_pid elapsed command self_seen=0 target_seen=0 target_elapsed=""
+  process_table=$(ps -A -ww -o pid= -o etime= -o command= 2>/dev/null) || return 2
+  [ -n "$process_table" ] || return 2
+  while read -r listed_pid elapsed command; do
+    [ -n "${listed_pid:-}" ] || continue
+    if [ "$listed_pid" = "$$" ]; then
+      case "$command" in *"$self"*) self_seen=1 ;; esac
+    fi
+    if [ "$listed_pid" = "$1" ]; then
+      case "$command" in
+        *"$self __supervise --lane $lane --id $2")
+          target_seen=1; target_elapsed=$elapsed
+          ;;
+      esac
+    fi
+  done <<<"$process_table"
+  [ "$self_seen" = 1 ] || return 2
+  if [ "$target_seen" = 1 ]; then
+    elapsed_seconds "$target_elapsed" || return 2
+    return 0
+  fi
   return 1
 }
 
@@ -124,8 +176,13 @@ bad_record() {
   printf '%s: UNKNOWN — %s; the last %s sweep cannot be judged\n' "$prog" "$1" "$lane" >&2
   VERDICT=unknown
 }
+bad_process_read() {
+  printf '%s: UNKNOWN — cannot read the process table completely; the last %s sweep cannot be judged\n' \
+    "$prog" "$lane" >&2
+  VERDICT=process-unknown
+}
 report_previous() {
-  local s f s_id s_pid s_at f_id f_rc f_at
+  local s f s_id s_pid s_at f_id f_rc f_at supervisor_state
   if [ ! -e "$started" ]; then
     printf '%s: no %s sweep on record — nothing shows the lane was ever swept\n' "$prog" "$lane"
     VERDICT=none; return 0
@@ -149,29 +206,54 @@ report_previous() {
       return 0
     fi
   fi
-  if supervisor_runs "$s_pid" "$s_id"; then
-    printf '%s: the last %s sweep (%s, pid %s) has been running since %s and has not finished\n' \
-      "$prog" "$lane" "$s_id" "$s_pid" "$s_at"
-    VERDICT=running
-  else
-    printf '%s: the last %s sweep (%s) started at %s and NEVER FINISHED — its supervisor (pid %s) is gone without recording an end; see the end of %s\n' \
-      "$prog" "$lane" "$s_id" "$s_at" "$s_pid" "$log"
-    VERDICT=unfinished
-  fi
+  if supervisor_runs "$s_pid" "$s_id"; then supervisor_state=0
+  else supervisor_state=$?; fi
+  case "$supervisor_state" in
+    0)
+      if (( SUPERVISOR_AGE_SECONDS >= stuck_after_seconds )); then
+        printf '%s: the last %s sweep (%s, pid %s) is STUCK — its supervisor has run for six hours or more since %s; inspect %s, then if it is not making progress run `kill %s` and start again\n' \
+          "$prog" "$lane" "$s_id" "$s_pid" "$s_at" "$log" "$s_pid"
+        VERDICT=stuck
+      else
+        printf '%s: the last %s sweep (%s, pid %s) has been running since %s and has not finished\n' \
+          "$prog" "$lane" "$s_id" "$s_pid" "$s_at"
+        VERDICT=running
+      fi
+      ;;
+    1)
+      printf '%s: the last %s sweep (%s) started at %s and NEVER FINISHED — its supervisor (pid %s) is gone without recording an end; see the end of %s\n' \
+        "$prog" "$lane" "$s_id" "$s_at" "$s_pid" "$log"
+      VERDICT=unfinished
+      ;;
+    *) bad_process_read ;;
+  esac
 }
 
+# Serialize a launcher's read/start/record transaction. A racing launcher either loses this
+# atomic mkdir or enters after the first releases it and observes the recorded supervisor.
+if [ "$cmd" = start ]; then
+  mkdir -p -- "$dir" 2>/dev/null || unknown "cannot create $dir"
+  if ! mkdir -- "$launch_lock" 2>/dev/null; then
+    unknown "another $lane sweep launcher holds $launch_lock; retry after it finishes"
+  fi
+  lock_held=1
+fi
+
 report_previous
-case "$VERDICT" in ok) rc=0 ;; unknown) rc=2 ;; *) rc=1 ;; esac
+case "$VERDICT" in ok) rc=0 ;; unknown|process-unknown) rc=2 ;; *) rc=1 ;; esac
 [ "$cmd" = start ] || finish "$rc"
 
-if [ "$VERDICT" = running ]; then
+if [ "$VERDICT" = process-unknown ]; then
+  printf '%s: not starting a %s sweep while its prior supervisor state is unknown\n' "$prog" "$lane"
+  finish "$rc"
+fi
+if [ "$VERDICT" = running ] || [ "$VERDICT" = stuck ]; then
   printf '%s: not starting a second %s sweep while that one runs\n' "$prog" "$lane"
   finish "$rc"
 fi
 # An unreadable record still starts a sweep, which replaces it: refusing would leave the lane
 # unswept on every run until someone repaired one file, and the disk would fill again.
 [ -x "$sweeper" ] || unknown "missing $sweeper"
-mkdir -p -- "$dir" 2>/dev/null || unknown "cannot create $dir"
 new_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 nohup bash "$self" __supervise --lane "$lane" --id "$new_id" >>"$log" 2>&1 </dev/null &
 pid=$!

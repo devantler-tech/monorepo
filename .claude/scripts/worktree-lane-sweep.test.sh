@@ -169,6 +169,42 @@ if [ "$rc" -eq 1 ] && grep -q 'not starting a second claude sweep' <<<"$out" \
   ok "start does not stack a second sweep on a running one"
 else bad "start does not stack a second sweep on a running one" "rc=$rc $out"; fi
 
+# A failed process-table read proves neither running nor gone. It is UNKNOWN and must not start
+# a second sweep over the one whose state could not be read.
+mkdir -p "$fx/bin"
+cat >"$fx/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$fx/bin/ps"
+out=$(HOME="$fx/home" PATH="$fx/bin:$PATH" bash "$sut" start --lane claude 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && grep -q 'UNKNOWN.*cannot read the process table' <<<"$out" \
+   && [ "$(field claude started id)" = "$hang_id" ]; then
+  ok "a failed process-table read is UNKNOWN and starts no second sweep"
+else bad "a failed process-table read is UNKNOWN and starts no second sweep" "rc=$rc $out"; fi
+
+# A live supervisor beyond the documented bound is distinct from a healthy in-progress sweep.
+# The launcher reports how to clear it and still refuses to stack another sweep on top.
+cat >"$fx/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+record=$(cat "$HOME/.claude/worktree-cleanup-manifests/cleanup-claude.started")
+target_pid=$(sed -nE 's/.* pid=([0-9]+) .*/\1/p' <<<"$record")
+target_id=$(sed -nE 's/^id=([^ ]+) .*/\1/p' <<<"$record")
+printf '%s 06:00:01 bash %s __supervise --lane claude --id %s\n' \
+  "$target_pid" "$SUT_PATH" "$target_id"
+printf '%s 00:00:01 bash %s start --lane claude\n' "$FAKE_PS_SELF_PID" "$SUT_PATH"
+EOF
+chmod +x "$fx/bin/ps"
+out=$(HOME="$fx/home" PATH="$fx/bin:$PATH" SUT_PATH="$sut" \
+  bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" start --lane claude' 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && grep -q 'STUCK.*six hours' <<<"$out" \
+   && grep -q "kill $hang_pid" <<<"$out" \
+   && [ "$(field claude started id)" = "$hang_id" ]; then
+  ok "a six-hour supervisor is reported as stuck with a clear recovery step"
+else bad "a six-hour supervisor is reported as stuck with a clear recovery step" "rc=$rc $out"; fi
+rm -f "$fx/bin/ps"
+
 # The supervisor dies without recording an end, as on a kill or a host restart.
 kill -9 "$hang_pid" 2>/dev/null
 for f in "$fx"/pids/sweep-*; do kill -9 "$(cat "$f")" 2>/dev/null; done
@@ -235,6 +271,39 @@ run status --lane claude
 if [ "$rc" -eq 0 ]; then ok "the replaced record reads as clean once that sweep finishes"
 else bad "the replaced record reads as clean once that sweep finishes" "rc=$rc $out"; fi
 
+# Two launchers arriving together must serialize the read/start/record transaction. One may see
+# the other already running or may lose the lock, but they must create exactly one supervisor.
+concurrent_home="$fx/concurrent-home"
+mkdir -p "$concurrent_home"
+mode hang
+rm -f "$fx/release" "$fx/hanging"
+before=0
+for f in "$fx"/pids/sweep-*; do [ ! -f "$f" ] || before=$((before + 1)); done
+HOME="$concurrent_home" bash "$sut" start --lane codex >"$fx/concurrent-1.out" 2>&1 & c1=$!
+HOME="$concurrent_home" bash "$sut" start --lane codex >"$fx/concurrent-2.out" 2>&1 & c2=$!
+wait "$c1" || true
+wait "$c2" || true
+wait_for "$fx/hanging" || bad "one concurrent launcher started a sweep" \
+  "$(cat "$fx"/concurrent-*.out 2>&1)"
+after=0
+for f in "$fx"/pids/sweep-*; do [ ! -f "$f" ] || after=$((after + 1)); done
+if [ $((after - before)) -eq 1 ]; then
+  ok "concurrent launchers create only one supervised sweep"
+else bad "concurrent launchers create only one supervised sweep" \
+  "started=$((after - before)) $(cat "$fx"/concurrent-*.out 2>&1)"; fi
+touch "$fx/release"
+i=0
+while [ "$i" -lt 200 ]; do
+  started_id=$(sed -nE 's/^id=([^ ]+) .*/\1/p' \
+    "$concurrent_home/.claude/worktree-cleanup-manifests/cleanup-codex.started" 2>/dev/null)
+  finished_id=$(sed -nE 's/^id=([^ ]+) .*/\1/p' \
+    "$concurrent_home/.claude/worktree-cleanup-manifests/cleanup-codex.finished" 2>/dev/null)
+  [ -n "$started_id" ] && [ "$finished_id" = "$started_id" ] && break
+  sleep 0.1; i=$((i + 1))
+done
+rm -f "$fx/release" "$fx/hanging"
+mode ok
+
 # --- lanes are separate -----------------------------------------------------------
 run status --lane codex
 if [ "$rc" -eq 1 ] && grep -q 'no codex sweep on record' <<<"$out"; then
@@ -275,9 +344,10 @@ elif grep -qF '.claude/scripts/worktree-lane-sweep.sh start --lane <lane>' <<<"$
 else bad "the guide's pre-flight starts the sweep through the supervised launcher" "$section"; fi
 # shellcheck disable=SC2016 # the backticks are literal Markdown, not a command substitution
 if grep -qF '`worktree-lane-sweep.sh start --lane <your lane>`' "$skill" \
+   && grep -qF 'never finished, is still running or no sweep is on record' "$skill" \
    && ! grep -qF 'Start `worktree-cleanup-all.sh apply 24' "$skill"; then
-  ok "the run procedure starts the sweep through the supervised launcher"
-else bad "the run procedure starts the sweep through the supervised launcher" "$skill"; fi
+  ok "the run procedure starts the sweep and names every non-clean status"
+else bad "the run procedure starts the sweep and names every non-clean status" "$skill"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$failures"
 [ "$failures" -eq 0 ]
