@@ -28,7 +28,8 @@
 #   fork                            the head is in another owner's repository: no lane on this host
 #                                   checks it out, so there is nothing local to examine
 #   unknown:<reason>                the helper could not tell, and that is NEVER `none`. Reasons:
-#                                   input, lsof-missing, lsof-failed, lsof-empty, ps-failed
+#                                   input, lsof-missing, lsof-failed, lsof-empty, ps-failed,
+#                                   worktree-list, lock-reason
 #
 # WHAT HOLDING A CHECKOUT MEANS
 #   A process holds the checkout containing its working directory, every populated submodule of
@@ -47,6 +48,26 @@
 #   busy or not: the process table cannot tell an idle session from a thinking one, and the report
 #   names the holder so a forgotten one is seen.
 #
+# WORKTREE LOCKS (monorepo#3780)
+#   An isolated subagent works in its own worktree but keeps no process there: its commands come
+#   and go, and the long-lived process is the parent session's, whose working directory is the
+#   parent's worktree. Between two of the worker's commands nothing has a working directory in its
+#   checkout, so its PR read `none` mid-flight. The harness records the owner instead: it locks
+#   every worktree it creates, and the lock reason names the owning session process,
+#     claude <kind> <name> (pid <pid> start <start>)
+#   where <start> is what `LC_ALL=C TZ=UTC ps -o lstart= -p <pid>` printed when the lock was taken.
+#   A lock holds its worktree, and the checkouts that worktree owns, exactly like a working
+#   directory, while that pid is alive AND still has the recorded start time. An exited process
+#   holds nothing, and neither does a pid that another process has since been given: its start
+#   time differs. The locks read are those of every repository a live process works in, and of
+#   the repository the helper is asked from.
+#   A lock the helper cannot read as that identity is `unknown:lock-reason` for the PRs its
+#   worktree serves, never `none`: a lock with no reason or someone else's reason, a start time in
+#   any other shape, and a lock that records no start time while its pid is alive (nothing then
+#   tells the owner from a reused pid). A holder found another way still answers `live:`, because
+#   an unread lock can only add holders. A lock stays for as long as the harness keeps the
+#   worktree, so it also holds after the worker has returned, until its session exits.
+#
 # SELF
 #   The asking session is not its own rival, the same exclusion the contract makes for its own
 #   push. The asking session is the nearest `claude`/`codex` process above this helper. A holder is
@@ -58,6 +79,11 @@
 #   read as one session. With no session process among the ancestors, only this helper's ancestry
 #   and descendants are `self`, so the asker's own background work reads `live`: the conservative
 #   direction.
+#   A lock names the session, not the worker, and every worker of one session shares that
+#   process. So a locked worktree is `self` only when its session is the asker's AND the worktree
+#   is inside the asker's own checkout tree: a subagent asking from its own worktree. The same
+#   session's lock on any other worktree is a sibling worker's, or a worker of the session that
+#   asks, and stays `live`.
 #
 # SCOPE
 #   Only sessions on this host have local processes. A session on another machine does not, so its
@@ -66,7 +92,8 @@
 # EXIT CODES
 #   0  every PR was answered
 #   2  UNKNOWN: a usage error, unreadable input, or any PR answered `unknown:`. A failed or partial
-#      `lsof` (a nonzero exit, or no working directories at all) never yields `none`.
+#      `lsof` (a nonzero exit, or no working directories at all) never yields `none`, and neither
+#      does a worktree list or a process start time that could not be read.
 set -euo pipefail
 
 # Every git call names its directory. An inherited location variable would redirect them all.
@@ -156,7 +183,8 @@ repo_slug() {
 }
 
 # resolve <dir> — the checkout containing <dir>, in ONE git call (git startup dominates the cost):
-# R_TOP, R_GITDIR, R_LINKED (1 for a linked worktree) and R_BRANCH (empty when none can be named).
+# R_TOP, R_GITDIR, R_COMMON (the git directory its repository's worktrees share), R_LINKED (1 for a
+# linked worktree) and R_BRANCH (empty when none can be named).
 resolve() {
   local out top gitdir common head='' f
   if ! out="$(git -C "$1" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir \
@@ -174,6 +202,7 @@ resolve() {
   if [ -z "${top}" ] || [ -z "${gitdir}" ]; then return 1; fi
   R_TOP="${top}"
   R_GITDIR="${gitdir}"
+  R_COMMON="${common}"
   R_LINKED=0
   if [ "${gitdir}" != "${common}" ]; then R_LINKED=1; fi
   R_BRANCH=''
@@ -255,12 +284,53 @@ expand_submodules() {
 
 # expand <dir> — the checkout containing <dir> and everything it owns, as record lines.
 expand() {
-  local top linked
   resolve "$1" || return 0
-  top="${R_TOP}"
-  linked="${R_LINKED}"
+  expand_resolved
+}
+
+# expand_resolved — the same, for the checkout `resolve` named last.
+expand_resolved() {
+  local top="${R_TOP}" linked="${R_LINKED}"
   record "${top}" "${top}" "${R_BRANCH}"
   expand_submodules "${top}" "${top}" "${linked}" 0
+}
+
+# lock_rows — `git worktree list --porcelain` on stdin; one row per LOCKED worktree:
+# <path> <pid> <start>. The pid is empty unless the reason is the harness's own form, and the start
+# is empty when that form records none. The form is matched whole and the start time by its exact
+# `ps -o lstart=` shape: a reason that drifted would otherwise compare unequal to every live process
+# and read as a reused pid, which holds nothing. git quotes a reason holding unusual characters, so
+# such a reason never matches either.
+lock_rows() {
+  awk '
+    /^worktree / { path = substr($0, 10); next }
+    /^$/ { path = ""; next }
+    /^locked( |$)/ {
+      if (path == "") next
+      reason = substr($0, 8)
+      pid = ""; start = ""
+      if (reason ~ /^claude [a-z]+ [^ ()]+ \(pid [1-9][0-9]*( start [A-Z][a-z][a-z] [A-Z][a-z][a-z] +[0-9][0-9]? [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [0-9][0-9][0-9][0-9])?\)$/) {
+        sub(/^.* \(pid /, "", reason)
+        sub(/\)$/, "", reason)
+        pid = reason
+        if (sub(/ start .*$/, "", pid)) {
+          start = substr(reason, length(pid) + 8)
+          gsub(/ +/, " ", start)
+        }
+      }
+      print path "\t" pid "\t" start
+    }'
+}
+
+# registered <path> — resolve a path the worktree registry names, and fail unless it is still its
+# own checkout. A registration outlives its directory, and a directory whose `.git` entry is gone
+# resolves to the checkout around it: neither is a checkout anyone can be working in.
+registered() {
+  local path="$1" physical
+  resolve "${path}" || return 1
+  [ "${R_TOP}" != "${path}" ] || return 0
+  physical="$(cd "${path}" 2>/dev/null && pwd -P)" || return 1
+  [ "${R_TOP}" = "${physical}" ]
 }
 
 # nearest_checkout <dir> — the nearest directory at or above <dir> that holds a `.git` entry, found
@@ -279,8 +349,11 @@ nearest_checkout() {
 
 : >"${work}/ps"
 : >"${work}/holders"
+: >"${work}/lockholders"
+: >"${work}/unread"
 : >"${work}/entries"
 : >"${work}/asker"
+tab=$'\t'
 probe_error=''
 if [ "${heads}" != $'\n\n' ]; then
   # lsof's own exit status is checked SEPARATELY from the parsing: a partial enumeration can print
@@ -315,21 +388,86 @@ if [ "${heads}" != $'\n\n' ]; then
     while IFS= read -r dir; do
       if near="$(nearest_checkout "${dir}")"; then printf '%s\t%s\n' "${dir}" "${near}" >>"${work}/near"; fi
     done < <(cut -f2- "${work}/live" | LC_ALL=C sort -u)
+    # Each checkout's repository is kept beside it (its shared git directory, then the checkout), so
+    # the lock scan below lists a repository's worktrees once however many of them are worked in.
     : >"${work}/tops"
+    : >"${work}/repos"
     while IFS= read -r near; do
-      if resolve "${near}"; then printf '%s\t%s\n' "${near}" "${R_TOP}" >>"${work}/tops"; fi
+      if resolve "${near}"; then
+        printf '%s\t%s\n' "${near}" "${R_TOP}" >>"${work}/tops"
+        printf '%s\t%s\n' "${R_COMMON}" "${R_TOP}" >>"${work}/repos"
+      fi
     done < <(cut -f2- "${work}/near" | LC_ALL=C sort -u)
     awk -F'\t' '
       FILENAME == ARGV[1] { top[$1] = $2; next }
       FILENAME == ARGV[2] { if ($2 in top) dirtop[$1] = top[$2]; next }
       ($2 in dirtop) { print $1 "\t" dirtop[$2] }
     ' "${work}/tops" "${work}/near" "${work}/live" | LC_ALL=C sort -n -k1,1 >"${work}/holders"
+    asker=''
+    if resolve "${PWD}"; then
+      asker="${R_TOP}"
+      printf '%s\t%s\n' "${R_COMMON}" "${R_TOP}" >>"${work}/repos"
+    fi
+    # Worktree locks (monorepo#3780): every locked worktree of those repositories, with the
+    # process identity its reason records. A list that cannot be read is UNKNOWN, since a lock in
+    # it may hold any of the PRs asked about.
+    : >"${work}/locks"
+    while IFS="${tab}" read -r common top; do
+      # Only a repository that has linked worktrees keeps this directory, and only those are locked.
+      [ -d "${common}/worktrees" ] || continue
+      if ! list="$(git -C "${top}" worktree list --porcelain 2>/dev/null)"; then
+        probe_error=worktree-list
+        break
+      fi
+      lock_rows <<<"${list}" >>"${work}/locks"
+    done < <(LC_ALL=C sort -u -t "${tab}" -k1,1 "${work}/repos")
+  fi
+  if [ -z "${probe_error}" ] && [ -s "${work}/locks" ]; then
+    # The start times are read once, only when a lock records one, and in the spelling the harness
+    # recorded them: the C locale and UTC. `ps -o lstart=` prints local time in the caller's language.
+    : >"${work}/starts"
+    if awk -F'\t' '$3 != "" { found = 1 } END { exit !found }' "${work}/locks"; then
+      if starts_raw="$(TZ=UTC LC_ALL=C ps -A -o pid= -o lstart= 2>/dev/null)"; then
+        printf '%s\n' "${starts_raw}" |
+          awk '$1 ~ /^[0-9]+$/ && NF > 1 { pid = $1; $1 = ""; sub(/^ +/, ""); print pid "\t" $0 }' \
+            >"${work}/starts"
+      fi
+      [ -s "${work}/starts" ] || probe_error=ps-failed
+    fi
+  fi
+  if [ -z "${probe_error}" ] && [ -s "${work}/locks" ]; then
+    # One verdict per lock: `<pid>` when it holds, `unread` when the helper cannot tell, nothing
+    # when its process exited or the pid now belongs to a process with another start time. A start
+    # time is compared only when both sides have the `lstart` shape, so an unexpected spelling
+    # from this host's `ps` is unread rather than a reused pid.
+    awk -F'\t' '
+      function lstart(s) {
+        return s ~ /^[A-Z][a-z][a-z] [A-Z][a-z][a-z] [0-9][0-9]? [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [0-9][0-9][0-9][0-9]$/
+      }
+      FILENAME == ARGV[1] { alive[$1] = 1; next }
+      FILENAME == ARGV[2] { started[$1] = $2; next }
+      $2 == "" { print "unread\t" $1; next }
+      !($2 in alive) { next }
+      $3 == "" { print "unread\t" $1; next }
+      !($2 in started) { next }
+      !lstart(started[$2]) { print "unread\t" $1; next }
+      started[$2] == $3 { print $2 "\t" $1 }
+    ' "${work}/ps" "${work}/starts" "${work}/locks" >"${work}/verdicts"
+    while IFS="${tab}" read -r who path; do
+      registered "${path}" || continue
+      if [ "${who}" = unread ]; then
+        printf '%s\n' "${R_TOP}" >>"${work}/unread"
+      else
+        printf '%s\t%s\n' "${who}" "${R_TOP}" >>"${work}/lockholders"
+      fi
+      expand_resolved >>"${work}/entries"
+    done <"${work}/verdicts"
+  fi
+  if [ -z "${probe_error}" ]; then
     while IFS= read -r top; do
       expand "${top}" >>"${work}/entries"
     done < <(cut -f2- "${work}/holders" | LC_ALL=C sort -u)
     # The asker's own tree, from the topmost superproject of the directory it asks from.
-    asker=''
-    if resolve "${PWD}"; then asker="${R_TOP}"; fi
     hops=0
     while [ -n "${asker}" ] && [ "${hops}" -lt 8 ]; do
       super="$(git -C "${asker}" rev-parse --show-superproject-working-tree 2>/dev/null)" || super=''
@@ -343,7 +481,8 @@ fi
 
 rc=0
 awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
-  -v psf="${work}/ps" -v askf="${work}/asker" -v entf="${work}/entries" -v holdf="${work}/holders" '
+  -v psf="${work}/ps" -v askf="${work}/asker" -v entf="${work}/entries" -v holdf="${work}/holders" \
+  -v lockf="${work}/lockholders" -v unreadf="${work}/unread" '
   function is_session(p) { return comm[p] == "claude" || comm[p] == "codex" }
   function is_shell(p,   name) {
     name = comm[p]
@@ -395,6 +534,8 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
   FILENAME == askf { asker[$1] = 1; next }
   FILENAME == entf { if ($3 != "") owns[$1, $3] = 1; next }
   FILENAME == holdf { holders++; hpid[holders] = $1; htop[holders] = $2; next }
+  FILENAME == lockf { holders++; hpid[holders] = $1; htop[holders] = $2; hlock[holders] = 1; next }
+  FILENAME == unreadf { unread[$1] = 1; next }
   {
     if (!inited) init()
     id = $1
@@ -402,19 +543,46 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
     if ($2 != "key") { print id " holder=unknown:input"; unknown = 1; next }
     if (probe_error != "") { print id " holder=unknown:" probe_error; unknown = 1; next }
     key = $3 ":" $4
+    # One verdict per process, working directories first: a process counts once however many of
+    # its checkouts serve this PR, and it is a rival when any of them makes it one.
+    found = 0
+    split("", mine)
+    split("", sits)
+    for (i = 1; i <= holders; i++) {
+      p = hpid[i]
+      top = htop[i]
+      if (!((top, key) in owns)) continue
+      if (i in hlock) {
+        # The process works in the very worktree it locked: its working directory already answered.
+        if ((p, top) in sits) continue
+        # A lock names the session, and every worker of that session shares the process, so the
+        # asker owns only the locked worktree it asks from.
+        own = (top in asker) && ((p in chain) || descends(p, me) || (session != "" && descends(p, session)))
+      } else {
+        if (is_shell(p) && !(p in busy)) continue
+        sits[p, top] = 1
+        own = (p in chain) || descends(p, me) ||
+          (session != "" && descends(p, session) && (top in asker))
+      }
+      if (!(p in mine)) { order[++found] = p; mine[p] = own }
+      else if (!own) mine[p] = 0
+    }
     lives = 0; selfs = 0; live_names = ""; self_names = ""
     for (pass = 1; pass <= 2; pass++) {
-      for (i = 1; i <= holders; i++) {
-        p = hpid[i]
-        if (!((htop[i], key) in owns)) continue
-        if (is_shell(p) && !(p in busy)) continue
+      for (i = 1; i <= found; i++) {
+        p = order[i]
         if ((pass == 1) != is_session(p)) continue
-        if ((p in chain) || descends(p, me) ||
-            (session != "" && descends(p, session) && (htop[i] in asker))) {
+        if (mine[p]) {
           if (++selfs <= 3) self_names = self_names (selfs > 1 ? "," : "") label(p)
         } else if (++lives <= 3) {
           live_names = live_names (lives > 1 ? "," : "") label(p)
         }
+      }
+    }
+    # A lock the helper could not read may name a rival. A rival found another way already answers.
+    if (lives == 0) {
+      for (top in unread) {
+        if ((top, key) in owns) { print id " holder=unknown:lock-reason"; unknown = 1; next }
       }
     }
     value = ""
@@ -423,6 +591,7 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
     print id " holder=" (value != "" ? value : "none")
   }
   END { exit unknown ? 2 : 0 }
-' "${work}/ps" "${work}/asker" "${work}/entries" "${work}/holders" "${work}/prs" || rc=$?
+' "${work}/ps" "${work}/asker" "${work}/entries" "${work}/holders" "${work}/lockholders" "${work}/unread" \
+  "${work}/prs" || rc=$?
 finished=1
 exit "${rc}"
