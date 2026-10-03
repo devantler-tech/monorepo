@@ -3111,13 +3111,25 @@ else
     "parent_called=yes elapsed=${safety_discovery_secs}s"
 fi
 
+mkdir -p "$FIX/safety-timeout-artifacts"
 BOUNDED_ALL=$(PATH="$FIX/safety-timeout-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
   SAFETY_TEST_STARTED="$FIX/safety-worker-started" SAFETY_TEST_COMPLETED="$FIX/safety-worker-completed" \
   CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
-  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$FIX/safety-timeout-artifacts" \
   bash "$TARGET" --since-days 3650 --safety-timeout-seconds 1 2>&1)
 check "the full report continues after a safety deadline" "$BOUNDED_ALL" "CROSS-INSTANCE / A2A"
 check "the full report reaches its completion footer after a safety deadline" "$BOUNDED_ALL" "END TELEMETRY"
+timeout_artifact=$(find "$FIX/safety-timeout-artifacts" -maxdepth 1 -type d -name '.agtel_bounded.*' -print -quit)
+if [ -n "$timeout_artifact" ]; then
+  sleep 1
+  timeout_artifact=$(find "$FIX/safety-timeout-artifacts" -maxdepth 1 -type d -name '.agtel_bounded.*' -print -quit)
+fi
+if [ -n "$timeout_artifact" ]; then
+  bad "a full-report safety timeout removes controller artifacts" \
+    "leftover=$timeout_artifact"
+else
+  ok "a full-report safety timeout removes controller artifacts"
+fi
 
 # Reading a completed report is still part of the advertised safety operation.
 # A stalled temporary filesystem must not bypass the deadline after the worker

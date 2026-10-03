@@ -2269,6 +2269,16 @@ run_safety_bounded() (
       rmdir "$bounded_dir" 2>/dev/null || true
     fi
   }
+  bounded_cleanup_async() {
+    local cleanup_dir=$1
+    (
+      trap - EXIT INT TERM
+      trap '' HUP
+      exec 9>&- 9<&-
+      rm -f "$cleanup_dir/status" "$cleanup_dir/report" "$cleanup_dir/worker-status"
+      rmdir "$cleanup_dir" 2>/dev/null || true
+    ) >/dev/null 2>&1 &
+  }
   trap bounded_cleanup EXIT
   trap 'exit 130' HUP INT TERM
   bounded_dir=$(mktemp -d "${TMPDIR:-/tmp}/.agtel_bounded.XXXXXXXX") || { bounded_unknown 'cannot allocate a private safety controller.'; exit 2; }
@@ -2331,6 +2341,11 @@ run_safety_bounded() (
         kill -KILL -- "-$worker_pid" 2>/dev/null || true
         wait "$worker_pid" 2>/dev/null || true
         worker_pid=''
+        # The advertised deadline has expired, so repeating cleanup in this
+        # process would make UNKNOWN unbounded if the temporary filesystem is
+        # stalled. Hand the known private paths to a detached child instead;
+        # it closes the controller FIFO and cannot hold the report pipe open.
+        bounded_cleanup_async "$bounded_dir"
         bounded_dir=''
         bounded_unknown "safety scan exceeded the ${SAFETY_TIMEOUT_SECONDS}s time limit."
         exit 2 ;;
