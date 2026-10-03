@@ -2093,8 +2093,12 @@ codex_session_files() {
       done | head -n "$MAX_FILES"
 }
 
-SF_CACHE="$(session_files)"
-SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
+SF_CACHE=''
+SF_COUNT=0
+WINDOW_SINCE=''
+CX_CACHE=''
+CX_COUNT=0
+ALL_CACHE=''
 
 # ── The window cutoff, computed ONCE for every section that bounds by record ──
 # The file set above is mtime-selected. That is a correct SUPERSET for windowing
@@ -2120,11 +2124,15 @@ SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
 # is true, and a plain at-cutoff record still compares >= `.000`. Every walk
 # shares this cutoff, so a boundary record vanished from the metric AND its
 # control together — invisible, and in the under-reporting direction.
-WINDOW_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
-               || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
-CX_CACHE="$(codex_session_files)"
-CX_COUNT=$(printf '%s' "$CX_CACHE" | grep -c . || true)
-ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
+populate_session_cache() {
+  SF_CACHE="$(session_files)"
+  SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
+  WINDOW_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
+                 || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
+  CX_CACHE="$(codex_session_files)"
+  CX_COUNT=$(printf '%s' "$CX_CACHE" | grep -c . || true)
+  ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
+}
 
 # Run safety in its own process group. A private FIFO carries only the worker's
 # completion status, never corpus text. The child PID remains unreaped until
@@ -2214,6 +2222,11 @@ run_safety_bounded() (
 # redact will eventually leak; here a new detector is covered by construction.
 main() {
 local main_rc=0
+if [ "$SAFETY_WORKER" = 0 ] && [ "$SECTION" = safety ]; then
+  SF_COUNT='bounded inside safety worker'
+else
+  populate_session_cache
+fi
 if [ "$SAFETY_WORKER" = 0 ]; then
 echo "════════════════════════════════════════════════════════════════"
 echo " AGENT TELEMETRY — window ${SINCE_DAYS}d — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ')"

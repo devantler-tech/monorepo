@@ -2988,13 +2988,57 @@ if [ -s "$FIX/safety-worker-started" ] && [ ! -e "$FIX/safety-worker-completed" 
     *)
       ok "the safety timeout fixture records the real stalled descendant PID"
       if kill -0 "$safety_stalled_pid" 2>/dev/null; then
-        bad "the safety deadline terminates its own stalled descendants" "worker is still alive"
+        safety_stalled_state=$(ps -o stat= -p "$safety_stalled_pid" 2>/dev/null | tr -d '[:space:]')
+        case "$safety_stalled_state" in
+          Z*) ok "the safety deadline terminates its own stalled descendants" ;;
+          *) bad "the safety deadline terminates its own stalled descendants" \
+               "worker is still active (state=${safety_stalled_state:-unknown})" ;;
+        esac
       else
         ok "the safety deadline terminates its own stalled descendants"
       fi ;;
   esac
 else
   bad "the safety deadline terminates its own stalled descendants" "stall was not reached or completed after the deadline"
+fi
+
+# The deadline starts before transcript discovery for a safety-only invocation.
+# A parent-side discovery walk would sit outside the worker process group and
+# make a permanently blocked find impossible to time out.
+mkdir -p "$FIX/safety-discovery-shim"
+safety_real_find=$(command -v find)
+cat > "$FIX/safety-discovery-shim/find" <<'EOF'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ]; then
+  sleep 4
+else
+  : > "$SAFETY_PARENT_DISCOVERY"
+  sleep 4
+fi
+exec "$SAFETY_TEST_FIND" "$@"
+EOF
+chmod +x "$FIX/safety-discovery-shim/find"
+rm -f "$FIX/safety-parent-discovery"
+safety_discovery_start=$(date +%s)
+DISCOVERY_BOUNDED=$(PATH="$FIX/safety-discovery-shim:$PATH" \
+  SAFETY_TEST_FIND="$safety_real_find" SAFETY_PARENT_DISCOVERY="$FIX/safety-parent-discovery" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+discovery_bounded_rc=$?
+safety_discovery_secs=$(( $(date +%s) - safety_discovery_start ))
+if [ "$discovery_bounded_rc" -eq 2 ] \
+   && grep -qF "UNKNOWN: safety scan exceeded" <<<"$DISCOVERY_BOUNDED"; then
+  ok "the safety deadline includes transcript discovery"
+else
+  bad "the safety deadline includes transcript discovery" \
+    "rc=$discovery_bounded_rc elapsed=${safety_discovery_secs}s"
+fi
+if [ ! -e "$FIX/safety-parent-discovery" ] && [ "$safety_discovery_secs" -lt 4 ]; then
+  ok "a safety-only parent performs no unbounded transcript discovery"
+else
+  bad "a safety-only parent performs no unbounded transcript discovery" \
+    "parent_called=$([ -e "$FIX/safety-parent-discovery" ] && echo yes || echo no) elapsed=${safety_discovery_secs}s"
 fi
 
 BOUNDED_ALL=$(PATH="$FIX/safety-timeout-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
