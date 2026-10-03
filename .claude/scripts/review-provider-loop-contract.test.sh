@@ -742,6 +742,76 @@ assert_prose "${constitution}" "Exit \`1\` means another instance is requesting 
   "the constitution does not tell a lock loser to stand down"
 assert_prose "${maintenance_skill}" "taking \`.claude/scripts/review-request-lock.sh acquire\` and standing down on its exit \`1\`" \
   "the run loop does not take the review-request lock before posting"
+# #3231: a refusal answers the request that drew it, never the head. On platform#3616 a duplicate
+# request's refusal was recorded as the head's `cr:no-gate` 41 seconds after CodeRabbit had submitted
+# a review of that head with two valid findings; Codex and Bugbot were then spent on it and the
+# findings went unread. The rule and its guard must stand where the no-gate record is written, in
+# the constitution and in the run loop.
+no_gate_start='**Findings restart the loop; service failures advance it.**'
+no_gate_end='**Local review round — when every lane is unavailable OR rate/billing limited**'
+assert_section_prose "${constitution}" "${no_gate_start}" "${no_gate_end}" \
+  'A refusal answers the request that drew it, never the head' \
+  "the review loop attributes a refusal to the head, so a duplicate request's refusal hides the review the first request drew"
+assert_section_prose "${constitution}" "${no_gate_start}" "${no_gate_end}" \
+  'that head carries a delivered review and a refusal at the same time' \
+  "the review loop does not say one head can carry both a served request and a refused duplicate"
+assert_section_prose "${constitution}" "${no_gate_start}" "${no_gate_end}" \
+  'before recording any `<provider>:no-gate@<sha>`, run [`review-no-gate-guard.sh --repo <owner>/<repo> --pr <n> --head <headRefOid> --provider <cr|codex|bugbot>`]' \
+  "the review loop records a no-gate without first reading that lane's reviews at the head"
+assert_section_prose "${constitution}" "${no_gate_start}" "${no_gate_end}" \
+  'that review governs, whatever a later reply says' \
+  "a later refusal can still outrank a review the lane already published at the head"
+assert_section_prose "${constitution}" "${no_gate_start}" "${no_gate_end}" \
+  'Exit `2` is UNKNOWN — a failed or partial read, or a head that has moved — and authorizes no record' \
+  "a failed or partial read of the lane's reviews can still admit a no-gate record"
+assert_section_prose "${constitution}" "${no_gate_start}" "${no_gate_end}" \
+  'give the time of that resolution record, never the time of a request' \
+  "a duplicate request's own time can narrow the round and hide the review the first request drew"
+assert_prose "${maintenance_skill}" 'only after `.claude/scripts/review-no-gate-guard.sh` exits `0` for that head and provider' \
+  "the run loop persists a no-gate without the guard, so a duplicate request's refusal is recorded as the head's"
+
+# Behavioural: the guard must reject the no-gate on the REAL head that exposed the defect, and the
+# rejection must come from the review, not from the refusal. The fixture is the verbatim
+# platform#3616 capture, so a change in what the lanes publish breaks this test.
+no_gate_guard="${repo_root}/.claude/scripts/review-no-gate-guard.sh"
+duplicate_fixture="${repo_root}/.claude/scripts/fixtures/no-gate-duplicate-request-platform-3616.json"
+duplicate_head='c533c43f4d256e3470260fbf67fcdd1a51497b30'
+[ -r "${duplicate_fixture}" ] || fail "the platform#3616 duplicate-request fixture is missing"
+# The defect's two halves must both be in the capture: a CodeRabbit review of the head, then a
+# CodeRabbit reply that did not complete a second request. Otherwise the case below proves nothing.
+review_at="$(jq -r --arg head "${duplicate_head}" \
+  '[.reviews[] | select(.user.login == "coderabbitai[bot]" and .commit_id == $head) | .submitted_at] | max // ""' \
+  "${duplicate_fixture}")"
+refusal_at="$(jq -r \
+  '[.comments[] | select(.user.login == "coderabbitai[bot]" and (.body | contains("Action not completed"))) | .created_at] | max // ""' \
+  "${duplicate_fixture}")"
+[ -n "${review_at}" ] || fail "the fixture no longer carries a CodeRabbit review at the head"
+[ -n "${refusal_at}" ] || fail "the fixture no longer carries the refusal that answered the duplicate request"
+[[ "${refusal_at}" > "${review_at}" ]] ||
+  fail "the fixture's refusal no longer follows its review; the duplicate-request case is not reproduced"
+guard_rc=0
+guard_out="$(bash "${no_gate_guard}" --input "${duplicate_fixture}" --head "${duplicate_head}" --provider cr)" || guard_rc=$?
+[ "${guard_rc}" -eq 1 ] ||
+  fail "the no-gate guard exited ${guard_rc} on a head carrying a review and a later refusal; the no-gate record is not rejected (#3231)"
+grep -Fq "REVIEWED cr@${duplicate_head} FINDINGS review:" <<<"${guard_out}" ||
+  fail "the no-gate guard rejected the record without naming the review that governs (got '${guard_out}')"
+# Negative control: the same head with the review removed and only the refusal left must still admit
+# the record, so the rejection above cannot come from a guard that refuses everything.
+guard_rc=0
+guard_out="$(jq 'del(.reviews[] | select(.user.login == "coderabbitai[bot]"))' "${duplicate_fixture}" |
+  bash "${no_gate_guard}" --input - --head "${duplicate_head}" --provider cr)" || guard_rc=$?
+if [ "${guard_rc}" -ne 0 ] || [ "${guard_out}" != "ADMIT cr@${duplicate_head}" ]; then
+  fail "a head with only a refusal and no review no longer admits the no-gate record (exit ${guard_rc}, '${guard_out}'); the guard over-blocks"
+fi
+# A read that lost its reviews is UNKNOWN: neither a rejection nor, above all, an admission.
+guard_rc=0
+guard_out="$(jq 'del(.reviews)' "${duplicate_fixture}" |
+  bash "${no_gate_guard}" --input - --head "${duplicate_head}" --provider cr 2>/dev/null)" || guard_rc=$?
+if [ "${guard_rc}" -ne 2 ] || [ -n "${guard_out}" ]; then
+  fail "a read that never returned the reviews was not reported UNKNOWN (exit ${guard_rc}, '${guard_out}')"
+fi
+grep -Fq 'run: bash .claude/scripts/review-no-gate-guard.test.sh' "${workflow}" ||
+  fail "CI does not execute the no-gate guard test"
 # #2737: CodeRabbit published `success — Review completed` one second after its summary recorded
 # `## Review failed`, with no review object at the head. The status therefore proves only that an
 # attempt ended; the artifact decides, and an errored review advances the lane as a service failure.

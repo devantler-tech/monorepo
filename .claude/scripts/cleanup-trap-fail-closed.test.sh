@@ -221,6 +221,7 @@ memory-backup.sh|
 memory-hygiene.sh|
 memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups
 review-lane-health.sh|--now 1
+review-no-gate-guard.sh|
 claude-lane-liveness.sh|--store $tmp/converted/store.json --projects $tmp/converted/projects
 renovate-dashboard-drift.sh|
 pr-ownership-disclosure.sh|--input -
