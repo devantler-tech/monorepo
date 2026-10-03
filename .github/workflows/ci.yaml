@@ -108,14 +108,20 @@ jobs:
             docs:
               - 'docs/**'
             docs-deps:
-              # Only what decides the audit's answer: the dependency tree and the
-              # wrapper that reads it. A workflow file is not listed, because a
-              # workflow-only change cannot alter what the site depends on and a
-              # live advisory says nothing about it; docs-audit-contract covers it.
+              # What decides the audit's answer: the dependency tree (a shrinkwrap
+              # replaces the lockfile when one exists), the npm settings that pick
+              # the advisory source and what the audit counts, and the wrapper. A
+              # workflow file is not listed, because a workflow-only change cannot
+              # alter what the site depends on and a live advisory says nothing
+              # about it; docs-audit-contract covers it.
               - 'docs/package.json'
               - 'docs/package-lock.json'
+              - 'docs/npm-shrinkwrap.json'
+              - 'docs/.npmrc'
               - 'docs/scripts/audit-dependencies.sh'
             docs-audit-contract:
+              # The contract test holds the npm settings to reviewed values.
+              - 'docs/.npmrc'
               - 'docs/scripts/audit-dependencies.sh'
               - 'docs/scripts/audit-dependencies.test.sh'
               # The contract test compares both workflow call sites.
