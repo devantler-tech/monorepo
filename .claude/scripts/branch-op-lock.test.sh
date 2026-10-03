@@ -475,6 +475,34 @@ check "a brand-new dir is NOT already past a 600s TTL" "1" \
   "$([[ "$probe_age" -lt 600 ]] && echo 1 || echo 0)"
 rm -rf "$mtime_probe_dir"
 # ---------------------------------------------------------------------------
+# A wrapped shell function that aborts under `set -u` never returns, so `run` must fail and must
+# still release the lock (monorepo#3414). Bash 3.2 hands the safety-net trap status 0 for that
+# abort, which read as the wrapped command succeeding. Each case runs in its own process, because
+# the abort ends the shell it happens in.
+abort_repo="$tmp/abort-repo"
+git init -q -b main "$abort_repo"
+abort_lockdir=$(branch_op_lock_dir "$abort_repo")
+run_wrapped() { # <function body> — prints the status `run` reported for a function with that body
+  local rc=0
+  # shellcheck disable=SC2016 # The script text is expanded by the child shell, not here.
+  env -u BRANCH_OP_LOCK_TEST_UNSET_VAR bash -c '
+    set -euo pipefail
+    # shellcheck source=branch-op-lock.sh
+    source "$1"
+    eval "wrapped() { $3; }"
+    branch_op_lock_run "$2" -- wrapped
+  ' _ "$lock_tool" "$abort_repo" "$1" >/dev/null 2>&1 || rc=$?
+  echo "$rc"
+}
+# shellcheck disable=SC2016 # The body is expanded by the child shell, not here.
+check "an aborted wrapped function makes run fail" "1" \
+  "$([[ "$(run_wrapped ': "${BRANCH_OP_LOCK_TEST_UNSET_VAR}"')" -ne 0 ]] && echo 1 || echo 0)"
+check "the lock is released after the aborted run" "0" "$([[ -d "$abort_lockdir" ]] && echo 1 || echo 0)"
+# Controls: the handler must not turn a returning function into a failure, or swallow its status.
+check "a wrapped function that returns still succeeds" "0" "$(run_wrapped ':')"
+check "a wrapped function's own failure status is kept" "7" "$(run_wrapped 'return 7')"
+check "the lock is released after the controls" "0" "$([[ -d "$abort_lockdir" ]] && echo 1 || echo 0)"
+# ---------------------------------------------------------------------------
 if [[ "$failures" -gt 0 ]]; then
   printf '\n%d failure(s)\n' "$failures" >&2
   exit 1

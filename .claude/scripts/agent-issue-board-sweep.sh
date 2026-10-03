@@ -157,7 +157,22 @@ SECONDS=0
 # archived ones. Archived repositories are read-only history and outside the active portfolio, so a
 # stale issue in one must never be added to the live board.
 err_file="$(mktemp)"
-trap 'rm -f "$err_file"' EXIT
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and a successful `rm` would then
+# become this script's status: a sweep that swept nothing would read as a clean batch. Completion
+# is recorded explicitly, so reaching the summary is the only way a zero status leaves this script;
+# an abort reports exit 2, the code for a sweep that proves nothing (monorepo#3414).
+agent_issue_board_sweep_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+agent_issue_board_sweep_cleanup() {
+  local rc=$?
+  rm -f "$err_file"
+  if [ "$agent_issue_board_sweep_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "agent-issue-board-sweep: aborted before finishing; reporting failure rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap agent_issue_board_sweep_cleanup EXIT
 # An interrupt is noted and acted on between issues, so the call in flight finishes and the
 # checkpoint and summary are still printed.
 interrupted=0
@@ -411,4 +426,5 @@ elif [ "$deferred" -gt 0 ]; then
 fi
 [ "$failed" -eq 0 ] || exit 2
 [ "$stopped" != interrupted ] || exit 2
+agent_issue_board_sweep_finished=1
 exit 0

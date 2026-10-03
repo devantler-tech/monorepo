@@ -165,7 +165,23 @@ remove_new_worktree() {
   [ -z "$oid" ] || git -C "$repo" update-ref -d "refs/heads/$branch" "$oid"
 }
 
-trap 'worktree_claim_lock_release >/dev/null 2>&1 || true; discard_pending_worktree' EXIT
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and this trap's own cleanup then
+# becomes the script's status. Completion is recorded explicitly, so reaching a verdict is the only
+# way a zero status leaves this script; an abort reports exit 2, the code for a failure that
+# determined nothing (monorepo#3414).
+worktree_claim_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+worktree_claim_exit() {
+  local rc=$?
+  worktree_claim_lock_release >/dev/null 2>&1 || true
+  discard_pending_worktree
+  if [ "$worktree_claim_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "worktree-claim: aborted before finishing; reporting failure rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap worktree_claim_exit EXIT
 trap 'exit 2' HUP INT TERM
 
 acquire_lock() {
@@ -1906,6 +1922,7 @@ cmd_check() {
   if [ ! -d "$wt" ]; then
     # No directory → nothing to squat; caller may create.
     echo "worktree-claim: free (path absent)"
+    worktree_claim_finished=1
     exit 0
   fi
   local marker="$wt/$WORKTREE_CLAIM_MARKER_NAME"
@@ -1915,6 +1932,7 @@ cmd_check() {
     wt_real="$(cd "$wt" && pwd -P)" || fail "cannot resolve worktree path: $wt"
     unmarked_tree_is_idle "$wt_real" || exit 3
     echo "worktree-claim: free (no live marker, no live process)"
+    worktree_claim_finished=1
     exit 0
   fi
   if [ -z "${MARKER_OWNER:-}" ] || [ -z "${MARKER_CREATED_AT:-}" ]; then
@@ -1922,6 +1940,7 @@ cmd_check() {
   fi
   if [ "$MARKER_OWNER" = "$me" ]; then
     echo "worktree-claim: mine (owner=$MARKER_OWNER)"
+    worktree_claim_finished=1
     exit 0
   fi
   local created_epoch now_epoch age
@@ -1931,6 +1950,7 @@ cmd_check() {
   age=$((now_epoch - created_epoch))
   if [ "$age" -ge "$WORKTREE_CLAIM_TTL_SECS" ]; then
     echo "worktree-claim: free (expired age=${age}s owner=$MARKER_OWNER)"
+    worktree_claim_finished=1
     exit 0
   fi
   echo "worktree-claim: LIVE foreign claim owner=$MARKER_OWNER created_at=$MARKER_CREATED_AT age=${age}s — stand down" >&2
@@ -1965,3 +1985,4 @@ main() {
 }
 
 main "$@"
+worktree_claim_finished=1
