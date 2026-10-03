@@ -2135,14 +2135,17 @@ populate_session_cache() {
 }
 
 # Run safety in its own process group. The nested worker records its report
-# status in the private controller directory, but only the wrapper relays that
-# status through the FIFO after the worker and its EXIT cleanup have finished.
-# The FIFO therefore signals completion, not merely a finished report. The
-# child PID remains unreaped until the controller chooses completion or
-# cancellation, so it cannot be reused while its process group is signalled.
-# Every saved report byte is redacted.
+# status in the private controller directory. After the worker and its EXIT
+# cleanup finish, the wrapper reads the complete redacted report into memory
+# and streams prefixed data lines plus one terminal status through the private
+# FIFO. The controller does not emit any line until that terminal status
+# arrives inside the original deadline, so a stalled report read or transfer
+# stays bounded and partial output is discarded. The child PID remains
+# unreaped until the controller chooses completion or cancellation, so it
+# cannot be reused while its process group is signalled.
 run_safety_bounded() (
-  local bounded_dir='' worker_pid='' worker_rc=0 result='' args=()
+  local bounded_dir='' worker_pid='' watchdog_pid='' worker_rc=0 result=''
+  local report='' line='' current_line='' report_lines=0 args=()
   umask 077
   bounded_unknown() {
     echo
@@ -2154,15 +2157,12 @@ run_safety_bounded() (
     echo "  Credential, instruction, denial and untrusted-build coverage are UNKNOWN."
     echo "  Partial worker output is discarded; skipped or truncated scope stays UNKNOWN."
   }
-  emit_bounded_report() {
-    local report
-    if ! report=$(cat "$bounded_dir/report"); then
-      bounded_unknown 'cannot read the completed safety report.'
-      return 2
-    fi
-    printf '%s\n' "$report"
-  }
   bounded_cleanup() {
+    if [ -n "$watchdog_pid" ]; then
+      kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+      kill -KILL -- "-$watchdog_pid" 2>/dev/null || true
+      wait "$watchdog_pid" 2>/dev/null || true
+    fi
     if [ -n "$worker_pid" ]; then
       kill -TERM -- "-$worker_pid" 2>/dev/null || true
       kill -KILL -- "-$worker_pid" 2>/dev/null || true
@@ -2185,40 +2185,92 @@ run_safety_bounded() (
   set -m
   (
     set +m
+    sleep "$SAFETY_TIMEOUT_SECONDS"
+    printf 'timeout\n' >&9
+  ) &
+  watchdog_pid=$!
+  (
+    set +m
     trap - EXIT HUP INT TERM
     AGENT_TELEMETRY_SAFETY_WORKER=1 \
       AGENT_TELEMETRY_SAFETY_STATUS="$bounded_dir/worker-status" \
-      bash +x "$0" "${args[@]}"
+      bash +x "$0" "${args[@]}" > "$bounded_dir/report" 2>/dev/null
     worker_rc=$?
     result='missing'
     if [ -r "$bounded_dir/worker-status" ]; then
       IFS= read -r result < "$bounded_dir/worker-status" || result='missing'
     fi
-    printf '%s:%s\n' "$result" "$worker_rc" >&9
+    if ! report=$(cat "$bounded_dir/report"); then
+      printf 'error:report:%s:%s\n' "$result" "$worker_rc" >&9
+      exit "$worker_rc"
+    fi
+    while IFS= read -r line; do
+      while [ "${#line}" -gt 512 ]; do
+        printf 'chunk:%s\n' "${line:0:512}" >&9 || exit 3
+        line=${line:512}
+      done
+      printf 'line:%s\n' "$line" >&9 || exit 3
+    done <<< "$report"
+    printf 'done:%s:%s\n' "$result" "$worker_rc" >&9
     exit "$worker_rc"
-  ) > "$bounded_dir/report" 2>/dev/null &
+  ) &
   worker_pid=$!
-  if IFS= read -r -t "$SAFETY_TIMEOUT_SECONDS" result <&9; then
-    wait "$worker_pid" 2>/dev/null || worker_rc=$?
-    worker_pid=''
-    if [ "$result" = 0:0 ] && [ "$worker_rc" -eq 0 ]; then
-      emit_bounded_report || exit 2
-    elif [ "$result" = 2:2 ] && [ "$worker_rc" -eq 2 ]; then
-      emit_bounded_report || exit 2
-      exit 2
-    else
-      bounded_unknown 'the safety worker failed; its measurements are incomplete.'
+  while :; do
+    if ! IFS= read -r result <&9; then
+      bounded_unknown 'the safety completion channel failed.'
       exit 2
     fi
-  else
-    kill -TERM -- "-$worker_pid" 2>/dev/null || true
-    IFS= read -r -t 2 result <&9 || true
-    kill -KILL -- "-$worker_pid" 2>/dev/null || true
-    wait "$worker_pid" 2>/dev/null || true
-    worker_pid=''
-    bounded_unknown "safety scan exceeded the ${SAFETY_TIMEOUT_SECONDS}s time limit."
-    exit 2
-  fi
+    case "$result" in
+      timeout)
+        wait "$watchdog_pid" 2>/dev/null || true
+        watchdog_pid=''
+        kill -TERM -- "-$worker_pid" 2>/dev/null || true
+        kill -KILL -- "-$worker_pid" 2>/dev/null || true
+        wait "$worker_pid" 2>/dev/null || true
+        worker_pid=''
+        bounded_unknown "safety scan exceeded the ${SAFETY_TIMEOUT_SECONDS}s time limit."
+        exit 2 ;;
+      chunk:*)
+        current_line="${current_line}${result#chunk:}" ;;
+      line:*)
+        current_line="${current_line}${result#line:}"
+        if [ "$report_lines" -eq 0 ]; then
+          report=$current_line
+        else
+          report="${report}"$'\n'"${current_line}"
+        fi
+        current_line=''
+        report_lines=$((report_lines + 1)) ;;
+      error:report:*)
+        kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+        wait "$watchdog_pid" 2>/dev/null || true
+        watchdog_pid=''
+        wait "$worker_pid" 2>/dev/null || worker_rc=$?
+        worker_pid=''
+        bounded_unknown 'cannot read the completed safety report.'
+        exit 2 ;;
+      done:*)
+        kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+        wait "$watchdog_pid" 2>/dev/null || true
+        watchdog_pid=''
+        wait "$worker_pid" 2>/dev/null || worker_rc=$?
+        worker_pid=''
+        result=${result#done:}
+        if [ "$result" = 0:0 ] && [ "$worker_rc" -eq 0 ]; then
+          printf '%s\n' "$report"
+          exit 0
+        elif [ "$result" = 2:2 ] && [ "$worker_rc" -eq 2 ]; then
+          printf '%s\n' "$report"
+          exit 2
+        else
+          bounded_unknown 'the safety worker failed; its measurements are incomplete.'
+          exit 2
+        fi ;;
+      *)
+        bounded_unknown 'the safety worker returned a malformed completion stream.'
+        exit 2 ;;
+    esac
+  done
 )
 
 # Everything the report prints goes through main(), whose entire stdout is piped

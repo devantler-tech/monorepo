@@ -3082,11 +3082,40 @@ BOUNDED_ALL=$(PATH="$FIX/safety-timeout-shim:$PATH" SAFETY_TEST_GREP="$candidate
 check "the full report continues after a safety deadline" "$BOUNDED_ALL" "CROSS-INSTANCE / A2A"
 check "the full report reaches its completion footer after a safety deadline" "$BOUNDED_ALL" "END TELEMETRY"
 
+# Reading a completed report is still part of the advertised safety operation.
+# A stalled temporary filesystem must not bypass the deadline after the worker
+# has already signalled completion.
+mkdir -p "$FIX/safety-report-timeout-shim"
+safety_real_cat=$(command -v cat)
+cat > "$FIX/safety-report-timeout-shim/cat" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  */.agtel_bounded.*/report)
+    : > "$SAFETY_REPORT_READ_STARTED"
+    sleep 4 ;;
+esac
+exec "$SAFETY_TEST_CAT" "$@"
+EOF
+chmod +x "$FIX/safety-report-timeout-shim/cat"
+rm -f "$FIX/safety-report-read-started"
+REPORT_READ_BOUNDED=$(PATH="$FIX/safety-report-timeout-shim:$PATH" \
+  SAFETY_TEST_CAT="$safety_real_cat" SAFETY_REPORT_READ_STARTED="$FIX/safety-report-read-started" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+report_read_bounded_rc=$?
+if [ -e "$FIX/safety-report-read-started" ] && [ "$report_read_bounded_rc" -eq 2 ] \
+   && grep -qF "UNKNOWN: safety scan exceeded" <<<"$REPORT_READ_BOUNDED"; then
+  ok "the safety deadline includes completed-report reads"
+else
+  bad "the safety deadline includes completed-report reads" \
+    "read_started=$([ -e "$FIX/safety-report-read-started" ] && echo yes || echo no) rc=$report_read_bounded_rc"
+fi
+
 # A completed worker report is still unmeasured if the controller cannot read
 # its private report file. Simulate only that final read; every worker-side cat
 # delegates to the real command.
 mkdir -p "$FIX/safety-report-read-shim"
-safety_real_cat=$(command -v cat)
 cat > "$FIX/safety-report-read-shim/cat" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
