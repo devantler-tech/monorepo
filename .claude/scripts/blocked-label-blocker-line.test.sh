@@ -728,49 +728,105 @@ OUT="$("$CHECK" --help 2>&1)"; RC=$?
 if [ "$RC" = 0 ] && grep -q '| <blocker-kind> | last-verified' <<<"$OUT" && grep -q '| authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session> <YYYY-MM-DD>' <<<"$OUT" && grep -q -- '--ask-max-age-days <n>' <<<"$OUT"; then ok "--help shows the class token, the authority ask suffix and the cadence option"; else bad "--help shows the class token, the authority ask suffix and the cadence option" "rc=$RC out=${OUT:0:300}"; fi
 if ! grep -q '^set -euo pipefail' <<<"$OUT"; then ok "and --help stops before the code"; else bad "and --help stops before the code" "help leaked code"; fi
 
-# ------------------------------------------------------------------ 39. --help and the guides define the same ask channels
+# ------------------------------------------------------------------ 43. --help and the guides define the same ask channels
 # A caller reading only --help has no other definition of the channels. The help once sent a Slack
 # ask to "the declared Slack channel" while the guides send it to the maintainer's self-DM, because
 # every channel in the workspace is public, and it never said `push` is excluded (#3784). So the
 # vocabulary is read out of the guide's own ask-record rule, and the help and the check are both
 # held to it: a token or an exclusion that changes in the guide alone turns this red.
+RULE_GUIDE="$HERE/../guides/work-selection.md"
+DESTINATION_GUIDE="$HERE/../guides/maintainer-channels.md"
 flat() { tr '\n' ' ' | tr -s '[:space:]' ' '; }
+# Every backticked span is a token, however it is spelt. A pattern that knew only lowercase words
+# would never examine `self-dm`, `SMS` or `dm2`, and a token nobody examined passes every check.
 # shellcheck disable=SC2016 # literal backticks: the guide marks each token up as code
-tokens() { { grep -o '`[a-z][a-z]*`' || true; } | tr -d '`' | paste -sd'|' -; }
-ASK_RULE="$(awk 'index($0, "**An `authority` line MUST also record the ask") { inside = 1 }
-  inside && /^[[:space:]]*$/ { exit }
-  inside { print }' "$HERE/../guides/work-selection.md" | flat)"
-SLACK_DESTINATION="$(awk 'index($0, "- **Destination:**") { inside = 1 }
-  inside && index($0, "- **Surface:**") { exit }
-  inside { print }' "$HERE/../guides/maintainer-channels.md" | flat)"
-HELP_RAW="$("$CHECK" --help 2>&1)"
-HELP_CHANNELS="$(awk '/^Ask channels: / { inside = 1 }
-  inside && /^[[:space:]]*$/ { exit }
-  inside { print }' <<<"$HELP_RAW" | flat)"
-# Fail closed: without its anchors a span would be the whole text, and its tokens meaningless.
-GUIDE_CHANNELS=""
-GUIDE_EXCLUDED=""
+tokens() { { grep -o '`[^`]*`' || true; } | tr -d '`' | paste -sd'|' -; }
+# section <file> <start> [<end>]: the lines from the one holding <start> up to the first later line
+# holding <end> (no <end>: the next blank line), flattened. It prints nothing unless BOTH anchors
+# were seen, so a renamed end anchor cannot stretch the span to the end of the file. The anchors
+# travel through the environment because `awk -v` would process their backslashes.
+section() {
+  SECTION_START="$2" SECTION_END="${3:-}" awk '
+    BEGIN { a = ENVIRON["SECTION_START"]; b = ENVIRON["SECTION_END"] }
+    !inside {
+      if (index($0, a)) { inside = 1; buf = $0 "\n" }
+      next
+    }
+    (b == "" ? ($0 ~ /^[[:space:]]*$/) : index($0, b)) { printf "%s", buf; exit }
+    { buf = buf $0 "\n" }
+  ' "$1" | flat
+}
+# rule_tokens <rule> <start> <end>: the tokens between two clauses of the rule, or nothing unless
+# both clauses are there in that order -- without them the span would be the whole rule.
+rule_tokens() {
+  local span
+  case "$1" in
+    *"$2"*"$3"*)
+      span=${1#*"$2"}
+      span=${span%%"$3"*}
+      tokens <<<"$span"
+      ;;
+  esac
+}
+# shellcheck disable=SC2016
+ASK_RULE="$(section "$RULE_GUIDE" '**An `authority` line MUST also record the ask')"
+SLACK_DESTINATION="$(section "$DESTINATION_GUIDE" '- **Destination:**' '- **Surface:**')"
+"$CHECK" --help >"$TMP/help.txt" 2>&1
+HELP_CHANNELS="$(section "$TMP/help.txt" 'Ask channels:')"
+GUIDE_CHANNELS="$(rule_tokens "$ASK_RULE" 'names where it actually landed' 'No other word is a channel token')"
+GUIDE_EXCLUDED="$(rule_tokens "$ASK_RULE" 'That includes' 'Re-raise on a cadence')"
 HELP_EXCLUDED=""
-case "$ASK_RULE" in
-  *'names where it actually landed'*'No other word is a channel token'*'That includes'*'Re-raise on a cadence'*)
-    span="${ASK_RULE#*names where it actually landed}"
-    GUIDE_CHANNELS="$(tokens <<<"${span%%No other word is a channel token*}")"
-    span="${ASK_RULE#*That includes}"
-    GUIDE_EXCLUDED="$(tokens <<<"${span%%Re-raise on a cadence*}")"
-    ;;
-esac
 case "$HELP_CHANNELS" in
   *'No other word is a channel token'*) HELP_EXCLUDED="${HELP_CHANNELS#*No other word is a channel token}" ;;
 esac
-if [ -n "$GUIDE_CHANNELS" ] && [ -n "$GUIDE_EXCLUDED" ] && [ -n "$SLACK_DESTINATION" ]; then
-  ok "the guides' ask-record rule and Slack destination are found"
+# Fail closed, and name the first anchor that went: an empty span says nothing about why.
+MISSING_ANCHOR=""
+missing() { MISSING_ANCHOR="${MISSING_ANCHOR:-$1}"; }
+# shellcheck disable=SC2016
+grep -qF -- '**An `authority` line MUST also record the ask' "$RULE_GUIDE" ||
+  missing 'work-selection.md has no "**An `authority` line MUST also record the ask" rule'
+[ -n "$ASK_RULE" ] || missing "the ask-record rule in work-selection.md has no blank line ending it"
+for anchor in 'names where it actually landed' 'No other word is a channel token' 'That includes' 'Re-raise on a cadence'; do
+  case "$ASK_RULE" in *"$anchor"*) ;; *) missing "the ask-record rule in work-selection.md lacks '$anchor'" ;; esac
+done
+for anchor in '- **Destination:**' '- **Surface:**'; do
+  grep -qF -- "$anchor" "$DESTINATION_GUIDE" || missing "maintainer-channels.md has no '$anchor' bullet"
+done
+[ -n "$SLACK_DESTINATION" ] || missing "maintainer-channels.md has no '- **Surface:**' bullet after '- **Destination:**'"
+for anchor in 'Ask channels:' 'No other word is a channel token'; do
+  case "$HELP_CHANNELS" in *"$anchor"*) ;; *) missing "the Ask channels paragraph of --help lacks '$anchor'" ;; esac
+done
+if [ -z "$MISSING_ANCHOR" ] && [ -n "$GUIDE_CHANNELS" ] && [ -n "$GUIDE_EXCLUDED" ]; then
+  ok "the guides' ask-record rule and Slack destination, and the help's channel paragraph, are found"
 else
-  bad "the guides' ask-record rule and Slack destination are found" "channels='$GUIDE_CHANNELS' excluded='$GUIDE_EXCLUDED' destination='${SLACK_DESTINATION:0:80}'"
+  bad "the guides' ask-record rule and Slack destination, and the help's channel paragraph, are found" "${MISSING_ANCHOR:-every anchor is present, but out of order or around no token}; channels='$GUIDE_CHANNELS' excluded='$GUIDE_EXCLUDED'"
 fi
-if grep -qF "| asked <$GUIDE_CHANNELS> <YYYY-MM-DD>" <<<"$HELP_RAW"; then
+# MUTATION: with its end anchor renamed, the destination reads as not found instead of running on
+# to the end of the guide.
+sed 's/- \*\*Surface:\*\*/- **Tooling:**/' "$DESTINATION_GUIDE" >"$TMP/destination-without-end.md"
+if ! cmp -s "$DESTINATION_GUIDE" "$TMP/destination-without-end.md" && [ -z "$(section "$TMP/destination-without-end.md" '- **Destination:**' '- **Surface:**')" ]; then
+  ok "MUTATION: a section whose end anchor is gone is not read to the end of the file"
+else
+  bad "MUTATION: a section whose end anchor is gone is not read to the end of the file" "the mutation changed nothing, or the span was still returned"
+fi
+help_advertises() { grep -qF "| asked <$1> <YYYY-MM-DD>" "$TMP/help.txt"; } # the grammar names exactly these
+if help_advertises "$GUIDE_CHANNELS"; then
   ok "--help advertises exactly the guide's channel tokens"
 else
   bad "--help advertises exactly the guide's channel tokens" "guide='$GUIDE_CHANNELS'"
+fi
+# MUTATION: a channel the guide spells with a capital, a hyphen or a digit is read out of it like any
+# other. Unexamined, it would leave the comparison above green while the guide named a channel the
+# help never lists and the check reads as NO-ASK.
+# shellcheck disable=SC2016
+MUTATED_RULE="$(FROM='and `session` the native' TO='`SMS` a text, `self-dm` a second DM, `dm2` a third, and `session` the native' awk '
+  (i = index($0, ENVIRON["FROM"])) { $0 = substr($0, 1, i - 1) ENVIRON["TO"] substr($0, i + length(ENVIRON["FROM"])) }
+  { print }' <<<"$ASK_RULE")"
+MUTATED_CHANNELS="$(rule_tokens "$MUTATED_RULE" 'names where it actually landed' 'No other word is a channel token')"
+if [ "$MUTATED_CHANNELS" = 'pr|slack|SMS|self-dm|dm2|session' ] && ! help_advertises "$MUTATED_CHANNELS"; then
+  ok "MUTATION: a guide channel of any spelling is read, and turns the comparison red"
+else
+  bad "MUTATION: a guide channel of any spelling is read, and turns the comparison red" "read '$MUTATED_CHANNELS' from the mutated rule"
 fi
 ask_verdict() { # word -> the check's verdict on an authority record asked through it
   printf '[{"repo":"a","number":80,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-01: pending | asked %s 2026-09-01"}]\n' "$1" >"$TMP/help-vocabulary.json"
@@ -784,30 +840,53 @@ for token in "${guide_channels[@]:-}"; do
     bad "--help defines the guide's channel '$token', and the check accepts it" "verdict=$(ask_verdict "$token") help=${HELP_CHANNELS:0:200}"
   fi
 done
-IFS='|' read -r -a guide_excluded <<<"$GUIDE_EXCLUDED"
-for word in "${guide_excluded[@]:-}"; do
-  if [ -n "$word" ] && grep -qw -- "$word" <<<"$HELP_EXCLUDED" && [ "$(ask_verdict "$word")" = NO-ASK ]; then
-    ok "--help rules out the guide's non-channel '$word', and the check reads it as NO-ASK"
-  else
-    bad "--help rules out the guide's non-channel '$word', and the check reads it as NO-ASK" "verdict=$(ask_verdict "$word") help=${HELP_EXCLUDED:0:200}"
-  fi
-done
 # The meaning, not only the token. Each row is a clause a guide states and the clause that carries
-# it in the help; both sides are asserted, so rewording either one prompts the other.
-while IFS='@' read -r source guide_clause help_clause; do
-  case "$source" in rule) guide_text="$ASK_RULE" ;; *) guide_text="$SLACK_DESTINATION" ;; esac
-  if grep -qF -- "$guide_clause" <<<"$guide_text" && grep -qF -- "$help_clause" <<<"$HELP_CHANNELS"; then
+# it in the help; both sides are asserted, so rewording either one prompts the other. A row that
+# names a token must open on it, and an `excluded` row is looked for only in the sentence of the
+# help that rules words out, so a word the help merely uses elsewhere cannot pass for its exclusion.
+CLAUSE_TOKENS="|"
+while IFS='@' read -r source token guide_clause help_clause; do
+  case "$source" in
+    rule) guide_text="$ASK_RULE" help_text="$HELP_CHANNELS" ;;
+    excluded) guide_text="$ASK_RULE" help_text="$HELP_EXCLUDED" ;;
+    *) guide_text="$SLACK_DESTINATION" help_text="$HELP_CHANNELS" ;;
+  esac
+  case "$guide_clause" in "${token:+\`$token\`}"*) about_token=1 ;; *) about_token=0 ;; esac
+  if [ "$about_token" = 1 ] && grep -qF -- "$guide_clause" <<<"$guide_text" && grep -qF -- "$help_clause" <<<"$help_text"; then
     ok "--help carries the guide's '$guide_clause'"
+    [ "$source" != excluded ] || CLAUSE_TOKENS="$CLAUSE_TOKENS$token|"
   else
-    bad "--help carries the guide's '$guide_clause'" "the guide must still say it, and the help must say '$help_clause'"
+    bad "--help carries the guide's '$guide_clause'" "the guide must still say it, opening on its token '$token', and the help must say '$help_clause'"
   fi
 done <<'CLAUSES'
-rule@`slack` the Slack DM to his own user@slack = the Slack DM to the maintainer's own user
-destination@**Destination:** his self-DM@(his self-DM), never a Slack channel
-destination@never a channel. Every channel in the workspace is public@never a Slack channel, because every channel in the workspace is public
-rule@`push`, whether it means a git push or the runtime's push notification@push, whether it means a git push or the runtime's push notification
-rule@`issue`: a GitHub comment is a durable **record** of an ask@issue: a GitHub comment records an ask and is not one
+rule@slack@`slack` the Slack DM to his own user@slack = the Slack DM to the maintainer's own user
+destination@@**Destination:** his self-DM@(his self-DM), never a Slack channel
+destination@@never a channel. Every channel in the workspace is public@never a Slack channel, because every channel in the workspace is public
+excluded@push@`push`, whether it means a git push or the runtime's push notification@push, whether it means a git push or the runtime's push notification
+excluded@issue@`issue`: a GitHub comment is a durable **record** of an ask@issue: a GitHub comment records an ask and is not one
 CLAUSES
+# ruled_out <word>: an `excluded` row above holds for it, and the check reads it as NO-ASK.
+ruled_out() {
+  case "$CLAUSE_TOKENS" in *"|$1|"*) ;; *) return 1 ;; esac
+  [ "$(ask_verdict "$1")" = NO-ASK ]
+}
+IFS='|' read -r -a guide_excluded <<<"$GUIDE_EXCLUDED"
+for word in "${guide_excluded[@]:-}"; do
+  if [ -n "$word" ] && ruled_out "$word"; then
+    ok "--help rules out the guide's non-channel '$word', and the check reads it as NO-ASK"
+  else
+    bad "--help rules out the guide's non-channel '$word', and the check reads it as NO-ASK" "it needs an 'excluded' row in CLAUSES that holds (rows hold for '$CLAUSE_TOKENS'); verdict=$(ask_verdict "$word")"
+  fi
+done
+# MUTATION: the help says "a GitHub comment" and "the check reads" in passing, and the check reads
+# either word as NO-ASK. Neither counts as ruled out unless a row says so.
+for word in comment check; do
+  if grep -qw -- "$word" <<<"$HELP_EXCLUDED" && [ "$(ask_verdict "$word")" = NO-ASK ] && ! ruled_out "$word"; then
+    ok "MUTATION: '$word', which the help only uses in passing, is not ruled out without a row"
+  else
+    bad "MUTATION: '$word', which the help only uses in passing, is not ruled out without a row" "the control needs the word in the help's exclusion sentence, and no row for it"
+  fi
+done
 
 # Current-head review regressions: exercise the public CLI with literal records.
 cat >"$TMP/authority-description.json" <<'JSON'

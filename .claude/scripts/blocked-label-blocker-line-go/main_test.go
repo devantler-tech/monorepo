@@ -108,6 +108,24 @@ func TestHelpDefinesTheEnforcedAskVocabulary(t *testing.T) {
 	}
 }
 
+// A token is matched as the text it is. Spliced into the expression unquoted, a
+// token such as "self.dm" would also accept "selfXdm" and quietly widen what
+// counts as asked.
+func TestAskExpressionMatchesEachTokenLiterally(t *testing.T) {
+	expression := askExpression([]string{"self.dm", "a|b"})
+	for record, want := range map[string]bool{
+		"x | asked self.dm 2026-09-01": true,
+		"x | asked selfXdm 2026-09-01": false,
+		"x | asked a|b 2026-09-01":     true,
+		"x | asked a 2026-09-01":       false,
+		"x | asked b 2026-09-01":       false,
+	} {
+		if got := expression.MatchString(record); got != want {
+			t.Errorf("%q: matched=%v, want %v", record, got, want)
+		}
+	}
+}
+
 // The digest tells an agent where to deliver the ask, so it names the same
 // closed set and, like the help, the one private Slack destination (#3784).
 func TestAskDigestNamesTheEnforcedChannelsAndTheSlackDestination(t *testing.T) {

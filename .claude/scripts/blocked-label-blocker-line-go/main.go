@@ -63,12 +63,23 @@ Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input).
 // test, so none of them can accept or advertise a token the others do not.
 var askChannels = []string{"pr", "slack", "session"}
 
+// askExpression matches an ask record that names one of channels. Each token
+// is quoted, so one that holds a metacharacter can only ever match itself and
+// never widens what counts as asked.
+func askExpression(channels []string) *regexp.Regexp {
+	quoted := make([]string, len(channels))
+	for i, channel := range channels {
+		quoted[i] = regexp.QuoteMeta(channel)
+	}
+	return regexp.MustCompile(`\| asked (` + strings.Join(quoted, "|") + `) ([0-9]{4}-[0-9]{2}-[0-9]{2})[\t ]*$`)
+}
+
 var (
 	orgRE          = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 	dateRE         = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 	identifierRE   = regexp.MustCompile(`#[0-9]+|maintainer authority|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
 	urlRE          = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*:[^\s]|//|www\.|[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.[A-Za-z]{2,}/)[^\s]*`)
-	askRE          = regexp.MustCompile(`\| asked (` + strings.Join(askChannels, "|") + `) ([0-9]{4}-[0-9]{2}-[0-9]{2})[\t ]*$`)
+	askRE          = askExpression(askChannels)
 	verificationRE = regexp.MustCompile(`^([0-9]{4}-[0-9]{2}-[0-9]{2}): (.*)$`)
 )
 
