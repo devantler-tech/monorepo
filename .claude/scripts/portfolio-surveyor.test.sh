@@ -941,18 +941,26 @@ war_cask_commits_json() {
     | with_commit_dates
 }
 
-ksail_head="8fdc117e5892a57a82781fc3a4806ef1f21873af"
+# Measured from devantler-tech/ksail#7249, exactly as the documented REST recipe reports it: the
+# release workflow commits through the API as the ksail-bot App, so GitHub's `web-flow` identity
+# commits and signs it. Every release since 2026-08-29 has this shape; the fixture used to carry the
+# retired `devantler-tech-bot[bot]` identity, which the classifier agreed with while matching no real
+# release (#3173).
+ksail_head="db7284e781375d8c68a20824977aad788b6a7fa2"
 ksail_files='[".claude-plugin/marketplace.json",".github/plugin/marketplace.json","copilot-plugin/.claude-plugin/plugin.json","copilot-plugin/plugin.json"]'
 ksail_commits="$(jq -cn --arg head "${ksail_head}" '[{
   sha: $head,
-  author_login: "",
-  author_name: "devantler-tech-bot[bot]",
-  author_email: "devantler-tech-bot[bot]@users.noreply.github.com",
-  committer_login: "",
-  committer_name: "devantler-tech-bot[bot]",
-  committer_email: "devantler-tech-bot[bot]@users.noreply.github.com",
-  message: "chore(copilot-plugin): release v7.172.2"
-}]' | with_commit_dates)"
+  author_login: "ksail-bot[bot]",
+  author_name: "ksail-bot[bot]",
+  author_email: "262010955+ksail-bot[bot]@users.noreply.github.com",
+  author_date: "2026-09-24T03:08:12Z",
+  committer_login: "web-flow",
+  committer_name: "GitHub",
+  committer_email: "noreply@github.com",
+  committer_date: "2026-09-24T03:08:12Z",
+  message: "chore(copilot-plugin): release v7.192.11",
+  verified: true
+}]')"
 
 ksail_cask_head="c58256924878560caff669a7c05df0d84c458b38"
 ksail_cask_commits="$(homebrew_commits_json \
@@ -1204,8 +1212,8 @@ expect_exempt \
   "KSail programmed plugin release" \
   "ksail" \
   "app/ksail-bot" \
-  "chore/copilot-plugin-v7.172.2" \
-  "chore(copilot-plugin): release v7.172.2" \
+  "chore/copilot-plugin-v7.192.11" \
+  "chore(copilot-plugin): release v7.192.11" \
   "${ksail_head}" \
   "${ksail_files}" \
   "${ksail_commits}"
@@ -1215,8 +1223,8 @@ expect_exempt \
 # and a null skill_owners map is an omission rather than an empty map.
 ksail_stdin_payload="$(jq -nc \
   --arg head "${ksail_head}" --argjson files "${ksail_files}" --argjson commits "${ksail_commits}" \
-  '{repo: "ksail", author: "app/ksail-bot", head_ref: "chore/copilot-plugin-v7.172.2",
-    title: "chore(copilot-plugin): release v7.172.2", head_oid: $head, files: $files,
+  '{repo: "ksail", author: "app/ksail-bot", head_ref: "chore/copilot-plugin-v7.192.11",
+    title: "chore(copilot-plugin): release v7.192.11", head_oid: $head, files: $files,
     commits: $commits}')"
 expect_stdin_rc() {
   local name="$1" want="$2" payload="$3"
@@ -1246,8 +1254,8 @@ expect_error_reason() {
   [[ "${err}" == "programmed-bot-review-exemption: ${want}" ]] ||
     fail "classifier ${name}: stderr '${err}', want '${want}'"
 }
-ksail_args=("ksail" "app/ksail-bot" "chore/copilot-plugin-v7.172.2"
-  "chore(copilot-plugin): release v7.172.2" "${ksail_head}" "${ksail_files}")
+ksail_args=("ksail" "app/ksail-bot" "chore/copilot-plugin-v7.192.11"
+  "chore(copilot-plugin): release v7.192.11" "${ksail_head}" "${ksail_files}")
 if err="$("${classifier}" --input - 2>&1 >/dev/null <<<"${ksail_stdin_payload}")"; then
   [[ -z "${err}" ]] || fail "classifier writes stderr on an exempt verdict: ${err}"
 else
@@ -1868,8 +1876,32 @@ expect_exempt \
   "${war_cask_head}" \
   '["Casks/world-at-ruin.rb"]' \
   "$(jq -c 'map(. + {verified: true})' <<<"${war_cask_commits}")"
-expect_exempt "KSail plugin release with the verified field" "devantler-tech/ksail" "${ksail_args[@]:1}" \
-  "$(jq -c 'map(. + {verified: true})' <<<"${ksail_commits}")"
+
+# The KSail release arm is a trust boundary pinned to one exact signed identity (#3173). Its names are
+# only what a commit claims, so without GitHub's signature verdict, or with an unsigned commit, the
+# release stays review-gated. Every identity field is compared exactly — changing any one of them, a
+# noreply address without its numeric prefix, or the bot committing for itself loses the exemption —
+# and the retired devantler-tech-bot identity is not kept as a second accepted shape.
+expect_review_gated "KSail plugin release without the verified field" "devantler-tech/ksail" \
+  "${ksail_args[@]:1}" "$(jq -c 'map(del(.verified))' <<<"${ksail_commits}")"
+expect_review_gated "KSail plugin release GitHub did not sign" "devantler-tech/ksail" "${ksail_args[@]:1}" \
+  "$(jq -c 'map(.verified = false)' <<<"${ksail_commits}")"
+for ksail_field in author_login author_name author_email committer_login committer_name committer_email; do
+  expect_review_gated "KSail plugin release with a different ${ksail_field}" "devantler-tech/ksail" \
+    "${ksail_args[@]:1}" "$(jq -c --arg f "${ksail_field}" 'map(.[$f] = "x" + .[$f])' <<<"${ksail_commits}")"
+done
+expect_review_gated "KSail plugin release from an unprefixed noreply address" "devantler-tech/ksail" \
+  "${ksail_args[@]:1}" \
+  "$(jq -c 'map(.author_email = "ksail-bot[bot]@users.noreply.github.com")' <<<"${ksail_commits}")"
+expect_review_gated "KSail plugin release the bot committed itself" "devantler-tech/ksail" "${ksail_args[@]:1}" \
+  "$(jq -c 'map(.committer_login = .author_login | .committer_name = .author_name
+    | .committer_email = .author_email)' <<<"${ksail_commits}")"
+expect_review_gated "KSail plugin release from the retired devantler-tech-bot identity" "devantler-tech/ksail" \
+  "${ksail_args[@]:1}" \
+  "$(jq -c 'map(.author_login = "" | .author_name = "devantler-tech-bot[bot]"
+    | .author_email = "devantler-tech-bot[bot]@users.noreply.github.com" | .committer_login = ""
+    | .committer_name = "devantler-tech-bot[bot]"
+    | .committer_email = "devantler-tech-bot[bot]@users.noreply.github.com")' <<<"${ksail_commits}")"
 
 # #2291. The tap token commits under the maintainer's own identity, so a `git commit --amend` that
 # rewrites the cask body leaves every login, name, email, message, branch and path identical to a
@@ -2141,8 +2173,8 @@ expect_not_release_exempt \
   "lookalike KSail release from the wrong actor" \
   "ksail" \
   "app/renovate" \
-  "chore/copilot-plugin-v7.172.2" \
-  "chore(copilot-plugin): release v7.172.2" \
+  "chore/copilot-plugin-v7.192.11" \
+  "chore(copilot-plugin): release v7.192.11" \
   "${ksail_head}" \
   "${ksail_files}" \
   "${ksail_commits}"
@@ -2151,8 +2183,8 @@ expect_review_gated \
   "bare KSail bot alias is not an API identity" \
   "ksail" \
   "ksail-bot" \
-  "chore/copilot-plugin-v7.172.2" \
-  "chore(copilot-plugin): release v7.172.2" \
+  "chore/copilot-plugin-v7.192.11" \
+  "chore(copilot-plugin): release v7.192.11" \
   "${ksail_head}" \
   "${ksail_files}" \
   "${ksail_commits}"
@@ -2181,8 +2213,8 @@ expect_review_gated \
   "KSail release with a human adaptation commit" \
   "ksail" \
   "app/ksail-bot" \
-  "chore/copilot-plugin-v7.172.2" \
-  "chore(copilot-plugin): release v7.172.2" \
+  "chore/copilot-plugin-v7.192.11" \
+  "chore(copilot-plugin): release v7.192.11" \
   "${adapted_ksail_head}" \
   "${ksail_files}" \
   "${adapted_ksail_commits}"
@@ -2201,8 +2233,8 @@ expect_classifier_error \
   "stale commit list does not reach the supplied head" \
   "ksail" \
   "app/ksail-bot" \
-  "chore/copilot-plugin-v7.172.2" \
-  "chore(copilot-plugin): release v7.172.2" \
+  "chore/copilot-plugin-v7.192.11" \
+  "chore(copilot-plugin): release v7.192.11" \
   "4444444444444444444444444444444444444444" \
   "${ksail_files}" \
   "${ksail_commits}"
@@ -2211,8 +2243,8 @@ expect_classifier_error \
   "malformed commit provenance" \
   "ksail" \
   "app/ksail-bot" \
-  "chore/copilot-plugin-v7.172.2" \
-  "chore(copilot-plugin): release v7.172.2" \
+  "chore/copilot-plugin-v7.192.11" \
+  "chore(copilot-plugin): release v7.192.11" \
   "${ksail_head}" \
   "${ksail_files}" \
   'not-json'
@@ -4043,3 +4075,65 @@ _mut_inline=$(sed 's/may read them with its shell\./reads them the same way./' <
 [[ "$(_local_read_rule_error "${_mut_inline}")" == *"must name 'An inline survey"* ]] ||
   fail "round-20 control: the local-read check did not reject a rule that dropped the inline-survey carve-out (#3638)"
 echo "portfolio surveyor contract: round-20 local-file read assertions passed"
+
+# ── monorepo#3067: the fifth active-work signal is a live process on this host ───────────────────
+# Every other active-work signal is a published event, and #3053 read idle on all four (push 3h24m
+# old) while two live sessions worked in its worktree. Pin the contract row and its discipline, and
+# bind `holder=` to EVERY PR row template that carries `active=`: a document-wide match would stay
+# green on the explanatory prose while one template silently dropped the field.
+_holder_contract_error() {
+  local flat="$1" clause
+  for clause in \
+    'A live process **outside your own session** working in a local checkout of its head branch (`holder=live:`)' \
+    'A live process is a **current** fact, so it does not expire; it is re-read instead' \
+    'immediately before your first push to a branch you did not create' \
+    '`self:` is your own session and parks nothing' \
+    '**`unknown:` is never "no live holder"**'; do
+    case "${flat}" in
+      *"${clause}"*) ;;
+      *) echo "the active-work contract must say: ${clause}"; return ;;
+    esac
+  done
+}
+_err=$(_holder_contract_error "${constitution_flat}")
+[ -z "${_err}" ] || fail "${_err} (monorepo#3067)"
+_mut=$(printf '%s' "${constitution_flat}" | sed 's/is never "no live holder"/is a pass/')
+[[ "$(_holder_contract_error "${_mut}")" == *'never "no live holder"'* ]] ||
+  fail "control: the holder contract check did not reject a contract that reads unknown as clear (monorepo#3067)"
+
+for _clause in \
+  '<repo-root>/.claude/scripts/pr-worktree-holder.sh --input -' \
+  '**`unknown` is never `none`**' \
+  'Run ONCE per survey (it reads the whole host, so never per PR)' \
+  'a failed call or a missing line is `unknown:query`' \
+  'every PR row carries the field' \
+  'any PR with a live `active=` signal or `holder=live:` `ACTIVELY-OWNED`' \
+  'Carries the same deepened pentad, `active=`, `holder=`, merge_group_result='; do
+  case "${surveyor_flat}" in
+    *"${_clause}"*) ;;
+    *) fail "portfolio-surveyor.md must say: ${_clause} (monorepo#3067)" ;;
+  esac
+done
+
+_holder_grammar='holder=<live:…|self:…|none|fork|unknown:<reason>>'
+_holder_rows_error() {
+  local file="$1" rows with
+  rows=$(grep -c 'active=<.*merge_group_result=' "${file}" || true)
+  with=$(grep 'active=<.*merge_group_result=' "${file}" | grep -c -F "${_holder_grammar}" || true)
+  if [ "${rows}" -lt 3 ]; then
+    echo "found ${rows} PR row templates, so the holder= binding would be vacuous"
+  elif [ "${rows}" != "${with}" ]; then
+    echo "only ${with} of ${rows} PR row templates carry ${_holder_grammar}"
+  fi
+}
+_err=$(_holder_rows_error "${surveyor}")
+[ -z "${_err}" ] || fail "portfolio-surveyor.md: ${_err} (monorepo#3067)"
+_holder_mutant="$(mktemp)"
+awk -v g="${_holder_grammar}, " '
+  !done && (i = index($0, g)) { $0 = substr($0, 1, i - 1) substr($0, i + length(g)); done = 1 }
+  { print }' "${surveyor}" >"${_holder_mutant}"
+_mut_err=$(_holder_rows_error "${_holder_mutant}")
+rm -f "${_holder_mutant}"
+[[ "${_mut_err}" == *'PR row templates carry'* ]] ||
+  fail "control: the holder row binding did not reject a template that dropped holder= (monorepo#3067)"
+echo "portfolio surveyor contract: monorepo#3067 worktree-holder assertions passed"

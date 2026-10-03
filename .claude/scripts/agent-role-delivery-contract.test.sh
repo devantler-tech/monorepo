@@ -962,7 +962,8 @@ cp "${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.js
   "${session_main}/.claude/plugin-consumption/"
 for session_classifier_name in pr-ownership-disclosure.sh programmed-bot-review-exemption.sh \
   pr-unresolved-threads.sh coderabbit-summary-verdict.sh local-review-verdict.sh \
-  coderabbit-review-verdict.sh kata-measure-date.sh; do
+  coderabbit-review-verdict.sh kata-measure-date.sh pr-worktree-holder.sh \
+  maintainer-comment-candidates.sh; do
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_main}/.claude/scripts/"
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_other}/.claude/scripts/"
 done
@@ -1226,6 +1227,58 @@ kata_sites="$(grep -o '[^[:space:]"`'"'"']*kata-measure-date\.sh[^[:space:]`]*' 
 [ -z "${kata_sites}" ] ||
   fail "surveyor overlay calls kata-measure-date.sh by a form the guard refuses: ${kata_sites}"
 
+# The worktree-holder probe likewise (monorepo#3067): every other active-work signal is a published
+# event, and #3053 read idle on all of them while two sessions worked in its worktree. Run the
+# overlay's OWN pipeline through the hook, and prove a relative-path call is refused.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+holder_command="$(grep -o '`gh api graphql [^`]*pr-worktree-holder\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${holder_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded pr-worktree-holder.sh pipeline (monorepo#3067)"
+holder_command="${holder_command//<repo-root>/${repo_root}}"
+holder_command="${holder_command//<repo>/monorepo}"
+holder_command="${holder_command//<n>/3053}"
+holder_payload="$(jq -nc --arg cmd "${holder_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${holder_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's worktree-holder pipeline (monorepo#3067)"
+relative_holder_command="${holder_command//${repo_root}\/.claude\/scripts\//.claude/scripts/}"
+[ "${relative_holder_command}" != "${holder_command}" ] ||
+  fail "negative control did not rewrite the worktree-holder path (monorepo#3067)"
+relative_holder_payload="$(jq -nc --arg cmd "${relative_holder_command}" '{tool_input: {command: $cmd}}')"
+if run_surveyor_hook "${relative_holder_payload}" >/dev/null 2>&1; then
+  fail "consumer surveyor hook admitted a RELATIVE pr-worktree-holder.sh call (monorepo#3067)"
+fi
+holder_sites="$(grep -o '[^[:space:]"`'"'"']*pr-worktree-holder\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/pr-worktree-holder.sh' || true)"
+[ -z "${holder_sites}" ] ||
+  fail "surveyor overlay calls pr-worktree-holder.sh by a form the guard refuses: ${holder_sites}"
+
+# The maintainer-comment candidate classifier likewise (monorepo#3163): composed by hand, an
+# issue-sweep row named the wrong issue and the maintainer-channel finding was discarded. Run the
+# overlay's OWN pipeline through the hook, and prove a relative-path call is refused.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+candidates_command="$(grep -o '`gh issue view [^`]*maintainer-comment-candidates\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${candidates_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded maintainer-comment-candidates.sh pipeline (monorepo#3163)"
+candidates_command="${candidates_command//<repo-root>/${repo_root}}"
+candidates_command="${candidates_command//<repo>/platform}"
+candidates_command="${candidates_command//<n>/3275}"
+candidates_payload="$(jq -nc --arg cmd "${candidates_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${candidates_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's maintainer-comment-candidates pipeline (monorepo#3163)"
+relative_candidates_command="${candidates_command//${repo_root}\/.claude\/scripts\//.claude/scripts/}"
+[ "${relative_candidates_command}" != "${candidates_command}" ] ||
+  fail "negative control did not rewrite the candidates helper path (monorepo#3163)"
+relative_candidates_payload="$(jq -nc --arg cmd "${relative_candidates_command}" '{tool_input: {command: $cmd}}')"
+if run_surveyor_hook "${relative_candidates_payload}" >/dev/null 2>&1; then
+  fail "consumer surveyor hook admitted a RELATIVE maintainer-comment-candidates.sh call (monorepo#3163)"
+fi
+candidates_sites="$(grep -o '[^[:space:]"`'"'"']*maintainer-comment-candidates\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/maintainer-comment-candidates.sh' || true)"
+[ -z "${candidates_sites}" ] ||
+  fail "surveyor overlay calls maintainer-comment-candidates.sh by a form the guard refuses: ${candidates_sites}"
+
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
 # shellcheck disable=SC2016  # fixture must inspect its own child environment
@@ -1410,15 +1463,53 @@ maintainer_channels_flat="$(
 )"
 [ -n "${maintainer_channels_flat}" ] ||
   fail "could not extract the maintainer-channels guide's '## Maintainer channels' section (monorepo#2900)"
+assert_maintainer_channels_prose() {
+  case "${maintainer_channels_flat}" in
+    *"$1"*) ;;
+    *) fail "Maintainer channels no longer says '$1' — $2" ;;
+  esac
+}
 for surface_rule in \
   "the Slack connector that is already signed in, whose tools are named \`slack_send_message\`" \
   "is a different surface, not evidence that the channel is closed" \
   "names each surface it tried and what that surface returned"; do
-  case "${maintainer_channels_flat}" in
-    *"${surface_rule}"*) ;;
-    *) fail "Maintainer channels no longer says '${surface_rule}' — the escalation surface is ambiguous again (monorepo#2900)" ;;
-  esac
+  assert_maintainer_channels_prose "${surface_rule}" "the escalation surface is ambiguous again (monorepo#2900)"
 done
+# A push notification delivered an ask that the blocker check then read as never-asked, because
+# the ask-record vocabulary excluded "push" without saying which push it meant (monorepo#3243).
+# The channels section must settle it where an escalating agent reads — the exclusion, a reason
+# for it, and the operative instruction — and the always-on core must agree. The anchors are the
+# rule's load-bearing clauses, not its whole sentences, so rewording the rationale stays free.
+for push_rule in \
+  "and the runtime's push notification are **not** attention channels" \
+  "An unattended run cannot rely on it" \
+  "a notification never satisfies an ask" \
+  "record that channel" \
+  "never use it for status, and never in place of one of the three"; do
+  assert_maintainer_channels_prose "${push_rule}" "a push-notification ask is ambiguous again (monorepo#3243)"
+done
+assert_prose "\`@devantler\` mentions and push notifications are not channels." \
+  "AGENTS.md's Maintainer channels summary no longer rules out the push notification (monorepo#3243)"
+# The ask-record rule must say both meanings of `push` are excluded. A refutation of the old
+# sentence would only stop a verbatim revert, so every backticked `push` token in THAT rule must
+# carry the disambiguation. Scoped to the rule's paragraph: `push` legitimately names other things
+# elsewhere in the contract (a git push, a workflow trigger), and those are not this rule.
+ask_rule_flat="$(
+  awk 'index($0, "**An `authority` line MUST also record the ask") { inside = 1 }
+       inside && /^[[:space:]]*$/ { exit }
+       inside { print }' "${repo_root}/.claude/guides/work-selection.md" | tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${ask_rule_flat}" ] ||
+  fail "could not extract the work-selection guide's ask-record rule, so the push exclusion cannot be checked (monorepo#3243)"
+# `|| true` inside the group: under pipefail a grep that matches nothing would otherwise abort the
+# run before the assertion below can name what is missing.
+push_tokens="$({ grep -o '`push`' <<<"${ask_rule_flat}" || true; } | wc -l | tr -d ' ')"
+push_disambiguated="$({ grep -o "\`push\`, whether it means a git push or the runtime's push notification" \
+  <<<"${ask_rule_flat}" || true; } | wc -l | tr -d ' ')"
+[ "${push_disambiguated}" -ge 1 ] ||
+  fail "the ask-record rule excludes 'push' without saying which push it means (monorepo#3243)"
+[ "${push_tokens}" = "${push_disambiguated}" ] ||
+  fail "the ask-record rule names \`push\` ${push_tokens} times but disambiguates it only ${push_disambiguated} — an ambiguous exclusion is back (monorepo#3243)"
 
 # The plugin's maintainer-PR driving fact (agent-plugins#201) is read from the Trust gate
 # section and defaults to hands-off when that section does not declare it. This deployment
@@ -1439,6 +1530,32 @@ trust_gate_words="$(printf '%s' "${trust_gate_flat}" | wc -w | tr -d ' ')"
 case "${trust_gate_flat}" in
   *'**Maintainer-PR driving: `attribution-only`.**'*) ;;
   *) fail "Trust gate does not declare 'Maintainer-PR driving: \`attribution-only\`' — the plugin would default to hands-off and stop driving the maintainer's interactive PRs this contract hands the engineer" ;;
+esac
+# The plugin surveyor reads the AI-disclosure prefix and, beside it, the interactive-session marker
+# from AGENTS.md's Maintainer channels section, and reports `none` for the maintainer's own
+# interactive PRs when that section declares no marker (monorepo#3225). Pin both declarations
+# INSIDE that section of AGENTS.md: the assembled contract would also accept a same-named heading in
+# a guide, which is not where the plugin looks.
+contract_channels_flat="$(
+  awk '/^### Maintainer channels/ { inside = 1; print; next } inside && /^##/ { exit } inside' "${repo_root}/AGENTS.md" |
+    tr '\n' ' ' | tr -s '[:space:]' ' '
+)"
+[ -n "${contract_channels_flat}" ] ||
+  fail "could not locate AGENTS.md's '### Maintainer channels' section, so the marker declarations cannot be checked"
+contract_channels_words="$(printf '%s' "${contract_channels_flat}" | wc -w | tr -d ' ')"
+[ "${contract_channels_words}" -lt 1500 ] ||
+  fail "Maintainer channels section extracted as ${contract_channels_words} words — its end anchor (the next heading) is missing, so the marker check is no longer scoped to the section"
+for channels_rule in \
+  '**AI-disclosure line:** everything this deployment authors begins with' \
+  '**Interactive-session marker:** the literal `Generated with [Claude Code]`'; do
+  case "${contract_channels_flat}" in
+    *"${channels_rule}"*) ;;
+    *) fail "AGENTS.md Maintainer channels no longer declares '${channels_rule}' — the plugin surveyor reads both markers there and cannot attribute the maintainer's interactive PRs without them (monorepo#3225)" ;;
+  esac
+done
+case "${contract_channels_flat}" in
+  *'how the two markers are matched: [maintainer channels guide](.claude/guides/maintainer-channels.md)'*) ;;
+  *) fail "AGENTS.md Maintainer channels no longer points at the maintainer channels guide for how the two markers are matched" ;;
 esac
 # The declaration is only as strong as the prose around it: wording that still calls the
 # interactive-PR rule a hands-off rule tells the same reader the opposite.

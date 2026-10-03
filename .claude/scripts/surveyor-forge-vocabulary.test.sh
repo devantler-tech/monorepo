@@ -156,7 +156,9 @@ esac
 # `PLACEHOLDER/…` is not a declared path. Its real `<repo-root>` absolute form is
 # admitted, and agent-role-delivery-contract.test.sh proves that (monorepo#3123).
 # The unresolved-thread counter row is the same case (monorepo#2670), and so is the
-# PR-ownership disclosure row, hidden until a list-item fence closed (monorepo#3648).
+# PR-ownership disclosure row, hidden until a list-item fence closed (monorepo#3648), and
+# so are the worktree-holder row (monorepo#3067) and the maintainer-comment candidates
+# row (monorepo#3163).
 corpus=$(cat <<'CORPUS'
 allow	gh pr list --repo devantler-tech/monorepo --state open --limit 100 --json number,title,isDraft,headRefName
 allow	gh pr view 2927 --repo devantler-tech/monorepo --json number,isDraft,headRefOid,mergeStateStatus,state
@@ -223,7 +225,9 @@ deny	gh api repos/devantler-tech/PLACEHOLDER/issues/comments/PLACEHOLDER --jq '{
 deny	gh api repos/devantler-tech/PLACEHOLDER/pulls/PLACEHOLDER/reviews/PLACEHOLDER --jq '{head:"PLACEHOLDER",author:.user.login,commit_id:.commit_id,body:(.body // "")}' | PLACEHOLDER/.claude/scripts/coderabbit-review-verdict.sh --input -
 deny	gh api graphql --paginate -F number=PLACEHOLDER -f query='query($number:Int!,$endCursor:String){repository(owner:"devantler-tech",name:"PLACEHOLDER"){pullRequest(number:$number){headRefOid reviews(first:100,after:$endCursor){totalCount nodes{author{login} state body submittedAt commit{oid}} pageInfo{hasNextPage endCursor}}}}}' | PLACEHOLDER/.claude/scripts/local-review-verdict.sh --input -
 deny	gh api repos/devantler-tech/PLACEHOLDER/issues/PLACEHOLDER --jq '{body:(.body // "")}' | PLACEHOLDER/.claude/scripts/kata-measure-date.sh --input -
+deny	gh issue view PLACEHOLDER --repo devantler-tech/PLACEHOLDER --json comments | PLACEHOLDER/.claude/scripts/maintainer-comment-candidates.sh --input -
 deny	gh pr view PLACEHOLDER --repo devantler-tech/PLACEHOLDER --json body --jq .body | PLACEHOLDER/.claude/scripts/pr-ownership-disclosure.sh --input -
+deny	gh api graphql --paginate -f query='query($endCursor:String){search(query:"org:devantler-tech is:pr is:open archived:false",type:ISSUE,first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{url headRefName headRepositoryOwner{login} headRepository{name}}}}}' --jq '[.data.search.nodes[]]' | PLACEHOLDER/.claude/scripts/pr-worktree-holder.sh --input -
 CORPUS
 )
 

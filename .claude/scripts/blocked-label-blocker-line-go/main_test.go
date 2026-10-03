@@ -35,7 +35,7 @@ func TestAuthorityGrammar(t *testing.T) {
 		{"hidden unspaced kind", "#7 |authority | upstream | last-verified 2026-09-01: pending", "MALFORMED"},
 		{"duplicate same kind", "owner/repo#1 | upstream | upstream | last-verified 2026-09-01: pending", "MALFORMED"},
 		{"draft PR is attention", "maintainer authority | authority | last-verified 2026-09-01: outage-cause=credentials/auth; pending | asked pr 2026-09-01", "CONFORMS"},
-		{"undefined push token is not attention", "maintainer authority | authority | last-verified 2026-09-01: pending | asked push 2026-09-01", "NO-ASK"},
+		{"push is excluded on purpose, git push or notification (monorepo#3243)", "maintainer authority | authority | last-verified 2026-09-01: pending | asked push 2026-09-01", "NO-ASK"},
 		{"issue alone is not attention", "maintainer authority | authority | last-verified 2026-09-01: pending | asked issue 2026-09-01", "NO-ASK"},
 		{"outage cause cannot replace kind", "owner/repo#1 | credentials/auth | last-verified 2026-09-01: pending", "MALFORMED"},
 	} {
@@ -61,7 +61,8 @@ func TestSearchCompleteness(t *testing.T) {
 		{"timed out", `{"total_count":0,"incomplete_results":true,"items":[]}`, 0, true},
 		{"count mismatch", `{"total_count":1,"incomplete_results":false,"items":[]}`, 0, true},
 		{"moving total", `{"total_count":0,"incomplete_results":false,"items":[]} {"total_count":1,"incomplete_results":false,"items":[]}`, 0, true},
-		{"all pages", `{"total_count":2,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1}]} {"total_count":2,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":2}]}`, 2, false},
+		{"all pages", `{"total_count":2,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"labels":[]}]} {"total_count":2,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":2,"labels":[{"name":"blocked"}]}]}`, 2, false},
+		{"item without labels", `{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1}]}`, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := searchIssues([]byte(tc.raw))
@@ -578,6 +579,128 @@ func TestVerifyMaxAgeRejectsNonIntegers(t *testing.T) {
 		code := run([]string{"--verify-max-age-days", value, "--input", "-"}, strings.NewReader(`[]`), &out, &stderr)
 		if code != 2 || !strings.Contains(stderr.String(), "--verify-max-age-days") {
 			t.Fatalf("value %q: code=%d stderr=%q; want UNKNOWN naming the flag", value, code, stderr.String())
+		}
+	}
+}
+
+// runInput feeds a payload through the --input seam the forge path shares.
+func runInput(t *testing.T, payload string, extra ...string) (int, string) {
+	t.Helper()
+	var out, stderr bytes.Buffer
+	args := append([]string{"--input", "-", "--today", "2026-09-01", "--verify-max-age-days", "999999999"}, extra...)
+	code := run(args, strings.NewReader(payload), &out, &stderr)
+	return code, out.String() + stderr.String()
+}
+
+// The two actions issues #3142 names declare "**Blocker:** none" and are
+// correctly unlabelled; the five it names declare a real blocker without the
+// label. Bodies are reduced to their record lines.
+const unlabelledPopulation = `[
+ {"repo":"actions","number":1025,"labels":[],"body":"**Blocker:** none — agent-actionable"},
+ {"repo":"actions","number":1028,"labels":[{"name":"bug"}],"body":"text\n\n**Blocker:** None. Ready to pick up."},
+ {"repo":"platform","number":3251,"labels":[],"body":"**Blocker:** Cloudflare account action | authority | last-verified 2026-08-30: not done"},
+ {"repo":"ksail","number":5150,"labels":[{"name":"enhancement"}],"body":"**Blocker:** homebrew/cask notability policy"},
+ {"repo":"platform","number":9,"labels":[],"body":"ordinary work with no record"},
+ {"repo":"platform","number":10,"labels":[{"name":"blocked"}],"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-30: open"}
+]`
+
+func TestUnlabelledDeclaredBlockerIsItsOwnFinding(t *testing.T) {
+	code, out := runInput(t, unlabelledPopulation)
+	if code != 1 {
+		t.Fatalf("code=%d, want 1; out:\n%s", code, out)
+	}
+	for _, want := range []string{"UNLABELLED platform#3251", "UNLABELLED ksail#5150", "2 open issue(s) declare a blocker without the blocked label"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	// The class is distinct: neither unlabelled row is folded into MISSING or
+	// MALFORMED, and the labelled conforming record keeps its own verdict.
+	for _, unwanted := range []string{"MISSING", "MALFORMED", "blocked-labelled issue(s) need repair"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("unexpected %q in:\n%s", unwanted, out)
+		}
+	}
+	if !strings.Contains(out, "CONFORMS   platform#10") {
+		t.Errorf("labelled record lost its verdict:\n%s", out)
+	}
+}
+
+func TestBlockerNoneAndRecordlessIssuesAreNotReported(t *testing.T) {
+	_, out := runInput(t, unlabelledPopulation)
+	for _, unwanted := range []string{"actions#1025", "actions#1028", "platform#9"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("%s reported:\n%s", unwanted, out)
+		}
+	}
+	// Ablation: without the "none" exemption both actions issues would be
+	// flagged, which is the naive check #3142 rejects.
+	for _, line := range []string{"**Blocker:** none — agent-actionable", "**Blocker:** None. Ready to pick up.", "**Blocker:**none", "**Blocker:** none", "**Blocker:** NONE: nothing blocks this", "**Blocker:** none—agent-actionable"} {
+		if declaresBlocker(line) {
+			t.Errorf("%q read as a declared blocker", line)
+		}
+	}
+	for _, line := range []string{"**Blocker:** nonexistent upstream fix", "**Blocker:** none/repo#7 | upstream | last-verified 2026-09-01: open", "**Blocker:** none.io/x#1 | upstream | last-verified 2026-09-01: open", "**Blocker:** none-x/r#2 | upstream | last-verified 2026-09-01: open", "**Blocker:** none_x/r#3", "**Blocker:** #12 | upstream | last-verified 2026-08-30: none shipped"} {
+		if !declaresBlocker(line) {
+			t.Errorf("%q read as declaring no blocker", line)
+		}
+	}
+}
+
+func TestLabelledOnlyPopulationKeepsItsReport(t *testing.T) {
+	code, out := runInput(t, `[{"repo":"a","number":1,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-30: open"},
+	 {"repo":"a","number":2,"labels":[],"body":"plain"}]`)
+	if code != 0 || !strings.Contains(out, "all 1 open blocked-labelled issue(s) carry a conforming **Blocker:** line") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+func TestUnlabelledFindingSurvivesQuietAndDigest(t *testing.T) {
+	code, out := runInput(t, unlabelledPopulation, "--quiet")
+	if code != 1 || !strings.Contains(out, "UNLABELLED ksail#5150") || strings.Contains(out, "CONFORMS") {
+		t.Fatalf("quiet: code=%d out:\n%s", code, out)
+	}
+	code, out = runInput(t, unlabelledPopulation, "--ask-digest")
+	if code != 1 || !strings.Contains(out, "2 finding(s) outside this digest") {
+		t.Fatalf("digest: code=%d out:\n%s", code, out)
+	}
+}
+
+func TestOrgReadIsIndependentOfTheBlockedLabel(t *testing.T) {
+	endpoint := searchEndpoint("o")
+	if strings.Contains(endpoint, "label") {
+		t.Fatalf("org read still filters on a label: %s", endpoint)
+	}
+	for _, want := range []string{"org:o", "is:issue", "state:open", "archived:false"} {
+		if !strings.Contains(endpoint, want) {
+			t.Errorf("endpoint lost %q: %s", want, endpoint)
+		}
+	}
+}
+
+func TestBlockedLabelMatchesCaseInsensitively(t *testing.T) {
+	// The label:blocked search this replaced matched "Blocked" too, so a
+	// record-less issue labelled that way must stay MISSING, not vanish.
+	code, out := runInput(t, `[{"repo":"c","number":1,"labels":[{"name":"Blocked"}],"body":"no record"}]`)
+	if code != 1 || !strings.Contains(out, "MISSING    c#1") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+func TestReportedSnippetDropsInvisibleFormatCharacters(t *testing.T) {
+	// A right-to-left override or zero-width space in untrusted issue text
+	// could reorder or hide part of a reported row in the operator's terminal.
+	if got := snippet("**Blocker:** a‮b​c"); strings.ContainsAny(got, "‮​") {
+		t.Fatalf("format characters survived: %q", got)
+	}
+}
+
+func TestLabelledAndUnlabelledSummariesAppearTogether(t *testing.T) {
+	code, out := runInput(t, `[{"repo":"m","number":1,"labels":[{"name":"blocked"}],"body":"no record"},
+	 {"repo":"m","number":2,"labels":[],"body":"**Blocker:** maintainer authority: sign it"}]`)
+	for _, want := range []string{"1 of 1 open blocked-labelled issue(s) need repair", "1 open issue(s) declare a blocker without the blocked label"} {
+		if code != 1 || !strings.Contains(out, want) {
+			t.Errorf("code=%d, missing %q in:\n%s", code, want, out)
 		}
 	}
 }

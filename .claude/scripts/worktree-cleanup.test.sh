@@ -1032,14 +1032,20 @@ add_merged_wt() {
 # gh_shim <root> — an OPEN-only query prints the Nth line of $root/gh-open for its Nth call
 # (a count; "0" when absent), so a PR can reopen between two queries. Otherwise `gh` prints $root/gh-out (TSV state<TAB>headRefOid per line), or
 # fails when $root/gh-fail exists. $root/gh-error-body makes it fail the way `gh api` does on
-# an HTTP error: the error body on stdout, exit 1. Every invocation's argv is appended to
-# $root/gh-args.
+# an HTTP error: the error body on stdout, exit 1. A tag lookup (`git/ref/tags/…`) prints
+# $root/gh-tag-out, or fails with $root/gh-tag-error-body, when either exists. Every
+# invocation's argv is appended to $root/gh-args.
 gh_shim() {
   local root=$1 shim="$1/ghshim"; mkdir -p "$shim"
   cat > "$shim/gh" <<SHIM
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$root/gh-args"
 [ -e "$root/gh-fail" ] && { echo "HTTP 502" >&2; exit 1; }
+case "\$*" in
+  *"/git/ref/tags/"*)
+    [ -e "$root/gh-tag-error-body" ] && { cat "$root/gh-tag-error-body"; exit 1; }
+    [ -e "$root/gh-tag-out" ] && { cat "$root/gh-tag-out"; exit 0; } ;;
+esac
 [ -e "$root/gh-error-body" ] && { cat "$root/gh-error-body"; exit 1; }
 [ -e "$root/gh-hang" ] && sleep 30
 case "\$*" in
@@ -3739,6 +3745,104 @@ SHIM
   rm -rf "$root"
 }
 
+# --- a run unregisters only the worktrees it reaped (#3716) --------------------------
+# A repository-wide `git worktree prune` cannot be limited to one root. It also dropped
+# another lane's registration whose directory was briefly unavailable, and that worktree
+# came back with a broken link to its repository.
+
+# registration <root> <path> — prints `present` or `absent` for a worktree registration at
+# <path>, or `unknown` when the list cannot be read. A state, not an exit status, so a test
+# asserting `absent` cannot pass on a failed read.
+registration() {
+  local list
+  list=$(git -C "$1/repo" worktree list --porcelain) || { echo unknown; return; }
+  if grep -qxF -- "worktree $2" <<<"$list"; then echo present; else echo absent; fi
+}
+
+# away_sibling <root> — a worktree under another lane's root whose directory is moved
+# aside, as a briefly unavailable directory looks. Prints its registered path.
+away_sibling() {
+  local root=$1 sib="$1/repo/.codex/worktrees/sib"
+  add_wt_at "$root" "$sib" codex/sib || return 1
+  mv "$sib" "$root/sib-away" || return 1
+  [ "$(registration "$root" "$sib")" = present ] || return 1
+  printf '%s' "$sib"
+}
+
+# sibling_restored <root> <path> — moves the sibling back. 0 when it is still registered
+# and its link to the repository still resolves.
+sibling_restored() {
+  mv "$1/sib-away" "$2" || return 1
+  [ "$(registration "$1" "$2")" = present ] && [ "$(git -C "$2" rev-parse --show-toplevel 2>/dev/null)" = "$2" ]
+}
+
+t_apply_keeps_a_sibling_lanes_missing_registration() {
+  local name="an apply run unregisters what it reaped and keeps another lane's missing registration"
+  local root sib; root=$(make_repo)
+  add_wt "$root" spent pushed
+  sib=$(away_sibling "$root") || { bad "$name" "FIXTURE: sibling worktree setup failed"; rm -rf "$root"; return; }
+  local out rc; out=$(run "$root" apply); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q '^REAPED *spent ' <<<"$out" \
+     && [ ! -e "$root/repo/.claude/worktrees/spent" ] \
+     && [ "$(registration "$root" "$root/repo/.claude/worktrees/spent")" = absent ] \
+     && sibling_restored "$root" "$sib"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out :: $(git -C "$root/repo" worktree list --porcelain)"
+  fi
+  rm -rf "$root"
+}
+
+t_absent_root_keeps_a_sibling_lanes_missing_registration() {
+  local name="an apply run with no worktree root unregisters nothing"
+  local root sib; root=$(make_repo)
+  sib=$(away_sibling "$root") || { bad "$name" "FIXTURE: sibling worktree setup failed"; rm -rf "$root"; return; }
+  rmdir "$root/repo/.claude/worktrees" || { bad "$name" "FIXTURE: root not removed"; rm -rf "$root"; return; }
+  local out rc; out=$(run "$root" apply); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q 'no worktree root at .* nothing to sweep' <<<"$out" \
+     && sibling_restored "$root" "$sib"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out :: $(git -C "$root/repo" worktree list --porcelain)"
+  fi
+  rm -rf "$root"
+}
+
+t_fallback_removal_unregisters_only_its_own_worktree() {
+  local name="the rm -rf fallback unregisters only the worktree it removed"
+  local root sib; root=$(make_repo)
+  add_wt "$root" stuck pushed
+  sib=$(away_sibling "$root") || { bad "$name" "FIXTURE: sibling worktree setup failed"; rm -rf "$root"; return; }
+  # `git worktree remove` fails while the worktree's directory exists, so the run takes the
+  # rm -rf fallback; unregistering the then-missing path passes through to the real git.
+  local shim="$root/shim" log="$root/shim.log" real_git; mkdir -p "$shim"
+  real_git=$(command -v git)
+  cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+prev=""
+for arg in "\$@"; do
+  if [ "\$prev" = worktree ] && [ "\$arg" = remove ] && [ -d "\${!#}" ]; then
+    echo "shim: injected 'git worktree remove' failure for \${!#}" >> "$log"
+    exit 1
+  fi
+  prev=\$arg
+done
+exec "$real_git" "\$@"
+SHIM
+  chmod +x "$shim/git"
+  local out rc; out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q '^REAPED *stuck ' <<<"$out" \
+     && grep -q 'injected .* failure for .*/stuck$' "$log" 2>/dev/null \
+     && [ ! -e "$root/repo/.claude/worktrees/stuck" ] \
+     && [ "$(registration "$root" "$root/repo/.claude/worktrees/stuck")" = absent ] \
+     && sibling_restored "$root" "$sib"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out :: shim: $(cat "$log" 2>/dev/null) :: $(git -C "$root/repo" worktree list --porcelain)"
+  fi
+  rm -rf "$root"
+}
+
 # --- a submodule sitting on a squash-merged PR head (#3674) --------------------------
 # drifted_sub_wt <root> <name> <origin-url> — a pushed worktree whose submodule has moved
 # to a clean commit no remote reaches (unstaged gitlink drift), with the submodule's origin
@@ -3843,6 +3947,212 @@ t_submodule_drift_keeps_local_only_refs() {
   grep -q 'KEEP .*subside .*uncommitted' <<<"$out" && [ -d "$wt" ] || failures="$failures side:[$out]"
   rm -rf "$root"
   if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
+}
+
+# --- every submodule repository the removal deletes, drifted or not (#3683) ----------
+# undrifted_sub_wt <root> <name> <kind> — admin_sub_wt, then a commit no remote has in the
+# submodule's repository, held only by <kind>: a local branch, a tag, a stash, the HEAD
+# reflog, or a branch of a submodule deinitialised afterwards. `clean` adds none (the
+# control); `broken` adds none either, but deinitialises the submodule and replaces its
+# repository's HEAD with a directory, so git cannot read that repository. A checkout left in
+# place ends exactly on its gitlink, so the parent's status has no line for the submodule;
+# the fixture asserts that, or every KEEP below could come from the drift path instead.
+undrifted_sub_wt() {
+  local root=$1 name=$2 kind=$3 wt="$1/repo/.claude/worktrees/$2" s gitlink
+  admin_sub_wt "$root" "$name" || return 1
+  s="$wt/sub"; gitlink=$(git -C "$wt" rev-parse HEAD:sub) || return 1
+  case "$kind" in
+    clean|broken) ;;
+    branch|deinit)
+      git -C "$s" checkout -q -b side && git -C "$s" commit -q --allow-empty -m "local only" \
+        && git -C "$s" checkout -q --detach "$gitlink" && git -C "$s" reflog expire --expire=now --all \
+        || return 1 ;;
+    tag)
+      git -C "$s" checkout -q --detach && git -C "$s" commit -q --allow-empty -m "local only" \
+        && git -C "$s" tag kept && git -C "$s" checkout -q --detach "$gitlink" \
+        && git -C "$s" reflog expire --expire=now --all || return 1 ;;
+    stash)
+      echo stashed >> "$s/f" && git -C "$s" stash -q || return 1 ;;
+    reflog)
+      git -C "$s" checkout -q --detach && git -C "$s" commit -q --allow-empty -m "local only" \
+        && git -C "$s" checkout -q --detach "$gitlink" || return 1 ;;
+    *) return 1 ;;
+  esac
+  if [ "$kind" = deinit ] || [ "$kind" = broken ]; then
+    git -C "$wt" submodule deinit -q -f sub >/dev/null 2>&1 && [ -z "$(ls -A "$s")" ] || return 1
+  else
+    [ "$(git -C "$s" rev-parse HEAD)" = "$gitlink" ] || return 1
+  fi
+  if [ "$kind" = broken ]; then
+    local g; g="$(git -C "$wt" rev-parse --absolute-git-dir)/modules/sub"
+    rm -f "$g/HEAD" && mkdir "$g/HEAD" || return 1
+  fi
+  [ -z "$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none)" ] || return 1
+  age_tree "$wt"
+}
+
+# nested_sub_wt <root> <name> — a pushed worktree whose submodule `sub` has its own submodule
+# `inner`, both on their gitlinks, with a commit no remote has on a local branch of `inner`.
+# Its repository is nested in the parent's: <admin>/modules/sub/modules/inner.
+nested_sub_wt() {
+  local root=$1 name=$2 wt="$1/repo/.claude/worktrees/$2" in gitlink
+  git init -q -b main "$root/innersrc" && echo in > "$root/innersrc/i" && git -C "$root/innersrc" add i \
+    && git -C "$root/innersrc" -c user.email=t@t.t -c user.name=t commit -qm inner \
+    && git init -q -b main "$root/subsrc" && echo one > "$root/subsrc/f" && git -C "$root/subsrc" add f \
+    && git -C "$root/subsrc" -c protocol.file.allow=always submodule add -q "file://$root/innersrc" inner >/dev/null 2>&1 \
+    && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm "one with inner" \
+    && add_wt "$root" "$name" pushed \
+    && git -C "$wt" -c protocol.file.allow=always submodule add -q "file://$root/subsrc" sub >/dev/null 2>&1 \
+    && git -C "$wt" -c protocol.file.allow=always submodule update -q --init --recursive >/dev/null 2>&1 \
+    && git -C "$wt" commit -qm "add sub" && git -C "$wt" push -q origin "claude/$name" || return 1
+  in="$wt/sub/inner"
+  [ -d "$(git -C "$wt" rev-parse --absolute-git-dir)/modules/sub/modules/inner" ] || return 1
+  gitlink=$(git -C "$wt/sub" rev-parse HEAD:inner) || return 1
+  git -C "$in" checkout -q -b side && git -C "$in" -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m "local only" \
+    && git -C "$in" checkout -q --detach "$gitlink" && git -C "$in" reflog expire --expire=now --all || return 1
+  [ -z "$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none)" ] || return 1
+  age_tree "$wt"
+}
+
+t_undrifted_submodule_repository_is_checked() {
+  local name="a local-only commit in any submodule repository keeps the worktree, drifted or not"
+  local failures="" kind root out
+  for kind in clean branch tag stash reflog deinit nested broken; do
+    root=$(make_repo)
+    if [ "$kind" = nested ]; then
+      nested_sub_wt "$root" "u$kind" || { failures="$failures $kind(FIXTURE)"; rm -rf "$root"; continue; }
+    else
+      undrifted_sub_wt "$root" "u$kind" "$kind" || { failures="$failures $kind(FIXTURE)"; rm -rf "$root"; continue; }
+    fi
+    out=$(run "$root")
+    case "$kind" in
+      clean)
+        grep -q "^REAP   *u$kind " <<<"$out" || failures="$failures $kind:[$out]" ;;
+      broken)
+        # Unreadable is unknown: kept, and not counted stuck, since nothing proves work is there.
+        grep -q "KEEP .*u$kind .*cannot prove its submodule repositories hold nothing local-only (modules/sub;" <<<"$out" \
+          && grep -q ' stuck=0 ' <<<"$out" || failures="$failures $kind:[$out]" ;;
+      nested)
+        grep -q "KEEP .*u$kind .*its remote lacks (modules/sub/modules/inner at [0-9a-f]\{12\})" <<<"$out" \
+          && grep -q ' stuck=1 ' <<<"$out" || failures="$failures $kind:[$out]" ;;
+      *)
+        grep -q "KEEP .*u$kind .*its remote lacks (modules/sub at [0-9a-f]\{12\})" <<<"$out" \
+          && grep -q ' stuck=1 ' <<<"$out" || failures="$failures $kind:[$out]" ;;
+    esac
+    rm -rf "$root"
+  done
+  if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
+}
+
+# released_sub_wt <root> <name> — a pushed worktree whose submodule's remote carries a release
+# tag v1.0.0 on a commit no branch reaches, so the clone holds a tag no remote-tracking ref
+# covers: the shape of the release tags every ksail clone carries. The submodule's origin
+# then names a portfolio repository. The remote is built once per root.
+released_sub_wt() {
+  local root=$1 name=$2 wt="$1/repo/.claude/worktrees/$2"
+  if [ ! -d "$root/subsrc" ]; then
+    git init -q -b main "$root/subsrc" && echo one > "$root/subsrc/f" && git -C "$root/subsrc" add f \
+      && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm one \
+      && git -C "$root/subsrc" checkout -q -b release \
+      && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m "release" \
+      && git -C "$root/subsrc" tag v1.0.0 && git -C "$root/subsrc" checkout -q main \
+      && git -C "$root/subsrc" branch -q -D release || return 1
+  fi
+  add_wt "$root" "$name" pushed \
+    && git -C "$wt" -c protocol.file.allow=always submodule add -q "file://$root/subsrc" sub >/dev/null 2>&1 \
+    && git -C "$wt" commit -qm "add sub" && git -C "$wt" push -q origin "claude/$name" || return 1
+  [ "$(git -C "$wt/sub" rev-list --count v1.0.0 --not --remotes 2>/dev/null)" = 1 ] || return 1
+  git -C "$wt/sub" remote set-url origin https://github.com/devantler-tech/subfix.git || return 1
+  [ -z "$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none)" ] || return 1
+  age_tree "$wt"
+}
+
+t_undrifted_submodule_evidence() {
+  # merged: a local branch whose tip is a merged PR's head. released: a tag GitHub holds at
+  # the same object, asked about once for two worktrees. retagged: GitHub holds the tag at
+  # another object. untagged: GitHub has no such tag (404). failed: GitHub cannot be read,
+  # which keeps without counting the worktree stuck.
+  local name="an undrifted submodule's commits are spent only on merged-PR or matching-tag evidence"
+  local failures="" case_name root shim out sha wt tags
+  for case_name in merged released retagged untagged failed; do
+    root=$(make_repo); wt="$root/repo/.claude/worktrees/e$case_name"
+    if [ "$case_name" = merged ]; then
+      undrifted_sub_wt "$root" "e$case_name" branch \
+        && sha=$(git -C "$wt/sub" rev-parse side) \
+        && git -C "$wt/sub" remote set-url origin https://github.com/devantler-tech/subfix.git \
+        && printf 'closed\t2026-09-01T00:00:00Z\t%s\n' "$sha" > "$root/gh-out" \
+        || { failures="$failures $case_name(FIXTURE)"; rm -rf "$root"; continue; }
+    else
+      released_sub_wt "$root" "e$case_name" && sha=$(git -C "$wt/sub" rev-parse v1.0.0) \
+        || { failures="$failures $case_name(FIXTURE)"; rm -rf "$root"; continue; }
+      if [ "$case_name" = released ]; then
+        released_sub_wt "$root" e2released || { failures="$failures $case_name(FIXTURE2)"; rm -rf "$root"; continue; }
+      fi
+      case "$case_name" in
+        released) printf '%s\n' "$sha" > "$root/gh-tag-out" ;;
+        retagged) printf '0123456789abcdef0123456789abcdef01234567\n' > "$root/gh-tag-out" ;;
+        untagged) printf '{"message":"Not Found","status":"404"}\n' > "$root/gh-tag-error-body" ;;
+        failed) touch "$root/gh-fail" ;;
+      esac
+    fi
+    shim=$(gh_shim "$root") || { failures="$failures $case_name(SHIM)"; rm -rf "$root"; continue; }
+    out=$(run_gh "$root" "$shim")
+    tags=$(grep -c "api repos/devantler-tech/subfix/git/ref/tags/v1.0.0 " "$root/gh-args" 2>/dev/null)
+    case "$case_name" in
+      merged)
+        grep -q "^REAP   *e$case_name " <<<"$out" \
+          && grep -qF "api --paginate repos/devantler-tech/subfix/commits/$sha/pulls" "$root/gh-args" \
+          || failures="$failures $case_name:[$out]" ;;
+      released)
+        # Both worktrees reaped, the tag asked about once, and no PR evidence needed.
+        grep -q "^REAP   *e$case_name " <<<"$out" && grep -q '^REAP   *e2released ' <<<"$out" \
+          && [ "$tags" = 1 ] && ! grep -q 'commits/' "$root/gh-args" \
+          || failures="$failures $case_name(tags=$tags):[$out]" ;;
+      failed)
+        grep -q "KEEP .*e$case_name .*cannot prove its submodule repositories" <<<"$out" \
+          && grep -q ' stuck=0 ' <<<"$out" || failures="$failures $case_name:[$out]" ;;
+      *)
+        grep -q "KEEP .*e$case_name .*its remote lacks (modules/sub at ${sha:0:12})" <<<"$out" \
+          && grep -q ' stuck=1 ' <<<"$out" && [ "$tags" = 1 ] || failures="$failures $case_name(tags=$tags):[$out]" ;;
+    esac
+    rm -rf "$root"
+  done
+  if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
+}
+
+t_submodule_work_during_the_sweep_keeps() {
+  # The gate is re-read under the ownership mutex, like status: a commit made in an undrifted
+  # submodule after the initial scan would otherwise be deleted with the worktree. A `git`
+  # shim makes it while the reap is being prepared, on the ignored-file count only that step
+  # takes.
+  local name="a submodule commit made after the initial scan keeps the worktree in apply"
+  local root wt gitlink shim real_git out
+  root=$(make_repo); wt="$root/repo/.claude/worktrees/late"
+  undrifted_sub_wt "$root" late clean || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  gitlink=$(git -C "$wt" rev-parse HEAD:sub); real_git=$(command -v git); shim="$root/gitshim"
+  mkdir -p "$shim"
+  cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" --ignored=matching "*)
+    if [ ! -e '$root/late-done' ]; then
+      : > '$root/late-done'
+      '$real_git' -C '$wt/sub' checkout -q -b late && '$real_git' -C '$wt/sub' commit -q --allow-empty -m late \\
+        && '$real_git' -C '$wt/sub' checkout -q --detach '$gitlink'
+    fi ;;
+esac
+exec '$real_git' "\$@"
+EOF
+  chmod +x "$shim/git"
+  out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1)
+  if grep -q 'KEEP .*late .*submodule work appeared during the sweep (modules/sub at ' <<<"$out" \
+     && [ -d "$wt" ] && [ -e "$root/late-done" ] \
+     && [ "$(git -C "$wt/sub" log -1 --format=%s late 2>/dev/null)" = late ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
 }
 
 printf 'worktree-cleanup.sh contract tests\n'
@@ -3994,7 +4304,13 @@ t_custom_root_rejects_a_symlinked_ancestor
 t_custom_root_that_cannot_be_inspected_is_unknown
 t_custom_root_rejects_dot_components
 t_custom_root_matches_a_registration_spelled_in_another_case
+t_apply_keeps_a_sibling_lanes_missing_registration
+t_absent_root_keeps_a_sibling_lanes_missing_registration
+t_fallback_removal_unregisters_only_its_own_worktree
 t_submodule_on_a_merged_pr_head
 t_submodule_drift_keeps_local_only_refs
+t_undrifted_submodule_repository_is_checked
+t_undrifted_submodule_evidence
+t_submodule_work_during_the_sweep_keeps
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
