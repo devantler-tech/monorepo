@@ -3112,6 +3112,36 @@ else
     "read_started=$([ -e "$FIX/safety-report-read-started" ] && echo yes || echo no) rc=$report_read_bounded_rc"
 fi
 
+# The controller's private-artifact cleanup is part of the same operation. It
+# must finish before the terminal frame, while the watchdog can still turn a
+# stalled filesystem into UNKNOWN.
+mkdir -p "$FIX/safety-controller-cleanup-shim"
+cat > "$FIX/safety-controller-cleanup-shim/rm" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *'/.agtel_bounded.'*)
+    : > "$SAFETY_CONTROLLER_CLEANUP_STARTED"
+    sleep 4 ;;
+esac
+exec "$SAFETY_TEST_RM" "$@"
+EOF
+chmod +x "$FIX/safety-controller-cleanup-shim/rm"
+rm -f "$FIX/safety-controller-cleanup-started"
+CONTROLLER_CLEANUP_BOUNDED=$(PATH="$FIX/safety-controller-cleanup-shim:$PATH" \
+  SAFETY_TEST_RM="$safety_real_rm" \
+  SAFETY_CONTROLLER_CLEANUP_STARTED="$FIX/safety-controller-cleanup-started" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1)
+controller_cleanup_bounded_rc=$?
+if [ -e "$FIX/safety-controller-cleanup-started" ] && [ "$controller_cleanup_bounded_rc" -eq 2 ] \
+   && grep -qF "UNKNOWN: safety scan exceeded" <<<"$CONTROLLER_CLEANUP_BOUNDED"; then
+  ok "the safety deadline includes controller cleanup"
+else
+  bad "the safety deadline includes controller cleanup" \
+    "cleanup_started=$([ -e "$FIX/safety-controller-cleanup-started" ] && echo yes || echo no) rc=$controller_cleanup_bounded_rc"
+fi
+
 # A completed worker report is still unmeasured if the controller cannot read
 # its private report file. Simulate only that final read; every worker-side cat
 # delegates to the real command.

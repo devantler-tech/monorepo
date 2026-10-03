@@ -2136,13 +2136,14 @@ populate_session_cache() {
 
 # Run safety in its own process group. The nested worker records its report
 # status in the private controller directory. After the worker and its EXIT
-# cleanup finish, the wrapper reads the complete redacted report into memory
-# and streams prefixed data lines plus one terminal status through the private
-# FIFO. The controller does not emit any line until that terminal status
-# arrives inside the original deadline, so a stalled report read or transfer
-# stays bounded and partial output is discarded. The child PID remains
-# unreaped until the controller chooses completion or cancellation, so it
-# cannot be reused while its process group is signalled.
+# cleanup finish, the wrapper reads the complete redacted report into memory,
+# streams prefixed data lines, removes the private artifacts, and only then
+# sends one terminal status through the still-open FIFO. The controller does
+# not emit any line until that terminal status arrives inside the original
+# deadline, so stalled report I/O or cleanup stays bounded and partial output
+# is discarded. The child PID remains unreaped until the controller chooses
+# completion or cancellation, so it cannot be reused while its process group
+# is signalled.
 run_safety_bounded() (
   local bounded_dir='' worker_pid='' watchdog_pid='' worker_rc=0 result=''
   local report='' line='' current_line='' report_lines=0 args=()
@@ -2200,23 +2201,31 @@ run_safety_bounded() (
     if [ -r "$bounded_dir/worker-status" ]; then
       IFS= read -r result < "$bounded_dir/worker-status" || result='missing'
     fi
+    protocol="done:${result}:${worker_rc}"
     if ! report=$(cat "$bounded_dir/report"); then
-      printf 'error:report:%s:%s\n' "$result" "$worker_rc" >&9
-      exit "$worker_rc"
+      protocol="error:report:${result}:${worker_rc}"
+    else
+      while IFS= read -r line; do
+        while [ "${#line}" -gt 512 ]; do
+          printf 'chunk:%s\n' "${line:0:512}" >&9 || exit 3
+          line=${line:512}
+        done
+        printf 'line:%s\n' "$line" >&9 || exit 3
+      done <<< "$report"
     fi
-    while IFS= read -r line; do
-      while [ "${#line}" -gt 512 ]; do
-        printf 'chunk:%s\n' "${line:0:512}" >&9 || exit 3
-        line=${line:512}
-      done
-      printf 'line:%s\n' "$line" >&9 || exit 3
-    done <<< "$report"
-    printf 'done:%s:%s\n' "$result" "$worker_rc" >&9
+    cleanup_ok=1
+    rm -f "$bounded_dir/status" "$bounded_dir/report" "$bounded_dir/worker-status" || cleanup_ok=0
+    rmdir "$bounded_dir" 2>/dev/null || cleanup_ok=0
+    if [ "$cleanup_ok" -eq 0 ]; then
+      protocol="error:cleanup:${result}:${worker_rc}"
+    fi
+    printf '%s\n' "$protocol" >&9
     exit "$worker_rc"
   ) &
   worker_pid=$!
   while :; do
     if ! IFS= read -r result <&9; then
+      bounded_dir=''
       bounded_unknown 'the safety completion channel failed.'
       exit 2
     fi
@@ -2228,6 +2237,7 @@ run_safety_bounded() (
         kill -KILL -- "-$worker_pid" 2>/dev/null || true
         wait "$worker_pid" 2>/dev/null || true
         worker_pid=''
+        bounded_dir=''
         bounded_unknown "safety scan exceeded the ${SAFETY_TIMEOUT_SECONDS}s time limit."
         exit 2 ;;
       chunk:*)
@@ -2247,7 +2257,17 @@ run_safety_bounded() (
         watchdog_pid=''
         wait "$worker_pid" 2>/dev/null || worker_rc=$?
         worker_pid=''
+        bounded_dir=''
         bounded_unknown 'cannot read the completed safety report.'
+        exit 2 ;;
+      error:cleanup:*)
+        kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+        wait "$watchdog_pid" 2>/dev/null || true
+        watchdog_pid=''
+        wait "$worker_pid" 2>/dev/null || worker_rc=$?
+        worker_pid=''
+        bounded_dir=''
+        bounded_unknown 'cannot remove the completed safety report artifacts.'
         exit 2 ;;
       done:*)
         kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
@@ -2255,6 +2275,7 @@ run_safety_bounded() (
         watchdog_pid=''
         wait "$worker_pid" 2>/dev/null || worker_rc=$?
         worker_pid=''
+        bounded_dir=''
         result=${result#done:}
         if [ "$result" = 0:0 ] && [ "$worker_rc" -eq 0 ]; then
           printf '%s\n' "$report"
@@ -2267,6 +2288,7 @@ run_safety_bounded() (
           exit 2
         fi ;;
       *)
+        bounded_dir=''
         bounded_unknown 'the safety worker returned a malformed completion stream.'
         exit 2 ;;
     esac
