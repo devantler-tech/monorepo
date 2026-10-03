@@ -38,6 +38,7 @@ age_tree() {
 # $CTIME_BROKEN answers a ctime query with a non-number, as an unreadable ctime would.
 # Every other query passes through.
 REAL_STAT=$(command -v stat)
+REAL_DU=$(command -v du)
 CTIME_SHIM_DIR=$(mktemp -d)
 CTIME_FRESH="$CTIME_SHIM_DIR/fresh"
 : > "$CTIME_FRESH"
@@ -1044,6 +1045,38 @@ t_freed_counts_the_admin_directory() {
     || failures="$failures apply:[$out_apply]"
   # What was counted is what went: the admin directory is gone with the working tree.
   [ ! -e "$wt" ] && [ ! -e "$admin" ] || failures="$failures not-removed:wt=$([ -e "$wt" ] && echo present),admin=$([ -e "$admin" ] && echo present)"
+  rm -rf "$root"
+  if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
+}
+
+t_unknown_freed_size_is_not_reported_as_zero() {
+  # A failed or partial disk-usage read says nothing about the bytes removed. The cleanup may
+  # still proceed, but every per-worktree and aggregate figure must preserve that uncertainty.
+  local name="failed, empty and partial du reads report an unknown freed size"
+  local root scenario out failures=""
+  root=$(make_repo)
+  add_wt "$root" spent pushed
+  cat >"$CTIME_SHIM_DIR/du" <<EOF
+#!/usr/bin/env bash
+case "\${DU_SCENARIO:-}" in
+  failure) printf '1024\t%s\n' "\$1"; exit 1 ;;
+  empty) exit 0 ;;
+  partial) printf '1024\t%s\n' "\$1"; exit 0 ;;
+  *) exec '$REAL_DU' "\$@" ;;
+esac
+EOF
+  chmod +x "$CTIME_SHIM_DIR/du"
+  for scenario in failure empty partial; do
+    export DU_SCENARIO=$scenario
+    out=$(run "$root" dry-run)
+    if ! grep -q '^REAP  .*spent .*(size unknown' <<<"$out" \
+       || ! grep -q ' freed=0 MB unmeasured=1$' <<<"$out" \
+       || grep -q '^REAP  .*spent .*(0 MB' <<<"$out"; then
+      failures="$failures $scenario:[$out]"
+    fi
+  done
+  unset DU_SCENARIO
+  rm -f "$CTIME_SHIM_DIR/du"
   rm -rf "$root"
   if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
 }
@@ -3918,6 +3951,7 @@ t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode
 t_freed_counts_the_admin_directory
+t_unknown_freed_size_is_not_reported_as_zero
 t_reaps_squash_merged_worktree
 t_keeps_merged_branch_when_pr_head_differs
 t_keeps_branch_with_open_pr

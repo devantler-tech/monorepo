@@ -477,7 +477,7 @@ case "$MAIN_WT_REAL/" in
 esac
 
 now=$(date +%s)
-reaped=0; kept=0; stuck=0; salvaged=0; freed_kb=0
+reaped=0; kept=0; stuck=0; salvaged=0; freed_kb=0; unmeasured=0
 
 # record <path> <branch> <sha> <evidence> <outcome>
 # The outcome column is what stops a row claiming a removal that never happened. The
@@ -1516,14 +1516,24 @@ admin_backpointer_ok() {
 # whose gitdir does not name this worktree is not the one the removal deletes, so only the
 # working tree is counted then: the figure may under-count, never claim what was not freed.
 reap_size_kb() {
-  local wt=$1 admin
+  local wt=$1 admin output expected
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) || admin=""
   if [ -n "$admin" ] && [ -d "$admin" ] && admin_backpointer_ok "$wt"; then
     set -- "$wt" "$admin"
   else
     set -- "$wt"
   fi
-  du -sk "$@" 2>/dev/null | awk '{ kb += $1 } END { print kb + 0 }'
+  expected=$#
+  output=$(du -sk "$@" 2>/dev/null) || return 1
+  [ -n "$output" ] || return 1
+  awk -v expected="$expected" '
+    $1 !~ /^[0-9]+$/ { invalid = 1 }
+    { kb += $1 }
+    END {
+      if (invalid || NR != expected) exit 1
+      print kb + 0
+    }
+  ' <<< "$output"
 }
 
 # The candidate set is every directory directly under WT_ROOT, PLUS every registered worktree
@@ -1798,7 +1808,13 @@ while IFS= read -r wt <&3; do
 
   # --- REAP ------------------------------------------------------------------------
   # The working tree plus its admin directory, sized before anything is removed.
-  sz_kb=$(reap_size_kb "$wt"); sz_kb=${sz_kb:-0}
+  if sz_kb=$(reap_size_kb "$wt"); then
+    size_note="$((sz_kb/1024)) MB"
+  else
+    sz_kb=""
+    size_note="size unknown"
+    unmeasured=$((unmeasured+1))
+  fi
   # Ignored files are NOT a KEEP reason — 70 of 80 worktrees on the reference host carry
   # build output or caches, so keeping on them would make the sweep reclaim nothing and
   # leave the disk-full condition this tool exists for unresolved. They are counted and
@@ -1813,12 +1829,13 @@ while IFS= read -r wt <&3; do
   fi
   if [ "$MODE" = "dry-run" ]; then
     if [ -n "$salvage_reason" ]; then
-      printf 'SALVAGE %-51s %s (%s; %s MB%s)\n' "$name" "$branch" "$salvage_reason" "$((sz_kb/1024))" "$ign_note"
+      printf 'SALVAGE %-51s %s (%s; %s%s)\n' "$name" "$branch" "$salvage_reason" "$size_note" "$ign_note"
       salvaged=$((salvaged+1))
     else
-      printf 'REAP   %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
+      printf 'REAP   %-52s %s (%s%s)\n' "$name" "$branch" "$size_note" "$ign_note"
     fi
-    reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
+    reaped=$((reaped+1))
+    [ -n "$sz_kb" ] && freed_kb=$((freed_kb+sz_kb))
     continue
   fi
 
@@ -1945,12 +1962,13 @@ while IFS= read -r wt <&3; do
   record "$wt_real" "$branch" "$sha" "removed" reaped \
     || die "REMOVED $wt_real but could not append its 'reaped' row. The deletion DID happen: a 'pending' row whose path no longer exists means deleted, not aborted (restore ref: refs/reaped/$sha)"
   if [ -n "$SALVAGE_REF" ]; then
-    printf 'SALVAGED %-50s %s -> %s (%s MB%s)\n' "$name" "$branch" "$SALVAGE_REF" "$((sz_kb/1024))" "$ign_note"
+    printf 'SALVAGED %-50s %s -> %s (%s%s)\n' "$name" "$branch" "$SALVAGE_REF" "$size_note" "$ign_note"
     salvaged=$((salvaged+1))
   else
-    printf 'REAPED %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
+    printf 'REAPED %-52s %s (%s%s)\n' "$name" "$branch" "$size_note" "$ign_note"
   fi
-  reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
+  reaped=$((reaped+1))
+  [ -n "$sz_kb" ] && freed_kb=$((freed_kb+sz_kb))
 done 3<<< "$CANDIDATES"
 
 # Drop admin entries whose directory is already gone.
@@ -1962,8 +1980,13 @@ if [ "$MODE" = "apply" ]; then
     || die "reaped $reaped worktree(s) but 'git worktree prune' failed — stale registrations remain and will pin their branches in branch-cleanup.sh"
 fi
 
-printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d stuck=%d salvaged=%d freed=%d MB\n' \
-  "$MODE" "$reaped" "$kept" "$stuck" "$salvaged" "$((freed_kb/1024))"
+if [ "$unmeasured" -gt 0 ]; then
+  printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d stuck=%d salvaged=%d freed=%d MB unmeasured=%d\n' \
+    "$MODE" "$reaped" "$kept" "$stuck" "$salvaged" "$((freed_kb/1024))" "$unmeasured"
+else
+  printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d stuck=%d salvaged=%d freed=%d MB\n' \
+    "$MODE" "$reaped" "$kept" "$stuck" "$salvaged" "$((freed_kb/1024))"
+fi
 if [ "$stuck" -gt 0 ]; then
   printf 'worktree-cleanup: %d of the kept worktree(s) hold abandoned work that no sweep will reap; salvage or discard it (#2831)\n' "$stuck"
 fi
