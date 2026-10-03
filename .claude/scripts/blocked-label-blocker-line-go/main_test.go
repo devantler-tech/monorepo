@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +46,82 @@ func TestAuthorityGrammar(t *testing.T) {
 				t.Fatalf("got %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// A caller reading only --help has no other definition of the ask channels,
+// and the help once sent a Slack ask to "the declared Slack channel" while the
+// guides send it to the maintainer's self-DM, because every channel in the
+// workspace is public (#3784). Pin the help to what the check enforces: the
+// tokens it advertises are exactly the ones classify accepts, the words it
+// rules out are ones classify reads as NO-ASK, and each is defined.
+func TestHelpDefinesTheEnforcedAskVocabulary(t *testing.T) {
+	today, err := civilDate("2026-09-05")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verdict := func(word string) string {
+		got, _ := classify("**Blocker:** maintainer authority | authority | last-verified 2026-09-01: pending | asked "+word+" 2026-09-01", today, 14)
+		return got
+	}
+	grammars := regexp.MustCompile(`asked <([^>]*)>`).FindAllStringSubmatch(help, -1)
+	if len(grammars) == 0 {
+		t.Fatal("help no longer shows the `asked <...>` grammar, so its tokens cannot be checked")
+	}
+	for _, grammar := range grammars {
+		if grammar[1] != strings.Join(askChannels, "|") {
+			t.Errorf("help advertises asked <%s>, the check accepts %q", grammar[1], askChannels)
+		}
+	}
+	// The paragraph is reflowed: its sentences wrap across source lines.
+	_, after, found := strings.Cut(help, "\nAsk channels: ")
+	paragraph, _, closed := strings.Cut(after, "\n\n")
+	if !found || !closed {
+		t.Fatal("help has no `Ask channels:` paragraph, so its definitions cannot be checked")
+	}
+	paragraph = strings.Join(strings.Fields(paragraph), " ")
+	var defined []string
+	for _, definition := range regexp.MustCompile(`([a-z]+) = `).FindAllStringSubmatch(paragraph, -1) {
+		defined = append(defined, definition[1])
+	}
+	if strings.Join(defined, "|") != strings.Join(askChannels, "|") {
+		t.Errorf("help defines %q, the check accepts %q", defined, askChannels)
+	}
+	for _, token := range askChannels {
+		if got := verdict(token); got != "CONFORMS" {
+			t.Errorf("help defines %q as a channel, but the check reads it as %s", token, got)
+		}
+	}
+	for _, word := range []string{"push", "issue"} {
+		if got := verdict(word); got != "NO-ASK" {
+			t.Errorf("%q must read as NO-ASK, got %s", word, got)
+		}
+	}
+	for _, clause := range []string{
+		"slack = the Slack DM to the maintainer's own user (his self-DM), never a Slack channel, because every channel in the workspace is public;",
+		"No other word is a channel token, and the check reads any other word as NO-ASK.",
+		"That includes push, whether it means a git push or the runtime's push notification, and issue:",
+	} {
+		if !strings.Contains(paragraph, clause) {
+			t.Errorf("help no longer says %q in:\n%s", clause, paragraph)
+		}
+	}
+}
+
+// The digest tells an agent where to deliver the ask, so it names the same
+// closed set and, like the help, the one private Slack destination (#3784).
+func TestAskDigestNamesTheEnforcedChannelsAndTheSlackDestination(t *testing.T) {
+	input := `[{"repo":"r","number":1,"created_at":"2026-06-17T00:00:00Z","body":"**Blocker:** maintainer authority - an action | last-verified 2026-09-01: pending"}]`
+	var out, stderr bytes.Buffer
+	run([]string{"--ask-digest", "--today", "2026-09-06", "--input", "-"}, strings.NewReader(input), &out, &stderr)
+	got := out.String()
+	for _, want := range []string{
+		"(" + strings.Join(askChannels, " | ") + "), then append `| asked <channel> <YYYY-MM-DD>`",
+		"slack means the maintainer's own Slack self-DM, never a Slack channel: every channel in the workspace is public.\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("digest no longer says %q in:\n%s", want, got)
+		}
 	}
 }
 

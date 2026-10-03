@@ -728,6 +728,87 @@ OUT="$("$CHECK" --help 2>&1)"; RC=$?
 if [ "$RC" = 0 ] && grep -q '| <blocker-kind> | last-verified' <<<"$OUT" && grep -q '| authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session> <YYYY-MM-DD>' <<<"$OUT" && grep -q -- '--ask-max-age-days <n>' <<<"$OUT"; then ok "--help shows the class token, the authority ask suffix and the cadence option"; else bad "--help shows the class token, the authority ask suffix and the cadence option" "rc=$RC out=${OUT:0:300}"; fi
 if ! grep -q '^set -euo pipefail' <<<"$OUT"; then ok "and --help stops before the code"; else bad "and --help stops before the code" "help leaked code"; fi
 
+# ------------------------------------------------------------------ 39. --help and the guides define the same ask channels
+# A caller reading only --help has no other definition of the channels. The help once sent a Slack
+# ask to "the declared Slack channel" while the guides send it to the maintainer's self-DM, because
+# every channel in the workspace is public, and it never said `push` is excluded (#3784). So the
+# vocabulary is read out of the guide's own ask-record rule, and the help and the check are both
+# held to it: a token or an exclusion that changes in the guide alone turns this red.
+flat() { tr '\n' ' ' | tr -s '[:space:]' ' '; }
+# shellcheck disable=SC2016 # literal backticks: the guide marks each token up as code
+tokens() { { grep -o '`[a-z][a-z]*`' || true; } | tr -d '`' | paste -sd'|' -; }
+ASK_RULE="$(awk 'index($0, "**An `authority` line MUST also record the ask") { inside = 1 }
+  inside && /^[[:space:]]*$/ { exit }
+  inside { print }' "$HERE/../guides/work-selection.md" | flat)"
+SLACK_DESTINATION="$(awk 'index($0, "- **Destination:**") { inside = 1 }
+  inside && index($0, "- **Surface:**") { exit }
+  inside { print }' "$HERE/../guides/maintainer-channels.md" | flat)"
+HELP_RAW="$("$CHECK" --help 2>&1)"
+HELP_CHANNELS="$(awk '/^Ask channels: / { inside = 1 }
+  inside && /^[[:space:]]*$/ { exit }
+  inside { print }' <<<"$HELP_RAW" | flat)"
+# Fail closed: without its anchors a span would be the whole text, and its tokens meaningless.
+GUIDE_CHANNELS=""
+GUIDE_EXCLUDED=""
+HELP_EXCLUDED=""
+case "$ASK_RULE" in
+  *'names where it actually landed'*'No other word is a channel token'*'That includes'*'Re-raise on a cadence'*)
+    span="${ASK_RULE#*names where it actually landed}"
+    GUIDE_CHANNELS="$(tokens <<<"${span%%No other word is a channel token*}")"
+    span="${ASK_RULE#*That includes}"
+    GUIDE_EXCLUDED="$(tokens <<<"${span%%Re-raise on a cadence*}")"
+    ;;
+esac
+case "$HELP_CHANNELS" in
+  *'No other word is a channel token'*) HELP_EXCLUDED="${HELP_CHANNELS#*No other word is a channel token}" ;;
+esac
+if [ -n "$GUIDE_CHANNELS" ] && [ -n "$GUIDE_EXCLUDED" ] && [ -n "$SLACK_DESTINATION" ]; then
+  ok "the guides' ask-record rule and Slack destination are found"
+else
+  bad "the guides' ask-record rule and Slack destination are found" "channels='$GUIDE_CHANNELS' excluded='$GUIDE_EXCLUDED' destination='${SLACK_DESTINATION:0:80}'"
+fi
+if grep -qF "| asked <$GUIDE_CHANNELS> <YYYY-MM-DD>" <<<"$HELP_RAW"; then
+  ok "--help advertises exactly the guide's channel tokens"
+else
+  bad "--help advertises exactly the guide's channel tokens" "guide='$GUIDE_CHANNELS'"
+fi
+ask_verdict() { # word -> the check's verdict on an authority record asked through it
+  printf '[{"repo":"a","number":80,"body":"**Blocker:** maintainer authority | authority | last-verified 2026-09-01: pending | asked %s 2026-09-01"}]\n' "$1" >"$TMP/help-vocabulary.json"
+  "$CHECK" --input "$TMP/help-vocabulary.json" --today 2026-09-05 2>&1 | awk 'NR == 1 { print $1 }'
+}
+IFS='|' read -r -a guide_channels <<<"$GUIDE_CHANNELS"
+for token in "${guide_channels[@]:-}"; do
+  if [ -n "$token" ] && grep -qF " $token = " <<<"$HELP_CHANNELS" && [ "$(ask_verdict "$token")" = CONFORMS ]; then
+    ok "--help defines the guide's channel '$token', and the check accepts it"
+  else
+    bad "--help defines the guide's channel '$token', and the check accepts it" "verdict=$(ask_verdict "$token") help=${HELP_CHANNELS:0:200}"
+  fi
+done
+IFS='|' read -r -a guide_excluded <<<"$GUIDE_EXCLUDED"
+for word in "${guide_excluded[@]:-}"; do
+  if [ -n "$word" ] && grep -qw -- "$word" <<<"$HELP_EXCLUDED" && [ "$(ask_verdict "$word")" = NO-ASK ]; then
+    ok "--help rules out the guide's non-channel '$word', and the check reads it as NO-ASK"
+  else
+    bad "--help rules out the guide's non-channel '$word', and the check reads it as NO-ASK" "verdict=$(ask_verdict "$word") help=${HELP_EXCLUDED:0:200}"
+  fi
+done
+# The meaning, not only the token. Each row is a clause a guide states and the clause that carries
+# it in the help; both sides are asserted, so rewording either one prompts the other.
+while IFS='@' read -r source guide_clause help_clause; do
+  case "$source" in rule) guide_text="$ASK_RULE" ;; *) guide_text="$SLACK_DESTINATION" ;; esac
+  if grep -qF -- "$guide_clause" <<<"$guide_text" && grep -qF -- "$help_clause" <<<"$HELP_CHANNELS"; then
+    ok "--help carries the guide's '$guide_clause'"
+  else
+    bad "--help carries the guide's '$guide_clause'" "the guide must still say it, and the help must say '$help_clause'"
+  fi
+done <<'CLAUSES'
+rule@`slack` the Slack DM to his own user@slack = the Slack DM to the maintainer's own user
+destination@**Destination:** his self-DM@(his self-DM), never a Slack channel
+destination@never a channel. Every channel in the workspace is public@never a Slack channel, because every channel in the workspace is public
+rule@`push`, whether it means a git push or the runtime's push notification@push, whether it means a git push or the runtime's push notification
+rule@`issue`: a GitHub comment is a durable **record** of an ask@issue: a GitHub comment records an ask and is not one
+CLAUSES
+
 # Current-head review regressions: exercise the public CLI with literal records.
 cat >"$TMP/authority-description.json" <<'JSON'
 [{"repo":"a","number":70,"body":"**Blocker:** Cloudflare account action | authority | last-verified 2026-09-01: pending | asked session 2026-09-01"}]
