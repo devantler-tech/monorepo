@@ -95,7 +95,7 @@ filter_paths() { # ci-workflow filter-name
 # returns 1; returns 0 when the wiring holds.
 validate_wiring() { # ci-workflow scheduled-workflow
   local ci="$1" scheduled="$2" workflow required_path
-  local live_filter contract_filter
+  local live_filter contract_filter extra_path
 
   for workflow in "${ci}" "${scheduled}"; do
     yq -e '
@@ -142,10 +142,16 @@ validate_wiring() { # ci-workflow scheduled-workflow
     }
   done
 
-  # A workflow-only change cannot alter what the site depends on. Listing a workflow
-  # here makes an advisory with no released fix fail every pull request that edits CI.
-  if grep -Eq "^ *- '\.github/" <<<"${live_filter}"; then
-    printf 'docs-deps filter runs the live audit for a workflow-only change\n'
+  # A workflow-only change cannot alter what the site depends on. A workflow path
+  # here makes an advisory with no released fix fail every pull request that edits
+  # CI, and a glob can match one as easily as a literal path, so the filter may hold
+  # those three inputs and nothing else.
+  extra_path="$(grep -E '^[[:space:]]*-' <<<"${live_filter}" | grep -Fvx \
+    -e "              - 'docs/package.json'" \
+    -e "              - 'docs/package-lock.json'" \
+    -e "              - 'docs/scripts/audit-dependencies.sh'" | head -n 1 || true)"
+  if [ -n "${extra_path}" ]; then
+    printf 'docs-deps filter runs the live audit for more than the dependency tree and its wrapper\n'
     return 1
   fi
 
@@ -275,12 +281,22 @@ violation="$(validate_wiring "${fixture_ci}" "${fixture_scheduled}")" ||
 reset_fixture
 add_filter_path docs-deps .github/workflows/ci.yaml
 expect_violation "the CI workflow re-enters the live audit filter" \
-  "docs-deps filter runs the live audit for a workflow-only change"
+  "docs-deps filter runs the live audit for more than the dependency tree and its wrapper"
 
 reset_fixture
 add_filter_path docs-deps .github/workflows/audit-docs.yaml
 expect_violation "the scheduled workflow re-enters the live audit filter" \
-  "docs-deps filter runs the live audit for a workflow-only change"
+  "docs-deps filter runs the live audit for more than the dependency tree and its wrapper"
+
+reset_fixture
+add_filter_path docs-deps '**'
+expect_violation "a catch-all glob enters the live audit filter" \
+  "docs-deps filter runs the live audit for more than the dependency tree and its wrapper"
+
+reset_fixture
+add_filter_path docs-deps 'docs/**'
+expect_violation "every docs change runs the live audit" \
+  "docs-deps filter runs the live audit for more than the dependency tree and its wrapper"
 
 reset_fixture
 remove_filter_path docs-deps docs/package-lock.json
@@ -340,6 +356,6 @@ yq -i 'del(.jobs.audit-docs.steps[] | select(.name == "Audit"))' "${fixture_sche
 expect_violation "the scheduled workflow stops auditing" \
   "audit-docs.yaml does not run the shared audit wrapper"
 
-[ "${mutations_run}" -eq 13 ] || fail "ran ${mutations_run} wiring mutations; expected 13"
+[ "${mutations_run}" -eq 15 ] || fail "ran ${mutations_run} wiring mutations; expected 15"
 
 printf 'docs audit: PASS\n'
