@@ -106,7 +106,9 @@ while [ $# -gt 0 ]; do
     --signature)  need_val "$@"; SIGNATURE="$2"; SIGNATURE_SET=1; shift 2 ;;
     --injection-provenance) INJECTION_PROVENANCE=1; shift ;;
     --credential-provenance) CREDENTIAL_PROVENANCE=1; shift ;;
-    -h|--help)    sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help)
+      awk 'NR >= 2 { if ($0 == "set -uo pipefail") exit; print }' "$0" || exit 3
+      exit 0 ;;
     *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
 done
@@ -2176,6 +2178,9 @@ run_safety_bounded() (
     worker_pid=''
     if [ "$result" = 0 ] && [ "$worker_rc" -eq 0 ]; then
       cat "$bounded_dir/report"
+    elif [ "$result" = 2 ] && [ "$worker_rc" -eq 2 ]; then
+      cat "$bounded_dir/report"
+      exit 2
     else
       bounded_unknown 'the safety worker failed; its measurements are incomplete.'
       exit 2
@@ -3792,6 +3797,7 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     if [ -s "$XFINJ" ]; then
       echo "    UNKNOWN: the instruction scan did not complete (a stage failed or was cut short)."
       echo "    All instruction counts and classes are PARTIAL, never a clean scan."
+      main_rc=2
     fi
     inj_records=$(cut -f1,2 "$CONCTMP" | sort -u | grep -c . || true)
     inj_sessions=$(cut -f1 "$CONCTMP" | sort -u | grep -c . || true)
@@ -4353,6 +4359,7 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     if [ "$cred_scan_complete" != 1 ]; then
       echo "    UNKNOWN: the credential scan did not complete (a stage failed or was cut short)."
       echo "    Any rows below are a PARTIAL count — an empty or short table here is NOT clean."
+      main_rc=2
     fi
     [ -z "$cred_rows" ] || printf '%s\n' "$cred_rows"
     # End of the credential-value region — restore the caller's tracing exactly.

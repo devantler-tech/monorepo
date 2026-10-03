@@ -261,6 +261,9 @@ run() {
 
 echo "agent-telemetry.sh"
 
+HELP_OUT=$(bash "$TARGET" --help 2>&1)
+check "help documents the bounded safety timeout" "$HELP_OUT" "--safety-timeout-seconds N"
+
 # Registry joins are independent of native transcript adapters. Exercise the
 # forge response boundary with neutral names and exact CLI identities.
 mkdir -p "$FIX/outcomes/bin" "$FIX/outcomes/repo/.git"
@@ -2783,8 +2786,15 @@ fi
 CANDIDATE_FAILED=$(PATH="$FIX/candidate-fail:$PATH" CLAUDE_PROJECTS_DIR="$FIX/credcandidate" \
   CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   bash "$TARGET" --since-days 3650 --section safety 2>&1)
+candidate_failed_rc=$?
 check "a candidate filter failure leaves the credential scan UNKNOWN" "$CANDIDATE_FAILED" \
   "UNKNOWN: the credential scan did not complete"
+if [ "$candidate_failed_rc" -eq 2 ]; then
+  ok "a credential candidate failure exits 2 so UNKNOWN cannot be treated as success"
+else
+  bad "a credential candidate failure exits 2 so UNKNOWN cannot be treated as success" \
+    "rc=$candidate_failed_rc"
+fi
 
 # The instruction walks also revisit the same large ASCII payloads. Keep their
 # original record locators and class totals while filtering only impossible
@@ -2904,8 +2914,15 @@ check "the fast phrase path retains the instruction finding" "$INSTRUCTION_POSIT
 INSTRUCTION_FAILED=$(PATH="$FIX/candidate-fail:$PATH" CLAUDE_PROJECTS_DIR="$FIX/credcandidate" \
   CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   bash "$TARGET" --since-days 3650 --section safety 2>&1)
+instruction_failed_rc=$?
 check "an instruction candidate filter failure is UNKNOWN" "$INSTRUCTION_FAILED" \
   "UNKNOWN: the instruction scan did not complete"
+if [ "$instruction_failed_rc" -eq 2 ]; then
+  ok "an instruction candidate failure exits 2 so UNKNOWN cannot be treated as success"
+else
+  bad "an instruction candidate failure exits 2 so UNKNOWN cannot be treated as success" \
+    "rc=$instruction_failed_rc"
+fi
 
 # A bounded scan must never turn an interrupted worker into a clean report.
 mkdir -p "$FIX/safety-timeout-shim"
