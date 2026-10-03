@@ -91,13 +91,16 @@ grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constit
   fail "consumer does not name the upstream Agent Improver source"
 
 extract_agent_definition_locations() {
-  awk '/^## Agent definition locations/ { inside = 1; print; next }
-       inside && /^## / { exit }
-       inside { print }'
+  awk '/^## Agent definition locations/ { inside = 1; found = 1; print; next }
+       inside && /^## / { ended = 1; exit }
+       inside { print }
+       END { if (!found || !ended) exit 1 }'
 }
-agent_definition_locations_flat="$(
+if ! agent_definition_locations_flat="$(
   extract_agent_definition_locations <"${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' '
-)"
+)"; then
+  fail "Agent definition locations is missing or has no peer-heading boundary"
+fi
 [ -n "${agent_definition_locations_flat}" ] ||
   fail "could not extract Agent definition locations, so its telemetry authority cannot be checked"
 assert_agent_definition_locations_prose() {
@@ -126,15 +129,22 @@ if (assert_agent_definition_locations_prose "${telemetry_grant}" \
   fail "negative control: a telemetry grant outside Agent definition locations satisfied the authority assertion"
 fi
 agent_definition_locations_flat="${real_agent_definition_locations_flat}"
+if printf '%s\n' '## Agent definition locations' "${telemetry_grant}" |
+  extract_agent_definition_locations >/dev/null; then
+  fail "negative control: guide Agent definition locations accepted a missing peer-heading boundary"
+fi
 
 extract_root_agent_definition_locations() {
-  awk '/^### Agent definition locations/ { inside = 1; print; next }
-       inside && /^### / { exit }
-       inside { print }'
+  awk '/^### Agent definition locations/ { inside = 1; found = 1; print; next }
+       inside && /^### / { ended = 1; exit }
+       inside { print }
+       END { if (!found || !ended) exit 1 }'
 }
-root_agent_definition_locations_flat="$(
+if ! root_agent_definition_locations_flat="$(
   extract_root_agent_definition_locations <"${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' '
-)"
+)"; then
+  fail "root Agent definition locations is missing or has no peer-heading boundary"
+fi
 [ -n "${root_agent_definition_locations_flat}" ] ||
   fail "could not extract root Agent definition locations, so its telemetry authority cannot be checked"
 assert_root_agent_definition_locations_prose() {
@@ -163,6 +173,10 @@ if (assert_root_agent_definition_locations_prose '.claude/scripts/agent-telemetr
   fail "negative control: a guide-level telemetry path masked its removal from the root authority list"
 fi
 root_agent_definition_locations_flat="${real_root_agent_definition_locations_flat}"
+if printf '%s\n' '### Agent definition locations' '.claude/scripts/agent-telemetry.sh' |
+  extract_root_agent_definition_locations >/dev/null; then
+  fail "negative control: root Agent definition locations accepted a missing peer-heading boundary"
+fi
 
 # The bundled SKILL.md is SYNCED from devantler-tech/agent-skills (it carries
 # metadata.github-repo and the update-agent-skills workflow re-pulls it), so an edit there
