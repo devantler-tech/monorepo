@@ -38,6 +38,7 @@ age_tree() {
 # $CTIME_BROKEN answers a ctime query with a non-number, as an unreadable ctime would.
 # Every other query passes through.
 REAL_STAT=$(command -v stat)
+REAL_DU=$(command -v du)
 CTIME_SHIM_DIR=$(mktemp -d)
 CTIME_FRESH="$CTIME_SHIM_DIR/fresh"
 : > "$CTIME_FRESH"
@@ -1009,6 +1010,75 @@ t_rejects_bad_mode() {
     bad "rejects an invalid MODE without deleting anything" "rc=$rc"
   fi
   rm -rf "$root"
+}
+
+# --- the freed figure (#3432) --------------------------------------------------------
+t_freed_counts_the_admin_directory() {
+  # The removal deletes the worktree's admin directory too, and with it every populated
+  # submodule's repository under modules/. Here the submodule's history holds 3 MB its
+  # checkout no longer has, so the admin directory outweighs the working tree: the shape
+  # measured on the host, and the one a working-tree-only figure gets most wrong.
+  local name="freed= and the REAP size count the admin directory, alike in dry-run and apply"
+  local root wt admin wt_mb want_mb out_dry out_apply failures=""
+  root=$(make_repo); wt="$root/repo/.claude/worktrees/heavy"
+  if ! { git init -q -b main "$root/subsrc" \
+         && head -c 3145728 /dev/urandom > "$root/subsrc/big" && git -C "$root/subsrc" add big \
+         && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm big \
+         && git -C "$root/subsrc" rm -q big && echo one > "$root/subsrc/f" && git -C "$root/subsrc" add f \
+         && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm one \
+         && add_wt "$root" heavy pushed \
+         && git -C "$wt" -c protocol.file.allow=always submodule add -q "file://$root/subsrc" sub >/dev/null 2>&1 \
+         && git -C "$wt" commit -qm "add sub" && git -C "$wt" push -q origin claude/heavy \
+         && admin=$(git -C "$wt" rev-parse --absolute-git-dir) && [ -d "$admin/modules/sub" ]; }; then
+    bad "$name" "FIXTURE"; rm -rf "$root"; return
+  fi
+  age_tree "$wt"
+  wt_mb=$(( $(du -sk "$wt" | cut -f1) / 1024 ))
+  want_mb=$(( $(du -sk "$wt" "$admin" | awk '{ kb += $1 } END { print kb + 0 }') / 1024 ))
+  # The fixture must separate the two figures, or the assertions below prove nothing.
+  [ "$want_mb" -ge 3 ] && [ "$want_mb" -gt "$wt_mb" ] || failures="$failures fixture:wt=${wt_mb}MB,want=${want_mb}MB"
+  out_dry=$(run "$root" dry-run)
+  grep -q "^REAP   *heavy .*(${want_mb} MB" <<<"$out_dry" && grep -q " freed=${want_mb} MB\$" <<<"$out_dry" \
+    || failures="$failures dry-run:[$out_dry]"
+  out_apply=$(run "$root" apply)
+  grep -q "^REAPED *heavy .*(${want_mb} MB" <<<"$out_apply" && grep -q " freed=${want_mb} MB\$" <<<"$out_apply" \
+    || failures="$failures apply:[$out_apply]"
+  # What was counted is what went: the admin directory is gone with the working tree.
+  [ ! -e "$wt" ] && [ ! -e "$admin" ] || failures="$failures not-removed:wt=$([ -e "$wt" ] && echo present),admin=$([ -e "$admin" ] && echo present)"
+  rm -rf "$root"
+  if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
+}
+
+t_unknown_freed_size_is_not_reported_as_zero() {
+  # A failed or partial disk-usage read says nothing about the bytes removed. The cleanup may
+  # still proceed, but every per-worktree and aggregate figure must preserve that uncertainty.
+  local name="failed, empty and partial du reads report an unknown freed size"
+  local root scenario out failures=""
+  root=$(make_repo)
+  add_wt "$root" spent pushed
+  cat >"$CTIME_SHIM_DIR/du" <<EOF
+#!/usr/bin/env bash
+case "\${DU_SCENARIO:-}" in
+  failure) printf '1024\t%s\n' "\$1"; exit 1 ;;
+  empty) exit 0 ;;
+  partial) printf '1024\t%s\n' "\$1"; exit 0 ;;
+  *) exec '$REAL_DU' "\$@" ;;
+esac
+EOF
+  chmod +x "$CTIME_SHIM_DIR/du"
+  for scenario in failure empty partial; do
+    export DU_SCENARIO=$scenario
+    out=$(run "$root" dry-run)
+    if ! grep -q '^REAP  .*spent .*(size unknown' <<<"$out" \
+       || ! grep -q ' freed=0 MB unmeasured=1$' <<<"$out" \
+       || grep -q '^REAP  .*spent .*(0 MB' <<<"$out"; then
+      failures="$failures $scenario:[$out]"
+    fi
+  done
+  unset DU_SCENARIO
+  rm -f "$CTIME_SHIM_DIR/du"
+  rm -rf "$root"
+  if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
 }
 
 # --- squash-merged branches (#2678) ------------------------------------------------
@@ -4190,6 +4260,8 @@ t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode
+t_freed_counts_the_admin_directory
+t_unknown_freed_size_is_not_reported_as_zero
 t_reaps_squash_merged_worktree
 t_keeps_merged_branch_when_pr_head_differs
 t_keeps_branch_with_open_pr
