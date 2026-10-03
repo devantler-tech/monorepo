@@ -214,10 +214,19 @@ if [ "$rc" -eq 1 ] && grep -q "($hang_id) started at .* and NEVER FINISHED" <<<"
   ok "a sweep whose supervisor died is reported as never finished (1)"
 else bad "a sweep whose supervisor died is reported as never finished (1)" "rc=$rc $out"; fi
 mode ok
-run start --lane claude
+mkdir -p "$fx/bin"
+cat >"$fx/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s 00:00:01 bash .claude/scripts/worktree-lane-sweep.sh start --lane claude\n' \
+  "$FAKE_PS_SELF_PID"
+EOF
+chmod +x "$fx/bin/ps"
+out=$(HOME="$fx/home" PATH="$fx/bin:$PATH" SUT_PATH="$sut" \
+  bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" start --lane claude' 2>&1); rc=$?
+rm -f "$fx/bin/ps"
 track claude
 if [ "$rc" -eq 1 ] && grep -q 'NEVER FINISHED' <<<"$out" && [ "$(field claude started id)" != "$hang_id" ]; then
-  ok "the next start reports it (1) and starts a fresh sweep"
+  ok "the documented relative invocation proves a dead supervisor and starts a fresh sweep"
 else bad "the next start reports it (1) and starts a fresh sweep" "rc=$rc $out"; fi
 wait_finished claude
 
@@ -252,6 +261,32 @@ run status --lane claude
 if [ "$rc" -eq 2 ] && grep -q 'malformed sweep record' <<<"$out"; then
   ok "a finish record with more than one line is UNKNOWN (2)"
 else bad "a finish record with more than one line is UNKNOWN (2)" "rc=$rc $out"; fi
+
+# A malformed finish record does not erase a valid live start record. Report UNKNOWN, but do not
+# replace the supervisor while the complete process table still proves that it is running.
+live_record='id=20261002T130000Z-2 pid=4242 at=2026-10-02T13:00:00Z'
+printf '%s\n' "$live_record" >"$records/cleanup-claude.started"
+printf 'garbage\n' >"$records/cleanup-claude.finished"
+mkdir -p "$fx/bin"
+cat >"$fx/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '4242 00:00:10 bash %s __supervise --lane claude --id 20261002T130000Z-2\n' "$SUT_PATH"
+printf '%s 00:00:01 bash %s start --lane claude\n' "$FAKE_PS_SELF_PID" "$SUT_PATH"
+EOF
+chmod +x "$fx/bin/ps"
+out=$(HOME="$fx/home" PATH="$fx/bin:$PATH" SUT_PATH="$sut" \
+  bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" start --lane claude' 2>&1); rc=$?
+rm -f "$fx/bin/ps"
+if [ "$rc" -eq 2 ] && grep -q 'malformed sweep record' <<<"$out" \
+   && grep -q 'not starting a second claude sweep' <<<"$out" \
+   && [ "$(cat "$records/cleanup-claude.started")" = "$live_record" ]; then
+  ok "a malformed finish record cannot replace its live supervisor"
+else
+  bad "a malformed finish record cannot replace its live supervisor" "rc=$rc $out"
+  replacement_id=$(field claude started id)
+  [ "$replacement_id" = 20261002T130000Z-2 ] || wait_finished claude
+fi
+printf '%s\n' "$live_record" >"$records/cleanup-claude.started"
 
 printf 'id=20261002T130000Z-2 rc=0 at=2026-10-02T13:05:00Z\n' >"$records/cleanup-claude.finished"
 run status --lane claude

@@ -83,6 +83,7 @@ esac
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) \
   || unknown "cannot resolve the script directory"
 self="$script_dir/worktree-lane-sweep.sh"
+self_name=${self##*/}
 sweeper="$script_dir/worktree-cleanup-all.sh"
 dir="$HOME/.claude/worktree-cleanup-manifests"
 log="$dir/cleanup-$lane.log"
@@ -139,7 +140,7 @@ supervisor_runs() {
   while read -r listed_pid elapsed command; do
     [ -n "${listed_pid:-}" ] || continue
     if [ "$listed_pid" = "$$" ]; then
-      case "$command" in *"$self"*) self_seen=1 ;; esac
+      case "$command" in *"$self_name"*) self_seen=1 ;; esac
     fi
     if [ "$listed_pid" = "$1" ]; then
       case "$command" in
@@ -182,7 +183,7 @@ bad_process_read() {
   VERDICT=process-unknown
 }
 report_previous() {
-  local s f s_id s_pid s_at f_id f_rc f_at supervisor_state
+  local s f s_id s_pid s_at f_id f_rc f_at supervisor_state finish_record_bad=0
   if [ ! -e "$started" ]; then
     printf '%s: no %s sweep on record — nothing shows the lane was ever swept\n' "$prog" "$lane"
     VERDICT=none; return 0
@@ -191,26 +192,36 @@ report_previous() {
   [[ "$s" =~ $started_re ]] || { bad_record "malformed sweep record in $started"; return 0; }
   s_id=${BASH_REMATCH[1]}; s_pid=${BASH_REMATCH[2]}; s_at=${BASH_REMATCH[3]}
   if [ -e "$finished" ]; then
-    f=$(cat -- "$finished" 2>/dev/null) || { bad_record "cannot read $finished"; return 0; }
-    [[ "$f" =~ $finished_re ]] || { bad_record "malformed sweep record in $finished"; return 0; }
-    f_id=${BASH_REMATCH[1]}; f_rc=${BASH_REMATCH[2]}; f_at=${BASH_REMATCH[3]}
-    if [ "$f_id" = "$s_id" ]; then
-      if [ "$f_rc" = 0 ]; then
-        printf '%s: the last %s sweep (%s) finished cleanly at %s\n' "$prog" "$lane" "$s_id" "$f_at"
-        VERDICT=ok
-      else
-        printf '%s: the last %s sweep (%s) FAILED with exit %s at %s — see the end of %s\n' \
-          "$prog" "$lane" "$s_id" "$f_rc" "$f_at" "$log"
-        VERDICT=failed
+    if ! f=$(cat -- "$finished" 2>/dev/null); then
+      bad_record "cannot read $finished"
+      finish_record_bad=1
+    elif [[ ! "$f" =~ $finished_re ]]; then
+      bad_record "malformed sweep record in $finished"
+      finish_record_bad=1
+    else
+      f_id=${BASH_REMATCH[1]}; f_rc=${BASH_REMATCH[2]}; f_at=${BASH_REMATCH[3]}
+      if [ "$f_id" = "$s_id" ]; then
+        if [ "$f_rc" = 0 ]; then
+          printf '%s: the last %s sweep (%s) finished cleanly at %s\n' "$prog" "$lane" "$s_id" "$f_at"
+          VERDICT=ok
+        else
+          printf '%s: the last %s sweep (%s) FAILED with exit %s at %s — see the end of %s\n' \
+            "$prog" "$lane" "$s_id" "$f_rc" "$f_at" "$log"
+          VERDICT=failed
+        fi
+        return 0
       fi
-      return 0
     fi
   fi
   if supervisor_runs "$s_pid" "$s_id"; then supervisor_state=0
   else supervisor_state=$?; fi
   case "$supervisor_state" in
     0)
-      if (( SUPERVISOR_AGE_SECONDS >= stuck_after_seconds )); then
+      if [ "$finish_record_bad" = 1 ]; then
+        printf '%s: not replacing the unreadable %s finish record while supervisor pid %s still runs\n' \
+          "$prog" "$lane" "$s_pid"
+        VERDICT=record-running
+      elif (( SUPERVISOR_AGE_SECONDS >= stuck_after_seconds )); then
         printf '%s: the last %s sweep (%s, pid %s) is STUCK — its supervisor has run for six hours or more since %s; inspect %s, then if it is not making progress run `kill %s` and start again\n' \
           "$prog" "$lane" "$s_id" "$s_pid" "$s_at" "$log" "$s_pid"
         VERDICT=stuck
@@ -221,9 +232,11 @@ report_previous() {
       fi
       ;;
     1)
-      printf '%s: the last %s sweep (%s) started at %s and NEVER FINISHED — its supervisor (pid %s) is gone without recording an end; see the end of %s\n' \
-        "$prog" "$lane" "$s_id" "$s_at" "$s_pid" "$log"
-      VERDICT=unfinished
+      if [ "$finish_record_bad" != 1 ]; then
+        printf '%s: the last %s sweep (%s) started at %s and NEVER FINISHED — its supervisor (pid %s) is gone without recording an end; see the end of %s\n' \
+          "$prog" "$lane" "$s_id" "$s_at" "$s_pid" "$log"
+        VERDICT=unfinished
+      fi
       ;;
     *) bad_process_read ;;
   esac
@@ -240,14 +253,14 @@ if [ "$cmd" = start ]; then
 fi
 
 report_previous
-case "$VERDICT" in ok) rc=0 ;; unknown|process-unknown) rc=2 ;; *) rc=1 ;; esac
+case "$VERDICT" in ok) rc=0 ;; unknown|process-unknown|record-running) rc=2 ;; *) rc=1 ;; esac
 [ "$cmd" = start ] || finish "$rc"
 
 if [ "$VERDICT" = process-unknown ]; then
   printf '%s: not starting a %s sweep while its prior supervisor state is unknown\n' "$prog" "$lane"
   finish "$rc"
 fi
-if [ "$VERDICT" = running ] || [ "$VERDICT" = stuck ]; then
+if [ "$VERDICT" = running ] || [ "$VERDICT" = stuck ] || [ "$VERDICT" = record-running ]; then
   printf '%s: not starting a second %s sweep while that one runs\n' "$prog" "$lane"
   finish "$rc"
 fi
