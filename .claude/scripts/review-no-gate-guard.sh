@@ -16,17 +16,24 @@
 #   review that exists governs whatever a later reply says.
 #
 #   What counts as a review of the head, per lane (the shapes review-lanes.md accepts):
-#     cr      a review object at the head that coderabbit-review-verdict.sh identifies as a review;
-#             a reply comment that coderabbit-comment-verdict.sh reads as a verdict for the head, or
-#             as findings when it follows an authenticated request for this head; the summary
-#             comment when coderabbit-summary-verdict.sh reads it as GREEN for the head
+#     cr      a review object at the head that coderabbit-review-verdict.sh identifies as a review,
+#             or that CodeRabbit submitted as APPROVED or CHANGES_REQUESTED; a reply comment that
+#             coderabbit-comment-verdict.sh reads as a verdict for the head, or as findings when it
+#             follows an authenticated request for this head; the summary comment when
+#             coderabbit-summary-verdict.sh reads it as GREEN for the head
 #     codex   a review object at the head; a clean-pass comment whose `Reviewed commit` is a prefix
 #             (10+ characters) of the head; a `## Review finding` comment whose blob permalinks name
 #             the head, or name no commit at all and follow an authenticated request for this head
-#     bugbot  a completed `Cursor Bugbot` check-run of the `cursor` app at the head titled
-#             `Bugbot Review` (success or neutral); a neutral `Error` is a run that never happened
+#     bugbot  a completed `Cursor Bugbot` check-run of the `cursor` app at the head that succeeded,
+#             or that is neutral and titled `Bugbot Review`; a neutral `Error` is a run that never
+#             happened
 #   An authenticated request is a comment by exactly `devantler` that begins with the disclosure
 #   line and carries `<!-- review-request-head: <sha> provider=<lane> -->`.
+#
+#   LIMIT: it judges what is published when it runs. A review still being written for another
+#   request is invisible to it, so a refusal that arrives first is admitted. The review-request lock
+#   is what keeps two requests from being in flight at one head, and a review that lands after a
+#   no-gate was recorded supersedes that record.
 #
 # USAGE
 #   review-no-gate-guard.sh --repo <owner>/<repo> --pr <n> --head <sha> --provider <cr|codex|bugbot>
@@ -37,13 +44,15 @@
 #   --head         the FULL 40-character lowercase sha the record would name. With --repo it must
 #                  be the pull request's current head: a no-gate is only ever recorded there.
 #   --input        a recorded read instead of a live one (`-` reads stdin): ONE JSON object with
-#                  the REST lists `reviews` and `comments` (cr, codex) or `check_runs` (bugbot). A
-#                  list that is missing or null is a surface that was not read, so the answer is
-#                  UNKNOWN.
+#                  the REST lists `reviews` and `comments` (cr, codex) or `check_runs` (bugbot, plus
+#                  `comments` when --round-start is given). A list that is missing or null is a
+#                  surface that was not read, so the answer is UNKNOWN.
 #   --round-start  YYYY-MM-DDTHH:MM:SSZ. Only artifacts at or after this time are considered. Pass
 #                  it ONLY when a recorded refutation restarted the review loop at this same head,
 #                  and give the time of that resolution record — never the time of a request, or a
-#                  duplicate request's refusal would hide the review the first request drew.
+#                  duplicate request's refusal would hide the review the first request drew. It is
+#                  refused unless an authenticated request for this head on this lane follows it:
+#                  the request that restarted the loop.
 #
 # OUTPUT (stdout)
 #   ADMIT <provider>@<sha> [round-start=<time>]
@@ -122,6 +131,14 @@ fi
 command -v jq >/dev/null 2>&1 || unknown "jq is required"
 
 # --- Read the surfaces this lane publishes on. Every one must arrive whole. -----------------------
+# CodeRabbit and Codex publish reviews and comments, Bugbot check-runs. The request markers live in
+# the comments, so a round start needs them on every lane.
+need_reviews=0 need_comments=0 need_checks=0
+case "$provider" in
+  cr | codex) need_reviews=1 need_comments=1 ;;
+  bugbot) need_checks=1 ;;
+esac
+[ -z "$round" ] || need_comments=1
 reviews="" comments="" checks=""
 # A surface is a JSON array of objects. Anything else is a read that did not happen.
 list_of_objects='if type == "array" and all(.[]; type == "object") then . else error("not a list of objects") end'
@@ -138,15 +155,15 @@ if [ -n "$input" ]; then
   surface() { # surface <key> — that list from the recorded read
     jq -ce --arg k "$1" ".[\$k] | ${list_of_objects}" <<<"$doc" 2>/dev/null
   }
-  case "$provider" in
-    cr | codex)
-      reviews="$(surface reviews)" || unknown "$source_name carries no reviews list: that surface was not read"
-      comments="$(surface comments)" || unknown "$source_name carries no comments list: that surface was not read"
-      ;;
-    bugbot)
-      checks="$(surface check_runs)" || unknown "$source_name carries no check_runs list: that surface was not read"
-      ;;
-  esac
+  if [ "$need_reviews" = 1 ]; then
+    reviews="$(surface reviews)" || unknown "$source_name carries no reviews list: that surface was not read"
+  fi
+  if [ "$need_comments" = 1 ]; then
+    comments="$(surface comments)" || unknown "$source_name carries no comments list: that surface was not read"
+  fi
+  if [ "$need_checks" = 1 ]; then
+    checks="$(surface check_runs)" || unknown "$source_name carries no check_runs list: that surface was not read"
+  fi
 else
   command -v gh >/dev/null 2>&1 || unknown "gh is required"
   pull="$(gh api "repos/$repo/pulls/$pr")" || unknown "cannot read $repo#$pr"
@@ -159,44 +176,56 @@ else
     jq -ces "if length > 0 and all(.[]; type == \"array\") then add | ${list_of_objects} else error(\"no page\") end" \
       <<<"$raw" 2>/dev/null
   }
-  case "$provider" in
-    cr | codex)
-      reviews="$(pages "repos/$repo/pulls/$pr/reviews?per_page=100")" || unknown "cannot read $repo#$pr reviews"
-      comments="$(pages "repos/$repo/issues/$pr/comments?per_page=100")" || unknown "cannot read $repo#$pr comments"
-      ;;
-    bugbot)
-      raw="$(gh api --paginate "repos/$repo/commits/$head/check-runs?check_name=Cursor%20Bugbot&per_page=100")" ||
-        unknown "cannot read the check-runs at $head"
-      # The first page states how many runs exist, so a short read is visible.
-      checks="$(jq -ces 'if length > 0 and all(.[]; type == "object" and (.check_runs | type == "array"))
-          then [.[].check_runs[]] as $runs
-            | if ($runs | length) == .[0].total_count then $runs else error("short") end
-          else error("no page") end' <<<"$raw" 2>/dev/null)" ||
-        unknown "the check-runs read at $head is incomplete"
-      ;;
-  esac
+  if [ "$need_reviews" = 1 ]; then
+    reviews="$(pages "repos/$repo/pulls/$pr/reviews?per_page=100")" || unknown "cannot read $repo#$pr reviews"
+  fi
+  if [ "$need_comments" = 1 ]; then
+    comments="$(pages "repos/$repo/issues/$pr/comments?per_page=100")" || unknown "cannot read $repo#$pr comments"
+  fi
+  if [ "$need_checks" = 1 ]; then
+    # filter=all: the default returns only the newest run of the check, and a failed re-run would
+    # then hide the review an earlier run delivered.
+    raw="$(gh api --paginate "repos/$repo/commits/$head/check-runs?check_name=Cursor%20Bugbot&filter=all&per_page=100")" ||
+      unknown "cannot read the check-runs at $head"
+    # The first page states how many runs exist, so a short read is visible.
+    checks="$(jq -ces 'if length > 0 and all(.[]; type == "object" and (.check_runs | type == "array"))
+        then [.[].check_runs[]] as $runs
+          | if ($runs | length) == .[0].total_count then $runs else error("short") end
+        else error("no page") end' <<<"$raw" 2>/dev/null)" ||
+      unknown "the check-runs read at $head is incomplete"
+  fi
 fi
 
 # --- Find the lane's reviews of this head ---------------------------------------------------------
 requested=""
-# scan <jq program> — run it over stdin with the shared arguments and helpers. `in_round` keeps an
-# artifact only when it carries a time inside the round.
+# scan <jq program> — run it over stdin with the shared arguments and helpers. `at` reads an
+# artifact's time and fails when it carries none: that is a read that lost a field, never a reason
+# to skip the artifact. `in_round` keeps a time inside the round.
 scan() {
   jq -r --arg head "$head" --arg round "$round" --arg provider "$provider" --arg requested "$requested" \
     'def body: .body // "";
-     def in_round: type == "string" and ($round == "" or . >= $round);
+     def at: if type == "string" then . else error("an artifact carries no time") end;
+     def in_round: $round == "" or . >= $round;
      '"$1"
 }
 
-# The earliest authenticated request for this head on this lane. An artifact that names no commit
-# can be tied to the head only by following that request.
-if [ "$provider" != bugbot ]; then
-  requested="$(scan '
+# The authenticated requests for this head on this lane: the earliest and the latest. An artifact
+# that names no commit can be tied to the head only by following the earliest one.
+latest_request=""
+if [ "$need_comments" = 1 ]; then
+  markers="$(scan '
     [.[]
       | select(.user.login == "devantler" and (body | startswith("> 🤖 Generated by the"))
           and (body | contains("<!-- review-request-head: \($head) provider=\($provider) -->")))
-      | .created_at | select(type == "string")] | min // ""' <<<"$comments")" ||
-    unknown "cannot read the request markers"
+      | .created_at | at]
+    | [(min // ""), (max // "")] | join(" ")' <<<"$comments")" || unknown "cannot read the request markers"
+  requested="${markers%% *}"
+  latest_request="${markers##* }"
+fi
+# A round start is the resolution record that a restarting request followed. With no request after
+# it there is no restarted round, only a time chosen to hide a review.
+if [ -n "$round" ] && { [ -z "$latest_request" ] || [[ ! "$latest_request" > "$round" ]]; }; then
+  unknown "--round-start $round is not followed by an authenticated ${provider} request for $head, so no round was restarted there"
 fi
 
 found=""
@@ -216,40 +245,51 @@ judge() {
 
 case "$provider" in
   cr)
+    # Candidates carry their position in the list, so the object judged is the object selected.
     candidates="$(scan '
-      .[] | select(.user.login == "coderabbitai[bot]" and .commit_id == $head and (.submitted_at | in_round)) | ["review", .id, .submitted_at, "bound"] | @tsv' \
-      <<<"$reviews")" || unknown "cannot scan the reviews"
+      to_entries[] | .key as $i | .value
+      | select(.user.login == "coderabbitai[bot]" and .commit_id == $head)
+      | (.submitted_at | at) as $t | select($t | in_round)
+      | ["review", $i, .id, $t, "bound", (.state // "-")] | @tsv' <<<"$reviews")" ||
+      unknown "cannot scan the reviews"
     # A reply is a candidate when it names this head, or follows the authenticated request for it.
+    # The two comment shapes are tested independently: one comment can quote the other marker.
     more="$(scan '
-      .[] | select(.user.login == "coderabbitai[bot]")
-      | if (body | contains("<!-- This is an auto-generated reply by CodeRabbit -->")) and (.created_at | in_round) then
-          (if $requested != "" and .created_at >= $requested then "bound" else "unbound" end) as $bind
-          | select($bind == "bound" or (body | contains($head[0:7])))
-          | ["comment", .id, .created_at, $bind] | @tsv
-        elif (body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->"))
-            and (.updated_at | in_round) then
-          ["summary", .id, .updated_at, "bound"] | @tsv
-        else empty end' <<<"$comments")" || unknown "cannot scan the comments"
-    while IFS=$'\t' read -r kind id at bind; do
+      to_entries[] | .key as $i | .value | select(.user.login == "coderabbitai[bot]")
+      | (if body | contains("<!-- This is an auto-generated reply by CodeRabbit -->") then
+           (.created_at | at) as $t | select($t | in_round)
+           | (if $requested != "" and $t >= $requested then "bound" else "unbound" end) as $bind
+           | select($bind == "bound" or (body | contains($head[0:7])))
+           | ["comment", $i, .id, $t, $bind, "-"]
+         else empty end),
+        (if body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->") then
+           (.updated_at | at) as $t | select($t | in_round)
+           | ["summary", $i, .id, $t, "bound", "-"]
+         else empty end)
+      | @tsv' <<<"$comments")" || unknown "cannot scan the comments"
+    while IFS=$'\t' read -r kind index id at bind state; do
       [ -n "$kind" ] || continue
-      [[ "$id" =~ ^[0-9]+$ ]] || unknown "an artifact carries no numeric id"
+      if ! [[ "$index" =~ ^[0-9]+$ && "$id" =~ ^[0-9]+$ ]]; then unknown "an artifact carries no numeric id"; fi
       case "$kind" in
         review)
-          payload="$(jq -c --arg head "$head" --argjson id "$id" \
-            'first(.[] | select(.id == $id)) | {head: $head, author: .user.login, commit_id, body: (.body // "")}' \
-            <<<"$reviews")" || unknown "cannot read review $id"
+          payload="$(jq -c --arg head "$head" --argjson i "$index" \
+            '.[$i] | {head: $head, author: .user.login, commit_id, body: (.body // "")}' <<<"$reviews")" ||
+            unknown "cannot read review $id"
           verdict="$(judge coderabbit-review-verdict.sh "$payload")" || unknown "cannot judge review $id"
           case "$verdict" in
             GREEN) record "$at" "$id" GREEN review ;;
             FINDINGS\ *) record "$at" "$id" FINDINGS review ;;
             # An identified review whose finding count cannot be trusted is still a review.
             "NONE unbalanced-sections" | "NONE hidden-finding-sections") record "$at" "$id" UNJUDGED review ;;
+            # An approval or a change request CodeRabbit submitted at this head is its verdict,
+            # whatever the body holds.
+            *) case "$state" in APPROVED | CHANGES_REQUESTED) record "$at" "$id" UNJUDGED review ;; esac ;;
           esac
           ;;
         comment)
-          payload="$(jq -c --arg head "$head" --argjson id "$id" \
-            'first(.[] | select(.id == $id)) | {head: $head, author: .user.login, body: (.body // "")}' \
-            <<<"$comments")" || unknown "cannot read comment $id"
+          payload="$(jq -c --arg head "$head" --argjson i "$index" \
+            '.[$i] | {head: $head, author: .user.login, body: (.body // "")}' <<<"$comments")" ||
+            unknown "cannot read comment $id"
           verdict="$(judge coderabbit-comment-verdict.sh "$payload")" || unknown "cannot judge comment $id"
           case "$verdict" in
             # A verdict reply names its commit, so the helper has already bound it to the head.
@@ -259,9 +299,8 @@ case "$provider" in
           esac
           ;;
         summary)
-          payload="$(jq -c --arg head "$head" --argjson id "$id" \
-            'first(.[] | select(.id == $id)) | {head: $head, body: (.body // "")}' <<<"$comments")" ||
-            unknown "cannot read comment $id"
+          payload="$(jq -c --arg head "$head" --argjson i "$index" \
+            '.[$i] | {head: $head, body: (.body // "")}' <<<"$comments")" || unknown "cannot read comment $id"
           verdict="$(judge coderabbit-summary-verdict.sh "$payload")" || unknown "cannot judge summary $id"
           # Only GREEN is bound to the head (its range ends there). The findings a summary counts
           # belong to the review object, which is read above.
@@ -272,22 +311,25 @@ case "$provider" in
     ;;
   codex)
     lines="$(scan '
-      .[] | select(.user.login == "chatgpt-codex-connector[bot]" and .commit_id == $head and (.submitted_at | in_round)) | [.submitted_at, .id, "FINDINGS", "review"] | @tsv' \
-      <<<"$reviews")" || unknown "cannot scan the reviews"
+      .[] | select(.user.login == "chatgpt-codex-connector[bot]" and .commit_id == $head)
+      | (.submitted_at | at) as $t | select($t | in_round)
+      | [$t, .id, "FINDINGS", "review"] | @tsv' <<<"$reviews")" || unknown "cannot scan the reviews"
+    # Both comment shapes are tested on every comment, and a finding outranks a clean pass: a
+    # finding can quote the clean-pass sentence.
     more="$(scan '
-      .[] | select(.user.login == "chatgpt-codex-connector[bot]" and (.created_at | in_round))
-      | if body | test("Didn.t find any major issues") then
-          # The clean pass names the commit it reviewed, abbreviated and in backticks.
-          ([body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`?(?<sha>[0-9a-f]{10,40})") | .sha] | first // "") as $sha
-          | select($sha != "" and ($head | startswith($sha)))
-          | [.created_at, .id, "GREEN", "comment"] | @tsv
-        elif body | test("(^|\\n)## Review finding") then
-          # A finding names its commit only in its blob permalinks. One that names no commit fails
-          # closed onto this head, but only once this head has an authenticated request.
-          [body | scan("/blob/([0-9a-f]{40})/") | .[0]] as $shas
-          | select(($shas | index($head)) != null
-              or (($shas | length) == 0 and $requested != "" and .created_at >= $requested))
-          | [.created_at, .id, "FINDINGS", "comment"] | @tsv
+      .[] | select(.user.login == "chatgpt-codex-connector[bot]")
+      | (.created_at | at) as $t | select($t | in_round)
+      # A finding names its commit only in its blob permalinks. One that names no commit fails
+      # closed onto this head, but only once this head has an authenticated request.
+      | [body | scan("/blob/([0-9a-f]{40})/") | .[0]] as $shas
+      | ((body | test("(^|\\n)## Review finding"))
+          and (any($shas[]; . == $head)
+            or (($shas | length) == 0 and $requested != "" and $t >= $requested))) as $finding
+      # The clean pass names the commit it reviewed, abbreviated and in backticks.
+      | ([body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`?(?<sha>[0-9a-f]{10,40})") | .sha] | first // "") as $sha
+      | ((body | test("Didn.t find any major issues")) and $sha != "" and ($head | startswith($sha))) as $clean
+      | if $finding then [$t, .id, "FINDINGS", "comment"] | @tsv
+        elif $clean then [$t, .id, "GREEN", "comment"] | @tsv
         else empty end' <<<"$comments")" || unknown "cannot scan the comments"
     while IFS=$'\t' read -r at id verdict kind; do
       [ -n "$at" ] || continue
@@ -297,10 +339,12 @@ case "$provider" in
   bugbot)
     lines="$(scan '
       .[] | select(.app.slug == "cursor" and ((.name // "") | test("bugbot"; "i"))
-          and (.head_sha // $head) == $head and .status == "completed" and (.completed_at | in_round)
-          and .output.title == "Bugbot Review")
-      | if .conclusion == "success" then [.completed_at, .id, "GREEN", "check"] | @tsv
-        elif .conclusion == "neutral" then [.completed_at, .id, "FINDINGS", "check"] | @tsv
+          and (.head_sha // $head) == $head and .status == "completed")
+      | (.completed_at | at) as $t | select($t | in_round)
+      | if .conclusion == "success" and .output.title == "Bugbot Review" then [$t, .id, "GREEN", "check"] | @tsv
+        # A successful run under a title this helper does not know is still a delivered run.
+        elif .conclusion == "success" then [$t, .id, "UNJUDGED", "check"] | @tsv
+        elif .conclusion == "neutral" and .output.title == "Bugbot Review" then [$t, .id, "FINDINGS", "check"] | @tsv
         else empty end' <<<"$checks")" || unknown "cannot scan the check-runs"
     while IFS=$'\t' read -r at id verdict kind; do
       [ -n "$at" ] || continue

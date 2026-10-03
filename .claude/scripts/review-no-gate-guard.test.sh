@@ -41,13 +41,16 @@ for f in "${capture}" "${summary_fixture}" "${codex_fixture}"; do
 done
 
 # --- Builders ----------------------------------------------------------------------------------
-review() { # review <id> <login> <commit> <submitted_at> <body>
+review() { # review <id> <login> <commit> <submitted_at|null> <body> [state]
   jq -n --argjson id "$1" --arg login "$2" --arg commit "$3" --arg at "$4" --arg body "$5" \
-    '{id:$id, user:{login:$login}, commit_id:$commit, submitted_at:$at, state:"COMMENTED", body:$body}'
+    --arg state "${6:-COMMENTED}" \
+    '{id:$id, user:{login:$login}, commit_id:$commit,
+      submitted_at:(if $at == "null" then null else $at end), state:$state, body:$body}'
 }
-comment() { # comment <id> <login> <created_at> <body> [updated_at]
+comment() { # comment <id> <login> <created_at|null> <body> [updated_at]
   jq -n --argjson id "$1" --arg login "$2" --arg at "$3" --arg body "$4" --arg up "${5:-$3}" \
-    '{id:$id, user:{login:$login}, created_at:$at, updated_at:$up, body:$body}'
+    '{id:$id, user:{login:$login}, created_at:(if $at == "null" then null else $at end),
+      updated_at:(if $up == "null" then null else $up end), body:$body}'
 }
 check() { # check <id> <app-slug> <head_sha> <status> <conclusion|null> <title> <completed_at>
   jq -n --argjson id "$1" --arg slug "$2" --arg sha "$3" --arg status "$4" --arg conclusion "$5" \
@@ -177,6 +180,15 @@ guard "an identified review whose finding count cannot be trusted still blocks t
 
 <details>
 <summary>🔇 Additional comments (1)</summary>")")" "$(list "${req}" "${refusal}")" '[]')" "${head}" cr
+guard "an approval CodeRabbit submitted at the head is its verdict, whatever the body holds" 1 \
+  "REVIEWED cr@${head} UNJUDGED review:11 ${t_review}" \
+  "$(doc "$(list "$(review 11 "${cr}" "${head}" "${t_review}" "Looks good." APPROVED)")" "$(list "${req}" "${refusal}")" '[]')" "${head}" cr
+guard "an approval from another account is not CodeRabbit's verdict" 0 "ADMIT cr@${head}" \
+  "$(doc "$(list "$(review 11 "devantler" "${head}" "${t_review}" "Looks good." APPROVED)")" "$(list "${req}" "${refusal}")" '[]')" "${head}" cr
+# The object judged is the object selected: a reply container sharing a review's id cannot stand in for it.
+guard "two objects under one id are each judged on their own" 1 \
+  "REVIEWED cr@${head} GREEN review:11 ${t_review}" \
+  "$(doc "$(list "$(review 11 "${cr}" "${head}" "${t_before}" "")" "$(review 11 "${cr}" "${head}" "${t_review}" "${green_body}")")" '[]' '[]')" "${head}" cr
 guard "every review at the head is listed, oldest first" 1 \
   "REVIEWED cr@${head} FINDINGS review:12 ${t_before}
 REVIEWED cr@${head} GREEN review:11 ${t_review}" \
@@ -199,6 +211,9 @@ guard "a verdict reply naming the head is the head's green" 1 \
   "$(doc '[]' "$(list "${req}" "$(comment 3 "${cr}" "${t_review}" "${verdict_reply}")" "${refusal}")" '[]')" "${head}" cr
 guard "a verdict reply naming another commit is not this head's review" 0 "ADMIT cr@${other}" \
   "$(doc '[]' "$(list "$(comment 3 "${cr}" "${t_review}" "${verdict_reply}")")" '[]')" "${other}" cr
+# Past the prefilter (it follows this head's request), the verdict helper itself rejects the other commit.
+guard "a verdict reply after this head's request, naming another commit, is not this head's review" 0 "ADMIT cr@${other}" \
+  "$(doc '[]' "$(list "$(request 1 cr "${t_request}" "${other}")" "$(comment 3 "${cr}" "${t_review}" "${verdict_reply}")")" '[]')" "${other}" cr
 guard "a verdict reply from another account is not CodeRabbit's review" 0 "ADMIT cr@${head}" \
   "$(doc '[]' "$(list "${req}" "$(comment 3 "devantler" "${t_review}" "${verdict_reply}")")" '[]')" "${head}" cr
 guard "a finding reply after this head's authenticated request is the head's review" 1 \
@@ -222,6 +237,12 @@ guard "that summary is no review of another head" 0 "ADMIT cr@${head}" \
   "$(doc '[]' "$(list "$(comment 4 "${cr}" "${t_before}" "${summary_body}" "${t_review}")")" '[]')" "${head}" cr
 guard "a summary-shaped comment from another account is not CodeRabbit's" 0 "ADMIT cr@${summary_head}" \
   "$(doc '[]' "$(list "$(comment 4 "devantler" "${t_before}" "${summary_body}" "${t_review}")")" '[]')" "${summary_head}" cr
+# One comment can carry both markers (a summary quoting a reply). Each shape is judged on its own.
+guard "a green summary that also quotes the reply marker is still the head's green" 1 \
+  "REVIEWED cr@${summary_head} GREEN summary:4 ${t_review}" \
+  "$(doc '[]' "$(list "$(comment 4 "${cr}" "${t_before}" "${summary_body}
+
+${reply_marker}" "${t_review}")")" '[]')" "${summary_head}" cr
 
 # --- Codex ---------------------------------------------------------------------------------------
 codex_finding="$(jq -r '.[] | select(.body | test("^## Review finding")) | .body' "${codex_fixture}")"
@@ -261,6 +282,12 @@ guard "Codex: a finding naming no commit, with no request for this head, binds n
   "$(doc '[]' "$(list "$(comment 6 "${codex}" "${t_review}" "${unattributed}")")" '[]')" "${head}" codex
 guard "Codex: a clean pass posted by another account is not Codex's" 0 "ADMIT codex@${codex_head}" \
   "$(doc '[]' "$(list "$(comment 5 "devantler" "${t_review}" "${codex_clean}")")" '[]')" "${codex_head}" codex
+# A finding that quotes the clean-pass sentence must still be read as a finding.
+guard "Codex: a finding that quotes the clean-pass sentence is still a finding" 1 \
+  "REVIEWED codex@${codex_head} FINDINGS comment:6 ${t_review}" \
+  "$(doc '[]' "$(list "$(comment 6 "${codex}" "${t_review}" "${codex_finding}
+
+An earlier pass said: Didn't find any major issues.")")" '[]')" "${codex_head}" codex
 
 # --- Cursor Bugbot ------------------------------------------------------------------------------
 guard "Bugbot: a successful review check at the head is the head's green" 1 \
@@ -269,6 +296,13 @@ guard "Bugbot: a successful review check at the head is the head's green" 1 \
 guard "Bugbot: a neutral review check at the head is its findings" 1 \
   "REVIEWED bugbot@${head} FINDINGS check:31 ${t_review}" \
   "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" completed neutral 'Bugbot Review' "${t_review}")")")" "${head}" bugbot
+guard "Bugbot: a successful check under an unknown title is still a delivered run" 1 \
+  "REVIEWED bugbot@${head} UNJUDGED check:31 ${t_review}" \
+  "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" completed success 'Bugbot' "${t_review}")")")" "${head}" bugbot
+guard "Bugbot: a review followed by a failed re-run is still the head's review" 1 \
+  "REVIEWED bugbot@${head} FINDINGS check:31 ${t_review}" \
+  "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" completed neutral 'Bugbot Review' "${t_review}")" \
+    "$(check 32 cursor "${head}" completed neutral 'Error' "${t_refusal}")")")" "${head}" bugbot
 guard "Bugbot: a neutral Error check is a run that never happened" 0 "ADMIT bugbot@${head}" \
   "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" completed neutral 'Error' "${t_review}")")")" "${head}" bugbot
 guard "Bugbot: a same-named check from another app is not Bugbot's" 0 "ADMIT bugbot@${head}" \
@@ -279,15 +313,52 @@ guard "Bugbot: a check at another commit is not this head's review" 0 "ADMIT bug
   "$(doc '[]' '[]' "$(list "$(check 31 cursor "${other}" completed success 'Bugbot Review' "${t_review}")")")" "${head}" bugbot
 
 # --- A round restarted at the same head ----------------------------------------------------------
-# A recorded refutation restarts the loop at the same head. The earlier round's review then no
-# longer speaks for the restarted round, so its own refusal may be recorded.
-restart_doc="$(doc "$(list "$(review 11 "${cr}" "${head}" "${t_review}" '**Actionable comments posted: 1**')")" "$(list "${req}" "${refusal}")" '[]')"
+# A recorded refutation restarts the loop at the same head: request, review with findings, the
+# resolution record, the restarting request, its refusal. The earlier round's review then no longer
+# speaks for the restarted round, so that round's own refusal may be recorded.
+t_resolved="2026-09-21T10:20:00Z"
+t_rerequest="2026-09-21T10:21:00Z"
+t_rerefusal="2026-09-21T10:22:00Z"
+rereq="$(request 5 cr "${t_rerequest}")"
+rerefusal="$(comment 6 "${cr}" "${t_rerefusal}" "${rate_limited}")"
+restart_doc="$(doc "$(list "$(review 11 "${cr}" "${head}" "${t_review}" '**Actionable comments posted: 1**')")" \
+  "$(list "${req}" "${rereq}" "${rerefusal}")" '[]')"
 guard "without a round start, an earlier review at the head blocks the no-gate" 1 \
   "REVIEWED cr@${head} FINDINGS review:11 ${t_review}" "${restart_doc}" "${head}" cr
-guard "a round started after that review admits the restarted round's no-gate" 0 \
-  "ADMIT cr@${head} round-start=2026-09-21T10:05:01Z" "${restart_doc}" "${head}" cr --round-start 2026-09-21T10:05:01Z
+guard "a round restarted after that review admits the restarted round's no-gate" 0 \
+  "ADMIT cr@${head} round-start=${t_resolved}" "${restart_doc}" "${head}" cr --round-start "${t_resolved}"
 guard "a review at the round start is inside the round" 1 \
   "REVIEWED cr@${head} FINDINGS review:11 ${t_review}" "${restart_doc}" "${head}" cr --round-start "${t_review}"
+# A round start is only the resolution record that a restarting request FOLLOWED. A time with no
+# request after it restarted nothing, and would only hide the review.
+expect_unknown "a round start at the refusal's own time is refused" "not followed by an authenticated" \
+  --input "${restart_doc}" --head "${head}" --provider cr --round-start "${t_rerefusal}"
+expect_unknown "a round start at the restarting request's own time is refused" "not followed by an authenticated" \
+  --input "${restart_doc}" --head "${head}" --provider cr --round-start "${t_rerequest}"
+expect_unknown "captured: the duplicate's refusal time cannot be passed off as a round start" \
+  "not followed by an authenticated" \
+  --input "${capture}" --head "${capture_head}" --provider cr --round-start 2026-09-06T02:31:43Z
+expect_unknown "a round start with only another lane's request after it is refused" "not followed by an authenticated" \
+  --input "${restart_doc}" --head "${head}" --provider codex --round-start "${t_resolved}"
+# The round applies to every surface and lane, not only CodeRabbit review objects.
+guard "a finding reply from the earlier round is outside the restarted round" 0 \
+  "ADMIT cr@${head} round-start=${t_resolved}" \
+  "$(doc '[]' "$(list "${req}" "$(comment 3 "${cr}" "${t_review}" "${finding_reply}")" "${rereq}" "${rerefusal}")" '[]')" \
+  "${head}" cr --round-start "${t_resolved}"
+codex_rereq="$(request 5 codex "${t_rerequest}")"
+guard "Codex: a review from the earlier round is outside the restarted round" 0 \
+  "ADMIT codex@${head} round-start=${t_resolved}" \
+  "$(doc "$(list "$(review 21 "${codex}" "${head}" "${t_review}" "")")" "$(list "${codex_req}" "${codex_rereq}")" '[]')" \
+  "${head}" codex --round-start "${t_resolved}"
+bugbot_rereq="$(request 5 bugbot "${t_rerequest}")"
+bugbot_restart="$(doc '[]' "$(list "${bugbot_rereq}")" "$(list "$(check 31 cursor "${head}" completed neutral 'Bugbot Review' "${t_review}")")")"
+guard "Bugbot: a run from the earlier round is outside the restarted round" 0 \
+  "ADMIT bugbot@${head} round-start=${t_resolved}" "${bugbot_restart}" "${head}" bugbot --round-start "${t_resolved}"
+guard "Bugbot: without a round start that run is the head's review" 1 \
+  "REVIEWED bugbot@${head} FINDINGS check:31 ${t_review}" "${bugbot_restart}" "${head}" bugbot
+jq 'del(.comments)' "${bugbot_restart}" >"${tmp}/bugbot-no-comments.json"
+expect_unknown "Bugbot: a round start cannot be checked without the comments" "comments" \
+  --input "${tmp}/bugbot-no-comments.json" --head "${head}" --provider bugbot --round-start "${t_resolved}"
 
 # --- A failed or partial read is UNKNOWN, never a no-gate ----------------------------------------
 jq 'del(.reviews)' "${capture}" >"${tmp}/no-reviews.json"
@@ -312,15 +383,25 @@ expect_unknown "a surface that is not a list of objects is UNKNOWN" "reviews" \
   --input "${tmp}/not-objects.json" --head "${head}" --provider cr
 expect_unknown "an unreadable input is UNKNOWN" "cannot read" \
   --input "${tmp}/absent.json" --head "${head}" --provider cr
+# A lane's artifact at the head that lost its time is a read that lost a field. Skipping it would
+# admit a no-gate over a review that is there.
+expect_unknown "a CodeRabbit review at the head with no time is UNKNOWN" "cannot scan the reviews" \
+  --input "$(doc "$(list "$(review 11 "${cr}" "${head}" null "${green_body}")")" '[]' '[]')" --head "${head}" --provider cr
+expect_unknown "a Codex review at the head with no time is UNKNOWN" "cannot scan the reviews" \
+  --input "$(doc "$(list "$(review 21 "${codex}" "${head}" null "")")" '[]' '[]')" --head "${head}" --provider codex
+expect_unknown "a CodeRabbit reply with no time is UNKNOWN" "cannot scan the comments" \
+  --input "$(doc '[]' "$(list "${req}" "$(comment 3 "${cr}" null "${verdict_reply}")")" '[]')" --head "${head}" --provider cr
+expect_unknown "a completed Bugbot run with no time is UNKNOWN" "cannot scan the check-runs" \
+  --input "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" completed success 'Bugbot Review' "")")")" --head "${head}" --provider bugbot
 # A sibling verdict helper that cannot run must stop the guard, not skip the artifact it would judge.
 mkdir -p "${tmp}/alone"
 cp "${tool}" "${tmp}/alone/review-no-gate-guard.sh"
 checks=$((checks + 1))
 run "${tmp}/alone/review-no-gate-guard.sh" --input "${capture}" --head "${capture_head}" --provider cr
-if [ "${rc}" = 2 ] && [ -z "${got}" ]; then
+if [ "${rc}" = 2 ] && [ -z "${got}" ] && grep -Fq "cannot judge review" "${tmp}/stderr"; then
   echo "ok   a missing verdict helper is UNKNOWN, not a skipped review"
 else
-  echo "FAIL a missing verdict helper: want rc=2 and empty stdout, got rc=${rc} '${got}'" >&2
+  echo "FAIL a missing verdict helper: want rc=2, empty stdout and 'cannot judge review'; got rc=${rc} '${got}' ($(cat "${tmp}/stderr"))" >&2
   failures=$((failures + 1))
 fi
 
@@ -372,6 +453,7 @@ case "$path" in
   */check-runs*) key=check-runs ;;
   *) exit 1 ;;
 esac
+printf '%s\n' "$path" >>"${dir}/requests.log"
 [ -e "${dir}/${key}" ] || { echo "gh: HTTP 502" >&2; exit 1; }
 cat "${dir}/${key}"
 [ ! -e "${dir}/${key}.rc" ] || exit "$(cat "${dir}/${key}.rc")"
@@ -408,6 +490,15 @@ live "live: the review is found across pages" 1 \
   "REVIEWED cr@${capture_head} FINDINGS review:5123840277 2026-09-06T02:31:02Z" "${d}" cr
 live "live: Codex's refusal with no review admits" 0 "ADMIT codex@${capture_head}" "${d}" codex
 live "live: Bugbot's failed run admits" 0 "ADMIT bugbot@${capture_head}" "${d}" bugbot
+# GitHub returns only the newest run of a check unless asked for all of them, and a failed re-run
+# would then hide the review an earlier run delivered.
+checks=$((checks + 1))
+if grep -Fq 'check-runs?check_name=Cursor%20Bugbot&filter=all' "${d}/requests.log"; then
+  echo "ok   live: the check-runs read asks for every run, not only the newest"
+else
+  echo "FAIL live: the check-runs read does not ask for filter=all ($(cat "${d}/requests.log"))" >&2
+  failures=$((failures + 1))
+fi
 d="$(stub comments-failed)"
 rm "${d}/comments"
 live "live: a failed comments read is UNKNOWN" 2 "" "${d}" cr
@@ -465,14 +556,14 @@ ablate() { # ablate <name> <literal> <replacement> <want-rc> <want-stdout> <args
 
 # Without the review-object read, the measured defect returns: the refused duplicate reads as a no-gate.
 ablate "dropping the review-object read admits the captured head again" \
-  'select(.user.login == "coderabbitai[bot]" and .commit_id == $head and (.submitted_at | in_round)) | ["review"' \
-  'select(false) | ["review"' 0 "ADMIT cr@${capture_head}" \
+  'select(.user.login == "coderabbitai[bot]" and .commit_id == $head)' \
+  'select(false)' 0 "ADMIT cr@${capture_head}" \
   --input "${capture}" --head "${capture_head}" --provider cr
 # Without the head bind, a review of any other commit would block this head's no-gate. (Codex: for
 # CodeRabbit the verdict helper binds the head a second time.)
 ablate "dropping the head bind lets another head's review block this one" \
-  '.commit_id == $head and (.submitted_at | in_round)) | [.submitted_at' \
-  '(.submitted_at | in_round)) | [.submitted_at' 1 \
+  'select(.user.login == "chatgpt-codex-connector[bot]" and .commit_id == $head)' \
+  'select(.user.login == "chatgpt-codex-connector[bot]")' 1 \
   "REVIEWED codex@${head} FINDINGS review:21 ${t_review}" \
   --input "$(doc "$(list "$(review 21 "${codex}" "${other}" "${t_review}" "")")" '[]' '[]')" --head "${head}" --provider codex
 # Without the author bind on a request marker, any account could attach a finding reply to a head.
@@ -483,10 +574,28 @@ ablate "dropping the request marker's author bind lets another account bind a re
   --input "$(doc '[]' "$(list "$(request 1 cr "${t_request}" "${head}" "someone-else")" "$(comment 3 "${cr}" "${t_review}" "${finding_reply}")")" '[]')" --head "${head}" --provider cr
 # Without the round filter, --round-start would be accepted and ignored.
 ablate "dropping the round filter makes --round-start inert" \
-  'def in_round: type == "string" and ($round == "" or . >= $round);' \
-  'def in_round: type == "string";' 1 \
+  'def in_round: $round == "" or . >= $round;' \
+  'def in_round: true;' 1 \
   "REVIEWED cr@${head} FINDINGS review:11 ${t_review}" \
-  --input "${restart_doc}" --head "${head}" --provider cr --round-start 2026-09-21T10:05:01Z
+  --input "${restart_doc}" --head "${head}" --provider cr --round-start "${t_resolved}"
+# Without the check that a request follows the round start, any later time hides the review: here
+# the duplicate's own refusal time, on the captured head.
+ablate "dropping the round-start check lets a refusal's time hide the captured review" \
+  'if [ -n "$round" ] && { [ -z "$latest_request" ] || [[ ! "$latest_request" > "$round" ]]; }; then' \
+  'if false; then' 0 "ADMIT cr@${capture_head} round-start=2026-09-06T02:31:43Z" \
+  --input "${capture}" --head "${capture_head}" --provider cr --round-start 2026-09-06T02:31:43Z
+# Without the time requirement, a review that lost its time is skipped and the no-gate admitted.
+ablate "dropping the time requirement skips a review that lost its time" \
+  'def at: if type == "string" then . else error("an artifact carries no time") end;' \
+  'def at: if type == "string" then . else empty end;' 0 "ADMIT cr@${head}" \
+  --input "$(doc "$(list "$(review 11 "${cr}" "${head}" null "${green_body}")")" '[]' '[]')" --head "${head}" --provider cr
+# Without the finding-first order, a Codex finding that quotes the clean-pass sentence is dropped.
+ablate "judging the clean pass first drops a finding that quotes it" \
+  'if $finding then [$t, .id, "FINDINGS", "comment"] | @tsv' \
+  'if $clean then [$t, .id, "GREEN", "comment"] | @tsv elif false then empty' 0 "ADMIT codex@${codex_head}" \
+  --input "$(doc '[]' "$(list "$(comment 6 "${codex}" "${t_review}" "${codex_finding}
+
+An earlier pass said: Didn't find any major issues.")")" '[]')" --head "${codex_head}" --provider codex
 
 echo "review-no-gate-guard.test: ${checks} checks, ${failures} failed"
 [ "${failures}" -eq 0 ] || exit 1

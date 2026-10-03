@@ -767,6 +767,14 @@ assert_section_prose "${constitution}" "${no_gate_start}" "${no_gate_end}" \
 assert_section_prose "${constitution}" "${no_gate_start}" "${no_gate_end}" \
   'give the time of that resolution record, never the time of a request' \
   "a duplicate request's own time can narrow the round and hide the review the first request drew"
+# Without this the gate's freshness bind (after the LATEST request) reads the served review as stale
+# once a duplicate request exists, while the guard forbids the no-gate: the head has no way forward.
+assert_section_prose "${constitution}" "${no_gate_start}" "${no_gate_end}" \
+  'A duplicate request starts no new round' \
+  "a duplicate request makes the review the first request drew stale, so the head can neither be green nor recorded as a no-gate"
+assert_section_prose "${constitution}" "${no_gate_start}" "${no_gate_end}" \
+  'a review that lands after a no-gate was recorded supersedes that record' \
+  "the review loop does not say what happens to a no-gate recorded before the served request's review landed"
 assert_prose "${maintenance_skill}" 'only after `.claude/scripts/review-no-gate-guard.sh` exits `0` for that head and provider' \
   "the run loop persists a no-gate without the guard, so a duplicate request's refusal is recorded as the head's"
 

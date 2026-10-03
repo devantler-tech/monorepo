@@ -561,12 +561,18 @@ result at the current head — self-promotion is forbidden before that. Request 
   Exit `0` prints `ADMIT`: the lane published no review of that head, so the record may be written.
   Exit `1` prints one `REVIEWED` line per review it found, and **that review governs, whatever a
   later reply says**: judge it under the green-review gate above, fix or refute its findings, read
-  an `UNJUDGED` one by hand, and record no no-gate. Exit `2` is UNKNOWN — a failed or partial read,
-  or a head that has moved — and authorizes no record. CodeRabbit's
+  an `UNJUDGED` one by hand, and record no no-gate. **A duplicate request starts no new round**, so
+  a review the guard reports is not stale merely because a later request for the same head exists:
+  the freshness bind counts from the request that opened the round. Exit `2` is UNKNOWN — a failed
+  or partial read, or a head that has moved — and authorizes no record. CodeRabbit's
   `Already reviewed the last commit` reply is not a refusal at all: it says a review of that commit
   exists, so find it. Pass `--round-start <UTC time>` only when a recorded refutation restarted the
   loop at this same head: give the time of that resolution record, never the time of a request, so
-  that the earlier round's review does not block the restarted round's own no-gate.
+  that the earlier round's review does not block the restarted round's own no-gate. The guard
+  refuses a round start that no request for that head and lane follows. It judges what is published
+  when it runs, so a review still being written for the other request is invisible to it: the
+  review-request lock is what keeps two requests from being in flight at one head, and a review
+  that lands after a no-gate was recorded supersedes that record.
 - **Local review round — when every lane is unavailable OR rate/billing limited** (maintainer
   direction 2026-07-18, widened to three lanes 2026-07-20, and widened again in an interactive
   session **2026-07-21**: *"We likely need to allow local review rounds when external review
