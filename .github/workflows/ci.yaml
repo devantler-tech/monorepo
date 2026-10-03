@@ -19,6 +19,7 @@ jobs:
     outputs:
       docs: ${{ steps.filter.outputs.docs }}
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
+      docs-audit-contract: ${{ steps.filter.outputs.docs-audit-contract }}
       docs-npm-toolchain: ${{ steps.filter.outputs.docs-npm-toolchain }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
@@ -107,8 +108,14 @@ jobs:
             docs:
               - 'docs/**'
             docs-deps:
+              # Only what decides the audit's answer: the dependency tree and the
+              # wrapper that reads it. A workflow file is not listed, because a
+              # workflow-only change cannot alter what the site depends on and a
+              # live advisory says nothing about it; docs-audit-contract covers it.
               - 'docs/package.json'
               - 'docs/package-lock.json'
+              - 'docs/scripts/audit-dependencies.sh'
+            docs-audit-contract:
               - 'docs/scripts/audit-dependencies.sh'
               - 'docs/scripts/audit-dependencies.test.sh'
               # The contract test compares both workflow call sites.
@@ -931,6 +938,29 @@ jobs:
       - name: Audit
         working-directory: docs
         run: ./scripts/audit-dependencies.sh
+
+  # The wrapper's contract test pins its retry behaviour and the wiring of both audit
+  # call sites, with npm stubbed. A job of its own, so a change to either workflow runs
+  # this static contract without the live dependency audit.
+  test-docs-audit-wrapper:
+    name: Test docs audit wrapper contract
+    needs: changes
+    if: needs.changes.outputs.docs-audit-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: Test audit wrapper
+        working-directory: docs
+        run: ./scripts/audit-dependencies.test.sh
 
   # Every workflow that installs, audits or publishes the site must use the npm major that
   # writes docs/package-lock.json. A job of its own, so a workflow-only change runs this
@@ -2844,6 +2874,7 @@ jobs:
       - changes
       - build-docs
       - audit-docs
+      - test-docs-audit-wrapper
       - test-docs-npm-toolchain
       - drift-check-active-projects
       - drift-check-renovate-dashboard
@@ -2932,6 +2963,7 @@ jobs:
             ${{ needs.changes.result }}
             ${{ needs.build-docs.result }}
             ${{ needs.audit-docs.result }}
+            ${{ needs.test-docs-audit-wrapper.result }}
             ${{ needs.test-docs-npm-toolchain.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.drift-check-renovate-dashboard.result }}
