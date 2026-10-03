@@ -642,7 +642,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    `--auto` once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
    with `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <the head you
    evaluated>` once CLEAN and self-promoted on genuine readiness; incl. majors;
-   definition PRs on that same path). **`--auto` is for those three authors only** — it merges at whatever
+   definition PRs on that same path). **`--auto` is for those two authors only** — it merges at whatever
    head passes checks later, so arming it on anyone else (`copilot-swe-agent[bot]`, any external
    contributor, or **`app/botantler-1` on ANY classifier result, exit 0 included**) would merge a
    commit nobody evaluated.
