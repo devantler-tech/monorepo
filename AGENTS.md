@@ -233,9 +233,9 @@ personalised investment advice, and never puts private financial data in a publi
 
 The Agent Improver may change only these surfaces; an installed or cached plugin copy is never one.
 
-- **Version-controlled** (draft PR, driven to merge): this `AGENTS.md` and the
-  [agent guides](#agent-guides); the contract tests in `.claude/scripts/*.test.sh` and
-  `.github/workflows/ci.yaml`; the declared deployment surfaces under `.claude/` (the
+- **Version-controlled** (draft PR → merge): `AGENTS.md`, its
+  [agent guides](#agent-guides), tests in `.claude/scripts/*.test.sh`, `.github/workflows/ci.yaml`,
+  `.claude/scripts/agent-telemetry.sh`; deployment surfaces under `.claude/` (the
   `daily-maintainer` alias, the surveyor and procedure overlays, the `finops` skill and floor, the
   plugin-consumption files, the instance registry and the portable loader); and, upstream, only the
   `agentic-engineer` and `agent-improver` definitions and plugin manifest in

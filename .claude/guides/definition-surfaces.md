@@ -15,6 +15,10 @@ definition surface, and an installed/cache copy is never an authoring target.
 
 - This consumer contract — `AGENTS.md` and the agent guides under `.claude/guides/` that it indexes —
   and its enforcement tests under `.claude/scripts/*.test.sh` plus `.github/workflows/ci.yaml`.
+- The observation-plane implementation at `.claude/scripts/agent-telemetry.sh` is a definition
+  surface; no other script source is included by that grant. This lets the Improver repair the
+  instrument that produces its evidence without turning every repository helper into self-modifiable
+  agent code. Its behavioural test remains covered by the enforcement-test grant above.
 - Deployment configuration and declared compatibility surfaces under `.claude/`: the thin
   `daily-maintainer` alias, the explicitly temporary surveyor and procedure overlays, the spend run
   loop at `.claude/skills/finops/SKILL.md` with its lifestyle floor and evidence script, the

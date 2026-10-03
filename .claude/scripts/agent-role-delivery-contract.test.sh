@@ -89,6 +89,8 @@ grep -Fq '### Authority model' "${constitution}" ||
   fail "consumer does not define Authority model"
 grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constitution}" ||
   fail "consumer does not name the upstream Agent Improver source"
+assert_prose 'The observation-plane implementation at `.claude/scripts/agent-telemetry.sh` is a definition surface; no other script source is included by that grant.' \
+  "consumer does not grant the Agent Improver narrow authority to repair its observation-plane implementation"
 
 # The bundled SKILL.md is SYNCED from devantler-tech/agent-skills (it carries
 # metadata.github-repo and the update-agent-skills workflow re-pulls it), so an edit there
