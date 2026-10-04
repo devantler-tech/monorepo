@@ -30,6 +30,7 @@ jobs:
       worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
       build-cache-reclaim: ${{ steps.filter.outputs.build-cache-reclaim }}
       disk-preflight: ${{ steps.filter.outputs.disk-preflight }}
+      shared-checkout-freshness: ${{ steps.filter.outputs.shared-checkout-freshness }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
@@ -216,6 +217,7 @@ jobs:
               - '.claude/scripts/comment-disclosure-drift.sh'
               - '.claude/scripts/python-ban-guard.sh'
               - '.claude/scripts/board-archive.sh'
+              - '.claude/scripts/shared-checkout-freshness.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -242,6 +244,12 @@ jobs:
             disk-preflight:
               - '.claude/scripts/disk-preflight.sh'
               - '.claude/scripts/disk-preflight.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            shared-checkout-freshness:
+              - '.claude/scripts/shared-checkout-freshness.sh'
+              - '.claude/scripts/shared-checkout-freshness.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1322,6 +1330,28 @@ jobs:
       # load-bearing: the host ships bash 3.2 and BSD df, which is where runs check.
       - name: Self-test disk-preflight verdicts
         run: bash .claude/scripts/disk-preflight.test.sh
+
+  test-shared-checkout-freshness:
+    name: Test shared checkout freshness
+    needs: changes
+    if: needs.changes.outputs.shared-checkout-freshness == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Every case builds its own upstream and clone, so no verdict depends on this checkout.
+      # A frozen checkout must be reported and a failed read must exit 2. The macos leg is
+      # load-bearing: the agent host ships bash 3.2, which is where runs call this check.
+      - name: Self-test shared-checkout-freshness verdicts
+        run: bash .claude/scripts/shared-checkout-freshness.test.sh
 
   test-worktree-cleanup:
     name: Test worktree cleanup
@@ -2908,6 +2938,7 @@ jobs:
       - test-worktree-cleanup
       - test-build-cache-reclaim
       - test-disk-preflight
+      - test-shared-checkout-freshness
       - test-submodule-init
       - test-submodule-pin-currency
       - test-blocked-label-blocker-line
@@ -2997,6 +3028,7 @@ jobs:
             ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-build-cache-reclaim.result }}
             ${{ needs.test-disk-preflight.result }}
+            ${{ needs.test-shared-checkout-freshness.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-blocked-label-blocker-line.result }}

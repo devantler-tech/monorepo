@@ -228,6 +228,7 @@ pr-ownership-disclosure.sh|--input -
 comment-disclosure-drift.sh|--input -
 python-ban-guard.sh|$repo_root
 board-archive.sh|
+shared-checkout-freshness.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"

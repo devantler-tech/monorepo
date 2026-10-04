@@ -159,7 +159,9 @@ card.
    background**, appending to the lane's log; never wait on it or poll it, and never pass another
    lane. (b) Run `disk-preflight.sh`. On `1`, run `build-cache-reclaim.sh apply` once and re-check; if
    it is still `1`, or it is `2`, do no builds, tests or cluster work this run, record it in
-   `needs_attention`, and escalate per *Maintainer channels*.
+   `needs_attention`, and escalate per *Maintainer channels*. (c) Run
+   `shared-checkout-freshness.sh`; a `FROZEN` verdict is a finding to report, never an edit to
+   discard.
 
 ## 1. Survey (delegate to a read-only subagent — keep the JSON out of your context)
 > **Guides:** [work-selection](../../guides/work-selection.md) (rung details the digest is read
