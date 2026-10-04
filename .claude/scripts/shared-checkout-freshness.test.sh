@@ -20,11 +20,19 @@ fixture=$(mktemp -d) || { printf 'cannot create a fixture directory\n' >&2; exit
 trap 'rm -rf -- "$fixture"' EXIT
 fixture=$(cd "$fixture" && pwd -P)
 
-g() { # <dir> <git args...> — git with a fixed identity and no host configuration
+git_try() { # <dir> <git args...> — git with a fixed identity and no host configuration
   local dir=$1; shift
   GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
     git -C "$dir" -c user.name=test -c user.email=test@example.invalid \
     -c commit.gpgsign=false -c init.defaultBranch=main "$@"
+}
+
+# g <dir> <git args...> — a fixture step that must succeed. A setup command that fails would
+# leave the fixture in another state than the case describes, and the assertion could then
+# pass without testing it, so the run stops instead. Inside $(...) the exit only leaves the
+# subshell: such callers check the status themselves.
+g() {
+  git_try "$@" || { printf 'fixture setup failed: git -C %s\n' "$*" >&2; exit 2; }
 }
 
 # new_pair <name> — an upstream with two files and one commit, and a clone of it. Sets
@@ -37,7 +45,8 @@ new_pair() {
   printf 'one\n' > "$up/other.md"
   g "$up" add contract.md other.md
   g "$up" commit -q -m 'initial'
-  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git clone -q "$up" "$co"
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git clone -q "$up" "$co" ||
+    { printf 'fixture setup failed: git clone %s\n' "$up" >&2; exit 2; }
 }
 
 # advance <file> — one more upstream commit that changes <file>.
@@ -56,8 +65,9 @@ run() { # [args...] -> sets out, rc
 ff_succeeds() {
   local copy="$fixture/ff-probe"
   rm -rf -- "$copy"; cp -R "$co" "$copy"
-  g "$copy" fetch -q origin '+refs/heads/main:refs/remotes/origin/main' || return 2
-  g "$copy" merge -q --ff-only origin/main >/dev/null 2>&1
+  git_try "$copy" fetch -q origin '+refs/heads/main:refs/remotes/origin/main' || return 2
+  # The one git call whose failure is an answer, not a broken fixture.
+  git_try "$copy" merge -q --ff-only origin/main >/dev/null 2>&1
 }
 
 expect() { # <name> <rc> <pattern>
@@ -226,9 +236,9 @@ expect "an unknown argument is a usage error" 2 "UNKNOWN — unexpected argument
 new_pair readonly
 advance contract.md
 printf 'local\n' >> "$co/contract.md"
-before=$(g "$co" rev-parse HEAD; g "$co" status --porcelain; cat "$co/contract.md")
+before=$(g "$co" rev-parse HEAD && g "$co" status --porcelain && cat "$co/contract.md") || exit 2
 run --repo-dir "$co"
-after=$(g "$co" rev-parse HEAD; g "$co" status --porcelain; cat "$co/contract.md")
+after=$(g "$co" rev-parse HEAD && g "$co" status --porcelain && cat "$co/contract.md") || exit 2
 if [ "$before" = "$after" ]; then ok "the check leaves HEAD, the index and the local edit untouched"
 else bad "the check leaves HEAD, the index and the local edit untouched"; fi
 
