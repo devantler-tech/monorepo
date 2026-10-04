@@ -145,6 +145,8 @@ elapsed_seconds() {
 # supervisor_runs <pid> <id> — 0 when <pid> is this script supervising sweep <id>, 1 when the
 # process is absent or different, and 2 when one unfiltered process-table read cannot prove either.
 # Matching the command line, not just the pid, keeps a recycled pid from reading as running. The
+# launcher is matched by its file name, not by this copy's path: every run starts it from its own
+# checkout, so the run that asks is rarely the one that started the sweep. The
 # same listing must contain this reporter with readable arguments, so a filtered or partial read
 # never becomes a "gone" verdict.
 supervisor_runs() {
@@ -158,7 +160,7 @@ supervisor_runs() {
     fi
     if [ "$listed_pid" = "$1" ]; then
       case "$command" in
-        *"$self __supervise --lane $lane --id $2")
+        *"/$self_name __supervise --lane $lane --id $2")
           target_seen=1; target_elapsed=$elapsed
           ;;
       esac

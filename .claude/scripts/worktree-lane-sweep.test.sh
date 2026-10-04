@@ -169,6 +169,23 @@ if [ "$rc" -eq 1 ] && grep -q 'not starting a second claude sweep' <<<"$out" \
   ok "start does not stack a second sweep on a running one"
 else bad "start does not stack a second sweep on a running one" "rc=$rc $out"; fi
 
+# The next run starts the launcher from its OWN checkout, never from the one that started the
+# sweep. A supervisor matched by the asking copy's path would read as gone from there, and a
+# second sweep would be stacked on the running one.
+mkdir -p "$fx/other/scripts"
+cp "$impl" "$fx/other/scripts/worktree-lane-sweep.sh"
+cp "$fx/scripts/worktree-cleanup-all.sh" "$fx/other/scripts/worktree-cleanup-all.sh"
+chmod +x "$fx/other/scripts/worktree-lane-sweep.sh" "$fx/other/scripts/worktree-cleanup-all.sh"
+out=$(HOME="$fx/home" bash "$fx/other/scripts/worktree-lane-sweep.sh" status --lane claude 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && grep -q "($hang_id, pid $hang_pid) has been running since" <<<"$out"; then
+  ok "a running sweep is seen from another checkout"
+else bad "a running sweep is seen from another checkout" "rc=$rc $out"; fi
+out=$(HOME="$fx/home" bash "$fx/other/scripts/worktree-lane-sweep.sh" start --lane claude 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && grep -q 'not starting a second claude sweep' <<<"$out" \
+   && [ "$(field claude started id)" = "$hang_id" ]; then
+  ok "start from another checkout does not stack a second sweep"
+else bad "start from another checkout does not stack a second sweep" "rc=$rc $out"; fi
+
 # A failed process-table read proves neither running nor gone. It is UNKNOWN and must not start
 # a second sweep over the one whose state could not be read.
 mkdir -p "$fx/bin"
