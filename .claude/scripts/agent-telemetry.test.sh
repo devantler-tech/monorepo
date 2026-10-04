@@ -1233,7 +1233,10 @@ printf '%s\n' '{"type":"response_item","payload":{"type":"function_call_output",
 subst "$FIX/cxonly/sessions/r.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
-nocheck "Codex-only window is not skipped as empty" "$OUT" "no sessions in window — neither"
+# The Claude scope is empty here and says so; the Codex scope has a session and must not.
+cxonly_codex_block=$(awk 'seen { print } /instance scope: codex transcripts/ { seen = 1 }' <<<"$OUT")
+check "Codex-only window reports its Codex scope" "$OUT" "instance scope: codex transcripts"
+nocheck "Codex-only window is not skipped as empty" "$cxonly_codex_block" "no sessions in window"
 if grep -qF 'aws-access-key-id' <<<"$OUT"; then
   ok "Codex-only credential leak is still caught"
 else bad "Codex-only credential leak is still caught" "missed"; fi
