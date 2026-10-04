@@ -688,6 +688,7 @@ mk93() { # <branch> <push|local> — a branch carrying one commit of its own; pr
   if [[ "$2" == "push" ]]; then git -C "$work93" push -q -u origin "$1"; fi
   git -C "$work93" rev-parse "$1"
 }
+counts93() { sed -n '1p' <<<"$out"; }
 verdict93() { sed -n '2p' <<<"$out"; }
 # The headline count must equal the sum of its reasons, or a reason could be printed without
 # being counted. Prints "yes" when they agree.
@@ -725,7 +726,7 @@ report "branches no rule may delete read as RETAINED, counted by reason (#3293)"
 report "a RETAINED verdict leaves the exit status at 0 (#3293)" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc"
 report "the counts line keeps its shape, so existing readers still match (#3293)" \
-  "$(sed -n '1p' <<<"$out" | grep -qE '^monorepo +ns=claude +local: -2 +keep 4 +\| remote: -0 +keep 4 +rej 0 +cand 2 +\| ' && echo yes || echo no)" "out=$out"
+  "$(grep -qE '^monorepo +ns=claude +local: -2 +keep 4 +\| remote: -0 +keep 4 +rej 0 +cand 2 +\| ' <<<"$(counts93)" && echo yes || echo no)" "out=$out"
 report "reporting changes no decision: a dry run moves no ref (#3293)" \
   "$([[ "$refs_before" == "$(git -C "$work93" for-each-ref; git -C "$bare93" for-each-ref)" ]] && echo yes || echo no)"
 
@@ -734,7 +735,7 @@ report "reporting changes no decision: a dry run moves no ref (#3293)" \
 printf '%s\tMERGED\t%s\n' "claude/moved-since-pr-3293" "$moved_sha" >"$PR_EVIDENCE_FILE"
 out="$("$helper" "$work93" "monorepo" "$tmp/m-3293c" dry-run 2>/dev/null)" && rc=0 || rc=$?
 report "control: matching evidence turns a retained branch into a deletion (#3293)" \
-  "$([[ "$(verdict93)" == *"RETAINED 5:"*"0 moved since their PR"* ]] && sed -n '1p' <<<"$out" | grep -qE 'remote: -1 ' && echo yes || echo no)" \
+  "$([[ "$(verdict93)" == *"RETAINED 5:"*"0 moved since their PR"* ]] && grep -qE 'remote: -1 ' <<<"$(counts93)" && echo yes || echo no)" \
   "out=$out"
 # The verdict in APPLY mode, where two more keeps exist. Both leave a spent branch behind,
 # so neither may read as "in use": a sweep whose every open-PR recheck died would otherwise
