@@ -272,9 +272,14 @@ validate_wiring() { # ci-workflow scheduled-workflow npmrc
   # npm reads its settings from this file on every audit: `audit-level` and `include`
   # change what the audit counts and `registry` chooses who answers it. A change that
   # turns the audit green that way triggers nothing the audit itself could catch, so
-  # the file may hold reviewed settings only.
+  # the file may hold reviewed settings only. npm trims each line and accepts CRLF
+  # endings, so a line is judged the way npm reads it: an indented comment or a
+  # whitespace-only line sets nothing, while an indented setting is still a setting.
   if [ -e "${settings}" ]; then
     while IFS= read -r line || [ -n "${line}" ]; do
+      line="${line%$'\r'}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
       case "${line}" in
         '' | '#'* | ';'*) continue ;;
         'registry=https://registry.npmjs.org/') continue ;;
@@ -469,6 +474,11 @@ expect_violation "the scheduled audit job is switched off" \
 
 # The npm settings the audit runs under.
 reset_fixture
+printf '\r\n   \n\t# indented comment\r\n  ; another\n  registry=https://registry.npmjs.org/ \r\n' >"${fixture_npmrc}"
+violation="$(validate_wiring "${fixture_ci}" "${fixture_scheduled}" "${fixture_npmrc}")" ||
+  fail "formatting npm ignores is rejected: ${violation}"
+
+reset_fixture
 printf 'audit-level=critical\n' >>"${fixture_npmrc}"
 expect_violation "the audit level is raised above the advisory" \
   'docs/.npmrc sets "audit-level=critical", which this contract has not reviewed'
@@ -488,7 +498,17 @@ printf 'audit=false' >>"${fixture_npmrc}"
 expect_violation "a setting on a final line without a newline" \
   'docs/.npmrc sets "audit=false", which this contract has not reviewed'
 
-[ "${mutations_run}" -eq 30 ] || fail "ran ${mutations_run} wiring mutations; expected 30"
+reset_fixture
+printf '  \taudit-level=critical\n' >>"${fixture_npmrc}"
+expect_violation "an indented setting" \
+  'docs/.npmrc sets "audit-level=critical", which this contract has not reviewed'
+
+reset_fixture
+printf 'include=dev\r\n' >>"${fixture_npmrc}"
+expect_violation "a setting on a CRLF line" \
+  'docs/.npmrc sets "include=dev", which this contract has not reviewed'
+
+[ "${mutations_run}" -eq 32 ] || fail "ran ${mutations_run} wiring mutations; expected 32"
 
 completed=1
 printf 'docs audit: PASS\n'
