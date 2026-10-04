@@ -134,6 +134,29 @@ value, duplicates work already shipped, or conflicts with where the product is g
 still-valid finding as an issue first, and stating the reason on the PR. A stale draft nobody will
 finish is not neutral: it costs review capacity, ages into conflicts, and hides the work that matters.
 
+**A parked PR carries one blocker record, in a comment, under the `blocked` label** (monorepo#3424).
+Without one, every run re-derived the same diagnosis and posted it again: `platform#3534` collected
+17 comments about one unchanged blocker in 18 days. To park a PR:
+
+1. Add the `blocked` label. The label is what parks the PR; a PR without it is not parked and is
+   worked like any other, whatever its comments say.
+2. Post **one** comment that begins with your disclosure line, carries `<!-- pr-blocker-record -->`
+   on a line of its own, and holds the same line a blocked issue carries (*Issue-driven → Drain
+   oldest-first*): `**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`,
+   with the `| asked <channel> <date>` record when the kind is `authority`. The record lives in a
+   comment because a dependency bot rewrites the body of its own PR.
+
+On every later run, **re-verify the blocker against live state and edit that comment in place**
+(`gh api -X PATCH repos/<owner>/<repo>/issues/comments/<id>`): update the date and result, or, when
+the blocker has cleared, remove the label and the record and drive the PR. Never post a second
+record or a new comment restating the blocker, and leave earlier prose alone: it has no marker and
+is not read. The record replaces the re-diagnosis, never the re-check.
+[`blocked-label-blocker-line.sh --org devantler-tech`](../scripts/blocked-label-blocker-line.sh)
+checks it with the issues: a parked PR with no record is `MISSING`, with more than one `DUPLICATE`,
+and its one record is `MALFORMED`, `STALE`, `NO-ASK` or `STALE-ASK` as an issue's would be. Only a
+comment by `devantler` that starts with the disclosure line counts, so nobody else's comment can
+park a PR or clear a finding.
+
 **"Is someone actively working on it?" is decided from data, never by asking.** Treat a PR as actively
 owned by someone else — and leave it alone this run — when any of these holds:
 
