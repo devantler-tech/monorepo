@@ -179,6 +179,27 @@ expect "'I found no …' is never a claim" 0 GREEN \
 expect "a claim about something other than issues is not a finding" 1 "NONE no-verdict" \
   "$(payload "$(reply "I reviewed \`${head}\`." "" "I found one helper that covers this.")")"
 
+# The claim may follow a mention, a bullet or a dash, and may name a bug rather than an issue.
+for claim in \
+  "\`@devantler\` I found one blocking issue in \`x.sh\`." \
+  "- I found one blocking issue." \
+  "Review complete — I found one blocking issue." \
+  "I've found one issue." \
+  "I found the following issue:" \
+  "I found another issue." \
+  "I found one bug."; do
+  expect "claim shape: ${claim}" 1 "FINDINGS 1" \
+    "$(payload "$(reply "I reviewed \`${head}\`." "" "${claim}" "" "No new findings.")")"
+done
+expect "a summary claim and its per-item lines are one count, not a sum" 1 "FINDINGS 2" \
+  "$(payload "$(reply "I reviewed \`${head}\`. I found two issues." "" "I found one issue in a.sh." "" "I found one issue in b.sh.")")"
+expect "an oversized number is one finding, never a float" 1 "FINDINGS 1" \
+  "$(payload "$(reply "I reviewed \`${head}\`. I found 99999999999999999999 issues.")")"
+expect "a claim about an earlier finding errs towards a finding" 1 "FINDINGS 1" \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "I found one earlier issue is now fixed." "" "No new findings.")")"
+expect "'I found the …' without 'following' is not a claim" 0 GREEN \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "I found the earlier findings addressed." "" "No new findings.")")"
+
 # --- Input contract ----------------------------------------------------------------------------
 expect "abbreviated head is refused" 2 "" "$(payload "$(reply 'No findings.')" "${head:0:12}")"
 expect "unknown key is refused" 2 "" '{"head":"'"${head}"'","author":"coderabbitai[bot]","body":"x","commit_id":"y"}'

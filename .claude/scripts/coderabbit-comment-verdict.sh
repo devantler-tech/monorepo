@@ -137,23 +137,32 @@ result="$(awk -v head="$head" '
     return 1
   }
   # A counted finding claim: "I found one blocking issue." / "I found 2 new findings:" — the
-  # verdict sentence stating that findings EXIST. Only the opening words are read, so a trailing
-  # clause cannot turn it back into "no review". Returns the count (1 for a/an/several/some).
-  function finding_claim(s,   l, n, w, i, c) {
+  # sentence stating that findings EXIST. The "I found" pair may sit anywhere in the sentence (after
+  # a mention, a bullet or a dash), and only the words up to the noun are read, so a trailing
+  # clause cannot turn it back into "no review". Returns the stated count, or 1 when the sentence
+  # gives none it can read (a/an/another/several/some/multiple/many, "the following", or an oversized number).
+  # It errs towards a finding on purpose: a wrong FINDINGS costs a re-read, a wrong GREEN a review.
+  function finding_claim(s,   l, n, w, i, p, q, c, names) {
     l = lower(s)
     gsub(/[^a-z0-9 -]+/, " ", l)
-    sub(/^ +/, "", l)
     n = split(l, w, / +/)
-    if (w[1] != "i" || w[2] != "found") return 0
-    c = 0
-    if (w[3] ~ /^[1-9][0-9]*$/) c = w[3] + 0
-    else if (w[3] ~ /^(a|an|one|several|some|multiple)$/) c = 1
-    else {
-      split("two three four five six seven eight nine ten", names, " ")
-      for (i = 1; i <= 9; i++) if (w[3] == names[i]) c = i + 1
+    for (p = 1; p < n; p++) {
+      if (w[p] != "i") continue
+      q = p + 1
+      if (w[q] == "ve" || w[q] == "have" || w[q] == "also") q++
+      if (w[q] != "found") continue
+      q++
+      c = 0
+      if (w[q] ~ /^[1-9][0-9]*(-[0-9]+)?$/) c = (w[q] ~ /^[1-9][0-9]?[0-9]?$/) ? w[q] + 0 : 1
+      else if (w[q] ~ /^(a|an|one|another|several|some|multiple|many)$/ || (w[q] == "the" && w[q + 1] == "following")) c = 1
+      else {
+        split("two three four five six seven eight nine ten", names, " ")
+        for (i = 1; i <= 9; i++) if (w[q] == names[i]) c = i + 1
+      }
+      if (!c) continue
+      for (i = q + 1; i <= n && i <= q + 5; i++)
+        if (w[i] ~ /^(issue|issues|finding|findings|bug|bugs|problem|problems|defect|defects|regression|regressions)$/) return c
     }
-    if (!c) return 0
-    for (i = 4; i <= n && i <= 8; i++) if (w[i] ~ /^(issue|issues|finding|findings)$/) return c
     return 0
   }
   BEGIN { fence = 0; depth = 0; first = ""; firstlead = ""; vlead = ""; notrun = 0; finding = 0; severities = 0; vsha = "none"; found = 0; claimed = 0 }
@@ -175,7 +184,7 @@ result="$(awk -v head="$head" '
     if (stripped ~ /^>/) next
     # A reply that states findings exist is a finding, whatever follows it (monorepo#3292).
     m = split(stripped, claims, /\. /)
-    for (j = 1; j <= m; j++) { k = finding_claim(claims[j]); if (k) { finding = 1; claimed += k } }
+    for (j = 1; j <= m; j++) { k = finding_claim(claims[j]); if (k) { finding = 1; if (k > claimed) claimed = k } }
     if (!found) {
       # The reviewed commit is the FIRST sha the prose of the reply names before its verdict: CodeRabbit
       # opens with it (`I reviewed <sha>.`) and may discuss other commits further down. A verdict
