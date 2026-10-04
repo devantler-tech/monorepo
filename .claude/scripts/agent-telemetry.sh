@@ -2010,9 +2010,32 @@ commands_in() {
          | .input? // empty
          | select(type=="string")
          | [scan("cmd:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")] | .[]? | .[0]?
-         | gsub("\\\\n"; "\n") | gsub("\\\\t"; " ") | gsub("\\\\\""; "\""))
+         # The literal is decoded as the string it is, in one pass, so that a
+         # backslash in the command is the one the shell will see. Unescaping
+         # three sequences by hand left a real backslash doubled and a
+         # JS-only escape such as \$ as written, and a reader that counts
+         # backslashes then misreads which quote closes. A literal that is not
+         # also a JSON string keeps the by-hand form and is flagged with a
+         # leading \u001d as inexact.
+         # A tab is whitespace between words, and the patterns that read these
+         # commands are written with a space, so it becomes one in both forms.
+         | . as $literal
+         | (try ("\"" + $literal + "\"" | fromjson | gsub("\t"; " "))
+            catch ("\u001d" + ($literal | gsub("\\\\n"; "\n") | gsub("\\\\t"; " ") | gsub("\\\\\""; "\"")))))
       )
-    | select(type=="string") | select(length > 0)
+    | select(type=="string")
+    # Every LINE carries a one-character marker: \u001e on the first line of a
+    # tool call (\u001d when its text is inexact), \u001f on each line after
+    # it. A reader that tracks state across lines needs to know where one call
+    # ends, because each call is its own shell parse (#3666). Marking every
+    # line, as tagged_commands_in does, is what keeps the boundary from being
+    # forged: command text that itself starts a line with \u001e still sits
+    # behind the \u001f that line carries. Text that opens with \u001d by
+    # itself only reads as inexact, which is the stricter reading.
+    | (if startswith("\u001d") then "\u001d" else "\u001e" end) as $opens
+    | ltrimstr("\u001d") | select(length > 0)
+    | split("\n") | to_entries
+    | map((if .key == 0 then $opens else "\u001f" end) + .value) | .[]
   ' "$f" 2>/dev/null
 }
 
@@ -4590,7 +4613,10 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     # like prose is LABELLED `[prose?]` and RANKED after every other candidate,
     # so it can no longer push a likely build out of the five rows shown, and a
     # wrong label changes only the order. Looks like prose means: once quoted
-    # text is removed (a "…" holding `$`, a backtick or an escape stays), no
+    # text is removed (a "…" holding an unescaped `$` or backtick stays; so
+    # does one holding any escape, unless the line is the whole of a tool call
+    # whose text is exact; and quote state never crosses from one tool call
+    # into the next), no
     # pipe, redirect, substitution, group or function syntax is left; every
     # `;`/`&`-separated segment starts with `printf` (no options), `echo`, `cd`
     # or a text-only `gh pr`/`gh issue` subcommand; and the session never
@@ -4612,27 +4638,37 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
                 inert = "^(rtk[[:space:]]+)?(printf|echo|cd|gh[[:space:]]+(pr|issue)[[:space:]]+(create|edit|comment|view))([[:space:]]|$)"
               }
               # unquoted(line) reads one line left to right with the quote state
-              # (st, buf) CARRIED from the previous line, so a quote character
-              # inside the other kind of quote is literal and a multi-line string
-              # stays a string. It returns the line with quoted text blanked; a
-              # "…" holding `$`, a backtick or an escape, or a quote still open
-              # at the end of the line, leaves a backtick, which text_only rejects.
+              # (st, buf) CARRIED from the previous line of the same tool call,
+              # so a quote character inside the other kind of quote is literal
+              # and a multi-line string stays a string. It returns the line with
+              # quoted text blanked; a "…" holding an unescaped `$` or backtick,
+              # or a quote still open at the end of the line, leaves a backtick,
+              # which text_only rejects. It also notes two facts for the END
+              # block: `esc`, a backslash inside "…", and `trail`, an unquoted
+              # backslash that ends the line and so joins the next line to it.
               function unquoted(line,   out, n, i, c, open) {
                 # A line that STARTS inside a carried quote is never exempt, so
-                # carried state (which may span two unrelated tool calls) can
-                # only add a candidate, never blank one away.
-                out = ""; n = length(line); open = st != 0
+                # carried state can only add a candidate, never blank one away.
+                out = ""; n = length(line); open = st != 0; esc = 0; trail = 0
                 for (i = 1; i <= n; i++) {
                   c = substr(line, i, 1)
                   if (st == 0) {
                     if (c == sq) st = 1
                     else if (c == "\"") { st = 2; buf = "" }
-                    else if (c == "\\") { out = out " "; i++ }
+                    else if (c == "\\") { out = out " "; trail = (i == n); i++ }
                     else out = out c
                   } else if (st == 1) {
                     if (c == sq) { st = 0; out = out " " }
-                  } else if (c == "\\") { buf = buf c; i++ }
-                  else if (c == "\"") { st = 0; out = out (buf ~ /[$]|`|\\/ ? "`" : " ") }
+                  } else if (c == "\\") {
+                    # Inside "…" a backslash makes the next character literal, so
+                    # neither is kept: `\$` and an escaped backtick must not read
+                    # as an expansion, and `\\` must not hide the unescaped
+                    # character after it. That holds for the shell that parses
+                    # this line; whether another one reads it again is decided
+                    # in the END block, from `esc`.
+                    esc = 1; i++
+                  }
+                  else if (c == "\"") { st = 0; out = out (buf ~ /[$]|`/ ? "`" : " ") }
                   else buf = buf c
                 }
                 return st == 0 && !open ? out : out "`"
@@ -4651,19 +4687,42 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
               }
               # Lines are decided at the end, because a name-changing line
               # anywhere in the session removes the exemption for all of them.
+              # commands_in marks every line: \036 opens a tool call, \035 opens
+              # one whose text was decoded inexactly, and \037 continues one. A
+              # call is its own shell parse, so the quote state starts over
+              # where a call opens and at nothing a command can write itself.
               {
-                line[++n] = $0; res[n] = unquoted($0)
+                mark = substr($0, 1, 1)
+                if (mark == "\035" || mark == "\036") { st = 0; joined = 0; inexact[++call] = (mark == "\035") }
+                if (mark == "\035" || mark == "\036" || mark == "\037") $0 = substr($0, 2)
+                line[++n] = $0; of[n] = call; lines[call]++; after[n] = joined
+                res[n] = unquoted($0); escaped[n] = esc; joined = trail
                 if ($0 ~ /(^|[^A-Za-z0-9_-])(alias|eval|source|enable|shopt|function|trap|builtin|BASH_ENV|BASH_FUNC[A-Za-z0-9_%]*|PROMPT_COMMAND|command_not_found_handle)([^A-Za-z0-9_-]|$)/ \
                     || $0 ~ /[(][[:space:]]*[)]/ || $0 ~ /(^|[^A-Za-z0-9_.\/-])[.][[:space:]]/) {
                   redefined = 1; renames[n] = 1
                 }
               }
+              # An escape inside "…" is prose only where this line is all one
+              # shell reads: a tool call of a single line whose text is exact.
+              # In a call of several lines the line can be a heredoc body, the
+              # rest of a continued command, part of a backtick block or the
+              # input of a group piped to a shell, where a second shell reads it
+              # again and `\$(…)` runs; and inexact text may not hold the
+              # backslashes the shell saw. There any backslash inside "…" keeps
+              # counting as evidence that something runs, as it always did. A
+              # line joined to the one before it by a backslash is never prose:
+              # it is an argument of that command, whatever it looks like alone.
+              # The walk does not read ANSI-C quoting ($'…'), where a backslash
+              # escapes a quote: after one, its idea of what is quoted can be off
+              # for the rest of the line, so a line that holds one keeps the old
+              # rule as well.
+              function layered(i) { return inexact[of[i]] || lines[of[i]] > 1 || index(line[i], "$" sq) > 0 }
               END {
                 for (i = 1; i <= n; i++) {
                   if (line[i] ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
                       || (renames[i] && line[i] ~ /make/)) print "0\t" substr(line[i], 1, 70)
                   else if (line[i] ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/)
-                    print (!redefined && text_only(res[i]) ? "1" : "0") "\t" substr(line[i], 1, 70)
+                    print (!redefined && !after[i] && !(escaped[i] && layered(i)) && text_only(res[i]) ? "1" : "0") "\t" substr(line[i], 1, 70)
                 }
               }' <<<"$cmds"
           fi
