@@ -35,8 +35,8 @@
 #
 # OUTPUT (one line on stdout)
 #   GREEN            a CodeRabbit reply stating a finding-free review of --head
-#   FINDINGS <n>     a CodeRabbit reply carrying <n> severity-tagged findings (`**P1 — …**`,
-#                    `### P1: …`), or 1 for any other finding marker; a non-thread review finding
+#   FINDINGS <n>     a CodeRabbit reply carrying <n> findings — severity-tagged (`**P1 — …**`,
+#                    `### P1: …`) or claimed (`I found one blocking issue.`), else 1; a finding
 #                    to fix or refute, never "no review" (monorepo#3004)
 #   NONE <reason>    not a green for this head; <reason> is one of not-coderabbit, not-a-reply,
 #                    did-not-run, no-verdict, no-sha, not-a-review, other-head
@@ -136,7 +136,37 @@ result="$(awk -v head="$head" '
     if (!noun || noun - start > 4 || n - noun > 4) return 0
     return 1
   }
-  BEGIN { fence = 0; depth = 0; first = ""; firstlead = ""; vlead = ""; notrun = 0; finding = 0; severities = 0; vsha = "none"; found = 0 }
+  # A counted finding claim: "I found one blocking issue." / "I found 2 new findings:" — the
+  # sentence stating that findings EXIST. The "I found" pair may sit anywhere in the sentence (after
+  # a mention, a bullet or a dash), and only the words up to the noun are read, so a trailing
+  # clause cannot turn it back into "no review". Returns the stated count, or 1 when the sentence
+  # gives none it can read (a/an/another/several/some/multiple/many, "the following", or an oversized number).
+  # It errs towards a finding on purpose: a wrong FINDINGS costs a re-read, a wrong GREEN a review.
+  function finding_claim(s,   l, n, w, i, p, q, c, names) {
+    l = lower(s)
+    gsub(/[^a-z0-9 -]+/, " ", l)
+    n = split(l, w, / +/)
+    for (p = 1; p < n; p++) {
+      if (w[p] != "i") continue
+      q = p + 1
+      if (w[q] == "ve" || w[q] == "have" || w[q] == "also") q++
+      if (w[q] != "found") continue
+      q++
+      c = 0
+      if (w[q] ~ /^[1-9][0-9]*(-[0-9]+)?$/) c = (w[q] ~ /^[1-9][0-9]?[0-9]?$/) ? w[q] + 0 : 1
+      else if (w[q] ~ /^(a|an|one|another|these|those|several|some|multiple|many)$/ || (w[q] == "the" && w[q + 1] == "following")) c = 1
+      else {
+        split("two three four five six seven eight nine ten", names, " ")
+        for (i = 1; i <= 9; i++) if (w[q] == names[i]) c = i + 1
+      }
+      if (!c) continue
+      for (i = q + 1; i <= n && i <= q + 5; i++) {
+        if (w[i] ~ /^(issue|issues|finding|findings|bug|bugs|problem|problems|defect|defects|regression|regressions)$/) return c
+      }
+    }
+    return 0
+  }
+  BEGIN { fence = 0; depth = 0; first = ""; firstlead = ""; vlead = ""; notrun = 0; finding = 0; severities = 0; vsha = "none"; found = 0; claimed = 0 }
   {
     line = $0
     if (line ~ /rate limited by coderabbit\.ai -->/) notrun = 1
@@ -153,6 +183,9 @@ result="$(awk -v head="$head" '
     stripped = line; sub(/^[ \t]+/, "", stripped); sub(/[ \t]+$/, "", stripped)
     if (stripped == "" || stripped ~ /^<!--.*-->$/) next
     if (stripped ~ /^>/) next
+    # A reply that states findings exist is a finding, whatever follows it (monorepo#3292).
+    m = split(stripped, claims, /\. /)
+    for (j = 1; j <= m; j++) { k = finding_claim(claims[j]); if (k) { finding = 1; if (k > claimed) claimed = k } }
     if (!found) {
       # The reviewed commit is the FIRST sha the prose of the reply names before its verdict: CodeRabbit
       # opens with it (`I reviewed <sha>.`) and may discuss other commits further down. A verdict
@@ -174,7 +207,7 @@ result="$(awk -v head="$head" '
   }
   END {
     # A finding outranks a did-not-run marker: it is still an open finding at this head.
-    if (finding) { print "FINDINGS " (severities > 0 ? severities : 1); exit }
+    if (finding) { print "FINDINGS " (severities > claimed ? severities : (claimed > 0 ? claimed : 1)); exit }
     if (notrun) { print "NONE did-not-run"; exit }
     if (!found) { print "NONE no-verdict"; exit }
     if (vsha == "") { print "NONE no-sha"; exit }

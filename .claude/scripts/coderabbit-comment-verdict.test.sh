@@ -145,6 +145,76 @@ expect "a six-character prefix is too short to be a sha" 1 "NONE no-sha" \
 expect "a bare 40-character sha binds" 0 GREEN \
   "$(payload "$(reply "I reviewed ${head}." "" "No findings.")")"
 
+
+# --- A reply that STATES findings exist (monorepo#3292) ----------------------------------------
+# platform#3732: `Review complete for <sha>. I found one blocking issue.` followed by a plain
+# bullet — no severity tag, no `Actionable comments posted:` marker. It read as "no verdict", which
+# a caller records as "no review" while a real finding sits in the comment.
+h3732f="910543e794a63eac935ec2397ce2166c70f0baa5"
+h3732g="7db24990896de60d39d6adbf8719f47b96e59d08"
+f3732="$(fixture coderabbit-comment-finding-claim-3732.txt)"
+g3732="$(fixture coderabbit-comment-full-review-complete-3732.txt)"
+expect "platform#3732 'I found one blocking issue.' is a finding" 1 "FINDINGS 1" "$(payload "${f3732}" "${h3732f}")"
+expect "platform#3732 'Full review complete for <sha>' + 'I found no new issues.'" 0 GREEN "$(payload "${g3732}" "${h3732g}")"
+expect "a counted claim in words" 1 "FINDINGS 2" \
+  "$(payload "$(reply "Review complete for \`${head}\`." "" "I found two blocking issues:" "" "- first" "- second")")"
+expect "a counted claim in digits" 1 "FINDINGS 3" \
+  "$(payload "$(reply "I reviewed \`${head}\`. I found 3 new findings.")")"
+expect "a claim with a trailing clause is still a finding" 1 "FINDINGS 1" \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "I found one issue, which may already be fixed.")")"
+expect "a claim outranks a later finding-free verdict" 1 "FINDINGS 1" \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "I found an issue in the retry path." "" "No new findings.")")"
+expect "a claim outranks a rate-limit marker beside it" 1 "FINDINGS 1" \
+  "$(payload "$(reply "I found one blocking issue." "<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->")")"
+expect "the larger of the tagged and the claimed count is reported" 1 "FINDINGS 2" \
+  "$(payload "$(reply "I reviewed \`${head}\`. I found two issues." "" "**P1 — unchecked exit status**")")"
+expect "a quoted claim does not count" 0 GREEN \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "> I found one blocking issue." "" "No new findings.")")"
+expect "a claim inside a code fence does not count" 0 GREEN \
+  "$(payload "$(reply "I reviewed \`${head}\`." '```' "I found one blocking issue." '```' "No findings.")")"
+expect "a claim inside the analysis chain does not count" 0 GREEN \
+  "$(payload "$(reply "I reviewed \`${head}\`." '<details>' "I found one blocking issue." '</details>' "No findings.")")"
+expect "'I found no …' is never a claim" 0 GREEN \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "I found no new issues.")")"
+expect "a claim about something other than issues is not a finding" 1 "NONE no-verdict" \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "I found one helper that covers this.")")"
+
+# The claim may follow a mention, a bullet or a dash, and may name a bug rather than an issue.
+for claim in \
+  "\`@devantler\` I found one blocking issue in \`x.sh\`." \
+  "- I found one blocking issue." \
+  "Review complete — I found one blocking issue." \
+  "I've found one issue." \
+  "I found the following issue:" \
+  "I found another issue." \
+  "I found one bug."; do
+  expect "claim shape: ${claim}" 1 "FINDINGS 1" \
+    "$(payload "$(reply "I reviewed \`${head}\`." "" "${claim}" "" "No new findings.")")"
+done
+expect "a summary claim and its per-item lines are one count, not a sum" 1 "FINDINGS 2" \
+  "$(payload "$(reply "I reviewed \`${head}\`. I found two issues." "" "I found one issue in a.sh." "" "I found one issue in b.sh.")")"
+expect "an oversized number is one finding, never a float" 1 "FINDINGS 1" \
+  "$(payload "$(reply "I reviewed \`${head}\`. I found 99999999999999999999 issues.")")"
+expect "a claim about an earlier finding errs towards a finding" 1 "FINDINGS 1" \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "I found one earlier issue is now fixed." "" "No new findings.")")"
+expect "'I found the …' without 'following' is not a claim" 0 GREEN \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "I found the earlier findings addressed." "" "No new findings.")")"
+
+# No exemption for benign compounds (`a regression test`, `a bug fix`): once punctuation is gone
+# `one bug — fix below` and `a regression: tests fail` look the same, and those are findings.
+for claim in \
+  "I found a regression test covering the new path." \
+  "I found a bug fix for the retry path and it is correct." \
+  "I found many improvements and no problems." \
+  "I found one issue; fix the quoting." \
+  "I found one bug — fix below." \
+  "I found a regression: tests no longer cover X."; do
+  expect "errs towards a finding: ${claim}" 1 "FINDINGS 1" \
+    "$(payload "$(reply "I reviewed \`${head}\`." "" "${claim}" "" "No new findings.")")"
+done
+expect "claim shape: I found these issues:" 1 "FINDINGS 1" \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "I found these issues:" "" "No new findings.")")"
+
 # --- Input contract ----------------------------------------------------------------------------
 expect "abbreviated head is refused" 2 "" "$(payload "$(reply 'No findings.')" "${head:0:12}")"
 expect "unknown key is refused" 2 "" '{"head":"'"${head}"'","author":"coderabbitai[bot]","body":"x","commit_id":"y"}'
