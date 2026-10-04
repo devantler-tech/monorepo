@@ -84,6 +84,7 @@ egress="$(extract '## Egress' '## Sensitive information stays private')"
 # unrelated reword into a required-check failure — measured for both the start and the end anchor.
 conventions="$(extract '## GitHub artifact conventions' '' "${conventions_guide}")"
 research="$(extract '## Professional-work repository boundary' '## Egress')"
+advance_research="$(extract '## Enhancement work' '## Security hardening' "${repo_root}/.claude/guides/advance-work.md")"
 
 # monorepo#3836: public inspection is permitted, but it cannot authorize execution,
 # publication, private reads or employment access. Pin these at the permission site.
@@ -429,5 +430,11 @@ for phrase in \
     fail "negative control failed for an unrelated reason"
 done
 ok
-[ "${passed}" -eq 16 ] || fail "expected 16 assertions, ran ${passed}"
+has 'public documentation and bounded public read-only source research under the privacy guide' "${advance_research}" || \
+  fail 'the advance guide still prohibits permitted public source research'
+if has '**non-repository** documentation in unattended runs; an external repository remains off-limits unless' "${advance_research}"; then
+  fail 'the advance guide retains the former blanket repository-read ban'
+fi
+ok
+[ "${passed}" -eq 17 ] || fail "expected 17 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
