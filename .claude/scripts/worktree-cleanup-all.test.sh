@@ -1025,6 +1025,64 @@ EOF
   done
 }
 
+t_declared_only_excluded_submodule_is_swept() {
+  # #3828: the monorepo always DECLARES out-of-portfolio submodules, so keeping a session
+  # worktree on the declaration alone kept every one of them and the root sweep reaped
+  # nothing. Only something that exists in the worktree keeps it: an entry in the submodule's
+  # directory, or a repository stored for it in the worktree's own git directory.
+  #   absent — declared, directory empty, nothing stored: swept like any other worktree
+  #   stray  — the directory holds an entry that is not a checkout: kept, never opened
+  #   stored — the directory is empty but a repository is stored for it: kept
+  local presence=$1 mode lane root sess shim out rc real_git gitdir want
+  for mode in dry-run apply; do
+    for lane in claude codex; do
+      root=$(make_root)
+      sess="$root/repo/.$lane/worktrees/sess"
+      git -C "$root/repo" worktree add -q -b "$lane/sess" "$sess" main || {
+        bad "declared-only fixture" "FIXTURE"; rm -rf "$root"; return; }
+      git -C "$sess" config -f .gitmodules submodule.nested.url https://github.com/fixture-excluded/fixture.git
+      git -C "$sess" add .gitmodules && git -C "$sess" commit -qm "exclude nested" \
+        && git -C "$sess" push -q origin "$lane/sess" || {
+        bad "declared-only fixture" "FIXTURE"; rm -rf "$root"; return; }
+      mkdir -p "$sess/nested"
+      gitdir=$(git -C "$sess" rev-parse --absolute-git-dir)
+      case "$presence" in
+        stray)  echo x > "$sess/nested/stray" ;;
+        stored) mkdir -p "$gitdir/modules/nested" ;;
+      esac
+      touch -t 202001010000 "$sess"
+      shim="$root/git-shim"; mkdir -p "$shim"; real_git=$(command -v git)
+      cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ]; then
+  case "\${2:-}" in '$sess/nested'|'$sess/nested/'*)
+    printf 'child probe\n' >> '$root/forbidden-probes'; exit 99 ;;
+  esac
+fi
+exec '$real_git' "\$@"
+SHIM
+      chmod +x "$shim/git"
+      out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+        bash "$SUT" "$mode" 24 --lane "$lane" 2>&1); rc=$?
+      if [ "$presence" = absent ]; then
+        # dry-run reports the reap and removes nothing; apply removes it.
+        if [ "$mode" = apply ]; then [ ! -d "$sess" ] && want=yes || want=no
+        else grep -q 'REAP  .*sess' <<<"$out" && [ -d "$sess" ] && want=yes || want=no; fi
+        grep -q 'not checked out here' <<<"$out" || want=no
+      else
+        [ -d "$sess" ] && ! grep -q 'REAP  .*sess' <<<"$out" && want=yes || want=no
+      fi
+      if [ "$rc" -eq 0 ] && [ "$want" = yes ] && [ ! -e "$root/forbidden-probes" ]; then
+        ok "declared out-of-portfolio submodule, $presence ($mode, $lane)"
+      else
+        bad "declared out-of-portfolio submodule, $presence ($mode, $lane)" \
+          "rc=$rc forbidden=$([ -e "$root/forbidden-probes" ] && echo yes || echo no) $out"
+      fi
+      rm -rf "$root"
+    done
+  done
+}
+
 t_excluded_nested_submodule_retains_parent() {
   local mode lane root sess shim out rc real_git metadata=${1:-excluded} expected=0
   [ "$metadata" != missing ] || expected=2
@@ -1091,6 +1149,9 @@ t_excluded_submodule_is_never_probed https://github.com/devantler-tech/fixture-u
 t_excluded_submodule_is_never_probed https://github.com/devantler-tech/reusable-workflows.git
 t_excluded_nested_submodule_retains_parent
 t_excluded_nested_submodule_retains_parent missing
+t_declared_only_excluded_submodule_is_swept absent
+t_declared_only_excluded_submodule_is_swept stray
+t_declared_only_excluded_submodule_is_swept stored
 t_unknown_submodule_eligibility_fails_closed
 t_sweeps_root_and_submodules
 t_rewrites_session_worktree_root
