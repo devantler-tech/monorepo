@@ -273,7 +273,7 @@ two — `github-actions` and `ksail-bot` — and prescribing `--auto` here uncon
 would put `devantler`, an external contributor and the classifier-conditioned updater through exactly
 the deferred path their author policy forbids. It is also unnecessary: on a queue-gated branch, a PR
 whose checks have passed is **added to the queue by a plain merge**, so the enqueue happens either way.
-So the three `--auto` authors use
+So the two `--auto` authors use
 `gh pr merge <n> --repo devantler-tech/<repo> --auto --match-head-commit <sha>`, and **every other
 author enqueues with `gh pr merge <n> --repo devantler-tech/<repo> --match-head-commit <sha>`** once
 the gates are clear. **Record per-repo

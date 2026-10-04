@@ -245,6 +245,8 @@ Two mechanics make this a standing duty rather than something automation handles
   `.claude/scripts/agent-issue-board-sweep.sh --author <registered-search-identity>`.
   The helper requires an explicit author, rejects incomplete discovery, excludes archived repositories,
   preserves the private-repository boundary, and delegates idempotent mutations to `board-add.sh`.
+  It reads existing membership in bulk and stops at a deadline with a resumable checkpoint, so a pass
+  that changes nothing fits the call budget (#3340).
   A provider name never implies either missing permission or authority to act.
 
 When bulk-operating on issues or board items, **serialize and pace** — GitHub's secondary limits allow
