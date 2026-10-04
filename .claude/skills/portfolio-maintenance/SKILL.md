@@ -965,7 +965,8 @@ noisy ones.
 blog evidence/topics about monthly and target one worthwhile publication or material refresh every
 4–8 weeks without displacing operate/oldest-substantive work; KSail Monthly Strategy at month start;
 heavy tasks (E2E, live-cluster reliability, content review) ~weekly per the per-product `weekly`
-timestamps; never spin up real clusters more than once/day portfolio-wide.
+timestamps; real-cluster trial cadence and the maintainer's standing temporary-cost authorization
+resolve from [Temporary engineering costs](../../guides/spend-and-inference.md#temporary-engineering-costs).
 A second run the same day → more selective, dedupe vs the earlier run.
 
 ## 3. Act (per selected product, via a per-run worktree)

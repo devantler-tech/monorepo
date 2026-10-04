@@ -172,8 +172,10 @@ roughly every 4–8 weeks. Blog work stays low priority and bounded to at most o
 **after operate work and one oldest-substantive slice**, a due review/publication/refresh may run before
 the next backlog issue, then normal oldest-first work resumes. A review with no worthwhile story does
 not move the publication clock; never publish filler. The KSail Monthly Strategy runs at month start;
-**never spin up real clusters more than once a day**
-portfolio-wide.
+**autonomous real-cluster trials run at most once a day** portfolio-wide. Maintainer-requested trials
+and their standing temporary-cost authorization follow
+[Temporary engineering costs](spend-and-inference.md#temporary-engineering-costs); the daily autonomous
+cadence is not a reason to refuse such a trial.
 **Substantive-progress gate (guards against easy-work drift).** Coverage bumps, docs polish, and
 self-test guards are valuable but **must not become every tick's output**: do **not** let the advance
 pick be a small coverage/docs/guard artifact for **more than ~2 consecutive runs** while any substantive
