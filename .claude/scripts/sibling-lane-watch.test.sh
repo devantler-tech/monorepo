@@ -189,9 +189,10 @@ usage "a flag without its value is a usage error" --lane claude --state-file
 
 # The default state file belongs to the CALLER's runtime, never the watched lane's.
 reset; liveness 1 "$DOWN_NO_SESSION"
-HOME="$FIX/home" SIBLING_LANE_LIVENESS_CMD="$FIX/liveness" bash "$SCRIPT" --lane claude >/dev/null 2>&1 || true
-HOME="$FIX/home" SIBLING_LANE_LIVENESS_CMD="$FIX/liveness" bash "$SCRIPT" --lane codex >/dev/null 2>&1 || true
-if [ -f "$FIX/home/.codex/lane-watch/claude.json" ] && [ -f "$FIX/home/.claude/lane-watch/codex.json" ]; then
+default_rc=0
+HOME="$FIX/home" SIBLING_LANE_LIVENESS_CMD="$FIX/liveness" bash "$SCRIPT" --lane claude >/dev/null 2>&1 || default_rc=$?
+HOME="$FIX/home" SIBLING_LANE_LIVENESS_CMD="$FIX/liveness" bash "$SCRIPT" --lane codex >/dev/null 2>&1 || default_rc=$?
+if [ "$default_rc" -eq 0 ] && [ -f "$FIX/home/.codex/lane-watch/claude.json" ] && [ -f "$FIX/home/.claude/lane-watch/codex.json" ]; then
   pass=$((pass + 1))
 else
   fail=$((fail + 1)); echo "FAIL: default state files are not in the caller's runtime directory"
