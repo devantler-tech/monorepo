@@ -143,7 +143,7 @@ owned by someone else — and leave it alone this run — when any of these hold
 | A **human** comment or review within the last **~2h** | A person is engaged right now |
 | A review request at the current head, **still inside its provider's response envelope** | That lane owns the next move |
 | An in-flight `merge_group` run for that PR | It is already being merged |
-| A live process **outside your own session** working in a local checkout of its head branch (`holder=live:`) | A session is mid-flight here, whether or not it has published anything |
+| A live process **outside your own session** working in a local checkout of its head branch, or a worktree a live session locked for a worker (`holder=live:`) | A session or one of its workers is mid-flight here, whether or not it has published anything |
 
 🔴 **A reviewer's COMPLETED output is the opposite of an ownership signal — it is your cue to act.**
 Row 2 says *human* deliberately. A finished CodeRabbit, Codex or Bugbot review is the next move having
@@ -178,7 +178,12 @@ a manual `lsof`. A live process is a **current** fact, so it does not expire; it
 instead, and holds only while the process lives. Every survey reports it as `holder=`, and you
 re-read it for that PR with `.claude/scripts/pr-worktree-holder.sh` (its usage line gives the
 one-PR read) immediately before your first push to a branch you did not create. `self:` is your
-own session and parks nothing — row 1's own-push exclusion, decided from process ancestry. An open
+own session and parks nothing — row 1's own-push exclusion, decided from process ancestry. A `live:`
+holder can name **your own session's pid**: the harness locks each worker's worktree in the
+session's name, and the lock stays until the session exits. That holder is a rival while the worker
+runs. Discount it only for a worker you know has returned, or by re-reading from inside that
+worker's worktree, which answers `self:`. Never discount a `live:` just because it names your pid:
+a sibling worker may still be running (monorepo#3780). An open
 session parks it even while idle, since nothing local can tell idle from thinking; a shell waiting
 at its prompt does not.
 **`unknown:` is never "no live holder"**: report it as a named gap, and the four published-event
