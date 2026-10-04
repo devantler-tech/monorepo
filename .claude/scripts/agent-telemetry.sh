@@ -2017,8 +2017,10 @@ commands_in() {
          # backslashes then misreads which quote closes. A literal that is not
          # also a JSON string keeps the by-hand form and is flagged with a
          # leading \u001d as inexact.
+         # A tab is whitespace between words, and the patterns that read these
+         # commands are written with a space, so it becomes one in both forms.
          | . as $literal
-         | (try ("\"" + $literal + "\"" | fromjson)
+         | (try ("\"" + $literal + "\"" | fromjson | gsub("\t"; " "))
             catch ("\u001d" + ($literal | gsub("\\\\n"; "\n") | gsub("\\\\t"; " ") | gsub("\\\\\""; "\"")))))
       )
     | select(type=="string")

@@ -8242,6 +8242,22 @@ else
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
 
+# A tab between the words of a Codex command is whitespace like any other. The patterns that pick
+# out a checkout and a build are written with a space, and the by-hand decoding turned `\t` into
+# one. Decoded exactly it is a real tab, and the row was dropped instead of counted.
+MK_OUT=$({
+  mk_xcmd "$(printf 'gh pr\tcheckout 31')"
+  mk_xcmd "$(printf 'npm i\tleft-pad')"
+  mk_xcmd "$(printf 'go\ttest ./...')"
+} | mk_xrun maketab)
+if grep -qE '^ +1 npm i left-pad$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 go test \./\.\.\.$' <<<"$MK_OUT"; then
+  ok "a tab between the words of a Codex command still counts as the checkout and the build"
+else
+  bad "a tab between the words of a Codex command still counts as the checkout and the build" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+
 # walk ~ section ~ literal to break ~ its mutation ~ line proving the walk read something
 while IFS='~' read -r wx_walk wx_sec wx_old wx_new wx_signal; do
   wx_ab="$FIX/wx_ablate_${wx_walk}.sh"
