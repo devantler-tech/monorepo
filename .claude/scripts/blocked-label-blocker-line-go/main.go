@@ -22,8 +22,9 @@ import (
 	"unicode"
 )
 
-const help = `Verify open blocked-labelled issues carry a visible **Blocker:** record, and
-that no open issue declares a blocker without carrying the blocked label.
+const help = `Verify open blocked-labelled issues carry a visible **Blocker:** record, that
+no open issue declares a blocker without carrying the blocked label, and that
+no Security issue is left unstarted with no record of why.
 
   **Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>
   **Blocker:** <what only the maintainer can do> | authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session> <YYYY-MM-DD>
@@ -43,14 +44,31 @@ issue: a GitHub comment records an ask and is not one.
 An UNLABELLED row is an issue whose visible record declares a blocker while the
 issue has no blocked label; "**Blocker:** none ..." declares none and is skipped.
 
-Sources (exactly one): --org <org> (every open issue, label or not) or
+An UNRECORDED row is a Security issue that has gone unstarted for longer than
+the bound with nothing on record to explain it. Unstarted: no open sub-issue,
+and no open pull request mentions it (a dependency bot's pull request, hidden
+text and a "Deferred:" line do not count). Nothing on record: no blocked label,
+no declared blocker and no open native blocker. An assignee is not a start,
+because a claim lapses after about two hours; such a row is marked [assigned].
+"**Blocker:** none" is not a reason either, and its row says so. An issue a
+dependency bot opened is the bot's own and is never reported. Only Security is
+read this way: it outranks every other issue whatever its age, while an older
+issue of another type may simply be queued behind older ones.
+
+Sources (exactly one): --org <org> (every open issue, label or not, and every
+                       open pull request, for the issues it mentions) or
          --input <file>|- (a JSON array; a record without a "labels" array is
-                       read as blocked-labelled, the shape of earlier payloads)
+                       read as blocked-labelled, the shape of earlier payloads;
+                       one with a "pull_request" key is a pull request; and an
+                       unlabelled issue that declares no blocker must carry
+                       "type", null when it has none)
 Options: --today <YYYY-MM-DD> (default UTC today)
          --ask-max-age-days <n> (default 14)
          --verify-max-age-days <n> (default 7; an otherwise conforming record
                        whose last-verified date is older is reported STALE,
                        because skipping a blocked issue needs a live check)
+         --unrecorded-max-age-days <n> (default 7; how long a Security issue
+                       may stay unstarted before it needs a record)
          --quiet (findings only)
          --ask-digest (emit declared authority blockers with missing or stale
                        ask records, oldest first, for verification before
@@ -84,12 +102,13 @@ var (
 )
 
 type options struct {
-	org, input   string
-	today        time.Time
-	maxAge       int64
-	verifyMaxAge int64
-	quiet        bool
-	askDigest    bool
+	org, input       string
+	today            time.Time
+	maxAge           int64
+	verifyMaxAge     int64
+	unrecordedMaxAge int64
+	quiet            bool
+	askDigest        bool
 }
 
 func civilDate(value string) (time.Time, error) {
@@ -100,7 +119,7 @@ func civilDate(value string) (time.Time, error) {
 }
 
 func arguments(args []string) (options, bool, error) {
-	o := options{maxAge: 14, verifyMaxAge: 7}
+	o := options{maxAge: 14, verifyMaxAge: 7, unrecordedMaxAge: 7}
 	today := time.Now().UTC().Format("2006-01-02")
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -111,7 +130,7 @@ func arguments(args []string) (options, bool, error) {
 			o.quiet = true
 		case "--ask-digest":
 			o.askDigest = true
-		case "--org", "--input", "--today", "--ask-max-age-days", "--verify-max-age-days":
+		case "--org", "--input", "--today", "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days":
 			i++
 			if i == len(args) {
 				return o, false, fmt.Errorf("%s requires a value", arg)
@@ -124,7 +143,7 @@ func arguments(args []string) (options, bool, error) {
 				o.input = value
 			case "--today":
 				today = value
-			case "--ask-max-age-days", "--verify-max-age-days":
+			case "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days":
 				if len(value) > 9 {
 					return o, false, fmt.Errorf("%s must have at most 9 digits", arg)
 				}
@@ -132,10 +151,13 @@ func arguments(args []string) (options, bool, error) {
 					return o, false, fmt.Errorf("%s must be a non-negative integer", arg)
 				}
 				days, _ := strconv.ParseInt(value, 10, 64)
-				if arg == "--ask-max-age-days" {
+				switch arg {
+				case "--ask-max-age-days":
 					o.maxAge = days
-				} else {
+				case "--verify-max-age-days":
 					o.verifyMaxAge = days
+				default:
+					o.unrecordedMaxAge = days
 				}
 			}
 		default:
@@ -502,6 +524,144 @@ type issue struct {
 	Labels *[]struct {
 		Name string `json:"name"`
 	} `json:"labels"`
+	// The rest decides whether an unlabelled issue that declares no blocker is
+	// being skipped or is simply new or in flight (see unrecorded). Type stays
+	// raw, and the others are pointers, so a record that lacks one of them can
+	// be told from one that carries it empty (see missingFact).
+	Type      json.RawMessage    `json:"type"`
+	Assignees *[]json.RawMessage `json:"assignees"`
+	User      struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	Dependencies *struct {
+		BlockedBy *int64 `json:"blocked_by"`
+	} `json:"issue_dependencies_summary"`
+	SubIssues *struct {
+		Total     *int64 `json:"total"`
+		Completed *int64 `json:"completed"`
+	} `json:"sub_issues_summary"`
+	// PullRequest is the key search puts on a pull request and on nothing else.
+	// A pull request is never judged as an issue: its body is read for the
+	// issues it mentions. pull is set by the loaders, from that key or from the
+	// read the record came from.
+	PullRequest json.RawMessage `json:"pull_request"`
+	pull        bool
+}
+
+// unrecordedType is the one issue type read for being unstarted: a Security
+// issue outranks every other issue regardless of age, so one still unstarted
+// after the bound was passed over by every run that started anything else. An
+// older issue of another type may be queued behind older ones in its own rung,
+// so reading those the same way would report the backlog (#3415).
+const unrecordedType = "Security"
+
+// dependencyBots are the two dependency-automation authors as the search
+// surface names them. An issue one of them opened is a control surface the bot
+// owns, never agent work, so it is never reported; and a pull request one of
+// them opened quotes upstream release notes, whose "#N" are not ours.
+var dependencyBots = map[string]bool{"renovate[bot]": true, "dependabot[bot]": true}
+
+// missingFact names the first fact an unrecorded verdict rests on that the
+// record does not carry. A missing native-blocker or sub-issue summary is
+// UNKNOWN: read as zero, it would tell a run to start an issue that may be
+// blocked or already carried by its sub-issues.
+func (i issue) missingFact() string {
+	switch {
+	case i.Assignees == nil:
+		return "assignees"
+	case i.Dependencies == nil || i.Dependencies.BlockedBy == nil:
+		return "issue_dependencies_summary.blocked_by"
+	case i.SubIssues == nil || i.SubIssues.Total == nil || i.SubIssues.Completed == nil:
+		return "sub_issues_summary"
+	}
+	return ""
+}
+
+// typeName reads the issue type's name. An absent or null type is an untyped
+// issue; anything else must be an object that names its type, so a shape this
+// guard does not know is refused instead of read as "not Security".
+func (i issue) typeName() (string, error) {
+	if len(i.Type) == 0 || string(i.Type) == "null" {
+		return "", nil
+	}
+	var named struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(i.Type, &named); err != nil || named.Name == "" {
+		return "", errors.New("unreadable type")
+	}
+	return named.Name, nil
+}
+
+var (
+	// An HTML comment is not part of the rendered body, and one left open hides
+	// everything after it.
+	hiddenRE = regexp.MustCompile(`(?s)<!--.*?(-->|$)`)
+	// A "Deferred: #N" line names an issue the pull request leaves alone.
+	deferredRE = regexp.MustCompile(`(?mi)^[\t ]*([-*+][\t ]+)?Deferred:.*$`)
+)
+
+// mentioned reports whether an open pull request refers to the issue: a bare
+// #N from its own repository, or <owner>/<repo>#N or .../<repo>/issues/N from
+// anywhere. A mention counts without a closing keyword, because a pull request
+// that says "Part of #N" is work on the issue too. Bodies are untrusted and
+// are only matched against the issue's own name and number, and only where
+// the text can be a reference of ours:
+//   - a dependency bot's pull request is skipped, and so are hidden text and
+//     Deferred lines;
+//   - a bare # is not one that ends a repository name, an HTML entity
+//     (&#8203;1403) or the text of an anchor (">#32598</a>");
+//   - the number is not the start of a longer one or of a hex colour (#42a5f5);
+//   - under --org a qualified reference must name that org, so another
+//     owner's repository of the same name does not count.
+func mentioned(item issue, pulls []issue, org string) bool {
+	number := strconv.FormatInt(item.Number, 10)
+	owner := `[A-Za-z0-9._-]+`
+	if org != "" {
+		owner = regexp.QuoteMeta(org)
+	}
+	end := `($|[^0-9A-Za-z_])`
+	bare := regexp.MustCompile(`(^|[^A-Za-z0-9._/&>-])#` + number + end)
+	qualified := regexp.MustCompile(`(?i)(^|[^A-Za-z0-9._-])` + owner + `/` + regexp.QuoteMeta(item.Repo) + `(#|/issues/)` + number + end)
+	for _, pull := range pulls {
+		if dependencyBots[pull.User.Login] {
+			continue
+		}
+		text := deferredRE.ReplaceAllString(hiddenRE.ReplaceAllString(pull.Body, ""), "")
+		if qualified.MatchString(text) || (strings.EqualFold(pull.Repo, item.Repo) && bare.MatchString(text)) {
+			return true
+		}
+	}
+	return false
+}
+
+// unrecorded reports whether an unlabelled issue that declares no blocker has
+// gone unstarted for longer than maxAge days, and how many days it has been
+// open. What clears it is what the contract treats as a visible reason not to
+// start an issue: an open pull request and an open native blocker are live
+// structured facts, and open sub-issues carry a decomposed one. An assignee is
+// not among them: an assignment is a claim that lapses after about two hours,
+// so one that stayed would hide the issue for good. A fact that cannot be read
+// is UNKNOWN: it is not shown to clear the issue, nor to leave it standing.
+func unrecorded(item issue, pulls []issue, org string, today time.Time, maxAge int64) (int64, bool, error) {
+	// run has already refused a record whose type cannot be read.
+	name, _ := item.typeName()
+	if !strings.EqualFold(name, unrecordedType) || dependencyBots[item.User.Login] {
+		return 0, false, nil
+	}
+	if missing := item.missingFact(); missing != "" {
+		return 0, false, fmt.Errorf("%s#%d carries no %s, so what holds it is unproven -- UNKNOWN", item.Repo, item.Number, missing)
+	}
+	if *item.Dependencies.BlockedBy > 0 || *item.SubIssues.Total > *item.SubIssues.Completed || mentioned(item, pulls, org) {
+		return 0, false, nil
+	}
+	// A creation date after today cannot be an age, as classify reads a future
+	// verification or ask date.
+	age, known := issueAge(item.CreatedAt, today)
+	if !known || age < 0 {
+		return 0, false, fmt.Errorf("%s#%d has no readable created_at on or before today, so its age is unproven -- UNKNOWN", item.Repo, item.Number)
+	}
+	return age, age > maxAge, nil
 }
 
 // blocked reports whether the issue carries the blocked label. An --input
@@ -542,12 +702,16 @@ func inputIssues(raw []byte) ([]issue, error) {
 	if err := json.Unmarshal(raw, &issues); err != nil {
 		return nil, errors.New("could not parse payload -- UNKNOWN")
 	}
+	for i := range issues {
+		issues[i].pull = len(issues[i].PullRequest) > 0 && string(issues[i].PullRequest) != "null"
+	}
 	return issues, nil
 }
 
 // searchIssues decodes every concatenated page from gh --paginate. Count and
 // completeness are independent requirements; partial results never mean zero.
-func searchIssues(raw []byte) ([]issue, error) {
+// typed is set for the issue read, whose items must each carry a type key.
+func searchIssues(raw []byte, typed bool) ([]issue, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	expected := -1
 	var issues []issue
@@ -577,6 +741,18 @@ func searchIssues(raw []byte) ([]issue, error) {
 			if item.Labels == nil {
 				return nil, errors.New("search item without labels -- UNKNOWN")
 			}
+			// The forge sends the key on every issue, null when untyped. Without
+			// it every issue would read as untyped and none as unrecorded.
+			if typed && len(item.Type) == 0 {
+				return nil, errors.New("search item without type -- UNKNOWN")
+			}
+			// The same holds for what an unrecorded verdict rests on: the
+			// forge sends each on every issue, so one missing is a changed
+			// payload, not an issue with no blocker and no sub-issue.
+			if missing := item.missingFact(); typed && missing != "" {
+				return nil, fmt.Errorf("search item without %s -- UNKNOWN", missing)
+			}
+			item.pull = !typed
 			item.Repo = item.RepositoryURL[strings.LastIndex(item.RepositoryURL, "/")+1:]
 			issues = append(issues, item)
 		}
@@ -595,6 +771,20 @@ func searchEndpoint(org string) string {
 	return "search/issues?q=org:" + org + "+is:issue+state:open+archived:false&per_page=100"
 }
 
+// pullEndpoint reads every open pull request, draft or not. Their bodies say
+// which issues are in flight: without them an issue whose draft has waited a
+// week for review would read as unstarted (#3415).
+func pullEndpoint(org string) string {
+	return "search/issues?q=org:" + org + "+is:pr+state:open+archived:false&per_page=100"
+}
+
+// forgeRead is the one place the guard reaches the forge; tests replace it.
+var forgeRead = func(endpoint string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "gh", "api", endpoint, "--paginate").Output()
+}
+
 func load(o options, stdin io.Reader) ([]issue, error) {
 	if o.input != "" {
 		var raw []byte
@@ -609,13 +799,24 @@ func load(o options, stdin io.Reader) ([]issue, error) {
 		}
 		return inputIssues(raw)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	raw, err := exec.CommandContext(ctx, "gh", "api", searchEndpoint(o.org), "--paginate").Output()
-	if err != nil {
-		return nil, errors.New("forge read failed -- UNKNOWN, never zero")
+	// Two reads, each complete or the whole result UNKNOWN: the issues to
+	// judge, then the pull requests that show which of them are in flight.
+	var records []issue
+	for _, read := range []struct {
+		endpoint string
+		typed    bool
+	}{{searchEndpoint(o.org), true}, {pullEndpoint(o.org), false}} {
+		raw, err := forgeRead(read.endpoint)
+		if err != nil {
+			return nil, errors.New("forge read failed -- UNKNOWN, never zero")
+		}
+		page, err := searchIssues(raw, read.typed)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, page...)
 	}
-	return searchIssues(raw)
+	return records, nil
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -639,32 +840,72 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if wantsHelp {
 		return emit(help, 0)
 	}
-	issues, err := load(o, stdin)
+	records, err := load(o, stdin)
 	if err != nil {
 		return unknown(err)
 	}
 	// Validate all records before emitting a partial report.
-	for i, item := range issues {
+	var issues, pulls []issue
+	// How many issues of the type were read is part of the verdict: a type that
+	// was renamed or switched off reads as none, which is not "none unstarted".
+	examined := 0
+	for i, item := range records {
 		if item.Repo == "" || item.Number <= 0 || strings.IndexFunc(item.Repo, unicode.IsControl) >= 0 {
 			return unknown(fmt.Errorf("record %d is missing or has invalid repo or number -- UNKNOWN", i))
+		}
+		name, err := item.typeName()
+		if err != nil {
+			return unknown(fmt.Errorf("record %d has an unreadable type -- UNKNOWN", i))
+		}
+		if item.pull {
+			pulls = append(pulls, item)
+			continue
+		}
+		issues = append(issues, item)
+		if strings.EqualFold(name, unrecordedType) {
+			examined++
 		}
 	}
 	// Builder writes cannot fail. Check the external writer once the complete
 	// report is ready, so an undelivered report never returns a valid verdict.
 	var report strings.Builder
 	var askRows []askRow
-	bad, labelled, unlabelled := 0, 0, 0
+	bad, labelled, unlabelled, parked := 0, 0, 0, 0
 	for _, item := range issues {
 		line := visibleRecord(item.Body)
 		if !item.blocked() {
-			// Only a declared blocker is a finding here: an unlabelled issue with
-			// no record is ordinary work, indistinguishable by content (#3142).
-			if !declaresBlocker(line) {
+			if declaresBlocker(line) {
+				bad++
+				unlabelled++
+				_, _ = fmt.Fprintf(&report, "%-10s %s#%d  >>%s\n", "UNLABELLED", item.Repo, item.Number, snippet(line))
 				continue
 			}
-			bad++
-			unlabelled++
-			_, _ = fmt.Fprintf(&report, "%-10s %s#%d  >>%s\n", "UNLABELLED", item.Repo, item.Number, snippet(line))
+			// With no blocker declared, content cannot tell a skipped issue from
+			// ordinary work (#3142). Its type, its age and what is in flight can
+			// (#3415) -- but only when the record says what type it is.
+			if len(item.Type) == 0 {
+				return unknown(fmt.Errorf("%s#%d carries no type, so whether it is a %s issue is unproven -- UNKNOWN", item.Repo, item.Number, unrecordedType))
+			}
+			age, finding, err := unrecorded(item, pulls, o.org, o.today, o.unrecordedMaxAge)
+			if err != nil {
+				return unknown(err)
+			}
+			if finding {
+				bad++
+				parked++
+				// "**Blocker:** none" says nothing blocks the issue. That is no
+				// reason to leave it unstarted, and writing it must not be a way
+				// to clear the row without starting anything.
+				reason := "with no record"
+				if line != "" {
+					reason = "while declaring no blocker"
+				}
+				_, _ = fmt.Fprintf(&report, "%-10s %s#%d  opened %s, unstarted for %d day(s) %s", "UNRECORDED", item.Repo, item.Number, item.CreatedAt[:10], age, reason)
+				if len(*item.Assignees) > 0 {
+					_, _ = fmt.Fprint(&report, "  [assigned]")
+				}
+				_, _ = fmt.Fprintln(&report)
+			}
 			continue
 		}
 		labelled++
@@ -715,19 +956,25 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return emit(digest, code)
 	}
+	noneUnstarted := fmt.Sprintf("none of the %d open %s issue(s) read has gone unstarted for more than %d day(s) with nothing on record", examined, unrecordedType, o.unrecordedMaxAge)
 	if bad > 0 {
 		if !o.quiet {
-			if labelledBad := bad - unlabelled; labelledBad > 0 {
+			if labelledBad := bad - unlabelled - parked; labelledBad > 0 {
 				_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: %d of %d open blocked-labelled issue(s) need repair (missing, malformed, not re-verified recently, or an unraised authority blocker).\n", labelledBad, labelled)
 			}
 			if unlabelled > 0 {
 				_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: %d open issue(s) declare a blocker without the blocked label: re-verify each, then label it or unblock it.\n", unlabelled)
 			}
+			if parked > 0 {
+				_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: %d of the %d open %s issue(s) read have gone unstarted for more than %d day(s) with nothing on record: start each, or record what really blocks it.\n", parked, examined, unrecordedType, o.unrecordedMaxAge)
+			} else {
+				_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: %s.\n", noneUnstarted)
+			}
 		}
 		return emit(report.String(), 1)
 	}
 	if !o.quiet {
-		_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: all %d open blocked-labelled issue(s) carry a conforming **Blocker:** line, and no unlabelled issue declares a blocker.\n", labelled)
+		_, _ = fmt.Fprintf(&report, "\nblocked-label-blocker-line.sh: all %d open blocked-labelled issue(s) carry a conforming **Blocker:** line, no unlabelled issue declares a blocker, and %s.\n", labelled, noneUnstarted)
 	}
 	return emit(report.String(), 0)
 }
