@@ -38,10 +38,15 @@
 # The pin comes from one of three places, and every verdict prints which:
 #   (default)          the gitlink at the tip of --remote's default branch, read from the remote now
 #   --adopted-ref REF  the gitlink at a consumer revision the caller names: a full commit ID or a
-#                      fully qualified ref. Nothing is fetched, so the caller owns its freshness.
+#                      remote-tracking ref (refs/remotes/...). Nothing is fetched, so the caller
+#                      owns its freshness, and every verdict says so (CALLER-NAMED PIN). A local
+#                      branch or tag is refused: this checkout wrote it, so it shows a proposal.
 #   --gitlink SHA      a pin the caller names outright. Neither the adopted nor the working-tree pin
 #                      is resolved; the refresh script binds its gated target this way.
 # An adopted pin that cannot be read is UNKNOWN. The working tree's gitlink never stands in for it.
+# --remote takes the NAME of a configured remote, never a path or URL. Each remote call is bounded
+# by PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS (default 20): a remote that does not answer in time is
+# UNKNOWN, not a hang.
 #
 # Usage: plugin-definition-currency.sh [--runtime claude|codex|git-ref] [--repo-root DIR]
 #                                      [--plugins-root DIR] [--codex-home DIR]
@@ -98,10 +103,12 @@ RECOVERY="
 # The same rule for the adopted pin. It names the one supported substitute, because the tempting one
 # — falling back to the working tree's gitlink — is the defect this resolution exists to remove.
 ADOPTED_RECOVERY="
-  To resolve: restore access to the remote and re-run, or fetch the default branch yourself and
-  name it, for example:
-    git fetch origin '+refs/heads/main:refs/remotes/origin/main'
-    plugin-definition-currency.sh --adopted-ref refs/remotes/origin/main ...
+  To resolve: restore access to the remote and re-run. Or fetch the default branch yourself and
+  name it, as ONE command, so the check runs only when the fetch succeeded:
+    git fetch origin '+refs/heads/main:refs/remotes/origin/main' &&
+      plugin-definition-currency.sh --adopted-ref refs/remotes/origin/main ...
+  A failed fetch leaves the old ref in place. Naming that ref anyway measures against a pin the
+  deployment may have moved off, and can report an install as up to date when it has drifted.
   The working tree's own gitlink is never used instead: on a branch that changes the pin it names a
   proposal, not what the deployment adopted. UNKNOWN means UNCHECKED: never read it as current,
   report it, and carry on against the reviewed definition — it must never halt a run."
@@ -156,16 +163,26 @@ if [ "$ADOPTED_REF_SET" -eq 1 ]; then
   [ -z "$GITLINK" ] || die "--adopted-ref and --gitlink both name the pin; pass only one"
   # Same shape rule as --loaded-ref, for the same reason: a short name such as `origin/main` can be
   # shadowed by a tag, so it does not identify one revision.
-  if [[ "$ADOPTED_REF" = refs/* ]]; then
+  # A ref must be a REMOTE-TRACKING one. A local branch or tag is something this checkout wrote
+  # itself: on a rollout branch `refs/heads/<branch>` is the proposal, and naming it would report
+  # the unmerged pin as the adopted one.
+  if [[ "$ADOPTED_REF" = refs/remotes/* ]]; then
     git check-ref-format "$ADOPTED_REF" >/dev/null 2>&1 \
-      || die "--adopted-ref must be a fully qualified ref or full commit ID"
+      || die "--adopted-ref must be a remote-tracking ref (refs/remotes/...) or full commit ID"
+  elif [[ "$ADOPTED_REF" = refs/* ]]; then
+    die "--adopted-ref '$ADOPTED_REF' is a local ref, which this checkout wrote itself and so cannot show what the deployment adopted — name a remote-tracking ref (refs/remotes/...) or a full commit ID"
   elif ! [[ "$ADOPTED_REF" =~ ^([[:xdigit:]]{40}|[[:xdigit:]]{64})$ ]]; then
-    die "--adopted-ref must be a fully qualified ref or full commit ID"
+    die "--adopted-ref must be a remote-tracking ref (refs/remotes/...) or full commit ID"
   fi
 fi
 case "$REMOTE" in
   ''|-*) die "--remote must name a git remote" ;;
 esac
+# Bounds each remote call below. Validated here, once: the calls run inside command substitutions
+# and behind `|| true`, where a bad value would surface as a hang or a confusing git error.
+REMOTE_TIMEOUT_SECS="${PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS:-20}"
+[[ "$REMOTE_TIMEOUT_SECS" =~ ^[1-9][0-9]{0,2}$ ]] \
+  || die "PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS must be a whole number of seconds from 1 to 999, got '$REMOTE_TIMEOUT_SECS'"
 
 say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 
@@ -196,15 +213,63 @@ gitlink_at() {
   printf '%s\n' "$entry" | awk '$1 == "160000" && $2 == "commit" { print $3 }'
 }
 
+# bounded_remote <seconds> <command...> — run a remote git call that can never hang the check.
+# This is a pre-flight step of every dispatch. A remote that accepts the connection and then goes
+# silent would otherwise hold it until the caller's own ceiling, not until exit 2. The host has no
+# `timeout` binary and its ssh configuration sets no connect timeout, so the bound is a bash-3.2
+# watchdog: the command gets its own process group (job control) and the whole group is signalled,
+# because git hands the transport to a helper (ssh, git-remote-https) that outlives a kill aimed at
+# git alone. Same mechanism as `bounded_remote` in worktree-claim.sh, where each step is explained.
+# GIT_TERMINAL_PROMPT=0 and BatchMode: an unattended run must get a failure, never a credential or
+# passphrase prompt it cannot answer.
+bounded_remote() {
+  local secs="$1"
+  shift
+  local cmd_pid killer_pid rc=0 had_monitor=0
+  case "$-" in *m*) had_monitor=1 ;; esac
+  set -m
+  GIT_TERMINAL_PROMPT=0 \
+    GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes -o ConnectTimeout=$secs" "$@" &
+  cmd_pid=$!
+  (
+    sleep "$secs"
+    kill -TERM -"$cmd_pid" 2>/dev/null || kill -TERM "$cmd_pid" 2>/dev/null
+  ) >/dev/null 2>&1 &
+  killer_pid=$!
+  [ "$had_monitor" -eq 1 ] || set +m
+  { wait "$cmd_pid" || rc=$?; } 2>/dev/null
+  kill -TERM -"$killer_pid" 2>/dev/null || kill -TERM "$killer_pid" 2>/dev/null || true
+  { wait "$killer_pid" || true; } 2>/dev/null
+  # TERM only asks. KILL reaps whatever in the group outlived the command.
+  kill -KILL -"$cmd_pid" 2>/dev/null || true
+  return "$rc"
+}
+
 # The tip of the remote's default branch, asked of the remote itself. A local remote-tracking ref is
 # only as fresh as the last fetch, and a stale one fails in BOTH directions: an install on the live
 # pin reads DRIFT, and an install on the superseded pin reads CURRENT.
 resolve_adopted_from_remote() {
   local advertised
-  # GIT_TERMINAL_PROMPT=0: an unattended run must get a failure, not a credential prompt it can
-  # never answer.
-  advertised="$(GIT_TERMINAL_PROMPT=0 git -C "$REPO_ROOT" ls-remote --symref -- "$REMOTE" HEAD 2>/dev/null)" \
-    || die "cannot read the default branch of remote '$REMOTE' from $REPO_ROOT — the adopted pin is unknown${ADOPTED_RECOVERY}"
+  # The remote must be one this repository has CONFIGURED. Git also accepts a path or URL here, and
+  # `.` or this repository's own path would answer with the working tree's HEAD: the proposal on a
+  # rollout branch, reported as "read from the remote".
+  git -C "$REPO_ROOT" config --get "remote.$REMOTE.url" >/dev/null 2>&1 \
+    || die "'$REMOTE' is not a configured remote of $REPO_ROOT — the adopted pin is unknown. --remote takes a remote NAME, never a path or URL${ADOPTED_RECOVERY}"
+  # A configured remote can still point back at this repository. It would answer with this
+  # repository's own HEAD, so it is refused for the same reason as a path.
+  local remote_url remote_common own_common
+  remote_url="$(git -C "$REPO_ROOT" config --get "remote.$REMOTE.url")"
+  if [ -d "$remote_url" ]; then
+    remote_common="$(cd "$remote_url" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)" || remote_common=""
+    own_common="$(cd "$REPO_ROOT" && cd "$(git rev-parse --git-common-dir)" && pwd -P)" || own_common=""
+    if [ -n "$remote_common" ] && [ "$remote_common" = "$own_common" ]; then
+      die "remote '$REMOTE' points back at this repository, so it cannot show what the deployment adopted — the adopted pin is unknown${ADOPTED_RECOVERY}"
+    fi
+  fi
+  advertised="$(bounded_remote "$REMOTE_TIMEOUT_SECS" git -C "$REPO_ROOT" \
+      -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$REMOTE_TIMEOUT_SECS" \
+      ls-remote --symref -- "$REMOTE" HEAD 2>/dev/null)" \
+    || die "cannot read the default branch of remote '$REMOTE' from $REPO_ROOT within ${REMOTE_TIMEOUT_SECS}s — the adopted pin is unknown${ADOPTED_RECOVERY}"
   # Two records for HEAD: "ref: refs/heads/<branch>\tHEAD" and "<sha>\tHEAD".
   ADOPTED_BRANCH="$(printf '%s\n' "$advertised" \
     | awk -F'\t' '!seen && $2 == "HEAD" && index($1, "ref: refs/heads/") == 1 { print substr($1, 6); seen = 1 }')"
@@ -216,8 +281,11 @@ resolve_adopted_from_remote() {
     # Fetch that one commit and nothing else. The empty --refmap and the bare object id mean no
     # remote-tracking ref moves and FETCH_HEAD is not written, so a check never changes what another
     # session's `origin/main` resolves to. The fetch's own status is not the evidence: the object
-    # being readable afterwards is.
-    GIT_TERMINAL_PROMPT=0 git -C "$REPO_ROOT" fetch --quiet --no-tags --no-recurse-submodules \
+    # being readable afterwards is. --no-auto-maintenance: the repository is shared by every
+    # session, and this check promises to add objects and nothing else.
+    bounded_remote "$REMOTE_TIMEOUT_SECS" git -C "$REPO_ROOT" \
+      -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$REMOTE_TIMEOUT_SECS" \
+      fetch --quiet --no-tags --no-recurse-submodules --no-auto-maintenance \
       --no-write-fetch-head --refmap= -- "$REMOTE" "$ADOPTED_COMMIT" >/dev/null 2>&1 || true
     git -C "$REPO_ROOT" --no-replace-objects cat-file -e "$ADOPTED_COMMIT^{commit}" 2>/dev/null \
       || die "the default-branch tip $ADOPTED_COMMIT of remote '$REMOTE' is not in the local object database and could not be fetched — the adopted pin is unknown${ADOPTED_RECOVERY}"
@@ -234,7 +302,9 @@ else
   if [ "$ADOPTED_REF_SET" -eq 1 ]; then
     ADOPTED_COMMIT="$(git -C "$REPO_ROOT" --no-replace-objects rev-parse --verify --quiet --end-of-options "$ADOPTED_REF^{commit}" 2>/dev/null)" \
       || die "cannot resolve the adopted revision '$ADOPTED_REF' in $REPO_ROOT — the adopted pin is unknown${ADOPTED_RECOVERY}"
-    PIN_SOURCE="adopted — the gitlink at $ADOPTED_REF ($ADOPTED_COMMIT), named by --adopted-ref and NOT refreshed by this check"
+    # Not labelled "adopted": this check did not ask the remote, so it cannot say that. The caller
+    # says so, and the notice after the verdict states what that claim rests on.
+    PIN_SOURCE="caller-named — the gitlink at $ADOPTED_REF ($ADOPTED_COMMIT), named by --adopted-ref and NOT refreshed by this check"
   else
     resolve_adopted_from_remote
     PIN_SOURCE="adopted — the gitlink at $REMOTE ${ADOPTED_BRANCH:-HEAD} ($ADOPTED_COMMIT), read from the remote by this check"
@@ -254,7 +324,11 @@ else
   if [ -z "$WORKTREE_PIN" ]; then
     WORKTREE_LINE="no gitlink readable at HEAD — only the adopted pin was compared"
   elif [ "$WORKTREE_PIN" = "$GITLINK" ]; then
-    WORKTREE_LINE="$WORKTREE_PIN at HEAD $WORKTREE_HEAD — the adopted pin"
+    if [ "$ADOPTED_REF_SET" -eq 1 ]; then
+      WORKTREE_LINE="$WORKTREE_PIN at HEAD $WORKTREE_HEAD — the caller-named pin"
+    else
+      WORKTREE_LINE="$WORKTREE_PIN at HEAD $WORKTREE_HEAD — the adopted pin"
+    fi
   else
     # Which side moved is read from the fork point, not from ancestry alone: a branch cut from an
     # older default branch is "behind" by ancestry whether or not it also bumps the gitlink.
@@ -279,6 +353,16 @@ fi
 # tree's pin. Naming what must NOT be done with this notice is the point: it is the state that used
 # to read as DRIFT.
 worktree_notice() {
+  if [ "$ADOPTED_REF_SET" -eq 1 ]; then
+    # Printed with EVERY --adopted-ref verdict. A stale ref and a fresh one produce the same output
+    # otherwise, and a CURRENT measured against a stale ref is the fail-open direction.
+    say ""
+    say "CALLER-NAMED PIN — this check did not ask the remote which pin is adopted. It measured"
+    say "  against $ADOPTED_REF as it stands in this repository."
+    say "  The verdict above holds for the deployment only if that revision was fetched from the"
+    say "  default branch just before this check, and that fetch succeeded. Otherwise it is"
+    say "  UNCHECKED: never read it as current."
+  fi
   [ -n "$WORKTREE_NOTE" ] || return 0
   say ""
   case "$WORKTREE_NOTE" in

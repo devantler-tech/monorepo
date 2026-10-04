@@ -173,10 +173,21 @@ notice after the verdict, with how the checked copy compares against that pin:
 
 **A notice describes the working tree, not the lane: it never changes the verdict or the exit code.**
 An adopted pin that cannot be read is `2` UNKNOWN — the working tree's gitlink never stands in for it.
-`--adopted-ref <full-commit-id-or-qualified-ref>` names a consumer revision the caller has already
-fetched instead of asking the remote, and the caller then owns its freshness; `--gitlink <sha>` names
-the pin outright, which is how the refresh script binds its gated target. The runtime-asset
-declaration is read from the same consumer revision as the pin.
+`--adopted-ref <full-commit-id-or-remote-tracking-ref>` names a consumer revision the caller has
+already fetched instead of asking the remote, and the caller then owns its freshness; `--gitlink <sha>`
+names the pin outright, which is how the refresh script binds its gated target. The runtime-asset
+declaration is read from the same consumer revision as the pin, except under `--gitlink`, where no
+consumer revision is resolved and the working tree's declaration is read.
+
+🔴 **A verdict from `--adopted-ref` is only as fresh as the fetch behind it.** The check labels its
+pin `caller-named` and prints a `CALLER-NAMED PIN` notice with every such verdict. Count it as a
+verdict about the deployment only when the fetch of the default branch ran immediately before it and
+succeeded: run the two as one `git fetch … && plugin-definition-currency.sh --adopted-ref …` command.
+A failed fetch leaves the old ref in place, and a check against it can report a drifted install as
+up to date; that result is UNCHECKED, like exit `2`. A local branch or tag is refused, and so is a
+`--remote` that is a path, a URL or this repository itself: each names what this checkout holds,
+not what the deployment adopted. Each remote call is bounded (20 seconds by default), so a remote
+that stops answering ends as `2` UNKNOWN.
 
 | Instance | Command | What is compared |
 |---|---|---|
@@ -227,9 +238,16 @@ lives in the shared repository, so a single stale entry reaches every worktree.
 that bumps the gitlink — the check reports `ROLLOUT` — it names a proposal nobody has merged, so
 there the pin to follow is the adopted one: the `pinned revision` the check printed or, when it
 printed none, the default branch's own gitlink (`refs/remotes/origin/main:libraries/agent-plugins`
-after `git fetch origin '+refs/heads/main:refs/remotes/origin/main'`). A `SUPERSEDED` checkout needs
-no such care: its gitlink was the adopted pin when the checkout was taken, so it still names a
-reviewed revision.
+after `git fetch origin '+refs/heads/main:refs/remotes/origin/main'` succeeds; substitute the
+remote and default branch this deployment uses).
+
+🔴 **Whenever the check printed a `pinned revision`, follow that one, whatever the notice says.** Use
+`HEAD`'s gitlink only when the check printed none **and** this checkout does not change the pin. This
+covers all three notices. On `SUPERSEDED` the default branch has moved off the pin this checkout
+holds, forward or back, so `HEAD`'s gitlink names a revision the deployment no longer uses: after a
+rollback it is the very revision the deployment moved away from, and it is also what the drifted
+install already has loaded. On `UNADOPTED` nothing shows which side moved, so the working tree's pin
+is not evidence either.
 
 **Prefer the forge read: it needs no working tree, so none of the traps below can reach it.** The
 revision is named in the request, so what comes back is the reviewed content by construction — this

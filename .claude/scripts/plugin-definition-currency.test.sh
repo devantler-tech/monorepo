@@ -1796,7 +1796,7 @@ esac
 # --adopted-ref names an already-fetched revision, and the output says it was not refreshed.
 if out="$(adopt_run --adopted-ref refs/remotes/origin/main --installed "${cur}")"; then
   case "${out}" in
-    *"refs/remotes/origin/main (${adopted_commit}), named by --adopted-ref and NOT refreshed by this check"*"ROLLOUT —"*)
+    *"caller-named — the gitlink at refs/remotes/origin/main (${adopted_commit}), named by --adopted-ref and NOT refreshed by this check"*"CALLER-NAMED PIN"*"UNCHECKED"*"ROLLOUT —"*)
       ok "--adopted-ref names the adopted revision and is reported as not refreshed" ;;
     *) fail "--adopted-ref did not report its source: ${out}" ;;
   esac
@@ -1840,19 +1840,21 @@ expect_adopted_unknown() {
 }
 expect_adopted_unknown "an adopted ref that does not exist" "cannot resolve the adopted revision" \
   --adopted-ref refs/remotes/origin/absent
-expect_adopted_unknown "a remote that is not configured" "cannot read the default branch of remote 'absent'" \
+expect_adopted_unknown "a remote that is not configured" "'absent' is not a configured remote" \
   --remote absent
 expect_adopted_unknown "an adopted revision that records no gitlink" "no gitlink for" \
   --adopted-ref "${unpinned_commit}"
-expect_adopted_unknown "a short adopted ref" "fully qualified ref or full commit ID" \
+expect_adopted_unknown "a short adopted ref" "remote-tracking ref (refs/remotes/...) or full commit ID" \
   --adopted-ref origin/main
 expect_adopted_unknown "an adopted ref beside an explicit pin" "pass only one" \
   --adopted-ref refs/remotes/origin/main --gitlink "${gitlink}"
 expect_adopted_unknown "an option-shaped remote name" "must name a git remote" \
   --remote --upload-pack=true
 git init -q --bare "${adopt}/empty.git"
+git -C "${work}" remote add empty "${adopt}/empty.git"
 expect_adopted_unknown "a remote with no default-branch commit" "advertised no default-branch commit" \
-  --remote "${adopt}/empty.git"
+  --remote empty
+git -C "${work}" remote remove empty
 case "${out}" in
   *"--adopted-ref refs/remotes/origin/main"*"never used instead"*)
     ok "the UNKNOWN names the supported recovery and rules out the working-tree fallback" ;;
@@ -1861,7 +1863,60 @@ esac
 # The remote that every real caller uses, made unreachable.
 git -C "${work}" remote set-url origin "${adopt}/gone"
 expect_adopted_unknown "an unreachable remote" "cannot read the default branch of remote 'origin'"
+case "${out}" in
+  *"refs/remotes/origin/main' &&"*"A failed fetch leaves the old ref in place"*)
+    ok "the recovery runs the check only when its fetch succeeded" ;;
+  *) fail "the recovery lets a failed fetch be followed by a check of the stale ref: ${out}" ;;
+esac
 git -C "${work}" remote set-url origin "${forge}"
+
+# Anything this checkout wrote itself cannot show what the deployment adopted. Each of these named
+# the working tree's own HEAD and, before they were refused, printed CURRENT with "adopted" beside it.
+expect_adopted_unknown "a local branch as the adopted ref" "is a local ref" \
+  --adopted-ref refs/heads/main
+expect_adopted_unknown "a local tag as the adopted ref" "is a local ref" \
+  --adopted-ref refs/tags/anything
+expect_adopted_unknown "this repository named as its own remote" "'.' is not a configured remote" \
+  --remote .
+expect_adopted_unknown "a path named as the remote" "is not a configured remote" \
+  --remote "${work}"
+git -C "${work}" remote add self "${work}"
+expect_adopted_unknown "a configured remote that points back at this repository" \
+  "points back at this repository" --remote self
+git -C "${work}" remote remove self
+
+# A remote that accepts the call and never answers must end as UNKNOWN inside the deadline. The
+# transport here is an ssh stand-in that only sleeps: unbounded, the check would wait on it for the
+# whole sleep.
+cat > "${adopt}/silent-ssh" <<'SSH'
+#!/bin/sh
+sleep 60
+SSH
+chmod +x "${adopt}/silent-ssh"
+git -C "${work}" remote add silent "ssh://silent.invalid/consumer.git"
+silent_started=${SECONDS}
+set +e
+out="$(GIT_SSH_COMMAND="${adopt}/silent-ssh" PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS=2 \
+  adopt_run --installed "${cur}" --remote silent)"; rc=$?
+set -e
+silent_elapsed=$((SECONDS - silent_started))
+git -C "${work}" remote remove silent
+[ "${rc}" -eq 2 ] || fail "a silent remote must exit 2 (UNKNOWN), got ${rc}: ${out}"
+case "${out}" in
+  *"cannot read the default branch of remote 'silent'"*"within 2s"*) ;;
+  *) fail "a silent remote exited 2 for an unrelated reason: ${out}" ;;
+esac
+[ "${silent_elapsed}" -lt 30 ] \
+  || fail "a silent remote held the check for ${silent_elapsed}s — the deadline did not apply"
+ok "a remote that never answers is UNKNOWN within the deadline (${silent_elapsed}s)"
+set +e
+out="$(PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS=soon adopt_run --installed "${cur}")"; rc=$?
+set -e
+case "${rc}:${out}" in
+  2:*"PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS must be a whole number"*)
+    ok "a malformed deadline is UNKNOWN, not an unbounded call" ;;
+  *) fail "a malformed deadline was accepted (exit ${rc}): ${out}" ;;
+esac
 
 # 14d. SUPERSEDED — the default branch adopts the bump AFTER this checkout was taken. The working
 # tree still holds the previous pin and does not even have the commit that moved it.
@@ -1945,7 +2000,7 @@ case "${section}" in
   *) fail "the plugin contract section allows a fallback to the working tree's gitlink" ;;
 esac
 case "${section}" in
-  *"--adopted-ref <full-commit-id-or-qualified-ref>"*"owns its freshness"*)
+  *"--adopted-ref <full-commit-id-or-remote-tracking-ref>"*"owns its freshness"*"only as fresh as the fetch behind it"*"follow that one, whatever the notice says"*)
     ok "the contract names the explicit adopted-ref form and who owns its freshness" ;;
   *) fail "the plugin contract section does not name --adopted-ref and its freshness owner" ;;
 esac
