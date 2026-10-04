@@ -318,6 +318,27 @@ case "${out}" in
   *) fail "exit 2 but not by the expected network-free path — did it call out to the forge? ${out}" ;;
 esac
 
+# ── 7a. An EMPTY submodule directory is not the submodule ─────────────────────
+# A fresh worktree has the directory but nothing in it, and `git -C` there answers from the consumer
+# repository around it. When that repository holds the pinned commit, a check that trusted the
+# directory read the consumer's objects with the wrong path prefix and found no files at all. It
+# must take the forge route instead; with no .gitmodules here that route stops before the network.
+shadow="${tmp}/shadow"
+git init -q "${shadow}"
+write_desired_state_fixture "${shadow}"
+mkdir -p "${shadow}/libraries/agent-plugins"
+git -C "${shadow}" fetch -q "${pin_repo}" "${gitlink}"
+git -C "${shadow}" cat-file -e "${gitlink}^{commit}" \
+  || fail "fixture: the consumer repository does not hold the pinned commit, so this case proves nothing"
+set +e; out="$("${script}" --repo-root "${shadow}" --installed "${cur}" --gitlink "${gitlink}" 2>&1)"; rc=$?; set -e
+[ "${rc}" -eq 2 ] || fail "an empty submodule directory with no forge route must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"yielded no tree entries"*)
+    fail "an empty submodule directory was read through the consumer repository: ${out}" ;;
+  *"no .gitmodules url"*) ok "an empty submodule directory takes the forge route, not the consumer repository's objects" ;;
+  *) fail "an empty submodule directory exited 2 for an unrelated reason: ${out}" ;;
+esac
+
 # ── 7b. FAIL OPEN REGRESSION — an unrecognised pinned path is never silently dropped ──
 # The defect this guards: the selector recognises two shapes and had no else branch, so any other
 # path under agents/ or skills/ fell out of the reviewed list entirely. It was then invisible on BOTH
@@ -406,7 +427,7 @@ esac
 # `shift 2` on a lone trailing flag returns 1, and under `set -e` that exited the script with 1 — the
 # code that tells a caller the definition is stale. A typo would have produced a silent, output-free
 # drift verdict, which is the most misleading failure this script can have.
-for flag in --runtime --repo-root --gitlink --installed --plugins-root --codex-home --loaded-ref; do
+for flag in --runtime --repo-root --gitlink --adopted-ref --remote --installed --plugins-root --codex-home --loaded-ref; do
   set +e; out="$("${script}" "${flag}" 2>&1)"; rc=$?; set -e
   [ "${rc}" -eq 2 ] || fail "a missing value for ${flag} must exit 2, got ${rc}: ${out}"
 done
@@ -653,14 +674,15 @@ case "${out}" in
   *) fail "exit ${rc} but the extra symlink was not reported: ${out}" ;;
 esac
 
-# ── 7l. DELIBERATELY NOT TESTED — the mktemp guard ───────────────────────────
-# `mktemp`'s failure path is guarded in the script (an unwritable TMPDIR would otherwise exit 1 under
-# `set -e`, and 1 is the DRIFT verdict, so an infrastructure failure would read as a finding about the
-# install). There is no assertion here because there is no portable way to force it: BSD/macOS mktemp
-# IGNORES an unusable TMPDIR and falls back to the system temp dir, so the obvious test passes on
-# every implementation regardless of the guard — verified by ablation, which did not fire.
-# A vacuous assertion is worse than none: it manufactures confidence in an untested path. Left absent
-# and explained rather than left green and meaningless.
+# ── 7l. The script keeps NO temporary file, so it needs no EXIT trap ──────────
+# An EXIT trap that removes one can turn a `set -u` abort into exit 0 on bash 3.2 (monorepo#3414),
+# and exit 0 is this script's CURRENT. The installed listing is held in a variable instead, which
+# removes that whole class rather than guarding it. Asserted on the source because the property is
+# the absence of a construct, which no fixture can exercise.
+if grep -Eq '^[[:space:]]*trap .* EXIT|mktemp' "${script}"; then
+  fail "the currency check must not create a temporary file or install an EXIT trap"
+fi
+ok "the script holds no temporary file and installs no EXIT trap"
 
 # A `codex` shim keeps this suite hermetic. The lane asks the runtime for effective state, so a real
 # `codex` on PATH would answer about the HOST rather than this fixture — and its answer for a fixture
@@ -1206,11 +1228,12 @@ esac
 
 
 # ── 7q. The PIN ITSELF must be resolved without replacement objects ───────────
-# Every other case passes --gitlink explicitly, so nothing exercised the `ls-tree HEAD` resolution
-# that every real caller uses. AGENTS.md requires --no-replace-objects there: a refs/replace entry
-# for HEAD makes ls-tree read the REPLACEMENT's gitlink while `rev-parse HEAD` still prints the
-# expected commit, so the run compares against a pin nobody reviewed. Asserted in the fail-OPEN
-# direction — without the flag this reports CURRENT, which is the dangerous verdict.
+# Most cases pass --gitlink explicitly, which skips the `ls-tree` resolution every real caller uses.
+# AGENTS.md requires --no-replace-objects there: a refs/replace entry for the adopted commit makes
+# ls-tree read the REPLACEMENT's gitlink while `rev-parse` still prints the expected commit, so the
+# run compares against a pin nobody reviewed. Asserted in the fail-OPEN direction — without the flag
+# this reports CURRENT, which is the dangerous verdict. The adopted revision is named as a commit so
+# the case stays hermetic; section 14 covers reading it from a remote.
 rc_root="${tmp}/replace-consumer"
 mkdir -p "${rc_root}/libraries"
 cp -R "${pin_repo}" "${rc_root}/libraries/agent-plugins"
@@ -1231,7 +1254,8 @@ git -C "${rc_root}" replace "${rc_true}" "${rc_decoy}"
 # The loader ref matches the DECOY's gitlink, so a replacement-poisoned read sees them as equal.
 git -C "${rc_root}/libraries/agent-plugins" update-ref refs/remotes/origin/main "${ref_drift}"
 set +e
-out="$("${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main --repo-root "${rc_root}" 2>&1)"; rc=$?
+out="$("${script}" --runtime git-ref --loaded-ref refs/remotes/origin/main --repo-root "${rc_root}" \
+                  --adopted-ref "${rc_true}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 1 ] || fail "a replace-poisoned pin must still report DRIFT (exit 1), got ${rc}: ${out}"
 case "${out}" in
@@ -1624,6 +1648,433 @@ case "${out}" in
     ok "drift in the second declared runtime asset is selected and named" ;;
   *)
     fail "drift in the second declared runtime asset was not named: ${out}" ;;
+esac
+
+# ── 14. The verdict is measured against the ADOPTED pin (monorepo#3230) ───────
+# The check used to read the pin from the working tree it ran in, and a DRIFT verdict opens a
+# lane-drift tracker. Two measured false positives came from that one assumption: a rollout branch
+# holding an unmerged bump read DRIFT for a lane byte-identical to the adopted pin (2026-09-06), and
+# a checkout taken before a rollout merged read DRIFT for an install already on the live pin
+# (2026-09-24). The verdict now uses the pin the default branch records, and the working tree's own
+# pin is a separate, named fact that never changes the verdict or the exit status.
+#
+# `forge` stands in for the remote: the tip of its default branch is what the deployment adopted.
+# `work` is a clone of it, and is the working tree the check runs in.
+adopt="${tmp}/adopt"
+forge="${adopt}/forge"
+work="${adopt}/work"
+mkdir -p "${forge}"
+git -C "${forge}" init -q
+git -C "${forge}" symbolic-ref HEAD refs/heads/main
+git -C "${forge}" config user.email t@example.invalid
+git -C "${forge}" config user.name t
+write_desired_state_fixture "${forge}"
+git -C "${forge}" add .claude/plugin-consumption/agentic-engineering.desired-state.json
+git -C "${forge}" -c commit.gpgsign=false commit -qm 'declare the runtime assets'
+# A consumer revision that records NO gitlink, for the unreadable-adopted-pin arm below.
+unpinned_commit="$(git -C "${forge}" rev-parse HEAD)"
+git -C "${forge}" update-index --add --cacheinfo "160000,${gitlink},libraries/agent-plugins"
+git -C "${forge}" -c commit.gpgsign=false commit -qm 'adopt the reviewed pin'
+adopted_commit="$(git -C "${forge}" rev-parse HEAD)"
+
+git clone -q "${forge}" "${work}"
+git -C "${work}" config user.email t@example.invalid
+git -C "${work}" config user.name t
+# A clone leaves the submodule path empty, as a fresh worktree does. Give it the plugin's object
+# database so the pinned trees are read locally and the suite stays off the network.
+rm -rf "${work}/libraries/agent-plugins"
+mkdir -p "${work}/libraries"
+cp -R "${pin_repo}" "${work}/libraries/agent-plugins"
+wsub="${work}/libraries/agent-plugins"
+wp="${wsub}/plugins/agentic-engineering"
+
+adopt_run() { "${script}" --repo-root "${work}" "$@" 2>&1; }
+assert_no_notice() {
+  case "$1" in
+    *"ROLLOUT —"*|*"SUPERSEDED —"*|*"UNADOPTED —"*) fail "$2: ${1}" ;;
+  esac
+}
+
+# 14a. Working tree == adopted. The pin comes from the REMOTE, and the output says so.
+if out="$(adopt_run --installed "${cur}")"; then
+  case "${out}" in
+    *"pinned revision : ${gitlink}"*"pin source      : adopted"*"origin refs/heads/main (${adopted_commit}), read from the remote by this check"*CURRENT*)
+      ok "the pin is read from the remote's default branch, and the output names that source" ;;
+    *) fail "the adopted pin's source was not reported: ${out}" ;;
+  esac
+  assert_no_notice "${out}" "a working tree on the adopted pin must carry no notice"
+  ok "a working tree on the adopted pin carries no notice"
+else
+  fail "an install on the adopted pin must exit 0, got $? — ${out}"
+fi
+# The arm that must keep firing: a stale install against the adopted pin is still DRIFT.
+set +e; out="$(adopt_run --installed "${chg}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a stale install against the adopted pin must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT    agents/agent-improver.agent.md"*"DRIFT — 1 finding(s)"*)
+    ok "a stale install against the adopted pin still reads DRIFT" ;;
+  *) fail "exit 1 but the stale definition was not named: ${out}" ;;
+esac
+assert_no_notice "${out}" "a real drift on the adopted pin must not be explained away by a notice"
+
+# 14b. ROLLOUT — the branch proposes a bump that has not merged. The proposed plugin revision changes
+# a definition AND adds a runtime asset, and the rollout declares that asset, exactly as a real
+# rollout does.
+printf 'proposed engineer definition\n' > "${wp}/agents/agentic-engineer.agent.md"
+printf '#!/bin/sh\necho guarded\n' > "${wp}/scripts/forge-readonly-guard.sh"
+chmod +x "${wp}/scripts/forge-readonly-guard.sh"
+git -C "${wsub}" add plugins/agentic-engineering/agents/agentic-engineer.agent.md \
+  plugins/agentic-engineering/scripts/forge-readonly-guard.sh
+git -C "${wsub}" -c commit.gpgsign=false commit -qm 'proposed plugin revision'
+proposed_pin="$(git -C "${wsub}" rev-parse HEAD)"
+proposed_install="${tmp}/install-proposed"
+mkdir -p "${proposed_install}"
+cp -R "${wp}/agents" "${wp}/skills" "${wp}/scripts" "${proposed_install}/"
+guard_sha="$(shasum -a 256 "${wp}/scripts/forge-readonly-guard.sh" | awk '{print $1}')"
+write_rollout_declaration() {
+  cat > "$1/.claude/plugin-consumption/agentic-engineering.desired-state.json" <<JSON
+{
+  "spec": {
+    "source": {
+      "requiredRuntimeAssets": [
+        { "path": "scripts/classify-default-branch-ci-runs.sh", "sha256": "${fixture_runtime_sha}", "executable": true },
+        { "path": "scripts/forge-readonly-guard.sh", "sha256": "${guard_sha}", "executable": true }
+      ]
+    }
+  }
+}
+JSON
+}
+git -C "${work}" checkout -q -b claude/rollout
+write_rollout_declaration "${work}"
+git -C "${work}" add .claude/plugin-consumption/agentic-engineering.desired-state.json
+git -C "${work}" update-index --cacheinfo "160000,${proposed_pin},libraries/agent-plugins"
+git -C "${work}" -c commit.gpgsign=false commit -qm 'propose a plugin bump'
+rollout_commit="$(git -C "${work}" rev-parse HEAD)"
+
+# The fixture must really reproduce the defect, or the assertions after it prove nothing: measured
+# against the PROPOSED pin, the same install differs.
+set +e; out="$(adopt_run --gitlink "${proposed_pin}" --installed "${cur}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] \
+  || fail "control: the install must differ from the proposed pin, got ${rc}: ${out}"
+ok "control — measured against the proposed pin, the same install differs"
+
+set +e; out="$(adopt_run --installed "${cur}")"; rc=$?; set -e
+case "${rc}" in
+  0) ;;
+  1) fail "a current install under an unmerged bump read DRIFT — the working tree's pin was used as the basis: ${out}" ;;
+  *) fail "a current install under an unmerged bump must exit 0, got ${rc} — the runtime-asset declaration must come from the adopted revision, not the rollout's working tree: ${out}" ;;
+esac
+case "${out}" in
+  *"pinned revision : ${gitlink}"*CURRENT*"ROLLOUT —"*"working tree : ${proposed_pin}"*"adopted      : ${gitlink}"*)
+    ok "a current install under an unmerged bump is CURRENT, and the proposal is reported as ROLLOUT" ;;
+  *) fail "the rollout was not reported distinctly from the verdict: ${out}" ;;
+esac
+case "${out}" in
+  *"DRIFT"*) fail "a rollout in progress must not print any DRIFT line: ${out}" ;;
+  *) ok "a rollout in progress prints no DRIFT signal at all" ;;
+esac
+# Both facts, distinctly: the verdict's own counts, and the proposal's — measured with the
+# declaration the proposal itself carries, which is why the second runtime asset is counted.
+case "${out}" in
+  *"CURRENT — 5 pinned loaded file(s) match"*"Against the working tree's pin the installed copy shows 2 finding(s) across 6 file(s)."*)
+    ok "the install's state against the proposed pin is reported as a second, separate fact" ;;
+  *) fail "the comparison against the proposed pin was not reported: ${out}" ;;
+esac
+case "${out}" in
+  *"never open, update or close a lane-drift"*"tracker on this notice"*)
+    ok "the notice says it is not a lane-drift signal" ;;
+  *) fail "the notice does not say what it must not be used for: ${out}" ;;
+esac
+# --quiet changes what is printed, never what is decided.
+adopt_run --installed "${cur}" --quiet >/dev/null \
+  || fail "a rollout in progress must exit 0 under --quiet too, got $?"
+ok "the exit status under a rollout is unchanged by --quiet"
+
+# An install that has already moved to the PROPOSED pin is drift against the adopted one: it serves a
+# revision the deployment has not adopted. The notice says which pin it does match.
+set +e; out="$(adopt_run --installed "${proposed_install}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "an install on an unadopted pin must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT —"*"ROLLOUT —"*"Against the working tree's pin the installed copy matches all 6 file(s)."*)
+    ok "an install on the proposed pin is DRIFT against the adopted one, and the notice says what it matches" ;;
+  *) fail "an install on the proposed pin was not reported as drift from the adopted one: ${out}" ;;
+esac
+# An install matching NEITHER pin: DRIFT, with the notice reporting findings rather than a match.
+set +e; out="$(adopt_run --installed "${chg}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "an install matching neither pin must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT — 1 finding(s)"*"ROLLOUT —"*"Against the working tree's pin the installed copy shows 3 finding(s) across 6 file(s)."*)
+    ok "an install matching neither pin is DRIFT, counted against each pin separately" ;;
+  *) fail "an install matching neither pin was not counted against both: ${out}" ;;
+esac
+# The Claude remediation must not send the refresh at the working tree's pin.
+case "${out}" in
+  *"--gitlink ${gitlink}"*) ok "the drift remediation names the adopted pin for the refresh" ;;
+  *) fail "the drift remediation does not bind the refresh to the adopted pin: ${out}" ;;
+esac
+
+# --adopted-ref names an already-fetched revision, and the output says it was not refreshed.
+if out="$(adopt_run --adopted-ref refs/remotes/origin/main --installed "${cur}")"; then
+  case "${out}" in
+    *"caller-named — the gitlink at refs/remotes/origin/main (${adopted_commit}), named by --adopted-ref and NOT refreshed by this check"*"CALLER-NAMED PIN"*"UNCHECKED"*"ROLLOUT —"*)
+      ok "--adopted-ref names the adopted revision and is reported as not refreshed" ;;
+    *) fail "--adopted-ref did not report its source: ${out}" ;;
+  esac
+else
+  fail "--adopted-ref on a current install must exit 0, got $? — ${out}"
+fi
+
+# The source-parity backend uses the same basis.
+if out="$(adopt_run --runtime git-ref --loaded-ref "${gitlink}")"; then
+  case "${out}" in
+    *CURRENT*"source parity only"*"ROLLOUT —"*"The declared source revision is not the working tree's pin."*)
+      ok "git-ref measures source parity against the adopted pin under a rollout" ;;
+    *) fail "git-ref under a rollout did not report the adopted basis: ${out}" ;;
+  esac
+else
+  fail "a source on the adopted pin must exit 0 under a rollout, got $? — ${out}"
+fi
+set +e; out="$(adopt_run --runtime git-ref --loaded-ref "${proposed_pin}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a source on an unadopted pin must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT —"*"ROLLOUT —"*"The declared source revision is the working tree's pin."*)
+    ok "a source on the proposed pin is DRIFT, and the notice says it is the proposal" ;;
+  *) fail "a source on the proposed pin was not reported against the adopted one: ${out}" ;;
+esac
+
+# 14c. FAIL CLOSED — an adopted pin that cannot be read is UNKNOWN, never the working tree's pin.
+# Back on the default branch the working tree's own pin MATCHES the install, so a silent fallback to
+# it would print CURRENT and exit 0. That is what makes these arms discriminating.
+git -C "${work}" checkout -q main
+expect_adopted_unknown() {
+  local label="$1" needle="$2"; shift 2
+  set +e; out="$(adopt_run --installed "${cur}" "$@")"; rc=$?; set -e
+  [ "${rc}" -eq 2 ] || fail "${label} must exit 2 (UNKNOWN), got ${rc}: ${out}"
+  case "${out}" in
+    *CURRENT*|*"DRIFT —"*) fail "${label} produced a verdict — it fell back to another pin: ${out}" ;;
+  esac
+  case "${out}" in
+    *"${needle}"*) ok "${label} is UNKNOWN and names the reason" ;;
+    *) fail "${label} exited 2 for an unrelated reason: ${out}" ;;
+  esac
+}
+expect_adopted_unknown "an adopted ref that does not exist" "cannot resolve the adopted revision" \
+  --adopted-ref refs/remotes/origin/absent
+expect_adopted_unknown "a remote that is not configured" "'absent' is not a configured remote" \
+  --remote absent
+expect_adopted_unknown "an adopted revision that records no gitlink" "no gitlink for" \
+  --adopted-ref "${unpinned_commit}"
+expect_adopted_unknown "a short adopted ref" "remote-tracking ref (refs/remotes/...) or full commit ID" \
+  --adopted-ref origin/main
+expect_adopted_unknown "an adopted ref beside an explicit pin" "pass only one" \
+  --adopted-ref refs/remotes/origin/main --gitlink "${gitlink}"
+expect_adopted_unknown "an option-shaped remote name" "must name a git remote" \
+  --remote --upload-pack=true
+git init -q --bare "${adopt}/empty.git"
+git -C "${work}" remote add empty "${adopt}/empty.git"
+expect_adopted_unknown "a remote with no default-branch commit" "advertised no default-branch commit" \
+  --remote empty
+git -C "${work}" remote remove empty
+case "${out}" in
+  *"--adopted-ref refs/remotes/origin/main"*"never used instead"*)
+    ok "the UNKNOWN names the supported recovery and rules out the working-tree fallback" ;;
+  *) fail "the UNKNOWN does not name its recovery: ${out}" ;;
+esac
+# The remote that every real caller uses, made unreachable.
+git -C "${work}" remote set-url origin "${adopt}/gone"
+expect_adopted_unknown "an unreachable remote" "cannot read the default branch of remote 'origin'"
+case "${out}" in
+  *"refs/remotes/origin/main' &&"*"A failed fetch leaves the old ref in place"*)
+    ok "the recovery runs the check only when its fetch succeeded" ;;
+  *) fail "the recovery lets a failed fetch be followed by a check of the stale ref: ${out}" ;;
+esac
+git -C "${work}" remote set-url origin "${forge}"
+
+# Anything this checkout wrote itself cannot show what the deployment adopted. Each of these named
+# the working tree's own HEAD and, before they were refused, printed CURRENT with "adopted" beside it.
+expect_adopted_unknown "a local branch as the adopted ref" "is a local ref" \
+  --adopted-ref refs/heads/main
+expect_adopted_unknown "a local tag as the adopted ref" "is a local ref" \
+  --adopted-ref refs/tags/anything
+expect_adopted_unknown "this repository named as its own remote" "'.' is not a configured remote" \
+  --remote .
+expect_adopted_unknown "a path named as the remote" "is not a configured remote" \
+  --remote "${work}"
+git -C "${work}" remote add self "${work}"
+expect_adopted_unknown "a configured remote that points back at this repository" \
+  "points back at this repository" --remote self
+git -C "${work}" remote remove self
+
+# The same repository reached by a file:// URL, or by a path relative to it, is still this
+# repository. `[ -d ]` on the raw URL saw neither, and the check then printed CURRENT for the
+# working tree's own HEAD.
+git -C "${work}" remote add self "file://${work}"
+expect_adopted_unknown "a file:// remote that points back at this repository" \
+  "points back at this repository" --remote self
+git -C "${work}" remote set-url self "."
+expect_adopted_unknown "a relative-path remote that points back at this repository" \
+  "points back at this repository" --remote self
+git -C "${work}" remote remove self
+
+# A repository that names its ssh command in core.sshCommand must keep it. The stand-in records
+# that it was the transport; replaced by plain `ssh`, it is never called.
+cat > "${adopt}/configured-ssh" <<SSH
+#!/bin/sh
+: > "${adopt}/configured-ssh.called"
+exit 1
+SSH
+chmod +x "${adopt}/configured-ssh"
+git -C "${work}" remote add viassh "ssh://configured.invalid/consumer.git"
+git -C "${work}" config core.sshCommand "${adopt}/configured-ssh"
+set +e
+out="$(env -u GIT_SSH_COMMAND -u GIT_SSH PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS=5 \
+  "${script}" --repo-root "${work}" --installed "${cur}" --remote viassh 2>&1)"; rc=$?
+set -e
+git -C "${work}" config --unset core.sshCommand
+git -C "${work}" remote remove viassh
+[ "${rc}" -eq 2 ] || fail "an ssh command that fails must exit 2 (UNKNOWN), got ${rc}: ${out}"
+[ -e "${adopt}/configured-ssh.called" ] \
+  || fail "core.sshCommand was replaced by plain ssh: the configured transport was never called"
+ok "the repository's core.sshCommand stays the transport when GIT_SSH_COMMAND is unset"
+
+# A remote that accepts the call and never answers must end as UNKNOWN inside the deadline. The
+# transport here is an ssh stand-in that only sleeps: unbounded, the check would wait on it for the
+# whole sleep.
+cat > "${adopt}/silent-ssh" <<'SSH'
+#!/bin/sh
+sleep 60
+SSH
+chmod +x "${adopt}/silent-ssh"
+git -C "${work}" remote add silent "ssh://silent.invalid/consumer.git"
+silent_started=${SECONDS}
+set +e
+out="$(GIT_SSH_COMMAND="${adopt}/silent-ssh" PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS=2 \
+  adopt_run --installed "${cur}" --remote silent)"; rc=$?
+set -e
+silent_elapsed=$((SECONDS - silent_started))
+git -C "${work}" remote remove silent
+[ "${rc}" -eq 2 ] || fail "a silent remote must exit 2 (UNKNOWN), got ${rc}: ${out}"
+case "${out}" in
+  *"cannot read the default branch of remote 'silent'"*"within 2s"*) ;;
+  *) fail "a silent remote exited 2 for an unrelated reason: ${out}" ;;
+esac
+[ "${silent_elapsed}" -lt 30 ] \
+  || fail "a silent remote held the check for ${silent_elapsed}s — the deadline did not apply"
+ok "a remote that never answers is UNKNOWN within the deadline (${silent_elapsed}s)"
+set +e
+out="$(PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS=soon adopt_run --installed "${cur}")"; rc=$?
+set -e
+case "${rc}:${out}" in
+  2:*"PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS must be a whole number"*)
+    ok "a malformed deadline is UNKNOWN, not an unbounded call" ;;
+  *) fail "a malformed deadline was accepted (exit ${rc}): ${out}" ;;
+esac
+
+# 14d. SUPERSEDED — the default branch adopts the bump AFTER this checkout was taken. The working
+# tree still holds the previous pin and does not even have the commit that moved it.
+write_rollout_declaration "${forge}"
+git -C "${forge}" add .claude/plugin-consumption/agentic-engineering.desired-state.json
+git -C "${forge}" update-index --cacheinfo "160000,${proposed_pin},libraries/agent-plugins"
+git -C "${forge}" -c commit.gpgsign=false commit -qm 'adopt the proposed pin'
+readopted_commit="$(git -C "${forge}" rev-parse HEAD)"
+if git -C "${work}" cat-file -e "${readopted_commit}^{commit}" 2>/dev/null; then
+  fail "fixture: the working tree already has the commit it is supposed to be behind"
+fi
+set +e; out="$(adopt_run --installed "${proposed_install}")"; rc=$?; set -e
+[ "${rc}" -eq 0 ] \
+  || fail "an install on the live pin must exit 0 from a checkout taken before the rollout merged, got ${rc}: ${out}"
+case "${out}" in
+  *"pinned revision : ${proposed_pin}"*"origin refs/heads/main (${readopted_commit})"*CURRENT*"SUPERSEDED —"*"working tree : ${gitlink}"*"adopted      : ${proposed_pin}"*"Against the working tree's pin the installed copy shows 1 finding(s) across 5 file(s)."*)
+    ok "an install on the live pin is CURRENT from a superseded checkout, which is reported as SUPERSEDED" ;;
+  *) fail "the superseded checkout was not reported distinctly: ${out}" ;;
+esac
+# The check brought in the one commit it needed and moved no ref of the working repository.
+git -C "${work}" cat-file -e "${readopted_commit}^{commit}" 2>/dev/null \
+  || fail "the adopted commit was not made available to the comparison"
+[ "$(git -C "${work}" rev-parse refs/remotes/origin/main)" = "${adopted_commit}" ] \
+  || fail "the check moved the working repository's remote-tracking ref"
+[ ! -e "${work}/.git/FETCH_HEAD" ] || fail "the check wrote FETCH_HEAD in the working repository"
+ok "reading the adopted pin fetches that commit only and moves no ref"
+# The same checkout with the install still on the PREVIOUS pin: that is real drift, because the
+# install is behind what the deployment adopted.
+set +e; out="$(adopt_run --installed "${cur}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "an install behind the adopted pin must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT —"*"SUPERSEDED —"*"Against the working tree's pin the installed copy matches all 5 file(s)."*)
+    ok "an install behind the adopted pin is DRIFT even though it matches the checkout's own pin" ;;
+  *) fail "an install behind the adopted pin was not reported as drift: ${out}" ;;
+esac
+# A stale remote-tracking ref named explicitly is honoured, and labelled as the caller's to refresh.
+# This is why the default asks the remote: read from this ref, the stale install above is CURRENT.
+if out="$(adopt_run --adopted-ref refs/remotes/origin/main --installed "${cur}")"; then
+  case "${out}" in
+    *"NOT refreshed by this check"*) ok "a named adopted ref is used as given and labelled as not refreshed" ;;
+    *) fail "a named adopted ref was not labelled as the caller's to refresh: ${out}" ;;
+  esac
+else
+  fail "a named adopted ref must be used as given, got $? — ${out}"
+fi
+
+# 14e. UNADOPTED — the two pins differ and share no history, so which side moved is not established.
+unrelated_commit="$(git -C "${work}" -c commit.gpgsign=false commit-tree -m 'unrelated root' "${rollout_commit}^{tree}")"
+if out="$(adopt_run --adopted-ref "${unrelated_commit}" --installed "${proposed_install}")"; then
+  case "${out}" in
+    *CURRENT*"UNADOPTED —"*"working tree : ${gitlink}"*"adopted      : ${proposed_pin}"*)
+      ok "pins that differ without common history are reported as UNADOPTED, not guessed" ;;
+    *) fail "unrelated histories were not reported as UNADOPTED: ${out}" ;;
+  esac
+else
+  fail "an install on the adopted pin must exit 0 whatever the working tree holds, got $? — ${out}"
+fi
+
+# ── 15. The CONTRACT says which pin the verdict uses, and what a notice is not ─
+# The script alone would let a later edit of the guide go back to "the pinned gitlink" meaning the
+# working tree's, and a run following that prose would file the tracker the script no longer asks for.
+case "${section}" in
+  *"measured against the pin this deployment has ADOPTED"*)
+    ok "the contract says the verdict is measured against the adopted pin" ;;
+  *) fail "the plugin contract section does not say which pin the verdict is measured against" ;;
+esac
+case "${section}" in
+  *"it never changes the verdict or the exit code"*)
+    ok "the contract says a working-tree notice never changes the verdict" ;;
+  *) fail "the plugin contract section does not bound what a working-tree notice means" ;;
+esac
+for notice in ROLLOUT SUPERSEDED UNADOPTED; do
+  case "${section}" in
+    *"\`${notice}\` —"*) ok "the contract defines the ${notice} notice" ;;
+    *) fail "the plugin contract section does not define the ${notice} notice" ;;
+  esac
+done
+case "${section}" in
+  *"the working tree's gitlink never stands in for it"*)
+    ok "the contract says an unreadable adopted pin is UNKNOWN, never the working tree's pin" ;;
+  *) fail "the plugin contract section allows a fallback to the working tree's gitlink" ;;
+esac
+case "${section}" in
+  *"--adopted-ref <full-commit-id-or-remote-tracking-ref>"*"owns its freshness"*"only as fresh as the fetch behind it"*"follow that one, whatever the notice says"*)
+    ok "the contract names the explicit adopted-ref form and who owns its freshness" ;;
+  *) fail "the plugin contract section does not name --adopted-ref and its freshness owner" ;;
+esac
+# The tracker clause must key on the verdict, not on the notice — this is what stops an unmerged bump
+# from filing a lane-drift tracker.
+case "${section}" in
+  *"only that verdict is a trigger"*"never opens, updates or closes a tracker"*)
+    ok "the tracker clause keys on drift against the adopted pin, never on a notice" ;;
+  *) fail "the tracker clause does not exclude a working-tree notice as a trigger" ;;
+esac
+# The refresh resolves its own pin from the working tree, so the contract has to bind it.
+case "${section}" in
+  *"pass the refresh the one the check printed: \`--gitlink <pinned revision>\`"*)
+    ok "the contract binds the refresh to the adopted pin under a notice" ;;
+  *) fail "the plugin contract section does not bind the refresh to the adopted pin" ;;
+esac
+# And the fallback read must not follow a proposal.
+case "${section}" in
+  *"is the reviewed pin only in a checkout that does not change it"*)
+    ok "the contract says HEAD's gitlink is a proposal on a rollout branch" ;;
+  *) fail "the plugin contract section lets the fallback follow an unmerged proposal" ;;
 esac
 
 echo "plugin-definition-currency: ${pass_count} assertions passed"
