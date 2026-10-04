@@ -50,8 +50,10 @@
   follow this section's PM-facing body shape and effective template, but keep only their interactive
   marker and do not invoke a routine role or disclosure through this script.
 - **Third-party upstream repos — clear the professional boundary, then get approval and check policy.**
-  Do not even inspect an external repository until the maintainer confirms in the current conversation
-  that it is unrelated to professional work. After that, **never autonomously open an issue or PR** —
+  Public read-only source research needs no separate read approval when it meets the research exception
+  in the privacy guide. Private or ambiguous external repositories still require current, explicit
+  confirmation before inspection. Before contributing, explicitly clear the professional boundary
+  for that named repository, and **never autonomously open an issue or PR** —
   get explicit approval via the ask tool first. Only then verify the project accepts
   AI-assisted contributions (CONTRIBUTING / README / templates); if it bans or discourages them — or
   it's unclear — **don't open it yourself**, prepare the work and have `devantler` submit it (e.g.

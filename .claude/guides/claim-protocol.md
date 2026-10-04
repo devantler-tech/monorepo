@@ -27,8 +27,8 @@ seconds**, #96 lost by **135 seconds**. Every one was correct, validated work; o
 failed. So, on every **in-scope `devantler-tech`** repo — claiming is a *write* action (a shared ref,
 then an assignment where supported and a pushed lane branch), so the *Professional-work repository
 boundary* below still wins outright: never
-claim, probe, or push anywhere that boundary has not been cleared, and nothing here licenses a first
-touch of an unconfirmed repo:
+claim, probe a coordination ref, or push externally without explicit write authorization. The public
+read-only research exception in the privacy guide grants none of those writer operations:
 
 **Cross-lane arbitration uses a lane-neutral ref.** Each instance still writes its own work-branch
 namespace (resolved from the instance registry), so a race settled only on the work-branch name is never

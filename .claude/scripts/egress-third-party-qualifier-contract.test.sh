@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
+# Contract prose uses literal backticks, never shell substitutions.
 #
 # Guards the Egress allow-list against re-acquiring the term collision that made it gate portfolio
 # repositories as if they were third-party.
@@ -81,6 +83,21 @@ egress="$(extract '## Egress' '## Sensitive information stays private')"
 # filter runs this test on every AGENTS.md edit, so an anchor on any bullet's wording turns an
 # unrelated reword into a required-check failure — measured for both the start and the end anchor.
 conventions="$(extract '## GitHub artifact conventions' '' "${conventions_guide}")"
+research="$(extract '## Professional-work repository boundary' '## Egress')"
+
+# monorepo#3836: public inspection is permitted, but it cannot authorize execution,
+# publication, private reads or employment access. Pin these at the permission site.
+check_research() {
+  local text="$1" phrase
+  for phrase in \
+    'Read-only investigation of public open-source repositories needed to operate or advance a portfolio product is permitted without per-repository read approval' \
+    'The project must be known to be unrelated to the maintainer' \
+    'Research does not authorize executing untrusted branch code, external writes or publication, or expanding the portfolio' \
+    'Private or ambiguous external repositories require current, explicit confirmation before any inspection' \
+    'Never discover, enumerate, search, inspect metadata/content/CI, clone, fetch, build, run, comment, review, push, open an issue/PR, merge, or otherwise interact with such repositories'; do
+    has "${phrase}" "${text}" || fail "public research boundary missing: ${phrase}"
+  done
+}
 
 # Assertions 1 and 3 match CONTIGUOUS literals with grep -qF, never a `case` glob. A glob written as
 # *'third-party'*'upstream issue/PR'* permits arbitrary text between the fragments, which is fail-open
@@ -126,7 +143,7 @@ ok
 #    becomes un-sendable: the exact operational failure this guard exists to prevent, arrived at from
 #    the opposite direction. Reproduced before this assertion existed.
 has 'Outbound content goes only to: `devantler-tech` GitHub artifacts (issues, PRs, comments, reviews, pushes)' "${egress}" || \
-  fail "the Egress allow-list no longer names `devantler-tech` GitHub artifacts as a permitted destination — a fail-closed list without it forbids all suite-owned output"
+  fail 'the Egress allow-list no longer names `devantler-tech` GitHub artifacts as a permitted destination — a fail-closed list without it forbids all suite-owned output'
 ok
 
 # 4. PRESERVATION — both gates must sit inside ONE CONTIGUOUS affirmative clause.
@@ -179,8 +196,11 @@ ok
 #    autonomous external artifacts while still saying "Third-party upstream repos" and naming the
 #    devantler-tech exemption, leaving the Egress copy contradicting it and this guard, whose whole
 #    purpose is pinning the two together, green. Reproduced before this assertion existed.
-has 'Do not even inspect an external repository until the maintainer confirms in the current conversation that it is unrelated to professional work' "${conventions}" || \
-  fail "*GitHub artifact conventions* no longer requires the professional-work boundary before inspecting an external repository"
+has 'Public read-only source research needs no separate read approval when it meets the research exception in the privacy guide' "${conventions}" || \
+  fail "*GitHub artifact conventions* does not permit bounded public source research"
+ok
+has 'Private or ambiguous external repositories still require current, explicit confirmation before inspection' "${conventions}" || \
+  fail "*GitHub artifact conventions* no longer requires confirmation for private or ambiguous repositories"
 ok
 has '**never autonomously open an issue or PR** — get explicit approval via the ask tool first' "${conventions}" || \
   fail "*GitHub artifact conventions* no longer requires per-artifact approval before opening an external issue or PR"
@@ -393,5 +413,21 @@ check_step_keys ".jobs.\"${JOB}\".steps[] | select(.run != null and (.run | test
 check_step_keys ".jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/actions/aggregate-job-checks@\")))" \
   "status job's aggregate step" "name,uses,with"
 ok
-[ "${passed}" -eq 14 ] || fail "expected 14 assertions, ran ${passed}"
+check_research "${research}"
+# Each dropped boundary must fail for that specific omission, not a setup error.
+for phrase in \
+  'Read-only investigation of public open-source repositories needed to operate or advance a portfolio product is permitted without per-repository read approval' \
+  'The project must be known to be unrelated to the maintainer' \
+  'Research does not authorize executing untrusted branch code, external writes or publication, or expanding the portfolio' \
+  'Private or ambiguous external repositories require current, explicit confirmation before any inspection' \
+  'Never discover, enumerate, search, inspect metadata/content/CI, clone, fetch, build, run, comment, review, push, open an issue/PR, merge, or otherwise interact with such repositories'; do
+  output=""
+  if output="$(check_research "${research//"${phrase}"/REMOVED}" 2>&1)"; then
+    fail "negative control accepted missing research boundary: ${phrase}"
+  fi
+  has "public research boundary missing: ${phrase}" "${output}" ||
+    fail "negative control failed for an unrelated reason"
+done
+ok
+[ "${passed}" -eq 16 ] || fail "expected 16 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"

@@ -61,7 +61,8 @@ definition surface, and an installed/cache copy is never an authoring target.
   third-party skill inside the agentic-engineering plugin itself. ⚠️ **Do not generalise that list to
   the agentic-engineering plugin's remaining skills**, which are `agent-skills`-authored per the
   census above. Each third party is a third party, so the *Ask before upstream creates* rule and the
-  *Professional-work repository boundary* both apply before any interaction. **Read the value to learn
+  *Professional-work repository boundary* apply to contributions; public read-only inspection follows
+  the privacy guide's research exception. **Read the value to learn
   who owns a file; never read it as permission to change that file.**
 
   Verify **from the monorepo root**, and **query the frontmatter structurally** — a `grep` for the
