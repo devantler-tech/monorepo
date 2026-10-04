@@ -776,6 +776,34 @@ out="$("$helper" "$work93" "monorepo" "$tmp/m-3293d" apply 2>/dev/null)" && rc=0
 report "control: once the checks answer, both branches are deleted (#3293)" \
   "$([[ "$(verdict93)" == *"0 unverified, 0 whose delete was rejected | in use: local 1, remote 1" ]] && ! git -C "$bare93" show-ref --verify --quiet "refs/heads/claude/recheck-fails-3293" && echo yes || echo no)" \
   "rc=$rc out=$out"
+
+# The LOCAL unverified keep: the worktree list cannot be read at the moment of deletion, so
+# the branch is kept and the run exits 3. It was counted under no reason at first, which let
+# the verdict print CONVERGED beside a branch nobody had shown to be in use. A `git` shim
+# answers the first enumeration (the keep-set snapshot) and fails every later one.
+enum_sha=$(mk93 "claude/enum-fails-3293" push)
+git -C "$work93" checkout -q main
+printf '%s\tMERGED\t%s\n' "claude/enum-fails-3293" "$enum_sha" >"$PR_EVIDENCE_FILE"
+real_git93=$(command -v git)
+cat >"$tmp/bin/git" <<SHIM
+#!/usr/bin/env bash
+if [ "\$1" = "worktree" ] && [ "\$2" = "list" ] && [ -n "\${WT93_STATE:-}" ]; then
+  n=\$(cat "\$WT93_STATE" 2>/dev/null || echo 0); n=\${n:-0}
+  echo \$((n+1)) >"\$WT93_STATE"
+  [ "\$n" -ge 1 ] && exit 1
+fi
+exec "$real_git93" "\$@"
+SHIM
+chmod +x "$tmp/bin/git"
+: >"$tmp/wt93-count"
+out="$(WT93_STATE="$tmp/wt93-count" "$helper" "$work93" "monorepo" "$tmp/m-3293d" apply 2>/dev/null)" && rc=0 || rc=$?
+rm -f "$tmp/bin/git"
+report "apply: a branch kept because the worktree list failed is unverified (#3293)" \
+  "$([[ $rc -eq 3 && "$(verdict93)" == *"1 unpushed, 1 unverified, 0 whose delete was rejected | remote:"* ]] && echo yes || echo no)" \
+  "rc=$rc got=$(verdict93)"
+report "apply: that branch is still there, and the total still equals its reasons (#3293)" \
+  "$([[ "$(sums93)" == yes ]] && git -C "$work93" rev-parse --verify --quiet "refs/heads/claude/enum-fails-3293" >/dev/null && echo yes || echo no)" \
+  "got=$(verdict93)"
 : >"$OPEN_HEADS_FILE"
 : >"$PR_EVIDENCE_FILE"
 
