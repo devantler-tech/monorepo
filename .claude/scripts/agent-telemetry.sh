@@ -276,6 +276,10 @@ run_safety_early() (
     set +m
     trap - EXIT HUP INT TERM
     sleep "$SAFETY_TIMEOUT_SECONDS"
+    # The deadline has fired, and exit 0 is how the controller learns it. Killing the worker
+    # wakes the controller, which then stops this watchdog; without this, that TERM could land
+    # before the exit below and the timeout was reported as a worker failure (#3826).
+    trap '' TERM
     kill -TERM -- "-$worker_pid" 2>/dev/null || true
     kill -KILL -- "-$worker_pid" 2>/dev/null || true
     exit 0

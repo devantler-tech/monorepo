@@ -3217,6 +3217,39 @@ else
   ok "a safety timeout removes worker scratch artifacts"
 fi
 
+# A fired deadline must be reported as the deadline every time. The watchdog used to be
+# stoppable between killing the worker and its own exit, which turned about one run in a
+# hundred into "the safety worker failed" (#3826). Ten runs at once make that window likelier.
+mkdir -p "$FIX/safety-deadline-repeat"
+for repeat_lane in 1 2 3 4 5 6 7 8 9 10; do
+  (
+    for repeat_round in 1 2 3 4 5; do
+      repeat_tmp="$FIX/safety-deadline-repeat/tmp-$repeat_lane-$repeat_round"
+      mkdir -p "$repeat_tmp"
+      repeat_rc=0
+      repeat_out=$(PATH="$FIX/safety-discovery-shim:$PATH" \
+        SAFETY_TEST_FIND="$safety_real_find" SAFETY_PARENT_DISCOVERY="$repeat_tmp/parent-discovery" \
+        CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+        MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" TMPDIR="$repeat_tmp" \
+        bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 1 2>&1) || repeat_rc=$?
+      if [ "$repeat_rc" -eq 2 ] && grep -qF "UNKNOWN: safety scan exceeded" <<<"$repeat_out"; then
+        : > "$FIX/safety-deadline-repeat/ok-$repeat_lane-$repeat_round"
+      else
+        printf 'rc=%s\n%s\n' "$repeat_rc" "$repeat_out" > "$FIX/safety-deadline-repeat/bad-$repeat_lane-$repeat_round"
+      fi
+    done
+  ) &
+done
+wait
+repeat_ok=$(find "$FIX/safety-deadline-repeat" -maxdepth 1 -name 'ok-*' | wc -l | tr -d ' ')
+repeat_bad=$(find "$FIX/safety-deadline-repeat" -maxdepth 1 -name 'bad-*' | wc -l | tr -d ' ')
+if [ "$repeat_ok" -eq 50 ] && [ "$repeat_bad" -eq 0 ]; then
+  ok "a fired safety deadline is reported as the deadline on 50 runs under load"
+else
+  bad "a fired safety deadline is reported as the deadline on 50 runs under load" \
+    "ok=$repeat_ok bad=$repeat_bad first=$(find "$FIX/safety-deadline-repeat" -maxdepth 1 -name 'bad-*' -print -quit | xargs grep -m1 -hE 'UNKNOWN|rc=' 2>/dev/null | tr '\n' ' ')"
+fi
+
 mkdir -p "$FIX/safety-timeout-artifacts"
 BOUNDED_ALL=$(PATH="$FIX/safety-timeout-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
   SAFETY_TEST_STARTED="$FIX/safety-worker-started" SAFETY_TEST_COMPLETED="$FIX/safety-worker-completed" \
