@@ -1194,6 +1194,227 @@ rc=$?
 [ "$rc" -eq 2 ] || fail "a relative GOENV exited ${rc}, not 2 (UNKNOWN)"
 grep -q 'is not absolute' <<<"$out" || fail 'a relative GOENV was not reported UNKNOWN'
 
+# --- shared stubs for cases 19-20 ---------------------------------------------------
+# One stub directory holding a `go`, a `ps` and an `lsof`, so both cases run the same way on a
+# host with no go at all (the macOS CI runner) and can never touch a real cache.
+#   go    answers `env GOCACHE|GOMODCACHE` from the environment and RECORDS each `clean` in
+#         cache-stub-cleans instead of running one.
+#   ps    the quiet table: no toolchain, no linter.
+#   lsof  the up-front snapshot lists only STUB_LSOF_SNAPSHOT (default: an unrelated path). The
+#         late per-tree probe (+D) names a holder under STUB_LSOF_LATE_HELD, and answers an
+#         empty row set with a diagnostic for STUB_LSOF_LATE_BLOCKED: the three shapes case 12
+#         measured on a real lsof. Both name a resolved directory.
+cache_stubs="${fixture_root}/cache-stub-bin"
+cache_cleans="${fixture_root}/cache-stub-cleans"
+mkdir -p "$cache_stubs" || fail 'fixture: cache stub dir'
+cp "${quiet_ps}/ps" "${cache_stubs}/ps" || fail 'fixture: cache stub ps'
+cat > "${cache_stubs}/go" <<STUB
+#!/bin/sh
+case "\$1" in
+  env)
+    case "\$2" in
+      GOCACHE) printf '%s\n' "\$GOCACHE" ;;
+      GOMODCACHE) printf '%s\n' "\$GOMODCACHE" ;;
+    esac
+    ;;
+  clean) printf '%s\n' "\$2" >> "${cache_cleans}" ;;
+esac
+exit 0
+STUB
+cat > "${cache_stubs}/lsof" <<STUB
+#!/bin/sh
+late=0
+for a in "\$@"; do
+  [ "\$a" = "+D" ] && late=1
+done
+if [ "\$late" -eq 0 ]; then
+  printf 'n%s\n' "\${STUB_LSOF_SNAPSHOT:-${fixture_root}/unrelated-path}"
+  exit 0
+fi
+for a in "\$@"; do
+  if [ -n "\${STUB_LSOF_LATE_HELD:-}" ] && [ "\$a" = "\$STUB_LSOF_LATE_HELD" ]; then
+    printf 'n%s\n' "\$a/held-file"
+  fi
+  if [ -n "\${STUB_LSOF_LATE_BLOCKED:-}" ] && [ "\$a" = "\$STUB_LSOF_LATE_BLOCKED" ]; then
+    echo "lsof: WARNING: can't opendir(\$a/nested): Permission denied" >&2
+  fi
+done
+exit 1
+STUB
+chmod +x "${cache_stubs}/go" "${cache_stubs}/lsof" || fail 'fixture: chmod cache stubs'
+empty_go_tmp="${go_tmp_root}/empty-19"
+mkdir -p "$empty_go_tmp" || fail 'fixture: empty Go temp root'
+
+# --- 19. a Go cache is asked about AGAIN immediately before `go clean` (monorepo#3710) ---
+# reclaim_go_cache decided "in use" from the snapshot taken at the start of the run and then, in
+# apply mode, ran `go clean` with no fresh probe -- although measuring one multi-gigabyte cache
+# takes minutes, and the tree sweep and the golangci-lint cache both re-check at removal time.
+# A build that started inside that window lost its cache files mid-build.
+#
+# The snapshot here names neither cache, so the up-front check passes for both and only the
+# late probe can keep one. It names a holder under the MODULE cache alone: the build cache is
+# the ablation partner inside the very same run, and must still be cleaned.
+late_go_cache="${fixture_root}/late-go-cache"
+late_mod_cache="${fixture_root}/late-mod-cache"
+mkdir -p "$late_go_cache" "$late_mod_cache" || fail 'fixture: case 19 caches'
+dd if=/dev/zero of="${late_go_cache}/blob" bs=1024 count=2048 2> /dev/null
+dd if=/dev/zero of="${late_mod_cache}/blob" bs=1024 count=2048 2> /dev/null
+late_mod_canon=$(cd -- "$late_mod_cache" && pwd -P) || fail 'fixture: resolve case 19 module cache'
+# run_late_go <mode> runs over a 0 GB budget, so both 2 MB caches are over it.
+run_late_go() {
+  rm -f "$cache_cleans"
+  PATH="${cache_stubs}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$iso_tmp" \
+    BUILD_CACHE_RECLAIM_GO_TMPDIR="$empty_go_tmp" \
+    GOCACHE="$late_go_cache" GOMODCACHE="$late_mod_cache" bash "$impl" "$1" 3 0 2>&1
+}
+# cleaned <flag> succeeds when the `go` stub recorded a `go clean <flag>`.
+cleaned() {
+  [ -f "$cache_cleans" ] && grep -qx -- "$1" "$cache_cleans"
+}
+
+# 19a. ABLATION PARTNER, nothing holds either cache at removal time: both ARE cleaned. Without
+# this, 19b passes just as well on a script that never reaches `go clean` at all.
+out=$(run_late_go apply)
+cleaned -cache || fail 'ablation partner: an idle over-budget build cache was not cleaned'
+cleaned -modcache || fail 'ablation partner: an idle over-budget module cache was not cleaned'
+
+# 19b. a holder that appears AFTER the snapshot keeps that cache, and only that cache.
+out=$(STUB_LSOF_LATE_HELD="$late_mod_canon" run_late_go apply)
+cleaned -modcache && fail 'go clean -modcache ran although a process opened the module cache after the snapshot'
+grep -qE '^build-cache-reclaim: GOMODCACHE .* in use at removal time' <<<"$out" ||
+  fail 'a module cache kept by the late re-check did not say why'
+cleaned -cache || fail 'a late holder of the module cache also kept the idle build cache'
+
+# 19c. a late probe that could not finish is not an idle answer: the cache is kept.
+out=$(STUB_LSOF_LATE_BLOCKED="$late_mod_canon" run_late_go apply)
+cleaned -modcache && fail 'go clean -modcache ran although the late liveness scan could not complete'
+grep -q 'KEEP  (scan incomplete)' <<<"$out" ||
+  fail 'a module cache whose late scan could not complete was not reported as such'
+
+# 19d. dry-run never cleans, and its projection is the up-front answer: the late probe is
+# about the moment of removal, which a dry-run never reaches.
+out=$(STUB_LSOF_LATE_HELD="$late_mod_canon" run_late_go dry-run)
+[ -e "$cache_cleans" ] && fail 'dry-run ran go clean'
+grep -q 'GOMODCACHE would be cleaned' <<<"$out" ||
+  fail 'dry-run did not project an over-budget module cache that is idle in the snapshot'
+
+# --- 20. a per-lane fallback module cache is budgeted too (monorepo#3710) --------------
+# A runtime whose sandbox cannot write the default caches points GOMODCACHE at
+# <temp root>/go-mod-<lane>. Section 1 budgets only the GOMODCACHE its own `go env` reports, and
+# a module cache carries no README marker, so the marker sweep of case 17 never selects it:
+# nothing owned it and it grew without bound. Every reap below has an ablation partner that
+# differs in exactly one dimension -- the budget, the name, the layout, a holder -- and is KEPT.
+mod_root="${fixture_root}/modcache-tmp"
+mkdir -p "$mod_root" || fail 'fixture: fallback module cache temp root'
+# make_mod_cache <path> builds a 2 MB directory laid out like a Go module cache: the download
+# cache the go command creates, and an unpacked module whose files Go marks read-only.
+make_mod_cache() {
+  mkdir -p "$1/cache/download/example.com/dep/@v" "$1/example.com/dep@v1.0.0" || return 1
+  printf 'v1.0.0\n' > "$1/cache/download/example.com/dep/@v/list" || return 1
+  dd if=/dev/zero of="$1/example.com/dep@v1.0.0/blob.go" bs=1024 count=2048 2> /dev/null
+  chmod -R a-w "$1/example.com/dep@v1.0.0" || return 1
+}
+# run_mod <mode> <budget-gb> sweeps mod_root with the stubs of case 19.
+run_mod() {
+  rm -f "$cache_cleans"
+  PATH="${cache_stubs}:$PATH" BUILD_CACHE_RECLAIM_TMPDIR="$mod_root" \
+    BUILD_CACHE_RECLAIM_GO_TMPDIR="$empty_go_tmp" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="${MOD_GOMODCACHE:-$GO_MOD_FIXTURE}" \
+    bash "$impl" "$1" 3 "$2" 2>&1
+}
+mod_idle="${mod_root}/go-mod-codex"
+mod_held="${mod_root}/go-mod-claude"
+mod_named_only="${mod_root}/go-mod-notes"
+mod_shaped_only="${mod_root}/lane-modules"
+mod_cache_link="${mod_root}/go-mod-cachelink"
+mod_elsewhere="${fixture_root}/modcache-elsewhere"
+make_mod_cache "$mod_idle" || fail 'fixture: idle fallback module cache'
+make_mod_cache "$mod_held" || fail 'fixture: held fallback module cache'
+# The name without the layout, the layout without the name, the name with `cache` a symlink into
+# a real module cache, and a go-mod-* SYMLINK to one: none is positively a fallback module cache.
+mkdir -p "$mod_named_only" || fail 'fixture: go-mod-notes'
+dd if=/dev/zero of="${mod_named_only}/notes.bin" bs=1024 count=2048 2> /dev/null
+make_mod_cache "$mod_shaped_only" || fail 'fixture: lane-modules'
+make_mod_cache "$mod_elsewhere" || fail 'fixture: module cache outside the temp root'
+mkdir -p "$mod_cache_link" || fail 'fixture: go-mod-cachelink'
+ln -s "${mod_elsewhere}/cache" "${mod_cache_link}/cache" || fail 'fixture: cache symlink'
+dd if=/dev/zero of="${mod_cache_link}/blob" bs=1024 count=2048 2> /dev/null
+ln -s "$mod_elsewhere" "${mod_root}/go-mod-linked" || fail 'fixture: go-mod-linked'
+mod_held_canon=$(cd -- "$mod_held" && pwd -P) || fail 'fixture: resolve held fallback module cache'
+
+# 20a. within budget: reported and kept. The ablation partner for 20b.
+out=$(run_mod apply "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 0 ] || fail "a readable fallback module cache sweep exited ${rc}, not 0"
+grep -qF "fallback GOMODCACHE ${mod_idle} = " <<<"$out" ||
+  fail 'a fallback module cache was never reported'
+grep -q 'REAP' <<<"$out" && fail 'a fallback module cache within budget was selected'
+[ -e "${mod_idle}/cache/download" ] || fail 'apply removed a fallback module cache within budget'
+
+# 20b. over budget, dry-run: the idle one is selected and counted, the held one is kept for
+# its holder, the four look-alikes are never considered, and nothing is deleted.
+out=$(STUB_LSOF_SNAPSHOT="${mod_held_canon}/cache/download/example.com/dep/@v/list" run_mod dry-run 0)
+said "$out" "$mod_idle" 'WOULD REAP' ||
+  fail 'an idle over-budget fallback module cache was not selected'
+said "$out" "$mod_held" 'KEEP  (in use)' ||
+  fail 'a fallback module cache held open by a live process was not kept as in use'
+for d in "$mod_named_only" "$mod_shaped_only" "$mod_cache_link" "${mod_root}/go-mod-linked"; do
+  grep -qF "$d" <<<"$out" && fail "a directory that is not a fallback module cache was considered: $d"
+done
+mod_summary=$(printf '%s\n' "$out" | sed -n 's/.*would reclaim=~\([0-9]*\) MB.*/\1/p' | tail -1)
+case "$mod_summary" in
+  '' | *[!0-9]*) fail 'dry-run summary reported no parsable would-reclaim total' ;;
+  *) [ "$mod_summary" -ge 2 ] ||
+    fail "dry-run summary omitted the fallback module cache: would reclaim=~${mod_summary} MB" ;;
+esac
+[ -e "${mod_idle}/cache/download" ] || fail 'dry-run deleted a fallback module cache'
+
+# 20c. over budget, apply: the idle one is removed whole, read-only files included; the held
+# one and every look-alike remain, and so does the module cache the symlinks point at.
+out=$(STUB_LSOF_SNAPSHOT="${mod_held_canon}/cache/download/example.com/dep/@v/list" run_mod apply 0)
+if [ -e "$mod_idle" ]; then
+  chmod -R u+w "$mod_idle" 2> /dev/null
+  fail "apply did not remove an idle over-budget fallback module cache: $mod_idle"
+fi
+[ -e "${mod_held}/example.com/dep@v1.0.0/blob.go" ] ||
+  fail 'apply removed a fallback module cache a live process held open'
+[ -e "${mod_named_only}/notes.bin" ] || fail 'apply removed a go-mod-* directory that is not a module cache'
+[ -e "${mod_shaped_only}/cache/download" ] ||
+  fail 'apply removed a module cache whose name is outside the fallback pattern'
+[ -e "${mod_cache_link}/blob" ] || fail 'apply removed a go-mod-* directory whose cache is a symlink'
+[ -e "${mod_elsewhere}/example.com/dep@v1.0.0/blob.go" ] ||
+  fail 'apply removed a module cache outside the temp root through a symlink'
+
+# 20d. a holder that appears AFTER the snapshot keeps it: the same late re-probe as case 11.
+out=$(STUB_LSOF_LATE_HELD="$mod_held_canon" run_mod apply 0)
+[ -e "${mod_held}/example.com/dep@v1.0.0/blob.go" ] ||
+  fail 'apply removed a fallback module cache whose holder appeared after the snapshot'
+said "$out" "$mod_held" 'KEEP  (in use, late)' ||
+  fail 'a fallback module cache kept by the late re-probe did not say why'
+
+# 20e. the GOMODCACHE this run's own go reports is budgeted by section 1, so the fallback sweep
+# must not decide it, or count it, a second time.
+out=$(MOD_GOMODCACHE="$mod_held" run_mod dry-run 0)
+grep -q 'GOMODCACHE would be cleaned' <<<"$out" ||
+  fail 'the configured module cache under the temp root was not budgeted by section 1'
+grep -qF "fallback GOMODCACHE ${mod_held}" <<<"$out" &&
+  fail 'the configured module cache was budgeted a second time as a fallback'
+said "$out" "$mod_held" 'REAP' && fail 'the configured module cache was selected a second time as a tree'
+
+# 20f. a go-mod-* directory this run cannot search hides its layout: that is "not examined"
+# (UNKNOWN, exit 2), never "not a module cache".
+chmod 000 "$mod_held"
+out=$(run_mod dry-run 0)
+rc=$?
+chmod 755 "$mod_held"
+if [ "$(id -u)" -ne 0 ]; then
+  [ "$rc" -eq 2 ] || fail "an unsearchable fallback module cache exited ${rc}, not 2 (UNKNOWN)"
+  said "$out" "$mod_held" 'UNKNOWN (unreadable, module cache not examined)' ||
+    fail 'an unsearchable fallback module cache was not reported UNKNOWN'
+fi
+chmod -R u+w "$mod_root" "$mod_elsewhere" 2> /dev/null
+rm -rf -- "$mod_root" "$mod_elsewhere"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0

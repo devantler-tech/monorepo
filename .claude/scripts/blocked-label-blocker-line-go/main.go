@@ -34,8 +34,12 @@ an account action, credential or permission in plain language. Legacy records
 infer authority only from the literal identifier text "maintainer authority".
 The independent provider outage cause belongs in the result, for example
 "outage-cause=credentials/auth; access is still missing".
-Ask channels: pr = draft PR; slack = the declared Slack channel; session = the
-native ask tool in an interactive session. An issue comment alone is not an ask.
+Ask channels: pr = a draft PR; slack = the Slack DM to the maintainer's own user
+(his self-DM), never a Slack channel, because every channel in the workspace is
+public; session = the native ask tool in an interactive session. No other word
+is a channel token, and the check reads any other word as NO-ASK. That includes
+push, whether it means a git push or the runtime's push notification, and
+issue: a GitHub comment records an ask and is not one.
 
 An UNLABELLED row is an issue whose visible record declares a blocker while the
 issue has no blocked label; "**Blocker:** none ..." declares none and is skipped.
@@ -72,12 +76,28 @@ Options: --today <YYYY-MM-DD> (default UTC today)
 Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input).
 `
 
+// askChannels is the closed set of tokens an ask record may name. The ask
+// expression and the digest are built from it and the help is pinned to it by
+// test, so none of them can accept or advertise a token the others do not.
+var askChannels = []string{"pr", "slack", "session"}
+
+// askExpression matches an ask record that names one of channels. Each token
+// is quoted, so one that holds a metacharacter can only ever match itself and
+// never widens what counts as asked.
+func askExpression(channels []string) *regexp.Regexp {
+	quoted := make([]string, len(channels))
+	for i, channel := range channels {
+		quoted[i] = regexp.QuoteMeta(channel)
+	}
+	return regexp.MustCompile(`\| asked (` + strings.Join(quoted, "|") + `) ([0-9]{4}-[0-9]{2}-[0-9]{2})[\t ]*$`)
+}
+
 var (
 	orgRE          = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 	dateRE         = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 	identifierRE   = regexp.MustCompile(`#[0-9]+|maintainer authority|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
 	urlRE          = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*:[^\s]|//|www\.|[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.[A-Za-z]{2,}/)[^\s]*`)
-	askRE          = regexp.MustCompile(`\| asked (pr|slack|session) ([0-9]{4}-[0-9]{2}-[0-9]{2})[\t ]*$`)
+	askRE          = askExpression(askChannels)
 	verificationRE = regexp.MustCompile(`^([0-9]{4}-[0-9]{2}-[0-9]{2}): (.*)$`)
 )
 
@@ -464,7 +484,9 @@ func askDigestReport(rows []askRow) string {
 	_, _ = fmt.Fprintf(&out, "ASK DIGEST -- %d declared authority blocker(s) to verify before asking for a maintainer action.\n", len(rows))
 	_, _ = fmt.Fprint(&out, "Verify current capabilities and prerequisites; complete work the agent can perform.\n")
 	_, _ = fmt.Fprint(&out, "Only for a remaining maintainer-only action, deliver an ask through a canonical channel\n")
-	_, _ = fmt.Fprint(&out, "(pr | slack | session), then append `| asked <channel> <YYYY-MM-DD>` to that issue's **Blocker:** line.\n")
+	_, _ = fmt.Fprintf(&out, "(%s), then append `| asked <channel> <YYYY-MM-DD>` to that issue's **Blocker:** line.\n", strings.Join(askChannels, " | "))
+	// Every channel in the workspace is public, and an ask can name a weakness.
+	_, _ = fmt.Fprint(&out, "slack means the maintainer's own Slack self-DM, never a Slack channel: every channel in the workspace is public.\n")
 	// Repository visibility is not in the search payload, so this tool cannot
 	// establish it. Say so rather than let a private row reach a public PR.
 	_, _ = fmt.Fprint(&out, "CHECK BEFORE DELIVERY: this tool does not establish repository visibility.\n")
