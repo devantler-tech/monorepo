@@ -309,6 +309,14 @@ while IFS=$'\t' read -r _ url; do
       ;;
   esac
   if [ "$dry_run" -eq 1 ]; then
+    # An interrupt ended the membership reads, so what is left was never read. Reporting it as
+    # "would board" would turn unread input into a count behind exit 0; it is the checkpoint.
+    if [ "$interrupted" -eq 1 ]; then
+      [ -n "$stopped" ] || checkpoint="$url"
+      stopped="interrupted"
+      deferred=$((deferred + 1))
+      continue
+    fi
     say "agent-issue-board-sweep: DRY-RUN would board ${url}"
     boarded=$((boarded + 1))
     continue

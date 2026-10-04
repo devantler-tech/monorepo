@@ -48,6 +48,7 @@ printf '%s\n' "$@" >> "${GH_ARGS_LOG}"
 case "$1 ${2:-}" in
   "search issues")
     printf 'search\n' >> "${GH_CALL_LOG}"
+    [ -z "${GH_SEARCH_SLEEP:-}" ] || sleep "${GH_SEARCH_SLEEP}"
     if [ -n "${GH_STDERR:-}" ]; then printf '%s\n' "${GH_STDERR}" >&2; fi
     if [ "${GH_EXIT:-0}" != 0 ]; then echo "stub: simulated search failure" >&2; exit "${GH_EXIT}"; fi
     [ -s "${GH_RESULTS}" ] && cat "${GH_RESULTS}"
@@ -593,6 +594,26 @@ interrupt_sweep 0 4
 report "an interrupt during the pause between writes is not followed by another write" \
   "$([ "$int_rc" -eq 2 ] && [ "$(cat "$BOARD_LOG")" = "$U1" ] && grep -qF "checkpoint=${U2}" <<<"$int_out" && echo yes || echo no)" \
   "rc=$int_rc log=[$(tr '\n' ' ' < "$BOARD_LOG")] $int_out"
+# A dry run interrupted before it read any membership has examined nothing: it must not report
+# the unread issues as "would board" behind exit 0. The signal lands while discovery is running.
+results "$U1" "$U2" "$U3"
+: > "$BOARD_LOG"; : > "$GH_CALL_LOG"; : > "$GH_BULK_IDS"; : > "$GH_BULK_SIZES"
+GH_SEARCH_SLEEP=3 PATH="$tmp/bin:$PATH" "$sweep" --author app/agent-fixture --board-add "$tmp/board-add-stub.sh" \
+  --dry-run > "$tmp/interrupted.out" 2>&1 &
+dry_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  [ -s "$GH_CALL_LOG" ] && break
+  sleep 0.2
+done
+kill -TERM "$dry_pid"
+int_rc=0
+wait "$dry_pid" || int_rc=$?
+int_out="$(cat "$tmp/interrupted.out")"
+report "an interrupted dry run exits 2 and reports no unread issue as would-board" \
+  "$([ "$int_rc" -eq 2 ] && ! grep -q 'would board' <<<"$int_out" && ! grep -q bulk "$GH_CALL_LOG" \
+    && grep -q 'discovered=3 verified=0 boarded=0 wrote=0 skipped=0 failed=0 deferred=3' <<<"$int_out" \
+    && grep -qF "stopped (interrupted) with 3 issue(s) not examined — continue with --resume-from ${U1}" <<<"$int_out" \
+    && echo yes || echo no)" "rc=$int_rc calls=[$(tr '\n' ' ' < "$GH_CALL_LOG")] $int_out"
 
 # 10e. THE HELPER CANNOT EAT THE REST OF THE LIST. The loop reads its rows from stdin; a helper that
 #      read stdin too would leave every later issue neither examined nor counted, behind exit 0.
