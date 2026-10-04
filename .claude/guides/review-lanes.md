@@ -548,6 +548,31 @@ result at the current head — self-promotion is forbidden before that. Request 
   record persists progression across runs. Compute progress as the furthest completed lane in
   CodeRabbit → Codex → Bugbot order, never the latest artifact timestamp, so a delayed earlier-lane
   response cannot move the cursor backward. A finding, success, or newer head supersedes the cursor.
+- **A refusal answers the request that drew it, never the head** (#3231). When two instances
+  request one head, the lane serves the first request and refuses the second, so that head carries
+  a delivered review and a refusal at the same time. Measured on `platform#3616` (2026-09-06):
+  CodeRabbit submitted a review of the head with two valid findings at 02:31:02Z and answered the
+  duplicate request 41 seconds later with `Action not completed`. The head was recorded
+  `cr:no-gate`, Codex and Bugbot were then spent on it, and both findings went unread. The
+  review-request lock makes a duplicate rare, not impossible. So **before recording any
+  `<provider>:no-gate@<sha>`, run
+  [`review-no-gate-guard.sh --repo <owner>/<repo> --pr <n> --head <headRefOid> --provider <cr|codex|bugbot>`](../scripts/review-no-gate-guard.sh).**
+  It reads that lane's review objects, comments or check-runs at the head, and never the refusal.
+  Exit `0` prints `ADMIT`: the lane published no review of that head, so the record may be written.
+  Exit `1` prints one `REVIEWED` line per review it found, and **that review governs, whatever a
+  later reply says**: judge it under the green-review gate above, fix or refute its findings, read
+  an `UNJUDGED` one by hand, and record no no-gate. **A duplicate request starts no new round**, so
+  a review the guard reports is not stale merely because a later request for the same head exists:
+  the freshness bind counts from the request that opened the round. Exit `2` is UNKNOWN — a failed
+  or partial read, or a head that has moved — and authorizes no record. CodeRabbit's
+  `Already reviewed the last commit` reply is not a refusal at all: it says a review of that commit
+  exists, so find it. Pass `--round-start <UTC time>` only when a recorded refutation restarted the
+  loop at this same head: give the time of that resolution record, never the time of a request, so
+  that the earlier round's review does not block the restarted round's own no-gate. The guard
+  refuses a round start that no request for that head and lane follows. It judges what is published
+  when it runs, so a review still being written for the other request is invisible to it: the
+  review-request lock is what keeps two requests from being in flight at one head, and a review
+  that lands after a no-gate was recorded supersedes that record.
 - **Local review round — when every lane is unavailable OR rate/billing limited** (maintainer
   direction 2026-07-18, widened to three lanes 2026-07-20, and widened again in an interactive
   session **2026-07-21**: *"We likely need to allow local review rounds when external review

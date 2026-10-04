@@ -222,6 +222,7 @@ memory-backup.sh|
 memory-hygiene.sh|
 memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups
 review-lane-health.sh|--now 1
+review-no-gate-guard.sh|
 claude-lane-liveness.sh|--store $tmp/converted/store.json --projects $tmp/converted/projects
 renovate-dashboard-drift.sh|
 pr-ownership-disclosure.sh|--input -
@@ -233,6 +234,7 @@ board-add.sh|
 pr-body-contract.sh|check --repo devantler-tech/monorepo --body-file $tmp/converted/memory.md
 plugin-definition-refresh.sh|--cli /usr/bin/true --repo-root $tmp/converted --gitlink 0000000000000000000000000000000000000000 --plugins-root $tmp/converted/plugins
 safe-clone.sh|devantler-tech/monorepo $tmp/converted/clone-destination
+shared-checkout-freshness.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"

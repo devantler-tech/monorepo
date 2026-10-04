@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -156,11 +157,11 @@ func TestSearchCompleteness(t *testing.T) {
 		{"timed out", `{"total_count":0,"incomplete_results":true,"items":[]}`, 0, true},
 		{"count mismatch", `{"total_count":1,"incomplete_results":false,"items":[]}`, 0, true},
 		{"moving total", `{"total_count":0,"incomplete_results":false,"items":[]} {"total_count":1,"incomplete_results":false,"items":[]}`, 0, true},
-		{"all pages", `{"total_count":2,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"labels":[]}]} {"total_count":2,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":2,"labels":[{"name":"blocked"}]}]}`, 2, false},
+		{"all pages", `{"total_count":2,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"labels":[],"type":null,"assignees":[],"issue_dependencies_summary":{"blocked_by":0},"sub_issues_summary":{"total":0,"completed":0}}]} {"total_count":2,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":2,"labels":[{"name":"blocked"}],"type":{"name":"Bug"},"assignees":[],"issue_dependencies_summary":{"blocked_by":0},"sub_issues_summary":{"total":0,"completed":0}}]}`, 2, false},
 		{"item without labels", `{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1}]}`, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := searchIssues([]byte(tc.raw))
+			got, err := searchIssues([]byte(tc.raw), true)
 			if (err != nil) != tc.unknown {
 				t.Fatalf("error=%v, want unknown=%v", err, tc.unknown)
 			}
@@ -691,11 +692,11 @@ func runInput(t *testing.T, payload string, extra ...string) (int, string) {
 // correctly unlabelled; the five it names declare a real blocker without the
 // label. Bodies are reduced to their record lines.
 const unlabelledPopulation = `[
- {"repo":"actions","number":1025,"labels":[],"body":"**Blocker:** none — agent-actionable"},
- {"repo":"actions","number":1028,"labels":[{"name":"bug"}],"body":"text\n\n**Blocker:** None. Ready to pick up."},
+ {"repo":"actions","number":1025,"labels":[],"type":null,"body":"**Blocker:** none — agent-actionable"},
+ {"repo":"actions","number":1028,"labels":[{"name":"bug"}],"type":{"name":"Bug"},"body":"text\n\n**Blocker:** None. Ready to pick up."},
  {"repo":"platform","number":3251,"labels":[],"body":"**Blocker:** Cloudflare account action | authority | last-verified 2026-08-30: not done"},
  {"repo":"ksail","number":5150,"labels":[{"name":"enhancement"}],"body":"**Blocker:** homebrew/cask notability policy"},
- {"repo":"platform","number":9,"labels":[],"body":"ordinary work with no record"},
+ {"repo":"platform","number":9,"labels":[],"type":null,"body":"ordinary work with no record"},
  {"repo":"platform","number":10,"labels":[{"name":"blocked"}],"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-30: open"}
 ]`
 
@@ -744,7 +745,7 @@ func TestBlockerNoneAndRecordlessIssuesAreNotReported(t *testing.T) {
 
 func TestLabelledOnlyPopulationKeepsItsReport(t *testing.T) {
 	code, out := runInput(t, `[{"repo":"a","number":1,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-30: open"},
-	 {"repo":"a","number":2,"labels":[],"body":"plain"}]`)
+	 {"repo":"a","number":2,"labels":[],"type":null,"body":"plain"}]`)
 	if code != 0 || !strings.Contains(out, "all 1 open blocked-labelled issue(s) carry a conforming **Blocker:** line") {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}
@@ -797,5 +798,456 @@ func TestLabelledAndUnlabelledSummariesAppearTogether(t *testing.T) {
 		if code != 1 || !strings.Contains(out, want) {
 			t.Errorf("code=%d, missing %q in:\n%s", code, want, out)
 		}
+	}
+}
+
+// A Security issue outranks every other issue regardless of age, so one that
+// nobody has started for more than a week was passed over by every run that
+// started anything else. Without a label or a declared blocker, the reason for
+// that lives only in a run's private memory (#3415). parkedPayload builds that
+// issue, and each control below changes one fact about it.
+func parkedPayload(overrides string, others ...string) string {
+	fields := map[string]json.RawMessage{}
+	base := `{"repo":"platform","number":42,"labels":[],"type":{"name":"Security"},"created_at":"2026-08-20T10:00:00Z","assignees":[],
+	 "issue_dependencies_summary":{"blocked_by":0},"sub_issues_summary":{"total":0,"completed":0},"body":"plain work, no record"}`
+	for _, raw := range []string{base, overrides} {
+		if raw == "" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+			panic(err)
+		}
+	}
+	record, err := json.Marshal(fields)
+	if err != nil {
+		panic(err)
+	}
+	return "[" + strings.Join(append([]string{string(record)}, others...), ",") + "]"
+}
+
+// pullRequest builds an open pull request as the search surface returns one.
+func pullRequest(repo, author, body string) string {
+	record, err := json.Marshal(map[string]any{
+		"repo": repo, "number": 900, "labels": []any{}, "pull_request": map[string]any{},
+		"user": map[string]string{"login": author}, "body": body,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(record)
+}
+
+func TestUnstartedSecurityIssueWithoutARecordIsItsOwnFinding(t *testing.T) {
+	code, out := runInput(t, parkedPayload(""))
+	if code != 1 {
+		t.Fatalf("code=%d, want 1; out:\n%s", code, out)
+	}
+	for _, want := range []string{
+		"UNRECORDED platform#42  opened 2026-08-20, unstarted for 12 day(s) with no record\n",
+		"1 of the 1 open Security issue(s) read have gone unstarted for more than 7 day(s) with nothing on record",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{"MISSING", "UNLABELLED", "blocked-labelled issue(s) need repair", "declare a blocker without", "[assigned]"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("unexpected %q in:\n%s", unwanted, out)
+		}
+	}
+}
+
+// Each row is the parked issue with one fact changed. A row that stays a
+// finding proves the neighbouring control clears it for its own reason.
+func TestUnrecordedFindingNeedsEveryCondition(t *testing.T) {
+	human := func(repo, body string) []string { return []string{pullRequest(repo, "devantler", body)} }
+	for _, tc := range []struct {
+		name      string
+		overrides string
+		others    []string
+		finding   bool
+	}{
+		{"exactly at the bound is not past it", `{"created_at":"2026-08-25T23:59:59Z"}`, nil, false},
+		{"one day past the bound", `{"created_at":"2026-08-24T00:00:00Z"}`, nil, true},
+		{"open native blocker", `{"issue_dependencies_summary":{"blocked_by":1}}`, nil, false},
+		{"every native blocker closed", `{"issue_dependencies_summary":{"blocked_by":0,"total_blocked_by":2}}`, nil, true},
+		{"open sub-issue", `{"sub_issues_summary":{"total":3,"completed":2}}`, nil, false},
+		{"every sub-issue completed", `{"sub_issues_summary":{"total":3,"completed":3}}`, nil, true},
+		{"another type", `{"type":{"name":"Bug"}}`, nil, false},
+		{"type name in another case", `{"type":{"name":"security"}}`, nil, true},
+		{"untyped", `{"type":null}`, nil, false},
+		{"opened by a dependency bot", `{"user":{"login":"renovate[bot]"}}`, nil, false},
+		{"opened by the other dependency bot", `{"user":{"login":"dependabot[bot]"}}`, nil, false},
+		{"a login that only resembles one", `{"user":{"login":"renovate"}}`, nil, true},
+		{"pull request closes it", "", human("platform", "Fixes #42"), false},
+		{"pull request is part of it", "", human("platform", "Part of #42."), false},
+		{"pull request in another repository names it", "", human("ksail", "Needs devantler-tech/platform#42 first"), false},
+		{"pull request links it", "", human("ksail", "See https://github.com/devantler-tech/platform/issues/42)."), false},
+		{"bare number in another repository", "", human("ksail", "Fixes #42"), true},
+		{"a longer number", "", human("platform", "Fixes #420 and devantler-tech/platform#421"), true},
+		{"the same number elsewhere", "", human("platform", "Fixes devantler-tech/ksail#42"), true},
+		{"a repository whose name only ends the same", "", human("ksail", "Fixes devantler-tech/my-platform#42"), true},
+		{"an issue that mentions it is not work on it", "", []string{`{"repo":"platform","number":77,"labels":[],"type":null,"body":"after #42"}`}, true},
+		// A dependency bot's pull request quotes upstream release notes.
+		{"a dependency bot's pull request", "", []string{pullRequest("platform", "renovate[bot]", "Fixes #42")}, true},
+		{"the other dependency bot's pull request", "", []string{pullRequest("platform", "dependabot[bot]", "Closes #42")}, true},
+		// The same text a person pasted is still not a reference of ours: the
+		// three shapes are the ones in open bot pull requests today.
+		{"an HTML entity, as Renovate writes one", `{"number":8203}`, human("platform", "[#&#8203;1403](https://redirect.github.com/o/r/issues/1403)"), true},
+		{"the text of an anchor, as Dependabot writes one", `{"repo":"ksail","number":32598}`, human("ksail", `<a href="https://redirect.github.com/helm/helm/issues/32598">#32598</a>`), true},
+		{"a hex colour", "", human("platform", "color: #42a5f5;"), true},
+		{"a number that runs into a word", "", human("platform", "see #42_old and #42x"), true},
+		// A pull request can name an issue precisely to say it is not doing it.
+		{"a Deferred line", "", human("platform", "Fixes #7\n\nDeferred: #42 — parked hardening"), true},
+		{"a Deferred list item", "", human("platform", "Fixes #7\n\n- deferred: #42 — later"), true},
+		{"a mention beside a Deferred line still counts", "", human("platform", "Part of #42\n\nDeferred: #43 — later"), false},
+		{"hidden in an HTML comment", "", human("platform", "<!-- Fixes #42 -->\nFixes #7"), true},
+		{"hidden in an HTML comment over several lines", "", human("platform", "<!--\nFixes #42\n-->\nFixes #7"), true},
+		{"after an HTML comment left open", "", human("platform", "Fixes #7\n<!-- Fixes #42"), true},
+		{"a mention after a closed HTML comment still counts", "", human("platform", "<!-- template -->\nFixes #42"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := parkedPayload(tc.overrides, tc.others...)
+			// The parked issue is the first record; an override may renumber it.
+			var records []struct {
+				Repo   string
+				Number int64
+			}
+			if err := json.Unmarshal([]byte(payload), &records); err != nil {
+				t.Fatal(err)
+			}
+			row := fmt.Sprintf("UNRECORDED %s#%d  ", records[0].Repo, records[0].Number)
+			code, out := runInput(t, payload)
+			if got := strings.Contains(out, row); got != tc.finding || (code == 1) != tc.finding {
+				t.Fatalf("finding=%v code=%d, want finding=%v; out:\n%s", got, code, tc.finding, out)
+			}
+		})
+	}
+}
+
+// An assignment is a claim that lapses after about two hours, not a start: an
+// assignee left on an issue would otherwise hide it for good. The row says the
+// issue is assigned, so the reader checks the lease instead of the guard
+// trusting it.
+func TestAnAssigneeDoesNotClearAnUnstartedIssue(t *testing.T) {
+	code, out := runInput(t, parkedPayload(`{"assignees":[{"login":"devantler"}]}`))
+	if code != 1 || !strings.Contains(out, "UNRECORDED platform#42  opened 2026-08-20, unstarted for 12 day(s) with no record  [assigned]\n") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+// "**Blocker:** none" says nothing blocks the issue. On an unstarted Security
+// issue that is the clearest case of parking without a reason, and it must not
+// be a way to clear the row without starting anything.
+func TestDeclaringNoBlockerDoesNotClearAnUnstartedIssue(t *testing.T) {
+	code, out := runInput(t, parkedPayload(`{"body":"**Blocker:** none — agent-actionable"}`))
+	if code != 1 || !strings.Contains(out, "UNRECORDED platform#42  opened 2026-08-20, unstarted for 12 day(s) while declaring no blocker\n") || strings.Contains(out, "UNLABELLED") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+	// Control: within the bound the same record is not reported, as #3142 requires.
+	if code, out := runInput(t, parkedPayload(`{"body":"**Blocker:** none — agent-actionable","created_at":"2026-08-30T00:00:00Z"}`)); code != 0 || strings.Contains(out, "platform#42") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+// A label without a record is already MISSING, and a record without a label is
+// already UNLABELLED: the new class is only the issue that declares no blocker.
+func TestUnrecordedIsDistinctFromARecordThatIsPresent(t *testing.T) {
+	for _, tc := range []struct{ name, overrides, want string }{
+		{"labelled without a record", `{"labels":[{"name":"blocked"}]}`, "MISSING    platform#42"},
+		{"record without the label", `{"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-30: open"}`, "UNLABELLED platform#42"},
+		{"labelled and conforming", `{"labels":[{"name":"blocked"}],"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-30: open"}`, "CONFORMS   platform#42"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, out := runInput(t, parkedPayload(tc.overrides))
+			if !strings.Contains(out, tc.want) || strings.Contains(out, "UNRECORDED") {
+				t.Fatalf("want %q and no UNRECORDED row; out:\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
+func TestUnrecordedBoundIsAFlag(t *testing.T) {
+	if code, out := runInput(t, parkedPayload(""), "--unrecorded-max-age-days", "12"); code != 0 || strings.Contains(out, "UNRECORDED") {
+		t.Fatalf("12 days open is within a 12-day bound: code=%d out:\n%s", code, out)
+	}
+	if code, out := runInput(t, parkedPayload(""), "--unrecorded-max-age-days", "11"); code != 1 || !strings.Contains(out, "more than 11 day(s)") {
+		t.Fatalf("12 days open is past an 11-day bound: code=%d out:\n%s", code, out)
+	}
+	for _, value := range []string{"", "-1", "7d", "1234567890"} {
+		var out, stderr bytes.Buffer
+		code := run([]string{"--unrecorded-max-age-days", value, "--input", "-"}, strings.NewReader(`[]`), &out, &stderr)
+		if code != 2 || !strings.Contains(stderr.String(), "--unrecorded-max-age-days") {
+			t.Fatalf("value %q: code=%d stderr=%q; want UNKNOWN naming the flag", value, code, stderr.String())
+		}
+	}
+}
+
+func TestUnrecordedFindingSurvivesQuietAndDigest(t *testing.T) {
+	code, out := runInput(t, parkedPayload(""), "--quiet")
+	if code != 1 || out != "UNRECORDED platform#42  opened 2026-08-20, unstarted for 12 day(s) with no record\n" {
+		t.Fatalf("quiet: code=%d out:\n%s", code, out)
+	}
+	code, out = runInput(t, parkedPayload(""), "--ask-digest")
+	if code != 1 || !strings.Contains(out, "1 finding(s) outside this digest") {
+		t.Fatalf("digest: code=%d out:\n%s", code, out)
+	}
+}
+
+// The verdict says how many Security issues it rests on. A type that was
+// renamed or switched off would otherwise read as "none unstarted".
+func TestTheVerdictCountsTheSecurityIssuesItRead(t *testing.T) {
+	fresh := parkedPayload(`{"created_at":"2026-08-30T00:00:00Z"}`, `{"repo":"platform","number":43,"labels":[],"type":{"name":"Bug"},"body":"plain"}`)
+	if code, out := runInput(t, fresh); code != 0 || !strings.Contains(out, "and none of the 1 open Security issue(s) read has gone unstarted for more than 7 day(s) with nothing on record.") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+	if code, out := runInput(t, `[{"repo":"platform","number":43,"labels":[],"type":{"name":"Bug"},"body":"plain"}]`); code != 0 || !strings.Contains(out, "none of the 0 open Security issue(s) read") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+	// Another class of finding does not hide the count.
+	withMissing := parkedPayload(`{"created_at":"2026-08-30T00:00:00Z"}`, `{"repo":"platform","number":44,"labels":[{"name":"blocked"}],"body":"no record"}`)
+	if code, out := runInput(t, withMissing); code != 1 || !strings.Contains(out, "MISSING    platform#44") || !strings.Contains(out, "none of the 1 open Security issue(s) read") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+// A pull request is read only for the issues it mentions. Judged as an issue
+// it would be MISSING under a blocked label and UNLABELLED under a record.
+func TestPullRequestsAreNeverJudgedAsIssues(t *testing.T) {
+	code, out := runInput(t, `[
+	 {"repo":"p","number":5,"pull_request":{},"labels":[{"name":"blocked"}],"body":"no record"},
+	 {"repo":"p","number":6,"pull_request":{},"labels":[],"body":"**Blocker:** owner/repo#7"},
+	 {"repo":"p","number":7,"pull_request":{},"labels":[],"type":{"name":"Security"},"created_at":"2026-01-01T00:00:00Z","body":"old"}]`)
+	if code != 0 || !strings.Contains(out, "all 0 open blocked-labelled issue(s)") || !strings.Contains(out, "none of the 0 open Security issue(s) read") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+// A fact the verdict rests on that cannot be read is neither a finding nor a
+// clean result: an age is not shown to be within the bound, a type is not
+// shown to be outside the population, and a missing blocker or sub-issue
+// summary is not zero.
+func TestUnreadableUnrecordedInputIsUnknown(t *testing.T) {
+	for _, tc := range []struct{ name, overrides, want string }{
+		{"no creation date", `{"created_at":""}`, "no readable created_at"},
+		{"impossible creation date", `{"created_at":"2026-02-30T00:00:00Z"}`, "no readable created_at"},
+		{"created after today", `{"created_at":"2026-09-02T00:00:00Z"}`, "no readable created_at on or before today"},
+		{"type is not an object", `{"type":"Security"}`, "unreadable type"},
+		{"type without a name", `{"type":{"id":7}}`, "unreadable type"},
+		{"no assignees", `{"assignees":null}`, "carries no assignees"},
+		{"no native-blocker summary", `{"issue_dependencies_summary":null}`, "carries no issue_dependencies_summary.blocked_by"},
+		{"native-blocker summary without its count", `{"issue_dependencies_summary":{"total_blocked_by":0}}`, "carries no issue_dependencies_summary.blocked_by"},
+		{"no sub-issue summary", `{"sub_issues_summary":null}`, "carries no sub_issues_summary"},
+		{"sub-issue summary without its completed count", `{"sub_issues_summary":{"total":2}}`, "carries no sub_issues_summary"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out := runInput(t, parkedPayload(tc.overrides))
+			if code != 2 || !strings.Contains(out, tc.want) || !strings.Contains(out, "UNKNOWN") || strings.Contains(out, "all 0 open") {
+				t.Fatalf("code=%d, want UNKNOWN naming %q; out:\n%s", code, tc.want, out)
+			}
+		})
+	}
+	// Control: the same unreadable facts on an issue outside the population are
+	// not consulted, so a record of another type needs none of them.
+	if code, out := runInput(t, parkedPayload(`{"created_at":"","type":{"name":"Bug"},"assignees":null,"issue_dependencies_summary":null,"sub_issues_summary":null}`)); code != 0 {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+// An unlabelled issue that declares no blocker is judged by its type. Without
+// the key the payload cannot say whether it is a Security issue, and reading
+// that as "it is not" would print a clean result for a question nobody asked.
+func TestAnIssueThatNeedsItsTypeMustCarryIt(t *testing.T) {
+	for _, body := range []string{"plain work", "**Blocker:** none — agent-actionable"} {
+		record, err := json.Marshal(map[string]any{"repo": "p", "number": 1, "labels": []any{}, "body": body})
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, out := runInput(t, "["+string(record)+"]")
+		if code != 2 || !strings.Contains(out, "p#1 carries no type") || strings.Contains(out, "all 0 open") {
+			t.Fatalf("body %q: code=%d out:\n%s", body, code, out)
+		}
+	}
+	// Controls: null is an answer, and a record that is judged without its type
+	// needs none -- a labelled one, the earlier payload shape with no labels
+	// array, and one that declares a blocker.
+	for _, payload := range []string{
+		`[{"repo":"p","number":1,"labels":[],"type":null,"body":"plain work"}]`,
+		`[{"repo":"p","number":1,"labels":[{"name":"blocked"}],"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-30: open"}]`,
+		`[{"repo":"p","number":1,"body":"**Blocker:** owner/repo#7 | upstream | last-verified 2026-08-30: open"}]`,
+	} {
+		if code, out := runInput(t, payload); code != 0 {
+			t.Fatalf("code=%d for %s; out:\n%s", code, payload, out)
+		}
+	}
+	if code, out := runInput(t, `[{"repo":"p","number":1,"labels":[],"body":"**Blocker:** owner/repo#7"}]`); code != 1 || !strings.Contains(out, "UNLABELLED p#1") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+// forgeIssue is one item of the issue read, with every key the forge sends
+// that the guard reads. Each %s takes one more key, or drops one named in it.
+const forgeIssue = `{"repository_url":"https://api.github.com/repos/o/platform","number":42,"labels":[],"type":{"name":"Security"},"created_at":"2026-08-20T10:00:00Z","assignees":[],"issue_dependencies_summary":{"blocked_by":0},"sub_issues_summary":{"total":0,"completed":0},"body":"plain"}`
+
+func searchPage(items ...string) string {
+	return fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,"items":[%s]}`, len(items), strings.Join(items, ","))
+}
+
+// without drops one top-level key from a JSON object.
+func without(t *testing.T, object, key string) string {
+	t.Helper()
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(object), &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := fields[key]; !present {
+		t.Fatalf("%s has no %q to drop", object, key)
+	}
+	delete(fields, key)
+	out, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// The forge sends type, assignees and both summaries on every issue. A page
+// without one of them is a changed payload: read as empty it would turn every
+// issue into "untyped", or into one with no blocker and no sub-issue.
+func TestSearchItemWithoutAFactTheVerdictNeedsIsUnknown(t *testing.T) {
+	if got, err := searchIssues([]byte(searchPage(forgeIssue)), true); err != nil || len(got) != 1 {
+		t.Fatalf("complete item: got %d records, err=%v", len(got), err)
+	}
+	for _, key := range []string{"type", "assignees", "issue_dependencies_summary", "sub_issues_summary"} {
+		item := without(t, forgeIssue, key)
+		if _, err := searchIssues([]byte(searchPage(item)), true); err == nil || !strings.Contains(err.Error(), "search item without "+key) {
+			t.Errorf("an issue without %s read as complete: err=%v", key, err)
+		}
+		// A pull request carries none of them to read, so its page needs none.
+		if got, err := searchIssues([]byte(searchPage(item)), false); err != nil || len(got) != 1 {
+			t.Errorf("pull-request page without %s: got %d records, err=%v", key, len(got), err)
+		}
+	}
+	// null is the forge's answer for an untyped issue, not a missing key.
+	untyped := strings.Replace(forgeIssue, `"type":{"name":"Security"}`, `"type":null`, 1)
+	if got, err := searchIssues([]byte(searchPage(untyped)), true); err != nil || len(got) != 1 {
+		t.Fatalf("untyped item: got %d records, err=%v", len(got), err)
+	}
+}
+
+// serveForge answers the two org reads from fixed pages. A read named in
+// failing returns its COMPLETE page together with an error, as gh does when it
+// prints a page and then exits non-zero: the guard must refuse it for the
+// error, not because the output happened to be empty.
+func serveForge(t *testing.T, issuePage, pullPage string, failing string) {
+	t.Helper()
+	original := forgeRead
+	t.Cleanup(func() { forgeRead = original })
+	forgeRead = func(endpoint string) ([]byte, error) {
+		var page string
+		switch endpoint {
+		case searchEndpoint("o"):
+			page = issuePage
+		case pullEndpoint("o"):
+			page = pullPage
+		default:
+			t.Errorf("unexpected read %q", endpoint)
+			return nil, errors.New("unexpected read")
+		}
+		if endpoint == failing {
+			return []byte(page), errors.New("exit status 1")
+		}
+		return []byte(page), nil
+	}
+}
+
+func runOrg(t *testing.T) (int, string) {
+	t.Helper()
+	var out, stderr bytes.Buffer
+	code := run([]string{"--org", "o", "--today", "2026-09-01"}, strings.NewReader(""), &out, &stderr)
+	return code, out.String() + stderr.String()
+}
+
+func forgePull(repo, author, body string) string {
+	record, err := json.Marshal(map[string]any{
+		"repository_url": "https://api.github.com/repos/o/" + repo, "number": 900, "labels": []any{},
+		"pull_request": map[string]any{}, "user": map[string]string{"login": author}, "body": body,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(record)
+}
+
+// The org read is two reads. Either one failing, or coming back incomplete,
+// must be UNKNOWN: without the pull requests every in-flight issue reads as
+// unstarted, and without the issues there is nothing to judge.
+func TestOrgReadFailsClosedOnEitherRead(t *testing.T) {
+	issues := searchPage(forgeIssue)
+	pulls := searchPage(forgePull("platform", "devantler", "Fixes #42"))
+	t.Run("both reads complete, and the pull request clears the issue", func(t *testing.T) {
+		serveForge(t, issues, pulls, "")
+		if code, out := runOrg(t); code != 0 || strings.Contains(out, "UNRECORDED") || !strings.Contains(out, "none of the 1 open Security issue(s) read") {
+			t.Fatalf("code=%d out:\n%s", code, out)
+		}
+	})
+	t.Run("without that pull request the issue is a finding", func(t *testing.T) {
+		serveForge(t, issues, searchPage(), "")
+		if code, out := runOrg(t); code != 1 || !strings.Contains(out, "UNRECORDED platform#42") {
+			t.Fatalf("code=%d out:\n%s", code, out)
+		}
+	})
+	// Each failing read hands back a complete page, so ignoring the error would
+	// print a verdict: a clean one above, a finding below.
+	for name, failing := range map[string]string{"issue read fails": searchEndpoint("o"), "pull-request read fails": pullEndpoint("o")} {
+		t.Run(name, func(t *testing.T) {
+			serveForge(t, issues, pulls, failing)
+			if code, out := runOrg(t); code != 2 || !strings.Contains(out, "forge read failed -- UNKNOWN") || strings.Contains(out, "open Security issue(s) read") {
+				t.Fatalf("code=%d out:\n%s", code, out)
+			}
+		})
+	}
+	t.Run("pull-request read is incomplete", func(t *testing.T) {
+		serveForge(t, issues, `{"total_count":2,"incomplete_results":false,"items":[]}`, "")
+		if code, out := runOrg(t); code != 2 || !strings.Contains(out, "UNKNOWN") {
+			t.Fatalf("code=%d out:\n%s", code, out)
+		}
+	})
+}
+
+// Under --org a qualified reference must name that org. Another owner's
+// repository of the same name is a different repository, and its issue 42 is
+// not ours.
+func TestOrgReadPinsTheOwnerOfAQualifiedReference(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		finding    bool
+	}{
+		{"the org's own repository", "Needs o/platform#42 first", false},
+		{"the org's own repository, in another case", "Needs O/Platform#42 first", false},
+		{"the org's own repository, as a link", "See https://github.com/o/platform/issues/42", false},
+		{"another owner's repository of the same name", "Needs fleetdm/platform#42 first", true},
+		{"another owner's repository, as a link", "See https://github.com/fleetdm/platform/issues/42", true},
+		{"an owner whose name only ends the same", "Needs not-o/platform#42 first", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			serveForge(t, searchPage(forgeIssue), searchPage(forgePull("ksail", "devantler", tc.body)), "")
+			code, out := runOrg(t)
+			if got := strings.Contains(out, "UNRECORDED platform#42"); got != tc.finding || (code == 1) != tc.finding {
+				t.Fatalf("finding=%v code=%d, want finding=%v; out:\n%s", got, code, tc.finding, out)
+			}
+		})
+	}
+}
+
+func TestPullRequestReadCoversEveryOpenPullRequest(t *testing.T) {
+	endpoint := pullEndpoint("o")
+	for _, want := range []string{"org:o", "is:pr", "state:open", "archived:false", "per_page=100"} {
+		if !strings.Contains(endpoint, want) {
+			t.Errorf("endpoint lost %q: %s", want, endpoint)
+		}
+	}
+	if strings.Contains(endpoint, "draft") || strings.Contains(endpoint, "label") {
+		t.Errorf("endpoint filters pull requests: %s", endpoint)
 	}
 }

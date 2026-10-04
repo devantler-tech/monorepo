@@ -295,7 +295,17 @@ governs the issue work that follows.) Two rules enforce that:
    its channel and date to the actual delivery. The check reads every open issue, not only labelled
    ones, so an `UNLABELLED` row is an issue whose `**Blocker:**` line declares a blocker while it
    carries no `blocked` label: re-verify that blocker, then label it with a conforming line or
-   unblock it (`**Blocker:** none` declares no blocker and is never reported). Exit `1` means findings, `2` means
+   unblock it (`**Blocker:** none` declares no blocker and is never reported as `UNLABELLED`). An
+   `UNRECORDED` row is an open `type:Security` issue that has gone unstarted for more than 7 days
+   (`--unrecorded-max-age-days`) with nothing on record to explain it: no open sub-issue and no
+   open pull request mentioning it, and no `blocked` label, declared blocker or open native
+   blocker (monorepo#3415). An assignee is not a start — a claim lapses after ~2h (see *Claim
+   protocol*), so check the lease of an `[assigned]` row — and `**Blocker:** none` is not a reason.
+   The row prescribes one thing, which no skip clause states by itself: within that bound a rung-2
+   issue is either started or carries its reason. So apply the completion check and start it, or
+   record what really blocks it under (b) or (g). An issue that is only queued behind other
+   Security work or behind rungs 0–1 has nothing truthful to record: leave the row standing until
+   a run reaches it, and never write a blocker to clear it. Exit `1` means findings, `2` means
    UNKNOWN — a failed or timed-out read, never a clean sweep.
    ⚠️ **Verify before repairing.** Adding a well-formed line to an issue whose dependency has already
    shipped makes the skip look *more* legitimate on every future tick, which is worse than the
