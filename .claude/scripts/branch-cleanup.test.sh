@@ -53,6 +53,11 @@ if [[ -n "${GH_FAIL_STATE:-}" && "$state" == "$GH_FAIL_STATE" && -z "$head" ]]; 
   printf '%s\n' "${GH_FAIL_STDERR:-gh: unknown failure}" >&2
   exit 1
 fi
+# Per-branch recheck failure (monorepo#3293): the query dies and prints nothing.
+if [[ -n "${GH_FAIL_HEAD_RECHECK:-}" && "$state" == "open" && -n "$head" ]]; then
+  echo "gh: transport failure" >&2
+  exit 1
+fi
 if [[ "$state" == "open" && -n "$head" ]]; then
   # Per-branch open recheck: length 0 unless head is listed in OPEN_HEADS.
   if grep -Fxq "$head" "${OPEN_HEADS_FILE:-/dev/null}" 2>/dev/null; then
@@ -684,6 +689,15 @@ mk93() { # <branch> <push|local> — a branch carrying one commit of its own; pr
   git -C "$work93" rev-parse "$1"
 }
 verdict93() { sed -n '2p' <<<"$out"; }
+# The headline count must equal the sum of its reasons, or a reason could be printed without
+# being counted. Prints "yes" when they agree.
+sums93() {
+  local line total reasons
+  line="$(verdict93)"
+  total="$(sed -E 's/^[^ ]+ RETAINED ([0-9]+):.*/\1/' <<<"$line")"
+  reasons="$(sed -E 's/^[^|]*\|//; s/\| in use:.*$//' <<<"$line" | grep -oE '[0-9]+ ' | awk '{s+=$1} END{print s+0}')"
+  [[ "$total" =~ ^[0-9]+$ && "$total" == "$reasons" ]] && echo yes || echo no
+}
 
 # Only an open PR's head exists: everything kept is in use, so the sweep has converged.
 mk93 "claude/open-pr-3293" push >/dev/null
@@ -705,7 +719,7 @@ git -C "$work93" checkout -q main
 printf '%s\tMERGED\t%s\n' "claude/moved-since-pr-3293" "0000000000000000000000000000000000000000" >"$PR_EVIDENCE_FILE"
 refs_before="$(git -C "$work93" for-each-ref; git -C "$bare93" for-each-ref)"
 out="$("$helper" "$work93" "monorepo" "$tmp/m-3293b" dry-run 2>/dev/null)" && rc=0 || rc=$?
-want93="monorepo RETAINED 6: not in use, yet no rule permits deleting them | local: 2 session-shaped with work, 1 unpushed | remote: 1 session-shaped, 1 without a PR, 1 moved since their PR, 0 unreadable, 0 whose delete was rejected | in use: local 1, remote 1"
+want93="monorepo RETAINED 6: not in use, yet no rule permits deleting them | local: 2 session-shaped with work, 1 unpushed, 0 unverified, 0 whose delete was rejected | remote: 1 session-shaped, 1 without a PR, 1 moved since their PR, 0 unverified, 0 whose delete was rejected | in use: local 1, remote 1"
 report "branches no rule may delete read as RETAINED, counted by reason (#3293)" \
   "$([[ "$(verdict93)" == "$want93" ]] && echo yes || echo no)" "got=$(verdict93)"
 report "a RETAINED verdict leaves the exit status at 0 (#3293)" \
@@ -722,6 +736,45 @@ out="$("$helper" "$work93" "monorepo" "$tmp/m-3293c" dry-run 2>/dev/null)" && rc
 report "control: matching evidence turns a retained branch into a deletion (#3293)" \
   "$([[ "$(verdict93)" == *"RETAINED 5:"*"0 moved since their PR"* ]] && sed -n '1p' <<<"$out" | grep -qE 'remote: -1 ' && echo yes || echo no)" \
   "out=$out"
+# The verdict in APPLY mode, where two more keeps exist. Both leave a spent branch behind,
+# so neither may read as "in use": a sweep whose every open-PR recheck died would otherwise
+# report a finished run.
+mk93 "claude/recheck-fails-3293" push >/dev/null
+rej_sha=$(git -C "$work93" rev-parse "claude/recheck-fails-3293")
+git -C "$work93" checkout -q main
+printf '%s\n' "claude/open-pr-3293" >"$OPEN_HEADS_FILE"
+{
+  printf '%s\tMERGED\t%s\n' "claude/moved-since-pr-3293" "$moved_sha"
+  printf '%s\tMERGED\t%s\n' "claude/recheck-fails-3293" "$rej_sha"
+} >"$PR_EVIDENCE_FILE"
+: >"$tmp/m-3293d"
+out="$(GH_FAIL_HEAD_RECHECK=1 "$helper" "$work93" "monorepo" "$tmp/m-3293d" apply 2>/dev/null)" && rc=0 || rc=$?
+report "apply: a failed open-PR recheck is unverified, never in use (#3293)" \
+  "$([[ "$(verdict93)" == *"| remote: 1 session-shaped, 1 without a PR, 0 moved since their PR, 2 unverified, 0 whose delete was rejected | in use: local 1, remote 1" ]] && echo yes || echo no)" \
+  "rc=$rc got=$(verdict93)"
+report "apply: the unverified branches are still on the remote (#3293)" \
+  "$(git -C "$bare93" show-ref --verify --quiet "refs/heads/claude/recheck-fails-3293" && git -C "$bare93" show-ref --verify --quiet "refs/heads/claude/moved-since-pr-3293" && echo yes || echo no)"
+
+# The remote refuses the delete. The branch stays, and is counted as a rejected delete.
+cat >"$bare93/hooks/pre-receive" <<'HOOK'
+#!/usr/bin/env bash
+exit 1
+HOOK
+chmod +x "$bare93/hooks/pre-receive"
+out="$("$helper" "$work93" "monorepo" "$tmp/m-3293d" apply 2>/dev/null)" && rc=0 || rc=$?
+report "apply: a delete the remote rejects is counted as rejected (#3293)" \
+  "$([[ "$(verdict93)" == *"0 unverified, 2 whose delete was rejected | in use: local 1, remote 1" ]] && echo yes || echo no)" \
+  "rc=$rc got=$(verdict93)"
+report "apply: the retained total is the sum of its reasons, rejected deletes included (#3293)" \
+  "$(sums93)" "got=$(verdict93)"
+
+# CONTROL — with the query answering and the remote accepting, the same two branches are
+# deleted and leave the retained count, so the two cases above measured the failures.
+rm -f "$bare93/hooks/pre-receive"
+out="$("$helper" "$work93" "monorepo" "$tmp/m-3293d" apply 2>/dev/null)" && rc=0 || rc=$?
+report "control: once the checks answer, both branches are deleted (#3293)" \
+  "$([[ "$(verdict93)" == *"0 unverified, 0 whose delete was rejected | in use: local 1, remote 1" ]] && ! git -C "$bare93" show-ref --verify --quiet "refs/heads/claude/recheck-fails-3293" && echo yes || echo no)" \
+  "rc=$rc out=$out"
 : >"$OPEN_HEADS_FILE"
 : >"$PR_EVIDENCE_FILE"
 

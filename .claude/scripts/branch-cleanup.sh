@@ -48,8 +48,10 @@
 #        RETAINED n n branches are not in use, yet no rule permits deleting them, by reason:
 #                   a session-shaped branch (local: only one that carries work), a local branch
 #                   with commits on no remote and no matching PR, a remote branch that never had
-#                   a PR, one that moved since its PR, one whose ref could not be read, or one whose
-#                   delete the remote rejected. These
+#                   a PR, one that moved since its PR, one a check could not verify (an unreadable
+#                   ref, a failed worktree or open-PR query), or one whose delete was rejected.
+#                   A local branch that was unreadable or whose delete was rejected counts here
+#                   although line 1 never counted it as a keep. These
 #                   are kept ON PURPOSE and are never deleted here; the line exists so a count
 #                   that only grows is visible instead of reading as "nothing to do".
 #      The exit status is unchanged by either verdict.
@@ -600,7 +602,8 @@ l_del=0; r_del=0; l_keep=0; r_keep=0; candidates=0; r_rej=0
 # Why each kept branch was kept (monorepo#3293). `keep` alone cannot tell a branch that is in
 # use from one that is spent yet may not be deleted, so a sweep that can never converge printed
 # the same `-0` as one with nothing to do. These counters change no decision.
-l_inuse=0; l_session=0; l_unpushed=0; r_inuse=0; r_session=0; r_nopr=0; r_moved=0; r_unread=0
+l_inuse=0; l_session=0; l_unpushed=0; l_unver=0; l_rej=0
+r_inuse=0; r_session=0; r_nopr=0; r_moved=0; r_unver=0
 
 # --- LOCAL (claude only) --------------------------------------------------
 if [ "$NAMESPACE" = "claude" ]; then
@@ -608,7 +611,7 @@ if [ "$NAMESPACE" = "claude" ]; then
     [ -z "$b" ] && continue
     if is_kept "$b"; then l_inuse=$((l_inuse+1)); l_keep=$((l_keep+1)); continue; fi
     if is_interactive_slug "$b" && ! holds_no_work "$b"; then l_session=$((l_session+1)); l_keep=$((l_keep+1)); continue; fi
-    sha=$(git rev-parse "$b" 2>/dev/null) || continue
+    sha=$(git rev-parse "$b" 2>/dev/null) || { l_unver=$((l_unver+1)); continue; }
     # Never lose unpushed work: delete only when the tip is reachable from SOME
     # remote ref, OR a MERGED/CLOSED PR accounts for this exact sha (a
     # squash-merged branch whose remote ref was already pruned is reachable
@@ -633,7 +636,7 @@ if [ "$NAMESPACE" = "claude" ]; then
       # leaving that worktree on a dangling/unborn HEAD.
       if ! wt_list=$(git worktree list --porcelain 2>/dev/null); then
         echo "$SLUG: keep '$b' — worktree enumeration failed; refusing to delete (fail-closed)" >&2
-        l_keep=$((l_keep+1)); errors=$((errors+1)); continue
+        l_unver=$((l_unver+1)); l_keep=$((l_keep+1)); errors=$((errors+1)); continue
       fi
       # Feed grep directly instead of through a pipe. This script runs under
       # `pipefail`, and `grep -Fxq` exits at the first match — so with a pipe the
@@ -650,7 +653,7 @@ if [ "$NAMESPACE" = "claude" ]; then
       # CAS delete: update-ref -d with the expected old value refuses if a
       # concurrent session re-pointed the ref after evidence-gathering.
       if git update-ref -d "refs/heads/$b" "$sha" >/dev/null 2>&1; then l_del=$((l_del+1));
-      else echo "$SLUG: WARN — local delete of '$b' rejected (ref moved) or failed" >&2; errors=$((errors+1)); fi
+      else echo "$SLUG: WARN — local delete of '$b' rejected (ref moved) or failed" >&2; l_rej=$((l_rej+1)); errors=$((errors+1)); fi
     else l_del=$((l_del+1)); fi
   done < <(git branch --list "${PREFIX}/*" --format='%(refname:short)')
 fi
@@ -666,7 +669,7 @@ while IFS= read -r rb; do
   [ -z "$b" ] && continue
   if re_kept "$b"; then r_inuse=$((r_inuse+1)); r_keep=$((r_keep+1)); continue; fi
   if is_interactive_slug "$b"; then r_session=$((r_session+1)); r_keep=$((r_keep+1)); continue; fi
-  sha=$(git rev-parse "$rb" 2>/dev/null) || { r_unread=$((r_unread+1)); r_keep=$((r_keep+1)); continue; }
+  sha=$(git rev-parse "$rb" 2>/dev/null) || { r_unver=$((r_unver+1)); r_keep=$((r_keep+1)); continue; }
   ev=$(pr_evidence "$b"); st="${ev%%$'\t'*}"; ev_sha="${ev#*$'\t'}"
   if [ "$st" != "MERGED" ] && [ "$st" != "CLOSED" ]; then
     # No PR evidence. Commit age is NOT push age — a recent push of old commits
@@ -692,7 +695,10 @@ while IFS= read -r rb; do
       --json number --jq 'length' 2>/dev/null)
     if [ -z "$open_now" ] || [ "$open_now" != "0" ]; then
       echo "$SLUG: keep '$b' — open-PR recheck non-empty or failed" >&2
-      r_inuse=$((r_inuse+1)); r_keep=$((r_keep+1)); continue
+      # A non-zero answer is an open PR. An EMPTY one is a failed query: the branch is kept,
+      # but nothing showed it is in use, so it must not read as a finished sweep.
+      if [ -n "$open_now" ]; then r_inuse=$((r_inuse+1)); else r_unver=$((r_unver+1)); fi
+      r_keep=$((r_keep+1)); continue
     fi
     # CAS delete: rejected if the remote ref moved off the evidence SHA.
     # $REMOTE_ENDPOINT is "origin" unless the fetch had to fall back, in which case
@@ -714,10 +720,10 @@ printf '%-24s ns=%-6s local: -%-4s keep %-3s | remote: -%-3s keep %-3s rej %-2s 
 # branch is either IN USE (an open PR head, a worktree checkout, the default branch) or RETAINED:
 # spent-looking, but every deletion rule refused it. Only the second kind can accumulate
 # forever, and one line of counts hid it for months (monorepo#3293).
-retained=$((l_session + l_unpushed + r_session + r_nopr + r_moved + r_unread + r_rej))
+retained=$((l_session + l_unpushed + l_unver + l_rej + r_session + r_nopr + r_moved + r_unver + r_rej))
 if [ "$retained" -gt 0 ]; then
-  printf '%s RETAINED %s: not in use, yet no rule permits deleting them | local: %s session-shaped with work, %s unpushed | remote: %s session-shaped, %s without a PR, %s moved since their PR, %s unreadable, %s whose delete was rejected | in use: local %s, remote %s\n' \
-    "$SLUG" "$retained" "$l_session" "$l_unpushed" "$r_session" "$r_nopr" "$r_moved" "$r_unread" "$r_rej" "$l_inuse" "$r_inuse"
+  printf '%s RETAINED %s: not in use, yet no rule permits deleting them | local: %s session-shaped with work, %s unpushed, %s unverified, %s whose delete was rejected | remote: %s session-shaped, %s without a PR, %s moved since their PR, %s unverified, %s whose delete was rejected | in use: local %s, remote %s\n' \
+    "$SLUG" "$retained" "$l_session" "$l_unpushed" "$l_unver" "$l_rej" "$r_session" "$r_nopr" "$r_moved" "$r_unver" "$r_rej" "$l_inuse" "$r_inuse"
 else
   printf '%s CONVERGED: every kept branch is in use | local %s, remote %s\n' "$SLUG" "$l_inuse" "$r_inuse"
 fi
