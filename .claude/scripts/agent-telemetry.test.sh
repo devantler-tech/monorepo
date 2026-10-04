@@ -8220,6 +8220,27 @@ else
   bad "in a call of several lines plain prose is still prose; a joined line and escaped prose keep counting" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
+# ANSI-C quoting is not read by the walk: `$'\''` is a complete word holding one quote, but the
+# walk takes its last quote as an opener and reads the rest of the line as a string. With an
+# escaped "…" on the same line, the commands after it — which really run — must keep counting,
+# as they do on the old rule.
+MK_OUT=$({
+  mk_cmd a1 'gh pr checkout 30'
+  # \047 is a single quote: the commands are  printf "done\n" $'\''; make build; printf \'
+  # and  echo "a\"b" $'\'' ; make check ; echo \'
+  mk_cmd a2 "$(printf 'printf "done\\n" $\047\\\047\047; make build; printf \\\047')"
+  mk_cmd a3 "$(printf 'echo "a\\"b" $\047\\\047\047 ; make check ; echo \\\047')"
+  mk_cmd a4 'npm ci'
+} | mk_run makeansic)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE '^ +1 printf "done' <<<"$MK_OUT" \
+   && grep -qE '^ +1 echo "a' <<<"$MK_OUT" \
+   && ! grep -qF '[prose?]' <<<"$MK_OUT"; then
+  ok "a line holding ANSI-C quoting beside an escaped string keeps counting its real make"
+else
+  bad "a line holding ANSI-C quoting beside an escaped string keeps counting its real make" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
 
 # walk ~ section ~ literal to break ~ its mutation ~ line proving the walk read something
 while IFS='~' read -r wx_walk wx_sec wx_old wx_new wx_signal; do

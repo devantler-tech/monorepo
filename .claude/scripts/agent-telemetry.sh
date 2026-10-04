@@ -4710,7 +4710,11 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
               # counting as evidence that something runs, as it always did. A
               # line joined to the one before it by a backslash is never prose:
               # it is an argument of that command, whatever it looks like alone.
-              function layered(i) { return inexact[of[i]] || lines[of[i]] > 1 }
+              # The walk does not read ANSI-C quoting ($'…'), where a backslash
+              # escapes a quote: after one, its idea of what is quoted can be off
+              # for the rest of the line, so a line that holds one keeps the old
+              # rule as well.
+              function layered(i) { return inexact[of[i]] || lines[of[i]] > 1 || index(line[i], "$" sq) > 0 }
               END {
                 for (i = 1; i <= n; i++) {
                   if (line[i] ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
