@@ -772,7 +772,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    1–2 seconds before its own trigger and closed zero races in 75 elections;
    persist a completed no-gate outcome, or an authenticated
    `review-progress-head` marker after evidenced silent expiry, so the next run advances rather than
-   repeats the provider; calculate that cursor as the furthest completed lane by provider order,
+   repeats the provider — but only after `.claude/scripts/review-no-gate-guard.sh` exits `0` for that
+   head and provider: a refusal answers the request that drew it, never the head, so a review the
+   lane already published there governs and no no-gate is recorded (#3231); calculate that cursor as the furthest completed lane by provider order,
    never by latest response time;
    findings require a fix-or-refute and restart from CodeRabbit, with a push only
    when files changed; after authenticated resolution, the first successful provider in that
