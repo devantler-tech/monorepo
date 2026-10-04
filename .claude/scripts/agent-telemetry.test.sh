@@ -1233,7 +1233,10 @@ printf '%s\n' '{"type":"response_item","payload":{"type":"function_call_output",
 subst "$FIX/cxonly/sessions/r.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
-nocheck "Codex-only window is not skipped as empty" "$OUT" "no sessions in window — neither"
+# The Claude scope is empty here and says so; the Codex scope has a session and must not.
+cxonly_codex_block=$(awk 'seen { print } /instance scope: codex transcripts/ { seen = 1 }' <<<"$OUT")
+check "Codex-only window reports its Codex scope" "$OUT" "instance scope: codex transcripts"
+nocheck "Codex-only window is not skipped as empty" "$cxonly_codex_block" "no sessions in window"
 if grep -qF 'aws-access-key-id' <<<"$OUT"; then
   ok "Codex-only credential leak is still caught"
 else bad "Codex-only credential leak is still caught" "missed"; fi
@@ -3341,6 +3344,48 @@ if [ "$empty_complete_rc" -eq 2 ] \
   ok "a completed empty full-report safety worker is UNKNOWN"
 else
   bad "a completed empty full-report safety worker is UNKNOWN" "rc=$empty_complete_rc"
+fi
+
+# Each runtime scope is bounded on its own (#3814). A scope that cannot finish
+# is UNKNOWN by name and still fails the run, while the scope that did finish
+# keeps its reading. Before this, one oversized corpus discarded every reading.
+mkdir -p "$FIX/safety-scope-shim"
+cat > "$FIX/safety-scope-shim/grep" <<'EOF_SHIM'
+#!/usr/bin/env bash
+if [ "${AGENT_TELEMETRY_SAFETY_WORKER:-0}" = 1 ] && [ "${AGENT_TELEMETRY_SAFETY_SCOPE:-}" = codex ]; then
+  sleep 60
+fi
+exec "$SAFETY_TEST_GREP" "$@"
+EOF_SHIM
+chmod +x "$FIX/safety-scope-shim/grep"
+SCOPE_SPLIT=$(PATH="$FIX/safety-scope-shim:$PATH" SAFETY_TEST_GREP="$candidate_real_grep" \
+  CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 10 2>&1)
+scope_split_rc=$?
+if [ "$scope_split_rc" -eq 2 ]; then
+  ok "one timed-out safety scope still fails the run"
+else
+  bad "one timed-out safety scope still fails the run" "rc=$scope_split_rc"
+fi
+scope_claude_block=$(awk '/instance scope: codex transcripts/ { exit } { print }' <<<"$SCOPE_SPLIT")
+scope_codex_block=$(awk 'seen { print } /instance scope: codex transcripts/ { seen = 1 }' <<<"$SCOPE_SPLIT")
+check "the scope that finished keeps its reading" "$scope_claude_block" "instance scope: claude transcripts."
+check "the finished scope reports its injection table" "$scope_claude_block" "TOTAL occurrences:"
+nocheck "the finished scope is not reported UNKNOWN" "$scope_claude_block" "UNKNOWN:"
+check "the timed-out scope is UNKNOWN by name" "$scope_codex_block" "UNKNOWN: safety scan exceeded the 10s time limit."
+nocheck "the timed-out scope prints no table" "$scope_codex_block" "TOTAL occurrences:"
+
+# Negative control: the same corpus with no stalled scope reports both scopes,
+# one banner and one footer, so the split cannot duplicate or drop the frame.
+SCOPE_BOTH=$(CLAUDE_PROJECTS_DIR="$FIX/credcandidate" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --safety-timeout-seconds 60 2>&1)
+scope_both_shape="banner=$(grep -c ' AGENT TELEMETRY — window' <<<"$SCOPE_BOTH") footer=$(grep -c ' END TELEMETRY' <<<"$SCOPE_BOTH") sections=$(grep -c '── SAFETY (guardrails)' <<<"$SCOPE_BOTH") claude=$(grep -c 'instance scope: claude transcripts' <<<"$SCOPE_BOTH") codex=$(grep -c 'instance scope: codex transcripts' <<<"$SCOPE_BOTH") unknown=$(grep -c 'UNKNOWN: ' <<<"$SCOPE_BOTH")"
+if [ "$scope_both_shape" = "banner=1 footer=1 sections=2 claude=1 codex=1 unknown=0" ]; then
+  ok "two finished safety scopes share one banner and one footer"
+else
+  bad "two finished safety scopes share one banner and one footer" "$scope_both_shape"
 fi
 
 # Interrupts must come from the structured flag, not prose quoting it.
