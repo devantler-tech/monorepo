@@ -1,0 +1,124 @@
+<!-- This is an auto-generated reply by CodeRabbit -->
+> [!TIP]
+> For best results, initiate chat on the files or code changes.
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+printf '%s\n' '=== Pull request metadata and current head ==='
+gh pr view 3732 --repo devantler-tech/platform \
+  --json number,baseRefName,headRefName,headRefOid,files,commits \
+  --jq '{number,baseRefName,headRefName,headRefOid,files:[.files[].path],commits:[.commits[]|{oid,messageHeadline}]}'
+
+printf '%s\n' '=== Merge base and changed files ==='
+base="$(git merge-base HEAD origin/main)"
+printf 'base=%s\nhead=%s\n' "$base" "$(git rev-parse HEAD)"
+git diff --name-status "$base" HEAD
+git diff --check "$base" HEAD
+
+printf '%s\n' '=== Full probe implementation map ==='
+ast-grep outline scripts/probe-image-signature-enforcement.sh --items all || true
+printf '%s\n' '=== Full probe implementation ==='
+nl -ba scripts/probe-image-signature-enforcement.sh | sed -n '1,760p'
+
+printf '%s\n' '=== Full behavioral test implementation ==='
+ast-grep outline scripts/tests/test-probe-image-signature-enforcement.sh --items all || true
+nl -ba scripts/tests/test-probe-image-signature-enforcement.sh | sed -n '1,1100p'
+
+printf '%s\n' '=== Current delta since prior reviewed head ==='
+git diff --unified=120 aa5190d2b43b33c96b28e3aef97f26465ccb81d0 HEAD -- \
+  scripts/probe-image-signature-enforcement.sh \
+  scripts/tests/test-probe-image-signature-enforcement.sh \
+  .github/workflows/probe-image-signature-enforcement.yaml \
+  .github/workflows/ci.yaml
+
+printf '%s\n' '=== Dedicated workflow ==='
+workflow="$(fd -a -t f 'probe-image-signature-enforcement.yaml' .github/workflows | head -n1 || true)"
+if [[ -n "$workflow" ]]; then
+  nl -ba "$workflow"
+fi
+
+printf '%s\n' '=== Live rules and all relevant image/rule consumers ==='
+rule_file="$(fd -a -t f 'verify-first-party-images.yaml' talos | head -n1 || true)"
+if [[ -n "$rule_file" ]]; then
+  nl -ba "$rule_file"
+fi
+rg -n -C 8 --glob '*.sh' --glob '*.yaml' --glob '*.yml' \
+  'ref_repository|lowercase_registry_domain|match_rule|ref_is_cached|is_verification_refusal|imagePattern|ImageVerificationConfigController|imageverificationrules|image (list|pull|remove)|prod-deploy|concurrency:' \
+  scripts talos .github 2>/dev/null || true
+
+printf '%s\n' '=== Static validation ==='
+bash -n scripts/probe-image-signature-enforcement.sh scripts/tests/test-probe-image-signature-enforcement.sh
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck -s bash scripts/probe-image-signature-enforcement.sh scripts/tests/test-probe-image-signature-enforcement.sh
+else
+  echo 'shellcheck unavailable'
+fi
+
+printf '%s\n' '=== Check status ==='
+gh pr checks 3732 --repo devantler-tech/platform || true
+```
+
+Length of output: 216824
+
+---
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+printf '%s\n' '=== Latest remediation commit and complete patch ==='
+git show --stat --oneline HEAD
+git show --format=fuller --find-renames --find-copies --unified=120 HEAD -- \
+  scripts/probe-image-signature-enforcement.sh \
+  scripts/tests/test-probe-image-signature-enforcement.sh \
+  scripts/tests/test-setup-talosctl.sh \
+  .github/workflows/probe-image-signature-enforcement.yaml \
+  .github/workflows/ci.yaml
+
+printf '%s\n' '=== Test setup changes and CI test wiring ==='
+nl -ba scripts/tests/test-setup-talosctl.sh | sed -n '1,360p'
+rg -n -C 6 --glob '*.yaml' --glob '*.yml' \
+  'test-probe-image-signature-enforcement|probe-image-signature-enforcement|test-setup-talosctl' \
+  .github/workflows
+
+printf '%s\n' '=== Argument parsing and reference normalization call sites ==='
+rg -n -C 8 --glob '*.sh' \
+  'no tag or digest|canonical lowercase|ref_repository\(|image list|image pull|without_probe_refs\(' \
+  scripts/probe-image-signature-enforcement.sh scripts/tests/test-probe-image-signature-enforcement.sh
+
+printf '%s\n' '=== Current branch differences outside probe files ==='
+base="$(git merge-base HEAD origin/main)"
+git diff --name-only "$base" HEAD | while IFS= read -r file; do
+  case "$file" in
+    scripts/probe-image-signature-enforcement.sh|scripts/tests/test-probe-image-signature-enforcement.sh|scripts/tests/test-setup-talosctl.sh|.github/workflows/probe-image-signature-enforcement.yaml|.github/workflows/ci.yaml) ;;
+    *) printf '%s\n' "$file" ;;
+  esac
+done
+```
+
+Length of output: 88241
+
+---
+
+</details>
+
+`@devantler` Full review complete for `7db24990896de60d39d6adbf8719f47b96e59d08`.
+
+I found no new issues.
+
+The new lowercase validation runs before any `talosctl` call. It rejects non-canonical registry or repository names. This prevents a mixed-case reference from missing its lowercase cached equivalent and producing an unfounded `PASS`.
+
+The new behavioral cases cover both controls. They require a usage error and no image pull when either reference has uppercase characters in its registry or repository name.
+
+The `setup-talosctl` call-site guard now includes the probe workflow. Bash syntax validation, ShellCheck, and whitespace validation completed without findings. The listed GitHub checks are passing or skipped.
+
+_You are interacting with an AI system._

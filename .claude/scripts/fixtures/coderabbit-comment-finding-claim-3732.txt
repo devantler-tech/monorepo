@@ -1,0 +1,70 @@
+<!-- This is an auto-generated reply by CodeRabbit -->
+> [!TIP]
+> For best results, initiate chat on the files or code changes.
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+printf '%s\n' '=== Pull request and current head ==='
+gh pr view 3732 --repo devantler-tech/platform \
+  --json number,baseRefName,headRefName,headRefOid,files \
+  --jq '{number,baseRefName,headRefName,headRefOid,files:[.files[].path]}'
+
+printf '%s\n' '=== PR changes from merge base ==='
+base="$(git merge-base HEAD origin/main)"
+printf 'base=%s\nhead=%s\n' "$base" "$(git rev-parse HEAD)"
+git diff --name-status "$base" HEAD
+
+printf '%s\n' '=== Changed probe-related files ==='
+git diff --unified=60 "$base" HEAD -- \
+  scripts/probe-image-signature-enforcement.sh \
+  scripts/tests/test-probe-image-signature-enforcement.sh \
+  .github/workflows/probe-image-signature-enforcement.yaml \
+  .github/workflows/ci.yaml
+
+printf '%s\n' '=== Probe structure ==='
+ast-grep outline scripts/probe-image-signature-enforcement.sh --items all || true
+printf '%s\n' '=== Probe implementation ==='
+nl -ba scripts/probe-image-signature-enforcement.sh | sed -n '1,520p'
+
+printf '%s\n' '=== Probe test structure ==='
+ast-grep outline scripts/tests/test-probe-image-signature-enforcement.sh --items all || true
+printf '%s\n' '=== Probe behavioral tests ==='
+nl -ba scripts/tests/test-probe-image-signature-enforcement.sh | sed -n '1,650p'
+
+printf '%s\n' '=== Dedicated workflow ==='
+workflow="$(fd -a -t f 'probe-image-signature-enforcement.yaml' .github/workflows | head -n1 || true)"
+if [ -n "$workflow" ]; then
+  nl -ba "$workflow"
+fi
+
+printf '%s\n' '=== Production write workflows and concurrency locks ==='
+rg -n -C 5 --glob '*.yml' --glob '*.yaml' \
+  'prod-deploy|concurrency:|talosctl|kubectl|flux (reconcile|suspend|resume)' \
+  .github/workflows
+
+printf '%s\n' '=== Probe ref handling and signature-error classification ==='
+rg -n -C 5 --glob '*.sh' \
+  'verification|signature|unsigned_image|signed_image|image pull|image remove|pulled' \
+  scripts/probe-image-signature-enforcement.sh scripts/tests/test-probe-image-signature-enforcement.sh
+```
+
+Length of output: 241273
+
+---
+
+</details>
+
+`@devantler` Review complete for `910543e7`. I found one blocking issue.
+
+- **Line 363 in `scripts/probe-image-signature-enforcement.sh`**: `is_verification_refusal()` treats any output containing `verif` as an image-signature refusal. A transport error such as `tls: failed to verify certificate` matches this expression. It does not prove that the image verifier rejected the unsigned image. If the signed control then pulls successfully, the probe returns `PASS` from an unrelated registry failure.
+
+  Match verifier-specific diagnostics instead. For example, accept known image-verification or signature-verification phrases, rather than the generic `verif` substring. Add a behavioral case where the unsigned pull returns `tls: failed to verify certificate`, the signed pull succeeds, and the probe returns `INCONCLUSIVE` with exit status `3`.
+
+_You are interacting with an AI system._
