@@ -221,12 +221,14 @@ memory-backup.sh|
 memory-hygiene.sh|
 memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups
 review-lane-health.sh|--now 1
+review-no-gate-guard.sh|
 claude-lane-liveness.sh|--store $tmp/converted/store.json --projects $tmp/converted/projects
 renovate-dashboard-drift.sh|
 pr-ownership-disclosure.sh|--input -
 comment-disclosure-drift.sh|--input -
 python-ban-guard.sh|$repo_root
 board-archive.sh|
+shared-checkout-freshness.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"

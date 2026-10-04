@@ -163,7 +163,8 @@ card.
    it does not block the run. (b) Run `disk-preflight.sh`. On `1`, run
    `build-cache-reclaim.sh apply` once and re-check; if it is still `1`, or it is `2`, do no builds,
    tests or cluster work this run, record it in `needs_attention`, and escalate per
-   *Maintainer channels*.
+   *Maintainer channels*. (c) Run `shared-checkout-freshness.sh`; a `FROZEN` verdict is a finding
+   to report, never an edit to discard.
 
 ## 1. Survey (delegate to a read-only subagent — keep the JSON out of your context)
 > **Guides:** [work-selection](../../guides/work-selection.md) (rung details the digest is read
@@ -776,7 +777,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    1–2 seconds before its own trigger and closed zero races in 75 elections;
    persist a completed no-gate outcome, or an authenticated
    `review-progress-head` marker after evidenced silent expiry, so the next run advances rather than
-   repeats the provider; calculate that cursor as the furthest completed lane by provider order,
+   repeats the provider — but only after `.claude/scripts/review-no-gate-guard.sh` exits `0` for that
+   head and provider: a refusal answers the request that drew it, never the head, so a review the
+   lane already published there governs and no no-gate is recorded (#3231); calculate that cursor as the furthest completed lane by provider order,
    never by latest response time;
    findings require a fix-or-refute and restart from CodeRabbit, with a push only
    when files changed; after authenticated resolution, the first successful provider in that

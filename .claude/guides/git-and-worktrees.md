@@ -362,6 +362,21 @@ blocks the run. On a disk-preflight `1`, run
 work such as reviews, triage and merges can go on — record it in `needs_attention`, and escalate per
 *Maintainer channels* when it persists after you have tried to resolve it.
 
+**Then check that the shared checkout is not frozen behind `main`** (#3331). A dispatch worktree is
+created from the shared checkout's local `HEAD`, so a shared checkout that stops advancing hands
+every later dispatch an old contract, and nothing else reports it:
+
+```sh
+.claude/scripts/shared-checkout-freshness.sh   # 0 CURRENT · 1 a finding · 2 UNKNOWN
+```
+
+It reads only, and it judges the repository's main worktree whichever worktree it is called from.
+On `BEHIND` it prints the fast-forward that would succeed. On `FROZEN` it names the locally changed
+paths that make git refuse the fast-forward: **never discard, stash or reset them** — they belong to
+whoever made them. Record the line in `needs_attention`, name it in the run report, and keep reading
+the definition at `origin/main` until the owner resolves the edit. `OFF-BRANCH`, `AHEAD` and
+`DIVERGED` are reported the same way. Exit `2` is never "current".
+
 **End-of-tick branch hygiene — reap spent branches and return to the default branch, EVERY run**
 (maintainer direction 2026-07-16: *"You never clean up old branches locally or on the remote. I expect
 you to always clean up and switch back to the default branch after a tick."*). Left unswept, every run's

@@ -31,6 +31,7 @@ jobs:
       build-cache-reclaim: ${{ steps.filter.outputs.build-cache-reclaim }}
       disk-preflight: ${{ steps.filter.outputs.disk-preflight }}
       worktree-lane-sweep: ${{ steps.filter.outputs.worktree-lane-sweep }}
+      shared-checkout-freshness: ${{ steps.filter.outputs.shared-checkout-freshness }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
@@ -210,12 +211,14 @@ jobs:
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-rewrite.sh'
               - '.claude/scripts/review-lane-health.sh'
+              - '.claude/scripts/review-no-gate-guard.sh'
               - '.claude/scripts/claude-lane-liveness.sh'
               - '.claude/scripts/renovate-dashboard-drift.sh'
               - '.claude/scripts/pr-ownership-disclosure.sh'
               - '.claude/scripts/comment-disclosure-drift.sh'
               - '.claude/scripts/python-ban-guard.sh'
               - '.claude/scripts/board-archive.sh'
+              - '.claude/scripts/shared-checkout-freshness.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -251,6 +254,12 @@ jobs:
               # The test also pins the pre-flight steps that start the sweep.
               - '.claude/guides/git-and-worktrees.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            shared-checkout-freshness:
+              - '.claude/scripts/shared-checkout-freshness.sh'
+              - '.claude/scripts/shared-checkout-freshness.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -714,6 +723,8 @@ jobs:
               - '.claude/scripts/coderabbit-review-verdict.test.sh'
               - '.claude/scripts/coderabbit-comment-verdict.sh'
               - '.claude/scripts/coderabbit-comment-verdict.test.sh'
+              - '.claude/scripts/review-no-gate-guard.sh'
+              - '.claude/scripts/review-no-gate-guard.test.sh'
               - '.claude/scripts/local-review-verdict.sh'
               - '.claude/scripts/local-review-verdict.test.sh'
               - '.claude/scripts/managed-run-streak.sh'
@@ -1352,6 +1363,28 @@ jobs:
       # host ships bash 3.2 and BSD ps, which is where runs start the sweep.
       - name: Self-test the supervised lane sweep
         run: bash .claude/scripts/worktree-lane-sweep.test.sh
+
+  test-shared-checkout-freshness:
+    name: Test shared checkout freshness
+    needs: changes
+    if: needs.changes.outputs.shared-checkout-freshness == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Every case builds its own upstream and clone, so no verdict depends on this checkout.
+      # A frozen checkout must be reported and a failed read must exit 2. The macos leg is
+      # load-bearing: the agent host ships bash 3.2, which is where runs call this check.
+      - name: Self-test shared-checkout-freshness verdicts
+        run: bash .claude/scripts/shared-checkout-freshness.test.sh
 
   test-worktree-cleanup:
     name: Test worktree cleanup
@@ -2546,6 +2579,9 @@ jobs:
       # Hermetic: judges captured and synthetic CodeRabbit reply comments, no API call.
       - name: Verify the CodeRabbit reply comment verdict classifier
         run: bash .claude/scripts/coderabbit-comment-verdict.test.sh
+      # Hermetic: judges a captured head and synthetic ones; a stub gh serves the live reads.
+      - name: Verify the no-gate guard
+        run: bash .claude/scripts/review-no-gate-guard.test.sh
       # Hermetic: judges captured local review rounds, no API call.
       - name: Verify the local review round verdict classifier
         run: bash .claude/scripts/local-review-verdict.test.sh
@@ -2936,6 +2972,7 @@ jobs:
       - test-build-cache-reclaim
       - test-disk-preflight
       - test-worktree-lane-sweep
+      - test-shared-checkout-freshness
       - test-submodule-init
       - test-submodule-pin-currency
       - test-blocked-label-blocker-line
@@ -3026,6 +3063,7 @@ jobs:
             ${{ needs.test-build-cache-reclaim.result }}
             ${{ needs.test-disk-preflight.result }}
             ${{ needs.test-worktree-lane-sweep.result }}
+            ${{ needs.test-shared-checkout-freshness.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-blocked-label-blocker-line.result }}
