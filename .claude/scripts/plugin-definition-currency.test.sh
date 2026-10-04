@@ -1906,6 +1906,38 @@ expect_adopted_unknown "a configured remote that points back at this repository"
   "points back at this repository" --remote self
 git -C "${work}" remote remove self
 
+# The same repository reached by a file:// URL, or by a path relative to it, is still this
+# repository. `[ -d ]` on the raw URL saw neither, and the check then printed CURRENT for the
+# working tree's own HEAD.
+git -C "${work}" remote add self "file://${work}"
+expect_adopted_unknown "a file:// remote that points back at this repository" \
+  "points back at this repository" --remote self
+git -C "${work}" remote set-url self "."
+expect_adopted_unknown "a relative-path remote that points back at this repository" \
+  "points back at this repository" --remote self
+git -C "${work}" remote remove self
+
+# A repository that names its ssh command in core.sshCommand must keep it. The stand-in records
+# that it was the transport; replaced by plain `ssh`, it is never called.
+cat > "${adopt}/configured-ssh" <<SSH
+#!/bin/sh
+: > "${adopt}/configured-ssh.called"
+exit 1
+SSH
+chmod +x "${adopt}/configured-ssh"
+git -C "${work}" remote add viassh "ssh://configured.invalid/consumer.git"
+git -C "${work}" config core.sshCommand "${adopt}/configured-ssh"
+set +e
+out="$(env -u GIT_SSH_COMMAND -u GIT_SSH PLUGIN_CURRENCY_REMOTE_TIMEOUT_SECS=5 \
+  "${script}" --repo-root "${work}" --installed "${cur}" --remote viassh 2>&1)"; rc=$?
+set -e
+git -C "${work}" config --unset core.sshCommand
+git -C "${work}" remote remove viassh
+[ "${rc}" -eq 2 ] || fail "an ssh command that fails must exit 2 (UNKNOWN), got ${rc}: ${out}"
+[ -e "${adopt}/configured-ssh.called" ] \
+  || fail "core.sshCommand was replaced by plain ssh: the configured transport was never called"
+ok "the repository's core.sshCommand stays the transport when GIT_SSH_COMMAND is unset"
+
 # A remote that accepts the call and never answers must end as UNKNOWN inside the deadline. The
 # transport here is an ssh stand-in that only sleeps: unbounded, the check would wait on it for the
 # whole sleep.

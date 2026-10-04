@@ -226,10 +226,16 @@ bounded_remote() {
   local secs="$1"
   shift
   local cmd_pid killer_pid rc=0 had_monitor=0
+  # GIT_SSH_COMMAND outranks core.sshCommand and GIT_SSH, so setting it to plain `ssh` would
+  # replace a transport the repository configured (a deploy key, a jump host) and every run
+  # would then end UNKNOWN. Start from whichever of the three git itself would have used.
+  local base_ssh="${GIT_SSH_COMMAND:-}"
+  [ -n "$base_ssh" ] || base_ssh="$(git -C "$REPO_ROOT" config --get core.sshCommand 2>/dev/null || true)"
+  [ -n "$base_ssh" ] || base_ssh="${GIT_SSH:-ssh}"
   case "$-" in *m*) had_monitor=1 ;; esac
   set -m
   GIT_TERMINAL_PROMPT=0 \
-    GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes -o ConnectTimeout=$secs" "$@" &
+    GIT_SSH_COMMAND="$base_ssh -o BatchMode=yes -o ConnectTimeout=$secs" "$@" &
   cmd_pid=$!
   (
     sleep "$secs"
@@ -257,10 +263,24 @@ resolve_adopted_from_remote() {
     || die "'$REMOTE' is not a configured remote of $REPO_ROOT — the adopted pin is unknown. --remote takes a remote NAME, never a path or URL${ADOPTED_RECOVERY}"
   # A configured remote can still point back at this repository. It would answer with this
   # repository's own HEAD, so it is refused for the same reason as a path.
-  local remote_url remote_common own_common
-  remote_url="$(git -C "$REPO_ROOT" config --get "remote.$REMOTE.url")"
-  if [ -d "$remote_url" ]; then
-    remote_common="$(cd "$remote_url" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)" || remote_common=""
+  # Compare the location git will actually contact: `ls-remote --get-url` applies any
+  # url.<base>.insteadOf rewrite. A file:// URL names a directory just as a bare path does, and
+  # git resolves a relative path against the repository, not against the caller's directory.
+  local remote_url remote_dir remote_common own_common
+  remote_url="$(git -C "$REPO_ROOT" ls-remote --get-url -- "$REMOTE" 2>/dev/null)" \
+    || remote_url="$(git -C "$REPO_ROOT" config --get "remote.$REMOTE.url")"
+  remote_dir="$remote_url"
+  case "$remote_dir" in
+    file://localhost/*) remote_dir="${remote_dir#file://localhost}" ;;
+    file:///*) remote_dir="${remote_dir#file://}" ;;
+  esac
+  case "$remote_dir" in
+    /*) ;;
+    *://*|*@*:*) remote_dir="" ;;
+    *) remote_dir="$REPO_ROOT/$remote_dir" ;;
+  esac
+  if [ -n "$remote_dir" ] && [ -d "$remote_dir" ]; then
+    remote_common="$(cd "$remote_dir" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)" || remote_common=""
     own_common="$(cd "$REPO_ROOT" && cd "$(git rev-parse --git-common-dir)" && pwd -P)" || own_common=""
     if [ -n "$remote_common" ] && [ "$remote_common" = "$own_common" ]; then
       die "remote '$REMOTE' points back at this repository, so it cannot show what the deployment adopted — the adopted pin is unknown${ADOPTED_RECOVERY}"
