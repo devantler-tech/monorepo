@@ -31,7 +31,8 @@
 #      a Claude Code session scratchpad (claude-*/<project>/<session>/scratchpad/<cache>),
 #      whatever they are named, recognised by the README each tool writes into its cache and
 #      reclaimed once nothing was written to them for a threshold counted in HOURS
-#      (2026-09-30: 75 GB).
+#      (2026-09-30: 75 GB). A Go build cache a lane REUSES is never idle, so while it is still
+#      being written to it is emptied only when it exceeds cache_budget_gb (monorepo#3831).
 #   2c. Per-lane fallback module caches (go-mod-*) directly under the temp root, each removed
 #      only when it exceeds cache_budget_gb.
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
@@ -51,7 +52,8 @@
 #   * Only trees matching a known agent-generated name pattern, carrying a Go or
 #     golangci-lint cache README marker (2b), or named go-mod-* and laid out like a Go
 #     module cache (2c), are ever considered.
-#   * A tree younger than its age threshold is KEPT.
+#   * A tree younger than its age threshold is KEPT. The one exception is a marked Go build
+#     cache over cache_budget_gb (2b), which is emptied while recent -- never while held open.
 #   * A tree any running process holds open is KEPT, and each cache or tree is asked about
 #     again immediately before it is removed.
 #   * The caller's own session tree is KEPT.
@@ -626,9 +628,13 @@ tree_in_use() {
 #
 #   $1  the candidate tree
 #   $2  the liveness scope for tree_in_use: temp-root or host
-#   $3  optional: run-cache, which repeats the marked-cache hold check just before removal
+#   $3  optional: run-cache, which repeats the marked-cache hold check just before removal;
+#       or budget-cache, for a marked Go cache over its budget while still written to (2b). Its
+#       late check re-reads the marker but NOT the idle rule, which such a cache fails by
+#       definition, and it is emptied (empty_marked_cache) rather than removed
+#   $4  optional: the tree's size in MB, when the caller has already measured it
 sweep_candidate() {
-  local tree=$1 scope=$2 tree_mb late_hold
+  local tree=$1 scope=$2 tree_mb=${4:-} late_hold late_kind
   [ -n "$tree" ] || return 0
   [ -d "$tree" ] || return 0
   if own_session_tree "$tree"; then
@@ -640,7 +646,7 @@ sweep_candidate() {
     log "KEEP  (in use)        $tree"
     return 0
   fi
-  if ! tree_mb=$(size_mb "$tree"); then
+  if [ -z "$tree_mb" ] && ! tree_mb=$(size_mb "$tree"); then
     # Kept, but not examined: a tree whose size could not be read is UNKNOWN, never a clean KEEP.
     unknown=$((unknown + 1))
     log "UNKNOWN (unmeasurable) $tree"
@@ -672,6 +678,17 @@ sweep_candidate() {
           ;;
       esac
     fi
+    if [ "${3:-}" = budget-cache ]; then
+      # The marker is what licenses emptying this directory, so it is read again through the
+      # same bounded reader: a README that changed or vanished since the listing keeps the tree.
+      if ! late_kind=$(run_cache_kind "$tree") || [ "$late_kind" != go ]; then
+        unknown=$((unknown + 1))
+        log "UNKNOWN (marker changed, cache not examined) $tree"
+        return 0
+      fi
+      empty_marked_cache "$tree" "$tree_mb"
+      return 0
+    fi
     # Go marks every file under a module cache read-only, so a plain `rm -rf` stops
     # partway. That is worse than skipping the tree: the partial delete bumps its
     # mtime, the age filter then never selects it again, and the remnant is orphaned
@@ -689,6 +706,34 @@ sweep_candidate() {
     removed=$((removed + 1))
     reclaimed_mb=$((reclaimed_mb + tree_mb))
     log "WOULD REAP ${tree_mb} MB  $tree"
+  fi
+}
+
+# empty_marked_cache <dir> <size-mb> empties a marked cache and keeps the directory and its README,
+# as reclaim_lint_cache and `go clean -cache` do. It is only reached through sweep_candidate, after
+# every guard there.
+#
+# Emptied, not removed, because this cache is still in use between runs: a lane's GOCACHE names
+# the directory, so it keeps the mode and owner the lane created it with, and the README keeps
+# identifying it to the next sweep -- which then reports its size again, and reaps it whole under
+# the idle rule once the lane stops using it.
+empty_marked_cache() {
+  local tree=$1 tree_mb=$2 leftover after_mb
+  chmod -R u+w -- "$tree" 2>/dev/null || true
+  find "$tree" -mindepth 1 -maxdepth 1 ! -name README -exec rm -rf -- {} + 2>/dev/null
+  # Judged by what is LEFT, not by find's status (see reclaim_lint_cache).
+  if leftover=$(find "$tree" -mindepth 1 -maxdepth 1 ! -name README 2>/dev/null) &&
+    [ -z "$leftover" ]; then
+    removed=$((removed + 1))
+    reclaimed_mb=$((reclaimed_mb + tree_mb))
+    log "REAP  ${tree_mb} MB  (emptied, README kept) $tree"
+  elif after_mb=$(size_mb "$tree") && [ "$after_mb" -lt "$tree_mb" ]; then
+    kept=$((kept + 1))
+    reclaimed_mb=$((reclaimed_mb + tree_mb - after_mb))
+    log "KEEP  (empty incomplete, reclaimed ~$((tree_mb - after_mb)) MB) $tree"
+  else
+    kept=$((kept + 1))
+    log "KEEP  (remove failed) $tree"
   fi
 }
 
@@ -760,6 +805,15 @@ fi
 # writes into its cache dir -- whatever the directory is called, and are reclaimed once
 # nothing has been written to them for RUN_CACHE_IDLE_HOURS. Every guard in
 # sweep_candidate still applies, and a cache is regenerable: removing one costs a rebuild.
+#
+# The idle rule alone leaves one gap. A lane that REUSES a single such cache every hour is never
+# idle, so it was kept forever with no size and no budget: /private/tmp/go-cache-codex grew from
+# 21 GB to 36 GB in five hours on 2026-10-04 (monorepo#3831). A Go build cache that is still
+# being written to is therefore held to cache_budget_gb, like the default GOCACHE in (1) and the
+# fallback module cache in (2c): within it the cache is kept and its size logged, over it the
+# cache is emptied -- unless a live process holds it open, now or at removal time. A recent
+# golangci-lint cache is not budgeted here: cache_budget_gb is sized for a Go build cache, and
+# the lint budget belongs to (3).
 # ---------------------------------------------------------------------------
 
 # run_cache_idle <dir> succeeds (0) when nothing anywhere in the cache has changed within
@@ -992,8 +1046,23 @@ if [ -n "$run_cache_trees" ]; then
     case "$hold" in
       '') sweep_candidate "$tree" temp-root run-cache ;;
       recent)
-        kept=$((kept + 1))
-        log "KEEP  (written within ${RUN_CACHE_IDLE_HOURS}h) $tree"
+        # A cache in use between runs: budgeted when it is a Go build cache (monorepo#3831).
+        # The kind comes from the same bounded reader; anything but a readable Go marker keeps
+        # the old answer, so a lint cache is kept for being recent exactly as before.
+        kind=$(run_cache_kind "$tree") || kind=''
+        if [ "$kind" != go ]; then
+          kept=$((kept + 1))
+          log "KEEP  (written within ${RUN_CACHE_IDLE_HOURS}h) $tree"
+        elif ! cache_mb=$(size_mb "$tree"); then
+          unknown=$((unknown + 1))
+          log "UNKNOWN (unmeasurable) $tree"
+        elif [ "$cache_mb" -le "$((CACHE_BUDGET_GB * 1024))" ]; then
+          kept=$((kept + 1))
+          log "KEEP  (written within ${RUN_CACHE_IDLE_HOURS}h) ${cache_mb} MB, budget $((CACHE_BUDGET_GB * 1024)) MB  $tree"
+        else
+          log "per-run GOCACHE ${tree} = ${cache_mb} MB (budget $((CACHE_BUDGET_GB * 1024)) MB), over budget while written within ${RUN_CACHE_IDLE_HOURS}h"
+          sweep_candidate "$tree" temp-root budget-cache "$cache_mb"
+        fi
         ;;
       linting)
         kept=$((kept + 1))

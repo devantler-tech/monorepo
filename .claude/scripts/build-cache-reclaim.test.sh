@@ -1415,6 +1415,106 @@ fi
 chmod -R u+w "$mod_root" "$mod_elsewhere" 2> /dev/null
 rm -rf -- "$mod_root" "$mod_elsewhere"
 
+# --- 21. a per-run Go cache a lane REUSES is budgeted while it is recent (monorepo#3831) ---
+# The idle rule of case 17 never selects a cache that is written every hour: one lane's
+# /private/tmp/go-cache-codex was kept as "written within 6h" on every sweep, with no size and
+# no budget, and grew from 21 GB to 36 GB in five hours on 2026-10-04. Every cache below was
+# written moments ago; each reap has an ablation partner that differs in exactly one dimension
+# -- the budget, the cache kind, a holder -- and must be KEPT.
+reuse_root="${fixture_root}/reuse-tmp"
+mkdir -p "$reuse_root" || fail 'fixture: reused cache temp root'
+# make_reused_cache <path> <marker-text> builds a 2 MB marked cache written just now.
+make_reused_cache() {
+  mkdir -p "$1/00" || return 1
+  printf '%s\n' "$2" > "$1/README" || return 1
+  dd if=/dev/zero of="$1/00/blob-d" bs=1024 count=2048 2> /dev/null
+}
+# run_reuse <mode> <budget-gb> sweeps reuse_root with the stubs of case 19.
+run_reuse() {
+  rm -f "$cache_cleans"
+  PATH="${REUSE_PATH_PREFIX:+${REUSE_PATH_PREFIX}:}${cache_stubs}:$PATH" \
+    BUILD_CACHE_RECLAIM_TMPDIR="$reuse_root" BUILD_CACHE_RECLAIM_GO_TMPDIR="$empty_go_tmp" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" bash "$impl" "$1" 3 "$2" 2>&1
+}
+reuse_go="${reuse_root}/go-cache-codex"
+reuse_held="${reuse_root}/go-cache-claude"
+reuse_lint="${reuse_root}/lint-cache-codex"
+make_reused_cache "$reuse_go" "$go_marker" || fail 'fixture: reused Go cache'
+make_reused_cache "$reuse_held" "$go_marker" || fail 'fixture: held reused Go cache'
+make_reused_cache "$reuse_lint" "$lint_marker" || fail 'fixture: reused lint cache'
+reuse_held_canon=$(cd -- "$reuse_held" && pwd -P) || fail 'fixture: resolve held reused Go cache'
+
+# 21a. within budget: kept as recent, and the line now carries its size and the budget, so
+# growth is visible before it is critical. The ablation partner for 21b and 21c.
+out=$(run_reuse apply "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 0 ] || fail "a readable reused-cache sweep exited ${rc}, not 0"
+said "$out" "$reuse_go" 'KEEP  (written within 6h) [0-9][0-9]* MB, budget [0-9][0-9]* MB' ||
+  fail 'a recent Go cache within budget was not kept with its size and budget reported'
+grep -q 'REAP' <<<"$out" && fail 'a recent Go cache within budget was selected'
+[ -e "${reuse_go}/00/blob-d" ] || fail 'apply emptied a recent Go cache within budget'
+
+# 21b. over budget, dry-run: the idle-in-the-snapshot one is selected and counted, the one a
+# live process holds open is kept for its holder, and nothing is deleted.
+out=$(STUB_LSOF_SNAPSHOT="${reuse_held_canon}/00/blob-d" run_reuse dry-run 0)
+said "$out" "$reuse_go" 'WOULD REAP' ||
+  fail 'a recent over-budget Go cache was not selected by dry-run'
+said "$out" "$reuse_held" 'KEEP  (in use)' ||
+  fail 'a recent over-budget Go cache held open by a live process was not kept as in use'
+reuse_summary=$(printf '%s\n' "$out" | sed -n 's/.*would reclaim=~\([0-9]*\) MB.*/\1/p' | tail -1)
+case "$reuse_summary" in
+  '' | *[!0-9]*) fail 'dry-run summary reported no parsable would-reclaim total' ;;
+  *) [ "$reuse_summary" -ge 2 ] ||
+    fail "dry-run summary omitted the reused Go cache: would reclaim=~${reuse_summary} MB" ;;
+esac
+[ -e "${reuse_go}/00/blob-d" ] || fail 'dry-run emptied a reused Go cache'
+
+# 21c. a recent over-budget LINT cache is not budgeted here: kept for being recent, as before,
+# with no size on the line. Asserted on the same over-budget runs as 21b and 21d.
+said "$out" "$reuse_lint" 'KEEP  (written within 6h)' ||
+  fail 'a recent lint cache was not kept for being recent'
+said "$out" "$reuse_lint" ' MB' && fail 'a recent lint cache was measured against the Go cache budget'
+
+# 21d. over budget, apply: the idle one is EMPTIED and keeps its README, so the lane's GOCACHE
+# still exists and still identifies itself; the held one and the lint cache remain.
+out=$(STUB_LSOF_SNAPSHOT="${reuse_held_canon}/00/blob-d" run_reuse apply 0)
+[ -e "${reuse_go}/00" ] && fail "apply did not empty a recent over-budget Go cache: $reuse_go"
+said "$out" "$reuse_go" 'REAP  [0-9][0-9]* MB  (emptied, README kept)' ||
+  fail 'an emptied reused Go cache was not reported'
+[ "$(head -n 1 "${reuse_go}/README" 2> /dev/null)" = "$go_marker" ] ||
+  fail 'emptying a reused Go cache removed its directory or its README marker'
+[ -e "${reuse_held}/00/blob-d" ] ||
+  fail 'apply emptied a recent over-budget Go cache a live process held open'
+[ -e "${reuse_lint}/00/blob-d" ] || fail 'apply emptied a recent over-budget lint cache'
+
+# 21e. a holder that appears AFTER the snapshot keeps it: the late re-probe still applies to a
+# cache the idle rule is not asked about again.
+out=$(STUB_LSOF_LATE_HELD="$reuse_held_canon" run_reuse apply 0)
+[ -e "${reuse_held}/00/blob-d" ] ||
+  fail 'apply emptied a reused Go cache whose holder appeared after the snapshot'
+said "$out" "$reuse_held" 'KEEP  (in use, late)' ||
+  fail 'a reused Go cache kept by the late re-probe did not say why'
+
+# 21f. a recent Go cache whose size cannot be read is UNKNOWN (exit 2), never emptied and never a
+# clean KEEP. This `du` answers nothing for that one cache and is the real du for every other.
+reuse_du="${fixture_root}/du-blind-21f"
+real_du=$(command -v du) || fail 'fixture: no du to wrap'
+mkdir -p "$reuse_du" || fail 'fixture: du stub dir'
+cat > "${reuse_du}/du" <<STUB
+#!/bin/sh
+for a in "\$@"; do last=\$a; done
+[ "\$last" = "${reuse_held}" ] && exit 1
+exec "${real_du}" "\$@"
+STUB
+chmod +x "${reuse_du}/du" || fail 'fixture: chmod du stub'
+out=$(REUSE_PATH_PREFIX="$reuse_du" run_reuse apply 0)
+rc=$?
+[ "$rc" -eq 2 ] || fail "an unmeasurable reused Go cache exited ${rc}, not 2 (UNKNOWN)"
+said "$out" "$reuse_held" 'UNKNOWN (unmeasurable)' ||
+  fail 'an unmeasurable reused Go cache was not reported UNKNOWN'
+[ -e "${reuse_held}/00/blob-d" ] || fail 'apply emptied a reused Go cache it could not measure'
+rm -rf -- "$reuse_root" "$reuse_du"
+
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0
