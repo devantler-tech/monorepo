@@ -211,6 +211,8 @@ if [ "$notified" -gt 0 ]; then
 fi
 if [ "$observations" -ge "$THRESHOLD" ]; then
   summary ESCALATE "$cause"
+  # The every-run bullet in AGENTS.md has no room for the procedure, so the verdict carries it.
+  echo "sibling-lane-watch: send the lane-outage Slack DM, then re-run with --mark-notified -- see 'Sibling lane outage' in .claude/guides/maintainer-channels.md" >&2
   exit 1
 fi
 summary WATCHING "$cause"

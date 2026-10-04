@@ -79,6 +79,9 @@ check "first bad slot only watches" 0 "verdict=WATCHING lane=claude observations
 check "a second run inside the same slot does not count twice" 0 "observations=1/3" 600
 check "second bad slot still only watches" 0 "verdict=WATCHING lane=claude observations=2/3" 3600
 check "third bad slot escalates" 1 "verdict=ESCALATE lane=claude observations=3/3" 7200
+# The escalation names what to do next, on stderr so the summary line stays quotable.
+hint=$(SIBLING_LANE_LIVENESS_CMD="$FIX/liveness" bash "$SCRIPT" --lane claude --state-file "$STATE" --now-epoch $((T0 + 7260)) 2>&1 >/dev/null || true)
+if grep -qF -- '--mark-notified' <<<"$hint" && grep -qF 'maintainer-channels.md' <<<"$hint"; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: ESCALATE does not say what to do next"; fi
 check "an unrecorded escalation is repeated, not lost" 1 "verdict=ESCALATE" 7800
 check "recording the send succeeds" 0 "verdict=ALREADY-NOTIFIED" 7860 --mark-notified
 check "no second page in the same outage" 0 "verdict=ALREADY-NOTIFIED" 10800
