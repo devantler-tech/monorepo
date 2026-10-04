@@ -557,9 +557,9 @@ type issue struct {
 	// read the record came from.
 	PullRequest json.RawMessage `json:"pull_request"`
 	pull        bool
-	// Comments is the comment count on a forge record and the comments
-	// themselves on an --input record. It is read only for a parked pull
-	// request, into thread (see parked.go).
+	// Comments is the comments of an --input record. It is read only for a
+	// parked pull request, into thread; under --org the thread is read from the
+	// forge instead (see parked.go).
 	Comments json.RawMessage `json:"comments"`
 	thread   []comment
 }
@@ -985,6 +985,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		parkedPulls++
 		verdict, line, legacy := parkVerdict(parkRecords(item.thread), o)
+		// An authority blocker on a pull request owes the same ask as one on an
+		// issue, so the digest lists it too.
+		if verdict == "NO-ASK" || verdict == "STALE-ASK" {
+			age, known := issueAge(item.CreatedAt, o.today)
+			created := ""
+			if known {
+				created = item.CreatedAt[:10]
+			}
+			askRows = append(askRows, askRow{
+				repo: item.Repo, number: item.Number, created: created,
+				age: age, agedKnow: known, request: askRequest(line),
+				stale: verdict == "STALE-ASK", legacy: legacy,
+				opaque: requestIsOpaque(line),
+			})
+		}
 		if verdict == "CONFORMS" && o.quiet {
 			continue
 		}

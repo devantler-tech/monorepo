@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -119,27 +120,33 @@ func TestParkedFindingStillFailsTheAskDigest(t *testing.T) {
 	}
 }
 
-func forgeParkedPull(t *testing.T, repo string, comments any) string {
+func forgeParkedPull(t *testing.T, repo string) string {
 	t.Helper()
-	fields := map[string]any{
+	raw, err := json.Marshal(map[string]any{
 		"repository_url": "https://api.github.com/repos/o/" + repo, "number": 900, "labels": []any{map[string]string{"name": "blocked"}},
 		"pull_request": map[string]any{}, "user": map[string]string{"login": "renovate[bot]"}, "body": "bump",
-	}
-	if comments != nil {
-		fields["comments"] = comments
-	}
-	raw, err := json.Marshal(fields)
+		"created_at": "2026-08-01T00:00:00Z", "comments": 0,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(raw)
 }
 
-// serveParked answers the two searches and the comment read of platform#900.
-// reads counts the comment reads, so a test can prove none happened.
-func serveParked(t *testing.T, pull, commentPages string, commentErr error) *int {
+// attempt is what the forge answers for one try at a parked pull request's
+// thread: its record, carrying the comment count, and then its comment pages.
+type attempt struct {
+	record, pages string
+	pagesErr      error
+}
+
+func counted(n int) string { return `{"number":900,"comments":` + strconv.Itoa(n) + `}` }
+
+// serveParked answers the two searches and then, try by try, the count and
+// comment reads of platform#900. It returns how many comment reads happened.
+func serveParked(t *testing.T, pull string, attempts ...attempt) *int {
 	t.Helper()
-	reads := 0
+	reads, try := 0, 0
 	original := forgeRead
 	t.Cleanup(func() { forgeRead = original })
 	forgeRead = func(endpoint string) ([]byte, error) {
@@ -148,9 +155,17 @@ func serveParked(t *testing.T, pull, commentPages string, commentErr error) *int
 			return []byte(searchPage()), nil
 		case pullEndpoint("o"):
 			return []byte(searchPage(pull)), nil
+		case "repos/o/platform/issues/900":
+			if try >= len(attempts) {
+				t.Errorf("unexpected try %d", try+1)
+				return nil, errors.New("unexpected try")
+			}
+			return []byte(attempts[try].record), nil
 		case "repos/o/platform/issues/900/comments?per_page=100":
 			reads++
-			return []byte(commentPages), commentErr
+			current := attempts[try]
+			try++
+			return []byte(current.pages), current.pagesErr
 		}
 		t.Errorf("unexpected read %q", endpoint)
 		return nil, errors.New("unexpected read")
@@ -161,44 +176,55 @@ func serveParked(t *testing.T, pull, commentPages string, commentErr error) *int
 func TestOrgReadJudgesAParkedPullRequestByItsComments(t *testing.T) {
 	record := commentJSON(t, "devantler", recordHead+goodLine)
 	other := commentJSON(t, "renovate[bot]", "rebased")
+	pull := forgeParkedPull(t, "platform")
 	t.Run("a record on the second page conforms", func(t *testing.T) {
-		reads := serveParked(t, forgeParkedPull(t, "platform", 2), "["+other+"]\n["+record+"]", nil)
+		reads := serveParked(t, pull, attempt{counted(2), "[" + other + "]\n[" + record + "]", nil})
 		if code, out := runOrg(t); code != 0 || *reads != 1 || !strings.Contains(out, "all 1 open blocked-labelled pull request(s)") {
 			t.Fatalf("code=%d reads=%d out:\n%s", code, *reads, out)
 		}
 	})
 	t.Run("no record is a finding", func(t *testing.T) {
-		serveParked(t, forgeParkedPull(t, "platform", 1), "["+other+"]", nil)
+		serveParked(t, pull, attempt{counted(1), "[" + other + "]", nil})
 		if code, out := runOrg(t); code != 1 || !strings.Contains(out, "MISSING    platform#900  [pull request]") {
 			t.Fatalf("code=%d out:\n%s", code, out)
 		}
 	})
 	t.Run("no comments at all is a finding, from a complete empty read", func(t *testing.T) {
-		serveParked(t, forgeParkedPull(t, "platform", 0), "[]", nil)
+		serveParked(t, pull, attempt{counted(0), "[]", nil})
 		if code, out := runOrg(t); code != 1 || !strings.Contains(out, "MISSING    platform#900  [pull request]") {
 			t.Fatalf("code=%d out:\n%s", code, out)
 		}
 	})
+	// A comment that lands between the count and the thread is ordinary: the
+	// second try sees both agree. The first try alone would read MISSING.
+	t.Run("a comment arriving between the two reads is retried once", func(t *testing.T) {
+		reads := serveParked(t, pull, attempt{counted(1), "[" + other + "," + record + "]", nil}, attempt{counted(2), "[" + other + "," + record + "]", nil})
+		if code, out := runOrg(t); code != 0 || *reads != 2 {
+			t.Fatalf("code=%d reads=%d out:\n%s", code, *reads, out)
+		}
+	})
 	// Each of these hands back the conforming record, so a guard that ignored
 	// the defect would print a clean sweep.
+	one := "[" + record + "]"
 	for _, tc := range []struct {
 		name     string
-		comments any
-		pages    string
-		err      error
+		attempts []attempt
 		want     string
 	}{
-		{"the comment read fails after printing the record", 1, "[" + record + "]", errors.New("exit status 1"), "forge read failed -- UNKNOWN"},
-		{"fewer comments than the search counted", 2, "[" + record + "]", nil, "truncated comment read"},
-		{"more comments than the search counted", 1, "[" + record + "," + other + "]", nil, "truncated comment read"},
-		{"an empty read where comments were counted", 1, "", nil, "truncated comment read"},
-		{"a page that is not an array", 1, `{"message":"Not Found"}`, nil, "unreadable comment page"},
-		{"a null page", 1, "null", nil, "unreadable comment page"},
-		{"no comment count on the search result", nil, "[" + record + "]", nil, "carries no comment count"},
-		{"a comment count that is not a number", "1", "[" + record + "]", nil, "carries no comment count"},
+		{"the comment read fails after printing the record", []attempt{{counted(1), one, errors.New("exit status 1")}}, "forge read failed -- UNKNOWN"},
+		{"fewer comments than counted, twice", []attempt{{counted(2), one, nil}, {counted(2), one, nil}}, "truncated comment read"},
+		{"more comments than counted, twice", []attempt{{counted(0), one, nil}, {counted(0), one, nil}}, "truncated comment read"},
+		{"an empty read where comments were counted, twice", []attempt{{counted(1), "", nil}, {counted(1), "", nil}}, "truncated comment read"},
+		{"a page that is not an array", []attempt{{counted(1), `{"message":"Not Found"}`, nil}}, "unreadable comment page"},
+		{"a null page", []attempt{{counted(1), "null", nil}}, "unreadable comment page"},
+		{"a record with no comment count", []attempt{{`{"number":900}`, one, nil}}, "carries no comment count"},
+		{"a record whose comment count is null", []attempt{{`{"comments":null}`, one, nil}}, "carries no comment count"},
+		{"a record whose comment count is a string", []attempt{{`{"comments":"1"}`, one, nil}}, "carries no comment count"},
+		{"a record whose comment count is negative", []attempt{{`{"comments":-1}`, one, nil}}, "carries no comment count"},
+		{"a record that is not JSON", []attempt{{"", one, nil}}, "carries no comment count"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			serveParked(t, forgeParkedPull(t, "platform", tc.comments), tc.pages, tc.err)
+			serveParked(t, pull, tc.attempts...)
 			if code, out := runOrg(t); code != 2 || !strings.Contains(out, tc.want) || strings.Contains(out, "pull request(s)") {
 				t.Fatalf("code=%d, want 2 and %q; out:\n%s", code, tc.want, out)
 			}
@@ -206,9 +232,63 @@ func TestOrgReadJudgesAParkedPullRequestByItsComments(t *testing.T) {
 	}
 }
 
+// The count read fails closed like every other read.
+func TestOrgReadFailsClosedOnTheCountRead(t *testing.T) {
+	original := forgeRead
+	t.Cleanup(func() { forgeRead = original })
+	forgeRead = func(endpoint string) ([]byte, error) {
+		switch endpoint {
+		case searchEndpoint("o"):
+			return []byte(searchPage()), nil
+		case pullEndpoint("o"):
+			return []byte(searchPage(forgeParkedPull(t, "platform"))), nil
+		case "repos/o/platform/issues/900":
+			return []byte(counted(0)), errors.New("exit status 1")
+		}
+		return []byte("[]"), nil
+	}
+	if code, out := runOrg(t); code != 2 || !strings.Contains(out, "forge read failed -- UNKNOWN") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+// An authority blocker on a parked pull request owes an ask, and the digest
+// must list it instead of saying no ask is owed.
+func TestAskDigestListsAParkedPullRequest(t *testing.T) {
+	for verdict, line := range map[string]string{
+		"NO-ASK":    "**Blocker:** approve the upgrade | authority | last-verified 2026-09-01: waiting",
+		"STALE-ASK": "**Blocker:** approve the upgrade | authority | last-verified 2026-09-01: waiting | asked slack 2026-08-01",
+	} {
+		t.Run(verdict, func(t *testing.T) {
+			code, out := runInput(t, parkedPull(commentJSON(t, "devantler", recordHead+line)), "--ask-digest")
+			if code != 1 || !strings.Contains(out, "p#​5") || !strings.Contains(out, "approve the upgrade") || strings.Contains(out, "no declared authority blocker") || strings.Contains(out, "outside this digest") {
+				t.Fatalf("code=%d out:\n%s", code, out)
+			}
+		})
+	}
+}
+
+// The marker counts only where it renders as nothing: four columns in, it is
+// a code block that quotes the marker.
+func TestMarkerIndentation(t *testing.T) {
+	for body, want := range map[string]bool{
+		recordMarker:                   true,
+		"   " + recordMarker:           true,
+		recordMarker + "  \r":          true,
+		"    " + recordMarker:          false,
+		"\t" + recordMarker:            false,
+		"~~~\n" + recordMarker:         false,
+		"```\nx\n```\n" + recordMarker: true,
+	} {
+		if got := carriesMarker(body); got != want {
+			t.Errorf("carriesMarker(%q) = %v, want %v", body, got, want)
+		}
+	}
+}
+
 // Only a parked pull request costs a comment read.
 func TestOrgReadSkipsCommentsOfUnparkedPullRequests(t *testing.T) {
-	reads := serveParked(t, forgePull("platform", "devantler", "x"), "[]", nil)
+	reads := serveParked(t, forgePull("platform", "devantler", "x"))
 	if code, out := runOrg(t); code != 0 || *reads != 0 || !strings.Contains(out, "all 0 open blocked-labelled pull request(s)") {
 		t.Fatalf("code=%d reads=%d out:\n%s", code, *reads, out)
 	}

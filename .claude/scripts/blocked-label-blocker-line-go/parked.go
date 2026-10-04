@@ -46,7 +46,12 @@ func carriesMarker(body string) bool {
 	var fence byte
 	fenceLength := 0
 	for _, raw := range strings.Split(body, "\n") {
-		line := strings.Trim(strings.TrimSuffix(raw, "\r"), " \t")
+		line := strings.TrimSuffix(raw, "\r")
+		// Four columns of indentation render as a code block, as in visibleRecord.
+		if indent := len(line) - len(strings.TrimLeft(line, " ")); indent > 3 || strings.HasPrefix(line, "\t") {
+			continue
+		}
+		line = strings.Trim(line, " \t")
 		if len(line) >= 3 && (line[0] == '`' || line[0] == '~') {
 			n := 0
 			for n < len(line) && line[n] == line[0] {
@@ -94,51 +99,76 @@ func inputComments(item issue) ([]comment, error) {
 	return comments, nil
 }
 
-// commentEndpoint names the comment read for one parked pull request. The
-// repository name comes from the forge's own search result and is still
-// checked, so nothing but a plain name ever reaches the query.
-func commentEndpoint(org, repo string, number int64) (string, error) {
+// pullPath names one parked pull request on the forge. The repository name
+// comes from the forge's own search result and is still checked, so nothing
+// but a plain name ever reaches the query.
+func pullPath(org, repo string, number int64) (string, error) {
 	if !orgRE.MatchString(repo) || strings.Trim(repo, ".") == "" {
 		return "", fmt.Errorf("pull request %d names an unusable repository -- UNKNOWN", number)
 	}
-	return "repos/" + org + "/" + repo + "/issues/" + strconv.FormatInt(number, 10) + "/comments?per_page=100", nil
+	return "repos/" + org + "/" + repo + "/issues/" + strconv.FormatInt(number, 10), nil
+}
+
+// commentEndpoint names the comment read for one parked pull request.
+func commentEndpoint(org, repo string, number int64) (string, error) {
+	path, err := pullPath(org, repo, number)
+	return path + "/comments?per_page=100", err
+}
+
+// commentCount reads how many comments the pull request has right now. The
+// search result carries a count too, but it is older than the comment read by
+// the whole sweep, and a comment landing in between would fail every verdict.
+func commentCount(path string) (int64, error) {
+	raw, err := forgeRead(path)
+	if err != nil {
+		return 0, errors.New("forge read failed -- UNKNOWN, never zero")
+	}
+	var record struct {
+		Comments *int64 `json:"comments"`
+	}
+	if json.Unmarshal(raw, &record) != nil || record.Comments == nil || *record.Comments < 0 {
+		return 0, errors.New("pull request record carries no comment count -- UNKNOWN")
+	}
+	return *record.Comments, nil
 }
 
 // forgeComments reads every comment of a parked pull request. gh --paginate
-// prints one array per page; the search result's comment count says how many
-// there are, so a read that returns another number is UNKNOWN, never a
-// missing record.
+// prints one array per page and no total, so the count is read first and the
+// thread must match it: a read that returns another number is not complete.
+// One comment arriving between the two reads is ordinary, so a mismatch is
+// retried once; a second one is UNKNOWN, never a missing record.
 func forgeComments(org string, item issue) ([]comment, error) {
-	count := strings.TrimSpace(string(item.Comments))
-	expected, err := strconv.ParseInt(count, 10, 64)
-	if err != nil || expected < 0 {
-		return nil, fmt.Errorf("pull request %s#%d carries no comment count -- UNKNOWN", item.Repo, item.Number)
-	}
-	endpoint, err := commentEndpoint(org, item.Repo, item.Number)
+	path, err := pullPath(org, item.Repo, item.Number)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := forgeRead(endpoint)
-	if err != nil {
-		return nil, errors.New("forge read failed -- UNKNOWN, never zero")
-	}
-	comments := []comment{}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	for {
-		var page []comment
-		err := decoder.Decode(&page)
-		if err == io.EOF {
-			break
+	for attempt := 0; attempt < 2; attempt++ {
+		expected, err := commentCount(path)
+		if err != nil {
+			return nil, err
 		}
-		if err != nil || page == nil {
-			return nil, fmt.Errorf("unreadable comment page for %s#%d -- UNKNOWN", item.Repo, item.Number)
+		raw, err := forgeRead(path + "/comments?per_page=100")
+		if err != nil {
+			return nil, errors.New("forge read failed -- UNKNOWN, never zero")
 		}
-		comments = append(comments, page...)
+		comments := []comment{}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		for {
+			var page []comment
+			err := decoder.Decode(&page)
+			if err == io.EOF {
+				break
+			}
+			if err != nil || page == nil {
+				return nil, fmt.Errorf("unreadable comment page for %s#%d -- UNKNOWN", item.Repo, item.Number)
+			}
+			comments = append(comments, page...)
+		}
+		if int64(len(comments)) == expected {
+			return comments, nil
+		}
 	}
-	if int64(len(comments)) != expected {
-		return nil, fmt.Errorf("truncated comment read for %s#%d -- UNKNOWN", item.Repo, item.Number)
-	}
-	return comments, nil
+	return nil, fmt.Errorf("truncated comment read for %s#%d -- UNKNOWN", item.Repo, item.Number)
 }
 
 // parkVerdict judges a parked pull request by its record comments: exactly one
