@@ -159,7 +159,9 @@ card.
    background**, appending to the lane's log; never wait on it or poll it, and never pass another
    lane. (b) Run `disk-preflight.sh`. On `1`, run `build-cache-reclaim.sh apply` once and re-check; if
    it is still `1`, or it is `2`, do no builds, tests or cluster work this run, record it in
-   `needs_attention`, and escalate per *Maintainer channels*.
+   `needs_attention`, and escalate per *Maintainer channels*. (c) Run
+   `shared-checkout-freshness.sh`; a `FROZEN` verdict is a finding to report, never an edit to
+   discard.
 
 ## 1. Survey (delegate to a read-only subagent — keep the JSON out of your context)
 > **Guides:** [work-selection](../../guides/work-selection.md) (rung details the digest is read
@@ -556,13 +558,28 @@ The helper requires an explicit author, excludes archived repositories, discover
 a bounded limit, and uses `board-add.sh` for idempotent status-preserving mutations. Do not hand-roll
 the item-add/item-edit pair or read a half-completed add as a finished one.
 
-Read both its exit status and summary: `0` means the bounded batch succeeded, while `deferred` counts
-issues left for later runs and `skipped` counts private issues requiring a maintainer decision.
+Read both its exit status and summary: `0` means the bounded batch succeeded, while `verified` counts
+issues a bulk read proved are already on the board, `boarded` those that went through `board-add.sh`
+(including ones it found already there), `deferred` issues left for later runs and `skipped`
+private issues requiring a maintainer decision.
 It does not prove complete board coverage. Exit `2` means the **discovery itself failed**, came back
 truncated at the `--limit` cap, or an issue could not be boarded — never treat a failed or short search as an empty lane, since
-the cap bounds what is fetched rather than guaranteeing a complete census. A private repository's
+the cap bounds what is fetched rather than guaranteeing a complete census. It also means a
+`--resume-from` checkpoint that discovery no longer returns, an interrupted run, or a pass that
+could not account for every discovered issue. A private repository's
 issue is reported `SKIPPED`, because project 5 is public and boarding one from a private repo is a
 maintainer decision.
+
+**Existing membership is read in bulk, and a pass that changes nothing fits the call budget** (#3340).
+Asking `board-add.sh` about every issue costs three remote reads each; measured 2026-10-04, that is
+about 14.5 minutes and 1,750 calls for the 583 open issues, and the bulk read did the same pass in
+23 seconds and 8 calls. Only a read that **proves** an issue is on this board with a Status skips
+the helper. A failed, short or surprising read proves nothing: the sweep prints
+`bulk membership read did not hold` and leaves those issues to the helper, so it can cost time but
+never coverage. Per-issue work stops at `--deadline-seconds` (default 90). The summary then carries
+`checkpoint=<url>`, the first issue not examined, and `--resume-from <url>` starts the next call
+there; an interrupted run prints the same and exits `2`. `--dry-run` is the read-only path:
+discovery and the bulk read, no helper call.
 
 The default discovery cap is 300. Saturation stops before any writes and requires an explicit
 larger `--limit` (a decimal integer from 1 to 1000 without leading zeros); repeating the same default
@@ -757,7 +774,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    1–2 seconds before its own trigger and closed zero races in 75 elections;
    persist a completed no-gate outcome, or an authenticated
    `review-progress-head` marker after evidenced silent expiry, so the next run advances rather than
-   repeats the provider; calculate that cursor as the furthest completed lane by provider order,
+   repeats the provider — but only after `.claude/scripts/review-no-gate-guard.sh` exits `0` for that
+   head and provider: a refusal answers the request that drew it, never the head, so a review the
+   lane already published there governs and no no-gate is recorded (#3231); calculate that cursor as the furthest completed lane by provider order,
    never by latest response time;
    findings require a fix-or-refute and restart from CodeRabbit, with a push only
    when files changed; after authenticated resolution, the first successful provider in that

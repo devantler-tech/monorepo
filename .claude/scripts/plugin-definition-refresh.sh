@@ -259,11 +259,25 @@ release_lock() {
   fi
   LOCK=""
 }
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
+# cleanup then becomes the script's status. Completion is recorded explicitly, so reaching the end is
+# the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
+plugin_definition_refresh_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+plugin_definition_refresh_cleanup() {
+  local rc=$?
+  release_lock
+  if [ "$plugin_definition_refresh_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "plugin-definition-refresh: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
 # INT/TERM must TERMINATE, not just clean up. A handler that returns normally resumes the script at
 # the point of interruption — so releasing the lock here and falling through would carry on into the
 # candidate check and `plugin update` with the lock already surrendered, which is precisely the
 # unserialized apply the lock exists to prevent. Exit instead and let the EXIT trap do the cleanup.
-trap release_lock EXIT
+trap plugin_definition_refresh_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -763,4 +777,5 @@ say "  ⚠️  'plugin update' requires a RESTART to take effect. THIS run keeps
 say "      definition it booted with; the pinned copy is served from the next dispatch onward."
 say "      Do not read this exit 0 as 'this run used the new definition' — that would be the same"
 say "      fail-open as the drift itself. Verify with plugin-definition-currency.sh next dispatch."
+plugin_definition_refresh_finished=1
 exit 0

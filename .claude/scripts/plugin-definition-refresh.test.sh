@@ -582,10 +582,14 @@ else
 fi
 cleanup
 
-if grep -Eq '^trap release_lock EXIT$' "$SCRIPT" \
+# The EXIT handler is the fail-closed cleanup (monorepo#3414), so the lock release is asserted where
+# it now happens: inside that handler, which must be the only thing the EXIT trap runs.
+exit_handler="$(sed -n '/^plugin_definition_refresh_cleanup() {$/,/^}$/p' "$SCRIPT")"
+if grep -Eq '^trap plugin_definition_refresh_cleanup EXIT$' "$SCRIPT" \
+  && grep -Eq '^  release_lock$' <<<"$exit_handler" \
   && grep -Eq "^trap 'exit 130' INT$" "$SCRIPT" \
   && grep -Eq "^trap 'exit 143' TERM$" "$SCRIPT" \
-  && ! grep -Eq '^trap release_lock EXIT INT TERM$' "$SCRIPT"; then
+  && ! grep -Eq '^trap [A-Za-z_]+ EXIT INT TERM$' "$SCRIPT"; then
   ok "A17 INT/TERM exit instead of resuming after releasing the lock"
 else bad "A17 INT/TERM exit instead of resuming after releasing the lock" \
   "$(grep -n '^trap ' "$SCRIPT" | tr '\n' '|')"; fi

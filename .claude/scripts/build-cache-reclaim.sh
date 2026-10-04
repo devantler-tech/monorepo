@@ -32,6 +32,8 @@
 #      whatever they are named, recognised by the README each tool writes into its cache and
 #      reclaimed once nothing was written to them for a threshold counted in HOURS
 #      (2026-09-30: 75 GB).
+#   2c. Per-lane fallback module caches (go-mod-*) directly under the temp root, each removed
+#      only when it exceeds cache_budget_gb.
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
 #   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
 #      per-user temp dir, older than a threshold counted in HOURS.
@@ -46,10 +48,12 @@
 #   BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS  idle threshold for (2b); default 6
 #
 # SAFETY — this deletes, so every rule below fails closed:
-#   * Only trees matching a known agent-generated name pattern, or carrying a Go or
-#     golangci-lint cache README marker (2b), are ever considered.
+#   * Only trees matching a known agent-generated name pattern, carrying a Go or
+#     golangci-lint cache README marker (2b), or named go-mod-* and laid out like a Go
+#     module cache (2c), are ever considered.
 #   * A tree younger than its age threshold is KEPT.
-#   * A tree any running process holds open is KEPT.
+#   * A tree any running process holds open is KEPT, and each cache or tree is asked about
+#     again immediately before it is removed.
 #   * The caller's own session tree is KEPT.
 #   * A Go work dir is KEPT while a Go toolchain process that could own it is running.
 #   * The golangci-lint cache is KEPT while golangci-lint runs, and is emptied only when
@@ -270,6 +274,58 @@ dir_in_use() {
     awk -v p="$canon" 'index($0, p "/") == 1 || $0 == p { found = 1 } END { exit !found }'
 }
 
+still_idle() {
+  # Re-verify a single tree immediately before it is removed.
+  #
+  # It sits here, ahead of the cache gate, because every remover asks it: `go clean` on a Go
+  # cache below, the golangci-lint cache, and the tree sweeps.
+  #
+  # The snapshot above is captured once, up front, and the loop then measures the size of
+  # every candidate before it deletes any of them -- so minutes can pass between that
+  # snapshot and a given unlink. A process that opens a file under a candidate inside that
+  # window is simply not in the snapshot, and the tree is deleted while genuinely in use.
+  # One targeted probe per tree costs time proportional to the DELETION set rather than to
+  # the ~1600 candidates a sweep scans, which is why it is affordable here and was not
+  # affordable as the primary check.
+  #
+  # This NARROWS the window; it does not close it, and nothing available here could. The
+  # trees are created by agent harnesses this script does not own, so there is no lock to
+  # take between the last observation and unlink(2). What remains is the gap between this
+  # probe and the `rm` a few lines below, and the cost of losing that race is a rebuild of
+  # regenerable content.
+  #
+  # `+D` descends the subtree, and its rows are judged rather than its exit status: it
+  # exits 1 while PRINTING the processes that hold a tree, so an exit-status test calls a
+  # tree free at the very moment lsof is naming who is using it.
+  # Probe the RESOLVED path: lsof works in physical paths, so a symlinked spelling would
+  # be asking about a different name for the same tree. A path that cannot be resolved is
+  # reported in use, so it is kept.
+  local path=$1 rows canon errfile diagnostics
+  [ -n "$LSOF_BIN" ] || return 1
+  canon=$(cd -- "$path" 2>/dev/null && pwd -P) || return 1
+  [ -n "$canon" ] || return 1
+  errfile=$(mktemp 2>/dev/null) || return 1
+  rows=$("$LSOF_BIN" +D "$canon" -Fn 2>"$errfile" | sed -n 's/^n//p')
+  diagnostics=$(cat -- "$errfile" 2>/dev/null)
+  rm -f -- "$errfile"
+  # A non-empty row set names a holder, so the tree is in use.
+  [ -z "$rows" ] || return 1
+  # An EMPTY row set is a claim about the SCAN, not about the tree, and on its own it is
+  # not evidence of anything. Measured here: lsof exits 1 for an idle tree, for a tree
+  # with a holder, and for a scan it could not finish alike, so the exit status separates
+  # none of the three -- and a subdirectory it cannot opendir() yields exactly the same
+  # empty row set as a genuinely idle tree. The diagnostic stream is the only signal that
+  # tells those two apart, so an empty result counts as idle only when the scan ran clean.
+  # Anything else keeps the tree: the same fail-closed direction as every other rule here,
+  # and the cheap side of the trade -- a kept tree costs one more cycle, while a tree
+  # deleted on an answer lsof never gave costs a live run its working state.
+  if [ -n "$diagnostics" ]; then
+    log "KEEP  (scan incomplete) $canon: ${diagnostics%%$'\n'*}"
+    return 1
+  fi
+  return 0
+}
+
 # PS_TABLE holds one "<elapsed-seconds> <name>" line per process on this host, captured
 # ONCE. Open files alone cannot prove a Go work dir or the golangci-lint cache is idle: a
 # running go command need not hold anything under its work dir between build steps, and
@@ -409,10 +465,14 @@ find_go() {
 #   $3  the `go clean` flag that empties it
 reclaim_go_cache() {
   local label=$1 env_var=$2 clean_flag=$3
-  local dir cache_mb budget_mb
+  local dir canon cache_mb budget_mb
 
   dir=$("$go_bin" env "$env_var" 2>/dev/null)
   [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  # Remembered by resolved path, so the fallback module-cache sweep (2c) does not decide, or
+  # count, the same cache a second time when GOMODCACHE names one of its candidates.
+  canon=$(cd -- "$dir" 2>/dev/null && pwd -P) || canon=''
+  [ -z "$canon" ] || BUDGETED_CACHES="${BUDGETED_CACHES}${canon}"$'\n'
 
   if ! cache_mb=$(size_mb "$dir"); then
     log "${label} size unmeasurable — keeping"
@@ -429,8 +489,8 @@ reclaim_go_cache() {
 
   # The budget says this cache is worth trimming; liveness says whether it is safe to.
   # `go clean` empties the cache wholesale, so a build reading it mid-sweep loses files
-  # from under itself. Nothing later protects this: holds_open and still_idle both narrow
-  # to the temp root, and both run in the sweep that FOLLOWS.
+  # from under itself. The tree sweep's own checks run later and only on its candidates,
+  # so this cache is asked about here: from the snapshot now, and afresh before the clean.
   #
   # Checked BEFORE the mode branch so the dry-run projection matches what apply would do.
   # The scheduled sibling runs dry-run, so a summary promising space that apply would then
@@ -452,6 +512,16 @@ reclaim_go_cache() {
     return 0
   fi
 
+  # dir_in_use answered from the snapshot taken at the start of the run, and `du` over this
+  # cache alone takes minutes: ample time for a build to start and open files in it. Ask
+  # again, about this cache only, immediately before emptying it -- the late re-check the
+  # tree sweep and the golangci-lint cache already make (monorepo#3710). A probe that finds
+  # a holder, or cannot finish, keeps the cache.
+  if ! still_idle "$dir"; then
+    log "${label} ${dir} in use at removal time — keeping"
+    return 0
+  fi
+
   if "$go_bin" clean "$clean_flag" 2>/dev/null; then
     reclaimed_mb=$((reclaimed_mb + cache_mb))
     log "${label} cleaned, reclaimed ~${cache_mb} MB"
@@ -460,6 +530,8 @@ reclaim_go_cache() {
   fi
 }
 
+# BUDGETED_CACHES lists, by resolved path, every cache reclaim_go_cache decided.
+BUDGETED_CACHES=''
 if go_bin=$(find_go); then
   # The BUILD cache is the largest single consumer (55 GB when the host filled). The
   # MODULE cache is the second (34 GB) and is named by the issue's acceptance criteria;
@@ -507,55 +579,6 @@ holds_open() {
   # Scanning to EOF costs microseconds and is the only form whose status means what it says.
   printf "%s\n" "$LSOF_SNAPSHOT" |
     awk -v p="$canon" 'index($0, p "/") == 1 || $0 == p { found = 1 } END { exit !found }'
-}
-
-still_idle() {
-  # Re-verify a single tree immediately before it is removed.
-  #
-  # The snapshot above is captured once, up front, and the loop then measures the size of
-  # every candidate before it deletes any of them -- so minutes can pass between that
-  # snapshot and a given unlink. A process that opens a file under a candidate inside that
-  # window is simply not in the snapshot, and the tree is deleted while genuinely in use.
-  # One targeted probe per tree costs time proportional to the DELETION set rather than to
-  # the ~1600 candidates a sweep scans, which is why it is affordable here and was not
-  # affordable as the primary check.
-  #
-  # This NARROWS the window; it does not close it, and nothing available here could. The
-  # trees are created by agent harnesses this script does not own, so there is no lock to
-  # take between the last observation and unlink(2). What remains is the gap between this
-  # probe and the `rm` a few lines below, and the cost of losing that race is a rebuild of
-  # regenerable content.
-  #
-  # `+D` descends the subtree, and its rows are judged rather than its exit status: it
-  # exits 1 while PRINTING the processes that hold a tree, so an exit-status test calls a
-  # tree free at the very moment lsof is naming who is using it.
-  # Probe the RESOLVED path: lsof works in physical paths, so a symlinked spelling would
-  # be asking about a different name for the same tree. A path that cannot be resolved is
-  # reported in use, so it is kept.
-  local path=$1 rows canon errfile diagnostics
-  [ -n "$LSOF_BIN" ] || return 1
-  canon=$(cd -- "$path" 2>/dev/null && pwd -P) || return 1
-  [ -n "$canon" ] || return 1
-  errfile=$(mktemp 2>/dev/null) || return 1
-  rows=$("$LSOF_BIN" +D "$canon" -Fn 2>"$errfile" | sed -n 's/^n//p')
-  diagnostics=$(cat -- "$errfile" 2>/dev/null)
-  rm -f -- "$errfile"
-  # A non-empty row set names a holder, so the tree is in use.
-  [ -z "$rows" ] || return 1
-  # An EMPTY row set is a claim about the SCAN, not about the tree, and on its own it is
-  # not evidence of anything. Measured here: lsof exits 1 for an idle tree, for a tree
-  # with a holder, and for a scan it could not finish alike, so the exit status separates
-  # none of the three -- and a subdirectory it cannot opendir() yields exactly the same
-  # empty row set as a genuinely idle tree. The diagnostic stream is the only signal that
-  # tells those two apart, so an empty result counts as idle only when the scan ran clean.
-  # Anything else keeps the tree: the same fail-closed direction as every other rule here,
-  # and the cheap side of the trade -- a kept tree costs one more cycle, while a tree
-  # deleted on an answer lsof never gave costs a live run its working state.
-  if [ -n "$diagnostics" ]; then
-    log "KEEP  (scan incomplete) $canon: ${diagnostics%%$'\n'*}"
-    return 1
-  fi
-  return 0
 }
 
 own_session_tree() {
@@ -983,6 +1006,99 @@ if [ -n "$run_cache_trees" ]; then
     esac
   done <<EOF
 $run_cache_trees
+EOF
+fi
+
+# ---------------------------------------------------------------------------
+# 2c. Per-lane fallback module caches under the temp root, budgeted like GOMODCACHE.
+#
+# A runtime whose sandbox cannot write the default caches points GOMODCACHE at
+# <temp root>/go-mod-<lane> (git-and-worktrees guide). Nothing owned that cache: (1) budgets
+# only the GOMODCACHE this run's own `go env` reports, and a module cache carries no README,
+# so the marker sweep in (2b) never selects it. It could grow without bound (monorepo#3710).
+#
+# It is BUDGETED, not aged. A lane keeps one module cache and reads it far more often than
+# it writes to it, so an idle rule would empty a warm cache between every two runs and each
+# run would download its modules again. Over cache_budget_gb it goes through sweep_candidate,
+# with every guard that applies to a tree: the caller's own tree, the liveness snapshot, the
+# late re-probe, and the read-only files a module cache is made of.
+#
+# Recognised by name AND shape: a direct child of the temp root named go-mod-* that holds
+# cache/download, which the go command creates in every module cache it downloads into.
+# Anything else called go-mod-* is not positively a module cache and is KEPT.
+# ---------------------------------------------------------------------------
+
+# is_module_cache <dir> returns 0 when <dir> is laid out like a Go module cache, 1 when it is
+# not, and 2 when it could not be inspected. Symlinks do not count: the measurement and the
+# removal must act on this tree and no other.
+is_module_cache() {
+  local dir=$1
+  # A directory this run cannot list or search hides its layout: "not examined", never "not one".
+  if [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
+    return 2
+  fi
+  if [ ! -d "${dir}/cache" ] || [ -L "${dir}/cache" ]; then
+    return 1
+  fi
+  if [ ! -r "${dir}/cache" ] || [ ! -x "${dir}/cache" ]; then
+    return 2
+  fi
+  if [ ! -d "${dir}/cache/download" ] || [ -L "${dir}/cache/download" ]; then
+    return 1
+  fi
+  return 0
+}
+
+# reclaim_fallback_modcache <dir> keeps one fallback module cache within the budget.
+reclaim_fallback_modcache() {
+  local tree=$1 label='fallback GOMODCACHE' shape_rc canon cache_mb budget_mb
+  # The status is read in the else branch: `if ! f` would turn f's 2 into a 0.
+  if is_module_cache "$tree"; then :; else
+    shape_rc=$?
+    if [ "$shape_rc" -eq 2 ]; then
+      unknown=$((unknown + 1))
+      log "UNKNOWN (unreadable, module cache not examined) $tree"
+    fi
+    return 0
+  fi
+  canon=$(cd -- "$tree" 2>/dev/null && pwd -P) || canon=''
+  if [ -z "$canon" ]; then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (unresolvable, module cache not examined) $tree"
+    return 0
+  fi
+  # (1) has already decided the GOMODCACHE this run's go reports.
+  case $'\n'"$BUDGETED_CACHES" in
+    *$'\n'"$canon"$'\n'*) return 0 ;;
+  esac
+  if ! cache_mb=$(size_mb "$tree"); then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (unmeasurable) $tree"
+    return 0
+  fi
+  budget_mb=$((CACHE_BUDGET_GB * 1024))
+  log "${label} ${tree} = ${cache_mb} MB (budget ${budget_mb} MB)"
+  if [ "$cache_mb" -le "$budget_mb" ]; then
+    log "${label} within budget — keeping (a warm cache is worth more than the space)"
+    return 0
+  fi
+  sweep_candidate "$tree" temp-root
+}
+
+if [ -d "$TMPDIR_ROOT" ]; then
+  # Listed on its own, so a failed scan is seen (see the marker sweep above). -H follows the
+  # root itself when it is a symlink; a symlinked CHILD is not `-type d` and is never listed.
+  if ! fallback_modcaches=$(find -H "$TMPDIR_ROOT" -mindepth 1 -maxdepth 1 -type d \
+    -name 'go-mod-*' 2>/dev/null); then
+    fallback_modcaches=''
+    unknown=$((unknown + 1))
+    log "UNKNOWN (scan failed) $TMPDIR_ROOT: fallback module caches not examined"
+  fi
+  while IFS= read -r tree; do
+    [ -n "$tree" ] || continue
+    reclaim_fallback_modcache "$tree"
+  done <<EOF
+$fallback_modcaches
 EOF
 fi
 

@@ -9,7 +9,11 @@
 #   - a main checkout never claims the per-session worktrees nested inside it;
 #   - the asking session is `self`, while another session in the same worktree and a sibling in a
 #     different worktree stay `live`;
-#   - a failed or empty `lsof`, or a failed `ps`, is `unknown:` and exit 2, never `none`.
+#   - a failed or empty `lsof`, or a failed `ps`, is `unknown:` and exit 2, never `none`;
+#   - a worktree lock holds its worktree while the process it names lives with the recorded start
+#     time, releases it once that process exited or the pid was reused, and is `unknown:` when the
+#     helper cannot read it (monorepo#3780: an isolated subagent keeps no process in its worktree
+#     between its commands, so only the harness's lock names its session).
 # `lsof` and `ps` are shims driven by FIXTURE_* variables; the helper itself reads no environment.
 set -euo pipefail
 
@@ -80,6 +84,76 @@ if g -C "${w3}" symbolic-ref -q HEAD >/dev/null; then
   exit 1
 fi
 
+# ── Locked worktrees (monorepo#3780) ────────────────────────────────────────────────────────────
+# A second repository, so every case that asks about the first one runs with no lock in sight. Its
+# worktrees sit where the harness puts them and carry the reason the harness writes when it locks
+# one. Copied from a host running Claude Code 2.1.286, the start time as `ps -o lstart=` pads it:
+#   claude agent agent-ad7725be40d52b9c8 (pid 17903 start Fri Oct  2 14:59:59 2026)
+hub="${sandbox}/hub"
+hub_wt="${hub}/.claude/worktrees"
+start_theirs='Fri Oct  2 14:59:59 2026'
+start_mine='Sat Oct  3 08:05:07 2026'
+start_s1='Thu Oct  1 23:00:10 2026'
+g init -q "${hub}"
+g -C "${hub}" commit -q --allow-empty -m init
+g -C "${hub}" submodule --quiet add "${sandbox}/product-origin" product
+g -C "${hub}" commit -q -m 'add product'
+g -C "${hub}" config remote.origin.url git@github.com:devantler-tech/hub.git
+# hub_worktree <name> <branch> [<lock reason>] — a worktree, locked when a reason is given.
+hub_worktree() {
+  g -C "${hub}" worktree add -q -b "$2" "${hub_wt}/$1"
+  if [ "$#" -ge 3 ]; then g -C "${hub}" worktree lock --reason "$3" "${hub_wt}/$1"; fi
+}
+me="$$"
+# The two sessions' own worktrees: where their long-lived processes have their working directory.
+# The asking session's is locked by that session itself, as the harness does for a worktree session.
+hub_worktree theirs claude/theirs-30
+hub_worktree mine claude/mine-31 "claude session mine (pid ${me} start ${start_mine})"
+# a1: another session's subagent, mid-flight. Nothing has a working directory in it, and it has
+# populated the product submodule and works on a branch there.
+hub_worktree agent-a1 worktree-agent-a1 "claude agent agent-a1 (pid 9000002 start ${start_theirs})"
+g -C "${hub_wt}/agent-a1" submodule --quiet update --init product
+g -C "${hub_wt}/agent-a1/product" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${hub_wt}/agent-a1/product" switch -q -c claude/product-32
+# a2: its session exited. a3: its session exited and the pid now belongs to another process.
+hub_worktree agent-a2 worktree-agent-a2 "claude agent agent-a2 (pid 9000099 start ${start_theirs})"
+hub_worktree agent-a3 worktree-agent-a3 "claude agent agent-a3 (pid 9000003 start ${start_theirs})"
+# a4, a5, a8: locks the helper cannot read as a process identity: someone else's reason, no reason
+# at all, and the harness's form with the start time in another shape.
+hub_worktree agent-a4 worktree-agent-a4 'left locked by hand'
+hub_worktree agent-a5 worktree-agent-a5
+g -C "${hub}" worktree lock "${hub_wt}/agent-a5"
+hub_worktree agent-a8 worktree-agent-a8 'claude agent agent-a8 (pid 9000002 start 2026-10-02T14:59:59Z)'
+# a6, a7: the form the harness writes when it could not read its own start time.
+hub_worktree agent-a6 worktree-agent-a6 'claude agent agent-a6 (pid 9000003)'
+hub_worktree agent-a7 worktree-agent-a7 'claude agent agent-a7 (pid 9000099)'
+# a9, a10: two subagents of the ASKING session. Both locks name the one session process.
+hub_worktree agent-a9 worktree-agent-a9 "claude agent agent-a9 (pid ${me} start ${start_mine})"
+hub_worktree agent-a10 worktree-agent-a10 "claude agent agent-a10 (pid ${me} start ${start_mine})"
+# s1: another session's own locked worktree (its name may hold a slash).
+hub_worktree s1 claude/s1-33 "claude session team/s1 (pid 9000011 start ${start_s1})"
+# a11: an unreadable lock on a worktree whose directory is gone. The registration outlives it.
+hub_worktree agent-a11 worktree-agent-a11 'left locked by hand'
+rm -rf -- "${hub_wt}/agent-a11"
+# a12: a live lock on a worktree whose `.git` entry is gone. Its directory now resolves to the main
+# checkout around it, which the lock was never on.
+hub_worktree agent-a12 worktree-agent-a12 "claude agent agent-a12 (pid 9000002 start ${start_theirs})"
+rm -f -- "${hub_wt}/agent-a12/.git"
+
+# Guard the fixture itself: git must list the harness's reason exactly as written, a1's submodule
+# must be its own checkout, and a11 must still be registered and locked.
+hub_list="$(g -C "${hub}" worktree list --porcelain)"
+grep -qxF "locked claude agent agent-a1 (pid 9000002 start ${start_theirs})" <<<"${hub_list}" ||
+  { echo "FAIL fixture: git does not list a1's lock reason as written" >&2; exit 1; }
+[ "$(grep -c '^locked' <<<"${hub_list}")" = 14 ] ||
+  { echo "FAIL fixture: expected 14 locked worktrees in the hub repository" >&2; exit 1; }
+[ "$(g -C "${hub_wt}/agent-a1/product" rev-parse --show-toplevel)" = "${hub_wt}/agent-a1/product" ] ||
+  { echo "FAIL fixture: agent-a1/product is not a populated submodule checkout" >&2; exit 1; }
+grep -qxF "worktree ${hub_wt}/agent-a11" <<<"${hub_list}" ||
+  { echo "FAIL fixture: agent-a11 is no longer registered" >&2; exit 1; }
+[ "$(g -C "${hub_wt}/agent-a12" rev-parse --show-toplevel)" = "${hub}" ] ||
+  { echo "FAIL fixture: agent-a12 does not resolve to the main checkout around it" >&2; exit 1; }
+
 # ── Shims ───────────────────────────────────────────────────────────────────────────────────────
 shims="${sandbox}/shims"
 mkdir -p "${shims}"
@@ -89,10 +163,18 @@ cat "${FIXTURE_LSOF:?}"
 exit "${FIXTURE_LSOF_RC:-0}"
 SHIM
 # The real process table (so the helper's own ancestry is real), with one row replaced and the
-# scripted holder rows appended.
+# scripted holder rows appended. The start-time read behind a worktree lock is answered from a
+# fixture, and only when asked in the spelling the harness recorded: the C locale and UTC.
 cat >"${shims}/ps" <<'SHIM'
 #!/usr/bin/env bash
 if [ "${FIXTURE_PS_FAIL:-0}" = 1 ]; then exit 1; fi
+case " $* " in
+  *' lstart= '*)
+    if [ "${FIXTURE_STARTS_FAIL:-0}" = 1 ] || [ "${TZ:-}" != UTC ] || [ "${LC_ALL:-}" != C ]; then exit 1; fi
+    cat "${FIXTURE_PS_STARTS:?}"
+    exit 0
+    ;;
+esac
 /bin/ps "$@" | awk -v row="${FIXTURE_SELF_ROW:-}" '
   BEGIN { split(row, r, " ") }
   row != "" && $1 == r[1] { print row; next }
@@ -100,8 +182,20 @@ if [ "${FIXTURE_PS_FAIL:-0}" = 1 ]; then exit 1; fi
 cat "${FIXTURE_PS_EXTRA:?}"
 SHIM
 chmod +x "${shims}/lsof" "${shims}/ps"
+# A git that cannot list worktrees and is the real one for everything else, on PATH only for the
+# case that needs it.
+gitshim="${sandbox}/gitshim"
+mkdir -p "${gitshim}"
+real_git="$(command -v git)"
+cat >"${gitshim}/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *' worktree list '*) exit 1 ;;
+esac
+exec "${real_git}" "\$@"
+SHIM
+chmod +x "${gitshim}/git"
 
-me="$$"
 lsof_full="${sandbox}/lsof-full"
 cat >"${lsof_full}" <<LSOF
 p${me}
@@ -187,6 +281,29 @@ lsof_idle_shells="${sandbox}/lsof-idle-shells"
 printf 'p9000013\nfcwd\nn%s\np9000016\nfcwd\nn%s\np9000017\nfcwd\nn%s\n' "${w2}" "${w2}" "${w2}" >"${lsof_idle_shells}"
 lsof_busy_shell="${sandbox}/lsof-busy-shell"
 printf 'p9000013\nfcwd\nn%s\np9000014\nfcwd\nn%s\n' "${w2}" "${w2}" >"${lsof_busy_shell}"
+# The hub repository: each session's process sits in its own worktree and NOTHING has a working
+# directory in a subagent's worktree, which is the state between two of a worker's commands.
+lsof_hub="${sandbox}/lsof-hub"
+printf 'p%s\nfcwd\nn%s\np9000002\nfcwd\nn%s\np9000003\nfcwd\nn/\n' "${me}" "${hub_wt}/mine" "${hub_wt}/theirs" >"${lsof_hub}"
+lsof_hub_s1="${sandbox}/lsof-hub-s1"
+cat "${lsof_hub}" >"${lsof_hub_s1}"
+printf 'p9000011\nfcwd\nn%s\n' "${hub_wt}/s1" >>"${lsof_hub_s1}"
+# ...and with a process in the worktree whose lock cannot be read: a rival, then the asker's own.
+lsof_hub_rival="${sandbox}/lsof-hub-rival"
+printf 'p%s\nfcwd\nn%s\np9000003\nfcwd\nn%s\n' "${me}" "${hub_wt}/mine" "${hub_wt}/agent-a4" >"${lsof_hub_rival}"
+lsof_hub_own="${sandbox}/lsof-hub-own"
+printf 'p%s\nfcwd\nn%s\np9000001\nfcwd\nn%s\n' "${me}" "${hub_wt}/mine" "${hub_wt}/agent-a4" >"${lsof_hub_own}"
+# What `ps -A -o pid= -o lstart=` prints for the processes a lock may name. 9000003 holds the pid
+# a3's lock names, with another start time; 9000099 is not running.
+ps_starts="${sandbox}/ps-starts"
+{
+  printf '%7s %s    \n' "${me}" "${start_mine}"
+  printf '%7s %s    \n' 9000002 "${start_theirs}"
+  printf '%7s %s    \n' 9000003 'Sat Oct  3 09:30:00 2026'
+  printf '%7s %s    \n' 9000011 "${start_s1}"
+} >"${ps_starts}"
+starts_fail=0
+list_fail=0
 
 # pr <owner/repo> <n> <head> [<head-owner>] [<head-repo>] — one gh pr view --json
 # url,headRefName,headRepositoryOwner,headRepository object; the head defaults to the base repository.
@@ -199,12 +316,17 @@ pr() {
 }
 
 # expect <label> <asking-dir> <self-row> <want-rc> <want-stdout> <stdin> [lsof-file] [lsof-rc] [ps-fail]
+# `starts_fail=1` fails the start-time read and `list_fail=1` the worktree listing, for the cases
+# that set them.
 expect() {
   local label="$1" dir="$2" self_row="$3" want_rc="$4" want_out="$5" payload="$6"
   local lsof_file="${7:-${lsof_full}}" lsof_rc="${8:-0}" ps_fail="${9:-0}" out rc=0
+  local path="${shims}:${PATH}"
+  if [ "${list_fail}" = 1 ]; then path="${gitshim}:${path}"; fi
   checks=$((checks + 1))
-  out="$(cd "${dir}" && PATH="${shims}:${PATH}" FIXTURE_LSOF="${lsof_file}" FIXTURE_LSOF_RC="${lsof_rc}" \
+  out="$(cd "${dir}" && PATH="${path}" FIXTURE_LSOF="${lsof_file}" FIXTURE_LSOF_RC="${lsof_rc}" \
     FIXTURE_PS_FAIL="${ps_fail}" FIXTURE_PS_EXTRA="${ps_extra}" FIXTURE_SELF_ROW="${self_row}" \
+    FIXTURE_PS_STARTS="${ps_starts}" FIXTURE_STARTS_FAIL="${starts_fail}" \
     "${tool}" --input - <<<"${payload}" 2>/dev/null)" || rc=$?
   if [ "${rc}" = "${want_rc}" ] && [ "${out}" = "${want_out}" ]; then
     echo "ok   ${label}"
@@ -302,6 +424,128 @@ expect "an outer session that launched the asking one is live, not part of the a
   "${w1}" "${me} 9000011 claude" 0 \
   "devantler-tech/demo#2 holder=live:4:9000011/codex,9000003/node,9000004/sleep" \
   "$(pr devantler-tech/demo 2 claude/feature-2)" "${lsof_outer}"
+
+# ── Worktree locks (monorepo#3780) ──────────────────────────────────────────────────────────────
+mine="${hub_wt}/mine"
+expect "a locked worktree is held while the process its lock names lives, with no process inside it" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/hub#40 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/hub 40 worktree-agent-a1)" "${lsof_hub}"
+expect "the lock is read from the repository asked from, with no process working anywhere in it" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#40 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/hub 40 worktree-agent-a1)"
+expect "a lock holds the checkouts its worktree owns: the branch in its populated submodule" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/product#32 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 32 claude/product-32)" "${lsof_hub}"
+expect "a lock whose process exited holds nothing" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#41 holder=none" \
+  "$(pr devantler-tech/hub 41 worktree-agent-a2)" "${lsof_hub}"
+expect "a lock whose pid now belongs to a process with another start time holds nothing" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#42 holder=none" \
+  "$(pr devantler-tech/hub 42 worktree-agent-a3)" "${lsof_hub}"
+expect "a lock that records no start time holds nothing once its process exited" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#46 holder=none" \
+  "$(pr devantler-tech/hub 46 worktree-agent-a7)" "${lsof_hub}"
+expect "an unreadable lock on a worktree whose directory is gone holds nothing: no checkout is left" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#50 holder=none" \
+  "$(pr devantler-tech/hub 50 worktree-agent-a11)" "${lsof_hub}"
+expect "a live lock on a worktree that lost its .git entry does not hold the checkout around it" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#52 holder=none" \
+  "$(pr devantler-tech/hub 52 main)" "${lsof_hub}"
+expect "a lock reason that is not the harness's is unknown, never none" \
+  "${mine}" "${session}" 2 \
+  "devantler-tech/hub#43 holder=unknown:lock-reason" \
+  "$(pr devantler-tech/hub 43 worktree-agent-a4)" "${lsof_hub}"
+expect "a lock with no reason at all is unknown, never none" \
+  "${mine}" "${session}" 2 \
+  "devantler-tech/hub#44 holder=unknown:lock-reason" \
+  "$(pr devantler-tech/hub 44 worktree-agent-a5)" "${lsof_hub}"
+expect "a start time in another shape is unknown, never a reused pid" \
+  "${mine}" "${session}" 2 \
+  "devantler-tech/hub#47 holder=unknown:lock-reason" \
+  "$(pr devantler-tech/hub 47 worktree-agent-a8)" "${lsof_hub}"
+expect "a lock that records no start time is unknown while its pid is alive: owner or reused pid" \
+  "${mine}" "${session}" 2 \
+  "devantler-tech/hub#45 holder=unknown:lock-reason" \
+  "$(pr devantler-tech/hub 45 worktree-agent-a6)" "${lsof_hub}"
+expect "an unreadable lock is unknown for the PR it serves only; the others are still answered" \
+  "${mine}" "${session}" 2 \
+  "devantler-tech/hub#41 holder=none
+devantler-tech/hub#43 holder=unknown:lock-reason
+devantler-tech/hub#40 holder=live:1:9000002/claude" \
+  "$(jq -sc . <<<"$(pr devantler-tech/hub 41 worktree-agent-a2) $(pr devantler-tech/hub 43 worktree-agent-a4) $(pr devantler-tech/hub 40 worktree-agent-a1)")" \
+  "${lsof_hub}"
+expect "a rival working in the worktree answers live: an unreadable lock can only add holders" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#43 holder=live:1:9000003/node" \
+  "$(pr devantler-tech/hub 43 worktree-agent-a4)" "${lsof_hub_rival}"
+expect "the asker's own process in the worktree does not vouch for a lock it cannot read" \
+  "${hub_wt}/agent-a4" "${session}" 2 \
+  "devantler-tech/hub#43 holder=unknown:lock-reason" \
+  "$(pr devantler-tech/hub 43 worktree-agent-a4)" "${lsof_hub_own}"
+expect "a subagent asking from its own locked worktree is self" \
+  "${hub_wt}/agent-a9" "${session}" 0 \
+  "devantler-tech/hub#48 holder=self:1:${me}/claude" \
+  "$(pr devantler-tech/hub 48 worktree-agent-a9)" "${lsof_hub}"
+expect "a sibling subagent's locked worktree stays live, though one session process locked both" \
+  "${hub_wt}/agent-a10" "${session}" 0 \
+  "devantler-tech/hub#48 holder=live:1:${me}/claude" \
+  "$(pr devantler-tech/hub 48 worktree-agent-a9)" "${lsof_hub}"
+expect "asked from the session's own worktree, the worktree it locked for a subagent is live" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#48 holder=live:1:${me}/claude" \
+  "$(pr devantler-tech/hub 48 worktree-agent-a9)" "${lsof_hub}"
+expect "with no session process among the ancestors, a lock naming the asker's own pid is still live elsewhere" \
+  "${mine}" "${plain}" 0 \
+  "devantler-tech/hub#48 holder=live:1:${me}/testshell" \
+  "$(pr devantler-tech/hub 48 worktree-agent-a9)" "${lsof_hub}"
+expect "a session's lock on its own worktree holds it between that session's commands" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#49 holder=live:1:9000011/codex" \
+  "$(pr devantler-tech/hub 49 claude/s1-33)" "${lsof_hub}"
+expect "a session sitting in the worktree it locked is counted once" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#49 holder=live:1:9000011/codex" \
+  "$(pr devantler-tech/hub 49 claude/s1-33)" "${lsof_hub_s1}"
+expect "a session sitting in the worktree it locked is answered by its working directory: still self for its subagent" \
+  "${hub_wt}/agent-a9" "${session}" 0 \
+  "devantler-tech/hub#51 holder=self:1:${me}/claude" \
+  "$(pr devantler-tech/hub 51 claude/mine-31)" "${lsof_hub}"
+ps_starts_real="${ps_starts}"
+ps_starts="${sandbox}/ps-starts-odd"
+printf '%7s %s\n' 9000002 '2026-10-02 14:59:59' >"${ps_starts}"
+expect "a live start time this host prints in another shape is unknown, never a reused pid" \
+  "${mine}" "${session}" 2 \
+  "devantler-tech/hub#40 holder=unknown:lock-reason" \
+  "$(pr devantler-tech/hub 40 worktree-agent-a1)" "${lsof_hub}"
+ps_starts="${sandbox}/ps-starts-partial"
+printf '%7s %s    \n' 9000003 'Sat Oct  3 09:30:00 2026' >"${ps_starts}"
+expect "a live pid missing from the start-time read is unknown: exited since, or a partial read" \
+  "${mine}" "${session}" 2 \
+  "devantler-tech/hub#40 holder=unknown:lock-reason" \
+  "$(pr devantler-tech/hub 40 worktree-agent-a1)" "${lsof_hub}"
+ps_starts="${ps_starts_real}"
+starts_fail=1
+expect "start times that cannot be read are unknown, never a reused pid" \
+  "${mine}" "${session}" 2 \
+  "devantler-tech/hub#40 holder=unknown:ps-failed
+devantler-tech/hub#41 holder=unknown:ps-failed" \
+  "$(jq -sc . <<<"$(pr devantler-tech/hub 40 worktree-agent-a1) $(pr devantler-tech/hub 41 worktree-agent-a2)")" \
+  "${lsof_hub}"
+starts_fail=0
+list_fail=1
+expect "a worktree list that cannot be read is unknown, never none" \
+  "${mine}" "${session}" 2 \
+  "devantler-tech/hub#41 holder=unknown:worktree-list" \
+  "$(pr devantler-tech/hub 41 worktree-agent-a2)" "${lsof_hub}"
+list_fail=0
 
 # ── Several PRs at once ─────────────────────────────────────────────────────────────────────────
 expect "an array answers every PR in input order" \

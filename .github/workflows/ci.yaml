@@ -19,6 +19,7 @@ jobs:
     outputs:
       docs: ${{ steps.filter.outputs.docs }}
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
+      docs-audit-contract: ${{ steps.filter.outputs.docs-audit-contract }}
       docs-npm-toolchain: ${{ steps.filter.outputs.docs-npm-toolchain }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
@@ -29,6 +30,7 @@ jobs:
       worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
       build-cache-reclaim: ${{ steps.filter.outputs.build-cache-reclaim }}
       disk-preflight: ${{ steps.filter.outputs.disk-preflight }}
+      shared-checkout-freshness: ${{ steps.filter.outputs.shared-checkout-freshness }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
@@ -107,8 +109,20 @@ jobs:
             docs:
               - 'docs/**'
             docs-deps:
+              # What decides the audit's answer: the dependency tree (a shrinkwrap
+              # replaces the lockfile when one exists), the npm settings that pick
+              # the advisory source and what the audit counts, and the wrapper. A
+              # workflow file is not listed, because a workflow-only change cannot
+              # alter what the site depends on and a live advisory says nothing
+              # about it; docs-audit-contract covers it.
               - 'docs/package.json'
               - 'docs/package-lock.json'
+              - 'docs/npm-shrinkwrap.json'
+              - 'docs/.npmrc'
+              - 'docs/scripts/audit-dependencies.sh'
+            docs-audit-contract:
+              # The contract test holds the npm settings to reviewed values.
+              - 'docs/.npmrc'
               - 'docs/scripts/audit-dependencies.sh'
               - 'docs/scripts/audit-dependencies.test.sh'
               # The contract test compares both workflow call sites.
@@ -196,12 +210,19 @@ jobs:
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-rewrite.sh'
               - '.claude/scripts/review-lane-health.sh'
+              - '.claude/scripts/review-no-gate-guard.sh'
               - '.claude/scripts/claude-lane-liveness.sh'
               - '.claude/scripts/renovate-dashboard-drift.sh'
               - '.claude/scripts/pr-ownership-disclosure.sh'
               - '.claude/scripts/comment-disclosure-drift.sh'
               - '.claude/scripts/python-ban-guard.sh'
               - '.claude/scripts/board-archive.sh'
+              - '.claude/scripts/blocked-label-blocker-line.sh'
+              - '.claude/scripts/board-add.sh'
+              - '.claude/scripts/pr-body-contract.sh'
+              - '.claude/scripts/plugin-definition-refresh.sh'
+              - '.claude/scripts/safe-clone.sh'
+              - '.claude/scripts/shared-checkout-freshness.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -228,6 +249,12 @@ jobs:
             disk-preflight:
               - '.claude/scripts/disk-preflight.sh'
               - '.claude/scripts/disk-preflight.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            shared-checkout-freshness:
+              - '.claude/scripts/shared-checkout-freshness.sh'
+              - '.claude/scripts/shared-checkout-freshness.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -691,6 +718,8 @@ jobs:
               - '.claude/scripts/coderabbit-review-verdict.test.sh'
               - '.claude/scripts/coderabbit-comment-verdict.sh'
               - '.claude/scripts/coderabbit-comment-verdict.test.sh'
+              - '.claude/scripts/review-no-gate-guard.sh'
+              - '.claude/scripts/review-no-gate-guard.test.sh'
               - '.claude/scripts/local-review-verdict.sh'
               - '.claude/scripts/local-review-verdict.test.sh'
               - '.claude/scripts/managed-run-streak.sh'
@@ -931,6 +960,29 @@ jobs:
       - name: Audit
         working-directory: docs
         run: ./scripts/audit-dependencies.sh
+
+  # The wrapper's contract test pins its retry behaviour and the wiring of both audit
+  # call sites, with npm stubbed. A job of its own, so a change to either workflow runs
+  # this static contract without the live dependency audit.
+  test-docs-audit-wrapper:
+    name: Test docs audit wrapper contract
+    needs: changes
+    if: needs.changes.outputs.docs-audit-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: Test audit wrapper
+        working-directory: docs
+        run: ./scripts/audit-dependencies.test.sh
 
   # Every workflow that installs, audits or publishes the site must use the npm major that
   # writes docs/package-lock.json. A job of its own, so a workflow-only change runs this
@@ -1283,6 +1335,28 @@ jobs:
       # load-bearing: the host ships bash 3.2 and BSD df, which is where runs check.
       - name: Self-test disk-preflight verdicts
         run: bash .claude/scripts/disk-preflight.test.sh
+
+  test-shared-checkout-freshness:
+    name: Test shared checkout freshness
+    needs: changes
+    if: needs.changes.outputs.shared-checkout-freshness == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Every case builds its own upstream and clone, so no verdict depends on this checkout.
+      # A frozen checkout must be reported and a failed read must exit 2. The macos leg is
+      # load-bearing: the agent host ships bash 3.2, which is where runs call this check.
+      - name: Self-test shared-checkout-freshness verdicts
+        run: bash .claude/scripts/shared-checkout-freshness.test.sh
 
   test-worktree-cleanup:
     name: Test worktree cleanup
@@ -2477,6 +2551,9 @@ jobs:
       # Hermetic: judges captured and synthetic CodeRabbit reply comments, no API call.
       - name: Verify the CodeRabbit reply comment verdict classifier
         run: bash .claude/scripts/coderabbit-comment-verdict.test.sh
+      # Hermetic: judges a captured head and synthetic ones; a stub gh serves the live reads.
+      - name: Verify the no-gate guard
+        run: bash .claude/scripts/review-no-gate-guard.test.sh
       # Hermetic: judges captured local review rounds, no API call.
       - name: Verify the local review round verdict classifier
         run: bash .claude/scripts/local-review-verdict.test.sh
@@ -2844,6 +2921,7 @@ jobs:
       - changes
       - build-docs
       - audit-docs
+      - test-docs-audit-wrapper
       - test-docs-npm-toolchain
       - drift-check-active-projects
       - drift-check-renovate-dashboard
@@ -2865,6 +2943,7 @@ jobs:
       - test-worktree-cleanup
       - test-build-cache-reclaim
       - test-disk-preflight
+      - test-shared-checkout-freshness
       - test-submodule-init
       - test-submodule-pin-currency
       - test-blocked-label-blocker-line
@@ -2932,6 +3011,7 @@ jobs:
             ${{ needs.changes.result }}
             ${{ needs.build-docs.result }}
             ${{ needs.audit-docs.result }}
+            ${{ needs.test-docs-audit-wrapper.result }}
             ${{ needs.test-docs-npm-toolchain.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.drift-check-renovate-dashboard.result }}
@@ -2953,6 +3033,7 @@ jobs:
             ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-build-cache-reclaim.result }}
             ${{ needs.test-disk-preflight.result }}
+            ${{ needs.test-shared-checkout-freshness.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-blocked-label-blocker-line.result }}
