@@ -4084,7 +4084,8 @@ echo "portfolio surveyor contract: round-20 local-file read assertions passed"
 _holder_contract_error() {
   local flat="$1" clause
   for clause in \
-    'A live process **outside your own session** working in a local checkout of its head branch (`holder=live:`)' \
+    'A live process **outside your own session** working in a local checkout of its head branch, or a worktree a live session locked for a worker (`holder=live:`)' \
+    'Never discount a `live:` just because it names your pid' \
     'A live process is a **current** fact, so it does not expire; it is re-read instead' \
     'immediately before your first push to a branch you did not create' \
     '`self:` is your own session and parks nothing' \

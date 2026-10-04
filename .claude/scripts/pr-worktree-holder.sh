@@ -21,7 +21,11 @@
 # OUTPUT (one line per PR, in input order)
 #   <owner>/<repo>#<n> holder=<value>
 #   live:<count>:<pid>/<cmd>[,...]  a process OUTSIDE the asking session works in a checkout of the
-#                                   head branch (at most three are named, sessions first)
+#                                   head branch, or a live session locked a worktree that serves
+#                                   it (at most three are named, sessions first). A lock names the
+#                                   session, so the pid can be the ASKER'S OWN session: one of its
+#                                   workers holds that worktree, or held it and has returned
+#                                   (see WORKTREE LOCKS and SELF)
 #   self:<count>:<pid>/<cmd>[,...]  only the asking session itself does, so it is never a rival
 #   live:...+self:...               both
 #   none                            the process enumeration was complete and nothing holds one
@@ -449,7 +453,9 @@ if [ "${heads}" != $'\n\n' ]; then
       $2 == "" { print "unread\t" $1; next }
       !($2 in alive) { next }
       $3 == "" { print "unread\t" $1; next }
-      !($2 in started) { next }
+      # Alive in the process table but absent from the start-time read: either it exited between
+      # the two reads or that read was partial. Nothing here can tell which, so it is unread.
+      !($2 in started) { print "unread\t" $1; next }
       !lstart(started[$2]) { print "unread\t" $1; next }
       started[$2] == $3 { print $2 "\t" $1 }
     ' "${work}/ps" "${work}/starts" "${work}/locks" >"${work}/verdicts"

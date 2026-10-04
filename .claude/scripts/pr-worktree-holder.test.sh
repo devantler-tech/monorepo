@@ -525,6 +525,12 @@ expect "a live start time this host prints in another shape is unknown, never a 
   "${mine}" "${session}" 2 \
   "devantler-tech/hub#40 holder=unknown:lock-reason" \
   "$(pr devantler-tech/hub 40 worktree-agent-a1)" "${lsof_hub}"
+ps_starts="${sandbox}/ps-starts-partial"
+printf '%7s %s    \n' 9000003 'Sat Oct  3 09:30:00 2026' >"${ps_starts}"
+expect "a live pid missing from the start-time read is unknown: exited since, or a partial read" \
+  "${mine}" "${session}" 2 \
+  "devantler-tech/hub#40 holder=unknown:lock-reason" \
+  "$(pr devantler-tech/hub 40 worktree-agent-a1)" "${lsof_hub}"
 ps_starts="${ps_starts_real}"
 starts_fail=1
 expect "start times that cannot be read are unknown, never a reused pid" \
