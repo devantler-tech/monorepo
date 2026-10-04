@@ -107,3 +107,39 @@ That rule governs how an EXISTING artifact is attributed — every already-merge
 included — while the guard governs only what may newly land, so the two never disagree about the same
 body. Fix it at the source, never by letting the routine disclosure outrank it: reading his PR as the
 routine's is the dangerous direction.
+
+## Sibling lane outage
+
+A lane that cannot start cannot report that it is down, so each runtime watches the other, in
+both directions: a Claude run watches the Codex lane and a Codex run watches the Claude lane.
+Every Engineer run does this in pre-flight, and an Improver run may:
+
+```bash
+.claude/scripts/sibling-lane-watch.sh --lane <codex|claude>   # the lane you are NOT
+```
+
+It runs that lane's own liveness check and counts consecutive slots in which the lane was not
+producing. It prints one summary line and never the liveness report, so the line is safe to quote.
+
+- **Exit `0`: send nothing.** `OK` is a producing lane. `WATCHING` is an outage still inside the
+  threshold. `KNOWN-RESET` is an outage whose only cause class is `quota/billing`: a usage limit
+  resets on its own and the maintainer cannot shorten it, so it never pages. `ALREADY-NOTIFIED` is an
+  outage he has been told about.
+- **Exit `1` (`ESCALATE`): the lane has been not producing for three consecutive hourly slots and
+  nobody has been told.** Send the Slack DM above, once per outage: the 🤖 disclosure line, the lane's
+  name, how long it has been down, and the bounded cause class the summary printed — nothing else
+  about the runtime. Only after the send returns a message link, run the same command with
+  `--mark-notified`. An unrecorded send is asked for again on the next run, which is the safe
+  direction: a lost DM costs more than a repeated one.
+- **Exit `2`: UNKNOWN, never "alive" and never "down".** The count is left where it was. Report it in
+  the run report and carry on; it is not a run-stopper.
+
+This DM is the one Slack message that has no issue behind it, so the watch's own state file is its
+record, in the caller's private runtime directory. Recovery clears it, and the next outage pages
+afresh. The summary line and the cause class may appear in a run report; the liveness report, reset
+times and account detail may not (*Sensitive information stays private*).
+
+Measured 2026-10-03: a stale desktop sign-in dropped 18 Claude dispatches before a session existed,
+and for 16.9 hours nothing reached the maintainer, although the liveness check read the outage
+correctly whenever it was run. Nothing ran it, because the only runs told to were the ones that
+could not start (monorepo#3801).
