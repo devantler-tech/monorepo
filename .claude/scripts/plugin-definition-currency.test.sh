@@ -318,6 +318,27 @@ case "${out}" in
   *) fail "exit 2 but not by the expected network-free path — did it call out to the forge? ${out}" ;;
 esac
 
+# ── 7a. An EMPTY submodule directory is not the submodule ─────────────────────
+# A fresh worktree has the directory but nothing in it, and `git -C` there answers from the consumer
+# repository around it. When that repository holds the pinned commit, a check that trusted the
+# directory read the consumer's objects with the wrong path prefix and found no files at all. It
+# must take the forge route instead; with no .gitmodules here that route stops before the network.
+shadow="${tmp}/shadow"
+git init -q "${shadow}"
+write_desired_state_fixture "${shadow}"
+mkdir -p "${shadow}/libraries/agent-plugins"
+git -C "${shadow}" fetch -q "${pin_repo}" "${gitlink}"
+git -C "${shadow}" cat-file -e "${gitlink}^{commit}" \
+  || fail "fixture: the consumer repository does not hold the pinned commit, so this case proves nothing"
+set +e; out="$("${script}" --repo-root "${shadow}" --installed "${cur}" --gitlink "${gitlink}" 2>&1)"; rc=$?; set -e
+[ "${rc}" -eq 2 ] || fail "an empty submodule directory with no forge route must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"yielded no tree entries"*)
+    fail "an empty submodule directory was read through the consumer repository: ${out}" ;;
+  *"no .gitmodules url"*) ok "an empty submodule directory takes the forge route, not the consumer repository's objects" ;;
+  *) fail "an empty submodule directory exited 2 for an unrelated reason: ${out}" ;;
+esac
+
 # ── 7b. FAIL OPEN REGRESSION — an unrecognised pinned path is never silently dropped ──
 # The defect this guards: the selector recognises two shapes and had no else branch, so any other
 # path under agents/ or skills/ fell out of the reviewed list entirely. It was then invisible on BOTH

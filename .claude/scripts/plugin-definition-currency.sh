@@ -604,7 +604,11 @@ load_reviewed() {
   # carrying the replacement bytes then matches and reports CURRENT. The git-ref branch above refuses a
   # verdict for the same hazard, but it exits before this point, so every other runtime reaches these
   # reads unprotected. Same rule the pin resolution above already follows.
-  if [ -e "$sub" ] && git -C "$sub" --no-replace-objects cat-file -e "$pin^{commit}" 2>/dev/null; then
+  # `-e "$sub/.git"`, not `-e "$sub"`: in a fresh worktree the submodule directory exists but is
+  # empty, and `git -C` on it answers from the CONSUMER repository around it. When that repository
+  # happens to hold the pinned commit, the read below runs there with this directory as its path
+  # prefix, matches nothing, and every fresh worktree reads UNKNOWN instead of using the forge.
+  if [ -e "$sub/.git" ] && git -C "$sub" --no-replace-objects cat-file -e "$pin^{commit}" 2>/dev/null; then
     tree="$(git -C "$sub" --no-replace-objects ls-tree -r "$pin" -- "$prefix" 2>/dev/null \
               | awk -F'\t' '{split($1, m, " "); if (m[2]=="blob") print m[3] "\t" m[1] "\t" $2}')" \
       || die "could not read the pinned tree $pin from $sub${RECOVERY}"
