@@ -662,6 +662,69 @@ report "control: same shape CARRYING WORK survives (#3114)" \
   "rc=$rc out=$out"
 git -C "$work" checkout -q -f main
 
+# --- 11b. the sweep says whether its keeps are finished or forbidden (#3293) ---
+# Every keep below is correct, and that is what hid the defect: a sweep that may delete
+# nothing printed the same `-0` as one with nothing left to delete, so 1144 branches no rule
+# could ever reap read as a healthy run for months. The second output line separates a
+# branch that is IN USE from one that is RETAINED, and names why. A fresh origin keeps the
+# counts exact: the shared fixture above has accumulated branches from earlier sections.
+bare93="$tmp/origin-3293.git"; work93="$tmp/work-3293"
+git init --bare --quiet "$bare93"
+git clone --quiet "$bare93" "$work93" 2>/dev/null
+git -C "$work93" config user.email "branch-cleanup-test@example.com"
+git -C "$work93" config user.name "branch-cleanup-test"
+git -C "$work93" checkout -q -b main
+git -C "$work93" commit -q --allow-empty -m "main"
+git -C "$work93" push -q -u origin main
+git -C "$work93" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+mk93() { # <branch> <push|local> — a branch carrying one commit of its own; prints its sha
+  git -C "$work93" checkout -q -B "$1" main
+  git -C "$work93" commit -q --allow-empty -m "tip $1"
+  if [[ "$2" == "push" ]]; then git -C "$work93" push -q -u origin "$1"; fi
+  git -C "$work93" rev-parse "$1"
+}
+verdict93() { sed -n '2p' <<<"$out"; }
+
+# Only an open PR's head exists: everything kept is in use, so the sweep has converged.
+mk93 "claude/open-pr-3293" push >/dev/null
+git -C "$work93" checkout -q main
+printf '%s\n' "claude/open-pr-3293" >"$OPEN_HEADS_FILE"
+: >"$PR_EVIDENCE_FILE"
+out="$("$helper" "$work93" "monorepo" "$tmp/m-3293a" dry-run 2>/dev/null)" && rc=0 || rc=$?
+report "kept branches that are all in use read as CONVERGED (#3293)" \
+  "$([[ $rc -eq 0 && "$(verdict93)" == "monorepo CONVERGED: every kept branch is in use | local 1, remote 1" ]] && echo yes || echo no)" \
+  "rc=$rc out=$out"
+
+# One branch per reason a spent-looking branch may not be deleted.
+mk93 "claude/brave-otter-abc123" local >/dev/null          # session-shaped, carries work, never pushed
+mk93 "claude/unpushed-work-3293" local >/dev/null          # commits on no remote, no PR
+mk93 "claude/never-had-a-pr-3293" push >/dev/null          # remote branch with no PR in any state
+moved_sha=$(mk93 "claude/moved-since-pr-3293" push)        # its PR recorded an older head
+mk93 "claude/calm-heron-def456" push >/dev/null            # session-shaped on the remote too
+git -C "$work93" checkout -q main
+printf '%s\tMERGED\t%s\n' "claude/moved-since-pr-3293" "0000000000000000000000000000000000000000" >"$PR_EVIDENCE_FILE"
+refs_before="$(git -C "$work93" for-each-ref; git -C "$bare93" for-each-ref)"
+out="$("$helper" "$work93" "monorepo" "$tmp/m-3293b" dry-run 2>/dev/null)" && rc=0 || rc=$?
+want93="monorepo RETAINED 6: not in use, yet no rule permits deleting them | local: 2 session-shaped with work, 1 unpushed | remote: 1 session-shaped, 1 without a PR, 1 moved since their PR, 0 unreadable, 0 whose delete was rejected | in use: local 1, remote 1"
+report "branches no rule may delete read as RETAINED, counted by reason (#3293)" \
+  "$([[ "$(verdict93)" == "$want93" ]] && echo yes || echo no)" "got=$(verdict93)"
+report "a RETAINED verdict leaves the exit status at 0 (#3293)" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc"
+report "the counts line keeps its shape, so existing readers still match (#3293)" \
+  "$(sed -n '1p' <<<"$out" | grep -qE '^monorepo +ns=claude +local: -2 +keep 4 +\| remote: -0 +keep 4 +rej 0 +cand 2 +\| ' && echo yes || echo no)" "out=$out"
+report "reporting changes no decision: a dry run moves no ref (#3293)" \
+  "$([[ "$refs_before" == "$(git -C "$work93" for-each-ref; git -C "$bare93" for-each-ref)" ]] && echo yes || echo no)"
+
+# CONTROL — give the moved branch evidence at its CURRENT head. It stops being retained and
+# becomes a deletion, so the reason counts follow the decision rather than the fixture's size.
+printf '%s\tMERGED\t%s\n' "claude/moved-since-pr-3293" "$moved_sha" >"$PR_EVIDENCE_FILE"
+out="$("$helper" "$work93" "monorepo" "$tmp/m-3293c" dry-run 2>/dev/null)" && rc=0 || rc=$?
+report "control: matching evidence turns a retained branch into a deletion (#3293)" \
+  "$([[ "$(verdict93)" == *"RETAINED 5:"*"0 moved since their PR"* ]] && sed -n '1p' <<<"$out" | grep -qE 'remote: -1 ' && echo yes || echo no)" \
+  "out=$out"
+: >"$OPEN_HEADS_FILE"
+: >"$PR_EVIDENCE_FILE"
+
 # --- 14. a failed query names its target and whether a retry can help (#2511) ---
 # The abort itself stays fail-closed; what changes is that the message carries the
 # exact owner/repo queried and a cause class, so a bad target (never succeeds) reads

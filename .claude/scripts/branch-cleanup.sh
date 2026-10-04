@@ -38,6 +38,21 @@
 #
 # In apply mode every deletion is recorded (branch -> sha) to the manifest BEFORE the delete, and
 # the write is verified — no restore record, no deletion. dry-run never touches the manifest.
+#
+# OUTPUT (stdout, two lines)
+#   1. the counts: deletions, keeps, rejected remote deletes and `cand` (kept for want of evidence,
+#      local and remote together).
+#   2. what the keeps mean (monorepo#3293):
+#        CONVERGED  every kept branch is in use: an open PR head, a worktree checkout or the
+#                   default branch. Nothing is waiting on this sweep.
+#        RETAINED n n branches are not in use, yet no rule permits deleting them, by reason:
+#                   a session-shaped branch (local: only one that carries work), a local branch
+#                   with commits on no remote and no matching PR, a remote branch that never had
+#                   a PR, one that moved since its PR, one whose ref could not be read, or one whose
+#                   delete the remote rejected. These
+#                   are kept ON PURPOSE and are never deleted here; the line exists so a count
+#                   that only grows is visible instead of reading as "nothing to do".
+#      The exit status is unchanged by either verdict.
 set -uo pipefail
 
 REPO_PATH="$1"; SLUG="$2"; MANIFEST="$3"; MODE="${4-apply}"; NAMESPACE="${5-claude}"
@@ -582,13 +597,17 @@ holds_no_work() {
 pr_evidence() { awk -F'\t' -v b="$1" '$1==b{print $2 "\t" $3; exit}' "$prs"; }
 
 l_del=0; r_del=0; l_keep=0; r_keep=0; candidates=0; r_rej=0
+# Why each kept branch was kept (monorepo#3293). `keep` alone cannot tell a branch that is in
+# use from one that is spent yet may not be deleted, so a sweep that can never converge printed
+# the same `-0` as one with nothing to do. These counters change no decision.
+l_inuse=0; l_session=0; l_unpushed=0; r_inuse=0; r_session=0; r_nopr=0; r_moved=0; r_unread=0
 
 # --- LOCAL (claude only) --------------------------------------------------
 if [ "$NAMESPACE" = "claude" ]; then
   while IFS= read -r b; do
     [ -z "$b" ] && continue
-    if is_kept "$b"; then l_keep=$((l_keep+1)); continue; fi
-    if is_interactive_slug "$b" && ! holds_no_work "$b"; then l_keep=$((l_keep+1)); continue; fi
+    if is_kept "$b"; then l_inuse=$((l_inuse+1)); l_keep=$((l_keep+1)); continue; fi
+    if is_interactive_slug "$b" && ! holds_no_work "$b"; then l_session=$((l_session+1)); l_keep=$((l_keep+1)); continue; fi
     sha=$(git rev-parse "$b" 2>/dev/null) || continue
     # Never lose unpushed work: delete only when the tip is reachable from SOME
     # remote ref, OR a MERGED/CLOSED PR accounts for this exact sha (a
@@ -598,7 +617,7 @@ if [ "$NAMESPACE" = "claude" ]; then
     ev=$(pr_evidence "$b"); st="${ev%%$'\t'*}"; ev_sha="${ev#*$'\t'}"
     if [ -z "$(git branch -r --contains "$sha" 2>/dev/null | head -1)" ] &&
        { [ "$st" != "MERGED" ] && [ "$st" != "CLOSED" ] || [ "$ev_sha" != "$sha" ]; }; then
-      candidates=$((candidates+1)); l_keep=$((l_keep+1)); continue
+      l_unpushed=$((l_unpushed+1)); candidates=$((candidates+1)); l_keep=$((l_keep+1)); continue
     fi
     if [ "$MODE" = "apply" ]; then
       # Record BEFORE delete (and only in apply): dry-run must leave the
@@ -626,7 +645,7 @@ if [ "$NAMESPACE" = "claude" ]; then
       # not fix such a case by dropping pipefail (monorepo#2674).
       if grep -Fxq "branch refs/heads/$b" <<<"$wt_list"; then
         echo "$SLUG: keep '$b' — checked out by a worktree since the snapshot" >&2
-        l_keep=$((l_keep+1)); continue
+        l_inuse=$((l_inuse+1)); l_keep=$((l_keep+1)); continue
       fi
       # CAS delete: update-ref -d with the expected old value refuses if a
       # concurrent session re-pointed the ref after evidence-gathering.
@@ -645,19 +664,19 @@ re_kept() { grep -Fxq "$1" "$keep2" || grep -Fxq "$1" "$keep"; }
 while IFS= read -r rb; do
   b="${rb#origin/}"
   [ -z "$b" ] && continue
-  if re_kept "$b"; then r_keep=$((r_keep+1)); continue; fi
-  if is_interactive_slug "$b"; then r_keep=$((r_keep+1)); continue; fi
-  sha=$(git rev-parse "$rb" 2>/dev/null) || { r_keep=$((r_keep+1)); continue; }
+  if re_kept "$b"; then r_inuse=$((r_inuse+1)); r_keep=$((r_keep+1)); continue; fi
+  if is_interactive_slug "$b"; then r_session=$((r_session+1)); r_keep=$((r_keep+1)); continue; fi
+  sha=$(git rev-parse "$rb" 2>/dev/null) || { r_unread=$((r_unread+1)); r_keep=$((r_keep+1)); continue; }
   ev=$(pr_evidence "$b"); st="${ev%%$'\t'*}"; ev_sha="${ev#*$'\t'}"
   if [ "$st" != "MERGED" ] && [ "$st" != "CLOSED" ]; then
     # No PR evidence. Commit age is NOT push age — a recent push of old commits
     # would look stale — so no-PR branches are candidates to REPORT, never delete.
-    candidates=$((candidates+1)); r_keep=$((r_keep+1)); continue
+    r_nopr=$((r_nopr+1)); candidates=$((candidates+1)); r_keep=$((r_keep+1)); continue
   fi
   if [ "$ev_sha" != "$sha" ]; then
     # The PR evidence belongs to an older incarnation of this branch name; the
     # current ref carries commits no PR accounts for. Keep it.
-    r_keep=$((r_keep+1)); continue
+    r_moved=$((r_moved+1)); r_keep=$((r_keep+1)); continue
   fi
   if [ "$MODE" = "apply" ]; then
     # Record BEFORE delete (and only in apply): dry-run must leave the
@@ -673,7 +692,7 @@ while IFS= read -r rb; do
       --json number --jq 'length' 2>/dev/null)
     if [ -z "$open_now" ] || [ "$open_now" != "0" ]; then
       echo "$SLUG: keep '$b' — open-PR recheck non-empty or failed" >&2
-      r_keep=$((r_keep+1)); continue
+      r_inuse=$((r_inuse+1)); r_keep=$((r_keep+1)); continue
     fi
     # CAS delete: rejected if the remote ref moved off the evidence SHA.
     # $REMOTE_ENDPOINT is "origin" unless the fetch had to fall back, in which case
@@ -690,6 +709,18 @@ done < <(git branch -r --list "origin/${PREFIX}/*" --format='%(refname:short)')
 
 printf '%-24s ns=%-6s local: -%-4s keep %-3s | remote: -%-3s keep %-3s rej %-2s cand %-3s | %s\n' \
   "$SLUG" "$NAMESPACE" "$l_del" "$l_keep" "$r_del" "$r_keep" "$r_rej" "$candidates" "$sw"
+
+# Say whether the keeps above are a finished sweep or work it is not allowed to finish. A kept
+# branch is either IN USE (an open PR head, a worktree checkout, the default branch) or RETAINED:
+# spent-looking, but every deletion rule refused it. Only the second kind can accumulate
+# forever, and one line of counts hid it for months (monorepo#3293).
+retained=$((l_session + l_unpushed + r_session + r_nopr + r_moved + r_unread + r_rej))
+if [ "$retained" -gt 0 ]; then
+  printf '%s RETAINED %s: not in use, yet no rule permits deleting them | local: %s session-shaped with work, %s unpushed | remote: %s session-shaped, %s without a PR, %s moved since their PR, %s unreadable, %s whose delete was rejected | in use: local %s, remote %s\n' \
+    "$SLUG" "$retained" "$l_session" "$l_unpushed" "$r_session" "$r_nopr" "$r_moved" "$r_unread" "$r_rej" "$l_inuse" "$r_inuse"
+else
+  printf '%s CONVERGED: every kept branch is in use | local %s, remote %s\n' "$SLUG" "$l_inuse" "$r_inuse"
+fi
 
 [ "$errors" -gt 0 ] && exit 3
 exit 0
