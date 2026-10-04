@@ -200,6 +200,16 @@ expect "a claim about an earlier finding errs towards a finding" 1 "FINDINGS 1" 
 expect "'I found the …' without 'following' is not a claim" 0 GREEN \
   "$(payload "$(reply "I reviewed \`${head}\`." "" "I found the earlier findings addressed." "" "No new findings.")")"
 
+for clean in \
+  "I found a regression test covering the new path." \
+  "I found a bug fix for the retry path and it is correct." \
+  "I found many improvements and no problems."; do
+  expect "not a claim: ${clean}" 0 GREEN \
+    "$(payload "$(reply "I reviewed \`${head}\`." "" "${clean}" "" "No new findings.")")"
+done
+expect "claim shape: I found these issues:" 1 "FINDINGS 1" \
+  "$(payload "$(reply "I reviewed \`${head}\`." "" "I found these issues:" "" "No new findings.")")"
+
 # --- Input contract ----------------------------------------------------------------------------
 expect "abbreviated head is refused" 2 "" "$(payload "$(reply 'No findings.')" "${head:0:12}")"
 expect "unknown key is refused" 2 "" '{"head":"'"${head}"'","author":"coderabbitai[bot]","body":"x","commit_id":"y"}'

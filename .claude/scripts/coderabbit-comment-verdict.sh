@@ -154,14 +154,18 @@ result="$(awk -v head="$head" '
       q++
       c = 0
       if (w[q] ~ /^[1-9][0-9]*(-[0-9]+)?$/) c = (w[q] ~ /^[1-9][0-9]?[0-9]?$/) ? w[q] + 0 : 1
-      else if (w[q] ~ /^(a|an|one|another|several|some|multiple|many)$/ || (w[q] == "the" && w[q + 1] == "following")) c = 1
+      else if (w[q] ~ /^(a|an|one|another|these|those|several|some|multiple|many)$/ || (w[q] == "the" && w[q + 1] == "following")) c = 1
       else {
         split("two three four five six seven eight nine ten", names, " ")
         for (i = 1; i <= 9; i++) if (w[q] == names[i]) c = i + 1
       }
       if (!c) continue
-      for (i = q + 1; i <= n && i <= q + 5; i++)
-        if (w[i] ~ /^(issue|issues|finding|findings|bug|bugs|problem|problems|defect|defects|regression|regressions)$/) return c
+      # The noun must be the thing found: `a regression test` and `a bug fix` are not findings,
+      # and `no` ends the claim (`many improvements and no problems`).
+      for (i = q + 1; i <= n && i <= q + 5; i++) {
+        if (w[i] == "no") break
+        if (w[i + 1] !~ /^(test|tests|fix|fixes)$/ && w[i] ~ /^(issue|issues|finding|findings|bug|bugs|problem|problems|defect|defects|regression|regressions)$/) return c
+      }
     }
     return 0
   }
