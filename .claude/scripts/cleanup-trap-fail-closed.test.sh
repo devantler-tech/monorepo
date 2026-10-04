@@ -209,7 +209,8 @@ echo
 # ---------------------------------------------------------------------------
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
-mkdir -p "$tmp/converted/projects" "$tmp/converted/backups"
+mkdir -p "$tmp/converted/projects" "$tmp/converted/backups" \
+  "$tmp/converted/plugins/marketplaces/devantler-plugins"
 printf 'memory line\n' > "$tmp/converted/memory.md"
 printf 'replacement line\n' > "$tmp/converted/replacement.md"
 printf '{"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":1,"cronExpression":"0 * * * *"}]}\n' \
@@ -228,6 +229,11 @@ pr-ownership-disclosure.sh|--input -
 comment-disclosure-drift.sh|--input -
 python-ban-guard.sh|$repo_root
 board-archive.sh|
+blocked-label-blocker-line.sh|
+board-add.sh|
+pr-body-contract.sh|check --repo devantler-tech/monorepo --body-file $tmp/converted/memory.md
+plugin-definition-refresh.sh|--cli /usr/bin/true --repo-root $tmp/converted --gitlink 0000000000000000000000000000000000000000 --plugins-root $tmp/converted/plugins
+safe-clone.sh|devantler-tech/monorepo $tmp/converted/clone-destination
 shared-checkout-freshness.sh|
 "
 
@@ -239,7 +245,7 @@ while IFS='|' read -r name args; do
     fail "${name}: listed as converted but not found at ${src}"
     continue
   fi
-  trap_line="$(grep -n -E '^trap [A-Za-z_][A-Za-z0-9_]* EXIT$' "$src" | head -1 | cut -d: -f1 || true)"
+  trap_line="$(grep -n -E '^[[:space:]]*trap [A-Za-z_][A-Za-z0-9_]* EXIT$' "$src" | head -1 | cut -d: -f1 || true)"
   if [ -z "$trap_line" ]; then
     fail "${name}: no \`trap <handler> EXIT\` line to inject after — the canonical shape is missing"
     continue
@@ -263,7 +269,7 @@ while IFS='|' read -r name args; do
     fail "${name}: the copy stopped before its trap line (exit ${rc}), so this result proves nothing: ${err}"
   elif [ "$rc" -eq 0 ]; then
     fail "${name}: a \`set -u\` abort after the trap line reported a CLEAN PASS"
-  elif [ "$naive_unbound" -eq 0 ] && ! grep -q 'aborted before finishing' <<<"$err"; then
+  elif [ "$naive_unbound" -eq 0 ] && ! grep -q 'aborted before' <<<"$err"; then
     fail "${name}: exit ${rc}, but not through the sentinel on a bash that masks the abort: ${err}"
   else
     pass "${name}: the abort reports failure (exit ${rc})"

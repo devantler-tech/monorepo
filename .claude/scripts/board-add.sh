@@ -56,7 +56,21 @@ die() { printf 'board-add: %s\n' "$1" >&2; exit "${2:-2}"; }
 # GraphQL budget (#2502). Each `2>` redirect truncates the file, so it always
 # holds the most recent failure and never a stale one.
 GH_ERR="$(mktemp)"
-trap 'rm -f "$GH_ERR"' EXIT
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
+# cleanup then becomes the script's status. Completion is recorded explicitly, so reaching a
+# verdict is the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
+board_add_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+board_add_cleanup() {
+  local rc=$?
+  rm -f "$GH_ERR"
+  if [ "$board_add_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "board-add: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap board_add_cleanup EXIT
 
 # A SECONDARY limit is a short-term burst guard. It is reported separately
 # because neither primary counter reflects it — quoting a healthy remaining/limit
@@ -352,6 +366,7 @@ done
 
 if [ "$EXPLICIT_STATUS" = false ] && [ -n "$CURRENT_STATUS" ]; then
   printf 'board-add: %s already-present (status untouched) (item %s) [verified]\n' "$ISSUE_URL" "$ITEM_ID"
+  board_add_finished=1
   exit 0
 fi
 
@@ -414,6 +429,7 @@ if [ "$EXPLICIT_STATUS" = false ]; then
   ADDED_STATUS=$(printf '%s' "$ADDED_JSON" | jq -r '.data.node.fieldValueByName.name // empty')
   if [ -n "$ADDED_STATUS" ]; then
     printf 'board-add: %s already-present (status untouched) (item %s) [verified]\n' "$ISSUE_URL" "$ITEM_ID"
+    board_add_finished=1
     exit 0
   fi
 fi
@@ -502,3 +518,4 @@ if [ "$ACTUAL" != "$STATUS_NAME" ]; then
 fi
 
 printf 'board-add: %s %s → %s (item %s) [verified]\n' "$ISSUE_URL" "$OUTCOME" "$STATUS_NAME" "$ITEM_ID"
+board_add_finished=1

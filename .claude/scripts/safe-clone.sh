@@ -269,6 +269,13 @@ case "${1:-}" in
       if [[ $cleanup_failed -ne 0 ]]; then
         echo "safe-clone: partial destination cleanup failed (details redacted)" >&2
       fi
+      # Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0. This trap is armed only
+      # until the clone is committed, so a zero status here means the run stopped before a
+      # usable clone existed: report failure rather than a clean pass (monorepo#3414).
+      if [[ $clone_committed -eq 0 && $rc -eq 0 ]]; then
+        echo "safe-clone: aborted before the clone was committed; reporting failure rather than a clean pass" >&2
+        rc=1
+      fi
       exit "$rc"
     }
     trap cleanup_partial_clone EXIT
