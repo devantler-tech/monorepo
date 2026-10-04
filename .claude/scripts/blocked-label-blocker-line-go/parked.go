@@ -48,7 +48,7 @@ func carriesMarker(body string) bool {
 	for _, raw := range strings.Split(body, "\n") {
 		line := strings.TrimSuffix(raw, "\r")
 		// Four columns of indentation render as a code block, as in visibleRecord.
-		if indent := len(line) - len(strings.TrimLeft(line, " ")); indent > 3 || strings.HasPrefix(line, "\t") {
+		if indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]; len(indent) > 3 || strings.Contains(indent, "\t") {
 			continue
 		}
 		line = strings.Trim(line, " \t")
@@ -118,15 +118,18 @@ func commentEndpoint(org, repo string, number int64) (string, error) {
 // commentCount reads how many comments the pull request has right now. The
 // search result carries a count too, but it is older than the comment read by
 // the whole sweep, and a comment landing in between would fail every verdict.
-func commentCount(path string) (int64, error) {
+func commentCount(path string, number int64) (int64, error) {
 	raw, err := forgeRead(path)
 	if err != nil {
 		return 0, errors.New("forge read failed -- UNKNOWN, never zero")
 	}
 	var record struct {
+		Number   int64  `json:"number"`
 		Comments *int64 `json:"comments"`
 	}
-	if json.Unmarshal(raw, &record) != nil || record.Comments == nil || *record.Comments < 0 {
+	// The count must be that of the pull request asked for, not of whatever
+	// object answered.
+	if json.Unmarshal(raw, &record) != nil || record.Number != number || record.Comments == nil || *record.Comments < 0 {
 		return 0, errors.New("pull request record carries no comment count -- UNKNOWN")
 	}
 	return *record.Comments, nil
@@ -143,7 +146,7 @@ func forgeComments(org string, item issue) ([]comment, error) {
 		return nil, err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		expected, err := commentCount(path)
+		expected, err := commentCount(path, item.Number)
 		if err != nil {
 			return nil, err
 		}

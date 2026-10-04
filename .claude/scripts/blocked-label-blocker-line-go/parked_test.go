@@ -125,7 +125,7 @@ func forgeParkedPull(t *testing.T, repo string) string {
 	raw, err := json.Marshal(map[string]any{
 		"repository_url": "https://api.github.com/repos/o/" + repo, "number": 900, "labels": []any{map[string]string{"name": "blocked"}},
 		"pull_request": map[string]any{}, "user": map[string]string{"login": "renovate[bot]"}, "body": "bump",
-		"created_at": "2026-08-01T00:00:00Z", "comments": 0,
+		"created_at": "2026-08-01T00:00:00Z", "comments": 99, // stale by design: never read
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,9 +218,11 @@ func TestOrgReadJudgesAParkedPullRequestByItsComments(t *testing.T) {
 		{"a page that is not an array", []attempt{{counted(1), `{"message":"Not Found"}`, nil}}, "unreadable comment page"},
 		{"a null page", []attempt{{counted(1), "null", nil}}, "unreadable comment page"},
 		{"a record with no comment count", []attempt{{`{"number":900}`, one, nil}}, "carries no comment count"},
-		{"a record whose comment count is null", []attempt{{`{"comments":null}`, one, nil}}, "carries no comment count"},
-		{"a record whose comment count is a string", []attempt{{`{"comments":"1"}`, one, nil}}, "carries no comment count"},
-		{"a record whose comment count is negative", []attempt{{`{"comments":-1}`, one, nil}}, "carries no comment count"},
+		{"a record of another pull request", []attempt{{`{"number":901,"comments":1}`, one, nil}}, "carries no comment count"},
+		{"a record with no number", []attempt{{`{"comments":1}`, one, nil}}, "carries no comment count"},
+		{"a record whose comment count is null", []attempt{{`{"number":900,"comments":null}`, one, nil}}, "carries no comment count"},
+		{"a record whose comment count is a string", []attempt{{`{"number":900,"comments":"1"}`, one, nil}}, "carries no comment count"},
+		{"a record whose comment count is negative", []attempt{{`{"number":900,"comments":-1}`, one, nil}}, "carries no comment count"},
 		{"a record that is not JSON", []attempt{{"", one, nil}}, "carries no comment count"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -276,6 +278,7 @@ func TestMarkerIndentation(t *testing.T) {
 		"   " + recordMarker:           true,
 		recordMarker + "  \r":          true,
 		"    " + recordMarker:          false,
+		" \t" + recordMarker:           false,
 		"\t" + recordMarker:            false,
 		"~~~\n" + recordMarker:         false,
 		"```\nx\n```\n" + recordMarker: true,
