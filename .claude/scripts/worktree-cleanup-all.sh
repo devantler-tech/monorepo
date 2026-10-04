@@ -126,11 +126,35 @@ portfolio_url_state() {
   return 1
 }
 
+# excluded_submodule_present <parent> <submodule path> <submodule name> — 0 when anything of an
+# out-of-portfolio submodule exists in this worktree, or that cannot be told; 1 when nothing
+# does. A declaration alone keeps nothing (#3828): the monorepo always declares such
+# submodules, so keeping on the declaration kept every session worktree and the root sweep
+# reaped nothing. Presence is read from the parent only — whether the path holds any entry,
+# and whether the parent's own git directory stores a repository for it. Nothing inside the
+# excluded repository is opened or handed to git.
+excluded_submodule_present() {
+  local parent=$1 child="$1/$2" name=$3 entry gitdir
+  [ ! -L "$child" ] || return 0
+  if [ -e "$child" ]; then
+    [ -d "$child" ] || return 0
+    entry=$(find "$child" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) || return 0
+    [ -z "$entry" ] || return 0
+  fi
+  # The name becomes a path component below the git directory; one that could leave it is
+  # not something this check can answer for.
+  case "/$name/" in //|*/../*|*/./*) return 0 ;; esac
+  gitdir=$(git -C "$parent" rev-parse --absolute-git-dir 2>/dev/null) || return 0
+  [ -n "$gitdir" ] || return 0
+  if [ -e "$gitdir/modules/$name" ] || [ -L "$gitdir/modules/$name" ]; then return 0; fi
+  return 1
+}
+
 # Collect only eligible paths in ELIGIBLE. 'submodule foreach' enters every populated child
 # before its owner can be checked, so recursive discovery uses parent metadata.
 eligible_submodules() {
   local parent=$1 recursive=$2 retain=${3:-$1} raw get_rc probe probe_rc record key sub url url_rc state
-  local child real stage stage_rc index entry indexed_path matches
+  local child real stage stage_rc index entry indexed_path matches name
   index=$(git -C "$parent" -c core.quotePath=false ls-files --stage 2>/dev/null) || {
     printf 'worktree-cleanup-all: unknown submodule eligibility (cannot read the index)\n' >&2
     return 2
@@ -177,8 +201,14 @@ eligible_submodules() {
     fi
     portfolio_url_state "$url"; state=$?
     case "$state" in
-      1) printf '### SKIP %s (outside the reviewed Portfolio map)\n' "$sub" >&2
-         [ "$recursive" -eq 0 ] || retain_parent "$retain"
+      1) if [ "$recursive" -eq 0 ]; then
+           printf '### SKIP %s (outside the reviewed Portfolio map)\n' "$sub" >&2
+         elif name=${key#submodule.}; excluded_submodule_present "$parent" "$sub" "${name%.path}"; then
+           printf '### SKIP %s (outside the reviewed Portfolio map)\n' "$sub" >&2
+           retain_parent "$retain"
+         else
+           printf '### SKIP %s (outside the reviewed Portfolio map; not checked out here)\n' "$sub" >&2
+         fi
          continue ;;
       2) printf 'worktree-cleanup-all: unknown submodule eligibility (unrecognized URL)\n' >&2; return 2 ;;
     esac
