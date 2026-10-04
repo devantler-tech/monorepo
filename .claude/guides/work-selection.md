@@ -304,7 +304,9 @@ governs the issue work that follows.) Two rules enforce that:
    issue is either started or carries its reason. So apply the completion check and start it, or
    record what really blocks it under (b) or (g). An issue that is only queued behind other
    Security work or behind rungs 0–1 has nothing truthful to record: leave the row standing until
-   a run reaches it, and never write a blocker to clear it. Exit `1` means findings, `2` means
+   a run reaches it, and never write a blocker to clear it. A row ending `[pull request]` is a
+   parked PR, judged by its one record comment instead of its body: the merge-policy guide's
+   *A parked PR carries one blocker record* says how to repair it. Exit `1` means findings, `2` means
    UNKNOWN — a failed or timed-out read, never a clean sweep.
    ⚠️ **Verify before repairing.** Adding a well-formed line to an issue whose dependency has already
    shipped makes the skip look *more* legitimate on every future tick, which is worse than the
