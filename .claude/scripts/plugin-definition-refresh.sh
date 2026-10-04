@@ -42,26 +42,32 @@
 # --submodule-path, all bound to the values this run gated on, and its exit status IS the verdict:
 # 0 verified, 2 UNKNOWN (preserved, never folded into 1), anything else NOT-ON-PIN.
 #
-# Exit 0  the runtime install is now pinned, and that was VERIFIED by an independent blob-identity
-#         check after the apply — never by `plugin update`'s own exit status, which can report
-#         success having repaired nothing. NOTE: `plugin update` requires a restart, so exit 0 still
+# Exit 0  the runtime install is now pinned, and that was VERIFIED after the apply — the WHOLE installed
+#         plugin directory equals the gated revision's tree, file for file by blob identity, and the
+#         independent currency check agrees — never by `plugin update`'s own exit status, which can
+#         report success having repaired nothing, or having installed something else. NOTE: `plugin update` requires a restart, so exit 0 still
 #         never means THIS run used the new definition.
 #      1  the install is NOT on the pin. Either the marketplace could not supply the pinned definition
 #         of this plugin (nothing was changed; the differing entry or files are named), or the
-#         apply ran and the post-apply check still does not report CURRENT. The reason is named.
+#         apply ran and the install is not the gated revision: `plugin update` refreshes the
+#         marketplace from its remote before installing, so it can install a revision published
+#         after the gate. That is DETECTED here, not prevented — the ungated revision is then
+#         already installed, the differing files are named, and the run must report it. Also when
+#         the post-apply currency check still does not report CURRENT. The reason is named.
 #      2  UNKNOWN — no verdict was produced: usage error, no CLI, unreadable pin or marketplace, a
 #         pinned revision present in neither the marketplace clone nor the consumer's submodule, a
 #         marketplace/plugin-id marketplace mismatch, a concurrent run holding the lock, a
 #         marketplace worktree whose BYTES do not provably match the gated revision, a marketplace
-#         clone that moved after the gate approved it, an apply whose verification command is
-#         unavailable, or --dry-run (a simulation asserts nothing).
+#         clone that moved after the gate approved it or during the apply, an apply whose result
+#         could not be compared with the gated tree or whose verification command is unavailable,
+#         or --dry-run (a simulation asserts nothing).
 #
 # Exit 2 is deliberately not exit 1 and never exit 0: "I could not check" is a third answer, and
 # collapsing it into either of the verdicts is how a currency control becomes decoration.
 set -euo pipefail
 
 REPO_ROOT=""
-PLUGINS_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"
+PLUGINS_ROOT=""
 GITLINK=""
 MARKETPLACE="devantler-plugins"
 PLUGIN_ID="agentic-engineering@devantler-plugins"
@@ -101,6 +107,19 @@ done
 
 command -v git >/dev/null 2>&1 || die "git is required"
 
+# $HOME is read only where it is actually needed, and an unset one is UNKNOWN there. Expanding it
+# unconditionally aborts under `set -u` with exit 1 — the code that means "not on the pin" — for a run
+# that named everything it needs through --plugins-root or $CLAUDE_CONFIG_DIR and --cli.
+if [ -z "$PLUGINS_ROOT" ]; then
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    PLUGINS_ROOT="$CLAUDE_CONFIG_DIR/plugins"
+  elif [ -n "${HOME:-}" ]; then
+    PLUGINS_ROOT="$HOME/.claude/plugins"
+  else
+    die "cannot locate the runtime plugins directory: none of --plugins-root, \$CLAUDE_CONFIG_DIR and \$HOME is set — UNKNOWN, not a verdict"
+  fi
+fi
+
 # ── the gate must bind the clone we READ to the plugin the CLI UPDATES ─────────
 # `--marketplace` selects the clone whose HEAD becomes `candidate`, while `--plugin-id` names what
 # `plugin update` installs. Left independent, `--marketplace staging` would refresh and gate on the
@@ -123,9 +142,12 @@ if [ -z "$CLI" ]; then
   CLI="$(command -v claude 2>/dev/null || true)"
   cli_source="PATH"
 fi
-bundle_base="$HOME/Library/Application Support/Claude/claude-code"
+bundle_base=""
 bundle_versions=""
 if [ -z "$CLI" ]; then
+  [ -n "${HOME:-}" ] \
+    || die "cannot resolve an executable claude CLI: none named by --cli or \$CLAUDE_CLI, none on PATH, and \$HOME is unset so the app bundle cannot be located — UNKNOWN, not a verdict"
+  bundle_base="$HOME/Library/Application Support/Claude/claude-code"
   # The app-bundled binary is not on PATH on this host. Pick the highest version present, by
   # version sort rather than mtime — a reinstall can touch an older directory last.
   #
@@ -136,6 +158,9 @@ if [ -z "$CLI" ]; then
   # installed is taken: they are builds of one release, and the verdict below never depends on which
   # of them drove the control plane.
   cli_source="the app bundle"
+  # `-x` alone is true for a DIRECTORY: one named `claude` in the newest build would be "resolved",
+  # end the search before an older valid build was tried, and then fail at its first use. A CLI is a
+  # regular executable file.
   if [ -d "$bundle_base" ]; then
     # Guarded: under `set -e` and `pipefail` an unreadable directory would otherwise exit with `ls`'s
     # own status, and 1 here means "not on the pin".
@@ -144,12 +169,12 @@ if [ -z "$CLI" ]; then
     while IFS= read -r v; do
       [ -n "$v" ] || continue
       cand="$bundle_base/$v/claude.app/Contents/MacOS/claude"
-      if [ -x "$cand" ]; then CLI="$cand"; break; fi
+      if [ -f "$cand" ] && [ -x "$cand" ]; then CLI="$cand"; break; fi
       builds="$(ls -1t "$bundle_base/$v" 2>/dev/null)" || builds=""
       while IFS= read -r b; do
         [ -n "$b" ] || continue
         cand="$bundle_base/$v/$b/claude.app/Contents/MacOS/claude"
-        if [ -x "$cand" ]; then CLI="$cand"; break; fi
+        if [ -f "$cand" ] && [ -x "$cand" ]; then CLI="$cand"; break; fi
       done <<< "$builds"
       [ -z "$CLI" ] || break
     done <<< "$bundle_versions"
@@ -161,7 +186,7 @@ if [ -z "$CLI" ]; then
   bundle_seen="$(printf '%s' "$bundle_versions" | tr '\n' ' ')"
   die "cannot resolve an executable claude CLI: none named by --cli or \$CLAUDE_CLI, none on PATH, and none in the app bundle under '$bundle_base' (tried <version>/claude.app/Contents/MacOS/claude and <version>/<build>/claude.app/Contents/MacOS/claude; version directories seen: ${bundle_seen:-none}) — UNKNOWN, not a verdict"
 fi
-[ -x "$CLI" ] || die "cannot resolve an executable claude CLI: '$CLI' (from $cli_source) is not executable — UNKNOWN, not a verdict"
+{ [ -f "$CLI" ] && [ -x "$CLI" ]; } || die "cannot resolve an executable claude CLI: '$CLI' (from $cli_source) is not an executable file — UNKNOWN, not a verdict"
 
 # ── the PINNED revision ────────────────────────────────────────────────────────
 if [ -z "$REPO_ROOT" ]; then
@@ -221,10 +246,13 @@ say "pinned revision ......... $GITLINK"
 # does not take it, so every read after the gate is bound to `candidate` and HEAD is read again
 # immediately before the apply.
 LOCK=""
+# Scratch space for the install comparison; removed on every exit path by the same trap as the lock.
+WORK=""
 # Release only a lock this process still OWNS. A blind rmdir lets a run that overran its lock delete
 # a SIBLING's replacement on the way out, which would hand a third run the section while the sibling
 # believes it holds it.
 release_lock() {
+  if [ -n "$WORK" ]; then rm -rf "$WORK"; WORK=""; fi
   if [ -n "$LOCK" ] && [ "$(cat "$LOCK/pid" 2>/dev/null || true)" = "$$" ]; then
     rm -f "$LOCK/pid"
     rmdir "$LOCK" 2>/dev/null || true
@@ -498,6 +526,27 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 2
 fi
 
+# ── what the apply must install: the gated revision's WHOLE plugin tree ────────
+# Resolved BEFORE anything is mutated, so a run that could not later tell what was installed never
+# applies in the first place. The expected side is every entry under the plugin's source path at
+# `candidate`; the installed side is compared with it after the apply, file for file.
+command -v jq >/dev/null 2>&1 || die "jq is required to locate the '$PLUGIN_NAME' source in the marketplace manifest and its install in the registry"
+WORK="$(mktemp -d)" || die "cannot create a temporary directory for the install comparison"
+inst_source="$(git -C "$MARKETPLACE_DIR" --no-replace-objects show "$candidate:.claude-plugin/marketplace.json" 2>/dev/null \
+  | jq -r --arg n "$PLUGIN_NAME" '[.plugins[]? | select(.name == $n)] | if length == 1 then (.[0].source | strings) else empty end' 2>/dev/null)" \
+  || die "cannot read the '$PLUGIN_NAME' entry of the marketplace manifest at $candidate"
+case "$inst_source" in
+  ./?*) inst_source="${inst_source#./}"; inst_source="${inst_source%/}" ;;
+  *) die "the '$PLUGIN_NAME' entry at $candidate is not listed exactly once with a source path inside the marketplace — the install could not be compared with it, refusing to apply" ;;
+esac
+case "/$inst_source/" in
+  */../*|*/./*|*//*|*[:*?[\\]*) die "the '$PLUGIN_NAME' entry's source '$inst_source' is not a plain relative path" ;;
+esac
+expected_list="$WORK/expected"
+git -C "$MARKETPLACE_DIR" --literal-pathspecs --no-replace-objects ls-tree -r -z "$candidate" -- "$inst_source" > "$expected_list" \
+  || die "cannot enumerate the '$PLUGIN_NAME' tree '$inst_source' at $candidate"
+[ -s "$expected_list" ] || die "the '$PLUGIN_NAME' tree '$inst_source' holds no files at $candidate — nothing an install could be compared with"
+
 # A runtime-local mutation is backed up BEFORE it happens, to a timestamped copy naming the reason.
 # The registry is not version-controlled, so an unbacked change is a one-way edit.
 if [ -r "$registry" ]; then
@@ -518,15 +567,18 @@ if [ -r "$registry" ]; then
 fi
 
 # ── the clone must STILL be the revision that was gated ────────────────────────
-# Everything above was established for `candidate`, and `plugin update` installs whatever the clone
-# holds when it runs. The lock serialises only this script's own runs, so the last thing before the
-# apply is to read HEAD again: a clone that moved since the gate is a revision this run never
-# approved, and applying it would be the fail-open the gate exists to close. That is UNKNOWN, not a
-# verdict — nothing was installed, and nothing was learned about the install.
+# Everything above was established for `candidate`. The lock serialises only this script's own runs,
+# so the last thing before the apply is to read HEAD again: a clone that already moved since the gate
+# is a revision this run never approved. That is UNKNOWN, not a verdict — nothing was installed, and
+# nothing was learned about the install.
 #
-# What remains is the CLI's own start-up, which no check placed here can cover. The verdict does not
-# rest on it: the post-apply check below compares the install with the pin by blob identity, so an
-# install taken from a clone that moved in that window is never reported as on the pin.
+# THIS DOES NOT BOUND WHAT THE APPLY INSTALLS, and nothing placed before the apply can. `plugin
+# update` does not install from the clone as this script last saw it: it refreshes the marketplace
+# from its remote first (skipping that only when the marketplace was updated moments ago) and
+# replaces the clone when the remote has moved. Upstream can therefore publish between the gate and
+# the install, and the CLI then installs a revision nobody here gated. The re-read only narrows that
+# window; it is the comparison AFTER the apply, below, that keeps such an install from being reported
+# as success. That is detection after the fact, never prevention.
 head_now="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" \
   || die "cannot re-read the marketplace clone HEAD before applying: $MARKETPLACE_DIR"
 [ "$head_now" = "$candidate" ] \
@@ -535,12 +587,129 @@ head_now="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" \
 "$CLI" plugin update "$PLUGIN_ID" >/dev/null 2>&1 \
   || die "'plugin update $PLUGIN_ID' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
 
+# ── what was ACTUALLY installed must be the gated revision's plugin tree ───────
+# The CLI may by now have installed a revision other than `candidate` (see above), and this script
+# cannot undo that: it never edits the plugin cache, and the CLI has no way to install a chosen
+# revision. What it can do is refuse to call the result a success. The currency check further down
+# compares only the agent and skill definitions and the declared runtime assets; a hook, a command, an
+# MCP configuration, the plugin manifest or any other file is outside it. So the WHOLE installed
+# directory is compared here with the gated tree, in both directions and by blob identity: a file
+# that is missing, changed or extra anywhere is an install that is NOT the gated revision (exit 1),
+# and the run must report it. Modes are not compared, only bytes.
+head_after="$(git -C "$MARKETPLACE_DIR" rev-parse HEAD 2>/dev/null)" || head_after="unreadable"
+install_paths="$(jq -r --arg id "$PLUGIN_ID" '.plugins[$id][]?.installPath // empty' "$registry" 2>/dev/null)" || install_paths=""
+if [ -z "$install_paths" ]; then
+  say ""
+  say "APPLIED, BUT UNVERIFIED — the registry '$registry' names no install of '$PLUGIN_ID', so this"
+  say "  run cannot compare what was installed with $candidate. The apply happened; the verdict is"
+  say "  UNKNOWN, never 0."
+  exit 2
+fi
+tree_diffs="$WORK/diffs"; expected_paths="$WORK/expected-paths"; installed_list="$WORK/installed"
+: > "$tree_diffs" || die "cannot record the install comparison in $WORK"
+tree_unknown=0; tree_files=0
+while IFS= read -r inst; do
+  [ -n "$inst" ] || continue
+  inst="${inst%/}"
+  if [ -L "$inst" ] || [ ! -d "$inst" ]; then
+    printf 'missing  %s (the install directory itself)\n' "$inst" >> "$tree_diffs"
+    continue
+  fi
+  : > "$expected_paths"
+  # Every file of the gated tree must be installed with the gated bytes.
+  while IFS= read -r -d '' entry; do
+    [ -n "$entry" ] || continue
+    # entry is "<mode> <type> <object>\t<path>"
+    mode="${entry%% *}"
+    want="${entry#* }"; want="${want#* }"; want="${want%%$'\t'*}"
+    rel="${entry#*$'\t'}"; rel="${rel#"$inst_source"/}"
+    # The expected paths are matched line by line below, so a name holding a newline cannot be
+    # represented there. Unproven is not proven.
+    case "$rel" in *$'\n'*) tree_unknown=$((tree_unknown + 1)); continue ;; esac
+    printf '%s\n' "$rel" >> "$expected_paths"
+    case "$mode" in
+      100644|100755)
+        if [ -L "$inst/$rel" ] || [ ! -f "$inst/$rel" ]; then
+          printf 'missing  %s\n' "$rel" >> "$tree_diffs"
+          continue
+        fi
+        got="$(git hash-object --no-filters -- "$inst/$rel" 2>/dev/null)" || { tree_unknown=$((tree_unknown + 1)); continue; }
+        ;;
+      120000)
+        # The runtime may copy a link as a link or as the file it resolves to. Only the first can be
+        # checked against the link's own blob; the second is left unproven rather than guessed at.
+        [ -L "$inst/$rel" ] || { tree_unknown=$((tree_unknown + 1)); continue; }
+        command -v perl >/dev/null 2>&1 || { tree_unknown=$((tree_unknown + 1)); continue; }
+        got="$(perl -e 'my $t = readlink($ARGV[0]); exit 1 unless defined $t; print $t' "$inst/$rel" 2>/dev/null | git hash-object --stdin 2>/dev/null)" || { tree_unknown=$((tree_unknown + 1)); continue; }
+        ;;
+      *)
+        # A submodule entry has no blob to compare an installed directory with.
+        tree_unknown=$((tree_unknown + 1)); continue
+        ;;
+    esac
+    if [ "$got" = "$want" ]; then tree_files=$((tree_files + 1)); else printf 'changed  %s\n' "$rel" >> "$tree_diffs"; fi
+  done < "$expected_list"
+  # And nothing may be installed that the gated tree does not hold. Directories are not listed: an
+  # empty one carries nothing, and a populated one is reported through its files.
+  if ! find "$inst" -mindepth 1 ! -type d -print0 > "$installed_list" 2>/dev/null; then
+    tree_unknown=$((tree_unknown + 1))
+    continue
+  fi
+  while IFS= read -r -d '' p; do
+    rel="${p#"$inst"/}"
+    # THE ONLY ALLOWANCE. The runtime writes two bookkeeping markers of its own at the TOP of an
+    # install directory, which no repository tree contains: `.in_use` (a directory recording the
+    # sessions using this copy) and `.orphaned_at` (a file stamped on a superseded copy). Measured on
+    # the agent host's real installs, where they are the only entries absent from the plugin's tree.
+    # Neither is a component the runtime loads. Matched at the top level only — the same names any
+    # deeper are ordinary extra files.
+    case "$rel" in .in_use|.in_use/*|.orphaned_at) continue ;; esac
+    case "$rel" in *$'\n'*) printf 'extra    %s\n' "$(printf '%s' "$rel" | tr '\n' '?')" >> "$tree_diffs"; continue ;; esac
+    grep -Fxq -- "$rel" "$expected_paths" && grc=0 || grc=$?
+    case "$grc" in
+      0) : ;;
+      1) printf 'extra    %s\n' "$rel" >> "$tree_diffs" ;;
+      *) tree_unknown=$((tree_unknown + 1)) ;;
+    esac
+  done < "$installed_list"
+done <<< "$install_paths"
+if [ -s "$tree_diffs" ]; then
+  diff_count="$(wc -l < "$tree_diffs" | tr -d ' ')"
+  say ""
+  say "APPLIED, BUT NOT THE GATED REVISION — $diff_count installed file(s) differ from '$inst_source' at"
+  say "  $candidate, the revision this run approved (the marketplace clone is now at $head_after):"
+  sed -n '1,10p' "$tree_diffs" | while IFS= read -r line; do say "    $line"; done
+  [ "$diff_count" -le 10 ] || say "    … and $((diff_count - 10)) more"
+  say "  'plugin update' refreshes the marketplace from its remote before installing, so it can install"
+  say "  a revision published after the gate. THE UNGATED REVISION IS INSTALLED and is served from the"
+  say "  next dispatch; this script cannot undo that. Report it, follow the reviewed definition at the"
+  say "  pinned gitlink $GITLINK per AGENTS.md, and re-run this once the pin and upstream agree."
+  exit 1
+fi
+if [ "$tree_unknown" -ne 0 ]; then
+  say ""
+  say "APPLIED, BUT UNVERIFIED — $tree_unknown installed entr(ies) could not be compared with"
+  say "  '$inst_source' at $candidate (an unreadable file, a link the runtime resolved, or a submodule)."
+  say "  The apply happened; unproven is not proven, so the verdict is UNKNOWN, never 0."
+  exit 2
+fi
+if [ "$head_after" != "$candidate" ]; then
+  say ""
+  say "APPLIED, BUT THE MARKETPLACE MOVED — the installed files match '$inst_source' at $candidate, but"
+  say "  the clone went from $candidate to $head_after during the apply. The marketplace entry the"
+  say "  runtime now reads was never gated by this run, so the verdict is UNKNOWN, never 0. Re-run this."
+  exit 2
+fi
+say "installed tree .......... $tree_files file(s) identical to $inst_source at $candidate"
+
 # ── the CLI's exit 0 is NOT proof the install now matches the pin ──────────────
 # `plugin update` can report success having repaired nothing — most reachably when the registry
 # already advertises the pinned version while the installed definition bytes were modified or
 # deleted, which is byte-level drift the version string cannot see. Treating the CLI's status as the
 # verdict would let exactly that drift persist indefinitely while this script reported it fixed.
-# So the verdict comes from an independent blob-identity check, not from the tool we just ran.
+# So the verdict also needs an independent blob-identity check, not just the tool we just ran. The
+# whole-tree comparison above proves the install is the gated revision; this proves it is the PIN,
+# read from the consumer's own submodule rather than from the marketplace clone.
 [ -n "$VERIFY_CMD" ] || VERIFY_CMD="$REPO_ROOT/.claude/scripts/plugin-definition-currency.sh"
 if [ ! -x "$VERIFY_CMD" ]; then
   say ""

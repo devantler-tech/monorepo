@@ -21,6 +21,12 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT="$HERE/plugin-definition-refresh.sh"
 
+# The fixtures commit, and a commit inherits the caller's global configuration. Where that turns on
+# commit signing, every fixture commit starts gpg, and parallel suite runs then fail inside gpg rather
+# than in anything under test. No global or system configuration is read from here on.
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_NOSYSTEM=1
+
 pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; [ $# -ge 2 ] && printf '       %s\n' "$2"; }
@@ -61,12 +67,18 @@ make_fixture() {
 
   g git -C "$MK" init -q -b main
   g git -C "$MK" config user.email t@t; g git -C "$MK" config user.name t
+  g git -C "$MK" config commit.gpgsign false
   # A real marketplace layout: the manifest, the target plugin's subtree and an unrelated plugin.
   # Commit two moves the TARGET plugin, so OLD vs NEW is a genuine change to what would install.
   g mkdir -p "$MK/.claude-plugin" "$MK/plugins/agentic-engineering/agents" "$MK/plugins/frontend-design"
   echo old > "$MK/f" || { printf 'FIXTURE FAILURE: write f\n' >&2; exit 9; }
   write_manifest "$MK" 1.0.0 1.0.0
   echo old > "$MK/plugins/agentic-engineering/agents/a.md" || { printf 'FIXTURE FAILURE: write a.md\n' >&2; exit 9; }
+  # A plugin manifest and a file outside agents/ and skills/: the parts of an install that the
+  # currency check does not read, and that the whole-tree comparison after the apply must.
+  g mkdir -p "$MK/plugins/agentic-engineering/.claude-plugin" "$MK/plugins/agentic-engineering/resources"
+  echo '{"name":"agentic-engineering"}' > "$MK/plugins/agentic-engineering/.claude-plugin/plugin.json" || { printf 'FIXTURE FAILURE: write plugin.json\n' >&2; exit 9; }
+  echo res > "$MK/plugins/agentic-engineering/resources/r.md" || { printf 'FIXTURE FAILURE: write r.md\n' >&2; exit 9; }
   echo fd > "$MK/plugins/frontend-design/s.md" || { printf 'FIXTURE FAILURE: write s.md\n' >&2; exit 9; }
   g git -C "$MK" add f .claude-plugin plugins; g git -C "$MK" commit -qm one
   MK_OLD="$(git -C "$MK" rev-parse HEAD)" || { printf 'FIXTURE FAILURE: rev-parse OLD\n' >&2; exit 9; }
@@ -80,6 +92,7 @@ make_fixture() {
   # consumer repo carrying a gitlink to the marketplace at a chosen revision
   g git -C "$CONSUMER" init -q -b main
   g git -C "$CONSUMER" config user.email t@t; g git -C "$CONSUMER" config user.name t
+  g git -C "$CONSUMER" config commit.gpgsign false
   git -C "$CONSUMER" config protocol.file.allow always 2>/dev/null || true
   echo x > "$CONSUMER/x" || { printf 'FIXTURE FAILURE: write x\n' >&2; exit 9; }
   g git -C "$CONSUMER" add x; g git -C "$CONSUMER" commit -qm base
@@ -108,6 +121,19 @@ if [ "\${1:-}" = plugin ] && [ "\${2:-}" = marketplace ] && [ "\${3:-}" = update
   [ -n "\${STUB_REFRESH_SLEEP:-}" ] && sleep "\$STUB_REFRESH_SLEEP"
 fi
 if [ "\${1:-}" = plugin ] && [ "\${2:-}" = update ]; then
+  # What the real command does: install the plugin directory of whatever the clone holds NOW. It
+  # refreshes the marketplace from its remote first, which STUB_APPLY_MOVE stands in for by moving
+  # the clone to another commit before the copy.
+  if [ -n "\${STUB_APPLY_MOVE:-}" ]; then git -C "$MK" checkout -q "\$STUB_APPLY_MOVE" || exit 1; fi
+  if [ -z "\${STUB_APPLY_NOOP:-}" ]; then
+    rm -rf "$INSTALLED"
+    cp -R "$MK/plugins/agentic-engineering" "$INSTALLED" || exit 1
+    # The runtime's own bookkeeping marker, present on every real install.
+    mkdir -p "$INSTALLED/.in_use" && : > "$INSTALLED/.in_use/4242"
+    if [ -n "\${STUB_APPLY_EXTRA:-}" ]; then
+      mkdir -p "$INSTALLED/\$(dirname "\$STUB_APPLY_EXTRA")" && : > "$INSTALLED/\$STUB_APPLY_EXTRA"
+    fi
+  fi
   touch "$ROOT/APPLIED"
 fi
 exit 0
@@ -353,7 +379,7 @@ else bad "A5 exits 2 (UNKNOWN, named reason) when the CLI cannot be resolved" \
   "exit was $rc — 0/1 would be a fabricated verdict; out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 # A CLI that was NAMED is never looked up anywhere else, so the message names it and its source
 # instead of listing lookups that did not happen.
-if grep -qF "'$ROOT/nope' (from --cli or \$CLAUDE_CLI) is not executable" <<<"$out"; then
+if grep -qF "'$ROOT/nope' (from --cli or \$CLAUDE_CLI) is not an executable file" <<<"$out"; then
   ok "A5b names the CLI that was given and where it came from"
 else bad "A5b names the CLI that was given and where it came from" "out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
@@ -396,18 +422,19 @@ else bad "A13 refuses (exit 2, named reason) when the plugin id is not marketpla
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
-# ── A14 — a malformed registry must not turn a SUCCESSFUL apply into a failure ─────────────────
-# The post-apply registry read is a reporting nicety. Under `set -e` + `pipefail` a malformed
-# registry aborted the script after 'plugin update' had already run and before the declared
-# `exit 0`, reporting a completed apply as a failure.
+# ── A14 — a malformed registry after the apply is UNKNOWN, never a verdict in either direction ─
+# The registry is where the install is located, so one that cannot be parsed leaves nothing to
+# compare with the gated tree: that is exit 2 with the reason named. It must not be exit 0 (nothing
+# was verified), and it must not be the exit 1 that `set -e` + `pipefail` produce when a failing `jq`
+# aborts the script — a "not on the pin" verdict fabricated by a parse error.
 make_fixture
 set_gitlink "$MK_NEW"
 printf '%s\n' 'this is not json {{{' > "$PLUGINS/installed_plugins.json"
-STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1; rc=$?
-if [ -e "$ROOT/APPLIED" ] && [ "$rc" -eq 0 ]; then
-  ok "A14 still exits 0 after applying when the registry is malformed"
-else bad "A14 still exits 0 after applying when the registry is malformed" \
-  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ -e "$ROOT/APPLIED" ] && [ "$rc" -eq 2 ] && grep -q 'APPLIED, BUT UNVERIFIED — the registry' <<<"$out"; then
+  ok "A14 exits 2 (UNKNOWN, named reason) after applying when the registry is malformed"
+else bad "A14 exits 2 (UNKNOWN, named reason) after applying when the registry is malformed" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
 # ── A15 — refresh → read → apply is serialized against an overlapping run ──────────────────────
@@ -736,6 +763,38 @@ else bad "C1 the byte check reads the gated revision, so a clone moved after the
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
+# C1b — the same move, to a revision that only DELETES a file. C1's two revisions hold the same file
+# set, so it pins only which revision each blob is read from; a check that took its file LIST from
+# the live HEAD would walk the moved revision's shorter list, find every file on it unchanged, and
+# print "verified against <gated>" having never looked for the file that is gone. The byte check's
+# own refusal is asserted, so the HEAD re-read before the apply cannot stand in for it.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+git -C "$MK" rm -q plugins/frontend-design/s.md || { printf 'FIXTURE FAILURE: remove s.md\n' >&2; exit 9; }
+MK_DEL="$(move_past_pin "$MK_NEW" file-deleted)" || exit 9
+REAL_GIT="$(command -v git)"
+mkdir -p "$ROOT/gitshim"
+cat > "$ROOT/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$MK" ] && [ "\${3:-}" = ls-files ] && [ ! -e "$ROOT/MOVED" ]; then
+  : > "$ROOT/MOVED"
+  "$REAL_GIT" -C "$MK" checkout -q "$MK_DEL"
+fi
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$ROOT/gitshim/git"
+out="$(PATH="$ROOT/gitshim:$PATH" STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ ! -e "$ROOT/MOVED" ] || [ -e "$MK/plugins/frontend-design/s.md" ]; then
+  bad "C1b fixture precondition: the clone must move, after the gate, to a revision without the file" "out=$(printf '%s' "$out" | tr '\n' '|')"
+elif [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && ! grep -q '^plugin update ' "$CLI_LOG" \
+  && grep -q '1 marketplace file(s) could not be byte-verified' <<<"$out" \
+  && ! grep -q 'marketplace bytes ....... verified against' <<<"$out"; then
+  ok "C1b the byte check lists the gated revision's files, so a move that only deletes one is refused by the byte check itself"
+else bad "C1b the byte check lists the gated revision's files, so a move that only deletes one is refused by the byte check itself" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
 # C2 — moved AFTER the byte check, at the last step before the apply (the registry backup's
 # timestamp). Every earlier guard has already passed for the gated revision, so only re-reading
 # HEAD immediately before `plugin update` can catch it.
@@ -762,6 +821,106 @@ elif [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && ! grep -q '^plugin update ' 
   ok "C2 a clone that moved after every check is UNKNOWN (exit 2), and 'plugin update' is never called"
 else bad "C2 a clone that moved after every check is UNKNOWN (exit 2), and 'plugin update' is never called" \
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# ── E — the apply itself can install an UNGATED revision, and that is never a success ──────────
+# `plugin update` does not install from the clone as the script last saw it: it refreshes the
+# marketplace from its remote first and replaces the clone when the remote has moved. So no check
+# placed before the apply bounds what gets installed. The stub stands in for that by moving the clone
+# inside `plugin update`, then installing what the clone holds. The post-apply verifier is the
+# ALWAYS-GREEN stub throughout, standing in for the real one, which reads only the agent and skill
+# definitions and the declared runtime assets — every difference below lies outside those.
+#
+# apply_moved <label> <expected exit> <expected line> runs with the clone moved, during the apply, to
+# the commit the caller just made, and asserts the exit, the named file and that no success is printed.
+apply_moved() {
+  local label="$1" want_rc="$2" want_line="$3" head
+  head="$(move_past_pin "$MK_NEW" "$label")" || exit 9
+  out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" STUB_APPLY_MOVE="$head" run 2>&1)"; rc=$?
+  if [ "$(git -C "$MK" rev-parse HEAD)" != "$head" ] || [ ! -e "$ROOT/APPLIED" ]; then
+    bad "$label fixture precondition: 'plugin update' must have run and moved the clone" "out=$(printf '%s' "$out" | tr '\n' '|')"
+  elif [ "$rc" -eq "$want_rc" ] && grep -qF -- "$want_line" <<<"$out" \
+    && ! grep -q 'APPLIED — the runtime install now points at the pinned revision' <<<"$out"; then
+    ok "$label (exit $want_rc), naming it, and never reports the apply as on the pin"
+  else bad "$label (exit $want_rc), naming it, and never reports the apply as on the pin" \
+    "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+}
+
+# E1 — the moved-to revision ADDS a hook: a file the gated tree does not hold.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+mkdir -p "$MK/plugins/agentic-engineering/hooks"
+echo '{"hooks":{}}' > "$MK/plugins/agentic-engineering/hooks/hooks.json"
+apply_moved "E1 an apply that installed an added hooks file is NOT the gated revision" 1 'extra    hooks/hooks.json'
+if grep -q 'APPLIED, BUT NOT THE GATED REVISION — 1 installed file(s) differ' <<<"$out" \
+  && grep -q 'THE UNGATED REVISION IS INSTALLED' <<<"$out"; then
+  ok "E1b says plainly that the ungated revision is installed and counts the differing files"
+else bad "E1b says plainly that the ungated revision is installed and counts the differing files" "out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# E2 — the moved-to revision CHANGES the plugin manifest.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+echo '{"name":"agentic-engineering","hooks":"./elsewhere.json"}' > "$MK/plugins/agentic-engineering/.claude-plugin/plugin.json"
+apply_moved "E2 an apply that installed a changed plugin manifest is NOT the gated revision" 1 'changed  .claude-plugin/plugin.json'
+cleanup
+
+# E3 — the moved-to revision DELETES a file.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+git -C "$MK" rm -q plugins/agentic-engineering/resources/r.md || { printf 'FIXTURE FAILURE: remove r.md\n' >&2; exit 9; }
+apply_moved "E3 an apply that installed a tree missing a file is NOT the gated revision" 1 'missing  resources/r.md'
+cleanup
+
+# E4 — the clone moved during the apply but this plugin's files are the gated ones (only an unrelated
+# plugin changed). Nothing differs, yet the marketplace the runtime now reads was never gated: UNKNOWN.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+echo fd3 > "$MK/plugins/frontend-design/s.md"
+apply_moved "E4 a clone that moved during the apply is UNKNOWN even when the installed files match" 2 'APPLIED, BUT THE MARKETPLACE MOVED'
+cleanup
+
+# E5 — the control: the apply installs exactly the gated revision. The runtime's own `.in_use` marker
+# is present (the stub writes it, as every real install has it) and is the one thing allowed beyond
+# the tree. The count is asserted so a comparison that examined nothing cannot pass.
+make_fixture
+set_gitlink "$MK_NEW"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$INSTALLED/.in_use/4242" ] \
+  && grep -q "installed tree .......... 3 file(s) identical to plugins/agentic-engineering at $MK_NEW" <<<"$out" \
+  && grep -q 'APPLIED — the runtime install now points at the pinned revision' <<<"$out"; then
+  ok "E5 exits 0 when the apply installed exactly the gated tree, allowing the runtime's own marker"
+else bad "E5 exits 0 when the apply installed exactly the gated tree, allowing the runtime's own marker" \
+  "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# E6 — the allowance is the top-level marker names only. The same name any deeper is an extra file.
+make_fixture
+set_gitlink "$MK_NEW"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" STUB_APPLY_EXTRA=".orphaned_at" run 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$INSTALLED/.orphaned_at" ]; then
+  ok "E6 allows the runtime's top-level .orphaned_at marker"
+else bad "E6 allows the runtime's top-level .orphaned_at marker" "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+make_fixture
+set_gitlink "$MK_NEW"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" STUB_APPLY_EXTRA="skills/.in_use/hook.sh" run 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -qF 'extra    skills/.in_use/hook.sh' <<<"$out"; then
+  ok "E6b a marker name below the top level is an extra file (exit 1), not an allowance"
+else bad "E6b a marker name below the top level is an extra file (exit 1), not an allowance" "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# E7 — `plugin update` exits 0 having installed nothing: every gated file is missing.
+make_fixture
+set_gitlink "$MK_NEW"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" STUB_APPLY_NOOP=1 run 2>&1)"; rc=$?
+if [ "$rc" -eq 1 ] && grep -q '3 installed file(s) differ' <<<"$out" && grep -qF 'missing  agents/a.md' <<<"$out"; then
+  ok "E7 an apply that installed nothing is exit 1, naming the missing files"
+else bad "E7 an apply that installed nothing is exit 1, naming the missing files" "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
 # ── D — the app-bundle fallback finds the CLI in the layout releases install (monorepo#3783) ───
@@ -869,6 +1028,59 @@ out="$(run_bundled)"; rc=$?
 if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'version directories seen: none' <<<"$out"; then
   ok "D5 a host with no app bundle exits 2 and says no version directory was seen"
 else bad "D5 a host with no app bundle exits 2 and says no version directory was seen" \
+  "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# D6 — $HOME is needed only for the two defaults it supplies. With the plugins directory given by
+# $CLAUDE_CONFIG_DIR and the CLI named, an unset $HOME must not matter: expanding it anyway aborts
+# under `set -u` with exit 1, which this script defines as "not on the pin".
+make_fixture
+set_gitlink "$MK_NEW"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" env -u HOME -u CLAUDE_CLI CLAUDE_CONFIG_DIR="$ROOT" \
+  "$SCRIPT" --repo-root "$CONSUMER" --cli "$BIN/claude" --verify-cmd "$VERIFY" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ]; then
+  ok "D6 runs with \$HOME unset when \$CLAUDE_CONFIG_DIR and --cli supply everything it needs"
+else bad "D6 runs with \$HOME unset when \$CLAUDE_CONFIG_DIR and --cli supply everything it needs" \
+  "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# D6b — and where $HOME IS needed, an unset one is UNKNOWN with the reason named, never exit 1.
+make_bundle_fixture
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" env -u HOME -u CLAUDE_CLI PATH="$PATH_NO_CLAUDE" \
+  "$SCRIPT" --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --verify-cmd "$VERIFY" 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -qF "\$HOME is unset so the app bundle cannot be located" <<<"$out"; then
+  ok "D6b exits 2, naming the reason, when the app bundle is needed and \$HOME is unset"
+else bad "D6b exits 2, naming the reason, when the app bundle is needed and \$HOME is unset" \
+  "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" env -u HOME -u CLAUDE_CLI -u CLAUDE_CONFIG_DIR \
+  "$SCRIPT" --repo-root "$CONSUMER" --cli "$BIN/claude" --verify-cmd "$VERIFY" 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -q 'cannot locate the runtime plugins directory' <<<"$out"; then
+  ok "D6c exits 2, naming the reason, when nothing locates the plugins directory"
+else bad "D6c exits 2, naming the reason, when nothing locates the plugins directory" \
+  "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# D7 — a DIRECTORY named `claude` passes an executable test. In the newest build it would be taken
+# as the CLI and end the search before the older, valid build was tried.
+make_bundle_fixture
+make_bundle "2.1.9/0a1b2c3d4e5f" older-valid-build
+mkdir -p "$BUNDLE_BASE/2.1.10/6f7e8d9c0b1a/claude.app/Contents/MacOS/claude" \
+  || { printf 'FIXTURE FAILURE: mkdir directory-named-claude\n' >&2; exit 9; }
+out="$(run_bundled)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ] && [ "$(bundles_used)" = "older-valid-build " ]; then
+  ok "D7 skips a directory named claude and resolves the older build that holds a real CLI"
+else bad "D7 skips a directory named claude and resolves the older build that holds a real CLI" \
+  "exit was $rc, used=[$(bundles_used)], out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
+# D7b — the same for a CLI that was named: a directory is not a CLI.
+make_fixture
+set_gitlink "$MK_NEW"
+mkdir -p "$ROOT/dir-cli/claude"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --cli "$ROOT/dir-cli/claude" 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && grep -qF "'$ROOT/dir-cli/claude' (from --cli or \$CLAUDE_CLI) is not an executable file" <<<"$out"; then
+  ok "D7b refuses a named CLI that is a directory (exit 2, named reason)"
+else bad "D7b refuses a named CLI that is a directory (exit 2, named reason)" \
   "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
@@ -985,6 +1197,14 @@ if [ -r "$CONSTITUTION" ]; then
     *"never the live \`HEAD\`"*"read again immediately before the apply"*"a clone that moved is \`2\`, never an apply"*)
       ok "A23 the contract binds the byte check and the apply to the gated revision" ;;
     *) bad "A23 the contract binds the byte check and the apply to the gated revision" "a clone moved after the gate is not covered by the contract" ;;
+  esac
+  # And it must not claim more than that. The apply itself can install an ungated revision; what is
+  # guaranteed is a non-zero exit afterwards. A contract that reads as prevention teaches the next
+  # reader that a completed apply needs no report.
+  case "$section" in
+    *"detected afterwards, not prevented"*"whole installed plugin directory"*"the ungated revision is already installed"*)
+      ok "A24 the contract states that an ungated install is detected after the apply, not prevented" ;;
+    *) bad "A24 the contract states that an ungated install is detected after the apply, not prevented" "the contract overstates what the gate guarantees" ;;
   esac
 else
   bad "A9-A11 the definition-and-plugin guide is unreadable at $CONSTITUTION"
