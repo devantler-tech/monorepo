@@ -137,8 +137,9 @@ standing substitute** for moving the real backlog:
   (a) **researching upstream state of the art** — new features and capabilities in each product's key
   dependencies and comparable tools (for ksail/platform: Headlamp, ArgoCD, FluxCD, Kubernetes, and the
   other controllers/tooling they build on — release notes, changelogs, roadmaps) — using public
-  **non-repository** documentation in unattended runs; an external repository remains off-limits unless
-  the current conversation has explicitly cleared the professional-work boundary for it — and (b) **hands-on
+  documentation and bounded public read-only source research under the privacy guide. Employment
+  repositories remain excluded; private or ambiguous external inspection requires current, explicit
+  confirmation. Research grants no execution or external publication — and (b) **hands-on
   product debugging** — exercising the product like a user to surface bugs, friction, and gaps in
   features, code quality, performance, reliability, UI and UX. Every finding is converted into a
   **well-formed issue** using the evidence-led shape in *Build the right thing* (labelled) per

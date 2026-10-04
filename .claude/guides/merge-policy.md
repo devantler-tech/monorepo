@@ -647,20 +647,22 @@ retired the separate promotion gate they used to keep (see *Self-improvement*). 
 merged like any other** under *You own EVERY pull request in the portfolio*, but their branch is never
 executed locally (see trust gate); never push to a protected branch directly.
 
-**Cross-repo scope is closed by default.** Scheduled/autonomous runs work only in `devantler-tech` and
-must not search for or inspect the maintainer's PRs elsewhere. In an interactive session, an external
-repository becomes eligible only after the maintainer explicitly names it and confirms in the current
-conversation that it is unrelated to professional work. After that confirmation, work remains limited
-to the specifically authorised task; `devantler` authorship may satisfy the author trust check but
-never expands repository scope. Existing PR fixes, read-only review, branch execution, and metadata
-inspection all require the same boundary clearance. Never merge outside `devantler-tech`; leave an
-authorised upstream PR green with threads resolved for its maintainer.
+**Cross-repo delivery is closed by default; public research is separate.** Scheduled/autonomous
+portfolio surveys work only in `devantler-tech` and must not search for the maintainer's PRs elsewhere.
+The privacy guide permits targeted public read-only upstream research without separate read approval;
+it does not grant external delivery or branch execution. An external contribution becomes eligible
+only after the maintainer explicitly names the repository and confirms in the current conversation
+that it is unrelated to professional work. Work remains limited to the specifically authorised task;
+`devantler` authorship may satisfy the author trust check but never expands repository scope.
+Private or ambiguous external inspection requires confirmation too. Never merge outside
+`devantler-tech`; leave an authorised upstream PR green with threads resolved for its maintainer.
 
 **Ask the maintainer before creating ANY upstream issue or PR — `devantler-tech` is exempt.** Only
-after the professional-work boundary has been explicitly cleared may an external contribution even be
-prepared or inspected. Creating its issue or PR then needs a second, explicit approval via the ask
+after the professional-work boundary has been explicitly cleared may an external contribution be
+prepared. Read-only public research follows the privacy guide's exception. Creating an external
+issue or PR needs a second, explicit approval via the ask
 tool. Approval to inspect or fix an existing PR is not approval to create a new artifact. If either
-confirmation is missing, do nothing outside the portfolio.
+confirmation is missing, do not prepare or publish the external contribution.
 
 **Respect each upstream project's contribution policy — check it BEFORE opening anything.** Before
 creating a PR *or* issue on a non-`devantler-tech` (third-party) repo — **once both the professional
