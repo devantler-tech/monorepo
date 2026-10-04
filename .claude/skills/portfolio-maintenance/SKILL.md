@@ -556,13 +556,28 @@ The helper requires an explicit author, excludes archived repositories, discover
 a bounded limit, and uses `board-add.sh` for idempotent status-preserving mutations. Do not hand-roll
 the item-add/item-edit pair or read a half-completed add as a finished one.
 
-Read both its exit status and summary: `0` means the bounded batch succeeded, while `deferred` counts
-issues left for later runs and `skipped` counts private issues requiring a maintainer decision.
+Read both its exit status and summary: `0` means the bounded batch succeeded, while `verified` counts
+issues a bulk read proved are already on the board, `boarded` those that went through `board-add.sh`
+(including ones it found already there), `deferred` issues left for later runs and `skipped`
+private issues requiring a maintainer decision.
 It does not prove complete board coverage. Exit `2` means the **discovery itself failed**, came back
 truncated at the `--limit` cap, or an issue could not be boarded — never treat a failed or short search as an empty lane, since
-the cap bounds what is fetched rather than guaranteeing a complete census. A private repository's
+the cap bounds what is fetched rather than guaranteeing a complete census. It also means a
+`--resume-from` checkpoint that discovery no longer returns, an interrupted run, or a pass that
+could not account for every discovered issue. A private repository's
 issue is reported `SKIPPED`, because project 5 is public and boarding one from a private repo is a
 maintainer decision.
+
+**Existing membership is read in bulk, and a pass that changes nothing fits the call budget** (#3340).
+Asking `board-add.sh` about every issue costs three remote reads each; measured 2026-10-04, that is
+about 14.5 minutes and 1,750 calls for the 583 open issues, and the bulk read did the same pass in
+23 seconds and 8 calls. Only a read that **proves** an issue is on this board with a Status skips
+the helper. A failed, short or surprising read proves nothing: the sweep prints
+`bulk membership read did not hold` and leaves those issues to the helper, so it can cost time but
+never coverage. Per-issue work stops at `--deadline-seconds` (default 90). The summary then carries
+`checkpoint=<url>`, the first issue not examined, and `--resume-from <url>` starts the next call
+there; an interrupted run prints the same and exits `2`. `--dry-run` is the read-only path:
+discovery and the bulk read, no helper call.
 
 The default discovery cap is 300. Saturation stops before any writes and requires an explicit
 larger `--limit` (a decimal integer from 1 to 1000 without leading zeros); repeating the same default
