@@ -350,7 +350,8 @@ the post-apply check still does not report `CURRENT`).
 `2` is UNKNOWN — no verdict produced: no CLI, an unreadable pin or marketplace, a pinned revision in
 neither the marketplace clone nor the consumer's submodule, a plugin id naming a
 different marketplace than the clone being gated, a concurrent run holding the lock, a marketplace
-worktree whose bytes do not provably match the pinned commit, an unavailable verifier, or
+worktree whose bytes do not provably match the gated revision, a marketplace clone that moved after
+the gate approved it, an unavailable verifier, or
 `--dry-run`, since a simulation asserts nothing about the install. **For the Claude lane only, run it
 on a `DRIFT`;** a `1` or `2` is reported, never a run-stopper, and you continue by **reading** the
 reviewed definition at the pinned gitlink and following it, exactly as above. On another native adapter, do
@@ -383,6 +384,26 @@ entry (apart from its version) and its whole source subtree are identical at bot
 subtree holds only regular files (a symlink or submodule refuses, since its tree identity does not
 cover the bytes the runtime copies). A release of an unrelated plugin then no longer blocks the
 repair (#3197), and any change to this plugin still refuses rather than taking the tip.
+
+🔴 **The gate approves a REVISION, and the apply must install that revision — not whatever the clone
+holds by then.** The marketplace clone is shared with the runtime, whose own marketplace auto-update
+takes no lock of the script's and can move it after the gate from any other session on the host. So
+the byte check compares the worktree against the gated revision's blobs, never the live `HEAD`, and
+the clone's `HEAD` is read again immediately before the apply: a clone that moved is `2`, never an
+apply ([#3783](https://github.com/devantler-tech/monorepo/issues/3783)).
+
+🔴 **None of that bounds what the apply installs: an ungated install is detected afterwards, not
+prevented.** `plugin update` refreshes the marketplace from its remote before it installs (it skips
+that only when the marketplace was updated moments ago) and replaces the clone when the remote has
+moved, so a revision published after the gate can still be installed. The script cannot undo that —
+it never edits the plugin cache and the CLI takes no revision. What it guarantees is that such a run
+never exits `0`: after the apply it compares the **whole installed plugin directory** with the gated
+revision's tree, every file on either side by blob identity, allowing only the runtime's own
+top-level `.in_use` and `.orphaned_at` markers. A missing, changed or extra file anywhere — a hook, a
+command, an MCP configuration, the plugin manifest — is exit `1` naming the files; a clone that moved
+during the apply while the installed files still match is `2`. **On that exit `1` the ungated
+revision is already installed and is served from the next dispatch: report it, and follow the
+reviewed definition at the pinned gitlink.**
 
 ⚠️ **A refusal is a real finding about the ROLLOUT, not a failure of the check.** It means the
 gitlink and upstream have diverged, so the fix is to bump `libraries/agent-plugins` to the revision
