@@ -86,6 +86,9 @@ verify_asset "${adapter_relative}"
 # The guard admits the bundled thread counter by its installed path, so the
 # surveyor may run it: verify its pinned bytes like every other admitted asset.
 verify_asset "${thread_counter_relative}"
+# From 6.0.0 the classifier and the thread counter source this library from
+# their own directory, so its bytes run inside two admitted programs: pin it too.
+verify_asset "scripts/json-stream.lib.sh"
 
 # The reviewed plugin admits a CONSUMING deployment's own classifier only when
 # that deployment DECLARES it, as an absolute path, in the hook environment.

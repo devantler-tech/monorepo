@@ -12,18 +12,23 @@
       "entrypoint": "agentic-engineer",
       "requiredRuntimeAssets": [
         {
+          "path": "scripts/json-stream.lib.sh",
+          "sha256": "13850e77959146d28af0e779c2effc449aba995ef3d3d033ca99b425ee102a8e",
+          "executable": true
+        },
+        {
           "path": "scripts/classify-default-branch-ci-runs.sh",
-          "sha256": "cb177781f3d4b8276f4d5d5e165e4d3c6938fadff351fd65754b70a7ae7c37d2",
+          "sha256": "9bb0ac5ae3705b7581e1da4a64d962e85a8e9de5a3c87cdc761d333625149de2",
           "executable": true
         },
         {
           "path": "scripts/count-unresolved-review-threads.sh",
-          "sha256": "cb41182d440b38fa43b72920b16c23a7d8b27a279b935cd7e21b506c7b1373c1",
+          "sha256": "022a197f36ec02b34727c83ba40ffdc4967892fbe299604c2deb3c8bef005e8e",
           "executable": true
         },
         {
           "path": "scripts/forge-readonly-guard.sh",
-          "sha256": "3cd4874be4211780108424aef01b1aa775dfbf38581cfbd3d586cdfe38118c63",
+          "sha256": "bb04b61f8451669cd52745e6414569c6f26368606180d5a2790786609c5ed484",
           "executable": true
         },
         {
@@ -33,7 +38,7 @@
         },
         {
           "path": "scripts/evaluate-inference-routing.sh",
-          "sha256": "9861b64b6caff842025fab51ad55791e9101cfdf5bdcf837ba08d8c4aec2c809",
+          "sha256": "5cda6907eec0a6c3e4ed94f7ac0e42626cf46be6e9b13c3910fc14147187e3a8",
           "executable": true
         }
       ],
@@ -71,13 +76,13 @@
       "portfolio-surveyor": {
         "enabled": true,
         "mode": "delegated-read-only",
-        "definitionSha256": "115f9ff9907c1ef08fc8ca7ca983d8355a320ae51590135d855b9e43b699fccc"
+        "definitionSha256": "1ede08e15c23e1b767f5f66ace2f49f94233677ca27890a411234f58a92f83ca"
       },
       "agent-improver": {
         "enabledWhen": "Both optional consumer contract sections are present",
         "mode": "separate-schedule-or-on-demand",
         "definitionSha256": "5bf3fb5e6e99e82900f23b5f42d41bc26a4ea764862a1ca155557162196c26b9",
-        "skillSha256": "0f4487e9ecf21533598db677c61f19c611ddf2125e4fdae2f6c13e1c4e1e02db"
+        "skillSha256": "19eeac53f2f8979e8af77f8a5812bf6aa84bd54f3bf457ae2758989fecde106d"
       }
     },
     "runtime": {
@@ -122,7 +127,7 @@
       "copyPasteInstruction": "Adopt this document as the desired state for this workspace. Reconcile it using your native plugin, agent, scheduler, memory, permission, and model controls. Keep AGENTS.md as the canonical organization contract and this plugin as the canonical role. Make only the minimum runtime-local wiring needed to point at those sources. Before enabling writes, complete every onboarding step and report the resulting state and any unsupported capability.",
       "steps": [
         "Resolve the canonical consumer repository from the current workspace.",
-        "Install or refresh agentic-engineering from the declared marketplace using the runtime's native mechanism. If full plugins are unsupported, load the canonical agent and skill files plus the referenced runtime assets from the declared source without creating divergent copies, including scripts/classify-default-branch-ci-runs.sh, scripts/count-unresolved-review-threads.sh, scripts/forge-readonly-guard.sh and scripts/surveyor-forge-readonly.sh for the portfolio-surveyor, and verify every declared SHA-256 and executable requirement before use. forge-readonly-guard.sh --command is the portable contract; the wrapper is an input adapter for it, never a second policy, and is wired in only where the runtime presents a candidate command as structured JSON on standard input rather than as an argument. Register the guard at the surveyor's own pre-execution point only, directly or through that adapter, using the runtime's own agent-scoped mechanism; plugin-shipped agent definitions cannot carry that registration themselves, so it is always consumer-side wiring. A deployment that has not installed those assets or has not registered the guard for that agent fails closed (forge reads are QUERY-UNKNOWN).",
+        "Install or refresh agentic-engineering from the declared marketplace using the runtime's native mechanism. If full plugins are unsupported, load the canonical agent and skill files plus the referenced runtime assets from the declared source without creating divergent copies, including scripts/classify-default-branch-ci-runs.sh, scripts/count-unresolved-review-threads.sh, scripts/json-stream.lib.sh, scripts/forge-readonly-guard.sh and scripts/surveyor-forge-readonly.sh for the portfolio-surveyor, and verify every declared SHA-256 and executable requirement before use. forge-readonly-guard.sh --command is the portable contract; the wrapper is an input adapter for it, never a second policy, and is wired in only where the runtime presents a candidate command as structured JSON on standard input rather than as an argument. Register the guard at the surveyor's own pre-execution point only, directly or through that adapter, using the runtime's own agent-scoped mechanism; plugin-shipped agent definitions cannot carry that registration themselves, so it is always consumer-side wiring. A deployment that has not installed those assets or has not registered the guard for that agent fails closed (forge reads are QUERY-UNKNOWN).",
         "Read AGENTS.md and verify every required consumer contract section. Enable agent-improver only when both additional sections are present. Preserve spec.roles[\"agentic-engineer\"].spendStewardshipEnabled from the single effective desired-state document declared in Spend contract, or the shipped false default when none is declared. Apply the engineer entrypoint's explicit opt-in contract before spend work; onboarding never infers or grants maintainer opt-in. Report the effective source, flag value, and unresolved prerequisites while continuing ordinary operate and advance engineering.",
         "Map the declared roles onto native agent capabilities, preserve portfolio-surveyor as read-only, and grant least privilege for each role. Export a disabling GH_TELEMETRY (0 or false) in the environment the surveyor's shell inherits: the read-only forge guard treats a missing value as unproven and refuses every command, including reads, so a runtime that enforces the guard without this variable leaves the surveyor unable to run any forge query at all. It cannot be supplied inside the command string, which the guard also refuses.",
         "Allocate a unique branch namespace for every deployed writer instance and record it in the consumer contract before enabling writes.",

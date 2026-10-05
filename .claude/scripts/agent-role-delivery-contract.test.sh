@@ -404,6 +404,7 @@ canonical_forge_guard="${plugin_scripts}/forge-readonly-guard.sh"
 canonical_thread_counter="${plugin_scripts}/count-unresolved-review-threads.sh"
 canonical_surveyor_hook="${plugin_scripts}/surveyor-forge-readonly.sh"
 canonical_routing_evaluator="${plugin_scripts}/evaluate-inference-routing.sh"
+canonical_json_stream_lib="${plugin_scripts}/json-stream.lib.sh"
 [ -f "${canonical_surveyor}" ] ||
   fail "pinned plugin does not bundle portfolio-surveyor.agent.md"
 [ -f "${canonical_improver}" ] ||
@@ -462,7 +463,7 @@ grep -Fq 'Any other mandatory-query failure also wins as `nothing_on_fire: false
 declared_runtime_asset_sha() {
   jq -er --arg path "$1" '
     .spec.source.requiredRuntimeAssets
-    | select(type == "array" and length == 5)
+    | select(type == "array" and length == 6)
     | map(select(
           type == "object"
           and keys == ["executable", "path", "sha256"]
@@ -478,11 +479,12 @@ for runtime_asset in \
   "scripts/count-unresolved-review-threads.sh:${canonical_thread_counter}" \
   "scripts/forge-readonly-guard.sh:${canonical_forge_guard}" \
   "scripts/surveyor-forge-readonly.sh:${canonical_surveyor_hook}" \
-  "scripts/evaluate-inference-routing.sh:${canonical_routing_evaluator}"; do
+  "scripts/evaluate-inference-routing.sh:${canonical_routing_evaluator}" \
+  "scripts/json-stream.lib.sh:${canonical_json_stream_lib}"; do
   runtime_asset_path="${runtime_asset%%:*}"
   canonical_runtime_asset="${runtime_asset#*:}"
   if ! declared_runtime_asset_sha="$(declared_runtime_asset_sha "${runtime_asset_path}")"; then
-    fail "consumer desired state does not carry exactly five executable path-and-digest runtime assets including ${runtime_asset_path}"
+    fail "consumer desired state does not carry exactly six executable path-and-digest runtime assets including ${runtime_asset_path}"
   fi
   [ "${declared_runtime_asset_sha}" = "$(sha256_bytes "${canonical_runtime_asset}")" ] ||
     fail "consumer desired-state ${runtime_asset_path} sha256 does not match the pinned executable bytes"
@@ -1047,9 +1049,9 @@ SURVEYOR_HOOK_COMMAND="${expected_surveyor_hook}" yq --front-matter=extract -e '
 # env-prefixed gh command, so the runtime must supply the disabling value to the shell
 # before the candidate command reaches the hook.
 jq -e '
-  .env == {"GH_TELEMETRY": "0"}
+  .env == {"GH_TELEMETRY": "0", "GIT_NO_LAZY_FETCH": "1"}
 ' "${settings}" >/dev/null ||
-  fail "runtime settings do not export GH_TELEMETRY=0 to the surveyor shell"
+  fail "runtime settings do not export GH_TELEMETRY=0 and GIT_NO_LAZY_FETCH=1 to the surveyor shell"
 
 if [ ! -f "${surveyor_hook_resolver}" ] \
   || [ ! -x "${surveyor_hook_resolver}" ] \
@@ -1582,6 +1584,26 @@ set -e
 case "${tampered_counter_output}" in
   *'scripts/count-unresolved-review-threads.sh sha256 does not match desired state'*) ;;
   *) fail "consumer surveyor hook refused a drifted thread counter without an actionable digest reason" ;;
+esac
+
+# The classifier and the thread counter source json-stream.lib.sh from their own
+# directory, so a drifted library runs inside two admitted programs whose own
+# digests still match: it must fail the same way.
+tampered_library_plugin="${hook_tmp}/tampered-library-plugin"
+cp -R "${plugin_root}" "${tampered_library_plugin}"
+printf '\n# unreviewed drift\n' >> \
+  "${tampered_library_plugin}/scripts/json-stream.lib.sh"
+chmod +x "${tampered_library_plugin}/scripts/json-stream.lib.sh"
+write_hook_registry "${tampered_library_plugin}"
+set +e
+tampered_library_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+tampered_library_status=$?
+set -e
+[ "${tampered_library_status}" -eq 2 ] ||
+  fail "consumer surveyor hook trusted a sourced library whose bytes differ from desired state (exit ${tampered_library_status})"
+case "${tampered_library_output}" in
+  *'scripts/json-stream.lib.sh sha256 does not match desired state'*) ;;
+  *) fail "consumer surveyor hook refused a drifted sourced library without an actionable digest reason" ;;
 esac
 
 jq -e '

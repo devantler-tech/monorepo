@@ -287,7 +287,11 @@ case "${1:-}" in
     # GH_TOKEN, and the `gh auth git-credential` helper NEEDS them on hosts
     # where gh is authenticated only via environment token. The guard below
     # verifies nothing token-shaped was persisted regardless.
-    if ! git -c credential.helper='!gh auth git-credential' \
+    # The one variable removed is GIT_NO_LAZY_FETCH: Claude sessions export it for the
+    # surveyor's read-only guard, and with it set a `--filter=blob:none` clone cannot
+    # fetch its own checkout's blobs (measured exit 128). Later reads of a blob outside
+    # that checkout still need `env -u GIT_NO_LAZY_FETCH git …` from the caller.
+    if ! env -u GIT_NO_LAZY_FETCH git -c credential.helper='!gh auth git-credential' \
       clone --quiet "$@" "$url" "$dest" >/dev/null 2>&1; then
       fail "clone failed for ${slug}"
     fi

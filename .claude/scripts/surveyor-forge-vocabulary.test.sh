@@ -111,6 +111,9 @@
 # Exit: 0 all entries match · 1 a mismatch · 2 UNKNOWN (guard unavailable).
 # UNKNOWN is never reported as success: an unverifiable boundary is unproven.
 set -uo pipefail
+# The 6.0.0 guard refuses a local Git read unless the process already disabled lazy
+# fetching, exactly as the runtime settings export it to the surveyor shell.
+export GIT_NO_LAZY_FETCH=1
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd) || exit 2
 guard="$repo_root/libraries/agent-plugins/plugins/agentic-engineering/scripts/forge-readonly-guard.sh"
