@@ -4,7 +4,8 @@
 # the same history IS; plus pagination, the manual-disable and missing-file skips, GitHub's
 # inactivity disable, offset timestamps, and every failed read reported as UNKNOWN. Every content and
 # history read is pinned to one resolved head, and a head that moves mid-scan is re-judged
-# (monorepo#3672); a schedule removed and re-added inside the window is not yet due (monorepo#3671).
+# (monorepo#3672); a schedule removed and re-added inside the window is not yet due, and neither is a
+# workflow that an earlier sweep saw disabled inside it (monorepo#3671).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 checker="$root/.claude/scripts/silent-scheduled-workflows.sh"
@@ -668,6 +669,108 @@ lacks "restored.yaml" "a file absent at the window start is new, not silent"
 has "SILENT-WORKFLOW o/p .github/workflows/edited.yaml — no scheduled run in the last 97h (its cron fires at least every 1d)" \
   "edits that keep the schedule must never extend the grace"
 has "CHECKED 5 scheduled workflow(s) across 1 repositor(ies)" "every scheduled workflow is examined"
+
+# A workflow switched back on inside the window is not yet due (monorepo#3671), and only a sweep that
+# SAW it disabled can know: --state-file records those sightings. edited.yaml is the one silent
+# workflow in o/p, with a 97-hour window.
+state="$tmp/state/seen.tsv" # its directory does not exist yet
+edited=".github/workflows/edited.yaml"
+silent_edited="SILENT-WORKFLOW o/p ${edited} — no scheduled run in the last 97h (its cron fires at least every 1d)"
+row() { printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
+# A sweep records every workflow it finds disabled, by hand or by GitHub, and nothing else.
+run --repo o/a --state-file "$state"
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "recording sightings must not change the verdict, got $rc"; }
+has "SILENT-WORKFLOW o/a .github/workflows/inactive.yaml — schedule disabled by GitHub for repository inactivity" \
+  "a workflow GitHub disabled is still reported while it is disabled"
+{ row o/a .github/workflows/inactive.yaml "$now"; row o/a .github/workflows/off.yaml "$now"; } >"$tmp/want"
+cmp -s "$tmp/want" "$state" || { cat "$state" >&2; fail "exactly the two disabled workflows must be recorded"; }
+# A later sighting replaces the earlier one, other rows are kept, and a row too old to matter is dropped.
+{ row o/a .github/workflows/off.yaml "$((now - 5 * d))"; row o/x .github/workflows/kept.yaml "$((now - 3 * d))"
+  row o/x .github/workflows/ancient.yaml "$((now - 6000 * d))"; } >"$state"
+run --repo o/a --state-file "$state"
+{ row o/a .github/workflows/inactive.yaml "$now"; row o/a .github/workflows/off.yaml "$now"
+  row o/x .github/workflows/kept.yaml "$((now - 3 * d))"; } >"$tmp/want"
+cmp -s "$tmp/want" "$state" || { cat "$state" >&2; fail "sightings must merge to the newest per workflow and drop expired rows"; }
+# Seen disabled 10 hours ago and active now: switched back on inside the window, so not yet due.
+row o/p "$edited" "$((now - 10 * h))" >"$state"
+run --repo o/p --state-file "$state"
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a workflow re-enabled inside the window must not be reported, got $rc"; }
+lacks "edited.yaml" "a workflow re-enabled inside the window is not yet due"
+has "CHECKED 5 scheduled workflow(s) across 1 repositor(ies)" "a graced workflow is still counted as examined"
+row o/p "$edited" "$((now - 10 * h))" | cmp -s - "$state" || { cat "$state" >&2; fail "a sighting must survive a sweep that adds none"; }
+# The sighting excuses a silence, never an unread run list: a failed read stays UNKNOWN.
+FAIL_ON="actions/workflows/4/runs" run --repo o/p --state-file "$state"
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a failed run read must exit 2 even with a recent sighting, got $rc"; }
+has "QUERY-UNKNOWN o/p ${edited} — run list read failed" "a recent sighting must not hide a failed run read"
+# The control: the same sweep with no state reports it, so the sighting is what granted the grace.
+run --repo o/p
+has "$silent_edited" "without a sighting the workflow is judged on its run history"
+# A sighting AT the window start, or before it, proves nothing about the window: reported.
+for age in $((97 * h)) $((30 * d)); do
+  row o/p "$edited" "$((now - age))" >"$state"
+  run --repo o/p --state-file "$state"
+  [ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a sighting ${age}s old must not grant the grace, got $rc"; }
+  has "$silent_edited" "a sighting outside the window must not grant the grace"
+done
+row o/p "$edited" "$((now - 97 * h + 1))" >"$state"
+run --repo o/p --state-file "$state"
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a sighting one second inside the window grants the grace, got $rc"; }
+# A sighting of another repository's workflow, or of another file, is not this workflow's.
+{ row o/q "$edited" "$((now - h))"; row o/p .github/workflows/other.yaml "$((now - h))"; } >"$state"
+run --repo o/p --state-file "$state"
+[ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "another workflow's sighting must not grant the grace, got $rc"; }
+has "$silent_edited" "a sighting is matched on the repository and the path together"
+# A state file that does not validate is UNKNOWN, grants nothing, and is left exactly as found.
+# That includes a sighting dated after the sweep, which would otherwise grant a grace that never ends,
+# and a line holding a NUL byte, which BSD grep does not select.
+for bad in "o/p	${edited}" "o/p	${edited}	soon" "o/p	../../etc/passwd	$((now - h))" "o p	${edited}	$((now - h))" \
+  "o/x	${edited}	$((now + 400 * d))" "o/x	${edited}	99999999999999999999999" "o/x	${edited}	$((now - h))\0000junk"; do
+  # shellcheck disable=SC2059 # the row is the format, so the NUL escape is written as a byte
+  { row o/p "$edited" "$((now - h))"; printf "${bad}\n"; } >"$state"
+  cp "$state" "$tmp/before"
+  run --repo o/p --state-file "$state"
+  [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed state row '$bad' must exit 2, got $rc"; }
+  has "QUERY-UNKNOWN — state file unreadable or malformed; scanned without it" "a malformed state file must be named"
+  has "$silent_edited" "a malformed state file must not grant the valid row's grace either"
+  cmp -s "$tmp/before" "$state" || fail "a malformed state file must not be rewritten"
+done
+# End to end, on one state file: the sweep that sees the workflow disabled is what lets the next one,
+# which finds it active and silent, leave it alone. GitHub's own disable is recorded the same way.
+for was in disabled_manually disabled_inactivity; do
+  rm -f "$state"
+  put "repos/o/r" '{"default_branch":"main"}'
+  put "repos/o/r/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+    {\"id\":1,\"state\":\"${was}\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+  workflow_file o/r .github/workflows/daily.yaml "$daily"
+  runs o/r 1 1 "schedule:$((now - 40 * d))"
+  run --repo o/r --state-file "$state"
+  row o/r .github/workflows/daily.yaml "$now" | cmp -s - "$state" || { cat "$state" >&2; fail "a ${was} workflow must be recorded"; }
+  put "repos/o/r/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+    {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+  run --repo o/r --repo o/p --state-file "$state"
+  lacks "o/r .github/workflows/daily.yaml" "a workflow seen ${was} by the last sweep is not yet due once active"
+  has "$silent_edited" "one repository's sighting must not grace another repository in the same sweep"
+  run --repo o/r
+  has "SILENT-WORKFLOW o/r .github/workflows/daily.yaml — no scheduled run in the last 97h (its cron fires at least every 1d)" \
+    "without the sighting the re-enabled workflow is reported"
+done
+# A state path that is not a file is the same.
+mkdir "$tmp/statedir"
+run --repo o/p --state-file "$tmp/statedir"
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a state path that is a directory must exit 2, got $rc"; }
+has "QUERY-UNKNOWN — state file unreadable or malformed; scanned without it" "an unreadable state file must be named"
+has "$silent_edited" "an unreadable state file must not hide a silence"
+# A state file that cannot be written is UNKNOWN: the sightings this sweep made would be lost.
+: >"$tmp/plainfile"
+run --repo o/a --state-file "$tmp/plainfile/seen.tsv"
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an unwritable state file must exit 2, got $rc"; }
+has "QUERY-UNKNOWN — state file could not be written" "an unwritable state file must be named"
+# No --state-file writes nothing, and an empty path is a usage error.
+rm -rf "$tmp/state"
+run --repo o/a
+[ ! -e "$tmp/state" ] || fail "a sweep without --state-file must not write state"
+run --repo o/a --state-file ""
+[ "$rc" -eq 2 ] || fail "an empty --state-file must exit 2, got $rc"
 # Only a PROVEN difference grants the grace: an unparseable version inside the window is UNKNOWN…
 workflow_file o/p .github/workflows/edited.yaml "$daily" "$daily" 'on: [unclosed'
 run --repo o/p
