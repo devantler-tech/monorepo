@@ -29,8 +29,20 @@
 # window (monorepo#3671). A schedule that was added, changed, or removed and re-added inside the
 # window is not yet due, so it is skipped rather than judged on runs from before it began.
 #
+# A workflow that was DISABLED and switched back on inside the window is not yet due either, and no
+# read can show it: the file and its crons never changed, and GitHub's workflow `updated_at` also moves
+# on any edit, so gracing from it would hide a stopped schedule on a busy file for good. The only
+# evidence is having seen it disabled. With `--state-file` each sweep records the workflows it finds
+# disabled, and a later sweep that finds one active with no scheduled run skips it while the last such
+# sighting is inside the window. Only a sighting grants that grace, never an edit. A disable and
+# re-enable that both fall between two sweeps leaves no sighting and is judged as before.
+#
 # Usage:
-#   silent-scheduled-workflows.sh --repo <owner/repo> [--repo …] [--now <epoch>]
+#   silent-scheduled-workflows.sh --repo <owner/repo> [--repo …] [--state-file <path>] [--now <epoch>]
+#
+# The state file holds one `<owner/repo><TAB><path><TAB><epoch>` row per workflow last seen disabled. It
+# is created when missing; one that cannot be read, validated or written is UNKNOWN, and the scan
+# then runs without it, so it can only ever withhold a grace.
 #
 # Output, one line per finding:
 #   SILENT-WORKFLOW <owner/repo> <path> — <reason>
@@ -51,7 +63,7 @@ finished=0
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {
   local rc=$?
-  rm -f "${err:-}" "${buf:-}"
+  rm -f "${err:-}" "${buf:-}" "${seen_disabled:-}" "${sightings:-}" "${state_tmp:-}"
   if [ "$finished" != 1 ]; then
     echo "silent-scheduled-workflows: aborted before finishing; reporting UNKNOWN" >&2
     rc=2
@@ -66,11 +78,13 @@ usage() {
 }
 
 repos=()
+state_file=""
 now="$(date -u +%s)"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo) [ "$#" -ge 2 ] || usage; repos+=("$2"); shift 2 ;;
     --now) [ "$#" -ge 2 ] || usage; now="$2"; shift 2 ;;
+    --state-file) [ "$#" -ge 2 ] && [ -n "$2" ] || usage; state_file="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -323,12 +337,55 @@ schedule_continuity() { # <repo> <path> <pinned head> <window start, ISO 8601> <
   echo "UNKNOWN file history inside the window exceeds $((max_history_pages * history_page_size)) commits"
 }
 
+# The disabled-workflow sightings (see the header). Every row is validated before any is trusted: the
+# file is local state, yet a row that does not parse must never be read as "no sighting" for some
+# workflows and a sighting for others. Rows older than the longest window the gap calculator can
+# produce (an 8-year span, doubled) can no longer grant a grace and are dropped on write.
+state_row_re='^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+'$'\t''[.]github/workflows/[A-Za-z0-9._#-]+'$'\t''[0-9]+$'
+state_horizon=$((2 * (8 * 366 + 1) * day + hour))
+valid_state() { # <file>: every non-empty row has the three validated fields
+  # grep exits 1 only when it read the file and no row failed the pattern; 2 is a failed read.
+  local rc=0
+  grep -qvE "^\$|${state_row_re}" -- "$1" || rc=$?
+  [ "$rc" -eq 1 ]
+}
+# Records that <repo> <path> is disabled now. A repository name the row format cannot hold is not
+# recorded, which only withholds a later grace.
+saw_disabled() { # <repo> <path>
+  [ "$state_mode" = on ] || return 0
+  [[ "$(printf '%s\t%s\t%s' "$1" "$2" "$now")" =~ $state_row_re ]] || return 0
+  printf '%s\t%s\t%s\n' "$1" "$2" "$now" >>"$seen_disabled"
+}
+# The newest time <repo> <path> was seen disabled, from earlier sweeps; 0 when never.
+last_seen_disabled() { # <repo> <path>
+  [ "$state_mode" = on ] || { echo 0; return 0; }
+  awk -F'\t' -v r="$1" -v p="$2" '$1 == r && $2 == p && $3 + 0 > m { m = $3 + 0 } END { printf "%d\n", m }' "$sightings"
+}
+# Merges this sweep's sightings into the state file. The file is read again here, so a sweep that
+# finished meanwhile keeps its rows, and replaced by rename, so a reader never sees half of it.
+write_state() {
+  local dir merged
+  dir="$(dirname -- "$state_file")"
+  mkdir -p -- "$dir" || return 1
+  if [ -e "$state_file" ]; then
+    [ -f "$state_file" ] && [ -r "$state_file" ] && valid_state "$state_file" || return 1
+    cat -- "$state_file" >>"$seen_disabled" || return 1
+  fi
+  merged="$(awk -F'\t' -v floor="$((now - state_horizon))" 'NF == 3 && $3 + 0 >= floor { k = $1 FS $2; if (!(k in m) || $3 + 0 > m[k]) m[k] = $3 + 0 }
+    END { for (k in m) printf "%s\t%d\n", k, m[k] }' "$seen_disabled" | LC_ALL=C sort)" || return 1
+  state_tmp="$(mktemp "${dir}/.silent-scheduled-workflows.XXXXXX")" || return 1
+  if [ -n "$merged" ]; then printf '%s\n' "$merged" >"$state_tmp"; else : >"$state_tmp"; fi || return 1
+  mv -f -- "$state_tmp" "$state_file" || return 1
+  state_tmp=""
+}
+
 # Judges every workflow in `workflows` for one repository, with every content and history read pinned
 # to <head>. Prints its findings and sets scan_checked, scan_silent and scan_unknown, so the caller can
 # confirm the head before reporting.
 scan_repo() { # <repo> <pinned head>
   local repo="$1" head="$2" wf_files wf_dir id state path created encoded_path content crons gap_days
   local window limit cutoff cutoff_iso continuity found verdict page rows oldest event at stamp recheck
+  local disabled_at
   scan_checked=0
   scan_silent=0
   scan_unknown=0
@@ -350,8 +407,13 @@ scan_repo() { # <repo> <pinned head>
     case "$path" in .github/workflows/*) ;; *) continue ;; esac # dynamic / GitHub-managed
     # Whitelist the documented states: an unknown or future one is never assumed to be active.
     case "$state" in
-      active | disabled_inactivity) ;;
-      disabled_manually | disabled_fork | deleted) continue ;; # a decision, a policy, or gone
+      active) ;;
+      disabled_inactivity) saw_disabled "$repo" "$path" ;;
+      disabled_manually)
+        saw_disabled "$repo" "$path"
+        continue # a decision
+        ;;
+      disabled_fork | deleted) continue ;; # a policy, or gone
       *)
         echo "QUERY-UNKNOWN ${repo} ${path} — unrecognised workflow state '${state}'"
         scan_unknown=1
@@ -445,6 +507,16 @@ scan_repo() { # <repo> <pinned head>
     # missing or unproven run needs the schedule's history (and its up to 300 file versions).
     [ -n "$found" ] && continue
 
+    # Seen disabled inside the window: it was switched back on after that sighting, so its first
+    # firing since may not be due. A sighting at or before the window start proves nothing.
+    disabled_at="$(last_seen_disabled "$repo" "$path")" || disabled_at=""
+    if ! is_epoch "$disabled_at"; then
+      echo "QUERY-UNKNOWN ${repo} ${path} — disabled-workflow state unreadable"
+      scan_unknown=1
+      continue
+    fi
+    [ "$disabled_at" -gt "$cutoff" ] && continue
+
     # The creation time is not enough: an old dispatch-only workflow that GAINS a schedule was
     # created long ago, yet its first firing may not be due. And the file's newest commit is not
     # enough either, because unrelated edits (a pin bump every month) would renew that grace
@@ -506,6 +578,24 @@ max_pages=5
 err="$(mktemp)"
 buf="$(mktemp)"
 unknown=0
+# Load the sightings once, into a private copy, so every repository is judged against the same state
+# whatever another sweep writes meanwhile.
+state_mode=off
+seen_disabled=""
+sightings=""
+state_tmp=""
+if [ -n "$state_file" ]; then
+  seen_disabled="$(mktemp)"
+  sightings="$(mktemp)"
+  if [ ! -e "$state_file" ]; then
+    state_mode=on
+  elif [ -f "$state_file" ] && [ -r "$state_file" ] && cat -- "$state_file" >"$sightings" && valid_state "$sightings"; then
+    state_mode=on
+  else
+    echo "QUERY-UNKNOWN — state file unreadable or malformed; scanned without it"
+    unknown=1
+  fi
+fi
 
 for repo in "${repos[@]}"; do
   # A null or missing default_branch reads as the string "null" through a bare filter; require a
@@ -568,6 +658,10 @@ for repo in "${repos[@]}"; do
   [ "$scan_unknown" -eq 0 ] || unknown=1
 done
 
+if [ "$state_mode" = on ] && ! write_state; then
+  echo "QUERY-UNKNOWN — state file could not be written"
+  unknown=1
+fi
 echo "CHECKED ${checked} scheduled workflow(s) across ${repos_read} repositor(ies)"
 finished=1
 [ "$unknown" -eq 0 ] || exit 2
