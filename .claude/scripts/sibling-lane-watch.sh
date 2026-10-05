@@ -267,7 +267,9 @@ if [ "$NOW_SET" -eq 1 ]; then
 fi
 
 liveness_rc=0
-liveness_out="$("$liveness_cmd" "${liveness_args[@]}" 2>/dev/null)" || liveness_rc=$?
+# bash 3.2 runs the inherited ERR trap inside this substitution even though the status is handled
+# here, which would turn the check's exit 1 into 2. The trap is dropped for the subshell only.
+liveness_out="$(trap - ERR; "$liveness_cmd" "${liveness_args[@]}" 2>/dev/null)" || liveness_rc=$?
 
 case "$liveness_rc" in
   0)
