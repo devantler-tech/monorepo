@@ -161,11 +161,12 @@ if grep -qE 'daily-ai-assistant|dispatched at|header line' <<<"$out"; then bad "
 
 # --- only the hourly task is judged, by the check beside the script ------------------------------
 reset; liveness 1 "$DOWN_NO_SESSION"
-watch 0 >/dev/null
-args=$(cat "$FIX/liveness.args")
+rm -f "$FIX/liveness.args"; watch 0 >/dev/null
+args=$(cat "$FIX/liveness.args" 2>/dev/null || echo "<check not invoked>")
 case "$args" in *"--task daily-ai-assistant --grace-seconds 300 --now-epoch $T0") ok ;; *) bad "the Claude check is not limited to the hourly task with the short grace: $args" ;; esac
+rm -f "$FIX/liveness.args"
 bash "$STUBBED" --lane codex --state-file "$FIX/state/codex.json" --now-epoch "$T0" >/dev/null 2>&1 || true
-args=$(cat "$FIX/liveness.args")
+args=$(cat "$FIX/liveness.args" 2>/dev/null || echo "<check not invoked>")
 case "$args" in "--automation daily-ai-engineer --now-ms ${T0}000") ok ;; *) bad "the Codex check is not limited to the hourly automation: $args" ;; esac
 # No environment variable can swap the check for another program.
 printf '#!/usr/bin/env bash\necho "  OK  x"\nexit 0\n' > "$FIX/fake-ok"; chmod +x "$FIX/fake-ok"
