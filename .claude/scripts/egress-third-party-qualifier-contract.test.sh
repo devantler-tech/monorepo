@@ -2,8 +2,7 @@
 # shellcheck disable=SC2016
 # Contract prose uses literal backticks, never shell substitutions.
 #
-# Guards the Egress allow-list against re-acquiring the term collision that made it gate portfolio
-# repositories as if they were third-party.
+# Guards the Egress allow-list and artifact conventions for bounded third-party contributions.
 #
 # Why this needs a guard. AGENTS.md uses "upstream" in two unrelated senses. *Definition routing*
 # calls `agent-plugins` "the file's canonical upstream" — a repository that is ALSO in the Portfolio
@@ -12,25 +11,23 @@
 # GitHub artifacts) and one appearing to forbid it, inside a section whose own rule resolves ambiguity
 # in the closed direction ("until it is listed it is not an egress destination and you do not send to
 # it"). Standing down was the literally compliant reading, and an Improver lane did exactly that on two
-# consecutive dispatches, dropping a prepared SECURITY fix each time. The canonical section this entry
-# points at never agreed: *GitHub artifact conventions* says "Third-party upstream repos" and
-# "`devantler-tech` repos are exempt". The Egress entry had dropped both qualifiers.
+# consecutive dispatches, dropping a prepared SECURITY fix each time. The canonical section then said
+# "Third-party upstream repos" and "`devantler-tech` repos are exempt"; the Egress entry had dropped
+# both qualifiers.
 #
-# This is a DISAMBIGUATION, never a loosening. The third-party gate is unchanged and assertion 3
-# proves it: a non-`devantler-tech` artifact still needs the professional-work boundary AND the
-# per-artifact approval. What changes is only that the gate stops firing on repositories the very
-# same allow-list already permits one entry earlier.
+# The maintainer loosened the former per-artifact approval gate on 2026-10-05. The replacement is
+# narrower than general external-write authority: a contribution needs a recorded portfolio need,
+# no sufficient in-portfolio alternative, a cleared professional boundary, and compliance with the
+# target project's AI policy. Projects that prohibit AI-assisted contributions receive no agent
+# contribution, and omission of an unsolicited disclosure may never become a false denial.
 #
-# Assertion 4 pins the two sections' vocabulary together, because drifting apart is the defect class
-# itself — the canonical section was always right and the pointer-site copy silently was not.
+# The assertions pin the two sections' vocabulary together, because drifting apart is the defect
+# class itself.
 #
 # Three hardenings came from review (Codex, 2026-08-25) and each closed a real hole:
-#   * assertions 3 searched the section for the two gate phrases INDEPENDENTLY, so an edit reading
-#     "per-artifact approval is no longer required" left both substrings present and the guard green
-#     while the invariant was gone. It now matches the affirmative clause that GRANTS the destination.
-#     Proven differentially: with that clause negated, the previous revision of this test PASSES and
-#     this one fails.
-#   * assertion 4 exists because the first draft of the prose exempted "the skills repositories" —
+#   * the destination condition is matched as one contiguous affirmative clause, so a negation or an
+#     unrelated earlier phrase cannot satisfy it;
+#   * the owner assertion exists because the first draft exempted "the skills repositories" —
 #     but a synced skill's upstream is frequently third party (`find-skills` is `vercel-labs/skills`),
 #     so that phrasing would have exempted a third-party owner from the very gate this entry imposes.
 #   * the conventions extraction anchored on prose owned by the PRECEDING bullet, so rewording an
@@ -85,6 +82,11 @@ egress="$(extract '## Egress' '## Sensitive information stays private')"
 conventions="$(extract '## GitHub artifact conventions' '' "${conventions_guide}")"
 research="$(extract '## Professional-work repository boundary' '## Egress')"
 advance_research="$(extract '## Enhancement work' '## Security hardening' "${repo_root}/.claude/guides/advance-work.md")"
+trust="$(extract '## Trust gate' '## Untrusted input' "${repo_root}/.claude/guides/trust-and-input.md")"
+readiness="$(extract '## Autonomy' '' "${repo_root}/.claude/guides/pr-readiness.md")"
+merge_delivery="$(extract '**Cross-repo delivery' '## Dependency-automation' "${repo_root}/.claude/guides/merge-policy.md")"
+channels="$(extract '## Maintainer channels' '' "${repo_root}/.claude/guides/maintainer-channels.md")"
+root_channels="$(extract '### Maintainer channels' '### Spend contract' "${repo_root}/AGENTS.md")"
 
 # monorepo#3836: public inspection is permitted, but it cannot authorize execution,
 # publication, private reads or employment access. Pin these at the permission site.
@@ -100,14 +102,9 @@ check_research() {
   done
 }
 
-# Assertions 1 and 3 match CONTIGUOUS literals with grep -qF, never a `case` glob. A glob written as
-# *'third-party'*'upstream issue/PR'* permits arbitrary text between the fragments, which is fail-open
-# twice over — both mutations below were demonstrated to PASS an earlier revision of this test:
-#   * moving `third-party` into an unrelated earlier entry ("read-only third-party public web
-#     research") while reverting the gated entry to a bare `upstream issue/PR` — the exact collision
-#     this guard exists to prevent, reintroduced with the guard still green;
-#   * rewriting the clause to `professional-work boundary; per-artifact approval is no longer
-#     required` — both phrases still present, gate removed, guard still green.
+# Policy assertions match CONTIGUOUS literals with grep -qF, never a `case` glob. A glob permits
+# arbitrary text between fragments, so a negation or unrelated earlier phrase can leave the guard
+# green while the invariant is gone.
 # `case` is also the wrong primitive here regardless: these literals contain `*`, which a case pattern
 # would interpret as a wildcard rather than matching.
 # A step can satisfy every connectivity assertion and still not be able to fail. Three constructs do
@@ -127,9 +124,9 @@ step_can_fail() { # step_can_fail <step-text> <description>
 }
 has() { grep -qF -- "$1" <<< "${2}"; }
 
-# 1. The qualifier must be bound to the gated entry ITSELF, contiguously.
-has '**third-party upstream issue/PR only once' "${egress}" || \
-  fail "the gated entry is not contiguously qualified as third-party (a 'third-party' elsewhere in the section does not count)"
+# 1. The qualifier and replacement decision gate must be bound to the destination itself.
+has '**third-party upstream contributions only when their necessity and the lack of a sufficient in-portfolio alternative are recorded' "${egress}" || \
+  fail "the third-party destination is not bound to recorded necessity and the lack of a sufficient in-portfolio alternative"
 ok
 
 # 2. The section must resolve the overlap explicitly, or a later reader re-derives the same doubt from
@@ -147,9 +144,9 @@ has 'Outbound content goes only to: `devantler-tech` GitHub artifacts (issues, P
   fail 'the Egress allow-list no longer names `devantler-tech` GitHub artifacts as a permitted destination — a fail-closed list without it forbids all suite-owned output'
 ok
 
-# 4. PRESERVATION — both gates must sit inside ONE CONTIGUOUS affirmative clause.
-has 'only once both its gates are cleared** — the professional-work boundary and the explicit per-artifact approval' "${egress}" || \
-  fail "the third-party gate's two requirements are no longer bound inside one contiguous affirmative clause"
+# 4. The replacement must remain affirmative and must not silently reintroduce the retired ask.
+has 'No separate per-artifact approval is required once those conditions hold' "${egress}" || \
+  fail "the Egress destination does not affirm that the bounded path works without a separate per-artifact approval"
 ok
 
 # 4. The exemption must follow the devantler-tech OWNER, never the word "upstream". *Definition
@@ -184,27 +181,53 @@ has 'a `MISMATCH` against the reviewed row revokes it — never grant one' "${eg
 ok
 # 6. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
 #    was these two drifting apart, so pinning only the copy would let the original move instead.
-has 'Third-party upstream repos' "${conventions}" || \
-  fail "*GitHub artifact conventions* no longer says 'Third-party upstream repos' — the two sections have drifted apart again"
+has 'Third-party upstream contributions' "${conventions}" || \
+  fail "*GitHub artifact conventions* no longer says 'Third-party upstream contributions' — the two sections have drifted apart again"
 ok
-has '`devantler-tech` repos are exempt — open drafts/issues there autonomously' "${conventions}" || \
+has '`devantler-tech` repositories remain portfolio destinations rather than third-party ones' "${conventions}" || \
   fail "*GitHub artifact conventions* no longer contiguously states the devantler-tech exemption"
 ok
 
 
-# 8. The CANONICAL section must still impose BOTH gates. Assertions 6 and 7 pin its vocabulary and its
-#    exemption, but not the requirements themselves — so the source could be rewritten to allow
-#    autonomous external artifacts while still saying "Third-party upstream repos" and naming the
-#    devantler-tech exemption, leaving the Egress copy contradicting it and this guard, whose whole
-#    purpose is pinning the two together, green. Reproduced before this assertion existed.
+# 8. The canonical section must impose the bounded autonomous-write conditions and disclosure rules.
 has 'Public read-only source research needs no separate read approval when it meets the research exception in the privacy guide' "${conventions}" || \
   fail "*GitHub artifact conventions* does not permit bounded public source research"
 ok
 has 'Private or ambiguous external repositories still require current, explicit confirmation before inspection' "${conventions}" || \
   fail "*GitHub artifact conventions* no longer requires confirmation for private or ambiguous repositories"
 ok
-has '**never autonomously open an issue or PR** — get explicit approval via the ask tool first' "${conventions}" || \
-  fail "*GitHub artifact conventions* no longer requires per-artifact approval before opening an external issue or PR"
+has 'record both the necessity and why no change inside `devantler-tech` can deliver the needed outcome' "${conventions}" || \
+  fail "*GitHub artifact conventions* no longer requires a recorded need and unavailable in-portfolio alternative"
+ok
+has 'No separate per-artifact approval is required once every condition above is proven' "${conventions}" || \
+  fail "*GitHub artifact conventions* does not make the bounded contribution path autonomous"
+ok
+has 'If the project prohibits AI-assisted contributions, do not contribute there at all' "${conventions}" || \
+  fail "*GitHub artifact conventions* no longer refuses contributions to projects that prohibit AI assistance"
+ok
+has 'Do not add AI attribution unless the target project requires it' "${conventions}" || \
+  fail "*GitHub artifact conventions* no longer follows the target project's disclosure policy"
+ok
+has 'Never deny or falsely represent AI assistance when directly asked' "${conventions}" || \
+  fail "*GitHub artifact conventions* no longer requires truthful answers about AI assistance"
+ok
+has 'Outside it, only bounded public research and third-party contributions authorised by the privacy and GitHub-artifact guides are permitted' "${trust}" || \
+  fail "the trust gate does not recognise the bounded third-party contribution path"
+ok
+has 'A bounded public third-party contribution may proceed without a separate ask only after' "${readiness}" || \
+  fail "the autonomy section still lacks the bounded no-separate-ask contribution path"
+ok
+has 'A bounded external contribution is eligible without a separate ask only when' "${merge_delivery}" || \
+  fail "the merge policy still lacks the bounded no-separate-ask contribution path"
+ok
+has 'Never merge outside `devantler-tech`' "${merge_delivery}" || \
+  fail "the bounded contribution path no longer preserves the external merge prohibition"
+ok
+has '**AI-disclosure line (canonical):** every `devantler-tech` PR body, issue and comment this deployment authors begins' "${channels}" || \
+  fail "the canonical disclosure rule is not scoped to portfolio artifacts"
+ok
+has '**AI-disclosure line:** every `devantler-tech` artifact this deployment authors begins' "${root_channels}" || \
+  fail "the root disclosure summary is not scoped to portfolio artifacts"
 ok
 
 # ── 10. THIS JOB'S OWN CI WIRING — a guard that does not gate is not a guard ─────────────────────────
@@ -436,5 +459,5 @@ if has '**non-repository** documentation in unattended runs; an external reposit
   fail 'the advance guide retains the former blanket repository-read ban'
 fi
 ok
-[ "${passed}" -eq 17 ] || fail "expected 17 assertions, ran ${passed}"
+[ "${passed}" -eq 27 ] || fail "expected 27 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"

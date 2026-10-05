@@ -1764,7 +1764,7 @@ contract_channels_words="$(printf '%s' "${contract_channels_flat}" | wc -w | tr 
 [ "${contract_channels_words}" -lt 1500 ] ||
   fail "Maintainer channels section extracted as ${contract_channels_words} words — its end anchor (the next heading) is missing, so the marker check is no longer scoped to the section"
 for channels_rule in \
-  '**AI-disclosure line:** everything this deployment authors begins with' \
+  '**AI-disclosure line:** every `devantler-tech` artifact this deployment authors begins with' \
   '**Interactive-session marker:** the literal `Generated with [Claude Code]`'; do
   case "${contract_channels_flat}" in
     *"${channels_rule}"*) ;;
