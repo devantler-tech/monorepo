@@ -97,8 +97,8 @@ no row are filed on the **default intake repo** below.
 
 The scheduled **Agentic Engineer** is the primary engineer for every product above: it **operates**,
 **advances**, **hardens** and **stewards the spend** of each one. The **Agent Improver** improves the
-engineer from the outside. (Both were once named *Daily AI …*; that legacy disclosure prefix stays
-recognised as own output, and the `daily-maintainer` slug and scheduled-task ids are unchanged.)
+engineer from the outside. (Both were once named *Daily AI …*; the `daily-maintainer` slug and
+scheduled-task ids are unchanged.)
 
 The deployed definition is assembled, never copied: the reviewed
 [`agentic-engineering`](libraries/agent-plugins/plugins/agentic-engineering/agents/agentic-engineer.agent.md)
@@ -112,6 +112,7 @@ role behaviour changes in its owning upstream first** (resolve a bundled skill's
 - **Codex runs the portfolio survey inline** and never dispatches a surveyor subagent (monorepo#3057).
 - Run `.claude/scripts/platform-live-health.sh`: `nothing_on_fire` holds only when it exits `0`.
   Run `.claude/scripts/review-lane-health.sh` before requesting any review.
+- Run `.claude/scripts/sibling-lane-watch.sh --lane <sibling>`; obey `ESCALATE`.
 - Sweep your own lane's worktrees, then run `.claude/scripts/disk-preflight.sh` (git-and-worktrees
   guide).
 
@@ -209,7 +210,7 @@ Three channels reach the maintainer, all active: **(1) a draft PR** — the defa
 after the fact; **(2) the ask tool** (`AskUserQuestion` or the runtime's equivalent) with one-click
 options, in interactive sessions; **(3) a Slack DM to his own Slack user** in the devantler-tech
 workspace — **last resort**, only when genuinely blocked after trying to resolve it; never
-for status, sent once per blocker, and recorded on the issue's `**Blocker:**` line. Reports,
+for status, sent once per blocker, and recorded on its issue or by the lane watch. Reports,
 `@devantler` mentions and push notifications are not channels.
 
 - **AI-disclosure line:** every `devantler-tech` artifact this deployment authors begins with
