@@ -1570,6 +1570,8 @@ ct_snapshot() {
   local dir stamp
   dir="${ct_store}/snapshots/$(ct_hex "$1")"
   mkdir -p "$dir" || return 1
+  # A real payload, so a size is a number a second count of it would visibly double.
+  dd if=/dev/zero of="${dir}/layer" bs=1024 count=2048 2>/dev/null || return 1
   if [ "$2" -gt 0 ]; then
     stamp=$(date -u -v-"$2"d +%Y%m%d%H%M 2>/dev/null) ||
       stamp=$(date -u -d "$2 days ago" +%Y%m%d%H%M 2>/dev/null) || return 1
@@ -1685,7 +1687,7 @@ ct_only_safe_calls || fail "22a: the sweep made a call beyond reads and image de
 ct_reset
 out=$(run_container dry-run 3 "$NEVER_CLEAN_BUDGET")
 [ -z "$(ct_deleted)" ] || fail '22b: dry-run removed a container image'
-grep -qE 'WOULD REMOVE  ~[0-9]+ MB  container image registry.test/old-unused:1' <<<"$out" ||
+grep -qE 'WOULD REMOVE  ~[1-9][0-9]* MB  container image registry.test/old-unused:1' <<<"$out" ||
   fail '22b: dry-run did not name the image it would remove'
 grep -qF 'WOULD REMOVE  ~0 MB  container image registry.test/old-unused-twin:1' <<<"$out" ||
   fail '22b: a second reference to one image was sized again'
@@ -1763,7 +1765,7 @@ grep -qF 'lists nothing in a store of 5120 MB' <<<"$out" ||
 
 # 22i. images that cannot be classified are kept and reported; the removable one still goes.
 ct_reset
-printf '[%s,%s,%s,%s,%s,%s,%s]\n' \
+printf '[%s,%s,%s,%s,%s,%s,%s,%s]\n' \
   "$(ct_image registry.test/old-unused:1 sha256:d1 "sha256:$(ct_hex 1)")" \
   "$(ct_image --all sha256:d6 "sha256:$(ct_hex 6)")" \
   "$(ct_image 'registry.test/has space:1' sha256:d6 "sha256:$(ct_hex 6)")" \
@@ -1771,6 +1773,7 @@ printf '[%s,%s,%s,%s,%s,%s,%s]\n' \
   "$(ct_image registry.test/odd-variant:1 sha256:d8 'sha256:../../escape')" \
   "$(ct_image registry.test/short-variant:1 sha256:d8 sha256:abcdef)" \
   "$(ct_image registry.test/non-hex-variant:1 sha256:d8 sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg)" \
+  "$(ct_image registry.test/no-digest:1 '' "sha256:$(ct_hex 1)")" \
   > "${ct_state}/images.json"
 out=$(run_container apply 3 "$NEVER_CLEAN_BUDGET")
 rc=$?
@@ -1785,7 +1788,9 @@ grep -qF 'KEEP  (age unknown)   container image registry.test/short-variant:1' <
   fail '22i: an image whose variant digest has the wrong length was not kept'
 grep -qF 'KEEP  (age unknown)   container image registry.test/non-hex-variant:1' <<<"$out" ||
   fail '22i: an image whose variant digest is not hexadecimal was not kept'
-grep -qF 'UNKNOWN: CONTAINER_IMAGES 6 image(s) could not be classified' <<<"$out" ||
+grep -qF 'KEEP  (use unknown)   container image registry.test/no-digest:1' <<<"$out" ||
+  fail '22i: an image that carries no digest of its own was not kept'
+grep -qF 'UNKNOWN: CONTAINER_IMAGES 7 image(s) could not be classified' <<<"$out" ||
   fail '22i: unclassifiable images were not reported UNKNOWN'
 
 # 22j. a store whose unpacked images cannot be found is UNKNOWN, not "nothing old enough".
