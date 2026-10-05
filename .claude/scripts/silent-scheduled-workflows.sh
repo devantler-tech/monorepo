@@ -515,16 +515,6 @@ scan_repo() { # <repo> <pinned head>
     # missing or unproven run needs the schedule's history (and its up to 300 file versions).
     [ -n "$found" ] && continue
 
-    # Seen disabled inside the window: it was switched back on after that sighting, so its first
-    # firing since may not be due. A sighting at or before the window start proves nothing.
-    disabled_at="$(last_seen_disabled "$repo" "$path")" || disabled_at=""
-    if ! is_epoch "$disabled_at"; then
-      echo "QUERY-UNKNOWN ${repo} ${path} — disabled-workflow state unreadable"
-      scan_unknown=1
-      continue
-    fi
-    [ "$disabled_at" -gt "$cutoff" ] && continue
-
     # The creation time is not enough: an old dispatch-only workflow that GAINS a schedule was
     # created long ago, yet its first firing may not be due. And the file's newest commit is not
     # enough either, because unrelated edits (a pin bump every month) would renew that grace
@@ -547,12 +537,26 @@ scan_repo() { # <repo> <pinned head>
         ;;
     esac
 
+    # When this workflow was last seen disabled, from earlier sweeps (see the header).
+    disabled_at="$(last_seen_disabled "$repo" "$path")" || disabled_at=""
+    if ! is_epoch "$disabled_at"; then
+      echo "QUERY-UNKNOWN ${repo} ${path} — disabled-workflow state unreadable"
+      scan_unknown=1
+      continue
+    fi
+
     if [ "$verdict" = "unknown" ]; then
       echo "QUERY-UNKNOWN ${repo} ${path} — run list read failed"
       scan_unknown=1
     elif [ "$verdict" != "edge" ]; then
       echo "QUERY-UNKNOWN ${repo} ${path} — window not reached within ${max_pages} pages of runs"
       scan_unknown=1
+    elif [ "$disabled_at" -gt "$cutoff" ]; then
+      # Seen disabled inside the window: it was switched back on after that sighting, so it has not
+      # yet been silent for a whole window. A sighting at or before the window start proves nothing.
+      # Judged only after the run list was read to the window edge, so the sighting can excuse a
+      # silence but never an incomplete read.
+      :
     else
       # Offset pagination shifts if a run is created mid-scan, so a scheduled run that landed after
       # page 1 was read could be skipped. Re-read page 1 before reporting a stop.

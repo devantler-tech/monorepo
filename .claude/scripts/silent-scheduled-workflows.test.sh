@@ -698,6 +698,10 @@ run --repo o/p --state-file "$state"
 lacks "edited.yaml" "a workflow re-enabled inside the window is not yet due"
 has "CHECKED 5 scheduled workflow(s) across 1 repositor(ies)" "a graced workflow is still counted as examined"
 row o/p "$edited" "$((now - 10 * h))" | cmp -s - "$state" || { cat "$state" >&2; fail "a sighting must survive a sweep that adds none"; }
+# The sighting excuses a silence, never an unread run list: a failed read stays UNKNOWN.
+FAIL_ON="actions/workflows/4/runs" run --repo o/p --state-file "$state"
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a failed run read must exit 2 even with a recent sighting, got $rc"; }
+has "QUERY-UNKNOWN o/p ${edited} — run list read failed" "a recent sighting must not hide a failed run read"
 # The control: the same sweep with no state reports it, so the sighting is what granted the grace.
 run --repo o/p
 has "$silent_edited" "without a sighting the workflow is judged on its run history"
