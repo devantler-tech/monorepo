@@ -120,8 +120,8 @@ Every Engineer run does this in pre-flight, and an Improver run may:
 
 It runs that lane's own liveness check on the lane's hourly task only, and counts the consecutive
 slots of that task in which it was not producing. Two runs inside one slot count once, and a count
-that goes more than one slot without a fresh observation starts again. It prints one summary line
-and never the liveness report, so the line is safe to quote.
+continues only into the very next slot: after a slot with no bad observation it starts again. It
+prints one summary line and never the liveness report, so the line is safe to quote.
 
 - **Exit `0`: send nothing.** `OK` is a producing lane. `WATCHING` is an outage still inside the
   threshold. `KNOWN-RESET` is an outage whose only cause class is `quota/billing`: a usage limit

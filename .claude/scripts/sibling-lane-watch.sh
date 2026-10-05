@@ -19,14 +19,14 @@
 # WHAT IT COUNTS
 #   Slots of the sibling's HOURLY task in which that task was not producing. Two runs inside one
 #   slot are one observation; runs in different slots are separate ones, however close together. A
-#   count that goes more than one slot without a fresh observation starts again, so old bad slots
-#   cannot combine with a new one into a page.
+#   count continues only into the very next slot. After any slot with no bad observation it starts
+#   again, so the threshold always means consecutive slots.
 #
 # WHAT IT DELIBERATELY DOES NOT PAGE ON
 #   - A lane that recovers inside the threshold. One or two bad slots are ordinary.
 #   - An outage whose every NOT-PRODUCING line carries cause=quota/billing. A usage limit has a known
 #     reset and the maintainer cannot shorten it (monorepo#3623), so it is reported as KNOWN-RESET and
-#     neither counts toward the threshold nor clears a count already running.
+#     neither counts toward the threshold nor erases a count (a count simply does not continue #     across it).
 #   - An UNKNOWN liveness verdict. "Could not check" is never "down", and it is never "alive" either:
 #     it leaves the count where it was and exits 2.
 #   - The sibling's twice-daily task. Its verdict stands for twelve hours, which says nothing about
@@ -72,10 +72,11 @@ NOW_EPOCH=""
 NOW_SET=0
 MARK_NOTIFIED=0
 
-# A count that has gone more than this many sibling slots since its last observation is no longer
-# evidence of ONE outage. A gap of 2 tolerates one unobserved slot, because the caller's own run can
-# be late or the check UNKNOWN for a slot.
-MAX_SLOT_GAP=2
+# The threshold promises CONSECUTIVE slots, so a count continues only into the next slot. A slot the
+# watch could not observe (its own run was late, or the check was UNKNOWN and the second look too)
+# restarts the count: that delays a page by a slot or two, where tolerating the gap would page on
+# slots nobody saw.
+MAX_SLOT_GAP=1
 # How long an ESCALATE verdict reserves the page for the run that received it. A run that dies
 # before sending must not silence the outage for good, so the claim expires.
 CLAIM_TTL_SECONDS=3600
@@ -266,6 +267,14 @@ if [ "$NOW_SET" -eq 1 ]; then
   esac
 fi
 
+# The healthy branch clears the state, but only the state this run saw before it looked: a run that
+# counted a bad slot or recorded a send while this one was still checking wrote something newer,
+# and that must survive.
+state_signature() {
+  if [ -e "$STATE_FILE" ]; then cksum <"$STATE_FILE" 2>/dev/null || echo unreadable; else echo absent; fi
+}
+signature_before="$(state_signature)"
+
 liveness_rc=0
 # bash 3.2 runs the inherited ERR trap inside this substitution even though the status is handled
 # here, which would turn the check's exit 1 into 2. The trap is dropped for the subshell only.
@@ -275,7 +284,7 @@ case "$liveness_rc" in
   0)
     # Producing again: the outage, if any, is over, so the next one may page afresh.
     lock_state
-    if [ -e "$STATE_FILE" ]; then
+    if [ -e "$STATE_FILE" ] && [ "$(state_signature)" = "$signature_before" ]; then
       rm -f "$STATE_FILE" 2>/dev/null || unknown "cannot clear the state file: $STATE_FILE"
     fi
     summary OK none

@@ -32,9 +32,11 @@ cp "$SCRIPT" "$FIX/bin/sibling-lane-watch.sh"
 cat > "$FIX/bin/claude-lane-liveness.sh" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" > "$FIX/liveness.args"
+# The verdict is read BEFORE the delay, so a case can change it for the next run meanwhile.
+out=\$(cat "$FIX/liveness.out"); rc=\$(cat "$FIX/liveness.rc")
 [ ! -f "$FIX/liveness.sleep" ] || sleep "\$(cat "$FIX/liveness.sleep")"
-cat "$FIX/liveness.out"
-exit "\$(cat "$FIX/liveness.rc")"
+printf '%s\n' "\$out"
+exit "\$rc"
 EOF
 cp "$FIX/bin/claude-lane-liveness.sh" "$FIX/bin/codex-lane-liveness.sh"
 chmod +x "$FIX/bin/"*.sh
@@ -126,11 +128,11 @@ check "short outage: recovered without a page" 0 "verdict=OK" $((2 * SLOT))
 # --- old bad slots do not combine with a new one -------------------------------------------------
 reset; liveness 1 "$DOWN_NO_SESSION"
 watch 0 >/dev/null; watch $SLOT >/dev/null
-check "one unobserved slot is tolerated" 1 "verdict=ESCALATE lane=claude observations=3/3" $((3 * SLOT))
-reset
-watch 0 >/dev/null; watch $SLOT >/dev/null
-check "a count two slots stale starts again instead of paging" 0 "verdict=WATCHING lane=claude observations=1/3" $((4 * SLOT))
-state_has "a restarted count restarts first_seen" ".first_seen_epoch == $((T0 + 4 * SLOT))"
+# Slots N, N+1 and N+3 are not three consecutive slots: nobody saw N+2.
+check "a count with an unobserved slot starts again instead of paging" 0 "verdict=WATCHING lane=claude observations=1/3" $((3 * SLOT))
+state_has "a restarted count restarts first_seen" ".first_seen_epoch == $((T0 + 3 * SLOT))"
+check "and it then needs three consecutive slots of its own" 0 "observations=2/3" $((4 * SLOT))
+check "which it gets" 1 "verdict=ESCALATE lane=claude observations=3/3" $((5 * SLOT))
 
 # --- a usage limit has a known reset and must not page -------------------------------------------
 reset; liveness 1 "$DOWN_QUOTA" "$DOWN_QUOTA"
@@ -141,11 +143,14 @@ no_state "a quota-only outage must not start a count"
 # ...but one task down for another cause beside a quota refusal is not a known reset.
 liveness 1 "$DOWN_QUOTA" "$DOWN_NO_SESSION"
 check "a mixed outage counts" 0 "verdict=WATCHING lane=claude observations=1/3" $((25 * SLOT))
-# A quota observation in the middle neither advances nor clears the running count.
+# A quota observation neither advances nor clears the count it finds...
 liveness 1 "$DOWN_QUOTA"
 check "a quota slot leaves the count alone" 0 "verdict=KNOWN-RESET" $((26 * SLOT))
+state_has "a quota slot writes nothing" '.observations == 1'
+# ...but it is a slot with no bad observation, so the run of consecutive slots starts again.
 liveness 1 "$DOWN_NO_SESSION"
-check "the count resumes after the quota slot" 0 "observations=2/3" $((27 * SLOT))
+check "the count starts again after the quota slot" 0 "observations=1/3" $((27 * SLOT))
+state_has "and first_seen moves with it" ".first_seen_epoch == $((T0 + 27 * SLOT))"
 # The quiet rule matches a literal the liveness checks print. Pin that both still print it.
 for live in claude codex; do
   if grep -qF 'quota/billing' "$SCRIPT_DIR/${live}-lane-liveness.sh"; then ok; else bad "${live}-lane-liveness.sh no longer names the quota/billing cause class"; fi
@@ -182,8 +187,9 @@ check "an UNKNOWN liveness verdict is UNKNOWN" 2 "verdict=UNKNOWN" $((2 * SLOT))
 state_has "an UNKNOWN slot leaves the count where it was" '.observations == 2'
 hint=$(bash "$STUBBED" --lane claude --state-file "$STATE" --now-epoch $((T0 + 2 * SLOT)) 2>&1 >/dev/null || true)
 if grep -qF 'once more before the run report' <<<"$hint"; then ok; else bad "an UNKNOWN liveness verdict does not ask for a second look"; fi
+# The second look the hint asks for, later in the same slot, is what completes the count.
 liveness 1 "$DOWN_NO_SESSION"
-check "the slot after an UNKNOWN one still completes the count" 1 "observations=3/3" $((3 * SLOT))
+check "a second look in the UNKNOWN slot completes the count" 1 "observations=3/3" $((2 * SLOT + 900))
 
 # The exit status decides, not the text: a check that could not judge is UNKNOWN even when its
 # partial report names a dead task.
@@ -252,6 +258,23 @@ wait "$slow_pid" || true
 state_has "the slower run did not overwrite the recorded send" '.notified_epoch > 0'
 state_has "and the slower run still counted its own slot" ".observations == 4"
 check "and the outage is not paged again" 0 "verdict=ALREADY-NOTIFIED" $((4 * SLOT))
+
+# A run that saw the lane healthy clears only the state it saw before looking. A bad slot counted
+# while it was still checking is newer than its verdict and must survive it.
+reset; liveness 1 "$DOWN_NO_SESSION"
+watch 0 >/dev/null
+liveness 0 "$OK_LINE"; echo 2 > "$FIX/liveness.sleep"
+watch $SLOT >/dev/null 2>&1 &
+slow_pid=$!
+sleep 0.7
+rm -f "$FIX/liveness.sleep"; liveness 1 "$DOWN_NO_SESSION"
+check "a bad slot is counted while a healthy verdict is still in flight" 0 "observations=2/3" $((SLOT + 5))
+wait "$slow_pid" || true
+state_has "the slower healthy run did not clear the newer count" '.observations == 2'
+# With nothing newer in the way, the same healthy verdict does clear it.
+liveness 0 "$OK_LINE"
+check "an undisturbed healthy run clears the count" 0 "verdict=OK" $((SLOT + 60))
+no_state "an undisturbed healthy run must clear state"
 
 # Two runs that both reach the threshold: exactly one is handed the page.
 reset; liveness 1 "$DOWN_NO_SESSION"
