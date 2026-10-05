@@ -118,26 +118,32 @@ Every Engineer run does this in pre-flight, and an Improver run may:
 .claude/scripts/sibling-lane-watch.sh --lane <codex|claude>   # the lane you are NOT
 ```
 
-It runs that lane's own liveness check and counts consecutive slots in which the lane was not
-producing. It prints one summary line and never the liveness report, so the line is safe to quote.
+It runs that lane's own liveness check on the lane's hourly task only, and counts the consecutive
+slots of that task in which it was not producing. Two runs inside one slot count once, and a count
+that goes more than one slot without a fresh observation starts again. It prints one summary line
+and never the liveness report, so the line is safe to quote.
 
 - **Exit `0`: send nothing.** `OK` is a producing lane. `WATCHING` is an outage still inside the
   threshold. `KNOWN-RESET` is an outage whose only cause class is `quota/billing`: a usage limit
-  resets on its own and the maintainer cannot shorten it, so it never pages. `ALREADY-NOTIFIED` is an
-  outage he has been told about.
-- **Exit `1` (`ESCALATE`): the lane has been not producing for three consecutive hourly slots and
-  nobody has been told.** Send the Slack DM above, once per outage: the 🤖 disclosure line, the lane's
-  name, how long it has been down, and the bounded cause class the summary printed — nothing else
-  about the runtime. Only after the send returns a message link, run the same command with
-  `--mark-notified`. An unrecorded send is asked for again on the next run, which is the safe
-  direction: a lost DM costs more than a repeated one.
-- **Exit `2`: UNKNOWN, never "alive" and never "down".** The count is left where it was. Report it in
-  the run report and carry on; it is not a run-stopper.
+  resets on its own and the maintainer cannot shorten it, so it never pages. `ESCALATION-CLAIMED`
+  means another run was handed the page within the last hour. `ALREADY-NOTIFIED` is an outage he
+  has been told about.
+- **Exit `1` together with `verdict=ESCALATE` on stdout: the lane has been not producing for
+  three consecutive hourly slots and nobody has been told.** Both must hold; any other non-zero exit
+  is UNKNOWN. Send the Slack DM above, once per outage: the 🤖 disclosure line, the lane's name, how
+  long it has been down, and the bounded cause class the summary printed — nothing else about the
+  runtime. Only after the send returns a message link, run the same command with `--mark-notified`.
+  The verdict reserves the page for the run that received it; a send that is never recorded is asked
+  for again an hour later, which is the safe direction: a lost DM costs more than a repeated one.
+- **Exit `2`: UNKNOWN, never "alive" and never "down".** The count is left where it was. The usual
+  cause is a sibling dispatch still in flight, so run the watch once more before the run report and
+  report the second answer. It is not a run-stopper.
 
-This DM is the one Slack message that has no issue behind it, so the watch's own state file is its
-record, in the caller's private runtime directory. Recovery clears it, and the next outage pages
-afresh. The summary line and the cause class may appear in a run report; the liveness report, reset
-times and account detail may not (*Sensitive information stays private*).
+This DM is the same last resort as any other: the blocker is the lane itself, and only the
+maintainer can clear it. It is the one Slack message with no issue behind it, so the watch's own
+state file is its record, in the caller's private runtime directory. Recovery clears it, and the
+next outage pages afresh. The summary line and the cause class may appear in a run report; the
+liveness report, reset times and account detail may not (*Sensitive information stays private*).
 
 Measured 2026-10-03: a stale desktop sign-in dropped 18 Claude dispatches before a session existed,
 and for 16.9 hours nothing reached the maintainer, although the liveness check read the outage

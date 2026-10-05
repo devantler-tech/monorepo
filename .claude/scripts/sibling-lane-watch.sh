@@ -13,8 +13,14 @@
 # private state file between runs because neither liveness check reports how long a lane has been
 # down, and because "once per outage" needs a memory of having sent.
 #
-# It never sends anything itself. Exit 1 tells the caller to send the DM through the Slack connector
-# and then record that with --mark-notified.
+# It never sends anything itself. Exit 1 together with `verdict=ESCALATE` on stdout tells the caller
+# to send the DM through the Slack connector and then record that with --mark-notified.
+#
+# WHAT IT COUNTS
+#   Slots of the sibling's HOURLY task in which that task was not producing. Two runs inside one
+#   slot are one observation; runs in different slots are separate ones, however close together. A
+#   count that goes more than one slot without a fresh observation starts again, so old bad slots
+#   cannot combine with a new one into a page.
 #
 # WHAT IT DELIBERATELY DOES NOT PAGE ON
 #   - A lane that recovers inside the threshold. One or two bad slots are ordinary.
@@ -23,14 +29,16 @@
 #     neither counts toward the threshold nor clears a count already running.
 #   - An UNKNOWN liveness verdict. "Could not check" is never "down", and it is never "alive" either:
 #     it leaves the count where it was and exits 2.
+#   - The sibling's twice-daily task. Its verdict stands for twelve hours, which says nothing about
+#     three hourly slots.
 #
-# READ-ONLY toward both runtimes. The only file it writes is its own state file, which holds a lane
-# name, a count, three timestamps and a bounded cause class — nothing from a transcript or a store.
-# It prints only that same summary, never the liveness report itself, so its output is safe to quote
-# in a run report.
+# READ-ONLY toward both runtimes. The only files it writes are its own state file and that file's
+# lock directory. The state holds a lane name, a count, a slot number and three timestamps — nothing
+# from a transcript or a store. It prints only that same summary, never the liveness report itself,
+# so its output is safe to quote in a run report.
 #
 # Usage: sibling-lane-watch.sh --lane <claude|codex> [--state-file PATH] [--threshold N]
-#                              [--min-gap-seconds S] [--now-epoch S]
+#                              [--now-epoch S]
 #        sibling-lane-watch.sh --lane <claude|codex> [--state-file PATH] --mark-notified
 #
 # --lane is the lane being WATCHED, which is never the caller's own: a Claude run passes `codex`, a
@@ -38,30 +46,72 @@
 # (`~/.claude/lane-watch/codex.json` when watching codex, `~/.codex/lane-watch/claude.json` when
 # watching claude), outside every checkout.
 #
-# SIBLING_LANE_LIVENESS_CMD replaces the liveness check, for the test suite only.
+# The liveness check is always the one beside this script. --now-epoch is for the test suite and is
+# passed on to it.
 #
-# Exit 0  nothing to send — verdict OK, WATCHING, KNOWN-RESET or ALREADY-NOTIFIED
+# Exit 0  nothing to send — verdict OK, WATCHING, KNOWN-RESET, ESCALATION-CLAIMED or ALREADY-NOTIFIED
 #      1  ESCALATE — the lane has been NOT-PRODUCING for the threshold and nobody has been told
 #      2  UNKNOWN — usage error, liveness could not judge, or the state file is unreadable,
-#         malformed or unwritable
+#         malformed, locked or unwritable
 #
 # Any OTHER non-zero status is an unexpected internal failure and also means UNKNOWN.
 
-set -euo pipefail
+set -Eeuo pipefail
+
+# Exit 1 is a VERDICT that asks for a page, so no internal failure may reach it. Under `set -e` the
+# abort status is the failing command's, and 1 is the commonest (a closed stdout is enough). Any
+# unhandled error becomes 2, as in the two liveness checks.
+trap 'exit 2' ERR
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 LANE=""
 STATE_FILE=""
 THRESHOLD=3
-MIN_GAP_SECONDS=2700
 NOW_EPOCH=""
+NOW_SET=0
 MARK_NOTIFIED=0
+
+# A count that has gone more than this many sibling slots since its last observation is no longer
+# evidence of ONE outage. A gap of 2 tolerates one unobserved slot, because the caller's own run can
+# be late or the check UNKNOWN for a slot.
+MAX_SLOT_GAP=2
+# How long an ESCALATE verdict reserves the page for the run that received it. A run that dies
+# before sending must not silence the outage for good, so the claim expires.
+CLAIM_TTL_SECONDS=3600
+# A healthy Claude dispatch starts its session about a second after `lastRunAt`, and the liveness
+# check already allows 120 s of skew. Its default 900 s grace is longer than the gap between a Claude
+# dispatch (`:50` plus a measured 3 to 13 minutes of scheduler jitter) and the Codex run at `:10`
+# that watches it, so with the default most Codex runs read UNKNOWN. One early misread is absorbed by
+# the threshold; a watch that cannot judge is not.
+CLAUDE_GRACE_SECONDS=300
+LOCK_STALE_MINUTES=2
+
+sibling_lane_watch_finished=0
+lock_dir=""
+lock_held=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+sibling_lane_watch_cleanup() {
+  local rc=$?
+  if [ "$lock_held" -eq 1 ]; then rmdir "$lock_dir" 2>/dev/null || true; fi
+  # Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0 (monorepo#3414).
+  if [ "$sibling_lane_watch_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+    echo "sibling-lane-watch: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap sibling_lane_watch_cleanup EXIT
+
+finish() {
+  sibling_lane_watch_finished=1
+  exit "$1"
+}
 
 unknown() {
   echo "sibling-lane-watch: UNKNOWN -- $*" >&2
   echo "verdict=UNKNOWN lane=${LANE:-unset}"
-  exit 2
+  finish 2
 }
 
 is_uint() {
@@ -70,14 +120,16 @@ is_uint() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --lane | --state-file | --threshold | --min-gap-seconds | --now-epoch)
+    --lane | --state-file | --threshold | --now-epoch)
       [ "$#" -ge 2 ] || unknown "$1 needs a value"
       case "$1" in
         --lane) LANE="$2" ;;
         --state-file) STATE_FILE="$2" ;;
         --threshold) THRESHOLD="$2" ;;
-        --min-gap-seconds) MIN_GAP_SECONDS="$2" ;;
-        --now-epoch) NOW_EPOCH="$2" ;;
+        --now-epoch)
+          NOW_EPOCH="$2"
+          NOW_SET=1
+          ;;
       esac
       shift 2
       ;;
@@ -89,9 +141,20 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# Only the HOURLY task is judged (see the header). `sibling_minute` is the minute that task is
+# scheduled at (AGENTS.md, Cadence & focus); it turns the caller's clock into the sibling slot whose
+# dispatch this run can judge.
 case "$LANE" in
-  claude) default_state="$HOME/.codex/lane-watch/claude.json" ;;
-  codex) default_state="$HOME/.claude/lane-watch/codex.json" ;;
+  claude)
+    default_state="$HOME/.codex/lane-watch/claude.json"
+    sibling_minute=50
+    liveness_args=(--task daily-ai-assistant --grace-seconds "$CLAUDE_GRACE_SECONDS")
+    ;;
+  codex)
+    default_state="$HOME/.claude/lane-watch/codex.json"
+    sibling_minute=10
+    liveness_args=(--automation daily-ai-engineer)
+    ;;
   *)
     LANE="unset"
     unknown "--lane must be claude or codex (the lane being watched, never the caller's own)"
@@ -99,40 +162,75 @@ case "$LANE" in
 esac
 [ -n "$STATE_FILE" ] || STATE_FILE="$default_state"
 
-is_uint "$THRESHOLD" && [ "$THRESHOLD" -ge 1 ] || unknown "--threshold must be a positive integer"
-is_uint "$MIN_GAP_SECONDS" || unknown "--min-gap-seconds must be a non-negative integer"
+is_uint "$THRESHOLD" && [ "${#THRESHOLD}" -le 4 ] && [ "$((10#$THRESHOLD))" -ge 1 ] ||
+  unknown "--threshold must be a positive integer of at most four digits"
+THRESHOLD=$((10#$THRESHOLD))
 [ -n "$NOW_EPOCH" ] || NOW_EPOCH="$(date +%s)"
-is_uint "$NOW_EPOCH" || unknown "--now-epoch must be a non-negative integer"
+is_uint "$NOW_EPOCH" && [ "${#NOW_EPOCH}" -le 11 ] ||
+  unknown "--now-epoch must be a non-negative integer of at most eleven digits"
+NOW_EPOCH=$((10#$NOW_EPOCH))
+[ "$NOW_EPOCH" -ge 3600 ] || unknown "--now-epoch is before the first slot"
 command -v jq >/dev/null 2>&1 || unknown "jq is not installed"
 
-# --- state -------------------------------------------------------------------------------------
-# A missing file is the ordinary "no outage being tracked" state. A file that exists but cannot be
-# parsed, or that tracks another lane, is UNKNOWN: guessing would either page on garbage or forget
-# that a DM was already sent.
-observations=0
-first_seen=0
-last_counted=0
-notified=0
-if [ -e "$STATE_FILE" ]; then
-  state_line="$(jq -r --arg lane "$LANE" '
-    select(type == "object" and .lane == $lane)
-    | [.observations, .first_seen_epoch, .last_counted_epoch, .notified_epoch]
-    | select(all(.[]; type == "number" and . >= 0 and . == floor))
-    | map(tostring) | join(" ")' "$STATE_FILE" 2>/dev/null)" || unknown "state file is unreadable: $STATE_FILE"
-  [ -n "$state_line" ] || unknown "state file is malformed or tracks another lane: $STATE_FILE"
-  read -r observations first_seen last_counted notified <<EOF
-$state_line
-EOF
-fi
+slot=$(((NOW_EPOCH - sibling_minute * 60) / 3600))
 
-write_state() {
-  local dir tmp
+# --- state -------------------------------------------------------------------------------------
+# Every read-modify-write happens under one lock, taken AFTER the liveness call. That call takes
+# seconds, and a run holding state it read before the call would overwrite another run's
+# --mark-notified and page the same outage twice.
+lock_state() {
+  local dir tries=0
   dir="$(dirname "$STATE_FILE")"
   mkdir -p "$dir" 2>/dev/null || unknown "cannot create the state directory: $dir"
+  [ -w "$dir" ] || unknown "the state directory is not writable: $dir"
+  lock_dir="${STATE_FILE}.lock"
+  until mkdir "$lock_dir" 2>/dev/null; do
+    # A lock older than any run of this script was left by one that died.
+    if [ -n "$(find "$lock_dir" -maxdepth 0 -mmin "+${LOCK_STALE_MINUTES}" 2>/dev/null || true)" ]; then
+      rmdir "$lock_dir" 2>/dev/null || true
+    fi
+    tries=$((tries + 1))
+    [ "$tries" -lt 50 ] || unknown "the state file is locked by another run; the count is unchanged"
+    sleep 0.1
+  done
+  lock_held=1
+}
+
+# A file that cannot be used is set aside, so one bad write cannot blind the watch for a whole
+# outage: this run is UNKNOWN and the next starts afresh. The cost is at worst one repeated DM.
+quarantine_state() {
+  mv -f "$STATE_FILE" "${STATE_FILE}.corrupt" 2>/dev/null ||
+    unknown "$1, and it could not be set aside: $STATE_FILE"
+  unknown "$1; it was set aside and the next run starts afresh: $STATE_FILE"
+}
+
+observations=0
+first_seen=0
+last_slot=0
+claimed=0
+notified=0
+read_state() {
+  local state_line state_lane
+  [ -e "$STATE_FILE" ] || return 0
+  state_line="$(jq -r '
+    select(type == "object" and (.lane == "claude" or .lane == "codex"))
+    | [.observations, .first_seen_epoch, .last_slot, .claimed_epoch, .notified_epoch] as $n
+    | select($n | all(.[]; type == "number" and . >= 0 and . == floor and . < 100000000000))
+    | [.lane] + ($n | map(tostring)) | join(" ")' "$STATE_FILE" 2>/dev/null)" || state_line=""
+  [ -n "$state_line" ] || quarantine_state "the state file is unreadable or malformed"
+  read -r state_lane observations first_seen last_slot claimed notified <<EOF
+$state_line
+EOF
+  [ "$state_lane" = "$LANE" ] || unknown "the state file tracks another lane: $STATE_FILE"
+  [ "$last_slot" -le "$slot" ] || quarantine_state "the state file's last observation is in the future"
+}
+
+write_state() {
+  local tmp
   tmp="${STATE_FILE}.tmp.$$"
   jq -n --arg lane "$LANE" --argjson o "$observations" --argjson f "$first_seen" \
-    --argjson l "$last_counted" --argjson n "$notified" \
-    '{lane: $lane, observations: $o, first_seen_epoch: $f, last_counted_epoch: $l, notified_epoch: $n}' \
+    --argjson s "$last_slot" --argjson c "$claimed" --argjson n "$notified" \
+    '{lane: $lane, observations: $o, first_seen_epoch: $f, last_slot: $s, claimed_epoch: $c, notified_epoch: $n}' \
     >"$tmp" 2>/dev/null || {
     rm -f "$tmp"
     unknown "cannot write the state file: $STATE_FILE"
@@ -148,33 +246,44 @@ summary() {
 }
 
 if [ "$MARK_NOTIFIED" -eq 1 ]; then
-  # Recording a send for an outage this script never observed would suppress the real DM later.
-  [ "$observations" -ge 1 ] || unknown "--mark-notified without a tracked outage for lane ${LANE}"
+  lock_state
+  read_state
+  # Recording a send nobody was asked for would suppress the real DM later.
+  [ "$claimed" -gt 0 ] || unknown "--mark-notified without an ESCALATE verdict for lane ${LANE}"
   notified="$NOW_EPOCH"
   write_state
   summary ALREADY-NOTIFIED recorded
-  exit 0
+  finish 0
 fi
 
 # --- liveness ----------------------------------------------------------------------------------
-liveness_cmd="${SIBLING_LANE_LIVENESS_CMD:-${script_dir}/${LANE}-lane-liveness.sh}"
+liveness_cmd="${script_dir}/${LANE}-lane-liveness.sh"
 [ -x "$liveness_cmd" ] || unknown "liveness check is missing or not executable: $liveness_cmd"
+if [ "$NOW_SET" -eq 1 ]; then
+  case "$LANE" in
+    claude) liveness_args+=(--now-epoch "$NOW_EPOCH") ;;
+    codex) liveness_args+=(--now-ms "${NOW_EPOCH}000") ;;
+  esac
+fi
 
 liveness_rc=0
-liveness_out="$("$liveness_cmd" 2>/dev/null)" || liveness_rc=$?
+liveness_out="$("$liveness_cmd" "${liveness_args[@]}" 2>/dev/null)" || liveness_rc=$?
 
 case "$liveness_rc" in
   0)
     # Producing again: the outage, if any, is over, so the next one may page afresh.
+    lock_state
     if [ -e "$STATE_FILE" ]; then
       rm -f "$STATE_FILE" 2>/dev/null || unknown "cannot clear the state file: $STATE_FILE"
     fi
-    observations=0 first_seen=0 notified=0
     summary OK none
-    exit 0
+    finish 0
     ;;
   1) ;;
-  *) unknown "the ${LANE} liveness check could not judge (exit ${liveness_rc}); the count is unchanged" ;;
+  *)
+    # Usually a dispatch still in flight, which a later look in the same run can judge.
+    unknown "the ${LANE} liveness check could not judge (exit ${liveness_rc}); the count is unchanged -- run this once more before the run report"
+    ;;
 esac
 
 # A `1` must name at least one NOT-PRODUCING task. An exit 1 with none is not a verdict this script
@@ -182,38 +291,51 @@ esac
 down_lines="$(printf '%s\n' "$liveness_out" | grep -E '^[[:space:]]*NOT-PRODUCING[[:space:]]' || true)"
 [ -n "$down_lines" ] || unknown "the ${LANE} liveness check exited 1 without a NOT-PRODUCING line"
 
+lock_state
+read_state
+
 other_lines="$(printf '%s\n' "$down_lines" | grep -vF 'cause=quota/billing' || true)"
 if [ -z "$other_lines" ]; then
   summary KNOWN-RESET quota/billing
-  exit 0
+  finish 0
 fi
 cause="unknown"
 case "$other_lines" in *cause=credentials/auth*) cause="credentials/auth" ;; esac
 
-# Two runs inside one slot are one observation, not two: the threshold counts slots.
-if [ "$observations" -eq 0 ]; then
+# An outage the maintainer was told about stays that outage until the lane is seen producing, however
+# long this watch went without looking; only a count nobody was paged for can go stale.
+if [ "$observations" -eq 0 ] ||
+  { [ "$notified" -eq 0 ] && [ $((slot - last_slot)) -gt "$MAX_SLOT_GAP" ]; }; then
   observations=1
   first_seen="$NOW_EPOCH"
-  last_counted="$NOW_EPOCH"
+  last_slot="$slot"
+  claimed=0
   notified=0
   write_state
-elif [ "$NOW_EPOCH" -lt "$last_counted" ]; then
-  unknown "the state file's last observation is in the future; the count is unchanged"
-elif [ $((NOW_EPOCH - last_counted)) -ge "$MIN_GAP_SECONDS" ]; then
+elif [ "$slot" -gt "$last_slot" ]; then
   observations=$((observations + 1))
-  last_counted="$NOW_EPOCH"
+  last_slot="$slot"
   write_state
 fi
 
 if [ "$notified" -gt 0 ]; then
   summary ALREADY-NOTIFIED "$cause"
-  exit 0
+  finish 0
 fi
-if [ "$observations" -ge "$THRESHOLD" ]; then
-  summary ESCALATE "$cause"
-  # The every-run bullet in AGENTS.md has no room for the procedure, so the verdict carries it.
-  echo "sibling-lane-watch: send the lane-outage Slack DM, then re-run with --mark-notified -- see 'Sibling lane outage' in .claude/guides/maintainer-channels.md" >&2
-  exit 1
+if [ "$observations" -lt "$THRESHOLD" ]; then
+  summary WATCHING "$cause"
+  finish 0
 fi
-summary WATCHING "$cause"
-exit 0
+if [ "$claimed" -gt 0 ] && [ $((NOW_EPOCH - claimed)) -lt "$CLAIM_TTL_SECONDS" ]; then
+  # Another run was handed this page. If it never records the send, the claim expires.
+  summary ESCALATION-CLAIMED "$cause"
+  finish 0
+fi
+# The verdict is printed BEFORE the claim is written: if the write fails this exits 2, and the caller
+# pages only on exit 1 together with verdict=ESCALATE.
+summary ESCALATE "$cause"
+claimed="$NOW_EPOCH"
+write_state
+# The every-run bullet in AGENTS.md has no room for the procedure, so the verdict carries it.
+echo "sibling-lane-watch: send the lane-outage Slack DM, then re-run with --mark-notified -- see 'Sibling lane outage' in .claude/guides/maintainer-channels.md" >&2
+finish 1
