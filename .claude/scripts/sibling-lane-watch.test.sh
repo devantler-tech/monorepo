@@ -129,11 +129,14 @@ check "short outage: recovered without a page" 0 "verdict=OK" $((2 * SLOT))
 # --- old bad slots do not combine with a new one -------------------------------------------------
 reset; liveness 1 "$DOWN_NO_SESSION"
 watch 0 >/dev/null; watch $SLOT >/dev/null
-# Slots N, N+1 and N+3 are not three consecutive slots: nobody saw N+2.
-check "a count with an unobserved slot starts again instead of paging" 0 "verdict=WATCHING lane=claude observations=1/3" $((3 * SLOT))
-state_has "a restarted count restarts first_seen" ".first_seen_epoch == $((T0 + 3 * SLOT))"
-check "and it then needs three consecutive slots of its own" 0 "observations=2/3" $((4 * SLOT))
-check "which it gets" 1 "verdict=ESCALATE lane=claude observations=3/3" $((5 * SLOT))
+check "two unobserved slots restart the count instead of paging" 0 "verdict=WATCHING lane=claude observations=1/3" $((4 * SLOT))
+state_has "a restarted count restarts first_seen" ".first_seen_epoch == $((T0 + 4 * SLOT))"
+# One unobserved slot does not: the caller's scheduler drops a dispatch that overlaps a long run, so
+# a watcher can look every second hour for a whole outage, and it must still page.
+reset
+check "a two-hourly watcher: first look" 0 "observations=1/3" 0
+check "a two-hourly watcher: second look" 0 "observations=2/3" $((2 * SLOT))
+check "a two-hourly watcher still pages" 1 "verdict=ESCALATE lane=claude observations=3/3" $((4 * SLOT))
 
 # --- a usage limit has a known reset and must not page -------------------------------------------
 reset; liveness 1 "$DOWN_QUOTA" "$DOWN_QUOTA"
@@ -148,10 +151,13 @@ check "a mixed outage counts" 0 "verdict=WATCHING lane=claude observations=1/3" 
 liveness 1 "$DOWN_QUOTA"
 check "a quota slot leaves the count alone" 0 "verdict=KNOWN-RESET" $((26 * SLOT))
 state_has "a quota slot writes nothing" '.observations == 1'
-# ...but it is a slot with no bad observation, so the run of consecutive slots starts again.
 liveness 1 "$DOWN_NO_SESSION"
-check "the count starts again after the quota slot" 0 "observations=1/3" $((27 * SLOT))
-state_has "and first_seen moves with it" ".first_seen_epoch == $((T0 + 27 * SLOT))"
+check "the count resumes after one quota slot" 0 "observations=2/3" $((27 * SLOT))
+# ...and a count does not outlive a longer usage limit.
+liveness 1 "$DOWN_QUOTA"
+check "two quota slots" 0 "verdict=KNOWN-RESET" $((29 * SLOT))
+liveness 1 "$DOWN_NO_SESSION"
+check "the count starts again after a longer usage limit" 0 "observations=1/3" $((30 * SLOT))
 # The quiet rule matches a literal the liveness checks print. Pin that both still print it.
 for live in claude codex; do
   if grep -qF 'quota/billing' "$SCRIPT_DIR/${live}-lane-liveness.sh"; then ok; else bad "${live}-lane-liveness.sh no longer names the quota/billing cause class"; fi
@@ -174,11 +180,10 @@ rm -f "$FIX/liveness.args"
 bash "$STUBBED" --lane codex --state-file "$FIX/state/codex.json" --now-epoch "$T0" >/dev/null 2>&1 || true
 args=$(cat "$FIX/liveness.args" 2>/dev/null || echo "<check not invoked>")
 case "$args" in "--automation daily-ai-engineer --now-ms ${T0}000") ok ;; *) bad "the Codex check is not limited to the hourly automation: $args" ;; esac
-# No environment variable can swap the check for another program.
-printf '#!/usr/bin/env bash\necho "  OK  x"\nexit 0\n' > "$FIX/fake-ok"; chmod +x "$FIX/fake-ok"
-reset
-out=$(SIBLING_LANE_LIVENESS_CMD="$FIX/fake-ok" bash "$STUBBED" --lane claude --state-file "$STATE" --now-epoch "$T0" 2>/dev/null) || true
-case "$out" in *verdict=WATCHING*) ok ;; *) bad "an environment variable replaced the liveness check: $out" ;; esac
+# The check is the one beside the script and nothing else: no environment variable names one.
+if grep -qE '\$\{?[A-Z_]*LIVENESS_CMD' "$SCRIPT"; then bad "the liveness check can be replaced through the environment"; else ok; fi
+# shellcheck disable=SC2016  # matching the literal source text
+if grep -qF 'liveness_cmd="${script_dir}/${LANE}-lane-liveness.sh"' "$SCRIPT"; then ok; else bad "the liveness check is no longer resolved beside the script"; fi
 
 # --- fail closed ---------------------------------------------------------------------------------
 reset; liveness 1 "$DOWN_NO_SESSION"
@@ -188,9 +193,12 @@ check "an UNKNOWN liveness verdict is UNKNOWN" 2 "verdict=UNKNOWN" $((2 * SLOT))
 state_has "an UNKNOWN slot leaves the count where it was" '.observations == 2'
 hint=$(bash "$STUBBED" --lane claude --state-file "$STATE" --now-epoch $((T0 + 2 * SLOT)) 2>&1 >/dev/null || true)
 if grep -qF 'once more before the run report' <<<"$hint"; then ok; else bad "an UNKNOWN liveness verdict does not ask for a second look"; fi
-# The second look the hint asks for, later in the same slot, is what completes the count.
+# The second look the hint asks for, later in the same slot, completes the count.
 liveness 1 "$DOWN_NO_SESSION"
 check "a second look in the UNKNOWN slot completes the count" 1 "observations=3/3" $((2 * SLOT + 900))
+# And so does the next slot when there was no second look.
+reset; watch 0 >/dev/null; watch $SLOT >/dev/null
+check "the slot after an unjudged one completes the count" 1 "observations=3/3" $((3 * SLOT))
 
 # The exit status decides, not the text: a check that could not judge is UNKNOWN even when its
 # partial report names a dead task.
@@ -213,6 +221,11 @@ bash "$STUBBED" --lane claude --state-file "$STATE" --now-epoch $((T0 + 2 * SLOT
 if [ "$closed_rc" -eq 2 ]; then ok; else bad "a closed stdout on the ESCALATE path exits $closed_rc, want 2"; fi
 state_has "a failed ESCALATE claims nothing, so the next run still pages" '.claimed_epoch == 0'
 check "the run after a failed ESCALATE pages" 1 "verdict=ESCALATE" $((2 * SLOT + 60))
+# A closed stderr only loses the hint: the verdict and the exit status still agree.
+reset; watch 0 >/dev/null; watch $SLOT >/dev/null
+closed_rc=0
+closed_out=$(bash "$STUBBED" --lane claude --state-file "$STATE" --now-epoch $((T0 + 2 * SLOT)) 2>&-) || closed_rc=$?
+if [ "$closed_rc" -eq 1 ] && grep -qF 'verdict=ESCALATE' <<<"$closed_out"; then ok; else bad "a closed stderr on the ESCALATE path gave rc=$closed_rc: $closed_out"; fi
 
 # --- a bad state file is set aside, not left to blind the watch ----------------------------------
 quarantined() {
@@ -227,6 +240,11 @@ quarantined "a malformed state file"
 reset; mkdir -p "$FIX/state"
 printf '{"lane":"claude","observations":"9","first_seen_epoch":1,"last_slot":1,"claimed_epoch":0,"notified_epoch":0}\n' > "$STATE"
 quarantined "a non-numeric count"
+# A number the shell cannot compare must not reach the comparisons: they would error, read as
+# false, and fall through to a page.
+reset; mkdir -p "$FIX/state"
+printf '{"lane":"claude","observations":3.0,"first_seen_epoch":1e9,"last_slot":1,"claimed_epoch":0,"notified_epoch":0}\n' > "$STATE"
+quarantined "a non-integer count"
 reset; mkdir -p "$FIX/state"
 printf '{"lane":"claude","observations":1,"first_seen_epoch":1,"last_slot":%s,"claimed_epoch":0,"notified_epoch":0}\n' $((T0 / SLOT + 5)) > "$STATE"
 quarantined "a state file from the future"
@@ -421,7 +439,7 @@ section=$(awk '/^## Sibling lane outage/{on=1; print; next} on && /^## /{exit} o
 # shellcheck disable=SC2016  # the backticks are literal Markdown, not a command substitution
 for needle in 'sibling-lane-watch.sh --lane' '--mark-notified' 'Exit `1`' 'Exit `2`' 'KNOWN-RESET' \
   'ESCALATION-CLAIMED' '`verdict=ESCALATE`' 'both directions' 'once per outage' 'cause class' \
-  'three consecutive hourly slots' 'once more before the run report'; do
+  'three hourly slots running' 'once more before the run report'; do
   if grep -qF -- "$needle" <<<"$section"; then ok; else bad "contract — the outage section lacks: $needle"; fi
 done
 if grep -qE '^THRESHOLD=3$' "$SCRIPT"; then ok; else bad "the script default threshold is not 3"; fi

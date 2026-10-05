@@ -19,8 +19,11 @@
 # WHAT IT COUNTS
 #   Slots of the sibling's HOURLY task in which that task was not producing. Two runs inside one
 #   slot are one observation; runs in different slots are separate ones, however close together. A
-#   count continues only into the very next slot. After any slot with no bad observation it starts
-#   again, so the threshold always means consecutive slots.
+#   count survives one slot the watch did not observe and starts again after two, so old bad slots
+#   cannot combine with a new one into a page. A producing look always clears it.
+#   Two known imprecisions, both absorbed by the threshold and cleared by the next producing look:
+#   a look between `:55` and a late Claude dispatch reads that dispatch as overdue, and a look just
+#   after a slot boundary can count the previous slot's dead dispatch again.
 #
 # WHAT IT DELIBERATELY DOES NOT PAGE ON
 #   - A lane that recovers inside the threshold. One or two bad slots are ordinary.
@@ -73,11 +76,12 @@ NOW_EPOCH=""
 NOW_SET=0
 MARK_NOTIFIED=0
 
-# The threshold promises CONSECUTIVE slots, so a count continues only into the next slot. A slot the
-# watch could not observe (its own run was late, or the check was UNKNOWN and the second look too)
-# restarts the count: that delays a page by a slot or two, where tolerating the gap would page on
-# slots nobody saw.
-MAX_SLOT_GAP=1
+# A count continues across at most ONE slot the watch did not observe. It cannot be zero: the
+# caller's scheduler drops a dispatch that overlaps a long run, and a watcher that looks every second
+# hour would then restart at 1 forever and never page (reproduced over 12 such looks). It is not
+# more than one, so that old bad slots cannot combine with a new one. The price is stated in the
+# guide: the three bad slots may have one unobserved slot between each pair.
+MAX_SLOT_GAP=2
 # How long an ESCALATE verdict reserves the page for the run that received it. A run that dies
 # before sending must not silence the outage for good, so the claim expires.
 CLAIM_TTL_SECONDS=3600
@@ -96,8 +100,9 @@ lock_held=0
 sibling_lane_watch_cleanup() {
   local rc=$?
   if [ "$lock_held" -eq 1 ]; then rmdir "$lock_dir" 2>/dev/null || true; fi
-  # Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0 (monorepo#3414).
-  if [ "$sibling_lane_watch_finished" != 1 ] && [ "$rc" -eq 0 ]; then
+  # Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0 (monorepo#3414), and bash 5
+  # reports it as 1, which here would read as a page. Only `finish` may choose the status.
+  if [ "$sibling_lane_watch_finished" != 1 ] && [ "$rc" -ne 2 ]; then
     echo "sibling-lane-watch: aborted before finishing; reporting UNKNOWN rather than a clean pass" >&2
     rc=2
   fi
@@ -181,15 +186,24 @@ slot=$(((NOW_EPOCH - sibling_minute * 60) / 3600))
 # seconds, and a run holding state it read before the call would overwrite another run's
 # --mark-notified and page the same outage twice.
 lock_state() {
-  local dir tries=0
+  local dir taken tries=0
   dir="$(dirname "$STATE_FILE")"
   mkdir -p "$dir" 2>/dev/null || unknown "cannot create the state directory: $dir"
   [ -w "$dir" ] || unknown "the state directory is not writable: $dir"
   lock_dir="${STATE_FILE}.lock"
   until mkdir "$lock_dir" 2>/dev/null; do
-    # A lock older than any run of this script was left by one that died.
+    # A lock older than any run of this script was left by one that died. Testing its age and then
+    # removing it are two steps, and between them another waiter can have replaced it with a live
+    # lock. So the lock is first RENAMED, which only one waiter can do and which keeps its age, and
+    # the age is judged again on what was actually taken: a live lock is put back.
     if [ -n "$(find "$lock_dir" -maxdepth 0 -mmin "+${LOCK_STALE_MINUTES}" 2>/dev/null || true)" ]; then
-      rmdir "$lock_dir" 2>/dev/null || true
+      taken="${lock_dir}.taken.$$"
+      if mv "$lock_dir" "$taken" 2>/dev/null; then
+        if [ -n "$(find "$taken" -maxdepth 0 -mmin "+${LOCK_STALE_MINUTES}" 2>/dev/null || true)" ] ||
+          ! mv "$taken" "$lock_dir" 2>/dev/null; then
+          rm -rf "$taken" 2>/dev/null || true
+        fi
+      fi
     fi
     tries=$((tries + 1))
     [ "$tries" -lt 50 ] || unknown "the state file is locked by another run; the count is unchanged"
@@ -217,7 +231,7 @@ read_state() {
   state_line="$(jq -r '
     select(type == "object" and (.lane == "claude" or .lane == "codex"))
     | [.observations, .first_seen_epoch, .last_slot, .claimed_epoch, .notified_epoch] as $n
-    | select($n | all(.[]; type == "number" and . >= 0 and . == floor and . < 100000000000))
+    | select($n | all(.[]; type == "number" and (tostring | test("^[0-9]{1,11}$"))))
     | [.lane] + ($n | map(tostring)) | join(" ")' "$STATE_FILE" 2>/dev/null)" || state_line=""
   [ -n "$state_line" ] || quarantine_state "the state file is unreadable or malformed"
   read -r state_lane observations first_seen last_slot claimed notified <<EOF
@@ -349,5 +363,5 @@ summary ESCALATE "$cause"
 claimed="$NOW_EPOCH"
 write_state
 # The every-run bullet in AGENTS.md has no room for the procedure, so the verdict carries it.
-echo "sibling-lane-watch: send the lane-outage Slack DM, then re-run with --mark-notified -- see 'Sibling lane outage' in .claude/guides/maintainer-channels.md" >&2
+echo "sibling-lane-watch: send the lane-outage Slack DM, then re-run with --mark-notified -- see 'Sibling lane outage' in .claude/guides/maintainer-channels.md" >&2 || true
 finish 1

@@ -112,7 +112,7 @@ role behaviour changes in its owning upstream first** (resolve a bundled skill's
 - **Codex runs the portfolio survey inline** and never dispatches a surveyor subagent (monorepo#3057).
 - Run `.claude/scripts/platform-live-health.sh`: `nothing_on_fire` holds only when it exits `0`.
   Run `.claude/scripts/review-lane-health.sh` before requesting any review.
-- Run `.claude/scripts/sibling-lane-watch.sh --lane <sibling>`; obey exit `1`.
+- Run `.claude/scripts/sibling-lane-watch.sh --lane <sibling>`; obey `ESCALATE`.
 - Sweep your own lane's worktrees, then run `.claude/scripts/disk-preflight.sh` (git-and-worktrees
   guide).
 

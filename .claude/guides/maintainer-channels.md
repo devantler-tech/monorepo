@@ -118,24 +118,27 @@ Every Engineer run does this in pre-flight, and an Improver run may:
 .claude/scripts/sibling-lane-watch.sh --lane <codex|claude>   # the lane you are NOT
 ```
 
-It runs that lane's own liveness check on the lane's hourly task only, and counts the consecutive
-slots of that task in which it was not producing. Two runs inside one slot count once, and a count
-continues only into the very next slot: after a slot with no bad observation it starts again. It
-prints one summary line and never the liveness report, so the line is safe to quote.
+It runs that lane's own liveness check on the lane's hourly task only, and counts the slots of that
+task in which it was not producing. Two runs inside one slot count once. A count survives one slot
+the watch did not observe, because a long run can make the watcher skip an hour, and starts again
+after two; a producing look always clears it. It prints one summary line and never the liveness
+report, so the line is safe to quote.
 
 - **Exit `0`: send nothing.** `OK` is a producing lane. `WATCHING` is an outage still inside the
   threshold. `KNOWN-RESET` is an outage whose only cause class is `quota/billing`: a usage limit
   resets on its own and the maintainer cannot shorten it, so it never pages. `ESCALATION-CLAIMED`
   means another run was handed the page within the last hour. `ALREADY-NOTIFIED` is an outage he
   has been told about.
-- **Exit `1` together with `verdict=ESCALATE` on stdout: the lane has been not producing for
-  three consecutive hourly slots and nobody has been told.** Both must hold; any other non-zero exit
-  is UNKNOWN. Send the Slack DM above, once per outage: the 🤖 disclosure line, the lane's name, how
+- **Exit `1` together with `verdict=ESCALATE` on stdout: the lane was not producing in
+  three hourly slots running, with no producing look between them, and nobody has been told.** Both
+  must hold; any other non-zero exit is UNKNOWN. Send the Slack DM above, once per outage: the 🤖 disclosure line, the lane's name, how
   long it has been down, and the bounded cause class the summary printed — nothing else about the
   runtime. Only after the send returns a message link, run the same command with `--mark-notified`.
   The verdict reserves the page for the run that received it; a send that is never recorded is asked
-  for again an hour later, which is the safe direction: a lost DM costs more than a repeated one.
-- **Exit `2`: UNKNOWN, never "alive" and never "down".** The count is left where it was. The usual
+  for again by the first run at least an hour later, which is the safe direction: a lost DM costs
+  more than a repeated one.
+- **Exit `2`: UNKNOWN, never "alive" and never "down".** A liveness check that could not judge
+  leaves the count where it was; an unusable state file is set aside and the count restarts. The usual
   cause is a sibling dispatch still in flight, so run the watch once more before the run report and
   report the second answer. It is not a run-stopper.
 
