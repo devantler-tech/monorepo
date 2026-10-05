@@ -28,7 +28,7 @@
     "astro-mermaid": "^2.1.0",
     "mermaid": "^11.17.2",
     "pdfkit": "^0.20.2",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "starlight-blog": "^0.30.0",
     "starlight-links-validator": "^0.26.0"
   },
