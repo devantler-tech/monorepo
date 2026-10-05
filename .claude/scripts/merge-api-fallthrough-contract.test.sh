@@ -14,7 +14,9 @@
 #   3. the generic refusal text is called out as naming no rule;
 #   4. the fall-through is bounded: pentad-clear only, and never on a merge-queue repository;
 #   5. NEGATIVE CONTROL: no definition surface prescribes a `PUT …/merge` without `sha=`, so an
-#      unpinned merge can never be the documented form.
+#      unpinned merge can never be the documented form;
+#   6. a PR in a GitHub-native stack merges through the asynchronous endpoint, head-pinned, with
+#      its result read and every PR below it held to the same gates (monorepo#3587).
 
 # shellcheck disable=SC2016 # backticks are literal Markdown in the patterns, not substitutions
 set -euo pipefail
@@ -54,6 +56,21 @@ has 'That refusal text names no rule' ||
 has 'bounded to' || fail "Merge policy must bound the fall-through to the pentad-clear case"
 has 'never on a merge-queue repository' ||
   fail "Merge policy must exclude merge-queue repositories from the fall-through"
+
+# 6. A stacked PR's merge path (monorepo#3587): the async endpoint with its head pin, a result read
+#    that is not the request's 202, and the whole-stack precondition.
+has 'Merging stacked PRs via this endpoint is not supported' ||
+  fail "Merge policy must quote the synchronous endpoint's stacked-PR refusal so it is recognised"
+stacked='gh api --method PUT repos/devantler-tech/<repo>/pulls/<n>/merge-async -f merge_method=squash -f merge_action=default -f sha=<headRefOid>'
+has "${stacked}" || fail "Merge policy must prescribe the pinned stacked-PR merge: ${stacked}"
+has 'gh api repos/devantler-tech/<repo>/pulls/<n>/merge-async/<id>' ||
+  fail "Merge policy must prescribe the read of the asynchronous merge's result"
+has 'is an accepted request, never a merge' ||
+  fail "Merge policy must say the 202 is not a merge, so the result and state are still read"
+has 'every PR below the one being merged must meet the same gates' ||
+  fail "Merge policy must require the gates on every PR below the one merged in a stack"
+has 'a stack you cannot enumerate completely is UNKNOWN' ||
+  fail "Merge policy must fail closed when the stack cannot be enumerated"
 
 # 5. Negative control across every definition surface: each prescribed PUT merge is pinned.
 # An unreadable root would make this sweep read clean over it, so each root must exist and yield
