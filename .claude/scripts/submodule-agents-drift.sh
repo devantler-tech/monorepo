@@ -298,8 +298,11 @@ while IFS=$'\t' read -r sub pin; do
     continue
   fi
 
-  # The blob read can fetch lazily from the same remote, so it refuses redirects too.
-  if ! body=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false git -C "$repo" -c credential.helper= \
+  # The blob read can fetch lazily from the same remote, so it refuses redirects too. It MUST be
+  # able to: the fetch above is blobless, and Claude sessions export GIT_NO_LAZY_FETCH=1 for the
+  # surveyor's guard, which would turn every row into UNKNOWN. Removed for this one command only.
+  if ! body=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false env -u GIT_NO_LAZY_FETCH \
+    git -C "$repo" -c credential.helper= \
     -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 -c http.followRedirects=false \
     -c protocol.file.allow=always \
     show "$pin:AGENTS.md" 2>/dev/null); then
