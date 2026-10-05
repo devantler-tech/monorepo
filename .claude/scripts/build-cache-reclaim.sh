@@ -38,6 +38,10 @@
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
 #   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
 #      per-user temp dir, older than a threshold counted in HOURS.
+#   5. The local container runtime's image store, when the `container` CLI is installed:
+#      images no container uses, unpacked longer ago than a threshold counted in HOURS,
+#      removed only while the store exceeds its own budget (2026-10-05: 57 GB unused,
+#      monorepo#3848). Long-running containers are named in the output and never stopped.
 #
 # Environment (all optional):
 #   BUILD_CACHE_RECLAIM_TMPDIR                temp root for (2); default /private/tmp
@@ -47,6 +51,13 @@
 #                                             DARWIN_USER_TEMP_DIR`, else ${TMPDIR:-/tmp}
 #   BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS  age threshold for (4); default 6
 #   BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS  idle threshold for (2b); default 6
+#   BUILD_CACHE_RECLAIM_CONTAINER_CLI         container runtime CLI for (5); default
+#                                             `container`, `off` skips the step
+#   BUILD_CACHE_RECLAIM_CONTAINER_STORE       that runtime's store directory; default
+#                                             ~/Library/Application Support/com.apple.container
+#   BUILD_CACHE_RECLAIM_CONTAINER_BUDGET_GB   image-store budget for (5); default 10
+#   BUILD_CACHE_RECLAIM_CONTAINER_IMAGE_MIN_AGE_HOURS  age threshold for (5); default 24
+#   BUILD_CACHE_RECLAIM_CONTAINER_LONG_RUN_HOURS       reporting threshold for (5); default 24
 #
 # SAFETY — this deletes, so every rule below fails closed:
 #   * Only trees matching a known agent-generated name pattern, carrying a Go or
@@ -60,9 +71,13 @@
 #   * A Go work dir is KEPT while a Go toolchain process that could own it is running.
 #   * The golangci-lint cache is KEPT while golangci-lint runs, and is emptied only when
 #     it carries golangci-lint's own README marker.
+#   * A container image is KEPT while any container, running or stopped, was created from
+#     it, while it was unpacked within its age threshold, and whenever either cannot be told.
+#     A container is never stopped or removed.
 #   * Anything that cannot be positively classified is KEPT.
 # The Go and golangci-lint caches are content-addressed and fully regenerable; removing
-# them costs a rebuild, never data.
+# them costs a rebuild, never data. A container image is the same kind of thing: removing
+# one costs a pull, or a rebuild from its source when a lane built it locally.
 set -uo pipefail
 
 MODE=${1:-dry-run}
@@ -1351,6 +1366,343 @@ $(find "$GO_TMP_ROOT" -mindepth 1 -maxdepth 1 -type d \
   -mmin "+$((GO_TMP_MIN_AGE_HOURS * 60))" 2>/dev/null)
 EOF
 fi
+
+# ---------------------------------------------------------------------------
+# 5. The local container runtime's image store, trimmed only when it exceeds its own budget.
+#
+# The lanes pull and build images with the `container` CLI for throwaway clusters and image
+# checks, and nothing removed any of them. On 2026-10-05 the store held 65 GB, 57 GB of it
+# images no container used, while the disk preflight read LOW and this sweep reclaimed 160 MB
+# (monorepo#3848). Each unpacked platform variant costs about 2 GB whatever the image's real
+# size, so the store grows far faster than the pulls suggest.
+# ---------------------------------------------------------------------------
+
+CONTAINER_BUDGET_GB=$(uint_setting BUILD_CACHE_RECLAIM_CONTAINER_BUDGET_GB \
+  "${BUILD_CACHE_RECLAIM_CONTAINER_BUDGET_GB:-10}") || exit 2
+# Hours since an image was UNPACKED, which is the only local timestamp the store keeps: the
+# image's own creation date says when it was built upstream, not when a lane fetched it. An
+# image a lane uses every hour is therefore removed too once it is this old, and pulled again
+# on its next use. That is the cost of a cache, and it is paid only while over budget.
+CONTAINER_IMAGE_MIN_AGE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_CONTAINER_IMAGE_MIN_AGE_HOURS \
+  "${BUILD_CACHE_RECLAIM_CONTAINER_IMAGE_MIN_AGE_HOURS:-24}") || exit 2
+CONTAINER_LONG_RUN_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_CONTAINER_LONG_RUN_HOURS \
+  "${BUILD_CACHE_RECLAIM_CONTAINER_LONG_RUN_HOURS:-24}") || exit 2
+CONTAINER_CLI=${BUILD_CACHE_RECLAIM_CONTAINER_CLI:-container}
+CONTAINER_STORE=${BUILD_CACHE_RECLAIM_CONTAINER_STORE:-${HOME:-}/Library/Application Support/com.apple.container}
+
+# container_unknown records a read of the store that could not be made. The store may hold
+# tens of gigabytes this sweep then never examined, so the summary is partial, never clean.
+container_unknown() {
+  unknown=$((unknown + 1))
+  log "UNKNOWN: CONTAINER_IMAGES $*"
+}
+
+# container_cli runs the runtime with no stdin. Most calls sit inside a loop that reads its
+# rows from stdin, and a CLI that prompted would swallow the rest of them.
+container_cli() {
+  "$CONTAINER_CLI" "$@" </dev/null 2>/dev/null
+}
+
+# container_image_usage prints "<size-bytes> <unused-bytes>" for the image store.
+container_image_usage() {
+  local json
+  json=$(container_cli system df --format json) || return 1
+  jq -er '
+    [.images.sizeInBytes, .images.reclaimable] as $v
+    | if ($v | all(type == "number" and . >= 0 and . == floor)) then "\($v[0]) \($v[1])"
+      else error("image usage is not two whole numbers") end' <<<"$json" 2>/dev/null
+}
+
+# container_list prints every container, running or stopped, as JSON -- but only when each
+# one names the image it was created from in the shape this sweep compares against. A
+# container that does not is not "created from nothing": its image is unknown, and a list
+# holding one cannot show any image to be unused.
+container_list() {
+  local json
+  json=$(container_cli list --all --format json) || return 1
+  jq -e '
+    type == "array" and all(.[];
+      (.configuration.image.reference | type == "string" and length > 0)
+      and (.configuration.image.descriptor.digest | type == "string" and startswith("sha256:")))' \
+    >/dev/null 2>&1 <<<"$json" || return 1
+  printf '%s' "$json"
+}
+
+# container_image_in_use reports whether any container, running or stopped, was created from
+# the image: 0 in use, 1 not in use, 2 could not tell. A stopped container still needs its
+# image to start again, so it counts. A container matches by the image's name, by its digest,
+# or by the digest of any of its variants. The list is read fresh on every call, immediately
+# before the image it guards is removed.
+container_image_in_use() {
+  local name=$1 digest=$2 variants=$3 json
+  case "$digest" in
+    sha256:?*) ;;
+    *) return 2 ;;
+  esac
+  json=$(container_list) || return 2
+  jq -e --arg name "$name" --arg digest "$digest" --arg variants "$variants" '
+    ($variants | split(",") | map("sha256:" + .)) as $v
+    | any(.[]; .configuration.image as $i
+        | ($i.reference == $name) or ($i.descriptor.digest == $digest)
+          or ($v | index($i.descriptor.digest) != null))' >/dev/null 2>&1 <<<"$json"
+  case $? in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# container_image_old reports the age of an image's unpacked variants: 0 every one is older
+# than the threshold, 1 one is younger, 2 none is unpacked on disk, 3 could not tell. A
+# variant list that is not plain digests cannot be trusted as a path, and is refused whole
+# before it is split, so nothing in it can expand as a pattern.
+container_image_old() {
+  local variants=$1 hex dir found=0 old
+  case "$variants" in
+    '' | *[!0-9a-f,]*) return 3 ;;
+  esac
+  local IFS=,
+  for hex in $variants; do
+    [ "${#hex}" -eq 64 ] || return 3
+    dir="${CONTAINER_STORE}/snapshots/${hex}"
+    [ -d "$dir" ] || continue
+    found=1
+    old=$(find "$dir" -maxdepth 0 -mmin "+$((CONTAINER_IMAGE_MIN_AGE_HOURS * 60))" 2>/dev/null) ||
+      return 3
+    [ -n "$old" ] || return 1
+  done
+  [ "$found" -eq 1 ] || return 2
+  return 0
+}
+
+# container_image_estimate sets CONTAINER_ESTIMATE_MB to the on-disk size of an image's
+# unpacked variants that no earlier call counted. Two references to one image share its
+# variants, so each is counted once across the sweep. It sets a variable instead of printing,
+# because the running list of counted variants would not survive a command substitution.
+# It is only called with a variant list container_image_old accepted.
+CONTAINER_COUNTED=,
+CONTAINER_ESTIMATE_MB=0
+container_image_estimate() {
+  local variants=$1 hex dir part
+  local IFS=,
+  CONTAINER_ESTIMATE_MB=0
+  for hex in $variants; do
+    case "$CONTAINER_COUNTED" in
+      *",${hex},"*) continue ;;
+    esac
+    CONTAINER_COUNTED="${CONTAINER_COUNTED}${hex},"
+    dir="${CONTAINER_STORE}/snapshots/${hex}"
+    [ -d "$dir" ] || continue
+    part=$(size_mb "$dir") || continue
+    CONTAINER_ESTIMATE_MB=$((CONTAINER_ESTIMATE_MB + part))
+  done
+}
+
+# report_long_running_containers names containers that have run longer than the threshold.
+# It never stops one: a cluster somebody is using must not be ended by a cache sweep, and
+# nothing here can tell an abandoned throwaway from a cluster in use. The line exists so the
+# lane that started it can decide. A running container whose start time cannot be read is
+# named too, because it cannot be shown to be recent.
+report_long_running_containers() {
+  local json rows rc id started
+  if ! json=$(container_list); then
+    container_unknown "container list could not be read — long-running containers not reported"
+    return 0
+  fi
+  rows=$(jq -r --argjson hours "$CONTAINER_LONG_RUN_HOURS" '
+      .[]
+      | select(.status.state == "running")
+      | (.status.startedDate
+          | if type == "string" then (try (sub("\\.[0-9]+"; "") | fromdateiso8601) catch null)
+            else null end) as $t
+      | select($t == null or (now - $t) > ($hours * 3600))
+      | [(.configuration.id | tostring), (if $t == null then "unreadable" else .status.startedDate end)]
+      | @tsv' <<<"$json" 2>/dev/null)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    container_unknown "container list could not be interpreted — long-running containers not reported"
+    return 0
+  fi
+  [ -n "$rows" ] || return 0
+  while IFS=$'\t' read -r id started; do
+    [ -n "$id" ] || continue
+    case "$id" in
+      *[!A-Za-z0-9_.-]*) id='<unprintable id>' ;;
+    esac
+    case "$started" in
+      unreadable)
+        log "NOTE  container ${id} running, start time unreadable — left running; the lane that started it decides"
+        continue
+        ;;
+      *[!0-9TZ:.+-]*) started='<unprintable time>' ;;
+    esac
+    log "NOTE  container ${id} running since ${started} (over ${CONTAINER_LONG_RUN_HOURS}h) — left running; the lane that started it decides"
+  done <<<"$rows"
+}
+
+reclaim_container_images() {
+  local label=CONTAINER_IMAGES usage size_b unused_b size_mb_before budget_mb images rows
+  local name digest variants est_mb after after_b freed_mb verdict
+  local would=0 deleted=0 unclassified=0
+
+  if [ "$CONTAINER_CLI" = off ]; then
+    log "${label} disabled — nothing to reclaim"
+    return 0
+  fi
+  if ! command -v "$CONTAINER_CLI" >/dev/null 2>&1; then
+    log "${label} no container runtime on this host — nothing to do"
+    return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    container_unknown "jq is not available, so the store cannot be read"
+    return 0
+  fi
+  if ! usage=$(container_image_usage); then
+    container_unknown "store usage could not be read (is the container runtime running?)"
+    return 0
+  fi
+  size_b=${usage%% *}
+  unused_b=${usage##* }
+  case "${size_b}${unused_b}" in
+    '' | *[!0-9]*)
+      container_unknown "store usage is not numeric"
+      return 0
+      ;;
+  esac
+  if [ "${#size_b}" -gt 15 ] || [ "${#unused_b}" -gt 15 ]; then
+    container_unknown "store usage is implausibly large"
+    return 0
+  fi
+  size_mb_before=$((10#$size_b / 1048576))
+  budget_mb=$((CONTAINER_BUDGET_GB * 1024))
+  log "${label} = ${size_mb_before} MB, $((10#$unused_b / 1048576)) MB of it used by no container (budget ${budget_mb} MB)"
+
+  report_long_running_containers
+
+  if [ "$size_mb_before" -le "$budget_mb" ]; then
+    log "${label} within budget — keeping (a pulled image is worth more than the space)"
+    return 0
+  fi
+
+  # Without the unpacked variants no image can be aged, and "nothing was old enough" would
+  # then be said of a store this sweep could not see into.
+  if [ ! -d "${CONTAINER_STORE}/snapshots" ]; then
+    container_unknown "the store's unpacked images were not found under ${CONTAINER_STORE} — nothing removed"
+    return 0
+  fi
+
+  if ! images=$(container_cli image list --format json) ||
+    ! rows=$(jq -er '
+      if type != "array" then error("image list is not an array") else .[] end
+      | [(.configuration.name // "-" | tostring | if . == "" then "-" else . end),
+         (.configuration.descriptor.digest // "-" | tostring | if . == "" then "-" else . end),
+         ([.variants[]?.digest | tostring | ltrimstr("sha256:")] | join(",") | if . == "" then "-" else . end)]
+      | @tsv' <<<"$images" 2>/dev/null); then
+    # An empty list is not a clean answer here: the store has just measured over budget, so
+    # the two reads disagree and neither can be trusted.
+    container_unknown "image list could not be read, or lists nothing in a store of ${size_mb_before} MB — nothing removed"
+    return 0
+  fi
+
+  while IFS=$'\t' read -r name digest variants; do
+    [ -n "$name" ] || continue
+    # The name becomes an argument to the runtime, so it must be a plain image reference.
+    case "$name" in
+      - | -* | *[!A-Za-z0-9_./:@-]*)
+        kept=$((kept + 1))
+        unclassified=$((unclassified + 1))
+        log "KEEP  (unreadable name) container image"
+        continue
+        ;;
+    esac
+    container_image_old "$variants"
+    case $? in
+      0) ;;
+      1)
+        kept=$((kept + 1))
+        log "KEEP  (unpacked within ${CONTAINER_IMAGE_MIN_AGE_HOURS}h) container image ${name}"
+        continue
+        ;;
+      2)
+        kept=$((kept + 1))
+        log "KEEP  (not unpacked)  container image ${name}"
+        continue
+        ;;
+      *)
+        kept=$((kept + 1))
+        unclassified=$((unclassified + 1))
+        log "KEEP  (age unknown)   container image ${name}"
+        continue
+        ;;
+    esac
+    container_image_in_use "$name" "$digest" "$variants"
+    verdict=$?
+    if [ "$verdict" -eq 0 ]; then
+      kept=$((kept + 1))
+      log "KEEP  (in use)        container image ${name}"
+      continue
+    elif [ "$verdict" -ne 1 ]; then
+      kept=$((kept + 1))
+      unclassified=$((unclassified + 1))
+      log "KEEP  (use unknown)   container image ${name}"
+      continue
+    fi
+
+    if [ "$MODE" != apply ]; then
+      container_image_estimate "$variants"
+      est_mb=$CONTAINER_ESTIMATE_MB
+      removed=$((removed + 1))
+      would=$((would + 1))
+      reclaimed_mb=$((reclaimed_mb + est_mb))
+      log "WOULD REMOVE  ~${est_mb} MB  container image ${name}"
+      continue
+    fi
+
+    if container_cli image delete "$name" >/dev/null; then
+      removed=$((removed + 1))
+      deleted=$((deleted + 1))
+      log "REMOVE  container image ${name}"
+    else
+      kept=$((kept + 1))
+      log "KEEP  (delete refused) container image ${name}"
+      unclassified=$((unclassified + 1))
+    fi
+  done <<<"$rows"
+
+  # One UNKNOWN for the sweep, however many images it covers: each is already named above.
+  if [ "$unclassified" -gt 0 ]; then
+    container_unknown "${unclassified} image(s) could not be classified or removed and were kept"
+  fi
+
+  if [ "$MODE" != apply ]; then
+    log "${label} would remove ${would} image reference(s) (over budget)"
+    return 0
+  fi
+  [ "$deleted" -gt 0 ] || {
+    log "${label} over budget, but no image was removed"
+    return 0
+  }
+  # Judge the result by what the store reports afterwards, not by the delete calls: two
+  # references can share one image, and only the last removal frees its space.
+  if after=$(container_image_usage); then
+    after_b=${after%% *}
+    case "$after_b" in
+      '' | *[!0-9]*) after_b='' ;;
+    esac
+  else
+    after_b=''
+  fi
+  if [ -z "$after_b" ] || [ "${#after_b}" -gt 15 ]; then
+    container_unknown "removed ${deleted} image reference(s), but the store could not be measured afterwards"
+    return 0
+  fi
+  freed_mb=$((size_mb_before - 10#$after_b / 1048576))
+  [ "$freed_mb" -ge 0 ] || freed_mb=0
+  reclaimed_mb=$((reclaimed_mb + freed_mb))
+  log "${label} removed ${deleted} image reference(s), reclaimed ~${freed_mb} MB"
+}
+
+reclaim_container_images
 
 # Report in the mode's own vocabulary. The counters are shared between the two modes, so
 # a dry-run summary phrased as apply ("reaped=N, reclaimed=~N MB") states that trees were

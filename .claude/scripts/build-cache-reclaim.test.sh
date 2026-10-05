@@ -42,6 +42,9 @@ trap 'rm -rf -- "$fixture_root" "$go_tmp_root"' EXIT
 export BUILD_CACHE_RECLAIM_GO_TMPDIR="$go_tmp_root"
 export GOLANGCI_LINT_CACHE="${fixture_root}/golangci-lint-absent"
 export BUILD_CACHE_RECLAIM_LINT_BUDGET_GB="$NEVER_CLEAN_BUDGET"
+# The container image step asks the host's real container runtime, and an apply run over its
+# budget removes real images. It is off for every case; case 22 points it at a stub.
+export BUILD_CACHE_RECLAIM_CONTAINER_CLI=off
 
 make_tree() {
   # make_tree <name> <age-days>
@@ -1514,6 +1517,300 @@ said "$out" "$reuse_held" 'UNKNOWN (unmeasurable)' ||
   fail 'an unmeasurable reused Go cache was not reported UNKNOWN'
 [ -e "${reuse_held}/00/blob-d" ] || fail 'apply emptied a reused Go cache it could not measure'
 rm -rf -- "$reuse_root" "$reuse_du"
+
+# --- 22. the container image store is budgeted too (monorepo#3848) ----------------------
+# 57 GB of images no container used sat in the local container runtime's store while the
+# disk preflight read LOW, because nothing here looked at it. Every keep rule is tested by
+# ablation against one removable image: `old-unused` is over the age threshold and no
+# container was created from it. Each other image differs from it in exactly one way.
+ct_root="${fixture_root}/container-22"
+ct_state="${ct_root}/state"
+ct_store="${ct_root}/store"
+ct_tmp="${ct_root}/tmp"
+mkdir -p "$ct_state" "${ct_store}/snapshots" "$ct_tmp" "${ct_root}/bin" ||
+  fail 'fixture: container dirs'
+# The stub answers from files, records every call, and fails a read when told to. It knows
+# no verb that stops or removes a CONTAINER, so such a call exits 64 and shows in `calls`.
+# `fail-list-after` holds how many container listings succeed before every later one fails.
+cat > "${ct_root}/bin/container" <<STUB
+#!/bin/sh
+s="${ct_state}"
+printf '%s\n' "\$*" >> "\$s/calls"
+case "\$1 \$2" in
+  'system df')
+    [ -e "\$s/fail-df" ] && exit 1
+    cat "\$s/df.json"
+    ;;
+  'list --all')
+    [ -e "\$s/fail-list" ] && exit 1
+    if [ -e "\$s/fail-list-after" ]; then
+      n=\$(grep -c '^list --all' "\$s/calls")
+      [ "\$n" -gt "\$(cat "\$s/fail-list-after")" ] && exit 1
+    fi
+    cat "\$s/containers.json"
+    ;;
+  'image list')
+    [ -e "\$s/fail-images" ] && exit 1
+    cat "\$s/images.json"
+    ;;
+  'image delete')
+    printf '%s\n' "\$3" >> "\$s/deleted"
+    [ -e "\$s/df-after.json" ] && cp "\$s/df-after.json" "\$s/df.json"
+    exit 0
+    ;;
+  *) exit 64 ;;
+esac
+STUB
+chmod +x "${ct_root}/bin/container" || fail 'fixture: chmod container stub'
+
+# Digests carry the letters a-f, so a rule that accepted digits only would refuse them all.
+ct_hex() { printf 'abcdef%058d' "$1"; }
+# ct_snapshot <n> <age-days> unpacks variant n, that many days ago.
+ct_snapshot() {
+  local dir stamp
+  dir="${ct_store}/snapshots/$(ct_hex "$1")"
+  mkdir -p "$dir" || return 1
+  # A real payload, so a size is a number a second count of it would visibly double.
+  dd if=/dev/zero of="${dir}/layer" bs=1024 count=2048 2>/dev/null || return 1
+  if [ "$2" -gt 0 ]; then
+    stamp=$(date -u -v-"$2"d +%Y%m%d%H%M 2>/dev/null) ||
+      stamp=$(date -u -d "$2 days ago" +%Y%m%d%H%M 2>/dev/null) || return 1
+    touch -t "$stamp" "$dir" || return 1
+  fi
+}
+ct_image() { # <name> <index-digest> <variant-digest>...
+  local name=$1 digest=$2 v sep='' variants=''
+  shift 2
+  for v in "$@"; do
+    variants="${variants}${sep}{\"digest\":\"${v}\"}"
+    sep=,
+  done
+  printf '{"configuration":{"name":"%s","descriptor":{"digest":"%s"}},"variants":[%s]}' \
+    "$name" "$digest" "$variants"
+}
+ct_container() { # <id> <image-reference> <image-digest> <state> [<startedDate>]
+  printf '{"configuration":{"id":"%s","image":{"reference":"%s","descriptor":{"digest":"%s"}}},"status":{"state":"%s","startedDate":"%s"}}' \
+    "$1" "$2" "$3" "$4" "${5:-}"
+}
+ct_reset() {
+  rm -f "${ct_state}/calls" "${ct_state}/deleted" "${ct_state}/fail-df" \
+    "${ct_state}/fail-list" "${ct_state}/fail-list-after" "${ct_state}/fail-images" \
+    "${ct_state}/df-after.json"
+  # 5 GiB of images, 4 GiB of it unused.
+  printf '{"images":{"sizeInBytes":5368709120,"reclaimable":4294967296}}\n' \
+    > "${ct_state}/df.json"
+  printf '[%s,%s,%s,%s,%s]\n' \
+    "$(ct_container uses-by-name registry.test/old-in-use:1 sha256:other stopped)" \
+    "$(ct_container uses-by-digest registry.test/another-name:1 sha256:digest-in-use running 2020-01-01T00:00:00.123Z)" \
+    "$(ct_container uses-by-variant registry.test/yet-another:1 "sha256:$(ct_hex 7)" stopped)" \
+    "$(ct_container just-started registry.test/another-name:1 sha256:digest-in-use running "$(date -u +%Y-%m-%dT%H:%M:%SZ)")" \
+    "$(ct_container no-clock registry.test/another-name:1 sha256:digest-in-use running not-a-time)" \
+    > "${ct_state}/containers.json"
+  # The twin is a second reference to the same image, as a tag and a digest pull produce.
+  # Variant 9 is the unpacked-nowhere attestation manifest every multi-platform image
+  # carries; variant 5 is never unpacked at all; variant 2 was unpacked just now.
+  printf '[%s,%s,%s,%s,%s,%s,%s]\n' \
+    "$(ct_image registry.test/old-unused:1 sha256:d1 "sha256:$(ct_hex 1)" "sha256:$(ct_hex 9)")" \
+    "$(ct_image registry.test/old-unused-twin:1 sha256:d1 "sha256:$(ct_hex 1)" "sha256:$(ct_hex 9)")" \
+    "$(ct_image registry.test/young-unused:1 sha256:d2 "sha256:$(ct_hex 2)")" \
+    "$(ct_image registry.test/old-in-use:1 sha256:d3 "sha256:$(ct_hex 3)")" \
+    "$(ct_image registry.test/old-in-use-by-digest:1 sha256:digest-in-use "sha256:$(ct_hex 4)")" \
+    "$(ct_image registry.test/old-in-use-by-variant:1 sha256:d7 "sha256:$(ct_hex 7)")" \
+    "$(ct_image registry.test/never-unpacked:1 sha256:d5 "sha256:$(ct_hex 5)")" \
+    > "${ct_state}/images.json"
+}
+{ ct_snapshot 1 3 && ct_snapshot 2 0 && ct_snapshot 3 3 && ct_snapshot 4 3 && ct_snapshot 6 3 &&
+  ct_snapshot 7 3; } || fail 'fixture: container snapshots'
+# A variant that is not a plain digest must never be followed as a path: this directory is
+# where `../../escape` lands, old enough to make that image removable if it were.
+{ mkdir -p "${ct_root}/escape" && touch -t 202001010000 "${ct_root}/escape"; } ||
+  fail 'fixture: escape dir'
+# ...and a digest of the wrong length must not be either, though this one exists and is old.
+{ mkdir -p "${ct_store}/snapshots/abcdef" && touch -t 202001010000 "${ct_store}/snapshots/abcdef"; } ||
+  fail 'fixture: short digest dir'
+# ...nor one of the right length that is not hexadecimal.
+{ mkdir -p "${ct_store}/snapshots/gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg" &&
+  touch -t 202001010000 "${ct_store}/snapshots/gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"; } || fail 'fixture: non-hex digest dir'
+
+run_container() {
+  BUILD_CACHE_RECLAIM_CONTAINER_CLI="${CT_CLI:-${ct_root}/bin/container}" \
+    BUILD_CACHE_RECLAIM_CONTAINER_STORE="${CT_STORE:-$ct_store}" \
+    BUILD_CACHE_RECLAIM_CONTAINER_BUDGET_GB="${CT_BUDGET:-1}" \
+    BUILD_CACHE_RECLAIM_TMPDIR="$ct_tmp" \
+    GOCACHE="$GO_BUILD_FIXTURE" GOMODCACHE="$GO_MOD_FIXTURE" \
+    bash "$impl" "$@" 2>&1
+}
+ct_deleted() { cat "${ct_state}/deleted" 2>/dev/null; }
+ct_expected_deleted='registry.test/old-unused:1
+registry.test/old-unused-twin:1'
+# No call may ever stop or remove a container: only reads, and `image delete`.
+ct_only_safe_calls() {
+  local other
+  [ -s "${ct_state}/calls" ] || return 1
+  other=$(grep -vE '^(system df --format json|list --all --format json|image list --format json|image delete [^ ]+)$' \
+    "${ct_state}/calls")
+  [ -z "$other" ]
+}
+
+# 22a. over budget, apply: exactly the old, unused image goes, under both its references.
+ct_reset
+printf '{"images":{"sizeInBytes":3221225472,"reclaimable":2147483648}}\n' \
+  > "${ct_state}/df-after.json"
+out=$(run_container apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 0 ] || fail "22a: a clean container sweep exited ${rc}"
+[ "$(ct_deleted)" = "$ct_expected_deleted" ] ||
+  fail "22a: expected only the old unused image to be removed, got: $(ct_deleted | tr '\n' ' ')"
+grep -qF 'CONTAINER_IMAGES = 5120 MB, 4096 MB of it used by no container' <<<"$out" ||
+  fail '22a: the store size and its unused share were not reported'
+grep -qF 'removed 2 image reference(s), reclaimed ~2048 MB' <<<"$out" ||
+  fail '22a: the reclaimed size was not taken from the store afterwards'
+grep -qF 'KEEP  (unpacked within 24h) container image registry.test/young-unused:1' <<<"$out" ||
+  fail '22a: a young image was not kept for its age'
+grep -qF 'KEEP  (in use)        container image registry.test/old-in-use:1' <<<"$out" ||
+  fail '22a: an image a stopped container was created from was not kept'
+grep -qF 'KEEP  (in use)        container image registry.test/old-in-use-by-digest:1' <<<"$out" ||
+  fail '22a: an image in use under another name was not kept'
+grep -qF 'KEEP  (in use)        container image registry.test/old-in-use-by-variant:1' <<<"$out" ||
+  fail '22a: an image a container names by one of its variants was not kept'
+grep -qF 'KEEP  (not unpacked)  container image registry.test/never-unpacked:1' <<<"$out" ||
+  fail '22a: an image with nothing unpacked was not kept'
+grep -qF 'NOTE  container uses-by-digest running since 2020-01-01T00:00:00.123Z' <<<"$out" ||
+  fail '22a: a long-running container was not named'
+grep -qF 'NOTE  container no-clock running, start time unreadable' <<<"$out" ||
+  fail '22a: a running container with an unreadable start time was not named'
+grep -qF 'container just-started' <<<"$out" &&
+  fail '22a: a container started just now was reported as long-running'
+ct_only_safe_calls || fail "22a: the sweep made a call beyond reads and image delete: $(cat "${ct_state}/calls")"
+
+# 22b. dry-run removes nothing, says what it would remove, and counts a shared image once.
+ct_reset
+out=$(run_container dry-run 3 "$NEVER_CLEAN_BUDGET")
+[ -z "$(ct_deleted)" ] || fail '22b: dry-run removed a container image'
+grep -qE 'WOULD REMOVE  ~[1-9][0-9]* MB  container image registry.test/old-unused:1' <<<"$out" ||
+  fail '22b: dry-run did not name the image it would remove'
+grep -qF 'WOULD REMOVE  ~0 MB  container image registry.test/old-unused-twin:1' <<<"$out" ||
+  fail '22b: a second reference to one image was sized again'
+grep -qF 'summary: would reap=2 ' <<<"$out" || fail '22b: the dry-run summary did not count both references'
+
+# 22c. within budget, nothing is removed however old and unused (budget ablation).
+ct_reset
+out=$(CT_BUDGET=100 run_container apply 3 "$NEVER_CLEAN_BUDGET")
+[ -z "$(ct_deleted)" ] || fail '22c: an image was removed while the store was within budget'
+grep -qF 'CONTAINER_IMAGES within budget' <<<"$out" || fail '22c: within-budget was not reported'
+grep -qF 'NOTE  container uses-by-digest' <<<"$out" ||
+  fail '22c: a long-running container was not named while within budget'
+
+# 22d. a store that cannot be measured is UNKNOWN, never empty -- whether the read fails...
+ct_reset
+: > "${ct_state}/fail-df"
+out=$(run_container apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "22d: an unreadable store exited ${rc}, not 2 (UNKNOWN)"
+grep -qF 'UNKNOWN: CONTAINER_IMAGES store usage could not be read' <<<"$out" ||
+  fail '22d: an unreadable store was not reported UNKNOWN'
+[ -z "$(ct_deleted)" ] || fail '22d: an image was removed from a store that could not be measured'
+# ...or succeeds and says nothing this sweep can read.
+ct_reset
+printf '{}\n' > "${ct_state}/df.json"
+out=$(run_container apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "22d: a store usage answer with no figures exited ${rc}, not 2"
+[ -z "$(ct_deleted)" ] || fail '22d: an image was removed on a usage answer with no figures'
+
+# 22e. an image list that cannot be read is UNKNOWN, and nothing is removed.
+ct_reset
+: > "${ct_state}/fail-images"
+out=$(run_container apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "22e: an unreadable image list exited ${rc}, not 2 (UNKNOWN)"
+grep -qF 'UNKNOWN: CONTAINER_IMAGES image list could not be read' <<<"$out" ||
+  fail '22e: an unreadable image list was not reported UNKNOWN'
+[ -z "$(ct_deleted)" ] || fail '22e: an image was removed without a readable image list'
+
+# 22f. when the containers cannot be listed, no image can be shown unused, so all are kept.
+# The first listing succeeds, so the UNKNOWN below comes from the per-image check alone and
+# not from the long-running report, which reads the same list earlier.
+ct_reset
+printf '1\n' > "${ct_state}/fail-list-after"
+out=$(run_container apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "22f: an unreadable container list exited ${rc}, not 2 (UNKNOWN)"
+[ -z "$(ct_deleted)" ] || fail '22f: an image was removed without knowing which are in use'
+grep -qF 'KEEP  (use unknown)   container image registry.test/old-unused:1' <<<"$out" ||
+  fail '22f: an image whose use could not be told was not kept for that reason'
+grep -qF 'long-running containers not reported' <<<"$out" &&
+  fail '22f: the fixture failed the first listing, so this case proves nothing about the per-image check'
+grep -qE 'UNKNOWN: CONTAINER_IMAGES [0-9]+ image\(s\) could not be classified' <<<"$out" ||
+  fail '22f: images of unknown use were not reported UNKNOWN'
+
+# 22g. a container that does not say which image it was created from makes every image's
+# use unknown: it is not a container created from nothing.
+ct_reset
+printf '[{"configuration":{"id":"shapeless"},"status":{"state":"stopped"}}]\n' \
+  > "${ct_state}/containers.json"
+out=$(run_container apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "22g: an unrecognised container shape exited ${rc}, not 2 (UNKNOWN)"
+[ -z "$(ct_deleted)" ] || fail '22g: an image was removed although a container did not name its image'
+
+# 22h. an empty image list in a store that measured over budget contradicts the measurement.
+ct_reset
+printf '[]\n' > "${ct_state}/images.json"
+out=$(run_container apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "22h: an empty image list in an over-budget store exited ${rc}, not 2"
+grep -qF 'lists nothing in a store of 5120 MB' <<<"$out" ||
+  fail '22h: the disagreement between the two reads was not reported'
+
+# 22i. images that cannot be classified are kept and reported; the removable one still goes.
+ct_reset
+printf '[%s,%s,%s,%s,%s,%s,%s,%s]\n' \
+  "$(ct_image registry.test/old-unused:1 sha256:d1 "sha256:$(ct_hex 1)")" \
+  "$(ct_image --all sha256:d6 "sha256:$(ct_hex 6)")" \
+  "$(ct_image 'registry.test/has space:1' sha256:d6 "sha256:$(ct_hex 6)")" \
+  "$(ct_image 'registry.test/semi;colon:1' sha256:d6 "sha256:$(ct_hex 6)")" \
+  "$(ct_image registry.test/odd-variant:1 sha256:d8 'sha256:../../escape')" \
+  "$(ct_image registry.test/short-variant:1 sha256:d8 sha256:abcdef)" \
+  "$(ct_image registry.test/non-hex-variant:1 sha256:d8 sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg)" \
+  "$(ct_image registry.test/no-digest:1 '' "sha256:$(ct_hex 1)")" \
+  > "${ct_state}/images.json"
+out=$(run_container apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "22i: unclassifiable images exited ${rc}, not 2 (UNKNOWN)"
+[ "$(ct_deleted)" = 'registry.test/old-unused:1' ] ||
+  fail "22i: expected only the classifiable image to be removed, got: $(ct_deleted | tr '\n' ' ')"
+[ "$(grep -cF 'KEEP  (unreadable name) container image' <<<"$out")" -eq 3 ] ||
+  fail '22i: a name that is not a plain image reference was not kept'
+grep -qF 'KEEP  (age unknown)   container image registry.test/odd-variant:1' <<<"$out" ||
+  fail '22i: an image whose variant is not a plain digest was not kept'
+grep -qF 'KEEP  (age unknown)   container image registry.test/short-variant:1' <<<"$out" ||
+  fail '22i: an image whose variant digest has the wrong length was not kept'
+grep -qF 'KEEP  (age unknown)   container image registry.test/non-hex-variant:1' <<<"$out" ||
+  fail '22i: an image whose variant digest is not hexadecimal was not kept'
+grep -qF 'KEEP  (use unknown)   container image registry.test/no-digest:1' <<<"$out" ||
+  fail '22i: an image that carries no digest of its own was not kept'
+grep -qF 'UNKNOWN: CONTAINER_IMAGES 7 image(s) could not be classified' <<<"$out" ||
+  fail '22i: unclassifiable images were not reported UNKNOWN'
+
+# 22j. a store whose unpacked images cannot be found is UNKNOWN, not "nothing old enough".
+ct_reset
+out=$(CT_STORE="${ct_root}/no-such-store" run_container apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 2 ] || fail "22j: a store with no unpacked images directory exited ${rc}, not 2"
+[ -z "$(ct_deleted)" ] || fail '22j: an image was removed from a store that could not be found'
+
+# 22k. a host without the runtime, and a disabled step, are quiet and clean.
+ct_reset
+out=$(CT_CLI="${ct_root}/bin/absent" run_container apply 3 "$NEVER_CLEAN_BUDGET")
+rc=$?
+[ "$rc" -eq 0 ] || fail "22k: a host without a container runtime exited ${rc}"
+grep -qF 'CONTAINER_IMAGES no container runtime on this host' <<<"$out" ||
+  fail '22k: a missing runtime was not reported as nothing to do'
+out=$(CT_CLI=off run_container apply 3 "$NEVER_CLEAN_BUDGET")
+grep -qF 'CONTAINER_IMAGES disabled' <<<"$out" || fail '22k: the off switch was not honoured'
+[ ! -e "${ct_state}/calls" ] || fail '22k: a disabled or absent runtime was still called'
+rm -rf -- "$ct_root"
 
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
