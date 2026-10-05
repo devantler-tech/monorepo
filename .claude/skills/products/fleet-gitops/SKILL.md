@@ -9,21 +9,16 @@ description: Product card for devantler-tech/fleet-gitops, the FleetDM GitOps co
 the FleetDM configuration for the suite's managed devices as GitOps-managed files.
 
 **Read the repository's visibility live before every run touches it** —
-`gh api repos/devantler-tech/fleet-gitops --jq .private` — never from this card or from memory; it
-read `true` on 2026-09-05, and the map deliberately records no visibility. Two consequences bind
-every run, the first only while that read stays `true`:
+`gh api repos/devantler-tech/fleet-gitops --jq .private` — never from this card or from memory. The
+portfolio map deliberately records no visibility. Then initialise the submodule with the monorepo's
+submodule helper and read `applications/fleet-gitops/AGENTS.md`; that repository contract owns its
+validation, apply flow, and protected-file guidance.
 
-- **While private, nothing from it reaches a public surface.** Its issues are not boarded on
-  project 5 (an item from a private repo on the public board is a maintainer decision, never an
-  agent default), and no file content, CI detail, or device inventory read from it enters a public
-  issue, PR body, comment, or report — the sanitised-minimum rule in the monorepo
-  [`AGENTS.md`](../../../../AGENTS.md) applies in full. Should the read turn `false`, its open
-  issues join the ordinary board sweep like any other public repo's. Work there is API-first; a
-  code change is an ordinary draft PR **in that repository**.
-- **The first advance slice is the missing `AGENTS.md`** — a `## Maintenance` section naming the
-  validate command its CI runs, the release flow, and the protected files — so this card can become
-  the thin pointer every other product has. Until it exists, read the repository's own CI workflow
-  for the validate command and never claim one from memory.
+While the live read says private, nothing from the repository reaches a public surface. Its issues
+are not boarded on project 5 (adding private work to the public board is a maintainer decision), and
+no file content, CI detail, validation output, or device inventory enters a public issue, PR body,
+comment, or report. Should the repository become public, its open issues join the ordinary board
+sweep. Work there remains API-first; code changes use ordinary draft PRs in that repository.
 
 Shared cross-repository rules are in the monorepo `AGENTS.md`; its Portfolio and Stack maps route
 managed-device needs here. The site lists this repository as internal infrastructure (`infra` in

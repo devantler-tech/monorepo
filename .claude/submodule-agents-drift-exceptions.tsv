@@ -1,4 +1,4 @@
 # Pinned submodules whose AGENTS.md is known to lag. Read by .claude/scripts/submodule-agents-drift.sh.
 # One row per pin: path TAB full 40-character revision TAB reason. A row matches only its exact
 # revision; when the pin moves the row turns stale and fails, so this list can only shrink.
-applications/fleet-gitops	8f514f9d985fe9a616af42809bea93b7dd266c4c	private repository; not readable anonymously in CI
+applications/fleet-gitops	6141cf468784494dadfdc2d130b36fac4422f210	private repository; not readable anonymously in CI
