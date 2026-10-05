@@ -1640,8 +1640,11 @@ ct_expected_deleted='registry.test/old-unused:1
 registry.test/old-unused-twin:1'
 # No call may ever stop or remove a container: only reads, and `image delete`.
 ct_only_safe_calls() {
-  ! grep -vE '^(system df --format json|list --all --format json|image list --format json|image delete [^ ]+)$' \
-    "${ct_state}/calls" 2>/dev/null | grep -q .
+  local other
+  [ -s "${ct_state}/calls" ] || return 1
+  other=$(grep -vE '^(system df --format json|list --all --format json|image list --format json|image delete [^ ]+)$' \
+    "${ct_state}/calls")
+  [ -z "$other" ]
 }
 
 # 22a. over budget, apply: exactly the old, unused image goes, under both its references.

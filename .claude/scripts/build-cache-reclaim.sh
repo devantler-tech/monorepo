@@ -1665,12 +1665,13 @@ reclaim_container_images() {
     else
       kept=$((kept + 1))
       log "KEEP  (delete refused) container image ${name}"
+      unclassified=$((unclassified + 1))
     fi
   done <<<"$rows"
 
   # One UNKNOWN for the sweep, however many images it covers: each is already named above.
   if [ "$unclassified" -gt 0 ]; then
-    container_unknown "${unclassified} image(s) could not be classified and were kept"
+    container_unknown "${unclassified} image(s) could not be classified or removed and were kept"
   fi
 
   if [ "$MODE" != apply ]; then
