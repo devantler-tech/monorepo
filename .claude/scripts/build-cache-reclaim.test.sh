@@ -1626,6 +1626,9 @@ ct_reset() {
 # ...and a digest of the wrong length must not be either, though this one exists and is old.
 { mkdir -p "${ct_store}/snapshots/abcdef" && touch -t 202001010000 "${ct_store}/snapshots/abcdef"; } ||
   fail 'fixture: short digest dir'
+# ...nor one of the right length that is not hexadecimal.
+{ mkdir -p "${ct_store}/snapshots/gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg" &&
+  touch -t 202001010000 "${ct_store}/snapshots/gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"; } || fail 'fixture: non-hex digest dir'
 
 run_container() {
   BUILD_CACHE_RECLAIM_CONTAINER_CLI="${CT_CLI:-${ct_root}/bin/container}" \
@@ -1760,13 +1763,14 @@ grep -qF 'lists nothing in a store of 5120 MB' <<<"$out" ||
 
 # 22i. images that cannot be classified are kept and reported; the removable one still goes.
 ct_reset
-printf '[%s,%s,%s,%s,%s,%s]\n' \
+printf '[%s,%s,%s,%s,%s,%s,%s]\n' \
   "$(ct_image registry.test/old-unused:1 sha256:d1 "sha256:$(ct_hex 1)")" \
   "$(ct_image --all sha256:d6 "sha256:$(ct_hex 6)")" \
   "$(ct_image 'registry.test/has space:1' sha256:d6 "sha256:$(ct_hex 6)")" \
   "$(ct_image 'registry.test/semi;colon:1' sha256:d6 "sha256:$(ct_hex 6)")" \
   "$(ct_image registry.test/odd-variant:1 sha256:d8 'sha256:../../escape')" \
   "$(ct_image registry.test/short-variant:1 sha256:d8 sha256:abcdef)" \
+  "$(ct_image registry.test/non-hex-variant:1 sha256:d8 sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg)" \
   > "${ct_state}/images.json"
 out=$(run_container apply 3 "$NEVER_CLEAN_BUDGET")
 rc=$?
@@ -1779,7 +1783,9 @@ grep -qF 'KEEP  (age unknown)   container image registry.test/odd-variant:1' <<<
   fail '22i: an image whose variant is not a plain digest was not kept'
 grep -qF 'KEEP  (age unknown)   container image registry.test/short-variant:1' <<<"$out" ||
   fail '22i: an image whose variant digest has the wrong length was not kept'
-grep -qF 'UNKNOWN: CONTAINER_IMAGES 5 image(s) could not be classified' <<<"$out" ||
+grep -qF 'KEEP  (age unknown)   container image registry.test/non-hex-variant:1' <<<"$out" ||
+  fail '22i: an image whose variant digest is not hexadecimal was not kept'
+grep -qF 'UNKNOWN: CONTAINER_IMAGES 6 image(s) could not be classified' <<<"$out" ||
   fail '22i: unclassifiable images were not reported UNKNOWN'
 
 # 22j. a store whose unpacked images cannot be found is UNKNOWN, not "nothing old enough".
