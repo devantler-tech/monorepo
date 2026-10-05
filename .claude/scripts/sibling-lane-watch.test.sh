@@ -157,8 +157,12 @@ liveness 1 "$DOWN_NO_SESSION"
 check "the count starts again after the quota slot" 0 "verdict=WATCHING lane=claude observations=1/3" $((28 * SLOT))
 # ...but an outage he was already told about stays recorded through a usage limit.
 check "second slot again" 0 "observations=2/3" $((29 * SLOT))
-watch $((30 * SLOT)) >/dev/null || true
-check "the send is recorded" 0 "verdict=ALREADY-NOTIFIED" $((30 * SLOT + 60)) --mark-notified
+check "third slot pages" 1 "verdict=ESCALATE" $((30 * SLOT))
+# A quota-only look between the page and its record must not drop the claim: the send could then
+# not be recorded, and the same outage would page again.
+liveness 1 "$DOWN_QUOTA"
+check "a quota look while the page is claimed" 0 "verdict=KNOWN-RESET lane=claude observations=3/3" $((30 * SLOT + 30))
+check "the send is still recorded" 0 "verdict=ALREADY-NOTIFIED" $((30 * SLOT + 60)) --mark-notified
 liveness 1 "$DOWN_QUOTA"
 check "a quota slot after the page" 0 "verdict=KNOWN-RESET" $((31 * SLOT))
 state_has "a quota slot keeps a notified outage" '.notified_epoch > 0'

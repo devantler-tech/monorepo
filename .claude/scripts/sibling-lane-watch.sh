@@ -36,9 +36,10 @@
 #   - The sibling's twice-daily task. Its verdict stands for twelve hours, which says nothing about
 #     three hourly slots.
 #
-# READ-ONLY toward both runtimes. The only files it writes are its own state file and that file's
-# lock directory. The state holds a lane name, a count, a slot number and three timestamps — nothing
-# from a transcript or a store. It prints only that same summary, never the liveness report itself,
+# READ-ONLY toward both runtimes. Everything it writes sits beside its own state file: the file, its
+# `.lock` and `.reap` directories, and a `.corrupt` copy of a state file it had to set aside. The
+# state holds a lane name, a count, a slot number and three timestamps — nothing from a transcript
+# or a store. It prints only that same summary, never the liveness report itself,
 # so its output is safe to quote in a run report.
 #
 # Usage: sibling-lane-watch.sh --lane <claude|codex> [--state-file PATH] [--threshold N]
@@ -328,8 +329,9 @@ read_state
 other_lines="$(printf '%s\n' "$down_lines" | grep -vF 'cause=quota/billing' || true)"
 if [ -z "$other_lines" ]; then
   # The lane is down for a reason that is not this watch's business, so what follows is a different
-  # outage: a count nobody was paged for ends here. An outage he WAS told about stays recorded.
-  if [ "$observations" -gt 0 ] && [ "$notified" -eq 0 ]; then
+  # outage: a count nobody was paged for ends here. An outage he WAS told about stays recorded, and
+  # so does one whose page has been handed to a run that still has to record the send.
+  if [ "$observations" -gt 0 ] && [ "$notified" -eq 0 ] && [ "$claimed" -eq 0 ]; then
     rm -f "$STATE_FILE" 2>/dev/null || unknown "cannot clear the state file: $STATE_FILE"
     observations=0
     first_seen=0
