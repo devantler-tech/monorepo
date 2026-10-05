@@ -26,7 +26,8 @@
 #   - A lane that recovers inside the threshold. One or two bad slots are ordinary.
 #   - An outage whose every NOT-PRODUCING line carries cause=quota/billing. A usage limit has a known
 #     reset and the maintainer cannot shorten it (monorepo#3623), so it is reported as KNOWN-RESET and
-#     neither counts toward the threshold nor erases a count (a count simply does not continue #     across it).
+#     neither counts toward the threshold nor erases a count; a count just does not continue
+#     across it.
 #   - An UNKNOWN liveness verdict. "Could not check" is never "down", and it is never "alive" either:
 #     it leaves the count where it was and exits 2.
 #   - The sibling's twice-daily task. Its verdict stands for twelve hours, which says nothing about
