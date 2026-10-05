@@ -173,7 +173,7 @@ top-down every run and **keep going while actionable work remains** — the floo
 shipped artifact, never a ceiling. **Finish before you start**: drive in-flight PRs to a terminal
 state before opening new ones. Never time anything off "the next tick": the Claude scheduler drops
 overlapping dispatches. Per product, strategy/docs reviews run weekly to monthly; E2E, reliability
-and cost reviews weekly; blog reviews monthly. Autonomous cluster trials run at most once/day.
+and cost reviews weekly; blog reviews monthly. Autonomous real-cluster trials run at most once/day.
 Maintainer-requested trials follow
 [Temporary engineering costs](.claude/guides/spend-and-inference.md#temporary-engineering-costs).
 Draft intake is capped:
