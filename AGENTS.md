@@ -136,9 +136,8 @@ The plugin's agents and skills fail closed unless these named sections resolve:
 ### Trust gate — who may be auto-driven / pushed-to / have branch code run
 
 - **Trusted authors, exact login match only:** `devantler`, `ksail-bot[bot]`, `dependabot[bot]`,
-  `github-actions[bot]`, `renovate[bot]`. Agent work also needs the registered instance's exact
-  identity and namespace from the [instance registry](.claude/plugin-consumption/agent-instances.json).
-  The KSail bot's account and App binding is defined in the [trust guide](.claude/guides/trust-and-input.md).
+  `github-actions[bot]`, `renovate[bot]`. Agent work needs the exact registered identity and namespace
+  ([instance registry](.claude/plugin-consumption/agent-instances.json)).
 - **Trust gates execution, not merge.** Never check out, build, test or run an untrusted
   author's branch — external contributors, the Copilot coding agent (`Copilot`,
   `copilot-swe-agent[bot]`), `cursor[bot]`. Review their PRs statically, let CI be the execution
