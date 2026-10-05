@@ -1397,34 +1397,54 @@ container_unknown() {
   log "UNKNOWN: CONTAINER_IMAGES $*"
 }
 
+# container_cli runs the runtime with no stdin. Most calls sit inside a loop that reads its
+# rows from stdin, and a CLI that prompted would swallow the rest of them.
+container_cli() {
+  "$CONTAINER_CLI" "$@" </dev/null 2>/dev/null
+}
+
 # container_image_usage prints "<size-bytes> <unused-bytes>" for the image store.
 container_image_usage() {
   local json
-  json=$("$CONTAINER_CLI" system df --format json 2>/dev/null) || return 1
+  json=$(container_cli system df --format json) || return 1
   jq -er '
     [.images.sizeInBytes, .images.reclaimable] as $v
     | if ($v | all(type == "number" and . >= 0 and . == floor)) then "\($v[0]) \($v[1])"
       else error("image usage is not two whole numbers") end' <<<"$json" 2>/dev/null
 }
 
-# container_list prints every container, running or stopped, as JSON.
+# container_list prints every container, running or stopped, as JSON -- but only when each
+# one names the image it was created from in the shape this sweep compares against. A
+# container that does not is not "created from nothing": its image is unknown, and a list
+# holding one cannot show any image to be unused.
 container_list() {
   local json
-  json=$("$CONTAINER_CLI" list --all --format json 2>/dev/null) || return 1
-  jq -e 'type == "array"' >/dev/null 2>&1 <<<"$json" || return 1
+  json=$(container_cli list --all --format json) || return 1
+  jq -e '
+    type == "array" and all(.[];
+      (.configuration.image.reference | type == "string" and length > 0)
+      and (.configuration.image.descriptor.digest | type == "string" and startswith("sha256:")))' \
+    >/dev/null 2>&1 <<<"$json" || return 1
   printf '%s' "$json"
 }
 
 # container_image_in_use reports whether any container, running or stopped, was created from
 # the image: 0 in use, 1 not in use, 2 could not tell. A stopped container still needs its
-# image to start again, so it counts. The list is read fresh on every call, immediately
+# image to start again, so it counts. A container matches by the image's name, by its digest,
+# or by the digest of any of its variants. The list is read fresh on every call, immediately
 # before the image it guards is removed.
 container_image_in_use() {
-  local name=$1 digest=$2 json
+  local name=$1 digest=$2 variants=$3 json
+  case "$digest" in
+    sha256:?*) ;;
+    *) return 2 ;;
+  esac
   json=$(container_list) || return 2
-  jq -e --arg name "$name" --arg digest "$digest" '
-    any(.[]; (.configuration.image.reference == $name)
-      or (.configuration.image.descriptor.digest == $digest))' >/dev/null 2>&1 <<<"$json"
+  jq -e --arg name "$name" --arg digest "$digest" --arg variants "$variants" '
+    ($variants | split(",") | map("sha256:" + .)) as $v
+    | any(.[]; .configuration.image as $i
+        | ($i.reference == $name) or ($i.descriptor.digest == $digest)
+          or ($v | index($i.descriptor.digest) != null))' >/dev/null 2>&1 <<<"$json"
   case $? in
     0) return 0 ;;
     1) return 1 ;;
@@ -1432,23 +1452,23 @@ container_image_in_use() {
   esac
 }
 
-# container_image_old reports whether every unpacked variant of an image is older than the
-# threshold: 0 old, 1 young, 2 could not tell. An image with no unpacked variant on disk
-# cannot be aged, and one whose variant list is not plain digests cannot be trusted as a
-# path, so both keep the image.
+# container_image_old reports the age of an image's unpacked variants: 0 every one is older
+# than the threshold, 1 one is younger, 2 none is unpacked on disk, 3 could not tell. A
+# variant list that is not plain digests cannot be trusted as a path, and is refused whole
+# before it is split, so nothing in it can expand as a pattern.
 container_image_old() {
   local variants=$1 hex dir found=0 old
+  case "$variants" in
+    '' | *[!0-9a-f,]*) return 3 ;;
+  esac
   local IFS=,
   for hex in $variants; do
-    case "$hex" in
-      '' | *[!0-9a-f]*) return 2 ;;
-    esac
-    [ "${#hex}" -eq 64 ] || return 2
+    [ "${#hex}" -eq 64 ] || return 3
     dir="${CONTAINER_STORE}/snapshots/${hex}"
     [ -d "$dir" ] || continue
     found=1
     old=$(find "$dir" -maxdepth 0 -mmin "+$((CONTAINER_IMAGE_MIN_AGE_HOURS * 60))" 2>/dev/null) ||
-      return 2
+      return 3
     [ -n "$old" ] || return 1
   done
   [ "$found" -eq 1 ] || return 2
@@ -1459,6 +1479,7 @@ container_image_old() {
 # unpacked variants that no earlier call counted. Two references to one image share its
 # variants, so each is counted once across the sweep. It sets a variable instead of printing,
 # because the running list of counted variants would not survive a command substitution.
+# It is only called with a variant list container_image_old accepted.
 CONTAINER_COUNTED=,
 CONTAINER_ESTIMATE_MB=0
 container_image_estimate() {
@@ -1480,26 +1501,39 @@ container_image_estimate() {
 # report_long_running_containers names containers that have run longer than the threshold.
 # It never stops one: a cluster somebody is using must not be ended by a cache sweep, and
 # nothing here can tell an abandoned throwaway from a cluster in use. The line exists so the
-# lane that started it can decide.
+# lane that started it can decide. A running container whose start time cannot be read is
+# named too, because it cannot be shown to be recent.
 report_long_running_containers() {
-  local json rows id started
-  if ! json=$(container_list) || ! rows=$(jq -er --argjson hours "$CONTAINER_LONG_RUN_HOURS" '
-      .[]
-      | select(.status.state == "running")
-      | (.status.startedDate | if type == "string" then (try fromdateiso8601 catch null) else null end) as $t
-      | select($t != null and (now - $t) > ($hours * 3600))
-      | [(.configuration.id | tostring), .status.startedDate] | @tsv' <<<"$json" 2>/dev/null); then
-    # jq -e exits 4 when nothing matched, which is the ordinary "none" answer.
-    [ -n "${json:-}" ] && jq -e 'type == "array"' >/dev/null 2>&1 <<<"$json" && return 0
+  local json rows rc id started
+  if ! json=$(container_list); then
     container_unknown "container list could not be read — long-running containers not reported"
     return 0
   fi
+  rows=$(jq -r --argjson hours "$CONTAINER_LONG_RUN_HOURS" '
+      .[]
+      | select(.status.state == "running")
+      | (.status.startedDate
+          | if type == "string" then (try (sub("\\.[0-9]+"; "") | fromdateiso8601) catch null)
+            else null end) as $t
+      | select($t == null or (now - $t) > ($hours * 3600))
+      | [(.configuration.id | tostring), (if $t == null then "unreadable" else .status.startedDate end)]
+      | @tsv' <<<"$json" 2>/dev/null)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    container_unknown "container list could not be interpreted — long-running containers not reported"
+    return 0
+  fi
+  [ -n "$rows" ] || return 0
   while IFS=$'\t' read -r id started; do
     [ -n "$id" ] || continue
     case "$id" in
       *[!A-Za-z0-9_.-]*) id='<unprintable id>' ;;
     esac
     case "$started" in
+      unreadable)
+        log "NOTE  container ${id} running, start time unreadable — left running; the lane that started it decides"
+        continue
+        ;;
       *[!0-9TZ:.+-]*) started='<unprintable time>' ;;
     esac
     log "NOTE  container ${id} running since ${started} (over ${CONTAINER_LONG_RUN_HOURS}h) — left running; the lane that started it decides"
@@ -1509,7 +1543,7 @@ report_long_running_containers() {
 reclaim_container_images() {
   local label=CONTAINER_IMAGES usage size_b unused_b size_mb_before budget_mb images rows
   local name digest variants est_mb after after_b freed_mb verdict
-  local would=0 deleted=0
+  local would=0 deleted=0 unclassified=0
 
   if [ "$CONTAINER_CLI" = off ]; then
     log "${label} disabled — nothing to reclaim"
@@ -1550,18 +1584,23 @@ reclaim_container_images() {
     return 0
   fi
 
-  if ! images=$("$CONTAINER_CLI" image list --format json 2>/dev/null) ||
+  # Without the unpacked variants no image can be aged, and "nothing was old enough" would
+  # then be said of a store this sweep could not see into.
+  if [ ! -d "${CONTAINER_STORE}/snapshots" ]; then
+    container_unknown "the store's unpacked images were not found under ${CONTAINER_STORE} — nothing removed"
+    return 0
+  fi
+
+  if ! images=$(container_cli image list --format json) ||
     ! rows=$(jq -er '
       if type != "array" then error("image list is not an array") else .[] end
       | [(.configuration.name // "-" | tostring | if . == "" then "-" else . end),
          (.configuration.descriptor.digest // "-" | tostring | if . == "" then "-" else . end),
          ([.variants[]?.digest | tostring | ltrimstr("sha256:")] | join(",") | if . == "" then "-" else . end)]
       | @tsv' <<<"$images" 2>/dev/null); then
-    if [ -n "${images:-}" ] && jq -e 'type == "array" and length == 0' >/dev/null 2>&1 <<<"$images"; then
-      log "${label} no images listed — nothing to remove"
-      return 0
-    fi
-    container_unknown "image list could not be read — nothing removed"
+    # An empty list is not a clean answer here: the store has just measured over budget, so
+    # the two reads disagree and neither can be trusted.
+    container_unknown "image list could not be read, or lists nothing in a store of ${size_mb_before} MB — nothing removed"
     return 0
   fi
 
@@ -1571,6 +1610,7 @@ reclaim_container_images() {
     case "$name" in
       - | -* | *[!A-Za-z0-9_./:@-]*)
         kept=$((kept + 1))
+        unclassified=$((unclassified + 1))
         log "KEEP  (unreadable name) container image"
         continue
         ;;
@@ -1583,13 +1623,19 @@ reclaim_container_images() {
         log "KEEP  (unpacked within ${CONTAINER_IMAGE_MIN_AGE_HOURS}h) container image ${name}"
         continue
         ;;
+      2)
+        kept=$((kept + 1))
+        log "KEEP  (not unpacked)  container image ${name}"
+        continue
+        ;;
       *)
         kept=$((kept + 1))
+        unclassified=$((unclassified + 1))
         log "KEEP  (age unknown)   container image ${name}"
         continue
         ;;
     esac
-    container_image_in_use "$name" "$digest"
+    container_image_in_use "$name" "$digest" "$variants"
     verdict=$?
     if [ "$verdict" -eq 0 ]; then
       kept=$((kept + 1))
@@ -1597,6 +1643,7 @@ reclaim_container_images() {
       continue
     elif [ "$verdict" -ne 1 ]; then
       kept=$((kept + 1))
+      unclassified=$((unclassified + 1))
       log "KEEP  (use unknown)   container image ${name}"
       continue
     fi
@@ -1611,7 +1658,7 @@ reclaim_container_images() {
       continue
     fi
 
-    if "$CONTAINER_CLI" image delete "$name" >/dev/null 2>&1; then
+    if container_cli image delete "$name" >/dev/null; then
       removed=$((removed + 1))
       deleted=$((deleted + 1))
       log "REMOVE  container image ${name}"
@@ -1621,12 +1668,17 @@ reclaim_container_images() {
     fi
   done <<<"$rows"
 
+  # One UNKNOWN for the sweep, however many images it covers: each is already named above.
+  if [ "$unclassified" -gt 0 ]; then
+    container_unknown "${unclassified} image(s) could not be classified and were kept"
+  fi
+
   if [ "$MODE" != apply ]; then
     log "${label} would remove ${would} image reference(s) (over budget)"
     return 0
   fi
   [ "$deleted" -gt 0 ] || {
-    log "${label} over budget, but no image was both old and unused — nothing removed"
+    log "${label} over budget, but no image was removed"
     return 0
   }
   # Judge the result by what the store reports afterwards, not by the delete calls: two
