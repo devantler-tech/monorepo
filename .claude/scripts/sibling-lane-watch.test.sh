@@ -34,6 +34,7 @@ cat > "$FIX/bin/claude-lane-liveness.sh" <<EOF
 printf '%s\n' "\$*" > "$FIX/liveness.args"
 # The verdict is read BEFORE the delay, so a case can change it for the next run meanwhile.
 out=\$(cat "$FIX/liveness.out"); rc=\$(cat "$FIX/liveness.rc")
+: > "$FIX/liveness.read"
 [ ! -f "$FIX/liveness.sleep" ] || sleep "\$(cat "$FIX/liveness.sleep")"
 printf '%s\n' "\$out"
 exit "\$rc"
@@ -243,18 +244,39 @@ watch 0 >/dev/null; watch $SLOT >/dev/null
 check "marking a send before any ESCALATE is UNKNOWN" 2 "verdict=UNKNOWN" $((SLOT + 60)) --mark-notified
 state_has "a refused mark records nothing" '.notified_epoch == 0'
 
+# start_slow <now-offset> — start a run in the background whose check is delayed, and return only
+# once that check has read its verdict, so what the case does next cannot race it.
+start_slow() {
+  local n=0
+  rm -f "$FIX/liveness.read" "$FIX/slow.out" "$FIX/slow.rc"
+  (rc=0; watch "$1" > "$FIX/slow.out" || rc=$?; echo "$rc" > "$FIX/slow.rc") &
+  slow_pid=$!
+  until [ -e "$FIX/liveness.read" ]; do
+    n=$((n + 1))
+    if [ "$n" -ge 100 ]; then bad "the slow run never reached its check"; return 0; fi
+    sleep 0.1
+  done
+}
+# slow_was <name> <want-rc> <want-stdout-substring> — wait for that run and judge what it reported
+slow_was() {
+  wait "$slow_pid" || true
+  if [ "$(cat "$FIX/slow.rc" 2>/dev/null)" = "$2" ] && grep -qF -- "$3" "$FIX/slow.out"; then
+    ok
+  else
+    bad "$1 (rc=$(cat "$FIX/slow.rc" 2>/dev/null), wanted rc=$2 '$3': $(cat "$FIX/slow.out" 2>/dev/null))"
+  fi
+}
+
 # --- two runs at once ----------------------------------------------------------------------------
 # A slow check holds a run between its start and its state update. A --mark-notified that lands in
 # that gap must survive it. The slow run is in a new slot, so it does write the state back.
 reset; liveness 1 "$DOWN_NO_SESSION"
 watch 0 >/dev/null; watch $SLOT >/dev/null; watch $((2 * SLOT)) >/dev/null || true
 echo 2 > "$FIX/liveness.sleep"
-watch $((2 * SLOT + 3100)) >/dev/null 2>&1 &
-slow_pid=$!
-sleep 0.5
+start_slow $((2 * SLOT + 3100))
 rm -f "$FIX/liveness.sleep"
 check "a send is recorded while another run is mid-check" 0 "verdict=ALREADY-NOTIFIED" $((2 * SLOT + 3110)) --mark-notified
-wait "$slow_pid" || true
+slow_was "the slower run then sees the recorded send" 0 "verdict=ALREADY-NOTIFIED lane=claude observations=4/3"
 state_has "the slower run did not overwrite the recorded send" '.notified_epoch > 0'
 state_has "and the slower run still counted its own slot" ".observations == 4"
 check "and the outage is not paged again" 0 "verdict=ALREADY-NOTIFIED" $((4 * SLOT))
@@ -264,12 +286,10 @@ check "and the outage is not paged again" 0 "verdict=ALREADY-NOTIFIED" $((4 * SL
 reset; liveness 1 "$DOWN_NO_SESSION"
 watch 0 >/dev/null
 liveness 0 "$OK_LINE"; echo 2 > "$FIX/liveness.sleep"
-watch $SLOT >/dev/null 2>&1 &
-slow_pid=$!
-sleep 0.7
+start_slow $SLOT
 rm -f "$FIX/liveness.sleep"; liveness 1 "$DOWN_NO_SESSION"
 check "a bad slot is counted while a healthy verdict is still in flight" 0 "observations=2/3" $((SLOT + 5))
-wait "$slow_pid" || true
+slow_was "the slower run did report the lane healthy" 0 "verdict=OK"
 state_has "the slower healthy run did not clear the newer count" '.observations == 2'
 # With nothing newer in the way, the same healthy verdict does clear it.
 liveness 0 "$OK_LINE"
