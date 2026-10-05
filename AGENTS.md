@@ -172,9 +172,11 @@ Work [*The work-selection ladder*](#the-work-selection-ladder--one-ordering-chec
 top-down every run and **keep going while actionable work remains** — the floor is at least one
 shipped artifact, never a ceiling. **Finish before you start**: drive in-flight PRs to a terminal
 state before opening new ones. Never time anything off "the next tick": the Claude scheduler drops
-overlapping dispatches. Strategy reviews and docs passes run weekly to monthly per product, heavy tasks
-(E2E audits, live-cluster reliability, the cost pass) about weekly, blog review about monthly, and real
-clusters start at most once a day portfolio-wide. Draft intake is capped:
+overlapping dispatches. Per product, strategy/docs reviews run weekly to monthly; E2E, reliability
+and cost reviews weekly; blog reviews monthly. Autonomous real-cluster trials run at most once/day.
+Maintainer-requested trials follow
+[Temporary engineering costs](.claude/guides/spend-and-inference.md#temporary-engineering-costs).
+Draft intake is capped:
 
 | Bound | Rule |
 |---|---|
@@ -346,9 +348,8 @@ change updates both in one PR. A section cited as "AGENTS.md → *X*" resolves t
 | [durable-memory](.claude/guides/durable-memory.md) | Durable memory | reading or writing memory |
 | [worktree-isolation](.claude/worktree-isolation.md) | submodule isolation | repairing a submodule worktree |
 
-**Keep this file small:** every session pays for every byte, and Codex reads at most 32 KiB. A rule
-belongs here only if every session needs it; the rest goes in a guide or next to its code
-(`.claude/scripts/agent-instructions-layout-contract.test.sh` enforces this).
+**Keep this file small:** keep universal rules here and topic guidance in guides or beside the code.
+`.claude/scripts/agent-instructions-layout-contract.test.sh` enforces Codex's 32 KiB instruction limit.
 
 ## Maintenance
 

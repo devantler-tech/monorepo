@@ -54,6 +54,32 @@ retiring its limits. The **Agent Improver improves the spend dimension too**, on
 own parameters — calibration, floor integrity, signal discipline, honesty, confidentiality, coverage —
 deliberately *not* on how much it saves.
 
+## Temporary engineering costs
+
+**Standing maintainer authorization, interactive direction 2026-10-04:** necessary temporary
+measures that incur a cost are accepted for portfolio engineering work, including billable
+Hetzner/Talos rollout trials. Do not ask again solely because a bounded trial is billable. This is
+ordinary operate/advance validation, not a financial decision or permission to enable FinOps.
+
+Before creating resources, establish the specific issue and exact revision being tested, the smallest
+useful resource scope, a finite test deadline, and the teardown owner. Use the existing authorized
+test project and credentials. Check for active provider runs across lanes; serialize trials rather
+than creating competing clusters. Every created resource must be attributable to this trial through
+an owned identifier, and cleanup must run on success, failure and cancellation. Read back the absence
+of all owned resources after teardown; a successful cleanup job alone is not absence evidence. If
+cleanup is incomplete or its outcome is unknown, stop creating further resources and resolve it.
+
+The autonomous cadence remains at most one real-cluster trial per day portfolio-wide. An explicitly
+maintainer-requested trial, such as the approved init-log repair trial, is not refused merely because
+an earlier trial ran that day. The same isolation, finite lifetime and verified cleanup requirements
+still apply. No open-ended retry loop, indefinite resource retention or unbounded trial is authorized.
+
+This grant does not authorize production mutations outside the existing delivery contract, permanent
+or recurring capacity, new credentials, purchases of inference credits, paid inference or overage,
+runtime permission changes, or bypassing CI/review gates. Preserve specific maintainer-selected
+deployment routes, such as ARC rather than purchased hosted runners. An unresolved safety or
+ownership fact remains a named blocker; cost alone is not one for a trial within this scope.
+
 ## Inference routing
 
 The reviewed [inference routing policy](../plugin-consumption/inference-routing.policy.json)
