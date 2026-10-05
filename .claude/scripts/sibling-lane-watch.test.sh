@@ -336,6 +336,23 @@ state_has "a held lock leaves the count where it was" '.observations == 1'
 touch -t 202001010000 "$STATE.lock"
 check "a lock left by a dead run is taken over" 0 "observations=2/3" $SLOT
 if [ ! -e "$STATE.lock" ]; then ok; else bad "the lock was not released"; fi
+# Many waiters meeting one dead lock: exactly one of them may reap it, so the lock is never held
+# twice (which would page twice) and never left behind (which would blind the next runs).
+doubles=0; stranded=0; unpaged=0
+for _ in 1 2 3 4 5 6; do
+  reset; watch 0 >/dev/null; watch $SLOT >/dev/null
+  mkdir "$STATE.lock"; touch -t 202001010000 "$STATE.lock"
+  for k in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    (watch $((2 * SLOT + k)) > "$FIX/herd.$k" 2>&1 || true) &
+  done
+  wait
+  n=$(cat "$FIX"/herd.* | grep -c 'verdict=ESCALATE ' || true)
+  [ "$n" -le 1 ] || doubles=$((doubles + 1))
+  [ "$n" -ge 1 ] || unpaged=$((unpaged + 1))
+  if [ -e "$STATE.lock" ] || [ -e "$STATE.reap" ]; then stranded=$((stranded + 1)); fi
+  rm -f "$FIX"/herd.*
+done
+if [ "$doubles" -eq 0 ] && [ "$stranded" -eq 0 ] && [ "$unpaged" -eq 0 ]; then ok; else bad "twelve waiters on a dead lock, 6 rounds: $doubles paged twice, $stranded left a lock, $unpaged did not page"; fi
 
 reset; mkdir -p "$FIX/state"; chmod 500 "$FIX/state"
 if [ "$(id -u)" -ne 0 ]; then

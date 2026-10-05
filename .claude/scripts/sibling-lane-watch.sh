@@ -29,8 +29,8 @@
 #   - A lane that recovers inside the threshold. One or two bad slots are ordinary.
 #   - An outage whose every NOT-PRODUCING line carries cause=quota/billing. A usage limit has a known
 #     reset and the maintainer cannot shorten it (monorepo#3623), so it is reported as KNOWN-RESET and
-#     neither counts toward the threshold nor erases a count; a count just does not continue
-#     across it.
+#     neither counts toward the threshold nor erases a count: to the count it is
+#     a slot the watch did not observe.
 #   - An UNKNOWN liveness verdict. "Could not check" is never "down", and it is never "alive" either:
 #     it leaves the count where it was and exits 2.
 #   - The sibling's twice-daily task. Its verdict stands for twelve hours, which says nothing about
@@ -185,24 +185,29 @@ slot=$(((NOW_EPOCH - sibling_minute * 60) / 3600))
 # Every read-modify-write happens under one lock, taken AFTER the liveness call. That call takes
 # seconds, and a run holding state it read before the call would overwrite another run's
 # --mark-notified and page the same outage twice.
+is_stale() {
+  [ -n "$(find "$1" -maxdepth 0 -mmin "+${LOCK_STALE_MINUTES}" 2>/dev/null || true)" ]
+}
+
 lock_state() {
-  local dir taken tries=0
+  local dir reap_dir tries=0
   dir="$(dirname "$STATE_FILE")"
   mkdir -p "$dir" 2>/dev/null || unknown "cannot create the state directory: $dir"
   [ -w "$dir" ] || unknown "the state directory is not writable: $dir"
   lock_dir="${STATE_FILE}.lock"
+  reap_dir="${STATE_FILE}.reap"
   until mkdir "$lock_dir" 2>/dev/null; do
     # A lock older than any run of this script was left by one that died. Testing its age and then
-    # removing it are two steps, and between them another waiter can have replaced it with a live
-    # lock. So the lock is first RENAMED, which only one waiter can do and which keeps its age, and
-    # the age is judged again on what was actually taken: a live lock is put back.
-    if [ -n "$(find "$lock_dir" -maxdepth 0 -mmin "+${LOCK_STALE_MINUTES}" 2>/dev/null || true)" ]; then
-      taken="${lock_dir}.taken.$$"
-      if mv "$lock_dir" "$taken" 2>/dev/null; then
-        if [ -n "$(find "$taken" -maxdepth 0 -mmin "+${LOCK_STALE_MINUTES}" 2>/dev/null || true)" ] ||
-          ! mv "$taken" "$lock_dir" 2>/dev/null; then
-          rm -rf "$taken" 2>/dev/null || true
-        fi
+    # removing it are two steps, and between them another waiter can have removed it and a third
+    # run taken a live lock in its place. So only ONE waiter at a time may reap: the age test and the
+    # removal both happen under a second, short mutex, and nothing but a reaper ever removes a
+    # lock it does not hold. A reaper mutex left by a killed run ages out the same way.
+    if is_stale "$lock_dir"; then
+      if mkdir "$reap_dir" 2>/dev/null; then
+        if is_stale "$lock_dir"; then rmdir "$lock_dir" 2>/dev/null || true; fi
+        rmdir "$reap_dir" 2>/dev/null || true
+      elif is_stale "$reap_dir"; then
+        rmdir "$reap_dir" 2>/dev/null || true
       fi
     fi
     tries=$((tries + 1))
