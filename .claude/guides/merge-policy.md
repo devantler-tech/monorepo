@@ -581,6 +581,35 @@ thread, or any other gate above unmet (every precondition in this section still 
 external-contributor evaluation record included), and never on a merge-queue repository, where the
 queue owns the merge and `gh pr merge` only enqueues.
 
+🔴 **A PR in a GitHub-native stack has its own merge endpoint — the synchronous one refuses it**
+(#3587). Measured on `world-at-ruin#876` and `#879` (2026-09-25): both met every precondition, and
+`PUT …/pulls/<n>/merge` answered HTTP 403, *"Merging stacked PRs via this endpoint is not supported.
+Use the asynchronous merge endpoint instead."* That refusal **names its cause**, so it is neither a
+blocker to park on nor a maintainer gate. Request the merge on the endpoint it names, keeping the
+head pin:
+
+```sh
+gh api --method PUT repos/devantler-tech/<repo>/pulls/<n>/merge-async -f merge_method=squash -f merge_action=default -f sha=<headRefOid>
+```
+
+**The `202` it returns is an accepted request, never a merge.** It carries a request id; read the
+result with **one** call per read to `gh api repos/devantler-tech/<repo>/pulls/<n>/merge-async/<id>` — a
+watcher or a later read, never a foreground loop — and then confirm with the same `state` read every
+merge ends on. **A `pending` result is a request still running, never a refusal**: a stacked merge
+can take several minutes, so keep the request id, read the result again later, and diagnose nothing
+yet — a pending request is not the failed merge the exit-`0` rule below describes. Only a `failed` result names the unmet requirement and is diagnosed like any other refusal.
+**Merging a stacked PR also merges every PR below it in the stack**, so the named PR's gates are not
+enough: **every PR below the one being merged must meet the same gates** — the current-head pentad,
+the green review, the readiness conditions and, for an external author, the evaluation record —
+before the request is sent. One unready PR anywhere below parks the whole request on that PR, named;
+otherwise a single merge lands work nobody evaluated. Enumerate the stack from the named PR downward by
+following each PR's `baseRefName` to the PR whose head is that branch, until the base is the default
+branch; a stack you cannot enumerate completely is UNKNOWN and authorizes no merge. `sha` pins only
+the named PR's head, so re-read the head of every PR below it immediately before the request and
+stand down when one has moved since it was evaluated. Every other
+precondition in this section applies unchanged. This path is unmeasured on a merge-queue
+repository: there the queue still owns the merge, so enqueue as usual and diagnose any refusal.
+
 🔴 **A merge command's exit `0` is not a merge.** On platform#2704, `gh pr merge` exited `0`, printed
 nothing and did nothing, because required checks were missing (#2730). So the confirmation read below
 is part of every merge. Unless `state` reads `MERGED`, or the PR is in the merge queue on a
