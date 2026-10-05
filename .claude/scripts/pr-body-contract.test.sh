@@ -80,7 +80,7 @@ whole_contract="$("${repo_root}/.claude/scripts/contract-text.sh")" ||
 if grep -Fq 'Before every agent-authored PR creation or body edit' <<<"${whole_contract}"; then
   fail "the contract incorrectly applies the routine-role disclosure gate to interactive PRs"
 fi
-grep -Fq '`devantler-tech` PR, issue and comment with its disclosure line' "${root_contract}" ||
+grep -Fq "\`devantler-tech\` PR, issue and comment with its disclosure line" "${root_contract}" ||
   fail "the always-on convention does not scope the routine disclosure to devantler-tech artifacts"
 if grep -Fq 'a scheduled role begins every PR, issue and comment' "${root_contract}"; then
   fail "the always-on convention still imposes the suite disclosure on third-party artifacts"
