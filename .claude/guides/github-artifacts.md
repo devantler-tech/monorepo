@@ -48,7 +48,12 @@
   warning. Existing PRs authored by either routine role that fail this gate are
   body-hygiene work and are corrected before review, promotion, or merge. Interactive sessions still
   follow this section's PM-facing body shape and effective template, but keep only their interactive
-  marker and do not invoke a routine role or disclosure through this script.
+  marker and do not invoke a routine role or disclosure through this script. For `devantler-tech`
+  targets, `seed` prepends the routine-role disclosure and `check` enforces this suite's PM-facing
+  `Why`/`What` contract. For a qualifying third-party target, `seed` preserves its effective template
+  without adding suite attribution and `check` preserves its template headings without imposing the
+  suite disclosure or section names; the separately inspected target policy governs any attribution
+  or additional content it requires.
 - **Third-party upstream contributions — prove necessity, clear the professional boundary, and obey
   project policy** (maintainer direction, interactive session 2026-10-05). Public read-only source
   research needs no separate read approval when it meets the research exception in the privacy guide.

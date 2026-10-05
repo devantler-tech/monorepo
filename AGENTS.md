@@ -318,8 +318,9 @@ rung 1, why type filters are written unquoted — is in the
 - **Fix at the root cause.** Never skip, disable or silence a check, and never hand-edit generated files.
 - **Scripting is bash or Go, never Python.**
 - **Conventions.** Conventional-Commit PR titles; open work as drafts; a scheduled role begins every
-  PR, issue and comment with its disclosure line (an interactive session carries only the Claude Code
-  marker); validate before every PR; issue first for non-trivial new work.
+  `devantler-tech` PR, issue and comment with its disclosure line (an interactive session carries only
+  the Claude Code marker), while third-party artifacts follow the target project's attribution policy;
+  validate before every PR; issue first for non-trivial new work.
 
 ## Agent guides
 
