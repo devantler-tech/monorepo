@@ -67,11 +67,11 @@ has 'gh api repos/devantler-tech/<repo>/pulls/<n>/merge-async/<id>' ||
   fail "Merge policy must prescribe the read of the asynchronous merge's result"
 has 'is an accepted request, never a merge' ||
   fail "Merge policy must say the 202 is not a merge, so the result and state are still read"
-has 'result is a request still running, never a refusal' ||
+has 'A `pending` result is a request still running, never a refusal' ||
   fail "Merge policy must keep a pending asynchronous merge distinct from a failed one"
 has 'every PR below the one being merged must meet the same gates' ||
   fail "Merge policy must require the gates on every PR below the one merged in a stack"
-has 'a stack you cannot enumerate completely is UNKNOWN' ||
+has 'a stack you cannot enumerate completely is UNKNOWN and authorizes no merge' ||
   fail "Merge policy must fail closed when the stack cannot be enumerated"
 
 # 5. Negative control across every definition surface: each prescribed PUT merge is pinned.

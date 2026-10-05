@@ -593,11 +593,11 @@ gh api --method PUT repos/devantler-tech/<repo>/pulls/<n>/merge-async -f merge_m
 ```
 
 **The `202` it returns is an accepted request, never a merge.** It carries a request id; read the
-result with **one** call to `gh api repos/devantler-tech/<repo>/pulls/<n>/merge-async/<id>` — a
+result with **one** call per read to `gh api repos/devantler-tech/<repo>/pulls/<n>/merge-async/<id>` — a
 watcher or a later read, never a foreground loop — and then confirm with the same `state` read every
 merge ends on. **A `pending` result is a request still running, never a refusal**: a stacked merge
 can take several minutes, so keep the request id, read the result again later, and diagnose nothing
-yet. Only a `failed` result names the unmet requirement and is diagnosed like any other refusal.
+yet — a pending request is not the failed merge the exit-`0` rule below describes. Only a `failed` result names the unmet requirement and is diagnosed like any other refusal.
 **Merging a stacked PR also merges every PR below it in the stack**, so the named PR's gates are not
 enough: **every PR below the one being merged must meet the same gates** — the current-head pentad,
 the green review, the readiness conditions and, for an external author, the evaluation record —
