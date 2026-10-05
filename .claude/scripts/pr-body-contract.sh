@@ -101,12 +101,8 @@ case "${role}" in
   *) fail "unsupported --role: ${role}" ;;
 esac
 
-portfolio_repo=0
-case "${repo}" in
-  devantler-tech/*) portfolio_repo=1 ;;
-esac
-
 work_dir="$(mktemp -d)"
+canonical_repo=""
 # Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
 # cleanup then becomes the script's status. Completion is recorded explicitly, so reaching a
 # verdict is the only way a zero status leaves this script; an abort reports UNKNOWN (monorepo#3414).
@@ -268,10 +264,14 @@ resolve_template() {
   local directory
   local error_file="${work_dir}/gh-api-error"
 
-  if ! gh api "repos/${target_repo}" --jq '.full_name' \
-    >/dev/null 2>"${error_file}"; then
+  if ! canonical_repo="$(gh api "repos/${target_repo}" --jq '.full_name' \
+    2>"${error_file}")"; then
     fail "target repository is not accessible: ${target_repo}"
   fi
+  case "${canonical_repo}" in
+    */*) ;;
+    *) fail "target repository returned an invalid canonical name: ${target_repo}" ;;
+  esac
 
   for directory in '.github' '.' 'docs'; do
     if find_template_path "${target_repo}" "${directory}"; then
@@ -1068,6 +1068,10 @@ validate_body() {
 
 template_file="${work_dir}/template.md"
 resolve_template "${repo}" "${template_file}"
+portfolio_repo=0
+case "${canonical_repo}" in
+  devantler-tech/*) portfolio_repo=1 ;;
+esac
 if [ "${portfolio_repo}" -eq 1 ]; then
   validate_template "${template_file}"
 fi
