@@ -126,7 +126,8 @@ report, so the line is safe to quote.
 
 - **Exit `0`: send nothing.** `OK` is a producing lane. `WATCHING` is an outage still inside the
   threshold. `KNOWN-RESET` is an outage whose only cause class is `quota/billing`: a usage limit
-  resets on its own and the maintainer cannot shorten it, so it never pages. `ESCALATION-CLAIMED`
+  resets on its own and the maintainer cannot shorten it, so it never pages, and it ends a count
+  nobody was paged for. `ESCALATION-CLAIMED`
   means another run was handed the page within the last hour. `ALREADY-NOTIFIED` is an outage he
   has been told about.
 - **Exit `1` together with `verdict=ESCALATE` on stdout: the lane was not producing in

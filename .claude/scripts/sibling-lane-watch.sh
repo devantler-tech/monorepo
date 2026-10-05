@@ -29,8 +29,8 @@
 #   - A lane that recovers inside the threshold. One or two bad slots are ordinary.
 #   - An outage whose every NOT-PRODUCING line carries cause=quota/billing. A usage limit has a known
 #     reset and the maintainer cannot shorten it (monorepo#3623), so it is reported as KNOWN-RESET and
-#     neither counts toward the threshold nor erases a count: to the count it is
-#     a slot the watch did not observe.
+#     never counts toward the threshold. It ends a count nobody was paged for, so bad slots before
+#     and after a usage limit are never added together.
 #   - An UNKNOWN liveness verdict. "Could not check" is never "down", and it is never "alive" either:
 #     it leaves the count where it was and exits 2.
 #   - The sibling's twice-daily task. Its verdict stands for twelve hours, which says nothing about
@@ -327,6 +327,13 @@ read_state
 
 other_lines="$(printf '%s\n' "$down_lines" | grep -vF 'cause=quota/billing' || true)"
 if [ -z "$other_lines" ]; then
+  # The lane is down for a reason that is not this watch's business, so what follows is a different
+  # outage: a count nobody was paged for ends here. An outage he WAS told about stays recorded.
+  if [ "$observations" -gt 0 ] && [ "$notified" -eq 0 ]; then
+    rm -f "$STATE_FILE" 2>/dev/null || unknown "cannot clear the state file: $STATE_FILE"
+    observations=0
+    first_seen=0
+  fi
   summary KNOWN-RESET quota/billing
   finish 0
 fi

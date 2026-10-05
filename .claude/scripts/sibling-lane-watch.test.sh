@@ -147,17 +147,23 @@ no_state "a quota-only outage must not start a count"
 # ...but one task down for another cause beside a quota refusal is not a known reset.
 liveness 1 "$DOWN_QUOTA" "$DOWN_NO_SESSION"
 check "a mixed outage counts" 0 "verdict=WATCHING lane=claude observations=1/3" $((25 * SLOT))
-# A quota observation neither advances nor clears the count it finds...
+# A quota-only slot ends a count nobody was paged for: bad slots on either side of a usage limit are
+# two outages, and adding them together would page after one look at the second.
+check "a mixed outage: second slot" 0 "observations=2/3" $((26 * SLOT))
 liveness 1 "$DOWN_QUOTA"
-check "a quota slot leaves the count alone" 0 "verdict=KNOWN-RESET" $((26 * SLOT))
-state_has "a quota slot writes nothing" '.observations == 1'
+check "a quota slot ends the count" 0 "verdict=KNOWN-RESET lane=claude observations=0/3" $((27 * SLOT))
+no_state "a quota slot must clear an unpaged count"
 liveness 1 "$DOWN_NO_SESSION"
-check "the count resumes after one quota slot" 0 "observations=2/3" $((27 * SLOT))
-# ...and a count does not outlive a longer usage limit.
+check "the count starts again after the quota slot" 0 "verdict=WATCHING lane=claude observations=1/3" $((28 * SLOT))
+# ...but an outage he was already told about stays recorded through a usage limit.
+check "second slot again" 0 "observations=2/3" $((29 * SLOT))
+watch $((30 * SLOT)) >/dev/null || true
+check "the send is recorded" 0 "verdict=ALREADY-NOTIFIED" $((30 * SLOT + 60)) --mark-notified
 liveness 1 "$DOWN_QUOTA"
-check "two quota slots" 0 "verdict=KNOWN-RESET" $((29 * SLOT))
+check "a quota slot after the page" 0 "verdict=KNOWN-RESET" $((31 * SLOT))
+state_has "a quota slot keeps a notified outage" '.notified_epoch > 0'
 liveness 1 "$DOWN_NO_SESSION"
-check "the count starts again after a longer usage limit" 0 "observations=1/3" $((30 * SLOT))
+check "and the outage is not paged again after it" 0 "verdict=ALREADY-NOTIFIED" $((32 * SLOT))
 # The quiet rule matches a literal the liveness checks print. Pin that both still print it.
 for live in claude codex; do
   if grep -qF 'quota/billing' "$SCRIPT_DIR/${live}-lane-liveness.sh"; then ok; else bad "${live}-lane-liveness.sh no longer names the quota/billing cause class"; fi
