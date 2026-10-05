@@ -28,6 +28,19 @@ fail() {
   exit 1
 }
 
+# Execution trust must use the verified bot account, not a similarly named user.
+# shellcheck disable=SC2016
+grep -Fq '**Trusted authors, exact login match only:** `devantler`, `ksail-bot[bot]`' "${repo_root}/AGENTS.md" ||
+  fail "root execution trust does not name the exact KSail bot login (monorepo#3845)"
+# shellcheck disable=SC2016
+for identity in 'GitHub App ID `2880167`' 'bot account ID `262010955`' 'GraphQL alias `app/ksail-bot`'; do
+  grep -Fq "${identity}" "${repo_root}/.claude/guides/trust-and-input.md" ||
+    fail "KSail execution trust is missing the verified ${identity} binding (monorepo#3845)"
+done
+# shellcheck disable=SC2016
+grep -Fq 'The bare login `ksail-bot` and lookalikes are not trusted.' "${repo_root}/.claude/guides/trust-and-input.md" ||
+  fail "KSail execution trust can admit a lookalike account (monorepo#3845)"
+
 if ! portfolio_surveyor_filter="$(\
   awk '
     /^            portfolio-surveyor:/ { inblock = 1; found_start = 1; next }
