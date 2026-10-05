@@ -492,7 +492,8 @@ skip CodeRabbit on that PR and go to the next lane.
 `.claude/scripts/silent-scheduled-workflows.sh` with one `--repo` per active repository (derive the
 list as the disclosure-drift sweep does, never from a literal list) and
 `--state-file "$HOME/.claude/silent-scheduled-workflows.state.tsv"`, where each sweep records the
-workflows it finds disabled so one switched back on is not reported before its first firing is due
+workflows it finds disabled so one switched back on is not reported before its first firing is due; if
+it reports that file unreadable or malformed, inspect it and remove it
 (monorepo#3671). The surveyor judges default-branch
 health only from runs at the current head, so a schedule that stopped firing is invisible to it; this
 reads each workflow's declared triggers and judges silence only where `schedule` can start a run, so a

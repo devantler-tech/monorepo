@@ -717,14 +717,38 @@ run --repo o/p --state-file "$state"
 [ "$rc" -eq 1 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "another workflow's sighting must not grant the grace, got $rc"; }
 has "$silent_edited" "a sighting is matched on the repository and the path together"
 # A state file that does not validate is UNKNOWN, grants nothing, and is left exactly as found.
-for bad in "o/p	${edited}" "o/p	${edited}	soon" "o/p	../../etc/passwd	$((now - h))" "o p	${edited}	$((now - h))"; do
-  { row o/p "$edited" "$((now - h))"; printf '%s\n' "$bad"; } >"$state"
+# That includes a sighting dated after the sweep, which would otherwise grant a grace that never ends,
+# and a line holding a NUL byte, which BSD grep does not select.
+for bad in "o/p	${edited}" "o/p	${edited}	soon" "o/p	../../etc/passwd	$((now - h))" "o p	${edited}	$((now - h))" \
+  "o/x	${edited}	$((now + 400 * d))" "o/x	${edited}	99999999999999999999999" "o/x	${edited}	$((now - h))\0000junk"; do
+  # shellcheck disable=SC2059 # the row is the format, so the NUL escape is written as a byte
+  { row o/p "$edited" "$((now - h))"; printf "${bad}\n"; } >"$state"
   cp "$state" "$tmp/before"
   run --repo o/p --state-file "$state"
   [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a malformed state row '$bad' must exit 2, got $rc"; }
   has "QUERY-UNKNOWN — state file unreadable or malformed; scanned without it" "a malformed state file must be named"
   has "$silent_edited" "a malformed state file must not grant the valid row's grace either"
   cmp -s "$tmp/before" "$state" || fail "a malformed state file must not be rewritten"
+done
+# End to end, on one state file: the sweep that sees the workflow disabled is what lets the next one,
+# which finds it active and silent, leave it alone. GitHub's own disable is recorded the same way.
+for was in disabled_manually disabled_inactivity; do
+  rm -f "$state"
+  put "repos/o/r" '{"default_branch":"main"}'
+  put "repos/o/r/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+    {\"id\":1,\"state\":\"${was}\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+  workflow_file o/r .github/workflows/daily.yaml "$daily"
+  runs o/r 1 1 "schedule:$((now - 40 * d))"
+  run --repo o/r --state-file "$state"
+  row o/r .github/workflows/daily.yaml "$now" | cmp -s - "$state" || { cat "$state" >&2; fail "a ${was} workflow must be recorded"; }
+  put "repos/o/r/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+    {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+  run --repo o/r --repo o/p --state-file "$state"
+  lacks "o/r .github/workflows/daily.yaml" "a workflow seen ${was} by the last sweep is not yet due once active"
+  has "$silent_edited" "one repository's sighting must not grace another repository in the same sweep"
+  run --repo o/r
+  has "SILENT-WORKFLOW o/r .github/workflows/daily.yaml — no scheduled run in the last 97h (its cron fires at least every 1d)" \
+    "without the sighting the re-enabled workflow is reported"
 done
 # A state path that is not a file is the same.
 mkdir "$tmp/statedir"

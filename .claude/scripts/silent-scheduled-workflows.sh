@@ -344,10 +344,16 @@ schedule_continuity() { # <repo> <path> <pinned head> <window start, ISO 8601> <
 state_row_re='^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+'$'\t''[.]github/workflows/[A-Za-z0-9._#-]+'$'\t''[0-9]+$'
 state_horizon=$((2 * (8 * 366 + 1) * day + hour))
 valid_state() { # <file>: every non-empty row has the three validated fields
-  # grep exits 1 only when it read the file and no row failed the pattern; 2 is a failed read.
   local rc=0
+  # BSD grep does not select a line holding a NUL byte, so such a line would pass unseen.
+  # shellcheck disable=SC2094 # both sides only read the file
+  LC_ALL=C tr -d '\000' <"$1" | cmp -s - "$1" || return 1
+  # grep exits 1 only when it read the file and no row failed the pattern; 2 is a failed read.
   grep -qvE "^\$|${state_row_re}" -- "$1" || rc=$?
-  [ "$rc" -eq 1 ]
+  [ "$rc" -eq 1 ] || return 1
+  # A sighting dated after this sweep would grant a grace that never runs out (a stepped clock, a
+  # hand edit). The hour allows for a sweep that started later and has already written.
+  awk -F'\t' -v latest="$((now + hour))" '$3 + 0 > latest { bad = 1 } END { exit bad }' "$1"
 }
 # Records that <repo> <path> is disabled now. A repository name the row format cannot hold is not
 # recorded, which only withholds a later grace.
@@ -361,8 +367,10 @@ last_seen_disabled() { # <repo> <path>
   [ "$state_mode" = on ] || { echo 0; return 0; }
   awk -F'\t' -v r="$1" -v p="$2" '$1 == r && $2 == p && $3 + 0 > m { m = $3 + 0 } END { printf "%d\n", m }' "$sightings"
 }
-# Merges this sweep's sightings into the state file. The file is read again here, so a sweep that
-# finished meanwhile keeps its rows, and replaced by rename, so a reader never sees half of it.
+# Merges this sweep's sightings into the state file. The file is read again here, so the rows of a
+# sweep that finished meanwhile are kept, and replaced by rename, so a reader never sees half of it.
+# Two sweeps that both read before either renames can still lose one's new sightings; no lock is
+# taken, because a lost sighting only withholds a grace and the workflow is seen again next sweep.
 write_state() {
   local dir merged
   dir="$(dirname -- "$state_file")"
