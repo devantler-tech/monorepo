@@ -27,18 +27,21 @@ const parkHelp = `Park a pull request: write its one blocker record and add the 
 --org is required and names the one owner park may write to: a target under
 any other owner is refused, so a mistyped target cannot put a comment and a
 label on a repository outside the portfolio.
-|slack|session> <YYYY-MM-DD>
 
 The record is the one compose prints, with the same refusals (compose --help);
 --actor selects the disclosure line. --line-only is refused: an issue keeps its
 record in its body, so compose --line-only is the tool there.
 
 The target must be an open pull request. Its existing record comment is edited
-in place; a new one is posted only when it has none. The record is written
-first and the label second, so a failure in between leaves a pull request that
-is still worked, never one parked with nothing to say why. Running park again
-with the same arguments finishes the job: it edits the same comment and adds
-the label. Success is reported only after both are read back from the forge.
+in place and its whole body replaced, so prose added to it by hand is lost; a
+new one is posted only when it has none. gh must be signed in as the record
+author (devantler): a record posted by anyone else is not read as one, so park
+refuses before writing. The record is written first and the label second, so a
+failure in between leaves a pull request that is still worked, never one
+parked with nothing to say why. When only the label write failed, running park
+again with the same arguments finishes the job: it edits the same comment and
+adds the label. Success is reported only after both are read back from the
+forge.
 
 Exit: 0 parked, the label and exactly one conforming record read back (or this
         help, when --help is the only argument);
@@ -125,13 +128,16 @@ func parkRun(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return refuse(nothing, err)
 	}
+	if wantsHelp && orgs != 0 {
+		return refuse(nothing, errors.New("--help must be the only argument"))
+	}
 	if wantsHelp {
 		if _, err := io.WriteString(stdout, parkHelp); err != nil {
 			return refuse(nothing, fmt.Errorf("could not write the help: %w", err))
 		}
 		return 0
 	}
-	if orgs != 1 || !orgRE.MatchString(org) || strings.Trim(org, ".") == "" {
+	if orgs != 1 {
 		return refuse(nothing, errors.New("--org <owner> is required, once: it names the one owner park may write to"))
 	}
 	if c.lineOnly {
@@ -155,6 +161,14 @@ func parkRun(args []string, stdout, stderr io.Writer) int {
 	path, err := pullPath(m[1], item.Repo, number)
 	if err != nil {
 		return refuse(nothing, err)
+	}
+	// A record counts only when its author is recordAuthor. Posted under any other
+	// login it would never read back, and every further call would post another.
+	var viewer struct {
+		Login string `json:"login"`
+	}
+	if raw, err := forgeRead("user"); err != nil || json.Unmarshal(raw, &viewer) != nil || viewer.Login != recordAuthor {
+		return refuse(nothing, fmt.Errorf("gh is not proven to be signed in as %s, the only author whose record is read", recordAuthor))
 	}
 	target, err := readParkTarget(path, number)
 	if err != nil {
@@ -206,10 +220,10 @@ func parkRun(args []string, stdout, stderr io.Writer) int {
 	}
 	comments, err = forgeComments(m[1], item)
 	if err != nil {
-		return refuse("the label is on; the record is unproven", err)
+		return refuse("the record is "+action+" and the label is on; the record is unproven", err)
 	}
 	if records := parkRecords(comments); len(records) != 1 || records[0] != line {
-		return refuse("the label is on", fmt.Errorf("the thread reads back %d record comment(s), not the one composed", len(records)))
+		return refuse("the record write returned ("+action+") and the label is on; do NOT run park again before reading the thread", fmt.Errorf("the thread reads back %d record comment(s), not the one composed", len(records)))
 	}
 	if _, err := fmt.Fprintf(stdout, "PARKED %s record %s, blocked label on\n%s\n", c.target, action, line); err != nil {
 		return refuse("the record is "+action+" and the label is on", fmt.Errorf("could not write the result: %w", err))

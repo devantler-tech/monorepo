@@ -141,7 +141,8 @@ Without one, every run re-derived the same diagnosis and posted it again: `platf
 **Park with one command, never two hand-made writes:**
 `.claude/scripts/blocked-label-blocker-line.sh park --org devantler-tech --target <owner/repo#N> --kind upstream --blocker <owner/repo#N> --result <text>`
 (`park --help` covers `authority`). It writes both halves and exits `0` only after reading both
-back; on any other exit its message says what was written, and running it again finishes the job.
+back; on any other exit its message says what, if anything, was written. When only the label
+write failed, running it again finishes the job; otherwise read the message before retrying.
 Done separately the two halves came apart: a label with no record is skipped by every lane for
 ever, and a record with no label is re-diagnosed every run (monorepo#3879). What it writes:
 
@@ -161,7 +162,8 @@ unfinished readiness work, never a blocker: drive them instead of parking on the
 comment without posting it.
 
 On every later run, **re-verify the blocker against live state and edit that comment in place**
-(`gh api -X PATCH repos/<owner>/<repo>/issues/comments/<id>`): update the date and result, or, when
+(run `park` again with today's result: it edits the one record and never posts a second):
+update the date and result, or, when
 the blocker has cleared, remove the label, delete the record comment and drive the PR (the check
 does not read an unlabelled PR, so a record left behind would be the stale one found if the label
 ever came back). Never post a second record or a new comment restating the blocker, and leave

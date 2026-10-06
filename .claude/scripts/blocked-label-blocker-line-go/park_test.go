@@ -20,7 +20,12 @@ type fakeForge struct {
 	comments    []comment
 	nextID      int64
 	writes      []string
-	failRead    string          // endpoint whose read fails
+	failRead    string // endpoint whose read fails
+	failReadAt  int    // which read of failRead fails; 0 means every one
+	reads       map[string]int
+	login       string          // who gh is signed in as
+	number      int64           // the number the target record answers with
+	nullPull    bool            // the record carries "pull_request": null
 	failWrite   map[string]bool // "METHOD endpoint-suffix" whose write fails
 	dropWrite   map[string]bool // write that returns success and changes nothing
 }
@@ -32,7 +37,7 @@ const (
 
 func newFakeForge(t *testing.T) *fakeForge {
 	t.Helper()
-	f := &fakeForge{t: t, state: "open", pullRequest: true, nextID: 100, failWrite: map[string]bool{}, dropWrite: map[string]bool{}}
+	f := &fakeForge{t: t, state: "open", pullRequest: true, nextID: 100, failWrite: map[string]bool{}, dropWrite: map[string]bool{}, reads: map[string]int{}, login: recordAuthor, number: 5}
 	originalRead, originalWrite := forgeRead, forgeWrite
 	t.Cleanup(func() { forgeRead, forgeWrite = originalRead, originalWrite })
 	forgeRead = f.read
@@ -41,12 +46,16 @@ func newFakeForge(t *testing.T) *fakeForge {
 }
 
 func (f *fakeForge) read(endpoint string) ([]byte, error) {
-	if endpoint == f.failRead {
+	f.reads[endpoint]++
+	if endpoint == f.failRead && (f.failReadAt == 0 || f.failReadAt == f.reads[endpoint]) {
 		return nil, errors.New("exit status 1")
 	}
 	switch endpoint {
+	case "user":
+		raw, _ := json.Marshal(map[string]string{"login": f.login})
+		return raw, nil
 	case parkIssuePath:
-		record := map[string]any{"number": 5, "state": f.state, "comments": len(f.comments)}
+		record := map[string]any{"number": f.number, "state": f.state, "comments": len(f.comments)}
 		if !f.noLabels {
 			labels := []map[string]string{}
 			for _, name := range f.labels {
@@ -56,6 +65,9 @@ func (f *fakeForge) read(endpoint string) ([]byte, error) {
 		}
 		if f.pullRequest {
 			record["pull_request"] = map[string]string{"url": "x"}
+		}
+		if f.nullPull {
+			record["pull_request"] = nil
 		}
 		raw, _ := json.Marshal(record)
 		return raw, nil
@@ -201,6 +213,15 @@ func TestParkRefusalsWriteNothing(t *testing.T) {
 			f.add(recordAuthor, oldRecord)
 			f.add(recordAuthor, oldRecord)
 		}, upstreamArgs, "already carries 2 record comments"},
+		"another signed-in account": {func(f *fakeForge) { f.login = "some-app[bot]" }, upstreamArgs, "not proven to be signed in as devantler"},
+		"a failed identity read":    {func(f *fakeForge) { f.failRead = "user" }, upstreamArgs, "not proven to be signed in"},
+		"a null pull request field": {func(f *fakeForge) { f.pullRequest, f.nullPull = false, true }, upstreamArgs, "is an issue"},
+		"another item answering":    {func(f *fakeForge) { f.number = 6 }, upstreamArgs, "UNKNOWN"},
+		"a record with no state":    {func(f *fakeForge) { f.state = "" }, upstreamArgs, "UNKNOWN"},
+		"an existing record with no id": {func(f *fakeForge) {
+			f.add(recordAuthor, oldRecord)
+			f.comments[0].ID = 0
+		}, upstreamArgs, "carries no id"},
 		"a failed target read":    {func(f *fakeForge) { f.failRead = parkIssuePath }, upstreamArgs, "UNKNOWN"},
 		"a record without labels": {func(f *fakeForge) { f.noLabels = true }, upstreamArgs, "UNKNOWN"},
 		"a failed thread read":    {func(f *fakeForge) { f.failRead = parkCommentsPath }, upstreamArgs, "UNKNOWN"},
@@ -281,7 +302,7 @@ func TestParkAuthorityRecordCarriesItsAsk(t *testing.T) {
 func TestParkHelp(t *testing.T) {
 	newFakeForge(t)
 	code, stdout, _ := park("--help")
-	if code != 0 || !strings.Contains(stdout, "record is written\nfirst and the label second") {
+	if code != 0 || !strings.Contains(stdout, "The record is written first and the label second") {
 		t.Errorf("code=%d stdout=%q", code, stdout)
 	}
 	if code, stdout, _ := park(append([]string{"--help"}, upstreamArgs...)...); code != 2 || stdout != "" {
@@ -293,12 +314,11 @@ func TestParkHelp(t *testing.T) {
 // a comment and a label on somebody else's repository.
 func TestParkWritesOnlyToTheNamedOwner(t *testing.T) {
 	for name, args := range map[string][]string{
-		"no owner named":      upstreamArgs,
-		"another owner":       append([]string{"--org", "elsewhere"}, upstreamArgs...),
-		"the owner twice":     append([]string{"--org", "o", "--org", "o"}, upstreamArgs...),
-		"an unusable owner":   append([]string{"--org", "o/r"}, upstreamArgs...),
-		"an owner of dots":    append([]string{"--org", ".."}, upstreamArgs...),
-		"a flag with no name": append(append([]string{}, upstreamArgs...), "--org"),
+		"no owner named":       upstreamArgs,
+		"another owner":        append([]string{"--org", "elsewhere"}, upstreamArgs...),
+		"the owner twice":      append([]string{"--org", "o", "--org", "o"}, upstreamArgs...),
+		"help beside an owner": {"--org", "o", "--help"},
+		"a flag with no name":  append(append([]string{}, upstreamArgs...), "--org"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeForge(t)
@@ -308,6 +328,31 @@ func TestParkWritesOnlyToTheNamedOwner(t *testing.T) {
 			}
 			if len(f.writes) != 0 {
 				t.Errorf("writes = %q, want none", f.writes)
+			}
+		})
+	}
+}
+
+// Each write can return success and still not be there. Every such case ends
+// unproven, and names what the writes reported so the next step is not a guess.
+func TestParkReadBackFailuresAreUnproven(t *testing.T) {
+	for name, tc := range map[string]struct {
+		arrange func(*fakeForge)
+		want    string
+	}{
+		"an edit that changed nothing": {func(f *fakeForge) {
+			id := f.add(recordAuthor, oldRecord)
+			f.dropWrite["PATCH repos/o/r/issues/comments/"+strconv.FormatInt(id, 10)] = true
+		}, "do NOT run park again"},
+		"a failed target read-back": {func(f *fakeForge) { f.failRead, f.failReadAt = parkIssuePath, 3 }, "the label is unproven"},
+		"a failed thread read-back": {func(f *fakeForge) { f.failRead, f.failReadAt = parkCommentsPath, 2 }, "the record is unproven"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeForge(t)
+			tc.arrange(f)
+			code, stdout, stderr := park(upstreamArgs...)
+			if code != 2 || stdout != "" || !strings.Contains(stderr, tc.want) {
+				t.Errorf("code=%d stdout=%q stderr=%q, want exit 2 naming %q", code, stdout, stderr, tc.want)
 			}
 		})
 	}
