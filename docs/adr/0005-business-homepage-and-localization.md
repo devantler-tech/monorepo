@@ -31,8 +31,13 @@ representation so visits to supporting pages retain the choice. System changes u
 page unless the visitor explicitly selects a theme; blocked storage does not prevent switching.
 The no-JavaScript layout follows the system theme and omits the inactive control.
 
+The opening section names the developer, shows the existing public profile photograph and links
+to his biography and public code. First-person copy and explicitly labelled family projects provide
+personal context without implying an agency team, paid client history or manufactured social proof.
+The same photograph is used for social sharing rather than the illustrated technical avatar.
+
 The build exercises both release states against emitted HTML. Checks cover language routes,
-starting prices, navigation, inquiry links, preserved supporting pages and absent unreleased
+starting prices, navigation, the developer's portrait and profile links, inquiry links, preserved supporting pages and absent unreleased
 markup. Controller tests cover saved choices, system changes and blocked storage. No application
 backend or new dependency is needed for the inquiry journey.
 

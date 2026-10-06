@@ -27,6 +27,11 @@ choice before painting, follows system changes in System mode, and shares Starli
 works for the current page. Without JavaScript, the page follows the system theme and hides the
 inactive selector. `scripts/theme.test.mjs` tests the actual controller as part of every build.
 
+The introduction identifies Nikolai with the existing public `profile.jpg` photograph, biography
+and GitHub links. First-person English/Danish copy explains the independent business without
+inventing client endorsements; the family projects remain labelled as such. The real photograph
+also supplies the sharing image. Built-page checks verify the portrait and profile journey.
+
 `FEATURE_BUSINESS_SITE` is a default-off release flag. `npm run build` verifies both states and
 leaves the selected build in `dist/`; `FEATURE_BUSINESS_SITE=true npm run build` previews the new
 experience. The off state renders the existing documentation homepage. Publication and flag
