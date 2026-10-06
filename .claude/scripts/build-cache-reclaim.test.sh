@@ -1851,7 +1851,7 @@ printf '%s\n' '00:05 /bin/sh' \
 b_ps="${fixture_root}/ps-browser"
 make_ps_stub "$b_ps" "$b_table" || fail 'fixture: browser ps stub'
 
-/bin/sh -c "exec 9<'${b_held}/b001/file'; exec sleep 600" &
+/bin/sh -c 'exec 9<"$1"; exec sleep 600' _ "${b_held}/b001/file" &
 b_holder=$!
 sleep 1
 kill -0 "$b_holder" 2>/dev/null ||
