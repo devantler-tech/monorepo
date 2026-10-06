@@ -723,6 +723,42 @@ origin_is_own() {
   fi
 }
 
+# The main checkout's repository for the submodule at path $1, when a fresh checkout in THIS linked
+# superproject worktree can borrow its objects; prints nothing otherwise (monorepo#3431).
+#
+# Every linked worktree clones each submodule it populates into its own admin directory, so one
+# large submodule is stored once per worktree: 42 private KSail copies held 34.5 GB on 2026-09-20.
+# `git submodule update --reference <store>` makes the new clone borrow the objects the main
+# checkout already has and fetch only what is missing (measured 740 MB down to 6.7 MB).
+#
+# A borrower breaks if the store ever deletes an object it relies on, so the caller sets the store
+# never to prune BEFORE borrowing, and borrows only when that setting took. Every "no" here is a
+# plain full clone, which is always safe: a main checkout (it IS the store), a submodule this
+# worktree has already cloned (git ignores --reference then), an ambiguous or unregistered path, a
+# store that is absent or unreadable, or SUBMODULE_INIT_NO_SHARED_STORE=1.
+shared_object_store() {
+  local path=$1 gitdir common rec rec_key rec_val name='' count=0 store
+  [ "${SUBMODULE_INIT_NO_SHARED_STORE:-}" != 1 ] || return 0
+  gitdir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 0
+  common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  [ -n "$gitdir" ] && [ -n "$common" ] && [ "$gitdir" != "$common" ] || return 0
+  while IFS= read -r -d '' rec; do
+    rec_key=${rec%%$'\n'*}
+    rec_val=${rec#*$'\n'}
+    if [ "$rec_val" = "$path" ]; then
+      name=${rec_key#submodule.}
+      name=${name%.path}
+      count=$((count + 1))
+    fi
+  done < <(git config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
+  [ "$count" -eq 1 ] && [ -n "$name" ] || return 0
+  [ ! -e "$gitdir/modules/$name" ] || return 0
+  store="$common/modules/$name"
+  [ -d "$store/objects" ] || return 0
+  git --git-dir="$store" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  printf '%s\n' "$store"
+}
+
 init_repair_probe() {
   local path=${1%/}
   # Only ever mutate config for a path git actually registers as a submodule. Handed a linked
@@ -751,7 +787,18 @@ init_repair_probe() {
     # `--checkout` overrides a configured `submodule.<name>.update` (which can name a shell command),
     # and no replace refs may substitute a different tree for the pinned commit. The path is a
     # literal pathspec: a registered name like `:(glob)*` would otherwise select other submodules.
-    GIT_NO_REPLACE_OBJECTS=1 git submodule update --init --checkout -- ":(literal)$path"
+    #
+    # Borrow the main checkout's objects when that is safe (see `shared_object_store`). The store is
+    # told never to prune first; if that cannot be written, clone in full instead of borrowing from a
+    # store that may later delete what this checkout needs.
+    local store reference=()
+    store=$(shared_object_store "$path") || store=''
+    if [ -n "$store" ] && git --git-dir="$store" config gc.pruneExpire never 2>/dev/null &&
+      [ "$(git --git-dir="$store" config --get gc.pruneExpire 2>/dev/null)" = never ]; then
+      reference=(--reference "$store")
+    fi
+    GIT_NO_REPLACE_OBJECTS=1 git submodule update --init --checkout \
+      ${reference[@]+"${reference[@]}"} -- ":(literal)$path"
     # It can exit 0 having populated NOTHING — observed 2026-07-26 running from a linked superproject
     # worktree while a sibling worktree already held that submodule: git printed `checked out '<sha>'`,
     # exited 0, and left the directory empty. `probe` below verifies ISOLATION, not content, so it
