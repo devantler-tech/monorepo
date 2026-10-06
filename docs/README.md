@@ -20,7 +20,7 @@ and `/da/` (Danish). Its offer amounts and translated copy live together in
 `src/components/business/content.ts`. Prices are introductory guides, not an automatic checkout:
 project scope, hosting capacity, external fees and support are agreed in a written proposal.
 
-The preview keeps the original green palette and locally served Matrix artwork. Its appearance
+The site keeps the original green palette and locally served Matrix artwork. Its appearance
 selector offers System, Light and Dark in both languages. The small head script applies the saved
 choice before painting, follows system changes in System mode, and shares Starlight's
 `starlight-theme` preference with supporting pages. If browser storage is blocked, switching still
@@ -40,29 +40,30 @@ Starlight component overrides. Their search, sidebar, RSS and historical article
 There is one appearance picker, including on mobile; the documentation header measures its height
 so the reading tools do not overlap the business navigation.
 
-`FEATURE_BUSINESS_SITE` is a default-off release flag. `npm run build` verifies both states and
-leaves the selected build in `dist/`; `FEATURE_BUSINESS_SITE=true npm run build` previews the new
-experience. The off state renders the existing documentation homepage. Publication and flag
-removal are tracked in [#3898](https://github.com/devantler-tech/monorepo/issues/3898).
+`npm run build` renders the business experience directly and verifies its English/Danish visitor
+journeys and supporting pages. The same command is used by CI and GitHub Pages publication.
+The business site has no release toggle; reverting the publication change and redeploying is the
+recovery path.
 
 The company contact email and CVR number are not known yet, so neither is invented or published.
-LinkedIn is the existing verified inquiry route. Confirm the registered name, CVR, public business
-address and email before publishing this commercial experience, in line with the
-[Danish Consumer Ombudsman's guidance](https://forbrugerombudsmanden.dk/alle-emner/anden-lovgivning/e-handelsloven).
+LinkedIn is the existing verified inquiry route. The maintainer has authorized publication with
+registration/contact details deferred to [#3917](https://github.com/devantler-tech/monorepo/issues/3917).
+That checklist covers the confirmed registered name, CVR, approved public business address and
+working email; publication does not claim verified statutory compliance.
 There is no contact-form backend, automatic booking,
 payment flow or paid product subscription. Home, About and Projects are translated; the journal,
 CV and detailed technical documentation remain in English and are labelled accordingly.
 
 ## CV download
 
-Both About experiences offer the CV as an A4 PDF at `/pdfs/nikolai-emil-damm-cv.pdf`. It is not a checked-in
+The About page offers the CV as an A4 PDF at `/pdfs/nikolai-emil-damm-cv.pdf`. It is not a checked-in
 file: the static endpoint in `src/pages/pdfs/` renders it during `npm run build` (and on request in
 `npm run dev`) from `src/data/cv.ts`, using the same palette as the site theme.
 
-`src/data/cv.ts` is the single source for the CV. The default-off About page renders its intro, meta cards, and
-skills from it directly; only the experience roster on the page stays hand-written, because its
-markdown headings feed the table of contents. `scripts/check-cv-drift.mjs` (run in CI) fails when that
-roster and the data disagree on a role title, period, or organisation line. When the content changes,
+`src/data/cv.ts` is the single source for the CV. The detailed background in
+`src/content/docs/about.mdx` retains a hand-written experience roster.
+`scripts/check-cv-drift.mjs` (run in CI) fails when that roster and the data disagree on a role title,
+period, or organisation line. When the content changes,
 bump the `updated` date in `src/data/cv.ts` so the PDF says when it last changed.
 
 ## Blog editorial standard
@@ -135,7 +136,7 @@ env: {
 
 Gate rendering on the flag by importing it from `astro:env/server` (or `astro:env/client` for a
 `PUBLIC_`-prefixed client flag) — see [`src/components/PreviewBanner.astro`](src/components/PreviewBanner.astro),
-the worked example wired into the home page. When the flag is off, the component emits nothing.
+the worked example. When the flag is off, the component emits nothing.
 
 Flags can also gate **content-collection inclusion** (filter entries out of `getCollection(...)`
 when a flag is off) to hold back whole docs sections.
