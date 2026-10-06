@@ -39,8 +39,9 @@ const composeHelp = `Compose a blocker record in the one shape the guard accepts
               whole pull-request record comment is printed: disclosure line,
               marker, record. --target is still required.
 
-Post the comment with --body-file. A parked pull request has exactly one record:
-edit the existing comment in place rather than posting another.
+To park a pull request use park, which posts or edits this comment and adds
+the blocked label in one step; posted by hand, the comment goes with --body-file. A parked pull request has exactly one record:
+it is edited in place, never joined by another.
 The last-verified date is always today (UTC): a record states what a check
 found now, so no other date can be written.
 Exit: 0 record (or this help, when --help is the only argument) printed;
