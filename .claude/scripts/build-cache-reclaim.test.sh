@@ -45,6 +45,9 @@ export BUILD_CACHE_RECLAIM_LINT_BUDGET_GB="$NEVER_CLEAN_BUDGET"
 # The container image step asks the host's real container runtime, and an apply run over its
 # budget removes real images. It is off for every case; case 22 points it at a stub.
 export BUILD_CACHE_RECLAIM_CONTAINER_CLI=off
+# The still-low report measures the real temp and cache dirs, and fires whenever the host that
+# runs this suite is itself short of space. It is off for every case; case 24 names its own.
+export BUILD_CACHE_RECLAIM_CONSUMER_ROOTS=off
 
 make_tree() {
   # make_tree <name> <age-days>
@@ -1811,6 +1814,180 @@ out=$(CT_CLI=off run_container apply 3 "$NEVER_CLEAN_BUDGET")
 grep -qF 'CONTAINER_IMAGES disabled' <<<"$out" || fail '22k: the off switch was not honoured'
 [ ! -e "${ct_state}/calls" ] || fail '22k: a disabled or absent runtime was still called'
 rm -rf -- "$ct_root"
+
+# --- 23. abandoned browser test profiles are swept from the per-user temp dir (monorepo#3883) ---
+# go-rod leaves one profile per browser at <temp dir>/rod/user-data/<16 hex digits> whenever
+# a test does not clean up, and 3,069 of them held 30 GB on 2026-10-06 while this script
+# reported nothing to do. Each kept fixture differs from a reapable one in exactly one
+# dimension: age (1 h against the 6 h default), name shape, file-vs-dir, location, an open
+# file, and a process naming it on its command line. The 12 h fixture pins the threshold to
+# HOURS: with min_age_days=3 applied instead it would be kept.
+b_root="${go_tmp_root}/browser"
+b_profiles="${b_root}/rod/user-data"
+mkdir -p "$b_profiles" || fail 'fixture: browser profile root'
+b_stale=$(make_go_dir "$b_profiles" 0123456789abcdef 240) || fail 'fixture: stale profile'
+b_hours=$(make_go_dir "$b_profiles" 1111111111111111 12) || fail 'fixture: 12h profile'
+b_young=$(make_go_dir "$b_profiles" 2222222222222222 1) || fail 'fixture: young profile'
+b_held=$(make_go_dir "$b_profiles" 3333333333333333 240) || fail 'fixture: held profile'
+b_named=$(make_go_dir "$b_profiles" 4444444444444444 240) || fail 'fixture: named profile'
+b_foreign=()
+for name in 0123456789abcde 0123456789abcdef0 ABCDEF0123456789 0123456789abcdeg; do
+  d=$(make_go_dir "$b_profiles" "$name" 240) || fail "fixture: profile-like $name"
+  b_foreign+=("$d")
+done
+# The right name in the wrong place: directly under the temp dir, not under rod/user-data.
+d=$(make_go_dir "$b_root" 5555555555555555 240) || fail 'fixture: misplaced profile'
+b_foreign+=("$d")
+b_file="${b_profiles}/6666666666666666"
+printf 'payload\n' > "$b_file" || fail 'fixture: profile-named file'
+age_path "$b_file" 240 || fail 'fixture: age profile-named file'
+
+# A browser is started with its profile on the command line. Only b_named is named here,
+# and nothing holds a file under it, so the command-line rule alone must keep it.
+b_table="${fixture_root}/ps-browser.txt"
+printf '%s\n' '00:05 /bin/sh' \
+  "02:10:00 /opt/chromium/chrome --headless --user-data-dir=${b_named} --remote-debugging-port=0" \
+  > "$b_table"
+b_ps="${fixture_root}/ps-browser"
+make_ps_stub "$b_ps" "$b_table" || fail 'fixture: browser ps stub'
+
+/bin/sh -c "exec 9<'${b_held}/b001/file'; sleep 30" &
+b_holder=$!
+sleep 1
+kill -0 "$b_holder" 2>/dev/null ||
+  fail 'fixture: profile holder did not stay alive; liveness assertion not exercised'
+
+# 23a. dry-run: selects exactly the reapable two, deletes nothing, and says why it kept
+# the two live ones.
+out=$(run_iso "$b_root" "$b_ps" dry-run 3 "$NEVER_CLEAN_BUDGET")
+for d in "$b_stale" "$b_hours"; do
+  said "$out" "$d" 'WOULD REAP' || fail "23a: dry-run did not select an abandoned profile: $d"
+done
+for d in "$b_young" "$b_held" "$b_named" "${b_foreign[@]}" "$b_file"; do
+  said "$out" "$d" 'REAP' && fail "23a: dry-run selected an entry it must keep: $d"
+done
+said "$out" "$b_held" 'KEEP  (in use)' ||
+  fail "23a: a profile held open by a live process was not kept as in use: $b_held"
+said "$out" "$b_named" 'KEEP  (browser running)' ||
+  fail "23a: a profile named on a running command line was not kept: $b_named"
+for d in "$b_stale" "$b_hours" "$b_young" "$b_held" "$b_named" "${b_foreign[@]}" "$b_file"; do
+  [ -e "$d" ] || fail "23a: dry-run deleted an entry: $d"
+done
+
+# 23b. the per-run limit defers the rest and says how many, instead of dropping them.
+out=$(BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MAX=1 run_iso "$b_root" "$quiet_ps" dry-run 3 "$NEVER_CLEAN_BUDGET")
+[ "$(grep -c 'WOULD REAP' <<<"$out")" -eq 1 ] ||
+  fail '23b: a limit of one profile did not examine exactly one'
+grep -qE 'DEFERRED [0-9]+ more browser test profile' <<<"$out" ||
+  fail '23b: profiles past the per-run limit were not reported as deferred'
+
+# 23c. no readable process table keeps every profile, and says so.
+b_nops="${fixture_root}/ps-none"
+make_ps_stub "$b_nops" || fail 'fixture: failing ps stub'
+out=$(run_iso "$b_root" "$b_nops" apply 3 "$NEVER_CLEAN_BUDGET")
+grep -qF 'every browser test profile will be KEPT' <<<"$out" ||
+  fail '23c: a failed process read was not reported for the profile sweep'
+for d in "$b_stale" "$b_hours"; do
+  [ -e "$d" ] || fail "23c: a profile was removed without a readable process table: $d"
+done
+
+# 23d. apply: reaps exactly the reapable two.
+out=$(run_iso "$b_root" "$b_ps" apply 3 "$NEVER_CLEAN_BUDGET")
+for d in "$b_stale" "$b_hours"; do
+  [ -e "$d" ] && fail "23d: apply did not reap an abandoned profile: $d"
+done
+for d in "$b_young" "$b_held" "$b_named" "${b_foreign[@]}" "$b_file"; do
+  [ -e "$d" ] || fail "23d: apply removed an entry it must keep: $d"
+done
+kill "$b_holder" 2>/dev/null
+wait "$b_holder" 2>/dev/null
+
+# --- 24. the sweep reports what the volume shows, and where space is when still low (monorepo#3883) ---
+# A sweep that frees nothing on a low disk used to leave the run with no next step, and the
+# "reclaimed" figure adds up folder sizes that shared files inflate. The free space is
+# therefore read from the volume before and after, and while it is still low the largest
+# entries are named. `df` is stubbed so both readings are chosen here.
+f_root="${fixture_root}/free"
+f_bin="${f_root}/bin"
+f_state="${f_root}/state"
+f_big="${f_root}/roots/a"
+mkdir -p "$f_bin" "$f_state" "${f_big}/large" "${f_big}/medium" "${f_big}/empty" ||
+  fail 'fixture: free-space case'
+dd if=/dev/zero of="${f_big}/large/blob" bs=1048576 count=3 2>/dev/null || fail 'fixture: large entry'
+dd if=/dev/zero of="${f_big}/medium/blob" bs=1048576 count=1 2>/dev/null || fail 'fixture: medium entry'
+# The stub answers the first plain reading with DF_BEFORE and every later one with DF_AFTER;
+# the human-readable call the summary makes is answered separately and never counted.
+cat > "${f_bin}/df" <<'STUB'
+#!/bin/sh
+case " $* " in *" -h "*) printf 'Filesystem Size Used Avail Capacity Mounted on\n/dev/x 1Gi 1Gi 1Gi 50%% /\n'; exit 0 ;; esac
+[ "${DF_FAIL:-0}" = 1 ] && exit 1
+if [ -e "${DF_STATE}/read" ]; then avail=$DF_AFTER; else avail=$DF_BEFORE; : > "${DF_STATE}/read"; fi
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk with space 900000000 500000 %s 50%% /System/Volumes/Data\n' "$avail"
+STUB
+chmod +x "${f_bin}/df"
+run_free() { # <before-kb> <after-kb> <args...>
+  local before=$1 after=$2
+  shift 2
+  rm -f -- "${f_state}/read"
+  DF_STATE="$f_state" DF_BEFORE="$before" DF_AFTER="$after" \
+    BUILD_CACHE_RECLAIM_LOW_FREE_GB=20 \
+    BUILD_CACHE_RECLAIM_CONSUMER_ROOTS="${BUILD_CACHE_RECLAIM_CONSUMER_ROOTS_CASE:-$f_big}" \
+    run_iso "${f_root}/no-go-tmp" "${f_bin}:${quiet_ps}" "$@"
+}
+gb=1048576
+
+# 24a. low before and after, nothing freed: both readings, the change, and the largest
+# entries in size order. The empty entry is not listed: a zero-size row names nothing.
+out=$(run_free $((10 * gb)) $((10 * gb + 2048)) apply 3 "$NEVER_CLEAN_BUDGET")
+grep -qF 'free space measured: before=10240 MB after=10242 MB change=2 MB' <<<"$out" ||
+  fail '24a: the free space was not reported from the two volume readings'
+grep -qF 'STILL LOW: 10 GB free, below 20 GB' <<<"$out" ||
+  fail '24a: a low volume after the sweep was not reported as still low'
+f_canon=$(cd "$f_big" && pwd -P)
+consumers=$(grep -F 'CONSUMER  ' <<<"$out")
+[ "$(sed -n '1p' <<<"$consumers" | awk '{print $NF}')" = "${f_canon}/large" ] ||
+  fail '24a: the largest entry was not named first'
+[ "$(sed -n '2p' <<<"$consumers" | awk '{print $NF}')" = "${f_canon}/medium" ] ||
+  fail '24a: the second largest entry was not named second'
+grep -qF "${f_canon}/empty" <<<"$consumers" && fail '24a: an empty entry was listed as a consumer'
+[ -e "${f_big}/large/blob" ] || fail '24a: the consumer report removed something'
+
+# 24b. enough space after the sweep: the readings are still reported, and nothing is called low.
+out=$(run_free $((10 * gb)) $((30 * gb)) apply 3 "$NEVER_CLEAN_BUDGET")
+grep -qF 'free space measured: before=10240 MB after=30720 MB change=20480 MB' <<<"$out" ||
+  fail '24b: a sweep that freed space did not report the change it measured'
+grep -qE 'STILL LOW|CONSUMER' <<<"$out" && fail '24b: a volume with room was reported as low'
+
+# 24c. an unreadable volume is UNKNOWN, never "low" and never "fine".
+out=$(DF_FAIL=1 run_free $((10 * gb)) $((10 * gb)) apply 3 "$NEVER_CLEAN_BUDGET")
+grep -qF 'free space measured: UNKNOWN' <<<"$out" ||
+  fail '24c: an unreadable volume was not reported as unknown'
+grep -qE 'STILL LOW|before=' <<<"$out" && fail '24c: an unreadable volume still produced a verdict'
+
+# 24d. a root that cannot be read, and the off switch, are each said plainly.
+out=$(BUILD_CACHE_RECLAIM_CONSUMER_ROOTS_CASE="${f_root}/absent:${f_big}" \
+  run_free $((10 * gb)) $((10 * gb)) dry-run 3 "$NEVER_CLEAN_BUDGET")
+grep -qF "CONSUMERS not measured: ${f_root}/absent (not a readable directory)" <<<"$out" ||
+  fail '24d: an unreadable root was not reported as unmeasured'
+grep -qF "${f_canon}/large" <<<"$out" || fail '24d: a readable root after an unreadable one was skipped'
+out=$(BUILD_CACHE_RECLAIM_CONSUMER_ROOTS_CASE=off \
+  run_free $((10 * gb)) $((10 * gb)) dry-run 3 "$NEVER_CLEAN_BUDGET")
+grep -qF 'CONSUMERS not measured: disabled' <<<"$out" || fail '24d: the off switch was not honoured'
+
+# 24e. a measurement that outlives its deadline is stopped and reported, not waited for.
+# Only the consumer pass (-d 1) is slowed; every other size read reaches the real du.
+f_slow="${f_root}/slow-bin"
+mkdir -p "$f_slow" || fail 'fixture: slow du dir'
+real_du=$(command -v du)
+printf '#!/bin/sh\ncase " $* " in *" -d "*) exec sleep 20 ;; esac\nexec "%s" "$@"\n' "$real_du" > "${f_slow}/du"
+chmod +x "${f_slow}/du"
+started=$(date +%s)
+out=$(PATH="${f_slow}:$PATH" BUILD_CACHE_RECLAIM_CONSUMER_SCAN_SECONDS=1 \
+  run_free $((10 * gb)) $((10 * gb)) dry-run 3 "$NEVER_CLEAN_BUDGET")
+took=$(($(date +%s) - started))
+grep -qF '(partial: stopped after 1s, no entry sized)' <<<"$out" ||
+  fail '24e: a measurement past its deadline was not reported as stopped'
+[ "$took" -lt 15 ] || fail "24e: the sweep waited ${took}s for a measurement with a 1s deadline"
 
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
