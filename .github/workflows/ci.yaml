@@ -2839,6 +2839,11 @@ jobs:
       # Same section, same trigger set: the merge fall-through past a stale mergeStateStatus.
       - name: Verify the merge-API fall-through contract
         run: bash .claude/scripts/merge-api-fallthrough-contract.test.sh
+      # Same section again: an adaptation commit reaches a dependency bot's branch only after the
+      # pull request is a confirmed draft with auto-merge off (monorepo#3885). Hermetic: a stub gh
+      # and a bare fixture remote, no network and no token.
+      - name: Self-test the bot pull request adaptation push
+        run: bash .claude/scripts/bot-pr-adaptation-push.test.sh
 
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
