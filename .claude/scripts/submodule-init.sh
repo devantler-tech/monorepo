@@ -31,6 +31,11 @@
 # checks out the recorded gitlink directly, then repair + probe. It refuses a dirty tree or a
 # checkout that is ahead of the pin, so it cannot discard uncommitted or unpushed work. It does not
 # move nested submodules; it validates every initialized nested checkout's pin, dirt, and isolation.
+#
+# In a linked worktree a fresh checkout borrows the main checkout's objects for that submodule
+# instead of cloning them again (monorepo#3431; see `shared_object_store`). The main checkout's
+# submodule repository is then set never to prune, and must not be deleted while a worktree that
+# borrowed from it is still in use. SUBMODULE_INIT_NO_SHARED_STORE=1 forces a full private clone.
 set -euo pipefail
 
 # Exit codes follow the helper convention in `.claude/scripts/AGENTS.md` (monorepo#3627): `die` is a
