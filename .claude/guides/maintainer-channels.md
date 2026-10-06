@@ -44,7 +44,8 @@ Three channels actually get the maintainer's attention, and all are *active* (ne
      layer refuses a step this contract assigns to the lane, the blocker is that mismatch, not the
      item that met it. File the mismatch once as a monorepo issue, ask once with the rule change
      prepared for the maintainer to apply, and park every later item that meets the same refusal on
-     that issue as an `upstream` blocker, with no further ask. Offer only options that can work: a
+     that issue as an `upstream` blocker, with no ask of its own. The one ask is renewed only as
+     the `STALE-ASK` rule below allows, never per item. Offer only options that can work: a
      reply, in the thread or on the issue, tells the lane what it may attempt and changes nothing
      about what its permission layer allows, so "reply approve" is never an option for a refused
      step.
