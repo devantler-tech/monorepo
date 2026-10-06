@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the business preview, 2026-10-06. Extends [ADR 0005](0005-business-homepage-and-localization.md).
+Accepted, 2026-10-06. Extends [ADR 0005](0005-business-homepage-and-localization.md).
 
 ## Context
 
@@ -13,7 +13,7 @@ a larger team or a roster of paying clients.
 
 ## Decision
 
-The flagged business experience uses shared header, footer, typography, colors and appearance
+The business experience uses shared header, footer, typography, colors and appearance
 controls throughout. Its About page introduces Nikolai Emil Damm as founder and developer, with
 a real public photograph, clear working boundaries and a link to his CV. Its Projects page
 introduces actual developer tools and accurately labelled family examples. Both pages have English
@@ -24,8 +24,8 @@ inside the same business identity. Historical articles and academic work retain 
 authorship and dates. There is no fictional employee directory, inflated agency language,
 testimonial or claim that personal work was commissioned by a customer.
 
-The default-off experience remains available while the release flag exists. The CV's data and
-drift contract remain authoritative; the business biography does not duplicate its role roster.
+The CV's data and drift contract remain authoritative; the business biography does not duplicate
+its role roster.
 
 ## Consequences
 

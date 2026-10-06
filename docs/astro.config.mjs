@@ -6,10 +6,6 @@ import starlightBlog from "starlight-blog";
 import starlightGithubAlerts from "starlight-github-alerts";
 import starlightLinksValidator from "starlight-links-validator";
 
-// Astro evaluates config before astro:env. Release builds pass the flag in the
-// process environment; the injected render entrypoint validates it natively too.
-const businessSite = process.env.FEATURE_BUSINESS_SITE === "true";
-
 export default defineConfig({
   site: "https://devantler.tech",
   // Kept so a renamed page does not break links that already exist in the wild
@@ -25,12 +21,7 @@ export default defineConfig({
   // Convention + lifecycle (remove the gate once shipped) live in docs/README.md.
   env: {
     schema: {
-      FEATURE_BUSINESS_SITE: envField.boolean({
-        context: "server",
-        access: "public",
-        default: false,
-      }),
-      // Example gated section: an unreleased-preview banner on the home page.
+      // Example flag for PreviewBanner.astro; not used by the business homepage.
       // Default-off, so production builds omit it; a preview build enables it
       // with `FEATURE_PREVIEW_BANNER=true npm run build`. Server context = the
       // flag is read while the .astro component renders at build time (SSG), so
@@ -43,7 +34,7 @@ export default defineConfig({
     },
   },
   integrations: [
-    ...(businessSite ? [{
+    {
       name: 'devantler-business-pages',
       hooks: {
         'astro:config:setup': ({ injectRoute }) => {
@@ -52,18 +43,18 @@ export default defineConfig({
           }
         },
       },
-    }] : []),
+    },
     mermaid(),
     starlight({
-      title: businessSite ? "Devantler Tech" : "Nikolai Emil | Devantler",
+      title: "Devantler Tech",
       description:
-        businessSite ? "Devantler Tech — a one-person software business building websites, small apps and open-source tools." : "Personal site of Nikolai Emil Damm — software engineer, open-source advocate, and Kubernetes enthusiast.",
-      ...(businessSite ? { components: {
+        "Devantler Tech — a one-person software business building websites, small apps and open-source tools.",
+      components: {
         Head: './src/components/business/SupportingHead.astro',
         Header: './src/components/business/SupportingHeader.astro',
         Footer: './src/components/business/SupportingFooter.astro',
         ThemeSelect: './src/components/business/SupportingThemeSelect.astro',
-      } } : {}),
+      },
       defaultLocale: "en",
       logo: {
         src: "./src/assets/author.png",
@@ -91,14 +82,14 @@ export default defineConfig({
         baseUrl:
           "https://github.com/devantler-tech/monorepo/edit/main/docs/",
       },
-      customCss: ["./src/styles/custom.css", ...(businessSite ? ["./src/styles/business-docs.css"] : [])],
+      customCss: ["./src/styles/custom.css", "./src/styles/business-docs.css"],
       plugins: [
         starlightBlog({
-          title: businessSite ? "Devantler Tech Journal" : "Blog",
+          title: "Devantler Tech Journal",
           authors: {
             devantler: {
               name: "Nikolai Emil Damm",
-              title: businessSite ? "Founder & developer, Devantler Tech" : "Developer Experience Engineer",
+              title: "Founder & developer, Devantler Tech",
               picture: "/author-avatar.png",
               url: "https://github.com/devantler",
             },
@@ -152,7 +143,7 @@ export default defineConfig({
       ],
       sidebar: [
         {
-          label: businessSite ? "About Devantler Tech" : "About Me",
+          label: "About Devantler Tech",
           link: "/about/",
         },
         {

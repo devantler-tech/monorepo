@@ -16,11 +16,8 @@ one component, stable section identifiers and typed English/Danish copy. Explici
 canonical URLs and alternate-language metadata make localization independent of browser language
 or client-side rendering. Switching languages preserves the current section.
 
-Starlight continues to own the supporting documentation, blog and profile. Its existing homepage
-content remains the default-off route during the short release-flag lifecycle. A small integration
-injects business routes only for enabled builds. Configuration bootstraps inclusion from the
-process environment because `astro:env` cannot be imported in Astro configuration; the injected
-entrypoint also checks the native, schema-validated flag. Separate route entrypoints avoid leaking
+Starlight owns the supporting documentation and journal. A small integration injects the business
+routes in every production and development build. Separate route entrypoints avoid leaking
 Starlight's global CSS into marketing pages, and component-scoped business styles do not restyle
 the documentation.
 
@@ -36,9 +33,9 @@ to his biography and public code. First-person copy and explicitly labelled fami
 personal context without implying an agency team, paid client history or manufactured social proof.
 The same photograph is used for social sharing rather than the illustrated technical avatar.
 
-The build exercises both release states against emitted HTML. Checks cover language routes,
-starting prices, navigation, the developer's portrait and profile links, inquiry links, preserved supporting pages and absent unreleased
-markup. Controller tests cover saved choices, system changes and blocked storage. No application
+The production build checks the published experience against emitted HTML. Checks cover language routes,
+starting prices, navigation, the developer's portrait and profile links, inquiry links and supporting
+pages. Controller tests cover saved choices, system changes and blocked storage. No application
 backend or new dependency is needed for the inquiry journey.
 
 ## Consequences
@@ -46,4 +43,4 @@ backend or new dependency is needed for the inquiry journey.
 The marketing copy is translated as a unit, while supporting technical content remains English.
 LinkedIn supplies a real contact destination until company contact details are confirmed. Paid
 subscriptions, checkout and contractual service guarantees are not implied by the product list.
-The separate publication issue owns removal of the temporary release flag after evaluation.
+The business experience requires no release flag. Recovery uses a reviewed revert and redeploy.
