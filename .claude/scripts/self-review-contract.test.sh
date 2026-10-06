@@ -155,7 +155,7 @@ grep -Fq 'prints no secret values, credentials or node addresses' "${constitutio
   fail "a reviewed evidence workflow may print secret values, credentials or node addresses to a public log"
 grep -Fq "itself still never runs \`exec\`, \`attach\`, \`cp\`, \`debug\` or any cluster mutation" "${constitution}" ||
   fail "the reviewed-workflow evidence path no longer says the agent itself never executes in a workload"
-grep -Fq 'works around the refusal' "${constitution}" ||
+grep -Fq 'never works around the refusal' "${constitution}" ||
   fail "a lane refused permission to build an evidence workflow is no longer told not to work around it"
 
 grep -Fq 'Self-review the' "${maintenance_skill}" ||

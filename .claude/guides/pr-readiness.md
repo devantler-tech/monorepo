@@ -63,8 +63,8 @@ draft yourself only when you genuinely know it is ready**, which means ALL THREE
    branch, take it through the ordinary review and merge gates, start it once from `main`, and
    record the run and its verdict on the issue. That is reviewed code doing the read: **the agent
    itself still never runs `exec`, `attach`, `cp`, `debug` or any cluster mutation.** A lane whose
-   permission layer refuses to build such a workflow records that as the named blocker; it never
-   works around the refusal (monorepo#3900).
+   permission layer refuses to build such a workflow records that as the named blocker and
+   never works around the refusal (monorepo#3900).
 A PR missing any of the three **stays a draft**. **Self-promotion applies to every draft you may
 drive** — your own instance's registered namespace (whichever *you* write;
 see *Execution model*), a sibling lane's, the maintainer's interactive drafts, and outside
