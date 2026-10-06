@@ -38,10 +38,15 @@
 #   3. The golangci-lint cache, emptied only when it exceeds its own, smaller budget.
 #   4. Go's orphaned work dirs (go-build<digits>, go-link-<digits>) directly under the
 #      per-user temp dir, older than a threshold counted in HOURS.
+#   4b. Abandoned browser test profiles (rod/user-data/<16 hex digits>) under that same
+#      temp dir, older than a threshold counted in HOURS (2026-10-06: 30 GB, monorepo#3883).
 #   5. The local container runtime's image store, when the `container` CLI is installed:
 #      images no container uses, unpacked longer ago than a threshold counted in HOURS,
 #      removed only while the store exceeds its own budget (2026-10-05: 57 GB unused,
 #      monorepo#3848). Long-running containers are named in the output and never stopped.
+#   6. A report, removing nothing: the free space the volume itself shows before and after,
+#      and, while that is still below the low-space threshold, the largest entries under
+#      the temp and cache dirs (monorepo#3883).
 #
 # Environment (all optional):
 #   BUILD_CACHE_RECLAIM_TMPDIR                temp root for (2); default /private/tmp
@@ -58,6 +63,14 @@
 #   BUILD_CACHE_RECLAIM_CONTAINER_BUDGET_GB   image-store budget for (5); default 10
 #   BUILD_CACHE_RECLAIM_CONTAINER_IMAGE_MIN_AGE_HOURS  age threshold for (5); default 24
 #   BUILD_CACHE_RECLAIM_CONTAINER_LONG_RUN_HOURS       reporting threshold for (5); default 24
+#   BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MIN_AGE_HOURS  age threshold for (4b); default 6
+#   BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MAX   most profiles (4b) examines in one run; default
+#                                             500, the rest are counted as deferred
+#   BUILD_CACHE_RECLAIM_LOW_FREE_GB           free space below which (6) names the largest
+#                                             entries; default $DISK_PREFLIGHT_MIN_FREE_GB, else 20
+#   BUILD_CACHE_RECLAIM_CONSUMER_ROOTS        colon-separated dirs (6) measures; default the
+#                                             two temp dirs and the per-user cache dir, `off` skips
+#   BUILD_CACHE_RECLAIM_CONSUMER_SCAN_SECONDS time (6) spends on each of them; default 20
 #
 # SAFETY — this deletes, so every rule below fails closed:
 #   * Only trees matching a known agent-generated name pattern, carrying a Go or
@@ -69,6 +82,7 @@
 #     again immediately before it is removed.
 #   * The caller's own session tree is KEPT.
 #   * A Go work dir is KEPT while a Go toolchain process that could own it is running.
+#   * A browser test profile is KEPT while any process names it on its command line.
 #   * The golangci-lint cache is KEPT while golangci-lint runs, and is emptied only when
 #     it carries golangci-lint's own README marker.
 #   * A container image is KEPT while any container, running or stopped, was created from
@@ -143,6 +157,18 @@ GO_TMP_MIN_AGE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_GO_TMP_MIN_AGE_HOURS \
 # day at 6-12 GB each, and 75 GB of them filled the host before any reached four days.
 RUN_CACHE_IDLE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS \
   "${BUILD_CACHE_RECLAIM_RUN_CACHE_IDLE_HOURS:-6}") || exit 2
+# A browser test profile is live only while its browser runs, so it is aged in hours like a
+# Go work dir. The per-run limit bounds the time one sweep spends on a large backlog.
+BROWSER_PROFILE_MIN_AGE_HOURS=$(uint_setting BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MIN_AGE_HOURS \
+  "${BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MIN_AGE_HOURS:-6}") || exit 2
+BROWSER_PROFILE_MAX=$(uint_setting BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MAX \
+  "${BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MAX:-500}") || exit 2
+# Below this much free space after the sweep, the largest locations are named (6). The
+# default follows the disk pre-flight's own threshold, so the two agree on what "low" is.
+LOW_FREE_GB=$(uint_setting BUILD_CACHE_RECLAIM_LOW_FREE_GB \
+  "${BUILD_CACHE_RECLAIM_LOW_FREE_GB:-${DISK_PREFLIGHT_MIN_FREE_GB:-20}}") || exit 2
+CONSUMER_SCAN_SECONDS=$(uint_setting BUILD_CACHE_RECLAIM_CONSUMER_SCAN_SECONDS \
+  "${BUILD_CACHE_RECLAIM_CONSUMER_SCAN_SECONDS:-20}") || exit 2
 
 # The README each tool writes into every cache dir it opens, whenever it is missing. These
 # are what prove a directory IS such a cache, whatever it is called (2b, 3).
@@ -191,6 +217,25 @@ size_mb() {
   esac
   printf '%s' "$out"
 }
+
+# free_kb prints the free space, in KB, on the volume the reclaimed space lives on, or
+# returns 1 when it cannot be read. That volume is the one holding $HOME, not `/`: on macOS
+# `/` is the sealed system volume, while the caches and temp dirs are on the data volume.
+# -P keeps a long device name from wrapping the row, and the four numeric columns are read
+# from the END of the row so a filesystem name holding spaces cannot shift them.
+free_kb() {
+  local out
+  out=$(LC_ALL=C df -Pk -- "${HOME:-/}" 2>/dev/null |
+    awk 'NR == 2 { for (i = NF; i > 3; i--) if ($i ~ /^[0-9]+%$/) { print $(i - 1); exit } }') || return 1
+  case "$out" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  [ "${#out}" -le 15 ] || return 1
+  printf '%s' "$((10#$out))"
+}
+# Read before anything is removed, so the summary can report what the sweep freed from the
+# volume's own reading. Folder sizes overstate it whenever files are shared between copies.
+FREE_KB_BEFORE=$(free_kb) || FREE_KB_BEFORE=''
 
 printf '\n===== %s  build-cache-reclaim (%s) =====\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MODE"
 log "temp root=${TMPDIR_ROOT} min_age_days=${MIN_AGE_DAYS} cache_budget_gb=${CACHE_BUDGET_GB}"
@@ -1368,6 +1413,109 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# 4b. Abandoned browser test profiles under the per-user temp dir (monorepo#3883).
+#
+# go-rod, the browser driver the products' browser tests use, gives every browser it starts
+# a fresh profile at <temp dir>/rod/user-data/<16 hex digits> (launcher.go: the default is
+# filepath.Join(os.TempDir(), "rod", "user-data", utils.RandString(8)), and RandString
+# hex-encodes that many random bytes). The profile is removed only when the test calls the
+# launcher's Cleanup, so a suite that does not leaves one behind per browser: 3,069 of them
+# held 30 GB on 2026-10-06 while every budgeted cache above read as within budget.
+#
+# Matched by that exact location and name shape AND an hours-scale age AND liveness, where
+# liveness is the open-file check every sweep shares plus the command-line check below.
+# ---------------------------------------------------------------------------
+# BROWSER_ARGS holds every process's full command line, read ONCE. A browser is started
+# with --user-data-dir=<its profile>, so a profile path found in any command line has an
+# owner even at a moment when that browser holds no file under it. BROWSER_ARGS_OK is
+# tracked apart from the contents for the reason LSOF_OK is: a failed read must keep every
+# profile, never read as "no browser is running".
+BROWSER_ARGS_OK=0
+BROWSER_ARGS=''
+if BROWSER_ARGS=$(ps -A -ww -o args= 2>/dev/null) && [ -n "$BROWSER_ARGS" ]; then
+  BROWSER_ARGS_OK=1
+fi
+
+# BROWSER_NAMED is every profile name a command line mentions, one per line, taken in ONE
+# pass. It looks for the path's own tail, rod/user-data/<name>, rather than a whole path: the
+# name is 64 random bits, so the tail identifies the profile under any spelling of the temp
+# dir (symlinked, relative, or with a doubled slash), and matching less of the path can only
+# keep more. One pass, because a backlog of thousands of profiles would otherwise scan the
+# whole process table once per profile. A pass that fails is an unreadable table.
+BROWSER_NAMED=''
+if [ "$BROWSER_ARGS_OK" -eq 1 ]; then
+  if ! BROWSER_NAMED=$(printf '%s\n' "$BROWSER_ARGS" | awk '
+    {
+      s = $0
+      while ((i = index(s, "rod/user-data/")) > 0) {
+        s = substr(s, i + 14)
+        n = substr(s, 1, 16)
+        if (length(n) == 16 && n !~ /[^0-9a-f]/) print n
+      }
+    }'); then
+    BROWSER_ARGS_OK=0
+    BROWSER_NAMED=''
+  fi
+fi
+
+# browser_profile_named reports whether a running process names `tree` on its command
+# line. Every unknown answers yes, so the profile is kept.
+browser_profile_named() {
+  [ "$BROWSER_ARGS_OK" -eq 1 ] || return 0
+  case "
+${BROWSER_NAMED}
+" in
+    *"
+${1##*/}
+"*) return 0 ;;
+  esac
+  return 1
+}
+
+BROWSER_PROFILE_ROOT="${GO_TMP_ROOT}/rod/user-data"
+if [ -d "$BROWSER_PROFILE_ROOT" ]; then
+  [ "$BROWSER_ARGS_OK" -eq 1 ] ||
+    log 'WARNING: ps produced no command lines — every browser test profile will be KEPT'
+  browser_seen=0
+  browser_deferred=0
+  if ! browser_profiles=$(find "$BROWSER_PROFILE_ROOT" -mindepth 1 -maxdepth 1 -type d \
+    -mmin "+$((BROWSER_PROFILE_MIN_AGE_HOURS * 60))" 2>/dev/null); then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (scan failed) $BROWSER_PROFILE_ROOT: browser test profiles not examined"
+    browser_profiles=''
+  fi
+  while IFS= read -r tree; do
+    [ -n "$tree" ] || continue
+    # `find -name` cannot say "exactly sixteen hex digits", so the shape is checked here.
+    name=${tree##*/}
+    case "$name" in
+      *[!0-9a-f]*) continue ;;
+    esac
+    [ "${#name}" -eq 16 ] || continue
+    if browser_profile_named "$tree"; then
+      kept=$((kept + 1))
+      log "KEEP  (browser running) $tree"
+      continue
+    fi
+    # Each profile past this point costs a size read and, in apply, its own open-file probe,
+    # so a large backlog is drained over several runs. What is left is counted, never dropped
+    # silently. A profile kept above is not charged to the limit: it costs nothing, and
+    # charging it would let long-lived browsers starve the backlog behind them.
+    if [ "$browser_seen" -ge "$BROWSER_PROFILE_MAX" ]; then
+      browser_deferred=$((browser_deferred + 1))
+      continue
+    fi
+    browser_seen=$((browser_seen + 1))
+    sweep_candidate "$tree" host
+  done <<EOF
+$browser_profiles
+EOF
+  if [ "$browser_deferred" -gt 0 ]; then
+    log "DEFERRED ${browser_deferred} more browser test profile(s) under ${BROWSER_PROFILE_ROOT} to a later run (limit ${BROWSER_PROFILE_MAX} per run)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 5. The local container runtime's image store, trimmed only when it exceeds its own budget.
 #
 # The lanes pull and build images with the `container` CLI for throwaway clusters and image
@@ -1722,6 +1870,110 @@ fi
 # wrapping a long device name onto a second line, where NR==2 would read the wrong row.
 if command -v df >/dev/null 2>&1; then
   log "free now: $(df -P -h "${HOME:-/}" 2>/dev/null | awk 'NR==2{print $4 " (" $5 " used)"}')"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. What the sweep actually freed, and where the space is when that was not enough
+#    (monorepo#3883).
+#
+# The "reclaimed" figure above adds up folder sizes, and a folder's size is not what removing
+# it frees: files shared between copies are counted in full each time (a 39 GB folder of
+# browser copies freed almost nothing on 2026-10-06). The volume's own free-space reading,
+# taken before and after, is the figure to act on. Other processes write to the volume while
+# the sweep runs, so it is a measurement of the volume, not an attribution to this sweep.
+# ---------------------------------------------------------------------------
+FREE_KB_AFTER=$(free_kb) || FREE_KB_AFTER=''
+if [ -n "$FREE_KB_BEFORE" ] && [ -n "$FREE_KB_AFTER" ]; then
+  free_change_kb=$((FREE_KB_AFTER - FREE_KB_BEFORE))
+  log "free space measured: before=$((FREE_KB_BEFORE / 1024)) MB after=$((FREE_KB_AFTER / 1024)) MB change=$((free_change_kb / 1024)) MB"
+else
+  log 'free space measured: UNKNOWN — the volume could not be read before and after the sweep'
+fi
+
+# report_consumers names the largest entries directly under each root it can measure.
+#
+# One `du` pass per root, each under its own deadline: macOS has no `timeout`, and a temp dir
+# holding tens of GB can take minutes to walk, which a pre-flight step cannot spend. A pass
+# that runs out of time is reported as such. `du` prints an entry only once its whole subtree
+# is walked, and buffers what it prints, so a stopped pass lists some of the entries that
+# finished and never the one still being walked -- which is likely the largest. The report
+# says so instead of presenting a short list as the answer. Nothing here removes anything,
+# and nothing here is a sweep, so an unmeasured root is said plainly and does not change the
+# exit status.
+report_consumers() {
+  local root canon outfile pid ticks limit state rows seen=''
+  local -a root_list
+  # Split once, into an array: an unquoted expansion would also glob the directory names.
+  IFS=: read -r -a root_list <<<"$1"
+  # An empty list is an unbound array to bash 3.2 under `set -u`, and would abort the report.
+  [ "${#root_list[@]}" -gt 0 ] || return 0
+  for root in "${root_list[@]}"; do
+    [ -n "$root" ] || continue
+    canon=$(cd -- "$root" 2>/dev/null && pwd -P) || {
+      log "CONSUMERS not measured: $root (not a readable directory)"
+      continue
+    }
+    # Two spellings of one directory would list its entries twice.
+    case ":${seen}:" in
+      *":${canon}:"*) continue ;;
+    esac
+    seen="${seen}:${canon}"
+    outfile=$(mktemp 2>/dev/null) || {
+      log "CONSUMERS not measured: $canon (no temp file)"
+      continue
+    }
+    du -x -k -d 1 "$canon" > "$outfile" 2>/dev/null &
+    pid=$!
+    ticks=0
+    limit=$((CONSUMER_SCAN_SECONDS * 5))
+    while kill -0 "$pid" 2>/dev/null && [ "$ticks" -lt "$limit" ]; do
+      sleep 0.2
+      ticks=$((ticks + 1))
+    done
+    state=complete
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null
+      state="partial: stopped after ${CONSUMER_SCAN_SECONDS}s, so the largest entry may be missing"
+    fi
+    wait "$pid" 2>/dev/null
+    # A stopped pass can end mid-row. A last row with no newline is a cut-off path, and a
+    # cut-off path names a directory that does not exist, so it is dropped.
+    if [ -n "$(tail -c 1 "$outfile" 2>/dev/null)" ]; then
+      sed '$d' "$outfile" > "${outfile}.whole" 2>/dev/null && cat -- "${outfile}.whole" > "$outfile"
+      rm -f -- "${outfile}.whole"
+    fi
+    # The root's own total is the last row of a finished pass; only its entries are ranked.
+    rows=$(ROOT="$canon" awk -F '\t' '$1 ~ /^[0-9]+$/ && $2 != ENVIRON["ROOT"] { printf "%d\t%s\n", $1 / 1024, $2 }' \
+      "$outfile" | sort -rn | awk -F '\t' 'NR <= 5 && $1 > 0')
+    rm -f -- "$outfile"
+    if [ -z "$rows" ]; then
+      log "CONSUMERS not measured: $canon (${state}, no entry sized)"
+      continue
+    fi
+    log "CONSUMERS under $canon (${state}):"
+    printf '%s\n' "$rows" | while IFS=$'\t' read -r mb path; do
+      log "CONSUMER  ${mb} MB  ${path}"
+    done
+  done
+}
+
+# consumer_roots prints the default roots: the two temp dirs this script sweeps and the
+# per-user cache dir, which between them held the space on every disk-full day so far.
+consumer_roots() {
+  local cache
+  cache=$(go_default_cache_dir)
+  printf '%s:%s:%s' "$GO_TMP_ROOT" "$TMPDIR_ROOT" "${cache%/go-build}"
+}
+
+if [ -n "$FREE_KB_AFTER" ] && [ "$FREE_KB_AFTER" -lt $((LOW_FREE_GB * 1048576)) ]; then
+  log "STILL LOW: $((FREE_KB_AFTER / 1048576)) GB free, below ${LOW_FREE_GB} GB, after this sweep"
+  CONSUMER_ROOTS=${BUILD_CACHE_RECLAIM_CONSUMER_ROOTS:-$(consumer_roots)}
+  if [ "$CONSUMER_ROOTS" = off ]; then
+    log 'CONSUMERS not measured: disabled'
+  else
+    report_consumers "$CONSUMER_ROOTS"
+    log 'CONSUMERS note: a size counts files shared with other copies in full, so removing an entry can free far less than its size — check free space before and after.'
+  fi
 fi
 if [ "$unknown" -gt 0 ]; then
   log "UNKNOWN: ${unknown} scan(s) could not be read; the summary above is partial"
