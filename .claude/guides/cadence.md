@@ -39,6 +39,17 @@ condition: continue telemetry, selection, and unrelated delivery. Stand down onl
 conflicting claim, exact shared-artifact contention, or an unsafe runtime-local mutation that could
 break a sibling mid-flight; keep the fence scoped to that artifact or surface and continue elsewhere.
 
+**Whether another run of your own task is live is a question you can answer, not infer**
+(monorepo#3536). The scheduler's record names only its newest dispatch, so the run it overlapped is
+invisible there. On the Claude lane, run
+`.claude/scripts/claude-task-live-runs.sh --task <scheduled task id>`: it lists the live session
+processes, leaves out your own, and attributes each of the others to its task from the opening
+marker of its transcript. Exit `1` prints one `LIVE` line per other run of the task. That is not a
+stand-down: it means the items the previous run recorded as its next steps are still being worked,
+so re-read a pull request's state immediately before you promote, queue or merge it, and do not
+rewrite a whole memory file. Exit `2` is UNKNOWN — a session could not be attributed, which is what
+a run a few seconds old looks like — and is handled as exit `1`, never as exit `0`.
+
 🔴 **Scheduled is not delivered — on the Claude lane about one tick in five never happens.** The two
 machine-local schedulers differ. Measured across 2026-08-02T03:50Z → 2026-08-08T19:50Z (**161 scheduled
 slots per lane**), **Codex dispatched 161/161**, because that scheduler starts a run even when the
