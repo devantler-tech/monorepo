@@ -21,6 +21,12 @@ updates:
     # private-registries UI (not a repo secret); .gitmodules keeps its SSH URLs, so
     # local `git submodule` operations are unaffected.
     registries: "*"
+    # Dependabot opens at most 5 pull requests per ecosystem unless told
+    # otherwise, and it counts them while a run is still submitting. This
+    # repository tracks more than 20 submodules and most move every day, so the
+    # default dropped two thirds of each daily run's bumps. Keep this above the
+    # number of entries in .gitmodules.
+    open-pull-requests-limit: 50
     schedule:
       interval: "daily"
 

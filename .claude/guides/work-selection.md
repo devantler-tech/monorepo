@@ -238,6 +238,8 @@ governs the issue work that follows.) Two rules enforce that:
    retaining a destination:
    `**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`
    Example: `**Blocker:** opencost/opencost#3710 | upstream | last-verified 2026-08-01: not shipped`.
+   Print the line with `.claude/scripts/blocked-label-blocker-line.sh compose --line-only …` rather
+   than typing it: the composer refuses any shape the check would report (monorepo#3879).
    The reference is an identifier, not permission to inspect that repository. Independently choose an
    allowed source and re-check it on every run before using (b) to skip. If the dependency has shipped,
    remove the `blocked` label and blocker line and resume oldest-first; otherwise update the

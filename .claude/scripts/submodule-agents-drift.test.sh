@@ -17,6 +17,10 @@
 # The fixture texts quote Markdown code spans, so backticks inside single quotes are intentional.
 # shellcheck disable=SC2016
 set -euo pipefail
+# Run every case as a Claude session does: with lazy fetching disabled in the environment. The
+# helper's blobless fetch then depends on its own blob read removing the variable; without that,
+# 24 of 62 assertions fail (monorepo#3878).
+export GIT_NO_LAZY_FETCH=1
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SCRIPT="$SCRIPT_DIR/submodule-agents-drift.sh"

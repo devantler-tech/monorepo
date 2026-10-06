@@ -246,6 +246,9 @@ printf '%s\n' \
   'if [[ "$1" == "-c" ]]; then' \
   '  dest="${!#}"' \
   '  if [[ "${FAKE_GIT_MODE:-failure}" == "success" ]]; then' \
+  '    if [[ -n "${FAKE_GIT_ENV_LOG:-}" ]]; then' \
+  '      printf "%s\\n" "${GIT_NO_LAZY_FETCH-unset}" >"$FAKE_GIT_ENV_LOG"' \
+  '    fi' \
   '    "${REAL_GIT:?}" init --quiet "$dest"' \
   '    "${REAL_GIT:?}" -C "$dest" remote add origin https://github.com/example/repo.git' \
   '    if [[ -n "${FAKE_GIT_REMOTE_URL:-}" ]]; then' \
@@ -281,6 +284,16 @@ out="$(FAKE_GIT_MODE=success REAL_GIT="$real_git" PATH="$fake_bin:$PATH" "$helpe
 report "successful clone mode exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)"
 report "successful clone mode keeps a valid checkout" \
   "$([[ -d "$successful/.git" ]] && "$helper" --check "$successful" >/dev/null 2>&1 && echo yes || echo no)"
+
+# Claude sessions export GIT_NO_LAZY_FETCH=1 for the surveyor's read-only guard. A blobless clone
+# fetches its checkout's blobs lazily, so the clone itself must run with that variable removed
+# (measured: `git clone --depth=1 --filter=blob:none` exits 128 with it set).
+lazy_clone="$tmp/lazy-fetch-clone"
+lazy_log="$tmp/lazy-fetch-env"
+out="$(GIT_NO_LAZY_FETCH=1 FAKE_GIT_ENV_LOG="$lazy_log" FAKE_GIT_MODE=success REAL_GIT="$real_git" \
+  PATH="$fake_bin:$PATH" "$helper" example/repo "$lazy_clone" --depth=1 --filter=blob:none 2>&1)" && rc=0 || rc=$?
+report "clone runs with GIT_NO_LAZY_FETCH removed when the session exports it" \
+  "$([[ $rc -eq 0 && "$(cat "$lazy_log" 2>/dev/null)" == "unset" ]] && echo yes || echo no)"
 
 guard_failed="$tmp/post-clone-guard-failure"
 unsafe_remote="https://x-access-token:${secret}@github.com/example/repo.git"

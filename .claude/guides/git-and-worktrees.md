@@ -462,3 +462,10 @@ sanitize (`--sanitize <dir>`) or delete the clone — and treat the credential a
 rotation to the maintainer) — **never** print a remote URL or config listing first. (Born of the
 2026-07-10/12 incidents where a token embedded in clone remotes and in a global `insteadOf` key
 reached durable task output — monorepo#2132.)
+
+**Claude sessions export `GIT_NO_LAZY_FETCH=1`** (`.claude/settings.json`): from plugin 6.0.0 the
+surveyor's read-only guard refuses a local Git read without it. A blobless clone or fetch
+(`--filter=blob:none`) then cannot fetch a missing blob later, and plain
+`git clone --filter=blob:none` exits 128 at checkout. `safe-clone.sh` removes the variable for the
+clone itself; any other command that must read a blob outside the checkout runs as
+`env -u GIT_NO_LAZY_FETCH git …`. Never remove it in a command the surveyor runs.

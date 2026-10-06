@@ -138,16 +138,32 @@ finish is not neutral: it costs review capacity, ages into conflicts, and hides 
 Without one, every run re-derived the same diagnosis and posted it again: `platform#3534` collected
 17 comments about one unchanged blocker in 18 days. To park a PR:
 
-1. Add the `blocked` label. The label is what parks the PR; a PR without it is not parked and is
-   worked like any other, whatever its comments say.
-2. Post **one** comment that begins with your disclosure line, carries `<!-- pr-blocker-record -->`
+**Park with one command, never two hand-made writes:**
+`.claude/scripts/blocked-label-blocker-line.sh park --org devantler-tech --target <owner/repo#N> --kind upstream --blocker <owner/repo#N> --result <text>`
+(`park --help` covers `authority`). It writes both halves and exits `0` only after reading both
+back; on any other exit its message says what, if anything, was written. When only the label
+write failed, running it again finishes the job; otherwise read the message before retrying.
+Done separately the two halves came apart: a label with no record is skipped by every lane for
+ever, and a record with no label is re-diagnosed every run (monorepo#3879). What it writes:
+
+1. **One** comment that begins with your disclosure line, carries `<!-- pr-blocker-record -->`
    on a line of its own, and holds the same line a blocked issue carries (*Issue-driven → Drain
    oldest-first*): `**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`,
    with the `| asked <channel> <date>` record when the kind is `authority`. The record lives in a
-   comment because a dependency bot rewrites the body of its own PR.
+   comment because a dependency bot rewrites the body of its own PR. An existing record is edited
+   in place, never joined by a second.
+2. The `blocked` label. The label is what parks the PR; a PR without it is not parked and is
+   worked like any other, whatever its comments say.
+
+It refuses a kind other than `upstream` or `authority`, the PR named as its own blocker, and an
+upstream blocker that is not one tracked item — review, CI and evaluation of the PR itself are its
+unfinished readiness work, never a blocker: drive them instead of parking on them.
+`.claude/scripts/blocked-label-blocker-line.sh compose --target <owner/repo#N> …` prints the same
+comment without posting it.
 
 On every later run, **re-verify the blocker against live state and edit that comment in place**
-(`gh api -X PATCH repos/<owner>/<repo>/issues/comments/<id>`): update the date and result, or, when
+(run `park` again with today's result: it edits the one record and never posts a second):
+update the date and result, or, when
 the blocker has cleared, remove the label, delete the record comment and drive the PR (the check
 does not read an unlabelled PR, so a record left behind would be the stale one found if the label
 ever came back). Never post a second record or a new comment restating the blocker, and leave
@@ -701,35 +717,25 @@ retired the separate promotion gate they used to keep (see *Self-improvement*). 
 merged like any other** under *You own EVERY pull request in the portfolio*, but their branch is never
 executed locally (see trust gate); never push to a protected branch directly.
 
-**Cross-repo delivery is closed by default; public research is separate.** Scheduled/autonomous
-portfolio surveys work only in `devantler-tech` and must not search for the maintainer's PRs elsewhere.
-The privacy guide permits targeted public read-only upstream research without separate read approval;
-it does not grant external delivery or branch execution. An external contribution becomes eligible
-only after the maintainer explicitly names the repository and confirms in the current conversation
-that it is unrelated to professional work. Work remains limited to the specifically authorised task;
-`devantler` authorship may satisfy the author trust check but never expands repository scope.
-Private or ambiguous external inspection requires confirmation too. Never merge outside
-`devantler-tech`; leave an authorised upstream PR green with threads resolved for its maintainer.
+**Cross-repo delivery is closed except for bounded upstream contributions** (maintainer direction,
+interactive session 2026-10-05). Scheduled/autonomous portfolio surveys remain limited to
+`devantler-tech` and must not search for the maintainer's PRs elsewhere. The privacy guide permits
+targeted public read-only upstream research without separate read approval, but never branch
+execution. **A bounded external contribution is eligible without a separate ask only when** an
+in-portfolio issue records why it is necessary for portfolio work and why no `devantler-tech` change
+can deliver the outcome, the repository is known-public and unrelated to professional work, and the
+target's contribution and AI policies permit it. Private or ambiguous repositories still need current
+explicit confirmation before inspection; employment-connected repositories remain categorically out
+of scope. `devantler` authorship never expands those boundaries.
 
-**Ask the maintainer before creating ANY upstream issue or PR — `devantler-tech` is exempt.** Only
-after the professional-work boundary has been explicitly cleared may an external contribution be
-prepared. Read-only public research follows the privacy guide's exception. Creating an external
-issue or PR needs a second, explicit approval via the ask
-tool. Approval to inspect or fix an existing PR is not approval to create a new artifact. If either
-confirmation is missing, do not prepare or publish the external contribution.
-
-**Respect each upstream project's contribution policy — check it BEFORE opening anything.** Before
-creating a PR *or* issue on a non-`devantler-tech` (third-party) repo — **once both the professional
-boundary and creation gate above are cleared** — check that project's stated
-contribution policy, **in particular whether it accepts AI-assisted / AI-generated contributions**
-(read its `CONTRIBUTING`, `README`, PR/issue templates, code of conduct). If the project **prohibits or
-discourages** AI contributions — or the policy is **unclear** — do **NOT** open the PR/issue yourself:
-prepare and verify the work locally on a branch, then **hand it to `devantler` to submit under his own
-name**, and surface it in the report. This refines *contribute-upstream-don't-fork* — the **prepare**
-step is yours, but the **submit** step is the maintainer's wherever a project bans AI contributions.
-(Evidence: `zizmorcore/zizmor` — and its in-repo crates `github-actions-models` / `yamlpath` — **bans AI
-PRs**; opening one there was a misstep. `rhysd/actionlint` has **no** such policy, so AI PRs are fine
-there.) This never loosens any other guardrail; it only adds a pre-flight check.
+Keep an eligible contribution minimal and professional, validate it to the target project's standards,
+and publish only the issue, pull request, comment/review, or minimum fork/branch write the proposal
+needs. Never execute an external branch. **Never merge outside `devantler-tech`** or administer an
+external repository; leave an upstream pull request green with threads resolved for its maintainer.
+If the target prohibits AI-assisted contributions, do not prepare or submit the external artifact and
+do not hand it to the maintainer to submit undisclosed. Do not add unsolicited AI attribution; when
+the target requires disclosure, use its requested form, and always answer truthfully if directly asked
+whether AI assisted. The detailed gate and disclosure rules live in *GitHub artifact conventions*.
 
 ## Dependency-automation and programmed bot PRs
 

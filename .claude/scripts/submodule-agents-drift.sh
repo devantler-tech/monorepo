@@ -138,7 +138,9 @@ printf '%s\n' "$tree" | awk -F'\t' '{ split($1, meta, " "); if (meta[2] == "comm
   >"$scratch/gitlinks" || die_unknown "cannot parse the tree at $ref"
 
 if [ -s "$scratch/gitlinks" ]; then
-  git -C "$root" --no-replace-objects show "$ref:.gitmodules" >"$scratch/gitmodules" 2>/dev/null ||
+  # In a blobless clone of the root this blob may be missing at $ref: let it be fetched, as it
+  # was before Claude sessions exported GIT_NO_LAZY_FETCH=1.
+  env -u GIT_NO_LAZY_FETCH git -C "$root" --no-replace-objects show "$ref:.gitmodules" >"$scratch/gitmodules" 2>/dev/null ||
     die_unknown "submodules are pinned at $ref but .gitmodules cannot be read"
   git config -f "$scratch/gitmodules" --get-regexp '^submodule\..*\.path$' >"$scratch/paths" 2>/dev/null ||
     die_unknown "cannot parse .gitmodules at $ref"
@@ -298,8 +300,11 @@ while IFS=$'\t' read -r sub pin; do
     continue
   fi
 
-  # The blob read can fetch lazily from the same remote, so it refuses redirects too.
-  if ! body=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false git -C "$repo" -c credential.helper= \
+  # The blob read can fetch lazily from the same remote, so it refuses redirects too. It MUST be
+  # able to: the fetch above is blobless, and Claude sessions export GIT_NO_LAZY_FETCH=1 for the
+  # surveyor's guard, which would turn every row into UNKNOWN. Removed for this one command only.
+  if ! body=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false env -u GIT_NO_LAZY_FETCH \
+    git -C "$repo" -c credential.helper= \
     -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 -c http.followRedirects=false \
     -c protocol.file.allow=always \
     show "$pin:AGENTS.md" 2>/dev/null); then
