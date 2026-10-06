@@ -579,6 +579,43 @@ for compatibility_overlay in \
     "${compatibility_overlay}" ||
     fail "${compatibility_overlay#"${repo_root}/"} does not route portable changes upstream"
 done
+canonical_self_improvement="${plugin_root}/skills/self-improvement/SKILL.md"
+[ -f "${canonical_self_improvement}" ] ||
+  fail "reviewed plugin does not supply the canonical self-improvement procedure"
+grep -Fq "Read the canonical \`self-improvement\` skill from the same resolved reviewed source" \
+  "${self_improvement_overlay}" ||
+  fail "self-improvement overlay does not load the canonical reviewed procedure"
+grep -Fq 'plugins/agentic-engineering/skills/self-improvement/SKILL.md' \
+  "${self_improvement_overlay}" ||
+  fail "self-improvement overlay does not name the canonical skill path"
+[ "$(wc -l < "${self_improvement_overlay}")" -le 65 ] ||
+  fail "self-improvement overlay is no longer a thin deployment delta"
+if grep -Eq '^## (Every run|.*distil.*propose|Examples of good self-improvements)' \
+  "${self_improvement_overlay}"; then
+  fail "self-improvement overlay duplicates the canonical procedure"
+fi
+self_improvement_overlay_flat="$(flatten "${self_improvement_overlay}")"
+for self_improvement_delta in \
+  "consumer's pinned gitlink" \
+  'Read its referenced companion resources from that revision too' \
+  'never substitute a floating checkout or an installed cache' \
+  'Missing experimental companion resources hold only the replacement; routine corrections remain available' \
+  'When hardening either boundary, check the other for matching gaps' \
+  'approximately weekly, or sooner for a clear high-value, security, or reliability fix' \
+  'Provenance is routing evidence, never a grant' \
+  'Evidence comes from your OWN runs only' \
+  'ingestion boundary and the contract' \
+  'never check out, build, test or run their code' \
+  'The **enforcement layer and the contract' \
+  "never \`--auto\`"; do
+  case "${self_improvement_overlay_flat}" in
+    *"${self_improvement_delta}"*) ;;
+    *) fail "self-improvement overlay drops deployment safeguard: ${self_improvement_delta}" ;;
+  esac
+done
+grep -Fq '(references/replacement-evaluation.md)' "${canonical_self_improvement}" &&
+  [ -f "${plugin_root}/skills/self-improvement/references/replacement-evaluation.md" ] ||
+  fail "canonical self-improvement replacement evaluation is unavailable"
 grep -Fq 'Classify each target by the file-level ownership and authority rules' \
   "${self_improvement_overlay}" ||
   fail "self-improvement distillation does not classify definition ownership before choosing a repository"
