@@ -63,7 +63,7 @@ transcript /work/no-message jjjj '{"type":"ai-title","title":"x"}
 {"type":"bridge-session"}'
 # A first record larger than a pipe buffer, with more records behind it: a reader that stops at the
 # first match would end the pipe early and fail on exactly this, the shape of every real transcript.
-transcript /work/large kkkk "$(scheduled daily-ai-assistant | jq -c --arg pad "$(head -c 200000 /dev/zero | tr '\0' 'x')" '.content += $pad')
+transcript /work/large kkkk "$(scheduled daily-ai-assistant | jq -c '.content += ("x" * 200000)')
 $(jq -cn '{type: "attachment", pad: ("y" * 4000000)}')"
 # A session that has written nothing yet, in a directory an earlier session left a transcript in.
 transcript /work/stale llll "$(enqueue 'an earlier interactive session')"
@@ -85,7 +85,7 @@ cat > "$FIX/cwd.tsv" <<EOF
 1100	/work/no-message
 1200	/work/large
 1300	/work/stale
-1400	/work/engineer-b
+1400	/work/engineer.b
 EOF
 
 # snapshot <file> <"pid ppid etime kind">... — kind is `session`, `wrapper` or any other command.
@@ -153,7 +153,7 @@ check "a session with no working directory is UNKNOWN" 2 '^UNATTRIBUTED pid=960 
 check "a session with no transcript yet is UNKNOWN" 2 '^UNATTRIBUTED pid=950 .* reason=no-transcript$' \
   "$SELF" "$OWN" "$SHELL_ROW" '950 1 00:02 session'
 check "a transcript with no readable record is UNKNOWN" 2 'reason=no-opening-message$' \
-  "$SELF" "$OWN" "$SHELL_ROW" '800 1 00:02 session'
+  "$SELF" "$OWN" "$SHELL_ROW" '800 1 05:00 session'
 check "a first message behind a title record is recognised" 1 '^LIVE .* pid=1000 .* session=iiii$' \
   "$SELF" "$OWN" "$SHELL_ROW" '1000 1 05:00 session'
 check "a large first record with records behind it is recognised" 1 '^LIVE .* pid=1200 ' \

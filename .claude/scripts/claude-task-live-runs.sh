@@ -56,7 +56,6 @@ PS_FILE=""
 CWD_FILE=""
 QUIET=0
 NOW=""
-SKEW_SECONDS=5
 OPENING_RECORDS=20
 
 while [ "$#" -gt 0 ]; do
@@ -191,12 +190,14 @@ while IFS="$TAB" read -r pid elapsed kind cwd; do
 
   if [ -z "$cwd" ]; then unattributed "$pid" "$elapsed" no-working-directory; continue; fi
 
-  sharing=$(printf '%s' "$rows" | awk -F '\t' -v cwd="$cwd" '$4 == cwd { count++ } END { print count + 0 }')
-  if [ "$sharing" -ne 1 ]; then unattributed "$pid" "$elapsed" shared-working-directory; continue; fi
-
   # The runtime names a session's transcript directory after its working directory, with every
-  # character that is not a letter or a digit replaced by a dash.
+  # character that is not a letter or a digit replaced by a dash. Two directories can therefore
+  # share one transcript directory, so sharing is judged on that name, not on the directory.
   slug=$(printf '%s' "$cwd" | tr -c 'A-Za-z0-9' '-')
+  sharing=$(printf '%s' "$rows" | awk -F '\t' -v slug="$slug" '
+    $4 != "" { name = $4; gsub(/[^A-Za-z0-9]/, "-", name); if (name == slug) count++ }
+    END { print count + 0 }')
+  if [ "$sharing" -ne 1 ]; then unattributed "$pid" "$elapsed" shared-working-directory; continue; fi
   newest=""
   for candidate in "$PROJECTS/$slug"/*.jsonl; do
     [ -f "$candidate" ] || continue
@@ -206,12 +207,14 @@ while IFS="$TAB" read -r pid elapsed kind cwd; do
 
   # A session that has not written its transcript yet must not be read from the one an earlier
   # session left in the same directory: the live session's own transcript is never older than it.
+  # One case remains open and cannot be closed from here, because a process carries no session
+  # identity: an earlier session in the same directory that wrote AFTER this one started.
   age=$(elapsed_seconds "$elapsed") || age=""
   modified=$(modified_epoch "$newest") || modified=""
   case "$age:$modified" in
     :*|*:|*[!0-9:]*) unattributed "$pid" "$elapsed" unreadable-age; continue ;;
   esac
-  if [ "$modified" -lt $((NOW - age - SKEW_SECONDS)) ]; then
+  if [ "$modified" -lt $((NOW - age)) ]; then
     unattributed "$pid" "$elapsed" stale-transcript; continue
   fi
 
