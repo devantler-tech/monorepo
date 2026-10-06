@@ -191,8 +191,7 @@ func composeRun(args []string, stdout, stderr io.Writer) int {
 	}
 	out := composeHelp
 	if !wantsHelp {
-		// The sweep's own defaults: a record composed here is read by them.
-		defaults := options{maxAge: 14, verifyMaxAge: 7}
+		defaults := defaultOptions()
 		line, body, err := composeRecord(c, defaults.maxAge, defaults.verifyMaxAge)
 		if err != nil {
 			return refuse(err)
