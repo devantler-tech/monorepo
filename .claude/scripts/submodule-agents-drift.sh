@@ -138,7 +138,9 @@ printf '%s\n' "$tree" | awk -F'\t' '{ split($1, meta, " "); if (meta[2] == "comm
   >"$scratch/gitlinks" || die_unknown "cannot parse the tree at $ref"
 
 if [ -s "$scratch/gitlinks" ]; then
-  git -C "$root" --no-replace-objects show "$ref:.gitmodules" >"$scratch/gitmodules" 2>/dev/null ||
+  # In a blobless clone of the root this blob may be missing at $ref: let it be fetched, as it
+  # was before Claude sessions exported GIT_NO_LAZY_FETCH=1.
+  env -u GIT_NO_LAZY_FETCH git -C "$root" --no-replace-objects show "$ref:.gitmodules" >"$scratch/gitmodules" 2>/dev/null ||
     die_unknown "submodules are pinned at $ref but .gitmodules cannot be read"
   git config -f "$scratch/gitmodules" --get-regexp '^submodule\..*\.path$' >"$scratch/paths" 2>/dev/null ||
     die_unknown "cannot parse .gitmodules at $ref"
