@@ -1,8 +1,10 @@
 ---
 import { FEATURE_BUSINESS_SITE } from 'astro:env/server';
 import BusinessSite from './BusinessSite.astro';
+import BusinessSupporting from './BusinessSupporting.astro';
 
 if (!FEATURE_BUSINESS_SITE) throw new Error('Business routes require the enabled native release flag');
-const locale = Astro.url.pathname.replace(/\/$/, '') === '/da' ? 'da' : 'en';
+const locale = Astro.url.pathname.startsWith('/da/') ? 'da' : 'en';
+const section = Astro.url.pathname.split('/').filter(Boolean).at(-1);
 ---
-<BusinessSite locale={locale} />
+{section === 'about' || section === 'projects' ? <BusinessSupporting locale={locale} section={section} /> : <BusinessSite locale={locale} />}
