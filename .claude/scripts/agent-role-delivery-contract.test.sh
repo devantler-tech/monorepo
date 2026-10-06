@@ -656,6 +656,59 @@ grep -Fq 'verified state' "${portable_loader}" ||
 grep -Fq 'inline fallback' "${portable_loader}" ||
   fail "portable loader drops the authorized inline fallback"
 
+# A merge completes delivery, not an experiment's observation window (#3895).
+# Check the operative reflection section as well as contradictory cleanup prose;
+# a correct lifecycle pointer elsewhere cannot excuse blanket merge pruning.
+verify_learning_lifecycle() {
+  local lifecycle_source="$1" reflection_text reflection_flat required_delta
+  if grep -Eq 'prune when its PR merges|prune entries whose PR has merged' "${lifecycle_source}"; then
+    echo 'blanket merge pruning discards pending experimental evidence' >&2
+    return 1
+  fi
+  reflection_text="$(awk '/^## 5\. Reflect & improve/ {active=1; next}
+    active && /^## / {exit} active {print}' "${lifecycle_source}")"
+  [ -n "${reflection_text}" ] || { echo 'missing operative reflection section' >&2; return 1; }
+  reflection_flat="$(printf '%s' "${reflection_text}" | tr '\n' ' ' | tr -s '[:space:]' ' ')"
+  for required_delta in \
+    'same resolved reviewed source' \
+    'plugins/agentic-engineering/skills/portfolio-maintenance/SKILL.md' \
+    '(../self-improvement/SKILL.md)' \
+    'Routine merged corrections may be pruned' \
+    'retain experimental evidence, observation owner and next check after merge' \
+    'Close the hypothesis only after the observation and recovery checks' \
+    'record HOLD or REJECT as outcomes too' \
+    'subject to the native memory write authority' \
+    'leave the *other* instance' \
+    'never self-widen' \
+    '~monthly host least-privilege audit'; do
+    case "${reflection_flat}" in
+      *"${required_delta}"*) ;;
+      *) echo "missing learning lifecycle requirement: ${required_delta}" >&2; return 1 ;;
+    esac
+  done
+}
+verify_learning_lifecycle "${maintenance_overlay}" ||
+  fail "end-of-run learning lifecycle is incomplete or contradictory"
+[ -f "${plugin_root}/skills/portfolio-maintenance/SKILL.md" ] &&
+  [ -f "${plugin_root}/skills/self-improvement/references/replacement-evaluation.md" ] ||
+  fail "reviewed canonical reflection or replacement evidence source is unavailable"
+learning_fixture="${contract_tmp}/learning-lifecycle.md"
+cp "${maintenance_overlay}" "${learning_fixture}"
+printf '\nprune when its PR merges.\n' >>"${learning_fixture}"
+if verify_learning_lifecycle "${learning_fixture}" >"${contract_tmp}/lifecycle-out" 2>&1; then
+  fail "a correct retention pointer hid contradictory merge pruning"
+fi
+grep -Fq 'blanket merge pruning discards pending experimental evidence' "${contract_tmp}/lifecycle-out" ||
+  fail "merge-pruning negative control failed for an unrelated reason"
+sed 's/retain experimental evidence, observation owner and next check after merge/retain experimental evidence after merge/' \
+  "${maintenance_overlay}" >"${learning_fixture}"
+if verify_learning_lifecycle "${learning_fixture}" >"${contract_tmp}/lifecycle-out" 2>&1; then
+  fail "pending experimental evidence can lose its observation owner and next check"
+fi
+grep -Fq 'missing learning lifecycle requirement: retain experimental evidence, observation owner and next check after merge' \
+  "${contract_tmp}/lifecycle-out" ||
+  fail "experimental ownership negative control failed for an unrelated reason"
+
 grep -Fq 'Agent Improver scorecard store' "${constitution}" ||
   fail "Memory does not name the Agent Improver scorecard store"
 grep -Fq 'open verification-hypothesis store' "${constitution}" ||
