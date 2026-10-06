@@ -187,6 +187,12 @@ git -C "$repo_dir" merge-base --is-ancestor "$observed_head" "$commit" 2>/dev/nu
 if [ "$pr_draft" != true ]; then
   gh pr ready "$pr" --repo "$repo" --undo >/dev/null 2>&1 ||
     unknown "could not convert ${repo}#${pr} to a draft"
+  # GitHub drops auto-merge by itself when a pull request becomes a draft, and then refuses the
+  # disable below because nothing is armed (monorepo#3904, 2026-10-06). Read the armed state
+  # again, so the disable is only attempted where it can succeed.
+  if [ "$pr_auto" != none ]; then
+    parse_pr "$(read_pr)"
+  fi
 fi
 if [ "$pr_auto" != none ]; then
   gh pr merge "$pr" --repo "$repo" --disable-auto >/dev/null 2>&1 ||
