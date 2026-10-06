@@ -13,13 +13,53 @@ npm run dev      # local dev server
 npm run build    # production build (this is what CI validates)
 ```
 
+## Business website
+
+The business homepage is rendered by `src/components/business/BusinessSite.astro` at `/` (English)
+and `/da/` (Danish). Its offer amounts and translated copy live together in
+`src/components/business/content.ts`. Prices are introductory guides, not an automatic checkout:
+project scope, hosting capacity, external fees and support are agreed in a written proposal.
+
+The preview keeps the original green palette and locally served Matrix artwork. Its appearance
+selector offers System, Light and Dark in both languages. The small head script applies the saved
+choice before painting, follows system changes in System mode, and shares Starlight's
+`starlight-theme` preference with supporting pages. If browser storage is blocked, switching still
+works for the current page. Without JavaScript, the page follows the system theme and hides the
+inactive selector. `scripts/theme.test.mjs` tests the actual controller as part of every build.
+
+The introduction identifies Nikolai with the existing public `profile.jpg` photograph, biography
+and GitHub links. First-person English/Danish copy explains the independent business without
+inventing client endorsements; the family projects remain labelled as such. The real photograph
+also supplies the sharing image. Built-page checks verify the portrait and profile journey.
+
+The business identity also covers `/about/` and `/projects/`, with Danish counterparts at
+`/da/about/` and `/da/projects/`. About introduces the founder of a one-person business; Projects
+distinguishes open-source tools and family examples from client work. The journal and technical
+pages reuse the business navigation, typography, colors, footer and appearance control through
+Starlight component overrides. Their search, sidebar, RSS and historical articles remain available.
+There is one appearance picker, including on mobile; the documentation header measures its height
+so the reading tools do not overlap the business navigation.
+
+`FEATURE_BUSINESS_SITE` is a default-off release flag. `npm run build` verifies both states and
+leaves the selected build in `dist/`; `FEATURE_BUSINESS_SITE=true npm run build` previews the new
+experience. The off state renders the existing documentation homepage. Publication and flag
+removal are tracked in [#3898](https://github.com/devantler-tech/monorepo/issues/3898).
+
+The company contact email and CVR number are not known yet, so neither is invented or published.
+LinkedIn is the existing verified inquiry route. Confirm the registered name, CVR, public business
+address and email before publishing this commercial experience, in line with the
+[Danish Consumer Ombudsman's guidance](https://forbrugerombudsmanden.dk/alle-emner/anden-lovgivning/e-handelsloven).
+There is no contact-form backend, automatic booking,
+payment flow or paid product subscription. Home, About and Projects are translated; the journal,
+CV and detailed technical documentation remain in English and are labelled accordingly.
+
 ## CV download
 
-The About page offers the CV as an A4 PDF at `/pdfs/nikolai-emil-damm-cv.pdf`. It is not a checked-in
+Both About experiences offer the CV as an A4 PDF at `/pdfs/nikolai-emil-damm-cv.pdf`. It is not a checked-in
 file: the static endpoint in `src/pages/pdfs/` renders it during `npm run build` (and on request in
 `npm run dev`) from `src/data/cv.ts`, using the same palette as the site theme.
 
-`src/data/cv.ts` is the single source for the CV. The About page renders its intro, meta cards, and
+`src/data/cv.ts` is the single source for the CV. The default-off About page renders its intro, meta cards, and
 skills from it directly; only the experience roster on the page stays hand-written, because its
 markdown headings feed the table of contents. `scripts/check-cv-drift.mjs` (run in CI) fails when that
 roster and the data disagree on a role title, period, or organisation line. When the content changes,
