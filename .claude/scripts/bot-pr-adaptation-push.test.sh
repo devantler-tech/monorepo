@@ -26,6 +26,8 @@ state="${root}/state"
 bin="${root}/bin"
 mkdir -p "$state" "$bin" || exit 2
 real_git=$(command -v git) || exit 2
+# The helper's own git calls must not meet a global hook, rewrite or signing setting.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 # --- the stubs ------------------------------------------------------------------------------
 cat > "${bin}/gh" <<'STUB'
@@ -61,8 +63,20 @@ esac
 STUB
 cat > "${bin}/git" <<STUB
 #!/bin/sh
-for a in "\$@"; do [ "\$a" = push ] && printf 'push\n' >> "\$GH_STUB_STATE/calls"; done
-exec "$real_git" "\$@"
+# Records each push, and makes the pull request's head follow a push that succeeded, as GitHub
+# does. git_mode: swallow = report success without pushing; nofollow = push, head stays behind.
+s=\$GH_STUB_STATE
+pushing=0; spec=''
+for a in "\$@"; do
+  [ "\$a" = push ] && pushing=1
+  case "\$a" in *:refs/heads/*) spec=\$a ;; esac
+done
+[ "\$pushing" = 1 ] || exec "$real_git" "\$@"
+printf 'push\n' >> "\$s/calls"
+[ "\$(cat "\$s/git_mode")" = swallow ] && exit 0
+"$real_git" "\$@" || exit \$?
+[ "\$(cat "\$s/git_mode")" = nofollow ] || printf '%s' "\${spec%%:*}" > "\$s/head"
+exit 0
 STUB
 chmod +x "${bin}/gh" "${bin}/git"
 
@@ -75,7 +89,14 @@ work="${root}/work"
 branch=renovate/widget-2.x
 g init -q --bare "$remote_repo" || fail 'fixture: init remote'
 g init -q "$work" || fail 'fixture: init work'
-g -C "$work" remote add origin "$remote_repo"
+# The remote is named by its GitHub URL, as a real checkout names it, and reaches the fixture
+# through a rewrite in the clone's own config. `fork` is another repository with the same branch.
+fork_repo="${root}/fork.git"
+g init -q --bare "$fork_repo" || fail 'fixture: init fork'
+g -C "$work" remote add origin https://github.com/acme/widgets.git
+g -C "$work" remote add fork https://github.com/someone/widgets.git
+g -C "$work" config "url.${remote_repo}.insteadOf" https://github.com/acme/widgets.git
+g -C "$work" config "url.${fork_repo}.insteadOf" https://github.com/someone/widgets.git
 g -C "$work" commit -q --allow-empty -m base || fail 'fixture: base commit'
 base=$(g -C "$work" rev-parse HEAD)
 g -C "$work" commit -q --allow-empty -m fix || fail 'fixture: fix commit'
@@ -99,17 +120,19 @@ reset() {
   printf '%s' "$branch" > "${state}/branch"
   printf '%s' "$base" > "${state}/head"
   printf '0' > "${state}/reads"
-  for f in fail_read undraft_on_read drop_auto ready_mode auto_mode move_head_to; do
+  for f in fail_read undraft_on_read drop_auto ready_mode auto_mode move_head_to git_mode; do
     : > "${state}/${f}"
   done
   : > "${state}/calls"
   g -C "$work" push -q --force origin "${base}:refs/heads/${branch}" 2>/dev/null || fail 'fixture: reset remote'
+  g -C "$work" push -q --force fork "${base}:refs/heads/${branch}" 2>/dev/null || fail 'fixture: reset fork'
 }
 set_state() { printf '%s' "$2" > "${state}/$1"; }
 calls() { tr '\n' ' ' < "${state}/calls" | sed 's/ $//'; }
 
 run() { # [<commit>] — sets out and rc
-  out=$(GH_STUB_STATE="$state" PATH="${bin}:$PATH" bash "$impl" \
+  out=$(GH_STUB_STATE="$state" PATH="${bin}:$PATH" \
+    BOT_PR_ADAPTATION_PUSH_HEAD_WAIT_SECONDS="${HEAD_WAIT:-0}" bash "$impl" --remote "${RUN_REMOTE:-origin}" \
     --repo acme/widgets --pr 7 --repo-dir "$work" --commit "${1:-$fix}" 2>&1)
   rc=$?
 }
@@ -234,6 +257,48 @@ reset false armed
 run "${fix%????}"
 [ "$rc" -eq 2 ] || fail "9: an abbreviated sha exited ${rc}, not 2"
 [ -z "$(calls)" ] || fail "9: a usage error still called out ($(calls))"
+
+# --- 10. the remote must be the pull request's repository -------------------------------------
+# A second remote with the same branch accepts the push, so the remote's own read-back cannot
+# tell: the helper has to refuse before it changes anything.
+fork_head() { g -C "$fork_repo" rev-parse "refs/heads/${branch}" 2>/dev/null; }
+for r in fork . nosuch; do
+  reset false armed
+  RUN_REMOTE=$r run
+  [ "$rc" -eq 2 ] || fail "10: --remote ${r} exited ${rc}, not 2: ${out}"
+  [ -z "$(calls)" ] || fail "10: --remote ${r} still reached the pull request or pushed ($(calls))"
+  expect_untouched "10 (--remote ${r})"
+  [ "$(fork_head)" = "$base" ] || fail "10: --remote ${r} pushed to the other repository"
+done
+
+# --- 11. the pull request must show the commit as its head before PUSHED is said --------------
+# 11a. a push that reports success without delivering is caught by the branch read-back.
+reset true none
+set_state git_mode swallow
+run
+[ "$rc" -eq 2 ] || fail "11a: a push that delivered nothing exited ${rc}, not 2"
+grep -q PUSHED <<<"$out" && fail '11a: an undelivered push was reported as pushed'
+# 11b. the branch has the commit but the pull request never shows it.
+reset true none
+set_state git_mode nofollow
+run
+[ "$rc" -eq 2 ] || fail "11b: a pull request whose head never followed exited ${rc}, not 2"
+grep -q PUSHED <<<"$out" && fail '11b: a commit the pull request does not show was reported as pushed'
+# 11c. a head that trails the push is waited for, one read a second, up to the wait.
+reset true none
+set_state git_mode nofollow
+HEAD_WAIT=1 run
+[ "$(calls)" = 'view view push view view' ] ||
+  fail "11c: the head was not read again within the wait ($(calls))"
+
+# --- 12. an abort is UNKNOWN, never "refused" and never success ------------------------------
+# With stdout closed the FENCED line cannot be written, so the run aborts before the push.
+reset false armed
+GH_STUB_STATE="$state" PATH="${bin}:$PATH" bash "$impl" --repo acme/widgets --pr 7 \
+  --repo-dir "$work" --commit "$fix" >&- 2>/dev/null
+rc=$?
+[ "$rc" -eq 2 ] || fail "12: an aborted run exited ${rc}, not 2"
+expect_untouched 12
 
 if [ "$failures" -eq 0 ]; then
   printf 'bot-pr-adaptation-push test: all assertions passed\n'

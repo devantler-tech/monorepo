@@ -19,43 +19,51 @@
 #   --repo-dir  a local checkout of that repository holding the commit
 #   --commit    the FULL 40-character sha to push. It must descend from the pull request's current
 #               head: the push is never forced, so a branch that moved is refused by the remote.
-#   --remote    the git remote to push to; default origin
+#   --remote    the git remote to push to; default origin. Its configured URL must name
+#               <owner>/<repo> on github.com, or nothing is fenced and nothing is pushed.
 #
 # OUTPUT (stdout)
 #   FENCED <repo>#<n> draft=true auto_merge=none head=<sha>
 #   PUSHED <repo>#<n> <commit> -> <branch>
 #
 # EXIT CODES
-#   0  the pull request was fenced, both states were confirmed, and the commit is the branch head
+#   0  the pull request was fenced, both states were confirmed, and the pull request itself
+#      shows the commit as its head, still as an open draft
 #   1  refused, nothing pushed: not an open dependency-bot pull request from this repository, the
 #      head moved, the commit does not descend from the head, or a state did not hold after the
 #      fence was applied (each printed as REFUSED)
-#   2  UNKNOWN: a usage error, a failed or unreadable read, a failed fence step or a failed push.
+#   2  UNKNOWN: a usage error, a remote that is not the pull request's repository, a failed or
+#      unreadable read, a failed fence step, a failed push, or any abort.
 #      Never read 2 as fenced or as pushed. A pull request this helper already converted to a
 #      draft stays a draft: that is the safe side, and the next call finds it fenced.
 set -euo pipefail
 
 prog=bot-pr-adaptation-push
-bot_pr_adaptation_push_finished=0
+# The verdict is recorded only by the three places that reach one, and the EXIT trap reports
+# nothing else. An abort is therefore always UNKNOWN, whatever status it carried: an errexit
+# abort exits 1, which would otherwise read as "refused, nothing pushed" even after the push
+# (a closed reader failing the last line is enough), and bash 3.2 hands the trap a 0 after a
+# `set -u` abort.
+bot_pr_adaptation_push_verdict=''
 # shellcheck disable=SC2329  # invoked by the EXIT trap below
 on_exit() {
-  local rc=$?
-  if [ "$bot_pr_adaptation_push_finished" != 1 ] && [ "$rc" -ne 1 ] && [ "$rc" -ne 2 ]; then
+  if [ -z "$bot_pr_adaptation_push_verdict" ]; then
     printf '%s: aborted before finishing — UNKNOWN\n' "$prog" >&2
-    rc=2
+    exit 2
   fi
-  exit "$rc"
+  exit "$bot_pr_adaptation_push_verdict"
 }
 trap on_exit EXIT
 
 unknown() {
   printf '%s: UNKNOWN — %s\n' "$prog" "$1" >&2
+  bot_pr_adaptation_push_verdict=2
   exit 2
 }
 refuse() {
-  printf 'REFUSED %s\n' "$1"
-  bot_pr_adaptation_push_finished=1
-  exit 1
+  bot_pr_adaptation_push_verdict=1
+  printf 'REFUSED %s\n' "$1" || bot_pr_adaptation_push_verdict=2
+  exit "$bot_pr_adaptation_push_verdict"
 }
 
 repo='' pr='' repo_dir='' commit='' remote=origin
@@ -79,11 +87,36 @@ done
 [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || unknown "--repo must be <owner>/<repo>"
 [[ "$pr" =~ ^[1-9][0-9]{0,8}$ ]] || unknown "--pr must be a pull request number"
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || unknown "--commit must be a full 40-character lowercase sha"
-[[ "$remote" =~ ^[A-Za-z0-9._-]+$ ]] || unknown "--remote must be a remote name"
+[[ "$remote" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || unknown "--remote must be a remote name"
 [ -n "$repo_dir" ] && [ -d "$repo_dir" ] || unknown "--repo-dir must be an existing checkout"
 git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1 || unknown "not a git checkout: $repo_dir"
 git -C "$repo_dir" cat-file -e "${commit}^{commit}" 2>/dev/null ||
   unknown "commit ${commit} is not in ${repo_dir}"
+
+# The remote must BE the pull request's repository. Without this the fence goes on one
+# repository and the commit to another: a second remote carrying the same branch name accepts
+# the push, reads back as pushed, and the pull request never receives the commit. The URL is
+# read as configured (the push URL when one is set), and only the GitHub spellings of
+# <owner>/<repo> are accepted; anything else, a path or `.` included, is UNKNOWN.
+remote_url=$(git -C "$repo_dir" config --get "remote.${remote}.pushurl" 2>/dev/null) ||
+  remote_url=$(git -C "$repo_dir" config --get "remote.${remote}.url" 2>/dev/null) ||
+  unknown "no remote named ${remote} in ${repo_dir}"
+remote_slug=''
+case "$remote_url" in
+  https://github.com/*) remote_slug=${remote_url#https://github.com/} ;;
+  git@github.com:*) remote_slug=${remote_url#git@github.com:} ;;
+  ssh://git@github.com/*) remote_slug=${remote_url#ssh://git@github.com/} ;;
+esac
+remote_slug=${remote_slug%/}
+remote_slug=${remote_slug%.git}
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+[ -n "$remote_slug" ] && [ "$(lower "$remote_slug")" = "$(lower "$repo")" ] ||
+  unknown "remote ${remote} does not point at ${repo}"
+
+# How long the pull request is given to show the pushed commit as its head (step 5).
+HEAD_WAIT_SECONDS=${BOT_PR_ADAPTATION_PUSH_HEAD_WAIT_SECONDS:-3}
+[[ "$HEAD_WAIT_SECONDS" =~ ^[0-9]{1,2}$ ]] ||
+  unknown "BOT_PR_ADAPTATION_PUSH_HEAD_WAIT_SECONDS must be a number of seconds below 100"
 
 # The exact identities whose pull requests repository automation merges unattended.
 BOT_AUTHORS='app/renovate app/dependabot'
@@ -164,17 +197,28 @@ printf 'FENCED %s#%s draft=true auto_merge=none head=%s\n' "$repo" "$pr" "$obser
 # 4. Push, never forced: the commit descends from the observed head, so a branch that moved
 #    since is rejected by the remote. The branch is then read back; the push's own status is not
 #    the evidence.
-git -C "$repo_dir" push "$remote" "${commit}:refs/heads/${branch}" >/dev/null 2>&1 ||
+git -C "$repo_dir" push -- "$remote" "${commit}:refs/heads/${branch}" >/dev/null 2>&1 ||
   unknown "the push to ${branch} was rejected or failed; ${repo}#${pr} stays fenced"
-remote_head=$(git -C "$repo_dir" ls-remote "$remote" "refs/heads/${branch}" 2>/dev/null | awk 'NR == 1 { print $1 }') ||
+remote_head=$(git -C "$repo_dir" ls-remote -- "$remote" "refs/heads/${branch}" 2>/dev/null | awk 'NR == 1 { print $1 }') ||
   unknown "could not read ${branch} back after the push"
 [ "$remote_head" = "$commit" ] ||
   unknown "after the push ${branch} is at '${remote_head}', not ${commit}"
 
-# 5. The push is what automation reacts to, so the draft state is confirmed once more.
-parse_pr "$(read_pr)"
+# 5. The pull request itself must now show the commit as its head, still as an open draft.
+#    The branch read above proves only what the remote holds; this is what proves the commit
+#    reached THIS pull request, and it is what automation reacts to. The head can trail the
+#    push by a moment, so it is read again each second up to the wait, never assumed.
+waited=0
+while :; do
+  parse_pr "$(read_pr)"
+  [ "$pr_head" != "$commit" ] && [ "$waited" -lt "$HEAD_WAIT_SECONDS" ] || break
+  sleep 1
+  waited=$((waited + 1))
+done
+[ "$pr_head" = "$commit" ] ||
+  unknown "${repo}#${pr} shows ${pr_head} as its head, not the pushed ${commit} — check it now"
 [ "$pr_draft" = true ] && [ "$pr_state" = OPEN ] ||
   unknown "${repo}#${pr} is no longer an open draft after the push — check it now"
 printf 'PUSHED %s#%s %s -> %s\n' "$repo" "$pr" "$commit" "$branch"
-bot_pr_adaptation_push_finished=1
+bot_pr_adaptation_push_verdict=0
 exit 0
