@@ -271,12 +271,24 @@ for r in fork . nosuch; do
   [ "$(fork_head)" = "$base" ] || fail "10: --remote ${r} pushed to the other repository"
 done
 
+# A second push URL would receive the commit unchecked, whichever order they are listed in.
+reset false armed
+g -C "$work" config --add remote.origin.pushurl https://github.com/someone/widgets.git
+g -C "$work" config --add remote.origin.pushurl https://github.com/acme/widgets.git
+run
+g -C "$work" config --unset-all remote.origin.pushurl
+[ "$rc" -eq 2 ] || fail "10: a remote with two push URLs exited ${rc}, not 2"
+[ -z "$(calls)" ] || fail "10: a remote with two push URLs still reached the pull request ($(calls))"
+[ "$(fork_head)" = "$base" ] || fail '10: the second push URL received the commit'
+
 # --- 11. the pull request must show the commit as its head before PUSHED is said --------------
 # 11a. a push that reports success without delivering is caught by the branch read-back.
 reset true none
 set_state git_mode swallow
 run
 [ "$rc" -eq 2 ] || fail "11a: a push that delivered nothing exited ${rc}, not 2"
+grep -qF 'after the push' <<<"$out" || fail '11a: the branch read-back did not catch the undelivered push'
+[ "$(calls)" = 'view view push' ] || fail "11a: the run went on after the failed read-back ($(calls))"
 grep -q PUSHED <<<"$out" && fail '11a: an undelivered push was reported as pushed'
 # 11b. the branch has the commit but the pull request never shows it.
 reset true none
@@ -299,6 +311,12 @@ GH_STUB_STATE="$state" PATH="${bin}:$PATH" bash "$impl" --repo acme/widgets --pr
 rc=$?
 [ "$rc" -eq 2 ] || fail "12: an aborted run exited ${rc}, not 2"
 expect_untouched 12
+# With stderr closed as well, the UNKNOWN message itself cannot be written.
+reset false armed
+GH_STUB_STATE="$state" PATH="${bin}:$PATH" bash "$impl" --repo not-a-repo --pr 7 \
+  --repo-dir "$work" --commit "$fix" >&- 2>&-
+rc=$?
+[ "$rc" -eq 2 ] || fail "12: a usage error with stderr closed exited ${rc}, not 2"
 
 if [ "$failures" -eq 0 ]; then
   printf 'bot-pr-adaptation-push test: all assertions passed\n'

@@ -20,7 +20,9 @@
 #   --commit    the FULL 40-character sha to push. It must descend from the pull request's current
 #               head: the push is never forced, so a branch that moved is refused by the remote.
 #   --remote    the git remote to push to; default origin. Its configured URL must name
-#               <owner>/<repo> on github.com, or nothing is fenced and nothing is pushed.
+#               <owner>/<repo> on github.com, or the pull request is left untouched. Rewrite
+#               rules (insteadOf) are not followed: what proves delivery is the pull request
+#               showing the commit as its head, which is required before PUSHED is said.
 #
 # OUTPUT (stdout)
 #   FENCED <repo>#<n> draft=true auto_merge=none head=<sha>
@@ -48,7 +50,7 @@ bot_pr_adaptation_push_verdict=''
 # shellcheck disable=SC2329  # invoked by the EXIT trap below
 on_exit() {
   if [ -z "$bot_pr_adaptation_push_verdict" ]; then
-    printf '%s: aborted before finishing — UNKNOWN\n' "$prog" >&2
+    printf '%s: aborted before finishing — UNKNOWN\n' "$prog" >&2 || true
     exit 2
   fi
   exit "$bot_pr_adaptation_push_verdict"
@@ -56,8 +58,10 @@ on_exit() {
 trap on_exit EXIT
 
 unknown() {
-  printf '%s: UNKNOWN — %s\n' "$prog" "$1" >&2
+  # Recorded BEFORE the message: with stderr closed the printf fails, and an errexit abort
+  # here must still end as UNKNOWN.
   bot_pr_adaptation_push_verdict=2
+  printf '%s: UNKNOWN — %s\n' "$prog" "$1" >&2 || true
   exit 2
 }
 refuse() {
@@ -98,9 +102,13 @@ git -C "$repo_dir" cat-file -e "${commit}^{commit}" 2>/dev/null ||
 # the push, reads back as pushed, and the pull request never receives the commit. The URL is
 # read as configured (the push URL when one is set), and only the GitHub spellings of
 # <owner>/<repo> are accepted; anything else, a path or `.` included, is UNKNOWN.
-remote_url=$(git -C "$repo_dir" config --get "remote.${remote}.pushurl" 2>/dev/null) ||
-  remote_url=$(git -C "$repo_dir" config --get "remote.${remote}.url" 2>/dev/null) ||
+# Every configured value is read: git pushes to ALL push URLs, so a second one would receive
+# the commit unchecked. Exactly one is accepted.
+remote_url=$(git -C "$repo_dir" config --get-all "remote.${remote}.pushurl" 2>/dev/null) ||
+  remote_url=$(git -C "$repo_dir" config --get-all "remote.${remote}.url" 2>/dev/null) ||
   unknown "no remote named ${remote} in ${repo_dir}"
+[ "$(printf '%s\n' "$remote_url" | grep -c .)" -eq 1 ] ||
+  unknown "remote ${remote} has more than one URL; this helper pushes to exactly one"
 remote_slug=''
 case "$remote_url" in
   https://github.com/*) remote_slug=${remote_url#https://github.com/} ;;
