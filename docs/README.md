@@ -13,6 +13,26 @@ npm run dev      # local dev server
 npm run build    # production build (this is what CI validates)
 ```
 
+## Business website
+
+The business homepage is rendered by `src/components/business/BusinessSite.astro` at `/` (English)
+and `/da/` (Danish). Its offer amounts and translated copy live together in
+`src/components/business/content.ts`. Prices are introductory guides, not an automatic checkout:
+project scope, hosting capacity, external fees and support are agreed in a written proposal.
+
+`FEATURE_BUSINESS_SITE` is a default-off release flag. `npm run build` verifies both states and
+leaves the selected build in `dist/`; `FEATURE_BUSINESS_SITE=true npm run build` previews the new
+experience. The off state renders the existing documentation homepage. Publication and flag
+removal are tracked in [#3898](https://github.com/devantler-tech/monorepo/issues/3898).
+
+The company contact email and CVR number are not known yet, so neither is invented or published.
+LinkedIn is the existing verified inquiry route. Confirm the registered name, CVR, public business
+address and email before publishing this commercial experience, in line with the
+[Danish Consumer Ombudsman's guidance](https://forbrugerombudsmanden.dk/alle-emner/anden-lovgivning/e-handelsloven).
+There is no contact-form backend, automatic booking,
+payment flow or paid product subscription. The business pages are translated; the supporting
+profile, blog and technical documentation remain in English and are labelled accordingly.
+
 ## CV download
 
 The About page offers the CV as an A4 PDF at `/pdfs/nikolai-emil-damm-cv.pdf`. It is not a checked-in

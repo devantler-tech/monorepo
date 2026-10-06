@@ -6,6 +6,10 @@ import starlightBlog from "starlight-blog";
 import starlightGithubAlerts from "starlight-github-alerts";
 import starlightLinksValidator from "starlight-links-validator";
 
+// Astro evaluates config before astro:env. Release builds pass the flag in the
+// process environment; the injected render entrypoint validates it natively too.
+const businessSite = process.env.FEATURE_BUSINESS_SITE === "true";
+
 export default defineConfig({
   site: "https://devantler.tech",
   // Kept so a renamed page does not break links that already exist in the wild
@@ -21,6 +25,11 @@ export default defineConfig({
   // Convention + lifecycle (remove the gate once shipped) live in docs/README.md.
   env: {
     schema: {
+      FEATURE_BUSINESS_SITE: envField.boolean({
+        context: "server",
+        access: "public",
+        default: false,
+      }),
       // Example gated section: an unreleased-preview banner on the home page.
       // Default-off, so production builds omit it; a preview build enables it
       // with `FEATURE_PREVIEW_BANNER=true npm run build`. Server context = the
@@ -34,9 +43,19 @@ export default defineConfig({
     },
   },
   integrations: [
+    ...(businessSite ? [{
+      name: 'devantler-business-pages',
+      hooks: {
+        'astro:config:setup': ({ injectRoute }) => {
+          for (const pattern of ['/', '/da/']) {
+            injectRoute({ pattern, entrypoint: './src/components/business/BusinessPage.astro', prerender: true });
+          }
+        },
+      },
+    }] : []),
     mermaid(),
     starlight({
-      title: "Nikolai Emil | Devantler",
+      title: businessSite ? "Devantler Tech" : "Nikolai Emil | Devantler",
       description:
         "Personal site of Nikolai Emil Damm — software engineer, open-source advocate, and Kubernetes enthusiast.",
       defaultLocale: "en",

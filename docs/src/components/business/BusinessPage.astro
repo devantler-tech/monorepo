@@ -1,0 +1,8 @@
+---
+import { FEATURE_BUSINESS_SITE } from 'astro:env/server';
+import BusinessSite from './BusinessSite.astro';
+
+if (!FEATURE_BUSINESS_SITE) throw new Error('Business routes require the enabled native release flag');
+const locale = Astro.url.pathname.replace(/\/$/, '') === '/da' ? 'da' : 'en';
+---
+<BusinessSite locale={locale} />
