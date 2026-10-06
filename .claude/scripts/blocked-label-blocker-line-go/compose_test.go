@@ -4,7 +4,14 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 )
+
+// The composer dates and judges a record by the real clock; pin it so the
+// fixtures below keep meaning the same thing as the calendar moves.
+func init() {
+	composeToday = func() time.Time { return time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC) }
+}
 
 func compose(args ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
@@ -13,8 +20,8 @@ func compose(args ...string) (int, string, string) {
 }
 
 var (
-	upstreamArgs  = []string{"--target", "o/r#5", "--kind", "upstream", "--blocker", "o/other#7", "--result", "still open", "--today", "2026-10-06"}
-	authorityArgs = []string{"--target", "o/r#5", "--kind", "authority", "--blocker", "rotate the registry token", "--result", "token still expired", "--asked", "slack", "2026-10-05", "--today", "2026-10-06"}
+	upstreamArgs  = []string{"--target", "o/r#5", "--kind", "upstream", "--blocker", "o/other#7", "--result", "still open"}
+	authorityArgs = []string{"--target", "o/r#5", "--kind", "authority", "--blocker", "rotate the registry token", "--result", "token still expired", "--asked", "slack", "2026-10-05"}
 )
 
 // replaced returns args with the value of one flag swapped, so each refusal
@@ -83,13 +90,26 @@ func TestComposeRefusals(t *testing.T) {
 		{"an empty result", replaced(upstreamArgs, "--result", " "), "--result must be one non-empty line"},
 		{"an unusable target", replaced(upstreamArgs, "--target", "r#5"), "--target must be one item"},
 		{"an ask on an upstream record", append(append([]string{}, upstreamArgs...), "--asked", "slack", "2026-10-05"), "belongs to --kind authority"},
-		{"an impossible date", replaced(upstreamArgs, "--today", "2026-13-01"), "--today must be a real"},
-		{"an ask dated after today", append(replaced(authorityArgs, "--asked", "slack")[:10], "2026-10-07", "--today", "2026-10-06"), "reads the composed record as MALFORMED"},
+		{"an ask dated after today", append(replaced(authorityArgs, "--asked", "slack")[:10], "2026-10-07"), "reads the composed record as MALFORMED"},
 		{"an unknown actor", append(append([]string{}, upstreamArgs...), "--actor", "maintainer"), "--actor must be"},
 		{"authority without an ask", authorityArgs[:8], "ask the maintainer first"},
 		{"authority with no words", replaced(authorityArgs, "--blocker", "#"), "what only the maintainer can do"},
-		{"an ask channel that does not exist", replaced(authorityArgs, "--asked", "issue"), "reads the composed record as NO-ASK"},
-		{"an ask that has gone stale", append(replaced(authorityArgs, "--asked", "slack")[:10], "2026-09-01", "--today", "2026-10-06"), "reads the composed record as STALE-ASK"},
+		{"an ask channel that does not exist", replaced(authorityArgs, "--asked", "issue"), "the channels are pr, slack, session"},
+		{"an ask channel carrying a second record", replaced(authorityArgs, "--asked", "x | asked slack"), "the channels are pr, slack, session"},
+		{"an ask date with trailing space", append(replaced(authorityArgs, "--asked", "slack")[:10], "2026-10-05 "), "--asked needs a real"},
+		{"an ask with one value", authorityArgs[:10], "--asked needs a channel and a date"},
+		{"an empty ask on an upstream record", append(append([]string{}, upstreamArgs...), "--asked", "", "2026-10-05"), "belongs to --kind authority"},
+		{"a caller-chosen date", append(append([]string{}, upstreamArgs...), "--today", "2020-01-01"), "unknown argument"},
+		{"help after other arguments", append(append([]string{}, upstreamArgs...), "--help"), "unknown argument"},
+		{"a hidden direction override in the result", replaced(upstreamArgs, "--result", "open\u202e"), "--result must be one non-empty line"},
+		{"a tab in the result", replaced(upstreamArgs, "--result", "open\tnow"), "--result must be one non-empty line"},
+		{"invalid text in the result", replaced(upstreamArgs, "--result", "open\xff"), "--result must be one non-empty line"},
+		{"a dot-only repository", replaced(upstreamArgs, "--blocker", "../..#1"), "exactly one tracked item"},
+		{"authority naming only an item", replaced(authorityArgs, "--blocker", "o/r#5"), "what only the maintainer can do"},
+		{"authority with a delimiter", replaced(authorityArgs, "--blocker", "rotate | upstream"), "what only the maintainer can do"},
+		{"a flag with no value", append(append([]string{}, upstreamArgs...), "--actor"), "--actor needs a value"},
+		{"a missing target", upstreamArgs[2:], "--target is required"},
+		{"an ask that has gone stale", append(replaced(authorityArgs, "--asked", "slack")[:10], "2026-09-01"), "reads the composed record as STALE-ASK"},
 		{"a flag given twice", append(append([]string{}, upstreamArgs...), "--kind", "authority"), "--kind given more than once"},
 		{"a missing result", upstreamArgs[:6], "--result is required"},
 		{"an unknown flag", append(append([]string{}, upstreamArgs...), "--org", "o"), "unknown argument"},
