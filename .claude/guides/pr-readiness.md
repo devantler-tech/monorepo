@@ -51,6 +51,20 @@ draft yourself only when you genuinely know it is ready**, which means ALL THREE
    stays a draft on that named blocker** — or you add the coverage that reaches it. A code-path
    trace never substitutes here: that carve-out is for a change with nothing to run, and this one
    has something to run that you cannot reach.
+   🔑 **Evidence only the deployment pipeline can reach is read by a reviewed workflow**
+   (maintainer direction 2026-10-06, platform#3604: *"Only GitHub Actions has full talos and kube
+   access"*). When the missing proof needs access the agents' identities are denied by design — a
+   read from inside a running production workload, a Talos API read — the coverage to add is a
+   **dispatch-only, read-only workflow**. It is started by `workflow_dispatch` alone, refuses any
+   ref but `main` before checkout, sits behind a typed confirmation, and holds no more than
+   `contents: read`. Its commands and targets are fixed in reviewed code, so nothing read from the
+   cluster, an input, an issue or a log is executed or chooses a target. It changes nothing, and it
+   prints no secret values, credentials or node addresses to the public log. Author it on a draft
+   branch, take it through the ordinary review and merge gates, start it once from `main`, and
+   record the run and its verdict on the issue. That is reviewed code doing the read: **the agent
+   itself still never runs `exec`, `attach`, `cp`, `debug` or any cluster mutation.** A lane whose
+   permission layer refuses to build such a workflow records that as the named blocker and
+   never works around the refusal (monorepo#3900).
 A PR missing any of the three **stays a draft**. **Self-promotion applies to every draft you may
 drive** — your own instance's registered namespace (whichever *you* write;
 see *Execution model*), a sibling lane's, the maintainer's interactive drafts, and outside

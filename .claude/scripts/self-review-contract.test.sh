@@ -143,6 +143,20 @@ grep -Fq 'against the real provider, and record **which run** and **what it' "${
   fail "the readiness record need not identify the CI run and what it demonstrated"
 grep -Fq 'demonstrated**, at the current head' "${constitution}" ||
   fail "the CI observation for a provider-gated change need not be at the current head"
+# monorepo#3900: evidence only the deployment pipeline can reach. A scheduled run stopped on
+# platform#4585 because nothing said a reviewed workflow is the sanctioned way to read from inside a
+# production workload. Pin the path, the bounds that keep it a READ, and the line it does not move:
+# the agent itself never executes in a workload, and never works around a lane's refusal.
+grep -Fq 'Evidence only the deployment pipeline can reach is read by a reviewed workflow' "${constitution}" ||
+  fail "the contract no longer names a reviewed workflow as the way to collect evidence only CI can reach"
+grep -Fq '**dispatch-only, read-only workflow**' "${constitution}" ||
+  fail "the reviewed-workflow evidence path is no longer bounded to a dispatch-only, read-only workflow"
+grep -Fq 'prints no secret values, credentials or node addresses' "${constitution}" ||
+  fail "a reviewed evidence workflow may print secret values, credentials or node addresses to a public log"
+grep -Fq "itself still never runs \`exec\`, \`attach\`, \`cp\`, \`debug\` or any cluster mutation" "${constitution}" ||
+  fail "the reviewed-workflow evidence path no longer says the agent itself never executes in a workload"
+grep -Fq 'never works around the refusal' "${constitution}" ||
+  fail "a lane refused permission to build an evidence workflow is no longer told not to work around it"
 
 grep -Fq 'Self-review the' "${maintenance_skill}" ||
   fail "portfolio-maintenance run loop does not self-review the diff before requesting review"
