@@ -24,9 +24,17 @@ entrypoint also checks the native, schema-validated flag. Separate route entrypo
 Starlight's global CSS into marketing pages, and component-scoped business styles do not restyle
 the documentation.
 
+The business pages preserve the original green identity and decorative Matrix image. A native
+appearance selector supports System, Light and Dark, with English/Danish labels. An inline head
+script applies the preference before painting and shares Starlight's storage key and System
+representation so visits to supporting pages retain the choice. System changes update the current
+page unless the visitor explicitly selects a theme; blocked storage does not prevent switching.
+The no-JavaScript layout follows the system theme and omits the inactive control.
+
 The build exercises both release states against emitted HTML. Checks cover language routes,
 starting prices, navigation, inquiry links, preserved supporting pages and absent unreleased
-markup. No application backend or new dependency is needed for the inquiry journey.
+markup. Controller tests cover saved choices, system changes and blocked storage. No application
+backend or new dependency is needed for the inquiry journey.
 
 ## Consequences
 

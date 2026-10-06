@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
 
 const [directory, state] = process.argv.slice(2);
 assert.ok(directory && ['true', 'false'].includes(state), 'Usage: check-business-site.mjs <build-directory> <true|false>');
@@ -23,6 +24,27 @@ if (state === 'false') {
     assert.ok(page.includes(`rel="canonical" href="${canonical}"`), 'Self-referencing canonical URL');
     assert.ok(page.includes(`href="https://devantler.tech${alternate}"`), 'Alternate language metadata');
     assert.ok(page.includes(`href="${alternate}"`), 'Visible language switch');
+    assert.match(page, /<select[^>]*id="theme-select"/, 'Visitors can choose an appearance');
+    for (const [value, label] of locale === 'en' ? [['auto', 'System'], ['light', 'Light'], ['dark', 'Dark']] : [['auto', 'System'], ['light', 'Lys'], ['dark', 'Mørk']]) {
+      assert.match(page, new RegExp(`<option[^>]*value="${value}"[^>]*>${label}</option>`), 'Localized theme options');
+    }
+    assert.match(page, /<label[^>]*for="theme-select"/, 'Theme selector has an accessible label');
+    const art = page.match(/<img[^>]*data-hero-art[^>]*>/)?.[0];
+    assert.ok(art, 'Hero includes the original decorative artwork');
+    assert.match(art, /\salt(?:=""|(?=\s|>))/, 'Decorative artwork must not distract screen readers');
+    const artPath = art.match(/src="([^"]+)"/)?.[1];
+    assert.ok(artPath && existsSync(resolve(root, `.${artPath}`)), 'Hero artwork is emitted locally');
+    const initializer = page.match(/<script[^>]*data-business-theme[^>]*>([\s\S]*?)<\/script>/);
+    assert.ok(initializer && page.indexOf(initializer[0]) < page.indexOf('</head>'), 'Theme is initialized before the body paints');
+    const documentElement = { dataset: {}, style: {} };
+    runInNewContext(initializer[1], {
+      document: { documentElement, readyState: 'loading', addEventListener() {} },
+      window: {
+        matchMedia: () => ({ matches: false, addEventListener() {} }),
+        localStorage: { getItem: () => 'light' }, addEventListener() {},
+      },
+    });
+    assert.equal(documentElement.dataset.theme, 'light', 'The emitted head script restores the saved preference');
     const stylesheets = [...page.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/g)];
     assert.ok(stylesheets.length > 0, 'Business design must have an emitted stylesheet');
     for (const [, stylesheet] of stylesheets) {

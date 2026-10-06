@@ -2,6 +2,7 @@
 # Exercise both release states; leave the selected production build in dist/.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+node --test scripts/theme.test.mjs
 selected=${FEATURE_BUSINESS_SITE:-false}
 case "$selected" in
   true) other=false ;;

@@ -3,6 +3,8 @@ import { Image } from 'astro:assets';
 import interRegular from '@expo-google-fonts/inter/400Regular/Inter_400Regular.ttf?url';
 import interSemibold from '@expo-google-fonts/inter/600SemiBold/Inter_600SemiBold.ttf?url';
 import portrait from '../../assets/author.png';
+import matrix from '../../assets/matrix.png';
+import themeScript from './theme.js?raw';
 import { copy, offers, inquiryUrl, type Locale } from './content';
 
 interface Props { locale: Locale }
@@ -18,6 +20,7 @@ const nav = ['services', 'work', 'products', 'process', 'contact'] as const;
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script is:inline data-business-theme set:html={themeScript} />
     <title>{t.title}</title>
     <meta name="description" content={t.description} />
     <link rel="canonical" href={`https://devantler.tech${home}`} />
@@ -50,15 +53,27 @@ const nav = ['services', 'work', 'products', 'process', 'contact'] as const;
         <nav aria-label={t.navigation}>
           {nav.map((id) => <a href={`#${id}`}>{t[id]}</a>)}
         </nav>
-        <div class="languages" aria-label={t.language}>
+        <div class="header-controls">
+          <div id="theme-control" class="theme-control" hidden>
+            <label class="sr-only" for="theme-select">{t.appearance}</label>
+            <select id="theme-select">
+              <option value="auto" selected>{t.system}</option>
+              <option value="light">{t.light}</option>
+              <option value="dark">{t.dark}</option>
+            </select>
+          </div>
+          <div class="languages" aria-label={t.language}>
           <a href="/" lang="en" aria-current={locale === 'en' ? 'page' : undefined} data-language-switch={locale !== 'en' || undefined}>EN</a>
           <span aria-hidden="true">/</span>
           <a href="/da/" lang="da" aria-current={locale === 'da' ? 'page' : undefined} data-language-switch={locale !== 'da' || undefined}>DA</a>
+          </div>
         </div>
       </div>
     </header>
     <main id="main">
-      <section class="hero container" aria-labelledby="hero-title">
+      <section class="hero-scene" aria-labelledby="hero-title">
+        <Image class="hero-art" data-hero-art src={matrix} width={1600} height={800} widths={[640, 1280, 1920]} sizes="100vw" format="webp" quality={80} alt="" aria-hidden="true" loading="eager" fetchpriority="high" />
+        <div class="hero container">
         <div class="hero-copy">
           <p class="eyebrow">{t.eyebrow}</p>
           <h1 id="hero-title">{t.headline.split('\n').map((line) => <span>{line}</span>)}</h1>
@@ -73,6 +88,7 @@ const nav = ['services', 'work', 'products', 'process', 'contact'] as const;
           <div class="note-rule"></div>
           <p class="note-signature">Devantler Tech <span aria-hidden="true">↗</span></p>
         </aside>
+        </div>
       </section>
       <div class="promise container"><ul>{t.promise.map((item) => <li>{item}</li>)}</ul></div>
       <section id="services" class="section container" aria-labelledby="services-title">
@@ -131,49 +147,60 @@ const nav = ['services', 'work', 'products', 'process', 'contact'] as const;
 </html>
 
 <style>
-  :root { --ink: #15263e; --muted: #53657d; --blue: #174dbe; --paper: #f6f8fc; --line: #dce3ee; --white: #fff; }
+  :root { color-scheme: dark; --ink: #eef6f0; --muted: #b1c1b6; --accent: #39ff14; --accent-hover: #7aff6e; --accent-ink: #08220d; --canvas: #080d0b; --paper: #101a15; --line: #314539; --card: #0c1510; --hero-shield: #080d0bf0; --note: #101a15ed; --art-opacity: .65; --contact: #101f15; }
+  :root[data-theme='light'] { color-scheme: light; --ink: #152b1c; --muted: #53655a; --accent: #15803d; --accent-hover: #0d5a2a; --accent-ink: #fff; --canvas: #f6faf7; --paper: #edf4ee; --line: #c4d5c8; --card: #fff; --hero-shield: #f6faf7f2; --note: #f6faf7ed; --art-opacity: .28; --contact: #e3eee5; }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) { color-scheme: light; --ink: #152b1c; --muted: #53655a; --accent: #15803d; --accent-hover: #0d5a2a; --accent-ink: #fff; --canvas: #f6faf7; --paper: #edf4ee; --line: #c4d5c8; --card: #fff; --hero-shield: #f6faf7f2; --note: #f6faf7ed; --art-opacity: .28; --contact: #e3eee5; }
+  }
   * { box-sizing: border-box; }
   html { scroll-padding-top: 2rem; }
-  body { margin: 0; background: var(--white); color: var(--ink); font-family: 'Studio Inter', system-ui, sans-serif; font-size: 1rem; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+  body { margin: 0; background: var(--canvas); color: var(--ink); font-family: 'Studio Inter', system-ui, sans-serif; font-size: 1rem; line-height: 1.65; -webkit-font-smoothing: antialiased; }
   a { color: inherit; text-underline-offset: .2em; }
-  a:hover { color: var(--blue); }
-  a:focus-visible { outline: 3px solid var(--blue); outline-offset: 5px; }
+  a:hover { color: var(--accent); }
+  :is(a, select):focus-visible { outline: 3px solid var(--accent); outline-offset: 5px; }
   p, h1, h2, h3 { margin: 0; }
   h1, h2, h3 { font-weight: 600; letter-spacing: -.04em; line-height: 1.18; text-wrap: balance; }
   h2 { font-size: clamp(1.8rem, 3vw, 2.65rem); }
   h3 { font-size: 1.3rem; letter-spacing: -.025em; }
   p { color: var(--muted); }
   .container { width: min(1160px, calc(100% - 4rem)); margin-inline: auto; }
-  .skip { position: absolute; top: -100px; left: 1rem; padding: .6rem 1rem; background: var(--white); z-index: 10; }
+  .skip { position: absolute; top: -100px; left: 1rem; padding: .6rem 1rem; background: var(--canvas); z-index: 10; }
   .skip:focus { top: 1rem; }
-  .site-header { border-bottom: 1px solid var(--line); }
-  .header-inner { display: flex; align-items: center; gap: 2rem; min-height: 90px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .site-header { border-bottom: 1px solid var(--line); background: var(--canvas); }
+  .header-inner { display: flex; align-items: center; gap: 1.5rem; min-height: 90px; }
   .brand { display: inline-flex; align-items: center; flex-shrink: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -.04em; text-decoration: none; }
-  .brand-tech { color: var(--blue); }
-  .brand-mark { width: 34px; height: 34px; margin-right: .45rem; background: var(--blue); color: var(--white); border-radius: 8px; }
-  nav { display: flex; justify-content: flex-end; flex: 1; gap: 1.4rem; }
+  .brand-tech { color: var(--accent); }
+  .brand-mark { width: 34px; height: 34px; margin-right: .45rem; background: var(--accent); color: var(--accent-ink); border-radius: 8px; }
+  nav { display: flex; justify-content: flex-end; flex: 1; gap: 1.1rem; }
   nav a { font-size: .875rem; text-decoration: none; }
+  .header-controls { display: flex; align-items: center; gap: .9rem; flex-shrink: 0; }
+  .theme-control select { min-height: 44px; border: 1px solid var(--line); border-radius: 6px; padding: .4rem .35rem .4rem .65rem; background: var(--paper); color: var(--ink); font: inherit; font-size: .8rem; cursor: pointer; }
   .languages { display: flex; gap: .5rem; font-size: .8rem; color: var(--muted); }
   .languages a { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; }
-  .languages [aria-current] { color: var(--blue); font-weight: 600; }
+  .languages [aria-current] { color: var(--accent); font-weight: 600; }
   .languages span { align-self: center; }
+  .hero-scene { position: relative; isolation: isolate; overflow: hidden; background: var(--canvas); }
+  .hero-art { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; object-fit: cover; object-position: center; opacity: var(--art-opacity); }
+  .hero-scene::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(90deg, var(--hero-shield) 10%, transparent 90%), linear-gradient(0deg, var(--canvas), transparent 30%); }
   .hero { display: grid; grid-template-columns: 1.5fr 1fr; gap: 5rem; padding-block: 6rem 4.5rem; align-items: center; }
-  .eyebrow { font-size: .8rem; font-weight: 600; letter-spacing: .01em; color: var(--blue); margin-bottom: 1.2rem; }
+  .eyebrow { font-size: .8rem; font-weight: 600; letter-spacing: .01em; color: var(--accent); margin-bottom: 1.2rem; }
   h1 { font-size: clamp(2.7rem, 4.5vw, 4.15rem); line-height: 1.09; }
   h1 span, .hero-note h2 span { display: block; }
+  h1 span:first-child { color: var(--accent); }
   .hero-intro { max-width: 550px; font-size: 1.1rem; margin-top: 1.6rem; }
   .actions { display: flex; align-items: center; gap: 1.7rem; flex-wrap: wrap; margin-top: 2rem; }
-  .button { display: inline-flex; align-items: center; justify-content: center; gap: 1.5rem; min-height: 48px; padding: .85rem 1.25rem; background: var(--blue); border: 1px solid var(--blue); border-radius: 6px; color: var(--white); font-size: .92rem; font-weight: 600; text-decoration: none; }
-  .button:hover { background: var(--ink); border-color: var(--ink); color: var(--white); }
-  .text-link { display: inline-flex; align-items: center; gap: .7rem; min-height: 44px; font-size: .9rem; font-weight: 600; color: var(--blue); text-decoration: none; }
+  .button { display: inline-flex; align-items: center; justify-content: center; gap: 1.5rem; min-height: 48px; padding: .85rem 1.25rem; background: var(--accent); border: 1px solid var(--accent); border-radius: 6px; color: var(--accent-ink); font-size: .92rem; font-weight: 600; text-decoration: none; }
+  .button:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--accent-ink); }
+  .text-link { display: inline-flex; align-items: center; gap: .7rem; min-height: 44px; font-size: .9rem; font-weight: 600; color: var(--accent); text-decoration: none; }
   .text-link:hover { text-decoration: underline; }
   .availability { display: flex; align-items: center; gap: .6rem; font-size: .8rem; margin-top: 1.25rem; }
-  .availability span { width: 6px; height: 6px; background: var(--blue); border-radius: 50%; }
-  .hero-note { position: relative; background: var(--paper); border: 1px solid var(--line); border-top: 4px solid var(--blue); padding: 2.2rem; border-radius: 6px; }
+  .availability span { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; }
+  .hero-note { position: relative; background: var(--note); border: 1px solid var(--line); border-top: 4px solid var(--accent); padding: 2.2rem; border-radius: 6px; }
   .hero-note h2 { font-size: 1.9rem; }
   .hero-note ul { margin: 2rem 0 0; padding: 0; list-style: none; }
   .hero-note li { display: flex; align-items: flex-start; gap: .8rem; margin-top: 1rem; font-size: .9rem; }
-  .hero-note li span { color: var(--blue); }
+  .hero-note li span { color: var(--accent); }
   .note-rule { border-top: 1px solid var(--line); margin-top: 2rem; }
   .note-signature { display: flex; justify-content: space-between; margin-top: 1rem; font-size: .8rem; }
   .promise { padding-block: 1.4rem; border-block: 1px solid var(--line); }
@@ -182,7 +209,7 @@ const nav = ['services', 'work', 'products', 'process', 'contact'] as const;
   .section-heading { max-width: 730px; margin-bottom: 2.5rem; }
   .section-heading p { margin-top: 1rem; }
   .offers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; }
-  .offer { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 6px; padding: 1.65rem; }
+  .offer { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 6px; padding: 1.65rem; background: var(--card); }
   .offer-description { font-size: .9rem; margin-top: .8rem; min-height: 4.5em; }
   .price { display: flex; flex-direction: column; margin-top: 1.5rem; }
   .price > span { font-size: .8rem; color: var(--muted); }
@@ -190,7 +217,7 @@ const nav = ['services', 'work', 'products', 'process', 'contact'] as const;
   .hosting-price { font-size: .8rem; border-bottom: 1px solid var(--line); padding-bottom: 1.3rem; }
   .offer ul { padding-left: 1.1rem; font-size: .86rem; margin-block: 1.35rem; }
   .offer li { padding-left: .15rem; margin-block: .45rem; }
-  .offer li::marker { color: var(--blue); }
+  .offer li::marker { color: var(--accent); }
   .boundary { font-size: .79rem; margin-bottom: 1rem; }
   .offer .text-link { margin-top: auto; }
   .price-note { font-size: .8rem; margin-top: 1.3rem; max-width: 1000px; }
@@ -204,13 +231,13 @@ const nav = ['services', 'work', 'products', 'process', 'contact'] as const;
   .work-list article > p:last-child { font-size: .9rem; margin-top: 1rem; }
   .product-list { display: grid; grid-template-columns: 1fr 1fr; gap: 4rem; }
   .product-list article { display: flex; gap: 1.5rem; }
-  .product-symbol { flex-shrink: 0; width: 54px; height: 54px; background: var(--paper); border: 1px solid var(--line); display: grid; place-items: center; border-radius: 6px; color: var(--blue); font-family: monospace; font-size: 1.25rem; }
+  .product-symbol { flex-shrink: 0; width: 54px; height: 54px; background: var(--paper); border: 1px solid var(--line); display: grid; place-items: center; border-radius: 6px; color: var(--accent); font-family: monospace; font-size: 1.25rem; }
   .product-list p { font-size: .9rem; margin-block: .9rem .4rem; }
   .subscription-note { margin-top: 2rem; font-size: .8rem; }
   .process { padding-top: 1rem; }
   .process ol { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3rem; list-style: none; counter-reset: steps; margin: 0; padding: 0; }
   .process li { border-top: 1px solid var(--line); padding-top: 1.3rem; counter-increment: steps; }
-  .process li::before { content: counter(steps); display: block; color: var(--blue); font-size: .9rem; margin-bottom: 1rem; }
+  .process li::before { content: counter(steps); display: block; color: var(--accent); font-size: .9rem; margin-bottom: 1rem; }
   .process h3 { font-size: 1.15rem; }
   .process p { font-size: .9rem; margin-top: .9rem; }
   .founder { display: flex; gap: 1.8rem; border-top: 1px solid var(--line); padding-block: 3rem; }
@@ -220,17 +247,15 @@ const nav = ['services', 'work', 'products', 'process', 'contact'] as const;
   .supporting-links { display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: .8rem; font-size: .85rem; }
   .supporting-links a { min-height: 44px; display: inline-flex; align-items: center; }
   .founder .language-note { margin-top: .3rem; font-size: .75rem; }
-  .contact-band { background: var(--ink); padding-block: 4.5rem; }
-  .contact-band h2 { max-width: 700px; color: var(--white); }
-  .contact-band p { color: var(--line); max-width: 650px; margin-top: 1.3rem; }
-  .contact-band .button { margin-top: 1.6rem; background: var(--white); border-color: var(--white); color: var(--ink); }
-  .contact-band .button:hover { background: var(--paper); color: var(--blue); }
+  .contact-band { background: var(--contact); border-top: 1px solid var(--line); padding-block: 4.5rem; }
+  .contact-band h2 { max-width: 700px; }
+  .contact-band p { max-width: 650px; margin-top: 1.3rem; }
+  .contact-band .button { margin-top: 1.6rem; }
   .contact-band .contact-note { font-size: .75rem; max-width: 700px; }
-  .contact-band a:focus-visible { outline-color: var(--white); }
   footer { display: flex; align-items: center; justify-content: space-between; gap: 2rem; padding-block: 2.5rem; }
   footer p, footer > a { font-size: .8rem; }
   footer > a { display: inline-flex; gap: .8rem; align-items: center; min-height: 44px; }
-  @media (max-width: 1000px) { .header-inner { gap: 1rem; flex-wrap: wrap; padding-block: 1rem; } nav { order: 3; flex-basis: 100%; justify-content: flex-start; flex-wrap: wrap; gap: .2rem 1.5rem; } nav a { display: inline-flex; align-items: center; min-height: 44px; } .languages { margin-left: auto; } .hero { gap: 2rem; } .hero-note { padding: 1.5rem; } .offers { gap: .75rem; } .offer { padding: 1.2rem; } }
-  @media (max-width: 760px) { .container { width: calc(100% - 2.5rem); } .hero { grid-template-columns: 1fr; gap: 2.5rem; padding-block: 3rem; } .hero-note { max-width: 540px; } h1 { font-size: clamp(2.2rem, 8vw, 3.4rem); } .promise ul { flex-direction: column; gap: .5rem; } .section { padding-block: 3rem; } .offers, .scope-notes, .work-list, .product-list, .process ol { grid-template-columns: 1fr; gap: 1.5rem; } .offer { padding: 1.5rem; } .offer-description { min-height: 0; } .scope-notes { margin-top: 2rem; padding-top: 2rem; } .product-list { gap: 2rem; } .founder { gap: 1.2rem; align-items: flex-start; } .founder img { width: 64px; height: 64px; } .supporting-links { gap: .3rem 1rem; } .contact-band { padding-block: 3rem; } footer { align-items: flex-start; flex-direction: column; gap: 1rem; } }
+  @media (max-width: 1050px) { .header-inner { gap: 1rem; flex-wrap: wrap; padding-block: 1rem; } nav { order: 3; flex-basis: 100%; justify-content: flex-start; flex-wrap: wrap; gap: .2rem 1.5rem; } nav a { display: inline-flex; align-items: center; min-height: 44px; } .header-controls { margin-left: auto; } .hero { gap: 2rem; } .hero-note { padding: 1.5rem; } .offers { gap: .75rem; } .offer { padding: 1.2rem; } }
+  @media (max-width: 760px) { .container { width: calc(100% - 2.5rem); } .brand { font-size: 1.1rem; } .brand-mark { width: 28px; height: 28px; } .header-controls { gap: .6rem; } .hero { grid-template-columns: 1fr; gap: 2.5rem; padding-block: 3rem; } .hero-scene::before { background: linear-gradient(90deg, var(--hero-shield), transparent 170%), linear-gradient(0deg, var(--canvas), transparent 35%); } .hero-note { max-width: 540px; } h1 { font-size: clamp(2.2rem, 8vw, 3.4rem); } .promise ul { flex-direction: column; gap: .5rem; } .section { padding-block: 3rem; } .offers, .scope-notes, .work-list, .product-list, .process ol { grid-template-columns: 1fr; gap: 1.5rem; } .offer { padding: 1.5rem; } .offer-description { min-height: 0; } .scope-notes { margin-top: 2rem; padding-top: 2rem; } .product-list { gap: 2rem; } .founder { gap: 1.2rem; align-items: flex-start; } .founder img { width: 64px; height: 64px; } .supporting-links { gap: .3rem 1rem; } .contact-band { padding-block: 3rem; } footer { align-items: flex-start; flex-direction: column; gap: 1rem; } }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 </style>

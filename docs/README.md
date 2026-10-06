@@ -20,6 +20,13 @@ and `/da/` (Danish). Its offer amounts and translated copy live together in
 `src/components/business/content.ts`. Prices are introductory guides, not an automatic checkout:
 project scope, hosting capacity, external fees and support are agreed in a written proposal.
 
+The preview keeps the original green palette and locally served Matrix artwork. Its appearance
+selector offers System, Light and Dark in both languages. The small head script applies the saved
+choice before painting, follows system changes in System mode, and shares Starlight's
+`starlight-theme` preference with supporting pages. If browser storage is blocked, switching still
+works for the current page. Without JavaScript, the page follows the system theme and hides the
+inactive selector. `scripts/theme.test.mjs` tests the actual controller as part of every build.
+
 `FEATURE_BUSINESS_SITE` is a default-off release flag. `npm run build` verifies both states and
 leaves the selected build in `dist/`; `FEATURE_BUSINESS_SITE=true npm run build` previews the new
 experience. The off state renders the existing documentation homepage. Publication and flag
