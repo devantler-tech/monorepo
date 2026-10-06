@@ -34,6 +34,20 @@ Three channels actually get the maintainer's attention, and all are *active* (ne
      engineering path is not an ask. A reviewed, dispatch-only workflow can do what an agent's own shell
      may not, and a value judgement about our own work is the agent's to make. Measured 2026-09-13: of 4
      authority blockers carrying no ask, 3 were resolvable without the maintainer.
+   - 🔴 **These steps are the lane's own and are never an ask** (maintainer direction, interactive
+     session 2026-10-06): promoting and merging a reviewed `app/botantler-1` pull request at its
+     reviewed head; dispatching a reviewed verification workflow from the default branch, a
+     production proof and its typed confirmation phrase included; setting a repository-level Actions
+     variable that a default-branch workflow reads; and deciding a question about our own work. The
+     confirmation phrase guards against an accidental dispatch; it is not an approval to wait for.
+   - 🔴 **One ask per refusal class, and it asks for the durable fix.** When the lane's permission
+     layer refuses a step this contract assigns to the lane, the blocker is that mismatch, not the
+     item that met it. File the mismatch once as a monorepo issue, ask once with the rule change
+     prepared for the maintainer to apply, and park every later item that meets the same refusal on
+     that issue as an `upstream` blocker, with no further ask. Offer only options that can work: a
+     reply, in the thread or on the issue, tells the lane what it may attempt and changes nothing
+     about what its permission layer allows, so "reply approve" is never an option for a refused
+     step.
    - ⚠️ **It does not notify him.** Slack never pushes a user's own message, so the ask waits until he
      opens Slack. It is a durable place he will look, not an alarm. Send it once per blocker, and
      renew it only when the blocker-line check reports it `STALE-ASK` — never on every tick.

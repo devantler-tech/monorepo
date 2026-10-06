@@ -262,6 +262,17 @@ governs the issue work that follows.) Two rules enforce that:
    their blocker lines was *conforming*; the check reported a clean sweep over them, because
    conformance was never the same thing as progress.
 
+   🔴 **`authority` means an act this lane CANNOT perform, never one it would rather not decide.**
+   Class a blocker `authority` only after naming the exact act and establishing that the access
+   this lane holds cannot do it: a payment, a legal identity or signature, a credential the lane
+   does not hold, or a refusal by the lane's own permission layer. A decision about our own work is
+   never `authority`: make it, and ship it as a draft PR or record it on the issue. An act the
+   lane's own access can perform is never `authority` either: perform it, and class the blocker
+   only on the refusal that attempt actually returned. An approval already on record is spent by
+   acting on it, not by asking again. Measured 2026-10-06 on the eight asks delivered on 2026-10-05
+   and 2026-10-06: one named an act only the maintainer can perform, three were permission-layer
+   refusals of two classes raised item by item, and four were this lane's own to perform or decide.
+
    🔴 **An `authority` line MUST also record the ask: append `| asked <channel> <YYYY-MM-DD>`.**
    `<channel>` names where it actually landed — a channel that *reaches* him per *Maintainer
    channels*: `pr` means a draft PR, `slack` the Slack DM to his own user that *Maintainer
@@ -292,8 +303,11 @@ governs the issue work that follows.) Two rules enforce that:
    row requires action: repair or unblock missing or malformed records; for `STALE` (last verified
    more than 7 days ago, `--verify-max-age-days`), re-verify the blocker and update the date and
    result, or unblock it; for `NO-ASK`, deliver an ask
-   through a canonical attention channel and record it; for `STALE-ASK`, renew the ask and update
-   its channel and date to the actual delivery. The check reads every open issue, not only labelled
+   through a canonical attention channel and record it; for `STALE-ASK`, re-apply the `authority`
+   test above first — perform or decide what this lane can, and reclass or unblock the record —
+   and renew the ask only for a blocker that still passes it, updating its channel and date to the
+   actual delivery. A renewal that skips that test re-sends an ask nobody needed to receive. The
+   check reads every open issue, not only labelled
    ones, so an `UNLABELLED` row is an issue whose `**Blocker:**` line declares a blocker while it
    carries no `blocked` label: re-verify that blocker, then label it with a conforming line or
    unblock it (`**Blocker:** none` declares no blocker and is never reported as `UNLABELLED`). An
