@@ -447,6 +447,11 @@ ladder's security rung (§2 rung 5); GitHub-only runs in between stay blind to l
 design, which is exactly why the cadence must not silently lapse — track it in memory like the other
 cadence gates.
 
+**Read the Slack threads under your asks first — that is where the maintainer answers** (monorepo#3888).
+Before anything else in this step, read his self-DM and every ask thread that has replies, as the
+[maintainer-channels guide](../../guides/maintainer-channels.md) describes; record each answer on
+its issue, then treat it like the comments below.
+
 **Maintainer comments on your own work are instructions — handle them first.** Before
 selecting new work, attribute every surfaced `CANDIDATE-MAINTAINER-COMMENT` and
 `CANDIDATE-MAINTAINER-ISSUE-COMMENT`.
