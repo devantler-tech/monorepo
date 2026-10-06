@@ -49,6 +49,7 @@ case "$1 $2" in
     printf 'ready-undo\n' >> "$s/calls"
     [ "$(get ready_mode)" = fail ] && exit 1
     [ "$(get ready_mode)" = noop ] || printf 'true' > "$s/draft"
+    [ "$(get ready_clears_auto)" = 1 ] && printf 'none' > "$s/auto"
     [ -n "$(get move_head_to)" ] && get move_head_to > "$s/head"
     exit 0
     ;;
@@ -120,7 +121,7 @@ reset() {
   printf '%s' "$branch" > "${state}/branch"
   printf '%s' "$base" > "${state}/head"
   printf '0' > "${state}/reads"
-  for f in fail_read undraft_on_read drop_auto ready_mode auto_mode move_head_to git_mode; do
+  for f in fail_read undraft_on_read drop_auto ready_clears_auto ready_mode auto_mode move_head_to git_mode; do
     : > "${state}/${f}"
   done
   : > "${state}/calls"
@@ -147,12 +148,23 @@ expect_untouched() {
 reset false armed
 run
 [ "$rc" -eq 0 ] || fail "1: exit ${rc}, not 0: ${out}"
-[ "$(calls)" = 'view ready-undo disable-auto view push view' ] ||
+[ "$(calls)" = 'view ready-undo view disable-auto view push view' ] ||
   fail "1: the fence was not applied and confirmed before the push ($(calls))"
 [ "$(remote_head)" = "$fix" ] || fail '1: the commit is not the remote branch head'
 grep -qF "FENCED acme/widgets#7 draft=true auto_merge=none head=${base}" <<<"$out" ||
   fail '1: the confirmed fence was not reported'
 grep -qF "PUSHED acme/widgets#7 ${fix} -> ${branch}" <<<"$out" || fail '1: the push was not reported'
+
+# --- 1b. the draft conversion drops auto-merge by itself, as GitHub does: the disable that
+#         would now be refused is never attempted, and the push still happens (monorepo#3904) --
+reset false armed
+set_state ready_clears_auto 1
+set_state auto_mode fail
+run
+[ "$rc" -eq 0 ] || fail "1b: exit ${rc}, not 0: ${out}"
+[ "$(calls)" = 'view ready-undo view view push view' ] ||
+  fail "1b: a disable was attempted with nothing armed ($(calls))"
+[ "$(remote_head)" = "$fix" ] || fail '1b: the commit is not the remote branch head'
 
 # --- 2. already a draft with nothing armed: no change is made, both states are still read ----
 reset true none
@@ -177,9 +189,15 @@ expect_untouched 4a
 reset false armed
 set_state fail_read 2
 run
-[ "$rc" -eq 2 ] || fail "4b: a failed confirmation read exited ${rc}, not 2"
+[ "$rc" -eq 2 ] || fail "4b: a failed read after the draft conversion exited ${rc}, not 2"
 expect_untouched 4b
 grep -q FENCED <<<"$out" && fail '4b: a fence nobody confirmed was reported as confirmed'
+reset false armed
+set_state fail_read 3
+run
+[ "$rc" -eq 2 ] || fail "4b2: a failed confirmation read exited ${rc}, not 2"
+expect_untouched 4b2
+grep -q FENCED <<<"$out" && fail '4b2: a fence nobody confirmed was reported as confirmed'
 # A read without the auto-merge field cannot say "not armed".
 reset true none
 set_state drop_auto 1
@@ -247,7 +265,7 @@ run "$base"
 
 # --- 8. a pull request that left draft after the push is not reported as done ---------------
 reset false armed
-set_state undraft_on_read 3
+set_state undraft_on_read 4
 run
 [ "$rc" -eq 2 ] || fail "8: a pull request no longer a draft after the push exited ${rc}, not 2"
 grep -q PUSHED <<<"$out" && fail '8: a pull request no longer fenced was reported as done'
