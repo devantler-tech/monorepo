@@ -42,6 +42,26 @@ Three channels actually get the maintainer's attention, and all are *active* (ne
      whole paragraph that starts with `**Blocker:**` as one record, so the ask must be the last thing in
      that paragraph, followed by a blank line. An ask followed by more prose is read as prose and stays
      `NO-ASK` (measured 2026-09-13 on ksail#5515).
+   - 🔴 **He answers in the thread under the ask. Read it, every run.** Whatever the ask says, the
+     maintainer replies in Slack, in the thread under the message, and rarely on the issue. On
+     2026-10-06 ten asks had a reply no run had read, the oldest three weeks old: approvals, "start
+     it yourself" and "that is managed declaratively" all sat unseen while their issues stayed
+     `blocked` and one was asked again (monorepo#3888). So before treating any ask as unanswered,
+     and before sending, renewing or escalating one: read the self-DM with `slack_read_channel`,
+     paging to the oldest open ask, and read every message that shows thread replies with
+     `slack_read_thread`. A reaction is not an answer; a thread reply is.
+     - **Whose words:** a reply from his Slack user with **neither** a leading 🤖 disclosure line **nor**
+       the connector's `Sent using` footer is the
+       maintainer. The agents post as him, so the footer the connector adds is what tells them apart;
+       a reply with either mark is own output, and a doubtful one is quoted on the issue, not obeyed.
+     - **What it authorises:** it is a maintainer instruction for **that ask**, with the limits of
+       a comment on a draft: it cannot loosen a guardrail, and it does not extend to another issue.
+       A short reply maps to the ask's numbered options (`2`, `yes`, `Approve`, `later`).
+     - **Record, then act:** quote the reply on the issue the ask names, say what it means and the
+       next action, remove `blocked` when the work is now the agent's, and only then act. The other
+       lane reads the issue, not the thread.
+     - **Write asks to match:** end an ask with "reply in this thread", never "reply on the issue"
+       as the only way to answer.
 
 The end-of-run report, a GitHub `@devantler` mention and the runtime's push notification are
 **not** attention channels. Full rules

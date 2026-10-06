@@ -1,13 +1,13 @@
 # AGENTS.md — devantler.tech site (`docs/`)
 
 The [devantler.tech](https://devantler.tech) website: an Astro + Starlight static site that
-`.github/workflows/publish-pages.yaml` deploys to GitHub Pages. The repository-wide rules in the root
-[`AGENTS.md`](../AGENTS.md) still apply; this file adds what is specific to the site. The
+`.github/workflows/publish-pages.yaml` deploys to GitHub Pages. The root
+[`AGENTS.md`](../AGENTS.md) still applies; this file adds what is specific to the site. The
 [`README.md`](README.md) carries the full editorial standard and the feature-flag how-to.
 
 ## Build and validate
 
-Run these before opening any `docs/` PR. Commands are written from the repository root, exactly as
+Run these before opening any `docs/` PR, from the repository root, as
 CI runs them (Node 24 with npm 11).
 
 | Check | Command |
