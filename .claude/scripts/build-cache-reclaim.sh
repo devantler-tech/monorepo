@@ -1437,15 +1437,17 @@ if BROWSER_ARGS=$(ps -A -ww -o args= 2>/dev/null) && [ -n "$BROWSER_ARGS" ]; the
 fi
 
 # browser_profile_named reports whether a running process names `tree` on its command
-# line, under either spelling of the path. Every unknown answers yes, so the profile is kept.
+# line. It looks for the path's own tail, rod/user-data/<name>, rather than the whole path:
+# the name is 64 random bits, so the tail identifies the profile under any spelling of the
+# temp dir (symlinked, relative, or with a doubled slash), and matching less of the path can
+# only keep more. Every unknown answers yes, so the profile is kept.
 browser_profile_named() {
-  local tree=$1 canon
+  local tree=$1
   [ "$BROWSER_ARGS_OK" -eq 1 ] || return 0
-  canon=$(cd -- "$tree" 2>/dev/null && pwd -P) || return 0
-  [ -n "$canon" ] || return 0
-  # Scans to EOF with no early `exit`, for the SIGPIPE reason documented on dir_in_use.
+  # Scans to EOF with no early `exit`, for the SIGPIPE reason documented on dir_in_use. The
+  # needle travels in the environment: `awk -v` would rewrite a backslash in it.
   printf '%s\n' "$BROWSER_ARGS" |
-    awk -v a="$tree" -v b="$canon" 'index($0, a) || index($0, b) { found = 1 } END { exit !found }'
+    NEEDLE="rod/user-data/${tree##*/}" awk 'index($0, ENVIRON["NEEDLE"]) { found = 1 } END { exit !found }'
 }
 
 BROWSER_PROFILE_ROOT="${GO_TMP_ROOT}/rod/user-data"
@@ -1468,18 +1470,20 @@ if [ -d "$BROWSER_PROFILE_ROOT" ]; then
       *[!0-9a-f]*) continue ;;
     esac
     [ "${#name}" -eq 16 ] || continue
-    # Each candidate costs a size read and, in apply, its own open-file probe, so a large
-    # backlog is drained over several runs. What is left is counted, never dropped silently.
-    if [ "$browser_seen" -ge "$BROWSER_PROFILE_MAX" ]; then
-      browser_deferred=$((browser_deferred + 1))
-      continue
-    fi
-    browser_seen=$((browser_seen + 1))
     if browser_profile_named "$tree"; then
       kept=$((kept + 1))
       log "KEEP  (browser running) $tree"
       continue
     fi
+    # Each profile past this point costs a size read and, in apply, its own open-file probe,
+    # so a large backlog is drained over several runs. What is left is counted, never dropped
+    # silently. A profile kept above is not charged to the limit: it costs nothing, and
+    # charging it would let long-lived browsers starve the backlog behind them.
+    if [ "$browser_seen" -ge "$BROWSER_PROFILE_MAX" ]; then
+      browser_deferred=$((browser_deferred + 1))
+      continue
+    fi
+    browser_seen=$((browser_seen + 1))
     sweep_candidate "$tree" host
   done <<EOF
 $browser_profiles
@@ -1868,13 +1872,18 @@ fi
 #
 # One `du` pass per root, each under its own deadline: macOS has no `timeout`, and a temp dir
 # holding tens of GB can take minutes to walk, which a pre-flight step cannot spend. A pass
-# that runs out of time is reported as such, and the entries it did finish are still listed,
-# marked partial. Nothing here removes anything, and nothing here is a sweep, so an
-# unmeasured root is said plainly and does not change the exit status.
+# that runs out of time is reported as such. `du` prints an entry only once its whole subtree
+# is walked, and buffers what it prints, so a stopped pass lists some of the entries that
+# finished and never the one still being walked -- which is likely the largest. The report
+# says so instead of presenting a short list as the answer. Nothing here removes anything,
+# and nothing here is a sweep, so an unmeasured root is said plainly and does not change the
+# exit status.
 report_consumers() {
-  local roots=$1 root canon outfile pid ticks limit state rows seen=''
-  local IFS=:
-  for root in $roots; do
+  local root canon outfile pid ticks limit state rows seen=''
+  local -a root_list
+  # Split once, into an array: an unquoted expansion would also glob the directory names.
+  IFS=: read -r -a root_list <<<"$1"
+  for root in "${root_list[@]}"; do
     [ -n "$root" ] || continue
     canon=$(cd -- "$root" 2>/dev/null && pwd -P) || {
       log "CONSUMERS not measured: $root (not a readable directory)"
@@ -1900,11 +1909,17 @@ report_consumers() {
     state=complete
     if kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null
-      state="partial: stopped after ${CONSUMER_SCAN_SECONDS}s"
+      state="partial: stopped after ${CONSUMER_SCAN_SECONDS}s, so the largest entry may be missing"
     fi
     wait "$pid" 2>/dev/null
+    # A stopped pass can end mid-row. A last row with no newline is a cut-off path, and a
+    # cut-off path names a directory that does not exist, so it is dropped.
+    if [ -n "$(tail -c 1 "$outfile" 2>/dev/null)" ]; then
+      sed '$d' "$outfile" > "${outfile}.whole" 2>/dev/null && cat -- "${outfile}.whole" > "$outfile"
+      rm -f -- "${outfile}.whole"
+    fi
     # The root's own total is the last row of a finished pass; only its entries are ranked.
-    rows=$(awk -F '\t' -v r="$canon" '$1 ~ /^[0-9]+$/ && $2 != r { printf "%d\t%s\n", $1 / 1024, $2 }' \
+    rows=$(ROOT="$canon" awk -F '\t' '$1 ~ /^[0-9]+$/ && $2 != ENVIRON["ROOT"] { printf "%d\t%s\n", $1 / 1024, $2 }' \
       "$outfile" | sort -rn | awk -F '\t' 'NR <= 5 && $1 > 0')
     rm -f -- "$outfile"
     if [ -z "$rows" ]; then

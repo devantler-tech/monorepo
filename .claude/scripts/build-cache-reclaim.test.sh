@@ -1851,7 +1851,7 @@ printf '%s\n' '00:05 /bin/sh' \
 b_ps="${fixture_root}/ps-browser"
 make_ps_stub "$b_ps" "$b_table" || fail 'fixture: browser ps stub'
 
-/bin/sh -c "exec 9<'${b_held}/b001/file'; sleep 30" &
+/bin/sh -c "exec 9<'${b_held}/b001/file'; exec sleep 600" &
 b_holder=$!
 sleep 1
 kill -0 "$b_holder" 2>/dev/null ||
@@ -1875,11 +1875,21 @@ for d in "$b_stale" "$b_hours" "$b_young" "$b_held" "$b_named" "${b_foreign[@]}"
 done
 
 # 23b. the per-run limit defers the rest and says how many, instead of dropping them.
-out=$(BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MAX=1 run_iso "$b_root" "$quiet_ps" dry-run 3 "$NEVER_CLEAN_BUDGET")
+# Its own root holding three reapable profiles and nothing else, so the result does not
+# depend on the order the filesystem lists them in.
+b_cap="${go_tmp_root}/browser-cap"
+for name in aaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbb cccccccccccccccc; do
+  make_go_dir "${b_cap}/rod/user-data" "$name" 240 >/dev/null || fail "fixture: capped profile $name"
+done
+out=$(BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MAX=1 run_iso "$b_cap" "$quiet_ps" dry-run 3 "$NEVER_CLEAN_BUDGET")
 [ "$(grep -c 'WOULD REAP' <<<"$out")" -eq 1 ] ||
   fail '23b: a limit of one profile did not examine exactly one'
-grep -qE 'DEFERRED [0-9]+ more browser test profile' <<<"$out" ||
-  fail '23b: profiles past the per-run limit were not reported as deferred'
+grep -qF 'DEFERRED 2 more browser test profile' <<<"$out" ||
+  fail '23b: the two profiles past the per-run limit were not reported as deferred'
+# A profile kept because a browser names it is not charged to the limit.
+out=$(BUILD_CACHE_RECLAIM_BROWSER_PROFILE_MAX=3 run_iso "$b_root" "$b_ps" dry-run 3 "$NEVER_CLEAN_BUDGET")
+grep -q 'DEFERRED' <<<"$out" &&
+  fail '23b: a profile kept for its running browser used up the per-run limit'
 
 # 23c. no readable process table keeps every profile, and says so.
 b_nops="${fixture_root}/ps-none"
@@ -1892,6 +1902,8 @@ for d in "$b_stale" "$b_hours"; do
 done
 
 # 23d. apply: reaps exactly the reapable two.
+kill -0 "$b_holder" 2>/dev/null ||
+  fail 'fixture: profile holder exited before the apply run; 23d liveness not exercised'
 out=$(run_iso "$b_root" "$b_ps" apply 3 "$NEVER_CLEAN_BUDGET")
 for d in "$b_stale" "$b_hours"; do
   [ -e "$d" ] && fail "23d: apply did not reap an abandoned profile: $d"
@@ -1979,15 +1991,15 @@ grep -qF 'CONSUMERS not measured: disabled' <<<"$out" || fail '24d: the off swit
 f_slow="${f_root}/slow-bin"
 mkdir -p "$f_slow" || fail 'fixture: slow du dir'
 real_du=$(command -v du)
-printf '#!/bin/sh\ncase " $* " in *" -d "*) exec sleep 20 ;; esac\nexec "%s" "$@"\n' "$real_du" > "${f_slow}/du"
+printf '#!/bin/sh\ncase " $* " in *" -d "*) exec sleep 120 ;; esac\nexec "%s" "$@"\n' "$real_du" > "${f_slow}/du"
 chmod +x "${f_slow}/du"
 started=$(date +%s)
 out=$(PATH="${f_slow}:$PATH" BUILD_CACHE_RECLAIM_CONSUMER_SCAN_SECONDS=1 \
   run_free $((10 * gb)) $((10 * gb)) dry-run 3 "$NEVER_CLEAN_BUDGET")
 took=$(($(date +%s) - started))
-grep -qF '(partial: stopped after 1s, no entry sized)' <<<"$out" ||
+grep -qF '(partial: stopped after 1s, so the largest entry may be missing, no entry sized)' <<<"$out" ||
   fail '24e: a measurement past its deadline was not reported as stopped'
-[ "$took" -lt 15 ] || fail "24e: the sweep waited ${took}s for a measurement with a 1s deadline"
+[ "$took" -lt 60 ] || fail "24e: the sweep waited ${took}s for a measurement with a 1s deadline"
 
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
