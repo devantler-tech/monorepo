@@ -11,7 +11,8 @@
     "agentic-engineering@devantler-plugins": true
   },
   "env": {
-    "GH_TELEMETRY": "0"
+    "GH_TELEMETRY": "0",
+    "GIT_NO_LAZY_FETCH": "1"
   },
   "hooks": {
     "PreToolUse": [
