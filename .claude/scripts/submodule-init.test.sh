@@ -2001,6 +2001,25 @@ report "shared store: SUBMODULE_INIT_NO_SHARED_STORE=1 clones in full" \
 report "shared store: the opt-out leaves the store's settings alone" \
   "$([[ -z "$(git --git-dir="$c94/super/.git/modules/sub" config --get gc.pruneExpire 2>/dev/null || true)" ]] && echo yes || echo no)"
 
+# An inherited git location variable can aim the lookup at another checkout's store, so the lookup
+# answers nothing then. Asked directly, in a worktree that has not cloned the submodule yet; the
+# first case is the control that the same call does name the store when nothing is inherited.
+c95="$tmp/c95"
+mk_super "$c95"
+git -C "$c95/super" worktree add -q "$c95/super-wt" -b wt
+store_lookup() (
+  # shellcheck source=/dev/null
+  . "$helper" >/dev/null 2>&1
+  cd "$c95/super-wt" && shared_object_store sub
+)
+report "shared store: the lookup names the main checkout's store (control)" \
+  "$([[ "$(abspath "$(store_lookup)")" == "$(abspath "$c95/super/.git/modules/sub")" ]] && echo yes || echo no)" "$(store_lookup 2>&1)"
+for var in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; do
+  # shellcheck disable=SC2016 # the inner shell expands $1 and $2, not this one
+  report "shared store: an inherited $var means no borrowing" \
+    "$([[ -z "$(env "$var=$c95/super/.git" bash -c '. "$1" >/dev/null 2>&1; cd "$2" && shared_object_store sub' _ "$helper" "$c95/super-wt")" ]] && echo yes || echo no)"
+done
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

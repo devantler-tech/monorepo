@@ -740,10 +740,14 @@ origin_is_own() {
 # never to prune BEFORE borrowing, and borrows only when that setting took. Every "no" here is a
 # plain full clone, which is always safe: a main checkout (it IS the store), a submodule this
 # worktree has already cloned (git ignores --reference then), an ambiguous or unregistered path, a
-# store that is absent or unreadable, or SUBMODULE_INIT_NO_SHARED_STORE=1.
+# store that is absent or unreadable, an inherited GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR, or
+# SUBMODULE_INIT_NO_SHARED_STORE=1.
 shared_object_store() {
   local path=$1 gitdir common rec rec_key rec_val name='' count=0 store
   [ "${SUBMODULE_INIT_NO_SHARED_STORE:-}" != 1 ] || return 0
+  # An inherited git location variable can point the lookups below at ANOTHER checkout, whose store
+  # would then be borrowed from and reconfigured. Where git was told where to look, do not borrow.
+  [ -z "${GIT_DIR:-}${GIT_WORK_TREE:-}${GIT_COMMON_DIR:-}" ] || return 0
   gitdir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 0
   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
   [ -n "$gitdir" ] && [ -n "$common" ] && [ "$gitdir" != "$common" ] || return 0
