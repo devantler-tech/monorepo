@@ -84,6 +84,7 @@ Options: --today <YYYY-MM-DD> (default UTC today)
          --ask-digest (emit declared authority blockers with missing or stale
                        ask records, oldest first, for verification before
                        asking the maintainer)
+Write a record with the compose subcommand (compose --help), never by hand.
 Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input).
 `
 
@@ -129,8 +130,14 @@ func civilDate(value string) (time.Time, error) {
 	return time.Parse("2006-01-02", value)
 }
 
+// defaultOptions holds the bounds a sweep applies unless told otherwise. The
+// composer reads the same ones, so a record it prints is judged as it was composed.
+func defaultOptions() options {
+	return options{maxAge: 14, verifyMaxAge: 7, unrecordedMaxAge: 7}
+}
+
 func arguments(args []string) (options, bool, error) {
-	o := options{maxAge: 14, verifyMaxAge: 7, unrecordedMaxAge: 7}
+	o := defaultOptions()
 	today := time.Now().UTC().Format("2006-01-02")
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -854,6 +861,10 @@ func load(o options, stdin io.Reader) ([]issue, error) {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	// compose writes a record and reads nothing: it never selects a forge query.
+	if len(args) > 0 && args[0] == "compose" {
+		return composeRun(args[1:], stdout, stderr)
+	}
 	unknown := func(err error) int {
 		// A failed diagnostic write cannot change the UNKNOWN exit status.
 		_, _ = fmt.Fprintln(stderr, "blocked-label-blocker-line.sh:", err)
