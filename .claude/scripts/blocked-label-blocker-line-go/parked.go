@@ -27,6 +27,8 @@ const (
 )
 
 type comment struct {
+	// ID is read only where a record is edited in place (park).
+	ID   int64 `json:"id"`
 	User struct {
 		Login string `json:"login"`
 	} `json:"user"`

@@ -1103,7 +1103,7 @@ if [ -z "$PARK_RULE" ]; then
   bad "the merge policy defines the parked-PR record" "no paragraph starting '**A parked PR carries one blocker record' in $MERGE_GUIDE"
 else
   ok "the merge policy defines the parked-PR record"
-  for token in '<!-- pr-blocker-record -->' '`blocked` label' 'on a line of its own' 'edit that comment in place' '`MISSING`' '`DUPLICATE`' 'by `devantler`' 'delete the record comment' 'blocked-label-blocker-line.sh --org devantler-tech' 'blocked-label-blocker-line.sh compose --target' 'never a blocker'; do
+  for token in '<!-- pr-blocker-record -->' '`blocked` label' 'on a line of its own' 'edit that comment in place' '`MISSING`' '`DUPLICATE`' 'by `devantler`' 'delete the record comment' 'blocked-label-blocker-line.sh --org devantler-tech' 'blocked-label-blocker-line.sh compose --target' 'blocked-label-blocker-line.sh park --org devantler-tech --target' 'only after reading both' 'never a blocker'; do
     if grep -qF -- "$token" <<<"$PARK_RULE"; then ok "the parked-PR rule states: $token"; else bad "the parked-PR rule states: $token" "not found in the rule paragraph"; fi
   done
   for token in '<!-- pr-blocker-record -->' 'DUPLICATE' 'devantler' 'on a line of its own'; do

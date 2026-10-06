@@ -138,22 +138,32 @@ finish is not neutral: it costs review capacity, ages into conflicts, and hides 
 Without one, every run re-derived the same diagnosis and posted it again: `platform#3534` collected
 17 comments about one unchanged blocker in 18 days. To park a PR:
 
-1. Add the `blocked` label. The label is what parks the PR; a PR without it is not parked and is
-   worked like any other, whatever its comments say.
-2. Post **one** comment that begins with your disclosure line, carries `<!-- pr-blocker-record -->`
+**Park with one command, never two hand-made writes:**
+`.claude/scripts/blocked-label-blocker-line.sh park --org devantler-tech --target <owner/repo#N> --kind upstream --blocker <owner/repo#N> --result <text>`
+(`park --help` covers `authority`). It writes both halves and exits `0` only after reading both
+back; on any other exit its message says what, if anything, was written. When only the label
+write failed, running it again finishes the job; otherwise read the message before retrying.
+Done separately the two halves came apart: a label with no record is skipped by every lane for
+ever, and a record with no label is re-diagnosed every run (monorepo#3879). What it writes:
+
+1. **One** comment that begins with your disclosure line, carries `<!-- pr-blocker-record -->`
    on a line of its own, and holds the same line a blocked issue carries (*Issue-driven → Drain
    oldest-first*): `**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`,
    with the `| asked <channel> <date>` record when the kind is `authority`. The record lives in a
-   comment because a dependency bot rewrites the body of its own PR.
-   **Compose the comment, never type it:**
-   `.claude/scripts/blocked-label-blocker-line.sh compose --target <owner/repo#N> --kind upstream --blocker <owner/repo#N> --result <text>`
-   prints the whole comment for `--body-file` (`compose --help` covers `authority`). It refuses a
-   kind other than `upstream` or `authority`, the PR named as its own blocker, and an upstream blocker
-   that is not one tracked item — review, CI and evaluation of the PR itself are its unfinished
-   readiness work, never a blocker: drive them instead of parking on them (monorepo#3879).
+   comment because a dependency bot rewrites the body of its own PR. An existing record is edited
+   in place, never joined by a second.
+2. The `blocked` label. The label is what parks the PR; a PR without it is not parked and is
+   worked like any other, whatever its comments say.
+
+It refuses a kind other than `upstream` or `authority`, the PR named as its own blocker, and an
+upstream blocker that is not one tracked item — review, CI and evaluation of the PR itself are its
+unfinished readiness work, never a blocker: drive them instead of parking on them.
+`.claude/scripts/blocked-label-blocker-line.sh compose --target <owner/repo#N> …` prints the same
+comment without posting it.
 
 On every later run, **re-verify the blocker against live state and edit that comment in place**
-(`gh api -X PATCH repos/<owner>/<repo>/issues/comments/<id>`): update the date and result, or, when
+(run `park` again with today's result: it edits the one record and never posts a second):
+update the date and result, or, when
 the blocker has cleared, remove the label, delete the record comment and drive the PR (the check
 does not read an unlabelled PR, so a record left behind would be the stale one found if the label
 ever came back). Never post a second record or a new comment restating the blocker, and leave

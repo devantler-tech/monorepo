@@ -85,6 +85,8 @@ Options: --today <YYYY-MM-DD> (default UTC today)
                        ask records, oldest first, for verification before
                        asking the maintainer)
 Write a record with the compose subcommand (compose --help), never by hand.
+Park a pull request with the park subcommand (park --help): it writes the
+record and the blocked label together and reads both back.
 Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input).
 `
 
@@ -864,6 +866,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// compose writes a record and reads nothing: it never selects a forge query.
 	if len(args) > 0 && args[0] == "compose" {
 		return composeRun(args[1:], stdout, stderr)
+	}
+	// park is the only path that changes the forge, and it names its one target.
+	if len(args) > 0 && args[0] == "park" {
+		return parkRun(args[1:], stdout, stderr)
 	}
 	unknown := func(err error) int {
 		// A failed diagnostic write cannot change the UNKNOWN exit status.
