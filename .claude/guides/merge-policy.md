@@ -782,7 +782,10 @@ bot-generated head keeps the repository automation's existing no-agent-review pa
 adaptation commit restores the ordinary current-head semantic-review gate before merge. Always
 convert the PR to draft before the first adaptation push, disable any existing auto-merge request,
 and confirm both states. Draft state is the durable fence: repository automation can re-arm
-auto-merge after a push. Promote from draft and re-arm only after the adapted head satisfies that
+auto-merge after a push. Push the adaptation with
+`.claude/scripts/bot-pr-adaptation-push.sh`, never with a bare `git push` to the bot branch: it
+applies that fence, reads both states back and only then pushes, and it refuses when either cannot
+be confirmed or the head moved (monorepo#3885). Promote from draft and re-arm only after the adapted head satisfies that
 review gate. Major-version
 bumps are included; difficulty changes the work, not ownership. If a merged dependency bump breaks
 `main`, repair that resulting breakage normally as well.
