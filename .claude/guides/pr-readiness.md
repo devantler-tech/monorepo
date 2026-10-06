@@ -209,7 +209,9 @@ state with the blocker named — before opening new ones; a *half-finished* draf
 threads, DIRTY, or never user-evaluated) is unfinished work to clear, not a new slice to defer it
 behind.
 
-**This autonomy is for `devantler-tech` work.** Opening PRs and filing issues on `devantler-tech`
-repos needs no prior sign-off — keep doing it. No external-repository action is
-autonomous: the professional-work boundary must be cleared first, and creating an upstream issue or PR
-then still needs approval via the ask tool. An existing `devantler` PR never bypasses the boundary.
+**This autonomy is primarily for `devantler-tech` work.** Opening PRs and filing issues on
+`devantler-tech` repositories needs no prior sign-off — keep doing it. **A bounded public third-party
+contribution may proceed without a separate ask only after** the GitHub-artifacts guide's recorded
+necessity, no-sufficient-portfolio-alternative, professional-boundary, project-policy and disclosure
+conditions all hold. No other external-repository action is autonomous, and an existing `devantler`
+PR never bypasses the boundary.

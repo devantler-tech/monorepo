@@ -122,7 +122,7 @@ ok
 #    EMITTED. Without it a run follows *GitHub artifact conventions* verbatim, emits the engineer
 #    form from either role, and the whole change becomes documentation that alters no behaviour —
 #    the "would the fix have prevented it?" test, applied to this change itself.
-operative="$(extract '- Begin every PR/issue/comment with the disclosure line' '"Begin" is the whole rule' "${guides}/github-artifacts.md")"
+operative="$(extract '- Begin every `devantler-tech` PR/issue/comment with the disclosure line' '"Begin" is the whole rule' "${guides}/github-artifacts.md")"
 case "${operative}" in
   *"${improver_form}"*) ok ;;
   *) fail "the authoring rule in *GitHub artifact conventions* does not name '${improver_form}'" ;;
