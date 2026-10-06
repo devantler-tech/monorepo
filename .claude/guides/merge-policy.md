@@ -145,6 +145,12 @@ Without one, every run re-derived the same diagnosis and posted it again: `platf
    oldest-first*): `**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`,
    with the `| asked <channel> <date>` record when the kind is `authority`. The record lives in a
    comment because a dependency bot rewrites the body of its own PR.
+   **Compose the comment, never type it:**
+   `.claude/scripts/blocked-label-blocker-line.sh compose --target <owner/repo#N> --kind upstream --blocker <owner/repo#N> --result <text>`
+   prints the whole comment for `--body-file` (`compose --help` covers `authority`). It refuses a
+   kind other than `upstream` or `authority`, the PR named as its own blocker, and an upstream blocker
+   that is not one tracked item — review, CI and evaluation of the PR itself are its unfinished
+   readiness work, never a blocker: drive them instead of parking on them (monorepo#3879).
 
 On every later run, **re-verify the blocker against live state and edit that comment in place**
 (`gh api -X PATCH repos/<owner>/<repo>/issues/comments/<id>`): update the date and result, or, when

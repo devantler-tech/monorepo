@@ -84,6 +84,7 @@ Options: --today <YYYY-MM-DD> (default UTC today)
          --ask-digest (emit declared authority blockers with missing or stale
                        ask records, oldest first, for verification before
                        asking the maintainer)
+Write a record with the compose subcommand (compose --help), never by hand.
 Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input).
 `
 
@@ -854,6 +855,10 @@ func load(o options, stdin io.Reader) ([]issue, error) {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	// compose writes a record and reads nothing: it never selects a forge query.
+	if len(args) > 0 && args[0] == "compose" {
+		return composeRun(args[1:], stdout, stderr)
+	}
 	unknown := func(err error) int {
 		// A failed diagnostic write cannot change the UNKNOWN exit status.
 		_, _ = fmt.Fprintln(stderr, "blocked-label-blocker-line.sh:", err)

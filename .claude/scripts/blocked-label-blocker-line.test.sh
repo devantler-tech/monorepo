@@ -1073,6 +1073,26 @@ else
   bad "a comment read shorter than the counted comments is UNKNOWN(2)" "rc=$RC; out: ${OUT:0:300}"
 fi
 
+# COMPOSER: the record a run posts is printed by the wrapper, not typed (monorepo#3879). Run the
+# real wrapper, then feed what it printed back through the sweep as a parked pull request's only
+# comment: the two must agree, and a refusal must leave nothing on stdout to post.
+COMPOSED="$("$WRAPPER" compose --target o/r#5 --kind upstream --blocker o/other#7 --result 'still open')"
+RC=$?
+if [ "$RC" = 0 ] && [ -n "$COMPOSED" ] &&
+  OUT="$(jq -n --arg body "$COMPOSED" '[{repo:"r",number:5,pull_request:{},labels:[{name:"blocked"}],body:"",comments:[{user:{login:"devantler"},body:$body}]}]' | "$GUARD" --input - 2>&1)" &&
+  grep -q 'all 1 open blocked-labelled pull request(s) carry one conforming record comment' <<<"$OUT"; then
+  ok "the wrapper composes a record the sweep accepts"
+else
+  bad "the wrapper composes a record the sweep accepts" "rc=$RC; composed: ${COMPOSED:0:200}; sweep: ${OUT:0:300}"
+fi
+OUT="$("$WRAPPER" compose --target o/r#5 --kind upstream --blocker 'review, CI and evaluation' --result 'pending' 2>"$TMP/compose.err")"
+RC=$?
+if [ "$RC" = 2 ] && [ -z "$OUT" ] && grep -q 'its own unfinished work' "$TMP/compose.err"; then
+  ok "the wrapper refuses readiness work as a blocker and prints nothing"
+else
+  bad "the wrapper refuses readiness work as a blocker and prints nothing" "rc=$RC; out: ${OUT:0:200}; err: $(head -c 300 "$TMP/compose.err")"
+fi
+
 # CONTRACT: the merge policy tells a run how to write the record the check accepts. Scope the
 # assertions to the paragraph that defines it, and fail when that paragraph cannot be found: an
 # empty extraction would pass no check here, but must not be mistaken for a rule that moved.
@@ -1083,7 +1103,7 @@ if [ -z "$PARK_RULE" ]; then
   bad "the merge policy defines the parked-PR record" "no paragraph starting '**A parked PR carries one blocker record' in $MERGE_GUIDE"
 else
   ok "the merge policy defines the parked-PR record"
-  for token in '<!-- pr-blocker-record -->' '`blocked` label' 'on a line of its own' 'edit that comment in place' '`MISSING`' '`DUPLICATE`' 'by `devantler`' 'delete the record comment' 'blocked-label-blocker-line.sh --org devantler-tech'; do
+  for token in '<!-- pr-blocker-record -->' '`blocked` label' 'on a line of its own' 'edit that comment in place' '`MISSING`' '`DUPLICATE`' 'by `devantler`' 'delete the record comment' 'blocked-label-blocker-line.sh --org devantler-tech' 'blocked-label-blocker-line.sh compose --target' 'never a blocker'; do
     if grep -qF -- "$token" <<<"$PARK_RULE"; then ok "the parked-PR rule states: $token"; else bad "the parked-PR rule states: $token" "not found in the rule paragraph"; fi
   done
   for token in '<!-- pr-blocker-record -->' 'DUPLICATE' 'devantler' 'on a line of its own'; do
