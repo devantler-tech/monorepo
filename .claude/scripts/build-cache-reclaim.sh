@@ -1436,18 +1436,40 @@ if BROWSER_ARGS=$(ps -A -ww -o args= 2>/dev/null) && [ -n "$BROWSER_ARGS" ]; the
   BROWSER_ARGS_OK=1
 fi
 
+# BROWSER_NAMED is every profile name a command line mentions, one per line, taken in ONE
+# pass. It looks for the path's own tail, rod/user-data/<name>, rather than a whole path: the
+# name is 64 random bits, so the tail identifies the profile under any spelling of the temp
+# dir (symlinked, relative, or with a doubled slash), and matching less of the path can only
+# keep more. One pass, because a backlog of thousands of profiles would otherwise scan the
+# whole process table once per profile. A pass that fails is an unreadable table.
+BROWSER_NAMED=''
+if [ "$BROWSER_ARGS_OK" -eq 1 ]; then
+  if ! BROWSER_NAMED=$(printf '%s\n' "$BROWSER_ARGS" | awk '
+    {
+      s = $0
+      while ((i = index(s, "rod/user-data/")) > 0) {
+        s = substr(s, i + 14)
+        n = substr(s, 1, 16)
+        if (length(n) == 16 && n !~ /[^0-9a-f]/) print n
+      }
+    }'); then
+    BROWSER_ARGS_OK=0
+    BROWSER_NAMED=''
+  fi
+fi
+
 # browser_profile_named reports whether a running process names `tree` on its command
-# line. It looks for the path's own tail, rod/user-data/<name>, rather than the whole path:
-# the name is 64 random bits, so the tail identifies the profile under any spelling of the
-# temp dir (symlinked, relative, or with a doubled slash), and matching less of the path can
-# only keep more. Every unknown answers yes, so the profile is kept.
+# line. Every unknown answers yes, so the profile is kept.
 browser_profile_named() {
-  local tree=$1
   [ "$BROWSER_ARGS_OK" -eq 1 ] || return 0
-  # Scans to EOF with no early `exit`, for the SIGPIPE reason documented on dir_in_use. The
-  # needle travels in the environment: `awk -v` would rewrite a backslash in it.
-  printf '%s\n' "$BROWSER_ARGS" |
-    NEEDLE="rod/user-data/${tree##*/}" awk 'index($0, ENVIRON["NEEDLE"]) { found = 1 } END { exit !found }'
+  case "
+${BROWSER_NAMED}
+" in
+    *"
+${1##*/}
+"*) return 0 ;;
+  esac
+  return 1
 }
 
 BROWSER_PROFILE_ROOT="${GO_TMP_ROOT}/rod/user-data"
@@ -1883,6 +1905,8 @@ report_consumers() {
   local -a root_list
   # Split once, into an array: an unquoted expansion would also glob the directory names.
   IFS=: read -r -a root_list <<<"$1"
+  # An empty list is an unbound array to bash 3.2 under `set -u`, and would abort the report.
+  [ "${#root_list[@]}" -gt 0 ] || return 0
   for root in "${root_list[@]}"; do
     [ -n "$root" ] || continue
     canon=$(cd -- "$root" 2>/dev/null && pwd -P) || {
