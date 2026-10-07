@@ -10,7 +10,7 @@
 # alone, BEFORE creating its lane-specific work branch. The push decides the
 # race; the tip comparison (never the push's exit status) decides the winner.
 #
-# Fifteen traps, proven by the delivery and its review rounds — do not regress them:
+# Sixteen traps, proven by the delivery, its review rounds and later runs — do not regress them:
 #   1. Second non-force push is refused; ls-remote returns the winner's sha.
 #   2. `git push … | tail` exits 0 on a REJECTED push — only the tip compare
 #      is safe (never judge by exit status, never through a pipe).
@@ -40,10 +40,15 @@
 #  14. Production takeover never accepts a lease below two hours.
 #  15. A failed post-push tip query reports UNKNOWN and returns the candidate
 #      ownership token for recovery.
+#  16. A commit that lands on a pull request after a stale PR-number tip must
+#      not make that tip a permanent lock. Takeover of a pull-request number
+#      names the head the caller re-read (--pr-head); the helper compares it
+#      with the remote's refs/pull/<n>/head and records it in the claim commit
+#      (monorepo#3811).
 #
 # Usage:
 #   agent-claim.sh acquire <issue> [--remote NAME] [--repo-dir DIR]
-#                                [--lease-hours N] [--takeover]
+#                                [--lease-hours N] [--takeover [--pr-head SHA]]
 #   agent-claim.sh renew   <issue> <acquired-sha> [--remote NAME] [--repo-dir DIR]
 #   agent-claim.sh verify  <issue> <expected-sha> [--remote NAME] [--repo-dir DIR]
 #   agent-claim.sh tip     <issue> [--remote NAME] [--repo-dir DIR]
@@ -54,11 +59,16 @@
 # <issue> may also be a pull-request number: issues and PRs share one number
 # sequence per repository, so finding-fix work on an existing PR is claimed as
 # agent-claim/<pr-number> without colliding with any issue claim (monorepo#2999).
+# Taking over a pull-request number needs --pr-head <full-sha>: the head at which
+# the caller re-read the pull request's findings and checks. It is required when
+# the remote publishes refs/pull/<issue>/head, refused when it does not, and
+# must equal that ref (monorepo#3811). Any takeover is refused as UNKNOWN when
+# the remote cannot show whether the number is a pull request.
 #
 # Exit codes:
 #   0  success (acquired / renewed / tip matches / retired / is stale)
-#   1  lost the race / tip mismatch / not stale
-#   2  usage error / missing entropy / unsafe arguments
+#   1  lost the race / tip mismatch / not stale / the pull request's head moved
+#   2  usage error / missing entropy / unsafe arguments / a failed remote read
 set -Eeuo pipefail
 
 DEFAULT_REMOTE="origin"
@@ -154,6 +164,78 @@ remote_tip() {
   ref="$(claim_ref "$issue")"
   # Match exact ref; awk prints the sha only. No pipe after push elsewhere.
   git_c ls-remote "$REMOTE" "$ref" | awk '{print $1; exit}'
+}
+
+# Head of pull request <n> as the remote publishes it: the forge keeps
+# refs/pull/<n>/head for every pull request, open or closed, and for no issue.
+# remote_pull_head <n> <claim-tip> prints the head, or nothing once the number
+# is SHOWN not to be a pull request.
+#
+# It reads every ref the remote advertises, with no pattern, and picks the ref
+# out here by its exact name. Asking the remote for the one ref, or for
+# `refs/pull/*/head`, is a filtered read: ls-remote exits 0 when nothing
+# matches, so an answer that left the ref out would read exactly like an issue
+# number and skip the gate below. A pattern also matches the TAIL of a ref, so
+# a branch named `x/refs/pull/<n>/head` would read as a pull request.
+#
+# Absence counts only when the same listing shows what is known to be there:
+# the claim tip the caller just read, when there is one, and at least one
+# pull-request head. Returns 1 when the read fails, 3 when the remote shows no
+# pull-request head for any number (nothing there can then be shown to be an
+# issue) and 4 when the listing does not show the claim tip. One assumption is
+# left, and no question a client can ask removes it: that a listing asked for
+# without a pattern, and answered with success, is everything the remote
+# advertises.
+remote_pull_head() {
+  local all
+  all="$(git_c ls-remote "$REMOTE")" || return 1
+  awk -v ref="refs/pull/$1/head" -v claim="$(claim_ref "$1")" -v tip="${2-}" '
+    $2 == claim && $1 == tip { shown = 1 }
+    $2 ~ /^refs\/pull\/[1-9][0-9]*\/head$/ { seen = 1; if ($2 == ref) head = $1 }
+    END {
+      if (tip != "" && !shown) exit 4
+      if (!seen) exit 3
+      if (head != "") print head
+    }
+  ' <<<"$all"
+}
+
+# Trap 16 — the takeover gate for a pull-request number (monorepo#3811).
+#
+# An issue's takeover is gated on "no open PR" (the caller's read) plus the
+# lease. A pull-request number has no such gate — the PR is open by definition
+# — and the gate that used to stand in for it, "no commit on the PR newer than
+# the tip", turned any later commit into a permanent lock, including one the
+# holder never made. What that gate protected was rebuilding a fix that had
+# already landed, and a re-read of the pull request at its current head
+# protects the same thing without the deadlock. So the caller names the head
+# it re-read and this refuses any other: a head read before the newest commit
+# is not the current head.
+#
+# Neither refusal prints the current head. It has to come from the caller's own
+# read of the pull request, or naming it would prove nothing.
+require_pr_head_for_takeover() {
+  local issue="$1" claim_tip="${2-}" live read_rc=0
+  live="$(remote_pull_head "$issue" "$claim_tip")" || read_rc=$?
+  case "$read_rc" in
+    0) ;;
+    3) fail "UNKNOWN — ${REMOTE} shows no pull-request head for any number, so #${issue} cannot be shown to be an issue; refusing takeover" ;;
+    4) fail "UNKNOWN — the refs ${REMOTE} listed do not show the claim tip ${claim_tip} that was just read, so the listing cannot show #${issue} is an issue either; refusing takeover" ;;
+    *) fail "UNKNOWN — could not list the refs of ${REMOTE}; refusing takeover" ;;
+  esac
+  if [[ -z "$live" ]]; then
+    [[ -z "$PR_HEAD" ]] ||
+      fail "--pr-head was given, but ${REMOTE} publishes no refs/pull/${issue}/head: #${issue} is not a pull request there"
+    return 0
+  fi
+  [[ "$live" =~ ^[0-9a-f]{40}$ ]] ||
+    fail "UNKNOWN — refs/pull/${issue}/head on ${REMOTE} is not a full SHA; refusing takeover"
+  [[ -n "$PR_HEAD" ]] ||
+    fail "#${issue} is a pull request: re-read its findings and checks at its current head, then pass --pr-head <full-sha> with --takeover"
+  if [[ "$PR_HEAD" != "$live" ]]; then
+    echo "agent-claim: REFUSED takeover — pull request #${issue} is not at ${PR_HEAD}, so that is not the head you re-read; read it again at its current head" >&2
+    exit 1
+  fi
 }
 
 # Committer unix time of a remote tip, via a local fetch of that single ref.
@@ -294,10 +376,13 @@ cmd_retire() {
 }
 
 # Create a fresh empty claim commit on a caller-selected parent. Ignore both
-# inherited Git dates (trap 9) and local replacement refs (trap 13).
+# inherited Git dates (trap 9) and local replacement refs (trap 13). An optional
+# third argument is appended to the subject as the claim's record — the head a
+# pull-request takeover re-read (trap 16).
 new_claim_commit() {
   local issue="$1"
   local parent="$2"
+  local record="${3-}"
   local nonce claim_time
   if ! nonce="$(claim_nonce)"; then
     fail "portable entropy is unavailable; refusing to create a fixed claim commit"
@@ -305,7 +390,7 @@ new_claim_commit() {
   claim_time="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   GIT_AUTHOR_DATE="$claim_time" GIT_COMMITTER_DATE="$claim_time" \
     git_c_no_replace commit-tree "${parent}^{tree}" -p "$parent" \
-      -m "chore: agent-claim #${issue} nonce=${nonce}"
+      -m "chore: agent-claim #${issue} nonce=${nonce}${record:+ ${record}}"
 }
 
 # Atomically refresh the lease at the publication boundary. The acquired SHA
@@ -374,10 +459,19 @@ cmd_acquire() {
   if ! existing="$(remote_tip "$issue")"; then
     fail "UNKNOWN — could not query ${branch} before acquire"
   fi
+  # Trap 16: every takeover of a pull-request number names the head it re-read,
+  # whether or not a tip is still there to take over. The lease below is checked
+  # as well, never instead.
+  local record=""
+  if [[ "$TAKEOVER" -eq 1 ]]; then
+    require_pr_head_for_takeover "$issue" "$existing"
+    [[ -z "$PR_HEAD" ]] || record="takeover-pr-head=${PR_HEAD}"
+  fi
   if [[ -n "$existing" ]]; then
     if [[ "$TAKEOVER" -eq 1 ]]; then
-      # Evidence gate 1 of 2 (caller must have confirmed no open PR). Gate 2:
-      # tip past the lease. Refuse takeover of a live claim.
+      # Evidence gate 1 of 2: for an issue, the caller must have confirmed no
+      # open PR; for a pull-request number, the head check above. Gate 2: tip
+      # past the lease. Refuse takeover of a live claim.
       local stale_rc=0
       claim_is_stale "$issue" || stale_rc=$?
       if (( stale_rc == 2 )); then
@@ -387,7 +481,7 @@ cmd_acquire() {
         echo "agent-claim: REFUSED takeover — claim is still within the ${LEASE_HOURS}h lease (tip $existing)" >&2
         exit 1
       fi
-      echo "agent-claim: taking over stale claim ${branch} (tip $existing)" >&2
+      echo "agent-claim: taking over stale claim ${branch} (tip $existing)${PR_HEAD:+ at pull-request head ${PR_HEAD}}" >&2
       # Delete the stale tip first so the subsequent non-force push can land.
       # Never --force onto a live tip — only delete after is-stale. The delete
       # is pinned to the tip the staleness check actually observed: a rival can
@@ -428,7 +522,7 @@ cmd_acquire() {
   # The commit is the lease clock. Ignore inherited Git dates: a scheduled
   # process or test harness can export an old GIT_COMMITTER_DATE, which would
   # make this just-acquired claim immediately stale and stealable.
-  if ! sha="$(new_claim_commit "$issue" "$parent")"; then
+  if ! sha="$(new_claim_commit "$issue" "$parent" "$record")"; then
     fail "could not create the claim commit"
   fi
 
@@ -462,6 +556,8 @@ REMOTE="$DEFAULT_REMOTE"
 REPO_DIR=""
 LEASE_HOURS="$DEFAULT_LEASE_HOURS"
 TAKEOVER=0
+PR_HEAD=""
+PR_HEAD_GIVEN=0
 COMMAND=""
 ISSUE=""
 EXPECTED_SHA=""
@@ -476,6 +572,7 @@ while [[ $# -gt 0 ]]; do
     --repo-dir) REPO_DIR="${2-}"; shift 2 || fail "--repo-dir needs a value" ;;
     --lease-hours) LEASE_HOURS="${2-}"; shift 2 || fail "--lease-hours needs a value" ;;
     --takeover) TAKEOVER=1; shift ;;
+    --pr-head) PR_HEAD="${2-}"; PR_HEAD_GIVEN=1; shift 2 || fail "--pr-head needs a value" ;;
     -h|--help) usage; exit 0 ;;
     -*) fail "unknown flag '$1'" ;;
     *)
@@ -495,6 +592,13 @@ done
 [[ "$LEASE_HOURS" =~ ^[0-9]+$ ]] || fail "--lease-hours must be an integer"
 (( LEASE_HOURS >= DEFAULT_LEASE_HOURS )) ||
   fail "--lease-hours must be at least ${DEFAULT_LEASE_HOURS}; production takeover cannot shorten the safety lease"
+if [[ "$PR_HEAD_GIVEN" -eq 1 ]]; then
+  [[ "$COMMAND" == "acquire" && "$TAKEOVER" -eq 1 ]] ||
+    fail "--pr-head only applies to acquire --takeover"
+  # A full SHA only: an abbreviation can match more than one head.
+  [[ "$PR_HEAD" =~ ^[0-9a-f]{40}$ ]] ||
+    fail "--pr-head must be the pull request's full head SHA (got '$PR_HEAD')"
+fi
 validate_repo_dir
 
 case "$COMMAND" in

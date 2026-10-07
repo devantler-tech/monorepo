@@ -270,7 +270,22 @@ done
 # a transcript's mtime is at or after its start, so this never drops an in-window session.
 ANY_ATTRIBUTED=0
 TIMEREF=$(mktemp); FILELIST=$(mktemp); STARTS=$(mktemp)
-trap 'rm -f "$TIMEREF" "$FILELIST" "$STARTS"' EXIT
+# Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and a successful `rm` would then
+# become this script's status: a run that printed no rate would read as a measured one. Completion
+# is recorded explicitly, so printing the rate is the only way a zero status leaves this script;
+# every other way out reports exit 2, the code for UNKNOWN, on every bash (monorepo#3414).
+claude_dispatch_rate_finished=0
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+claude_dispatch_rate_cleanup() {
+  local rc=$?
+  rm -f "$TIMEREF" "$FILELIST" "$STARTS"
+  if [ "$claude_dispatch_rate_finished" != 1 ] && [ "$rc" -ne 2 ]; then
+    echo "claude-dispatch-rate: UNKNOWN -- aborted before finishing; reporting failure rather than a measured rate" >&2
+    rc=2
+  fi
+  exit "$rc"
+}
+trap claude_dispatch_rate_cleanup EXIT
 # Built in UTC: a local wall-clock stamp is ambiguous during a DST fallback, and `touch` may pick the
 # later occurrence and hide transcripts from the earlier one.
 stamp=$(TZ=UTC epoch_to_touch "$SINCE_E"); [ -n "$stamp" ] || die_unknown "could not render --since as a touch stamp"
@@ -339,3 +354,4 @@ rate=$(awk -v d="$dropped" -v n="$scheduled" 'BEGIN { printf "%.1f", 100 * d / n
 printf 'DISPATCH-RATE task=%s cron="%s" cron_source=current window=%s..%s scheduled=%d dispatched=%d dropped=%d drop_rate=%s%%\n' \
   "$TASK" "$CRON" "$(epoch_to_iso "$SINCE_E")" "$(epoch_to_iso "$UNTIL_E")" "$scheduled" "$dispatched" "$dropped" "$rate"
 [ "$SLOTS" -eq 0 ] || printf '%s' "$slot_lines"
+claude_dispatch_rate_finished=1
