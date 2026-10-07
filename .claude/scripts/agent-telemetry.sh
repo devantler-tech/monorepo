@@ -728,12 +728,38 @@ emit_injection_hits() {
 # line's total. `~` is safe as the field separator because the display filter
 # admits only [a-z0-9 ._:/@+-].
 phrase_class_keys() {
-  local ph
+  local ph digest display i found cached=0 separator="${1:-~}"
+  local cached_phrases=() cached_digests=() cached_displays=()
+  local LC_ALL=C
   while LC_ALL=C IFS= read -r ph || [ -n "$ph" ]; do
     [ -n "$ph" ] || continue
-    printf '%s~%s\n' \
-      "$(printf '%s' "$ph" | sha256_digest)" \
-      "$(printf '%s' "$ph" | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)"
+    found=0
+    for ((i=0; i<cached; i++)); do
+      if [ "$ph" = "${cached_phrases[$i]}" ]; then
+        digest="${cached_digests[$i]}"
+        display="${cached_displays[$i]}"
+        found=1
+        break
+      fi
+    done
+    if [ "$found" = 0 ]; then
+      if ! digest=$(printf '%s' "$ph" | sha256_digest); then
+        printf x >> "$XFINJ"
+        return 1
+      fi
+      display=$(printf '%s' "$ph" | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)
+      # Reports and loaded definitions repeat a handful of phrases thousands
+      # of times (#3830). Cache exact values only within this stream, bounded
+      # to 64 x 512 bytes. Longer or excess phrases still take the full digest
+      # path; every occurrence is emitted, including after cache saturation.
+      if [ "$cached" -lt 64 ] && [ "${#ph}" -le 512 ]; then
+        cached_phrases[$cached]="$ph"
+        cached_digests[$cached]="$digest"
+        cached_displays[$cached]="$display"
+        cached=$((cached + 1))
+      fi
+    fi
+    printf '%s%s%s\n' "$digest" "$separator" "$display"
   done
 }
 
@@ -3917,12 +3943,7 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
         printf x >> "$XFINJ"
       fi
     done < "$INJSNAP" | redact | tr '[:upper:]' '[:lower:]' \
-      | while LC_ALL=C IFS= read -r phrase || [ -n "$phrase" ]; do
-          [ -n "$phrase" ] || continue
-          digest=$(printf '%s' "$phrase" | sha256_digest) || exit 3
-          display=$(printf '%s' "$phrase" | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)
-          printf '%s\t%s\n' "$digest" "$display"
-        done > "$INJTMP"
+      | phrase_class_keys "$(printf '\t')" > "$INJTMP"
     inj_total=$(wc -l < "$INJTMP" | tr -d ' ')
     echo "    TOTAL occurrences: ${inj_total}   (distinct phrases: $(cut -f1 "$INJTMP" | sort -u | grep -c . || true))"
     # Concentration — the same occurrences grouped by the transcript RECORD that
