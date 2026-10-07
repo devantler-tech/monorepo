@@ -79,6 +79,35 @@ wait_for() { # <file>
   return 1
 }
 track() { field "$1" started pid >"$fx/pids/supervisor-$(field "$1" started id)"; }
+# live_sweeps — pids of the fake sweeps still running, one per line.
+live_sweeps() {
+  local f pid
+  for f in "$fx"/pids/sweep-*; do
+    [ -f "$f" ] || continue
+    pid=$(cat "$f" 2>/dev/null) || continue
+    kill -0 "$pid" 2>/dev/null && printf '%s\n' "$pid"
+  done
+  return 0
+}
+count_live_sweeps() { live_sweeps | grep -c . || true; }
+wait_gone() { # <pid>
+  local i=0
+  while kill -0 "$1" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  ! kill -0 "$1" 2>/dev/null
+}
+# Where the launcher has no record naming a process it looks for the lane's processes by name,
+# across the host. A real sweep of the same lane on this machine must not decide such a case, so
+# those cases read the process table through this filter: only processes of this fixture.
+real_ps=$(command -v ps) || { printf 'cannot find ps\n' >&2; exit 2; }
+mkdir -p "$fx/fxbin"
+cat >"$fx/fxbin/ps" <<EOF
+#!/usr/bin/env bash
+"$real_ps" "\$@" | grep -F -- "$fx/"
+EOF
+chmod +x "$fx/fxbin/ps"
+run_fx() { # [args...] -> sets out, rc; sees only this fixture's processes
+  out=$(HOME="$fx/home" PATH="$fx/fxbin:$PATH" bash "$sut" "$@" 2>&1); rc=$?
+}
 
 printf 'worktree-lane-sweep.sh contract tests\n'
 
@@ -376,7 +405,7 @@ else bad "control: the same records, well formed, read as clean" "rc=$rc $out"; 
 # An unreadable record must not stop the lane being swept on every later run.
 printf 'garbage\n' >"$records/cleanup-claude.started"
 mode ok
-run start --lane claude
+run_fx start --lane claude
 track claude
 if [ "$rc" -eq 2 ] && grep -q 'malformed sweep record' <<<"$out" \
    && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude; then
@@ -385,6 +414,133 @@ else bad "start on a malformed record is UNKNOWN (2) and still sweeps, replacing
 run status --lane claude
 if [ "$rc" -eq 0 ]; then ok "the replaced record reads as clean once that sweep finishes"
 else bad "the replaced record reads as clean once that sweep finishes" "rc=$rc $out"; fi
+
+# --- a second sweep never starts beside a live one (#3823) ------------------------
+# A start record nobody can read names no supervisor. Before replacing it the launcher looks for
+# any supervisor of the lane: one still running means the sweep that record stood for is live.
+mode hang
+rm -f "$fx/release" "$fx/hanging"
+run start --lane claude
+live_id=$(field claude started id); live_pid=$(field claude started pid)
+track claude
+wait_for "$fx/hanging" || bad "the sweep behind the unreadable record started" "$(cat "$log" 2>&1)"
+printf 'garbage\n' >"$records/cleanup-claude.started"
+run_fx start --lane claude
+if [ "$rc" -eq 2 ] && grep -q 'malformed sweep record' <<<"$out" \
+   && grep -Eq "not starting a second claude sweep while supervisor pid( [0-9]+)* $live_pid( [0-9]+)* still runs" <<<"$out" \
+   && [ "$(cat "$records/cleanup-claude.started")" = garbage ] && [ "$(count_live_sweeps)" -eq 1 ]; then
+  ok "a malformed start record cannot replace a live supervisor of the lane"
+else
+  bad "a malformed start record cannot replace a live supervisor of the lane" \
+    "rc=$rc live-sweeps=$(count_live_sweeps) $out"
+  [ "$(cat "$records/cleanup-claude.started")" = garbage ] || track claude
+fi
+# The same record with an unreadable process table proves neither running nor gone.
+printf 'garbage\n' >"$records/cleanup-claude.started"
+mkdir -p "$fx/bin"
+cat >"$fx/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$fx/bin/ps"
+out=$(HOME="$fx/home" PATH="$fx/bin:$PATH" bash "$sut" start --lane claude 2>&1); rc=$?
+rm -f "$fx/bin/ps"
+if [ "$rc" -eq 2 ] && grep -q 'UNKNOWN.*cannot read the process table' <<<"$out" \
+   && [ "$(cat "$records/cleanup-claude.started")" = garbage ] && [ "$(count_live_sweeps)" -eq 1 ]; then
+  ok "a malformed start record with an unreadable process table starts nothing"
+else bad "a malformed start record with an unreadable process table starts nothing" \
+  "rc=$rc live-sweeps=$(count_live_sweeps) $out"; fi
+# Once that supervisor has ended, the same unreadable record is replaced as before.
+touch "$fx/release"
+wait_gone "$live_pid" || bad "the supervisor behind the unreadable record ended" "pid=$live_pid"
+rm -f "$fx/release" "$fx/hanging"
+mode ok
+run_fx start --lane claude
+track claude
+if [ "$rc" -eq 2 ] && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude \
+   && [ "$(field claude started id)" != "$live_id" ]; then
+  ok "the unreadable record is replaced once no supervisor of the lane runs"
+else bad "the unreadable record is replaced once no supervisor of the lane runs" "rc=$rc $out"; fi
+
+# kill -9 reaches only the supervisor: the sweeper it started goes on sweeping with nothing
+# recording its end. The next start must not put a second sweeper beside it.
+mode hang
+rm -f "$fx/release" "$fx/hanging"
+run start --lane claude
+orphan_id=$(field claude started id); orphan_sup=$(field claude started pid)
+track claude
+wait_for "$fx/hanging" || bad "the sweep to orphan started" "$(cat "$log" 2>&1)"
+orphan_sweeper=$(live_sweeps)
+if [ -n "$orphan_sweeper" ] && [ "$(field claude sweeper pid)" = "$orphan_sweeper" ] \
+   && [ "$(field claude sweeper id)" = "$orphan_id" ]; then
+  ok "a running sweeper is on record under its sweep's id"
+else bad "a running sweeper is on record under its sweep's id" \
+  "live=$orphan_sweeper $(cat "$records/cleanup-claude.sweeper" 2>&1)"; fi
+kill -9 "$orphan_sup" 2>/dev/null
+wait_gone "$orphan_sup" || bad "the supervisor was killed" "pid=$orphan_sup"
+if [ "$(count_live_sweeps)" -eq 1 ]; then ok "fixture: the sweeper outlives its killed supervisor"
+else bad "fixture: the sweeper outlives its killed supervisor" "live-sweeps=$(count_live_sweeps)"; fi
+run start --lane claude
+if [ "$rc" -eq 1 ] && grep -q 'NEVER FINISHED' <<<"$out" \
+   && grep -q "not starting a second claude sweep: sweeper pid $orphan_sweeper is still running without its supervisor" <<<"$out" \
+   && grep -q "kill $orphan_sweeper" <<<"$out" \
+   && [ "$(field claude started id)" = "$orphan_id" ] && [ "$(count_live_sweeps)" -eq 1 ]; then
+  ok "start does not put a second sweeper beside an orphaned one"
+else
+  bad "start does not put a second sweeper beside an orphaned one" \
+    "rc=$rc live-sweeps=$(count_live_sweeps) $out"
+  [ "$(field claude started id)" = "$orphan_id" ] || track claude
+fi
+# A pid that is alive but is not the lane's sweeper (a recycled pid) blocks nothing, and neither
+# does a sweeper that has ended.
+touch "$fx/release"
+[ -z "$orphan_sweeper" ] || wait_gone "$orphan_sweeper" || bad "the orphaned sweeper ended" "pid=$orphan_sweeper"
+i=0; while [ "$(count_live_sweeps)" -gt 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+rm -f "$fx/release" "$fx/hanging"
+printf 'id=%s pid=%s at=2026-10-02T12:00:00Z\n' "$orphan_id" "$$" >"$records/cleanup-claude.sweeper"
+printf 'id=%s pid=999996 at=2026-10-02T12:00:00Z\n' "$orphan_id" >"$records/cleanup-claude.started"
+rm -f "$records/cleanup-claude.finished"
+mode ok
+run start --lane claude
+track claude
+if [ "$rc" -eq 1 ] && grep -q 'NEVER FINISHED' <<<"$out" && grep -q 'started the claude sweep' <<<"$out" \
+   && wait_finished claude; then
+  ok "a recorded sweeper pid that is not the lane's sweeper blocks nothing"
+else bad "a recorded sweeper pid that is not the lane's sweeper blocks nothing" "rc=$rc $out"; fi
+if [ ! -e "$records/cleanup-claude.sweeper" ]; then ok "a finished sweep leaves no sweeper on record"
+else bad "a finished sweep leaves no sweeper on record" "$(cat "$records/cleanup-claude.sweeper" 2>&1)"; fi
+
+# A sweeper record nobody can read names no pid, so any sweeper of the lane counts.
+mode hang
+rm -f "$fx/release" "$fx/hanging"
+run start --lane claude
+orphan_id=$(field claude started id); orphan_sup=$(field claude started pid)
+track claude
+wait_for "$fx/hanging" || bad "the second sweep to orphan started" "$(cat "$log" 2>&1)"
+orphan_sweeper=$(live_sweeps)
+kill -9 "$orphan_sup" 2>/dev/null
+wait_gone "$orphan_sup" || bad "the second supervisor was killed" "pid=$orphan_sup"
+printf 'garbage\n' >"$records/cleanup-claude.sweeper"
+run_fx start --lane claude
+if [ "$rc" -eq 2 ] && grep -q 'unreadable sweeper record' <<<"$out" \
+   && grep -q "sweeper pid $orphan_sweeper is still running without its supervisor" <<<"$out" \
+   && [ "$(field claude started id)" = "$orphan_id" ] && [ "$(count_live_sweeps)" -eq 1 ]; then
+  ok "an unreadable sweeper record still finds the lane's running sweeper"
+else
+  bad "an unreadable sweeper record still finds the lane's running sweeper" \
+    "rc=$rc live-sweeps=$(count_live_sweeps) $out"
+  [ "$(field claude started id)" = "$orphan_id" ] || track claude
+fi
+touch "$fx/release"
+i=0; while [ "$(count_live_sweeps)" -gt 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+rm -f "$fx/release" "$fx/hanging"
+mode ok
+run_fx start --lane claude
+track claude
+if [ "$rc" -eq 2 ] && grep -q 'unreadable sweeper record' <<<"$out" \
+   && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude; then
+  ok "an unreadable sweeper record is replaced once no sweeper of the lane runs"
+else bad "an unreadable sweeper record is replaced once no sweeper of the lane runs" "rc=$rc $out"; fi
 
 # Two launchers arriving together must serialize the read/start/record transaction. One may see
 # the other already running or may lose the lock, but they must create exactly one supervisor.
@@ -443,6 +599,182 @@ while [ "$i" -lt 100 ] && \
   [ "$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$stale_records/cleanup-codex.finished" 2>/dev/null)" != "$stale_id" ]; do
   sleep 0.1; i=$((i + 1))
 done
+if [ ! -e "$stale_records/cleanup-codex.launch.lock" ]; then ok "the recovered lock is released with its dead owner's record"
+else bad "the recovered lock is released with its dead owner's record" \
+  "$(ls -la "$stale_records/cleanup-codex.launch.lock" 2>&1)"; fi
+
+# --- recovering a dead launcher's lock is one atomic step (#3823) -----------------
+# lock_start <home> <ps-listing-lines...> — start the codex lane with a process table that holds
+# this launcher and the given extra lines. Sets out, rc. `@SUT@` in a line is the launcher's path.
+lock_start() {
+  local home=$1 line; shift
+  {
+    printf '#!/usr/bin/env bash\n'
+    # shellcheck disable=SC2016  # expanded by the generated script, not here
+    printf 'printf "%%s 00:00:01 bash %%s start --lane codex\\n" "$FAKE_PS_SELF_PID" "$SUT_PATH"\n'
+    for line in "$@"; do printf 'printf "%%s\\n" %q\n' "${line//@SUT@/$sut}"; done
+  } >"$fx/bin/ps"
+  chmod +x "$fx/bin/ps"
+  out=$(HOME="$home" PATH="$fx/bin:$PATH" SUT_PATH="$sut" \
+    bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" start --lane codex' 2>&1); rc=$?
+  rm -f "$fx/bin/ps"
+}
+# lock_settle <home> — wait for the sweep that home started, so no supervisor outlives its case.
+lock_settle() {
+  local dir="$1/.claude/worktree-cleanup-manifests" sid i=0
+  sid=$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$dir/cleanup-codex.started" 2>/dev/null)
+  [ -n "$sid" ] || return 0
+  while [ "$i" -lt 100 ] && \
+    [ "$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$dir/cleanup-codex.finished" 2>/dev/null)" != "$sid" ]; do
+    sleep 0.1; i=$((i + 1))
+  done
+}
+mkdir -p "$fx/bin"
+mode ok
+
+# A launcher that died while taking a dead lock over leaves two records: the dead owner's and its
+# own. The next launcher follows them to the last and takes over from that one.
+chain_home="$fx/chain-home"
+chain_lock="$chain_home/.claude/worktree-cleanup-manifests/cleanup-codex.launch.lock"
+mkdir -p "$chain_lock"
+printf 'pid=999999 at=2026-10-02T12:00:00Z\n' >"$chain_lock/owner"
+printf 'pid=999997 at=2026-10-02T12:00:05Z\n' >"$chain_lock/takeover.999999.2026-10-02T12:00:00Z"
+lock_start "$chain_home"
+if [ "$rc" -eq 1 ] && grep -q 'started the codex sweep' <<<"$out" && [ ! -e "$chain_lock" ]; then
+  ok "a launcher that died mid-takeover does not leave a permanent lock"
+else bad "a launcher that died mid-takeover does not leave a permanent lock" \
+  "rc=$rc $out $(ls -la "$chain_lock" 2>&1)"; fi
+lock_settle "$chain_home"
+
+# The last record names the owner. While that launcher runs, the dead records before it mean
+# nothing: the lock is held and no record in it may change.
+held_home="$fx/held-home"
+held_lock="$held_home/.claude/worktree-cleanup-manifests/cleanup-codex.launch.lock"
+mkdir -p "$held_lock"
+printf 'pid=999999 at=2026-10-02T12:00:00Z\n' >"$held_lock/owner"
+printf 'pid=4343 at=2026-10-02T12:00:05Z\n' >"$held_lock/takeover.999999.2026-10-02T12:00:00Z"
+held_before=$(ls "$held_lock")
+lock_start "$held_home" '4343 00:00:02 bash @SUT@ start --lane codex'
+if [ "$rc" -eq 2 ] && grep -q 'another codex sweep launcher (pid 4343) holds' <<<"$out" \
+   && [ "$(ls "$held_lock")" = "$held_before" ] \
+   && [ ! -e "$held_home/.claude/worktree-cleanup-manifests/cleanup-codex.started" ]; then
+  ok "a lock taken over by a running launcher is held, whatever its first record says"
+else bad "a lock taken over by a running launcher is held, whatever its first record says" \
+  "rc=$rc $out $(ls "$held_lock" 2>&1)"; fi
+
+# While a launcher decides, the dead lock it read can be taken over, released and made again by
+# others. The record it then adds belongs to a chain that is gone and must own nothing in the new
+# lock, whose owner is running.
+swap_home="$fx/swap-home"
+swap_lock="$swap_home/.claude/worktree-cleanup-manifests/cleanup-codex.launch.lock"
+mkdir -p "$swap_lock"
+printf 'pid=999999 at=2026-10-02T12:00:00Z\n' >"$swap_lock/owner"
+cat >"$fx/bin/ps" <<EOF
+#!/usr/bin/env bash
+if [ ! -e "$fx/swap-done" ]; then
+  : >"$fx/swap-done"
+  rm -rf "$swap_lock"
+  mkdir "$swap_lock"
+  printf 'pid=4343 at=2026-10-02T12:30:00Z\n' >"$swap_lock/owner"
+fi
+printf '%s 00:00:01 bash %s start --lane codex\n' "\$FAKE_PS_SELF_PID" "$sut"
+printf '4343 00:00:02 bash %s start --lane codex\n' "$sut"
+EOF
+chmod +x "$fx/bin/ps"
+out=$(HOME="$swap_home" PATH="$fx/bin:$PATH" SUT_PATH="$sut" \
+  bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" start --lane codex' 2>&1); rc=$?
+rm -f "$fx/bin/ps"
+if [ -e "$fx/swap-done" ] && [ "$rc" -eq 2 ] && grep -q 'another codex sweep launcher holds' <<<"$out" \
+   && [ "$(cat "$swap_lock/owner" 2>/dev/null)" = 'pid=4343 at=2026-10-02T12:30:00Z' ] \
+   && [ ! -e "$swap_home/.claude/worktree-cleanup-manifests/cleanup-codex.started" ]; then
+  ok "a record added to a lock that was made again in the meantime owns nothing"
+else
+  bad "a record added to a lock that was made again in the meantime owns nothing" "rc=$rc $out"
+  lock_settle "$swap_home"
+fi
+
+# An owner record nobody can read names no launcher to look for, so only age can show the lock was
+# abandoned: a launcher that has just made the directory has not written its record yet.
+garbled_home="$fx/garbled-home"
+garbled_lock="$garbled_home/.claude/worktree-cleanup-manifests/cleanup-codex.launch.lock"
+mkdir -p "$garbled_lock"
+printf 'garbage\n' >"$garbled_lock/owner"
+lock_start "$garbled_home"
+if [ "$rc" -eq 2 ] && grep -q 'not old enough to recover' <<<"$out" \
+   && [ "$(cat "$garbled_lock/owner")" = garbage ] \
+   && [ ! -e "$garbled_home/.claude/worktree-cleanup-manifests/cleanup-codex.started" ]; then
+  ok "a fresh lock with an unreadable owner record is not taken over"
+else bad "a fresh lock with an unreadable owner record is not taken over" "rc=$rc $out"; fi
+touch -t 202601010000 "$garbled_lock"
+lock_start "$garbled_home"
+if [ "$rc" -eq 1 ] && grep -q 'started the codex sweep' <<<"$out" && [ ! -e "$garbled_lock" ]; then
+  ok "an old lock with an unreadable owner record is taken over"
+else bad "an old lock with an unreadable owner record is taken over" \
+  "rc=$rc $out $(ls -la "$garbled_lock" 2>&1)"; fi
+lock_settle "$garbled_home"
+
+# The race itself. Launcher B reads the dead owner and asks the process table whether it still
+# runs. Before B gets its answer, launcher A recovers the same lock and holds it. B then acts on
+# what it read: it must not remove A's lock, and only one of the two may start a sweep.
+race_home="$fx/race-home"
+race_records="$race_home/.claude/worktree-cleanup-manifests"
+mkdir -p "$race_records/cleanup-codex.launch.lock" "$fx/race/bin-a" "$fx/race/bin-b"
+printf 'pid=999999 at=2026-10-02T12:00:00Z\n' >"$race_records/cleanup-codex.launch.lock/owner"
+# An unfinished sweep on record makes a launcher read the process table once more after it has
+# the lock, which is where A is held while it owns the lock.
+printf 'id=20261002T110000Z-7 pid=999998 at=2026-10-02T11:00:00Z\n' >"$race_records/cleanup-codex.started"
+cat >"$fx/race/bin-a/ps" <<EOF
+#!/usr/bin/env bash
+calls=\$(cat "$fx/race/a-calls" 2>/dev/null || echo 0)
+calls=\$((calls + 1))
+echo "\$calls" >"$fx/race/a-calls"
+if [ "\$calls" -eq 2 ]; then
+  : >"$fx/race/a-holding"
+  i=0
+  while [ ! -e "$fx/race/release-a" ] && [ "\$i" -lt 300 ]; do sleep 0.1; i=\$((i + 1)); done
+fi
+printf '%s 00:00:01 bash %s start --lane codex\n' "\$FAKE_PS_SELF_PID" "$sut"
+EOF
+cat >"$fx/race/bin-b/ps" <<EOF
+#!/usr/bin/env bash
+if [ ! -e "$fx/race/b-asked" ]; then
+  : >"$fx/race/b-asked"
+  HOME="$race_home" PATH="$fx/race/bin-a:$PATH" SUT_PATH="$sut" \\
+    bash -c 'export FAKE_PS_SELF_PID=\$\$; exec bash "\$SUT_PATH" start --lane codex' \\
+    >"$fx/race/a.out" 2>&1 &
+  echo \$! >"$fx/race/a-pid"
+  i=0
+  while [ ! -e "$fx/race/a-holding" ] && [ "\$i" -lt 300 ]; do sleep 0.1; i=\$((i + 1)); done
+fi
+printf '%s 00:00:01 bash %s start --lane codex\n' "\$FAKE_PS_SELF_PID" "$sut"
+printf '%s 00:00:01 bash %s start --lane codex\n' "\$(cat "$fx/race/a-pid")" "$sut"
+EOF
+chmod +x "$fx/race/bin-a/ps" "$fx/race/bin-b/ps"
+race_before=0
+for f in "$fx"/pids/sweep-*; do [ ! -f "$f" ] || race_before=$((race_before + 1)); done
+out=$(HOME="$race_home" PATH="$fx/race/bin-b:$PATH" SUT_PATH="$sut" \
+  bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" start --lane codex' 2>&1); rc=$?
+race_a_pid=$(cat "$fx/race/a-pid" 2>/dev/null)
+if [ -e "$fx/race/a-holding" ] && [ -n "$race_a_pid" ] && kill -0 "$race_a_pid" 2>/dev/null; then
+  ok "fixture: launcher A recovered the lock and holds it while B decides"
+else bad "fixture: launcher A recovered the lock and holds it while B decides" \
+  "a-pid=$race_a_pid $(cat "$fx/race/a.out" 2>&1)"; fi
+race_owner=$(cat "$race_records/cleanup-codex.launch.lock/takeover.999999.2026-10-02T12:00:00Z" 2>/dev/null)
+if [ "$rc" -eq 2 ] && grep -q 'took .* first' <<<"$out" && ! grep -q 'started the codex sweep' <<<"$out" \
+   && [ "${race_owner%% *}" = "pid=$race_a_pid" ]; then
+  ok "a launcher that read the dead owner first cannot remove the lock another just took"
+else bad "a launcher that read the dead owner first cannot remove the lock another just took" \
+  "rc=$rc owner=$race_owner $out"; fi
+touch "$fx/race/release-a"
+[ -z "$race_a_pid" ] || wait_gone "$race_a_pid" || bad "launcher A finished" "$(cat "$fx/race/a.out" 2>&1)"
+lock_settle "$race_home"
+race_after=0
+for f in "$fx"/pids/sweep-*; do [ ! -f "$f" ] || race_after=$((race_after + 1)); done
+if [ $((race_after - race_before)) -eq 1 ] && grep -q 'started the codex sweep' "$fx/race/a.out" \
+   && [ ! -e "$race_records/cleanup-codex.launch.lock" ]; then
+  ok "launchers recovering one dead lock start exactly one sweep"
+else bad "launchers recovering one dead lock start exactly one sweep" \
+  "started=$((race_after - race_before)) a: $(cat "$fx/race/a.out" 2>&1) b: $out"; fi
 
 # --- lanes are separate -----------------------------------------------------------
 run status --lane codex
@@ -521,6 +853,14 @@ elif grep -qF '.claude/scripts/worktree-lane-sweep.sh start --lane <lane>' <<<"$
    && ! grep -q 'nohup' <<<"$section"; then
   ok "the guide's pre-flight starts the sweep through the supervised launcher"
 else bad "the guide's pre-flight starts the sweep through the supervised launcher" "$section"; fi
+# What the launcher refuses and how a stuck sweep is stopped are part of that procedure (#3823): a
+# run told only to `kill` reaches for `kill -9`, which is what leaves a sweeper running alone.
+# shellcheck disable=SC2016 # the backticks are literal Markdown, not a command substitution
+if grep -qF 'never `kill -9`' <<<"$section" \
+   && grep -qF 'A sweeper left running without' <<<"$section" \
+   && grep -qF 'an unreadable record still starts a replacement, unless a supervisor' <<<"$section"; then
+  ok "the guide's pre-flight says how to stop a stuck sweep and what blocks a replacement"
+else bad "the guide's pre-flight says how to stop a stuck sweep and what blocks a replacement" "$section"; fi
 # shellcheck disable=SC2016 # the backticks are literal Markdown, not a command substitution
 if grep -qF '`worktree-lane-sweep.sh start --lane <your lane>`' "$skill" \
    && grep -qF 'never finished, is still running or no sweep is on record' "$skill" \

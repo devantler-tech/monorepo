@@ -12,20 +12,29 @@
 #
 #   ~/.claude/worktree-cleanup-manifests/cleanup-<lane>.log       the sweep's output, appended
 #   ~/.claude/worktree-cleanup-manifests/cleanup-<lane>.started   id, supervisor pid, start time
+#   ~/.claude/worktree-cleanup-manifests/cleanup-<lane>.sweeper   id, sweeper pid, start time
 #   ~/.claude/worktree-cleanup-manifests/cleanup-<lane>.finished  id, exit code, end time
 #
 # The launcher writes .started and the supervisor writes .finished, so neither can overwrite the
 # other's record, whichever finishes first. A sweep has finished only when both name the same id.
 # A supervisor that dies before recording (killed, host restarted) leaves .started alone, and
 # its pid then no longer runs this script with that id: that is a sweep that never finished.
+# The sweeper writes .sweeper itself before it sweeps and the supervisor removes it once the
+# sweeper has ended, so a sweeper that outlives its supervisor (a `kill -9` reaches only the
+# supervisor) is still on record for the next start.
+#
+# A second sweep must never start beside a live one (#3823). So a start is refused while the
+# recorded supervisor runs, while the recorded sweeper runs without it, and, when the start record
+# cannot be read and so names nobody, while any supervisor of the lane runs.
 #
 # Usage: worktree-lane-sweep.sh start|status --lane claude|codex
 #   start   report the previous sweep, then start a new one detached
 #           (worktree-cleanup-all.sh apply 24 --lane <lane>) and return at once. While the
 #           previous sweep is still running, report that and start no second one. A supervisor
 #           still present after six hours is reported as stuck with a recovery command, and also
-#           blocks a second sweep. An unreadable record is reported and replaced; an unreadable
-#           process table is UNKNOWN and starts nothing because running versus gone is unproven.
+#           blocks a second sweep. An unreadable record is reported and replaced unless a process
+#           it would have named may still be sweeping; an unreadable process table is UNKNOWN and
+#           starts nothing because running versus gone is unproven.
 #   status  report the previous sweep only.
 #
 # Exit codes: 0 the previous sweep finished cleanly · 1 it did not: it failed, never finished,
@@ -44,10 +53,15 @@ lock_held=0
 # a deliberate exit is the only way a verdict leaves this script (the ci-job-wiring.sh pattern).
 # shellcheck disable=SC2329  # invoked by the EXIT trap below
 on_exit() {
-  local rc=$?
+  local rc=$? grave
   if [ "$lock_held" = 1 ]; then
-    rm -f -- "$launch_lock_owner" 2>/dev/null || true
-    if ! rmdir -- "$launch_lock" 2>/dev/null; then
+    # One rename frees the lock, whatever owner records it holds: removing them one at a time
+    # would show a waiting launcher the dead owner this one took over from, still on record.
+    grave="$launch_lock.released.$$"
+    rm -rf -- "$grave" 2>/dev/null || true
+    if mv -- "$launch_lock" "$grave" 2>/dev/null; then
+      rm -rf -- "$grave" 2>/dev/null || true
+    else
       printf '%s: UNKNOWN — cannot release launcher lock %s\n' "$prog" "$launch_lock" >&2
       rc=2
     fi
@@ -87,9 +101,11 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) \
 self="$script_dir/worktree-lane-sweep.sh"
 self_name=${self##*/}
 sweeper="$script_dir/worktree-cleanup-all.sh"
+sweeper_name=${sweeper##*/}
 dir="$HOME/.claude/worktree-cleanup-manifests"
 log="$dir/cleanup-$lane.log"
 started="$dir/cleanup-$lane.started"
+sweeper_record="$dir/cleanup-$lane.sweeper"
 finished="$dir/cleanup-$lane.finished"
 launch_lock="$dir/cleanup-$lane.launch.lock"
 launch_lock_owner="$launch_lock/owner"
@@ -194,6 +210,40 @@ launcher_runs() {
   return 1
 }
 
+# lane_processes <sweeper> — the same complete process-table proof for what may still be sweeping
+# this lane when the records show no running supervisor. <sweeper> is the recorded sweeper's pid,
+# `any` when its record cannot be read, or `none`. Sets LIVE_SWEEPERS to those of them still
+# running the lane's sweep, and LIVE_SUPERVISORS to every supervisor of the lane, for a start
+# record that cannot be read. With no record to name a process, the lane on the command line is
+# all there is to match, so any copy of these scripts counts, whichever checkout or home directory
+# started it: a refused start costs one sweep, and a second sweep beside a live one is what this
+# exists to prevent.
+LIVE_SUPERVISORS=""; LIVE_SWEEPERS=""
+lane_processes() {
+  local process_table listed_pid elapsed command self_seen=0
+  LIVE_SUPERVISORS=""; LIVE_SWEEPERS=""
+  process_table=$(ps -A -ww -o pid= -o etime= -o command= 2>/dev/null) || return 2
+  [ -n "$process_table" ] || return 2
+  while read -r listed_pid elapsed command; do
+    [ -n "${listed_pid:-}" ] || continue
+    if [ "$listed_pid" = "$$" ]; then
+      case "$command" in *"$self_name"*) self_seen=1 ;; esac
+      continue
+    fi
+    case "$command" in
+      *"/$self_name __supervise --lane $lane --id "*)
+        LIVE_SUPERVISORS="$LIVE_SUPERVISORS $listed_pid"
+        ;;
+      *"/$sweeper_name apply 24 --lane $lane")
+        if [ "$1" = any ] || [ "$1" = "$listed_pid" ]; then
+          LIVE_SWEEPERS="$LIVE_SWEEPERS $listed_pid"
+        fi
+        ;;
+    esac
+  done <<<"$process_table"
+  [ "$self_seen" = 1 ] || return 2
+}
+
 lock_is_stale() {
   local modified now_epoch
   if modified=$(stat -f %m "$launch_lock" 2>/dev/null); then :
@@ -204,46 +254,84 @@ lock_is_stale() {
   [ $((now_epoch - modified)) -ge "$stale_lock_after_seconds" ]
 }
 
-remove_launch_lock() {
-  rm -f -- "$launch_lock_owner" 2>/dev/null || return 1
-  rmdir -- "$launch_lock" 2>/dev/null
+# The launcher lock is a directory holding a chain of owner records. `owner` names the launcher
+# that made the directory. A launcher that finds the last owner dead takes the lock over by adding
+# the next record, and the chain's last record is the owner.
+#
+# Taking over used to remove the dead owner's directory and make a new one. Two launchers recovering
+# the same dead lock could then each remove the other's fresh lock, and both went on (#3823): a
+# removal cannot be told which lock it may remove. So recovery removes nothing. Every record is
+# created by one hard link, which fails when the name exists and shows the record only once it is
+# complete, and the name of a takeover record is fixed by the record it replaces. Two launchers that
+# judged the same owner dead therefore ask for the same name and exactly one gets it. The directory
+# goes away only when its live owner renames it aside on exit.
+#
+# lock_owner — follow the chain. OWNER_STATE is `none` (no record), `valid`, `malformed` (the last
+# record cannot be read as one) or `unknown` (too long to follow); OWNER_PID is a valid owner's pid
+# and OWNER_NEXT the one name the record after the last would carry.
+OWNER_STATE=""; OWNER_FILE=""; OWNER_PID=""; OWNER_NEXT=""
+lock_owner() {
+  local file=$launch_lock_owner record hops=0
+  OWNER_STATE=none; OWNER_FILE=""; OWNER_PID=""; OWNER_NEXT=$file
+  while [ -e "$file" ] || [ -L "$file" ]; do
+    hops=$((hops + 1))
+    if [ "$hops" -gt 64 ]; then OWNER_STATE=unknown; return 0; fi
+    OWNER_FILE=$file
+    if record_is_safe "$file" && record=$(cat -- "$file" 2>/dev/null) \
+      && [[ "$record" =~ $lock_owner_re ]]; then
+      OWNER_STATE=valid; OWNER_PID=${BASH_REMATCH[1]}
+      OWNER_NEXT="$launch_lock/takeover.${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+    else
+      OWNER_STATE=malformed; OWNER_PID=""
+      OWNER_NEXT="$file.next"
+    fi
+    file=$OWNER_NEXT
+  done
 }
 
 acquire_launch_lock() {
-  local owner owner_pid state
+  local made=0 refusal="" state target tmp="$dir/cleanup-$lane.launch.owner.tmp.$$"
   if mkdir -- "$launch_lock" 2>/dev/null; then
-    write_record "$launch_lock_owner" "pid=$$ at=$(now)" \
-      || { rmdir -- "$launch_lock" 2>/dev/null || true; unknown "cannot record launcher ownership in $launch_lock_owner"; }
-    lock_held=1
-    return 0
-  fi
-
-  if record_is_safe "$launch_lock_owner"; then
-    owner=$(cat -- "$launch_lock_owner" 2>/dev/null) \
-      || unknown "cannot read launcher ownership in $launch_lock_owner"
-    if [[ "$owner" =~ $lock_owner_re ]]; then
-      owner_pid=${BASH_REMATCH[1]}
-      if launcher_runs "$owner_pid"; then state=0; else state=$?; fi
-      case "$state" in
-        0) unknown "another $lane sweep launcher (pid $owner_pid) holds $launch_lock" ;;
-        1) remove_launch_lock || unknown "dead launcher pid $owner_pid left an unrecoverable $launch_lock" ;;
-        *) unknown "cannot read the process table completely to verify launcher pid $owner_pid" ;;
-      esac
-    elif lock_is_stale; then
-      remove_launch_lock || unknown "stale malformed launcher lock cannot be removed: $launch_lock"
-    else
-      unknown "launcher ownership in $launch_lock_owner is malformed and not old enough to recover"
-    fi
-  elif lock_is_stale; then
-    remove_launch_lock || unknown "stale launcher lock cannot be removed: $launch_lock"
+    made=1; target=$launch_lock_owner
   else
-    unknown "launcher lock $launch_lock has no safe owner record and is not old enough to recover"
+    lock_owner
+    target=$OWNER_NEXT
+    case "$OWNER_STATE" in
+      valid)
+        if launcher_runs "$OWNER_PID"; then state=0; else state=$?; fi
+        case "$state" in
+          0) unknown "another $lane sweep launcher (pid $OWNER_PID) holds $launch_lock" ;;
+          1) ;;
+          *) unknown "cannot read the process table completely to verify launcher pid $OWNER_PID" ;;
+        esac
+        ;;
+      none|malformed)
+        # No owner to ask the process table about, so only age shows the lock was abandoned: a
+        # launcher that has just made the directory has not written its record yet.
+        lock_is_stale \
+          || unknown "launcher lock $launch_lock has no readable owner record and is not old enough to recover"
+        ;;
+      *) unknown "launcher lock $launch_lock holds more owner records than can be followed" ;;
+    esac
   fi
 
-  mkdir -- "$launch_lock" 2>/dev/null \
-    || unknown "another $lane sweep launcher acquired $launch_lock during recovery"
-  write_record "$launch_lock_owner" "pid=$$ at=$(now)" \
-    || { rmdir -- "$launch_lock" 2>/dev/null || true; unknown "cannot record launcher ownership in $launch_lock_owner"; }
+  if ! printf 'pid=%s at=%s\n' "$$" "$(now)" >"$tmp" 2>/dev/null; then
+    refusal="cannot write a launcher owner record in $dir"
+  elif ! ln -- "$tmp" "$target" 2>/dev/null; then
+    refusal="another $lane sweep launcher took $launch_lock first"
+  fi
+  rm -f -- "$tmp" 2>/dev/null || true
+  if [ -n "$refusal" ]; then
+    # An empty directory this launcher made itself is nobody's lock yet.
+    [ "$made" = 0 ] || rmdir -- "$launch_lock" 2>/dev/null || true
+    unknown "$refusal"
+  fi
+  # The directory read above may have been released and made again by another launcher since. A
+  # record added to a chain that is no longer there owns nothing, so read the chain once more.
+  lock_owner
+  if [ "$OWNER_FILE" != "$target" ] || [ "$OWNER_STATE" != valid ] || [ "$OWNER_PID" != "$$" ]; then
+    unknown "another $lane sweep launcher holds $launch_lock"
+  fi
   lock_held=1
 }
 
@@ -285,6 +373,7 @@ stop_sweep_group() {
 stop_supervised_sweep() {
   trap - TERM INT HUP
   stop_sweep_group
+  rm -f -- "$sweeper_record" 2>/dev/null || true
   printf '=== lane sweep %s stopped %s: exit 143 ===\n' "$id" "$(now)"
   write_record "$finished" "id=$id rc=143 at=$(now)" \
     || unknown "cannot record the stopped sweep $id in $finished"
@@ -298,11 +387,22 @@ if [ "$cmd" = __supervise ]; then
   printf '=== lane sweep %s started %s (lane %s) ===\n' "$id" "$(now)" "$lane"
   trap stop_supervised_sweep TERM INT HUP
   set -m
-  "$sweeper" apply 24 --lane "$lane" </dev/null &
+  # The sweeper records its own pid before it sweeps and then becomes the sweep, so there is no
+  # moment in which a sweeper runs that the records do not name. `$$` is still the supervisor's
+  # pid inside this subshell, and bash 3.2 has no BASHPID: a child reports its parent instead.
+  (
+    if ! sweeper_pid=$(exec sh -c 'echo "$PPID"') \
+      || ! write_record "$sweeper_record" "id=$id pid=$sweeper_pid at=$(now)"; then
+      printf '%s: cannot record the sweeper of %s in %s; not sweeping\n' "$prog" "$id" "$sweeper_record"
+      exit 125
+    fi
+    exec "$sweeper" apply 24 --lane "$lane"
+  ) </dev/null &
   sweep_pid=$!
   set +m
   if wait "$sweep_pid"; then rc=0; else rc=$?; fi
   trap - TERM INT HUP
+  rm -f -- "$sweeper_record" 2>/dev/null || true
   printf '=== lane sweep %s finished %s: exit %s ===\n' "$id" "$(now)" "$rc"
   write_record "$finished" "id=$id rc=$rc at=$(now)" \
     || unknown "cannot record the end of sweep $id in $finished"
@@ -312,6 +412,7 @@ fi
 # report_previous — print how the last recorded sweep ended and set VERDICT: ok, or one of
 # failed · unfinished · running · none (exit 1), or unknown for a record it cannot read (exit 2).
 VERDICT=""
+START_RECORD_BAD=0
 bad_record() {
   printf '%s: UNKNOWN — %s; the last %s sweep cannot be judged\n' "$prog" "$1" "$lane" >&2
   VERDICT=unknown
@@ -327,10 +428,13 @@ report_previous() {
     printf '%s: no %s sweep on record — nothing shows the lane was ever swept\n' "$prog" "$lane"
     VERDICT=none; return 0
   fi
+  # A start record that cannot be read names no supervisor to look for.
+  START_RECORD_BAD=1
   record_is_safe "$started" \
     || { bad_record "non-regular or oversized sweep record in $started"; return 0; }
   s=$(cat -- "$started" 2>/dev/null) || { bad_record "cannot read $started"; return 0; }
   [[ "$s" =~ $started_re ]] || { bad_record "malformed sweep record in $started"; return 0; }
+  START_RECORD_BAD=0
   s_id=${BASH_REMATCH[1]}; s_pid=${BASH_REMATCH[2]}; s_at=${BASH_REMATCH[3]}
   if [ -e "$finished" ]; then
     if ! record_is_safe "$finished"; then
@@ -366,7 +470,8 @@ report_previous() {
           "$prog" "$lane" "$s_pid"
         VERDICT="record-running"
       elif (( SUPERVISOR_AGE_SECONDS >= stuck_after_seconds )); then
-        printf '%s: the last %s sweep (%s, pid %s) is STUCK — its supervisor has run for six hours or more since %s; inspect %s, then if it is not making progress run `kill %s` and start again\n' \
+        # shellcheck disable=SC2016  # the backticks are literal: they mark the command to run
+        printf '%s: the last %s sweep (%s, pid %s) is STUCK — its supervisor has run for six hours or more since %s; inspect %s, then if it is not making progress run `kill %s` and start again (a plain kill: the supervisor then stops its sweeper, which `kill -9` would leave running)\n' \
           "$prog" "$lane" "$s_id" "$s_pid" "$s_at" "$log" "$s_pid"
         VERDICT=stuck
       else
@@ -405,8 +510,42 @@ if [ "$VERDICT" = running ] || [ "$VERDICT" = stuck ] || [ "$VERDICT" = record-r
   printf '%s: not starting a second %s sweep while that one runs\n' "$prog" "$lane"
   finish "$rc"
 fi
-# An unreadable record still starts a sweep, which replaces it: refusing would leave the lane
-# unswept on every run until someone repaired one file, and the disk would fill again.
+# The verdict above covers the supervisor the start record names. It cannot cover a sweeper whose
+# supervisor died without stopping it, nor any supervisor when the start record cannot be read, so
+# those are looked for here: nothing of the lane may still be sweeping when a new sweep starts.
+sweeper_wanted=none
+if [ -e "$sweeper_record" ] || [ -L "$sweeper_record" ]; then
+  if record_is_safe "$sweeper_record" && sweeper_line=$(cat -- "$sweeper_record" 2>/dev/null) \
+    && [[ "$sweeper_line" =~ $started_re ]]; then
+    sweeper_wanted=${BASH_REMATCH[2]}
+  else
+    printf '%s: UNKNOWN — unreadable sweeper record in %s; looking for any %s sweeper instead\n' \
+      "$prog" "$sweeper_record" "$lane" >&2
+    sweeper_wanted=any; rc=2
+  fi
+fi
+if [ "$START_RECORD_BAD" = 1 ] || [ "$sweeper_wanted" != none ]; then
+  if ! lane_processes "$sweeper_wanted"; then
+    printf '%s: UNKNOWN — cannot read the process table completely; not starting a %s sweep while what still runs is unknown\n' \
+      "$prog" "$lane" >&2
+    finish 2
+  fi
+  if [ "$START_RECORD_BAD" = 1 ] && [ -n "$LIVE_SUPERVISORS" ]; then
+    printf '%s: not starting a second %s sweep while supervisor pid%s still runs\n' \
+      "$prog" "$lane" "$LIVE_SUPERVISORS"
+    finish "$rc"
+  fi
+  if [ -n "$LIVE_SWEEPERS" ]; then
+    # shellcheck disable=SC2016  # the backticks are literal: they mark the command to run
+    printf '%s: not starting a second %s sweep: sweeper pid%s is still running without its supervisor — let it finish, or stop it with `kill%s`, then start again\n' \
+      "$prog" "$lane" "$LIVE_SWEEPERS" "$LIVE_SWEEPERS"
+    [ "$rc" -ne 0 ] || rc=1
+    finish "$rc"
+  fi
+fi
+# An unreadable record still starts a sweep once nothing it could have named is running, and that
+# sweep replaces it: refusing would leave the lane unswept on every run until someone repaired one
+# file, and the disk would fill again.
 [ -x "$sweeper" ] || unknown "missing $sweeper"
 new_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 nohup bash "$self" __supervise --lane "$lane" --id "$new_id" >>"$log" 2>&1 </dev/null &
