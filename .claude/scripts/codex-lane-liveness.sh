@@ -24,10 +24,12 @@
 # must not be able to carry such state into a repository artifact or a run report.
 #
 # Usage: codex-lane-liveness.sh [--store PATH] [--sessions DIR] [--automation ID] [--grace-seconds N]
-#                              [--stub-seconds N] [--consecutive N] [--now-ms MS] [--quiet]
+#                              [--stub-seconds N] [--preflight-seconds N] [--consecutive N]
+#                              [--now-ms MS] [--quiet]
 #
 # Exit 0  every ACTIVE automation checked has a healthy run among its newest settled runs
-#      1  NOT PRODUCING — some automation's scheduled run is overdue, or its newest runs are ALL stubs
+#      1  NOT PRODUCING — some automation's scheduled run is overdue, its newest runs are ALL stubs,
+#         or its newest runs ALL ended inside the pre-flight window
 #      2  UNKNOWN — could not determine (no sqlite3, unreadable/absent store, unexpected schema,
 #         an unusable automation id, or too little settled history to judge)
 #
@@ -36,15 +38,26 @@
 # alive" are different answers, and collapsing them is how a liveness check becomes decoration —
 # which is precisely the failure this script exists to correct.
 #
-# Exit 1 requires BOTH discriminators on EVERY run in the window. Duration alone fires on a
-# legitimately fast run; inbox-presence alone fires on a run that wrote nothing for a benign reason.
-# Requiring both, on consecutive runs, is what keeps a real verdict rare enough to act on.
+# A STUB needs BOTH discriminators: it ended inside the stub window AND wrote no inbox item. Inbox
+# presence alone fires on a run that wrote nothing for a benign reason.
 #
-# But failing that conjunction is NOT health, and reading it as health was a fail-open: a run that
-# wrote no inbox item yet outlasted the stub window died PART WAY, and this store cannot tell that
+# PRE-FLIGHT STOPS (monorepo#3929). An inbox item is NOT proof of work: a run that stops at its
+# start-up checks writes one saying so. From 2026-10-01 about 145 consecutive hourly runs each ended
+# in 145-458 s with such a notice, and this check read every one as producing for six days. The
+# notice is content the run chooses, so it is not the signal. The duration is: of the 1,046 producing
+# `daily-ai-engineer` runs recorded before that date none ended inside 900 s (shortest 1,384 s). So a
+# run that ended inside `--preflight-seconds` (default 600) did no work, WITH OR WITHOUT an inbox
+# item, and a window made only of such runs is exit 1. A GitHub write in the run's time window was
+# considered and rejected as the signal: hand-started Codex threads write under the same account and
+# branch namespace, so it cannot be attributed to the scheduled run.
+# Requiring it of every run in the window is what keeps a real verdict rare enough to act on.
+#
+# But a window that is not all short is NOT thereby healthy, and reading it so was a fail-open: a run
+# that wrote no inbox item yet outlasted the pre-flight window died PART WAY, and this store cannot tell that
 # apart from a long run that never wrote one. That third class is exit 2, never exit 0
-# (monorepo#3287). So the window has three outcomes, not two: every run a stub is exit 1, any run
-# unproven is exit 2, and only an inbox item anywhere in the window is exit 0.
+# (monorepo#3287). So the window has three outcomes, not two: every run a stub or a pre-flight
+# stop is exit 1, any run unproven is exit 2, and only a run that outlasted the pre-flight window AND wrote an inbox item
+# makes the window exit 0.
 #
 # CAUSE CLASS (monorepo#2908). A NOT-PRODUCING verdict names a bounded cause class taken from the
 # runtime's own per-turn outcome record: the `codex_error_info` classifier of the stub's rollout under
@@ -78,6 +91,7 @@ AUTOMATION=""
 AUTOMATION_SET=0
 GRACE_SECONDS=300
 STUB_SECONDS=60
+PREFLIGHT_SECONDS=600
 CONSECUTIVE=2
 NOW_MS=""
 QUIET=0
@@ -90,7 +104,7 @@ RECOVERY="
   run has settled."
 
 usage() {
-  sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 die_unknown() {
@@ -107,6 +121,7 @@ while [ "$#" -gt 0 ]; do
     --automation) [ "$#" -ge 2 ] || die_unknown "--automation needs a value"; AUTOMATION="$2"; AUTOMATION_SET=1; shift 2 ;;
     --grace-seconds) [ "$#" -ge 2 ] || die_unknown "--grace-seconds needs a value"; GRACE_SECONDS="$2"; shift 2 ;;
     --stub-seconds) [ "$#" -ge 2 ] || die_unknown "--stub-seconds needs a value"; STUB_SECONDS="$2"; shift 2 ;;
+    --preflight-seconds) [ "$#" -ge 2 ] || die_unknown "--preflight-seconds needs a value"; PREFLIGHT_SECONDS="$2"; shift 2 ;;
     --consecutive) [ "$#" -ge 2 ] || die_unknown "--consecutive needs a value"; CONSECUTIVE="$2"; shift 2 ;;
     --now-ms) [ "$#" -ge 2 ] || die_unknown "--now-ms needs a value"; NOW_MS="$2"; shift 2 ;;
     --quiet) QUIET=1; shift ;;
@@ -117,7 +132,8 @@ done
 # Every numeric knob is validated before use. An unvalidated value would otherwise reach arithmetic
 # and either abort under `set -e` (reported as an internal failure) or, worse, silently widen the
 # stub window until the check cannot fire.
-for pair in "GRACE_SECONDS:$GRACE_SECONDS" "STUB_SECONDS:$STUB_SECONDS" "CONSECUTIVE:$CONSECUTIVE"; do
+for pair in "GRACE_SECONDS:$GRACE_SECONDS" "STUB_SECONDS:$STUB_SECONDS" \
+            "PREFLIGHT_SECONDS:$PREFLIGHT_SECONDS" "CONSECUTIVE:$CONSECUTIVE"; do
   name=${pair%%:*}; val=${pair#*:}
   case "$val" in
     ''|*[!0-9]*) die_unknown "$name must be a non-negative integer, got: $val" ;;
@@ -130,6 +146,9 @@ done
 [ "$CONSECUTIVE" -ge 1 ] || die_unknown "--consecutive must be at least 1"
 [ "$GRACE_SECONDS" -ge 1 ] || die_unknown "--grace-seconds must be at least 1"
 [ "$STUB_SECONDS" -ge 1 ] || die_unknown "--stub-seconds must be at least 1"
+# A pre-flight window shorter than the stub window would let a stub escape the wider class it belongs
+# to, so the two verdict branches below could disagree about the same run.
+[ "$PREFLIGHT_SECONDS" -ge "$STUB_SECONDS" ] || die_unknown "--preflight-seconds must be at least --stub-seconds"
 
 if [ -n "$NOW_MS" ]; then
   case "$NOW_MS" in
@@ -234,7 +253,7 @@ settled_before=$(( NOW_MS - GRACE_SECONDS * 1000 ))
 # row here only fails to ESCALATE, so it cannot turn a verdict healthy; the main loop still reports it.
 acct_ms=0
 acct_src=""
-stub_limit_ms=$(( STUB_SECONDS * 1000 ))
+preflight_ms=$(( PREFLIGHT_SECONDS * 1000 ))
 all_ids=$(sq "SELECT id FROM automations WHERE status='ACTIVE' ORDER BY id;") \
   || die_unknown "could not enumerate automations"
 while IFS= read -r aid; do
@@ -253,8 +272,10 @@ $newest
 EOF
   case "$n_settled" in ''|*[!0-9]*) continue ;; esac
   case "$n_dur" in ''|*[!0-9]*) continue ;; esac
-  [ "$n_noinbox" = "1" ] || continue
-  [ "$n_dur" -le "$stub_limit_ms" ] || continue
+  # The refusal is proven by the cause class, not by the inbox flag, and it need not be a 60-second
+  # stub: a run refused part way through its start-up checks ends inside the pre-flight window too.
+  case "$n_noinbox" in 0|1) : ;; *) continue ;; esac
+  [ "$n_dur" -le "$preflight_ms" ] || continue
   [ "$(cause_class "$n_tid")" = "quota/billing" ] || continue
   if [ "$n_settled" -gt "$acct_ms" ]; then acct_ms=$n_settled; acct_src=$aid; fi
 done <<EOF
@@ -268,6 +289,7 @@ if [ "$acct_ms" -gt 0 ]; then
                          AND r.status != 'IN_PROGRESS'
                          AND r.updated_at <= ${settled_before}
                          AND r.inbox_title IS NOT NULL AND trim(r.inbox_title) != ''
+                         AND (r.updated_at - r.created_at) > ${preflight_ms}
                          AND r.updated_at > ${acct_ms};") \
     || die_unknown "could not read account-wide production"
   case "$produced_since" in ''|*[!0-9]*) die_unknown "unparsable account-wide production count" ;; esac
@@ -345,6 +367,7 @@ while IFS= read -r id; do
 
   n=0
   stubs=0
+  short=0
   indeterminate=0
   indet_ms=-1
   maxdur_ms=-1
@@ -370,6 +393,9 @@ while IFS= read -r id; do
     # under `set -e`, so the assignment is written as a full conditional.
     if [ "$n" -eq 1 ]; then newest_tid=$tid; fi
     if [ "$dur_ms" -gt "$maxdur_ms" ]; then maxdur_ms=$dur_ms; fi
+    # Counted whatever the inbox flag says: a run that ended inside the pre-flight window did no work,
+    # and the notice it may have written is content, not evidence (monorepo#3929).
+    if [ "$dur_ms" -le "$preflight_ms" ]; then short=$(( short + 1 )); fi
     # A run that wrote no inbox item produced no recorded output. The DURATION only says how it got
     # there: inside the stub window it died at dispatch, which is the diagnosable signature the
     # NOT-PRODUCING verdict is built on; beyond it the run died or hung PART WAY, and this store
@@ -381,7 +407,10 @@ while IFS= read -r id; do
     if [ "$no_inbox" = "1" ]; then
       if [ "$dur_ms" -le "$stub_ms" ]; then
         stubs=$(( stubs + 1 ))
-      else
+      elif [ "$dur_ms" -gt "$preflight_ms" ]; then
+        # Only a run that OUTLASTED the pre-flight window is unproven. One that ended inside it is a
+        # known pre-flight stop, already counted in `short`, and must not turn a window that also
+        # holds a working run into UNKNOWN.
         indeterminate=$(( indeterminate + 1 ))
         if [ "$dur_ms" -gt "$indet_ms" ]; then indet_ms=$dur_ms; fi
       fi
@@ -397,7 +426,8 @@ EOF
                    WHERE automation_id = '${id}'
                      AND status != 'IN_PROGRESS'
                      AND updated_at <= ${settled_before}
-                     AND inbox_title IS NOT NULL AND trim(inbox_title) != '';") \
+                     AND inbox_title IS NOT NULL AND trim(inbox_title) != ''
+                     AND (updated_at - created_at) > ${preflight_ms};") \
       || die_unknown "could not read production for ${id}"
     case "$own_prod" in ''|*[!0-9]*) die_unknown "unparsable production time for ${id}" ;; esac
   fi
@@ -414,6 +444,13 @@ EOF
     report="${report}  NOT-PRODUCING  ${id} — newest ${n} settled runs all ended within ${STUB_SECONDS}s with no inbox item (cause=$(cause_class "$newest_tid"))
 "
     any_dead=1
+  elif [ "$short" -eq "$n" ]; then
+    # Every run in the window stopped before it could do work. Ordered after the all-stubs branch so
+    # a dispatch-time death keeps its own, more specific wording, and before every other branch
+    # because an inbox item on such a run is exactly what must not certify the lane.
+    report="${report}  NOT-PRODUCING  ${id} — newest ${n} settled runs all ended within the ${PREFLIGHT_SECONDS}s pre-flight window, so none did work; an inbox item does not count (cause=$(cause_class "$newest_tid"))
+"
+    any_dead=1
   elif [ "$acct_ms" -gt 0 ] && [ "$own_prod" -lt "$acct_ms" ]; then
     # Ordered BEFORE the unproven and OK branches: a live account-scoped refusal is proof, and a healthy
     # older run in the window is exactly the evidence that refusal has already superseded.
@@ -424,7 +461,7 @@ EOF
     # Ordered AFTER the all-stubs branch on purpose: a proven dead lane is actionable now, so it
     # outranks an unjudgeable one — the same precedence the Claude-side check applies between its
     # own exit 1 and exit 2. UNKNOWN is never read as producing, so this fails closed.
-    report="${report}  UNKNOWN  ${id} — ${indeterminate} of ${n} newest settled runs wrote no inbox item despite outlasting the ${STUB_SECONDS}s stub window (longest ${indet_ms}ms), so production is unproven
+    report="${report}  UNKNOWN  ${id} — ${indeterminate} of ${n} newest settled runs wrote no inbox item despite outlasting the ${PREFLIGHT_SECONDS}s pre-flight window (longest ${indet_ms}ms), so production is unproven
 "
     any_unknown=1
   else
