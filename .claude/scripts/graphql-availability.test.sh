@@ -140,6 +140,22 @@ check 'an empty login is unknown, never serving' '[ "$RC" -eq 2 ]'
 run 0 '{"data":{"viewer":{"login":"someone"}},"errors":[{"type":"OTHER","message":"partial"}]}' ''
 check 'a reply carrying errors beside a login is unknown, never serving' '[ "$RC" -eq 2 ]'
 
+for bad in '{"data":{"viewer":{"login":"someone"}},"errors":null}' \
+  '{"data":{"viewer":{"login":"someone"}},"errors":false}' \
+  '{"data":{"viewer":{"login":"someone"}}}{"data":{"viewer":{"login":"someone"}}}' \
+  '[{"data":{"viewer":{"login":"someone"}}}]' \
+  '{"data":"x"}'; do
+  run 0 "$bad" ''
+  check "a reply outside the serving shape is unknown: $bad" \
+    '[ "$RC" -eq 2 ] && [ "$OUT" = "GRAPHQL=UNKNOWN reason=malformed-reply" ]'
+done
+
+run 0 "$SERVING" 'warning: something on stderr'
+check 'stderr noise beside a serving reply is unknown, never serving' '[ "$RC" -eq 2 ]'
+
+# No file may hold the reply: one would outlive an interrupted run with the account id in it.
+check 'the probe writes the reply to no file' '! grep -Eq "mktemp|2>\"|>\"\$" "$SCRIPT"'
+
 run 0 "$SERVING" '' --verbose
 check 'an argument is a usage error and makes no call' \
   '[ "$RC" -eq 2 ] && [ "$OUT" = "GRAPHQL=UNKNOWN reason=usage" ] && [ -z "$ARGS" ]'

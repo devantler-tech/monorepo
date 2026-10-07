@@ -44,21 +44,16 @@ for tool in gh jq; do
   }
 done
 
-err_file=$(mktemp) || {
-  echo "GRAPHQL=UNKNOWN reason=no-temp-file"
-  exit 2
-}
+# Both streams are captured into one variable, never a file: a refusal message carries the account's
+# numeric user id, and a file would outlive an interrupted run. gh writes nothing to stderr on a
+# successful call; if it ever does, the reply no longer parses and reads as UNKNOWN, not serving.
 rc=0
-out=$(gh api graphql --hostname github.com -f query='{viewer{login}}' 2>"$err_file") || rc=$?
-err=$(cat "$err_file" 2>/dev/null || true)
-rm -f "$err_file"
+reply=$(gh api graphql --hostname github.com -f query='{viewer{login}}' 2>&1) || rc=$?
 
 # `"RATE_LIMIT` is matched as a prefix: GitHub uses both RATE_LIMIT and RATE_LIMITED as the type.
 # A refusal is recognised on either stream: gh prints the errors document on stdout and its own
 # one-line summary on stderr, and which of the two survives depends on the gh version.
-both="$out
-$err"
-case "$both" in
+case "$reply" in
 *graphql_rate_limit* | *'"RATE_LIMIT'* | *'rate limit'* | *'Rate limit'*)
   echo "GRAPHQL=REFUSING reason=rate-limit"
   exit 1
@@ -66,8 +61,12 @@ case "$both" in
 esac
 
 if [ "$rc" -eq 0 ]; then
-  login=$(printf '%s' "$out" | jq -r 'select((.errors | not) and (.data.viewer.login | type == "string" and length > 0)) | .data.viewer.login' 2>/dev/null) || login=''
-  if [ -n "$login" ]; then
+  # Serving is a whitelist: exactly one JSON object, no `errors` member at all (not merely a falsy
+  # one), and a non-empty string login. Every other shape is malformed.
+  if printf '%s' "$reply" | jq -e -s '
+      length == 1 and (.[0] | type == "object" and (has("errors") | not)
+        and (.data | type == "object") and (.data.viewer | type == "object")
+        and (.data.viewer.login | type == "string" and length > 0))' >/dev/null 2>&1; then
     echo "GRAPHQL=SERVING"
     exit 0
   fi
@@ -76,7 +75,7 @@ if [ "$rc" -eq 0 ]; then
 fi
 
 reason=failed-call
-case "$err" in
+case "$reply" in
 *'HTTP 5'[0-9][0-9]*) reason=server-error ;;
 *'HTTP 401'* | *'HTTP 403'*) reason=auth ;;
 esac
