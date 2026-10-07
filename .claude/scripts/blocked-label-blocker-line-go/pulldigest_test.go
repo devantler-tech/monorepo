@@ -21,7 +21,7 @@ func TestParkedDigestReportsAConformingRecordAsParkedWithItsBlocker(t *testing.T
 	if code != 0 {
 		t.Fatalf("code=%d, want 0; out:\n%s", code, out)
 	}
-	for _, want := range []string{"PARKED     p#5  owner/repo#7  [upstream, blocker state not read]\n", "CHECKED labelled=1 parked=1 actionable=0\n"} {
+	for _, want := range []string{"PARKED     p#5  [upstream, blocker state not read]  owner/repo#7\n", "CHECKED labelled=1 parked=1 actionable=0\n"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q; out:\n%s", want, out)
 		}
@@ -68,7 +68,7 @@ func TestParkedDigestKeepsALabelWithoutAValidRecordActionable(t *testing.T) {
 
 func TestParkedDigestNeverReportsAnUnlabelledPullRequest(t *testing.T) {
 	record := commentJSON(t, "devantler", recordHead+goodLine)
-	for name, labels := range map[string]string{"an empty label set": `"labels":[],`, "another label": `"labels":[{"name":"dependencies"}],`, "no labels array": ""} {
+	for name, labels := range map[string]string{"an empty label set": `"labels":[],`, "another label": `"labels":[{"name":"dependencies"}],`} {
 		t.Run(name, func(t *testing.T) {
 			code, out := runInput(t, "["+digestPull("5", labels, record)+"]", "--parked-digest")
 			if code != 0 || out != "CHECKED labelled=0 parked=0 actionable=0\n" {
@@ -81,7 +81,7 @@ func TestParkedDigestNeverReportsAnUnlabelledPullRequest(t *testing.T) {
 func TestParkedDigestReportsAnAuthorityBlockerThatWasAsked(t *testing.T) {
 	record := commentJSON(t, "devantler", recordHead+"**Blocker:** approve the upgrade | authority | last-verified 2026-09-01: waiting | asked slack 2026-08-30")
 	code, out := runInput(t, "["+digestPull("5", blockedLabel, record)+"]", "--parked-digest")
-	if code != 0 || !strings.Contains(out, "PARKED     p#5  approve the upgrade  [authority]\n") {
+	if code != 0 || !strings.Contains(out, "PARKED     p#5  [authority]  approve the upgrade\n") {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}
 }
@@ -95,7 +95,7 @@ func TestParkedDigestReportsEachPullRequestOnItsOwn(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("code=%d, want 1; out:\n%s", code, out)
 	}
-	for _, want := range []string{"PARKED     p#5  owner/repo#7  [upstream, blocker state not read]\n", "ACTIONABLE p#6  record=MISSING\n", "CHECKED labelled=2 parked=1 actionable=1\n"} {
+	for _, want := range []string{"PARKED     p#5  [upstream, blocker state not read]  owner/repo#7\n", "ACTIONABLE p#6  record=MISSING\n", "CHECKED labelled=2 parked=1 actionable=1\n"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q; out:\n%s", want, out)
 		}
@@ -116,7 +116,7 @@ func TestParkedDigestIsNotChangedByIssueFindings(t *testing.T) {
 		t.Fatalf("control: code=%d out:\n%s", code, out)
 	}
 	code, out := runInput(t, payload, "--parked-digest")
-	if code != 0 || out != "PARKED     p#5  owner/repo#7  [upstream, blocker state not read]\nCHECKED labelled=1 parked=1 actionable=0\n" {
+	if code != 0 || out != "PARKED     p#5  [upstream, blocker state not read]  owner/repo#7\nCHECKED labelled=1 parked=1 actionable=0\n" {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}
 }
@@ -131,7 +131,7 @@ func TestParkedDigestBoundsTheBlockerItPrints(t *testing.T) {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}
 	row := strings.SplitN(out, "\n", 2)[0]
-	if !strings.HasPrefix(row, "PARKED     p#5  owner/repo#7 xxx") || !strings.HasSuffix(row, "  [upstream, blocker state not read]") || len([]rune(row)) > 165 {
+	if !strings.HasPrefix(row, "PARKED     p#5  [upstream, blocker state not read]  owner/repo#7 xxx") || len([]rune(row)) > 165 {
 		t.Fatalf("row is not bounded: %d runes: %q", len([]rune(row)), row)
 	}
 }
@@ -148,9 +148,10 @@ func TestParkedDigestRefusesToBeCombinedWithAnotherReport(t *testing.T) {
 // read that failed into "nothing is parked".
 func TestParkedDigestIsUnknownWhenTheInputCannotBeRead(t *testing.T) {
 	for name, payload := range map[string]string{
-		"not JSON":                          "{",
-		"a labelled pull without comments":  `[{"repo":"p","number":5,"pull_request":{},"labels":[{"name":"blocked"}],"body":"x"}]`,
-		"a pull request without its number": `[{"repo":"p","pull_request":{},"labels":[{"name":"blocked"}],"body":"x","comments":[]}]`,
+		"not JSON":                            "{",
+		"a labelled pull without comments":    `[{"repo":"p","number":5,"pull_request":{},"labels":[{"name":"blocked"}],"body":"x"}]`,
+		"a pull request with no labels array": `[{"repo":"p","number":5,"pull_request":{},"body":"x","comments":[]}]`,
+		"a pull request without its number":   `[{"repo":"p","pull_request":{},"labels":[{"name":"blocked"}],"body":"x","comments":[]}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if code, out := runInput(t, payload, "--parked-digest"); code != 2 || strings.Contains(out, "CHECKED") {
@@ -179,7 +180,7 @@ func TestParkedDigestDoesNotHonourAParkWhoseBlockerClosed(t *testing.T) {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}
 	// CONTROL: the same record with its blocker still open stays parked.
-	if code, out := runInput(t, pull(`"blocker_state":"open",`), "--parked-digest"); code != 0 || out != "PARKED     p#5  owner/repo#7  [upstream, blocker open]\nCHECKED labelled=1 parked=1 actionable=0\n" {
+	if code, out := runInput(t, pull(`"blocker_state":"open",`), "--parked-digest"); code != 0 || out != "PARKED     p#5  [upstream, blocker open]  owner/repo#7\nCHECKED labelled=1 parked=1 actionable=0\n" {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}
 	// A state that is neither is not a state: UNKNOWN, never parked.
@@ -195,7 +196,7 @@ func TestParkedDigestDoesNotHonourAParkWhoseBlockerClosed(t *testing.T) {
 func TestParkedDigestDoesNotReadAnAuthorityBlockersState(t *testing.T) {
 	record := commentJSON(t, "devantler", recordHead+"**Blocker:** owner/repo#7 | authority | last-verified 2026-09-01: waiting | asked slack 2026-08-30")
 	code, out := runInput(t, "["+digestPull("5", blockedLabel+`"blocker_state":"closed",`, record)+"]", "--parked-digest")
-	if code != 0 || !strings.Contains(out, "PARKED     p#5  owner/repo#7  [authority]\n") {
+	if code != 0 || !strings.Contains(out, "PARKED     p#5  [authority]  owner/repo#7\n") {
 		t.Fatalf("code=%d out:\n%s", code, out)
 	}
 }
@@ -247,7 +248,7 @@ func TestParkedDigestReadsTheBlockerOfThisOrganizationFromTheForge(t *testing.T)
 		code                            int
 		want                            string
 	}{
-		{"an open blocker in another repository", "o/ksail#7", "repos/o/ksail/issues/7", `{"number":7,"state":"open"}`, 0, "PARKED     platform#900  o/ksail#7  [upstream, blocker open]\n"},
+		{"an open blocker in another repository", "o/ksail#7", "repos/o/ksail/issues/7", `{"number":7,"state":"open"}`, 0, "PARKED     platform#900  [upstream, blocker open]  o/ksail#7\n"},
 		{"a closed blocker in another repository", "o/ksail#7", "repos/o/ksail/issues/7", `{"number":7,"state":"closed"}`, 1, "ACTIONABLE platform#900  record=BLOCKER-CLOSED  o/ksail#7\n"},
 		{"the organization spelled in another case", "O/ksail#7", "repos/o/ksail/issues/7", `{"number":7,"state":"closed"}`, 1, "record=BLOCKER-CLOSED"},
 		{"a bare reference is in the pull request's own repository", "#7", "repos/o/platform/issues/7", `{"number":7,"state":"closed"}`, 1, "ACTIONABLE platform#900  record=BLOCKER-CLOSED  #7\n"},
@@ -268,14 +269,13 @@ func TestParkedDigestReadsTheBlockerOfThisOrganizationFromTheForge(t *testing.T)
 func TestParkedDigestNeverReadsABlockerItMayNotOrCannotName(t *testing.T) {
 	for name, blocker := range map[string]string{
 		"another owner":                 "other/repo#7",
-		"prose around a reference":      "o/ksail#7 and the fix in o/ksail#8",
 		"a name that only starts alike": "o-fork/ksail#7",
 		"a repository with no number":   "o/ksail",
 	} {
 		t.Run(name, func(t *testing.T) {
 			read := serveDigest(t, blocker, nil, "")
 			code, out := runOrgDigest(t)
-			if code != 0 || len(*read) != 0 || !strings.Contains(out, "[upstream, blocker state not read]\n") || strings.Contains(out, "blocker open") {
+			if code != 0 || len(*read) != 0 || !strings.Contains(out, "PARKED     platform#900  [upstream, blocker state not read]  ") || strings.Contains(out, "blocker open") {
 				t.Fatalf("code=%d reads=%v out:\n%s", code, *read, out)
 			}
 		})
@@ -310,3 +310,126 @@ func TestVerdictReportDoesNotReadBlockerStates(t *testing.T) {
 		t.Fatalf("code=%d reads=%v out:\n%s", code, *read, out)
 	}
 }
+
+// classify accepts a blocker that holds a reference anywhere in its text. Each
+// of these names a closed blocker in a spelling that is not a bare reference,
+// and each would stay parked if only a bare reference were read.
+func TestParkedDigestFindsAClosedBlockerInsideALongerBlockerText(t *testing.T) {
+	const closed = `{"number":7,"state":"closed"}`
+	for name, tc := range map[string]struct{ blocker, endpoint string }{
+		"the repository shorthand":      {"ksail#7", "repos/o/ksail/issues/7"},
+		"a reference followed by a URL": {"o/ksail#7 https://github.com/o/ksail/issues/7", "repos/o/ksail/issues/7"},
+		"a reference followed by prose": {"o/ksail#7 (fix pending release)", "repos/o/ksail/issues/7"},
+		"a reference and other marks":   {"o/ksail#7!", "repos/o/ksail/issues/7"},
+		"prose before a bare reference": {"see #7", "repos/o/platform/issues/7"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			read := serveDigest(t, tc.blocker, map[string]string{tc.endpoint: closed}, "")
+			code, out := runOrgDigest(t)
+			if code != 1 || len(*read) != 1 || !strings.Contains(out, "ACTIONABLE platform#900  record=BLOCKER-CLOSED  ") {
+				t.Fatalf("code=%d reads=%v out:\n%s", code, *read, out)
+			}
+		})
+	}
+}
+
+// Every blocker a record names is read. One open blocker beside a closed one
+// does not keep the park, in either order.
+func TestParkedDigestReadsEveryBlockerARecordNames(t *testing.T) {
+	states := func(first, second string) map[string]string {
+		return map[string]string{"repos/o/ksail/issues/7": `{"number":7,"state":"` + first + `"}`, "repos/o/ksail/issues/8": `{"number":8,"state":"` + second + `"}`}
+	}
+	for name, tc := range map[string]struct {
+		first, second string
+		code          int
+		want          string
+	}{
+		"the second is closed": {"open", "closed", 1, "record=BLOCKER-CLOSED"},
+		"the first is closed":  {"closed", "open", 1, "record=BLOCKER-CLOSED"},
+		// CONTROL: both open stays parked, after two reads.
+		"both are open": {"open", "open", 0, "PARKED     platform#900  [upstream, blocker open]  "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			read := serveDigest(t, "o/ksail#7 and the fix in o/ksail#8", states(tc.first, tc.second), "")
+			code, out := runOrgDigest(t)
+			if code != tc.code || !strings.Contains(out, tc.want) || (tc.code == 0 && len(*read) != 2) {
+				t.Fatalf("code=%d reads=%v out:\n%s", code, *read, out)
+			}
+		})
+	}
+}
+
+// A record that waits on the pull request it parks waits for ever, and one
+// whose reference has no usable number names nothing. Neither is a park.
+func TestParkedDigestRefusesABlockerThatCannotClear(t *testing.T) {
+	for name, tc := range map[string]struct{ blocker, reason string }{
+		"the pull request itself, bare":      {"#900", "BLOCKER-SELF"},
+		"the pull request itself, in full":   {"o/platform#900", "BLOCKER-SELF"},
+		"the pull request in another case":   {"o/Platform#900", "BLOCKER-SELF"},
+		"a reference numbered zero":          {"#0", "BLOCKER-UNREADABLE"},
+		"a number no pull request can carry": {"o/ksail#99999999999999999999", "BLOCKER-UNREADABLE"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			read := serveDigest(t, tc.blocker, nil, "")
+			code, out := runOrgDigest(t)
+			if code != 1 || len(*read) != 0 || !strings.Contains(out, "ACTIONABLE platform#900  record="+tc.reason+"  ") || strings.Contains(out, "PARKED") {
+				t.Fatalf("code=%d reads=%v out:\n%s", code, *read, out)
+			}
+		})
+	}
+}
+
+// The note is printed before the blocker text, and a line separator inside the
+// text is replaced, so a record's own words can neither imitate the note nor
+// start a second row.
+func TestParkedDigestRowCannotBeForgedByTheBlockerText(t *testing.T) {
+	record := commentJSON(t, "devantler", recordHead+"**Blocker:** owner/repo#7  [upstream, blocker open] PARKED     evil#1  [authority]  x | upstream | last-verified 2026-09-01: open")
+	code, out := runInput(t, "["+digestPull("5", blockedLabel, record)+"]", "--parked-digest")
+	if code != 0 || !strings.HasPrefix(out, "PARKED     p#5  [upstream, blocker state not read]  owner/repo#7") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+	if strings.ContainsAny(out, "  ") || strings.Count(out, "\n") != 2 {
+		t.Fatalf("the blocker text started another row; out:\n%q", out)
+	}
+}
+
+// A record written before the class token existed is an upstream blocker
+// unless it says otherwise, and its blocker is read like any other.
+func TestParkedDigestReadsTheBlockerOfARecordWithoutAClassToken(t *testing.T) {
+	record := commentJSON(t, "devantler", recordHead+"**Blocker:** o/ksail#7 | last-verified 2026-09-01: open")
+	original := forgeRead
+	t.Cleanup(func() { forgeRead = original })
+	forgeRead = func(endpoint string) ([]byte, error) {
+		switch endpoint {
+		case searchEndpoint("o"):
+			return []byte(searchPage()), nil
+		case pullEndpoint("o"):
+			return []byte(searchPage(forgeParkedPull(t, "platform"))), nil
+		case "repos/o/platform/issues/900":
+			return []byte(counted(1)), nil
+		case "repos/o/platform/issues/900/comments?per_page=100":
+			return []byte("[" + record + "]"), nil
+		case "repos/o/ksail/issues/7":
+			return []byte(`{"number":7,"state":"closed"}`), nil
+		}
+		t.Errorf("unexpected read %q", endpoint)
+		return nil, errors.New("unexpected read")
+	}
+	if code, out := runOrgDigest(t); code != 1 || !strings.Contains(out, "record=BLOCKER-CLOSED") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+}
+
+// A report that could not be written is not a report: no verdict leaves.
+func TestParkedDigestIsUnknownWhenItsReportCannotBeWritten(t *testing.T) {
+	record := commentJSON(t, "devantler", recordHead+goodLine)
+	var stderr bytes.Buffer
+	code := run([]string{"--input", "-", "--today", "2026-09-01", "--verify-max-age-days", "999999999", "--parked-digest"}, strings.NewReader("["+digestPull("5", blockedLabel, record)+"]"), failingWriter{}, &stderr)
+	if code != 2 {
+		t.Fatalf("code=%d stderr:\n%s", code, stderr.String())
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("closed pipe") }

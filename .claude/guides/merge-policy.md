@@ -180,15 +180,20 @@ survey, run `.claude/scripts/blocked-label-blocker-line.sh --org devantler-tech 
 prints one row for every open PR that carries the `blocked` label and a closing `CHECKED` line that
 counts them:
 
-- `PARKED <repo>#<n>  <blocker>  [...]`: the PR has one conforming record, re-verified recently, and
-  its blocker is not known to be closed. It is finished rung-1 work. Do not deepen it, diagnose it
-  again or comment on it, and do not count it against `nothing_on_fire`, whatever the survey digest
-  says about that PR. `blocker state not read` means the blocker is outside this organization or is
-  described in prose: its re-check is still yours, on the cadence the record's date sets.
+- `PARKED <repo>#<n>  [<note>]  <blocker>`: the PR has one conforming record, re-verified recently, and
+  no blocker it names is known to be closed. It is finished rung-1 work. Do not diagnose it again or
+  comment on it, and do not count it against `nothing_on_fire`, whatever the survey digest says
+  about that PR. The note says what was read. `blocker open`: every issue or PR of this
+  organization that the record names was read and is open. `blocker state not read`: the record
+  names none the digest may read (another owner's, or a blocker described only in words), so
+  checking that blocker when the record's date comes due is still yours. `authority`: the PR waits
+  on a decision, and the digest never reads an authority blocker's state.
 - `ACTIONABLE <repo>#<n>  record=<reason>`: the label is there and the park is not. The PR is ordinary
-  rung-1 work this run. `record=BLOCKER-CLOSED` means the issue or PR the record names has closed:
-  remove the label, delete the record comment and drive the PR. Any other reason is the record's own
-  verdict from the paragraph above: repair the record, or unpark the PR.
+  rung-1 work this run. `record=BLOCKER-CLOSED` means an issue or PR the record names has closed:
+  remove the label, delete the record comment and drive the PR, or park it again on what really
+  blocks it now. `BLOCKER-SELF` and `BLOCKER-UNREADABLE` mean the record names the PR itself or a
+  reference with no usable number: write a real blocker or unpark. Any other reason is the record's
+  own verdict from the paragraph above: repair the record, or unpark the PR.
 
 Exit `0` means every labelled PR is parked, `1` that at least one is actionable, and `2` is UNKNOWN:
 then nothing is read as parked, and every labelled PR stays in the survey's own disposition.

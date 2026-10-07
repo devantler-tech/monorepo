@@ -86,11 +86,15 @@ Options: --today <YYYY-MM-DD> (default UTC today)
                        asking the maintainer)
          --parked-digest (pull requests only: one row per open
                        blocked-labelled pull request, PARKED with its blocker
-                       when its one record conforms, was re-verified recently
-                       and names no blocker known to be closed, ACTIONABLE
-                       with the reason otherwise (record=BLOCKER-CLOSED when
-                       the one issue or pull request the record names has
-                       closed; only this organization's are read), then
+                       and a note when its one record conforms, was
+                       re-verified recently and names no blocker known to be
+                       closed, ACTIONABLE with the reason otherwise
+                       (record=BLOCKER-CLOSED when an issue or pull request
+                       the record names has closed, BLOCKER-SELF when it
+                       names the pull request itself, BLOCKER-UNREADABLE when
+                       a reference has no usable number; only this
+                       organization's are read, and an authority blocker's
+                       state never is), then
                        a CHECKED line counting every one read; issue findings
                        are not part of it and do not change its exit)
 Write a record with the compose subcommand (compose --help), never by hand.
@@ -1114,7 +1118,7 @@ func snippet(line string) string {
 		runes = runes[:100]
 	}
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return unicode.ReplacementChar
 		}
 		return r

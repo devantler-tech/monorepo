@@ -20,13 +20,16 @@ import (
 // verdict report judges it, and the blocker it names is not known to be
 // closed. Anything else is ACTIONABLE and names what kept it there, so neither
 // a label nobody backed with a record nor a park that outlived its blocker can
-// hide work.
+// hide work. The bracketed note stands before the blocker text, which is the
+// record's own words and could otherwise imitate it.
 
-// blockerReferenceRE matches a blocker that is exactly one issue or pull
-// request: "owner/repo#N", or "#N" for one in the parked pull request's own
-// repository. A blocker described in prose names nothing the forge can answer
-// for, so its state is never guessed.
-var blockerReferenceRE = regexp.MustCompile(`^(?:([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+))?#([0-9]{1,9})[.,;:]?$`)
+// blockerReferenceRE finds every issue or pull request a blocker names:
+// "owner/repo#N", "repo#N" for one in this organization, or "#N" for one in the
+// parked pull request's own repository. classify accepts a blocker that holds a
+// reference anywhere in its text, so every one is found, not only a blocker
+// that is a single reference: a closed blocker must not escape behind a word
+// of prose beside it.
+var blockerReferenceRE = regexp.MustCompile(`(?:(?:([A-Za-z0-9._-]+)/)?([A-Za-z0-9._-]+))?#([0-9]+)`)
 
 // recordBlocker returns the blocker and the class of a record classify
 // accepted. A record without a class token is the earlier shape, which classify
@@ -64,11 +67,13 @@ func forgeBlockerState(org, repo string, number int64) (string, error) {
 	return record.State, nil
 }
 
-// blockerState reports "open", "closed" or "" (not read) for the blocker of
-// one parked pull request. Under --org only a blocker inside the organization
-// is read: another owner's repository is outside what a sweep may query. An
-// --input record states it in "blocker_state", and one that does not is not
-// read. A blocker that is not a single reference is never read.
+// blockerState reports what is known about the blocker of one parked pull
+// request: "closed" when any issue or pull request it names has closed, "open"
+// when every one that was read is open, "" when none could be read, "self" when
+// it names the parked pull request itself and "unreadable" when a reference
+// carries no usable number. Under --org only a reference inside the
+// organization is read: another owner's repository is outside what a sweep may
+// query. An --input record states the answer in "blocker_state".
 func blockerState(item issue, blocker string, o options) (string, error) {
 	if o.org == "" {
 		switch item.BlockerState {
@@ -77,22 +82,45 @@ func blockerState(item issue, blocker string, o options) (string, error) {
 		}
 		return "", fmt.Errorf("pull request %s#%d carries an unreadable blocker_state -- UNKNOWN", item.Repo, item.Number)
 	}
-	reference := blockerReferenceRE.FindStringSubmatch(blocker)
-	if reference == nil {
-		return "", nil
-	}
-	repo := item.Repo
-	if reference[1] != "" {
-		if !strings.EqualFold(reference[1], o.org) {
-			return "", nil
+	text := urlRE.ReplaceAllString(blocker, " ")
+	state := ""
+	for _, at := range blockerReferenceRE.FindAllStringSubmatchIndex(text, -1) {
+		// A match that continues a longer path or word names something else.
+		if at[0] > 0 {
+			if before := text[at[0]-1]; before == '/' || before == '.' || before == '_' || before == '-' || before >= '0' && before <= '9' || before >= 'A' && before <= 'Z' || before >= 'a' && before <= 'z' {
+				continue
+			}
 		}
-		repo = reference[2]
+		group := func(i int) string {
+			if at[2*i] < 0 {
+				return ""
+			}
+			return text[at[2*i]:at[2*i+1]]
+		}
+		owner, repo := group(1), group(2)
+		if owner != "" && !strings.EqualFold(owner, o.org) {
+			continue
+		}
+		if repo == "" {
+			repo = item.Repo
+		}
+		number, err := strconv.ParseInt(group(3), 10, 64)
+		if err != nil || number <= 0 {
+			return "unreadable", nil
+		}
+		if strings.EqualFold(repo, item.Repo) && number == item.Number {
+			return "self", nil
+		}
+		answer, err := forgeBlockerState(o.org, repo, number)
+		if err != nil {
+			return "", err
+		}
+		if answer == "closed" {
+			return "closed", nil
+		}
+		state = "open"
 	}
-	number, err := strconv.ParseInt(reference[3], 10, 64)
-	if err != nil || number <= 0 {
-		return "", nil
-	}
-	return forgeBlockerState(o.org, repo, number)
+	return state, nil
 }
 
 // parkedDigestReport renders one row per blocked-labelled pull request and a
@@ -102,6 +130,11 @@ func parkedDigestReport(pulls []issue, o options) (string, bool, error) {
 	var report strings.Builder
 	labelled, parked := 0, 0
 	for _, item := range pulls {
+		// A pull request record with no labels array was never read for the
+		// label, so the digest cannot say it is not parked.
+		if item.Labels == nil {
+			return "", false, fmt.Errorf("pull request %s#%d carries no labels array, so whether it is parked is unproven -- UNKNOWN", item.Repo, item.Number)
+		}
 		if !item.parked() {
 			continue
 		}
@@ -120,8 +153,8 @@ func parkedDigestReport(pulls []issue, o options) (string, bool, error) {
 				return "", false, err
 			}
 		}
-		if state == "closed" {
-			_, _ = fmt.Fprintf(&report, "%-10s %s#%d  record=BLOCKER-CLOSED  %s\n", "ACTIONABLE", item.Repo, item.Number, snippet(blocker))
+		if reason, refused := map[string]string{"closed": "BLOCKER-CLOSED", "self": "BLOCKER-SELF", "unreadable": "BLOCKER-UNREADABLE"}[state]; refused {
+			_, _ = fmt.Fprintf(&report, "%-10s %s#%d  record=%s  %s\n", "ACTIONABLE", item.Repo, item.Number, reason, snippet(blocker))
 			continue
 		}
 		parked++
@@ -132,7 +165,7 @@ func parkedDigestReport(pulls []issue, o options) (string, bool, error) {
 		case kind == "upstream":
 			note += ", blocker state not read"
 		}
-		_, _ = fmt.Fprintf(&report, "%-10s %s#%d  %s  [%s]\n", "PARKED", item.Repo, item.Number, snippet(blocker), note)
+		_, _ = fmt.Fprintf(&report, "%-10s %s#%d  [%s]  %s\n", "PARKED", item.Repo, item.Number, note, snippet(blocker))
 	}
 	_, _ = fmt.Fprintf(&report, "CHECKED labelled=%d parked=%d actionable=%d\n", labelled, parked, labelled-parked)
 	return report.String(), labelled > parked, nil
