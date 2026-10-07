@@ -242,6 +242,24 @@ g config -f "${broken}/.gitmodules" --get-regexp '^submodule\..*\.path$' >/dev/n
 # 0 would be a file git reads, and 1 a readable file that names no path: neither is the fixture.
 [ "${broken_rc}" -gt 1 ] ||
   { echo "FAIL fixture: git reads the broken .gitmodules (exit ${broken_rc})" >&2; exit 1; }
+# A populated submodule at a path that holds a tab. Its repository registers a worktree elsewhere,
+# at a path without one, and a live session locked it: the lock row is ordinary, and it is the
+# registry's own path that no tab-separated table can carry.
+tabsub="${sandbox}/tabsub"
+tabsub_path="pro"$'\t'"duct"
+g init -q "${tabsub}"
+g -C "${tabsub}" commit -q --allow-empty -m init
+g -C "${tabsub}" submodule --quiet add "${sandbox}/product-origin" "${tabsub_path}"
+g -C "${tabsub}" commit -q -m 'add product'
+g -C "${tabsub}/${tabsub_path}" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${tabsub}/${tabsub_path}" worktree add -q -b claude/product-90 "${sandbox}/tabsub-wt"
+g -C "${tabsub}/${tabsub_path}" worktree lock \
+  --reason "claude agent tabsub (pid 9000002 start ${start_theirs})" "${sandbox}/tabsub-wt"
+tabsub_common="$(g -C "${tabsub}/${tabsub_path}" rev-parse --path-format=absolute --git-common-dir)"
+case "${tabsub_common}" in
+  *$'\t'*) ;;
+  *) echo "FAIL fixture: the tabbed submodule's git directory has no tab in its path" >&2; exit 1 ;;
+esac
 # A populated submodule whose `.git` entry names a git directory that is not there.
 corrupt="${sandbox}/corrupt"
 g init -q "${corrupt}"
@@ -767,6 +785,10 @@ expect "a populated submodule whose .git entry cannot be read is unknown: its re
   "${corrupt}" "${session}" 2 \
   "devantler-tech/demo#3 holder=unknown:lock-scan" \
   "$(pr devantler-tech/demo 3 claude/nobody-3)" "${lsof_nowhere}"
+expect "a registry whose own path holds a tab is unknown: the scan's table cannot carry it" \
+  "${tabsub}" "${session}" 2 \
+  "devantler-tech/product#90 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/product 90 claude/product-90)" "${lsof_nowhere}"
 expect "a .gitmodules that cannot be parsed is unknown: which submodules it names was never read" \
   "${broken}" "${session}" 2 \
   "devantler-tech/demo#3 holder=unknown:lock-scan" \

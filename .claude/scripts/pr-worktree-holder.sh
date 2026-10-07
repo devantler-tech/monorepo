@@ -391,6 +391,20 @@ lock_rows() {
     }'
 }
 
+# scan_row <shared git directory> <checkout> — add one repository to the list the lock scan reads.
+# The list is tab-separated and read back line by line, so a path that holds a tab or a newline
+# cannot be carried in it: the row would be cut short and its registry passed over. Such a
+# repository is one the scan knows of and cannot reach, and fails like the others.
+scan_row() {
+  case "$1$2" in
+    *$'\t'* | *$'\n'*)
+      : >"${work}/scanfail"
+      return 1
+      ;;
+  esac
+  printf '%s\t%s\n' "$1" "$2" >>"${work}/repos"
+}
+
 # scan_checkout — add the checkout `resolve` named last to the lock scan, and every superproject
 # above it: an asker or a process inside a submodule says nothing else about the repository whose
 # registry holds the locks on the worktrees around it.
@@ -403,7 +417,7 @@ lock_rows() {
 scan_checkout() {
   local hops=0 super
   while :; do
-    printf '%s\t%s\n' "${R_COMMON}" "${R_TOP}" >>"${work}/repos"
+    scan_row "${R_COMMON}" "${R_TOP}" || break
     printf '%s\n' "${R_TOP}" >>"${work}/scan"
     # git prints nothing, and succeeds, for a checkout that is nobody's submodule.
     if ! super="$(git -C "${R_TOP}" rev-parse --show-superproject-working-tree 2>/dev/null)"; then
@@ -417,6 +431,7 @@ scan_checkout() {
     fi
     hops=$((hops + 1))
   done
+  return 0
 }
 
 # lockless <submodule checkout> — succeeds when its repository can be seen, without starting git,
@@ -472,7 +487,7 @@ scan_submodules() {
         : >"${work}/scanfail"
         return 0
       fi
-      printf '%s\t%s\n' "${R_COMMON}" "${sub}" >>"${work}/repos"
+      scan_row "${R_COMMON}" "${sub}" || return 0
     fi
     scan_submodules "${sub}" "$((depth + 1))"
   done <<<"${paths}"
