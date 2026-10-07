@@ -320,6 +320,31 @@ ln -s ../nomodules "${escape_link}/out"
 g config -f "${escape_link}/.gitmodules" submodule.out.path out
 [ -e "${escape_up}/../nomodules/.git" ] && [ -e "${escape_link}/out/.git" ] ||
   { echo "FAIL fixture: the paths that leave their checkout do not lead to a repository" >&2; exit 1; }
+# locked_submodule <superproject> <path> <branch> <worktree> — a superproject with the product
+# repository as a populated submodule at <path>, whose registry holds a worktree a live session
+# locked on <branch>.
+locked_submodule() {
+  g init -q "$1"
+  g -C "$1" commit -q --allow-empty -m init
+  g -C "$1" submodule --quiet add "${sandbox}/product-origin" "$2"
+  g -C "$1" commit -q -m 'add product'
+  g -C "$1/$2" config remote.origin.url git@github.com:devantler-tech/product.git
+  g -C "$1/$2" worktree add -q -b "$3" "$4"
+  g -C "$1/$2" worktree lock --reason "claude agent $3 (pid 9000002 start ${start_theirs})" "$4"
+}
+# A submodule at a path that holds the byte the scan uses to stand for a newline.
+ctrlsub="${sandbox}/ctrlsub"
+locked_submodule "${ctrlsub}" "pro"$'\001'"duct" claude/product-94 "${sandbox}/ctrlsub-wt"
+# A checkout whose index file is gone, and whose working tree has no `.gitmodules`: git lists an
+# empty index without complaint, while the commit checked out holds the submodule.
+noindex="${sandbox}/noindex"
+locked_submodule "${noindex}" product claude/product-95 "${sandbox}/noindex-wt"
+rm "${noindex}/.gitmodules" "${noindex}/.git/index"
+[ -z "$(g -C "${noindex}" ls-files -s)" ] ||
+  { echo "FAIL fixture: git still lists entries for the checkout whose index was removed" >&2; exit 1; }
+# A submodule below a directory this user may not look into (the mode is set where it is asked).
+noperm="${sandbox}/noperm"
+locked_submodule "${noperm}" inner/product claude/product-96 "${sandbox}/noperm-wt"
 # A populated submodule whose `.git` entry names a git directory that is not there.
 corrupt="${sandbox}/corrupt"
 g init -q "${corrupt}"
@@ -417,7 +442,9 @@ real_tr="$(command -v tr)"
 real_sed="$(command -v sed)"
 cat >"${gitshim}/tr" <<SHIM
 #!/usr/bin/env bash
-if [ "\${FIXTURE_SUBLIST_FAIL:-}" = tr ] && [ "\${1:-}" = '\n\0' ]; then exit 1; fi
+if [ "\${FIXTURE_SUBLIST_FAIL:-}" = tr ]; then
+  case "\${1:-}" in '\n\0'*) exit 1 ;; esac
+fi
 exec "${real_tr}" "\$@"
 SHIM
 cat >"${gitshim}/sed" <<SHIM
@@ -909,6 +936,27 @@ expect "a path .gitmodules names through a symbolic link is not followed out of 
   "${escape_link}" "${session}" 0 \
   "devantler-tech/product#91 holder=none" \
   "$(pr devantler-tech/product 91 claude/product-91)" "${lsof_nowhere}"
+expect "a submodule at a path that holds the byte standing for a newline is unknown, never none" \
+  "${ctrlsub}" "${session}" 2 \
+  "devantler-tech/product#94 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/product 94 claude/product-94)" "${lsof_nowhere}"
+expect "an index that lists nothing under a commit that holds files is unknown: the index is gone" \
+  "${noindex}" "${session}" 2 \
+  "devantler-tech/product#95 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/product 95 claude/product-95)" "${lsof_nowhere}"
+# root may look into any directory, so this case cannot be set up as root.
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "${noperm}/inner"
+  expect "a submodule below a directory that may not be looked into is unknown, never none" \
+    "${noperm}" "${session}" 2 \
+    "devantler-tech/product#96 holder=unknown:lock-scan" \
+    "$(pr devantler-tech/product 96 claude/product-96)" "${lsof_nowhere}"
+  chmod 755 "${noperm}/inner"
+fi
+expect "the same submodule is read once its directory may be looked into" \
+  "${noperm}" "${session}" 0 \
+  "devantler-tech/product#96 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 96 claude/product-96)" "${lsof_nowhere}"
 expect "a populated submodule at a path that holds a newline is unknown: no list here can carry it" \
   "${nlsub}" "${session}" 2 \
   "devantler-tech/product#92 holder=unknown:lock-scan" \
