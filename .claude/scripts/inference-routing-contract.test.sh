@@ -57,10 +57,21 @@ GUIDE="${INFERENCE_ROUTING_GUIDE:-$ROOT/.claude/guides/spend-and-inference.md}"
 RUNTIME_DOC="${INFERENCE_ROUTING_RUNTIME_DOC:-$ROOT/.claude/plugin-consumption/inference-routing-runtime.md}"
 REGISTRY="$ROOT/.claude/plugin-consumption/agent-instances.json"
 # An input that cannot be read or parsed is UNKNOWN (2), never a finding (1): nothing was examined.
-[[ -r "$GUIDE" && -r "$RUNTIME_DOC" && -r "$REGISTRY" ]] ||
+# A readable input that says the wrong thing is a finding.
+[[ -r "$GUIDE" && -r "$RUNTIME_DOC" ]] ||
   { echo 'UNKNOWN accepted parent routes: contract files unreadable' >&2; exit 2; }
-jq -e '.instances | type == "object"' "$REGISTRY" > /dev/null 2>&1 ||
-  { echo 'UNKNOWN accepted parent routes: the instance registry has no instances object' >&2; exit 2; }
+
+# Check that a registry file holds an instances map. Argument: the registry file.
+check_registry() {
+  local status=0
+  [[ -r "$1" ]] || { echo 'UNKNOWN accepted parent routes: the instance registry is unreadable'; return 2; }
+  jq -e '.instances | type == "object"' "$1" > /dev/null 2>&1 || status=$?
+  case "$status" in
+    0) ;;
+    1) echo 'FAIL accepted parent routes: the instance registry has no instances map'; return 1 ;;
+    *) echo 'UNKNOWN accepted parent routes: the instance registry could not be parsed'; return 2 ;;
+  esac
+}
 
 # Print a file as one line of whitespace-normalised text with the backticks (octal 140) removed:
 # both files are hard-wrapped and mark code with backticks.
@@ -98,55 +109,77 @@ check_guide() {
   done
 }
 
-# Each table cell is matched whole, so a row cannot be widened by adding words to it: the route
-# cell admits only the scheduled parent on the scheduler-fixed model and one named subscription
-# sign-in.
-route_re='^(Engineer|Improver|Engineer and improver) schedules?, on the model fixed in (its|each) scheduler entry and the [A-Za-z][A-Za-z0-9.-]* subscription sign-in$'
-decision_re='^Maintainer, 20[0-9][0-9]-[0-9][0-9]-[0-9][0-9], monorepo#[0-9]+$'
-# The Codex row is the decision this contract records, so it is pinned exactly, not by pattern:
-# both schedules, and the decision as it was made. Narrowing it to one schedule would return the
-# other to stopping at the pre-flight. Changing the decision means changing these two lines too.
-codex_route='Engineer and improver schedules, on the model fixed in each scheduler entry and the ChatGPT subscription sign-in'
-codex_decision='Maintainer, 2026-10-07, monorepo#3314'
+
+# The accepted rows, exactly as the maintainer decided them: one "instance|route|decision" per
+# line. The table must hold exactly these rows. Listing a row lets a scheduled run work without
+# the enforcement proof, so a row is authorised by a reviewed change to this list in the same
+# pull request, never by table text that merely looks like a decision.
+accepted_rows='codex-local|Engineer and improver schedules, on the model fixed in each scheduler entry and the ChatGPT subscription sign-in|Maintainer, 2026-10-07, monorepo#3314'
+
 # Print one trimmed cell of a table row. Arguments: the row, the awk field number.
 cell() {
   printf '%s\n' "$1" | awk -F'|' -v n="$2" '{ gsub(/^[ \t]+|[ \t]+$/, "", $n); print $n }'
 }
 
-# Check the accepted-routes table and the startup rule beside it. Argument: the runtime document.
-# Every row names a registered instance, a route no wider than the scheduled parent and a
-# maintainer decision. The Codex row is required, exactly as decided: without it the scheduled
-# Codex runs stop at the pre-flight again.
+# Check the accepted-routes table and the rules beside it. Arguments: the runtime document, and
+# optionally the decided rows (default: the list above). Each rule is read where agents resolve
+# it: the startup rule in the document's introduction, the row rule and the table in the
+# Accepted scheduled parent routes section.
 check_routes() {
-  local text phrase rows row fields id route decision registered codex_listed=0
-  [[ -r "$1" ]] || { echo 'UNKNOWN accepted parent routes: runtime document unreadable'; return 2; }
-  text="$(flatten < "$1")" ||
+  local doc="$1" allowed="${2-$accepted_rows}"
+  local intro section text phrase rows row fields key id registered seen=''
+  [[ -r "$doc" ]] || { echo 'UNKNOWN accepted parent routes: runtime document unreadable'; return 2; }
+  intro="$(awk '/^## / { exit } { print }' "$doc")" ||
     { echo 'UNKNOWN accepted parent routes: runtime document unreadable'; return 2; }
+  text="$(printf '%s\n' "$intro" | flatten)"
   for phrase in \
     'Outside a listed route, missing pre-inference controls hold the affected startup, resume or fallback' \
-    'A listed route is never held for them' \
-    'a row accepts the parent run alone and enables no route, child, switch or fallback'; do
+    'A listed route is never held for them'; do
     case "$text" in
       *"$phrase"*) ;;
       *) printf 'FAIL accepted parent routes: runtime document lost: %s\n' "$phrase"; return 1 ;;
     esac
   done
-  # The table's data rows (neither the header nor the separator row), backticks removed.
-  rows="$(awk '
+  section="$(awk '
     /^## Accepted scheduled parent routes$/ { on = 1; next }
     on && /^## / { exit }
-    on && /^\|/ && !/^\| *Instance *\|/ && !/^\|[-| ]+$/ { print }' "$1" | tr -d '\140')" ||
+    on { print }' "$doc")" ||
     { echo 'UNKNOWN accepted parent routes: runtime document unreadable'; return 2; }
+  [[ -n "$section" ]] ||
+    { echo 'FAIL accepted parent routes: the runtime document has no Accepted scheduled parent routes section'; return 1; }
+  text="$(printf '%s\n' "$section" | flatten)"
+  phrase='a row accepts the parent run alone and enables no route, child, switch or fallback'
+  case "$text" in
+    *"$phrase"*) ;;
+    *) printf 'FAIL accepted parent routes: runtime document lost: %s\n' "$phrase"; return 1 ;;
+  esac
+  # The table's data rows (neither the header nor the separator row), backticks removed.
+  rows="$(printf '%s\n' "$section" |
+    awk '/^\|/ && !/^\| *Instance *\|/ && !/^\|[-| ]+$/ { print }' | tr -d '\140')"
   [[ -n "$rows" ]] || { echo 'FAIL accepted parent routes: no accepted row found'; return 1; }
+  # Every row in the table is a decided row, once.
   while IFS= read -r row; do
     # "| a | b | c |" splits into five fields; any other count is a row this check cannot read.
     fields="$(printf '%s\n' "$row" | awk -F'|' '{ print NF }')"
     [[ "$fields" == 5 ]] ||
       { printf 'FAIL accepted parent routes: row is not three cells: %s\n' "$row"; return 1; }
-    id="$(cell "$row" 2)"
-    route="$(cell "$row" 3)"
-    decision="$(cell "$row" 4)"
-    [[ -n "$id" ]] || { printf 'FAIL accepted parent routes: unreadable row: %s\n' "$row"; return 1; }
+    key="$(cell "$row" 2)|$(cell "$row" 3)|$(cell "$row" 4)"
+    grep -Fxq -- "$key" <<<"$allowed" ||
+      { printf 'FAIL accepted parent routes: not a decided row: %s\n' "$key"; return 1; }
+    if grep -Fxq -- "$key" <<<"$seen"; then
+      printf 'FAIL accepted parent routes: row listed twice: %s\n' "$key"
+      return 1
+    fi
+    seen="$seen$key"$'\n'
+  done <<ROWS
+$rows
+ROWS
+  # Every decided row is in the table, and names a registered instance.
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    id="${key%%|*}"
+    grep -Fxq -- "$key" <<<"$seen" ||
+      { printf 'FAIL accepted parent routes: decided row missing: %s\n' "$id"; return 1; }
     # jq exits 1 for "not registered" and above 1 when it could not read or parse the registry.
     registered=0
     jq -e --arg id "$id" '.instances | has($id)' "$REGISTRY" > /dev/null 2>&1 || registered=$?
@@ -155,37 +188,29 @@ check_routes() {
       1) printf 'FAIL accepted parent routes: %s is not a registered instance\n' "$id"; return 1 ;;
       *) echo 'UNKNOWN accepted parent routes: the instance registry could not be read'; return 2 ;;
     esac
-    [[ "$route" =~ $route_re ]] ||
-      { printf 'FAIL accepted parent routes: %s accepts more than a scheduled parent route: %s\n' "$id" "$route"; return 1; }
-    [[ "$decision" =~ $decision_re ]] ||
-      { printf 'FAIL accepted parent routes: %s carries no maintainer decision\n' "$id"; return 1; }
-    if [[ "$id" == codex-local ]]; then
-      [[ "$route" == "$codex_route" && "$decision" == "$codex_decision" ]] ||
-        { printf 'FAIL accepted parent routes: the codex-local row is not the decided one: %s | %s\n' "$route" "$decision"; return 1; }
-      codex_listed=1
-    fi
-  done <<ROWS
-$rows
-ROWS
-  [[ "$codex_listed" == 1 ]] ||
-    { echo 'FAIL accepted parent routes: codex-local is not listed'; return 1; }
+  done <<ALLOWED
+$allowed
+ALLOWED
 }
 
 # The live contract must pass. A checker's own status is kept: 1 is a finding, 2 is UNKNOWN.
 status=0
+out="$(check_registry "$REGISTRY")" || status=$?
+[[ "$status" == 0 ]] || { printf '%s\n' "$out" >&2; exit "$status"; }
 out="$(check_guide "$GUIDE")" || status=$?
 [[ "$status" == 0 ]] || { printf '%s\n' "$out" >&2; exit "$status"; }
 printf 'PASS accepted parent route rule and its limits\n'
 out="$(check_routes "$RUNTIME_DOC")" || status=$?
 [[ "$status" == 0 ]] || { printf '%s\n' "$out" >&2; exit "$status"; }
-printf 'PASS accepted parent routes are registered, parent-only and maintainer-decided\n'
+printf 'PASS accepted parent routes are exactly the decided rows\n'
 
-# Run a checker against a fixture and require one outcome: the given status and a diagnostic
-# naming its own reason. Arguments: case name, checker, fixture file, expected status, expected
-# diagnostic text.
+# Run a checker and require one outcome: the given status and a diagnostic naming its own reason.
+# Arguments: case name, expected status, expected diagnostic text, then the checker and its
+# arguments.
 expects() {
-  local name="$1" checker="$2" fixture="$3" want_status="$4" want="$5" got got_status=0
-  got="$("$checker" "$fixture")" || got_status=$?
+  local name="$1" want_status="$2" want="$3" got got_status=0
+  shift 3
+  got="$("$@")" || got_status=$?
   if [[ "$got_status" != "$want_status" ]]; then
     printf 'FAIL accepted parent routes control %s: status %s, want %s: %s\n' \
       "$name" "$got_status" "$want_status" "$got" >&2
@@ -197,14 +222,17 @@ expects() {
        exit 1 ;;
   esac
 }
-# A fixture that must be refused as a finding. Arguments: case name, checker, fixture, diagnostic.
+# A fixture that must be refused as a finding. Arguments: case name, expected diagnostic text,
+# then the checker and its arguments.
 refuses() {
-  expects "$1" "$2" "$3" 1 "$4"
+  local name="$1" want="$2"
+  shift 2
+  expects "$name" 1 "$want" "$@"
 }
 
-# Print a runtime document holding the rules beside the table and one table row per
-# "id|route|decision" argument. A row argument is written as given, so a fixture can carry a
-# fourth cell.
+# Print a runtime document: the startup rule in the introduction, then the section with its row
+# rule and one table row per "instance|route|decision" argument. A row argument is written as
+# given, so a fixture can carry a fourth cell.
 routes_doc() {
   printf '%s\n\n' 'Outside a listed route, missing pre-inference controls hold the affected startup,' \
     'resume or fallback. A listed route is never held for them.'
@@ -217,63 +245,78 @@ routes_doc() {
   done
   printf '\n%s\n' '## Native verification procedure'
 }
-codex_row="codex-local|$codex_route|$codex_decision"
-# A valid route and decision for a second, registered instance: the generic rules, without the
-# exact pin the Codex row carries.
+codex_row="$accepted_rows"
+codex_route="$(cell "|$codex_row|" 3)"
+codex_decision="$(cell "|$codex_row|" 4)"
+# A second row, for fixtures only: it is not a decided row unless a fixture's own list says so.
 other_route='Engineer schedule, on the model fixed in its scheduler entry and the Example subscription sign-in'
-other_decision='Maintainer, 2026-11-01, monorepo#1'
+other_row="claude-local|$other_route|Maintainer, 2026-11-01, monorepo#1"
+two_rows="$codex_row"$'\n'"$other_row"
 
 # The fixture builder itself must produce a document the checker accepts, or every refusal below
-# would prove nothing.
+# would prove nothing. Two decided rows prove the list is not limited to one.
 routes_doc "$codex_row" > "$TMP/routes-good.md"
-out="$(check_routes "$TMP/routes-good.md")" ||
-  { printf 'FAIL accepted parent routes control: the valid fixture was refused: %s\n' "$out" >&2; exit 1; }
-routes_doc "$codex_row" "claude-local|$other_route|$other_decision" > "$TMP/routes-two.md"
-out="$(check_routes "$TMP/routes-two.md")" ||
-  { printf 'FAIL accepted parent routes control: a second valid row was refused: %s\n' "$out" >&2; exit 1; }
-printf 'PASS control valid fixtures are accepted\n'
+expects 'valid fixture' 0 '' check_routes "$TMP/routes-good.md"
+routes_doc "$codex_row" "$other_row" > "$TMP/routes-two.md"
+expects 'valid fixture with two decided rows' 0 '' check_routes "$TMP/routes-two.md" "$two_rows"
 
-# The generic rules, on a second row beside the valid Codex row.
-routes_doc "$codex_row" "claude-local|Engineer schedule, on any model and the Example subscription sign-in|$other_decision" > "$TMP/r.md"
-refuses 'route on any model' check_routes "$TMP/r.md" 'claude-local accepts more than a scheduled parent route'
-routes_doc "$codex_row" "claude-local|$other_route or API billing|$other_decision" > "$TMP/r.md"
-refuses 'route with API billing' check_routes "$TMP/r.md" 'claude-local accepts more than a scheduled parent route'
-routes_doc "$codex_row" "claude-local|$other_route, and its children and fallback|$other_decision" > "$TMP/r.md"
-refuses 'route with children and fallback' check_routes "$TMP/r.md" 'claude-local accepts more than a scheduled parent route'
-routes_doc "$codex_row" "claude-local|$other_route|also its children|$other_decision" > "$TMP/r.md"
-refuses 'fourth cell' check_routes "$TMP/r.md" 'row is not three cells'
-routes_doc "$codex_row" "claude-local|$other_route|Engineer, 2026-11-01" > "$TMP/r.md"
-refuses 'decision not the maintainer' check_routes "$TMP/r.md" 'claude-local carries no maintainer decision'
-routes_doc "$codex_row" "claude-local|$other_route|$other_decision and the engineer" > "$TMP/r.md"
-refuses 'decision with a suffix' check_routes "$TMP/r.md" 'claude-local carries no maintainer decision'
-routes_doc "$codex_row" "unregistered-example|$other_route|$other_decision" > "$TMP/r.md"
-refuses 'unregistered instance' check_routes "$TMP/r.md" 'unregistered-example is not a registered instance'
-
-# The Codex row: required, and exactly the decided one.
-routes_doc "claude-local|$other_route|$other_decision" > "$TMP/r.md"
-refuses 'codex row replaced' check_routes "$TMP/r.md" 'codex-local is not listed'
+# A row is accepted only when it is a decided row, whatever it looks like.
+refuses 'well-formed row that was never decided' 'not a decided row: claude-local|' \
+  check_routes "$TMP/routes-two.md"
+routes_doc "codex-local|$codex_route or API billing|$codex_decision" > "$TMP/r.md"
+refuses 'route with API billing' 'not a decided row: codex-local|' check_routes "$TMP/r.md"
+routes_doc "codex-local|$codex_route, and its children and fallback|$codex_decision" > "$TMP/r.md"
+refuses 'route with children and fallback' 'not a decided row: codex-local|' check_routes "$TMP/r.md"
+routes_doc "codex-local|Engineer and improver schedules, on any model and the ChatGPT subscription sign-in|$codex_decision" > "$TMP/r.md"
+refuses 'route on any model' 'not a decided row: codex-local|' check_routes "$TMP/r.md"
 routes_doc "codex-local|Improver schedule, on the model fixed in its scheduler entry and the ChatGPT subscription sign-in|$codex_decision" > "$TMP/r.md"
-refuses 'codex row narrowed to the improver' check_routes "$TMP/r.md" 'the codex-local row is not the decided one'
-routes_doc "codex-local|Engineer schedule, on the model fixed in its scheduler entry and the ChatGPT subscription sign-in|$codex_decision" > "$TMP/r.md"
-refuses 'codex row narrowed to the engineer' check_routes "$TMP/r.md" 'the codex-local row is not the decided one'
-routes_doc "codex-local|$other_route|$codex_decision" > "$TMP/r.md"
-refuses 'codex row on another sign-in' check_routes "$TMP/r.md" 'the codex-local row is not the decided one'
-routes_doc "codex-local|$codex_route|$other_decision" > "$TMP/r.md"
-refuses 'codex row under another decision' check_routes "$TMP/r.md" 'the codex-local row is not the decided one'
+refuses 'codex row narrowed to the improver' 'not a decided row: codex-local|' check_routes "$TMP/r.md"
+routes_doc "codex-local|$codex_route|Maintainer, 2026-11-01, monorepo#1" > "$TMP/r.md"
+refuses 'codex row under another decision' 'not a decided row: codex-local|' check_routes "$TMP/r.md"
+routes_doc "codex-local|$codex_route|also its children|$codex_decision" > "$TMP/r.md"
+refuses 'fourth cell' 'row is not three cells' check_routes "$TMP/r.md"
+routes_doc "$codex_row" "$codex_row" > "$TMP/r.md"
+refuses 'row listed twice' 'row listed twice' check_routes "$TMP/r.md"
 
-# The table and the rules beside it.
+# Every decided row must be there, for a registered instance.
+routes_doc "$other_row" > "$TMP/r.md"
+refuses 'decided row missing' 'decided row missing: codex-local' check_routes "$TMP/r.md" "$two_rows"
+unregistered_row="unregistered-example|$other_route|Maintainer, 2026-11-01, monorepo#1"
+routes_doc "$codex_row" "$unregistered_row" > "$TMP/r.md"
+refuses 'decided row for an unregistered instance' 'unregistered-example is not a registered instance' \
+  check_routes "$TMP/r.md" "$codex_row"$'\n'"$unregistered_row"
+
+# The table and the rules beside it, each in its own place.
 routes_doc > "$TMP/r.md"
-refuses 'empty table' check_routes "$TMP/r.md" 'no accepted row found'
+refuses 'empty table' 'no accepted row found' check_routes "$TMP/r.md"
 sed 's/^## Accepted scheduled parent routes$/## Something else/' "$TMP/routes-good.md" > "$TMP/r.md"
-refuses 'table under another heading' check_routes "$TMP/r.md" 'no accepted row found'
+refuses 'table under another heading' 'has no Accepted scheduled parent routes section' \
+  check_routes "$TMP/r.md"
 sed 's/^Outside a listed route, missing/Missing/' "$TMP/routes-good.md" > "$TMP/r.md"
-refuses 'startup hold not scoped' check_routes "$TMP/r.md" 'runtime document lost: Outside a listed route'
+refuses 'startup hold not scoped' 'runtime document lost: Outside a listed route' check_routes "$TMP/r.md"
+{ printf '%s\n\n' 'An introduction without the rule.'; sed 's/^## Native verification procedure$//' "$TMP/routes-good.md" |
+  awk '/^Outside a listed route/ { held = 1 } held && /^## Accepted/ { held = 0 } !held { print }'
+  printf '%s\n\n%s\n%s\n' '## Native verification procedure' \
+    'Outside a listed route, missing pre-inference controls hold the affected startup,' \
+    'resume or fallback. A listed route is never held for them.'; } > "$TMP/r.md"
+refuses 'startup rule outside the introduction' 'runtime document lost: Outside a listed route' \
+  check_routes "$TMP/r.md"
 sed 's/a row accepts the parent run alone and enables no route/a row accepts the run and its children and enables no route/' "$TMP/routes-good.md" > "$TMP/r.md"
-refuses 'row scope widened' check_routes "$TMP/r.md" 'runtime document lost: a row accepts the parent run alone'
+refuses 'row scope widened' 'runtime document lost: a row accepts the parent run alone' check_routes "$TMP/r.md"
 
-# An input that cannot be read is UNKNOWN, not a finding.
-expects 'unreadable runtime document' check_routes "$TMP/absent.md" 2 'UNKNOWN accepted parent routes: runtime document unreadable'
-expects 'unreadable guide' check_guide "$TMP/absent.md" 2 'UNKNOWN accepted parent routes: guide unreadable'
+# An input that cannot be read or parsed is UNKNOWN; a readable one that is wrong is a finding.
+expects 'unreadable runtime document' 2 'runtime document unreadable' check_routes "$TMP/absent.md"
+expects 'unreadable guide' 2 'guide unreadable' check_guide "$TMP/absent.md"
+expects 'unreadable registry' 2 'the instance registry is unreadable' check_registry "$TMP/absent.json"
+printf '%s' '{not json' > "$TMP/registry.json"
+expects 'registry that does not parse' 2 'the instance registry could not be parsed' \
+  check_registry "$TMP/registry.json"
+printf '%s\n' '{"instances": []}' > "$TMP/registry.json"
+refuses 'registry without an instances map' 'the instance registry has no instances map' \
+  check_registry "$TMP/registry.json"
+printf '%s\n' '{"version": 1}' > "$TMP/registry.json"
+refuses 'registry with no instances at all' 'the instance registry has no instances map' \
+  check_registry "$TMP/registry.json"
 
 # Guide controls are cut from the live guide, so each first proves that it changed its input.
 # Arguments: case name, sed expression, expected diagnostic text.
@@ -283,7 +326,7 @@ guide_refuses() {
     printf 'FAIL accepted parent routes control %s: the fixture equals the live guide\n' "$1" >&2
     exit 1
   fi
-  refuses "$1" check_guide "$TMP/g.md" "$3"
+  refuses "$1" "$3" check_guide "$TMP/g.md"
 }
 guide_refuses 'guide heading renamed' 's/^## Inference routing$/## Routing/' \
   'the guide has no Inference routing section'
@@ -301,5 +344,5 @@ awk '
   "$GUIDE" > "$TMP/g.md"
 cmp -s "$GUIDE" "$TMP/g.md" &&
   { echo 'FAIL accepted parent routes control guide rule moved: the fixture equals the live guide' >&2; exit 1; }
-refuses 'guide rule moved out of its section' check_guide "$TMP/g.md" \
-  'guide lost: Outside an accepted route'
+refuses 'guide rule moved out of its section' 'guide lost: Outside an accepted route' \
+  check_guide "$TMP/g.md"
