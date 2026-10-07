@@ -8,8 +8,9 @@ Its opt-in controls the new automatic routing and
 delegation mechanism; it does not stop or reconfigure existing native parent schedules. Existing
 parent execution also requires an independently confirmed permitted model and included billing
 route, or a listing under [Accepted scheduled parent routes](#accepted-scheduled-parent-routes).
-Disabled routing does not establish that compliance. Missing pre-inference controls hold the
-affected startup, resume or fallback; unresolved parent enforcement remains an explicit rollout gap.
+Disabled routing does not establish that compliance. Outside a listed route, missing pre-inference
+controls hold the affected startup, resume or fallback; unresolved parent enforcement remains an
+explicit rollout gap. A listed route is never held for them.
 All registrations initially expire on **2026-09-26 00:00 UTC**. Renewal requires fresh capability
 evidence and a reviewed policy revision, not extending a date automatically.
 

@@ -122,8 +122,9 @@ once across providers; stop the previous writer first. One delivery owner retain
 Existing native parent execution may continue only on an independently confirmed permitted model
 and included billing route, or on an **accepted scheduled parent route** (below). Disabled routing
 does not grandfather an unknown parent route, reconfigure
-its scheduler, or prove its initial inference is quota-protected. Missing pre-inference controls hold
-the affected startup, resume or fallback; report unresolved parent enforcement explicitly.
+its scheduler, or prove its initial inference is quota-protected. Outside an accepted route, missing
+pre-inference controls hold the affected startup, resume or fallback; report unresolved parent
+enforcement explicitly. An accepted route is never held for them.
 
 **Accepted scheduled parent routes** (maintainer decision 2026-10-07, monorepo#3314). The maintainer
 may accept a registered instance's scheduled parent runs on the model fixed in its scheduler entry
