@@ -1722,17 +1722,32 @@ unset worktree_claim_timeout_usable
 #     is reaped, so a poll loop would spin until the deadline instead of returning immediately;
 #   * the killer's stdout is redirected, because it would otherwise inherit and hold open a caller's
 #     pipe, making every call take the full timeout even when git answered instantly.
+#
+# plugin-definition-currency.sh carries the same function, statement for statement, and its test
+# fails when the two differ (monorepo#3824). A fix made there never reached here: this copy replaced
+# the ssh command a repository configures with plain `ssh`, and set no connect timeout.
 bounded_remote() {
   local secs="$1"
   shift
   local cmd_pid killer_pid rc=0 had_monitor=0
+  # GIT_SSH_COMMAND outranks core.sshCommand and GIT_SSH, so setting it to plain `ssh` would
+  # replace a transport the repository configured (a deploy key, a jump host). Start from
+  # whichever of the three git itself would have used. Every caller bounds
+  # `git -C <repository> ...`, which is how that repository's own setting is found.
+  local base_ssh="${GIT_SSH_COMMAND:-}" repo=""
+  if [ "${1-}" = git ] && [ "${2-}" = -C ]; then repo="${3-}"; fi
+  if [ -z "$base_ssh" ] && [ -n "$repo" ]; then
+    base_ssh="$(git -C "$repo" config --get core.sshCommand 2>/dev/null || true)"
+  fi
+  [ -n "$base_ssh" ] || base_ssh="${GIT_SSH:-ssh}"
   # Job control gives the background command its OWN process group, which is what makes the whole
   # transport tree killable. git delegates to a helper (`git remote-ext`, ssh, git-remote-https); a
   # kill aimed at the git pid alone leaves that helper reparented and running to ITS native timeout,
   # and `add` can time out twice per call, so an unresponsive remote accumulates them.
   case "$-" in *m*) had_monitor=1 ;; esac
   set -m
-  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" "$@" &
+  GIT_TERMINAL_PROMPT=0 \
+    GIT_SSH_COMMAND="$base_ssh -o BatchMode=yes -o ConnectTimeout=$secs" "$@" &
   cmd_pid=$!
   # The killer is started while job control is STILL on, so it too gets its own process group. That
   # is what makes it killable as a tree: the subshell's `sleep` is a separate child, and a signal to

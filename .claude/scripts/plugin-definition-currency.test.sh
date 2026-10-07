@@ -1698,8 +1698,8 @@ assert_no_notice() {
 # 14a. Working tree == adopted. The pin comes from the REMOTE, and the output says so.
 if out="$(adopt_run --installed "${cur}")"; then
   case "${out}" in
-    *"pinned revision : ${gitlink}"*"pin source      : adopted"*"origin refs/heads/main (${adopted_commit}), read from the remote by this check"*CURRENT*)
-      ok "the pin is read from the remote's default branch, and the output names that source" ;;
+    *"pinned revision : ${gitlink}"*"pin source      : adopted"*"origin refs/heads/main (${adopted_commit}), read from the remote by this check at ${forge}"*CURRENT*)
+      ok "the pin is read from the remote's default branch, and the output names that source and where it is" ;;
     *) fail "the adopted pin's source was not reported: ${out}" ;;
   esac
   assert_no_notice "${out}" "a working tree on the adopted pin must carry no notice"
@@ -1865,6 +1865,17 @@ expect_adopted_unknown "a remote that is not configured" "'absent' is not a conf
   --remote absent
 expect_adopted_unknown "an adopted revision that records no gitlink" "no gitlink for" \
   --adopted-ref "${unpinned_commit}"
+# A revision that resolves but whose tree is not in the object database: its gitlink cannot be
+# read at all. Falling back to the working tree's pin here would print CURRENT (monorepo#3824).
+treeless_commit="$(printf 'tree %s\nauthor t <t@example.invalid> 0 +0000\ncommitter t <t@example.invalid> 0 +0000\n\na tree nobody has\n' \
+  0123456789abcdef0123456789abcdef01234567 | git -C "${work}" hash-object -t commit -w --stdin)"
+git -C "${work}" cat-file -e "${treeless_commit}^{commit}" \
+  || fail "fixture: the commit with a missing tree was not written"
+if git -C "${work}" ls-tree "${treeless_commit}" >/dev/null 2>&1; then
+  fail "fixture: the tree of ${treeless_commit} is readable, so this arm proves nothing"
+fi
+expect_adopted_unknown "an adopted revision whose tree cannot be read" \
+  "cannot read the tree of the adopted revision ${treeless_commit}" --adopted-ref "${treeless_commit}"
 expect_adopted_unknown "a short adopted ref" "remote-tracking ref (refs/remotes/...) or full commit ID" \
   --adopted-ref origin/main
 expect_adopted_unknown "an adopted ref beside an explicit pin" "pass only one" \
@@ -1890,6 +1901,49 @@ case "${out}" in
   *) fail "the recovery lets a failed fetch be followed by a check of the stale ref: ${out}" ;;
 esac
 git -C "${work}" remote set-url origin "${forge}"
+
+# The pin source names the repository that ANSWERED, not just the remote's name (monorepo#3824). A
+# url.<base>.insteadOf rewrite sends a remote somewhere else while its name and its configured URL
+# stay the same, so the name alone would hide which repository the pin was read from.
+git -C "${work}" remote add rewritten "https://rewritten.invalid/consumer.git"
+git -C "${work}" config "url.${forge}.insteadOf" "https://rewritten.invalid/consumer.git"
+if out="$(adopt_run --installed "${cur}" --remote rewritten)"; then
+  case "${out}" in
+    *"rewritten refs/heads/main (${adopted_commit}), read from the remote by this check at ${forge}"*CURRENT*)
+      ok "the pin source prints the location a rewritten remote resolved to" ;;
+    *) fail "the pin source does not name where the rewritten remote resolved to: ${out}" ;;
+  esac
+  case "${out}" in
+    *rewritten.invalid*) fail "the pin source printed the configured URL, not the one git contacted: ${out}" ;;
+    *) ok "the pin source does not print the URL the rewrite replaced" ;;
+  esac
+else
+  fail "a rewritten remote that reaches the adopted pin must exit 0, got $? — ${out}"
+fi
+git -C "${work}" config --unset "url.${forge}.insteadOf"
+git -C "${work}" remote remove rewritten
+# A URL can carry a token, and this line is copied into reports. The stand-in runs the command git
+# asks the remote for on this machine, so an ssh URL with credentials in it reaches the fixture.
+cat > "${adopt}/local-ssh" <<'SSH'
+#!/bin/sh
+for last in "$@"; do :; done
+exec sh -c "$last"
+SSH
+chmod +x "${adopt}/local-ssh"
+git -C "${work}" remote add withtoken "ssh://tokenuser7f3a:hunter2@token.invalid${forge}"
+set +e
+out="$(GIT_SSH_COMMAND="${adopt}/local-ssh" GIT_SSH_VARIANT=ssh adopt_run --installed "${cur}" --remote withtoken)"; rc=$?
+set -e
+git -C "${work}" remote remove withtoken
+[ "${rc}" -eq 0 ] || fail "a remote reached over the ssh stand-in must exit 0, got ${rc}: ${out}"
+case "${out}" in
+  *hunter2*|*tokenuser7f3a*) fail "the pin source printed the credentials written into the remote URL: ${out}" ;;
+esac
+case "${out}" in
+  *"read from the remote by this check at ssh://token.invalid${forge}"*)
+    ok "the pin source prints a remote URL without the credentials written into it" ;;
+  *) fail "the pin source does not name the remote's location without its credentials: ${out}" ;;
+esac
 
 # Anything this checkout wrote itself cannot show what the deployment adopted. Each of these named
 # the working tree's own HEAD and, before they were refused, printed CURRENT with "adopted" beside it.
@@ -2016,6 +2070,37 @@ else
   fail "a named adopted ref must be used as given, got $? — ${out}"
 fi
 
+# The default branch's tip is advertised, but its commit cannot be brought in (monorepo#3824). The
+# working tree's own pin matches this install, so a fallback to it would print CURRENT and exit 0:
+# the install is in fact behind what the deployment adopted, as the arm above shows.
+git -C "${forge}" -c commit.gpgsign=false commit -q --allow-empty -m 'a tip the working repository does not have'
+unfetched_commit="$(git -C "${forge}" rev-parse HEAD)"
+if git -C "${work}" cat-file -e "${unfetched_commit}^{commit}" 2>/dev/null; then
+  fail "fixture: the working repository already has the tip it is supposed to be unable to fetch"
+fi
+real_git_path="$(command -v git)"
+mkdir -p "${adopt}/fetchless"
+cat > "${adopt}/fetchless/git" <<SHIM
+#!/bin/sh
+# The real git for everything except bringing objects in.
+for arg in "\$@"; do
+  if [ "\$arg" = fetch ]; then
+    : > "${adopt}/fetchless/refused"
+    exit 128
+  fi
+done
+exec "${real_git_path}" "\$@"
+SHIM
+chmod +x "${adopt}/fetchless/git"
+PATH="${adopt}/fetchless:${PATH}" expect_adopted_unknown "a default-branch tip that cannot be fetched" \
+  "the default-branch tip ${unfetched_commit} of remote 'origin' is not in the local object database and could not be fetched"
+[ -e "${adopt}/fetchless/refused" ] \
+  || fail "fixture: the check never tried to fetch the advertised tip, so this arm proves nothing"
+if git -C "${work}" cat-file -e "${unfetched_commit}^{commit}" 2>/dev/null; then
+  fail "fixture: the advertised tip reached the working repository although its fetch was refused"
+fi
+ok "a refused fetch leaves the advertised tip out of the working repository"
+
 # 14e. UNADOPTED — the two pins differ and share no history, so which side moved is not established.
 unrelated_commit="$(git -C "${work}" -c commit.gpgsign=false commit-tree -m 'unrelated root' "${rollout_commit}^{tree}")"
 if out="$(adopt_run --adopted-ref "${unrelated_commit}" --installed "${proposed_install}")"; then
@@ -2076,5 +2161,74 @@ case "${section}" in
     ok "the contract says HEAD's gitlink is a proposal on a rollout branch" ;;
   *) fail "the plugin contract section lets the fallback follow an unmerged proposal" ;;
 esac
+# The always-on core says "the pinned gitlink" in one line every session reads. Since the verdict
+# moved to the adopted pin there are two gitlinks that phrase could mean, and a run on a rollout
+# branch would follow its own proposal (monorepo#3824). The line names the default branch in as few
+# words as it can: that file and a nested one together sit within 20 bytes of what Codex reads, so
+# the longer explanation stays in the guide, which the assertions above already pin.
+core="${repo_root}/AGENTS.md"
+[ -r "${core}" ] || fail "cannot read ${core}"
+core_rule="$(awk '/^- \*\*Before acting on a plugin-sourced role\*\*/ { on = 1 } on && /^- / && !/Before acting on a plugin-sourced role/ { exit } on' "${core}")"
+[ -n "${core_rule}" ] || fail "AGENTS.md no longer carries the plugin-sourced-role rule this test reads"
+# Every mention of a gitlink in that rule must name the default branch, so adding the words in one
+# place does not leave a bare "the pinned gitlink" beside it. The rule is read with its line breaks
+# folded, so re-wrapping the paragraph cannot hide or fake a mention.
+core_reading() {
+  printf '%s\n' "$1" | awk '
+    { text = text " " $0 }
+    END {
+      gsub(/[[:space:]]+/, " ", text)
+      if (!index(text, "gitlink")) { print "none"; exit }
+      gsub(/the default branch.s (pinned )?gitlink/, "", text)
+      print (index(text, "gitlink") ? "bare" : "named")
+    }'
+}
+case "$(core_reading "${core_rule}")" in
+  named) ok "the always-on core says which pin \"the pinned gitlink\" means" ;;
+  bare) fail "AGENTS.md names a gitlink without saying it is the default branch's: ${core_rule}" ;;
+  *) fail "AGENTS.md no longer says which gitlink a run follows on DRIFT or UNKNOWN: ${core_rule}" ;;
+esac
+# Controls: the sentence this replaced reads as bare, and a rule naming no gitlink reads as none.
+[ "$(core_reading "follow the reviewed definition at the pinned
+  gitlink and report it")" = bare ] ||
+  fail "the reading of the core rule accepts the bare phrase it exists to refuse"
+[ "$(core_reading "follow the reviewed definition and report it")" = none ] ||
+  fail "the reading of the core rule accepts a rule that names no gitlink"
+ok "the reading of the core rule refuses the bare phrase and a rule with no gitlink"
+
+# ── 16. ONE bounded remote call, in the two scripts that carry it (monorepo#3824) ──
+# worktree-claim.sh and the currency check each bound their remote git calls with the same
+# function. They were two copies, and a fix to one never reached the other: the currency check
+# learned to keep the ssh command a repository configures and to set a connect timeout, and the
+# claim helper went on replacing it with plain `ssh`. The statements must stay identical, so the
+# comparison leaves out only comments and blank lines, where the two explain different callers.
+bounded_statements() {
+  awk '
+    /^bounded_remote\(\) \{$/ { on = 1 }
+    on && !/^[[:space:]]*#/ && !/^[[:space:]]*$/ { print }
+    on && /^\}$/ { closed = 1; exit }
+    END { if (!on || !closed) exit 1 }
+  ' "$1"
+}
+claim_script="${repo_root}/.claude/scripts/worktree-claim.sh"
+currency_copy="$(bounded_statements "${script}")" \
+  || fail "cannot find a complete bounded_remote in ${script}"
+claim_copy="$(bounded_statements "${claim_script}")" \
+  || fail "cannot find a complete bounded_remote in ${claim_script}"
+[ "$(printf '%s\n' "${currency_copy}" | wc -l)" -gt 10 ] \
+  || fail "the bounded_remote read from ${script} is too short to be the function"
+if [ "${currency_copy}" = "${claim_copy}" ]; then
+  ok "the two copies of bounded_remote are the same statements"
+else
+  fail "bounded_remote differs between plugin-definition-currency.sh and worktree-claim.sh — make the same change in both:
+$(diff <(printf '%s\n' "${currency_copy}") <(printf '%s\n' "${claim_copy}") || true)"
+fi
+# The comparison must be able to fail: one changed statement in a copy of either script is seen.
+sed 's/-o BatchMode=yes //' "${claim_script}" > "${tmp}/worktree-claim.changed.sh"
+changed_copy="$(bounded_statements "${tmp}/worktree-claim.changed.sh")" \
+  || fail "cannot find bounded_remote in the changed copy"
+[ "${changed_copy}" != "${currency_copy}" ] \
+  || fail "control: a copy of worktree-claim.sh with one statement changed still compares equal"
+ok "control — a changed statement in one copy is seen"
 
 echo "plugin-definition-currency: ${pass_count} assertions passed"
