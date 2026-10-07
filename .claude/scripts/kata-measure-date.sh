@@ -119,22 +119,35 @@ fi
 # PARAGRAPH: on the body's first line, after a blank line, or directly under the other date line.
 # The rule used to be the reverse, a list of the places a line does NOT count (in a quote, after a
 # quoted line, after a line that cannot end a quote ...), and three review rounds each found one
-# more such place. Markdown has too many of them for a line scanner to enumerate. A blank line
-# settles nearly all of them at once: it ends a paragraph, a quote's lazy continuation and an HTML
-# block opened by a tag, so the line after it starts a block of its own.
+# more such place. A blank line settles nearly all of them at once: it ends a paragraph, a quote's
+# lazy continuation and an HTML block opened by a tag, so the line after it starts a block of its
+# own. A date line anywhere else is not guessed at. It prints a placeholder that is no date, so
+# the verdict is UNKNOWN malformed and the line gets repaired; it is never silently counted.
 #
-# What a blank line does NOT end is tracked as a state, and a line inside one is an example or an
-# instruction, never this Kata's date: a ``` or ~~~ fence, an HTML comment, and the other HTML
-# blocks that run to an end marker (<pre>, <script>, <style>, <textarea>, <?, <!LETTER and
-# <![CDATA[). A line quoted with `>` or indented four spaces or a tab (a code block) is not a date
-# line at all.
+# WHAT A BLANK LINE DOES NOT END is followed in two layers, the way the page is produced. Each
+# rule here was checked against the forge's own renderer (POST /markdown) on 2026-10-07; the
+# property kept is that a line the page does not show as a rendered bold label is never counted.
+#   Blocks, as CommonMark defines them. A line inside one is an example and is not read:
+#     - a ``` or ~~~ fence. One opened on a list item line ends with the item. One opened on an
+#       indented line may or may not sit inside a list item, so a less indented line inside it
+#       cannot be placed: a fence line there is read as opening a fence, and after any other
+#       line nothing more is read;
+#     - an HTML block that runs to an end marker: <pre>, <script>, <style> or <textarea> to the
+#       closing tag, <!-- to -->, <? to ?>, <! and a letter to >, <![CDATA[ to ]]>. It opens only
+#       on a line indented at most three spaces (deeper is code), and one opened inside a quote or
+#       a list item ends with it. One opened on an indented line has the fence's problem, and
+#       after a less indented line inside it nothing more is read.
+#   HTML comments, as the browser reads the result. Only text the renderer passes through as raw
+#   HTML can open or close one: a line inside an HTML block, including a block opened by any other
+#   tag, which runs to the next blank line and is placed by the same rules, though a line inside it
+#   is not hidden. `<!--` in ordinary text or in a code span is escaped,
+#   so it opens nothing; `-->` in ordinary text is escaped too, so it closes nothing. A comment
+#   opened in raw HTML therefore stays open, across blank lines and past the end of the block it
+#   opened in, until a `-->` that is raw HTML as well. A line inside one is not on the page.
+# A line quoted with `>` or indented four spaces or a tab (a code block) is not a date line at all.
 #
-# A date line anywhere else (under a line of text, a quoted line, a heading, a closed fence) is
-# not guessed at. It prints a placeholder that is no date, so the verdict is UNKNOWN malformed and
-# the line gets repaired; it is never silently counted and never silently dropped.
-#
-# The patterns spell out "up to three spaces" as ` ? ? ?`, and a date as digit by digit, because
-# the awk on CI's runners has no {n,m} intervals.
+# The patterns spell out "up to three spaces" as ` ? ? ?`, and a date digit by digit, because the
+# awk on CI's runners has no {n,m} intervals.
 # A NUL byte is replaced by another control character first. BSD awk ends a line at a NUL, which
 # would hide the rest of that line (a comment opener, or trailing words that make a value
 # malformed) from the scan. It is replaced, never deleted: deleting one inside `2026-0<NUL>9-20`
@@ -153,7 +166,6 @@ marked_values() {
   # Fences follow CommonMark: an opening run of three or more backticks or tildes indented at most
   # three spaces (or opened within a list item), closed only by a run of the same character at
   # least as long, with nothing after it but whitespace.
-  function unindent(s) { sub(/^ ? ? ?/, "", s); return s }
   function unindent_fence(s, extra,    k) {
     k = 3 + extra
     while (k > 0 && substr(s, 1, 1) == " ") {
@@ -163,26 +175,100 @@ marked_values() {
     return s
   }
   function run(s, c,    k) { k = 0; if (c == "") return 0; while (substr(s, k + 1, 1) == c) k++; return k }
-  function unclosed_comment(rem,    p, q) {
-    while ((p = index(rem, "<!--")) > 0) {
-      rem = substr(rem, p + 4)
-      q = index(rem, "-->")
-      if (q == 0) return 1
-      rem = substr(rem, q + 3)
+  function spaces(s,    k) { k = 0; while (substr(s, k + 1, 1) == " ") k++; return k }
+  # fence_opens(line): does this line open a fence? Sets open_char and open_len to its run,
+  # open_pfx to its indentation and open_marker to the width of a list marker before the run.
+  function fence_opens(s,    u) {
+    open_pfx = 0
+    while (open_pfx < 3 && substr(s, 1, 1) == " ") {
+      s = substr(s, 2)
+      open_pfx++
     }
+    open_marker = 0
+    u = s
+    if (match(u, /^([-+*]|[0-9]+[.)])[ \t]+/)) {
+      open_marker = RLENGTH
+      u = substr(u, RLENGTH + 1)
+    }
+    open_char = substr(u, 1, 1)
+    open_len = run(u, open_char)
+    # A backtick fence info string cannot contain a backtick; such a line is inline code.
+    return ((open_char == "`" || open_char == "~") && open_len >= 3 && !(open_char == "`" && index(substr(u, open_len + 1), "`") > 0))
+  }
+  # indent(line): the width of its leading whitespace, a tab reaching the next multiple of four.
+  function indent(s,    k, i, c) {
+    k = 0
+    i = 1
+    while (1) {
+      c = substr(s, i, 1)
+      if (c == " ") k++
+      else if (c == "\t") k += 4 - (k % 4)
+      else break
+      i++
+    }
+    return k
+  }
+  # content(line): the line without its quote and list markers, or "" when what is left is
+  # indented as code (four or more spaces, or a tab). It also records where the line sits:
+  # first_quote is 1 when its outermost container is a quote, first_item is the column a list
+  # item holds its content at when the outermost container is a list item (else 0), and
+  # first_pad is the indentation of a line that carries no marker at all (else 0).
+  function content(s,    k, depth, at) {
+    first_quote = 0
+    first_item = 0
+    first_pad = 0
+    depth = 0
+    at = 0
+    while (1) {
+      k = spaces(s)
+      if (k > 3 || substr(s, k + 1, 1) == "\t") return ""
+      if (depth == 0) first_pad = k
+      s = substr(s, k + 1)
+      at += k
+      if (substr(s, 1, 1) == ">") {
+        if (depth == 0) { first_quote = 1; first_pad = 0 }
+        depth++
+        s = substr(s, 2)
+        at++
+        if (substr(s, 1, 1) == " ") { s = substr(s, 2); at++ }
+        continue
+      }
+      if (match(s, /^([-+*]|[0-9]+[.)])[ \t]/)) {
+        at += RLENGTH - 1
+        s = substr(s, RLENGTH)
+        if (substr(s, 1, 1) == "\t") { s = substr(s, 2); at++ }
+        else {
+          # One to four spaces after the marker belong to it; of five or more only one does, and
+          # the rest indent the content as code.
+          k = spaces(s)
+          if (k > 4) k = 1
+          s = substr(s, k + 1)
+          at += k
+        }
+        if (depth == 0) { first_item = at; first_pad = 0 }
+        depth++
+        continue
+      }
+      return s
+    }
+  }
+  # outside(quoted, item, pad): has the current line left the container an HTML block opened in?
+  # 0 is no. 1 is yes: a block opened inside a quote ends at the first line that is not quoted,
+  # and one opened inside a list item at the first line indented less than the item. 2 is cannot
+  # tell: a block opened on an indented line with no marker may sit inside a list item, which a
+  # less indented line then ended, or at the top level, where that line is still part of it.
+  function outside(quoted, item, pad) {
+    if (quoted) return ($0 !~ /^ ? ? ?>/) ? 1 : 0
+    if (blank) return 0
+    if (item > 0 && indent($0) < item) return 1
+    if (pad > 0 && indent($0) < pad) return 2
     return 0
   }
-  # raw_html(line): the kind of HTML block this line opens that a blank line does not end, or 0.
-  # CommonMark numbers them: 1 is <pre>, <script>, <style> or <textarea>; 3 is <?; 4 is <! and a
-  # letter; 5 is <![CDATA[. (Kind 2 is the comment, which has its own rule.) Quote and list
-  # markers before the tag are skipped, so a block opened inside a list item is seen too. A block
-  # inside a quote really ends with the quote; here it runs to its end marker, which can only hide
-  # a line, never count one. raw_rest is the line from the tag on.
-  function raw_html(s,    t, l) {
-    t = s
-    while (t ~ /^[ \t]*(>|[-+*][ \t]|[0-9]+[.)][ \t])/) sub(/^[ \t]*(>|[-+*]|[0-9]+[.)])[ \t]*/, "", t)
-    sub(/^[ \t]+/, "", t)
-    raw_rest = t
+  # html_block(content): the kind of HTML block with an end marker that this line opens, or 0.
+  # CommonMark numbers them: 1 is <pre>, <script>, <style> or <textarea>; 2 is the comment; 3 is
+  # <?; 4 is <! and a letter; 5 is <![CDATA[.
+  function html_block(t,    l) {
+    if (t ~ /^<!--/) return 2
     l = tolower(t)
     if (l ~ /^<(pre|script|style|textarea)([ \t>]|$)/) return 1
     if (t ~ /^<\?/) return 3
@@ -190,87 +276,166 @@ marked_values() {
     if (t ~ /^<![A-Za-z]/) return 4
     return 0
   }
-  # raw_html_ends(line, kind): does this line carry the end marker of that kind of block?
-  function raw_html_ends(s, kind,    l) {
+  # html_block_ends(line, kind): does this line carry the end marker of that kind of block?
+  function html_block_ends(s, kind,    l) {
     if (kind == 1) {
       l = tolower(s)
       return (index(l, "</pre>") > 0 || index(l, "</script>") > 0 || index(l, "</style>") > 0 || index(l, "</textarea>") > 0)
     }
+    if (kind == 2) return index(s, "-->") > 0
     if (kind == 3) return index(s, "?>") > 0
     if (kind == 4) return index(s, ">") > 0
     return index(s, "]]>") > 0
   }
-  { sub(/\r$/, "") }
-  # An HTML comment and an HTML block that runs to an end marker each stay open until their own
-  # end marker, whatever the lines between hold, and either can open inside the other. Both are
-  # followed on every such line, and a line is hidden while either is open.
-  in_comment || raw_kind > 0 {
-    if (raw_kind > 0) {
-      if (raw_html_ends($0, raw_kind)) raw_kind = 0
-    } else {
-      kind = raw_html($0)
-      if (kind > 0 && !raw_html_ends(raw_rest, kind)) raw_kind = kind
-    }
-    if (in_comment) {
-      p = index($0, "-->")
-      if (p > 0) in_comment = unclosed_comment(substr($0, p + 3))
-    } else if (unclosed_comment($0)) in_comment = 1
-    fresh = 0
-    next
+  # tag_block(content): does this line open an HTML block that runs to the next blank line? That
+  # is a line starting with one of the block-level tags CommonMark lists (kind 6), or a line that
+  # is one complete tag and nothing else (kind 7). A paragraph that merely starts with an inline
+  # tag, or with an autolink, is ordinary text.
+  function tag_block(t,    l) {
+    l = tolower(t)
+    if (l ~ /^<\/?(address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)([ \t>]|\/>|$)/) return 1
+    if (t ~ /^<\/?[A-Za-z][A-Za-z0-9-]*([ \t][^<>]*|\/)?>[ \t]*$/) return 1
+    return 0
   }
+  # comments(raw): follow the comment openers and closers on a line of raw HTML, in order. `live`
+  # is 1 while a comment is open. `<!-->` and `<!--->` are complete, empty comments.
+  function comments(s,    p) {
+    while (1) {
+      if (live) {
+        p = index(s, "-->")
+        if (p == 0) return
+        live = 0
+        s = substr(s, p + 3)
+      } else {
+        p = index(s, "<!--")
+        if (p == 0) return
+        s = substr(s, p + 4)
+        if (substr(s, 1, 1) == ">") s = substr(s, 2)
+        else if (substr(s, 1, 2) == "->") s = substr(s, 3)
+        else live = 1
+      }
+    }
+  }
+  # settle(): the line is ordinary text. A blank line starts a paragraph; a date line is read or
+  # reported; anything else leaves the next line inside a paragraph.
+  function settle(    v, starts) {
+    if ($0 ~ /^[ \t]*$/) { fresh = 1; return }
+    if ($0 ~ dateline) {
+      starts = fresh
+      fresh = (starts && $0 ~ whole)
+      if (!live && $0 ~ marker) {
+        v = $0
+        sub(marker "[ \t]*", "", v)
+        sub(/[ \t]+$/, "", v)
+        # A line that does not start a paragraph, and an empty value, each become a placeholder
+        # that is no date. Validation must see both: neither may be dropped, and command
+        # substitution would strip a trailing empty line.
+        if (!starts) print "(misplaced)"
+        else print (v == "" ? "(empty)" : v)
+      }
+      return
+    }
+    fresh = 0
+  }
+  { sub(/\r$/, ""); blank = ($0 ~ /^[ \t]*$/) }
+  lost { next }
   fence_len > 0 {
-    t = unindent_fence($0, fence_indent)
-    n = run(t, fence_char)
-    if (n >= fence_len && substr(t, n + 1) ~ /^[ \t]*$/) { fence_len = 0; fence_indent = 0 }
+    ended = 0
+    if (!blank && fence_item > 0 && indent($0) < fence_item) {
+      # Opened on a list item line, the fence ends with the item: at the first line indented
+      # less than the item. That line is then read like any other, and may open a fence itself.
+      ended = 1
+    } else if (!blank && fence_maybe > 0 && indent($0) < fence_maybe) {
+      # Opened on an indented line with no marker, the fence may sit inside a list item, and
+      # then this less indented line ended both; or it sits at the top level, and this line is
+      # its content or its closing fence. A fence line is read as OPENING a fence, which hides
+      # what follows under either reading. Any other line cannot be placed at all, so nothing
+      # after it is read.
+      if (fence_opens($0)) ended = 1
+      else {
+        lost = 1
+        next
+      }
+    }
+    if (!ended) {
+      t = unindent_fence($0, fence_item)
+      n = run(t, fence_char)
+      if (n >= fence_len && substr(t, n + 1) ~ /^[ \t]*$/) { fence_len = 0; fence_item = 0; fence_maybe = 0 }
+      # A blank line still counts as one if the item, and the fence with it, ends on the next line.
+      fresh = blank
+      next
+    }
+    fence_len = 0
+    fence_item = 0
+    fence_maybe = 0
+  }
+  # A line that left the container a block opened in is read like any other. One that cannot be
+  # placed is raw HTML under one reading and ordinary text under the other, and no reading of it
+  # is safe under both, so nothing after it is read.
+  block_kind > 0 {
+    where = outside(block_quoted, block_item, block_pad)
+    if (where == 2) {
+      lost = 1
+      next
+    }
+    if (where == 1) block_kind = 0
+    else {
+      comments($0)
+      if (html_block_ends($0, block_kind)) block_kind = 0
+      # A blank line still counts as one if the container, and the block with it, ends next.
+      fresh = blank
+      next
+    }
+  }
+  in_tag_block {
+    where = (blank ? 1 : outside(tag_quoted, tag_item, tag_pad))
+    if (where == 2) {
+      lost = 1
+      next
+    }
+    if (where == 1) in_tag_block = 0
+    else {
+      comments($0)
+      settle()
+      next
+    }
+  }
+  fence_opens($0) {
+    fence_char = open_char
+    fence_len = open_len
+    # The column a list item holds its content at, when the fence opens on the item line; else
+    # the indentation of a fence that may or may not sit inside an item.
+    fence_item = (open_marker > 0 ? open_pfx + open_marker : 0)
+    fence_maybe = (open_marker > 0 ? 0 : open_pfx)
     fresh = 0
     next
   }
   {
-    t = $0
-    pfx = 0
-    while (pfx < 3 && substr(t, 1, 1) == " ") {
-      t = substr(t, 2)
-      pfx++
+    t = content($0)
+    kind = html_block(t)
+    if (kind > 0) {
+      comments(t)
+      # A block whose first line also carries its end marker is that one line.
+      if (!html_block_ends(t, kind)) {
+        block_kind = kind
+        block_quoted = first_quote
+        block_item = first_item
+        block_pad = first_pad
+      }
+      fresh = 0
+      next
     }
-    extra = 0
-    u = t
-    if (u ~ /^([-+*]|[0-9]+[.)])[ \t]+/) {
-      match(u, /^([-+*]|[0-9]+[.)])[ \t]+/)
-      extra = RLENGTH
-      u = substr(u, RLENGTH + 1)
-    }
-    c = substr(u, 1, 1)
-    n = run(u, c)
-    # A backtick fence info string cannot contain a backtick; such a line is inline code.
-    if ((c == "`" || c == "~") && n >= 3 && !(c == "`" && index(substr(u, n + 1), "`") > 0)) {
-      fence_char = c; fence_len = n; fence_indent = pfx + extra; fresh = 0; next
+    if (tag_block(t)) {
+      in_tag_block = 1
+      tag_quoted = first_quote
+      tag_item = first_item
+      tag_pad = first_pad
+      comments(t)
+      fresh = 0
+      next
     }
   }
-  {
-    kind = raw_html($0)
-    # A block whose first line also carries its end marker is that one line. The same line can
-    # open a comment as well, and then both are open.
-    if (kind > 0 && !raw_html_ends(raw_rest, kind)) raw_kind = kind
-    if (unclosed_comment($0)) in_comment = 1
-    if (kind > 0 || in_comment) { fresh = 0; next }
-  }
-  /^[ \t]*$/ { fresh = 1; next }
-  $0 ~ dateline {
-    starts = fresh
-    fresh = (starts && $0 ~ whole)
-    if ($0 ~ marker) {
-      v = $0
-      sub(marker "[ \t]*", "", v)
-      sub(/[ \t]+$/, "", v)
-      # A line that does not start a paragraph, and an empty value, each become a placeholder that
-      # is no date. Validation must see both: neither may be dropped, and command substitution
-      # would strip a trailing empty line.
-      if (!starts) print "(misplaced)"
-      else print (v == "" ? "(empty)" : v)
-    }
-    next
-  }
-  { fresh = 0 }'
+  { settle() }'
 }
 
 # one_date <label> <unknown-suffix> — prints the single calendar date the body names on that line,

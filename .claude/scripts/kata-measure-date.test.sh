@@ -135,8 +135,13 @@ expect "a one-line HTML comment changes nothing after it" 1 "NOT-DUE 2026-10-20"
   "$(kata $'<!-- note -->\n\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "a comment reopened on a closing line hides subsequent markers" 2 "UNKNOWN missing" \
   "$(kata $'<!-- first\n--> <!-- second\n**Measure on:** 2099-01-01\n-->' 2026-09-25)"
-expect "a comment closed and reopened on a closing line does not conflict with the real line" 1 "NOT-DUE 2026-10-20" \
+# The reopened comment is raw HTML, and the `-->` under the hidden line is ordinary text, which the
+# renderer escapes. So that comment never closes and the page shows nothing after it. This case
+# used to expect the last line to count; the forge's renderer, asked on 2026-10-07, hides it.
+expect "a closer in ordinary text does not end a comment reopened on a closing line" 2 "UNKNOWN missing" \
   "$(kata $'<!-- first\n--> <!-- second\n**Measure on:** 2099-01-01\n-->\n\n**Measure on:** 2026-10-20' 2026-09-25)"
+expect "a closer on a line of raw HTML does end it" 1 "NOT-DUE 2026-10-20" \
+  "$(kata $'<!-- first\n--> <!-- second\n**Measure on:** 2099-01-01\n\n<p>-->\n\n**Measure on:** 2026-10-20' 2026-09-25)"
 
 # Without `today` the helper uses the current UTC date; far past and far future are stable.
 expect "without today, a far-past date is DUE" 0 "DUE 2000-01-01" "$(kata $'**Measure on:** 2000-01-01')"
@@ -292,15 +297,117 @@ expect "a delivery line inside a <pre> block opened in a list item is an example
   "$(solo "${own}"$'\n- <pre>\n\n  **Delivered on:** 2026-09-20\n  </pre>' 2026-09-25 "${none}")"
 expect "a measurement line inside a <pre> block is an example, not this Kata's date" 2 "UNKNOWN missing" \
   "$(kata $'<pre>\n\n**Measure on:** 2026-10-20\n\n</pre>' 2026-09-25)"
-# A comment and such a block can open inside one another, and each lasts to its own end marker.
 expect "a comment opened on the line that opens <pre> does not end the block" 0 "UNDELIVERED 2026-10-20" \
   "$(solo "${own}"$'\n<pre><!-- note\n-->\n\n**Delivered on:** 2026-09-20\n\n</pre>' 2026-09-25 "${none}")"
-expect "a comment opened inside <pre> outlives the block" 0 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}"$'\n<pre>\n<!--\n</pre>\n\n**Delivered on:** 2026-09-20\n\n-->' 2026-09-25 "${none}")"
-expect "a <pre> block opened inside a comment outlives the comment" 0 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}"$'\n<!--\n<pre>\n-->\n\n**Delivered on:** 2026-09-20\n\n</pre>' 2026-09-25 "${none}")"
 expect "a delivery line after a comment that held a whole <pre> block counts" 1 "NOT-DUE 2026-10-20" \
   "$(solo "${own}"$'\n<!--\n<pre>\nexample\n</pre>\n-->\n\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+
+# ── Measured against the forge's own renderer ────────────────────────────────────────────────────
+# Each body below was sent to the forge's Markdown endpoint on 2026-10-07 (POST /markdown with
+# the body as `text`, `mode` gfm and this repository as `context`) and the result read for the
+# delivery line. `shown` cases came back with the line as a rendered bold label, that is with
+# `<strong>Delivered on:</strong>` in the HTML; `hidden` cases came back with it as raw text, as
+# code, or not at all. The property that matters is the second: a line the page does not show as
+# the record must never count as one. In all 99 bodies measured, none did. The format's %s is
+# the line.
+measured() { # measured <want-exit> <want-stdout> <label> <printf format of the text under the measure line>
+  local text
+  # shellcheck disable=SC2059 # the format is the case itself
+  text="$(printf -- "$4" '**Delivered on:** 2026-09-20')"
+  expect "$3" "$1" "$2" "$(solo "${own}"$'\n'"${text}" 2026-09-25 "${none}")"
+}
+shown() { measured 1 "NOT-DUE 2026-10-20" "the page shows it, so it counts: $1" "$2"; }
+hidden() { measured 0 "UNDELIVERED 2026-10-20" "the page does not show it, so it does not count: $1" "$2"; }
+# shellcheck disable=SC2016 # backticks are literal Markdown in the cases, not substitutions
+{
+# An HTML comment exists only where the renderer passes text through as raw HTML. In ordinary
+# text and in code the opener is escaped, so nothing after it is hidden.
+shown "a code span holding a comment opener" 'The token `<!--` starts a comment.\n\n%s'
+shown "a comment opener left open in a paragraph" 'text <!-- x\n\n%s\n\n-->'
+shown "a four-space-indented comment opener, which is code" 'Example:\n\n    <!--\n\n%s\n\n    -->'
+shown "a fence holding a comment opener" '```\n<!--\n```\n\n%s'
+shown "a paragraph that starts with an inline tag and holds an opener" '<span>x</span> <!--\n\n%s'
+shown "a paragraph that starts with an autolink and holds an opener" '<https://example.com> <!--\n\n%s'
+shown "a tag with attributes and more text on its line, holding an opener" '<a href="x"> <!--\n\n%s'
+shown "an opener in a paragraph, then a fence holding a closer" 'text <!--\n```\n-->\n```\n\n%s'
+# In raw HTML it is a comment, and it stays open across blank lines and past the block it opened in.
+hidden "a multi-line comment with blank lines" '<!--\n\n%s\n\n-->'
+hidden "a comment opened on a block-level tag line" '<div> <!--\n\n%s\n\n-->'
+hidden "a comment opened on a closing tag line" '</div> <!--\n\n%s'
+hidden "a comment opened on a text line inside a tag-opened block" '<div>\ntext <!--\n\n%s\n\n-->'
+hidden "a comment opened under a line that is one complete tag" '<a href="x">\ntext <!--\n\n%s'
+hidden "a comment opened inside <pre>, after the block has closed" '<pre>\n<!--\n</pre>\n\n%s\n\n-->'
+hidden "a comment opened inside <pre> and never closed" '<pre>\n<!--\n</pre>\n\n%s'
+hidden "a comment opened inside <script>, after the block has closed" '<script>\n<!--\n</script>\n\n%s'
+hidden "a comment opened inside <textarea>, after the block has closed" '<textarea>\n<!--\n</textarea>\n\n%s'
+hidden "a comment block that interrupts a paragraph" 'text\n<!--\n\n%s\n\n-->'
+hidden "a second comment left open on the line that closed the first" '<!-- a --> <!-- b\n\n%s'
+hidden "a comment opened on a list item line" '- <!--\n\n  %s\n  -->'
+hidden "a comment that only --!> tries to close" '<!--\na --!>\n\n%s'
+# Only a closer that is raw HTML too can end it.
+hidden "a comment opened in raw HTML, after a closer in a paragraph" '<div> <!--\n\nx\n\n-->\n\n%s'
+hidden "a comment reopened on a closing line, after a closer in a paragraph" '<!-- first\n--> <!-- second\n\nx\n\n-->\n\n%s'
+shown "a comment opened in raw HTML, after a closer on a tag line" '<div> <!--\n\nx\n\n<p>-->\n\n%s'
+shown "a comment opened and closed inside <pre>" '<pre>\n<!--\n-->\n</pre>\n\n%s'
+shown "a comment opened and closed inside <details>" '<details>\n<!--\nnote\n-->\n\n%s\n</details>'
+shown "balanced comments inside a tag-opened block" '<div><!-- a -->\ntext <!--\nb -->\n\n%s'
+shown "a stray closer inside a tag-opened block" '<div>\n-->\n\n%s'
+shown "the empty comment <!-->" '<!-->\n\n%s'
+shown "a comment closed with more text on its line" '<!-- a --> text\n\n%s'
+# A block inside a comment is part of the comment, and a tag inside a tag-opened block is part of it.
+shown "<pre> opened inside a comment, after the comment has closed" '<!--\n<pre>\n-->\n\n%s\n\n</pre>'
+shown "a fence marker inside a comment, after the comment has closed" '<!--\n```\n-->\n\n%s\n\n```'
+shown "<pre> inside a tag-opened block, after its blank line" '<div>\n<pre>\n\n%s\n\n</pre>'
+shown "<details> with its summary and a text line, after a blank line" '<details>\n<summary>x</summary>\nsome text\n\n%s'
+# An HTML block opens only on a line indented at most three spaces; deeper is code.
+shown "a four-space-indented <pre>, which is code" 'Example:\n\n    <pre>\n\n%s'
+shown "a tab-indented <pre>, which is code" '\t<pre>\n\n%s'
+hidden "a four-space-indented line after a blank line, which is code" 'text\n\n    %s'
+# A block or a fence opened inside a quote or a list item ends with it.
+shown "a quoted <pre> left open, after the quote has ended" '> <pre>\n\n%s'
+shown "<pre> left open in a list item, after the item has ended" '- <pre>\n\n%s'
+shown "a comment block inside a list item, after it has closed" '- item\n  <!--\n  note\n  -->\n\n%s'
+shown "a comment inside an ordered item, after the next item" '1. step\n   <!-- note\n   more -->\n2. next\n\n%s'
+shown "a quoted comment block, after it has closed" '> <!--\n> note\n> -->\n\n%s'
+shown "an indented comment block, after it has closed" '  <!--\n  note\n  -->\n\n%s'
+hidden "a quoted line inside a quoted <pre>" '> <pre>\n>\n> %s\n> </pre>'
+shown "a fence inside an ordered item, after it has closed" '1. step\n   ```\n   code\n   ```\n\n%s'
+shown "a fence on a list item line, after it has closed" '- ```\n  code\n  ```\n\n%s'
+shown "a fence left open in a list item, after the item has ended" '- ```\n  code\n\n%s'
+shown "a quoted fence left open, after the quote has ended" '> ```\n> code\n\n%s'
+hidden "a fence opened at the margin after a list item left its own open" '- ```\n  code\n```\n\n%s\n```'
+hidden "a fence opened at the margin after an indented one in a list item" '- item\n  ```\n  code\n```\n\n%s\n```'
+hidden "a fence opened at the margin after a quoted one left open" '> ```\n> code\n```\n\n%s\n```'
+hidden "a deeper fence line inside a one-space fence, which is its content" ' ```\n    ```\n\n%s\n ```'
+hidden "a fence opened after an outdented line ended an indented one in a list item" '- item\n  ```\noutdented\n  ```\n\n%s\n  ```'
+# A tag-opened block is placed by the same rules, because its lines are raw HTML and can open a
+# comment, while the same lines outside it are ordinary text and cannot.
+shown "a quoted <div>, then an unquoted text line holding an opener" '> <div>\ntext <!--\n\n%s'
+shown "<div> on a list item line, then a text line at the margin holding an opener" '- <div>\ntext <!--\n\n%s'
+hidden "<div> on a list item line, then a text line inside the item holding an opener" '- <div>\n  text <!--\n\n%s'
+shown "an indented <details> whose lines are indented alike" '  <details>\n  <summary>x</summary>\n\n%s'
+hidden "an indented <div>, then a text line at the margin holding an opener" '  <div>\ntext <!--\n\n%s'
+hidden "<div> in a list item, then a fence at the margin around the line" '- item\n  <div>\n```\n\n%s\n```'
+hidden "a line at the margin that closes a comment and a <pre> left open in a list item" \
+  '<div> <!--\n\n- item\n  <pre>\noutdented --> </pre>\n\n%s'
+# Ordinary structure around the line changes nothing.
+shown "two blank lines above it" 'text\n\n\n%s'
+shown "a list item above it, the line at the margin" '- item\n\n%s'
+shown "three spaces of indentation" 'text\n\n   %s'
+shown "a table above it" '| a | b |\n|---|---|\n| 1 | 2 |\n\n%s'
+shown "a link reference definition above it" '[x]: https://example.com\n\n%s'
+# Some shapes the page DOES show are still not counted. A fence or an HTML block opened on an
+# indented line may sit inside a list item or at the top level, and a line scanner cannot tell
+# which. A fence line at the margin is then read as opening a fence even where it was closing one,
+# and any other less indented line stops the read. A line that is one inline tag is read as opening
+# a block even where it only continues a paragraph. Refusing a real record costs a repair; counting
+# an example would hide the work.
+refused() { measured 0 "UNDELIVERED 2026-10-20" "the page shows it, but it cannot be placed, so it does not count: $1" "$2"; }
+refused "an indented fence closed at the margin" '  ```\n  code\n```\n\n%s'
+refused "an indented comment block with lines at the margin" '  <!--\nnote\n-->\n\n%s'
+refused "<div> in a list item, then a text line at the margin holding an opener" '- item\n  <div>\ntext <!--\n\n%s'
+refused "a paragraph continued by a lone inline tag and a line holding an opener" 'text\n<span>\nmore <!--\n\n%s'
+}
 # A NUL byte inside a date must not be deleted: that would join the pieces into a date nobody wrote.
 expect "a NUL byte inside a delivery date leaves it malformed" 2 "UNKNOWN malformed-delivery" \
   "$(solo "${own}"$'\n**Delivered on:** 2026-0\x019-20' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
@@ -308,7 +415,7 @@ expect "a NUL byte inside a measurement date leaves it malformed" 2 "UNKNOWN mal
   "$(solo $'**Measure on:** 2026-1\x010-20' 2026-09-25 "${open1}" | sed 's/\\u0001/\\u0000/')"
 # A NUL byte ends a line for BSD awk, which hid whatever followed it on that line.
 expect "a comment opened after a NUL byte still hides the delivery line" 0 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}"$'\nx\x01<!--\n**Delivered on:** 2026-09-20\n-->' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
+  "$(solo "${own}"$'\n<div>\x01<!--\n\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
 expect "trailing words after a NUL byte still make a delivery line malformed" 2 "UNKNOWN malformed-delivery" \
   "$(solo "${own}"$'\n**Delivered on:** 2026-09-20\x01 not yet' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
 # Once the date arrives the Kata is actionable whatever was delivered, so delivery is not read.
@@ -356,23 +463,36 @@ expect_mutant "without the open sub-issue test a Kata with an open child reads U
 mutant closed-children-count 's/(\.sub_issues\.total - \.sub_issues\.completed) >= 1/.sub_issues.total >= 1/'
 expect_mutant "counting closed sub-issues hides a Kata whose children have all closed" closed-children-count \
   "NOT-DUE 2026-10-20" "$(solo "${own}" 2026-09-25 "${closed1}")"
-mutant no-paragraph-rule 's/^    starts = fresh$/    starts = 1/'
+mutant no-paragraph-rule 's/^      starts = fresh$/      starts = 1/'
 expect_mutant "without the paragraph rule a delivery line that continues a quote counts" no-paragraph-rule \
   "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 expect_mutant "without the paragraph rule a delivery line inside a tag-opened HTML block counts" no-paragraph-rule \
   "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n<div>\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-mutant no-html-block-state 's/^    if (kind > 0 && !raw_html_ends(raw_rest, kind)) raw_kind = kind$//'
+mutant no-html-block-state 's/^        block_kind = kind$/        block_kind = 0/'
 expect_mutant "without the HTML block state a delivery line inside <pre> counts" no-html-block-state \
   "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n<pre>\n\n**Delivered on:** 2026-09-20\n\n</pre>' 2026-09-25 "${none}")"
 # shellcheck disable=SC2016 # the expression matches the helper's own text; nothing here expands
-mutant no-comment-inside-block 's/^    } else if (unclosed_comment(\$0)) in_comment = 1$/    }/'
-expect_mutant "without it a comment opened inside <pre> closes with the block" no-comment-inside-block \
+mutant raw-lines-open-no-comment 's/^      comments(\$0)$//'
+expect_mutant "without following comments on raw HTML lines one opened inside <pre> hides nothing" raw-lines-open-no-comment \
   "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n<pre>\n<!--\n</pre>\n\n**Delivered on:** 2026-09-20\n\n-->' 2026-09-25 "${none}")"
-mutant no-block-inside-comment 's/^      if (kind > 0 && !raw_html_ends(raw_rest, kind)) raw_kind = kind$//'
-expect_mutant "without it a <pre> block opened inside a comment closes with the comment" no-block-inside-comment \
-  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n<!--\n<pre>\n-->\n\n**Delivered on:** 2026-09-20\n\n</pre>' 2026-09-25 "${none}")"
 # shellcheck disable=SC2016 # the expression matches the helper's own text; nothing here expands
-mutant any-date-line-chains 's/^    fresh = (starts && \$0 ~ whole)$/    fresh = starts/'
+mutant live-comment-ignored 's/^      if (!live && \$0 ~ marker) {$/      if (\$0 ~ marker) {/'
+expect_mutant "without the open-comment test a line the page hides counts" live-comment-ignored \
+  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n<div> <!--\n\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+# shellcheck disable=SC2016 # the expression matches the helper's own text; nothing here expands
+mutant item-fence-never-ends 's/^    if (!blank && fence_item > 0 && indent(\$0) < fence_item) {$/    if (0) {/'
+expect_mutant "without the list item rule a fence at the margin closes the one the item left open" item-fence-never-ends \
+  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n- ```\n  code\n```\n\n**Delivered on:** 2026-09-20\n```' 2026-09-25 "${none}")"
+# shellcheck disable=SC2016 # the expression matches the helper's own text; nothing here expands
+mutant indented-fence-trusted 's/^    } else if (!blank && fence_maybe > 0 && indent(\$0) < fence_maybe) {$/    } else if (0) {/'
+expect_mutant "without the indented fence rule a fence at the margin closes one that sat in a list item" indented-fence-trusted \
+  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n- item\n  ```\n  code\n```\n\n**Delivered on:** 2026-09-20\n```' 2026-09-25 "${none}")"
+# shellcheck disable=SC2016 # the expression matches the helper's own text; nothing here expands
+mutant indented-block-trusted 's/^    if (pad > 0 && indent(\$0) < pad) return 2$/    if (0) return 2/'
+expect_mutant "without the indented block rule a fence at the margin is read as raw HTML of a <div> in a list item" indented-block-trusted \
+  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n- item\n  <div>\n```\n\n**Delivered on:** 2026-09-20\n```' 2026-09-25 "${none}")"
+# shellcheck disable=SC2016 # the expression matches the helper's own text; nothing here expands
+mutant any-date-line-chains 's/^      fresh = (starts && \$0 ~ whole)$/      fresh = starts/'
 expect_mutant "without the whole-line test a date line under one that carries other text counts" any-date-line-chains \
   "DUE 2026-10-20" "$(solo $'**Delivered on:** see `the\n**Measure on:** 2026-10-20\nnotes`' 2026-12-01 "${none}")"
 mutant nul-deleted "s/tr '.000' '.001'/tr -d '\\\\000'/"
