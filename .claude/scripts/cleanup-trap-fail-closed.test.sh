@@ -211,6 +211,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 mkdir -p "$tmp/converted/projects" "$tmp/converted/backups" \
   "$tmp/converted/plugins/marketplaces/devantler-plugins"
+git init -q "$tmp/converted/lockrepo"
 printf 'memory line\n' > "$tmp/converted/memory.md"
 printf 'replacement line\n' > "$tmp/converted/replacement.md"
 printf '{"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":1,"cronExpression":"0 * * * *"}]}\n' \
@@ -235,6 +236,9 @@ pr-body-contract.sh|check --repo devantler-tech/monorepo --body-file $tmp/conver
 plugin-definition-refresh.sh|--cli /usr/bin/true --repo-root $tmp/converted --gitlink 0000000000000000000000000000000000000000 --plugins-root $tmp/converted/plugins
 safe-clone.sh|devantler-tech/monorepo $tmp/converted/clone-destination
 shared-checkout-freshness.sh|
+worktree-claim.sh|check $tmp/converted/absent-worktree cleanup-trap-test
+branch-op-lock.sh|run $tmp/converted/lockrepo -- true
+agent-issue-board-sweep.sh|--author cleanup-trap-test
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"
@@ -250,7 +254,13 @@ while IFS='|' read -r name args; do
     fail "${name}: no \`trap <handler> EXIT\` line to inject after — the canonical shape is missing"
     continue
   fi
-  copy="$tmp/converted/$name"
+  # Each copy gets its own directory. A script that sources a sibling by its own location needs
+  # that sibling beside it, so the directory is filled with links to the other scripts. The copy
+  # is written first, into a fresh directory, and a link is never created over an existing name,
+  # so nothing here can write through a link into a real script.
+  run_dir="$tmp/converted/$name.d"
+  mkdir "$run_dir"
+  copy="$run_dir/$name"
   {
     head -n "$trap_line" "$src"
     # shellcheck disable=SC2016 # Written literally into the copy, expanded when it runs.
@@ -258,6 +268,9 @@ while IFS='|' read -r name args; do
     tail -n "+$((trap_line + 1))" "$src"
   } > "$copy"
   chmod +x "$copy"
+  for sibling in "$script_dir"/*.sh; do
+    [ -e "$run_dir/$(basename "$sibling")" ] || ln -s "$sibling" "$run_dir/"
+  done
   reached="$tmp/converted/$name.reached"
   rm -f "$reached"
   rc=0
