@@ -208,8 +208,9 @@ settled runs stay the last healthy ones and the check reports `0` for the whole 
 2026-09-13, both Codex automations had missed their slots for five hours and read `OK`
 (monorepo#3333).
 🔴 **Those two discriminators are read as THREE classes, not two, because a run can die PART WAY.** An
-inbox-less run inside the stub window died at dispatch and is the `1`; an inbox-less run that outlasted
-it is **UNPROVEN, never healthy** — this store cannot separate a mid-run death from a long run that
+inbox-less run inside the stub window died at dispatch and is the `1`, as is any run that ended inside
+the pre-flight window; an inbox-less run that outlasted the pre-flight window is **UNPROVEN, never
+healthy** — this store cannot separate a mid-run death from a long run that
 simply never wrote an inbox item, so it is a `2`. Requiring both conditions at once made that third
 class report `0`: measured 2026-09-08, a twice-daily automation whose newest settled run had run 46
 minutes and died to an account-scoped cause read `OK`, and the lane was caught only because a *second*
