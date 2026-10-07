@@ -1273,6 +1273,8 @@ func TestOutcomeGrammar(t *testing.T) {
 		{"a bare repository names no event", "owner/repo | outcome | last-verified 2026-09-01: open", "MALFORMED"},
 		{"no words at all", "2026-10-08 | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
 		{"a URL alone names no event", "https://example.com/release | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
+		{"a URL beside a bare item still names no event", "https://example.com/release owner/repo#7 | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
+		{"an encoded bare item still names no event", "owner/repo&#35;7 | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
 		{"an empty identifier", " | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
 		{"an ask contradicts the kind", "the next release | outcome | last-verified 2026-09-01: not yet | asked slack 2026-09-01", "MALFORMED"},
 		{"an ask in a channel that is not one still contradicts it", "the next release | outcome | last-verified 2026-09-01: not yet | asked issue 2026-09-01", "MALFORMED"},

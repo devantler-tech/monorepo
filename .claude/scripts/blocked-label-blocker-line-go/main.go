@@ -334,7 +334,7 @@ func classify(line string, today time.Time, maxAge int64) (string, bool) {
 		// reference is a tracked item, and waiting on one is an upstream blocker.
 		// Nobody can be asked for an event, so an ask record contradicts the kind
 		// (#3426).
-		if strings.IndexFunc(identifier, unicode.IsLetter) < 0 || requestIsOpaque(line) || strings.Contains(parts[1], "| asked ") {
+		if strings.IndexFunc(identifier, unicode.IsLetter) < 0 || identifierOnlyRE.MatchString(html.UnescapeString(identifier)) || strings.Contains(parts[1], "| asked ") {
 			return "MALFORMED", false
 		}
 	} else if !legacy && kind == "authority" {
