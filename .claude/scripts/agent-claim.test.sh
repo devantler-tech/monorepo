@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Self-test for agent-claim.sh — RED/GREEN coverage of the fifteen traps proven
-# by monorepo#2302 and its review rounds. Fixtures use a local bare remote + two clones; nothing
-# touches a real network remote.
+# Self-test for agent-claim.sh — RED/GREEN coverage of the sixteen traps proven
+# by monorepo#2302, its review rounds and monorepo#3811. Fixtures use a local bare remote + two
+# clones; nothing touches a real network remote.
 #
 # Trap 1 — arbitration works: second non-force push loses; ls-remote shows winner.
 # Trap 2 — never judge by push exit status: a piped `push | true` looks like
@@ -22,6 +22,9 @@
 # Trap 14 — production takeover never accepts a lease below two hours.
 # Trap 15 — a failed post-push tip query reports UNKNOWN and returns the
 #           candidate ownership token for recovery.
+# Trap 16 — a commit that lands on a pull request after a stale PR-number tip
+#           must not make that tip a permanent lock: takeover names the head the
+#           caller re-read, and the helper checks and records it.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -681,6 +684,211 @@ fi
 if [[ "$actual_15" =~ ^[0-9a-f]{40}$ ]]; then
   "$tool" retire "$ISSUE15" "$actual_15" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
 fi
+
+# ---------------------------------------------------------------------------
+# Trap 16 — a commit on the pull request after a stale PR-number tip must not
+# make that tip a permanent lock (monorepo#3811).
+#
+# Claim protocol rule 6 used to allow takeover of an `agent-claim/<pr-number>`
+# tip only while no commit on the pull request was newer than the tip, reading
+# a newer commit as "the holder delivered and only failed to retire". A commit
+# the holder never made — an "Update branch" merge of the base — satisfied that
+# too, and then nothing could take the tip over or clear it until the pull
+# request closed. Takeover of a pull-request number is now gated on the caller
+# naming the head it re-read: the helper compares it with the remote's
+# refs/pull/<n>/head, which is how the forge publishes a pull request's head,
+# and records it in the claim commit.
+# ---------------------------------------------------------------------------
+ISSUE16=1616
+claim16="refs/heads/agent-claim/${ISSUE16}"
+pull16="refs/pull/${ISSUE16}/head"
+tip16() { git -C "$clone_c" ls-remote origin "$claim16" | awk '{print $1}'; }
+
+if older_time="$(date -u -v-4H '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)"; then
+  :
+else
+  older_time="$(date -u -d '4 hours ago' '+%Y-%m-%dT%H:%M:%SZ')"
+fi
+base16="$(git -C "$clone_b" rev-parse HEAD)"
+# The pull request's head as the holder last saw it, older than the claim.
+head16_v1="$(GIT_AUTHOR_DATE="$older_time" GIT_COMMITTER_DATE="$older_time" \
+  git -C "$clone_b" commit-tree "${base16}^{tree}" -p "$base16" -m "feat: the pull request's work")"
+git -C "$clone_b" push --quiet origin "${head16_v1}:${pull16}"
+# The holder claimed the pull request three hours ago and never retired.
+stale16="$(GIT_AUTHOR_DATE="$old_claim_time" GIT_COMMITTER_DATE="$old_claim_time" \
+  git -C "$clone_b" commit-tree "${base16}^{tree}" -p "$base16" \
+    -m "chore: stale agent-claim #${ISSUE16}")"
+git -C "$clone_b" push --quiet origin "${stale16}:${claim16}"
+# Afterwards a commit the holder did not make lands on the pull request.
+head16_v2="$(git -C "$clone_b" commit-tree "${base16}^{tree}" -p "$head16_v1" -p "$base16" \
+  -m "Merge branch 'main' into the pull request")"
+git -C "$clone_b" push --quiet origin "${head16_v2}:${pull16}"
+
+if (( $(git -C "$clone_b" log -1 --format=%ct "$head16_v2") > $(git -C "$clone_b" log -1 --format=%ct "$stale16") )); then
+  pass "trap16: fixture — a commit landed on the pull request after the stale tip"
+else
+  fail "trap16: fixture — a commit landed on the pull request after the stale tip"
+fi
+rc_16_stale=0
+"$tool" is-stale "$ISSUE16" --repo-dir "$clone_c" --remote origin >/dev/null 2>&1 || rc_16_stale=$?
+check "trap16: fixture — the tip is past its lease" "0" "$rc_16_stale"
+rc_16_plain=0
+"$tool" acquire "$ISSUE16" --repo-dir "$clone_c" --remote origin >/dev/null 2>&1 || rc_16_plain=$?
+check "trap16: a plain acquire still loses to the leftover tip" "1" "$rc_16_plain"
+
+# Takeover of a pull-request number must name the head the caller re-read.
+rc_16_nohead=0
+"$tool" acquire "$ISSUE16" --repo-dir "$clone_c" --remote origin --takeover \
+  >"$tmp/out-16-nohead" 2>"$tmp/err-16-nohead" || rc_16_nohead=$?
+check "trap16: takeover of a pull-request number without --pr-head exits 2" "2" "$rc_16_nohead"
+check "trap16: takeover without --pr-head leaves the tip in place" "$stale16" "$(tip16)"
+if grep -q 'is a pull request' "$tmp/err-16-nohead" && grep -q -- '--pr-head' "$tmp/err-16-nohead"; then
+  pass "trap16: the refusal asks for the head that was re-read"
+else
+  fail "trap16: the refusal asks for the head that was re-read"
+fi
+
+# A head read before the newer commit is not the current head: the caller has
+# not seen what landed, which is exactly what the retired date gate stood for.
+rc_16_old=0
+"$tool" acquire "$ISSUE16" --repo-dir "$clone_c" --remote origin --takeover --pr-head "$head16_v1" \
+  >"$tmp/out-16-old" 2>"$tmp/err-16-old" || rc_16_old=$?
+check "trap16: takeover naming a head that has since moved exits 1" "1" "$rc_16_old"
+check "trap16: takeover naming a moved head leaves the tip in place" "$stale16" "$(tip16)"
+if grep -q 'REFUSED takeover' "$tmp/err-16-old" && grep -q 'not the head you re-read' "$tmp/err-16-old"; then
+  pass "trap16: a moved head is refused as a moved head"
+else
+  fail "trap16: a moved head is refused as a moved head"
+fi
+# The current head must come from the caller's own read of the pull request,
+# so neither refusal hands it out.
+check "trap16: no refusal prints the current head" "0" \
+  "$(cat "$tmp/err-16-nohead" "$tmp/out-16-nohead" "$tmp/err-16-old" "$tmp/out-16-old" | grep -c "$head16_v2" || true)"
+
+# An unreadable pull-request head is UNKNOWN, never "this is an issue".
+shim_dir_16="$tmp/shim-16"
+mkdir -p "$shim_dir_16"
+real_git_16="$(command -v git)"
+cat > "$shim_dir_16/git" <<SHIM
+#!/usr/bin/env bash
+listing=0
+pull=0
+for arg in "\$@"; do
+  if [[ "\$arg" == "ls-remote" ]]; then listing=1; fi
+  if [[ "\$arg" == "${pull16}" ]]; then pull=1; fi
+done
+if [[ "\$listing" -eq 1 && "\$pull" -eq 1 ]]; then
+  : > "$tmp/trap16-pull-read-failed"
+  echo "simulated pull-request head query failure" >&2
+  exit 1
+fi
+exec "$real_git_16" "\$@"
+SHIM
+chmod +x "$shim_dir_16/git"
+rc_16_unknown=0
+PATH="$shim_dir_16:$PATH" "$tool" acquire "$ISSUE16" --repo-dir "$clone_c" --remote origin \
+  --takeover --pr-head "$head16_v2" >"$tmp/out-16-unknown" 2>"$tmp/err-16-unknown" || rc_16_unknown=$?
+if [[ -f "$tmp/trap16-pull-read-failed" ]]; then
+  pass "trap16: fixture — the pull-request head read actually failed"
+else
+  fail "trap16: fixture — the pull-request head read never ran"
+fi
+check "trap16: an unreadable pull-request head exits 2" "2" "$rc_16_unknown"
+check "trap16: an unreadable pull-request head leaves the tip in place" "$stale16" "$(tip16)"
+if grep -q 'UNKNOWN' "$tmp/err-16-unknown"; then
+  pass "trap16: an unreadable pull-request head is reported as UNKNOWN"
+else
+  fail "trap16: an unreadable pull-request head is reported as UNKNOWN"
+fi
+# The same outage without --pr-head is the fail-open to rule out: a failed read
+# taken for "no pull request here" would let the takeover through unchecked.
+rc_16_unknown_bare=0
+PATH="$shim_dir_16:$PATH" "$tool" acquire "$ISSUE16" --repo-dir "$clone_c" --remote origin \
+  --takeover >/dev/null 2>"$tmp/err-16-unknown-bare" || rc_16_unknown_bare=$?
+check "trap16: an unreadable pull-request head without --pr-head exits 2" "2" "$rc_16_unknown_bare"
+check "trap16: an unreadable pull-request head never reads as an issue" "$stale16" "$(tip16)"
+
+# Naming the current head takes the tip over although a commit landed after it.
+rc_16_take=0
+"$tool" acquire "$ISSUE16" --repo-dir "$clone_c" --remote origin --takeover --pr-head "$head16_v2" \
+  >"$tmp/out-16-take" 2>"$tmp/err-16-take" || rc_16_take=$?
+sha_16="$(tail -n1 "$tmp/out-16-take")"
+check "trap16: takeover naming the current head exits 0" "0" "$rc_16_take"
+check "trap16: takeover stdout is exactly the acquired sha" "$sha_16" "$(cat "$tmp/out-16-take")"
+check "trap16: the tip is the takeover's" "$sha_16" "$(tip16)"
+subject_16=""
+if [[ "$sha_16" =~ ^[0-9a-f]{40}$ ]]; then
+  git -C "$clone_b" fetch --quiet origin "+${claim16}:refs/trap16/claim"
+  subject_16="$(git -C "$clone_b" log -1 --format=%s refs/trap16/claim)"
+fi
+case "$subject_16" in
+  *" takeover-pr-head=${head16_v2}") pass "trap16: the claim commit records the head that was re-read" ;;
+  *) fail "trap16: the claim commit records the head that was re-read (subject '$subject_16')" ;;
+esac
+
+# Naming the head never replaces the lease: the fresh takeover is a live claim.
+rc_16_live=0
+"$tool" acquire "$ISSUE16" --repo-dir "$clone_a" --remote origin --takeover --pr-head "$head16_v2" \
+  >/dev/null 2>"$tmp/err-16-live" || rc_16_live=$?
+check "trap16: the current head does not take over a live claim" "1" "$rc_16_live"
+check "trap16: the live claim survives" "$sha_16" "$(tip16)"
+
+# The defined path to clear a leftover tip: take it over, then retire it.
+if [[ "$sha_16" =~ ^[0-9a-f]{40}$ ]]; then
+  "$tool" retire "$ISSUE16" "$sha_16" --repo-dir "$clone_c" --remote origin >/dev/null 2>&1 || true
+fi
+check "trap16: retiring the takeover clears the lock" "" "$(tip16)"
+
+# An issue number has no pull-request head, so --pr-head is a mistake there and
+# never a way to skip the gate. A branch whose name merely ends in the pull ref
+# matches the same ls-remote pattern and must not read as a pull request.
+ISSUE16I=1617
+claim16i="refs/heads/agent-claim/${ISSUE16I}"
+tip16i() { git -C "$clone_c" ls-remote origin "$claim16i" | awk '{print $1}'; }
+stale16i="$(GIT_AUTHOR_DATE="$old_claim_time" GIT_COMMITTER_DATE="$old_claim_time" \
+  git -C "$clone_b" commit-tree "${base16}^{tree}" -p "$base16" \
+    -m "chore: stale agent-claim #${ISSUE16I}")"
+git -C "$clone_b" push --quiet origin "${stale16i}:${claim16i}"
+git -C "$clone_b" push --quiet origin "${head16_v2}:refs/heads/decoy/refs/pull/${ISSUE16I}/head"
+check "trap16: fixture — a decoy branch matches the pull-ref pattern" "1" \
+  "$(git -C "$clone_c" ls-remote origin "refs/pull/${ISSUE16I}/head" | grep -c . || true)"
+rc_16_issue=0
+"$tool" acquire "$ISSUE16I" --repo-dir "$clone_c" --remote origin --takeover --pr-head "$head16_v2" \
+  >/dev/null 2>"$tmp/err-16-issue" || rc_16_issue=$?
+check "trap16: --pr-head on an issue number exits 2" "2" "$rc_16_issue"
+check "trap16: --pr-head on an issue number leaves the tip in place" "$stale16i" "$(tip16i)"
+if grep -q 'not a pull request' "$tmp/err-16-issue"; then
+  pass "trap16: --pr-head on an issue number is refused as not a pull request"
+else
+  fail "trap16: --pr-head on an issue number is refused as not a pull request"
+fi
+rc_16_issue_take=0
+sha_16i="$("$tool" acquire "$ISSUE16I" --repo-dir "$clone_c" --remote origin --takeover 2>/dev/null)" ||
+  rc_16_issue_take=$?
+check "trap16: an issue-number takeover needs no head" "0" "$rc_16_issue_take"
+check "trap16: the issue-number tip is the takeover's" "$sha_16i" "$(tip16i)"
+if [[ "$sha_16i" =~ ^[0-9a-f]{40}$ ]]; then
+  "$tool" retire "$ISSUE16I" "$sha_16i" --repo-dir "$clone_c" --remote origin >/dev/null 2>&1 || true
+fi
+git -C "$clone_b" push --quiet --delete origin "decoy/refs/pull/${ISSUE16I}/head" >/dev/null 2>&1 || true
+
+# --pr-head is a takeover argument and a full SHA: anything else is a usage
+# error that creates no claim.
+ISSUE16U=1618
+tip16u() { git -C "$clone_c" ls-remote origin "refs/heads/agent-claim/${ISSUE16U}" | awk '{print $1}'; }
+rc_16_notake=0
+"$tool" acquire "$ISSUE16U" --repo-dir "$clone_c" --remote origin --pr-head "$head16_v2" \
+  >/dev/null 2>&1 || rc_16_notake=$?
+check "trap16: --pr-head without --takeover exits 2" "2" "$rc_16_notake"
+rc_16_short=0
+"$tool" acquire "$ISSUE16U" --repo-dir "$clone_c" --remote origin --takeover --pr-head "${head16_v2:0:12}" \
+  >/dev/null 2>&1 || rc_16_short=$?
+check "trap16: an abbreviated --pr-head exits 2" "2" "$rc_16_short"
+rc_16_empty=0
+"$tool" acquire "$ISSUE16U" --repo-dir "$clone_c" --remote origin --takeover --pr-head \
+  >/dev/null 2>&1 || rc_16_empty=$?
+check "trap16: --pr-head without a value exits 2" "2" "$rc_16_empty"
+check "trap16: no usage error creates a claim" "" "$(tip16u)"
 
 # ---------------------------------------------------------------------------
 if (( failures > 0 )); then

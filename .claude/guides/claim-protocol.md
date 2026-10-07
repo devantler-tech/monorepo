@@ -35,7 +35,7 @@ namespace (resolved from the instance registry), so a race settled only on the w
 arbitrated across lanes. The durable claim is therefore `agent-claim/<issue>` — a single shared ref
 every instance derives from the issue number alone — acquired **before** the lane-specific work
 branch via [`.claude/scripts/agent-claim.sh`](../scripts/agent-claim.sh) (RED/GREEN coverage of
-the fifteen proven traps live in `agent-claim.test.sh`).
+the sixteen proven traps live in `agent-claim.test.sh`).
 
 1. **Check four signals before selecting, not one:** open PRs, remote `agent-claim/<issue>` tips,
    remote work branches in every registered namespace, and issue assignees. An assignee
@@ -205,10 +205,20 @@ the fifteen proven traps live in `agent-claim.test.sh`).
      renew. **Retire the acquired SHA once the fix is pushed** and the threads are answered — the new
      commit is now the discoverable signal. [`agent-claim-sweep.sh`](../scripts/agent-claim-sweep.sh)
      removes the tip after the PR closes, because the issues API reports a merged PR as closed.
-   - **Takeover of a PR-number tip** needs the lease gate (`is-stale` exits 0) **and** no commit on
-     the PR newer than the tip's committer date. The "no open PR" gate of rule 3 cannot apply — the
-     PR is open by definition — so the commit check takes its place: a push after the claim means the
-     holder delivered and only failed to retire.
+   - **Takeover of a PR-number tip** needs the lease gate (`is-stale` exits 0) **and** a re-read of
+     the PR at its current head, which you name to the helper:
+     `.claude/scripts/agent-claim.sh acquire <pr-number> --takeover --pr-head <head-sha> --repo-dir <product-path>`.
+     The "no open PR" gate of rule 3 cannot apply — the PR is open by definition — so the head you
+     re-read takes its place. The helper compares `--pr-head` with the remote's
+     `refs/pull/<pr-number>/head`, refuses a takeover that omits it or names any other commit, and
+     records it in the claim commit. A refusal means the head moved after your read: read the PR
+     again, and never copy a SHA to get past it.
+     **A commit newer than the tip does not block takeover** (monorepo#3811). It may be the holder's
+     fix or a commit the holder never made — an "Update branch" merge left `ksail#7440` unclaimable
+     by every lane on 2026-10-03 — and its date cannot tell which. Your re-read can. When the
+     findings are already answered at that head, the holder delivered and only failed to retire:
+     rebuild nothing, and retire the tip you took over so it stops locking the PR. When findings
+     remain, fix them on that head.
 
 **A live claim is a temporary skip — the one addition to the skip test.** *Drain oldest-first* lists
 when an older issue may be passed over; a **live claim** — an `agent-claim/<issue>` tip inside the
