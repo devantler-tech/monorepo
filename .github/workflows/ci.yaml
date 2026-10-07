@@ -842,7 +842,8 @@ jobs:
               - '.github/workflows/ci.yaml'
             graphql-availability:
               # The suite asserts the merge policy keeps naming the GraphQL-unavailable state.
-              - '.claude/guides/merge-policy.md'
+              - 'AGENTS.md'
+              - '.claude/guides/**'
               - '.claude/scripts/graphql-availability.sh'
               - '.claude/scripts/graphql-availability.test.sh'
               - '.github/workflows/ci.yaml'

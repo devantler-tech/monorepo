@@ -53,12 +53,13 @@ out=$(gh api graphql --hostname github.com -f query='{viewer{login}}' 2>"$err_fi
 err=$(cat "$err_file" 2>/dev/null || true)
 rm -f "$err_file"
 
+# `"RATE_LIMIT` is matched as a prefix: GitHub uses both RATE_LIMIT and RATE_LIMITED as the type.
 # A refusal is recognised on either stream: gh prints the errors document on stdout and its own
 # one-line summary on stderr, and which of the two survives depends on the gh version.
 both="$out
 $err"
 case "$both" in
-*graphql_rate_limit* | *'"RATE_LIMIT"'* | *'rate limit'* | *'Rate limit'*)
+*graphql_rate_limit* | *'"RATE_LIMIT'* | *'rate limit'* | *'Rate limit'*)
   echo "GRAPHQL=REFUSING reason=rate-limit"
   exit 1
   ;;

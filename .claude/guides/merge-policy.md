@@ -451,8 +451,11 @@ waiting for the reset it names proves nothing. Establish the state with the prob
 surface, [`graphql-availability.sh`](../scripts/graphql-availability.sh): exit `0` is
 `GRAPHQL=SERVING`, exit `1` is `GRAPHQL=REFUSING` and exit `2` is `GRAPHQL=UNKNOWN`. On `1` or `2`
 the thread count is UNKNOWN: decline every merge, and continue all non-merge work — fixes, reviews,
-REST reads, issues. It is a state of the service, never a maintainer gate and never a blocker to
-record on the pull request. Probe again before the next merge attempt; a refusal clears by itself.
+REST reads, issues. `REFUSING` is the named state: a state of the service that clears by itself,
+never a maintainer gate and never a blocker to record on the pull request, so probe again before the
+next merge attempt. `UNKNOWN` is not that state and does not clear by waiting:
+diagnose it by its reason — a missing tool, a sign-in failure (the pre-flight identity ladder), no
+network, a server error — and handle the cause it names, escalating only a cause outside agent authority.
 
 **That must read `0` immediately before the merge — not once, earlier, from the survey.** The survey
 pentad does carry unresolved threads, but it is a **snapshot taken earlier in the run**, and this

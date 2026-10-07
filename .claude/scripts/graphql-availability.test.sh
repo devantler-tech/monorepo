@@ -38,14 +38,16 @@ fail=0
 
 cat >"$FIX/bin/gh" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$@" >"$FAKE_ARGS"
+printf '%s\n' "$*" >>"$FAKE_ARGS"
 [ -n "${FAKE_OUT-}" ] && printf '%s' "$FAKE_OUT"
 [ -n "${FAKE_ERR-}" ] && printf '%s\n' "$FAKE_ERR" >&2
 exit "${FAKE_RC:-0}"
 EOF
 chmod +x "$FIX/bin/gh"
 
-# run <rc> <stdout> <stderr> [args…] — sets RC, OUT, ERR and ARGS for the helper's result.
+# run <rc> <stdout> <stderr> [args…] — sets RC, OUT, ERR, ARGS and CALLS for the helper's result.
+# The fake appends one line per invocation, so ARGS holds EVERY call and CALLS counts them: a
+# helper that read the rate-limit report first and then queried GraphQL would show two lines.
 run() {
   local rc=$1 out=$2 err=$3
   shift 3
@@ -55,7 +57,8 @@ run() {
     bash "$SCRIPT" "$@" >"$FIX/out" 2>"$FIX/err" || RC=$?
   OUT=$(cat "$FIX/out")
   ERR=$(cat "$FIX/err")
-  ARGS=$(tr '\n' ' ' <"$FIX/args")
+  ARGS=$(cat "$FIX/args")
+  CALLS=$(grep -c '' "$FIX/args" || true)
 }
 
 check() {
@@ -74,6 +77,7 @@ REFUSAL='{"errors":[{"type":"RATE_LIMIT","code":"graphql_rate_limit","message":"
 # --- serving ---------------------------------------------------------------------------------
 run 0 "$SERVING" ''
 check 'a viewer login reads as serving' '[ "$RC" -eq 0 ] && [ "$OUT" = "GRAPHQL=SERVING" ]'
+check 'the probe makes exactly one call' '[ "$CALLS" -eq 1 ]'
 check 'the probe exercises GraphQL on github.com' \
   'case "$ARGS" in "api graphql --hostname github.com "*) true ;; *) false ;; esac'
 check 'the probe never reads the rate-limit report' \
@@ -91,6 +95,10 @@ check 'a refusal seen on stderr only still reads as refusing' '[ "$RC" -eq 1 ]'
 
 run 1 "$REFUSAL" ''
 check 'a refusal seen on stdout only still reads as refusing' '[ "$RC" -eq 1 ]'
+
+run 1 '{"errors":[{"type":"RATE_LIMITED","message":"slow down"}]}' ''
+check 'the RATE_LIMITED error type with no rate-limit wording is refusing' \
+  '[ "$RC" -eq 1 ] && [ "$OUT" = "GRAPHQL=REFUSING reason=rate-limit" ]'
 
 # The dangerous shape: gh exits 0 while the body is a refusal. Exit status alone would say serving.
 run 0 "$REFUSAL" ''
@@ -142,6 +150,8 @@ check 'it rules out the rate-limit report as evidence' \
   'case "$section" in *rate_limit*) true ;; *) false ;; esac'
 check 'it forbids parking the pull request behind the maintainer' \
   'case "$section" in *"never a maintainer gate"*) true ;; *) false ;; esac'
+check 'it sends an UNKNOWN verdict to diagnosis instead of waiting it out' \
+  'case "$section" in *"diagnose it by its reason"*) true ;; *) false ;; esac'
 
 rm -rf "$FIX"
 echo "graphql-availability.test.sh: $pass passed, $fail failed"
