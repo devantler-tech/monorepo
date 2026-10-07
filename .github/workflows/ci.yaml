@@ -943,6 +943,7 @@ jobs:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/skills/products/monorepo/SKILL.md'
+              - '.claude/skills/products/github-actions/SKILL.md'
               - '.claude/scripts/product-value-contract.test.sh'
               - 'docs/README.md'
               - '.github/workflows/ci.yaml'
