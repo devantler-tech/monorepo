@@ -1875,6 +1875,151 @@ else
 fi
 chmod 755 "$c81/super/sub"
 
+# --- Shared object store (monorepo#3431): a linked worktree borrows the main checkout's objects
+# instead of cloning the submodule again, and the store it borrows from never prunes.
+alternates_of() { cat "$1/objects/info/alternates" 2>/dev/null || true; }
+
+# A fixture where the worktree's pin (B) is in the store but will later become unreachable there.
+#
+# The submodule is registered by a file:// URL, not a path: git copies every object when it clones
+# from a plain local path, so nothing would be borrowed and the cases below would pass on a checkout
+# that never depended on the store. A URL goes through the same transfer a real remote does, which
+# sends only what the store lacks.
+mk_borrow_fixture() {
+  local root="$1"
+  mkdir -p "$root"
+  git init -q "$root/remote-sub"
+  (
+    cd "$root/remote-sub"
+    echo seed >file.txt
+    git add file.txt
+    git commit -q -m init
+  )
+  git init -q "$root/super"
+  (
+    cd "$root/super"
+    echo root >root.txt
+    git add root.txt
+    git commit -q -m init
+    git submodule add -q "file://$(abspath "$root/remote-sub")" sub
+    git commit -q -m "add sub"
+  )
+  (
+    cd "$root/remote-sub"
+    echo second >second.txt
+    git add second.txt
+    git commit -q -m second
+  )
+  (
+    cd "$root/super/sub"
+    git fetch -q origin
+  )
+  git -C "$root/super" worktree add -q "$root/super-wt" -b wt
+  (
+    cd "$root/super-wt"
+    git update-index --cacheinfo "160000,$(git -C "$root/remote-sub" rev-parse HEAD),sub"
+    git commit -q -m "pin sub to second"
+  )
+}
+
+# Make the pinned commit unreachable in the store, then run the store's ordinary housekeeping.
+store_forgets_pin_and_collects() {
+  local store="$1"
+  git --git-dir="$store" update-ref -d refs/remotes/origin/main
+  git --git-dir="$store" reflog expire --expire=now --all
+  git --git-dir="$store" gc -q
+}
+
+c90="$tmp/c90"
+mk_borrow_fixture "$c90"
+c90_store="$(abspath "$c90/super/.git/modules/sub")"
+c90_pin="$(git -C "$c90/remote-sub" rev-parse HEAD)"
+# A store configured to prune at once is the worst case the guard has to override.
+git --git-dir="$c90_store" config gc.pruneExpire now
+out="$(cd "$c90/super-wt" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "shared store: linked-worktree init exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+c90_mdir="$(cd "$c90/super-wt/sub" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+report "shared store: the worktree's submodule keeps its own repository" \
+  "$([[ "$c90_mdir" == *"/worktrees/"*"/modules/sub" ]] && echo yes || echo no)" "$c90_mdir"
+report "shared store: it borrows from the main checkout's store" \
+  "$([[ -n "$c90_mdir" && "$(abspath "$(dirname "$(alternates_of "$c90_mdir")")")" == "$c90_store" ]] && echo yes || echo no)" \
+  "alternates=$(alternates_of "$c90_mdir") store=$c90_store"
+report "shared store: the store is set never to prune" \
+  "$([[ "$(git --git-dir="$c90_store" config --get gc.pruneExpire)" == never ]] && echo yes || echo no)"
+report "shared store: the pinned commit is borrowed, not copied" \
+  "$([[ -n "$c90_mdir" && ! -e "$c90_mdir/objects/${c90_pin:0:2}/${c90_pin:2}" && "$(git -C "$c90/super-wt/sub" count-objects -v | sed -n 's/^count: //p')" == 0 ]] && echo yes || echo no)" \
+  "$(git -C "$c90/super-wt/sub" count-objects -v 2>&1 | tr '\n' ' ')"
+report "shared store: the checkout is at its pin with its files" \
+  "$([[ "$(git -C "$c90/super-wt/sub" rev-parse HEAD)" == "$c90_pin" && -f "$c90/super-wt/sub/second.txt" ]] && echo yes || echo no)"
+out="$(cd "$c90/super-wt" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "shared store: --check still reports the borrower isolated" \
+  "$([[ $rc -eq 0 ]] && grep -q 'sub — isolated' <<<"$out" && echo yes || echo no)" "$out"
+store_forgets_pin_and_collects "$c90_store"
+report "shared store: the borrower survives housekeeping in the store" \
+  "$(git -C "$c90/super-wt/sub" cat-file -e "$c90_pin^{tree}" 2>/dev/null && git -C "$c90/super-wt/sub" fsck --connectivity-only >/dev/null 2>&1 && echo yes || echo no)"
+
+# Negative control: the same housekeeping WITHOUT the guard does break a borrower, so the case above
+# passes because of the setting and not because nothing was collected.
+c91="$tmp/c91"
+mk_borrow_fixture "$c91"
+c91_store="$(abspath "$c91/super/.git/modules/sub")"
+c91_pin="$(git -C "$c91/remote-sub" rev-parse HEAD)"
+(cd "$c91/super-wt" && "$helper" sub >/dev/null 2>&1) || true
+git --git-dir="$c91_store" config gc.pruneExpire now
+store_forgets_pin_and_collects "$c91_store"
+report "shared store: without the guard the same housekeeping breaks a borrower (negative control)" \
+  "$(git -C "$c91/super-wt/sub" cat-file -e "$c91_pin^{tree}" 2>/dev/null && echo no || echo yes)"
+
+# The main checkout is the store: it never borrows from itself.
+c92="$tmp/c92"
+mk_super "$c92"
+git -C "$c92/super" submodule deinit -q -f sub
+rm -rf "$c92/super/.git/modules/sub"
+out="$(cd "$c92/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "shared store: a main checkout clones in full" \
+  "$([[ $rc -eq 0 && -z "$(alternates_of "$c92/super/.git/modules/sub")" ]] && echo yes || echo no)" "$out"
+
+# No store to borrow from: a plain full clone, not a failure.
+c93="$tmp/c93"
+mk_super "$c93"
+git -C "$c93/super" submodule deinit -q -f sub
+rm -rf "$c93/super/.git/modules/sub"
+git -C "$c93/super" worktree add -q "$c93/super-wt" -b wt
+out="$(cd "$c93/super-wt" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+c93_mdir="$(cd "$c93/super-wt/sub" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+report "shared store: with no store, a linked worktree clones in full" \
+  "$([[ $rc -eq 0 && -n "$c93_mdir" && -z "$(alternates_of "$c93_mdir")" && -f "$c93/super-wt/sub/file.txt" ]] && echo yes || echo no)" "$out"
+
+# The opt-out keeps today's behaviour.
+c94="$tmp/c94"
+mk_super "$c94"
+git -C "$c94/super" worktree add -q "$c94/super-wt" -b wt
+out="$(cd "$c94/super-wt" && SUBMODULE_INIT_NO_SHARED_STORE=1 "$helper" sub 2>&1)" && rc=0 || rc=$?
+c94_mdir="$(cd "$c94/super-wt/sub" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+report "shared store: SUBMODULE_INIT_NO_SHARED_STORE=1 clones in full" \
+  "$([[ $rc -eq 0 && -n "$c94_mdir" && -z "$(alternates_of "$c94_mdir")" ]] && echo yes || echo no)" "$out"
+report "shared store: the opt-out leaves the store's settings alone" \
+  "$([[ -z "$(git --git-dir="$c94/super/.git/modules/sub" config --get gc.pruneExpire 2>/dev/null || true)" ]] && echo yes || echo no)"
+
+# An inherited git location variable can aim the lookup at another checkout's store, so the lookup
+# answers nothing then. Asked directly, in a worktree that has not cloned the submodule yet; the
+# first case is the control that the same call does name the store when nothing is inherited.
+c95="$tmp/c95"
+mk_super "$c95"
+git -C "$c95/super" worktree add -q "$c95/super-wt" -b wt
+store_lookup() (
+  # shellcheck source=/dev/null
+  . "$helper" >/dev/null 2>&1
+  cd "$c95/super-wt" && shared_object_store sub
+)
+report "shared store: the lookup names the main checkout's store (control)" \
+  "$([[ "$(abspath "$(store_lookup)")" == "$(abspath "$c95/super/.git/modules/sub")" ]] && echo yes || echo no)" "$(store_lookup 2>&1)"
+for var in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; do
+  # shellcheck disable=SC2016 # the inner shell expands $1 and $2, not this one
+  report "shared store: an inherited $var means no borrowing" \
+    "$([[ -z "$(env "$var=$c95/super/.git" bash -c '. "$1" >/dev/null 2>&1; cd "$2" && shared_object_store sub' _ "$helper" "$c95/super-wt")" ]] && echo yes || echo no)"
+done
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1
