@@ -101,6 +101,7 @@ gitmodules="$repo_root/.gitmodules"
 templates_dir="$repo_root/docs/src/content/docs/templates"
 content_dir="$repo_root/docs/src/content"
 homepage_parity_checker="$script_dir/check-homepage-project-parity.mjs"
+public_catalogue="$repo_root/docs/src/data/public-products.json"
 
 # Anchor each H2 section on the source repo URL it links to — unique and stable.
 actions_anchor="](https://github.com/devantler-tech/actions)"
@@ -115,6 +116,7 @@ die_missing() {
 [ -f "$mdx" ] || die_missing "active.mdx" "$mdx"
 [ -f "$homepage" ] || die_missing "homepage index.mdx" "$homepage"
 [ -f "$homepage_parity_checker" ] || die_missing "homepage parity checker" "$homepage_parity_checker"
+[ -f "$public_catalogue" ] || die_missing "Public product catalogue" "$public_catalogue"
 [ -d "$actions_dir" ] || die_missing "actions submodule" "$actions_dir"
 [ -d "$rw_workflows_dir" ] || die_missing "actions submodule workflows directory" "$rw_workflows_dir"
 [ -d "$content_dir" ] || die_missing "docs content directory" "$content_dir"
@@ -324,6 +326,34 @@ keep the 'projects-submodules' marker disposition in lockstep." >&2
 else
   tpl_n=$(printf '%s\n' "$templates_declared" | grep -c .)
   echo "OK: Templates page in sync (${tpl_n} templates-page submodules == ${tpl_n} template doc pages, repo set matches)."
+fi
+
+# The public page consumes the bilingual JSON, not the legacy MDX descriptions.
+# Bind that rendered source to the curated inventory as well as checking the
+# older technical metadata; green legacy checks alone cannot clear a stale shelf.
+if ! node --input-type=module - "$public_catalogue" "$mdx" <<'NODE'
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+try {
+  const [cataloguePath, inventoryPath] = process.argv.slice(2);
+  const catalogue = JSON.parse(readFileSync(cataloguePath, 'utf8'));
+  assert.ok(Array.isArray(catalogue) && catalogue.length > 0);
+  const actual = catalogue.map(({ repository }) => repository);
+  assert.ok(actual.every((name) => typeof name === 'string' && /^[a-z0-9._-]+$/.test(name)));
+  assert.equal(new Set(actual).size, actual.length);
+  const inventories = [...readFileSync(inventoryPath, 'utf8').matchAll(/public-products:\s*([a-z0-9._,-]+)/g)];
+  assert.equal(inventories.length, 1);
+  const expected = inventories[0][1].split(',');
+  assert.equal(new Set(expected).size, expected.length);
+  assert.deepEqual(actual.sort(), expected.sort());
+  console.log(`OK: Public product catalogue matches inventory (${actual.length} repositories).`);
+} catch (error) {
+  console.error(`::error::Public product catalogue drift: update the rendered public-products.json source and its public-products: inventory together. ${error.message}`);
+  process.exitCode = 1;
+}
+NODE
+then
+  fail=1
 fi
 
 exit "$fail"

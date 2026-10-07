@@ -8,8 +8,10 @@ assert.ok(directory && extraArguments.length === 0, 'Usage: check-business-site.
 const root = resolve(directory);
 const html = (path) => readFileSync(resolve(root, path, 'index.html'), 'utf8');
 const home = html('');
-const publicRepositories = ['.github', 'agent-plugins', 'agent-skills', 'data-product-controller', 'dotnet-template', 'go-template', 'ksail', 'kyverno-policies', 'platform-template', 'platform-tenant-template', 'provider-upjet-unifi', 'world-at-ruin'];
+const publicRepositories = ['.github', 'actions', 'agent-plugins', 'agent-skills', 'data-product-controller', 'dotnet-template', 'go-template', 'ksail', 'kyverno-policies', 'platform-template', 'platform-tenant-template', 'provider-upjet-unifi', 'world-at-ruin'];
 const starSnapshot = JSON.parse(readFileSync(new URL('../src/data/github-stars.json', import.meta.url), 'utf8'));
+const publicCatalogue = JSON.parse(readFileSync(new URL('../src/data/public-products.json', import.meta.url), 'utf8'));
+const escapeText = (text) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 assert.ok(home.includes('data-business-site'), 'Production build must publish the business homepage without an opt-in flag');
 
@@ -65,6 +67,10 @@ for (const locale of ['en', 'da']) {
       assert.match(shelf, /world-at-ruin\/blob\/main\/LICENSE/, 'The game links to its distinct source-available terms');
       assert.ok(shelf.includes(locale === 'da' ? 'Kildekode tilgængelig' : 'Source-available'), 'The game is not presented as unrestricted open source');
       for (const repository of publicRepositories) assert.ok(shelf.includes(`href="https://github.com/devantler-tech/${repository}"`), `${repository} retains its real repository link`);
+      for (const product of publicCatalogue) {
+        const card = [...shelf.matchAll(/<article\b[^>]*data-public-product="([^"]+)"[^>]*>([\s\S]*?)<\/article>/g)].find((match) => match[1] === product.repository)?.[2];
+        assert.ok(card?.includes(escapeText(product.description[locale])), `${product.repository} renders its documented ${locale} description source`);
+      }
       assert.ok(page.includes('href="https://ksail.devantler.tech"'), 'Projects link to their real public product');
       for (const id of ['open-title', 'family-title', 'research']) {
         assert.ok(page.includes(`id="${id}"`), `The unified portfolio includes ${id}`);
@@ -95,7 +101,7 @@ for (const locale of ['en', 'da']) {
         ['platform-template', ['️-platform---']],
         ['data-product-controller', ['-data-product-controller--']],
         ['world-at-ruin', ['️-world-at-ruin--']],
-        ['.github', ['-reusable-workflows-', '-actions-']],
+        ['actions', ['-reusable-workflows-', '-actions-']],
         ['agent-skills', ['-agent-skills--']],
         ['agent-plugins', ['-agent-plugins---']],
         ['provider-upjet-unifi', ['-unifi-provider---']],

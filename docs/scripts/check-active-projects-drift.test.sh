@@ -65,6 +65,8 @@ build_fixture() {
   local actions_dir="$root/github/devantler-tech/github-actions/actions"
   local rw_dir="$actions_dir/.github/workflows"
   mkdir -p "$mdx_dir" "$tpl_dir" "$actions_dir/alpha" "$actions_dir/beta" "$rw_dir"
+  mkdir -p "$root/docs/src/data"
+  printf '[{"repository":"actions"},{"repository":"foo-template"}]\n' > "$root/docs/src/data/public-products.json"
 
   printf 'name: alpha\n' > "$actions_dir/alpha/action.yaml"
   printf 'name: beta\n'  > "$actions_dir/beta/action.yaml"
@@ -105,6 +107,7 @@ title: Active Projects
 <div class="projects-page">
 
 {/* projects-submodules: applications/bar=grouped,github/devantler-tech/github-actions/actions=section,github/devantler-tech/github-actions/reusable-workflows=omitted,templates/foo-template=templates-page */}
+{/* public-products: actions,foo-template */}
 
 ## [⚡ Actions](https://github.com/devantler-tech/actions)
 
@@ -915,8 +918,20 @@ EOF
 fail_match "Homepage: rebound LinkCard binding fails closed" "$c" \
   "Featured Projects component bindings must use named exports"
 
+c="$tmp/public-products-set"; build_fixture "$c"
+printf '[{"repository":"foo-template"}]\n' > "$c/docs/src/data/public-products.json"
+fail_match "Public catalogue: removed product cannot leave inventory stale" "$c" "Public product catalogue drift"
+
+c="$tmp/public-products-missing"; build_fixture "$c"
+rm "$c/docs/src/data/public-products.json"
+fail_match "Public catalogue: missing source fails closed" "$c" "Public product catalogue not found"
+
+c="$tmp/public-products-marker"; build_fixture "$c"
+sed -i.bak '/public-products:/d' "$(mdx_path "$c")"
+fail_match "Public catalogue: missing inventory fails closed" "$c" "Public product catalogue drift"
+
 if [ "$fail" -ne 0 ]; then
   printf '❌ active-projects drift-guard self-test FAILED\n' >&2
   exit 1
 fi
-printf '✅ active-projects drift-guard self-test passed (51 cases)\n'
+printf '✅ active-projects drift-guard self-test passed (54 cases)\n'

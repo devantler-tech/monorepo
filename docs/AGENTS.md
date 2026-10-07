@@ -1,9 +1,8 @@
 # AGENTS.md — devantler.tech site (`docs/`)
 
-The [devantler.tech](https://devantler.tech) website: an Astro + Starlight static site that
-`.github/workflows/publish-pages.yaml` deploys to GitHub Pages. The root
-[`AGENTS.md`](../AGENTS.md) still applies; this file adds what is specific to the site. The
-[`README.md`](README.md) carries the full editorial standard and the feature-flag how-to.
+Astro + Starlight at [devantler.tech](https://devantler.tech), published by
+`.github/workflows/publish-pages.yaml`. Root [`AGENTS.md`](../AGENTS.md) applies;
+[`README.md`](README.md) owns editorial and feature-flag standards.
 
 ## Build and validate
 
@@ -23,8 +22,10 @@ captured, and killed afterwards even on failure, so port 4321 is freed.
 ## Where things live
 
 - **Pages and blog posts:** `src/content/docs/`, with posts in `src/content/docs/blog/`.
-- **Project descriptions:** `src/content/docs/projects/active.mdx`, one `##` heading per product.
-  KSail gets a short description and a link to ksail.devantler.tech — never a copy of its docs.
+- **Projects:** edit bilingual `src/data/public-products.json`; set changes also update the
+  `public-products:` inventory in `src/content/docs/projects/active.mdx` and refresh GitHub stars.
+  That MDX is legacy metadata, not rendered descriptions. Production checks both languages.
+  Keep KSail brief and linked to ksail.devantler.tech; never duplicate its docs.
 - **CV:** `src/data/cv.ts` is the single source; the PDF is rendered at build time (see the README).
 - **Architecture decisions:** every ADR for this repository lives in `adr/`, numbered `NNNN-title.md`.
 - **Scripts:** `scripts/`, in bash (the existing `.mjs` checks parse MDX with the site's own
@@ -32,9 +33,7 @@ captured, and killed afterwards even on failure, so port 4321 is freed.
 
 ## Content rules
 
-- **Write for the reader.** User-facing pages use a concise, human register that frames each item by
-  what the reader gets. Keep the stack names technical readers need to recognise what they are
-  getting; cut filler and repetition.
+- **Write for the reader.** Concise, human, benefit-led prose; retain useful stack names, cut filler.
 - **Describe what is true now.** State current behaviour and rationale; do not narrate history or
   migrations. Dated records such as ADRs, and migration steps users still need, are exempt.
 - **Blog posts are a product.** Follow the README's *Blog editorial standard*: evidence first, an

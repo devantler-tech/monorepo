@@ -127,8 +127,12 @@ Keep this lane single-flight—maintain or measure the current post before start
 
 The Projects page's “Built in the open” shelf lists public tools, libraries, templates and
 source-available inspiration, not tenant deployments. `src/data/public-products.json` holds the
-curated bilingual descriptions. Shared Actions live in `.github`; the legacy Actions repository is
-not a second current product. Repository licences govern reuse; World at Ruin is a pre-alpha game
+curated bilingual descriptions and is the source rendered by both language routes. The
+`public-products:` inventory in `src/content/docs/projects/active.mdx` is checked against this JSON;
+that MDX file now holds legacy portfolio metadata, not the public description-editing surface.
+The production contract verifies the rendered catalogue. Shared Actions live in `.github`; the
+old `actions` repository has a separately labelled legacy card for existing consumers and bookmarks,
+and directs new projects to `.github`. Repository licences govern reuse; World at Ruin is a pre-alpha game
 whose source is available for study, not unrestricted reuse or hosting.
 
 `src/data/github-stars.json` is generated with an explicit UTC observation date. Cards sort by GitHub
