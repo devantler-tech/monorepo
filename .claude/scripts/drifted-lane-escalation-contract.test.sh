@@ -346,7 +346,7 @@ for surface in "${repo_root}/AGENTS.md" "${repo_root}/.claude/skills/portfolio-m
   flat="$(tr '\n' ' ' < "${surface}" | tr -s '[:space:]' ' ')"
   [ "${#flat}" -gt 2000 ] || fail "${surface} flattened to only ${#flat} chars — the read is broken"
   case "${flat}" in
-    *'A Claude `DRIFT` also runs `.claude/scripts/plugin-definition-refresh.sh`'*) ;;
+    *'A Claude `DRIFT` also runs `plugin-definition-refresh.sh`'*) ;;
     *'On a Claude-lane `DRIFT`, also run `.claude/scripts/plugin-definition-refresh.sh`'*) ;;
     *) fail "${surface} no longer tells a Claude run to run plugin-definition-refresh.sh on a DRIFT — the repair is then stated only in a guide no run is required to load" ;;
   esac
