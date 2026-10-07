@@ -22,13 +22,15 @@ fail() {
 
 # The public catalogue and maintenance instructions must agree on the shared
 # automation owner; Actions remains a real legacy product, not a .github alias.
-grep -Fq '| Shared automation and organization defaults | `devantler-tech/.github` |' "${repo_root}/AGENTS.md" ||
+grep -Fq "| Shared automation and organization defaults | \`devantler-tech/.github\` |" "${repo_root}/AGENTS.md" ||
   fail "portfolio map does not name the maintained shared automation owner"
-grep -Fq '| Legacy GitHub Actions | `devantler-tech/actions` |' "${repo_root}/AGENTS.md" ||
+grep -Fq "| Legacy GitHub Actions | \`devantler-tech/actions\` |" "${repo_root}/AGENTS.md" ||
   fail "portfolio map misclassifies the legacy Actions repository"
-grep -F '| Repo automation |' "${repo_root}/AGENTS.md" | grep -Fq '`devantler-tech/.github`' ||
+repo_automation_row="$(grep -F '| Repo automation |' "${repo_root}/AGENTS.md")" ||
+  fail "stack map is missing the automation row"
+grep -Fq "\`devantler-tech/.github\`" <<<"${repo_automation_row}" ||
   fail "stack map routes new automation to the legacy repository"
-grep -Fq 'target `.github` for new shared-CI work' "${repo_root}/.claude/skills/products/github-actions/SKILL.md" ||
+grep -Fq "target \`.github\` for new shared-CI work" "${repo_root}/.claude/skills/products/github-actions/SKILL.md" ||
   fail "automation maintenance card routes new work to the legacy repository"
 
 grep -Fq 'Build the right thing — value before output' "${contract}" ||
