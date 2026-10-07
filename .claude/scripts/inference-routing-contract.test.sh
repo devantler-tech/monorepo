@@ -47,3 +47,47 @@ jq -e --slurpfile registry "$ROOT/.claude/plugin-consumption/agent-instances.jso
   and all(.runtimes | keys[]; . as $id | $registry[0].instances | has($id))
   and .limits.maxDepth == 1 and .limits.maxChildren == 1' "$POLICY" > /dev/null
 printf 'PASS inert runtime registrations\n'
+
+# Accepted scheduled parent routes (monorepo#3314). A maintainer decision lets a listed instance's
+# scheduled parent run without the native enforcement proof. Pin both halves: the rule that lets
+# the run work, and the limits the acceptance must not move.
+GUIDE="${INFERENCE_ROUTING_GUIDE:-$ROOT/.claude/guides/spend-and-inference.md}"
+RUNTIME_DOC="${INFERENCE_ROUTING_RUNTIME_DOC:-$ROOT/.claude/plugin-consumption/inference-routing-runtime.md}"
+REGISTRY="$ROOT/.claude/plugin-consumption/agent-instances.json"
+[[ -r "$GUIDE" && -r "$RUNTIME_DOC" && -r "$REGISTRY" ]] ||
+  { echo 'FAIL accepted parent routes: contract files unreadable' >&2; exit 1; }
+# The guide is hard-wrapped, so match on one line of whitespace-normalised text.
+guide_text="$(tr -s '[:space:]' ' ' < "$GUIDE")"
+[[ -n "$guide_text" ]] || { echo 'FAIL accepted parent routes: guide is empty' >&2; exit 1; }
+for phrase in \
+  'native pre-inference enforcement is **not a required control** for it' \
+  'never a reason to stop a scheduled run or to skip portfolio work' \
+  'a visible model ID containing `fable`, an inference API key, or a sign-in or billing route other than the included subscription' \
+  'Children, advisors, model switches, fallback and automatic routing stay disabled and gated' \
+  'only the maintainer adds one'; do
+  case "$guide_text" in
+    *"$phrase"*) ;;
+    *) printf 'FAIL accepted parent routes: guide lost: %s\n' "$phrase" >&2; exit 1 ;;
+  esac
+done
+printf 'PASS accepted parent route rule and its limits\n'
+# Every accepted row names a registered instance and a maintainer decision; an empty table would
+# silently return the listed lanes to stopping at the pre-flight.
+rows="$(awk '
+  /^## Accepted scheduled parent routes$/ { on = 1; next }
+  on && /^## / { exit }
+  on && /^\| *`/ { print }' "$RUNTIME_DOC")"
+[[ -n "$rows" ]] || { echo 'FAIL accepted parent routes: no accepted row found' >&2; exit 1; }
+while IFS= read -r row; do
+  id="$(printf '%s\n' "$row" | sed -n 's/^| *`\([^`]*\)`.*/\1/p')"
+  [[ -n "$id" ]] || { printf 'FAIL accepted parent routes: unreadable row: %s\n' "$row" >&2; exit 1; }
+  jq -e --arg id "$id" '.instances | has($id)' "$REGISTRY" > /dev/null ||
+    { printf 'FAIL accepted parent routes: %s is not a registered instance\n' "$id" >&2; exit 1; }
+  case "$row" in
+    *'| Maintainer, 20'[0-9][0-9]-[0-9][0-9]-[0-9][0-9]', monorepo#'[0-9]*' |') ;;
+    *) printf 'FAIL accepted parent routes: %s carries no maintainer decision\n' "$id" >&2; exit 1 ;;
+  esac
+done <<ROWS
+$rows
+ROWS
+printf 'PASS accepted parent routes are registered and maintainer-decided\n'

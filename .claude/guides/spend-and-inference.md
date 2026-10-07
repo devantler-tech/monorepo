@@ -120,9 +120,28 @@ once across providers; stop the previous writer first. One delivery owner retain
 
 **Activation:** automatic routing is initially disabled in the policy and every runtime registration.
 Existing native parent execution may continue only on an independently confirmed permitted model
-and included billing route. Disabled routing does not grandfather an unknown parent route, reconfigure
+and included billing route, or on an **accepted scheduled parent route** (below). Disabled routing
+does not grandfather an unknown parent route, reconfigure
 its scheduler, or prove its initial inference is quota-protected. Missing pre-inference controls hold
-the affected startup, resume or fallback; report unresolved parent enforcement explicitly. Resolve
+the affected startup, resume or fallback; report unresolved parent enforcement explicitly.
+
+**Accepted scheduled parent routes** (maintainer decision 2026-10-07, monorepo#3314). The maintainer
+may accept a registered instance's scheduled parent runs on the model fixed in its scheduler entry
+and the runtime's own subscription sign-in, without the native enforcement proof. The accepted
+instances are listed in
+[runtime verification](../plugin-consumption/inference-routing-runtime.md#accepted-scheduled-parent-routes);
+only the maintainer adds one. For a listed instance:
+
+- That route is the **permitted parent route**, and native pre-inference enforcement is **not a
+  required control** for it. Its absence is a recorded gap, never a reason to stop a scheduled run
+  or to skip portfolio work, and a run does not report it again.
+- The run stops at this step only on what it **observes** in its own runtime: a visible model ID
+  containing `fable`, an inference API key, or a sign-in or billing route other than the included
+  subscription.
+- Nothing else is accepted. Children, advisors, model switches, fallback and automatic routing stay
+  disabled and gated exactly as below, and No-Fable and subscription-only inference are unchanged.
+
+Resolve
 this contract before any new delegated/model-switched execution. Do not enable a route until native billing, exact model,
 tool, isolation, and serialized account-admission probes pass. Retain **UNKNOWN** for unexposed quota
 buckets and **NO-VERDICT** for incomplete attribution. The Codex **inline survey override** remains

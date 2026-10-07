@@ -7,7 +7,8 @@ Adding a compatible native adapter does not require another role definition or i
 Its opt-in controls the new automatic routing and
 delegation mechanism; it does not stop or reconfigure existing native parent schedules. Existing
 parent execution also requires an independently confirmed permitted model and included billing
-route. Disabled routing does not establish that compliance. Missing pre-inference controls hold the
+route, or a listing under [Accepted scheduled parent routes](#accepted-scheduled-parent-routes).
+Disabled routing does not establish that compliance. Missing pre-inference controls hold the
 affected startup, resume or fallback; unresolved parent enforcement remains an explicit rollout gap.
 All registrations initially expire on **2026-09-26 00:00 UTC**. Renewal requires fresh capability
 evidence and a reviewed policy revision, not extending a date automatically.
@@ -41,6 +42,19 @@ Console OAuth can incur API charges without an API key. Disabling usage credits 
 Claude.ai account supplies the included-usage ceiling only when the scheduler's subscription route
 is independently verified. Neither the account setting nor that scheduler identity was verified.
 Keep the Claude route disabled; do not substitute a prompt or a non-blocking hook for enforcement.
+
+## Accepted scheduled parent routes
+
+The maintainer accepts these scheduled parent runs without the native enforcement proof. The rule,
+and what a listed run still stops on, is in `AGENTS.md` **Inference routing** (the *Accepted
+scheduled parent routes* paragraph of the spend and inference guide). Only the maintainer adds a
+row; a row accepts the parent run alone and enables no route, child, switch or fallback.
+
+| Instance | Accepted route | Decision |
+|---|---|---|
+| `codex-local` | Engineer and improver schedules, on the model fixed in each scheduler entry and the ChatGPT subscription sign-in | Maintainer, 2026-10-07, monorepo#3314 |
+
+The enforcement gaps recorded above for this surface are unchanged and stay open on monorepo#3314.
 
 ## Native verification procedure
 
