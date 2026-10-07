@@ -5,8 +5,8 @@
 # WHY THIS EXISTS
 #   AGENTS.md requires every review request to carry the disclosure line and a current-head
 #   request marker IN THE SAME COMMENT as the trigger, with Bugbot the single exception (its
-#   trigger must be the whole comment body, so its disclosure + marker go in a preceding
-#   comment). Stated only as prose, lanes kept posting bare `@codex review` /
+#   trigger must open the comment and is posted bare, so its disclosure + marker go in a
+#   preceding comment). Stated only as prose, lanes kept posting bare `@codex review` /
 #   `@coderabbitai full review` comments: 49 in 24h across two lanes on 2026-09-13. An
 #   undisclosed `devantler` comment reads as the HUMAN MAINTAINER to every later run, so each
 #   one is agent output sitting on the control channel.

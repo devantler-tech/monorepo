@@ -376,9 +376,10 @@ result at the current head — self-promotion is forbidden before that. Request 
   ref, not a comment, so it is not the retired reservation comment below. Remove locks left by
   closed PRs and superseded heads with `review-request-lock.sh sweep --repo <owner>/<repo> [--apply]`.
   [`bugbot-request-marker.sh --repo <owner>/<repo> --pr <n> [--head <headRefOid>]`](../scripts/bugbot-request-marker.sh)
-  checks that pairing for every comment on a PR that opens with `@cursor review`, which is every
-  shape that starts Bugbot (see the measurement below), and reports it apart from disclosure
-  drift: `0` paired, `1` an unpaired trigger or a latest request naming another head, `2` unknown.
+  checks that pairing for every comment on a PR whose first line names `@cursor review`, which is
+  wider than the bare trigger on purpose (see the measurement below), and reports it apart from
+  disclosure drift: `0` paired, `1` an unpaired trigger or a latest request naming another head,
+  `2` unknown.
   🔴 **Compose every review-request comment with
   [`.claude/scripts/review-request-comment.sh`](../scripts/review-request-comment.sh) — never
   hand-write one.** It prints the only allowed shapes: disclosure, marker, and trigger in one comment
@@ -445,9 +446,12 @@ result at the current head — self-promotion is forbidden before that. Request 
   2026-09-16→23. Each was a live request, and a check that recognised only the exact body counted
   none of them.
   **Post only the exact bare body anyway** — it is the one shape `review-request-comment.sh`
-  composes and the only one the disclosure guard exempts. Any other comment that opens with the
-  command still starts Bugbot, so `bugbot-request-marker.sh` counts it and requires its marker, and
-  `comment-disclosure-drift.sh` reports it as an undisclosed trigger.
+  composes and the only one the disclosure guard exempts. These five rows are all that was
+  measured. The only shape known NOT to start Bugbot is the command below the first line, so
+  `bugbot-request-marker.sh` leaves out that shape alone: it counts every comment whose first line
+  names the command, measured or not, and requires its marker, because a live request read as
+  none is the costly error. `comment-disclosure-drift.sh` reports a comment that opens with the
+  command, and is not the exact bare body, as an undisclosed trigger.
   **Carve-out, deliberately narrow:** post the disclosure as its **own comment immediately before** the
   bare trigger, so the thread still self-documents as agent-driven and the *Untrusted input*
   disambiguator still has a disclosed neighbour. A bare `@cursor review` is a **machine command with no

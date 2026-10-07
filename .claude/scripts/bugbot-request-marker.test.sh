@@ -135,36 +135,43 @@ expect "a bare trigger does not reuse the footer trigger's marker" 1 "triggers=2
   "$(payload "$paired_disclosure" "$footer_trigger" "$(comment 3 devantler "$issue_a" '@cursor review')")"
 expect "--head holds a footer trigger to the current head" 1 "STALE-HEAD https://example.test/c/2 marker=${sha} head=${old}" \
   "$(payload "$paired_disclosure" "$footer_trigger")" --head "$old"
-# Shapes nobody measured are counted when the comment still OPENS with the command, because the
-# costly error is a live request read as none: a different letter case, a blank line or up to
-# three spaces before it. The disclosure guard reads the same shapes as trigger-led.
-expect "a different letter case is counted" 1 "triggers=1 paired=0 unpaired=1" \
-  "$(payload "$(comment 2 devantler "$issue_a" '@Cursor Review')")"
-expect "a blank line before the command is counted" 1 "triggers=1 paired=0 unpaired=1" \
-  "$(payload "$(comment 2 devantler "$issue_a" $'\n@cursor review')")"
-expect "three spaces before the command are counted" 1 "triggers=1 paired=0 unpaired=1" \
-  "$(payload "$(comment 2 devantler "$issue_a" '   @cursor review')")"
-# Negative controls, one per shape that does NOT start Bugbot. Both were measured on monorepo#3949
-# on 2026-10-07 with no check-run and no reply: the command inside a sentence, and the command
-# alone on a line BELOW a disclosure line. Neither may be counted or end a pairing window.
-expect "a disclosure line above the command is not a trigger" 0 "triggers=0" \
+# Only five shapes were measured, so every OTHER first line that names the command is counted:
+# the costly error is a live request read as none, and Bugbot reads the raw body, so how Markdown
+# would render the line (a code block, a quotation) says nothing about whether it starts.
+unmeasured() { # unmeasured <label> <body> — an unmeasured first-line shape must count as a trigger
+  expect "$1 is counted" 1 "triggers=1 paired=0 unpaired=1" "$(payload "$(comment 2 devantler "$issue_a" "$2")")"
+}
+unmeasured "a different letter case" '@Cursor Review'
+unmeasured "a blank line before the command" $'\n@cursor review'
+unmeasured "a line of other whitespace before the command" $'\xc2\xa0\n@cursor review'
+unmeasured "three spaces before the command" '   @cursor review'
+unmeasured "four spaces before the command" $'    @cursor review\n\nexample'
+unmeasured "a tab before the command" $'\t@cursor review'
+unmeasured "a no-break space before the command" $'\xc2\xa0@cursor review'
+unmeasured "a quoted command" '> @cursor review'
+unmeasured "text before the command on the first line" 'Requesting @cursor review now'
+unmeasured "a full stop straight after the command" '@cursor review.'
+unmeasured "a comma straight after the command" '@cursor review, thanks'
+unmeasured "two spaces inside the command" '@cursor  review'
+unmeasured "a tab inside the command" $'@cursor\treview'
+unmeasured "bare carriage returns between the command and a footer" $'@cursor review\r---\rfooter'
+# Negative controls for the one shape measured NOT to start Bugbot: the command below the first
+# line. Measured on monorepo#3949 on 2026-10-07 below a disclosure line, alone on its own line and
+# inside a sentence, with no check-run and no reply; and on 2026-07-20 below a sender line. None
+# may be counted or end a pairing window.
+expect "the command alone below a disclosure line is not a trigger" 0 "triggers=0" \
   "$(payload "$(comment 2 devantler "$issue_a" "${disclosure}"$'\n\n@cursor review')")"
-expect "a mention inside a sentence is not a trigger" 0 "triggers=0" \
+expect "the command in a sentence below a disclosure line is not a trigger" 0 "triggers=0" \
   "$(payload "$(comment 2 devantler "$issue_a" "${disclosure}"$'\n\nI will post @cursor review once CI is green.')")"
-expect "a mention inside the first line is not a trigger" 0 "triggers=0" \
-  "$(payload "$(comment 2 devantler "$issue_a" 'Requesting @cursor review now')")"
-# Not a request by construction: an example in a code block, a quotation, another command, and a
-# longer word that merely starts with the command.
-expect "a command indented as a code block is not a trigger" 0 "triggers=0" \
-  "$(payload "$(comment 2 devantler "$issue_a" $'    @cursor review\n\nexample')")"
-expect "a tab-indented command is not a trigger" 0 "triggers=0" \
-  "$(payload "$(comment 2 devantler "$issue_a" $'\t@cursor review')")"
-expect "a quoted command is not a trigger" 0 "triggers=0" \
-  "$(payload "$(comment 2 devantler "$issue_a" '> @cursor review')")"
+expect "the command below any other first line is not a trigger" 0 "triggers=0" \
+  "$(payload "$(comment 2 devantler "$issue_a" $'<!-- note -->\n@cursor review')")"
+# Not the command at all: another command, and a longer word that merely starts with it.
 expect "a different command with a footer is not a trigger" 0 "triggers=0" \
   "$(payload "$(comment 2 devantler "$issue_a" "@cursor investigate${footer}")")"
 expect "a longer word that starts with the command is not a trigger" 0 "triggers=0" \
   "$(payload "$(comment 2 devantler "$issue_a" '@cursor reviewer notes')")"
+expect "the command with a letter or underscore joined on is not a trigger" 0 "triggers=0" \
+  "$(payload "$(comment 2 devantler "$issue_a" '@cursor review_notes')")"
 expect "a non-trigger comment keeps the window open for a footer trigger" 0 "paired=1" \
   "$(payload "$paired_disclosure" \
     "$(comment 5 devantler "$issue_a" "${disclosure}"$'\n\nI will post @cursor review once CI is green.')" \
@@ -234,8 +241,9 @@ contract_error() { # contract_error <flattened review-lanes text> — prints the
     '| a disclosure line, then a sentence that names `@cursor review` | none in 135 s |' \
     '| a disclosure line, then `@cursor review` alone on its own line | none in 137 s |' \
     '**Post only the exact bare body anyway**' \
-    'so `bugbot-request-marker.sh` counts it and requires its marker' \
-    'checks that pairing for every comment on a PR that opens with `@cursor review`'; do
+    'These five rows are all that was measured.' \
+    '`bugbot-request-marker.sh` leaves out that shape alone: it counts every comment whose first line names the command, measured or not, and requires its marker' \
+    'checks that pairing for every comment on a PR whose first line names `@cursor review`'; do
     case "${flat}" in
       *"${clause}"*) ;;
       *) echo "${clause}"; return ;;

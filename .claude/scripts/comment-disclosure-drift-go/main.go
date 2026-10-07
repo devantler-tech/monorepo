@@ -174,8 +174,8 @@ const (
 	// Compliant means the body begins with the canonical disclosure prefix.
 	Compliant Verdict = "compliant"
 	// BareTrigger means the whole body is exactly a review-lane trigger, which
-	// the contract exempts: the trigger must be the entire body for the lane to
-	// fire, and the disclosure goes in its own preceding comment.
+	// the contract exempts: nothing may stand above the command for the lane to
+	// start, so the disclosure goes in its own preceding comment.
 	BareTrigger Verdict = "bare-trigger"
 	// SenderMarker means the first line is a non-canonical 🤖 sender marker.
 	SenderMarker Verdict = "sender-marker"
@@ -204,7 +204,7 @@ const (
 
 // codeRabbitTriggers are the reviewTriggers that must END their comment. Codex is
 // absent because its focus suffix is part of the command, and Bugbot's trigger is
-// already required to be the whole body.
+// absent because any body but its exact one is already an undisclosed trigger.
 var codeRabbitTriggers = []string{
 	"@coderabbitai full review",
 	"@coderabbitai review",
