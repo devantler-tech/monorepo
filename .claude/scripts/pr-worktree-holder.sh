@@ -34,7 +34,10 @@
 #   unknown:<reason>                the helper could not tell, and that is NEVER `none`. Reasons:
 #                                   input, lsof-missing, lsof-failed, lsof-empty, ps-failed,
 #                                   worktree-list (any worktree listing the answer depends on:
-#                                   the locks, or the worktrees nested in a held one), lock-reason
+#                                   the locks, or the worktrees nested in a held one), lock-reason,
+#                                   lock-scan (a repository whose registry may hold a lock was not
+#                                   reached: a superproject or a `.gitmodules` that cannot be read,
+#                                   or nesting deeper than the scan follows)
 #
 # WHAT HOLDING A CHECKOUT MEANS
 #   A process holds the checkout containing its working directory, every populated submodule of
@@ -396,14 +399,21 @@ lock_rows() {
 # scan_checkout — add the checkout `resolve` named last to the lock scan, and every superproject
 # above it: an asker or a process inside a submodule says nothing else about the repository whose
 # registry holds the locks on the worktrees around it.
+# A registry this walk knows of and does not reach may hold a lock on any PR asked about, so it is
+# never passed over in silence: a superproject that cannot be read, and one more than the walk
+# follows, leave a flag the main shell turns into `unknown:lock-scan`. scan_submodules does the
+# same below a checkout.
 scan_checkout() {
   local hops=0 super
   while :; do
     printf '%s\t%s\n' "${R_COMMON}" "${R_TOP}" >>"${work}/repos"
     printf '%s\n' "${R_TOP}" >>"${work}/scan"
     super="${R_SUPER}"
-    if [ -z "${super}" ] || [ "${hops}" -ge 8 ]; then break; fi
-    resolve "${super}" || break
+    [ -n "${super}" ] || break
+    if [ "${hops}" -ge 8 ] || ! resolve "${super}"; then
+      : >"${work}/scanfail"
+      break
+    fi
     hops=$((hops + 1))
   done
 }
@@ -432,14 +442,27 @@ lockless() {
 # scan_submodules <checkout> <depth> — add the repository of every populated submodule below it:
 # a session can lock a worktree of a submodule while it, and the asker, stand in the superproject.
 scan_submodules() {
-  local dir="$1" depth="$2" paths rel sub
-  [ "${depth}" -lt 4 ] || return 0
+  local dir="$1" depth="$2" listed paths rc=0 rel sub
   [ -f "${dir}/.gitmodules" ] || return 0
-  paths="$(git config -f "${dir}/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null | cut -d' ' -f2-)" || paths=''
+  # git answers 1 for a file that names no submodule path: a read that worked and found none.
+  # Any other failure is a file that could not be read, and its submodules stay unknown.
+  listed="$(git config -f "${dir}/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null)" || rc=$?
+  if [ "${rc}" -gt 1 ]; then
+    : >"${work}/scanfail"
+    return 0
+  fi
+  paths="$(cut -d' ' -f2- <<<"${listed}")"
   while IFS= read -r rel; do
     [ -n "${rel}" ] || continue
     sub="${dir}/${rel}"
     [ -e "${sub}/.git" ] || continue
+    # A checkout the scan already starts from is walked from there, to its own depth.
+    if grep -qxF -- "${sub}" "${work}/scan"; then continue; fi
+    # A populated submodule nested deeper than this walk follows.
+    if [ "${depth}" -ge 4 ]; then
+      : >"${work}/scanfail"
+      return 0
+    fi
     if ! lockless "${sub}"; then
       # The same two tests as expand_submodules: an unpopulated submodule and a path that leaves
       # the checkout both resolve elsewhere.
@@ -542,11 +565,14 @@ if [ "${heads}" != $'\n\n' ]; then
     while IFS= read -r top; do
       scan_submodules "${top}" 0
     done < <(LC_ALL=C sort -u "${work}/scan")
+    # A registry the scan knows of and could not reach: a lock in it may hold any PR asked about.
+    if [ -e "${work}/scanfail" ]; then probe_error=lock-scan; fi
     # Worktree locks (monorepo#3780): every locked worktree of those repositories, with the
     # process identity its reason records. A list that cannot be read is UNKNOWN, since a lock in
     # it may hold any of the PRs asked about.
     : >"${work}/locks"
     while IFS="${tab}" read -r common top; do
+      [ -z "${probe_error}" ] || break
       # Only a repository that has linked worktrees keeps this directory, and only those are locked.
       [ -d "${common}/worktrees" ] || continue
       if ! list="$(git -C "${top}" worktree list --porcelain 2>/dev/null)"; then

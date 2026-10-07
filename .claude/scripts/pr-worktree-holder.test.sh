@@ -214,6 +214,35 @@ g -C "${hub_product}" worktree lock --reason "claude agent sub-gone (pid 9000099
 [ "$(g -C "${hub}" worktree list --porcelain | grep -c '^locked')" = 15 ] ||
   { echo "FAIL fixture: the product submodule's locks leaked into the hub's registry" >&2; exit 1; }
 
+# A chain of ten repositories, each a populated submodule of the one before: deeper than the scan
+# follows downwards from its top, and with more superprojects than it follows upwards from its
+# bottom. Half way down, everything is within reach in both directions.
+chain="${sandbox}/chain"
+g init -q "${chain}/r9"
+g -C "${chain}/r9" commit -q --allow-empty -m init
+for level in 8 7 6 5 4 3 2 1 0; do
+  g init -q "${chain}/r${level}"
+  g -C "${chain}/r${level}" commit -q --allow-empty -m init
+  g -C "${chain}/r${level}" submodule --quiet add "${chain}/r$((level + 1))" sub
+  g -C "${chain}/r${level}" commit -q -m 'add sub'
+done
+g clone -q --recurse-submodules "${chain}/r0" "${chain}/deep" 2>/dev/null
+chain_top="${chain}/deep"
+chain_mid="${chain_top}/sub/sub/sub/sub/sub"
+chain_bottom="${chain_mid}/sub/sub/sub/sub"
+[ "$(g -C "${chain_bottom}" rev-parse --show-toplevel)" = "${chain_bottom}" ] ||
+  { echo "FAIL fixture: the ten-level chain is not populated to its bottom" >&2; exit 1; }
+# A checkout whose `.gitmodules` cannot be parsed: which submodules it has is unknown.
+broken="${sandbox}/broken"
+g init -q "${broken}"
+g -C "${broken}" commit -q --allow-empty -m init
+printf '[submodule "x"\n\tpath = x\n' >"${broken}/.gitmodules"
+broken_rc=0
+g config -f "${broken}/.gitmodules" --get-regexp '^submodule\..*\.path$' >/dev/null 2>&1 || broken_rc=$?
+# 0 would be a file git reads, and 1 a readable file that names no path: neither is the fixture.
+[ "${broken_rc}" -gt 1 ] ||
+  { echo "FAIL fixture: git reads the broken .gitmodules (exit ${broken_rc})" >&2; exit 1; }
+
 # ── A locked worktree whose path holds a tab (monorepo#3825) ────────────────────────────────────
 # A third repository, so the row no table can carry is in sight only for the cases that ask it.
 tabs="${sandbox}/tabs"
@@ -268,6 +297,8 @@ case " \$* " in
     if [ -n "\${FIXTURE_LIST_FAIL_AT:-}" ]; then
       # Only the listing asked of that one checkout fails.
       case " \$* " in *" -C \${FIXTURE_LIST_FAIL_AT} "*) exit 1 ;; esac
+    elif [ -n "\${FIXTURE_RESOLVE_FAIL_AT:-}" ]; then
+      :
     else
       # The first FIXTURE_LIST_OK listings succeed; every later one fails.
       n=\$((\$(cat "${gitshim}/count" 2>/dev/null || echo 0) + 1))
@@ -276,6 +307,10 @@ case " \$* " in
     fi
     ;;
 esac
+# With FIXTURE_RESOLVE_FAIL_AT, that one checkout cannot be resolved and every listing succeeds.
+if [ -n "\${FIXTURE_RESOLVE_FAIL_AT:-}" ]; then
+  case " \$* " in *" -C \${FIXTURE_RESOLVE_FAIL_AT} rev-parse "*) exit 128 ;; esac
+fi
 exec "${real_git}" "\$@"
 SHIM
 chmod +x "${gitshim}/git"
@@ -390,6 +425,7 @@ starts_fail=0
 list_fail=0
 list_ok=0
 list_fail_at=''
+resolve_fail_at=''
 # Only the asking session, at w1; only a process at the main checkout; only another process at w2.
 lsof_w2_only="${sandbox}/lsof-w2-only"
 printf 'p9000003\nfcwd\nn%s\n' "${w2}" >"${lsof_w2_only}"
@@ -425,7 +461,7 @@ expect() {
   out="$(cd "${dir}" && PATH="${path}" FIXTURE_LSOF="${lsof_file}" FIXTURE_LSOF_RC="${lsof_rc}" \
     FIXTURE_PS_FAIL="${ps_fail}" FIXTURE_PS_EXTRA="${ps_extra}" FIXTURE_SELF_ROW="${self_row}" \
     FIXTURE_PS_STARTS="${ps_starts}" FIXTURE_STARTS_FAIL="${starts_fail}" FIXTURE_LIST_OK="${list_ok}" \
-    FIXTURE_LIST_FAIL_AT="${list_fail_at}" \
+    FIXTURE_LIST_FAIL_AT="${list_fail_at}" FIXTURE_RESOLVE_FAIL_AT="${resolve_fail_at}" \
     "${tool}" --input - <<<"${payload}" 2>/dev/null)" || rc=$?
   if [ "${rc}" = "${want_rc}" ] && [ "${out}" = "${want_out}" ]; then
     echo "ok   ${label}"
@@ -690,6 +726,34 @@ expect "a submodule's worktree list that cannot be read is unknown, never none" 
   "$(pr devantler-tech/product 71 claude/product-71)" "${lsof_nowhere}"
 list_fail=0
 list_fail_at=''
+# A registry the scan knows of and does not reach may hold a lock on any PR asked about, so
+# passing it over is unknown, never none. Nobody holds this branch anywhere: every `unknown:` below
+# comes from the scan alone.
+# `list_fail=1` puts the git shim on the path; with `resolve_fail_at` set it fails no listing.
+list_fail=1
+resolve_fail_at="${hub}"
+expect "a superproject that cannot be resolved is unknown: its registry was never read" \
+  "${hub_product}" "${session}" 2 \
+  "devantler-tech/hub#40 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/hub 40 worktree-agent-a1)" "${lsof_nowhere}"
+list_fail=0
+resolve_fail_at=''
+expect "a .gitmodules that cannot be parsed is unknown: which submodules it names was never read" \
+  "${broken}" "${session}" 2 \
+  "devantler-tech/demo#3 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/demo 3 claude/nobody-3)" "${lsof_nowhere}"
+expect "populated submodules nested deeper than the scan follows are unknown" \
+  "${chain_top}" "${session}" 2 \
+  "devantler-tech/demo#3 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/demo 3 claude/nobody-3)" "${lsof_nowhere}"
+expect "more superprojects above the asker than the scan follows are unknown" \
+  "${chain_bottom}" "${session}" 2 \
+  "devantler-tech/demo#3 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/demo 3 claude/nobody-3)" "${lsof_nowhere}"
+expect "a chain within reach in both directions is still answered" \
+  "${chain_mid}" "${session}" 0 \
+  "devantler-tech/demo#3 holder=none" \
+  "$(pr devantler-tech/demo 3 claude/nobody-3)" "${lsof_nowhere}"
 
 # ── A locked worktree whose path holds a tab (monorepo#3825) ────────────────────────────────────
 expect "a live lock on a worktree whose path holds a tab is unknown, never none" \
