@@ -930,8 +930,32 @@ c="$tmp/public-products-marker"; build_fixture "$c"
 sed -i.bak '/public-products:/d' "$(mdx_path "$c")"
 fail_match "Public catalogue: missing inventory fails closed" "$c" "Public product catalogue drift"
 
+# Both extensions are GitHub workflow files; include reusable .yml files while
+# ignoring ordinary CI files regardless of their extension.
+c="$tmp/workflow-mixed-extension"; build_fixture "$c"
+mv "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yaml" "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yml"
+pass_case "Reusable Workflows: mixed YAML extensions are counted" "$c"
+
+c="$tmp/workflow-yml-only"; build_fixture "$c"
+for name in ci-one cd-two repo-ci; do
+  mv "$c/github/devantler-tech/github-actions/actions/.github/workflows/$name.yaml" "$c/github/devantler-tech/github-actions/actions/.github/workflows/$name.yml"
+done
+pass_case "Reusable Workflows: a .yml-only directory is counted" "$c"
+
+c="$tmp/workflow-yml-added"; build_fixture "$c"
+printf 'on:\n  workflow_call:\n' > "$c/github/devantler-tech/github-actions/actions/.github/workflows/new-call.yml"
+fail_match "Reusable Workflows: unlisted .yml trips count drift" "$c" "3 reusable (workflow_call) workflow(s)"
+
+c="$tmp/workflow-yml-renamed"; build_fixture "$c"
+mv "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yaml" "$c/github/devantler-tech/github-actions/actions/.github/workflows/renamed.yml"
+fail_match "Reusable Workflows: a .yml rename trips set drift" "$c" "'reusable-workflows-names' marker does not match"
+
+c="$tmp/workflow-yml-ordinary"; build_fixture "$c"
+printf 'on:\n  push:\n' > "$c/github/devantler-tech/github-actions/actions/.github/workflows/ordinary-ci.yml"
+pass_case "Reusable Workflows: ordinary .yml CI is ignored" "$c"
+
 if [ "$fail" -ne 0 ]; then
   printf '❌ active-projects drift-guard self-test FAILED\n' >&2
   exit 1
 fi
-printf '✅ active-projects drift-guard self-test passed (54 cases)\n'
+printf '✅ active-projects drift-guard self-test passed (59 cases)\n'
