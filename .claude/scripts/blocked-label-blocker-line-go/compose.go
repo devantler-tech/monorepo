@@ -190,7 +190,7 @@ func composeRecord(c composition, maxAge, verifyMaxAge int64) (line, body string
 			return "", "", errors.New("--asked needs a real YYYY-MM-DD calendar date")
 		}
 	case "outcome":
-		if !oneLine(c.blocker) || strings.IndexFunc(c.blocker, unicode.IsLetter) < 0 || requestIsOpaque("**Blocker:** "+c.blocker) {
+		if !oneLine(c.blocker) || !namesAnEvent(c.blocker) {
 			return "", "", errors.New("an outcome --blocker must say on one line, in words, which event the delivered work waits on; a tracked item that must move first is --kind upstream")
 		}
 		if c.asked {

@@ -293,6 +293,23 @@ func visibleRecord(body string) string {
 	return record
 }
 
+var (
+	eventReferenceRE = regexp.MustCompile(`(?i)(?:[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]*#[0-9]+|gh-[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
+	eventWordRE      = regexp.MustCompile(`\p{L}{3,}`)
+)
+
+// namesAnEvent reports whether text still says something in words once every
+// link, tracked item and repository name is taken out of it. An outcome wait
+// is for an event, which only words can name; whatever else the text holds --
+// a bare item, an item inside a link label, an encoded one -- is a reference,
+// and waiting on a reference is an upstream blocker. Asking what remains,
+// rather than listing the shapes a reference can take, leaves no spelling of
+// one to be found later (#3426).
+func namesAnEvent(text string) bool {
+	text = urlRE.ReplaceAllString(html.UnescapeString(text), " ")
+	return eventWordRE.MatchString(eventReferenceRE.ReplaceAllString(text, " "))
+}
+
 // classify separates blocker kind (who can clear it) from the result's outage
 // cause (why a provider stopped serving). Delimiter cardinality is checked before
 // reading the kind, so an extra segment cannot turn authority into upstream.
@@ -334,7 +351,7 @@ func classify(line string, today time.Time, maxAge int64) (string, bool) {
 		// reference is a tracked item, and waiting on one is an upstream blocker.
 		// Nobody can be asked for an event, so an ask record contradicts the kind
 		// (#3426).
-		if strings.IndexFunc(identifier, unicode.IsLetter) < 0 || identifierOnlyRE.MatchString(html.UnescapeString(identifier)) || strings.Contains(parts[1], "| asked ") {
+		if !namesAnEvent(head[0]) || strings.Contains(parts[1], "| asked ") {
 			return "MALFORMED", false
 		}
 	} else if !legacy && kind == "authority" {

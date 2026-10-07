@@ -86,6 +86,8 @@ func TestComposeRefusals(t *testing.T) {
 		{"a kind that does not exist", replaced(upstreamArgs, "--kind", "external"), "exactly upstream, authority or outcome"},
 		{"a kind with a second word", replaced(upstreamArgs, "--kind", "external service"), "exactly upstream, authority or outcome"},
 		{"an outcome that is a tracked item", replaced(outcomeArgs, "--blocker", "o/other#7"), "is --kind upstream"},
+		{"an outcome that is a link to a tracked item", replaced(outcomeArgs, "--blocker", "[o/other#7](https://example.com/issue)"), "is --kind upstream"},
+		{"an outcome that is two tracked items", replaced(outcomeArgs, "--blocker", "o/other#7, o/other#8"), "is --kind upstream"},
 		{"an outcome with no words", replaced(outcomeArgs, "--blocker", "2026-10-08"), "which event the delivered work waits on"},
 		{"an outcome on two lines", replaced(outcomeArgs, "--blocker", "the next release\n**Blocker:** x/y#1"), "which event the delivered work waits on"},
 		{"an outcome carrying a delimiter", replaced(outcomeArgs, "--blocker", "the next release | upstream"), "which event the delivered work waits on"},
