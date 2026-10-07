@@ -44,10 +44,17 @@
 #   UNDELIVERED <date>         the named date is still in the future, with no open sub-issue and no
 #                              delivery line: the Kata is delivery work, and (d) does NOT apply
 #   UNKNOWN missing            no `**Measure on:**` line (a quoted `> ` line does not count)
-#   UNKNOWN malformed          a line whose value is empty or not one real calendar date as YYYY-MM-DD
+#   UNKNOWN malformed          a line whose value is empty or not one real calendar date as
+#                              YYYY-MM-DD, or a line that does not start a paragraph
 #   UNKNOWN conflicting <a,b>  two different dates; the helper never picks one
 #   UNKNOWN malformed-delivery / UNKNOWN conflicting-delivery <a,b>
 #                              the same two faults on a `**Delivered on:**` line
+#
+# WHERE A LINE COUNTS
+#   Each date line is read only at the start of a paragraph: on the body's first line, after a
+#   blank line, or directly under the other date line. Anywhere else it is reported as malformed
+#   rather than guessed at. A line that is quoted, indented as code, or inside a fence, an HTML
+#   comment or a <pre>-like HTML block is an example and is not read at all.
 #
 # EXIT CODES
 #   0  the Kata is actionable now: DUE (measure it) or UNDELIVERED (deliver it); stdout says which
@@ -107,17 +114,42 @@ fi
 [ -n "${today}" ] || today="$(date -u +%Y-%m-%d)"
 
 # marked_values <label> — every value on a `**<label>:**` line of the body, CRLF endings removed.
-# Only rendered text counts: a line
-# quoted with `>`, indented four spaces or a tab (a code block), inside a ``` or ~~~ fence, or inside
-# an HTML comment is an example or an instruction, never this Kata's date. The patterns spell out
-# "up to three spaces" as ` ? ? ?` because the awk on CI's runners has no {n,m} intervals.
+#
+# WHERE A LINE COUNTS is a whitelist, on purpose. A date line is read only at the START OF A
+# PARAGRAPH: on the body's first line, after a blank line, or directly under the other date line.
+# The rule used to be the reverse, a list of the places a line does NOT count (in a quote, after a
+# quoted line, after a line that cannot end a quote ...), and three review rounds each found one
+# more such place. Markdown has too many of them for a line scanner to enumerate. A blank line
+# settles nearly all of them at once: it ends a paragraph, a quote's lazy continuation and an HTML
+# block opened by a tag, so the line after it starts a block of its own.
+#
+# What a blank line does NOT end is tracked as a state, and a line inside one is an example or an
+# instruction, never this Kata's date: a ``` or ~~~ fence, an HTML comment, and the other HTML
+# blocks that run to an end marker (<pre>, <script>, <style>, <textarea>, <?, <!LETTER and
+# <![CDATA[). A line quoted with `>` or indented four spaces or a tab (a code block) is not a date
+# line at all.
+#
+# A date line anywhere else (under a line of text, a quoted line, a heading, a closed fence) is
+# not guessed at. It prints a placeholder that is no date, so the verdict is UNKNOWN malformed and
+# the line gets repaired; it is never silently counted and never silently dropped.
+#
+# The patterns spell out "up to three spaces" as ` ? ? ?`, and a date as digit by digit, because
+# the awk on CI's runners has no {n,m} intervals.
 # A NUL byte is replaced by another control character first. BSD awk ends a line at a NUL, which
 # would hide the rest of that line (a comment opener, or trailing words that make a value
 # malformed) from the scan. It is replaced, never deleted: deleting one inside `2026-0<NUL>9-20`
 # would join the pieces into a date nobody wrote.
 marked_values() {
   jq -r '.body' <<<"${payload}" | tr '\000' '\001' | awk -v label="$1" '
-  BEGIN { marker = "^ ? ? ?\\*\\*" label ":\\*\\*" }
+  BEGIN {
+    marker = "^ ? ? ?\\*\\*" label ":\\*\\*"
+    # Either date line, and one that is nothing but its label and a date-shaped value. Only the
+    # second keeps the next line at a paragraph start: any other text could open an inline span
+    # (a code span, a link) that runs on into the line below.
+    dateline = "^ ? ? ?\\*\\*(Measure on|Delivered on):\\*\\*"
+    whole = dateline "[ \t]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][ \t]*$"
+    fresh = 1
+  }
   # Fences follow CommonMark: an opening run of three or more backticks or tildes indented at most
   # three spaces (or opened within a list item), closed only by a run of the same character at
   # least as long, with nothing after it but whitespace.
@@ -140,34 +172,57 @@ marked_values() {
     }
     return 0
   }
-  # interrupts(line): can this line interrupt a paragraph? CommonMark names the cases, and nothing
-  # else ends a lazy continuation: a thematic break, an ATX heading, a bullet item with content, an
-  # ordered item numbered 1 with content, and the start of an HTML block of kinds 1 to 6 (a comment,
-  # a declaration, or one of the listed block-level tags; any other tag is inline text). A fence is
-  # handled where fences are, and a blank line and a quote marker by their own rules.
-  function interrupts(s,    t) {
+  # raw_html(line): the kind of HTML block this line opens that a blank line does not end, or 0.
+  # CommonMark numbers them: 1 is <pre>, <script>, <style> or <textarea>; 3 is <?; 4 is <! and a
+  # letter; 5 is <![CDATA[. (Kind 2 is the comment, which has its own rule.) Quote and list
+  # markers before the tag are skipped, so a block opened inside a list item is seen too. A block
+  # inside a quote really ends with the quote; here it runs to its end marker, which can only hide
+  # a line, never count one. raw_rest is the line from the tag on.
+  function raw_html(s,    t, l) {
     t = s
-    sub(/^ ? ? ?/, "", t)
-    if (t ~ /^#(#?#?#?#?#?)([ \t]|$)/) return 1
-    if (t ~ /^(\*[ \t]*\*[ \t]*\*[ \t*]*|-[ \t]*-[ \t]*-[ \t-]*|_[ \t]*_[ \t]*_[ \t_]*)$/) return 1
-    if (t ~ /^[-+*][ \t]+[^ \t]/) return 1
-    if (t ~ /^1[.)][ \t]+[^ \t]/) return 1
-    if (t ~ /^<(!|\?)/) return 1
-    t = tolower(t)
-    if (t ~ /^<(script|pre|style|textarea)([ \t>]|$)/) return 1
-    if (t ~ /^<\/?(address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)([ \t>]|\/>|$)/) return 1
+    while (t ~ /^[ \t]*(>|[-+*][ \t]|[0-9]+[.)][ \t])/) sub(/^[ \t]*(>|[-+*]|[0-9]+[.)])[ \t]*/, "", t)
+    sub(/^[ \t]+/, "", t)
+    raw_rest = t
+    l = tolower(t)
+    if (l ~ /^<(pre|script|style|textarea)([ \t>]|$)/) return 1
+    if (t ~ /^<\?/) return 3
+    if (t ~ /^<!\[CDATA\[/) return 5
+    if (t ~ /^<![A-Za-z]/) return 4
     return 0
   }
+  # raw_html_ends(line, kind): does this line carry the end marker of that kind of block?
+  function raw_html_ends(s, kind,    l) {
+    if (kind == 1) {
+      l = tolower(s)
+      return (index(l, "</pre>") > 0 || index(l, "</script>") > 0 || index(l, "</style>") > 0 || index(l, "</textarea>") > 0)
+    }
+    if (kind == 3) return index(s, "?>") > 0
+    if (kind == 4) return index(s, ">") > 0
+    return index(s, "]]>") > 0
+  }
   { sub(/\r$/, "") }
-  in_comment {
-    p = index($0, "-->")
-    if (p > 0) in_comment = unclosed_comment(substr($0, p + 3))
+  # An HTML comment and an HTML block that runs to an end marker each stay open until their own
+  # end marker, whatever the lines between hold, and either can open inside the other. Both are
+  # followed on every such line, and a line is hidden while either is open.
+  in_comment || raw_kind > 0 {
+    if (raw_kind > 0) {
+      if (raw_html_ends($0, raw_kind)) raw_kind = 0
+    } else {
+      kind = raw_html($0)
+      if (kind > 0 && !raw_html_ends(raw_rest, kind)) raw_kind = kind
+    }
+    if (in_comment) {
+      p = index($0, "-->")
+      if (p > 0) in_comment = unclosed_comment(substr($0, p + 3))
+    } else if (unclosed_comment($0)) in_comment = 1
+    fresh = 0
     next
   }
   fence_len > 0 {
     t = unindent_fence($0, fence_indent)
     n = run(t, fence_char)
     if (n >= fence_len && substr(t, n + 1) ~ /^[ \t]*$/) { fence_len = 0; fence_indent = 0 }
+    fresh = 0
     next
   }
   {
@@ -188,36 +243,34 @@ marked_values() {
     n = run(u, c)
     # A backtick fence info string cannot contain a backtick; such a line is inline code.
     if ((c == "`" || c == "~") && n >= 3 && !(c == "`" && index(substr(u, n + 1), "`") > 0)) {
-      fence_char = c; fence_len = n; fence_indent = pfx + extra; in_quote = 0; next
+      fence_char = c; fence_len = n; fence_indent = pfx + extra; fresh = 0; next
     }
   }
-  unclosed_comment($0) { in_comment = 1; in_quote = 0; next }
-  # A paragraph line that follows a quoted PARAGRAPH line with no blank line between is still
-  # inside the quote (a lazy continuation), so a marker there belongs to the quoted text as well.
-  # The quote ends exactly where CommonMark ends it, which is a closed list and not a matter of
-  # taste: at a blank line, and at a line that can interrupt a paragraph (see interrupts below).
-  # A quoted line leaves a paragraph open only if it is itself paragraph text; an empty one, a
-  # heading, a thematic break, a fence or an HTML block leaves nothing to continue.
-  /^[ \t]*$/ { in_quote = 0; next }
-  /^ ? ? ?>/ {
-    q = $0
-    while (q ~ /^ ? ? ?>/) sub(/^ ? ? ?> ?/, "", q)
-    sub(/^[ \t]+/, "", q)
-    # A quoted list item holds a paragraph, so judge what follows its marker.
-    sub(/^([-+*]|[0-9]+[.)])[ \t]+/, "", q)
-    in_quote = (q != "" && q !~ /^(```|~~~)/ && !interrupts(q))
+  {
+    kind = raw_html($0)
+    # A block whose first line also carries its end marker is that one line. The same line can
+    # open a comment as well, and then both are open.
+    if (kind > 0 && !raw_html_ends(raw_rest, kind)) raw_kind = kind
+    if (unclosed_comment($0)) in_comment = 1
+    if (kind > 0 || in_comment) { fresh = 0; next }
+  }
+  /^[ \t]*$/ { fresh = 1; next }
+  $0 ~ dateline {
+    starts = fresh
+    fresh = (starts && $0 ~ whole)
+    if ($0 ~ marker) {
+      v = $0
+      sub(marker "[ \t]*", "", v)
+      sub(/[ \t]+$/, "", v)
+      # A line that does not start a paragraph, and an empty value, each become a placeholder that
+      # is no date. Validation must see both: neither may be dropped, and command substitution
+      # would strip a trailing empty line.
+      if (!starts) print "(misplaced)"
+      else print (v == "" ? "(empty)" : v)
+    }
     next
   }
-  interrupts($0) { in_quote = 0 }
-  $0 ~ marker {
-    if (in_quote) next
-    v = $0
-    sub(marker "[ \t]*", "", v)
-    sub(/[ \t]+$/, "", v)
-    # An empty value becomes a placeholder: command substitution would strip a trailing empty line,
-    # and validation must still see it.
-    print (v == "" ? "(empty)" : v)
-  }'
+  { fresh = 0 }'
 }
 
 # one_date <label> <unknown-suffix> — prints the single calendar date the body names on that line,

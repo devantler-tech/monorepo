@@ -61,7 +61,7 @@ expect "a GitHub web edit's CRLF line endings still parse" 1 "NOT-DUE 2026-10-20
   "$(kata $'Target.\r\n\r\n**Measure on:** 2026-10-20\r\n' 2026-09-25)"
 expect "leading indentation is allowed" 1 "NOT-DUE 2026-10-20" "$(kata $'  **Measure on:** 2026-10-20' 2026-09-25)"
 expect "the same date repeated is one date" 0 "DUE 2026-10-20" \
-  "$(kata $'**Measure on:** 2026-10-20\n\nlater:\n**Measure on:** 2026-10-20' 2026-11-01)"
+  "$(kata $'**Measure on:** 2026-10-20\n\nlater:\n\n**Measure on:** 2026-10-20' 2026-11-01)"
 
 # A date anywhere else is never the measurement date — that is the defect being fixed.
 expect "prose naming a date is not the line: UNKNOWN, never a guess" 2 "UNKNOWN missing" \
@@ -109,15 +109,15 @@ expect "a shorter run inside a longer fence does not close it" 2 "UNKNOWN missin
 expect "a shorter tilde run inside a longer tilde fence does not close it" 2 "UNKNOWN missing" \
   "$(kata $'~~~~\n~~~\n**Measure on:** 2099-01-01\n~~~~' 2026-09-25)"
 expect "a longer run closes a fence" 1 "NOT-DUE 2026-10-20" \
-  "$(kata "${fence}"$'\nexample\n'"\`\`\`\`\`"$'\n**Measure on:** 2026-10-20' 2026-09-25)"
+  "$(kata "${fence}"$'\nexample\n'"\`\`\`\`\`"$'\n\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "a fence line followed by text does not close the fence" 2 "UNKNOWN missing" \
   "$(kata "${fence}"$'\n'"${fence} not a close"$'\n**Measure on:** 2026-10-20\n'"${fence}" 2026-09-25)"
 expect "a backtick run whose info string holds a backtick is inline code, not a fence" 1 "NOT-DUE 2026-10-20" \
-  "$(kata "${fence} aa ${fence}"$'\n**Measure on:** 2026-10-20' 2026-09-25)"
+  "$(kata "${fence} aa ${fence}"$'\n\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "a tilde fence's info string may hold a backtick" 2 "UNKNOWN missing" \
   "$(kata $'~~~ a`b\n**Measure on:** 2026-10-20\n~~~' 2026-09-25)"
 expect "a fence indented four spaces is code, not a fence" 1 "NOT-DUE 2026-10-20" \
-  "$(kata $'    '"${fence}"$'\n**Measure on:** 2026-10-20' 2026-09-25)"
+  "$(kata $'    '"${fence}"$'\n\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "an indented code block is not the line" 2 "UNKNOWN missing" \
   "$(kata $'Example:\n\n    **Measure on:** 2026-10-20' 2026-09-25)"
 expect "a tab-indented line is code, not the line" 2 "UNKNOWN missing" "$(kata $'\t**Measure on:** 2026-10-20' 2026-09-25)"
@@ -130,13 +130,13 @@ expect "a list-contained fenced example does not conflict with the real line" 1 
 expect "a multi-line HTML comment is not the line" 2 "UNKNOWN missing" \
   "$(kata $'<!--\n**Measure on:** YYYY-MM-DD\n-->' 2026-09-25)"
 expect "the line after a closed HTML comment counts" 1 "NOT-DUE 2026-10-20" \
-  "$(kata $'<!-- template:\n**Measure on:** 2026-01-01\n-->\n**Measure on:** 2026-10-20' 2026-09-25)"
+  "$(kata $'<!-- template:\n**Measure on:** 2026-01-01\n-->\n\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "a one-line HTML comment changes nothing after it" 1 "NOT-DUE 2026-10-20" \
-  "$(kata $'<!-- note -->\n**Measure on:** 2026-10-20' 2026-09-25)"
+  "$(kata $'<!-- note -->\n\n**Measure on:** 2026-10-20' 2026-09-25)"
 expect "a comment reopened on a closing line hides subsequent markers" 2 "UNKNOWN missing" \
   "$(kata $'<!-- first\n--> <!-- second\n**Measure on:** 2099-01-01\n-->' 2026-09-25)"
 expect "a comment closed and reopened on a closing line does not conflict with the real line" 1 "NOT-DUE 2026-10-20" \
-  "$(kata $'<!-- first\n--> <!-- second\n**Measure on:** 2099-01-01\n-->\n**Measure on:** 2026-10-20' 2026-09-25)"
+  "$(kata $'<!-- first\n--> <!-- second\n**Measure on:** 2099-01-01\n-->\n\n**Measure on:** 2026-10-20' 2026-09-25)"
 
 # Without `today` the helper uses the current UTC date; far past and far future are stable.
 expect "without today, a far-past date is DUE" 0 "DUE 2000-01-01" "$(kata $'**Measure on:** 2000-01-01')"
@@ -200,55 +200,107 @@ expect "prose naming a delivery is not the line" 0 "UNDELIVERED 2026-10-20" \
   "$(solo "${own}"$'\nDelivered on 2026-09-20 through the pilot.' 2026-09-25 "${none}")"
 expect "a delivery line does not stand in for the measurement date" 2 "UNKNOWN missing" \
   "$(solo $'**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-# A paragraph line straight after a quoted line is still inside the quote, for either marker.
-expect "a delivery line that continues a quote is someone else's text" 0 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}"$'\n> someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-expect "a delivery line after a quote and a blank line counts" 1 "NOT-DUE 2026-10-20" \
-  "$(solo "${own}"$'\n> someone wrote\n\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-expect "a delivery line after a quote and a heading counts" 1 "NOT-DUE 2026-10-20" \
-  "$(solo "${own}"$'\n> someone wrote\n## Delivery\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-expect "a measurement line that continues a quote is not this Kata's date" 2 "UNKNOWN missing" \
+# ── Where a line counts: only at the start of a paragraph ────────────────────────────────────────
+# The rule is a whitelist. A date line is read on the body's first line, after a blank line, or
+# directly under the other date line. Anywhere else it is neither counted nor dropped: the verdict
+# is UNKNOWN, so a line that only looks like a record can never hide the work. Listing the places
+# a line does NOT count was tried first, and three review rounds each found one more.
+under() { # under <label> <the line directly above the delivery line>
+  expect "a delivery line directly under $1 is not read as delivered" 2 "UNKNOWN malformed-delivery" \
+    "$(solo "${own}"$'\n'"$2"$'\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+}
+under "a line of text" 'The pilots ran.'
+under "a quoted line" '> someone wrote'
+under "a nested quoted line" '> > someone wrote'
+under "a quoted list item" '> - someone wrote'
+under "an empty quoted line" '>'
+under "a quoted heading" '> ## Note'
+under "a heading" '## Delivery'
+under "a thematic break" '---'
+under "a bullet item" '- done'
+under "an ordered item" '1. done'
+under "a block-level tag" '<div>'
+under "a closing block-level tag" '</details>'
+under "an inline tag" '<span>note</span>'
+under "a one-line HTML comment" '<!-- note -->'
+under "a setext underline" '==='
+expect "a delivery line directly under a closed fence is not read as delivered" 2 "UNKNOWN malformed-delivery" \
+  "$(solo "${own}"$'\n'"${fence}"$'\nexample\n'"${fence}"$'\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a delivery line directly under a closed HTML comment is not read as delivered" 2 "UNKNOWN malformed-delivery" \
+  "$(solo "${own}"$'\n<!--\nnote\n-->\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+# The case the review named: a tag-opened HTML block that interrupts a quoted paragraph runs to the
+# next blank line, so the line under the tag is raw HTML and not this Kata's record.
+expect "a delivery line under a tag that interrupts a quote is not read as delivered" 2 "UNKNOWN malformed-delivery" \
+  "$(solo "${own}"$'\n> someone wrote\n<div>\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a measurement line directly under a quoted line is not read as the date" 2 "UNKNOWN malformed" \
   "$(solo $'> they suggested\n**Measure on:** 2026-10-20' 2026-09-25 "${open1}")"
-expect "a marker that continues a nested quote is still quoted" 0 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}"$'\n> > someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-expect "a marker that continues a quoted list item is still quoted" 0 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}"$'\n> - someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-# Only a paragraph can be continued. A quoted line that is empty, a heading or a fence leaves
-# nothing to continue, so the unquoted line after it is this Kata's own.
-expect "a delivery line after an empty quoted line counts" 1 "NOT-DUE 2026-10-20" \
-  "$(solo "${own}"$'\n> someone wrote\n>\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-expect "a measurement line after an empty quoted line counts" 1 "NOT-DUE 2026-10-20" \
-  "$(solo $'> they suggested\n> \n**Measure on:** 2026-10-20' 2026-09-25 "${open1}")"
-expect "a delivery line after a quoted heading counts" 1 "NOT-DUE 2026-10-20" \
-  "$(solo "${own}"$'\n> ## Note\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-# The quote ends exactly where CommonMark ends a lazy continuation: at a line that can interrupt a
-# paragraph. Each of these is such a line, so the marker after it is this Kata's own.
-ends_quote() { # ends_quote <label> <the line between the quote and the marker>
-  expect "a delivery line after a quote and $1 counts" 1 "NOT-DUE 2026-10-20" \
-    "$(solo "${own}"$'\n> someone wrote\n'"$2"$'\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a measurement line directly under a line of text is not read as the date" 2 "UNKNOWN malformed" \
+  "$(kata $'Measure it then.\n**Measure on:** 2026-10-20' 2026-09-25)"
+# A misplaced line is reported even beside a well-placed one: it is never silently dropped.
+expect "a misplaced delivery line beside a well-placed one is still UNKNOWN" 2 "UNKNOWN malformed-delivery" \
+  "$(solo "${delivered}"$'\nnote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a misplaced measurement line beside a well-placed one is still UNKNOWN" 2 "UNKNOWN malformed" \
+  "$(kata $'**Measure on:** 2026-10-20\n\nnote\n**Measure on:** 2026-10-20' 2026-09-25)"
+
+# A blank line ends whatever came before it, so the line after one starts a paragraph of its own.
+after_blank() { # after_blank <label> <the line above the blank line>
+  expect "a delivery line after $1 and a blank line counts" 1 "NOT-DUE 2026-10-20" \
+    "$(solo "${own}"$'\n'"$2"$'\n\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 }
-ends_quote "a dash thematic break" '---'
-ends_quote "a star thematic break" '***'
-ends_quote "a spaced underscore thematic break" ' _ _ _'
-ends_quote "a bullet item" '- done'
-ends_quote "an ordered item numbered 1" '1. done'
-ends_quote "an HTML block" '<div>'
-ends_quote "a closing block tag" '</details>'
-ends_quote "a one-line HTML comment" '<!-- note -->'
-expect "a delivery line after a quoted thematic break counts" 1 "NOT-DUE 2026-10-20" \
-  "$(solo "${own}"$'\n> ---\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-# And each of these CANNOT interrupt a paragraph, so the quote runs on through it and the marker
-# after it is still quoted text.
-keeps_quote() { # keeps_quote <label> <the line between the quote and the marker>
-  expect "a delivery line after a quote and $1 is still quoted" 0 "UNDELIVERED 2026-10-20" \
-    "$(solo "${own}"$'\n> someone wrote\n'"$2"$'\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+after_blank "a line of text" 'The pilots ran.'
+after_blank "a quoted line" '> someone wrote'
+after_blank "a heading" '## Delivery'
+after_blank "a block-level tag" '<div>'
+after_blank "a one-line HTML comment" '<!-- note -->'
+after_blank "a one-line <pre> block" '<pre>example</pre>'
+after_blank "a one-line declaration" '<!DOCTYPE html>'
+after_blank "a one-line processing instruction" '<?note ?>'
+after_blank "a tag that only begins like <pre>" '<preview>'
+expect "a line of only spaces and tabs is a blank line" 1 "NOT-DUE 2026-10-20" \
+  "$(solo "${own}"$'\nThe pilots ran.\n \t \n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a delivery line on the body's first line counts" 1 "NOT-DUE 2026-10-20" \
+  "$(solo $'**Delivered on:** 2026-09-20\n\n**Measure on:** 2026-10-20' 2026-09-25 "${none}")"
+# The two lines may sit together: a line that is nothing but its label and a date opens nothing
+# that could run on into the line below, so that line starts as cleanly as it did.
+expect "a delivery line directly under the measurement line counts" 1 "NOT-DUE 2026-10-20" \
+  "$(solo $'## Dates\n\n**Measure on:** 2026-10-20\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a measurement line directly under the delivery line counts" 1 "NOT-DUE 2026-10-20" \
+  "$(solo $'**Delivered on:** 2026-09-20\n**Measure on:** 2026-10-20' 2026-09-25 "${none}")"
+# Any other text on the upper line could open a code span or a link that swallows the lower one.
+expect "a date line under a date line that carries other text is not read" 2 "UNKNOWN malformed" \
+  "$(solo $'**Delivered on:** see `the\n**Measure on:** 2026-10-20\nnotes`' 2026-12-01 "${none}")"
+expect "a pair of date lines that began under text is not read" 2 "UNKNOWN malformed" \
+  "$(solo $'text\n**Delivered on:** 2026-09-20\n**Measure on:** 2026-10-20' 2026-12-01 "${none}")"
+
+# An HTML block that runs to an end marker is not ended by a blank line, so a line inside one is an
+# example even though a blank line stands before it. Once the block has closed, lines count again.
+inside() { # inside <label> <opening line> <closing line>
+  expect "a delivery line inside $1 is an example" 0 "UNDELIVERED 2026-10-20" \
+    "$(solo "${own}"$'\n'"$2"$'\n\n**Delivered on:** 2026-09-20\n\n'"$3" 2026-09-25 "${none}")"
+  expect "a delivery line after $1 has closed counts" 1 "NOT-DUE 2026-10-20" \
+    "$(solo "${own}"$'\n'"$2"$'\n\nexample\n\n'"$3"$'\n\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 }
-keeps_quote "a line of plain text" 'and went on'
-keeps_quote "an ordered item not numbered 1" '2. done'
-keeps_quote "an empty bullet marker" '-'
-keeps_quote "an inline tag" '<span>note</span>'
-keeps_quote "a setext underline" '==='
-keeps_quote "seven hashes, which is no heading" '####### note'
+inside "a <pre> block" '<pre>' '</pre>'
+inside "an upper-case <PRE> block with an attribute" '<PRE class="x">' '</PRE>'
+inside "a <script> block" '<script>' '</script>'
+inside "a <style> block" '<style>' '</style>'
+inside "a <textarea> block" '<textarea>' '</textarea>'
+inside "a processing instruction" '<?note' '?>'
+inside "a declaration" '<!DOCTYPE note' '>'
+inside "a CDATA section" '<![CDATA[' ']]>'
+expect "a delivery line inside a <pre> block opened in a list item is an example" 0 "UNDELIVERED 2026-10-20" \
+  "$(solo "${own}"$'\n- <pre>\n\n  **Delivered on:** 2026-09-20\n  </pre>' 2026-09-25 "${none}")"
+expect "a measurement line inside a <pre> block is an example, not this Kata's date" 2 "UNKNOWN missing" \
+  "$(kata $'<pre>\n\n**Measure on:** 2026-10-20\n\n</pre>' 2026-09-25)"
+# A comment and such a block can open inside one another, and each lasts to its own end marker.
+expect "a comment opened on the line that opens <pre> does not end the block" 0 "UNDELIVERED 2026-10-20" \
+  "$(solo "${own}"$'\n<pre><!-- note\n-->\n\n**Delivered on:** 2026-09-20\n\n</pre>' 2026-09-25 "${none}")"
+expect "a comment opened inside <pre> outlives the block" 0 "UNDELIVERED 2026-10-20" \
+  "$(solo "${own}"$'\n<pre>\n<!--\n</pre>\n\n**Delivered on:** 2026-09-20\n\n-->' 2026-09-25 "${none}")"
+expect "a <pre> block opened inside a comment outlives the comment" 0 "UNDELIVERED 2026-10-20" \
+  "$(solo "${own}"$'\n<!--\n<pre>\n-->\n\n**Delivered on:** 2026-09-20\n\n</pre>' 2026-09-25 "${none}")"
+expect "a delivery line after a comment that held a whole <pre> block counts" 1 "NOT-DUE 2026-10-20" \
+  "$(solo "${own}"$'\n<!--\n<pre>\nexample\n</pre>\n-->\n\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 # A NUL byte inside a date must not be deleted: that would join the pieces into a date nobody wrote.
 expect "a NUL byte inside a delivery date leaves it malformed" 2 "UNKNOWN malformed-delivery" \
   "$(solo "${own}"$'\n**Delivered on:** 2026-0\x019-20' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
@@ -304,16 +356,25 @@ expect_mutant "without the open sub-issue test a Kata with an open child reads U
 mutant closed-children-count 's/(\.sub_issues\.total - \.sub_issues\.completed) >= 1/.sub_issues.total >= 1/'
 expect_mutant "counting closed sub-issues hides a Kata whose children have all closed" closed-children-count \
   "NOT-DUE 2026-10-20" "$(solo "${own}" 2026-09-25 "${closed1}")"
-mutant no-lazy-quote 's/^    if (in_quote) next$//'
-expect_mutant "without the quote rule a delivery line that continues a quote counts" no-lazy-quote \
+mutant no-paragraph-rule 's/^    starts = fresh$/    starts = 1/'
+expect_mutant "without the paragraph rule a delivery line that continues a quote counts" no-paragraph-rule \
   "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect_mutant "without the paragraph rule a delivery line inside a tag-opened HTML block counts" no-paragraph-rule \
+  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n<div>\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+mutant no-html-block-state 's/^    if (kind > 0 && !raw_html_ends(raw_rest, kind)) raw_kind = kind$//'
+expect_mutant "without the HTML block state a delivery line inside <pre> counts" no-html-block-state \
+  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n<pre>\n\n**Delivered on:** 2026-09-20\n\n</pre>' 2026-09-25 "${none}")"
 # shellcheck disable=SC2016 # the expression matches the helper's own text; nothing here expands
-mutant no-interrupt 's/^  interrupts(\$0) { in_quote = 0 }$//'
-expect_mutant "without the interruption rule a thematic break keeps the quote open" no-interrupt \
-  "UNDELIVERED 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n---\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-mutant quote-never-ends 's/^    in_quote = (q != "" .*$/    in_quote = 1/'
-expect_mutant "without the paragraph test an empty quoted line keeps the quote open" quote-never-ends \
-  "UNDELIVERED 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n>\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+mutant no-comment-inside-block 's/^    } else if (unclosed_comment(\$0)) in_comment = 1$/    }/'
+expect_mutant "without it a comment opened inside <pre> closes with the block" no-comment-inside-block \
+  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n<pre>\n<!--\n</pre>\n\n**Delivered on:** 2026-09-20\n\n-->' 2026-09-25 "${none}")"
+mutant no-block-inside-comment 's/^      if (kind > 0 && !raw_html_ends(raw_rest, kind)) raw_kind = kind$//'
+expect_mutant "without it a <pre> block opened inside a comment closes with the comment" no-block-inside-comment \
+  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n<!--\n<pre>\n-->\n\n**Delivered on:** 2026-09-20\n\n</pre>' 2026-09-25 "${none}")"
+# shellcheck disable=SC2016 # the expression matches the helper's own text; nothing here expands
+mutant any-date-line-chains 's/^    fresh = (starts && \$0 ~ whole)$/    fresh = starts/'
+expect_mutant "without the whole-line test a date line under one that carries other text counts" any-date-line-chains \
+  "DUE 2026-10-20" "$(solo $'**Delivered on:** see `the\n**Measure on:** 2026-10-20\nnotes`' 2026-12-01 "${none}")"
 mutant nul-deleted "s/tr '.000' '.001'/tr -d '\\\\000'/"
 expect_mutant "deleting a NUL byte joins a broken delivery date into a valid one" nul-deleted \
   "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n**Delivered on:** 2026-0\x019-20' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
@@ -380,6 +441,8 @@ selection_clauses=(
   'its body carries a `**Delivered on:** YYYY-MM-DD` line (a UTC date, today or earlier), which the delivering run adds'
   'An experiment with a future date and neither is **delivery work, never a skip**'
   'That includes one whose sub-issues have all closed. A closed child proves only that the child closed'
+  'Write each of the two lines at the start of a paragraph: after a blank line, or directly under the other one.'
+  'Anywhere else it cannot be told from quoted or example text, and is reported for repair instead of read.'
   '`NOT-DUE` is the skip, `UNDELIVERED` is delivery work, and its `UNKNOWN` is a line to repair, never a skip'
 )
 contract() { # contract <label> <text> <clause>...
