@@ -146,8 +146,9 @@ case "${provider}" in
         printf '%s\n%s' "${disclosure}" "$(marker bugbot)"
         ;;
       trigger)
-        # Bugbot exact-matches the whole body: any extra byte, including a disclosure line,
-        # silently voids the request. This is the one sanctioned bare trigger.
+        # Bugbot starts only on a comment that OPENS with the command, so a disclosure line
+        # above it silently voids the request. Text after it would not, but it would be
+        # undisclosed content, so this exact body is the one sanctioned bare trigger.
         [ -z "${head}" ] || die "--head belongs on the disclosure part, not the trigger"
         [ "${actor_set}" -eq 0 ] || die "--actor belongs on the disclosure part, not the trigger"
         printf '%s' '@cursor review'
