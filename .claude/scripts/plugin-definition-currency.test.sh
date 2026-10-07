@@ -1944,6 +1944,37 @@ case "${out}" in
     ok "the pin source prints a remote URL without the credentials written into it" ;;
   *) fail "the pin source does not name the remote's location without its credentials: ${out}" ;;
 esac
+# A token is written into a URL in more places than before the host: the query and the fragment
+# carry one too. The stand-in above cannot reach a repository through a URL with a query, so the
+# function that prints the location is asked directly. It keeps what names the repository (scheme,
+# host and port, path) and drops the rest, and prints any byte that is not printable ASCII as `?`,
+# since the line is copied into reports.
+printable_url_source="$(awk '/^printable_url\(\) \{$/ { on = 1 } on { print } on && /^\}$/ { exit }' "${script}")"
+[ -n "${printable_url_source}" ] || fail "cannot find printable_url in ${script}"
+eval "${printable_url_source}"
+expect_printable() { # <url> <what must be printed> <case name>
+  local got
+  got="$(printable_url "$1")"
+  [ "${got}" = "$2" ] || fail "$3: printed '${got}', want '$2'"
+  case "${got}" in *s3cr3t*) fail "$3: the secret written into the URL was printed: ${got}" ;; esac
+  ok "$3"
+}
+expect_printable 'https://host.example/org/repo.git?token=s3cr3t' 'https://host.example/org/repo.git' \
+  "the pin source leaves out a URL's query"
+expect_printable 'https://host.example/org/repo.git#s3cr3t' 'https://host.example/org/repo.git' \
+  "the pin source leaves out a URL's fragment"
+expect_printable 'https://user:s3cr3t@host.example:8443/org/repo.git?access_token=s3cr3t#s3cr3t' \
+  'https://host.example:8443/org/repo.git' \
+  "the pin source keeps scheme, host, port and path, and nothing else"
+expect_printable 'https://host.example?token=s3cr3t' 'https://host.example' \
+  "the pin source leaves out a query that follows the host directly"
+expect_printable 's3cr3t@host.example:org/repo.git' 'host.example:org/repo.git' \
+  "the pin source leaves out the user of an scp-style location"
+expect_printable '/srv/git/a?b#c.git' '/srv/git/a?b#c.git' \
+  "the pin source prints a plain path whole"
+expect_printable "https://host.example/org/repo.git"$'\n'"pin source      : forged"$'\033'"[2K" \
+  'https://host.example/org/repo.git?pin source      : forged?[2K' \
+  "the pin source prints a line break or an escape byte in a URL as a question mark"
 
 # Anything this checkout wrote itself cannot show what the deployment adopted. Each of these named
 # the working tree's own HEAD and, before they were refused, printed CURRENT with "adopted" beside it.
@@ -2082,7 +2113,11 @@ real_git_path="$(command -v git)"
 mkdir -p "${adopt}/fetchless"
 cat > "${adopt}/fetchless/git" <<SHIM
 #!/bin/sh
-# The real git for everything except bringing objects in.
+# The real git for everything except bringing objects in. Each call that talks to the remote is
+# written down first, with its arguments.
+case " \$* " in
+  *" ls-remote --symref "* | *" fetch "*) printf '%s\n' "\$*" >> "${adopt}/fetchless/remote-calls" ;;
+esac
 for arg in "\$@"; do
   if [ "\$arg" = fetch ]; then
     : > "${adopt}/fetchless/refused"
@@ -2100,6 +2135,20 @@ if git -C "${work}" cat-file -e "${unfetched_commit}^{commit}" 2>/dev/null; then
   fail "fixture: the advertised tip reached the working repository although its fetch was refused"
 fi
 ok "a refused fetch leaves the advertised tip out of the working repository"
+# Both calls that talk to the remote refuse an HTTP redirect (monorepo#3824). git follows a redirect
+# of its first request by default, so the pin could come from a repository the pin source line does
+# not name. No web server stands behind this suite, so what is pinned is that both calls carry the
+# setting: the read of the default branch, and the fetch of its tip.
+remote_calls="$(cat "${adopt}/fetchless/remote-calls" 2>/dev/null || true)"
+remote_reads="$(grep -c -- ' ls-remote --symref ' <<<"${remote_calls}" || true)"
+remote_fetches="$(grep -c -- ' fetch ' <<<"${remote_calls}" || true)"
+if [ "${remote_reads}" -ne 1 ] || [ "${remote_fetches}" -ne 1 ]; then
+  fail "fixture: expected one read of the default branch and one fetch, saw ${remote_reads} and ${remote_fetches}: ${remote_calls}"
+fi
+remote_following="$(grep -v -- ' -c http.followRedirects=false ' <<<"${remote_calls}" || true)"
+[ -z "${remote_following}" ] \
+  || fail "a call to the remote would follow an HTTP redirect: ${remote_following}"
+ok "the default-branch read and the fetch both refuse an HTTP redirect"
 
 # 14e. UNADOPTED — the two pins differ and share no history, so which side moved is not established.
 unrelated_commit="$(git -C "${work}" -c commit.gpgsign=false commit-tree -m 'unrelated root' "${rollout_commit}^{tree}")"

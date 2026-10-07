@@ -258,20 +258,39 @@ bounded_remote() {
   return "$rc"
 }
 
-# printable_url <url> — the location without any user name or password written into it. The pin
-# source line is printed with every verdict and copied into reports, and a remote URL can carry a
-# token (`https://user:token@host/...`). Only a URL with a scheme can: an scp-style `user@host:path`
-# has no place for one, and a path has neither.
+# printable_url <url> — where the remote is, and nothing else. The pin source line is printed with
+# every verdict and copied into reports, and a URL has more than one place a token is written into:
+# the user and password before the host, the query, and the fragment. So this keeps what names the
+# repository — the scheme, the host with its port, and the path — and drops the rest, instead of
+# removing the places known to hold a secret. Of an scp-style `user@host:path` it keeps the host and
+# the path; a plain path is kept whole. Any byte that is not printable ASCII is printed as `?`, so
+# nothing in a URL can start a new line or move the cursor in the report it is copied into.
 printable_url() {
-  local url="$1" rest authority
+  local url="$1" scheme="" host="" path rest first
   case "$url" in
     *://*)
+      scheme="${url%%://*}://"
       rest="${url#*://}"
-      authority="${rest%%/*}"
-      printf '%s://%s%s\n' "${url%%://*}" "${authority##*@}" "${rest#"$authority"}"
+      host="${rest%%[/?#]*}"
+      path="${rest#"$host"}"
+      path="${path%%[?#]*}"
+      host="${host##*@}"
       ;;
-    *) printf '%s\n' "$url" ;;
+    /* | ./* | ../*) path="$url" ;;
+    *:*)
+      first="${url%%:*}"
+      case "$first" in
+        */*) path="$url" ;;
+        *)
+          host="${first##*@}"
+          path=":${url#*:}"
+          ;;
+      esac
+      ;;
+    *) path="$url" ;;
   esac
+  printf '%s%s%s' "$scheme" "$host" "$path" | LC_ALL=C tr -c '\040-\176' '?'
+  printf '\n'
 }
 
 # The tip of the remote's default branch, asked of the remote itself. A local remote-tracking ref is
@@ -310,7 +329,11 @@ resolve_adopted_from_remote() {
       die "remote '$REMOTE' points back at this repository, so it cannot show what the deployment adopted — the adopted pin is unknown${ADOPTED_RECOVERY}"
     fi
   fi
+  # http.followRedirects=false, here and on the fetch below: git follows a redirect of its first
+  # request by default, and the pin would then come from a location the pin source line does not
+  # name. A remote that redirects fails this read instead, and the verdict is UNKNOWN.
   advertised="$(bounded_remote "$REMOTE_TIMEOUT_SECS" git -C "$REPO_ROOT" \
+      -c http.followRedirects=false \
       -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$REMOTE_TIMEOUT_SECS" \
       ls-remote --symref -- "$REMOTE" HEAD 2>/dev/null)" \
     || die "cannot read the default branch of remote '$REMOTE' from $REPO_ROOT within ${REMOTE_TIMEOUT_SECS}s — the adopted pin is unknown${ADOPTED_RECOVERY}"
@@ -328,6 +351,7 @@ resolve_adopted_from_remote() {
     # being readable afterwards is. --no-auto-maintenance: the repository is shared by every
     # session, and this check promises to add objects and nothing else.
     bounded_remote "$REMOTE_TIMEOUT_SECS" git -C "$REPO_ROOT" \
+      -c http.followRedirects=false \
       -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$REMOTE_TIMEOUT_SECS" \
       fetch --quiet --no-tags --no-recurse-submodules --no-auto-maintenance \
       --no-write-fetch-head --refmap= -- "$REMOTE" "$ADOPTED_COMMIT" >/dev/null 2>&1 || true
