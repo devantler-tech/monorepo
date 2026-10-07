@@ -5,8 +5,8 @@
 # WHY THIS EXISTS
 #   AGENTS.md requires every review request to carry the disclosure line and a current-head
 #   request marker IN THE SAME COMMENT as the trigger, with Bugbot the single exception (its
-#   trigger must be the whole comment body, so its disclosure + marker go in a preceding
-#   comment). Stated only as prose, lanes kept posting bare `@codex review` /
+#   trigger must open the comment and is posted bare, so its disclosure + marker go in a
+#   preceding comment). Stated only as prose, lanes kept posting bare `@codex review` /
 #   `@coderabbitai full review` comments: 49 in 24h across two lanes on 2026-09-13. An
 #   undisclosed `devantler` comment reads as the HUMAN MAINTAINER to every later run, so each
 #   one is agent output sitting on the control channel.
@@ -146,8 +146,9 @@ case "${provider}" in
         printf '%s\n%s' "${disclosure}" "$(marker bugbot)"
         ;;
       trigger)
-        # Bugbot exact-matches the whole body: any extra byte, including a disclosure line,
-        # silently voids the request. This is the one sanctioned bare trigger.
+        # Bugbot starts only on a comment that OPENS with the command, so a disclosure line
+        # above it silently voids the request. Text after it would not, but it would be
+        # undisclosed content, so this exact body is the one sanctioned bare trigger.
         [ -z "${head}" ] || die "--head belongs on the disclosure part, not the trigger"
         [ "${actor_set}" -eq 0 ] || die "--actor belongs on the disclosure part, not the trigger"
         printf '%s' '@cursor review'

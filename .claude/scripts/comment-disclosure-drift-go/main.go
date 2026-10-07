@@ -156,9 +156,9 @@ var reviewVerdictPattern = regexp.MustCompile(
 // bareTriggerExemptBodies are the complete comment bodies that may carry no
 // disclosure at all, compared case-insensitively after trimming.
 //
-// Deliberately just ONE entry. AGENTS.md grants the carve-out to Bugbot alone,
-// because Bugbot exact-matches the whole comment body, so its trigger cannot
-// share a comment with a disclosure line; every other lane's trigger is required
+// Deliberately just ONE entry. The contract grants the carve-out to Bugbot alone,
+// because Bugbot starts only on a comment that OPENS with its command, so no
+// disclosure line can lead that comment; every other lane's trigger is required
 // to sit in the SAME disclosed comment as its request marker. Widening this to
 // "any recognised trigger prefix" would exempt `@codex review`, `@coderabbitai
 // review` and even `@cursor investigate` — leaving common real violations
@@ -174,8 +174,8 @@ const (
 	// Compliant means the body begins with the canonical disclosure prefix.
 	Compliant Verdict = "compliant"
 	// BareTrigger means the whole body is exactly a review-lane trigger, which
-	// the contract exempts: the trigger must be the entire body for the lane to
-	// fire, and the disclosure goes in its own preceding comment.
+	// the contract exempts: nothing may stand above the command for the lane to
+	// start, so the disclosure goes in its own preceding comment.
 	BareTrigger Verdict = "bare-trigger"
 	// SenderMarker means the first line is a non-canonical 🤖 sender marker.
 	SenderMarker Verdict = "sender-marker"
@@ -204,7 +204,7 @@ const (
 
 // codeRabbitTriggers are the reviewTriggers that must END their comment. Codex is
 // absent because its focus suffix is part of the command, and Bugbot's trigger is
-// already required to be the whole body.
+// absent because any body but its exact one is already an undisclosed trigger.
 var codeRabbitTriggers = []string{
 	"@coderabbitai full review",
 	"@coderabbitai review",
@@ -529,11 +529,13 @@ func codeRabbitTriggerWithExtraText(body string) (string, bool) {
 // never on a recognised prefix plus a word count: a prefix rule exempts
 // `@cursor investigate` and `@codex fix`, which are not review triggers and are
 // not carved out.
-// Byte-exactness is the point, not pedantry: the exemption exists only because
-// Bugbot exact-matches the whole comment body, so a variant that would NOT fire
-// the lane has no claim to it. Accepting `@Cursor Review`, a double-spaced variant
-// or padding would hide a disclosure violation on a comment that also silently
-// started no review.
+// Byte-exactness is the point, not pedantry: the exemption is for the ONE body
+// the contract posts, a machine command that carries no prose. It is not for
+// every body that starts Bugbot. Measured on monorepo#3949 (2026-10-07,
+// monorepo#3520), Bugbot also starts when text follows the command, on the same
+// line or on later lines, and that text is undisclosed content: exempting it
+// would let anything written below a trigger pass as agent output nobody signed.
+// Such a body is a trigger-led violation instead (UndisclosedTrigger).
 //
 // Nothing is trimmed. Measured across the portfolio, every real bare trigger is
 // stored as exactly "@cursor review" (ksail#6244 comment 5030838309,

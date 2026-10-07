@@ -376,8 +376,10 @@ result at the current head — self-promotion is forbidden before that. Request 
   ref, not a comment, so it is not the retired reservation comment below. Remove locks left by
   closed PRs and superseded heads with `review-request-lock.sh sweep --repo <owner>/<repo> [--apply]`.
   [`bugbot-request-marker.sh --repo <owner>/<repo> --pr <n> [--head <headRefOid>]`](../scripts/bugbot-request-marker.sh)
-  checks that pairing for every bare `@cursor review` on a PR and reports it apart from disclosure
-  drift: `0` paired, `1` an unpaired trigger or a latest request naming another head, `2` unknown.
+  checks that pairing for every comment on a PR whose first line names `@cursor review`, which is
+  wider than the bare trigger on purpose (see the measurement below), and reports it apart from
+  disclosure drift: `0` paired, `1` an unpaired trigger or a latest request naming another head,
+  `2` unknown.
   🔴 **Compose every review-request comment with
   [`.claude/scripts/review-request-comment.sh`](../scripts/review-request-comment.sh) — never
   hand-write one.** It prints the only allowed shapes: disclosure, marker, and trigger in one comment
@@ -423,14 +425,38 @@ result at the current head — self-promotion is forbidden before that. Request 
   fired** (2026-07-20, monorepo#2309/#2322). A `@cursor review` carrying the usual
   `> Requested by the 🤖 Daily AI Engineer` line above it **also did not fire** (19:13:28Z — no
   reaction, no check). A comment whose body was **exactly `@cursor review` and nothing else** started
-  Bugbot **9 seconds** later (19:20:20Z → check `started_at` 19:20:29Z). Bugbot exact-matches the whole
-  comment body, so any extra line silently voids the request — and a voided request is
+  Bugbot **9 seconds** later (19:20:20Z → check `started_at` 19:20:29Z). So a line ABOVE the command
+  silently voids the request — and a voided request is
   indistinguishable from a dead lane, which is precisely how ~40 minutes were lost that day.
+  🔴 **Bugbot starts on a comment that OPENS with the command; text AFTER it voids nothing**
+  (re-measured 2026-10-07 on monorepo#3949 for monorepo#3520, each shape posted on its own and
+  Bugbot's check-run read back). Until then this section said Bugbot exact-matches the whole body.
+  That was inferred from the two cases above, and the measurement refutes it:
+
+  | Comment body | Bugbot check-run |
+  |---|---|
+  | exactly `@cursor review` | started 8 s later |
+  | `@cursor review please` (more text on the same line) | started 8 s later |
+  | `@cursor review`, then a blank line, a rule and a footer | started 8 s later |
+  | a disclosure line, then a sentence that names `@cursor review` | none in 135 s |
+  | a disclosure line, then `@cursor review` alone on its own line | none in 137 s |
+
+  The third row is what the GitHub connector posts: it appends its own footer to every comment, and
+  monorepo#3520 counted that shape as 27 of 31 Bugbot triggers in this repository over
+  2026-09-16→23. Each was a live request, and a check that recognised only the exact body counted
+  none of them.
+  **Post only the exact bare body anyway** — it is the one shape `review-request-comment.sh`
+  composes and the only one the disclosure guard exempts. These five rows are all that was
+  measured. The only shape known NOT to start Bugbot is the command below the first line, so
+  `bugbot-request-marker.sh` leaves out that shape alone: it counts every comment whose first line
+  names the command, measured or not, and requires its marker, because a live request read as
+  none is the costly error. `comment-disclosure-drift.sh` reports a comment that opens with the
+  command, and is not the exact bare body, as an undisclosed trigger.
   **Carve-out, deliberately narrow:** post the disclosure as its **own comment immediately before** the
   bare trigger, so the thread still self-documents as agent-driven and the *Untrusted input*
   disambiguator still has a disclosed neighbour. A bare `@cursor review` is a **machine command with no
   prose content** — it instructs no agent and asserts nothing, so it cannot function as a disguised
-  maintainer instruction. This carve-out covers **only** an exact-match review trigger; every other
+  maintainer instruction. This carve-out covers **only** the exact bare trigger; every other
   comment you author keeps its inline disclosure line.
 
 - **READ a lane's quota state before spending a request on it — its artifacts say so for free.**

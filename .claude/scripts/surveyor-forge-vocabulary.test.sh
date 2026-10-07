@@ -230,6 +230,7 @@ deny	gh api graphql --paginate -F number=PLACEHOLDER -f query='query($number:Int
 deny	gh api repos/devantler-tech/PLACEHOLDER/issues/PLACEHOLDER --jq '{body:(.body // ""),sub_issues:.sub_issues_summary}' | PLACEHOLDER/.claude/scripts/kata-measure-date.sh --input -
 deny	gh issue view PLACEHOLDER --repo devantler-tech/PLACEHOLDER --json comments | PLACEHOLDER/.claude/scripts/maintainer-comment-candidates.sh --input -
 deny	gh pr view PLACEHOLDER --repo devantler-tech/PLACEHOLDER --json body --jq .body | PLACEHOLDER/.claude/scripts/pr-ownership-disclosure.sh --input -
+deny	gh pr view PLACEHOLDER --repo devantler-tech/PLACEHOLDER --json url,baseRefName,headRefOid | PLACEHOLDER/.claude/scripts/required-gate-completeness.sh --input -
 deny	gh api graphql --paginate -f query='query($endCursor:String){search(query:"org:devantler-tech is:pr is:open archived:false",type:ISSUE,first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{url headRefName headRepositoryOwner{login} headRepository{name}}}}}' --jq '[.data.search.nodes[]]' | PLACEHOLDER/.claude/scripts/pr-worktree-holder.sh --input -
 CORPUS
 )

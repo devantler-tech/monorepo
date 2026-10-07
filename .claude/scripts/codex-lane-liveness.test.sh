@@ -172,12 +172,72 @@ run_check "$db"
 expect_rc 0 "an IN_PROGRESS row must not be classified after its updated_at ages past grace"
 expect_out "OK" "terminal history containing a healthy run must remain OK"
 
-# --- 4. duration alone is not enough -----------------------------------------------------------
-db=$TMP/fastok.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
-add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 yes           # fast BUT wrote an inbox item
+# --- 4. an inbox item on a run that stopped at start-up is not proof of work (monorepo#3929) ------
+# This case used to assert exit 0, and that was the defect: about 145 consecutive hourly runs each
+# stopped at their start-up checks, wrote a notice saying so, and were read as producing for six
+# days. The notice is content the run chooses; the duration is not.
+db=$TMP/fastnotice.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 yes           # fast, and wrote an inbox item
 add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 yes
 run_check "$db"
-expect_rc 0 "a fast run that wrote an inbox item is not a stub"
+expect_rc 1 "fast runs that wrote an inbox item did no work"
+expect_out "pre-flight window" "the verdict must name the pre-flight window"
+expect_out_not "OK  lane-a" "an inbox item must not certify a run that ended at start-up"
+
+# --- 4b. THE LIVE SHAPE: every newest run short, every one carrying a notice ---------------------
+# Durations are the measured ones from 2026-10-03..07 (145-458 s).
+db=$TMP/preflight-live.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))   284 yes
+add_run "$db" lane-a $(( GRACE_MS + 3660000 )) 458 yes
+add_run "$db" lane-a $(( GRACE_MS + 7260000 )) 145 yes
+run_check "$db" --consecutive 3
+expect_rc 1 "runs that all stopped at pre-flight with a notice are NOT-PRODUCING"
+expect_out "NOT-PRODUCING  lane-a" "the pre-flight verdict must name the lane"
+expect_out "an inbox item does not count" "the verdict must say why the notices were not counted"
+
+# --- 4c. one long working run in the window is still OK ------------------------------------------
+# 6,437 s is the one working run measured on 2026-10-07, beside two pre-flight stops.
+db=$TMP/preflight-oneworked.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))   284  yes
+add_run "$db" lane-a $(( GRACE_MS + 3660000 )) 6437 yes
+add_run "$db" lane-a $(( GRACE_MS + 7260000 )) 255  yes
+run_check "$db" --consecutive 3
+expect_rc 0 "one long working run in the window keeps the lane OK"
+expect_out "OK  lane-a" "a working run must be reported OK"
+expect_out_not "NOT-PRODUCING" "a single pre-flight stop beside a working run must not fire"
+
+# --- 4d. the boundary is exact, in milliseconds --------------------------------------------------
+db=$TMP/preflight-at.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))   600000 yes
+add_run_ms "$db" lane-a $(( GRACE_MS + 3660000 )) 600000 yes
+run_check "$db"
+expect_rc 1 "a run that ended exactly at the pre-flight window is inside it"
+db=$TMP/preflight-over.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))   600001 yes
+add_run_ms "$db" lane-a $(( GRACE_MS + 3660000 )) 600001 yes
+run_check "$db"
+expect_rc 0 "a run 1 ms past the pre-flight window with an inbox item is producing"
+# The window is a knob, and the verdict follows it.
+run_check "$TMP/preflight-live.db" --consecutive 3 --preflight-seconds 100
+expect_rc 0 "a narrower pre-flight window must stop counting longer runs as pre-flight stops"
+
+# --- 4d2. a known pre-flight stop beside a working run is not "unproven" --------------------------
+# A run that ended inside the pre-flight window with no inbox item is a known stop, not an unjudged
+# long run, so it must not turn a window that also holds a working run into UNKNOWN.
+db=$TMP/preflight-mixed.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))   200 no
+add_run "$db" lane-a $(( GRACE_MS + 3660000 )) 900 yes
+run_check "$db"
+expect_rc 0 "a pre-flight stop beside a working run must not read as unproven"
+expect_out_not "production is unproven" "a known pre-flight stop is not an unjudged long run"
+
+# --- 4e. the knob is validated like the others ---------------------------------------------------
+run_check "$TMP/preflight-live.db" --preflight-seconds abc
+expect_rc 2 "a non-numeric --preflight-seconds must be rejected"
+expect_out "PREFLIGHT_SECONDS must be a non-negative integer" "the non-numeric refusal must come from the validation, not from a failed comparison"
+run_check "$TMP/preflight-live.db" --preflight-seconds 30
+expect_rc 2 "a pre-flight window shorter than the stub window must be rejected"
+expect_out "at least --stub-seconds" "the refusal must name the constraint"
 
 # --- 5. missing inbox alone is not a STUB, but it is not health either --------------------------
 # A long run without an inbox item is not the dispatch-time death the NOT-PRODUCING verdict names,
@@ -380,6 +440,17 @@ fi
 
 asserts=$(( asserts + 1 ))
 noncomment=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
+# `archived_sessions` is the name of the runtime's archive DIRECTORY (monorepo#3950), not a store
+# column, and the script must name it to find a moved rollout. Only that exact path segment is set
+# aside; the controls below prove every real `archived_*` column is still caught afterwards.
+strip_archive_dir() { printf '%s' "${1//\/archived_sessions\"/\"}"; }
+noncomment=$(strip_archive_dir "$noncomment")
+for col in archived_user_message archived_assistant_message archived_reason archived_sessions; do
+  asserts=$(( asserts + 1 ))
+  if ! grep -Eq "$PAYLOAD_RE" <<<"$(strip_archive_dir "SELECT $col FROM automation_runs;")"; then
+    note_fail "the archive-directory allowance hides a reference to the column-shaped name $col"
+  fi
+done
 if grep -Eq "$PAYLOAD_RE" <<<"$noncomment"; then
   note_fail "the script must not read a run's payload columns"
 fi
@@ -420,17 +491,27 @@ run_check "$db" --automation lane-b
 expect_rc 2 "an inactive automation must be UNKNOWN, never NOT-PRODUCING"
 expect_out "not an ACTIVE automation" "the inactive refusal must name the reason"
 
-# --- a run just OVER the stub threshold is not a stub --------------------------------------------
-# Whole-second truncation classified `STUB_SECONDS*1000 + 999` ms as exactly STUB_SECONDS, so a run
-# genuinely over the threshold counted as under it. Both runs sit 999 ms over, so the comparison
+# --- a run just OVER the pre-flight window is not a pre-flight stop -------------------------------
+# Whole-second truncation classified `N*1000 + 999` ms as exactly N seconds, so a run genuinely over
+# a threshold counted as under it. Both runs sit 999 ms over the pre-flight window, so the comparison
 # precision is the only thing deciding the verdict.
 db=$TMP/justover.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))  600999 no
+add_run_ms "$db" lane-a $(( GRACE_MS + 900000 )) 600999 no
+run_check "$db"
+expect_rc 2 "a run 999ms over the pre-flight window must not be counted a pre-flight stop"
+expect_out "600999ms" "the verdict must report the millisecond duration it actually compared"
+expect_out_not "NOT-PRODUCING" "999ms over the window must not reach the dead-lane verdict"
+
+# Just over the STUB window but inside the pre-flight one: no longer unproven. The run ended before
+# any run has ever done work, so it is a pre-flight stop, worded as one rather than as a stub.
+db=$TMP/overstub.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))  60999 no
 add_run_ms "$db" lane-a $(( GRACE_MS + 900000 )) 60999 no
 run_check "$db"
-expect_rc 2 "a run 999ms over the stub threshold must not be counted a stub"
-expect_out "60999ms" "the verdict must report the millisecond duration it actually compared"
-expect_out_not "NOT-PRODUCING" "999ms over the threshold must not reach the dead-lane verdict"
+expect_rc 1 "a run past the stub window but inside the pre-flight window did no work"
+expect_out "pre-flight window" "it must be worded as a pre-flight stop"
+expect_out_not "with no inbox item" "a run past the stub window must not be worded as a stub"
 
 # --- a NEGATIVE duration is corrupt timing data, not a long run ----------------------------------
 # updated_at before created_at cannot describe a real run. Treating it as a large duration made it a
@@ -610,6 +691,124 @@ expect_out "NOT-PRODUCING  lane-i" "a run that settled before the refusal must n
 expect_out "account-scoped" "the verdict must still name the account scope"
 expect_out_not "OK  lane-i" "a start-time comparison would have reported this lane OK"
 
+# A pre-flight notice does not clear an account-scoped refusal (monorepo#3929).
+# A refusal is cleared by a producing run anywhere on the account. A notice from a run that
+# stopped at start-up is not production, so it must not clear one either.
+db=$TMP/preflight-acct.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-e $(( GRACE_MS + 3660000 )) 4 no
+add_run "$db" lane-e $(( GRACE_MS + 1800000 )) 4 no             # the refusal
+add_rollout "$db" lane-e usage_limit_exceeded
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes          # produced BEFORE the refusal
+add_run "$db" lane-i $(( GRACE_MS + 60000 ))   200 yes          # a notice AFTER it, from a pre-flight stop
+run_check "$db"
+expect_rc 1 "a pre-flight notice after a refusal must not clear it"
+expect_out "NOT-PRODUCING  lane-i" "the sibling lane must stay NOT-PRODUCING behind the refusal"
+
+# A refusal that took longer than the stub window is still a refusal. A 200-second run refused for
+# quota is a pre-flight stop with a proven account-scoped cause, so a sibling automation asked about
+# on its own must not read OK from its older healthy runs.
+db=$TMP/preflight-acct-long.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-e $(( GRACE_MS + 3660000 )) 900 yes
+add_run "$db" lane-e $(( GRACE_MS + 60000 ))   200 no              # the refusal, 200 s long
+add_rollout "$db" lane-e usage_limit_exceeded
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 3600000 )) 800 yes
+run_check "$db" --automation lane-i
+expect_rc 1 "a quota refusal longer than the stub window must still reach the sibling automation"
+expect_out "account-scoped" "the verdict must name the account scope"
+
+# --- archived outcome records (monorepo#3950) ----------------------------------------------------
+# The runtime MOVES a run's outcome record out of the dated sessions tree into a flat archive folder
+# once the run is archived, and almost every scheduled run is archived within hours. Measured
+# 2026-10-07: of the newest 30 archived scheduled runs, 0 records were under the sessions tree and 30
+# in the archive folder — so the cause read `unknown` for every one of them.
+ARCH=$TMP/archived_sessions
+
+# archive_rollout <db> <automation> <codex_error_info>
+# Same record as add_rollout, written ONLY to the archive folder, flat, as the runtime leaves it.
+archive_rollout() {
+  local tid
+  tid=$(sqlite3 "$1" "SELECT thread_id FROM automation_runs WHERE automation_id='$2' ORDER BY updated_at DESC LIMIT 1;")
+  mkdir -p "$ARCH"
+  printf '%s\n' '{"type":"session_meta","payload":{"id":"fixture"}}' \
+    "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"t\",\"error\":{\"message\":\"PRIVATE-ROLLOUT-MESSAGE\",\"codex_error_info\":\"$3\"}}}" \
+    > "$ARCH/rollout-2026-09-15T00-00-00-$tid.jsonl"
+  # The reach guard: the record must exist in the archive and NOT under the sessions tree, or the
+  # case below would pass on the old lookup and prove nothing.
+  asserts=$(( asserts + 1 ))
+  if [ ! -s "$ARCH/rollout-2026-09-15T00-00-00-$tid.jsonl" ] ||
+     [ -n "$(find "$SESS" -type f -name "rollout-*-$tid.jsonl" 2>/dev/null)" ]; then
+    note_fail "fixture error: the archived record for $tid is not archive-only"
+  fi
+}
+
+# A stopped run whose record is only in the archive folder still names its cause.
+db=$TMP/arch-quota.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 no
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 no
+archive_rollout "$db" lane-a usage_limit_exceeded
+run_check "$db"
+expect_rc 1 "an all-stub lane whose record is archived must still be NOT-PRODUCING"
+expect_out "cause=quota/billing" "an archived outcome record must still yield the cause class"
+expect_out_not "PRIVATE-ROLLOUT-MESSAGE" "an archived record's message must never reach the output"
+expect_out_not "usage_limit_exceeded" "an archived record's raw classifier is never echoed"
+
+# The account-wide rule applies to an archived refusal exactly as to a live one.
+db=$TMP/arch-acct.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-e $(( GRACE_MS + 900000 )) 4 no
+add_run "$db" lane-e $(( GRACE_MS + 60000 ))  3 no
+archive_rollout "$db" lane-e usage_limit_exceeded
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 3600000 )) 800 yes
+run_check "$db" --automation lane-i
+expect_rc 1 "an archived account-scoped refusal must reach the sibling automation"
+expect_out "account-scoped" "the verdict must name the account scope for an archived refusal"
+
+# The archive folder is named explicitly when it is not beside the sessions tree.
+db=$TMP/arch-flag.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 no
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 no
+archive_rollout "$db" lane-a usage_limit_exceeded
+mv "$ARCH" "$TMP/elsewhere"
+run_check "$db"
+expect_rc 1 "a record that is in neither place must leave the verdict NOT-PRODUCING"
+expect_out "cause=unknown" "a record present in neither place must read unknown"
+run_check "$db" --archived-sessions "$TMP/elsewhere"
+expect_out "cause=quota/billing" "--archived-sessions must name the archive folder"
+mv "$TMP/elsewhere" "$ARCH"
+
+# A record in neither place never escalates: the mixed window stays OK.
+db=$TMP/arch-none.db; mkstore "$db"; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 120000 ))  3 no
+run_check "$db"
+expect_rc 0 "a run with no record in either place must not escalate"
+expect_out_not "NOT-PRODUCING" "an unfindable cause must leave a mixed window OK"
+
+# The archive is read with the same EXACT mapping: a lookalike there is unknown too.
+db=$TMP/arch-lookalike.db; mkstore "$db"; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 120000 ))  3 no
+archive_rollout "$db" lane-i usage_limit_exceeded_v2
+run_check "$db"
+expect_rc 0 "a lookalike classifier in the archive must not be read as an account-scoped refusal"
+
+# The archive works when the sessions tree does not exist at all (a store with only archived runs).
+db=$TMP/arch-only.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 no
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 no
+archive_rollout "$db" lane-a usage_limit_exceeded
+set +e
+OUT=$(bash "$SCRIPT" --store "$db" --sessions "$TMP/no-such-sessions" --archived-sessions "$ARCH" --now-ms "$NOW_MS" 2>&1)
+RC=$?
+set -e
+expect_rc 1 "a missing sessions tree must not change the verdict"
+expect_out "cause=quota/billing" "the archive must be read even when the sessions tree is absent"
+
+# An option with no value is UNKNOWN, like every other knob.
+run_check "$db" --archived-sessions
+expect_rc 2 "--archived-sessions without a value must be UNKNOWN"
+
 # Structural privacy: the outcome record is read for its classifier only.
 asserts=$(( asserts + 1 ))
 noncomment=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
@@ -619,7 +818,7 @@ fi
 
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 91 ]; then
+if [ "$asserts" -lt 115 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi
