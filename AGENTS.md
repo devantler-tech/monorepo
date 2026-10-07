@@ -272,8 +272,7 @@ Full rules: [claim protocol guide](.claude/guides/claim-protocol.md).
 The reviewed [routing policy](.claude/plugin-consumption/inference-routing.policy.json) and instance
 registry bind task classes and runtimes; **automatic routing is disabled**. Use only included native
 subscription inference — no API keys, paid fallbacks or overage. **No Fable-family model may run in a
-scheduled run, child, advisor, fallback, retry or experiment.** An accepted scheduled parent runs
-without enforcement proof. Details:
+scheduled run, child, advisor, fallback, retry or experiment.** Details:
 [spend and inference guide](.claude/guides/spend-and-inference.md#inference-routing).
 
 ## Rules that always apply
