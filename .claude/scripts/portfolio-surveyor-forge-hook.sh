@@ -97,7 +97,7 @@ verify_asset "scripts/json-stream.lib.sh"
 # surveyor's environment widen the read-only allowlist to a program of its
 # choosing, which is exactly the bypass the SCOPE and GUARD pins above close.
 #
-# Nine programs are declared, and all are READS. pr-ownership-disclosure.sh
+# Ten programs are declared, and all are READS. pr-ownership-disclosure.sh
 # classifies a `devantler` PR body as the maintainer's interactive work or the
 # routine's own output. Without a route for it the surveyor falls back to
 # hand-deriving that verdict, and that substitution has already misread live
@@ -136,6 +136,14 @@ verify_asset "scripts/json-stream.lib.sh"
 # maintainer-comment sweep's rows, each bound to the artifact named by the comment's own
 # permalink. Undeclared, the surveyor composed those rows by hand and reported a real
 # maintainer-channel comment under the wrong issue, which discarded it (monorepo#3163).
+# required-gate-completeness.sh reads ONE pull request on stdin (its url, base branch and
+# head) and says whether every REQUIRED gate ran at that head. It is the one declared
+# program that reads the forge itself: GET requests only, for the devantler-tech
+# repository, base and head that pull request names, which are reads the guard already
+# admits from the surveyor directly. Its argv is `--input -` alone and it refuses any
+# other owner before the first request. Undeclared, the survey could only read the check
+# rollup, which lists what ran and so reported an absent required check as green
+# (monorepo#3506).
 #
 # Absence fails CLOSED, consistently with DESIRED_STATE above: a checkout that
 # cannot present its own reviewed files does not get a survey. Exiting 0 with
@@ -149,7 +157,8 @@ local-review-verdict.sh
 coderabbit-review-verdict.sh
 kata-measure-date.sh
 pr-worktree-holder.sh
-maintainer-comment-candidates.sh'
+maintainer-comment-candidates.sh
+required-gate-completeness.sh'
 
 consumer_classifiers=''
 for classifier_name in ${classifier_names}; do
