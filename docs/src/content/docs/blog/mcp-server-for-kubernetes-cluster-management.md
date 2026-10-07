@@ -12,8 +12,8 @@ tags:
 description: KSail now ships with a built-in MCP server that lets Claude, Cursor, and other AI assistants manage Kubernetes clusters directly. Here's how it works and what you can do with it.
 excerpt: KSail now ships with a built-in MCP server that lets Claude, Cursor, and other AI assistants manage Kubernetes clusters directly. Here's how it works and what you can do with it.
 cover:
-  alt: KSail MCP Server connecting AI assistants to Kubernetes clusters
-  image: ../../../assets/ksail-mcp-server.png
+  alt: Illustration of a terminal and a dialogue connected to infrastructure
+  image: ../../../assets/editorial/agent-dialogue.webp
 ---
 
 There's a growing list of tools adopting the Model Context Protocol — the standard that lets AI assistants call external capabilities as structured tools rather than guessing from context. Most of the MCP servers I've seen are wrappers around databases, APIs, or SaaS products.

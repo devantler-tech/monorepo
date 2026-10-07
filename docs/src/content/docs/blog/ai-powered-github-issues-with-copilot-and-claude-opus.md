@@ -12,8 +12,8 @@ tags:
 description: How I leverage GitHub Copilot with Claude Opus 4.5 to analyze codebases, investigate context, and create well-structured GitHub issues that save time for myself and my team.
 excerpt: How I leverage GitHub Copilot with Claude Opus 4.5 to analyze codebases, investigate context, and create well-structured GitHub issues that save time for myself and my team.
 cover:
-  alt: AI-powered GitHub Issues
-  image: ../../../assets/issues.png
+  alt: Illustration of connected planning and verification cards
+  image: ../../../assets/editorial/workflows.webp
 ---
 
 Creating good GitHub issues is an underrated skill. A well-written issue saves hours of back-and-forth during refinement, reduces misunderstandings, and helps developers focus on solving problems rather than deciphering vague descriptions. But writing those issues takes time — time spent investigating code, formulating problems clearly, and ensuring the description meets team expectations.

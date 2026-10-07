@@ -16,7 +16,7 @@ Closes the acceptance criteria of [#2176](https://github.com/devantler-tech/mono
 
 ## `agentic-engineering-process.png`
 
-Cover image and inline diagram for the Agentic Engineering blog post. The Agentic Engineering
+Inline diagram for the Agentic Engineering blog post. The Agentic Engineering
 documentation page renders the editable Mermaid source.
 
 - **Origin:** rendered from the Mermaid `block-beta` definition embedded in
@@ -25,3 +25,16 @@ documentation page renders the editable Mermaid source.
   exported at 3808×2142 (16:9).
 - **Status:** the MDX Mermaid definition is the editable source. Regenerate the PNG from that source
   whenever the process or diagram changes, and update both in the same change.
+
+## `editorial/*.webp`
+
+Conceptual journal and project cover illustrations generated with the built-in image-generation
+tool on 2026-10-07. The complete prompt set is in [editorial/PROMPTS.md](editorial/PROMPTS.md).
+They share a charcoal/green workshop palette and use subject-specific metaphors: workflows,
+local clusters, cloud infrastructure, assistant dialogue, software craft, ownership, developer
+setup and data research. Related articles share a subject illustration.
+
+These are illustrations, not photographs of company equipment, factual architecture diagrams,
+customer examples or product screenshots. The real founder photograph, KSail interface captures
+and authored research/process diagrams retain their evidential role. Covers are compressed to
+1440-pixel-wide WebP; Astro generates responsive delivery assets.

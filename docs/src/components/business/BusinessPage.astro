@@ -2,6 +2,8 @@
 import BusinessSite from './BusinessSite.astro';
 import BusinessSupporting from './BusinessSupporting.astro';
 
+if (Astro.url.pathname.replace(/\/$/, '') === '/projects/active') return Astro.redirect('/projects/#technical-projects');
+if (Astro.url.pathname.replace(/\/$/, '') === '/projects/completed') return Astro.redirect('/projects/#research');
 const locale = Astro.url.pathname.startsWith('/da/') ? 'da' : 'en';
 const section = Astro.url.pathname.split('/').filter(Boolean).at(-1);
 ---

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 
@@ -40,11 +40,29 @@ for (const locale of ['en', 'da']) {
       assert.ok(page.includes('href="/pdfs/nikolai-emil-damm-cv.pdf"'), 'The founder’s professional background remains available');
     } else {
       assert.ok(page.includes('href="https://ksail.devantler.tech"'), 'Projects link to their real public product');
-      assert.ok(page.includes('href="/projects/active/"'), 'Technical project details remain reachable');
+      for (const id of ['open-title', 'family-title', 'technical-projects', 'research']) {
+        assert.ok(page.includes(`id="${id}"`), `The unified portfolio includes ${id}`);
+      }
+      assert.ok(!page.includes('href="/projects/active/"') && !page.includes('href="/projects/completed/"'), 'Projects stay on one canonical page');
+      assert.ok(!page.includes('sidebar-pane'), 'Projects use the business layout, not a floating documentation sidebar');
+      for (const product of ['Data Product Controller', 'World at Ruin', 'Reusable Workflows', 'Kyverno Policies']) {
+        assert.ok(page.includes(product), `The full technical catalogue retains ${product}`);
+      }
+      assert.ok(page.includes('href="/pdfs/thesis.pdf"'), 'Earlier research remains reachable');
+      assert.match(page, /<details[^>]*id="technical-projects"/, 'Long technical detail is available without overwhelming the opening');
+      const illustration = page.match(/<img[^>]*data-project-art[^>]*>/)?.[0];
+      assert.ok(illustration, 'The portfolio includes a locally hosted editorial illustration');
+      const illustrationPath = illustration.match(/src="([^"]+)"/)?.[1];
+      assert.ok(illustrationPath && existsSync(resolve(root, `.${illustrationPath}`)), 'Project artwork is emitted locally');
     }
   }
 }
-for (const path of ['blog', 'projects/active', 'projects/completed', 'templates', 'agentic-engineering']) {
+for (const [path, target] of [['projects/active', '/projects/#technical-projects'], ['projects/completed', '/projects/#research']]) {
+  const page = html(path);
+  assert.match(page, /http-equiv="refresh"/i, 'Legacy project URLs redirect on static hosting');
+  assert.ok(page.includes(target), `Legacy projects resolve to ${target}`);
+}
+for (const path of ['blog', 'templates', 'agentic-engineering']) {
   navigation(html(path), 'en');
 }
 for (const [locale, path, alternate] of [['en', '', '/da/'], ['da', 'da', '/']]) {
@@ -116,4 +134,33 @@ for (const [locale, path, alternate] of [['en', '', '/da/'], ['da', 'da', '/']])
     assert.ok(page.includes(`id="${anchor[1]}"`), `Broken section link: ${anchor[1]}`);
   }
 }
-console.log('Published business visitor journey verified.');
+// Pin delivered covers, not just source frontmatter or a filename substring.
+const editorialCovers = [
+  ['building-ksail-from-shell-to-dotnet-to-go', 'code-craft'],
+  ['autonomous-oss-with-github-agentic-workflows', 'workflows'],
+  ['gitops-without-the-git-server-oci-registries-as-a-flux-source-with-ksail', 'cloud-fleet'],
+  ['mcp-server-for-kubernetes-cluster-management', 'agent-dialogue'],
+  ['creating-development-kubernetes-clusters-on-hetzner-with-ksail-and-talos', 'cloud-fleet'],
+  ['local-kubernetes-development-with-ksail-and-kind', 'kubernetes-workshop'],
+  ['storing-secrets-in-zshrc-with-macos-keychain', 'developer-workbench'],
+  ['ai-powered-github-issues-with-copilot-and-claude-opus', 'workflows'],
+  ['macos-as-a-developer-machine', 'developer-workbench'],
+  ['why-i-chose-the-polyform-shield-license-for-ksail', 'software-ownership'],
+  ['building-an-ai-assistant-for-kubernetes-with-github-copilot-sdk', 'agent-dialogue'],
+  ['local-kubernetes-development-with-ksail-and-talos', 'kubernetes-workshop'],
+  ['how-my-agentic-engineer-turns-problems-into-proved-working-solutions', 'workflows'],
+  ['local-kubernetes-development-with-ksail-and-k3d', 'kubernetes-workshop'],
+];
+for (const [slug, subject] of editorialCovers) {
+  const page = html(`blog/${slug}`);
+  const cover = [...page.matchAll(/<img\b[^>]*>/g)].map((match) => match[0]).find((tag) => /class="[^"]*sl-blog-cover-image/.test(tag));
+  assert.ok(cover, `Journal post ${slug} has a delivered cover`);
+  assert.match(cover, /alt="Illustration of /, 'Generated covers are described as illustrations, not evidence');
+  assert.match(cover, /width="1440" height="810"/, 'Covers reserve a consistent landscape frame');
+  const asset = cover.match(/src="([^"]+)"/)?.[1];
+  assert.ok(asset?.startsWith(`/_astro/${subject}.`) && asset.endsWith('.webp'), `${slug} uses its intended subject illustration`);
+  const path = resolve(root, `.${asset}`);
+  assert.ok(existsSync(path), `Cover for ${slug} is served locally`);
+  assert.ok(statSync(path).size < 220_000, 'Editorial covers stay below 220 kB at full size');
+}
+console.log('Published business visitor journey and editorial artwork verified.');
