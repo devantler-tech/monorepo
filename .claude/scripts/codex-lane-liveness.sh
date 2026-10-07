@@ -23,7 +23,8 @@
 # posture); this check is about the deployment being BLIND, so it must stay generic across causes and
 # must not be able to carry such state into a repository artifact or a run report.
 #
-# Usage: codex-lane-liveness.sh [--store PATH] [--sessions DIR] [--automation ID] [--grace-seconds N]
+# Usage: codex-lane-liveness.sh [--store PATH] [--sessions DIR] [--archived-sessions DIR]
+#                              [--automation ID] [--grace-seconds N]
 #                              [--stub-seconds N] [--preflight-seconds N] [--consecutive N]
 #                              [--now-ms MS] [--quiet]
 #
@@ -66,6 +67,14 @@
 # anything else, a missing record, or an unusable thread id. The operator-facing text beside it
 # carries reset times and account detail, so it is never selected and never printed.
 #
+# ARCHIVED RECORDS (monorepo#3950). The runtime MOVES a run's rollout out of the dated `sessions` tree
+# into a flat archive folder once the run is archived, and almost every scheduled run is archived
+# within hours. Measured 2026-10-07: of the newest 30 archived scheduled runs, 0 rollouts were under
+# `sessions` and 30 in the archive, so the cause read `unknown` for every stop older than a few hours
+# and a quota stop was no longer applied account-wide. So the rollout is looked up under `--sessions`
+# first and then under `--archived-sessions` (default: `archived_sessions` beside the sessions
+# directory). The same bounded classifier is read from either place, and nothing else.
+#
 # ACCOUNT SCOPE. A `quota/billing` refusal is per ACCOUNT, and every automation in this store shares
 # one. Measured 2026-09-15: `daily-ai-engineer` showed 12 consecutive refusals while `agent-improver`
 # read OK, because the older of its two newest settled runs was still healthy — its own newest run was
@@ -84,6 +93,7 @@ trap 'ec=$?; [ "$ec" -eq 0 ] || exit 2' ERR
 
 STORE="${CODEX_HOME:-$HOME/.codex}/sqlite/codex-dev.db"
 SESSIONS=""
+ARCHIVED_SESSIONS=""
 AUTOMATION=""
 # Tracked separately from the value, because `--automation ""` is a REQUEST for one automation that
 # happens to be empty, not an absent flag. Testing the value alone would silently widen that request
@@ -118,6 +128,7 @@ while [ "$#" -gt 0 ]; do
     --help|-h) usage; exit 0 ;;
     --store) [ "$#" -ge 2 ] || die_unknown "--store needs a value"; STORE="$2"; shift 2 ;;
     --sessions) [ "$#" -ge 2 ] || die_unknown "--sessions needs a value"; SESSIONS="$2"; shift 2 ;;
+    --archived-sessions) [ "$#" -ge 2 ] || die_unknown "--archived-sessions needs a value"; ARCHIVED_SESSIONS="$2"; shift 2 ;;
     --automation) [ "$#" -ge 2 ] || die_unknown "--automation needs a value"; AUTOMATION="$2"; AUTOMATION_SET=1; shift 2 ;;
     --grace-seconds) [ "$#" -ge 2 ] || die_unknown "--grace-seconds needs a value"; GRACE_SECONDS="$2"; shift 2 ;;
     --stub-seconds) [ "$#" -ge 2 ] || die_unknown "--stub-seconds needs a value"; STUB_SECONDS="$2"; shift 2 ;;
@@ -165,6 +176,11 @@ command -v sqlite3 >/dev/null 2>&1 || die_unknown "sqlite3 is not available"
 if [ -z "$SESSIONS" ]; then
   SESSIONS="$(dirname -- "$(dirname -- "$STORE")")/sessions"
 fi
+# Beside the sessions directory, not beside the store: a caller that names its own sessions root
+# must not have its verdict depend on an archive that happens to exist next to the store.
+if [ -z "$ARCHIVED_SESSIONS" ]; then
+  ARCHIVED_SESSIONS="$(dirname -- "$SESSIONS")/archived_sessions"
+fi
 
 # cause_class <thread_id> — prints a BOUNDED class and always returns 0.
 # The mapping is an exact match on purpose: a prefix-extended or reworded classifier is `unknown`,
@@ -172,10 +188,16 @@ fi
 # `unknown` too, which leaves the per-automation verdict exactly as it would have been without this.
 # `find -print -quit` rather than a pipe into `head`: under pipefail a SIGPIPE would discard the path.
 cause_class() {
-  local tid=$1 rec="" raw=""
+  local tid=$1 rec="" raw="" root
   case "$tid" in ''|*[!A-Za-z0-9-]*) printf 'unknown'; return 0 ;; esac
-  if ! command -v jq >/dev/null 2>&1 || [ ! -d "$SESSIONS" ]; then printf 'unknown'; return 0; fi
-  rec=$(find "$SESSIONS" -type f -name "rollout-*-${tid}.jsonl" -print -quit 2>/dev/null) || rec=""
+  if ! command -v jq >/dev/null 2>&1; then printf 'unknown'; return 0; fi
+  # Active sessions first, then the archive the runtime moves a rollout into (monorepo#3950). A root
+  # that does not exist is skipped, so a store holding only archived runs is still read.
+  for root in "$SESSIONS" "$ARCHIVED_SESSIONS"; do
+    [ -d "$root" ] || continue
+    rec=$(find "$root" -type f -name "rollout-*-${tid}.jsonl" -print -quit 2>/dev/null) || rec=""
+    [ -z "$rec" ] || break
+  done
   if [ -n "$rec" ]; then
     raw=$(jq -r 'select(.payload?.type? == "task_complete") | .payload.error?.codex_error_info? // empty' \
       "$rec" 2>/dev/null) || raw=""
