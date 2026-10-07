@@ -75,6 +75,7 @@ jobs:
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       gh-json-vocabulary-contract: ${{ steps.filter.outputs.gh-json-vocabulary-contract }}
       gh-json-read: ${{ steps.filter.outputs.gh-json-read }}
+      graphql-availability: ${{ steps.filter.outputs.graphql-availability }}
       squash-closing-keywords: ${{ steps.filter.outputs.squash-closing-keywords }}
       merge-preflight-thread-gate: ${{ steps.filter.outputs.merge-preflight-thread-gate }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
@@ -838,6 +839,12 @@ jobs:
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/gh-json-read.sh'
               - '.claude/scripts/gh-json-read.test.sh'
+              - '.github/workflows/ci.yaml'
+            graphql-availability:
+              # The suite asserts the merge policy keeps naming the GraphQL-unavailable state.
+              - '.claude/guides/merge-policy.md'
+              - '.claude/scripts/graphql-availability.sh'
+              - '.claude/scripts/graphql-availability.test.sh'
               - '.github/workflows/ci.yaml'
             squash-closing-keywords:
               - '.claude/scripts/squash-closing-keywords.sh'
@@ -2759,6 +2766,25 @@ jobs:
       - name: Verify the gh JSON read helper
         run: bash .claude/scripts/gh-json-read.test.sh
 
+  test-graphql-availability:
+    name: Test GraphQL availability probe
+    needs: changes
+    if: needs.changes.outputs.graphql-availability == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the GraphQL availability probe
+        run: bash .claude/scripts/graphql-availability.test.sh
+
   test-squash-closing-keywords:
     name: Test squash closing-keyword guard
     needs: changes
@@ -3097,6 +3123,7 @@ jobs:
       - test-merge-confirmation-read
       - test-gh-json-vocabulary-contract
       - test-gh-json-read
+      - test-graphql-availability
       - test-squash-closing-keywords
       - test-improver-role-disclosure
       - test-merge-preflight-thread-gate
@@ -3190,6 +3217,7 @@ jobs:
             ${{ needs.test-merge-confirmation-read.result }}
             ${{ needs.test-gh-json-vocabulary-contract.result }}
             ${{ needs.test-gh-json-read.result }}
+            ${{ needs.test-graphql-availability.result }}
             ${{ needs.test-squash-closing-keywords.result }}
             ${{ needs.test-improver-role-disclosure.result }}
             ${{ needs.test-merge-preflight-thread-gate.result }}
