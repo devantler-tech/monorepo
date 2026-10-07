@@ -32,9 +32,10 @@
 #   --input -  REQUIRED: stdin is ONE JSON object with the string key `body` and, optionally,
 #              `today` (YYYY-MM-DD; default the current UTC date) and `sub_issues` (the forge's
 #              sub-issue summary for the Kata: an object whose `total` and `completed` are whole
-#              numbers with completed <= total; null or absent means the summary is not known
-#              and proves no open sub-issue). This is the only shape the surveyor's read-only
-#              guard admits for a declared helper.
+#              numbers with completed <= total). A null or absent summary is not a count of
+#              zero: when the verdict depends on it, the read is incomplete and the helper exits
+#              2 with no verdict. This is the only shape the surveyor's read-only guard admits
+#              for a declared helper.
 #
 # OUTPUT (one line on stdout)
 #   DUE <date>                 the named date is today or earlier: measuring is actionable now
@@ -49,11 +50,12 @@
 #                              the same two faults on a `**Delivered on:**` line
 #
 # EXIT CODES
-#   0  DUE
-#   1  NOT-DUE
-#   2  UNKNOWN, a usage error, or unreadable input. The caller reports the Kata for its line to
-#      be repaired; UNKNOWN is never read as due and never as not-due.
-#   3  UNDELIVERED. A caller that skips on exit 1 can therefore never skip an undelivered Kata.
+#   0  the Kata is actionable now: DUE (measure it) or UNDELIVERED (deliver it); stdout says which
+#   1  NOT-DUE: skip reason (d) applies. A caller that skips on exit 1 therefore never skips an
+#      undelivered Kata.
+#   2  UNKNOWN, a usage error, or unreadable input, including a sub-issue summary the verdict needs
+#      and the read did not carry. The caller reports an UNKNOWN verdict for its line to be
+#      repaired, and a read with no verdict as failed; neither is ever read as due or as not-due.
 set -euo pipefail
 
 usage() {
@@ -109,10 +111,12 @@ fi
 # quoted with `>`, indented four spaces or a tab (a code block), inside a ``` or ~~~ fence, or inside
 # an HTML comment is an example or an instruction, never this Kata's date. The patterns spell out
 # "up to three spaces" as ` ? ? ?` because the awk on CI's runners has no {n,m} intervals.
-# NUL bytes are dropped first: BSD awk ends a line at one, which would hide the rest of that line
-# (a comment opener, or trailing words that make a value malformed) from the scan.
+# A NUL byte is replaced by another control character first. BSD awk ends a line at a NUL, which
+# would hide the rest of that line (a comment opener, or trailing words that make a value
+# malformed) from the scan. It is replaced, never deleted: deleting one inside `2026-0<NUL>9-20`
+# would join the pieces into a date nobody wrote.
 marked_values() {
-  jq -r '.body' <<<"${payload}" | tr -d '\000' | awk -v label="$1" '
+  jq -r '.body' <<<"${payload}" | tr '\000' '\001' | awk -v label="$1" '
   BEGIN { marker = "^ ? ? ?\\*\\*" label ":\\*\\*" }
   # Fences follow CommonMark: an opening run of three or more backticks or tildes indented at most
   # three spaces (or opened within a list item), closed only by a run of the same character at
@@ -170,11 +174,19 @@ marked_values() {
     }
   }
   unclosed_comment($0) { in_comment = 1; next }
-  # A paragraph line that follows a quoted line with no blank line between is still inside the
-  # quote (a lazy continuation), so a marker there belongs to the quoted text as well. A blank
-  # line, a heading or a list item ends the quote.
+  # A paragraph line that follows a quoted PARAGRAPH line with no blank line between is still
+  # inside the quote (a lazy continuation), so a marker there belongs to the quoted text as well.
+  # Only a paragraph can be continued: a quoted line that is empty, a heading or a fence leaves
+  # nothing to continue, so the next unquoted line is outside the quote. A blank line, a heading
+  # or a list item ends the quote too.
   /^[ \t]*$/ { in_quote = 0; next }
-  /^ ? ? ?>/ { in_quote = 1; next }
+  /^ ? ? ?>/ {
+    q = $0
+    while (q ~ /^ ? ? ?>/) sub(/^ ? ? ?> ?/, "", q)
+    sub(/^[ \t]+/, "", q)
+    in_quote = (q != "" && q !~ /^(#|```|~~~)/)
+    next
+  }
   /^ ? ? ?(#|[-+*][ \t]|[0-9]+[.)][ \t])/ { in_quote = 0 }
   $0 ~ marker {
     if (in_quote) next
@@ -238,17 +250,28 @@ hides_nothing=no
 if [ -n "${delivered_on}" ] && [[ ! "${delivered_on}" > "${today}" ]]; then
   hides_nothing=yes
 fi
-# An OPEN sub-issue carries the remaining delivery work and stays selectable. A closed one proves
-# only that it closed. Subtracted inside jq: a count may print as `1.0`, which a shell integer
-# test would reject.
-open_child="$(jq -r 'if .sub_issues == null then "no"
-  elif (.sub_issues.total - .sub_issues.completed) >= 1 then "yes" else "no" end' <<<"${payload}")"
-if [ "${open_child}" = yes ]; then
-  hides_nothing=yes
-fi
 if [ "${hides_nothing}" = yes ]; then
   echo "NOT-DUE ${measure_on}"
   exit 1
 fi
-echo "UNDELIVERED ${measure_on}"
-exit 3
+# No delivery line, so the verdict now rests on the sub-issues. An OPEN one carries the remaining
+# delivery work and stays selectable; a closed one proves only that it closed. A summary the read
+# did not carry is not a count of zero: calling the Kata undelivered on it could select a parent
+# whose open child already holds the work, so the read is incomplete and gets no verdict.
+# Subtracted inside jq: a count may print as `1.0`, which a shell integer test would reject.
+open_child="$(jq -r 'if .sub_issues == null then "unknown"
+  elif (.sub_issues.total - .sub_issues.completed) >= 1 then "yes" else "no" end' <<<"${payload}")"
+case "${open_child}" in
+  yes)
+    echo "NOT-DUE ${measure_on}"
+    exit 1
+    ;;
+  no)
+    echo "UNDELIVERED ${measure_on}"
+    exit 0
+    ;;
+  *)
+    echo "kata-measure-date: the verdict needs the sub-issue summary, and stdin did not carry one" >&2
+    exit 2
+    ;;
+esac

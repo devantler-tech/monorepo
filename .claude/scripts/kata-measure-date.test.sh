@@ -148,16 +148,22 @@ expect "without today, a far-future date is NOT-DUE" 1 "NOT-DUE 2999-12-31" "$(k
 # with nothing to measure. monorepo#3407 is that shape: no sub-issue, three pilots still to run.
 own='## Actions\n\n- pick pilot 1\n\n**Measure on:** 2026-10-20\n'
 own="$(printf '%b' "${own}")"
-expect "a future date with no delivery on record is UNDELIVERED, never a skip" 3 "UNDELIVERED 2026-10-20" \
+expect "a future date with no delivery on record is UNDELIVERED, never a skip" 0 "UNDELIVERED 2026-10-20" \
   "$(solo "${own}" 2026-09-25 "${none}")"
-expect "an unknown sub-issue summary proves no open sub-issue" 3 "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25 null)"
-expect "an absent sub-issue summary proves no open sub-issue" 3 "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25)"
+# A summary the read did not carry is not a count of zero. Calling the Kata undelivered on it could
+# select a parent whose open child already holds the work, so the read gets no verdict at all.
+expect "a null sub-issue summary gives no verdict when the verdict needs it" 2 "" "$(solo "${own}" 2026-09-25 null)"
+expect "an absent sub-issue summary gives no verdict when the verdict needs it" 2 "" "$(solo "${own}" 2026-09-25)"
+# It is needed only for a future date with no delivery line; the other verdicts never read it.
+expect "an arrived date is DUE without a sub-issue summary" 0 "DUE 2026-10-20" "$(solo "${own}" 2026-10-20)"
+expect "a recorded delivery is NOT-DUE without a sub-issue summary" 1 "NOT-DUE 2026-10-20" \
+  "$(solo "${own}"$'\n**Delivered on:** 2026-09-20' 2026-09-25)"
 expect "an open sub-issue carries the delivery, so the skip hides nothing" 1 "NOT-DUE 2026-10-20" \
   "$(solo "${own}" 2026-09-25 "${open1}")"
 expect "one open sub-issue among closed ones is enough" 1 "NOT-DUE 2026-10-20" "$(solo "${own}" 2026-09-25 "${mixed}")"
 # A closed sub-issue proves only that it closed: the Kata can carry actions no child covered, and
 # nothing selectable is left to do them. The skip would hide that work, so it does not apply.
-expect "a Kata whose sub-issues have all closed is UNDELIVERED until its delivery is recorded" 3 \
+expect "a Kata whose sub-issues have all closed is UNDELIVERED until its delivery is recorded" 0 \
   "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25 "${closed1}")"
 expect "counts written as 1.0 and 0.0 are still one open sub-issue" 1 "NOT-DUE 2026-10-20" \
   "$(printf '{"body":%s,"today":"2026-09-25","sub_issues":{"total":1.0,"completed":0.0}}' "$(jq -n --arg b "${own}" '$b')")"
@@ -166,7 +172,7 @@ expect "a recorded delivery makes a Kata with closed sub-issues NOT-DUE" 1 "NOT-
   "$(solo "${delivered}" 2026-09-25 "${closed1}")"
 expect "a recorded delivery makes a future date NOT-DUE" 1 "NOT-DUE 2026-10-20" "$(solo "${delivered}" 2026-09-25 "${none}")"
 expect "a delivery recorded today counts" 1 "NOT-DUE 2026-10-20" "$(solo "${delivered}" 2026-09-20 "${none}")"
-expect "a delivery date still ahead is an intention, not a delivery" 3 "UNDELIVERED 2026-10-20" \
+expect "a delivery date still ahead is an intention, not a delivery" 0 "UNDELIVERED 2026-10-20" \
   "$(solo "${delivered}" 2026-09-19 "${none}")"
 expect "the same delivery date repeated is one date" 1 "NOT-DUE 2026-10-20" \
   "$(solo "${delivered}"$'\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
@@ -184,18 +190,18 @@ expect "two different delivery dates are UNKNOWN, not the earlier or the later" 
 expect "a malformed delivery line is UNKNOWN beside an open sub-issue too" 2 "UNKNOWN malformed-delivery" \
   "$(solo "${own}"$'\n**Delivered on:** soon' 2026-09-25 "${open1}")"
 # Only rendered text records a delivery, exactly as for the measurement date.
-expect "a quoted delivery line is someone else's text" 3 "UNDELIVERED 2026-10-20" \
+expect "a quoted delivery line is someone else's text" 0 "UNDELIVERED 2026-10-20" \
   "$(solo "${own}"$'\n> **Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
-expect "a fenced delivery line is an example" 3 "UNDELIVERED 2026-10-20" \
+expect "a fenced delivery line is an example" 0 "UNDELIVERED 2026-10-20" \
   "$(solo "${own}"$'\n'"${fence}"$'\n**Delivered on:** 2026-09-20\n'"${fence}" 2026-09-25 "${none}")"
-expect "a delivery line inside an HTML comment is a template" 3 "UNDELIVERED 2026-10-20" \
+expect "a delivery line inside an HTML comment is a template" 0 "UNDELIVERED 2026-10-20" \
   "$(solo "${own}"$'\n<!--\n**Delivered on:** 2026-09-20\n-->' 2026-09-25 "${none}")"
-expect "prose naming a delivery is not the line" 3 "UNDELIVERED 2026-10-20" \
+expect "prose naming a delivery is not the line" 0 "UNDELIVERED 2026-10-20" \
   "$(solo "${own}"$'\nDelivered on 2026-09-20 through the pilot.' 2026-09-25 "${none}")"
 expect "a delivery line does not stand in for the measurement date" 2 "UNKNOWN missing" \
   "$(solo $'**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 # A paragraph line straight after a quoted line is still inside the quote, for either marker.
-expect "a delivery line that continues a quote is someone else's text" 3 "UNDELIVERED 2026-10-20" \
+expect "a delivery line that continues a quote is someone else's text" 0 "UNDELIVERED 2026-10-20" \
   "$(solo "${own}"$'\n> someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 expect "a delivery line after a quote and a blank line counts" 1 "NOT-DUE 2026-10-20" \
   "$(solo "${own}"$'\n> someone wrote\n\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
@@ -203,8 +209,25 @@ expect "a delivery line after a quote and a heading counts" 1 "NOT-DUE 2026-10-2
   "$(solo "${own}"$'\n> someone wrote\n## Delivery\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 expect "a measurement line that continues a quote is not this Kata's date" 2 "UNKNOWN missing" \
   "$(solo $'> they suggested\n**Measure on:** 2026-10-20' 2026-09-25 "${open1}")"
+expect "a marker that continues a nested quote is still quoted" 0 "UNDELIVERED 2026-10-20" \
+  "$(solo "${own}"$'\n> > someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a marker that continues a quoted list item is still quoted" 0 "UNDELIVERED 2026-10-20" \
+  "$(solo "${own}"$'\n> - someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+# Only a paragraph can be continued. A quoted line that is empty, a heading or a fence leaves
+# nothing to continue, so the unquoted line after it is this Kata's own.
+expect "a delivery line after an empty quoted line counts" 1 "NOT-DUE 2026-10-20" \
+  "$(solo "${own}"$'\n> someone wrote\n>\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a measurement line after an empty quoted line counts" 1 "NOT-DUE 2026-10-20" \
+  "$(solo $'> they suggested\n> \n**Measure on:** 2026-10-20' 2026-09-25 "${open1}")"
+expect "a delivery line after a quoted heading counts" 1 "NOT-DUE 2026-10-20" \
+  "$(solo "${own}"$'\n> ## Note\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+# A NUL byte inside a date must not be deleted: that would join the pieces into a date nobody wrote.
+expect "a NUL byte inside a delivery date leaves it malformed" 2 "UNKNOWN malformed-delivery" \
+  "$(solo "${own}"$'\n**Delivered on:** 2026-0\x019-20' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
+expect "a NUL byte inside a measurement date leaves it malformed" 2 "UNKNOWN malformed" \
+  "$(solo $'**Measure on:** 2026-1\x010-20' 2026-09-25 "${open1}" | sed 's/\\u0001/\\u0000/')"
 # A NUL byte ends a line for BSD awk, which hid whatever followed it on that line.
-expect "a comment opened after a NUL byte still hides the delivery line" 3 "UNDELIVERED 2026-10-20" \
+expect "a comment opened after a NUL byte still hides the delivery line" 0 "UNDELIVERED 2026-10-20" \
   "$(solo "${own}"$'\nx\x01<!--\n**Delivered on:** 2026-09-20\n-->' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
 expect "trailing words after a NUL byte still make a delivery line malformed" 2 "UNKNOWN malformed-delivery" \
   "$(solo "${own}"$'\n**Delivered on:** 2026-09-20\x01 not yet' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
@@ -256,6 +279,15 @@ expect_mutant "counting closed sub-issues hides a Kata whose children have all c
 mutant no-lazy-quote 's/^    if (in_quote) next$//'
 expect_mutant "without the quote rule a delivery line that continues a quote counts" no-lazy-quote \
   "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+mutant quote-never-ends 's/^    in_quote = (q != "" .*$/    in_quote = 1/'
+expect_mutant "without the paragraph test an empty quoted line keeps the quote open" quote-never-ends \
+  "UNDELIVERED 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n>\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+mutant nul-deleted "s/tr '.000' '.001'/tr -d '\\\\000'/"
+expect_mutant "deleting a NUL byte joins a broken delivery date into a valid one" nul-deleted \
+  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n**Delivered on:** 2026-0\x019-20' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
+mutant null-summary-is-zero 's/if .sub_issues == null then "unknown"/if .sub_issues == null then "no"/'
+expect_mutant "reading a missing summary as zero calls the Kata undelivered" null-summary-is-zero \
+  "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25 null)"
 rm -rf "${mutants}"
 
 # Unreadable input judges nothing: exit 2 and no verdict on stdout.
@@ -382,14 +414,16 @@ projected() { # projected <label> <want-exit> <want-stdout> <forge issue JSON>
   fi
 }
 far='{"body":"**Measure on:** 2999-12-31"'
-projected "the overlay's projection of a Kata with no sub-issue is UNDELIVERED" 3 "UNDELIVERED 2999-12-31" \
+projected "the overlay's projection of a Kata with no sub-issue is UNDELIVERED" 0 "UNDELIVERED 2999-12-31" \
   "${far},\"sub_issues_summary\":${none}}"
 projected "the overlay's projection of a Kata with an open sub-issue is NOT-DUE" 1 "NOT-DUE 2999-12-31" \
   "${far},\"sub_issues_summary\":${open1}}"
-projected "the overlay's projection of a Kata whose sub-issues have all closed is UNDELIVERED" 3 "UNDELIVERED 2999-12-31" \
+projected "the overlay's projection of a Kata whose sub-issues have all closed is UNDELIVERED" 0 "UNDELIVERED 2999-12-31" \
   "${far},\"sub_issues_summary\":${closed1}}"
-projected "the overlay's projection of an issue with no summary proves no open sub-issue" 3 "UNDELIVERED 2999-12-31" \
+projected "the overlay's projection of an issue with no summary gives no verdict" 2 "" \
   "${far}}"
+projected "the overlay's projection of an arrived Kata needs no summary" 0 "DUE 2000-01-01" \
+  '{"body":"**Measure on:** 2000-01-01"}'
 projected "the overlay's projection of an issue with no body is UNKNOWN missing" 2 "UNKNOWN missing" \
   "{\"body\":null,\"sub_issues_summary\":${open1}}"
 
