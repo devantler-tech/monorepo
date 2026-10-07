@@ -135,11 +135,16 @@ only the maintainer adds one. For a listed instance:
 - That route is the **permitted parent route**, and native pre-inference enforcement is **not a
   required control** for it. Its absence is a recorded gap, never a reason to stop a scheduled run
   or to skip portfolio work, and a run does not report it again.
-- The run stops at this step only on what it **observes** in its own runtime: a visible model ID
-  containing `fable`, an inference API key, or a sign-in or billing route other than the included
-  subscription.
+- **Before the first turn, the only protection is the scheduler entry**: the model fixed there and
+  the runtime's sign-in. Nothing checks them at dispatch. That is the gap this acceptance takes on,
+  and it stays open on monorepo#3314 until the runtime enforces both before inference.
+- **In the run, a backstop.** The run stops at this step only on what it **observes** in its own
+  runtime: a visible model ID containing `fable`, an inference API key, or a sign-in or billing
+  route other than the included subscription. The stop limits a violation to the turns already
+  spent and reports it; it cannot prevent the first one.
 - Nothing else is accepted. Children, advisors, model switches, fallback and automatic routing stay
-  disabled and gated exactly as below, and No-Fable and subscription-only inference are unchanged.
+  disabled and gated exactly as below. No-Fable and subscription-only inference still bind the
+  accepted route; what the acceptance gives up is the proof that the runtime enforces them.
 
 Resolve
 this contract before any new delegated/model-switched execution. Do not enable a route until native billing, exact model,

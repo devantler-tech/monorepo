@@ -56,15 +56,26 @@ RUNTIME_DOC="${INFERENCE_ROUTING_RUNTIME_DOC:-$ROOT/.claude/plugin-consumption/i
 REGISTRY="$ROOT/.claude/plugin-consumption/agent-instances.json"
 [[ -r "$GUIDE" && -r "$RUNTIME_DOC" && -r "$REGISTRY" ]] ||
   { echo 'FAIL accepted parent routes: contract files unreadable' >&2; exit 1; }
+# Agents resolve this rule at the guide's Inference routing section, so read that section alone:
+# the same words under another heading would not be the rule. An absent heading extracts nothing,
+# and nothing must not pass.
+routing_section="$(awk '
+  /^## Inference routing$/ { on = 1; next }
+  on && /^## / { exit }
+  on { print }' "$GUIDE")"
+[[ -n "$routing_section" ]] ||
+  { echo 'FAIL accepted parent routes: the guide has no Inference routing section' >&2; exit 1; }
 # The guide is hard-wrapped and marks code with backticks, so match on one line of
 # whitespace-normalised text with the backticks (octal 140) removed.
-guide_text="$(tr -s '[:space:]' ' ' < "$GUIDE" | tr -d '\140')"
+guide_text="$(printf '%s\n' "$routing_section" | tr -s '[:space:]' ' ' | tr -d '\140')"
 [[ -n "$guide_text" ]] || { echo 'FAIL accepted parent routes: guide is empty' >&2; exit 1; }
 for phrase in \
   'native pre-inference enforcement is **not a required control** for it' \
   'never a reason to stop a scheduled run or to skip portfolio work' \
   'a visible model ID containing fable, an inference API key, or a sign-in or billing route other than the included subscription' \
+  'it cannot prevent the first one' \
   'Children, advisors, model switches, fallback and automatic routing stay disabled and gated' \
+  'No-Fable and subscription-only inference still bind the accepted route' \
   'only the maintainer adds one'; do
   case "$guide_text" in
     *"$phrase"*) ;;
