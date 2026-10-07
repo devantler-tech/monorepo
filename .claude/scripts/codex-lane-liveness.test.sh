@@ -440,6 +440,17 @@ fi
 
 asserts=$(( asserts + 1 ))
 noncomment=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
+# `archived_sessions` is the name of the runtime's archive DIRECTORY (monorepo#3950), not a store
+# column, and the script must name it to find a moved rollout. Only that exact path segment is set
+# aside; the controls below prove every real `archived_*` column is still caught afterwards.
+strip_archive_dir() { printf '%s' "${1//\/archived_sessions\"/\"}"; }
+noncomment=$(strip_archive_dir "$noncomment")
+for col in archived_user_message archived_assistant_message archived_reason archived_sessions; do
+  asserts=$(( asserts + 1 ))
+  if ! grep -Eq "$PAYLOAD_RE" <<<"$(strip_archive_dir "SELECT $col FROM automation_runs;")"; then
+    note_fail "the archive-directory allowance hides a reference to the column-shaped name $col"
+  fi
+done
 if grep -Eq "$PAYLOAD_RE" <<<"$noncomment"; then
   note_fail "the script must not read a run's payload columns"
 fi
@@ -705,6 +716,98 @@ add_run "$db" lane-i $(( GRACE_MS + 3600000 )) 800 yes
 run_check "$db" --automation lane-i
 expect_rc 1 "a quota refusal longer than the stub window must still reach the sibling automation"
 expect_out "account-scoped" "the verdict must name the account scope"
+
+# --- archived outcome records (monorepo#3950) ----------------------------------------------------
+# The runtime MOVES a run's outcome record out of the dated sessions tree into a flat archive folder
+# once the run is archived, and almost every scheduled run is archived within hours. Measured
+# 2026-10-07: of the newest 30 archived scheduled runs, 0 records were under the sessions tree and 30
+# in the archive folder — so the cause read `unknown` for every one of them.
+ARCH=$TMP/archived_sessions
+
+# archive_rollout <db> <automation> <codex_error_info>
+# Same record as add_rollout, written ONLY to the archive folder, flat, as the runtime leaves it.
+archive_rollout() {
+  local tid
+  tid=$(sqlite3 "$1" "SELECT thread_id FROM automation_runs WHERE automation_id='$2' ORDER BY updated_at DESC LIMIT 1;")
+  mkdir -p "$ARCH"
+  printf '%s\n' '{"type":"session_meta","payload":{"id":"fixture"}}' \
+    "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"t\",\"error\":{\"message\":\"PRIVATE-ROLLOUT-MESSAGE\",\"codex_error_info\":\"$3\"}}}" \
+    > "$ARCH/rollout-2026-09-15T00-00-00-$tid.jsonl"
+  # The reach guard: the record must exist in the archive and NOT under the sessions tree, or the
+  # case below would pass on the old lookup and prove nothing.
+  asserts=$(( asserts + 1 ))
+  if [ ! -s "$ARCH/rollout-2026-09-15T00-00-00-$tid.jsonl" ] ||
+     [ -n "$(find "$SESS" -type f -name "rollout-*-$tid.jsonl" 2>/dev/null)" ]; then
+    note_fail "fixture error: the archived record for $tid is not archive-only"
+  fi
+}
+
+# A stopped run whose record is only in the archive folder still names its cause.
+db=$TMP/arch-quota.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 no
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 no
+archive_rollout "$db" lane-a usage_limit_exceeded
+run_check "$db"
+expect_rc 1 "an all-stub lane whose record is archived must still be NOT-PRODUCING"
+expect_out "cause=quota/billing" "an archived outcome record must still yield the cause class"
+expect_out_not "PRIVATE-ROLLOUT-MESSAGE" "an archived record's message must never reach the output"
+expect_out_not "usage_limit_exceeded" "an archived record's raw classifier is never echoed"
+
+# The account-wide rule applies to an archived refusal exactly as to a live one.
+db=$TMP/arch-acct.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-e $(( GRACE_MS + 900000 )) 4 no
+add_run "$db" lane-e $(( GRACE_MS + 60000 ))  3 no
+archive_rollout "$db" lane-e usage_limit_exceeded
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 3600000 )) 800 yes
+run_check "$db" --automation lane-i
+expect_rc 1 "an archived account-scoped refusal must reach the sibling automation"
+expect_out "account-scoped" "the verdict must name the account scope for an archived refusal"
+
+# The archive folder is named explicitly when it is not beside the sessions tree.
+db=$TMP/arch-flag.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 no
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 no
+archive_rollout "$db" lane-a usage_limit_exceeded
+mv "$ARCH" "$TMP/elsewhere"
+run_check "$db"
+expect_rc 1 "a record that is in neither place must leave the verdict NOT-PRODUCING"
+expect_out "cause=unknown" "a record present in neither place must read unknown"
+run_check "$db" --archived-sessions "$TMP/elsewhere"
+expect_out "cause=quota/billing" "--archived-sessions must name the archive folder"
+mv "$TMP/elsewhere" "$ARCH"
+
+# A record in neither place never escalates: the mixed window stays OK.
+db=$TMP/arch-none.db; mkstore "$db"; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 120000 ))  3 no
+run_check "$db"
+expect_rc 0 "a run with no record in either place must not escalate"
+expect_out_not "NOT-PRODUCING" "an unfindable cause must leave a mixed window OK"
+
+# The archive is read with the same EXACT mapping: a lookalike there is unknown too.
+db=$TMP/arch-lookalike.db; mkstore "$db"; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 120000 ))  3 no
+archive_rollout "$db" lane-i usage_limit_exceeded_v2
+run_check "$db"
+expect_rc 0 "a lookalike classifier in the archive must not be read as an account-scoped refusal"
+
+# The archive works when the sessions tree does not exist at all (a store with only archived runs).
+db=$TMP/arch-only.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 no
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 no
+archive_rollout "$db" lane-a usage_limit_exceeded
+set +e
+OUT=$(bash "$SCRIPT" --store "$db" --sessions "$TMP/no-such-sessions" --archived-sessions "$ARCH" --now-ms "$NOW_MS" 2>&1)
+RC=$?
+set -e
+expect_rc 1 "a missing sessions tree must not change the verdict"
+expect_out "cause=quota/billing" "the archive must be read even when the sessions tree is absent"
+
+# An option with no value is UNKNOWN, like every other knob.
+run_check "$db" --archived-sessions
+expect_rc 2 "--archived-sessions without a value must be UNKNOWN"
 
 # Structural privacy: the outcome record is read for its classifier only.
 asserts=$(( asserts + 1 ))
