@@ -1,0 +1,91 @@
+---
+import { Image } from 'astro:assets';
+import { getEntry, render } from 'astro:content';
+import ksail from '../../assets/ksail-cli-dark.png';
+import workflows from '../../assets/editorial/workflows.webp';
+import research from '../../assets/editorial/data-research.webp';
+import { copy, type Locale } from './content';
+import { supporting } from './supporting';
+interface Props { locale: Locale }
+const { locale } = Astro.props;
+const t = supporting[locale];
+const home = copy[locale];
+const active = await getEntry('docs', 'projects/active');
+const completed = await getEntry('docs', 'projects/completed');
+if (!active || !completed) throw new Error('The canonical project catalogue is missing');
+const { Content: TechnicalContent } = await render(active);
+const { Content: ResearchContent } = await render(completed);
+---
+<nav class="project-index" aria-label={t.projectIndex}>
+  <a href="#open-title">{t.openTitle}</a><a href="#family-title">{t.familyTitle}</a><a href="#technical-projects">{t.technicalTitle}</a><a href="#research">{t.researchTitle}</a>
+</nav>
+<section aria-labelledby="open-title">
+  <p class="eyebrow">{t.currentLabel}</p><h2 id="open-title">{t.openTitle}</h2><p class="intro">{t.openIntro}</p>
+  <article class="feature">
+    <div><h3>KSail</h3><p>{home.ksailText}</p><a href="https://ksail.devantler.tech">{home.productLink} <span aria-hidden="true">↗</span></a></div>
+    <figure><Image src={ksail} alt={locale === 'da' ? 'KSails brugerflade i terminalen' : 'KSail’s terminal interface'} width={760} format="webp" /><figcaption>{t.realScreenshot}</figcaption></figure>
+  </article>
+  <article class="feature">
+    <div><h3>{t.pluginsTitle}</h3><p>{home.pluginsText}</p><a href="https://github.com/devantler-tech/agent-plugins">{home.productLink} <span aria-hidden="true">↗</span></a></div>
+    <Image data-project-art src={workflows} alt="" width={760} format="webp" />
+  </article>
+  <p class="note">{home.subscriptionNote}</p>
+</section>
+<section aria-labelledby="family-title">
+  <p class="eyebrow">{t.familyLabel}</p><h2 id="family-title">{t.familyTitle}</h2><p class="intro">{t.familyIntro}</p>
+  <div class="family">{home.workItems.map((item) => <article><p class="eyebrow">{item.kind}</p><h3>{item.title}</h3><p>{item.text}</p></article>)}</div>
+</section>
+<section aria-labelledby="technical-title">
+  <h2 id="technical-title">{t.technicalTitle}</h2><p class="intro">{t.technicalIntro}</p>
+  <details id="technical-projects"><summary>{t.technicalExpand}</summary><div class="catalogue" lang="en"><TechnicalContent /></div></details>
+</section>
+<section id="research" aria-labelledby="research-title">
+  <p class="eyebrow">{t.researchLabel}</p><h2 id="research-title">{t.researchTitle}</h2>
+  <article class="feature">
+    <div><h3>{t.researchProject}</h3><p>{t.researchText}</p><a href="/pdfs/thesis.pdf">{t.thesis} <span aria-hidden="true">↗</span></a></div>
+    <Image src={research} alt="" width={760} format="webp" />
+  </article>
+  <details><summary>{t.researchExpand}</summary><div class="catalogue" lang="en"><ResearchContent /></div></details>
+</section>
+<script>
+  const revealTarget = () => {
+    let id;
+    try { id = decodeURIComponent(location.hash.slice(1)); } catch { return; }
+    if (!id) return;
+    const target = document.getElementById(id);
+    if (!target) return;
+    const details = target.closest('details');
+    if (details) { details.open = true; target.scrollIntoView(); }
+  };
+  revealTarget();
+  window.addEventListener('hashchange', revealTarget);
+</script>
+<style>
+  .project-index { display: flex; flex-wrap: wrap; gap: .5rem 2rem; padding-bottom: 2rem; }
+  a { display: inline-flex; align-items: center; gap: .5rem; min-height: 44px; color: var(--accent); text-underline-offset: .2em; }
+  section { border-top: 1px solid var(--line); padding-block: 3rem; scroll-margin-top: 1.5rem; }
+  h2 { font-size: clamp(1.6rem, 3vw, 2.2rem); } h3 { font-size: 1.3rem; }
+  .eyebrow { font-size: .8rem; color: var(--accent); margin-bottom: .6rem; }
+  .intro { margin-top: 1.2rem; max-width: 760px; }
+  .feature { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); align-items: center; gap: 3rem; margin-top: 2.5rem; }
+  .feature + .feature { border-top: 1px solid var(--line); padding-top: 2.5rem; }
+  .feature p { margin-block: 1rem; }
+  .feature img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .feature > img { aspect-ratio: 16 / 9; object-fit: cover; }
+  figure { margin: 0; } figcaption, .note { font-size: .8rem; color: var(--muted); margin-top: .75rem; }
+  .family { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; margin-top: 2rem; }
+  .family article { border-left: 2px solid var(--line); padding-left: 1.5rem; }
+  .family article > p:last-child { margin-top: 1rem; }
+  details { margin-top: 2rem; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+  summary { cursor: pointer; padding: 1.25rem; min-height: 44px; font-weight: 600; }
+  summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+  .catalogue { padding: 0 1.5rem 1.5rem; max-width: 850px; }
+  .catalogue :global(h2) { font-size: 1.4rem; margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
+  .catalogue :global(h3) { font-size: 1.1rem; }
+  .catalogue :global(p), .catalogue :global(ul) { margin-block: 1.25rem; }
+  .catalogue :global(img) { max-width: 100%; height: auto; border-radius: 5px; }
+  .catalogue :global(h2 img) { display: none; }
+  .catalogue :global(a) { color: var(--accent); overflow-wrap: anywhere; }
+  .catalogue :global(.sl-anchor-link) { display: none; }
+  @media (max-width: 760px) { section { padding-block: 2rem; } .feature, .family { grid-template-columns: 1fr; gap: 1.5rem; } .catalogue { padding-inline: 1rem; } }
+</style>

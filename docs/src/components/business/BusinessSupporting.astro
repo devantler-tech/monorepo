@@ -1,8 +1,8 @@
 ---
 import { Image } from 'astro:assets';
 import portrait from '../../assets/profile.jpg';
-import ksail from '../../assets/ksail-cli-dark.png';
 import BusinessLayout from './BusinessLayout.astro';
+import BusinessProjects from './BusinessProjects.astro';
 import { copy, type Locale } from './content';
 import { supporting } from './supporting';
 interface Props { locale: Locale; section: 'about' | 'projects' }
@@ -23,13 +23,7 @@ const about = section === 'about';
       <section aria-labelledby="approach-title"><h2 id="approach-title">{t.approachTitle}</h2><div class="principles">{t.principles.map((item) => <article><h3>{item.title}</h3><p>{item.text}</p></article>)}</div></section>
       <section class="background" aria-labelledby="background-title"><h2 id="background-title">{t.backgroundTitle}</h2><p>{t.backgroundText}</p><div class="links"><a href="/pdfs/nikolai-emil-damm-cv.pdf" download>{t.cv}</a><a href="https://github.com/devantler">{t.github}</a><a href="/blog/">{homeCopy.blog}</a></div></section>
     </> : <>
-      <section aria-labelledby="open-title"><h2 id="open-title">{t.openTitle}</h2><p class="section-intro">{t.openIntro}</p>
-        <article class="featured"><div><h3>KSail</h3><p>{homeCopy.ksailText}</p><a href="https://ksail.devantler.tech">{homeCopy.productLink}</a></div><Image src={ksail} alt={locale === 'da' ? 'KSails brugerflade i terminalen' : 'KSail’s terminal interface'} width={760} format="webp" /></article>
-        <article class="project-row"><h3>{t.pluginsTitle}</h3><div><p>{homeCopy.pluginsText}</p><a href="https://github.com/devantler-tech/agent-plugins">{homeCopy.productLink}</a></div></article>
-        <p class="note">{homeCopy.subscriptionNote}</p>
-      </section>
-      <section aria-labelledby="family-title"><h2 id="family-title">{t.familyTitle}</h2><p class="section-intro">{t.familyIntro}</p><div class="family">{homeCopy.workItems.map((item) => <article><p class="role">{item.kind}</p><h3>{item.title}</h3><p>{item.text}</p></article>)}</div></section>
-      <section class="background" aria-labelledby="more-title"><h2 id="more-title">{t.moreTitle}</h2><p>{t.moreText}</p><div class="links"><a href="/projects/active/">{t.active}</a><a href="/projects/completed/">{t.completed}</a></div><p class="note">{t.english}</p></section>
+      <BusinessProjects locale={locale} />
     </>}
     <a class="contact-link" href={`${home}#contact`}>{t.contact}</a>
   </main>

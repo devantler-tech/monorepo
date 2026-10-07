@@ -40,6 +40,20 @@ Starlight component overrides. Their search, sidebar, RSS and historical article
 There is one appearance picker, including on mobile; the documentation header measures its height
 so the reading tools do not overlap the business navigation.
 
+Projects includes the wider technical catalogue and earlier research on the same page, with
+expandable English detail sourced directly from `src/content/docs/projects/active.mdx` and
+`completed.mdx`. Their drift checks remain authoritative. The legacy active/completed URLs
+redirect to the relevant section of `/projects/`; the documentation sidebar links only to that
+canonical page. Browser redirects preserve incoming heading fragments; links without a fragment
+and the no-JavaScript fallback use the relevant catalogue section. Root horizontal overflow is
+clipped without creating a non-scrolling ancestor
+that would break the documentation header's sticky positioning.
+
+Journal covers and project illustrations use the subject-based green/charcoal workshop series in
+`src/assets/editorial/`. [Asset provenance](src/assets/PROVENANCE.md) distinguishes generated
+illustrations from the real portrait, product captures and authored diagrams; the complete prompts
+are recorded alongside the assets. Covers do not replace factual inline screenshots or diagrams.
+
 `npm run build` renders the business experience directly and verifies its English/Danish visitor
 journeys and supporting pages. The same command is used by CI and GitHub Pages publication.
 The business site has no release toggle; reverting the publication change and redeploying is the

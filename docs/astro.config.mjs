@@ -38,7 +38,7 @@ export default defineConfig({
       name: 'devantler-business-pages',
       hooks: {
         'astro:config:setup': ({ injectRoute }) => {
-          for (const pattern of ['/', '/da/', '/about/', '/da/about/', '/projects/', '/da/projects/']) {
+          for (const pattern of ['/', '/da/', '/about/', '/da/about/', '/projects/', '/da/projects/', '/projects/active/', '/projects/completed/']) {
             injectRoute({ pattern, entrypoint: './src/components/business/BusinessPage.astro', prerender: true });
           }
         },
@@ -152,7 +152,7 @@ export default defineConfig({
         },
         {
           label: "Projects",
-          items: [{ autogenerate: { directory: "projects" } }],
+          link: "/projects/",
         },
         {
           label: "Templates",
