@@ -2798,7 +2798,7 @@ grep -Fq 'it is not a bare event match' "${surveyor}" ||
 grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor}" ||
   fail "surveyor must require BOTH the dynamic event and a dynamic/ path for the managed carve-out (#2536, #2704)"
 
-# --- Ownership disclosure is a THREE-valued literal test, not a prefix boolean (#2762) ----------
+# --- Ownership disclosure is a literal test with its own UNKNOWN, not a prefix boolean (#2762) ----------
 # Measured 2026-08-11 (snapshot n=75; the corpus is live and drifts, so this documents the ORIGINAL
 # defect rather than a current total): the two-valued
 # `disclosure=<yes|no>` field was 100% precise when it said `yes` (26/26 routine) but carried NO
@@ -2806,8 +2806,18 @@ grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor
 # actions: 5 maintainer-interactive (HANDS-OFF), 7 routine whose disclosure simply is not at position
 # zero, and 37 with no marker at all. Acting on that conflation mutated two of the maintainer's
 # interactive PRs (platform#2985, #3034) via `gh pr update-branch`.
-grep -Fq 'disclosure=<routine|interactive|none>' "${surveyor}" ||
-  fail "surveyor must emit the three-valued ownership disclosure field, not a yes/no boolean (#2762)"
+grep -Fq 'disclosure=<routine|interactive|none|unknown>' "${surveyor}" ||
+  fail "surveyor must emit the ownership disclosure field with its unknown value, not a yes/no boolean (#2762, #3513)"
+# #3513 — since #3110 the classifier exits 2 on an empty or unreadable body. The digest needs a value
+# for that outcome, or the only one left to report is `none`, the all-clear #3110 removed.
+grep -Fq "Exit 2 prints no verdict: report disclosure=unknown." "${surveyor}" ||
+  fail "surveyor invocation must name the exit-2 outcome and the value it reports (#3513)"
+grep -Fq "the classifier exited \`2\`: the body was empty, whitespace-only or unreadable" "${surveyor}" ||
+  fail "surveyor must define disclosure=unknown as the classifier exit-2 outcome (#3513)"
+grep -Fq "**Never \`none\`** — nothing was read, so nothing was found absent." "${surveyor}" ||
+  fail "surveyor must forbid folding an unread body into disclosure=none (#3513)"
+! grep -Fq "disclosure=<routine|interactive|none>" "${surveyor}" ||
+  fail "surveyor still carries the three-valued grammar that has no value for an unread body (#3513)"
 
 # Position is a red herring and must never be reinstated as the discriminator: platform#2985 carries
 # the maintainer literal at the START of the body and #3034 carries it as a trailing line, so an
