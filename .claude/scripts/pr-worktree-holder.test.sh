@@ -381,7 +381,23 @@ case "\${FIXTURE_RESOLVE_FAIL_AT:-}" in
 esac
 exec "${real_git}" "\$@"
 SHIM
-chmod +x "${gitshim}/git"
+# Beside it, a tr and a sed that fail only the step that turns a NUL-terminated list of submodules
+# into lines, when FIXTURE_SUBLIST_FAIL names them, and are the real ones otherwise.
+real_tr="$(command -v tr)"
+real_sed="$(command -v sed)"
+cat >"${gitshim}/tr" <<SHIM
+#!/usr/bin/env bash
+if [ "\${FIXTURE_SUBLIST_FAIL:-}" = tr ] && [ "\${1:-}" = '\n\0' ]; then exit 1; fi
+exec "${real_tr}" "\$@"
+SHIM
+cat >"${gitshim}/sed" <<SHIM
+#!/usr/bin/env bash
+if [ "\${FIXTURE_SUBLIST_FAIL:-}" = sed ]; then
+  case "\${2:-}" in 's/^160000 '*) cat >/dev/null; exit 1 ;; esac
+fi
+exec "${real_sed}" "\$@"
+SHIM
+chmod +x "${gitshim}/git" "${gitshim}/tr" "${gitshim}/sed"
 
 lsof_full="${sandbox}/lsof-full"
 cat >"${lsof_full}" <<LSOF
@@ -494,6 +510,7 @@ list_fail=0
 list_ok=0
 list_fail_at=''
 resolve_fail_at=''
+sublist_fail=''
 # Only the asking session, at w1; only a process at the main checkout; only another process at w2.
 lsof_w2_only="${sandbox}/lsof-w2-only"
 printf 'p9000003\nfcwd\nn%s\n' "${w2}" >"${lsof_w2_only}"
@@ -530,6 +547,7 @@ expect() {
     FIXTURE_PS_FAIL="${ps_fail}" FIXTURE_PS_EXTRA="${ps_extra}" FIXTURE_SELF_ROW="${self_row}" \
     FIXTURE_PS_STARTS="${ps_starts}" FIXTURE_STARTS_FAIL="${starts_fail}" FIXTURE_LIST_OK="${list_ok}" \
     FIXTURE_LIST_FAIL_AT="${list_fail_at}" FIXTURE_RESOLVE_FAIL_AT="${resolve_fail_at}" \
+    FIXTURE_SUBLIST_FAIL="${sublist_fail}" \
     "${tool}" --input - <<<"${payload}" 2>/dev/null)" || rc=$?
   if [ "${rc}" = "${want_rc}" ] && [ "${out}" = "${want_out}" ]; then
     echo "ok   ${label}"
@@ -823,6 +841,23 @@ expect "a lock in a submodule's registry is read when the superproject's working
   "${nomodules}" "${session}" 0 \
   "devantler-tech/product#91 holder=live:1:9000002/claude" \
   "$(pr devantler-tech/product 91 claude/product-91)" "${lsof_nowhere}"
+# Half a list of submodules would read as a whole one, so a step that fails while the list is built
+# is unknown. `list_fail=1` puts the shims on the path; with `sublist_fail` set they fail no listing.
+list_fail=1
+resolve_fail_at='nowhere'
+for sublist_fail in tr sed; do
+  expect "a list of submodules that could not be built (${sublist_fail} failed) is unknown, never none" \
+    "${nomodules}" "${session}" 2 \
+    "devantler-tech/product#91 holder=unknown:lock-scan" \
+    "$(pr devantler-tech/product 91 claude/product-91)" "${lsof_nowhere}"
+done
+sublist_fail=''
+expect "with those steps working, the same question on the same path is answered" \
+  "${nomodules}" "${session}" 0 \
+  "devantler-tech/product#91 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 91 claude/product-91)" "${lsof_nowhere}"
+list_fail=0
+resolve_fail_at=''
 expect "a populated submodule at a path that holds a newline is unknown: no list here can carry it" \
   "${nlsub}" "${session}" 2 \
   "devantler-tech/product#92 holder=unknown:lock-scan" \

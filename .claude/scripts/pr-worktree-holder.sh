@@ -466,17 +466,21 @@ lockless() {
 submodule_paths() {
   local dir="$1" rc=0 soh=$'\001'
   git -C "${dir}" ls-files -s -z >"${work}/index.z" 2>/dev/null || return 1
+  # Every step below fails the list when it fails: a caller that tests this function switches the
+  # shell's own stop-on-error off inside it, and half a list would read as a whole one.
   # An entry is `<mode> <object> <stage>`, a tab, and the path; a gitlink's mode is 160000.
-  tr '\n\0' '\001\n' <"${work}/index.z" | sed -n "s/^160000 [^${tab}]*${tab}//p" >"${work}/subs"
+  tr '\n\0' '\001\n' <"${work}/index.z" | sed -n "s/^160000 [^${tab}]*${tab}//p" >"${work}/subs" ||
+    return 1
   if [ -f "${dir}/.gitmodules" ]; then
     # git answers 1 for a file that names no submodule path: a read that worked and found none.
     git config -z -f "${dir}/.gitmodules" --get-regexp '^submodule\..*\.path$' \
       >"${work}/modules.z" 2>/dev/null || rc=$?
     [ "${rc}" -le 1 ] || return 1
     # An entry is the key, a newline, and the value.
-    tr '\n\0' '\001\n' <"${work}/modules.z" | sed "s/^[^${soh}]*${soh}//" >>"${work}/subs"
+    tr '\n\0' '\001\n' <"${work}/modules.z" | sed "s/^[^${soh}]*${soh}//" >>"${work}/subs" ||
+      return 1
   fi
-  LC_ALL=C sort -u "${work}/subs"
+  LC_ALL=C sort -u "${work}/subs" || return 1
 }
 
 # scan_submodules <checkout> <depth> — add the repository of every populated submodule below it:
