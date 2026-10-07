@@ -33,7 +33,8 @@
 #                                   checks it out, so there is nothing local to examine
 #   unknown:<reason>                the helper could not tell, and that is NEVER `none`. Reasons:
 #                                   input, lsof-missing, lsof-failed, lsof-empty, ps-failed,
-#                                   worktree-list, lock-reason
+#                                   worktree-list (any worktree listing the answer depends on:
+#                                   the locks, or the worktrees nested in a held one), lock-reason
 #
 # WHAT HOLDING A CHECKOUT MEANS
 #   A process holds the checkout containing its working directory, every populated submodule of
@@ -41,9 +42,13 @@
 #   submodules register inside their own directories: the per-run product worktrees the
 #   git-and-worktrees guide prescribes. A session usually sits at its worktree root while its
 #   branch is checked out in a submodule below it, so stopping at the working directory would miss
-#   most product PRs. A MAIN checkout never claims worktrees beneath it, because every per-session
-#   worktree lives inside the main checkout and one shell there would then hold every branch on the
-#   host. A checkout serves a PR when any of its remotes names the PR's head repository and its
+#   most product PRs. A linked worktree also holds the worktrees of its OWN repository registered
+#   inside its directory, at any depth, and what those own (monorepo#3818): the guide puts a
+#   session's per-run worktrees of the superproject at `<session worktree>/.claude/worktrees/`,
+#   the session drives them with `git -C` from its own root, and the harness does not lock them,
+#   so nothing else names their owner. A MAIN checkout never claims worktrees beneath it, because
+#   every per-session worktree lives inside the main checkout and one shell there would then hold
+#   every branch on the host. A checkout serves a PR when any of its remotes names the PR's head repository and its
 #   branch is the head branch, including a branch that is mid-rebase or mid-bisect (HEAD detached,
 #   the branch still named in the checkout's git directory).
 #   A shell holds a checkout only while something other than a shell runs below it: a terminal tab
@@ -251,7 +256,12 @@ expand_nested() {
   local top="$1" sub="$2" gitdir="$3" list line
   # Only a repository that has linked worktrees keeps this directory, so most submodules cost no call.
   [ -d "${gitdir}/worktrees" ] || return 0
-  list="$(git -C "${sub}" worktree list --porcelain 2>/dev/null)" || return 0
+  # A listing that fails may hide a held worktree. The callers run in pipelines and redirections,
+  # so the failure is left as a file for the main shell to turn into `unknown:worktree-list`.
+  if ! list="$(git -C "${sub}" worktree list --porcelain 2>/dev/null)"; then
+    : >"${work}/listfail"
+    return 0
+  fi
   while IFS= read -r line; do
     case "${line}" in
       'worktree '*)
@@ -260,6 +270,43 @@ expand_nested() {
         case "${R_TOP}" in
           "${sub}"/?*) record "${top}" "${R_TOP}" "${R_BRANCH}" ;;
         esac
+        ;;
+    esac
+  done <<<"${list}"
+}
+
+# expand_own_nested <holder-top> — the worktrees of the holder's OWN repository registered inside
+# its directory, and what each of those owns (monorepo#3818). Only ever called for a linked
+# worktree. One listing answers every depth, because a worktree nested in a nested one is still a
+# worktree of the same repository under the same directory.
+expand_own_nested() {
+  local top="$1" list line nested
+  if ! list="$(git -C "${top}" worktree list --porcelain 2>/dev/null)"; then
+    : >"${work}/listfail"
+    return 0
+  fi
+  # A session host registers a couple of hundred worktrees and nearly all are elsewhere, so the
+  # listed paths are narrowed to those under <top> before git is started for any of them. The
+  # comparison ignores letter case: git lists a path as it was spelled when the worktree was added
+  # or moved, and on a case-insensitive volume that can differ from the spelling it reports for
+  # <top>. This only narrows; the exact test is the one on the resolved path below.
+  list="$(awk -v top="${top}" '
+    BEGIN { want = tolower(top) "/"; n = length(want) }
+    /^worktree / { if (tolower(substr($0, 10, n)) == want && length($0) > 9 + n) print }
+  ' <<<"${list}")"
+  while IFS= read -r line; do
+    case "${line}" in
+      'worktree '*)
+        # A pruned worktree fails to resolve; one that lost its `.git` entry resolves to the
+        # checkout around it, which is <top> itself or a nested worktree this loop records anyway.
+        resolve "${line#worktree }" || continue
+        case "${R_TOP}" in
+          "${top}"/?*) ;;
+          *) continue ;;
+        esac
+        nested="${R_TOP}"
+        record "${top}" "${nested}" "${R_BRANCH}"
+        expand_submodules "${top}" "${nested}" 1 0
         ;;
     esac
   done <<<"${list}"
@@ -286,6 +333,9 @@ expand_submodules() {
   done <<<"${paths}"
 }
 
+# Cleared only while the asker's own tree is listed for the lock rule: see where that is built.
+own_nested=1
+
 # expand <dir> — the checkout containing <dir> and everything it owns, as record lines.
 expand() {
   resolve "$1" || return 0
@@ -297,6 +347,7 @@ expand_resolved() {
   local top="${R_TOP}" linked="${R_LINKED}"
   record "${top}" "${top}" "${R_BRANCH}"
   expand_submodules "${top}" "${top}" "${linked}" 0
+  if [ "${linked}" = 1 ] && [ "${own_nested}" = 1 ]; then expand_own_nested "${top}"; fi
 }
 
 # lock_rows — `git worktree list --porcelain` on stdin; one row per LOCKED worktree:
@@ -357,6 +408,7 @@ nearest_checkout() {
 : >"${work}/unread"
 : >"${work}/entries"
 : >"${work}/asker"
+: >"${work}/askerlock"
 tab=$'\t'
 probe_error=''
 if [ "${heads}" != $'\n\n' ]; then
@@ -481,13 +533,25 @@ if [ "${heads}" != $'\n\n' ]; then
       asker="${super}"
       hops=$((hops + 1))
     done
-    if [ -n "${asker}" ]; then expand "${asker}" | cut -f2 | LC_ALL=C sort -u >"${work}/asker"; fi
+    # Listed twice. A process is the asker's own when it works anywhere in the asker's tree, the
+    # worktrees nested in it included. A lock is the asker's own only on the worktree it asks
+    # from: a worktree the harness locked for one of the asker's workers must stay `live` even
+    # when it is registered inside the asker's own worktree, so that list leaves the nested out.
+    if [ -n "${asker}" ]; then
+      expand "${asker}" | cut -f2 | LC_ALL=C sort -u >"${work}/asker"
+      {
+        own_nested=0
+        expand "${asker}"
+      } | cut -f2 | LC_ALL=C sort -u >"${work}/askerlock"
+    fi
   fi
+  # A nested-worktree listing failed somewhere above: a holder may be missing from the entries.
+  if [ -z "${probe_error}" ] && [ -e "${work}/listfail" ]; then probe_error=worktree-list; fi
 fi
 
 rc=0
 awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
-  -v psf="${work}/ps" -v askf="${work}/asker" -v entf="${work}/entries" -v holdf="${work}/holders" \
+  -v psf="${work}/ps" -v askf="${work}/asker" -v asklf="${work}/askerlock" -v entf="${work}/entries" -v holdf="${work}/holders" \
   -v lockf="${work}/lockholders" -v unreadf="${work}/unread" '
   function is_session(p) { return comm[p] == "claude" || comm[p] == "codex" }
   function is_shell(p,   name) {
@@ -538,6 +602,7 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
   }
   FILENAME == psf { ppid[$1] = $2; comm[$1] = $3; next }
   FILENAME == askf { asker[$1] = 1; next }
+  FILENAME == asklf { askerlock[$1] = 1; next }
   FILENAME == entf { if ($3 != "") owns[$1, $3] = 1; next }
   FILENAME == holdf { holders++; hpid[holders] = $1; htop[holders] = $2; next }
   FILENAME == lockf { holders++; hpid[holders] = $1; htop[holders] = $2; hlock[holders] = 1; next }
@@ -563,7 +628,7 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
         if ((p, top) in sits) continue
         # A lock names the session, and every worker of that session shares the process, so the
         # asker owns only the locked worktree it asks from.
-        own = (top in asker) && ((p in chain) || descends(p, me) || (session != "" && descends(p, session)))
+        own = (top in askerlock) && ((p in chain) || descends(p, me) || (session != "" && descends(p, session)))
       } else {
         if (is_shell(p) && !(p in busy)) continue
         sits[p, top] = 1
@@ -597,7 +662,7 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
     print id " holder=" (value != "" ? value : "none")
   }
   END { exit unknown ? 2 : 0 }
-' "${work}/ps" "${work}/asker" "${work}/entries" "${work}/holders" "${work}/lockholders" "${work}/unread" \
+' "${work}/ps" "${work}/asker" "${work}/askerlock" "${work}/entries" "${work}/holders" "${work}/lockholders" "${work}/unread" \
   "${work}/prs" || rc=$?
 finished=1
 exit "${rc}"
