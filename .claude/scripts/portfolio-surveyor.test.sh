@@ -2807,7 +2807,9 @@ grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor
 # zero, and 37 with no marker at all. Acting on that conflation mutated two of the maintainer's
 # interactive PRs (platform#2985, #3034) via `gh pr update-branch`.
 # The grammar must sit on the digest row that carries the field, so read that row alone.
-_disclosure_row=$(grep -F -- '— `devantler`, draft=<true|false>' "${surveyor}" || true)
+# grep exits 1 for no match and 2 for a failed read: only the first is a missing rule.
+_disclosure_row=$(grep -F -- '— `devantler`, draft=<true|false>' "${surveyor}") || [ "$?" -eq 1 ] ||
+  fail "surveyor could not be read for its devantler digest row; UNKNOWN, not a missing rule (#3513)"
 [ -n "${_disclosure_row}" ] ||
   fail "surveyor digest row for a devantler pull request was not found, so its disclosure grammar is unchecked (#3513)"
 grep -Fq 'disclosure=<routine|interactive|none|unknown>' <<<"${_disclosure_row}" ||
@@ -2822,7 +2824,8 @@ grep -Fq "the classifier exited \`2\`: the body was empty, whitespace-only or un
   fail "surveyor must define disclosure=unknown as the classifier exit-2 outcome (#3513)"
 grep -Fq "**Never \`none\`** — nothing was read, so nothing was found absent." <<<"${_disclosure_values}" ||
   fail "surveyor must forbid folding an unread body into disclosure=none (#3513)"
-_disclosure_call=$(grep -B1 'pr-ownership-disclosure\.sh --input -$' "${surveyor}" || true)
+_disclosure_call=$(grep -B1 'pr-ownership-disclosure\.sh --input -$' "${surveyor}") || [ "$?" -eq 1 ] ||
+  fail "surveyor could not be read for its classifier invocation; UNKNOWN, not a missing rule (#3513)"
 [ -n "${_disclosure_call}" ] ||
   fail "surveyor classifier invocation was not found, so its exit-2 comment is unchecked (#3513)"
 grep -Fq "# Prints interactive, routine or none. Exit 2 prints no verdict: report disclosure=unknown." <<<"${_disclosure_call}" ||

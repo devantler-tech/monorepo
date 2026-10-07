@@ -528,7 +528,7 @@ public and private — no per-repo loop needed to enumerate):
      **comment-attribution** half of that distinction survives: they tell the orchestrator whose
      control channel a `devantler` comment on that PR is — his steer versus its own prior output —
      which is a different question from who may drive it.
-     **The test is which literal, never where it sits.** Emit one of three values.
+     **The test is which literal, never where it sits.** Emit one of four values.
      ⚠️ **Matching SYNTAX is identical for both literals; only the attribution WEIGHT differs.**
      Do not read any asymmetry into how they are matched — an implementation that matched
      `interactive` more loosely would misattribute the maintainer's control channel on PRs that are
