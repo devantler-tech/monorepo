@@ -18,7 +18,10 @@ completed=0
 on_exit() {
   local status=$?
   rm -rf "$tmp"
-  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then exit 1; fi
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "safe-clone.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
 }
 trap on_exit EXIT
 
