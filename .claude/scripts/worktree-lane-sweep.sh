@@ -24,8 +24,10 @@
 # supervisor) is still on record for the next start.
 #
 # A second sweep must never start beside a live one (#3823). So a start is refused while the
-# recorded supervisor runs, while the recorded sweeper runs without it, and, when the start record
-# cannot be read and so names nobody, while any supervisor of the lane runs.
+# recorded supervisor runs and while the recorded sweeper runs without it. Where the record that
+# would name the process cannot be read, or was never written (a sweep left unfinished by a copy
+# of this script from before sweepers recorded themselves), it is refused while any supervisor or
+# sweeper of the lane runs.
 #
 # Usage: worktree-lane-sweep.sh start|status --lane claude|codex
 #   start   report the previous sweep, then start a new one detached
@@ -514,6 +516,7 @@ fi
 # supervisor died without stopping it, nor any supervisor when the start record cannot be read, so
 # those are looked for here: nothing of the lane may still be sweeping when a new sweep starts.
 sweeper_wanted=none
+any_supervisor=$START_RECORD_BAD
 if [ -e "$sweeper_record" ] || [ -L "$sweeper_record" ]; then
   if record_is_safe "$sweeper_record" && sweeper_line=$(cat -- "$sweeper_record" 2>/dev/null) \
     && [[ "$sweeper_line" =~ $started_re ]]; then
@@ -523,16 +526,23 @@ if [ -e "$sweeper_record" ] || [ -L "$sweeper_record" ]; then
       "$prog" "$sweeper_record" "$lane" >&2
     sweeper_wanted=any; rc=2
   fi
+elif [ "$VERDICT" = unfinished ]; then
+  # A sweep that never recorded its end, and no sweeper on record for it. Either its supervisor
+  # ran a copy of this script from before sweepers recorded themselves, or it was killed in the
+  # moment before its sweeper did, while that sweeper was still the supervisor's own fork and
+  # looked like one. Nothing names the process, so anything of the lane counts.
+  sweeper_wanted=any; any_supervisor=1
 fi
-if [ "$START_RECORD_BAD" = 1 ] || [ "$sweeper_wanted" != none ]; then
+if [ "$any_supervisor" = 1 ] || [ "$sweeper_wanted" != none ]; then
   if ! lane_processes "$sweeper_wanted"; then
     printf '%s: UNKNOWN — cannot read the process table completely; not starting a %s sweep while what still runs is unknown\n' \
       "$prog" "$lane" >&2
     finish 2
   fi
-  if [ "$START_RECORD_BAD" = 1 ] && [ -n "$LIVE_SUPERVISORS" ]; then
+  if [ "$any_supervisor" = 1 ] && [ -n "$LIVE_SUPERVISORS" ]; then
     printf '%s: not starting a second %s sweep while supervisor pid%s still runs\n' \
       "$prog" "$lane" "$LIVE_SUPERVISORS"
+    [ "$rc" -ne 0 ] || rc=1
     finish "$rc"
   fi
   if [ -n "$LIVE_SWEEPERS" ]; then

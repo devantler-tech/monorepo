@@ -542,6 +542,40 @@ if [ "$rc" -eq 2 ] && grep -q 'unreadable sweeper record' <<<"$out" \
   ok "an unreadable sweeper record is replaced once no sweeper of the lane runs"
 else bad "an unreadable sweeper record is replaced once no sweeper of the lane runs" "rc=$rc $out"; fi
 
+# A supervisor that ran a copy of the launcher from before sweepers recorded themselves leaves no
+# sweeper record at all. Killed, it leaves a sweep that never finished, a sweeper still running
+# and nothing that names it: any sweeper of the lane has to count then too.
+mode hang
+rm -f "$fx/release" "$fx/hanging"
+run start --lane claude
+orphan_id=$(field claude started id); orphan_sup=$(field claude started pid)
+track claude
+wait_for "$fx/hanging" || bad "the sweep to orphan without a record started" "$(cat "$log" 2>&1)"
+orphan_sweeper=$(live_sweeps)
+kill -9 "$orphan_sup" 2>/dev/null
+wait_gone "$orphan_sup" || bad "the third supervisor was killed" "pid=$orphan_sup"
+rm -f "$records/cleanup-claude.sweeper"
+run_fx start --lane claude
+if [ "$rc" -eq 1 ] && grep -q 'NEVER FINISHED' <<<"$out" \
+   && grep -q "sweeper pid $orphan_sweeper is still running without its supervisor" <<<"$out" \
+   && [ "$(field claude started id)" = "$orphan_id" ] && [ "$(count_live_sweeps)" -eq 1 ]; then
+  ok "an unfinished sweep with no sweeper on record still finds the lane's running sweeper"
+else
+  bad "an unfinished sweep with no sweeper on record still finds the lane's running sweeper" \
+    "rc=$rc live-sweeps=$(count_live_sweeps) $out"
+  [ "$(field claude started id)" = "$orphan_id" ] || track claude
+fi
+touch "$fx/release"
+i=0; while [ "$(count_live_sweeps)" -gt 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+rm -f "$fx/release" "$fx/hanging"
+mode ok
+run_fx start --lane claude
+track claude
+if [ "$rc" -eq 1 ] && grep -q 'NEVER FINISHED' <<<"$out" \
+   && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude; then
+  ok "an unfinished sweep with no sweeper on record is replaced once nothing of the lane runs"
+else bad "an unfinished sweep with no sweeper on record is replaced once nothing of the lane runs" "rc=$rc $out"; fi
+
 # Two launchers arriving together must serialize the read/start/record transaction. One may see
 # the other already running or may lose the lock, but they must create exactly one supervisor.
 concurrent_home="$fx/concurrent-home"
