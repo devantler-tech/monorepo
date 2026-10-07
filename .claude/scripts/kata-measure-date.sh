@@ -140,6 +140,24 @@ marked_values() {
     }
     return 0
   }
+  # interrupts(line): can this line interrupt a paragraph? CommonMark names the cases, and nothing
+  # else ends a lazy continuation: a thematic break, an ATX heading, a bullet item with content, an
+  # ordered item numbered 1 with content, and the start of an HTML block of kinds 1 to 6 (a comment,
+  # a declaration, or one of the listed block-level tags; any other tag is inline text). A fence is
+  # handled where fences are, and a blank line and a quote marker by their own rules.
+  function interrupts(s,    t) {
+    t = s
+    sub(/^ ? ? ?/, "", t)
+    if (t ~ /^#(#?#?#?#?#?)([ \t]|$)/) return 1
+    if (t ~ /^(\*[ \t]*\*[ \t]*\*[ \t*]*|-[ \t]*-[ \t]*-[ \t-]*|_[ \t]*_[ \t]*_[ \t_]*)$/) return 1
+    if (t ~ /^[-+*][ \t]+[^ \t]/) return 1
+    if (t ~ /^1[.)][ \t]+[^ \t]/) return 1
+    if (t ~ /^<(!|\?)/) return 1
+    t = tolower(t)
+    if (t ~ /^<(script|pre|style|textarea)([ \t>]|$)/) return 1
+    if (t ~ /^<\/?(address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)([ \t>]|\/>|$)/) return 1
+    return 0
+  }
   { sub(/\r$/, "") }
   in_comment {
     p = index($0, "-->")
@@ -173,21 +191,24 @@ marked_values() {
       fence_char = c; fence_len = n; fence_indent = pfx + extra; in_quote = 0; next
     }
   }
-  unclosed_comment($0) { in_comment = 1; next }
+  unclosed_comment($0) { in_comment = 1; in_quote = 0; next }
   # A paragraph line that follows a quoted PARAGRAPH line with no blank line between is still
   # inside the quote (a lazy continuation), so a marker there belongs to the quoted text as well.
-  # Only a paragraph can be continued: a quoted line that is empty, a heading or a fence leaves
-  # nothing to continue, so the next unquoted line is outside the quote. A blank line, a heading
-  # or a list item ends the quote too.
+  # The quote ends exactly where CommonMark ends it, which is a closed list and not a matter of
+  # taste: at a blank line, and at a line that can interrupt a paragraph (see interrupts below).
+  # A quoted line leaves a paragraph open only if it is itself paragraph text; an empty one, a
+  # heading, a thematic break, a fence or an HTML block leaves nothing to continue.
   /^[ \t]*$/ { in_quote = 0; next }
   /^ ? ? ?>/ {
     q = $0
     while (q ~ /^ ? ? ?>/) sub(/^ ? ? ?> ?/, "", q)
     sub(/^[ \t]+/, "", q)
-    in_quote = (q != "" && q !~ /^(#|```|~~~)/)
+    # A quoted list item holds a paragraph, so judge what follows its marker.
+    sub(/^([-+*]|[0-9]+[.)])[ \t]+/, "", q)
+    in_quote = (q != "" && q !~ /^(```|~~~)/ && !interrupts(q))
     next
   }
-  /^ ? ? ?(#|[-+*][ \t]|[0-9]+[.)][ \t])/ { in_quote = 0 }
+  interrupts($0) { in_quote = 0 }
   $0 ~ marker {
     if (in_quote) next
     v = $0

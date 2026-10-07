@@ -221,6 +221,34 @@ expect "a measurement line after an empty quoted line counts" 1 "NOT-DUE 2026-10
   "$(solo $'> they suggested\n> \n**Measure on:** 2026-10-20' 2026-09-25 "${open1}")"
 expect "a delivery line after a quoted heading counts" 1 "NOT-DUE 2026-10-20" \
   "$(solo "${own}"$'\n> ## Note\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+# The quote ends exactly where CommonMark ends a lazy continuation: at a line that can interrupt a
+# paragraph. Each of these is such a line, so the marker after it is this Kata's own.
+ends_quote() { # ends_quote <label> <the line between the quote and the marker>
+  expect "a delivery line after a quote and $1 counts" 1 "NOT-DUE 2026-10-20" \
+    "$(solo "${own}"$'\n> someone wrote\n'"$2"$'\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+}
+ends_quote "a dash thematic break" '---'
+ends_quote "a star thematic break" '***'
+ends_quote "a spaced underscore thematic break" ' _ _ _'
+ends_quote "a bullet item" '- done'
+ends_quote "an ordered item numbered 1" '1. done'
+ends_quote "an HTML block" '<div>'
+ends_quote "a closing block tag" '</details>'
+ends_quote "a one-line HTML comment" '<!-- note -->'
+expect "a delivery line after a quoted thematic break counts" 1 "NOT-DUE 2026-10-20" \
+  "$(solo "${own}"$'\n> ---\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+# And each of these CANNOT interrupt a paragraph, so the quote runs on through it and the marker
+# after it is still quoted text.
+keeps_quote() { # keeps_quote <label> <the line between the quote and the marker>
+  expect "a delivery line after a quote and $1 is still quoted" 0 "UNDELIVERED 2026-10-20" \
+    "$(solo "${own}"$'\n> someone wrote\n'"$2"$'\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+}
+keeps_quote "a line of plain text" 'and went on'
+keeps_quote "an ordered item not numbered 1" '2. done'
+keeps_quote "an empty bullet marker" '-'
+keeps_quote "an inline tag" '<span>note</span>'
+keeps_quote "a setext underline" '==='
+keeps_quote "seven hashes, which is no heading" '####### note'
 # A NUL byte inside a date must not be deleted: that would join the pieces into a date nobody wrote.
 expect "a NUL byte inside a delivery date leaves it malformed" 2 "UNKNOWN malformed-delivery" \
   "$(solo "${own}"$'\n**Delivered on:** 2026-0\x019-20' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
@@ -279,6 +307,10 @@ expect_mutant "counting closed sub-issues hides a Kata whose children have all c
 mutant no-lazy-quote 's/^    if (in_quote) next$//'
 expect_mutant "without the quote rule a delivery line that continues a quote counts" no-lazy-quote \
   "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+# shellcheck disable=SC2016 # the expression matches the helper's own text; nothing here expands
+mutant no-interrupt 's/^  interrupts(\$0) { in_quote = 0 }$//'
+expect_mutant "without the interruption rule a thematic break keeps the quote open" no-interrupt \
+  "UNDELIVERED 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n---\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 mutant quote-never-ends 's/^    in_quote = (q != "" .*$/    in_quote = 1/'
 expect_mutant "without the paragraph test an empty quoted line keeps the quote open" quote-never-ends \
   "UNDELIVERED 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n>\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
