@@ -333,6 +333,26 @@ assert_contains "${section}" 'rollouts, surface it on a declared *Maintainer cha
   'the original refresh-tool escalation must survive — this clause supplements it, never replaces it'
 
 # ---------------------------------------------------------------------------
+# 4b. The repair must be stated where a run READS it, not only in this guide (monorepo#3926). The
+#     guide is loaded on demand; the every-run bullet and the run procedure are loaded by every
+#     Engineer run. After the always-on core was split out, 2 of 74 drift-detecting Claude runs
+#     invoked the refresh (22 of 104 before), and 57 reported that it needs an interactive session.
+#     Both surfaces are flattened first because the sentences wrap across source lines, and each is
+#     checked for the Claude scoping as well as the script, so an unconditional imperative that
+#     would send another lane to the Claude-only control plane fails here too.
+# ---------------------------------------------------------------------------
+for surface in "${repo_root}/AGENTS.md" "${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"; do
+  [ -r "${surface}" ] || fail "cannot read ${surface}"
+  flat="$(tr '\n' ' ' < "${surface}" | tr -s '[:space:]' ' ')"
+  [ "${#flat}" -gt 2000 ] || fail "${surface} flattened to only ${#flat} chars — the read is broken"
+  case "${flat}" in
+    *'A Claude `DRIFT` also runs `.claude/scripts/plugin-definition-refresh.sh`'*) ;;
+    *'On a Claude-lane `DRIFT`, also run `.claude/scripts/plugin-definition-refresh.sh`'*) ;;
+    *) fail "${surface} no longer tells a Claude run to run plugin-definition-refresh.sh on a DRIFT — the repair is then stated only in a guide no run is required to load" ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
 # 5. The premise must stay TRUE of the scripts, or the contract becomes a story about code that
 #    changed underneath it. If a lane selector is ever added to the refresh path, this test fails and
 #    whoever added it updates the prose in the same change.
