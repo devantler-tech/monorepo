@@ -17,7 +17,13 @@
 #   - a linked worktree holds the worktrees of its own repository registered inside it, at any
 #     depth, with their submodules, whether it is held by a working directory or by a live lock,
 #     and a listing of them that fails is `unknown:` (monorepo#3818: a session's per-run worktree
-#     sits inside its session worktree and has no process and no lock of its own).
+#     sits inside its session worktree and has no process and no lock of its own);
+#   - the locks read include those of each superproject above, and of each populated submodule
+#     below, every checkout a process works in or the helper is asked from (monorepo#3825: a lock
+#     lives in its worktree's repository, which need not be the one its owner or the asker stands
+#     in), and a listing of one of those that fails is `unknown:`;
+#   - a locked worktree whose path holds a tab is `unknown:` for every PR asked about unless its
+#     process exited, never a row that splits and reads `none` (monorepo#3825).
 # `lsof` and `ps` are shims driven by FIXTURE_* variables; the helper itself reads no environment.
 set -euo pipefail
 
@@ -189,6 +195,39 @@ grep -qxF "worktree ${hub_wt}/agent-a11" <<<"${hub_list}" ||
 [ "$(g -C "${hub_wt}/agent-a12" rev-parse --show-toplevel)" = "${hub}" ] ||
   { echo "FAIL fixture: agent-a12 does not resolve to the main checkout around it" >&2; exit 1; }
 
+# ── Locks in another repository than the one asked from (monorepo#3825) ─────────────────────────
+# A lock lives in the registry of its worktree's repository. The hub's main checkout has populated
+# its product submodule, and that submodule's repository registers two locked worktrees of its
+# own: one whose session lives and one whose session exited. Neither is in the hub's registry.
+hub_product="${hub}/product"
+g -C "${hub_product}" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${hub_product}" worktree add -q -b claude/product-70 "${hub_product}/.claude/worktrees/sub-live"
+g -C "${hub_product}" worktree lock --reason "claude agent sub-live (pid 9000002 start ${start_theirs})" \
+  "${hub_product}/.claude/worktrees/sub-live"
+g -C "${hub_product}" worktree add -q -b claude/product-71 "${hub_product}/.claude/worktrees/sub-gone"
+g -C "${hub_product}" worktree lock --reason "claude agent sub-gone (pid 9000099 start ${start_theirs})" \
+  "${hub_product}/.claude/worktrees/sub-gone"
+[ "$(g -C "${hub_product}" rev-parse --show-superproject-working-tree)" = "${hub}" ] ||
+  { echo "FAIL fixture: hub/product is not a submodule checkout of the hub" >&2; exit 1; }
+[ "$(g -C "${hub_product}" worktree list --porcelain | grep -c '^locked')" = 2 ] ||
+  { echo "FAIL fixture: expected 2 locked worktrees in the hub's product submodule" >&2; exit 1; }
+[ "$(g -C "${hub}" worktree list --porcelain | grep -c '^locked')" = 15 ] ||
+  { echo "FAIL fixture: the product submodule's locks leaked into the hub's registry" >&2; exit 1; }
+
+# ── A locked worktree whose path holds a tab (monorepo#3825) ────────────────────────────────────
+# A third repository, so the row no table can carry is in sight only for the cases that ask it.
+tabs="${sandbox}/tabs"
+tab_wt="${tabs}/.claude/worktrees/agent"$'\t'"tab"
+g init -q "${tabs}"
+g -C "${tabs}" commit -q --allow-empty -m init
+g -C "${tabs}" config remote.origin.url git@github.com:devantler-tech/tabs.git
+g -C "${tabs}" worktree add -q -b worktree-agent-tab "${tab_wt}"
+g -C "${tabs}" worktree lock --reason "claude agent agent-tab (pid 9000002 start ${start_theirs})" "${tab_wt}"
+g -C "${tabs}" worktree add -q -b claude/plain-80 "${tabs}/.claude/worktrees/plain"
+tabs_list="$(g -C "${tabs}" worktree list --porcelain)"
+grep -qxF "worktree ${tab_wt}" <<<"${tabs_list}" ||
+  { echo "FAIL fixture: git does not list the tabbed worktree path raw" >&2; exit 1; }
+
 # ── Shims ───────────────────────────────────────────────────────────────────────────────────────
 shims="${sandbox}/shims"
 mkdir -p "${shims}"
@@ -226,10 +265,15 @@ cat >"${gitshim}/git" <<SHIM
 #!/usr/bin/env bash
 case " \$* " in
   *' worktree list '*)
-    # The first FIXTURE_LIST_OK listings succeed; every later one fails.
-    n=\$((\$(cat "${gitshim}/count" 2>/dev/null || echo 0) + 1))
-    echo "\${n}" >"${gitshim}/count"
-    [ "\${n}" -le "\${FIXTURE_LIST_OK:-0}" ] || exit 1
+    if [ -n "\${FIXTURE_LIST_FAIL_AT:-}" ]; then
+      # Only the listing asked of that one checkout fails.
+      case " \$* " in *" -C \${FIXTURE_LIST_FAIL_AT} "*) exit 1 ;; esac
+    else
+      # The first FIXTURE_LIST_OK listings succeed; every later one fails.
+      n=\$((\$(cat "${gitshim}/count" 2>/dev/null || echo 0) + 1))
+      echo "\${n}" >"${gitshim}/count"
+      [ "\${n}" -le "\${FIXTURE_LIST_OK:-0}" ] || exit 1
+    fi
     ;;
 esac
 exec "${real_git}" "\$@"
@@ -345,6 +389,7 @@ ps_starts="${sandbox}/ps-starts"
 starts_fail=0
 list_fail=0
 list_ok=0
+list_fail_at=''
 # Only the asking session, at w1; only a process at the main checkout; only another process at w2.
 lsof_w2_only="${sandbox}/lsof-w2-only"
 printf 'p9000003\nfcwd\nn%s\n' "${w2}" >"${lsof_w2_only}"
@@ -368,7 +413,8 @@ pr() {
 
 # expect <label> <asking-dir> <self-row> <want-rc> <want-stdout> <stdin> [lsof-file] [lsof-rc] [ps-fail]
 # `starts_fail=1` fails the start-time read and `list_fail=1` the worktree listing, for the cases
-# that set them; with `list_fail=1`, the first `list_ok` listings still succeed.
+# that set them; with `list_fail=1`, the first `list_ok` listings still succeed, or, when
+# `list_fail_at` names a checkout, only the listing asked of that checkout fails.
 expect() {
   local label="$1" dir="$2" self_row="$3" want_rc="$4" want_out="$5" payload="$6"
   local lsof_file="${7:-${lsof_full}}" lsof_rc="${8:-0}" ps_fail="${9:-0}" out rc=0
@@ -379,6 +425,7 @@ expect() {
   out="$(cd "${dir}" && PATH="${path}" FIXTURE_LSOF="${lsof_file}" FIXTURE_LSOF_RC="${lsof_rc}" \
     FIXTURE_PS_FAIL="${ps_fail}" FIXTURE_PS_EXTRA="${ps_extra}" FIXTURE_SELF_ROW="${self_row}" \
     FIXTURE_PS_STARTS="${ps_starts}" FIXTURE_STARTS_FAIL="${starts_fail}" FIXTURE_LIST_OK="${list_ok}" \
+    FIXTURE_LIST_FAIL_AT="${list_fail_at}" \
     "${tool}" --input - <<<"${payload}" 2>/dev/null)" || rc=$?
   if [ "${rc}" = "${want_rc}" ] && [ "${out}" = "${want_out}" ]; then
     echo "ok   ${label}"
@@ -598,6 +645,83 @@ expect "a worktree list that cannot be read is unknown, never none" \
   "devantler-tech/hub#41 holder=unknown:worktree-list" \
   "$(pr devantler-tech/hub 41 worktree-agent-a2)" "${lsof_hub}"
 list_fail=0
+
+# ── Locks in another repository than the one asked from (monorepo#3825) ─────────────────────────
+# Nobody works in any repository: every lock below is found from where the asker stands, or not
+# at all.
+lsof_nowhere="${sandbox}/lsof-nowhere"
+printf 'p%s\nfcwd\nn/\np9000002\nfcwd\nn/\n' "${me}" >"${lsof_nowhere}"
+# The lock's owner sits at the hub's main checkout; the asker is in an unrelated repository.
+lsof_owner_at_hub="${sandbox}/lsof-owner-at-hub"
+printf 'p%s\nfcwd\nn%s\np9000002\nfcwd\nn%s\n' "${me}" "${w1}" "${hub}" >"${lsof_owner_at_hub}"
+# Some other process sits inside the hub's product submodule; nobody is in the hub itself.
+lsof_in_submodule="${sandbox}/lsof-in-submodule"
+printf 'p%s\nfcwd\nn%s\np9000003\nfcwd\nn%s\n' "${me}" "${w1}" "${hub_product}" >"${lsof_in_submodule}"
+expect "a lock in a submodule's registry is read when its owner works outside it and the asker stands in the superproject" \
+  "${hub}" "${session}" 0 \
+  "devantler-tech/product#70 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 70 claude/product-70)" "${lsof_nowhere}"
+expect "a lock in the superproject's registry is read when the asker stands inside a submodule and nobody is in the superproject" \
+  "${hub_product}" "${session}" 0 \
+  "devantler-tech/hub#40 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/hub 40 worktree-agent-a1)" "${lsof_nowhere}"
+expect "a lock in a submodule's registry is read when its owner sits at the superproject's main checkout" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/product#70 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 70 claude/product-70)" "${lsof_owner_at_hub}"
+expect "a lock in the superproject's registry is read when the only process near it works inside a submodule" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/hub#40 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/hub 40 worktree-agent-a1)" "${lsof_in_submodule}"
+expect "a lock found in a submodule's registry still holds nothing once its process exited" \
+  "${hub}" "${session}" 0 \
+  "devantler-tech/product#71 holder=none" \
+  "$(pr devantler-tech/product 71 claude/product-71)" "${lsof_nowhere}"
+expect "a lock in a repository unrelated to the asker and to every process is out of sight" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/product#70 holder=none" \
+  "$(pr devantler-tech/product 70 claude/product-70)" "${lsof_nowhere}"
+# Every other listing succeeds, so only the scan of the submodule's registry can answer unknown.
+list_fail=1
+list_fail_at="${hub_product}"
+expect "a submodule's worktree list that cannot be read is unknown, never none" \
+  "${hub}" "${session}" 2 \
+  "devantler-tech/product#71 holder=unknown:worktree-list" \
+  "$(pr devantler-tech/product 71 claude/product-71)" "${lsof_nowhere}"
+list_fail=0
+list_fail_at=''
+
+# ── A locked worktree whose path holds a tab (monorepo#3825) ────────────────────────────────────
+expect "a live lock on a worktree whose path holds a tab is unknown, never none" \
+  "${tabs}" "${session}" 2 \
+  "devantler-tech/tabs#81 holder=unknown:lock-reason" \
+  "$(pr devantler-tech/tabs 81 worktree-agent-tab)" "${lsof_nowhere}"
+expect "nothing can say which PRs that worktree serves, so every PR asked with it is unknown" \
+  "${tabs}" "${session}" 2 \
+  "devantler-tech/tabs#80 holder=unknown:lock-reason
+devantler-tech/demo#3 holder=unknown:lock-reason" \
+  "$(jq -sc . <<<"$(pr devantler-tech/tabs 80 claude/plain-80) $(pr devantler-tech/demo 3 claude/nobody-3)")" \
+  "${lsof_nowhere}"
+g -C "${tabs}" worktree unlock "${tab_wt}"
+g -C "${tabs}" worktree lock --reason "claude agent agent-tab (pid 9000003 start ${start_theirs})" "${tab_wt}"
+expect "a lock on a tabbed path whose pid now belongs to another process holds nothing" \
+  "${tabs}" "${session}" 0 \
+  "devantler-tech/tabs#81 holder=none" \
+  "$(pr devantler-tech/tabs 81 worktree-agent-tab)" "${lsof_nowhere}"
+g -C "${tabs}" worktree unlock "${tab_wt}"
+g -C "${tabs}" worktree lock --reason "claude agent agent-tab (pid 9000099 start ${start_theirs})" "${tab_wt}"
+expect "a lock on a tabbed path whose process exited holds nothing" \
+  "${tabs}" "${session}" 0 \
+  "devantler-tech/tabs#81 holder=none
+devantler-tech/tabs#80 holder=none" \
+  "$(jq -sc . <<<"$(pr devantler-tech/tabs 81 worktree-agent-tab) $(pr devantler-tech/tabs 80 claude/plain-80)")" \
+  "${lsof_nowhere}"
+g -C "${tabs}" worktree unlock "${tab_wt}"
+g -C "${tabs}" worktree lock --reason 'left locked by hand' "${tab_wt}"
+expect "a lock on a tabbed path that is not the harness's is unknown, never none" \
+  "${tabs}" "${session}" 2 \
+  "devantler-tech/tabs#81 holder=unknown:lock-reason" \
+  "$(pr devantler-tech/tabs 81 worktree-agent-tab)" "${lsof_nowhere}"
 
 # ── Worktrees nested in a linked worktree (monorepo#3818) ───────────────────────────────────────
 expect "a per-session worktree holds the worktree of its own repository nested inside it" \

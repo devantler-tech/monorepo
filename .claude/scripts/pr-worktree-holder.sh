@@ -68,14 +68,22 @@
 #   A lock holds its worktree, and the checkouts that worktree owns, exactly like a working
 #   directory, while that pid is alive AND still has the recorded start time. An exited process
 #   holds nothing, and neither does a pid that another process has since been given: its start
-#   time differs. The locks read are those of every repository a live process works in, and of
-#   the repository the helper is asked from.
+#   time differs. The locks read are those of every repository a live process works in and of
+#   the repository the helper is asked from, of each superproject above those checkouts, and of
+#   every populated submodule below any of them (monorepo#3825). A lock lives in the registry of
+#   its worktree's repository, which need not be the repository its owner or the asker stands in:
+#   a session at a superproject's checkout can lock a worktree of a submodule, and an asker inside
+#   a submodule asks about worktrees its superproject locked.
 #   A lock the helper cannot read as that identity is `unknown:lock-reason` for the PRs its
 #   worktree serves, never `none`: a lock with no reason or someone else's reason, a start time in
 #   any other shape, and a lock that records no start time while its pid is alive (nothing then
 #   tells the owner from a reused pid). A holder found another way still answers `live:`, because
 #   an unread lock can only add holders. A lock stays for as long as the harness keeps the
 #   worktree, so it also holds after the worker has returned, until its session exits.
+#   A locked worktree whose path holds a tab cannot be carried through this helper's tab-separated
+#   tables, so nothing can say which PRs it serves. Unless its process is known to have exited,
+#   EVERY PR asked about is then `unknown:lock-reason` (monorepo#3825): the row used to split,
+#   and the live lock read `none`.
 #
 # SELF
 #   The asking session is not its own rival, the same exclusion the contract makes for its own
@@ -193,25 +201,30 @@ repo_slug() {
 
 # resolve <dir> — the checkout containing <dir>, in ONE git call (git startup dominates the cost):
 # R_TOP, R_GITDIR, R_COMMON (the git directory its repository's worktrees share), R_LINKED (1 for a
-# linked worktree) and R_BRANCH (empty when none can be named).
+# linked worktree), R_BRANCH (empty when none can be named) and R_SUPER (the checkout that holds
+# this one as a submodule, empty when none does). git prints the superproject only when there is
+# one, so it is asked for last, where a missing line shifts nothing.
 resolve() {
-  local out top gitdir common head='' f
+  local out top gitdir common head='' super f born=1
   if ! out="$(git -C "$1" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir \
-    --symbolic-full-name HEAD 2>/dev/null)"; then
+    --symbolic-full-name HEAD --show-superproject-working-tree 2>/dev/null)"; then
     # An unborn branch has no HEAD to name; the checkout still exists.
     out="$(git -C "$1" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir \
-      2>/dev/null)" || return 1
+      --show-superproject-working-tree 2>/dev/null)" || return 1
+    born=0
   fi
   {
     IFS= read -r top || top=''
     IFS= read -r gitdir || gitdir=''
     IFS= read -r common || common=''
-    IFS= read -r head || head=''
+    if [ "${born}" = 1 ]; then IFS= read -r head || head=''; fi
+    IFS= read -r super || super=''
   } <<<"${out}"
   if [ -z "${top}" ] || [ -z "${gitdir}" ]; then return 1; fi
   R_TOP="${top}"
   R_GITDIR="${gitdir}"
   R_COMMON="${common}"
+  R_SUPER="${super}"
   R_LINKED=0
   if [ "${gitdir}" != "${common}" ]; then R_LINKED=1; fi
   R_BRANCH=''
@@ -351,11 +364,14 @@ expand_resolved() {
 }
 
 # lock_rows — `git worktree list --porcelain` on stdin; one row per LOCKED worktree:
-# <path> <pid> <start>. The pid is empty unless the reason is the harness's own form, and the start
+# <pid> <start> <path>. The pid is empty unless the reason is the harness's own form, and the start
 # is empty when that form records none. The form is matched whole and the start time by its exact
 # `ps -o lstart=` shape: a reason that drifted would otherwise compare unequal to every live process
 # and read as a reused pid, which holds nothing. git quotes a reason holding unusual characters, so
 # such a reason never matches either.
+# The path comes LAST because git prints it raw: a path holding a tab then only lengthens the row,
+# and the identity before it still reads. With the path first, its tab pushed a piece of the path
+# into the pid column, which matched no process, and a live lock read `none` (monorepo#3825).
 lock_rows() {
   awk '
     /^worktree / { path = substr($0, 10); next }
@@ -373,8 +389,66 @@ lock_rows() {
           gsub(/ +/, " ", start)
         }
       }
-      print path "\t" pid "\t" start
+      print pid "\t" start "\t" path
     }'
+}
+
+# scan_checkout — add the checkout `resolve` named last to the lock scan, and every superproject
+# above it: an asker or a process inside a submodule says nothing else about the repository whose
+# registry holds the locks on the worktrees around it.
+scan_checkout() {
+  local hops=0 super
+  while :; do
+    printf '%s\t%s\n' "${R_COMMON}" "${R_TOP}" >>"${work}/repos"
+    printf '%s\n' "${R_TOP}" >>"${work}/scan"
+    super="${R_SUPER}"
+    if [ -z "${super}" ] || [ "${hops}" -ge 8 ]; then break; fi
+    resolve "${super}" || break
+    hops=$((hops + 1))
+  done
+}
+
+# lockless <submodule checkout> — succeeds when its repository can be seen, without starting git,
+# to register no linked worktree, and so to hold no lock. A repository keeps its linked worktrees
+# in a `worktrees` directory beside its objects, in the git directory a submodule's `.git` entry
+# names. It fails for anything it cannot read that plainly, a checkout that is itself a linked
+# worktree included (its git directory holds no objects), and the caller then asks git.
+lockless() {
+  local sub="$1" pointer='' gitdir
+  if [ -d "${sub}/.git" ]; then
+    gitdir="${sub}/.git"
+  else
+    [ -f "${sub}/.git" ] || return 1
+    IFS= read -r pointer <"${sub}/.git" 2>/dev/null || [ -n "${pointer}" ] || return 1
+    case "${pointer}" in
+      'gitdir: /'?*) gitdir="${pointer#gitdir: }" ;;
+      'gitdir: '?*) gitdir="${sub}/${pointer#gitdir: }" ;;
+      *) return 1 ;;
+    esac
+  fi
+  [ -d "${gitdir}/objects" ] && [ ! -e "${gitdir}/worktrees" ]
+}
+
+# scan_submodules <checkout> <depth> — add the repository of every populated submodule below it:
+# a session can lock a worktree of a submodule while it, and the asker, stand in the superproject.
+scan_submodules() {
+  local dir="$1" depth="$2" paths rel sub
+  [ "${depth}" -lt 4 ] || return 0
+  [ -f "${dir}/.gitmodules" ] || return 0
+  paths="$(git config -f "${dir}/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null | cut -d' ' -f2-)" || paths=''
+  while IFS= read -r rel; do
+    [ -n "${rel}" ] || continue
+    sub="${dir}/${rel}"
+    [ -e "${sub}/.git" ] || continue
+    if ! lockless "${sub}"; then
+      # The same two tests as expand_submodules: an unpopulated submodule and a path that leaves
+      # the checkout both resolve elsewhere.
+      resolve "${sub}" || continue
+      [ "${R_TOP}" = "${sub}" ] || continue
+      printf '%s\t%s\n' "${R_COMMON}" "${sub}" >>"${work}/repos"
+    fi
+    scan_submodules "${sub}" "$((depth + 1))"
+  done <<<"${paths}"
 }
 
 # registered <path> — resolve a path the worktree registry names, and fail unless it is still its
@@ -448,10 +522,11 @@ if [ "${heads}" != $'\n\n' ]; then
     # the lock scan below lists a repository's worktrees once however many of them are worked in.
     : >"${work}/tops"
     : >"${work}/repos"
+    : >"${work}/scan"
     while IFS= read -r near; do
       if resolve "${near}"; then
         printf '%s\t%s\n' "${near}" "${R_TOP}" >>"${work}/tops"
-        printf '%s\t%s\n' "${R_COMMON}" "${R_TOP}" >>"${work}/repos"
+        scan_checkout
       fi
     done < <(cut -f2- "${work}/near" | LC_ALL=C sort -u)
     awk -F'\t' '
@@ -462,8 +537,11 @@ if [ "${heads}" != $'\n\n' ]; then
     asker=''
     if resolve "${PWD}"; then
       asker="${R_TOP}"
-      printf '%s\t%s\n' "${R_COMMON}" "${R_TOP}" >>"${work}/repos"
+      scan_checkout
     fi
+    while IFS= read -r top; do
+      scan_submodules "${top}" 0
+    done < <(LC_ALL=C sort -u "${work}/scan")
     # Worktree locks (monorepo#3780): every locked worktree of those repositories, with the
     # process identity its reason records. A list that cannot be read is UNKNOWN, since a lock in
     # it may hold any of the PRs asked about.
@@ -482,7 +560,7 @@ if [ "${heads}" != $'\n\n' ]; then
     # The start times are read once, only when a lock records one, and in the spelling the harness
     # recorded them: the C locale and UTC. `ps -o lstart=` prints local time in the caller's language.
     : >"${work}/starts"
-    if awk -F'\t' '$3 != "" { found = 1 } END { exit !found }' "${work}/locks"; then
+    if awk -F'\t' '$2 != "" { found = 1 } END { exit !found }' "${work}/locks"; then
       if starts_raw="$(TZ=UTC LC_ALL=C ps -A -o pid= -o lstart= 2>/dev/null)"; then
         printf '%s\n' "${starts_raw}" |
           awk '$1 ~ /^[0-9]+$/ && NF > 1 { pid = $1; $1 = ""; sub(/^ +/, ""); print pid "\t" $0 }' \
@@ -496,21 +574,32 @@ if [ "${heads}" != $'\n\n' ]; then
     # when its process exited or the pid now belongs to a process with another start time. A start
     # time is compared only when both sides have the `lstart` shape, so an unexpected spelling
     # from this host's `ps` is unread rather than a reused pid.
+    # A row longer than three fields is a path that holds a tab. Its identity still reads, so a lock
+    # whose process exited is dropped like any other; one that holds or cannot be read is `split`,
+    # because no table below can carry that path to the PRs it serves.
     awk -F'\t' '
       function lstart(s) {
         return s ~ /^[A-Z][a-z][a-z] [A-Z][a-z][a-z] [0-9][0-9]? [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [0-9][0-9][0-9][0-9]$/
       }
+      function verdict(who) {
+        if (NF > 3) { print "split\t" path; return }
+        print who "\t" path
+      }
       FILENAME == ARGV[1] { alive[$1] = 1; next }
       FILENAME == ARGV[2] { started[$1] = $2; next }
-      $2 == "" { print "unread\t" $1; next }
-      !($2 in alive) { next }
-      $3 == "" { print "unread\t" $1; next }
+      { path = substr($0, length($1) + length($2) + 3) }
+      $1 == "" { verdict("unread"); next }
+      !($1 in alive) { next }
+      $2 == "" { verdict("unread"); next }
       # Alive in the process table but absent from the start-time read: either it exited between
       # the two reads or that read was partial. Nothing here can tell which, so it is unread.
-      !($2 in started) { print "unread\t" $1; next }
-      !lstart(started[$2]) { print "unread\t" $1; next }
-      started[$2] == $3 { print $2 "\t" $1 }
+      !($1 in started) { verdict("unread"); next }
+      !lstart(started[$1]) { verdict("unread"); next }
+      started[$1] == $2 { verdict($1) }
     ' "${work}/ps" "${work}/starts" "${work}/locks" >"${work}/verdicts"
+    if grep -q "^split${tab}" "${work}/verdicts"; then probe_error=lock-reason; fi
+  fi
+  if [ -z "${probe_error}" ] && [ -s "${work}/locks" ]; then
     while IFS="${tab}" read -r who path; do
       registered "${path}" || continue
       if [ "${who}" = unread ]; then
