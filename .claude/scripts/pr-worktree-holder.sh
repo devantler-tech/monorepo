@@ -36,8 +36,9 @@
 #                                   worktree-list (any worktree listing the answer depends on:
 #                                   the locks, or the worktrees nested in a held one), lock-reason,
 #                                   lock-scan (a repository whose registry may hold a lock was not
-#                                   reached: a superproject or a `.gitmodules` that cannot be read,
-#                                   or nesting deeper than the scan follows)
+#                                   reached: a superproject, an index or a `.gitmodules` that cannot
+#                                   be read, a populated submodule at a path holding a tab or a
+#                                   newline, or nesting deeper than the scan follows)
 #
 # WHAT HOLDING A CHECKOUT MEANS
 #   A process holds the checkout containing its working directory, every populated submodule of
@@ -455,23 +456,50 @@ lockless() {
   [ -d "${gitdir}/objects" ] && [ ! -e "${gitdir}/worktrees" ]
 }
 
+# submodule_paths <checkout> — print, one per line, every path below it that may hold a submodule.
+# Two lists say so and neither is complete. The index holds a gitlink for each submodule whether or
+# not the working tree has a `.gitmodules`: a sparse checkout, or an edit in progress, leaves a
+# populated submodule without that file. And `.gitmodules` names one whose gitlink is not staged.
+# Both are read NUL-terminated, because a path may hold a newline, which a list read line by line
+# cuts into two paths that both lead nowhere. In the lines printed here that newline is the byte
+# \001, and the caller turns it back. Fails when either list cannot be read.
+submodule_paths() {
+  local dir="$1" rc=0 soh=$'\001'
+  git -C "${dir}" ls-files -s -z >"${work}/index.z" 2>/dev/null || return 1
+  # An entry is `<mode> <object> <stage>`, a tab, and the path; a gitlink's mode is 160000.
+  tr '\n\0' '\001\n' <"${work}/index.z" | sed -n "s/^160000 [^${tab}]*${tab}//p" >"${work}/subs"
+  if [ -f "${dir}/.gitmodules" ]; then
+    # git answers 1 for a file that names no submodule path: a read that worked and found none.
+    git config -z -f "${dir}/.gitmodules" --get-regexp '^submodule\..*\.path$' \
+      >"${work}/modules.z" 2>/dev/null || rc=$?
+    [ "${rc}" -le 1 ] || return 1
+    # An entry is the key, a newline, and the value.
+    tr '\n\0' '\001\n' <"${work}/modules.z" | sed "s/^[^${soh}]*${soh}//" >>"${work}/subs"
+  fi
+  LC_ALL=C sort -u "${work}/subs"
+}
+
 # scan_submodules <checkout> <depth> — add the repository of every populated submodule below it:
 # a session can lock a worktree of a submodule while it, and the asker, stand in the superproject.
 scan_submodules() {
-  local dir="$1" depth="$2" listed paths rc=0 rel sub
-  [ -f "${dir}/.gitmodules" ] || return 0
-  # git answers 1 for a file that names no submodule path: a read that worked and found none.
-  # Any other failure is a file that could not be read, and its submodules stay unknown.
-  listed="$(git config -f "${dir}/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null)" || rc=$?
-  if [ "${rc}" -gt 1 ]; then
+  local dir="$1" depth="$2" paths rel sub soh=$'\001' nl=$'\n'
+  # A list that could not be read leaves this checkout's submodules unknown.
+  if ! paths="$(submodule_paths "${dir}")"; then
     : >"${work}/scanfail"
     return 0
   fi
-  paths="$(cut -d' ' -f2- <<<"${listed}")"
   while IFS= read -r rel; do
     [ -n "${rel}" ] || continue
-    sub="${dir}/${rel}"
+    sub="${dir}/${rel//${soh}/${nl}}"
     [ -e "${sub}/.git" ] || continue
+    # A populated submodule at a path the lists the scan keeps, one path to a line and
+    # tab-separated, cannot carry.
+    case "${sub}" in
+      *"${tab}"* | *"${nl}"*)
+        : >"${work}/scanfail"
+        return 0
+        ;;
+    esac
     # A checkout the scan already starts from is walked from there, to its own depth.
     if grep -qxF -- "${sub}" "${work}/scan"; then continue; fi
     # A populated submodule nested deeper than this walk follows.

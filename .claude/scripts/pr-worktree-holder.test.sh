@@ -260,6 +260,36 @@ case "${tabsub_common}" in
   *$'\t'*) ;;
   *) echo "FAIL fixture: the tabbed submodule's git directory has no tab in its path" >&2; exit 1 ;;
 esac
+# A populated submodule whose superproject has no `.gitmodules` in its working tree, as a sparse
+# checkout or an edit in progress leaves it. The index still holds the gitlink, and the submodule's
+# repository registers a worktree a live session locked.
+nomodules="${sandbox}/nomodules"
+g init -q "${nomodules}"
+g -C "${nomodules}" commit -q --allow-empty -m init
+g -C "${nomodules}" submodule --quiet add "${sandbox}/product-origin" product
+g -C "${nomodules}" commit -q -m 'add product'
+g -C "${nomodules}/product" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${nomodules}/product" worktree add -q -b claude/product-91 "${sandbox}/nomodules-wt"
+g -C "${nomodules}/product" worktree lock \
+  --reason "claude agent nomodules (pid 9000002 start ${start_theirs})" "${sandbox}/nomodules-wt"
+rm "${nomodules}/.gitmodules"
+[ "$(g -C "${nomodules}" ls-files -s product | cut -d' ' -f1)" = 160000 ] ||
+  { echo "FAIL fixture: the index of the checkout without .gitmodules holds no gitlink" >&2; exit 1; }
+# A populated submodule at a path that holds a newline, named only by `.gitmodules` (its gitlink is
+# not staged). git writes the path escaped and reads it back as two lines unless asked for NULs.
+nlsub="${sandbox}/nlsub"
+nlsub_path="pro"$'\n'"duct"
+g init -q "${nlsub}"
+g -C "${nlsub}" commit -q --allow-empty -m init
+g clone -q "${sandbox}/product-origin" "${nlsub}/${nlsub_path}"
+g config -f "${nlsub}/.gitmodules" submodule.safe.path "${nlsub_path}"
+g config -f "${nlsub}/.gitmodules" submodule.safe.url "${sandbox}/product-origin"
+g -C "${nlsub}/${nlsub_path}" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${nlsub}/${nlsub_path}" worktree add -q -b claude/product-92 "${sandbox}/nlsub-wt"
+g -C "${nlsub}/${nlsub_path}" worktree lock \
+  --reason "claude agent nlsub (pid 9000002 start ${start_theirs})" "${sandbox}/nlsub-wt"
+[ "$(g config -f "${nlsub}/.gitmodules" --get-regexp '^submodule\..*\.path$' | wc -l | tr -d ' ')" = 2 ] ||
+  { echo "FAIL fixture: git prints the newline path of .gitmodules on one line" >&2; exit 1; }
 # A populated submodule whose `.git` entry names a git directory that is not there.
 corrupt="${sandbox}/corrupt"
 g init -q "${corrupt}"
@@ -789,6 +819,14 @@ expect "a registry whose own path holds a tab is unknown: the scan's table canno
   "${tabsub}" "${session}" 2 \
   "devantler-tech/product#90 holder=unknown:lock-scan" \
   "$(pr devantler-tech/product 90 claude/product-90)" "${lsof_nowhere}"
+expect "a lock in a submodule's registry is read when the superproject's working tree has no .gitmodules" \
+  "${nomodules}" "${session}" 0 \
+  "devantler-tech/product#91 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 91 claude/product-91)" "${lsof_nowhere}"
+expect "a populated submodule at a path that holds a newline is unknown: no list here can carry it" \
+  "${nlsub}" "${session}" 2 \
+  "devantler-tech/product#92 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/product 92 claude/product-92)" "${lsof_nowhere}"
 expect "a .gitmodules that cannot be parsed is unknown: which submodules it names was never read" \
   "${broken}" "${session}" 2 \
   "devantler-tech/demo#3 holder=unknown:lock-scan" \
