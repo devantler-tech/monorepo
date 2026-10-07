@@ -6,14 +6,20 @@
 # Retiring the issue claim when the draft opens left a later review's findings with no reservation,
 # so two lanes built the same fix twice in one hour on 2026-08-22 (platform#3313, #3314). The rule
 # closes that with a cheap commit read, a PR-number claim on the existing helper, renew-before-push,
-# retire-after-push, and a takeover gate that replaces "no open PR" (always false for a PR) with "no
-# commit newer than the tip".
+# retire-after-push, and a takeover gate that replaces "no open PR" (always false for a PR) with a
+# re-read of the PR at its current head, named to the helper as `--pr-head`.
 #
-#   1. each load-bearing element of the rule is present in the claim-protocol guide;
+# That gate used to be "no commit on the PR newer than the tip". Any later commit satisfied it,
+# including one the holder never made, so one unretired tip plus one "Update branch" merge left a PR
+# unclaimable by every lane until it closed (monorepo#3811). The rule must therefore say that a
+# newer commit does not block takeover, and must not bring the date gate back.
+#
+#   1. each load-bearing element of the rule is present in the claim-protocol guide, and the retired
+#      date gate is absent;
 #   2. ABLATIONS: the same check must fail, for the stated reason, against a copy of the guide with
-#      rule 6 removed, one without the paragraph that ends it, and
-#      against one that keeps rule 6 but drops only its takeover gate, so a partial rule is caught
-#      too.
+#      rule 6 removed, one without the paragraph that ends it,
+#      one that keeps rule 6 but drops only its takeover gate, so a partial rule is caught too, and
+#      one that puts the retired date gate back beside the new one.
 
 set -euo pipefail
 
@@ -53,9 +59,18 @@ check() {
     'Renew immediately before you push the fix' \
     'Retire the acquired SHA once the fix is pushed' \
     'agent-claim-sweep.sh' \
+    '--takeover --pr-head <head-sha>' \
+    'refs/pull/<pr-number>/head' \
+    'A commit newer than the tip does not block takeover' \
+    'a commit the holder never made' \
+    'retire the tip you took over'; do
+    grep -Fq -- "${needle}" <<<"${rule}" || { echo "missing: ${needle}"; return 1; }
+  done
+  # The retired gate. Either half of its sentence is enough to bring the deadlock back.
+  for needle in \
     'no commit on' \
     'newer than the tip'"'"'s committer date'; do
-    grep -Fq -- "${needle}" <<<"${rule}" || { echo "missing: ${needle}"; return 1; }
+    ! grep -Fq -- "${needle}" <<<"${rule}" || { echo "retired gate is back: ${needle}"; return 1; }
   done
 }
 
@@ -94,11 +109,22 @@ awk '
 expect_ablation "rule-removal" "${tmp}/ablated.md" "rule 6 is missing"
 
 # 3. Ablation: keep rule 6 but drop its takeover gate line.
-grep -v "newer than the tip's committer date" "${guide}" >"${tmp}/no-gate.md" || true
-expect_ablation "takeover" "${tmp}/no-gate.md" "missing: newer than the tip's committer date"
+grep -Fv -- '--takeover --pr-head <head-sha>' "${guide}" >"${tmp}/no-gate.md" || true
+expect_ablation "takeover" "${tmp}/no-gate.md" "missing: --takeover --pr-head <head-sha>"
 
 # 4. Ablation: remove the paragraph that ends rule 6, so extraction would run to end of file.
 grep -v '^\*\*A live claim is a temporary skip' "${guide}" >"${tmp}/unterminated.md" || true
 expect_ablation "unterminated" "${tmp}/unterminated.md" "rule 6 is missing"
+
+# 5. Ablation: put the retired date gate back beside the new one, inside rule 6. Each half of its
+#    sentence is tried alone, so neither wording can return unnoticed.
+for half in 'no commit on' 'newer than the tip'"'"'s committer date'; do
+  awk -v half="${half}" '
+    { print }
+    /^   - \*\*Takeover of a PR-number tip\*\*/ { print "     Takeover also needs: " half "."; added = 1 }
+    END { if (!added) exit 1 }
+  ' "${guide}" >"${tmp}/date-gate.md" || fail "date-gate ablation found no takeover bullet to extend"
+  expect_ablation "date-gate" "${tmp}/date-gate.md" "retired gate is back: ${half}"
+done
 
 echo "claim PR-findings contract: OK"
