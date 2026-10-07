@@ -66,16 +66,65 @@ for (const locale of ['en', 'da']) {
       assert.ok(shelf.includes(locale === 'da' ? 'Kildekode tilgængelig' : 'Source-available'), 'The game is not presented as unrestricted open source');
       for (const repository of publicRepositories) assert.ok(shelf.includes(`href="https://github.com/devantler-tech/${repository}"`), `${repository} retains its real repository link`);
       assert.ok(page.includes('href="https://ksail.devantler.tech"'), 'Projects link to their real public product');
-      for (const id of ['open-title', 'family-title', 'technical-projects', 'research']) {
+      for (const id of ['open-title', 'family-title', 'research']) {
         assert.ok(page.includes(`id="${id}"`), `The unified portfolio includes ${id}`);
       }
+      const index = page.match(/<nav[^>]*class="project-index(?: [^"]*)?"[^>]*>([\s\S]*?)<\/nav>/)?.[1];
+      assert.ok(index, 'Projects have a compact section index');
+      assert.deepEqual([...index.matchAll(/href="#([^"]+)"/g)].map((match) => match[1]), ['open-title', 'family-title', 'research'], 'The section index leads to one public catalogue, family examples and research');
+      assert.deepEqual([...page.matchAll(/<section\b[^>]*aria-labelledby="([^"]+)"/g)].map((match) => match[1]), ['open-title', 'family-title', 'research-title'], 'The public shelf is the only current technical catalogue');
+      assert.ok(!page.includes(locale === 'da' ? 'Værktøjer, platforme og eksperimenter' : 'Tools, platforms &amp; experiments'), 'Visitors are not offered a competing technical catalogue');
       assert.ok(!page.includes('href="/projects/active/"') && !page.includes('href="/projects/completed/"'), 'Projects stay on one canonical page');
       assert.ok(!page.includes('sidebar-pane'), 'Projects use the business layout, not a floating documentation sidebar');
-      for (const product of ['Data Product Controller', 'World at Ruin', 'Reusable Workflows', 'Kyverno Policies']) {
-        assert.ok(page.includes(product), `The full technical catalogue retains ${product}`);
-      }
+      const family = page.match(/<section[^>]*aria-labelledby="family-title"[^>]*>([\s\S]*?)<\/section>/)?.[1];
+      assert.ok(family?.includes('Wedding App') && family.includes('AS Coaching'), 'Family examples remain available outside the public software catalogue');
+      assert.ok(family.includes(locale === 'da' ? 'ikke betalte kundeopgaver' : 'not paid client commissions'), 'Family work is labelled honestly');
       assert.ok(page.includes('href="/pdfs/thesis.pdf"'), 'Earlier research remains reachable');
-      assert.match(page, /<details[^>]*id="technical-projects"/, 'Long technical detail is available without overwhelming the opening');
+      assert.match(page, /<img[^>]*alt="Data Space as a Data Mesh"/, 'Research retains its authored diagram');
+      const ksail = shelf.match(/<article\b[^>]*data-public-product="ksail"[^>]*>([\s\S]*?)<\/article>/)?.[1];
+      const screenshot = ksail?.match(/<img[^>]*alt="KSail CLI"[^>]*>/)?.[0];
+      assert.ok(screenshot, 'The actual KSail capture belongs to its public product card');
+      const screenshotPath = screenshot.match(/src="([^"]+)"/)?.[1];
+      assert.match(screenshotPath, /\/_astro\/ksail-cli-dark\.[^/]+\.webp$/, 'KSail uses its real capture, not editorial artwork');
+      assert.ok(existsSync(resolve(root, `.${screenshotPath}`)), 'The KSail capture is emitted locally');
+      assert.ok(ksail.includes(locale === 'da' ? 'Den faktiske KSail-brugerflade i terminalen.' : 'The actual KSail terminal interface.'), 'KSail’s capture has a localized factual caption');
+      // Former MDX heading links now land on the matching public card or family examples.
+      // The deployed-platform bookmark points to the reusable platform starter.
+      for (const [repository, anchors] of [
+        ['ksail', ['️-ksail---']],
+        ['platform-template', ['️-platform---']],
+        ['data-product-controller', ['-data-product-controller--']],
+        ['world-at-ruin', ['️-world-at-ruin--']],
+        ['.github', ['-reusable-workflows-', '-actions-']],
+        ['agent-skills', ['-agent-skills--']],
+        ['agent-plugins', ['-agent-plugins---']],
+        ['provider-upjet-unifi', ['-unifi-provider---']],
+        ['kyverno-policies', ['️-kyverno-policies--']],
+      ]) {
+        const card = [...shelf.matchAll(/<article\b[^>]*data-public-product="([^"]+)"[^>]*>([\s\S]*?)<\/article>/g)].find((match) => match[1] === repository)?.[2];
+        for (const anchor of anchors) assert.ok(card?.includes(`id="${anchor}"`), `The old ${anchor} bookmark lands on ${repository}`);
+      }
+      assert.ok(family.includes('id="-self-hosted-personal-apps"'), 'The former personal-apps bookmark lands on honest family examples');
+      for (const id of ['technical-title', 'technical-projects']) assert.ok(shelf.includes(`id="${id}"`), `The former ${id} section bookmark lands on the public catalogue`);
+      const reveal = page.match(/<script\b[^>]*data-project-reveal[^>]*>([\s\S]*?)<\/script>/)?.[1];
+      assert.ok(reveal, 'Bookmarks can reveal products and research inside native disclosures');
+      const researchDetails = page.match(/<section\b[^>]*id="research"[^>]*>[\s\S]*?<details[^>]*>([\s\S]*?)<\/details>/)?.[1];
+      for (const [hash, disclosure] of [
+        ['#-data-product-controller--', overflow[1]],
+        ['#%EF%B8%8F-kyverno-policies--', overflow[1]],
+        ['#-data-product-', researchDetails],
+      ]) {
+        const id = decodeURIComponent(hash.slice(1));
+        assert.ok(disclosure?.includes(`id="${id}"`), `Bookmark ${hash} has a real destination inside its disclosure`);
+        const details = { open: false };
+        let scrolled = false;
+        runInNewContext(reveal, {
+          location: { hash },
+          document: { getElementById: (requested) => requested === id ? { closest: () => details, scrollIntoView: () => { scrolled = true; } } : null },
+          window: { addEventListener() {} },
+        });
+        assert.ok(details.open && scrolled, `Bookmark ${hash} opens its disclosure and scrolls to the destination`);
+      }
       const illustration = page.match(/<img[^>]*data-project-art[^>]*>/)?.[0];
       assert.ok(illustration, 'The portfolio includes a locally hosted editorial illustration');
       const illustrationPath = illustration.match(/src="([^"]+)"/)?.[1];
@@ -83,7 +132,7 @@ for (const locale of ['en', 'da']) {
     }
   }
 }
-for (const [path, target] of [['projects/active', '/projects/#technical-projects'], ['projects/completed', '/projects/#research']]) {
+for (const [path, target] of [['projects/active', '/projects/#open-title'], ['projects/completed', '/projects/#research']]) {
   const page = html(path);
   assert.match(page, /http-equiv="refresh"/i, 'Legacy project URLs redirect on static hosting');
   assert.ok(page.includes(target), `Legacy projects resolve to ${target}`);

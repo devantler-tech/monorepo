@@ -40,12 +40,15 @@ Starlight component overrides. Their search, sidebar, RSS and historical article
 There is one appearance picker, including on mobile; the documentation header measures its height
 so the reading tools do not overlap the business navigation.
 
-Projects includes the wider technical catalogue and earlier research on the same page, with
-expandable English detail sourced directly from `src/content/docs/projects/active.mdx` and
-`completed.mdx`. Their drift checks remain authoritative. The legacy active/completed URLs
-redirect to the relevant section of `/projects/`; the documentation sidebar links only to that
-canonical page. Browser redirects preserve incoming heading fragments; links without a fragment
-and the no-JavaScript fallback use the relevant catalogue section. Root horizontal overflow is
+Projects presents one complete, stars-ranked public software catalogue, followed by family examples
+and earlier research. The real KSail terminal capture appears in its product card; expandable English
+research and diagrams are sourced from `src/content/docs/projects/completed.mdx`. The legacy
+active/completed URLs redirect to the public catalogue or research section of `/projects/`; the
+documentation sidebar links only to that canonical page. Browser redirects preserve incoming
+heading fragments, which land on the corresponding public product card or family/research content.
+The former deployed-platform bookmark lands on the reusable Platform Template. A bookmarked card
+in the collapsed remainder opens that disclosure. Links without a fragment and the no-JavaScript
+fallback use the relevant section. Root horizontal overflow is
 clipped without creating a non-scrolling ancestor
 that would break the documentation header's sticky positioning.
 

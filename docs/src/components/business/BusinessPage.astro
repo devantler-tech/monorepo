@@ -4,7 +4,7 @@ import BusinessSupporting from './BusinessSupporting.astro';
 import ProjectRedirect from './ProjectRedirect.astro';
 
 const legacy = Astro.url.pathname.replace(/\/$/, '');
-const anchor = legacy === '/projects/active' ? 'technical-projects' : legacy === '/projects/completed' ? 'research' : null;
+const anchor = legacy === '/projects/active' ? 'open-title' : legacy === '/projects/completed' ? 'research' : null;
 const locale = Astro.url.pathname.startsWith('/da/') ? 'da' : 'en';
 const section = Astro.url.pathname.split('/').filter(Boolean).at(-1);
 ---
