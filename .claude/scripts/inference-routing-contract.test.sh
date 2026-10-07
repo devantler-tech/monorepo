@@ -72,24 +72,39 @@ for phrase in \
   esac
 done
 printf 'PASS accepted parent route rule and its limits\n'
-# Every accepted row names a registered instance and a maintainer decision; an empty table would
-# silently return the listed lanes to stopping at the pre-flight. Take the table's data rows
-# (neither the header nor the separator row) with the backticks removed.
+# Every accepted row names a registered instance, a route no wider than the scheduled parent and a
+# maintainer decision; an empty table would silently return the listed lanes to stopping at the
+# pre-flight. Take the table's data rows (neither the header nor the separator row) with the
+# backticks removed.
 rows="$(awk '
   /^## Accepted scheduled parent routes$/ { on = 1; next }
   on && /^## / { exit }
   on && /^\|/ && !/^\| *Instance *\|/ && !/^\|[-| ]+$/ { print }' "$RUNTIME_DOC" | tr -d '\140')"
 [[ -n "$rows" ]] || { echo 'FAIL accepted parent routes: no accepted row found' >&2; exit 1; }
+# Each cell is matched whole, so a row cannot be widened by adding words to it: the route cell
+# admits only the scheduled parent on the scheduler-fixed model and one named subscription sign-in.
+route_re='^(Engineer|Improver|Engineer and improver) schedules?, on the model fixed in (its|each) scheduler entry and the [A-Za-z][A-Za-z0-9.-]* subscription sign-in$'
+decision_re='^Maintainer, 20[0-9][0-9]-[0-9][0-9]-[0-9][0-9], monorepo#[0-9]+$'
+# Print one trimmed cell of a table row. Arguments: the row, the awk field number.
+cell() {
+  printf '%s\n' "$1" | awk -F'|' -v n="$2" '{ gsub(/^[ \t]+|[ \t]+$/, "", $n); print $n }'
+}
 while IFS= read -r row; do
-  id="$(printf '%s\n' "$row" | awk -F'|' '{ gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2 }')"
+  # "| a | b | c |" splits into five fields; any other count is a row this check cannot read.
+  fields="$(printf '%s\n' "$row" | awk -F'|' '{ print NF }')"
+  [[ "$fields" == 5 ]] ||
+    { printf 'FAIL accepted parent routes: row is not three cells: %s\n' "$row" >&2; exit 1; }
+  id="$(cell "$row" 2)"
+  route="$(cell "$row" 3)"
+  decision="$(cell "$row" 4)"
   [[ -n "$id" ]] || { printf 'FAIL accepted parent routes: unreadable row: %s\n' "$row" >&2; exit 1; }
   jq -e --arg id "$id" '.instances | has($id)' "$REGISTRY" > /dev/null ||
     { printf 'FAIL accepted parent routes: %s is not a registered instance\n' "$id" >&2; exit 1; }
-  case "$row" in
-    *'| Maintainer, 20'[0-9][0-9]-[0-9][0-9]-[0-9][0-9]', monorepo#'[0-9]*' |') ;;
-    *) printf 'FAIL accepted parent routes: %s carries no maintainer decision\n' "$id" >&2; exit 1 ;;
-  esac
+  [[ "$route" =~ $route_re ]] ||
+    { printf 'FAIL accepted parent routes: %s accepts more than a scheduled parent route: %s\n' "$id" "$route" >&2; exit 1; }
+  [[ "$decision" =~ $decision_re ]] ||
+    { printf 'FAIL accepted parent routes: %s carries no maintainer decision\n' "$id" >&2; exit 1; }
 done <<ROWS
 $rows
 ROWS
-printf 'PASS accepted parent routes are registered and maintainer-decided\n'
+printf 'PASS accepted parent routes are registered, parent-only and maintainer-decided\n'
