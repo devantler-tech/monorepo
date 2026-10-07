@@ -109,7 +109,7 @@ role behaviour changes in its owning upstream first** (resolve a bundled skill's
 - **Before acting on a plugin-sourced role**, run `.claude/scripts/plugin-definition-currency.sh
   --runtime <claude|codex|git-ref>`. On `DRIFT` or `UNKNOWN` (exit `2` is never "current"), follow the
   reviewed definition at the pinned gitlink and report it — never halt the run. A Claude `DRIFT` also
-  runs `plugin-definition-refresh.sh`.
+  runs `.claude/scripts/plugin-definition-refresh.sh`.
 - **Codex runs the portfolio survey inline** and never dispatches a surveyor subagent (monorepo#3057).
 - Run `.claude/scripts/platform-live-health.sh`: `nothing_on_fire` holds only when it exits `0`.
   Run `.claude/scripts/review-lane-health.sh` before requesting any review.
