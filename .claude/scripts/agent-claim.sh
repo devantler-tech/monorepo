@@ -62,7 +62,8 @@
 # Taking over a pull-request number needs --pr-head <full-sha>: the head at which
 # the caller re-read the pull request's findings and checks. It is required when
 # the remote publishes refs/pull/<issue>/head, refused when it does not, and
-# must equal that ref (monorepo#3811).
+# must equal that ref (monorepo#3811). Any takeover is refused as UNKNOWN when
+# the remote cannot show whether the number is a pull request.
 #
 # Exit codes:
 #   0  success (acquired / renewed / tip matches / retired / is stale)
@@ -167,13 +168,32 @@ remote_tip() {
 
 # Head of pull request <n> as the remote publishes it: the forge keeps
 # refs/pull/<n>/head for every pull request, open or closed, and for no issue.
-# Empty when the remote publishes none, non-zero when the read fails. The ref
-# name is compared exactly: an ls-remote pattern matches the TAIL of a ref, so
-# a branch named `x/refs/pull/<n>/head` would otherwise read as a pull request.
+# Prints the head, or nothing once the number is SHOWN not to be a pull
+# request. The ref name is compared exactly: an ls-remote pattern matches the
+# TAIL of a ref, so a branch named `x/refs/pull/<n>/head` would otherwise read
+# as a pull request.
+#
+# An empty answer to the one-ref read is not that proof. ls-remote exits 0 when
+# nothing matches, so a partial answer and a remote that hides these refs both
+# look exactly like an issue number, and reading them as one skips the gate
+# below. Absence is accepted only from a second read, of every pull-request
+# head, that lists at least one pull request and does not list this one.
+# Returns 1 when a read fails, 3 when the remote shows no pull-request head for
+# any number (nothing there can then be shown to be an issue) and 4 when the
+# two reads disagree.
 remote_pull_head() {
-  local ref="refs/pull/$1/head" rows
+  local ref="refs/pull/$1/head" rows head all
   rows="$(git_c ls-remote "$REMOTE" "$ref")" || return 1
-  awk -v ref="$ref" '$2 == ref { print $1; exit }' <<<"$rows"
+  head="$(awk -v ref="$ref" '$2 == ref { print $1; exit }' <<<"$rows")"
+  if [[ -n "$head" ]]; then
+    printf '%s\n' "$head"
+    return 0
+  fi
+  all="$(git_c ls-remote "$REMOTE" 'refs/pull/*/head')" || return 1
+  awk -v ref="$ref" '
+    $2 ~ /^refs\/pull\/[1-9][0-9]*\/head$/ { seen = 1; if ($2 == ref) listed = 1 }
+    END { if (!seen) exit 3; if (listed) exit 4 }
+  ' <<<"$all"
 }
 
 # Trap 16 — the takeover gate for a pull-request number (monorepo#3811).
@@ -191,10 +211,14 @@ remote_pull_head() {
 # Neither refusal prints the current head. It has to come from the caller's own
 # read of the pull request, or naming it would prove nothing.
 require_pr_head_for_takeover() {
-  local issue="$1" live
-  if ! live="$(remote_pull_head "$issue")"; then
-    fail "UNKNOWN — could not read refs/pull/${issue}/head on ${REMOTE}; refusing takeover"
-  fi
+  local issue="$1" live read_rc=0
+  live="$(remote_pull_head "$issue")" || read_rc=$?
+  case "$read_rc" in
+    0) ;;
+    3) fail "UNKNOWN — ${REMOTE} shows no pull-request head for any number, so #${issue} cannot be shown to be an issue; refusing takeover" ;;
+    4) fail "UNKNOWN — two reads of ${REMOTE} disagree about refs/pull/${issue}/head; refusing takeover" ;;
+    *) fail "UNKNOWN — could not read refs/pull/${issue}/head on ${REMOTE}; refusing takeover" ;;
+  esac
   if [[ -z "$live" ]]; then
     [[ -z "$PR_HEAD" ]] ||
       fail "--pr-head was given, but ${REMOTE} publishes no refs/pull/${issue}/head: #${issue} is not a pull request there"

@@ -212,7 +212,8 @@ the sixteen proven traps live in `agent-claim.test.sh`).
      re-read takes its place. The helper compares `--pr-head` with the remote's
      `refs/pull/<pr-number>/head`, refuses a takeover that omits it or names any other commit, and
      records it in the claim commit. A refusal means the head moved after your read: read the PR
-     again, and never copy a SHA to get past it.
+     again, and never copy a SHA to get past it. When the remote cannot show whether a number is
+     a pull request at all, every takeover of it is refused as UNKNOWN (exit 2).
      **A commit newer than the tip does not block takeover** (monorepo#3811). It may be the holder's
      fix or a commit the holder never made — an "Update branch" merge left `ksail#7440` unclaimable
      by every lane on 2026-10-03 — and its date cannot tell which. Your re-read can. When the
