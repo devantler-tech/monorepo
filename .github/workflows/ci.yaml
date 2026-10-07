@@ -226,6 +226,9 @@ jobs:
               - '.claude/scripts/plugin-definition-refresh.sh'
               - '.claude/scripts/safe-clone.sh'
               - '.claude/scripts/shared-checkout-freshness.sh'
+              - '.claude/scripts/worktree-claim.sh'
+              - '.claude/scripts/branch-op-lock.sh'
+              - '.claude/scripts/agent-issue-board-sweep.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
