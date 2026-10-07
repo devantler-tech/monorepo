@@ -1734,20 +1734,39 @@ bounded_remote() {
   # replace a transport the repository configured (a deploy key, a jump host). Start from
   # whichever of the three git itself would have used. Every caller bounds
   # `git -C <repository> ...`, which is how that repository's own setting is found.
-  local base_ssh="${GIT_SSH_COMMAND:-}" repo=""
+  local base_ssh="${GIT_SSH_COMMAND:-}" repo="" variant="${GIT_SSH_VARIANT:-}" program
   if [ "${1-}" = git ] && [ "${2-}" = -C ]; then repo="${3-}"; fi
   if [ -z "$base_ssh" ] && [ -n "$repo" ]; then
     base_ssh="$(git -C "$repo" config --get core.sshCommand 2>/dev/null || true)"
   fi
   [ -n "$base_ssh" ] || base_ssh="${GIT_SSH:-ssh}"
+  # The two options added below are OpenSSH's. git also runs plink, putty and wrappers that take
+  # neither (ssh.variant), and such a transport fails every call it is handed them on: a failed
+  # `ls-remote` here reads a remote-only branch as unknown. So they go only to a command git
+  # itself treats as OpenSSH: one declared so, or, undeclared, one named `ssh`. Any other runs
+  # exactly as configured, and the watchdog below is what bounds it.
+  if [ -z "$variant" ] && [ -n "$repo" ]; then
+    variant="$(git -C "$repo" config --get ssh.variant 2>/dev/null || true)"
+  fi
+  if [ -z "$variant" ] || [ "$variant" = auto ]; then
+    program="${base_ssh%% *}"
+    case "${program##*/}" in
+      ssh) variant=ssh ;;
+      *) variant=other ;;
+    esac
+  fi
   # Job control gives the background command its OWN process group, which is what makes the whole
   # transport tree killable. git delegates to a helper (`git remote-ext`, ssh, git-remote-https); a
   # kill aimed at the git pid alone leaves that helper reparented and running to ITS native timeout,
   # and `add` can time out twice per call, so an unresponsive remote accumulates them.
   case "$-" in *m*) had_monitor=1 ;; esac
   set -m
-  GIT_TERMINAL_PROMPT=0 \
-    GIT_SSH_COMMAND="$base_ssh -o BatchMode=yes -o ConnectTimeout=$secs" "$@" &
+  if [ "$variant" = ssh ]; then
+    GIT_TERMINAL_PROMPT=0 \
+      GIT_SSH_COMMAND="$base_ssh -o BatchMode=yes -o ConnectTimeout=$secs" "$@" &
+  else
+    GIT_TERMINAL_PROMPT=0 "$@" &
+  fi
   cmd_pid=$!
   # The killer is started while job control is STILL on, so it too gets its own process group. That
   # is what makes it killable as a tree: the subshell's `sleep` is a separate child, and a signal to

@@ -1922,6 +1922,15 @@ else
 fi
 git -C "${work}" config --unset "url.${forge}.insteadOf"
 git -C "${work}" remote remove rewritten
+# The check refuses an HTTP redirect, but a setting scoped to the remote's URL outranks the one it
+# passes: git takes the closest match to the URL. With such a setting the read may follow a
+# redirect to a repository the pin source does not name, so the check stops before it reads.
+git -C "${work}" remote add redirecting "https://redirecting.invalid/consumer.git"
+git -C "${work}" config "http.https://redirecting.invalid/.followRedirects" true
+expect_adopted_unknown "a URL-scoped setting that lets the read follow a redirect" \
+  "follow an HTTP redirect" --remote redirecting
+git -C "${work}" config --unset "http.https://redirecting.invalid/.followRedirects"
+git -C "${work}" remote remove redirecting
 # A URL can carry a token, and this line is copied into reports. The stand-in runs the command git
 # asks the remote for on this machine, so an ssh URL with credentials in it reaches the fixture.
 cat > "${adopt}/local-ssh" <<'SSH'
@@ -1972,6 +1981,16 @@ expect_printable 's3cr3t@host.example:org/repo.git' 'host.example:org/repo.git' 
   "the pin source leaves out the user of an scp-style location"
 expect_printable '/srv/git/a?b#c.git' '/srv/git/a?b#c.git' \
   "the pin source prints a plain path whole"
+# git also takes locations that are no URL: an address only a helper program understands, and a
+# whole command line. Nothing of those is known to be safe to print, so only the transport is.
+expect_printable 'ext::auth-proxy --token s3cr3t host.example org/repo' 'ext::<address not shown>' \
+  "the pin source prints only the transport of a command-line location"
+expect_printable 'vault::s3cr3t@host.example/org/repo' 'vault::<address not shown>' \
+  "the pin source prints only the transport of a helper's own address"
+expect_printable 's3cr3t token@host.example:org/repo.git' 'host.example:org/repo.git' \
+  "the pin source prints only the host and path of an scp-style location with an odd user"
+expect_printable 'host name with s3cr3t:org/repo.git' '<location not shown>' \
+  "the pin source prints nothing of a location it cannot read as one of the known forms"
 expect_printable "https://host.example/org/repo.git"$'\n'"pin source      : forged"$'\033'"[2K" \
   'https://host.example/org/repo.git?pin source      : forged?[2K' \
   "the pin source prints a line break or an escape byte in a URL as a question mark"
@@ -2022,6 +2041,42 @@ git -C "${work}" remote remove viassh
 [ -e "${adopt}/configured-ssh.called" ] \
   || fail "core.sshCommand was replaced by plain ssh: the configured transport was never called"
 ok "the repository's core.sshCommand stays the transport when GIT_SSH_COMMAND is unset"
+
+# A transport that is not OpenSSH takes none of OpenSSH's options (ssh.variant): plink, putty, a
+# wrapper of one's own. This stand-in fails when it is handed one, and otherwise runs the command
+# git asks the remote for on this machine, so the remote is reached only when nothing was added.
+mkdir -p "${adopt}/odd"
+cat > "${adopt}/odd/strict" <<'SSH'
+#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in -o*) exit 64 ;; esac
+done
+for last in "$@"; do :; done
+exec sh -c "$last"
+SSH
+cp "${adopt}/odd/strict" "${adopt}/odd/ssh"
+chmod +x "${adopt}/odd/strict" "${adopt}/odd/ssh"
+git -C "${work}" remote add viaplain "ssh://plain.invalid${forge}"
+set +e
+out="$(GIT_SSH_COMMAND="${adopt}/odd/strict" GIT_SSH_VARIANT=simple adopt_run --installed "${cur}" --remote viaplain)"; rc=$?
+set -e
+[ "${rc}" -eq 0 ] \
+  || fail "a transport declared as not OpenSSH must be run as configured, got ${rc}: ${out}"
+ok "a transport declared as not OpenSSH is handed none of OpenSSH's options"
+# Declared in the repository's configuration instead, for a command that happens to be named ssh:
+# the name alone would say OpenSSH.
+git -C "${work}" config core.sshCommand "${adopt}/odd/ssh"
+git -C "${work}" config ssh.variant simple
+set +e
+out="$(env -u GIT_SSH_COMMAND -u GIT_SSH -u GIT_SSH_VARIANT "${script}" --repo-root "${work}" \
+  --installed "${cur}" --remote viaplain 2>&1)"; rc=$?
+set -e
+git -C "${work}" config --unset core.sshCommand
+git -C "${work}" config --unset ssh.variant
+git -C "${work}" remote remove viaplain
+[ "${rc}" -eq 0 ] \
+  || fail "ssh.variant must decide what a command named ssh is handed, got ${rc}: ${out}"
+ok "the repository's ssh.variant is honoured for a command named ssh"
 
 # A remote that accepts the call and never answers must end as UNKNOWN inside the deadline. The
 # transport here is an ssh stand-in that only sleeps: unbounded, the check would wait on it for the

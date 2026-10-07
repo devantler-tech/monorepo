@@ -233,16 +233,34 @@ bounded_remote() {
   # replace a transport the repository configured (a deploy key, a jump host) and every run
   # would then end UNKNOWN. Start from whichever of the three git itself would have used. Every
   # caller bounds `git -C <repository> ...`, which is how that repository's own setting is found.
-  local base_ssh="${GIT_SSH_COMMAND:-}" repo=""
+  local base_ssh="${GIT_SSH_COMMAND:-}" repo="" variant="${GIT_SSH_VARIANT:-}" program
   if [ "${1-}" = git ] && [ "${2-}" = -C ]; then repo="${3-}"; fi
   if [ -z "$base_ssh" ] && [ -n "$repo" ]; then
     base_ssh="$(git -C "$repo" config --get core.sshCommand 2>/dev/null || true)"
   fi
   [ -n "$base_ssh" ] || base_ssh="${GIT_SSH:-ssh}"
+  # The two options added below are OpenSSH's. git also runs plink, putty and wrappers that take
+  # neither (ssh.variant), and such a transport fails every call it is handed them on. So they go
+  # only to a command git itself treats as OpenSSH: one declared so, or, undeclared, one named
+  # `ssh`. Any other runs exactly as configured, and the watchdog below is what bounds it.
+  if [ -z "$variant" ] && [ -n "$repo" ]; then
+    variant="$(git -C "$repo" config --get ssh.variant 2>/dev/null || true)"
+  fi
+  if [ -z "$variant" ] || [ "$variant" = auto ]; then
+    program="${base_ssh%% *}"
+    case "${program##*/}" in
+      ssh) variant=ssh ;;
+      *) variant=other ;;
+    esac
+  fi
   case "$-" in *m*) had_monitor=1 ;; esac
   set -m
-  GIT_TERMINAL_PROMPT=0 \
-    GIT_SSH_COMMAND="$base_ssh -o BatchMode=yes -o ConnectTimeout=$secs" "$@" &
+  if [ "$variant" = ssh ]; then
+    GIT_TERMINAL_PROMPT=0 \
+      GIT_SSH_COMMAND="$base_ssh -o BatchMode=yes -o ConnectTimeout=$secs" "$@" &
+  else
+    GIT_TERMINAL_PROMPT=0 "$@" &
+  fi
   cmd_pid=$!
   (
     sleep "$secs"
@@ -265,31 +283,38 @@ bounded_remote() {
 # removing the places known to hold a secret. Of an scp-style `user@host:path` it keeps the host and
 # the path; a plain path is kept whole. Any byte that is not printable ASCII is printed as `?`, so
 # nothing in a URL can start a new line or move the cursor in the report it is copied into.
+# git also takes a location that is no URL at all: `<transport>::<address>` hands an address in a
+# form only that transport knows to a helper program, and `ext::<command>` is a command line. What
+# is safe to print of those cannot be told, so only the transport is printed. The same goes for
+# anything else that is not one of the forms above.
 printable_url() {
-  local url="$1" scheme="" host="" path rest first
-  case "$url" in
-    *://*)
-      scheme="${url%%://*}://"
-      rest="${url#*://}"
-      host="${rest%%[/?#]*}"
-      path="${rest#"$host"}"
-      path="${path%%[?#]*}"
-      host="${host##*@}"
-      ;;
-    /* | ./* | ../*) path="$url" ;;
-    *:*)
-      first="${url%%:*}"
-      case "$first" in
-        */*) path="$url" ;;
-        *)
-          host="${first##*@}"
-          path=":${url#*:}"
-          ;;
-      esac
-      ;;
-    *) path="$url" ;;
-  esac
-  printf '%s%s%s' "$scheme" "$host" "$path" | LC_ALL=C tr -c '\040-\176' '?'
+  local url="$1" shown="" rest host path first
+  if [[ "$url" =~ ^([A-Za-z0-9][A-Za-z0-9+.-]*):: ]]; then
+    shown="${BASH_REMATCH[1]}::<address not shown>"
+  else
+    case "$url" in
+      *://*)
+        rest="${url#*://}"
+        host="${rest%%[/?#]*}"
+        path="${rest#"$host"}"
+        if [[ "${url%%://*}" =~ ^[A-Za-z][A-Za-z0-9+.-]*$ ]]; then
+          shown="${url%%://*}://${host##*@}${path%%[?#]*}"
+        fi
+        ;;
+      /* | ./* | ../*) shown="$url" ;;
+      *:*)
+        first="${url%%:*}"
+        host="${first##*@}"
+        case "$first" in
+          */*) shown="$url" ;;
+          *) if [[ "$host" =~ ^[A-Za-z0-9._-]+$ ]]; then shown="$host:${url#*:}"; fi ;;
+        esac
+        ;;
+      *) shown="$url" ;;
+    esac
+  fi
+  [ -n "$shown" ] || shown="<location not shown>"
+  printf '%s' "$shown" | LC_ALL=C tr -c '\040-\176' '?'
   printf '\n'
 }
 
@@ -332,6 +357,16 @@ resolve_adopted_from_remote() {
   # http.followRedirects=false, here and on the fetch below: git follows a redirect of its first
   # request by default, and the pin would then come from a location the pin source line does not
   # name. A remote that redirects fails this read instead, and the verdict is UNKNOWN.
+  # A setting scoped to the URL (http.<url>.followRedirects) outranks the one given here, however
+  # it is given: git takes the closest match to the URL, not the last one read. So git is asked
+  # which value it will use for this URL, with the same setting passed, and anything but `false`
+  # is a read that may follow a redirect.
+  case "$remote_url" in
+    http://* | https://* | ftp://* | ftps://*)
+      [ "$(git -C "$REPO_ROOT" -c http.followRedirects=false config --get-urlmatch http.followRedirects "$remote_url" 2>/dev/null)" = false ] \
+        || die "the configuration of $REPO_ROOT lets a read of remote '$REMOTE' follow an HTTP redirect (an http.<url>.followRedirects setting), so the location the pin would come from cannot be named — the adopted pin is unknown${ADOPTED_RECOVERY}"
+      ;;
+  esac
   advertised="$(bounded_remote "$REMOTE_TIMEOUT_SECS" git -C "$REPO_ROOT" \
       -c http.followRedirects=false \
       -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$REMOTE_TIMEOUT_SECS" \
