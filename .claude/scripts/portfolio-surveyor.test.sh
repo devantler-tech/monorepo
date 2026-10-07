@@ -2806,16 +2806,27 @@ grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor
 # actions: 5 maintainer-interactive (HANDS-OFF), 7 routine whose disclosure simply is not at position
 # zero, and 37 with no marker at all. Acting on that conflation mutated two of the maintainer's
 # interactive PRs (platform#2985, #3034) via `gh pr update-branch`.
-grep -Fq 'disclosure=<routine|interactive|none|unknown>' "${surveyor}" ||
+# The grammar must sit on the digest row that carries the field, so read that row alone.
+_disclosure_row=$(grep -F -- '— `devantler`, draft=<true|false>' "${surveyor}" || true)
+[ -n "${_disclosure_row}" ] ||
+  fail "surveyor digest row for a devantler pull request was not found, so its disclosure grammar is unchecked (#3513)"
+grep -Fq 'disclosure=<routine|interactive|none|unknown>' <<<"${_disclosure_row}" ||
   fail "surveyor must emit the ownership disclosure field with its unknown value, not a yes/no boolean (#2762, #3513)"
 # #3513 — since #3110 the classifier exits 2 on an empty or unreadable body. The digest needs a value
-# for that outcome, or the only one left to report is `none`, the all-clear #3110 removed.
-grep -Fq "Exit 2 prints no verdict: report disclosure=unknown." "${surveyor}" ||
-  fail "surveyor invocation must name the exit-2 outcome and the value it reports (#3513)"
-grep -Fq "the classifier exited \`2\`: the body was empty, whitespace-only or unreadable" "${surveyor}" ||
+# for that outcome, or the only one left to report is `none`, the all-clear #3110 removed. Each rule
+# is checked where it is used: the value list, and the line directly above the classifier call.
+_disclosure_values=$(sed -n '/^     four values:$/,/^     ```sh$/p' "${surveyor}")
+grep -Fq '```sh' <<<"${_disclosure_values}" ||
+  fail "surveyor disclosure value list was not found, so its unknown value is unchecked (#3513)"
+grep -Fq "the classifier exited \`2\`: the body was empty, whitespace-only or unreadable" <<<"${_disclosure_values}" ||
   fail "surveyor must define disclosure=unknown as the classifier exit-2 outcome (#3513)"
-grep -Fq "**Never \`none\`** — nothing was read, so nothing was found absent." "${surveyor}" ||
+grep -Fq "**Never \`none\`** — nothing was read, so nothing was found absent." <<<"${_disclosure_values}" ||
   fail "surveyor must forbid folding an unread body into disclosure=none (#3513)"
+_disclosure_call=$(grep -B1 'pr-ownership-disclosure\.sh --input -$' "${surveyor}" || true)
+[ -n "${_disclosure_call}" ] ||
+  fail "surveyor classifier invocation was not found, so its exit-2 comment is unchecked (#3513)"
+grep -Fq "# Prints interactive, routine or none. Exit 2 prints no verdict: report disclosure=unknown." <<<"${_disclosure_call}" ||
+  fail "surveyor invocation must name the exit-2 outcome and the value it reports (#3513)"
 ! grep -Fq "disclosure=<routine|interactive|none>" "${surveyor}" ||
   fail "surveyor still carries the three-valued grammar that has no value for an unread body (#3513)"
 
