@@ -197,6 +197,10 @@ producing, `2` **UNKNOWN**. From the scheduler store it reads only run timings, 
 payload. From a stub's own outcome record it reads exactly one field, the `codex_error_info`
 classifier, and prints it as a bounded cause class (`cause=quota/billing` or `cause=unknown`), never
 the text beside it — so it cannot carry private runtime state into an artifact (monorepo#2908).
+🔴 **An inbox item is not proof of work.** A run that stops at its start-up checks writes one saying
+so, and about 145 consecutive hourly runs did exactly that from 2026-10-01 while the check read each
+as producing. A run that ended inside the pre-flight window (`--preflight-seconds`, default 600) did
+no work with or without an inbox item, and a window made only of such runs is `1` (monorepo#3929).
 🔴 **A lane that stops DISPATCHING has no new runs to classify, so the check reads `next_run_at`
 first.** An ACTIVE automation whose scheduled next run is overdue by more than the grace window is a
 `1` whatever its older runs look like, and a missing next-run time is a `2`. Without this, the newest
@@ -204,8 +208,9 @@ settled runs stay the last healthy ones and the check reports `0` for the whole 
 2026-09-13, both Codex automations had missed their slots for five hours and read `OK`
 (monorepo#3333).
 🔴 **Those two discriminators are read as THREE classes, not two, because a run can die PART WAY.** An
-inbox-less run inside the stub window died at dispatch and is the `1`; an inbox-less run that outlasted
-it is **UNPROVEN, never healthy** — this store cannot separate a mid-run death from a long run that
+inbox-less run inside the stub window died at dispatch and is the `1`, as is any run that ended inside
+the pre-flight window; an inbox-less run that outlasted the pre-flight window is **UNPROVEN, never
+healthy** — this store cannot separate a mid-run death from a long run that
 simply never wrote an inbox item, so it is a `2`. Requiring both conditions at once made that third
 class report `0`: measured 2026-09-08, a twice-daily automation whose newest settled run had run 46
 minutes and died to an account-scoped cause read `OK`, and the lane was caught only because a *second*
