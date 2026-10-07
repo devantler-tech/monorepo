@@ -770,96 +770,96 @@ fi
 check "trap16: no refusal prints the current head" "0" \
   "$(cat "$tmp/err-16-nohead" "$tmp/out-16-nohead" "$tmp/err-16-old" "$tmp/out-16-old" | grep -c "$head16_v2" || true)"
 
-# An unreadable pull-request head is UNKNOWN, never "this is an issue".
+# Whether a number is a pull request is read from the remote's whole ref
+# listing, asked for with no pattern. The shim answers that one read falsely,
+# as TRAP16_READS says, and passes every other git call through: `fail` fails
+# it, `no-pulls` leaves out every pull-request head and `omit-claim` leaves out
+# the claim tips.
 shim_dir_16="$tmp/shim-16"
 mkdir -p "$shim_dir_16"
 real_git_16="$(command -v git)"
 cat > "$shim_dir_16/git" <<SHIM
 #!/usr/bin/env bash
 listing=0
-pull=0
+patterned=0
 for arg in "\$@"; do
   if [[ "\$arg" == "ls-remote" ]]; then listing=1; fi
-  if [[ "\$arg" == "${pull16}" ]]; then pull=1; fi
+  if [[ "\$arg" == refs/* || "\$arg" == HEAD ]]; then patterned=1; fi
 done
-if [[ "\$listing" -eq 1 && "\$pull" -eq 1 ]]; then
-  : > "$tmp/trap16-pull-read-failed"
-  echo "simulated pull-request head query failure" >&2
-  exit 1
+if [[ "\$listing" -eq 1 && "\$patterned" -eq 0 && -n "\${TRAP16_READS:-}" ]]; then
+  : > "$tmp/trap16-read-\${TRAP16_READS}"
+  case "\${TRAP16_READS}" in
+    fail)
+      echo "simulated ref listing failure" >&2
+      exit 1
+      ;;
+    no-pulls) drop='refs/pull/' ;;
+    omit-claim) drop='refs/heads/agent-claim/' ;;
+    *) exit 1 ;;
+  esac
+  rows="\$("$real_git_16" "\$@")" || exit 1
+  awk -v drop="\$drop" 'index(\$2, drop) != 1' <<<"\$rows"
+  exit 0
 fi
 exec "$real_git_16" "\$@"
 SHIM
 chmod +x "$shim_dir_16/git"
+# A listing that cannot be read is UNKNOWN, never "this is an issue".
 rc_16_unknown=0
-PATH="$shim_dir_16:$PATH" "$tool" acquire "$ISSUE16" --repo-dir "$clone_c" --remote origin \
+TRAP16_READS=fail PATH="$shim_dir_16:$PATH" "$tool" acquire "$ISSUE16" --repo-dir "$clone_c" --remote origin \
   --takeover --pr-head "$head16_v2" >"$tmp/out-16-unknown" 2>"$tmp/err-16-unknown" || rc_16_unknown=$?
-if [[ -f "$tmp/trap16-pull-read-failed" ]]; then
+if [[ -f "$tmp/trap16-read-fail" ]]; then
   pass "trap16: fixture — the pull-request head read actually failed"
 else
   fail "trap16: fixture — the pull-request head read never ran"
 fi
 check "trap16: an unreadable pull-request head exits 2" "2" "$rc_16_unknown"
 check "trap16: an unreadable pull-request head leaves the tip in place" "$stale16" "$(tip16)"
-if grep -q 'UNKNOWN' "$tmp/err-16-unknown"; then
-  pass "trap16: an unreadable pull-request head is reported as UNKNOWN"
+if grep -q 'UNKNOWN' "$tmp/err-16-unknown" && grep -q 'could not list the refs' "$tmp/err-16-unknown"; then
+  pass "trap16: an unreadable pull-request head is reported as UNKNOWN, as a failed read"
 else
-  fail "trap16: an unreadable pull-request head is reported as UNKNOWN"
+  fail "trap16: an unreadable pull-request head is reported as UNKNOWN, as a failed read"
 fi
 # The same outage without --pr-head is the fail-open to rule out: a failed read
 # taken for "no pull request here" would let the takeover through unchecked.
 rc_16_unknown_bare=0
-PATH="$shim_dir_16:$PATH" "$tool" acquire "$ISSUE16" --repo-dir "$clone_c" --remote origin \
+TRAP16_READS=fail PATH="$shim_dir_16:$PATH" "$tool" acquire "$ISSUE16" --repo-dir "$clone_c" --remote origin \
   --takeover >/dev/null 2>"$tmp/err-16-unknown-bare" || rc_16_unknown_bare=$?
 check "trap16: an unreadable pull-request head without --pr-head exits 2" "2" "$rc_16_unknown_bare"
 check "trap16: an unreadable pull-request head never reads as an issue" "$stale16" "$(tip16)"
 
-# An EMPTY answer is not proof of an issue either: ls-remote exits 0 when
-# nothing matches, so a partial answer looks exactly like a number that is not
-# a pull request. Absence counts only once a second read, of every
-# pull-request head, lists some pull request and not this one. TRAP16_READS
-# picks which read the shim answers falsely.
-shim_dir_16c="$tmp/shim-16c"
-mkdir -p "$shim_dir_16c"
-cat > "$shim_dir_16c/git" <<SHIM
-#!/usr/bin/env bash
-listing=0
-one=0
-all=0
-for arg in "\$@"; do
-  if [[ "\$arg" == "ls-remote" ]]; then listing=1; fi
-  if [[ "\$arg" == 'refs/pull/*/head' ]]; then all=1; elif [[ "\$arg" == refs/pull/*/head ]]; then one=1; fi
-done
-if [[ "\$listing" -eq 1 ]]; then
-  case "\${TRAP16_READS:-}:\$one:\$all" in
-    empty-one:1:0|empty-all:0:1)
-      : > "$tmp/trap16-control-\${TRAP16_READS}"
-      exit 0
-      ;;
-    fail-all:0:1)
-      : > "$tmp/trap16-control-\${TRAP16_READS}"
-      echo "simulated pull-request listing failure" >&2
-      exit 1
-      ;;
-  esac
-fi
-exec "$real_git_16" "\$@"
-SHIM
-chmod +x "$shim_dir_16c/git"
+# A listing that READS but leaves refs out is not proof of an issue either. The
+# only thing that can show a listing is whole is that it holds what is known to
+# be there, so one that does not show the claim tip just read proves nothing
+# about the pull-request head.
 rc_16_partial=0
-TRAP16_READS=empty-one PATH="$shim_dir_16c:$PATH" "$tool" acquire "$ISSUE16" --repo-dir "$clone_c" \
+TRAP16_READS=omit-claim PATH="$shim_dir_16:$PATH" "$tool" acquire "$ISSUE16" --repo-dir "$clone_c" \
   --remote origin --takeover >/dev/null 2>"$tmp/err-16-partial" || rc_16_partial=$?
-if [[ -f "$tmp/trap16-control-empty-one" ]]; then
-  pass "trap16: fixture — the one-ref read answered empty for a pull request"
+if [[ -f "$tmp/trap16-read-omit-claim" ]]; then
+  pass "trap16: fixture — the listing left out the claim tip"
 else
-  fail "trap16: fixture — the one-ref read was never answered empty"
+  fail "trap16: fixture — the listing was never read"
 fi
-check "trap16: an empty one-ref answer for a pull request exits 2" "2" "$rc_16_partial"
-check "trap16: an empty one-ref answer never reads as an issue" "$stale16" "$(tip16)"
-if grep -q 'UNKNOWN' "$tmp/err-16-partial" && grep -q 'disagree' "$tmp/err-16-partial"; then
-  pass "trap16: two reads that disagree are reported as UNKNOWN"
+check "trap16: a listing that leaves out the claim tip exits 2" "2" "$rc_16_partial"
+check "trap16: a listing that leaves out the claim tip leaves it in place" "$stale16" "$(tip16)"
+if grep -q 'UNKNOWN' "$tmp/err-16-partial" && grep -q 'do not show the claim tip' "$tmp/err-16-partial"; then
+  pass "trap16: a listing that leaves out the claim tip is reported as UNKNOWN"
 else
-  fail "trap16: two reads that disagree are reported as UNKNOWN"
+  fail "trap16: a listing that leaves out the claim tip is reported as UNKNOWN"
 fi
+# With every pull-request head left out, this pull request reads like an issue
+# to a helper that trusts an empty answer.
+rc_16_hidden=0
+TRAP16_READS=no-pulls PATH="$shim_dir_16:$PATH" "$tool" acquire "$ISSUE16" --repo-dir "$clone_c" \
+  --remote origin --takeover >/dev/null 2>"$tmp/err-16-hidden" || rc_16_hidden=$?
+if [[ -f "$tmp/trap16-read-no-pulls" ]]; then
+  pass "trap16: fixture — the listing left out every pull-request head"
+else
+  fail "trap16: fixture — the listing was never read"
+fi
+check "trap16: a pull request whose head the listing leaves out exits 2" "2" "$rc_16_hidden"
+check "trap16: a pull request whose head the listing leaves out is not taken over as an issue" \
+  "$stale16" "$(tip16)"
 
 # Naming the current head takes the tip over although a commit landed after it.
 rc_16_take=0
@@ -939,13 +939,14 @@ fi
 # A number is taken for an issue only when the remote shows pull-request heads
 # and this is not one of them. A remote that shows none proves nothing, and
 # neither does a listing that cannot be read.
+rm -f "$tmp/trap16-read-no-pulls" "$tmp/trap16-read-fail"
 rc_16_none=0
-TRAP16_READS=empty-all PATH="$shim_dir_16c:$PATH" "$tool" acquire "$ISSUE16I" --repo-dir "$clone_c" \
+TRAP16_READS=no-pulls PATH="$shim_dir_16:$PATH" "$tool" acquire "$ISSUE16I" --repo-dir "$clone_c" \
   --remote origin --takeover >/dev/null 2>"$tmp/err-16-none" || rc_16_none=$?
-if [[ -f "$tmp/trap16-control-empty-all" ]]; then
-  pass "trap16: fixture — the listing of every pull-request head answered empty"
+if [[ -f "$tmp/trap16-read-no-pulls" ]]; then
+  pass "trap16: fixture — the listing showed no pull-request head"
 else
-  fail "trap16: fixture — the listing of every pull-request head was never read"
+  fail "trap16: fixture — the listing was never read"
 fi
 check "trap16: a remote that shows no pull-request head exits 2" "2" "$rc_16_none"
 check "trap16: a remote that shows no pull-request head leaves the tip in place" "$stale16i" "$(tip16i)"
@@ -955,15 +956,15 @@ else
   fail "trap16: a remote that shows no pull-request head is reported as UNKNOWN"
 fi
 rc_16_listfail=0
-TRAP16_READS=fail-all PATH="$shim_dir_16c:$PATH" "$tool" acquire "$ISSUE16I" --repo-dir "$clone_c" \
+TRAP16_READS=fail PATH="$shim_dir_16:$PATH" "$tool" acquire "$ISSUE16I" --repo-dir "$clone_c" \
   --remote origin --takeover >/dev/null 2>&1 || rc_16_listfail=$?
-if [[ -f "$tmp/trap16-control-fail-all" ]]; then
-  pass "trap16: fixture — the listing of every pull-request head failed"
+if [[ -f "$tmp/trap16-read-fail" ]]; then
+  pass "trap16: fixture — the listing failed for an issue number"
 else
-  fail "trap16: fixture — the listing of every pull-request head was never read"
+  fail "trap16: fixture — the listing was never read for an issue number"
 fi
-check "trap16: an unreadable listing of pull-request heads exits 2" "2" "$rc_16_listfail"
-check "trap16: an unreadable listing of pull-request heads leaves the tip in place" "$stale16i" "$(tip16i)"
+check "trap16: an unreadable listing exits 2 for an issue number" "2" "$rc_16_listfail"
+check "trap16: an unreadable listing leaves an issue number's tip in place" "$stale16i" "$(tip16i)"
 
 rc_16_issue_take=0
 sha_16i="$("$tool" acquire "$ISSUE16I" --repo-dir "$clone_c" --remote origin --takeover 2>/dev/null)" ||

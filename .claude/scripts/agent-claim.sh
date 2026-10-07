@@ -168,31 +168,35 @@ remote_tip() {
 
 # Head of pull request <n> as the remote publishes it: the forge keeps
 # refs/pull/<n>/head for every pull request, open or closed, and for no issue.
-# Prints the head, or nothing once the number is SHOWN not to be a pull
-# request. The ref name is compared exactly: an ls-remote pattern matches the
-# TAIL of a ref, so a branch named `x/refs/pull/<n>/head` would otherwise read
-# as a pull request.
+# remote_pull_head <n> <claim-tip> prints the head, or nothing once the number
+# is SHOWN not to be a pull request.
 #
-# An empty answer to the one-ref read is not that proof. ls-remote exits 0 when
-# nothing matches, so a partial answer and a remote that hides these refs both
-# look exactly like an issue number, and reading them as one skips the gate
-# below. Absence is accepted only from a second read, of every pull-request
-# head, that lists at least one pull request and does not list this one.
-# Returns 1 when a read fails, 3 when the remote shows no pull-request head for
-# any number (nothing there can then be shown to be an issue) and 4 when the
-# two reads disagree.
+# It reads every ref the remote advertises, with no pattern, and picks the ref
+# out here by its exact name. Asking the remote for the one ref, or for
+# `refs/pull/*/head`, is a filtered read: ls-remote exits 0 when nothing
+# matches, so an answer that left the ref out would read exactly like an issue
+# number and skip the gate below. A pattern also matches the TAIL of a ref, so
+# a branch named `x/refs/pull/<n>/head` would read as a pull request.
+#
+# Absence counts only when the same listing shows what is known to be there:
+# the claim tip the caller just read, when there is one, and at least one
+# pull-request head. Returns 1 when the read fails, 3 when the remote shows no
+# pull-request head for any number (nothing there can then be shown to be an
+# issue) and 4 when the listing does not show the claim tip. One assumption is
+# left, and no question a client can ask removes it: that a listing asked for
+# without a pattern, and answered with success, is everything the remote
+# advertises.
 remote_pull_head() {
-  local ref="refs/pull/$1/head" rows head all
-  rows="$(git_c ls-remote "$REMOTE" "$ref")" || return 1
-  head="$(awk -v ref="$ref" '$2 == ref { print $1; exit }' <<<"$rows")"
-  if [[ -n "$head" ]]; then
-    printf '%s\n' "$head"
-    return 0
-  fi
-  all="$(git_c ls-remote "$REMOTE" 'refs/pull/*/head')" || return 1
-  awk -v ref="$ref" '
-    $2 ~ /^refs\/pull\/[1-9][0-9]*\/head$/ { seen = 1; if ($2 == ref) listed = 1 }
-    END { if (!seen) exit 3; if (listed) exit 4 }
+  local all
+  all="$(git_c ls-remote "$REMOTE")" || return 1
+  awk -v ref="refs/pull/$1/head" -v claim="$(claim_ref "$1")" -v tip="${2-}" '
+    $2 == claim && $1 == tip { shown = 1 }
+    $2 ~ /^refs\/pull\/[1-9][0-9]*\/head$/ { seen = 1; if ($2 == ref) head = $1 }
+    END {
+      if (tip != "" && !shown) exit 4
+      if (!seen) exit 3
+      if (head != "") print head
+    }
   ' <<<"$all"
 }
 
@@ -211,13 +215,13 @@ remote_pull_head() {
 # Neither refusal prints the current head. It has to come from the caller's own
 # read of the pull request, or naming it would prove nothing.
 require_pr_head_for_takeover() {
-  local issue="$1" live read_rc=0
-  live="$(remote_pull_head "$issue")" || read_rc=$?
+  local issue="$1" claim_tip="${2-}" live read_rc=0
+  live="$(remote_pull_head "$issue" "$claim_tip")" || read_rc=$?
   case "$read_rc" in
     0) ;;
     3) fail "UNKNOWN — ${REMOTE} shows no pull-request head for any number, so #${issue} cannot be shown to be an issue; refusing takeover" ;;
-    4) fail "UNKNOWN — two reads of ${REMOTE} disagree about refs/pull/${issue}/head; refusing takeover" ;;
-    *) fail "UNKNOWN — could not read refs/pull/${issue}/head on ${REMOTE}; refusing takeover" ;;
+    4) fail "UNKNOWN — the refs ${REMOTE} listed do not show the claim tip ${claim_tip} that was just read, so the listing cannot show #${issue} is an issue either; refusing takeover" ;;
+    *) fail "UNKNOWN — could not list the refs of ${REMOTE}; refusing takeover" ;;
   esac
   if [[ -z "$live" ]]; then
     [[ -z "$PR_HEAD" ]] ||
@@ -460,7 +464,7 @@ cmd_acquire() {
   # as well, never instead.
   local record=""
   if [[ "$TAKEOVER" -eq 1 ]]; then
-    require_pr_head_for_takeover "$issue"
+    require_pr_head_for_takeover "$issue" "$existing"
     [[ -z "$PR_HEAD" ]] || record="takeover-pr-head=${PR_HEAD}"
   fi
   if [[ -n "$existing" ]]; then
