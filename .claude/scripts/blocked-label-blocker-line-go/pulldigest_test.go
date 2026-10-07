@@ -86,6 +86,23 @@ func TestParkedDigestReportsAnAuthorityBlockerThatWasAsked(t *testing.T) {
 	}
 }
 
+// A pull request that waits on an event is parked by an outcome record (#3426).
+// The digest never reads the state of an item such a record names: the wait is
+// for the event, so a closed item beside the words does not unpark it, and a
+// record nobody re-checked goes stale like any other.
+func TestParkedDigestReportsAnOutcomeWait(t *testing.T) {
+	record := commentJSON(t, "devantler", recordHead+"**Blocker:** a release carrying owner/repo#7 | outcome | last-verified 2026-09-01: tag exists, release not published")
+	pull := "[" + digestPull("5", blockedLabel+`"blocker_state":"closed",`, record) + "]"
+	code, out := runInput(t, pull, "--parked-digest")
+	if code != 0 || !strings.Contains(out, "PARKED     p#5  [outcome]  a release carrying owner/repo#7\n") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+	code, out = runInput(t, pull, "--parked-digest", "--today", "2026-09-09", "--verify-max-age-days", "7")
+	if code != 1 || !strings.Contains(out, "ACTIONABLE p#5  record=STALE\n") {
+		t.Fatalf("a stale outcome record must be actionable: code=%d out:\n%s", code, out)
+	}
+}
+
 // One pull request's missing record must not hide another's valid park, and
 // the closing line must account for every labelled pull request read.
 func TestParkedDigestReportsEachPullRequestOnItsOwn(t *testing.T) {
