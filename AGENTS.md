@@ -8,7 +8,7 @@ has its own `AGENTS.md`, whose `## Maintenance` section wins for that repository
 ## What this repo is
 
 Every devantler-tech product as a Git submodule, plus the **devantler.tech** site in `docs/`, so one
-checkout holds the whole portfolio for a single autonomous **engineer**.
+checkout holds the whole portfolio for one autonomous **engineer**.
 
 | Path | What it holds | Instructions |
 |---|---|---|
@@ -97,7 +97,7 @@ no row are filed on the **default intake repo** below.
 
 The scheduled **Agentic Engineer** is the primary engineer for every product above: it **operates**,
 **advances**, **hardens** and **stewards the spend** of each one. The **Agent Improver** improves the
-engineer from the outside. (Both were once named *Daily AI …*; the `daily-maintainer` slug and
+engineer from the outside. (Once named *Daily AI …*; the `daily-maintainer` slug and
 scheduled-task ids are unchanged.)
 
 The deployed definition is assembled, never copied: the reviewed
@@ -108,13 +108,13 @@ role behaviour changes in its owning upstream first** (resolve a bundled skill's
 
 - **Before acting on a plugin-sourced role**, run `.claude/scripts/plugin-definition-currency.sh
   --runtime <claude|codex|git-ref>`. On `DRIFT` or `UNKNOWN` (exit `2` is never "current"), follow the
-  reviewed definition at the pinned gitlink and report it — never halt the run.
+  reviewed definition at the pinned gitlink and report it — never halt the run. A Claude `DRIFT` also
+  runs `.claude/scripts/plugin-definition-refresh.sh`.
 - **Codex runs the portfolio survey inline** and never dispatches a surveyor subagent (monorepo#3057).
 - Run `.claude/scripts/platform-live-health.sh`: `nothing_on_fire` holds only when it exits `0`.
   Run `.claude/scripts/review-lane-health.sh` before requesting any review.
 - Run `.claude/scripts/sibling-lane-watch.sh --lane <sibling>`; obey `ESCALATE`.
-- Sweep your own lane's worktrees, then run `.claude/scripts/disk-preflight.sh` (git-and-worktrees
-  guide).
+- Sweep your own lane's worktrees, then run `.claude/scripts/disk-preflight.sh`.
 
 Assembly and pin reading: [definition guide](.claude/guides/definition-and-plugin.md).
 
@@ -351,13 +351,13 @@ change updates both in one PR. A section cited as "AGENTS.md → *X*" resolves t
 | [durable-memory](.claude/guides/durable-memory.md) | Durable memory | reading or writing memory |
 | [worktree-isolation](.claude/worktree-isolation.md) | submodule isolation | repairing a submodule worktree |
 
-**Keep this file small:** keep universal rules here and topic guidance in guides or beside the code.
+**Keep this file small:** universal rules here, topic guidance in guides or beside the code.
 `.claude/scripts/agent-instructions-layout-contract.test.sh` enforces Codex's 32 KiB instruction limit.
 
 ## Maintenance
 
 Validate a change with `.claude/scripts/run-affected-tests.sh`: it runs only the self-tests CI would
-run for it (`--list` shows them). Never loop over every `.claude/scripts/*.test.sh` in one call. See
+run for it. Never loop over every `.claude/scripts/*.test.sh` in one call. See
 [running the tests](.claude/scripts/AGENTS.md#running-the-tests).
 
 ## Review guidelines

@@ -1181,6 +1181,9 @@ as the [portable loader](../../loaders/portable-agentic-engineer.md):
 Apply the [self-improvement deployment overlay](../self-improvement/SKILL.md) alongside its canonical
 procedure for capture, distillation and genuine readiness, subject to the native memory write authority.
 Use the consumer's pinned gitlink on `DRIFT` or `UNKNOWN`, per the definition guide above.
+On a Claude-lane `DRIFT`, also run `.claude/scripts/plugin-definition-refresh.sh` once in the same run:
+a scheduled run can drive it, and it needs no interactive session. Its exit `1` or `2` is reported,
+never a run-stopper, and its exit `0` takes effect from the next dispatch (monorepo#3926).
 
 Routine merged corrections may be pruned; retain experimental evidence, observation owner and next check after merge.
 Close the hypothesis only after the observation and recovery checks; record HOLD or REJECT as outcomes too.

@@ -1,8 +1,7 @@
 # AGENTS.md — deployment scripts and contract tests (`.claude/scripts/`)
 
 The helpers the Agentic Engineer and Agent Improver run, and the contract tests that keep the agent
-guides honest. The root [`AGENTS.md`](../../AGENTS.md) still applies; this file adds the conventions for
-code in this directory.
+guides honest. The root [`AGENTS.md`](../../AGENTS.md) still applies; this file adds this directory's conventions.
 
 ## Writing a helper
 

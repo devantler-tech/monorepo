@@ -611,6 +611,9 @@ jobs:
               # from the currency check, must run this job and update the prose in the same change.
               - '.claude/scripts/plugin-definition-refresh.sh'
               - '.claude/scripts/plugin-definition-currency.sh'
+              # Assertion 4b reads the run procedure overlay, which must name the refresh for a
+              # Claude DRIFT just as the every-run bullet does (monorepo#3926).
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
               # This test asserts the loader's explicit fetch refspec and is the only guard that
               # does, so a change to the loader alone must run it. The sibling maintainer-preflight
               # filter needed the same entry for the same reason — fixing one and not the other is
