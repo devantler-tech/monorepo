@@ -221,7 +221,7 @@ its thread. Reports,
 - **Interactive-session marker:** the literal `Generated with [Claude Code]` identifies the
   maintainer's own interactive PRs. A scheduled run never emits it as a marker line.
 
-Details and the Slack rules:
+Details, the Slack rules and how the two markers are matched:
 [maintainer channels guide](.claude/guides/maintainer-channels.md).
 
 ### Spend contract — the money side of the same portfolio
@@ -357,7 +357,7 @@ change updates both in one PR. A section cited as "AGENTS.md → *X*" resolves t
 ## Maintenance
 
 Validate a change with `.claude/scripts/run-affected-tests.sh`: it runs only the self-tests CI would
-run for it (`--list` shows them). Never loop over every `.claude/scripts/*.test.sh` in one call. See
+run for it. Never loop over every `.claude/scripts/*.test.sh` in one call. See
 [running the tests](.claude/scripts/AGENTS.md#running-the-tests).
 
 ## Review guidelines
