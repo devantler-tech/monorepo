@@ -140,7 +140,7 @@ Without one, every run re-derived the same diagnosis and posted it again: `platf
 
 **Park with one command, never two hand-made writes:**
 `.claude/scripts/blocked-label-blocker-line.sh park --org devantler-tech --target <owner/repo#N> --kind upstream --blocker <owner/repo#N> --result <text>`
-(`park --help` covers `authority`). It writes both halves and exits `0` only after reading both
+(`park --help` covers `authority` and `outcome`). It writes both halves and exits `0` only after reading both
 back; on any other exit its message says what, if anything, was written. When only the label
 write failed, running it again finishes the job; otherwise read the message before retrying.
 Done separately the two halves came apart: a label with no record is skipped by every lane for
@@ -155,9 +155,12 @@ ever, and a record with no label is re-diagnosed every run (monorepo#3879). What
 2. The `blocked` label. The label is what parks the PR; a PR without it is not parked and is
    worked like any other, whatever its comments say.
 
-It refuses a kind other than `upstream` or `authority`, the PR named as its own blocker, and an
-upstream blocker that is not one tracked item — review, CI and evaluation of the PR itself are its
-unfinished readiness work, never a blocker: drive them instead of parking on them.
+It refuses a kind other than `upstream`, `authority` or `outcome`, the PR named as its own blocker,
+and an upstream blocker that is not one tracked item — review, CI and evaluation of the PR itself
+are its unfinished readiness work, never a blocker: drive them instead of parking on them. A
+finished PR that waits on an event rather than an item (a release that is tagged but not yet
+published, a named date) is parked with `--kind outcome` and the event in words; *Issue-driven →
+Drain oldest-first* says what an outcome is and is not.
 `.claude/scripts/blocked-label-blocker-line.sh compose --target <owner/repo#N> …` prints the same
 comment without posting it.
 
@@ -187,7 +190,9 @@ counts them:
   organization that the record names was read and is open. `blocker state not read`: the record
   names none the digest may read (another owner's, or a blocker described only in words), so
   checking that blocker when the record's date comes due is still yours. `authority`: the PR waits
-  on a decision, and the digest never reads an authority blocker's state.
+  on a decision, and the digest never reads an authority blocker's state. `outcome`: the PR waits on
+  an event, and the digest reads no item the record names beside it, so checking for that event
+  when the record's date comes due is yours.
 - `ACTIONABLE <repo>#<n>  record=<reason>`: the label is there and the park is not. The PR is ordinary
   rung-1 work this run. `record=BLOCKER-CLOSED` means an issue or PR the record names has closed:
   remove the label, delete the record comment and drive the PR, or park it again on what really

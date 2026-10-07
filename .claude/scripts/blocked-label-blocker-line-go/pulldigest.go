@@ -146,7 +146,8 @@ func parkedDigestReport(pulls []issue, o options) (string, bool, error) {
 		}
 		blocker, kind := recordBlocker(line)
 		state := ""
-		// An authority blocker waits on a decision, not on the object it may name.
+		// An authority blocker waits on a decision and an outcome blocker on an
+		// event, not on the object either may name.
 		if kind == "upstream" {
 			var err error
 			if state, err = blockerState(item, blocker, o); err != nil {

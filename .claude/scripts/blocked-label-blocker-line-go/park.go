@@ -23,6 +23,7 @@ const parkHelp = `Park a pull request: write its one blocker record and add the 
   park --org <owner> --target <owner/repo#N> --kind upstream  --blocker <owner/repo#N> --result <text>
   park --org <owner> --target <owner/repo#N> --kind authority --blocker <what only the maintainer can do>
        --result <text> --asked <pr|slack|session> <YYYY-MM-DD>
+  park --org <owner> --target <owner/repo#N> --kind outcome   --blocker <the event waited on, in words> --result <text>
 
 --org is required and names the one owner park may write to: a target under
 any other owner is refused, so a mistyped target cannot put a comment and a

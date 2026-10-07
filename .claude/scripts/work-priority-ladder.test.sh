@@ -294,6 +294,20 @@ assert_prose 're-check it on every run before using (b) to skip' \
 # shellcheck disable=SC2016
 assert_prose '`**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`' \
   "${constitution_flat}" "structured blocker line does not limit issue data to identity and status"
+# Delivered work that waits on an event had no recorded state, so every run re-derived it as the
+# oldest actionable item of its type (monorepo#3426). Pin the third kind, the skip clause that names
+# it, and the two limits that stop it becoming a way to set work aside.
+# shellcheck disable=SC2016
+assert_prose '`<blocker-kind>` is exactly `upstream`, `authority` or `outcome`' \
+  "${constitution_flat}" "contract does not name outcome as a blocker kind"
+# shellcheck disable=SC2016
+assert_prose 'it waits on a **named event** recorded as an `outcome` blocker' \
+  "${constitution_flat}" "skip clause (b) does not name delivered work waiting on an event"
+# shellcheck disable=SC2016
+assert_prose 'An `outcome` record carries no ask' \
+  "${constitution_flat}" "contract lets an outcome wait inherit the authority ask requirement"
+assert_prose 'anything this lane can still do' \
+  "${constitution_flat}" "contract lets work this lane can still do be recorded as an outcome wait"
 assert_prose 'opencost/opencost#3710' \
   "${constitution_flat}" "blocker example is not a fully qualified cross-repository reference"
 assert_absent '| verify via <non-repo channel> | next-check' \

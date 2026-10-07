@@ -29,9 +29,12 @@ no Security issue is left unstarted with no record of why.
   **Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>
   **Blocker:** <what only the maintainer can do> | authority | last-verified <YYYY-MM-DD>: <result> | asked <pr|slack|session> <YYYY-MM-DD>
 
-The blocker kind is upstream or authority. Explicit authority records may name
-an account action, credential or permission in plain language. Legacy records
-infer authority only from the literal identifier text "maintainer authority".
+The blocker kind is upstream, authority or outcome. Explicit authority records
+may name an account action, credential or permission in plain language. Legacy
+records infer authority only from the literal identifier text "maintainer
+authority". An outcome record says in words which event the delivered work
+waits on -- a release being published, the next production occurrence -- and
+never carries an ask, because nobody can be asked for an event.
 The independent provider outage cause belongs in the result, for example
 "outage-cause=credentials/auth; access is still missing".
 Ask channels: pr = a draft PR; slack = the Slack DM to the maintainer's own user
@@ -290,6 +293,23 @@ func visibleRecord(body string) string {
 	return record
 }
 
+var (
+	eventReferenceRE = regexp.MustCompile(`(?i)(?:[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]*#[0-9]+|gh-[0-9]+|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+`)
+	eventWordRE      = regexp.MustCompile(`\p{L}{3,}`)
+)
+
+// namesAnEvent reports whether text still says something in words once every
+// link, tracked item and repository name is taken out of it. An outcome wait
+// is for an event, which only words can name; whatever else the text holds --
+// a bare item, an item inside a link label, an encoded one -- is a reference,
+// and waiting on a reference is an upstream blocker. Asking what remains,
+// rather than listing the shapes a reference can take, leaves no spelling of
+// one to be found later (#3426).
+func namesAnEvent(text string) bool {
+	text = urlRE.ReplaceAllString(html.UnescapeString(text), " ")
+	return eventWordRE.MatchString(eventReferenceRE.ReplaceAllString(text, " "))
+}
+
 // classify separates blocker kind (who can clear it) from the result's outage
 // cause (why a provider stopped serving). Delimiter cardinality is checked before
 // reading the kind, so an extra segment cannot turn authority into upstream.
@@ -321,12 +341,20 @@ func classify(line string, today time.Time, maxAge int64) (string, bool) {
 		}
 	} else {
 		kind = head[1]
-		if kind != "upstream" && kind != "authority" {
+		if kind != "upstream" && kind != "authority" && kind != "outcome" {
 			return "MALFORMED", false
 		}
 	}
 	identifier := strings.TrimSpace(urlRE.ReplaceAllString(head[0], ""))
-	if !legacy && kind == "authority" {
+	if kind == "outcome" {
+		// An outcome wait names an event, which only words can do: a bare
+		// reference is a tracked item, and waiting on one is an upstream blocker.
+		// Nobody can be asked for an event, so an ask record contradicts the kind
+		// (#3426).
+		if !namesAnEvent(head[0]) || strings.Contains(parts[1], "| asked ") {
+			return "MALFORMED", false
+		}
+	} else if !legacy && kind == "authority" {
 		// An explicit authority kind makes plain descriptive text unambiguous.
 		if !identifierRE.MatchString(identifier) && strings.IndexFunc(identifier, unicode.IsLetter) < 0 {
 			return "MALFORMED", false
@@ -346,7 +374,7 @@ func classify(line string, today time.Time, maxAge int64) (string, bool) {
 	if strings.TrimSpace(result) == "" {
 		return "MALFORMED", false
 	}
-	if kind == "upstream" {
+	if kind == "upstream" || kind == "outcome" {
 		return "CONFORMS", legacy
 	}
 	ask := askRE.FindStringSubmatch(line)

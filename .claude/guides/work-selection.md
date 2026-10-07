@@ -138,7 +138,8 @@ governs the issue work that follows.) Two rules enforce that:
    before closing the Spike. Among open issues prefer the oldest.
    **"Actionable" is deliberately narrow — skip an older issue ONLY when one of these is true and you can
    *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
-   external dependency (a specific upstream PR/release you can cite) — see *External-blocker
+   external dependency (a specific upstream PR/release you can cite), or its work is delivered and
+   it waits on a **named event** recorded as an `outcome` blocker — see *External-blocker
    verification* below; or (c) it is too under-specified to even begin; or (d) a delivered experiment is
    awaiting its **named, future measurement date**, recorded in the issue body as a
    `**Measure on:** YYYY-MM-DD` line (moved in place when the date moves) and not yet reached.
@@ -246,8 +247,8 @@ governs the issue work that follows.) Two rules enforce that:
    `last-verified` result. A missing, malformed, or merely prose "waiting on upstream" record is
    under-specified for (b) — repair the line and verify it (or unblock) rather than skipping.
 
-   🔴 **`<blocker-kind>` is exactly `upstream` or `authority`, and the difference decides whether
-   re-verification is sufficient or futile.** This is separate from the provider-outage **cause
+   🔴 **`<blocker-kind>` is exactly `upstream`, `authority` or `outcome`, and the difference decides
+   whether re-verification is sufficient or futile.** This is separate from the provider-outage **cause
    class** (`quota/billing`, `credentials/auth`, `runtime/config`, `unknown`). For an outage, put
    `outage-cause=<cause-class>; <verification evidence>` in `<result>`; never use that class in
    the blocker-kind field. An explicit `authority` identifier may describe the account action,
@@ -261,6 +262,24 @@ governs the issue work that follows.) Two rules enforce that:
    auto-generated plan, or no comments at all. The oldest had been open **54 days**. Every one of
    their blocker lines was *conforming*; the check reported a clean sweep over them, because
    conformance was never the same thing as progress.
+
+   🔴 **`outcome` is delivered work waiting on an event, and it is skipped under (b) like any other
+   recorded blocker (monorepo#3426).** Use it when the change has merged, or the PR is finished, and
+   what remains is an event nobody performs on request: a release being published, the next
+   production occurrence of the fault, a rebuild that happens on its own schedule. Write the event
+   in words as the identifier, and in `<result>` what the live check found and where to look next
+   time, for example `**Blocker:** the next weekly credential rotation in production | outcome |
+   last-verified 2026-10-07: last rotation predates the fix`. Keep the `blocked` label on, and
+   re-check the event before each skip exactly as for `upstream`; the record goes `STALE` on the
+   same bound. When the event has happened, verifying the outcome **is the work**: do it, then
+   close the issue or reopen the repair. An `outcome` record carries no ask, because nobody can be
+   asked for an event, and the check reads one that carries an ask as `MALFORMED`. It is never a
+   way to set work aside: a tracked item that must move first is `upstream`, an act only the
+   maintainer can perform is `authority`, and anything this lane can still do (trigger the
+   event through access it holds, write the missing check, run the measurement) is not a blocker
+   at all. Before this kind existed such an issue carried no label, so every run reached it as
+   the oldest actionable item of its type and re-derived the same wait: measured 2026-09-20, 7 of
+   the 8 issues waiting this way were unlabelled, and one had gathered 18 comments doing so.
 
    🔴 **`authority` means an act this lane CANNOT perform, never one it would rather not decide.**
    Class a blocker `authority` only after naming the exact act and establishing that the access

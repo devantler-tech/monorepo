@@ -1253,3 +1253,74 @@ func TestPullRequestReadCoversEveryOpenPullRequest(t *testing.T) {
 		t.Errorf("endpoint filters pull requests: %s", endpoint)
 	}
 }
+
+// Delivered work that waits on an event had no record of its own, so every run
+// re-derived "merged, come back after the next production event" (#3426). An
+// outcome record names that event in words. It is not an upstream blocker (a
+// bare tracked item is refused: waiting on one is upstream) and not an
+// authority blocker (nobody can be asked for an event, so it needs no ask and
+// may not carry one).
+func TestOutcomeGrammar(t *testing.T) {
+	today, err := civilDate("2026-09-05")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, record, want string }{
+		{"an event in words, with no ask", "the next weekly credential rotation in production | outcome | last-verified 2026-09-01: not rotated yet", "CONFORMS"},
+		{"an event beside the item that delivers it", "a release newer than v1.2.3 carrying owner/repo#7 | outcome | last-verified 2026-09-01: tag exists, release not published", "CONFORMS"},
+		{"a bare item is an upstream blocker", "owner/repo#7 | outcome | last-verified 2026-09-01: open", "MALFORMED"},
+		{"a bare number is an upstream blocker", "#7 | outcome | last-verified 2026-09-01: open", "MALFORMED"},
+		{"a bare repository names no event", "owner/repo | outcome | last-verified 2026-09-01: open", "MALFORMED"},
+		{"no words at all", "2026-10-08 | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
+		{"a URL alone names no event", "https://example.com/release | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
+		{"a URL beside a bare item still names no event", "https://example.com/release owner/repo#7 | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
+		{"an encoded bare item still names no event", "owner/repo&#35;7 | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
+		{"a link whose label is only a tracked item", "[owner/repo#7](https://example.com/issue) | outcome | last-verified 2026-09-01: open", "MALFORMED"},
+		{"two tracked items and no words", "owner/repo#7, other/repo#8 | outcome | last-verified 2026-09-01: open", "MALFORMED"},
+		{"a tracked item in brackets", "(owner/repo#7) | outcome | last-verified 2026-09-01: open", "MALFORMED"},
+		{"a short reference", "GH-7 | outcome | last-verified 2026-09-01: open", "MALFORMED"},
+		{"a version alone names no event", "v1.14.1 | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
+		{"an event named in another script", "næste ugentlige rotation | outcome | last-verified 2026-09-01: not yet", "CONFORMS"},
+		{"an empty identifier", " | outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
+		{"an ask contradicts the kind", "the next release | outcome | last-verified 2026-09-01: not yet | asked slack 2026-09-01", "MALFORMED"},
+		{"an ask in a channel that is not one still contradicts it", "the next release | outcome | last-verified 2026-09-01: not yet | asked issue 2026-09-01", "MALFORMED"},
+		{"a second kind", "the next release | outcome | upstream | last-verified 2026-09-01: not yet", "MALFORMED"},
+		{"a future check date", "the next release | outcome | last-verified 2026-09-06: not yet", "MALFORMED"},
+		{"an empty result", "the next release | outcome | last-verified 2026-09-01: ", "MALFORMED"},
+		{"the kind is case sensitive", "the next release | Outcome | last-verified 2026-09-01: not yet", "MALFORMED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, legacy := classify("**Blocker:** "+tc.record, today, 14)
+			if got != tc.want || legacy {
+				t.Fatalf("got %s (legacy=%t), want %s", got, legacy, tc.want)
+			}
+		})
+	}
+}
+
+// An outcome wait is skipped only while somebody keeps checking for the event:
+// it goes STALE on the same bound as every other record, never asks the
+// maintainer, and needs the blocked label like any declared blocker.
+func TestOutcomeRecordIsCheckedLikeAnyOtherRecord(t *testing.T) {
+	line := "**Blocker:** the next weekly credential rotation | outcome | last-verified 2026-09-01: not rotated yet"
+	labelled := `[{"repo":"r","number":1,"labels":[{"name":"blocked"}],"body":"` + line + `"}]`
+	check := func(input string, args ...string) (int, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := run(append([]string{"--input", "-"}, args...), strings.NewReader(input), &stdout, &stderr)
+		return code, stdout.String() + stderr.String()
+	}
+	if code, out := check(labelled, "--today", "2026-09-05"); code != 0 || !strings.Contains(out, "CONFORMS") {
+		t.Fatalf("a fresh outcome record: code=%d out:\n%s", code, out)
+	}
+	if code, out := check(labelled, "--today", "2026-09-09"); code != 1 || !strings.Contains(out, "STALE") {
+		t.Fatalf("an outcome record nobody re-checked for 8 days: code=%d out:\n%s", code, out)
+	}
+	if code, out := check(labelled, "--today", "2026-09-05", "--ask-digest"); code != 0 || !strings.Contains(out, "no declared authority blocker has a missing or stale ask record") {
+		t.Fatalf("an outcome record must never reach the ask digest: code=%d out:\n%s", code, out)
+	}
+	unlabelled := `[{"repo":"r","number":1,"labels":[],"type":{"name":"Bug"},"body":"` + line + `"}]`
+	if code, out := check(unlabelled, "--today", "2026-09-05"); code != 1 || !strings.Contains(out, "UNLABELLED") {
+		t.Fatalf("an outcome record without the blocked label: code=%d out:\n%s", code, out)
+	}
+}

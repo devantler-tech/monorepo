@@ -23,14 +23,21 @@ const composeHelp = `Compose a blocker record in the one shape the guard accepts
   compose --target <owner/repo#N> --kind upstream  --blocker <owner/repo#N> --result <text>
   compose --target <owner/repo#N> --kind authority --blocker <what only the maintainer can do>
           --result <text> --asked <pr|slack|session> <YYYY-MM-DD>
+  compose --target <owner/repo#N> --kind outcome   --blocker <the event waited on, in words> --result <text>
 
   --target    the pull request or issue being parked.
-  --kind      upstream (another tracked item must move first) or authority (only
-              the maintainer can clear it). No other word is a kind.
+  --kind      upstream (another tracked item must move first), authority (only
+              the maintainer can clear it) or outcome (the work is delivered and
+              waits on an event nobody performs on request: a release being
+              published, the next production occurrence). No other word is a
+              kind. Work an agent can still do is never an outcome.
   --blocker   upstream: exactly one tracked item, written owner/repo#N, and never
               the target itself. Review, CI and evaluation of the target are its
               own readiness work, not a blocker, and have no item to name.
               authority: the action in plain words, on one line.
+              outcome: the event in plain words, on one line. An item that
+              must move first is an upstream blocker, so a bare reference is
+              refused; a reference may appear beside the words.
   --result    what the live check found today, on one line.
   --asked     authority only, and required: where and when the maintainer was
               asked. Ask first; a record without a fresh ask is refused.
@@ -182,8 +189,15 @@ func composeRecord(c composition, maxAge, verifyMaxAge int64) (line, body string
 		if _, err := civilDate(c.askDate); err != nil {
 			return "", "", errors.New("--asked needs a real YYYY-MM-DD calendar date")
 		}
+	case "outcome":
+		if !oneLine(c.blocker) || !namesAnEvent(c.blocker) {
+			return "", "", errors.New("an outcome --blocker must say on one line, in words, which event the delivered work waits on; a tracked item that must move first is --kind upstream")
+		}
+		if c.asked {
+			return "", "", errors.New("--asked records a maintainer ask and belongs to --kind authority only")
+		}
 	default:
-		return "", "", errors.New("--kind must be exactly upstream or authority")
+		return "", "", errors.New("--kind must be exactly upstream, authority or outcome")
 	}
 	line = fmt.Sprintf("**Blocker:** %s | %s | last-verified %s: %s", c.blocker, c.kind, c.today.Format("2006-01-02"), c.result)
 	if c.kind == "authority" {

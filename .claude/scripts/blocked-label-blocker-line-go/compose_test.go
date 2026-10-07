@@ -21,6 +21,7 @@ func compose(args ...string) (int, string, string) {
 
 var (
 	upstreamArgs  = []string{"--target", "o/r#5", "--kind", "upstream", "--blocker", "o/other#7", "--result", "still open"}
+	outcomeArgs   = []string{"--target", "o/r#5", "--kind", "outcome", "--blocker", "a release newer than v1.2.3 carrying o/other#7", "--result", "tag exists, release not published"}
 	authorityArgs = []string{"--target", "o/r#5", "--kind", "authority", "--blocker", "rotate the registry token", "--result", "token still expired", "--asked", "slack", "2026-10-05"}
 )
 
@@ -40,7 +41,7 @@ func replaced(args []string, flag, value string) []string {
 // The composed comment must be the one the sweep accepts: fed back through the
 // --input seam as a parked pull request's only comment, it reports no finding.
 func TestComposedRecordIsAcceptedByTheSweep(t *testing.T) {
-	for name, args := range map[string][]string{"upstream": upstreamArgs, "authority": authorityArgs} {
+	for name, args := range map[string][]string{"upstream": upstreamArgs, "authority": authorityArgs, "outcome": outcomeArgs} {
 		t.Run(name, func(t *testing.T) {
 			code, body, stderr := compose(args...)
 			if code != 0 || stderr != "" {
@@ -82,8 +83,15 @@ func TestComposeRefusals(t *testing.T) {
 		{"an item with trailing prose", replaced(upstreamArgs, "--blocker", "o/other#7 and review"), "exactly one tracked item"},
 		{"a bare number", replaced(upstreamArgs, "--blocker", "#7"), "exactly one tracked item"},
 		{"the target as its own blocker", replaced(upstreamArgs, "--blocker", "O/R#5"), "cannot be its own blocker"},
-		{"a kind that does not exist", replaced(upstreamArgs, "--kind", "external"), "exactly upstream or authority"},
-		{"a kind with a second word", replaced(upstreamArgs, "--kind", "external service"), "exactly upstream or authority"},
+		{"a kind that does not exist", replaced(upstreamArgs, "--kind", "external"), "exactly upstream, authority or outcome"},
+		{"a kind with a second word", replaced(upstreamArgs, "--kind", "external service"), "exactly upstream, authority or outcome"},
+		{"an outcome that is a tracked item", replaced(outcomeArgs, "--blocker", "o/other#7"), "is --kind upstream"},
+		{"an outcome that is a link to a tracked item", replaced(outcomeArgs, "--blocker", "[o/other#7](https://example.com/issue)"), "is --kind upstream"},
+		{"an outcome that is two tracked items", replaced(outcomeArgs, "--blocker", "o/other#7, o/other#8"), "is --kind upstream"},
+		{"an outcome with no words", replaced(outcomeArgs, "--blocker", "2026-10-08"), "which event the delivered work waits on"},
+		{"an outcome on two lines", replaced(outcomeArgs, "--blocker", "the next release\n**Blocker:** x/y#1"), "which event the delivered work waits on"},
+		{"an outcome carrying a delimiter", replaced(outcomeArgs, "--blocker", "the next release | upstream"), "which event the delivered work waits on"},
+		{"an ask on an outcome record", append(append([]string{}, outcomeArgs...), "--asked", "slack", "2026-10-05"), "belongs to --kind authority"},
 		{"a delimiter in the result", replaced(upstreamArgs, "--result", "open | authority"), "--result must be one non-empty line"},
 		{"a second line in the result", replaced(upstreamArgs, "--result", "open\n**Blocker:** x/y#1"), "--result must be one non-empty line"},
 		{"a hidden comment in the result", replaced(upstreamArgs, "--result", "open <!-- x -->"), "--result must be one non-empty line"},
@@ -128,6 +136,21 @@ func TestComposeRefusals(t *testing.T) {
 
 // The help is the only definition a caller reads, so it names the same kinds
 // and ask channels the composer enforces, and the sweep's help points at it.
+// The help is the only definition of the kinds a caller sees: it must offer
+// outcome and say what it is not, or work that can still be done gets parked.
+func TestHelpDefinesTheOutcomeKind(t *testing.T) {
+	for name, text := range map[string]string{"compose": composeHelp, "park": parkHelp, "check": help} {
+		if !strings.Contains(text, "outcome") {
+			t.Errorf("%s help does not mention the outcome kind", name)
+		}
+	}
+	for _, want := range []string{"--kind outcome   --blocker <the event waited on, in words>", "Work an agent can still do is never an outcome."} {
+		if !strings.Contains(composeHelp, want) {
+			t.Errorf("compose help lacks %q", want)
+		}
+	}
+}
+
 func TestComposeHelp(t *testing.T) {
 	code, out, _ := compose("--help")
 	if code != 0 || out != composeHelp {
