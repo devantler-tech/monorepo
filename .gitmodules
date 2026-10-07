@@ -90,3 +90,7 @@
 	path = applications/aws
 	url = git@github.com:devantler-tech/aws.git
 	branch = main
+[submodule "applications/business-site"]
+	path = applications/business-site
+	url = https://github.com/devantler-tech/business-site.git
+	branch = main

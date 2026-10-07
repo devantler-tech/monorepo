@@ -4,56 +4,42 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "docs/**"
+      - "applications/business-site"
+      - ".github/workflows/publish-pages.yaml"
+      - ".claude/scripts/business-site-revision.sh"
   workflow_dispatch:
 
 concurrency:
   group: "pages"
   cancel-in-progress: true
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  build:
+  revision:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      revision: ${{ steps.pin.outputs.revision }}
     steps:
-      - name: Checkout
+      - name: Checkout reviewed portfolio
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: docs/package-lock.json
-      - name: Setup Pages
-        id: pages
-        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-      - name: Install dependencies
-        working-directory: docs
-        run: npm ci
-      - name: Build with Astro
-        working-directory: docs
-        run: npm run build
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: docs/dist
+      - name: Resolve committed website source
+        id: pin
+        run: |
+          revision=$(bash .claude/scripts/business-site-revision.sh)
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
 
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+  publish:
+    needs: revision
+    # Replace with the reviewed source merge commit before this adoption is ready.
+    uses: devantler-tech/business-site/.github/workflows/publish-pages.yaml@4c28849a326bc6ba3a6bf50f034b2bf96e7a18d7
+    with:
+      source-revision: ${{ needs.revision.outputs.revision }}
     permissions:
+      contents: read
       pages: write
       id-token: write
-    needs: build
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

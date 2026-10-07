@@ -10,14 +10,26 @@ trap 'rm -f "${contract}"' EXIT
   { echo "product value contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
 run_loop="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 engineering="${repo_root}/.claude/skills/product-engineering/SKILL.md"
-site_card="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
-site_readme="${repo_root}/docs/README.md"
+site_card="${repo_root}/.claude/skills/products/business-site/SKILL.md"
+monorepo_card="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
+site_readme="${repo_root}/applications/business-site/docs/README.md"
 workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
   echo "product value contract: FAIL — $*" >&2
   exit 1
 }
+
+# The public catalogue and maintenance instructions must agree on the shared
+# automation owner; Actions remains a real legacy product, not a .github alias.
+grep -Fq '| Shared automation and organization defaults | `devantler-tech/.github` |' "${repo_root}/AGENTS.md" ||
+  fail "portfolio map does not name the maintained shared automation owner"
+grep -Fq '| Legacy GitHub Actions | `devantler-tech/actions` |' "${repo_root}/AGENTS.md" ||
+  fail "portfolio map misclassifies the legacy Actions repository"
+grep -F '| Repo automation |' "${repo_root}/AGENTS.md" | grep -Fq '`devantler-tech/.github`' ||
+  fail "stack map routes new automation to the legacy repository"
+grep -Fq 'target `.github` for new shared-CI work' "${repo_root}/.claude/skills/products/github-actions/SKILL.md" ||
+  fail "automation maintenance card routes new work to the legacy repository"
 
 grep -Fq 'Build the right thing — value before output' "${contract}" ||
   fail "canonical contract does not put user value before output"
@@ -129,6 +141,8 @@ grep -Fq 'RSS inclusion, social/OG presentation' "${site_readme}" ||
 
 grep -Fq -- "- '.github/workflows/ci.yaml'" "${workflow}" ||
   fail "product value filter does not self-test workflow-only changes"
+grep -Fq -- "- '.claude/skills/products/github-actions/SKILL.md'" "${workflow}" ||
+  fail "product value filter does not self-test shared automation owner guidance"
 for adr_filter in "'**/[Aa][Dd][Rr]/**'" "'**/[Aa][Dd][Rr][Ss]/**'"; do
   grep -Fq -- "- ${adr_filter}" "${workflow}" ||
     fail "product value filter does not run for ${adr_filter} path changes"
@@ -179,7 +193,7 @@ monorepo_labels_are_live() {
   done < <(grep -oE "\`[^\`]+\`" <<<"${candidate_line}" | tr -d '`')
 }
 
-labels_line="$(grep -E '^\- \*\*Labels\*\*' "${site_card}" || true)"
+labels_line="$(grep -E '^\- \*\*Labels\*\*' "${monorepo_card}" || true)"
 [[ -n "${labels_line}" ]] || fail "site card missing Labels allowlist line"
 grep -Fq "\`github_actions\`" <<<"${labels_line}" ||
   fail "site card Labels allowlist missing live github_actions (#2260)"

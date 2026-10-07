@@ -270,7 +270,7 @@ Targeted, **behaviour-preserving** improvement, backed by tests.
 Treat docs as part of the product — keep them **in sync** with what ships and **improve** what exists.
 - **Sync (definition of done).** A feature/fix that changes behaviour, flags, commands, config, or UX
   updates the affected docs **in the same PR**: the CLI `--help`/generated reference, README, the
-  repo's `AGENTS.md`, and the relevant devantler.tech `docs/` page. Re-run the doc generator (e.g.
+  repo's `AGENTS.md`, and the relevant `business-site/docs/` page. Re-run the doc generator (e.g.
   KSail's command reference); **never hand-edit generated docs**. If a change already merged without
   its docs, **backfill** them in a focused `docs:` PR.
 - **Improve (on the docs cadence).** Pick an under-served area and make it genuinely better: fix
@@ -304,8 +304,8 @@ Treat docs as part of the product — keep them **in sync** with what ships and 
   - Adding explanation where there was none may make a page *longer*; that is an acceptable trade
     when it raises usefulness per word. Say so plainly in the PR rather than implying it shrank.
 - **Scope.** Spans **every product's own docs** (README, `AGENTS.md`, usage/reference) and the central
-  **devantler.tech site** (`docs/`). The site's recurring slice (Site QA, Content Sync, Content Review)
-  lives in the [monorepo card](../products/monorepo/SKILL.md); this section is the cross-product
+  **devantler.tech site** (`applications/business-site/docs/`). Its recurring slice (Site QA, Content Sync, Content Review)
+  lives in the [business-site card](../products/business-site/SKILL.md); this section is the cross-product
   discipline that also covers per-product docs. `docs:`-titled PRs are first-class advance work.
 
 ### Blog stewardship — communication is a product
@@ -461,9 +461,9 @@ doing, held to the contract's **two-sided test** (*Security hardening without a 
   enhancements; never spin up real clusters >1×/day.
 - **actions / reusable-workflows**: load-bearing for every repo — advance = new composite actions or
   workflow capabilities, **additive & backward-compatible**, with their own tests; never break consumers.
-- **monorepo + site**: advance = docs/site features, accessibility, performance (bundle/Lighthouse),
+- **business-site**: advance = docs/site features, accessibility, performance (bundle/Lighthouse),
   content quality, evidence-led discovery/adoption, and low-priority blog stewardship (see the
-  monorepo card's Site QA / Content Review / Blog Stewardship).
+  business-site card's Site QA / Content Review / Blog Stewardship).
 - **homebrew-tap**: Casks are machine-generated (`# DO NOT EDIT` — GoReleaser for ksail, World at
   Ruin's CD for its cask) — advance is limited to CI/tap hygiene; never chase version/sha bumps.
 - **applications** (private, SvelteKit): conservative, extra discretion; coverage/quality/perf within
