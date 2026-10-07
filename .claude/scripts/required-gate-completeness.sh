@@ -24,7 +24,10 @@
 #   code_quality and <state> is PASS | PENDING | FAILED | MISSING | UNVERIFIED.
 #   A required check with no run is PENDING while a workflow run or an Actions job at the head is
 #   unfinished, and MISSING once all have finished: a job publishes its check-run only when it
-#   starts (monorepo#3506). Another app's unfinished check-run does not delay MISSING.
+#   starts (monorepo#3506). Another app's unfinished check-run does not delay MISSING, and an
+#   Actions run does not delay a check bound to another app.
+#   A required check bound to an app is judged by that app's check-runs alone. A commit status
+#   names no app, so one beside no such check-run reads UNVERIFIED, never PASS.
 #   An active `code_quality` rule is always UNVERIFIED: no readable surface reports its analysis
 #   for a head. Its line is `GATE code_quality setup=<state|unreadable> UNVERIFIED`, and the setup
 #   state is the lead when a merge is refused.
@@ -35,7 +38,7 @@
 #   The survey form then prints one LAST line, the value the survey copies into its check field:
 #     required=complete
 #     required=missing:<gate>[,<gate>…][+failing:<gate>…][+pending:<gate>…]
-#     required=unverified:<kind>[,<kind>…]   every readable gate passed; these have no readable surface
+#     required=unverified:<gate>[,<gate>…]   every readable gate passed; these have no readable surface
 #     required=unknown:<reason>
 #   It always ends with that line: an abort nothing above describes prints `required=unknown:aborted`.
 #
@@ -171,6 +174,8 @@ gates="$(jq -n -r \
   --arg cq "${cq_state}" '
   def ok: . == "success" or . == "neutral" or . == "skipped";
   def rank: if . == "PASS" then 3 elif . == "PENDING" then 2 elif . == "FAILED" then 1 else 0 end;
+  # The GitHub Actions app, whose jobs publish their check-runs.
+  def actions_app: 15368;
   [$c[].check_runs[]] as $runs
   | [$s[][]] as $statuses
   | [$w[].workflow_runs[]] as $wf
@@ -188,13 +193,21 @@ gates="$(jq -n -r \
           | if . == null then "MISSING"
             elif .state == "success" then "PASS"
             elif .state == "pending" then "PENDING" else "FAILED" end) as $st
-       | (if ($cr | rank) >= ($st | rank) then $cr else $st end) as $seen
+       | (if $g.app == null then (if ($cr | rank) >= ($st | rank) then $cr else $st end)
+          # A gate bound to an app is decided by that app alone. A commit status names no app, so
+          # it can neither pass nor fail the gate: beside no check-run from the app it leaves the
+          # gate UNVERIFIED, never PASS.
+          elif $cr != "MISSING" then $cr
+          elif $st != "MISSING" then "UNVERIFIED"
+          else "MISSING" end) as $seen
        # A job publishes its check-run only when it starts, so a job that waits on other jobs has
        # none while they run. An absent check is therefore PENDING, not MISSING, until every
        # workflow run and every Actions job at this head has finished. Both states block, but only
        # MISSING means the check will never report. Another app with a check-run left unfinished
-       # says nothing about an Actions job, so it does not turn MISSING into PENDING.
-       | if $seen == "MISSING" and $unfinished then "PENDING" else $seen end
+       # says nothing about an Actions job, so it does not turn MISSING into PENDING. Nor does an
+       # Actions run delay a gate bound to another app, which no Actions job can publish.
+       | if $seen == "MISSING" and $unfinished and ($g.app == null or $g.app == actions_app)
+         then "PENDING" else $seen end
      elif $g.kind == "workflow" then
        # A required workflow runs under /actions/required_workflows/; an ordinary workflow at the same
        # path, including one the PR itself adds, never satisfies it.
@@ -233,8 +246,17 @@ if [ $((missing + failed + pending)) -gt 0 ]; then
 fi
 if [ "${unverified}" -ne 0 ]; then
   echo "UNKNOWN unverified=${unverified}"
-  # An unverifiable gate is named by its kind: its GATE line carries a setup state, not a name.
-  survey_line "unverified:$(sed -n 's/^GATE \([a-z_]*\) .* UNVERIFIED$/\1/p' <<<"${gates}" | sort -u | paste -s -d , -)"
+  # A code_quality gate is named by its kind, because its GATE line carries a setup state where
+  # the others carry a name.
+  survey_line "unverified:$(awk '
+    / UNVERIFIED$/ {
+      name = $0
+      if ($2 == "code_quality") name = "code_quality"
+      else { sub(/^GATE [a-z_]* /, "", name); sub(/ UNVERIFIED$/, "", name) }
+      if (name == "") name = "(unnamed)"
+      if (!seen[name]++) { n++; print name }
+    }
+    END { if (!n) print "(unnamed)" }' <<<"${gates}" | paste -s -d , -)"
   exit 2
 fi
 echo "COMPLETE required=$(jq 'length' <<<"${required}")"

@@ -139,6 +139,28 @@ fixture absent-while-other-app-queued "${rules_build_only}" "${branch_off}" \
 fixture absent-while-appless-check-queued "${rules_build_only}" "${branch_off}" \
   '{"total_count":1,"check_runs":[{"id":11,"name":"Some App","status":"queued","conclusion":null}]}' '[]' \
   '{"total_count":0,"workflow_runs":[]}'
+# A check bound to another app cannot be published by an Actions job, so an unfinished Actions run
+# says nothing about it: absent is MISSING at once. Bound to Actions itself, it still waits.
+rules_build_other_app='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"Build","integration_id":999}]}}]'
+rules_build_actions_app='[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"Build","integration_id":15368}]}}]'
+fixture other-app-absent-while-run-unfinished "${rules_build_other_app}" "${branch_off}" \
+  '{"total_count":0,"check_runs":[]}' '[]' "{\"total_count\":1,\"workflow_runs\":[${running_ci}]}"
+fixture actions-app-absent-while-run-unfinished "${rules_build_actions_app}" "${branch_off}" \
+  '{"total_count":0,"check_runs":[]}' '[]' "{\"total_count\":1,\"workflow_runs\":[${running_ci}]}"
+# A commit status names no app, so it cannot stand in for the check-run of the app a gate is bound
+# to. Passing, it used to read the gate PASS while the forge still held it missing.
+fixture app-bound-status-only "${rules_build_actions_app}" "${branch_off}" \
+  '{"total_count":0,"check_runs":[]}' '[{"id":5,"context":"Build","state":"success"}]' \
+  '{"total_count":0,"workflow_runs":[]}'
+fixture app-bound-failed-status-only "${rules_build_actions_app}" "${branch_off}" \
+  '{"total_count":0,"check_runs":[]}' '[{"id":5,"context":"Build","state":"failure"}]' \
+  '{"total_count":0,"workflow_runs":[]}'
+fixture app-bound-check-run-decides "${rules_build_actions_app}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[${build_ok}]}" '[{"id":5,"context":"Build","state":"failure"}]' \
+  '{"total_count":0,"workflow_runs":[]}'
+fixture app-bound-failed-check-run-decides "${rules_build_actions_app}" "${branch_off}" \
+  '{"total_count":1,"check_runs":[{"id":10,"name":"Build","status":"completed","conclusion":"failure","app":{"id":15368}}]}' \
+  '[{"id":5,"context":"Build","state":"success"}]' '{"total_count":0,"workflow_runs":[]}'
 fixture absent-after-runs-finished "${rules_build_only}" "${branch_off}" \
   '{"total_count":1,"check_runs":[{"id":11,"name":"Lint","status":"completed","conclusion":"success","app":{"id":15368}}]}' '[]' \
   "{\"total_count\":1,\"workflow_runs\":[${finished_ci}]}"
@@ -219,6 +241,20 @@ expect "another app's unfinished check-run does not delay MISSING" "${tool}" abs
   "GATE check Build MISSING"
 expect "a check-run with no app does not delay MISSING" "${tool}" absent-while-appless-check-queued 1 \
   "GATE check Build MISSING"
+expect "an Actions run does not delay a check bound to another app" "${tool}" other-app-absent-while-run-unfinished 1 \
+  "GATE check Build MISSING"
+expect "an Actions run still delays a check bound to Actions" "${tool}" actions-app-absent-while-run-unfinished 1 \
+  "GATE check Build PENDING"
+expect "a passing status does not pass a check bound to an app" "${tool}" app-bound-status-only 2 \
+  "GATE check Build UNVERIFIED"
+expect "a status beside no app check-run never reads complete" "${tool}" app-bound-status-only 2 \
+  "UNKNOWN unverified=1"
+expect "a failing status does not fail a check bound to an app either" "${tool}" app-bound-failed-status-only 2 \
+  "GATE check Build UNVERIFIED"
+expect "the bound app's passing check-run decides beside a failing status" "${tool}" app-bound-check-run-decides 0 \
+  "COMPLETE required=1"
+expect "the bound app's failed check-run decides beside a passing status" "${tool}" app-bound-failed-check-run-decides 1 \
+  "GATE check Build FAILED"
 expect "a setup read that is not JSON is unreadable, not an abort" "${tool}" code-quality-not-json 2 \
   "GATE code_quality setup=unreadable UNVERIFIED"
 expect "a setup read that is not an object is unreadable" "${tool}" code-quality-not-object 2 \
@@ -337,6 +373,10 @@ expect_survey "survey: another app's unfinished check-run leaves the gate missin
   absent-while-other-app-queued "${pr_json}" 1 "required=missing:Build"
 expect_survey "survey: a setup read that is not JSON still ends in the survey line" "${tool}" \
   code-quality-not-json "${pr_json}" 2 "required=unverified:code_quality"
+expect_survey "survey: an app-bound check with only a status is named unverified, never complete" "${tool}" \
+  app-bound-status-only "${pr_json}" 2 "required=unverified:Build"
+expect_survey "survey: a check bound to another app reads missing while Actions runs" "${tool}" \
+  other-app-absent-while-run-unfinished "${pr_json}" 1 "required=missing:Build"
 expect_survey "survey: a gate required twice is named once" "${tool}" same-name-twice "${pr_json}" 1 \
   "required=missing:Build"
 expect_survey "survey: an empty gate name never leaves the list empty" "${tool}" empty-name "${pr_json}" 1 \
@@ -429,7 +469,9 @@ no_unverified="$(ablate no-unverified 's/if \[ "\$\{unverified\}" -ne 0 \]; then
 no_org_pin="$(ablate no-org-pin 's/github\\\.com\/devantler-tech\/\(/github\\.com\/[A-Za-z0-9_.-]+\/(/')"
 no_single="$(ablate no-single-document 's/length == 1 and //')"
 no_mix_guard="$(ablate no-mix-guard 's/ && \[ -z "\$\{repo\}\$\{base\}\$\{head\}" \]//')"
-no_unfinished="$(ablate no-unfinished 's/if \$seen == "MISSING" and \$unfinished then "PENDING" else \$seen end/\$seen/')"
+no_unfinished="$(ablate no-unfinished 's/if \$seen == "MISSING" and \$unfinished and \(\$g\.app == null or \$g\.app == actions_app\)\n         then "PENDING" else \$seen end/\$seen/')"
+any_gate_waits="$(ablate any-gate-waits 's/ and \(\$g\.app == null or \$g\.app == actions_app\)\n         then "PENDING"/\n         then "PENDING"/')"
+status_passes_bound="$(ablate status-passes-bound 's/if \$g\.app == null then \(if \(\$cr \| rank\) >= \(\$st \| rank\) then \$cr else \$st end\)/if true then (if (\$cr | rank) >= (\$st | rank) then \$cr else \$st end)/')"
 only_workflow_runs="$(ablate only-workflow-runs 's/\n     or any\(\$runs\[\]; \.status != "completed" and \(\.app\.slug \/\/ ""\) == "github-actions"\)//')"
 any_app="$(ablate any-app 's/ and \(\.app\.slug \/\/ ""\) == "github-actions"//')"
 no_control_strip="$(ablate no-control-strip 's/ \| LC_ALL=C tr -d \x27\[:cntrl:\]\x27//')"
@@ -481,6 +523,10 @@ expect_ablation_line "without the check-run arm a queued Actions job is not seen
   "${only_workflow_runs}" absent-while-job-queued "GATE check Build MISSING"
 expect_ablation_line "without the Actions test another app's check-run delays MISSING" \
   "${any_app}" absent-while-other-app-queued "GATE check Build PENDING"
+expect_ablation_line "without the app test an Actions run delays a check bound to another app" \
+  "${any_gate_waits}" other-app-absent-while-run-unfinished "GATE check Build PENDING"
+expect_ablation_line "without the app-bound rule a passing status passes the gate" \
+  "${status_passes_bound}" app-bound-status-only "COMPLETE required=1"
 
 expect_survey_ablation() { # <label> <ablated tool> <fixture> <payload> <last line the ablated tool must print> [extra args…]
   local label="$1" t="$2" fx="$3" payload="$4" want="$5" got last
