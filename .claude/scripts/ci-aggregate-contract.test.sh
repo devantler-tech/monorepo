@@ -4,7 +4,15 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 workflow="$root/.github/workflows/ci-aggregate-contract.yaml"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then exit 1; fi
+}
+trap on_exit EXIT
 fail() { echo "ci-aggregate-contract test: $*" >&2; exit 1; }
 
 [[ -f "$workflow" ]] || fail "independent aggregate workflow is missing"
@@ -61,4 +69,5 @@ expect_failure "malformed candidate YAML"
   fail "candidate access must be read-only"
 [[ "$(yq -r '[.jobs.validate.steps[] | select(has("uses"))] | length' "$workflow")" == 0 ]] ||
   fail "the control must not check out or execute candidate actions"
+completed=1
 echo "ci-aggregate-contract: OK"

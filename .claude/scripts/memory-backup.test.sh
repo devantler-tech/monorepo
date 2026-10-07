@@ -12,7 +12,15 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 wrapper="$script_dir/memory-backup.sh"
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then exit 1; fi
+}
+trap on_exit EXIT
 tool="$tmp/memory-backup"
 if ! go -C "$script_dir/memory-backup-go" build -o "$tool" .; then
   echo "FAIL — could not build memory-backup Go helper" >&2
@@ -336,6 +344,7 @@ else
   fi
 fi
 
+completed=1
 if [[ "$failures" -eq 0 ]]; then
   printf '\nAll memory-backup self-tests passed.\n'
   exit 0

@@ -5,7 +5,15 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 checker="$root/.claude/scripts/review-lane-health.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then exit 1; fi
+}
+trap on_exit EXIT
 fail() { echo "review-lane-health test: $*" >&2; exit 1; }
 
 now=1790000000 # 2026-09-21T14:13:20Z
@@ -154,4 +162,5 @@ FAIL_ON=reviews PATH="$bin:$PATH" run --org o --since 2026-09-14
 [ "$rc" -eq 2 ] || fail "a failed read must exit 2, got $rc"
 grep -qF "UNKNOWN" "$tmp/err" || fail "a failed read must say UNKNOWN"
 
+completed=1
 echo "review-lane-health: OK"

@@ -12,7 +12,15 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helper="$here/safe-clone.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then exit 1; fi
+}
+trap on_exit EXIT
 
 # Hermetic git environment: the host's real system/global config (which may
 # itself carry the very rewrites the guard hunts) must not affect fixtures.
@@ -410,4 +418,5 @@ if [[ $fail -ne 0 ]]; then
   echo "safe-clone self-test: FAILURES above" >&2
   exit 1
 fi
+completed=1
 echo "safe-clone self-test: all cases passed"
