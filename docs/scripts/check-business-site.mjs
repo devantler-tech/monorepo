@@ -8,6 +8,8 @@ assert.ok(directory && extraArguments.length === 0, 'Usage: check-business-site.
 const root = resolve(directory);
 const html = (path) => readFileSync(resolve(root, path, 'index.html'), 'utf8');
 const home = html('');
+const publicRepositories = ['.github', 'agent-plugins', 'agent-skills', 'data-product-controller', 'dotnet-template', 'go-template', 'ksail', 'kyverno-policies', 'platform-template', 'platform-tenant-template', 'provider-upjet-unifi', 'world-at-ruin'];
+const starSnapshot = JSON.parse(readFileSync(new URL('../src/data/github-stars.json', import.meta.url), 'utf8'));
 
 assert.ok(home.includes('data-business-site'), 'Production build must publish the business homepage without an opt-in flag');
 
@@ -39,6 +41,30 @@ for (const locale of ['en', 'da']) {
       assert.match(page, /<img[^>]*alt="Nikolai Emil Damm"/, 'The business biography identifies its real founder');
       assert.ok(page.includes('href="/pdfs/nikolai-emil-damm-cv.pdf"'), 'The founder’s professional background remains available');
     } else {
+      const shelf = page.match(/<section[^>]*aria-labelledby="open-title"[^>]*>([\s\S]*?)<\/section>/)?.[1];
+      assert.ok(shelf, 'The public products shelf is reachable on the unified Projects page');
+      const overflow = shelf.match(/<details[^>]*id="more-public-products"[^>]*>([\s\S]*?)<\/details>/);
+      assert.ok(overflow, 'Products beyond the top six live in one disclosure below the shelf');
+      assert.ok(!/\sopen(?:[\s=>])/.test(overflow[0].split('>')[0]), 'Additional public products are initially collapsed');
+      const repositories = (markup) => [...markup.matchAll(/<article\b[^>]*data-public-product="([^"]+)"/g)].map((match) => match[1]);
+      const featured = repositories(shelf.slice(0, shelf.indexOf(overflow[0])));
+      assert.equal(featured.length, 6, 'Exactly six leading public products are visible');
+      const allRepositories = repositories(shelf);
+      assert.deepEqual([...allRepositories].sort(), publicRepositories, 'All current reusable products appear once, without tenants or legacy duplicates');
+      const ranked = [...shelf.matchAll(/<article\b[^>]*data-public-product="([^"]+)"[^>]*data-stars="(\d+)"/g)].map(([, repository, stars]) => ({ repository, stars: Number(stars) }));
+      assert.equal(ranked.length, publicRepositories.length, 'Every public product has a verified star count');
+      for (const product of ranked) assert.equal(product.stars, starSnapshot.repositories[product.repository], 'Rendered star counts match the observed snapshot');
+      for (let i = 1; i < ranked.length; i++) {
+        const before = ranked[i - 1], after = ranked[i];
+        assert.ok(before.stars > after.stars || (before.stars === after.stars && before.repository < after.repository), 'GitHub stars descend across both groups with stable repository-name ties');
+      }
+      assert.deepEqual(repositories(overflow[1]), allRepositories.slice(6), 'The rest sit immediately below the leading six, in the same order');
+      assert.match(overflow[1], /data-stars="0"/, 'Zero-star products are included, not discarded as missing');
+      assert.match(shelf, /<time[^>]*datetime="\d{4}-\d{2}-\d{2}"/, 'Star counts carry a visible observation date');
+      assert.ok(shelf.includes(`datetime="${starSnapshot.observedAt}"`), 'The displayed star date matches the observation');
+      assert.match(shelf, /world-at-ruin\/blob\/main\/LICENSE/, 'The game links to its distinct source-available terms');
+      assert.ok(shelf.includes(locale === 'da' ? 'Kildekode tilgængelig' : 'Source-available'), 'The game is not presented as unrestricted open source');
+      for (const repository of publicRepositories) assert.ok(shelf.includes(`href="https://github.com/devantler-tech/${repository}"`), `${repository} retains its real repository link`);
       assert.ok(page.includes('href="https://ksail.devantler.tech"'), 'Projects link to their real public product');
       for (const id of ['open-title', 'family-title', 'technical-projects', 'research']) {
         assert.ok(page.includes(`id="${id}"`), `The unified portfolio includes ${id}`);
