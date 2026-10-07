@@ -12,10 +12,18 @@
 #
 # USAGE
 #   required-gate-completeness.sh --repo <owner>/<repo> --base <branch> --head <40-char sha>
+#   required-gate-completeness.sh --input -
+#
+#   `--input -` is the SURVEY form (monorepo#3506). It reads one pull request on stdin, exactly as
+#   `gh pr view <n> --repo devantler-tech/<repo> --json url,baseRefName,headRefOid` prints it, and
+#   judges that head. It takes no other argument, so argv can never aim it at another target, and
+#   the repository in `url` must belong to devantler-tech.
 #
 # OUTPUT
 #   One `GATE <kind> <name> <state>` line per required gate, where <kind> is check | workflow |
 #   code_quality and <state> is PASS | PENDING | FAILED | MISSING | UNVERIFIED.
+#   A required check with no run is PENDING while any run at the head is unfinished, and MISSING
+#   once all have finished: a job publishes its check-run only when it starts (monorepo#3506).
 #   An active `code_quality` rule is always UNVERIFIED: no readable surface reports its analysis
 #   for a head. Its line is `GATE code_quality setup=<state|unreadable> UNVERIFIED`, and the setup
 #   state is the lead when a merge is refused.
@@ -23,6 +31,11 @@
 #     COMPLETE required=<n>
 #     INCOMPLETE missing=<n> failed=<n> pending=<n>
 #     UNKNOWN <reason>
+#   The survey form then prints one LAST line, the value the survey copies into its check field:
+#     required=complete
+#     required=missing:<gate>[,<gate>…][+failing:<gate>…][+pending:<gate>…]
+#     required=unverified:<kind>[,<kind>…]   every readable gate passed; these have no readable surface
+#     required=unknown:<reason>
 #
 # EXIT CODES
 #   0  every required gate passed at the head
@@ -31,27 +44,61 @@
 set -euo pipefail
 
 usage() {
-  sed -n '13,30p' "$0" >&2
+  sed -n '13,43p' "$0" >&2
   exit 2
 }
 
-repo="" base="" head=""
+repo="" base="" head="" input=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo) [ "$#" -ge 2 ] || usage; repo="$2"; shift 2 ;;
     --base) [ "$#" -ge 2 ] || usage; base="$2"; shift 2 ;;
     --head) [ "$#" -ge 2 ] || usage; head="$2"; shift 2 ;;
+    --input) [ "$#" -ge 2 ] || usage; input="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
+
+survey=0
+# survey_line <value> — the survey form's last line; the argv form prints nothing extra.
+survey_line() {
+  [ "${survey}" = 1 ] || return 0
+  printf 'required=%s\n' "$(printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]')"
+}
+
+unknown() {
+  local reason="$*"
+  echo "UNKNOWN ${reason}"
+  survey_line "unknown:${reason// /-}"
+  exit 2
+}
+
+if [ -n "${input}" ]; then
+  # Stdin is the only source of the target, so a caller cannot mix the two forms.
+  [ "${input}" = "-" ] && [ -z "${repo}${base}${head}" ] || usage
+  survey=1
+  payload="$(cat)" || unknown "malformed-input"
+  # Exactly one JSON object with three string fields; anything else is not a pull request read.
+  target="$(jq -s -r 'if length == 1 and (.[0] | type) == "object"
+      and ([.[0].url, .[0].baseRefName, .[0].headRefOid] | all(type == "string"))
+    then [.[0].url, .[0].baseRefName, .[0].headRefOid] | @tsv else error("shape") end' \
+    <<<"${payload}" 2>/dev/null)" || unknown "malformed-input"
+  pr_url="" extra=""
+  IFS=$'\t' read -r pr_url base head extra <<<"${target}" || true
+  [ -z "${extra}" ] || unknown "malformed-input"
+  # The owner is pinned: this form is declared to the surveyor's read-only guard, so whatever the
+  # forge printed must not be able to steer it to a repository outside the portfolio.
+  [[ "${pr_url}" =~ ^https://github\.com/devantler-tech/([A-Za-z0-9_.-]+)/pull/[1-9][0-9]*$ ]] ||
+    unknown "malformed-input"
+  repo_name="${BASH_REMATCH[1]}"
+  case "${repo_name}" in . | ..) unknown "malformed-input" ;; esac
+  repo="devantler-tech/${repo_name}"
+  [[ "${base}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${base}" != *..* ]] || unknown "malformed-input"
+  [[ "${head}" =~ ^[0-9a-f]{40}$ ]] || unknown "malformed-input"
+fi
 grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' <<<"${repo}" || usage
 grep -Eq '^[A-Za-z0-9._/-]+$' <<<"${base}" || usage
 grep -Eq '^[0-9a-f]{40}$' <<<"${head}" || usage
-
-unknown() {
-  echo "UNKNOWN $*"
-  exit 2
-}
 
 # read_json <gh api args…> — capture first; a failed or empty read fails, never yields empty data.
 read_json() {
@@ -105,6 +152,7 @@ gates="$(jq -n -r \
   [$c[].check_runs[]] as $runs
   | [$s[][]] as $statuses
   | [$w[].workflow_runs[]] as $wf
+  | (any($wf[]; .status != "completed") or any($runs[]; .status != "completed")) as $unfinished
   | $req[]
   | . as $g
   | (if $g.kind == "check" then
@@ -117,7 +165,11 @@ gates="$(jq -n -r \
           | if . == null then "MISSING"
             elif .state == "success" then "PASS"
             elif .state == "pending" then "PENDING" else "FAILED" end) as $st
-       | if ($cr | rank) >= ($st | rank) then $cr else $st end
+       | (if ($cr | rank) >= ($st | rank) then $cr else $st end) as $seen
+       # A job publishes its check-run only when it starts, so a job that waits on other jobs has
+       # none while they run. An absent check is therefore PENDING, not MISSING, until every run
+       # at this head has finished; both states block, but only MISSING means it will never report.
+       | if $seen == "MISSING" and $unfinished then "PENDING" else $seen end
      elif $g.kind == "workflow" then
        # A required workflow runs under /actions/required_workflows/; an ordinary workflow at the same
        # path, including one the PR itself adds, never satisfies it.
@@ -135,10 +187,25 @@ gates="$(jq -n -r \
 count() { grep -c " $1\$" <<<"${gates}" || true; }
 missing="$(count MISSING)" failed="$(count FAILED)" pending="$(count PENDING)"
 unverified="$(count UNVERIFIED)"
+# names <STATE> — the comma-joined gate names in that state, for the survey line.
+names() {
+  sed -n "s/^GATE [a-z_]* \(.*\) $1\$/\1/p" <<<"${gates}" | paste -s -d , -
+}
 # A definite blocker is more useful than UNKNOWN, so it wins; UNVERIFIED alone never reads COMPLETE.
 if [ $((missing + failed + pending)) -gt 0 ]; then
   echo "INCOMPLETE missing=${missing} failed=${failed} pending=${pending}"
+  parts=""
+  [ "${missing}" -eq 0 ] || parts="missing:$(names MISSING)"
+  [ "${failed}" -eq 0 ] || parts="${parts:+${parts}+}failing:$(names FAILED)"
+  [ "${pending}" -eq 0 ] || parts="${parts:+${parts}+}pending:$(names PENDING)"
+  survey_line "${parts}"
   exit 1
 fi
-[ "${unverified}" -eq 0 ] || unknown "unverified=${unverified}"
+if [ "${unverified}" -ne 0 ]; then
+  echo "UNKNOWN unverified=${unverified}"
+  # An unverifiable gate is named by its kind: its GATE line carries a setup state, not a name.
+  survey_line "unverified:$(sed -n 's/^GATE \([a-z_]*\) .* UNVERIFIED$/\1/p' <<<"${gates}" | sort -u | paste -s -d , -)"
+  exit 2
+fi
 echo "COMPLETE required=$(jq 'length' <<<"${required}")"
+survey_line complete
