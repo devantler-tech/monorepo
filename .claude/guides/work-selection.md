@@ -151,9 +151,10 @@ governs the issue work that follows.) Two rules enforce that:
    **delivery work, never a skip**: left skipped, its date arrives with nothing to measure. That
    includes one whose sub-issues have all closed. A closed child proves only that the child closed,
    so either finish what the experiment still asks for or record the line.
-   Write each of the two lines at the start of a paragraph: after a blank line, or directly under
-   the other one. Anywhere else it cannot be told from quoted or example text, and is reported for
-   repair instead of read.
+   Write the two lines near the top of the body: each at the start of a paragraph (after a blank
+   line, or directly under the other one), and above any code fence and anything in angle
+   brackets, a `<placeholder>` in inline code included. Anywhere else a line cannot be told from
+   quoted or example text, and is reported for repair instead of read.
    Read it with `.claude/scripts/kata-measure-date.sh`, never from the issue's creation date or a date
    in prose: `NOT-DUE` is the skip, `UNDELIVERED` is delivery work, and its `UNKNOWN` is a line to
    repair, never a skip.
