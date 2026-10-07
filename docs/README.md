@@ -120,6 +120,29 @@ hypothesis, success proxy, measurement window, and follow-up date. Close its del
 post merges; close the experiment only after recording the measured outcome and resulting decision.
 Keep this lane single-flight—maintain or measure the current post before starting another.
 
+## Public product catalogue
+
+The Projects page's “Built in the open” shelf lists public tools, libraries, templates and
+source-available inspiration, not tenant deployments. `src/data/public-products.json` holds the
+curated bilingual descriptions. Shared Actions live in `.github`; the legacy Actions repository is
+not a second current product. Repository licences govern reuse; World at Ruin is a pre-alpha game
+whose source is available for study, not unrestricted reuse or hosting.
+
+`src/data/github-stars.json` is generated with an explicit UTC observation date. Cards sort by GitHub
+stars descending, then repository name; the leading six are visible and the rest sit in a native
+disclosure directly below. Builds and visitors need no GitHub connection. Refresh the snapshot when
+updating the catalogue and during the monthly site content review:
+
+```sh
+bash docs/scripts/refresh-public-stars.sh
+```
+
+The refresh requires authenticated `gh` and `jq`. It validates every selected repository as public,
+unarchived and present exactly once before atomically replacing the snapshot. Failed or incomplete
+reads leave the existing file untouched; missing or invalid counts fail the build rather than
+silently becoming zero. The production build checks ranking, the collapsed remainder, bilingual
+routes and failure cases. Review and commit the generated snapshot alongside catalogue changes.
+
 ## Feature flags (build-time)
 
 Part of the portfolio-wide **feature-flag-first delivery** program
