@@ -66,7 +66,7 @@ case "$both" in
 esac
 
 if [ "$rc" -eq 0 ]; then
-  login=$(printf '%s' "$out" | jq -r '.data.viewer.login // empty' 2>/dev/null) || login=''
+  login=$(printf '%s' "$out" | jq -r 'select((.errors | not) and (.data.viewer.login | type == "string" and length > 0)) | .data.viewer.login' 2>/dev/null) || login=''
   if [ -n "$login" ]; then
     echo "GRAPHQL=SERVING"
     exit 0

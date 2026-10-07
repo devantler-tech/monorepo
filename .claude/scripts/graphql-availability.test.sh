@@ -127,6 +127,19 @@ check 'a non-JSON successful reply is unknown, never serving' '[ "$RC" -eq 2 ]'
 run 0 '{"data":{"viewer":null}}' ''
 check 'a reply with no viewer is unknown, never serving' '[ "$RC" -eq 2 ]'
 
+run 0 '{"data":{"viewer":{"login":123}}}' ''
+check 'a non-string login is unknown, never serving' \
+  '[ "$RC" -eq 2 ] && [ "$OUT" = "GRAPHQL=UNKNOWN reason=malformed-reply" ]'
+
+run 0 '{"data":{"viewer":{"login":["x"]}}}' ''
+check 'an array login is unknown, never serving' '[ "$RC" -eq 2 ]'
+
+run 0 '{"data":{"viewer":{"login":""}}}' ''
+check 'an empty login is unknown, never serving' '[ "$RC" -eq 2 ]'
+
+run 0 '{"data":{"viewer":{"login":"someone"}},"errors":[{"type":"OTHER","message":"partial"}]}' ''
+check 'a reply carrying errors beside a login is unknown, never serving' '[ "$RC" -eq 2 ]'
+
 run 0 "$SERVING" '' --verbose
 check 'an argument is a usage error and makes no call' \
   '[ "$RC" -eq 2 ] && [ "$OUT" = "GRAPHQL=UNKNOWN reason=usage" ] && [ -z "$ARGS" ]'
