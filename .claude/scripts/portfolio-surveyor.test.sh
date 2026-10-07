@@ -2587,14 +2587,44 @@ if grep -Fq 'on every Advance candidate you rank' "${surveyor}"; then
 fi
 grep -Fq '— subissues=<completed>/<total> DELIVERY-CHECK' "${surveyor}" ||
   fail "surveyor digest must define the DELIVERY-CHECK row (#2994)"
-subissue_jq="$(sed -n "/subIssuesSummary{total completed}}}}' \\\\\$/{n;s/^[[:space:]]*--jq '\\(.*\\)'\$/\\1/p;}" "${surveyor}")"
+subissue_jq="$(sed -n "/subIssuesSummary{total completed} labels(first:100){totalCount nodes{name}}}}}' \\\\\$/{n;s/^[[:space:]]*--jq '\\(.*\\)'\$/\\1/p;}" "${surveyor}")"
 [ -n "${subissue_jq}" ] || fail "could not extract the dependency/sub-issue jq filter (#2994)"
-subissue_out="$(jq -c "${subissue_jq}" <<<'{"data":{"repository":{"issue":{"number":2994,"issueDependenciesSummary":{"blockedBy":0,"totalBlockedBy":0},"subIssuesSummary":{"total":1,"completed":1}}}}}')" ||
+subissue_out="$(jq -c "${subissue_jq}" <<<'{"data":{"repository":{"issue":{"number":2994,"issueDependenciesSummary":{"blockedBy":0,"totalBlockedBy":0},"subIssuesSummary":{"total":1,"completed":1},"labels":{"totalCount":0,"nodes":[]}}}}}')" ||
   fail "the delivered-parent negative control was rejected (#2994)"
-[ "${subissue_out}" = '{"number":2994,"openBlockedBy":0,"totalBlockedBy":0,"completedSubIssues":1,"totalSubIssues":1}' ] ||
+[ "${subissue_out}" = '{"number":2994,"openBlockedBy":0,"totalBlockedBy":0,"completedSubIssues":1,"totalSubIssues":1,"labels":[]}' ] ||
   fail "the delivered-parent negative control projected ${subissue_out} (#2994)"
-if jq -c "${subissue_jq}" <<<'{"data":{"repository":{"issue":{"number":2994,"issueDependenciesSummary":{"blockedBy":0,"totalBlockedBy":0},"subIssuesSummary":{"total":1,"completed":2}}}}}' >/dev/null 2>&1; then
+if jq -c "${subissue_jq}" <<<'{"data":{"repository":{"issue":{"number":2994,"issueDependenciesSummary":{"blockedBy":0,"totalBlockedBy":0},"subIssuesSummary":{"total":1,"completed":2},"labels":{"totalCount":0,"nodes":[]}}}}}' >/dev/null 2>&1; then
   fail "a sub-issue summary with completed > total must be QUERY-UNKNOWN (#2994)"
+fi
+
+# ── The `blocked` state comes from the candidate's own label read (#3435) ────
+#
+# A digest named a parked issue "not blocked" from a search row that had lost its label. The
+# deepening read now carries the labels, and an unread list is never an empty one.
+grep -Fq 'subIssuesSummary{total completed} labels(first:100){totalCount nodes{name}}' "${surveyor}" ||
+  fail "surveyor dependency read must also request the candidate's labels (#3435)"
+# shellcheck disable=SC2016 # Backticks are literal Markdown contract text.
+grep -Fq '`labels` is **the only source for the `blocked` state**' "${surveyor}" ||
+  fail "surveyor must judge the blocked state from the candidate's own label read (#3435)"
+grep -Fq 'Never write "not blocked" without this read' "${surveyor}" ||
+  fail "surveyor must not report an unread candidate as not blocked (#3435)"
+grep -Fq -- '— labels=<name,...>|none' "${surveyor}" ||
+  fail "surveyor digest must define the labels field (#3435)"
+_label_fixture() {
+  jq -c --argjson labels "$1" '.data.repository.issue.labels=$labels' \
+    <<<'{"data":{"repository":{"issue":{"number":3101,"issueDependenciesSummary":{"blockedBy":0,"totalBlockedBy":0},"subIssuesSummary":{"total":0,"completed":0}}}}}'
+}
+label_out="$(jq -c "${subissue_jq}" <<<"$(_label_fixture '{"totalCount":1,"nodes":[{"name":"blocked"}]}')")" ||
+  fail "a complete label list was rejected (#3435)"
+[ "${label_out}" = '{"number":3101,"openBlockedBy":0,"totalBlockedBy":0,"completedSubIssues":0,"totalSubIssues":0,"labels":["blocked"]}' ] ||
+  fail "the parked-issue control projected ${label_out} (#3435)"
+for _bad_labels in 'null' '{"totalCount":2,"nodes":[{"name":"roadmap"}]}' '{"nodes":[]}' '{"totalCount":0}' '{"totalCount":1,"nodes":[{}]}' '{"totalCount":1,"nodes":[null]}'; do
+  if jq -c "${subissue_jq}" <<<"$(_label_fixture "${_bad_labels}")" >/dev/null 2>&1; then
+    fail "a label list of ${_bad_labels} must be QUERY-UNKNOWN, never unblocked (#3435)"
+  fi
+done
+if jq -c "${subissue_jq}" <<<'{"data":{"repository":{"issue":{"number":3101,"issueDependenciesSummary":{"blockedBy":0,"totalBlockedBy":0},"subIssuesSummary":{"total":0,"completed":0}}}}}' >/dev/null 2>&1; then
+  fail "an absent label list must be QUERY-UNKNOWN, never unblocked (#3435)"
 fi
 
 # --- GitHub-managed code scanning is not repository breakage (#2536) ----------

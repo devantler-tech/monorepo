@@ -1364,8 +1364,8 @@ public and private — no per-repo loop needed to enumerate):
 
    ```sh
    gh api graphql -F owner=<owner> -F name=<repo> -F number=<number> \
-     -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){number issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed}}}}' \
-     --jq 'if ((.data.repository.issue|type)!="object" or (.data.repository.issue.number|type)!="number" or (.data.repository.issue.issueDependenciesSummary|type)!="object" or (.data.repository.issue.issueDependenciesSummary.blockedBy|type)!="number" or (.data.repository.issue.issueDependenciesSummary.totalBlockedBy|type)!="number" or .data.repository.issue.issueDependenciesSummary.blockedBy < 0 or .data.repository.issue.issueDependenciesSummary.totalBlockedBy < .data.repository.issue.issueDependenciesSummary.blockedBy or (.data.repository.issue.subIssuesSummary|type)!="object" or (.data.repository.issue.subIssuesSummary.total|type)!="number" or (.data.repository.issue.subIssuesSummary.completed|type)!="number" or .data.repository.issue.subIssuesSummary.completed < 0 or .data.repository.issue.subIssuesSummary.total < .data.repository.issue.subIssuesSummary.completed) then error("QUERY-UNKNOWN: malformed issue dependency or sub-issue summary") else {number:.data.repository.issue.number,openBlockedBy:.data.repository.issue.issueDependenciesSummary.blockedBy,totalBlockedBy:.data.repository.issue.issueDependenciesSummary.totalBlockedBy,completedSubIssues:.data.repository.issue.subIssuesSummary.completed,totalSubIssues:.data.repository.issue.subIssuesSummary.total} end'
+     -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){number issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed} labels(first:100){totalCount nodes{name}}}}}' \
+     --jq 'if ((.data.repository.issue|type)!="object" or (.data.repository.issue.number|type)!="number" or (.data.repository.issue.issueDependenciesSummary|type)!="object" or (.data.repository.issue.issueDependenciesSummary.blockedBy|type)!="number" or (.data.repository.issue.issueDependenciesSummary.totalBlockedBy|type)!="number" or .data.repository.issue.issueDependenciesSummary.blockedBy < 0 or .data.repository.issue.issueDependenciesSummary.totalBlockedBy < .data.repository.issue.issueDependenciesSummary.blockedBy or (.data.repository.issue.subIssuesSummary|type)!="object" or (.data.repository.issue.subIssuesSummary.total|type)!="number" or (.data.repository.issue.subIssuesSummary.completed|type)!="number" or .data.repository.issue.subIssuesSummary.completed < 0 or .data.repository.issue.subIssuesSummary.total < .data.repository.issue.subIssuesSummary.completed or (.data.repository.issue.labels|type)!="object" or (.data.repository.issue.labels.totalCount|type)!="number" or (.data.repository.issue.labels.nodes|type)!="array" or (.data.repository.issue.labels.nodes|length)!=.data.repository.issue.labels.totalCount or (.data.repository.issue.labels.nodes|all(type=="object" and (.name|type)=="string" and .name!="")|not)) then error("QUERY-UNKNOWN: malformed issue dependency, sub-issue or label summary") else {number:.data.repository.issue.number,openBlockedBy:.data.repository.issue.issueDependenciesSummary.blockedBy,totalBlockedBy:.data.repository.issue.issueDependenciesSummary.totalBlockedBy,completedSubIssues:.data.repository.issue.subIssuesSummary.completed,totalSubIssues:.data.repository.issue.subIssuesSummary.total,labels:(.data.repository.issue.labels.nodes|map(.name)|sort)} end'
    ```
 
    `issueDependenciesSummary.blockedBy` is the count of **open** blocking issues;
@@ -1383,6 +1383,13 @@ public and private — no per-repo loop needed to enumerate):
    Never drop, down-rank or close that candidate yourself. A closed child proves only that the child
    closed, and the parent can carry acceptance criteria no child covered. A `total` of zero claims
    nothing. A missing or malformed sub-issue summary makes the candidate `QUERY-UNKNOWN`.
+   `labels` is **the only source for the `blocked` state** (monorepo#3435, agent-plugins#545).
+   Judge skip clause (b) from this array alone, never from the labels a search row carried: a
+   listing can drop a label for one row and keep it for the next. Report `labels=<name,...>` (or
+   `labels=none` for a complete empty list) on each candidate deepened by this read, and never
+   nominate one whose array holds `blocked`. Never write "not blocked" without this read; a row you
+   never deepen carries no label verdict. A missing, cut-short or malformed label list makes the
+   candidate `QUERY-UNKNOWN`, never unblocked.
    Flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
@@ -1622,6 +1629,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
 - <repo> #<n> "<title>" — subissues=<completed>/<total> DELIVERY-CHECK (every child closed; completion check before starting, never a skip)
+- <repo> #<n> "<title>" — labels=<name,...>|none   # from the candidate's own deepening read; absent on a row never deepened
 - <repo> #<n> "<title>" — CLAIMED: assignee=<registered-writer>|none(verified-unavailable)|none(shared-tip), claim=agent-claim/<issue>@<sha>@<age>|branch:<name>, no open PR
 ```
 
