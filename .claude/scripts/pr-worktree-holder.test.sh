@@ -13,7 +13,11 @@
 #   - a worktree lock holds its worktree while the process it names lives with the recorded start
 #     time, releases it once that process exited or the pid was reused, and is `unknown:` when the
 #     helper cannot read it (monorepo#3780: an isolated subagent keeps no process in its worktree
-#     between its commands, so only the harness's lock names its session).
+#     between its commands, so only the harness's lock names its session);
+#   - a linked worktree holds the worktrees of its own repository registered inside it, at any
+#     depth, with their submodules, whether it is held by a working directory or by a live lock,
+#     and a listing of them that fails is `unknown:` (monorepo#3818: a session's per-run worktree
+#     sits inside its session worktree and has no process and no lock of its own).
 # `lsof` and `ps` are shims driven by FIXTURE_* variables; the helper itself reads no environment.
 set -euo pipefail
 
@@ -59,6 +63,26 @@ g -C "${w1}" submodule --quiet update --init product
 g -C "${w1}/product" config remote.origin.url git@github.com:devantler-tech/product.git
 g -C "${w1}/product" switch -q -c claude/product-7
 g -C "${w1}/product" worktree add -q -b claude/product-8 "${w1}/product/.claude/worktrees/maint-1"
+# Session w1 also keeps per-run worktrees of the SAME repository inside its own worktree, one of
+# them nested in another, and works on a product branch in the first one's submodule
+# (monorepo#3818). No process sits in any of them and none is locked.
+w1_run="${w1}/.claude/worktrees/maint-1"
+g -C "${main}" worktree add -q -b claude/nested-20 "${w1_run}"
+g -C "${main}" worktree add -q -b claude/deep-21 "${w1_run}/.claude/worktrees/deep"
+g -C "${w1_run}" submodule --quiet update --init product
+g -C "${w1_run}/product" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${w1_run}/product" switch -q -c claude/product-22
+# Session w2 keeps one too. It has no populated submodule, so the only worktree listing its tree
+# needs is the one of its own nested worktrees.
+g -C "${main}" worktree add -q -b claude/nested-23 "${w2}/.claude/worktrees/maint-2"
+# On a volume that ignores letter case, git lists a worktree under the spelling it was added with,
+# which need not be the spelling it reports for the worktree around it. Linux runners keep case,
+# so there the differently spelled path would be another directory and the case is skipped.
+case_blind=0
+if [ -d "${sandbox}/MAIN" ]; then
+  case_blind=1
+  g -C "${main}" worktree add -q -b claude/nested-24 "${main}/.CLAUDE/Worktrees/W2/.claude/worktrees/maint-3"
+fi
 # Session w3 is mid-rebase on its branch: HEAD is detached and the branch is named only in the
 # rebase state (the shape `git rebase` leaves while it stops on a conflict).
 w3="${main}/.claude/worktrees/w3"
@@ -140,13 +164,24 @@ rm -rf -- "${hub_wt}/agent-a11"
 hub_worktree agent-a12 worktree-agent-a12 "claude agent agent-a12 (pid 9000002 start ${start_theirs})"
 rm -f -- "${hub_wt}/agent-a12/.git"
 
+# Per-run worktrees nested inside locked ones (monorepo#3818), themselves unlocked: in a1 (its
+# session lives), in a2 (its session exited) and in a9 (the asking session's own subagent).
+g -C "${hub}" worktree add -q -b claude/nested-60 "${hub_wt}/agent-a1/.claude/worktrees/maint-9"
+g -C "${hub}" worktree add -q -b claude/nested-61 "${hub_wt}/agent-a2/.claude/worktrees/maint-9"
+g -C "${hub}" worktree add -q -b claude/nested-62 "${hub_wt}/agent-a9/.claude/worktrees/maint-9"
+
+# a13: a subagent of the ASKING session whose locked worktree is registered inside that session's
+# own worktree.
+g -C "${hub}" worktree add -q -b worktree-agent-a13 "${hub_wt}/mine/.claude/worktrees/agent-a13"
+g -C "${hub}" worktree lock --reason "claude agent agent-a13 (pid ${me} start ${start_mine})" "${hub_wt}/mine/.claude/worktrees/agent-a13"
+
 # Guard the fixture itself: git must list the harness's reason exactly as written, a1's submodule
 # must be its own checkout, and a11 must still be registered and locked.
 hub_list="$(g -C "${hub}" worktree list --porcelain)"
 grep -qxF "locked claude agent agent-a1 (pid 9000002 start ${start_theirs})" <<<"${hub_list}" ||
   { echo "FAIL fixture: git does not list a1's lock reason as written" >&2; exit 1; }
-[ "$(grep -c '^locked' <<<"${hub_list}")" = 14 ] ||
-  { echo "FAIL fixture: expected 14 locked worktrees in the hub repository" >&2; exit 1; }
+[ "$(grep -c '^locked' <<<"${hub_list}")" = 15 ] ||
+  { echo "FAIL fixture: expected 15 locked worktrees in the hub repository" >&2; exit 1; }
 [ "$(g -C "${hub_wt}/agent-a1/product" rev-parse --show-toplevel)" = "${hub_wt}/agent-a1/product" ] ||
   { echo "FAIL fixture: agent-a1/product is not a populated submodule checkout" >&2; exit 1; }
 grep -qxF "worktree ${hub_wt}/agent-a11" <<<"${hub_list}" ||
@@ -190,7 +225,12 @@ real_git="$(command -v git)"
 cat >"${gitshim}/git" <<SHIM
 #!/usr/bin/env bash
 case " \$* " in
-  *' worktree list '*) exit 1 ;;
+  *' worktree list '*)
+    # The first FIXTURE_LIST_OK listings succeed; every later one fails.
+    n=\$((\$(cat "${gitshim}/count" 2>/dev/null || echo 0) + 1))
+    echo "\${n}" >"${gitshim}/count"
+    [ "\${n}" -le "\${FIXTURE_LIST_OK:-0}" ] || exit 1
+    ;;
 esac
 exec "${real_git}" "\$@"
 SHIM
@@ -304,6 +344,17 @@ ps_starts="${sandbox}/ps-starts"
 } >"${ps_starts}"
 starts_fail=0
 list_fail=0
+list_ok=0
+# Only the asking session, at w1; only a process at the main checkout; only another process at w2.
+lsof_w2_only="${sandbox}/lsof-w2-only"
+printf 'p9000003\nfcwd\nn%s\n' "${w2}" >"${lsof_w2_only}"
+lsof_w1_only="${sandbox}/lsof-w1-only"
+printf 'p%s\nfcwd\nn%s\n' "${me}" "${w1}" >"${lsof_w1_only}"
+# The asking session at w1 and its own child working inside the worktree nested there.
+lsof_w1_child="${sandbox}/lsof-w1-child"
+printf 'p%s\nfcwd\nn%s\np9000001\nfcwd\nn%s\n' "${me}" "${w1}" "${w1_run}" >"${lsof_w1_child}"
+lsof_main_only="${sandbox}/lsof-main-only"
+printf 'p9000005\nfcwd\nn%s\n' "${main}" >"${lsof_main_only}"
 
 # pr <owner/repo> <n> <head> [<head-owner>] [<head-repo>] — one gh pr view --json
 # url,headRefName,headRepositoryOwner,headRepository object; the head defaults to the base repository.
@@ -317,16 +368,17 @@ pr() {
 
 # expect <label> <asking-dir> <self-row> <want-rc> <want-stdout> <stdin> [lsof-file] [lsof-rc] [ps-fail]
 # `starts_fail=1` fails the start-time read and `list_fail=1` the worktree listing, for the cases
-# that set them.
+# that set them; with `list_fail=1`, the first `list_ok` listings still succeed.
 expect() {
   local label="$1" dir="$2" self_row="$3" want_rc="$4" want_out="$5" payload="$6"
   local lsof_file="${7:-${lsof_full}}" lsof_rc="${8:-0}" ps_fail="${9:-0}" out rc=0
   local path="${shims}:${PATH}"
   if [ "${list_fail}" = 1 ]; then path="${gitshim}:${path}"; fi
+  rm -f -- "${gitshim}/count"
   checks=$((checks + 1))
   out="$(cd "${dir}" && PATH="${path}" FIXTURE_LSOF="${lsof_file}" FIXTURE_LSOF_RC="${lsof_rc}" \
     FIXTURE_PS_FAIL="${ps_fail}" FIXTURE_PS_EXTRA="${ps_extra}" FIXTURE_SELF_ROW="${self_row}" \
-    FIXTURE_PS_STARTS="${ps_starts}" FIXTURE_STARTS_FAIL="${starts_fail}" \
+    FIXTURE_PS_STARTS="${ps_starts}" FIXTURE_STARTS_FAIL="${starts_fail}" FIXTURE_LIST_OK="${list_ok}" \
     "${tool}" --input - <<<"${payload}" 2>/dev/null)" || rc=$?
   if [ "${rc}" = "${want_rc}" ] && [ "${out}" = "${want_out}" ]; then
     echo "ok   ${label}"
@@ -546,6 +598,82 @@ expect "a worktree list that cannot be read is unknown, never none" \
   "devantler-tech/hub#41 holder=unknown:worktree-list" \
   "$(pr devantler-tech/hub 41 worktree-agent-a2)" "${lsof_hub}"
 list_fail=0
+
+# ── Worktrees nested in a linked worktree (monorepo#3818) ───────────────────────────────────────
+expect "a per-session worktree holds the worktree of its own repository nested inside it" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/demo#20 holder=live:1:9000002/claude+self:2:${me}/claude,9000001/go" \
+  "$(pr devantler-tech/demo 20 claude/nested-20)"
+expect "asked by the session that owns the outer worktree alone, its nested worktree is self" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/demo#20 holder=self:1:${me}/claude" \
+  "$(pr devantler-tech/demo 20 claude/nested-20)" "${lsof_w1_only}"
+expect "the asking session's own process working inside the nested worktree is self" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/demo#20 holder=self:2:${me}/claude,9000001/go" \
+  "$(pr devantler-tech/demo 20 claude/nested-20)" "${lsof_w1_child}"
+expect "asked from a sibling session's worktree, the nested worktree is live" \
+  "${w2}" "${session}" 0 \
+  "devantler-tech/demo#20 holder=live:2:9000002/claude,9000001/go+self:1:${me}/claude" \
+  "$(pr devantler-tech/demo 20 claude/nested-20)"
+expect "a worktree nested in a nested one is held too" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/demo#21 holder=self:1:${me}/claude" \
+  "$(pr devantler-tech/demo 21 claude/deep-21)" "${lsof_w1_only}"
+expect "a nested worktree brings its populated submodule's branch with it" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/product#22 holder=self:1:${me}/claude" \
+  "$(pr devantler-tech/product 22 claude/product-22)" "${lsof_w1_only}"
+expect "a process at the main checkout does not hold the worktrees nested in it, at any depth" \
+  "${w1}" "${session}" 0 \
+  "devantler-tech/demo#2 holder=none
+devantler-tech/demo#20 holder=none" \
+  "$(jq -sc . <<<"$(pr devantler-tech/demo 2 claude/feature-2) $(pr devantler-tech/demo 20 claude/nested-20)")" \
+  "${lsof_main_only}"
+expect "a live lock holds the worktree nested inside the worktree it locked" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#60 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/hub 60 claude/nested-60)" "${lsof_hub}"
+expect "a lock whose process exited does not hold the worktree nested inside it" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#61 holder=none" \
+  "$(pr devantler-tech/hub 61 claude/nested-61)" "${lsof_hub}"
+expect "a subagent asking from its own locked worktree owns the worktree nested inside it" \
+  "${hub_wt}/agent-a9" "${session}" 0 \
+  "devantler-tech/hub#62 holder=self:1:${me}/claude" \
+  "$(pr devantler-tech/hub 62 claude/nested-62)" "${lsof_hub}"
+expect "asked from the session's own worktree, a worktree nested in its subagent's is live" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#62 holder=live:1:${me}/claude" \
+  "$(pr devantler-tech/hub 62 claude/nested-62)" "${lsof_hub}"
+# The lock scan lists the repository's worktrees first, and that listing succeeds here. The second
+# listing is the one of w2's own nested worktrees. The asker sits in w2 as well, so its own tree
+# is listed once more: three listings in all.
+expect "a worktree the asker's session locked for a subagent stays live when it sits inside the asker's own worktree" \
+  "${mine}" "${session}" 0 \
+  "devantler-tech/hub#63 holder=live:1:${me}/claude" \
+  "$(pr devantler-tech/hub 63 worktree-agent-a13)" "${lsof_hub}"
+if [ "${case_blind}" = 1 ]; then
+  expect "a nested worktree listed under another letter case is still held" \
+    "${w1}" "${session}" 0 \
+    "devantler-tech/demo#24 holder=live:1:9000003/node" \
+    "$(pr devantler-tech/demo 24 claude/nested-24)" "${lsof_w2_only}"
+else
+  echo "skip a nested worktree listed under another letter case (this volume keeps case)"
+fi
+list_fail=1
+list_ok=1
+expect "a listing of a held worktree's nested worktrees that fails is unknown, never none" \
+  "${w2}" "${session}" 2 \
+  "devantler-tech/demo#23 holder=unknown:worktree-list" \
+  "$(pr devantler-tech/demo 23 claude/nested-23)" "${lsof_w2_only}"
+list_ok=3
+expect "the same question through the same shim is answered once every listing succeeds" \
+  "${w2}" "${session}" 0 \
+  "devantler-tech/demo#23 holder=live:1:9000003/node" \
+  "$(pr devantler-tech/demo 23 claude/nested-23)" "${lsof_w2_only}"
+list_fail=0
+list_ok=0
 
 # ── Several PRs at once ─────────────────────────────────────────────────────────────────────────
 expect "an array answers every PR in input order" \
