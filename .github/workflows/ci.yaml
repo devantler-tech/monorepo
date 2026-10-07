@@ -229,6 +229,7 @@ jobs:
               - '.claude/scripts/worktree-claim.sh'
               - '.claude/scripts/branch-op-lock.sh'
               - '.claude/scripts/agent-issue-board-sweep.sh'
+              - '.claude/scripts/claude-dispatch-rate.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'

@@ -145,7 +145,8 @@
   (typically below a review trigger), a **non-canonical sender marker** such as
   `> Requested by the 🤖 Daily AI Engineer`, and a **review trigger posted with no disclosure at all**.
   The one exception is **Bugbot's trigger specifically** — a body that is exactly `@cursor review`,
-  because Bugbot exact-matches the whole body, so its disclosure goes in its own preceding comment.
+  because Bugbot starts only on a comment that opens with the command (measured 2026-10-07,
+  review-lanes guide), so no disclosure line can lead it and it goes in its own preceding comment.
   That carve-out does **not** extend to the other lanes: their trigger belongs in the *same* disclosed
   comment as its request marker, so a bare `@codex review` or `@coderabbitai review` is a violation.
   **The check is [`comment-disclosure-drift.sh`](../scripts/comment-disclosure-drift.sh)**
