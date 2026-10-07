@@ -49,10 +49,22 @@ case "\$(cat "$fx/mode")" in
   hang) touch "$fx/hanging"
         while [ ! -e "$fx/release" ]; do sleep 0.1; done
         exit 0 ;;
+  cleanup) # as the real sweep does: one repository's cleanup, writing the lane's manifest
+        "$fx/scripts/worktree-cleanup.sh" "$fx/repo" \\
+          "\$HOME/.claude/worktree-cleanup-manifests/monorepo-20261002T000000Z.tsv" apply 24 336
+        exit 0 ;;
 esac
 exit 3
 EOF
-chmod +x "$fx/scripts/worktree-cleanup-all.sh"
+# The fake per-repository cleanup: hangs until released, as one busy with a large repository does.
+cat >"$fx/scripts/worktree-cleanup.sh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$\$" > "$fx/pids/cleanup-\$\$"
+touch "$fx/hanging"
+while [ ! -e "$fx/release" ]; do sleep 0.1; done
+exit 0
+EOF
+chmod +x "$fx/scripts/worktree-cleanup-all.sh" "$fx/scripts/worktree-cleanup.sh"
 mode() { printf '%s\n' "$1" >"$fx/mode"; }
 
 run() { # [args...] -> sets out, rc
@@ -90,6 +102,22 @@ live_sweeps() {
   return 0
 }
 count_live_sweeps() { live_sweeps | grep -c . || true; }
+# live_cleanups — pids of the fake per-repository cleanups still running, one per line.
+live_cleanups() {
+  local f pid
+  for f in "$fx"/pids/cleanup-*; do
+    [ -f "$f" ] || continue
+    pid=$(cat "$f" 2>/dev/null) || continue
+    kill -0 "$pid" 2>/dev/null && printf '%s\n' "$pid"
+  done
+  return 0
+}
+# started_sweeps — how many fake sweeps have ever started.
+started_sweeps() {
+  local f n=0
+  for f in "$fx"/pids/sweep-*; do [ ! -f "$f" ] || n=$((n + 1)); done
+  printf '%s\n' "$n"
+}
 wait_gone() { # <pid>
   local i=0
   while kill -0 "$1" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
@@ -99,11 +127,15 @@ wait_gone() { # <pid>
 # run, across the whole host, so a real sweep of the same lane on this machine would decide these
 # cases. Every launcher this file starts therefore reads the process table through this filter,
 # which keeps only the fixture's own processes; a case that scripts its own `ps` puts it in front.
+# A question about one process (`-p`) is passed through: its answer names no path to keep it by.
 real_ps=$(command -v ps) || { printf 'cannot find ps\n' >&2; exit 2; }
 mkdir -p "$fx/fxbin"
 cat >"$fx/fxbin/ps" <<EOF
 #!/usr/bin/env bash
-"$real_ps" "\$@" | grep -F -- "$fx/"
+case " \$* " in
+  *" -A "*) "$real_ps" "\$@" | grep -F -- "$fx/" ;;
+  *) exec "$real_ps" "\$@" ;;
+esac
 EOF
 chmod +x "$fx/fxbin/ps"
 PATH="$fx/fxbin:$PATH"
@@ -491,7 +523,7 @@ else bad "fixture: the sweeper outlives its killed supervisor" "live-sweeps=$(co
 run start --lane claude
 if [ "$rc" -eq 1 ] && grep -q 'NEVER FINISHED' <<<"$out" \
    && grep -q "not starting a second claude sweep: sweeper pid $orphan_sweeper is still running without its supervisor" <<<"$out" \
-   && grep -q "kill $orphan_sweeper" <<<"$out" \
+   && grep -qF "\`kill -- -$orphan_sweeper\`" <<<"$out" \
    && [ "$(field claude started id)" = "$orphan_id" ] && [ "$(count_live_sweeps)" -eq 1 ]; then
   ok "start does not put a second sweeper beside an orphaned one"
 else
@@ -522,6 +554,53 @@ track claude
 if [ "$rc" -eq 2 ] && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude; then
   ok "the lane is swept again once the orphaned sweeper has ended"
 else bad "the lane is swept again once the orphaned sweeper has ended" "rc=$rc $out"; fi
+
+# A sweeper runs one repository's cleanup at a time and waits for it. Stopped alone, it leaves that
+# cleanup going on with nothing of the sweeper's name left in the process table, so the cleanup
+# itself has to block the next start, and the advice has to stop both.
+mode cleanup
+rm -f "$fx/release" "$fx/hanging"
+run start --lane claude
+group_id=$(field claude started id); group_sup=$(field claude started pid)
+track claude
+wait_for "$fx/hanging" || bad "the sweep's cleanup started" "$(cat "$log" 2>&1)"
+group_sweeper=$(live_sweeps); group_cleanup=$(live_cleanups)
+kill -9 "$group_sup" 2>/dev/null
+wait_gone "$group_sup" || bad "the supervisor of the cleaning sweep was killed" "pid=$group_sup"
+run start --lane claude
+if [ "$rc" -eq 1 ] && [ -n "$group_sweeper" ] \
+   && grep -qF "\`kill -- -$group_sweeper\`" <<<"$out" && [ "$(field claude started id)" = "$group_id" ]; then
+  ok "the advice for an orphaned sweeper stops its whole process group"
+else bad "the advice for an orphaned sweeper stops its whole process group" "rc=$rc $out"; fi
+# What a plain `kill <pid>` does: the sweeper is gone and the cleanup it ran goes on.
+kill "$group_sweeper" 2>/dev/null
+wait_gone "$group_sweeper" || bad "the sweeper was stopped alone" "pid=$group_sweeper"
+if [ -n "$group_cleanup" ] && kill -0 "$group_cleanup" 2>/dev/null; then
+  ok "fixture: the cleanup outlives the sweeper that was stopped alone"
+else bad "fixture: the cleanup outlives the sweeper that was stopped alone" "cleanup=$group_cleanup"; fi
+group_before=$(started_sweeps)
+run start --lane claude
+if [ "$rc" -eq 1 ] \
+   && grep -q "not starting a second claude sweep: cleanup pid $group_cleanup, which a sweep of the lane started, is still running" <<<"$out" \
+   && [ "$(field claude started id)" = "$group_id" ] && [ "$(started_sweeps)" -eq "$group_before" ]; then
+  ok "start does not put a sweep beside a cleanup whose sweeper was stopped alone"
+else
+  bad "start does not put a sweep beside a cleanup whose sweeper was stopped alone" \
+    "rc=$rc started=$(started_sweeps)/$group_before $out"
+  [ "$(field claude started id)" = "$group_id" ] || track claude
+fi
+# The command the advice gave still reaches that cleanup: it stayed in the sweeper's group.
+kill -- "-$group_sweeper" 2>/dev/null
+if [ -n "$group_cleanup" ] && wait_gone "$group_cleanup"; then
+  ok "the advised group signal reaches the cleanup after its sweeper is gone"
+else bad "the advised group signal reaches the cleanup after its sweeper is gone" "cleanup=$group_cleanup"; fi
+rm -f "$fx/release" "$fx/hanging"
+mode ok
+run start --lane claude
+track claude
+if [ "$rc" -eq 1 ] && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude; then
+  ok "the lane is swept again once nothing of the stopped sweep runs"
+else bad "the lane is swept again once nothing of the stopped sweep runs" "rc=$rc $out"; fi
 run status --lane claude
 clean_id=$(field claude started id)
 if [ "$rc" -eq 0 ]; then ok "fixture: the records show the last sweep finished cleanly"
@@ -814,7 +893,7 @@ else bad "the codex lane sweeps only --lane codex, logged and recorded apart" \
 # recording the end (independent of permissions, which root ignores).
 supervisor_blocked="$fx/supervisor-blocked"
 supervisor_records="$supervisor_blocked/.claude/worktree-cleanup-manifests"
-mkdir -p "$supervisor_records/cleanup-claude.finished"
+mkdir -p "$supervisor_records/cleanup-claude.finished" "$supervisor_records/cleanup-claude.launch.lock"
 out=$(HOME="$supervisor_blocked" SUT_PATH="$sut" bash -c '
   printf "id=20261002T140000Z-3 pid=%s at=2026-10-02T14:00:00Z\n" "$$" \
     >"$HOME/.claude/worktree-cleanup-manifests/cleanup-claude.started"
@@ -863,6 +942,189 @@ else
 fi
 mode ok
 
+# --- a supervisor is not yet a supervisor in the process table (#3823) -------------
+# A supervisor is forked from its launcher and shows the launcher's command line until it has
+# replaced it. The launcher keeps its lock until the supervisor has said it is running, and a
+# supervisor nobody holds the lock for sweeps nothing.
+nolock_home="$fx/nolock-home"
+mkdir -p "$nolock_home/.claude/worktree-cleanup-manifests"
+before=$(started_sweeps)
+out=$(HOME="$nolock_home" SUT_PATH="$sut" bash -c '
+  printf "id=20261002T150000Z-4 pid=%s at=2026-10-02T15:00:00Z\n" "$$" \
+    >"$HOME/.claude/worktree-cleanup-manifests/cleanup-claude.started"
+  exec bash "$SUT_PATH" __supervise --lane claude --id 20261002T150000Z-4
+' 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && grep -q 'no longer holds' <<<"$out" && [ "$(started_sweeps)" -eq "$before" ]; then
+  ok "a supervisor whose launcher holds no lock sweeps nothing"
+else bad "a supervisor whose launcher holds no lock sweeps nothing" \
+  "rc=$rc started=$(started_sweeps)/$before $out"; fi
+
+# A `nohup` that waits before it runs the supervisor stands for the moment between the fork and
+# the supervisor's own command line.
+slow_home="$fx/slow-home"
+slow_records="$slow_home/.claude/worktree-cleanup-manifests"
+mkdir -p "$slow_home" "$fx/slow"
+cat >"$fx/slow/nohup" <<EOF
+#!/usr/bin/env bash
+while [ ! -e "$fx/slow/go" ]; do sleep 0.05; done
+exec "\$@"
+EOF
+chmod +x "$fx/slow/nohup"
+quiet_lane codex || bad "fixture: the codex lane is quiet before the slow supervisor" "$(ps -A -ww -o command= 2>&1)"
+HOME="$slow_home" PATH="$fx/slow:$PATH" bash "$sut" start --lane codex >"$fx/slow/a.out" 2>&1 & slow_a=$!
+wait_for "$slow_records/cleanup-codex.started" || bad "the slow launcher recorded its supervisor" "$(cat "$fx/slow/a.out" 2>&1)"
+sleep 0.3
+if kill -0 "$slow_a" 2>/dev/null && [ -d "$slow_records/cleanup-codex.launch.lock" ]; then
+  ok "the launcher keeps its lock until its supervisor has said it is running"
+else bad "the launcher keeps its lock until its supervisor has said it is running" \
+  "$(cat "$fx/slow/a.out" 2>&1) $(ls "$slow_records" 2>&1)"; fi
+before=$(started_sweeps)
+out=$(HOME="$slow_home" bash "$sut" start --lane codex 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && grep -q "holds $slow_records/cleanup-codex.launch.lock" <<<"$out" \
+   && [ "$(started_sweeps)" -eq "$before" ]; then
+  ok "a launcher arriving before the supervisor is one starts nothing"
+else bad "a launcher arriving before the supervisor is one starts nothing" "rc=$rc $out"; fi
+touch "$fx/slow/go"
+wait_gone "$slow_a" || bad "the slow launcher finished" "$(cat "$fx/slow/a.out" 2>&1)"
+slow_id=$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$slow_records/cleanup-codex.started" 2>/dev/null)
+i=0
+while [ "$i" -lt 100 ] && \
+  [ "$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$slow_records/cleanup-codex.finished" 2>/dev/null)" != "$slow_id" ]; do
+  sleep 0.1; i=$((i + 1))
+done
+if grep -q 'started the codex sweep' "$fx/slow/a.out" && [ ! -e "$slow_records/cleanup-codex.launch.lock" ] \
+   && [ "$(started_sweeps)" -eq $((before + 1)) ] && [ "$i" -lt 100 ]; then
+  ok "once the supervisor has said so, the launcher reports the start and frees the lock"
+else bad "once the supervisor has said so, the launcher reports the start and frees the lock" \
+  "started=$(started_sweeps)/$before $(cat "$fx/slow/a.out" 2>&1)"; fi
+
+# A supervisor that ends without saying it is running, and one that never says it.
+mkdir -p "$fx/dead" "$fx/mute"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$fx/dead/nohup"
+printf '#!/usr/bin/env bash\nexec sleep 60\n' >"$fx/mute/nohup"
+chmod +x "$fx/dead/nohup" "$fx/mute/nohup"
+before=$(started_sweeps)
+quiet_lane codex || bad "fixture: the codex lane is quiet before the dead supervisor" "$(ps -A -ww -o command= 2>&1)"
+out=$(HOME="$fx/dead-home" PATH="$fx/dead:$PATH" bash "$sut" start --lane codex 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && grep -q 'ended before it began the sweep' <<<"$out" \
+   && ! grep -q 'started the codex sweep' <<<"$out" && [ "$(started_sweeps)" -eq "$before" ] \
+   && [ ! -e "$fx/dead-home/.claude/worktree-cleanup-manifests/cleanup-codex.launch.lock" ]; then
+  ok "a supervisor that ended before sweeping is UNKNOWN (2), not a started sweep"
+else bad "a supervisor that ended before sweeping is UNKNOWN (2), not a started sweep" "rc=$rc $out"; fi
+out=$(HOME="$fx/mute-home" PATH="$fx/mute:$PATH" bash "$sut" start --lane codex 2>&1); rc=$?
+mute_pid=$(sed -nE 's/^id=[^ ]+ pid=([0-9]+) .*/\1/p' \
+  "$fx/mute-home/.claude/worktree-cleanup-manifests/cleanup-codex.started" 2>/dev/null)
+if [ "$rc" -eq 2 ] && grep -q 'did not say it was running within ten seconds; it was stopped' <<<"$out" \
+   && [ "$(started_sweeps)" -eq "$before" ] && [ -n "$mute_pid" ] && ! kill -0 "$mute_pid" 2>/dev/null; then
+  ok "a supervisor that never says it is running is stopped, and the start is UNKNOWN (2)"
+else bad "a supervisor that never says it is running is stopped, and the start is UNKNOWN (2)" \
+  "rc=$rc pid=$mute_pid $out"; fi
+
+# table_start <lane> <home> <ps-listing-lines...> — start <lane> with a process table that holds
+# this launcher and the given lines. Sets out, rc. In a line `@SUT@` is the launcher's path,
+# `@ALL@` the sweeper's, `@ONE@` the per-repository cleanup's and `@DIR@` that home's records.
+table_start() {
+  local table_lane=$1 home=$2 line; shift 2
+  mkdir -p "$fx/bin"
+  {
+    printf '#!/usr/bin/env bash\n'
+    # shellcheck disable=SC2016  # expanded by the generated script, not here
+    printf 'printf "%%s 00:00:01 bash %%s start --lane %s\\n" "$FAKE_PS_SELF_PID" "$SUT_PATH"\n' "$table_lane"
+    for line in "$@"; do
+      line=${line//@SUT@/$sut}
+      line=${line//@ALL@/$fx/scripts/worktree-cleanup-all.sh}
+      line=${line//@ONE@/$fx/scripts/worktree-cleanup.sh}
+      line=${line//@DIR@/$home/.claude/worktree-cleanup-manifests}
+      printf 'printf "%%s\\n" %q\n' "$line"
+    done
+  } >"$fx/bin/ps"
+  chmod +x "$fx/bin/ps"
+  out=$(HOME="$home" PATH="$fx/bin:$PATH" SUT_PATH="$sut" TABLE_LANE="$table_lane" \
+    bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" start --lane "$TABLE_LANE"' 2>&1); rc=$?
+  rm -f "$fx/bin/ps"
+}
+
+# The record names a pid that still shows the launcher's command line: the supervisor in the
+# moment before it is one. It is running, not gone, whatever happened to the launcher's lock.
+fork_home="$fx/fork-home"
+fork_records="$fork_home/.claude/worktree-cleanup-manifests"
+mkdir -p "$fork_records"
+printf 'id=20261002T160000Z-5 pid=4242 at=2026-10-02T16:00:00Z\n' >"$fork_records/cleanup-codex.started"
+before=$(started_sweeps)
+table_start codex "$fork_home" '4242 00:00:02 bash @SUT@ start --lane codex'
+if [ "$rc" -eq 1 ] && grep -q 'has been running since' <<<"$out" \
+   && grep -q 'not starting a second codex sweep while that one runs' <<<"$out" \
+   && [ "$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$fork_records/cleanup-codex.started")" = 20261002T160000Z-5 ] \
+   && [ "$(started_sweeps)" -eq "$before" ]; then
+  ok "a recorded supervisor that still shows the launcher's command line is running, not gone"
+else bad "a recorded supervisor that still shows the launcher's command line is running, not gone" \
+  "rc=$rc $out"; fi
+
+# --- every spelling of a sweep is the same sweep (#3823) --------------------------
+# What blocks a start is read from a command line the way the script it names reads its own
+# arguments. Each line below is one process beside the launcher; nothing is on record.
+spell_home="$fx/spell-home"
+mkdir -p "$spell_home"
+refused() { # <lane> <process line> <what the refusal names> <case name>
+  local before_refused
+  before_refused=$(started_sweeps)
+  table_start "$1" "$spell_home" "$2"
+  if [ "$rc" -eq 1 ] && grep -q "not starting a second $1 sweep" <<<"$out" && grep -q "$3" <<<"$out" \
+     && [ "$(started_sweeps)" -eq "$before_refused" ] \
+     && [ ! -e "$spell_home/.claude/worktree-cleanup-manifests/cleanup-$1.started" ]; then ok "$4"
+  else bad "$4" "rc=$rc $out"; fi
+}
+refused codex '4301 00:01:00 bash @ALL@ apply 24 336 --lane codex' 'sweeper pid 4301 ' \
+  "a sweeper given a salvage age blocks its lane's start"
+refused codex '4302 00:01:00 bash @ALL@ --lane=codex apply' 'sweeper pid 4302 ' \
+  "a sweeper given --lane=<lane> first blocks its lane's start"
+refused codex '4303 00:01:00 bash @ALL@ apply --lane codex 24' 'sweeper pid 4303 ' \
+  "a sweeper given its lane between the other arguments blocks its lane's start"
+refused codex '4304 00:01:00 bash @ALL@ apply 24 --lane' 'sweeper pid 4304 ' \
+  "a sweeper whose lane cannot be read blocks the start"
+refused claude '4305 00:01:00 bash @ALL@ apply 24' 'sweeper pid 4305 ' \
+  "a sweeper given no lane sweeps the claude lane, and blocks its start"
+refused codex '4306 00:01:00 bash @SUT@ __supervise --id 20261002T990000Z-9 --lane codex' 'supervisor pid 4306 ' \
+  "a supervisor given its id first blocks its lane's start"
+refused codex '4307 00:01:00 bash @ONE@ /repo @DIR@/codex/monorepo-20261002T000000Z.tsv apply 24 336' 'cleanup pid 4307,' \
+  "a cleanup writing the codex lane's manifest blocks the codex start"
+refused claude '4308 00:01:00 bash @ONE@ /repo @DIR@/monorepo-20261002T000000Z.tsv apply 24 336' 'cleanup pid 4308,' \
+  "a cleanup writing the claude lane's manifest blocks the claude start"
+# None of these sweeps the lane asked about, or removes anything, so none blocks it.
+mode ok
+quiet_lane codex || bad "fixture: the codex lane is quiet before the spellings that do not block" "$(ps -A -ww -o command= 2>&1)"
+table_start codex "$spell_home" \
+  '4311 00:01:00 bash @ALL@ apply 24' \
+  '4312 00:01:00 bash @ALL@ dry-run 24 --lane codex' \
+  '4313 00:01:00 bash @ALL@ --lane codex' \
+  '4314 00:01:00 bash @ALL@ 24 apply --lane codex' \
+  '4315 00:01:00 bash @SUT@ __supervise --lane claude --id 20261002T990000Z-9' \
+  '4316 00:01:00 bash @SUT@ status --lane codex' \
+  '4317 00:01:00 bash @ONE@ /repo @DIR@/monorepo-20261002T000000Z.tsv apply 24 336' \
+  '4318 00:01:00 bash @ONE@ /repo @DIR@/codex/monorepo-20261002T000000Z.tsv dry-run 24' \
+  '4319 00:01:00 bash @ONE@ /repo /elsewhere/.claude/worktree-cleanup-manifests/codex/monorepo-1.tsv apply 24' \
+  '4320 00:01:00 sed -n 1,40p @ALL@'
+if [ "$rc" -eq 1 ] && grep -q 'started the codex sweep' <<<"$out"; then
+  ok "another lane's sweep, a dry run and a cleanup for another home do not block the codex start"
+else bad "another lane's sweep, a dry run and a cleanup for another home do not block the codex start" "rc=$rc $out"; fi
+quiet_lane claude || bad "fixture: the claude lane is quiet before the spellings that do not block" "$(ps -A -ww -o command= 2>&1)"
+table_start claude "$spell_home" \
+  '4321 00:01:00 bash @ALL@ apply 24 --lane codex' \
+  '4322 00:01:00 bash @ALL@ --lane=codex apply' \
+  '4323 00:01:00 bash @SUT@ __supervise --id 20261002T990000Z-9 --lane codex' \
+  '4324 00:01:00 bash @ONE@ /repo @DIR@/codex/monorepo-20261002T000000Z.tsv apply 24 336'
+if [ "$rc" -eq 1 ] && grep -q 'started the claude sweep' <<<"$out"; then
+  ok "the codex lane's sweeper, supervisor and cleanup do not block the claude start"
+else bad "the codex lane's sweeper, supervisor and cleanup do not block the claude start" "rc=$rc $out"; fi
+for spell_lane in codex claude; do
+  spell_id=$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$spell_home/.claude/worktree-cleanup-manifests/cleanup-$spell_lane.started" 2>/dev/null)
+  i=0
+  while [ "$i" -lt 100 ] && \
+    [ "$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$spell_home/.claude/worktree-cleanup-manifests/cleanup-$spell_lane.finished" 2>/dev/null)" != "$spell_id" ]; do
+    sleep 0.1; i=$((i + 1))
+  done
+done
+
 # --- the run's pre-flight uses the supervised start -------------------------------
 guide="$repo_root/.claude/guides/git-and-worktrees.md"
 skill="$repo_root/.claude/skills/portfolio-maintenance/SKILL.md"
@@ -878,6 +1140,7 @@ else bad "the guide's pre-flight starts the sweep through the supervised launche
 # shellcheck disable=SC2016 # the backticks are literal Markdown, not a command substitution
 if grep -qF 'never `kill -9`' <<<"$section" \
    && grep -qF 'A sweeper left running without' <<<"$section" \
+   && grep -qF 'together with the cleanup it is running' <<<"$section" \
    && grep -qF 'an unreadable record still starts a replacement, unless a supervisor' <<<"$section"; then
   ok "the guide's pre-flight says how to stop a stuck sweep and what blocks a replacement"
 else bad "the guide's pre-flight says how to stop a stuck sweep and what blocks a replacement" "$section"; fi

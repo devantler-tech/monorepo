@@ -25,6 +25,11 @@
 # sweep may START: none does while any supervisor or sweeper of the lane is running, whatever the
 # records say. The one supervisor left out is the one whose sweep the records show finished: it
 # has written its last record and is on its way out.
+# A process is known by its command line, which is read the way the script it runs reads its own
+# arguments, so every spelling that script accepts is the same sweep: `apply 24`, `apply 24 336
+# --lane claude` and `--lane=claude apply` all sweep the claude lane. And a supervisor shows the
+# launcher's command line until it has replaced it with its own, so the launcher keeps its lock
+# until the supervisor has said it is running, and the supervisor sweeps only once it has said so.
 #
 # Usage: worktree-lane-sweep.sh start|status --lane claude|codex
 #   start   report the previous sweep, then start a new one detached
@@ -101,6 +106,8 @@ self="$script_dir/worktree-lane-sweep.sh"
 self_name=${self##*/}
 sweeper="$script_dir/worktree-cleanup-all.sh"
 sweeper_name=${sweeper##*/}
+# The per-repository cleanup the sweeper runs for each repository of the lane.
+cleanup_name=worktree-cleanup.sh
 dir="$HOME/.claude/worktree-cleanup-manifests"
 log="$dir/cleanup-$lane.log"
 started="$dir/cleanup-$lane.started"
@@ -177,6 +184,11 @@ supervisor_runs() {
         *"/$self_name __supervise --lane $lane --id $2")
           target_seen=1; target_elapsed=$elapsed
           ;;
+        # A supervisor that has only just been started still shows the command line of the launcher
+        # it was forked from. It is about to be the supervisor, so it is running, not gone.
+        *"/$self_name start --lane $lane")
+          [ "$listed_pid" = "$$" ] || { target_seen=1; target_elapsed=$elapsed; }
+          ;;
       esac
     fi
   done <<<"$process_table"
@@ -208,20 +220,96 @@ launcher_runs() {
   return 1
 }
 
+# sweep_command <command line> — what a process is to a lane's sweep. The command line is read the
+# way the script it names reads its own arguments, so every spelling that script accepts counts
+# (#3823): matching the one spelling this launcher uses let `apply 24` (the claude lane, by
+# default) or `--lane=claude apply` run beside a sweep it had started. Sets CMD_KIND to
+#   supervisor  this script supervising a sweep; CMD_LANE and CMD_ID are what it was given
+#   sweeper     worktree-cleanup-all.sh removing worktrees; CMD_LANE is the lane it resolves to
+#   cleanup     worktree-cleanup.sh removing one repository's worktrees, as a sweeper runs it
+# or to nothing: any other process, a dry run, and the launcher's own `start` and `status`.
+CMD_KIND=""; CMD_LANE=""; CMD_ID=""
+sweep_command() {
+  local -a words
+  local i=0 n word script="" positional=0 mode=""
+  CMD_KIND=""; CMD_LANE=""; CMD_ID=""
+  read -r -a words <<<"$1" || return 0
+  n=${#words[@]}
+  while [ "$i" -lt "$n" ] && [ -z "$script" ]; do
+    word=${words[$i]}; i=$((i + 1))
+    case "$word" in
+      "$self_name"|*/"$self_name") script=launcher ;;
+      "$sweeper_name"|*/"$sweeper_name") script=sweeper ;;
+      "$cleanup_name"|*/"$cleanup_name") script=cleanup ;;
+    esac
+  done
+  case "$script" in
+    launcher)
+      if [ "$i" -ge "$n" ] || [ "${words[$i]}" != __supervise ]; then return 0; fi
+      i=$((i + 1))
+      while [ "$i" -lt "$n" ]; do
+        word=${words[$i]}; i=$((i + 1))
+        [ "$i" -lt "$n" ] || break
+        case "$word" in
+          --lane) CMD_LANE=${words[$i]}; i=$((i + 1)) ;;
+          --id) CMD_ID=${words[$i]}; i=$((i + 1)) ;;
+        esac
+      done
+      CMD_KIND=supervisor
+      ;;
+    sweeper)
+      # --lane may stand anywhere, in either form, and is claude when absent. The first other
+      # argument is the mode, a dry run when absent, and only `apply` removes anything.
+      CMD_LANE=claude
+      while [ "$i" -lt "$n" ]; do
+        word=${words[$i]}; i=$((i + 1))
+        case "$word" in
+          --lane)
+            if [ "$i" -lt "$n" ]; then CMD_LANE=${words[$i]}; i=$((i + 1)); else CMD_LANE=""; fi
+            ;;
+          --lane=*) CMD_LANE=${word#--lane=} ;;
+          *) positional=$((positional + 1)); [ "$positional" -ne 1 ] || mode=$word ;;
+        esac
+      done
+      [ "$mode" != apply ] || CMD_KIND=sweeper
+      ;;
+    cleanup)
+      while [ "$i" -lt "$n" ]; do
+        [ "${words[$i]}" != apply ] || CMD_KIND=cleanup
+        i=$((i + 1))
+      done
+      ;;
+  esac
+  return 0
+}
+
+# other_lane <lane> — succeeds when it names the lane this launcher was not asked about. A lane that
+# cannot be read from a command line is not known to be the other one, so its process counts.
+other_lane() {
+  case "$1" in
+    claude|codex) [ "$1" != "$lane" ] ;;
+    *) return 1 ;;
+  esac
+}
+
 # lane_processes <finished-id> — the same complete process-table proof for everything that may
-# still be sweeping this lane, asked before any sweep starts. Sets LIVE_SUPERVISORS and
-# LIVE_SWEEPERS to their pids. Processes are matched by what they run, never by a pid a record
+# still be sweeping this lane, asked before any sweep starts. Sets LIVE_SUPERVISORS, LIVE_SWEEPERS
+# and LIVE_CLEANUPS to their pids. Processes are known by what they run, never by a pid a record
 # names: a record can be unreadable or missing, and a sweeper outlives a killed supervisor. So any
 # copy of these scripts counts, whichever checkout or home directory started it. A refused start
 # costs one sweep; a second sweep beside a live one is what this exists to prevent.
 # The supervisor of sweep <finished-id> is left out: the records show that sweep finished, so it
-# has written its last record and is exiting. The sweeper is matched as the supervisor starts it.
+# has written its last record and is exiting.
 # A sweeper that has only just been forked still runs the supervisor's own command line, and is
 # counted as a supervisor until it is the sweeper.
-LIVE_SUPERVISORS=""; LIVE_SWEEPERS=""
+# A cleanup goes on after a sweeper that was stopped alone, and its arguments name no lane. The
+# manifest it writes does, by where it lies: the claude lane's in this launcher's records
+# directory, another lane's in a directory of the lane's name below it. Only a cleanup writing
+# there counts, so one started for another home directory, as the tests do, blocks nothing.
+LIVE_SUPERVISORS=""; LIVE_SWEEPERS=""; LIVE_CLEANUPS=""
 lane_processes() {
   local process_table listed_pid elapsed command self_seen=0
-  LIVE_SUPERVISORS=""; LIVE_SWEEPERS=""
+  LIVE_SUPERVISORS=""; LIVE_SWEEPERS=""; LIVE_CLEANUPS=""
   process_table=$(ps -A -ww -o pid= -o etime= -o command= 2>/dev/null) || return 2
   [ -n "$process_table" ] || return 2
   while read -r listed_pid elapsed command; do
@@ -230,17 +318,48 @@ lane_processes() {
       case "$command" in *"$self_name"*) self_seen=1 ;; esac
       continue
     fi
-    case "$command" in
-      *"/$self_name __supervise --lane $lane --id $1") ;;
-      *"/$self_name __supervise --lane $lane --id "*)
+    sweep_command "$command"
+    case "$CMD_KIND" in
+      supervisor)
+        if other_lane "$CMD_LANE"; then continue; fi
+        if [ -n "$1" ] && [ "$CMD_LANE" = "$lane" ] && [ "$CMD_ID" = "$1" ]; then continue; fi
         LIVE_SUPERVISORS="$LIVE_SUPERVISORS $listed_pid"
         ;;
-      *"/$sweeper_name apply 24 --lane $lane")
+      sweeper)
+        if other_lane "$CMD_LANE"; then continue; fi
         LIVE_SWEEPERS="$LIVE_SWEEPERS $listed_pid"
+        ;;
+      cleanup)
+        case "$lane" in
+          claude)
+            case "$command" in
+              *" $dir/codex/"*) continue ;;
+              *" $dir/"*) ;;
+              *) continue ;;
+            esac
+            ;;
+          *)
+            case "$command" in
+              *" $dir/$lane/"*) ;;
+              *) continue ;;
+            esac
+            ;;
+        esac
+        LIVE_CLEANUPS="$LIVE_CLEANUPS $listed_pid"
         ;;
     esac
   done <<<"$process_table"
   [ "$self_seen" = 1 ] || return 2
+}
+
+# leads_group <pid> — succeeds when <pid> leads its own process group, as a sweeper its supervisor
+# started does. One signal to that group then reaches the sweeper and the cleanup it is running;
+# a signal to the sweeper alone leaves that cleanup going on without it.
+leads_group() {
+  local group
+  group=$(ps -o pgid= -p "$1" 2>/dev/null) || return 1
+  group=${group//[[:space:]]/}
+  [ "$group" = "$1" ]
 }
 
 lock_is_stale() {
@@ -350,6 +469,30 @@ await_start_record() {
   return 1
 }
 
+# A supervisor is forked from its launcher, and until it has replaced that command line with its
+# own the process table shows a second launcher where the record names a supervisor. A launcher
+# arriving then would read the recorded supervisor as gone and start a second sweep (#3823). So the
+# supervisor says it is running, by a file in the launcher's lock, before it sweeps anything, and
+# the launcher keeps the lock until it has. A supervisor that cannot say so has no launcher holding
+# the lock for it, and sweeps nothing.
+#
+# await_supervisor <pid> <id> — 0 once the supervisor has said it is running, 1 when it ended
+# without saying so, 2 when it has said nothing for ten seconds.
+await_supervisor() {
+  local attempt=0 said="$launch_lock/supervisor.$2"
+  while [ "$attempt" -lt 200 ]; do
+    [ ! -e "$said" ] || return 0
+    if ! kill -0 "$1" 2>/dev/null; then
+      # It may have said so, swept and ended between the two looks above.
+      [ ! -e "$said" ] || return 0
+      return 1
+    fi
+    sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  return 2
+}
+
 sweep_pid=""
 # shellcheck disable=SC2329  # invoked by the signal handler below
 stop_sweep_group() {
@@ -382,6 +525,8 @@ if [ "$cmd" = __supervise ]; then
   # Detached, with stdout and stderr appended to the lane's log by the launcher.
   [[ "$id" =~ ^$id_re$ ]] || unknown "--id is malformed: '$id'"
   await_start_record || unknown "start record handshake for sweep $id was not completed"
+  touch -- "$launch_lock/supervisor.$id" 2>/dev/null \
+    || unknown "the launcher that started sweep $id no longer holds $launch_lock, so nothing was swept"
   printf '=== lane sweep %s started %s (lane %s) ===\n' "$id" "$(now)" "$lane"
   trap stop_supervised_sweep TERM INT HUP
   set -m
@@ -510,9 +655,31 @@ if [ -n "$LIVE_SUPERVISORS" ]; then
   finish "$rc"
 fi
 if [ -n "$LIVE_SWEEPERS" ]; then
-  # shellcheck disable=SC2016  # the backticks are literal: they mark the command to run
-  printf '%s: not starting a second %s sweep: sweeper pid%s is still running without its supervisor — let it finish, or stop it with `kill%s`, then start again\n' \
-    "$prog" "$lane" "$LIVE_SWEEPERS" "$LIVE_SWEEPERS"
+  # The advice stops a sweeper with the cleanup it is running, or not at all: stopped alone, it
+  # leaves that cleanup going on with nothing by the sweeper's name left to see.
+  stop_groups=""
+  for sweeper_pid in $LIVE_SWEEPERS; do
+    if leads_group "$sweeper_pid"; then
+      stop_groups="$stop_groups -$sweeper_pid"
+    else
+      stop_groups=""
+      break
+    fi
+  done
+  if [ -n "$stop_groups" ]; then
+    # shellcheck disable=SC2016  # the backticks are literal: they mark the command to run
+    printf '%s: not starting a second %s sweep: sweeper pid%s is still running without its supervisor — let it finish, or stop it and the cleanup it is running with `kill --%s`, then start again\n' \
+      "$prog" "$lane" "$LIVE_SWEEPERS" "$stop_groups"
+  else
+    printf '%s: not starting a second %s sweep: sweeper pid%s is still running without its supervisor — let it finish, then start again (stopping it alone would leave the cleanup it is running)\n' \
+      "$prog" "$lane" "$LIVE_SWEEPERS"
+  fi
+  [ "$rc" -ne 0 ] || rc=1
+  finish "$rc"
+fi
+if [ -n "$LIVE_CLEANUPS" ]; then
+  printf '%s: not starting a second %s sweep: cleanup pid%s, which a sweep of the lane started, is still running after its sweeper ended — let it finish, then start again\n' \
+    "$prog" "$lane" "$LIVE_CLEANUPS"
   [ "$rc" -ne 0 ] || rc=1
   finish "$rc"
 fi
@@ -528,6 +695,16 @@ if ! write_record "$started" "id=$new_id pid=$pid at=$(now)"; then
   wait "$pid" 2>/dev/null || true
   unknown "started supervisor $new_id (pid $pid) but cannot record it in $started; it was stopped before cleanup began"
 fi
+if await_supervisor "$pid" "$new_id"; then supervisor_said=0; else supervisor_said=$?; fi
+case "$supervisor_said" in
+  0) ;;
+  1) unknown "supervisor $new_id (pid $pid) ended before it began the sweep — see the end of $log" ;;
+  *)
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    unknown "supervisor $new_id (pid $pid) did not say it was running within ten seconds; it was stopped"
+    ;;
+esac
 printf '%s: started the %s sweep %s (pid %s) detached — its output appends to %s\n' \
   "$prog" "$lane" "$new_id" "$pid" "$log"
 finish "$rc"

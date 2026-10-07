@@ -353,8 +353,10 @@ present after six hours is reported as **stuck** and continues to block a second
 named log, then use the reported `kill <pid>` command only after confirming it is not making progress,
 and run the launcher again. **Use a plain `kill`, never `kill -9`**: the supervisor stops its sweeper
 when it is asked to end, and `kill -9` leaves that sweeper running. A sweeper left running without
-its supervisor blocks a second sweep too, until it ends or you stop it with the `kill <pid>` the
-launcher then reports (#3823). Launchers serialize through an atomic per-lane directory, so overlapping
+its supervisor blocks a second sweep too, until it ends or you stop it with the command the launcher
+then reports, which stops the sweeper together with the cleanup it is running; stopped alone, it
+leaves that cleanup going, and the cleanup then blocks the sweep (#3823). Launchers serialize through
+an atomic per-lane directory, so overlapping
 dispatches cannot both start a sweep. An unreadable process table exits `2` and starts nothing because
 running versus gone is unproven; an unreadable record still starts a replacement, unless a supervisor
 or sweeper of the lane is still running. On a sweep `1` or
