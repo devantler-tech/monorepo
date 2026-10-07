@@ -12,29 +12,48 @@
 #       **Measure on:** YYYY-MM-DD
 #   This helper reads that line and nothing else — never createdAt, never a date in prose.
 #
+#   DELIVERY COMES FIRST (monorepo#3619). Skip reason (d) covers a DELIVERED experiment waiting
+#   for its date. A future date alone used to exclude a Kata, so one that carries its own
+#   undelivered actions was hidden until its date arrived with nothing to measure. A future date
+#   is therefore NOT-DUE only when delivery is on record, in one of two ways:
+#     - the Kata has at least one sub-issue: its delivery work lives there and stays selectable,
+#       so skipping the Kata hides nothing; or
+#     - its body carries the line the delivering run writes when the Kata's own actions are done:
+#           **Delivered on:** YYYY-MM-DD
+#       with a date that is today or earlier.
+#   With neither, the verdict is UNDELIVERED: the Kata is delivery work, never a skip.
+#
 # USAGE
-#   gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // "")}' | kata-measure-date.sh --input -
+#   gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // ""),sub_issues:.sub_issues_summary.total}' | kata-measure-date.sh --input -
 #
 #   --input -  REQUIRED: stdin is ONE JSON object with the string key `body` and, optionally,
-#              `today` (YYYY-MM-DD; default the current UTC date). This is the only shape the
-#              surveyor's read-only guard admits for a declared helper.
+#              `today` (YYYY-MM-DD; default the current UTC date) and `sub_issues` (the Kata's
+#              sub-issue count, a whole number; null or absent means the count is not known and
+#              proves no delivery). This is the only shape the surveyor's read-only guard admits
+#              for a declared helper.
 #
 # OUTPUT (one line on stdout)
 #   DUE <date>                 the named date is today or earlier: measuring is actionable now
-#   NOT-DUE <date>             the named date is still in the future: skip reason (d) applies
+#   NOT-DUE <date>             the named date is still in the future and delivery is on record:
+#                              skip reason (d) applies
+#   UNDELIVERED <date>         the named date is still in the future and nothing records delivery:
+#                              the Kata is delivery work, and skip reason (d) does NOT apply
 #   UNKNOWN missing            no `**Measure on:**` line (a quoted `> ` line does not count)
 #   UNKNOWN malformed          a line whose value is empty or not one real calendar date as YYYY-MM-DD
 #   UNKNOWN conflicting <a,b>  two different dates; the helper never picks one
+#   UNKNOWN malformed-delivery / UNKNOWN conflicting-delivery <a,b>
+#                              the same two faults on a `**Delivered on:**` line
 #
 # EXIT CODES
 #   0  DUE
 #   1  NOT-DUE
 #   2  UNKNOWN, a usage error, or unreadable input. The caller reports the Kata for its line to
 #      be repaired; UNKNOWN is never read as due and never as not-due.
+#   3  UNDELIVERED. A caller that skips on exit 1 can therefore never skip an undelivered Kata.
 set -euo pipefail
 
 usage() {
-  sed -n '15,34p' "$0" >&2
+  sed -n '/^# USAGE$/,/^set -euo pipefail$/p' "$0" | sed '$d' >&2
   exit 2
 }
 
@@ -48,11 +67,13 @@ command -v jq >/dev/null 2>&1 || {
 
 payload="$(cat)" || exit 2
 jq -se 'length == 1 and (.[0] | type == "object"
-    and (keys - ["body", "today"] | length == 0)
+    and (keys - ["body", "today", "sub_issues"] | length == 0)
     and (.body | type == "string")
-    and ((has("today") | not) or (.today | type == "string" and test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"))))' \
+    and ((has("today") | not) or (.today | type == "string" and test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")))
+    and ((has("sub_issues") | not) or .sub_issues == null
+         or (.sub_issues | type == "number" and . >= 0 and . == floor)))' \
   <<<"${payload}" >/dev/null 2>&1 || {
-  echo "kata-measure-date: stdin must be one JSON object with a string body and an optional YYYY-MM-DD today" >&2
+  echo "kata-measure-date: stdin must be one JSON object with a string body, an optional YYYY-MM-DD today and an optional whole-number sub_issues" >&2
   exit 2
 }
 
@@ -77,11 +98,14 @@ if [ -n "${today}" ] && ! is_calendar_date "${today}"; then
 fi
 [ -n "${today}" ] || today="$(date -u +%Y-%m-%d)"
 
-# Every value on a `**Measure on:**` line, CRLF endings removed. Only rendered text counts: a line
+# marked_values <label> — every value on a `**<label>:**` line of the body, CRLF endings removed.
+# Only rendered text counts: a line
 # quoted with `>`, indented four spaces or a tab (a code block), inside a ``` or ~~~ fence, or inside
 # an HTML comment is an example or an instruction, never this Kata's date. The patterns spell out
 # "up to three spaces" as ` ? ? ?` because the awk on CI's runners has no {n,m} intervals.
-values="$(jq -r '.body' <<<"${payload}" | awk '
+marked_values() {
+  jq -r '.body' <<<"${payload}" | awk -v label="$1" '
+  BEGIN { marker = "^ ? ? ?\\*\\*" label ":\\*\\*" }
   # Fences follow CommonMark: an opening run of three or more backticks or tildes indented at most
   # three spaces (or opened within a list item), closed only by a run of the same character at
   # least as long, with nothing after it but whitespace.
@@ -138,34 +162,72 @@ values="$(jq -r '.body' <<<"${payload}" | awk '
     }
   }
   unclosed_comment($0) { in_comment = 1; next }
-  /^ ? ? ?\*\*Measure on:\*\*/ {
+  $0 ~ marker {
     v = $0
-    sub(/^ ? ? ?\*\*Measure on:\*\*[ \t]*/, "", v)
+    sub(marker "[ \t]*", "", v)
     sub(/[ \t]+$/, "", v)
     # An empty value becomes a placeholder: command substitution would strip a trailing empty line,
     # and validation must still see it.
     print (v == "" ? "(empty)" : v)
-  }')"
+  }'
+}
 
-if [ -z "${values}" ]; then
+# one_date <label> <unknown-suffix> — prints the single calendar date the body names on that line,
+# or nothing when it has no such line. Exits 2 with an UNKNOWN verdict on a value that is not a
+# calendar date or on two different dates: the helper never picks one.
+one_date() {
+  local values value dates
+  # A body that could not be scanned is unreadable input, never "no such line".
+  values="$(marked_values "$1")" || exit 2
+  [ -n "${values}" ] || return 0
+  while IFS= read -r value; do
+    is_calendar_date "${value}" || {
+      echo "UNKNOWN malformed$2"
+      exit 2
+    }
+  done <<<"${values}"
+  dates="$(sort -u <<<"${values}")"
+  if [ "$(grep -c . <<<"${dates}")" -ne 1 ]; then
+    echo "UNKNOWN conflicting$2 $(paste -sd, - <<<"${dates}")"
+    exit 2
+  fi
+  printf '%s\n' "${dates}"
+}
+
+# A verdict printed inside the substitution is the helper's whole answer, so pass it through.
+measure_on="$(one_date "Measure on" "")" || {
+  [ -z "${measure_on}" ] || printf '%s\n' "${measure_on}"
+  exit 2
+}
+if [ -z "${measure_on}" ]; then
   echo "UNKNOWN missing"
   exit 2
 fi
-while IFS= read -r value; do
-  is_calendar_date "${value}" || {
-    echo "UNKNOWN malformed"
-    exit 2
-  }
-done <<<"${values}"
 
-dates="$(sort -u <<<"${values}")"
-if [ "$(grep -c . <<<"${dates}")" -ne 1 ]; then
-  echo "UNKNOWN conflicting $(paste -sd, - <<<"${dates}")"
-  exit 2
+if [[ ! "${measure_on}" > "${today}" ]]; then
+  echo "DUE ${measure_on}"
+  exit 0
 fi
 
-if [[ "${dates}" > "${today}" ]]; then
-  echo "NOT-DUE ${dates}"
+# The date is still ahead. That is skip reason (d) only for a DELIVERED experiment, so delivery is
+# established before the Kata may be called not due (monorepo#3619).
+delivered_on="$(one_date "Delivered on" "-delivery")" || {
+  [ -z "${delivered_on}" ] || printf '%s\n' "${delivered_on}"
+  exit 2
+}
+delivered=no
+# A delivery date still ahead records an intention, not a delivery.
+if [ -n "${delivered_on}" ] && [[ ! "${delivered_on}" > "${today}" ]]; then
+  delivered=yes
+fi
+# Compared inside jq: the count may print as `1.0`, which a shell integer test would reject.
+has_children="$(jq -r 'if ((.sub_issues // 0) >= 1) then "yes" else "no" end' <<<"${payload}")"
+if [ "${has_children}" = yes ]; then
+  delivered=yes
+fi
+if [ "${delivered}" = yes ]; then
+  echo "NOT-DUE ${measure_on}"
   exit 1
 fi
-echo "DUE ${dates}"
+echo "UNDELIVERED ${measure_on}"
+exit 3

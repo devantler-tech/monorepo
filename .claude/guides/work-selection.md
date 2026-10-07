@@ -143,8 +143,15 @@ governs the issue work that follows.) Two rules enforce that:
    verification* below; or (c) it is too under-specified to even begin; or (d) a delivered experiment is
    awaiting its **named, future measurement date**, recorded in the issue body as a
    `**Measure on:** YYYY-MM-DD` line (moved in place when the date moves) and not yet reached.
+   **"Delivered" is part of the test, not a description** (monorepo#3619): the skip holds only when
+   the delivery is on record, in one of two ways. Either the experiment has at least one sub-issue,
+   which carries its delivery work and stays selectable, so skipping the experiment hides nothing; or
+   its body carries a `**Delivered on:** YYYY-MM-DD` line, which the delivering run adds when the
+   experiment's own actions are done. An experiment with a future date and neither is **delivery
+   work, never a skip**: left skipped, its date arrives with nothing to measure.
    Read it with `.claude/scripts/kata-measure-date.sh`, never from the issue's creation date or a date
-   in prose; its `UNKNOWN` is a line to repair, never a skip.
+   in prose: `NOT-DUE` is the skip, `UNDELIVERED` is delivery work, and its `UNKNOWN` is a line to
+   repair, never a skip.
    Once that date arrives, measuring and recording the decision is actionable work; or (e) another
    instance holds a **live claim** on it — an `agent-claim/<issue>` tip within the ~2h lease, or an
    assignment **and** lane branch within that window, with no PR yet (see *Claim protocol*). (e) is
