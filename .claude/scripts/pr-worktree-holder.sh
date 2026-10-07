@@ -37,8 +37,8 @@
 #                                   the locks, or the worktrees nested in a held one), lock-reason,
 #                                   lock-scan (a repository whose registry may hold a lock was not
 #                                   reached: a superproject, an index or a `.gitmodules` that cannot
-#                                   be read, a populated submodule at a path holding a tab or a
-#                                   newline, or nesting deeper than the scan follows)
+#                                   be read, a checkout or a populated submodule at a path holding
+#                                   a newline or a tab, or nesting deeper than the scan follows)
 #
 # WHAT HOLDING A CHECKOUT MEANS
 #   A process holds the checkout containing its working directory, every populated submodule of
@@ -207,12 +207,22 @@ repo_slug() {
 # R_TOP, R_GITDIR, R_COMMON (the git directory its repository's worktrees share), R_LINKED (1 for a
 # linked worktree) and R_BRANCH (empty when none can be named).
 resolve() {
-  local out top gitdir common head='' f
+  local out top gitdir common head='' f want=4 lines=0 line
   if ! out="$(git -C "$1" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir \
     --symbolic-full-name HEAD 2>/dev/null)"; then
     # An unborn branch has no HEAD to name; the checkout still exists.
     out="$(git -C "$1" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir \
       2>/dev/null)" || return 1
+    want=3
+  fi
+  # git answers one value to a line. A path that holds a newline takes two, every value after it is
+  # then read from the wrong line, and the checkout this would name is some other directory, whose
+  # registry holds none of the locks. More lines than values is a checkout that cannot be named, and
+  # one that may hold any PR asked about: it fails, and the answer is `unknown:lock-scan`.
+  while IFS= read -r line; do lines=$((lines + 1)); done <<<"${out}"
+  if [ "${lines}" -ne "${want}" ]; then
+    : >"${work}/scanfail"
+    return 1
   fi
   {
     IFS= read -r top || top=''
@@ -483,6 +493,28 @@ submodule_paths() {
   LC_ALL=C sort -u "${work}/subs" || return 1
 }
 
+# below <checkout> <path> — set B_PATH to <path> below <checkout>, and fail unless the path can
+# only lead there: it is relative, in the form git records a path (no empty step, no `.`, no `..`),
+# and no step of it is a symbolic link. git keeps a submodule at such a path and nowhere else.
+# Nothing is read to decide this but whether each step is a link.
+B_PATH=''
+below() {
+  local path="$1" rest="${2%/}" step
+  case "/${rest}/" in
+    *//* | */./* | */../*) return 1 ;;
+  esac
+  while [ -n "${rest}" ]; do
+    step="${rest%%/*}"
+    case "${rest}" in
+      */*) rest="${rest#*/}" ;;
+      *) rest='' ;;
+    esac
+    path="${path}/${step}"
+    [ ! -L "${path}" ] || return 1
+  done
+  B_PATH="${path}"
+}
+
 # scan_submodules <checkout> <depth> — add the repository of every populated submodule below it:
 # a session can lock a worktree of a submodule while it, and the asker, stand in the superproject.
 scan_submodules() {
@@ -494,7 +526,11 @@ scan_submodules() {
   fi
   while IFS= read -r rel; do
     [ -n "${rel}" ] || continue
-    sub="${dir}/${rel//${soh}/${nl}}"
+    # `.gitmodules` is repository content, and a path it names can lead out of the checkout: a step
+    # up, an absolute path, a symbolic link. No submodule lives outside its superproject's working
+    # tree, so such a path names none, and the directory it leads to is not this scan's to read.
+    below "${dir}" "${rel//${soh}/${nl}}" || continue
+    sub="${B_PATH}"
     [ -e "${sub}/.git" ] || continue
     # A populated submodule at a path the lists the scan keeps, one path to a line and
     # tab-separated, cannot carry.
@@ -613,15 +649,22 @@ if [ "${heads}" != $'\n\n' ]; then
       asker="${R_TOP}"
       scan_checkout
     fi
+    # The roots are sorted into a file before they are walked. A sort read straight into the loop
+    # loses its failure there, and the loop would walk none of them, or only the first few.
+    if ! LC_ALL=C sort -u "${work}/scan" >"${work}/roots"; then : >"${work}/scanfail"; fi
     while IFS= read -r top; do
       scan_submodules "${top}" 0
-    done < <(LC_ALL=C sort -u "${work}/scan")
+    done <"${work}/roots"
     # A registry the scan knows of and could not reach: a lock in it may hold any PR asked about.
     if [ -e "${work}/scanfail" ]; then probe_error=lock-scan; fi
     # Worktree locks (monorepo#3780): every locked worktree of those repositories, with the
     # process identity its reason records. A list that cannot be read is UNKNOWN, since a lock in
     # it may hold any of the PRs asked about.
     : >"${work}/locks"
+    # Sorted into a file first, for the reason the roots above are.
+    if ! LC_ALL=C sort -u -t "${tab}" -k1,1 "${work}/repos" >"${work}/registries"; then
+      probe_error=lock-scan
+    fi
     while IFS="${tab}" read -r common top; do
       [ -z "${probe_error}" ] || break
       # Only a repository that has linked worktrees keeps this directory, and only those are locked.
@@ -631,7 +674,7 @@ if [ "${heads}" != $'\n\n' ]; then
         break
       fi
       lock_rows <<<"${list}" >>"${work}/locks"
-    done < <(LC_ALL=C sort -u -t "${tab}" -k1,1 "${work}/repos")
+    done <"${work}/registries"
   fi
   if [ -z "${probe_error}" ] && [ -s "${work}/locks" ]; then
     # The start times are read once, only when a lock records one, and in the spelling the harness
@@ -713,6 +756,8 @@ if [ "${heads}" != $'\n\n' ]; then
   fi
   # A nested-worktree listing failed somewhere above: a holder may be missing from the entries.
   if [ -z "${probe_error}" ] && [ -e "${work}/listfail" ]; then probe_error=worktree-list; fi
+  # A checkout that could not be named turned up after the scan was judged: the same answer.
+  if [ -z "${probe_error}" ] && [ -e "${work}/scanfail" ]; then probe_error=lock-scan; fi
 fi
 
 rc=0

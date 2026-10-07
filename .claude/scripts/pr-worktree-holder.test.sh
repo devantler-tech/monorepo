@@ -290,6 +290,36 @@ g -C "${nlsub}/${nlsub_path}" worktree lock \
   --reason "claude agent nlsub (pid 9000002 start ${start_theirs})" "${sandbox}/nlsub-wt"
 [ "$(g config -f "${nlsub}/.gitmodules" --get-regexp '^submodule\..*\.path$' | wc -l | tr -d ' ')" = 2 ] ||
   { echo "FAIL fixture: git prints the newline path of .gitmodules on one line" >&2; exit 1; }
+# A repository whose own path holds a newline, with a worktree elsewhere that a live session
+# locked. git prints each of its paths on two lines, and the first line of each is the directory
+# above it, which is a repository too: read a line to a value, the checkout is that other one.
+g init -q "${sandbox}/nlouter"
+g -C "${sandbox}/nlouter" commit -q --allow-empty -m init
+nlrepo="${sandbox}/nlouter/"$'\n'"inner"
+g init -q "${nlrepo}"
+g -C "${nlrepo}" commit -q --allow-empty -m init
+g -C "${nlrepo}" config remote.origin.url git@github.com:devantler-tech/nlrepo.git
+g -C "${nlrepo}" worktree add -q -b claude/nl-93 "${sandbox}/nlrepo-wt"
+g -C "${nlrepo}" worktree lock \
+  --reason "claude agent nlrepo (pid 9000002 start ${start_theirs})" "${sandbox}/nlrepo-wt"
+[ "$(g -C "${nlrepo}" rev-parse --show-toplevel | wc -l | tr -d ' ')" = 2 ] ||
+  { echo "FAIL fixture: git prints the newline checkout's path on one line" >&2; exit 1; }
+# Two checkouts whose `.gitmodules` names a path that leads out of them, by a step up and by a
+# symbolic link. Both lead to the checkout above whose submodule's registry holds a live lock: a
+# scan that followed either would be reading a repository that is no part of the one it stands in.
+escape_up="${sandbox}/escape-up"
+escape_link="${sandbox}/escape-link"
+for escape in "${escape_up}" "${escape_link}"; do
+  g init -q "${escape}"
+  g -C "${escape}" commit -q --allow-empty -m init
+  g -C "${escape}" config remote.origin.url git@github.com:devantler-tech/escape.git
+  g config -f "${escape}/.gitmodules" submodule.out.url "${sandbox}/product-origin"
+done
+g config -f "${escape_up}/.gitmodules" submodule.out.path ../nomodules
+ln -s ../nomodules "${escape_link}/out"
+g config -f "${escape_link}/.gitmodules" submodule.out.path out
+[ -e "${escape_up}/../nomodules/.git" ] && [ -e "${escape_link}/out/.git" ] ||
+  { echo "FAIL fixture: the paths that leave their checkout do not lead to a repository" >&2; exit 1; }
 # A populated submodule whose `.git` entry names a git directory that is not there.
 corrupt="${sandbox}/corrupt"
 g init -q "${corrupt}"
@@ -397,7 +427,16 @@ if [ "\${FIXTURE_SUBLIST_FAIL:-}" = sed ]; then
 fi
 exec "${real_sed}" "\$@"
 SHIM
-chmod +x "${gitshim}/git" "${gitshim}/tr" "${gitshim}/sed"
+# And a sort that fails only the sort of the checkouts the lock scan starts from.
+real_sort="$(command -v sort)"
+cat >"${gitshim}/sort" <<SHIM
+#!/usr/bin/env bash
+if [ "\${FIXTURE_SUBLIST_FAIL:-}" = sort ]; then
+  case "\${!#}" in */scan) exit 1 ;; esac
+fi
+exec "${real_sort}" "\$@"
+SHIM
+chmod +x "${gitshim}/git" "${gitshim}/tr" "${gitshim}/sed" "${gitshim}/sort"
 
 lsof_full="${sandbox}/lsof-full"
 cat >"${lsof_full}" <<LSOF
@@ -845,8 +884,8 @@ expect "a lock in a submodule's registry is read when the superproject's working
 # is unknown. `list_fail=1` puts the shims on the path; with `sublist_fail` set they fail no listing.
 list_fail=1
 resolve_fail_at='nowhere'
-for sublist_fail in tr sed; do
-  expect "a list of submodules that could not be built (${sublist_fail} failed) is unknown, never none" \
+for sublist_fail in tr sed sort; do
+  expect "a list the scan needs that could not be built (${sublist_fail} failed) is unknown, never none" \
     "${nomodules}" "${session}" 2 \
     "devantler-tech/product#91 holder=unknown:lock-scan" \
     "$(pr devantler-tech/product 91 claude/product-91)" "${lsof_nowhere}"
@@ -858,6 +897,18 @@ expect "with those steps working, the same question on the same path is answered
   "$(pr devantler-tech/product 91 claude/product-91)" "${lsof_nowhere}"
 list_fail=0
 resolve_fail_at=''
+expect "a checkout whose own path holds a newline is unknown: git's answer about it cannot be read" \
+  "${nlrepo}" "${session}" 2 \
+  "devantler-tech/nlrepo#93 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/nlrepo 93 claude/nl-93)" "${lsof_nowhere}"
+expect "a path .gitmodules names by a step up is not followed out of the checkout" \
+  "${escape_up}" "${session}" 0 \
+  "devantler-tech/product#91 holder=none" \
+  "$(pr devantler-tech/product 91 claude/product-91)" "${lsof_nowhere}"
+expect "a path .gitmodules names through a symbolic link is not followed out of the checkout" \
+  "${escape_link}" "${session}" 0 \
+  "devantler-tech/product#91 holder=none" \
+  "$(pr devantler-tech/product 91 claude/product-91)" "${lsof_nowhere}"
 expect "a populated submodule at a path that holds a newline is unknown: no list here can carry it" \
   "${nlsub}" "${session}" 2 \
   "devantler-tech/product#92 holder=unknown:lock-scan" \
