@@ -84,10 +84,25 @@ Options: --today <YYYY-MM-DD> (default UTC today)
          --ask-digest (emit declared authority blockers with missing or stale
                        ask records, oldest first, for verification before
                        asking the maintainer)
+         --parked-digest (pull requests only: one row per open
+                       blocked-labelled pull request, PARKED with its blocker
+                       and a note when its one record conforms, was
+                       re-verified recently and names no blocker known to be
+                       closed, ACTIONABLE with the reason otherwise
+                       (record=BLOCKER-CLOSED when an issue or pull request
+                       the record names has closed, BLOCKER-SELF when it
+                       names the pull request itself, BLOCKER-UNREADABLE when
+                       a reference has no usable number; only this
+                       organization's are read, and an authority blocker's
+                       state never is), then
+                       a CHECKED line counting every one read; issue findings
+                       are not part of it and do not change its exit)
 Write a record with the compose subcommand (compose --help), never by hand.
 Park a pull request with the park subcommand (park --help): it writes the
 record and the blocked label together and reads both back.
 Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input).
+      With --parked-digest: 0 every labelled pull request is parked (or none is
+      labelled); 1 at least one is ACTIONABLE; 2 UNKNOWN.
 `
 
 // askChannels is the closed set of tokens an ask record may name. The ask
@@ -123,6 +138,7 @@ type options struct {
 	unrecordedMaxAge int64
 	quiet            bool
 	askDigest        bool
+	parkedDigest     bool
 }
 
 func civilDate(value string) (time.Time, error) {
@@ -150,6 +166,8 @@ func arguments(args []string) (options, bool, error) {
 			o.quiet = true
 		case "--ask-digest":
 			o.askDigest = true
+		case "--parked-digest":
+			o.parkedDigest = true
 		case "--org", "--input", "--today", "--ask-max-age-days", "--verify-max-age-days", "--unrecorded-max-age-days":
 			i++
 			if i == len(args) {
@@ -183,6 +201,9 @@ func arguments(args []string) (options, bool, error) {
 		default:
 			return o, false, fmt.Errorf("unknown argument %q", arg)
 		}
+	}
+	if o.parkedDigest && (o.askDigest || o.quiet) {
+		return o, false, errors.New("--parked-digest is a report of its own and takes neither --ask-digest nor --quiet")
 	}
 	if (o.org == "") == (o.input == "") {
 		return o, false, errors.New("exactly one of --org or --input is required")
@@ -571,6 +592,10 @@ type issue struct {
 	// forge instead (see parked.go).
 	Comments json.RawMessage `json:"comments"`
 	thread   []comment
+	// BlockerState is, on an --input pull request, whether the blocker its
+	// record names is "open" or "closed". Only the parked digest reads it; under
+	// --org the state is read from the forge instead (see pulldigest.go).
+	BlockerState string `json:"blocker_state"`
 }
 
 // unrecordedType is the one issue type read for being unstarted: a Security
@@ -917,6 +942,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			examined++
 		}
 	}
+	// The parked digest is a report of its own: it reads the pull requests the
+	// validation above accepted and nothing about the issues beside them.
+	if o.parkedDigest {
+		digest, actionable, err := parkedDigestReport(pulls, o)
+		if err != nil {
+			return unknown(err)
+		}
+		if actionable {
+			return emit(digest, 1)
+		}
+		return emit(digest, 0)
+	}
 	// Builder writes cannot fail. Check the external writer once the complete
 	// report is ready, so an undelivered report never returns a valid verdict.
 	var report strings.Builder
@@ -1081,7 +1118,7 @@ func snippet(line string) string {
 		runes = runes[:100]
 	}
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return unicode.ReplacementChar
 		}
 		return r
