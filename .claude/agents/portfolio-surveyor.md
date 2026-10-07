@@ -1352,12 +1352,13 @@ public and private — no per-repo loop needed to enumerate):
    **`security` is REPORTED, not prioritised**: the queue
    stays oldest-actionable-first and a security issue is *not* a reason to skip an older one — only an
    urgent security hotfix jumps, under the normal breakage rule.
-   **Exclude a DELIVERED `Kata` whose named measurement date is still in the FUTURE** — contract skip
-   reason (d). An undelivered one is delivery work, never not-due (monorepo#3619). Read both ONLY with
-   `gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // ""),sub_issues:.sub_issues_summary.total}' | <repo-root>/.claude/scripts/kata-measure-date.sh --input -`
-   (the guard's only admitted form; monorepo#2838), never from `createdAt` or prose: `NOT-DUE <date>`
-   excludes it (report it separately, with the date), `UNDELIVERED <date>` keeps it as delivery work,
-   `DUE` keeps it, `UNKNOWN …` reports the line it names for repair, and a failed call is `QUERY-UNKNOWN` for that Kata, never a repair.
+   **Exclude a DELIVERED `Kata` whose named measurement date is still in the FUTURE** — skip reason
+   (d). An undelivered one is delivery work (monorepo#3619). Read both ONLY with
+   `gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // ""),sub_issues:.sub_issues_summary}' | <repo-root>/.claude/scripts/kata-measure-date.sh --input -`
+   (the guard's only form; monorepo#2838), never from `createdAt` or prose: `NOT-DUE <date>`
+   excludes it (report it apart, with the date), `UNDELIVERED <date>` keeps it as delivery work,
+   `DUE` keeps it, `UNKNOWN …` reports its `**Measure on:**` or (`…-delivery`) `**Delivered on:**`
+   line for repair, and a failed call is `QUERY-UNKNOWN` for that Kata, never a repair.
    Before nominating any issue as actionable, deepen that candidate once with the exact in-scope
    issue's server-side dependency summary:
 

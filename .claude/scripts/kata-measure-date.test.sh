@@ -27,13 +27,22 @@ expect() {
     failures=$((failures + 1))
   fi
 }
-# kata <body> [today] — a stdin payload for a Kata whose delivery lives in one sub-issue, so the
-# date-reading cases below are about the date alone. The delivery cases further down use `solo`.
+# The forge's sub-issue summary in the four shapes the delivery cases need.
+none='{"total":0,"completed":0,"percent_completed":0}'
+open1='{"total":1,"completed":0,"percent_completed":0}'
+closed1='{"total":1,"completed":1,"percent_completed":100}'
+mixed='{"total":3,"completed":2,"percent_completed":66}'
+# kata <body> [today] — a stdin payload for a Kata whose delivery lives in one OPEN sub-issue, so
+# the date-reading cases below are about the date alone. The delivery cases further down use `solo`.
 kata() {
-  if [ "$#" -ge 2 ]; then jq -nc --arg b "$1" --arg t "$2" '{body: $b, today: $t, sub_issues: 1}'; else jq -nc --arg b "$1" '{body: $b, sub_issues: 1}'; fi
+  if [ "$#" -ge 2 ]; then
+    jq -nc --arg b "$1" --arg t "$2" --argjson s "${open1}" '{body: $b, today: $t, sub_issues: $s}'
+  else
+    jq -nc --arg b "$1" --argjson s "${open1}" '{body: $b, sub_issues: $s}'
+  fi
 }
-# solo <body> <today> [sub_issues as JSON] — a Kata payload with exactly the sub-issue count given;
-# with no third argument the key is absent, as an old caller would send it.
+# solo <body> <today> [sub_issues as JSON] — a Kata payload with exactly the summary given; with
+# no third argument the key is absent, as an old caller would send it.
 solo() {
   if [ "$#" -ge 3 ]; then
     jq -nc --arg b "$1" --arg t "$2" --argjson s "$3" '{body: $b, today: $t, sub_issues: $s}'
@@ -140,48 +149,69 @@ expect "without today, a far-future date is NOT-DUE" 1 "NOT-DUE 2999-12-31" "$(k
 own='## Actions\n\n- pick pilot 1\n\n**Measure on:** 2026-10-20\n'
 own="$(printf '%b' "${own}")"
 expect "a future date with no delivery on record is UNDELIVERED, never a skip" 3 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}" 2026-09-25 0)"
-expect "an unknown sub-issue count proves no delivery" 3 "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25 null)"
-expect "an absent sub-issue count proves no delivery" 3 "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25)"
-expect "a sub-issue carries the delivery, so the skip hides nothing" 1 "NOT-DUE 2026-10-20" "$(solo "${own}" 2026-09-25 1)"
-expect "several sub-issues carry the delivery" 1 "NOT-DUE 2026-10-20" "$(solo "${own}" 2026-09-25 3)"
-expect "a count written as 1.0 is still one sub-issue" 1 "NOT-DUE 2026-10-20" \
-  "$(printf '{"body":%s,"today":"2026-09-25","sub_issues":1.0}' "$(jq -n --arg b "${own}" '$b')")"
+  "$(solo "${own}" 2026-09-25 "${none}")"
+expect "an unknown sub-issue summary proves no open sub-issue" 3 "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25 null)"
+expect "an absent sub-issue summary proves no open sub-issue" 3 "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25)"
+expect "an open sub-issue carries the delivery, so the skip hides nothing" 1 "NOT-DUE 2026-10-20" \
+  "$(solo "${own}" 2026-09-25 "${open1}")"
+expect "one open sub-issue among closed ones is enough" 1 "NOT-DUE 2026-10-20" "$(solo "${own}" 2026-09-25 "${mixed}")"
+# A closed sub-issue proves only that it closed: the Kata can carry actions no child covered, and
+# nothing selectable is left to do them. The skip would hide that work, so it does not apply.
+expect "a Kata whose sub-issues have all closed is UNDELIVERED until its delivery is recorded" 3 \
+  "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25 "${closed1}")"
+expect "counts written as 1.0 and 0.0 are still one open sub-issue" 1 "NOT-DUE 2026-10-20" \
+  "$(printf '{"body":%s,"today":"2026-09-25","sub_issues":{"total":1.0,"completed":0.0}}' "$(jq -n --arg b "${own}" '$b')")"
 delivered="${own}"$'\n**Delivered on:** 2026-09-20\n'
-expect "a recorded delivery makes a future date NOT-DUE" 1 "NOT-DUE 2026-10-20" "$(solo "${delivered}" 2026-09-25 0)"
-expect "a delivery recorded today counts" 1 "NOT-DUE 2026-10-20" "$(solo "${delivered}" 2026-09-20 0)"
+expect "a recorded delivery makes a Kata with closed sub-issues NOT-DUE" 1 "NOT-DUE 2026-10-20" \
+  "$(solo "${delivered}" 2026-09-25 "${closed1}")"
+expect "a recorded delivery makes a future date NOT-DUE" 1 "NOT-DUE 2026-10-20" "$(solo "${delivered}" 2026-09-25 "${none}")"
+expect "a delivery recorded today counts" 1 "NOT-DUE 2026-10-20" "$(solo "${delivered}" 2026-09-20 "${none}")"
 expect "a delivery date still ahead is an intention, not a delivery" 3 "UNDELIVERED 2026-10-20" \
-  "$(solo "${delivered}" 2026-09-19 0)"
+  "$(solo "${delivered}" 2026-09-19 "${none}")"
 expect "the same delivery date repeated is one date" 1 "NOT-DUE 2026-10-20" \
-  "$(solo "${delivered}"$'\n**Delivered on:** 2026-09-20' 2026-09-25 0)"
+  "$(solo "${delivered}"$'\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 expect "a delivery line that is not a date is UNKNOWN" 2 "UNKNOWN malformed-delivery" \
-  "$(solo "${own}"$'\n**Delivered on:** last week' 2026-09-25 0)"
+  "$(solo "${own}"$'\n**Delivered on:** last week' 2026-09-25 "${none}")"
 expect "an empty delivery line is UNKNOWN" 2 "UNKNOWN malformed-delivery" \
-  "$(solo "${own}"$'\n**Delivered on:**' 2026-09-25 0)"
+  "$(solo "${own}"$'\n**Delivered on:**' 2026-09-25 "${none}")"
 expect "an impossible delivery date is UNKNOWN" 2 "UNKNOWN malformed-delivery" \
-  "$(solo "${own}"$'\n**Delivered on:** 2026-02-30' 2026-09-25 0)"
+  "$(solo "${own}"$'\n**Delivered on:** 2026-02-30' 2026-09-25 "${none}")"
 expect "two different delivery dates are UNKNOWN, not the earlier or the later" 2 \
   "UNKNOWN conflicting-delivery 2026-09-01,2026-09-20" \
-  "$(solo "${delivered}"$'\n**Delivered on:** 2026-09-01' 2026-09-25 0)"
+  "$(solo "${delivered}"$'\n**Delivered on:** 2026-09-01' 2026-09-25 "${none}")"
 # A malformed delivery line is reported even when a sub-issue would settle the verdict: the line
 # is this Kata's record and a later reader will trust it.
-expect "a malformed delivery line is UNKNOWN beside a sub-issue too" 2 "UNKNOWN malformed-delivery" \
-  "$(solo "${own}"$'\n**Delivered on:** soon' 2026-09-25 1)"
+expect "a malformed delivery line is UNKNOWN beside an open sub-issue too" 2 "UNKNOWN malformed-delivery" \
+  "$(solo "${own}"$'\n**Delivered on:** soon' 2026-09-25 "${open1}")"
 # Only rendered text records a delivery, exactly as for the measurement date.
 expect "a quoted delivery line is someone else's text" 3 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}"$'\n> **Delivered on:** 2026-09-20' 2026-09-25 0)"
+  "$(solo "${own}"$'\n> **Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 expect "a fenced delivery line is an example" 3 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}"$'\n'"${fence}"$'\n**Delivered on:** 2026-09-20\n'"${fence}" 2026-09-25 0)"
+  "$(solo "${own}"$'\n'"${fence}"$'\n**Delivered on:** 2026-09-20\n'"${fence}" 2026-09-25 "${none}")"
 expect "a delivery line inside an HTML comment is a template" 3 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}"$'\n<!--\n**Delivered on:** 2026-09-20\n-->' 2026-09-25 0)"
+  "$(solo "${own}"$'\n<!--\n**Delivered on:** 2026-09-20\n-->' 2026-09-25 "${none}")"
 expect "prose naming a delivery is not the line" 3 "UNDELIVERED 2026-10-20" \
-  "$(solo "${own}"$'\nDelivered on 2026-09-20 through the pilot.' 2026-09-25 0)"
+  "$(solo "${own}"$'\nDelivered on 2026-09-20 through the pilot.' 2026-09-25 "${none}")"
 expect "a delivery line does not stand in for the measurement date" 2 "UNKNOWN missing" \
-  "$(solo $'**Delivered on:** 2026-09-20' 2026-09-25 0)"
+  "$(solo $'**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+# A paragraph line straight after a quoted line is still inside the quote, for either marker.
+expect "a delivery line that continues a quote is someone else's text" 3 "UNDELIVERED 2026-10-20" \
+  "$(solo "${own}"$'\n> someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a delivery line after a quote and a blank line counts" 1 "NOT-DUE 2026-10-20" \
+  "$(solo "${own}"$'\n> someone wrote\n\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a delivery line after a quote and a heading counts" 1 "NOT-DUE 2026-10-20" \
+  "$(solo "${own}"$'\n> someone wrote\n## Delivery\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
+expect "a measurement line that continues a quote is not this Kata's date" 2 "UNKNOWN missing" \
+  "$(solo $'> they suggested\n**Measure on:** 2026-10-20' 2026-09-25 "${open1}")"
+# A NUL byte ends a line for BSD awk, which hid whatever followed it on that line.
+expect "a comment opened after a NUL byte still hides the delivery line" 3 "UNDELIVERED 2026-10-20" \
+  "$(solo "${own}"$'\nx\x01<!--\n**Delivered on:** 2026-09-20\n-->' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
+expect "trailing words after a NUL byte still make a delivery line malformed" 2 "UNKNOWN malformed-delivery" \
+  "$(solo "${own}"$'\n**Delivered on:** 2026-09-20\x01 not yet' 2026-09-25 "${none}" | sed 's/\\u0001/\\u0000/')"
 # Once the date arrives the Kata is actionable whatever was delivered, so delivery is not read.
-expect "an arrived date is DUE with nothing delivered" 0 "DUE 2026-10-20" "$(solo "${own}" 2026-10-20 0)"
+expect "an arrived date is DUE with nothing delivered" 0 "DUE 2026-10-20" "$(solo "${own}" 2026-10-20 "${none}")"
 expect "an arrived date is DUE beside a malformed delivery line" 0 "DUE 2026-10-20" \
-  "$(solo "${own}"$'\n**Delivered on:** soon' 2026-10-21 0)"
+  "$(solo "${own}"$'\n**Delivered on:** soon' 2026-10-21 "${none}")"
 
 # Negative controls: each delivery guard, removed, must change the verdict it exists for. A
 # control that left the helper unchanged would prove nothing, so that is checked first.
@@ -197,33 +227,46 @@ mutant() { # mutant <name> <sed expression> — writes a mutated helper and requ
     echo "ok   control $1 changes the helper"
   fi
 }
-expect_mutant() { # expect_mutant <label> <mutant> <stdout the real helper gives> <stdin>
+expect_mutant() { # expect_mutant <label> <mutant> <the WRONG verdict the mutant must give> <stdin>
+  # The exact wrong verdict is required: a mutant that merely crashed prints nothing, and that
+  # would say the mutation broke the helper, not that the guard it removed was doing the work.
   local out
   checks=$((checks + 1))
   out="$(printf '%s' "$4" | "${mutants}/$2.sh" --input - 2>/dev/null)" || true
-  if [ "${out}" != "$3" ]; then
+  if [ "${out}" = "$3" ]; then
     echo "ok   control caught: $1"
   else
-    echo "FAIL control not caught: $1 (still ${out})" >&2
+    echo "FAIL control not caught: $1 (wanted ${3}, got ${out})" >&2
     failures=$((failures + 1))
   fi
 }
-mutant no-delivery-gate 's/^delivered=no$/delivered=yes/'
+mutant no-delivery-gate 's/^hides_nothing=no$/hides_nothing=yes/'
 expect_mutant "without the delivery gate an undelivered Kata reads NOT-DUE" no-delivery-gate \
-  "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25 0)"
+  "NOT-DUE 2026-10-20" "$(solo "${own}" 2026-09-25 "${none}")"
 # shellcheck disable=SC2016 # the expression matches the helper's own text; nothing here expands
 mutant future-delivery-counts 's/ && \[\[ ! "${delivered_on}" > "${today}" \]\]//'
 expect_mutant "without the date test a planned delivery reads delivered" future-delivery-counts \
-  "UNDELIVERED 2026-10-20" "$(solo "${delivered}" 2026-09-19 0)"
-mutant children-ignored 's/if ((.sub_issues \/\/ 0) >= 1) then "yes"/if false then "yes"/'
-expect_mutant "without the sub-issue test a Kata delivered through children reads UNDELIVERED" children-ignored \
-  "NOT-DUE 2026-10-20" "$(solo "${own}" 2026-09-25 1)"
+  "NOT-DUE 2026-10-20" "$(solo "${delivered}" 2026-09-19 "${none}")"
+mutant children-ignored 's/ >= 1 then "yes" else "no" end/ >= 1 then "no" else "no" end/'
+expect_mutant "without the open sub-issue test a Kata with an open child reads UNDELIVERED" children-ignored \
+  "UNDELIVERED 2026-10-20" "$(solo "${own}" 2026-09-25 "${open1}")"
+mutant closed-children-count 's/(\.sub_issues\.total - \.sub_issues\.completed) >= 1/.sub_issues.total >= 1/'
+expect_mutant "counting closed sub-issues hides a Kata whose children have all closed" closed-children-count \
+  "NOT-DUE 2026-10-20" "$(solo "${own}" 2026-09-25 "${closed1}")"
+mutant no-lazy-quote 's/^    if (in_quote) next$//'
+expect_mutant "without the quote rule a delivery line that continues a quote counts" no-lazy-quote \
+  "NOT-DUE 2026-10-20" "$(solo "${own}"$'\n> someone wrote\n**Delivered on:** 2026-09-20' 2026-09-25 "${none}")"
 rm -rf "${mutants}"
 
 # Unreadable input judges nothing: exit 2 and no verdict on stdout.
-expect "a negative sub-issue count" 2 "" '{"body":"**Measure on:** 2026-10-20","sub_issues":-1}'
-expect "a fractional sub-issue count" 2 "" '{"body":"**Measure on:** 2026-10-20","sub_issues":1.5}'
-expect "a sub-issue count that is not a number" 2 "" '{"body":"**Measure on:** 2026-10-20","sub_issues":"1"}'
+measure='"body":"**Measure on:** 2026-10-20"'
+expect "a bare sub-issue count instead of the summary" 2 "" "{${measure},\"sub_issues\":1}"
+expect "a summary with a negative count" 2 "" "{${measure},\"sub_issues\":{\"total\":1,\"completed\":-1}}"
+expect "a summary with a fractional count" 2 "" "{${measure},\"sub_issues\":{\"total\":1.5,\"completed\":0}}"
+expect "a summary with a count that is not a number" 2 "" "{${measure},\"sub_issues\":{\"total\":\"1\",\"completed\":0}}"
+expect "a summary with more completed than total" 2 "" "{${measure},\"sub_issues\":{\"total\":1,\"completed\":2}}"
+expect "a summary missing its completed count" 2 "" "{${measure},\"sub_issues\":{\"total\":1}}"
+expect "a summary with an absurd count" 2 "" "{${measure},\"sub_issues\":{\"total\":1e300,\"completed\":0}}"
 expect "not JSON" 2 "" "not json"
 expect "two JSON documents" 2 "" '{"body":"a"}{"body":"b"}'
 expect "a body that is not a string" 2 "" '{"body":42}'
@@ -259,18 +302,20 @@ missing_clause() {
 # shellcheck disable=SC2016 # backticks are literal Markdown in the clauses, not substitutions
 overlay_clauses=(
   '**Exclude a DELIVERED `Kata` whose named measurement date is still in the FUTURE**'
-  'An undelivered one is delivery work, never not-due (monorepo#3619).'
-  "--jq '{body:(.body // \"\"),sub_issues:.sub_issues_summary.total}' | <repo-root>/.claude/scripts/kata-measure-date.sh --input -"
+  'An undelivered one is delivery work (monorepo#3619).'
+  "--jq '{body:(.body // \"\"),sub_issues:.sub_issues_summary}' | <repo-root>/.claude/scripts/kata-measure-date.sh --input -"
   '`NOT-DUE <date>` excludes it'
   '`UNDELIVERED <date>` keeps it as delivery work'
+  '`UNKNOWN …` reports its `**Measure on:**` or (`…-delivery`) `**Delivered on:**` line for repair'
 )
 # shellcheck disable=SC2016 # backticks are literal Markdown in the clauses, not substitutions
 selection_clauses=(
   'awaiting its **named, future measurement date**'
   '**"Delivered" is part of the test, not a description** (monorepo#3619)'
-  'Either the experiment has at least one sub-issue, which carries its delivery work and stays selectable'
-  'its body carries a `**Delivered on:** YYYY-MM-DD` line, which the delivering run adds'
+  'Either the experiment has at least one **open** sub-issue, which carries its remaining delivery work and stays selectable'
+  'its body carries a `**Delivered on:** YYYY-MM-DD` line (a UTC date, today or earlier), which the delivering run adds'
   'An experiment with a future date and neither is **delivery work, never a skip**'
+  'That includes one whose sub-issues have all closed. A closed child proves only that the child closed'
   '`NOT-DUE` is the skip, `UNDELIVERED` is delivery work, and its `UNKNOWN` is a line to repair, never a skip'
 )
 contract() { # contract <label> <text> <clause>...
@@ -289,7 +334,7 @@ contract "the survey excludes only a delivered Kata and keeps an undelivered one
 contract "skip reason (d) requires delivery on record" "${selection_flat}" "${selection_clauses[@]}"
 # shellcheck disable=SC2016 # backticks are literal Markdown in the clause, not a substitution
 contract "the Kata type names where its delivery is recorded" "${board_flat}" \
-  'its delivery on record as a sub-issue or a `**Delivered on:** YYYY-MM-DD` line'
+  'its delivery carried by open sub-issues or its own actions, and recorded as a `**Delivered on:** YYYY-MM-DD` line when done'
 # Controls: the same check must reject a contract that lost the delivery condition, each for the
 # clause that carried it. A mutation that changed nothing would prove nothing.
 control() { # control <label> <text> <mutated text> <expected fragment of the missing clause> <clause>...
@@ -305,12 +350,14 @@ control() { # control <label> <text> <mutated text> <expected fragment of the mi
 }
 control "an overlay that excludes every future-dated Kata is rejected" "${overlay_flat}" \
   "${overlay_flat//Exclude a DELIVERED /Exclude a }" 'Exclude a DELIVERED' "${overlay_clauses[@]}"
-control "an overlay that drops the sub-issue count is rejected" "${overlay_flat}" \
-  "${overlay_flat//,sub_issues:.sub_issues_summary.total/}" 'sub_issues:.sub_issues_summary.total' "${overlay_clauses[@]}"
+control "an overlay that drops the sub-issue summary is rejected" "${overlay_flat}" \
+  "${overlay_flat//,sub_issues:.sub_issues_summary/}" 'sub_issues:.sub_issues_summary' "${overlay_clauses[@]}"
 control "an overlay that drops the UNDELIVERED verdict is rejected" "${overlay_flat}" \
   "${overlay_flat//UNDELIVERED <date>/NOT-DUE <date>}" 'UNDELIVERED <date>' "${overlay_clauses[@]}"
 control "a selection rule that skips an undelivered experiment is rejected" "${selection_flat}" \
   "${selection_flat//delivery work, never a skip/a skip}" 'delivery work, never a skip' "${selection_clauses[@]}"
+control "a selection rule that counts closed sub-issues is rejected" "${selection_flat}" \
+  "${selection_flat//at least one \*\*open\*\* sub-issue/at least one sub-issue}" '**open** sub-issue' "${selection_clauses[@]}"
 
 # The overlay's own projection, applied to issue objects shaped like the forge's, must give the
 # helper a payload it accepts and the verdict the rule promises. A far-future date keeps it stable.
@@ -336,13 +383,15 @@ projected() { # projected <label> <want-exit> <want-stdout> <forge issue JSON>
 }
 far='{"body":"**Measure on:** 2999-12-31"'
 projected "the overlay's projection of a Kata with no sub-issue is UNDELIVERED" 3 "UNDELIVERED 2999-12-31" \
-  "${far},\"sub_issues_summary\":{\"total\":0,\"completed\":0,\"percent_completed\":0}}"
-projected "the overlay's projection of a Kata with a sub-issue is NOT-DUE" 1 "NOT-DUE 2999-12-31" \
-  "${far},\"sub_issues_summary\":{\"total\":1,\"completed\":0,\"percent_completed\":0}}"
-projected "the overlay's projection of an issue with no summary proves no delivery" 3 "UNDELIVERED 2999-12-31" \
+  "${far},\"sub_issues_summary\":${none}}"
+projected "the overlay's projection of a Kata with an open sub-issue is NOT-DUE" 1 "NOT-DUE 2999-12-31" \
+  "${far},\"sub_issues_summary\":${open1}}"
+projected "the overlay's projection of a Kata whose sub-issues have all closed is UNDELIVERED" 3 "UNDELIVERED 2999-12-31" \
+  "${far},\"sub_issues_summary\":${closed1}}"
+projected "the overlay's projection of an issue with no summary proves no open sub-issue" 3 "UNDELIVERED 2999-12-31" \
   "${far}}"
 projected "the overlay's projection of an issue with no body is UNKNOWN missing" 2 "UNKNOWN missing" \
-  '{"body":null,"sub_issues_summary":{"total":1,"completed":1,"percent_completed":100}}'
+  "{\"body\":null,\"sub_issues_summary\":${open1}}"
 
 checks=$((checks + 1))
 if "${tool}" --input /dev/null >/dev/null 2>&1 || "${tool}" >/dev/null 2>&1 </dev/null; then

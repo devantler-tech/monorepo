@@ -15,29 +15,33 @@
 #   DELIVERY COMES FIRST (monorepo#3619). Skip reason (d) covers a DELIVERED experiment waiting
 #   for its date. A future date alone used to exclude a Kata, so one that carries its own
 #   undelivered actions was hidden until its date arrived with nothing to measure. A future date
-#   is therefore NOT-DUE only when delivery is on record, in one of two ways:
-#     - the Kata has at least one sub-issue: its delivery work lives there and stays selectable,
-#       so skipping the Kata hides nothing; or
+#   is therefore NOT-DUE only when the skip hides nothing, in one of two ways:
+#     - the Kata has at least one OPEN sub-issue: its remaining delivery work lives there and
+#       stays selectable; or
 #     - its body carries the line the delivering run writes when the Kata's own actions are done:
 #           **Delivered on:** YYYY-MM-DD
-#       with a date that is today or earlier.
-#   With neither, the verdict is UNDELIVERED: the Kata is delivery work, never a skip.
+#       with a date, in UTC, that is today or earlier.
+#   With neither, the verdict is UNDELIVERED: the Kata is delivery work, never a skip. That
+#   includes a Kata whose sub-issues have all CLOSED. A closed child proves only that the child
+#   closed, and the Kata can carry actions no child covered, so its delivery is then recorded by
+#   the line.
 #
 # USAGE
-#   gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // ""),sub_issues:.sub_issues_summary.total}' | kata-measure-date.sh --input -
+#   gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // ""),sub_issues:.sub_issues_summary}' | kata-measure-date.sh --input -
 #
 #   --input -  REQUIRED: stdin is ONE JSON object with the string key `body` and, optionally,
-#              `today` (YYYY-MM-DD; default the current UTC date) and `sub_issues` (the Kata's
-#              sub-issue count, a whole number; null or absent means the count is not known and
-#              proves no delivery). This is the only shape the surveyor's read-only guard admits
-#              for a declared helper.
+#              `today` (YYYY-MM-DD; default the current UTC date) and `sub_issues` (the forge's
+#              sub-issue summary for the Kata: an object whose `total` and `completed` are whole
+#              numbers with completed <= total; null or absent means the summary is not known
+#              and proves no open sub-issue). This is the only shape the surveyor's read-only
+#              guard admits for a declared helper.
 #
 # OUTPUT (one line on stdout)
 #   DUE <date>                 the named date is today or earlier: measuring is actionable now
-#   NOT-DUE <date>             the named date is still in the future and delivery is on record:
-#                              skip reason (d) applies
-#   UNDELIVERED <date>         the named date is still in the future and nothing records delivery:
-#                              the Kata is delivery work, and skip reason (d) does NOT apply
+#   NOT-DUE <date>             the named date is still in the future, and an open sub-issue or a
+#                              delivery line means the skip hides nothing: skip reason (d) applies
+#   UNDELIVERED <date>         the named date is still in the future, with no open sub-issue and no
+#                              delivery line: the Kata is delivery work, and (d) does NOT apply
 #   UNKNOWN missing            no `**Measure on:**` line (a quoted `> ` line does not count)
 #   UNKNOWN malformed          a line whose value is empty or not one real calendar date as YYYY-MM-DD
 #   UNKNOWN conflicting <a,b>  two different dates; the helper never picks one
@@ -71,9 +75,11 @@ jq -se 'length == 1 and (.[0] | type == "object"
     and (.body | type == "string")
     and ((has("today") | not) or (.today | type == "string" and test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")))
     and ((has("sub_issues") | not) or .sub_issues == null
-         or (.sub_issues | type == "number" and . >= 0 and . == floor)))' \
+         or (.sub_issues | type == "object"
+             and ([.total, .completed] | all(type == "number" and . >= 0 and . <= 100000 and . == floor))
+             and .completed <= .total)))' \
   <<<"${payload}" >/dev/null 2>&1 || {
-  echo "kata-measure-date: stdin must be one JSON object with a string body, an optional YYYY-MM-DD today and an optional whole-number sub_issues" >&2
+  echo "kata-measure-date: stdin must be one JSON object with a string body, an optional YYYY-MM-DD today and an optional sub_issues summary whose total and completed are whole numbers" >&2
   exit 2
 }
 
@@ -103,8 +109,10 @@ fi
 # quoted with `>`, indented four spaces or a tab (a code block), inside a ``` or ~~~ fence, or inside
 # an HTML comment is an example or an instruction, never this Kata's date. The patterns spell out
 # "up to three spaces" as ` ? ? ?` because the awk on CI's runners has no {n,m} intervals.
+# NUL bytes are dropped first: BSD awk ends a line at one, which would hide the rest of that line
+# (a comment opener, or trailing words that make a value malformed) from the scan.
 marked_values() {
-  jq -r '.body' <<<"${payload}" | awk -v label="$1" '
+  jq -r '.body' <<<"${payload}" | tr -d '\000' | awk -v label="$1" '
   BEGIN { marker = "^ ? ? ?\\*\\*" label ":\\*\\*" }
   # Fences follow CommonMark: an opening run of three or more backticks or tildes indented at most
   # three spaces (or opened within a list item), closed only by a run of the same character at
@@ -158,11 +166,18 @@ marked_values() {
     n = run(u, c)
     # A backtick fence info string cannot contain a backtick; such a line is inline code.
     if ((c == "`" || c == "~") && n >= 3 && !(c == "`" && index(substr(u, n + 1), "`") > 0)) {
-      fence_char = c; fence_len = n; fence_indent = pfx + extra; next
+      fence_char = c; fence_len = n; fence_indent = pfx + extra; in_quote = 0; next
     }
   }
   unclosed_comment($0) { in_comment = 1; next }
+  # A paragraph line that follows a quoted line with no blank line between is still inside the
+  # quote (a lazy continuation), so a marker there belongs to the quoted text as well. A blank
+  # line, a heading or a list item ends the quote.
+  /^[ \t]*$/ { in_quote = 0; next }
+  /^ ? ? ?>/ { in_quote = 1; next }
+  /^ ? ? ?(#|[-+*][ \t]|[0-9]+[.)][ \t])/ { in_quote = 0 }
   $0 ~ marker {
+    if (in_quote) next
     v = $0
     sub(marker "[ \t]*", "", v)
     sub(/[ \t]+$/, "", v)
@@ -186,7 +201,10 @@ one_date() {
       exit 2
     }
   done <<<"${values}"
-  dates="$(sort -u <<<"${values}")"
+  # Errexit is off in here (the caller tests this function's status), so a failed sort is checked
+  # by hand: an empty list must never be reported as two conflicting dates.
+  dates="$(sort -u <<<"${values}")" || exit 2
+  [ -n "${dates}" ] || exit 2
   if [ "$(grep -c . <<<"${dates}")" -ne 1 ]; then
     echo "UNKNOWN conflicting$2 $(paste -sd, - <<<"${dates}")"
     exit 2
@@ -209,23 +227,26 @@ if [[ ! "${measure_on}" > "${today}" ]]; then
   exit 0
 fi
 
-# The date is still ahead. That is skip reason (d) only for a DELIVERED experiment, so delivery is
+# The date is still ahead. That is skip reason (d) only when the skip hides nothing, so that is
 # established before the Kata may be called not due (monorepo#3619).
 delivered_on="$(one_date "Delivered on" "-delivery")" || {
   [ -z "${delivered_on}" ] || printf '%s\n' "${delivered_on}"
   exit 2
 }
-delivered=no
+hides_nothing=no
 # A delivery date still ahead records an intention, not a delivery.
 if [ -n "${delivered_on}" ] && [[ ! "${delivered_on}" > "${today}" ]]; then
-  delivered=yes
+  hides_nothing=yes
 fi
-# Compared inside jq: the count may print as `1.0`, which a shell integer test would reject.
-has_children="$(jq -r 'if ((.sub_issues // 0) >= 1) then "yes" else "no" end' <<<"${payload}")"
-if [ "${has_children}" = yes ]; then
-  delivered=yes
+# An OPEN sub-issue carries the remaining delivery work and stays selectable. A closed one proves
+# only that it closed. Subtracted inside jq: a count may print as `1.0`, which a shell integer
+# test would reject.
+open_child="$(jq -r 'if .sub_issues == null then "no"
+  elif (.sub_issues.total - .sub_issues.completed) >= 1 then "yes" else "no" end' <<<"${payload}")"
+if [ "${open_child}" = yes ]; then
+  hides_nothing=yes
 fi
-if [ "${delivered}" = yes ]; then
+if [ "${hides_nothing}" = yes ]; then
   echo "NOT-DUE ${measure_on}"
   exit 1
 fi

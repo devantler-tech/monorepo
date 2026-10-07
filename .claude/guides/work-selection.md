@@ -144,11 +144,13 @@ governs the issue work that follows.) Two rules enforce that:
    awaiting its **named, future measurement date**, recorded in the issue body as a
    `**Measure on:** YYYY-MM-DD` line (moved in place when the date moves) and not yet reached.
    **"Delivered" is part of the test, not a description** (monorepo#3619): the skip holds only when
-   the delivery is on record, in one of two ways. Either the experiment has at least one sub-issue,
-   which carries its delivery work and stays selectable, so skipping the experiment hides nothing; or
-   its body carries a `**Delivered on:** YYYY-MM-DD` line, which the delivering run adds when the
-   experiment's own actions are done. An experiment with a future date and neither is **delivery
-   work, never a skip**: left skipped, its date arrives with nothing to measure.
+   it hides nothing, in one of two ways. Either the experiment has at least one **open** sub-issue,
+   which carries its remaining delivery work and stays selectable; or its body carries a
+   `**Delivered on:** YYYY-MM-DD` line (a UTC date, today or earlier), which the delivering run adds
+   when the experiment's own actions are done. An experiment with a future date and neither is
+   **delivery work, never a skip**: left skipped, its date arrives with nothing to measure. That
+   includes one whose sub-issues have all closed. A closed child proves only that the child closed,
+   so either finish what the experiment still asks for or record the line.
    Read it with `.claude/scripts/kata-measure-date.sh`, never from the issue's creation date or a date
    in prose: `NOT-DUE` is the skip, `UNDELIVERED` is delivery work, and its `UNKNOWN` is a line to
    repair, never a skip.
