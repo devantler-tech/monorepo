@@ -172,12 +172,61 @@ run_check "$db"
 expect_rc 0 "an IN_PROGRESS row must not be classified after its updated_at ages past grace"
 expect_out "OK" "terminal history containing a healthy run must remain OK"
 
-# --- 4. duration alone is not enough -----------------------------------------------------------
-db=$TMP/fastok.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
-add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 yes           # fast BUT wrote an inbox item
+# --- 4. an inbox item on a run that stopped at start-up is not proof of work (monorepo#3929) ------
+# This case used to assert exit 0, and that was the defect: about 145 consecutive hourly runs each
+# stopped at their start-up checks, wrote a notice saying so, and were read as producing for six
+# days. The notice is content the run chooses; the duration is not.
+db=$TMP/fastnotice.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 yes           # fast, and wrote an inbox item
 add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 yes
 run_check "$db"
-expect_rc 0 "a fast run that wrote an inbox item is not a stub"
+expect_rc 1 "fast runs that wrote an inbox item did no work"
+expect_out "pre-flight window" "the verdict must name the pre-flight window"
+expect_out_not "OK  lane-a" "an inbox item must not certify a run that ended at start-up"
+
+# --- 4b. THE LIVE SHAPE: every newest run short, every one carrying a notice ---------------------
+# Durations are the measured ones from 2026-10-03..07 (145-458 s).
+db=$TMP/preflight-live.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))   284 yes
+add_run "$db" lane-a $(( GRACE_MS + 3660000 )) 458 yes
+add_run "$db" lane-a $(( GRACE_MS + 7260000 )) 145 yes
+run_check "$db" --consecutive 3
+expect_rc 1 "runs that all stopped at pre-flight with a notice are NOT-PRODUCING"
+expect_out "NOT-PRODUCING  lane-a" "the pre-flight verdict must name the lane"
+expect_out "an inbox item does not count" "the verdict must say why the notices were not counted"
+
+# --- 4c. one long working run in the window is still OK ------------------------------------------
+# 6,437 s is the one working run measured on 2026-10-07, beside two pre-flight stops.
+db=$TMP/preflight-oneworked.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))   284  yes
+add_run "$db" lane-a $(( GRACE_MS + 3660000 )) 6437 yes
+add_run "$db" lane-a $(( GRACE_MS + 7260000 )) 255  yes
+run_check "$db" --consecutive 3
+expect_rc 0 "one long working run in the window keeps the lane OK"
+expect_out "OK  lane-a" "a working run must be reported OK"
+expect_out_not "NOT-PRODUCING" "a single pre-flight stop beside a working run must not fire"
+
+# --- 4d. the boundary is exact, in milliseconds --------------------------------------------------
+db=$TMP/preflight-at.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))   600000 yes
+add_run_ms "$db" lane-a $(( GRACE_MS + 3660000 )) 600000 yes
+run_check "$db"
+expect_rc 1 "a run that ended exactly at the pre-flight window is inside it"
+db=$TMP/preflight-over.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))   600001 yes
+add_run_ms "$db" lane-a $(( GRACE_MS + 3660000 )) 600001 yes
+run_check "$db"
+expect_rc 0 "a run 1 ms past the pre-flight window with an inbox item is producing"
+# The window is a knob, and the verdict follows it.
+run_check "$TMP/preflight-live.db" --consecutive 3 --preflight-seconds 100
+expect_rc 0 "a narrower pre-flight window must stop counting longer runs as pre-flight stops"
+
+# --- 4e. the knob is validated like the others ---------------------------------------------------
+run_check "$TMP/preflight-live.db" --preflight-seconds abc
+expect_rc 2 "a non-numeric --preflight-seconds must be rejected"
+run_check "$TMP/preflight-live.db" --preflight-seconds 30
+expect_rc 2 "a pre-flight window shorter than the stub window must be rejected"
+expect_out "at least --stub-seconds" "the refusal must name the constraint"
 
 # --- 5. missing inbox alone is not a STUB, but it is not health either --------------------------
 # A long run without an inbox item is not the dispatch-time death the NOT-PRODUCING verdict names,
@@ -420,17 +469,27 @@ run_check "$db" --automation lane-b
 expect_rc 2 "an inactive automation must be UNKNOWN, never NOT-PRODUCING"
 expect_out "not an ACTIVE automation" "the inactive refusal must name the reason"
 
-# --- a run just OVER the stub threshold is not a stub --------------------------------------------
-# Whole-second truncation classified `STUB_SECONDS*1000 + 999` ms as exactly STUB_SECONDS, so a run
-# genuinely over the threshold counted as under it. Both runs sit 999 ms over, so the comparison
+# --- a run just OVER the pre-flight window is not a pre-flight stop -------------------------------
+# Whole-second truncation classified `N*1000 + 999` ms as exactly N seconds, so a run genuinely over
+# a threshold counted as under it. Both runs sit 999 ms over the pre-flight window, so the comparison
 # precision is the only thing deciding the verdict.
 db=$TMP/justover.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))  600999 no
+add_run_ms "$db" lane-a $(( GRACE_MS + 900000 )) 600999 no
+run_check "$db"
+expect_rc 2 "a run 999ms over the pre-flight window must not be counted a pre-flight stop"
+expect_out "600999ms" "the verdict must report the millisecond duration it actually compared"
+expect_out_not "NOT-PRODUCING" "999ms over the window must not reach the dead-lane verdict"
+
+# Just over the STUB window but inside the pre-flight one: no longer unproven. The run ended before
+# any run has ever done work, so it is a pre-flight stop, worded as one rather than as a stub.
+db=$TMP/overstub.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
 add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))  60999 no
 add_run_ms "$db" lane-a $(( GRACE_MS + 900000 )) 60999 no
 run_check "$db"
-expect_rc 2 "a run 999ms over the stub threshold must not be counted a stub"
-expect_out "60999ms" "the verdict must report the millisecond duration it actually compared"
-expect_out_not "NOT-PRODUCING" "999ms over the threshold must not reach the dead-lane verdict"
+expect_rc 1 "a run past the stub window but inside the pre-flight window did no work"
+expect_out "pre-flight window" "it must be worded as a pre-flight stop"
+expect_out_not "with no inbox item" "a run past the stub window must not be worded as a stub"
 
 # --- a NEGATIVE duration is corrupt timing data, not a long run ----------------------------------
 # updated_at before created_at cannot describe a real run. Treating it as a large duration made it a
@@ -610,6 +669,19 @@ expect_out "NOT-PRODUCING  lane-i" "a run that settled before the refusal must n
 expect_out "account-scoped" "the verdict must still name the account scope"
 expect_out_not "OK  lane-i" "a start-time comparison would have reported this lane OK"
 
+# A pre-flight notice does not clear an account-scoped refusal (monorepo#3929).
+# A refusal is cleared by a producing run anywhere on the account. A notice from a run that
+# stopped at start-up is not production, so it must not clear one either.
+db=$TMP/preflight-acct.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-e $(( GRACE_MS + 3660000 )) 4 no
+add_run "$db" lane-e $(( GRACE_MS + 1800000 )) 4 no             # the refusal
+add_rollout "$db" lane-e usage_limit_exceeded
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes          # produced BEFORE the refusal
+add_run "$db" lane-i $(( GRACE_MS + 60000 ))   200 yes          # a notice AFTER it, from a pre-flight stop
+run_check "$db"
+expect_rc 1 "a pre-flight notice after a refusal must not clear it"
+expect_out "NOT-PRODUCING  lane-i" "the sibling lane must stay NOT-PRODUCING behind the refusal"
+
 # Structural privacy: the outcome record is read for its classifier only.
 asserts=$(( asserts + 1 ))
 noncomment=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
@@ -619,7 +691,7 @@ fi
 
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 91 ]; then
+if [ "$asserts" -lt 110 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi
