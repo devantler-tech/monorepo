@@ -242,6 +242,17 @@ g config -f "${broken}/.gitmodules" --get-regexp '^submodule\..*\.path$' >/dev/n
 # 0 would be a file git reads, and 1 a readable file that names no path: neither is the fixture.
 [ "${broken_rc}" -gt 1 ] ||
   { echo "FAIL fixture: git reads the broken .gitmodules (exit ${broken_rc})" >&2; exit 1; }
+# A populated submodule whose `.git` entry names a git directory that is not there.
+corrupt="${sandbox}/corrupt"
+g init -q "${corrupt}"
+g -C "${corrupt}" commit -q --allow-empty -m init
+g -C "${corrupt}" submodule --quiet add "${sandbox}/product-origin" product
+g -C "${corrupt}" commit -q -m 'add product'
+printf 'gitdir: %s\n' "${sandbox}/no-such-git-directory" >"${corrupt}/product/.git"
+if g -C "${corrupt}/product" rev-parse --show-toplevel >/dev/null 2>&1; then
+  echo "FAIL fixture: git still resolves the submodule whose .git entry was broken" >&2
+  exit 1
+fi
 
 # ── A locked worktree whose path holds a tab (monorepo#3825) ────────────────────────────────────
 # A third repository, so the row no table can carry is in sight only for the cases that ask it.
@@ -308,9 +319,18 @@ case " \$* " in
     ;;
 esac
 # With FIXTURE_RESOLVE_FAIL_AT, that one checkout cannot be resolved and every listing succeeds.
-if [ -n "\${FIXTURE_RESOLVE_FAIL_AT:-}" ]; then
-  case " \$* " in *" -C \${FIXTURE_RESOLVE_FAIL_AT} rev-parse "*) exit 128 ;; esac
-fi
+# A value that begins with super: fails only the question of what its superproject is.
+case "\${FIXTURE_RESOLVE_FAIL_AT:-}" in
+  '') ;;
+  super:*)
+    case " \$* " in
+      *" -C \${FIXTURE_RESOLVE_FAIL_AT#super:} rev-parse --show-superproject-working-tree "*) exit 128 ;;
+    esac
+    ;;
+  *)
+    case " \$* " in *" -C \${FIXTURE_RESOLVE_FAIL_AT} rev-parse "*) exit 128 ;; esac
+    ;;
+esac
 exec "${real_git}" "\$@"
 SHIM
 chmod +x "${gitshim}/git"
@@ -736,8 +756,17 @@ expect "a superproject that cannot be resolved is unknown: its registry was neve
   "${hub_product}" "${session}" 2 \
   "devantler-tech/hub#40 holder=unknown:lock-scan" \
   "$(pr devantler-tech/hub 40 worktree-agent-a1)" "${lsof_nowhere}"
+resolve_fail_at="super:${hub_product}"
+expect "a checkout git cannot say the superproject of is unknown" \
+  "${hub_product}" "${session}" 2 \
+  "devantler-tech/hub#40 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/hub 40 worktree-agent-a1)" "${lsof_nowhere}"
 list_fail=0
 resolve_fail_at=''
+expect "a populated submodule whose .git entry cannot be read is unknown: its registry was never read" \
+  "${corrupt}" "${session}" 2 \
+  "devantler-tech/demo#3 holder=unknown:lock-scan" \
+  "$(pr devantler-tech/demo 3 claude/nobody-3)" "${lsof_nowhere}"
 expect "a .gitmodules that cannot be parsed is unknown: which submodules it names was never read" \
   "${broken}" "${session}" 2 \
   "devantler-tech/demo#3 holder=unknown:lock-scan" \

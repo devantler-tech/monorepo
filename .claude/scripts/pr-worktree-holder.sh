@@ -204,30 +204,25 @@ repo_slug() {
 
 # resolve <dir> — the checkout containing <dir>, in ONE git call (git startup dominates the cost):
 # R_TOP, R_GITDIR, R_COMMON (the git directory its repository's worktrees share), R_LINKED (1 for a
-# linked worktree), R_BRANCH (empty when none can be named) and R_SUPER (the checkout that holds
-# this one as a submodule, empty when none does). git prints the superproject only when there is
-# one, so it is asked for last, where a missing line shifts nothing.
+# linked worktree) and R_BRANCH (empty when none can be named).
 resolve() {
-  local out top gitdir common head='' super f born=1
+  local out top gitdir common head='' f
   if ! out="$(git -C "$1" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir \
-    --symbolic-full-name HEAD --show-superproject-working-tree 2>/dev/null)"; then
+    --symbolic-full-name HEAD 2>/dev/null)"; then
     # An unborn branch has no HEAD to name; the checkout still exists.
     out="$(git -C "$1" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir \
-      --show-superproject-working-tree 2>/dev/null)" || return 1
-    born=0
+      2>/dev/null)" || return 1
   fi
   {
     IFS= read -r top || top=''
     IFS= read -r gitdir || gitdir=''
     IFS= read -r common || common=''
-    if [ "${born}" = 1 ]; then IFS= read -r head || head=''; fi
-    IFS= read -r super || super=''
+    IFS= read -r head || head=''
   } <<<"${out}"
   if [ -z "${top}" ] || [ -z "${gitdir}" ]; then return 1; fi
   R_TOP="${top}"
   R_GITDIR="${gitdir}"
   R_COMMON="${common}"
-  R_SUPER="${super}"
   R_LINKED=0
   if [ "${gitdir}" != "${common}" ]; then R_LINKED=1; fi
   R_BRANCH=''
@@ -400,15 +395,21 @@ lock_rows() {
 # above it: an asker or a process inside a submodule says nothing else about the repository whose
 # registry holds the locks on the worktrees around it.
 # A registry this walk knows of and does not reach may hold a lock on any PR asked about, so it is
-# never passed over in silence: a superproject that cannot be read, and one more than the walk
-# follows, leave a flag the main shell turns into `unknown:lock-scan`. scan_submodules does the
-# same below a checkout.
+# never passed over in silence: a checkout git cannot say the superproject of, a superproject that
+# cannot be read, and one more than the walk follows, each leave a flag the main shell turns into
+# `unknown:lock-scan`. scan_submodules does the same below a checkout.
+# The superproject is asked for here and not in `resolve`, which every holder also goes through:
+# git answers it by running a second command in the directory above the checkout.
 scan_checkout() {
   local hops=0 super
   while :; do
     printf '%s\t%s\n' "${R_COMMON}" "${R_TOP}" >>"${work}/repos"
     printf '%s\n' "${R_TOP}" >>"${work}/scan"
-    super="${R_SUPER}"
+    # git prints nothing, and succeeds, for a checkout that is nobody's submodule.
+    if ! super="$(git -C "${R_TOP}" rev-parse --show-superproject-working-tree 2>/dev/null)"; then
+      : >"${work}/scanfail"
+      break
+    fi
     [ -n "${super}" ] || break
     if [ "${hops}" -ge 8 ] || ! resolve "${super}"; then
       : >"${work}/scanfail"
@@ -463,11 +464,14 @@ scan_submodules() {
       : >"${work}/scanfail"
       return 0
     fi
+    # A populated submodule ends in one of two ways: seen to hold no lock, or resolved as its own
+    # checkout and listed. One that has a `.git` entry and is neither, because that entry cannot
+    # be read or names a checkout somewhere else, is a registry nobody looked at.
     if ! lockless "${sub}"; then
-      # The same two tests as expand_submodules: an unpopulated submodule and a path that leaves
-      # the checkout both resolve elsewhere.
-      resolve "${sub}" || continue
-      [ "${R_TOP}" = "${sub}" ] || continue
+      if ! resolve "${sub}" || [ "${R_TOP}" != "${sub}" ]; then
+        : >"${work}/scanfail"
+        return 0
+      fi
       printf '%s\t%s\n' "${R_COMMON}" "${sub}" >>"${work}/repos"
     fi
     scan_submodules "${sub}" "$((depth + 1))"
