@@ -44,7 +44,9 @@ Projects includes the wider technical catalogue and earlier research on the same
 expandable English detail sourced directly from `src/content/docs/projects/active.mdx` and
 `completed.mdx`. Their drift checks remain authoritative. The legacy active/completed URLs
 redirect to the relevant section of `/projects/`; the documentation sidebar links only to that
-canonical page. Root horizontal overflow is clipped without creating a non-scrolling ancestor
+canonical page. Browser redirects preserve incoming heading fragments; links without a fragment
+and the no-JavaScript fallback use the relevant catalogue section. Root horizontal overflow is
+clipped without creating a non-scrolling ancestor
 that would break the documentation header's sticky positioning.
 
 Journal covers and project illustrations use the subject-based green/charcoal workshop series in

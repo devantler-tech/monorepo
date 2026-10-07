@@ -61,6 +61,28 @@ for (const [path, target] of [['projects/active', '/projects/#technical-projects
   const page = html(path);
   assert.match(page, /http-equiv="refresh"/i, 'Legacy project URLs redirect on static hosting');
   assert.ok(page.includes(target), `Legacy projects resolve to ${target}`);
+  // A fixed meta-refresh loses the fragment of an old heading permalink.
+  // Exercise the emitted browser code, not just the source or fallback link.
+  const redirect = page.match(/<script\b([^>]*\bdata-project-redirect[^>]*)>([\s\S]*?)<\/script>/);
+  assert.ok(redirect, 'Legacy heading links use a fragment-preserving browser redirect');
+  const dataset = {
+    destination: redirect[1].match(/data-destination="([^"]+)"/)?.[1],
+    fallback: redirect[1].match(/data-fallback="([^"]+)"/)?.[1],
+  };
+  for (const [hash, expected] of [
+    ['', target],
+    ['#-data-product-controller--', '/projects/#-data-product-controller--'],
+    ['#-data-product-', '/projects/#-data-product-'],
+    ['#%EF%B8%8F-ksail---', '/projects/#%EF%B8%8F-ksail---'],
+    ['#//outside.example/path', '/projects/#//outside.example/path'],
+  ]) {
+    const destinations = [];
+    runInNewContext(redirect[2], {
+      document: { currentScript: { dataset } },
+      location: { hash, replace: (url) => destinations.push(url) },
+    });
+    assert.deepEqual(destinations, [expected], `Legacy ${path} preserves ${hash || 'the section fallback'}`);
+  }
 }
 for (const path of ['blog', 'templates', 'agentic-engineering']) {
   navigation(html(path), 'en');
