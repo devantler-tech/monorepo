@@ -56,13 +56,14 @@ RUNTIME_DOC="${INFERENCE_ROUTING_RUNTIME_DOC:-$ROOT/.claude/plugin-consumption/i
 REGISTRY="$ROOT/.claude/plugin-consumption/agent-instances.json"
 [[ -r "$GUIDE" && -r "$RUNTIME_DOC" && -r "$REGISTRY" ]] ||
   { echo 'FAIL accepted parent routes: contract files unreadable' >&2; exit 1; }
-# The guide is hard-wrapped, so match on one line of whitespace-normalised text.
-guide_text="$(tr -s '[:space:]' ' ' < "$GUIDE")"
+# The guide is hard-wrapped and marks code with backticks, so match on one line of
+# whitespace-normalised text with the backticks (octal 140) removed.
+guide_text="$(tr -s '[:space:]' ' ' < "$GUIDE" | tr -d '\140')"
 [[ -n "$guide_text" ]] || { echo 'FAIL accepted parent routes: guide is empty' >&2; exit 1; }
 for phrase in \
   'native pre-inference enforcement is **not a required control** for it' \
   'never a reason to stop a scheduled run or to skip portfolio work' \
-  'a visible model ID containing `fable`, an inference API key, or a sign-in or billing route other than the included subscription' \
+  'a visible model ID containing fable, an inference API key, or a sign-in or billing route other than the included subscription' \
   'Children, advisors, model switches, fallback and automatic routing stay disabled and gated' \
   'only the maintainer adds one'; do
   case "$guide_text" in
@@ -72,14 +73,15 @@ for phrase in \
 done
 printf 'PASS accepted parent route rule and its limits\n'
 # Every accepted row names a registered instance and a maintainer decision; an empty table would
-# silently return the listed lanes to stopping at the pre-flight.
+# silently return the listed lanes to stopping at the pre-flight. Take the table's data rows
+# (neither the header nor the separator row) with the backticks removed.
 rows="$(awk '
   /^## Accepted scheduled parent routes$/ { on = 1; next }
   on && /^## / { exit }
-  on && /^\| *`/ { print }' "$RUNTIME_DOC")"
+  on && /^\|/ && !/^\| *Instance *\|/ && !/^\|[-| ]+$/ { print }' "$RUNTIME_DOC" | tr -d '\140')"
 [[ -n "$rows" ]] || { echo 'FAIL accepted parent routes: no accepted row found' >&2; exit 1; }
 while IFS= read -r row; do
-  id="$(printf '%s\n' "$row" | sed -n 's/^| *`\([^`]*\)`.*/\1/p')"
+  id="$(printf '%s\n' "$row" | awk -F'|' '{ gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2 }')"
   [[ -n "$id" ]] || { printf 'FAIL accepted parent routes: unreadable row: %s\n' "$row" >&2; exit 1; }
   jq -e --arg id "$id" '.instances | has($id)' "$REGISTRY" > /dev/null ||
     { printf 'FAIL accepted parent routes: %s is not a registered instance\n' "$id" >&2; exit 1; }
