@@ -308,7 +308,7 @@ expect "a delivery line after a comment that held a whole <pre> block counts" 1 
 # delivery line. `shown` cases came back with the line as a rendered bold label, that is with
 # `<strong>Delivered on:</strong>` in the HTML; `hidden` cases came back with it as raw text, as
 # code, or not at all. The property that matters is the second: a line the page does not show as
-# the record must never count as one. In all 99 bodies measured, none did. The format's %s is
+# the record must never count as one. In all 122 bodies measured, none did. The format's %s is
 # the line.
 measured() { # measured <want-exit> <want-stdout> <label> <printf format of the text under the measure line>
   local text
@@ -390,7 +390,32 @@ hidden "an indented <div>, then a text line at the margin holding an opener" '  
 hidden "<div> in a list item, then a fence at the margin around the line" '- item\n  <div>\n```\n\n%s\n```'
 hidden "a line at the margin that closes a comment and a <pre> left open in a list item" \
   '<div> <!--\n\n- item\n  <pre>\noutdented --> </pre>\n\n%s'
+# Which lines open a tag block: one that starts with a block-level tag, or one that is a single
+# complete tag and nothing else, whatever its attributes hold. Text after an inline tag does not.
+hidden "<div> and an opener on a list item line" '- <div> <!--\n\n%s'
+hidden "<div split over two lines, the opener on the second" '<div\nclass="x"> <!--\n\n%s'
+hidden "a self-closing tag line, then a line holding an opener" '<br/>\ntext <!--\n\n%s'
+hidden "a closing tag line, then a line holding an opener" '</span>\ntext <!--\n\n%s'
+hidden "a custom element line, then a line holding an opener" '<my-box>\ntext <!--\n\n%s'
+hidden "a tag with a bare attribute, then a line holding an opener" '<input disabled>\ntext <!--\n\n%s'
+hidden "a tag with an unquoted value, then a line holding an opener" '<a href=x>\ntext <!--\n\n%s'
+hidden "a tag whose double-quoted value holds >, then a line holding an opener" '<a title="a>b">\ntext <!--\n\n%s'
+hidden "a tag whose single-quoted value holds >, then a line holding an opener" "<a title='a>b'>\\ntext <!--\\n\\n%s"
+shown "a line of two tags, then a line holding an opener" '<b><i>\ntext <!--\n\n%s'
+shown "<img> with more text on its line, holding an opener" '<img src="x"> <!--\n\n%s'
+shown "a < that starts no tag, then an opener" '<3 <!--\n\n%s'
+shown "an opener at the end of a heading" '## Title <!--\n\n%s'
+shown "an opener in a table cell" '| a |\n|---|\n| <!-- |\n\n%s'
+shown "a whole comment inside one paragraph, over two lines" 'text <!-- a\nb --> more\n\n%s'
+# A closer that is not raw HTML ends nothing, wherever it stands.
+hidden "a comment opened in raw HTML, after a closer under a line of inline tags" '<div> <!--\n\n<span>x</span>\n-->\n\n%s'
+hidden "a comment opened in raw HTML, after a closer inside a fence" '<div> <!--\n\n```\n-->\n```\n\n%s'
+hidden "a comment opened in raw HTML, after a closer in indented code" '<div> <!--\n\n    -->\n\n%s'
+hidden "a comment opened in raw HTML, after a closer in a code span" '<div> <!--\n\nsee `-->` here\n\n%s'
+hidden "a comment opened in raw HTML, after a closer on a heading" '<div> <!--\n\n## T -->\n\n%s'
 # Ordinary structure around the line changes nothing.
+shown "a math block around it, which a blank line ends" '$$\n\n%s\n\n$$'
+shown "a footnote definition above it" 'See[^1].\n\n[^1]: note\n\n%s'
 shown "two blank lines above it" 'text\n\n\n%s'
 shown "a list item above it, the line at the margin" '- item\n\n%s'
 shown "three spaces of indentation" 'text\n\n   %s'
@@ -407,6 +432,9 @@ refused "an indented fence closed at the margin" '  ```\n  code\n```\n\n%s'
 refused "an indented comment block with lines at the margin" '  <!--\nnote\n-->\n\n%s'
 refused "<div> in a list item, then a text line at the margin holding an opener" '- item\n  <div>\ntext <!--\n\n%s'
 refused "a paragraph continued by a lone inline tag and a line holding an opener" 'text\n<span>\nmore <!--\n\n%s'
+# And a whole comment inside a paragraph is raw HTML too, so its closer does end a comment left
+# open before it. Ordinary text is not read for closers at all, which only ever hides more.
+refused "a comment opened in raw HTML, after a whole comment in a later paragraph" '<div> <!--\n\ntext <!-- a --> more\n\n%s'
 }
 # A NUL byte inside a date must not be deleted: that would join the pieces into a date nobody wrote.
 expect "a NUL byte inside a delivery date leaves it malformed" 2 "UNKNOWN malformed-delivery" \

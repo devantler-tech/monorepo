@@ -161,6 +161,12 @@ marked_values() {
     # (a code span, a link) that runs on into the line below.
     dateline = "^ ? ? ?\\*\\*(Measure on|Delivered on):\\*\\*"
     whole = dateline "[ \t]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][ \t]*$"
+    # A line that is one complete opening or closing tag and nothing else, as CommonMark spells a
+    # tag: a name, then attributes whose values may be bare, single-quoted or double-quoted. A
+    # quoted value may hold a > of its own. \047 is the single quote, which this program cannot
+    # hold literally.
+    attribute = "[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*([ \t]*=[ \t]*([^ \t\"\047=<>`]+|\047[^\047]*\047|\"[^\"]*\"))?"
+    one_tag = "^(<[A-Za-z][A-Za-z0-9-]*(" attribute ")*[ \t]*/?>|</[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*$"
     fresh = 1
   }
   # Fences follow CommonMark: an opening run of three or more backticks or tildes indented at most
@@ -294,7 +300,7 @@ marked_values() {
   function tag_block(t,    l) {
     l = tolower(t)
     if (l ~ /^<\/?(address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)([ \t>]|\/>|$)/) return 1
-    if (t ~ /^<\/?[A-Za-z][A-Za-z0-9-]*([ \t][^<>]*|\/)?>[ \t]*$/) return 1
+    if (t ~ one_tag) return 1
     return 0
   }
   # comments(raw): follow the comment openers and closers on a line of raw HTML, in order. `live`
