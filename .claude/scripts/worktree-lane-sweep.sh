@@ -12,31 +12,28 @@
 #
 #   ~/.claude/worktree-cleanup-manifests/cleanup-<lane>.log       the sweep's output, appended
 #   ~/.claude/worktree-cleanup-manifests/cleanup-<lane>.started   id, supervisor pid, start time
-#   ~/.claude/worktree-cleanup-manifests/cleanup-<lane>.sweeper   id, sweeper pid, start time
 #   ~/.claude/worktree-cleanup-manifests/cleanup-<lane>.finished  id, exit code, end time
 #
 # The launcher writes .started and the supervisor writes .finished, so neither can overwrite the
 # other's record, whichever finishes first. A sweep has finished only when both name the same id.
 # A supervisor that dies before recording (killed, host restarted) leaves .started alone, and
 # its pid then no longer runs this script with that id: that is a sweep that never finished.
-# The sweeper writes .sweeper itself before it sweeps and the supervisor removes it once the
-# sweeper has ended, so a sweeper that outlives its supervisor (a `kill -9` reaches only the
-# supervisor) is still on record for the next start.
 #
-# A second sweep must never start beside a live one (#3823). So a start is refused while the
-# recorded supervisor runs and while the recorded sweeper runs without it. Where the record that
-# would name the process cannot be read, or was never written (a sweep left unfinished by a copy
-# of this script from before sweepers recorded themselves), it is refused while any supervisor or
-# sweeper of the lane runs.
+# A second sweep must never start beside a live one (#3823), and the records cannot promise that
+# on their own: a record can be unreadable, and a sweeper outlives a supervisor that was killed
+# with `kill -9`. So the records decide what is REPORTED, and the process table decides whether a
+# sweep may START: none does while any supervisor or sweeper of the lane is running, whatever the
+# records say. The one supervisor left out is the one whose sweep the records show finished: it
+# has written its last record and is on its way out.
 #
 # Usage: worktree-lane-sweep.sh start|status --lane claude|codex
 #   start   report the previous sweep, then start a new one detached
 #           (worktree-cleanup-all.sh apply 24 --lane <lane>) and return at once. While the
 #           previous sweep is still running, report that and start no second one. A supervisor
 #           still present after six hours is reported as stuck with a recovery command, and also
-#           blocks a second sweep. An unreadable record is reported and replaced unless a process
-#           it would have named may still be sweeping; an unreadable process table is UNKNOWN and
-#           starts nothing because running versus gone is unproven.
+#           blocks a second sweep. An unreadable record is reported and replaced unless something
+#           of the lane is still sweeping; an unreadable process table is UNKNOWN and starts
+#           nothing because running versus gone is unproven.
 #   status  report the previous sweep only.
 #
 # Exit codes: 0 the previous sweep finished cleanly · 1 it did not: it failed, never finished,
@@ -107,7 +104,6 @@ sweeper_name=${sweeper##*/}
 dir="$HOME/.claude/worktree-cleanup-manifests"
 log="$dir/cleanup-$lane.log"
 started="$dir/cleanup-$lane.started"
-sweeper_record="$dir/cleanup-$lane.sweeper"
 finished="$dir/cleanup-$lane.finished"
 launch_lock="$dir/cleanup-$lane.launch.lock"
 launch_lock_owner="$launch_lock/owner"
@@ -212,14 +208,16 @@ launcher_runs() {
   return 1
 }
 
-# lane_processes <sweeper> — the same complete process-table proof for what may still be sweeping
-# this lane when the records show no running supervisor. <sweeper> is the recorded sweeper's pid,
-# `any` when its record cannot be read, or `none`. Sets LIVE_SWEEPERS to those of them still
-# running the lane's sweep, and LIVE_SUPERVISORS to every supervisor of the lane, for a start
-# record that cannot be read. With no record to name a process, the lane on the command line is
-# all there is to match, so any copy of these scripts counts, whichever checkout or home directory
-# started it: a refused start costs one sweep, and a second sweep beside a live one is what this
-# exists to prevent.
+# lane_processes <finished-id> — the same complete process-table proof for everything that may
+# still be sweeping this lane, asked before any sweep starts. Sets LIVE_SUPERVISORS and
+# LIVE_SWEEPERS to their pids. Processes are matched by what they run, never by a pid a record
+# names: a record can be unreadable or missing, and a sweeper outlives a killed supervisor. So any
+# copy of these scripts counts, whichever checkout or home directory started it. A refused start
+# costs one sweep; a second sweep beside a live one is what this exists to prevent.
+# The supervisor of sweep <finished-id> is left out: the records show that sweep finished, so it
+# has written its last record and is exiting. The sweeper is matched as the supervisor starts it.
+# A sweeper that has only just been forked still runs the supervisor's own command line, and is
+# counted as a supervisor until it is the sweeper.
 LIVE_SUPERVISORS=""; LIVE_SWEEPERS=""
 lane_processes() {
   local process_table listed_pid elapsed command self_seen=0
@@ -233,13 +231,12 @@ lane_processes() {
       continue
     fi
     case "$command" in
+      *"/$self_name __supervise --lane $lane --id $1") ;;
       *"/$self_name __supervise --lane $lane --id "*)
         LIVE_SUPERVISORS="$LIVE_SUPERVISORS $listed_pid"
         ;;
       *"/$sweeper_name apply 24 --lane $lane")
-        if [ "$1" = any ] || [ "$1" = "$listed_pid" ]; then
-          LIVE_SWEEPERS="$LIVE_SWEEPERS $listed_pid"
-        fi
+        LIVE_SWEEPERS="$LIVE_SWEEPERS $listed_pid"
         ;;
     esac
   done <<<"$process_table"
@@ -375,7 +372,6 @@ stop_sweep_group() {
 stop_supervised_sweep() {
   trap - TERM INT HUP
   stop_sweep_group
-  rm -f -- "$sweeper_record" 2>/dev/null || true
   printf '=== lane sweep %s stopped %s: exit 143 ===\n' "$id" "$(now)"
   write_record "$finished" "id=$id rc=143 at=$(now)" \
     || unknown "cannot record the stopped sweep $id in $finished"
@@ -389,22 +385,11 @@ if [ "$cmd" = __supervise ]; then
   printf '=== lane sweep %s started %s (lane %s) ===\n' "$id" "$(now)" "$lane"
   trap stop_supervised_sweep TERM INT HUP
   set -m
-  # The sweeper records its own pid before it sweeps and then becomes the sweep, so there is no
-  # moment in which a sweeper runs that the records do not name. `$$` is still the supervisor's
-  # pid inside this subshell, and bash 3.2 has no BASHPID: a child reports its parent instead.
-  (
-    if ! sweeper_pid=$(exec sh -c 'echo "$PPID"') \
-      || ! write_record "$sweeper_record" "id=$id pid=$sweeper_pid at=$(now)"; then
-      printf '%s: cannot record the sweeper of %s in %s; not sweeping\n' "$prog" "$id" "$sweeper_record"
-      exit 125
-    fi
-    exec "$sweeper" apply 24 --lane "$lane"
-  ) </dev/null &
+  "$sweeper" apply 24 --lane "$lane" </dev/null &
   sweep_pid=$!
   set +m
   if wait "$sweep_pid"; then rc=0; else rc=$?; fi
   trap - TERM INT HUP
-  rm -f -- "$sweeper_record" 2>/dev/null || true
   printf '=== lane sweep %s finished %s: exit %s ===\n' "$id" "$(now)" "$rc"
   write_record "$finished" "id=$id rc=$rc at=$(now)" \
     || unknown "cannot record the end of sweep $id in $finished"
@@ -414,7 +399,7 @@ fi
 # report_previous — print how the last recorded sweep ended and set VERDICT: ok, or one of
 # failed · unfinished · running · none (exit 1), or unknown for a record it cannot read (exit 2).
 VERDICT=""
-START_RECORD_BAD=0
+FINISHED_ID=""   # the sweep the records show finished, cleanly or not
 bad_record() {
   printf '%s: UNKNOWN — %s; the last %s sweep cannot be judged\n' "$prog" "$1" "$lane" >&2
   VERDICT=unknown
@@ -430,13 +415,10 @@ report_previous() {
     printf '%s: no %s sweep on record — nothing shows the lane was ever swept\n' "$prog" "$lane"
     VERDICT=none; return 0
   fi
-  # A start record that cannot be read names no supervisor to look for.
-  START_RECORD_BAD=1
   record_is_safe "$started" \
     || { bad_record "non-regular or oversized sweep record in $started"; return 0; }
   s=$(cat -- "$started" 2>/dev/null) || { bad_record "cannot read $started"; return 0; }
   [[ "$s" =~ $started_re ]] || { bad_record "malformed sweep record in $started"; return 0; }
-  START_RECORD_BAD=0
   s_id=${BASH_REMATCH[1]}; s_pid=${BASH_REMATCH[2]}; s_at=${BASH_REMATCH[3]}
   if [ -e "$finished" ]; then
     if ! record_is_safe "$finished"; then
@@ -451,6 +433,7 @@ report_previous() {
     else
       f_id=${BASH_REMATCH[1]}; f_rc=${BASH_REMATCH[2]}; f_at=${BASH_REMATCH[3]}
       if [ "$f_id" = "$s_id" ]; then
+        FINISHED_ID=$s_id
         if [ "$f_rc" = 0 ]; then
           printf '%s: the last %s sweep (%s) finished cleanly at %s\n' "$prog" "$lane" "$s_id" "$f_at"
           VERDICT=ok
@@ -512,50 +495,30 @@ if [ "$VERDICT" = running ] || [ "$VERDICT" = stuck ] || [ "$VERDICT" = record-r
   printf '%s: not starting a second %s sweep while that one runs\n' "$prog" "$lane"
   finish "$rc"
 fi
-# The verdict above covers the supervisor the start record names. It cannot cover a sweeper whose
-# supervisor died without stopping it, nor any supervisor when the start record cannot be read, so
-# those are looked for here: nothing of the lane may still be sweeping when a new sweep starts.
-sweeper_wanted=none
-any_supervisor=$START_RECORD_BAD
-if [ -e "$sweeper_record" ] || [ -L "$sweeper_record" ]; then
-  if record_is_safe "$sweeper_record" && sweeper_line=$(cat -- "$sweeper_record" 2>/dev/null) \
-    && [[ "$sweeper_line" =~ $started_re ]]; then
-    sweeper_wanted=${BASH_REMATCH[2]}
-  else
-    printf '%s: UNKNOWN — unreadable sweeper record in %s; looking for any %s sweeper instead\n' \
-      "$prog" "$sweeper_record" "$lane" >&2
-    sweeper_wanted=any; rc=2
-  fi
-elif [ "$VERDICT" = unfinished ]; then
-  # A sweep that never recorded its end, and no sweeper on record for it. Either its supervisor
-  # ran a copy of this script from before sweepers recorded themselves, or it was killed in the
-  # moment before its sweeper did, while that sweeper was still the supervisor's own fork and
-  # looked like one. Nothing names the process, so anything of the lane counts.
-  sweeper_wanted=any; any_supervisor=1
+# The verdict above is what the records say. Whether a sweep may start is asked of the process
+# table, every time and whatever the verdict: the records cannot name a sweeper whose supervisor
+# was killed, and an unreadable record names nothing at all.
+if ! lane_processes "$FINISHED_ID"; then
+  printf '%s: UNKNOWN — cannot read the process table completely; not starting a %s sweep while what still runs is unknown\n' \
+    "$prog" "$lane" >&2
+  finish 2
 fi
-if [ "$any_supervisor" = 1 ] || [ "$sweeper_wanted" != none ]; then
-  if ! lane_processes "$sweeper_wanted"; then
-    printf '%s: UNKNOWN — cannot read the process table completely; not starting a %s sweep while what still runs is unknown\n' \
-      "$prog" "$lane" >&2
-    finish 2
-  fi
-  if [ "$any_supervisor" = 1 ] && [ -n "$LIVE_SUPERVISORS" ]; then
-    printf '%s: not starting a second %s sweep while supervisor pid%s still runs\n' \
-      "$prog" "$lane" "$LIVE_SUPERVISORS"
-    [ "$rc" -ne 0 ] || rc=1
-    finish "$rc"
-  fi
-  if [ -n "$LIVE_SWEEPERS" ]; then
-    # shellcheck disable=SC2016  # the backticks are literal: they mark the command to run
-    printf '%s: not starting a second %s sweep: sweeper pid%s is still running without its supervisor — let it finish, or stop it with `kill%s`, then start again\n' \
-      "$prog" "$lane" "$LIVE_SWEEPERS" "$LIVE_SWEEPERS"
-    [ "$rc" -ne 0 ] || rc=1
-    finish "$rc"
-  fi
+if [ -n "$LIVE_SUPERVISORS" ]; then
+  printf '%s: not starting a second %s sweep while supervisor pid%s still runs\n' \
+    "$prog" "$lane" "$LIVE_SUPERVISORS"
+  [ "$rc" -ne 0 ] || rc=1
+  finish "$rc"
 fi
-# An unreadable record still starts a sweep once nothing it could have named is running, and that
-# sweep replaces it: refusing would leave the lane unswept on every run until someone repaired one
-# file, and the disk would fill again.
+if [ -n "$LIVE_SWEEPERS" ]; then
+  # shellcheck disable=SC2016  # the backticks are literal: they mark the command to run
+  printf '%s: not starting a second %s sweep: sweeper pid%s is still running without its supervisor — let it finish, or stop it with `kill%s`, then start again\n' \
+    "$prog" "$lane" "$LIVE_SWEEPERS" "$LIVE_SWEEPERS"
+  [ "$rc" -ne 0 ] || rc=1
+  finish "$rc"
+fi
+# An unreadable record still starts a sweep once nothing of the lane is running, and that sweep
+# replaces it: refusing would leave the lane unswept on every run until someone repaired one file,
+# and the disk would fill again.
 [ -x "$sweeper" ] || unknown "missing $sweeper"
 new_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 nohup bash "$self" __supervise --lane "$lane" --id "$new_id" >>"$log" 2>&1 </dev/null &

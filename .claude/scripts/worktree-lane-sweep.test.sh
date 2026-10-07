@@ -95,9 +95,10 @@ wait_gone() { # <pid>
   while kill -0 "$1" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
   ! kill -0 "$1" 2>/dev/null
 }
-# Where the launcher has no record naming a process it looks for the lane's processes by name,
-# across the host. A real sweep of the same lane on this machine must not decide such a case, so
-# those cases read the process table through this filter: only processes of this fixture.
+# Before it starts a sweep the launcher looks for the lane's supervisors and sweepers by what they
+# run, across the whole host, so a real sweep of the same lane on this machine would decide these
+# cases. Every launcher this file starts therefore reads the process table through this filter,
+# which keeps only the fixture's own processes; a case that scripts its own `ps` puts it in front.
 real_ps=$(command -v ps) || { printf 'cannot find ps\n' >&2; exit 2; }
 mkdir -p "$fx/fxbin"
 cat >"$fx/fxbin/ps" <<EOF
@@ -105,8 +106,20 @@ cat >"$fx/fxbin/ps" <<EOF
 "$real_ps" "\$@" | grep -F -- "$fx/"
 EOF
 chmod +x "$fx/fxbin/ps"
-run_fx() { # [args...] -> sets out, rc; sees only this fixture's processes
-  out=$(HOME="$fx/home" PATH="$fx/fxbin:$PATH" bash "$sut" "$@" 2>&1); rc=$?
+PATH="$fx/fxbin:$PATH"
+export PATH
+# quiet_lane <lane> — wait until no supervisor or sweeper of that lane is left in the fixture. A
+# supervisor is still alive for a moment after it has recorded its end, and a case that starts
+# from another home directory has no record that says so.
+quiet_lane() {
+  local i=0 listing
+  while [ "$i" -lt 100 ]; do
+    listing=$(ps -A -ww -o command= 2>/dev/null) || listing=""
+    grep -Eq "worktree-lane-sweep\.sh __supervise --lane $1 |worktree-cleanup-all\.sh apply 24 --lane $1\$" \
+      <<<"$listing" || return 0
+    sleep 0.1; i=$((i + 1))
+  done
+  return 1
 }
 
 printf 'worktree-lane-sweep.sh contract tests\n'
@@ -405,7 +418,7 @@ else bad "control: the same records, well formed, read as clean" "rc=$rc $out"; 
 # An unreadable record must not stop the lane being swept on every later run.
 printf 'garbage\n' >"$records/cleanup-claude.started"
 mode ok
-run_fx start --lane claude
+run start --lane claude
 track claude
 if [ "$rc" -eq 2 ] && grep -q 'malformed sweep record' <<<"$out" \
    && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude; then
@@ -425,7 +438,7 @@ live_id=$(field claude started id); live_pid=$(field claude started pid)
 track claude
 wait_for "$fx/hanging" || bad "the sweep behind the unreadable record started" "$(cat "$log" 2>&1)"
 printf 'garbage\n' >"$records/cleanup-claude.started"
-run_fx start --lane claude
+run start --lane claude
 if [ "$rc" -eq 2 ] && grep -q 'malformed sweep record' <<<"$out" \
    && grep -Eq "not starting a second claude sweep while supervisor pid( [0-9]+)* $live_pid( [0-9]+)* still runs" <<<"$out" \
    && [ "$(cat "$records/cleanup-claude.started")" = garbage ] && [ "$(count_live_sweeps)" -eq 1 ]; then
@@ -455,7 +468,7 @@ touch "$fx/release"
 wait_gone "$live_pid" || bad "the supervisor behind the unreadable record ended" "pid=$live_pid"
 rm -f "$fx/release" "$fx/hanging"
 mode ok
-run_fx start --lane claude
+run start --lane claude
 track claude
 if [ "$rc" -eq 2 ] && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude \
    && [ "$(field claude started id)" != "$live_id" ]; then
@@ -471,11 +484,6 @@ orphan_id=$(field claude started id); orphan_sup=$(field claude started pid)
 track claude
 wait_for "$fx/hanging" || bad "the sweep to orphan started" "$(cat "$log" 2>&1)"
 orphan_sweeper=$(live_sweeps)
-if [ -n "$orphan_sweeper" ] && [ "$(field claude sweeper pid)" = "$orphan_sweeper" ] \
-   && [ "$(field claude sweeper id)" = "$orphan_id" ]; then
-  ok "a running sweeper is on record under its sweep's id"
-else bad "a running sweeper is on record under its sweep's id" \
-  "live=$orphan_sweeper $(cat "$records/cleanup-claude.sweeper" 2>&1)"; fi
 kill -9 "$orphan_sup" 2>/dev/null
 wait_gone "$orphan_sup" || bad "the supervisor was killed" "pid=$orphan_sup"
 if [ "$(count_live_sweeps)" -eq 1 ]; then ok "fixture: the sweeper outlives its killed supervisor"
@@ -491,90 +499,66 @@ else
     "rc=$rc live-sweeps=$(count_live_sweeps) $out"
   [ "$(field claude started id)" = "$orphan_id" ] || track claude
 fi
-# A pid that is alive but is not the lane's sweeper (a recycled pid) blocks nothing, and neither
-# does a sweeper that has ended.
+# The same orphan behind a start record nobody can read: the record names no sweep at all, and
+# the sweeper still has to block the replacement.
+printf 'garbage\n' >"$records/cleanup-claude.started"
+run start --lane claude
+if [ "$rc" -eq 2 ] && grep -q 'malformed sweep record' <<<"$out" \
+   && grep -q "sweeper pid $orphan_sweeper is still running without its supervisor" <<<"$out" \
+   && [ "$(cat "$records/cleanup-claude.started")" = garbage ] && [ "$(count_live_sweeps)" -eq 1 ]; then
+  ok "an orphaned sweeper blocks the replacement of an unreadable start record"
+else
+  bad "an orphaned sweeper blocks the replacement of an unreadable start record" \
+    "rc=$rc live-sweeps=$(count_live_sweeps) $out"
+  [ "$(cat "$records/cleanup-claude.started")" = garbage ] || track claude
+fi
+# Once the sweeper has ended on its own, the next start replaces the record and sweeps.
 touch "$fx/release"
 [ -z "$orphan_sweeper" ] || wait_gone "$orphan_sweeper" || bad "the orphaned sweeper ended" "pid=$orphan_sweeper"
-i=0; while [ "$(count_live_sweeps)" -gt 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
 rm -f "$fx/release" "$fx/hanging"
-printf 'id=%s pid=%s at=2026-10-02T12:00:00Z\n' "$orphan_id" "$$" >"$records/cleanup-claude.sweeper"
-printf 'id=%s pid=999996 at=2026-10-02T12:00:00Z\n' "$orphan_id" >"$records/cleanup-claude.started"
-rm -f "$records/cleanup-claude.finished"
 mode ok
 run start --lane claude
 track claude
-if [ "$rc" -eq 1 ] && grep -q 'NEVER FINISHED' <<<"$out" && grep -q 'started the claude sweep' <<<"$out" \
-   && wait_finished claude; then
-  ok "a recorded sweeper pid that is not the lane's sweeper blocks nothing"
-else bad "a recorded sweeper pid that is not the lane's sweeper blocks nothing" "rc=$rc $out"; fi
-if [ ! -e "$records/cleanup-claude.sweeper" ]; then ok "a finished sweep leaves no sweeper on record"
-else bad "a finished sweep leaves no sweeper on record" "$(cat "$records/cleanup-claude.sweeper" 2>&1)"; fi
+if [ "$rc" -eq 2 ] && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude; then
+  ok "the lane is swept again once the orphaned sweeper has ended"
+else bad "the lane is swept again once the orphaned sweeper has ended" "rc=$rc $out"; fi
+run status --lane claude
+clean_id=$(field claude started id)
+if [ "$rc" -eq 0 ]; then ok "fixture: the records show the last sweep finished cleanly"
+else bad "fixture: the records show the last sweep finished cleanly" "rc=$rc $out"; fi
 
-# A sweeper record nobody can read names no pid, so any sweeper of the lane counts.
-mode hang
-rm -f "$fx/release" "$fx/hanging"
-run start --lane claude
-orphan_id=$(field claude started id); orphan_sup=$(field claude started pid)
+# The records can say "finished cleanly" while a supervisor of the lane is running that they do
+# not name. What may start is decided by the process table, so that one blocks a start too.
+mkdir -p "$fx/bin"
+cat >"$fx/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+printf '4242 00:03:00 bash %s __supervise --lane claude --id 20261002T990000Z-9\n' "$SUT_PATH"
+printf '%s 00:00:01 bash %s start --lane claude\n' "$FAKE_PS_SELF_PID" "$SUT_PATH"
+EOF
+chmod +x "$fx/bin/ps"
+out=$(HOME="$fx/home" PATH="$fx/bin:$PATH" SUT_PATH="$sut" \
+  bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" start --lane claude' 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && grep -q 'finished cleanly' <<<"$out" \
+   && grep -q 'not starting a second claude sweep while supervisor pid 4242 still runs' <<<"$out" \
+   && [ "$(field claude started id)" = "$clean_id" ]; then
+  ok "a supervisor of the lane the records do not name blocks a start after a clean sweep"
+else bad "a supervisor of the lane the records do not name blocks a start after a clean sweep" "rc=$rc $out"; fi
+# The supervisor of the sweep the records show finished has written its last record and is on its
+# way out. It is not a sweep in progress, and the next start does not wait for it.
+cat >"$fx/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+id=$(sed -nE 's/^id=([^ ]+) .*/\1/p' "$HOME/.claude/worktree-cleanup-manifests/cleanup-claude.finished")
+printf '4242 00:03:00 bash %s __supervise --lane claude --id %s\n' "$SUT_PATH" "$id"
+printf '%s 00:00:01 bash %s start --lane claude\n' "$FAKE_PS_SELF_PID" "$SUT_PATH"
+EOF
+out=$(HOME="$fx/home" PATH="$fx/bin:$PATH" SUT_PATH="$sut" \
+  bash -c 'export FAKE_PS_SELF_PID=$$; exec bash "$SUT_PATH" start --lane claude' 2>&1); rc=$?
+rm -f "$fx/bin/ps"
 track claude
-wait_for "$fx/hanging" || bad "the second sweep to orphan started" "$(cat "$log" 2>&1)"
-orphan_sweeper=$(live_sweeps)
-kill -9 "$orphan_sup" 2>/dev/null
-wait_gone "$orphan_sup" || bad "the second supervisor was killed" "pid=$orphan_sup"
-printf 'garbage\n' >"$records/cleanup-claude.sweeper"
-run_fx start --lane claude
-if [ "$rc" -eq 2 ] && grep -q 'unreadable sweeper record' <<<"$out" \
-   && grep -q "sweeper pid $orphan_sweeper is still running without its supervisor" <<<"$out" \
-   && [ "$(field claude started id)" = "$orphan_id" ] && [ "$(count_live_sweeps)" -eq 1 ]; then
-  ok "an unreadable sweeper record still finds the lane's running sweeper"
-else
-  bad "an unreadable sweeper record still finds the lane's running sweeper" \
-    "rc=$rc live-sweeps=$(count_live_sweeps) $out"
-  [ "$(field claude started id)" = "$orphan_id" ] || track claude
-fi
-touch "$fx/release"
-i=0; while [ "$(count_live_sweeps)" -gt 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
-rm -f "$fx/release" "$fx/hanging"
-mode ok
-run_fx start --lane claude
-track claude
-if [ "$rc" -eq 2 ] && grep -q 'unreadable sweeper record' <<<"$out" \
-   && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude; then
-  ok "an unreadable sweeper record is replaced once no sweeper of the lane runs"
-else bad "an unreadable sweeper record is replaced once no sweeper of the lane runs" "rc=$rc $out"; fi
-
-# A supervisor that ran a copy of the launcher from before sweepers recorded themselves leaves no
-# sweeper record at all. Killed, it leaves a sweep that never finished, a sweeper still running
-# and nothing that names it: any sweeper of the lane has to count then too.
-mode hang
-rm -f "$fx/release" "$fx/hanging"
-run start --lane claude
-orphan_id=$(field claude started id); orphan_sup=$(field claude started pid)
-track claude
-wait_for "$fx/hanging" || bad "the sweep to orphan without a record started" "$(cat "$log" 2>&1)"
-orphan_sweeper=$(live_sweeps)
-kill -9 "$orphan_sup" 2>/dev/null
-wait_gone "$orphan_sup" || bad "the third supervisor was killed" "pid=$orphan_sup"
-rm -f "$records/cleanup-claude.sweeper"
-run_fx start --lane claude
-if [ "$rc" -eq 1 ] && grep -q 'NEVER FINISHED' <<<"$out" \
-   && grep -q "sweeper pid $orphan_sweeper is still running without its supervisor" <<<"$out" \
-   && [ "$(field claude started id)" = "$orphan_id" ] && [ "$(count_live_sweeps)" -eq 1 ]; then
-  ok "an unfinished sweep with no sweeper on record still finds the lane's running sweeper"
-else
-  bad "an unfinished sweep with no sweeper on record still finds the lane's running sweeper" \
-    "rc=$rc live-sweeps=$(count_live_sweeps) $out"
-  [ "$(field claude started id)" = "$orphan_id" ] || track claude
-fi
-touch "$fx/release"
-i=0; while [ "$(count_live_sweeps)" -gt 0 ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
-rm -f "$fx/release" "$fx/hanging"
-mode ok
-run_fx start --lane claude
-track claude
-if [ "$rc" -eq 1 ] && grep -q 'NEVER FINISHED' <<<"$out" \
-   && grep -q 'started the claude sweep' <<<"$out" && wait_finished claude; then
-  ok "an unfinished sweep with no sweeper on record is replaced once nothing of the lane runs"
-else bad "an unfinished sweep with no sweeper on record is replaced once nothing of the lane runs" "rc=$rc $out"; fi
+if [ "$rc" -eq 0 ] && grep -q 'started the claude sweep' <<<"$out" \
+   && [ "$(field claude started id)" != "$clean_id" ] && wait_finished claude; then
+  ok "the supervisor of a sweep already recorded as finished does not block the next start"
+else bad "the supervisor of a sweep already recorded as finished does not block the next start" "rc=$rc $out"; fi
 
 # Two launchers arriving together must serialize the read/start/record transaction. One may see
 # the other already running or may lose the lock, but they must create exactly one supervisor.
@@ -816,6 +800,7 @@ if [ "$rc" -eq 1 ] && grep -q 'no codex sweep on record' <<<"$out"; then
   ok "the claude lane's records say nothing about the codex lane"
 else bad "the claude lane's records say nothing about the codex lane" "rc=$rc $out"; fi
 mode ok
+quiet_lane codex || bad "fixture: the codex lane is quiet before its own case" "$(ps -A -ww -o command= 2>&1)"
 run start --lane codex
 track codex
 if wait_finished codex && grep -q '^fake sweep args: apply 24 --lane codex$' "$records/cleanup-codex.log" \
@@ -860,6 +845,7 @@ for f in "$fx"/pids/sweep-*; do
   candidate=$(cat "$f")
   kill -0 "$candidate" 2>/dev/null && before=$((before + 1))
 done
+quiet_lane claude || bad "fixture: the claude lane is quiet before the handshake case" "$(ps -A -ww -o command= 2>&1)"
 out=$(HOME="$handshake_home" bash "$sut" start --lane claude 2>&1); rc=$?
 sleep 0.3
 after=0
