@@ -214,7 +214,7 @@ mkdir -p "$tmp/converted/projects" "$tmp/converted/backups" \
 git init -q "$tmp/converted/lockrepo"
 printf 'memory line\n' > "$tmp/converted/memory.md"
 printf 'replacement line\n' > "$tmp/converted/replacement.md"
-printf '{"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":1,"cronExpression":"0 * * * *"}]}\n' \
+printf '{"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":1,"createdAt":0,"cronExpression":"0 * * * *"}]}\n' \
   > "$tmp/converted/store.json"
 
 # <script>|<arguments that carry it past its own input checks to the trap line>
@@ -239,6 +239,7 @@ shared-checkout-freshness.sh|
 worktree-claim.sh|check $tmp/converted/absent-worktree cleanup-trap-test
 branch-op-lock.sh|run $tmp/converted/lockrepo -- true
 agent-issue-board-sweep.sh|--author cleanup-trap-test
+claude-dispatch-rate.sh|--task alpha --since 1970-01-02T00:00:00Z --until 1970-01-02T06:00:00Z --now-epoch 172800 --store $tmp/converted/store.json --projects $tmp/converted/projects
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"
