@@ -294,6 +294,7 @@ jobs:
               - '.claude/scripts/blocked-label-blocker-line-go/**'
               - 'AGENTS.md'
               - '.claude/guides/**'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/blocked-label-blocker-line.sh'
               - '.claude/scripts/blocked-label-blocker-line.test.sh'

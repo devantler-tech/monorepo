@@ -492,6 +492,11 @@ as healthy. Their labels are discovery aids; verify the underlying provider evid
 is currently unavailable, review locally immediately without waiting for quota resets.
 A `CR-DECLINED <repo>#<n>` line names a PR where CodeRabbit refuses our disclosed requests (#3124):
 skip CodeRabbit on that PR and go to the next lane.
+**Then set the parked pull requests aside** (monorepo#3288): run
+`.claude/scripts/blocked-label-blocker-line.sh --org devantler-tech --parked-digest` once and read it
+as the [merge-policy guide](../../guides/merge-policy.md) says. A `PARKED` row is finished rung-1
+work: drop it from the queue and from `nothing_on_fire`, whatever the surveyor reported for it. An
+`ACTIONABLE` row is rung-1 work this run, and exit `2` parks nothing.
 **About daily, also sweep for silent schedules** (monorepo#2928), tracked by a
 `last_silent_schedule_sweep` cursor in memory: run
 `.claude/scripts/silent-scheduled-workflows.sh` with one `--repo` per active repository (derive the
