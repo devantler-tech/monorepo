@@ -53,7 +53,7 @@
 # Requiring it of every run in the window is what keeps a real verdict rare enough to act on.
 #
 # But a window that is not all short is NOT thereby healthy, and reading it so was a fail-open: a run
-# that wrote no inbox item yet outlasted the stub window died PART WAY, and this store cannot tell that
+# that wrote no inbox item yet outlasted the pre-flight window died PART WAY, and this store cannot tell that
 # apart from a long run that never wrote one. That third class is exit 2, never exit 0
 # (monorepo#3287). So the window has three outcomes, not two: every run a stub or a pre-flight
 # stop is exit 1, any run unproven is exit 2, and only a run that outlasted the pre-flight window AND wrote an inbox item
@@ -132,7 +132,8 @@ done
 # Every numeric knob is validated before use. An unvalidated value would otherwise reach arithmetic
 # and either abort under `set -e` (reported as an internal failure) or, worse, silently widen the
 # stub window until the check cannot fire.
-for pair in "GRACE_SECONDS:$GRACE_SECONDS" "STUB_SECONDS:$STUB_SECONDS" "CONSECUTIVE:$CONSECUTIVE"; do
+for pair in "GRACE_SECONDS:$GRACE_SECONDS" "STUB_SECONDS:$STUB_SECONDS" \
+            "PREFLIGHT_SECONDS:$PREFLIGHT_SECONDS" "CONSECUTIVE:$CONSECUTIVE"; do
   name=${pair%%:*}; val=${pair#*:}
   case "$val" in
     ''|*[!0-9]*) die_unknown "$name must be a non-negative integer, got: $val" ;;
@@ -252,7 +253,6 @@ settled_before=$(( NOW_MS - GRACE_SECONDS * 1000 ))
 # row here only fails to ESCALATE, so it cannot turn a verdict healthy; the main loop still reports it.
 acct_ms=0
 acct_src=""
-stub_limit_ms=$(( STUB_SECONDS * 1000 ))
 preflight_ms=$(( PREFLIGHT_SECONDS * 1000 ))
 all_ids=$(sq "SELECT id FROM automations WHERE status='ACTIVE' ORDER BY id;") \
   || die_unknown "could not enumerate automations"
@@ -272,8 +272,10 @@ $newest
 EOF
   case "$n_settled" in ''|*[!0-9]*) continue ;; esac
   case "$n_dur" in ''|*[!0-9]*) continue ;; esac
-  [ "$n_noinbox" = "1" ] || continue
-  [ "$n_dur" -le "$stub_limit_ms" ] || continue
+  # The refusal is proven by the cause class, not by the inbox flag, and it need not be a 60-second
+  # stub: a run refused part way through its start-up checks ends inside the pre-flight window too.
+  case "$n_noinbox" in 0|1) : ;; *) continue ;; esac
+  [ "$n_dur" -le "$preflight_ms" ] || continue
   [ "$(cause_class "$n_tid")" = "quota/billing" ] || continue
   if [ "$n_settled" -gt "$acct_ms" ]; then acct_ms=$n_settled; acct_src=$aid; fi
 done <<EOF
@@ -405,7 +407,10 @@ while IFS= read -r id; do
     if [ "$no_inbox" = "1" ]; then
       if [ "$dur_ms" -le "$stub_ms" ]; then
         stubs=$(( stubs + 1 ))
-      else
+      elif [ "$dur_ms" -gt "$preflight_ms" ]; then
+        # Only a run that OUTLASTED the pre-flight window is unproven. One that ended inside it is a
+        # known pre-flight stop, already counted in `short`, and must not turn a window that also
+        # holds a working run into UNKNOWN.
         indeterminate=$(( indeterminate + 1 ))
         if [ "$dur_ms" -gt "$indet_ms" ]; then indet_ms=$dur_ms; fi
       fi
@@ -456,7 +461,7 @@ EOF
     # Ordered AFTER the all-stubs branch on purpose: a proven dead lane is actionable now, so it
     # outranks an unjudgeable one — the same precedence the Claude-side check applies between its
     # own exit 1 and exit 2. UNKNOWN is never read as producing, so this fails closed.
-    report="${report}  UNKNOWN  ${id} — ${indeterminate} of ${n} newest settled runs wrote no inbox item despite outlasting the ${STUB_SECONDS}s stub window (longest ${indet_ms}ms), so production is unproven
+    report="${report}  UNKNOWN  ${id} — ${indeterminate} of ${n} newest settled runs wrote no inbox item despite outlasting the ${PREFLIGHT_SECONDS}s pre-flight window (longest ${indet_ms}ms), so production is unproven
 "
     any_unknown=1
   else

@@ -221,9 +221,20 @@ expect_rc 0 "a run 1 ms past the pre-flight window with an inbox item is produci
 run_check "$TMP/preflight-live.db" --consecutive 3 --preflight-seconds 100
 expect_rc 0 "a narrower pre-flight window must stop counting longer runs as pre-flight stops"
 
+# --- 4d2. a known pre-flight stop beside a working run is not "unproven" --------------------------
+# A run that ended inside the pre-flight window with no inbox item is a known stop, not an unjudged
+# long run, so it must not turn a window that also holds a working run into UNKNOWN.
+db=$TMP/preflight-mixed.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))   200 no
+add_run "$db" lane-a $(( GRACE_MS + 3660000 )) 900 yes
+run_check "$db"
+expect_rc 0 "a pre-flight stop beside a working run must not read as unproven"
+expect_out_not "production is unproven" "a known pre-flight stop is not an unjudged long run"
+
 # --- 4e. the knob is validated like the others ---------------------------------------------------
 run_check "$TMP/preflight-live.db" --preflight-seconds abc
 expect_rc 2 "a non-numeric --preflight-seconds must be rejected"
+expect_out "PREFLIGHT_SECONDS must be a non-negative integer" "the non-numeric refusal must come from the validation, not from a failed comparison"
 run_check "$TMP/preflight-live.db" --preflight-seconds 30
 expect_rc 2 "a pre-flight window shorter than the stub window must be rejected"
 expect_out "at least --stub-seconds" "the refusal must name the constraint"
@@ -682,6 +693,19 @@ run_check "$db"
 expect_rc 1 "a pre-flight notice after a refusal must not clear it"
 expect_out "NOT-PRODUCING  lane-i" "the sibling lane must stay NOT-PRODUCING behind the refusal"
 
+# A refusal that took longer than the stub window is still a refusal. A 200-second run refused for
+# quota is a pre-flight stop with a proven account-scoped cause, so a sibling automation asked about
+# on its own must not read OK from its older healthy runs.
+db=$TMP/preflight-acct-long.db; mkstore "$db"; add_automation "$db" lane-e ACTIVE; add_automation "$db" lane-i ACTIVE
+add_run "$db" lane-e $(( GRACE_MS + 3660000 )) 900 yes
+add_run "$db" lane-e $(( GRACE_MS + 60000 ))   200 no              # the refusal, 200 s long
+add_rollout "$db" lane-e usage_limit_exceeded
+add_run "$db" lane-i $(( GRACE_MS + 7200000 )) 900 yes
+add_run "$db" lane-i $(( GRACE_MS + 3600000 )) 800 yes
+run_check "$db" --automation lane-i
+expect_rc 1 "a quota refusal longer than the stub window must still reach the sibling automation"
+expect_out "account-scoped" "the verdict must name the account scope"
+
 # Structural privacy: the outcome record is read for its classifier only.
 asserts=$(( asserts + 1 ))
 noncomment=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
@@ -691,7 +715,7 @@ fi
 
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 110 ]; then
+if [ "$asserts" -lt 115 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi
