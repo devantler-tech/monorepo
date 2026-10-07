@@ -3904,7 +3904,7 @@ grep -Fq '`managed-failing` alone never makes a PR `NEEDS-FIX`' "${surveyor}" ||
   fail "pentad (a) must say managed-failing alone never makes a PR NEEDS-FIX (monorepo#2557)"
 grep -Fq 'no ordinary failing check (`managed-failing` alone does not count)' "${surveyor}" ||
   fail "review-ready must exclude managed-failing from the failing-check condition (monorepo#2557)"
-_mf_lines=$(grep -Fc 'pentad: checks=<green|failing:X|managed-failing:X|failing:X+managed-failing:Y>,' "${surveyor}" || true)
+_mf_lines=$(grep -Fc 'pentad: checks=<green|<missing:X|failing:X|pending:X|unverified:X|managed-failing:X>[+…]>,' "${surveyor}" || true)
 [ "${_mf_lines}" -ge 2 ] ||
   fail "both trusted-bot digest lines must carry the managed-failing checks grammar, found ${_mf_lines} (monorepo#2557)"
 echo "portfolio surveyor contract: round-14 managed-failing pentad assertions passed"
@@ -4212,3 +4212,71 @@ rm -f "${_holder_mutant}"
 [[ "${_mut_err}" == *'PR row templates carry'* ]] ||
   fail "control: the holder row binding did not reject a template that dropped holder= (monorepo#3067)"
 echo "portfolio surveyor contract: monorepo#3067 worktree-holder assertions passed"
+
+# ── monorepo#3506: an absent required gate is never reported as green ────────────────────────────
+# The check rollup lists what ran, never what should have run, so a head that predates a required
+# workflow read `checks=green` and could be classed ready. Pin the prescription, each mapping of
+# the checker's `required=` value, and the grammar on every row template that carries `checks=`.
+_required_gate_error() {
+  local flat="$1" clause
+  for clause in \
+    '**(a) is `green` only when every REQUIRED gate ran at the head**' \
+    'For each deepened PR with no ordinary failing check, run `gh pr view <n> --repo devantler-tech/<repo> --json url,baseRefName,headRefOid | <repo-root>/.claude/scripts/required-gate-completeness.sh --input -`' \
+    'copy the value of its last line, `required=`, verbatim' \
+    '`complete` leaves (a) as the rollup read it; any other value replaces `green`, or joins a `managed-failing:` one with `+`' \
+    'A `missing:<gate>`, `failing:<gate>` or `pending:<gate>` PR is `NEEDS-FIX` naming the gate, **never `REVIEW-READY` or `MERGE-READY`**' \
+    '`pending:` is still on its way, so its fix is to wait' \
+    '`unverified:<gate>` (every readable gate passed, and this one has no readable surface) decides no class by itself' \
+    '`unknown:<reason>`, a failed call or a missing `required=` line is `QUERY-UNKNOWN … failed=checks:<reason>`, **never `green`**' \
+    'no ordinary failing check (`managed-failing` alone does not count), no missing, failing or pending required gate, it is not CONFLICTING'; do
+    case "${flat}" in
+      *"${clause}"*) ;;
+      *) echo "portfolio-surveyor.md must say: ${clause}"; return ;;
+    esac
+  done
+}
+_err=$(_required_gate_error "${surveyor_flat}")
+[ -z "${_err}" ] || fail "${_err} (monorepo#3506)"
+# Negative controls: each fail-open rewording must be rejected for its own clause, so a check that
+# matched nothing could not pass as silently as one that matched everything.
+_mut=$(printf '%s' "${surveyor_flat}" | sed 's/, \*\*never `REVIEW-READY` or `MERGE-READY`\*\*//')
+[ "${_mut}" != "${surveyor_flat}" ] ||
+  fail "control: the ready-class mutation changed nothing, so it proves nothing (monorepo#3506)"
+[[ "$(_required_gate_error "${_mut}")" == *'PR is `NEEDS-FIX` naming the gate'* ]] ||
+  fail "control: the required-gate check did not reject an overlay that lets a missing gate be ready (monorepo#3506)"
+_mut=$(printf '%s' "${surveyor_flat}" | sed 's/; any other value replaces `green`, or joins/; any other value joins/')
+[ "${_mut}" != "${surveyor_flat}" ] ||
+  fail "control: the replaces-green mutation changed nothing, so it proves nothing (monorepo#3506)"
+[[ "$(_required_gate_error "${_mut}")" == *'any other value replaces `green`'* ]] ||
+  fail "control: the required-gate check did not reject an overlay that keeps green beside another value (monorepo#3506)"
+_mut=$(printf '%s' "${surveyor_flat}" | sed 's/failed=checks:<reason>`, \*\*never `green`\*\*/failed=checks:<reason>`/')
+[ "${_mut}" != "${surveyor_flat}" ] ||
+  fail "control: the unknown mutation changed nothing, so it proves nothing (monorepo#3506)"
+[[ "$(_required_gate_error "${_mut}")" == *'a missing `required=` line is'* ]] ||
+  fail "control: the required-gate check did not reject an overlay that may read UNKNOWN as green (monorepo#3506)"
+_mut=$(printf '%s' "${surveyor_flat}" | sed 's/, no missing, failing or pending required gate//')
+[ "${_mut}" != "${surveyor_flat}" ] ||
+  fail "control: the review-ready mutation changed nothing, so it proves nothing (monorepo#3506)"
+[[ "$(_required_gate_error "${_mut}")" == *'no missing, failing or pending required gate'* ]] ||
+  fail "control: the required-gate check did not reject a review-ready rule without the required-gate condition (monorepo#3506)"
+
+_checks_grammar='checks=<green|<missing:X|failing:X|pending:X|unverified:X|managed-failing:X>[+…]>'
+_checks_rows_error() {
+  local file="$1" rows with
+  rows=$(grep -c 'pentad: checks=<' "${file}" || true)
+  with=$(grep 'pentad: checks=<' "${file}" | grep -c -F "pentad: ${_checks_grammar}," || true)
+  if [ "${rows}" -lt 2 ]; then
+    echo "found ${rows} row templates carrying checks=, so the grammar binding would be vacuous"
+  elif [ "${rows}" != "${with}" ]; then
+    echo "only ${with} of ${rows} row templates carry ${_checks_grammar}"
+  fi
+}
+_err=$(_checks_rows_error "${surveyor}")
+[ -z "${_err}" ] || fail "portfolio-surveyor.md: ${_err} (monorepo#3506)"
+_checks_mutant="$(mktemp)"
+awk '!done && sub(/missing:X\|failing:X\|pending:X\|unverified:X\|/, "failing:X|") { done = 1 } { print }' "${surveyor}" >"${_checks_mutant}"
+_mut_err=$(_checks_rows_error "${_checks_mutant}")
+rm -f "${_checks_mutant}"
+[[ "${_mut_err}" == *'row templates carry'* ]] ||
+  fail "control: the checks grammar binding did not reject a template that dropped the required-gate values (monorepo#3506)"
+echo "portfolio surveyor contract: monorepo#3506 required-gate assertions passed"

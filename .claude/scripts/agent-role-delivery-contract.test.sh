@@ -1273,7 +1273,7 @@ cp "${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.js
 for session_classifier_name in pr-ownership-disclosure.sh programmed-bot-review-exemption.sh \
   pr-unresolved-threads.sh coderabbit-summary-verdict.sh local-review-verdict.sh \
   coderabbit-review-verdict.sh kata-measure-date.sh pr-worktree-holder.sh \
-  maintainer-comment-candidates.sh; do
+  maintainer-comment-candidates.sh required-gate-completeness.sh; do
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_main}/.claude/scripts/"
   cp "${repo_root}/.claude/scripts/${session_classifier_name}" "${session_other}/.claude/scripts/"
 done
@@ -1588,6 +1588,42 @@ candidates_sites="$(grep -o '[^[:space:]"`'"'"']*maintainer-comment-candidates\.
   grep -vxF '<repo-root>/.claude/scripts/maintainer-comment-candidates.sh' || true)"
 [ -z "${candidates_sites}" ] ||
   fail "surveyor overlay calls maintainer-comment-candidates.sh by a form the guard refuses: ${candidates_sites}"
+
+# The required-gate completeness checker likewise (monorepo#3506): the check rollup lists what ran,
+# so the survey reported a head with an absent required check as green. Run the overlay's OWN
+# pipeline through the hook, prove a relative-path call is refused, and prove the checker's argv
+# form is refused too: only the stdin form is declared, so argv can never aim it.
+# shellcheck disable=SC2016 # backticks are literal Markdown in the pattern, not a substitution
+gates_command="$(grep -o '`gh pr view [^`]*required-gate-completeness\.sh --input -`' "${surveyor_agent}" |
+  tr -d '`' || true)"
+[ "$(printf '%s\n' "${gates_command}" | grep -c .)" = 1 ] ||
+  fail "surveyor overlay must prescribe exactly one guarded required-gate-completeness.sh pipeline (monorepo#3506)"
+gates_command="${gates_command//<repo-root>/${repo_root}}"
+gates_command="${gates_command//<repo>/monorepo}"
+gates_command="${gates_command//<n>/3504}"
+gates_payload="$(jq -nc --arg cmd "${gates_command}" '{tool_input: {command: $cmd}}')"
+run_surveyor_hook "${gates_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the overlay's required-gate completeness pipeline (monorepo#3506)"
+relative_gates_command="${gates_command//${repo_root}\/.claude\/scripts\//.claude/scripts/}"
+[ "${relative_gates_command}" != "${gates_command}" ] ||
+  fail "negative control did not rewrite the required-gate helper path (monorepo#3506)"
+relative_gates_payload="$(jq -nc --arg cmd "${relative_gates_command}" '{tool_input: {command: $cmd}}')"
+if run_surveyor_hook "${relative_gates_payload}" >/dev/null 2>&1; then
+  fail "consumer surveyor hook admitted a RELATIVE required-gate-completeness.sh call (monorepo#3506)"
+fi
+argv_gates_payload="$(jq -nc --arg cls "${repo_root}/.claude/scripts/required-gate-completeness.sh" '{
+  tool_input: {
+    command: ("gh pr view 3504 --repo devantler-tech/monorepo --json url,baseRefName,headRefOid | "
+      + $cls + " --repo devantler-tech/monorepo --base main --head 0123456789abcdef0123456789abcdef01234567")
+  }
+}')"
+if run_surveyor_hook "${argv_gates_payload}" >/dev/null 2>&1; then
+  fail "consumer surveyor hook admitted required-gate-completeness.sh with a target in argv (monorepo#3506)"
+fi
+gates_sites="$(grep -o '[^[:space:]"`'"'"']*required-gate-completeness\.sh[^[:space:]`]*' "${surveyor_agent}" |
+  grep -vxF '<repo-root>/.claude/scripts/required-gate-completeness.sh' || true)"
+[ -z "${gates_sites}" ] ||
+  fail "surveyor overlay calls required-gate-completeness.sh by a form the guard refuses: ${gates_sites}"
 
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
