@@ -22,8 +22,9 @@
 # OUTPUT
 #   One `GATE <kind> <name> <state>` line per required gate, where <kind> is check | workflow |
 #   code_quality and <state> is PASS | PENDING | FAILED | MISSING | UNVERIFIED.
-#   A required check with no run is PENDING while any run at the head is unfinished, and MISSING
-#   once all have finished: a job publishes its check-run only when it starts (monorepo#3506).
+#   A required check with no run is PENDING while a workflow run or an Actions job at the head is
+#   unfinished, and MISSING once all have finished: a job publishes its check-run only when it
+#   starts (monorepo#3506). Another app's unfinished check-run does not delay MISSING.
 #   An active `code_quality` rule is always UNVERIFIED: no readable surface reports its analysis
 #   for a head. Its line is `GATE code_quality setup=<state|unreadable> UNVERIFIED`, and the setup
 #   state is the lead when a merge is refused.
@@ -36,6 +37,7 @@
 #     required=missing:<gate>[,<gate>…][+failing:<gate>…][+pending:<gate>…]
 #     required=unverified:<kind>[,<kind>…]   every readable gate passed; these have no readable surface
 #     required=unknown:<reason>
+#   It always ends with that line: an abort nothing above describes prints `required=unknown:aborted`.
 #
 # EXIT CODES
 #   0  every required gate passed at the head
@@ -44,7 +46,8 @@
 set -euo pipefail
 
 usage() {
-  sed -n '13,43p' "$0" >&2
+  # The header ends where the code starts, so its length is never a number to keep in step.
+  sed -n '/^# USAGE$/,/^set -euo pipefail$/p' "$0" | sed '$d' >&2
   exit 2
 }
 
@@ -60,10 +63,21 @@ while [ "$#" -gt 0 ]; do
 done
 
 survey=0
+survey_said=0
 # survey_line <value> — the survey form's last line; the argv form prints nothing extra.
 survey_line() {
   [ "${survey}" = 1 ] || return 0
+  survey_said=1
   printf 'required=%s\n' "$(printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]')"
+}
+# The survey copies the LAST line, so the survey form must end with one whatever happens. An abort
+# no branch below foresaw prints `required=unknown:aborted` and exits 2 instead of printing nothing.
+# Installed for the survey form only: the argv form keeps the shell's own exit status untouched.
+survey_backstop() {
+  [ "${survey_said}" = 1 ] || {
+    echo "required=unknown:aborted"
+    exit 2
+  }
 }
 
 unknown() {
@@ -77,15 +91,16 @@ if [ -n "${input}" ]; then
   # Stdin is the only source of the target, so a caller cannot mix the two forms.
   [ "${input}" = "-" ] && [ -z "${repo}${base}${head}" ] || usage
   survey=1
+  trap survey_backstop EXIT
   payload="$(cat)" || unknown "malformed-input"
   # Exactly one JSON object with three string fields; anything else is not a pull request read.
+  # `@tsv` escapes a tab or newline inside a value, so the line always holds exactly three fields.
   target="$(jq -s -r 'if length == 1 and (.[0] | type) == "object"
       and ([.[0].url, .[0].baseRefName, .[0].headRefOid] | all(type == "string"))
     then [.[0].url, .[0].baseRefName, .[0].headRefOid] | @tsv else error("shape") end' \
     <<<"${payload}" 2>/dev/null)" || unknown "malformed-input"
-  pr_url="" extra=""
-  IFS=$'\t' read -r pr_url base head extra <<<"${target}" || true
-  [ -z "${extra}" ] || unknown "malformed-input"
+  pr_url=""
+  IFS=$'\t' read -r pr_url base head <<<"${target}" || true
   # The owner is pinned: this form is declared to the surveyor's read-only guard, so whatever the
   # forge printed must not be able to steer it to a repository outside the portfolio.
   [[ "${pr_url}" =~ ^https://github\.com/devantler-tech/([A-Za-z0-9_.-]+)/pull/[1-9][0-9]*$ ]] ||
@@ -93,8 +108,10 @@ if [ -n "${input}" ]; then
   repo_name="${BASH_REMATCH[1]}"
   case "${repo_name}" in . | ..) unknown "malformed-input" ;; esac
   repo="devantler-tech/${repo_name}"
-  [[ "${base}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${base}" != *..* ]] || unknown "malformed-input"
   [[ "${head}" =~ ^[0-9a-f]{40}$ ]] || unknown "malformed-input"
+  # A legal branch name may hold characters this allowlist leaves out (`@`, `+`); it is refused by
+  # name rather than placed unescaped into a request path.
+  [[ "${base}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${base}" != *..* ]] || unknown "unsupported-base"
 fi
 grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' <<<"${repo}" || usage
 grep -Eq '^[A-Za-z0-9._/-]+$' <<<"${base}" || usage
@@ -138,7 +155,12 @@ required="$(jq -n -c \
 
 cq_state=""
 if jq -e 'any(.[]; .kind == "code_quality")' <<<"${required}" >/dev/null; then
-  cq="$(gh api "repos/${repo}/code-quality/setup" 2>/dev/null)" && cq_state="$(jq -r '.state // ""' <<<"${cq}" 2>/dev/null)"
+  # Only the setup state is wanted. A failed read, or one that is not a JSON object, leaves it
+  # empty, which prints as `unreadable`; it must never abort the verdict.
+  if cq="$(gh api "repos/${repo}/code-quality/setup" 2>/dev/null)"; then
+    cq_state="$(jq -r 'if type == "object" and (.state | type) == "string" then .state else "" end' \
+      <<<"${cq}" 2>/dev/null)" || cq_state=""
+  fi
 fi
 
 gates="$(jq -n -r \
@@ -152,7 +174,8 @@ gates="$(jq -n -r \
   [$c[].check_runs[]] as $runs
   | [$s[][]] as $statuses
   | [$w[].workflow_runs[]] as $wf
-  | (any($wf[]; .status != "completed") or any($runs[]; .status != "completed")) as $unfinished
+  | (any($wf[]; .status != "completed")
+     or any($runs[]; .status != "completed" and (.app.slug // "") == "github-actions")) as $unfinished
   | $req[]
   | . as $g
   | (if $g.kind == "check" then
@@ -167,8 +190,10 @@ gates="$(jq -n -r \
             elif .state == "pending" then "PENDING" else "FAILED" end) as $st
        | (if ($cr | rank) >= ($st | rank) then $cr else $st end) as $seen
        # A job publishes its check-run only when it starts, so a job that waits on other jobs has
-       # none while they run. An absent check is therefore PENDING, not MISSING, until every run
-       # at this head has finished; both states block, but only MISSING means it will never report.
+       # none while they run. An absent check is therefore PENDING, not MISSING, until every
+       # workflow run and every Actions job at this head has finished. Both states block, but only
+       # MISSING means the check will never report. Another app with a check-run left unfinished
+       # says nothing about an Actions job, so it does not turn MISSING into PENDING.
        | if $seen == "MISSING" and $unfinished then "PENDING" else $seen end
      elif $g.kind == "workflow" then
        # A required workflow runs under /actions/required_workflows/; an ordinary workflow at the same
@@ -187,9 +212,14 @@ gates="$(jq -n -r \
 count() { grep -c " $1\$" <<<"${gates}" || true; }
 missing="$(count MISSING)" failed="$(count FAILED)" pending="$(count PENDING)"
 unverified="$(count UNVERIFIED)"
-# names <STATE> — the comma-joined gate names in that state, for the survey line.
+# names <STATE> — the comma-joined gate names in that state, for the survey line. A name is copied
+# as the ruleset wrote it; one required twice (by a ruleset and by classic protection) is named
+# once. A name that is empty, or that no GATE line yields (one holding a line break), is named
+# `(unnamed)`, so a counted gate never leaves the list empty.
 names() {
-  sed -n "s/^GATE [a-z_]* \(.*\) $1\$/\1/p" <<<"${gates}" | paste -s -d , -
+  sed -n "s/^GATE [a-z_]* \(.*\) $1\$/\1/p" <<<"${gates}" |
+    awk '!seen[$0]++ { n++; print ($0 == "" ? "(unnamed)" : $0) } END { if (!n) print "(unnamed)" }' |
+    paste -s -d , -
 }
 # A definite blocker is more useful than UNKNOWN, so it wins; UNVERIFIED alone never reads COMPLETE.
 if [ $((missing + failed + pending)) -gt 0 ]; then

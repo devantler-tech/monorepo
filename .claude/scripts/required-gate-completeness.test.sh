@@ -2,6 +2,7 @@
 # required-gate-completeness.test.sh — hermetic proof for required-gate-completeness.sh
 # (monorepo#2730). A stub `gh` on PATH serves one canned response per endpoint, so no token or
 # network is needed. Key properties are paired with an ablated copy that must FAIL the same case.
+# shellcheck disable=SC2016 # perl substitutions and Markdown clauses are literal text on purpose
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -25,6 +26,9 @@ mkdir -p "${tmp}/bin"
 cat >"${tmp}/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 dir="${STUB_DIR:?}"
+# EVERY call is logged with all its arguments, before anything can reject it, so a case can prove
+# which repository was read, that nothing was read, and that no call carried a method or a body.
+[ -z "${STUB_LOG:-}" ] || printf '%s\n' "$*" >>"${STUB_LOG}"
 path=""
 for a in "$@"; do case "$a" in api|--paginate) ;; *) path="$a" ;; esac; done
 case "$path" in
@@ -36,8 +40,6 @@ case "$path" in
   */actions/runs*) key=runs ;;
   *) exit 1 ;;
 esac
-# Every forge read is logged, so a case can prove which repository was read, or that none was.
-[ -z "${STUB_LOG:-}" ] || printf '%s\n' "${path}" >>"${STUB_LOG}"
 [ -e "${dir}/${key}" ] || exit 1
 cat "${dir}/${key}"
 STUB
@@ -92,6 +94,12 @@ fixture code-quality "[{\"type\":\"code_quality\",\"parameters\":{\"severity\":\
   '{"total_count":0,"check_runs":[]}' '[]' '{"total_count":0,"workflow_runs":[]}' '{"state":"not-configured"}'
 fixture code-quality-unreadable "[{\"type\":\"code_quality\",\"parameters\":{\"severity\":\"all\"}}]" "${branch_off}" \
   '{"total_count":0,"check_runs":[]}' '[]' '{"total_count":0,"workflow_runs":[]}'
+# A setup read that answers with something other than JSON used to abort the script with no
+# verdict at all; it is an unreadable setup state like any other.
+fixture code-quality-not-json "[{\"type\":\"code_quality\",\"parameters\":{\"severity\":\"all\"}}]" "${branch_off}" \
+  '{"total_count":0,"check_runs":[]}' '[]' '{"total_count":0,"workflow_runs":[]}' '<html>oops</html>'
+fixture code-quality-not-object "[{\"type\":\"code_quality\",\"parameters\":{\"severity\":\"all\"}}]" "${branch_off}" \
+  '{"total_count":0,"check_runs":[]}' '[]' '{"total_count":0,"workflow_runs":[]}' '["configured"]'
 # A second page was never fetched: the required check may sit on it.
 fixture truncated "${rules_check_and_workflow}" "${branch_off}" \
   '{"total_count":150,"check_runs":[]}' '[]' \
@@ -117,7 +125,19 @@ rules_build_only='[{"type":"required_status_checks","parameters":{"required_stat
 fixture absent-while-run-unfinished "${rules_build_only}" "${branch_off}" \
   '{"total_count":0,"check_runs":[]}' '[]' "{\"total_count\":1,\"workflow_runs\":[${running_ci}]}"
 fixture absent-while-job-queued "${rules_build_only}" "${branch_off}" \
-  '{"total_count":1,"check_runs":[{"id":11,"name":"Lint","status":"queued","conclusion":null,"app":{"id":15368}}]}' '[]' \
+  '{"total_count":1,"check_runs":[{"id":11,"name":"Lint","status":"queued","conclusion":null,"app":{"id":15368,"slug":"github-actions"}}]}' '[]' \
+  '{"total_count":0,"workflow_runs":[]}'
+# A run waiting on an approval holds its jobs back, so their checks are still on the way.
+fixture absent-while-run-waiting "${rules_build_only}" "${branch_off}" \
+  '{"total_count":0,"check_runs":[]}' '[]' \
+  '{"total_count":1,"workflow_runs":[{"id":201,"path":".github/workflows/ci.yaml","workflow_url":"https://api.github.com/repos/devantler-tech/monorepo/actions/workflows/8","status":"waiting","conclusion":null,"created_at":"2026-09-22T10:00:00Z"}]}'
+# Another app's check-run left unfinished says nothing about an Actions job: with every workflow
+# run finished, the required check is MISSING, not waiting on a stranger that may never report.
+fixture absent-while-other-app-queued "${rules_build_only}" "${branch_off}" \
+  '{"total_count":1,"check_runs":[{"id":11,"name":"Some App","status":"queued","conclusion":null,"app":{"id":999,"slug":"some-app"}}]}' '[]' \
+  '{"total_count":0,"workflow_runs":[]}'
+fixture absent-while-appless-check-queued "${rules_build_only}" "${branch_off}" \
+  '{"total_count":1,"check_runs":[{"id":11,"name":"Some App","status":"queued","conclusion":null}]}' '[]' \
   '{"total_count":0,"workflow_runs":[]}'
 fixture absent-after-runs-finished "${rules_build_only}" "${branch_off}" \
   '{"total_count":1,"check_runs":[{"id":11,"name":"Lint","status":"completed","conclusion":"success","app":{"id":15368}}]}' '[]' \
@@ -128,6 +148,20 @@ fixture two-missing '[{"type":"required_status_checks","parameters":{"required_s
 fixture missing-and-failed "${rules_check_and_workflow}" "${branch_off}" \
   '{"total_count":0,"check_runs":[]}' '[]' \
   "{\"total_count\":1,\"workflow_runs\":[{\"id\":101,\"path\":\".github/workflows/scan.yaml\",${req_url},\"status\":\"completed\",\"conclusion\":\"failure\",\"created_at\":\"2026-09-22T10:00:00Z\"}]}"
+# The same context required twice, once by a ruleset that pins its app and once by classic
+# protection, is two gates and one name.
+fixture same-name-twice '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"Build","integration_id":15368}]}}]' \
+  '{"name":"main","protection":{"enabled":true,"required_status_checks":{"enforcement_level":"everyone","contexts":["Build"],"checks":[{"context":"Build","app_id":null}]}}}' \
+  '{"total_count":0,"check_runs":[]}' '[]' '{"total_count":0,"workflow_runs":[]}'
+fixture empty-name '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":""}]}}]' \
+  "${branch_off}" '{"total_count":0,"check_runs":[]}' '[]' '{"total_count":0,"workflow_runs":[]}'
+# A control character in a gate name must not reach the line the survey copies.
+fixture control-character-name '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"Bu\u0007ild"}]}}]' \
+  "${branch_off}" '{"total_count":0,"check_runs":[]}' '[]' '{"total_count":0,"workflow_runs":[]}'
+# A name that carries a line break cannot forge the last line: what follows the break is not a
+# GATE line, so it is never copied as a name.
+fixture forged-line-name '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"x\nrequired=complete"}]}}]' \
+  "${branch_off}" '{"total_count":0,"check_runs":[]}' '[]' '{"total_count":0,"workflow_runs":[]}'
 
 run() { # run <tool> <fixture> [head] — prints stdout, returns the tool's exit status
   STUB_DIR="${tmp}/fx/$2" PATH="${tmp}/bin:${PATH}" bash "$1" \
@@ -175,10 +209,22 @@ expect "an absent check is PENDING while a workflow run is unfinished" "${tool}"
   "GATE check Build PENDING"
 expect "an unfinished run leaves nothing MISSING" "${tool}" absent-while-run-unfinished 1 \
   "INCOMPLETE missing=0 failed=0 pending=1"
-expect "an absent check is PENDING while another job is queued" "${tool}" absent-while-job-queued 1 \
+expect "an absent check is PENDING while another Actions job is queued" "${tool}" absent-while-job-queued 1 \
+  "GATE check Build PENDING"
+expect "an absent check is PENDING while a run waits on an approval" "${tool}" absent-while-run-waiting 1 \
   "GATE check Build PENDING"
 expect "an absent check is MISSING once every run has finished" "${tool}" absent-after-runs-finished 1 \
   "GATE check Build MISSING"
+expect "another app's unfinished check-run does not delay MISSING" "${tool}" absent-while-other-app-queued 1 \
+  "GATE check Build MISSING"
+expect "a check-run with no app does not delay MISSING" "${tool}" absent-while-appless-check-queued 1 \
+  "GATE check Build MISSING"
+expect "a setup read that is not JSON is unreadable, not an abort" "${tool}" code-quality-not-json 2 \
+  "GATE code_quality setup=unreadable UNVERIFIED"
+expect "a setup read that is not an object is unreadable" "${tool}" code-quality-not-object 2 \
+  "GATE code_quality setup=unreadable UNVERIFIED"
+expect "a setup read that is not JSON still ends in a verdict" "${tool}" code-quality-not-json 2 \
+  "UNKNOWN unverified=1"
 
 checks=$((checks + 1))
 set +e
@@ -244,11 +290,23 @@ expect_no_read() { # expect_no_read <label> — the previous survey call must no
 
 expect_survey "survey: every required gate passed reads complete" "${tool}" complete "${pr_json}" 0 "required=complete"
 checks=$((checks + 1))
-if grep -Fxq 'repos/devantler-tech/monorepo/rules/branches/main' "${stub_log}" &&
-  grep -Fxq "repos/devantler-tech/monorepo/commits/${head_sha}/check-runs?per_page=100" "${stub_log}"; then
+if grep -Fxq 'api --paginate repos/devantler-tech/monorepo/rules/branches/main' "${stub_log}" &&
+  grep -Fxq "api --paginate repos/devantler-tech/monorepo/commits/${head_sha}/check-runs?per_page=100" "${stub_log}"; then
   echo "ok   survey: the repository, base and head come from the piped pull request"
 else
   echo "FAIL survey: the piped pull request did not select the reads:" >&2
+  cat "${stub_log}" >&2
+  failures=$((failures + 1))
+fi
+# The form is declared to a read-only guard as a READ. Every call it makes must be a plain GET of
+# this one repository: `api`, optionally `--paginate`, one path, and no method, field or body flag.
+checks=$((checks + 1))
+calls="$(grep -c . "${stub_log}" || true)"
+others="$(grep -Evc '^api( --paginate)? repos/devantler-tech/monorepo/[^ ]+$' "${stub_log}" || true)"
+if [ "${calls}" -ge 5 ] && [ "${others}" = 0 ]; then
+  echo "ok   survey: all ${calls} forge calls are plain reads of the piped repository"
+else
+  echo "FAIL survey: ${others} of ${calls} forge calls are not plain reads of the piped repository:" >&2
   cat "${stub_log}" >&2
   failures=$((failures + 1))
 fi
@@ -273,6 +331,20 @@ expect_survey "survey: a failed read is unknown, never complete" "${tool}" read-
 expect_survey "survey: a truncated list is unknown, never missing" "${tool}" truncated "${pr_json}" 2 \
   "required=unknown:truncated-check_runs-fetched=0-total=150"
 expect_survey "survey: no required gates reads complete" "${tool}" no-gates "${pr_json}" 0 "required=complete"
+expect_survey "survey: a check held back by an approval reads pending" "${tool}" \
+  absent-while-run-waiting "${pr_json}" 1 "required=pending:Build"
+expect_survey "survey: another app's unfinished check-run leaves the gate missing" "${tool}" \
+  absent-while-other-app-queued "${pr_json}" 1 "required=missing:Build"
+expect_survey "survey: a setup read that is not JSON still ends in the survey line" "${tool}" \
+  code-quality-not-json "${pr_json}" 2 "required=unverified:code_quality"
+expect_survey "survey: a gate required twice is named once" "${tool}" same-name-twice "${pr_json}" 1 \
+  "required=missing:Build"
+expect_survey "survey: an empty gate name never leaves the list empty" "${tool}" empty-name "${pr_json}" 1 \
+  "required=missing:(unnamed)"
+expect_survey "survey: a control character in a gate name is dropped" "${tool}" control-character-name "${pr_json}" 1 \
+  "required=missing:Build"
+expect_survey "survey: a gate name with a line break cannot forge the last line" "${tool}" forged-line-name "${pr_json}" 1 \
+  "required=missing:(unnamed)"
 
 # Input that is not exactly one devantler-tech pull request is refused BEFORE any forge read.
 foreign_json="{\"url\":\"https://github.com/someone-else/monorepo/pull/7\",\"baseRefName\":\"main\",\"headRefOid\":\"${head_sha}\"}"
@@ -283,11 +355,22 @@ for bad in \
   "an array|[${pr_json}]" \
   "a missing base|{\"url\":\"https://github.com/devantler-tech/monorepo/pull/7\",\"headRefOid\":\"${head_sha}\"}" \
   "an abbreviated head|{\"url\":\"https://github.com/devantler-tech/monorepo/pull/7\",\"baseRefName\":\"main\",\"headRefOid\":\"0123456\"}" \
-  "a base that climbs out of its path|{\"url\":\"https://github.com/devantler-tech/monorepo/pull/7\",\"baseRefName\":\"../../x\",\"headRefOid\":\"${head_sha}\"}" \
+  "an empty base|{\"url\":\"https://github.com/devantler-tech/monorepo/pull/7\",\"baseRefName\":\"\",\"headRefOid\":\"${head_sha}\"}" \
   "a repository name that climbs out of its path|{\"url\":\"https://github.com/devantler-tech/../pull/7\",\"baseRefName\":\"main\",\"headRefOid\":\"${head_sha}\"}" \
   "a url that is not a pull request|{\"url\":\"https://github.com/devantler-tech/monorepo/issues/7\",\"baseRefName\":\"main\",\"headRefOid\":\"${head_sha}\"}" \
   "a tab that would shift the fields|{\"url\":\"https://github.com/devantler-tech/monorepo/pull/7\\tmain\\t${head_sha}\",\"baseRefName\":\"x\",\"headRefOid\":\"y\"}"; do
   expect_survey "survey: ${bad%%|*} is refused" "${tool}" complete "${bad#*|}" 2 "required=unknown:malformed-input"
+  expect_no_read "survey: ${bad%%|*} reads nothing"
+done
+# A base this form will not place in a request path is refused by name, also before any read: one
+# that climbs out of its path, and a legal branch name with a character outside the allowlist.
+for bad in \
+  "a base that climbs out of its path|../../x" \
+  "a base with an at sign|release@1" \
+  "a base with a plus sign|release+1"; do
+  expect_survey "survey: ${bad%%|*} is refused as unsupported" "${tool}" complete \
+    "{\"url\":\"https://github.com/devantler-tech/monorepo/pull/7\",\"baseRefName\":\"${bad#*|}\",\"headRefOid\":\"${head_sha}\"}" \
+    2 "required=unknown:unsupported-base"
   expect_no_read "survey: ${bad%%|*} reads nothing"
 done
 
@@ -347,7 +430,18 @@ no_org_pin="$(ablate no-org-pin 's/github\\\.com\/devantler-tech\/\(/github\\.co
 no_single="$(ablate no-single-document 's/length == 1 and //')"
 no_mix_guard="$(ablate no-mix-guard 's/ && \[ -z "\$\{repo\}\$\{base\}\$\{head\}" \]//')"
 no_unfinished="$(ablate no-unfinished 's/if \$seen == "MISSING" and \$unfinished then "PENDING" else \$seen end/\$seen/')"
-only_workflow_runs="$(ablate only-workflow-runs 's/ or any\(\$runs\[\]; \.status != "completed"\)//')"
+only_workflow_runs="$(ablate only-workflow-runs 's/\n     or any\(\$runs\[\]; \.status != "completed" and \(\.app\.slug \/\/ ""\) == "github-actions"\)//')"
+any_app="$(ablate any-app 's/ and \(\.app\.slug \/\/ ""\) == "github-actions"//')"
+no_control_strip="$(ablate no-control-strip 's/ \| LC_ALL=C tr -d \x27\[:cntrl:\]\x27//')"
+no_dedupe="$(ablate no-dedupe 's/!seen\[\$0\]\+\+ \{ n\+\+;/{ n++;/')"
+# An abort nothing foresaw, placed after the survey form is set up: `false` under `set -e`.
+aborting="$(ablate aborting 's/\nrules="\$\(read_json/\nfalse\nrules="\$(read_json/')"
+aborting_no_backstop="${tmp}/aborting-no-backstop.sh"
+perl -0pe 's/  trap survey_backstop EXIT\n//' "${aborting}" >"${aborting_no_backstop}"
+if cmp -s "${aborting}" "${aborting_no_backstop}"; then
+  echo "FAIL ablation aborting-no-backstop did not change the tool" >&2
+  failures=$((failures + 1))
+fi
 no_required_url="$(ablate no-required-url 's/ and \(\.workflow_url \/\/ "" \| contains\("\/actions\/required_workflows\/"\)\)//')"
 no_value_guard="$(ablate no-value-guard 's/\[ "\$#" -ge 2 \] \|\| usage; //g')"
 
@@ -367,42 +461,85 @@ expect_ablation_fails "without the truncation guard a partial list is judged" "$
 expect_ablation_fails "without MISSING an absent check reads green" "${no_missing}" missing-check 1
 expect_ablation_fails "without the UNVERIFIED guard code_quality reads complete" "${no_unverified}" code-quality 2
 expect_ablation_fails "without the required-run filter a local run shadows a failure" "${no_required_url}" local-shadow 1
-# Both arms exit 1, so these two compare the gate line rather than the status.
-expect_ablation_line() { # <label> <ablated tool> <fixture> <line the real tool prints>
+# Both arms exit 1, so these compare the gate line rather than the status. The ablated tool must
+# print the OTHER state for that gate: an ablation that merely crashed prints neither line.
+expect_ablation_line() { # <label> <ablated tool> <fixture> <line the ablated tool must print instead>
   local got
   checks=$((checks + 1))
   set +e
   got="$(run "$2" "$3")"
   set -e
-  if [[ "${got}" != *"$4"* ]]; then echo "ok   ablation caught: $1"; else
-    echo "FAIL ablation not caught: $1" >&2
+  if [[ "${got}" == *"$4"* ]]; then echo "ok   ablation caught: $1"; else
+    echo "FAIL ablation not caught: $1 — wanted '$4', got:" >&2
+    printf '%s\n' "${got}" >&2
     failures=$((failures + 1))
   fi
 }
 expect_ablation_line "without the unfinished-run rule a job that has not started reads MISSING" \
-  "${no_unfinished}" absent-while-run-unfinished "GATE check Build PENDING"
-expect_ablation_line "without the check-run arm a queued sibling job is not seen" \
-  "${only_workflow_runs}" absent-while-job-queued "GATE check Build PENDING"
+  "${no_unfinished}" absent-while-run-unfinished "GATE check Build MISSING"
+expect_ablation_line "without the check-run arm a queued Actions job is not seen" \
+  "${only_workflow_runs}" absent-while-job-queued "GATE check Build MISSING"
+expect_ablation_line "without the Actions test another app's check-run delays MISSING" \
+  "${any_app}" absent-while-other-app-queued "GATE check Build PENDING"
 
-expect_survey_ablation_fails() { # <label> <ablated tool> <payload> <rc the real tool gives> [extra args…]
-  local label="$1" t="$2" payload="$3" real="$4" rc
-  shift 4
+expect_survey_ablation() { # <label> <ablated tool> <fixture> <payload> <last line the ablated tool must print> [extra args…]
+  local label="$1" t="$2" fx="$3" payload="$4" want="$5" got last
+  shift 5
   checks=$((checks + 1))
   set +e
-  run_survey "${t}" complete "${payload}" "$@" >/dev/null
-  rc=$?
+  got="$(run_survey "${t}" "${fx}" "${payload}" "$@")"
   set -e
-  if [ "${rc}" != "${real}" ]; then echo "ok   ablation caught: ${label}"; else
-    echo "FAIL ablation not caught: ${label} (rc=${rc})" >&2
+  last="$(printf '%s\n' "${got}" | tail -n 1)"
+  if [ "${last}" = "${want}" ]; then echo "ok   ablation caught: ${label}"; else
+    echo "FAIL ablation not caught: ${label} — wanted last line '${want}', got:" >&2
+    printf '%s\n' "${got}" >&2
     failures=$((failures + 1))
   fi
 }
-expect_survey_ablation_fails "without the owner pin another organisation's pull request is judged" \
-  "${no_org_pin}" "${foreign_json}" 2
-expect_survey_ablation_fails "without the single-document guard a second pull request is ignored" \
-  "${no_single}" "${pr_json}${pr_json}" 2
-expect_survey_ablation_fails "without the mix guard argv aims the survey form" \
-  "${no_mix_guard}" "${pr_json}" 2 --repo devantler-tech/monorepo
+# Each of these three ends in `required=complete`, the verdict the removed guard exists to refuse.
+expect_survey_ablation "without the owner pin another organisation's pull request is judged as ours" \
+  "${no_org_pin}" complete "${foreign_json}" "required=complete"
+checks=$((checks + 1))
+if [ -s "${stub_log}" ]; then echo "ok   ablation caught: without the owner pin the forge is read"; else
+  echo "FAIL ablation not caught: without the owner pin nothing was read" >&2
+  failures=$((failures + 1))
+fi
+expect_survey_ablation "without the single-document guard a second pull request is silently dropped" \
+  "${no_single}" complete "${pr_json}${pr_json}" "required=complete"
+expect_survey_ablation "without the mix guard a target in argv is silently ignored" \
+  "${no_mix_guard}" complete "${pr_json}" "required=complete" --repo devantler-tech/monorepo
+expect_survey_ablation "without the control-character strip the name is copied raw" \
+  "${no_control_strip}" control-character-name "${pr_json}" "$(printf 'required=missing:Bu\aild')"
+expect_survey_ablation "without the de-duplication a gate required twice is named twice" \
+  "${no_dedupe}" same-name-twice "${pr_json}" "required=missing:Build,Build"
+# The backstop: an abort nothing foresaw still ends the survey form in a `required=` line and
+# exit 2. Without it the same abort prints nothing, which only a missing-line rule could catch.
+expect_survey "survey: an unforeseen abort still ends in the survey line" "${aborting}" complete "${pr_json}" 2 \
+  "required=unknown:aborted"
+checks=$((checks + 1))
+set +e
+got="$(run_survey "${aborting_no_backstop}" complete "${pr_json}")"
+rc=$?
+set -e
+if [ -z "${got}" ] && [ "${rc}" != 0 ]; then
+  echo "ok   ablation caught: without the backstop an abort prints no survey line"
+else
+  echo "FAIL ablation not caught: without the backstop the abort gave rc=${rc}: ${got}" >&2
+  failures=$((failures + 1))
+fi
+# The backstop belongs to the survey form alone: the argv form's abort keeps the shell's status
+# and prints no survey line.
+checks=$((checks + 1))
+set +e
+got="$(run "${aborting}" complete)"
+rc=$?
+set -e
+if [ -z "${got}" ] && [ "${rc}" != 0 ] && [ "${rc}" != 2 ]; then
+  echo "ok   the argv form's abort is left to the shell"
+else
+  echo "FAIL the argv form's abort was rewritten (rc=${rc}): ${got}" >&2
+  failures=$((failures + 1))
+fi
 checks=$((checks + 1))
 set +e
 got="$(run_survey "${no_unverified}" code-quality "${pr_json}")"

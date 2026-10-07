@@ -3873,7 +3873,7 @@ grep -Fq '`managed-failing` alone never makes a PR `NEEDS-FIX`' "${surveyor}" ||
   fail "pentad (a) must say managed-failing alone never makes a PR NEEDS-FIX (monorepo#2557)"
 grep -Fq 'no ordinary failing check (`managed-failing` alone does not count)' "${surveyor}" ||
   fail "review-ready must exclude managed-failing from the failing-check condition (monorepo#2557)"
-_mf_lines=$(grep -Fc 'pentad: checks=<green|missing:X|pending:X|unverified:X|failing:X|managed-failing:X|failing:X+managed-failing:Y>,' "${surveyor}" || true)
+_mf_lines=$(grep -Fc 'pentad: checks=<green|<missing:X|failing:X|pending:X|unverified:X|managed-failing:X>[+…]>,' "${surveyor}" || true)
 [ "${_mf_lines}" -ge 2 ] ||
   fail "both trusted-bot digest lines must carry the managed-failing checks grammar, found ${_mf_lines} (monorepo#2557)"
 echo "portfolio surveyor contract: round-14 managed-failing pentad assertions passed"
@@ -4192,9 +4192,10 @@ _required_gate_error() {
     '**(a) is `green` only when every REQUIRED gate ran at the head**' \
     'For each deepened PR with no ordinary failing check, run `gh pr view <n> --repo devantler-tech/<repo> --json url,baseRefName,headRefOid | <repo-root>/.claude/scripts/required-gate-completeness.sh --input -`' \
     'copy the value of its last line, `required=`, verbatim' \
-    '`complete` leaves (a) as the rollup read it' \
-    '`missing:<gate>`, `failing:<gate>` or `pending:<gate>` replaces `green`, and that PR is `NEEDS-FIX` naming the gate, **never `REVIEW-READY` or `MERGE-READY`**' \
-    '`unverified:<gate>` (every readable gate passed, and this one has no readable surface) replaces `green` and decides no class by itself' \
+    '`complete` leaves (a) as the rollup read it; any other value replaces `green`, or joins a `managed-failing:` one with `+`' \
+    'A `missing:<gate>`, `failing:<gate>` or `pending:<gate>` PR is `NEEDS-FIX` naming the gate, **never `REVIEW-READY` or `MERGE-READY`**' \
+    '`pending:` is still on its way, so its fix is to wait' \
+    '`unverified:<gate>` (every readable gate passed, and this one has no readable surface) decides no class by itself' \
     '`unknown:<reason>`, a failed call or a missing `required=` line is `QUERY-UNKNOWN … failed=checks:<reason>`, **never `green`**' \
     'no ordinary failing check (`managed-failing` alone does not count), no missing, failing or pending required gate, it is not CONFLICTING'; do
     case "${flat}" in
@@ -4210,8 +4211,13 @@ _err=$(_required_gate_error "${surveyor_flat}")
 _mut=$(printf '%s' "${surveyor_flat}" | sed 's/, \*\*never `REVIEW-READY` or `MERGE-READY`\*\*//')
 [ "${_mut}" != "${surveyor_flat}" ] ||
   fail "control: the ready-class mutation changed nothing, so it proves nothing (monorepo#3506)"
-[[ "$(_required_gate_error "${_mut}")" == *'replaces `green`, and that PR is `NEEDS-FIX`'* ]] ||
+[[ "$(_required_gate_error "${_mut}")" == *'PR is `NEEDS-FIX` naming the gate'* ]] ||
   fail "control: the required-gate check did not reject an overlay that lets a missing gate be ready (monorepo#3506)"
+_mut=$(printf '%s' "${surveyor_flat}" | sed 's/; any other value replaces `green`, or joins/; any other value joins/')
+[ "${_mut}" != "${surveyor_flat}" ] ||
+  fail "control: the replaces-green mutation changed nothing, so it proves nothing (monorepo#3506)"
+[[ "$(_required_gate_error "${_mut}")" == *'any other value replaces `green`'* ]] ||
+  fail "control: the required-gate check did not reject an overlay that keeps green beside another value (monorepo#3506)"
 _mut=$(printf '%s' "${surveyor_flat}" | sed 's/failed=checks:<reason>`, \*\*never `green`\*\*/failed=checks:<reason>`/')
 [ "${_mut}" != "${surveyor_flat}" ] ||
   fail "control: the unknown mutation changed nothing, so it proves nothing (monorepo#3506)"
@@ -4223,7 +4229,7 @@ _mut=$(printf '%s' "${surveyor_flat}" | sed 's/, no missing, failing or pending 
 [[ "$(_required_gate_error "${_mut}")" == *'no missing, failing or pending required gate'* ]] ||
   fail "control: the required-gate check did not reject a review-ready rule without the required-gate condition (monorepo#3506)"
 
-_checks_grammar='checks=<green|missing:X|pending:X|unverified:X|failing:X|managed-failing:X|failing:X+managed-failing:Y>'
+_checks_grammar='checks=<green|<missing:X|failing:X|pending:X|unverified:X|managed-failing:X>[+…]>'
 _checks_rows_error() {
   local file="$1" rows with
   rows=$(grep -c 'pentad: checks=<' "${file}" || true)
@@ -4237,7 +4243,7 @@ _checks_rows_error() {
 _err=$(_checks_rows_error "${surveyor}")
 [ -z "${_err}" ] || fail "portfolio-surveyor.md: ${_err} (monorepo#3506)"
 _checks_mutant="$(mktemp)"
-awk '!done && sub(/missing:X\|pending:X\|unverified:X\|/, "") { done = 1 } { print }' "${surveyor}" >"${_checks_mutant}"
+awk '!done && sub(/missing:X\|failing:X\|pending:X\|unverified:X\|/, "failing:X|") { done = 1 } { print }' "${surveyor}" >"${_checks_mutant}"
 _mut_err=$(_checks_rows_error "${_checks_mutant}")
 rm -f "${_checks_mutant}"
 [[ "${_mut_err}" == *'row templates carry'* ]] ||
