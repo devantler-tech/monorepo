@@ -119,6 +119,19 @@ step:
    The **open verification-hypothesis store** is
    `/Users/homelab-mac-mini/.claude/projects/-Users-homelab-mac-mini-git-personal-monorepo/memory/agent-improver-routine.md`
    for Claude and the `Hypotheses / next run` section of the Codex Agent Improver memory file.
+   🔴 **Reserve a hypothesis identifier before it is written — never mint `H<n>` by reading the newest
+   one and adding one.** Two overlapping runs of one task both read the same newest identifier, and
+   both opened `H80` on one signature with different baselines. Before it writes a new hypothesis, a
+   run takes its identifier from
+   `.claude/scripts/hypothesis-id-reserve.sh --reservations /Users/homelab-mac-mini/.claude/hypothesis-id-reservations --owner <run token> --scan <store>`,
+   with one `--scan` for every file that holds identifiers: the store named above, any file it has
+   been split into, and the sibling's. It reads heading lines only, so open every hypothesis under a
+   heading that names it. Exit `0` prints the identifier, which is then this run's alone.
+   Exit `2` reserved nothing: never mint one by hand, and leave the hypothesis for a run that can
+   reserve. **The ledger itself is appended to, in a section of its own for each run**, so a
+   concurrent writer cannot be overwritten; a whole-file rewrite of an Improver store additionally
+   needs `.claude/scripts/claude-task-live-runs.sh --task <scheduled task id>` to exit `0` first,
+   and its exit `1` or `2` postpones the rewrite to a later run (monorepo#3536).
    🔴 **A SIBLING'S STORE IS EVIDENCE ONLY WHILE ITS LANE IS PRODUCING — establish that FIRST, because
    a frozen ledger and a quiet one are indistinguishable.** That store is the one input this instance
    cannot corroborate from its own lane, so an unchecked read is exactly where a dead sibling silently

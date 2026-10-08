@@ -444,6 +444,19 @@ run's merge preflight calls it directly. The read-only surveyor pipes the same q
 `pr-unresolved-threads.sh --input -`, a classifier its guard admits by declaration, so the survey's
 field (b) and the preflight produce the same count.
 
+🔴 **Name the state: `GraphQL-unavailable`.** GitHub can refuse every GraphQL call while REST stays
+healthy, and while `gh api rate_limit` reports the GraphQL bucket as untouched — measured for about 35
+minutes on 2026-09-20 (monorepo#3429). So `rate_limit` is never evidence that GraphQL is serving, and
+waiting for the reset it names proves nothing. Establish the state with the probe that exercises the
+surface, [`graphql-availability.sh`](../scripts/graphql-availability.sh): exit `0` is
+`GRAPHQL=SERVING`, exit `1` is `GRAPHQL=REFUSING` and exit `2` is `GRAPHQL=UNKNOWN`. On `1` or `2`
+the thread count is UNKNOWN: decline every merge, and continue all non-merge work — fixes, reviews,
+REST reads, issues. `REFUSING` is the named state: a state of the service that clears by itself,
+never a maintainer gate and never a blocker to record on the pull request, so probe again before the
+next merge attempt. `UNKNOWN` is not that state and does not clear by waiting:
+diagnose it by its reason — a missing tool, a sign-in failure (the pre-flight identity ladder), no
+network, a server error — and handle the cause it names, escalating only a cause outside agent authority.
+
 **That must read `0` immediately before the merge — not once, earlier, from the survey.** The survey
 pentad does carry unresolved threads, but it is a **snapshot taken earlier in the run**, and this
 fresh read exists precisely for state that moves after that snapshot — the same reason `title` is

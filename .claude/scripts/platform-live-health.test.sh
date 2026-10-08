@@ -5,7 +5,18 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 checker="$root/.claude/scripts/platform-live-health.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "platform-live-health.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 fail() { echo "platform-live-health test: $*" >&2; exit 1; }
 
 # The stub answers `kubectl --context <ctx> --request-timeout=<t> get <resources> -A -o json` from
@@ -314,4 +325,5 @@ touch "$FAKE/config.fail"
 runresolve
 expect "an unreadable kubeconfig is unknown" 2 "PLATFORM-HEALTH=UNKNOWN (no prod context resolved)"
 
+completed=1
 echo "platform-live-health test: OK"

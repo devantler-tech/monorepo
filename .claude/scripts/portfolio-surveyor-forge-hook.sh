@@ -125,7 +125,9 @@ verify_asset "scripts/json-stream.lib.sh"
 # as reviews (monorepo#3572).
 # kata-measure-date.sh reads ONE Kata issue body on stdin and says whether its structured
 # `**Measure on:**` date has arrived. Undeclared, the surveyor read the date by eye and reported
-# both open Katas as past due from their createdAt (monorepo#2838).
+# both open Katas as past due from their createdAt (monorepo#2838). The same stdin object also
+# carries the Kata's sub-issue summary, so a future date is not-due only when an open sub-issue
+# or a recorded delivery means the skip hides nothing (monorepo#3619).
 # pr-worktree-holder.sh reads a PR's head branch from the forge JSON on stdin and says
 # whether a live process on this host works in a local checkout of it. It is the one
 # declared program that reads beyond stdin — the process table (`lsof`, `ps`) and local
