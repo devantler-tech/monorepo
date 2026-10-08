@@ -1340,6 +1340,7 @@ func TestABareNumberCountsOnlyAsAReference(t *testing.T) {
 		{"a number alone on a line", "#42", true},
 		{"a word that only ends in a reference word", "The prefix #42 is unchanged; we oversee #42 too.", true},
 		{"a reference word further back in the sentence", "Fixes the retry bug by choosing option #42", true},
+		{"a cross-reference that is not work on it", "As you can see #42 is unaffected. See #42 for background.", true},
 		{"a closing keyword", "Closes #42", false},
 		{"a closing keyword in another case, with a colon", "RESOLVES: #42", false},
 		{"a Part of line", "Part of #42", false},

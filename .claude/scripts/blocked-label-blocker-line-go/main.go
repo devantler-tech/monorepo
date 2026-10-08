@@ -105,7 +105,8 @@ Options: --today <YYYY-MM-DD> (default UTC today)
 Write a record with the compose subcommand (compose --help), never by hand.
 Park a pull request with the park subcommand (park --help): it writes the
 record and the blocked label together and reads both back.
-Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input).
+Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input,
+      or an --org read that saw no Security issue at all).
       With --parked-digest: 0 every labelled pull request is parked (or none is
       labelled); 1 at least one is ACTIONABLE; 2 UNKNOWN.
 `
@@ -687,7 +688,7 @@ var (
 // the forge's closing keywords and the linking words pull requests here use.
 // A bare #N counts only straight after one, so a number in running prose
 // ("we chose option #7") names no issue (#3822).
-const referenceWords = `close[sd]?|fix(?:e[sd])?|resolve[sd]?|part of|refs?|references|related to|relates to|addresses|implements|towards|tracks|see`
+const referenceWords = `close[sd]?|fix(?:e[sd])?|resolve[sd]?|part of|refs?|references|related to|relates to|addresses|implements|towards|tracks`
 
 // mentioned reports whether an open pull request refers to the issue, in its
 // title or its body: <owner>/<repo>#N or .../<repo>/issues/N from anywhere, or
