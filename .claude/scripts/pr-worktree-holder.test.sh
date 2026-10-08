@@ -23,7 +23,11 @@
 #     lives in its worktree's repository, which need not be the one its owner or the asker stands
 #     in), and a listing of one of those that fails is `unknown:`;
 #   - a locked worktree whose path holds a tab is `unknown:` for every PR asked about unless its
-#     process exited, never a row that splits and reads `none` (monorepo#3825).
+#     process exited, never a row that splits and reads `none` (monorepo#3825);
+#   - nothing of a populated submodule is read through a `.git` entry that names a git directory
+#     its superproject does not keep, among the holders or in the lock scan, and the answer is
+#     `unknown:`, while a submodule of a main checkout, one of a linked worktree and one that keeps
+#     its own git directory read as before (monorepo#3982).
 # `lsof` and `ps` are shims driven by FIXTURE_* variables; the helper itself reads no environment.
 set -euo pipefail
 
@@ -358,6 +362,100 @@ if g -C "${corrupt}/product" rev-parse --show-toplevel >/dev/null 2>&1; then
   echo "FAIL fixture: git still resolves the submodule whose .git entry was broken" >&2
   exit 1
 fi
+
+# ── A submodule whose `.git` entry names a git directory elsewhere (monorepo#3982) ──────────────
+# An unrelated repository on the same host. It works on one branch, and its registry holds a
+# worktree a live session locked. Nothing below is its submodule, so none of this is the probe's
+# to read.
+stranger="${sandbox}/stranger"
+g init -q "${stranger}"
+g -C "${stranger}" commit -q --allow-empty -m init
+g -C "${stranger}" config remote.origin.url git@github.com:devantler-tech/stranger.git
+g -C "${stranger}" switch -q -c claude/stranger-97
+g -C "${stranger}" worktree add -q -b claude/stranger-98 "${sandbox}/stranger-wt"
+g -C "${stranger}" worktree lock \
+  --reason "claude agent stranger (pid 9000002 start ${start_theirs})" "${sandbox}/stranger-wt"
+# A superproject whose populated submodule has had its `.git` entry pointed at that repository.
+astray="${sandbox}/astray"
+g init -q "${astray}"
+g -C "${astray}" commit -q --allow-empty -m init
+g -C "${astray}" submodule --quiet add "${sandbox}/product-origin" product
+g -C "${astray}" commit -q -m 'add product'
+printf 'gitdir: %s\n' "${stranger}/.git" >"${astray}/product/.git"
+# The same, with the entry a symbolic link to that git directory instead of a file naming it.
+astray_link="${sandbox}/astray-link"
+g init -q "${astray_link}"
+g -C "${astray_link}" commit -q --allow-empty -m init
+g -C "${astray_link}" submodule --quiet add "${sandbox}/product-origin" product
+g -C "${astray_link}" commit -q -m 'add product'
+rm -f -- "${astray_link}/product/.git"
+ln -s "${stranger}/.git" "${astray_link}/product/.git"
+# And one whose working tree has lost its `.gitmodules`: the index still holds the gitlink, so the
+# lock scan finds the submodule while the listing of what a holder owns does not.
+astray_bare="${sandbox}/astray-bare"
+g init -q "${astray_bare}"
+g -C "${astray_bare}" commit -q --allow-empty -m init
+g -C "${astray_bare}" submodule --quiet add "${sandbox}/product-origin" product
+g -C "${astray_bare}" commit -q -m 'add product'
+rm -f -- "${astray_bare}/.gitmodules"
+printf 'gitdir: %s\n' "${stranger}/.git" >"${astray_bare}/product/.git"
+# A repository whose locked worktree, held by a live session, has such a submodule. Nobody works
+# in that worktree and nobody asks from it, so only the listing of what a holder owns reaches it.
+lodge="${sandbox}/lodge"
+g init -q "${lodge}"
+g -C "${lodge}" commit -q --allow-empty -m init
+g -C "${lodge}" submodule --quiet add "${sandbox}/product-origin" product
+g -C "${lodge}" commit -q -m 'add product'
+g -C "${lodge}" worktree add -q -b worktree-agent-b1 "${lodge}/.claude/worktrees/agent-b1"
+g -C "${lodge}" worktree lock \
+  --reason "claude agent agent-b1 (pid 9000002 start ${start_theirs})" "${lodge}/.claude/worktrees/agent-b1"
+g -C "${lodge}/.claude/worktrees/agent-b1" submodule --quiet update --init product
+printf 'gitdir: %s\n' "${stranger}/.git" >"${lodge}/.claude/worktrees/agent-b1/product/.git"
+# Guard the fixture itself: git follows each entry, so without the check every one of these reads
+# the unrelated repository as though it were the submodule.
+for strayed in "${astray}/product" "${astray_link}/product" "${astray_bare}/product" "${lodge}/.claude/worktrees/agent-b1/product"; do
+  [ "$(g -C "${strayed}" rev-parse --symbolic-full-name HEAD 2>/dev/null)" = refs/heads/claude/stranger-97 ] ||
+    { echo "FAIL fixture: git does not follow the .git entry of ${strayed} to the unrelated repository" >&2; exit 1; }
+done
+# A submodule that keeps its own git directory: its `.git` entry is that directory, and git never
+# moved it below the superproject's. Its registry holds a worktree a live session locked.
+selfkept="${sandbox}/selfkept"
+g init -q "${selfkept}"
+g -C "${selfkept}" commit -q --allow-empty -m init
+g clone -q "${sandbox}/product-origin" "${selfkept}/product"
+g -C "${selfkept}" -c advice.addEmbeddedRepo=false add product
+g -C "${selfkept}" commit -q -m 'add product'
+g -C "${selfkept}/product" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${selfkept}/product" worktree add -q -b claude/product-99 "${sandbox}/selfkept-wt"
+g -C "${selfkept}/product" worktree lock \
+  --reason "claude agent selfkept (pid 9000002 start ${start_theirs})" "${sandbox}/selfkept-wt"
+if [ ! -d "${selfkept}/product/.git" ] || [ -L "${selfkept}/product/.git" ]; then
+  echo "FAIL fixture: selfkept/product does not keep its own git directory" >&2
+  exit 1
+fi
+# A linked worktree whose submodule entry names the git directory the MAIN checkout keeps for that
+# submodule: below the directory the worktree's `commondir` names, and not below its own.
+shared="${sandbox}/shared"
+shared_wt="${sandbox}/shared-wt"
+g init -q "${shared}"
+g -C "${shared}" commit -q --allow-empty -m init
+g -C "${shared}" submodule --quiet add "${sandbox}/product-origin" product
+g -C "${shared}" commit -q -m 'add product'
+g -C "${shared}" config remote.origin.url git@github.com:devantler-tech/shared.git
+g -C "${shared}" worktree add -q -b claude/shared-100 "${shared_wt}"
+mkdir -p "${shared_wt}/product"
+printf 'gitdir: %s\n' "${shared}/.git/modules/product" >"${shared_wt}/product/.git"
+if [ ! -d "${shared}/.git/modules/product/objects" ] || [ ! -f "${shared}/.git/worktrees/shared-wt/commondir" ]; then
+  echo "FAIL fixture: the shared layout is not the one the case describes" >&2
+  exit 1
+fi
+# Guard the layouts in use on an agent host, which the cases above this section read: a submodule
+# of a main checkout keeps its git directory below the main checkout's, and a submodule of a
+# linked worktree below that worktree's own git directory.
+[ "$(g -C "${hub_product}" rev-parse --path-format=absolute --git-dir)" = "${hub}/.git/modules/product" ] ||
+  { echo "FAIL fixture: hub/product does not keep its git directory below the hub's" >&2; exit 1; }
+[ "$(g -C "${w1}/product" rev-parse --path-format=absolute --git-dir)" = "${main}/.git/worktrees/w1/modules/product" ] ||
+  { echo "FAIL fixture: w1/product does not keep its git directory below w1's own" >&2; exit 1; }
 
 # ── A locked worktree whose path holds a tab (monorepo#3825) ────────────────────────────────────
 # A third repository, so the row no table can carry is in sight only for the cases that ask it.
@@ -909,6 +1007,36 @@ expect "a lock in a submodule's registry is read when the superproject's working
   "${nomodules}" "${session}" 0 \
   "devantler-tech/product#91 holder=live:1:9000002/claude" \
   "$(pr devantler-tech/product 91 claude/product-91)" "${lsof_nowhere}"
+# ── A submodule whose `.git` entry names a git directory elsewhere (monorepo#3982) ──────────────
+# Asked from the superproject, with no process in any checkout: only the lock scan reaches the
+# submodule. Read through its entry, the unrelated repository's live lock would answer `live`.
+expect "a submodule whose .git entry names a git directory outside its superproject is not read for locks" \
+  "${astray}" "${session}" 2 \
+  "devantler-tech/stranger#98 holder=unknown:submodule-gitdir" \
+  "$(pr devantler-tech/stranger 98 claude/stranger-98)" "${lsof_nowhere}"
+expect "a submodule whose .git entry is a symbolic link to a git directory outside its superproject is not read" \
+  "${astray_link}" "${session}" 2 \
+  "devantler-tech/stranger#98 holder=unknown:submodule-gitdir" \
+  "$(pr devantler-tech/stranger 98 claude/stranger-98)" "${lsof_nowhere}"
+expect "the lock scan alone does not read a submodule whose .git entry names a git directory outside its superproject" \
+  "${astray_bare}" "${session}" 2 \
+  "devantler-tech/stranger#98 holder=unknown:submodule-gitdir" \
+  "$(pr devantler-tech/stranger 98 claude/stranger-98)" "${lsof_nowhere}"
+# Asked from the main checkout of the repository whose locked worktree has the submodule: the scan
+# never walks that worktree, and only the listing of what its holder owns reaches it. Read through
+# its entry, the unrelated repository's branch would be held by the lock's session.
+expect "a held worktree's submodule whose .git entry names a git directory outside it is not read for what it serves" \
+  "${lodge}" "${session}" 2 \
+  "devantler-tech/stranger#97 holder=unknown:submodule-gitdir" \
+  "$(pr devantler-tech/stranger 97 claude/stranger-97)" "${lsof_nowhere}"
+expect "a submodule that keeps its own git directory still has its registry read" \
+  "${selfkept}" "${session}" 0 \
+  "devantler-tech/product#99 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 99 claude/product-99)" "${lsof_nowhere}"
+expect "a linked worktree's submodule may keep its git directory below the directory its commondir names" \
+  "${shared_wt}" "${session}" 0 \
+  "devantler-tech/shared#100 holder=none" \
+  "$(pr devantler-tech/shared 100 claude/shared-100)" "${lsof_nowhere}"
 # Half a list of submodules would read as a whole one, so a step that fails while the list is built
 # is unknown. `list_fail=1` puts the shims on the path; with `sublist_fail` set they fail no listing.
 list_fail=1
