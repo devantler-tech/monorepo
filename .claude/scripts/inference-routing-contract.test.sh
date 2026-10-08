@@ -6,7 +6,18 @@ PLUGIN_ROOT="${INFERENCE_ROUTING_PLUGIN_ROOT:-$ROOT/libraries/agent-plugins/plug
 EVALUATOR="$PLUGIN_ROOT/scripts/evaluate-inference-routing.sh"
 POLICY="$ROOT/.claude/plugin-consumption/inference-routing.policy.json"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$TMP"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "inference-routing-contract.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 [[ -x "$EVALUATOR" ]] || { echo 'reviewed routing evaluator unavailable' >&2; exit 1; }
 jq -n --slurpfile policy "$POLICY" '{policy:$policy[0],
   task:{class:"workhorse",depth:0,children:0,distinctFailedHypotheses:0,activeMinutes:0,
@@ -346,3 +357,4 @@ cmp -s "$GUIDE" "$TMP/g.md" &&
   { echo 'FAIL accepted parent routes control guide rule moved: the fixture equals the live guide' >&2; exit 1; }
 refuses 'guide rule moved out of its section' 'guide lost: Outside an accepted route' \
   check_guide "$TMP/g.md"
+completed=1

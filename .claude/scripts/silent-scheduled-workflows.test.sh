@@ -10,7 +10,18 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 checker="$root/.claude/scripts/silent-scheduled-workflows.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "silent-scheduled-workflows.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 fail() { echo "silent-scheduled-workflows test: $*" >&2; exit 1; }
 
 now=1790000000 # 2026-09-21T13:33:20Z
@@ -937,3 +948,4 @@ run
 [ "$rc" -eq 2 ] || fail "no --repo must exit 2, got $rc"
 
 echo "silent-scheduled-workflows: all assertions passed"
+completed=1

@@ -257,6 +257,21 @@ python-ban-guard.test.sh|
 review-lane-health.test.sh|
 safe-clone.test.sh|
 unsigned-push-guard.test.sh|
+blocked-label-blocker-line.test.sh|
+claude-dispatch-rate.test.sh|
+codex-lane-liveness.test.sh|
+inference-routing-contract.test.sh|
+prod-kube-context.test.sh|
+claude-lane-liveness.test.sh|
+submodule-agents-drift.test.sh|
+inference-routing-scorecard.test.sh|
+release-exemption-identity-currency.test.sh|
+submodule-pin-currency.test.sh|
+unsigned-commit-report.test.sh|
+ci-job-wiring.test.sh|
+pipefail-grep-guard.test.sh|
+skill-owner.test.sh|
+silent-scheduled-workflows.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"
