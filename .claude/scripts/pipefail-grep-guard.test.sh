@@ -24,7 +24,18 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 guard="$here/pipefail-grep-guard.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "pipefail-grep-guard.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 
 fail=0
 
@@ -1369,4 +1380,5 @@ if ((fail != 0)); then
   exit 1
 fi
 echo "pipefail-grep-guard self-test: all cases passed"
+completed=1
 

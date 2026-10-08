@@ -16,7 +16,18 @@ WRAPPER="$CHECK"
 }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$TMP"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "blocked-label-blocker-line.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 
 go -C "$HERE/blocked-label-blocker-line-go" test ./... || exit 2
 go -C "$HERE/blocked-label-blocker-line-go" build -o "$TMP/guard" . || exit 2
@@ -1147,4 +1158,5 @@ RUN_SKILL="$HERE/../skills/portfolio-maintenance/SKILL.md"
 if grep -qF -- 'blocked-label-blocker-line.sh --org devantler-tech --parked-digest' "$RUN_SKILL"; then ok "the run procedure runs the parked digest after the survey"; else bad "the run procedure runs the parked digest after the survey" "command not found in $RUN_SKILL"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
+completed=1
 [ "$fail" = 0 ] || exit 1

@@ -29,7 +29,18 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$TMP"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "claude-lane-liveness.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 
 NOW=1788000000            # fixed "now" for every case
 fails=0
@@ -702,4 +713,5 @@ for missing in id enabled lastRunAt cronExpression; do
   expect_msg 2 "unexpected store schema" "a task missing .$missing is UNKNOWN store-wide"
 done
 echo "claude-lane-liveness.test.sh: $asserts assertion(s), $fails failure(s)"
+completed=1
 [ "$fails" -eq 0 ] || exit 1

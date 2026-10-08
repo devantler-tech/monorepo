@@ -8,7 +8,18 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK="$HERE/unsigned-commit-report.sh"
 [ -x "$CHECK" ] || { echo "FATAL: $CHECK is not executable" >&2; exit 2; }
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$TMP"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "unsigned-commit-report.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 INSTANCES="$TMP/instances.json"
 cat >"$INSTANCES" <<'JSON'
 {"version":1,"policyPublisher":"codex-local","instances":{
@@ -394,4 +405,5 @@ flag_expiry=20261031
 today="$(date -u +%Y%m%d)"
 if [ "$today" -lt "$flag_expiry" ]; then ok "the UNSIGNED_COMMIT_REPORT release flag has not passed its expiry"; else bad "the UNSIGNED_COMMIT_REPORT release flag has not passed its expiry" "today=$today expiry=$flag_expiry -- activate then remove the flag per monorepo#3229"; fi
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
+completed=1
 [ "$fail" = 0 ] || exit 1
