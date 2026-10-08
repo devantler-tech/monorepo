@@ -38,7 +38,10 @@
 #                                   lock-scan (a repository whose registry may hold a lock was not
 #                                   reached: a superproject, an index or a `.gitmodules` that cannot
 #                                   be read, a checkout or a populated submodule at a path holding
-#                                   a newline or a tab, or nesting deeper than the scan follows)
+#                                   a newline or a tab, or nesting deeper than the scan follows),
+#                                   submodule-gitdir (a populated submodule's `.git` entry names a
+#                                   git directory its superproject does not keep, so nothing of it
+#                                   was read: see SUBMODULE GIT DIRECTORIES)
 #
 # WHAT HOLDING A CHECKOUT MEANS
 #   A process holds the checkout containing its working directory, every populated submodule of
@@ -88,6 +91,18 @@
 #   tables, so nothing can say which PRs it serves. Unless its process is known to have exited,
 #   EVERY PR asked about is then `unknown:lock-reason` (monorepo#3825): the row used to split,
 #   and the live lock read `none`.
+#
+# SUBMODULE GIT DIRECTORIES (monorepo#3982)
+#   Both the holders and the lock scan read every populated submodule of a checkout, and git finds
+#   a submodule's repository through its `.git` entry, wherever that leads. The entry is not
+#   repository content, so one that names a git directory elsewhere was written on this host; read
+#   through it, an unrelated repository's branch, worktrees and locks would answer for the
+#   submodule. Before anything of a submodule is read, the directory its entry names must be the
+#   entry itself (a submodule that keeps its own), or lie below its superproject's git directory
+#   or, for a linked worktree, below the directory that worktree's `commondir` names. Otherwise
+#   every PR asked about is `unknown:submodule-gitdir`: the submodule may hold any of them, and
+#   nobody looked. An entry that names no directory at all is one git cannot follow either, and
+#   keeps the answer it had (skipped among the holders, `unknown:lock-scan` in the scan).
 #
 # SELF
 #   The asking session is not its own rival, the same exclusion the contract makes for its own
@@ -283,6 +298,87 @@ record() {
   done <<<"${remotes}"
 }
 
+# outside — a populated submodule's `.git` entry names a git directory that is not its
+# superproject's to keep, and the answer is `unknown:submodule-gitdir`. Kept twice, as scan_failed is.
+OUTSIDE=0
+outside() {
+  OUTSIDE=1
+  : >"${work}/outside" 2>/dev/null || true
+}
+outside_seen() { [ "${OUTSIDE}" = 1 ] || [ -e "${work}/outside" ]; }
+
+# git_directory <checkout> — set G_DIR to the git directory its `.git` entry names, as a physical
+# path, read the way git reads that entry and without starting git. Fails when the entry names no
+# directory that can be entered, which is an entry git cannot follow either.
+G_DIR=''
+git_directory() {
+  local dir="$1" pointer target
+  if [ -d "${dir}/.git" ]; then
+    target="${dir}/.git"
+  else
+    [ -f "${dir}/.git" ] || return 1
+    pointer="$(cat -- "${dir}/.git" 2>/dev/null)" || return 1
+    # git drops every newline and carriage return that ends the file.
+    while :; do
+      case "${pointer}" in
+        *$'\r') pointer="${pointer%$'\r'}" ;;
+        *$'\n') pointer="${pointer%$'\n'}" ;;
+        *) break ;;
+      esac
+    done
+    case "${pointer}" in
+      'gitdir: /'*) target="${pointer#gitdir: }" ;;
+      'gitdir: '?*) target="${dir}/${pointer#gitdir: }" ;;
+      *) return 1 ;;
+    esac
+  fi
+  G_DIR="$(cd -- "${target}" 2>/dev/null && pwd -P)" || return 1
+  [ -n "${G_DIR}" ]
+}
+
+# confined <superproject checkout> <submodule checkout> — is the git directory the submodule's
+# `.git` entry names one its superproject keeps (monorepo#3982)? git follows that entry wherever it
+# leads, and an entry is not repository content: git never checks one out, so one that names a
+# directory elsewhere was written on this host, and following it reads the worktrees and locks of
+# an unrelated repository as though they were the submodule's. A superproject keeps a submodule's
+# git directory in one of three places: in the submodule itself (the entry is the directory), below
+# its own git directory, and, for a linked worktree, below the directory its `commondir` names.
+# Answers 0 for one of those, 1 for anywhere else, and 2 when the entry names no directory at all:
+# git fails on that entry too, so the caller's own handling of an unreadable submodule still applies.
+confined() {
+  local super="$1" sub="$2" subdir common
+  if [ -d "${sub}/.git" ] && [ ! -L "${sub}/.git" ]; then return 0; fi
+  git_directory "${sub}" || return 2
+  subdir="${G_DIR}"
+  # The superproject is a checkout git already resolved, so an entry that cannot be read here is
+  # not one to guess around.
+  git_directory "${super}" || return 1
+  if inside "${subdir}" "${G_DIR}"; then return 0; fi
+  [ -f "${G_DIR}/commondir" ] || return 1
+  common="$(cat -- "${G_DIR}/commondir" 2>/dev/null)" || return 1
+  case "${common}" in
+    '') return 1 ;;
+    /*) ;;
+    *) common="${G_DIR}/${common}" ;;
+  esac
+  [ -d "${common}" ] || return 1
+  if inside "${subdir}" "${common}"; then return 0; fi
+  return 1
+}
+
+# inside <physical directory> <ancestor> — is the directory strictly below the ancestor? Each step
+# up is compared as the same directory, not the same spelling: a volume that ignores letter case
+# keeps whichever spelling a path was written with, and an entry may spell its superproject's path
+# differently from git.
+inside() {
+  local dir="$1" ancestor="$2"
+  while [ -n "${dir}" ] && [ "${dir}" != / ]; do
+    dir="${dir%/*}"
+    if [ "${dir:-/}" -ef "${ancestor}" ]; then return 0; fi
+  done
+  return 1
+}
+
 # expand_nested <holder-top> <submodule> <its git dir> — worktrees its repository registers INSIDE it.
 expand_nested() {
   local top="$1" sub="$2" gitdir="$3" list line
@@ -346,7 +442,7 @@ expand_own_nested() {
 
 # expand_submodules <holder-top> <checkout> <linked> <depth> — every populated submodule below it.
 expand_submodules() {
-  local top="$1" dir="$2" linked="$3" depth="$4" paths rel sub gitdir
+  local top="$1" dir="$2" linked="$3" depth="$4" paths rel sub gitdir confined_rc
   [ "${depth}" -lt 4 ] || return 0
   [ -f "${dir}/.gitmodules" ] || return 0
   paths="$(git config -f "${dir}/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null | cut -d' ' -f2-)" || paths=''
@@ -354,6 +450,17 @@ expand_submodules() {
     [ -n "${rel}" ] || continue
     sub="${dir}/${rel}"
     [ -e "${sub}/.git" ] || continue
+    # `.gitmodules` is repository content. A path in it that leaves the checkout names no submodule
+    # and was never recorded (see the equality below), so its `.git` entry is not judged either:
+    # content alone must not be able to turn every answer into `unknown:`.
+    below "${dir}" "${rel}" || continue
+    # Nothing of a submodule is read through an entry that names a git directory elsewhere.
+    confined_rc=0
+    confined "${dir}" "${sub}" || confined_rc=$?
+    if [ "${confined_rc}" = 1 ]; then
+      outside
+      continue
+    fi
     # An unpopulated submodule resolves to the superproject, and a `.gitmodules` path that leaves the
     # checkout (it is repository content) resolves elsewhere: both fail this equality.
     resolve "${sub}" || continue
@@ -549,7 +656,7 @@ below() {
 # scan_submodules <checkout> <depth> — add the repository of every populated submodule below it:
 # a session can lock a worktree of a submodule while it, and the asker, stand in the superproject.
 scan_submodules() {
-  local dir="$1" depth="$2" paths rel sub soh=$'\001' stx=$'\002' nl=$'\n' below_rc
+  local dir="$1" depth="$2" paths rel sub soh=$'\001' stx=$'\002' nl=$'\n' below_rc confined_rc
   # A list that could not be read leaves this checkout's submodules unknown.
   if ! paths="$(submodule_paths "${dir}")"; then
     scan_failed
@@ -593,6 +700,14 @@ scan_submodules() {
     # A populated submodule nested deeper than this walk follows.
     if [ "${depth}" -ge 4 ]; then
       scan_failed
+      return 0
+    fi
+    # Nothing of a submodule is read through an entry that names a git directory elsewhere: not
+    # whether that directory registers worktrees, and not their locks.
+    confined_rc=0
+    confined "${dir}" "${sub}" || confined_rc=$?
+    if [ "${confined_rc}" = 1 ]; then
+      outside
       return 0
     fi
     # A populated submodule ends in one of two ways: seen to hold no lock, or resolved as its own
@@ -705,6 +820,9 @@ if [ "${heads}" != $'\n\n' ]; then
     done <"${work}/roots"
     # A registry the scan knows of and could not reach: a lock in it may hold any PR asked about.
     if scan_has_failed; then probe_error=lock-scan; fi
+    # A submodule the scan would have had to read through an entry that leads elsewhere. It is the
+    # more exact answer, so it is the one given when both are true.
+    if outside_seen; then probe_error=submodule-gitdir; fi
     # Worktree locks (monorepo#3780): every locked worktree of those repositories, with the
     # process identity its reason records. A list that cannot be read is UNKNOWN, since a lock in
     # it may hold any of the PRs asked about.
@@ -806,6 +924,8 @@ if [ "${heads}" != $'\n\n' ]; then
   if [ -z "${probe_error}" ] && [ -e "${work}/listfail" ]; then probe_error=worktree-list; fi
   # A checkout that could not be named turned up after the scan was judged: the same answer.
   if [ -z "${probe_error}" ] && scan_has_failed; then probe_error=lock-scan; fi
+  # A submodule of a held checkout was left unread for the same reason: a holder may be missing.
+  if [ -z "${probe_error}" ] && outside_seen; then probe_error=submodule-gitdir; fi
 fi
 
 rc=0
