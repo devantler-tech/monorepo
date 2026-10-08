@@ -307,8 +307,6 @@ guard "Bugbot: a neutral Error check is a run that never happened" 0 "ADMIT bugb
   "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" completed neutral 'Error' "${t_review}")")")" "${head}" bugbot
 guard "Bugbot: a same-named check from another app is not Bugbot's" 0 "ADMIT bugbot@${head}" \
   "$(doc '[]' '[]' "$(list "$(check 31 github-actions "${head}" completed success 'Bugbot Review' "${t_review}")")")" "${head}" bugbot
-guard "Bugbot: a check still running has delivered nothing yet" 0 "ADMIT bugbot@${head}" \
-  "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" in_progress null 'Bugbot Review' "")")")" "${head}" bugbot
 guard "Bugbot: a check at another commit is not this head's review" 0 "ADMIT bugbot@${head}" \
   "$(doc '[]' '[]' "$(list "$(check 31 cursor "${other}" completed success 'Bugbot Review' "${t_review}")")")" "${head}" bugbot
 
@@ -376,7 +374,7 @@ guard "CodeRabbit's verdict does not need the check-runs" 1 \
   "REVIEWED cr@${capture_head} FINDINGS review:5123840277 2026-09-06T02:31:02Z" \
   "${tmp}/no-checks.json" "${capture_head}" cr
 printf '{"reviews": [' >"${tmp}/truncated.json"
-expect_unknown "a truncated document is UNKNOWN" "reviews" \
+expect_unknown "a truncated document is UNKNOWN" "exactly one JSON object" \
   --input "${tmp}/truncated.json" --head "${head}" --provider cr
 printf '{"reviews":["oops"],"comments":[],"check_runs":[]}\n' >"${tmp}/not-objects.json"
 expect_unknown "a surface that is not a list of objects is UNKNOWN" "reviews" \
@@ -404,6 +402,69 @@ else
   echo "FAIL a missing verdict helper: want rc=2, empty stdout and 'cannot judge review'; got rc=${rc} '${got}' ($(cat "${tmp}/stderr"))" >&2
   failures=$((failures + 1))
 fi
+
+
+# --- The gaps the review of #3807 left (monorepo#3821) -------------------------------------------
+# 1. A request marker counts only on a line of its own. Round one: request, review with findings,
+#    the resolution record. Afterwards a disclosed comment only QUOTES the marker, so no request
+#    restarted the round and the round start has nothing to stand on.
+quoting="$(comment 7 devantler "${t_rerequest}" "${disclosure}
+
+The earlier request carried \`<!-- review-request-head: ${head} provider=cr -->\` in its body.")"
+expect_unknown "a comment that only quotes the request marker restarts no round" "not followed by an authenticated" \
+  --input "$(doc "$(list "$(review 11 "${cr}" "${head}" "${t_review}" "'**Actionable comments posted: 1**'")")" \
+    "$(list "${req}" "${quoting}")" '[]')" --head "${head}" --provider cr --round-start "${t_resolved}"
+indented="$(comment 7 devantler "${t_rerequest}" "${disclosure}
+
+  <!-- review-request-head: ${head} provider=cr -->  
+@coderabbitai review")"
+guard "a marker on its own line still counts with spaces around it and a CR line ending" 0 \
+  "ADMIT cr@${head} round-start=${t_resolved}" \
+  "$(doc "$(list "$(review 11 "${cr}" "${head}" "${t_review}" "'**Actionable comments posted: 1**'")")" \
+    "$(list "${req}" "$(jq -c '.body |= gsub("\n"; "\r\n")' <<<"${indented}")")" '[]')" \
+  "${head}" cr --round-start "${t_resolved}"
+
+# 2. Times are compared as text, which is sound only for UTC seconds. Any other spelling is refused.
+expect_unknown "a review stamped with a non-UTC offset is UNKNOWN" "not a UTC time" \
+  --input "$(doc "$(list "$(review 11 "${cr}" "${head}" "2026-09-06T04:31:02+02:00" "'**Actionable comments posted: 1**'")")" "$(list "${req}")" '[]')" \
+  --head "${head}" --provider cr
+expect_unknown "a time with fractional seconds is UNKNOWN" "not a UTC time" \
+  --input "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" completed success 'Bugbot Review' "2026-09-06T02:31:02.500Z")")")" \
+  --head "${head}" --provider bugbot
+
+# 3. A Bugbot run that has not completed is an accepted request with no answer yet.
+expect_unknown "Bugbot: a run still in progress is UNKNOWN, not a no-gate" "has not completed" \
+  --input "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" in_progress null 'Bugbot Review' "")")")" \
+  --head "${head}" --provider bugbot
+expect_unknown "Bugbot: a queued run is UNKNOWN too" "has not completed" \
+  --input "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" queued null '' "")")")" \
+  --head "${head}" --provider bugbot
+guard "Bugbot: a review already delivered governs while a re-run is still in progress" 1 \
+  "REVIEWED bugbot@${head} FINDINGS check:31 ${t_review}" \
+  "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" completed neutral 'Bugbot Review' "${t_review}")" \
+    "$(check 32 cursor "${head}" in_progress null 'Bugbot Review' "")")")" "${head}" bugbot
+guard "Bugbot: a run in progress at another commit does not hold this head" 0 "ADMIT bugbot@${head}" \
+  "$(doc '[]' '[]' "$(list "$(check 31 cursor "${other}" in_progress null 'Bugbot Review' "")")")" "${head}" bugbot
+
+# 4. Only the measured never-ran shape (neutral, titled Error) admits. Every other completed run is
+#    an unmeasured shape to read by hand.
+for conclusion in failure timed_out cancelled action_required; do
+  guard "Bugbot: a completed run that ended ${conclusion} is read by hand, not admitted" 1 \
+    "REVIEWED bugbot@${head} UNJUDGED check:31 ${t_review}" \
+    "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" completed "${conclusion}" 'Bugbot Review' "${t_review}")")")" "${head}" bugbot
+done
+guard "Bugbot: a neutral run under an unknown title is read by hand, not admitted" 1 \
+  "REVIEWED bugbot@${head} UNJUDGED check:31 ${t_review}" \
+  "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" completed neutral 'Something new' "${t_review}")")")" "${head}" bugbot
+
+# 5. The input is ONE document. A second one would otherwise be read past.
+two_docs="${tmp}/two-documents.json"
+cat "$(doc '[]' '[]' '[]')" "$(doc "$(list "$(review 11 "${cr}" "${head}" "${t_review}" "'**Actionable comments posted: 1**'")")" '[]' '[]')" >"${two_docs}"
+expect_unknown "an input holding two documents is UNKNOWN" "exactly one JSON object" \
+  --input "${two_docs}" --head "${head}" --provider cr
+printf '[]\n' >"${tmp}/array.json"
+expect_unknown "an input that is not an object is UNKNOWN" "exactly one JSON object" \
+  --input "${tmp}/array.json" --head "${head}" --provider cr
 
 # --- A recorded read on stdin --------------------------------------------------------------------
 stdin_case() { # stdin_case <name> <want-rc> <want-stdout> <file fed to stdin> <provider>
@@ -586,8 +647,8 @@ ablate "dropping the round-start check lets a refusal's time hide the captured r
   --input "${capture}" --head "${capture_head}" --provider cr --round-start 2026-09-06T02:31:43Z
 # Without the time requirement, a review that lost its time is skipped and the no-gate admitted.
 ablate "dropping the time requirement skips a review that lost its time" \
-  'def at: if type == "string" then . else error("an artifact carries no time") end;' \
-  'def at: if type == "string" then . else empty end;' 0 "ADMIT cr@${head}" \
+  'def at: if type == "string" then . else error("an artifact carries no time") end' \
+  'def at: if type == "string" then . else empty end' 0 "ADMIT cr@${head}" \
   --input "$(doc "$(list "$(review 11 "${cr}" "${head}" null "${green_body}")")" '[]' '[]')" --head "${head}" --provider cr
 # Without the finding-first order, a Codex finding that quotes the clean-pass sentence is dropped.
 ablate "judging the clean pass first drops a finding that quotes it" \
@@ -596,6 +657,28 @@ ablate "judging the clean pass first drops a finding that quotes it" \
   --input "$(doc '[]' "$(list "$(comment 6 "${codex}" "${t_review}" "${codex_finding}
 
 An earlier pass said: Didn't find any major issues.")")" '[]')" --head "${codex_head}" --provider codex
+
+# Without the own-line rule, a comment that only quotes the marker restarts the round and hides the review.
+ablate "matching the marker anywhere lets a quoted marker restart the round" \
+  'and (lines | index("<!-- review-request-head: \($head) provider=\($provider) -->") != null))' \
+  'and (body | contains("<!-- review-request-head: \($head) provider=\($provider) -->")))' 0 \
+  "ADMIT cr@${head} round-start=${t_resolved}" \
+  --input "$(doc "$(list "$(review 11 "${cr}" "${head}" "${t_review}" '**Actionable comments posted: 1**')")" \
+    "$(list "${req}" "${quoting}")" '[]')" --head "${head}" --provider cr --round-start "${t_resolved}"
+# Without the UTC rule, a review stamped 09:21:30-01:00 (10:21:30Z) sorts before the round start it follows and is dropped.
+ablate "dropping the UTC rule drops a review whose offset time sorts before the round start" \
+  '| if test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$") then . else error("an artifact carries \(.), which is not a UTC time to the second") end;' \
+  ';' 0 "ADMIT cr@${head} round-start=${t_resolved}" \
+  --input "$(doc "$(list "$(review 11 "${cr}" "${head}" "2026-09-21T09:21:30-01:00" '**Actionable comments posted: 1**')")" \
+    "$(list "${req}" "${rereq}")" '[]')" --head "${head}" --provider cr --round-start "${t_resolved}"
+# Without the running-run stop, an accepted Bugbot request reads as a lane that delivered nothing.
+ablate "dropping the running-run stop admits a no-gate while Bugbot is still reviewing" \
+  'if [ -z "$found" ] && [ -n "$running" ]; then' 'if false; then' 0 "ADMIT bugbot@${head}" \
+  --input "$(doc '[]' '[]' "$(list "$(check 31 cursor "${head}" in_progress null 'Bugbot Review' "")")")" --head "${head}" --provider bugbot
+# Without the single-document rule, a second document is read past.
+ablate "dropping the single-document rule reads past a second document" \
+  'if length == 1 and (.[0] | type == "object") then .[0] else error("not one object") end' '.[0]' 0 \
+  "ADMIT cr@${head}" --input "${two_docs}" --head "${head}" --provider cr
 
 echo "review-no-gate-guard.test: ${checks} checks, ${failures} failed"
 [ "${failures}" -eq 0 ] || exit 1
