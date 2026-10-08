@@ -318,8 +318,10 @@ done
 g config -f "${escape_up}/.gitmodules" submodule.out.path ../nomodules
 ln -s ../nomodules "${escape_link}/out"
 g config -f "${escape_link}/.gitmodules" submodule.out.path out
-[ -e "${escape_up}/../nomodules/.git" ] && [ -e "${escape_link}/out/.git" ] ||
-  { echo "FAIL fixture: the paths that leave their checkout do not lead to a repository" >&2; exit 1; }
+if [ ! -e "${escape_up}/../nomodules/.git" ] || [ ! -e "${escape_link}/out/.git" ]; then
+  echo "FAIL fixture: the paths that leave their checkout do not lead to a repository" >&2
+  exit 1
+fi
 # locked_submodule <superproject> <path> <branch> <worktree> — a superproject with the product
 # repository as a populated submodule at <path>, whose registry holds a worktree a live session
 # locked on <branch>.
