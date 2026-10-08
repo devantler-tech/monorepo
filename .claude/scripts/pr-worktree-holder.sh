@@ -119,6 +119,8 @@
 #   about, since nothing says which PR it meant: a link or anything else that is not a regular
 #   file, a `serves=` value in any other shape, more than 64 lines, and a time that is missing,
 #   malformed, or further ahead than a clock drifts (five minutes), which would never lapse.
+#   A claim is session state and is never committed. A committed file of the claim's name is
+#   repository content, which could name any PR on every branch that carries it: it names nothing.
 #   A PR whose head is in another owner's repository still answers `fork`.
 #
 # SUBMODULE GIT DIRECTORIES (monorepo#3982)
@@ -360,6 +362,9 @@ served() {
   }
   # Most claims name no PR. Nothing else of such a claim is read, so its age is not judged here.
   [ -n "${ids}" ] || return 0
+  # A claim is session state and is never committed. A committed file of that name is repository
+  # content, which could name any PR on any branch that carries it: it is not a claim.
+  if git -C "${dir}" ls-files --error-unmatch -- .claude-worktree-owner >/dev/null 2>&1; then return 0; fi
   while IFS= read -r id; do
     if ! [[ "${id}" =~ ${CLAIM_ID_RE} ]]; then
       claim_unread

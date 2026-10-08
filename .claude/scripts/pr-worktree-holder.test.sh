@@ -1600,6 +1600,13 @@ mkdir "${repair_marker}"
 expect "a claim that is not a regular file is unknown" \
   "${elsewhere}" "${plain}" 2 "devantler-tech/fix#30 holder=unknown:claim-marker" "${pr30}" "${lsof_repair}"
 rmdir "${repair_marker}"
+claim "${now_iso}" 'serves=devantler-tech/fix#30'
+g -C "${repair}" add -f .claude-worktree-owner
+expect "a committed file of the claim's name is repository content, not a claim" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=none" "${pr30}" "${lsof_repair}"
+g -C "${repair}" rm -q --cached .claude-worktree-owner
+expect "once it is no longer in the index the same file is a claim again" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=live:1:9000010/vim" "${pr30}" "${lsof_repair}"
 claim 'not-a-time'
 expect "a claim that names no PR is never read for its time" \
   "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=none" "${pr30}" "${lsof_repair}"
