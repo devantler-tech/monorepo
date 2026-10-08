@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Client portal preview · Devantler Tech</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <style>
+:root{color-scheme:dark;--ink:#eef6f0;--muted:#b1c1b6;--accent:#39ff14;--accent-ink:#08220d;--canvas:#080d0b;--paper:#101a15;--line:#314539;--card:#0c1510}
+:root[data-theme=light]{color-scheme:light;--ink:#152b1c;--muted:#53655a;--accent:#15803d;--accent-ink:#fff;--canvas:#f6faf7;--paper:#edf4ee;--line:#c4d5c8;--card:#fff}
+@media(prefers-color-scheme:light){:root:not([data-theme]){color-scheme:light;--ink:#152b1c;--muted:#53655a;--accent:#15803d;--accent-ink:#fff;--canvas:#f6faf7;--paper:#edf4ee;--line:#c4d5c8;--card:#fff}}
+*{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--ink);font-family:Studio, sans-serif;font-size:15px;line-height:1.6}a{color:inherit}button,input,textarea,select{font:inherit}button,select{cursor:pointer}button,input,textarea,select{border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);padding:10px 13px;min-height:44px}button{font-weight:600}button:hover:not(:disabled){border-color:var(--accent)}button:disabled{cursor:not-allowed;opacity:.48}.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}:focus-visible{outline:3px solid var(--accent);outline-offset:4px}p{margin:0;color:var(--muted)}h1,h2,h3{margin:0;font-weight:600;line-height:1.2;letter-spacing:-.045em}.demo-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 14px;padding:10px 20px;background:var(--paper);border-bottom:1px solid var(--line);font-size:12px}.demo-bar strong{letter-spacing:.08em}.dot{height:7px;width:7px;border-radius:50%;background:var(--accent)}header,main,footer{width:min(1160px,calc(100% - 64px));margin:auto}header{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:100px;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;font-size:20px;font-weight:600;letter-spacing:-.06em;text-decoration:none;white-space:nowrap}.tech{color:var(--accent)}.mark{margin-right:10px;display:grid;place-items:center;width:34px;height:34px;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-size:17px}.portal{font-size:14px;letter-spacing:0;color:var(--muted);margin-left:18px}.preferences{display:flex;gap:8px}.preferences select{font-size:12px;background:transparent}.workspace-head{display:flex;gap:30px;align-items:flex-end;justify-content:space-between;padding:46px 0 38px}.eyebrow{text-transform:uppercase;letter-spacing:.13em;font-size:11px;font-weight:600;color:var(--accent);margin-bottom:16px}h1{font-size:clamp(35px,4vw,54px);line-height:1.05}h1 span{color:var(--muted)}.role-picker{width:240px}.role-picker label{display:block;font-size:12px;color:var(--muted);margin-bottom:7px}.role-picker select{width:100%}.role-picker p{font-size:11px;margin-top:8px}.workspace-grid{display:grid;grid-template-columns:340px minmax(0,1fr);gap:24px}.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}.panel-head{padding:22px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px}h2{font-size:21px}h3{font-size:17px}.count{color:var(--muted);font-size:12px}.order-button{display:block;width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;text-align:left;padding:22px 24px;background:transparent;position:relative}.order-button.selected{background:var(--paper)}.order-button.selected:before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent)}.order-meta{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:9px}.order-title{display:block;font-size:14px;font-weight:600;line-height:1.4;margin-bottom:12px}.status{display:inline-flex;align-items:center;gap:6px;font-size:11px;line-height:1.3;color:var(--muted)}.status:before{content:'';width:5px;height:5px;border-radius:50%;background:currentColor}.status.live,.status.ready{color:var(--accent)}.new-request{margin:20px 24px;width:calc(100% - 48px)}.details{padding:26px 30px}.detail-top{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;padding-bottom:24px}.detail-top h2{font-size:26px;line-height:1.25;margin-top:8px}.pill{border:1px solid var(--line);border-radius:30px;white-space:nowrap;font-size:11px;padding:6px 11px}.next-action{border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--paper);border-radius:7px;padding:22px;margin-bottom:26px}.next-action h3{margin-bottom:10px}.next-action p{font-size:13px}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.quote{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:15px 0;padding:16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.amount{font-size:25px;font-weight:600;letter-spacing:-.05em}.small{font-size:11px;color:var(--muted)}.timeline{list-style:none;margin:20px 0 0;padding:0;display:grid;gap:0}.timeline li{position:relative;padding:0 0 22px 29px;color:var(--muted);font-size:13px}.timeline li:before{content:'';position:absolute;left:1px;top:7px;width:8px;height:8px;border-radius:50%;border:1px solid var(--line);background:var(--canvas);z-index:1}.timeline li:not(:last-child):after{content:'';position:absolute;left:5px;top:16px;width:1px;height:calc(100% - 9px);background:var(--line)}.timeline li.done:before{background:var(--accent);border-color:var(--accent)}.timeline li.done{color:var(--ink)}.timeline span{display:block;font-size:11px;color:var(--muted)}.queue-note{border-bottom:1px solid var(--line);padding:20px 24px;background:var(--paper);font-size:13px}.form{display:grid;gap:14px;margin-top:18px}.form label{display:grid;gap:6px;font-size:12px;color:var(--muted)}textarea{resize:vertical;min-height:90px;width:100%}input,select{max-width:100%}.empty{padding:24px}.text-button{border:0;background:transparent;padding:0;color:var(--muted);text-decoration:underline;text-underline-offset:3px;font-size:12px}footer{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-top:36px;padding:22px 0 30px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}#notice{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--accent);color:var(--accent-ink);padding:12px 18px;border-radius:7px;box-shadow:0 5px 40px #0004;max-width:90%;font-size:13px;display:none}.skip{position:fixed;top:-100%;left:20px;z-index:20;background:var(--accent);color:var(--accent-ink);padding:10px}.skip:focus{top:12px}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.release-choices{padding:22px 24px;margin-bottom:24px}.release-choices>p{margin-top:10px;font-size:13px}.release-choices dl{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;margin:20px 0}.release-choices dt{font-size:11px;color:var(--muted)}.release-choices dd{font-size:13px;font-weight:600;margin:5px 0 0;line-height:1.5}.release-choices .small{font-size:11px}
+.guide-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.guide-tabs [aria-selected=true]{border-color:var(--accent)}.guide-panel{display:grid;gap:14px}.guide-panel button{justify-self:start}
+@media(max-width:760px){header,main,footer{width:calc(100% - 32px)}header{flex-wrap:wrap;padding:20px 0}.preferences{margin-left:auto}.portal{display:none}.workspace-head{align-items:flex-start;flex-direction:column;padding:30px 0}.role-picker{width:100%}.workspace-grid{grid-template-columns:1fr}.details{padding:22px}.detail-top{gap:10px;flex-wrap:wrap}.detail-top h2{font-size:23px}footer{align-items:flex-start}.demo-bar{justify-content:flex-start}.demo-bar span:last-child{width:100%}.brand{font-size:18px}.preferences select{padding:7px;font-size:11px}.release-choices dl{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+  <script type="module">
+// Browser-only design model. This does not authorize real work or verify funds.
+function eligible(order) {
+  const q = order.quote, p = order.payment;
+  return order.status === 'waiting' && order.approved === true && !!q && !!p &&
+    Number.isFinite(q.amount) && q.amount > 0 && q.currency === 'DKK' &&
+    order.acceptedVersion === q.version && p.state === 'verified' &&
+    p.version === q.version && p.amount === q.amount && p.currency === q.currency;
+}
+function queue(orders) {
+  return orders.filter(eligible).sort((a, b) => a.submitted - b.submitted || a.id.localeCompare(b.id));
+}
+function start(orders, id) {
+  if (orders.some(x => x.status === 'active') || queue(orders)[0]?.id !== id) throw new Error('Work cannot start');
+  return orders.map(x => x.id === id ? { ...x, status: 'active' } : x);
+}
+function requote(order, amount) {
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Invalid quote');
+  return { ...order, approved: true, status: 'waiting',
+    quote: { version: (order.quote?.version ?? 0) + 1, amount, currency: 'DKK' },
+    acceptedVersion: null, payment: null };
+}
+function demoOrders() {
+  const quote = { version: 1, amount: 2995, currency: 'DKK' };
+  const payment = { state: 'verified', version: 1, amount: 2995, currency: 'DKK' };
+  return [
+    { id: 'D-001', client: 'a', submitted: 1, title: 'Demo: a focused business website', product: 'website', status: 'active', approved: true, quote: { ...quote }, acceptedVersion: 1, payment: { ...payment }, update: 'Demo update: the first layout is ready for your feedback.' },
+    { id: 'D-002', client: 'a', submitted: 2, title: 'Demo: a simpler booking page', product: 'website', status: 'waiting', approved: true, quote: { ...quote }, acceptedVersion: null, payment: null },
+    { id: 'D-003', client: 'b', submitted: 3, title: 'Demo: a small reporting service', product: 'service', status: 'waiting', approved: true, quote: { ...quote, amount: 4995 }, acceptedVersion: 1, payment: { ...payment, amount: 4995 } },
+    { id: 'D-004', client: 'b', submitted: 4, title: 'Demo: an internal team app', product: 'app', status: 'held', approved: false, quote: null, acceptedVersion: null, payment: null },
+  ];
+}
+
+// A browser-only interaction sketch. Role selection never grants real access.
+let orders = demoOrders(), selected = 'D-002', view = 'a', lang = 'en', inquiry = false;
+let guide = null, guideStep = 0;
+const $ = (id) => document.getElementById(id);
+const words = {
+  en: {
+    workspace:'YOUR WORKSPACE', headline:'Good work.<br><span>Clear next steps.</span>',
+    explore:'Explore the demo as', role:'Role switching is a simulation, not authentication.',
+    demo:'INTERACTIVE PROTOTYPE', warning:'Demo data only. No login, payment, GitHub connection or real work.',
+    footer:'A working design preview, not a customer service. Nothing leaves this browser.', reset:'Reset demo',
+    a:'Demo client A', b:'Demo client B', operator:'Operator', system:'System', light:'Light', dark:'Dark',
+    requests:'Your requests', all:'Demo requests', next:'NEXT STEP', new:'New free inquiry',
+    website:'Website', app:'Small app', service:'Service', waiting:'Waiting', held:'On hold', rejected:'Not approved',
+    active:'In progress', delivered:'Delivered', ready:'Ready for queue', agreement:'Review your demo quote',
+    scope:'This demo quote covers only the request shown above. It is not a contract or a payment request.',
+    accept:'Accept demo quote', accepted:'Demo quote accepted. A real order would receive an invoice; work waits for the operator to confirm credited bank-transfer funds.',
+    funds:'Simulate operator confirmation of credited funds', quote:'Approve / issue demo quote', requote:'Change scope / requote',
+    hold:'Hold request', reject:'Decline request', finish:'Simulate delivery', begin:'Start oldest eligible request',
+    progress:'A first layout is ready for your feedback. This is a simulated update, not actual delivery.',
+    deliveredText:'The demo work is complete. A real portal would show the delivery and review here.',
+    blocked:'No work starts until operator approval, current quote acceptance and matching full payment are verified.',
+    paid:'Full payment simulated. Your request is eligible; the queue keeps its original submission order.',
+    busy:'One demo request is active. Eligible requests wait; older requests do not interrupt active work.',
+    free:'New inquiries are free. Describe a fictional request; do not enter personal or confidential information.',
+    title:'Demo request title', product:'Type of work', submit:'Add free demo inquiry', cancel:'Cancel',
+    pending:'Awaiting operator approval and a quote. No charge, commitment or work has been triggered.',
+    stages:['Inquiry received','Operator approval','Current quote accepted','Matching full payment','Work started','Delivered'],
+    queue:'Eligible queue', noQueue:'No eligible requests yet.', position:'Original submission', version:'Quote version',
+    saved:'Demo updated. Nothing was sent.', added:'Free demo inquiry added. No work started.',
+    amount:'Demo quote amount (DKK)', invalid:'Enter a positive demo amount.', resetDone:'Demo reset.', done:'Complete', notDone:'Not complete yet',
+    only:'Only the oldest eligible request can start, and only when no work is active.',
+    firstRelease:'Your agreed first release', access:'Access', invited:'Invitation-only initially',
+    signIn:'Sign-in', providers:'Google and Microsoft', paymentMethod:'Payment', invoice:'Invoice and bank transfer',
+    release:'Work release', credited:'Operator confirms credited funds',
+    exploreQuestion:'Explore how an accepted quote and operator-confirmed funds make a request eligible without interrupting active work.',
+    planNote:'These are choices for the real portal, not active services in this demo. Sign-in is not connected, payments are not collected, and bank transfers are not a promise of irreversible payment.',
+  },
+  da: {
+    workspace:'DIT OVERBLIK', headline:'Godt arbejde.<br><span>Tydelige næste skridt.</span>',
+    explore:'Udforsk demoen som', role:'Rolleskift er en simulation, ikke adgangskontrol.',
+    demo:'INTERAKTIV PROTOTYPE', warning:'Kun demodata. Ingen login, betaling, GitHub-forbindelse eller rigtigt arbejde.',
+    footer:'Et fungerende designudkast, ikke en kundeservice. Intet forlader denne browser.', reset:'Nulstil demo',
+    a:'Demokunde A', b:'Demokunde B', operator:'Operatør', system:'System', light:'Lys', dark:'Mørk',
+    requests:'Dine forespørgsler', all:'Demoforespørgsler', next:'NÆSTE SKRIDT', new:'Ny gratis forespørgsel',
+    website:'Hjemmeside', app:'Lille app', service:'Service', waiting:'Afventer', held:'Sat på pause', rejected:'Ikke godkendt',
+    active:'I gang', delivered:'Leveret', ready:'Klar til køen', agreement:'Gennemgå dit demotilbud',
+    scope:'Dette demotilbud omfatter kun forespørgslen ovenfor. Det er ikke en aftale eller en betalingsanmodning.',
+    accept:'Accepter demotilbud', accepted:'Demotilbud accepteret. En rigtig ordre ville få en faktura; arbejdet venter på, at operatøren bekræfter modtagne penge fra bankoverførslen.',
+    funds:'Simuler operatørens bekræftelse af modtagne penge', quote:'Godkend / opret demotilbud', requote:'Ændr omfang / nyt tilbud',
+    hold:'Sæt på pause', reject:'Afvis forespørgsel', finish:'Simuler levering', begin:'Start ældste klare forespørgsel',
+    progress:'Et første layout er klar til din feedback. Dette er en simuleret opdatering, ikke en rigtig levering.',
+    deliveredText:'Demoarbejdet er færdigt. En rigtig portal vil vise leveringen og gennemgangen her.',
+    blocked:'Intet arbejde starter uden operatørens godkendelse, accept af det aktuelle tilbud og verificeret fuld betaling.',
+    paid:'Fuld betaling simuleret. Forespørgslen er klar; køen følger den oprindelige indsendelsesrækkefølge.',
+    busy:'Én demoforespørgsel er i gang. Andre venter; ældre forespørgsler afbryder ikke aktivt arbejde.',
+    free:'Nye forespørgsler er gratis. Beskriv en fiktiv opgave; skriv ikke personlige eller fortrolige oplysninger.',
+    title:'Titel på demoforespørgsel', product:'Type af arbejde', submit:'Tilføj gratis demoforespørgsel', cancel:'Annuller',
+    pending:'Afventer godkendelse og tilbud. Ingen betaling, aftale eller arbejde er sat i gang.',
+    stages:['Forespørgsel modtaget','Godkendt af operatøren','Aktuelt tilbud accepteret','Fuld betaling matcher','Arbejdet startet','Leveret'],
+    queue:'Klar kø', noQueue:'Ingen forespørgsler er klar endnu.', position:'Oprindelig indsendelse', version:'Tilbudsversion',
+    saved:'Demo opdateret. Intet blev sendt.', added:'Gratis demoforespørgsel tilføjet. Intet arbejde startet.',
+    amount:'Demotilbuddets beløb (DKK)', invalid:'Indtast et positivt demobeløb.', resetDone:'Demo nulstillet.', done:'Færdig', notDone:'Ikke færdig endnu',
+    only:'Kun den ældste klare forespørgsel kan starte, og kun når intet arbejde er i gang.',
+    firstRelease:'Dine aftalte valg til første version', access:'Adgang', invited:'Kun inviterede i første omgang',
+    signIn:'Login', providers:'Google og Microsoft', paymentMethod:'Betaling', invoice:'Faktura og bankoverførsel',
+    release:'Arbejdet frigives', credited:'Operatøren bekræfter modtagne penge',
+    exploreQuestion:'Afprøv, hvordan et accepteret tilbud og operatørens bekræftelse af betaling gør en forespørgsel klar uden at afbryde aktivt arbejde.',
+    planNote:'Dette er valg til den rigtige portal, ikke aktive tjenester i demoen. Login er ikke tilsluttet, der opkræves ingen betaling, og bankoverførsel er ikke et løfte om uigenkaldelig betaling.',
+  },
+};
+const t = () => words[lang];
+const esc = (value) => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const button = (action, label, primary = false, disabled = false) => `<button type="button" data-action="${action}" class="${primary ? 'primary' : ''}" ${disabled ? 'disabled' : ''}>${esc(label)}</button>`;
+const money = amount => new Intl.NumberFormat(lang === 'da' ? 'da-DK' : 'en-DK', {style:'currency',currency:'DKK',maximumFractionDigits:0}).format(amount);
+const status = o => eligible(o) ? t().ready : t()[o.status] ?? t().waiting;
+const guideWords = {
+  en: { title:'Try a guided walkthrough', intro:'Choose a scenario to reset the fictional requests. Each step changes the visible demo state.',
+    labels:['Release an order','No interruption','Changed scope'], notes:[
+      'Acceptance alone is not enough. Confirm matching funds, finish the active order, then release the oldest eligible order.',
+      'Try starting a waiting order while another is active. The attempt is refused; even an older eligible order must wait.',
+      'A new quote clears previous acceptance and funds, but keeps the original submission position.'],
+    steps:[['Accept D-002 demo quote','Simulate credited funds for D-002','Simulate delivery of D-001','Start eligible D-002'],
+      ['Try starting D-003 while D-001 is active','Accept D-002 demo quote','Simulate credited funds for older D-002'],
+      ['Issue a new D-003 demo quote','Accept the new D-003 demo quote','Simulate matching credited funds']],
+    done:'Walkthrough complete. Explore the visible result below or choose another scenario.', refused:'Start refused: D-001 remains active. No work was released.' },
+  da: { title:'Prøv et guidet forløb', intro:'Vælg et scenarie for at nulstille de fiktive forespørgsler. Hvert trin ændrer demoens synlige tilstand.',
+    labels:['Frigiv en ordre','Ingen afbrydelse','Ændret omfang'], notes:[
+      'Accept er ikke nok. Bekræft modtagne penge, afslut den aktive ordre, og frigiv derefter den ældste klare ordre.',
+      'Prøv at starte en ventende ordre, mens en anden er aktiv. Forsøget afvises; selv en ældre klar ordre må vente.',
+      'Et nyt tilbud nulstiller accept og betaling, men beholder den oprindelige plads i rækkefølgen.'],
+    steps:[['Accepter D-002 demotilbud','Simuler modtagne penge for D-002','Simuler levering af D-001','Start klar D-002'],
+      ['Prøv at starte D-003, mens D-001 er aktiv','Accepter D-002 demotilbud','Simuler modtagne penge for ældre D-002'],
+      ['Opret nyt D-003 demotilbud','Accepter det nye D-003 demotilbud','Simuler matchende modtagne penge']],
+    done:'Forløbet er færdigt. Se resultatet nedenfor, eller vælg et andet scenarie.', refused:'Start afvist: D-001 er stadig aktiv. Intet arbejde blev frigivet.' },
+};
+function renderGuide() {
+  const w=guideWords[lang], panel=$('walkthroughs');
+  panel.setAttribute('aria-label',w.title);
+  panel.innerHTML=`<h2>${esc(w.title)}</h2><p>${esc(w.intro)}</p><div class="guide-tabs" role="tablist" aria-label="${esc(w.title)}">${w.labels.map((label,i)=>`<button type="button" role="tab" id="guide-tab-${i}" aria-selected="${guide===i}" aria-controls="guide-panel" data-guide="${i}">${esc(label)}</button>`).join('')}</div>${guide===null?'':`<div class="guide-panel" role="tabpanel" id="guide-panel" aria-labelledby="guide-tab-${guide}"><p>${esc(w.notes[guide])}</p>${guideStep<w.steps[guide].length?`<button type="button" id="guide-next" class="primary">${esc(w.steps[guide][guideStep])}</button>`:`<p>${esc(w.done)}</p>`}</div>`}`;
+}
+function guidedStep() {
+  const o2=orders.find(o=>o.id==='D-002'), o3=orders.find(o=>o.id==='D-003');
+  const accept=o=>{o.acceptedVersion=o.quote.version;selected=o.id;view=o.client;};
+  const funds=o=>{o.payment={state:'verified',version:o.quote.version,amount:o.quote.amount,currency:o.quote.currency};selected=o.id;view='operator';};
+  let refused=false;
+  if(guide===0) {
+    if(guideStep===0)accept(o2); else if(guideStep===1)funds(o2);
+    else if(guideStep===2){orders.find(o=>o.id==='D-001').status='delivered';selected='D-001';view='operator';}
+    else {orders=start(orders,'D-002');selected='D-002';view='operator';}
+  } else if(guide===1) {
+    if(guideStep===0){selected='D-003';view='operator';try{orders=start(orders,'D-003');}catch{refused=true;}}
+    else if(guideStep===1)accept(o2);else funds(o2);
+  } else {
+    if(guideStep===0){orders=orders.map(o=>o.id==='D-003'?requote(o,4995):o);selected='D-003';view='operator';}
+    else if(guideStep===1)accept(o3);else funds(o3);
+  }
+  guideStep++;$('view').value=view;render();notify(refused?guideWords[lang].refused:t().saved);
+}
+function notify(message) {
+  $('notice').textContent = message; $('notice').style.display = 'block';
+  clearTimeout(notify.timer); notify.timer = setTimeout(() => { $('notice').style.display = 'none'; }, 5000);
+}
+function controls(o) {
+  const w = t(), accepted = o.quote && o.acceptedVersion === o.quote.version;
+  let body = '', actions = '';
+  if (o.status === 'active') {
+    body = w.progress; if (view === 'operator') actions = button('finish',w.finish,true);
+  } else if (o.status === 'delivered') body = w.deliveredText;
+  else if (view !== 'operator') {
+    if (o.status === 'held' || o.status === 'rejected' || !o.quote) body = w.pending;
+    else if (!accepted) { body = w.scope; actions = button('accept',w.accept,true); }
+    else body = eligible(o) ? w.paid : w.accepted;
+  } else {
+    body = w.blocked;
+    if (o.status !== 'rejected') {
+      actions = `<label class="small">${esc(w.amount)} <input id="quoteAmount" type="number" min="1" step="1" value="${o.quote?.amount ?? ({website:2995,app:7995,service:4995}[o.product])}" aria-label="${esc(w.amount)}"></label>`;
+      actions += button('quote', o.quote ? w.requote : w.quote);
+      if (accepted && !eligible(o) && o.status === 'waiting') actions += button('funds',w.funds,true);
+      if (eligible(o)) actions += button('start',w.begin,true,orders.some(x=>x.status==='active') || queue(orders)[0]?.id !== o.id);
+      if (o.status !== 'held') actions += button('hold',w.hold);
+      actions += button('reject',w.reject);
+    }
+  }
+  const quote = o.quote ? `<div class="quote"><span class="amount">${esc(money(o.quote.amount))}</span><span class="small">${esc(w.version)} ${o.quote.version}<br>${esc(w.product)}: ${esc(w[o.product])}</span></div>` : '';
+  return `<section class="next-action"><p class="eyebrow">${w.next}</p><h3>${esc(o.quote && !accepted && view !== 'operator' ? w.agreement : status(o))}</h3>${quote}<p>${esc(body)}</p><div class="actions">${actions}</div></section>`;
+}
+function details(o) {
+  const w=t(), q=o.quote, p=o.payment;
+  const done=[true,o.approved===true,!!q&&o.acceptedVersion===q.version,!!q&&!!p&&p.state==='verified'&&p.version===q.version&&p.amount===q.amount&&p.currency===q.currency,['active','delivered'].includes(o.status),o.status==='delivered'];
+  return `<section class="panel details" aria-label="${esc(o.id)}"><div class="detail-top"><div><p class="eyebrow">${esc(o.id)} · ${esc(w[o.product])}</p><h2 id="detailTitle" tabindex="-1">${esc(o.title)}</h2></div><span class="pill">${esc(status(o))}</span></div>${controls(o)}<h3>${esc(w.position)} #${o.submitted}</h3><ol class="timeline">${w.stages.map((s,i)=>`<li class="${done[i]?'done':''}">${esc(s)}<span>${esc(done[i]?w.done:w.notDone)}</span></li>`).join('')}</ol></section>`;
+}
+function form() {
+  const w=t(); return `<section class="panel details"><p class="eyebrow">${esc(w.new)}</p><h2>${esc(w.title)}</h2><p>${esc(w.free)}</p><form id="inquiryForm" class="form"><label>${esc(w.title)}<input name="title" maxlength="100" required placeholder="${lang==='da'?'Demo: et nyt projekt':'Demo: a new project'}"></label><label>${esc(w.product)}<select name="product">${['website','app','service'].map(p=>`<option value="${p}">${esc(w[p])}</option>`).join('')}</select></label><div class="actions"><button class="primary" type="submit">${esc(w.submit)}</button>${button('cancel',w.cancel)}</div></form></section>`;
+}
+function render() {
+  const w=t(); document.documentElement.lang=lang;
+  renderGuide();
+  for(const [id,key] of [['workspaceLabel','workspace'],['viewLabel','explore'],['roleNote','role'],['demoLabel','demo'],['demoNotice','warning'],['footerNote','footer'],['reset','reset']]) $(id).textContent=w[key];
+  $('headline').innerHTML=w.headline;
+  $('releaseChoices').setAttribute('aria-label',w.firstRelease);
+  $('releaseChoices').innerHTML=`<h2>${esc(w.firstRelease)}</h2><p>${esc(w.exploreQuestion)}</p><dl>${[['access','invited'],['signIn','providers'],['paymentMethod','invoice'],['release','credited']].map(([label,value])=>`<div><dt>${esc(w[label])}</dt><dd>${esc(w[value])}</dd></div>`).join('')}</dl><p class="small">${esc(w.planNote)}</p>`;
+  for(const option of $('view').options) option.textContent=w[option.value];
+  for(const option of $('appearance').options) option.textContent=w[option.value];
+  document.querySelector('.skip').textContent=lang==='da'?'Spring til indhold':'Skip to content';
+  document.querySelector('.preferences label:first-child .sr-only').textContent=lang==='da'?'Sprog':'Language';
+  document.querySelector('.preferences label:last-child .sr-only').textContent=lang==='da'?'Udseende':'Appearance';
+  document.title=lang==='da'?'Kundeportal demo · Devantler Tech':'Client portal preview · Devantler Tech';
+  const visible=orders.filter(o=>view==='operator'||o.client===view);
+  if(!visible.some(o=>o.id===selected)) selected=visible[0]?.id;
+  const o=visible.find(x=>x.id===selected), ready=queue(orders);
+  const queueNote=view==='operator'?`<div class="queue-note"><p>${esc(orders.some(x=>x.status==='active')?w.busy:w.only)}</p><p><strong>${esc(w.queue)}:</strong> ${esc(ready.length?ready.map(x=>x.id).join(' → '):w.noQueue)}</p></div>`:'';
+  $('content').innerHTML=`<div class="workspace-grid"><aside class="panel"><div class="panel-head"><h2>${esc(view==='operator'?w.all:w.requests)}</h2><span class="count">${visible.length}</span></div>${queueNote}${visible.map(x=>`<button class="order-button ${selected===x.id?'selected':''}" data-action="select" data-id="${x.id}" aria-pressed="${selected===x.id}"><span class="order-meta"><span>${x.id}</span><span>${esc(w[x.product])}</span></span><span class="order-title">${esc(x.title)}</span><span class="status ${x.status==='active'?'live':eligible(x)?'ready':''}">${esc(status(x))}</span></button>`).join('')}${view!=='operator'?`<button class="new-request" data-action="new">+ ${esc(w.new)}</button>`:''}</aside>${inquiry?form():o?details(o):`<section class="panel empty">${esc(w.noQueue)}</section>`}</div>`;
+}
+$('content').addEventListener('click',event=>{
+  const b=event.target.closest('button[data-action]'); if(!b||b.disabled)return;
+  const action=b.dataset.action;
+  if(action==='select'){selected=b.dataset.id;inquiry=false;render();return;}
+  if(action==='new'||action==='cancel'){inquiry=action==='new';render();if(inquiry)$('inquiryForm').elements.title.focus();return;}
+  const o=orders.find(x=>x.id===selected); if(!o)return;
+  try {
+    if(action==='accept'&&view===o.client&&o.quote&&o.status==='waiting')o.acceptedVersion=o.quote.version;
+    else if(view==='operator') {
+      if(action==='quote')orders=orders.map(x=>x.id===o.id?requote(x,Number($('quoteAmount').value)):x);
+      else if(action==='funds'&&o.quote&&o.acceptedVersion===o.quote.version&&o.status==='waiting')o.payment={state:'verified',version:o.quote.version,amount:o.quote.amount,currency:o.quote.currency};
+      else if(action==='start')orders=start(orders,o.id);
+      else if(action==='finish'&&o.status==='active')o.status='delivered';
+      else if(action==='hold')o.status='held';
+      else if(action==='reject'){o.status='rejected';o.approved=false;}
+    }
+    render();notify(t().saved);
+  } catch { notify(action==='quote'?t().invalid:t().only); }
+});
+$('content').addEventListener('submit',event=>{
+  if(event.target.id!=='inquiryForm')return;event.preventDefault();if(view==='operator')return;
+  const data=new FormData(event.target), title=String(data.get('title')).trim(), product=data.get('product');
+  if(!title||title.length>100||!['website','app','service'].includes(product))return;
+  const sequence=Math.max(...orders.map(o=>o.submitted))+1, id=`D-${String(sequence).padStart(3,'0')}`;
+  orders.push({id,client:view,submitted:sequence,title,product,status:'waiting',approved:false,quote:null,acceptedVersion:null,payment:null});
+  selected=id;inquiry=false;render();$('detailTitle').focus();notify(t().added);
+});
+$('view').addEventListener('change',()=>{view=$('view').value;inquiry=false;render();});
+$('language').addEventListener('change',()=>{lang=$('language').value;$('notice').style.display='none';render();});
+$('appearance').addEventListener('change',()=>{const mode=$('appearance').value;if(mode==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=mode;});
+$('reset').addEventListener('click',()=>{orders=demoOrders();selected='D-002';inquiry=false;guide=null;guideStep=0;render();notify(t().resetDone);});
+$('walkthroughs').addEventListener('click',event=>{
+  const tab=event.target.closest('button[data-guide]');
+  if(tab){guide=Number(tab.dataset.guide);guideStep=0;orders=demoOrders();selected='D-002';view='a';inquiry=false;$('view').value=view;render();$('guide-tab-'+guide).focus();}
+  else if(event.target.closest('#guide-next')){try{guidedStep();$('guide-next')?.focus();}catch{notify(t().only);}}
+});
+$('walkthroughs').addEventListener('keydown',event=>{
+  const tab=event.target.closest('button[data-guide]');if(!tab||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+  event.preventDefault();const current=Number(tab.dataset.guide),next=event.key==='Home'?0:event.key==='End'?2:(current+(event.key==='ArrowRight'?1:2))%3;
+  $('guide-tab-'+next).click();
+});
+render();
+</script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="demo-bar"><span class="dot"></span><strong id="demoLabel">INTERACTIVE PROTOTYPE</strong><span id="demoNotice">Demo data only. No login, payment, GitHub connection or real work.</span></div>
+  <header>
+    <a class="brand" href="#main" aria-label="Devantler Tech portal home"><span class="mark">D↗</span>Devantler<span class="tech">Tech</span><span class="portal">/ portal</span></a>
+    <div class="preferences">
+      <label><span class="sr-only">Language</span><select id="language"><option value="en">English</option><option value="da">Dansk</option></select></label>
+      <label><span class="sr-only">Appearance</span><select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    </div>
+  </header>
+  <main id="main">
+    <div class="workspace-head"><div><p class="eyebrow" id="workspaceLabel">YOUR WORKSPACE</p><h1 id="headline">Good work.<br><span>Clear next steps.</span></h1></div><div class="role-picker"><label for="view" id="viewLabel">Explore the demo as</label><select id="view"><option value="a">Demo client A</option><option value="b">Demo client B</option><option value="operator">Operator</option></select><p id="roleNote">Role switching is a simulation, not authentication.</p></div></div>
+    <section class="panel release-choices" id="releaseChoices" aria-label="First-release choices"></section>
+    <section class="panel release-choices" id="walkthroughs" aria-label="Guided walkthroughs"></section>
+    <div id="content"></div>
+    <div id="notice" role="status" aria-live="polite"></div>
+  </main>
+  <footer><span id="footerNote">A working design preview, not a customer service. Nothing leaves this browser.</span><button id="reset" class="text-button">Reset demo</button></footer>
+</body>
+</html>
