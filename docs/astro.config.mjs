@@ -21,7 +21,7 @@ export default defineConfig({
   // Convention + lifecycle (remove the gate once shipped) live in docs/README.md.
   env: {
     schema: {
-      // Example flag for PreviewBanner.astro; not used by the business homepage.
+      // Default-off preview notice on the rendered English and Danish homepages.
       // Default-off, so production builds omit it; a preview build enables it
       // with `FEATURE_PREVIEW_BANNER=true npm run build`. Server context = the
       // flag is read while the .astro component renders at build time (SSG), so
@@ -138,7 +138,22 @@ export default defineConfig({
         },
         {
           tag: "script",
-          content: `document.addEventListener('DOMContentLoaded',()=>{const sel='main article, .blog-post-list article';function navigate(article){const link=article.querySelector('h2 a');if(link)window.location.href=link.href;}document.addEventListener('click',e=>{if(e.target.closest('a'))return;const article=e.target.closest(sel);if(article)navigate(article);});document.querySelectorAll(sel).forEach(el=>{const link=el.querySelector('h2 a');if(!link)return;el.setAttribute('tabindex','0');el.setAttribute('role','link');el.setAttribute('aria-label',link.textContent.trim());el.addEventListener('keydown',e=>{if(e.target!==el)return;if(e.key==='Enter'||e.code==='Space'||e.key===' '||e.key==='Spacebar'){e.preventDefault();navigate(el);}});});});`,
+          content: `document.addEventListener('DOMContentLoaded', () => {
+            const cards = 'article.sl-blog-preview';
+            const destination = 'a.sl-blog-preview-link';
+            const interactive = 'a, button, input, select, textarea, summary, [role="button"], [role="link"], [contenteditable]';
+            function navigate(card) {
+              const link = card.querySelector(destination);
+              if (link) window.location.href = link.href;
+            }
+            document.addEventListener('click', (event) => {
+              const card = event.target.closest(cards);
+              if (!card) return;
+              const control = event.target.closest(interactive);
+              if (control && control !== card) return;
+              navigate(card);
+            });
+          });`,
         },
       ],
       sidebar: [

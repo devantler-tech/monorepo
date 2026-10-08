@@ -19,6 +19,19 @@ fail() {
   exit 1
 }
 
+# The public catalogue and maintenance instructions must agree on the shared
+# automation owner; Actions remains a real legacy product, not a .github alias.
+grep -Fq "| Shared automation and organization defaults | \`devantler-tech/.github\` |" "${repo_root}/AGENTS.md" ||
+  fail "portfolio map does not name the maintained shared automation owner"
+grep -Fq "| Legacy GitHub Actions | \`devantler-tech/actions\` |" "${repo_root}/AGENTS.md" ||
+  fail "portfolio map misclassifies the legacy Actions repository"
+repo_automation_row="$(grep -F '| Repo automation |' "${repo_root}/AGENTS.md")" ||
+  fail "stack map is missing the automation row"
+grep -Fq "\`devantler-tech/.github\`" <<<"${repo_automation_row}" ||
+  fail "stack map routes new automation to the legacy repository"
+grep -Fq "target \`.github\` for new shared-CI work" "${repo_root}/.claude/skills/products/github-actions/SKILL.md" ||
+  fail "automation maintenance card routes new work to the legacy repository"
+
 grep -Fq 'Build the right thing — value before output' "${contract}" ||
   fail "canonical contract does not put user value before output"
 grep -Fq 'evidence → audience/problem → hypothesis → success signal' "${contract}" ||
@@ -129,6 +142,8 @@ grep -Fq 'RSS inclusion, social/OG presentation' "${site_readme}" ||
 
 grep -Fq -- "- '.github/workflows/ci.yaml'" "${workflow}" ||
   fail "product value filter does not self-test workflow-only changes"
+grep -Fq -- "- '.claude/skills/products/github-actions/SKILL.md'" "${workflow}" ||
+  fail "product value filter does not self-test shared automation owner guidance"
 for adr_filter in "'**/[Aa][Dd][Rr]/**'" "'**/[Aa][Dd][Rr][Ss]/**'"; do
   grep -Fq -- "- ${adr_filter}" "${workflow}" ||
     fail "product value filter does not run for ${adr_filter} path changes"

@@ -151,10 +151,15 @@ jobs:
               - 'docs/scripts/check-cv-drift.mjs'
               - 'docs/scripts/check-cv-drift.test.sh'
               - 'docs/src/data/cv.ts'
+              - 'docs/src/data/public-products.json'
+              - 'docs/scripts/check-active-projects-ci.test.sh'
               - 'docs/package.json'
               - 'docs/package-lock.json'
               - '.gitmodules'
               - 'github/devantler-tech/github-actions/actions'
+              - 'github/devantler-tech/.github-public'
+              - 'github/devantler-tech/.github-public/actions/**'
+              - 'github/devantler-tech/.github-public/.github/workflows/**'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the guards it gates.
               - '.github/workflows/ci.yaml'
@@ -978,6 +983,7 @@ jobs:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/skills/products/monorepo/SKILL.md'
+              - '.claude/skills/products/github-actions/SKILL.md'
               - '.claude/scripts/product-value-contract.test.sh'
               - 'docs/README.md'
               - '.github/workflows/ci.yaml'
@@ -988,6 +994,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      LC_ALL: C
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -999,11 +1007,21 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: docs/package-lock.json
+      - name: Verify lockfile with older supported npm
+        working-directory: docs
+        run: npx --yes --package=npm@11.4.2 npm ci --ignore-scripts
       - name: Install dependencies
         working-directory: docs
         run: npm ci
+      - name: Build enabled preview
+        working-directory: docs
+        env:
+          FEATURE_PREVIEW_BANNER: "true"
+        run: npm run build
       - name: Build
         working-directory: docs
+        env:
+          FEATURE_PREVIEW_BANNER: "false"
         run: npm run build
 
   # The Audit step below is mirrored by .github/workflows/audit-docs.yaml, which runs it
@@ -1096,6 +1114,8 @@ jobs:
       # submodule checkout needed, so it fails fast if a refactor broke a check.
       - name: Self-test the drift checker
         run: bash docs/scripts/check-active-projects-drift.test.sh
+      - name: Verify catalogue CI selection and immutable automation checkout
+        run: bash docs/scripts/check-active-projects-ci.test.sh
       - name: Self-test the CV drift checker
         run: bash docs/scripts/check-cv-drift.test.sh
       - name: Check the About page and CV data for drift
@@ -1104,7 +1124,20 @@ jobs:
       # its pinned commit (no GitHub API, no other submodules). The .gitmodules
       # URL is SSH (git@github.com:), which the runner has no key for, so point
       # it at public HTTPS first to clone anonymously.
-      - name: Check out source submodule
+      - name: Resolve current automation gitlink
+        id: automation-pin
+        run: |
+          read -r mode kind revision owner <<< "$(git --no-replace-objects ls-tree HEAD -- github/devantler-tech/.github-public)"
+          [[ "$mode" == 160000 && "$kind" == commit && "$revision" =~ ^[0-9a-f]{40}$ && "$owner" == github/devantler-tech/.github-public ]]
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+      - name: Checkout current shared automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: devantler-tech/.github
+          ref: ${{ steps.automation-pin.outputs.revision }}
+          path: github/devantler-tech/.github-public
+          persist-credentials: false
+      - name: Check out retained legacy Actions submodule
         run: |
           git submodule set-url github/devantler-tech/github-actions/actions https://github.com/devantler-tech/actions.git
           git submodule update --init --depth 1 \

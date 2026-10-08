@@ -2,6 +2,9 @@
 #
 # check-active-projects-drift.sh
 #
+# Guards current .github automation inventories and the retained legacy Actions lists.
+# Current actions live in .github-public/actions and callable workflows in
+# .github-public/.github/workflows; both are checked independently of legacy metadata.
 # Guards the hand-maintained Actions / Reusable Workflows lists on the Active
 # Projects page (docs/src/content/docs/projects/active.mdx) against silent
 # drift from their source-of-truth repo. Both lists are sourced from the
@@ -12,7 +15,7 @@
 # already-checked-out submodule, never the GitHub API.
 #
 #   - Actions list       — one bullet per composite action, so it maps 1:1 to
-#                          the `*/action.yaml` directories. A bullet *count*
+#                          the `*/action.yaml` / `*/action.yml` directories. A bullet *count*
 #                          alone cannot catch a rename (or a net-zero add+remove)
 #                          — the count stays equal while a bullet silently goes
 #                          stale — so we additionally pin the exact directory
@@ -97,10 +100,13 @@ mdx="$repo_root/docs/src/content/docs/projects/active.mdx"
 homepage="$repo_root/docs/src/content/docs/index.mdx"
 actions_dir="$repo_root/github/devantler-tech/github-actions/actions"
 rw_workflows_dir="$repo_root/github/devantler-tech/github-actions/actions/.github/workflows"
+current_actions_dir="$repo_root/github/devantler-tech/.github-public/actions"
+current_workflows_dir="$repo_root/github/devantler-tech/.github-public/.github/workflows"
 gitmodules="$repo_root/.gitmodules"
 templates_dir="$repo_root/docs/src/content/docs/templates"
 content_dir="$repo_root/docs/src/content"
 homepage_parity_checker="$script_dir/check-homepage-project-parity.mjs"
+public_catalogue="$repo_root/docs/src/data/public-products.json"
 
 # Anchor each H2 section on the source repo URL it links to — unique and stable.
 actions_anchor="](https://github.com/devantler-tech/actions)"
@@ -115,8 +121,11 @@ die_missing() {
 [ -f "$mdx" ] || die_missing "active.mdx" "$mdx"
 [ -f "$homepage" ] || die_missing "homepage index.mdx" "$homepage"
 [ -f "$homepage_parity_checker" ] || die_missing "homepage parity checker" "$homepage_parity_checker"
+[ -f "$public_catalogue" ] || die_missing "Public product catalogue" "$public_catalogue"
 [ -d "$actions_dir" ] || die_missing "actions submodule" "$actions_dir"
 [ -d "$rw_workflows_dir" ] || die_missing "actions submodule workflows directory" "$rw_workflows_dir"
+[ -d "$current_actions_dir" ] || die_missing "current automation actions" "$current_actions_dir"
+[ -d "$current_workflows_dir" ] || die_missing "current automation workflows" "$current_workflows_dir"
 [ -d "$content_dir" ] || die_missing "docs content directory" "$content_dir"
 
 # --- Retired repos: no page may still link to one -----------------------------
@@ -139,13 +148,40 @@ for entry in "${retired_repo_urls[@]}"; do
   retired_url="${entry%%|*}"
   replacement_url="${entry##*|}"
 
-  # -F: the URLs are literals, not patterns. Match the whole content tree, not just
-  # active.mdx — an unguarded page is exactly how this drifts.
-  if hits=$(grep -rFl "$retired_url" "$content_dir" 2>/dev/null) && [ -n "$hits" ]; then
+  # Components and data also render public links. Inspect the whole source tree,
+  # not just MDX; distinguish no matches from an incomplete read.
+  if hits=$(grep -rFlI "$retired_url" "$repo_root/docs/src"); then
     while IFS= read -r hit; do
       echo "::error file=${hit#"$repo_root"/}::Retired-repo link: this page links to '${retired_url}', \
 which is archived (read-only). Link '${replacement_url}' instead." >&2
     done <<<"$hits"
+    fail=1
+  else
+    scan_status=$?
+    if [ "$scan_status" -ne 1 ]; then
+      echo "::error::Cannot inspect public source for retired-repo links" >&2
+      fail=1
+    fi
+  fi
+
+  # The catalogue renderer constructs links from repository slugs, so there is
+  # no literal URL to grep. Check the URLs that it will actually emit as well.
+  if ! node --input-type=module - "$public_catalogue" "$retired_url" "$replacement_url" <<'NODE'
+import { readFileSync } from 'node:fs';
+try {
+  const [cataloguePath, retired, replacement] = process.argv.slice(2);
+  const catalogue = JSON.parse(readFileSync(cataloguePath, 'utf8'));
+  if (!Array.isArray(catalogue)) throw new Error('Expected an array');
+  if (catalogue.some(({ repository }) => `https://github.com/devantler-tech/${repository}` === retired)) {
+    console.error(`::error::Retired-repo link: the public catalogue generates '${retired}'. Link '${replacement}' instead.`);
+    process.exitCode = 1;
+  }
+} catch {
+  console.error('::error::Cannot inspect public catalogue for retired-repo links');
+  process.exitCode = 1;
+}
+NODE
+  then
     fail=1
   fi
 done
@@ -173,9 +209,9 @@ count_section_bullets() {
 }
 
 # --- Actions: bullet-count tripwire + directory-name set equality --------------
-# Live action directory names (each dir holding an action.yaml), sorted & unique.
+# Live action directory names (either valid metadata extension), sorted & unique.
 actions_live=$(
-  find "$actions_dir" -mindepth 2 -maxdepth 2 -name action.yaml -type f \
+  find "$actions_dir" -mindepth 2 -maxdepth 2 -type f \( -name action.yaml -o -name action.yml \) \
     | awk -F/ '{ print $(NF - 1) }' | sort -u
 )
 actions_count=$(printf '%s\n' "$actions_live" | grep -c . || true)
@@ -212,11 +248,43 @@ else
 fi
 
 # --- Reusable Workflows: count tripwire + workflow-name set equality -----------
-# Live reusable (workflow_call) workflow names (basename minus .yaml), sorted & unique.
-rw_live=$(
-  grep -lE '^[[:space:]]*workflow_call:' "$rw_workflows_dir"/*.yaml 2>/dev/null \
-    | awk -F/ '{ name = $NF; sub(/\.yaml$/, "", name); print name }' | sort -u
-)
+# Live reusable (workflow_call) workflow names (basename minus .yaml or .yml), sorted & unique.
+reusable_workflows() {
+  node --input-type=module - "$1" "$script_dir/../package.json" <<'NODE'
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { resolve, parse } from 'node:path';
+import { createRequire } from 'node:module';
+const { load } = createRequire(resolve(process.argv[3]))('js-yaml');
+const names = new Set();
+for (const filename of readdirSync(process.argv[2]).filter((name) => /\.ya?ml$/.test(name))) {
+  const file = resolve(process.argv[2], filename);
+  if (!statSync(file).isFile()) continue;
+  try {
+    const events = load(readFileSync(file, 'utf8'))?.on;
+    let reusable;
+    if (typeof events === 'string') reusable = events === 'workflow_call';
+    else if (Array.isArray(events) && events.every((event) => typeof event === 'string')) {
+      reusable = events.includes('workflow_call');
+    } else if (events && typeof events === 'object' && !Array.isArray(events)) {
+      reusable = Object.hasOwn(events, 'workflow_call');
+    } else throw new Error('on must be an event name, sequence or mapping');
+    if (reusable) {
+      const name = parse(filename).name;
+      if (names.has(name)) {
+        console.error(`::error file=${file}::Duplicate reusable workflow basename: ${name}`);
+        process.exit(1);
+      }
+      names.add(name);
+    }
+  } catch {
+    console.error(`::error file=${file}::Cannot parse workflow triggers`);
+    process.exit(1);
+  }
+}
+console.log([...names].sort().join('\n'));
+NODE
+}
+rw_live="$(reusable_workflows "$rw_workflows_dir")"
 rw_count=$(printf '%s\n' "$rw_live" | grep -c . || true)
 rw_expected=$(grep -oE 'reusable-workflows-count:[[:space:]]*[0-9]+' "$mdx" | grep -oE '[0-9]+' | head -n1 || true)
 
@@ -256,6 +324,37 @@ else
   echo "OK: Reusable Workflows in sync (${rw_count} workflow_call workflows == marker ${rw_expected}, name set matches)."
 fi
 
+# Current shared automation has its own exact inventories. Both action extensions
+# are valid; parse actual top-level workflow events with the same YAML parser.
+current_actions_live=$(
+  find "$current_actions_dir" -mindepth 2 -maxdepth 2 -type f \( -name action.yaml -o -name action.yml \) \
+    | awk -F/ '{ print $(NF - 1) }' | sort -u
+)
+current_workflows_live="$(reusable_workflows "$current_workflows_dir")"
+check_current_inventory() {
+  local marker="$1" live="$2" label="$3" declared entries
+  entries="$(grep -oE "${marker}:[[:space:]]*[a-z0-9,_-]+" "$mdx" | sed -E "s/^${marker}:[[:space:]]*//" || true)"
+  if [ -z "$entries" ]; then
+    echo "::error::Missing '$marker' inventory in active.mdx" >&2
+    fail=1
+    return
+  fi
+  if [ "$(printf '%s\n' "$entries" | wc -l | tr -d ' ')" -ne 1 ]; then
+    echo "::error::$label drift: inventory must occur exactly once" >&2
+    fail=1
+    return
+  fi
+  declared="$(printf '%s' "$entries" | tr ',' '\n' | sort -u)"
+  if [ "$declared" != "$live" ]; then
+    echo "::error::$label drift: update '$marker' to match the pinned devantler-tech/.github inventory" >&2
+    fail=1
+  else
+    echo "OK: $label inventory matches the current automation owner."
+  fi
+}
+check_current_inventory github-automation-actions "$current_actions_live" "Current GitHub Actions"
+check_current_inventory github-automation-workflows "$current_workflows_live" "Current reusable workflows"
+
 # --- Submodules: every submodule is consciously represented (or excluded) ------
 # Live submodule paths from .gitmodules (a tracked file at the repo root, so no
 # submodule contents are needed here), sorted & unique.
@@ -265,11 +364,25 @@ submodules_live=$(
 )
 
 # Declared paths from the inline `projects-submodules: path=disposition,...`
-# marker — take the path (left of '=') from each comma-separated entry.
+# marker — validate every complete entry BEFORE discarding its disposition.
 submodules_marker=$(
-  grep -oE 'projects-submodules:[[:space:]]*[a-z0-9/=,._-]+' "$mdx" \
-    | sed -E 's/^projects-submodules:[[:space:]]*//' | head -n1 || true
+  sed -nE 's#^.*projects-submodules:[[:space:]]*(.*)$#\1#p' "$mdx" \
+    | sed -E 's#[[:space:]]*\*/\}[[:space:]]*$##; s/^[[:space:]]+//; s/[[:space:]]+$//'
 )
+submodules_valid=1
+if [ -n "$submodules_marker" ]; then
+  if [ "$(grep -oF 'projects-submodules:' "$mdx" | wc -l | tr -d ' ')" -ne 1 ]; then
+    submodules_valid=0
+  fi
+  while IFS= read -r disposition_entry; do
+    if [[ ! "$disposition_entry" =~ ^[a-z0-9._/-]+=(section|grouped|templates-page|infra|omitted)$ ]]; then
+      submodules_valid=0
+    fi
+  done < <(printf '%s\n' "$submodules_marker" | tr ',' '\n')
+  if [ "$(printf '%s\n' "$submodules_marker" | tr ',' '\n' | cut -d= -f1 | sort | uniq -d | wc -l | tr -d ' ')" -ne 0 ]; then
+    submodules_valid=0
+  fi
+fi
 submodules_declared=$(
   printf '%s' "$submodules_marker" | tr ',' '\n' | sed -E 's/=.*$//; /^[[:space:]]*$/d' | sort -u
 )
@@ -278,6 +391,9 @@ if [ -z "$submodules_marker" ]; then
   echo "::error file=docs/src/content/docs/projects/active.mdx::Missing \
 'projects-submodules: path=disposition,...' marker in \
 docs/src/content/docs/projects/active.mdx." >&2
+  fail=1
+elif [ "$submodules_valid" -ne 1 ]; then
+  echo "::error file=docs/src/content/docs/projects/active.mdx::Invalid projects-submodules disposition: use one inventory with unique paths and one of section / grouped / templates-page / infra / omitted for EVERY entry." >&2
   fail=1
 elif [ "$submodules_declared" != "$submodules_live" ]; then
   only_live=$(comm -23 <(printf '%s\n' "$submodules_live") <(printf '%s\n' "$submodules_declared") | paste -sd, -)
@@ -324,6 +440,34 @@ keep the 'projects-submodules' marker disposition in lockstep." >&2
 else
   tpl_n=$(printf '%s\n' "$templates_declared" | grep -c .)
   echo "OK: Templates page in sync (${tpl_n} templates-page submodules == ${tpl_n} template doc pages, repo set matches)."
+fi
+
+# The public page consumes the bilingual JSON, not the legacy MDX descriptions.
+# Bind that rendered source to the curated inventory as well as checking the
+# older technical metadata; green legacy checks alone cannot clear a stale shelf.
+if ! node --input-type=module - "$public_catalogue" "$mdx" <<'NODE'
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+try {
+  const [cataloguePath, inventoryPath] = process.argv.slice(2);
+  const catalogue = JSON.parse(readFileSync(cataloguePath, 'utf8'));
+  assert.ok(Array.isArray(catalogue) && catalogue.length > 0);
+  const actual = catalogue.map(({ repository }) => repository);
+  assert.ok(actual.every((name) => typeof name === 'string' && /^[a-z0-9._-]+$/.test(name)));
+  assert.equal(new Set(actual).size, actual.length);
+  const inventories = [...readFileSync(inventoryPath, 'utf8').matchAll(/public-products:\s*([a-z0-9._,-]+)/g)];
+  assert.equal(inventories.length, 1);
+  const expected = inventories[0][1].split(',');
+  assert.equal(new Set(expected).size, expected.length);
+  assert.deepEqual(actual.sort(), expected.sort());
+  console.log(`OK: Public product catalogue matches inventory (${actual.length} repositories).`);
+} catch (error) {
+  console.error(`::error::Public product catalogue drift: update the rendered public-products.json source and its public-products: inventory together. ${error.message}`);
+  process.exitCode = 1;
+}
+NODE
+then
+  fail=1
 fi
 
 exit "$fail"

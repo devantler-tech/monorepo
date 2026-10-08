@@ -8,10 +8,23 @@ root) and deploys to GitHub Pages via `.github/workflows/publish-pages.yaml`.
 
 ```sh
 cd docs
-npm install
+npm ci
 npm run dev      # local dev server
 npm run build    # production build (this is what CI validates)
 ```
+
+Use Node 24 and npm 11. CI clean-installs with npm 11.4.2 before repeating the install
+with the runner's current npm 11. This also checks older supported versions: they
+require a nested optional Markdown peer that newer npm releases can omit when
+generating a lockfile. For intentional dependency changes, regenerate rather than
+editing the lockfile:
+
+```sh
+npx --yes --package=npm@11.4.2 npm install --package-lock-only --ignore-scripts
+```
+
+Then run both CI install commands and the build. A newer generator's output is
+acceptable only when it passes the same clean-install checks.
 
 ## Business website
 
@@ -32,20 +45,46 @@ and GitHub links. First-person English/Danish copy explains the independent busi
 inventing client endorsements; the family projects remain labelled as such. The real photograph
 also supplies the sharing image. Built-page checks verify the portrait and profile journey.
 
+Selected work uses the same `WorkExample.astro` card on Home and Projects in both languages.
+AS Coaching og Vaner includes a real public homepage capture, a compact responsive thumbnail
+linked to its original local JPEG in a new tab, and a separate link to the public website.
+The Wedding App shows its documented local guest demo after sign-in, with names, date,
+venue/address, countdown values and the venue background removed before capture. The card
+explicitly labels it an anonymized demo and does not link to the private invitation site.
+No production account or guest invitation code is used. Built-page checks verify both
+thumbnails and their readable larger images, as well as the localized visit action.
+
+Home focuses on services, two visual examples and a compact engineering-quality summary. A short
+bridge points to the public portfolio instead of repeating product cards or the About biography.
+Projects owns the complete catalogue and a collapsed evidence disclosure, linked from Home:
+actual KSail test/lint and CodeQL workflows, Wedding App accessibility tests, and portfolio
+maintenance/review rules. A direct fragment opens that disclosure in either language. The copy
+describes verified practices rather than universal coverage, certification, vulnerability-free
+software or unlimited maintenance. Project-specific checks and ongoing support remain scoped.
+
 The business identity also covers `/about/` and `/projects/`, with Danish counterparts at
 `/da/about/` and `/da/projects/`. About introduces the founder of a one-person business; Projects
 distinguishes open-source tools and family examples from client work. The journal and technical
 pages reuse the business navigation, typography, colors, footer and appearance control through
 Starlight component overrides. Their search, sidebar, RSS and historical articles remain available.
+Only Starlight Blog's preview cards receive whole-card mouse navigation. Each native title link
+provides the single keyboard destination without making its article a second focus stop. Links,
+form controls, disclosure toggles and editable descendants retain their own interaction; individual
+journal and technical articles remain reading surfaces. `scripts/journal-navigation.test.mjs`
+executes the actual head script as part of every build.
 There is one appearance picker, including on mobile; the documentation header measures its height
 so the reading tools do not overlap the business navigation.
 
-Projects includes the wider technical catalogue and earlier research on the same page, with
-expandable English detail sourced directly from `src/content/docs/projects/active.mdx` and
-`completed.mdx`. Their drift checks remain authoritative. The legacy active/completed URLs
-redirect to the relevant section of `/projects/`; the documentation sidebar links only to that
-canonical page. Browser redirects preserve incoming heading fragments; links without a fragment
-and the no-JavaScript fallback use the relevant catalogue section. Root horizontal overflow is
+Projects presents one complete, stars-ranked public software catalogue, followed by family examples
+and earlier research. The real KSail terminal capture appears in its product card; expandable English
+research and diagrams are sourced from `src/content/docs/projects/completed.mdx`. The legacy
+active/completed URLs redirect to the public catalogue or research section of `/projects/`; the
+documentation sidebar links only to that canonical page. Browser redirects preserve incoming
+heading fragments, which land on the corresponding public product card or family/research content.
+The deployed-platform bookmark lands on the separate Platform hosting-project example, not the
+reusable Platform Template in the public software catalogue. A bookmarked card
+in the collapsed remainder opens that disclosure. Links without a fragment and the no-JavaScript
+fallback use the relevant section. Root horizontal overflow is
 clipped without creating a non-scrolling ancestor
 that would break the documentation header's sticky positioning.
 
@@ -124,8 +163,12 @@ Keep this lane single-flight—maintain or measure the current post before start
 
 The Projects page's “Built in the open” shelf lists public tools, libraries, templates and
 source-available inspiration, not tenant deployments. `src/data/public-products.json` holds the
-curated bilingual descriptions. Shared Actions live in `.github`; the legacy Actions repository is
-not a second current product. Repository licences govern reuse; World at Ruin is a pre-alpha game
+curated bilingual descriptions and is the source rendered by both language routes. The
+`public-products:` inventory in `src/content/docs/projects/active.mdx` is checked against this JSON;
+that MDX file now holds legacy portfolio metadata, not the public description-editing surface.
+The production contract verifies the rendered catalogue. Shared Actions live in `.github`; the
+old `actions` repository has a separately labelled legacy card for existing consumers and bookmarks,
+and directs new projects to `.github`. Repository licences govern reuse; World at Ruin is a pre-alpha game
 whose source is available for study, not unrestricted reuse or hosting.
 
 `src/data/github-stars.json` is generated with an explicit UTC observation date. Cards sort by GitHub
@@ -173,7 +216,8 @@ env: {
 
 Gate rendering on the flag by importing it from `astro:env/server` (or `astro:env/client` for a
 `PUBLIC_`-prefixed client flag) — see [`src/components/PreviewBanner.astro`](src/components/PreviewBanner.astro),
-the worked example. When the flag is off, the component emits nothing.
+the worked example mounted on the English and Danish business homepages. When the flag is off,
+the component emits nothing; enabling it adds a localized notice above the homepage introduction.
 
 Flags can also gate **content-collection inclusion** (filter entries out of `getCollection(...)`
 when a flag is off) to hold back whole docs sections.

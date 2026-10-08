@@ -64,7 +64,14 @@ build_fixture() {
   local tpl_dir="$root/docs/src/content/docs/templates"
   local actions_dir="$root/github/devantler-tech/github-actions/actions"
   local rw_dir="$actions_dir/.github/workflows"
+  local current="$root/github/devantler-tech/.github-public"
   mkdir -p "$mdx_dir" "$tpl_dir" "$actions_dir/alpha" "$actions_dir/beta" "$rw_dir"
+  mkdir -p "$current/actions/current-alpha" "$current/.github/workflows"
+  printf 'name: current-alpha\n' > "$current/actions/current-alpha/action.yml"
+  printf 'on: [push, workflow_call]\n' > "$current/.github/workflows/current-ci.yml"
+  printf 'on: push\n' > "$current/.github/workflows/ordinary.yaml"
+  mkdir -p "$root/docs/src/data"
+  printf '[{"repository":"actions"},{"repository":"foo-template"}]\n' > "$root/docs/src/data/public-products.json"
 
   printf 'name: alpha\n' > "$actions_dir/alpha/action.yaml"
   printf 'name: beta\n'  > "$actions_dir/beta/action.yaml"
@@ -105,6 +112,9 @@ title: Active Projects
 <div class="projects-page">
 
 {/* projects-submodules: applications/bar=grouped,github/devantler-tech/github-actions/actions=section,github/devantler-tech/github-actions/reusable-workflows=omitted,templates/foo-template=templates-page */}
+{/* public-products: actions,foo-template */}
+{/* github-automation-actions: current-alpha */}
+{/* github-automation-workflows: current-ci */}
 
 ## [⚡ Actions](https://github.com/devantler-tech/actions)
 
@@ -915,8 +925,204 @@ EOF
 fail_match "Homepage: rebound LinkCard binding fails closed" "$c" \
   "Featured Projects component bindings must use named exports"
 
+c="$tmp/public-products-set"; build_fixture "$c"
+printf '[{"repository":"foo-template"}]\n' > "$c/docs/src/data/public-products.json"
+fail_match "Public catalogue: removed product cannot leave inventory stale" "$c" "Public product catalogue drift"
+
+c="$tmp/public-products-missing"; build_fixture "$c"
+rm "$c/docs/src/data/public-products.json"
+fail_match "Public catalogue: missing source fails closed" "$c" "Public product catalogue not found"
+
+c="$tmp/public-products-marker"; build_fixture "$c"
+sed -i.bak '/public-products:/d' "$(mdx_path "$c")"
+fail_match "Public catalogue: missing inventory fails closed" "$c" "Public product catalogue drift"
+
+# Both extensions are GitHub workflow files; include reusable .yml files while
+# ignoring ordinary CI files regardless of their extension.
+c="$tmp/workflow-mixed-extension"; build_fixture "$c"
+mv "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yaml" "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yml"
+pass_case "Reusable Workflows: mixed YAML extensions are counted" "$c"
+
+c="$tmp/workflow-yml-only"; build_fixture "$c"
+for name in ci-one cd-two repo-ci; do
+  mv "$c/github/devantler-tech/github-actions/actions/.github/workflows/$name.yaml" "$c/github/devantler-tech/github-actions/actions/.github/workflows/$name.yml"
+done
+pass_case "Reusable Workflows: a .yml-only directory is counted" "$c"
+
+c="$tmp/workflow-yml-added"; build_fixture "$c"
+printf 'on:\n  workflow_call:\n' > "$c/github/devantler-tech/github-actions/actions/.github/workflows/new-call.yml"
+fail_match "Reusable Workflows: unlisted .yml trips count drift" "$c" "3 reusable (workflow_call) workflow(s)"
+
+c="$tmp/workflow-yml-renamed"; build_fixture "$c"
+mv "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yaml" "$c/github/devantler-tech/github-actions/actions/.github/workflows/renamed.yml"
+fail_match "Reusable Workflows: a .yml rename trips set drift" "$c" "'reusable-workflows-names' marker does not match"
+
+c="$tmp/workflow-yml-ordinary"; build_fixture "$c"
+printf 'on:\n  push:\n' > "$c/github/devantler-tech/github-actions/actions/.github/workflows/ordinary-ci.yml"
+pass_case "Reusable Workflows: ordinary .yml CI is ignored" "$c"
+
+# The markers intentionally use extensionless names. Two callable files with the
+# same basename cannot be represented honestly and must not collapse into one.
+c="$tmp/workflow-callable-basename-collision"; build_fixture "$c"
+cp "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yaml" "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yml"
+fail_match "Reusable Workflows: callable basename collision fails closed" "$c" "Duplicate reusable workflow basename: ci-one"
+
+c="$tmp/current-callable-basename-collision"; build_fixture "$c"
+cp "$c/github/devantler-tech/.github-public/.github/workflows/current-ci.yml" "$c/github/devantler-tech/.github-public/.github/workflows/current-ci.yaml"
+fail_match "Current automation: callable basename collision fails closed" "$c" "Duplicate reusable workflow basename: current-ci"
+
+c="$tmp/workflow-ordinary-basename-collision"; build_fixture "$c"
+printf 'on: push\n' > "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yml"
+pass_case "Reusable Workflows: ordinary namesake does not add a callable workflow" "$c"
+
+c="$tmp/current-ordinary-basename-collision"; build_fixture "$c"
+printf 'on: push\n' > "$c/github/devantler-tech/.github-public/.github/workflows/current-ci.yaml"
+pass_case "Current automation: ordinary namesake does not add a callable workflow" "$c"
+
+# GitHub accepts scalar, sequence and mapping event declarations. These literal
+# fixtures catch omitted reusable workflows without mirroring the parser.
+for form in scalar flow-list block-list flow-map quoted-key; do
+  c="$tmp/workflow-event-$form"; build_fixture "$c"
+  workflow="$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yaml"
+  case "$form" in
+    scalar) printf 'on: workflow_call\n' > "$workflow" ;;
+    flow-list) printf 'on: [push, workflow_call]\n' > "$workflow" ;;
+    block-list) printf 'on:\n  - push\n  - workflow_call\n' > "$workflow" ;;
+    flow-map) printf 'on: {workflow_call: {}}\n' > "$workflow" ;;
+    quoted-key) printf '"on": workflow_call\n' > "$workflow" ;;
+  esac
+  pass_case "Reusable Workflows: $form event declaration is counted" "$c"
+done
+
+c="$tmp/workflow-nested-key"; build_fixture "$c"
+printf 'on: push\nenv:\n  workflow_call: false\n' > "$c/github/devantler-tech/github-actions/actions/.github/workflows/ordinary.yml"
+pass_case "Reusable Workflows: a key outside on is ignored" "$c"
+
+c="$tmp/workflow-script-text"; build_fixture "$c"
+printf 'on: push\njobs:\n  example:\n    steps:\n      - run: |\n          workflow_call: not-an-event\n' > "$c/github/devantler-tech/github-actions/actions/.github/workflows/ordinary.yml"
+pass_case "Reusable Workflows: script text is not an event" "$c"
+
+c="$tmp/workflow-unlisted-scalar"; build_fixture "$c"
+printf 'on: workflow_call\n' > "$c/github/devantler-tech/github-actions/actions/.github/workflows/new-call.yml"
+fail_match "Reusable Workflows: an unlisted scalar event trips drift" "$c" "3 reusable (workflow_call) workflow(s)"
+
+c="$tmp/workflow-malformed-yaml"; build_fixture "$c"
+printf 'on: [workflow_call\n' > "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yaml"
+fail_match "Reusable Workflows: malformed YAML fails closed" "$c" "Cannot parse workflow triggers"
+
+c="$tmp/workflow-invalid-events"; build_fixture "$c"
+printf 'on: 42\n' > "$c/github/devantler-tech/github-actions/actions/.github/workflows/ci-one.yaml"
+fail_match "Reusable Workflows: invalid event shape fails closed" "$c" "Cannot parse workflow triggers"
+
+# Current automation is independent of the legacy comparison: unchanged legacy
+# inventories cannot hide an added, removed or renamed maintained building block.
+c="$tmp/current-action-added"; build_fixture "$c"
+mkdir -p "$c/github/devantler-tech/.github-public/actions/new-action"
+printf 'name: new-action\n' > "$c/github/devantler-tech/.github-public/actions/new-action/action.yaml"
+fail_match "Current automation: new action trips inventory drift" "$c" "Current GitHub Actions drift"
+
+c="$tmp/current-action-removed"; build_fixture "$c"
+rm "$c/github/devantler-tech/.github-public/actions/current-alpha/action.yml"
+fail_match "Current automation: removed action trips inventory drift" "$c" "Current GitHub Actions drift"
+
+c="$tmp/current-workflow-renamed"; build_fixture "$c"
+mv "$c/github/devantler-tech/.github-public/.github/workflows/current-ci.yml" "$c/github/devantler-tech/.github-public/.github/workflows/renamed.yaml"
+fail_match "Current automation: renamed workflow trips inventory drift" "$c" "Current reusable workflows drift"
+
+c="$tmp/current-workflow-added"; build_fixture "$c"
+printf 'on: workflow_call\n' > "$c/github/devantler-tech/.github-public/.github/workflows/new-call.yml"
+fail_match "Current automation: scalar reusable workflow trips drift" "$c" "Current reusable workflows drift"
+
+c="$tmp/current-workflow-invalid"; build_fixture "$c"
+printf 'on: [workflow_call\n' > "$c/github/devantler-tech/.github-public/.github/workflows/current-ci.yml"
+fail_match "Current automation: malformed workflow fails closed" "$c" "Cannot parse workflow triggers"
+
+c="$tmp/current-marker-missing"; build_fixture "$c"
+sed -i.bak '/github-automation-actions:/d' "$(mdx_path "$c")"
+fail_match "Current automation: missing inventory fails closed" "$c" "Missing 'github-automation-actions' inventory"
+
+c="$tmp/current-checkout-missing"; build_fixture "$c"
+rm -rf "$c/github/devantler-tech/.github-public"
+fail_match "Current automation: missing checkout fails closed" "$c" "current automation actions not found"
+
+# Legacy action.yml files are equally valid, including an extension-only rename.
+c="$tmp/action-mixed-extension"; build_fixture "$c"
+mv "$c/github/devantler-tech/github-actions/actions/alpha/action.yaml" "$c/github/devantler-tech/github-actions/actions/alpha/action.yml"
+pass_case "Actions: mixed metadata extensions are counted" "$c"
+
+c="$tmp/action-yml-only"; build_fixture "$c"
+for name in alpha beta; do
+  mv "$c/github/devantler-tech/github-actions/actions/$name/action.yaml" "$c/github/devantler-tech/github-actions/actions/$name/action.yml"
+done
+pass_case "Actions: a .yml-only inventory is counted" "$c"
+
+c="$tmp/action-yml-added"; build_fixture "$c"
+mkdir -p "$c/github/devantler-tech/github-actions/actions/gamma"
+printf 'name: gamma\n' > "$c/github/devantler-tech/github-actions/actions/gamma/action.yml"
+fail_match "Actions: unlisted .yml trips count drift" "$c" "3 composite action(s)"
+
+c="$tmp/action-yml-renamed"; build_fixture "$c"
+mv "$c/github/devantler-tech/github-actions/actions/alpha" "$c/github/devantler-tech/github-actions/actions/gamma"
+mv "$c/github/devantler-tech/github-actions/actions/gamma/action.yaml" "$c/github/devantler-tech/github-actions/actions/gamma/action.yml"
+fail_match "Actions: a .yml rename trips set drift" "$c" "'actions-dirs' marker does not match"
+
+# Correct paths cannot hide an absent, misspelled or partially parsed disposition.
+c="$tmp/disposition-multiline-comment"; build_fixture "$c"
+sed -i.bak '/projects-submodules:/s# \*/}##' "$(mdx_path "$c")"
+sed -i.bak '/projects-submodules:/a\
+  Inventory explanation.\
+*/}' "$(mdx_path "$c")"
+pass_case "Submodules: multiline comment preserves the complete inventory" "$c"
+
+for disposition in sectoin '' '=section' 'section!ignored' 'section=infra'; do
+  c="$tmp/disposition-${disposition:-missing}"; build_fixture "$c"
+  sed -i.bak "s#applications/bar=grouped#applications/bar=$disposition#" "$(mdx_path "$c")"
+  fail_match "Submodules: invalid disposition '$disposition' fails closed" "$c" "Invalid projects-submodules disposition"
+done
+
+c="$tmp/disposition-no-equals"; build_fixture "$c"
+sed -i.bak 's#applications/bar=grouped#applications/bar#' "$(mdx_path "$c")"
+fail_match "Submodules: missing disposition assignment fails closed" "$c" "Invalid projects-submodules disposition"
+
+c="$tmp/disposition-empty-entry"; build_fixture "$c"
+sed -i.bak 's#applications/bar=grouped,#applications/bar=grouped,,#' "$(mdx_path "$c")"
+fail_match "Submodules: an empty entry fails closed" "$c" "Invalid projects-submodules disposition"
+
+c="$tmp/disposition-duplicate-marker"; build_fixture "$c"
+sed -i.bak '/projects-submodules:/p' "$(mdx_path "$c")"
+fail_match "Submodules: duplicate inventory fails closed" "$c" "Invalid projects-submodules disposition"
+
+c="$tmp/disposition-duplicate-path"; build_fixture "$c"
+sed -i.bak 's#applications/bar=grouped,#applications/bar=grouped,applications/bar=infra,#' "$(mdx_path "$c")"
+fail_match "Submodules: conflicting duplicate path fails closed" "$c" "Invalid projects-submodules disposition"
+
+c="$tmp/disposition-same-line-markers"; build_fixture "$c"
+sed -i.bak 's#{/\* projects-submodules: #{/* projects-submodules: applications/bar=sectoin */} {/* projects-submodules: #' "$(mdx_path "$c")"
+fail_match "Submodules: another marker on the same line cannot hide invalid entries" "$c" "Invalid projects-submodules disposition"
+
+for disposition in section grouped infra omitted; do
+  c="$tmp/disposition-valid-$disposition"; build_fixture "$c"
+  sed -i.bak "s#applications/bar=grouped#applications/bar=$disposition#" "$(mdx_path "$c")"
+  pass_case "Submodules: supported '$disposition' is accepted" "$c"
+done
+
+# Public business components/data and repository-derived URLs are rendered too.
+c="$tmp/retired-business-component"; build_fixture "$c"
+mkdir -p "$c/docs/src/components/business"
+printf '<a href="https://github.com/devantler-tech/reusable-workflows">Source</a>\n' > "$c/docs/src/components/business/ProjectsPage.astro"
+fail_match "Retired links: business component cannot bypass guard" "$c" "Retired-repo link"
+
+c="$tmp/retired-business-data"; build_fixture "$c"
+printf '{"source":"https://github.com/devantler-tech/reusable-workflows"}\n' > "$c/docs/src/data/example.json"
+fail_match "Retired links: public data cannot bypass guard" "$c" "Retired-repo link"
+
+c="$tmp/retired-catalogue-slug"; build_fixture "$c"
+printf '[{"repository":"actions"},{"repository":"foo-template"},{"repository":"reusable-workflows"}]\n' > "$c/docs/src/data/public-products.json"
+sed -i.bak 's/public-products: actions,foo-template/public-products: actions,foo-template,reusable-workflows/' "$(mdx_path "$c")"
+fail_match "Retired links: a generated catalogue URL cannot bypass guard" "$c" "Retired-repo link"
+
 if [ "$fail" -ne 0 ]; then
   printf '❌ active-projects drift-guard self-test FAILED\n' >&2
   exit 1
 fi
-printf '✅ active-projects drift-guard self-test passed (51 cases)\n'
+printf '✅ active-projects drift-guard self-test passed (102 cases)\n'

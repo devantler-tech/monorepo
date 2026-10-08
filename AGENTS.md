@@ -30,13 +30,13 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | `AGENTS.md` |
 | AWS config tenant | `devantler-tech/aws` | `applications/aws` | `AGENTS.md` |
 | devantler.tech site | `devantler-tech/monorepo` | `docs/` + repo root | [`docs/AGENTS.md`](docs/AGENTS.md) and this file |
-| GitHub organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | `AGENTS.md` |
+| Shared automation and organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | `AGENTS.md` |
 | Go template | `devantler-tech/go-template` | `templates/go-template` | `AGENTS.md` |
 | .NET template | `devantler-tech/dotnet-template` | `templates/dotnet-template` | `AGENTS.md` |
 | Platform-tenant template | `devantler-tech/platform-tenant-template` | `templates/platform-tenant-template` | `AGENTS.md` |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | `AGENTS.md` |
-| GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | `AGENTS.md` |
-| Reusable Workflows | `devantler-tech/reusable-workflows` (**archived 2026-07-10** — merged into `devantler-tech/actions`, whose `.github/workflows` now hosts them) | — (legacy submodule pin removed 2026-07-11) | see `devantler-tech/actions` |
+| Legacy GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | `AGENTS.md` |
+| Reusable Workflows | `devantler-tech/reusable-workflows` (**archived 2026-07-10**) | — | see `devantler-tech/.github` |
 | Homebrew tap | `devantler-tech/homebrew-tap` (repo renamed from `homebrew-formulas`) | `homebrew-tap` | `AGENTS.md` |
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | `AGENTS.md` |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | `AGENTS.md` |
@@ -77,7 +77,7 @@ no row are filed on the **default intake repo** below.
 | AWS infrastructure | Changing THIS suite's deployed AWS resources — today the EKS-based CI cluster, and anything else the platform's AWS tenant reconciles through Crossplane (not AWS setups in general) | `devantler-tech/aws` |
 | KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
 | Data product controller | Creating, composing, publishing, and exploring reusable data products backed by new or existing data sources | `devantler-tech/data-product-controller` |
-| Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/actions` |
+| Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/.github` |
 | AI assistant skills | Teaching the AI assistants new individual skills and behaviours | `devantler-tech/agent-skills` |
 | AI assistant plugin bundles | Bundling skills into installable plugins / marketplace entries for VS Code, Copilot CLI, Claude Code | `devantler-tech/agent-plugins` |
 | Go project template | The starter template new Go repositories are created from | `devantler-tech/go-template` |
