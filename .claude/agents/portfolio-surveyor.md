@@ -1522,7 +1522,7 @@ public and private — no per-repo loop needed to enumerate):
    by `devantler`. The orchestrator cannot authorise an external repository from survey metadata; only
    the maintainer can clear that boundary in a current interactive conversation.
 
-Portfolio repos (the org-wide search covers them). The
+Portfolio repos. The
 **authoritative set is the org's live non-archived repo list**: the monorepo `AGENTS.md` portfolio
 map names the *products*, and org/infra repos outside that map (e.g. `maintenance`) are in scope
 too. Reconcile each run with one bounded call —
