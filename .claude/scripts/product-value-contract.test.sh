@@ -46,7 +46,7 @@ grep -Fq 'Stewardship includes **new posts and' "${contract}" ||
   fail "canonical blog stewardship omits new posts"
 grep -Fq 'material refreshes** of useful older posts' "${contract}" ||
   fail "canonical blog stewardship omits old-post maintenance"
-grep -Fq 'after operate work and one oldest-substantive slice' "${contract}" ||
+grep -Fq 'after operate work and one important-substantive slice' "${contract}" ||
   fail "canonical cadence can starve low-priority blog stewardship"
 grep -Fq "Use \`Fixes #delivery\`; when later measurement" "${contract}" ||
   fail "canonical queue rules can close an experiment before measurement"
