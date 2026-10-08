@@ -20,6 +20,7 @@ check() {
     (.on.push.paths | index(".claude/scripts/business-site-revision.sh") != null) and
     (.on | has("workflow_dispatch")) and
     .concurrency.group == "pages" and
+    .concurrency["cancel-in-progress"] == true and
     .jobs.revision.permissions == {"contents":"read"} and
     .jobs.revision.outputs.revision == "${{ steps.pin.outputs.revision }}" and
     ([.jobs.revision.steps[] | select((.uses // "") | startswith("actions/checkout@"))] | length == 1) and
@@ -49,6 +50,9 @@ reject() {
 }
 reject 'mutable reusable workflow' '.jobs.publish.uses = "devantler-tech/business-site/.github/workflows/publish-pages.yaml@main"'
 reject 'mutable source input' '.jobs.publish.with."source-revision" = "main"'
+reject 'missing publication serialization' 'del(.concurrency)'
+reject 'missing in-flight cancellation' 'del(.concurrency."cancel-in-progress")'
+reject 'disabled in-flight cancellation' '.concurrency."cancel-in-progress" = false'
 reject 'ignored pin output' '.jobs.revision.outputs.revision = "fixed"'
 reject 'missing source trigger' '.on.push.paths -= ["applications/business-site"]'
 reject 'missing resolver trigger' '.on.push.paths -= [".claude/scripts/business-site-revision.sh"]'
