@@ -35,8 +35,8 @@ jobs:
 
   publish:
     needs: revision
-    # Replace with the reviewed source merge commit before this adoption is ready.
-    uses: devantler-tech/business-site/.github/workflows/publish-pages.yaml@733d8ac2aad9aeefb648e256ea217ada32717a66
+    # Bind publisher code and committed application source to the reviewed source merge.
+    uses: devantler-tech/business-site/.github/workflows/publish-pages.yaml@ce07dd9939e1b616be66f8ce8b0c6e74c7c1365e
     with:
       source-revision: ${{ needs.revision.outputs.revision }}
     permissions:

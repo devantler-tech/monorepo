@@ -127,6 +127,7 @@ jobs:
               # drift lists live in would let a retired link ship from a blog
               # post or any other page the guard claims to cover.
               - 'applications/business-site'
+              - '.claude/scripts/business-site-ci.test.sh'
               - '.claude/scripts/submodule-init.sh'
               - '.gitmodules'
               - 'github/devantler-tech/.github-public'
@@ -974,6 +975,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      LC_ALL: C
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -987,14 +990,26 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: applications/business-site/docs/package-lock.json
+      - name: Verify lockfile with older supported npm
+        working-directory: applications/business-site/docs
+        run: npx --yes --package=npm@11.4.2 npm ci --ignore-scripts
       - name: Install dependencies
         working-directory: applications/business-site/docs
         run: npm ci
+      - name: Build enabled preview
+        working-directory: applications/business-site/docs
+        env:
+          FEATURE_PREVIEW_BANNER: "true"
+        run: npm run build
       - name: Build
         working-directory: applications/business-site/docs
         env:
           LC_ALL: C
+          FEATURE_PREVIEW_BANNER: "false"
         run: npm run build
+      - name: Build default production
+        working-directory: applications/business-site/docs
+        run: env -u FEATURE_PREVIEW_BANNER npm run build
 
   test-business-site-integration:
     name: Test business-site publication bridge
@@ -1030,7 +1045,7 @@ jobs:
           GIT_CONFIG_COUNT: "1"
           GIT_CONFIG_KEY_0: url.https://github.com/.insteadOf
           GIT_CONFIG_VALUE_0: "git@github.com:"
-        run: bash .claude/scripts/submodule-init.sh applications/business-site github/devantler-tech/.github-public github/devantler-tech/github-actions/actions
+        run: bash .claude/scripts/submodule-init.sh applications/business-site github/devantler-tech/github-actions/actions
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -1044,10 +1059,25 @@ jobs:
       # submodule checkout needed, so it fails fast if a refactor broke a check.
       - name: Self-test the drift checker
         run: bash applications/business-site/docs/scripts/check-active-projects-drift.test.sh
+      - name: Verify catalogue CI selection and immutable automation checkout
+        run: bash .claude/scripts/business-site-ci.test.sh
       - name: Self-test the CV drift checker
         run: bash applications/business-site/docs/scripts/check-cv-drift.test.sh
       - name: Check the About page and CV data for drift
         run: node --disable-warning=ExperimentalWarning applications/business-site/docs/scripts/check-cv-drift.mjs applications/business-site/docs/src/content/docs/about.mdx applications/business-site/docs/src/data/cv.ts
+      - name: Resolve current automation gitlink
+        id: automation-pin
+        run: |
+          read -r mode kind revision owner <<< "$(git --no-replace-objects ls-tree HEAD -- github/devantler-tech/.github-public)"
+          [[ "$mode" == 160000 && "$kind" == commit && "$revision" =~ ^[0-9a-f]{40}$ && "$owner" == github/devantler-tech/.github-public ]]
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+      - name: Checkout current shared automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: devantler-tech/.github
+          ref: ${{ steps.automation-pin.outputs.revision }}
+          path: github/devantler-tech/.github-public
+          persist-credentials: false
       - name: Check Active Projects lists for drift
         env:
           SITE_ROOT: ${{ github.workspace }}/applications/business-site

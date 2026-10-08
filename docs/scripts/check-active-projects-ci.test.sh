@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Exercise migrated catalogue/current-owner selection through the actual CI runner.
+# Exercise catalogue/current-owner change selection through the actual CI runner.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/.github/workflows" "$tmp/applications/business-site/docs" "$tmp/.claude"
+mkdir -p "$tmp/.github/workflows" "$tmp/docs/src/data" "$tmp/.claude"
 cp "$root/.github/workflows/ci.yaml" "$tmp/.github/workflows/ci.yaml"
 ln -s "$root/.claude/scripts" "$tmp/.claude/scripts"
-ln -s "$root/applications/business-site/docs/scripts" "$tmp/applications/business-site/docs/scripts"
+ln -s "$root/docs/scripts" "$tmp/docs/scripts"
 git -C "$tmp" init -q
-git -C "$tmp" add .github/workflows/ci.yaml .claude/scripts applications/business-site/docs/scripts
+git -C "$tmp" add .github/workflows/ci.yaml .claude/scripts docs/scripts
 git -C "$tmp" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -qm baseline
-for path in .gitmodules github/devantler-tech/.github-public github/devantler-tech/.github-public/actions/new/action.yaml github/devantler-tech/.github-public/.github/workflows/new.yml; do
+for path in docs/src/data/public-products.json github/devantler-tech/.github-public github/devantler-tech/.github-public/actions/new/action.yaml github/devantler-tech/.github-public/.github/workflows/new.yml; do
   mkdir -p "$(dirname "$tmp/$path")"
   printf 'changed\n' > "$tmp/$path"
   selected="$(bash "$root/.claude/scripts/run-affected-tests.sh" --root "$tmp" --base HEAD --list)"
   case "$selected" in
-    *applications/business-site/docs/scripts/check-active-projects-drift.test.sh*) ;;
+    *docs/scripts/check-active-projects-drift.test.sh*) ;;
     *) echo "FAIL: $path does not select the actual catalogue guard" >&2; exit 1 ;;
   esac
   rm "$tmp/$path"
@@ -30,7 +30,7 @@ import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 const root = process.env.ROOT;
-const { load } = createRequire(resolve(root, 'applications/business-site/docs/package.json'))('js-yaml');
+const { load } = createRequire(resolve(root, 'docs/package.json'))('js-yaml');
 const job = load(readFileSync(resolve(root, '.github/workflows/ci.yaml'), 'utf8')).jobs['drift-check-active-projects'];
 const checkout = job.steps.find(s => s.with?.repository === 'devantler-tech/.github');
 assert.ok(checkout, 'CI must check out the current automation owner');

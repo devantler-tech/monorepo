@@ -2,6 +2,7 @@
   "observedAt": "2026-10-07",
   "repositories": {
     ".github": 0,
+    "actions": 2,
     "agent-plugins": 2,
     "agent-skills": 3,
     "data-product-controller": 0,
