@@ -270,6 +270,8 @@ else
   bad "a timed-out search is UNKNOWN(2), not a clean sweep" "rc=$RC; out: ${OUT:0:200}"
 fi
 
+# An org read that sees no Security issue at all is UNKNOWN (#3822), so each org fixture that is
+# about something else serves one that an open native blocker holds: read, and never a finding.
 # CONTROL: the same mocked page WITHOUT the timeout flag must be evaluated normally, so the
 # case above is proven to turn on incomplete_results rather than on the mock being rejected.
 # The org read is two reads (#3415): the open issues, then the open pull requests.
@@ -277,7 +279,7 @@ cat >"$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
   *is:pr*) echo '{"total_count":0,"incomplete_results":false,"items":[]}' ;;
-  *) echo '{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"labels":[{"name":"blocked"}],"type":null,"assignees":[],"issue_dependencies_summary":{"blocked_by":0},"sub_issues_summary":{"total":0,"completed":0},"body":"no blocker line"}]}' ;;
+  *) echo '{"total_count":2,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"labels":[{"name":"blocked"}],"type":null,"assignees":[],"issue_dependencies_summary":{"blocked_by":0},"sub_issues_summary":{"total":0,"completed":0},"body":"no blocker line"},{"repository_url":"https://api.github.com/repos/o/sec","number":99,"labels":[],"type":{"name":"Security"},"created_at":"2026-01-01T00:00:00Z","assignees":[],"issue_dependencies_summary":{"blocked_by":1},"sub_issues_summary":{"total":0,"completed":0},"body":"plain"}]}' ;;
 esac
 EOF
 chmod +x "$TMP/bin/gh"
@@ -297,8 +299,10 @@ fi
 for pr_status in 1 0; do
   cat >"$TMP/bin/gh" <<EOF
 #!/usr/bin/env bash
-echo '{"total_count":0,"incomplete_results":false,"items":[]}'
-case "\$*" in *is:pr*) exit $pr_status ;; esac
+case "\$*" in
+  *is:pr*) echo '{"total_count":0,"incomplete_results":false,"items":[]}'; exit $pr_status ;;
+  *) echo '{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/sec","number":99,"labels":[],"type":{"name":"Security"},"created_at":"2026-01-01T00:00:00Z","assignees":[],"issue_dependencies_summary":{"blocked_by":1},"sub_issues_summary":{"total":0,"completed":0},"body":"plain"}]}' ;;
+esac
 EOF
   chmod +x "$TMP/bin/gh"
   OUT="$(PATH="$TMP/bin:$PATH" "$CHECK" --org devantler-tech 2>&1)"
@@ -1049,7 +1053,7 @@ parked_gh() { # <comment count the pull request reports> <comment pages> [<comme
 #!/usr/bin/env bash
 case "\$*" in
   *is:pr*) echo '{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":7,"labels":[{"name":"blocked"}],"user":{"login":"renovate[bot]"},"comments":0,"body":"bump"}]}' ;;
-  *is:issue*) echo '{"total_count":0,"incomplete_results":false,"items":[]}' ;;
+  *is:issue*) echo '{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/sec","number":99,"labels":[],"type":{"name":"Security"},"created_at":"2026-01-01T00:00:00Z","assignees":[],"issue_dependencies_summary":{"blocked_by":1},"sub_issues_summary":{"total":0,"completed":0},"body":"plain"}]}' ;;
   "api repos/devantler-tech/r/issues/7 --paginate") echo '{"number":7,"comments":$1}' ;;
   "api repos/devantler-tech/r/issues/7/comments?per_page=100 --paginate") printf '%s\n' '$2'; exit ${3:-0} ;;
   *) echo "unexpected gh call: \$*" >&2; exit 9 ;;
