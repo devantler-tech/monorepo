@@ -351,9 +351,15 @@ first reports how the **previous** sweep of the lane ended, and exits `1` when i
 finished, is still running (no second sweep is started then) or none is on record. A supervisor still
 present after six hours is reported as **stuck** and continues to block a second sweep; inspect the
 named log, then use the reported `kill <pid>` command only after confirming it is not making progress,
-and run the launcher again. Launchers serialize through an atomic per-lane directory, so overlapping
+and run the launcher again. **Use a plain `kill`, never `kill -9`**: the supervisor stops its sweeper
+when it is asked to end, and `kill -9` leaves that sweeper running. A sweeper left running without
+its supervisor blocks a second sweep too, until it ends or you stop it with the command the launcher
+then reports, which stops the sweeper together with the cleanup it is running; stopped alone, it
+leaves that cleanup going, and the cleanup then blocks the sweep (#3823). Launchers serialize through
+an atomic per-lane directory, so overlapping
 dispatches cannot both start a sweep. An unreadable process table exits `2` and starts nothing because
-running versus gone is unproven; an unreadable record still starts a replacement. On a sweep `1` or
+running versus gone is unproven; an unreadable record still starts a replacement, unless a supervisor
+or sweeper of the lane is still running. On a sweep `1` or
 `2`, read the end of that log, record it in `needs_attention`, and escalate per
 *Maintainer channels* when it persists across runs after you have tried to resolve it; it never
 blocks the run. On a disk-preflight `1`, run
