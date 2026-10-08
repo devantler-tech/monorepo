@@ -22,16 +22,16 @@ for path in .gitmodules github/devantler-tech/.github-public github/devantler-te
   rm "$tmp/$path"
 done
 # Execute the actual pinned-checkout resolver, then inspect its consumer binding.
-ROOT="$root" node --input-type=module <<'NODE'
+# Use the runner's existing YAML tool: this guard runs before any npm install.
+CI_JOB_JSON="$(yq -o=json '.jobs."drift-check-active-projects"' "$root/.github/workflows/ci.yaml")"
+ROOT="$root" CI_JOB_JSON="$CI_JOB_JSON" node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 const root = process.env.ROOT;
-const { load } = createRequire(resolve(root, 'applications/business-site/docs/package.json'))('js-yaml');
-const job = load(readFileSync(resolve(root, '.github/workflows/ci.yaml'), 'utf8')).jobs['drift-check-active-projects'];
+const job = JSON.parse(process.env.CI_JOB_JSON);
 const checkout = job.steps.find(s => s.with?.repository === 'devantler-tech/.github');
 assert.ok(checkout, 'CI must check out the current automation owner');
 assert.equal(checkout.with.path, 'github/devantler-tech/.github-public');
