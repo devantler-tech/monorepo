@@ -994,6 +994,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      LC_ALL: C
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1011,8 +1013,15 @@ jobs:
       - name: Install dependencies
         working-directory: docs
         run: npm ci
+      - name: Build enabled preview
+        working-directory: docs
+        env:
+          FEATURE_PREVIEW_BANNER: "true"
+        run: npm run build
       - name: Build
         working-directory: docs
+        env:
+          FEATURE_PREVIEW_BANNER: "false"
         run: npm run build
 
   # The Audit step below is mirrored by .github/workflows/audit-docs.yaml, which runs it

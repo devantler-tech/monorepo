@@ -181,6 +181,16 @@ check() {
   ')" || violation "cannot read the lockfile compatibility installs" || return 1
   [ "${compatibility}" = "true" ] ||
     violation "ci.yaml:build-docs must clean-install with npm 11.4.2 before its current npm ci" || return 1
+  local preview_sequence
+  preview_sequence="$(yq -o=json '.' "${ci}" | jq -r '
+    .jobs["build-docs"].steps as $steps |
+    [range(0; $steps | length) | select($steps[.].run == "npm run build" and $steps[.].env.FEATURE_PREVIEW_BANNER == "true")] as $preview |
+    [range(0; $steps | length) | select($steps[.].run == "npm run build" and $steps[.].env.FEATURE_PREVIEW_BANNER == "false")] as $production |
+    ($preview | length) == 1 and ($production | length) == 1 and $preview[0] < $production[0] and
+    all(($preview + $production)[]; $steps[.] | .["working-directory"] == "docs" and .if == null and .["continue-on-error"] == null)
+  ')" || violation "cannot read the preview build sequence" || return 1
+  [ "${preview_sequence}" = "true" ] ||
+    violation "ci.yaml:build-docs must validate preview-on before preview-off without ignoring failures" || return 1
   # The test runs from the repository root: a step working in docs/ would make its own job one
   # this test requires to set up Node.
   gate="$(yq -r '
@@ -332,5 +342,18 @@ reset_fixture
 yq -i '(.jobs.changes.steps[] | select(.id == "filter") | .with.filters) |= (from_yaml | .docs-npm-toolchain -= [".github/workflows/**"] | to_yaml)' \
   "${fixture}/.github/workflows/ci.yaml"
 expect_failure "filter misses new workflows" "does not list .github/workflows/**"
+
+for broken_preview in \
+  '.jobs["build-docs"].steps |= map(select(.env.FEATURE_PREVIEW_BANNER != "true"))' \
+  '.jobs["build-docs"].steps |= map(select(.env.FEATURE_PREVIEW_BANNER != "false"))' \
+  '.jobs["build-docs"].steps |= map(if .env.FEATURE_PREVIEW_BANNER == "true" then .env.FEATURE_PREVIEW_BANNER = "false" else . end)' \
+  '.jobs["build-docs"].steps |= ([.[] | select(.env.FEATURE_PREVIEW_BANNER == null)] + [.[] | select(.env.FEATURE_PREVIEW_BANNER == "false")] + [.[] | select(.env.FEATURE_PREVIEW_BANNER == "true")])' \
+  '.jobs["build-docs"].steps |= map(if .env.FEATURE_PREVIEW_BANNER == "true" then .["continue-on-error"] = true else . end)' \
+  '.jobs["build-docs"].steps |= map(if .env.FEATURE_PREVIEW_BANNER == "true" then .if = "false" else . end)'; do
+  reset_fixture
+  yq -o=json '.' "${fixture}/.github/workflows/ci.yaml" | jq "$broken_preview" >"${fixture}/ci-broken.json"
+  yq -P '.' "${fixture}/ci-broken.json" >"${fixture}/.github/workflows/ci.yaml"
+  expect_failure "invalid preview build sequence" "must validate preview-on before preview-off"
+done
 
 printf 'docs npm toolchain: PASS\n'
