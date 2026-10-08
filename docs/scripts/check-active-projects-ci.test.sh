@@ -24,7 +24,7 @@ done
 # Execute the actual pinned-checkout resolver, then inspect its consumer binding.
 ROOT="$root" node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
@@ -36,7 +36,7 @@ const checkout = job.steps.find(s => s.with?.repository === 'devantler-tech/.git
 assert.ok(checkout, 'CI must check out the current automation owner');
 assert.equal(checkout.with.path, 'github/devantler-tech/.github-public');
 assert.equal(checkout.with['persist-credentials'], false);
-assert.match(checkout.with.ref, /^\$\{\{ steps\.[a-z-]+\.outputs\.sha \}\}$/);
+assert.match(checkout.with.ref, /^\$\{\{ steps\.[a-z-]+\.outputs\.revision \}\}$/);
 const id = checkout.with.ref.match(/steps\.([a-z-]+)\.outputs/)[1];
 const resolver = job.steps.find(s => s.id === id);
 assert.ok(resolver?.run, 'The checkout ref must come from an executed immutable resolver');
@@ -45,8 +45,18 @@ try {
   const output = resolve(dir, 'output');
   execFileSync('bash', ['-e', '-o', 'pipefail', '-c', resolver.run], { cwd: root, env: { ...process.env, GITHUB_OUTPUT: output } });
   const expected = execFileSync('git', ['--no-replace-objects', 'rev-parse', 'HEAD:github/devantler-tech/.github-public'], { cwd: root, encoding: 'utf8' }).trim();
-  assert.equal(readFileSync(output, 'utf8').trim(), `sha=${expected}`);
+  assert.equal(readFileSync(output, 'utf8').trim(), `revision=${expected}`);
   assert.match(expected, /^[0-9a-f]{40}$/);
+  // A blob also has a 40-character object ID, but is not a source gitlink.
+  const invalid = resolve(dir, 'ordinary-file');
+  mkdirSync(resolve(invalid, 'github/devantler-tech'), { recursive: true });
+  writeFileSync(resolve(invalid, 'github/devantler-tech/.github-public'), 'not a submodule\n');
+  execFileSync('git', ['init', '-q', invalid]);
+  execFileSync('git', ['-C', invalid, 'add', 'github/devantler-tech/.github-public']);
+  execFileSync('git', ['-C', invalid, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'ordinary file']);
+  assert.throws(() => execFileSync('bash', ['-e', '-o', 'pipefail', '-c', resolver.run], {
+    cwd: invalid, env: { ...process.env, GITHUB_OUTPUT: resolve(dir, 'invalid-output') }, stdio: 'pipe',
+  }), 'An ordinary committed blob must not be admitted as automation source');
 } finally { rmSync(dir, { recursive: true, force: true }); }
 NODE
 printf 'PASS: real catalogue CI selection and current-owner gitlink checkout\n'

@@ -1118,14 +1118,14 @@ jobs:
       - name: Resolve current automation gitlink
         id: automation-pin
         run: |
-          sha="$(git --no-replace-objects rev-parse HEAD:github/devantler-tech/.github-public)"
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+          read -r mode kind revision owner <<< "$(git --no-replace-objects ls-tree HEAD -- github/devantler-tech/.github-public)"
+          [[ "$mode" == 160000 && "$kind" == commit && "$revision" =~ ^[0-9a-f]{40}$ && "$owner" == github/devantler-tech/.github-public ]]
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
       - name: Checkout current shared automation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: devantler-tech/.github
-          ref: ${{ steps.automation-pin.outputs.sha }}
+          ref: ${{ steps.automation-pin.outputs.revision }}
           path: github/devantler-tech/.github-public
           persist-credentials: false
       - name: Check out retained legacy Actions submodule
