@@ -66,10 +66,7 @@ const resolver = job.steps.find(s => s.id === id);
 assert.ok(resolver?.run, 'The checkout ref must come from an executed immutable resolver');
 const dir = mkdtempSync(resolve(tmpdir(), 'active-projects-pin-'));
 try {
-  const output = resolve(dir, 'output');
-  execFileSync('bash', ['-e', '-o', 'pipefail', '-c', resolver.run], { cwd: root, env: { ...process.env, GITHUB_OUTPUT: output } });
   const expected = execFileSync('git', ['--no-replace-objects', 'rev-parse', 'HEAD:github/devantler-tech/.github-public'], { cwd: root, encoding: 'utf8' }).trim();
-  assert.equal(readFileSync(output, 'utf8').trim(), `revision=${expected}`);
   assert.match(expected, /^[0-9a-f]{40}$/);
   // A blob also has a 40-character object ID, but is not a source gitlink.
   const invalid = resolve(dir, 'ordinary-file');
@@ -78,9 +75,20 @@ try {
   execFileSync('git', ['init', '-q', invalid]);
   execFileSync('git', ['-C', invalid, 'add', 'github/devantler-tech/.github-public']);
   execFileSync('git', ['-C', invalid, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'ordinary file']);
-  assert.throws(() => execFileSync('bash', ['-e', '-o', 'pipefail', '-c', resolver.run], {
-    cwd: invalid, env: { ...process.env, GITHUB_OUTPUT: resolve(dir, 'invalid-output') }, stdio: 'pipe',
-  }), 'An ordinary committed blob must not be admitted as automation source');
+  // macOS system Bash 3.2 can ignore errexit for a failed compound [[ ... && ... ]].
+  // Execute the actual resolver with both shells even when PATH selects a newer Bash.
+  for (const shell of ['bash', '/bin/bash']) {
+    const output = resolve(dir, `output-${shell.replaceAll('/', '-')}`);
+    execFileSync(shell, ['-e', '-o', 'pipefail', '-c', resolver.run], {
+      cwd: root, env: { ...process.env, GITHUB_OUTPUT: output },
+    });
+    assert.equal(readFileSync(output, 'utf8').trim(), `revision=${expected}`);
+    const invalidOutput = resolve(dir, `invalid-output-${shell.replaceAll('/', '-')}`);
+    assert.throws(() => execFileSync(shell, ['-e', '-o', 'pipefail', '-c', resolver.run], {
+      cwd: invalid, env: { ...process.env, GITHUB_OUTPUT: invalidOutput }, stdio: 'pipe',
+    }), `${shell}: an ordinary committed blob must not be admitted as automation source`);
+    assert.throws(() => readFileSync(invalidOutput), { code: 'ENOENT' }, `${shell}: rejection must not emit a revision`);
+  }
 } finally { rmSync(dir, { recursive: true, force: true }); }
 NODE
 printf 'PASS: real catalogue CI selection and current-owner gitlink checkout\n'

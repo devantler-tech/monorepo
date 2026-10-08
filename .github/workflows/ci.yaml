@@ -1069,7 +1069,11 @@ jobs:
         id: automation-pin
         run: |
           read -r mode kind revision owner <<< "$(git --no-replace-objects ls-tree HEAD -- github/devantler-tech/.github-public)"
-          [[ "$mode" == 160000 && "$kind" == commit && "$revision" =~ ^[0-9a-f]{40}$ && "$owner" == github/devantler-tech/.github-public ]]
+          # Bash 3.2 does not reliably apply errexit to a compound [[ ... && ... ]].
+          if [[ "$mode" != 160000 || "$kind" != commit || ! "$revision" =~ ^[0-9a-f]{40}$ || "$owner" != github/devantler-tech/.github-public ]]; then
+            printf 'ERROR: committed automation source is not the expected gitlink\n' >&2
+            exit 1
+          fi
           printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
       - name: Checkout current shared automation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
