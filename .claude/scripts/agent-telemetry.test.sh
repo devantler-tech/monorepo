@@ -8091,6 +8091,68 @@ else
   bad "a session that evaluates text loses the prose label" \
       "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
 fi
+# A name-changing word that is only text one inert command prints changes nothing,
+# so it no longer removes the label for the whole session (#3666). The line that
+# names make was always listed and stays listed, now with the label.
+MK_OUT=$({
+  mk_cmd qa1 'gh pr checkout 40'
+  mk_cmd qa2 "printf 'alias echo=make'"
+  mk_cmd qa3 'echo "use eval, source and trap with care"'
+  mk_cmd qa4 "printf 'make the report clearer'"
+  mk_cmd qa5 'npm ci'
+} | mk_run makequotedmention)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qF "1 [prose?] printf 'alias echo=make'" <<<"$MK_OUT" \
+   && grep -qF "1 [prose?] printf 'make the report clearer'" <<<"$MK_OUT"; then
+  ok "a quoted mention of a name-changing word keeps the prose label and stays listed"
+else
+  bad "a quoted mention of a name-changing word keeps the prose label and stays listed" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
+# The mention still counts wherever something other than one inert command could
+# act on it: a quoted command word, a second command on the line, a redirect that
+# writes it to a file, ANSI-C quoting, and a line that starts inside an open quote.
+# Each case is its own session, and one run reads them all: the label is decided
+# per session, so every session must list its prose line without the label.
+MKM="$FIX/makemention"
+MKM_SLUG=$(printf '%s' "$MKM/nest" | sed 's|/|-|g')
+mkdir -p "$MKM/projects/$MKM_SLUG" "$MKM/codex" "$MKM/nest"
+MKM_N=0
+mk_mention_session() { # $1 = the line holding the mention, $2 = optional second line of the same call
+  local cmd="$1"
+  [[ $# -lt 2 ]] || cmd="$1"$'\n'"$2"
+  MKM_N=$((MKM_N+1))
+  {
+    mk_cmd "qb${MKM_N}a" 'gh pr checkout 41'
+    mk_cmd "qb${MKM_N}b" "$cmd"
+    mk_cmd "qb${MKM_N}c" "printf 'make the report clearer'"
+    mk_cmd "qb${MKM_N}d" 'npm ci'
+  } > "$MKM/projects/$MKM_SLUG/s$MKM_N.jsonl"
+}
+mk_mention_session "'eval' 'x=1'"
+mk_mention_session "'eval' 'x=1'; echo hi"
+mk_mention_session "printf 'alias echo=x'; eval y"
+mk_mention_session "printf 'alias echo=x' && source ./h.sh"
+mk_mention_session "echo 'alias printf=x' >> ~/.bashrc"
+mk_mention_session "echo 'alias printf=x' | tee -a ~/.bashrc"
+# In `$'a\'b'` the escaped quote does not close the string, which the walk cannot
+# see: it reads `; eval x; \` as quoted text, so the line is judged by the `$'`.
+mk_mention_session "echo \$'a\\'b'; eval x; \\'"
+mk_mention_session "echo 'open" "eval x'"
+# shellcheck disable=SC2016 # literal command text
+mk_mention_session 'echo "$(alias echo=x)"'
+mk_mention_session 'alias echo=x'
+MK_OUT=$(TZ=UTC CLAUDE_PROJECTS_DIR="$MKM/projects" CODEX_HOME="$MKM/codex" MONOREPO_DIR="$MKM/nest" \
+  HOME="$MKM" bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if [[ "$MKM_N" -eq 10 ]] \
+   && grep -qE '^ +10 npm ci$' <<<"$MK_OUT" \
+   && grep -qE "^ +10 printf 'make the report clearer'$" <<<"$MK_OUT" \
+   && ! grep -qF '[prose?]' <<<"$MK_OUT"; then
+  ok "a mention outside one inert command still removes the prose label for the session"
+else
+  bad "a mention outside one inert command still removes the prose label for the session" \
+      "got: $(grep -E '^ +[0-9]+ ' <<<"$MK_OUT" | head -8)"
+fi
 # An alias can point an innocent-looking later line at make, so the alias line is
 # listed itself; and the raw line is matched, so a `#` that is not a comment (an
 # extended glob) cannot hide the substitution after it.
