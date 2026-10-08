@@ -6,7 +6,18 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 guard="${GUARD:-$here/python-ban-guard.sh}"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "python-ban-guard-build-surfaces.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 fail=0
 count=0
 
@@ -62,4 +73,5 @@ check make-continuation Makefile $'check:\n\t@echo safe; \\\n\tpython3 --version
 check make-continuation-data Makefile $'check:\n\t@echo \\\n\tpython3 --version\n' 0
 
 printf 'Build surface entrypoint assertions: %s\n' "$count"
+completed=1
 exit "$fail"

@@ -14,7 +14,18 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script="$here/board-add.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "board-add.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 
 pass=0
 fail=0
@@ -604,4 +615,5 @@ run
 check "no args prints usage" 1 "$rc" "$out" "usage:"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
+completed=1
 [ "$fail" -eq 0 ]

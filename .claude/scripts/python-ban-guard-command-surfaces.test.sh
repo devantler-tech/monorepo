@@ -3,7 +3,18 @@
 set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "python-ban-guard-command-surfaces.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 mkdir -p "$tmp/tools"
 : >"$tmp/tools/check.sh"
 git -C "$tmp" init -q
@@ -34,4 +45,5 @@ check 'find ok command' 'find . -ok python3 --version '\'';'\''' 1
 check 'find okdir command' 'find . -okdir python3 --version '\'';'\''' 1
 check 'find predicate data' 'find . -name python3 -printf '\''python3 --version'\''' 0
 check 'find command argument data' 'find . -exec echo -exec python3 '\'';'\''' 0
+completed=1
 exit "$fail"

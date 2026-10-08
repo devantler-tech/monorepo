@@ -196,6 +196,7 @@ fi
 PIN_SOURCE=""       # where GITLINK came from; printed with every verdict
 ADOPTED_COMMIT=""   # the consumer commit whose gitlink is the adopted pin
 ADOPTED_BRANCH=""   # the remote's default branch, when it advertises one
+ADOPTED_URL=""      # the location git contacted for it, with no credentials in it
 WORKTREE_HEAD=""    # this working tree's HEAD commit
 WORKTREE_PIN=""     # the gitlink recorded at that commit
 WORKTREE_LINE=""    # the header line describing it
@@ -219,7 +220,9 @@ gitlink_at() {
 # `timeout` binary and its ssh configuration sets no connect timeout, so the bound is a bash-3.2
 # watchdog: the command gets its own process group (job control) and the whole group is signalled,
 # because git hands the transport to a helper (ssh, git-remote-https) that outlives a kill aimed at
-# git alone. Same mechanism as `bounded_remote` in worktree-claim.sh, where each step is explained.
+# git alone. The same function, statement for statement, as `bounded_remote` in worktree-claim.sh,
+# where each step is explained: this file's test fails when the two differ, so a fix to one cannot
+# miss the other (monorepo#3824).
 # GIT_TERMINAL_PROMPT=0 and BatchMode: an unattended run must get a failure, never a credential or
 # passphrase prompt it cannot answer.
 bounded_remote() {
@@ -228,14 +231,36 @@ bounded_remote() {
   local cmd_pid killer_pid rc=0 had_monitor=0
   # GIT_SSH_COMMAND outranks core.sshCommand and GIT_SSH, so setting it to plain `ssh` would
   # replace a transport the repository configured (a deploy key, a jump host) and every run
-  # would then end UNKNOWN. Start from whichever of the three git itself would have used.
-  local base_ssh="${GIT_SSH_COMMAND:-}"
-  [ -n "$base_ssh" ] || base_ssh="$(git -C "$REPO_ROOT" config --get core.sshCommand 2>/dev/null || true)"
+  # would then end UNKNOWN. Start from whichever of the three git itself would have used. Every
+  # caller bounds `git -C <repository> ...`, which is how that repository's own setting is found.
+  local base_ssh="${GIT_SSH_COMMAND:-}" repo="" variant="${GIT_SSH_VARIANT:-}" program
+  if [ "${1-}" = git ] && [ "${2-}" = -C ]; then repo="${3-}"; fi
+  if [ -z "$base_ssh" ] && [ -n "$repo" ]; then
+    base_ssh="$(git -C "$repo" config --get core.sshCommand 2>/dev/null || true)"
+  fi
   [ -n "$base_ssh" ] || base_ssh="${GIT_SSH:-ssh}"
+  # The two options added below are OpenSSH's. git also runs plink, putty and wrappers that take
+  # neither (ssh.variant), and such a transport fails every call it is handed them on. So they go
+  # only to a command git itself treats as OpenSSH: one declared so, or, undeclared, one named
+  # `ssh`. Any other runs exactly as configured, and the watchdog below is what bounds it.
+  if [ -z "$variant" ] && [ -n "$repo" ]; then
+    variant="$(git -C "$repo" config --get ssh.variant 2>/dev/null || true)"
+  fi
+  if [ -z "$variant" ] || [ "$variant" = auto ]; then
+    program="${base_ssh%% *}"
+    case "${program##*/}" in
+      ssh) variant=ssh ;;
+      *) variant=other ;;
+    esac
+  fi
   case "$-" in *m*) had_monitor=1 ;; esac
   set -m
-  GIT_TERMINAL_PROMPT=0 \
-    GIT_SSH_COMMAND="$base_ssh -o BatchMode=yes -o ConnectTimeout=$secs" "$@" &
+  if [ "$variant" = ssh ]; then
+    GIT_TERMINAL_PROMPT=0 \
+      GIT_SSH_COMMAND="$base_ssh -o BatchMode=yes -o ConnectTimeout=$secs" "$@" &
+  else
+    GIT_TERMINAL_PROMPT=0 "$@" &
+  fi
   cmd_pid=$!
   (
     sleep "$secs"
@@ -249,6 +274,48 @@ bounded_remote() {
   # TERM only asks. KILL reaps whatever in the group outlived the command.
   kill -KILL -"$cmd_pid" 2>/dev/null || true
   return "$rc"
+}
+
+# printable_url <url> — where the remote is, and nothing else. The pin source line is printed with
+# every verdict and copied into reports, and a URL has more than one place a token is written into:
+# the user and password before the host, the query, and the fragment. So this keeps what names the
+# repository — the scheme, the host with its port, and the path — and drops the rest, instead of
+# removing the places known to hold a secret. Of an scp-style `user@host:path` it keeps the host and
+# the path; a plain path is kept whole. Any byte that is not printable ASCII is printed as `?`, so
+# nothing in a URL can start a new line or move the cursor in the report it is copied into.
+# git also takes a location that is no URL at all: `<transport>::<address>` hands an address in a
+# form only that transport knows to a helper program, and `ext::<command>` is a command line. What
+# is safe to print of those cannot be told, so only the transport is printed. The same goes for
+# anything else that is not one of the forms above.
+printable_url() {
+  local url="$1" shown="" rest host path first
+  if [[ "$url" =~ ^([A-Za-z0-9][A-Za-z0-9+.-]*):: ]]; then
+    shown="${BASH_REMATCH[1]}::<address not shown>"
+  else
+    case "$url" in
+      *://*)
+        rest="${url#*://}"
+        host="${rest%%[/?#]*}"
+        path="${rest#"$host"}"
+        if [[ "${url%%://*}" =~ ^[A-Za-z][A-Za-z0-9+.-]*$ ]]; then
+          shown="${url%%://*}://${host##*@}${path%%[?#]*}"
+        fi
+        ;;
+      /* | ./* | ../*) shown="$url" ;;
+      *:*)
+        first="${url%%:*}"
+        host="${first##*@}"
+        case "$first" in
+          */*) shown="$url" ;;
+          *) if [[ "$host" =~ ^[A-Za-z0-9._-]+$ ]]; then shown="$host:${url#*:}"; fi ;;
+        esac
+        ;;
+      *) shown="$url" ;;
+    esac
+  fi
+  [ -n "$shown" ] || shown="<location not shown>"
+  printf '%s' "$shown" | LC_ALL=C tr -c '\040-\176' '?'
+  printf '\n'
 }
 
 # The tip of the remote's default branch, asked of the remote itself. A local remote-tracking ref is
@@ -269,6 +336,7 @@ resolve_adopted_from_remote() {
   local remote_url remote_dir remote_common own_common
   remote_url="$(git -C "$REPO_ROOT" ls-remote --get-url -- "$REMOTE" 2>/dev/null)" \
     || remote_url="$(git -C "$REPO_ROOT" config --get "remote.$REMOTE.url")"
+  ADOPTED_URL="$(printable_url "$remote_url")"
   remote_dir="$remote_url"
   case "$remote_dir" in
     file://localhost/*) remote_dir="${remote_dir#file://localhost}" ;;
@@ -286,7 +354,21 @@ resolve_adopted_from_remote() {
       die "remote '$REMOTE' points back at this repository, so it cannot show what the deployment adopted — the adopted pin is unknown${ADOPTED_RECOVERY}"
     fi
   fi
+  # http.followRedirects=false, here and on the fetch below: git follows a redirect of its first
+  # request by default, and the pin would then come from a location the pin source line does not
+  # name. A remote that redirects fails this read instead, and the verdict is UNKNOWN.
+  # A setting scoped to the URL (http.<url>.followRedirects) outranks the one given here, however
+  # it is given: git takes the closest match to the URL, not the last one read. So git is asked
+  # which value it will use for this URL, with the same setting passed, and anything but `false`
+  # is a read that may follow a redirect.
+  case "$remote_url" in
+    http://* | https://* | ftp://* | ftps://*)
+      [ "$(git -C "$REPO_ROOT" -c http.followRedirects=false config --get-urlmatch http.followRedirects "$remote_url" 2>/dev/null)" = false ] \
+        || die "the configuration of $REPO_ROOT lets a read of remote '$REMOTE' follow an HTTP redirect (an http.<url>.followRedirects setting), so the location the pin would come from cannot be named — the adopted pin is unknown${ADOPTED_RECOVERY}"
+      ;;
+  esac
   advertised="$(bounded_remote "$REMOTE_TIMEOUT_SECS" git -C "$REPO_ROOT" \
+      -c http.followRedirects=false \
       -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$REMOTE_TIMEOUT_SECS" \
       ls-remote --symref -- "$REMOTE" HEAD 2>/dev/null)" \
     || die "cannot read the default branch of remote '$REMOTE' from $REPO_ROOT within ${REMOTE_TIMEOUT_SECS}s — the adopted pin is unknown${ADOPTED_RECOVERY}"
@@ -304,6 +386,7 @@ resolve_adopted_from_remote() {
     # being readable afterwards is. --no-auto-maintenance: the repository is shared by every
     # session, and this check promises to add objects and nothing else.
     bounded_remote "$REMOTE_TIMEOUT_SECS" git -C "$REPO_ROOT" \
+      -c http.followRedirects=false \
       -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$REMOTE_TIMEOUT_SECS" \
       fetch --quiet --no-tags --no-recurse-submodules --no-auto-maintenance \
       --no-write-fetch-head --refmap= -- "$REMOTE" "$ADOPTED_COMMIT" >/dev/null 2>&1 || true
@@ -327,7 +410,10 @@ else
     PIN_SOURCE="caller-named — the gitlink at $ADOPTED_REF ($ADOPTED_COMMIT), named by --adopted-ref and NOT refreshed by this check"
   else
     resolve_adopted_from_remote
-    PIN_SOURCE="adopted — the gitlink at $REMOTE ${ADOPTED_BRANCH:-HEAD} ($ADOPTED_COMMIT), read from the remote by this check"
+    # The name alone does not say which repository answered: a url.<base>.insteadOf rewrite sends
+    # `origin` somewhere else while the name stays `origin`. So the line carries the location git
+    # contacted.
+    PIN_SOURCE="adopted — the gitlink at $REMOTE ${ADOPTED_BRANCH:-HEAD} ($ADOPTED_COMMIT), read from the remote by this check at $ADOPTED_URL"
   fi
   GITLINK="$(gitlink_at "$ADOPTED_COMMIT")" \
     || die "cannot read the tree of the adopted revision $ADOPTED_COMMIT in $REPO_ROOT — the adopted pin is unknown${ADOPTED_RECOVERY}"

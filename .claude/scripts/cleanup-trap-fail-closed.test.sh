@@ -222,6 +222,7 @@ converted_scripts="
 memory-backup.sh|
 memory-hygiene.sh|
 memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups
+hypothesis-id-reserve.test.sh|
 review-lane-health.sh|--now 1
 review-no-gate-guard.sh|
 claude-lane-liveness.sh|--store $tmp/converted/store.json --projects $tmp/converted/projects
@@ -240,6 +241,22 @@ worktree-claim.sh|check $tmp/converted/absent-worktree cleanup-trap-test
 branch-op-lock.sh|run $tmp/converted/lockrepo -- true
 agent-issue-board-sweep.sh|--author cleanup-trap-test
 claude-dispatch-rate.sh|--task alpha --since 1970-01-02T00:00:00Z --until 1970-01-02T06:00:00Z --now-epoch 172800 --store $tmp/converted/store.json --projects $tmp/converted/projects
+board-add.test.sh|
+board-archive.test.sh|
+branch-cleanup.test.sh|
+ci-aggregate-contract.test.sh|
+flow-scorecard.test.sh|
+memory-backup.test.sh|
+memory-rewrite.test.sh|
+platform-live-health.test.sh|
+python-ban-guard-build-surfaces.test.sh|
+python-ban-guard-command-surfaces.test.sh|
+python-ban-guard-symlinks.test.sh|
+python-ban-guard-wrappers.test.sh|
+python-ban-guard.test.sh|
+review-lane-health.test.sh|
+safe-clone.test.sh|
+unsigned-push-guard.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"

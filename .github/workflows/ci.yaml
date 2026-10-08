@@ -64,6 +64,7 @@ jobs:
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
       claude-lane-liveness: ${{ steps.filter.outputs.claude-lane-liveness }}
       claude-task-live-runs: ${{ steps.filter.outputs.claude-task-live-runs }}
+      hypothesis-id-reserve: ${{ steps.filter.outputs.hypothesis-id-reserve }}
       sibling-lane-watch: ${{ steps.filter.outputs.sibling-lane-watch }}
       claude-dispatch-rate: ${{ steps.filter.outputs.claude-dispatch-rate }}
       review-lane-health: ${{ steps.filter.outputs.review-lane-health }}
@@ -75,6 +76,7 @@ jobs:
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       gh-json-vocabulary-contract: ${{ steps.filter.outputs.gh-json-vocabulary-contract }}
       gh-json-read: ${{ steps.filter.outputs.gh-json-read }}
+      graphql-availability: ${{ steps.filter.outputs.graphql-availability }}
       squash-closing-keywords: ${{ steps.filter.outputs.squash-closing-keywords }}
       merge-preflight-thread-gate: ${{ steps.filter.outputs.merge-preflight-thread-gate }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
@@ -217,6 +219,7 @@ jobs:
               - '.claude/scripts/memory-backup.sh'
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-rewrite.sh'
+              - '.claude/scripts/hypothesis-id-reserve.test.sh'
               - '.claude/scripts/review-lane-health.sh'
               - '.claude/scripts/review-no-gate-guard.sh'
               - '.claude/scripts/claude-lane-liveness.sh'
@@ -235,6 +238,22 @@ jobs:
               - '.claude/scripts/branch-op-lock.sh'
               - '.claude/scripts/agent-issue-board-sweep.sh'
               - '.claude/scripts/claude-dispatch-rate.sh'
+              - '.claude/scripts/board-add.test.sh'
+              - '.claude/scripts/board-archive.test.sh'
+              - '.claude/scripts/branch-cleanup.test.sh'
+              - '.claude/scripts/ci-aggregate-contract.test.sh'
+              - '.claude/scripts/flow-scorecard.test.sh'
+              - '.claude/scripts/memory-backup.test.sh'
+              - '.claude/scripts/memory-rewrite.test.sh'
+              - '.claude/scripts/platform-live-health.test.sh'
+              - '.claude/scripts/python-ban-guard-build-surfaces.test.sh'
+              - '.claude/scripts/python-ban-guard-command-surfaces.test.sh'
+              - '.claude/scripts/python-ban-guard-symlinks.test.sh'
+              - '.claude/scripts/python-ban-guard-wrappers.test.sh'
+              - '.claude/scripts/python-ban-guard.test.sh'
+              - '.claude/scripts/review-lane-health.test.sh'
+              - '.claude/scripts/safe-clone.test.sh'
+              - '.claude/scripts/unsigned-push-guard.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -655,6 +674,8 @@ jobs:
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/plugin-definition-currency.sh'
               - '.claude/scripts/plugin-definition-currency.test.sh'
+              # The test compares this script's bounded remote call with the claim helper's copy.
+              - '.claude/scripts/worktree-claim.sh'
               - '.github/workflows/ci.yaml'
             run-affected-tests:
               - '.claude/scripts/run-affected-tests.sh'
@@ -689,6 +710,12 @@ jobs:
               - '.claude/guides/cadence.md'
               - '.claude/scripts/claude-task-live-runs.sh'
               - '.claude/scripts/claude-task-live-runs.test.sh'
+              - '.github/workflows/ci.yaml'
+            hypothesis-id-reserve:
+              # The durable-memory guide states the rule the suite's contract section pins.
+              - '.claude/guides/durable-memory.md'
+              - '.claude/scripts/hypothesis-id-reserve.sh'
+              - '.claude/scripts/hypothesis-id-reserve.test.sh'
               - '.github/workflows/ci.yaml'
             sibling-lane-watch:
               # AGENTS.md and the maintainer-channels guide carry the rule the suite's contract
@@ -843,6 +870,13 @@ jobs:
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/gh-json-read.sh'
               - '.claude/scripts/gh-json-read.test.sh'
+              - '.github/workflows/ci.yaml'
+            graphql-availability:
+              # The suite asserts the merge policy keeps naming the GraphQL-unavailable state.
+              - 'AGENTS.md'
+              - '.claude/guides/**'
+              - '.claude/scripts/graphql-availability.sh'
+              - '.claude/scripts/graphql-availability.test.sh'
               - '.github/workflows/ci.yaml'
             squash-closing-keywords:
               - '.claude/scripts/squash-closing-keywords.sh'
@@ -2480,6 +2514,25 @@ jobs:
       - name: Verify the same-task live-run check
         run: bash .claude/scripts/claude-task-live-runs.test.sh
 
+  test-hypothesis-id-reserve:
+    name: Test hypothesis identifier reservation
+    needs: changes
+    if: needs.changes.outputs.hypothesis-id-reserve == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the hypothesis identifier reservation
+        run: bash .claude/scripts/hypothesis-id-reserve.test.sh
+
   test-sibling-lane-watch:
     name: Test sibling lane watch
     needs: changes
@@ -2782,6 +2835,25 @@ jobs:
           persist-credentials: false
       - name: Verify the gh JSON read helper
         run: bash .claude/scripts/gh-json-read.test.sh
+
+  test-graphql-availability:
+    name: Test GraphQL availability probe
+    needs: changes
+    if: needs.changes.outputs.graphql-availability == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the GraphQL availability probe
+        run: bash .claude/scripts/graphql-availability.test.sh
 
   test-squash-closing-keywords:
     name: Test squash closing-keyword guard
@@ -3107,6 +3179,7 @@ jobs:
       - test-codex-lane-liveness
       - test-claude-lane-liveness
       - test-claude-task-live-runs
+      - test-hypothesis-id-reserve
       - test-sibling-lane-watch
       - test-claude-dispatch-rate
       - test-review-lane-health
@@ -3121,6 +3194,7 @@ jobs:
       - test-merge-confirmation-read
       - test-gh-json-vocabulary-contract
       - test-gh-json-read
+      - test-graphql-availability
       - test-squash-closing-keywords
       - test-improver-role-disclosure
       - test-merge-preflight-thread-gate
@@ -3200,6 +3274,7 @@ jobs:
             ${{ needs.test-codex-lane-liveness.result }}
             ${{ needs.test-claude-lane-liveness.result }}
             ${{ needs.test-claude-task-live-runs.result }}
+            ${{ needs.test-hypothesis-id-reserve.result }}
             ${{ needs.test-sibling-lane-watch.result }}
             ${{ needs.test-claude-dispatch-rate.result }}
             ${{ needs.test-review-lane-health.result }}
@@ -3214,6 +3289,7 @@ jobs:
             ${{ needs.test-merge-confirmation-read.result }}
             ${{ needs.test-gh-json-vocabulary-contract.result }}
             ${{ needs.test-gh-json-read.result }}
+            ${{ needs.test-graphql-availability.result }}
             ${{ needs.test-squash-closing-keywords.result }}
             ${{ needs.test-improver-role-disclosure.result }}
             ${{ needs.test-merge-preflight-thread-gate.result }}
