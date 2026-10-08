@@ -58,7 +58,9 @@ issue has no blocked label; "**Blocker:** none ..." declares none and is skipped
 
 An UNRECORDED row is a Security issue that has gone unstarted for longer than
 the bound with nothing on record to explain it. Unstarted: no open sub-issue,
-and no open pull request mentions it (a dependency bot's pull request, hidden
+and no open pull request refers to it in its title or body (a number in running
+prose is not a reference: a bare #N counts after a word such as Fixes, Part of
+or Refs, or in parentheses in a title; a dependency bot's pull request, hidden
 text and a "Deferred:" line do not count). Nothing on record: no blocked label,
 no declared blocker and no open native blocker. An assignee is not a start,
 because a claim lapses after about two hours; such a row is marked [assigned].
@@ -583,9 +585,11 @@ func askDigestReport(rows []askRow) string {
 }
 
 type issue struct {
-	Repo          string `json:"repo"`
-	Number        int64  `json:"number"`
-	Body          string `json:"body"`
+	Repo   string `json:"repo"`
+	Number int64  `json:"number"`
+	Body   string `json:"body"`
+	// Title is read only on a pull request, for the issues it names (see mentioned).
+	Title         string `json:"title"`
 	RepositoryURL string `json:"repository_url"`
 	CreatedAt     string `json:"created_at"`
 	// Labels is nil when the record carries no "labels" array at all. Only an
@@ -679,16 +683,24 @@ var (
 	deferredRE = regexp.MustCompile(`(?mi)^[\t ]*([-*+][\t ]+)?Deferred:.*$`)
 )
 
-// mentioned reports whether an open pull request refers to the issue: a bare
-// #N from its own repository, or <owner>/<repo>#N or .../<repo>/issues/N from
-// anywhere. A mention counts without a closing keyword, because a pull request
-// that says "Part of #N" is work on the issue too. Bodies are untrusted and
-// are only matched against the issue's own name and number, and only where
+// referenceWords are the words that make the number after them a reference:
+// the forge's closing keywords and the linking words pull requests here use.
+// A bare #N counts only straight after one, so a number in running prose
+// ("we chose option #7") names no issue (#3822).
+const referenceWords = `close[sd]?|fix(?:e[sd])?|resolve[sd]?|part of|refs?|references|related to|relates to|addresses|implements|towards|tracks|see`
+
+// mentioned reports whether an open pull request refers to the issue, in its
+// title or its body: <owner>/<repo>#N or .../<repo>/issues/N from anywhere, or
+// a bare #N from its own repository where the text is built as a reference.
+// A reference counts without a closing keyword, because a pull request that
+// says "Part of #N" is work on the issue too. Titles and bodies are untrusted
+// and are only matched against the issue's own name and number, and only where
 // the text can be a reference of ours:
 //   - a dependency bot's pull request is skipped, and so are hidden text and
 //     Deferred lines;
-//   - a bare # is not one that ends a repository name, an HTML entity
-//     (&#8203;1403) or the text of an anchor (">#32598</a>");
+//   - a bare #N follows a reference word on the same line, directly or as a
+//     later item of the list that word opens ("Fixes #7, #N"); in a title it
+//     may also stand in parentheses on its own, as in "fix: ... (#N)";
 //   - the number is not the start of a longer one or of a hex colour (#42a5f5);
 //   - under --org a qualified reference must name that org, so another
 //     owner's repository of the same name does not count.
@@ -699,14 +711,23 @@ func mentioned(item issue, pulls []issue, org string) bool {
 		owner = regexp.QuoteMeta(org)
 	}
 	end := `($|[^0-9A-Za-z_])`
-	bare := regexp.MustCompile(`(^|[^A-Za-z0-9._/&>-])#` + number + end)
+	// The items a reference word's list may hold before ours, each followed by
+	// its separator. A qualified item is passed over here and never matched as
+	// ours: that is the qualified expression's to decide.
+	earlier := `(?:(?:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?#[0-9]+(?:[\t ]*[,&][\t ]*|[\t ]+and[\t ]+|[\t ]+))*`
+	bare := regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_])(?:` + referenceWords + `)[*_:]*[\t ]+` + earlier + `#` + number + end)
+	parenthesised := regexp.MustCompile(`\((?:#[0-9]+[\t ]*,[\t ]*)*#` + number + `(?:[\t ]*,[\t ]*#[0-9]+)*\)`)
 	qualified := regexp.MustCompile(`(?i)(^|[^A-Za-z0-9._-])` + owner + `/` + regexp.QuoteMeta(item.Repo) + `(#|/issues/)` + number + end)
 	for _, pull := range pulls {
 		if dependencyBots[pull.User.Login] {
 			continue
 		}
-		text := deferredRE.ReplaceAllString(hiddenRE.ReplaceAllString(pull.Body, ""), "")
-		if qualified.MatchString(text) || (strings.EqualFold(pull.Repo, item.Repo) && bare.MatchString(text)) {
+		body := deferredRE.ReplaceAllString(hiddenRE.ReplaceAllString(pull.Body, ""), "")
+		if qualified.MatchString(pull.Title) || qualified.MatchString(body) {
+			return true
+		}
+		if strings.EqualFold(pull.Repo, item.Repo) &&
+			(bare.MatchString(body) || bare.MatchString(pull.Title) || parenthesised.MatchString(pull.Title)) {
 			return true
 		}
 	}
@@ -981,6 +1002,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return emit(digest, 1)
 		}
 		return emit(digest, 0)
+	}
+	// Across a whole organisation, no issue of the type at all is far more
+	// likely a type that was renamed or is hidden from this token than a
+	// portfolio that has none, and the report would print "none unstarted" over
+	// issues it never saw (#3822). A recorded input holds what its author chose.
+	if o.org != "" && examined == 0 {
+		return unknown(fmt.Errorf("read no open %s issue across %s: the type may be renamed or hidden from this token, so none unstarted is unproven -- UNKNOWN", unrecordedType, o.org))
 	}
 	// Builder writes cannot fail. Check the external writer once the complete
 	// report is ready, so an undelivered report never returns a valid verdict.
