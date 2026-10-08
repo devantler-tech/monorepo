@@ -2415,6 +2415,9 @@ jobs:
           ref: ${{ steps.site-pin.outputs.revision }}
           path: applications/business-site
           persist-credentials: false
+      - name: Install macOS verification tools
+        if: matrix.os == 'macos-latest'
+        run: brew install shellcheck yq
       - name: Verify the real source checkout and selection
         run: |
           shellcheck .claude/scripts/business-site-ci.test.sh

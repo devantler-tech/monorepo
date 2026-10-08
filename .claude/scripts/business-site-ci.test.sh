@@ -23,7 +23,7 @@ for path in .gitmodules github/devantler-tech/.github-public github/devantler-te
 done
 # Execute the actual pinned-checkout resolver, then inspect its consumer binding.
 # Use the runner's existing YAML tool: this guard runs before any npm install.
-CI_JOB_JSON="$(yq -o=json '.jobs."drift-check-active-projects"' "$root/.github/workflows/ci.yaml")"
+CI_JOB_JSON="$(yq -o=json '.jobs | {"catalogue": ."drift-check-active-projects", "runner": ."test-run-affected-tests"}' "$root/.github/workflows/ci.yaml")"
 ROOT="$root" CI_JOB_JSON="$CI_JOB_JSON" node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -31,7 +31,31 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 const root = process.env.ROOT;
-const job = JSON.parse(process.env.CI_JOB_JSON);
+const { catalogue: job, runner } = JSON.parse(process.env.CI_JOB_JSON);
+// Hosted macOS does not provide these tools; require setup before the real guard.
+function verifyRunnerTools(candidate) {
+  const verification = candidate.steps.findIndex(s => s.run?.includes('shellcheck .claude/scripts/business-site-ci.test.sh'));
+  const setup = candidate.steps.findIndex(s => s.run === 'brew install shellcheck yq');
+  assert.ok(setup >= 0 && setup < verification, 'macOS tools must be installed before checkout verification');
+  const step = candidate.steps[setup];
+  assert.equal(step.if, "matrix.os == 'macos-latest'", 'Tool setup must run on the macOS matrix leg');
+  assert.ok(step['continue-on-error'] === undefined || step['continue-on-error'] === false, 'Tool setup must fail closed');
+}
+verifyRunnerTools(runner);
+const setupIndex = runner.steps.findIndex(s => s.run === 'brew install shellcheck yq');
+for (const mutation of [
+  candidate => candidate.steps.splice(setupIndex, 1),
+  candidate => candidate.steps.push(...candidate.steps.splice(setupIndex, 1)),
+  candidate => { candidate.steps[setupIndex].if = 'false'; },
+  candidate => { candidate.steps[setupIndex]['continue-on-error'] = true; },
+]) {
+  const candidate = structuredClone(runner);
+  mutation(candidate);
+  assert.throws(() => verifyRunnerTools(candidate));
+}
+const explicitFalse = structuredClone(runner);
+explicitFalse.steps[setupIndex]['continue-on-error'] = false;
+verifyRunnerTools(explicitFalse);
 const checkout = job.steps.find(s => s.with?.repository === 'devantler-tech/.github');
 assert.ok(checkout, 'CI must check out the current automation owner');
 assert.equal(checkout.with.path, 'github/devantler-tech/.github-public');
