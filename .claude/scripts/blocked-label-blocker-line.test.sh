@@ -22,9 +22,10 @@ completed=0
 on_exit() {
   local status=$?
   rm -rf "$TMP"
-  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+  if [ "${completed}" != 1 ]; then
     echo "blocked-label-blocker-line.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
-    exit 1
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
   fi
 }
 trap on_exit EXIT
