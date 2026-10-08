@@ -10,6 +10,13 @@ description: "The ADVANCE playbook for the Agentic Engineer (the products' prima
 > repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
 > deltas here; never add a second copy of generic behaviour.
 
+Read the canonical `product-engineering` skill from the same resolved reviewed source before
+applying this deployment's deltas. Its source path is
+[`plugins/agentic-engineering/skills/product-engineering/SKILL.md`](../../../libraries/agent-plugins/plugins/agentic-engineering/skills/product-engineering/SKILL.md)
+at the adopted plugin gitlink. Use the reviewed-source resolution in the
+[definition guide](../../guides/definition-and-plugin.md); an installed cache or a floating checkout
+does not replace that source. The consumer contract governs deployment controls and artifact format.
+
 This is the *advance* half of the role. The **operate** half (keep everything healthy) and the run
 loop live in [`portfolio-maintenance`](../portfolio-maintenance/SKILL.md); the binding rules live in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) and the agent guides it indexes — for advance work the
@@ -245,31 +252,27 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    (definition PRs included: their separate promotion gate was retired 2026-07-18).
 
 ## 4. Test coverage
-Raise coverage where it *matters*, not for a vanity number.
-- **Find gaps:** Go — `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out` (per-func
-  %); .NET — `dotnet test --collect:"XPlat Code Coverage"`; TS/Svelte — `vitest run --coverage`. Target
-  under-tested **critical paths** (error handling, edge cases, regressions), not getters/scaffolding.
-- **Add meaningful tests:** assert real behaviour and boundaries; reproduce a past bug as a regression
-  test. **Never** weaken an assertion, add a vacuous test, or `t.Skip`/`[Fact(Skip=…)]` to make
-  numbers move. A coverage PR with weak tests is worse than none.
+Follow the canonical skill's
+[Test coverage](../../../libraries/agent-plugins/plugins/agentic-engineering/skills/product-engineering/SKILL.md#4-test-coverage)
+procedure, including its incomplete-observation regression guidance.
+Deployment tooling: Go — `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`
+(per-function coverage); .NET — `dotnet test --collect:"XPlat Code Coverage"`;
+TS/Svelte — `vitest run --coverage`. Each product's maintenance contract selects the applicable command.
 
 ## 5. Benchmarking & performance
-Optimise with evidence, never by guesswork.
-- **Baseline first:** Go — `go test -bench . -benchmem` (+ `pprof` for hotspots); .NET — BenchmarkDotNet;
-  CLI/build — wall-clock + CI duration; site — built bundle size / Lighthouse. Capture the *before*.
-- **Find the real hotspot** (profile; don't assume), change one thing, **re-measure**, and put
-  **before/after numbers in the PR body**. Keep behaviour identical (a perf PR is not a feature PR);
-  back it with the existing tests + a benchmark. Skip evidence-free micro-optimisation.
+Follow the canonical skill's
+[Benchmarking & performance](../../../libraries/agent-plugins/plugins/agentic-engineering/skills/product-engineering/SKILL.md#5-benchmarking--performance)
+procedure. Deployment tooling: Go — `go test -bench . -benchmem` and `pprof`;
+.NET — BenchmarkDotNet; CLI/build — wall-clock and CI duration; site — built bundle size and Lighthouse.
+This deployment's PM-facing artifact contract puts detailed measurements in the readiness comment;
+the PR body follows the organization template.
 
 ## 6. Refactoring & code quality
-Targeted, **behaviour-preserving** improvement, backed by tests.
-- Cut duplication and cyclomatic complexity, modernise idioms, tighten types/error handling, improve
-  names and module boundaries, delete dead code. Use `engineering:tech-debt` to pick the
-  highest-leverage target.
-- **Never mix a refactor with a behaviour change** in one PR — reviewers must be able to trust the diff
-  is a no-op. Keep diffs reviewable (split large refactors into incremental PRs). Run the linter/formatter
-  (`golangci-lint`, `dotnet format`, `actionlint`, the repo's formatter) and the full test suite before
-  the PR; if tests are thin in the area, add them *first* (a separate PR) so the refactor is safe.
+Follow the canonical skill's
+[Refactoring & code quality](../../../libraries/agent-plugins/plugins/agentic-engineering/skills/product-engineering/SKILL.md#6-refactoring--code-quality)
+procedure, including its tool-maturation and independent-reuse decisions.
+Deployment lint and formatter tools include `golangci-lint`, `dotnet format`, `actionlint`, and the
+repository's formatter; each product's maintenance contract remains authoritative for validation.
 
 ## 7. Documentation
 Treat docs as part of the product — keep them **in sync** with what ships and **improve** what exists.
