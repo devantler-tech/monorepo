@@ -64,6 +64,7 @@ jobs:
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
       claude-lane-liveness: ${{ steps.filter.outputs.claude-lane-liveness }}
       claude-task-live-runs: ${{ steps.filter.outputs.claude-task-live-runs }}
+      hypothesis-id-reserve: ${{ steps.filter.outputs.hypothesis-id-reserve }}
       sibling-lane-watch: ${{ steps.filter.outputs.sibling-lane-watch }}
       claude-dispatch-rate: ${{ steps.filter.outputs.claude-dispatch-rate }}
       review-lane-health: ${{ steps.filter.outputs.review-lane-health }}
@@ -213,6 +214,7 @@ jobs:
               - '.claude/scripts/memory-backup.sh'
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-rewrite.sh'
+              - '.claude/scripts/hypothesis-id-reserve.test.sh'
               - '.claude/scripts/review-lane-health.sh'
               - '.claude/scripts/review-no-gate-guard.sh'
               - '.claude/scripts/claude-lane-liveness.sh'
@@ -703,6 +705,12 @@ jobs:
               - '.claude/guides/cadence.md'
               - '.claude/scripts/claude-task-live-runs.sh'
               - '.claude/scripts/claude-task-live-runs.test.sh'
+              - '.github/workflows/ci.yaml'
+            hypothesis-id-reserve:
+              # The durable-memory guide states the rule the suite's contract section pins.
+              - '.claude/guides/durable-memory.md'
+              - '.claude/scripts/hypothesis-id-reserve.sh'
+              - '.claude/scripts/hypothesis-id-reserve.test.sh'
               - '.github/workflows/ci.yaml'
             sibling-lane-watch:
               # AGENTS.md and the maintainer-channels guide carry the rule the suite's contract
@@ -2482,6 +2490,25 @@ jobs:
       - name: Verify the same-task live-run check
         run: bash .claude/scripts/claude-task-live-runs.test.sh
 
+  test-hypothesis-id-reserve:
+    name: Test hypothesis identifier reservation
+    needs: changes
+    if: needs.changes.outputs.hypothesis-id-reserve == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the hypothesis identifier reservation
+        run: bash .claude/scripts/hypothesis-id-reserve.test.sh
+
   test-sibling-lane-watch:
     name: Test sibling lane watch
     needs: changes
@@ -3128,6 +3155,7 @@ jobs:
       - test-codex-lane-liveness
       - test-claude-lane-liveness
       - test-claude-task-live-runs
+      - test-hypothesis-id-reserve
       - test-sibling-lane-watch
       - test-claude-dispatch-rate
       - test-review-lane-health
@@ -3222,6 +3250,7 @@ jobs:
             ${{ needs.test-codex-lane-liveness.result }}
             ${{ needs.test-claude-lane-liveness.result }}
             ${{ needs.test-claude-task-live-runs.result }}
+            ${{ needs.test-hypothesis-id-reserve.result }}
             ${{ needs.test-sibling-lane-watch.result }}
             ${{ needs.test-claude-dispatch-rate.result }}
             ${{ needs.test-review-lane-health.result }}

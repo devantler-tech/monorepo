@@ -222,6 +222,7 @@ converted_scripts="
 memory-backup.sh|
 memory-hygiene.sh|
 memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups
+hypothesis-id-reserve.test.sh|
 review-lane-health.sh|--now 1
 review-no-gate-guard.sh|
 claude-lane-liveness.sh|--store $tmp/converted/store.json --projects $tmp/converted/projects
