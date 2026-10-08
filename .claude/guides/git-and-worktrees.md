@@ -54,7 +54,13 @@ own; when `lsof` cannot answer, the claim fails closed (#2724). **Only exit 0 au
 every non-zero status (exit 3 or an acquisition/validation failure) means stand down.** `check` is
 read-only diagnosis and does not reserve the worktree. Renew a long-running claim by calling
 `acquire` with the same owner at least hourly. A stale marker must not park a worktree permanently
-(#2284). **Submodule worktree isolation breaks whenever a submodule is initialised** — a
+(#2284). **When a worktree works on a pull request from a branch that is not that pull request's head
+branch** (a repair you prepare on a branch of your own before it reaches the head), name the pull
+request in the claim before your first edit:
+`.claude/scripts/worktree-claim.sh acquire <wt> <session-owner-token> --serves <owner>/<repo>#<n>`.
+The `holder=` signal matches a checkout to a pull request by its head branch, so without that line
+your repair reads `holder=none` to every other session until you push (#3987). The name lasts as long
+as the claim: renew it hourly with the plain `acquire`, which keeps it. **Submodule worktree isolation breaks whenever a submodule is initialised** — a
 stray shared `core.worktree` makes `git worktree add` resolve back into the main checkout, silently
 collapsing every parallel session into one physical tree.
 
