@@ -380,7 +380,8 @@ staged="${sandbox}/staged"
 locked_submodule "${staged}" product claude/product-110 "${sandbox}/staged-wt"
 g -C "${staged}" rm -q --cached product
 g config -f "${staged}/.gitmodules" --remove-section submodule.product
-if g -C "${staged}" ls-files -s | grep -q '^160000 ' || [ ! -e "${staged}/product/.git" ] ||
+staged_index="$(g -C "${staged}" ls-files -s)"
+if grep -q "^160000 " <<<"${staged_index}" || [ ! -e "${staged}/product/.git" ] ||
   g config -f "${staged}/.gitmodules" --get-regexp '^submodule\.' >/dev/null 2>&1; then
   echo "FAIL fixture: a list of paths still names the submodule staged for deletion, or its directory is gone" >&2
   exit 1
