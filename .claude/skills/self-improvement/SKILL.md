@@ -19,6 +19,9 @@ never substitute a floating checkout or an installed cache. Missing canonical so
 procedure unavailable; continue unrelated authorised work.
 Missing experimental companion resources hold only the replacement; routine corrections remain available.
 
+For authorized third-party PRs, the reviewed plugin's
+`portfolio-maintenance/references/upstream-contributions.md` governs the separate upstream review handoff.
+
 Use that procedure for capture, entry schema, distillation, replacement evaluation, examples and
 genuine readiness. Apply the following deployment facts and constraints alongside it.
 

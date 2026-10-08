@@ -10,6 +10,9 @@ description: "The ADVANCE playbook for the Agentic Engineer (the products' prima
 > repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
 > deltas here; never add a second copy of generic behaviour.
 
+For authorized third-party PRs, the reviewed plugin's
+`portfolio-maintenance/references/upstream-contributions.md` governs instead of the portfolio review and promotion rules below.
+
 This is the *advance* half of the role. The **operate** half (keep everything healthy) and the run
 loop live in [`portfolio-maintenance`](../portfolio-maintenance/SKILL.md); the binding rules live in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) and the agent guides it indexes — for advance work the

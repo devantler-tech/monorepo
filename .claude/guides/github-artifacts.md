@@ -62,8 +62,13 @@
   external write, record both the necessity and why no change inside `devantler-tech` can deliver the
   needed outcome on the in-portfolio issue that owns the work. Keep the contribution minimal,
   accurate, actionable, validated to the target project's standards, and free of portfolio-private
-  information. The permitted writes are issues, pull requests, comments/reviews, and the minimum fork
-  or branch push needed to propose a pull request; never merge or administer an external repository.
+  information. Follow the reviewed plugin's `portfolio-maintenance/references/upstream-contributions.md`
+  for the separate Ready for Review handoff. Keep internal reviews private; routine PR updates change
+  only its title and description. Do not post self-reviews, readiness receipts or review-bot requests.
+  Address feedback received from the upstream maintainer or their tools and reply in the contributor's
+  voice in plain English. Resolve a thread only after its feedback is addressed. The permitted writes
+  are issues, pull requests, replies to received feedback, and the minimum fork or branch push needed
+  to propose and maintain a pull request; never merge or administer an external repository.
   **No separate per-artifact approval is required once every condition above is proven.**
   Independently inspect the target repository's contribution and AI policies from validated public
   paths. **If the project prohibits AI-assisted contributions, do not contribute there at all** — do
