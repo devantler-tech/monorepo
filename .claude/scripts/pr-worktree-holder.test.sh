@@ -1521,6 +1521,100 @@ else
   failures=$((failures + 1))
 fi
 
+# ── A repair on a branch other than the PR's head (monorepo#3987) ───────────────────────────────
+# Its own repository and its own process list: several cases below make every answer unknown.
+repair="${sandbox}/repair"
+g init -q "${repair}"
+g -C "${repair}" commit -q --allow-empty -m init
+g -C "${repair}" config remote.origin.url git@github.com:devantler-tech/fix.git
+g -C "${repair}" switch -q -c claude/repair-of-30
+lsof_repair="${sandbox}/lsof-repair"
+printf 'p9000010\nfcwd\nn%s\n' "${repair}" >"${lsof_repair}"
+repair_marker="${repair}/.claude-worktree-owner"
+now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# claim <created_at> [<serves line>...] — the marker worktree-claim.sh writes, with its `serves` lines.
+claim() {
+  local created="$1"
+  shift
+  rm -rf -- "${repair_marker}"
+  {
+    printf 'owner=fixture-run\ncreated_at=%s\n' "${created}"
+    if [ "$#" -gt 0 ]; then printf '%s\n' "$@"; fi
+  } >"${repair_marker}"
+}
+pr30="$(pr devantler-tech/fix 30 codex/the-pr-head-30)"
+pr31="$(pr devantler-tech/fix 31 codex/another-head-31)"
+
+claim "${now_iso}"
+expect "a held checkout on another branch whose claim names no PR is none" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=none" "${pr30}" "${lsof_repair}"
+claim "${now_iso}" 'serves=devantler-tech/fix#30'
+expect "a held checkout whose claim names the PR is live on any branch" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=live:1:9000010/vim" "${pr30}" "${lsof_repair}"
+expect "a claim that names one PR holds no other PR of that repository" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#31 holder=none" "${pr31}" "${lsof_repair}"
+expect "a claim on a repository's PR 30 holds no PR 30 of another repository" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/demo#30 holder=none" \
+  "$(pr devantler-tech/demo 30 codex/the-pr-head-30)" "${lsof_repair}"
+claim "${now_iso}" 'serves=Devantler-Tech/Fix#30'
+expect "a claim names its repository in any letter case" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=live:1:9000010/vim" "${pr30}" "${lsof_repair}"
+claim "${now_iso}" 'serves=devantler-tech/fix#31' 'serves=devantler-tech/fix#30'
+expect "a claim may name several PRs, and each is held" \
+  "${elsewhere}" "${plain}" 0 \
+  "devantler-tech/fix#30 holder=live:1:9000010/vim
+devantler-tech/fix#31 holder=live:1:9000010/vim" \
+  "$(jq -sc . <<<"${pr30}${pr31}")" "${lsof_repair}"
+claim "${now_iso}" 'serves=devantler-tech/fix#30'
+printf 'p%s\nfcwd\nn%s\n' "${me}" "${repair}" >"${sandbox}/lsof-repair-self"
+expect "the asking session's own claim is self, never a rival" \
+  "${repair}" "${session}" 0 "devantler-tech/fix#30 holder=self:1:${me}/claude" "${pr30}" "${sandbox}/lsof-repair-self"
+printf 'p9000007\nfcwd\nn/\n' >"${sandbox}/lsof-root-only"
+expect "a claim nobody works in holds nothing" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=none" "${pr30}" "${sandbox}/lsof-root-only"
+claim '2026-01-01T00:00:00Z' 'serves=devantler-tech/fix#30'
+expect "a claim past its two hours no longer names its PR" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=none" "${pr30}" "${lsof_repair}"
+claim "$(date -u -v-119M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '119 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  'serves=devantler-tech/fix#30'
+expect "a claim one minute inside its two hours still names its PR" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=live:1:9000010/vim" "${pr30}" "${lsof_repair}"
+for bad in 'serves=fix#30' 'serves=devantler-tech/fix#' 'serves=devantler-tech/fix#30 ' \
+  'serves=devantler-tech/fix#3x' 'serves=devantler-tech/fix/more#30' 'serves='; do
+  claim "${now_iso}" "${bad}"
+  expect "a claim naming a PR in a shape that cannot be read ('${bad}') is unknown" \
+    "${elsewhere}" "${plain}" 2 "devantler-tech/fix#30 holder=unknown:claim-marker" "${pr30}" "${lsof_repair}"
+done
+for when in 'yesterday' '' '2026-13-45T99:00:00Z' '2026-02-31T00:00:00Z' '2099-01-01T00:00:00Z'; do
+  claim "${when}" 'serves=devantler-tech/fix#30'
+  expect "a claim naming a PR whose time ('${when}') cannot be a claim's is unknown" \
+    "${elsewhere}" "${plain}" 2 "devantler-tech/fix#30 holder=unknown:claim-marker" "${pr30}" "${lsof_repair}"
+done
+claim "${now_iso}" 'serves=devantler-tech/fix#30'
+mv "${repair_marker}" "${sandbox}/marker-target"
+ln -s "${sandbox}/marker-target" "${repair_marker}"
+expect "a claim that is a symbolic link is unknown, and is not followed" \
+  "${elsewhere}" "${plain}" 2 "devantler-tech/fix#30 holder=unknown:claim-marker" "${pr30}" "${lsof_repair}"
+rm -f -- "${repair_marker}"
+mkdir "${repair_marker}"
+expect "a claim that is not a regular file is unknown" \
+  "${elsewhere}" "${plain}" 2 "devantler-tech/fix#30 holder=unknown:claim-marker" "${pr30}" "${lsof_repair}"
+rmdir "${repair_marker}"
+claim "${now_iso}" 'serves=devantler-tech/fix#30'
+g -C "${repair}" add -f .claude-worktree-owner
+expect "a committed file of the claim's name is repository content, not a claim" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=none" "${pr30}" "${lsof_repair}"
+g -C "${repair}" rm -q --cached .claude-worktree-owner
+expect "once it is no longer in the index the same file is a claim again" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=live:1:9000010/vim" "${pr30}" "${lsof_repair}"
+claim 'not-a-time'
+expect "a claim that names no PR is never read for its time" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=none" "${pr30}" "${lsof_repair}"
+rm -f -- "${repair_marker}"
+g -C "${repair}" switch -q -c codex/the-pr-head-30
+expect "the head branch still answers with no claim at all" \
+  "${elsewhere}" "${plain}" 0 "devantler-tech/fix#30 holder=live:1:9000010/vim" "${pr30}" "${lsof_repair}"
+
 finished=1
 if [ "${failures}" -ne 0 ]; then
   echo "pr-worktree-holder.test.sh: ${failures} of ${checks} checks FAILED" >&2

@@ -34,15 +34,22 @@
 #       Atomically acquire a free/expired worktree or renew the current owner's
 #       lease. Exit 3 without changing the marker when another live owner wins
 #       or an unmarked worktree has a live process inside it.
+#   .claude/scripts/worktree-claim.sh acquire <worktree_path> <owner-token> --serves <owner>/<repo>#<n>
+#       The same, and the claim also names a pull request this worktree works on. Use it when
+#       the worktree's branch is not that pull request's head branch: pr-worktree-holder.sh matches
+#       a checkout to a pull request by its head branch, and by nothing else unless the claim
+#       names it (monorepo#3987). Repeat the call to name another pull request. A renewal by the
+#       same owner keeps the names; a claim that passes to another owner starts with none.
 #   .claude/scripts/worktree-claim.sh mark  <worktree_path> <owner-token>
 #       Compatibility alias for `acquire`.
 #
 # MARKER
 #   Path: <worktree>/.claude-worktree-owner  (gitignored locally by agents; never
 #   staged — it is session state, not product content).
-#   Format (two lines, KEY=value):
+#   Format (KEY=value, one to a line):
 #     owner=<slug>
 #     created_at=<ISO-8601 UTC, e.g. 2026-07-21T07:40:00Z>
+#     serves=<owner>/<repo>#<n>   (optional, one line for each pull request named)
 #
 # EXIT CODES
 #   0  success / free-or-mine-or-expired
@@ -77,7 +84,7 @@ usage() {
 usage:
   worktree-claim.sh add   <repo_path> <worktree_path> <branch> <owner-token>
   worktree-claim.sh check <worktree_path> <my-owner-token>
-  worktree-claim.sh acquire <worktree_path> <owner-token>
+  worktree-claim.sh acquire <worktree_path> <owner-token> [--serves <owner>/<repo>#<n>]
   worktree-claim.sh mark  <worktree_path> <owner-token>
 EOF
   exit 1
@@ -89,13 +96,19 @@ fail() {
 }
 
 write_marker() {
-  local wt="$1" owner="$2"
+  local wt="$1" owner="$2" serves="${3:-}" named
   local marker="$wt/$WORKTREE_CLAIM_MARKER_NAME"
   # Atomic-ish write: temp then mv, so a concurrent reader never sees a half
   # file. Do not stage this path — it is per-session state.
   local tmp
   tmp="$(mktemp "$wt/.claude-worktree-owner.XXXXXX")"
-  printf 'owner=%s\ncreated_at=%s\n' "$owner" "$(worktree_claim_utc_now)" >"$tmp"
+  {
+    printf 'owner=%s\ncreated_at=%s\n' "$owner" "$(worktree_claim_utc_now)"
+    # One line for each pull request named, in the order they were named.
+    while IFS= read -r named; do
+      [ -z "$named" ] || printf 'serves=%s\n' "$named"
+    done <<<"$serves"
+  } >"$tmp"
   mv -f "$tmp" "$marker"
 }
 
@@ -217,16 +230,19 @@ ignore_marker() {
 }
 
 read_marker() {
-  # Sets MARKER_OWNER and MARKER_CREATED_AT from the file, or leaves them empty.
+  # Sets MARKER_OWNER, MARKER_CREATED_AT and MARKER_SERVES (one pull request to a line) from the
+  # file, or leaves them empty.
   local marker="$1"
   MARKER_OWNER=""
   MARKER_CREATED_AT=""
+  MARKER_SERVES=""
   [ -f "$marker" ] || return 0
   # shellcheck disable=SC2034
   while IFS='=' read -r key val; do
     case "$key" in
       owner) MARKER_OWNER="$val" ;;
       created_at) MARKER_CREATED_AT="$val" ;;
+      serves) MARKER_SERVES="${MARKER_SERVES}${val}"$'\n' ;;
     esac
   done <"$marker"
 }
@@ -299,9 +315,16 @@ unmarked_tree_is_idle() {
 cmd_acquire() {
   # "fresh" is passed only by `add`, whose tree was created by this invocation, so nothing can be
   # working in it yet and the process check is skipped.
-  local wt="$1" owner="$2" fresh="${3:-}"
+  local wt="$1" owner="$2" fresh="${3:-}" serves="${4:-}" kept=""
   [ -d "$wt" ] || fail "worktree path is not a directory: $wt"
   [ -n "$owner" ] || usage
+  # owner/repo#number, in the characters a repository name can hold. Refused before anything is
+  # written: pr-worktree-holder.sh answers unknown for every pull request when it meets any other shape.
+  local serves_re='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$'
+  if [ -n "$serves" ] && ! [[ "$serves" =~ $serves_re ]]; then
+    echo "worktree-claim: --serves takes <owner>/<repo>#<n>, got: $serves" >&2
+    usage
+  fi
   [ "$fresh" = "fresh" ] || refuse_symlinked_submodule_path "$wt"
   local given="$wt"
   wt="$(cd "$wt" && pwd -P)" || fail "cannot resolve worktree path: $wt"
@@ -322,6 +345,8 @@ cmd_acquire() {
     fi
     if [ "$MARKER_OWNER" = "$owner" ]; then
       action="renewed"
+      # A renewal keeps the pull requests the claim already names.
+      kept="$MARKER_SERVES"
     else
       local created_epoch now_epoch age
       created_epoch="$(worktree_claim_iso_to_epoch "$MARKER_CREATED_AT")" ||
@@ -336,7 +361,13 @@ cmd_acquire() {
       action="transferred expired claim"
     fi
   fi
-  write_marker "$wt" "$owner"
+  if [ -n "$serves" ]; then
+    case $'\n'"$kept" in
+      *$'\n'"$serves"$'\n'*) ;;
+      *) kept="${kept}${serves}"$'\n' ;;
+    esac
+  fi
+  write_marker "$wt" "$owner" "$kept"
   release_lock
   echo "worktree-claim: $action $wt owner=$owner"
 }
@@ -2005,8 +2036,12 @@ main() {
       cmd_check "$1" "$2"
       ;;
     acquire)
-      [ $# -eq 2 ] || usage
-      cmd_acquire "$1" "$2"
+      if [ $# -eq 4 ] && [ "$3" = "--serves" ]; then
+        cmd_acquire "$1" "$2" "" "$4"
+      else
+        [ $# -eq 2 ] || usage
+        cmd_acquire "$1" "$2"
+      fi
       ;;
     mark)
       [ $# -eq 2 ] || usage

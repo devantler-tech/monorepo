@@ -44,7 +44,9 @@
 #                                   looked into),
 #                                   submodule-gitdir (a populated submodule's `.git` entry names a
 #                                   git directory its superproject does not keep, so nothing of it
-#                                   was read: see SUBMODULE GIT DIRECTORIES)
+#                                   was read: see SUBMODULE GIT DIRECTORIES),
+#                                   claim-marker (a held checkout's claim names a PR, or may, in a
+#                                   form that cannot be read: see CLAIMS THAT NAME A PR)
 #
 # WHAT HOLDING A CHECKOUT MEANS
 #   A process holds the checkout containing its working directory, every populated submodule of
@@ -101,6 +103,25 @@
 #   tables, so nothing can say which PRs it serves. Unless its process is known to have exited,
 #   EVERY PR asked about is then `unknown:lock-reason` (monorepo#3825): the row used to split,
 #   and the live lock read `none`.
+#
+# CLAIMS THAT NAME A PR (monorepo#3987)
+#   A repair is often made in a second worktree, on a branch of its own, and reaches the PR's head
+#   branch only when it is pushed. Until then no checkout has the head branch, and the PR read
+#   `none` while a live session worked on it. A branch name cannot bind the two: any branch may
+#   carry any number. The session says so itself instead. `worktree-claim.sh acquire <worktree>
+#   <owner> --serves <owner>/<repo>#<n>` adds a `serves=` line to the claim it keeps at the
+#   worktree's root, and a held checkout whose claim names a PR serves that PR on whatever branch
+#   it is, exactly as a checkout of the head branch does. Holding is unchanged: a claim nobody
+#   works in holds nothing, and the asker's own claim is `self`.
+#   A claim lasts two hours from when it was taken or last renewed, and one past that names
+#   nothing, as it no longer reserves its worktree either. A claim that names no PR is not read
+#   further. One that does, or may, and cannot be read is `unknown:claim-marker` for every PR asked
+#   about, since nothing says which PR it meant: a link or anything else that is not a regular
+#   file, a `serves=` value in any other shape, more than 64 lines, and a time that is missing,
+#   malformed, or further ahead than a clock drifts (five minutes), which would never lapse.
+#   A claim is session state and is never committed. A committed file of the claim's name is
+#   repository content, which could name any PR on every branch that carries it: it names nothing.
+#   A PR whose head is in another owner's repository still answers `fork`.
 #
 # SUBMODULE GIT DIRECTORIES (monorepo#3982)
 #   Both the holders and the lock scan read every populated submodule of a checkout, and git finds
@@ -297,11 +318,93 @@ resolve() {
   return 0
 }
 
-# record <holder-top> <checkout> <branch> — the checkout's path line, then one key line per remote
+# claim_unread — a held checkout's claim names a PR, or may, in a form the helper cannot read, and
+# the answer is `unknown:claim-marker`. Kept twice, as scan_failed is.
+CLAIM_UNREAD=0
+claim_unread() {
+  CLAIM_UNREAD=1
+  : >"${work}/claimfail" 2>/dev/null || true
+}
+claim_was_unread() { [ "${CLAIM_UNREAD}" = 1 ] || [ -e "${work}/claimfail" ]; }
+
+# served <holder-top> <checkout> — one key line for each PR the checkout's claim names
+# (see CLAIMS THAT NAME A PR). The claim is the file worktree-claim.sh writes at the checkout's root.
+CLAIM_TTL_SECS=7200
+CLAIM_SKEW_SECS=300
+CLAIM_ID_RE='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$'
+CLAIM_TIME_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+served() {
+  local top="$1" dir="$2" marker="$2/.claude-worktree-owner" line created='' ids='' id lines=0 epoch now age
+  # A link is tested first: `-e` follows one, and a claim is never legitimately a link.
+  if [ -L "${marker}" ]; then
+    claim_unread
+    return 0
+  fi
+  [ -e "${marker}" ] || return 0
+  if [ ! -f "${marker}" ] || [ ! -r "${marker}" ]; then
+    claim_unread
+    return 0
+  fi
+  while IFS= read -r line || [ -n "${line}" ]; do
+    lines=$((lines + 1))
+    if [ "${lines}" -gt 64 ]; then
+      claim_unread
+      return 0
+    fi
+    case "${line}" in
+      created_at=*) created="${line#created_at=}" ;;
+      serves=*) ids="${ids}${line#serves=}"$'\n' ;;
+    esac
+  done <"${marker}" || {
+    # The file went, or stopped being readable, between the tests above and the read.
+    claim_unread
+    return 0
+  }
+  # Most claims name no PR. Nothing else of such a claim is read, so its age is not judged here.
+  [ -n "${ids}" ] || return 0
+  # A claim is session state and is never committed. A committed file of that name is repository
+  # content, which could name any PR on any branch that carries it: it is not a claim.
+  if git -C "${dir}" ls-files --error-unmatch -- .claude-worktree-owner >/dev/null 2>&1; then return 0; fi
+  while IFS= read -r id; do
+    if ! [[ "${id}" =~ ${CLAIM_ID_RE} ]]; then
+      claim_unread
+      return 0
+    fi
+  done <<<"${ids%$'\n'}"
+  if ! [[ "${created}" =~ ${CLAIM_TIME_RE} ]]; then
+    claim_unread
+    return 0
+  fi
+  # GNU date, then BSD date. BSD date rolls an impossible day or hour over into the next one, so
+  # the time is printed back and must read the same.
+  if ! epoch="$(date -u -d "${created}" +%s 2>/dev/null)"; then
+    if ! epoch="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "${created}" +%s 2>/dev/null)" ||
+      [ "$(date -u -j -r "${epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" != "${created}" ]; then
+      claim_unread
+      return 0
+    fi
+  fi
+  now="$(date -u +%s)"
+  age=$((now - epoch))
+  # A claim lasts two hours from when it was taken or last renewed, as worktree-claim.sh has it.
+  if [ "${age}" -ge "${CLAIM_TTL_SECS}" ]; then return 0; fi
+  # A time further ahead than a clock can drift would never lapse: it is not a claim's time.
+  if [ "${age}" -lt "$((-CLAIM_SKEW_SECS))" ]; then
+    claim_unread
+    return 0
+  fi
+  while IFS= read -r id; do
+    printf '%s\t%s\tpr:%s\n' "${top}" "${dir}" "$(printf '%s' "${id}" | tr '[:upper:]' '[:lower:]')"
+  done <<<"${ids%$'\n'}"
+}
+
+# record <holder-top> <checkout> <branch> — the checkout's path line, one key line per PR its claim
+# names, then one key line per remote
 # when its branch is a head branch some PR asks about.
 record() {
   local top="$1" dir="$2" branch="$3" remotes url slug
   printf '%s\t%s\t\n' "${top}" "${dir}"
+  served "${top}" "${dir}"
   if [ -z "${branch}" ] || ! wanted "${branch}"; then return 0; fi
   remotes="$(git -C "${dir}" config --get-regexp '^remote\..*\.url$' 2>/dev/null)" || return 0
   while IFS=' ' read -r _ url; do
@@ -1099,6 +1202,8 @@ if [ "${heads}" != $'\n\n' ]; then
   if [ -z "${probe_error}" ] && scan_has_failed; then probe_error=lock-scan; fi
   # A submodule of a held checkout was left unread for the same reason: a holder may be missing.
   if [ -z "${probe_error}" ] && outside_seen; then probe_error=submodule-gitdir; fi
+  # A held checkout's claim may name a PR asked about and could not be read.
+  if [ -z "${probe_error}" ] && claim_was_unread; then probe_error=claim-marker; fi
 fi
 
 rc=0
@@ -1166,6 +1271,8 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
     if ($2 != "key") { print id " holder=unknown:input"; unknown = 1; next }
     if (probe_error != "") { print id " holder=unknown:" probe_error; unknown = 1; next }
     key = $3 ":" $4
+    # A checkout serves the PR by its head branch, or by a claim that names the PR itself.
+    claim = "pr:" tolower(id)
     # One verdict per process, working directories first: a process counts once however many of
     # its checkouts serve this PR, and it is a rival when any of them makes it one.
     found = 0
@@ -1174,7 +1281,7 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
     for (i = 1; i <= holders; i++) {
       p = hpid[i]
       top = htop[i]
-      if (!((top, key) in owns)) continue
+      if (!((top, key) in owns) && !((top, claim) in owns)) continue
       if (i in hlock) {
         # The process works in the very worktree it locked: its working directory already answered.
         if ((p, top) in sits) continue
@@ -1205,7 +1312,7 @@ awk -F'\t' -v me="$$" -v probe_error="${probe_error}" \
     # A lock the helper could not read may name a rival. A rival found another way already answers.
     if (lives == 0) {
       for (top in unread) {
-        if ((top, key) in owns) { print id " holder=unknown:lock-reason"; unknown = 1; next }
+        if (((top, key) in owns) || ((top, claim) in owns)) { print id " holder=unknown:lock-reason"; unknown = 1; next }
       }
     }
     value = ""

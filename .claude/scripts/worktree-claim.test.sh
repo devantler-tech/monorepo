@@ -1391,6 +1391,57 @@ check "acquire renews own claim" 0 "$rc" "$out" "renewed"
 renewed_at="$(sed -n 's/^created_at=//p' "$wt/.claude-worktree-owner")"
 check "renewal refreshes timestamp" 0 "$([ "$renewed_at" != "$old" ] && echo 0 || echo 1)"
 
+# ── acquire --serves: the claim names the pull request it works on (monorepo#3987) ──────────
+served_lines() { sed -n 's/^serves=//p' "$wt/.claude-worktree-owner" | tr '\n' ' '; }
+rc=0
+out="$("$script" acquire "$wt" "session-beta" --serves devantler-tech/demo#30 2>&1)" || rc=$?
+check "acquire --serves renews the claim" 0 "$rc" "$out" "renewed"
+check "the claim names the pull request" 0 0 "[$(served_lines)]" "[devantler-tech/demo#30 ]"
+rc=0
+out="$("$script" acquire "$wt" "session-beta" 2>&1)" || rc=$?
+check "a plain renewal keeps the pull request named" 0 "$rc" "[$(served_lines)]" "[devantler-tech/demo#30 ]"
+rc=0
+out="$("$script" acquire "$wt" "session-beta" --serves devantler-tech/demo#30 2>&1)" || rc=$?
+check "naming the same pull request twice writes it once" 0 "$rc" "[$(served_lines)]" "[devantler-tech/demo#30 ]"
+rc=0
+out="$("$script" acquire "$wt" "session-beta" --serves devantler-tech/other#7 2>&1)" || rc=$?
+check "a second pull request is added beside the first" 0 "$rc" "[$(served_lines)]" \
+  "[devantler-tech/demo#30 devantler-tech/other#7 ]"
+kept_lines="$(grep -c -E '^(owner=session-beta|created_at=[0-9T:Z-]+)$' "$wt/.claude-worktree-owner" || true)"
+check "the claim keeps its owner and time lines" 0 "$([ "$kept_lines" = 2 ] && echo 0 || echo 1)"
+for bad in 'demo#30' 'devantler-tech/demo' 'devantler-tech/demo#' 'devantler-tech/demo#3x' \
+  'devantler-tech/demo#30 ' 'a/b/c#1' $'devantler-tech/demo#30\nowner=session-other'; do
+  before="$(cat "$wt/.claude-worktree-owner")"
+  rc=0
+  out="$("$script" acquire "$wt" "session-beta" --serves "$bad" 2>&1)" || rc=$?
+  check "acquire --serves refuses a value that is not owner/repo#number ($(printf '%q' "$bad"))" 1 "$rc" "$out" "--serves takes"
+  check "a refused --serves leaves the claim as it was" 0 \
+    "$([ "$(cat "$wt/.claude-worktree-owner")" = "$before" ] && echo 0 || echo 1)"
+done
+rc=0
+out="$("$script" acquire "$wt" "session-beta" --names devantler-tech/demo#30 2>&1)" || rc=$?
+check "acquire refuses a fourth argument that is not --serves" 1 "$rc" "$out" "usage"
+rc=0
+out="$("$script" acquire "$wt" "session-beta" --serves 2>&1)" || rc=$?
+check "acquire refuses --serves with no value" 1 "$rc" "$out" "usage"
+rc=0
+out="$("$script" check "$wt" "session-beta" 2>&1)" || rc=$?
+check "check still reads a claim that names pull requests" 0 "$rc" "$out" "mine"
+rc=0
+out="$("$script" acquire "$wt" "session-gamma" --serves devantler-tech/demo#31 2>&1)" || rc=$?
+check "a live claim that names pull requests still refuses another owner" 3 "$rc" "$out" "LIVE foreign claim"
+check "a refused owner adds no pull request" 0 0 "[$(served_lines)]" \
+  "[devantler-tech/demo#30 devantler-tech/other#7 ]"
+printf 'owner=session-beta\ncreated_at=%s\nserves=devantler-tech/demo#30\n' "$old" >"$wt/.claude-worktree-owner"
+rc=0
+out="$("$script" acquire "$wt" "session-gamma" 2>&1)" || rc=$?
+check "an expired claim passes to another owner" 0 "$rc" "$out" "transferred expired claim"
+check "a claim that passed to another owner names no pull request" 0 0 "[$(served_lines)]" "[]"
+printf 'owner=session-beta\ncreated_at=%s\n' "$old" >"$wt/.claude-worktree-owner"
+rc=0
+out="$("$script" acquire "$wt" "session-beta" 2>&1)" || rc=$?
+check "the worktree is back with its owner for the cases below" 0 "$rc" "$out" "renewed"
+
 # ── malformed foreign marker fails closed ───────────────────────────────────
 printf 'owner=session-beta\ncreated_at=not-a-timestamp\n' >"$wt/.claude-worktree-owner"
 rc=0
