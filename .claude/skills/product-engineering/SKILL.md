@@ -107,6 +107,7 @@ Revalidate the selected issue when starting it; if current evidence invalidates 
 the problem remains real but measurement is weak, decomposition starts with the evidence gap.
 
 ## 2. Issue triage & creation
+
 Issues are the unit of work (contract *Issue-driven*) — this is where new work enters the queue.
 - **Capture new work as an issue first (issue-first).** Before building anything new and non-trivial —
   a bug, gap, coverage hole, refactor, perf hotspot, docs improvement, enhancement — **file a
@@ -135,12 +136,9 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
   contributors.
 
 ## 3. Plan & implement
-1. **Pull the most important eligible Ready work — and "big" is not a reason to skip it.** Follow
-   the canonical *Value-prioritized Kanban pull* procedure and reviewed plugin assessment before
-   claiming: finish started work and due verification, check all downstream ceilings, then compare
-   documented priority, outcomes, cost of waiting, risk reduction and prerequisites unlocked against
-   end-to-end effort. Age breaks comparable ties; preserve original clocks, not `updatedAt`.
-   Backlog is refinement and Icebox deferred. Missing joins mean HOLD, not new intake.
+1. **Pull the most important eligible Ready work — and "big" is not a reason to skip it.** Apply
+   canonical *Value-prioritized Kanban pull* and the reviewed assessment before claiming: complete
+   joins, downstream capacity, importance, end-to-end effort and original clocks. Unknown means HOLD.
    Skip an eligible issue **only** if (a) it already has an open PR, (b) it is
    blocked on a **named, live-verified** external dependency you can cite, (c) it is too
    under-specified to begin, (d) a delivered experiment is waiting for its named future measurement

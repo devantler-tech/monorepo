@@ -661,10 +661,9 @@ top-down — **hotfix/operate first, then advance**:
 
 **Value check before build.** When an issue reaches the front of the advance queue, revalidate its
 current evidence, affected audience/problem, hypothesis, and success signal using
-`product-engineering`'s **Value & evidence loop**. This never lets a newer shiny idea jump an older
-actionable issue: if the premise still holds, do the work; if current evidence invalidates it, reframe
-or close it with the reason; if the value is plausible but unmeasured, make measurement the first child
-slice. Record the product's `last_value_review` cursor, not live metrics, in native memory.
+`product-engineering`'s **Value & evidence loop**. Revalidate older work, but compare eligible Ready
+issues by documented importance before age breaks comparable ties. Reframe invalid premises or make
+measurement the first valuable slice when evidence is missing. Record `last_value_review`, not live metrics.
 
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.
@@ -868,7 +867,7 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
 7. **Resolve the next issue by the ladder** *(the default advance action)* — take the highest rung
    with actionable work (contract *The work-selection ladder*). Before new implementation, join
    project 5 Status, Priority, Service class, Delivery size, Due date, dependencies, Ready since,
-   original Start date and Blocked since to issue evidence and the complete PR/verification census.
+   First started and Blocked since to actual-start issue evidence and the complete PR/verification census.
    Use the board guide's ceilings and the reviewed product-engineering value-pull assessment.
    Full active stages or unknown joins mean HOLD and finishing/unblocking, never new intake.
    Backlog supplies refinement; Icebox remains deferred. Ordinary Security/Bug types are not severity.

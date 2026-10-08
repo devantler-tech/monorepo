@@ -207,6 +207,16 @@ assert_prose 'ordinary Security/Bug types do not establish urgency' \
   "${constitution_flat}" "issue type still substitutes for evidence of severity"
 assert_prose 'Age breaks ties between comparable candidates' \
   "${constitution_flat}" "importance does not precede age"
+assert_prose 'maxAgeSeconds=900' \
+  "${constitution_flat}" "consumer does not declare the required selection freshness bound"
+assert_prose 'oldest required observation' \
+  "${constitution_flat}" "a final page timestamp can bless stale joined evidence"
+assert_absent 'This never lets a newer shiny idea jump an older' \
+  "${skill_flat}" "the value check still vetoes newer important Ready work"
+assert_absent 'original Start date recorded' \
+  "${constitution_flat}" "actual first-start still overwrites the planned Start date"
+assert_prose 'First started' \
+  "${constitution_flat}" "the board does not expose the actual first-start observation"
 
 # ── completion is checked separately from ownership (monorepo#2994) ────────────
 # Skip reasons (a)–(g) all answer WHO holds an issue; none can see that the work already shipped,

@@ -111,6 +111,7 @@ they **must not crowd out the meaningful work the products actually need** (see 
 Pull valuable Ready work* and *Cadence & focus → Substantive-progress gate*).
 
 ## Issue-driven — issues are the unit of work
+
 GitHub Issues are the **advance work queue**, and **resolving them is the primary advance output of
 every run** — finish existing work, then select by documented importance within board capacity.
 (Driving in-flight **actionable PRs** to merge still comes *first* each run,

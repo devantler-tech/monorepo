@@ -258,7 +258,8 @@ Until that is solved, backfill is a standing duty, not an exception.
 - **Value-pull flow fields and capacity.** Resolve the maintainer's explicit ceilings and field
   semantics from [Flow fields and WIP capacity](../../../guides/issues-and-board.md#flow-fields-and-wip-capacity).
   Project 5 has Priority, Service class, Delivery size, Ready since and Blocked since, alongside
-  Start date and Due date. Missing priorities require refinement, never an inferred P2. Preserve
+  planned Start date and Due date; First started records actual work with issue evidence. Missing
+  priorities require refinement, never an inferred P2. Preserve
   original ages and keep parked unfinished work in WIP. A full downstream stage stops new starts;
   Backlog is refinement and Icebox deferred. Do not manufacture capacity through card moves.
 - **Issue Types are mandatory** — every issue carries exactly one of **Epic, Feature, Bug, Security,

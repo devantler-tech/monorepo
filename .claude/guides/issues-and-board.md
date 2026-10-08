@@ -189,7 +189,7 @@ ladder mirrors the agent's actual lifecycle, so every state answers "what's next
 | **📊 Verifying** | **Merged**, outcome not yet proven (covers the wait for an async release, and the wait for a Kata's measurement date) | Verify it actually works E2E once released; measure a Kata's signal; then decide |
 | **🚀 Ready to Merge** | Green review at head, all checks green, nothing unresolved | Self-promote and merge |
 | **👀 In Review** | PR open, CI green, review requested | Fix findings, re-request, re-secure green at the new head |
-| **🏃🏻‍♂️ In Progress** | Refined work pulled within downstream capacity; original Start date recorded | Finish the implementation, get CI green |
+| **🏃🏻‍♂️ In Progress** | Refined work pulled within downstream capacity; actual first-start evidenced | Finish the implementation, get CI green |
 | **🫴 Ready** | Refinement, priority rationale and prerequisites verified | Pull by importance only with downstream capacity |
 | **📥 Backlog** | Captured and triaged, not yet refined | Refine, or decompose if it is an Epic |
 | **🧊 Icebox** | Parked | Revisit at triage |
@@ -227,16 +227,20 @@ issue cards for the Kanban view, including parked unfinished work. Reconcile act
 from or misplaced on the board before permitting a start; board occupancy alone is not full WIP.
 Do not fill columns to their limits or hide WIP by moving started work upstream. A saturated active
 stage stops new implementation and redirects effort toward finishing/unblocking it.
+Selection freshness is **15 minutes** (`maxAgeSeconds=900`), measured from the oldest required observation,
+not the last page; re-read capacity before claim and before the Ready-to-In-Progress write.
 
 Project 5 uses **Priority** (P0 Critical, P1 High, P2 Normal, P3 Low), **Service class** (Expedite,
 Fixed date, Standard, Risk reduction), **Delivery size** (Small, Medium, Large), **Ready since** and
-**Blocked since**, together with existing **Start date** and **Due date**. Record a brief issue
+**Blocked since** and **First started**, together with planned **Start date** and **Due date**. Record a brief issue
 rationale supporting outcome, audience impact, urgency/cost of waiting, risk reduction, dependencies
 unlocked and end-to-end effort. Size includes CI, review, deployment and verification. Fixed date
 needs a verified deadline; Expedite needs confirmed incident/urgent-security evidence and a recorded
 WIP exception, not merely a Bug/Security type. Missing values mean refinement, not a default P2.
 
-Preserve original Start date and first blocked/Ready observation. DATE fields have day precision;
+Start date is planned roadmap intent, never overwritten by actual work start. First started records
+actual first work, with its original evidence on the issue. Preserve it and first blocked/Ready observation.
+DATE fields have day precision;
 unavailable entry history is a documented first-observed lower bound, not exact continuous waiting.
 Record unblock transitions and accumulated blocked intervals in the issue evidence; a single date
 does not measure cumulative blocked time. Bot comments, parking and re-entry never reset clocks.

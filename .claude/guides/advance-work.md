@@ -33,6 +33,7 @@ or important eligible substantive work; it makes value evidence part of shaping 
 of them.
 
 ## Enhancement work — moving products forward
+
 Beyond fixing what breaks, proactively improve each product — **all of it routed through issues** (see
 *Issue-driven*): each enhancement below is **captured as an issue first** (unless genuinely trivial)
 and then implemented through **value-prioritized Ready pull within capacity**, never picked up ad-hoc and turned
