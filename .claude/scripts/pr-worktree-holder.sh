@@ -39,7 +39,9 @@
 #                                   submodule a holder may have on the head branch, was not
 #                                   reached: a superproject, an index or a `.gitmodules` that cannot
 #                                   be read, a checkout or a populated submodule at a path holding
-#                                   a newline or a tab, or nesting deeper than the scan follows),
+#                                   a newline or a tab, nesting deeper than the scan follows, or
+#                                   submodule repositories below a git directory that may not be
+#                                   looked into),
 #                                   submodule-gitdir (a populated submodule's `.git` entry names a
 #                                   git directory its superproject does not keep, so nothing of it
 #                                   was read: see SUBMODULE GIT DIRECTORIES)
@@ -83,6 +85,12 @@
 #   its worktree's repository, which need not be the repository its owner or the asker stands in:
 #   a session at a superproject's checkout can lock a worktree of a submodule, and an asker inside
 #   a submodule asks about worktrees its superproject locked.
+#   The locks of a submodule's repository are also read where git keeps that repository, below
+#   its superproject's git directory, and not only through the paths the index and `.gitmodules`
+#   name (monorepo#3984): the repository, the worktrees it registers and their locks stay there
+#   when the submodule is staged for deletion, when its directory is removed, and when only
+#   another working tree of the superproject populates it. A submodule that keeps its git
+#   directory in its own working tree is still found by its path alone.
 #   A lock the helper cannot read as that identity is `unknown:lock-reason` for the PRs its
 #   worktree serves, never `none`: a lock with no reason or someone else's reason, a start time in
 #   any other shape, and a lock that records no start time while its pid is alive (nothing then
@@ -105,6 +113,8 @@
 #   every PR asked about is `unknown:submodule-gitdir`: the submodule may hold any of them, and
 #   nobody looked. An entry that names no directory at all is one git cannot follow either, and
 #   keeps the answer it had (skipped among the holders, `unknown:lock-scan` in the scan).
+#   The same holds for the repositories read below a git directory: a step there that is a
+#   symbolic link leads out of it, is not followed, and answers `unknown:submodule-gitdir`.
 #
 # SELF
 #   The asking session is not its own rival, the same exclusion the contract makes for its own
@@ -744,6 +754,11 @@ scan_submodules() {
       outside
       return 0
     fi
+    # A submodule that keeps its own git directory keeps its submodules' repositories there, where
+    # the walk from its superproject's git directory does not come.
+    if [ -d "${sub}/.git" ] && [ ! -L "${sub}/.git" ]; then
+      printf '%s\n' "${sub}/.git" >>"${work}/owndirs" || scan_failed
+    fi
     # A populated submodule ends in one of two ways: seen to hold no lock, or resolved as its own
     # checkout and listed. One that has a `.git` entry and is neither, because that entry cannot
     # be read or names a checkout somewhere else, is a registry nobody looked at.
@@ -757,6 +772,111 @@ scan_submodules() {
     scan_submodules "${sub}" "$((depth + 1))"
   done <<<"${paths}"
 }
+
+# registry_modules <git directory> <depth> — the submodule repositories git keeps below a git
+# directory, read where they are kept and not through a list of paths (monorepo#3984). git puts a
+# submodule's repository in `modules/<name>` below the git directory of the checkout that populated
+# it: the repository's own for its main checkout, and `worktrees/<id>` below that for a linked
+# worktree. It stays there when the index and `.gitmodules` stop naming the submodule, when its
+# directory is removed, and when only another working tree of the repository uses it, and so do the
+# worktrees it registers and their locks.
+# Nothing is followed out of the git directory: a step that is a symbolic link was written on this
+# host and leads elsewhere, so what lies behind it is not read and the answer is
+# `unknown:submodule-gitdir`. A directory that cannot be listed, a name nested deeper than git
+# writes one, and a repository nested deeper than the scan follows are `unknown:lock-scan`.
+registry_modules() {
+  local gitdir="$1" depth="$2" entry
+  registry_names "${gitdir}/modules" "${depth}" 0
+  if [ -L "${gitdir}/worktrees" ]; then
+    outside
+    return 0
+  fi
+  [ -d "${gitdir}/worktrees" ] || return 0
+  if [ ! -r "${gitdir}/worktrees" ] || [ ! -x "${gitdir}/worktrees" ]; then
+    scan_failed
+    return 0
+  fi
+  for entry in "${gitdir}/worktrees"/* "${gitdir}/worktrees"/.[!.]* "${gitdir}/worktrees"/..?*; do
+    if [ -L "${entry}" ]; then
+      if [ -d "${entry}" ]; then outside; fi
+      continue
+    fi
+    [ -d "${entry}" ] || continue
+    if [ ! -x "${entry}" ]; then
+      scan_failed
+      continue
+    fi
+    registry_names "${entry}/modules" "${depth}" 0
+  done
+}
+
+# registry_names <directory> <depth> <level> — a `modules` directory, or a directory below one that
+# is part of a submodule's name: a name may hold a `/`, and git then nests directories. A directory
+# that holds a `HEAD` file and an `objects` directory is a repository; anything else is a step of a
+# name and is looked into.
+registry_names() {
+  local dir="$1" depth="$2" level="$3" entry
+  if [ -L "${dir}" ]; then
+    if [ -d "${dir}" ]; then outside; fi
+    return 0
+  fi
+  [ -d "${dir}" ] || return 0
+  if [ ! -r "${dir}" ] || [ ! -x "${dir}" ]; then
+    scan_failed
+    return 0
+  fi
+  for entry in "${dir}"/* "${dir}"/.[!.]* "${dir}"/..?*; do
+    if [ -L "${entry}" ]; then
+      if [ -d "${entry}" ]; then outside; fi
+      continue
+    fi
+    [ -d "${entry}" ] || continue
+    if [ -f "${entry}/HEAD" ] && [ -d "${entry}/objects" ]; then
+      registry_found "${entry}" "${depth}"
+    elif [ "${level}" -ge 8 ]; then
+      scan_failed
+    else
+      registry_names "${entry}" "${depth}" "$((level + 1))"
+    fi
+  done
+}
+
+# registry_found <submodule git directory> <depth> — add the repository to the lock scan when its
+# registry holds a lock, then read the submodules it keeps itself. A lock is a `locked` file in the
+# worktree's entry, so a registry without one costs no git call: this host keeps a couple of hundred
+# such repositories and nearly none of them holds a lock.
+# The depth is counted from the git directory the walk starts in, which can be that of the topmost
+# superprojects the scan climbs to: eight above a checkout, and the four levels of submodules the
+# scan follows below one. A repository nested deeper than both together is not read.
+registry_found() {
+  local gitdir="$1" depth="$2" entry
+  if [ "${depth}" -ge 12 ]; then
+    scan_failed
+    return 0
+  fi
+  if [ -d "${gitdir}/worktrees" ] && [ ! -L "${gitdir}/worktrees" ]; then
+    if [ ! -r "${gitdir}/worktrees" ] || [ ! -x "${gitdir}/worktrees" ]; then
+      scan_failed
+      return 0
+    fi
+    for entry in "${gitdir}/worktrees"/* "${gitdir}/worktrees"/.[!.]* "${gitdir}/worktrees"/..?*; do
+      # A symbolic link here is answered by registry_modules below.
+      if [ -L "${entry}" ] || [ ! -d "${entry}" ]; then continue; fi
+      if [ ! -x "${entry}" ]; then
+        scan_failed
+        return 0
+      fi
+      if [ -e "${entry}/locked" ] || [ -L "${entry}/locked" ]; then
+        # No checkout is named: the repository may have none left, and its registry is read from
+        # its git directory.
+        scan_row "${gitdir}" '' || return 0
+        break
+      fi
+    done
+  fi
+  registry_modules "${gitdir}" "$((depth + 1))"
+}
+
 
 # registered <path> — resolve a path the worktree registry names, and fail unless it is still its
 # own checkout. A registration outlives its directory, and a directory whose `.git` entry is gone
@@ -830,6 +950,7 @@ if [ "${heads}" != $'\n\n' ]; then
     : >"${work}/tops"
     : >"${work}/repos"
     : >"${work}/scan"
+    : >"${work}/owndirs"
     while IFS= read -r near; do
       if resolve "${near}"; then
         printf '%s\t%s\n' "${near}" "${R_TOP}" >>"${work}/tops"
@@ -852,6 +973,14 @@ if [ "${heads}" != $'\n\n' ]; then
     while IFS= read -r top; do
       scan_submodules "${top}" 0
     done <"${work}/roots"
+    # The submodule repositories each of those git directories keeps, whatever the lists of paths
+    # above say (monorepo#3984). Sorted into a file first, for the reason the roots are.
+    if ! cut -f1 "${work}/repos" | LC_ALL=C sort -u - "${work}/owndirs" >"${work}/gitdirs"; then
+      scan_failed
+    fi
+    while IFS= read -r common; do
+      registry_modules "${common}" 0
+    done <"${work}/gitdirs"
     # A registry the scan knows of and could not reach: a lock in it may hold any PR asked about.
     if scan_has_failed; then probe_error=lock-scan; fi
     # A submodule the scan would have had to read through an entry that leads elsewhere. It is the
@@ -862,14 +991,24 @@ if [ "${heads}" != $'\n\n' ]; then
     # it may hold any of the PRs asked about.
     : >"${work}/locks"
     # Sorted into a file first, for the reason the roots above are.
-    if ! LC_ALL=C sort -u -t "${tab}" -k1,1 "${work}/repos" >"${work}/registries"; then
+    # One row for each repository, and the row that names a checkout when there are two.
+    if ! LC_ALL=C sort -t "${tab}" -k1,1 -k2,2r "${work}/repos" >"${work}/reposorted" ||
+      ! awk -F'\t' '!seen[$1]++' "${work}/reposorted" >"${work}/registries"; then
       probe_error=lock-scan
     fi
     while IFS="${tab}" read -r common top; do
       [ -z "${probe_error}" ] || break
       # Only a repository that has linked worktrees keeps this directory, and only those are locked.
       [ -d "${common}/worktrees" ] || continue
-      if ! list="$(git -C "${top}" worktree list --porcelain 2>/dev/null)"; then
+      # A repository found below a git directory may have no checkout left, and git will not start
+      # in one whose configured working tree is gone. Its git directory stands in for the working
+      # tree: only the worktrees it registers are read, and those are named by the registry.
+      if [ -z "${top}" ]; then
+        if ! list="$(git --git-dir="${common}" --work-tree="${common}" worktree list --porcelain 2>/dev/null)"; then
+          probe_error=worktree-list
+          break
+        fi
+      elif ! list="$(git -C "${top}" worktree list --porcelain 2>/dev/null)"; then
         probe_error=worktree-list
         break
       fi

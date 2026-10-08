@@ -31,6 +31,11 @@
 #   - a holder's submodules are those its index or its `.gitmodules` names, so a checkout without
 #     `.gitmodules` still holds its submodule's branch, and a list that cannot be read, or a
 #     populated submodule at a path holding a newline, is `unknown:`, never `none` (monorepo#3978).
+#   - the locks of a submodule's repository are read where git keeps it, below its superproject's
+#     git directory, so a lock is found when the submodule is staged for deletion, not populated,
+#     or populated only in another working tree; a symbolic link there is not followed, and it,
+#     a directory that may not be looked into and a listing that fails are `unknown:`
+#     (monorepo#3984).
 # `lsof` and `ps` are shims driven by FIXTURE_* variables; the helper itself reads no environment.
 set -euo pipefail
 
@@ -366,6 +371,79 @@ if g -C "${corrupt}/product" rev-parse --show-toplevel >/dev/null 2>&1; then
   exit 1
 fi
 
+# ── Submodule repositories no list of paths names (monorepo#3984) ───────────────────────────────
+# git keeps a submodule's repository below its superproject's git directory, and with it the
+# worktrees that repository registers and their locks, whatever the index, `.gitmodules` and the
+# working tree say. Each of these holds a worktree a live session locked.
+# The gitlink is staged for deletion and `.gitmodules` no longer names it; the directory remains.
+staged="${sandbox}/staged"
+locked_submodule "${staged}" product claude/product-110 "${sandbox}/staged-wt"
+g -C "${staged}" rm -q --cached product
+g config -f "${staged}/.gitmodules" --remove-section submodule.product
+staged_index="$(g -C "${staged}" ls-files -s)"
+if grep -q "^160000 " <<<"${staged_index}" || [ ! -e "${staged}/product/.git" ] ||
+  g config -f "${staged}/.gitmodules" --get-regexp '^submodule\.' >/dev/null 2>&1; then
+  echo "FAIL fixture: a list of paths still names the submodule staged for deletion, or its directory is gone" >&2
+  exit 1
+fi
+# Not populated at all: its directory is gone, and its name holds a `/`, which git keeps as nested
+# directories. git will not start in this repository without being told where its working tree is.
+absent="${sandbox}/absent"
+locked_submodule "${absent}" libs/product claude/product-111 "${sandbox}/absent-wt"
+rm -rf "${absent}/libs"
+absent_registry="${absent}/.git/modules/libs/product"
+if [ ! -d "${absent_registry}/worktrees" ] ||
+  g --git-dir="${absent_registry}" worktree list --porcelain >/dev/null 2>&1; then
+  echo "FAIL fixture: the repository of the submodule that is not populated is not where git keeps it, or git still starts in it" >&2
+  exit 1
+fi
+# The same, with a lock whose process has exited.
+exited="${sandbox}/exited"
+locked_submodule "${exited}" product claude/product-112 "${sandbox}/exited-wt"
+g -C "${exited}/product" worktree unlock "${sandbox}/exited-wt"
+g -C "${exited}/product" worktree lock --reason "claude agent gone (pid 9000099 start ${start_theirs})" "${sandbox}/exited-wt"
+rm -rf "${exited}/product"
+# Populated only in ANOTHER working tree of the same repository, which keeps the submodule's
+# repository below its own entry in the registry. The asker stands in the main checkout.
+sibling="${sandbox}/sibling"
+sibling_wt="${sandbox}/sibling-wt"
+g init -q "${sibling}"
+g -C "${sibling}" commit -q --allow-empty -m init
+g -C "${sibling}" submodule --quiet add "${sandbox}/product-origin" product
+g -C "${sibling}" commit -q -m 'add product'
+g -C "${sibling}" worktree add -q -b claude/sibling-1 "${sibling_wt}"
+g -C "${sibling_wt}" submodule --quiet update --init product
+g -C "${sibling_wt}/product" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${sibling_wt}/product" worktree add -q -b claude/product-113 "${sandbox}/sibling-product-wt"
+g -C "${sibling_wt}/product" worktree lock --reason "claude agent sibling (pid 9000002 start ${start_theirs})" "${sandbox}/sibling-product-wt"
+[ -d "${sibling}/.git/worktrees/sibling-wt/modules/product/worktrees" ] ||
+  { echo "FAIL fixture: the linked worktree's submodule repository is not below its registry entry" >&2; exit 1; }
+# A step below a git directory's `modules` that is a symbolic link to a repository elsewhere.
+linkmod="${sandbox}/linkmod"
+g init -q "${linkmod}"
+g -C "${linkmod}" commit -q --allow-empty -m init
+mkdir -p "${linkmod}/.git/modules"
+ln -s "${staged}/.git/modules/product" "${linkmod}/.git/modules/elsewhere"
+# One whose `modules` directory may not be looked into (the mode is set where it is asked).
+sealed="${sandbox}/sealed"
+locked_submodule "${sealed}" product claude/product-114 "${sandbox}/sealed-wt"
+rm -rf "${sealed}/product"
+# Submodule repositories nested below one git directory: twelve levels, which is as far as the walk
+# reads, and thirteen. Only the directories the walk looks for are made; none needs to be a
+# repository git could open, because none registers a worktree.
+nest_ok="${sandbox}/nest-ok"
+nest_deep="${sandbox}/nest-deep"
+for nest in "${nest_ok}:12" "${nest_deep}:13"; do
+  g init -q "${nest%:*}"
+  g -C "${nest%:*}" commit -q --allow-empty -m init
+  level_dir="${nest%:*}/.git"
+  for ((level = 0; level < ${nest#*:}; level++)); do
+    level_dir="${level_dir}/modules/m"
+    mkdir -p "${level_dir}/objects"
+    printf 'ref: refs/heads/main\n' >"${level_dir}/HEAD"
+  done
+done
+
 # ── A submodule whose `.git` entry names a git directory elsewhere (monorepo#3982) ──────────────
 # An unrelated repository on the same host. It works on one branch, and its registry holds a
 # worktree a live session locked. Nothing below is its submodule, so none of this is the probe's
@@ -578,7 +656,10 @@ case " \$* " in
   *' worktree list '*)
     if [ -n "\${FIXTURE_LIST_FAIL_AT:-}" ]; then
       # Only the listing asked of that one checkout fails.
-      case " \$* " in *" -C \${FIXTURE_LIST_FAIL_AT} "*) exit 1 ;; esac
+      # A repository with no checkout left is listed from its git directory.
+      case " \$* " in
+        *" -C \${FIXTURE_LIST_FAIL_AT} "* | *" --git-dir=\${FIXTURE_LIST_FAIL_AT} "*) exit 1 ;;
+      esac
     elif [ -n "\${FIXTURE_RESOLVE_FAIL_AT:-}" ]; then
       :
     else
@@ -1174,6 +1255,61 @@ expect "more superprojects above the asker than the scan follows are unknown" \
 expect "a chain within reach in both directions is still answered" \
   "${chain_mid}" "${session}" 0 \
   "devantler-tech/demo#3 holder=none" \
+  "$(pr devantler-tech/demo 3 claude/nobody-3)" "${lsof_nowhere}"
+
+# ── Submodule repositories no list of paths names (monorepo#3984) ───────────────────────────────
+expect "a lock in the registry of a submodule staged for deletion, which no list of paths names, is read" \
+  "${staged}" "${session}" 0 \
+  "devantler-tech/product#110 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 110 claude/product-110)" "${lsof_nowhere}"
+expect "a lock in the registry of a submodule that is not populated is read from where git keeps it" \
+  "${absent}" "${session}" 0 \
+  "devantler-tech/product#111 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 111 claude/product-111)" "${lsof_nowhere}"
+expect "a lock found there still holds nothing once its process exited" \
+  "${exited}" "${session}" 0 \
+  "devantler-tech/product#112 holder=none" \
+  "$(pr devantler-tech/product 112 claude/product-112)" "${lsof_nowhere}"
+expect "a lock in a submodule only another working tree of the repository populates is read" \
+  "${sibling}" "${session}" 0 \
+  "devantler-tech/product#113 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 113 claude/product-113)" "${lsof_nowhere}"
+expect "a branch nobody locked is still none beside those registries" \
+  "${sibling}" "${session}" 0 \
+  "devantler-tech/product#3 holder=none" \
+  "$(pr devantler-tech/product 3 claude/nobody-3)" "${lsof_nowhere}"
+expect "a symbolic link below a git directory's modules is not followed, and the answer is unknown" \
+  "${linkmod}" "${session}" 2 \
+  "devantler-tech/product#110 holder=unknown:submodule-gitdir" \
+  "$(pr devantler-tech/product 110 claude/product-110)" "${lsof_nowhere}"
+list_fail=1
+list_fail_at="${absent_registry}"
+expect "a listing of such a registry that fails is unknown, never none" \
+  "${absent}" "${session}" 2 \
+  "devantler-tech/product#111 holder=unknown:worktree-list" \
+  "$(pr devantler-tech/product 111 claude/product-111)" "${lsof_nowhere}"
+list_fail=0
+list_fail_at=''
+# root may look into any directory, so this case cannot be set up as root.
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "${sealed}/.git/modules"
+  expect "submodule repositories that may not be looked into are unknown, never none" \
+    "${sealed}" "${session}" 2 \
+    "devantler-tech/product#114 holder=unknown:lock-scan" \
+    "$(pr devantler-tech/product 114 claude/product-114)" "${lsof_nowhere}"
+  chmod 755 "${sealed}/.git/modules"
+fi
+expect "the same repositories are read once they may be looked into" \
+  "${sealed}" "${session}" 0 \
+  "devantler-tech/product#114 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 114 claude/product-114)" "${lsof_nowhere}"
+expect "submodule repositories nested as deep as the walk reads are still answered" \
+  "${nest_ok}" "${session}" 0 \
+  "devantler-tech/demo#3 holder=none" \
+  "$(pr devantler-tech/demo 3 claude/nobody-3)" "${lsof_nowhere}"
+expect "submodule repositories nested deeper than the walk reads are unknown" \
+  "${nest_deep}" "${session}" 2 \
+  "devantler-tech/demo#3 holder=unknown:lock-scan" \
   "$(pr devantler-tech/demo 3 claude/nobody-3)" "${lsof_nowhere}"
 
 # ── What a holder owns when its list of submodules is not the plain one (monorepo#3978) ─────────
