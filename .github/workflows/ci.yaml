@@ -650,6 +650,8 @@ jobs:
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/plugin-definition-currency.sh'
               - '.claude/scripts/plugin-definition-currency.test.sh'
+              # The test compares this script's bounded remote call with the claim helper's copy.
+              - '.claude/scripts/worktree-claim.sh'
               - '.github/workflows/ci.yaml'
             run-affected-tests:
               - '.claude/scripts/run-affected-tests.sh'
