@@ -11,7 +11,18 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script="$here/board-archive.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "board-archive.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 
 pass=0
 fail=0
@@ -359,4 +370,5 @@ check "usage shows --claim for both mutating forms" \
     grep -qF -- '--restore FILE --claim ISSUE:SHA' <<<"$err" && echo 0 || echo 1)" "rc=$rc $err"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
+completed=1
 [ "$fail" = 0 ]

@@ -11,7 +11,18 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 guard="$here/unsigned-push-guard.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "unsigned-push-guard.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 
 fail=0
 pass() { printf 'ok   %s\n' "$1"; }
@@ -184,6 +195,7 @@ else
   run "reverting to %G? alone fails the unverifiable signature" 1 env GIT_CONFIG_GLOBAL="$noverify" "$header_ablated" "$r7" base
 fi
 
+completed=1
 if [ "$fail" -eq 0 ]; then
   printf 'unsigned-push-guard.test.sh: all cases passed\n'
 else

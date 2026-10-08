@@ -5,7 +5,18 @@ set -Eeuo pipefail
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 tmp="$(mktemp -d)"
 tmp="$(cd -- "$tmp" && pwd -P)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "python-ban-guard-symlinks.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 fail=0
 count=0
 go -C "$here/python-ban-guard-go" build -o "$tmp/parser" .
@@ -129,4 +140,5 @@ report 'removing shell boundary exposes a read before Go rejection' \
     ! cmp -s "$here/python-ban-guard.sh" "$tmp/ablated/python-ban-guard.sh" && echo yes || echo no)" "rc=$rc: $out"
 
 printf 'python-ban-guard symlink self-test: %s cases\n' "$count"
+completed=1
 exit "$fail"
