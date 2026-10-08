@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Guards the work-selection ladder (maintainer direction 2026-07-25): a run picks work top-down —
-# live breakage, then EVERY open PR it owns or trusts INCLUDING ITS OWN DRAFTS, then security
-# issues, then bugs, then the oldest actionable issue.
+# Guards the work-selection ladder (maintainer directions 2026-07-25 and 2026-10-08):
+# live breakage, finish started work INCLUDING OWN DRAFTS, verified critical obligations,
+# value-prioritized Ready pull within capacity, then refinement.
 #
 # Why this needs enforcing rather than merely stating: the contract already said "PRs before issues"
 # and already said "stop starting, start finishing", and the pile still happened. The mechanism was a
@@ -16,9 +16,9 @@
 #   1. the ladder exists, is ordered, and names all five rungs;
 #   2. rung 1 explicitly covers OWN DRAFTS, and Merge policy's `non-draft` is explicitly scoped to
 #      the merge command rather than the sweep — the exact misreading that produced the pile;
-#   3. rung 1 is oldest-updated first across the whole lane, with explicit terminal states and no
+#   3. rung 1 finishes by delivery stage, with explicit terminal states and no
 #      replacement-intake loophole;
-#   4. severity outranks age, so a Security issue is not queued behind an older Docs one;
+#   4. evidenced importance outranks age; issue types alone do not establish severity;
 #   5. the run-loop skill agrees with the contract — three surfaces restate this ordering, and a
 #      silent divergence between them is how the previous wording drifted;
 #   6. intake is CAPPED and not merely ordered — because fixing (2) still did not drain the pile, and
@@ -186,7 +186,7 @@ assert_prose 'draft and non-draft alike' \
 assert_prose 'scoping below bounds the merge COMMAND, never the SWEEP' \
   "${constitution_flat}" "Merge policy does not scope its non-draft clause to the merge command"
 
-# ── 3. rung 1 drains the oldest work before the freshest ──────────────────────
+# ── 3. rung 1 finishes by delivery stage and preserves original clocks ───────
 assert_prose 'merge-ready, due verification, review resolution, implementation/unblocking' \
   "${constitution_flat}" "finishing does not order work by delivery stage"
 # Markdown backticks are literal prose, not command substitution.

@@ -279,15 +279,15 @@ scheduled run, child, advisor, fallback, retry or experiment.** Details:
 
 ### The work-selection ladder — one ordering, checked top-down every run
 
-Maintainer direction 2026-10-08: finish first, use Kanban to select important work, and protect
-cycle and lead time. This replaces age-only intake, not finishing or safety gates. This ladder is the
-**single normative ordering**; other ordering statements defer to it. **Do not descend while a
-higher rung has actionable work**:
+Maintainer direction 2026-10-08: finish first; use Kanban value, readiness and capacity before age.
+Safety gates are unchanged. This ladder is the **single normative ordering**. Rungs are strictly
+ordered — **you do not descend while a higher rung still
+has actionable work**:
 
 | # | Rung | What it covers |
 |---|---|---|
 | **0** | **Live breakage** | CI red on `main`, a broken build or site, the live prod cluster, an urgent security fix. Preempts everything. |
-| **1** | **Finish started work — INCLUDING your own drafts** | Actionable PRs, due verification and started issues: finish by delivery stage or park on a live-verified blocker; preserve clocks and WIP. |
+| **1** | **Finish started work — INCLUDING your own drafts** | Actionable PRs, draft and non-draft alike, due verification and started issues: finish by delivery stage or park on a live-verified blocker; preserve clocks and WIP. |
 | **2** | **Critical obligations** | Evidence-backed security deadlines and critical defects; ordinary Security/Bug types do not establish urgency. |
 | **3** | **Value-prioritized Ready pull** | Only refined, unblocked Ready work with downstream capacity; priority, product outcome and cost of waiting before age. |
 | **4** | **Refinement and replenishment** | Refine important near-term Backlog work within Ready capacity. Icebox is deferred, not an implementation queue. |
