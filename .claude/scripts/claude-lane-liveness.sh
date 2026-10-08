@@ -34,15 +34,18 @@
 #   - `.timestamp` and `.type` values, to time it and count assistant turns, and
 #   - on assistant records only, `isApiErrorMessage`, `message.model` and the `error` class token, to
 #     tell a runtime-synthesised error record from a real turn (monorepo#3412).
-# It never reads message content. The only transcript-derived value it emits is that error class,
+# It never reads message text. The only transcript-derived value it emits is that error class,
 # mapped onto a fixed cause-class vocabulary -- never the message text, which carries reset times.
+# It reads one structural fact besides: whether the session's last turn is a tool call with no
+# result, which is how a run waiting on an unanswered approval prompt looks (monorepo#3990).
 #
 # Usage: claude-lane-liveness.sh [--store PATH] [--projects PATH] [--task ID]
 #                               [--grace-seconds N] [--skew-seconds N]
-#                               [--lookback-hours N] [--now-epoch S] [--quiet]
+#                               [--lookback-hours N] [--stall-seconds N]
+#                               [--now-epoch S] [--quiet]
 #
 # Exit 0  every enabled task checked is dispatching and produced work on its most recent settled run
-#      1  NOT PRODUCING -- a dispatch produced no work, or an expected dispatch never happened
+#      1  NOT PRODUCING -- a dispatch produced no work, stalled on a tool call, or never happened
 #      2  UNKNOWN -- could not determine (no jq, absent/ambiguous store, absent projects root,
 #         unparsable record, or the newest dispatch still in flight)
 #
@@ -65,6 +68,7 @@ TASK_SET=0
 GRACE_SECONDS=900
 SKEW_SECONDS=120
 LOOKBACK_HOURS=72
+STALL_SECONDS=7200
 NOW_EPOCH=""
 QUIET=0
 
@@ -74,7 +78,7 @@ RECOVERY="
   the expected slot and whether a session exists for the latest dispatch. Re-run this check once the
   newest expected dispatch has had time to settle."
 
-usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; }
 
 die_unknown() {
   printf 'claude-lane-liveness: UNKNOWN -- %s\n' "$1" >&2
@@ -91,6 +95,7 @@ while [ "$#" -gt 0 ]; do
     --grace-seconds) [ "$#" -ge 2 ] || die_unknown "--grace-seconds needs a value"; GRACE_SECONDS="$2"; shift 2 ;;
     --skew-seconds) [ "$#" -ge 2 ] || die_unknown "--skew-seconds needs a value"; SKEW_SECONDS="$2"; shift 2 ;;
     --lookback-hours) [ "$#" -ge 2 ] || die_unknown "--lookback-hours needs a value"; LOOKBACK_HOURS="$2"; shift 2 ;;
+    --stall-seconds) [ "$#" -ge 2 ] || die_unknown "--stall-seconds needs a value"; STALL_SECONDS="$2"; shift 2 ;;
     --now-epoch) [ "$#" -ge 2 ] || die_unknown "--now-epoch needs a value"; NOW_EPOCH="$2"; shift 2 ;;
     --quiet) QUIET=1; shift ;;
     *) die_unknown "unrecognised argument: $1" ;;
@@ -100,7 +105,8 @@ done
 # Every numeric knob is validated before use. An unvalidated value would otherwise reach arithmetic
 # and either abort under `set -e` or silently widen a window until the check cannot fire.
 for pair in "GRACE_SECONDS:$GRACE_SECONDS" \
-            "SKEW_SECONDS:$SKEW_SECONDS" "LOOKBACK_HOURS:$LOOKBACK_HOURS"; do
+            "SKEW_SECONDS:$SKEW_SECONDS" "LOOKBACK_HOURS:$LOOKBACK_HOURS" \
+            "STALL_SECONDS:$STALL_SECONDS"; do
   name=${pair%%:*}; val=${pair#*:}
   case "$val" in ''|*[!0-9]*) die_unknown "$name must be a non-negative integer, got: $val" ;; esac
 done
@@ -112,6 +118,8 @@ done
 [ "$GRACE_SECONDS" -ge 1 ] || die_unknown "--grace-seconds must be at least 1"
 [ "$SKEW_SECONDS" -ge 1 ] || die_unknown "--skew-seconds must be at least 1"
 [ "$LOOKBACK_HOURS" -ge 1 ] || die_unknown "--lookback-hours must be at least 1"
+# --stall-seconds 0 would call any tool call still running at a skip sample a stall.
+[ "$STALL_SECONDS" -ge 1 ] || die_unknown "--stall-seconds must be at least 1"
 
 if [ -n "$NOW_EPOCH" ]; then
   case "$NOW_EPOCH" in ''|*[!0-9]*) die_unknown "--now-epoch must be a non-negative integer, got: $NOW_EPOCH" ;; esac
@@ -530,7 +538,11 @@ while IFS= read -r id; do
              elif $e == "authentication_failed" then "credentials/auth"
              else "unknown" end
          end) as $c
-      | "\($a)\t\($t | first // "")\t\($t | last // "")\t\($c)"' "$match" 2>/dev/null) || stats=""
+      | ([$r[] | select(.type == "assistant" or .type == "user")] | last) as $end
+      | (if ($end | type) == "object" and $end.type == "assistant"
+            and ([$end.message.content? | arrays | .[] | select(type == "object" and .type == "tool_use")] | length) > 0
+         then 1 else 0 end) as $p
+      | "\($a)\t\($t | first // "")\t\($t | last // "")\t\($c)\t\($p)"' "$match" 2>/dev/null) || stats=""
   if [ -z "$stats" ]; then
     report="${report}  UNKNOWN  ${id} -- session transcript could not be parsed, cannot judge
 "
@@ -538,8 +550,10 @@ while IFS= read -r id; do
   fi
   turns=${stats%%$'\t'*}; rest=${stats#*$'\t'}
   t_first=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-  t_last=${rest%%$'\t'*}; cause=${rest#*$'\t'}
+  t_last=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+  cause=${rest%%$'\t'*}; pending=${rest#*$'\t'}
   case "$cause" in none|quota/billing|credentials/auth|unknown) : ;; *) turns="" ;; esac
+  case "$pending" in 0|1) : ;; *) turns="" ;; esac
   case "$turns" in ''|*[!0-9]*) turns="" ;; esac
   fe=$(iso_to_epoch "$t_first"); le=$(iso_to_epoch "$t_last")
   if [ -z "$turns" ] || [ -z "$fe" ] || [ -z "$le" ] || [ "$le" -lt "$fe" ]; then
@@ -570,9 +584,20 @@ while IFS= read -r id; do
       | select(type == "number" and . >= 0 and floor == . and . <= $cutoff)]
     | max // empty' "$STORE" 2>/dev/null) || skip_ms=""
   overlap_until=$le
+  stalled_for=""
   if [ -n "$skip_ms" ]; then
     skip_epoch=$(( skip_ms / 1000 ))
     if [ "$skip_epoch" -gt "$overlap_until" ]; then overlap_until=$skip_epoch; fi
+    # A skip sample says the run is still OPEN, not that it is working. A run whose transcript ends on
+    # a tool call that never returned, and which the scheduler still saw open more than the stall
+    # window later, is waiting -- on a hung tool, or on an approval prompt nobody is there to answer.
+    # It holds the task's only slot, so every later dispatch is dropped while the samples keep
+    # arriving, and they covered that outage as healthy for as long as it lasted (monorepo#3990).
+    # Both legs are required: an unanswered call alone is also what a killed session leaves behind,
+    # and silence alone is what a finished turn that was resumed hours later looks like.
+    if [ "$pending" -eq 1 ] && [ $(( skip_epoch - le )) -gt "$STALL_SECONDS" ]; then
+      stalled_for=$(( skip_epoch - le ))
+    fi
   fi
 
   # A producing session or scheduler skip that crosses a scheduled slot explains why Claude did not
@@ -617,6 +642,10 @@ while IFS= read -r id; do
     cause_note=""
     [ "$cause" = none ] || cause_note=" (runtime error record only, cause=${cause})"
     report="${report}  NOT-PRODUCING  ${id} -- dispatched at ${last_run}, session produced 0 assistant turns in ${span}s${cause_note}
+"
+    any_dead=1
+  elif [ -n "$stalled_for" ]; then
+    report="${report}  NOT-PRODUCING  ${id} -- dispatched at ${last_run}, session has waited ${stalled_for}s on a tool call that never returned while the scheduler dropped the slots behind it
 "
     any_dead=1
   elif [ "$schedule_state" = dead ]; then

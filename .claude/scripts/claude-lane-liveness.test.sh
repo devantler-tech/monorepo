@@ -198,6 +198,55 @@ printf '{"recordedSkips":{"alpha":[{"at":%s,"reason":"per_task_limit"}]},"schedu
 mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 40 1200 >/dev/null
 expect 0 "a live per_task_limit sample covers a slot crossed during transcript silence"
 
+# --- RED: a run waiting on a tool call that never returns (monorepo#3990) ----------------------
+# A scheduled run whose tool call becomes an approval prompt waits on it for good: nobody is there to
+# answer. The scheduler keeps the run open, drops every later slot and keeps writing skip samples,
+# which read as a busy run for as long as the outage lasts. The fixture is the real case's shape: a
+# short producing session ending on a tool call with no result, and a skip sample hours later.
+mkskipstore() {
+  local last_slot=$1 last_run=$2 skip_epoch=$3
+  printf '{"recordedSkips":{"alpha":[{"at":%s,"reason":"per_task_limit"}]},"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":"%s","lastScheduledFor":"%s","cronExpression":"0 * * * *","filePath":"/x","cwd":"/y"}]}\n' \
+    "$(( skip_epoch * 1000 ))" "$(iso_at "$last_run")" "$(iso_at "$last_slot")" > "$STORE"
+}
+# The appended record carries the session's own closing timestamp, so the span is unchanged and only
+# the unanswered call differs from a healthy fixture.
+add_pending_call() {
+  printf '{"type":"assistant","timestamp":"%s","message":{"content":[{"type":"tool_use"}]}}\n' "$(iso_at "$2")" >> "$1"
+}
+
+mkcase unanswered_call_stalls_lane
+last_slot=$(( NOW - NOW % 3600 - 4 * 3600 ))
+last_run=$(( last_slot + 60 ))
+mkskipstore "$last_slot" "$last_run" $(( NOW - 60 ))
+sess=$(mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 22 146)
+add_pending_call "$sess" $(( last_run + 147 ))
+expect_msg 1 "tool call that never returned" "an unanswered tool call the scheduler still sees open hours later is NOT-PRODUCING"
+# The threshold is what fires, not the unanswered call alone: the same fixture under a window wider
+# than the silence is the long tool call the skip samples exist to cover.
+expect 0 "the same unanswered call inside a wider stall window stays healthy" --stall-seconds 100000
+expect_msg 2 "--stall-seconds must be at least 1" "a zero stall window is refused" --stall-seconds 0
+
+# A tool call that is merely slow: unanswered, but the scheduler last saw the run open inside the
+# default window. This is the case the skip samples were added for and it must not fire.
+mkcase unanswered_call_inside_window
+last_slot=$(( NOW - NOW % 3600 - 3600 ))
+last_run=$(( last_slot + 60 ))
+mkskipstore "$last_slot" "$last_run" $(( NOW - 60 ))
+sess=$(mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 22 146)
+add_pending_call "$sess" $(( last_run + 147 ))
+expect 0 "an unanswered tool call younger than the stall window stays healthy"
+
+# Silence alone is not a stall. A session whose call was answered, then went quiet for the same four
+# hours under fresh skip samples, keeps the verdict it had before this check existed.
+mkcase answered_call_long_silence
+last_slot=$(( NOW - NOW % 3600 - 4 * 3600 ))
+last_run=$(( last_slot + 60 ))
+mkskipstore "$last_slot" "$last_run" $(( NOW - 60 ))
+sess=$(mksession "$PROJECTS/proj-a" alpha $(( last_run + 1 )) 22 146)
+add_pending_call "$sess" $(( last_run + 147 ))
+printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result"}]}}\n' "$(iso_at $(( last_run + 147 )))" >> "$sess"
+expect 0 "a long silence after an answered tool call is not a stall"
+
 # A schedule anchor must name the exact start of a cron minute. Silently accepting nonzero seconds
 # shifts every derived deadline and can delay a stopped-scheduler verdict.
 mkcase scheduled_seconds
