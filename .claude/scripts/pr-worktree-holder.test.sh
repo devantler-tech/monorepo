@@ -429,8 +429,10 @@ g -C "${selfkept}/product" config remote.origin.url git@github.com:devantler-tec
 g -C "${selfkept}/product" worktree add -q -b claude/product-99 "${sandbox}/selfkept-wt"
 g -C "${selfkept}/product" worktree lock \
   --reason "claude agent selfkept (pid 9000002 start ${start_theirs})" "${sandbox}/selfkept-wt"
-[ -d "${selfkept}/product/.git" ] && [ ! -L "${selfkept}/product/.git" ] ||
-  { echo "FAIL fixture: selfkept/product does not keep its own git directory" >&2; exit 1; }
+if [ ! -d "${selfkept}/product/.git" ] || [ -L "${selfkept}/product/.git" ]; then
+  echo "FAIL fixture: selfkept/product does not keep its own git directory" >&2
+  exit 1
+fi
 # A linked worktree whose submodule entry names the git directory the MAIN checkout keeps for that
 # submodule: below the directory the worktree's `commondir` names, and not below its own.
 shared="${sandbox}/shared"
@@ -443,8 +445,10 @@ g -C "${shared}" config remote.origin.url git@github.com:devantler-tech/shared.g
 g -C "${shared}" worktree add -q -b claude/shared-100 "${shared_wt}"
 mkdir -p "${shared_wt}/product"
 printf 'gitdir: %s\n' "${shared}/.git/modules/product" >"${shared_wt}/product/.git"
-[ -d "${shared}/.git/modules/product/objects" ] && [ -f "${shared}/.git/worktrees/shared-wt/commondir" ] ||
-  { echo "FAIL fixture: the shared layout is not the one the case describes" >&2; exit 1; }
+if [ ! -d "${shared}/.git/modules/product/objects" ] || [ ! -f "${shared}/.git/worktrees/shared-wt/commondir" ]; then
+  echo "FAIL fixture: the shared layout is not the one the case describes" >&2
+  exit 1
+fi
 # Guard the layouts in use on an agent host, which the cases above this section read: a submodule
 # of a main checkout keeps its git directory below the main checkout's, and a submodule of a
 # linked worktree below that worktree's own git directory.
