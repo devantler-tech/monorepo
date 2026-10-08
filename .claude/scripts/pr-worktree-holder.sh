@@ -305,6 +305,7 @@ outside() {
   OUTSIDE=1
   : >"${work}/outside" 2>/dev/null || true
 }
+# outside_seen — succeeds when `outside` was called, in this shell or in a subshell of it.
 outside_seen() { [ "${OUTSIDE}" = 1 ] || [ -e "${work}/outside" ]; }
 
 # git_directory <checkout> — set G_DIR to the git directory its `.git` entry names, as a physical
