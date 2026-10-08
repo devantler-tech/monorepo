@@ -4675,7 +4675,9 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
     # mentions a way to change what a name runs — `alias`, `eval`, `source`,
     # `enable`, `shopt`, `function`, `trap`, `builtin`, `BASH_ENV`, `BASH_FUNC`,
     # `PROMPT_COMMAND`, `command_not_found_handle`, a `name()` definition or a
-    # `.` word. Such a mention is itself listed whenever it names `make`.
+    # `.` word. A mention that is only text one inert command prints (a printf
+    # of the words "alias echo=x") is not such a way and is left out. Either
+    # kind of mention is itself listed whenever it names `make`.
     # Matching is on the raw line with no boundary before `make` (`gmake`), so
     # the candidate set is the original predicate's, never smaller. Label
     # precision is tracked in #3666.
@@ -4751,7 +4753,7 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
                 res[n] = unquoted($0); escaped[n] = esc; joined = trail
                 if ($0 ~ /(^|[^A-Za-z0-9_-])(alias|eval|source|enable|shopt|function|trap|builtin|BASH_ENV|BASH_FUNC[A-Za-z0-9_%]*|PROMPT_COMMAND|command_not_found_handle)([^A-Za-z0-9_-]|$)/ \
                     || $0 ~ /[(][[:space:]]*[)]/ || $0 ~ /(^|[^A-Za-z0-9_.\/-])[.][[:space:]]/) {
-                  redefined = 1; renames[n] = 1
+                  mention[n] = 1
                 }
               }
               # An escape inside "…" is prose only where this line is all one
@@ -4769,12 +4771,30 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
               # for the rest of the line, so a line that holds one keeps the old
               # rule as well.
               function layered(i) { return inexact[of[i]] || lines[of[i]] > 1 || index(line[i], "$" sq) > 0 }
+              function prose(i) { return !after[i] && !(escaped[i] && layered(i)) && text_only(res[i]) }
+              # A mention of a name-changing word changes nothing when it is
+              # only text that one inert command prints or posts, such as a
+              # printf of the words "alias echo=x" (#3666): the line is a single
+              # command, with no `;` or `&`, whose own word is unquoted and
+              # inert, and what is left once quoted text is blanked is text
+              # only. A quoted command word leaves no inert word behind, a line
+              # holding ANSI-C quoting may be misread, and in a call of several
+              # lines or one decoded inexactly the line may not be all the shell
+              # reads (a continued line can carry the redirect), so all still count.
+              # Every other mention removes the label for the session, as before.
+              function quoted_mention(i) {
+                return lines[of[i]] == 1 && !inexact[of[i]] && prose(i) && res[i] !~ /[;&]/ && res[i] ~ /[^[:space:]]/ && index(line[i], "$" sq) == 0
+              }
               END {
+                for (i = 1; i <= n; i++) if (mention[i] && !quoted_mention(i)) { redefined = 1; renames[i] = 1 }
                 for (i = 1; i <= n; i++) {
                   if (line[i] ~ /(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest)/ \
                       || (renames[i] && line[i] ~ /make/)) print "0\t" substr(line[i], 1, 70)
-                  else if (line[i] ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/)
-                    print (!redefined && !after[i] && !(escaped[i] && layered(i)) && text_only(res[i]) ? "1" : "0") "\t" substr(line[i], 1, 70)
+                  # A quoted mention that names make was always listed, so it
+                  # stays listed; it carries the label instead of ranking with
+                  # the builds.
+                  else if ((mention[i] && line[i] ~ /make/) || line[i] ~ /make([[:space:]]+-[^[:space:]]+)*[[:space:]]+[a-z]/)
+                    print (!redefined && prose(i) ? "1" : "0") "\t" substr(line[i], 1, 70)
                 }
               }' <<<"$cmds"
           fi
