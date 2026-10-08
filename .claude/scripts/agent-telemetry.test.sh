@@ -8142,11 +8142,13 @@ mk_mention_session "echo 'open" "eval x'"
 # shellcheck disable=SC2016 # literal command text
 mk_mention_session 'echo "$(alias echo=x)"'
 mk_mention_session 'alias echo=x'
+# The redirect that writes the text to a file can sit on the next line of the call.
+mk_mention_session "printf 'alias echo=x' \\" ">> ~/.bashrc"
 MK_OUT=$(TZ=UTC CLAUDE_PROJECTS_DIR="$MKM/projects" CODEX_HOME="$MKM/codex" MONOREPO_DIR="$MKM/nest" \
   HOME="$MKM" bash "$TARGET" --since-days 3650 --section safety 2>&1)
-if [[ "$MKM_N" -eq 10 ]] \
-   && grep -qE '^ +10 npm ci$' <<<"$MK_OUT" \
-   && grep -qE "^ +10 printf 'make the report clearer'$" <<<"$MK_OUT" \
+if [[ "$MKM_N" -eq 11 ]] \
+   && grep -qE '^ +11 npm ci$' <<<"$MK_OUT" \
+   && grep -qE "^ +11 printf 'make the report clearer'$" <<<"$MK_OUT" \
    && ! grep -qF '[prose?]' <<<"$MK_OUT"; then
   ok "a mention outside one inert command still removes the prose label for the session"
 else
@@ -8353,6 +8355,30 @@ if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
   ok "a Codex command is decoded as the string it is; a literal that cannot be keeps every backslash counting"
 else
   bad "a Codex command is decoded as the string it is; a literal that cannot be keeps every backslash counting" \
+      "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -12)"
+fi
+# A quoted mention of a name-changing word is left out only when the call's text is
+# exact (#3666). Decoded exactly it keeps the session's label; inexactly, where the
+# quotes may not be the ones the shell saw, it removes the label as before.
+MK_OUT=$({
+  mk_xcmd 'gh pr checkout 42'
+  mk_xcmd "printf 'alias echo=x'"
+  mk_xcmd "printf 'make the report clearer'"
+  mk_xcmd 'npm ci'
+} | mk_xrun makecodexmention)
+MK_OUT2=$({
+  mk_xcmd 'gh pr checkout 43'
+  mk_xraw "printf 'alias echo=x\\x21'"
+  mk_xcmd "printf 'make the report clearer'"
+  mk_xcmd 'npm ci'
+} | mk_xrun makecodexmentionraw)
+if grep -qE '^ +1 npm ci$' <<<"$MK_OUT" \
+   && grep -qE "^ +1 \[prose\?\] printf 'make the report clearer'$" <<<"$MK_OUT" \
+   && grep -qE '^ +1 npm ci$' <<<"$MK_OUT2" \
+   && grep -qE "^ +1 printf 'make the report clearer'$" <<<"$MK_OUT2"; then
+  ok "a quoted mention keeps the label in an exactly decoded Codex call and removes it in an inexact one"
+else
+  bad "a quoted mention keeps the label in an exactly decoded Codex call and removes it in an inexact one" \
       "got: $(grep -hE '^ +[0-9]+ ' <<<"$MK_OUT$MK_OUT2" | head -12)"
 fi
 # An escape inside "…" is prose only where the line is all one shell reads. In a call of several

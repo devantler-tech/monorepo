@@ -4777,11 +4777,13 @@ if want safety && [ "$SAFETY_WORKER" = 1 ]; then
               # printf of the words "alias echo=x" (#3666): the line is a single
               # command, with no `;` or `&`, whose own word is unquoted and
               # inert, and what is left once quoted text is blanked is text
-              # only. A quoted command word leaves no inert word behind, and a
-              # line holding ANSI-C quoting may be misread, so both still count.
+              # only. A quoted command word leaves no inert word behind, a line
+              # holding ANSI-C quoting may be misread, and in a call of several
+              # lines or one decoded inexactly the line may not be all the shell
+              # reads (a continued line can carry the redirect), so all still count.
               # Every other mention removes the label for the session, as before.
               function quoted_mention(i) {
-                return prose(i) && res[i] !~ /[;&]/ && res[i] ~ /[^[:space:]]/ && index(line[i], "$" sq) == 0
+                return lines[of[i]] == 1 && !inexact[of[i]] && prose(i) && res[i] !~ /[;&]/ && res[i] ~ /[^[:space:]]/ && index(line[i], "$" sq) == 0
               }
               END {
                 for (i = 1; i <= n; i++) if (mention[i] && !quoted_mention(i)) { redefined = 1; renames[i] = 1 }
