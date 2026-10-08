@@ -53,7 +53,7 @@ reserved_count() { find "$1" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' '
 
 echo "== the next identifier =="
 store="$FIX/store.md"
-printf '%s\n' '## SETTLED H70 · H76 — archived' '## H93 (opened 2026-10-06) — a signature' 'H94: another' > "$store"
+printf '%s\n' '## SETTLED H70 · H76 — archived' '## H93 (opened 2026-10-06) — a signature' '### H94 — another' 'Upper bounds H8653/60, H898/10 and H120 in running text' > "$store"
 res="$FIX/res"
 
 run --reservations "$res" --owner run-a --scan "$store"
@@ -73,18 +73,34 @@ expect "a reservation above the store wins" 0 H121
 
 echo "== what counts as an identifier =="
 words="$FIX/words.md"
-printf '%s\n' 'SHA256 H2O xH999 H12345678 h500 H_700 H44' '(H45), [H46]' 'CH47' > "$words"
+printf '%s\n' '# SHA256 H2O xH999 H12345678 h500 H_700 H44' '## (H45), [H46]' '### CH47' '####### H300 has seven marks' '#H400 has no space' ' # H500 is indented' > "$words"
 run --reservations "$FIX/res-words" --owner run-a --scan "$words"
-expect "only a whole-word H<n> counts" 0 H47
+expect "only a whole-word H<n> in a heading counts" 0 H47
 
 zeros="$FIX/zeros.md"
-printf '%s\n' 'H007 and H08' > "$zeros"
+printf '%s\n' '## H007 and H08' > "$zeros"
 run --reservations "$FIX/res-zeros" --owner run-a --scan "$zeros"
 expect "leading zeros are read as decimal" 0 H9
 
+echo "== running text is not read =="
+prose="$FIX/prose.md"
+printf '%s\n' '## H89 — a signature' 'UpperboundsH8653/60,H87a11/30,H898/10 NOT-YET-DUE' 'see H500' > "$prose"
+run --reservations "$FIX/res-prose" --owner run-a --scan "$prose"
+expect "an identifier run together with a figure is not read as a larger one" 0 H90
+run --reservations "$FIX/res-atleast" --owner run-a --scan "$prose" --at-least 500
+expect "--at-least raises the floor" 0 H501
+run --reservations "$FIX/res-atleast-low" --owner run-a --scan "$prose" --at-least 3
+expect "--at-least never lowers it" 0 H90
+only_prose="$FIX/only-prose.md"
+printf '%s\n' 'H12 is mentioned, never in a heading' > "$only_prose"
+run --reservations "$FIX/res-only-prose" --owner run-a --scan "$only_prose"
+expect "a store with no identifier in a heading is unknown" 2 ""
+run --reservations "$FIX/res-only-prose" --owner run-a --scan "$only_prose" --at-least 12
+expect "--at-least stands in for it" 0 H13
+
 echo "== several stores =="
 sibling="$FIX/sibling.md"
-printf '%s\n' 'Hypotheses / next run: H101 pending' > "$sibling"
+printf '%s\n' '### Hypotheses / next run — H101' > "$sibling"
 run --reservations "$FIX/res-two" --owner run-a --scan "$store" --scan "$sibling"
 expect "the highest across every store" 0 H102
 run --reservations "$FIX/res-two-b" --owner run-a --scan "$sibling" --scan "$store"
@@ -148,6 +164,10 @@ run --reservations "$FIX/res-usage" --owner run-a
 expect "no store" 2 ""
 run --reservations "$FIX/res-usage" --owner 'run a; rm -rf x' --scan "$store"
 expect "an owner that is not a plain token" 2 ""
+for bad_floor in 0 007 -3 1.5 abc 1234567 ''; do
+  run --reservations "$FIX/res-usage" --owner run-a --scan "$store" --at-least "$bad_floor"
+  expect "--at-least '$bad_floor' is refused" 2 ""
+done
 run --reservations "$FIX/res-usage" --owner run-a --scan "$store" --unknown
 expect "an unknown argument" 2 ""
 run --reservations "$FIX/res-usage" --owner run-a --scan

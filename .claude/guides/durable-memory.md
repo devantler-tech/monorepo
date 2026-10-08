@@ -125,7 +125,8 @@ step:
    run takes its identifier from
    `.claude/scripts/hypothesis-id-reserve.sh --reservations /Users/homelab-mac-mini/.claude/hypothesis-id-reservations --owner <run token> --scan <store>`,
    with one `--scan` for every file that holds identifiers: the store named above, any file it has
-   been split into, and the sibling's. Exit `0` prints the identifier, which is then this run's alone.
+   been split into, and the sibling's. It reads heading lines only, so open every hypothesis under a
+   heading that names it. Exit `0` prints the identifier, which is then this run's alone.
    Exit `2` reserved nothing: never mint one by hand, and leave the hypothesis for a run that can
    reserve. **The ledger itself is appended to, in a section of its own for each run**, so a
    concurrent writer cannot be overwritten; a whole-file rewrite of an Improver store additionally
