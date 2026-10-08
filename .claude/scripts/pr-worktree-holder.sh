@@ -35,7 +35,8 @@
 #                                   input, lsof-missing, lsof-failed, lsof-empty, ps-failed,
 #                                   worktree-list (any worktree listing the answer depends on:
 #                                   the locks, or the worktrees nested in a held one), lock-reason,
-#                                   lock-scan (a repository whose registry may hold a lock was not
+#                                   lock-scan (a repository whose registry may hold a lock, or a
+#                                   submodule a holder may have on the head branch, was not
 #                                   reached: a superproject, an index or a `.gitmodules` that cannot
 #                                   be read, a checkout or a populated submodule at a path holding
 #                                   a newline or a tab, or nesting deeper than the scan follows),
@@ -45,7 +46,8 @@
 #
 # WHAT HOLDING A CHECKOUT MEANS
 #   A process holds the checkout containing its working directory, every populated submodule of
-#   that checkout and, when that checkout is a linked (per-session) worktree, the worktrees its
+#   that checkout (those its index or its `.gitmodules` names, monorepo#3978) and, when that
+#   checkout is a linked (per-session) worktree, the worktrees its
 #   submodules register inside their own directories: the per-run product worktrees the
 #   git-and-worktrees guide prescribes. A session usually sits at its worktree root while its
 #   branch is checked out in a submodule below it, so stopping at the working directory would miss
@@ -442,19 +444,51 @@ expand_own_nested() {
 }
 
 # expand_submodules <holder-top> <checkout> <linked> <depth> — every populated submodule below it.
+# Which submodules a checkout has is read as the lock scan reads it (monorepo#3978): from the index
+# and from `.gitmodules`, NUL-terminated. `.gitmodules` alone misses a populated submodule whose
+# superproject's working tree has lost that file, and read line by line it cuts a path that holds a
+# newline in two. A list that cannot be read, and a populated submodule at a path the tables here
+# cannot carry, leave what this holder holds unknown, and the answer is `unknown:lock-scan`: a
+# submodule nobody looked at may be on the head branch of any PR asked about.
 expand_submodules() {
-  local top="$1" dir="$2" linked="$3" depth="$4" paths rel sub gitdir confined_rc
+  local top="$1" dir="$2" linked="$3" depth="$4" paths rel sub gitdir confined_rc below_rc
+  local soh=$'\001' stx=$'\002' nl=$'\n'
   [ "${depth}" -lt 4 ] || return 0
-  [ -f "${dir}/.gitmodules" ] || return 0
-  paths="$(git config -f "${dir}/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null | cut -d' ' -f2-)" || paths=''
+  if ! paths="$(submodule_paths "${dir}")"; then
+    scan_failed
+    return 0
+  fi
   while IFS= read -r rel; do
     [ -n "${rel}" ] || continue
-    sub="${dir}/${rel}"
+    # A path holding the byte that stands for a newline in this list: which path it is cannot be told.
+    case "${rel}" in
+      *"${stx}"*)
+        scan_failed
+        return 0
+        ;;
+    esac
+    # `.gitmodules` is repository content. A path in it that leaves the checkout names no submodule,
+    # so its `.git` entry is not judged either: content alone must not be able to turn every answer
+    # into `unknown:`. A step that may not be looked into hides whether a submodule is populated.
+    below_rc=0
+    below "${dir}" "${rel//${soh}/${nl}}" || below_rc=$?
+    case "${below_rc}" in
+      0) ;;
+      2)
+        scan_failed
+        return 0
+        ;;
+      *) continue ;;
+    esac
+    sub="${B_PATH}"
     [ -e "${sub}/.git" ] || continue
-    # `.gitmodules` is repository content. A path in it that leaves the checkout names no submodule
-    # and was never recorded (see the equality below), so its `.git` entry is not judged either:
-    # content alone must not be able to turn every answer into `unknown:`.
-    below "${dir}" "${rel}" || continue
+    # The record lines are tab-separated and read back one to a line.
+    case "${sub}" in
+      *"${tab}"* | *"${nl}"*)
+        scan_failed
+        return 0
+        ;;
+    esac
     # Nothing of a submodule is read through an entry that names a git directory elsewhere.
     confined_rc=0
     confined "${dir}" "${sub}" || confined_rc=$?
@@ -462,8 +496,7 @@ expand_submodules() {
       outside
       continue
     fi
-    # An unpopulated submodule resolves to the superproject, and a `.gitmodules` path that leaves the
-    # checkout (it is repository content) resolves elsewhere: both fail this equality.
+    # An unpopulated submodule resolves to the superproject, which fails this equality.
     resolve "${sub}" || continue
     [ "${R_TOP}" = "${sub}" ] || continue
     gitdir="${R_GITDIR}"

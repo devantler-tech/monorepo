@@ -28,6 +28,9 @@
 #     its superproject does not keep, among the holders or in the lock scan, and the answer is
 #     `unknown:`, while a submodule of a main checkout, one of a linked worktree and one that keeps
 #     its own git directory read as before (monorepo#3982).
+#   - a holder's submodules are those its index or its `.gitmodules` names, so a checkout without
+#     `.gitmodules` still holds its submodule's branch, and a list that cannot be read, or a
+#     populated submodule at a path holding a newline, is `unknown:`, never `none` (monorepo#3978).
 # `lsof` and `ps` are shims driven by FIXTURE_* variables; the helper itself reads no environment.
 set -euo pipefail
 
@@ -417,6 +420,71 @@ for strayed in "${astray}/product" "${astray_link}/product" "${astray_bare}/prod
   [ "$(g -C "${strayed}" rev-parse --symbolic-full-name HEAD 2>/dev/null)" = refs/heads/claude/stranger-97 ] ||
     { echo "FAIL fixture: git does not follow the .git entry of ${strayed} to the unrelated repository" >&2; exit 1; }
 done
+# ── What a holder's checkout owns, when its list of submodules is not the plain one (monorepo#3978) ──
+# Each is the one worktree of a repository of its own, locked by a live session and asked about
+# from that repository's main checkout with no process anywhere: the lock scan starts from the
+# main checkout and never walks the worktree, so only the listing of what the lock's holder owns
+# reaches its submodules. One repository each, because a list that cannot be read leaves every
+# answer unknown, and would hide whether the worktree beside it was read.
+# roster_worktree <name> — repository `roster-<name>` and its locked worktree, product populated.
+roster_worktree() {
+  local roster="${sandbox}/roster-$1" wt
+  wt="${roster}/.claude/worktrees/$1"
+  g init -q "${roster}"
+  g -C "${roster}" commit -q --allow-empty -m init
+  g -C "${roster}" submodule --quiet add "${sandbox}/product-origin" product
+  g -C "${roster}" commit -q -m 'add product'
+  g -C "${roster}" worktree add -q -b "worktree-$1" "${wt}"
+  g -C "${roster}" worktree lock --reason "claude agent $1 (pid 9000002 start ${start_theirs})" "${wt}"
+  g -C "${wt}" submodule --quiet update --init product
+  g -C "${wt}/product" config remote.origin.url git@github.com:devantler-tech/product.git
+}
+# Its working tree has no `.gitmodules`; the index still holds the gitlink.
+roster_worktree bare
+roster_bare="${sandbox}/roster-bare/.claude/worktrees/bare"
+g -C "${roster_bare}/product" checkout -q -b claude/product-101
+rm "${roster_bare}/.gitmodules"
+[ "$(g -C "${roster_bare}" ls-files -s product | cut -d' ' -f1)" = 160000 ] ||
+  { echo "FAIL fixture: the index of the worktree without .gitmodules holds no gitlink" >&2; exit 1; }
+# A second populated submodule at a path that holds a newline, named only by `.gitmodules`.
+roster_worktree newline
+roster_nl="${sandbox}/roster-newline/.claude/worktrees/newline"
+g clone -q "${sandbox}/product-origin" "${roster_nl}/${nlsub_path}"
+g config -f "${roster_nl}/.gitmodules" submodule.safe.path "${nlsub_path}"
+g config -f "${roster_nl}/.gitmodules" submodule.safe.url "${sandbox}/product-origin"
+g -C "${roster_nl}/${nlsub_path}" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${roster_nl}/${nlsub_path}" checkout -q -b claude/product-102
+# The same, staged, so the index names it too: git prints an index path on one line only with NULs.
+roster_worktree staged
+roster_staged="${sandbox}/roster-staged/.claude/worktrees/staged"
+g clone -q "${sandbox}/product-origin" "${roster_staged}/${nlsub_path}"
+g -C "${roster_staged}" -c advice.addEmbeddedRepo=false add "${nlsub_path}"
+g -C "${roster_staged}/${nlsub_path}" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${roster_staged}/${nlsub_path}" checkout -q -b claude/product-103
+[ "$(g -C "${roster_staged}" ls-files -s -z | tr '\0' '\n' | grep -c '^160000 ')" = 2 ] ||
+  { echo "FAIL fixture: the index of the staged worktree does not hold both gitlinks" >&2; exit 1; }
+# A second populated submodule at a path that holds a tab: a record line would carry it as two fields.
+roster_worktree tabbed
+roster_tabbed="${sandbox}/roster-tabbed/.claude/worktrees/tabbed"
+g clone -q "${sandbox}/product-origin" "${roster_tabbed}/${tabsub_path}"
+g -C "${roster_tabbed}" -c advice.addEmbeddedRepo=false add "${tabsub_path}"
+g -C "${roster_tabbed}/${tabsub_path}" config remote.origin.url git@github.com:devantler-tech/product.git
+g -C "${roster_tabbed}/${tabsub_path}" checkout -q -b claude/product-109
+# Its `.gitmodules` cannot be parsed.
+roster_worktree unparsed
+roster_unparsed="${sandbox}/roster-unparsed/.claude/worktrees/unparsed"
+g -C "${roster_unparsed}/product" checkout -q -b claude/product-104
+printf '[submodule "x"\n\tpath = x\n' >"${roster_unparsed}/.gitmodules"
+# Its index file is gone, and so is its `.gitmodules`: no list names the submodule.
+roster_worktree indexless
+roster_indexless="${sandbox}/roster-indexless/.claude/worktrees/indexless"
+g -C "${roster_indexless}/product" checkout -q -b claude/product-105
+rm "${roster_indexless}/.gitmodules" "$(g -C "${roster_indexless}" rev-parse --path-format=absolute --git-dir)/index"
+# An ordinary one, untouched: the control.
+roster_worktree plain
+g -C "${sandbox}/roster-plain/.claude/worktrees/plain/product" checkout -q -b claude/product-106
+# The checkout without `.gitmodules` above, with its submodule on a branch of its own.
+g -C "${nomodules}/product" checkout -q -b claude/product-108
 # A submodule that keeps its own git directory: its `.git` entry is that directory, and git never
 # moved it below the superproject's. Its registry holds a worktree a live session locked.
 selfkept="${sandbox}/selfkept"
@@ -1107,6 +1175,40 @@ expect "a chain within reach in both directions is still answered" \
   "${chain_mid}" "${session}" 0 \
   "devantler-tech/demo#3 holder=none" \
   "$(pr devantler-tech/demo 3 claude/nobody-3)" "${lsof_nowhere}"
+
+# ── What a holder owns when its list of submodules is not the plain one (monorepo#3978) ─────────
+for unlisted in \
+  "newline:102:a held worktree's submodule at a path that holds a newline is unknown, never none" \
+  "staged:103:a held worktree's staged submodule at a path that holds a newline is unknown, never none" \
+  "tabbed:109:a held worktree's submodule at a path that holds a tab is unknown, never none" \
+  "unparsed:104:a held worktree whose .gitmodules cannot be parsed is unknown, never none" \
+  "indexless:105:a held worktree whose index is gone is unknown, never none"; do
+  unlisted_name="${unlisted%%:*}"
+  unlisted="${unlisted#*:}"
+  expect "${unlisted#*:}" \
+    "${sandbox}/roster-${unlisted_name}" "${session}" 2 \
+    "devantler-tech/product#${unlisted%%:*} holder=unknown:lock-scan" \
+    "$(pr devantler-tech/product "${unlisted%%:*}" "claude/product-${unlisted%%:*}")" "${lsof_nowhere}"
+done
+expect "a held worktree with no .gitmodules in its working tree still holds its populated submodule's branch" \
+  "${sandbox}/roster-bare" "${session}" 0 \
+  "devantler-tech/product#101 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 101 claude/product-101)" "${lsof_nowhere}"
+expect "a held worktree with an ordinary list of submodules holds its populated submodule's branch" \
+  "${sandbox}/roster-plain" "${session}" 0 \
+  "devantler-tech/product#106 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 106 claude/product-106)" "${lsof_nowhere}"
+expect "a branch that worktree's submodule is not on stays free" \
+  "${sandbox}/roster-plain" "${session}" 0 \
+  "devantler-tech/product#107 holder=none" \
+  "$(pr devantler-tech/product 107 claude/product-107)" "${lsof_nowhere}"
+# A process, not a lock: a session whose working directory is a checkout without `.gitmodules`.
+lsof_at_nomodules="${sandbox}/lsof-at-nomodules"
+printf 'p%s\nfcwd\nn/\np9000002\nfcwd\nn%s\n' "${me}" "${nomodules}" >"${lsof_at_nomodules}"
+expect "a process in a checkout with no .gitmodules holds its populated submodule's branch" \
+  "${main}" "${session}" 0 \
+  "devantler-tech/product#108 holder=live:1:9000002/claude" \
+  "$(pr devantler-tech/product 108 claude/product-108)" "${lsof_at_nomodules}"
 
 # ── A locked worktree whose path holds a tab (monorepo#3825) ────────────────────────────────────
 expect "a live lock on a worktree whose path holds a tab is unknown, never none" \
