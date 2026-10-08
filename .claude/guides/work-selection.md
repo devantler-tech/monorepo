@@ -107,7 +107,7 @@ a self-test guard, or a triage pass is a **legitimate fallback when nothing larg
 first thing to reach for.** Repeatedly picking the small, safe, completable-in-one-tick artifact while
 substantive issues age untouched in the backlog is the **central failure mode this contract guards
 against**: it clears the floor while leaving the products where they were. Easy wins are real work, but
-they **must not crowd out the meaningful work the products actually need** (see *Issue-driven → Drain
+they **must not crowd out the meaningful work the products actually need** (see *Issue-driven →
 Pull valuable Ready work* and *Cadence & focus → Substantive-progress gate*).
 
 ## Issue-driven — issues are the unit of work
