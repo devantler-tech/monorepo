@@ -13,10 +13,14 @@ A new inquiry starts unapproved; accepting a quote cannot release work. The oper
 ## Confirmed first-release choices
 
 - Public application source; private customer-work inbox.
-- Invitation-only initially, with Google and Microsoft sign-in.
+- Invitation-only initially, with Google and Microsoft through one federated sign-in service.
 - Invoice and operator-confirmed bank transfer.
 
 Hosting and operating-budget approval remain unanswered. These choices are shown in the prototype, not connected services.
+The planned portal will use a single standards-based OIDC integration with a federated identity service
+such as Dex. Google/Microsoft connectors belong to that service, not to bespoke portal
+integrations. Reuse the existing platform federation where appropriate after reviewed setup;
+the portal still enforces its invitations, customer access and session lifecycle.
 
 ## What this is not
 
@@ -24,4 +28,4 @@ All seed data is fictional and state exists only in memory. Role switching is no
 
 ## Captured evaluation
 
-The unchanged model's ten controls pass. Actual local-browser interaction verified quote acceptance, simulated credited funds, oldest-first eligibility without preemption, English/Danish first-release choices, theme continuity and no horizontal overflow at 390px. This is prototype evidence, not production assurance.
+The unchanged model's ten controls pass. Actual local-browser interaction verified all three guided scenarios, quote acceptance, simulated credited funds, oldest-first eligibility without preemption, keyboard scenario switching, English/Danish first-release choices and no horizontal overflow at 390px. The served local prototype supplied that browser evidence; the inline portable module parses, but a file-protocol browser visit was blocked by browser policy and not bypassed. This is prototype evidence, not production assurance.
