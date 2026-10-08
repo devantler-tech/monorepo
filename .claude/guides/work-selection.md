@@ -72,8 +72,8 @@ of breakage or actionable PRs, and it stops hard at the money itself: you prepar
 financial decision, you never execute one. Both operate and advance are
 also **issue-driven** (see *Issue-driven* below): open issues are the work queue and **resolving them
 is the core of *advance* work** — in the order *The work-selection ladder* sets, which puts **every
-open PR you own, drafts included, ahead of any issue**, then security issues, then bugs, then the
-oldest actionable issue. Newly-discovered non-trivial work
+open PR you own, drafts included, ahead of new implementation**, together with due verification,
+then critical obligations and value-prioritized Ready work. Newly-discovered non-trivial work
 is captured as an issue *before* it is built — so the existing backlog clears before new problems are
 started.
 **Floor — every run ships at least one concrete thing:** ideally **an open PR of yours driven to
@@ -81,7 +81,7 @@ merged**, or **a draft PR delivering the highest rung of *The work-selection lad
 actionable work** (`Fixes #delivery`; add `Part of #experiment` when later measurement keeps the
 experiment issue open), or else a PR, a newly-filed well-formed issue
 capturing real work, a triage/strategy pass, a review-thread resolution that unblocks a PR, or a
-actionable PR merge. **Spike carve-out (#2267):** when the oldest actionable issue is a
+actionable PR merge. **Spike carve-out (#2267):** when the selected actionable issue is a
 `type:"Spike"`, its definition-of-done is a **recorded decision + follow-up issues, not a PR** — that
 pair **is** the floor-satisfying artifact; do **not** open a delivery PR just to clear the floor
 (see *Issue hierarchy → Spike*). A portfolio this size
@@ -101,19 +101,19 @@ the bar — quality, validation, and safety are never traded for it. And the flo
 ceiling**: clearing it is never a reason to stop while more is actionable — keep working (see *Cadence &
 focus*).
 **Aim higher than the easiest qualifying artifact — the floor's options are NOT co-equal.** A draft PR
-that *advances a substantive issue* — a feature increment, a meaningful fix, or **the oldest
+that *advances a substantive issue* — a feature increment, a meaningful fix, or **an important
 `enhancement`/`roadmap` issue decomposed and started** — is the **goal**. A coverage bump, a docs polish,
 a self-test guard, or a triage pass is a **legitimate fallback when nothing larger is startable — not the
 first thing to reach for.** Repeatedly picking the small, safe, completable-in-one-tick artifact while
 substantive issues age untouched in the backlog is the **central failure mode this contract guards
 against**: it clears the floor while leaving the products where they were. Easy wins are real work, but
 they **must not crowd out the meaningful work the products actually need** (see *Issue-driven → Drain
-oldest-first* and *Cadence & focus → Substantive-progress gate*).
+Pull valuable Ready work* and *Cadence & focus → Substantive-progress gate*).
 
 ## Issue-driven — issues are the unit of work
 GitHub Issues are the **advance work queue**, and **resolving them is the primary advance output of
-every run** — existing issues get resolved before new problems are started, and the oldest take
-priority. (Driving in-flight **actionable PRs** to merge still comes *first* each run,
+every run** — finish existing work, then select by documented importance within board capacity.
+(Driving in-flight **actionable PRs** to merge still comes *first* each run,
 ahead of issues — including dependency-automation PRs once their own automation cannot finish them;
 see *Merge policy*; this section
 governs the issue work that follows.) Two rules enforce that:
@@ -121,13 +121,15 @@ governs the issue work that follows.) Two rules enforce that:
    coverage hole, a refactor target, a perf hotspot, docs drift, an enhancement — **open a well-formed
    issue for it first**, using the evidence-led issue shape in *Build the right thing* (for a defect:
    reproduction/evidence → affected audience and impact → expected behaviour → acceptance criteria +
-   rough size), instead of diving straight into a PR. It joins the backlog and is picked up in age order;
-   this is what stops the agent
-   chasing shiny new work ahead of older issues. **Trivial, obvious fixes are the carve-out** — a typo,
+   rough size), instead of diving straight into a PR. It joins refinement, not immediate implementation;
+   existing Ready work is compared by value rather than displaced by a shiny new discovery.
+   **Trivial, obvious fixes are the carve-out** — a typo,
    a dead link, a missing alt-text, a one-line correction may go straight to a small PR (still a valid
    artifact); don't manufacture issue noise for them.
-2. **Drain oldest-first — and "big" is NOT a reason to skip.** Each run, advance the **oldest
-   *actionable* open issue** and ship a draft delivery PR. Use `Fixes #delivery`; when later measurement
+2. **Pull valuable Ready work — and "big" is NOT a reason to skip.** Each run, advance the **most
+   important eligible Ready issue** within current downstream capacity and ship a draft delivery PR.
+   Apply *Value-prioritized Kanban pull* below before claiming new implementation.
+   Use `Fixes #delivery`; when later measurement
    keeps an experiment issue open, also use `Part of #experiment`. **Exception — `type:"Spike"`:** do
    **not** ship a delivery PR; close the Spike by recording the decision on the issue and filing the
    follow-up issues its DoD requires — that output satisfies both this drain rule and the run floor
@@ -135,8 +137,8 @@ governs the issue work that follows.) Two rules enforce that:
    **atomically renew the retained SHA** immediately before publishing the decision or follow-up
    issues (`claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir
    <product-path>)"`), then **retire the acquired SHA after the decision and follow-up issue artifacts are recorded** and
-   before closing the Spike. Among open issues prefer the oldest.
-   **"Actionable" is deliberately narrow — skip an older issue ONLY when one of these is true and you can
+   before closing the Spike. Age breaks ties between comparable candidates; it is not sole priority.
+   **"Actionable" is deliberately narrow — skip an eligible issue ONLY when one of these is true and you can
    *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
    external dependency (a specific upstream PR/release you can cite), or its work is delivered and
    it waits on a **named event** recorded as an `outcome` blocker — see *External-blocker
@@ -181,7 +183,7 @@ governs the issue work that follows.) Two rules enforce that:
    record already identifies it as a `devantler-tech` issue; when that record accounts for fewer
    blockers than the open count, report the issue as under-recorded so the record is repaired. A wait
    on anything outside the portfolio is recorded and verified under (b), never as a native
-   dependency. A skip never demotes the work that unblocks it: when (g) skips a rung-2 or rung-3
+   dependency. A skip never demotes the work that unblocks it: when (g) skips a critical-obligation
    issue whose record names an in-portfolio blocker, first confirm that blocker is one of the open
    ones by comparing opaque node ids alone — the skipped issue's `blockedBy` node `id`s against the
    named issue's own `id`, reading no other field — and, if it is and is actionable, select it at the
@@ -217,14 +219,14 @@ governs the issue work that follows.) Two rules enforce that:
    or record what is still missing and narrow the issue to it. The check itself only reads; closing or
    narrowing the issue **is issue work, so it goes through the claim protocol**: acquire
    `agent-claim/<issue>` before the first write, renew the retained SHA immediately before each
-   mutation, and retire that exact SHA afterward — so two lanes that reach the same oldest issue never
+   mutation, and retire that exact SHA afterward — so two lanes that reach the same selected issue never
    both close or rewrite it. Never start a second delivery on an
    issue you have not checked, and never close one on the check alone — the check decides whether to
    **start**; closing still needs the live verification.
    **Size, difficulty, architectural weight, a
    `roadmap`/`enhancement`/`security`/`performance`/`repo-assist`/`automation` label, or a vague
    "maintainer-hot" feel are NOT valid skip reasons.** A large or hard issue **is the work, not an excuse
-   to pass it over**: when the oldest actionable issue is big, **decompose it into a small, well-specified
+   to pass it over**: when the most important eligible issue is big, **decompose it into a small, well-specified
    first child and ship that increment as a draft PR** (`Fixes #child`, link the parent) — make real
    progress on the big thing across runs instead of perpetually deferring it whole. Before skipping any
    issue as "blocked"/"gated", **re-verify the blocker against live state** (memory's "gated" notes go
@@ -256,7 +258,7 @@ governs the issue work that follows.) Two rules enforce that:
    than typing it: the composer refuses any shape the check would report (monorepo#3879).
    The reference is an identifier, not permission to inspect that repository. Independently choose an
    allowed source and re-check it on every run before using (b) to skip. If the dependency has shipped,
-   remove the `blocked` label and blocker line and resume oldest-first; otherwise update the
+   remove the `blocked` label and blocker line and resume value-prioritized selection; otherwise update the
    `last-verified` result. A missing, malformed, or merely prose "waiting on upstream" record is
    under-specified for (b) — repair the line and verify it (or unblock) rather than skipping.
 
@@ -428,10 +430,10 @@ put the fire out first (open a tracking issue only if it aids follow-up), then r
 | # | Rung | What it covers |
 |---|---|---|
 | **0** | **Live breakage** | CI red on `main`, a broken build or site, an urgent security fix. Preempts everything and is the one exception to capture-before-you-build. **A failing GitHub-*managed* run is NOT breakage** — identify the class by the **property, never by an enumerated path**: `event: dynamic` with a `path` under `dynamic/`, meaning **no workflow file exists in the repository** to fix and GitHub refuses to re-run it (`403`). That covers `dynamic/github-code-scanning/*` **and** `dynamic/dependabot/*` and whatever GitHub adds next; each is reported `GITHUB-MANAGED (NO-ACTION)` and never counts against `nothing_on_fire`. **Only the first failure of a streak** — a managed run still red (`failure`, `timed_out` or `startup_failure`) on the next run of `main` is ours to repair (the build, the scanning or dependency configuration, or moving off default setup) and IS actionable (see the surveyor; [`managed-run-streak.sh`](../scripts/managed-run-streak.sh) implements this judgement, and wiring it into the survey is [#3586](https://github.com/devantler-tech/monorepo/issues/3586)). |
-| **1** | **Open PRs — INCLUDING your own drafts** | Every actionable open PR in the portfolio, **draft and non-draft alike**, whoever authored it — your own lane, a sibling lane, the maintainer's interactive sessions, our bots, and external contributors — driven to a terminal state: merged, closed with the reason recorded, or parked on a **named, live-verified** blocker. Exact `renovate[bot]`/`dependabot[bot]` dependency PRs may yield to healthy repository automation, but become actionable here as soon as live evidence shows that automation cannot carry the current head to merge (see *Merge policy*). An external branch is still never run locally (see *You own EVERY pull request in the portfolio*). |
-| **2** | **Security issues** | `type:Security`, regardless of age, plus the confirmed in-portfolio blocker of one skipped under clause (g). |
-| **3** | **Bugs** | `type:Bug`, regardless of age, plus the confirmed in-portfolio blocker of one skipped under clause (g). |
-| **4** | **Oldest actionable issue** | Everything else, oldest-first (see *Drain oldest-first*). |
+| **1** | **Finish started work — INCLUDING your own drafts** | Every actionable open PR in the portfolio, **draft and non-draft alike**, due post-merge verification and started issue — whoever authored it — driven to a terminal state or parked on a **named, live-verified** blocker. Exact `renovate[bot]`/`dependabot[bot]` dependency PRs may yield to healthy repository automation, but become actionable here as soon as live evidence shows that automation cannot carry the current head to merge (see *Merge policy*). An external branch is still never run locally (see *You own EVERY pull request in the portfolio*). Waiting work retains original clocks and remains unfinished WIP. |
+| **2** | **Critical obligations** | Verified security deadlines and critical defects, including a confirmed in-portfolio prerequisite under clause (g). Urgent security/live incidents preempt at rung 0; ordinary Security/Bug types do not establish urgency. |
+| **3** | **Value-prioritized Ready pull** | Only refined, unblocked Ready work with downstream capacity, ordered by evidence-backed importance (see *Value-prioritized Kanban pull*). |
+| **4** | **Refinement and replenishment** | Refine the most important near-term Backlog work within Ready capacity; Icebox remains deferred. No direct Backlog/Icebox implementation. |
 
 🔴 **Rung 0 includes the live prod cluster, and GitHub cannot show it.** On 2026-08-27 a merged
 platform change took cluster DNS down, every Flux source went `False`, and the survey still reported
@@ -450,8 +452,8 @@ on and says so.
 form, and exits 0 while doing it.** Measured across the portfolio 2026-08-18:
 `gh search issues --owner devantler-tech --state open 'type:"Security"'` returns **0** while the
 unquoted `type:Security` returns **73**, and the same split holds for `type:"Bug"`, which returns
-**0** against **269** genuinely open. So a run building its rung-2/3 query by retyping a quoted literal
-descends straight past every open Security and Bug issue and reports a clean sweep — and
+**0** against **269** genuinely open. So a run building a type census by retyping a quoted literal
+misses every open Security and Bug issue and reports a clean sweep — and
 nothing in the exit status distinguishes that from a genuinely empty queue. The raw REST
 surface is indifferent (`gh api "search/issues?q=…type:Security"` returns the same count either
 way), which is why the surveyor is safe: it queries that surface, unquoted. Prefer running the
@@ -474,19 +476,53 @@ promoted**, median age **6.9 days** — of which **18 were already `CLEAN`** (me
 were opened**. Throughput was never the problem: ~27 own PRs merged per day that same week. The pile
 is what *starting* outruns *finishing* looks like, and closing it is rung 1's job.
 
-**Within rung 1, work oldest-updated first across the whole lane, not per repository.** Sort the
-actionable non-automation set by `updatedAt` ascending; choosing the freshest or easiest PR first is not
-following the rung. A PR reaches a terminal state when it is merged, parked on a named live-verified
+**Finish across the portfolio by delivery stage: merge-ready, due verification, review resolution, implementation/unblocking.**
+Help the saturated stage first; within comparable work use original first-start age, falling back to
+immutable PR creation time when the start is unknown. `updatedAt` is activity, not waiting age.
+A PR reaches a terminal state when it is merged, parked on a named live-verified
 blocker, or—when a stale draft is not worth reviving—closed with every still-valid finding re-filed
 as an issue (an invalid or superseded finding may instead be closed with the reason recorded).
 Closing old work creates no intake credit: the lane's total open own-PR count must not rise while the
 oldest cohort drains, and no replacement draft may be opened merely because an old one was disposed
 of.
 
-**Severity outranks age at rungs 2–3; age decides only *within* a rung.** A three-week-old `Docs`
-issue never precedes an open `Security` one. Rungs 2 and 3 are otherwise ordinary issue work under
-*Drain oldest-first* — the same actionability test, the same claim protocol, the same
-decompose-and-start rule when one is large.
+## Value-prioritized Kanban pull
+
+Use project 5's state and flow fields, not a type-filtered or oldest-created issue list. The
+[board guide](issues-and-board.md#flow-fields-and-wip-capacity) declares the fields and maintainer WIP
+ceilings. Read the complete current portfolio PR census, due verification and all board stages;
+join visibility, dependencies, ownership, priority rationale and acceptance criteria. Missing,
+truncated or stale joins are `QUERY-UNKNOWN`/`HOLD`, never spare capacity or permission to descend.
+
+Finish started work before pulling. A live-verified waiting item can be parked with its next due
+action, but remains unfinished WIP and retains original first-start and blocked clocks. Check every
+downstream ceiling immediately before claiming and again before moving Ready to In Progress; any
+full implementation, review, merge or verification stage stops new starts and calls for helping it.
+Do not move active work upstream to manufacture capacity. Limits are ceilings, not fill targets.
+
+Compare explicit Priority first, then current product outcomes, audience impact, deadline/cost of
+waiting, risk reduction and prerequisites unlocked relative to **end-to-end** effort, including CI,
+review, deployment and verification. Evidence belongs on the issue; do not invent scores or infer
+priority from type, labels, comments or age. A critical obligation is refined promptly without
+trading away its safety deadline. Large important work gets a valuable independent slice, not skipped
+for small low-value work. Backlog is a near-term refinement/replenishment queue; Icebox is deferred.
+
+Age breaks ties between comparable candidates and triggers anti-starvation review. Use Ready entry
+for waiting age and original first-start for active age, never `updatedAt`. Missing history uses a
+recorded first-observed lower bound, not a backdated continuous wait. Parking, re-entry and bot
+activity never reset age. Review unusually old low-priority work for explicit reprioritization,
+decomposition or deferral; retain the substantive-progress/anti-filler floor.
+
+Read the reviewed plugin's product-engineering `references/value-pull.md`. Before a new pull,
+normalize the complete live evidence with the declared ceilings and run its assessment-only
+`scripts/select-work.sh --now <current-unix-seconds> <evidence.json>`. `HOLD` is not approval and
+`PULL` never grants ownership, trust, review or deployment clearance; rebind evidence and acquire the
+normal claim before writes. A missing installed entrypoint is `HOLD`, not an age-only fallback.
+
+Version this as `value-pull-v1`. Preserve the historical issue-age/easy-work metric rubric and
+denominator unchanged; report the new cohort separately with WIP, blocked/active/Ready age,
+request-to-verified-delivery lead time and first-start-to-verified-delivery cycle time. No measured
+flow improvement follows from a policy change alone; missing timestamps remain unknown.
 
 ## Delivery ownership — finding to fix
 

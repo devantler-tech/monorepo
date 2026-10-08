@@ -637,16 +637,16 @@ outranks it). Exact Renovate/Dependabot PRs yield only while live evidence prove
 once repository automation cannot finish their current head, they are actionable PRs.
 Scope: every **`devantler-tech`** repo's actionable PRs, whoever authored them; scheduled runs do not enumerate or act on
 external repositories. Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
-are the work queue**, worked in the order contract *The work-selection ladder* sets — **security
-issues, then bugs, then the oldest actionable issue** — and new non-trivial finds are
+are the work queue**, worked in the order contract *The work-selection ladder* sets — **finish started
+work and due verification, critical obligations, then value-prioritized Ready pull within capacity** — and new non-trivial finds are
 **filed as issues before** they're built (trivial obvious fixes excepted). **Every run must clear the
-floor — at least one concrete artifact** (ideally a merged/drafted PR or a draft resolving the oldest
+floor — at least one concrete artifact** (ideally a merged/drafted PR or a draft resolving an important
 actionable issue; else a newly-filed well-formed issue, a triage/strategy pass, an unblocking
 review-thread resolution, or a trusted-PR merge) — but the floor is a **minimum, not a ceiling: keep
 working while actionable work remains, prefer long continuous sessions, and don't stop after a few
 items** (end only when work is exhausted or blocked). A survey-and-exit run that authors nothing is a
 **failure, not a valid outcome** (contract *Mandate*). In-flight drafts still maturing toward
-readiness are **not** a reason to stop — advance a *different* product. **Stop starting, start finishing**
+readiness are **not** a reason to stop — help finish/unblock them; new work still requires downstream capacity. **Stop starting, start finishing**
 (contract *Cadence & focus*): before opening any **new** draft, first run
 `.claude/scripts/lane-draft-count.sh --lane <your namespace>` and open **no** non-hotfix draft when
 the own lane is `UNKNOWN` or `OVER` (exit 2 or 1). Then drive **every own in-flight PR** to
@@ -844,7 +844,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    un-commented open item.
 4. **Confident fixes** — a *trivial, obvious* fix (broken link, missing alt text, typo, manifest
    misconfig, version bump) may go straight to a small PR (the issue-first carve-out). A **non-trivial**
-   bug you spot is **filed as an issue first** (it joins the oldest-first backlog), not turned straight
+   bug you spot is **filed as an issue first** (it joins value-led refinement), not turned straight
    into a PR — unless it's live breakage, which is rung 1.
 5. **Security posture ingestion (cadence-gated)** — when the run's Survey included the
    [`platform-security-surveyor`](../../agents/platform-security-surveyor.md) pass (§1), act on its
@@ -862,12 +862,16 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
 
 **Advance (move it forward) — the default once nothing above is pending, and the floor's backstop:
 when the operate ladder is clear you still advance at least one product (never exit empty-handed).**
-Advance work is **issue-driven** (contract *Issue-driven*): its heart is **resolving the oldest
-actionable open issue**, and any new non-trivial find is **filed as an issue first** to enter that same
+Advance work is **issue-driven** (contract *Issue-driven*): its heart is **resolving important eligible
+Ready work within downstream capacity**, and any new non-trivial find is **filed as an issue first** to enter that same
 backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
 7. **Resolve the next issue by the ladder** *(the default advance action)* — take the highest rung
-   with actionable work: open `type:"Security"` issues first, then `type:"Bug"`, then the **oldest**
-   startable issue (contract *The work-selection ladder*). Within a rung, oldest first.
+   with actionable work (contract *The work-selection ladder*). Before new implementation, join
+   project 5 Status, Priority, Service class, Delivery size, Due date, dependencies, Ready since,
+   original Start date and Blocked since to issue evidence and the complete PR/verification census.
+   Use the board guide's ceilings and the reviewed product-engineering value-pull assessment.
+   Full active stages or unknown joins mean HOLD and finishing/unblocking, never new intake.
+   Backlog supplies refinement; Icebox remains deferred. Ordinary Security/Bug types are not severity.
    Skip one only if it already has an open PR, is too under-specified to begin, is blocked on a
    named external dependency that satisfies the consumer contract, or is a delivered experiment
    awaiting its **named, future measurement date** recorded on the issue and not yet elapsed (contract
@@ -962,22 +966,23 @@ that improves your own definition (the [`self-improvement`](../self-improvement/
 
 **Blog Stewardship (low-priority, bounded, orthogonal cadence)** — for the monorepo/site only, a due
 blog action must not wait for the issue queue to become empty. After operate work and one
-oldest-substantive slice in the run, perform at most one due blog evidence review, worthwhile
+important-substantive slice in the run, perform at most one due blog evidence review, worthwhile
 publication, or material refresh before selecting the next issue, then resume the normal ladder. Use
 the monorepo card's editorial, single-flight, experiment-lifecycle, and cursor rules: maintain an open
 blog experiment/PR through review, deployment, and measurement before starting another. A review that
 finds no worthwhile story is useful but does not move the publication clock; marketing, positioning,
 discovery, and adoption are product work, while filler and traffic-only vanity are not.
 
-**Fairness & ordering:** **severity is the primary sort, age the tiebreaker within a tier** — open
-`type:"Security"` issues, then `type:"Bug"`, then everything else oldest-actionable-first (contract
-*The work-selection ladder*); a three-week-old `Docs` issue never precedes an open `Security` one.
-When severity and age are comparable, prefer the product with the
+**Fairness & ordering:** **documented priority and cost of waiting precede age** (contract
+*The work-selection ladder*). Compare outcomes, audience impact, urgency, risk reduction and
+dependencies unlocked against end-to-end effort; age breaks comparable ties and triggers explicit
+anti-starvation review. Preserve original clocks, never use comment-driven `updatedAt` as age.
+When importance and age are comparable, prefer the product with the
 oldest `last_worked` (and oldest strategy review). Aim over time to advance every product, not just the
 noisy ones.
 **Cadence gates:** per-product strategy review and docs pass weekly-to-monthly (oldest first); review
 blog evidence/topics about monthly and target one worthwhile publication or material refresh every
-4–8 weeks without displacing operate/oldest-substantive work; KSail Monthly Strategy at month start;
+4–8 weeks without displacing operate/important-substantive work; KSail Monthly Strategy at month start;
 heavy tasks (E2E, live-cluster reliability, content review) ~weekly per the per-product `weekly`
 timestamps; real-cluster trial cadence and the maintainer's standing temporary-cost authorization
 resolve from [Temporary engineering costs](../../guides/spend-and-inference.md#temporary-engineering-costs).

@@ -147,8 +147,8 @@ Done separately the two halves came apart: a label with no record is skipped by 
 ever, and a record with no label is re-diagnosed every run (monorepo#3879). What it writes:
 
 1. **One** comment that begins with your disclosure line, carries `<!-- pr-blocker-record -->`
-   on a line of its own, and holds the same line a blocked issue carries (*Issue-driven → Drain
-   oldest-first*): `**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`,
+   on a line of its own, and holds the same line a blocked issue carries (*Issue-driven →
+   Pull valuable Ready work*): `**Blocker:** <identifier> | <blocker-kind> | last-verified <YYYY-MM-DD>: <result>`,
    with the `| asked <channel> <date>` record when the kind is `authority`. The record lives in a
    comment because a dependency bot rewrites the body of its own PR. An existing record is edited
    in place, never joined by a second.
@@ -160,7 +160,7 @@ and an upstream blocker that is not one tracked item — review, CI and evaluati
 are its unfinished readiness work, never a blocker: drive them instead of parking on them. A
 finished PR that waits on an event rather than an item (a release that is tagged but not yet
 published, a named date) is parked with `--kind outcome` and the event in words; *Issue-driven →
-Drain oldest-first* says what an outcome is and is not.
+Pull valuable Ready work* says what an outcome is and is not.
 `.claude/scripts/blocked-label-blocker-line.sh compose --target <owner/repo#N> …` prints the same
 comment without posting it.
 

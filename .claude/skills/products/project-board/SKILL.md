@@ -255,6 +255,12 @@ Until that is solved, backfill is a standing duty, not an exception.
   **limits** encode the same WIP discipline; treat an over-limit column as a signal to finish, never as
   a reason to raise the limit. **"Blocked" is intentionally not a status** — use a native issue
   dependency (Blocked badge renders in-place) and reserve the `blocked` label for cross-org blockers.
+- **Value-pull flow fields and capacity.** Resolve the maintainer's explicit ceilings and field
+  semantics from [Flow fields and WIP capacity](../../../guides/issues-and-board.md#flow-fields-and-wip-capacity).
+  Project 5 has Priority, Service class, Delivery size, Ready since and Blocked since, alongside
+  Start date and Due date. Missing priorities require refinement, never an inferred P2. Preserve
+  original ages and keep parked unfinished work in WIP. A full downstream stage stops new starts;
+  Backlog is refinement and Icebox deferred. Do not manufacture capacity through card moves.
 - **Issue Types are mandatory** — every issue carries exactly one of **Epic, Feature, Bug, Security,
   Performance, Refactor, Docs, Spike, Kata, Chore** (see the contract's *Issue hierarchy* for the
   definition-of-done each implies). An untyped issue is an incomplete issue. Setting one always works,

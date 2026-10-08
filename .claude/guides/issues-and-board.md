@@ -21,7 +21,7 @@ evidence, audience, hypothesis, and success signal while adding concrete accepta
 is not a link). Triage incoming issues into this structure (type, label, prioritise, dedupe, add to
 the board with a `Status`, close stale/duplicate with a reason). Native memory holds only a lightweight per-product cursor (last
 strategy review, current theme); the issues themselves are the durable roadmap, and they feed the
-single work queue the agent drains **oldest-actionable-first** (see *Issue-driven*) — strategy and
+single work queue the agent advances **by importance within Kanban capacity** (see *Issue-driven*) — strategy and
 decomposition exist to keep that queue stocked with well-formed, ready work. Implementing PRs use
 `Fixes #delivery` to close the delivered slice and, when needed, `Part of #experiment` to preserve its
 outcome record.
@@ -136,7 +136,7 @@ deserves a type rather than a label, and it is why the type tells you what "next
 | **Chore** | Mechanical upkeep | No flag required |
 
 **Spike execution path (#2267) — how a Spike clears the floor without a delivery PR.** A Spike's
-definition-of-done deliberately forbids a PR, so when a Spike is the oldest actionable issue the
+definition-of-done deliberately forbids a PR, so when a Spike is the selected actionable issue the
 *Issue-driven* "ship a draft delivery PR" rule yields to this type's DoD: (1) investigate within the
 Spike's timebox; (2) **record the decision on the Spike issue** (evidence → options considered →
 chosen path → why); (3) **file the follow-up issues** the decision implies (linked as sub-issues when
@@ -189,8 +189,8 @@ ladder mirrors the agent's actual lifecycle, so every state answers "what's next
 | **📊 Verifying** | **Merged**, outcome not yet proven (covers the wait for an async release, and the wait for a Kata's measurement date) | Verify it actually works E2E once released; measure a Kata's signal; then decide |
 | **🚀 Ready to Merge** | Green review at head, all checks green, nothing unresolved | Self-promote and merge |
 | **👀 In Review** | PR open, CI green, review requested | Fix findings, re-request, re-secure green at the new head |
-| **🏃🏻‍♂️ In Progress** | Assignee has time to implement | Finish the implementation, get CI green |
-| **🫴 Ready** | Refinement criteria met | Pick it up, oldest first |
+| **🏃🏻‍♂️ In Progress** | Refined work pulled within downstream capacity; original Start date recorded | Finish the implementation, get CI green |
+| **🫴 Ready** | Refinement, priority rationale and prerequisites verified | Pull by importance only with downstream capacity |
 | **📥 Backlog** | Captured and triaged, not yet refined | Refine, or decompose if it is an Epic |
 | **🧊 Icebox** | Parked | Revisit at triage |
 
@@ -217,6 +217,30 @@ views** — **kanban (board)**, **backlog (table)**, **roadmap (roadmap)** — a
 fourth view: **prefer an extra grouping/slice on an
 existing view over a new one** (maintainer direction 2026-07-18). See its
 [product card](../skills/products/project-board/SKILL.md).
+
+### Flow fields and WIP capacity
+
+Maintainer-confirmed ceilings: Icebox **94**, Backlog **48**, Ready **24**, In Progress **12**,
+In Review **12**, Ready to Merge **6**, Verifying **3**. Icebox overflow is temporarily accepted
+during the current backlog cleanup; this does not waive any other ceiling. Count open non-Epic
+issue cards for the Kanban view, including parked unfinished work. Reconcile active work absent
+from or misplaced on the board before permitting a start; board occupancy alone is not full WIP.
+Do not fill columns to their limits or hide WIP by moving started work upstream. A saturated active
+stage stops new implementation and redirects effort toward finishing/unblocking it.
+
+Project 5 uses **Priority** (P0 Critical, P1 High, P2 Normal, P3 Low), **Service class** (Expedite,
+Fixed date, Standard, Risk reduction), **Delivery size** (Small, Medium, Large), **Ready since** and
+**Blocked since**, together with existing **Start date** and **Due date**. Record a brief issue
+rationale supporting outcome, audience impact, urgency/cost of waiting, risk reduction, dependencies
+unlocked and end-to-end effort. Size includes CI, review, deployment and verification. Fixed date
+needs a verified deadline; Expedite needs confirmed incident/urgent-security evidence and a recorded
+WIP exception, not merely a Bug/Security type. Missing values mean refinement, not a default P2.
+
+Preserve original Start date and first blocked/Ready observation. DATE fields have day precision;
+unavailable entry history is a documented first-observed lower bound, not exact continuous waiting.
+Record unblock transitions and accumulated blocked intervals in the issue evidence; a single date
+does not measure cumulative blocked time. Bot comments, parking and re-entry never reset clocks.
+Keep existing view filters, issue-only cards, hierarchy and reversed finishing-first status order.
 
 Two mechanics make this a standing duty rather than something automation handles:
 - **Auto-add workflows are capped at 5 on the Team plan** and each one targets exactly **one**

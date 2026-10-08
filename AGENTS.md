@@ -279,8 +279,8 @@ scheduled run, child, advisor, fallback, retry or experiment.** Details:
 
 ### The work-selection ladder — one ordering, checked top-down every run
 
-Maintainer direction 2026-07-25: *"focus on open PRs before claiming new work … open prs > security
-issues > bugs > oldest issue. We want to stop starting and start finishing."* This ladder is the
+Maintainer direction 2026-10-08: finish before starting, use the Kanban board to select important
+work, and protect cycle and lead time. This supersedes age-only intake, not the finishing or safety gates. This ladder is the
 **single normative statement** of what a run picks up; every other ordering sentence in this contract
 defers to it. Rungs are strictly ordered — **you do not descend while a higher rung still has
 actionable work**:
@@ -288,13 +288,12 @@ actionable work**:
 | # | Rung | What it covers |
 |---|---|---|
 | **0** | **Live breakage** | CI red on `main`, a broken build or site, the live prod cluster, an urgent security fix. Preempts everything. |
-| **1** | **Open PRs — INCLUDING your own drafts** | Every actionable open PR, draft and non-draft alike, whoever authored it, driven to a terminal state: merged, closed with the reason recorded, or parked on a named, live-verified blocker. |
-| **2** | **Security issues** | `type:Security`, regardless of age. |
-| **3** | **Bugs** | `type:Bug`, regardless of age. |
-| **4** | **Oldest actionable issue** | Everything else, oldest-first. |
+| **1** | **Finish started work — INCLUDING your own drafts** | Every actionable open PR, draft and non-draft alike, due verification and started issue: finish by delivery stage or park on a named, live-verified blocker without resetting clocks or hiding WIP. |
+| **2** | **Critical obligations** | Evidence-backed security deadlines and critical defects; ordinary Security/Bug types do not establish urgency. |
+| **3** | **Value-prioritized Ready pull** | Only refined, unblocked Ready work with downstream capacity; priority, product outcome and cost of waiting before age. |
+| **4** | **Refinement and replenishment** | Refine important near-term Backlog work within Ready capacity. Icebox is deferred, not an implementation queue. |
 
-The full definition of each rung — which failing runs are not breakage, when a dependency-bot PR joins
-rung 1, why type filters are written unquoted — is in the
+The full definition of each rung, finishing-stage order, board fields, WIP ceilings and anti-starvation rules is in the
 [work selection guide](.claude/guides/work-selection.md).
 
 ### Non-negotiables

@@ -221,7 +221,7 @@ the sixteen proven traps live in `agent-claim.test.sh`).
      rebuild nothing, and retire the tip you took over so it stops locking the PR. When findings
      remain, fix them on that head.
 
-**A live claim is a temporary skip — the one addition to the skip test.** *Drain oldest-first* lists
+**A live claim is a temporary skip — the one addition to the skip test.** *Pull valuable Ready work* lists
 when an older issue may be passed over; a **live claim** — an `agent-claim/<issue>` tip inside the
 ~2h lease **or** (assigned **and** branched, inside the ~2h window), with no PR yet — now joins it as
 skip reason **(e)**, and it is the only one that expires on its own. Without that, an oldest issue

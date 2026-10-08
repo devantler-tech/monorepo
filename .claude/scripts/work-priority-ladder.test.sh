@@ -149,10 +149,10 @@ assert_prose 'you do not descend while a higher rung still has actionable work' 
 
 for rung in \
   '| **0** | **Live breakage** |' \
-  '| **1** | **Open PRs — INCLUDING your own drafts** |' \
-  '| **2** | **Security issues** |' \
-  '| **3** | **Bugs** |' \
-  '| **4** | **Oldest actionable issue** |'; do
+  '| **1** | **Finish started work — INCLUDING your own drafts** |' \
+  '| **2** | **Critical obligations** |' \
+  '| **3** | **Value-prioritized Ready pull** |' \
+  '| **4** | **Refinement and replenishment** |'; do
   grep -Fq "${rung}" "${constitution}" ||
     fail "ladder is missing rung row ${rung}"
 done
@@ -161,8 +161,8 @@ done
 # definitions in the work-selection guide. Each must carry every rung on its own — a check over the
 # assembled contract would let one table satisfy the other while the second one regressed.
 for ladder_file in "${repo_root}/AGENTS.md" "${repo_root}/.claude/guides/work-selection.md"; do
-  for rung in '| **0** | **Live breakage** |' '| **1** | **Open PRs — INCLUDING your own drafts** |' \
-    '| **2** | **Security issues** |' '| **3** | **Bugs** |' '| **4** | **Oldest actionable issue** |'; do
+  for rung in '| **0** | **Live breakage** |' '| **1** | **Finish started work — INCLUDING your own drafts** |' \
+    '| **2** | **Critical obligations** |' '| **3** | **Value-prioritized Ready pull** |' '| **4** | **Refinement and replenishment** |'; do
     grep -Fq "${rung}" "${ladder_file}" ||
       fail "${ladder_file#"${repo_root}"/} is missing rung row ${rung}"
   done
@@ -175,8 +175,8 @@ assert_prose 'GITHUB-MANAGED (NO-ACTION)' "${ladder_guide_flat}" \
   "the full rung-0 definition no longer separates GitHub-managed runs from breakage"
 assert_prose 'become actionable here as soon as live evidence shows that automation cannot carry the current head to merge' \
   "${ladder_guide_flat}" "the full rung-1 definition no longer brings stalled dependency-bot PRs into rung 1"
-assert_prose 'Everything else, oldest-first (see *Drain oldest-first*)' "${ladder_guide_flat}" \
-  "the full rung-4 definition no longer points at the oldest-first drain rule"
+assert_prose 'refined, unblocked Ready work with downstream capacity' "${ladder_guide_flat}" \
+  "new intake does not require Ready eligibility and downstream capacity"
 
 # ── 2. rung 1 covers own drafts, and `non-draft` is scoped to the merge command ──
 assert_prose 'Rung 1 includes your own DRAFTS' \
@@ -187,12 +187,12 @@ assert_prose 'scoping below bounds the merge COMMAND, never the SWEEP' \
   "${constitution_flat}" "Merge policy does not scope its non-draft clause to the merge command"
 
 # ── 3. rung 1 drains the oldest work before the freshest ──────────────────────
-assert_prose 'oldest-updated first across the whole lane' \
-  "${constitution_flat}" "rung 1 does not order drafts oldest-updated first across the lane"
+assert_prose 'merge-ready, due verification, review resolution, implementation/unblocking' \
+  "${constitution_flat}" "finishing does not order work by delivery stage"
 # Markdown backticks are literal prose, not command substitution.
 # shellcheck disable=SC2016
-assert_prose 'Sort the actionable non-automation set by `updatedAt` ascending' \
-  "${constitution_flat}" "rung 1 does not specify the normative updatedAt ascending sort"
+assert_absent 'Sort the actionable non-automation set by `updatedAt` ascending' \
+  "${constitution_flat}" "comment activity still determines waiting age"
 assert_prose 'a stale draft is not worth reviving' \
   "${constitution_flat}" "rung 1 allows close-and-refile for a draft still worth reviving"
 assert_prose 'closed with every still-valid finding re-filed as an issue' \
@@ -203,8 +203,10 @@ assert_prose 'no replacement draft may be opened merely because an old one was d
   "${constitution_flat}" "rung 1 permits replacement drafts after old-draft disposal"
 
 # ── 4. severity outranks age ──────────────────────────────────────────────────
-assert_prose 'Severity outranks age at rungs 2–3; age decides only *within* a rung' \
-  "${constitution_flat}" "contract does not state that severity outranks age"
+assert_prose 'ordinary Security/Bug types do not establish urgency' \
+  "${constitution_flat}" "issue type still substitutes for evidence of severity"
+assert_prose 'Age breaks ties between comparable candidates' \
+  "${constitution_flat}" "importance does not precede age"
 
 # ── completion is checked separately from ownership (monorepo#2994) ────────────
 # Skip reasons (a)–(g) all answer WHO holds an issue; none can see that the work already shipped,
@@ -216,7 +218,7 @@ assert_prose 'Severity outranks age at rungs 2–3; age decides only *within* a 
 # accept the rule moved into any later section.
 work_selection_guide="${repo_root}/.claude/guides/work-selection.md"
 drain_section="$(awk '
-  /^2\. \*\*Drain oldest-first/ { on = 1; started = 1 }
+  /^2\. \*\*Pull valuable Ready work/ { on = 1; started = 1 }
   on && /^   \*\*External-blocker verification \(skip clause/ { ended = 1; exit }
   on { print }
   END { if (!started || !ended) exit 1 }
@@ -340,7 +342,7 @@ assert_prose 'open native blocking-dependency count is above zero, read on the i
 # ── 5. the run-loop skill agrees with the contract ────────────────────────────
 assert_prose 'Your own DRAFTS are rung-1 work' \
   "${skill_flat}" "run-loop skill does not carry the own-drafts rung-1 rule"
-assert_prose 'severity is the primary sort, age the tiebreaker within a tier' \
+assert_prose 'documented priority and cost of waiting precede age' \
   "${skill_flat}" "run-loop skill still sorts the issue queue by age alone"
 assert_prose 'Resolve the next issue by the ladder' \
   "${skill_flat}" "run-loop skill's advance step does not follow the ladder"

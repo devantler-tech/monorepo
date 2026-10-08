@@ -39,8 +39,8 @@ check_rows() {
   # section mentioning a type filter cannot satisfy — or break — these assertions.
   rows="$(
     awk '
-      /^\| \*\*2\*\* \| \*\*Security issues\*\*/ { print }
-      /^\| \*\*3\*\* \| \*\*Bugs\*\*/            { print }
+      /^\| \*\*2\*\* \| \*\*Critical obligations\*\*/ { print }
+      /^\| \*\*3\*\* \| \*\*Value-prioritized Ready pull\*\*/ { print }
     ' "$1"
   )"
 
@@ -63,22 +63,20 @@ check_rows() {
   # 2. Each row must name ITS OWN filter. Searching the combined output would accept the two filters
   # swapped between the rungs — a table that still contains both strings, still satisfies assertion 1,
   # and inverts the Security-before-Bug order the ladder exists to impose.
-  rung2_row="$(printf '%s\n' "${rows}" | grep -F '| **2** | **Security issues**')"
-  rung3_row="$(printf '%s\n' "${rows}" | grep -F '| **3** | **Bugs**')"
+  rung2_row="$(printf '%s\n' "${rows}" | grep -F '| **2** | **Critical obligations**')"
+  rung3_row="$(printf '%s\n' "${rows}" | grep -F '| **3** | **Value-prioritized Ready pull**')"
   [ -n "${rung2_row}" ] || fail "could not isolate the rung-2 row"
   [ -n "${rung3_row}" ] || fail "could not isolate the rung-3 row"
 
-  grep -q 'type:Security' <<<"${rung2_row}" ||
-    fail "the rung-2 row no longer names type:Security, so assertion 1 would pass with no filter present at all"
-  grep -q 'type:Bug' <<<"${rung3_row}" ||
-    fail "the rung-3 row no longer names type:Bug, so assertion 1 would pass with no filter present at all"
+  grep -q 'deadline' <<<"${rung2_row}" ||
+    fail "critical obligations no longer require urgency evidence"
+  grep -q 'downstream capacity' <<<"${rung3_row}" ||
+    fail "Ready pull no longer requires capacity evidence"
 
   # ...and only its own. Without these, a row naming BOTH filters satisfies the two assertions above
   # while still pointing that rung at the wrong type.
-  ! grep -q 'type:Bug' <<<"${rung2_row}" ||
-    fail "the rung-2 (Security) row also names type:Bug — the rung filters are crossed"
-  ! grep -q 'type:Security' <<<"${rung3_row}" ||
-    fail "the rung-3 (Bug) row also names type:Security — the rung filters are crossed"
+  ! grep -q 'type:Security\|type:Bug' <<<"${rows}" ||
+    fail "issue type still substitutes for priority or urgency evidence"
 }
 check_rows "${repo_root}/AGENTS.md"
 check_rows "${constitution}"
@@ -117,4 +115,4 @@ case "${warning}" in
   *) fail "the warning no longer ties back to the standing rule that an empty filtered read is a claim about the filter" ;;
 esac
 
-echo "rung type-filter contract: OK — rungs 2/3 use the unquoted form, and the measured warning is intact"
+echo "rung type-filter contract: OK — evidence-based selection and measured query warning intact"
