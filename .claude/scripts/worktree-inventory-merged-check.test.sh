@@ -95,8 +95,8 @@ check() { # name condition...
   local name=$1; shift
   if "$@"; then ok "$name"; else bad "$name" "rc=$RC out=$OUT err=$(cat "$TMP/err") calls=$(cat "$CALLS")"; fi
 }
-out_has() { printf '%s\n' "$OUT" | grep -q "$1"; }
-no_verdict() { ! printf '%s\n' "$OUT" | grep -q '^MERGE-CHECK'; }
+out_has() { grep -q "$1" <<<"$OUT"; }
+no_verdict() { ! grep -q '^MERGE-CHECK' <<<"$OUT"; }
 no_calls() { [ ! -s "$CALLS" ]; }
 rc_is() { [ "$RC" = "$1" ]; }
 
