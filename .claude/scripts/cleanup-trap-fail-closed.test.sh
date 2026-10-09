@@ -272,6 +272,17 @@ ci-job-wiring.test.sh|
 pipefail-grep-guard.test.sh|
 skill-owner.test.sh|
 silent-scheduled-workflows.test.sh|
+claude-task-live-runs.test.sh|
+delivered-open-candidates.test.sh|
+lane-draft-count.test.sh|
+portfolio-surveyor.test.sh|
+product-value-contract.test.sh|
+review-request-comment.test.sh|
+self-review-contract.test.sh|
+sibling-lane-watch.test.sh|
+squash-closing-keywords.test.sh|
+surveyor-hook-dispatch.test.sh|
+work-priority-ladder.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"

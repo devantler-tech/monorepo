@@ -269,6 +269,17 @@ jobs:
               - '.claude/scripts/pipefail-grep-guard.test.sh'
               - '.claude/scripts/skill-owner.test.sh'
               - '.claude/scripts/silent-scheduled-workflows.test.sh'
+              - '.claude/scripts/claude-task-live-runs.test.sh'
+              - '.claude/scripts/delivered-open-candidates.test.sh'
+              - '.claude/scripts/lane-draft-count.test.sh'
+              - '.claude/scripts/portfolio-surveyor.test.sh'
+              - '.claude/scripts/product-value-contract.test.sh'
+              - '.claude/scripts/review-request-comment.test.sh'
+              - '.claude/scripts/self-review-contract.test.sh'
+              - '.claude/scripts/sibling-lane-watch.test.sh'
+              - '.claude/scripts/squash-closing-keywords.test.sh'
+              - '.claude/scripts/surveyor-hook-dispatch.test.sh'
+              - '.claude/scripts/work-priority-ladder.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'

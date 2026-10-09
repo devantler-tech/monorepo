@@ -20,7 +20,19 @@ SCRIPT="$SCRIPT_DIR/sibling-lane-watch.sh"
 command -v jq >/dev/null 2>&1 || { echo "FAIL: jq is required" >&2; exit 1; }
 
 FIX=$(mktemp -d)
-trap 'rm -rf "$FIX"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$FIX"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "sibling-lane-watch.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 pass=0; fail=0
 ok() { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); echo "FAIL: $1"; }
@@ -485,4 +497,5 @@ for pair in claude:50 codex:10; do
 done
 
 echo "sibling-lane-watch.test: $pass passed, $fail failed"
+test_run_completed=1
 [ "$fail" -eq 0 ]
