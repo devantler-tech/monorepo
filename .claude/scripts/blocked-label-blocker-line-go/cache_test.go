@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +23,7 @@ func servePages(t *testing.T, pages map[string]forgePage) *pageForge {
 	forge := &pageForge{pages: pages, offered: map[string][]string{}}
 	original := forgeFetch
 	t.Cleanup(func() { forgeFetch = original })
-	forgeFetch = func(target, validator string) (forgePage, error) {
+	forgeFetch = func(_ context.Context, target, validator string) (forgePage, error) {
 		forge.offered[target] = append(forge.offered[target], validator)
 		page, ok := forge.pages[target]
 		if !ok {
@@ -37,6 +39,10 @@ func servePages(t *testing.T, pages map[string]forgePage) *pageForge {
 
 func keepPagesIn(t *testing.T) string {
 	t.Helper()
+	// A park test earlier in the run leaves reuse off.
+	original := reuseKeptPages
+	t.Cleanup(func() { reuseKeptPages = original })
+	reuseKeptPages = true
 	dir := filepath.Join(t.TempDir(), "kept")
 	t.Setenv("BLOCKER_LINE_CACHE_DIR", dir)
 	return dir
@@ -226,7 +232,7 @@ func TestConditionalReadFailsRatherThanAnswerShort(t *testing.T) {
 		keepPagesIn(t)
 		original := forgeFetch
 		t.Cleanup(func() { forgeFetch = original })
-		forgeFetch = func(string, string) (forgePage, error) { return forgePage{status: 304}, nil }
+		forgeFetch = func(context.Context, string, string) (forgePage, error) { return forgePage{status: 304}, nil }
 		if _, err := conditionalRead("repos/o/r/issues/1", true); err == nil || !strings.Contains(err.Error(), "304") {
 			t.Fatalf("expected an error, got %v", err)
 		}
@@ -251,7 +257,7 @@ func TestConditionalReadFailsRatherThanAnswerShort(t *testing.T) {
 		keepPagesIn(t)
 		original := forgeFetch
 		t.Cleanup(func() { forgeFetch = original })
-		forgeFetch = func(target, _ string) (forgePage, error) {
+		forgeFetch = func(_ context.Context, target, _ string) (forgePage, error) {
 			return forgePage{status: 200, next: forgeHost + "loop", body: []byte(`[]`)}, nil
 		}
 		if _, err := conditionalRead("repos/o/r/issues/1/comments", true); err == nil || !strings.Contains(err.Error(), "page bound") {
@@ -297,7 +303,7 @@ func TestPruneKeptPagesDropsOnlyOldPages(t *testing.T) {
 	dir := keepPagesIn(t)
 	storeKeptPage(dir, keptPage{Target: "old", Validator: `"a"`, Body: []byte(`{}`)})
 	storeKeptPage(dir, keptPage{Target: "new", Validator: `"a"`, Body: []byte(`{}`)})
-	unrelated := filepath.Join(dir, "notes.txt")
+	unrelated := filepath.Join(dir, "package.json")
 	if err := os.WriteFile(unrelated, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -317,5 +323,77 @@ func TestPruneKeptPagesDropsOnlyOldPages(t *testing.T) {
 	}
 	if _, err := os.Stat(unrelated); err != nil {
 		t.Fatal("a file that is not a kept page must stay")
+	}
+}
+
+func TestParsePageReadsOtherAnswerShapes(t *testing.T) {
+	plain, ok := parsePage([]byte("HTTP/1.1 200 OK\nETag: \"abc\"\n\n{\"a\":1}"))
+	if !ok || plain.status != 200 || plain.validator != `"abc"` || string(plain.body) != `{"a":1}` {
+		t.Fatalf("unexpected page %+v (ok %v)", plain, ok)
+	}
+	// A second Link line that names no continuation must not erase the first.
+	two, ok := parsePage([]byte("HTTP/2.0 200 OK\r\nLink: <https://api.github.com/x?page=2>; rel=\"next\"\r\nLink: <https://api.github.com/x?page=1>; rel=\"first\"\r\n\r\n[]"))
+	if !ok || two.next != "https://api.github.com/x?page=2" {
+		t.Fatalf("the continuation was lost: %+v (ok %v)", two, ok)
+	}
+}
+
+func TestConditionalReadKeepsNothingInADirectoryOthersCanEnter(t *testing.T) {
+	dir := keepPagesIn(t)
+	forge := servePages(t, map[string]forgePage{
+		"repos/o/r/issues/1": {status: 200, validator: `W/"a1"`, body: []byte(`{"number":1}`)},
+	})
+	mustRead(t, "repos/o/r/issues/1", true)
+	if _, ok := loadKeptPage(dir, "repos/o/r/issues/1"); !ok {
+		t.Fatal("the control must keep the page in a private directory")
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustRead(t, "repos/o/r/issues/1", true)
+	if offered := forge.offered["repos/o/r/issues/1"]; len(offered) != 2 || offered[1] != "" {
+		t.Fatalf("a page from a directory others can enter must not be offered, offered %q", offered)
+	}
+	if err := os.Remove(keptPagePath(dir, "repos/o/r/issues/1")); err != nil {
+		t.Fatal(err)
+	}
+	mustRead(t, "repos/o/r/issues/1", true)
+	if _, err := os.Stat(keptPagePath(dir, "repos/o/r/issues/1")); err == nil {
+		t.Fatal("no page may be kept in a directory others can enter")
+	}
+}
+
+func TestParkNeverReusesAKeptPage(t *testing.T) {
+	keepPagesIn(t)
+	original := reuseKeptPages
+	t.Cleanup(func() { reuseKeptPages = original })
+	forge := servePages(t, map[string]forgePage{
+		"repos/o/r/issues/1": {status: 200, validator: `W/"a1"`, body: []byte(`{"number":1}`)},
+	})
+	mustRead(t, "repos/o/r/issues/1", true)
+	// Any park invocation switches reuse off before it reads; a usage error is enough.
+	if rc := parkRun([]string{"--no-such-flag"}, io.Discard, io.Discard); rc != 2 {
+		t.Fatalf("expected the usage error, got %d", rc)
+	}
+	mustRead(t, "repos/o/r/issues/1", true)
+	if offered := forge.offered["repos/o/r/issues/1"]; len(offered) != 2 || offered[1] != "" {
+		t.Fatalf("park must read anew, offered %q", offered)
+	}
+}
+
+func TestAPageInUseIsNotPruned(t *testing.T) {
+	dir := keepPagesIn(t)
+	servePages(t, map[string]forgePage{
+		"repos/o/r/issues/1": {status: 200, validator: `W/"a1"`, body: []byte(`{"number":1}`)},
+	})
+	mustRead(t, "repos/o/r/issues/1", true)
+	long := time.Now().Add(-keptPageAge - time.Hour)
+	if err := os.Chtimes(keptPagePath(dir, "repos/o/r/issues/1"), long, long); err != nil {
+		t.Fatal(err)
+	}
+	mustRead(t, "repos/o/r/issues/1", true)
+	pruneKeptPages(dir, time.Now())
+	if _, ok := loadKeptPage(dir, "repos/o/r/issues/1"); !ok {
+		t.Fatal("a page the forge has just confirmed must stay")
 	}
 }

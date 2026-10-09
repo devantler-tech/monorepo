@@ -53,11 +53,9 @@ type keptPage struct {
 	Body      []byte `json:"body"`
 }
 
-// forgeFetch asks the forge for one page, offering validator when it is set;
-// tests replace it.
-var forgeFetch = func(target, validator string) (forgePage, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+// forgeFetch asks the forge for one page before ctx ends, offering validator
+// when it is set; tests replace it.
+var forgeFetch = func(ctx context.Context, target, validator string) (forgePage, error) {
 	args := []string{"api", "--include"}
 	if validator != "" {
 		args = append(args, "-H", "If-None-Match: "+validator)
@@ -107,7 +105,10 @@ func parsePage(raw []byte) (forgePage, bool) {
 		case "etag":
 			page.validator = value
 		case "link":
-			page.next = nextLink(value)
+			// A second Link line must not erase the continuation of the first.
+			if next := nextLink(value); next != "" {
+				page.next = next
+			}
 		}
 	}
 	return page, true
@@ -128,11 +129,22 @@ func nextLink(header string) string {
 	return ""
 }
 
+// reuseKeptPages is false where every read must be the forge's own answer of
+// this moment: the park subcommand reads back what it has just written.
+var reuseKeptPages = true
+
 // conditionalRead returns every page of endpoint, concatenated as
-// `gh api --paginate` prints them. With reuse set, each page the forge
-// confirms unchanged comes from the kept copy; without it every page is read
-// anew, which is what a caller asks for when a reused answer did not add up.
+// `gh api --paginate` prints them, within one deadline for the whole read.
+// With reuse set, each page the forge confirms unchanged comes from the kept
+// copy; without it every page is read anew.
+//
+// A confirmed page says nothing about a page that has appeared after it: the
+// forge confirms a full first page of a list that has since grown onto a
+// second. A caller reading a list must therefore hold the result against a
+// count it read itself, and read anew when the two disagree (forgeComments).
 func conditionalRead(endpoint string, reuse bool) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	dir := keptPageDir()
 	var out []byte
 	target := endpoint
@@ -142,19 +154,22 @@ func conditionalRead(endpoint string, reuse bool) ([]byte, error) {
 		}
 		var kept keptPage
 		have := false
-		if reuse && dir != "" {
+		if reuse && reuseKeptPages && dir != "" {
 			kept, have = loadKeptPage(dir, target)
 		}
 		validator := ""
 		if have {
 			validator = kept.Validator
 		}
-		page, err := forgeFetch(target, validator)
+		page, err := forgeFetch(ctx, target, validator)
 		if err != nil {
 			return nil, err
 		}
 		if page.status == 304 && have {
 			page = forgePage{status: 200, validator: kept.Validator, next: kept.Next, body: kept.Body}
+			// A page still in use is not an old page.
+			now := time.Now()
+			os.Chtimes(keptPagePath(dir, target), now, now)
 		} else if page.status != 200 {
 			return nil, errors.New("forge answered " + strconv.Itoa(page.status))
 		} else if dir != "" {
@@ -170,7 +185,9 @@ func conditionalRead(endpoint string, reuse bool) ([]byte, error) {
 }
 
 // keptPageDir is the private per-user store, or "" when pages are not kept:
-// BLOCKER_LINE_CACHE_DIR names it, and "off" there disables it.
+// BLOCKER_LINE_CACHE_DIR names it, and "off" there disables it. Pages hold
+// what the forge returned, private repositories included, for up to
+// keptPageAge after their last use.
 func keptPageDir() string {
 	if dir, set := os.LookupEnv("BLOCKER_LINE_CACHE_DIR"); set {
 		if dir == "off" {
@@ -189,29 +206,51 @@ func keptPageDir() string {
 	return filepath.Join(base, "blocked-label-blocker-line")
 }
 
+// keptPageNameRE is the only file name a kept page has.
+var keptPageNameRE = regexp.MustCompile(`^[0-9a-f]{64}\.json$`)
+
+// keptPagePath names the kept copy of target. The forge host is part of the
+// name, so another host's answer for the same path is another page.
 func keptPagePath(dir, target string) string {
-	sum := sha256.Sum256([]byte(target))
+	sum := sha256.Sum256([]byte(os.Getenv("GH_HOST") + "\n" + target))
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".json")
 }
 
+// ownPrivate reports whether info describes something of this user that no
+// one else can read or write.
+func ownPrivate(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(stat.Uid) == os.Getuid() && info.Mode().Perm()&0o077 == 0
+}
+
+// privateDir reports whether dir is a real directory of this user that no one
+// else can enter, so nobody else can place or replace a page in it.
+func privateDir(dir string) bool {
+	info, err := os.Lstat(dir)
+	return err == nil && info.IsDir() && ownPrivate(info)
+}
+
 // loadKeptPage returns the kept copy of target only when it is a private
-// regular file of this user that names this target and a sendable validator.
-// Anything else reads as no copy, so the page is simply read anew.
+// regular file of this user, in a private directory of this user, that names
+// this target and a sendable validator. Anything else reads as no copy, so
+// the page is simply read anew.
 func loadKeptPage(dir, target string) (keptPage, bool) {
-	path := keptPagePath(dir, target)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+	if !privateDir(dir) {
 		return keptPage{}, false
 	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Getuid() {
-		return keptPage{}, false
-	}
-	raw, err := os.ReadFile(path)
+	// The file that was checked is the file that is read: it is opened once,
+	// never through a link, and judged by its descriptor.
+	file, err := os.OpenFile(keptPagePath(dir, target), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return keptPage{}, false
 	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || !ownPrivate(info) {
+		return keptPage{}, false
+	}
 	var kept keptPage
-	if json.Unmarshal(raw, &kept) != nil || kept.Target != target || !validatorRE.MatchString(kept.Validator) {
+	if json.NewDecoder(file).Decode(&kept) != nil || kept.Target != target || !validatorRE.MatchString(kept.Validator) {
 		return keptPage{}, false
 	}
 	return kept, true
@@ -224,7 +263,7 @@ func storeKeptPage(dir string, page keptPage) {
 		return
 	}
 	raw, err := json.Marshal(page)
-	if err != nil || os.MkdirAll(dir, 0o700) != nil {
+	if err != nil || os.MkdirAll(dir, 0o700) != nil || !privateDir(dir) {
 		return
 	}
 	part, err := os.CreateTemp(dir, ".part.*")
@@ -238,19 +277,23 @@ func storeKeptPage(dir string, page keptPage) {
 	}
 }
 
-// pruneKeptPages drops pages no run has rewritten for keptPageAge, so pull
-// requests that merged or closed do not stay on disk.
+// pruneKeptPages drops pages no run has used for keptPageAge, so pull requests
+// that merged or closed do not stay on disk. It touches nothing but kept pages
+// and their unfinished parts, and only in a directory that is this store.
 func pruneKeptPages(dir string, now time.Time) {
+	if !privateDir(dir) {
+		return
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".json") && !strings.HasPrefix(name, ".part.") {
+		if !keptPageNameRE.MatchString(name) && !strings.HasPrefix(name, ".part.") {
 			continue
 		}
-		if info, err := entry.Info(); err == nil && info.Mode().IsRegular() && now.Sub(info.ModTime()) > keptPageAge {
+		if info, err := entry.Info(); err == nil && info.Mode().IsRegular() && ownPrivate(info) && now.Sub(info.ModTime()) > keptPageAge {
 			os.Remove(filepath.Join(dir, name))
 		}
 	}

@@ -105,6 +105,9 @@ func ownRecords(comments []comment) []comment {
 }
 
 func parkRun(args []string, stdout, stderr io.Writer) int {
+	// Park writes and then proves the write by reading it back, so every one
+	// of its reads must be the forge's answer of this moment.
+	reuseKeptPages = false
 	refuse := func(written string, err error) int {
 		_, _ = fmt.Fprintln(stderr, "blocked-label-blocker-line.sh park:", err, "--", written)
 		return 2
