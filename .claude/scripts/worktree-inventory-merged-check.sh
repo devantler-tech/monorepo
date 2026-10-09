@@ -295,7 +295,9 @@ walk() {
 
 # --- content comparison (--content-reference) ---------------------------------------------
 # Both sides of a comparison are printed with the same options, so the two patch ids are
-# comparable. `--binary --full-index` makes a binary file's content part of the id.
+# comparable. `--binary --full-index` makes a binary file's content part of the id, and
+# `patch-id --verbatim` keeps whitespace in it: two changes that differ only in indentation
+# are different changes.
 DIFF_OPTS=(--no-ext-diff --no-textconv --no-renames --no-color --binary --full-index)
 c_reached=0; c_same=0; c_empty=0; c_differs=0; c_noref=0
 # The current entry's reference: `unset` until first needed, then `none` (the checkout has
@@ -332,7 +334,7 @@ default_branch_ids() {
   local f="$PATCH_DIR/$1-$cur_base"
   if [ ! -f "$f" ]; then
     gitc log --first-parent --diff-merges=first-parent -p "${DIFF_OPTS[@]}" --format='commit %H' "$1..$cur_base" 2>/dev/null \
-      | git patch-id --stable > "$f.tmp" 2>/dev/null || { rm -f "$f.tmp"; return 1; }
+      | git patch-id --verbatim > "$f.tmp" 2>/dev/null || { rm -f "$f.tmp"; return 1; }
     mv "$f.tmp" "$f" || return 1
   fi
   printf '%s\n' "$f"
@@ -378,7 +380,7 @@ content_check() {
   tree_b=$(gitc rev-parse --verify --quiet "$sha^{tree}" 2>/dev/null) \
     || { unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0; }
   if [ "$tree_a" = "$tree_b" ]; then content_row "$cur_label" "$cur_path" no-change "$sha" "$cur_base" -; return 0; fi
-  pid=$(gitc diff "${DIFF_OPTS[@]}" "$fork" "$sha" 2>/dev/null | git patch-id --stable 2>/dev/null) \
+  pid=$(gitc diff "${DIFF_OPTS[@]}" "$fork" "$sha" 2>/dev/null | git patch-id --verbatim 2>/dev/null) \
     || { unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0; }
   pid=${pid%% *}
   # The files differ, so an empty or malformed id is a failed read, never "no change".

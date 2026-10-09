@@ -398,7 +398,7 @@ c_add() { # worktree -> a clone of UP as it is now, with the origin a submodule 
   g -C "$CR/$1" add .gitmodules; g -C "$CR/$1" commit -qm base
   g clone -q "$UP" "$CR/$1/sub"; g -C "$CR/$1/sub" config remote.origin.url "$URL"
 }
-for w in c-same c-moved c-differs c-empty c-reached c-binary c-merged c-noref c-foreign c-nohead; do c_add "$w"; done
+for w in c-same c-moved c-differs c-space c-empty c-reached c-binary c-merged c-noref c-foreign c-nohead; do c_add "$w"; done
 c_commit() { g -C "$CR/$1/sub" add -A; g -C "$CR/$1/sub" commit -qm "$2"; }
 c_sha() { g -C "$CR/$1/sub" rev-parse HEAD; }
 # c-same: two commits; the default branch gets their sum as one commit of its own.
@@ -407,6 +407,8 @@ echo new > "$CR/c-same/sub/added"; c_commit c-same 'second half'
 # c-moved: one commit; the default branch gets it, then changes the same line again.
 echo moved > "$CR/c-moved/sub/m"; printf 'a\nB\nc\n' > "$CR/c-moved/sub/h"; c_commit c-moved 'moved on'
 echo unique > "$CR/c-differs/sub/u"; c_commit c-differs 'never merged'
+# c-space: the default branch gets the same lines with other indentation.
+printf 'x\n    y\n' > "$CR/c-space/sub/w"; c_commit c-space 'four spaces'
 echo tmp > "$CR/c-empty/sub/t"; c_commit c-empty 'try'; rm "$CR/c-empty/sub/t"; c_commit c-empty 'undo'
 echo reached > "$CR/c-reached/sub/r"; c_commit c-reached 'pushed straight to the default branch'
 printf '\000\001\003' > "$CR/c-binary/sub/bin"; c_commit c-binary 'binary, one content'
@@ -415,6 +417,7 @@ for w in c-noref c-foreign c-nohead; do echo "$w" > "$CR/$w/sub/own"; c_commit "
 # The default branch moves on.
 g -C "$UP" pull -q --ff-only "$CR/c-reached/sub" main
 echo unrelated > "$UP/z"; g -C "$UP" add z; g -C "$UP" commit -qm 'unrelated'
+printf 'x\n\ty\n' > "$UP/w"; g -C "$UP" add w; g -C "$UP" commit -qm 'the same lines, indented with a tab'
 printf 'one\nTWO\nthree\n' > "$UP/f"; echo new > "$UP/added"; g -C "$UP" add -A; g -C "$UP" commit -qm 'squash of c-same'
 same_as=$(g -C "$UP" rev-parse HEAD)
 echo moved > "$UP/m"; printf 'a\nB\nc\n' > "$UP/h"; g -C "$UP" add -A; g -C "$UP" commit -qm 'squash of c-moved'
@@ -424,7 +427,7 @@ printf '\000\001\004' > "$UP/bin"; g -C "$UP" commit -qam 'binary, another conte
 mkdir -p "$REF"; g clone -q "$UP" "$REF/sub"; g -C "$REF/sub" config remote.origin.url "$URL"
 ref_base=$(g -C "$REF/sub" rev-parse refs/remotes/origin/main)
 nopr='{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":0,"nodes":[]}}}}}'
-for w in c-same c-moved c-differs c-empty c-reached c-binary c-noref c-foreign c-nohead; do printf '%s\n' "$nopr" > "$FIX/$(c_sha "$w").json"; done
+for w in c-same c-moved c-differs c-space c-empty c-reached c-binary c-noref c-foreign c-nohead; do printf '%s\n' "$nopr" > "$FIX/$(c_sha "$w").json"; done
 printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":1,"nodes":[%s]}}}}}\n' \
   "$(node 51 MERGED "$(c_sha c-merged)")" > "$FIX/$(c_sha c-merged).json"
 
@@ -439,22 +442,23 @@ content_is() { # name worktree want
   if [ "$got" = "$3" ]; then ok "$1"; else bad "$1" "want [$3] got [$got] rc=$RC out=$OUT err=$(cat "$TMP/err")"; fi
 }
 objects_of() { find "$CR"/*/sub/.git "$REF/sub/.git" -type f | LC_ALL=C sort | cksum; }
-content_rows() { grep -E "^ENTRY	c-(same|moved|differs|empty|reached|binary|merged)	" "$TMP/content.all"; }
+content_rows() { grep -E "^ENTRY	c-(same|moved|differs|space|empty|reached|binary|merged)	" "$TMP/content.all"; }
 bash "$INVENTORY" "$CR" > "$TMP/content.all"
 { content_rows; } > "$TMP/content.in"; seal "$TMP/content.in"
 before=$(objects_of)
 c_run "$TMP/content.in" "$REF"
 after=$(objects_of)
-check 'the fixture inventory lists the seven compared entries' eval '[ "$(grep -c "^ENTRY" "$TMP/content.in")" = 7 ]'
+check 'the fixture inventory lists the eight compared entries' eval '[ "$(grep -c "^ENTRY" "$TMP/content.in")" = 8 ]'
 content_is 'the sum of two commits merged as one is same-change'   c-same    "same-change commit=$(c_sha c-same) base=$ref_base same_as=$same_as"
 content_is 'a change the default branch later built on is same-change' c-moved "same-change commit=$(c_sha c-moved) base=$ref_base same_as=$moved_as"
 content_is 'a change the default branch never got differs'         c-differs "differs commit=$(c_sha c-differs) base=$ref_base same_as=-"
+content_is 'a change that differs only in indentation differs'     c-space   "differs commit=$(c_sha c-space) base=$ref_base same_as=-"
 content_is 'a commit that leaves the files as they were is no-change' c-empty "no-change commit=$(c_sha c-empty) base=$ref_base same_as=-"
 content_is 'a commit the default branch contains is reached'       c-reached "reached commit=$(c_sha c-reached) base=$ref_base same_as=-"
 content_is 'a binary file with other content differs'              c-binary  "differs commit=$(c_sha c-binary) base=$ref_base same_as=-"
 content_is 'a merged entry is not compared'                        c-merged  ''
-check 'the comparison keeps the pull-request verdicts' eval '[ "$(printf "%s\n" "$OUT" | grep -c "^MERGE-CHECK	c-.*	no-pr	")" = 6 ] && grep -q "^MERGE-CHECK	c-merged	sub	merged	" <<<"$OUT"'
-check 'the closing line carries the content totals' eval 'grep -q "	content_reached=1	content_same_change=2	content_no_change=1	content_differs=2	content_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
+check 'the comparison keeps the pull-request verdicts' eval '[ "$(printf "%s\n" "$OUT" | grep -c "^MERGE-CHECK	c-.*	no-pr	")" = 7 ] && grep -q "^MERGE-CHECK	c-merged	sub	merged	" <<<"$OUT"'
+check 'the closing line carries the content totals' eval 'grep -q "	content_reached=1	content_same_change=2	content_no_change=1	content_differs=3	content_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
 check 'the comparison writes to neither repository' [ "$before" = "$after" ]
 c_run "$TMP/content.in"
 check 'without a reference nothing is compared' eval '! grep -q "CONTENT-CHECK\|content_" <<<"$OUT" && [ "$RC" = 0 ]'
