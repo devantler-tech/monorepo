@@ -11,7 +11,7 @@ The portfolio's products, including **devantler.tech**, are Git submodules in on
 
 | Path | What it holds | Instructions |
 |---|---|---|
-| `docs/` | ADRs in `docs/adr/`; frozen website migration snapshot | [`docs/AGENTS.md`](docs/AGENTS.md) |
+| `docs/` | Portfolio architecture decisions in `docs/adr/` | [`docs/AGENTS.md`](docs/AGENTS.md) |
 | `.claude/guides/` | the agent guides — the detailed half of this contract | [index](#agent-guides) |
 | `.claude/scripts/` | helpers the engineer runs, and the contract tests that guard the guides | [`.claude/scripts/AGENTS.md`](.claude/scripts/AGENTS.md) |
 | `.claude/skills/`, `.claude/agents/`, `.claude/loaders/` | run procedures, product cards, the surveyor overlay and loaders | [*Agent definition locations*](#agent-definition-locations) |

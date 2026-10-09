@@ -14,6 +14,31 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
+# Once the replacement is live, architecture records remain here but the old
+# application must not return as a second source tree (monorepo#3086).
+legacy_retired() {
+  local checkout=$1 path
+  [ -f "$checkout/docs/AGENTS.md" ] && [ -d "$checkout/docs/adr" ] || return 1
+  for path in src public scripts package.json package-lock.json astro.config.mjs tsconfig.json .npmrc; do
+    if [ -e "$checkout/docs/$path" ] || [ -L "$checkout/docs/$path" ]; then return 1; fi
+  done
+}
+mkdir -p "$tmp/retirement/docs/adr"
+printf 'architecture instructions\n' > "$tmp/retirement/docs/AGENTS.md"
+legacy_retired "$tmp/retirement" || { echo 'FAIL: architecture-only docs were rejected' >&2; exit 1; }
+for path in src public scripts package.json package-lock.json astro.config.mjs tsconfig.json .npmrc; do
+  touch "$tmp/retirement/docs/$path"
+  if legacy_retired "$tmp/retirement"; then
+    echo "FAIL: restored legacy application path docs/$path was accepted" >&2; exit 1
+  fi
+  rm "$tmp/retirement/docs/$path"
+done
+mv "$tmp/retirement/docs/AGENTS.md" "$tmp/retirement/AGENTS.md"
+if legacy_retired "$tmp/retirement"; then echo 'FAIL: missing architecture instructions were accepted' >&2; exit 1; fi
+mv "$tmp/retirement/AGENTS.md" "$tmp/retirement/docs/AGENTS.md"
+rmdir "$tmp/retirement/docs/adr"
+if legacy_retired "$tmp/retirement"; then echo 'FAIL: missing ADR directory was accepted' >&2; exit 1; fi
+legacy_retired "$root" || { echo 'FAIL: frozen website remains or architecture records are missing' >&2; exit 1; }
 mkdir -p "$tmp/.github/workflows" "$tmp/applications/business-site" "$tmp/.claude"
 cp "$root/.github/workflows/ci.yaml" "$tmp/.github/workflows/ci.yaml"
 ln -s "$root/.claude/scripts" "$tmp/.claude/scripts"
@@ -21,7 +46,7 @@ ln -s "$root/applications/business-site/scripts" "$tmp/applications/business-sit
 git -C "$tmp" init -q
 git -C "$tmp" add .github/workflows/ci.yaml .claude/scripts applications/business-site/scripts
 git -C "$tmp" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -qm baseline
-for path in .gitmodules github/devantler-tech/.github-public github/devantler-tech/.github-public/actions/new/action.yaml github/devantler-tech/.github-public/.github/workflows/new.yml; do
+for path in .gitmodules docs/AGENTS.md docs/adr/0008-example.md docs/src/restored.astro docs/package.json github/devantler-tech/.github-public github/devantler-tech/.github-public/actions/new/action.yaml github/devantler-tech/.github-public/.github/workflows/new.yml; do
   mkdir -p "$(dirname "$tmp/$path")"
   printf 'changed\n' > "$tmp/$path"
   selected="$(bash "$root/.claude/scripts/run-affected-tests.sh" --root "$tmp" --base HEAD --list)"
