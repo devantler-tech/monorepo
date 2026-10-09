@@ -17,7 +17,18 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sweep="$here/agent-issue-board-sweep.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "agent-issue-board-sweep.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
 
 fail=0
 report() {
@@ -838,4 +849,5 @@ report "ablation: without the one-document rule, a doubled answer is trusted" \
   "$([ ! -s "$BOARD_LOG" ] && grep -q 'verified=3' <<<"$out" && echo yes || echo no)" \
   "log=[$(tr '\n' ' ' < "$BOARD_LOG")] $(tail -n 1 <<<"$out")"
 
+test_run_finished=1
 if [ "$fail" -eq 0 ]; then echo "agent-issue-board-sweep self-test: all cases passed"; else echo "agent-issue-board-sweep self-test: FAILED" >&2; exit 1; fi
