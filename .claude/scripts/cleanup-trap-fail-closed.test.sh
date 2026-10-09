@@ -290,6 +290,16 @@ disk-preflight.test.sh|
 gh-json-read.test.sh|
 run-affected-tests.test.sh|
 shared-checkout-freshness.test.sh|
+bugbot-request-marker.test.sh|
+coderabbit-summary-verdict.test.sh|
+coderabbit-comment-verdict.test.sh|
+coderabbit-review-verdict.test.sh|
+local-review-verdict.test.sh|
+managed-run-streak.test.sh|
+pr-unresolved-threads.test.sh|
+review-no-gate-guard.test.sh|
+portfolio-map-drift.test.sh|
+review-request-lock.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"
