@@ -58,8 +58,9 @@ export GIT_OPTIONAL_LOCKS=0
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
 
 # rgit — git with the repository-configured helpers that `git status` would otherwise run or
-# start (a filesystem monitor writes into the git directory) switched off.
-rgit() { git -c core.fsmonitor=false -c core.untrackedCache=false "$@"; }
+# start (a filesystem monitor writes into the git directory) switched off. The commit graph
+# is an optional speed-up; a stale one only makes git warn, and a warning fails the read.
+rgit() { git -c core.fsmonitor=false -c core.untrackedCache=false -c core.commitGraph=false "$@"; }
 
 die() { printf 'worktree-submodule-inventory: %s\n' "$1" >&2; exit 2; }
 
@@ -136,14 +137,16 @@ classify_entry() {
 
   # -z never quotes a path; NUL becomes the record separator and a real newline \001, so a
   # path holding a newline is detected instead of being split into two records.
+  # stderr joins the stream on purpose: git only WARNS about a directory it may not open and
+  # still exits 0, and a warning line carries a newline, so the guard below rejects it.
   # --ignored=matching: an ignored file dies with the worktree too, and an ignored directory
   # can hold a whole repository.
   status=$(rgit -C "$dir" status --porcelain -z --untracked-files=all --ignored=matching \
-             --ignore-submodules=none 2>/dev/null \
+             --ignore-submodules=none 2>&1 \
            | tr '\0\n' '\n\001') \
     || { unreadable_row "$label" "$path" "cannot read its status"; return 0; }
   case "$status" in
-    *$'\001'*) unreadable_row "$label" "$path" "a path holds a newline"; return 0 ;;
+    *$'\001'*) unreadable_row "$label" "$path" "git warned about the read, or a path holds a newline"; return 0 ;;
   esac
   # Drop the rename/copy SOURCE that -z emits as its own field.
   status=$(printf '%s\n' "$status" | awk 'skip { skip = 0; next } { print } /^([RC].|.[RC]) / { skip = 1 }')
@@ -209,6 +212,7 @@ classify_entry() {
 submodule_paths() {
   local wt=$1 named='' links rc=0
   if [ -e "$wt/.gitmodules" ]; then
+    [ -f "$wt/.gitmodules" ] && [ -r "$wt/.gitmodules" ] || return 1
     # -z prints `key<newline>value<NUL>`, so a submodule NAME holding a space cannot shift
     # the value. Exit 1 means no key matched.
     named=$(git config -z -f "$wt/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null \
@@ -220,7 +224,37 @@ submodule_paths() {
   links=$(rgit -C "$wt" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') || return 1
   case "$links" in *$'\001'*) return 1 ;; esac
   links=$(printf '%s\n' "$links" | awk '$1 == "160000" { sub(/^[^\t]*\t/, ""); print }')
-  printf '%s\n%s\n' "$named" "$links" | awk 'NF && !seen[$0]++'
+  printf '%s\n%s\n' "$named" "$links" | awk 'length($0) && !seen[$0]++'
+}
+
+# locate_submodule <worktree-realpath> <path> -> sets SUB_DIR to the submodule's directory.
+# Returns 0 when it is there to read, 1 when it is provably absent (unpopulated), and 2 with
+# SUB_WHY set when that cannot be established. Every component must be a real directory this
+# process may read and search: `-e` is false both for an absent entry and for one behind a
+# directory it may not search, and a symbolic link can lead out of the worktree.
+locate_submodule() {
+  local cur=$1 rest=$2 comp
+  SUB_DIR=''; SUB_WHY=''
+  case "$rest" in
+    /*)      SUB_WHY="the path is absolute"; return 2 ;;
+    *$'\t'*) SUB_WHY="the path holds a tab"; return 2 ;;
+  esac
+  while [ -n "$rest" ]; do
+    comp=${rest%%/*}
+    case "$rest" in */*) rest=${rest#*/} ;; *) rest='' ;; esac
+    case "$comp" in
+      '') continue ;;
+      .|..) SUB_WHY="the path does not stay inside the worktree"; return 2 ;;
+    esac
+    if [ ! -r "$cur" ] || [ ! -x "$cur" ]; then SUB_WHY="no permission to read ${cur##*/}"; return 2; fi
+    cur="$cur/$comp"
+    if [ -L "$cur" ]; then SUB_WHY="a path component is a symbolic link"; return 2; fi
+    [ -e "$cur" ] || return 1
+    [ -d "$cur" ] || return 1
+  done
+  if [ ! -r "$cur" ] || [ ! -x "$cur" ]; then SUB_WHY="no permission to read the directory"; return 2; fi
+  SUB_DIR=$cur
+  return 0
 }
 
 for wt in "$ROOT"/*/; do
@@ -242,20 +276,23 @@ for wt in "$ROOT"/*/; do
     || { unreadable_row "$label" "-" "git resolves it to another working tree"; continue; }
   worktrees=$((worktrees+1))
   paths=$(submodule_paths "$wt") || { unreadable_row "$label" "-" "cannot list its submodules"; continue; }
+  seen_dirs=''
   while IFS= read -r path; do
     [ -n "$path" ] || continue
-    # A path that leaves the worktree, or names the worktree itself, would be read as
-    # some other repository under this worktree's label.
-    case "/$path/" in
-      //*|*/../*|*/./*) unreadable_row "$label" "$path" "the path does not stay inside the worktree"; continue ;;
+    rc=0; locate_submodule "$wt_real" "$path" || rc=$?
+    case "$rc" in
+      0) ;;
+      1) continue ;;
+      *) unreadable_row "$label" "$path" "$SUB_WHY"; continue ;;
     esac
-    [ -e "$wt/$path" ] || continue
-    if [ ! -d "$wt/$path" ] || [ ! -r "$wt/$path" ] || [ ! -x "$wt/$path" ]; then
-      unreadable_row "$label" "$path" "no permission to read the directory"; continue
-    fi
     # A populated submodule has its own .git entry; an unpopulated one holds nothing.
-    [ -e "$wt/$path/.git" ] || continue
-    classify_entry "$label" "$path" "$wt/$path"
+    [ -e "$SUB_DIR/.git" ] || continue
+    # Two spellings of one directory (`sub` and `sub/`, or another letter case) are one entry.
+    sub_real=$(physical_path "$SUB_DIR") \
+      || { unreadable_row "$label" "$path" "cannot resolve the directory"; continue; }
+    case "$seen_dirs" in *$'\n'"$sub_real"$'\n'*) continue ;; esac
+    seen_dirs="$seen_dirs"$'\n'"$sub_real"$'\n'
+    classify_entry "$label" "$path" "$SUB_DIR"
   done <<< "$paths"
 done
 

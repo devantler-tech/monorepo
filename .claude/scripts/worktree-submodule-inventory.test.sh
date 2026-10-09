@@ -210,6 +210,36 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 ROOT=$ROOT_SAVE
 
+# More spellings of "cannot be established", each of which once read as absent or clean.
+gm() { printf '[submodule "s"]\n\tpath = %s\n\turl = https://example.invalid/s.git\n' "$2" > "$ROOT/$1/.gitmodules"; }
+ROOT="$TMP/absolute"; mkdir -p "$ROOT"; s=$(make_wt x-absolute); gm x-absolute "$s"
+unreadable_case x-absolute 'the path is absolute' "an absolute submodule path is UNREADABLE"
+ROOT="$TMP/dot"; mkdir -p "$ROOT"; s=$(make_wt y-dot); gm y-dot .
+unreadable_case y-dot 'the path does not stay inside the worktree' "a submodule path naming the worktree itself is UNREADABLE"
+ROOT="$TMP/link"; mkdir -p "$ROOT"; s=$(make_wt z-link); make_wt z-victim >/dev/null
+ln -s ../z-victim/sub "$ROOT/z-link/link"; gm z-link link
+unreadable_case z-link 'a path component is a symbolic link' "a submodule path through a symbolic link is UNREADABLE"
+if [ "$(id -u)" -ne 0 ]; then
+  ROOT="$TMP/parent"; mkdir -p "$ROOT"; s=$(make_wt aa-parent 'libs/sub'); echo edit > "$s/f"; chmod 000 "$ROOT/aa-parent/libs"
+  unreadable_case aa-parent 'no permission to read libs' "a submodule behind a directory that may not be searched is UNREADABLE"
+  chmod 700 "$ROOT/aa-parent/libs"
+  ROOT="$TMP/inner"; mkdir -p "$ROOT"; s=$(make_wt ab-inner); mkdir "$s/priv"; echo secret > "$s/priv/x"; chmod 000 "$s/priv"
+  unreadable_case ab-inner 'git warned about the read, or a path holds a newline' "a submodule holding a directory git may not open is UNREADABLE, never clean"
+  chmod 700 "$s/priv"
+  ROOT="$TMP/modules"; mkdir -p "$ROOT"; s=$(make_wt ac-modules); echo edit > "$s/f"; chmod 000 "$ROOT/ac-modules/.gitmodules"
+  out=$(bash "$SUT" "$ROOT" 2>&1); rc=$?
+  { [ "$rc" -eq 2 ] && grep -q $'^UNREADABLE\tac-modules\t-\tcannot list its submodules$' <<<"$out"; } \
+    && ok "a .gitmodules that may not be read is UNREADABLE, not empty" || bad "an unreadable .gitmodules is UNREADABLE" "rc=$rc: $out"
+  chmod 600 "$ROOT/ac-modules/.gitmodules"
+fi
+# One directory named twice (a gitlink `sub` and a .gitmodules `sub/`) is ONE entry.
+ROOT="$TMP/twice"; mkdir -p "$ROOT"; s=$(make_wt ad-twice)
+g -C "$ROOT/ad-twice" update-index --add --cacheinfo "160000,$(g -C "$s" rev-parse HEAD),sub"; gm ad-twice sub/
+out=$(bash "$SUT" "$ROOT" 2>&1); rc=$?
+{ [ "$rc" -eq 0 ] && [ "$(grep -c $'^ENTRY\tad-twice\t' <<<"$out")" -eq 1 ]; } \
+  && ok "a submodule named by both sources is listed once" || bad "a submodule named by both sources is listed once" "rc=$rc: $out"
+ROOT=$ROOT_SAVE
+
 # A root with no worktree at all is the wrong directory, not an empty inventory.
 mkdir -p "$TMP/empty/plain"
 bash "$SUT" "$TMP/empty" >/dev/null 2>&1; [ $? -eq 2 ] && ok "a root holding no worktree exits 2" || bad "a root holding no worktree exits 2"
