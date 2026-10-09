@@ -45,7 +45,7 @@ for a in "$@"; do
   [ "$prev" != --hostname ] || host=$a
   prev=$a
 done
-printf '%s %s %s %s\n' "$owner/$name" "$sha" "$host" "${GH_HOST:-unset}" >> "$CALLS"
+printf '%s %s %s %s\n' "$owner/$name" "$sha" "$host" "${GH_HOST:-unset}/${GH_REPO:-unset}" >> "$CALLS"
 [ -f "$FIX/$sha.json" ] || { echo 'gh: HTTP 502' >&2; exit 1; }
 cat "$FIX/$sha.json"
 STUB
@@ -63,8 +63,9 @@ add_sub() {
   g -C "$d" config remote.origin.url "$2"
 }
 sha_of() { g -C "$ROOT/$1/sub" rev-parse HEAD; }
-node() { # number state head [base]
-  printf '{"number":%s,"state":"%s","headRefOid":"%s","baseRefName":"%s"}' "$1" "$2" "$3" "${4:-main}"
+node() { # number state head [base] [base-repository]
+  printf '{"number":%s,"state":"%s","headRefOid":"%s","baseRefName":"%s","baseRepository":{"nameWithOwner":"%s"}}' \
+    "$1" "$2" "$3" "${4:-main}" "${5:-devantler-tech/ksail}"
 }
 prs() { # worktree total nodes-json
   printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":%s,"nodes":%s}}}}}\n' \
@@ -78,7 +79,7 @@ entry() { # worktree class [unpushed] [local_only] [path]
 # seal <file> -> appends the closing line the inventory would print for those rows.
 seal() {
   awk -F'\t' '$1 == "ENTRY" { e++; if ($4 == "unpushed") u++; if ($4 == "local-only") l++ }
-    END { printf "CHECKED\tworktrees=1\tentries=%d\tunpushed=%d\tlocal_only=%d\tunreadable=0\n", e, u, l }' "$1" >> "$1"
+    END { printf "CHECKED\tworktrees=1\tentries=%d\tunpushed=%d\tlocal_only=%d\tbelow_min_idle=0\tunreadable=0\n", e, u, l }' "$1" >> "$1"
 }
 
 run() { # stdin -> OUT, RC
@@ -99,7 +100,7 @@ no_verdict() { ! printf '%s\n' "$OUT" | grep -q '^MERGE-CHECK'; }
 no_calls() { [ ! -s "$CALLS" ]; }
 rc_is() { [ "$RC" = "$1" ]; }
 
-for w in w-merged w-closed w-nopr w-absent w-both w-stacked w-local w-fail w-held; do
+for w in w-merged w-closed w-nopr w-absent w-both w-stacked w-local w-fail w-held w-fork w-stale w-dirty w-gitlink; do
   add_sub "$w" 'git@github.com:devantler-tech/ksail.git'
 done
 add_sub w-open      'https://github.com/devantler-tech/platform.git'
@@ -110,9 +111,15 @@ add_sub w-lookalike 'git@github.com:devantler-tech-evil/ksail.git'
 # A second worktree at the same commit as w-merged.
 mkdir -p "$ROOT/w-same"; g clone -q "$ROOT/w-merged/sub" "$ROOT/w-same/sub"
 g -C "$ROOT/w-same/sub" config remote.origin.url 'https://github.com/devantler-tech/ksail'
+g -C "$ROOT/w-same/sub" update-ref -d refs/remotes/origin/main
+g -C "$ROOT/w-same/sub" symbolic-ref -d refs/remotes/origin/HEAD
+# w-held keeps 8 more commits on another local branch.
+g -C "$ROOT/w-held/sub" checkout -q -b side
+for i in 1 2 3 4 5 6 7 8; do echo "$i" > "$ROOT/w-held/sub/f"; g -C "$ROOT/w-held/sub" commit -qam "side $i"; done
+g -C "$ROOT/w-held/sub" checkout -q main
 
 prs w-merged 1 "[$(node 11 MERGED "$(sha_of w-merged)")]"
-prs w-open   1 "[$(node 12 OPEN "$(sha_of w-open)")]"
+prs w-open   1 "[$(node 12 OPEN "$(sha_of w-open)" main devantler-tech/platform)]"
 prs w-closed 1 "[$(node 13 CLOSED "$(sha_of w-closed)")]"
 prs w-other  1 "[$(node 14 MERGED "$OTHER")]"
 prs w-nopr   0 '[]'
@@ -120,11 +127,15 @@ raw w-absent '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object"
 prs w-both   2 "[$(node 17 CLOSED "$(sha_of w-both)"),$(node 18 MERGED "$(sha_of w-both)")]"
 prs w-stacked 1 "[$(node 19 MERGED "$(sha_of w-stacked)" feature-base)]"
 prs w-held   1 "[$(node 20 MERGED "$(sha_of w-held)")]"
+prs w-fork   1 "[$(node 23 MERGED "$(sha_of w-fork)" main someone-else/ksail)]"
+prs w-stale  1 "[$(node 24 MERGED "$(sha_of w-stale)")]"
+prs w-dirty  1 "[$(node 25 MERGED "$(sha_of w-dirty)")]"
+prs w-gitlink 1 "[$(node 26 MERGED "$(sha_of w-gitlink)")]"
 
 echo '== verdicts'
 { entry w-merged unpushed; entry w-open unpushed; entry w-closed unpushed; entry w-other unpushed
   entry w-nopr unpushed; entry w-absent unpushed; entry w-both unpushed; entry w-same unpushed
-  entry w-stacked unpushed; entry w-held unpushed 1 9; } > "$TMP/in"; seal "$TMP/in"
+  entry w-stacked unpushed; entry w-held unpushed 1 9; entry w-fork unpushed; } > "$TMP/in"; seal "$TMP/in"
 run < "$TMP/in"
 expect 'a merged pull request at this head is merged'            w-merged  'merged pr=11 other_local=0'
 expect 'an open pull request at this head is open'               w-open    'open pr=12 other_local=0'
@@ -136,16 +147,17 @@ expect 'merged wins over closed at the same head'                w-both    'merg
 expect 'a second entry at the same commit gets the same verdict' w-same    'merged pr=11 other_local=0'
 expect 'merged into another branch is not merged'                w-stacked 'merged-other-base pr=19 other_local=0'
 expect 'commits held away from HEAD are counted beside merged'   w-held    'merged pr=20 other_local=8'
+expect "merged into a fork's default branch is not merged"           w-fork    'merged-other-base pr=23 other_local=0'
 check 'every entry answered: exit 0' rc_is 0
 n=$(grep -c " $(sha_of w-merged) " "$CALLS")
 if [ "$n" = 1 ]; then ok 'one lookup per repository and commit'; else bad 'one lookup per repository and commit' "calls=$n"; fi
 check 'owner, name and host are the ones sent' grep -q "^devantler-tech/platform $(sha_of w-open) github.com " "$CALLS"
 check 'the closing line carries the totals' out_has \
-  $'^CHECKED\tmerged=4\tmerged_other_base=1\topen=1\tclosed=1\tother_head=1\tno_pr=1\tnot_on_github=1\tnot_checked=0\tother_classes=0\tunknown=0$'
+  $'^CHECKED\tmerged=4\tmerged_other_base=2\topen=1\tclosed=1\tother_head=1\tno_pr=1\tnot_on_github=1\tnot_checked=0\tother_classes=0\tunknown=0$'
 : > "$CALLS"
 OUT=$(GH_HOST=ghe.example.invalid GH_REPO=someone/else PATH="$BIN:$PATH" bash "$SUT" "$ROOT" < "$TMP/in" 2>"$TMP/err"); RC=$?
-if [ "$RC" = 0 ] && ! grep -qv ' github.com unset$' "$CALLS"; then ok 'an inherited GH_HOST is not honoured'
-else bad 'an inherited GH_HOST is not honoured' "rc=$RC $(head -2 "$CALLS")"; fi
+if [ "$RC" = 0 ] && ! grep -qv ' github.com unset/unset$' "$CALLS"; then ok 'an inherited GH_HOST or GH_REPO is not honoured'
+else bad 'an inherited GH_HOST or GH_REPO is not honoured' "rc=$RC $(head -2 "$CALLS")"; fi
 
 echo '== never queried'
 { entry w-foreign unpushed; entry w-gitlab unpushed; entry w-lookalike unpushed
@@ -213,6 +225,20 @@ bad_row 'a row shifted by a leading tab'             "$(printf '\t%s' "$(row_for
 bad_row 'a row with no commit counts'                "$(printf 'ENTRY\tw-merged\tsub\tunpushed\tidle_days=1\thead=%s' "$M")" 'no commit counts'
 bad_row 'fewer local-only commits than unpushed ones' \
   "$(printf 'ENTRY\tw-merged\tsub\tunpushed\tidle_days=1\thead=%s\tunpushed=3\tlocal_only=1' "$M")" 'no commit counts'
+# HEAD stands still while the entry changes underneath a saved inventory.
+entry w-stale unpushed > "$TMP/row-stale"; entry w-dirty unpushed > "$TMP/row-dirty"
+g -C "$ROOT/w-stale/sub" checkout -q -b later; echo later > "$ROOT/w-stale/sub/f"
+g -C "$ROOT/w-stale/sub" commit -qam later; g -C "$ROOT/w-stale/sub" checkout -q main
+echo edit > "$ROOT/w-dirty/sub/f"
+bad_row 'a new local commit since the inventory, HEAD unchanged' "$(tr -d '\n' < "$TMP/row-stale")" 'it changed since the inventory'
+bad_row 'an edited file since the inventory'                     "$(tr -d '\n' < "$TMP/row-dirty")" 'it changed since the inventory'
+# The submodule directory is real, but its .git is a link to a repository outside the root.
+G=$(sha_of w-gitlink); mv "$ROOT/w-gitlink/sub/.git" "$TMP/outside-git"; ln -s "$TMP/outside-git" "$ROOT/w-gitlink/sub/.git"
+bad_row 'a .git that is a symbolic link'             "$(row_for w-gitlink sub "$G")"         'symbolic link'
+bad_row 'counts written with a leading zero' \
+  "$(printf 'ENTRY\tw-merged\tsub\tunpushed\tidle_days=1\thead=%s\tunpushed=01\tlocal_only=01' "$M")" 'no commit counts'
+bad_row 'a row with an empty field' \
+  "$(printf 'ENTRY\tw-merged\t\tunpushed\tidle_days=1\thead=%s\tunpushed=1\tlocal_only=1' "$M")" 'malformed'
 # A submodule whose own .git is an empty directory: git answers with the worktree's origin.
 mkdir -p "$ROOT/w-broken"; g init -q -b main "$ROOT/w-broken"
 g -C "$ROOT/w-broken" config remote.origin.url 'git@github.com:devantler-tech/monorepo.git'
@@ -230,18 +256,26 @@ incomplete 'no closing line' 'no closing CHECKED line'
 incomplete 'an UNREADABLE inventory row' 'UNREADABLE, malformed or trailing'
 : > "$TMP/in"
 incomplete 'an empty inventory' 'no closing CHECKED line'
-printf 'CHECKED\tworktrees=1\tentries=5\tunpushed=5\tlocal_only=0\tunreadable=0\n' > "$TMP/in"
+printf 'CHECKED\tworktrees=1\tentries=5\tunpushed=5\tlocal_only=0\tbelow_min_idle=0\tunreadable=0\n' > "$TMP/in"
 incomplete 'a closing line whose rows were lost' 'do not match'
-printf 'CHECKED\tworktrees=1\tentries=0\tunpushed=0\tlocal_only=0\tunreadable=2\n' > "$TMP/in"
+printf 'CHECKED\tworktrees=1\tentries=0\tunpushed=0\tlocal_only=0\tbelow_min_idle=0\tunreadable=2\n' > "$TMP/in"
 incomplete 'a closing line that reports unreadable entries' 'reports unreadable entries'
-printf 'CHECKED\tworktrees=0\tentries=0\tunpushed=0\tlocal_only=0\tunreadable=0\n' > "$TMP/in"
+printf 'CHECKED\tworktrees=0\tentries=0\tunpushed=0\tlocal_only=0\tbelow_min_idle=0\tunreadable=0\n' > "$TMP/in"
 incomplete 'an inventory that found no worktree' 'found no worktree'
+for f in entries unpushed local_only; do
+  { entry w-merged unpushed; entry w-local local-only 0 3; } > "$TMP/in"; seal "$TMP/in"
+  sed -i.bak "s/	$f=[0-9]*/	$f=7/" "$TMP/in"
+  incomplete "a closing line whose $f total disagrees" 'do not match'
+done
+{ entry w-merged unpushed; } > "$TMP/in"; seal "$TMP/in"; sed -i.bak 's/below_min_idle=0/below_min_idle=4/' "$TMP/in"
+run < "$TMP/in"
+check 'entries the inventory left out for their age are named' out_has $'^NOTE\tthe inventory left out 4 entries'
 printf 'CHECKED\tworktrees=1\n' > "$TMP/in"
 incomplete 'a closing line with no totals' 'carries no totals'
-{ printf 'CHECKED\tworktrees=1\tentries=1\tunpushed=1\tlocal_only=0\tunreadable=0\n'; entry w-merged unpushed; } > "$TMP/in"
+{ printf 'CHECKED\tworktrees=1\tentries=1\tunpushed=1\tlocal_only=0\tbelow_min_idle=0\tunreadable=0\n'; entry w-merged unpushed; } > "$TMP/in"
 incomplete 'a row after the closing line' 'UNREADABLE, malformed or trailing'
 check 'and that row was not looked up' no_calls
-{ entry w-merged unpushed; printf 'CHECKED\tworktrees=1\tentries=1\tunpushed=1\tlocal_only=0\tunreadable=0'; } > "$TMP/in"
+{ entry w-merged unpushed; printf 'CHECKED\tworktrees=1\tentries=1\tunpushed=1\tlocal_only=0\tbelow_min_idle=0\tunreadable=0'; } > "$TMP/in"
 run < "$TMP/in"
 check 'a closing line with no trailing newline still counts' rc_is 0
 

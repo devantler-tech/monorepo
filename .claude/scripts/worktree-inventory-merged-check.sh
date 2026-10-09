@@ -26,10 +26,10 @@
 # them: a `merged` row with other_local above 0 still holds unexamined commits.
 #
 # Verdicts for an `unpushed` entry (HEAD is the commit that was looked up):
-#   merged         a pull request whose head is this commit was merged into the default
-#                  branch: the commits reachable from HEAD are there in content
-#   merged-other-base  such a pull request was merged, but into another branch (a stacked
-#                  pull request): not proof the content reached the default branch
+#   merged         a pull request whose head is this commit was merged into this
+#                  repository's default branch: the commits reachable from HEAD are there in content
+#   merged-other-base  such a pull request was merged, but into another branch or another
+#                  repository (a stacked pull request, a fork): not proof the content reached the default branch
 #   open           a pull request whose head is this commit is open: work in flight
 #   closed         a pull request whose head is this commit was closed without merging
 #   other-head     GitHub has the commit and pull requests contain it, but none has it as
@@ -49,8 +49,10 @@
 # Exit codes: 0 every `unpushed` entry got a verdict; 2 usage error, an inventory that is
 # incomplete (no CHECKED line or one that is not last, an UNREADABLE or malformed row, rows
 # that disagree with the inventory's own totals, no worktree found), or an UNKNOWN row: a
-# lookup failed, a path is not a plain directory under the root, or HEAD has moved since the
-# inventory. Nothing is claimed about an UNKNOWN entry.
+# lookup failed, a path is not a plain directory under the root, or the entry no longer
+# matches its row (HEAD, its commit counts or its working tree changed since the
+# inventory). Nothing is claimed about an UNKNOWN entry. A `NOTE` row says how many entries
+# the inventory left out with --min-idle-days: those were not checked at all.
 set -euo pipefail
 
 export GIT_OPTIONAL_LOCKS=0
@@ -67,7 +69,7 @@ die() { printf 'worktree-inventory-merged-check: %s\n' "$1" >&2; exit 2; }
 
 [ $# -eq 1 ] || die "usage: worktree-inventory-merged-check.sh <worktree-root> < inventory-output"
 case "$1" in
-  -h|--help) sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   -*) die "unknown option: $1" ;;
 esac
 [ -d "$1" ] || die "not a directory: $1"
@@ -126,11 +128,11 @@ lookup() {
         defaultBranchRef{ name }
         object(oid:$sha){
           __typename
-          ... on Commit{ associatedPullRequests(first:$n){ totalCount nodes{ number state headRefOid baseRefName } } }
+          ... on Commit{ associatedPullRequests(first:$n){ totalCount nodes{ number state headRefOid baseRefName baseRepository{ nameWithOwner } } } }
         }}}' 2>/dev/null) || return 1
   # Every shape is matched positively. A missing repository, an error body or a list cut
   # short yields no verdict, never `no-pr`.
-  answer=$(printf '%s' "$json" | jq -r --arg sha "$sha" '
+  answer=$(printf '%s' "$json" | jq -r --arg sha "$sha" --arg repo "$OWNER/$name" '
     if (has("errors")) or (.data.repository == null) or (.data.repository | has("object") | not)
        or ((.data.repository.defaultBranchRef.name | type) != "string") then empty
     elif .data.repository.object == null then "not-on-github -"
@@ -141,7 +143,8 @@ lookup() {
            or $p.totalCount != ($p.nodes | length) then empty
         elif $p.totalCount == 0 then "no-pr -"
         else ($p.nodes | map(select(.headRefOid == $sha))) as $at
-          | ($at | map(select(.state == "MERGED" and .baseRefName == $default))) as $in
+          | ($at | map(select(.state == "MERGED" and .baseRefName == $default
+                       and ((.baseRepository.nameWithOwner // "") | ascii_downcase) == ($repo | ascii_downcase)))) as $in
           | if   ($in | length) > 0 then "merged \($in[0].number)"
             elif ($at | map(select(.state == "MERGED")) | length) > 0
               then "merged-other-base \($at | map(select(.state == "MERGED")) | .[0].number)"
@@ -194,6 +197,7 @@ locate() {
     if [ -L "$cur" ]; then WHY="a path component is a symbolic link"; return 1; fi
     if [ ! -d "$cur" ]; then WHY="no repository at that path under this root"; return 1; fi
   done
+  if [ -L "$cur/.git" ]; then WHY="a path component is a symbolic link"; return 1; fi
   if [ ! -e "$cur/.git" ]; then WHY="no repository at that path under this root"; return 1; fi
   DIR=$cur
 }
@@ -236,6 +240,8 @@ EOF_ROW
   case "$sha" in *[!0-9a-f]*) unknown_row "$label" "$path" "the row carries no full head commit"; continue ;; esac
   unp=${unpf#unpushed=}; loc=${locf#local_only=}
   case "$unpf$locf" in "unpushed=${unp}local_only=${loc}") ;; *) unknown_row "$label" "$path" "the row carries no commit counts"; continue ;; esac
+  # A leading zero would be read as octal by the arithmetic below.
+  case "$unp" in 0?*) unp=x ;; esac; case "$loc" in 0?*) loc=x ;; esac
   case "$unp$loc" in ''|*[!0-9]*) unknown_row "$label" "$path" "the row carries no commit counts"; continue ;; esac
   [ -n "$unp" ] && [ -n "$loc" ] && [ "$loc" -ge "$unp" ] \
     || { unknown_row "$label" "$path" "the row carries no commit counts"; continue; }
@@ -250,6 +256,18 @@ EOF_ROW
   now=$(git -C "$DIR" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null) \
     || { unknown_row "$label" "$path" "cannot read its HEAD"; continue; }
   [ "$now" = "$sha" ] || { unknown_row "$label" "$path" "its HEAD moved since the inventory"; continue; }
+  # HEAD can stand still while the entry changes: a new local branch, a stash, an edit.
+  # Re-read what the row claims; any difference means the row no longer describes it.
+  g_dir=$(git -C "$DIR" rev-parse --absolute-git-dir 2>/dev/null) \
+    || { unknown_row "$label" "$path" "cannot find its git directory"; continue; }
+  unp_now=$(git --git-dir="$g_dir" rev-list --count "$sha" --not --remotes 2>/dev/null) \
+    || { unknown_row "$label" "$path" "cannot recount its commits"; continue; }
+  loc_now=$(git --git-dir="$g_dir" rev-list --count --all --reflog --not --remotes 2>/dev/null) \
+    || { unknown_row "$label" "$path" "cannot recount its commits"; continue; }
+  dirty=$(git -C "$DIR" -c core.fsmonitor=false status --porcelain --untracked-files=all 2>&1) \
+    || { unknown_row "$label" "$path" "cannot read its status"; continue; }
+  [ "$unp_now" = "$unp" ] && [ "$loc_now" = "$loc" ] && [ -z "$dirty" ] \
+    || { unknown_row "$label" "$path" "it changed since the inventory"; continue; }
   case "$repo" in
     "$OWNER"/*) name=${repo#*/} ;;
     *) count_verdict not-checked; row "$label" "$path" not-checked "$sha" - - "$other"; continue ;;
@@ -277,9 +295,12 @@ c_entries=$(checked_field "$checked_line" entries) || no_totals
 c_unp=$(checked_field "$checked_line" unpushed) || no_totals
 c_loc=$(checked_field "$checked_line" local_only) || no_totals
 c_bad=$(checked_field "$checked_line" unreadable) || no_totals
+c_young=$(checked_field "$checked_line" below_min_idle) || no_totals
 [ "$c_wt" -gt 0 ] || die "the inventory found no worktree: wrong root, not an empty result"
 [ "$c_bad" -eq 0 ] || die "the inventory reports unreadable entries: it is incomplete"
 [ "$c_entries" -eq "$rows_entry" ] && [ "$c_unp" -eq "$rows_unpushed" ] && [ "$c_loc" -eq "$rows_local" ] \
   || die "the rows read do not match the inventory's own totals: it is incomplete"
+# Entries the inventory left out for being too recently used were never checked here.
+[ "$c_young" -eq 0 ] || printf 'NOTE\tthe inventory left out %s entries below its --min-idle-days\n' "$c_young"
 [ "$unknown" -eq 0 ] || exit 2
 exit 0
