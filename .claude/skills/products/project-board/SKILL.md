@@ -154,22 +154,18 @@ Until that is solved, backfill is a standing duty, not an exception.
   Every additional view is another surface to keep honest and another place for the maintainer to
   look; a board with three well-configured views beats one with seven overlapping ones. Add a fourth
   only when a genuine audience or cadence cannot be served by grouping an existing view.
-  ⚠️ **Creating a view is scriptable; EDITING one is not.** REST documents
-  **`POST /orgs/{org}/projectsV2/{project_number}/views`** with `name`, `layout`
-  (`table`/`board`/`roadmap`), `filter` and `visible_fields` — so a *new* view can be created from the
-  API. There is **no documented PATCH/DELETE for a view**, `ProjectV2View` is a **read-only** GraphQL
-  type (no view mutations), and `gh project` has no view subcommand — so **changing an existing view's
-  filter, layout, grouping or toggles needs a browser** with the maintainer's session. (A GET against
-  the views path 404s on this org, so treat the POST as documented-but-unexercised: verify before
-  relying on it, and don't create a throwaway view to test — there is no documented way to delete it.)
-  Propose view *edits* precisely (layout, filter string, grouping, visible fields) so applying them by
-  hand is mechanical.
+  **Discover the current API before assuming a view edit needs a browser.** On 2026-10-09,
+  GraphQL `updateProjectV2View` successfully changed existing views with
+  `configuration: {visibleFieldIds: [...]}`; read the ordered result through
+  `configuration.visibleFields`. Its configuration input exposes visible field IDs only, so do not
+  infer that hierarchy toggles or the Roadmap axis can be changed through that input. Snapshot and
+  preserve all unrelated filters, layout, groups, sort order and toggles. Verify each supported edit
+  by readback; unsupported settings need an explicitly permitted browser or a maintainer walkthrough.
 
-  **The only browser an agent can DRIVE is Chrome via the Claude extension.** Computer-use grants
-  browsers at **read tier only** — screenshots work, clicks and typing are blocked at the OS level —
-  so Safari/Firefox/Arc can be *seen* but never operated, by design. Don't burn a round trip
-  requesting browser access for a click-through task; check `list_connected_browsers` first, and if
-  nothing is connected, say so and offer the tooltip-guided walkthrough instead. When saving a view,
+  **Browser capability and permission are runtime-specific.** Use only a verified native browser
+  control with applicable saved permissions. A denied operation stays denied: never switch surfaces
+  or bypass the runtime guard. If no permitted control is available, offer the maintainer a precise
+  walkthrough instead. When saving a view,
   GitHub prompts *"make it the default for everyone"* — the board is shared, so **every view save is
   a public change**.
 
@@ -257,9 +253,11 @@ Until that is solved, backfill is a standing duty, not an exception.
   dependency (Blocked badge renders in-place) and reserve the `blocked` label for cross-org blockers.
 - **Value-pull flow fields and capacity.** Resolve the maintainer's explicit ceilings and field
   semantics from [Flow fields and WIP capacity](../../../guides/issues-and-board.md#flow-fields-and-wip-capacity).
-  Project 5 has Priority, Service class, Delivery size, Ready since and Blocked since, alongside
-  planned Start date and Due date; First started records actual work with issue evidence. Missing
-  priorities require refinement, never an inferred P2. Preserve
+  Project 5 attaches the native issue fields Priority, Effort, Start date and Target date; use
+  `project-planning-fields.sh` as the board guide prescribes to resolve the existing bindings before
+  writes, never recreate project-local counterparts. Service class, Ready since and Blocked since
+  remain project-local; First started records actual work with issue evidence. Missing
+  priorities require refinement, never an inferred Medium. Preserve
   original ages and keep parked unfinished work in WIP. A full downstream stage stops new starts;
   Backlog is refinement and Icebox deferred. Do not manufacture capacity through card moves.
 - **Issue Types are mandatory** — every issue carries exactly one of **Epic, Feature, Bug, Security,
@@ -277,7 +275,7 @@ Until that is solved, backfill is a standing duty, not an exception.
   lacks the scope.
 - **The roadmap axis.** A roadmap layout plots **date or iteration fields only** — it does **not** render
   hierarchy. The `Year` iteration field (2026/2027/2028) is the current coarse axis and is assigned **on
-  evidence of activity**, never by assumption. Finer `Start date`/`Due date` values encode *the
+  evidence of activity**, never by assumption. Native `Start date`/`Target date` values encode *the
   maintainer's intent* — **do not invent them**; propose a sequence and let him drag, or ask.
 - **Fields.** 50-field cap per project. Prefer an **org-level issue field** over a project field when the
   value should be identical everywhere (25/org) — project fields are per-board by design.
@@ -293,6 +291,8 @@ Until that is solved, backfill is a standing duty, not an exception.
 - **Pace bulk work**: ~80 content-generating requests/minute, 500/hour. Serialize; never fan out.
 - The board is **public**. Adding items from **private** repos is a maintainer decision, not an
   agent default.
+- Native planned Start/Target dates do not replace actual First started or Kata Measure on. Preserve
+  the independent clocks and Kata outcome fields when consolidating duplicate planning columns.
 
 ## Roadmap & enhancement
 

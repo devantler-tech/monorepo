@@ -872,8 +872,11 @@ Ready work within downstream capacity**, and any new non-trivial find is **filed
 backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
 7. **Resolve the next issue by the ladder** *(the default advance action)* — take the highest rung
    with actionable work (contract *The work-selection ladder*). Before new implementation, join
-   project 5 Status, Priority, Service class, Delivery size, Due date, dependencies, Ready since,
-   First started and Blocked since to actual-start issue evidence and the complete PR/verification census.
+   project 5 Status, native issue Priority, Effort, Start date and Target date, project-local
+   Service class, dependencies, Ready since, First started and Blocked since to actual-start issue
+   evidence and the complete PR/verification census. Resolve existing native bindings with
+   `project-planning-fields.sh` as the board guide prescribes before planning writes; never recreate
+   the removed project-local counterparts.
    Use the board guide's ceilings and the reviewed product-engineering value-pull assessment.
    Full active stages or unknown joins mean HOLD and finishing/unblocking, never new intake.
    Backlog supplies refinement; Icebox remains deferred. Ordinary Security/Bug types are not severity.
