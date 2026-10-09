@@ -25,11 +25,19 @@
 #   beyond the first page, a null node, a failed or short read — proves nothing, and the issue
 #   goes through board-add.sh exactly as before. The bulk read can only ever skip a no-op.
 #
-#   DEADLINE AND CHECKPOINT. Per-issue work stops at --deadline-seconds: issues not yet examined are
-#   counted `deferred`, the summary names the first of them as `checkpoint=<url>`, and
-#   `--resume-from <url>` starts the next call's per-issue work there. An INT or TERM delivered to
-#   the sweep does the same once the call in flight returns, and exits 2. Issues the bulk read
-#   verified cost nothing, so they are counted whatever the clock says.
+#   DEADLINE AND CHECKPOINT. The membership reads and the per-issue work both stop at
+#   --deadline-seconds (monorepo#3820): no further read starts once it has passed, and issues not
+#   yet examined are counted `deferred`, the summary names the first of them as
+#   `checkpoint=<url>`, and `--resume-from <url>` starts the next call's per-issue work there. An
+#   INT or TERM delivered to the sweep does the same once the call in flight returns, and exits 2.
+#   Issues a read that did finish verified cost nothing more, so they are counted whatever the
+#   clock says.
+#
+#   A RESUMED CHAIN ENDS WITH ONE FULL PASS. A run started with --resume-from does not examine the
+#   issues before its checkpoint; it reports them as `before_checkpoint=<n>`, apart from the issues
+#   deferred for the request budget. That group can hold an issue an earlier run FAILED on, so a
+#   caller that only ever follows the printed checkpoint never retries it. After the last run of a
+#   chain prints no checkpoint, run once more without --resume-from.
 #
 #   `--limit` is pinned because `gh search` defaults to 30: a lane with more open issues than
 #   that would have the remainder silently never boarded. Ordering is pinned to created-ascending
@@ -54,7 +62,8 @@
 #                               [--deadline-seconds <n>] [--resume-from <issue-url>]
 #                               [--board-add <path>] [--dry-run]
 #   --dry-run is the read-only path: discovery and the bulk membership read, no helper call.
-#   The summary line counts discovered = verified + boarded + skipped + failed + deferred.
+#   The summary line counts discovered = verified + boarded + skipped + failed + deferred, plus
+#   before_checkpoint on a resumed run.
 #   exit 0  bounded batch succeeded; inspect deferred and skipped for remaining issues
 #   exit 1  usage error
 #   exit 2  discovery failed or was truncated at the cap, an issue could not be boarded, the
@@ -223,6 +232,9 @@ fi
 # only the issues a read PROVED are on this board with a Status; everything else is left to
 # board-add.sh, so a failed, short or surprising read can cost time but never coverage.
 verified_urls=""
+# The first discovery row no read was started for, or 0 when every row was read. A read that was
+# started and did not hold is still a read: its issues go to board-add.sh as before.
+unread_from=0
 bulk_note() { echo "agent-issue-board-sweep: $*" >&2; }
 if [ "$discovered_count" -gt 0 ]; then
   # GraphQL variables belong to the query, not the shell.
@@ -248,16 +260,24 @@ if [ "$discovered_count" -gt 0 ]; then
     }'
     offset=1
     while [ "$offset" -le "$discovered_count" ]; do
-      # An interrupt ends the reads here. The issues not yet read stay unverified, so the loop
-      # below stops at the first of them and names it as the checkpoint.
-      [ "$interrupted" -eq 0 ] || break
+      # An interrupt or the deadline ends the reads here: the deadline bounds this phase too, or
+      # slow answers would carry the sweep past its call budget before it printed anything. The
+      # issues not yet read stay unverified, so the loop below stops at the first of them and names
+      # it as the checkpoint.
+      if [ "$interrupted" -ne 0 ] || [ "$SECONDS" -ge "$deadline" ]; then
+        unread_from="$offset"
+        break
+      fi
       chunk="$(sed -n "${offset},$((offset + BULK_SIZE - 1))p" <<<"$found")"
       offset=$((offset + BULK_SIZE))
       # The answer is trusted node by node, and by its CONTENT rather than gh's exit status: gh
       # exits non-zero whenever the response carries an `errors` entry, which it does for one
       # unresolvable id beside ninety-nine good nodes (measured 2026-10-04). A node proves
       # membership only when it answers for the issue asked about at that position (same id AND
-      # url), its repository is public, and one of its items is on THIS board with a Status. An
+      # url), it belongs to the board's own owner (board-add.sh refuses every other owner, so an
+      # issue of another organisation that sits on the board must reach the helper and be refused
+      # there, whatever --owner selected), its repository is public, and one of its items is on
+      # THIS board with a Status. An
       # answer that is not exactly one document as long as the request is not read at all: there
       # is nothing to read, or positions no longer line up.
       page=""
@@ -266,7 +286,8 @@ if [ "$discovered_count" -gt 0 ]; then
         page="$(gh api graphql --input - <<<"$body" 2>"$err_file")" || true
       fi
       # shellcheck disable=SC2016
-      if proven="$(jq -rs --arg rows "$chunk" --arg project "$project_id" '
+      if proven="$(jq -rs --arg rows "$chunk" --arg project "$project_id" \
+          --arg prefix "https://github.com/${PROJECT_OWNER}/" '
           ($rows | split("\n") | map(select(length > 0) | split("\t") | {id: .[0], url: .[1]})) as $asked
           | if length != 1 then error("no answer") else .[0] end
           | if (.data.nodes | type) != "array" or (.data.nodes | length) != ($asked | length)
@@ -276,6 +297,7 @@ if [ "$discovered_count" -gt 0 ]; then
           | $nodes[$i] as $node | $asked[$i] as $want
           | select(($node | type) == "object")
           | select($node.id == $want.id and $node.url == $want.url)
+          | select($want.url | startswith($prefix))
           | select($node.repository.isPrivate == false)
           | select(($node.projectItems.nodes | type) == "array")
           | select(any($node.projectItems.nodes[];
@@ -298,6 +320,7 @@ skipped=0
 failed=0
 mutated=0
 deferred=0
+before_checkpoint=0
 wrote_last=0
 stopped=""
 checkpoint=""
@@ -324,11 +347,13 @@ while IFS=$'\t' read -r _ url; do
       ;;
   esac
   if [ "$dry_run" -eq 1 ]; then
-    # An interrupt ended the membership reads, so what is left was never read. Reporting it as
-    # "would board" would turn unread input into a count behind exit 0; it is the checkpoint.
-    if [ "$interrupted" -eq 1 ]; then
+    # An interrupt or the deadline ended the membership reads, so what is left was never read.
+    # Reporting it as "would board" would turn unread input into a count behind exit 0; it is the
+    # checkpoint. After an interrupt nothing more is reported at all; after the deadline the issues
+    # whose read did finish are still reported for what that read showed.
+    if [ "$interrupted" -eq 1 ] || { [ "$unread_from" -gt 0 ] && [ "$total" -ge "$unread_from" ]; }; then
       [ -n "$stopped" ] || checkpoint="$url"
-      stopped="interrupted"
+      if [ "$interrupted" -eq 1 ]; then stopped="interrupted"; else stopped="deadline"; fi
       deferred=$((deferred + 1))
       continue
     fi
@@ -336,9 +361,10 @@ while IFS=$'\t' read -r _ url; do
     boarded=$((boarded + 1))
     continue
   fi
-  # Before the checkpoint of an earlier run: that run examined it, this one starts further on.
+  # Before the checkpoint of an earlier run: this one starts further on. Counted apart from the
+  # budget deferrals, because "an earlier run handled it" includes issues that run failed on.
   if [ "$resume_pending" -eq 1 ]; then
-    deferred=$((deferred + 1))
+    before_checkpoint=$((before_checkpoint + 1))
     continue
   fi
   # Already stopped by the deadline or an interrupt: nothing more is examined.
@@ -412,17 +438,20 @@ done <<<"$found"
 # CONSERVATION. Every discovered issue was either verified, handed to the helper, or counted as
 # deferred. A loop that saw fewer rows than discovery returned has dropped some without a trace.
 if [ "$total" -ne "$discovered_count" ] ||
-  [ $((verified + boarded + skipped + failed + deferred)) -ne "$total" ]; then
-  echo "agent-issue-board-sweep: accounted for ${total} of ${discovered_count} discovered issue(s) (verified=${verified} boarded=${boarded} skipped=${skipped} failed=${failed} deferred=${deferred}); coverage is unknown" >&2
+  [ $((verified + boarded + skipped + failed + deferred + before_checkpoint)) -ne "$total" ]; then
+  echo "agent-issue-board-sweep: accounted for ${total} of ${discovered_count} discovered issue(s) (verified=${verified} boarded=${boarded} skipped=${skipped} failed=${failed} deferred=${deferred} before_checkpoint=${before_checkpoint}); coverage is unknown" >&2
   exit 2
 fi
 
-say "agent-issue-board-sweep: discovered=${total} verified=${verified} boarded=${boarded} wrote=${mutated} skipped=${skipped} failed=${failed} deferred=${deferred} author=${author} owner=${owner} limit=${limit} pace=${pace}s batch=${max_mutations} deadline=${deadline}s elapsed=${SECONDS}s${checkpoint:+ checkpoint=${checkpoint}}"
+say "agent-issue-board-sweep: discovered=${total} verified=${verified} boarded=${boarded} wrote=${mutated} skipped=${skipped} failed=${failed} deferred=${deferred}${resume_from:+ before_checkpoint=${before_checkpoint}} author=${author} owner=${owner} limit=${limit} pace=${pace}s batch=${max_mutations} deadline=${deadline}s elapsed=${SECONDS}s${checkpoint:+ checkpoint=${checkpoint}}"
 if [ -n "$stopped" ]; then
   # The reason is one of two fixed words; the URL is the script's own discovery row.
   say "agent-issue-board-sweep: stopped (${stopped}) with ${deferred} issue(s) not examined — continue with --resume-from ${checkpoint}"
 elif [ "$deferred" -gt 0 ]; then
   say "agent-issue-board-sweep: ${deferred} issue(s) deferred to the next run to stay inside the hourly request budget — board-add is idempotent, so the next sweep continues where this one stopped"
+fi
+if [ "$before_checkpoint" -gt 0 ]; then
+  say "agent-issue-board-sweep: ${before_checkpoint} issue(s) before the checkpoint were not examined by this run — once a resumed chain prints no checkpoint, run one full pass without --resume-from, so an issue an earlier run failed on is retried"
 fi
 [ "$failed" -eq 0 ] || exit 2
 [ "$stopped" != interrupted ] || exit 2
