@@ -246,6 +246,15 @@ Record unblock transitions and accumulated blocked intervals in the issue eviden
 does not measure cumulative blocked time. Bot comments, parking and re-entry never reset clocks.
 Keep existing view filters, issue-only cards, hierarchy and reversed finishing-first status order.
 
+### Kata measurement fields
+
+Project 5 also carries **Measure on** (DATE), **Target condition** (TEXT), **Current obstacle**
+(TEXT) and **Kata decision** (Adopt, Iterate, Stop, Inconclusive). These mirror the canonical Kata
+issue and authorized hypothesis, not a second status machine. Leave the decision unset before a
+readback; Inconclusive records a checkpoint, not Done. Measure on is the next evidence readback,
+not the roadmap Due date. Preserve prior dates and decisions in issue history before changing mirrors.
+See [Improvement katas](improvement-katas.md) for outcome ownership and due/overdue handling.
+
 Two mechanics make this a standing duty rather than something automation handles:
 - **Auto-add workflows are capped at 5 on the Team plan** and each one targets exactly **one**
   repository — so built-in auto-add can **never** cover a ~20-repo portfolio. The durable fix is an
