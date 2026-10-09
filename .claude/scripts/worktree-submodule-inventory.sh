@@ -56,6 +56,8 @@ set -euo pipefail
 export GIT_OPTIONAL_LOCKS=0
 # An inherited location variable would point every read below at the caller's repository.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
+# Tracing writes to stderr, which the status read below treats as a warning.
+unset GIT_TRACE GIT_TRACE_SETUP GIT_TRACE_PERFORMANCE GIT_TRACE2 GIT_TRACE_PACKET GIT_TRACE_REFS
 
 # rgit — git with the repository-configured helpers that `git status` would otherwise run or
 # start (a filesystem monitor writes into the git directory) switched off. The commit graph
@@ -120,7 +122,7 @@ idle_days() {
 classify_entry() {
   local label=$1 path=$2 dir=$3
   local top real g head status line code rest
-  local modified=0 untracked=0 nested=0 ignored=0 inner unpushed local_only idle class
+  local modified=0 untracked=0 nested=0 ignored=0 inner hidden unpushed local_only idle class
 
   # `git -C` on a directory whose own .git is broken answers for the PARENT repository, so
   # a broken submodule would read as the parent's state. Require git to name this directory.
@@ -137,6 +139,13 @@ classify_entry() {
 
   # -z never quotes a path; NUL becomes the record separator and a real newline \001, so a
   # path holding a newline is detected instead of being split into two records.
+  # `git status` hides a tracked file marked assume-unchanged or skip-worktree, edited or
+  # not, so such a mark means the status below cannot vouch for the working tree.
+  hidden=$(rgit -C "$dir" ls-files -v 2>/dev/null | awk '/^[a-zS] / { n++ } END { print n + 0 }') \
+    || { unreadable_row "$label" "$path" "cannot list its tracked files"; return 0; }
+  [ "$hidden" = 0 ] \
+    || { unreadable_row "$label" "$path" "tracked files are hidden from git status"; return 0; }
+
   # stderr joins the stream on purpose: git only WARNS about a directory it may not open and
   # still exits 0, and a warning line carries a newline, so the guard below rejects it.
   # --ignored=matching: an ignored file dies with the worktree too, and an ignored directory
@@ -261,6 +270,10 @@ for wt in "$ROOT"/*/; do
   [ -d "$wt" ] || continue
   wt=${wt%/}
   label=${wt##*/}
+  # A link to a worktree would list it twice, once under each name.
+  if [ -L "$wt" ]; then
+    skipped=$((skipped+1)); printf 'SKIP\t%s\t%s\n' "$label" "a symbolic link"; continue
+  fi
   # `-e` cannot tell an absent .git from one it may not look at.
   if [ ! -r "$wt" ] || [ ! -x "$wt" ]; then
     unreadable_row "$label" "-" "no permission to read the directory"; continue
@@ -286,7 +299,13 @@ for wt in "$ROOT"/*/; do
       *) unreadable_row "$label" "$path" "$SUB_WHY"; continue ;;
     esac
     # A populated submodule has its own .git entry; an unpopulated one holds nothing.
-    [ -e "$SUB_DIR/.git" ] || continue
+    # A directory with content but no usable .git is a broken checkout, not an empty one.
+    if [ ! -e "$SUB_DIR/.git" ]; then
+      content=$(ls -A "$SUB_DIR" 2>/dev/null) \
+        || { unreadable_row "$label" "$path" "cannot list the directory"; continue; }
+      [ -z "$content" ] || unreadable_row "$label" "$path" "holds files but no git directory"
+      continue
+    fi
     # Two spellings of one directory (`sub` and `sub/`, or another letter case) are one entry.
     sub_real=$(physical_path "$SUB_DIR") \
       || { unreadable_row "$label" "$path" "cannot resolve the directory"; continue; }

@@ -232,6 +232,26 @@ if [ "$(id -u)" -ne 0 ]; then
     && ok "a .gitmodules that may not be read is UNREADABLE, not empty" || bad "an unreadable .gitmodules is UNREADABLE" "rc=$rc: $out"
   chmod 600 "$ROOT/ac-modules/.gitmodules"
 fi
+# git status hides an edit to a file marked assume-unchanged or skip-worktree.
+ROOT="$TMP/assume"; mkdir -p "$ROOT"; s=$(make_wt ae-assume)
+g -C "$s" update-index --assume-unchanged f; echo authored > "$s/f"
+unreadable_case ae-assume 'tracked files are hidden from git status' "an edit behind assume-unchanged is UNREADABLE, never clean"
+ROOT="$TMP/skip"; mkdir -p "$ROOT"; s=$(make_wt af-skip)
+g -C "$s" update-index --skip-worktree f; echo authored > "$s/f"
+unreadable_case af-skip 'tracked files are hidden from git status' "an edit behind skip-worktree is UNREADABLE, never clean"
+ROOT="$TMP/nogit"; mkdir -p "$ROOT"; s=$(make_wt ag-no-git); rm -rf "$s/.git"
+unreadable_case ag-no-git 'holds files but no git directory' "a submodule with files but no git directory is UNREADABLE, not unpopulated"
+ROOT="$TMP/tab"; mkdir -p "$ROOT"; s=$(make_wt ah-tab "a"$'\t'"b")
+unreadable_case ah-tab 'the path holds a tab' "a submodule path holding a tab is UNREADABLE"
+# A symbolic link to a worktree is skipped, so the worktree is counted once.
+ROOT="$TMP/alias"; mkdir -p "$ROOT"; make_wt ai-real >/dev/null; ln -s ai-real "$ROOT/ai-alias"
+out=$(bash "$SUT" "$ROOT" 2>&1); rc=$?
+{ [ "$rc" -eq 0 ] && grep -q $'^SKIP\tai-alias\ta symbolic link$' <<<"$out" && grep -q $'\tworktrees=1\tentries=1\t' <<<"$out"; } \
+  && ok "a link to a worktree is skipped, not listed twice" || bad "a link to a worktree is skipped" "rc=$rc: $out"
+# An inherited trace setting must not turn every read into a warning.
+out=$(GIT_TRACE=1 bash "$SUT" "$ROOT" 2>&1); rc=$?
+{ [ "$rc" -eq 0 ] && grep -q $'\tunreadable=0$' <<<"$out"; } \
+  && ok "an inherited GIT_TRACE does not fail the reads" || bad "an inherited GIT_TRACE does not fail the reads" "rc=$rc"
 # One directory named twice (a gitlink `sub` and a .gitmodules `sub/`) is ONE entry.
 ROOT="$TMP/twice"; mkdir -p "$ROOT"; s=$(make_wt ad-twice)
 g -C "$ROOT/ad-twice" update-index --add --cacheinfo "160000,$(g -C "$s" rev-parse HEAD),sub"; gm ad-twice sub/
