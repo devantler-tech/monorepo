@@ -26,7 +26,11 @@ report() {
 }
 
 # A `gh` stub that answers the three calls the sweep makes and records its argv.
-#   search issues       prints $GH_RESULTS (rows `<node id><TAB><url>`); GH_EXIT fails it
+#   search issues       answers from $GH_RESULTS (rows `<node id><TAB><url>`) the way the CLI
+#                       does: each row becomes an object holding ONLY the fields named by --json,
+#                       printed through the --jq filter it was handed. A sweep that asks for the
+#                       wrong fields therefore gets rows it cannot read (monorepo#3820), instead
+#                       of the same rows whatever it asked for. GH_EXIT fails it
 #   api graphql         without --input: the board id ($GH_PROJECT_ID); GH_PROJECT_EXIT fails it
 #   api graphql --input the bulk membership read. Each requested id is looked up in $GH_MEMBERSHIP
 #                       (rows `<id><TAB><url><TAB><kind>`) and answered by kind:
@@ -36,6 +40,7 @@ report() {
 #                         wrongid / wrongurl   a present node that answers for another issue
 #                       (an item beyond the first page of an issue's project items looks like
 #                       `other` or `absent` to the read, so it needs no kind of its own)
+#                       GH_BULK_SLEEP makes each read take that many seconds.
 #                       GH_BULK_EXIT fails the call; GH_BULK_MODE is errors (no data), short (one
 #                       node missing), long (one node too many), partial (an errors entry beside
 #                       complete data), garbage (not JSON) or twodocs (the answer printed twice).
@@ -51,7 +56,16 @@ case "$1 ${2:-}" in
     [ -z "${GH_SEARCH_SLEEP:-}" ] || sleep "${GH_SEARCH_SLEEP}"
     if [ -n "${GH_STDERR:-}" ]; then printf '%s\n' "${GH_STDERR}" >&2; fi
     if [ "${GH_EXIT:-0}" != 0 ]; then echo "stub: simulated search failure" >&2; exit "${GH_EXIT}"; fi
-    [ -s "${GH_RESULTS}" ] && cat "${GH_RESULTS}"
+    fields="" filter="" previous=""
+    for arg in "$@"; do
+      case "$previous" in --json) fields="$arg" ;; --jq) filter="$arg" ;; esac
+      previous="$arg"
+    done
+    [ -s "${GH_RESULTS}" ] || exit 0
+    jq -Rn --arg fields "$fields" '
+      ($fields | split(",")) as $asked
+      | [inputs | select(length > 0) | split("\t") | {id: .[0], url: .[1]}
+         | with_entries(select(.key as $k | $asked | index($k)))]' "${GH_RESULTS}" | jq -r "$filter"
     exit 0
     ;;
   "api graphql")
@@ -61,6 +75,7 @@ case "$1 ${2:-}" in
         body="$(cat)"
         jq -r '.variables.ids[]' <<<"$body" >> "${GH_BULK_IDS}"
         jq -r '.variables.ids | length' <<<"$body" >> "${GH_BULK_SIZES}"
+        [ -z "${GH_BULK_SLEEP:-}" ] || sleep "${GH_BULK_SLEEP}"
         if [ "${GH_BULK_EXIT:-0}" != 0 ]; then echo "stub: simulated bulk failure" >&2; exit "${GH_BULK_EXIT}"; fi
         jq -c --rawfile table "${GH_MEMBERSHIP}" --arg mode "${GH_BULK_MODE:-ok}" '
           ($table | split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: {url: .[1], kind: .[2]}})
@@ -228,6 +243,21 @@ for flag in "--archived=false" "--owner devantler-tech" "--state open" "--author
 done
 report "discovery passes the explicit author as an exact argument" \
   "$([ "$(awk 'previous == "--author" { print; exit } { previous=$0 }' "$GH_ARGS_LOG")" = app/agent-fixture ] && echo yes || echo no)" "$argv"
+
+# The fields discovery asks for are pinned twice: by argument, and by a copy that asks for one
+# field fewer (no url), which must stop at rows it cannot read rather than board anything.
+report "discovery asks for exactly the node id and the url" \
+  "$([ "$(awk 'previous == "--json" { print; exit } { previous=$0 }' "$GH_ARGS_LOG")" = id,url ] && echo yes || echo no)" "$argv"
+fields_copy="$tmp/sweep-fields-ablated.sh"
+sed 's| --json id,url | --json id |' "$sweep" > "$fields_copy"
+chmod +x "$fields_copy"
+if cmp -s "$sweep" "$fields_copy"; then
+  report "ablation: the requested-fields edit landed" no "the sed edit matched nothing"
+else
+  run_sweep "$fields_copy"
+  report "ablation: a sweep that asks discovery for the wrong fields reads no usable row and stops" \
+    "$([ "$rc" -eq 2 ] && [ ! -s "$BOARD_LOG" ] && grep -q "that are not '<node id><TAB><issue url>'" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+fi
 
 # A different explicit identity must select the caller's author without a provider default.
 run_sweep_without_author "$sweep" --author fixture-maintainer
@@ -452,6 +482,17 @@ GH_BULK_MODE=partial run_sweep "$sweep"
 report "a partial error keeps the nodes that validate and checks the null one on its own" \
   "$([ "$rc" -eq 0 ] && [ "$(cat "$BOARD_LOG")" = "$U2" ] && grep -q 'verified=2 boarded=1' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
+# 9c2. THE BOARD'S OWNER, NOT THE CALLER'S. board-add.sh refuses an issue of any other owner, so the
+#      bulk read must not report one as already boarded, even when it sits on the board
+#      (monorepo#3820). The helper is asked, and its answer decides.
+U_FOREIGN=https://github.com/another-org/elsewhere/issues/7
+results "$U1" "$U_FOREIGN"
+membership present "$U1" "$U_FOREIGN"
+run_sweep "$sweep"
+report "an issue of another owner is never verified by the bulk read, even when it is on the board" \
+  "$([ "$(cat "$BOARD_LOG")" = "$U_FOREIGN" ] && grep -q 'discovered=2 verified=1 boarded=1' <<<"$out" && echo yes || echo no)" \
+  "rc=$rc log=[$(tr '\n' ' ' < "$BOARD_LOG")] $(tail -n 1 <<<"$out")"
+
 # 9d. NO SILENT TRUNCATION. 250 issues take three reads of at most 100, and every discovered id is
 #     asked about exactly once.
 many_issues() { # many_issues <count> <kind> — a discovery set of <count> issues, all of one kind
@@ -532,12 +573,41 @@ report "the unexamined issues are deferred and the summary is still printed" \
   "$(grep -q 'discovered=3 verified=0 boarded=1 wrote=1 skipped=0 failed=0 deferred=2' <<<"$out" && echo yes || echo no)" "$out"
 report "the checkpoint names the first issue not examined" \
   "$(grep -qF "checkpoint=${U2}" <<<"$out" && grep -qF -- "--resume-from ${U2}" <<<"$out" && echo yes || echo no)" "$out"
-# Verified issues cost nothing, so they are still counted after the deadline has passed.
+# Issues a finished read verified cost nothing more, so they are still counted after the deadline
+# has passed: the helper call for the first issue outlasts it, and the third is counted anyway.
+results "$U1" "$U2" "$U3"
+membership present "$U3"
+BOARD_ADD_SLEEP=9 run_sweep "$sweep" --deadline-seconds 8
+report "an issue the bulk read verified is counted after the deadline stopped the per-issue work" \
+  "$([ "$rc" -eq 0 ] && [ "$(cat "$BOARD_LOG")" = "$U1" ] && grep -q 'discovered=3 verified=1 boarded=1 wrote=1 skipped=0 failed=0 deferred=1' <<<"$out" && grep -qF "checkpoint=${U2}" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+# The deadline bounds the membership reads too (monorepo#3820): a zero deadline starts none, so
+# nothing is verified and nothing is examined, in a real run and in a dry run alike.
 results "$U1" "$U2" "$U3"
 membership present "$U3"
 run_sweep "$sweep" --deadline-seconds 0
-report "a zero deadline examines nothing, yet still counts what the bulk read proved" \
-  "$([ "$rc" -eq 0 ] && [ ! -s "$BOARD_LOG" ] && grep -q 'discovered=3 verified=1 boarded=0 wrote=0 skipped=0 failed=0 deferred=2' <<<"$out" && grep -qF "checkpoint=${U1}" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+report "a zero deadline starts no membership read and examines nothing" \
+  "$([ "$rc" -eq 0 ] && [ ! -s "$BOARD_LOG" ] && [ "$(count_calls bulk)" = 0 ] && grep -q 'discovered=3 verified=0 boarded=0 wrote=0 skipped=0 failed=0 deferred=3' <<<"$out" && grep -qF "checkpoint=${U1}" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+run_sweep "$sweep" --deadline-seconds 0 --dry-run
+report "a dry run past its deadline reports no unread issue as would-board" \
+  "$([ "$rc" -eq 0 ] && [ "$(count_calls bulk)" = 0 ] && ! grep -q 'would board' <<<"$out" && grep -q 'verified=0 boarded=0 wrote=0 skipped=0 failed=0 deferred=3' <<<"$out" && grep -qF "stopped (deadline) with 3 issue(s) not examined — continue with --resume-from ${U1}" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+# A deadline that arrives DURING the reads: the read in flight finishes and counts, the next one
+# is never started, and the first issue it would have covered is the checkpoint. Each stubbed read
+# outlasts the deadline, and the deadline leaves the two calls before it room on a loaded runner.
+many_issues 101 present
+GH_BULK_SLEEP=7 run_sweep "$sweep" --limit 1000 --deadline-seconds 5
+report "the membership reads stop at the deadline and the unread issue is the checkpoint" \
+  "$([ "$rc" -eq 0 ] && [ ! -s "$BOARD_LOG" ] && [ "$(count_calls bulk)" = 1 ] && grep -q 'discovered=101 verified=100 boarded=0 wrote=0 skipped=0 failed=0 deferred=1' <<<"$out" && grep -qF "checkpoint=https://github.com/devantler-tech/bulk/issues/101" <<<"$out" && echo yes || echo no)" \
+  "rc=$rc bulk=$(count_calls bulk) $(tail -n 2 <<<"$out")"
+GH_BULK_SLEEP=7 run_sweep "$sweep" --limit 1000 --deadline-seconds 5 --dry-run
+report "a dry run whose reads stop at the deadline defers the unread issue instead of reporting it" \
+  "$([ "$rc" -eq 0 ] && [ "$(count_calls bulk)" = 1 ] && ! grep -q 'would board' <<<"$out" && grep -q 'discovered=101 verified=100 boarded=0 wrote=0 skipped=0 failed=0 deferred=1' <<<"$out" && grep -qF "stopped (deadline) with 1 issue(s) not examined — continue with --resume-from https://github.com/devantler-tech/bulk/issues/101" <<<"$out" && echo yes || echo no)" \
+  "rc=$rc bulk=$(count_calls bulk) $(tail -n 2 <<<"$out")"
+# In a dry run the issues whose read DID finish are still reported for what it showed.
+many_issues 101 absent
+GH_BULK_SLEEP=7 run_sweep "$sweep" --limit 1000 --deadline-seconds 5 --dry-run
+report "a dry run still reports the issues whose read finished before the deadline" \
+  "$([ "$rc" -eq 0 ] && [ "$(grep -c 'DRY-RUN would board' <<<"$out")" = 100 ] && grep -q 'verified=0 boarded=100 wrote=0 skipped=0 failed=0 deferred=1' <<<"$out" && echo yes || echo no)" \
+  "rc=$rc $(tail -n 2 <<<"$out")"
 # Control: with time to spare nothing is deferred and no checkpoint is printed.
 results "$U1" "$U2" "$U3"
 run_sweep "$sweep" --deadline-seconds 60
@@ -549,8 +619,22 @@ results "$U1" "$U2" "$U3"
 run_sweep "$sweep" --resume-from "$U2"
 report "--resume-from starts the per-issue work at the checkpoint" \
   "$([ "$rc" -eq 0 ] && [ "$(tr '\n' ' ' < "$BOARD_LOG")" = "$U2 $U3 " ] && echo yes || echo no)" "rc=$rc log=[$(tr '\n' ' ' < "$BOARD_LOG")]"
-report "the issues before the checkpoint are reported deferred, not dropped" \
-  "$(grep -q 'discovered=3 verified=0 boarded=2 wrote=2 skipped=0 failed=0 deferred=1' <<<"$out" && echo yes || echo no)" "$out"
+# They are counted on their own, never as budget deferrals: an earlier run handled them, and that
+# can mean it failed on one, so the report must send the caller back for one full pass.
+report "the issues before the checkpoint are counted apart from the budget deferrals" \
+  "$(grep -q 'discovered=3 verified=0 boarded=2 wrote=2 skipped=0 failed=0 deferred=0 before_checkpoint=1 ' <<<"$out" && ! grep -q 'hourly request budget' <<<"$out" && echo yes || echo no)" "$out"
+report "a completed resumed run says a full pass must follow the chain" \
+  "$(grep -qF '1 issue(s) before the checkpoint were not examined by this run' <<<"$out" && grep -qF 'run one full pass without --resume-from' <<<"$out" && echo yes || echo no)" "$out"
+# A budget deferral in the same run keeps its own count and its own line.
+results "$U1" "$U2" "$U3"
+run_sweep "$sweep" --resume-from "$U2" --max-mutations 1
+report "a resumed run that also exhausts its batch reports both groups separately" \
+  "$([ "$rc" -eq 0 ] && [ "$(cat "$BOARD_LOG")" = "$U2" ] && grep -q 'boarded=1 wrote=1 skipped=0 failed=0 deferred=1 before_checkpoint=1 ' <<<"$out" && grep -q '1 issue(s) deferred to the next run' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+# Control: a run that was not resumed prints no such count.
+results "$U1" "$U2" "$U3"
+run_sweep "$sweep"
+report "control: a run without --resume-from prints no before_checkpoint count" \
+  "$([ "$rc" -eq 0 ] && ! grep -q 'before_checkpoint' <<<"$out" && echo yes || echo no)" "$out"
 # A checkpoint that discovery no longer returns cannot place the resume point, so nothing is assumed.
 run_sweep "$sweep" --resume-from https://github.com/devantler-tech/monorepo/issues/999
 report "a checkpoint that is no longer discovered fails closed and boards nothing" \
@@ -614,6 +698,28 @@ report "an interrupted dry run exits 2 and reports no unread issue as would-boar
     && grep -q 'discovered=3 verified=0 boarded=0 wrote=0 skipped=0 failed=0 deferred=3' <<<"$int_out" \
     && grep -qF "stopped (interrupted) with 3 issue(s) not examined — continue with --resume-from ${U1}" <<<"$int_out" \
     && echo yes || echo no)" "rc=$int_rc calls=[$(tr '\n' ' ' < "$GH_CALL_LOG")] $int_out"
+
+# An interrupt during the membership reads of a REAL run (monorepo#3820): the read in flight
+# finishes and its issues count, no further read starts, no helper call is made, and the first
+# unread issue is the checkpoint behind exit 2.
+many_issues 101 present
+: > "$BOARD_LOG"; : > "$GH_CALL_LOG"; : > "$GH_BULK_IDS"; : > "$GH_BULK_SIZES"
+GH_BULK_SLEEP=4 PATH="$tmp/bin:$PATH" "$sweep" --author app/agent-fixture --board-add "$tmp/board-add-stub.sh" \
+  --limit 1000 --pace-seconds 0 > "$tmp/interrupted.out" 2>&1 &
+read_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  grep -q -x bulk "$GH_CALL_LOG" && break
+  sleep 0.2
+done
+kill -TERM "$read_pid"
+int_rc=0
+wait "$read_pid" || int_rc=$?
+int_out="$(cat "$tmp/interrupted.out")"
+report "an interrupt during the membership reads of a real run stops the reads and calls no helper" \
+  "$([ "$int_rc" -eq 2 ] && [ ! -s "$BOARD_LOG" ] && [ "$(count_calls bulk)" = 1 ] \
+    && grep -q 'discovered=101 verified=100 boarded=0 wrote=0 skipped=0 failed=0 deferred=1' <<<"$int_out" \
+    && grep -qF "stopped (interrupted) with 1 issue(s) not examined — continue with --resume-from https://github.com/devantler-tech/bulk/issues/101" <<<"$int_out" \
+    && echo yes || echo no)" "rc=$int_rc bulk=$(count_calls bulk) $(tail -n 2 <<<"$int_out")"
 
 # 10e. THE HELPER CANNOT EAT THE REST OF THE LIST. The loop reads its rows from stdin; a helper that
 #      read stdin too would leave every later issue neither examined nor counted, behind exit 0.
