@@ -219,6 +219,7 @@ printf '{"scheduledTasks":[{"id":"alpha","enabled":true,"lastRunAt":1,"createdAt
 
 # <script>|<arguments that carry it past its own input checks to the trap line>
 converted_scripts="
+business-site-ci.test.sh|
 memory-backup.sh|
 memory-hygiene.sh|
 memory-rewrite.sh|--file $tmp/converted/memory.md --from $tmp/converted/replacement.md --backup-dir $tmp/converted/backups

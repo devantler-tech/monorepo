@@ -190,6 +190,7 @@ jobs:
             cleanup-trap-fail-closed:
               - '.claude/scripts/cleanup-trap-fail-closed.test.sh'
               # The scripts the test injects an abort into, so removing a sentinel re-runs it.
+              - '.claude/scripts/business-site-ci.test.sh'
               - '.claude/scripts/memory-backup.sh'
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-rewrite.sh'
