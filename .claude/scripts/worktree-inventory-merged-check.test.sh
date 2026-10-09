@@ -441,7 +441,7 @@ content_is() { # name worktree want
   local got; got=$(content_of "$2")
   if [ "$got" = "$3" ]; then ok "$1"; else bad "$1" "want [$3] got [$got] rc=$RC out=$OUT err=$(cat "$TMP/err")"; fi
 }
-objects_of() { find "$CR"/*/sub/.git "$REF/sub/.git" -type f | LC_ALL=C sort | cksum; }
+objects_of() { find "$CR"/*/sub/.git "$REF/sub/.git" -type f -exec cksum {} + | LC_ALL=C sort | cksum; }
 content_rows() { grep -E "^ENTRY	c-(same|moved|differs|space|empty|reached|binary|merged)	" "$TMP/content.all"; }
 bash "$INVENTORY" "$CR" > "$TMP/content.all"
 { content_rows; } > "$TMP/content.in"; seal "$TMP/content.in"
@@ -482,6 +482,23 @@ mkdir -p "$TMP/ref-nohead"; g clone -q "$UP" "$TMP/ref-nohead/sub"; g -C "$TMP/r
 g -C "$TMP/ref-nohead/sub" symbolic-ref -d refs/remotes/origin/HEAD
 c_one c-nohead; c_run "$TMP/content.one" "$TMP/ref-nohead"
 check 'a reference with no default branch is UNKNOWN' eval '[ -z "$(content_of c-nohead)" ] && grep -q "^UNKNOWN	c-nohead	sub	cannot read the default branch in the reference checkout" <<<"$OUT" && [ "$RC" = 2 ]'
+# A repository can configure programs for git to run while it prints commits and patches.
+# None of them may run here: the comparison reads repositories other sessions own.
+cat > "$BIN/ran" <<'RAN'
+#!/usr/bin/env bash
+: > "$RAN_MARK"
+exit 1
+RAN
+chmod +x "$BIN/ran"; RAN_MARK="$TMP/ran.mark"; export RAN_MARK
+printf '* diff=probe\n' > "$CR/c-same/sub/.git/info/attributes"
+for kv in log.showSignature=true "gpg.program=$BIN/ran" "diff.external=$BIN/ran" "diff.probe.textconv=$BIN/ran" "diff.probe.command=$BIN/ran"; do
+  g -C "$CR/c-same/sub" config "${kv%%=*}" "${kv#*=}"
+done
+c_one c-same; rm -f "$RAN_MARK"; c_run "$TMP/content.one" "$REF"
+no_program_ran() { [ ! -e "$RAN_MARK" ] && [ "$(content_of c-same)" = "same-change commit=$(c_sha c-same) base=$ref_base same_as=$same_as" ] && [ "$RC" = 0 ]; }
+check 'no program the repository configures is run' no_program_ran
+for k in log.showSignature gpg.program diff.external diff.probe.textconv diff.probe.command; do g -C "$CR/c-same/sub" config --unset "$k"; done
+rm -f "$CR/c-same/sub/.git/info/attributes"
 # A patch read that fails must not read as `differs`.
 c_one c-same
 OUT=$(PATH="$BIN:$PATH" bash -c 'git() { case " $* " in *" patch-id "*) return 3 ;; esac; command git "$@"; }; export -f git; bash "$0" "$1" --content-reference "$2" < "$3"' "$SUT" "$CR" "$REF" "$TMP/content.one" 2>"$TMP/err"); RC=$?

@@ -295,9 +295,10 @@ walk() {
 
 # --- content comparison (--content-reference) ---------------------------------------------
 # Both sides of a comparison are printed with the same options, so the two patch ids are
-# comparable. `--binary --full-index` makes a binary file's content part of the id, and
-# `patch-id --verbatim` keeps whitespace in it: two changes that differ only in indentation
-# are different changes.
+# comparable, and no program the repository configures (an external diff, a text conversion,
+# a signature check) is run. `--binary --full-index` makes a binary file's content part of
+# the id, and `patch-id --verbatim` keeps whitespace in it: two changes that differ only in
+# indentation are different changes.
 DIFF_OPTS=(--no-ext-diff --no-textconv --no-renames --no-color --binary --full-index)
 c_reached=0; c_same=0; c_empty=0; c_differs=0; c_noref=0
 # The current entry's reference: `unset` until first needed, then `none` (the checkout has
@@ -333,7 +334,7 @@ resolve_reference() {
 default_branch_ids() {
   local f="$PATCH_DIR/$1-$cur_base"
   if [ ! -f "$f" ]; then
-    gitc log --first-parent --diff-merges=first-parent -p "${DIFF_OPTS[@]}" --format='commit %H' "$1..$cur_base" 2>/dev/null \
+    gitc log --no-show-signature --first-parent --diff-merges=first-parent -p "${DIFF_OPTS[@]}" --format='commit %H' "$1..$cur_base" 2>/dev/null \
       | git patch-id --verbatim > "$f.tmp" 2>/dev/null || { rm -f "$f.tmp"; return 1; }
     mv "$f.tmp" "$f" || return 1
   fi
