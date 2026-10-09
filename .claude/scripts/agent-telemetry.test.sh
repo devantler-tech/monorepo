@@ -3061,13 +3061,16 @@ fi
 
 # The default report reaches safety after its own unrelated setup, but every
 # safety-specific controller operation must still sit behind the same deadline.
+# The planted stall is far longer than the limit below, so a slow runner cannot
+# fail this on the report's unrelated sections (#4050); a deadline that does not
+# cover setup still lets the full stall through and fails it.
 mkdir -p "$FIX/safety-full-setup-timeout-shim"
 cat > "$FIX/safety-full-setup-timeout-shim/mkdir" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
   *'.agtel_bounded.'*|*'.agtel_worker.'*)
     : > "$SAFETY_FULL_SETUP_STARTED"
-    sleep 4 ;;
+    sleep 60 ;;
 esac
 exec "$SAFETY_TEST_MKDIR" "$@"
 EOF
@@ -3082,7 +3085,7 @@ FULL_SETUP_BOUNDED=$(PATH="$FIX/safety-full-setup-timeout-shim:$PATH" \
 full_setup_bounded_rc=$?
 full_setup_secs=$(( $(date +%s) - full_setup_start ))
 if [ -e "$FIX/safety-full-setup-started" ] && [ "$full_setup_bounded_rc" -eq 2 ] \
-   && [ "$full_setup_secs" -lt 4 ] \
+   && [ "$full_setup_secs" -lt 30 ] \
    && grep -qF "UNKNOWN: safety scan exceeded" <<<"$FULL_SETUP_BOUNDED" \
    && grep -qF "END TELEMETRY" <<<"$FULL_SETUP_BOUNDED"; then
   ok "the full-report safety deadline starts before controller setup"
@@ -3281,7 +3284,7 @@ cat > "$FIX/safety-controller-cleanup-shim/rmdir" <<'EOF'
 case " $* " in
   *'/.agtel_worker.'*)
     : > "$SAFETY_CONTROLLER_CLEANUP_STARTED"
-    sleep 8 ;;
+    sleep 60 ;;
 esac
 exec "$SAFETY_TEST_RMDIR" "$@"
 EOF
@@ -3298,7 +3301,7 @@ controller_cleanup_bounded_rc=$?
 controller_cleanup_secs=$(( $(date +%s) - controller_cleanup_start ))
 if [ ! -e "$FIX/safety-controller-cleanup-started" ]; then sleep 1; fi
 if [ -e "$FIX/safety-controller-cleanup-started" ] && [ "$controller_cleanup_bounded_rc" -eq 0 ] \
-   && [ "$controller_cleanup_secs" -lt 8 ] \
+   && [ "$controller_cleanup_secs" -lt 30 ] \
    && grep -qF "END TELEMETRY" <<<"$CONTROLLER_CLEANUP_BOUNDED"; then
   ok "asynchronous controller cleanup cannot hold the report open"
 else
