@@ -143,7 +143,9 @@ for endpoint in "$@"; do
   case "$endpoint" in
     orgs/devantler-tech) printf '[{"public_repos":2,"total_private_repos":%s}]\n' "${STUB_PRIVATE:-1}" ;;
     orgs/devantler-tech/repos\?type=all\&per_page=100)
-      if [ "${STUB_NEW_REPO_AT:-0}" = "$calls" ]; then
+      if [ "${STUB_ALL_ARCHIVED:-0}" = 1 ]; then
+        echo '[[{"name":"one","archived":true},{"name":"two","archived":true},{"name":"old","archived":true}]]'
+      elif [ "${STUB_NEW_REPO_AT:-0}" = "$calls" ]; then
         echo '[[{"name":"one","archived":false},{"name":"two","archived":false}],[{"name":"old","archived":true},{"name":"new","archived":false}]]'
       else
         echo '[[{"name":"one","archived":false},{"name":"two","archived":false}],[{"name":"old","archived":true}]]'
@@ -154,6 +156,8 @@ for endpoint in "$@"; do
     *) exit 2 ;;
   esac
 done
+# A reader that fails after it has printed a whole answer.
+[ "${STUB_LATE_FAIL_AT:-0}" != "$calls" ] || exit 2
 STUB
 chmod +x "$FIX/reader"
 pull() { printf '{"node_id":"%s","draft":%s,"head":{"ref":"%s","repo":{"full_name":"%s"}},"base":{"repo":{"full_name":"devantler-tech/one"}},"user":{"login":"%s"}}' "$@"; }
@@ -179,6 +183,12 @@ if [ "$(cat "$FIX/calls")" = 5 ]; then pass=$((pass + 1)); else
 for at in 1 2 3 4 5; do
   STUB_FAIL_AT=$at live "a failed read (call $at) is UNKNOWN" 2 "verdict=UNKNOWN"
 done
+for at in 1 2 3 4 5; do
+  STUB_LATE_FAIL_AT=$at live "a reader failing after a whole answer (call $at) is UNKNOWN" 2 "verdict=UNKNOWN"
+done
+STUB_ALL_ARCHIVED=1 live "an organisation with only archived repositories counts none" 0 "open_drafts: claude=0 codex=0 other=0 total=0"
+if [ "$(cat "$FIX/calls")" = 3 ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: with nothing to read, only the three inventories are read"; fi
 STUB_SHORT=1 live "a read answering for fewer repositories than asked is UNKNOWN" 2 "verdict=UNKNOWN"
 STUB_ONE='[{"message":"Not Found"}]' live "a page that is not a list is UNKNOWN" 2 "verdict=UNKNOWN"
 STUB_ONE='[]' live "an answer without a page is UNKNOWN" 2 "verdict=UNKNOWN"

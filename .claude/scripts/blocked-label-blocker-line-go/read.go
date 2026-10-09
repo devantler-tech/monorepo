@@ -25,6 +25,10 @@ func readableEndpoint(endpoint string) bool {
 	if !readEndpointRE.MatchString(endpoint) {
 		return false
 	}
+	// Two page sizes leave it to the forge which one applies.
+	if strings.Count(endpoint, "per_page=") > 1 {
+		return false
+	}
 	path, _, _ := strings.Cut(endpoint, "?")
 	for _, segment := range strings.Split(path, "/") {
 		if segment == "." || segment == ".." {
@@ -39,6 +43,9 @@ var perPageRE = regexp.MustCompile(`[?&]per_page=([0-9]{1,3})(&|$)`)
 
 // forgePageSize is the page size the forge applies when none is asked for.
 const forgePageSize = 30
+
+// forgeLargestPage is the largest page the forge returns.
+const forgeLargestPage = 100
 
 // pagesOf splits what conditionalRead returned into its pages.
 func pagesOf(raw []byte) ([]json.RawMessage, error) {
@@ -74,7 +81,26 @@ func lastPageIsFull(endpoint string, pages []json.RawMessage) bool {
 			size = asked
 		}
 	}
+	// The forge never returns more than its largest page, whatever was asked.
+	if size > forgeLargestPage {
+		size = forgeLargestPage
+	}
 	return len(items) >= size
+}
+
+// listOrOneObject reports whether pages are the pages of a plain list, or one
+// object. A list wrapped in an object could continue unseen, since its length
+// is not read here, so it is refused rather than answered short.
+func listOrOneObject(pages []json.RawMessage) bool {
+	lists := 0
+	for _, page := range pages {
+		if trimmed := bytes.TrimSpace(page); len(trimmed) > 0 && trimmed[0] == '[' {
+			lists++
+		} else if len(trimmed) == 0 || trimmed[0] != '{' {
+			return false
+		}
+	}
+	return lists == len(pages) || (lists == 0 && len(pages) == 1)
 }
 
 // readPages returns every page of endpoint as one JSON array. Pages the forge
@@ -95,6 +121,9 @@ func readPages(endpoint string) ([]byte, error) {
 		}
 		if len(pages) == 0 {
 			return nil, errors.New("empty forge answer")
+		}
+		if !listOrOneObject(pages) {
+			return nil, errors.New("not a list and not a single object")
 		}
 		if reuse && lastPageIsFull(endpoint, pages) {
 			continue

@@ -137,3 +137,33 @@ func TestReadRefusesWhatIsNotAPlainOrganisationOrRepositoryPath(t *testing.T) {
 		t.Fatalf("a refused endpoint must never reach the forge, reached %v", forge.offered)
 	}
 }
+
+// The forge caps a page at its largest size, so a larger one asked for must
+// not make a full page look short; two sizes are refused outright.
+func TestReadJudgesAFullPageByWhatTheForgeReturns(t *testing.T) {
+	full := "[" + strings.TrimSuffix(strings.Repeat(`{},`, forgeLargestPage), ",") + "]"
+	pages, err := pagesOf([]byte(full))
+	if err != nil || !lastPageIsFull("repos/o/r/pulls?per_page=200", pages) {
+		t.Fatalf("a page of %d is full even when 200 were asked for (err %v)", forgeLargestPage, err)
+	}
+	if readableEndpoint("repos/o/r/pulls?per_page=100&per_page=5") {
+		t.Fatal("an endpoint naming two page sizes must be refused")
+	}
+}
+
+// A list wrapped in an object could continue past a kept page unseen.
+func TestReadRefusesAListWrappedInAnObject(t *testing.T) {
+	keepPagesIn(t)
+	second := forgeHost + "repositories/1/actions/runs?page=2"
+	servePages(t, map[string]forgePage{
+		"repos/o/r/actions/runs": {status: 200, validator: `W/"a1"`, next: second, body: []byte(`{"total_count":2,"workflow_runs":[{}]}`)},
+		second:                   {status: 200, validator: `W/"a2"`, body: []byte(`{"total_count":2,"workflow_runs":[{}]}`)},
+		"repos/o/r/mixed":        {status: 200, validator: `W/"m1"`, next: second, body: []byte(`[{}]`)},
+		"repos/o/r/scalar":       {status: 200, validator: `W/"s1"`, body: []byte(`3`)},
+	})
+	for _, endpoint := range []string{"repos/o/r/actions/runs", "repos/o/r/mixed", "repos/o/r/scalar"} {
+		if code, out, _ := runRead(t, endpoint); code != 2 || out != "" {
+			t.Fatalf("%s must be UNKNOWN with no output: %d, %q", endpoint, code, out)
+		}
+	}
+}
