@@ -8,6 +8,9 @@ on:
       - ".github/workflows/publish-pages.yaml"
       - ".claude/scripts/business-site-revision.sh"
   workflow_dispatch:
+  # Refresh only public ranking metadata through this existing Pages publisher.
+  schedule:
+    - cron: "13 0,6,12,18 * * *"
 
 concurrency:
   group: "pages"
@@ -26,6 +29,7 @@ jobs:
       - name: Checkout reviewed portfolio
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Resolve committed website source
         id: pin
@@ -36,7 +40,7 @@ jobs:
   publish:
     needs: revision
     # Bind publisher code and committed application source to the reviewed source merge.
-    uses: devantler-tech/business-site/.github/workflows/publish-pages.yaml@aa6b3ceaae57f6ad16df91b7ffa91ca97ed8a4c2
+    uses: devantler-tech/business-site/.github/workflows/publish-pages.yaml@66072da0f685d28b34ece994fe323bc2efb965fa
     with:
       source-revision: ${{ needs.revision.outputs.revision }}
     permissions:
