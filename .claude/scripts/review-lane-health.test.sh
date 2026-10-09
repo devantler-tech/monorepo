@@ -20,7 +20,14 @@ trap on_exit EXIT
 fail() { echo "review-lane-health test: $*" >&2; exit 1; }
 
 now=1790000000 # 2026-09-21T14:13:20Z
-run() { set +e; "$checker" "$@" --now "$now" >"$tmp/out" 2>"$tmp/err"; rc=$?; set -e; }
+# Every run names a cache directory inside $tmp and leaves the cache off, so no case reads the real
+# per-user cache or another case's sweep; the cache cases below switch it on. $at overrides the clock.
+run() {
+  set +e
+  "$checker" --cache-dir "$tmp/cache" --cache-seconds 0 "$@" --now "${at:-$now}" >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+}
 expect() { # <label> <rc> <line fragment>
   [ "$rc" -eq "$2" ] || { cat "$tmp/out" "$tmp/err" >&2; fail "$1: rc=$rc, want $2"; }
   grep -qF -- "$3" "$tmp/out" || { cat "$tmp/out" >&2; fail "$1: missing '$3'"; }
@@ -85,6 +92,7 @@ cat >"$bin/gh" <<'STUB'
 args=("$@"); jqexpr=""
 for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[i]}" = --jq ] && jqexpr="${args[i + 1]}"; done
 emit() { if [ -n "$jqexpr" ]; then jq -r "$jqexpr"; else cat; fi; }
+[ -n "${GH_CALLS:-}" ] && echo call >>"$GH_CALLS"
 [ -n "${FAIL_ON:-}" ] && [[ "$*" == *"$FAIL_ON"* ]] && { echo "gh: HTTP 502" >&2; exit 1; }
 case "$1 $2" in
   "search prs")
@@ -164,6 +172,97 @@ expect "outside-diff review" 1 "cr=LIMITED rate-limit at 2026-09-21T12:00:00Z la
 FAIL_ON=reviews PATH="$bin:$PATH" run --org o --since 2026-09-14
 [ "$rc" -eq 2 ] || fail "a failed read must exit 2, got $rc"
 grep -qF "UNKNOWN" "$tmp/err" || fail "a failed read must say UNKNOWN"
+
+# One sweep is shared (monorepo#3973). A counting gh shows what each call cost; the stub's single
+# pull request stands for the 60 a real sweep reads, so the ratio is what is asserted.
+export GH_CALLS="$tmp/calls"
+calls() { if [ -f "$GH_CALLS" ]; then wc -l <"$GH_CALLS" | tr -d ' '; else echo 0; fi; }
+sweep() { # [checker arguments] — one cached-mode run against the stub, counting its gh calls
+  rm -f "$GH_CALLS"
+  PATH="$bin:$PATH" run --org o --since 2026-09-14 --cache-seconds 900 "$@"
+  n="$(calls)"
+}
+cached="$tmp/cache/o.2026-09-14.60.events"
+head_line="# review-lane-health sweep org=o since=2026-09-14 limit=60 at="
+
+sweep
+if [ "$rc" -ne 1 ] || [ "$n" -lt 5 ]; then fail "the first call must sweep (rc=$rc, $n gh calls)"; fi
+first_calls="$n"
+cp "$tmp/out" "$tmp/live-out"
+[ -f "$cached" ] || fail "a complete sweep must be stored"
+# shellcheck disable=SC2012 # One known path; ls spells the mode the same on BSD and GNU.
+[ "$(ls -ld "$cached" | cut -c5-10)" = "------" ] ||
+  fail "the stored sweep must be readable by its owner only"
+
+sweep
+[ "$rc" -eq 1 ] || fail "a reused sweep must give the same exit status, got $rc"
+[ $((n * 10)) -le "$first_calls" ] ||
+  fail "a second call within the lifetime made $n gh calls, more than 10% of $first_calls"
+cmp -s "$tmp/out" "$tmp/live-out" ||
+  { diff "$tmp/live-out" "$tmp/out" >&2; fail "a reused sweep must print the live sweep's verdicts"; }
+grep -qF "reusing the sweep" "$tmp/err" || fail "a reused sweep must be announced"
+
+# Never past its lifetime, never from the future, never for other arguments, never when --refresh asks.
+at=$((now + 900)) sweep
+[ "$n" -eq 0 ] || fail "a sweep exactly at its lifetime is still usable, got $n gh calls"
+at=$((now + 901)) FAIL_ON=reviews sweep
+if [ "$rc" -ne 2 ] || [ "$n" -eq 0 ]; then
+  fail "past its lifetime a stored sweep must not answer for a failed one (rc=$rc, $n gh calls)"
+fi
+grep -q '^LANE-HEALTH' "$tmp/out" && fail "a failed sweep must print no verdict from the expired cache"
+[ "$(sed -n 1p "$cached")" = "$head_line$now" ] || fail "a failed sweep must leave the stored sweep as it was"
+at=$((now - 1)) sweep
+[ "$n" -gt 0 ] || fail "a stored sweep dated after now must not be reused"
+sweep
+[ "$n" -eq 0 ] || fail "the sweep just stored must be reused, got $n gh calls"
+sweep --limit 5
+[ "$n" -gt 0 ] || fail "a sweep for another --limit must not be reused"
+cp "$cached" "$tmp/cache/o.2026-09-14.7.events"
+sweep --limit 7
+[ "$n" -gt 0 ] || fail "a stored sweep whose first line names other arguments must not be reused"
+sweep --refresh
+[ "$n" -gt 0 ] || fail "--refresh must sweep"
+sweep --cache-seconds 0
+[ "$n" -gt 0 ] || fail "--cache-seconds 0 must sweep"
+
+# A stored sweep that is malformed in any line, or is not this user's own regular file, is ignored.
+printf 'cr\t2026-09-21T13:59:00Z\tok\n' >>"$cached"
+sweep
+[ "$n" -gt 0 ] || fail "a stored sweep with a malformed line must not be reused"
+printf '%s%s\ncr\t2026-09-21T13:59:00Z\tok\t-\n' "$head_line" "$now" >"$tmp/planted"
+rm -f "$cached"
+ln -s "$tmp/planted" "$cached"
+FAIL_ON=reviews sweep
+[ "$rc" -eq 2 ] || { cat "$tmp/out" >&2; fail "a symlinked cache must not be read: a failed sweep stays UNKNOWN, got $rc"; }
+rm -f "$cached"
+
+# The file name carries --since, which moves daily: storing a sweep drops stored sweeps and leftover
+# part files more than a day old, and nothing else in the directory.
+: >"$tmp/cache/o.2026-09-01.60.events"
+: >"$tmp/cache/.part.old"
+: >"$tmp/cache/keep.txt"
+touch -t 202001010000 "$tmp/cache/o.2026-09-01.60.events" "$tmp/cache/.part.old" "$tmp/cache/keep.txt"
+sweep
+[ -f "$cached" ] || fail "the sweep must be stored"
+if [ -e "$tmp/cache/o.2026-09-01.60.events" ] || [ -e "$tmp/cache/.part.old" ]; then
+  fail "storing a sweep must drop stored sweeps and part files more than a day old"
+fi
+[ -e "$tmp/cache/keep.txt" ] || fail "pruning must leave files that are not stored sweeps alone"
+rm -f "$cached"
+
+# A failed sweep stores nothing, so the next call cannot read a partial sweep as a complete one.
+FAIL_ON=check-runs sweep --cache-dir "$tmp/cache-fail"
+[ "$rc" -eq 2 ] || fail "a failed sweep must exit 2, got $rc"
+[ -z "$(ls -A "$tmp/cache-fail" 2>/dev/null)" ] || fail "a failed sweep must store nothing"
+
+# A cache directory that cannot be written costs the cache, never the verdict.
+: >"$tmp/not-a-dir"
+sweep --cache-dir "$tmp/not-a-dir/x"
+if [ "$rc" -ne 1 ] || ! cmp -s "$tmp/out" "$tmp/live-out"; then
+  fail "an unwritable cache must not change the verdict (rc=$rc)"
+fi
+grep -qF "could not store the sweep" "$tmp/err" || fail "an unwritable cache must be reported"
+unset GH_CALLS
 
 completed=1
 echo "review-lane-health: OK"
