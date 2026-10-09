@@ -122,6 +122,8 @@ jobs:
               - '.claude/scripts/business-site-publication.test.sh'
               - '.github/workflows/**'
             active-projects:
+              # Architecture records stay; the removed duplicate application must not return.
+              - 'docs/**'
               # The retired-link guard greps the WHOLE content tree, so it must
               # run for ANY content change — gating it on the two pages the
               # drift lists live in would let a retired link ship from a blog
