@@ -384,6 +384,132 @@ echo edit > "$ts/f.new"; bash "$INVENTORY" "$T" --tips > "$TMP/tips.other"; tips
 check 'tips of an untracked entry are counted, not looked up' eval 'grep -q "	tips=4	tips_merged=0	tips_pushed_ref=0	tips_unsettled=0	tips_other_classes=4$" <<<"$OUT" && [ ! -s "$CALLS" ] && [ "$RC" = 0 ]'
 rm -f "$ts/f.new"
 
+echo "== content comparison with a reference checkout"
+# UP stands for the repository on GitHub. REF is a checkout that fetched it recently; every
+# entry under CR cloned it earlier and never fetched again, as a session's submodule does.
+UP="$TMP/upstream"; REF="$TMP/reference"; CR="$TMP/content-root"
+URL='git@github.com:devantler-tech/ksail.git'
+g init -q -b main "$UP"
+printf 'one\ntwo\nthree\n' > "$UP/f"; printf 'a\nb\nc\n' > "$UP/h"; printf '\000\001\002' > "$UP/bin"
+g -C "$UP" add f h bin; g -C "$UP" commit -qm base
+c_add() { # worktree -> a clone of UP as it is now, with the origin a submodule would have
+  g init -q -b main "$CR/$1"
+  printf '[submodule "s"]\n\tpath = sub\n\turl = https://example.invalid/s.git\n' > "$CR/$1/.gitmodules"
+  g -C "$CR/$1" add .gitmodules; g -C "$CR/$1" commit -qm base
+  g clone -q "$UP" "$CR/$1/sub"; g -C "$CR/$1/sub" config remote.origin.url "$URL"
+}
+for w in c-same c-moved c-differs c-empty c-reached c-binary c-merged c-noref c-foreign c-nohead; do c_add "$w"; done
+c_commit() { g -C "$CR/$1/sub" add -A; g -C "$CR/$1/sub" commit -qm "$2"; }
+c_sha() { g -C "$CR/$1/sub" rev-parse HEAD; }
+# c-same: two commits; the default branch gets their sum as one commit of its own.
+printf 'one\nTWO\nthree\n' > "$CR/c-same/sub/f"; c_commit c-same 'first half'
+echo new > "$CR/c-same/sub/added"; c_commit c-same 'second half'
+# c-moved: one commit; the default branch gets it, then changes the same line again.
+echo moved > "$CR/c-moved/sub/m"; printf 'a\nB\nc\n' > "$CR/c-moved/sub/h"; c_commit c-moved 'moved on'
+echo unique > "$CR/c-differs/sub/u"; c_commit c-differs 'never merged'
+echo tmp > "$CR/c-empty/sub/t"; c_commit c-empty 'try'; rm "$CR/c-empty/sub/t"; c_commit c-empty 'undo'
+echo reached > "$CR/c-reached/sub/r"; c_commit c-reached 'pushed straight to the default branch'
+printf '\000\001\003' > "$CR/c-binary/sub/bin"; c_commit c-binary 'binary, one content'
+echo merged > "$CR/c-merged/sub/x"; c_commit c-merged 'merged pull request'
+for w in c-noref c-foreign c-nohead; do echo "$w" > "$CR/$w/sub/own"; c_commit "$w" "$w"; done
+# The default branch moves on.
+g -C "$UP" pull -q --ff-only "$CR/c-reached/sub" main
+echo unrelated > "$UP/z"; g -C "$UP" add z; g -C "$UP" commit -qm 'unrelated'
+printf 'one\nTWO\nthree\n' > "$UP/f"; echo new > "$UP/added"; g -C "$UP" add -A; g -C "$UP" commit -qm 'squash of c-same'
+same_as=$(g -C "$UP" rev-parse HEAD)
+echo moved > "$UP/m"; printf 'a\nB\nc\n' > "$UP/h"; g -C "$UP" add -A; g -C "$UP" commit -qm 'squash of c-moved'
+moved_as=$(g -C "$UP" rev-parse HEAD)
+printf 'a\nB again\nc\n' > "$UP/h"; g -C "$UP" commit -qam 'the same line changes again'
+printf '\000\001\004' > "$UP/bin"; g -C "$UP" commit -qam 'binary, another content'
+mkdir -p "$REF"; g clone -q "$UP" "$REF/sub"; g -C "$REF/sub" config remote.origin.url "$URL"
+ref_base=$(g -C "$REF/sub" rev-parse refs/remotes/origin/main)
+nopr='{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":0,"nodes":[]}}}}}'
+for w in c-same c-moved c-differs c-empty c-reached c-binary c-noref c-foreign c-nohead; do printf '%s\n' "$nopr" > "$FIX/$(c_sha "$w").json"; done
+printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":1,"nodes":[%s]}}}}}\n' \
+  "$(node 51 MERGED "$(c_sha c-merged)")" > "$FIX/$(c_sha c-merged).json"
+
+c_run() { # inventory-file [reference] -> OUT, RC
+  : > "$CALLS"
+  if [ $# -gt 1 ]; then OUT=$(PATH="$BIN:$PATH" bash "$SUT" "$CR" --content-reference "$2" < "$1" 2>"$TMP/err"); RC=$?
+  else OUT=$(PATH="$BIN:$PATH" bash "$SUT" "$CR" < "$1" 2>"$TMP/err"); RC=$?; fi
+}
+content_of() { printf '%s\n' "$OUT" | awk -F'\t' -v w="$1" '$1 == "CONTENT-CHECK" && $2 == w { print $4 " " $5 " " $6 " " $7 }'; }
+content_is() { # name worktree want
+  local got; got=$(content_of "$2")
+  if [ "$got" = "$3" ]; then ok "$1"; else bad "$1" "want [$3] got [$got] rc=$RC out=$OUT err=$(cat "$TMP/err")"; fi
+}
+objects_of() { find "$CR"/*/sub/.git "$REF/sub/.git" -type f | LC_ALL=C sort | cksum; }
+content_rows() { grep -E "^ENTRY	c-(same|moved|differs|empty|reached|binary|merged)	" "$TMP/content.all"; }
+bash "$INVENTORY" "$CR" > "$TMP/content.all"
+{ content_rows; } > "$TMP/content.in"; seal "$TMP/content.in"
+before=$(objects_of)
+c_run "$TMP/content.in" "$REF"
+after=$(objects_of)
+check 'the fixture inventory lists the seven compared entries' eval '[ "$(grep -c "^ENTRY" "$TMP/content.in")" = 7 ]'
+content_is 'the sum of two commits merged as one is same-change'   c-same    "same-change commit=$(c_sha c-same) base=$ref_base same_as=$same_as"
+content_is 'a change the default branch later built on is same-change' c-moved "same-change commit=$(c_sha c-moved) base=$ref_base same_as=$moved_as"
+content_is 'a change the default branch never got differs'         c-differs "differs commit=$(c_sha c-differs) base=$ref_base same_as=-"
+content_is 'a commit that leaves the files as they were is no-change' c-empty "no-change commit=$(c_sha c-empty) base=$ref_base same_as=-"
+content_is 'a commit the default branch contains is reached'       c-reached "reached commit=$(c_sha c-reached) base=$ref_base same_as=-"
+content_is 'a binary file with other content differs'              c-binary  "differs commit=$(c_sha c-binary) base=$ref_base same_as=-"
+content_is 'a merged entry is not compared'                        c-merged  ''
+check 'the comparison keeps the pull-request verdicts' eval '[ "$(printf "%s\n" "$OUT" | grep -c "^MERGE-CHECK	c-.*	no-pr	")" = 6 ] && grep -q "^MERGE-CHECK	c-merged	sub	merged	" <<<"$OUT"'
+check 'the closing line carries the content totals' eval 'grep -q "	content_reached=1	content_same_change=2	content_no_change=1	content_differs=2	content_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
+check 'the comparison writes to neither repository' [ "$before" = "$after" ]
+c_run "$TMP/content.in"
+check 'without a reference nothing is compared' eval '! grep -q "CONTENT-CHECK\|content_" <<<"$OUT" && [ "$RC" = 0 ]'
+
+c_one() { # worktree -> an inventory holding that entry alone
+  sed -n "/^ENTRY	$1	/p" "$TMP/content.all" > "$TMP/content.one"; seal "$TMP/content.one"
+}
+# The reference holds nothing at that path, or holds another repository there.
+c_one c-noref; mkdir -p "$TMP/ref-empty"; c_run "$TMP/content.one" "$TMP/ref-empty"
+content_is 'a reference without that repository is no-reference' c-noref "no-reference commit=$(c_sha c-noref) base=- same_as=-"
+check 'no-reference is a verdict, not a failure' rc_is 0
+mkdir -p "$TMP/ref-foreign"; g clone -q "$UP" "$TMP/ref-foreign/sub"
+g -C "$TMP/ref-foreign/sub" config remote.origin.url 'git@github.com:devantler-tech/platform.git'
+c_one c-foreign; c_run "$TMP/content.one" "$TMP/ref-foreign"
+content_is 'a reference holding another repository there is no-reference' c-foreign "no-reference commit=$(c_sha c-foreign) base=- same_as=-"
+mkdir -p "$TMP/ref-link"; ln -s "$REF/sub" "$TMP/ref-link/sub"
+c_one c-differs; c_run "$TMP/content.one" "$TMP/ref-link"
+content_is 'a reference reached through a symbolic link is not read' c-differs "no-reference commit=$(c_sha c-differs) base=- same_as=-"
+# A reference whose default branch cannot be named is a failed read, never `differs`.
+mkdir -p "$TMP/ref-nohead"; g clone -q "$UP" "$TMP/ref-nohead/sub"; g -C "$TMP/ref-nohead/sub" config remote.origin.url "$URL"
+g -C "$TMP/ref-nohead/sub" symbolic-ref -d refs/remotes/origin/HEAD
+c_one c-nohead; c_run "$TMP/content.one" "$TMP/ref-nohead"
+check 'a reference with no default branch is UNKNOWN' eval '[ -z "$(content_of c-nohead)" ] && grep -q "^UNKNOWN	c-nohead	sub	cannot read the default branch in the reference checkout" <<<"$OUT" && [ "$RC" = 2 ]'
+# A patch read that fails must not read as `differs`.
+c_one c-same
+OUT=$(PATH="$BIN:$PATH" bash -c 'git() { case " $* " in *" patch-id "*) return 3 ;; esac; command git "$@"; }; export -f git; bash "$0" "$1" --content-reference "$2" < "$3"' "$SUT" "$CR" "$REF" "$TMP/content.one" 2>"$TMP/err"); RC=$?
+check 'a failed patch read is UNKNOWN, never differs' eval '[ -z "$(content_of c-same)" ] && grep -q "^UNKNOWN	c-same	sub	cannot" <<<"$OUT" && [ "$RC" = 2 ]'
+c_run "$TMP/content.in" "$TMP/no-such-reference"
+check 'a missing reference directory is a usage error' eval '[ "$RC" = 2 ] && grep -q "not a directory" "$TMP/err"'
+OUT=$(PATH="$BIN:$PATH" bash "$SUT" "$CR" --surprise "$REF" < "$TMP/content.in" 2>"$TMP/err"); RC=$?
+check 'an unknown option is a usage error' eval '[ "$RC" = 2 ] && grep -q "usage:" "$TMP/err"'
+
+# A commit held away from HEAD is compared the same way, after its own TIP-CHECK row.
+CT="$TMP/content-tips"; g init -q -b main "$CT/wt"
+printf '[submodule "s"]\n\tpath = sub\n\turl = https://example.invalid/s.git\n' > "$CT/wt/.gitmodules"
+g -C "$CT/wt" add .gitmodules; g -C "$CT/wt" commit -qm base
+g clone -q "$UP" "$CT/wt/sub"; g -C "$CT/wt/sub" reset -q --hard "$(g -C "$UP" rev-list --max-parents=0 HEAD)"
+g -C "$CT/wt/sub" update-ref refs/remotes/origin/main HEAD
+g -C "$CT/wt/sub" checkout -q -b side; echo unrelated > "$CT/wt/sub/z"; g -C "$CT/wt/sub" add z; g -C "$CT/wt/sub" commit -qm 'the same file, locally'
+tip_sha=$(g -C "$CT/wt/sub" rev-parse HEAD); g -C "$CT/wt/sub" checkout -q main
+g -C "$CT/wt/sub" config remote.origin.url "$URL"
+printf '%s\n' "$nopr" > "$FIX/$tip_sha.json"
+unrelated_as=$(g -C "$UP" log --format=%H --grep='^unrelated$' main)
+# The clone's first HEAD stays in its reflog: a second held commit, which the reference has.
+printf '%s\n' "$nopr" > "$FIX/$ref_base.json"
+: > "$CALLS"
+OUT=$(bash "$INVENTORY" "$CT" --tips | PATH="$BIN:$PATH" bash "$SUT" "$CT" --content-reference "$REF" 2>"$TMP/err"); RC=$?
+want_tip="same-change commit=$tip_sha base=$ref_base same_as=$unrelated_as"
+want_log="reached commit=$ref_base base=$ref_base same_as=-"
+tip_content_ok() {
+  grep -q "^TIP-CHECK	wt	sub	no-pr	tip=$tip_sha	kind=branch	" <<<"$OUT" || return 1
+  [ "$(content_of wt | LC_ALL=C sort)" = "$(printf '%s\n%s\n' "$want_tip" "$want_log" | LC_ALL=C sort)" ] && [ "$RC" = 0 ]
+}
+check 'commits held away from HEAD are compared too' tip_content_ok
+
 # An inventory that fails (a root with no worktree) must not read as an empty, clean result.
 mkdir -p "$TMP/empty-root"
 OUT=$(bash "$INVENTORY" "$TMP/empty-root" 2>/dev/null | PATH="$BIN:$PATH" bash "$SUT" "$TMP/empty-root" 2>"$TMP/err"); RC=$?
