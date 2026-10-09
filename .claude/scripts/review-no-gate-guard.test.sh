@@ -30,7 +30,11 @@ completed=0
 on_exit() {
   local status=$?
   rm -rf "${tmp}"
-  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then exit 1; fi
+  if [ "${completed}" != 1 ]; then
+    echo "review-no-gate-guard.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
 }
 trap on_exit EXIT
 failures=0
@@ -681,5 +685,5 @@ ablate "dropping the single-document rule reads past a second document" \
   "ADMIT cr@${head}" --input "${two_docs}" --head "${head}" --provider cr
 
 echo "review-no-gate-guard.test: ${checks} checks, ${failures} failed"
-[ "${failures}" -eq 0 ] || exit 1
 completed=1
+[ "${failures}" -eq 0 ] || exit 1

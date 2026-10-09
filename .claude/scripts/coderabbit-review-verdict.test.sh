@@ -20,7 +20,11 @@ completed=0
 on_exit() {
   local status=$?
   rm -rf "${tmp}"
-  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then exit 1; fi
+  if [ "${completed}" != 1 ]; then
+    echo "coderabbit-review-verdict.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
 }
 trap on_exit EXIT
 failures=0
