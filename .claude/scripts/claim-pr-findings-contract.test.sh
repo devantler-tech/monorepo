@@ -23,6 +23,20 @@
 
 set -euo pipefail
 
+tmp="$(mktemp -d)"
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "${tmp}"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "claim-pr-findings-contract.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 guide="${CLAIM_GUIDE:-${repo_root}/.claude/guides/claim-protocol.md}"
 
@@ -87,8 +101,6 @@ if ! missing="$(check_file "${guide}")"; then
   fail "${missing}"
 fi
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
 
 # expect_ablation <name> <file> <want> — the check must fail on <file>, with exactly <want>.
 expect_ablation() {
@@ -127,4 +139,5 @@ for half in 'no commit on' 'newer than the tip'"'"'s committer date'; do
   expect_ablation "date-gate" "${tmp}/date-gate.md" "retired gate is back: ${half}"
 done
 
+test_run_finished=1
 echo "claim PR-findings contract: OK"

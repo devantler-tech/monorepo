@@ -13,7 +13,16 @@ tool="${here}/kata-measure-date.sh"
 checks=0
 failures=0
 kata_measure_date_test_finished=0
-trap '[ "${kata_measure_date_test_finished}" = 1 ] || { echo "kata-measure-date.test.sh: aborted before finishing" >&2; exit 1; }' EXIT
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  if [ "${kata_measure_date_test_finished}" != 1 ]; then
+    echo "kata-measure-date.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
 
 # expect <label> <want-exit> <want-stdout> <stdin>
 expect() {

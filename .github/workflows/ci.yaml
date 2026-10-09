@@ -288,6 +288,14 @@ jobs:
               - '.claude/scripts/pr-ownership-disclosure.test.sh'
               - '.claude/scripts/pr-worktree-holder.test.sh'
               - '.claude/scripts/required-gate-completeness.test.sh'
+              - '.claude/scripts/kata-measure-date.test.sh'
+              - '.claude/scripts/pr-body-contract.test.sh'
+              - '.claude/scripts/provider-neutral-agents-contract.test.sh'
+              - '.claude/scripts/claim-pr-findings-contract.test.sh'
+              - '.claude/scripts/improver-role-disclosure-contract.test.sh'
+              - '.claude/scripts/merge-confirmation-read.test.sh'
+              - '.claude/scripts/merge-preflight-thread-gate.test.sh'
+              - '.claude/scripts/drifted-lane-escalation-contract.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'

@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 # Verify portable ownership declarations and removal of retired engineering wiring.
 set -euo pipefail
+probe="$(mktemp)"
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -f -- "$probe"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "provider-neutral-agents-contract.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 fail() { printf 'FAIL provider-neutral agents: %s\n' "$*" >&2; exit 1; }
 [[ ! -e "$ROOT/.claude/loaders/cursor-daily-ai-engineer.md" ]] || fail 'retired loader remains'
@@ -52,8 +65,6 @@ reviewer_free() {
 }
 reviewer_free < "$ROOT/.claude/plugin-consumption/agent-instances.json" ||
   fail 'instance registry assigns a review lane identity to a writer'
-probe="$(mktemp)"
-trap 'rm -f -- "$probe"' EXIT
 jq '.instances.probe = {namespace: "probe", definitionAdapter: "probe", roles: ["agentic-engineer"],
     authors: {cli: "app/cursor", rest: "cursor[bot]", graphql: "cursor", search: "app/cursor"}}' \
   "$ROOT/.claude/plugin-consumption/agent-instances.json" > "$probe"
@@ -66,4 +77,5 @@ jq -e --slurpfile registry "$ROOT/.claude/plugin-consumption/agent-instances.jso
   all(.routes[]; .runtime as $id | $registry[0].instances | has($id))
   and all(.runtimes | keys[]; . as $id | $registry[0].instances | has($id))
 ' "$ROOT/.claude/plugin-consumption/inference-routing.policy.json" > /dev/null || fail 'routing references an undeclared instance'
+test_run_finished=1
 printf 'PASS provider-neutral ownership and active instruction boundaries\n'

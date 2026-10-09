@@ -26,6 +26,20 @@
 
 set -euo pipefail
 
+self_test_dir="$(mktemp -d)"
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "${self_test_dir}"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "merge-confirmation-read.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 constitution="${repo_root}/.claude/guides/merge-policy.md"
 
@@ -191,8 +205,6 @@ bad_lists_in() {
 #
 # So exercise the extractor against committed fixtures before trusting it on the real surfaces. Every
 # BAD form must be caught and every VALID form must pass; a broken extractor now fails HERE.
-self_test_dir="$(mktemp -d)"
-trap 'rm -rf "${self_test_dir}"' EXIT
 
 # Each form pairs `merged` with a DIFFERENT valid field on purpose. The extractor ends in `sort -u`
 # (correct for the real scan — identical prescriptions should dedupe), so fixtures that normalise to the
@@ -486,4 +498,5 @@ if [ -n "${offenders}" ]; then
   exit 1
 fi
 
+test_run_finished=1
 echo "merge-confirmation read: OK — self-test caught ${bad_caught}/10 markdown + ${json_bad_caught}/2 escaped-JSON bad forms, flagged ${good_flagged}+${json_good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces (${plugin_surfaces} of them consumed plugin definitions)"

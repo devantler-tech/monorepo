@@ -11,6 +11,20 @@
 
 set -euo pipefail
 
+refspec_fixture="$(mktemp -d)"
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "${refspec_fixture}"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "drifted-lane-escalation-contract.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 constitution="${1:-${repo_root}/.claude/guides/definition-and-plugin.md}"
 refresh="${repo_root}/.claude/scripts/plugin-definition-refresh.sh"
@@ -469,8 +483,6 @@ assert_not_contains "${loader_text}" 'gh auth' \
 # not depend on the host's ~/.gitconfig.
 command -v git >/dev/null 2>&1 || fail 'git is required to verify the refspec premise behaviourally'
 
-refspec_fixture=$(mktemp -d) || fail 'could not create the refspec fixture directory'
-trap 'rm -rf "${refspec_fixture}"' EXIT
 
 (
   export GIT_CONFIG_GLOBAL="${refspec_fixture}/gitconfig"
@@ -532,4 +544,5 @@ green_runs=$(refspec_arm green origin '+refs/heads/main:refs/remotes/origin/main
 # explicit 'present' tokens are the only passing value.
 [ "${green_runs}" = "present present present " ] || fail \
   "the fully-qualified refspec must keep refs/remotes/origin/main present on EVERY run; expected 'present present present ', got '${green_runs}' (an EMPTY value means the fixture itself failed, not that the refspec is sound) — otherwise a source-drift reset leaves the currency check reading a missing ref and exits 2 UNKNOWN"
+test_run_finished=1
 echo "drifted-lane-escalation contract: PASS — condition-keyed escalation, issue-latched, additive, and both script premises verified behaviourally"

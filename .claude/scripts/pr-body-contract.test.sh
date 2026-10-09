@@ -10,7 +10,18 @@ maintenance_overlay="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 engineering_overlay="${repo_root}/.claude/skills/product-engineering/SKILL.md"
 workflow="${repo_root}/.github/workflows/ci.yaml"
 fixture_root="$(mktemp -d)"
-trap 'rm -rf "${fixture_root}"' EXIT
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "${fixture_root}"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "pr-body-contract.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
 
 fail() {
   echo "pr-body contract test: FAIL — $*" >&2
@@ -5277,4 +5288,5 @@ expect_fail "template lookup authorization failure" \
   PATH="${fixture_root}/bin:${PATH}" GH_MODE=authfail GH_TEMPLATE_FIXTURE="${fixture_root}/template.md" \
   "${subject}" seed --repo devantler-tech/platform --output "${fixture_root}/authfail.md"
 
+test_run_finished=1
 echo "pr-body contract test: PASS"
