@@ -73,6 +73,28 @@ echo more > "$s/f"; g -C "$s" commit -qam more; echo edit > "$s/f"; echo new > "
 s=$(make_wt h-spaced 'sub dir')
 echo new > "$s/new.txt"
 
+s=$(make_wt m-ignored)
+echo 'build/' > "$s/.gitignore"; g -C "$s" add .gitignore; g -C "$s" commit -qm ignore; g -C "$s" push -q origin main
+mkdir "$s/build"; echo out > "$s/build/out.o"
+
+# An ignored directory holding a whole repository two levels down. (m-ignored pushed the ignore rule, so this clone has it.)
+s=$(make_wt n-ignored-repository)
+mkdir -p "$s/build/deep"; g init -q -b main "$s/build/deep/inner"
+
+# A staged rename is ONE change: -z prints its source as a second field.
+s=$(make_wt o-renamed)
+g -C "$s" mv f renamed
+
+# A submodule whose NAME holds a space (the key is then `submodule.my mod.path`).
+s=$(make_wt p-spaced-name)
+printf '[submodule "my mod"]\n\tpath = sub\n\turl = https://example.invalid/s.git\n' > "$ROOT/p-spaced-name/.gitmodules"
+echo edit > "$s/f"
+
+# .gitmodules deleted from the working tree: the index still records the gitlink.
+s=$(make_wt q-gitlink-only)
+g -C "$ROOT/q-gitlink-only" update-index --add --cacheinfo "160000,$(g -C "$s" rev-parse HEAD),sub"
+rm "$ROOT/q-gitlink-only/.gitmodules"; echo edit > "$s/f"
+
 # An unpopulated submodule: listed in .gitmodules, directory present but empty.
 g init -q -b main "$ROOT/i-unpopulated"
 printf '[submodule "s"]\n\tpath = sub\n\turl = https://example.invalid/s.git\n' > "$ROOT/i-unpopulated/.gitmodules"
@@ -97,17 +119,24 @@ expect_class e-nested nested
 expect_class f-local-only local-only
 expect_class g-precedence modified
 expect_class h-spaced untracked
+expect_class m-ignored ignored
+expect_class n-ignored-repository nested
+expect_class o-renamed modified
+expect_class p-spaced-name modified
+expect_class q-gitlink-only modified
+case "$(row m-ignored)" in *$'\tignored=1') ok "ignored content is counted, not reported clean" ;; *) bad "ignored content is counted" "$(row m-ignored)" ;; esac
+case "$(row o-renamed)" in *$'\tmodified=1\t'*) ok "a rename counts once" ;; *) bad "a rename counts once" "$(row o-renamed)" ;; esac
 
 case "$(row b-unpushed)" in *$'\tunpushed=1\t'*) ok "an unpushed commit is counted" ;; *) bad "an unpushed commit is counted" "$(row b-unpushed)" ;; esac
 case "$(row d-untracked)" in *$'\tuntracked=2\t'*) ok "untracked files are counted" ;; *) bad "untracked files are counted" "$(row d-untracked)" ;; esac
-case "$(row e-nested)" in *$'\tnested=1') ok "a nested repository is counted apart from untracked files" ;; *) bad "a nested repository is counted apart from untracked files" "$(row e-nested)" ;; esac
+case "$(row e-nested)" in *$'\tnested=1\tignored=0') ok "a nested repository is counted apart from untracked files" ;; *) bad "a nested repository is counted apart from untracked files" "$(row e-nested)" ;; esac
 case "$(row g-precedence)" in *$'\tunpushed=1\t'*$'\tmodified=1\t'*$'untracked=1\t'*) ok "the lower-precedence counts stay visible" ;; *) bad "the lower-precedence counts stay visible" "$(row g-precedence)" ;; esac
 [ "$(row h-spaced | awk -F'\t' '{ print $3 }')" = 'sub dir' ] \
   && ok "a submodule path holding a space is kept whole" || bad "a submodule path holding a space is kept whole" "$(row h-spaced)"
 [ -z "$(row i-unpopulated)" ] && ok "an unpopulated submodule has no row" || bad "an unpopulated submodule has no row" "$(row i-unpopulated)"
 grep -q $'^SKIP\tj-plain-directory\t' <<<"$out" \
   && ok "a directory that is not a worktree is reported, not classified" || bad "a non-worktree directory is reported" "$out"
-grep -q $'^CHECKED\tworktrees=9\tentries=8\tmodified=2\tnested=1\tuntracked=2\tunpushed=1\tlocal_only=1\tclean=1\tbelow_min_idle=0\tskipped=1\tunreadable=0$' <<<"$out" \
+grep -q $'^CHECKED\tworktrees=14\tentries=13\tmodified=5\tnested=2\tuntracked=2\tunpushed=1\tlocal_only=1\tignored=1\tclean=1\tbelow_min_idle=0\tskipped=1\tunreadable=0$' <<<"$out" \
   && ok "the closing line totals every class" || bad "the closing line totals every class" "$(printf '%s\n' "$out" | tail -n 1)"
 
 # Read-only: the run must not rewrite another session's index (GIT_OPTIONAL_LOCKS=0).
@@ -123,7 +152,7 @@ out=$(bash "$SUT" "$ROOT" --min-idle-days 30 2>&1); rc=$?
 n=$(printf '%s\n' "$out" | grep -c $'^ENTRY\t')
 { [ "$rc" -eq 0 ] && [ "$n" -eq 1 ] && [ "$(class_of c-modified)" = modified ]; } \
   && ok "--min-idle-days keeps only the old entry" || bad "--min-idle-days keeps only the old entry" "rc=$rc rows=$n"
-grep -q $'\tentries=1\t.*\tbelow_min_idle=7\t' <<<"$out" \
+grep -q $'\tentries=1\t.*\tbelow_min_idle=12\t' <<<"$out" \
   && ok "entries below the idle floor are counted, not dropped silently" || bad "below-floor entries are counted" "$(printf '%s\n' "$out" | tail -n 1)"
 
 # NEGATIVE CONTROL 1: a submodule whose .git points nowhere is UNREADABLE and the run is
@@ -149,6 +178,41 @@ out=$(bash "$SUT" "$BROKEN2" 2>&1); rc=$?
 grep -q $'\tclean=0\t.*\tunreadable=1$' <<<"$out" \
   && ok "the unreadable entry is not counted as clean" || bad "the unreadable entry is not counted as clean" "$(printf '%s\n' "$out" | tail -n 1)"
 ROOT=$ROOT_SAVE
+
+# NEGATIVE CONTROL 3: a worktree whose own .git is an empty directory, inside another
+# repository. `git -C` answers for that outer repository.
+OUTER="$TMP/outer"; g init -q -b main "$OUTER"; mkdir -p "$OUTER/wts/r-outer-answers/.git"
+out=$(bash "$SUT" "$OUTER/wts" 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && grep -q $'^UNREADABLE\tr-outer-answers\t-\tgit resolves it to another working tree$' <<<"$out"; } \
+  && ok "a worktree git answers for an outer repository is UNREADABLE" || bad "a worktree answered by an outer repository is UNREADABLE" "rc=$rc: $out"
+
+# NEGATIVE CONTROLS 4-7: each must be UNREADABLE with exit 2, never a missing row.
+unreadable_case() { # name, expected reason, description
+  out=$(bash "$SUT" "$ROOT" 2>&1); rc=$?
+  { [ "$rc" -eq 2 ] && grep -q "^UNREADABLE"$'\t'"$1"$'\t'".*$2\$" <<<"$out" && [ -z "$(row "$1")" ]; } \
+    && ok "$3" || bad "$3" "rc=$rc: $(grep -F "$1" <<<"$out")"
+}
+ROOT="$TMP/unborn"; mkdir -p "$ROOT"; s=$(make_wt s-unborn)
+rm -rf "$s"; g init -q -b main "$s"
+unreadable_case s-unborn 'HEAD is not a commit' "an unborn HEAD is UNREADABLE"
+ROOT="$TMP/newline"; mkdir -p "$ROOT"; s=$(make_wt t-newline)
+echo x > "$s/a"$'\n'"b"
+unreadable_case t-newline 'a path holds a newline' "a path holding a newline is UNREADABLE"
+ROOT="$TMP/escape"; mkdir -p "$ROOT"; s=$(make_wt u-escape); make_wt v-victim >/dev/null
+printf '[submodule "s"]\n\tpath = ../v-victim/sub\n\turl = https://example.invalid/s.git\n' > "$ROOT/u-escape/.gitmodules"
+unreadable_case u-escape 'the path does not stay inside the worktree' "a submodule path leaving the worktree is UNREADABLE"
+if [ "$(id -u)" -ne 0 ]; then
+  ROOT="$TMP/perm"; mkdir -p "$ROOT"; s=$(make_wt w-no-permission); echo edit > "$s/f"; chmod 000 "$s"
+  unreadable_case w-no-permission 'no permission to read the directory' "a submodule that may not be read is UNREADABLE"
+  chmod 700 "$s"; chmod 000 "$ROOT/w-no-permission"
+  unreadable_case w-no-permission 'no permission to read the directory' "a worktree that may not be read is UNREADABLE, not skipped"
+  chmod 700 "$ROOT/w-no-permission"
+fi
+ROOT=$ROOT_SAVE
+
+# A root with no worktree at all is the wrong directory, not an empty inventory.
+mkdir -p "$TMP/empty/plain"
+bash "$SUT" "$TMP/empty" >/dev/null 2>&1; [ $? -eq 2 ] && ok "a root holding no worktree exits 2" || bad "a root holding no worktree exits 2"
 
 # Usage errors are UNKNOWN (2), never an empty clean inventory.
 bash "$SUT" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no root exits 2" || bad "no root exits 2"
