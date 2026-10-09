@@ -38,8 +38,8 @@ const (
 func newFakeForge(t *testing.T) *fakeForge {
 	t.Helper()
 	f := &fakeForge{t: t, state: "open", pullRequest: true, nextID: 100, failWrite: map[string]bool{}, dropWrite: map[string]bool{}, reads: map[string]int{}, login: recordAuthor, number: 5}
-	originalRead, originalWrite := forgeRead, forgeWrite
-	t.Cleanup(func() { forgeRead, forgeWrite = originalRead, originalWrite })
+	originalRead, originalWrite, originalReuse := forgeRead, forgeWrite, reuseKeptPages
+	t.Cleanup(func() { forgeRead, forgeWrite, reuseKeptPages = originalRead, originalWrite, originalReuse })
 	forgeRead = f.read
 	forgeWrite = f.write
 	return f

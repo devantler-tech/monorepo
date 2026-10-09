@@ -397,3 +397,78 @@ func TestAPageInUseIsNotPruned(t *testing.T) {
 		t.Fatal("a page the forge has just confirmed must stay")
 	}
 }
+
+func TestKeptPageNameCarriesTheForgeHost(t *testing.T) {
+	t.Setenv("GH_HOST", "")
+	plain := keptPagePath("d", "repos/o/r/issues/1")
+	t.Setenv("GH_HOST", "forge.example.invalid")
+	if other := keptPagePath("d", "repos/o/r/issues/1"); other == plain {
+		t.Fatal("another host's answer for the same path must be another page")
+	}
+}
+
+func TestOneDeadlineCoversAWholeRead(t *testing.T) {
+	keepPagesIn(t)
+	original := forgeFetch
+	t.Cleanup(func() { forgeFetch = original })
+	var deadlines []time.Time
+	forgeFetch = func(ctx context.Context, target, _ string) (forgePage, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Error("a page was read without a deadline")
+		}
+		deadlines = append(deadlines, deadline)
+		time.Sleep(5 * time.Millisecond)
+		if len(deadlines) < 3 {
+			return forgePage{status: 200, next: forgeHost + "page", body: []byte(`[]`)}, nil
+		}
+		return forgePage{status: 200, body: []byte(`[]`)}, nil
+	}
+	mustRead(t, "repos/o/r/issues/1/comments", true)
+	if len(deadlines) != 3 || !deadlines[0].Equal(deadlines[1]) || !deadlines[1].Equal(deadlines[2]) {
+		t.Fatalf("every page must share the read's deadline, got %v", deadlines)
+	}
+}
+
+func TestPruneLeavesWhatIsNotThisStore(t *testing.T) {
+	long := time.Now().Add(-keptPageAge - time.Hour)
+	old := func(t *testing.T, dir string) string {
+		t.Helper()
+		storeKeptPage(dir, keptPage{Target: "old", Validator: `"a"`, Body: []byte(`{}`)})
+		path := keptPagePath(dir, "old")
+		if err := os.Chtimes(path, long, long); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	t.Run("a directory others can enter", func(t *testing.T) {
+		dir := keepPagesIn(t)
+		path := old(t, dir)
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		pruneKeptPages(dir, time.Now())
+		if _, err := os.Stat(path); err != nil {
+			t.Fatal("nothing may be removed from a directory others can enter")
+		}
+	})
+	t.Run("a file others can read", func(t *testing.T) {
+		dir := keepPagesIn(t)
+		path := old(t, dir)
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		pruneKeptPages(dir, time.Now())
+		if _, err := os.Stat(path); err != nil {
+			t.Fatal("a file that is not a private kept page must stay")
+		}
+	})
+	t.Run("the control", func(t *testing.T) {
+		dir := keepPagesIn(t)
+		path := old(t, dir)
+		pruneKeptPages(dir, time.Now())
+		if _, err := os.Stat(path); err == nil {
+			t.Fatal("an old private page must be dropped")
+		}
+	})
+}
