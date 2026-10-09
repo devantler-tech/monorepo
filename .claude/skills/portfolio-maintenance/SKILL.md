@@ -593,9 +593,12 @@ about 14.5 minutes and 1,750 calls for the 583 open issues, and the bulk read di
 23 seconds and 8 calls. Only a read that **proves** an issue is on this board with a Status skips
 the helper. A failed, short or surprising read proves nothing: the sweep prints
 `bulk membership read did not hold` and leaves those issues to the helper, so it can cost time but
-never coverage. Per-issue work stops at `--deadline-seconds` (default 90). The summary then carries
-`checkpoint=<url>`, the first issue not examined, and `--resume-from <url>` starts the next call
-there; an interrupted run prints the same and exits `2`. `--dry-run` is the read-only path:
+never coverage. The membership reads and the per-issue work both stop at `--deadline-seconds`
+(default 90). The summary then carries `checkpoint=<url>`, the first issue not examined, and
+`--resume-from <url>` starts the next call there; an interrupted run prints the same and exits `2`.
+A resumed run reports the issues before its checkpoint as `before_checkpoint=<n>`: it did not
+examine them, and an earlier run may have failed on one. **When a resumed chain prints no
+checkpoint, run one full pass without `--resume-from`** (#3820). `--dry-run` is the read-only path:
 discovery and the bulk read, no helper call.
 
 The default discovery cap is 300. Saturation stops before any writes and requires an explicit
