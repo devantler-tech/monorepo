@@ -35,7 +35,11 @@ namespace (resolved from the instance registry), so a race settled only on the w
 arbitrated across lanes. The durable claim is therefore `agent-claim/<issue>` — a single shared ref
 every instance derives from the issue number alone — acquired **before** the lane-specific work
 branch via [`.claude/scripts/agent-claim.sh`](../scripts/agent-claim.sh) (RED/GREEN coverage of
-the sixteen proven traps live in `agent-claim.test.sh`).
+the seventeen proven traps live in `agent-claim.test.sh`). Acquisition and renewal explicitly sign
+their candidate commits and verify the exact candidate before publishing it. A missing signer or
+unverifiable signature fails closed without creating or replacing a claim; takeover also retains the
+expired tip until its replacement is signed and verified. Configure the repository's signing and
+verification backend before claiming work — `commit.gpgsign` alone does not sign `commit-tree`.
 
 1. **Check four signals before selecting, not one:** open PRs, remote `agent-claim/<issue>` tips,
    remote work branches in every registered namespace, and issue assignees. An assignee

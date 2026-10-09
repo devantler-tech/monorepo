@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test for agent-claim.sh — RED/GREEN coverage of the sixteen traps proven
+# Self-test for agent-claim.sh — RED/GREEN coverage of the seventeen traps proven
 # by monorepo#2302, its review rounds and monorepo#3811. Fixtures use a local bare remote + two
 # clones; nothing touches a real network remote.
 #
@@ -25,6 +25,8 @@
 # Trap 16 — a commit that lands on a pull request after a stale PR-number tip
 #           must not make that tip a permanent lock: takeover names the head the
 #           caller re-read, and the helper checks and records it.
+# Trap 17 — acquisition, renewal and takeover sign and verify the candidate
+#           before any remote mutation; signing failures preserve the prior tip.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +36,7 @@ chmod +x "$tool"
 tmp="$(mktemp -d)"
 test_run_finished=0
 # bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 on_test_exit() {
   local status=$?
   rm -rf "$tmp"
@@ -86,13 +89,112 @@ clone_c="$tmp/c"
 git clone --quiet "$bare" "$clone_a"
 git clone --quiet "$bare" "$clone_b"
 git clone --quiet "$bare" "$clone_c"
+# Disposable SSH signing identity: no host keys, keyring or real remote are used.
+ssh-keygen -q -t ed25519 -N '' -C agent-claim-test@example.com -f "$tmp/claim-key"
+printf 'agent-claim-test@example.com %s\n' "$(cat "$tmp/claim-key.pub")" >"$tmp/allowed-signers"
 for c in "$clone_a" "$clone_b" "$clone_c"; do
   git -C "$c" config user.email "agent-claim-test@example.com"
   git -C "$c" config user.name "agent-claim-test"
   git -C "$c" config commit.gpgsign false
+  git -C "$c" config gpg.format ssh
+  git -C "$c" config gpg.ssh.program ssh-keygen
+  git -C "$c" config user.signingkey "$tmp/claim-key"
+  git -C "$c" config gpg.ssh.allowedSignersFile "$tmp/allowed-signers"
 done
 
 ISSUE=2302
+
+# ---------------------------------------------------------------------------
+# Trap 17 — inspect actual local-remote tips, not the helper's intended flags.
+# Removing explicit signing or candidate verification must fail these controls.
+# commit.gpgsign=false deliberately remains set: the helper must request signing.
+# ---------------------------------------------------------------------------
+claim17="$("$tool" acquire 1717 --repo-dir "$clone_a" 2>"$tmp/err-17-acquire")"
+tip17="$(git -C "$clone_a" ls-remote origin refs/heads/agent-claim/1717 | awk '{print $1}')"
+check "trap17: acquisition publishes its exact candidate" "$claim17" "$tip17"
+rc17=0
+git -C "$clone_a" verify-commit "$tip17" >/dev/null 2>&1 || rc17=$?
+check "trap17: acquired remote tip has a valid signature" 0 "$rc17"
+renew17="$("$tool" renew 1717 "$claim17" --repo-dir "$clone_a" 2>"$tmp/err-17-renew")"
+tip17="$(git -C "$clone_a" ls-remote origin refs/heads/agent-claim/1717 | awk '{print $1}')"
+check "trap17: renewal publishes its exact candidate" "$renew17" "$tip17"
+rc17=0
+git -C "$clone_a" verify-commit "$tip17" >/dev/null 2>&1 || rc17=$?
+check "trap17: renewed remote tip has a valid signature" 0 "$rc17"
+"$tool" retire 1717 "$renew17" --repo-dir "$clone_a" >/dev/null 2>&1
+
+printf '' >"$tmp/no-allowed-signers"
+cat >"$tmp/invalid-signer" <<'SIGNER'
+#!/usr/bin/env bash
+for last in "$@"; do :; done
+printf 'invalid signature\n' >"$last.sig"
+SIGNER
+chmod +x "$tmp/invalid-signer"
+failure_issue=1718
+for failure_mode in missing-key signer-failure untrusted-signature invalid-signature; do
+  git -C "$clone_b" config user.signingkey "$tmp/claim-key"
+  git -C "$clone_b" config gpg.ssh.program ssh-keygen
+  git -C "$clone_b" config gpg.ssh.allowedSignersFile "$tmp/allowed-signers"
+  case "$failure_mode" in
+    missing-key) git -C "$clone_b" config user.signingkey "$tmp/absent-key" ;;
+    signer-failure) git -C "$clone_b" config gpg.ssh.program /usr/bin/false ;;
+    untrusted-signature) git -C "$clone_b" config gpg.ssh.allowedSignersFile "$tmp/no-allowed-signers" ;;
+    invalid-signature) git -C "$clone_b" config gpg.ssh.program "$tmp/invalid-signer" ;;
+  esac
+  rc17=0
+  "$tool" acquire "$failure_issue" --repo-dir "$clone_b" >"$tmp/out-17-failure" 2>"$tmp/err-17-failure" || rc17=$?
+  check "trap17: $failure_mode acquisition fails closed" 2 "$rc17"
+  check "trap17: $failure_mode publishes no candidate token" '' "$(cat "$tmp/out-17-failure")"
+  failed_tip="$(git -C "$clone_b" ls-remote origin "refs/heads/agent-claim/$failure_issue" | awk '{print $1}')"
+  check "trap17: $failure_mode leaves the remote absent" '' "$failed_tip"
+  # Remove only a RED fixture's exact tip through the production retirement path.
+  if [[ -n "$failed_tip" ]]; then
+    "$tool" retire "$failure_issue" "$failed_tip" --repo-dir "$clone_b" >/dev/null 2>&1
+  fi
+  failure_issue=$((failure_issue + 1))
+done
+git -C "$clone_b" config user.signingkey "$tmp/claim-key"
+git -C "$clone_b" config gpg.ssh.program ssh-keygen
+git -C "$clone_b" config gpg.ssh.allowedSignersFile "$tmp/allowed-signers"
+
+held17="$("$tool" acquire 1722 --repo-dir "$clone_b" 2>"$tmp/err-17-held")"
+for failure_mode in missing-key untrusted-signature; do
+  git -C "$clone_b" config user.signingkey "$tmp/claim-key"
+  git -C "$clone_b" config gpg.ssh.allowedSignersFile "$tmp/allowed-signers"
+  case "$failure_mode" in
+    missing-key) git -C "$clone_b" config user.signingkey "$tmp/absent-key" ;;
+    untrusted-signature) git -C "$clone_b" config gpg.ssh.allowedSignersFile "$tmp/no-allowed-signers" ;;
+  esac
+  rc17=0
+  "$tool" renew 1722 "$held17" --repo-dir "$clone_b" >"$tmp/out-17-renew-failure" 2>"$tmp/err-17-renew-failure" || rc17=$?
+  check "trap17: $failure_mode renewal exits 2" 2 "$rc17"
+  check "trap17: $failure_mode renewal emits no replacement token" '' "$(cat "$tmp/out-17-renew-failure")"
+  tip17="$(git -C "$clone_b" ls-remote origin refs/heads/agent-claim/1722 | awk '{print $1}')"
+  check "trap17: $failure_mode renewal preserves the held tip" "$held17" "$tip17"
+done
+"$tool" retire 1722 "$tip17" --repo-dir "$clone_b" >/dev/null 2>&1
+
+parent17="$(git -C "$clone_b" rev-parse origin/main)"
+stale17="$(GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+  git -C "$clone_b" commit-tree "$parent17^{tree}" -p "$parent17" -m 'chore: stale local fixture')"
+git -C "$clone_b" push --quiet origin "$stale17:refs/heads/agent-claim/1723"
+for failure_mode in missing-key untrusted-signature; do
+  git -C "$clone_b" config user.signingkey "$tmp/claim-key"
+  git -C "$clone_b" config gpg.ssh.allowedSignersFile "$tmp/allowed-signers"
+  case "$failure_mode" in
+    missing-key) git -C "$clone_b" config user.signingkey "$tmp/absent-key" ;;
+    untrusted-signature) git -C "$clone_b" config gpg.ssh.allowedSignersFile "$tmp/no-allowed-signers" ;;
+  esac
+  rc17=0
+  "$tool" acquire 1723 --takeover --repo-dir "$clone_b" >"$tmp/out-17-takeover-failure" 2>"$tmp/err-17-takeover-failure" || rc17=$?
+  check "trap17: $failure_mode takeover exits 2" 2 "$rc17"
+  check "trap17: $failure_mode takeover emits no candidate token" '' "$(cat "$tmp/out-17-takeover-failure")"
+  tip17="$(git -C "$clone_b" ls-remote origin refs/heads/agent-claim/1723 | awk '{print $1}')"
+  check "trap17: $failure_mode takeover preserves the stale tip" "$stale17" "$tip17"
+done
+"$tool" retire 1723 "$tip17" --repo-dir "$clone_b" >/dev/null 2>&1
+git -C "$clone_b" config user.signingkey "$tmp/claim-key"
+git -C "$clone_b" config gpg.ssh.allowedSignersFile "$tmp/allowed-signers"
 
 # ---------------------------------------------------------------------------
 # Trap 10 — --repo-dir must identify that exact repository root.

@@ -378,19 +378,30 @@ cmd_retire() {
 # Create a fresh empty claim commit on a caller-selected parent. Ignore both
 # inherited Git dates (trap 9) and local replacement refs (trap 13). An optional
 # third argument is appended to the subject as the claim's record — the head a
-# pull-request takeover re-read (trap 16).
+# pull-request takeover re-read (trap 16). Explicitly sign and verify the
+# candidate before returning it: commit-tree does not honor commit.gpgsign,
+# and no acquisition, renewal or takeover may mutate a remote with an
+# unsigned or unverifiable candidate (trap 17).
 new_claim_commit() {
   local issue="$1"
   local parent="$2"
   local record="${3-}"
-  local nonce claim_time
+  local nonce claim_time sha
   if ! nonce="$(claim_nonce)"; then
     fail "portable entropy is unavailable; refusing to create a fixed claim commit"
   fi
   claim_time="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  GIT_AUTHOR_DATE="$claim_time" GIT_COMMITTER_DATE="$claim_time" \
-    git_c_no_replace commit-tree "${parent}^{tree}" -p "$parent" \
-      -m "chore: agent-claim #${issue} nonce=${nonce}${record:+ ${record}}"
+  if ! sha="$(GIT_AUTHOR_DATE="$claim_time" GIT_COMMITTER_DATE="$claim_time" \
+    git_c_no_replace commit-tree -S "${parent}^{tree}" -p "$parent" \
+      -m "chore: agent-claim #${issue} nonce=${nonce}${record:+ ${record}}")"; then
+    fail "could not sign the claim candidate; refusing any remote mutation"
+  fi
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] ||
+    fail "signed claim candidate is not a full commit SHA; refusing any remote mutation"
+  if ! git_c_no_replace verify-commit "$sha" >/dev/null 2>&1; then
+    fail "claim candidate signature could not be verified; refusing any remote mutation"
+  fi
+  printf '%s\n' "$sha"
 }
 
 # Atomically refresh the lease at the publication boundary. The acquired SHA
@@ -482,15 +493,6 @@ cmd_acquire() {
         exit 1
       fi
       echo "agent-claim: taking over stale claim ${branch} (tip $existing)${PR_HEAD:+ at pull-request head ${PR_HEAD}}" >&2
-      # Delete the stale tip first so the subsequent non-force push can land.
-      # Never --force onto a live tip — only delete after is-stale. The delete
-      # is pinned to the tip the staleness check actually observed: a rival can
-      # retire and reacquire between that check and here, and an unconditional
-      # delete would erase that fresh holder, leaving both lanes believing they
-      # won. A changed tip fails closed and the takeover is abandoned.
-      git_c push --quiet --force-with-lease="refs/heads/${branch}:${existing}" \
-        "$REMOTE" ":${branch}" \
-        || fail "could not delete stale ${branch} before takeover (tip moved since the staleness check — another lane reacquired it; stand down)"
     else
       echo "agent-claim: LOST — ${branch} already held at $existing (pass --takeover after confirming no open PR + lease expiry)" >&2
       exit 1
@@ -524,6 +526,15 @@ cmd_acquire() {
   # make this just-acquired claim immediately stale and stealable.
   if ! sha="$(new_claim_commit "$issue" "$parent" "$record")"; then
     fail "could not create the claim commit"
+  fi
+
+  if [[ -n "$existing" ]]; then
+    # Only retire the stale tip after the replacement is signed and verified.
+    # Pin deletion to the observed tip: a rival renewal or reacquisition must
+    # fail closed, while a signing failure must leave the old tip untouched.
+    git_c push --quiet --force-with-lease="refs/heads/${branch}:${existing}" \
+      "$REMOTE" ":${branch}" \
+      || fail "could not delete stale ${branch} before takeover (tip moved since the staleness check — another lane reacquired it; stand down)"
   fi
 
   # Push WITHOUT force. Capture status ourselves — never through a pipe
