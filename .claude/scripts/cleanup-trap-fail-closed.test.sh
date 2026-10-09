@@ -309,6 +309,7 @@ plugin-definition-currency.test.sh|
 submodule-init.test.sh|
 worktree-claim.test.sh|
 worktree-submodule-inventory.test.sh|
+worktree-inventory-merged-check.test.sh|
 agent-claim-sweep.test.sh|
 bash-parse-guard.test.sh|
 comment-disclosure-drift.test.sh|
