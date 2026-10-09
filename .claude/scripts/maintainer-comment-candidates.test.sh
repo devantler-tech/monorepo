@@ -16,7 +16,17 @@ failures=0
 checks=0
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/maintainer-comment-candidates-test.XXXXXX")"
 # shellcheck disable=SC2317,SC2329 # Invoked indirectly by the EXIT trap.
-cleanup() { rm -rf -- "${tmpdir}"; }
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+cleanup() {
+  local status=$?
+  rm -rf -- "${tmpdir}"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "maintainer-comment-candidates.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
 trap cleanup EXIT
 
 fail() {
@@ -135,6 +145,7 @@ run /dev/null --help
 expect_status 0 "--help exits 0"
 expect_out 'monorepo#3163' "--help names the motivating issue"
 
+test_run_finished=1
 if [ "${failures}" -ne 0 ]; then
   echo "maintainer-comment-candidates.test.sh: ${failures} of ${checks} checks FAILED" >&2
   exit 1

@@ -18,7 +18,17 @@ artifacts_guide="$script_dir/../guides/github-artifacts.md"
 failures=0
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/comment-disclosure-drift-test.XXXXXX")"
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
-cleanup() { rm -rf -- "$tmpdir"; }
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+cleanup() {
+  local status=$?
+  rm -rf -- "$tmpdir"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "comment-disclosure-drift.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
 trap cleanup EXIT
 
 # expect_exit <want> <label> -- <command...>
@@ -676,6 +686,7 @@ sed -i.bak 's#\*"/pulls/comments?since="\*) printf .*#*"/pulls/comments?since="*
 expect_exit 2 "--since fails closed when the inline comments read fails" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
 
 echo
+test_run_finished=1
 if [ "$failures" -ne 0 ]; then
   echo "comment-disclosure-drift.test.sh: $failures assertion(s) failed"
   exit 1

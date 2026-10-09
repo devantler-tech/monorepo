@@ -15,9 +15,17 @@ tool="$script_dir/agent-claim-sweep.sh"
 
 tmp="$(mktemp -d)"
 completed=0
-# The completion flag keeps an aborted run from reporting success through the
-# cleanup trap.
-trap 'rm -rf "$tmp"; [[ $completed == 1 ]] || exit 1' EXIT
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ]; then
+    echo "agent-claim-sweep.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
 
 failures=0
 pass() { printf 'ok   — %s\n' "$1"; }

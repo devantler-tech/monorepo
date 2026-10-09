@@ -307,6 +307,15 @@ dotfile-glob-fanout-contract.test.sh|
 plugin-definition-currency.test.sh|
 submodule-init.test.sh|
 worktree-claim.test.sh|
+agent-claim-sweep.test.sh|
+bash-parse-guard.test.sh|
+comment-disclosure-drift.test.sh|
+contract-test-invocation.test.sh|
+gnu-only-syntax-guard.test.sh|
+maintainer-comment-candidates.test.sh|
+pr-ownership-disclosure.test.sh|
+pr-worktree-holder.test.sh|
+required-gate-completeness.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"

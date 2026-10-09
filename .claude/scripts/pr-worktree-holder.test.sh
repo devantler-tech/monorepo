@@ -45,7 +45,17 @@ checks=0
 failures=0
 finished=0
 sandbox="$(mktemp -d "${TMPDIR:-/tmp}/pr-worktree-holder-test.XXXXXX")"
-trap 'rm -rf -- "${sandbox}"; if [ "${finished}" != 1 ]; then echo "pr-worktree-holder.test.sh: aborted before finishing" >&2; exit 1; fi' EXIT
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf -- "${sandbox}"
+  if [ "${finished}" != 1 ]; then
+    echo "pr-worktree-holder.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
 sandbox="$(cd "${sandbox}" && /bin/pwd -P)"
 
 [ -x "${tool}" ] || { echo "FAIL cannot execute ${tool}" >&2; exit 1; }
