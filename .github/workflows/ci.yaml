@@ -802,6 +802,8 @@ jobs:
               - '.claude/guides/**'
               - '.claude/scripts/contract-text.sh'
               - '.claude/scripts/lane-draft-count.sh'
+              # The live path reads through this helper's conditional reader.
+              - '.claude/scripts/blocked-label-blocker-line.sh'
               - '.claude/scripts/lane-draft-count.test.sh'
               # The run loop's fail-closed intake check is pinned by this suite.
               - '.claude/skills/portfolio-maintenance/SKILL.md'

@@ -18,6 +18,11 @@
 # complete. The repository list is verified first, then every non-archived repository's open PRs
 # are read in full.
 #
+# COST: the reads are conditional. A list the forge confirms unchanged in this call is taken from
+# the copy kept by the previous call and is not charged to the hourly request budget; nothing is
+# reused on age, so a count is still only what the forge confirmed while it was being read
+# (monorepo#4055). The kept pages live where blocked-label-blocker-line.sh keeps its own.
+#
 # FAILS CLOSED. A count is printed only when the read is provably complete; otherwise UNKNOWN:
 #   - any failed request;
 #   - a credential that cannot list every organisation repository (public + private), since a
@@ -44,12 +49,15 @@
 #   LANE_REPOS_VISIBLE    repositories the credential could list
 #   LANE_REPOS_EXPECTED_2 / LANE_REPOS_VISIBLE_2  the second pass's inventory (default: the first)
 #   LANE_REPOS_VISIBLE_3  the inventory read after the last scan (default: the second)
+# LANE_FORGE_READ replaces the conditional reader of the live path (a program called as
+# `<program> read <endpoint>...` that prints one line of pages per endpoint).
 set -uo pipefail
 
 CAP=20
 LANE=""
 ORG=devantler-tech
-INSTANCES="${AGENT_INSTANCES_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../plugin-consumption/agent-instances.json}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTANCES="${AGENT_INSTANCES_FILE:-$HERE/../plugin-consumption/agent-instances.json}"
 
 unknown() { echo "lane-draft-count: UNKNOWN — $*" >&2; echo "verdict=UNKNOWN"; exit 2; }
 need_val() { [ $# -ge 2 ] && [ -n "$2" ] || unknown "$1 needs a value"; }
@@ -60,7 +68,7 @@ while [ $# -gt 0 ]; do
     --lane)      need_val "$@"; LANE="$2"; shift 2 ;;
     --cap)       need_val "$@"; CAP="$2"; shift 2 ;;
     --instances) need_val "$@"; INSTANCES="$2"; shift 2 ;;
-    -h|--help)   sed -n '2,45p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '2,53p' "$0"; exit 0 ;;
     *)           unknown "unknown argument: $1" ;;
   esac
 done
@@ -79,32 +87,51 @@ lanes=$(jq -ec '
 ' "$INSTANCES" 2>/dev/null) || unknown "instance registry is unreadable or malformed"
 printf '%s' "$lanes" | jq -e --arg l "$LANE" 'any(.[]; .ns == $l)' >/dev/null || unknown "lane '$LANE' is not a registered namespace"
 
+# forge_read <endpoint>... — one line per endpoint: the JSON array of its pages. The reads are
+# conditional (blocked-label-blocker-line-go/read.go): a page the forge confirms unchanged in THIS
+# call costs nothing against the hourly request budget, and nothing is ever served on age. One
+# count used to cost about 72 requests, almost all of them for lists that had not changed since
+# the previous run (monorepo#4055). LANE_FORGE_READ replaces the reader in tests.
+FORGE_READ="${LANE_FORGE_READ:-$HERE/blocked-label-blocker-line.sh}"
+forge_read() { "$FORGE_READ" read "$@" 2>/dev/null; }
+
 # read_drafts <repo-names> — every open draft across those repositories, sorted by id.
 read_drafts() {
-  local repo page out="[]"
-  for repo in $1; do
-    page=$(set -o pipefail; gh api --paginate --slurp "repos/$ORG/$repo/pulls?state=open&per_page=100" 2>/dev/null | jq -c '
-      [.[][] | select(.draft == true) | {
+  local repo pages endpoints=()
+  for repo in $1; do endpoints+=("repos/$ORG/$repo/pulls?state=open&per_page=100"); done
+  if [ "${#endpoints[@]}" -eq 0 ]; then printf '[]'; return 0; fi
+  pages=$(forge_read "${endpoints[@]}") || unknown "open pull requests are unreadable"
+  # One line per repository, or the read is short: a missing line would drop that repository's
+  # drafts from the count without a trace.
+  [ "$(printf '%s\n' "$pages" | jq -cs 'length' 2>/dev/null)" = "${#endpoints[@]}" ] \
+    || unknown "open pull requests were read for fewer repositories than were asked"
+  printf '%s\n' "$pages" | jq -cse '
+    select(all(.[]; type == "array" and length > 0 and all(.[]; type == "array")))
+    | [.[][][] | select(.draft == true) | {
         id: .node_id,
         headRefName: .head.ref,
         isCrossRepository: ((.head.repo.full_name // "") != .base.repo.full_name),
-        author: {login: .user.login}}]') || unknown "open pull requests of $repo are unreadable"
-    out=$(jq -nc --argjson a "$out" --argjson b "$page" '$a + $b') || unknown "pull request page could not be merged"
-  done
-  printf '%s' "$out" | jq -c 'sort_by(.id)'
+        author: {login: .user.login}}]
+    | sort_by(.id)' || unknown "open pull request pages are malformed"
 }
 
 # read_inventory — {expected, visible, repos:[{name, archived}]} for the organisation right now.
 read_inventory() {
-  local totals pub priv repos
+  local pages totals pub priv repos
+  pages=$(forge_read "orgs/$ORG" "orgs/$ORG/repos?type=all&per_page=100") \
+    || unknown "organisation repository totals or listing are unreadable"
+  [ "$(printf '%s\n' "$pages" | jq -cs 'length' 2>/dev/null)" = 2 ] \
+    || unknown "organisation read is short"
   # total_private_repos is null for a credential without org-owner visibility; is_count rejects it.
-  totals=$(gh api "orgs/$ORG" --jq '(.public_repos // "x" | tostring) + " " + (.total_private_repos // "x" | tostring)' 2>/dev/null) \
-    || unknown "organisation repository totals are unreadable"
+  totals=$(printf '%s\n' "$pages" | jq -rse '.[0] | select(type == "array" and length == 1) | .[0]
+    | (.public_repos // "x" | tostring) + " " + (.total_private_repos // "x" | tostring)') \
+    || unknown "organisation repository totals are malformed"
   pub=${totals%% *}; priv=${totals##* }
   is_count "$pub" && is_count "$priv" || unknown "the credential cannot see the organisation's private repository total"
-  repos=$(set -o pipefail; gh api --paginate --slurp "orgs/$ORG/repos?type=all&per_page=100" 2>/dev/null \
-    | jq -c '[.[][] | {name, archived: (.archived == true)}] | sort_by(.name)') \
-    || unknown "organisation repository listing failed"
+  repos=$(printf '%s\n' "$pages" | jq -cse '.[1]
+    | select(type == "array" and length > 0 and all(.[]; type == "array"))
+    | [.[][] | {name, archived: (.archived == true)}] | sort_by(.name)') \
+    || unknown "organisation repository listing is malformed"
   jq -nc --argjson e "$((pub + priv))" --argjson r "$repos" '{expected: $e, visible: ($r | length), repos: $r}'
 }
 
