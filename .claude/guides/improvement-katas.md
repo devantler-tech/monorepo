@@ -5,6 +5,10 @@
 
 ## Ownership and records
 
+The challenge is a safer, higher-quality engineer with shorter end-to-end delivery time. Improvement
+is earned by observed outcomes, never by instruction volume or merged definition changes. Project 5
+and typed Kata issues carry targets, obstacles and checkpoints; due measurements are finishing work.
+
 The Agent Improver owns cross-run engineer/observer improvement and reads the reviewed skill's
 `references/improvement-kata.md` when this opt-in resolves. The Agentic Engineer finishes its
 assigned delivery and due product experiments through normal product-engineering gates; it never
