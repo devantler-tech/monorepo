@@ -236,6 +236,20 @@ FAIL_ON=reviews sweep
 [ "$rc" -eq 2 ] || { cat "$tmp/out" >&2; fail "a symlinked cache must not be read: a failed sweep stays UNKNOWN, got $rc"; }
 rm -f "$cached"
 
+# The file name carries --since, which moves daily: storing a sweep drops stored sweeps and leftover
+# part files more than a day old, and nothing else in the directory.
+: >"$tmp/cache/o.2026-09-01.60.events"
+: >"$tmp/cache/.part.old"
+: >"$tmp/cache/keep.txt"
+touch -t 202001010000 "$tmp/cache/o.2026-09-01.60.events" "$tmp/cache/.part.old" "$tmp/cache/keep.txt"
+sweep
+[ -f "$cached" ] || fail "the sweep must be stored"
+if [ -e "$tmp/cache/o.2026-09-01.60.events" ] || [ -e "$tmp/cache/.part.old" ]; then
+  fail "storing a sweep must drop stored sweeps and part files more than a day old"
+fi
+[ -e "$tmp/cache/keep.txt" ] || fail "pruning must leave files that are not stored sweeps alone"
+rm -f "$cached"
+
 # A failed sweep stores nothing, so the next call cannot read a partial sweep as a complete one.
 FAIL_ON=check-runs sweep --cache-dir "$tmp/cache-fail"
 [ "$rc" -eq 2 ] || fail "a failed sweep must exit 2, got $rc"

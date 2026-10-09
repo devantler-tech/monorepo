@@ -40,7 +40,7 @@
 # dozens of times a day and the budget ran out for hours (monorepo#3973). The verdict is org-wide and
 # coarse in time, so a completed sweep is kept in a private per-user cache and reused for
 # --cache-seconds (default 900). Only a COMPLETE sweep is stored. A cache that is missing, too old,
-# from the future, not a private regular file of this user, for other arguments, or malformed in any
+# from the future, not this user's own regular file, for other arguments, or malformed in any
 # line is ignored and a new sweep runs, so a failed read still reports UNKNOWN and a stored sweep is
 # never reported past its lifetime. A reused sweep is announced on stderr; --refresh forces a new one.
 #
@@ -219,6 +219,9 @@ else
         mkdir -p "$cache_dir" && part="$(mktemp "$cache_dir/.part.XXXXXX")" || exit 1
         { printf '%s%s\n' "$cache_head" "$now" && cat "$tmp/events"; } >"$part" &&
           mv -f "$part" "$cache_file" || { rm -f "$part"; exit 1; }
+        # The name carries --since, which moves every day: drop what yesterday left behind.
+        find "$cache_dir" -maxdepth 1 -type f \( -name '*.events' -o -name '.part.*' \) -mtime +1 \
+          -exec rm -f {} + || true
       ) 2>/dev/null; then :
       else
         echo "review-lane-health: could not store the sweep in $cache_dir; the next call sweeps again" >&2
