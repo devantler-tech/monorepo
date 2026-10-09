@@ -1049,26 +1049,26 @@ jobs:
         with:
           node-version: "24"
           cache: "npm"
-          cache-dependency-path: applications/business-site/docs/package-lock.json
+          cache-dependency-path: applications/business-site/package-lock.json
       - name: Verify lockfile with older supported npm
-        working-directory: applications/business-site/docs
+        working-directory: applications/business-site
         run: npx --yes --package=npm@11.4.2 npm ci --ignore-scripts
       - name: Install dependencies
-        working-directory: applications/business-site/docs
+        working-directory: applications/business-site
         run: npm ci
       - name: Build enabled preview
-        working-directory: applications/business-site/docs
+        working-directory: applications/business-site
         env:
           FEATURE_PREVIEW_BANNER: "true"
         run: npm run build
       - name: Build
-        working-directory: applications/business-site/docs
+        working-directory: applications/business-site
         env:
           LC_ALL: C
           FEATURE_PREVIEW_BANNER: "false"
         run: npm run build
       - name: Build default production
-        working-directory: applications/business-site/docs
+        working-directory: applications/business-site
         run: env -u FEATURE_PREVIEW_BANNER npm run build
 
   test-business-site-integration:
@@ -1111,20 +1111,20 @@ jobs:
         with:
           node-version: "24"
           cache: "npm"
-          cache-dependency-path: applications/business-site/docs/package-lock.json
+          cache-dependency-path: applications/business-site/package-lock.json
       - name: Install MDX parser dependencies
-        working-directory: applications/business-site/docs
+        working-directory: applications/business-site
         run: npm ci
       # Verify the drift checker itself first — self-contained fixtures, no
       # submodule checkout needed, so it fails fast if a refactor broke a check.
       - name: Self-test the drift checker
-        run: bash applications/business-site/docs/scripts/check-active-projects-drift.test.sh
+        run: bash applications/business-site/scripts/check-active-projects-drift.test.sh
       - name: Verify catalogue CI selection and immutable automation checkout
         run: bash .claude/scripts/business-site-ci.test.sh
       - name: Self-test the CV drift checker
-        run: bash applications/business-site/docs/scripts/check-cv-drift.test.sh
+        run: bash applications/business-site/scripts/check-cv-drift.test.sh
       - name: Check the About page and CV data for drift
-        run: node --disable-warning=ExperimentalWarning applications/business-site/docs/scripts/check-cv-drift.mjs applications/business-site/docs/src/content/docs/about.mdx applications/business-site/docs/src/data/cv.ts
+        run: node --disable-warning=ExperimentalWarning applications/business-site/scripts/check-cv-drift.mjs applications/business-site/src/content/docs/about.mdx applications/business-site/src/data/cv.ts
       - name: Resolve current automation gitlink
         id: automation-pin
         run: |
@@ -1145,7 +1145,7 @@ jobs:
       - name: Check Active Projects lists for drift
         env:
           SITE_ROOT: ${{ github.workspace }}/applications/business-site
-        run: bash applications/business-site/docs/scripts/check-active-projects-drift.sh
+        run: bash applications/business-site/scripts/check-active-projects-drift.sh
 
   test-agent-telemetry:
     name: Test agent telemetry miner

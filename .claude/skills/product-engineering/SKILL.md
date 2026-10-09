@@ -279,7 +279,7 @@ repository's formatter; each product's maintenance contract remains authoritativ
 Treat docs as part of the product — keep them **in sync** with what ships and **improve** what exists.
 - **Sync (definition of done).** A feature/fix that changes behaviour, flags, commands, config, or UX
   updates the affected docs **in the same PR**: the CLI `--help`/generated reference, README, the
-  repo's `AGENTS.md`, and the relevant `business-site/docs/` page. Re-run the doc generator (e.g.
+  repo's `AGENTS.md`, and the relevant `business-site/src/content/` page. Re-run the doc generator (e.g.
   KSail's command reference); **never hand-edit generated docs**. If a change already merged without
   its docs, **backfill** them in a focused `docs:` PR.
 - **Improve (on the docs cadence).** Pick an under-served area and make it genuinely better: fix
@@ -313,7 +313,7 @@ Treat docs as part of the product — keep them **in sync** with what ships and 
   - Adding explanation where there was none may make a page *longer*; that is an acceptable trade
     when it raises usefulness per word. Say so plainly in the PR rather than implying it shrank.
 - **Scope.** Spans **every product's own docs** (README, `AGENTS.md`, usage/reference) and the central
-  **devantler.tech site** (`applications/business-site/docs/`). Its recurring slice (Site QA, Content Sync, Content Review)
+  **devantler.tech site** (`applications/business-site/`). Its recurring slice (Site QA, Content Sync, Content Review)
   lives in the [business-site card](../products/business-site/SKILL.md); this section is the cross-product
   discipline that also covers per-product docs. `docs:`-titled PRs are first-class advance work.
 
