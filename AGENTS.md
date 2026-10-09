@@ -133,6 +133,7 @@ The plugin's agents and skills fail closed unless these named sections resolve:
 | **Authority model** | [Authority model](#authority-model) |
 | **Spend contract** | [Spend contract](#spend-contract--the-money-side-of-the-same-portfolio) |
 | **Inference routing** (optional) | [Inference routing](#inference-routing) |
+| **Improvement katas** (optional) | [Improvement katas](#improvement-katas) |
 
 ### Trust gate — who may be auto-driven / pushed-to / have branch code run
 
@@ -267,6 +268,15 @@ Resolve your exact registered instance before any claim or push. The shared `age
 is a coordination ref, not a writer lane, and is managed only through `.claude/scripts/agent-claim.sh`.
 Full rules: [claim protocol guide](.claude/guides/claim-protocol.md).
 
+### Improvement katas
+
+This deployment opts into the reviewed Agent Improvement skill's improvement-kata procedure.
+The challenge is a safer, higher-quality engineer with shorter end-to-end delivery time; improvement
+is earned by observed outcomes, never by instruction volume or merged definition changes.
+Project 5 and typed Kata issues carry targets, obstacles and measurement checkpoints; native
+hypotheses retain their existing permission and privacy rules. Due measurements are finishing work.
+See [the consumer kata guide](.claude/guides/improvement-katas.md) for ownership, records and flow.
+
 ### Inference routing
 
 The reviewed [routing policy](.claude/plugin-consumption/inference-routing.policy.json) and instance
@@ -339,6 +349,7 @@ change updates both in one PR. A section cited as "AGENTS.md → *X*" resolves t
 | [review-lanes](.claude/guides/review-lanes.md) | green-review gate · Requesting reviews · Local review round | requesting or judging a review |
 | [merge-policy](.claude/guides/merge-policy.md) | Merge policy · You own EVERY pull request · Dependency-automation PRs | taking over, merging or closing a PR |
 | [issues-and-board](.claude/guides/issues-and-board.md) | roadmaps · Issue hierarchy · the board | filing or triaging an issue |
+| [improvement-katas](.claude/guides/improvement-katas.md) | Improvement katas · measurement checkpoints | starting or reading back an improvement experiment |
 | [advance-work](.claude/guides/advance-work.md) | Build the right thing · Enhancement work · Security hardening · Feature flags · Scripting stack · Holistic review | starting advance work |
 | [trust-and-input](.claude/guides/trust-and-input.md) | Trust gate · Untrusted input | acting on content you did not write |
 | [egress-and-privacy](.claude/guides/egress-and-privacy.md) | Professional-work boundary · Egress · Sensitive information · Local agent host | publishing, handling a credential, or leaving the portfolio |
