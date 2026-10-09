@@ -12,23 +12,34 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
+# Validate the candidate index too: CI's index is the reviewed committed tree.
+# Publication itself still resolves HEAD, never an uncommitted working-tree pin.
+entry=$(git --no-replace-objects -C "$ROOT" ls-files --stage -- applications/business-site)
+[[ "$entry" =~ ^160000[[:space:]]([0-9a-f]{40})[[:space:]]0[[:space:]]applications/business-site$ ]] || {
+  echo 'FAIL: candidate business-site gitlink is missing or conflicted' >&2
+  exit 1
+}
+source_pin=${BASH_REMATCH[1]}
 check() {
-  yq -o=json '.' "$1" | jq -er '
+  yq -o=json '.' "$1" | jq -er --arg pin "$source_pin" '
     .on.push.branches == ["main"] and
     (.on.push.paths | index("applications/business-site") != null) and
     (.on.push.paths | index(".github/workflows/publish-pages.yaml") != null) and
     (.on.push.paths | index(".claude/scripts/business-site-revision.sh") != null) and
     (.on | has("workflow_dispatch")) and
+    .on.schedule == [{"cron":"13 0,6,12,18 * * *"}] and
     .concurrency.group == "pages" and
     .concurrency["cancel-in-progress"] == true and
     .jobs.revision.permissions == {"contents":"read"} and
     .jobs.revision.outputs.revision == "${{ steps.pin.outputs.revision }}" and
     ([.jobs.revision.steps[] | select((.uses // "") | startswith("actions/checkout@"))] | length == 1) and
     ([.jobs.revision.steps[] | select((.uses // "") | startswith("actions/checkout@"))][0].with["persist-credentials"] == false) and
+    ([.jobs.revision.steps[] | select((.uses // "") | startswith("actions/checkout@"))][0].with.ref == "${{ github.sha }}") and
     ([.jobs.revision.steps[] | select(.id == "pin")][0].run ==
       "revision=$(bash .claude/scripts/business-site-revision.sh)\nprintf '\''revision=%s\\n'\'' \"$revision\" >> \"$GITHUB_OUTPUT\"\n") and
     .jobs.publish.needs == "revision" and
     (.jobs.publish.uses | test("^devantler-tech/business-site/\\.github/workflows/publish-pages\\.yaml@[0-9a-f]{40}$")) and
+    .jobs.publish.uses == ("devantler-tech/business-site/.github/workflows/publish-pages.yaml@" + $pin) and
     .jobs.publish.with["source-revision"] == "${{ needs.revision.outputs.revision }}" and
     .jobs.publish.permissions == {"contents":"read","pages":"write","id-token":"write"} and
     (.jobs.publish | has("secrets") | not) and
@@ -49,7 +60,12 @@ reject() {
   fi
 }
 reject 'mutable reusable workflow' '.jobs.publish.uses = "devantler-tech/business-site/.github/workflows/publish-pages.yaml@main"'
+reject 'publisher differs from application pin' '.jobs.publish.uses = "devantler-tech/business-site/.github/workflows/publish-pages.yaml@0123456789abcdef0123456789abcdef01234567"'
 reject 'mutable source input' '.jobs.publish.with."source-revision" = "main"'
+reject 'missing public ranking refresh' 'del(.on.schedule)'
+reject 'unreviewed refresh cadence' '.on.schedule[0].cron = "* * * * *"'
+reject 'mutable caller checkout' '(.jobs.revision.steps[] | select((.uses // "") | test("^actions/checkout@")) | .with.ref) = "main"'
+reject 'unbound caller checkout' 'del(.jobs.revision.steps[] | select((.uses // "") | test("^actions/checkout@")) | .with.ref)'
 reject 'missing publication serialization' 'del(.concurrency)'
 reject 'missing in-flight cancellation' 'del(.concurrency."cancel-in-progress")'
 reject 'disabled in-flight cancellation' '.concurrency."cancel-in-progress" = false'
