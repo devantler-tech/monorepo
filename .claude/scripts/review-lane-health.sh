@@ -35,8 +35,18 @@
 # Local review round still requires direct current-PR reads for all verdicts and findings; verified
 # applicable unavailability across all three lanes permits immediate fallback without quota waits.
 #
+# ONE SWEEP IS SHARED. A sweep reads four lists per pull request, at least 240 REST calls for the
+# default 60, from the 5,000 an hour every lane and interactive session shares; both lanes ran it
+# dozens of times a day and the budget ran out for hours (monorepo#3973). The verdict is org-wide and
+# coarse in time, so a completed sweep is kept in a private per-user cache and reused for
+# --cache-seconds (default 900). Only a COMPLETE sweep is stored. A cache that is missing, too old,
+# from the future, not a private regular file of this user, for other arguments, or malformed in any
+# line is ignored and a new sweep runs, so a failed read still reports UNKNOWN and a stored sweep is
+# never reported past its lifetime. A reused sweep is announced on stderr; --refresh forces a new one.
+#
 # Usage:
 #   review-lane-health.sh [--org ORG] [--since YYYY-MM-DD] [--limit N] [--stale-hours N] [--now EPOCH]
+#                         [--cache-seconds N] [--cache-dir DIR] [--refresh]
 #   review-lane-health.sh --events FILE [--stale-hours N] [--now EPOCH]   # classify recorded events
 #
 # Events are tab-separated: lane (cr|codex|bugbot), ISO-8601 UTC time, ok|fail|declined, cause (- when
@@ -49,6 +59,7 @@
 set -euo pipefail
 
 org="devantler-tech" since="" limit=60 stale_hours=72 now="" events_file=""
+cache_seconds=900 cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/review-lane-health" refresh=0
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -58,10 +69,14 @@ while [ $# -gt 0 ]; do
     --stale-hours) stale_hours="${2:-}"; shift 2 || usage ;;
     --now) now="${2:-}"; shift 2 || usage ;;
     --events) events_file="${2:-}"; shift 2 || usage ;;
+    --cache-seconds) cache_seconds="${2:-}"; shift 2 || usage ;;
+    --cache-dir) cache_dir="${2:-}"; shift 2 || usage ;;
+    --refresh) refresh=1; shift ;;
     *) usage ;;
   esac
 done
-[[ "$limit" =~ ^[0-9]+$ && "$stale_hours" =~ ^[0-9]+$ ]] || usage
+[[ "$limit" =~ ^[0-9]+$ && "$stale_hours" =~ ^[0-9]+$ && "$cache_seconds" =~ ^[0-9]+$ ]] || usage
+[ -n "$cache_dir" ] || usage
 [ -z "$now" ] && now="$(date -u +%s)"
 [[ "$now" =~ ^[0-9]+$ ]] || usage
 command -v jq >/dev/null || { echo "review-lane-health: jq is required — UNKNOWN" >&2; exit 2; }
@@ -162,13 +177,54 @@ else
   if [ -z "$since" ]; then
     since="$(date -u -v-7d +%Y-%m-%d 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%d)"
   fi
-  gh search prs --owner "$org" --updated ">=$since" --archived=false --sort updated --order desc \
-    --limit "$limit" --json repository,number \
-    --jq '.[] | "\(.repository.name) \(.number)"' >"$tmp/prs" || unknown "cannot search $org pull requests"
-  while IFS= read -r pr; do
-    [ -n "$pr" ] || continue
-    collect_pr "${pr%% *}" "${pr##* }"
-  done <"$tmp/prs"
+  # The stored sweep is named and headed by the arguments that decide what a sweep reads, so a sweep
+  # for other arguments is never reused. Arguments that cannot be a safe file name are not cached.
+  cache_file="" cache_head="# review-lane-health sweep org=$org since=$since limit=$limit at="
+  if [ "$cache_seconds" -gt 0 ] && [[ "$org" =~ ^[A-Za-z0-9._-]+$ && "$since" =~ ^[0-9-]+$ ]]; then
+    cache_file="$cache_dir/$org.$since.$limit.events"
+  fi
+  # cache_usable — true only for a private regular file of this user whose first line names these
+  # arguments and a sweep time within the lifetime, and whose every other line is a well-formed event.
+  cache_usable() {
+    local first at
+    [ -n "$cache_file" ] && [ "$refresh" = 0 ] || return 1
+    [ -f "$cache_file" ] && [ ! -L "$cache_file" ] && [ -O "$cache_file" ] && [ -r "$cache_file" ] || return 1
+    IFS= read -r first <"$cache_file" || return 1
+    [ "${first#"$cache_head"}" != "$first" ] || return 1
+    at="${first#"$cache_head"}"
+    [[ "$at" =~ ^[0-9]+$ ]] && [ "$at" -le "$now" ] && [ $((now - at)) -le "$cache_seconds" ] || return 1
+    awk -F'\t' 'NR == 1 { next }
+      !((NF == 4 || NF == 5) && $1 ~ /^(cr|codex|bugbot)$/ && $3 ~ /^(ok|fail|declined)$/ &&
+        $2 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) { bad = 1 }
+      END { exit bad }' "$cache_file" || return 1
+    cache_at="$at"
+  }
+  if cache_usable; then
+    sed 1d "$cache_file" >"$tmp/events" || unknown "cannot read $cache_file"
+    echo "review-lane-health: reusing the sweep taken at epoch $cache_at ($((now - cache_at))s old); --refresh forces a new one" >&2
+  else
+    gh search prs --owner "$org" --updated ">=$since" --archived=false --sort updated --order desc \
+      --limit "$limit" --json repository,number \
+      --jq '.[] | "\(.repository.name) \(.number)"' >"$tmp/prs" || unknown "cannot search $org pull requests"
+    while IFS= read -r pr; do
+      [ -n "$pr" ] || continue
+      collect_pr "${pr%% *}" "${pr##* }"
+    done <"$tmp/prs"
+    # Every read above succeeded, or the script has already exited UNKNOWN: only a complete sweep is
+    # stored. It is dated at this run's start, so it expires no later than its oldest read allows.
+    # Storing is best-effort: the verdict below stands on the sweep, not on the cache.
+    if [ -n "$cache_file" ]; then
+      if (
+        umask 077
+        mkdir -p "$cache_dir" && part="$(mktemp "$cache_dir/.part.XXXXXX")" || exit 1
+        { printf '%s%s\n' "$cache_head" "$now" && cat "$tmp/events"; } >"$part" &&
+          mv -f "$part" "$cache_file" || { rm -f "$part"; exit 1; }
+      ) 2>/dev/null; then :
+      else
+        echo "review-lane-health: could not store the sweep in $cache_dir; the next call sweeps again" >&2
+      fi
+    fi
+  fi
 fi
 
 # to_epoch <ISO-8601 UTC> — BSD and GNU date spell the parse differently.

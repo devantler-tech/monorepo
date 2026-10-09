@@ -318,7 +318,9 @@ the account and that **an admin must raise the limit in the Cursor dashboard**. 
   looks like many PRs that simply have no review yet: Bugbot's 2026-07-21 usage limit went unreported
   for weeks that way (#2561). Run
   [`.claude/scripts/review-lane-health.sh`](../scripts/review-lane-health.sh) once per run
-  before requesting reviews. It prints one `LANE-HEALTH` line per lane: `OK`, `LIMITED` (a rate limit
+  before requesting reviews. A sweep costs about 240 API reads, so a completed one is shared for 15
+  minutes across runs and lanes, and a reused one says so on stderr; pass `--refresh` only when you
+  need what the lanes published since then (#3973). It prints one `LANE-HEALTH` line per lane: `OK`, `LIMITED` (a rate limit
   that clears on its own), `DOWN` (`MAINTAINER-ONLY` for a usage limit), or `NO-EVIDENCE`. A
   `LIMITED` line ends with `until=<UTC>` when the refusal stated its retry window, and adds `elapsed`
   once that time has passed. Do not request that lane before `until`: go to the next lane or a
