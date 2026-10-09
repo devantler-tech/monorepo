@@ -1,8 +1,8 @@
 # AGENTS.md — devantler-tech monorepo
 
-The **always-on core** for AI agents in this monorepo: every session loads it, so it holds only what
-every session needs. Everything else lives in the [agent guides](#agent-guides) or next to the code it
-governs — **read the guide an entry names before doing that kind of work.** Each product submodule
+The **always-on core**: every session loads it; keep only universal guidance here. Topic rules live
+in the [agent guides](#agent-guides) or beside the code — **read the guide an entry names before doing
+that kind of work.** Each product submodule
 has its own `AGENTS.md`, whose `## Maintenance` section wins for that repository.
 
 ## What this repo is
