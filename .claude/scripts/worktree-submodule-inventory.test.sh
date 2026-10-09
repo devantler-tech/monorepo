@@ -260,6 +260,37 @@ out=$(bash "$SUT" "$ROOT" 2>&1); rc=$?
   && ok "a submodule named by both sources is listed once" || bad "a submodule named by both sources is listed once" "rc=$rc: $out"
 ROOT=$ROOT_SAVE
 
+# --tips names the commits an entry holds away from HEAD, by what holds each one.
+ROOT="$TMP/tips"; mkdir -p "$ROOT"; s=$(make_wt t-held)
+g -C "$s" checkout -q -b side; echo one > "$s/f"; g -C "$s" commit -qam one; echo two > "$s/f"; g -C "$s" commit -qam two
+side=$(g -C "$s" rev-parse HEAD)
+g -C "$s" checkout -q main
+echo tagged > "$s/f"; g -C "$s" commit -qam tagged; g -C "$s" tag -a -m release v1; tagged=$(g -C "$s" rev-parse HEAD)
+g -C "$s" reset -q --hard origin/main
+echo lost > "$s/f"; g -C "$s" commit -qam lost; lost=$(g -C "$s" rev-parse HEAD)
+g -C "$s" reset -q --hard origin/main
+echo aside > "$s/f"; g -C "$s" stash -q; stashed=$(g -C "$s" rev-parse refs/stash)
+s=$(make_wt u-clean)
+out=$(bash "$SUT" "$ROOT" --tips 2>&1); rc=$?
+tip() { grep $'^TIP\tt-held\tsub\ttip='"$1"$'\t' <<<"$out" | cut -f5-; }
+[ "$rc" -eq 0 ] && ok "--tips exits 0" || bad "--tips exits 0" "rc=$rc: $out"
+[ "$(tip "$side")" = $'kind=branch\tref=side\tcommits=2' ] \
+  && ok "a local branch is named with the commits it alone reaches" || bad "a local branch tip" "$out"
+[ "$(tip "$tagged")" = $'kind=ref\tref=refs/tags/v1\tcommits=1' ] \
+  && ok "an annotated tag is named by the commit it points at" || bad "an annotated tag tip" "$out"
+[ "$(tip "$lost")" = $'kind=reflog\tref=-\tcommits=1' ] \
+  && ok "a commit only old history keeps is a reflog tip" || bad "a reflog tip" "$out"
+case "$(tip "$stashed")" in $'kind=stash\tref=-\tcommits='[1-9]) ok "a stash is named as a stash" ;; *) bad "a stash tip" "$out" ;; esac
+[ "$(grep -c '^TIP' <<<"$out")" -eq 4 ] \
+  && ok "only tips are listed: no commit below one, none for a clean entry" || bad "only tips are listed" "$out"
+[ "$(grep -n $'^ENTRY\tt-held\t' <<<"$out" | cut -d: -f1)" -lt "$(grep -n '^TIP' <<<"$out" | head -n 1 | cut -d: -f1)" ] \
+  && ok "an entry's TIP rows follow its ENTRY row" || bad "an entry's TIP rows follow its ENTRY row" "$out"
+grep -q $'\tunreadable=0\ttips=4$' <<<"$out" && ok "the closing line counts the tips" || bad "the closing line counts the tips" "$out"
+out=$(bash "$SUT" "$ROOT" 2>&1)
+{ ! grep -q '^TIP' <<<"$out" && grep -q $'\tunreadable=0$' <<<"$out"; } \
+  && ok "without --tips the output is unchanged" || bad "without --tips the output is unchanged" "$out"
+ROOT=$ROOT_SAVE
+
 # A root with no worktree at all is the wrong directory, not an empty inventory.
 mkdir -p "$TMP/empty/plain"
 bash "$SUT" "$TMP/empty" >/dev/null 2>&1; [ $? -eq 2 ] && ok "a root holding no worktree exits 2" || bad "a root holding no worktree exits 2"

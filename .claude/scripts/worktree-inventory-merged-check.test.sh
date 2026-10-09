@@ -38,10 +38,11 @@ mkdir -p "$BIN" "$FIX" "$ROOT"
 cat > "$BIN/gh" <<'STUB'
 #!/usr/bin/env bash
 # Answers `gh api graphql` from $FIX/<sha>.json; a missing fixture is a failed request.
+# A ref question (q=refs/...) is answered from $FIX/ref-<last path component>.json.
 set -euo pipefail
 sha=''; name=''; owner=''; host=''; prev=''
 for a in "$@"; do
-  case "$a" in sha=*) sha=${a#sha=} ;; r=*) name=${a#r=} ;; o=*) owner=${a#o=} ;; esac
+  case "$a" in sha=*) sha=${a#sha=} ;; r=*) name=${a#r=} ;; o=*) owner=${a#o=} ;; q=*) sha="ref-${a##*/}" ;; esac
   [ "$prev" != --hostname ] || host=$a
   prev=$a
 done
@@ -117,6 +118,11 @@ g -C "$ROOT/w-same/sub" symbolic-ref -d refs/remotes/origin/HEAD
 g -C "$ROOT/w-held/sub" checkout -q -b side
 for i in 1 2 3 4 5 6 7 8; do echo "$i" > "$ROOT/w-held/sub/f"; g -C "$ROOT/w-held/sub" commit -qam "side $i"; done
 g -C "$ROOT/w-held/sub" checkout -q main
+# w-local's HEAD is pushed, and it keeps 3 commits on another local branch.
+g -C "$ROOT/w-local/sub" update-ref refs/remotes/origin/main HEAD
+g -C "$ROOT/w-local/sub" checkout -q -b side
+for i in 1 2 3; do echo "$i" > "$ROOT/w-local/sub/f"; g -C "$ROOT/w-local/sub" commit -qam "side $i"; done
+g -C "$ROOT/w-local/sub" checkout -q main
 
 prs w-merged 1 "[$(node 11 MERGED "$(sha_of w-merged)")]"
 prs w-open   1 "[$(node 12 OPEN "$(sha_of w-open)" main devantler-tech/platform)]"
@@ -302,6 +308,82 @@ OUT=$(bash "$INVENTORY" "$E2E" | PATH="$BIN:$PATH" bash "$SUT" "$E2E" 2>"$TMP/er
 check 'the inventory output is read as it is printed' out_has \
   "^MERGE-CHECK	wt	sub	merged	head=$head_sha	repo=devantler-tech/ksail	pr=31	other_local=0\$"
 check 'and exits 0' rc_is 0
+
+echo '== tips: the commits an entry holds away from HEAD'
+T="$TMP/tips"; mkdir -p "$T"
+g init -q -b main "$T/wt"
+printf '[submodule "s"]\n\tpath = sub\n\turl = https://example.invalid/s.git\n' > "$T/wt/.gitmodules"
+g -C "$T/wt" add .gitmodules; g -C "$T/wt" commit -qm base
+ts="$T/wt/sub"; g clone -q "$TMP/remote.git" "$ts"
+g -C "$ts" checkout -q -b side; echo one > "$ts/f"; g -C "$ts" commit -qam one; side=$(g -C "$ts" rev-parse HEAD)
+g -C "$ts" checkout -q main
+echo tagged > "$ts/f"; g -C "$ts" commit -qam tagged; g -C "$ts" tag -a -m release v1; tagged=$(g -C "$ts" rev-parse HEAD)
+g -C "$ts" reset -q --hard origin/main
+echo lost > "$ts/f"; g -C "$ts" commit -qam lost; lost=$(g -C "$ts" rev-parse HEAD)
+g -C "$ts" reset -q --hard origin/main
+echo aside > "$ts/f"; g -C "$ts" stash -q; stashed=$(g -C "$ts" rev-parse refs/stash)
+g -C "$ts" config remote.origin.url 'git@github.com:devantler-tech/ksail.git'
+commit_fix() { # sha nodes-json|null
+  if [ "$2" = null ]; then printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":null}}}\n' > "$FIX/$1.json"
+  else printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":1,"nodes":[%s]}}}}}\n' "$2" > "$FIX/$1.json"; fi
+}
+ref_fix() { printf '{"data":{"repository":{"ref":%s}}}\n' "$1" > "$FIX/ref-v1.json"; }
+commit_fix "$side" "$(node 41 MERGED "$side")"
+commit_fix "$lost" null
+commit_fix "$tagged" "$(node 42 OPEN "$tagged")"
+# GitHub answers an annotated tag with the tag object, and the commit below it.
+ref_fix "{\"target\":{\"oid\":\"$OTHER\",\"target\":{\"oid\":\"$tagged\"}}}"
+bash "$INVENTORY" "$T" --tips > "$TMP/tips.in"
+tips_run() { : > "$CALLS"; OUT=$(PATH="$BIN:$PATH" bash "$SUT" "$T" < "${1:-$TMP/tips.in}" 2>"$TMP/err"); RC=$?; }
+tip_of() { printf '%s\n' "$OUT" | awk -F'\t' -v t="tip=$1" '$1 == "TIP-CHECK" && $5 == t { print $4 " " $6 " " $9 }'; }
+tip_is() { # name sha want
+  local got; got=$(tip_of "$2")
+  if [ "$got" = "$3" ]; then ok "$1"; else bad "$1" "want [$3] got [$got] rc=$RC out=$OUT err=$(cat "$TMP/err")"; fi
+}
+tips_run
+tip_is 'a branch tip whose pull request merged is merged'        "$side"    'merged kind=branch pr=41'
+tip_is 'a tag GitHub holds at that commit is pushed-ref'         "$tagged"  'pushed-ref kind=ref pr=-'
+tip_is 'a commit only this machine has is not-on-github'         "$lost"    'not-on-github kind=reflog pr=-'
+tip_is 'a stash is reported, never looked up'                    "$stashed" 'stash kind=stash pr=-'
+check 'the stash never reached GitHub' eval '! grep -q "$stashed" "$CALLS"'
+check 'the entry row still says its HEAD was not looked up' out_has '^MERGE-CHECK	wt	sub	not-checked	'
+check 'the closing line totals the tips' out_has '	tips=4	tips_merged=1	tips_pushed_ref=1	tips_unsettled=2	tips_other_classes=0$'
+check 'and exits 0' rc_is 0
+
+ref_fix "{\"target\":{\"oid\":\"$OTHER\"}}"; tips_run
+tip_is 'a tag GitHub holds at ANOTHER commit falls back to the commit lookup' "$tagged" 'open kind=ref pr=42'
+ref_fix null; tips_run
+tip_is 'a tag GitHub does not have falls back to the commit lookup'           "$tagged" 'open kind=ref pr=42'
+rm -f "$FIX/ref-v1.json"; tips_run
+check 'a failed ref lookup is UNKNOWN, never pushed-ref' eval '[ -z "$(tip_of "$tagged")" ] && grep -q "^UNKNOWN	wt	sub	the ref lookup failed" <<<"$OUT" && [ "$RC" = 2 ]'
+printf '{"data":{"repository":{}},"errors":[{"message":"x"}]}\n' > "$FIX/ref-v1.json"; tips_run
+check 'a ref answer carrying errors is UNKNOWN' eval '[ -z "$(tip_of "$tagged")" ] && [ "$RC" = 2 ]'
+ref_fix "{\"target\":{\"oid\":\"$tagged\"}}"
+rm -f "$FIX/$lost.json"; tips_run
+check 'a failed commit lookup for a tip is UNKNOWN' eval '[ -z "$(tip_of "$lost")" ] && grep -q "^UNKNOWN	wt	sub	the pull request lookup failed for a commit held away" <<<"$OUT" && [ "$RC" = 2 ]'
+commit_fix "$lost" null
+
+tips_bad() { # name sed-expression expected-stderr
+  sed "$2" "$TMP/tips.in" > "$TMP/tips.bad"; tips_run "$TMP/tips.bad"
+  if [ "$RC" = 2 ] && grep -q "$3" "$TMP/err"; then ok "$1"; else bad "$1" "rc=$RC out=$OUT err=$(cat "$TMP/err")"; fi
+}
+tips_bad 'a lost TIP row disagrees with the inventory total'      "/tip=$side/d" 'TIP rows read do not match'
+tips_bad 'TIP rows without a tips total are refused'              's/	tips=4$//' 'without the inventory'
+tips_bad 'a TIP row naming another entry is malformed'            "s/^TIP	wt	sub	tip=$side/TIP	wt	other	tip=$side/" 'malformed'
+tips_bad 'a TIP row with an unknown kind is malformed'            's/kind=reflog/kind=surprise/' 'malformed'
+tips_bad 'a TIP row with a short commit is malformed'             "s/tip=$lost/tip=abc123/" 'malformed'
+{ grep -v '^TIP' "$TMP/tips.in" | sed 's/	tips=4$/	tips=0/'; } > "$TMP/tips.bad"; tips_run "$TMP/tips.bad"
+check 'an entry holding such commits but naming none is incomplete' eval '[ "$RC" = 2 ] && grep -q "names none of them" "$TMP/err"'
+sed "s/\(tip=$side.*\)commits=1/\1commits=5/" "$TMP/tips.in" > "$TMP/tips.bad"; tips_run "$TMP/tips.bad"
+check 'a tip whose commit count no longer matches is UNKNOWN' eval '[ -z "$(tip_of "$side")" ] && grep -q "changed since the inventory" <<<"$OUT" && [ "$RC" = 2 ]'
+# A TIP row before any entry describes nothing.
+{ grep '^TIP' "$TMP/tips.in" | head -n 1; cat "$TMP/tips.in"; } | sed 's/	tips=4$/	tips=5/' > "$TMP/tips.bad"; tips_run "$TMP/tips.bad"
+check 'a TIP row before any entry is malformed' eval '[ "$RC" = 2 ] && grep -q "malformed" "$TMP/err"'
+# Tips of an entry in another class are counted, not looked up.
+echo edit > "$ts/f.new"; bash "$INVENTORY" "$T" --tips > "$TMP/tips.other"; tips_run "$TMP/tips.other"
+check 'tips of an untracked entry are counted, not looked up' eval 'grep -q "	tips=4	tips_merged=0	tips_pushed_ref=0	tips_unsettled=0	tips_other_classes=4$" <<<"$OUT" && [ ! -s "$CALLS" ] && [ "$RC" = 0 ]'
+rm -f "$ts/f.new"
+
 # An inventory that fails (a root with no worktree) must not read as an empty, clean result.
 mkdir -p "$TMP/empty-root"
 OUT=$(bash "$INVENTORY" "$TMP/empty-root" 2>/dev/null | PATH="$BIN:$PATH" bash "$SUT" "$TMP/empty-root" 2>"$TMP/err"); RC=$?
