@@ -178,6 +178,12 @@ bad_row 'a commit that is not hexadecimal' \
   "$(printf 'ENTRY\tw-merged\tsub\tunpushed\tidle_days=1\thead=%s' 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz')"
 bad_row 'a path with no repository under the root' \
   "$(printf 'ENTRY\tw-merged\tmissing\tunpushed\tidle_days=1\thead=%s' "$(sha_of 1)")"
+# A submodule whose own .git is an empty directory: git answers with the worktree's origin.
+mkdir -p "$ROOT/w-broken"; g init -q -b main "$ROOT/w-broken"
+g -C "$ROOT/w-broken" config remote.origin.url 'git@github.com:devantler-tech/monorepo.git'
+mkdir -p "$ROOT/w-broken/sub/.git"
+bad_row 'a broken submodule is not looked up in its parent repository' \
+  "$(printf 'ENTRY\tw-broken\tsub\tunpushed\tidle_days=1\thead=%s' "$(sha_of 1)")"
 bad_row 'a class this script does not know' \
   "$(printf 'ENTRY\tw-merged\tsub\tmerged\tidle_days=1\thead=%s' "$(sha_of 1)")"
 bad_row 'a row kind this script does not know' "$(printf 'MERGE-CHECK\tw-merged\tsub\tmerged')"
@@ -194,6 +200,11 @@ run < "$TMP/in"
 : > "$TMP/in"
 run < "$TMP/in"
 [ "$RC" = 2 ] && ok 'an empty inventory: exit 2' || bad 'an empty inventory: exit 2' "rc=$RC"
+
+{ entry w-merged unpushed 1; printf 'CHECKED\tworktrees=1'; } > "$TMP/in"
+run < "$TMP/in"
+[ "$RC" = 0 ] && ok 'a closing line with no trailing newline still counts' \
+  || bad 'a closing line with no trailing newline still counts' "rc=$RC"
 
 echo '== usage'
 PATH="$BIN:$PATH" bash "$SUT" >/dev/null 2>&1 </dev/null; [ $? = 2 ] && ok 'no root: exit 2' || bad 'no root: exit 2'

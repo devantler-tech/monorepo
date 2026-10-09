@@ -59,7 +59,7 @@ die() { printf 'worktree-inventory-merged-check: %s\n' "$1" >&2; exit 2; }
 
 [ $# -eq 1 ] || die "usage: worktree-inventory-merged-check.sh <worktree-root> < inventory-output"
 case "$1" in
-  -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   -*) die "unknown option: $1" ;;
 esac
 [ -d "$1" ] || die "not a directory: $1"
@@ -83,8 +83,14 @@ unknown_row() { # worktree submodule why
 # origin_repo <dir> -> prints `<owner>/<name>` for a github.com origin, or nothing when the
 # origin is not a GitHub repository. Non-zero when the origin cannot be read at all.
 origin_repo() {
-  local url rest
-  url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 1
+  local url rest top real
+  # `git -C` on a directory whose own .git is broken answers for the PARENT repository,
+  # whose origin is another repository. Require git to name this directory.
+  real=$(cd "$1" 2>/dev/null && /bin/pwd -P) || return 1
+  top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || return 1
+  top=$(cd "$top" 2>/dev/null && /bin/pwd -P) || return 1
+  [ "$top" = "$real" ] || return 1
+  url=$(git -C "$1" config --local --get remote.origin.url 2>/dev/null) || return 1
   case "$url" in
     git@github.com:*)       rest=${url#git@github.com:} ;;
     ssh://git@github.com/*) rest=${url#ssh://git@github.com/} ;;
@@ -155,7 +161,8 @@ count_verdict() {
   esac
 }
 
-while IFS=$'\t' read -r kind label path class _idle headf _rest; do
+# `|| [ -n "$kind" ]`: a last row with no trailing newline is still a row.
+while IFS=$'\t' read -r kind label path class _idle headf _rest || [ -n "$kind" ]; do
   case "$kind" in
     '') continue ;;
     CHECKED) saw_checked=1; continue ;;
