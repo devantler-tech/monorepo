@@ -4,9 +4,9 @@ The root [AGENTS.md](../AGENTS.md) applies. This directory owns the monorepo's
 architecture decisions in `adr/`, numbered `NNNN-title.md`; do not add website source here.
 Describe present-state architecture and rationale. Preserve dated ADR records as history.
 
-The legacy website files are a frozen migration snapshot, not a second maintained product.
-Keep them until the new publisher has a successful deployment and live source/caller receipt.
-Then remove that snapshot in a reviewed cleanup under monorepo#3086, retaining this file and ADRs.
+The former website snapshot has been retired after successful replacement publication and
+live source/caller verification under monorepo#3086. Git history retains it for recovery;
+this directory holds architecture records, not a second application source tree.
 
 The public website is `applications/business-site`, owned by `devantler-tech/business-site`.
 Read that repository's `AGENTS.md` and `docs/AGENTS.md` before editing site content or code.
