@@ -5,7 +5,19 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # The contract is AGENTS.md plus every guide it indexes; these assertions span several guides.
 contract="$(mktemp)"
-trap 'rm -f "${contract}"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -f "${contract}"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "product-value-contract.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 "${repo_root}/.claude/scripts/contract-text.sh" >"${contract}" ||
   { echo "product value contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
 run_loop="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
@@ -225,3 +237,4 @@ if grep -Fq 'wrap the span in backticks' "${contract}"; then
 fi
 
 echo "product value contract: all assertions passed"
+test_run_completed=1

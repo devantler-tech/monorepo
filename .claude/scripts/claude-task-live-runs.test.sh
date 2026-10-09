@@ -15,7 +15,19 @@ SCRIPT="$SCRIPT_DIR/claude-task-live-runs.sh"
 command -v jq >/dev/null 2>&1 || { echo "FAIL: jq is required" >&2; exit 1; }
 
 FIX=$(mktemp -d)
-trap 'rm -rf "$FIX"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$FIX"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "claude-task-live-runs.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 pass=0; fail=0
 
 BIN='/Users/someone/Library/Application Support/Claude/claude-code/2.1.288/48d54124d3c3/claude.app/Contents/MacOS/claude'
@@ -208,4 +220,5 @@ else
 fi
 
 echo "claude-task-live-runs.test.sh: $pass passed, $fail failed"
+test_run_completed=1
 [ "$fail" -eq 0 ]

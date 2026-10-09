@@ -29,7 +29,19 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # The contract is AGENTS.md plus every guide it indexes; these assertions span several guides.
 constitution="$(mktemp)"
-trap 'rm -f "${constitution}"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -f "${constitution}"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "work-priority-ladder.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 "${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
   { echo "work-priority ladder: FAIL — cannot assemble the agent contract" >&2; exit 1; }
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
@@ -767,3 +779,4 @@ grep -Fq '${{ needs.test-work-priority-ladder.result }}' "${workflow}" ||
   fail "required checks do not aggregate the work-priority ladder"
 
 echo "work-priority ladder: all assertions passed"
+test_run_completed=1
