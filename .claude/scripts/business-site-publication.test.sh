@@ -35,10 +35,10 @@ check() {
         test("actions/deploy-pages@|business-site-revision\\.sh|business-site/.*publish-pages|gh workflow run.*publish-site") | not)))' >/dev/null
 }
 for retired in .github/workflows/publish-pages.yaml .claude/scripts/business-site-revision.sh .claude/scripts/business-site-revision.test.sh; do
-  [ ! -e "$ROOT/$retired" ] && [ ! -L "$ROOT/$retired" ] || {
+  if [ -e "$ROOT/$retired" ] || [ -L "$ROOT/$retired" ]; then
     printf 'FAIL: retired monorepo publication implementation remains: %s\n' "$retired" >&2
     exit 1
-  }
+  fi
 done
 workflow_files=$(find "$ROOT/.github/workflows" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort) || {
   echo 'FAIL: root workflows could not be read' >&2; exit 1;
