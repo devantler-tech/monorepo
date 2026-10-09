@@ -40,13 +40,27 @@
 #   not-checked    not looked up: the repository is outside devantler-tech, or its origin
 #                  is not a GitHub repository
 # A `local-only` entry is always `not-checked`: its HEAD is pushed, and the commits it
-# holds sit on other local branches, stashes or the reflog, which the inventory does not
-# name. It is listed so that it is never mistaken for a checked entry.
+# holds sit on other local branches, stashes or the reflog. It is listed so that it is
+# never mistaken for a checked entry.
+#
+# When the inventory ran with --tips, it names those commits, and each TIP row of an
+# `unpushed` or `local-only` entry gets its own row after the entry's:
+#   TIP-CHECK <worktree> <submodule> <verdict> tip=<sha> kind=<kind> ref=<name|-> repo=<owner/name|-> pr=<n|->
+#             commits=<n>
+# with the verdicts above, read for that tip instead of HEAD, and one more:
+#   stash          a stash entry: changes someone set aside. It is never a pull request's
+#                  head, so it is not looked up and needs a person to read it
+#   pushed-ref     a `kind=ref` tip (a tag, mostly) that GitHub holds under the same name
+#                  at the same commit: it was never local-only, only outside every branch
+# An entry's commits away from HEAD need no rescue only when EVERY one of its tips is
+# `merged` or `pushed-ref`. `no-pr` and `other-head` say GitHub has the commit object, not
+# that anything there still keeps it. Tips of entries in other classes are counted, not
+# looked up.
 #
 # Only `merged` with other_local=0 says the entry's commits need no rescue. Every other
 # row means: do not treat the entry as disposable on this evidence.
 #
-# Exit codes: 0 every `unpushed` entry got a verdict; 2 usage error, an inventory that is
+# Exit codes: 0 every `unpushed` entry and every looked-up tip got a verdict; 2 usage error, an inventory that is
 # incomplete (no CHECKED line or one that is not last, an UNREADABLE or malformed row, rows
 # that disagree with the inventory's own totals, no worktree found), or an UNKNOWN row: a
 # lookup failed, a path is not a plain directory under the root, or the entry no longer
@@ -69,17 +83,33 @@ die() { printf 'worktree-inventory-merged-check: %s\n' "$1" >&2; exit 2; }
 
 [ $# -eq 1 ] || die "usage: worktree-inventory-merged-check.sh <worktree-root> < inventory-output"
 case "$1" in
-  -h|--help) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,69p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   -*) die "unknown option: $1" ;;
 esac
 [ -d "$1" ] || die "not a directory: $1"
 ROOT=$(cd "$1" 2>/dev/null && /bin/pwd -P) || die "cannot resolve the worktree root"
 command -v gh >/dev/null 2>&1 || die "gh is required"
 command -v jq >/dev/null 2>&1 || die "jq is required"
+CACHE_FILE=$(mktemp) || die "cannot create a temporary file"
+merged_check_finished=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -f "$CACHE_FILE"
+  if [ "$merged_check_finished" != 1 ] && [ "$status" = 0 ]; then status=2; fi
+  exit "$status"
+}
+trap on_exit EXIT
 
 n_merged=0; n_otherbase=0; n_open=0; n_closed=0; n_other=0; n_nopr=0; n_absent=0; n_notchecked=0
 unknown=0; other_rows=0; saw_checked=0; bad_input=0
-cache=''
+rows_tip=0; t_merged=0; t_settled=0; t_unsettled=0; t_skipped=0
+# The entry the following TIP rows belong to: its state is one of `none` (no entry yet),
+# `skip` (another class: its tips are counted only), `unknown` (the entry got an UNKNOWN
+# row, which already covers its tips), `outside` (not a devantler-tech repository) or `ok`.
+cur_state=none; cur_label=''; cur_path=''; cur_gdir=''; cur_repo=''; cur_head=''
+cur_other=0; cur_tips=0; missing_tips=0
 
 row() { # worktree submodule verdict sha repo pr other-local
   printf 'MERGE-CHECK\t%s\t%s\t%s\thead=%s\trepo=%s\tpr=%s\tother_local=%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7"
@@ -165,6 +195,28 @@ lookup() {
   printf '%s\n' "$answer"
 }
 
+# ref_held <name> <refname> <sha> -> 0 when GitHub holds that ref at that commit (an
+# annotated tag counts by the commit it names), 1 when it does not, 2 when the read failed
+# or its answer cannot be trusted.
+ref_held() {
+  local name=$1 ref=$2 sha=$3 json answer
+  case "$ref" in refs/*) ;; *) return 1 ;; esac
+  # shellcheck disable=SC2016 # $o, $r and $q are GraphQL variables.
+  json=$(gh api graphql --hostname github.com -f o="$OWNER" -f r="$name" -f q="$ref" -f query='
+    query($o:String!,$r:String!,$q:String!){
+      repository(owner:$o,name:$r){
+        ref(qualifiedName:$q){ target{ oid ... on Tag{ target{ oid } } } }
+      }}' 2>/dev/null) || return 2
+  answer=$(printf '%s' "$json" | jq -r --arg sha "$sha" '
+    if (has("errors")) or (.data.repository == null) or (.data.repository | has("ref") | not) then "unknown"
+    elif .data.repository.ref == null then "absent"
+    elif ((.data.repository.ref.target.oid // "") == $sha)
+         or ((.data.repository.ref.target.target.oid // "") == $sha) then "held"
+    else "absent"
+    end' 2>/dev/null) || return 2
+  case "$answer" in held) return 0 ;; absent) return 1 ;; *) return 2 ;; esac
+}
+
 count_verdict() {
   case "$1" in
     merged)        n_merged=$((n_merged+1)) ;;
@@ -202,6 +254,77 @@ locate() {
   DIR=$cur
 }
 
+# close_entry — an entry that holds commits away from HEAD must have named at least one tip
+# when the inventory was asked for them; none means its TIP rows were lost on the way here.
+close_entry() {
+  case "$cur_state" in ok|outside|unknown|skip)
+    if [ "$cur_other" -gt 0 ] && [ "$cur_tips" -eq 0 ]; then missing_tips=$((missing_tips+1)); fi ;;
+  esac
+}
+
+# tip_row <label> <path> <verdict> <sha> <kind> <ref> <repo> <pr> <commits>
+tip_row() {
+  case "$3" in
+    merged)     t_merged=$((t_merged+1)) ;;
+    pushed-ref) t_settled=$((t_settled+1)) ;;
+    *)          t_unsettled=$((t_unsettled+1)) ;;
+  esac
+  printf 'TIP-CHECK\t%s\t%s\t%s\ttip=%s\tkind=%s\tref=%s\trepo=%s\tpr=%s\tcommits=%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
+}
+
+# check_tip <tip-line> — one TIP row of the current entry.
+check_tip() {
+  local t_label t_path tipf kindf reff comf t_rest sha kind ref n now hit held
+  IFS=$'\t' read -r _ t_label t_path tipf kindf reff comf t_rest <<EOF_TIP
+$1
+EOF_TIP
+  rows_tip=$((rows_tip+1))
+  # A TIP row belongs to the ENTRY row right before it; anywhere else it describes nothing.
+  if [ "$cur_state" = none ] || [ "$t_label" != "$cur_label" ] || [ "$t_path" != "$cur_path" ] \
+     || [ -n "$t_rest" ] || [ "$cur_other" -eq 0 ]; then bad_input=1; return 0; fi
+  cur_tips=$((cur_tips+1))
+  sha=${tipf#tip=}; kind=${kindf#kind=}; ref=${reff#ref=}; n=${comf#commits=}
+  case "$tipf$kindf$reff$comf" in "tip=${sha}kind=${kind}ref=${ref}commits=${n}") ;; *) bad_input=1; return 0 ;; esac
+  [ ${#sha} -eq 40 ] || { bad_input=1; return 0; }
+  case "$sha" in *[!0-9a-f]*) bad_input=1; return 0 ;; esac
+  case "$kind" in branch|stash|ref|reflog) ;; *) bad_input=1; return 0 ;; esac
+  case "$n" in ''|0*|*[!0-9]*) bad_input=1; return 0 ;; esac
+  [ -n "$ref" ] || { bad_input=1; return 0; }
+  case "$cur_state" in
+    skip)    t_skipped=$((t_skipped+1)); return 0 ;;
+    unknown) return 0 ;;
+  esac
+  # The entry's counts were re-read above; this ties the row to the commit it names.
+  now=$(git --git-dir="$cur_gdir" rev-list --count "$sha" --not --remotes "$cur_head" 2>/dev/null) \
+    || { unknown_row "$cur_label" "$cur_path" "cannot re-read a commit it holds away from HEAD"; return 0; }
+  [ "$now" = "$n" ] || { unknown_row "$cur_label" "$cur_path" "a commit it holds away from HEAD changed since the inventory"; return 0; }
+  if [ "$kind" = stash ]; then tip_row "$cur_label" "$cur_path" stash "$sha" "$kind" "$ref" - - "$n"; return 0; fi
+  if [ "$cur_state" = outside ]; then tip_row "$cur_label" "$cur_path" not-checked "$sha" "$kind" "$ref" - - "$n"; return 0; fi
+  if [ "$kind" = ref ]; then
+    held=0; ref_held "${cur_repo#*/}" "$ref" "$sha" || held=$?
+    case "$held" in
+      0) tip_row "$cur_label" "$cur_path" pushed-ref "$sha" "$kind" "$ref" "$cur_repo" - "$n"; return 0 ;;
+      1) ;;
+      *) unknown_row "$cur_label" "$cur_path" "the ref lookup failed for a commit held away from HEAD"; return 0 ;;
+    esac
+  fi
+  hit=$(cached_lookup "$cur_repo" "$sha") \
+    || { unknown_row "$cur_label" "$cur_path" "the pull request lookup failed for a commit held away from HEAD"; return 0; }
+  tip_row "$cur_label" "$cur_path" "${hit% *}" "$sha" "$kind" "$ref" "$cur_repo" "${hit#* }" "$n"
+}
+
+# cached_lookup <owner/name> <sha> -> lookup's answer, read once per repository and commit.
+# The cache lives in a file because this runs in a command substitution.
+cached_lookup() {
+  local key="$1@$2" hit
+  hit=$(awk -F'\t' -v k="$key" '$1 == k && !done { print $2; done = 1 }' "$CACHE_FILE") || return 1
+  if [ -z "$hit" ]; then
+    hit=$(lookup "${1#*/}" "$2") || return 1
+    printf '%s\t%s\n' "$key" "$hit" >> "$CACHE_FILE" || return 1
+  fi
+  printf '%s\n' "$hit"
+}
+
 # checked_field <CHECKED-line> <key> -> prints the key's value; non-zero unless it is a number.
 checked_field() {
   local v
@@ -222,19 +345,28 @@ while IFS= read -r line || [ -n "$line" ]; do
 $line
 EOF_ROW
   case "$kind" in
-    CHECKED) saw_checked=1; checked_line=$line; continue ;;
+    CHECKED) close_entry; cur_state=none; saw_checked=1; checked_line=$line; continue ;;
+    TIP) check_tip "$line"; continue ;;
     SKIP) continue ;;
     UNREADABLE) bad_input=1; continue ;;
     ENTRY) ;;
     *) bad_input=1; continue ;;
   esac
   rows_entry=$((rows_entry+1))
+  close_entry
+  cur_state=skip; cur_label=$label; cur_path=$path; cur_gdir=''; cur_repo=''; cur_head=''
+  cur_other=0; cur_tips=0
+  # Every class can hold commits away from HEAD, so every row's counts place its TIP rows.
+  e_unp=${unpf#unpushed=}; e_loc=${locf#local_only=}
+  case "$e_unp" in 0?*) e_unp=x ;; esac; case "$e_loc" in 0?*) e_loc=x ;; esac
+  case "$e_unp$e_loc" in ''|*[!0-9]*) ;; *) [ -z "$e_unp" ] || [ -z "$e_loc" ] || [ "$e_loc" -lt "$e_unp" ] || cur_other=$((e_loc - e_unp)) ;; esac
   case "$class" in
     unpushed)   rows_unpushed=$((rows_unpushed+1)) ;;
     local-only) rows_local=$((rows_local+1)) ;;
     modified|nested|untracked|ignored|clean) other_rows=$((other_rows+1)); continue ;;
     *) bad_input=1; continue ;;
   esac
+  cur_state=unknown
   sha=${headf#head=}
   if [ "$sha" = "$headf" ] || [ ${#sha} -ne 40 ]; then unknown_row "$label" "$path" "the row carries no full head commit"; continue; fi
   case "$sha" in *[!0-9a-f]*) unknown_row "$label" "$path" "the row carries no full head commit"; continue ;; esac
@@ -247,9 +379,6 @@ EOF_ROW
     || { unknown_row "$label" "$path" "the row carries no commit counts"; continue; }
   # Commits held away from HEAD (other branches, stashes, the reflog): no verdict covers them.
   other=$((loc - unp))
-  if [ "$class" = local-only ]; then
-    count_verdict not-checked; row "$label" "$path" not-checked "$sha" - - "$other"; continue
-  fi
   locate "$label" "$path" || { unknown_row "$label" "$path" "$WHY"; continue; }
   repo=$(origin_repo "$DIR") || { unknown_row "$label" "$path" "cannot read its origin"; continue; }
   # A saved or stale inventory names a commit the repository has since moved away from.
@@ -268,23 +397,30 @@ EOF_ROW
     || { unknown_row "$label" "$path" "cannot read its status"; continue; }
   [ "$unp_now" = "$unp" ] && [ "$loc_now" = "$loc" ] && [ -z "$dirty" ] \
     || { unknown_row "$label" "$path" "it changed since the inventory"; continue; }
+  cur_gdir=$g_dir; cur_repo=$repo; cur_head=$sha
   case "$repo" in
-    "$OWNER"/*) name=${repo#*/} ;;
-    *) count_verdict not-checked; row "$label" "$path" not-checked "$sha" - - "$other"; continue ;;
+    "$OWNER"/*) ;;
+    *) cur_state=outside; count_verdict not-checked; row "$label" "$path" not-checked "$sha" - - "$other"; continue ;;
   esac
-  key="$repo@$sha"
-  hit=$(printf '%s' "$cache" | awk -F'\t' -v k="$key" '$1 == k && !done { print $2; done = 1 }')
-  if [ -z "$hit" ]; then
-    hit=$(lookup "$name" "$sha") || { unknown_row "$label" "$path" "the pull request lookup failed"; continue; }
-    cache="$cache$key"$'\t'"$hit"$'\n'
+  cur_state=ok
+  # HEAD is pushed: there is nothing to look up for it, only for the tips that follow.
+  if [ "$class" = local-only ]; then
+    count_verdict not-checked; row "$label" "$path" not-checked "$sha" - - "$other"; continue
   fi
+  hit=$(cached_lookup "$repo" "$sha") || { cur_state=unknown; unknown_row "$label" "$path" "the pull request lookup failed"; continue; }
   verdict=${hit% *}; pr=${hit#* }
   count_verdict "$verdict"
   row "$label" "$path" "$verdict" "$sha" "$repo" "$pr" "$other"
 done
 
-printf 'CHECKED\tmerged=%s\tmerged_other_base=%s\topen=%s\tclosed=%s\tother_head=%s\tno_pr=%s\tnot_on_github=%s\tnot_checked=%s\tother_classes=%s\tunknown=%s\n' \
-  "$n_merged" "$n_otherbase" "$n_open" "$n_closed" "$n_other" "$n_nopr" "$n_absent" "$n_notchecked" "$other_rows" "$unknown"
+close_entry
+# The tip totals are printed only when the inventory was asked for tips.
+tip_totals=''
+case "$checked_line" in *$'\t'tips=*)
+  tip_totals=$'\t'"tips=$rows_tip"$'\t'"tips_merged=$t_merged"$'\t'"tips_pushed_ref=$t_settled"$'\t'"tips_unsettled=$t_unsettled"$'\t'"tips_other_classes=$t_skipped" ;;
+esac
+printf 'CHECKED\tmerged=%s\tmerged_other_base=%s\topen=%s\tclosed=%s\tother_head=%s\tno_pr=%s\tnot_on_github=%s\tnot_checked=%s\tother_classes=%s\tunknown=%s%s\n' \
+  "$n_merged" "$n_otherbase" "$n_open" "$n_closed" "$n_other" "$n_nopr" "$n_absent" "$n_notchecked" "$other_rows" "$unknown" "$tip_totals"
 [ "$saw_checked" = 1 ] || die "the inventory has no closing CHECKED line: it is incomplete"
 [ "$bad_input" = 0 ] || die "the inventory holds an UNREADABLE, malformed or trailing row: it is incomplete"
 # The closing line is the inventory's own account of what it printed. Rows lost on the way
@@ -301,6 +437,15 @@ c_young=$(checked_field "$checked_line" below_min_idle) || no_totals
 [ "$c_entries" -eq "$rows_entry" ] && [ "$c_unp" -eq "$rows_unpushed" ] && [ "$c_loc" -eq "$rows_local" ] \
   || die "the rows read do not match the inventory's own totals: it is incomplete"
 # Entries the inventory left out for being too recently used were never checked here.
+# With --tips the inventory counts its TIP rows; without it, none may appear at all.
+case "$checked_line" in
+  *$'\t'tips=*)
+    c_tips=$(checked_field "$checked_line" tips) || no_totals
+    [ "$c_tips" -eq "$rows_tip" ] || die "the TIP rows read do not match the inventory's own total: it is incomplete"
+    [ "$missing_tips" -eq 0 ] || die "an entry holds commits away from HEAD but names none of them: the inventory is incomplete" ;;
+  *) [ "$rows_tip" -eq 0 ] || die "TIP rows without the inventory's tips total: it is incomplete" ;;
+esac
 [ "$c_young" -eq 0 ] || printf 'NOTE\tthe inventory left out %s entries below its --min-idle-days\n' "$c_young"
+merged_check_finished=1
 [ "$unknown" -eq 0 ] || exit 2
 exit 0

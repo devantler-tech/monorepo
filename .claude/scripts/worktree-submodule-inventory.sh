@@ -13,11 +13,12 @@
 # `git status` from refreshing another session's index), so it is safe while sessions run.
 #
 # Usage:
-#   worktree-submodule-inventory.sh <worktree-root> [--min-idle-days N]
+#   worktree-submodule-inventory.sh <worktree-root> [--min-idle-days N] [--tips]
 #
 #   <worktree-root>      a directory whose immediate children are worktrees
 #                        (for example <checkout>/.claude/worktrees)
 #   --min-idle-days N    list only entries idle for at least N days (default 0)
+#   --tips               also name the commits an entry holds away from HEAD (see TIP)
 #
 # Output, tab-separated, one row per populated submodule of each worktree:
 #   ENTRY <worktree> <submodule> <class> idle_days=<n> head=<sha> unpushed=<n>
@@ -25,6 +26,18 @@
 # and a closing `CHECKED ...` line with the totals. Other rows:
 #   SKIP <name> <reason>                     a child that is not a worktree
 #   UNREADABLE <worktree> <submodule> <why>  a read failed; nothing is claimed about it
+#
+# With --tips, each ENTRY whose local_only= exceeds its unpushed= is followed by one row per
+# commit that nothing else it holds descends from, among the commits neither HEAD nor a
+# remote-tracking ref reaches:
+#   TIP <worktree> <submodule> tip=<sha> kind=<kind> ref=<name|-> commits=<n>
+# `kind=` says what holds the commit, the first that applies: `branch` (a local branch,
+# named in `ref=`), `stash` (a stash entry: changes set aside, never a pull request's
+# head), `ref` (any other local ref, named in `ref=`), `reflog` (only old history: an
+# amended or rebased-away commit, a deleted branch). `commits=` counts what that tip alone
+# reaches; two tips can share commits, so the counts do not add up to the entry's total.
+# The closing line then also carries `tips=<n>`. worktree-inventory-merged-check.sh looks
+# each tip up.
 #
 # Each entry gets exactly ONE class, the first that applies:
 #   modified     tracked files changed (staged or not): looks like unfinished authored work
@@ -80,24 +93,26 @@ file_mtime() {
 
 ROOT=''
 MIN_IDLE_DAYS=0
+TIPS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --min-idle-days)
       [ $# -ge 2 ] || die "--min-idle-days needs a value"
       MIN_IDLE_DAYS=$2; shift 2 ;;
-    -h|--help) sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --tips) TIPS=1; shift ;;
+    -h|--help) sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *) [ -z "$ROOT" ] || die "exactly one <worktree-root> is expected"
        ROOT=$1; shift ;;
   esac
 done
-[ -n "$ROOT" ] || die "usage: worktree-submodule-inventory.sh <worktree-root> [--min-idle-days N]"
+[ -n "$ROOT" ] || die "usage: worktree-submodule-inventory.sh <worktree-root> [--min-idle-days N] [--tips]"
 case "$MIN_IDLE_DAYS" in ''|*[!0-9]*) die "--min-idle-days must be a non-negative integer" ;; esac
 [ -d "$ROOT" ] || die "not a directory: $ROOT"
 ROOT=$(physical_path "$ROOT") || die "cannot resolve the worktree root"
 NOW=$(date +%s)
 
-worktrees=0; entries=0; unreadable=0; skipped=0; below_age=0
+worktrees=0; entries=0; unreadable=0; skipped=0; below_age=0; n_tips=0
 n_modified=0; n_nested=0; n_untracked=0; n_unpushed=0; n_local_only=0; n_ignored=0; n_clean=0
 
 unreadable_row() { # worktree submodule why
@@ -118,11 +133,47 @@ idle_days() {
   printf '%s\n' $(( (NOW - newest) / 86400 ))
 }
 
+# held_tips <git-dir> <head> -> prints "<sha> <kind> <ref|-> <commits>" for each commit that
+# no other held commit descends from, among those neither HEAD nor a remote-tracking ref
+# reaches. Non-zero on any failed read, and when it finds no tip at all: the caller only asks
+# when the counts say such commits exist, so an empty answer is a failed read.
+held_tips() {
+  local g=$1 head=$2 graph tips refs stashes sha kind ref n
+  # refs: `<commit> <refname>` per ref, an annotated tag peeled to the commit it names.
+  graph=$(rgit --git-dir="$g" rev-list --parents --all --reflog --not --remotes "$head" 2>/dev/null) || return 1
+  # A tip is a listed commit that is no listed commit's parent.
+  tips=$(printf '%s\n' "$graph" | awk '
+    NF { order[++count] = $1; for (i = 2; i <= NF; i++) parent[$i] = 1 }
+    END { for (i = 1; i <= count; i++) if (!(order[i] in parent)) print order[i] }') || return 1
+  [ -n "$tips" ] || return 1
+  refs=$(rgit --git-dir="$g" for-each-ref \
+            --format='%(if)%(*objectname)%(then)%(*objectname)%(else)%(objectname)%(end) %(refname)' 2>/dev/null) \
+    || return 1
+  stashes=''
+  if rgit --git-dir="$g" show-ref --verify --quiet refs/stash 2>/dev/null; then
+    stashes=$(rgit --git-dir="$g" log -g --format=%H refs/stash 2>/dev/null) || return 1
+  fi
+  while IFS= read -r sha; do
+    case "$sha" in ''|*[!0-9a-f]*) return 1 ;; esac
+    ref=$(printf '%s\n' "$refs" | awk -v s="$sha" '$1 == s && index($2, "refs/heads/") == 1 { print substr($2, 12); exit }')
+    if [ -n "$ref" ]; then kind=branch
+    elif grep -qx "$sha" <<<"$stashes"; then kind=stash; ref=-
+    else
+      ref=$(printf '%s\n' "$refs" | awk -v s="$sha" '$1 == s && index($2, "refs/remotes/") != 1 { print $2; exit }')
+      if [ -n "$ref" ]; then kind=ref; else kind=reflog; ref=-; fi
+    fi
+    n=$(rgit --git-dir="$g" rev-list --count "$sha" --not --remotes "$head" 2>/dev/null) || return 1
+    case "$n" in ''|0|*[!0-9]*) return 1 ;; esac
+    printf '%s %s %s %s\n' "$sha" "$kind" "$ref" "$n"
+  done <<< "$tips"
+}
+
 # classify_entry <worktree-label> <submodule-path> <submodule-dir>
 classify_entry() {
   local label=$1 path=$2 dir=$3
   local top real g head status line code rest
   local modified=0 untracked=0 nested=0 ignored=0 inner hidden unpushed local_only idle class
+  local tips='' t_sha t_kind t_ref t_n
 
   # `git -C` on a directory whose own .git is broken answers for the PARENT repository, so
   # a broken submodule would read as the parent's state. Require git to name this directory.
@@ -200,6 +251,11 @@ classify_entry() {
   fi
 
   if [ "$idle" -lt "$MIN_IDLE_DAYS" ]; then below_age=$((below_age+1)); return 0; fi
+  # Read the tips before the ENTRY row is printed, so a failed read leaves no half entry.
+  if [ "$TIPS" = 1 ] && [ "$local_only" -gt "$unpushed" ]; then
+    tips=$(held_tips "$g" "$head") \
+      || { unreadable_row "$label" "$path" "cannot name the commits it holds away from HEAD"; return 0; }
+  fi
   entries=$((entries+1))
   case "$class" in
     modified)   n_modified=$((n_modified+1)) ;;
@@ -212,6 +268,11 @@ classify_entry() {
   esac
   printf 'ENTRY\t%s\t%s\t%s\tidle_days=%s\thead=%s\tunpushed=%s\tlocal_only=%s\tmodified=%s\tuntracked=%s\tnested=%s\tignored=%s\n' \
     "$label" "$path" "$class" "$idle" "$head" "$unpushed" "$local_only" "$modified" "$untracked" "$nested" "$ignored"
+  [ -n "$tips" ] || return 0
+  while read -r t_sha t_kind t_ref t_n; do
+    n_tips=$((n_tips+1))
+    printf 'TIP\t%s\t%s\ttip=%s\tkind=%s\tref=%s\tcommits=%s\n' "$label" "$path" "$t_sha" "$t_kind" "$t_ref" "$t_n"
+  done <<< "$tips"
 }
 
 # submodule_paths <worktree> -> prints each path .gitmodules names or the index records as a
@@ -315,9 +376,11 @@ for wt in "$ROOT"/*/; do
   done <<< "$paths"
 done
 
-printf 'CHECKED\tworktrees=%s\tentries=%s\tmodified=%s\tnested=%s\tuntracked=%s\tunpushed=%s\tlocal_only=%s\tignored=%s\tclean=%s\tbelow_min_idle=%s\tskipped=%s\tunreadable=%s\n' \
+tips_field=''
+[ "$TIPS" = 0 ] || tips_field=$'\t'"tips=$n_tips"
+printf 'CHECKED\tworktrees=%s\tentries=%s\tmodified=%s\tnested=%s\tuntracked=%s\tunpushed=%s\tlocal_only=%s\tignored=%s\tclean=%s\tbelow_min_idle=%s\tskipped=%s\tunreadable=%s%s\n' \
   "$worktrees" "$entries" "$n_modified" "$n_nested" "$n_untracked" "$n_unpushed" "$n_local_only" \
-  "$n_ignored" "$n_clean" "$below_age" "$skipped" "$unreadable"
+  "$n_ignored" "$n_clean" "$below_age" "$skipped" "$unreadable" "$tips_field"
 [ "$unreadable" -eq 0 ] || exit 2
 # A root holding no worktree is far more likely the wrong directory than an empty lane.
 [ "$worktrees" -gt 0 ] || die "no worktree found under $ROOT"
