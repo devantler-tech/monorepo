@@ -501,11 +501,13 @@ downstream ceiling immediately before claiming and again before moving Ready to 
 full implementation, review, merge or verification stage stops new starts and calls for helping it.
 Do not move active work upstream to manufacture capacity. Limits are ceilings, not fill targets.
 
-Compare explicit Priority first, then current product outcomes, audience impact, deadline/cost of
-waiting, risk reduction and prerequisites unlocked relative to **end-to-end** effort, including CI,
+Compare native issue Priority (Urgent, High, Medium, Low) first, then current product outcomes,
+audience impact, deadline/cost of waiting, risk reduction and prerequisites unlocked relative to
+**end-to-end** effort, including CI,
 review, deployment and verification. Evidence belongs on the issue; do not invent scores or infer
-priority from type, labels, comments or age. A critical obligation is refined promptly without
-trading away its safety deadline. Large important work gets a valuable independent slice, not skipped
+priority from type, labels, comments or age. Read native Effort rather than a project-local size copy;
+an unset priority requires refinement, not a default Medium. A critical obligation is refined promptly
+without trading away its safety deadline. Large important work gets a valuable independent slice, not skipped
 for small low-value work. Backlog is a near-term refinement/replenishment queue; Icebox is deferred.
 
 Age breaks ties between comparable candidates and triggers anti-starvation review. Use Ready entry

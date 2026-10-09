@@ -895,6 +895,9 @@ jobs:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/skills/products/project-board/SKILL.md'
+              - '.claude/scripts/project-planning-fields.sh'
+              - '.claude/scripts/project-planning-fields.test.sh'
               - '.claude/scripts/work-priority-ladder.test.sh'
               - '.github/workflows/ci.yaml'
             merge-confirmation-read:
@@ -2834,6 +2837,8 @@ jobs:
           persist-credentials: false
       - name: Verify the work-priority ladder
         run: bash .claude/scripts/work-priority-ladder.test.sh
+      - name: Verify native planning field resolution
+        run: bash .claude/scripts/project-planning-fields.test.sh
 
   test-merge-confirmation-read:
     name: Test merge-confirmation read contract

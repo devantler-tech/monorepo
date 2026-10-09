@@ -230,13 +230,33 @@ stage stops new implementation and redirects effort toward finishing/unblocking 
 Selection freshness is **15 minutes** (`maxAgeSeconds=900`), measured from the oldest required observation,
 not the last page; re-read capacity before claim and before the Ready-to-In-Progress write.
 
-Project 5 uses **Priority** (P0 Critical, P1 High, P2 Normal, P3 Low), **Service class** (Expedite,
-Fixed date, Standard, Risk reduction), **Delivery size** (Small, Medium, Large), **Ready since** and
-**Blocked since** and **First started**, together with planned **Start date** and **Due date**. Record a brief issue
+Project 5 uses the existing **native organization issue fields** **Priority** (Urgent, High, Medium,
+Low), **Effort** (Low, Medium, High), **Start date** and **Target date**, attached as project columns.
+Prefer native GitHub fields whenever they represent the same meaning; discover before creating.
+Never recreate project-local Priority, Delivery size, Start date or Due date counterparts.
+The maintainer approved public visibility for these four fields on 2026-10-09; private repositories
+remain private. Reuse their existing definitions, not new organization fields.
+
+Names alone do not establish identity: read a complete Project field census and run
+`bash .claude/scripts/project-planning-fields.sh --input <response.json>` before writing planning
+values. The helper verifies `isIssueField` and the linked `issueField.id` for both
+`ProjectV2SingleSelectField` and `ProjectV2Field`; UNKNOWN permits no write or fallback copy.
+Read select options from the organization issue field, not the attachment's empty `options` list.
+Write native values on the issue so they remain consistent across projects.
+
+Keep the distinct project-local **Service class** (Expedite, Fixed date, Standard, Risk reduction),
+**Ready since**, **Blocked since** and **First started** fields. Record a brief issue
 rationale supporting outcome, audience impact, urgency/cost of waiting, risk reduction, dependencies
-unlocked and end-to-end effort. Size includes CI, review, deployment and verification. Fixed date
+unlocked and end-to-end effort. Effort includes CI, review, deployment and verification. Fixed date
 needs a verified deadline; Expedite needs confirmed incident/urgent-security evidence and a recorded
-WIP exception, not merely a Bug/Security type. Missing values mean refinement, not a default P2.
+WIP exception, not merely a Bug/Security type. Missing values mean refinement, not a default Medium.
+
+For consolidation, snapshot populated legacy values including archived items. Map P0/P1/P2/P3 to
+Urgent/High/Medium/Low and Small/Medium/Large to Effort Low/Medium/High; copy dates exactly. Re-read
+before each write and never overwrite a conflicting native value. Native issue fields do not apply
+to PRs: preserve any PR-only planning values in durable issue history before removing the source.
+Rebind visible columns to native attachments, verify every migrated value and preserved view
+configuration, then delete only the exact legacy field IDs. A partial or failed read stops deletion.
 
 Start date is planned roadmap intent, never overwritten by actual work start. First started records
 actual first work, with its original evidence on the issue. Preserve it and first blocked/Ready observation.
@@ -252,7 +272,7 @@ Project 5 also carries **Measure on** (DATE), **Target condition** (TEXT), **Cur
 (TEXT) and **Kata decision** (Adopt, Iterate, Stop, Inconclusive). These mirror the canonical Kata
 issue and authorized hypothesis, not a second status machine. Leave the decision unset before a
 readback; Inconclusive records a checkpoint, not Done. Measure on is the next evidence readback,
-not the roadmap Due date. Preserve prior dates and decisions in issue history before changing mirrors.
+not the roadmap Target date. Preserve prior dates and decisions in issue history before changing mirrors.
 See [Improvement katas](improvement-katas.md) for outcome ownership and due/overdue handling.
 
 Two mechanics make this a standing duty rather than something automation handles:
