@@ -14,7 +14,19 @@ SCRIPT="$SCRIPT_DIR/delivered-open-candidates.sh"
 command -v jq >/dev/null 2>&1 || { echo "FAIL: jq is required" >&2; exit 1; }
 
 FIX=$(mktemp -d)
-trap 'rm -rf "$FIX"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$FIX"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "delivered-open-candidates.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 pass=0
 fail=0
 
@@ -171,4 +183,5 @@ check "--type without --oldest is UNKNOWN" 2 "--type needs --oldest" "" --issue 
 check "--oldest above the page size is UNKNOWN" 2 "--oldest must be 1..100" "" --oldest 101
 
 echo "delivered-open-candidates: $pass passed, $fail failed"
+test_run_completed=1
 [ "$fail" -eq 0 ]

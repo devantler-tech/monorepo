@@ -21,7 +21,19 @@ CHECK="$HERE/release-exemption-identity-currency.sh"
 }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$TMP"
+  if [ "${completed}" != 1 ]; then
+    echo "release-exemption-identity-currency.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 
 pass=0
 fail=0
@@ -414,4 +426,5 @@ else
 fi
 
 printf '\n%s: %d passed, %d failed\n' "${0##*/}" "$pass" "$fail"
+completed=1
 [ "$fail" -eq 0 ]

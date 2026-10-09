@@ -15,7 +15,18 @@ set -euo pipefail
 PASS=0
 FAIL=0
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "skill-owner.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SUT="${repo_root}/.claude/scripts/skill-owner.sh"
@@ -767,3 +778,4 @@ assert_contains 'reviewed: the help names the mode' "$OUT_H" '--check-reviewed'
 printf '\nskill-owner: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 printf 'skill-owner contract: PASS — ownership is per-file, structural, and fails closed on an empty enumeration\n'
+completed=1

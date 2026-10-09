@@ -26,7 +26,19 @@ set -uo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sweep="$script_dir/disclosure-drift-sweep.sh"
 scratch="$(mktemp -d)"
-trap 'rm -rf "$scratch"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$scratch"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "disclosure-drift-sweep.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 
 failures=0
 assertions=0
@@ -273,5 +285,6 @@ assert_contains "the inline comment is reported" "REAL     https://github.com/o/
 assert_log "no --issue re-verification was attempted for a review surface" no "--issue"
 
 printf '\n%d assertion(s), %d failure(s)\n' "$assertions" "$failures"
+test_run_completed=1
 [ "$failures" -eq 0 ] || exit 1
 printf 'disclosure-drift-sweep: OK\n'

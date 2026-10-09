@@ -20,7 +20,19 @@ root=$(mktemp -d) || {
   printf 'cannot create fixture root\n' >&2
   exit 2
 }
-trap 'rm -rf -- "$root"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf -- "$root"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "bot-pr-adaptation-push.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 root=$(cd "$root" && pwd -P)
 state="${root}/state"
 bin="${root}/bin"
@@ -336,6 +348,7 @@ GH_STUB_STATE="$state" PATH="${bin}:$PATH" bash "$impl" --repo not-a-repo --pr 7
 rc=$?
 [ "$rc" -eq 2 ] || fail "12: a usage error with stderr closed exited ${rc}, not 2"
 
+test_run_completed=1
 if [ "$failures" -eq 0 ]; then
   printf 'bot-pr-adaptation-push test: all assertions passed\n'
   exit 0

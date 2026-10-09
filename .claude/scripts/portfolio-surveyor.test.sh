@@ -8,7 +8,19 @@ surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 surveyor_diff="${repo_root}/.claude/plugin-consumption/agentic-engineering-surveyor-diff.md"
 # The contract is AGENTS.md plus every guide it indexes; these assertions span several guides.
 constitution="$(mktemp)"
-trap 'rm -f "${constitution}"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -f "${constitution}"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "portfolio-surveyor.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 "${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
   { echo "portfolio surveyor contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
@@ -4280,3 +4292,4 @@ rm -f "${_checks_mutant}"
 [[ "${_mut_err}" == *'row templates carry'* ]] ||
   fail "control: the checks grammar binding did not reject a template that dropped the required-gate values (monorepo#3506)"
 echo "portfolio surveyor contract: monorepo#3506 required-gate assertions passed"
+test_run_completed=1

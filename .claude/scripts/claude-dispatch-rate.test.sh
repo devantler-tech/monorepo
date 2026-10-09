@@ -15,7 +15,18 @@ SCRIPT="$SCRIPT_DIR/claude-dispatch-rate.sh"
 command -v jq >/dev/null 2>&1 || { echo "FAIL: jq is required" >&2; exit 1; }
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$TMP"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "claude-dispatch-rate.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 
 # 2026-09-01T00:00:00Z. Slots below are offsets from here.
 BASE=1788220800
@@ -258,3 +269,4 @@ if [ "$fails" -gt 0 ]; then
   exit 1
 fi
 echo "claude-dispatch-rate.test.sh: all $asserts assertions passed"
+completed=1

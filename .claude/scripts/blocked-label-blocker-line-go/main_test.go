@@ -1324,3 +1324,101 @@ func TestOutcomeRecordIsCheckedLikeAnyOtherRecord(t *testing.T) {
 		t.Fatalf("an outcome record without the blocked label: code=%d out:\n%s", code, out)
 	}
 }
+
+// A number in running prose is not a reference: "we chose option #7" must not
+// clear Security issue #7 (#3822). A bare #N counts only where the text is
+// built as a reference: straight after a reference word, or in a list one
+// opens. A qualified reference and an issue link name the issue outright.
+func TestABareNumberCountsOnlyAsAReference(t *testing.T) {
+	human := func(body string) []string { return []string{pullRequest("platform", "devantler", body)} }
+	for _, tc := range []struct {
+		name, body string
+		finding    bool
+	}{
+		{"a number in running prose", "We chose option #42 over the others.", true},
+		{"a step number", "Step #42 of the rollout is unchanged.", true},
+		{"a number alone on a line", "#42", true},
+		{"a word that only ends in a reference word", "The prefix #42 is unchanged; we oversee #42 too.", true},
+		{"a reference word further back in the sentence", "Fixes the retry bug by choosing option #42", true},
+		{"a cross-reference that is not work on it", "As you can see #42 is unaffected. See #42 for background.", true},
+		{"a closing keyword", "Closes #42", false},
+		{"a closing keyword in another case, with a colon", "RESOLVES: #42", false},
+		{"a Part of line", "Part of #42", false},
+		{"a Part of line in bold", "**Part of** #42", false},
+		{"a list item", "- Refs #42", false},
+		{"second in a list a keyword opens", "Fixes #7, #42", false},
+		{"last in a list joined by and", "Fixes #7 and #42", false},
+		{"after a qualified reference in the same list", "Fixes devantler-tech/ksail#7, #42", false},
+		{"related work", "Related to #42.", false},
+		{"an issue link", "https://github.com/devantler-tech/platform/issues/42", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out := runInput(t, parkedPayload("", human(tc.body)...))
+			if got := strings.Contains(out, "UNRECORDED platform#42  "); got != tc.finding || (code == 1) != tc.finding {
+				t.Fatalf("finding=%v code=%d, want finding=%v; out:\n%s", got, code, tc.finding, out)
+			}
+		})
+	}
+}
+
+// A pull request can name its issue only in its title (#3822).
+func TestAReferenceInAPullRequestTitleCounts(t *testing.T) {
+	titled := func(repo, title string) []string {
+		record, err := json.Marshal(map[string]any{
+			"repo": repo, "number": 900, "labels": []any{}, "pull_request": map[string]any{},
+			"user": map[string]string{"login": "devantler"}, "title": title, "body": "",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []string{string(record)}
+	}
+	for _, tc := range []struct {
+		name, repo, title string
+		finding           bool
+	}{
+		{"a trailing parenthesised number", "platform", "fix(auth): bound the retry (#42)", false},
+		{"a parenthesised list", "platform", "fix(auth): bound the retry (#7, #42)", false},
+		{"a closing keyword", "platform", "Fixes #42: bound the retry", false},
+		{"a qualified reference from another repository", "ksail", "fix: adapt to devantler-tech/platform#42", false},
+		{"a number in the title's prose", "platform", "fix: choose option #42 for retries", true},
+		{"a parenthesised number in another repository", "ksail", "fix(auth): bound the retry (#42)", true},
+		{"no reference at all", "platform", "fix(auth): bound the retry", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out := runInput(t, parkedPayload("", titled(tc.repo, tc.title)...))
+			if got := strings.Contains(out, "UNRECORDED platform#42  "); got != tc.finding || (code == 1) != tc.finding {
+				t.Fatalf("finding=%v code=%d, want finding=%v; out:\n%s", got, code, tc.finding, out)
+			}
+		})
+	}
+}
+
+// Across a whole organisation, reading no Security issue at all is far more
+// likely a type that was renamed or hidden from the token than a portfolio
+// with none, so "none unstarted" is unproven (#3822). A recorded input keeps
+// its count: whoever recorded it chose what it holds.
+func TestAnOrgReadWithNoSecurityIssueIsUnknown(t *testing.T) {
+	bug := strings.Replace(forgeIssue, `"type":{"name":"Security"}`, `"type":{"name":"Bug"}`, 1)
+	if bug == forgeIssue {
+		t.Fatal("the fixture no longer carries the Security type this test rewrites")
+	}
+	serveForge(t, searchPage(bug), searchPage(), "")
+	code, out := runOrg(t)
+	if code != 2 || !strings.Contains(out, "read no open Security issue") || strings.Contains(out, "none of the 0") {
+		t.Fatalf("code=%d out:\n%s", code, out)
+	}
+	t.Run("the parked digest does not read issue types and is unaffected", func(t *testing.T) {
+		serveForge(t, searchPage(bug), searchPage(), "")
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{"--org", "o", "--today", "2026-09-01", "--parked-digest"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+			t.Fatalf("code=%d out:\n%s%s", code, stdout.String(), stderr.String())
+		}
+	})
+}
+
+// freshSecurityIssue is a Security issue still inside the bound: an org read
+// that serves it has read the type, and it is not itself a finding. Tests of
+// the verdict report that are about something else serve it, because an org
+// read with no Security issue at all is UNKNOWN (#3822).
+var freshSecurityIssue = strings.Replace(forgeIssue, "2026-08-20T10:00:00Z", "2026-08-30T10:00:00Z", 1)

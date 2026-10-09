@@ -10,6 +10,13 @@ description: "The ADVANCE playbook for the Agentic Engineer (the products' prima
 > repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
 > deltas here; never add a second copy of generic behaviour.
 
+Read the canonical `product-engineering` skill from the same resolved reviewed source before
+applying this deployment's deltas. Its source path is
+[`plugins/agentic-engineering/skills/product-engineering/SKILL.md`](../../../libraries/agent-plugins/plugins/agentic-engineering/skills/product-engineering/SKILL.md)
+at the adopted plugin gitlink. Use the reviewed-source resolution in the
+[definition guide](../../guides/definition-and-plugin.md); an installed cache or a floating checkout
+does not replace that source. The consumer contract governs deployment controls and artifact format.
+
 This is the *advance* half of the role. The **operate** half (keep everything healthy) and the run
 loop live in [`portfolio-maintenance`](../portfolio-maintenance/SKILL.md); the binding rules live in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) and the agent guides it indexes — for advance work the
@@ -93,23 +100,24 @@ substantive strategy or enhancement slice:
    experiment issue and any parent roadmap item, then close the experiment issue only after that
    decision. A technically successful launch that does not move the value signal is a learning, not a
    reason to keep investing automatically. Its named measurement date is a valid time gate in the
-   oldest-first queue only until that date arrives.
+   verification queue only until that date arrives.
 
-Evidence does not let a shiny new idea jump the oldest-actionable queue. Revalidate the oldest issue
-when starting it; if current evidence invalidates its premise, close or reframe it with the reason. If
+Evidence reprioritizes work through refinement, not by bypassing Ready eligibility or WIP limits.
+Revalidate the selected issue when starting it; if current evidence invalidates its premise, close or reframe it with the reason. If
 the problem remains real but measurement is weak, decomposition starts with the evidence gap.
 
 ## 2. Issue triage & creation
+
 Issues are the unit of work (contract *Issue-driven*) — this is where new work enters the queue.
 - **Capture new work as an issue first (issue-first).** Before building anything new and non-trivial —
   a bug, gap, coverage hole, refactor, perf hotspot, docs improvement, enhancement — **file a
-  well-formed issue for it** so it enters the oldest-first backlog rather than jumping the queue as an
+  well-formed issue for it** so it enters value-led refinement rather than jumping the queue as an
   ad-hoc PR. *Trivial, obvious fixes are the carve-out* (a typo, dead link, missing alt-text → a small
   PR is fine). Live breakage is a hotfix — fix it now, file a tracking issue only if it helps follow-up.
 - **Triage incoming:** set an **Issue Type** — **mandatory, exactly one** of Epic / Feature / Bug /
   Security / Performance / Refactor / Docs / Spike / Kata / Chore (each implies a different
-  definition-of-done — see the contract's *Issue hierarchy*). **The type alone makes it queueable** —
-  the surveyor selects by type, so no companion label is required; label only for genuinely
+  definition-of-done — see the contract's *Issue hierarchy*). **Type does not establish importance or Ready eligibility** —
+  record priority and outcome evidence separately; label only for genuinely
   cross-cutting concerns (`automation`, `kubernetes`, `good first issue`).
   **link it under its epic as a sub-issue** if it belongs to one; **put it on
   [project 5](https://github.com/orgs/devantler-tech/projects/5) with a `Status`** (📥 Backlog unless
@@ -128,8 +136,10 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
   contributors.
 
 ## 3. Plan & implement
-1. **Pick the oldest *actionable* open issue — and "big" is not a reason to skip it.** Prefer the
-   **oldest** startable issue. Skip an older one **only** if (a) it already has an open PR, (b) it is
+1. **Pull the most important eligible Ready work — and "big" is not a reason to skip it.** Apply
+   canonical *Value-prioritized Kanban pull* and the reviewed assessment before claiming: complete
+   joins, downstream capacity, importance, end-to-end effort and original clocks. Unknown means HOLD.
+   Skip an eligible issue **only** if (a) it already has an open PR, (b) it is
    blocked on a **named, live-verified** external dependency you can cite, (c) it is too
    under-specified to begin, (d) a delivered experiment is waiting for its named future measurement
    date — once that date arrives, measuring it is actionable — or (e) another instance holds a **live
@@ -143,7 +153,7 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    open native blocking-dependency count is above zero, read on the issue itself and never through the
    blocker nodes' metadata; a closed blocker the issue's own record names is re-verified before work
    builds on it (contract skip clause (g)).
-   **`type:"Spike"` is not a skip and not a delivery-PR:** when it is the oldest actionable issue,
+   **`type:"Spike"` is not a skip and not a delivery-PR:** when it is the selected actionable issue,
    record the decision on the Spike and file its follow-up issues — that pair is the floor artifact;
    do not open a delivery PR (#2267; contract *Issue hierarchy → Spike*). Since no PR opens to
    perform normal cleanup, **atomically renew the retained SHA** immediately before publishing the
@@ -151,7 +161,7 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    "$claim_sha" --repo-dir <product-path>)"`, then **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
    and before closing the Spike. **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
-   when the oldest issue is large, **decompose it into a small first child and ship that increment**
+   when the important issue is large, **decompose it into a valuable first child and ship that increment**
    (`Fixes #child`; add `Part of #experiment` when the parent stays open) so the big thing advances
    across runs. ("Repo Assist"/`automation`
    roadmap issues are KSail's own *feature specs*, part of the queue — not maintainer-interactive work.)
@@ -240,31 +250,27 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    (definition PRs included: their separate promotion gate was retired 2026-07-18).
 
 ## 4. Test coverage
-Raise coverage where it *matters*, not for a vanity number.
-- **Find gaps:** Go — `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out` (per-func
-  %); .NET — `dotnet test --collect:"XPlat Code Coverage"`; TS/Svelte — `vitest run --coverage`. Target
-  under-tested **critical paths** (error handling, edge cases, regressions), not getters/scaffolding.
-- **Add meaningful tests:** assert real behaviour and boundaries; reproduce a past bug as a regression
-  test. **Never** weaken an assertion, add a vacuous test, or `t.Skip`/`[Fact(Skip=…)]` to make
-  numbers move. A coverage PR with weak tests is worse than none.
+Follow the canonical skill's
+[Test coverage](../../../libraries/agent-plugins/plugins/agentic-engineering/skills/product-engineering/SKILL.md#4-test-coverage)
+procedure, including its incomplete-observation regression guidance.
+Deployment tooling: Go — `go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`
+(per-function coverage); .NET — `dotnet test --collect:"XPlat Code Coverage"`;
+TS/Svelte — `vitest run --coverage`. Each product's maintenance contract selects the applicable command.
 
 ## 5. Benchmarking & performance
-Optimise with evidence, never by guesswork.
-- **Baseline first:** Go — `go test -bench . -benchmem` (+ `pprof` for hotspots); .NET — BenchmarkDotNet;
-  CLI/build — wall-clock + CI duration; site — built bundle size / Lighthouse. Capture the *before*.
-- **Find the real hotspot** (profile; don't assume), change one thing, **re-measure**, and put
-  **before/after numbers in the PR body**. Keep behaviour identical (a perf PR is not a feature PR);
-  back it with the existing tests + a benchmark. Skip evidence-free micro-optimisation.
+Follow the canonical skill's
+[Benchmarking & performance](../../../libraries/agent-plugins/plugins/agentic-engineering/skills/product-engineering/SKILL.md#5-benchmarking--performance)
+procedure. Deployment tooling: Go — `go test -bench . -benchmem` and `pprof`;
+.NET — BenchmarkDotNet; CLI/build — wall-clock and CI duration; site — built bundle size and Lighthouse.
+This deployment's PM-facing artifact contract puts detailed measurements in the readiness comment;
+the PR body follows the organization template.
 
 ## 6. Refactoring & code quality
-Targeted, **behaviour-preserving** improvement, backed by tests.
-- Cut duplication and cyclomatic complexity, modernise idioms, tighten types/error handling, improve
-  names and module boundaries, delete dead code. Use `engineering:tech-debt` to pick the
-  highest-leverage target.
-- **Never mix a refactor with a behaviour change** in one PR — reviewers must be able to trust the diff
-  is a no-op. Keep diffs reviewable (split large refactors into incremental PRs). Run the linter/formatter
-  (`golangci-lint`, `dotnet format`, `actionlint`, the repo's formatter) and the full test suite before
-  the PR; if tests are thin in the area, add them *first* (a separate PR) so the refactor is safe.
+Follow the canonical skill's
+[Refactoring & code quality](../../../libraries/agent-plugins/plugins/agentic-engineering/skills/product-engineering/SKILL.md#6-refactoring--code-quality)
+procedure, including its tool-maturation and independent-reuse decisions.
+Deployment lint and formatter tools include `golangci-lint`, `dotnet format`, `actionlint`, and the
+repository's formatter; each product's maintenance contract remains authoritative for validation.
 
 ## 7. Documentation
 Treat docs as part of the product — keep them **in sync** with what ships and **improve** what exists.
@@ -401,7 +407,7 @@ maintainer direction 2026-07-05):
   hunt friction: bugs, rough edges, missing affordances, slow paths, flaky behaviour, confusing UX.
 - **Output = well-formed issues, never ad-hoc PRs.** Each finding becomes an issue using the contract's
   evidence-led shape (labelled; `roadmap` for theme-sized findings) per the *Issue-driven* rule, joining
-  the oldest-first queue. Research restocks the queue — it never displaces startable substantive work.
+  value-led refinement. Research restocks the queue — it never displaces startable important work.
 - **Research position & cadence.** Record a per-product `last_research` cursor in native memory (pointer only).
   Dedupe against existing issues before filing; a research pass that files nothing new still updates
   the cursor and notes what was checked.

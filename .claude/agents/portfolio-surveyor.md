@@ -192,8 +192,8 @@ public and private — no per-repo loop needed to enumerate):
    work.** This set is
    much larger than the `devantler`-only one it replaces, and the heavy fields plus the GraphQL
    thread query are what exhaust the API pool mid-survey — measured 2026-08-09, when the pool ran
-   out and **40 `platform` PRs went undeepened with no pentad at all**. Deepen in **`updatedAt`
-   ascending** order, which is exactly rung 1's own working order, so the budget lands on the PRs
+   out and **40 `platform` PRs went undeepened with no pentad at all**. Deepen in the canonical
+   ladder's finishing order, never `updatedAt` as waiting age, so the budget lands on the PRs
    the run will actually pick up. If the pool runs short, **stop and say so explicitly** — emit the
    undeepened remainder as `NOT-DEEPENED (budget)` rows naming the count and the repos, never a
    silent cheap row that reads like a completed assessment:
@@ -1364,9 +1364,8 @@ public and private — no per-repo loop needed to enumerate):
    automation identities** (`renovate[bot]` / `dependabot[bot]`; also `app/renovate` /
    `app/dependabot` on surfaces that spell them that way) — the issue-only boundary from step 2;
    they are never oldest-actionable (verified against `platform#313`).
-   **`security` is REPORTED, not prioritised**: the queue
-   stays oldest-actionable-first and a security issue is *not* a reason to skip an older one — only an
-   urgent security hotfix jumps, under the normal breakage rule.
+   **Follow Value-prioritized Kanban pull** in the work-selection guide: join project-5 eligibility,
+   priority and WIP; missing joins are `QUERY-UNKNOWN`. Type and age alone never establish importance.
    **Exclude a DELIVERED `Kata` whose named measurement date is still in the FUTURE** — skip reason
    (d). An undelivered one is delivery work (monorepo#3619). Read both ONLY with
    `gh api repos/devantler-tech/<repo>/issues/<n> --jq '{body:(.body // ""),sub_issues:.sub_issues_summary}' | <repo-root>/.claude/scripts/kata-measure-date.sh --input -`

@@ -18,7 +18,18 @@ SCRIPT="$SCRIPT_DIR/submodule-pin-currency.sh"
 [ -f "$SCRIPT" ] || { echo "FAIL: script not found at $SCRIPT" >&2; exit 1; }
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$TMP"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "submodule-pin-currency.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 
 fails=0
 asserts=0
@@ -287,3 +298,4 @@ if [ "$fails" -ne 0 ]; then
   exit 1
 fi
 echo "submodule-pin-currency.test.sh: all $asserts assertion(s) passed"
+completed=1
