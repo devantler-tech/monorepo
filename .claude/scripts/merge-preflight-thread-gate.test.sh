@@ -40,6 +40,20 @@
 
 set -euo pipefail
 
+self_test_dir="$(mktemp -d)"
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "${self_test_dir}"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "merge-preflight-thread-gate.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 self_basename="$(basename "${BASH_SOURCE[0]}")"
 constitution="${repo_root}/.claude/guides/merge-policy.md"
@@ -238,8 +252,6 @@ bad_lists_in() {
 # `scanned` counts readable FILES, not successfully parsed field lists. If the extraction pattern ever
 # stops matching, every surface yields nothing, no offender is found, and the control prints OK over
 # every surface while detecting nothing at all. So exercise it against fixtures before trusting it.
-self_test_dir="$(mktemp -d)"
-trap 'rm -rf "${self_test_dir}"' EXIT
 
 # Each BAD form pairs the offending field with a DIFFERENT valid field on purpose: the extractor ends in
 # `sort -u`, so fixtures normalising to the same string would collapse and under-report detection.
@@ -516,3 +528,4 @@ for trigger in \
   grep -qxF -- "${trigger}" <<<"${filter_block}" ||
     fail "ci.yaml filter is missing ${trigger# *} — an edit there would not run this guard"
 done
+test_run_finished=1

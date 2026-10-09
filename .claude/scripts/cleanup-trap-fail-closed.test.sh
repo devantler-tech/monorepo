@@ -322,6 +322,9 @@ pr-body-contract.test.sh|
 provider-neutral-agents-contract.test.sh|
 claim-pr-findings-contract.test.sh|
 improver-role-disclosure-contract.test.sh|
+merge-confirmation-read.test.sh|
+merge-preflight-thread-gate.test.sh|
+drifted-lane-escalation-contract.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"
