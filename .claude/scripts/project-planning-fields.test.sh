@@ -22,12 +22,14 @@ result="$(bash "$helper" --input - <<<"$fixture")" || fail "native fields were n
 expected='{"Priority":{"projectFieldId":"native-priority","issueFieldId":"IFSS_kgDOAck10g"},"Effort":{"projectFieldId":"native-effort","issueFieldId":"IFSS_kgDOAck11Q"},"Start date":{"projectFieldId":"native-start","issueFieldId":"IFD_kgDOAck10w"},"Target date":{"projectFieldId":"native-target","issueFieldId":"IFD_kgDOAck11A"}}'
 [ "$result" = "$expected" ] || fail "a project-local duplicate shadowed a native field: $result"
 
-unknown() {
-  local input="$1" reason="$2" output rc=0
+reject() {
+  local input="$1" reason="$2" expected_rc="$3" label="$4" output rc=0
   output="$(bash "$helper" --input - <<<"$input" 2>&1)" || rc=$?
-  [ "$rc" -eq 2 ] || fail "$reason returned $rc, expected UNKNOWN"
-  case "$output" in *"UNKNOWN"*) ;; *) fail "$reason has no actionable UNKNOWN diagnostic" ;; esac
+  [ "$rc" -eq "$expected_rc" ] || fail "$reason returned $rc, expected $label"
+  case "$output" in *"$label"*) ;; *) fail "$reason has no actionable $label diagnostic" ;; esac
 }
+unknown() { reject "$1" "$2" 2 UNKNOWN; }
+finding() { reject "$1" "$2" 1 FINDING; }
 
 unknown '' 'empty read'
 unknown '{' 'malformed JSON'
@@ -38,13 +40,14 @@ unknown "$(jq -c '.data.organization.projectV2.fields.pageInfo.hasNextPage=true'
 unknown "$(jq -c 'del(.data.organization.projectV2.fields.pageInfo)' <<<"$fixture")" 'missing completeness evidence'
 unknown "$(jq -c '.data.organization.projectV2.id="another-project"' <<<"$fixture")" 'wrong board'
 unknown "$(jq -c '.data.organization.projectV2.fields.nodes=[]' <<<"$fixture")" 'empty field list'
-unknown "$(jq -c '.data.organization.projectV2.fields.nodes |= map(select(.id!="native-priority"))' <<<"$fixture")" 'project-local field only'
-unknown "$(jq -c '.data.organization.projectV2.fields.nodes[2].issueField.id="lookalike"' <<<"$fixture")" 'wrong issue-field identity'
-unknown "$(jq -c '.data.organization.projectV2.fields.nodes[2].isIssueField=false' <<<"$fixture")" 'unbound native lookalike'
-unknown "$(jq -c '.data.organization.projectV2.fields.nodes[2].issueField.visibility="PRIVATE"' <<<"$fixture")" 'private field on public board'
-unknown "$(jq -c '.data.organization.projectV2.fields.nodes[2].__typename="ProjectV2Field"' <<<"$fixture")" 'wrong native select type'
-unknown "$(jq -c '.data.organization.projectV2.fields.nodes[4].dataType="TEXT"' <<<"$fixture")" 'wrong date type'
+finding "$(jq -c '.data.organization.projectV2.fields.nodes |= map(select(.id!="native-priority"))' <<<"$fixture")" 'project-local field only'
+finding "$(jq -c '.data.organization.projectV2.fields.nodes[2].issueField.id="lookalike"' <<<"$fixture")" 'wrong issue-field identity'
+finding "$(jq -c '.data.organization.projectV2.fields.nodes[2].isIssueField=false' <<<"$fixture")" 'unbound native lookalike'
+finding "$(jq -c '.data.organization.projectV2.fields.nodes[2].issueField.visibility="PRIVATE"' <<<"$fixture")" 'private field on public board'
+finding "$(jq -c '.data.organization.projectV2.fields.nodes[2].__typename="ProjectV2Field"' <<<"$fixture")" 'wrong native select type'
+finding "$(jq -c '.data.organization.projectV2.fields.nodes[4].dataType="TEXT"' <<<"$fixture")" 'wrong date type'
 unknown "$(jq -c '.data.organization.projectV2.fields.nodes[2].id=""' <<<"$fixture")" 'missing mutation identity'
 unknown "$(jq -c '.data.organization.projectV2.fields.nodes += [.data.organization.projectV2.fields.nodes[2]]' <<<"$fixture")" 'ambiguous native binding'
+unknown "$(jq -c '.data.organization.projectV2.fields.nodes += [.data.organization.projectV2.fields.nodes[2] | .id="second-native-priority"]' <<<"$fixture")" 'two distinct attachments for one native field'
 
 echo 'project-planning-fields.test: all assertions passed'

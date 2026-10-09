@@ -2,8 +2,11 @@
 # monorepo#4057: resolve Project 5's native planning bindings, never a same-named local copy.
 # Read-only classifier: no GitHub calls or mutations. Input is the complete GraphQL envelope
 # data.organization.projectV2 { id fields { nodes { ... } pageInfo { hasNextPage } } }.
-# Request isIssueField on ProjectV2FieldCommon and issueField { id name visibility } on BOTH
-# ProjectV2Field and ProjectV2SingleSelectField. Native select attachments have empty options;
+# Request isIssueField on ProjectV2FieldCommon. In BOTH ProjectV2Field and
+# ProjectV2SingleSelectField branches, select the IssueFields union with inline fragments:
+# issueField { ... on IssueFieldSingleSelect { id name visibility }
+#              ... on IssueFieldDate { id name visibility } }
+# Native select attachments have empty options;
 # option identities are read separately from the linked organization issue field.
 set -euo pipefail
 
@@ -37,14 +40,22 @@ result="$(jq -sce '
       {name:"Start date", id:"IFD_kgDOAck10w", type:"ProjectV2Field", dataType:"DATE"},
       {name:"Target date", id:"IFD_kgDOAck11A", type:"ProjectV2Field", dataType:"DATE"}
     ]
-  | reduce .[] as $want ({};
-      [$fields[] | select(.issueField.id == $want.id)] as $matches
-      | (if ($matches | length) != 1 then error("missing or ambiguous native " + $want.name)
-        else $matches[0] end) as $field
-      | if $field.isIssueField != true or $field.name != $want.name
-           or $field.issueField.name != $want.name or $field.issueField.visibility != "ALL"
-           or $field.__typename != $want.type or $field.dataType != $want.dataType then
-          error("unverified native binding for " + $want.name)
-        else . + {($want.name): {projectFieldId:$field.id, issueFieldId:$want.id}} end)
+  | map(. as $want
+      | [$fields[] | select(.issueField.id == $want.id)] as $matches
+      | if ($matches | length) > 1 then error("ambiguous native " + $want.name)
+        else {want:$want, field:($matches[0] // null)} end)
+  | [.[] | select(.field == null or .field.isIssueField != true or .field.name != .want.name
+       or .field.issueField.name != .want.name or .field.issueField.visibility != "ALL"
+       or .field.__typename != .want.type or .field.dataType != .want.dataType) | .want.name] as $invalid
+  | if ($invalid | length) > 0 then
+      {finding:("missing or invalid native attachments: " + ($invalid | join(", ")))}
+    else reduce .[] as $binding ({};
+      . + {($binding.want.name): {projectFieldId:$binding.field.id, issueFieldId:$binding.want.id}})
+    end
 ' <<<"$payload")" || unknown 'native planning bindings unverified; re-read, never create a fallback copy'
+if jq -e 'has("finding")' <<<"$result" >/dev/null; then
+  printf 'project-planning-fields: FINDING %s; restore the existing native binding, never create a copy\n' \
+    "$(jq -r '.finding' <<<"$result")" >&2
+  exit 1
+fi
 printf '%s\n' "$result"

@@ -505,8 +505,8 @@ Compare native issue Priority (Urgent, High, Medium, Low) first, then current pr
 audience impact, deadline/cost of waiting, risk reduction and prerequisites unlocked relative to
 **end-to-end** effort, including CI,
 review, deployment and verification. Evidence belongs on the issue; do not invent scores or infer
-priority from type, labels, comments or age. Read native Effort rather than a project-local size copy;
-an unset priority requires refinement, not a default Medium. A critical obligation is refined promptly
+priority from type, labels, comments or age. Read native Effort rather than a duplicate project-local
+estimate; an unset priority requires refinement, not a default Medium. A critical obligation is refined promptly
 without trading away its safety deadline. Large important work gets a valuable independent slice, not skipped
 for small low-value work. Backlog is a near-term refinement/replenishment queue; Icebox is deferred.
 

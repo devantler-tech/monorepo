@@ -240,7 +240,9 @@ remain private. Reuse their existing definitions, not new organization fields.
 Names alone do not establish identity: read a complete Project field census and run
 `bash .claude/scripts/project-planning-fields.sh --input <response.json>` before writing planning
 values. The helper verifies `isIssueField` and the linked `issueField.id` for both
-`ProjectV2SingleSelectField` and `ProjectV2Field`; UNKNOWN permits no write or fallback copy.
+`ProjectV2SingleSelectField` and `ProjectV2Field`. Exit 1/FINDING identifies a confirmed missing or
+invalid binding; exit 2/UNKNOWN means the response cannot prove the bindings. Neither permits a
+planning write or fallback copy.
 Read select options from the organization issue field, not the attachment's empty `options` list.
 Write native values on the issue so they remain consistent across projects.
 
