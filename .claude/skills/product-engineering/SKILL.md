@@ -17,6 +17,9 @@ at the adopted plugin gitlink. Use the reviewed-source resolution in the
 [definition guide](../../guides/definition-and-plugin.md); an installed cache or a floating checkout
 does not replace that source. The consumer contract governs deployment controls and artifact format.
 
+For authorized third-party PRs, the reviewed plugin's
+`portfolio-maintenance/references/upstream-contributions.md` governs instead of the portfolio review and promotion rules below.
+
 This is the *advance* half of the role. The **operate** half (keep everything healthy) and the run
 loop live in [`portfolio-maintenance`](../portfolio-maintenance/SKILL.md); the binding rules live in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) and the agent guides it indexes — for advance work the

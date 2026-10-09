@@ -7,6 +7,17 @@
 
 ## The green-review gate — reading each lane's verdict
 
+This gate, its review requests and its posted local-review receipts govern portfolio PRs.
+For an authorized contribution to a third-party project, use the reviewed plugin's
+`portfolio-maintenance/references/upstream-contributions.md` procedure: internal reviews and
+their evidence remain private, including reviews by children and local tools. Do not post an
+internal review, request a review bot, or add a readiness comment on the upstream PR. Update its
+title and description and explicitly mark it Ready for Review when the separate handoff gate
+holds. Feedback received from the upstream maintainer or their enabled tools is addressed and
+answered in the contributor's voice in plain English; resolve threads only after addressing the
+feedback. These replies are the exception to quiet routine bookkeeping, never an internal review
+receipt. The posted-review and comment requirements below do not apply to that upstream handoff.
+
 **CodeRabbit is first and foremost a review provider.** Its pre-merge evaluator is ancillary: do not
 request, chase, parse, or persist it as a separate readiness surface. **Missing or delayed pre-merge output never blocks promotion**,
 and a green, absent, inconclusive, or unparseable evaluator summary

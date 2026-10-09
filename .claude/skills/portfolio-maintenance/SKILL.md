@@ -10,6 +10,9 @@ description: The run procedure for the Agentic Engineer (the products' primary e
 > repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
 > deltas here; never add a second copy of generic behaviour.
 
+For authorized third-party PRs, the reviewed canonical skill's
+`references/upstream-contributions.md` governs instead of the portfolio review and promotion rules below.
+
 This is the procedure the `daily-maintainer` agent follows each run. The **shared contract** is the
 monorepo [`AGENTS.md`](../../../AGENTS.md) plus the [agent guides](../../guides/) it indexes — the
 maintain-*and*-advance mandate, autonomy, merge policy, product strategy & roadmaps, enhancement work,

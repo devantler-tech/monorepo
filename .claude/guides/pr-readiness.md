@@ -7,6 +7,17 @@
 
 ## Autonomy — self-promotion on genuine readiness
 
+The promotion gate and public readiness receipts below govern portfolio repositories. For an
+authorized contribution to a third-party project, follow the reviewed plugin's
+`portfolio-maintenance/references/upstream-contributions.md` procedure instead. Perform the
+current-head internal review privately, record concise validation and limitations in the PR
+description, and explicitly mark the contribution Ready for Review when that handoff is ready.
+Do not wait for upstream approval before offering it for review. A fork workflow awaiting the
+upstream maintainer's approval to run is an external dependency to name in the description, never
+a passed check. It does not require a validated contribution to stay draft. Actual failing checks,
+unaddressed findings, merge conflicts and incomplete local validation still block the handoff.
+No internal review, readiness or user-evaluation comment is posted on the upstream PR.
+
 Act on your own best judgement and DO the work; don't defer decisions. Work is **issue-driven** (see
 *Issue-driven*): you act on an **eligible Ready issue**, by importance within downstream capacity — when you've identified an
 actionable change for one — fix, cleanup, larger restructure, breaking change, new/bumped dependency —
