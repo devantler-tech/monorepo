@@ -38,6 +38,7 @@
 #                holds commits no remote-tracking ref reaches
 #   clean        nothing a removal would destroy
 #
+# `local_only=` counts every such commit, so it includes the ones `unpushed=` counts.
 # The counts are local facts at the time of the read. "Reaches" is judged against the
 # remote-tracking refs already in the repository; a stale fetch can only over-report.
 # Submodules nested inside a submodule are not listed separately.
@@ -69,7 +70,7 @@ while [ $# -gt 0 ]; do
     --min-idle-days)
       [ $# -ge 2 ] || die "--min-idle-days needs a value"
       MIN_IDLE_DAYS=$2; shift 2 ;;
-    -h|--help) sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option: $1" ;;
     *) [ -z "$ROOT" ] || die "exactly one <worktree-root> is expected"
        ROOT=$1; shift ;;

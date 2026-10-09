@@ -15,7 +15,19 @@ ok()  { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 bad() { fail=$((fail+1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; }
 
 TMP=$(mktemp -d); TMP=$(cd "$TMP" && pwd -P)
-trap 'rm -rf "$TMP"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$TMP"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "worktree-submodule-inventory.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 
 g() { git -c user.email=t@t.t -c user.name=t -c commit.gpgsign=false "$@"; }
 
@@ -93,9 +105,9 @@ case "$(row g-precedence)" in *$'\tunpushed=1\t'*$'\tmodified=1\t'*$'untracked=1
 [ "$(row h-spaced | awk -F'\t' '{ print $3 }')" = 'sub dir' ] \
   && ok "a submodule path holding a space is kept whole" || bad "a submodule path holding a space is kept whole" "$(row h-spaced)"
 [ -z "$(row i-unpopulated)" ] && ok "an unpopulated submodule has no row" || bad "an unpopulated submodule has no row" "$(row i-unpopulated)"
-printf '%s\n' "$out" | grep -q $'^SKIP\tj-plain-directory\t' \
+grep -q $'^SKIP\tj-plain-directory\t' <<<"$out" \
   && ok "a directory that is not a worktree is reported, not classified" || bad "a non-worktree directory is reported" "$out"
-printf '%s\n' "$out" | grep -q $'^CHECKED\tworktrees=9\tentries=8\tmodified=2\tnested=1\tuntracked=2\tunpushed=1\tlocal_only=1\tclean=1\tbelow_min_idle=0\tskipped=1\tunreadable=0$' \
+grep -q $'^CHECKED\tworktrees=9\tentries=8\tmodified=2\tnested=1\tuntracked=2\tunpushed=1\tlocal_only=1\tclean=1\tbelow_min_idle=0\tskipped=1\tunreadable=0$' <<<"$out" \
   && ok "the closing line totals every class" || bad "the closing line totals every class" "$(printf '%s\n' "$out" | tail -n 1)"
 
 # Read-only: the run must not rewrite another session's index (GIT_OPTIONAL_LOCKS=0).
@@ -111,7 +123,7 @@ out=$(bash "$SUT" "$ROOT" --min-idle-days 30 2>&1); rc=$?
 n=$(printf '%s\n' "$out" | grep -c $'^ENTRY\t')
 { [ "$rc" -eq 0 ] && [ "$n" -eq 1 ] && [ "$(class_of c-modified)" = modified ]; } \
   && ok "--min-idle-days keeps only the old entry" || bad "--min-idle-days keeps only the old entry" "rc=$rc rows=$n"
-printf '%s\n' "$out" | grep -q $'\tentries=1\t.*\tbelow_min_idle=7\t' \
+grep -q $'\tentries=1\t.*\tbelow_min_idle=7\t' <<<"$out" \
   && ok "entries below the idle floor are counted, not dropped silently" || bad "below-floor entries are counted" "$(printf '%s\n' "$out" | tail -n 1)"
 
 # NEGATIVE CONTROL 1: a submodule whose .git points nowhere is UNREADABLE and the run is
@@ -121,7 +133,7 @@ ROOT_SAVE=$ROOT; ROOT=$BROKEN
 s=$(make_wt k-dangling)
 rm -rf "$s/.git"; printf 'gitdir: /nonexistent/gone\n' > "$s/.git"
 out=$(bash "$SUT" "$BROKEN" 2>&1); rc=$?
-{ [ "$rc" -eq 2 ] && printf '%s\n' "$out" | grep -q $'^UNREADABLE\tk-dangling\tsub\t' && [ -z "$(row k-dangling)" ]; } \
+{ [ "$rc" -eq 2 ] && grep -q $'^UNREADABLE\tk-dangling\tsub\t' <<<"$out" && [ -z "$(row k-dangling)" ]; } \
   && ok "a dangling submodule git directory is UNREADABLE and exits 2" || bad "a dangling submodule is UNREADABLE" "rc=$rc: $out"
 
 # NEGATIVE CONTROL 2: an EMPTY .git directory makes `git -C` answer for the parent
@@ -130,11 +142,11 @@ BROKEN2="$TMP/broken2"; mkdir -p "$BROKEN2"; ROOT=$BROKEN2
 s=$(make_wt l-parent-answers)
 rm -rf "$s/.git"; mkdir "$s/.git"
 out=$(bash "$SUT" "$BROKEN2" 2>&1); rc=$?
-{ [ "$rc" -eq 2 ] && printf '%s\n' "$out" | grep -q $'^UNREADABLE\tl-parent-answers\tsub\tgit resolves it to another working tree$' \
+{ [ "$rc" -eq 2 ] && grep -q $'^UNREADABLE\tl-parent-answers\tsub\tgit resolves it to another working tree$' <<<"$out" \
     && [ -z "$(row l-parent-answers)" ]; } \
   && ok "a submodule git answers for the parent is UNREADABLE, never clean" \
   || bad "a submodule git answers for the parent is UNREADABLE" "rc=$rc: $out"
-printf '%s\n' "$out" | grep -q $'\tclean=0\t.*\tunreadable=1$' \
+grep -q $'\tclean=0\t.*\tunreadable=1$' <<<"$out" \
   && ok "the unreadable entry is not counted as clean" || bad "the unreadable entry is not counted as clean" "$(printf '%s\n' "$out" | tail -n 1)"
 ROOT=$ROOT_SAVE
 
@@ -145,4 +157,5 @@ bash "$SUT" "$ROOT" --min-idle-days x >/dev/null 2>&1; [ $? -eq 2 ] && ok "a non
 bash "$SUT" "$ROOT" --frobnicate >/dev/null 2>&1; [ $? -eq 2 ] && ok "an unknown option exits 2" || bad "an unknown option exits 2"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
+test_run_completed=1
 [ "$fail" -eq 0 ]
