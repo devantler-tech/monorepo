@@ -24,6 +24,20 @@
 
 set -euo pipefail
 
+tmp="$(mktemp -d)"
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "${tmp}"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "improver-role-disclosure-contract.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 guides="${repo_root}/.claude/guides"
 constitution="${guides}/maintainer-channels.md"
@@ -86,8 +100,6 @@ esac
 # 3. BEHAVIOURAL: the real deployed guard must accept the new form as a leading disclosure. This is
 #    what proves no guard change is needed. Asserting it from the Go source would only restate the
 #    intent; running the guard tests it.
-tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
 printf '%s' '[{"id":1,"html_url":"https://x/1","issue_url":"https://api.github.com/repos/o/r/issues/1","user":{"login":"devantler"},"body":"'"${improver_form}"'\n\nrecorded a verdict"}]' >"${tmp}/improver.json"
 "${guard}" --input "${tmp}/improver.json" >/dev/null 2>&1 ||
   fail "the deployed guard rejects '${improver_form}' as a leading disclosure"
@@ -128,4 +140,5 @@ case "${operative}" in
   *) fail "the authoring rule in *GitHub artifact conventions* does not name '${improver_form}'" ;;
 esac
 
+test_run_finished=1
 echo "improver-role-disclosure contract: OK — ${passed} assertions passed"

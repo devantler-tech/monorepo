@@ -317,6 +317,11 @@ maintainer-comment-candidates.test.sh|
 pr-ownership-disclosure.test.sh|
 pr-worktree-holder.test.sh|
 required-gate-completeness.test.sh|
+kata-measure-date.test.sh|
+pr-body-contract.test.sh|
+provider-neutral-agents-contract.test.sh|
+claim-pr-findings-contract.test.sh|
+improver-role-disclosure-contract.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"
