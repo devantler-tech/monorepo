@@ -29,7 +29,19 @@ fail_case() {
 }
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "${tmp}"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "surveyor-hook-dispatch.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 
 cp "${dispatch}" "${tmp}/surveyor-hook-dispatch.sh"
 chmod +x "${tmp}/surveyor-hook-dispatch.sh"
@@ -136,3 +148,4 @@ if [ "${fail}" -ne 0 ]; then
   exit 1
 fi
 echo "surveyor-hook-dispatch: surveyor types forwarded verbatim, everything else untouched, wired in settings.json."
+test_run_completed=1

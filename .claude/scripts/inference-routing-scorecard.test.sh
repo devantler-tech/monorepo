@@ -3,7 +3,18 @@
 set -euo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "$TMP"
+  if [ "${completed}" != 1 ] && [ "${status}" = 0 ]; then
+    echo "inference-routing-scorecard.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
 cat > "$TMP/evidence.json" <<'JSON'
 {
   "version": 1,
@@ -84,3 +95,4 @@ bash "$HERE/inference-routing-scorecard.sh" < "$TMP/input.json" > "$TMP/output.j
 [[ "$status" == 2 && ! -s "$TMP/error" ]]
 jq -e '.status == "INVALID" and .optimizationVerdict == "NO_VERDICT"' "$TMP/output.json" > /dev/null
 printf 'PASS malformed JSON\n'
+completed=1

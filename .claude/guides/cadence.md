@@ -112,8 +112,8 @@ direction of waiting **longer** than planned — so prefer finishing inside the 
 work to a tick that may not come. The Agent Improver's four daily starts are additional work, not
 replacement slots. The scheduled interval is the gap **between runs, not a per-run time budget**; it
 bounds a carry-forward without telling an active run to stop early. Each run works
-*The work-selection ladder* top-down — **breakage → every open PR you own or trust, drafts included →
-security issues → bugs → the oldest actionable issue** — capturing new
+*The work-selection ladder* top-down — **breakage → finish started work and due verification →
+critical obligations → value-prioritized Ready pull → refinement/replenishment** — capturing new
 non-trivial finds as issues (see *Issue-driven*).
 **Stop starting, start finishing (WIP limit — the core agile principle).** Finishing in-flight work
 outranks starting new work. Each run, before opening any **new** draft, first drive **every own
@@ -180,8 +180,8 @@ per product (oldest first); heavy tasks (E2E audits, live-cluster reliability, s
 and the **cost pass** of *Spend contract*)
 ~weekly; review blog evidence/topics about monthly and publish or materially refresh a worthwhile post
 roughly every 4–8 weeks. Blog work stays low priority and bounded to at most one due action per run:
-**after operate work and one oldest-substantive slice**, a due review/publication/refresh may run before
-the next backlog issue, then normal oldest-first work resumes. A review with no worthwhile story does
+**after operate work and one important-substantive slice**, a due review/publication/refresh may run before
+the next eligible Ready issue, then normal value-prioritized work resumes. A review with no worthwhile story does
 not move the publication clock; never publish filler. The KSail Monthly Strategy runs at month start;
 **autonomous real-cluster trials run at most once a day** portfolio-wide. Maintainer-requested trials
 and their standing temporary-cost authorization follow
@@ -191,7 +191,7 @@ cadence is not a reason to refuse such a trial.
 self-test guards are valuable but **must not become every tick's output**: do **not** let the advance
 pick be a small coverage/docs/guard artifact for **more than ~2 consecutive runs** while any substantive
 `enhancement`/`roadmap`/`bug` issue is startable (decompose-and-start counts as startable — see
-*Issue-driven → Drain oldest-first*). Across each week the backlog's **oldest substantive issues must
+*Issue-driven → Pull valuable Ready work*). Across each week the board's **important substantive issues must
 visibly move** — a feature increment shipped, an epic's first child landed, a meaningful fix made — not
 merely its coverage % and docs freshness. If the substantive backlog *is* genuinely all blocked, that is
 **rare**: say so in the report with the **specific, live-verified blocker per issue**, rather than

@@ -17,7 +17,7 @@ Shape roadmap and enhancement issues as **evidence → audience/problem → hypo
 (baseline/target or an honest proxy + measurement window + guardrail) → smallest useful change →
 acceptance criteria + rough size. If the necessary signal does not exist, the first independently
 shippable child is measurement/instrumentation, not a guessed feature. Revalidate older issues against
-current evidence when work starts: age still controls queue order, but invalidated work is reframed or
+current evidence when work starts: documented importance and capacity govern intake, while invalidated work is reframed or
 closed with a reason rather than implemented mechanically. When success cannot be known at merge, keep
 the originating experiment issue open and give it a named follow-up date; ship through a delivery child
 whose PR uses `Fixes #child` plus `Part of #experiment`. After release, measure the chosen signal,
@@ -29,18 +29,19 @@ feedback loop, not proof of value.
 clear path to first value are outcomes the engineer owns alongside capability and reliability. Treat
 content, distribution, onboarding, examples, and calls to action as product surfaces, using meaningful
 signals rather than page-view vanity. This does not jump marketing work ahead of breakage, open PRs,
-or the oldest actionable substantive issue; it makes value evidence part of shaping and validating all
+or important eligible substantive work; it makes value evidence part of shaping and validating all
 of them.
 
 ## Enhancement work — moving products forward
+
 Beyond fixing what breaks, proactively improve each product — **all of it routed through issues** (see
 *Issue-driven*): each enhancement below is **captured as an issue first** (unless genuinely trivial)
-and then implemented from the backlog **oldest-actionable-first**, never picked up ad-hoc and turned
+and then implemented through **value-prioritized Ready pull within capacity**, never picked up ad-hoc and turned
 straight into a PR. These levers are **not co-equal — default to the first, not the easiest:**
-implementing the oldest substantive issue is the **primary** advance output; coverage, performance,
+implementing important substantive work is the **primary** advance output; coverage, performance,
 refactor, and docs are how you fill in *around* it or when nothing larger is startable, **never a
 standing substitute** for moving the real backlog:
-- **Implement (or decompose-and-start) the oldest substantive issue** — take the oldest actionable
+- **Implement (or decompose-and-start) important substantive Ready work** — take an eligible, important
   `enhancement`/`roadmap`/`bug`/`security` issue; if it is **large, decompose it into a small,
   well-specified first child and ship that increment** (`Fixes #child`, link the parent) rather than
   deferring the whole thing — a big issue moves forward across runs, it does not wait for a run big
@@ -49,7 +50,7 @@ standing substitute** for moving the real backlog:
   keep ADRs in another folder. Repositories without ADRs do not need to introduce them. Implement with
   tests under the normal draft-PR + validate discipline; close the delivery child and preserve any
   experiment parent per *Build the right thing*. **Being
-  large or hard is never why you skip it — see *Issue-driven → Drain oldest-first*.**
+  large or hard is never why you skip it — see *Issue-driven → Pull valuable Ready work*.**
 - **Security posture** — treat each product's live security findings as a first-class advance lever, not
   only a break/fix chore. **Ingest** them (the survey looks at live scanner state, not just GitHub) and
   beware the trap that **a `0`/empty reading is usually a *broken* scanner, not a clean cluster** — a
@@ -258,7 +259,7 @@ steps, tooling, generators, test harnesses, and one-off helpers. Concretely:
   letting bash sprawl — treat "bash first, Go when it grows" as the standard maturation path, and
   such migrations are real `refactor:` advance work.
 - Existing Python found anywhere in the portfolio is a **migration target**: capture an issue and
-  replace it with bash/Go on the normal oldest-first cadence.
+  replace it with bash/Go through normal value-prioritized refinement and delivery.
 - **CARVE-OUT — an embedded interpreter that admits only Python is NOT a migration target.** The ban
   targets scripting *we choose to write*, where bash or Go is genuinely available. When a host tool
   exposes its API solely to its own bundled Python — Blender's `bpy`, and the same shape in Godot

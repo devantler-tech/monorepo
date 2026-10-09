@@ -152,7 +152,7 @@ func serveParked(t *testing.T, pull string, attempts ...attempt) *int {
 	forgeRead = func(endpoint string) ([]byte, error) {
 		switch endpoint {
 		case searchEndpoint("o"):
-			return []byte(searchPage()), nil
+			return []byte(searchPage(freshSecurityIssue)), nil
 		case pullEndpoint("o"):
 			return []byte(searchPage(pull)), nil
 		case "repos/o/platform/issues/900":

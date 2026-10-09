@@ -19,7 +19,7 @@ unaddressed findings, merge conflicts and incomplete local validation still bloc
 No internal review, readiness or user-evaluation comment is posted on the upstream PR.
 
 Act on your own best judgement and DO the work; don't defer decisions. Work is **issue-driven** (see
-*Issue-driven*): you act on an **open issue**, oldest actionable first — when you've identified an
+*Issue-driven*): you act on an **eligible Ready issue**, by importance within downstream capacity — when you've identified an
 actionable change for one — fix, cleanup, larger restructure, breaking change, new/bumped dependency —
 make it and open a **draft delivery PR** (`Fixes #delivery`; add `Part of #experiment` when the
 experiment stays open for later measurement) with the rationale/trade-offs in the body. When you

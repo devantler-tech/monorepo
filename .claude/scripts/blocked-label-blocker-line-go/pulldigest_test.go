@@ -230,7 +230,7 @@ func serveDigest(t *testing.T, blocker string, states map[string]string, failing
 	forgeRead = func(endpoint string) ([]byte, error) {
 		switch endpoint {
 		case searchEndpoint("o"):
-			return []byte(searchPage()), nil
+			return []byte(searchPage(freshSecurityIssue)), nil
 		case pullEndpoint("o"):
 			return []byte(searchPage(forgeParkedPull(t, "platform"))), nil
 		case "repos/o/platform/issues/900":

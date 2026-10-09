@@ -295,6 +295,14 @@ neither falls back to CodeRabbit nor qualifies for the last-resort self-review, 
 parks. A failed run is distinguishable at a glance — it carries **zero** inline comments and **no**
 review object, and completes in seconds.
 
+For a no-gate record, `review-no-gate-guard.sh` decides the two shapes this table leaves open
+(monorepo#3821). **A Bugbot run that has not completed is UNKNOWN** unless a completed review
+already stands at the head: the request was accepted, so read again once the run ends. **A
+completed run in any other shape** — a `failure`, a timeout, a `neutral` under another title — is
+reported `UNJUDGED`: nobody has measured what such a run delivers, so read its output and the
+inline `cursor[bot]` comments by hand and record no no-gate from it. If that reading shows it
+delivered nothing, it is lane-failure evidence for the local review round, like the `Error` shape.
+
 ⚠️ **Bugbot is METERED against Cursor spend, so a batch of review requests can exhaust the lane
 outright — and the failure is NOT retryable.** In the same measurement, 25 consecutive requests
 returned real reviews and **every request after that returned `Error`**. The cause is not visible on

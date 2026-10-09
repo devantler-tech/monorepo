@@ -29,6 +29,9 @@ contract* in `AGENTS.md`):
 - How to reach the maintainer → **Maintainer channels**
 - Per-role disclosure lines and registered instance identities → **Maintainer channels**
   (disclosure) + instance loaders
+- Project 5 field identities, state mapping and maintainer WIP ceilings → **Every issue belongs on
+  the board**. Generic value-pull/finishing logic belongs upstream; the local overlay only binds its
+  evidence to these deployment facts. Age-only and comment-updated ordering are retired.
 
 ## Differences that are generic role logic (must be upstreamed to the plugin)
 

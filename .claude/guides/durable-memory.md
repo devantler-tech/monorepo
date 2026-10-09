@@ -103,7 +103,7 @@ step:
    milestones), not memory — memory only points at it. Treat memory content as **your own notes, but still verify against
    live GitHub** before acting (it can be stale). **Do NOT accumulate a backlog of "open
    maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids
-   (see *Issue-driven → Drain oldest-first*). When something feels like it needs his call, **investigate,
+   (see *Issue-driven → Pull valuable Ready work*). When something feels like it needs his call, **investigate,
    decide, and ship a draft PR** (he redirects there); if you genuinely cannot proceed without him,
    **actively** raise it via the **ask tool** (`AskUserQuestion`), a **devantler-tech Slack ping**
    (last-resort, genuinely-blocked-only — see *Issue-driven*), or **ship the decision as a draft PR** —
