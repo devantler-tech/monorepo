@@ -1,0 +1,257 @@
+// Conditional forge reads. Every sweep re-reads the same parked pull requests,
+// and almost none of them changed since the last one. The forge answers a
+// request that carries the validator of an earlier answer with "not modified"
+// and does not charge it to the hourly request budget (#4055), so each page is
+// kept beside its validator and offered back. Nothing is ever served on age:
+// a kept page is used only when the forge itself confirms it in this run.
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// forgeHost is the only place a continuation link may point.
+const forgeHost = "https://api.github.com/"
+
+// maxPages bounds one read; a longer one is an error, never a short answer.
+const maxPages = 50
+
+// keptPageAge is how long an unused page stays on disk.
+const keptPageAge = 7 * 24 * time.Hour
+
+// validatorRE admits a forge entity tag and nothing that could end the header
+// it is sent in.
+var validatorRE = regexp.MustCompile(`^(W/)?"[A-Za-z0-9+/=_.:-]{1,200}"$`)
+
+// forgePage is one answer of the forge: its status, the validator and the
+// continuation link it carried, and its body.
+type forgePage struct {
+	status    int
+	validator string
+	next      string
+	body      []byte
+}
+
+// keptPage is a page as it is stored between runs.
+type keptPage struct {
+	Target    string `json:"target"`
+	Validator string `json:"validator"`
+	Next      string `json:"next"`
+	Body      []byte `json:"body"`
+}
+
+// forgeFetch asks the forge for one page, offering validator when it is set;
+// tests replace it.
+var forgeFetch = func(target, validator string) (forgePage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	args := []string{"api", "--include"}
+	if validator != "" {
+		args = append(args, "-H", "If-None-Match: "+validator)
+	}
+	raw, err := exec.CommandContext(ctx, "gh", append(args, target)...).Output()
+	page, ok := parsePage(raw)
+	if !ok {
+		if err == nil {
+			err = errors.New("unreadable forge answer")
+		}
+		return forgePage{}, err
+	}
+	// gh exits non-zero on "not modified", which is the one answer a failed
+	// command may still carry: any other one may have been cut short.
+	if err != nil && page.status != 304 {
+		return forgePage{}, err
+	}
+	return page, nil
+}
+
+// parsePage splits what `gh api --include` printed into the answer's head and
+// body. It reports false when no status line can be read.
+func parsePage(raw []byte) (forgePage, bool) {
+	head, body, found := bytes.Cut(raw, []byte("\r\n\r\n"))
+	if !found {
+		if head, body, found = bytes.Cut(raw, []byte("\n\n")); !found {
+			head, body = raw, nil
+		}
+	}
+	lines := strings.Split(strings.ReplaceAll(string(head), "\r\n", "\n"), "\n")
+	status := strings.Fields(lines[0])
+	if len(status) < 2 || !strings.HasPrefix(status[0], "HTTP/") {
+		return forgePage{}, false
+	}
+	code, err := strconv.Atoi(status[1])
+	if err != nil {
+		return forgePage{}, false
+	}
+	page := forgePage{status: code, body: body}
+	for _, line := range lines[1:] {
+		name, value, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "etag":
+			page.validator = value
+		case "link":
+			page.next = nextLink(value)
+		}
+	}
+	return page, true
+}
+
+// nextLink returns the rel="next" target of a Link header, or "".
+func nextLink(header string) string {
+	for _, part := range strings.Split(header, ",") {
+		target, params, found := strings.Cut(strings.TrimSpace(part), ";")
+		if !found || !strings.Contains(params, `rel="next"`) {
+			continue
+		}
+		target = strings.TrimSpace(target)
+		if strings.HasPrefix(target, "<") && strings.HasSuffix(target, ">") {
+			return target[1 : len(target)-1]
+		}
+	}
+	return ""
+}
+
+// conditionalRead returns every page of endpoint, concatenated as
+// `gh api --paginate` prints them. With reuse set, each page the forge
+// confirms unchanged comes from the kept copy; without it every page is read
+// anew, which is what a caller asks for when a reused answer did not add up.
+func conditionalRead(endpoint string, reuse bool) ([]byte, error) {
+	dir := keptPageDir()
+	var out []byte
+	target := endpoint
+	for pages := 0; target != ""; pages++ {
+		if pages == maxPages {
+			return nil, errors.New("forge read exceeds the page bound")
+		}
+		var kept keptPage
+		have := false
+		if reuse && dir != "" {
+			kept, have = loadKeptPage(dir, target)
+		}
+		validator := ""
+		if have {
+			validator = kept.Validator
+		}
+		page, err := forgeFetch(target, validator)
+		if err != nil {
+			return nil, err
+		}
+		if page.status == 304 && have {
+			page = forgePage{status: 200, validator: kept.Validator, next: kept.Next, body: kept.Body}
+		} else if page.status != 200 {
+			return nil, errors.New("forge answered " + strconv.Itoa(page.status))
+		} else if dir != "" {
+			storeKeptPage(dir, keptPage{Target: target, Validator: page.validator, Next: page.next, Body: page.body})
+		}
+		if page.next != "" && !strings.HasPrefix(page.next, forgeHost) {
+			return nil, errors.New("forge continuation leaves the forge")
+		}
+		out = append(out, page.body...)
+		target = page.next
+	}
+	return out, nil
+}
+
+// keptPageDir is the private per-user store, or "" when pages are not kept:
+// BLOCKER_LINE_CACHE_DIR names it, and "off" there disables it.
+func keptPageDir() string {
+	if dir, set := os.LookupEnv("BLOCKER_LINE_CACHE_DIR"); set {
+		if dir == "off" {
+			return ""
+		}
+		return dir
+	}
+	base := os.Getenv("XDG_CACHE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		base = filepath.Join(home, ".cache")
+	}
+	return filepath.Join(base, "blocked-label-blocker-line")
+}
+
+func keptPagePath(dir, target string) string {
+	sum := sha256.Sum256([]byte(target))
+	return filepath.Join(dir, hex.EncodeToString(sum[:])+".json")
+}
+
+// loadKeptPage returns the kept copy of target only when it is a private
+// regular file of this user that names this target and a sendable validator.
+// Anything else reads as no copy, so the page is simply read anew.
+func loadKeptPage(dir, target string) (keptPage, bool) {
+	path := keptPagePath(dir, target)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return keptPage{}, false
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Getuid() {
+		return keptPage{}, false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return keptPage{}, false
+	}
+	var kept keptPage
+	if json.Unmarshal(raw, &kept) != nil || kept.Target != target || !validatorRE.MatchString(kept.Validator) {
+		return keptPage{}, false
+	}
+	return kept, true
+}
+
+// storeKeptPage keeps one page for the next run. It is best-effort: a page that
+// cannot be kept is read again next time, and the verdict never depends on it.
+func storeKeptPage(dir string, page keptPage) {
+	if !validatorRE.MatchString(page.Validator) {
+		return
+	}
+	raw, err := json.Marshal(page)
+	if err != nil || os.MkdirAll(dir, 0o700) != nil {
+		return
+	}
+	part, err := os.CreateTemp(dir, ".part.*")
+	if err != nil {
+		return
+	}
+	_, writeErr := part.Write(raw)
+	closeErr := part.Close()
+	if writeErr != nil || closeErr != nil || os.Rename(part.Name(), keptPagePath(dir, page.Target)) != nil {
+		os.Remove(part.Name())
+	}
+}
+
+// pruneKeptPages drops pages no run has rewritten for keptPageAge, so pull
+// requests that merged or closed do not stay on disk.
+func pruneKeptPages(dir string, now time.Time) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".json") && !strings.HasPrefix(name, ".part.") {
+			continue
+		}
+		if info, err := entry.Info(); err == nil && info.Mode().IsRegular() && now.Sub(info.ModTime()) > keptPageAge {
+			os.Remove(filepath.Join(dir, name))
+		}
+	}
+}

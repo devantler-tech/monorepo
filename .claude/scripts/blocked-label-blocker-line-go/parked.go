@@ -120,8 +120,8 @@ func commentEndpoint(org, repo string, number int64) (string, error) {
 // commentCount reads how many comments the pull request has right now. The
 // search result carries a count too, but it is older than the comment read by
 // the whole sweep, and a comment landing in between would fail every verdict.
-func commentCount(path string, number int64) (int64, error) {
-	raw, err := forgeRead(path)
+func commentCount(read func(string) ([]byte, error), path string, number int64) (int64, error) {
+	raw, err := read(path)
 	if err != nil {
 		return 0, errors.New("forge read failed -- UNKNOWN, never zero")
 	}
@@ -141,18 +141,23 @@ func commentCount(path string, number int64) (int64, error) {
 // prints one array per page and no total, so the count is read first and the
 // thread must match it: a read that returns another number is not complete.
 // One comment arriving between the two reads is ordinary, so a mismatch is
-// retried once; a second one is UNKNOWN, never a missing record.
+// retried once, without reusing a kept page; a second one is UNKNOWN, never a
+// missing record.
 func forgeComments(org string, item issue) ([]comment, error) {
 	path, err := pullPath(org, item.Repo, item.Number)
 	if err != nil {
 		return nil, err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		expected, err := commentCount(path, item.Number)
+		read := forgeRead
+		if attempt > 0 {
+			read = readAnew
+		}
+		expected, err := commentCount(read, path, item.Number)
 		if err != nil {
 			return nil, err
 		}
-		raw, err := forgeRead(path + "/comments?per_page=100")
+		raw, err := read(path + "/comments?per_page=100")
 		if err != nil {
 			return nil, errors.New("forge read failed -- UNKNOWN, never zero")
 		}
