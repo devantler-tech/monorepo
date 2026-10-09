@@ -283,6 +283,12 @@ sibling-lane-watch.test.sh|
 squash-closing-keywords.test.sh|
 surveyor-hook-dispatch.test.sh|
 work-priority-ladder.test.sh|
+bot-pr-adaptation-push.test.sh|
+disclosure-drift-sweep.test.sh|
+disk-preflight.test.sh|
+gh-json-read.test.sh|
+run-affected-tests.test.sh|
+shared-checkout-freshness.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"

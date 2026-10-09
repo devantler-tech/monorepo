@@ -17,7 +17,19 @@ ok()  { pass=$((pass + 1)); printf '  ok   %s\n' "$1"; }
 bad() { failures=$((failures + 1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; }
 
 fixture=$(mktemp -d) || { printf 'cannot create a fixture directory\n' >&2; exit 2; }
-trap 'rm -rf -- "$fixture"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf -- "$fixture"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "shared-checkout-freshness.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 fixture=$(cd "$fixture" && pwd -P)
 
 git_try() { # <dir> <git args...> — git with a fixed identity and no host configuration
@@ -243,4 +255,5 @@ if [ "$before" = "$after" ]; then ok "the check leaves HEAD, the index and the l
 else bad "the check leaves HEAD, the index and the local edit untouched"; fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$failures"
+test_run_completed=1
 [ "$failures" -eq 0 ]

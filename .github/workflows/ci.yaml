@@ -280,6 +280,12 @@ jobs:
               - '.claude/scripts/squash-closing-keywords.test.sh'
               - '.claude/scripts/surveyor-hook-dispatch.test.sh'
               - '.claude/scripts/work-priority-ladder.test.sh'
+              - '.claude/scripts/bot-pr-adaptation-push.test.sh'
+              - '.claude/scripts/disclosure-drift-sweep.test.sh'
+              - '.claude/scripts/disk-preflight.test.sh'
+              - '.claude/scripts/gh-json-read.test.sh'
+              - '.claude/scripts/run-affected-tests.test.sh'
+              - '.claude/scripts/shared-checkout-freshness.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'

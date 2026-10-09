@@ -18,7 +18,19 @@ set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 runner="${here}/run-affected-tests.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
+test_run_completed=0
+# bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+on_exit() {
+  local status=$?
+  rm -rf "${tmp}"
+  if [ "${test_run_completed}" != 1 ]; then
+    echo "run-affected-tests.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_exit EXIT
 fails=0
 ok() { printf 'ok: %s\n' "$1"; }
 bad() { printf 'FAIL: %s\n' "$1"; fails=$((fails + 1)); }
@@ -365,6 +377,7 @@ if [ $? -eq 2 ]; then ok "a missing merge base is exit 2"; else bad "missing mer
 "${runner}" --root "${repo}" --timeout 0 --list >/dev/null 2>&1
 if [ $? -eq 2 ]; then ok "a zero timeout is rejected"; else bad "a zero timeout was accepted"; fi
 
+test_run_completed=1
 if [ "${fails}" -eq 0 ]; then
   echo "PASS: run-affected-tests selects what CI selects, and fails closed"
   exit 0
