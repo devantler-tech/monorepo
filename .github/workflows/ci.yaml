@@ -349,6 +349,8 @@ jobs:
               - '.claude/scripts/worktree-cleanup-all.sh'
               - '.claude/scripts/worktree-cleanup.test.sh'
               - '.claude/scripts/worktree-cleanup-all.test.sh'
+              - '.claude/scripts/worktree-submodule-inventory.sh'
+              - '.claude/scripts/worktree-submodule-inventory.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1527,6 +1529,9 @@ jobs:
         run: bash .claude/scripts/worktree-cleanup.test.sh
       - name: Self-test the multi-repo orchestrator
         run: bash .claude/scripts/worktree-cleanup-all.test.sh
+      # Read-only companion (monorepo#3072): what each populated submodule still holds.
+      - name: Self-test the per-submodule inventory
+        run: bash .claude/scripts/worktree-submodule-inventory.test.sh
 
   test-submodule-init:
     needs: changes
