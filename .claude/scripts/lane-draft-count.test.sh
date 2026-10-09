@@ -128,6 +128,78 @@ T_REGISTRY="$FIX/empty.json" check "an empty registry is UNKNOWN" 2 "verdict=UNK
 echo '{"version":1,"instances":{"claude-local":{"namespace":"claude"}}}' > "$FIX/noauthor.json"
 T_REGISTRY="$FIX/noauthor.json" check "a registry lane without an author is UNKNOWN" 2 "verdict=UNKNOWN" "$FIX/three.json" --lane claude
 
+# The live path reads through the conditional reader. A stub stands in for it here, so these cases
+# cover what the script does with the reader's answer: one line of pages per endpoint, in order.
+[ -x "$SCRIPT_DIR/blocked-label-blocker-line.sh" ] \
+  || { echo "FAIL: the default conditional reader is missing or not executable" >&2; fail=$((fail + 1)); }
+cat > "$FIX/reader" <<'STUB'
+#!/usr/bin/env bash
+# reader stub: answers `read <endpoint>...` from STUB_* and counts its calls in STUB_CALLS.
+set -euo pipefail
+[ "$1" = read ] || exit 2; shift
+calls=$(($(cat "$STUB_CALLS" 2>/dev/null || echo 0) + 1)); echo "$calls" > "$STUB_CALLS"
+[ "${STUB_FAIL_AT:-0}" != "$calls" ] || exit 2
+for endpoint in "$@"; do
+  case "$endpoint" in
+    orgs/devantler-tech) printf '[{"public_repos":2,"total_private_repos":%s}]\n' "${STUB_PRIVATE:-1}" ;;
+    orgs/devantler-tech/repos\?type=all\&per_page=100)
+      if [ "${STUB_ALL_ARCHIVED:-0}" = 1 ]; then
+        echo '[[{"name":"one","archived":true},{"name":"two","archived":true},{"name":"old","archived":true}]]'
+      elif [ "${STUB_NEW_REPO_AT:-0}" = "$calls" ]; then
+        echo '[[{"name":"one","archived":false},{"name":"two","archived":false}],[{"name":"old","archived":true},{"name":"new","archived":false}]]'
+      else
+        echo '[[{"name":"one","archived":false},{"name":"two","archived":false}],[{"name":"old","archived":true}]]'
+      fi ;;
+    repos/devantler-tech/one/pulls\?state=open\&per_page=100) echo "${STUB_ONE:-$STUB_ONE_DEFAULT}" ;;
+    repos/devantler-tech/two/pulls\?state=open\&per_page=100) [ "${STUB_SHORT:-0}" = 1 ] || echo '[[]]' ;;
+    repos/devantler-tech/new/pulls\?state=open\&per_page=100) echo '[[]]' ;;
+    *) exit 2 ;;
+  esac
+done
+# A reader that fails after it has printed a whole answer.
+[ "${STUB_LATE_FAIL_AT:-0}" != "$calls" ] || exit 2
+STUB
+chmod +x "$FIX/reader"
+pull() { printf '{"node_id":"%s","draft":%s,"head":{"ref":"%s","repo":{"full_name":"%s"}},"base":{"repo":{"full_name":"devantler-tech/one"}},"user":{"login":"%s"}}' "$@"; }
+STUB_ONE_DEFAULT="[[$(pull A true claude/a-1 devantler-tech/one devantler),$(pull B false claude/b-2 devantler-tech/one devantler)],[$(pull C true codex/c-3 devantler-tech/one devantler),$(pull D true claude/d-4 fork/one devantler),$(pull E true claude/e-5 devantler-tech/one someone-else)]]"
+export STUB_ONE_DEFAULT
+
+# live <name> <want-rc> <want-stdout-substring> — runs the live path against the stub
+live() {
+  local name=$1 want_rc=$2 want=$3 out rc=0
+  rm -f "$FIX/calls"
+  out=$(STUB_CALLS="$FIX/calls" LANE_FORGE_READ="$FIX/reader" \
+    bash "$SCRIPT" --instances "$FIX/registry.json" --lane claude 2>/dev/null) || rc=$?
+  if [ "$rc" -eq "$want_rc" ] && grep -qF -- "$want" <<<"$out" && ! { [ "$want_rc" -eq 2 ] && grep -q "drafts=" <<<"$out"; }; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1)); echo "FAIL: $name (rc=$rc want=$want_rc)"; printf '%s\n' "$out" | sed 's/^/    /'
+  fi
+}
+
+live "the live path counts drafts on every page, by lane, fork and author" 0 "open_drafts: claude=1 codex=1 other=2 total=4"
+if [ "$(cat "$FIX/calls")" = 5 ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: a count must take three inventories and two draft reads, took $(cat "$FIX/calls")"; fi
+for at in 1 2 3 4 5; do
+  STUB_FAIL_AT=$at live "a failed read (call $at) is UNKNOWN" 2 "verdict=UNKNOWN"
+done
+for at in 1 2 3 4 5; do
+  STUB_LATE_FAIL_AT=$at live "a reader failing after a whole answer (call $at) is UNKNOWN" 2 "verdict=UNKNOWN"
+done
+STUB_ALL_ARCHIVED=1 live "an organisation with only archived repositories counts none" 0 "open_drafts: claude=0 codex=0 other=0 total=0"
+if [ "$(cat "$FIX/calls")" = 3 ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: with nothing to read, only the three inventories are read"; fi
+STUB_SHORT=1 live "a read answering for fewer repositories than asked is UNKNOWN" 2 "verdict=UNKNOWN"
+STUB_ONE='[{"message":"Not Found"}]' live "a page that is not a list is UNKNOWN" 2 "verdict=UNKNOWN"
+STUB_ONE='[]' live "an answer without a page is UNKNOWN" 2 "verdict=UNKNOWN"
+STUB_PRIVATE=null live "an invisible private repository total is UNKNOWN" 2 "verdict=UNKNOWN"
+STUB_PRIVATE=5 live "an inventory the credential cannot list in full is UNKNOWN" 2 "verdict=UNKNOWN"
+for at in 3 5; do
+  STUB_NEW_REPO_AT=$at live "a repository appearing mid-read (call $at) is UNKNOWN" 2 "verdict=UNKNOWN"
+done
+STUB_ONE="[[$(pull A true claude/a-1 devantler-tech/one devantler),$(pull A true claude/a-1 devantler-tech/one devantler)]]" \
+  live "a draft read twice in one pass is UNKNOWN" 2 "verdict=UNKNOWN"
+
 # The run loop must consult this helper before opening a draft, and fail closed on it. The count is
 # the orchestrator's to read: the survey subagent's read-only guard declares no route to this
 # script, so a digest line produced there would always be UNKNOWN and block every lane's intake.

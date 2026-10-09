@@ -105,6 +105,9 @@ Options: --today <YYYY-MM-DD> (default UTC today)
 Write a record with the compose subcommand (compose --help), never by hand.
 Park a pull request with the park subcommand (park --help): it writes the
 record and the blocked label together and reads both back.
+Lend the conditional reads to another helper with the read subcommand
+(read <endpoint>...): one line per endpoint, the JSON array of its pages, for
+an orgs/ or repos/ path; nothing is printed unless every endpoint was read.
 Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input,
       or an --org read that saw no Security issue at all).
       With --parked-digest: 0 every labelled pull request is parked (or none is
@@ -967,6 +970,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// park is the only path that changes the forge, and it names its one target.
 	if len(args) > 0 && args[0] == "park" {
 		return parkRun(args[1:], stdout, stderr)
+	}
+	// read lends the conditional forge reads to the other helpers here.
+	if len(args) > 0 && args[0] == "read" {
+		return readRun(args[1:], stdout, stderr)
 	}
 	unknown := func(err error) int {
 		// A failed diagnostic write cannot change the UNKNOWN exit status.
