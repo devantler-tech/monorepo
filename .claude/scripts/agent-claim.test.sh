@@ -32,7 +32,18 @@ tool="$script_dir/agent-claim.sh"
 chmod +x "$tool"
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "agent-claim.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
 
 failures=0
 pass() { printf 'ok   — %s\n' "$1"; }
@@ -995,6 +1006,7 @@ check "trap16: --pr-head without a value exits 2" "2" "$rc_16_empty"
 check "trap16: no usage error creates a claim" "" "$(tip16u)"
 
 # ---------------------------------------------------------------------------
+test_run_finished=1
 if (( failures > 0 )); then
   printf '\n%d failure(s)\n' "$failures" >&2
   exit 1

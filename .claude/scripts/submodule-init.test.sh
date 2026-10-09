@@ -18,7 +18,18 @@ set -Eeuo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helper="$here/submodule-init.sh"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  chmod -R u+rwx "$tmp" 2>/dev/null; rm -rf "$tmp"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "submodule-init.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
 
 # Hermetic git environment: the host's real system/global config must not affect
 # fixtures, and file:// submodules need protocol.file.allow (default-denied since
@@ -228,8 +239,7 @@ live_wt="$c7/live-wt"
 git -C "$c7/super/sub" worktree add -q --detach "$live_wt"
 wt_admin="$c7/super/.git/modules/sub/worktrees"
 chmod 0400 "$live_wt"
-# Restore permissions on exit so the EXIT trap's `rm -rf "$tmp"` can actually remove the fixture.
-trap 'chmod -R u+rwx "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
+# The EXIT handler restores permissions first, so its `rm -rf "$tmp"` can actually remove the fixture.
 
 # PRECONDITION: if the platform lets us read the dir anyway (running as root, or a filesystem that
 # ignores the mode), the case under test never arises and the assertions below would pass vacuously.
@@ -2020,6 +2030,7 @@ for var in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; do
     "$([[ -z "$(env "$var=$c95/super/.git" bash -c '. "$1" >/dev/null 2>&1; cd "$2" && shared_object_store sub' _ "$helper" "$c95/super-wt")" ]] && echo yes || echo no)"
 done
 
+test_run_finished=1
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

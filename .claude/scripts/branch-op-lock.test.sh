@@ -15,7 +15,18 @@ lock_tool="$script_dir/branch-op-lock.sh"
 wt_add="$script_dir/worktree-add.sh"
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "branch-op-lock.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
 
 failures=0
 pass() { printf 'ok   — %s\n' "$1"; }
@@ -503,6 +514,7 @@ check "a wrapped function that returns still succeeds" "0" "$(run_wrapped ':')"
 check "a wrapped function's own failure status is kept" "7" "$(run_wrapped 'return 7')"
 check "the lock is released after the controls" "0" "$([[ -d "$abort_lockdir" ]] && echo 1 || echo 0)"
 # ---------------------------------------------------------------------------
+test_run_finished=1
 if [[ "$failures" -gt 0 ]]; then
   printf '\n%d failure(s)\n' "$failures" >&2
   exit 1

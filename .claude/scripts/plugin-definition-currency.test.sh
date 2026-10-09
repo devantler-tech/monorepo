@@ -34,12 +34,23 @@ ok() {
   echo "  ok — $*"
 }
 
+tmp="$(mktemp -d)"
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "${tmp}"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "plugin-definition-currency.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
+
 [ -x "${script}" ] || fail "${script} is missing or not executable"
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
 [ -r "${portable_loader}" ] || fail "cannot read ${portable_loader}"
-
-tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
 
 # ── the fixture "pinned revision" ─────────────────────────────────────────────
 # A real git repository, so the script exercises its local-object-database path exactly as it does
@@ -2335,4 +2346,5 @@ changed_copy="$(bounded_statements "${tmp}/worktree-claim.changed.sh")" \
   || fail "control: a copy of worktree-claim.sh with one statement changed still compares equal"
 ok "control — a changed statement in one copy is seen"
 
+test_run_finished=1
 echo "plugin-definition-currency: ${pass_count} assertions passed"

@@ -26,6 +26,20 @@ fail() {
   exit 1
 }
 
+tmp="$(mktemp -d)"
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "${tmp}"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "claim-lease-timeline-contract.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
+
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
 
 # The fenced sh block that follows the "Lease clock for the assignee" bullet.
@@ -37,9 +51,6 @@ snippet="$(awk '
 ' "${constitution}")"
 [ -n "${snippet}" ] || fail "no sh block after 'Lease clock for the assignee' in ${constitution}"
 grep -Fq 'issues/<n>/timeline' <<<"${snippet}" || fail "the lease snippet no longer reads the timeline"
-
-tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
 
 # A fake gh: FAKE_GH_MODE=fail exits 1; pages prints two pages' worth of filtered lines out of
 # order; empty prints nothing. It emulates `gh api --paginate --jq` output, one match per line.
@@ -83,4 +94,5 @@ if ! run "${ablated}" fail >/dev/null; then
   fail "ablation did not fire: the snippet without pipefail should exit 0 on a failed read"
 fi
 
+test_run_finished=1
 echo "claim-lease timeline contract: OK"

@@ -296,6 +296,14 @@ jobs:
               - '.claude/scripts/review-no-gate-guard.test.sh'
               - '.claude/scripts/portfolio-map-drift.test.sh'
               - '.claude/scripts/review-request-lock.test.sh'
+              - '.claude/scripts/agent-claim.test.sh'
+              - '.claude/scripts/agent-issue-board-sweep.test.sh'
+              - '.claude/scripts/branch-op-lock.test.sh'
+              - '.claude/scripts/claim-lease-timeline-contract.test.sh'
+              - '.claude/scripts/dotfile-glob-fanout-contract.test.sh'
+              - '.claude/scripts/plugin-definition-currency.test.sh'
+              - '.claude/scripts/submodule-init.test.sh'
+              - '.claude/scripts/worktree-claim.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'

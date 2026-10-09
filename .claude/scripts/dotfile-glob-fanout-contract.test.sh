@@ -23,11 +23,23 @@ fail() {
   exit 1
 }
 
+fixture="$(mktemp -d)"
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "${fixture}"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "dotfile-glob-fanout-contract.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
+
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
 
 # --- Fixture: the hazard and the prescribed form -------------------------------------------------
-fixture="$(mktemp -d)"
-trap 'rm -rf "${fixture}"' EXIT
 repos=(monorepo platform .github ksail)
 for r in "${repos[@]}"; do printf '{}\n' >"${fixture}/${r}.json"; done
 
@@ -91,4 +103,5 @@ assert_bullet 'iterate the repo list' \
 assert_bullet 'missing cache file is an error' \
   "the bullet does not make a missing cache fail loudly instead of reading as an empty result"
 
+test_run_finished=1
 echo "dotfile glob fan-out contract: OK — 3 fixture checks and 5 assertions passed"

@@ -12,7 +12,18 @@ root_contract="$here/../guides/git-and-worktrees.md"
 maintenance_contract="$here/../skills/portfolio-maintenance/SKILL.md"
 workflow_contract="$here/../../.github/workflows/ci.yaml"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+test_run_finished=0
+# bash 3.2 can report a set -e abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "$tmp"
+  if [ "${test_run_finished}" != 1 ]; then
+    echo "worktree-claim.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap on_test_exit EXIT
 
 pass=0
 fail=0
@@ -2819,5 +2830,6 @@ check "a refused pinned creation leaves no worktree behind" 1 \
 check "a refused pinned creation leaves no new branch behind" 1 \
   "$(git -C "$pinfail_consumer" show-ref --verify --quiet refs/heads/claim-pinfail && echo 0 || echo 1)"
 
+test_run_finished=1
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
