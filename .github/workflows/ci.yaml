@@ -17,7 +17,6 @@ jobs:
     permissions:
       pull-requests: read
     outputs:
-      docs: ${{ steps.filter.outputs.docs }}
       business-site-integration: ${{ steps.filter.outputs.business-site-integration }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
@@ -109,16 +108,9 @@ jobs:
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
-            docs:
-              - 'applications/business-site'
-              - '.gitmodules'
-              - '.claude/scripts/submodule-init.sh'
-              - '.github/workflows/ci.yaml'
             business-site-integration:
               - 'applications/business-site'
               - '.gitmodules'
-              - '.claude/scripts/business-site-revision.sh'
-              - '.claude/scripts/business-site-revision.test.sh'
               - '.claude/scripts/business-site-publication.test.sh'
               - '.github/workflows/**'
             active-projects:
@@ -731,7 +723,6 @@ jobs:
               - '.claude/scripts/run-affected-tests.sh'
               - '.claude/scripts/run-affected-tests.test.sh'
               - '.claude/scripts/business-site-ci.test.sh'
-              - '.claude/scripts/business-site-revision.sh'
               - 'applications/business-site'
               - '.gitmodules'
               - '.github/workflows/ci.yaml'
@@ -1049,51 +1040,8 @@ jobs:
               - '.gitmodules'
               - '.claude/scripts/submodule-init.sh'
               - '.github/workflows/ci.yaml'
-
-  build-docs:
-    needs: changes
-    if: needs.changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      LC_ALL: C
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize the pinned website
-        run: bash .claude/scripts/submodule-init.sh applications/business-site
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: applications/business-site/package-lock.json
-      - name: Verify lockfile with older supported npm
-        working-directory: applications/business-site
-        run: npx --yes --package=npm@11.4.2 npm ci --ignore-scripts
-      - name: Install dependencies
-        working-directory: applications/business-site
-        run: npm ci
-      - name: Build enabled preview
-        working-directory: applications/business-site
-        env:
-          FEATURE_PREVIEW_BANNER: "true"
-        run: npm run build
-      - name: Build
-        working-directory: applications/business-site
-        env:
-          LC_ALL: C
-          FEATURE_PREVIEW_BANNER: "false"
-        run: npm run build
-      - name: Build default production
-        working-directory: applications/business-site
-        run: env -u FEATURE_PREVIEW_BANNER npm run build
-
   test-business-site-integration:
-    name: Test business-site publication bridge
+    name: Test business-site source ownership
     needs: changes
     if: needs.changes.outputs.business-site-integration == 'true'
     runs-on: ubuntu-latest
@@ -1104,10 +1052,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Verify committed pin selection and publication wiring
+      - name: Verify immutable aggregation pin and source-owned publication
         run: |
-          shellcheck .claude/scripts/business-site-revision.sh .claude/scripts/business-site-revision.test.sh .claude/scripts/business-site-publication.test.sh
-          bash .claude/scripts/business-site-revision.test.sh
+          shellcheck .claude/scripts/business-site-publication.test.sh
           bash .claude/scripts/business-site-publication.test.sh
 
   drift-check-active-projects:
@@ -1136,16 +1083,8 @@ jobs:
       - name: Install MDX parser dependencies
         working-directory: applications/business-site
         run: npm ci
-      # Verify the drift checker itself first — self-contained fixtures, no
-      # submodule checkout needed, so it fails fast if a refactor broke a check.
-      - name: Self-test the drift checker
-        run: bash applications/business-site/scripts/check-active-projects-drift.test.sh
-      - name: Verify catalogue CI selection and immutable automation checkout
+      - name: Verify aggregation selection and immutable automation checkout
         run: bash .claude/scripts/business-site-ci.test.sh
-      - name: Self-test the CV drift checker
-        run: bash applications/business-site/scripts/check-cv-drift.test.sh
-      - name: Check the About page and CV data for drift
-        run: node --disable-warning=ExperimentalWarning applications/business-site/scripts/check-cv-drift.mjs applications/business-site/src/content/docs/about.mdx applications/business-site/src/data/cv.ts
       - name: Resolve current automation gitlink
         id: automation-pin
         run: |
@@ -2494,22 +2433,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Resolve the committed website source
-        id: site-pin
-        run: |
-          revision=$(bash .claude/scripts/business-site-revision.sh)
-          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
-      - name: Checkout the committed website source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: devantler-tech/business-site
-          ref: ${{ steps.site-pin.outputs.revision }}
-          path: applications/business-site
-          persist-credentials: false
       - name: Install macOS verification tools
         if: matrix.os == 'macos-latest'
         run: brew install shellcheck yq
-      - name: Verify the real source checkout and selection
+      - name: Verify the aggregation boundary and selection
         run: |
           shellcheck .claude/scripts/business-site-ci.test.sh
           bash .claude/scripts/business-site-ci.test.sh
@@ -3178,7 +3105,6 @@ jobs:
     if: always()
     needs:
       - changes
-      - build-docs
       - test-business-site-integration
       - drift-check-active-projects
       - drift-check-renovate-dashboard
@@ -3271,7 +3197,6 @@ jobs:
         with:
           job-results: >-
             ${{ needs.changes.result }}
-            ${{ needs.build-docs.result }}
             ${{ needs.test-business-site-integration.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.drift-check-renovate-dashboard.result }}

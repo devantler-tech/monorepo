@@ -1,6 +1,6 @@
 ---
 name: maintain-monorepo
-description: Maintenance menu for the portfolio aggregator, its agent tooling, cross-product contracts and immutable website publication caller. Website content belongs to business-site.
+description: Maintenance menu for the portfolio aggregator, its agent tooling and cross-product contracts. Website source and publication belong to business-site.
 ---
 
 # Maintain: Portfolio aggregator
@@ -23,15 +23,16 @@ retain a hit that also names the local issue.
 ## Task menu
 
 - **CI Doctor:** diagnose actual current-main and PR failures in this repository, including dead
-  submodule pins and the Pages caller; fix at the root and retain exact-head evidence.
+  submodule pins; fix at the root and retain exact-head evidence.
 - **Portfolio integration:** join the pinned site's documented inventory to this repository's
   actual submodules, Actions and templates. Initialize only required public submodules through
   the isolation-safe helper. Bind `GITHUB_WORKSPACE` to this aggregator and `SITE_ROOT` to its
   website submodule when running the site's drift checker locally. An unreadable source is
   unknown, never a clean empty inventory.
-- **Website publication:** adopt a reviewed business-site commit and preserve the separately pinned
-  reusable workflow. Source merge, successful Pages deployment and live source receipt plus
-  English/Danish visitor paths are separate gates; never close delivery on a source merge alone.
+- **Website aggregation:** adopt a reviewed business-site commit without implementing its build
+  or triggering publication. The source repository owns Pages, the public domain and refreshes.
+  Source merge, successful source-owned deployment and live source/run receipt plus English/Danish
+  visitor paths are separate gates; never close website delivery on a source merge alone.
 - **Repo Assist:** triage issues and drive open drafts through current-head CI, ordered review,
   promotion and protected head-pinned merge. Keep architecture decisions in `docs/adr/`.
 - **Dependency PRs:** when one cannot finish autonomously, diagnose, repair, and merge it as
