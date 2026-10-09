@@ -33,6 +33,16 @@ result="$(jq -sce '
   | if all(.[]; type == "object" and (.id | type) == "string" and (.id | length) > 0)
        and ([.[].id] | length) == ([.[].id] | unique | length) then .
     else error("malformed or repeated project field identity") end
+  | if all(.[]; (.__typename | type) == "string" and (.name | type) == "string"
+       and (.dataType | type) == "string" and (.isIssueField | type) == "boolean"
+       and (if .__typename == "ProjectV2Field" or .__typename == "ProjectV2SingleSelectField" then
+         has("issueField") and (if .isIssueField then
+           (.issueField | type) == "object" and (.issueField.id | type) == "string"
+           and (.issueField.id | length) > 0 and (.issueField.name | type) == "string"
+           and (.issueField.visibility | type) == "string"
+         else true end)
+       else true end)) then .
+    else error("incomplete field metadata; request the common fields and native union fragments") end
   | . as $fields
   | [
       {name:"Priority", id:"IFSS_kgDOAck10g", type:"ProjectV2SingleSelectField", dataType:"SINGLE_SELECT"},
