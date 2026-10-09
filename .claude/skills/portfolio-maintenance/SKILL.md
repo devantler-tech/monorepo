@@ -531,7 +531,7 @@ stays private*) — and track it with a `last_host_audit` cursor like the other 
 org-wide `gh search` first, deepen only the candidates — never the old per-repo `gh pr/issue list` loop.)*
 
 Products → cards: [ksail](../products/ksail/SKILL.md) · [data-product-controller](../products/data-product-controller/SKILL.md) · [platform](../products/platform/SKILL.md) · [aws](../products/aws/SKILL.md) · [fleet-gitops](../products/fleet-gitops/SKILL.md) ·
-[cloudflare](../products/cloudflare/SKILL.md) · [monorepo + site](../products/monorepo/SKILL.md) · [templates](../products/templates/SKILL.md) ·
+[cloudflare](../products/cloudflare/SKILL.md) · [monorepo](../products/monorepo/SKILL.md) · [business-site](../products/business-site/SKILL.md) · [templates](../products/templates/SKILL.md) ·
 [github-actions](../products/github-actions/SKILL.md) · [skills (+ plugins)](../products/agent-skills/SKILL.md) ·
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md) ·
 [provider-upjet-unifi](../products/provider-upjet-unifi/SKILL.md) ·
@@ -969,11 +969,11 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
 **Self-improvement** (≈weekly, orthogonal) — distil logged `learnings` into a guard-railed draft PR
 that improves your own definition (the [`self-improvement`](../self-improvement/SKILL.md) skill).
 
-**Blog Stewardship (low-priority, bounded, orthogonal cadence)** — for the monorepo/site only, a due
+**Blog Stewardship (low-priority, bounded, orthogonal cadence)** — for business-site only, a due
 blog action must not wait for the issue queue to become empty. After operate work and one
 important-substantive slice in the run, perform at most one due blog evidence review, worthwhile
 publication, or material refresh before selecting the next issue, then resume the normal ladder. Use
-the monorepo card's editorial, single-flight, experiment-lifecycle, and cursor rules: maintain an open
+the business-site card's editorial, single-flight, experiment-lifecycle, and cursor rules: maintain an open
 blog experiment/PR through review, deployment, and measurement before starting another. A review that
 finds no worthwhile story is useful but does not move the publication clock; marketing, positioning,
 discovery, and adoption are product work, while filler and traffic-only vanity are not.

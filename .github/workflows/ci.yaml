@@ -18,9 +18,7 @@ jobs:
       pull-requests: read
     outputs:
       docs: ${{ steps.filter.outputs.docs }}
-      docs-deps: ${{ steps.filter.outputs.docs-deps }}
-      docs-audit-contract: ${{ steps.filter.outputs.docs-audit-contract }}
-      docs-npm-toolchain: ${{ steps.filter.outputs.docs-npm-toolchain }}
+      business-site-integration: ${{ steps.filter.outputs.business-site-integration }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
       cleanup-trap-fail-closed: ${{ steps.filter.outputs.cleanup-trap-fail-closed }}
@@ -112,54 +110,30 @@ jobs:
         with:
           filters: |
             docs:
-              - 'docs/**'
-            docs-deps:
-              # What decides the audit's answer: the dependency tree (a shrinkwrap
-              # replaces the lockfile when one exists), the npm settings that pick
-              # the advisory source and what the audit counts, and the wrapper. A
-              # workflow file is not listed, because a workflow-only change cannot
-              # alter what the site depends on and a live advisory says nothing
-              # about it; docs-audit-contract covers it.
-              - 'docs/package.json'
-              - 'docs/package-lock.json'
-              - 'docs/npm-shrinkwrap.json'
-              - 'docs/.npmrc'
-              - 'docs/scripts/audit-dependencies.sh'
-            docs-audit-contract:
-              # The contract test holds the npm settings to reviewed values.
-              - 'docs/.npmrc'
-              - 'docs/scripts/audit-dependencies.sh'
-              - 'docs/scripts/audit-dependencies.test.sh'
-              # The contract test compares both workflow call sites.
-              - '.github/workflows/audit-docs.yaml'
+              - 'applications/business-site'
+              - '.gitmodules'
+              - '.claude/scripts/submodule-init.sh'
               - '.github/workflows/ci.yaml'
-            docs-npm-toolchain:
-              # The contract reads every workflow that installs, audits or publishes
-              # the site, including one a change adds.
-              - 'docs/package.json'
-              - 'docs/scripts/npm-toolchain.test.sh'
+            business-site-integration:
+              - 'applications/business-site'
+              - '.gitmodules'
+              - '.claude/scripts/business-site-revision.sh'
+              - '.claude/scripts/business-site-revision.test.sh'
+              - '.claude/scripts/business-site-publication.test.sh'
               - '.github/workflows/**'
             active-projects:
               # The retired-link guard greps the WHOLE content tree, so it must
               # run for ANY content change — gating it on the two pages the
               # drift lists live in would let a retired link ship from a blog
               # post or any other page the guard claims to cover.
-              - 'docs/src/content/**'
-              - 'docs/scripts/check-active-projects-drift.sh'
-              - 'docs/scripts/check-active-projects-drift.test.sh'
-              - 'docs/scripts/check-homepage-project-parity.mjs'
-              - 'docs/scripts/check-cv-drift.mjs'
-              - 'docs/scripts/check-cv-drift.test.sh'
-              - 'docs/src/data/cv.ts'
-              - 'docs/src/data/public-products.json'
-              - 'docs/scripts/check-active-projects-ci.test.sh'
-              - 'docs/package.json'
-              - 'docs/package-lock.json'
+              - 'applications/business-site'
+              - '.claude/scripts/business-site-ci.test.sh'
+              - '.claude/scripts/submodule-init.sh'
               - '.gitmodules'
-              - 'github/devantler-tech/github-actions/actions'
               - 'github/devantler-tech/.github-public'
               - 'github/devantler-tech/.github-public/actions/**'
               - 'github/devantler-tech/.github-public/.github/workflows/**'
+              - 'github/devantler-tech/github-actions/actions'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the guards it gates.
               - '.github/workflows/ci.yaml'
@@ -216,6 +190,7 @@ jobs:
             cleanup-trap-fail-closed:
               - '.claude/scripts/cleanup-trap-fail-closed.test.sh'
               # The scripts the test injects an abort into, so removing a sentinel re-runs it.
+              - '.claude/scripts/business-site-ci.test.sh'
               - '.claude/scripts/memory-backup.sh'
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-rewrite.sh'
@@ -730,6 +705,10 @@ jobs:
             run-affected-tests:
               - '.claude/scripts/run-affected-tests.sh'
               - '.claude/scripts/run-affected-tests.test.sh'
+              - '.claude/scripts/business-site-ci.test.sh'
+              - '.claude/scripts/business-site-revision.sh'
+              - 'applications/business-site'
+              - '.gitmodules'
               - '.github/workflows/ci.yaml'
             plugin-definition-refresh:
               - 'AGENTS.md'
@@ -1034,8 +1013,11 @@ jobs:
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/skills/products/monorepo/SKILL.md'
               - '.claude/skills/products/github-actions/SKILL.md'
+              - '.claude/skills/products/business-site/SKILL.md'
               - '.claude/scripts/product-value-contract.test.sh'
-              - 'docs/README.md'
+              - 'applications/business-site'
+              - '.gitmodules'
+              - '.claude/scripts/submodule-init.sh'
               - '.github/workflows/ci.yaml'
 
   build-docs:
@@ -1051,35 +1033,39 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Initialize the pinned website
+        run: bash .claude/scripts/submodule-init.sh applications/business-site
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
           cache: "npm"
-          cache-dependency-path: docs/package-lock.json
+          cache-dependency-path: applications/business-site/docs/package-lock.json
       - name: Verify lockfile with older supported npm
-        working-directory: docs
+        working-directory: applications/business-site/docs
         run: npx --yes --package=npm@11.4.2 npm ci --ignore-scripts
       - name: Install dependencies
-        working-directory: docs
+        working-directory: applications/business-site/docs
         run: npm ci
       - name: Build enabled preview
-        working-directory: docs
+        working-directory: applications/business-site/docs
         env:
           FEATURE_PREVIEW_BANNER: "true"
         run: npm run build
       - name: Build
-        working-directory: docs
+        working-directory: applications/business-site/docs
         env:
+          LC_ALL: C
           FEATURE_PREVIEW_BANNER: "false"
         run: npm run build
+      - name: Build default production
+        working-directory: applications/business-site/docs
+        run: env -u FEATURE_PREVIEW_BANNER npm run build
 
-  # The Audit step below is mirrored by .github/workflows/audit-docs.yaml, which runs it
-  # on a cadence so advisories surface before they can block an automated dependency PR.
-  # Keep the two in lockstep: a change to the Audit step here needs the same change there.
-  audit-docs:
+  test-business-site-integration:
+    name: Test business-site publication bridge
     needs: changes
-    if: needs.changes.outputs.docs-deps == 'true'
+    if: needs.changes.outputs.business-site-integration == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1088,57 +1074,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-      - name: Test audit wrapper
-        working-directory: docs
-        run: ./scripts/audit-dependencies.test.sh
-      - name: Audit
-        working-directory: docs
-        run: ./scripts/audit-dependencies.sh
-
-  # The wrapper's contract test pins its retry behaviour and the wiring of both audit
-  # call sites, with npm stubbed. A job of its own, so a change to either workflow runs
-  # this static contract without the live dependency audit.
-  test-docs-audit-wrapper:
-    name: Test docs audit wrapper contract
-    needs: changes
-    if: needs.changes.outputs.docs-audit-contract == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-      - name: Test audit wrapper
-        working-directory: docs
-        run: ./scripts/audit-dependencies.test.sh
-
-  # Every workflow that installs, audits or publishes the site must use the npm major that
-  # writes docs/package-lock.json. A job of its own, so a workflow-only change runs this
-  # static contract without the live dependency audit.
-  test-docs-npm-toolchain:
-    name: Test docs npm toolchain contract
-    needs: changes
-    if: needs.changes.outputs.docs-npm-toolchain == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Test npm toolchain contract
-        run: bash docs/scripts/npm-toolchain.test.sh
+      - name: Verify committed pin selection and publication wiring
+        run: |
+          shellcheck .claude/scripts/business-site-revision.sh .claude/scripts/business-site-revision.test.sh .claude/scripts/business-site-publication.test.sh
+          bash .claude/scripts/business-site-revision.test.sh
+          bash .claude/scripts/business-site-publication.test.sh
 
   drift-check-active-projects:
     needs: changes
@@ -1151,34 +1091,40 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Initialize only the public source owners
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: "git@github.com:"
+        run: bash .claude/scripts/submodule-init.sh applications/business-site github/devantler-tech/github-actions/actions
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
           cache: "npm"
-          cache-dependency-path: docs/package-lock.json
+          cache-dependency-path: applications/business-site/docs/package-lock.json
       - name: Install MDX parser dependencies
-        working-directory: docs
+        working-directory: applications/business-site/docs
         run: npm ci
       # Verify the drift checker itself first — self-contained fixtures, no
       # submodule checkout needed, so it fails fast if a refactor broke a check.
       - name: Self-test the drift checker
-        run: bash docs/scripts/check-active-projects-drift.test.sh
+        run: bash applications/business-site/docs/scripts/check-active-projects-drift.test.sh
       - name: Verify catalogue CI selection and immutable automation checkout
-        run: bash docs/scripts/check-active-projects-ci.test.sh
+        run: bash .claude/scripts/business-site-ci.test.sh
       - name: Self-test the CV drift checker
-        run: bash docs/scripts/check-cv-drift.test.sh
+        run: bash applications/business-site/docs/scripts/check-cv-drift.test.sh
       - name: Check the About page and CV data for drift
-        run: node --disable-warning=ExperimentalWarning docs/scripts/check-cv-drift.mjs docs/src/content/docs/about.mdx docs/src/data/cv.ts
-      # The source-of-truth repo is a public submodule; check it out alone at
-      # its pinned commit (no GitHub API, no other submodules). The .gitmodules
-      # URL is SSH (git@github.com:), which the runner has no key for, so point
-      # it at public HTTPS first to clone anonymously.
+        run: node --disable-warning=ExperimentalWarning applications/business-site/docs/scripts/check-cv-drift.mjs applications/business-site/docs/src/content/docs/about.mdx applications/business-site/docs/src/data/cv.ts
       - name: Resolve current automation gitlink
         id: automation-pin
         run: |
           read -r mode kind revision owner <<< "$(git --no-replace-objects ls-tree HEAD -- github/devantler-tech/.github-public)"
-          [[ "$mode" == 160000 && "$kind" == commit && "$revision" =~ ^[0-9a-f]{40}$ && "$owner" == github/devantler-tech/.github-public ]]
+          # Bash 3.2 does not reliably apply errexit to a compound [[ ... && ... ]].
+          if [[ "$mode" != 160000 || "$kind" != commit || ! "$revision" =~ ^[0-9a-f]{40}$ || "$owner" != github/devantler-tech/.github-public ]]; then
+            printf 'ERROR: committed automation source is not the expected gitlink\n' >&2
+            exit 1
+          fi
           printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
       - name: Checkout current shared automation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1187,13 +1133,10 @@ jobs:
           ref: ${{ steps.automation-pin.outputs.revision }}
           path: github/devantler-tech/.github-public
           persist-credentials: false
-      - name: Check out retained legacy Actions submodule
-        run: |
-          git submodule set-url github/devantler-tech/github-actions/actions https://github.com/devantler-tech/actions.git
-          git submodule update --init --depth 1 \
-            github/devantler-tech/github-actions/actions
       - name: Check Active Projects lists for drift
-        run: bash docs/scripts/check-active-projects-drift.sh
+        env:
+          SITE_ROOT: ${{ github.workspace }}/applications/business-site
+        run: bash applications/business-site/docs/scripts/check-active-projects-drift.sh
 
   test-agent-telemetry:
     name: Test agent telemetry miner
@@ -2213,6 +2156,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Initialize the pinned editorial source
+        run: bash .claude/scripts/submodule-init.sh applications/business-site
       - name: Verify the product value contract
         run: bash .claude/scripts/product-value-contract.test.sh
 
@@ -2513,6 +2458,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Resolve the committed website source
+        id: site-pin
+        run: |
+          revision=$(bash .claude/scripts/business-site-revision.sh)
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+      - name: Checkout the committed website source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: devantler-tech/business-site
+          ref: ${{ steps.site-pin.outputs.revision }}
+          path: applications/business-site
+          persist-credentials: false
+      - name: Install macOS verification tools
+        if: matrix.os == 'macos-latest'
+        run: brew install shellcheck yq
+      - name: Verify the real source checkout and selection
+        run: |
+          shellcheck .claude/scripts/business-site-ci.test.sh
+          bash .claude/scripts/business-site-ci.test.sh
       # Both OSes: agents run the runner locally on macOS, where the process-group timeout and
       # BSD tools behave differently from the Linux runner.
       - name: Self-test the affected-tests runner
@@ -3177,9 +3141,7 @@ jobs:
     needs:
       - changes
       - build-docs
-      - audit-docs
-      - test-docs-audit-wrapper
-      - test-docs-npm-toolchain
+      - test-business-site-integration
       - drift-check-active-projects
       - drift-check-renovate-dashboard
       - test-agent-telemetry
@@ -3272,9 +3234,7 @@ jobs:
           job-results: >-
             ${{ needs.changes.result }}
             ${{ needs.build-docs.result }}
-            ${{ needs.audit-docs.result }}
-            ${{ needs.test-docs-audit-wrapper.result }}
-            ${{ needs.test-docs-npm-toolchain.result }}
+            ${{ needs.test-business-site-integration.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.drift-check-renovate-dashboard.result }}
             ${{ needs.test-agent-telemetry.result }}

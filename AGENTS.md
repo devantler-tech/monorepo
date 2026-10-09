@@ -1,18 +1,17 @@
 # AGENTS.md — devantler-tech monorepo
 
-The **always-on core** for AI agents in this monorepo: every session loads it, so it holds only what
-every session needs. Everything else lives in the [agent guides](#agent-guides) or next to the code it
-governs — **read the guide an entry names before doing that kind of work.** Each product submodule
+The **always-on core**: every session loads it; keep only universal guidance here. Topic rules live
+in the [agent guides](#agent-guides) or beside the code — **read the guide an entry names before doing
+that kind of work.** Each product submodule
 has its own `AGENTS.md`, whose `## Maintenance` section wins for that repository.
 
 ## What this repo is
 
-Every devantler-tech product as a Git submodule, plus the **devantler.tech** site in `docs/`, so one
-checkout holds the whole portfolio for one autonomous **engineer**.
+The portfolio's products, including **devantler.tech**, are Git submodules in one checkout.
 
 | Path | What it holds | Instructions |
 |---|---|---|
-| `docs/` | the devantler.tech site, and this repository's ADRs in `docs/adr/` | [`docs/AGENTS.md`](docs/AGENTS.md) |
+| `docs/` | ADRs in `docs/adr/`; frozen website migration snapshot | [`docs/AGENTS.md`](docs/AGENTS.md) |
 | `.claude/guides/` | the agent guides — the detailed half of this contract | [index](#agent-guides) |
 | `.claude/scripts/` | helpers the engineer runs, and the contract tests that guard the guides | [`.claude/scripts/AGENTS.md`](.claude/scripts/AGENTS.md) |
 | `.claude/skills/`, `.claude/agents/`, `.claude/loaders/` | run procedures, product cards, the surveyor overlay and loaders | [*Agent definition locations*](#agent-definition-locations) |
@@ -29,7 +28,8 @@ Populate a submodule with `.claude/scripts/submodule-init.sh <path>` — never a
 | Data Product Controller | `devantler-tech/data-product-controller` | `applications/data-product-controller` | `AGENTS.md` |
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | `AGENTS.md` |
 | AWS config tenant | `devantler-tech/aws` | `applications/aws` | `AGENTS.md` |
-| devantler.tech site | `devantler-tech/monorepo` | `docs/` + repo root | [`docs/AGENTS.md`](docs/AGENTS.md) and this file |
+| Portfolio aggregator | `devantler-tech/monorepo` | repo root | this file |
+| devantler.tech site | `devantler-tech/business-site` | `applications/business-site` | `AGENTS.md` and [product card](.claude/skills/products/business-site/SKILL.md) |
 | Shared automation and organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | `AGENTS.md` |
 | Go template | `devantler-tech/go-template` | `templates/go-template` | `AGENTS.md` |
 | .NET template | `devantler-tech/dotnet-template` | `templates/dotnet-template` | `AGENTS.md` |
@@ -69,7 +69,7 @@ no row are filed on the **default intake repo** below.
 
 | Building block | Good for | Owning repo |
 |---|---|---|
-| devantler.tech website | Public web pages on devantler.tech — docs, guides, announcements, portfolio content | `devantler-tech/monorepo` |
+| devantler.tech website | Public web pages on devantler.tech — docs, guides, announcements, portfolio content | `devantler-tech/business-site` |
 | World at Ruin | THIS suite's own online fantasy game — its world, dungeons, characters, monsters, combat, loot and progression (not games in general) | `devantler-tech/world-at-ruin` |
 | Wedding app | THIS suite's existing deployed wedding website only — its guest pages, RSVPs, schedules, photos and practical info (not new wedding sites in general) | `devantler-tech/wedding-app` |
 | AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |

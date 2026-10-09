@@ -2,6 +2,12 @@
 
 Every project I actively work on, gathered in one place.
 
+The public [Devantler Tech website](https://devantler.tech) is owned by
+[business-site](https://github.com/devantler-tech/business-site), checked out at
+`applications/business-site`. Its source checks and content live there; this monorepo pins the
+reviewed source and publishes it through the existing GitHub Pages hosting. Repository-wide
+architecture decisions stay in [`docs/adr/`](docs/adr/).
+
 Each project stays its own repository and is linked in here as a *submodule* — a pointer to another
 repository, checked out inside this one. So one clone opens everything in VS Code, while each project
 keeps its own releases, issues, and access.

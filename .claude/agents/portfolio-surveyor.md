@@ -1521,7 +1521,7 @@ public and private — no per-repo loop needed to enumerate):
    by `devantler`. The orchestrator cannot authorise an external repository from survey metadata; only
    the maintainer can clear that boundary in a current interactive conversation.
 
-Portfolio repos (the org-wide search covers them). The
+Portfolio repos. The
 **authoritative set is the org's live non-archived repo list**: the monorepo `AGENTS.md` portfolio
 map names the *products*, and org/infra repos outside that map (e.g. `maintenance`) are in scope
 too. Reconcile each run with one bounded call —
@@ -1534,7 +1534,7 @@ intentional tombstone, never drift.) The list:
 `ksail`, `data-product-controller`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
 `platform-tenant-template`, `platform-template`, `actions`, `homebrew-tap`, `agent-skills`,
 `agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`,
-`cloudflare`, `world-at-ruin`, `wedding-app`, `ascoachingogvaner`, `unifi`.
+`cloudflare`, `world-at-ruin`, `wedding-app`, `ascoachingogvaner`, `unifi`, `business-site`.
 Archived repos (currently `reusable-workflows`, `data-product`, `doggy-countdown`) are
 read-only: skip them entirely —
 no CI-red pass, no actionable signal (their stale bot PRs are unmergeable by design).

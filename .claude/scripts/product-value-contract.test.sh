@@ -22,8 +22,9 @@ trap on_exit EXIT
   { echo "product value contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
 run_loop="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 engineering="${repo_root}/.claude/skills/product-engineering/SKILL.md"
-site_card="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
-site_readme="${repo_root}/docs/README.md"
+site_card="${repo_root}/.claude/skills/products/business-site/SKILL.md"
+monorepo_card="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
+site_readme="${repo_root}/applications/business-site/docs/README.md"
 workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
@@ -206,7 +207,7 @@ monorepo_labels_are_live() {
   done < <(grep -oE "\`[^\`]+\`" <<<"${candidate_line}" | tr -d '`')
 }
 
-labels_line="$(grep -E '^\- \*\*Labels\*\*' "${site_card}" || true)"
+labels_line="$(grep -E '^\- \*\*Labels\*\*' "${monorepo_card}" || true)"
 [[ -n "${labels_line}" ]] || fail "site card missing Labels allowlist line"
 grep -Fq "\`github_actions\`" <<<"${labels_line}" ||
   fail "site card Labels allowlist missing live github_actions (#2260)"
