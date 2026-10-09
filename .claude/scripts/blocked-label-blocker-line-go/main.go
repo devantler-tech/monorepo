@@ -109,6 +109,10 @@ Exit: 0 conforms; 1 findings; 2 UNKNOWN (usage, unreadable or incomplete input,
       or an --org read that saw no Security issue at all).
       With --parked-digest: 0 every labelled pull request is parked (or none is
       labelled); 1 at least one is ACTIONABLE; 2 UNKNOWN.
+Forge reads other than searches are conditional: each page is kept privately
+under $XDG_CACHE_HOME (default ~/.cache) and reused only when the forge
+confirms it unchanged in this run, which is not charged to the request budget.
+BLOCKER_LINE_CACHE_DIR names another directory; "off" keeps nothing.
 `
 
 // askChannels is the closed set of tokens an ask record may name. The ask
@@ -886,10 +890,28 @@ func pullEndpoint(org string) string {
 }
 
 // forgeRead is the one place the guard reaches the forge; tests replace it.
+// A search is read in full every time: it is charged to a budget of its own,
+// not the hourly one. Every other read is conditional (cache.go).
 var forgeRead = func(endpoint string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, "gh", "api", endpoint, "--paginate").Output()
+	if strings.HasPrefix(endpoint, "search/") {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		return exec.CommandContext(ctx, "gh", "api", endpoint, "--paginate").Output()
+	}
+	return conditionalRead(endpoint, true)
+}
+
+// forgeReadAnew reads without reusing a kept page. It is nil wherever
+// forgeRead already reads anew, as in tests that replace forgeRead.
+var forgeReadAnew func(endpoint string) ([]byte, error)
+
+// readAnew is the read a caller repeats with when a reused answer did not add
+// up: a kept first page cannot show that a later page has since appeared.
+func readAnew(endpoint string) ([]byte, error) {
+	if forgeReadAnew != nil {
+		return forgeReadAnew(endpoint)
+	}
+	return forgeRead(endpoint)
 }
 
 func load(o options, stdin io.Reader) ([]issue, error) {
@@ -1186,5 +1208,14 @@ func main() {
 	// Let failed stdout/stderr writes reach run's UNKNOWN handling instead of
 	// terminating the process before it can return the documented exit status.
 	signal.Ignore(syscall.SIGPIPE)
+	forgeReadAnew = func(endpoint string) ([]byte, error) {
+		if strings.HasPrefix(endpoint, "search/") {
+			return forgeRead(endpoint)
+		}
+		return conditionalRead(endpoint, false)
+	}
+	if dir := keptPageDir(); dir != "" {
+		pruneKeptPages(dir, time.Now())
+	}
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
