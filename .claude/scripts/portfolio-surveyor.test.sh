@@ -3910,11 +3910,11 @@ grep -Fq 'no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"
 # reviewed one, and the per-file `match` lines of the same report prove exactly that. The proof must
 # be POSITIVE: `--quiet` prints no per-file lines, so "no differing script line" alone would pass on
 # a report that showed nothing. UNKNOWN and a differing script must still fail closed.
-grep -Fq 'A `DRIFT` verdict qualifies too, but only when that same report, run without `--quiet`, prints a `match` line for `scripts/classify-default-branch-ci-runs.sh`' <<<"${_ci_step}" ||
+grep -Fq 'A `DRIFT` report qualifies too when, run without `--quiet`, it prints `match` for that helper' <<<"${_ci_step}" ||
   fail "step 4 must let a DRIFT install serve the inline classifier when the report proves the helper itself matches the pin — otherwise a drift in prose files stops CI classification (monorepo#4095)"
-grep -Fq 'and no `scripts/` line that reads anything else' <<<"${_ci_step}" ||
+grep -Fq 'and for every other `scripts/` line' <<<"${_ci_step}" ||
   fail "step 4 must require every scripts/ line to match under DRIFT — the helper sources a sibling library, and an unexpected file beside it is not reviewed (monorepo#4095)"
-grep -Fq 'An `UNKNOWN` verdict, a `scripts/` line that does not read `match`, or no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"${_ci_step}" ||
+grep -Fq 'Anything else, or no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"${_ci_step}" ||
   fail "step 4 must keep UNKNOWN and a differing script as QUERY-UNKNOWN on the inline route (monorepo#4095)"
 if grep -Fq 'Any other verdict, or no executable helper' <<<"${_ci_step}"; then
   fail "step 4 still carries the CURRENT-only sentence, which contradicts the DRIFT-with-matching-scripts route (monorepo#4095)"
