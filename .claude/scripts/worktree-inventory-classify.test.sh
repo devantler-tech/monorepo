@@ -121,7 +121,7 @@ else bad "the counts name one settled and one unsettled commit" "$(cat "$OUT")";
 expect_class "an open tip beside an unsettled one is work in flight" w s work-in-flight
 { mc w s not-checked "$H1"; tc w s github-bot "$T1" branch; tc w s merged "$T2" ref; chk_end; } > "$CHK"
 expect_class "a commit a bot made on GitHub is its own class, never merged in content" w s made-on-github
-if grep -q "$(printf 'settled=1\tunsettled=0\tin_flight=0\tgithub_bot=1$')" "$OUT"; then ok "the counts keep the bot commit apart from the settled one"
+if grep -q "$(printf 'settled=1\tunsettled=0\tin_flight=0\tgithub_bot=1\tread=0$')" "$OUT"; then ok "the counts keep the bot commit apart from the settled one"
 else bad "the counts keep the bot commit apart from the settled one" "$(cat "$OUT")"; fi
 if grep -q "$(printf '\tmerged_in_content=0\tmade_on_github=1\t.*\twt_merged_in_content=0\twt_made_on_github=1\t')" "$OUT"; then ok "the closing line counts the class apart"
 else bad "the closing line counts the class apart" "$(tail -n 1 "$OUT")"; fi
@@ -271,7 +271,7 @@ if [ "$(grep '^WORKTREE' "$OUT")" = "$want" ]; then ok "a worktree takes its mos
 else bad "a worktree takes its most demanding entry's class" "$(grep '^WORKTREE' "$OUT")"; fi
 last=$(tail -n 1 "$OUT")
 case "$last" in
-  "$(printf 'CLASSIFIED\tentries=5\tnothing_held=2\tmerged_in_content=0\tmade_on_github=0\ttool_output=1\twork_in_flight=0\tneeds_a_person=1\tunknown=1\tworktrees=3\twt_nothing_held=1\twt_merged_in_content=0\twt_made_on_github=0\twt_tool_output=0\twt_work_in_flight=0\twt_needs_a_person=1\twt_unknown=1\tbelow_min_idle=0')")
+  "$(printf 'CLASSIFIED\tentries=5\tnothing_held=2\tmerged_in_content=0\tmade_on_github=0\ttool_output=1\twork_in_flight=0\tneeds_a_person=1\tunknown=1\tworktrees=3\twt_nothing_held=1\twt_merged_in_content=0\twt_made_on_github=0\twt_tool_output=0\twt_work_in_flight=0\twt_needs_a_person=1\twt_unknown=1\tbelow_min_idle=0\tsettled_by_reading=0\twt_settled_by_reading=0')")
     ok "the closing line carries the totals" ;;
   *) bad "the closing line carries the totals" "$last" ;;
 esac
@@ -348,6 +348,124 @@ expect_refused "an inventory class this script does not know" "unknown inventory
 expect_refused "rows after the inventory's closing line" "inventory has rows after its CHECKED line"
 : > "$INV"
 expect_refused "an empty inventory" "inventory has no CHECKED line"
+
+
+echo "recorded readings"
+RV="$TMP/rv"
+# run_rv — the same run with the read-verdicts file.
+run_rv() { "$SUT" --inventory "$INV" --read-verdicts "$RV" < "$CHK" > "$OUT" 2> "$ERR"; }
+# expect_class_rv <label> <class> — with the readings, the run succeeds and `w s` gets that class.
+expect_class_rv() {
+  local rc=0 got
+  run_rv || rc=$?
+  got=$(awk -F'\t' '$1 == "CLASS" && $2 == "w" && $3 == "s" { print $4 }' "$OUT")
+  if [ "$rc" = 0 ] && [ "$got" = "$2" ]; then ok "$1"; else bad "$1" "rc=$rc class=${got:-none} $(head -n 1 "$ERR")"; fi
+}
+# expect_refused_rv <label> <message fragment> — exit 2, no CLASS row, and the named cause.
+expect_refused_rv() {
+  local rc=0
+  run_rv || rc=$?
+  if [ "$rc" = 2 ] && ! grep -q '^CLASS' "$OUT" && grep -qF -- "$2" "$ERR"; then ok "$1"
+  else bad "$1" "rc=$rc rows=$(grep -c '^CLASS' "$OUT") err=$(head -n 1 "$ERR")"; fi
+}
+rv() { printf 'READ\t%s\t%s\t%s\n' "$@"; } # <submodule> <sha> <where the work went>
+
+one unpushed 1 1 < /dev/null
+{ mc w s no-pr "$H1"; cc w s differs "$H1"; chk_end; } > "$CHK"
+{ printf '# a comment\n\n'; rv s "$H1" 'merged as o/r#1 in a revised form'; } > "$RV"
+expect_class "without the readings the commit still needs a person" w s needs-a-person
+expect_class_rv "a recorded reading settles a HEAD every check left open" settled-by-reading
+if grep -q "$(printf 'settled=0\tunsettled=0\tin_flight=0\tgithub_bot=0\tread=1$')" "$OUT"; then ok "the counts name the read commit apart"
+else bad "the counts name the read commit apart" "$(cat "$OUT")"; fi
+if grep -q "$(printf '\tsettled_by_reading=1\twt_settled_by_reading=1$')" "$OUT" && grep -q "$(printf '\tmerged_in_content=0\t.*\tneeds_a_person=0\t')" "$OUT"
+then ok "the closing line counts the class apart from merged in content"
+else bad "the closing line counts the class apart from merged in content" "$(tail -n 1 "$OUT")"; fi
+if grep -q "$(printf '^WORKTREE\tw\tsettled-by-reading\t')" "$OUT"; then ok "the worktree takes the class"
+else bad "the worktree takes the class" "$(grep '^WORKTREE' "$OUT")"; fi
+
+rv other "$H1" 'merged as o/r#1' > "$RV"
+expect_class_rv "a reading recorded for another submodule settles nothing" needs-a-person
+rv s "$H2" 'merged as o/r#1' > "$RV"
+expect_class_rv "a reading recorded for another commit settles nothing" needs-a-person
+: > "$RV"
+expect_class_rv "an empty list settles nothing" needs-a-person
+
+rv s "$H1" 'merged as o/r#1' > "$RV"
+{ mc w s merged "$H1"; chk_end; } > "$CHK"
+expect_class_rv "a commit the checks settle stays merged in content, reading or not" merged-in-content
+{ mc w s open "$H1"; chk_end; } > "$CHK"
+expect_class_rv "a reading never hides an open pull request" work-in-flight
+
+one local-only 0 2 <<EOF2
+$(tip w s "$T1" stash)
+$(tip w s "$T2" reflog)
+EOF2
+{ mc w s not-checked "$H1"; tc w s stash "$T1" stash; tc w s no-pr "$T2" reflog; chk_end; } > "$CHK"
+{ rv s "$T1" 'read'; rv s "$T2" 'merged as o/r#2'; } > "$RV"
+expect_class_rv "a reading never settles a stash" needs-a-person
+if grep -q "$(printf 'unsettled=1\tin_flight=0\tgithub_bot=0\tread=1$')" "$OUT"; then ok "the stash stays unsettled beside the read tip"
+else bad "the stash stays unsettled beside the read tip" "$(cat "$OUT")"; fi
+
+one local-only 0 2 <<EOF2
+$(tip w s "$T1" branch)
+$(tip w s "$T2" reflog)
+EOF2
+{ mc w s not-checked "$H1"; tc w s no-pr "$T1" branch; tc w s no-pr "$T2" reflog; chk_end; } > "$CHK"
+rv s "$T1" 'merged as o/r#3' > "$RV"
+expect_class_rv "one read tip beside an unread one still needs a person" needs-a-person
+{ rv s "$T1" 'merged as o/r#3'; rv s "$T2" 'superseded by o/r#4'; } > "$RV"
+expect_class_rv "every unsettled tip read is settled by reading" settled-by-reading
+{ mc w s not-checked "$H1"; tc w s github-bot "$T1" branch; tc w s no-pr "$T2" reflog; chk_end; } > "$CHK"
+expect_class_rv "a read tip beside a bot's commit is settled by reading, the more demanding class" settled-by-reading
+{ mc w s not-checked "$H1"; tc w s merged "$T1" branch; tc w s no-pr "$T2" reflog; chk_end; } > "$CHK"
+expect_class_rv "a read tip beside a merged one is settled by reading, never merged in content" settled-by-reading
+
+{ printf 'ENTRY\tw\ts\tunpushed\tidle_days=3\thead=%s\tunpushed=1\tlocal_only=1\tmodified=0\tuntracked=0\tnested=0\tignored=2\n' "$H1"; inv_end 1; } > "$INV"
+{ mc w s no-pr "$H1"; chk_end; } > "$CHK"
+rv s "$H1" 'merged as o/r#1' > "$RV"
+expect_class_rv "ignored files beside a read commit are tool output" tool-output
+
+{ entry a s1 unpushed "$H1" 1 1; entry a s2 unpushed "$H2" 1 1; entry b s1 unpushed "$H1" 1 1; entry b s2 ignored "$H1" 0 0; inv_end 4; } > "$INV"
+{ mc a s1 no-pr "$H1"; mc a s2 github-bot "$H2"; mc b s1 no-pr "$H1"; chk_end; } > "$CHK"
+rv s1 "$H1" 'merged as o/r#1' > "$RV"
+run_rv; if grep -q "$(printf '^WORKTREE\ta\tsettled-by-reading\t')" "$OUT" && grep -q "$(printf '^WORKTREE\tb\ttool-output\t')" "$OUT"
+then ok "settled by reading outranks made on GitHub, and tool output outranks it"
+else bad "settled by reading outranks made on GitHub, and tool output outranks it" "$(grep '^WORKTREE' "$OUT")"; fi
+
+one unpushed 1 1 < /dev/null
+{ mc w s no-pr "$H1"; chk_end; } > "$CHK"
+printf 'SEEN\ts\t%s\twhy\n' "$H1" > "$RV"
+expect_refused_rv "a row that is not READ" "unknown row SEEN"
+printf 'READ\ts\t%s\n' "$H1" > "$RV"
+expect_refused_rv "a READ row with no reason field" "a READ row has 3 fields, not 4"
+printf 'READ\ts\t%s\t \n' "$H1" > "$RV"
+expect_refused_rv "a READ row with a blank reason" "does not say where the work went"
+rv s 1111111 'merged as o/r#1' > "$RV"
+expect_refused_rv "a READ row with a short commit" "names no submodule or no full commit"
+rv '' "$H1" 'merged as o/r#1' > "$RV"
+expect_refused_rv "a READ row with no submodule" "names no submodule or no full commit"
+{ rv s "$H1" 'merged as o/r#1'; rv s "$H1" 'merged as o/r#2'; } > "$RV"
+expect_refused_rv "a commit listed twice" "list $H1 twice for s"
+rv s "$H1" 'merged as o/r#1' > "$RV"
+rc=0; "$SUT" --inventory "$INV" --read-verdicts "$TMP/absent" < "$CHK" > "$OUT" 2> "$ERR" || rc=$?
+if [ "$rc" = 2 ] && grep -q 'not a readable file' "$ERR"; then ok "a missing read-verdicts file is refused"; else bad "a missing read-verdicts file is refused" "rc=$rc"; fi
+rc=0; "$SUT" --inventory "$INV" --readings "$RV" < "$CHK" > "$OUT" 2> "$ERR" || rc=$?
+if [ "$rc" = 2 ] && grep -q '^worktree-inventory-classify: usage' "$ERR"; then ok "an unknown option is a usage error"; else bad "an unknown option is a usage error" "rc=$rc"; fi
+# A reading must not reach the entry through a forged inventory row inside the list.
+{ rv s "$H1" 'merged as o/r#1'; printf 'I\tCHECKED\n'; } > "$RV"
+expect_refused_rv "a list row that imitates another text" "unknown row I"
+
+echo "the repository's own list"
+LIST="$SCRIPT_DIR/worktree-inventory-read-verdicts.tsv"
+if [ -r "$LIST" ]; then
+  { inv_end 0; } > "$INV"; chk_end > "$CHK"
+  rc=0; "$SUT" --inventory "$INV" --read-verdicts "$LIST" < "$CHK" > "$OUT" 2> "$ERR" || rc=$?
+  if [ "$rc" = 0 ]; then ok "the committed list is well formed"; else bad "the committed list is well formed" "rc=$rc $(head -n 1 "$ERR")"; fi
+  rows=$(grep -c '^READ' "$LIST")
+  if [ "$rows" -gt 0 ]; then ok "the committed list holds rows ($rows)"; else bad "the committed list holds rows" "rows=$rows"; fi
+else
+  bad "the committed list is readable" "$LIST"
+fi
 
 echo "usage"
 rc=0; "$SUT" > "$OUT" 2> "$ERR" < /dev/null || rc=$?

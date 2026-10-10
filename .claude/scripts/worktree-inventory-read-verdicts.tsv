@@ -1,0 +1,29 @@
+# worktree-inventory-read-verdicts.tsv — commits a reader read and found to need no rescue
+# (monorepo#4085). worktree-inventory-classify.sh --read-verdicts reads this file. The
+# reader is a person or an agent; every row arrives through a reviewed pull request.
+#
+# Add a row only after reading the commit's WHOLE line since it left the default branch
+# (a tip can stand for several commits) and comparing it with the current default branch.
+# The last field says where the work went, so the next reader can check the reading.
+# Never add a commit whose work is on no default branch in any shape: that one needs its
+# owner, not a row here.
+#
+# READ <submodule> <full sha> <where the work went>
+READ	applications/ksail	ef3b5919a7bc712268db3f613c1d3bdc7364b03d	merged as devantler-tech/ksail#7300; its two tests were rewritten in upgrade_prepare_internal_test.go
+READ	applications/ksail	beaa9901413326f488572c39dbf0c3fd8528cda4	on the default branch in a revised form: the unmanaged refusal and its three tests are in pkg/cli/clusterapi
+READ	applications/ksail	2afa6736d1924d64f543935841409bec9f4d5dce	merged as devantler-tech/ksail#6248 in a revised form (TryWriteFileWithin)
+READ	applications/ksail	65b2083b18a84c406da86757bb36f922c2ecfd3f	on the default branch; one line differs by a linter comment
+READ	applications/ksail	060ec2a9e67e2c43b5b72220c2658930a0127da5	on the default branch in full
+READ	applications/ksail	459de9549daa8f761bac3b32dacf70e94e877a69	abandoned on purpose: a merge into the closed test pull request devantler-tech/ksail#7442 (do not merge)
+READ	applications/world-at-ruin	e362ffc5306a79b39a0c609e6d4c9466b368bc77	superseded: the closed devantler-tech/world-at-ruin#114; the fix merged as #117 with shipped_piece_slots_test
+READ	applications/world-at-ruin	423c6fc19a93065d864ce40263f574154c024b85	merged as devantler-tech/world-at-ruin#415; the guard was rebuilt in #599
+READ	applications/world-at-ruin	a5e94c12789155b20958c086b7a9ad5de773e429	merged as devantler-tech/world-at-ruin#416
+READ	applications/world-at-ruin	da5d298635980ecaab83c45aa2d2820d0acfd952	abandoned on purpose: temporary diagnostics; the finished version merged as devantler-tech/world-at-ruin#425
+READ	applications/world-at-ruin	b1293b618a727fcda09c5e2255ab0dece28e5ed9	superseded: its code is on the default branch and its changelog entry merged with devantler-tech/world-at-ruin#460
+READ	libraries/agent-plugins	b6e1f8bb2aabc1c9c011f318557bf2fbec746c19	on the default branch; only a version number and two checksums differ
+READ	github/devantler-tech/.github-public	35fd47671086583ef429d4c93e3db1b9f2f22619	on the default branch in a revised form; comment and README wording differ
+READ	platform	ad67bbf63b3c67c882c8f2063075515ef593b647	on the default branch in a revised form; the file permission was changed in review
+READ	platform	70892efc0a23cc6434f0a1238bb029b2526a42a5	on the default branch in a revised form; message wording and test counts differ
+READ	platform	a23eba17ed0eeec4e1327934115a2b21180a5f8c	an earlier version of 70892efc, on the default branch in a revised form
+READ	platform	b662afee80ef7e8f1848dea4dce6b0b7ec0d389f	an earlier version of 70892efc, on the default branch in a revised form
+READ	platform	00c74e4a9f1d3a003eb07faa9fdf9dbb34ef3ad8	an earlier version of 70892efc, on the default branch in a revised form

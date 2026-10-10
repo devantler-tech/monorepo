@@ -17,13 +17,23 @@
 #   worktree-inventory-merged-check.sh <root> [--content-reference <checkout>] \
 #     < inventory.tsv > check.tsv        # its exit 2 on an UNKNOWN row still leaves full output
 #   worktree-inventory-classify.sh --inventory inventory.tsv < check.tsv
+#   worktree-inventory-classify.sh --inventory inventory.tsv \
+#     --read-verdicts .claude/scripts/worktree-inventory-read-verdicts.tsv < check.tsv
 #
 #   --inventory <file>   the inventory's complete output, taken with --tips
+#   --read-verdicts <file>  optional: the commits a reader read and found to need no rescue.
+#                        One row per commit, tab-separated, `#` lines and blank lines skipped:
+#                          READ <submodule> <full sha> <where the work went>
+#                        A row covers the commit's WHOLE line since it left the default
+#                        branch, not the commit alone: a tip can stand for several commits,
+#                        and the reader must have read them all. The sha fixes that line
+#                        for good, so a reading never goes stale. A row for a commit no
+#                        entry holds is ignored: its working copy is gone
 #   stdin                the merged check's complete output for that same inventory
 #
 # Output, tab-separated, one row per inventory entry, in the inventory's order:
 #   CLASS <worktree> <submodule> <class> inventory=<class> settled=<n> unsettled=<n> in_flight=<n>
-#         github_bot=<n>
+#         github_bot=<n> read=<n>
 # then one row per worktree:
 #   WORKTREE <worktree> <class> entries=<n>
 # and a closing `CLASSIFIED ...` line with the totals.
@@ -39,6 +49,12 @@
 #                      only as `github-bot`: GitHub signed it for a bot, so it was never
 #                      made on this machine. Needs no rescue, and is NOT shown to be on the
 #                      default branch: it is kept apart from merged-in-content for that
+#   settled-by-reading it holds commits only, none is unsettled, and at least one is settled
+#                      only because --read-verdicts lists it: no evidence this script can
+#                      check settles it, a reader read it and recorded where the work went.
+#                      Needs no rescue on that reader's word, and is kept apart from the
+#                      two classes above for that. Without --read-verdicts no entry gets
+#                      this class. A reading never settles a stash or an open pull request
 #   tool-output        nothing but files the repository's own ignore rules cover. A removal
 #                      deletes them; they are rarely authored. An entry that would be
 #                      merged-in-content or made-on-github but also holds ignored files gets
@@ -60,8 +76,8 @@
 # entry, and each TIP. They are 0 for an entry whose files decided its class.
 #
 # A worktree gets the most demanding class among its entries, in this order: unknown,
-# needs-a-person, work-in-flight, tool-output, made-on-github, merged-in-content,
-# nothing-held. That row
+# needs-a-person, work-in-flight, tool-output, settled-by-reading, made-on-github,
+# merged-in-content, nothing-held. That row
 # covers the worktree's populated submodules only. It says nothing about the worktree's own
 # top-level repository, which the sweep judges separately.
 #
@@ -77,18 +93,25 @@
 # after it, the inventory was taken without --tips or holds an UNREADABLE row, a row is
 # malformed or carries a verdict this script does not know, a row names an entry, HEAD,
 # tip or file count the inventory does not, an entry or tip that needs a verdict has none, or a row
-# appears twice. On input it cannot join it prints no CLASS row at all.
+# appears twice. A --read-verdicts file with a malformed, unknown or repeated row is refused
+# the same way. On input it cannot join it prints no CLASS row at all.
 set -euo pipefail
 
 die() { printf 'worktree-inventory-classify: %s\n' "$1" >&2; exit 2; }
 
-USAGE="usage: worktree-inventory-classify.sh --inventory <file> < merged-check-output"
+USAGE="usage: worktree-inventory-classify.sh --inventory <file> [--read-verdicts <file>] < merged-check-output"
 case "${1:-}" in
   -h|--help) sed -n '2,/^set -euo pipefail$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; exit 0 ;;
 esac
-[ $# -eq 2 ] && [ "$1" = --inventory ] || die "$USAGE"
+{ [ $# -eq 2 ] || [ $# -eq 4 ]; } && [ "$1" = --inventory ] || die "$USAGE"
 INVENTORY=$2
 [ -f "$INVENTORY" ] && [ -r "$INVENTORY" ] || die "not a readable file: $INVENTORY"
+READ_VERDICTS=
+if [ $# -eq 4 ]; then
+  [ "$3" = --read-verdicts ] || die "$USAGE"
+  READ_VERDICTS=$4
+  [ -f "$READ_VERDICTS" ] && [ -r "$READ_VERDICTS" ] || die "not a readable file: $READ_VERDICTS"
+fi
 
 OUT=$(mktemp) || die "cannot create a temporary file"
 classify_finished=0
@@ -106,6 +129,7 @@ trap on_exit EXIT
 # never be read as an awk assignment and a row can never be attributed to the wrong text.
 rc=0
 {
+  if [ -n "$READ_VERDICTS" ]; then sed 's/^/R	/' < "$READ_VERDICTS" || exit 1; fi
   sed 's/^/I	/' < "$INVENTORY" || exit 1
   sed 's/^/C	/' || exit 1
 } | LC_ALL=C awk -F'\t' '
@@ -119,13 +143,15 @@ rc=0
     return substr($i, length(p) + 1)
   }
   function name_ok(s) { return s != "" }
-  # judge — count one commit as in flight, settled or unsettled.
-  function judge(key, verdict, kind, content) {
+  # judge — count one commit as in flight, settled, read or unsettled. A recorded reading is
+  # the last resort: it settles only a commit every check left unsettled, never a stash.
+  function judge(key, verdict, kind, content, sha) {
     if (verdict == "open") { flight[key]++; return }
     if (kind == "stash" || verdict == "stash") { unsettled[key]++; return }
     if (verdict == "github-bot") { bot[key]++; return }
     if (verdict == "merged" || verdict == "merged-ancestor" || verdict == "pushed-ref") { settled[key]++; return }
     if (content == "reached" || content == "no-change" || content == "same-change" || content == "clean-merge") { settled[key]++; return }
+    if ((e_sub[key], sha) in readv) { rd[key]++; return }
     unsettled[key]++
   }
   BEGIN {
@@ -140,11 +166,25 @@ rc=0
     for (i in a) file_verdict[a[i]] = 1
     split("branch stash ref reflog", a, " ")
     for (i in a) tip_kind[a[i]] = 1
-    rank["nothing-held"] = 1; rank["merged-in-content"] = 2; rank["made-on-github"] = 3
-    rank["tool-output"] = 4; rank["work-in-flight"] = 5; rank["needs-a-person"] = 6; rank["unknown"] = 7
+    rank["nothing-held"] = 1; rank["merged-in-content"] = 2; rank["made-on-github"] = 3; rank["settled-by-reading"] = 4
+    rank["tool-output"] = 5; rank["work-in-flight"] = 6; rank["needs-a-person"] = 7; rank["unknown"] = 8
+  }
+
+  $1 == "R" {
+    if (inv_started) fail("a read-verdict row after the inventory began")
+    if (NF <= 2 && $2 == "") next
+    if (substr($2, 1, 1) == "#") next
+    if ($2 != "READ") fail("read-verdicts line " NR ": unknown row " $2)
+    if (NF != 5) fail("read-verdicts line " NR ": a READ row has " (NF - 1) " fields, not 4")
+    if (!name_ok($3) || !sha_ok($4)) fail("read-verdicts line " NR ": a READ row names no submodule or no full commit")
+    if ($5 ~ /^[ ]*$/) fail("read-verdicts line " NR ": a READ row does not say where the work went")
+    if (($3, $4) in readv) fail("the read verdicts list " $4 " twice for " $3)
+    readv[$3, $4] = 1
+    next
   }
 
   $1 == "I" {
+    inv_started = 1
     if (inv_closed) fail("the inventory has rows after its CHECKED line")
     if ($2 == "SKIP") next
     if ($2 == "UNREADABLE") fail("the inventory holds an UNREADABLE row: it is incomplete")
@@ -253,7 +293,7 @@ rc=0
     if (n != inv_entries + 0) fail("the inventory lists " n " entries and its CHECKED line says " inv_entries)
     for (i = 1; i <= n; i++) {
       key = order[i]; c = e_class[key]
-      settled[key] += 0; unsettled[key] += 0; flight[key] += 0; bot[key] += 0
+      settled[key] += 0; unsettled[key] += 0; flight[key] += 0; bot[key] += 0; rd[key] += 0
       if (key in unk) cls = "unknown"
       else if (c == "clean") cls = "nothing-held"
       else if (c == "ignored") cls = "tool-output"
@@ -267,17 +307,18 @@ rc=0
         if (!(key in mc)) fail("the merged check has no row for " e_wt[key] " " e_sub[key])
         pushed = (e_unpushed[key] + 0 == 0)
         if (pushed && mc[key] != "not-checked") fail("the merged check judged the pushed HEAD of " e_wt[key] " " e_sub[key])
-        if (!pushed) judge(key, mc[key], "", cc[key, e_head[key]])
+        if (!pushed) judge(key, mc[key], "", cc[key, e_head[key]], e_head[key])
         if (e_local[key] + 0 > e_unpushed[key] + 0 && t_count[key] + 0 == 0)
           fail("the inventory names no tip for " e_wt[key] " " e_sub[key] ", which holds commits away from HEAD")
         m = split(tips[key], tl, " ")
         for (j = 1; j <= m; j++) {
           if (!((key, tl[j]) in tc)) fail("the merged check has no row for tip " tl[j] " of " e_wt[key] " " e_sub[key])
-          judge(key, tc[key, tl[j]], t_kind[key, tl[j]], cc[key, tl[j]])
+          judge(key, tc[key, tl[j]], t_kind[key, tl[j]], cc[key, tl[j]], tl[j])
         }
-        if (settled[key] + unsettled[key] + flight[key] + bot[key] == 0) fail("no commit was judged for " e_wt[key] " " e_sub[key])
+        if (settled[key] + unsettled[key] + flight[key] + bot[key] + rd[key] == 0) fail("no commit was judged for " e_wt[key] " " e_sub[key])
         if (flight[key] > 0) cls = "work-in-flight"
         else if (unsettled[key] > 0) cls = "needs-a-person"
+        else if (rd[key] > 0) cls = "settled-by-reading"
         else if (bot[key] > 0) cls = "made-on-github"
         else cls = "merged-in-content"
       }
@@ -291,14 +332,14 @@ rc=0
     }
     for (i = 1; i <= n; i++) {
       key = order[i]
-      printf "CLASS\t%s\t%s\t%s\tinventory=%s\tsettled=%d\tunsettled=%d\tin_flight=%d\tgithub_bot=%d\n", e_wt[key], e_sub[key], e_out[key], e_class[key], settled[key], unsettled[key], flight[key], bot[key]
+      printf "CLASS\t%s\t%s\t%s\tinventory=%s\tsettled=%d\tunsettled=%d\tin_flight=%d\tgithub_bot=%d\tread=%d\n", e_wt[key], e_sub[key], e_out[key], e_class[key], settled[key], unsettled[key], flight[key], bot[key], rd[key]
     }
     for (i = 1; i <= wn; i++) {
       w = w_order[i]; w_total[w_class[w]]++
       printf "WORKTREE\t%s\t%s\tentries=%d\n", w, w_class[w], w_entries[w]
     }
     printf "CLASSIFIED\tentries=%d\tnothing_held=%d\tmerged_in_content=%d\tmade_on_github=%d\ttool_output=%d\twork_in_flight=%d\tneeds_a_person=%d\tunknown=%d", n, total["nothing-held"], total["merged-in-content"], total["made-on-github"], total["tool-output"], total["work-in-flight"], total["needs-a-person"], total["unknown"]
-    printf "\tworktrees=%d\twt_nothing_held=%d\twt_merged_in_content=%d\twt_made_on_github=%d\twt_tool_output=%d\twt_work_in_flight=%d\twt_needs_a_person=%d\twt_unknown=%d\tbelow_min_idle=%d\n", wn, w_total["nothing-held"], w_total["merged-in-content"], w_total["made-on-github"], w_total["tool-output"], w_total["work-in-flight"], w_total["needs-a-person"], w_total["unknown"], below
+    printf "\tworktrees=%d\twt_nothing_held=%d\twt_merged_in_content=%d\twt_made_on_github=%d\twt_tool_output=%d\twt_work_in_flight=%d\twt_needs_a_person=%d\twt_unknown=%d\tbelow_min_idle=%d\tsettled_by_reading=%d\twt_settled_by_reading=%d\n", wn, w_total["nothing-held"], w_total["merged-in-content"], w_total["made-on-github"], w_total["tool-output"], w_total["work-in-flight"], w_total["needs-a-person"], w_total["unknown"], below, total["settled-by-reading"], w_total["settled-by-reading"]
     if (total["unknown"] > 0) exit 4
   }
 ' > "$OUT" || rc=$?
