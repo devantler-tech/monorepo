@@ -688,8 +688,12 @@ fi
 # and the disk would fill again.
 [ -x "$sweeper" ] || unknown "missing $sweeper"
 new_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+# nohup ignores HUP but still inherits the caller's process group. Give the supervisor its
+# own group so a scheduled command's teardown cannot kill it before it records the result.
+set -m
 nohup bash "$self" __supervise --lane "$lane" --id "$new_id" >>"$log" 2>&1 </dev/null &
 pid=$!
+set +m
 if ! write_record "$started" "id=$new_id pid=$pid at=$(now)"; then
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
