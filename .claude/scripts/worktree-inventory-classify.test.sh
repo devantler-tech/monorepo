@@ -88,6 +88,8 @@ done
 one unpushed 1 1 < /dev/null
 { mc w s merged "$H1"; chk_end; } > "$CHK"
 expect_class "an unpushed HEAD whose pull request merged is merged in content" w s merged-in-content
+{ mc w s merged-ancestor "$H1"; chk_end; } > "$CHK"
+expect_class "an unpushed HEAD in the history of a merged pull request is merged in content" w s merged-in-content
 for v in merged-other-base closed other-head no-pr not-on-github not-checked; do
   { mc w s "$v" "$H1"; chk_end; } > "$CHK"
   expect_class "an unpushed HEAD read as $v needs a person" w s needs-a-person
@@ -109,12 +111,24 @@ $(tip w s "$T2" ref)
 EOF
 { mc w s not-checked "$H1"; tc w s merged "$T1" branch; tc w s pushed-ref "$T2" ref; chk_end; } > "$CHK"
 expect_class "every tip settled is merged in content" w s merged-in-content
+{ mc w s not-checked "$H1"; tc w s merged-ancestor "$T1" branch; tc w s pushed-ref "$T2" ref; chk_end; } > "$CHK"
+expect_class "a tip in the history of a merged pull request is settled" w s merged-in-content
 { mc w s not-checked "$H1"; tc w s merged "$T1" branch; tc w s no-pr "$T2" ref; chk_end; } > "$CHK"
 expect_class "one unsettled tip among settled ones needs a person" w s needs-a-person
 if grep -q "$(printf 'settled=1\tunsettled=1\tin_flight=0')" "$OUT"; then ok "the counts name one settled and one unsettled commit"
 else bad "the counts name one settled and one unsettled commit" "$(cat "$OUT")"; fi
 { mc w s not-checked "$H1"; tc w s open "$T1" branch; tc w s no-pr "$T2" ref; chk_end; } > "$CHK"
 expect_class "an open tip beside an unsettled one is work in flight" w s work-in-flight
+{ mc w s not-checked "$H1"; tc w s github-bot "$T1" branch; tc w s merged "$T2" ref; chk_end; } > "$CHK"
+expect_class "a commit a bot made on GitHub is its own class, never merged in content" w s made-on-github
+if grep -q "$(printf 'settled=1\tunsettled=0\tin_flight=0\tgithub_bot=1$')" "$OUT"; then ok "the counts keep the bot commit apart from the settled one"
+else bad "the counts keep the bot commit apart from the settled one" "$(cat "$OUT")"; fi
+if grep -q "$(printf '\tmerged_in_content=0\tmade_on_github=1\t.*\twt_merged_in_content=0\twt_made_on_github=1\t')" "$OUT"; then ok "the closing line counts the class apart"
+else bad "the closing line counts the class apart" "$(tail -n 1 "$OUT")"; fi
+{ mc w s not-checked "$H1"; tc w s github-bot "$T1" branch; tc w s no-pr "$T2" ref; chk_end; } > "$CHK"
+expect_class "a bot commit beside an unsettled one needs a person" w s needs-a-person
+{ mc w s not-checked "$H1"; tc w s github-bot "$T1" branch; tc w s open "$T2" ref; chk_end; } > "$CHK"
+expect_class "a bot commit beside an open pull request is work in flight" w s work-in-flight
 
 one local-only 0 1 <<EOF
 $(tip w s "$T1" stash)
@@ -123,6 +137,8 @@ EOF
 expect_class "a stash is never settled, even by a content row" w s needs-a-person
 { mc w s not-checked "$H1"; tc w s merged "$T1" stash; chk_end; } > "$CHK"
 expect_class "a stash is never settled, even by a merged verdict" w s needs-a-person
+{ mc w s not-checked "$H1"; tc w s github-bot "$T1" stash; chk_end; } > "$CHK"
+expect_class "a stash is never settled, even by a bot verdict" w s needs-a-person
 
 one unpushed 1 2 <<EOF
 $(tip w s "$T1" reflog)
@@ -142,7 +158,7 @@ if [ "$(grep '^WORKTREE' "$OUT")" = "$want" ]; then ok "a worktree takes its mos
 else bad "a worktree takes its most demanding entry's class" "$(grep '^WORKTREE' "$OUT")"; fi
 last=$(tail -n 1 "$OUT")
 case "$last" in
-  "$(printf 'CLASSIFIED\tentries=5\tnothing_held=2\tmerged_in_content=0\ttool_output=1\twork_in_flight=0\tneeds_a_person=1\tunknown=1\tworktrees=3\twt_nothing_held=1\twt_merged_in_content=0\twt_tool_output=0\twt_work_in_flight=0\twt_needs_a_person=1\twt_unknown=1\tbelow_min_idle=0')")
+  "$(printf 'CLASSIFIED\tentries=5\tnothing_held=2\tmerged_in_content=0\tmade_on_github=0\ttool_output=1\twork_in_flight=0\tneeds_a_person=1\tunknown=1\tworktrees=3\twt_nothing_held=1\twt_merged_in_content=0\twt_made_on_github=0\twt_tool_output=0\twt_work_in_flight=0\twt_needs_a_person=1\twt_unknown=1\tbelow_min_idle=0')")
     ok "the closing line carries the totals" ;;
   *) bad "the closing line carries the totals" "$last" ;;
 esac
@@ -150,6 +166,11 @@ esac
 { mc a s1 merged "$H1"; chk_end; } > "$CHK"
 run; if grep -q "$(printf '^WORKTREE\ta\ttool-output\t')" "$OUT"; then ok "tool output outranks merged in content"
 else bad "tool output outranks merged in content" "$(grep '^WORKTREE' "$OUT")"; fi
+{ entry a s1 unpushed "$H1" 1 1; entry a s2 unpushed "$H2" 1 1; entry b s1 unpushed "$H1" 1 1; entry b s2 ignored "$H1" 0 0; inv_end 4; } > "$INV"
+{ mc a s1 merged "$H1"; mc a s2 github-bot "$H2"; mc b s1 github-bot "$H1"; chk_end; } > "$CHK"
+run; if grep -q "$(printf '^WORKTREE\ta\tmade-on-github\t')" "$OUT" && grep -q "$(printf '^WORKTREE\tb\ttool-output\t')" "$OUT"
+then ok "made on GitHub outranks merged in content, and tool output outranks it"
+else bad "made on GitHub outranks merged in content, and tool output outranks it" "$(grep '^WORKTREE' "$OUT")"; fi
 
 { entry a s1 clean "$H1" 0 0; inv_end 1; } > "$INV"
 { printf 'UNKNOWN\ta\ts1\tit changed since the inventory\n'; chk_end; } > "$CHK"
