@@ -1134,8 +1134,13 @@ public and private — no per-repo loop needed to enumerate):
    In an inline survey with no surveyor guard (the Codex survey dispatch override), never submit the bare probe:
    unguarded, a bare basename is a `PATH` lookup, not a denial. Instead take the `installed copy` path
    that this lane's `plugin-definition-currency.sh --runtime <lane>` reported with a `CURRENT` verdict,
-   and invoke `<installed copy>/scripts/classify-default-branch-ci-runs.sh`. Any other verdict, or
-   no executable helper at exactly that path, means `QUERY-UNKNOWN`.
+   and invoke `<installed copy>/scripts/classify-default-branch-ci-runs.sh`. A `DRIFT` verdict
+   qualifies too, but only when that same report, run without `--quiet`, prints a `match` line for
+   `scripts/classify-default-branch-ci-runs.sh` and no `scripts/` line that reads anything else: the
+   helper and the library it sources beside it are then byte-identical to the reviewed pin, and the
+   drift lies in files this step never executes (monorepo#4095). An `UNKNOWN` verdict, a `scripts/`
+   line that does not read `match`, or no executable helper at exactly that path, means
+   `QUERY-UNKNOWN`.
    **Invoke the classifier only in its flag form, by its resolved installed
    path:** `<installed plugin>/scripts/classify-default-branch-ci-runs.sh --repo OWNER/REPO --branch
    BRANCH --head-sha FULL_SHA`. The helper and the read-only guard accept nothing else: the guard

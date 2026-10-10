@@ -3903,6 +3903,22 @@ grep -Fq 'reported with a `CURRENT` verdict' <<<"${_ci_step}" ||
   fail "step 4 must resolve the inline helper path only from the lane's CURRENT currency check (Codex P1, monorepo#3339)"
 grep -Fq 'no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"${_ci_step}" ||
   fail "step 4 must fail closed when the inline install path does not hold an executable helper (Codex P1, monorepo#3339)"
+# CURRENT-only made ANY drift in the lane's install switch the classifier off. Measured
+# 2026-10-09T07Z→2026-10-10T10Z (monorepo#4095): the Codex install read DRIFT in 2 of 64 pinned files,
+# both agent definitions, with every script reading `match`, and 18 of 27 Codex Engineer runs reported
+# the survey or merge clearance held by that drift. The rule exists so the helper that runs is the
+# reviewed one, and the per-file `match` lines of the same report prove exactly that. The proof must
+# be POSITIVE: `--quiet` prints no per-file lines, so "no differing script line" alone would pass on
+# a report that showed nothing. UNKNOWN and a differing script must still fail closed.
+grep -Fq 'A `DRIFT` verdict qualifies too, but only when that same report, run without `--quiet`, prints a `match` line for `scripts/classify-default-branch-ci-runs.sh`' <<<"${_ci_step}" ||
+  fail "step 4 must let a DRIFT install serve the inline classifier when the report proves the helper itself matches the pin — otherwise a drift in prose files stops CI classification (monorepo#4095)"
+grep -Fq 'and no `scripts/` line that reads anything else' <<<"${_ci_step}" ||
+  fail "step 4 must require every scripts/ line to match under DRIFT — the helper sources a sibling library, and an unexpected file beside it is not reviewed (monorepo#4095)"
+grep -Fq 'An `UNKNOWN` verdict, a `scripts/` line that does not read `match`, or no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"${_ci_step}" ||
+  fail "step 4 must keep UNKNOWN and a differing script as QUERY-UNKNOWN on the inline route (monorepo#4095)"
+if grep -Fq 'Any other verdict, or no executable helper' <<<"${_ci_step}"; then
+  fail "step 4 still carries the CURRENT-only sentence, which contradicts the DRIFT-with-matching-scripts route (monorepo#4095)"
+fi
 echo "portfolio surveyor contract: round-13 classifier-path-resolution assertions passed"
 
 # Round 14 — a GitHub-managed red (`event: dynamic`, `path` under `dynamic/`) is not a repairable
