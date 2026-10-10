@@ -907,19 +907,25 @@ check 'a merged HEAD beside an ignored file is looked up' eval 'grep -q "^MERGE-
 check 'the closing line counts the ignored entries' eval 'grep -q "	files_same_as_default=0	files_default_ignores=5	files_differ=7	files_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
 check 'reading the rules writes to neither repository' [ "$before" = "$after" ]
 check 'the classification never puts ignored files below tool output' eval '[ "$(printf "%s\n" "$OUT" | bash "$SCRIPT_DIR/worktree-inventory-classify.sh" --inventory "$TMP/ignores.all" | awk -F"\t" "\$1 == \"CLASS\" { printf \"%s=%s \", \$2, \$4 }")" = "i-all=tool-output i-case=needs-a-person i-deep=tool-output i-dir=needs-a-person i-head=tool-output i-held=needs-a-person i-mix=tool-output i-neg=needs-a-person i-open=work-in-flight i-own=needs-a-person i-part=needs-a-person i-top=needs-a-person " ]'
+i_one() { # worktree -> an inventory holding that entry alone
+  grep "^[A-Z]*	$1	" "$TMP/ignores.all" > "$TMP/ignores.one"
+  printf 'CHECKED\tworktrees=1\tentries=1\tunpushed=0\tlocal_only=0\tbelow_min_idle=0\tunreadable=0\ttips=0\n' >> "$TMP/ignores.one"
+}
 # The machine's own ignore file is not the default branch's either. The entry turns it off
 # for itself, so its file stays listed: only the rules read for the default branch could
 # still pick it up.
 mkdir -p "$TMP/machine-home"; printf '*.md\n*.txt\n' > "$TMP/machine-ignore"
 printf '[core]\n\texcludesFile = %s\n' "$TMP/machine-ignore" > "$TMP/machine-home/.gitconfig"
 g -C "$FR/i-own/sub" config core.excludesFile /dev/null
-i_one() { # worktree -> an inventory holding that entry alone
-  grep "^[A-Z]*	$1	" "$TMP/ignores.all" > "$TMP/ignores.one"
-  printf 'CHECKED\tworktrees=1\tentries=1\tunpushed=0\tlocal_only=0\tbelow_min_idle=0\tunreadable=0\ttips=0\n' >> "$TMP/ignores.one"
-}
 i_one i-own
 OUT=$(PATH="$BIN:$PATH" HOME="$TMP/machine-home" XDG_CONFIG_HOME="$TMP/machine-home/none" GIT_CONFIG_GLOBAL="$TMP/machine-home/.gitconfig" bash "$SUT" "$FR" --content-reference "$IREF" < "$TMP/ignores.one" 2>"$TMP/err"); RC=$?
 file_is 'a rule of the machine does not count'                             i-own "differs files=1 same=0 default_ignores=0 base=$iref_base"
+# Nor is a rule the machine plants in every new repository.
+mkdir -p "$TMP/machine-home/template/info"; printf '*.md\n' > "$TMP/machine-home/template/info/exclude"
+printf '[init]\n\ttemplateDir = %s\n' "$TMP/machine-home/template" > "$TMP/machine-home/.gitconfig"
+i_one i-own
+OUT=$(PATH="$BIN:$PATH" HOME="$TMP/machine-home" XDG_CONFIG_HOME="$TMP/machine-home/none" GIT_CONFIG_GLOBAL="$TMP/machine-home/.gitconfig" bash "$SUT" "$FR" --content-reference "$IREF" < "$TMP/ignores.one" 2>"$TMP/err"); RC=$?
+file_is 'a rule planted in every new repository does not count'           i-own "differs files=1 same=0 default_ignores=0 base=$iref_base"
 # A failed read of the rules is never `differs` or `default-ignores`.
 i_one i-all
 for verb in check-ignore cat-file init; do
