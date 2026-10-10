@@ -911,8 +911,12 @@ for detached_result in ok fail; do
   if wait_for "$fx/launcher-returned" && wait_for "$fx/hanging"; then
     detached_group=$(ps -p "$detached_launcher" -o pgid= | tr -d ' ')
     if [ "$detached_group" = "$detached_launcher" ]; then
-      kill -KILL -- "-$detached_launcher" 2>/dev/null
+      kill -KILL -- "-$detached_launcher" 2>/dev/null \
+        || bad "fixture: caller process-group teardown succeeds"
       wait "$detached_launcher" 2>/dev/null
+      detached_rc=$?
+      [ "$detached_rc" -eq 137 ] \
+        || bad "fixture: caller actually ended by KILL" "rc=$detached_rc"
       touch "$fx/release"
       if wait_finished codex; then
         run status --lane codex
