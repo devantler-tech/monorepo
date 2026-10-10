@@ -220,7 +220,8 @@ rc=0; "$SUT" > "$OUT" 2> "$ERR" < /dev/null || rc=$?
 if [ "$rc" = 2 ] && grep -q '^worktree-inventory-classify: usage' "$ERR"; then ok "no arguments is a usage error"; else bad "no arguments is a usage error" "rc=$rc"; fi
 rc=0; "$SUT" --inventory "$TMP/absent" > "$OUT" 2> "$ERR" < /dev/null || rc=$?
 if [ "$rc" = 2 ] && grep -q 'not a readable file' "$ERR"; then ok "a missing inventory file is refused"; else bad "a missing inventory file is refused" "rc=$rc"; fi
-if "$SUT" --help | grep -q '^Usage:'; then ok "--help prints the header"; else bad "--help prints the header"; fi
+"$SUT" --help > "$OUT" 2> "$ERR"; rc=$?
+if [ "$rc" = 0 ] && grep -q '^Usage:' "$OUT"; then ok "--help prints the header"; else bad "--help prints the header" "rc=$rc"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 test_run_completed=1
