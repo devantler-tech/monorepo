@@ -290,6 +290,8 @@ jobs:
               - '.claude/scripts/merge-confirmation-read.test.sh'
               - '.claude/scripts/merge-preflight-thread-gate.test.sh'
               - '.claude/scripts/drifted-lane-escalation-contract.test.sh'
+              - '.claude/scripts/retired-rule-survivors-contract.test.sh'
+              - '.claude/scripts/review-provider-loop-contract.test.sh'
               - '.claude/scripts/worktree-submodule-inventory.test.sh'
               - '.claude/scripts/worktree-inventory-merged-check.test.sh'
               - '.claude/scripts/worktree-inventory-classify.test.sh'

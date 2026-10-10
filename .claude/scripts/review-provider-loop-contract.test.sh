@@ -6,6 +6,23 @@
 
 set -euo pipefail
 
+# One handler stays installed through both temporary-file phases, so an abort
+# cannot become a clean pass after cleanup (monorepo#3414).
+section_fixture=""
+constitution=""
+review_loop_test_finished=0
+cleanup() {
+  local rc=$?
+  [ -z "${section_fixture}" ] || rm -f "${section_fixture}"
+  [ -z "${constitution}" ] || rm -f "${constitution}"
+  if [ "${review_loop_test_finished}" != 1 ] && [ "${rc}" -eq 0 ]; then
+    echo "review-provider loop contract: aborted before finishing" >&2
+    rc=1
+  fi
+  exit "${rc}"
+}
+trap cleanup EXIT
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
@@ -59,19 +76,16 @@ assert_section_prose() {
 # Prove the section helper fails closed at its boundary. Without the end marker the old helper
 # scanned to EOF, so matching vocabulary in a later section could satisfy an operative-phase guard.
 section_fixture="$(mktemp)"
-trap 'rm -f "${section_fixture}"' EXIT
 printf '%s\n' 'OPERATIVE START' 'unrelated line' 'required phrase outside the missing boundary' >"${section_fixture}"
 if (assert_section_prose "${section_fixture}" 'OPERATIVE START' 'OPERATIVE END' \
   'required phrase' 'fixture delimiter missing') 2>/dev/null; then
   fail "assert_section_prose accepted a phrase after a missing end delimiter"
 fi
 rm -f "${section_fixture}"
-trap - EXIT
 
 # The contract is AGENTS.md plus every guide it indexes; the assertions below span several guides.
-# Assembled here, after the fixture's own trap is released, so this cleanup is the one in force.
+# The same cleanup handler covers this file and the earlier section fixture.
 constitution="$(mktemp)"
-trap 'rm -f "${constitution}"' EXIT
 "${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
   fail "cannot assemble the agent contract"
 
@@ -863,3 +877,4 @@ grep -Fq '${{ needs.test-review-provider-loop-contract.result }}' "${workflow}" 
   fail "the required aggregate check does not include the review-provider contract job"
 
 echo "review-provider loop contract: all assertions passed"
+review_loop_test_finished=1
