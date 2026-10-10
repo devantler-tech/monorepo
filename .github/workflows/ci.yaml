@@ -300,6 +300,7 @@ jobs:
               - '.claude/scripts/drifted-lane-escalation-contract.test.sh'
               - '.claude/scripts/worktree-submodule-inventory.test.sh'
               - '.claude/scripts/worktree-inventory-merged-check.test.sh'
+              - '.claude/scripts/worktree-inventory-classify.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -354,7 +355,9 @@ jobs:
               - '.claude/scripts/worktree-submodule-inventory.sh'
               - '.claude/scripts/worktree-submodule-inventory.test.sh'
               - '.claude/scripts/worktree-inventory-merged-check.sh'
+              - '.claude/scripts/worktree-inventory-classify.sh'
               - '.claude/scripts/worktree-inventory-merged-check.test.sh'
+              - '.claude/scripts/worktree-inventory-classify.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -1539,6 +1542,9 @@ jobs:
       # Its pull-request lookup for the unpushed entries (monorepo#3072).
       - name: Self-test the inventory merged-pull-request check
         run: bash .claude/scripts/worktree-inventory-merged-check.test.sh
+      # The one class per entry and per worktree read off both (monorepo#3072).
+      - name: Self-test the inventory classification
+        run: bash .claude/scripts/worktree-inventory-classify.test.sh
 
   test-submodule-init:
     needs: changes
