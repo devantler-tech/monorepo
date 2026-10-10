@@ -40,13 +40,19 @@
 #                      made on this machine. Needs no rescue, and is NOT shown to be on the
 #                      default branch: it is kept apart from merged-in-content for that
 #   tool-output        nothing but files the repository's own ignore rules cover. A removal
-#                      deletes them; they are rarely authored
+#                      deletes them; they are rarely authored. An entry that would be
+#                      merged-in-content or made-on-github but also holds ignored files gets
+#                      this class instead: its commits need no rescue, its files still die
 #   work-in-flight     at least one of its commits is the head of an open pull request
-#   needs-a-person     anything else: changed, untracked or nested files (never judged
-#                      here), a stash, or a commit no evidence settles. `unsettled=` counts
-#                      those commits
+#   needs-a-person     anything else: changed or nested files (never judged here),
+#                      untracked files, a stash, or a commit no evidence settles.
+#                      `unsettled=` counts those commits
 #   unknown            the merged check printed UNKNOWN for it: nothing is claimed, whatever
 #                      the inventory read
+# An `untracked` entry leaves needs-a-person only when the merged check, run with
+# --content-reference, printed `FILE-CHECK ... same-as-default` for it: every untracked
+# file is a copy of the file the default branch holds at that path. It then gets the class
+# its commits earn, as an `unpushed` entry would, and merged-in-content when it holds none.
 # `settled`, `unsettled`, `in_flight` and `github_bot` count the commits looked at: HEAD of an `unpushed`
 # entry, and each TIP. They are 0 for an entry whose files decided its class.
 #
@@ -66,8 +72,8 @@
 # Exit codes: 0 every entry got a class other than `unknown`; 2 usage error, an `unknown`
 # entry, or input that cannot be joined: either text lacks its closing line or has rows
 # after it, the inventory was taken without --tips or holds an UNREADABLE row, a row is
-# malformed or carries a verdict this script does not know, a row names an entry, HEAD or
-# tip the inventory does not, an entry or tip that needs a verdict has none, or a row
+# malformed or carries a verdict this script does not know, a row names an entry, HEAD,
+# tip or file count the inventory does not, an entry or tip that needs a verdict has none, or a row
 # appears twice. On input it cannot join it prints no CLASS row at all.
 set -euo pipefail
 
@@ -127,6 +133,8 @@ rc=0
     tip_verdict["stash"] = 1; tip_verdict["pushed-ref"] = 1
     split("reached no-change same-change clean-merge differs no-reference", a, " ")
     for (i in a) content_verdict[a[i]] = 1
+    split("same-as-default differs no-reference", a, " ")
+    for (i in a) file_verdict[a[i]] = 1
     split("branch stash ref reflog", a, " ")
     for (i in a) tip_kind[a[i]] = 1
     rank["nothing-held"] = 1; rank["merged-in-content"] = 2; rank["made-on-github"] = 3
@@ -156,8 +164,9 @@ rc=0
       if (!($5 in inv_class)) fail("line " NR ": unknown inventory class " $5)
       val(6, "idle_days")
       e_head[key] = val(7, "head"); e_unpushed[key] = val(8, "unpushed"); e_local[key] = val(9, "local_only")
-      val(10, "modified"); val(11, "untracked"); val(12, "nested"); val(13, "ignored")
+      val(10, "modified"); e_untracked[key] = val(11, "untracked"); val(12, "nested"); e_ignored[key] = val(13, "ignored")
       if (!sha_ok(e_head[key]) || !num_ok(e_unpushed[key]) || !num_ok(e_local[key])) fail("line " NR ": malformed ENTRY row")
+      if (!num_ok(e_untracked[key]) || !num_ok(e_ignored[key])) fail("line " NR ": malformed ENTRY row")
       e_class[key] = $5; order[++n] = key; e_wt[key] = $3; e_sub[key] = $4
       next
     }
@@ -180,12 +189,25 @@ rc=0
     if ($2 == "NOTE") next
     if ($2 == "CHECKED") { chk_closed = 1; next }
     key = $3 SUBSEP $4
-    if ($2 == "MERGE-CHECK" || $2 == "TIP-CHECK" || $2 == "CONTENT-CHECK" || $2 == "UNKNOWN") {
+    if ($2 == "MERGE-CHECK" || $2 == "TIP-CHECK" || $2 == "CONTENT-CHECK" || $2 == "FILE-CHECK" || $2 == "UNKNOWN") {
       if (NF < 5) fail("merged-check line " NR ": a " $2 " row is too short")
       if (!(key in e_class)) fail("a " $2 " row names " $3 " " $4 ", which the inventory does not list")
     }
     if ($2 == "UNKNOWN") { unk[key] = 1; next }
-    if (e_class[key] != "unpushed" && e_class[key] != "local-only")
+    if ($2 == "FILE-CHECK") {
+      if (NF != 8) fail("a FILE-CHECK row has " (NF - 1) " fields, not 7")
+      if (e_class[key] != "untracked") fail("a FILE-CHECK row names " $3 " " $4 ", which the inventory reads as " e_class[key])
+      if (key in fc) fail("the merged check compares the files of " $3 " " $4 " twice")
+      if (!($5 in file_verdict)) fail("unknown FILE-CHECK verdict " $5)
+      t = val(6, "files"); k = val(7, "same"); val(8, "base")
+      if (!num_ok(t) || !num_ok(k) || k + 0 > t + 0) fail("malformed FILE-CHECK row")
+      if (t + 0 != e_untracked[key] + 0) fail("the FILE-CHECK row for " $3 " " $4 " counts other files than the inventory")
+      if ($5 == "same-as-default" && (k + 0 != t + 0 || t + 0 == 0)) fail("a FILE-CHECK row says same-as-default without matching every file")
+      fc[key] = $5
+      next
+    }
+    # The commits of an untracked entry are looked up only after its files were compared.
+    if (e_class[key] != "unpushed" && e_class[key] != "local-only" && !(e_class[key] == "untracked" && (key in fc)))
       if ($2 == "MERGE-CHECK" || $2 == "TIP-CHECK" || $2 == "CONTENT-CHECK")
         fail("a " $2 " row names " $3 " " $4 ", which the inventory reads as " e_class[key])
     if ($2 == "MERGE-CHECK") {
@@ -231,11 +253,17 @@ rc=0
       if (key in unk) cls = "unknown"
       else if (c == "clean") cls = "nothing-held"
       else if (c == "ignored") cls = "tool-output"
-      else if (c == "modified" || c == "untracked" || c == "nested") cls = "needs-a-person"
+      else if (c == "modified" || c == "nested") cls = "needs-a-person"
+      else if (c == "untracked" && fc[key] != "same-as-default") cls = "needs-a-person"
+      else if (c == "untracked" && e_local[key] + 0 == 0) {
+        if (key in mc) fail("the merged check judged " e_wt[key] " " e_sub[key] ", which holds no commit")
+        cls = "merged-in-content"
+      }
       else {
         if (!(key in mc)) fail("the merged check has no row for " e_wt[key] " " e_sub[key])
-        if (c == "local-only" && mc[key] != "not-checked") fail("the merged check judged the pushed HEAD of " e_wt[key] " " e_sub[key])
-        if (c == "unpushed") judge(key, mc[key], "", cc[key, e_head[key]])
+        pushed = (e_unpushed[key] + 0 == 0)
+        if (pushed && mc[key] != "not-checked") fail("the merged check judged the pushed HEAD of " e_wt[key] " " e_sub[key])
+        if (!pushed) judge(key, mc[key], "", cc[key, e_head[key]])
         if (e_local[key] + 0 > e_unpushed[key] + 0 && t_count[key] + 0 == 0)
           fail("the inventory names no tip for " e_wt[key] " " e_sub[key] ", which holds commits away from HEAD")
         m = split(tips[key], tl, " ")
@@ -249,6 +277,8 @@ rc=0
         else if (bot[key] > 0) cls = "made-on-github"
         else cls = "merged-in-content"
       }
+      # Ignored files die with the entry whatever its commits earned.
+      if (e_ignored[key] + 0 > 0 && rank[cls] < rank["tool-output"]) cls = "tool-output"
       e_out[key] = cls; total[cls]++
       w = e_wt[key]
       if (!(w in w_class)) { w_order[++wn] = w; w_class[w] = cls }

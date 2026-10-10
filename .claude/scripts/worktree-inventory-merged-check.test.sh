@@ -640,7 +640,7 @@ content_is 'a commit the default branch contains is reached'       c-reached "re
 content_is 'a binary file with other content differs'              c-binary  "differs commit=$(c_sha c-binary) base=$ref_base same_as=-"
 content_is 'a merged entry is not compared'                        c-merged  ''
 check 'the comparison keeps the pull-request verdicts' eval '[ "$(printf "%s\n" "$OUT" | grep -c "^MERGE-CHECK	c-.*	no-pr	")" = 7 ] && grep -q "^MERGE-CHECK	c-merged	sub	merged	" <<<"$OUT"'
-check 'the closing line carries the content totals' eval 'grep -q "	content_reached=1	content_same_change=2	content_no_change=1	content_clean_merge=0	content_differs=3	content_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
+check 'the closing line carries the content totals' eval 'grep -q "	content_reached=1	content_same_change=2	content_no_change=1	content_clean_merge=0	content_differs=3	content_no_reference=0	files_same_as_default=0	files_differ=0	files_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
 check 'the comparison writes to neither repository' [ "$before" = "$after" ]
 c_run "$TMP/content.in"
 check 'without a reference nothing is compared' eval '! grep -q "CONTENT-CHECK\|content_" <<<"$OUT" && [ "$RC" = 0 ]'
@@ -742,6 +742,118 @@ tip_content_ok() {
   [ "$(content_of wt | LC_ALL=C sort)" = "$(printf '%s\n%s\n' "$want_tip" "$want_log" | LC_ALL=C sort)" ] && [ "$RC" = 0 ]
 }
 check 'commits held away from HEAD are compared too' tip_content_ok
+
+echo "== untracked files compared with the default branch"
+# Each entry under FR is a clone that stopped at the default branch's first commit, as a
+# session's submodule stops at an old pin. The reference has moved on and now tracks `z`
+# (unrelated), `added` (new) and more: a copy of one of those here is an untracked file.
+FR="$TMP/file-root"
+root_sha=$(g -C "$UP" rev-list --max-parents=0 HEAD)
+f_add() { # worktree
+  g init -q -b main "$FR/$1"
+  printf '[submodule "s"]\n\tpath = sub\n\turl = https://example.invalid/s.git\n' > "$FR/$1/.gitmodules"
+  g -C "$FR/$1" add .gitmodules; g -C "$FR/$1" commit -qm base
+  g clone -q "$UP" "$FR/$1/sub"; g -C "$FR/$1/sub" reset -q --hard "$root_sha"
+  g -C "$FR/$1/sub" update-ref refs/remotes/origin/main "$root_sha"
+  # The clone's first HEAD would otherwise stay behind as a commit held in the reflog.
+  g -C "$FR/$1/sub" reflog expire --expire=all --all
+  g -C "$FR/$1/sub" config remote.origin.url "$URL"
+}
+for w in f-copy f-part f-other f-link f-filter f-many f-tip f-head f-open; do f_add "$w"; done
+echo unrelated > "$FR/f-copy/sub/z"; echo new > "$FR/f-copy/sub/added"
+echo unrelated > "$FR/f-part/sub/z"; echo mine > "$FR/f-part/sub/only-here"
+echo 'not the same' > "$FR/f-other/sub/z"
+echo unrelated > "$TMP/z-target"; ln -s "$TMP/z-target" "$FR/f-link/sub/z"
+echo unrelated > "$FR/f-filter/sub/z"
+# One file more than is compared, among them a real copy.
+echo unrelated > "$FR/f-many/sub/z"
+i=0; while [ "$i" -lt 200 ]; do echo x > "$FR/f-many/sub/extra-$i"; i=$((i+1)); done
+# f-tip: a copy beside a commit on another local branch. f-head, f-open: beside an unpushed HEAD.
+g -C "$FR/f-tip/sub" checkout -q -b side; echo side > "$FR/f-tip/sub/s"; g -C "$FR/f-tip/sub" add s; g -C "$FR/f-tip/sub" commit -qm side
+f_tip=$(g -C "$FR/f-tip/sub" rev-parse HEAD); g -C "$FR/f-tip/sub" checkout -q main
+echo unrelated > "$FR/f-tip/sub/z"
+for w in f-head f-open; do
+  echo "$w" > "$FR/$w/sub/own"; g -C "$FR/$w/sub" add own; g -C "$FR/$w/sub" commit -qm "$w"
+  echo unrelated > "$FR/$w/sub/z"
+done
+f_sha() { g -C "$FR/$1/sub" rev-parse HEAD; }
+cm_pr "$f_tip" 61; cm_pr "$(f_sha f-head)" 62
+printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":1,"nodes":[%s]}}}}}\n' \
+  "$(node 63 OPEN "$(f_sha f-open)")" > "$FIX/$(f_sha f-open).json"
+
+f_run() { # inventory-file [reference] -> OUT, RC
+  : > "$CALLS"
+  if [ $# -gt 1 ]; then OUT=$(PATH="$BIN:$PATH" bash "$SUT" "$FR" --content-reference "$2" < "$1" 2>"$TMP/err"); RC=$?
+  else OUT=$(PATH="$BIN:$PATH" bash "$SUT" "$FR" < "$1" 2>"$TMP/err"); RC=$?; fi
+}
+file_of() { printf '%s\n' "$OUT" | awk -F'\t' -v w="$1" '$1 == "FILE-CHECK" && $2 == w { print $4 " " $5 " " $6 " " $7 }'; }
+file_is() { # name worktree want
+  local got; got=$(file_of "$2")
+  if [ "$got" = "$3" ]; then ok "$1"; else bad "$1" "want [$3] got [$got] rc=$RC out=$OUT err=$(cat "$TMP/err")"; fi
+}
+f_objects() { find "$FR"/*/sub/.git "$REF/sub/.git" -type f -exec cksum {} + | LC_ALL=C sort | cksum; }
+bash "$INVENTORY" "$FR" --tips > "$TMP/files.all"
+check 'the fixture inventory reads all nine entries as untracked' eval '[ "$(grep -c "^ENTRY	f-[a-z]*	sub	untracked	" "$TMP/files.all")" = 9 ]'
+# A clean filter is a program the repository configures: hashing must not run it. It is
+# set after the inventory, which reads an entry whose filter fails as unreadable.
+printf 'z filter=probe\n' > "$FR/f-filter/sub/.git/info/attributes"
+g -C "$FR/f-filter/sub" config filter.probe.clean "$BIN/ran"
+rm -f "$RAN_MARK"; before=$(f_objects)
+f_run "$TMP/files.all" "$REF"
+after=$(f_objects)
+file_is 'copies of files the default branch holds are same-as-default' f-copy "same-as-default files=2 same=2 base=$ref_base"
+file_is 'one file the default branch does not hold differs'            f-part "differs files=2 same=1 base=$ref_base"
+file_is 'a file with other content than the default branch differs'    f-other "differs files=1 same=0 base=$ref_base"
+file_is 'a symbolic link to a copy is not a copy'                      f-link "differs files=1 same=0 base=$ref_base"
+file_is 'a file is hashed as it is on disk'                            f-filter "same-as-default files=1 same=1 base=$ref_base"
+check 'the clean filter the repository configures is never run' [ ! -e "$RAN_MARK" ]
+file_is 'more files than are compared differ, copy or not'             f-many "differs files=201 same=0 base=$ref_base"
+check 'an entry holding files only gets no commit verdict' eval '! grep -qE "^MERGE-CHECK	f-(copy|part|other|link|filter|many)	" <<<"$OUT"'
+file_is 'a copy beside a held commit is still compared'                f-tip "same-as-default files=1 same=1 base=$ref_base"
+f_tip_ok() {
+  grep -q "^MERGE-CHECK	f-tip	sub	not-checked	head=$root_sha	repo=-	pr=-	other_local=1$" <<<"$OUT" || return 1
+  grep -q "^TIP-CHECK	f-tip	sub	merged	tip=$f_tip	kind=branch	ref=side	repo=devantler-tech/ksail	pr=61	commits=1$" <<<"$OUT"
+}
+check 'the commit it holds away from HEAD is looked up' f_tip_ok
+check 'an unpushed HEAD beside a copy is looked up' eval 'grep -q "^MERGE-CHECK	f-head	sub	merged	head=$(f_sha f-head)	repo=devantler-tech/ksail	pr=62	other_local=0$" <<<"$OUT"'
+check 'an open pull request beside a copy stays open' eval 'grep -q "^MERGE-CHECK	f-open	sub	open	head=$(f_sha f-open)	repo=devantler-tech/ksail	pr=63	other_local=0$" <<<"$OUT"'
+check 'each FILE-CHECK row comes before its entry'"'"'s commit rows' eval '[ "$(grep -n "^FILE-CHECK	f-tip	" <<<"$OUT" | cut -d: -f1)" -lt "$(grep -n "^MERGE-CHECK	f-tip	" <<<"$OUT" | cut -d: -f1)" ]'
+check 'the closing line carries the file totals' eval 'grep -q "	files_same_as_default=5	files_differ=4	files_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
+check 'only the three commits are looked up' eval '[ "$(grep -c . "$CALLS")" = 3 ]'
+check 'the file comparison writes to neither repository' [ "$before" = "$after" ]
+check 'the classification joins the two texts' eval '[ "$(printf "%s\n" "$OUT" | bash "$SCRIPT_DIR/worktree-inventory-classify.sh" --inventory "$TMP/files.all" | awk -F"\t" "\$1 == \"CLASS\" { printf \"%s=%s \", \$2, \$4 }")" = "f-copy=merged-in-content f-filter=merged-in-content f-head=merged-in-content f-link=needs-a-person f-many=needs-a-person f-open=work-in-flight f-other=needs-a-person f-part=needs-a-person f-tip=merged-in-content " ]'
+
+f_run "$TMP/files.all"
+check 'without a reference no file is compared and no commit looked up' eval '! grep -qE "FILE-CHECK|files_|^MERGE-CHECK" <<<"$OUT" && [ ! -s "$CALLS" ] && [ "$RC" = 0 ]'
+
+f_one() { # worktree -> an inventory holding that entry alone, with its TIP rows
+  grep "^[A-Z]*	$1	" "$TMP/files.all" > "$TMP/files.one"
+  awk -F'\t' '$1 == "ENTRY" { e++; if ($4 == "unpushed") u++; if ($4 == "local-only") l++ } $1 == "TIP" { t++ }
+    END { printf "CHECKED\tworktrees=1\tentries=%d\tunpushed=%d\tlocal_only=%d\tbelow_min_idle=0\tunreadable=0\ttips=%d\n", e, u, l, t }' "$TMP/files.one" >> "$TMP/files.one"
+}
+f_one f-copy; f_run "$TMP/files.one" "$TMP/ref-empty"
+file_is 'a reference without that repository is no-reference for files too' f-copy "no-reference files=2 same=0 base=-"
+check 'no-reference for files is a verdict, not a failure' rc_is 0
+f_one f-copy; f_run "$TMP/files.one" "$TMP/ref-foreign"
+file_is 'a reference holding another repository compares no file' f-copy "no-reference files=2 same=0 base=-"
+# A failed read is never `differs` or `same-as-default`.
+f_one f-copy
+OUT=$(PATH="$BIN:$PATH" bash -c 'git() { case " $* " in *" hash-object "*) return 3 ;; esac; command git "$@"; }; export -f git; bash "$0" "$1" --content-reference "$2" < "$3"' "$SUT" "$FR" "$REF" "$TMP/files.one" 2>"$TMP/err"); RC=$?
+check 'a file that cannot be hashed is UNKNOWN' eval '[ -z "$(file_of f-copy)" ] && grep -q "^UNKNOWN	f-copy	sub	cannot read an untracked file" <<<"$OUT" && [ "$RC" = 2 ]'
+OUT=$(PATH="$BIN:$PATH" bash -c 'git() { case " $* " in *" ls-tree "*) return 3 ;; esac; command git "$@"; }; export -f git; bash "$0" "$1" --content-reference "$2" < "$3"' "$SUT" "$FR" "$REF" "$TMP/files.one" 2>"$TMP/err"); RC=$?
+check 'a default branch that cannot be read is UNKNOWN' eval '[ -z "$(file_of f-copy)" ] && grep -q "^UNKNOWN	f-copy	sub	cannot read a file of the default branch" <<<"$OUT" && [ "$RC" = 2 ]'
+# The entry changed after the inventory read it: nothing is claimed.
+echo later > "$FR/f-copy/sub/later"; f_run "$TMP/files.one" "$REF"
+check 'one more untracked file than the row counts is UNKNOWN' eval '[ -z "$(file_of f-copy)" ] && grep -q "^UNKNOWN	f-copy	sub	it changed since the inventory" <<<"$OUT" && [ "$RC" = 2 ]'
+rm -f "$FR/f-copy/sub/later"; echo edited >> "$FR/f-copy/sub/f"; rm -f "$FR/f-copy/sub/added"; f_run "$TMP/files.one" "$REF"
+check 'a changed tracked file in place of an untracked one is UNKNOWN' eval '[ -z "$(file_of f-copy)" ] && grep -q "^UNKNOWN	f-copy	sub	it changed since the inventory" <<<"$OUT" && [ "$RC" = 2 ]'
+g -C "$FR/f-copy/sub" checkout -q -- f; echo new > "$FR/f-copy/sub/added"
+sed 's/	untracked=2	/	untracked=x	/' "$TMP/files.one" > "$TMP/files.bad"; f_run "$TMP/files.bad" "$REF"
+check 'a row without an untracked file count is UNKNOWN' eval '[ -z "$(file_of f-copy)" ] && grep -q "^UNKNOWN	f-copy	sub	the row carries no untracked file count" <<<"$OUT" && [ "$RC" = 2 ]'
+# The tip of an untracked entry is held to the same checks as any other tip.
+f_one f-tip; mv "$FIX/$f_tip.json" "$TMP/f-tip.json"; f_run "$TMP/files.one" "$REF"
+check 'a failed lookup of a commit beside copies is UNKNOWN' eval 'grep -q "^UNKNOWN	f-tip	sub	the pull request lookup failed for a commit held away from HEAD" <<<"$OUT" && ! grep -q "^TIP-CHECK" <<<"$OUT" && [ "$RC" = 2 ]'
+mv "$TMP/f-tip.json" "$FIX/$f_tip.json"
 
 # An inventory that fails (a root with no worktree) must not read as an empty, clean result.
 mkdir -p "$TMP/empty-root"

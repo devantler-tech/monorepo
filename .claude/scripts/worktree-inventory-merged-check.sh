@@ -18,7 +18,8 @@
 #   <worktree-root>   the SAME root the inventory read; the rows name paths below it
 #   stdin             the inventory's complete output, including its closing CHECKED line
 #
-# Output, tab-separated, one row per `unpushed` or `local-only` inventory entry:
+# Output, tab-separated, one row per `unpushed` or `local-only` inventory entry (and, with
+# --content-reference, per `untracked` entry that holds commits: see FILE-CHECK below):
 #   MERGE-CHECK <worktree> <submodule> <verdict> head=<sha> repo=<owner/name|-> pr=<n|->
 #               other_local=<n>
 # and a closing `CHECKED ...` line with the totals. `other_local=` counts the commits the
@@ -99,6 +100,25 @@
 # `reached`, `no-change`, `same-change` and `clean-merge` say the commit's content needs no rescue.
 # A reference that was fetched long ago can only turn those into `differs`.
 #
+# With --content-reference, an `untracked` entry is examined too. Its files are compared with
+# the files the default branch holds at the same paths, and one row says what was found:
+#   FILE-CHECK <worktree> <submodule> <verdict> files=<n> same=<n> base=<sha|->
+#   same-as-default  every untracked file is, byte for byte, the file the default branch
+#                    holds at that path: a removal deletes a copy, not the only one. The
+#                    working copy is usually just older than the commit that added the file
+#   differs          at least one file is not: the default branch has no file there, or
+#                    another one, or the entry is a directory, a symbolic link or anything
+#                    but a plain file, or it lists more files than are compared (`FILE_MAX`)
+#   no-reference     the checkout holds no copy of this repository at that path
+# A file is hashed as it is on disk: no filter, line-ending conversion or other program the
+# repository configures is run, so only a file stored unchanged in the default branch can
+# match. `files=` is the inventory's count, re-read here; `same=` counts the matches.
+# Such an entry can hold commits as well. When it does, a MERGE-CHECK row follows its
+# FILE-CHECK row (`not-checked` when HEAD is pushed), and its TIP rows are looked up like those
+# of an `unpushed` entry: its files are never settled while its commits stay unexamined.
+# The row says nothing about files the repository's ignore rules cover: the inventory's
+# `ignored=` counts those.
+#
 # Only `merged`, `merged-ancestor` or `github-bot` with other_local=0 says the entry's commits need no rescue. Every other
 # row means: do not treat the entry as disposable on this evidence.
 #
@@ -106,8 +126,8 @@
 # incomplete (no CHECKED line or one that is not last, an UNREADABLE or malformed row, rows
 # that disagree with the inventory's own totals, no worktree found), or an UNKNOWN row: a
 # lookup failed, a path is not a plain directory under the root, or the entry no longer
-# matches its row (HEAD, its commit counts or its working tree changed since the
-# inventory). Nothing is claimed about an UNKNOWN entry. A `NOTE` row says how many entries
+# matches its row (HEAD, its commit counts, its untracked files or its working tree
+# changed since the inventory). Nothing is claimed about an UNKNOWN entry. A `NOTE` row says how many entries
 # the inventory left out with --min-idle-days: those were not checked at all.
 set -euo pipefail
 
@@ -122,6 +142,8 @@ OWNER='devantler-tech'
 PR_PAGE=50
 # A `github-bot` commit with more unpushed commits than this below it is not walked.
 BOT_RANGE=10
+# An `untracked` entry listing more files than this is not compared file by file.
+FILE_MAX=200
 
 die() { printf 'worktree-inventory-merged-check: %s\n' "$1" >&2; exit 2; }
 
@@ -541,6 +563,65 @@ content_check() {
   content_row "$cur_label" "$cur_path" same-change "$sha" "$cur_base" "$same"
 }
 
+# --- untracked files (--content-reference) -------------------------------------------------
+f_same=0; f_differs=0; f_noref=0
+
+# untracked_files <dir> <count> — writes the entry's untracked paths, NUL-separated, to
+# $PATCH_DIR/untracked.z. Non-zero unless the working tree holds exactly <count> untracked
+# entries and nothing else: a changed or staged file means the row no longer describes it.
+untracked_files() {
+  local dir=$1 want=$2 rec count=0 f="$PATCH_DIR/untracked.z"
+  git -C "$dir" -c core.fsmonitor=false -c core.untrackedCache=false status --porcelain -z --untracked-files=all \
+    > "$f.status" 2> "$f.err" || return 1
+  # A warning means git could not read something: the list may be short.
+  [ ! -s "$f.err" ] || return 1
+  : > "$f" || return 1
+  while IFS= read -r -d '' rec; do
+    case "$rec" in '?? '?*) ;; *) return 1 ;; esac
+    printf '%s\0' "${rec#'?? '}" >> "$f" || return 1
+    count=$((count+1))
+  done < "$f.status"
+  [ "$count" = "$want" ]
+}
+
+file_row() { # verdict files same base
+  case "$1" in
+    same-as-default) f_same=$((f_same+1)) ;;
+    differs)         f_differs=$((f_differs+1)) ;;
+    no-reference)    f_noref=$((f_noref+1)) ;;
+  esac
+  printf 'FILE-CHECK\t%s\t%s\t%s\tfiles=%s\tsame=%s\tbase=%s\n' "$cur_label" "$cur_path" "$1" "$2" "$3" "$4"
+}
+
+# file_check <dir> <count> — the FILE-CHECK row of the current entry, from the list
+# untracked_files wrote. Returns 1 after an UNKNOWN row instead.
+file_check() {
+  local dir=$1 n=$2 same=0 p entry mine
+  resolve_reference
+  case "$cur_refstate" in
+    none) file_row no-reference "$n" 0 -; return 0 ;;
+    ok) ;;
+    *) unknown_row "$cur_label" "$cur_path" "cannot read the default branch in the reference checkout"; return 1 ;;
+  esac
+  if [ "$n" -gt "$FILE_MAX" ]; then file_row differs "$n" 0 "$cur_base"; return 0; fi
+  while IFS= read -r -d '' p; do
+    # git lists an untracked directory it does not descend into with a trailing slash.
+    case "$p" in */) continue ;; esac
+    if [ -L "$dir/$p" ] || [ ! -f "$dir/$p" ]; then continue; fi
+    # The path is data: it is matched literally, never as a pattern.
+    entry=$(GIT_LITERAL_PATHSPECS=1 gitc ls-tree --format='%(objectmode) %(objecttype) %(objectname)' "$cur_base" -- "$p" 2>/dev/null) \
+      || { unknown_row "$cur_label" "$cur_path" "cannot read a file of the default branch"; return 1; }
+    case "$entry" in '100644 blob '*|'100755 blob '*) ;; *) continue ;; esac
+    mine=$(git hash-object --no-filters -- "$dir/$p" 2>/dev/null) \
+      || { unknown_row "$cur_label" "$cur_path" "cannot read an untracked file"; return 1; }
+    [ ${#mine} -ge 40 ] || { unknown_row "$cur_label" "$cur_path" "cannot read an untracked file"; return 1; }
+    [ "${entry##* }" = "$mine" ] || continue
+    same=$((same+1))
+  done < "$PATCH_DIR/untracked.z"
+  if [ "$same" = "$n" ]; then file_row same-as-default "$n" "$same" "$cur_base"
+  else file_row differs "$n" "$same" "$cur_base"; fi
+}
+
 # close_entry — an entry that holds commits away from HEAD must have named at least one tip
 # when the inventory was asked for them; none means its TIP rows were lost on the way here.
 close_entry() {
@@ -659,7 +740,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   if [ "$saw_checked" != 0 ]; then bad_input=1; continue; fi
   # Split on single tabs. `read` alone would drop a leading tab and shift every field.
   case "$line" in $'\t'*|*$'\t\t'*) bad_input=1; continue ;; esac
-  IFS=$'\t' read -r kind label path class _idle headf unpf locf _rest <<EOF_ROW
+  IFS=$'\t' read -r kind label path class _idle headf unpf locf _modf untf _rest <<EOF_ROW
 $line
 EOF_ROW
   case "$kind" in
@@ -682,7 +763,9 @@ EOF_ROW
   case "$class" in
     unpushed)   rows_unpushed=$((rows_unpushed+1)) ;;
     local-only) rows_local=$((rows_local+1)) ;;
-    modified|nested|untracked|ignored|clean) other_rows=$((other_rows+1)); continue ;;
+    # Without a reference there is nothing to compare its files with: it is counted only.
+    untracked)  other_rows=$((other_rows+1)); [ -n "$REFERENCE" ] || continue ;;
+    modified|nested|ignored|clean) other_rows=$((other_rows+1)); continue ;;
     *) bad_input=1; continue ;;
   esac
   cur_state=unknown
@@ -698,6 +781,12 @@ EOF_ROW
     || { unknown_row "$label" "$path" "the row carries no commit counts"; continue; }
   # Commits held away from HEAD (other branches, stashes, the reflog): no verdict covers them.
   other=$((loc - unp))
+  unt=0
+  if [ "$class" = untracked ]; then
+    unt=${untf#untracked=}
+    case "$untf" in "untracked=${unt}") ;; *) unt='' ;; esac
+    case "$unt" in ''|0*|*[!0-9]*) unknown_row "$label" "$path" "the row carries no untracked file count"; continue ;; esac
+  fi
   locate "$label" "$path" || { unknown_row "$label" "$path" "$WHY"; continue; }
   repo=$(origin_repo "$DIR") || { unknown_row "$label" "$path" "cannot read its origin"; continue; }
   # A saved or stale inventory names a commit the repository has since moved away from.
@@ -712,18 +801,29 @@ EOF_ROW
     || { unknown_row "$label" "$path" "cannot recount its commits"; continue; }
   loc_now=$(git --git-dir="$g_dir" rev-list --count --all --reflog --not --remotes 2>/dev/null) \
     || { unknown_row "$label" "$path" "cannot recount its commits"; continue; }
-  dirty=$(git -C "$DIR" -c core.fsmonitor=false status --porcelain --untracked-files=all 2>&1) \
-    || { unknown_row "$label" "$path" "cannot read its status"; continue; }
+  if [ "$class" = untracked ]; then
+    # Its untracked files are what the row describes; anything else in its status is a change.
+    untracked_files "$DIR" "$unt" || { unknown_row "$label" "$path" "it changed since the inventory"; continue; }
+    dirty=''
+  else
+    dirty=$(git -C "$DIR" -c core.fsmonitor=false status --porcelain --untracked-files=all 2>&1) \
+      || { unknown_row "$label" "$path" "cannot read its status"; continue; }
+  fi
   [ "$unp_now" = "$unp" ] && [ "$loc_now" = "$loc" ] && [ -z "$dirty" ] \
     || { unknown_row "$label" "$path" "it changed since the inventory"; continue; }
   cur_gdir=$g_dir; cur_repo=$repo; cur_head=$sha
+  if [ "$class" = untracked ]; then
+    file_check "$DIR" "$unt" || continue
+    # No commit at all: the FILE-CHECK row is the whole answer.
+    if [ "$loc" -eq 0 ]; then cur_state=ok; continue; fi
+  fi
   case "$repo" in
     "$OWNER"/*) ;;
     *) cur_state=outside; count_verdict not-checked; row "$label" "$path" not-checked "$sha" - - "$other"; continue ;;
   esac
   cur_state=ok
   # HEAD is pushed: there is nothing to look up for it, only for the tips that follow.
-  if [ "$class" = local-only ]; then
+  if [ "$class" = local-only ] || [ "$unp" -eq 0 ]; then
     count_verdict not-checked; row "$label" "$path" not-checked "$sha" - - "$other"; continue
   fi
   hit=$(cached_lookup "$repo" "$sha") || { cur_state=unknown; unknown_row "$label" "$path" "the pull request lookup failed"; continue; }
@@ -741,7 +841,7 @@ case "$checked_line" in *$'\t'tips=*)
   tip_totals=$'\t'"tips=$rows_tip"$'\t'"tips_merged=$t_merged"$'\t'"tips_merged_ancestor=$t_ancestor"$'\t'"tips_github_bot=$t_bot"$'\t'"tips_pushed_ref=$t_settled"$'\t'"tips_unsettled=$t_unsettled"$'\t'"tips_other_classes=$t_skipped" ;;
 esac
 # The content totals are printed only when a reference checkout was given.
-[ -z "$REFERENCE" ] || tip_totals="$tip_totals"$'\t'"content_reached=$c_reached"$'\t'"content_same_change=$c_same"$'\t'"content_no_change=$c_empty"$'\t'"content_clean_merge=$c_clean"$'\t'"content_differs=$c_differs"$'\t'"content_no_reference=$c_noref"
+[ -z "$REFERENCE" ] || tip_totals="$tip_totals"$'\t'"content_reached=$c_reached"$'\t'"content_same_change=$c_same"$'\t'"content_no_change=$c_empty"$'\t'"content_clean_merge=$c_clean"$'\t'"content_differs=$c_differs"$'\t'"content_no_reference=$c_noref"$'\t'"files_same_as_default=$f_same"$'\t'"files_differ=$f_differs"$'\t'"files_no_reference=$f_noref"
 printf 'CHECKED\tmerged=%s\tmerged_ancestor=%s\tgithub_bot=%s\tmerged_other_base=%s\topen=%s\tclosed=%s\tother_head=%s\tno_pr=%s\tnot_on_github=%s\tnot_checked=%s\tother_classes=%s\tunknown=%s%s\n' \
   "$n_merged" "$n_ancestor" "$n_bot" "$n_otherbase" "$n_open" "$n_closed" "$n_other" "$n_nopr" "$n_absent" "$n_notchecked" "$other_rows" "$unknown" "$tip_totals"
 [ "$saw_checked" = 1 ] || die "the inventory has no closing CHECKED line: it is incomplete"
