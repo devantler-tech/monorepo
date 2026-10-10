@@ -91,7 +91,7 @@ trap on_exit EXIT
 rc=0
 {
   sed 's/^/I	/' < "$INVENTORY" || exit 1
-  sed 's/^/C	/'
+  sed 's/^/C	/' || exit 1
 } | LC_ALL=C awk -F'\t' '
   function fail(msg) { printf "worktree-inventory-classify: %s\n", msg > "/dev/stderr"; failed = 1; exit 3 }
   function sha_ok(s) { return length(s) == 40 && s !~ /[^0-9a-f]/ }
