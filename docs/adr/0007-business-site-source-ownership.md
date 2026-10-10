@@ -44,12 +44,19 @@ succeeded with deployment skipped. Production
 [37996176833](https://github.com/devantler-tech/business-site/actions/runs/37996176833)
 succeeded before the domain transfer.
 
-The actual live HTTPS receipt identifies that source, run 37996176833, attempt 1,
-publish mode and no monorepo caller. Pages settings identify business-site as the
-verified domain owner with an approved certificate and HTTPS enforced. Actual browser
-checks cover EN/DA Home and Projects, the English Journal and a keyboard-opened
-article, theme continuity, Danish 390px layout and the completed-projects URL redirect
-to Projects research. The Danish navigation accurately labels the Journal as English.
+At the 2026-10-10 08:20 UTC HTTPS readback, the live receipt identifies reviewed source
+`2cbd6634001122f135a418b7546f0d0f2461f993`, successful source-owned scheduled run
+[38031748878](https://github.com/devantler-tech/business-site/actions/runs/38031748878),
+attempt 1, publish mode and no monorepo caller. Subsequent publications replace this
+receipt; these dated observations record the replacement proof, not a fixed latest run.
+The monorepo's aggregation gitlink adopts that reviewed, published source revision.
+
+Pages settings were verified on 2026-10-10 as business-site's domain ownership,
+approved certificate and HTTPS enforcement. Actual browser checks that day reached
+EN/DA Home and Projects, the English Journal and a keyboard-opened article, and the
+completed-projects URL redirected to Projects research. Earlier recorded evaluations
+cover theme continuity and Danish 390px layout; they are not new visits at this readback.
+The Danish navigation accurately labels the Journal as English.
 
 Historical extraction and snapshot-retirement evidence remains in merged
 monorepo #4056 and #3086. That former source/caller publication is not current
