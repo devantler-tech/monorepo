@@ -543,6 +543,20 @@ check 'a TIP row before any entry is malformed' eval '[ "$RC" = 2 ] && grep -q "
 echo edit > "$ts/f.new"; bash "$INVENTORY" "$T" --tips > "$TMP/tips.other"; tips_run "$TMP/tips.other"
 check 'tips of an untracked entry are counted, not looked up' eval 'grep -q "	tips=4	tips_merged=0	tips_merged_ancestor=0	tips_github_bot=0	tips_pushed_ref=0	tips_unsettled=0	tips_other_classes=4$" <<<"$OUT" && [ ! -s "$CALLS" ] && [ "$RC" = 0 ]'
 rm -f "$ts/f.new"
+# One of the entry's OWN worktrees, holding no file of its own, is not a change (monorepo#4085).
+g -C "$ts" worktree add -q --detach "$ts/.claude/worktrees/w" origin/main
+bash "$INVENTORY" "$T" --tips > "$TMP/tips.own"; tips_run "$TMP/tips.own"
+check 'an own worktree holding no file leaves the entry checked' eval 'grep -q "^MERGE-CHECK	wt	sub	not-checked	" <<<"$OUT" && ! grep -q "^UNKNOWN" <<<"$OUT" && grep -q "	tips=4	tips_merged=1	" <<<"$OUT" && [ "$RC" = 0 ]'
+echo new > "$ts/.claude/worktrees/w/new.txt"; tips_run "$TMP/tips.own"
+check 'a file added to an own worktree since the inventory is UNKNOWN' eval 'grep -q "^UNKNOWN	wt	sub	it changed since the inventory" <<<"$OUT" && [ "$RC" = 2 ]'
+rm -f "$ts/.claude/worktrees/w/new.txt"; echo edit > "$ts/.claude/worktrees/w/f"; tips_run "$TMP/tips.own"
+check 'a file edited in an own worktree since the inventory is UNKNOWN' eval 'grep -q "^UNKNOWN	wt	sub	it changed since the inventory" <<<"$OUT" && [ "$RC" = 2 ]'
+g -C "$ts" worktree remove --force "$ts/.claude/worktrees/w"
+# Another repository in the same place is a change, however clean it is.
+g clone -q "$TMP/remote.git" "$TMP/tips-foreign"; g -C "$TMP/tips-foreign" worktree add -q --detach "$ts/.claude/worktrees/w"
+tips_run "$TMP/tips.own"
+check 'another repository where the own worktree stood is UNKNOWN' eval 'grep -q "^UNKNOWN	wt	sub	it changed since the inventory" <<<"$OUT" && [ "$RC" = 2 ]'
+g -C "$TMP/tips-foreign" worktree remove --force "$ts/.claude/worktrees/w"; rm -rf "$ts/.claude"
 
 echo "== content comparison with a reference checkout"
 # UP stands for the repository on GitHub. REF is a checkout that fetched it recently; every

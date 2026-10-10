@@ -301,6 +301,82 @@ bash "$SUT" "$TMP/absent" >/dev/null 2>&1; [ $? -eq 2 ] && ok "a missing root ex
 bash "$SUT" "$ROOT" --min-idle-days x >/dev/null 2>&1; [ $? -eq 2 ] && ok "a non-numeric idle floor exits 2" || bad "a non-numeric idle floor exits 2"
 bash "$SUT" "$ROOT" --frobnicate >/dev/null 2>&1; [ $? -eq 2 ] && ok "an unknown option exits 2" || bad "an unknown option exits 2"
 
+# A repository's OWN linked worktree under an untracked directory (monorepo#4085). Its commits
+# sit in the entry's git directory, so only its files decide whether it stays `nested`.
+ROOT="$TMP/own"; mkdir -p "$ROOT"
+field() { row "$1" | tr '\t' '\n' | awk -F= -v k="$2" 'NF == 2 && $1 == k { print $2 }'; }
+
+s=$(make_wt oa-held-commit)
+g -C "$s" worktree add -q --detach "$s/.claude/worktrees/w"
+echo more > "$s/.claude/worktrees/w/f"; g -C "$s/.claude/worktrees/w" commit -qam inner
+inner_tip=$(g -C "$s/.claude/worktrees/w" rev-parse HEAD)
+
+s=$(make_wt ob-nothing)
+g -C "$s" worktree add -q --detach "$s/.claude/worktrees/w"
+
+s=$(make_wt oc-ignored-file)
+g -C "$s" worktree add -q --detach "$s/.claude/worktrees/w"
+mkdir "$s/.claude/worktrees/w/build"; echo out > "$s/.claude/worktrees/w/build/out.o"
+
+s=$(make_wt od-untracked-file)
+g -C "$s" worktree add -q --detach "$s/.claude/worktrees/w"
+echo new > "$s/.claude/worktrees/w/new.txt"
+
+s=$(make_wt oe-changed-file)
+g -C "$s" worktree add -q --detach "$s/.claude/worktrees/w"
+echo edit > "$s/.claude/worktrees/w/f"
+
+# Another repository's linked worktree: its commits are NOT in the entry's git directory.
+s=$(make_wt of-foreign-worktree)
+g clone -q "$TMP/remote.git" "$TMP/foreign"
+g -C "$TMP/foreign" worktree add -q --detach "$s/w"
+echo more > "$s/w/f"; g -C "$s/w" commit -qam foreign
+
+s=$(make_wt og-repository-in-ignored)
+g -C "$s" worktree add -q --detach "$s/.claude/worktrees/w"
+mkdir -p "$s/.claude/worktrees/w/build/deep"; g init -q -b main "$s/.claude/worktrees/w/build/deep"
+
+s=$(make_wt oh-hidden-file)
+g -C "$s" worktree add -q --detach "$s/.claude/worktrees/w"
+g -C "$s/.claude/worktrees/w" update-index --assume-unchanged f; echo edit > "$s/.claude/worktrees/w/f"
+
+s=$(make_wt oi-two-worktrees)
+g -C "$s" worktree add -q --detach "$s/.claude/worktrees/w"
+g -C "$s" worktree add -q --detach "$s/.claude/worktrees/x"
+echo new > "$s/.claude/worktrees/x/new.txt"
+
+out=$(bash "$SUT" "$ROOT" --tips 2>&1); rc=$?
+[ "$rc" -eq 0 ] && ok "a root of own-worktree cases exits 0" || bad "a root of own-worktree cases exits 0" "rc=$rc: $out"
+expect_class oa-held-commit local-only
+{ [ "$(field oa-held-commit nested)" = 0 ] && [ "$(field oa-held-commit local_only)" = 1 ]; } \
+  && ok "an own worktree's commit is counted as held, and it is not nested" \
+  || bad "an own worktree's commit is counted as held" "$(row oa-held-commit)"
+grep -q $'^TIP\toa-held-commit\tsub\ttip='"$inner_tip"$'\t' <<<"$out" \
+  && ok "an own worktree's commit is named as a tip" || bad "an own worktree's commit is named as a tip" "$(grep TIP <<<"$out")"
+expect_class ob-nothing clean
+expect_class oc-ignored-file ignored
+[ "$(field oc-ignored-file ignored)" = 1 ] \
+  && ok "an own worktree's ignored file is counted" || bad "an own worktree's ignored file is counted" "$(row oc-ignored-file)"
+expect_class od-untracked-file nested
+expect_class oe-changed-file nested
+expect_class of-foreign-worktree nested
+expect_class og-repository-in-ignored nested
+expect_class oh-hidden-file nested
+expect_class oi-two-worktrees nested
+[ "$(field oi-two-worktrees nested)" = 1 ] \
+  && ok "only the worktree holding a file stays nested" || bad "only the worktree holding a file stays nested" "$(row oi-two-worktrees)"
+
+# The entry is as recent as its most recently written own worktree.
+s="$ROOT/ob-nothing/sub"
+touch -t 202001010000 "$s/.git/HEAD" "$s/.git/index"
+out=$(bash "$SUT" "$ROOT" --min-idle-days 30 2>&1)
+[ -z "$(row ob-nothing)" ] \
+  && ok "a recently written own worktree keeps its entry recent" || bad "a recently written own worktree keeps its entry recent" "$(row ob-nothing)"
+touch -t 202001010000 "$s/.git/worktrees/w/HEAD" "$s/.git/worktrees/w/index"
+out=$(bash "$SUT" "$ROOT" --min-idle-days 30 2>&1)
+[ "$(class_of ob-nothing)" = clean ] \
+  && ok "an entry and its own worktree both idle are listed as idle" || bad "an entry and its own worktree both idle are listed as idle" "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 test_run_completed=1
 [ "$fail" -eq 0 ]

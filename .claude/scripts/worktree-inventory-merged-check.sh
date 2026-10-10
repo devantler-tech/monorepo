@@ -594,6 +594,28 @@ untracked_files() {
   [ "$count" = "$want" ]
 }
 
+# own_clean_worktree <entry-dir> <status-line> — true when the line names an untracked
+# directory that is one of this repository's OWN linked worktrees with no changed or untracked
+# file in it. The inventory does not count such a worktree (its commits are in the entry's
+# git directory, so the recount above covers them); anything else on the line is a change.
+own_clean_worktree() {
+  local dir=$1 line=$2 rel inner real top common ig inner_status
+  case "$line" in '?? '?*/) rel=${line#'?? '}; rel=${rel%/} ;; *) return 1 ;; esac
+  inner="$dir/$rel"
+  [ -e "$inner/.git" ] || return 1
+  real=$(cd "$inner" 2>/dev/null && /bin/pwd -P) || return 1
+  top=$(git -C "$inner" rev-parse --show-toplevel 2>/dev/null) || return 1
+  top=$(cd "$top" 2>/dev/null && /bin/pwd -P) || return 1
+  [ "$top" = "$real" ] || return 1
+  common=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  common=$(cd "$common" 2>/dev/null && /bin/pwd -P) || return 1
+  ig=$(git -C "$inner" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  ig=$(cd "$ig" 2>/dev/null && /bin/pwd -P) || return 1
+  case "$ig" in "$common"/worktrees/*) ;; *) return 1 ;; esac
+  inner_status=$(git -C "$inner" -c core.fsmonitor=false status --porcelain --untracked-files=all 2>&1) || return 1
+  [ -z "$inner_status" ]
+}
+
 file_row() { # verdict files same default-ignores base
   case "$1" in
     same-as-default) f_same=$((f_same+1)) ;;
@@ -870,6 +892,11 @@ EOF_ROW
   else
     dirty=$(git -C "$DIR" -c core.fsmonitor=false status --porcelain --untracked-files=all 2>&1) \
       || { unknown_row "$label" "$path" "cannot read its status"; continue; }
+    if [ -n "$dirty" ]; then
+      dirty=$(while IFS= read -r line; do
+                own_clean_worktree "$DIR" "$line" || printf '%s\n' "$line"
+              done <<< "$dirty")
+    fi
   fi
   [ "$unp_now" = "$unp" ] && [ "$loc_now" = "$loc" ] && [ -z "$dirty" ] \
     || { unknown_row "$label" "$path" "it changed since the inventory"; continue; }
