@@ -23,6 +23,7 @@
 #
 # Output, tab-separated, one row per inventory entry, in the inventory's order:
 #   CLASS <worktree> <submodule> <class> inventory=<class> settled=<n> unsettled=<n> in_flight=<n>
+#         github_bot=<n>
 # then one row per worktree:
 #   WORKTREE <worktree> <class> entries=<n>
 # and a closing `CLASSIFIED ...` line with the totals.
@@ -34,6 +35,10 @@
 #                      merged there has the commit in its history (`merged-ancestor`), GitHub holds
 #                      the same ref (`pushed-ref`), or the content check found it `reached`,
 #                      `no-change` or `same-change`. Needs no rescue
+#   made-on-github     it holds commits only, none is unsettled, and at least one is settled
+#                      only as `github-bot`: GitHub signed it for a bot, so it was never
+#                      made on this machine. Needs no rescue, and is NOT shown to be on the
+#                      default branch: it is kept apart from merged-in-content for that
 #   tool-output        nothing but files the repository's own ignore rules cover. A removal
 #                      deletes them; they are rarely authored
 #   work-in-flight     at least one of its commits is the head of an open pull request
@@ -42,11 +47,12 @@
 #                      those commits
 #   unknown            the merged check printed UNKNOWN for it: nothing is claimed, whatever
 #                      the inventory read
-# `settled`, `unsettled` and `in_flight` count the commits looked at: HEAD of an `unpushed`
+# `settled`, `unsettled`, `in_flight` and `github_bot` count the commits looked at: HEAD of an `unpushed`
 # entry, and each TIP. They are 0 for an entry whose files decided its class.
 #
 # A worktree gets the most demanding class among its entries, in this order: unknown,
-# needs-a-person, work-in-flight, tool-output, merged-in-content, nothing-held. That row
+# needs-a-person, work-in-flight, tool-output, made-on-github, merged-in-content,
+# nothing-held. That row
 # covers the worktree's populated submodules only. It says nothing about the worktree's own
 # top-level repository, which the sweep judges separately.
 #
@@ -108,6 +114,7 @@ rc=0
   function judge(key, verdict, kind, content) {
     if (verdict == "open") { flight[key]++; return }
     if (kind == "stash" || verdict == "stash") { unsettled[key]++; return }
+    if (verdict == "github-bot") { bot[key]++; return }
     if (verdict == "merged" || verdict == "merged-ancestor" || verdict == "pushed-ref") { settled[key]++; return }
     if (content == "reached" || content == "no-change" || content == "same-change") { settled[key]++; return }
     unsettled[key]++
@@ -115,15 +122,15 @@ rc=0
   BEGIN {
     split("clean ignored modified untracked nested unpushed local-only", a, " ")
     for (i in a) inv_class[a[i]] = 1
-    split("merged merged-ancestor merged-other-base open closed other-head no-pr not-on-github not-checked", a, " ")
+    split("merged merged-ancestor github-bot merged-other-base open closed other-head no-pr not-on-github not-checked", a, " ")
     for (i in a) { head_verdict[a[i]] = 1; tip_verdict[a[i]] = 1 }
     tip_verdict["stash"] = 1; tip_verdict["pushed-ref"] = 1
     split("reached no-change same-change differs no-reference", a, " ")
     for (i in a) content_verdict[a[i]] = 1
     split("branch stash ref reflog", a, " ")
     for (i in a) tip_kind[a[i]] = 1
-    rank["nothing-held"] = 1; rank["merged-in-content"] = 2; rank["tool-output"] = 3
-    rank["work-in-flight"] = 4; rank["needs-a-person"] = 5; rank["unknown"] = 6
+    rank["nothing-held"] = 1; rank["merged-in-content"] = 2; rank["made-on-github"] = 3
+    rank["tool-output"] = 4; rank["work-in-flight"] = 5; rank["needs-a-person"] = 6; rank["unknown"] = 7
   }
 
   $1 == "I" {
@@ -220,7 +227,7 @@ rc=0
     if (n != inv_entries + 0) fail("the inventory lists " n " entries and its CHECKED line says " inv_entries)
     for (i = 1; i <= n; i++) {
       key = order[i]; c = e_class[key]
-      settled[key] += 0; unsettled[key] += 0; flight[key] += 0
+      settled[key] += 0; unsettled[key] += 0; flight[key] += 0; bot[key] += 0
       if (key in unk) cls = "unknown"
       else if (c == "clean") cls = "nothing-held"
       else if (c == "ignored") cls = "tool-output"
@@ -236,9 +243,10 @@ rc=0
           if (!((key, tl[j]) in tc)) fail("the merged check has no row for tip " tl[j] " of " e_wt[key] " " e_sub[key])
           judge(key, tc[key, tl[j]], t_kind[key, tl[j]], cc[key, tl[j]])
         }
-        if (settled[key] + unsettled[key] + flight[key] == 0) fail("no commit was judged for " e_wt[key] " " e_sub[key])
+        if (settled[key] + unsettled[key] + flight[key] + bot[key] == 0) fail("no commit was judged for " e_wt[key] " " e_sub[key])
         if (flight[key] > 0) cls = "work-in-flight"
         else if (unsettled[key] > 0) cls = "needs-a-person"
+        else if (bot[key] > 0) cls = "made-on-github"
         else cls = "merged-in-content"
       }
       e_out[key] = cls; total[cls]++
@@ -249,14 +257,14 @@ rc=0
     }
     for (i = 1; i <= n; i++) {
       key = order[i]
-      printf "CLASS\t%s\t%s\t%s\tinventory=%s\tsettled=%d\tunsettled=%d\tin_flight=%d\n", e_wt[key], e_sub[key], e_out[key], e_class[key], settled[key], unsettled[key], flight[key]
+      printf "CLASS\t%s\t%s\t%s\tinventory=%s\tsettled=%d\tunsettled=%d\tin_flight=%d\tgithub_bot=%d\n", e_wt[key], e_sub[key], e_out[key], e_class[key], settled[key], unsettled[key], flight[key], bot[key]
     }
     for (i = 1; i <= wn; i++) {
       w = w_order[i]; w_total[w_class[w]]++
       printf "WORKTREE\t%s\t%s\tentries=%d\n", w, w_class[w], w_entries[w]
     }
-    printf "CLASSIFIED\tentries=%d\tnothing_held=%d\tmerged_in_content=%d\ttool_output=%d\twork_in_flight=%d\tneeds_a_person=%d\tunknown=%d", n, total["nothing-held"], total["merged-in-content"], total["tool-output"], total["work-in-flight"], total["needs-a-person"], total["unknown"]
-    printf "\tworktrees=%d\twt_nothing_held=%d\twt_merged_in_content=%d\twt_tool_output=%d\twt_work_in_flight=%d\twt_needs_a_person=%d\twt_unknown=%d\tbelow_min_idle=%d\n", wn, w_total["nothing-held"], w_total["merged-in-content"], w_total["tool-output"], w_total["work-in-flight"], w_total["needs-a-person"], w_total["unknown"], below
+    printf "CLASSIFIED\tentries=%d\tnothing_held=%d\tmerged_in_content=%d\tmade_on_github=%d\ttool_output=%d\twork_in_flight=%d\tneeds_a_person=%d\tunknown=%d", n, total["nothing-held"], total["merged-in-content"], total["made-on-github"], total["tool-output"], total["work-in-flight"], total["needs-a-person"], total["unknown"]
+    printf "\tworktrees=%d\twt_nothing_held=%d\twt_merged_in_content=%d\twt_made_on_github=%d\twt_tool_output=%d\twt_work_in_flight=%d\twt_needs_a_person=%d\twt_unknown=%d\tbelow_min_idle=%d\n", wn, w_total["nothing-held"], w_total["merged-in-content"], w_total["made-on-github"], w_total["tool-output"], w_total["work-in-flight"], w_total["needs-a-person"], w_total["unknown"], below
     if (total["unknown"] > 0) exit 4
   }
 ' > "$OUT" || rc=$?

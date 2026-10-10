@@ -42,6 +42,15 @@
 #                  in its history, so what the branch kept of it reached the default
 #                  branch. A later commit of that branch may have changed or undone it:
 #                  that was the branch's own reviewed outcome, not work left behind
+#   github-bot     GitHub has the commit, no pull request has it as its head, and GitHub
+#                  itself signed it for one of the bots that work here, its only author:
+#                  it was made on GitHub, never on this machine, so there is no local
+#                  work in it to rescue. This is NOT proof that the change reached the
+#                  default branch, and it is never counted as merged. Where the entry
+#                  holds more commits below this one, each of them must be `github-bot`,
+#                  `merged` or `merged-ancestor` too, or the verdict stays `no-pr` or
+#                  `other-head`. The author's name and email are never the evidence:
+#                  anyone can set those locally. GitHub's signature cannot be made here
 #   no-pr          GitHub has the commit, and no pull request contains it
 #   not-on-github  GitHub does not have the commit: it exists only on this machine
 #   not-checked    not looked up: the repository is outside devantler-tech, or its origin
@@ -60,7 +69,7 @@
 #   pushed-ref     a `kind=ref` tip (a tag, mostly) that GitHub holds under the same name
 #                  at the same commit: it was never local-only, only outside every branch
 # An entry's commits away from HEAD need no rescue only when EVERY one of its tips is
-# `merged`, `merged-ancestor` or `pushed-ref`. `no-pr` and `other-head` say GitHub has the commit object, not
+# `merged`, `merged-ancestor`, `github-bot` or `pushed-ref`. `no-pr` and `other-head` say GitHub has the commit object, not
 # that anything there still keeps it. Tips of entries in other classes are counted, not
 # looked up.
 #
@@ -85,7 +94,7 @@
 # `reached`, `no-change` and `same-change` say the commit's content needs no rescue.
 # A reference that was fetched long ago can only turn those into `differs`.
 #
-# Only `merged` or `merged-ancestor` with other_local=0 says the entry's commits need no rescue. Every other
+# Only `merged`, `merged-ancestor` or `github-bot` with other_local=0 says the entry's commits need no rescue. Every other
 # row means: do not treat the entry as disposable on this evidence.
 #
 # Exit codes: 0 every `unpushed` entry and every looked-up tip got a verdict; 2 usage error, an inventory that is
@@ -106,6 +115,8 @@ unset GH_HOST GH_REPO
 OWNER='devantler-tech'
 # More associated pull requests than this in one answer means the list may be cut short.
 PR_PAGE=50
+# A `github-bot` commit with more unpushed commits than this below it is not walked.
+BOT_RANGE=10
 
 die() { printf 'worktree-inventory-merged-check: %s\n' "$1" >&2; exit 2; }
 
@@ -140,9 +151,9 @@ on_exit() {
 }
 trap on_exit EXIT
 
-n_merged=0; n_ancestor=0; n_otherbase=0; n_open=0; n_closed=0; n_other=0; n_nopr=0; n_absent=0; n_notchecked=0
+n_merged=0; n_ancestor=0; n_bot=0; n_otherbase=0; n_open=0; n_closed=0; n_other=0; n_nopr=0; n_absent=0; n_notchecked=0
 unknown=0; other_rows=0; saw_checked=0; bad_input=0
-rows_tip=0; t_merged=0; t_ancestor=0; t_settled=0; t_unsettled=0; t_skipped=0
+rows_tip=0; t_merged=0; t_ancestor=0; t_bot=0; t_settled=0; t_unsettled=0; t_skipped=0
 # The entry the following TIP rows belong to: its state is one of `none` (no entry yet),
 # `skip` (another class: its tips are counted only), `unknown` (the entry got an UNKNOWN
 # row, which already covers its tips), `outside` (not a devantler-tech repository) or `ok`.
@@ -218,7 +229,9 @@ lookup() {
         defaultBranchRef{ name }
         object(oid:$sha){
           __typename
-          ... on Commit{ associatedPullRequests(first:$n){ totalCount nodes{ number state headRefOid baseRefName baseRepository{ nameWithOwner } } } }
+          ... on Commit{
+            author{ user{ login } } authors(first:2){ totalCount } signature{ isValid wasSignedByGitHub }
+            associatedPullRequests(first:$n){ totalCount nodes{ number state headRefOid baseRefName baseRepository{ nameWithOwner } } } }
         }}}' 2>/dev/null) || return 1
   # Every shape is matched positively. A missing repository, an error body or a list cut
   # short yields no verdict, never `no-pr`.
@@ -228,10 +241,17 @@ lookup() {
     elif .data.repository.object == null then "not-on-github -"
     elif .data.repository.object.__typename != "Commit" then empty
     else .data.repository.defaultBranchRef.name as $default
+      # Made on GitHub by a bot: GitHub signed it and the bot is its only author. A field
+      # that is missing or has another shape reads as "not shown", never as a bot commit.
+      | (.data.repository.object as $c
+         | ($c.signature.isValid == true) and ($c.signature.wasSignedByGitHub == true)
+           and ($c.authors.totalCount == 1)
+           and (($c.author.user.login // "") as $l
+                | ["dependabot[bot]", "github-actions[bot]", "ksail-bot[bot]", "renovate[bot]"] | index($l) != null)) as $bot
       | .data.repository.object.associatedPullRequests as $p
       | if ($p.totalCount | type) != "number" or ($p.nodes | type) != "array"
            or $p.totalCount != ($p.nodes | length) then empty
-        elif $p.totalCount == 0 then "no-pr -"
+        elif $p.totalCount == 0 then (if $bot then "github-bot -" else "no-pr -" end)
         else ($p.nodes | map(select(.headRefOid == $sha))) as $at
           | ($at | map(select(.state == "MERGED" and .baseRefName == $default
                        and ((.baseRepository.nameWithOwner // "") | ascii_downcase) == ($repo | ascii_downcase)))) as $in
@@ -246,8 +266,8 @@ lookup() {
             else ($p.nodes | map(select(.state == "MERGED" and .baseRefName == $default
                          and ((.baseRepository.nameWithOwner // "") | ascii_downcase) == ($repo | ascii_downcase)))) as $anc
               | if ($anc | length) > 0
-                then "ancestor? \($p.nodes[0].number) \($anc | map("\(.number):\(.headRefOid)") | join(","))"
-                else "other-head \($p.nodes[0].number)"
+                then "ancestor\(if $bot then "-bot" else "" end)? \($p.nodes[0].number) \($anc | map("\(.number):\(.headRefOid)") | join(","))"
+                else "\(if $bot then "github-bot" else "other-head" end) \($p.nodes[0].number)"
                 end
             end
         end
@@ -255,11 +275,13 @@ lookup() {
   # A pull request merged into the default branch contains the commit, at another head.
   # Whether the commit is in the history that merged is a second read; until one of them
   # proves it, the verdict stays `other-head`.
-  case "$answer" in 'ancestor? '[0-9]*' '[0-9]*)
-    local first=${answer#ancestor? } list pair n h is unsure=0
+  case "$answer" in 'ancestor? '[0-9]*' '[0-9]*|'ancestor-bot? '[0-9]*' '[0-9]*)
+    local first=${answer#*\? } list pair n h is unsure=0 fallback=other-head
+    # What a bot made on GitHub is known whatever the comparisons below say.
+    case "$answer" in ancestor-bot*) fallback=github-bot ;; esac
     list=${first#* }; first=${first%% *}
     case "$first" in ''|*[!0-9]*) return 1 ;; esac
-    answer="other-head $first"
+    answer="$fallback $first"
     while [ -n "$list" ]; do
       pair=${list%%,*}
       case "$list" in *,*) list=${list#*,} ;; *) list='' ;; esac
@@ -281,6 +303,7 @@ lookup() {
   case "$answer" in
     'merged-ancestor '[0-9]*) ;;
     'merged '[0-9]*|'merged-other-base '[0-9]*|'open '[0-9]*|'closed '[0-9]*|'other-head '[0-9]*|'no-pr -'|'not-on-github -') ;;
+    'github-bot '[0-9]*|'github-bot -') ;;
     *) return 1 ;;
   esac
   case "${answer#* }" in *[!0-9-]*) return 1 ;; esac
@@ -313,6 +336,7 @@ count_verdict() {
   case "$1" in
     merged)        n_merged=$((n_merged+1)) ;;
     merged-ancestor) n_ancestor=$((n_ancestor+1)) ;;
+    github-bot)    n_bot=$((n_bot+1)) ;;
     merged-other-base) n_otherbase=$((n_otherbase+1)) ;;
     open)          n_open=$((n_open+1)) ;;
     closed)        n_closed=$((n_closed+1)) ;;
@@ -471,6 +495,7 @@ tip_row() {
   case "$3" in
     merged)     t_merged=$((t_merged+1)) ;;
     merged-ancestor) t_ancestor=$((t_ancestor+1)) ;;
+    github-bot) t_bot=$((t_bot+1)) ;;
     pushed-ref) t_settled=$((t_settled+1)) ;;
     *)          t_unsettled=$((t_unsettled+1)) ;;
   esac
@@ -515,6 +540,8 @@ EOF_TIP
   fi
   hit=$(cached_lookup "$cur_repo" "$sha") \
     || { unknown_row "$cur_label" "$cur_path" "the pull request lookup failed for a commit held away from HEAD"; return 0; }
+  hit=$(bot_range "$cur_repo" "$sha" "$hit" "$n" "$cur_head") \
+    || { unknown_row "$cur_label" "$cur_path" "the pull request lookup failed for a commit held away from HEAD"; return 0; }
   tip_row "$cur_label" "$cur_path" "${hit% *}" "$sha" "$kind" "$ref" "$cur_repo" "${hit#* }" "$n"
   content_check "${hit% *}" "$sha"
 }
@@ -528,6 +555,32 @@ cached_lookup() {
     hit=$(lookup "${1#*/}" "$2") || return 1
     printf '%s\t%s\n' "$key" "$hit" >> "$CACHE_FILE" || return 1
   fi
+  printf '%s\n' "$hit"
+}
+
+# bot_range <owner/name> <sha> <answer> <n> [<also-excluded>] -> prints the answer to use
+# for the current entry. A `github-bot` answer speaks for one commit, and the entry holds
+# <n> unpushed commits ending at it: the others may be anyone's. Each must be `github-bot`,
+# `merged` or `merged-ancestor` itself, or the answer falls back to what it would have been
+# without the rule. Non-zero when one of them cannot be read.
+bot_range() {
+  local repo=$1 sha=$2 hit=$3 n=$4 demoted list c other
+  case "$hit" in 'github-bot '*) ;; *) printf '%s\n' "$hit"; return 0 ;; esac
+  [ "$n" -gt 1 ] || { printf '%s\n' "$hit"; return 0; }
+  case "${hit#* }" in -) demoted='no-pr -' ;; *) demoted="other-head ${hit#* }" ;; esac
+  [ "$n" -le "$BOT_RANGE" ] || { printf '%s\n' "$demoted"; return 0; }
+  list=$(git --git-dir="$cur_gdir" rev-list "$sha" --not --remotes ${5:+"$5"} 2>/dev/null) || return 1
+  # The walk must be the very commits the row counted.
+  [ "$(printf '%s\n' "$list" | grep -c .)" = "$n" ] || return 1
+  for c in $list; do
+    [ "$c" != "$sha" ] || continue
+    [ ${#c} -eq 40 ] || return 1
+    other=$(cached_lookup "$repo" "$c") || return 1
+    case "${other% *}" in
+      github-bot|merged|merged-ancestor) ;;
+      *) printf '%s\n' "$demoted"; return 0 ;;
+    esac
+  done
   printf '%s\n' "$hit"
 }
 
@@ -615,6 +668,7 @@ EOF_ROW
     count_verdict not-checked; row "$label" "$path" not-checked "$sha" - - "$other"; continue
   fi
   hit=$(cached_lookup "$repo" "$sha") || { cur_state=unknown; unknown_row "$label" "$path" "the pull request lookup failed"; continue; }
+  hit=$(bot_range "$repo" "$sha" "$hit" "$unp") || { cur_state=unknown; unknown_row "$label" "$path" "the pull request lookup failed"; continue; }
   verdict=${hit% *}; pr=${hit#* }
   count_verdict "$verdict"
   row "$label" "$path" "$verdict" "$sha" "$repo" "$pr" "$other"
@@ -625,12 +679,12 @@ close_entry
 # The tip totals are printed only when the inventory was asked for tips.
 tip_totals=''
 case "$checked_line" in *$'\t'tips=*)
-  tip_totals=$'\t'"tips=$rows_tip"$'\t'"tips_merged=$t_merged"$'\t'"tips_merged_ancestor=$t_ancestor"$'\t'"tips_pushed_ref=$t_settled"$'\t'"tips_unsettled=$t_unsettled"$'\t'"tips_other_classes=$t_skipped" ;;
+  tip_totals=$'\t'"tips=$rows_tip"$'\t'"tips_merged=$t_merged"$'\t'"tips_merged_ancestor=$t_ancestor"$'\t'"tips_github_bot=$t_bot"$'\t'"tips_pushed_ref=$t_settled"$'\t'"tips_unsettled=$t_unsettled"$'\t'"tips_other_classes=$t_skipped" ;;
 esac
 # The content totals are printed only when a reference checkout was given.
 [ -z "$REFERENCE" ] || tip_totals="$tip_totals"$'\t'"content_reached=$c_reached"$'\t'"content_same_change=$c_same"$'\t'"content_no_change=$c_empty"$'\t'"content_differs=$c_differs"$'\t'"content_no_reference=$c_noref"
-printf 'CHECKED\tmerged=%s\tmerged_ancestor=%s\tmerged_other_base=%s\topen=%s\tclosed=%s\tother_head=%s\tno_pr=%s\tnot_on_github=%s\tnot_checked=%s\tother_classes=%s\tunknown=%s%s\n' \
-  "$n_merged" "$n_ancestor" "$n_otherbase" "$n_open" "$n_closed" "$n_other" "$n_nopr" "$n_absent" "$n_notchecked" "$other_rows" "$unknown" "$tip_totals"
+printf 'CHECKED\tmerged=%s\tmerged_ancestor=%s\tgithub_bot=%s\tmerged_other_base=%s\topen=%s\tclosed=%s\tother_head=%s\tno_pr=%s\tnot_on_github=%s\tnot_checked=%s\tother_classes=%s\tunknown=%s%s\n' \
+  "$n_merged" "$n_ancestor" "$n_bot" "$n_otherbase" "$n_open" "$n_closed" "$n_other" "$n_nopr" "$n_absent" "$n_notchecked" "$other_rows" "$unknown" "$tip_totals"
 [ "$saw_checked" = 1 ] || die "the inventory has no closing CHECKED line: it is incomplete"
 [ "$bad_input" = 0 ] || die "the inventory holds an UNREADABLE, malformed or trailing row: it is incomplete"
 # The closing line is the inventory's own account of what it printed. Rows lost on the way
