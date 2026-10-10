@@ -47,7 +47,9 @@
 # Output, one line per finding:
 #   SILENT-WORKFLOW <owner/repo> <path> — <reason>
 #   QUERY-UNKNOWN <owner/repo> [<path>] — <what failed>
-#   CHECKED <n> scheduled workflow(s) across <m> repositor(ies)   (always last, so a clean exit shows what it examined)
+#   EMPTY-REPOSITORY <owner/repo> — no commits, so no schedule to judge   (never UNKNOWN: GitHub said so outright)
+#   CHECKED <n> scheduled workflow(s) across <m> repositor(ies)[; skipped <k> empty repositor(ies)]
+#     (always last, so a clean exit shows what it examined)
 #
 # Exit codes:
 #   0  every scheduled workflow ran within its window
@@ -189,6 +191,19 @@ resolve_head() { # <repo> <branch>
   IFS=$'\t' read -r ref kind sha <<<"$out" || return 1
   [ "$ref" = "refs/heads/$2" ] && [ "$kind" = commit ] && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
   printf '%s' "$sha"
+}
+
+# Whether GitHub says outright that the repository has no commits (monorepo#4087). Such a repository
+# holds no workflow file, so there is no schedule in it to judge. Only that exact refusal of the head
+# read counts: the request must fail, and its reply must carry status 409 and the message
+# "Git Repository is empty.". A head that resolves after all, any other status or message, and a
+# reply jq cannot read those two fields from all return 1, so the caller keeps the repository UNKNOWN.
+repo_is_empty() { # <repo> <branch>
+  local encoded body
+  encoded="$(jq -rn --arg b "$2" '$b | split("/") | map(@uri) | join("/")')" || return 1
+  if body="$(gh api "repos/$1/git/ref/heads/${encoded}" 2>/dev/null)"; then return 1; fi
+  jq -e '.message == "Git Repository is empty." and (.status | tostring) == "409"' \
+    <<<"$body" >/dev/null 2>&1
 }
 
 # One page of a workflow file's history at the pinned head: the newest version at or before the
@@ -586,6 +601,7 @@ unconfirmed() { # <reason>
 silent=0
 checked=0
 repos_read=0
+repos_empty=0
 max_pages=5
 err="$(mktemp)"
 buf="$(mktemp)"
@@ -641,6 +657,13 @@ for repo in "${repos[@]}"; do
     continue
   fi
   if ! head="$(resolve_head "$repo" "$branch")"; then
+    # A repository that lists no workflow and that GitHub reports as having no commits has nothing
+    # to judge. It is named and counted apart, so the closing line still shows what was examined.
+    if [ "$total" -eq 0 ] && repo_is_empty "$repo" "$branch"; then
+      echo "EMPTY-REPOSITORY ${repo} — no commits, so no schedule to judge"
+      repos_empty=$((repos_empty + 1))
+      continue
+    fi
     echo "QUERY-UNKNOWN ${repo} — default branch head unresolvable"
     unknown=1
     continue
@@ -674,7 +697,9 @@ if [ "$state_mode" = on ] && ! write_state; then
   echo "QUERY-UNKNOWN — state file could not be written"
   unknown=1
 fi
-echo "CHECKED ${checked} scheduled workflow(s) across ${repos_read} repositor(ies)"
+skipped=""
+[ "$repos_empty" -eq 0 ] || skipped="; skipped ${repos_empty} empty repositor(ies)"
+echo "CHECKED ${checked} scheduled workflow(s) across ${repos_read} repositor(ies)${skipped}"
 finished=1
 [ "$unknown" -eq 0 ] || exit 2
 [ "$silent" -eq 0 ] || exit 1

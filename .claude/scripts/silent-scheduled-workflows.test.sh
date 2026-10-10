@@ -98,6 +98,13 @@ if [ -f "$FIXTURES/$key.seq" ]; then
   f="$FIXTURES/.seq.json"
   [ "$(cat "$f")" != FAIL ] || { echo "gh: HTTP 502" >&2; exit 1; }
 fi
+# An `.httperror` fixture is a request GitHub refused: real gh prints the reply body, skips --jq
+# and exits 1.
+if [ -f "$FIXTURES/$key.httperror" ]; then
+  cat "$FIXTURES/$key.httperror"
+  echo "gh: $(jq -r '.message // "error"' "$FIXTURES/$key.httperror" 2>/dev/null) (HTTP $(jq -r '.status // "?"' "$FIXTURES/$key.httperror" 2>/dev/null))" >&2
+  exit 1
+fi
 # The default branch resolves to $PIN unless a test supplies the ref itself.
 if [ ! -f "$f" ] && [[ "$url" =~ ^repos/[^/]+/[^/]+/git/ref/heads/main$ ]]; then
   printf '{"ref":"refs/heads/main","object":{"type":"commit","sha":"%s"}}' "$PIN" >"$FIXTURES/.head.json"
@@ -942,6 +949,55 @@ run --repo o/z
 [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a head that cannot be re-read must exit 2, got $rc"; }
 has "QUERY-UNKNOWN o/z .github/workflows/daily.yaml — silence not confirmed: default branch head unresolvable before reporting" \
   "a head that cannot be re-read must be named"
+
+# Repository o/empty has no commits (monorepo#4087): GitHub refuses the head read with its explicit
+# empty-repository answer. Nothing can be scheduled there, so it is named and skipped, not UNKNOWN.
+put_error() { printf '%s' "$2" >"$fix/$(printf '%s' "$1" | tr '/?&=' '____').httperror"; }
+drop_error() { rm -f "$fix/$(printf '%s' "$1" | tr '/?&=' '____').httperror"; }
+empty_reply='{"message":"Git Repository is empty.","documentation_url":"https://docs.github.com/rest/git/refs#get-a-reference","status":"409"}'
+put "repos/o/empty" '{"default_branch":"main"}'
+put "repos/o/empty/actions/workflows?per_page=100" '{"total_count":0,"workflows":[]}'
+put_error "repos/o/empty/git/ref/heads/main" "$empty_reply"
+run --repo o/empty
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an empty repository alone must exit 0, got $rc"; }
+has "EMPTY-REPOSITORY o/empty — no commits, so no schedule to judge" "an empty repository must be named"
+lacks "QUERY-UNKNOWN" "an empty repository is not an unknown"
+has "CHECKED 0 scheduled workflow(s) across 0 repositor(ies); skipped 1 empty repositor(ies)" \
+  "the closing line counts empty repositories apart from the ones read"
+# Beside a healthy repository the sweep stays clean, and the healthy one is still counted as read.
+run --repo o/empty --repo o/q
+[ "$rc" -eq 0 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an empty repository beside a healthy one must exit 0, got $rc"; }
+grep -qF -- "across 1 repositor(ies); skipped 1 empty repositor(ies)" "$tmp/out" ||
+  { cat "$tmp/out" "$tmp/err" >&2; fail "a read repository and an empty one are counted apart"; }
+# Only that exact answer counts. Any other refusal of the head read stays UNKNOWN: a missing ref,
+# a server error, a body that is not the empty-repository answer, or one that is not JSON at all.
+for reply in '{"message":"Not Found","status":"404"}' \
+  '{"message":"Server Error","status":"502"}' \
+  '{"message":"Git Repository is empty.","status":"404"}' \
+  '{"message":"Conflict","status":"409"}' \
+  '["Git Repository is empty.","409"]' \
+  '<html>Git Repository is empty. 409</html>' \
+  ''; do
+  put_error "repos/o/empty/git/ref/heads/main" "$reply"
+  run --repo o/empty
+  [ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a refused head read ($reply) must exit 2, got $rc"; }
+  has "QUERY-UNKNOWN o/empty — default branch head unresolvable" "a refused head read ($reply) must be named"
+  lacks "EMPTY-REPOSITORY" "a refused head read ($reply) is never an empty repository"
+done
+# A repository that lists a workflow has commits, whatever the head read says: still UNKNOWN.
+put_error "repos/o/empty/git/ref/heads/main" "$empty_reply"
+put "repos/o/empty/actions/workflows?per_page=100" "{\"total_count\":1,\"workflows\":[
+  {\"id\":1,\"state\":\"active\",\"path\":\".github/workflows/daily.yaml\",\"created_at\":\"$old\"}]}"
+run --repo o/empty
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "an empty answer beside a listed workflow must exit 2, got $rc"; }
+lacks "EMPTY-REPOSITORY" "a repository that lists a workflow is never skipped as empty"
+# A head read that succeeds on the second look (a first commit just landed) is not empty either.
+put "repos/o/empty/actions/workflows?per_page=100" '{"total_count":0,"workflows":[]}'
+drop_error "repos/o/empty/git/ref/heads/main"
+head_sequence o/empty FAIL "$pin"
+run --repo o/empty
+[ "$rc" -eq 2 ] || { cat "$tmp/out" "$tmp/err" >&2; fail "a head that resolves on the second read must exit 2, got $rc"; }
+lacks "EMPTY-REPOSITORY" "a head that resolves on the second read is never an empty repository"
 
 # Usage errors are UNKNOWN.
 run
