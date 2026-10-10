@@ -893,10 +893,16 @@ emit_injection_classes() {
             end;
           runtime_text | .[] | select(type == "string")
         ' 2>/dev/null \
-          | grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null \
-          | redact | tr '[:upper:]' '[:lower:]' \
-          | sed -E 's|[^a-z0-9 ._:/@+-]||g' | cut -c1-80 \
-          | tr '\n' '|' || true)
+          | grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null || true)
+        # Most matched records have no runtime phrases (#3830). Avoid starting
+        # the normalisation pipeline on an empty stream; raw matches below
+        # still take the unchanged detector, redactor and independent class walk.
+        if [ -n "$runtime_phrases" ]; then
+          runtime_phrases=$(printf '%s\n' "$runtime_phrases" \
+            | redact | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's|[^a-z0-9 ._:/@+-]||g' | cut -c1-80 \
+            | tr '\n' '|' || true)
+        fi
         # Normalisation MUST match the phrase list's own display derivation, or
         # the per-phrase class annotation silently joins nothing.
         #
