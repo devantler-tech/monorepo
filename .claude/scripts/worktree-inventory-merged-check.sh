@@ -57,6 +57,27 @@
 # that anything there still keeps it. Tips of entries in other classes are counted, not
 # looked up.
 #
+# With --content-reference <checkout>, every row whose verdict leaves the commit unsettled
+# (`other-head`, `no-pr`, `not-on-github`, `closed`, `merged-other-base`) is followed by a
+# local comparison with the default branch as that checkout's own copy of the repository
+# last fetched it. Squash-merge leaves no graph link, and a branch that moved after its
+# pull request merged has no pull request at its head, so the lookup above cannot settle
+# these; the change itself can. <checkout> is a checkout of the same superproject (the
+# shared one, usually): the repository compared against is the one at the entry's own
+# submodule path inside it. Nothing is fetched and nothing is written to either repository.
+#   CONTENT-CHECK <worktree> <submodule> <verdict> commit=<sha> base=<sha|-> same_as=<sha|->
+#   reached        the default branch at `base=` already contains this very commit
+#   no-change      the commit's files are identical to those at the point it left the
+#                  default branch: it holds no change at all
+#   same-change    one commit on the default branch's first-parent line since that point
+#                  (`same_as=`) makes exactly the change this commit's line makes since
+#                  it: the work was merged as that commit
+#   differs        none of the above. Not proof of anything: the default branch may hold
+#                  the work in another shape, or not at all
+#   no-reference   the checkout holds no copy of this repository at that path
+# `reached`, `no-change` and `same-change` say the commit's content needs no rescue.
+# A reference that was fetched long ago can only turn those into `differs`.
+#
 # Only `merged` with other_local=0 says the entry's commits need no rescue. Every other
 # row means: do not treat the entry as disposable on this evidence.
 #
@@ -81,22 +102,32 @@ PR_PAGE=50
 
 die() { printf 'worktree-inventory-merged-check: %s\n' "$1" >&2; exit 2; }
 
-[ $# -eq 1 ] || die "usage: worktree-inventory-merged-check.sh <worktree-root> < inventory-output"
-case "$1" in
-  -h|--help) sed -n '2,69p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+USAGE="usage: worktree-inventory-merged-check.sh <worktree-root> [--content-reference <checkout>] < inventory-output"
+case "${1:-}" in
+  -h|--help) sed -n '2,/^set -euo pipefail$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; exit 0 ;;
   -*) die "unknown option: $1" ;;
+esac
+REFERENCE=''
+case $# in
+  1) ;;
+  3) [ "$2" = --content-reference ] || die "$USAGE"
+     [ -d "$3" ] || die "not a directory: $3"
+     REFERENCE=$(cd "$3" 2>/dev/null && /bin/pwd -P) || die "cannot resolve the reference checkout" ;;
+  *) die "$USAGE" ;;
 esac
 [ -d "$1" ] || die "not a directory: $1"
 ROOT=$(cd "$1" 2>/dev/null && /bin/pwd -P) || die "cannot resolve the worktree root"
 command -v gh >/dev/null 2>&1 || die "gh is required"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 CACHE_FILE=$(mktemp) || die "cannot create a temporary file"
+PATCH_DIR=$(mktemp -d) || { rm -f "$CACHE_FILE"; die "cannot create a temporary directory"; }
 merged_check_finished=0
 # bash 3.2 can report a set -u abort as exit 0 once an EXIT trap runs, so require completion.
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 on_exit() {
   local status=$?
   rm -f "$CACHE_FILE"
+  rm -rf "$PATCH_DIR"
   if [ "$merged_check_finished" != 1 ] && [ "$status" = 0 ]; then status=2; fi
   exit "$status"
 }
@@ -234,9 +265,17 @@ count_verdict() {
 # The rows are data: every component must be a real directory below the root, because a
 # symbolic link could lead to a repository outside it.
 locate() {
-  local cur=$ROOT rest="$1/$2" comp
   DIR=''; WHY=''
   case "$1" in ''|*/*|.|..) WHY="not a worktree name"; return 1 ;; esac
+  case "$2" in ''|/*) WHY="the path does not stay inside the worktree"; return 1 ;; esac
+  walk "$ROOT" "$1/$2"
+}
+
+# walk <root> <relative-path> -> the same walk below any root: sets DIR, or returns 1 with
+# WHY set.
+walk() {
+  local cur=$1 rest=$2 comp
+  DIR=''; WHY=''
   case "$2" in ''|/*) WHY="the path does not stay inside the worktree"; return 1 ;; esac
   while [ -n "$rest" ]; do
     comp=${rest%%/*}
@@ -252,6 +291,109 @@ locate() {
   if [ -L "$cur/.git" ]; then WHY="a path component is a symbolic link"; return 1; fi
   if [ ! -e "$cur/.git" ]; then WHY="no repository at that path under this root"; return 1; fi
   DIR=$cur
+}
+
+# --- content comparison (--content-reference) ---------------------------------------------
+# Both sides of a comparison are printed with the same options, so the two patch ids are
+# comparable, and no program the repository configures (an external diff, a text conversion,
+# a signature check) is run. `--binary --full-index` makes a binary file's content part of
+# the id, and `patch-id --verbatim` keeps whitespace in it: two changes that differ only in
+# indentation are different changes.
+DIFF_OPTS=(--no-ext-diff --no-textconv --no-renames --no-color --binary --full-index)
+c_reached=0; c_same=0; c_empty=0; c_differs=0; c_noref=0
+# The current entry's reference: `unset` until first needed, then `none` (the checkout has
+# no copy of this repository there), `fail` (it has one that cannot be read) or `ok`.
+cur_refstate='unset'; cur_base=''; cur_alt=''
+
+# gitc — git on the entry's repository, also reading the reference's objects. The
+# reference's default branch is usually newer than anything the entry has fetched.
+gitc() { GIT_ALTERNATE_OBJECT_DIRECTORIES="$cur_alt" git --git-dir="$cur_gdir" "$@"; }
+
+resolve_reference() {
+  local rdir rrepo head objs
+  cur_refstate=none; cur_base=''; cur_alt=''
+  walk "$REFERENCE" "$cur_path" || return 0
+  rdir=$DIR
+  rrepo=$(origin_repo "$rdir") || { cur_refstate=fail; return 0; }
+  [ "$rrepo" = "$cur_repo" ] || return 0
+  cur_refstate=fail
+  head=$(git -C "$rdir" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || return 0
+  case "$head" in refs/remotes/origin/?*) ;; *) return 0 ;; esac
+  cur_base=$(git -C "$rdir" rev-parse --verify --quiet "$head^{commit}" 2>/dev/null) || return 0
+  objs=$(git -C "$rdir" rev-parse --path-format=absolute --git-path objects 2>/dev/null) || return 0
+  # The object directories are passed as a colon-separated list.
+  case "$objs" in /*) ;; *) return 0 ;; esac
+  case "$objs" in *:*|*'"'*) return 0 ;; esac
+  [ -d "$objs" ] || return 0
+  cur_alt=$objs; cur_refstate=ok
+}
+
+# default_branch_ids <fork-point> -> prints the file holding `<patch-id> <commit>` for every
+# first-parent commit of the default branch after the fork point (a merge commit counts by
+# what it brought in). Read once per fork point and base.
+default_branch_ids() {
+  local f="$PATCH_DIR/$1-$cur_base"
+  if [ ! -f "$f" ]; then
+    gitc log --no-show-signature --first-parent --diff-merges=first-parent -p "${DIFF_OPTS[@]}" --format='commit %H' "$1..$cur_base" 2>/dev/null \
+      | git patch-id --verbatim > "$f.tmp" 2>/dev/null || { rm -f "$f.tmp"; return 1; }
+    mv "$f.tmp" "$f" || return 1
+  fi
+  printf '%s\n' "$f"
+}
+
+content_row() { # worktree submodule verdict sha base same-as
+  case "$3" in
+    reached)      c_reached=$((c_reached+1)) ;;
+    same-change)  c_same=$((c_same+1)) ;;
+    no-change)    c_empty=$((c_empty+1)) ;;
+    differs)      c_differs=$((c_differs+1)) ;;
+    no-reference) c_noref=$((c_noref+1)) ;;
+  esac
+  printf 'CONTENT-CHECK\t%s\t%s\t%s\tcommit=%s\tbase=%s\tsame_as=%s\n' "$1" "$2" "$3" "$4" "$5" "$6"
+}
+
+# content_check <verdict> <sha> — compare one unsettled commit of the current entry.
+content_check() {
+  local sha=$2 rc fork tree_a tree_b pid ids same
+  [ -n "$REFERENCE" ] || return 0
+  case "$1" in other-head|no-pr|not-on-github|closed|merged-other-base) ;; *) return 0 ;; esac
+  [ "$cur_refstate" != unset ] || resolve_reference
+  case "$cur_refstate" in
+    none) content_row "$cur_label" "$cur_path" no-reference "$sha" - -; return 0 ;;
+    ok) ;;
+    *) unknown_row "$cur_label" "$cur_path" "cannot read the default branch in the reference checkout"; return 0 ;;
+  esac
+  rc=0; gitc merge-base --is-ancestor "$sha" "$cur_base" 2>/dev/null || rc=$?
+  case "$rc" in
+    0) content_row "$cur_label" "$cur_path" reached "$sha" "$cur_base" -; return 0 ;;
+    1) ;;
+    *) unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0 ;;
+  esac
+  rc=0; fork=$(gitc merge-base "$cur_base" "$sha" 2>/dev/null) || rc=$?
+  case "$rc" in
+    0) ;;
+    # No shared history with the default branch at all.
+    1) content_row "$cur_label" "$cur_path" differs "$sha" "$cur_base" -; return 0 ;;
+    *) unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0 ;;
+  esac
+  tree_a=$(gitc rev-parse --verify --quiet "$fork^{tree}" 2>/dev/null) \
+    || { unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0; }
+  tree_b=$(gitc rev-parse --verify --quiet "$sha^{tree}" 2>/dev/null) \
+    || { unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0; }
+  if [ "$tree_a" = "$tree_b" ]; then content_row "$cur_label" "$cur_path" no-change "$sha" "$cur_base" -; return 0; fi
+  pid=$(gitc diff "${DIFF_OPTS[@]}" "$fork" "$sha" 2>/dev/null | git patch-id --verbatim 2>/dev/null) \
+    || { unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0; }
+  pid=${pid%% *}
+  # The files differ, so an empty or malformed id is a failed read, never "no change".
+  [ ${#pid} -eq 40 ] || { unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0; }
+  case "$pid" in *[!0-9a-f]*) unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0 ;; esac
+  ids=$(default_branch_ids "$fork") \
+    || { unknown_row "$cur_label" "$cur_path" "cannot read the default branch's commits in the reference checkout"; return 0; }
+  same=$(awk -v p="$pid" '$1 == p && !done { print $2; done = 1 }' "$ids") \
+    || { unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0; }
+  if [ -z "$same" ]; then content_row "$cur_label" "$cur_path" differs "$sha" "$cur_base" -; return 0; fi
+  [ ${#same} -eq 40 ] || { unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0; }
+  content_row "$cur_label" "$cur_path" same-change "$sha" "$cur_base" "$same"
 }
 
 # close_entry — an entry that holds commits away from HEAD must have named at least one tip
@@ -311,6 +453,7 @@ EOF_TIP
   hit=$(cached_lookup "$cur_repo" "$sha") \
     || { unknown_row "$cur_label" "$cur_path" "the pull request lookup failed for a commit held away from HEAD"; return 0; }
   tip_row "$cur_label" "$cur_path" "${hit% *}" "$sha" "$kind" "$ref" "$cur_repo" "${hit#* }" "$n"
+  content_check "${hit% *}" "$sha"
 }
 
 # cached_lookup <owner/name> <sha> -> lookup's answer, read once per repository and commit.
@@ -356,6 +499,7 @@ EOF_ROW
   close_entry
   cur_state=skip; cur_label=$label; cur_path=$path; cur_gdir=''; cur_repo=''; cur_head=''
   cur_other=0; cur_tips=0
+  cur_refstate='unset'; cur_base=''; cur_alt=''
   # Every class can hold commits away from HEAD, so every row's counts place its TIP rows.
   e_unp=${unpf#unpushed=}; e_loc=${locf#local_only=}
   case "$e_unp" in 0?*) e_unp=x ;; esac; case "$e_loc" in 0?*) e_loc=x ;; esac
@@ -411,6 +555,7 @@ EOF_ROW
   verdict=${hit% *}; pr=${hit#* }
   count_verdict "$verdict"
   row "$label" "$path" "$verdict" "$sha" "$repo" "$pr" "$other"
+  content_check "$verdict" "$sha"
 done
 
 close_entry
@@ -419,6 +564,8 @@ tip_totals=''
 case "$checked_line" in *$'\t'tips=*)
   tip_totals=$'\t'"tips=$rows_tip"$'\t'"tips_merged=$t_merged"$'\t'"tips_pushed_ref=$t_settled"$'\t'"tips_unsettled=$t_unsettled"$'\t'"tips_other_classes=$t_skipped" ;;
 esac
+# The content totals are printed only when a reference checkout was given.
+[ -z "$REFERENCE" ] || tip_totals="$tip_totals"$'\t'"content_reached=$c_reached"$'\t'"content_same_change=$c_same"$'\t'"content_no_change=$c_empty"$'\t'"content_differs=$c_differs"$'\t'"content_no_reference=$c_noref"
 printf 'CHECKED\tmerged=%s\tmerged_other_base=%s\topen=%s\tclosed=%s\tother_head=%s\tno_pr=%s\tnot_on_github=%s\tnot_checked=%s\tother_classes=%s\tunknown=%s%s\n' \
   "$n_merged" "$n_otherbase" "$n_open" "$n_closed" "$n_other" "$n_nopr" "$n_absent" "$n_notchecked" "$other_rows" "$unknown" "$tip_totals"
 [ "$saw_checked" = 1 ] || die "the inventory has no closing CHECKED line: it is incomplete"
