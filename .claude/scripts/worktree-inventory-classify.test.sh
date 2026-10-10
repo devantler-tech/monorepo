@@ -151,6 +151,11 @@ esac
 run; if grep -q "$(printf '^WORKTREE\ta\ttool-output\t')" "$OUT"; then ok "tool output outranks merged in content"
 else bad "tool output outranks merged in content" "$(grep '^WORKTREE' "$OUT")"; fi
 
+{ entry a s1 clean "$H1" 0 0; inv_end 1; } > "$INV"
+{ printf 'UNKNOWN\ta\ts1\tit changed since the inventory\n'; chk_end; } > "$CHK"
+rc=0; run || rc=$?
+if [ "$rc" = 2 ] && grep -q "$(printf '^CLASS\ta\ts1\tunknown\t')" "$OUT"; then ok "an UNKNOWN row outranks a clean inventory read"
+else bad "an UNKNOWN row outranks a clean inventory read" "rc=$rc $(cat "$OUT")"; fi
 echo "input that cannot be joined"
 one unpushed 1 1 < /dev/null
 chk_end > "$CHK"

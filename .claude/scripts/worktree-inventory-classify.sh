@@ -39,7 +39,8 @@
 #   needs-a-person     anything else: changed, untracked or nested files (never judged
 #                      here), a stash, or a commit no evidence settles. `unsettled=` counts
 #                      those commits
-#   unknown            the merged check printed UNKNOWN for it: nothing is claimed
+#   unknown            the merged check printed UNKNOWN for it: nothing is claimed, whatever
+#                      the inventory read
 # `settled`, `unsettled` and `in_flight` count the commits looked at: HEAD of an `unpushed`
 # entry, and each TIP. They are 0 for an entry whose files decided its class.
 #
@@ -47,6 +48,9 @@
 # needs-a-person, work-in-flight, tool-output, merged-in-content, nothing-held. That row
 # covers the worktree's populated submodules only. It says nothing about the worktree's own
 # top-level repository, which the sweep judges separately.
+#
+# Every class is as old as the two texts: a session that is still running can change an
+# entry after the inventory read it. Take both texts again before acting on a class.
 #
 # A stash is never settled, whatever any row says about it. `merged-other-base`, `closed`,
 # `other-head`, `no-pr`, `not-on-github`, `not-checked`, `differs` and `no-reference` settle
@@ -216,10 +220,10 @@ rc=0
     for (i = 1; i <= n; i++) {
       key = order[i]; c = e_class[key]
       settled[key] += 0; unsettled[key] += 0; flight[key] += 0
-      if (c == "clean") cls = "nothing-held"
+      if (key in unk) cls = "unknown"
+      else if (c == "clean") cls = "nothing-held"
       else if (c == "ignored") cls = "tool-output"
       else if (c == "modified" || c == "untracked" || c == "nested") cls = "needs-a-person"
-      else if (key in unk) cls = "unknown"
       else {
         if (!(key in mc)) fail("the merged check has no row for " e_wt[key] " " e_sub[key])
         if (c == "local-only" && mc[key] != "not-checked") fail("the merged check judged the pushed HEAD of " e_wt[key] " " e_sub[key])
