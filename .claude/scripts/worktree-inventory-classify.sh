@@ -34,7 +34,7 @@
 #                      that head was merged into the default branch (`merged`), or one that
 #                      merged there has the commit in its history (`merged-ancestor`), GitHub holds
 #                      the same ref (`pushed-ref`), or the content check found it `reached`,
-#                      `no-change` or `same-change`. Needs no rescue
+#                      `no-change`, `same-change` or `clean-merge`. Needs no rescue
 #   made-on-github     it holds commits only, none is unsettled, and at least one is settled
 #                      only as `github-bot`: GitHub signed it for a bot, so it was never
 #                      made on this machine. Needs no rescue, and is NOT shown to be on the
@@ -116,7 +116,7 @@ rc=0
     if (kind == "stash" || verdict == "stash") { unsettled[key]++; return }
     if (verdict == "github-bot") { bot[key]++; return }
     if (verdict == "merged" || verdict == "merged-ancestor" || verdict == "pushed-ref") { settled[key]++; return }
-    if (content == "reached" || content == "no-change" || content == "same-change") { settled[key]++; return }
+    if (content == "reached" || content == "no-change" || content == "same-change" || content == "clean-merge") { settled[key]++; return }
     unsettled[key]++
   }
   BEGIN {
@@ -125,7 +125,7 @@ rc=0
     split("merged merged-ancestor github-bot merged-other-base open closed other-head no-pr not-on-github not-checked", a, " ")
     for (i in a) { head_verdict[a[i]] = 1; tip_verdict[a[i]] = 1 }
     tip_verdict["stash"] = 1; tip_verdict["pushed-ref"] = 1
-    split("reached no-change same-change differs no-reference", a, " ")
+    split("reached no-change same-change clean-merge differs no-reference", a, " ")
     for (i in a) content_verdict[a[i]] = 1
     split("branch stash ref reflog", a, " ")
     for (i in a) tip_kind[a[i]] = 1
