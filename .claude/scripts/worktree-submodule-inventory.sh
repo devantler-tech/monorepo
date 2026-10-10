@@ -177,8 +177,9 @@ held_tips() {
 # THIS repository's own linked worktrees and holds nothing but ignored files, prints
 # "<ignored-count> <idle-days>" and returns 0. Its commits live in the entry's own git
 # directory, so the counts below already cover them; only its files need a look. Returns 1
-# for anything else or any failed read: another repository, changed or untracked files, a
-# repository inside it, hidden tracked files. The caller then counts it as nested.
+# for anything else (another repository, changed or untracked files, a repository inside
+# it, hidden tracked files): the caller counts it as nested. Returns 2 when it is such a
+# worktree but a read of it failed: the caller reports the entry UNREADABLE.
 own_worktree_state() {
   local dir=$1 inner=$2 real top common ig hidden status line rest found n=0 idle
   real=$(physical_path "$inner") || return 1
@@ -191,24 +192,26 @@ own_worktree_state() {
   ig=$(physical_path "$ig") || return 1
   # Only this repository's own linked worktrees keep their git directory under its shared one.
   case "$ig" in "$common"/worktrees/*) ;; *) return 1 ;; esac
-  rgit -C "$inner" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1 || return 1
-  hidden=$(rgit -C "$inner" ls-files -v 2>/dev/null | awk '/^[a-zS] / { n++ } END { print n + 0 }') || return 1
+  # From here on it IS a worktree of this repository: a read that fails is a failed read (2),
+  # never a reason to call it nested.
+  rgit -C "$inner" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1 || return 2
+  hidden=$(rgit -C "$inner" ls-files -v 2>/dev/null | awk '/^[a-zS] / { n++ } END { print n + 0 }') || return 2
   [ "$hidden" = 0 ] || return 1
   status=$(rgit -C "$inner" status --porcelain -z --untracked-files=all --ignored=matching \
              --ignore-submodules=none 2>&1 \
-           | tr '\0\n' '\n\001') || return 1
-  case "$status" in *$'\001'*) return 1 ;; esac
+           | tr '\0\n' '\n\001') || return 2
+  case "$status" in *$'\001'*) return 2 ;; esac
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     [ "${line:0:2}" = '!!' ] || return 1
     rest=${line:3}
     case "$rest" in
-      */) found=$(find "$inner/${rest%/}" -name .git -print -quit 2>/dev/null) || return 1
+      */) found=$(find "$inner/${rest%/}" -name .git -print -quit 2>/dev/null) || return 2
           [ -z "$found" ] || return 1 ;;
     esac
     n=$((n+1))
   done <<< "$status"
-  idle=$(idle_days "$ig") || return 1
+  idle=$(idle_days "$ig") || return 2
   printf '%s %s\n' "$n" "$idle"
 }
 
@@ -267,6 +270,8 @@ classify_entry() {
                 # ignored files die with the entry, its commits are counted below.
                 ignored=$((ignored + ${own%% *})); own_idle=${own##* }
                 if [ -z "$inner_idle" ] || [ "$own_idle" -lt "$inner_idle" ]; then inner_idle=$own_idle; fi
+              elif [ "$?" -eq 2 ]; then
+                unreadable_row "$label" "$path" "cannot read a worktree of its own"; return 0
               else nested=$((nested+1)); fi ;;
           *)  untracked=$((untracked+1)) ;;
         esac ;;

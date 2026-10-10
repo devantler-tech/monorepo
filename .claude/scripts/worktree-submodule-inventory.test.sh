@@ -369,13 +369,19 @@ expect_class oi-two-worktrees nested
 # The entry is as recent as its most recently written own worktree.
 s="$ROOT/ob-nothing/sub"
 touch -t 202001010000 "$s/.git/HEAD" "$s/.git/index"
-out=$(bash "$SUT" "$ROOT" --min-idle-days 30 2>&1)
-[ -z "$(row ob-nothing)" ] \
-  && ok "a recently written own worktree keeps its entry recent" || bad "a recently written own worktree keeps its entry recent" "$(row ob-nothing)"
+out=$(bash "$SUT" "$ROOT" --min-idle-days 30 2>&1); rc=$?
+{ [ "$rc" -eq 0 ] && [ -z "$(row ob-nothing)" ] && grep -q $'^CHECKED\tworktrees=9\tentries=0\t.*\tbelow_min_idle=9\t.*\tunreadable=0$' <<<"$out"; } \
+  && ok "a recently written own worktree keeps its entry recent" || bad "a recently written own worktree keeps its entry recent" "rc=$rc: $out"
 touch -t 202001010000 "$s/.git/worktrees/w/HEAD" "$s/.git/worktrees/w/index"
-out=$(bash "$SUT" "$ROOT" --min-idle-days 30 2>&1)
-[ "$(class_of ob-nothing)" = clean ] \
-  && ok "an entry and its own worktree both idle are listed as idle" || bad "an entry and its own worktree both idle are listed as idle" "$out"
+out=$(bash "$SUT" "$ROOT" --min-idle-days 30 2>&1); rc=$?
+{ [ "$rc" -eq 0 ] && [ "$(class_of ob-nothing)" = clean ] && grep -q $'^CHECKED\tworktrees=9\tentries=1\t.*\tbelow_min_idle=8\t' <<<"$out"; } \
+  && ok "an entry and its own worktree both idle are listed as idle" || bad "an entry and its own worktree both idle are listed as idle" "rc=$rc: $out"
+
+# An own worktree that cannot be read is a failed read, never `nested` and never clean.
+ROOT="$TMP/own-broken"; mkdir -p "$ROOT"; s=$(make_wt oj-unreadable-worktree)
+g -C "$s" worktree add -q --detach "$s/.claude/worktrees/w"
+echo garbage > "$s/.git/worktrees/w/index"
+unreadable_case oj-unreadable-worktree 'cannot read a worktree of its own' "an own worktree whose index cannot be read is UNREADABLE"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 test_run_completed=1
