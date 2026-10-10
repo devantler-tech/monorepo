@@ -28,6 +28,10 @@
 #   Actions run does not delay a check bound to another app.
 #   A required check bound to an app is judged by that app's check-runs alone. A commit status
 #   names no app, so one beside no such check-run reads UNVERIFIED, never PASS.
+#   A required check bound to no app is judged by every source that reports its name. The forge
+#   requires both a check-run and a commit status that share a required name, so the gate is PASS
+#   only when both passed, FAILED when either failed, and PENDING when either is unfinished and
+#   neither failed. A name only one source reports keeps that source's verdict (monorepo#3971).
 #   An active `code_quality` rule is always UNVERIFIED: no readable surface reports its analysis
 #   for a head. Its line is `GATE code_quality setup=<state|unreadable> UNVERIFIED`, and the setup
 #   state is the lead when a merge is refused.
@@ -174,6 +178,13 @@ gates="$(jq -n -r \
   --arg cq "${cq_state}" '
   def ok: . == "success" or . == "neutral" or . == "skipped";
   def rank: if . == "PASS" then 3 elif . == "PENDING" then 2 elif . == "FAILED" then 1 else 0 end;
+  # The forge requires BOTH a check-run and a commit status that share a required name, so the
+  # name passes only when every source that reports it passed. A source that reports nothing has
+  # no say, and a failure outranks a wait: the other source finishing cannot pass a gate that one
+  # source has already failed.
+  def worst($a; $b):
+    if $a == "MISSING" then $b elif $b == "MISSING" then $a
+    elif ($a | rank) <= ($b | rank) then $a else $b end;
   # The GitHub Actions app, whose jobs publish their check-runs.
   def actions_app: 15368;
   [$c[].check_runs[]] as $runs
@@ -193,7 +204,7 @@ gates="$(jq -n -r \
           | if . == null then "MISSING"
             elif .state == "success" then "PASS"
             elif .state == "pending" then "PENDING" else "FAILED" end) as $st
-       | (if $g.app == null then (if ($cr | rank) >= ($st | rank) then $cr else $st end)
+       | (if $g.app == null then worst($cr; $st)
           # A gate bound to an app is decided by that app alone. A commit status names no app, so
           # it can neither pass nor fail the gate: beside no check-run from the app it leaves the
           # gate UNVERIFIED, never PASS.

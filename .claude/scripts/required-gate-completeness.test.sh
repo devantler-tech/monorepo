@@ -165,6 +165,32 @@ fixture app-bound-check-run-decides "${rules_build_actions_app}" "${branch_off}"
 fixture app-bound-failed-check-run-decides "${rules_build_actions_app}" "${branch_off}" \
   '{"total_count":1,"check_runs":[{"id":10,"name":"Build","status":"completed","conclusion":"failure","app":{"id":15368}}]}' \
   '[{"id":5,"context":"Build","state":"success"}]' '{"total_count":0,"workflow_runs":[]}'
+# monorepo#3971: a check-run and a commit status that share a required name are BOTH required by
+# the forge. Keeping the better of the two read a failed check-run beside a passing status as PASS.
+build_failed='{"id":10,"name":"Build","status":"completed","conclusion":"failure","app":{"id":15368}}'
+build_running='{"id":10,"name":"Build","status":"in_progress","conclusion":null,"app":{"id":15368}}'
+no_check_runs='{"total_count":0,"check_runs":[]}'
+no_runs='{"total_count":0,"workflow_runs":[]}'
+status_of() { printf '[{"id":5,"context":"Build","state":"%s"}]' "$1"; }
+fixture same-name-failed-check-run-passing-status "${rules_build_only}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[${build_failed}]}" "$(status_of success)" "${no_runs}"
+fixture same-name-passing-check-run-failed-status "${rules_build_only}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[${build_ok}]}" "$(status_of failure)" "${no_runs}"
+fixture same-name-running-check-run-passing-status "${rules_build_only}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[${build_running}]}" "$(status_of success)" "${no_runs}"
+fixture same-name-passing-check-run-pending-status "${rules_build_only}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[${build_ok}]}" "$(status_of pending)" "${no_runs}"
+fixture same-name-running-check-run-failed-status "${rules_build_only}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[${build_running}]}" "$(status_of failure)" "${no_runs}"
+fixture same-name-both-pass "${rules_build_only}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[${build_ok}]}" "$(status_of success)" "${no_runs}"
+# A name only one source reports keeps that source's verdict.
+fixture check-run-only-failed "${rules_build_only}" "${branch_off}" \
+  "{\"total_count\":1,\"check_runs\":[${build_failed}]}" '[]' "${no_runs}"
+fixture status-only-failed "${rules_build_only}" "${branch_off}" \
+  "${no_check_runs}" "$(status_of failure)" "${no_runs}"
+fixture status-only-pending "${rules_build_only}" "${branch_off}" \
+  "${no_check_runs}" "$(status_of pending)" "${no_runs}"
 fixture absent-after-runs-finished "${rules_build_only}" "${branch_off}" \
   '{"total_count":1,"check_runs":[{"id":11,"name":"Lint","status":"completed","conclusion":"success","app":{"id":15368}}]}' '[]' \
   "{\"total_count\":1,\"workflow_runs\":[${finished_ci}]}"
@@ -259,6 +285,23 @@ expect "the bound app's passing check-run decides beside a failing status" "${to
   "COMPLETE required=1"
 expect "the bound app's failed check-run decides beside a passing status" "${tool}" app-bound-failed-check-run-decides 1 \
   "GATE check Build FAILED"
+expect "a failed check-run beside a passing status of the same name is FAILED" "${tool}" \
+  same-name-failed-check-run-passing-status 1 "GATE check Build FAILED"
+expect "a failed check-run beside a passing status never reads complete" "${tool}" \
+  same-name-failed-check-run-passing-status 1 "INCOMPLETE missing=0 failed=1 pending=0"
+expect "a failing status beside a passing check-run of the same name is FAILED" "${tool}" \
+  same-name-passing-check-run-failed-status 1 "GATE check Build FAILED"
+expect "an unfinished check-run beside a passing status of the same name is PENDING" "${tool}" \
+  same-name-running-check-run-passing-status 1 "GATE check Build PENDING"
+expect "a pending status beside a passing check-run of the same name is PENDING" "${tool}" \
+  same-name-passing-check-run-pending-status 1 "GATE check Build PENDING"
+expect "a failure outranks a wait when both sources report the name" "${tool}" \
+  same-name-running-check-run-failed-status 1 "GATE check Build FAILED"
+expect "a check-run and a status of the same name that both passed read complete" "${tool}" \
+  same-name-both-pass 0 "COMPLETE required=1"
+expect "a failed check-run alone is FAILED" "${tool}" check-run-only-failed 1 "GATE check Build FAILED"
+expect "a failing status alone is FAILED" "${tool}" status-only-failed 1 "GATE check Build FAILED"
+expect "a pending status alone is PENDING" "${tool}" status-only-pending 1 "GATE check Build PENDING"
 expect "a setup read that is not JSON is unreadable, not an abort" "${tool}" code-quality-not-json 2 \
   "GATE code_quality setup=unreadable UNVERIFIED"
 expect "a setup read that is not an object is unreadable" "${tool}" code-quality-not-object 2 \
@@ -475,7 +518,9 @@ no_single="$(ablate no-single-document 's/length == 1 and //')"
 no_mix_guard="$(ablate no-mix-guard 's/ && \[ -z "\$\{repo\}\$\{base\}\$\{head\}" \]//')"
 no_unfinished="$(ablate no-unfinished 's/if \$seen == "MISSING" and \$unfinished and \(\$g\.app == null or \$g\.app == actions_app\)\n         then "PENDING" else \$seen end/\$seen/')"
 any_gate_waits="$(ablate any-gate-waits 's/ and \(\$g\.app == null or \$g\.app == actions_app\)\n         then "PENDING"/\n         then "PENDING"/')"
-status_passes_bound="$(ablate status-passes-bound 's/if \$g\.app == null then \(if \(\$cr \| rank\) >= \(\$st \| rank\) then \$cr else \$st end\)/if true then (if (\$cr | rank) >= (\$st | rank) then \$cr else \$st end)/')"
+status_passes_bound="$(ablate status-passes-bound 's/if \$g\.app == null then worst\(\$cr; \$st\)/if true then worst(\$cr; \$st)/')"
+# The rule this replaced: keep the better of the two sources instead of requiring both.
+better_of_two="$(ablate better-of-two 's/elif \(\$a \| rank\) <= \(\$b \| rank\) then \$a else \$b end;/elif (\$a | rank) >= (\$b | rank) then \$a else \$b end;/')"
 only_workflow_runs="$(ablate only-workflow-runs 's/\n     or any\(\$runs\[\]; \.status != "completed" and \(\.app\.slug \/\/ ""\) == "github-actions"\)//')"
 any_app="$(ablate any-app 's/ and \(\.app\.slug \/\/ ""\) == "github-actions"//')"
 no_control_strip="$(ablate no-control-strip 's/ \| LC_ALL=C tr -d \x27\[:cntrl:\]\x27//')"
@@ -531,6 +576,10 @@ expect_ablation_line "without the app test an Actions run delays a check bound t
   "${any_gate_waits}" other-app-absent-while-run-unfinished "GATE check Build PENDING"
 expect_ablation_line "without the app-bound rule a passing status passes the gate" \
   "${status_passes_bound}" app-bound-status-only "COMPLETE required=1"
+expect_ablation_line "keeping the better of the two sources passes a failed check-run beside a passing status" \
+  "${better_of_two}" same-name-failed-check-run-passing-status "COMPLETE required=1"
+expect_ablation_line "keeping the better of the two sources passes a failing status beside a passing check-run" \
+  "${better_of_two}" same-name-passing-check-run-failed-status "COMPLETE required=1"
 
 expect_survey_ablation() { # <label> <ablated tool> <fixture> <payload> <last line the ablated tool must print> [extra args…]
   local label="$1" t="$2" fx="$3" payload="$4" want="$5" got last
