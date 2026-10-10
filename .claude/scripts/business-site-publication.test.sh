@@ -58,7 +58,9 @@ for retired in .github/workflows/publish-pages.yaml .claude/scripts/business-sit
     exit 1
   fi
 done
-workflow_files=$(find "$ROOT/.github/workflows" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort) || {
+# Actions only loads workflow files directly in this directory, not nested fixtures.
+workflow_files=$(find "$ROOT/.github/workflows" -type d ! -path "$ROOT/.github/workflows" -prune -o \
+  -type f \( -name '*.yaml' -o -name '*.yml' \) -print | sort) || {
   echo 'UNKNOWN: root workflows could not be read' >&2; exit 2;
 }
 [ -n "$workflow_files" ] || { echo 'UNKNOWN: no root workflows were examined' >&2; exit 2; }
@@ -105,6 +107,22 @@ for tool in yq jq; do
   PATH="$TMP/tools:$PATH" expect_unknown "actual guard $tool failure" bash "$TMP/probe/.claude/scripts/business-site-publication.test.sh"
   rm "$TMP/tools/$tool"
 done
+# GitHub ignores nested YAML; it must not hide a genuine top-level violation.
+mkdir -p "$TMP/probe/.github/workflows/fixtures/deeper"
+cp "$TMP/jobs-array.yaml" "$TMP/probe/.github/workflows/fixtures/partial.yaml"
+cp "$TMP/base.yaml" "$TMP/probe/.github/workflows/fixtures/deeper/inactive.yml"
+cp "$TMP/base.yaml" "$TMP/probe/.github/workflows/zz-policy.yml"
+yq -i '.permissions.pages = "write"' "$TMP/probe/.github/workflows/zz-policy.yml"
+if scope_out=$(bash "$TMP/probe/.claude/scripts/business-site-publication.test.sh" 2>&1); then
+  scope_rc=0
+else
+  scope_rc=$?
+fi
+if [[ "$scope_rc" != 1 ]] || ! grep -Fq "FAIL: competing website publication in $TMP/probe/.github/workflows/zz-policy.yml" <<< "$scope_out"; then
+  printf 'FAIL: nested fixtures changed the actual top-level policy verdict (rc=%s)\n%s\n' "$scope_rc" "$scope_out" >&2
+  exit 1
+fi
+asserts=$((asserts + 1))
 # Mutation controls exercise the same validator used for every real root workflow.
 reject() {
   local name=$1 expression=$2 out rc
