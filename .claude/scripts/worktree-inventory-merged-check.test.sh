@@ -43,6 +43,11 @@ set -euo pipefail
 sha=''; name=''; owner=''; host=''; prev=''
 for a in "$@"; do
   case "$a" in sha=*) sha=${a#sha=} ;; r=*) name=${a#r=} ;; o=*) owner=${a#o=} ;; q=*) sha="ref-${a##*/}" ;; esac
+  # A comparison (repos/<owner>/<name>/compare/<base>...<head>) is answered from
+  # $FIX/cmp-<base>-<head>.json.
+  case "$a" in repos/*/*/compare/*...*)
+    c=${a##*/compare/}; sha="cmp-${c%%...*}-${c##*...}"; rest=${a#repos/}; owner=${rest%%/*}; rest=${rest#*/}; name=${rest%%/*} ;;
+  esac
   [ "$prev" != --hostname ] || host=$a
   prev=$a
 done
@@ -71,6 +76,10 @@ node() { # number state head [base] [base-repository]
 prs() { # worktree total nodes-json
   printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":%s,"nodes":%s}}}}}\n' \
     "$2" "$3" > "$FIX/$(sha_of "$1").json"
+}
+cmp() { # worktree head status behind merge-base
+  printf '{"status":"%s","behind_by":%s,"ahead_by":1,"merge_base_commit":{"sha":"%s"}}\n' \
+    "$3" "$4" "$5" > "$FIX/cmp-$(sha_of "$1")-$2.json"
 }
 raw() { printf '%s\n' "$2" > "$FIX/$(sha_of "$1").json"; }
 entry() { # worktree class [unpushed] [local_only] [path]
@@ -128,6 +137,8 @@ prs w-merged 1 "[$(node 11 MERGED "$(sha_of w-merged)")]"
 prs w-open   1 "[$(node 12 OPEN "$(sha_of w-open)" main devantler-tech/platform)]"
 prs w-closed 1 "[$(node 13 CLOSED "$(sha_of w-closed)")]"
 prs w-other  1 "[$(node 14 MERGED "$OTHER")]"
+# The head that merged does not contain w-other's commit: the two diverged.
+cmp w-other "$OTHER" diverged 2 "$(printf '%040d' 98)"
 prs w-nopr   0 '[]'
 raw w-absent '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":null}}}'
 prs w-both   2 "[$(node 17 CLOSED "$(sha_of w-both)"),$(node 18 MERGED "$(sha_of w-both)")]"
@@ -159,11 +170,73 @@ n=$(grep -c " $(sha_of w-merged) " "$CALLS")
 if [ "$n" = 1 ]; then ok 'one lookup per repository and commit'; else bad 'one lookup per repository and commit' "calls=$n"; fi
 check 'owner, name and host are the ones sent' grep -q "^devantler-tech/platform $(sha_of w-open) github.com " "$CALLS"
 check 'the closing line carries the totals' out_has \
-  $'^CHECKED\tmerged=4\tmerged_other_base=2\topen=1\tclosed=1\tother_head=1\tno_pr=1\tnot_on_github=1\tnot_checked=0\tother_classes=0\tunknown=0$'
+  $'^CHECKED\tmerged=4\tmerged_ancestor=0\tmerged_other_base=2\topen=1\tclosed=1\tother_head=1\tno_pr=1\tnot_on_github=1\tnot_checked=0\tother_classes=0\tunknown=0$'
 : > "$CALLS"
 OUT=$(GH_HOST=ghe.example.invalid GH_REPO=someone/else PATH="$BIN:$PATH" bash "$SUT" "$ROOT" < "$TMP/in" 2>"$TMP/err"); RC=$?
 if [ "$RC" = 0 ] && ! grep -qv ' github.com unset/unset$' "$CALLS"; then ok 'an inherited GH_HOST or GH_REPO is not honoured'
 else bad 'an inherited GH_HOST or GH_REPO is not honoured' "rc=$RC $(head -2 "$CALLS")"; fi
+
+echo '== a commit in the history of a merged pull request'
+# The pull request moved on from the commit and then merged: no pull request has the commit
+# as its head, and only the comparison can say whether the head that merged contains it.
+for w in w-anc w-anc-fail w-anc-odd w-anc-second w-anc-stacked w-anc-fork w-anc-open w-anc-badhead w-anc-ident w-anc-retry w-anc-unsure; do
+  add_sub "$w" 'git@github.com:devantler-tech/ksail.git'
+done
+H1=$(printf '%040d' 71); H2=$(printf '%040d' 72)
+prs w-anc         1 "[$(node 51 MERGED "$H1")]"
+cmp w-anc "$H1" ahead 0 "$(sha_of w-anc)"
+prs w-anc-fail    1 "[$(node 52 MERGED "$H1")]"
+prs w-anc-odd     1 "[$(node 53 MERGED "$H1")]"
+cmp w-anc-odd "$H1" ahead 0 "$OTHER"
+prs w-anc-second  2 "[$(node 54 MERGED "$H1"),$(node 55 MERGED "$H2")]"
+cmp w-anc-second "$H1" diverged 3 "$OTHER"
+cmp w-anc-second "$H2" ahead 0 "$(sha_of w-anc-second)"
+prs w-anc-ident   1 "[$(node 60 MERGED "$H1")]"
+cmp w-anc-ident "$H1" identical 0 "$(sha_of w-anc-ident)"
+# w-anc-retry: the first comparison cannot be read, the second proves it.
+prs w-anc-retry   2 "[$(node 62 MERGED "$H1"),$(node 63 MERGED "$H2")]"
+cmp w-anc-retry "$H2" ahead 0 "$(sha_of w-anc-retry)"
+# w-anc-unsure: the first comparison cannot be read, the second says no.
+prs w-anc-unsure  2 "[$(node 64 MERGED "$H1"),$(node 65 MERGED "$H2")]"
+cmp w-anc-unsure "$H2" diverged 3 "$OTHER"
+prs w-anc-stacked 1 "[$(node 56 MERGED "$H1" feature-base)]"
+prs w-anc-fork    1 "[$(node 57 MERGED "$H1" main someone-else/ksail)]"
+prs w-anc-open    1 "[$(node 58 OPEN "$H1")]"
+prs w-anc-badhead 1 "[$(node 59 MERGED 'main/../../x')]"
+{ entry w-anc unpushed; entry w-anc-second unpushed; entry w-anc-stacked unpushed; entry w-anc-retry unpushed
+  entry w-anc-fork unpushed; entry w-anc-open unpushed; entry w-other unpushed; } > "$TMP/in"; seal "$TMP/in"
+run < "$TMP/in"
+expect 'an ancestor of the head that merged is merged-ancestor'      w-anc         'merged-ancestor pr=51 other_local=0'
+expect 'the pull request that proves it is the one named'            w-anc-second  'merged-ancestor pr=55 other_local=0'
+expect 'an unreadable comparison does not hide a later one that proves it' w-anc-retry 'merged-ancestor pr=63 other_local=0'
+expect 'a pull request merged into another branch proves nothing'    w-anc-stacked 'other-head pr=56 other_local=0'
+expect "a pull request merged into a fork proves nothing"            w-anc-fork    'other-head pr=57 other_local=0'
+expect 'an open pull request at another head proves nothing'         w-anc-open    'other-head pr=58 other_local=0'
+expect 'a head that merged WITHOUT the commit stays other-head'      w-other       'other-head pr=14 other_local=0'
+check 'every entry answered: exit 0' rc_is 0
+check 'the comparison names this commit and the head that merged' \
+  grep -q "^devantler-tech/ksail cmp-$(sha_of w-anc)-$H1 github.com " "$CALLS"
+check 'no comparison is made for a pull request that could not prove it' eval \
+  '! grep -q "cmp-$(sha_of w-anc-stacked)-\|cmp-$(sha_of w-anc-fork)-\|cmp-$(sha_of w-anc-open)-" "$CALLS"'
+check 'the closing line counts them apart from merged' out_has $'^CHECKED\tmerged=0\tmerged_ancestor=3\tmerged_other_base=0\topen=0\tclosed=0\tother_head=4\t'
+anc_unknown() { # name worktree
+  { entry "$2" unpushed; } > "$TMP/in"; seal "$TMP/in"
+  run < "$TMP/in"
+  if [ "$RC" = 2 ] && out_has "^UNKNOWN	$2	sub	the pull request lookup failed$" && [ -z "$(verdict_of "$2")" ]; then
+    ok "$1"; else bad "$1" "rc=$RC out=$OUT"; fi
+}
+anc_unknown 'a comparison that failed is UNKNOWN, never other-head or merged-ancestor' w-anc-fail
+anc_unknown 'an answer whose merge base is another commit but claims no divergence'    w-anc-odd
+anc_unknown 'identical is never proof: the head that merged cannot be this commit'            w-anc-ident
+anc_unknown 'an unreadable comparison beside one that says no is UNKNOWN, not other-head' w-anc-unsure
+anc_unknown 'a head that is not a commit id is never put in a request'                 w-anc-badhead
+check 'and no comparison was sent for it' eval '! grep -q " cmp-" "$CALLS"'
+printf '{"status":"ahead","behind_by":0}\n' > "$FIX/cmp-$(sha_of w-anc-fail)-$H1.json"
+anc_unknown 'an answer with no merge base' w-anc-fail
+printf '{"message":"Not Found"}\n' > "$FIX/cmp-$(sha_of w-anc-fail)-$H1.json"
+anc_unknown 'an error body' w-anc-fail
+cmp w-anc-fail "$H1" behind 0 "$OTHER"
+anc_unknown 'an answer that is behind by nothing' w-anc-fail
 
 echo '== never queried'
 { entry w-foreign unpushed; entry w-gitlab unpushed; entry w-lookalike unpushed
@@ -347,8 +420,16 @@ tip_is 'a commit only this machine has is not-on-github'         "$lost"    'not
 tip_is 'a stash is reported, never looked up'                    "$stashed" 'stash kind=stash pr=-'
 check 'the stash never reached GitHub' eval '! grep -q "$stashed" "$CALLS"'
 check 'the entry row still says its HEAD was not looked up' out_has '^MERGE-CHECK	wt	sub	not-checked	'
-check 'the closing line totals the tips' out_has '	tips=4	tips_merged=1	tips_pushed_ref=1	tips_unsettled=2	tips_other_classes=0$'
+check 'the closing line totals the tips' out_has '	tips=4	tips_merged=1	tips_merged_ancestor=0	tips_pushed_ref=1	tips_unsettled=2	tips_other_classes=0$'
 check 'and exits 0' rc_is 0
+
+# The same tip, when its pull request moved on and merged with it in its history.
+commit_fix "$side" "$(node 61 MERGED "$H1")"
+printf '{"status":"ahead","behind_by":0,"ahead_by":2,"merge_base_commit":{"sha":"%s"}}\n' "$side" > "$FIX/cmp-$side-$H1.json"
+tips_run
+tip_is 'a branch tip in the history of a merged pull request is merged-ancestor' "$side" 'merged-ancestor kind=branch pr=61'
+check 'the closing line counts it apart from merged' out_has '	tips_merged=0	tips_merged_ancestor=1	tips_pushed_ref=1	tips_unsettled=2	'
+commit_fix "$side" "$(node 41 MERGED "$side")"; rm -f "$FIX/cmp-$side-$H1.json"
 
 ref_fix "{\"target\":{\"oid\":\"$OTHER\"}}"; tips_run
 tip_is 'a tag GitHub holds at ANOTHER commit falls back to the commit lookup' "$tagged" 'open kind=ref pr=42'
@@ -381,7 +462,7 @@ check 'a tip whose commit count no longer matches is UNKNOWN' eval '[ -z "$(tip_
 check 'a TIP row before any entry is malformed' eval '[ "$RC" = 2 ] && grep -q "malformed" "$TMP/err"'
 # Tips of an entry in another class are counted, not looked up.
 echo edit > "$ts/f.new"; bash "$INVENTORY" "$T" --tips > "$TMP/tips.other"; tips_run "$TMP/tips.other"
-check 'tips of an untracked entry are counted, not looked up' eval 'grep -q "	tips=4	tips_merged=0	tips_pushed_ref=0	tips_unsettled=0	tips_other_classes=4$" <<<"$OUT" && [ ! -s "$CALLS" ] && [ "$RC" = 0 ]'
+check 'tips of an untracked entry are counted, not looked up' eval 'grep -q "	tips=4	tips_merged=0	tips_merged_ancestor=0	tips_pushed_ref=0	tips_unsettled=0	tips_other_classes=4$" <<<"$OUT" && [ ! -s "$CALLS" ] && [ "$RC" = 0 ]'
 rm -f "$ts/f.new"
 
 echo "== content comparison with a reference checkout"

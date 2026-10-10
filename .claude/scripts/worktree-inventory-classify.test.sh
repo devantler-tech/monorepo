@@ -88,6 +88,8 @@ done
 one unpushed 1 1 < /dev/null
 { mc w s merged "$H1"; chk_end; } > "$CHK"
 expect_class "an unpushed HEAD whose pull request merged is merged in content" w s merged-in-content
+{ mc w s merged-ancestor "$H1"; chk_end; } > "$CHK"
+expect_class "an unpushed HEAD in the history of a merged pull request is merged in content" w s merged-in-content
 for v in merged-other-base closed other-head no-pr not-on-github not-checked; do
   { mc w s "$v" "$H1"; chk_end; } > "$CHK"
   expect_class "an unpushed HEAD read as $v needs a person" w s needs-a-person
@@ -109,6 +111,8 @@ $(tip w s "$T2" ref)
 EOF
 { mc w s not-checked "$H1"; tc w s merged "$T1" branch; tc w s pushed-ref "$T2" ref; chk_end; } > "$CHK"
 expect_class "every tip settled is merged in content" w s merged-in-content
+{ mc w s not-checked "$H1"; tc w s merged-ancestor "$T1" branch; tc w s pushed-ref "$T2" ref; chk_end; } > "$CHK"
+expect_class "a tip in the history of a merged pull request is settled" w s merged-in-content
 { mc w s not-checked "$H1"; tc w s merged "$T1" branch; tc w s no-pr "$T2" ref; chk_end; } > "$CHK"
 expect_class "one unsettled tip among settled ones needs a person" w s needs-a-person
 if grep -q "$(printf 'settled=1\tunsettled=1\tin_flight=0')" "$OUT"; then ok "the counts name one settled and one unsettled commit"

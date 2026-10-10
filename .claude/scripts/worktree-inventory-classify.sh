@@ -30,7 +30,8 @@
 # Classes, for an entry:
 #   nothing-held       the inventory read it as `clean`: a removal destroys nothing
 #   merged-in-content  it holds commits only, and every one is settled: a pull request with
-#                      that head was merged into the default branch (`merged`), GitHub holds
+#                      that head was merged into the default branch (`merged`), or one that
+#                      merged there has the commit in its history (`merged-ancestor`), GitHub holds
 #                      the same ref (`pushed-ref`), or the content check found it `reached`,
 #                      `no-change` or `same-change`. Needs no rescue
 #   tool-output        nothing but files the repository's own ignore rules cover. A removal
@@ -107,14 +108,14 @@ rc=0
   function judge(key, verdict, kind, content) {
     if (verdict == "open") { flight[key]++; return }
     if (kind == "stash" || verdict == "stash") { unsettled[key]++; return }
-    if (verdict == "merged" || verdict == "pushed-ref") { settled[key]++; return }
+    if (verdict == "merged" || verdict == "merged-ancestor" || verdict == "pushed-ref") { settled[key]++; return }
     if (content == "reached" || content == "no-change" || content == "same-change") { settled[key]++; return }
     unsettled[key]++
   }
   BEGIN {
     split("clean ignored modified untracked nested unpushed local-only", a, " ")
     for (i in a) inv_class[a[i]] = 1
-    split("merged merged-other-base open closed other-head no-pr not-on-github not-checked", a, " ")
+    split("merged merged-ancestor merged-other-base open closed other-head no-pr not-on-github not-checked", a, " ")
     for (i in a) { head_verdict[a[i]] = 1; tip_verdict[a[i]] = 1 }
     tip_verdict["stash"] = 1; tip_verdict["pushed-ref"] = 1
     split("reached no-change same-change differs no-reference", a, " ")

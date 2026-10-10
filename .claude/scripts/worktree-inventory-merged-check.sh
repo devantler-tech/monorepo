@@ -35,6 +35,13 @@
 #   other-head     GitHub has the commit and pull requests contain it, but none has it as
 #                  its head (the pull request moved on, or was rebuilt). Not proof of
 #                  anything: `pr=` names one to read
+#   merged-ancestor  no pull request has this commit as its head, but one that was merged
+#                  into this repository's default branch contains it, and GitHub's own
+#                  comparison shows the commit is an ancestor of the head that merged:
+#                  the pull request moved on from this commit and then merged with it
+#                  in its history, so what the branch kept of it reached the default
+#                  branch. A later commit of that branch may have changed or undone it:
+#                  that was the branch's own reviewed outcome, not work left behind
 #   no-pr          GitHub has the commit, and no pull request contains it
 #   not-on-github  GitHub does not have the commit: it exists only on this machine
 #   not-checked    not looked up: the repository is outside devantler-tech, or its origin
@@ -53,7 +60,7 @@
 #   pushed-ref     a `kind=ref` tip (a tag, mostly) that GitHub holds under the same name
 #                  at the same commit: it was never local-only, only outside every branch
 # An entry's commits away from HEAD need no rescue only when EVERY one of its tips is
-# `merged` or `pushed-ref`. `no-pr` and `other-head` say GitHub has the commit object, not
+# `merged`, `merged-ancestor` or `pushed-ref`. `no-pr` and `other-head` say GitHub has the commit object, not
 # that anything there still keeps it. Tips of entries in other classes are counted, not
 # looked up.
 #
@@ -78,7 +85,7 @@
 # `reached`, `no-change` and `same-change` say the commit's content needs no rescue.
 # A reference that was fetched long ago can only turn those into `differs`.
 #
-# Only `merged` with other_local=0 says the entry's commits need no rescue. Every other
+# Only `merged` or `merged-ancestor` with other_local=0 says the entry's commits need no rescue. Every other
 # row means: do not treat the entry as disposable on this evidence.
 #
 # Exit codes: 0 every `unpushed` entry and every looked-up tip got a verdict; 2 usage error, an inventory that is
@@ -133,9 +140,9 @@ on_exit() {
 }
 trap on_exit EXIT
 
-n_merged=0; n_otherbase=0; n_open=0; n_closed=0; n_other=0; n_nopr=0; n_absent=0; n_notchecked=0
+n_merged=0; n_ancestor=0; n_otherbase=0; n_open=0; n_closed=0; n_other=0; n_nopr=0; n_absent=0; n_notchecked=0
 unknown=0; other_rows=0; saw_checked=0; bad_input=0
-rows_tip=0; t_merged=0; t_settled=0; t_unsettled=0; t_skipped=0
+rows_tip=0; t_merged=0; t_ancestor=0; t_settled=0; t_unsettled=0; t_skipped=0
 # The entry the following TIP rows belong to: its state is one of `none` (no entry yet),
 # `skip` (another class: its tips are counted only), `unknown` (the entry got an UNKNOWN
 # row, which already covers its tips), `outside` (not a devantler-tech repository) or `ok`.
@@ -178,6 +185,28 @@ origin_repo() {
   printf '%s\n' "$rest"
 }
 
+# is_ancestor <name> <sha> <head> -> 0 when GitHub's comparison shows <sha> is an ancestor of
+# <head>, 1 when it shows it is not, 2 when the read failed or its answer
+# cannot be trusted. The merge base of the two IS <sha> exactly when <sha> is an ancestor.
+# `identical` is never accepted: it would mean <head> is <sha>, and then a pull request has
+# <sha> as its head, which the caller has already ruled out.
+is_ancestor() {
+  local name=$1 sha=$2 head=$3 json answer
+  case "$name" in ''|.|..|*/*) return 2 ;; esac
+  json=$(gh api --hostname github.com "repos/$OWNER/$name/compare/$sha...$head" 2>/dev/null) || return 2
+  answer=$(printf '%s' "$json" | jq -r --arg sha "$sha" '
+    if (type != "object") or ((.merge_base_commit.sha | type) != "string")
+       or ((.status | type) != "string") or ((.behind_by | type) != "number")
+       or ((.ahead_by | type) != "number") then "unknown"
+    elif .merge_base_commit.sha == $sha and .behind_by == 0 and .ahead_by > 0
+         and .status == "ahead" then "yes"
+    elif .merge_base_commit.sha != $sha and .behind_by > 0
+         and (.status == "diverged" or .status == "behind") then "no"
+    else "unknown"
+    end' 2>/dev/null) || return 2
+  case "$answer" in yes) return 0 ;; no) return 1 ;; *) return 2 ;; esac
+}
+
 # lookup <name> <sha> -> prints `<verdict> <pr|->`. Non-zero when the read failed or its
 # answer cannot be trusted; nothing is printed then.
 lookup() {
@@ -214,11 +243,43 @@ lookup() {
             elif ($at | map(select(.state == "CLOSED")) | length) > 0
               then "closed \($at | map(select(.state == "CLOSED")) | .[0].number)"
             elif ($at | length) > 0 then empty
-            else "other-head \($p.nodes[0].number)"
+            else ($p.nodes | map(select(.state == "MERGED" and .baseRefName == $default
+                         and ((.baseRepository.nameWithOwner // "") | ascii_downcase) == ($repo | ascii_downcase)))) as $anc
+              | if ($anc | length) > 0
+                then "ancestor? \($p.nodes[0].number) \($anc | map("\(.number):\(.headRefOid)") | join(","))"
+                else "other-head \($p.nodes[0].number)"
+                end
             end
         end
     end' 2>/dev/null) || return 1
+  # A pull request merged into the default branch contains the commit, at another head.
+  # Whether the commit is in the history that merged is a second read; until one of them
+  # proves it, the verdict stays `other-head`.
+  case "$answer" in 'ancestor? '[0-9]*' '[0-9]*)
+    local first=${answer#ancestor? } list pair n h is unsure=0
+    list=${first#* }; first=${first%% *}
+    case "$first" in ''|*[!0-9]*) return 1 ;; esac
+    answer="other-head $first"
+    while [ -n "$list" ]; do
+      pair=${list%%,*}
+      case "$list" in *,*) list=${list#*,} ;; *) list='' ;; esac
+      n=${pair%%:*}; h=${pair#*:}
+      case "$n" in ''|*[!0-9]*) return 1 ;; esac
+      [ ${#h} -eq 40 ] || return 1
+      case "$h" in *[!0-9a-f]*) return 1 ;; esac
+      is=0; is_ancestor "$name" "$sha" "$h" || is=$?
+      case "$is" in
+        0) answer="merged-ancestor $n"; break ;;
+        1) ;;
+        # An unreadable comparison settles nothing, and a later pull request may still prove it.
+        *) unsure=1 ;;
+      esac
+    done
+    # Nothing proved it, and one comparison could not be read: `other-head` would be a guess.
+    case "$answer" in other-head\ *) [ "$unsure" = 0 ] || return 1 ;; esac ;;
+  esac
   case "$answer" in
+    'merged-ancestor '[0-9]*) ;;
     'merged '[0-9]*|'merged-other-base '[0-9]*|'open '[0-9]*|'closed '[0-9]*|'other-head '[0-9]*|'no-pr -'|'not-on-github -') ;;
     *) return 1 ;;
   esac
@@ -251,6 +312,7 @@ ref_held() {
 count_verdict() {
   case "$1" in
     merged)        n_merged=$((n_merged+1)) ;;
+    merged-ancestor) n_ancestor=$((n_ancestor+1)) ;;
     merged-other-base) n_otherbase=$((n_otherbase+1)) ;;
     open)          n_open=$((n_open+1)) ;;
     closed)        n_closed=$((n_closed+1)) ;;
@@ -408,6 +470,7 @@ close_entry() {
 tip_row() {
   case "$3" in
     merged)     t_merged=$((t_merged+1)) ;;
+    merged-ancestor) t_ancestor=$((t_ancestor+1)) ;;
     pushed-ref) t_settled=$((t_settled+1)) ;;
     *)          t_unsettled=$((t_unsettled+1)) ;;
   esac
@@ -562,12 +625,12 @@ close_entry
 # The tip totals are printed only when the inventory was asked for tips.
 tip_totals=''
 case "$checked_line" in *$'\t'tips=*)
-  tip_totals=$'\t'"tips=$rows_tip"$'\t'"tips_merged=$t_merged"$'\t'"tips_pushed_ref=$t_settled"$'\t'"tips_unsettled=$t_unsettled"$'\t'"tips_other_classes=$t_skipped" ;;
+  tip_totals=$'\t'"tips=$rows_tip"$'\t'"tips_merged=$t_merged"$'\t'"tips_merged_ancestor=$t_ancestor"$'\t'"tips_pushed_ref=$t_settled"$'\t'"tips_unsettled=$t_unsettled"$'\t'"tips_other_classes=$t_skipped" ;;
 esac
 # The content totals are printed only when a reference checkout was given.
 [ -z "$REFERENCE" ] || tip_totals="$tip_totals"$'\t'"content_reached=$c_reached"$'\t'"content_same_change=$c_same"$'\t'"content_no_change=$c_empty"$'\t'"content_differs=$c_differs"$'\t'"content_no_reference=$c_noref"
-printf 'CHECKED\tmerged=%s\tmerged_other_base=%s\topen=%s\tclosed=%s\tother_head=%s\tno_pr=%s\tnot_on_github=%s\tnot_checked=%s\tother_classes=%s\tunknown=%s%s\n' \
-  "$n_merged" "$n_otherbase" "$n_open" "$n_closed" "$n_other" "$n_nopr" "$n_absent" "$n_notchecked" "$other_rows" "$unknown" "$tip_totals"
+printf 'CHECKED\tmerged=%s\tmerged_ancestor=%s\tmerged_other_base=%s\topen=%s\tclosed=%s\tother_head=%s\tno_pr=%s\tnot_on_github=%s\tnot_checked=%s\tother_classes=%s\tunknown=%s%s\n' \
+  "$n_merged" "$n_ancestor" "$n_otherbase" "$n_open" "$n_closed" "$n_other" "$n_nopr" "$n_absent" "$n_notchecked" "$other_rows" "$unknown" "$tip_totals"
 [ "$saw_checked" = 1 ] || die "the inventory has no closing CHECKED line: it is incomplete"
 [ "$bad_input" = 0 ] || die "the inventory holds an UNREADABLE, malformed or trailing row: it is incomplete"
 # The closing line is the inventory's own account of what it printed. Rows lost on the way
