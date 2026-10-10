@@ -151,8 +151,8 @@ echo "untracked files and ignored files"
 entry_f() {
   printf 'ENTRY\t%s\t%s\t%s\tidle_days=3\thead=%s\tunpushed=%s\tlocal_only=%s\tmodified=0\tuntracked=%s\tnested=0\tignored=%s\n' "$@"
 }
-fcr() { # <worktree> <submodule> <verdict> <files> <same>
-  printf 'FILE-CHECK\t%s\t%s\t%s\tfiles=%s\tsame=%s\tbase=%s\n' "$@" "$H2"
+fcr() { # <worktree> <submodule> <verdict> <files> <same> [<default_ignores>]
+  printf 'FILE-CHECK\t%s\t%s\t%s\tfiles=%s\tsame=%s\tdefault_ignores=%s\tbase=%s\n' "$1" "$2" "$3" "$4" "$5" "${6:-0}" "$H2"
 }
 # one_f <unpushed> <local_only> <untracked> <ignored> — one `untracked` entry `w s`.
 one_f() { { entry_f w s untracked "$H1" "$@"; cat; inv_end 1; } > "$INV"; }
@@ -216,7 +216,35 @@ expect_refused "more matches than files" "malformed FILE-CHECK row"
 { fcr w s shiny 2 2; chk_end; } > "$CHK"
 expect_refused "a FILE-CHECK verdict this script does not know" "unknown FILE-CHECK verdict shiny"
 { printf 'FILE-CHECK\tw\ts\tsame-as-default\tfiles=2\tsame=2\n'; chk_end; } > "$CHK"
-expect_refused "a FILE-CHECK row that is cut short" "a FILE-CHECK row has 6 fields, not 7"
+expect_refused "a FILE-CHECK row that is cut short" "a FILE-CHECK row has 6 fields, not 8"
+{ printf 'FILE-CHECK\tw\ts\tsame-as-default\tfiles=2\tsame=2\tbase=%s\n' "$H2"; chk_end; } > "$CHK"
+expect_refused "a FILE-CHECK row without its ignored count" "a FILE-CHECK row has 7 fields, not 8"
+{ fcr w s default-ignores 2 2 0; chk_end; } > "$CHK"
+expect_refused "default-ignores with no ignored file" "without accounting for every file"
+{ fcr w s default-ignores 2 0 1; chk_end; } > "$CHK"
+expect_refused "default-ignores with a file nothing accounts for" "without accounting for every file"
+{ fcr w s differs 2 1 2; chk_end; } > "$CHK"
+expect_refused "more copies and ignored files than files" "malformed FILE-CHECK row"
+{ fcr w s differs 2 1 x; chk_end; } > "$CHK"
+expect_refused "an ignored count that is not a number" "malformed FILE-CHECK row"
+
+{ fcr w s default-ignores 2 0 2; chk_end; } > "$CHK"
+expect_class "files the default branch ignores are tool output, never nothing" w s tool-output
+{ fcr w s default-ignores 2 1 1; chk_end; } > "$CHK"
+expect_class "a copy beside a file the default branch ignores is tool output" w s tool-output
+{ fcr w s differs 2 0 1; chk_end; } > "$CHK"
+expect_class "one file no rule covers keeps the entry with a person" w s needs-a-person
+one_f 1 1 1 0 < /dev/null
+{ fcr w s default-ignores 1 0 1; mc w s merged "$H1"; chk_end; } > "$CHK"
+expect_class "ignored-by-default files beside a merged HEAD are tool output" w s tool-output
+{ fcr w s default-ignores 1 0 1; mc w s github-bot "$H1"; chk_end; } > "$CHK"
+expect_class "ignored-by-default files beside a bot's commit are tool output" w s tool-output
+{ fcr w s default-ignores 1 0 1; mc w s no-pr "$H1"; chk_end; } > "$CHK"
+expect_class "ignored-by-default files do not settle a HEAD no evidence settles" w s needs-a-person
+{ fcr w s default-ignores 1 0 1; mc w s open "$H1"; chk_end; } > "$CHK"
+expect_class "ignored-by-default files never lower work in flight" w s work-in-flight
+{ fcr w s default-ignores 1 0 1; chk_end; } > "$CHK"
+expect_refused "ignored-by-default files with an unexamined HEAD" "has no row for w s"
 one unpushed 1 1 < /dev/null
 { fcr w s same-as-default 2 2; mc w s merged "$H1"; chk_end; } > "$CHK"
 expect_refused "a FILE-CHECK row for an entry that is not untracked" "which the inventory reads as unpushed"
