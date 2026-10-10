@@ -102,17 +102,27 @@
 #
 # With --content-reference, an `untracked` entry is examined too. Its files are compared with
 # the files the default branch holds at the same paths, and one row says what was found:
-#   FILE-CHECK <worktree> <submodule> <verdict> files=<n> same=<n> base=<sha|->
+#   FILE-CHECK <worktree> <submodule> <verdict> files=<n> same=<n> default_ignores=<n> base=<sha|->
 #   same-as-default  every untracked file is, byte for byte, the file the default branch
 #                    holds at that path: a removal deletes a copy, not the only one. The
 #                    working copy is usually just older than the commit that added the file
-#   differs          at least one file is not: the default branch has no file there, or
-#                    another one, or the entry is a directory, a symbolic link or anything
-#                    but a plain file, or it lists more files than are compared (`FILE_MAX`)
+#   default-ignores  every untracked file is such a copy or a file the default branch's own
+#                    ignore rules cover, and at least one is the latter: a current working
+#                    copy would not list it. A removal deletes that file, and nothing says
+#                    the default branch holds it
+#   differs          at least one file is neither: the default branch has another file
+#                    there, or none and no rule for it, or the entry is a directory, a
+#                    symbolic link or anything but a plain file, or it lists more files than
+#                    are compared (`FILE_MAX`)
 #   no-reference     the checkout holds no copy of this repository at that path
 # A file is hashed as it is on disk: no filter, line-ending conversion or other program the
 # repository configures is run, so only a file stored unchanged in the default branch can
 # match. `files=` is the inventory's count, re-read here; `same=` counts the matches.
+# `default_ignores=` counts the files the default branch's rules cover. Only the `.gitignore`
+# files of the default branch are read for it, with letter case kept apart: the entry's own
+# rules, the machine's and the reference checkout's working files play no part. A path the
+# default branch holds is never counted, whatever a rule says, and neither is a file the
+# rules only cover as a directory.
 # Such an entry can hold commits as well. When it does, a MERGE-CHECK row follows its
 # FILE-CHECK row (`not-checked` when HEAD is pushed), and its TIP rows are looked up like those
 # of an `unpushed` entry: its files are never settled while its commits stay unexamined.
@@ -564,7 +574,7 @@ content_check() {
 }
 
 # --- untracked files (--content-reference) -------------------------------------------------
-f_same=0; f_differs=0; f_noref=0
+f_same=0; f_ignores=0; f_differs=0; f_noref=0
 
 # untracked_files <dir> <count> — writes the entry's untracked paths, NUL-separated, to
 # $PATCH_DIR/untracked.z. Non-zero unless the working tree holds exactly <count> untracked
@@ -584,26 +594,64 @@ untracked_files() {
   [ "$count" = "$want" ]
 }
 
-file_row() { # verdict files same base
+file_row() { # verdict files same default-ignores base
   case "$1" in
     same-as-default) f_same=$((f_same+1)) ;;
+    default-ignores) f_ignores=$((f_ignores+1)) ;;
     differs)         f_differs=$((f_differs+1)) ;;
     no-reference)    f_noref=$((f_noref+1)) ;;
   esac
-  printf 'FILE-CHECK\t%s\t%s\t%s\tfiles=%s\tsame=%s\tbase=%s\n' "$cur_label" "$cur_path" "$1" "$2" "$3" "$4"
+  printf 'FILE-CHECK\t%s\t%s\t%s\tfiles=%s\tsame=%s\tdefault_ignores=%s\tbase=%s\n' "$cur_label" "$cur_path" "$1" "$2" "$3" "$4" "$5"
+}
+
+# default_rules -> sets cur_rules to an empty repository holding nothing but the `.gitignore`
+# files of the default branch, each at its own path. Built once per base.
+default_rules() {
+  local d="$PATCH_DIR/rules-$cur_base" mode type oid p
+  cur_rules="$d/tree"
+  [ ! -f "$d/built" ] || return 0
+  rm -rf "$d" || return 1
+  mkdir -p "$d" || return 1
+  git init -q "$cur_rules" > /dev/null 2>&1 || return 1
+  # A template can ship rules of its own.
+  rm -f "$cur_rules/.git/info/exclude" || return 1
+  gitc ls-tree -r -z --format='%(objectmode) %(objecttype) %(objectname) %(path)' "$cur_base" > "$d/list" 2> /dev/null || return 1
+  while IFS=' ' read -r -d '' mode type oid p; do
+    case "$p" in .gitignore|*/.gitignore) ;; *) continue ;; esac
+    # A symbolic link is not read as a rule file.
+    case "$mode $type" in '100644 blob'|'100755 blob') ;; *) continue ;; esac
+    case "$p" in */*) mkdir -p "$cur_rules/${p%/*}" || return 1 ;; esac
+    gitc cat-file blob "$oid" > "$cur_rules/$p" 2> /dev/null || return 1
+  done < "$d/list"
+  : > "$d/built" || return 1
+}
+
+# default_ignored <list> -> prints how many of the NUL-separated paths in <list> the default
+# branch's rules cover. Non-zero when that cannot be read.
+default_ignored() {
+  local rc=0 rec count=0
+  default_rules || return 1
+  # 0: at least one path is covered. 1: none is. Anything else is a failed read.
+  git -C "$cur_rules" -c core.excludesFile=/dev/null -c core.ignoreCase=false -c core.fsmonitor=false \
+    check-ignore -z --stdin < "$1" > "$1.out" 2> "$1.err" || rc=$?
+  case "$rc" in 0|1) ;; *) return 1 ;; esac
+  [ ! -s "$1.err" ] || return 1
+  while IFS= read -r -d '' rec; do count=$((count+1)); done < "$1.out"
+  printf '%s\n' "$count"
 }
 
 # file_check <dir> <count> — the FILE-CHECK row of the current entry, from the list
 # untracked_files wrote. Returns 1 after an UNKNOWN row instead.
 file_check() {
-  local dir=$1 n=$2 same=0 p entry mine
+  local dir=$1 n=$2 same=0 ign=0 absent=0 p entry mine
   resolve_reference
   case "$cur_refstate" in
-    none) file_row no-reference "$n" 0 -; return 0 ;;
+    none) file_row no-reference "$n" 0 0 -; return 0 ;;
     ok) ;;
     *) unknown_row "$cur_label" "$cur_path" "cannot read the default branch in the reference checkout"; return 1 ;;
   esac
-  if [ "$n" -gt "$FILE_MAX" ]; then file_row differs "$n" 0 "$cur_base"; return 0; fi
+  if [ "$n" -gt "$FILE_MAX" ]; then file_row differs "$n" 0 0 "$cur_base"; return 0; fi
+  : > "$PATCH_DIR/absent.z" || { unknown_row "$cur_label" "$cur_path" "cannot write a temporary file"; return 1; }
   while IFS= read -r -d '' p; do
     # git lists an untracked directory it does not descend into with a trailing slash.
     case "$p" in */) continue ;; esac
@@ -611,6 +659,12 @@ file_check() {
     # The path is data: it is matched literally, never as a pattern.
     entry=$(GIT_LITERAL_PATHSPECS=1 gitc ls-tree --format='%(objectmode) %(objecttype) %(objectname)' "$cur_base" -- "$p" 2>/dev/null) \
       || { unknown_row "$cur_label" "$cur_path" "cannot read a file of the default branch"; return 1; }
+    # No file there at all: only then can a rule of the default branch speak for it.
+    if [ -z "$entry" ]; then
+      printf '%s\0' "$p" >> "$PATCH_DIR/absent.z" \
+        || { unknown_row "$cur_label" "$cur_path" "cannot write a temporary file"; return 1; }
+      absent=$((absent+1)); continue
+    fi
     case "$entry" in '100644 blob '*|'100755 blob '*) ;; *) continue ;; esac
     mine=$(git hash-object --no-filters -- "$dir/$p" 2>/dev/null) \
       || { unknown_row "$cur_label" "$cur_path" "cannot read an untracked file"; return 1; }
@@ -618,8 +672,16 @@ file_check() {
     [ "${entry##* }" = "$mine" ] || continue
     same=$((same+1))
   done < "$PATCH_DIR/untracked.z"
-  if [ "$same" = "$n" ]; then file_row same-as-default "$n" "$same" "$cur_base"
-  else file_row differs "$n" "$same" "$cur_base"; fi
+  if [ "$absent" -gt 0 ]; then
+    ign=$(default_ignored "$PATCH_DIR/absent.z") \
+      || { unknown_row "$cur_label" "$cur_path" "cannot read the ignore rules of the default branch"; return 1; }
+    case "$ign" in ''|*[!0-9]*) unknown_row "$cur_label" "$cur_path" "cannot read the ignore rules of the default branch"; return 1 ;; esac
+    [ "$ign" -le "$absent" ] \
+      || { unknown_row "$cur_label" "$cur_path" "cannot read the ignore rules of the default branch"; return 1; }
+  fi
+  if [ "$same" = "$n" ]; then file_row same-as-default "$n" "$same" 0 "$cur_base"
+  elif [ "$ign" -gt 0 ] && [ $((same+ign)) = "$n" ]; then file_row default-ignores "$n" "$same" "$ign" "$cur_base"
+  else file_row differs "$n" "$same" "$ign" "$cur_base"; fi
 }
 
 # close_entry — an entry that holds commits away from HEAD must have named at least one tip
@@ -841,7 +903,7 @@ case "$checked_line" in *$'\t'tips=*)
   tip_totals=$'\t'"tips=$rows_tip"$'\t'"tips_merged=$t_merged"$'\t'"tips_merged_ancestor=$t_ancestor"$'\t'"tips_github_bot=$t_bot"$'\t'"tips_pushed_ref=$t_settled"$'\t'"tips_unsettled=$t_unsettled"$'\t'"tips_other_classes=$t_skipped" ;;
 esac
 # The content totals are printed only when a reference checkout was given.
-[ -z "$REFERENCE" ] || tip_totals="$tip_totals"$'\t'"content_reached=$c_reached"$'\t'"content_same_change=$c_same"$'\t'"content_no_change=$c_empty"$'\t'"content_clean_merge=$c_clean"$'\t'"content_differs=$c_differs"$'\t'"content_no_reference=$c_noref"$'\t'"files_same_as_default=$f_same"$'\t'"files_differ=$f_differs"$'\t'"files_no_reference=$f_noref"
+[ -z "$REFERENCE" ] || tip_totals="$tip_totals"$'\t'"content_reached=$c_reached"$'\t'"content_same_change=$c_same"$'\t'"content_no_change=$c_empty"$'\t'"content_clean_merge=$c_clean"$'\t'"content_differs=$c_differs"$'\t'"content_no_reference=$c_noref"$'\t'"files_same_as_default=$f_same"$'\t'"files_default_ignores=$f_ignores"$'\t'"files_differ=$f_differs"$'\t'"files_no_reference=$f_noref"
 printf 'CHECKED\tmerged=%s\tmerged_ancestor=%s\tgithub_bot=%s\tmerged_other_base=%s\topen=%s\tclosed=%s\tother_head=%s\tno_pr=%s\tnot_on_github=%s\tnot_checked=%s\tother_classes=%s\tunknown=%s%s\n' \
   "$n_merged" "$n_ancestor" "$n_bot" "$n_otherbase" "$n_open" "$n_closed" "$n_other" "$n_nopr" "$n_absent" "$n_notchecked" "$other_rows" "$unknown" "$tip_totals"
 [ "$saw_checked" = 1 ] || die "the inventory has no closing CHECKED line: it is incomplete"

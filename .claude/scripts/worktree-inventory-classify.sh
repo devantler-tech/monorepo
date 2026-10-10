@@ -53,6 +53,9 @@
 # --content-reference, printed `FILE-CHECK ... same-as-default` for it: every untracked
 # file is a copy of the file the default branch holds at that path. It then gets the class
 # its commits earn, as an `unpushed` entry would, and merged-in-content when it holds none.
+# `FILE-CHECK ... default-ignores` does the same, but the entry is never classed below
+# tool-output: at least one of its files is covered by the default branch's ignore rules, is
+# not shown to be on the default branch, and dies with the entry.
 # `settled`, `unsettled`, `in_flight` and `github_bot` count the commits looked at: HEAD of an `unpushed`
 # entry, and each TIP. They are 0 for an entry whose files decided its class.
 #
@@ -133,7 +136,7 @@ rc=0
     tip_verdict["stash"] = 1; tip_verdict["pushed-ref"] = 1
     split("reached no-change same-change clean-merge differs no-reference", a, " ")
     for (i in a) content_verdict[a[i]] = 1
-    split("same-as-default differs no-reference", a, " ")
+    split("same-as-default default-ignores differs no-reference", a, " ")
     for (i in a) file_verdict[a[i]] = 1
     split("branch stash ref reflog", a, " ")
     for (i in a) tip_kind[a[i]] = 1
@@ -195,14 +198,15 @@ rc=0
     }
     if ($2 == "UNKNOWN") { unk[key] = 1; next }
     if ($2 == "FILE-CHECK") {
-      if (NF != 8) fail("a FILE-CHECK row has " (NF - 1) " fields, not 7")
+      if (NF != 9) fail("a FILE-CHECK row has " (NF - 1) " fields, not 8")
       if (e_class[key] != "untracked") fail("a FILE-CHECK row names " $3 " " $4 ", which the inventory reads as " e_class[key])
       if (key in fc) fail("the merged check compares the files of " $3 " " $4 " twice")
       if (!($5 in file_verdict)) fail("unknown FILE-CHECK verdict " $5)
-      t = val(6, "files"); k = val(7, "same"); val(8, "base")
-      if (!num_ok(t) || !num_ok(k) || k + 0 > t + 0) fail("malformed FILE-CHECK row")
+      t = val(6, "files"); k = val(7, "same"); d = val(8, "default_ignores"); val(9, "base")
+      if (!num_ok(t) || !num_ok(k) || !num_ok(d) || k + d > t + 0) fail("malformed FILE-CHECK row")
       if (t + 0 != e_untracked[key] + 0) fail("the FILE-CHECK row for " $3 " " $4 " counts other files than the inventory")
       if ($5 == "same-as-default" && (k + 0 != t + 0 || t + 0 == 0)) fail("a FILE-CHECK row says same-as-default without matching every file")
+      if ($5 == "default-ignores" && (k + d != t + 0 || d + 0 == 0)) fail("a FILE-CHECK row says default-ignores without accounting for every file")
       fc[key] = $5
       next
     }
@@ -254,7 +258,7 @@ rc=0
       else if (c == "clean") cls = "nothing-held"
       else if (c == "ignored") cls = "tool-output"
       else if (c == "modified" || c == "nested") cls = "needs-a-person"
-      else if (c == "untracked" && fc[key] != "same-as-default") cls = "needs-a-person"
+      else if (c == "untracked" && fc[key] != "same-as-default" && fc[key] != "default-ignores") cls = "needs-a-person"
       else if (c == "untracked" && e_local[key] + 0 == 0) {
         if (key in mc) fail("the merged check judged " e_wt[key] " " e_sub[key] ", which holds no commit")
         cls = "merged-in-content"
@@ -278,7 +282,7 @@ rc=0
         else cls = "merged-in-content"
       }
       # Ignored files die with the entry whatever its commits earned.
-      if (e_ignored[key] + 0 > 0 && rank[cls] < rank["tool-output"]) cls = "tool-output"
+      if ((e_ignored[key] + 0 > 0 || (c == "untracked" && fc[key] == "default-ignores")) && rank[cls] < rank["tool-output"]) cls = "tool-output"
       e_out[key] = cls; total[cls]++
       w = e_wt[key]
       if (!(w in w_class)) { w_order[++wn] = w; w_class[w] = cls }

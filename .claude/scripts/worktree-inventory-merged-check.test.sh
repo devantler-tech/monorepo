@@ -640,7 +640,7 @@ content_is 'a commit the default branch contains is reached'       c-reached "re
 content_is 'a binary file with other content differs'              c-binary  "differs commit=$(c_sha c-binary) base=$ref_base same_as=-"
 content_is 'a merged entry is not compared'                        c-merged  ''
 check 'the comparison keeps the pull-request verdicts' eval '[ "$(printf "%s\n" "$OUT" | grep -c "^MERGE-CHECK	c-.*	no-pr	")" = 7 ] && grep -q "^MERGE-CHECK	c-merged	sub	merged	" <<<"$OUT"'
-check 'the closing line carries the content totals' eval 'grep -q "	content_reached=1	content_same_change=2	content_no_change=1	content_clean_merge=0	content_differs=3	content_no_reference=0	files_same_as_default=0	files_differ=0	files_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
+check 'the closing line carries the content totals' eval 'grep -q "	content_reached=1	content_same_change=2	content_no_change=1	content_clean_merge=0	content_differs=3	content_no_reference=0	files_same_as_default=0	files_default_ignores=0	files_differ=0	files_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
 check 'the comparison writes to neither repository' [ "$before" = "$after" ]
 c_run "$TMP/content.in"
 check 'without a reference nothing is compared' eval '! grep -q "CONTENT-CHECK\|content_" <<<"$OUT" && [ "$RC" = 0 ]'
@@ -786,7 +786,7 @@ f_run() { # inventory-file [reference] -> OUT, RC
   if [ $# -gt 1 ]; then OUT=$(PATH="$BIN:$PATH" bash "$SUT" "$FR" --content-reference "$2" < "$1" 2>"$TMP/err"); RC=$?
   else OUT=$(PATH="$BIN:$PATH" bash "$SUT" "$FR" < "$1" 2>"$TMP/err"); RC=$?; fi
 }
-file_of() { printf '%s\n' "$OUT" | awk -F'\t' -v w="$1" '$1 == "FILE-CHECK" && $2 == w { print $4 " " $5 " " $6 " " $7 }'; }
+file_of() { printf '%s\n' "$OUT" | awk -F'\t' -v w="$1" '$1 == "FILE-CHECK" && $2 == w { print $4 " " $5 " " $6 " " $7 " " $8 }'; }
 file_is() { # name worktree want
   local got; got=$(file_of "$2")
   if [ "$got" = "$3" ]; then ok "$1"; else bad "$1" "want [$3] got [$got] rc=$RC out=$OUT err=$(cat "$TMP/err")"; fi
@@ -801,15 +801,15 @@ g -C "$FR/f-filter/sub" config filter.probe.clean "$BIN/ran"
 rm -f "$RAN_MARK"; before=$(f_objects)
 f_run "$TMP/files.all" "$REF"
 after=$(f_objects)
-file_is 'copies of files the default branch holds are same-as-default' f-copy "same-as-default files=2 same=2 base=$ref_base"
-file_is 'one file the default branch does not hold differs'            f-part "differs files=2 same=1 base=$ref_base"
-file_is 'a file with other content than the default branch differs'    f-other "differs files=1 same=0 base=$ref_base"
-file_is 'a symbolic link to a copy is not a copy'                      f-link "differs files=1 same=0 base=$ref_base"
-file_is 'a file is hashed as it is on disk'                            f-filter "same-as-default files=1 same=1 base=$ref_base"
+file_is 'copies of files the default branch holds are same-as-default' f-copy "same-as-default files=2 same=2 default_ignores=0 base=$ref_base"
+file_is 'one file the default branch does not hold differs'            f-part "differs files=2 same=1 default_ignores=0 base=$ref_base"
+file_is 'a file with other content than the default branch differs'    f-other "differs files=1 same=0 default_ignores=0 base=$ref_base"
+file_is 'a symbolic link to a copy is not a copy'                      f-link "differs files=1 same=0 default_ignores=0 base=$ref_base"
+file_is 'a file is hashed as it is on disk'                            f-filter "same-as-default files=1 same=1 default_ignores=0 base=$ref_base"
 check 'the clean filter the repository configures is never run' [ ! -e "$RAN_MARK" ]
-file_is 'more files than are compared differ, copy or not'             f-many "differs files=201 same=0 base=$ref_base"
+file_is 'more files than are compared differ, copy or not'             f-many "differs files=201 same=0 default_ignores=0 base=$ref_base"
 check 'an entry holding files only gets no commit verdict' eval '! grep -qE "^MERGE-CHECK	f-(copy|part|other|link|filter|many)	" <<<"$OUT"'
-file_is 'a copy beside a held commit is still compared'                f-tip "same-as-default files=1 same=1 base=$ref_base"
+file_is 'a copy beside a held commit is still compared'                f-tip "same-as-default files=1 same=1 default_ignores=0 base=$ref_base"
 f_tip_ok() {
   grep -q "^MERGE-CHECK	f-tip	sub	not-checked	head=$root_sha	repo=-	pr=-	other_local=1$" <<<"$OUT" || return 1
   grep -q "^TIP-CHECK	f-tip	sub	merged	tip=$f_tip	kind=branch	ref=side	repo=devantler-tech/ksail	pr=61	commits=1$" <<<"$OUT"
@@ -818,7 +818,7 @@ check 'the commit it holds away from HEAD is looked up' f_tip_ok
 check 'an unpushed HEAD beside a copy is looked up' eval 'grep -q "^MERGE-CHECK	f-head	sub	merged	head=$(f_sha f-head)	repo=devantler-tech/ksail	pr=62	other_local=0$" <<<"$OUT"'
 check 'an open pull request beside a copy stays open' eval 'grep -q "^MERGE-CHECK	f-open	sub	open	head=$(f_sha f-open)	repo=devantler-tech/ksail	pr=63	other_local=0$" <<<"$OUT"'
 check 'each FILE-CHECK row comes before its entry'"'"'s commit rows' eval '[ "$(grep -n "^FILE-CHECK	f-tip	" <<<"$OUT" | cut -d: -f1)" -lt "$(grep -n "^MERGE-CHECK	f-tip	" <<<"$OUT" | cut -d: -f1)" ]'
-check 'the closing line carries the file totals' eval 'grep -q "	files_same_as_default=5	files_differ=4	files_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
+check 'the closing line carries the file totals' eval 'grep -q "	files_same_as_default=5	files_default_ignores=0	files_differ=4	files_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
 check 'only the three commits are looked up' eval '[ "$(grep -c . "$CALLS")" = 3 ]'
 check 'the file comparison writes to neither repository' [ "$before" = "$after" ]
 check 'the classification joins the two texts' eval '[ "$(printf "%s\n" "$OUT" | bash "$SCRIPT_DIR/worktree-inventory-classify.sh" --inventory "$TMP/files.all" | awk -F"\t" "\$1 == \"CLASS\" { printf \"%s=%s \", \$2, \$4 }")" = "f-copy=merged-in-content f-filter=merged-in-content f-head=merged-in-content f-link=needs-a-person f-many=needs-a-person f-open=work-in-flight f-other=needs-a-person f-part=needs-a-person f-tip=merged-in-content " ]'
@@ -832,10 +832,10 @@ f_one() { # worktree -> an inventory holding that entry alone, with its TIP rows
     END { printf "CHECKED\tworktrees=1\tentries=%d\tunpushed=%d\tlocal_only=%d\tbelow_min_idle=0\tunreadable=0\ttips=%d\n", e, u, l, t }' "$TMP/files.one" >> "$TMP/files.one"
 }
 f_one f-copy; f_run "$TMP/files.one" "$TMP/ref-empty"
-file_is 'a reference without that repository is no-reference for files too' f-copy "no-reference files=2 same=0 base=-"
+file_is 'a reference without that repository is no-reference for files too' f-copy "no-reference files=2 same=0 default_ignores=0 base=-"
 check 'no-reference for files is a verdict, not a failure' rc_is 0
 f_one f-copy; f_run "$TMP/files.one" "$TMP/ref-foreign"
-file_is 'a reference holding another repository compares no file' f-copy "no-reference files=2 same=0 base=-"
+file_is 'a reference holding another repository compares no file' f-copy "no-reference files=2 same=0 default_ignores=0 base=-"
 # A failed read is never `differs` or `same-as-default`.
 f_one f-copy
 OUT=$(PATH="$BIN:$PATH" bash -c 'git() { case " $* " in *" hash-object "*) return 3 ;; esac; command git "$@"; }; export -f git; bash "$0" "$1" --content-reference "$2" < "$3"' "$SUT" "$FR" "$REF" "$TMP/files.one" 2>"$TMP/err"); RC=$?
@@ -854,6 +854,78 @@ check 'a row without an untracked file count is UNKNOWN' eval '[ -z "$(file_of f
 f_one f-tip; mv "$FIX/$f_tip.json" "$TMP/f-tip.json"; f_run "$TMP/files.one" "$REF"
 check 'a failed lookup of a commit beside copies is UNKNOWN' eval 'grep -q "^UNKNOWN	f-tip	sub	the pull request lookup failed for a commit held away from HEAD" <<<"$OUT" && ! grep -q "^TIP-CHECK" <<<"$OUT" && [ "$RC" = 2 ]'
 mv "$TMP/f-tip.json" "$FIX/$f_tip.json"
+
+echo "== untracked files the default branch ignores"
+# The default branch gains ignore rules after the entries stopped at its first commit, and
+# tracks one file its own rules cover. Entries under IR hold files those rules speak about.
+printf '*.log\ncache/\n!keep.log\n' > "$UP/.gitignore"
+mkdir -p "$UP/deep"; printf '*.tmp\n' > "$UP/deep/.gitignore"
+echo tracked > "$UP/tracked.log"
+g -C "$UP" add .gitignore deep/.gitignore; g -C "$UP" add -f tracked.log; g -C "$UP" commit -qm 'ignore rules'
+IREF="$TMP/reference-ignores"
+mkdir -p "$IREF"; g clone -q "$UP" "$IREF/sub"; g -C "$IREF/sub" config remote.origin.url "$URL"
+iref_base=$(g -C "$IREF/sub" rev-parse refs/remotes/origin/main)
+# The reference's working files and its own exclude file are not the default branch's rules.
+printf '*.txt\n' >> "$IREF/sub/.gitignore"; printf '*.txt\n' >> "$IREF/sub/.git/info/exclude"
+FR="$TMP/ignore-root"
+for w in i-all i-mix i-part i-neg i-deep i-top i-held i-dir i-case i-own i-head i-open; do f_add "$w"; done
+echo out > "$FR/i-all/sub/a.log"; mkdir -p "$FR/i-all/sub/cache/in"; echo out > "$FR/i-all/sub/cache/in/x.bin"
+echo unrelated > "$FR/i-mix/sub/z"; echo out > "$FR/i-mix/sub/b.log"
+echo out > "$FR/i-part/sub/a.log"; echo mine > "$FR/i-part/sub/mine.txt"
+echo out > "$FR/i-neg/sub/keep.log"
+mkdir -p "$FR/i-deep/sub/deep/er"; echo out > "$FR/i-deep/sub/deep/er/x.tmp"
+echo out > "$FR/i-top/sub/x.tmp"
+echo 'another content' > "$FR/i-held/sub/tracked.log"
+echo 'a file, not a directory' > "$FR/i-dir/sub/cache"
+echo out > "$FR/i-case/sub/A.LOG"
+# i-own: a file only the machine's own ignore file will name, further down.
+echo mine > "$FR/i-own/sub/notes.md"
+for w in i-head i-open; do
+  echo "$w" > "$FR/$w/sub/own"; g -C "$FR/$w/sub" add own; g -C "$FR/$w/sub" commit -qm "$w"
+  echo out > "$FR/$w/sub/run.log"
+done
+cm_pr "$(f_sha i-head)" 71
+printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":1,"nodes":[%s]}}}}}\n' \
+  "$(node 72 OPEN "$(f_sha i-open)")" > "$FIX/$(f_sha i-open).json"
+bash "$INVENTORY" "$FR" --tips > "$TMP/ignores.all"
+check 'the fixture inventory reads all twelve entries as untracked' eval '[ "$(grep -c "^ENTRY	i-[a-z]*	sub	untracked	" "$TMP/ignores.all")" = 12 ]'
+f_objects() { find "$FR"/*/sub/.git "$IREF/sub/.git" -type f -exec cksum {} + | LC_ALL=C sort | cksum; }
+before=$(f_objects)
+f_run "$TMP/ignores.all" "$IREF"
+after=$(f_objects)
+file_is 'files the default branch ignores are default-ignores'             i-all "default-ignores files=2 same=0 default_ignores=2 base=$iref_base"
+file_is 'a copy beside an ignored file is default-ignores'                 i-mix "default-ignores files=2 same=1 default_ignores=1 base=$iref_base"
+file_is 'one file no rule covers differs'                                  i-part "differs files=2 same=0 default_ignores=1 base=$iref_base"
+file_is 'a file a later rule takes back out differs'                       i-neg "differs files=1 same=0 default_ignores=0 base=$iref_base"
+file_is 'a rule file deeper in the default branch covers its own folder'   i-deep "default-ignores files=1 same=0 default_ignores=1 base=$iref_base"
+file_is 'and covers nothing outside it'                                    i-top "differs files=1 same=0 default_ignores=0 base=$iref_base"
+file_is 'a path the default branch holds is never ignored, rule or not'    i-held "differs files=1 same=0 default_ignores=0 base=$iref_base"
+file_is 'a file is not covered by a rule for a directory'                  i-dir "differs files=1 same=0 default_ignores=0 base=$iref_base"
+file_is 'letter case is kept apart'                                        i-case "differs files=1 same=0 default_ignores=0 base=$iref_base"
+file_is 'only rules the default branch holds count'                        i-own "differs files=1 same=0 default_ignores=0 base=$iref_base"
+check 'a merged HEAD beside an ignored file is looked up' eval 'grep -q "^MERGE-CHECK	i-head	sub	merged	head=$(f_sha i-head)	repo=devantler-tech/ksail	pr=71	other_local=0$" <<<"$OUT"'
+check 'the closing line counts the ignored entries' eval 'grep -q "	files_same_as_default=0	files_default_ignores=5	files_differ=7	files_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
+check 'reading the rules writes to neither repository' [ "$before" = "$after" ]
+check 'the classification never puts ignored files below tool output' eval '[ "$(printf "%s\n" "$OUT" | bash "$SCRIPT_DIR/worktree-inventory-classify.sh" --inventory "$TMP/ignores.all" | awk -F"\t" "\$1 == \"CLASS\" { printf \"%s=%s \", \$2, \$4 }")" = "i-all=tool-output i-case=needs-a-person i-deep=tool-output i-dir=needs-a-person i-head=tool-output i-held=needs-a-person i-mix=tool-output i-neg=needs-a-person i-open=work-in-flight i-own=needs-a-person i-part=needs-a-person i-top=needs-a-person " ]'
+# The machine's own ignore file is not the default branch's either. The entry turns it off
+# for itself, so its file stays listed: only the rules read for the default branch could
+# still pick it up.
+mkdir -p "$TMP/machine-home"; printf '*.md\n*.txt\n' > "$TMP/machine-ignore"
+printf '[core]\n\texcludesFile = %s\n' "$TMP/machine-ignore" > "$TMP/machine-home/.gitconfig"
+g -C "$FR/i-own/sub" config core.excludesFile /dev/null
+i_one() { # worktree -> an inventory holding that entry alone
+  grep "^[A-Z]*	$1	" "$TMP/ignores.all" > "$TMP/ignores.one"
+  printf 'CHECKED\tworktrees=1\tentries=1\tunpushed=0\tlocal_only=0\tbelow_min_idle=0\tunreadable=0\ttips=0\n' >> "$TMP/ignores.one"
+}
+i_one i-own
+OUT=$(PATH="$BIN:$PATH" HOME="$TMP/machine-home" XDG_CONFIG_HOME="$TMP/machine-home/none" GIT_CONFIG_GLOBAL="$TMP/machine-home/.gitconfig" bash "$SUT" "$FR" --content-reference "$IREF" < "$TMP/ignores.one" 2>"$TMP/err"); RC=$?
+file_is 'a rule of the machine does not count'                             i-own "differs files=1 same=0 default_ignores=0 base=$iref_base"
+# A failed read of the rules is never `differs` or `default-ignores`.
+i_one i-all
+for verb in check-ignore cat-file init; do
+  OUT=$(PATH="$BIN:$PATH" V="$verb" bash -c 'git() { case " $* " in *" $V "*) return 3 ;; esac; command git "$@"; }; export -f git; bash "$0" "$1" --content-reference "$2" < "$3"' "$SUT" "$FR" "$IREF" "$TMP/ignores.one" 2>"$TMP/err"); RC=$?
+  check "a failed $verb is UNKNOWN" eval '[ -z "$(file_of i-all)" ] && grep -q "^UNKNOWN	i-all	sub	cannot read the ignore rules of the default branch" <<<"$OUT" && [ "$RC" = 2 ]'
+done
 
 # An inventory that fails (a root with no worktree) must not read as an empty, clean result.
 mkdir -p "$TMP/empty-root"
