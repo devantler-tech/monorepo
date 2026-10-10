@@ -170,7 +170,7 @@ n=$(grep -c " $(sha_of w-merged) " "$CALLS")
 if [ "$n" = 1 ]; then ok 'one lookup per repository and commit'; else bad 'one lookup per repository and commit' "calls=$n"; fi
 check 'owner, name and host are the ones sent' grep -q "^devantler-tech/platform $(sha_of w-open) github.com " "$CALLS"
 check 'the closing line carries the totals' out_has \
-  $'^CHECKED\tmerged=4\tmerged_ancestor=0\tmerged_other_base=2\topen=1\tclosed=1\tother_head=1\tno_pr=1\tnot_on_github=1\tnot_checked=0\tother_classes=0\tunknown=0$'
+  $'^CHECKED\tmerged=4\tmerged_ancestor=0\tgithub_bot=0\tmerged_other_base=2\topen=1\tclosed=1\tother_head=1\tno_pr=1\tnot_on_github=1\tnot_checked=0\tother_classes=0\tunknown=0$'
 : > "$CALLS"
 OUT=$(GH_HOST=ghe.example.invalid GH_REPO=someone/else PATH="$BIN:$PATH" bash "$SUT" "$ROOT" < "$TMP/in" 2>"$TMP/err"); RC=$?
 if [ "$RC" = 0 ] && ! grep -qv ' github.com unset/unset$' "$CALLS"; then ok 'an inherited GH_HOST or GH_REPO is not honoured'
@@ -218,7 +218,7 @@ check 'the comparison names this commit and the head that merged' \
   grep -q "^devantler-tech/ksail cmp-$(sha_of w-anc)-$H1 github.com " "$CALLS"
 check 'no comparison is made for a pull request that could not prove it' eval \
   '! grep -q "cmp-$(sha_of w-anc-stacked)-\|cmp-$(sha_of w-anc-fork)-\|cmp-$(sha_of w-anc-open)-" "$CALLS"'
-check 'the closing line counts them apart from merged' out_has $'^CHECKED\tmerged=0\tmerged_ancestor=3\tmerged_other_base=0\topen=0\tclosed=0\tother_head=4\t'
+check 'the closing line counts them apart from merged' out_has $'^CHECKED\tmerged=0\tmerged_ancestor=3\tgithub_bot=0\tmerged_other_base=0\topen=0\tclosed=0\tother_head=4\t'
 anc_unknown() { # name worktree
   { entry "$2" unpushed; } > "$TMP/in"; seal "$TMP/in"
   run < "$TMP/in"
@@ -237,6 +237,79 @@ printf '{"message":"Not Found"}\n' > "$FIX/cmp-$(sha_of w-anc-fail)-$H1.json"
 anc_unknown 'an error body' w-anc-fail
 cmp w-anc-fail "$H1" behind 0 "$OTHER"
 anc_unknown 'an answer that is behind by nothing' w-anc-fail
+
+echo '== a commit a bot made on GitHub'
+# GitHub signed the commit for a bot, its only author: it was never made on this machine.
+# Every other shape (a local signature, a person, a second author, a name that only looks
+# like a bot's) must stay what it was without the rule.
+botfix() { # sha total nodes-json [login|null] [signed-by-github] [valid] [authors]
+  local user="{\"login\":\"${4:-renovate[bot]}\"}"
+  [ "${4:-}" != null ] || user=null
+  printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","author":{"user":%s},"authors":{"totalCount":%s},"signature":{"isValid":%s,"wasSignedByGitHub":%s},"associatedPullRequests":{"totalCount":%s,"nodes":%s}}}}}\n' \
+    "$user" "${7:-1}" "${6:-true}" "${5:-true}" "$2" "$3" > "$FIX/$1.json"
+}
+bot() { local w=$1; shift; botfix "$(sha_of "$w")" "$@"; }
+for w in w-bot w-bot-dep w-bot-pr w-bot-anc w-bot-ancfail w-bot-head w-bot-local w-bot-invalid w-bot-person \
+         w-bot-nouser w-bot-two w-bot-alike w-bot-string w-bot-nosig w-bot-range w-bot-mixed w-bot-rfail w-bot-long; do
+  add_sub "$w" 'git@github.com:devantler-tech/ksail.git'
+done
+bot w-bot         0 '[]'
+bot w-bot-dep     0 '[]' 'dependabot[bot]'
+bot w-bot-pr      1 "[$(node 81 OPEN "$H1")]"
+bot w-bot-anc     1 "[$(node 82 MERGED "$H1")]"
+cmp w-bot-anc "$H1" ahead 0 "$(sha_of w-bot-anc)"
+bot w-bot-ancfail 1 "[$(node 83 MERGED "$H1")]"
+bot w-bot-head    1 "[$(node 84 CLOSED "$(sha_of w-bot-head)")]"
+bot w-bot-local   0 '[]' 'renovate[bot]' false
+bot w-bot-invalid 0 '[]' 'renovate[bot]' true false
+bot w-bot-person  0 '[]' 'devantler'
+bot w-bot-nouser  0 '[]' null
+bot w-bot-two     0 '[]' 'renovate[bot]' true true 2
+bot w-bot-alike   0 '[]' 'renovate[bot]-evil'
+bot w-bot-string  0 '[]' 'renovate[bot]' '"true"' '"true"'
+printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","author":{"user":{"login":"renovate[bot]"}},"authors":{"totalCount":1},"signature":null,"associatedPullRequests":{"totalCount":0,"nodes":[]}}}}}\n' \
+  > "$FIX/$(sha_of w-bot-nosig).json"
+{ for w in w-bot w-bot-dep w-bot-pr w-bot-anc w-bot-ancfail w-bot-head w-bot-local w-bot-invalid w-bot-person \
+           w-bot-nouser w-bot-two w-bot-alike w-bot-string w-bot-nosig; do entry "$w" unpushed; done; } > "$TMP/in"; seal "$TMP/in"
+run < "$TMP/in"
+expect 'a commit GitHub signed for a bot is github-bot'                 w-bot         'github-bot pr=- other_local=0'
+expect 'each bot that works here counts'                                w-bot-dep     'github-bot pr=- other_local=0'
+expect 'a pull request that moved on from it is named'                  w-bot-pr      'github-bot pr=81 other_local=0'
+expect 'proof that it merged still wins over the weaker verdict'        w-bot-anc     'merged-ancestor pr=82 other_local=0'
+expect 'an unreadable comparison leaves what is known: a bot made it'   w-bot-ancfail 'github-bot pr=83 other_local=0'
+expect 'a pull request with this head keeps its own verdict'            w-bot-head    'closed pr=84 other_local=0'
+expect 'a signature GitHub did not make proves nothing'                 w-bot-local   'no-pr pr=- other_local=0'
+expect 'an invalid signature proves nothing'                            w-bot-invalid 'no-pr pr=- other_local=0'
+expect 'a person GitHub signed for is not a bot'                        w-bot-person  'no-pr pr=- other_local=0'
+expect 'an author GitHub cannot name is not a bot'                      w-bot-nouser  'no-pr pr=- other_local=0'
+expect 'a second author means someone else had a hand in it'            w-bot-two     'no-pr pr=- other_local=0'
+expect "a login that only starts like a bot's is not that bot"          w-bot-alike   'no-pr pr=- other_local=0'
+expect 'a signature answer of another type is not a yes'                w-bot-string  'no-pr pr=- other_local=0'
+expect 'no signature at all proves nothing'                             w-bot-nosig   'no-pr pr=- other_local=0'
+check 'every entry answered: exit 0' rc_is 0
+check 'the closing line counts them apart from merged' out_has $'^CHECKED\tmerged=0\tmerged_ancestor=1\tgithub_bot=4\tmerged_other_base=0\topen=0\tclosed=1\tother_head=0\tno_pr=8\t'
+
+# The entry holds more unpushed commits below the bot's: each needs its own answer.
+below() { # worktree count -> adds that many commits; prints nothing
+  local i; for i in $(seq 1 "$2"); do echo "$1 $i" > "$ROOT/$1/sub/f"; g -C "$ROOT/$1/sub" commit -qam "more $i"; done
+}
+parent_of() { g -C "$ROOT/$1/sub" rev-parse HEAD~1; }
+for w in w-bot-range w-bot-mixed w-bot-rfail; do below "$w" 1; bot "$w" 0 '[]'; done
+below w-bot-long 11; bot w-bot-long 0 '[]'
+botfix "$(parent_of w-bot-range)" 0 '[]'
+botfix "$(parent_of w-bot-mixed)" 0 '[]' 'devantler'
+{ entry w-bot-range unpushed 2 2; entry w-bot-mixed unpushed 2 2; entry w-bot-long unpushed 12 12; } > "$TMP/in"; seal "$TMP/in"
+run < "$TMP/in"
+expect 'bot commits all the way down are github-bot'                    w-bot-range 'github-bot pr=- other_local=0'
+expect "a person's commit below the bot's keeps the entry unsettled"    w-bot-mixed 'no-pr pr=- other_local=0'
+expect 'a range too long to walk is not settled on a guess'             w-bot-long  'no-pr pr=- other_local=0'
+check 'every entry answered: exit 0' rc_is 0
+check 'the commit below was asked about' grep -q "^devantler-tech/ksail $(parent_of w-bot-range) " "$CALLS"
+check 'the long range was not walked' eval '[ "$(grep -c "^devantler-tech/ksail " "$CALLS")" = 5 ]'
+{ entry w-bot-rfail unpushed 2 2; } > "$TMP/in"; seal "$TMP/in"
+run < "$TMP/in"
+check 'a commit below that cannot be read is UNKNOWN, never github-bot' eval \
+  '[ "$RC" = 2 ] && out_has "^UNKNOWN	w-bot-rfail	sub	the pull request lookup failed$" && [ -z "$(verdict_of w-bot-rfail)" ]'
 
 echo '== never queried'
 { entry w-foreign unpushed; entry w-gitlab unpushed; entry w-lookalike unpushed
@@ -420,7 +493,7 @@ tip_is 'a commit only this machine has is not-on-github'         "$lost"    'not
 tip_is 'a stash is reported, never looked up'                    "$stashed" 'stash kind=stash pr=-'
 check 'the stash never reached GitHub' eval '! grep -q "$stashed" "$CALLS"'
 check 'the entry row still says its HEAD was not looked up' out_has '^MERGE-CHECK	wt	sub	not-checked	'
-check 'the closing line totals the tips' out_has '	tips=4	tips_merged=1	tips_merged_ancestor=0	tips_pushed_ref=1	tips_unsettled=2	tips_other_classes=0$'
+check 'the closing line totals the tips' out_has '	tips=4	tips_merged=1	tips_merged_ancestor=0	tips_github_bot=0	tips_pushed_ref=1	tips_unsettled=2	tips_other_classes=0$'
 check 'and exits 0' rc_is 0
 
 # The same tip, when its pull request moved on and merged with it in its history.
@@ -428,8 +501,14 @@ commit_fix "$side" "$(node 61 MERGED "$H1")"
 printf '{"status":"ahead","behind_by":0,"ahead_by":2,"merge_base_commit":{"sha":"%s"}}\n' "$side" > "$FIX/cmp-$side-$H1.json"
 tips_run
 tip_is 'a branch tip in the history of a merged pull request is merged-ancestor' "$side" 'merged-ancestor kind=branch pr=61'
-check 'the closing line counts it apart from merged' out_has '	tips_merged=0	tips_merged_ancestor=1	tips_pushed_ref=1	tips_unsettled=2	'
+check 'the closing line counts it apart from merged' out_has '	tips_merged=0	tips_merged_ancestor=1	tips_github_bot=0	tips_pushed_ref=1	tips_unsettled=2	'
 commit_fix "$side" "$(node 41 MERGED "$side")"; rm -f "$FIX/cmp-$side-$H1.json"
+# The same tip, when a bot made it on GitHub and no pull request holds it any more.
+printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","author":{"user":{"login":"ksail-bot[bot]"}},"authors":{"totalCount":1},"signature":{"isValid":true,"wasSignedByGitHub":true},"associatedPullRequests":{"totalCount":0,"nodes":[]}}}}}\n' > "$FIX/$side.json"
+tips_run
+tip_is 'a branch tip a bot made on GitHub is github-bot' "$side" 'github-bot kind=branch pr=-'
+check 'the closing line counts it apart from merged and unsettled' out_has '	tips_merged=0	tips_merged_ancestor=0	tips_github_bot=1	tips_pushed_ref=1	tips_unsettled=2	'
+commit_fix "$side" "$(node 41 MERGED "$side")"
 
 ref_fix "{\"target\":{\"oid\":\"$OTHER\"}}"; tips_run
 tip_is 'a tag GitHub holds at ANOTHER commit falls back to the commit lookup' "$tagged" 'open kind=ref pr=42'
@@ -462,7 +541,7 @@ check 'a tip whose commit count no longer matches is UNKNOWN' eval '[ -z "$(tip_
 check 'a TIP row before any entry is malformed' eval '[ "$RC" = 2 ] && grep -q "malformed" "$TMP/err"'
 # Tips of an entry in another class are counted, not looked up.
 echo edit > "$ts/f.new"; bash "$INVENTORY" "$T" --tips > "$TMP/tips.other"; tips_run "$TMP/tips.other"
-check 'tips of an untracked entry are counted, not looked up' eval 'grep -q "	tips=4	tips_merged=0	tips_merged_ancestor=0	tips_pushed_ref=0	tips_unsettled=0	tips_other_classes=4$" <<<"$OUT" && [ ! -s "$CALLS" ] && [ "$RC" = 0 ]'
+check 'tips of an untracked entry are counted, not looked up' eval 'grep -q "	tips=4	tips_merged=0	tips_merged_ancestor=0	tips_github_bot=0	tips_pushed_ref=0	tips_unsettled=0	tips_other_classes=4$" <<<"$OUT" && [ ! -s "$CALLS" ] && [ "$RC" = 0 ]'
 rm -f "$ts/f.new"
 
 echo "== content comparison with a reference checkout"
