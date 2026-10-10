@@ -42,7 +42,12 @@
 # Each entry gets exactly ONE class, the first that applies:
 #   modified     tracked files changed (staged or not): looks like unfinished authored work
 #   nested       an untracked or ignored directory that is, or holds, a repository or
-#                worktree; it cannot be judged until that inner repository is classified
+#                worktree; it cannot be judged until that inner repository is classified.
+#                One case is looked into: an untracked directory that is one of this
+#                repository's OWN linked worktrees and holds only ignored files (or none)
+#                is not counted here. Its ignored files join `ignored=`, and its commits
+#                are already in `local_only=` (and the TIP rows), since they live in the
+#                entry's git directory. Changed or untracked files in it keep it nested
 #   untracked    untracked files only
 #   unpushed     clean, but HEAD holds commits no remote-tracking ref reaches. Under
 #                squash-merge these are often merged in content already: check the pull
@@ -168,12 +173,54 @@ held_tips() {
   done <<< "$tips"
 }
 
+# own_worktree_state <entry-dir> <inner-dir> -> for an untracked directory that is one of
+# THIS repository's own linked worktrees and holds nothing but ignored files, prints
+# "<ignored-count> <idle-days>" and returns 0. Its commits live in the entry's own git
+# directory, so the counts below already cover them; only its files need a look. Returns 1
+# for anything else (another repository, changed or untracked files, a repository inside
+# it, hidden tracked files): the caller counts it as nested. Returns 2 when it is such a
+# worktree but a read of it failed: the caller reports the entry UNREADABLE.
+own_worktree_state() {
+  local dir=$1 inner=$2 real top common ig hidden status line rest found n=0 idle
+  real=$(physical_path "$inner") || return 1
+  top=$(rgit -C "$inner" rev-parse --show-toplevel 2>/dev/null) || return 1
+  top=$(physical_path "$top") || return 1
+  [ "$top" = "$real" ] || return 1
+  common=$(rgit -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  common=$(physical_path "$common") || return 1
+  ig=$(rgit -C "$inner" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  ig=$(physical_path "$ig") || return 1
+  # Only this repository's own linked worktrees keep their git directory under its shared one.
+  case "$ig" in "$common"/worktrees/*) ;; *) return 1 ;; esac
+  # From here on it IS a worktree of this repository: a read that fails is a failed read (2),
+  # never a reason to call it nested.
+  rgit -C "$inner" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1 || return 2
+  hidden=$(rgit -C "$inner" ls-files -v 2>/dev/null | awk '/^[a-zS] / { n++ } END { print n + 0 }') || return 2
+  [ "$hidden" = 0 ] || return 1
+  status=$(rgit -C "$inner" status --porcelain -z --untracked-files=all --ignored=matching \
+             --ignore-submodules=none 2>&1 \
+           | tr '\0\n' '\n\001') || return 2
+  case "$status" in *$'\001'*) return 2 ;; esac
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "${line:0:2}" = '!!' ] || return 1
+    rest=${line:3}
+    case "$rest" in
+      */) found=$(find "$inner/${rest%/}" -name .git -print -quit 2>/dev/null) || return 2
+          [ -z "$found" ] || return 1 ;;
+    esac
+    n=$((n+1))
+  done <<< "$status"
+  idle=$(idle_days "$ig") || return 2
+  printf '%s %s\n' "$n" "$idle"
+}
+
 # classify_entry <worktree-label> <submodule-path> <submodule-dir>
 classify_entry() {
   local label=$1 path=$2 dir=$3
   local top real g head status line code rest
   local modified=0 untracked=0 nested=0 ignored=0 inner hidden unpushed local_only idle class
-  local tips='' t_sha t_kind t_ref t_n
+  local tips='' t_sha t_kind t_ref t_n own own_idle inner_idle=''
 
   # `git -C` on a directory whose own .git is broken answers for the PARENT repository, so
   # a broken submodule would read as the parent's state. Require git to name this directory.
@@ -217,7 +264,15 @@ classify_entry() {
       '??')
         # git lists an untracked repository as one directory entry and does not descend.
         case "$rest" in
-          */) if [ -e "$dir/${rest%/}/.git" ]; then nested=$((nested+1)); else untracked=$((untracked+1)); fi ;;
+          */) if [ ! -e "$dir/${rest%/}/.git" ]; then untracked=$((untracked+1))
+              elif own=$(own_worktree_state "$dir" "$dir/${rest%/}"); then
+                # One of this repository's own worktrees holding no file of its own: its
+                # ignored files die with the entry, its commits are counted below.
+                ignored=$((ignored + ${own%% *})); own_idle=${own##* }
+                if [ -z "$inner_idle" ] || [ "$own_idle" -lt "$inner_idle" ]; then inner_idle=$own_idle; fi
+              elif [ "$?" -eq 2 ]; then
+                unreadable_row "$label" "$path" "cannot read a worktree of its own"; return 0
+              else nested=$((nested+1)); fi ;;
           *)  untracked=$((untracked+1)) ;;
         esac ;;
       '!!')
@@ -240,6 +295,8 @@ classify_entry() {
     unreadable_row "$label" "$path" "a commit count is not a number"; return 0 ;;
   esac
   idle=$(idle_days "$g") || { unreadable_row "$label" "$path" "cannot read its last-write time"; return 0; }
+  # A worktree of its own that was written more recently makes the entry that recent.
+  if [ -n "$inner_idle" ] && [ "$inner_idle" -lt "$idle" ]; then idle=$inner_idle; fi
 
   if   [ "$modified"   -gt 0 ]; then class=modified
   elif [ "$nested"     -gt 0 ]; then class=nested
