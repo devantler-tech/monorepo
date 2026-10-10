@@ -49,6 +49,11 @@ case "\$(cat "$fx/mode")" in
   hang) touch "$fx/hanging"
         while [ ! -e "$fx/release" ]; do sleep 0.1; done
         exit 0 ;;
+  detached-ok|detached-fail)
+        touch "$fx/hanging"
+        while [ ! -e "$fx/release" ]; do sleep 0.1; done
+        [ "\$(cat "$fx/mode")" != detached-fail ] || exit 2
+        exit 0 ;;
   cleanup) # as the real sweep does: one repository's cleanup, writing the lane's manifest
         "$fx/scripts/worktree-cleanup.sh" "$fx/repo" \\
           "\$HOME/.claude/worktree-cleanup-manifests/monorepo-20261002T000000Z.tsv" apply 24 336
@@ -887,6 +892,56 @@ if wait_finished codex && grep -q '^fake sweep args: apply 24 --lane codex$' "$r
   ok "the codex lane sweeps only --lane codex, logged and recorded apart"
 else bad "the codex lane sweeps only --lane codex, logged and recorded apart" \
   "$(cat "$records"/cleanup-codex.* 2>&1)"; fi
+
+# A scheduled command can reap its caller's process group as soon as the launcher returns
+# (#3989). The supervisor must survive that boundary and record the actual cleanup result.
+# Only the launcher group in this private fixture is killed; no real cleanup is invoked.
+export -f run
+export fx sut
+for detached_result in ok fail; do
+  mode "detached-$detached_result"
+  rm -f "$fx/release" "$fx/hanging" "$fx/launcher-returned"
+  quiet_lane codex || bad "fixture: the codex lane is quiet before caller teardown" "$(ps -A -ww -o command= 2>&1)"
+  set -m
+  bash -c 'run start --lane codex; : >"$fx/launcher-returned"; exec sleep 30' \
+    >"$fx/detached-launcher.out" 2>&1 &
+  detached_launcher=$!
+  set +m
+  printf '%s\n' "$detached_launcher" >"$fx/pids/detached-launcher"
+  if wait_for "$fx/launcher-returned" && wait_for "$fx/hanging"; then
+    detached_group=$(ps -p "$detached_launcher" -o pgid= | tr -d ' ')
+    if [ "$detached_group" = "$detached_launcher" ]; then
+      kill -KILL -- "-$detached_launcher" 2>/dev/null
+      wait "$detached_launcher" 2>/dev/null
+      touch "$fx/release"
+      if wait_finished codex; then
+        run status --lane codex
+        if [ "$detached_result" = ok ] && [ "$rc" -eq 0 ] \
+           && [ "$(field codex finished rc)" = 0 ]; then
+          ok "caller teardown preserves the successful sweep's completion receipt"
+        elif [ "$detached_result" = fail ] && [ "$rc" -eq 1 ] \
+             && [ "$(field codex finished rc)" = 2 ]; then
+          ok "caller teardown preserves the failed sweep's actual non-clean result"
+        else
+          bad "caller teardown preserves the $detached_result sweep result" "rc=$rc $out"
+        fi
+      else
+        bad "caller teardown preserves the $detached_result sweep completion receipt" \
+          "$(cat "$records/cleanup-codex.log" 2>&1)"
+      fi
+    else
+      bad "fixture: caller has its own process group" "pid=$detached_launcher pgid=$detached_group"
+      kill "$detached_launcher" 2>/dev/null
+    fi
+  else
+    bad "fixture: cleanup starts before caller teardown" "$(cat "$fx/detached-launcher.out" 2>&1)"
+    kill "$detached_launcher" 2>/dev/null
+  fi
+  touch "$fx/release"
+  quiet_lane codex || bad "fixture: caller teardown leaves no sweep running" "$(ps -A -ww -o command= 2>&1)"
+done
+export -n -f run
+mode ok
 
 # --- the supervisor and launcher fail closed --------------------------------------
 # The supervisor has a valid launcher handshake, but a directory at .finished keeps it from
