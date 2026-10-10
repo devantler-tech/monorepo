@@ -96,7 +96,7 @@ for v in merged-other-base closed other-head no-pr not-on-github not-checked; do
 done
 { mc w s open "$H1"; chk_end; } > "$CHK"
 expect_class "an unpushed HEAD with an open pull request is work in flight" w s work-in-flight
-for v in reached no-change same-change; do
+for v in reached no-change same-change clean-merge; do
   { mc w s no-pr "$H1"; cc w s "$v" "$H1"; chk_end; } > "$CHK"
   expect_class "content $v settles a HEAD the lookup left open" w s merged-in-content
 done
