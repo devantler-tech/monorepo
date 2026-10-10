@@ -350,6 +350,7 @@ jobs:
               - '.claude/scripts/worktree-submodule-inventory.test.sh'
               - '.claude/scripts/worktree-inventory-merged-check.sh'
               - '.claude/scripts/worktree-inventory-classify.sh'
+              - '.claude/scripts/worktree-inventory-read-verdicts.tsv'
               - '.claude/scripts/worktree-inventory-merged-check.test.sh'
               - '.claude/scripts/worktree-inventory-classify.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
