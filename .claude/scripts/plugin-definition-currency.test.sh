@@ -287,10 +287,12 @@ esac
 # `scripts/` line. That rule is prose, so what can regress silently is the REPORT it reads. This
 # encodes the rule once and runs it over each state: one eligible, the rest fail closed.
 inline_classifier_eligible() { # <exit status> <report>
-  local status="$1" report="$2"
+  local status="$1" report="$2" script_lines
   [ "${status}" -eq 0 ] || [ "${status}" -eq 1 ] || return 1
   grep -Eq "^match +${runtime_rel}\$" <<<"${report}" || return 1
-  if grep -E '^[A-Za-z]+ +scripts/' <<<"${report}" | grep -Evq '^match +'; then return 1; fi
+  # Never empty here: the classifier's own match line was just required.
+  script_lines="$(grep -E '^[A-Za-z]+ +scripts/' <<<"${report}")" || return 1
+  if grep -Evq '^match +' <<<"${script_lines}"; then return 1; fi
   return 0
 }
 expect_inline() { # <eligible|closed> <case name> <exit status> <report>
