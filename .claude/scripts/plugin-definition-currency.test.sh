@@ -281,6 +281,47 @@ case "${out}" in
   *) fail "exit 1 but the symlinked runtime asset parent was not reported: ${out}" ;;
 esac
 
+# ── 3c. The report carries the evidence the inline classifier route reads (monorepo#4095) ──
+# Step 4 of the surveyor overlay lets an inline survey run the installed classifier under DRIFT only
+# when the report, run without --quiet, prints `match` for that helper and for every other
+# `scripts/` line. That rule is prose, so what can regress silently is the REPORT it reads. This
+# encodes the rule once and runs it over each state: one eligible, the rest fail closed.
+inline_classifier_eligible() { # <exit status> <report>
+  local status="$1" report="$2"
+  [ "${status}" -eq 0 ] || [ "${status}" -eq 1 ] || return 1
+  grep -Eq "^match +${runtime_rel}\$" <<<"${report}" || return 1
+  if grep -E '^[A-Za-z]+ +scripts/' <<<"${report}" | grep -Evq '^match +'; then return 1; fi
+  return 0
+}
+expect_inline() { # <eligible|closed> <case name> <exit status> <report>
+  local want="$1" name="$2" got=closed
+  if inline_classifier_eligible "$3" "$4"; then got=eligible; fi
+  [ "${got}" = "${want}" ] || fail "inline classifier route: ${name} must be ${want}, got ${got}: $4"
+  ok "inline classifier route: ${name} is ${want}"
+}
+set +e; out="$(run "${chg}")"; rc=$?; set -e
+expect_inline eligible "a drift confined to a definition file" "${rc}" "${out}"
+set +e; out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --installed "${chg}" --quiet 2>&1)"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "the quiet prose-drift fixture must still exit 1, got ${rc}: ${out}"
+expect_inline closed "the same drift read with --quiet (no positive match line)" "${rc}" "${out}"
+set +e; out="$(run "${runtime_changed}")"; rc=$?; set -e
+expect_inline closed "a changed classifier" "${rc}" "${out}"
+set +e; out="$(run "${runtime_missing}")"; rc=$?; set -e
+expect_inline closed "a missing classifier" "${rc}" "${out}"
+set +e; out="$(run "${runtime_mode}")"; rc=$?; set -e
+expect_inline closed "a classifier that lost its executable bit" "${rc}" "${out}"
+set +e; out="$(run "${runtime_parent_symlink}")"; rc=$?; set -e
+expect_inline closed "a classifier reached through a symlinked directory" "${rc}" "${out}"
+set +e; out="$(run "${tmp}/no-such-install")"; rc=$?; set -e
+[ "${rc}" -eq 2 ] || fail "an unresolvable install must be UNKNOWN for the inline-route case, got ${rc}: ${out}"
+expect_inline closed "an UNKNOWN currency result" "${rc}" "${out}"
+# The fixture pin declares one runtime asset, so the "every other scripts/ line" conjunct is run
+# over the report's own line format: the classifier matches while the library it sources does not.
+sibling_report="$(printf 'match    %s\nDRIFT    scripts/json-stream.lib.sh  installed=aaaaaaaaaaaa reviewed=bbbbbbbbbbbb\n' "${runtime_rel}")"
+expect_inline closed "a matching classifier beside a drifted sibling script" 1 "${sibling_report}"
+sibling_report="$(printf 'match    %s\nmatch    scripts/json-stream.lib.sh\nDRIFT    agents/agent-improver.agent.md  installed=aaaaaaaaaaaa reviewed=bbbbbbbbbbbb\n' "${runtime_rel}")"
+expect_inline eligible "matching classifier and sibling beside a drifted definition" 1 "${sibling_report}"
+
 # ── 4. An EXTRA definition fires ──────────────────────────────────────────────
 # A role the runtime can still dispatch that the reviewed revision no longer describes. A check
 # driven only by the reviewed list cannot see this, which is why it is asserted separately.

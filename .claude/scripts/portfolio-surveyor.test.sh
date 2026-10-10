@@ -3913,7 +3913,7 @@ grep -Fq 'no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"
 grep -Fq 'A `DRIFT` report qualifies too when, run without `--quiet`, it prints `match` for that helper' <<<"${_ci_step}" ||
   fail "step 4 must let a DRIFT install serve the inline classifier when the report proves the helper itself matches the pin — otherwise a drift in prose files stops CI classification (monorepo#4095)"
 grep -Fq 'and for every other `scripts/` line' <<<"${_ci_step}" ||
-  fail "step 4 must require every scripts/ line to match under DRIFT — the helper sources a sibling library, and an unexpected file beside it is not reviewed (monorepo#4095)"
+  fail "step 4 must require every scripts/ line to match under DRIFT — the helper sources a sibling library (monorepo#4095)"
 grep -Fq 'Anything else, or no executable helper at exactly that path, means `QUERY-UNKNOWN`' <<<"${_ci_step}" ||
   fail "step 4 must keep UNKNOWN and a differing script as QUERY-UNKNOWN on the inline route (monorepo#4095)"
 if grep -Fq 'Any other verdict, or no executable helper' <<<"${_ci_step}"; then
