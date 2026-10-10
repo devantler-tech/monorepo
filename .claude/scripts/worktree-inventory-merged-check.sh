@@ -88,10 +88,15 @@
 #   same-change    one commit on the default branch's first-parent line since that point
 #                  (`same_as=`) makes exactly the change this commit's line makes since
 #                  it: the work was merged as that commit
+#   clean-merge    a merge of two parents that git makes again exactly from them, so it
+#                  adds no change of its own, and each parent is either contained in
+#                  the default branch or is the head, or in the history, of a pull
+#                  request that was merged there. A merge someone resolved by hand,
+#                  or one with a parent nothing settles, stays `differs`
 #   differs        none of the above. Not proof of anything: the default branch may hold
 #                  the work in another shape, or not at all
 #   no-reference   the checkout holds no copy of this repository at that path
-# `reached`, `no-change` and `same-change` say the commit's content needs no rescue.
+# `reached`, `no-change`, `same-change` and `clean-merge` say the commit's content needs no rescue.
 # A reference that was fetched long ago can only turn those into `differs`.
 #
 # Only `merged`, `merged-ancestor` or `github-bot` with other_local=0 says the entry's commits need no rescue. Every other
@@ -386,7 +391,7 @@ walk() {
 # the id, and `patch-id --verbatim` keeps whitespace in it: two changes that differ only in
 # indentation are different changes.
 DIFF_OPTS=(--no-ext-diff --no-textconv --no-renames --no-color --binary --full-index)
-c_reached=0; c_same=0; c_empty=0; c_differs=0; c_noref=0
+c_reached=0; c_same=0; c_empty=0; c_clean=0; c_differs=0; c_noref=0
 # The current entry's reference: `unset` until first needed, then `none` (the checkout has
 # no copy of this repository there), `fail` (it has one that cannot be read) or `ok`.
 cur_refstate='unset'; cur_base=''; cur_alt=''
@@ -432,10 +437,64 @@ content_row() { # worktree submodule verdict sha base same-as
     reached)      c_reached=$((c_reached+1)) ;;
     same-change)  c_same=$((c_same+1)) ;;
     no-change)    c_empty=$((c_empty+1)) ;;
+    clean-merge)  c_clean=$((c_clean+1)) ;;
     differs)      c_differs=$((c_differs+1)) ;;
     no-reference) c_noref=$((c_noref+1)) ;;
   esac
   printf 'CONTENT-CHECK\t%s\t%s\t%s\tcommit=%s\tbase=%s\tsame_as=%s\n' "$1" "$2" "$3" "$4" "$5" "$6"
+}
+
+# clean_merge <sha> — 0 when the commit is a merge of two parents that git reproduces
+# exactly from them, so it adds no change of its own, and neither parent needs a rescue:
+# the default branch contains it, or a pull request that has it as its head or in its
+# history was merged there. 1 when not; 2 when a read failed.
+# The merge is made again in a scratch object directory, so nothing is written to the
+# entry's repository. A merge driver is a program the repository configures: where one
+# is configured, no merge is made and the commit stays `differs`.
+clean_merge() {
+  local line p1 p2 rest tree objs scratch auto rc p hit
+  line=$(gitc rev-list --no-walk --parents "$1" 2>/dev/null) || return 2
+  p1=''; p2=''; rest=''
+  read -r _ p1 p2 rest <<<"$line" || return 2
+  [ -n "$p2" ] && [ -z "$rest" ] || return 1
+  tree=$(gitc rev-parse --verify --quiet "$1^{tree}" 2>/dev/null) || return 2
+  rc=0; gitc config --get-regexp '^merge\..*\.driver$' >/dev/null 2>&1 || rc=$?
+  case "$rc" in 0) return 1 ;; 1) ;; *) return 2 ;; esac
+  rc=0; gitc merge-base "$p1" "$p2" >/dev/null 2>&1 || rc=$?
+  case "$rc" in 0) ;; 1) return 1 ;; *) return 2 ;; esac
+  objs=$(git --git-dir="$cur_gdir" rev-parse --path-format=absolute --git-path objects 2>/dev/null) || return 2
+  case "$objs" in /*) ;; *) return 2 ;; esac
+  case "$objs" in *:*|*'"'*) return 2 ;; esac
+  scratch="$PATCH_DIR/merge-objects"
+  mkdir -p "$scratch" || return 2
+  rc=0
+  auto=$(GIT_OBJECT_DIRECTORY="$scratch" GIT_ALTERNATE_OBJECT_DIRECTORIES="$objs${cur_alt:+:$cur_alt}" \
+    git --git-dir="$cur_gdir" -c merge.renormalize=false merge-tree --write-tree --no-messages "$p1" "$p2" 2>/dev/null) || rc=$?
+  case "$rc" in
+    0) ;;
+    # The two parents conflict: whoever made the merge resolved it by hand.
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
+  [ "$auto" = "$tree" ] || return 1
+  for p in "$p1" "$p2"; do
+    rc=0; gitc merge-base --is-ancestor "$p" "$cur_base" 2>/dev/null || rc=$?
+    case "$rc" in 0) continue ;; 1) ;; *) return 2 ;; esac
+    hit=$(cached_lookup "$cur_repo" "$p") || return 2
+    case "${hit% *}" in merged|merged-ancestor) ;; *) return 1 ;; esac
+  done
+  return 0
+}
+
+# differs_or_clean_merge <sha> — the row for a commit no comparison settled.
+differs_or_clean_merge() {
+  local rc=0
+  clean_merge "$1" || rc=$?
+  case "$rc" in
+    0) content_row "$cur_label" "$cur_path" clean-merge "$1" "$cur_base" - ;;
+    1) content_row "$cur_label" "$cur_path" differs "$1" "$cur_base" - ;;
+    *) unknown_row "$cur_label" "$cur_path" "cannot read a merge commit's parents" ;;
+  esac
 }
 
 # content_check <verdict> <sha> — compare one unsettled commit of the current entry.
@@ -477,7 +536,7 @@ content_check() {
     || { unknown_row "$cur_label" "$cur_path" "cannot read the default branch's commits in the reference checkout"; return 0; }
   same=$(awk -v p="$pid" '$1 == p && !done { print $2; done = 1 }' "$ids") \
     || { unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0; }
-  if [ -z "$same" ]; then content_row "$cur_label" "$cur_path" differs "$sha" "$cur_base" -; return 0; fi
+  if [ -z "$same" ]; then differs_or_clean_merge "$sha"; return 0; fi
   [ ${#same} -eq 40 ] || { unknown_row "$cur_label" "$cur_path" "cannot compare a commit with the default branch"; return 0; }
   content_row "$cur_label" "$cur_path" same-change "$sha" "$cur_base" "$same"
 }
@@ -682,7 +741,7 @@ case "$checked_line" in *$'\t'tips=*)
   tip_totals=$'\t'"tips=$rows_tip"$'\t'"tips_merged=$t_merged"$'\t'"tips_merged_ancestor=$t_ancestor"$'\t'"tips_github_bot=$t_bot"$'\t'"tips_pushed_ref=$t_settled"$'\t'"tips_unsettled=$t_unsettled"$'\t'"tips_other_classes=$t_skipped" ;;
 esac
 # The content totals are printed only when a reference checkout was given.
-[ -z "$REFERENCE" ] || tip_totals="$tip_totals"$'\t'"content_reached=$c_reached"$'\t'"content_same_change=$c_same"$'\t'"content_no_change=$c_empty"$'\t'"content_differs=$c_differs"$'\t'"content_no_reference=$c_noref"
+[ -z "$REFERENCE" ] || tip_totals="$tip_totals"$'\t'"content_reached=$c_reached"$'\t'"content_same_change=$c_same"$'\t'"content_no_change=$c_empty"$'\t'"content_clean_merge=$c_clean"$'\t'"content_differs=$c_differs"$'\t'"content_no_reference=$c_noref"
 printf 'CHECKED\tmerged=%s\tmerged_ancestor=%s\tgithub_bot=%s\tmerged_other_base=%s\topen=%s\tclosed=%s\tother_head=%s\tno_pr=%s\tnot_on_github=%s\tnot_checked=%s\tother_classes=%s\tunknown=%s%s\n' \
   "$n_merged" "$n_ancestor" "$n_bot" "$n_otherbase" "$n_open" "$n_closed" "$n_other" "$n_nopr" "$n_absent" "$n_notchecked" "$other_rows" "$unknown" "$tip_totals"
 [ "$saw_checked" = 1 ] || die "the inventory has no closing CHECKED line: it is incomplete"

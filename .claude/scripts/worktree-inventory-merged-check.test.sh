@@ -574,6 +574,21 @@ echo reached > "$CR/c-reached/sub/r"; c_commit c-reached 'pushed straight to the
 printf '\000\001\003' > "$CR/c-binary/sub/bin"; c_commit c-binary 'binary, one content'
 echo merged > "$CR/c-merged/sub/x"; c_commit c-merged 'merged pull request'
 for w in c-noref c-foreign c-nohead; do echo "$w" > "$CR/$w/sub/own"; c_commit "$w" "$w"; done
+# Merge commits (c-cm*): each merges a local commit with the commit c-reached pushed.
+# c-cm: both sides merge cleanly. c-cmopen: the same, but no pull request has the local
+# side. c-cmhand: both sides add the same file, resolved by hand. c-cmevil: a clean merge
+# with one more file added in the merge commit itself.
+for w in c-cm c-cmopen c-cmhand c-cmevil; do
+  c_add "$w"; g -C "$CR/$w/sub" fetch -q "$CR/c-reached/sub" main
+done
+cm_merge() { g -C "$CR/$1/sub" merge -q --no-ff --no-edit FETCH_HEAD; }
+for w in c-cm c-cmopen c-cmevil; do echo "$w" > "$CR/$w/sub/side"; c_commit "$w" 'local side'; done
+cm_side=$(c_sha c-cm); cmopen_side=$(c_sha c-cmopen); cmevil_side=$(c_sha c-cmevil)
+cm_merge c-cm; cm_merge c-cmopen
+g -C "$CR/c-cmevil/sub" merge -q --no-ff --no-commit FETCH_HEAD; echo extra > "$CR/c-cmevil/sub/extra"; c_commit c-cmevil 'merge, with one more file'
+echo mine > "$CR/c-cmhand/sub/r"; c_commit c-cmhand 'the same file, other content'; cmhand_side=$(c_sha c-cmhand)
+g -C "$CR/c-cmhand/sub" merge -q --no-ff --no-commit FETCH_HEAD >/dev/null 2>&1 || true
+echo both > "$CR/c-cmhand/sub/r"; c_commit c-cmhand 'merge, resolved by hand'
 # The default branch moves on.
 g -C "$UP" pull -q --ff-only "$CR/c-reached/sub" main
 echo unrelated > "$UP/z"; g -C "$UP" add z; g -C "$UP" commit -qm 'unrelated'
@@ -590,6 +605,13 @@ nopr='{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typ
 for w in c-same c-moved c-differs c-space c-empty c-reached c-binary c-noref c-foreign c-nohead; do printf '%s\n' "$nopr" > "$FIX/$(c_sha "$w").json"; done
 printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":1,"nodes":[%s]}}}}}\n' \
   "$(node 51 MERGED "$(c_sha c-merged)")" > "$FIX/$(c_sha c-merged).json"
+for w in c-cm c-cmopen c-cmhand c-cmevil; do printf '%s\n' "$nopr" > "$FIX/$(c_sha "$w").json"; done
+printf '%s\n' "$nopr" > "$FIX/$cmopen_side.json"
+cm_pr() { # side-sha pr-number -> a pull request with that head was merged
+  printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"object":{"__typename":"Commit","associatedPullRequests":{"totalCount":1,"nodes":[%s]}}}}}\n' \
+    "$(node "$2" MERGED "$1")" > "$FIX/$1.json"
+}
+cm_pr "$cm_side" 52; cm_pr "$cmhand_side" 53; cm_pr "$cmevil_side" 54
 
 c_run() { # inventory-file [reference] -> OUT, RC
   : > "$CALLS"
@@ -618,7 +640,7 @@ content_is 'a commit the default branch contains is reached'       c-reached "re
 content_is 'a binary file with other content differs'              c-binary  "differs commit=$(c_sha c-binary) base=$ref_base same_as=-"
 content_is 'a merged entry is not compared'                        c-merged  ''
 check 'the comparison keeps the pull-request verdicts' eval '[ "$(printf "%s\n" "$OUT" | grep -c "^MERGE-CHECK	c-.*	no-pr	")" = 7 ] && grep -q "^MERGE-CHECK	c-merged	sub	merged	" <<<"$OUT"'
-check 'the closing line carries the content totals' eval 'grep -q "	content_reached=1	content_same_change=2	content_no_change=1	content_differs=3	content_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
+check 'the closing line carries the content totals' eval 'grep -q "	content_reached=1	content_same_change=2	content_no_change=1	content_clean_merge=0	content_differs=3	content_no_reference=0$" <<<"$OUT" && [ "$RC" = 0 ]'
 check 'the comparison writes to neither repository' [ "$before" = "$after" ]
 c_run "$TMP/content.in"
 check 'without a reference nothing is compared' eval '! grep -q "CONTENT-CHECK\|content_" <<<"$OUT" && [ "$RC" = 0 ]'
@@ -667,6 +689,36 @@ c_run "$TMP/content.in" "$TMP/no-such-reference"
 check 'a missing reference directory is a usage error' eval '[ "$RC" = 2 ] && grep -q "not a directory" "$TMP/err"'
 OUT=$(PATH="$BIN:$PATH" bash "$SUT" "$CR" --surprise "$REF" < "$TMP/content.in" 2>"$TMP/err"); RC=$?
 check 'an unknown option is a usage error' eval '[ "$RC" = 2 ] && grep -q "usage:" "$TMP/err"'
+
+echo "== a merge commit that adds no change of its own"
+before=$(objects_of)
+c_one c-cm; c_run "$TMP/content.one" "$REF"
+after=$(objects_of)
+content_is 'a clean merge of a merged commit and the default branch is clean-merge' c-cm "clean-merge commit=$(c_sha c-cm) base=$ref_base same_as=-"
+check 'the closing line counts the clean merge' eval 'grep -q "	content_no_change=0	content_clean_merge=1	content_differs=0	" <<<"$OUT" && [ "$RC" = 0 ]'
+check 'making the merge again writes to neither repository' [ "$before" = "$after" ]
+check 'the parent on the default branch is not looked up' eval '[ "$(grep -c . "$CALLS")" = 2 ]'
+c_one c-cmopen; c_run "$TMP/content.one" "$REF"
+content_is 'a clean merge with a parent nothing settles differs' c-cmopen "differs commit=$(c_sha c-cmopen) base=$ref_base same_as=-"
+c_one c-cmhand; c_run "$TMP/content.one" "$REF"
+content_is 'a merge resolved by hand differs' c-cmhand "differs commit=$(c_sha c-cmhand) base=$ref_base same_as=-"
+c_one c-cmevil; c_run "$TMP/content.one" "$REF"
+content_is 'a merge commit that adds a file of its own differs' c-cmevil "differs commit=$(c_sha c-cmevil) base=$ref_base same_as=-"
+# A merge driver is a program the repository configures: no merge is made where one is set.
+printf '* merge=probe\n' > "$CR/c-cm/sub/.git/info/attributes"
+g -C "$CR/c-cm/sub" config merge.probe.driver "$BIN/ran"
+c_one c-cm; rm -f "$RAN_MARK"; c_run "$TMP/content.one" "$REF"
+cm_no_driver() { [ ! -e "$RAN_MARK" ] && [ "$(content_of c-cm)" = "differs commit=$(c_sha c-cm) base=$ref_base same_as=-" ] && [ "$RC" = 0 ]; }
+check 'a configured merge driver is never run, and the merge stays differs' cm_no_driver
+g -C "$CR/c-cm/sub" config --unset merge.probe.driver; rm -f "$CR/c-cm/sub/.git/info/attributes"
+# A merge that cannot be made again is a failed read, never `differs` or `clean-merge`.
+c_one c-cm
+OUT=$(PATH="$BIN:$PATH" bash -c 'git() { case " $* " in *" merge-tree "*) return 3 ;; esac; command git "$@"; }; export -f git; bash "$0" "$1" --content-reference "$2" < "$3"' "$SUT" "$CR" "$REF" "$TMP/content.one" 2>"$TMP/err"); RC=$?
+check 'a failed merge read is UNKNOWN' eval '[ -z "$(content_of c-cm)" ] && grep -q "^UNKNOWN	c-cm	sub	cannot read a merge commit" <<<"$OUT" && [ "$RC" = 2 ]'
+# The lookup of a parent that fails must not read as an unsettled parent.
+c_one c-cm; mv "$FIX/$cm_side.json" "$TMP/cm-side.json"; c_run "$TMP/content.one" "$REF"
+check 'a failed parent lookup is UNKNOWN' eval '[ -z "$(content_of c-cm)" ] && grep -q "^UNKNOWN	c-cm	sub	cannot read a merge commit" <<<"$OUT" && [ "$RC" = 2 ]'
+mv "$TMP/cm-side.json" "$FIX/$cm_side.json"
 
 # A commit held away from HEAD is compared the same way, after its own TIP-CHECK row.
 CT="$TMP/content-tips"; g init -q -b main "$CT/wt"
