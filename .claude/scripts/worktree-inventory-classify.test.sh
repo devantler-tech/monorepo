@@ -146,6 +146,91 @@ EOF
 { mc w s merged "$H1"; tc w s no-pr "$T1" reflog; chk_end; } > "$CHK"
 expect_class "a merged HEAD does not cover an unsettled tip" w s needs-a-person
 
+echo "untracked files and ignored files"
+# entry_f <worktree> <submodule> <class> <head> <unpushed> <local_only> <untracked> <ignored>
+entry_f() {
+  printf 'ENTRY\t%s\t%s\t%s\tidle_days=3\thead=%s\tunpushed=%s\tlocal_only=%s\tmodified=0\tuntracked=%s\tnested=0\tignored=%s\n' "$@"
+}
+fcr() { # <worktree> <submodule> <verdict> <files> <same>
+  printf 'FILE-CHECK\t%s\t%s\t%s\tfiles=%s\tsame=%s\tbase=%s\n' "$@" "$H2"
+}
+# one_f <unpushed> <local_only> <untracked> <ignored> — one `untracked` entry `w s`.
+one_f() { { entry_f w s untracked "$H1" "$@"; cat; inv_end 1; } > "$INV"; }
+
+one_f 0 0 2 0 < /dev/null
+{ fcr w s same-as-default 2 2; chk_end; } > "$CHK"
+expect_class "untracked files that are all copies of the default branch's need no rescue" w s merged-in-content
+for v in differs no-reference; do
+  { fcr w s "$v" 2 0; chk_end; } > "$CHK"
+  expect_class "untracked files read as $v need a person" w s needs-a-person
+done
+{ fcr w s differs 2 1; chk_end; } > "$CHK"
+expect_class "one file that is not a copy keeps the entry with a person" w s needs-a-person
+chk_end > "$CHK"
+expect_class "untracked files nobody compared need a person" w s needs-a-person
+one_f 0 0 2 3 < /dev/null
+{ fcr w s same-as-default 2 2; chk_end; } > "$CHK"
+expect_class "copies beside ignored files are tool output, never nothing" w s tool-output
+{ fcr w s differs 2 0; chk_end; } > "$CHK"
+expect_class "ignored files never lower an entry that needs a person" w s needs-a-person
+
+one_f 1 1 1 0 < /dev/null
+{ fcr w s same-as-default 1 1; mc w s merged "$H1"; chk_end; } > "$CHK"
+expect_class "copies and a merged HEAD are merged in content" w s merged-in-content
+{ fcr w s same-as-default 1 1; mc w s no-pr "$H1"; chk_end; } > "$CHK"
+expect_class "copies do not settle a HEAD no evidence settles" w s needs-a-person
+{ fcr w s same-as-default 1 1; mc w s open "$H1"; chk_end; } > "$CHK"
+expect_class "copies beside an open pull request are work in flight" w s work-in-flight
+{ fcr w s same-as-default 1 1; mc w s github-bot "$H1"; chk_end; } > "$CHK"
+expect_class "copies beside a bot's commit are made on GitHub" w s made-on-github
+{ fcr w s same-as-default 1 1; chk_end; } > "$CHK"
+expect_refused "copies with an unexamined HEAD" "has no row for w s"
+{ fcr w s differs 1 0; chk_end; } > "$CHK"
+expect_class "files that differ need no commit verdict to need a person" w s needs-a-person
+
+one_f 0 1 1 0 <<EOF2
+$(tip w s "$T1" branch)
+EOF2
+{ fcr w s same-as-default 1 1; mc w s not-checked "$H1"; tc w s merged "$T1" branch; chk_end; } > "$CHK"
+expect_class "copies and a merged tip are merged in content" w s merged-in-content
+{ fcr w s same-as-default 1 1; mc w s not-checked "$H1"; tc w s no-pr "$T1" branch; chk_end; } > "$CHK"
+expect_class "copies do not settle a tip no evidence settles" w s needs-a-person
+{ fcr w s same-as-default 1 1; mc w s not-checked "$H1"; chk_end; } > "$CHK"
+expect_refused "copies with an unexamined tip" "has no row for tip $T1"
+{ fcr w s same-as-default 1 1; mc w s merged "$H1"; tc w s merged "$T1" branch; chk_end; } > "$CHK"
+expect_refused "a verdict for the pushed HEAD of an untracked entry" "judged the pushed HEAD"
+
+one_f 0 0 2 0 < /dev/null
+{ fcr w s same-as-default 2 2; mc w s merged "$H1"; chk_end; } > "$CHK"
+expect_refused "a commit verdict for an entry that holds no commit" "which holds no commit"
+{ mc w s merged "$H1"; fcr w s same-as-default 2 2; chk_end; } > "$CHK"
+expect_refused "a commit verdict before the files were compared" "which the inventory reads as untracked"
+{ fcr w s same-as-default 2 2; fcr w s same-as-default 2 2; chk_end; } > "$CHK"
+expect_refused "the files compared twice" "compares the files of w s twice"
+{ fcr w s same-as-default 3 3; chk_end; } > "$CHK"
+expect_refused "a file count the inventory does not have" "counts other files than the inventory"
+{ fcr w s same-as-default 2 1; chk_end; } > "$CHK"
+expect_refused "same-as-default with a file that did not match" "without matching every file"
+{ fcr w s differs 2 3; chk_end; } > "$CHK"
+expect_refused "more matches than files" "malformed FILE-CHECK row"
+{ fcr w s shiny 2 2; chk_end; } > "$CHK"
+expect_refused "a FILE-CHECK verdict this script does not know" "unknown FILE-CHECK verdict shiny"
+{ printf 'FILE-CHECK\tw\ts\tsame-as-default\tfiles=2\tsame=2\n'; chk_end; } > "$CHK"
+expect_refused "a FILE-CHECK row that is cut short" "a FILE-CHECK row has 6 fields, not 7"
+one unpushed 1 1 < /dev/null
+{ fcr w s same-as-default 2 2; mc w s merged "$H1"; chk_end; } > "$CHK"
+expect_refused "a FILE-CHECK row for an entry that is not untracked" "which the inventory reads as unpushed"
+
+{ entry_f w s unpushed "$H1" 1 1 0 4; inv_end 1; } > "$INV"
+{ mc w s merged "$H1"; chk_end; } > "$CHK"
+expect_class "a merged HEAD beside ignored files is tool output" w s tool-output
+{ mc w s github-bot "$H1"; chk_end; } > "$CHK"
+expect_class "a bot's commit beside ignored files is tool output" w s tool-output
+{ mc w s open "$H1"; chk_end; } > "$CHK"
+expect_class "ignored files never lower work in flight" w s work-in-flight
+{ mc w s no-pr "$H1"; chk_end; } > "$CHK"
+expect_class "ignored files never lower an unsettled commit" w s needs-a-person
+
 echo "unknown and the worktree row"
 { entry a s1 clean "$H1" 0 0; entry a s2 unpushed "$H1" 1 1; entry b s1 ignored "$H1" 0 0
   entry b s2 unpushed "$H2" 1 1; entry c s1 clean "$H1" 0 0; inv_end 5; } > "$INV"
