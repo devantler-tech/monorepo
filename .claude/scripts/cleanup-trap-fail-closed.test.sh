@@ -328,6 +328,8 @@ improver-role-disclosure-contract.test.sh|
 merge-confirmation-read.test.sh|
 merge-preflight-thread-gate.test.sh|
 drifted-lane-escalation-contract.test.sh|
+retired-rule-survivors-contract.test.sh|
+review-provider-loop-contract.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"

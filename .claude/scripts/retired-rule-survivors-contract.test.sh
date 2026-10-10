@@ -28,6 +28,21 @@
 
 set -euo pipefail
 
+# Keep the override path allocation-free, but guard both paths against an abort
+# being masked by successful cleanup on bash 3.2 (monorepo#3414).
+scratch=""
+retired_rule_test_finished=0
+cleanup() {
+  local rc=$?
+  [ -z "${scratch}" ] || rm -rf "${scratch}"
+  if [ "${retired_rule_test_finished}" != 1 ] && [ "${rc}" -eq 0 ]; then
+    echo "retired-rule-survivors contract: aborted before finishing" >&2
+    rc=1
+  fi
+  exit "${rc}"
+}
+trap cleanup EXIT
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # The document under test is the whole contract — AGENTS.md plus every guide it indexes — unless
 # CONTRACT_DOC names another. The scratch directory also holds the self-test's mutated copies.
@@ -35,7 +50,6 @@ if [ -n "${CONTRACT_DOC:-}" ]; then
   constitution="${CONTRACT_DOC}"
 else
   scratch="$(mktemp -d)"
-  trap 'rm -rf "${scratch}"' EXIT
   constitution="${scratch}/contract.md"
   "${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
     { echo "retired-rule-survivors contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
@@ -130,3 +144,4 @@ if [ -z "${CONTRACT_DOC:-}" ]; then
 fi
 
 echo "retired-rule-survivors contract: OK — each retired rule survives only inside its supersession notice"
+retired_rule_test_finished=1
