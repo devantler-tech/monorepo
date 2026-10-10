@@ -179,7 +179,7 @@ else bad 'an inherited GH_HOST or GH_REPO is not honoured' "rc=$RC $(head -2 "$C
 echo '== a commit in the history of a merged pull request'
 # The pull request moved on from the commit and then merged: no pull request has the commit
 # as its head, and only the comparison can say whether the head that merged contains it.
-for w in w-anc w-anc-fail w-anc-odd w-anc-second w-anc-stacked w-anc-fork w-anc-open w-anc-badhead; do
+for w in w-anc w-anc-fail w-anc-odd w-anc-second w-anc-stacked w-anc-fork w-anc-open w-anc-badhead w-anc-ident w-anc-retry w-anc-unsure; do
   add_sub "$w" 'git@github.com:devantler-tech/ksail.git'
 done
 H1=$(printf '%040d' 71); H2=$(printf '%040d' 72)
@@ -190,16 +190,25 @@ prs w-anc-odd     1 "[$(node 53 MERGED "$H1")]"
 cmp w-anc-odd "$H1" ahead 0 "$OTHER"
 prs w-anc-second  2 "[$(node 54 MERGED "$H1"),$(node 55 MERGED "$H2")]"
 cmp w-anc-second "$H1" diverged 3 "$OTHER"
-cmp w-anc-second "$H2" identical 0 "$(sha_of w-anc-second)"
+cmp w-anc-second "$H2" ahead 0 "$(sha_of w-anc-second)"
+prs w-anc-ident   1 "[$(node 60 MERGED "$H1")]"
+cmp w-anc-ident "$H1" identical 0 "$(sha_of w-anc-ident)"
+# w-anc-retry: the first comparison cannot be read, the second proves it.
+prs w-anc-retry   2 "[$(node 62 MERGED "$H1"),$(node 63 MERGED "$H2")]"
+cmp w-anc-retry "$H2" ahead 0 "$(sha_of w-anc-retry)"
+# w-anc-unsure: the first comparison cannot be read, the second says no.
+prs w-anc-unsure  2 "[$(node 64 MERGED "$H1"),$(node 65 MERGED "$H2")]"
+cmp w-anc-unsure "$H2" diverged 3 "$OTHER"
 prs w-anc-stacked 1 "[$(node 56 MERGED "$H1" feature-base)]"
 prs w-anc-fork    1 "[$(node 57 MERGED "$H1" main someone-else/ksail)]"
 prs w-anc-open    1 "[$(node 58 OPEN "$H1")]"
 prs w-anc-badhead 1 "[$(node 59 MERGED 'main/../../x')]"
-{ entry w-anc unpushed; entry w-anc-second unpushed; entry w-anc-stacked unpushed
+{ entry w-anc unpushed; entry w-anc-second unpushed; entry w-anc-stacked unpushed; entry w-anc-retry unpushed
   entry w-anc-fork unpushed; entry w-anc-open unpushed; entry w-other unpushed; } > "$TMP/in"; seal "$TMP/in"
 run < "$TMP/in"
 expect 'an ancestor of the head that merged is merged-ancestor'      w-anc         'merged-ancestor pr=51 other_local=0'
 expect 'the pull request that proves it is the one named'            w-anc-second  'merged-ancestor pr=55 other_local=0'
+expect 'an unreadable comparison does not hide a later one that proves it' w-anc-retry 'merged-ancestor pr=63 other_local=0'
 expect 'a pull request merged into another branch proves nothing'    w-anc-stacked 'other-head pr=56 other_local=0'
 expect "a pull request merged into a fork proves nothing"            w-anc-fork    'other-head pr=57 other_local=0'
 expect 'an open pull request at another head proves nothing'         w-anc-open    'other-head pr=58 other_local=0'
@@ -209,7 +218,7 @@ check 'the comparison names this commit and the head that merged' \
   grep -q "^devantler-tech/ksail cmp-$(sha_of w-anc)-$H1 github.com " "$CALLS"
 check 'no comparison is made for a pull request that could not prove it' eval \
   '! grep -q "cmp-$(sha_of w-anc-stacked)-\|cmp-$(sha_of w-anc-fork)-\|cmp-$(sha_of w-anc-open)-" "$CALLS"'
-check 'the closing line counts them apart from merged' out_has $'^CHECKED\tmerged=0\tmerged_ancestor=2\tmerged_other_base=0\topen=0\tclosed=0\tother_head=4\t'
+check 'the closing line counts them apart from merged' out_has $'^CHECKED\tmerged=0\tmerged_ancestor=3\tmerged_other_base=0\topen=0\tclosed=0\tother_head=4\t'
 anc_unknown() { # name worktree
   { entry "$2" unpushed; } > "$TMP/in"; seal "$TMP/in"
   run < "$TMP/in"
@@ -218,6 +227,8 @@ anc_unknown() { # name worktree
 }
 anc_unknown 'a comparison that failed is UNKNOWN, never other-head or merged-ancestor' w-anc-fail
 anc_unknown 'an answer whose merge base is another commit but claims no divergence'    w-anc-odd
+anc_unknown 'identical is never proof: the head that merged cannot be this commit'            w-anc-ident
+anc_unknown 'an unreadable comparison beside one that says no is UNKNOWN, not other-head' w-anc-unsure
 anc_unknown 'a head that is not a commit id is never put in a request'                 w-anc-badhead
 check 'and no comparison was sent for it' eval '! grep -q " cmp-" "$CALLS"'
 printf '{"status":"ahead","behind_by":0}\n' > "$FIX/cmp-$(sha_of w-anc-fail)-$H1.json"

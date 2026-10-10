@@ -186,17 +186,20 @@ origin_repo() {
 }
 
 # is_ancestor <name> <sha> <head> -> 0 when GitHub's comparison shows <sha> is an ancestor of
-# <head> (or is <head>), 1 when it shows it is not, 2 when the read failed or its answer
+# <head>, 1 when it shows it is not, 2 when the read failed or its answer
 # cannot be trusted. The merge base of the two IS <sha> exactly when <sha> is an ancestor.
+# `identical` is never accepted: it would mean <head> is <sha>, and then a pull request has
+# <sha> as its head, which the caller has already ruled out.
 is_ancestor() {
   local name=$1 sha=$2 head=$3 json answer
   case "$name" in ''|.|..|*/*) return 2 ;; esac
   json=$(gh api --hostname github.com "repos/$OWNER/$name/compare/$sha...$head" 2>/dev/null) || return 2
   answer=$(printf '%s' "$json" | jq -r --arg sha "$sha" '
     if (type != "object") or ((.merge_base_commit.sha | type) != "string")
-       or ((.status | type) != "string") or ((.behind_by | type) != "number") then "unknown"
-    elif .merge_base_commit.sha == $sha and .behind_by == 0
-         and (.status == "ahead" or .status == "identical") then "yes"
+       or ((.status | type) != "string") or ((.behind_by | type) != "number")
+       or ((.ahead_by | type) != "number") then "unknown"
+    elif .merge_base_commit.sha == $sha and .behind_by == 0 and .ahead_by > 0
+         and .status == "ahead" then "yes"
     elif .merge_base_commit.sha != $sha and .behind_by > 0
          and (.status == "diverged" or .status == "behind") then "no"
     else "unknown"
@@ -253,7 +256,7 @@ lookup() {
   # Whether the commit is in the history that merged is a second read; until one of them
   # proves it, the verdict stays `other-head`.
   case "$answer" in 'ancestor? '[0-9]*' '[0-9]*)
-    local first=${answer#ancestor? } list pair n h is
+    local first=${answer#ancestor? } list pair n h is unsure=0
     list=${first#* }; first=${first%% *}
     case "$first" in ''|*[!0-9]*) return 1 ;; esac
     answer="other-head $first"
@@ -268,9 +271,12 @@ lookup() {
       case "$is" in
         0) answer="merged-ancestor $n"; break ;;
         1) ;;
-        *) return 1 ;;
+        # An unreadable comparison settles nothing, and a later pull request may still prove it.
+        *) unsure=1 ;;
       esac
-    done ;;
+    done
+    # Nothing proved it, and one comparison could not be read: `other-head` would be a guess.
+    case "$answer" in other-head\ *) [ "$unsure" = 0 ] || return 1 ;; esac ;;
   esac
   case "$answer" in
     'merged-ancestor '[0-9]*) ;;
