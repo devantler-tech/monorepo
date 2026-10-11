@@ -214,20 +214,32 @@ expect_exit() {
   if [ "$rc" -eq "$want" ]; then pass=$((pass + 1)); else echo "FAIL: $name -- exit $rc, want $want"; fail=$((fail + 1)); fi
 }
 
+# expect_refusal <name> <expected stderr text> <args...> — exit 2 for the stated reason: any other
+# UNKNOWN (an unreadable snapshot, a missing tool) also exits 2 and must not pass as this refusal.
+expect_refusal() {
+  local name=$1 reason=$2 rc=0 err; shift 2
+  err=$(bash "$SCRIPT" "$@" 2>&1 >/dev/null) || rc=$?
+  if [ "$rc" -ne 2 ]; then echo "FAIL: $name -- exit $rc, want 2"; fail=$((fail + 1)); return; fi
+  if ! grep -Fq -- "$reason" <<<"$err"; then
+    echo "FAIL: $name -- refused, but not for: $reason"; printf '%s\n' "$err" | sed 's/^/    /'; fail=$((fail + 1)); return
+  fi
+  pass=$((pass + 1))
+}
+
 snapshot "$FIX/ok.txt" "$SELF" "$OWN" "$SHELL_ROW"
 : > "$FIX/empty.txt"
 COMMON=(--projects "$PROJECTS" --self-pid 110 --cwd-file "$FIX/cwd.tsv")
 expect_exit "control: the shared arguments pass" 0 --task daily-ai-assistant --ps-file "$FIX/ok.txt" "${COMMON[@]}"
 expect_exit "a missing task is a usage error" 2 --ps-file "$FIX/ok.txt" "${COMMON[@]}"
-expect_exit "a task that is not an id is refused" 2 --task 'a b' --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_refusal "a task that is not an id is refused" '--task must be a task id' --task 'a b' --ps-file "$FIX/ok.txt" "${COMMON[@]}"
 expect_exit "control: a set of two ids passes" 0 --task daily-ai-assistant,agentic-engineer-2 --ps-file "$FIX/ok.txt" "${COMMON[@]}"
-expect_exit "a set with an empty id is refused" 2 --task daily-ai-assistant,,agent-improver --ps-file "$FIX/ok.txt" "${COMMON[@]}"
-expect_exit "a set with a trailing comma is refused" 2 --task daily-ai-assistant, --ps-file "$FIX/ok.txt" "${COMMON[@]}"
-expect_exit "a set with a leading comma is refused" 2 --task ,daily-ai-assistant --ps-file "$FIX/ok.txt" "${COMMON[@]}"
-expect_exit "a set naming an id twice is refused" 2 --task daily-ai-assistant,daily-ai-assistant --ps-file "$FIX/ok.txt" "${COMMON[@]}"
-expect_exit "a set with an id that is not an id is refused" 2 --task 'daily-ai-assistant,a b' --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_refusal "a set with an empty id is refused" '--task must be a task id' --task daily-ai-assistant,,agent-improver --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_refusal "a set with a trailing comma is refused" '--task must be a task id' --task daily-ai-assistant, --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_refusal "a set with a leading comma is refused" '--task must be a task id' --task ,daily-ai-assistant --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_refusal "a set naming an id twice is refused" '--task names an id twice: daily-ai-assistant' --task daily-ai-assistant,daily-ai-assistant --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_refusal "a set with an id that is not an id is refused" '--task must be a task id' --task 'daily-ai-assistant,a b' --ps-file "$FIX/ok.txt" "${COMMON[@]}"
 expect_exit "control: a set of four ids passes" 0 --task a,b,c,d --ps-file "$FIX/ok.txt" "${COMMON[@]}"
-expect_exit "a set of more than four ids is refused" 2 --task a,b,c,d,e --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_refusal "a set of more than four ids is refused" '--task takes at most four ids' --task a,b,c,d,e --ps-file "$FIX/ok.txt" "${COMMON[@]}"
 expect_exit "an empty process list is UNKNOWN" 2 --task daily-ai-assistant --ps-file "$FIX/empty.txt" "${COMMON[@]}"
 expect_exit "an unreadable process list is UNKNOWN" 2 --task daily-ai-assistant --ps-file "$FIX/absent.txt" "${COMMON[@]}"
 expect_exit "a missing projects root is UNKNOWN" 2 --task daily-ai-assistant --ps-file "$FIX/ok.txt" \
