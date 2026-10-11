@@ -51,6 +51,7 @@ This is an automated run."; }
 transcript /work/engineer-a aaaa "$(scheduled daily-ai-assistant)"
 transcript /work/engineer-b bbbb "$(scheduled daily-ai-assistant)"
 transcript /work/improver cccc "$(scheduled agent-improver)"
+transcript /work/engineer-second mmmm "$(scheduled agentic-engineer-2)"
 transcript /work/interactive dddd "$(enqueue 'please fix the build')"
 transcript /work/quoted eeee "$(enqueue 'what does <scheduled-task name="daily-ai-assistant" file="x"> mean?')"
 transcript /work/reminder ffff "$(enqueue "<system-reminder>
@@ -98,6 +99,7 @@ cat > "$FIX/cwd.tsv" <<EOF
 1200	/work/large
 1300	/work/stale
 1400	/work/engineer.b
+1500	/work/engineer-second
 EOF
 
 # snapshot <file> <"pid ppid etime kind">... — kind is `session`, `wrapper` or any other command.
@@ -184,6 +186,27 @@ check "a live run outranks an unattributed session" 1 '^LIVE .* pid=200 ' \
   "$SELF" "$OWN" "$SHELL_ROW" '200 1 05:00 session' '950 1 00:02 session'
 check "a snapshot with no session at all is UNKNOWN" 2 - "$SHELL_ROW" '130 1 00:30 sleep 5'
 
+# A lane can have more than one engineer entry working the same branch namespace (monorepo#4117).
+# A run on either must see the other's run, so --task takes the lane's entries as a set.
+SET=daily-ai-assistant,agentic-engineer-2
+check "control: asking for one entry does not report the other entry's run" 0 'other=1 own=100 task=daily-ai-assistant live=0$' \
+  "$SELF" "$OWN" "$SHELL_ROW" '1500 1 05:00 session'
+T_TASK=$SET check "a run of the second entry is reported when the set is asked for" 1 '^LIVE task=agentic-engineer-2 pid=1500 elapsed=05:00 session=mmmm$' \
+  "$SELF" "$OWN" "$SHELL_ROW" '1500 1 05:00 session'
+T_TASK=$SET check "a run of the first entry is reported when the set is asked for" 1 '^LIVE task=daily-ai-assistant pid=200 ' \
+  "$SELF" "$OWN" "$SHELL_ROW" '200 1 05:00 session'
+T_TASK=$SET check "runs of both entries are each reported under their own id" 1 '^CHECKED sessions=3 other=2 own=100 task=daily-ai-assistant,agentic-engineer-2 live=2$' \
+  "$SELF" "$OWN" "$SHELL_ROW" '200 1 05:00 session' '1500 1 04:00 session'
+T_TASK=$SET check "a task outside the set is still not reported" 0 'task=daily-ai-assistant,agentic-engineer-2 live=0$' \
+  "$SELF" "$OWN" "$SHELL_ROW" '300 1 05:00 session'
+T_TASK=$SET check "an interactive session matches no entry of the set" 0 'live=0$' \
+  "$SELF" "$OWN" "$SHELL_ROW" '400 1 05:00 session'
+T_TASK=$SET check "an unattributed session is still UNKNOWN for a set" 2 'reason=no-transcript$' \
+  "$SELF" "$OWN" "$SHELL_ROW" '950 1 00:02 session'
+# An id is matched whole: an entry whose id merely begins with a requested id is another task.
+T_TASK=agentic-engineer check "an id that is a prefix of a live task's id does not match it" 0 'live=0$' \
+  "$SELF" "$OWN" "$SHELL_ROW" '1500 1 05:00 session'
+
 # expect_exit <name> <expected exit> <args...>
 expect_exit() {
   local name=$1 want=$2 rc=0; shift 2
@@ -197,6 +220,14 @@ COMMON=(--projects "$PROJECTS" --self-pid 110 --cwd-file "$FIX/cwd.tsv")
 expect_exit "control: the shared arguments pass" 0 --task daily-ai-assistant --ps-file "$FIX/ok.txt" "${COMMON[@]}"
 expect_exit "a missing task is a usage error" 2 --ps-file "$FIX/ok.txt" "${COMMON[@]}"
 expect_exit "a task that is not an id is refused" 2 --task 'a b' --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_exit "control: a set of two ids passes" 0 --task daily-ai-assistant,agentic-engineer-2 --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_exit "a set with an empty id is refused" 2 --task daily-ai-assistant,,agent-improver --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_exit "a set with a trailing comma is refused" 2 --task daily-ai-assistant, --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_exit "a set with a leading comma is refused" 2 --task ,daily-ai-assistant --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_exit "a set naming an id twice is refused" 2 --task daily-ai-assistant,daily-ai-assistant --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_exit "a set with an id that is not an id is refused" 2 --task 'daily-ai-assistant,a b' --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_exit "control: a set of four ids passes" 0 --task a,b,c,d --ps-file "$FIX/ok.txt" "${COMMON[@]}"
+expect_exit "a set of more than four ids is refused" 2 --task a,b,c,d,e --ps-file "$FIX/ok.txt" "${COMMON[@]}"
 expect_exit "an empty process list is UNKNOWN" 2 --task daily-ai-assistant --ps-file "$FIX/empty.txt" "${COMMON[@]}"
 expect_exit "an unreadable process list is UNKNOWN" 2 --task daily-ai-assistant --ps-file "$FIX/absent.txt" "${COMMON[@]}"
 expect_exit "a missing projects root is UNKNOWN" 2 --task daily-ai-assistant --ps-file "$FIX/ok.txt" \
@@ -213,7 +244,7 @@ rule=$(awk '/^\*\*Whether another run of your own task is live/ { on = 1 } on &&
 if [ -z "$rule" ]; then
   echo "FAIL: contract -- the same-task rule was not found in the cadence guide"; fail=$((fail + 1))
 else
-  for needle in 'claude-task-live-runs.sh --task' 'stand-down' 're-read a pull request' 'Exit `2` is UNKNOWN' 'never as exit `0`'; do
+  for needle in 'claude-task-live-runs.sh --task' 'separated by commas' 'stand-down' 're-read a pull request' 'Exit `2` is UNKNOWN' 'never as exit `0`'; do
     if grep -Fq -- "$needle" <<<"$rule"; then pass=$((pass + 1))
     else echo "FAIL: contract -- the cadence guide rule lacks: $needle"; fail=$((fail + 1)); fi
   done

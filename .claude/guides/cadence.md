@@ -49,7 +49,9 @@ break a sibling mid-flight; keep the fence scoped to that artifact or surface an
 invisible there. On the Claude lane, run
 `.claude/scripts/claude-task-live-runs.sh --task <scheduled task id>`: it lists the live session
 processes, leaves out your own, and attributes each of the others to its task from the opening
-marker of its transcript. Exit `1` prints one `LIVE` line per other run of the task. That is not a
+marker of its transcript. A lane whose engineer runs on more than one scheduler entry passes every
+entry's id, separated by commas, because those entries work one branch namespace (monorepo#4117).
+Exit `1` prints one `LIVE` line per other run of the task. That is not a
 stand-down: it means the items the previous run recorded as its next steps are still being worked,
 so re-read a pull request's state immediately before you promote, queue or merge it, and do not
 rewrite a whole memory file. Exit `2` is UNKNOWN — a session could not be attributed, which is what
