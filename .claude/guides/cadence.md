@@ -11,15 +11,20 @@ The dispatch table itself is in [AGENTS.md → *Cadence & focus*](../../AGENTS.m
 
 **The stagger invariant IS the schedule: both machine-local Agentic Engineer lanes dispatch every
 hour, at distinct minute offsets — the current Codex adapter at `:10` and Claude adapter at
-`:50`; the four Agent Improver starts remain at `:00`.** No two scheduled roles share an exact start
+`:50`; the eight Agent Improver starts remain at `:00`.** No two scheduled roles share an exact start
 time. Read your lane's row for your own slots, and treat runtime jitter plus long-running siblings as
 normal overlap rather than evidence that a slot is free.
 
 Both machine-local Agentic Engineer lanes are **scheduled** every hour — for what the Claude lane
 actually keeps, see *Scheduled is not delivered* below. These rows are deployment bindings, not
 provider requirements for the portable role. The Agent Improver
-keeps its 4×/day rotation (00 Claude, 07 Codex, 12 Claude, 19 Codex) as additional `:00` starts; those
-slots no longer replace an Agentic Engineer tick. This table covers the two scheduled engineering
+runs 8×/day, alternating every three hours (00, 06, 12, 18 Claude; 03, 09, 15, 21 Codex), as
+additional `:00` starts; those slots no longer replace an Agentic Engineer tick. The improver cadence
+was doubled to use the weekly allowances (maintainer decision 2026-10-11, monorepo#4116). A
+30-minute engineer cadence was decided the same day and is not scheduled yet: it needs a second
+engineer entry per lane, and the schedule drift check, the liveness checks and the lane watch read
+one entry per lane (monorepo#4117). Weekly allowance use is re-read on 2026-10-18; a cap reached
+early is evidence to lower that lane's cadence, and nothing works around a cap. This table covers the two scheduled engineering
 roles only — spend stewardship has no dispatch slot of its own (see *Spend contract*).
 
 **Two properties of this schedule change how you plan a run.**
@@ -92,7 +97,7 @@ store records **zero** `per_task_limit` skips for it, but the second failure cau
 to that store, and the Improver's own missing 2026-08-05 dispatch is one of the two no-record cases.
 So zero skips establishes nothing about its health; reading it as a clean bill is the same
 absence-as-evidence error this whole correction is about. Measure the Improver the same way —
-scheduled slots against actual dispatches — before relying on its four daily starts. The Codex
+scheduled slots against actual dispatches — before relying on its four daily starts on this lane. The Codex
 scheduler refuses none, which bounds *that* lane's refusal cause and says nothing about this one.
 ⚠️ **Re-derive this ONLY by comparing actual dispatches to scheduled slots** — never by counting skip
 records. Counting them is what produced five mutually-inconsistent readings (32.9%, 36.6%, 44.0%,
@@ -109,7 +114,7 @@ next run will collect this" decision is wrong whenever that tick is dropped. Tha
 time in five on Claude in August and far less in the September reading above, so measure the current
 rate rather than assuming either. The error is always in the
 direction of waiting **longer** than planned — so prefer finishing inside the current run over handing
-work to a tick that may not come. The Agent Improver's four daily starts are additional work, not
+work to a tick that may not come. The Agent Improver's eight daily starts, four per lane, are additional work, not
 replacement slots. The scheduled interval is the gap **between runs, not a per-run time budget**; it
 bounds a carry-forward without telling an active run to stop early. Each run works
 *The work-selection ladder* top-down — **breakage → finish started work and due verification →

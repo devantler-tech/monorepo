@@ -166,8 +166,8 @@ disagree, the scheduler is the defect — reconcile it there, per *Agent definit
 
 | Lane | Agentic Engineer | Agent Improver |
 |---|---|---|
-| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 12:00 |
-| **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 07:00, 19:00 |
+| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 06:00, 12:00, 18:00 |
+| **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 03:00, 09:00, 15:00, 21:00 |
 
 Work [*The work-selection ladder*](#the-work-selection-ladder--one-ordering-checked-top-down-every-run)
 top-down every run and **keep going while actionable work remains** — the floor is at least one
