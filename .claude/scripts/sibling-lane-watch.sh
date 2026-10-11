@@ -198,8 +198,10 @@ esac
 # The ids go to the liveness check as one argument each and into this script's own summary, so
 # they are held to the shape a scheduler id has. A repeated id would be judged twice and could
 # hide a dead entry behind a producing one of the same name.
+# The letters are spelled out: a range such as a-z follows the locale's collation, and outside the C
+# locale it also matches capitals.
 [ "$ENTRIES_SET" -eq 1 ] || ENTRIES="$default_entries"
-case "$ENTRIES" in '' | ,* | *, | *,,* | *[!a-z0-9,-]*)
+case "$ENTRIES" in '' | ,* | *, | *,,* | *[!abcdefghijklmnopqrstuvwxyz0123456789,-]*)
   unknown "--entries must be a comma-separated list of ids made of lowercase letters, digits and hyphens" ;;
 esac
 ENTRY_LIST=()
