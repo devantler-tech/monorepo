@@ -516,15 +516,18 @@ portfolio products as work for his business's clients: `devantler-tech/ascoachin
 `devantler-tech/business-site`. Only he extends this list. Two things follow from the direction,
 and only these two:
 
-- **High by default.** An open issue in a client product is refined to native Priority **High**
-  unless he set another value, with this direction recorded as the reason. This is a deliberate
-  raise: it places client work ahead of Medium and Low work at the same rung and delivery stage.
-  A priority that a product card or guide sets for a class of work still governs that class: Blog
-  Stewardship on the business site stays low priority and bounded, as the cadence guide says.
-- **First among equals.** One precedence per rung. Finishing (rung 1): within a delivery stage, the
-  client item before original first-start age is compared. Ready pull (rung 3): among candidates of
-  equal native Priority, the client item. Refinement (rung 4): among Backlog items, the client item,
-  after any critical obligation that needs refining.
+- **High when refined.** When you refine an actionable issue in a client product and its native
+  Priority is unset, set **High** and record this direction as the reason. That is a deliberate
+  raise over the Medium and Low work it will be compared with. It does not apply where he set
+  another value, where a product card or guide sets the priority for a class of work (Blog
+  Stewardship on the business site stays low priority and bounded, as the cadence guide says), or
+  to an issue this guide says is never worked, such as an automation-owned dashboard: leave those
+  untouched.
+- **First among equals.** Client status is a tie-breaker and nothing more. Wherever this guide
+  chooses between comparable candidates, meaning the same rung, delivery stage and native Priority,
+  the client item is chosen before age is compared: among work being finished, among Ready
+  candidates, and among Backlog items being refined. A candidate of higher native Priority always
+  comes before a client item of lower Priority.
 
 Everything else is unchanged. Rung order and delivery-stage order are compared before either of
 these. Icebox stays deferred: at triage this direction is a reason to move a client item from
