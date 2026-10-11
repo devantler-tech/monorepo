@@ -70,6 +70,10 @@
 #   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog, ORIG_HEAD or FETCH_HEAD commit reachable from no remote
 #   refs/salvaged/<id>/commit-editmsg - the COMMIT_EDITMSG bytes, when present (a message a hook rejected)
 #   refs/salvaged/<id>/config-worktree - the config.worktree bytes, when present (per-worktree settings)
+#   refs/salvaged/<id>/resolve-undo - a tree of the index's resolve-undo stages, when present, as
+#                                   `stage<N>/<path>` (1 base, 2 ours, 3 theirs). Git has no
+#                                   command that writes them back into an index; read a stage
+#                                   with `git cat-file blob refs/salvaged/<id>/resolve-undo:stage2/<path>`
 # Restore: `git worktree add --detach <path> refs/salvaged/<id>/head`, then
 # `git -C <path> read-tree refs/salvaged/<id>/index` for the staged index and
 # `git -C <path> restore --source=refs/salvaged/<id>/worktree --worktree -- .` for the working
@@ -786,6 +790,9 @@ recheck_mutable_gates() {
     if ! now_msg=$(admin_file_blobs "$wt") || [ "$now_msg" != "$SALVAGE_ADMIN_BLOBS" ]; then
       keep "$wt" "COMMIT_EDITMSG or config.worktree changed after the salvage snapshot ($SALVAGE_REF)"; return 1
     fi
+    if ! resolve_undo_tree "$wt" || [ "$RESOLVE_UNDO_TREE" != "$SALVAGE_RESOLVE_UNDO" ]; then
+      keep "$wt" "the index's resolve-undo entries changed after the salvage snapshot ($SALVAGE_REF)"; return 1
+    fi
     if ! admin_backpointer_ok "$wt"; then
       keep "$wt" "the worktree's gitfile no longer names its own admin directory ($SALVAGE_REF)"; return 1
     fi
@@ -1103,9 +1110,13 @@ salvage_blocker() {
   if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot read the index for conflicts"; return 0; fi
   if [ -n "$list" ]; then SALVAGE_NOTE="the index holds unmerged (conflicted) entries"; return 0; fi
   # A resolved conflict keeps its three stages as resolve-undo data, which write-tree drops.
-  list=$(git -C "$wt" ls-files --resolve-undo 2>/dev/null); rc=$?
-  if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot read the index for resolve-undo entries"; return 0; fi
-  if [ -n "$list" ]; then SALVAGE_NOTE="the index holds resolve-undo entries (salvage cannot carry them)"; return 0; fi
+  # Salvage carries them in their own ref (resolve_undo_tree), so they only count
+  # towards the cap here (#2831).
+  sz=$(resolve_undo_kb "$wt") || { SALVAGE_NOTE="cannot read or size the index's resolve-undo entries"; return 0; }
+  total_kb=$((total_kb + sz))
+  if [ "$total_kb" -gt "$SALVAGE_MAX_KB" ]; then
+    SALVAGE_NOTE="more than ${SALVAGE_MAX_KB} KB of changed or untracked data to salvage"; return 0
+  fi
   # NUL-delimited: the default output C-quotes unusual names, which would hide them from
   # both the embedded-repository test and the size sum. tr keeps NULs out of $( ).
   # Untracked tool noise is sized as the snapshot takes it: not at all (salvage_pathspec).
@@ -1157,6 +1168,66 @@ salvage_blocker() {
   worktree_state_blocker "$wt" && return 0
   conversion_blocker "$wt" && return 0
   return 1
+}
+
+# resolve_undo_entries <worktree> <file> -> writes one NUL-terminated
+# `<mode> <sha>\tstage<N>/<path>` record to <file> for every resolve-undo entry in the index:
+# the stages of a conflict that was resolved, which git keeps so the resolution can be
+# redone. They are in no tree, and a clean worktree whose merge was committed long ago
+# still holds them (#2831). Non-zero when the index cannot be read or a record does not
+# parse; an empty <file> means the index holds none.
+resolve_undo_entries() {
+  local wt=$1 out=$2 raw rec meta path mode sha stage rest
+  raw=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-reuc.XXXXXX") || return 1
+  if ! git -C "$wt" ls-files -z --resolve-undo > "$raw" 2>/dev/null; then rm -f "$raw"; return 1; fi
+  : > "$out" || { rm -f "$raw"; return 1; }
+  while IFS= read -r -d '' rec; do
+    # rec: `<mode> <sha> <stage>\t<path>`; the path may itself hold tabs.
+    meta=${rec%%$'\t'*}; path=${rec#*$'\t'}
+    IFS=' ' read -r mode sha stage rest <<< "$meta"
+    if [ "$meta" = "$rec" ] || [ -z "$path" ] || [ -n "$rest" ]; then rm -f "$raw"; return 1; fi
+    case "$mode" in ''|*[!0-7]*) rm -f "$raw"; return 1 ;; esac
+    case "$sha" in ''|*[!0-9a-f]*) rm -f "$raw"; return 1 ;; esac
+    case "$stage" in 1|2|3) ;; *) rm -f "$raw"; return 1 ;; esac
+    printf '%s %s\tstage%s/%s\0' "$mode" "$sha" "$stage" "$path" >> "$out" || { rm -f "$raw"; return 1; }
+  done < "$raw"
+  rm -f "$raw"
+}
+
+# resolve_undo_kb <worktree> -> prints the size in KB of the blobs the resolve-undo entries
+# name, rounded up per blob, so the salvage cap covers what the resolve-undo ref makes
+# permanent. Read-only. Non-zero on a read failure.
+resolve_undo_kb() {
+  local wt=$1 list rec meta mode sha sz kb=0 failed=0
+  list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-reuc-list.XXXXXX") || return 1
+  if ! resolve_undo_entries "$wt" "$list"; then rm -f "$list"; return 1; fi
+  while IFS= read -r -d '' rec; do
+    meta=${rec%%$'\t'*}
+    IFS=' ' read -r mode sha <<< "$meta"
+    [ "$mode" = 160000 ] && continue                     # a gitlink holds no bytes here
+    sz=$(git -C "$wt" cat-file -s "$sha" 2>/dev/null) || { failed=1; break; }
+    kb=$((kb + (sz + 1023) / 1024))
+  done < "$list"
+  rm -f "$list"
+  [ "$failed" -eq 0 ] || return 1
+  printf '%s\n' "$kb"
+}
+
+# resolve_undo_tree <worktree> -> sets RESOLVE_UNDO_TREE to a tree holding every resolve-undo
+# stage as `stage<N>/<path>`, or to nothing when the index holds none. Built in a temporary
+# index, so the worktree's own index is never written. Non-zero on any failure.
+resolve_undo_tree() {
+  local wt=$1 dir tree
+  RESOLVE_UNDO_TREE=""
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/wt-salvage-reuc-index.XXXXXX") || return 1
+  if ! resolve_undo_entries "$wt" "$dir/entries"; then rm -rf "$dir"; return 1; fi
+  if [ ! -s "$dir/entries" ]; then rm -rf "$dir"; return 0; fi
+  if ! GIT_INDEX_FILE="$dir/index" git -C "$wt" update-index -z --index-info < "$dir/entries" 2>/dev/null \
+     || ! tree=$(GIT_INDEX_FILE="$dir/index" git -C "$wt" write-tree 2>/dev/null) || [ -z "$tree" ]; then
+    rm -rf "$dir"; return 1
+  fi
+  rm -rf "$dir"
+  RESOLVE_UNDO_TREE=$tree
 }
 
 # nested_repository_blocker <worktree> -> 0, with SALVAGE_NOTE, when the worktree holds any
@@ -1550,7 +1621,7 @@ pseudo_ref_commits() {
 # only preserve data) and the caller KEEPs the worktree.
 salvage_write() {
   local wt=$1 sha=$2 id base idx_tree wt_tree idx_commit wt_commit orphans o path_id
-  SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""
+  SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_RESOLVE_UNDO=""
   # The namespace must be unique per WORKTREE, not per basename: two registered nested
   # worktrees can share a basename and a HEAD, and salvaged in the same second they would
   # otherwise derive one namespace and the second would overwrite the first's refs —
@@ -1577,7 +1648,9 @@ salvage_write() {
     || { SALVAGE_NOTE="cannot size the salvage snapshot"; return 1; }
   local admin_kb
   admin_kb=$(admin_files_kb "$wt") || { SALVAGE_NOTE="cannot size the admin directory's files"; return 1; }
-  captured_kb=$((captured_kb + admin_kb))
+  local reuc_kb
+  reuc_kb=$(resolve_undo_kb "$wt") || { SALVAGE_NOTE="cannot read or size the index's resolve-undo entries"; return 1; }
+  captured_kb=$((captured_kb + admin_kb + reuc_kb))
   if [ "$captured_kb" -gt "$SALVAGE_MAX_KB" ]; then
     SALVAGE_NOTE="the snapshot holds more than ${SALVAGE_MAX_KB} KB of changed data"; return 1
   fi
@@ -1613,6 +1686,15 @@ salvage_write() {
       && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$kref" 2>/dev/null)" = "$kblob" ] \
       || { SALVAGE_NOTE="cannot write or verify $kref"; return 1; }
   done <<< "$kept"
+  # The resolve-undo stages are in neither tree above, and the removal deletes the index
+  # that holds them.
+  resolve_undo_tree "$wt" || { SALVAGE_NOTE="cannot preserve the index's resolve-undo entries"; return 1; }
+  if [ -n "$RESOLVE_UNDO_TREE" ]; then
+    git -C "$TOPLEVEL" update-ref "$base/resolve-undo" "$RESOLVE_UNDO_TREE" "" 2>/dev/null \
+      && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/resolve-undo" 2>/dev/null)" = "$RESOLVE_UNDO_TREE" ] \
+      || { SALVAGE_NOTE="cannot write or verify $base/resolve-undo"; return 1; }
+  fi
+  SALVAGE_RESOLVE_UNDO=$RESOLVE_UNDO_TREE
   SALVAGE_REF=$base; SALVAGE_TREE=$wt_tree; SALVAGE_INDEX_TREE=$idx_tree; SALVAGE_ADMIN_BLOBS=$kept
   return 0
 }
@@ -1745,7 +1827,7 @@ while IFS= read -r wt <&3; do
   name=$(wt_label "$wt")
   # Per-candidate salvage state; recheck_mutable_gates reads it, so it must never leak
   # from the previous candidate.
-  salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_NOTE=""
+  salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_RESOLVE_UNDO=""; SALVAGE_NOTE=""
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
   # here-string, NOT a pipe: grep -q exits at its first match, printf then takes SIGPIPE,
