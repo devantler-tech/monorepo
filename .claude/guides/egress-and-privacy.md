@@ -16,9 +16,10 @@ comment, review, push, open an issue/PR, merge, or otherwise interact with such 
 this rule generic: do not record the identities of excluded organisations in version-controlled
 instructions, reports, or durable status.
 
-The boundary is about what other parties own. A repository that devantler-tech owns and the
-Portfolio map lists stays in scope when it serves a client of the maintainer's own business (work
-selection → *Client products*); everything that client owns does not.
+**The single exception is a product of this portfolio** (maintainer decision 2026-10-11): a
+repository that devantler-tech owns and the Portfolio map lists is in scope even when it serves a
+client of the maintainer's own business. Everything that client owns stays out of scope, and so does
+any repository connected to his employment, whoever owns it.
 
 **Public source research exception.** Read-only investigation of public open-source repositories
 needed to operate or advance a portfolio product is permitted without per-repository read approval, in
