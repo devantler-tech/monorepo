@@ -97,7 +97,7 @@ store records **zero** `per_task_limit` skips for it, but the second failure cau
 to that store, and the Improver's own missing 2026-08-05 dispatch is one of the two no-record cases.
 So zero skips establishes nothing about its health; reading it as a clean bill is the same
 absence-as-evidence error this whole correction is about. Measure the Improver the same way —
-scheduled slots against actual dispatches — before relying on its four daily starts. The Codex
+scheduled slots against actual dispatches — before relying on its four daily starts on this lane. The Codex
 scheduler refuses none, which bounds *that* lane's refusal cause and says nothing about this one.
 ⚠️ **Re-derive this ONLY by comparing actual dispatches to scheduled slots** — never by counting skip
 records. Counting them is what produced five mutually-inconsistent readings (32.9%, 36.6%, 44.0%,
@@ -114,7 +114,7 @@ next run will collect this" decision is wrong whenever that tick is dropped. Tha
 time in five on Claude in August and far less in the September reading above, so measure the current
 rate rather than assuming either. The error is always in the
 direction of waiting **longer** than planned — so prefer finishing inside the current run over handing
-work to a tick that may not come. The Agent Improver's four daily starts are additional work, not
+work to a tick that may not come. The Agent Improver's eight daily starts, four per lane, are additional work, not
 replacement slots. The scheduled interval is the gap **between runs, not a per-run time budget**; it
 bounds a carry-forward without telling an active run to stop early. Each run works
 *The work-selection ladder* top-down — **breakage → finish started work and due verification →
