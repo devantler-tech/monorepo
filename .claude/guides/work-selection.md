@@ -478,8 +478,7 @@ were opened**. Throughput was never the problem: ~27 own PRs merged per day that
 is what *starting* outruns *finishing* looks like, and closing it is rung 1's job.
 
 **Finish across the portfolio by delivery stage: merge-ready, due verification, review resolution, implementation/unblocking.**
-Help the saturated stage first; within comparable work put client products first (*Client products*
-below), then use original first-start age, falling back to
+Help the saturated stage first; within comparable work use original first-start age, falling back to
 immutable PR creation time when the start is unknown. `updatedAt` is activity, not waiting age.
 A PR reaches a terminal state when it is merged, parked on a named live-verified
 blocker, or—when a stale draft is not worth reviving—closed with every still-valid finding re-filed
@@ -513,28 +512,19 @@ for small low-value work. Backlog is a near-term refinement/replenishment queue;
 
 **Client products** (maintainer direction 2026-10-11, monorepo#4116). The maintainer named two
 portfolio products as work for his business's clients: `devantler-tech/ascoachingogvaner` and
-`devantler-tech/business-site`. Only he extends this list. Two things follow from the direction,
-and only these two:
+`devantler-tech/business-site`. Only he extends this list. The direction is carried by native
+Priority alone, so every ordering rule in this guide applies to client work as written:
 
-- **High when refined.** When you refine an actionable issue in a client product and its native
-  Priority is unset, set **High** and record this direction as the reason. That is a deliberate
-  raise over the Medium and Low work it will be compared with. It does not apply where he set
-  another value, where a product card or guide sets the priority for a class of work (Blog
-  Stewardship on the business site stays low priority and bounded, as the cadence guide says), or
-  to an issue this guide says is never worked, such as an automation-owned dashboard: leave those
-  untouched.
-- **First among equals.** Client status is a tie-breaker and nothing more. Wherever this guide
-  chooses between comparable candidates, meaning the same rung, delivery stage and native Priority,
-  the client item is chosen before age is compared: among work being finished, among Ready
-  candidates, and among Backlog items being refined. A candidate of higher native Priority always
-  comes before a client item of lower Priority.
-
-Everything else is unchanged. Rung order and delivery-stage order are compared before either of
-these. Icebox stays deferred: at triage this direction is a reason to move a client item from
-Icebox to Backlog before other Icebox items, while Backlog is under its ceiling; it never moves an
-Icebox item ahead of Backlog work and never lifts a ceiling. Stage ceilings, the readiness gate,
-review, claims and the trust gate apply to client work as to any other, and live breakage still
-preempts it.
+- When you refine an actionable issue in a client product and its native Priority is unset, set
+  **High** and record this direction as the reason. That is a deliberate raise over the Medium and
+  Low work it will be compared with.
+- The default does not apply where he set another value, where a product card or guide sets the
+  priority for a class of work (Blog Stewardship on the business site stays low priority and
+  bounded, as the cadence guide says), or to an issue this guide says is never worked, such as an
+  automation-owned dashboard. Leave those untouched.
+- There is no separate client ordering. Rung order, delivery-stage order, the Priority comparison
+  above, age, rotation, Icebox, stage ceilings, the readiness gate, review, claims and the trust
+  gate are unchanged, and live breakage still preempts client work.
 
 **This does not widen scope.** A client product is a repository that devantler-tech owns and the
 Portfolio map lists; both were products of this portfolio before the direction. The

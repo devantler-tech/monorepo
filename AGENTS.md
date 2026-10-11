@@ -295,7 +295,7 @@ has actionable work**:
 | **3** | **Value-prioritized Ready pull** | Only refined, unblocked Ready work with downstream capacity; priority, product outcome and cost of waiting before age. |
 | **4** | **Refinement and replenishment** | Refine important near-term Backlog work within Ready capacity. Icebox is deferred, not an implementation queue. |
 
-The full definition of each rung, finishing-stage order, client precedence, board fields, WIP ceilings and anti-starvation rules is in the
+The full definition of each rung, finishing-stage order, board fields, WIP ceilings and anti-starvation rules is in the
 [work selection guide](.claude/guides/work-selection.md).
 
 ### Non-negotiables
