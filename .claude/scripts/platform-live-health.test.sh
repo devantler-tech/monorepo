@@ -147,6 +147,55 @@ list "$pullback_init" >"$FAKE/pods.json"
 run
 expect "image pull failure in an init container" 1 "FAILING Pod apps/web-1 container=migrate reason=ImagePullBackOff"
 
+# 🔴 monorepo#4124: a crash-looping container is RUNNING or TERMINATED for part of every cycle, so
+# a waiting-reason check alone reads the same pod as healthy or failing by the moment of the read.
+# The fixed clock is 2026-09-25T18:00:00Z; "recent" is five minutes before it.
+loop_pod() { # <state json> <ready> <restarts> <last finishedAt>
+  printf '{"metadata":{"namespace":"backstage","name":"db-4"},"status":{"phase":"Running","containerStatuses":[{"name":"postgres","ready":%s,"restartCount":%s,"state":%s,"lastState":{"terminated":{"exitCode":1,"finishedAt":"%s"}}}]}}' \
+    "$2" "$3" "$1" "$4"
+}
+scenario loop-running
+list "$healthy_pod" "$(loop_pod '{"running":{"startedAt":"2026-09-25T17:59:30Z"}}' false 21 2026-09-25T17:55:00Z)" >"$FAKE/pods.json"
+run
+expect "a crash loop caught while the container runs" 1 "FAILING Pod backstage/db-4 container=postgres reason=RestartLoop restarts=21"
+
+scenario loop-terminated
+list '{"metadata":{"namespace":"backstage","name":"db-4"},"status":{"phase":"Running","containerStatuses":[{"name":"postgres","ready":false,"restartCount":21,"state":{"terminated":{"exitCode":1,"finishedAt":"2026-09-25T17:59:50.123456Z"}}}]}}' >"$FAKE/pods.json"
+run
+expect "a crash loop caught just after a crash" 1 "FAILING Pod backstage/db-4 container=postgres reason=RestartLoop restarts=21"
+
+scenario loop-waiting
+list "$(loop_pod '{"waiting":{"reason":"CrashLoopBackOff"}}' false 21 2026-09-25T17:55:00Z)" >"$FAKE/pods.json"
+run
+expect "the waiting reason still names the finding" 1 "FAILING Pod backstage/db-4 container=postgres reason=CrashLoopBackOff restarts=21"
+expect "one container is reported once" 1 "PLATFORM-HEALTH=UNHEALTHY failing=1"
+
+scenario restarted-long-ago
+list "$(loop_pod '{"running":{"startedAt":"2026-09-20T10:00:05Z"}}' true 7 2026-09-20T10:00:00Z)" "$(loop_pod '{"running":{"startedAt":"2026-09-25T17:00:05Z"}}' false 7 2026-09-25T17:00:00Z)" >"$FAKE/pods.json"
+run
+expect "old restarts are not a loop" 0 "PLATFORM-HEALTH=OK"
+
+scenario restarted-recently-and-ready
+list "$(loop_pod '{"running":{"startedAt":"2026-09-25T17:55:05Z"}}' true 21 2026-09-25T17:55:00Z)" >"$FAKE/pods.json"
+run
+expect "a ready container is not a loop" 0 "PLATFORM-HEALTH=OK"
+
+scenario few-restarts
+list "$(loop_pod '{"running":{"startedAt":"2026-09-25T17:59:30Z"}}' false 2 2026-09-25T17:55:00Z)" >"$FAKE/pods.json"
+run
+expect "two restarts are below the loop threshold" 0 "PLATFORM-HEALTH=OK"
+
+scenario completed-normally
+list '{"metadata":{"namespace":"apps","name":"migrate-1"},"status":{"phase":"Succeeded","initContainerStatuses":[{"name":"init","ready":true,"restartCount":0,"state":{"terminated":{"exitCode":0,"reason":"Completed","finishedAt":"2026-09-25T17:59:00Z"}}}],"containerStatuses":[{"name":"job","ready":false,"restartCount":0,"state":{"terminated":{"exitCode":0,"reason":"Completed","finishedAt":"2026-09-25T17:59:30Z"}}}]}}' >"$FAKE/pods.json"
+run
+expect "a completed container is not a loop" 0 "PLATFORM-HEALTH=OK"
+
+# A job that failed three times and then succeeded is finished work, however recent.
+scenario retried-then-succeeded
+list '{"metadata":{"namespace":"apps","name":"job-1"},"status":{"phase":"Succeeded","containerStatuses":[{"name":"job","ready":false,"restartCount":3,"state":{"terminated":{"exitCode":0,"reason":"Completed","finishedAt":"2026-09-25T17:59:30Z"}},"lastState":{"terminated":{"exitCode":1,"finishedAt":"2026-09-25T17:58:00Z"}}}]}}' >"$FAKE/pods.json"
+run
+expect "a retried job that succeeded is not a loop" 0 "PLATFORM-HEALTH=OK"
+
 # Unknown is what every object reports mid-reconcile; it must never fail a tick during a deploy.
 scenario progressing
 list "$(ready Kustomization flux-system infrastructure Unknown Progressing)" >"$FAKE/kustomizations.json"
