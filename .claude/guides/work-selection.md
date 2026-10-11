@@ -478,7 +478,8 @@ were opened**. Throughput was never the problem: ~27 own PRs merged per day that
 is what *starting* outruns *finishing* looks like, and closing it is rung 1's job.
 
 **Finish across the portfolio by delivery stage: merge-ready, due verification, review resolution, implementation/unblocking.**
-Help the saturated stage first; within comparable work use original first-start age, falling back to
+Help the saturated stage first; within comparable work put client products first (*Client products*
+below), then use original first-start age, falling back to
 immutable PR creation time when the start is unknown. `updatedAt` is activity, not waiting age.
 A PR reaches a terminal state when it is merged, parked on a named live-verified
 blocker, or—when a stale draft is not worth reviving—closed with every still-valid finding re-filed
@@ -518,8 +519,11 @@ and only these two:
 - **High by default.** An open issue in a client product is refined to native Priority **High**
   unless he set another value, with this direction recorded as the reason. This is a deliberate
   raise: it places client work ahead of Medium and Low work at the same rung and delivery stage.
-- **First among equals.** Among candidates at the same rung, delivery stage and native Priority, the
-  client item comes first: finished first, pulled first, and refined first among Backlog items,
+  A priority that a product card or guide sets for a class of work still governs that class: Blog
+  Stewardship on the business site stays low priority and bounded, as the cadence guide says.
+- **First among equals.** One precedence per rung. Finishing (rung 1): within a delivery stage, the
+  client item before original first-start age is compared. Ready pull (rung 3): among candidates of
+  equal native Priority, the client item. Refinement (rung 4): among Backlog items, the client item,
   after any critical obligation that needs refining.
 
 Everything else is unchanged. Rung order and delivery-stage order are compared before either of
@@ -534,7 +538,9 @@ Portfolio map lists; both were products of this portfolio before the direction. 
 [professional-work boundary](egress-and-privacy.md#professional-work-repository-boundary--hard-exclusion)
 is unchanged: a repository, account or system that a client or any other party owns stays out of
 scope, as does anything connected to the maintainer's employment. Client work that would need one
-of those is prepared for the maintainer and never done there.
+of those is prepared for the maintainer and never done there. A client product whose own
+repository is private follows the board rule for private issues unchanged (issues and board guide):
+naming it here does not put its issues on the public board. Read visibility live, as that guide says.
 
 Age breaks ties between comparable candidates and triggers anti-starvation review. Use Ready entry
 for waiting age and original first-start for active age, never `updatedAt`. Missing history uses a
