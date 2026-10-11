@@ -955,8 +955,8 @@ reflog_fixture() {
   add_wt "$root" "$name" pushed || return 1
   w="$root/repo/.claude/worktrees/$name"
   for i in $(seq 1 "$n"); do
-    echo "wip $i" > "$w/wip-$i.txt"
-    git -C "$w" add "wip-$i.txt" && git -C "$w" commit -qm "wip $i" || return 1
+    echo "wip $name $i" > "$w/wip-$i.txt"   # named: two fixtures in one second must not make one commit
+    git -C "$w" add "wip-$i.txt" && git -C "$w" commit -qm "wip $name $i" || return 1
   done
   git -C "$w" rev-parse HEAD
   git -C "$w" reset -q --hard "HEAD~$n" || return 1
