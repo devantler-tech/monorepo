@@ -948,6 +948,109 @@ t_keeps_worktree_with_orphaned_reflog_commit() {
   rm -rf "$root"
 }
 
+# reflog_fixture <root> <name> <commits> — a pushed worktree that then made <commits> commits
+# and reset them all away, so they live only in its HEAD reflog. Prints the newest one.
+reflog_fixture() {
+  local root=$1 name=$2 n=$3 w i
+  add_wt "$root" "$name" pushed || return 1
+  w="$root/repo/.claude/worktrees/$name"
+  for i in $(seq 1 "$n"); do
+    echo "wip $i" > "$w/wip-$i.txt"
+    git -C "$w" add "wip-$i.txt" && git -C "$w" commit -qm "wip $i" || return 1
+  done
+  git -C "$w" rev-parse HEAD
+  git -C "$w" reset -q --hard "HEAD~$n" || return 1
+  age_tree "$w"
+}
+
+t_reaps_reflog_commit_origin_advertises() {
+  # #2831: the reset-away commit is on the remote under a ref this checkout has no
+  # remote-tracking ref for (a pull request head), so nothing is held only here. The
+  # sibling worktree's commit is on no remote and must still be kept.
+  local name="REAPs a worktree whose reflog-only commit origin advertises; KEEPs its unadvertised twin"
+  local root held lost out; root=$(make_repo)
+  held=$(reflog_fixture "$root" held 1) && lost=$(reflog_fixture "$root" lost 1) \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  if ! git -C "$root/repo" push -q origin "$held:refs/pull/7/head" \
+     || [ -n "$(git -C "$root/repo" for-each-ref --contains "$held" refs/remotes)" ]; then
+    bad "$name" "FIXTURE: the commit must be on origin with no remote-tracking ref"; rm -rf "$root"; return
+  fi
+  out=$(run "$root")
+  if grep -q '^REAP  .*held' <<<"$out" \
+     && grep -q 'KEEP .*lost .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "held=$held lost=$lost $out"
+  fi
+  rm -rf "$root"
+}
+
+t_reaps_reflog_ancestor_of_an_advertised_commit() {
+  # Two commits reset away; origin advertises only the newer one, which reaches the older.
+  local name="REAPs when origin advertises a descendant of every reflog-only commit"
+  local root tip out; root=$(make_repo)
+  tip=$(reflog_fixture "$root" chain 2) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin "$tip:refs/pull/8/head" \
+    || { bad "$name" "FIXTURE: push"; rm -rf "$root"; return; }
+  out=$(run "$root")
+  if grep -q '^REAP  .*chain' <<<"$out"; then ok "$name"; else bad "$name" "$out"; fi
+  rm -rf "$root"
+}
+
+t_keeps_reflog_descendant_of_an_advertised_commit() {
+  # The direction matters: origin holds the OLDER commit only, so the newer one is still
+  # held nowhere else. An exclusion read the wrong way round would reap it.
+  local name="KEEPs a reflog-only commit that merely descends from an advertised one"
+  local root tip out; root=$(make_repo)
+  tip=$(reflog_fixture "$root" chain 2) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin "$tip~1:refs/pull/9/head" \
+    || { bad "$name" "FIXTURE: push"; rm -rf "$root"; return; }
+  out=$(run "$root")
+  if grep -q "KEEP .*chain .*reflog or pseudo-ref holds commit(s) reachable from nowhere else (${tip:0:12})" <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "tip=$tip $out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_reflog_commit_when_origin_cannot_be_read() {
+  # The commit IS on origin, but the sweep cannot ask: an unread remote proves nothing.
+  # The first run is the control that the same fixture is reaped when origin answers.
+  local name="KEEPs a reflog-only commit when origin cannot be read (and REAPs it when it can)"
+  local root held before out; root=$(make_repo)
+  held=$(reflog_fixture "$root" held 1) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin "$held:refs/pull/7/head" \
+    || { bad "$name" "FIXTURE: push"; rm -rf "$root"; return; }
+  before=$(run "$root")
+  git -C "$root/repo" remote set-url origin "$root/no-such-remote.git"
+  out=$(run "$root")
+  if grep -q '^REAP  .*held' <<<"$before" \
+     && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "before: $before :: after: $out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_reflog_commit_origin_no_longer_advertises() {
+  # Pushed, then deleted on origin: a commit that was once there is not there now.
+  local name="KEEPs a reflog-only commit whose remote ref was deleted"
+  local root held out; root=$(make_repo)
+  held=$(reflog_fixture "$root" held 1) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin "$held:refs/heads/gone" \
+    && git -C "$root/repo" push -q origin ":refs/heads/gone" \
+    || { bad "$name" "FIXTURE: push then delete"; rm -rf "$root"; return; }
+  out=$(run "$root")
+  if grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_keeps_worktree_with_operation_in_progress() {
   # A worktree mid-rebase holds that operation's state only in its own admin dir, so
   # reaping it destroys work no commit or reflog accounts for.
@@ -4403,6 +4506,11 @@ t_keeps_untracked_when_showUntrackedFiles_is_no
 t_keeps_parent_of_nested_worktree_even_when_ignored
 t_reaps_a_spent_nested_worktree
 t_keeps_worktree_with_orphaned_reflog_commit
+t_reaps_reflog_commit_origin_advertises
+t_reaps_reflog_ancestor_of_an_advertised_commit
+t_keeps_reflog_descendant_of_an_advertised_commit
+t_keeps_reflog_commit_when_origin_cannot_be_read
+t_keeps_reflog_commit_origin_no_longer_advertises
 t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records

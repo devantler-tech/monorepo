@@ -37,6 +37,9 @@
 #           (`git rev-list <head> --not --remotes`) covers both an unpushed branch and a
 #           detached HEAD left on an orphan commit — the only states where removing the
 #           directory would destroy the sole copy of real work.
+#   KEEP  - a worktree whose HEAD reflog, ORIG_HEAD or FETCH_HEAD names a commit no remote
+#           ref reaches. Here a commit origin advertises right now counts as on the remote
+#           too (a pull request's head, a claim tip), read once per sweep (#2831)
 #   KEEP  - a worktree with modified TRACKED files, other than UNSTAGED gitlink drift
 #   KEEP  - a worktree with untracked files outside the known tool-noise set
 #   KEEP  - a worktree whose modified submodule itself has uncommitted work, or any of whose
@@ -279,10 +282,14 @@ GH_DEADLINE_S=${WORKTREE_CLEANUP_GH_DEADLINE:-60}
 case "$GH_DEADLINE_S" in ''|*[!0-9]*|0) GH_DEADLINE_S=60 ;; esac
 
 # gh_bounded <gh args...> — gh with a deadline; prints its stdout, returns its status or 124.
-gh_bounded() {
+gh_bounded() { run_bounded "$GH_BIN" "$@"; }
+
+# run_bounded <command> [args...] — the command with the same deadline; prints its stdout,
+# returns its status or 124.
+run_bounded() {
   local tmp pid rc ticks=0
   tmp=$(mktemp "${TMPDIR:-/tmp}/worktree-cleanup-gh.XXXXXX") || return 2
-  "$GH_BIN" "$@" >"$tmp" 2>/dev/null &
+  "$@" >"$tmp" 2>/dev/null &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$ticks" -ge $((GH_DEADLINE_S * 5)) ]; then
@@ -299,6 +306,45 @@ gh_bounded() {
   cat "$tmp"
   rm -f "$tmp"
   return "$rc"
+}
+
+# remote_held_commits -> sets REMOTE_HELD to every commit origin advertises right now that the
+# local object store also holds, one per line. Read once per sweep, and only when a worktree
+# first needs it.
+# `--not --remotes` knows only the remote-tracking refs this checkout happens to have, and a
+# commit can be on the remote without one: a pull request's head (refs/pull/<n>/head, which
+# GitHub keeps after the branch is deleted), a claim tip, or a branch pushed by refspec and
+# never fetched back. Measured on the host 2026-10-11: 20 of the 34 worktrees kept for a
+# reflog-only commit were kept for one origin advertised (#2831).
+# Any failure, a timeout included, leaves the list empty or short, which only ever keeps more.
+REMOTE_HELD=""
+REMOTE_HELD_READ=0
+remote_held_commits() {
+  [ "$REMOTE_HELD_READ" -eq 0 ] || return 0
+  REMOTE_HELD_READ=1
+  local rows ids
+  rows=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}" \
+         run_bounded git -C "$TOPLEVEL" ls-remote origin) || return 0
+  # An advertised line is `<object id><TAB><ref>`; anything else is not evidence.
+  ids=$(awk -F'\t' 'NF == 2 && $1 ~ /^([0-9a-f]{40}|[0-9a-f]{64})$/ { print $1 }' <<< "$rows" | sort -u)
+  [ -n "$ids" ] || return 0
+  REMOTE_HELD=$(git -C "$TOPLEVEL" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" \
+                2>/dev/null | awk '$2 == "commit" { print $1 }') || REMOTE_HELD=""
+}
+
+# not_remote_held <commits> -> prints those of <commits> (one per line) that no commit origin
+# advertises reaches. With nothing advertised, or when the comparison fails, prints them all.
+not_remote_held() {
+  local commits=$1 out
+  [ -n "$commits" ] || return 0
+  remote_held_commits
+  if [ -z "$REMOTE_HELD" ]; then printf '%s\n' "$commits"; return 0; fi
+  if out=$( { printf '%s\n' "$commits"; sed 's/^/^/' <<< "$REMOTE_HELD"; } \
+            | git -C "$TOPLEVEL" rev-list --no-walk --stdin 2>/dev/null); then
+    [ -z "$out" ] || printf '%s\n' "$out"
+  else
+    printf '%s\n' "$commits"
+  fi
 }
 
 # still_the_reviewed_worktree <wt> <branch> <sha> <merged_head> — re-read under the mutex.
@@ -2090,7 +2136,9 @@ while IFS= read -r wt <&3; do
     if ! orphaned=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog_shas --not --remotes $merged_head 2>/dev/null); then
       keep "$wt" "cannot check whether reflog or pseudo-ref commits are reachable"; continue
     fi
-    orphaned=$(head -1 <<< "$orphaned")
+    # A commit origin advertises is not held only here, whatever the remote-tracking refs
+    # say. Asked only when something is left to ask about, so most sweeps never ask.
+    orphaned=$(not_remote_held "$orphaned" | head -1)
     if [ -n "$orphaned" ]; then
       if ! salvage_eligible "$age_h" "$wt"; then
         keep_stuck "$wt" "reflog or pseudo-ref holds commit(s) reachable from nowhere else (${orphaned:0:12})"
