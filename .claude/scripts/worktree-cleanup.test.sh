@@ -3377,10 +3377,11 @@ t_salvage_keeps_a_submodule_tag_only_a_reflog_names() {
   rm -rf "$root"
 }
 
-# reuc_wt <root> <name> <quit|commit> [big] — a worktree whose index holds resolve-undo
+# reuc_wt <root> <name> <quit|commit|pushed> [big] — a worktree whose index holds resolve-undo
 # entries for file.txt and nothing unmerged: the conflict was resolved, and the merge then
-# either quit (the resolution is staged only) or committed (the worktree is clean, the state
-# #2831 measured on two real worktrees). `big` makes the side's stage about 64 KB.
+# either quit (the resolution is staged only), committed (the worktree is clean, the state
+# #2831 measured on two real worktrees) or committed and pushed (reaped without salvage).
+# `big` makes the side's stage about 64 KB.
 reuc_wt() {
   local root=$1 name=$2 how=$3 big=${4:-}
   add_wt "$root" "$name" pushed || return 1
@@ -3392,8 +3393,9 @@ reuc_wt() {
     && echo ours > "$wt/file.txt" && git -C "$wt" commit -qam ours || return 1
   git -C "$wt" merge -q "side-$name" >/dev/null 2>&1
   echo resolved > "$wt/file.txt"; git -C "$wt" add file.txt
-  if [ "$how" = commit ]; then
+  if [ "$how" = commit ] || [ "$how" = pushed ]; then
     git -C "$wt" commit -qm merged || return 1
+    if [ "$how" = pushed ]; then git -C "$wt" push -q origin "claude/$name" "side-$name" || return 1; fi
     [ -z "$(git -C "$wt" status --porcelain)" ] || return 1
   else
     git -C "$wt" merge --quit || return 1
@@ -3488,10 +3490,50 @@ SHIM
   local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
   if [ ! -d "$wt" ] || [ -n "$(git -C "$wt" ls-files --resolve-undo)" ]; then
     bad "$name" "worktree removed, or the late rewrite never ran: $out"
-  elif grep -q 'KEEP .*reuclate .*resolve-undo entries changed after the salvage snapshot' <<<"$out"; then
+  elif grep -q 'KEEP .*reuclate .*resolve-undo entries changed after they were saved' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_plain_reap_preserves_resolve_undo_entries() {
+  # A merge that was committed AND pushed leaves nothing for salvage to want, so the
+  # worktree is reaped plainly; the removal still deletes the index holding the stages.
+  local name="a plain reap preserves the resolve-undo stages of a pushed merge"
+  local root; root=$(make_repo)
+  reuc_wt "$root" reucpush pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/reucpush" side
+  side=$(git -C "$root/repo" rev-parse side-reucpush:file.txt)
+  local dry; dry=$(run_salvage "$root" dry-run 1)
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q '^REAP  .*reucpush ' <<<"$dry" && grep -q '^REAPED .*reucpush ' <<<"$out" && [ ! -e "$wt" ] \
+     && reuc_ref_holds_stages "$root" "$side" \
+     && [ "$(git -C "$root/repo" for-each-ref refs/salvaged | wc -l | tr -d ' ')" = 1 ] \
+     && grep -q 'resolve-undo=refs/salvaged/.*/resolve-undo' "$root/manifest.tsv"; then
+    ok "$name"
+  else
+    bad "$name" "$dry :: $out :: $(git -C "$root/repo" for-each-ref refs/salvaged) :: $(cat "$root/manifest.tsv" 2>/dev/null)"
+  fi
+  rm -rf "$root"
+}
+
+t_plain_reap_cap_counts_resolve_undo_blobs() {
+  # The control is the same fixture under the default cap, which must be reaped.
+  local name="a plain reap KEEPs a worktree whose resolve-undo stages exceed the cap"
+  local root; root=$(make_repo)
+  reuc_wt "$root" reucpushbig pushed big || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/reucpushbig"
+  local dry; dry=$(WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" dry-run 1)
+  local out; out=$(WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
+  local ctl; ctl=$(run_salvage "$root" dry-run 1)
+  if grep -q 'KEEP .*reucpushbig .*more than 8 KB of resolve-undo stages' <<<"$dry" \
+     && grep -q 'KEEP .*reucpushbig .*more than 8 KB of resolve-undo stages' <<<"$out" && [ -d "$wt" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ] && grep -q '^REAP  .*reucpushbig ' <<<"$ctl"; then
+    ok "$name"
+  else
+    bad "$name" "$dry :: $out :: $ctl"
   fi
   rm -rf "$root"
 }
@@ -4438,6 +4480,8 @@ t_salvage_preserves_resolve_undo_entries
 t_salvage_reaps_a_clean_worktree_with_resolve_undo_entries
 t_salvage_cap_counts_resolve_undo_blobs
 t_salvage_keeps_resolve_undo_entries_changed_after_the_snapshot
+t_plain_reap_preserves_resolve_undo_entries
+t_plain_reap_cap_counts_resolve_undo_blobs
 t_salvage_keeps_a_symlinked_per_worktree_ref
 t_salvage_keeps_a_module_repository_whose_head_is_a_directory
 t_salvage_keeps_resolve_undo_entries_in_a_submodule
