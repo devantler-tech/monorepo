@@ -510,6 +510,32 @@ estimate; an unset priority requires refinement, not a default Medium. A critica
 without trading away its safety deadline. Large important work gets a valuable independent slice, not skipped
 for small low-value work. Backlog is a near-term refinement/replenishment queue; Icebox is deferred.
 
+**Client products** (maintainer direction 2026-10-11, monorepo#4116). The maintainer named two
+portfolio products as work for his business's clients: `devantler-tech/ascoachingogvaner` and
+`devantler-tech/business-site`. Only he extends this list. Two things follow from the direction,
+and only these two:
+
+- **High by default.** An open issue in a client product is refined to native Priority **High**
+  unless he set another value, with this direction recorded as the reason. This is a deliberate
+  raise: it places client work ahead of Medium and Low work at the same rung and delivery stage.
+- **First among equals.** Among candidates at the same rung, delivery stage and native Priority, the
+  client item comes first: finished first, pulled first, and refined first among Backlog items,
+  after any critical obligation that needs refining.
+
+Everything else is unchanged. Rung order and delivery-stage order are compared before either of
+these. Icebox stays deferred: at triage this direction is a reason to move a client item from
+Icebox to Backlog before other Icebox items, while Backlog is under its ceiling; it never moves an
+Icebox item ahead of Backlog work and never lifts a ceiling. Stage ceilings, the readiness gate,
+review, claims and the trust gate apply to client work as to any other, and live breakage still
+preempts it.
+
+**This does not widen scope.** A client product is a repository that devantler-tech owns and the
+Portfolio map lists; both were products of this portfolio before the direction. The
+[professional-work boundary](egress-and-privacy.md#professional-work-repository-boundary--hard-exclusion)
+is unchanged: a repository, account or system that a client or any other party owns stays out of
+scope, as does anything connected to the maintainer's employment. Client work that would need one
+of those is prepared for the maintainer and never done there.
+
 Age breaks ties between comparable candidates and triggers anti-starvation review. Use Ready entry
 for waiting age and original first-start for active age, never `updatedAt`. Missing history uses a
 recorded first-observed lower bound, not a backdated continuous wait. Parking, re-entry and bot
