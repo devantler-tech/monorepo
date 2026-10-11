@@ -164,15 +164,41 @@ if read_json controllers deployments -n flux-system; then
   done
 fi
 
+now="${PLATFORM_HEALTH_NOW:-$(date -u +%s)}"
+case "$now" in
+  '' | *[!0-9]*) usage_die "PLATFORM_HEALTH_NOW must be a Unix timestamp, got '$now'" ;;
+esac
+
+# 🔴 A waiting reason alone misses a crash loop for part of every cycle: the container is RUNNING
+# until it crashes again and TERMINATED just before the back-off starts, and a read landing there
+# sees no failure (monorepo#4124: a pod with 21 restarts read as healthy, then as failing, minutes
+# apart). So a container that is not ready, has restarted RESTART_LOOP_MIN times and last
+# terminated within RESTART_LOOP_SECONDS is failing in any state. The window is three times the
+# kubelet's five-minute back-off ceiling, so a loop cannot outlast it between two crashes. A
+# container whose current state is a clean exit (code 0) is finished work, never a loop, and one that restarted long ago is
+# outside the window. Known limit: a container that turns ready between crashes is only caught
+# while it is waiting.
+readonly RESTART_LOOP_MIN=3
+readonly RESTART_LOOP_SECONDS=900
+# shellcheck disable=SC2016  # the $-names below are jq variables
+pod_rows='
+  . as $pod
+  | (($pod.status.initContainerStatuses // []) + ($pod.status.containerStatuses // []))[]
+  | "FAILING Pod \($pod.metadata.namespace)/\($pod.metadata.name) container=\(.name)" as $row
+  | (.state.terminated // .lastState.terminated) as $ended
+  | if ((.state.waiting.reason // "")
+        | test("^(CrashLoopBackOff|ImagePullBackOff|ErrImagePull|ErrImageNeverPull|CreateContainerConfigError|CreateContainerError|InvalidImageName)$")) then
+      "\($row) reason=\(.state.waiting.reason) restarts=\(.restartCount // 0)"
+    elif ((.ready // false) | not) and (.restartCount // 0) >= __MIN__ and ($ended.finishedAt != null) and (.state.terminated.exitCode // 1) != 0
+         and (__NOW__ - ($ended.finishedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) <= __WINDOW__ then
+      "\($row) reason=RestartLoop restarts=\(.restartCount)"
+    else empty end
+'
+pod_rows="${pod_rows//__NOW__/$now}"
+pod_rows="${pod_rows//__MIN__/$RESTART_LOOP_MIN}"
+pod_rows="${pod_rows//__WINDOW__/$RESTART_LOOP_SECONDS}"
 if read_json pods pods -A; then
-  # shellcheck disable=SC2016  # $pod is a jq variable
-  extract pods '
-    . as $pod
-    | (($pod.status.initContainerStatuses // []) + ($pod.status.containerStatuses // []))[]
-    | select((.state.waiting.reason // "")
-             | test("^(CrashLoopBackOff|ImagePullBackOff|ErrImagePull|ErrImageNeverPull|CreateContainerConfigError|CreateContainerError|InvalidImageName)$"))
-    | "FAILING Pod \($pod.metadata.namespace)/\($pod.metadata.name) container=\(.name) reason=\(.state.waiting.reason) restarts=\(.restartCount // 0)"
-  '
+  extract pods "$pod_rows"
 fi
 
 # 🔴 A gateway controller that has stopped APPLYING routes is invisible to every read above. The
@@ -187,10 +213,6 @@ fi
 # repeated ones would keep a stalled route PROGRESSING forever. Every parent's observedGeneration
 # counts, and a missing one means that parent never observed the route.
 readonly ROUTE_GRACE_SECONDS=600
-now="${PLATFORM_HEALTH_NOW:-$(date -u +%s)}"
-case "$now" in
-  '' | *[!0-9]*) usage_die "PLATFORM_HEALTH_NOW must be a Unix timestamp, got '$now'" ;;
-esac
 # Per route: every DECLARED parent (spec.parentRefs) must have a status entry whose conditions all
 # observed the current generation — a parent whose controller stopped may add no entry at all, so
 # scanning only the entries that exist would read as current. Parents are matched on their whole
