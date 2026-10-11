@@ -298,6 +298,7 @@ jobs:
               - '.claude/scripts/surveyor-vocabulary-coverage.test.sh'
               - '.claude/scripts/build-cache-reclaim.test.sh'
               - '.claude/scripts/worktree-cleanup.test.sh'
+              - '.claude/scripts/agent-role-delivery-contract.test.sh'
               - '.claude/scripts/worktree-submodule-inventory.test.sh'
               - '.claude/scripts/worktree-inventory-merged-check.test.sh'
               - '.claude/scripts/worktree-inventory-classify.test.sh'
