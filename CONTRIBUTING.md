@@ -61,7 +61,7 @@ or disable a failing check. Native CI and review remain separate submission gate
 ## Submit your change
 
 Review the diff, configure commit signing, and stage only your changed paths. Use a Conventional
-Commit subject describing the reader-facing outcome:
+Commit subject describing the reader-facing outcome. For the first README-only change above:
 
 ```sh
 git add README.md

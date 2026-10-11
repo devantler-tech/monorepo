@@ -44,8 +44,9 @@ want to change that product rather than inspect the aggregator's pin.
 ## Working safely with pinned projects
 
 Use `submodule-init.sh`, not bare `git submodule update --init` or a recursive clone. The helper
-populates the selected repository at its recorded pin, repairs Git worktree configuration, and
-checks isolation. The plain Git initialization path can leave parallel sessions resolving to the
+populates an empty repository at its recorded pin. For an existing checkout, it repairs Git
+worktree configuration and checks isolation without moving the checkout to a different pin.
+The plain Git initialization path can leave parallel sessions resolving to the
 same physical folder. Read [worktree isolation](.claude/worktree-isolation.md) before project edits.
 
 A detached checkout at the recorded commit is expected. It is a source snapshot, not your work
