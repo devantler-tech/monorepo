@@ -510,19 +510,20 @@ estimate; an unset priority requires refinement, not a default Medium. A critica
 without trading away its safety deadline. Large important work gets a valuable independent slice, not skipped
 for small low-value work. Backlog is a near-term refinement/replenishment queue; Icebox is deferred.
 
-**Client products first** (maintainer direction 2026-10-11, monorepo#4116). Work for the business's
-clients is ordered before other work at every rung: finishing, critical obligations, the Ready pull
-and refinement. The client products are `devantler-tech/ascoachingogvaner` and `devantler-tech/business-site`. This
+**Client products first among equals** (maintainer direction 2026-10-11, monorepo#4116). Work for the
+business's clients comes before other work of the same urgency and delivery stage. Rung order,
+delivery-stage order and native Priority are compared first, unchanged; client status breaks the
+ties they leave. The client products are `devantler-tech/ascoachingogvaner` and `devantler-tech/business-site`. This
 list is authoritative and only the maintainer extends it; AGENTS.md → *The work-selection ladder*
 states the order. In practice:
 
 - An open client issue carries native Priority **High** unless the maintainer set another value. Set
   it while refining the issue and record this direction as the reason.
-- Refine client Backlog and Icebox items before any other refinement, so that a client item is Ready
-  whenever one can be made Ready. This direction is the reason a client item leaves Icebox; any
+- After any critical obligation that needs refining, refine client Backlog and Icebox items before
+  other refinement, so that a client item is Ready whenever one can be made Ready. This direction is the reason a client item leaves Icebox; any
   other item still needs its own.
-- Among Ready candidates, pull a client item before any other. Native Priority and the comparison
-  above order client items among themselves, and the remaining items among themselves.
+- Among Ready candidates of equal native Priority, pull the client item. A higher-Priority item
+  that is not client work still comes first.
 - Nothing else changes. Stage ceilings, the readiness gate, review, claims and the trust gate apply
   to client work as to any other, and live breakage still preempts it. A full downstream stage holds
   a client start too; help that stage finish, client items first.

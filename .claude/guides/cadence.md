@@ -38,10 +38,18 @@ own lane working at once is now the standing case, not an accident of a long run
 about same-lane overlap applies as written: the claim and the review-request lock arbitrate it, and
 neither run stands down because the other exists.
 
-The cadence was raised to use the weekly allowances. Measured 2026-10-11, before the change: the
-Claude lane had used 7% of its weekly allowance after 15% of the week, and Codex had exhausted one
-weekly window six days before its reset. Weekly use is re-read on 2026-10-18 (monorepo#4116); a lane
-that reaches its cap early is evidence to lower that lane's cadence, never to work around the cap.
+The cadence was raised to use the weekly allowances (maintainer decision 2026-10-11, monorepo#4116).
+Measured that day, before the change, the Claude lane had used 7% of its weekly allowance after 15%
+of the week. Codex had exhausted one weekly window six days before its reset; the maintainer was
+shown that and raised Codex as well, so that both runtimes carry the same number of runs. **For
+Codex the raise is a decision taken against the measurement, not one it supports:** expect its cap
+earlier in the week. Weekly use is re-read on 2026-10-18 and each lane's cadence is decided again
+from that reading. A cap reached early is evidence to lower that lane's cadence; nothing works
+around a cap, and no paid overage is authorised.
+
+The quota reserves and the one-chain-per-account limit in *Inference routing* are pilot parameters
+for automatic routing, which is disabled. They do not govern these scheduled entries, and enabling
+automatic routing requires revisiting this cadence first.
 
 **Two properties of this schedule change how you plan a run.**
 ⚠️ **A sibling being mid-run is the NORMAL case — scan cross-lane on EVERY run, never at one special
