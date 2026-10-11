@@ -1026,8 +1026,8 @@ t_keeps_reflog_commit_when_origin_cannot_be_read() {
   git -C "$root/repo" remote set-url origin "$root/no-such-remote.git"
   out=$(run "$root"); rc=$?
   if [ "$before_rc" -eq 0 ] && grep -q '^REAP  .*held' <<<"$before" \
-     && ! grep -q 'could not read what origin advertises' <<<"$before" \
-     && [ "$rc" -eq 2 ] && grep -q 'UNKNOWN — could not read what origin advertises' <<<"$out" \
+     && ! grep -q 'could not establish which reflog-only commits origin holds' <<<"$before" \
+     && [ "$rc" -eq 2 ] && grep -q 'UNKNOWN — could not establish which reflog-only commits origin holds' <<<"$out" \
      && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
     ok "$name"
   else
@@ -1057,6 +1057,62 @@ SHIM
     ok "$name"
   else
     bad "$name" "ls-remote calls=${n:-0} $out"
+  fi
+  rm -rf "$root"
+}
+
+# git_shim <root> <body> — a git on PATH that runs <body> (with the real git in $real and the
+# fixture root in $root) before handing over to the real one. Prints the directory to put on PATH.
+git_shim() {
+  local root=$1 body=$2 real; real=$(command -v git); mkdir -p "$root/shim"
+  { printf '#!/usr/bin/env bash\nreal=%q\nroot=%q\n' "$real" "$root"; printf '%s\n' "$body"; printf 'exec "$real" "$@"\n'; } > "$root/shim/git"
+  chmod +x "$root/shim/git"
+  printf '%s\n' "$root/shim"
+}
+
+t_unknown_when_the_origin_comparison_fails() {
+  # origin answered, but the ancestry comparison itself failed: the worktree is kept and the
+  # sweep must not report it as abandoned work with exit 0.
+  local name="KEEPs and exits UNKNOWN when the comparison against origin fails"
+  local root shim out rc; root=$(make_repo)
+  reflog_fixture "$root" held 1 >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  shim=$(git_shim "$root" 'case " $* " in *" rev-list --no-walk --stdin "*) exit 128 ;; esac')
+  out=$(PATH="$shim:$PATH" run "$root"); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q 'UNKNOWN — could not establish which reflog-only commits origin holds' <<<"$out" \
+     && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+t_origin_read_keeps_the_configured_ssh_command() {
+  # GIT_SSH_COMMAND outranks core.sshCommand, so the sweep must not set one of its own.
+  local name="reads origin without replacing the configured ssh command"
+  local root shim out; root=$(make_repo)
+  reflog_fixture "$root" held 1 >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  shim=$(git_shim "$root" 'case " $* " in *" ls-remote "*) printf "%s\n" "${GIT_SSH_COMMAND-unset}" >> "$root/ssh.seen" ;; esac')
+  out=$(env -u GIT_SSH_COMMAND PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" dry-run 24 2>&1)
+  if [ "$(cat "$root/ssh.seen" 2>/dev/null)" = unset ]; then ok "$name"; else bad "$name" "seen=$(cat "$root/ssh.seen" 2>/dev/null) $out"; fi
+  rm -rf "$root"
+}
+
+t_origin_read_deadline_stops_the_transport_helper() {
+  # git hands the read to a helper process. At the deadline the helper must go too, not be
+  # left running after the sweep has moved on.
+  local name="stops the transport helper when the origin read passes its deadline, and exits UNKNOWN"
+  local root shim out rc helper; root=$(make_repo)
+  reflog_fixture "$root" held 1 >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  shim=$(git_shim "$root" 'case " $* " in *" ls-remote "*) sleep 300 & echo $! > "$root/helper.pid"; wait ;; esac')
+  out=$(WORKTREE_CLEANUP_GH_DEADLINE=1 PATH="$shim:$PATH" run "$root"); rc=$?
+  helper=$(cat "$root/helper.pid" 2>/dev/null)
+  if [ -n "$helper" ] && ! kill -0 "$helper" 2>/dev/null && [ "$rc" -eq 2 ] \
+     && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc helper=${helper:-none} alive=$(kill -0 "$helper" 2>/dev/null && echo yes || echo no) $out"
+    [ -z "$helper" ] || kill -KILL "$helper" 2>/dev/null
   fi
   rm -rf "$root"
 }
@@ -4538,6 +4594,9 @@ t_reaps_reflog_ancestor_of_an_advertised_commit
 t_keeps_reflog_descendant_of_an_advertised_commit
 t_keeps_reflog_commit_when_origin_cannot_be_read
 t_asks_origin_once_for_many_reflog_worktrees
+t_unknown_when_the_origin_comparison_fails
+t_origin_read_keeps_the_configured_ssh_command
+t_origin_read_deadline_stops_the_transport_helper
 t_keeps_reflog_commit_origin_no_longer_advertises
 t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing

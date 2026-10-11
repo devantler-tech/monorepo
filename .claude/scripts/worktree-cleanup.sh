@@ -286,15 +286,24 @@ gh_bounded() { run_bounded "$GH_BIN" "$@"; }
 
 # run_bounded <command> [args...] — the command with the same deadline; prints its stdout,
 # returns its status or 124.
+# The command runs in its own process group (job control), and the deadline stops the whole
+# group: git hands a remote read to a transport helper (ssh, git-remote-https), and a signal
+# to git alone leaves that helper running after the sweep has given up on it.
 run_bounded() {
-  local tmp pid rc ticks=0
+  local tmp pid rc ticks=0 had_monitor=0
   tmp=$(mktemp "${TMPDIR:-/tmp}/worktree-cleanup-gh.XXXXXX") || return 2
+  case "$-" in *m*) had_monitor=1 ;; esac
+  set -m
   "$@" >"$tmp" 2>/dev/null &
   pid=$!
+  [ "$had_monitor" -eq 1 ] || set +m
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$ticks" -ge $((GH_DEADLINE_S * 5)) ]; then
-      kill -TERM "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
+      # Negative pid = the group; the single pid is the fallback where job control gave none.
+      kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+      { wait "$pid"; } 2>/dev/null
+      # TERM can be ignored; whatever is left of the group outlived the command.
+      kill -KILL -"$pid" 2>/dev/null || true
       rm -f "$tmp"
       return 124
     fi
@@ -330,8 +339,9 @@ remote_held_commits() {
   [ "$REMOTE_HELD_READ" -eq 0 ] || return 0
   REMOTE_HELD_READ=1
   local rows ids
-  rows=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}" \
-         run_bounded git -C "$TOPLEVEL" ls-remote origin) || { REMOTE_HELD_FAILED=1; return 0; }
+  # No GIT_SSH_COMMAND here: it outranks core.sshCommand and GIT_SSH, so setting it would
+  # replace a transport the repository configured. The deadline bounds a prompt instead.
+  rows=$(GIT_TERMINAL_PROMPT=0 run_bounded git -C "$TOPLEVEL" ls-remote origin) || { REMOTE_HELD_FAILED=1; return 0; }
   # An advertised line is `<object id><TAB><ref>`; anything else is not evidence.
   ids=$(awk -F'\t' 'NF == 2 && $1 ~ /^([0-9a-f]{40}|[0-9a-f]{64})$/ { print $1 }' <<< "$rows" | sort -u)
   [ -n "$ids" ] || return 0
@@ -340,7 +350,8 @@ remote_held_commits() {
 }
 
 # not_remote_held <commits> -> prints those of <commits> (one per line) that no commit origin
-# advertises reaches. With nothing advertised, or when the comparison fails, prints them all.
+# advertises reaches. With nothing advertised, prints them all. When the comparison itself
+# fails, prints them all and returns 1, so the caller can end the sweep UNKNOWN.
 # Reads REMOTE_HELD only; the caller runs remote_held_commits first.
 not_remote_held() {
   local commits=$1 out
@@ -351,6 +362,7 @@ not_remote_held() {
     [ -z "$out" ] || printf '%s\n' "$out"
   else
     printf '%s\n' "$commits"
+    return 1
   fi
 }
 
@@ -2147,7 +2159,7 @@ while IFS= read -r wt <&3; do
     # say. Asked only when something is left to ask about, so most sweeps never ask.
     if [ -n "$orphaned" ]; then
       remote_held_commits
-      orphaned=$(not_remote_held "$orphaned")
+      orphaned=$(not_remote_held "$orphaned") || REMOTE_HELD_FAILED=1
     fi
     orphaned=$(head -1 <<< "$orphaned")
     if [ -n "$orphaned" ]; then
@@ -2397,6 +2409,6 @@ fi
 if [ "$REMOTE_HELD_FAILED" -ne 0 ]; then
   # Said last and with exit 2: the worktrees kept for a reflog-only commit above were kept
   # without evidence either way, so this sweep did not show they hold abandoned work.
-  printf 'worktree-cleanup: UNKNOWN — could not read what origin advertises, so every worktree with a reflog-only commit was kept unexamined (#2831)\n' >&2
+  printf 'worktree-cleanup: UNKNOWN — could not establish which reflog-only commits origin holds, so the worktrees kept for one were kept unexamined (#2831)\n' >&2
   exit 2
 fi
