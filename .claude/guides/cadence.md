@@ -11,15 +11,20 @@ The dispatch table itself is in [AGENTS.md → *Cadence & focus*](../../AGENTS.m
 
 **The stagger invariant IS the schedule: both machine-local Agentic Engineer lanes dispatch every
 hour, at distinct minute offsets — the current Codex adapter at `:10` and Claude adapter at
-`:50`; the four Agent Improver starts remain at `:00`.** No two scheduled roles share an exact start
+`:50`; the eight Agent Improver starts remain at `:00`.** No two scheduled roles share an exact start
 time. Read your lane's row for your own slots, and treat runtime jitter plus long-running siblings as
 normal overlap rather than evidence that a slot is free.
 
 Both machine-local Agentic Engineer lanes are **scheduled** every hour — for what the Claude lane
 actually keeps, see *Scheduled is not delivered* below. These rows are deployment bindings, not
 provider requirements for the portable role. The Agent Improver
-keeps its 4×/day rotation (00 Claude, 07 Codex, 12 Claude, 19 Codex) as additional `:00` starts; those
-slots no longer replace an Agentic Engineer tick. This table covers the two scheduled engineering
+runs 8×/day, alternating every three hours (00, 06, 12, 18 Claude; 03, 09, 15, 21 Codex), as
+additional `:00` starts; those slots no longer replace an Agentic Engineer tick. The improver cadence
+was doubled to use the weekly allowances (maintainer decision 2026-10-11, monorepo#4116). A
+30-minute engineer cadence was decided the same day and is not scheduled yet: it needs a second
+engineer entry per lane, and the schedule drift check, the liveness checks and the lane watch read
+one entry per lane (monorepo#4117). Weekly allowance use is re-read on 2026-10-18; a cap reached
+early is evidence to lower that lane's cadence, and nothing works around a cap. This table covers the two scheduled engineering
 roles only — spend stewardship has no dispatch slot of its own (see *Spend contract*).
 
 **Two properties of this schedule change how you plan a run.**

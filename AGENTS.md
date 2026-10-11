@@ -159,15 +159,14 @@ Full rules: [trust and untrusted input](.claude/guides/trust-and-input.md) and t
 
 ### Cadence & focus
 **This table IS the deployment's dispatch schedule** — the concrete cadence the plugin's
-`cadenceFrom: AGENTS.md#Cadence` pointer resolves to (the plugin deliberately carries no fixed
-schedule; see *Agentic engineering plugin contract*). Times are the agent host's local time. The
+`cadenceFrom: AGENTS.md#Cadence` pointer resolves to. Times are the agent host's local time. The
 runtime-local scheduler entries are **thin pointers that must match this table**; when the two
 disagree, the scheduler is the defect — reconcile it there, per *Agent definition locations*.
 
 | Lane | Agentic Engineer | Agent Improver |
 |---|---|---|
-| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 12:00 |
-| **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 07:00, 19:00 |
+| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 06:00, 12:00, 18:00 |
+| **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 03:00, 09:00, 15:00, 21:00 |
 
 Work [*The work-selection ladder*](#the-work-selection-ladder--one-ordering-checked-top-down-every-run)
 top-down every run and **keep going while actionable work remains** — the floor is at least one
@@ -292,8 +291,8 @@ has actionable work**:
 | **0** | **Live breakage** | CI red on `main`, a broken build or site, the live prod cluster, an urgent security fix. Preempts everything. |
 | **1** | **Finish started work — INCLUDING your own drafts** | Actionable PRs, draft and non-draft alike, due verification and started issues: finish by delivery stage or park on a live-verified blocker; preserve clocks and WIP. |
 | **2** | **Critical obligations** | Evidence-backed security deadlines and critical defects; ordinary Security/Bug types do not establish urgency. |
-| **3** | **Value-prioritized Ready pull** | Only refined, unblocked Ready work with downstream capacity; priority, product outcome and cost of waiting before age. |
-| **4** | **Refinement and replenishment** | Refine important near-term Backlog work within Ready capacity. Icebox is deferred, not an implementation queue. |
+| **3** | **Value-prioritized Ready pull** | Only refined, unblocked Ready work with downstream capacity; priority, then client products, product outcome and cost of waiting before age. |
+| **4** | **Refinement and replenishment** | Refine client, then important near-term Backlog work within Ready capacity. Icebox is deferred, not an implementation queue. |
 
 The full definition of each rung, finishing-stage order, board fields, WIP ceilings and anti-starvation rules is in the
 [work selection guide](.claude/guides/work-selection.md).

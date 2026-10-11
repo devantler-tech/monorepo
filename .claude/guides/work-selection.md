@@ -510,6 +510,26 @@ estimate; an unset priority requires refinement, not a default Medium. A critica
 without trading away its safety deadline. Large important work gets a valuable independent slice, not skipped
 for small low-value work. Backlog is a near-term refinement/replenishment queue; Icebox is deferred.
 
+**Client products first among equals** (maintainer direction 2026-10-11, monorepo#4116). Work for the
+business's clients comes before other work of the same urgency and delivery stage. Rung order,
+delivery-stage order and native Priority are compared first, unchanged; client status breaks the
+ties they leave. The client products are `devantler-tech/ascoachingogvaner` and `devantler-tech/business-site`. This
+list is authoritative and only the maintainer extends it; AGENTS.md → *The work-selection ladder*
+states the order. In practice:
+
+- An open client issue carries native Priority **High** unless the maintainer set another value. Set
+  it while refining the issue and record this direction as the reason.
+- After any critical obligation that needs refining, refine client Backlog items before other
+  Backlog items, so that a client item is Ready whenever one can be made Ready.
+- Icebox stays deferred. At triage this direction is a reason to move a client item from Icebox to
+  Backlog before other Icebox items, when Backlog is under its ceiling. It never moves an Icebox
+  item ahead of Backlog work and never lifts a ceiling.
+- Among Ready candidates of equal native Priority, pull the client item. A higher-Priority item
+  that is not client work still comes first.
+- Nothing else changes. Stage ceilings, the readiness gate, review, claims and the trust gate apply
+  to client work as to any other, and live breakage still preempts it. A full downstream stage holds
+  a client start too; help that stage finish, client items first.
+
 Age breaks ties between comparable candidates and triggers anti-starvation review. Use Ready entry
 for waiting age and original first-start for active age, never `updatedAt`. Missing history uses a
 recorded first-observed lower bound, not a backdated continuous wait. Parking, re-entry and bot
