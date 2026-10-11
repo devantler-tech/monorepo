@@ -317,6 +317,8 @@ run_bounded() {
 # never fetched back. Measured on the host 2026-10-11: 20 of the 34 worktrees kept for a
 # reflog-only commit were kept for one origin advertised (#2831).
 # Any failure, a timeout included, leaves the list empty or short, which only ever keeps more.
+# The answer is as of the read: a ref its owner deletes afterwards is no longer evidence, the
+# same limit a remote-tracking ref has, and a pull request head is never deleted.
 REMOTE_HELD=""
 REMOTE_HELD_READ=0
 remote_held_commits() {
@@ -2138,7 +2140,8 @@ while IFS= read -r wt <&3; do
     fi
     # A commit origin advertises is not held only here, whatever the remote-tracking refs
     # say. Asked only when something is left to ask about, so most sweeps never ask.
-    orphaned=$(not_remote_held "$orphaned" | head -1)
+    orphaned=$(not_remote_held "$orphaned")
+    orphaned=$(head -1 <<< "$orphaned")
     if [ -n "$orphaned" ]; then
       if ! salvage_eligible "$age_h" "$wt"; then
         keep_stuck "$wt" "reflog or pseudo-ref holds commit(s) reachable from nowhere else (${orphaned:0:12})"
