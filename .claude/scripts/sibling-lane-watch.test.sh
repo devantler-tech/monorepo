@@ -46,6 +46,9 @@ cat > "$FIX/bin/claude-lane-liveness.sh" <<EOF
 printf '%s\n' "\$*" > "$FIX/liveness.args"
 # The verdict is read BEFORE the delay, so a case can change it for the next run meanwhile.
 out=\$(cat "$FIX/liveness.out"); rc=\$(cat "$FIX/liveness.rc")
+# A case may script ONE entry: the id is the second argument, after --task or --automation.
+if [ -f "$FIX/entry.\$2.rc" ]; then out=\$(cat "$FIX/entry.\$2.out"); rc=\$(cat "$FIX/entry.\$2.rc"); fi
+printf '%s\n' "\$*" >> "$FIX/liveness.calls"
 : > "$FIX/liveness.read"
 [ ! -f "$FIX/liveness.sleep" ] || sleep "\$(cat "$FIX/liveness.sleep")"
 printf '%s\n' "\$out"
@@ -90,7 +93,7 @@ check() {
   fi
 }
 
-reset() { chmod -R u+w "$FIX/state" 2>/dev/null || true; rm -rf "$FIX/state" "$FIX/liveness.sleep"; }
+reset() { chmod -R u+w "$FIX/state" 2>/dev/null || true; rm -rf "$FIX/state" "$FIX/liveness.sleep" "$FIX/liveness.calls" "$FIX"/entry.*; }
 
 # no_state <what must hold> — the state file must not exist
 no_state() { if [ ! -e "$STATE" ]; then ok; else bad "$1"; fi; }
@@ -383,6 +386,108 @@ else
   ok
 fi
 chmod 700 "$FIX/state"
+
+# --- a lane with more than one engineer entry (monorepo#4117) ------------------------------------
+# The lane is down only when EVERY entry is down. One dead entry beside a producing one is named in
+# the summary and never counted or paged; a partial reading with nothing seen producing is UNKNOWN.
+SECOND=agentic-engineer-2
+DOWN_SECOND="  NOT-PRODUCING  ${SECOND} -- dispatched at 2026-10-03T04:23:00Z and no session started within 120s of it"
+DOWN_SECOND_QUOTA="  NOT-PRODUCING  ${SECOND} -- newest run ended at once (cause=quota/billing)"
+DOWN_FIRST_QUOTA='  NOT-PRODUCING  daily-ai-assistant -- newest run ended at once (cause=quota/billing)'
+# entry <id> <rc> <line>... — set what the stubbed check prints and returns for ONE entry
+entry() {
+  local id=$1; shift
+  printf '%s\n' "$1" > "$FIX/entry.$id.rc"; shift
+  printf '%s\n' "header line" "$@" > "$FIX/entry.$id.out"
+}
+PAIR="daily-ai-assistant,${SECOND}"
+calls() { wc -l < "$FIX/liveness.calls" 2>/dev/null | tr -d ' ' || echo 0; }
+
+reset; entry daily-ai-assistant 0 "$OK_LINE"; entry "$SECOND" 0 "  OK  ${SECOND} -- produced work"
+out=$(watch 0 --entries "$PAIR"); rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "verdict=OK lane=claude observations=0/3 first_seen_epoch=0 notified_epoch=0 cause=none" ]; then ok
+else bad "two producing entries must read OK with no entry note (rc=$rc: $out)"; fi
+if [ "$(calls)" = 2 ] && grep -q -- "^--task daily-ai-assistant --grace-seconds 300 " "$FIX/liveness.calls" &&
+  grep -q -- "^--task ${SECOND} --grace-seconds 300 " "$FIX/liveness.calls"; then ok
+else bad "each entry must be judged once, by its own id: $(cat "$FIX/liveness.calls" 2>/dev/null)"; fi
+
+reset; entry daily-ai-assistant 0 "$OK_LINE"; entry "$SECOND" 1 "$DOWN_SECOND"
+for i in 0 1 2 3 4; do
+  check "a dead second entry beside a producing first is reported, slot $i" 0 "verdict=OK lane=claude observations=0/3 first_seen_epoch=0 notified_epoch=0 cause=none degraded=${SECOND}" $((i * SLOT)) --entries "$PAIR"
+done
+no_state "a degraded lane must not start a count"
+
+# A dead FIRST entry must not page while the second produces, and a count both entries built ends
+# the moment either produces again.
+reset; entry daily-ai-assistant 1 "$DOWN_NO_SESSION"; entry "$SECOND" 1 "$DOWN_SECOND"
+check "both entries down starts the count" 0 "verdict=WATCHING lane=claude observations=1/3" 0 --entries "$PAIR"
+check "both entries down, second slot" 0 "observations=2/3" $SLOT --entries "$PAIR"
+entry "$SECOND" 0 "  OK  ${SECOND} -- produced work"
+check "the second entry producing ends the outage" 0 "cause=none degraded=daily-ai-assistant" $((2 * SLOT)) --entries "$PAIR"
+no_state "a lane with one producing entry must clear the count"
+for i in 3 4 5 6; do
+  check "a dead first entry beside a producing second never pages, slot $i" 0 "verdict=OK" $((i * SLOT)) --entries "$PAIR"
+done
+
+reset; entry daily-ai-assistant 1 "$DOWN_NO_SESSION"; entry "$SECOND" 1 "$DOWN_SECOND"
+check "all entries down, slot 1" 0 "verdict=WATCHING" 0 --entries "$PAIR"
+check "all entries down, slot 2" 0 "verdict=WATCHING" $SLOT --entries "$PAIR"
+check "all entries down for the threshold pages once" 1 "verdict=ESCALATE lane=claude observations=3/3" $((2 * SLOT)) --entries "$PAIR"
+
+reset; entry daily-ai-assistant 1 "$DOWN_FIRST_QUOTA"; entry "$SECOND" 1 "$DOWN_SECOND_QUOTA"
+check "every entry on a usage limit is a known reset" 0 "verdict=KNOWN-RESET" 0 --entries "$PAIR"
+no_state "a usage limit on every entry must not start a count"
+reset; entry daily-ai-assistant 1 "$DOWN_FIRST_QUOTA"; entry "$SECOND" 1 "$DOWN_SECOND"
+check "a usage limit on one entry does not excuse the other" 0 "verdict=WATCHING lane=claude observations=1/3" 0 --entries "$PAIR"
+
+# Nothing seen producing and one entry unjudged: the lane cannot be called down.
+reset; entry daily-ai-assistant 1 "$DOWN_NO_SESSION"; entry "$SECOND" 1 "$DOWN_SECOND"
+check "seed one bad slot" 0 "observations=1/3" 0 --entries "$PAIR"
+entry "$SECOND" 2 "could not judge"
+check "one unjudged entry and none producing is UNKNOWN" 2 "verdict=UNKNOWN" $SLOT --entries "$PAIR"
+state_has "an unjudged look must leave the count where it was" '.observations == 1'
+entry "$SECOND" 1 "a line that names no task"
+check "an entry exiting 1 without a NOT-PRODUCING line is unjudged" 2 "verdict=UNKNOWN" $SLOT --entries "$PAIR"
+state_has "a malformed entry verdict must leave the count where it was" '.observations == 1'
+entry daily-ai-assistant 0 "$OK_LINE"; entry "$SECOND" 2 "could not judge"
+check "an unjudged entry beside a producing one is named, not fatal" 0 "cause=none unjudged=${SECOND}" $SLOT --entries "$PAIR"
+entry "$SECOND" 1 "$DOWN_SECOND"; entry third-entry 2 "could not judge"
+check "a dead and an unjudged entry beside a producing one are both named" 0 "cause=none degraded=${SECOND} unjudged=third-entry" $SLOT --entries "${PAIR},third-entry"
+
+# The Codex check takes its entries through its own flag.
+reset; entry daily-ai-engineer 0 "  OK  daily-ai-engineer"; entry "$SECOND" 1 "$DOWN_SECOND"
+out=$(bash "$STUBBED" --lane codex --state-file "$FIX/state/codex.json" --now-epoch "$T0" --entries "daily-ai-engineer,${SECOND}" 2>/dev/null) || true
+if grep -qF "verdict=OK lane=codex" <<<"$out" && grep -qF "degraded=${SECOND}" <<<"$out" &&
+  grep -q -- "^--automation daily-ai-engineer --now-ms ${T0}000\$" "$FIX/liveness.calls" &&
+  grep -q -- "^--automation ${SECOND} --now-ms ${T0}000\$" "$FIX/liveness.calls"; then ok
+else bad "the codex lane must judge each entry through --automation: $out / $(cat "$FIX/liveness.calls" 2>/dev/null)"; fi
+
+# A malformed set is refused before any check runs: an id reaches the check as an argument.
+for bad_set in "" "daily-ai-assistant," ",daily-ai-assistant" "a,,b" "a,a" "Daily" "-x" "a b" 'a;b' "a,b,c,d,e"; do
+  reset
+  out=$(watch 0 --entries "$bad_set") && rc=0 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -qF "verdict=UNKNOWN" <<<"$out" && [ ! -e "$FIX/liveness.calls" ]; then ok
+  else bad "a malformed --entries value must be UNKNOWN before any check runs: '$bad_set' (rc=$rc, calls=$(calls))"; fi
+done
+
+# Negative control: a watch that judges only the first entry must FAIL the case above that needs the
+# second, and for that reason — it keeps counting an outage the second entry had ended.
+mkdir -p "$FIX/mutant"
+cp "$FIX/bin/"*-lane-liveness.sh "$FIX/mutant/"
+# shellcheck disable=SC2016 # The pattern and its replacement are literal script text.
+sed 's/^for entry in "\${ENTRY_LIST\[@\]}"; do$/for entry in "${ENTRY_LIST[0]}"; do/' "$SCRIPT" > "$FIX/mutant/sibling-lane-watch.sh"
+if cmp -s "$SCRIPT" "$FIX/mutant/sibling-lane-watch.sh"; then
+  bad "negative control: the mutation did not change the script"
+else
+  reset; entry daily-ai-assistant 1 "$DOWN_NO_SESSION"; entry "$SECOND" 0 "  OK  ${SECOND} -- produced work"
+  out=$(bash "$FIX/mutant/sibling-lane-watch.sh" --lane claude --state-file "$STATE" --now-epoch "$T0" --entries "$PAIR" 2>/dev/null) || true
+  if grep -qF "verdict=WATCHING lane=claude observations=1/3" <<<"$out"; then ok
+  else bad "negative control: a first-entry-only watch should count the slot the second entry covers: $out"; fi
+  out=$(watch 0 --entries "$PAIR") || true
+  if grep -qF "verdict=OK" <<<"$out" && grep -qF "degraded=daily-ai-assistant" <<<"$out"; then ok
+  else bad "the real watch must read the same fixture as OK and degraded: $out"; fi
+fi
+reset
 
 # --- usage ---------------------------------------------------------------------------------------
 usage() {

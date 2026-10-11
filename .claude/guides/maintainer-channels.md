@@ -168,6 +168,10 @@ report, so the line is safe to quote.
   nobody was paged for. `ESCALATION-CLAIMED`
   means another run was handed the page within the last hour. `ALREADY-NOTIFIED` is an outage he
   has been told about.
+  A lane may dispatch its engineer from more than one scheduler entry, and it is down only when
+  every entry is. While one produces, the verdict is `OK` and the line ends with `degraded=<ids>`
+  for each entry that is not producing and `unjudged=<ids>` for each the check could not judge:
+  put either in the run report, and do not page for it.
 - **Exit `1` together with `verdict=ESCALATE` on stdout: the lane was not producing in
   three hourly slots running, with no producing look between them, and nobody has been told.** Both
   must hold; any other non-zero exit is UNKNOWN. Send the Slack DM above, once per outage: the 🤖 disclosure line, the lane's name, how
