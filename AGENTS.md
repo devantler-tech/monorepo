@@ -163,10 +163,10 @@ Full rules: [trust and untrusted input](.claude/guides/trust-and-input.md) and t
 runtime-local scheduler entries are **thin pointers that must match this table**; when the two
 disagree, the scheduler is the defect — reconcile it there, per *Agent definition locations*.
 
-| Lane | Agentic Engineer | Agent Improver | Engineer 2 |
-|---|---|---|---|
-| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 06:00, 12:00, 18:00 | Every hour at `:20` |
-| **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 03:00, 09:00, 15:00, 21:00 | Every hour at `:40` |
+| Lane | Agentic Engineer | Agent Improver |
+|---|---|---|
+| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 06:00, 12:00, 18:00 |
+| **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 03:00, 09:00, 15:00, 21:00 |
 
 Work [*The work-selection ladder*](#the-work-selection-ladder--one-ordering-checked-top-down-every-run)
 top-down every run and **keep going while actionable work remains** — the floor is at least one

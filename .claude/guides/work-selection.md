@@ -519,9 +519,11 @@ states the order. In practice:
 
 - An open client issue carries native Priority **High** unless the maintainer set another value. Set
   it while refining the issue and record this direction as the reason.
-- After any critical obligation that needs refining, refine client Backlog and Icebox items before
-  other refinement, so that a client item is Ready whenever one can be made Ready. This direction is the reason a client item leaves Icebox; any
-  other item still needs its own.
+- After any critical obligation that needs refining, refine client Backlog items before other
+  Backlog items, so that a client item is Ready whenever one can be made Ready.
+- Icebox stays deferred. At triage this direction is a reason to move a client item from Icebox to
+  Backlog before other Icebox items, when Backlog is under its ceiling. It never moves an Icebox
+  item ahead of Backlog work and never lifts a ceiling.
 - Among Ready candidates of equal native Priority, pull the client item. A higher-Priority item
   that is not client work still comes first.
 - Nothing else changes. Stage ceilings, the readiness gate, review, claims and the trust gate apply

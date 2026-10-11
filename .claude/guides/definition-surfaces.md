@@ -122,14 +122,9 @@ definition surface, and an installed/cache copy is never an authoring target.
 memory and the run report:**
 
 - Claude schedule pointers:
-  `/Users/homelab-mac-mini/.claude/scheduled-tasks/{daily-ai-assistant,agentic-engineer-2,agent-improver}/SKILL.md`.
+  `/Users/homelab-mac-mini/.claude/scheduled-tasks/{daily-ai-assistant,agent-improver}/SKILL.md`.
 - Codex schedule pointers:
-  `/Users/homelab-mac-mini/.codex/automations/{daily-ai-engineer,agentic-engineer-2,agent-improver}/automation.toml`.
-  Each `agentic-engineer-2` is its lane's second engineer entry (AGENTS.md → *Cadence & focus*): the
-  same thin pointer as the first, differing only in its id and its minute. Keep the two in step; a
-  change to one that is not made to the other is drift. The drift check below reads the first
-  engineer entry and the improver entry of each lane; until monorepo#4117 lands, verify a second
-  entry by reading its own scheduler record.
+  `/Users/homelab-mac-mini/.codex/automations/{daily-ai-engineer,agent-improver}/automation.toml`.
   A `finops-engineer` schedule under either path is **retired state to remove**, not a definition
   surface: spend now runs inside the engineer's own loop, so a surviving schedule would dispatch a role
   no reviewed definition describes. Retire it **at or before** the switch, never after: leaving it armed
