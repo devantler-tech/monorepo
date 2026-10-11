@@ -333,6 +333,9 @@ review-provider-loop-contract.test.sh|
 agent-instructions-layout-contract.test.sh|
 worktree-lane-sweep.test.sh|
 plugin-definition-refresh.test.sh|
+surveyor-vocabulary-coverage.test.sh|
+build-cache-reclaim.test.sh|
+worktree-cleanup.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"

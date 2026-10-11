@@ -44,7 +44,18 @@ CTIME_FRESH="$CTIME_SHIM_DIR/fresh"
 : > "$CTIME_FRESH"
 CTIME_BROKEN="$CTIME_SHIM_DIR/broken"
 : > "$CTIME_BROKEN"
-trap 'rm -rf "$CTIME_SHIM_DIR"' EXIT
+cleanup_test_finished=0
+# bash 3.2 can report a set -u abort inside an EXIT trap as exit 0, so require completion.
+on_test_exit() {
+  local status=$?
+  rm -rf "$CTIME_SHIM_DIR"
+  if [ "$cleanup_test_finished" != 1 ]; then
+    echo "worktree-cleanup.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "$status" != 0 ] || status=1
+    exit "$status"
+  fi
+}
+trap on_test_exit EXIT
 cat > "$CTIME_SHIM_DIR/stat" <<EOF
 #!/usr/bin/env bash
 path="\${!#}"
@@ -4385,4 +4396,5 @@ t_undrifted_submodule_repository_is_checked
 t_undrifted_submodule_evidence
 t_submodule_work_during_the_sweep_keeps
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
+cleanup_test_finished=1
 [ "$fail" -eq 0 ]

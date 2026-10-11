@@ -88,7 +88,23 @@ $repo_root/libraries/agent-plugins/plugins/agentic-engineering/agents/portfolio-
 SOURCES="$(printf '%s\n' "$SOURCE_FLOORS" | cut -f1)"
 MIN_CORPUS_ROWS=25
 
-die_unknown() { echo "surveyor-vocabulary-coverage: UNKNOWN — $1" >&2; exit 2; }
+fixdir=""
+coverage_test_finished=0
+# A reported UNKNOWN is a verdict this script reached, so it counts as finishing.
+die_unknown() { echo "surveyor-vocabulary-coverage: UNKNOWN — $1" >&2; coverage_test_finished=1; exit 2; }
+
+# bash 3.2 can report a set -u abort inside an EXIT trap as exit 0, so require completion. The
+# handler is set before the first read so the shared proof can reach it.
+cleanup() {
+  local status=$?
+  [ -z "$fixdir" ] || rm -rf "$fixdir"
+  if [ "$coverage_test_finished" != 1 ]; then
+    echo "surveyor-vocabulary-coverage.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "$status" != 0 ] || status=1
+    exit "$status"
+  fi
+}
+trap cleanup EXIT
 
 [ -f "$guard" ] || die_unknown "guard not found at $guard
   (populate the submodule: .claude/scripts/submodule-init.sh libraries/agent-plugins)"
@@ -707,7 +723,6 @@ CORPUS_REASONS=$(corpus_deny_reasons) \
 
 # ── Self-tests: planted fixtures, before any real verdict is trusted ──────────
 fixdir=$(mktemp -d) || die_unknown "cannot create fixture dir"
-trap 'rm -rf "$fixdir"' EXIT
 # Scratch file the fenced extractor hands a restored compound to `bash -n` through; parsed only,
 # never executed. Inside fixdir, so the EXIT trap removes it.
 PARSE_SCRATCH="$fixdir/compound-parse.sh"
@@ -1202,6 +1217,7 @@ CHECKED=0; SKIPPED=0; CLASSIFIED=0
 # source as a finding.
 check_sources "$SOURCES"
 status=$?
+coverage_test_finished=1
 if [ "$status" -eq 0 ]; then
   echo "surveyor-vocabulary-coverage: $CHECKED prescribed command(s) covered" \
        "($CLASSIFIED classified in corpus, $SKIPPED prose fragment(s) skipped," \

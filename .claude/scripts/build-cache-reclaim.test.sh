@@ -20,11 +20,25 @@ fail() {
   failures=$((failures + 1))
 }
 
+fixture_root=""
+go_tmp_root=""
+reclaim_test_finished=0
+# bash 3.2 can report a set -u abort inside an EXIT trap as exit 0, so require completion.
+cleanup() {
+  local status=$?
+  [ -z "$fixture_root" ] || rm -rf -- "$fixture_root"
+  [ -z "$go_tmp_root" ] || rm -rf -- "$go_tmp_root"
+  if [ "$reclaim_test_finished" != 1 ]; then
+    echo "build-cache-reclaim.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "$status" != 0 ] || status=1
+    exit "$status"
+  fi
+}
+trap cleanup EXIT
 fixture_root=$(mktemp -d) || {
   printf 'cannot create fixture root\n' >&2
   exit 2
 }
-trap 'rm -rf -- "$fixture_root"' EXIT
 # Go's work dirs are swept from a SEPARATE root, deliberately outside fixture_root: the
 # real per-user temp dir is not under the per-run temp root either, and a fixture inside
 # it would let a liveness check that only reads the narrowed snapshot pass (case 15).
@@ -32,7 +46,6 @@ go_tmp_root=$(mktemp -d) || {
   printf 'cannot create Go temp fixture root\n' >&2
   exit 2
 }
-trap 'rm -rf -- "$fixture_root" "$go_tmp_root"' EXIT
 
 # EXPORTED, not passed per call, so no invocation -- including the ones that call the
 # script directly below -- can reach the host's real per-user temp dir or real
@@ -2001,6 +2014,7 @@ grep -qF '(partial: stopped after 1s, so the largest entry may be missing, no en
   fail '24e: a measurement past its deadline was not reported as stopped'
 [ "$took" -lt 60 ] || fail "24e: the sweep waited ${took}s for a measurement with a 1s deadline"
 
+reclaim_test_finished=1
 if [ "$failures" -eq 0 ]; then
   printf 'build-cache-reclaim contract: all assertions passed\n'
   exit 0
