@@ -510,6 +510,21 @@ estimate; an unset priority requires refinement, not a default Medium. A critica
 without trading away its safety deadline. Large important work gets a valuable independent slice, not skipped
 for small low-value work. Backlog is a near-term refinement/replenishment queue; Icebox is deferred.
 
+**Client products first** (maintainer direction 2026-10-11, monorepo#4116). Work for the business's
+clients is ordered before other work at every rung: finishing, critical obligations, the Ready pull
+and refinement. The client products are listed in AGENTS.md → *The work-selection ladder*; that
+list is authoritative and only the maintainer extends it. In practice:
+
+- An open client issue carries native Priority **High** unless the maintainer set another value. Set
+  it while refining the issue and record this direction as the reason.
+- Refine client Backlog and Icebox items before any other refinement, so that a client item is Ready
+  whenever one can be made Ready. This direction is the reason a client item leaves Icebox; any
+  other item still needs its own.
+- Among Ready candidates of equal native Priority, pull the client item.
+- Nothing else changes. Stage ceilings, the readiness gate, review, claims and the trust gate apply
+  to client work as to any other, and live breakage still preempts it. A full downstream stage holds
+  a client start too; help that stage finish, client items first.
+
 Age breaks ties between comparable candidates and triggers anti-starvation review. Use Ready entry
 for waiting age and original first-start for active age, never `updatedAt`. Missing history uses a
 recorded first-observed lower bound, not a backdated continuous wait. Parking, re-entry and bot

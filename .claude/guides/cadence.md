@@ -9,18 +9,39 @@
 
 The dispatch table itself is in [AGENTS.md → *Cadence & focus*](../../AGENTS.md#cadence--focus).
 
-**The stagger invariant IS the schedule: both machine-local Agentic Engineer lanes dispatch every
-hour, at distinct minute offsets — the current Codex adapter at `:10` and Claude adapter at
-`:50`; the four Agent Improver starts remain at `:00`.** No two scheduled roles share an exact start
+**The stagger invariant IS the schedule: each machine-local lane starts an Agentic Engineer run every
+30 minutes, through two hourly entries at distinct minute offsets — the Codex adapter at `:10` and
+`:40`, the Claude adapter at `:50` and `:20`; the eight Agent Improver starts remain at `:00`.** No
+two scheduled roles share an exact start
 time. Read your lane's row for your own slots, and treat runtime jitter plus long-running siblings as
 normal overlap rather than evidence that a slot is free.
 
-Both machine-local Agentic Engineer lanes are **scheduled** every hour — for what the Claude lane
+Every Agentic Engineer entry is **scheduled** every hour — for what the Claude lane
 actually keeps, see *Scheduled is not delivered* below. These rows are deployment bindings, not
 provider requirements for the portable role. The Agent Improver
-keeps its 4×/day rotation (00 Claude, 07 Codex, 12 Claude, 19 Codex) as additional `:00` starts; those
+runs 8×/day, alternating every three hours (00, 06, 12, 18 Claude; 03, 09, 15, 21 Codex), as
+additional `:00` starts; those
 slots no longer replace an Agentic Engineer tick. This table covers the two scheduled engineering
 roles only — spend stewardship has no dispatch slot of its own (see *Spend contract*).
+
+**Each lane has two hourly engineer entries, not one entry with two minutes** (maintainer direction
+2026-10-11, monorepo#4116). The Claude scheduler refuses a dispatch that overlaps the previous run of
+the same task, and its engineer run is busy most of each hour, so a second slot on the same entry
+would almost always be refused. A second entry has its own overlap limit and runs beside the first.
+Codex has the same shape so that both runtimes carry the same number of runs and every pointer stays
+one hourly minute, the form the schedule drift check reads. The first entry of each lane is
+unchanged, so every reading and check keyed to it still holds; the checks do not read the second
+entries yet (monorepo#4117).
+
+The second entry is the same role, definition and branch namespace as the first, so two runs of your
+own lane working at once is now the standing case, not an accident of a long run. Everything below
+about same-lane overlap applies as written: the claim and the review-request lock arbitrate it, and
+neither run stands down because the other exists.
+
+The cadence was raised to use the weekly allowances. Measured 2026-10-11, before the change: the
+Claude lane had used 7% of its weekly allowance after 15% of the week, and Codex had exhausted one
+weekly window six days before its reset. Weekly use is re-read on 2026-10-18 (monorepo#4116); a lane
+that reaches its cap early is evidence to lower that lane's cadence, never to work around the cap.
 
 **Two properties of this schedule change how you plan a run.**
 ⚠️ **A sibling being mid-run is the NORMAL case — scan cross-lane on EVERY run, never at one special
