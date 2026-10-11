@@ -161,7 +161,19 @@ run() {
 }
 
 cleanup() { [ -n "${ROOT:-}" ] && rm -rf "$ROOT"; }
-trap cleanup EXIT
+refresh_test_finished=0
+# bash 3.2 can report a set -u abort inside an EXIT trap as exit 0, so require completion. The
+# cases call cleanup themselves between fixtures, so the exit handler is a separate function.
+on_test_exit() {
+  local status=$?
+  cleanup
+  if [ "$refresh_test_finished" != 1 ]; then
+    echo "plugin-definition-refresh.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "$status" != 0 ] || status=1
+    exit "$status"
+  fi
+}
+trap on_test_exit EXIT
 
 printf '\nplugin-definition-refresh contract\n'
 
@@ -1215,4 +1227,5 @@ else
 fi
 
 printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"
+refresh_test_finished=1
 [ "$fail" -eq 0 ]

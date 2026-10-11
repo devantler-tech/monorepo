@@ -20,7 +20,10 @@ fx=$(mktemp -d) || { printf 'cannot create a fixture directory\n' >&2; exit 2; }
 fx=$(cd "$fx" && pwd -P)
 # Release any hanging fake and stop every supervisor a case left behind before deleting the
 # fixture they write into.
+sweep_test_finished=0
+# bash 3.2 can report a set -u abort inside an EXIT trap as exit 0, so require completion.
 cleanup() {
+  local status=$?
   touch "$fx/release" 2>/dev/null
   local f pid
   for f in "$fx"/pids/*; do
@@ -30,6 +33,11 @@ cleanup() {
   done
   sleep 0.3
   rm -rf -- "$fx"
+  if [ "$sweep_test_finished" != 1 ]; then
+    echo "worktree-lane-sweep.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "$status" != 0 ] || status=1
+    exit "$status"
+  fi
 }
 trap cleanup EXIT
 mkdir -p "$fx/scripts" "$fx/home" "$fx/pids"
@@ -1211,4 +1219,5 @@ if grep -qF '`worktree-lane-sweep.sh start --lane <your lane>`' "$skill" \
 else bad "the run procedure starts the sweep and names every non-clean status" "$skill"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$failures"
+sweep_test_finished=1
 [ "$failures" -eq 0 ]

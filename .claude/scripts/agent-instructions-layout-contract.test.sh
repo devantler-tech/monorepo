@@ -26,6 +26,20 @@
 
 set -euo pipefail
 
+# Set up before the first read, so an early stop anywhere below is reported as a failure.
+scratch="$(mktemp -d)"
+layout_test_finished=0
+cleanup() {
+  local rc=$?
+  rm -rf "${scratch}"
+  if [ "${layout_test_finished}" != 1 ] && [ "${rc}" -eq 0 ]; then
+    echo "agent-instructions layout contract: aborted before finishing" >&2
+    rc=1
+  fi
+  exit "${rc}"
+}
+trap cleanup EXIT
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 contract_text="${repo_root}/.claude/scripts/contract-text.sh"
 
@@ -189,19 +203,6 @@ result="$(check_layout "${repo_root}")" || fail "${result}"
 echo "ok   the live instruction layout satisfies every property"
 
 # ── Negative controls: each mutation must fail for its own reason ─────────────────────────────────
-scratch="$(mktemp -d)"
-layout_test_finished=0
-cleanup() {
-  local rc=$?
-  rm -rf "${scratch}"
-  if [ "${layout_test_finished}" != 1 ] && [ "${rc}" -eq 0 ]; then
-    echo "agent-instructions layout contract: aborted before finishing" >&2
-    rc=1
-  fi
-  exit "${rc}"
-}
-trap cleanup EXIT
-
 fixture() {
   rm -rf "${scratch}/repo"
   mkdir -p "${scratch}/repo/.claude"

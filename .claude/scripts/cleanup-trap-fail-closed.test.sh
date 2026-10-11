@@ -330,6 +330,9 @@ merge-preflight-thread-gate.test.sh|
 drifted-lane-escalation-contract.test.sh|
 retired-rule-survivors-contract.test.sh|
 review-provider-loop-contract.test.sh|
+agent-instructions-layout-contract.test.sh|
+worktree-lane-sweep.test.sh|
+plugin-definition-refresh.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"
