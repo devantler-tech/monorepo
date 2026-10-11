@@ -336,6 +336,7 @@ plugin-definition-refresh.test.sh|
 surveyor-vocabulary-coverage.test.sh|
 build-cache-reclaim.test.sh|
 worktree-cleanup.test.sh|
+agent-role-delivery-contract.test.sh|
 "
 
 echo "converted scripts (\`set -u\` abort injected after the trap line):"
@@ -387,6 +388,41 @@ while IFS='|' read -r name args; do
 done <<EOF
 $converted_scripts
 EOF
+echo
+
+# The injection above stops agent-role-delivery-contract.test.sh at its first trap, long before
+# its spend cases start. Those run in a subshell with a handler of their own, so that handler is
+# lifted out of the real script and run with the same abort placed right after its trap line.
+echo "nested handler (agent-role-delivery-contract.test.sh, the spend cases subshell):"
+nested_src="$script_dir/agent-role-delivery-contract.test.sh"
+# shellcheck disable=SC2016 # A literal pattern for the script's own text, not an expansion.
+nested_setup="$(sed -n '/^  spend_tmp="\$(mktemp -d)"$/,/^  trap spend_cleanup EXIT$/p' "$nested_src")"
+if ! grep -q '^  trap spend_cleanup EXIT$' <<<"$nested_setup"; then
+  fail "agent-role-delivery-contract.test.sh: the spend cases handler was not found, so it is not proven"
+else
+  nested="$tmp/nested-spend.sh"
+  {
+    printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' '('
+    printf '%s\n' "$nested_setup"
+    # shellcheck disable=SC2016 # Written literally into the fixture, expanded when it runs.
+    printf '%s\n' '  printf reached > "$CLEANUP_TRAP_TEST_REACHED"' '  : "${CLEANUP_TRAP_TEST_UNSET_VAR}"' \
+      '  spend_cases_finished=1' ')' 'echo "all assertions passed"'
+  } > "$nested"
+  chmod +x "$nested"
+  reached="$tmp/nested-spend.reached"
+  rm -f "$reached"
+  rc=0
+  err="$(env -u CLEANUP_TRAP_TEST_UNSET_VAR CLEANUP_TRAP_TEST_REACHED="$reached" "$nested" 2>&1 >/dev/null)" || rc=$?
+  if [ ! -f "$reached" ]; then
+    fail "spend cases handler: the fixture stopped before its trap line (exit ${rc}), so this result proves nothing: ${err}"
+  elif [ "$rc" -eq 0 ]; then
+    fail "spend cases handler: a \`set -u\` abort inside the subshell reported a CLEAN PASS"
+  elif [ "$naive_unbound" -eq 0 ] && ! grep -q 'aborted before' <<<"$err"; then
+    fail "spend cases handler: exit ${rc}, but not through the sentinel on a bash that masks the abort: ${err}"
+  else
+    pass "spend cases handler: the abort reports failure (exit ${rc})"
+  fi
+fi
 echo
 
 if [ "$fails" -ne 0 ]; then

@@ -10,8 +10,22 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # The contract is AGENTS.md plus every guide it indexes; most assertions below span several guides.
+contract_tmp=""
+hook_tmp=""
+role_contract_finished=0
+# bash 3.2 can report a set -u abort inside an EXIT trap as exit 0, so require completion.
+cleanup() {
+  local status=$?
+  [ -z "${contract_tmp}" ] || rm -rf "${contract_tmp}"
+  [ -z "${hook_tmp}" ] || rm -rf "${hook_tmp}"
+  if [ "${role_contract_finished}" != 1 ]; then
+    echo "agent-role-delivery-contract.test.sh: aborted before finishing; reporting failure rather than a clean pass" >&2
+    [ "${status}" != 0 ] || status=1
+    exit "${status}"
+  fi
+}
+trap cleanup EXIT
 contract_tmp="$(mktemp -d)"
-trap 'rm -rf "${contract_tmp}"' EXIT
 constitution="${contract_tmp}/contract.md"
 "${repo_root}/.claude/scripts/contract-text.sh" >"${constitution}" ||
   { echo "agent-role delivery contract: FAIL — cannot assemble the agent contract" >&2; exit 1; }
@@ -32,6 +46,8 @@ workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
   echo "agent-role delivery contract: FAIL — $*" >&2
+  # A reported failure is a verdict this script reached, so it counts as finishing.
+  role_contract_finished=1
   exit 1
 }
 
@@ -1012,7 +1028,18 @@ cmp -s "${desired_state}" "${plugin_root}/resources/provider-neutral.desired-sta
 # source is involved. A correct path outside the Spend contract cannot mask drift.
 (
   spend_tmp="$(mktemp -d)"
-  trap 'rm -rf "${spend_tmp}"' EXIT
+  spend_cases_finished=0
+  # The same abort inside this subshell would end it with status 0 and skip the cases silently.
+  spend_cleanup() {
+    local status=$?
+    rm -rf "${spend_tmp}"
+    if [ "${spend_cases_finished}" != 1 ] && [ "${status}" = 0 ]; then
+      echo "agent-role-delivery-contract.test.sh: the spend cases aborted before finishing" >&2
+      status=1
+    fi
+    exit "${status}"
+  }
+  trap spend_cleanup EXIT
   for invalid_flag in missing null '"false"' 0 '[]' '{}' true; do
     if [ "${invalid_flag}" = missing ]; then
       jq 'del(.spec.roles["agentic-engineer"].spendStewardshipEnabled)' \
@@ -1050,6 +1077,7 @@ cmp -s "${desired_state}" "${plugin_root}/resources/provider-neutral.desired-sta
     grep -Fq 'Spend contract' "${spend_tmp}/failure" ||
       fail "invalid spend source failed for an unrelated reason"
   done
+  spend_cases_finished=1
 )
 assert_prose 'never moves money' \
   "Spend contract does not preserve the never-move-money boundary"
@@ -1154,7 +1182,6 @@ fi
 # initialised by this contract's CI job. The real adapter and real guard then classify
 # one read and one write, so a resolver that merely finds a file cannot satisfy this.
 hook_tmp="$(mktemp -d)"
-trap 'rm -rf "${hook_tmp}" "${contract_tmp}"' EXIT
 hook_config="${hook_tmp}/claude"
 hook_registry="${hook_config}/plugins/installed_plugins.json"
 mkdir -p "$(dirname "${hook_registry}")"
@@ -1949,4 +1976,5 @@ for ownership_doc in \
   esac
 done
 
+role_contract_finished=1
 echo "agent-role delivery contract: all assertions passed"
