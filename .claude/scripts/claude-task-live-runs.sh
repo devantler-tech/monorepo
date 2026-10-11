@@ -20,10 +20,13 @@
 # the FIRST line of a transcript, and from it only the opening task marker. It never prints message
 # content, and it prints no process arguments.
 #
-# Usage: claude-task-live-runs.sh --task ID [--projects PATH] [--self-pid PID]
+# Usage: claude-task-live-runs.sh --task ID[,ID...] [--projects PATH] [--self-pid PID]
 #                                 [--ps-file FILE] [--cwd-file FILE] [--now-epoch S] [--quiet]
 #
-#   --task       the scheduled task id to look for (the name in its `<scheduled-task name=...>`).
+#   --task       the scheduled task id to look for (the name in its `<scheduled-task name=...>`),
+#                or up to four ids separated by commas. A lane whose engineer runs on more than
+#                one scheduler entry names them all: the entries work one branch namespace, so
+#                a run on either must see the other's run (monorepo#4117). An id matches whole.
 #   --projects   the Claude projects root (default: ~/.claude/projects).
 #   --self-pid   a process inside the caller's own session (default: this script's own pid). The
 #                session that process descends from is the caller's and is never reported.
@@ -34,12 +37,13 @@
 #   --now-epoch  TEST SEAM: the current time in seconds, instead of the clock.
 #
 # Output: one `LIVE task=<id> pid=<pid> elapsed=<etime> session=<transcript name>` line per other
-# live run of the task, then one `CHECKED sessions=<n> other=<n> own=<pid|unresolved> task=<id> live=<n>` line. `own` is
+# live run of a requested task, naming the id that run carries, then one
+# `CHECKED sessions=<n> other=<n> own=<pid|unresolved> task=<the ids as given> live=<n>` line. `own` is
 # the caller's session; `unresolved` means none was found, so the caller's own run, if it is one of
 # the sessions, is reported as another.
 #
-# Exit 0  no other run of the task is live
-#      1  at least one other run of the task is live
+# Exit 0  no other run of a requested task is live
+#      1  at least one other run of a requested task is live
 #      2  UNKNOWN -- a usage error, a failed or empty process read, or a live session that could not
 #         be attributed to a task: no readable working directory, a directory two live sessions
 #         share, no transcript or only one older than the session, or no opening message. A session
@@ -72,15 +76,29 @@ while [ "$#" -gt 0 ]; do
       esac
       shift 2 ;;
     --quiet) QUIET=1; shift ;;
-    --help|-h) sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --help|-h) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die_unknown "unknown argument: $1" ;;
   esac
 done
 
-case "$TASK" in
-  "") die_unknown "--task is required" ;;
-  *[!A-Za-z0-9._-]*) die_unknown "--task must be a task id (letters, digits, '.', '_' or '-')" ;;
-esac
+# Every id is validated on its own, so the set can be matched below as a comma-delimited string: no
+# id is empty, none holds a comma, and none is named twice.
+[ -n "$TASK" ] || die_unknown "--task is required"
+task_count=0
+tasks_seen=","
+tasks_rest="$TASK"
+while :; do
+  task_id="${tasks_rest%%,*}"
+  case "$task_id" in
+    ""|*[!A-Za-z0-9._-]*)
+      die_unknown "--task must be a task id (letters, digits, '.', '_' or '-'), or up to four separated by commas" ;;
+  esac
+  case "$tasks_seen" in *",${task_id},"*) die_unknown "--task names an id twice: $task_id" ;; esac
+  tasks_seen="${tasks_seen}${task_id},"
+  task_count=$((task_count + 1))
+  case "$tasks_rest" in *,*) tasks_rest="${tasks_rest#*,}" ;; *) break ;; esac
+done
+[ "$task_count" -le 4 ] || die_unknown "--task takes at most four ids"
 case "$SELF_PID" in ""|*[!0-9]*) die_unknown "--self-pid must be a process id" ;; esac
 [ -d "$PROJECTS" ] || die_unknown "projects root not found: $PROJECTS"
 command -v jq >/dev/null 2>&1 || die_unknown "jq is required"
@@ -244,11 +262,14 @@ while IFS="$TAB" read -r pid elapsed kind cwd; do
     *) unattributed "$pid" "$elapsed" no-opening-message; continue ;;
   esac
 
-  if [ "$name" = "$TASK" ]; then
-    live=$((live + 1))
-    session_name=${newest##*/}
-    printf 'LIVE task=%s pid=%s elapsed=%s session=%s\n' "$TASK" "$pid" "$elapsed" "${session_name%.jsonl}"
-  fi
+  # An interactive session has no task name, and the empty name must match no entry of the set.
+  [ -n "$name" ] || continue
+  case "$tasks_seen" in
+    *",${name},"*)
+      live=$((live + 1))
+      session_name=${newest##*/}
+      printf 'LIVE task=%s pid=%s elapsed=%s session=%s\n' "$name" "$pid" "$elapsed" "${session_name%.jsonl}" ;;
+  esac
 done <<EOF2
 $rows
 EOF2
