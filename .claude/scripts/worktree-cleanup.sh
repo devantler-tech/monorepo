@@ -316,30 +316,35 @@ run_bounded() {
 # GitHub keeps after the branch is deleted), a claim tip, or a branch pushed by refspec and
 # never fetched back. Measured on the host 2026-10-11: 20 of the 34 worktrees kept for a
 # reflog-only commit were kept for one origin advertised (#2831).
-# Any failure, a timeout included, leaves the list empty or short, which only ever keeps more.
+# Any failure, a timeout included, leaves the list empty or short, which only ever keeps more,
+# and sets REMOTE_HELD_FAILED so the sweep ends UNKNOWN (exit 2) instead of calling worktrees
+# it could not ask about abandoned.
+# Call it from the main shell, never inside $(): a subshell would drop the result and every
+# worktree would ask origin again.
 # The answer is as of the read: a ref its owner deletes afterwards is no longer evidence, the
 # same limit a remote-tracking ref has, and a pull request head is never deleted.
 REMOTE_HELD=""
 REMOTE_HELD_READ=0
+REMOTE_HELD_FAILED=0
 remote_held_commits() {
   [ "$REMOTE_HELD_READ" -eq 0 ] || return 0
   REMOTE_HELD_READ=1
   local rows ids
   rows=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}" \
-         run_bounded git -C "$TOPLEVEL" ls-remote origin) || return 0
+         run_bounded git -C "$TOPLEVEL" ls-remote origin) || { REMOTE_HELD_FAILED=1; return 0; }
   # An advertised line is `<object id><TAB><ref>`; anything else is not evidence.
   ids=$(awk -F'\t' 'NF == 2 && $1 ~ /^([0-9a-f]{40}|[0-9a-f]{64})$/ { print $1 }' <<< "$rows" | sort -u)
   [ -n "$ids" ] || return 0
   REMOTE_HELD=$(git -C "$TOPLEVEL" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" \
-                2>/dev/null | awk '$2 == "commit" { print $1 }') || REMOTE_HELD=""
+                2>/dev/null | awk '$2 == "commit" { print $1 }') || { REMOTE_HELD=""; REMOTE_HELD_FAILED=1; }
 }
 
 # not_remote_held <commits> -> prints those of <commits> (one per line) that no commit origin
 # advertises reaches. With nothing advertised, or when the comparison fails, prints them all.
+# Reads REMOTE_HELD only; the caller runs remote_held_commits first.
 not_remote_held() {
   local commits=$1 out
   [ -n "$commits" ] || return 0
-  remote_held_commits
   if [ -z "$REMOTE_HELD" ]; then printf '%s\n' "$commits"; return 0; fi
   if out=$( { printf '%s\n' "$commits"; sed 's/^/^/' <<< "$REMOTE_HELD"; } \
             | git -C "$TOPLEVEL" rev-list --no-walk --stdin 2>/dev/null); then
@@ -2140,7 +2145,10 @@ while IFS= read -r wt <&3; do
     fi
     # A commit origin advertises is not held only here, whatever the remote-tracking refs
     # say. Asked only when something is left to ask about, so most sweeps never ask.
-    orphaned=$(not_remote_held "$orphaned")
+    if [ -n "$orphaned" ]; then
+      remote_held_commits
+      orphaned=$(not_remote_held "$orphaned")
+    fi
     orphaned=$(head -1 <<< "$orphaned")
     if [ -n "$orphaned" ]; then
       if ! salvage_eligible "$age_h" "$wt"; then
@@ -2385,4 +2393,10 @@ else
 fi
 if [ "$stuck" -gt 0 ]; then
   printf 'worktree-cleanup: %d of the kept worktree(s) hold abandoned work that no sweep will reap; salvage or discard it (#2831)\n' "$stuck"
+fi
+if [ "$REMOTE_HELD_FAILED" -ne 0 ]; then
+  # Said last and with exit 2: the worktrees kept for a reflog-only commit above were kept
+  # without evidence either way, so this sweep did not show they hold abandoned work.
+  printf 'worktree-cleanup: UNKNOWN — could not read what origin advertises, so every worktree with a reflog-only commit was kept unexamined (#2831)\n' >&2
+  exit 2
 fi

@@ -1017,19 +1017,46 @@ t_keeps_reflog_descendant_of_an_advertised_commit() {
 t_keeps_reflog_commit_when_origin_cannot_be_read() {
   # The commit IS on origin, but the sweep cannot ask: an unread remote proves nothing.
   # The first run is the control that the same fixture is reaped when origin answers.
-  local name="KEEPs a reflog-only commit when origin cannot be read (and REAPs it when it can)"
-  local root held before out; root=$(make_repo)
+  local name="KEEPs a reflog-only commit and exits UNKNOWN when origin cannot be read (and REAPs it, exit 0, when it can)"
+  local root held before before_rc out rc; root=$(make_repo)
   held=$(reflog_fixture "$root" held 1) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   git -C "$root/repo" push -q origin "$held:refs/pull/7/head" \
     || { bad "$name" "FIXTURE: push"; rm -rf "$root"; return; }
-  before=$(run "$root")
+  before=$(run "$root"); before_rc=$?
   git -C "$root/repo" remote set-url origin "$root/no-such-remote.git"
-  out=$(run "$root")
-  if grep -q '^REAP  .*held' <<<"$before" \
+  out=$(run "$root"); rc=$?
+  if [ "$before_rc" -eq 0 ] && grep -q '^REAP  .*held' <<<"$before" \
+     && ! grep -q 'could not read what origin advertises' <<<"$before" \
+     && [ "$rc" -eq 2 ] && grep -q 'UNKNOWN — could not read what origin advertises' <<<"$out" \
      && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
     ok "$name"
   else
-    bad "$name" "before: $before :: after: $out"
+    bad "$name" "before(rc=$before_rc): $before :: after(rc=$rc): $out"
+  fi
+  rm -rf "$root"
+}
+
+t_asks_origin_once_for_many_reflog_worktrees() {
+  # The read is shared across the sweep: three worktrees with reflog-only commits make one
+  # request, not three. Counted with a git that logs each ls-remote and then runs the real one.
+  local name="asks origin once per sweep however many worktrees hold reflog-only commits"
+  local root shim real n out; root=$(make_repo)
+  reflog_fixture "$root" one 1 >/dev/null && reflog_fixture "$root" two 1 >/dev/null \
+    && reflog_fixture "$root" three 1 >/dev/null \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  real=$(command -v git); shim="$root/shim"; mkdir -p "$shim"
+  cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = ls-remote ] && echo x >> "$root/ls-remote.count"; done
+exec "$real" "\$@"
+SHIM
+  chmod +x "$shim/git"
+  out=$(PATH="$shim:$PATH" run "$root")
+  n=$(wc -l < "$root/ls-remote.count" 2>/dev/null | tr -d " ")
+  if [ "$n" = 1 ] && [ "$(grep -c 'KEEP .*reflog or pseudo-ref holds commit' <<<"$out")" -eq 3 ]; then
+    ok "$name"
+  else
+    bad "$name" "ls-remote calls=${n:-0} $out"
   fi
   rm -rf "$root"
 }
@@ -4510,6 +4537,7 @@ t_reaps_reflog_commit_origin_advertises
 t_reaps_reflog_ancestor_of_an_advertised_commit
 t_keeps_reflog_descendant_of_an_advertised_commit
 t_keeps_reflog_commit_when_origin_cannot_be_read
+t_asks_origin_once_for_many_reflog_worktrees
 t_keeps_reflog_commit_origin_no_longer_advertises
 t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing
