@@ -35,6 +35,16 @@
 #     it leaves the count where it was and exits 2.
 #   - The sibling's twice-daily task. Its verdict stands for twelve hours, which says nothing about
 #     three hourly slots.
+#   - A lane with one dead engineer entry and one producing. See the next section.
+#
+# A LANE WITH MORE THAN ONE ENGINEER ENTRY (monorepo#4117)
+#   A lane may dispatch its engineer from more than one scheduler entry. The lane is down only when
+#   EVERY entry is not producing: that is the outage this watch counts and pages on. While at least
+#   one entry produces, the lane is producing, the verdict is OK and the count clears; an entry that
+#   is not producing is then named in `degraded=` and one the check could not judge in `unjudged=`,
+#   for the run report. Neither is paged: the work still gets done, at a lower rate. With no entry
+#   seen producing, one unjudged entry makes the whole look UNKNOWN, because the lane cannot be
+#   called down on a partial reading. Slots are still counted on the FIRST entry's minute.
 #
 # READ-ONLY toward both runtimes. Everything it writes sits beside its own state file: the file, its
 # `.lock` and `.reap` directories, and a `.corrupt` copy of a state file it had to set aside. The
@@ -43,7 +53,7 @@
 # so its output is safe to quote in a run report.
 #
 # Usage: sibling-lane-watch.sh --lane <claude|codex> [--state-file PATH] [--threshold N]
-#                              [--now-epoch S]
+#                              [--now-epoch S] [--entries ID[,ID...]]
 #        sibling-lane-watch.sh --lane <claude|codex> [--state-file PATH] --mark-notified
 #
 # --lane is the lane being WATCHED, which is never the caller's own: a Claude run passes `codex`, a
@@ -53,6 +63,11 @@
 #
 # The liveness check is always the one beside this script. --now-epoch is for the test suite and is
 # passed on to it.
+#
+# --entries names the watched lane's engineer entries (scheduler task or automation ids), first
+# entry first. The default is the lane's deployed set, declared below next to its minute, so the
+# every-run command stays the same when a lane gains an entry; the option exists for the test suite
+# and for trying a set before it is deployed.
 #
 # Exit 0  nothing to send — verdict OK, WATCHING, KNOWN-RESET, ESCALATION-CLAIMED or ALREADY-NOTIFIED
 #      1  ESCALATE — the lane has been NOT-PRODUCING for the threshold and nobody has been told
@@ -71,6 +86,8 @@ trap 'exit 2' ERR
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 LANE=""
+ENTRIES=""
+ENTRIES_SET=0
 STATE_FILE=""
 THRESHOLD=3
 NOW_EPOCH=""
@@ -128,12 +145,16 @@ is_uint() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --lane | --state-file | --threshold | --now-epoch)
+    --lane | --state-file | --threshold | --now-epoch | --entries)
       [ "$#" -ge 2 ] || unknown "$1 needs a value"
       case "$1" in
         --lane) LANE="$2" ;;
         --state-file) STATE_FILE="$2" ;;
         --threshold) THRESHOLD="$2" ;;
+        --entries)
+          ENTRIES="$2"
+          ENTRIES_SET=1
+          ;;
         --now-epoch)
           NOW_EPOCH="$2"
           NOW_SET=1
@@ -156,12 +177,16 @@ case "$LANE" in
   claude)
     default_state="$HOME/.codex/lane-watch/claude.json"
     sibling_minute=50
-    liveness_args=(--task daily-ai-assistant --grace-seconds "$CLAUDE_GRACE_SECONDS")
+    default_entries="daily-ai-assistant"
+    liveness_flag="--task"
+    liveness_args=(--grace-seconds "$CLAUDE_GRACE_SECONDS")
     ;;
   codex)
     default_state="$HOME/.claude/lane-watch/codex.json"
     sibling_minute=10
-    liveness_args=(--automation daily-ai-engineer)
+    default_entries="daily-ai-engineer"
+    liveness_flag="--automation"
+    liveness_args=()
     ;;
   *)
     LANE="unset"
@@ -169,6 +194,27 @@ case "$LANE" in
     ;;
 esac
 [ -n "$STATE_FILE" ] || STATE_FILE="$default_state"
+
+# The ids go to the liveness check as one argument each and into this script's own summary, so
+# they are held to the shape a scheduler id has. A repeated id would be judged twice and could
+# hide a dead entry behind a producing one of the same name.
+# The letters are spelled out: a range such as a-z follows the locale's collation, and outside the C
+# locale it also matches capitals.
+[ "$ENTRIES_SET" -eq 1 ] || ENTRIES="$default_entries"
+case "$ENTRIES" in '' | ,* | *, | *,,* | *[!abcdefghijklmnopqrstuvwxyz0123456789,-]*)
+  unknown "--entries must be a comma-separated list of ids made of lowercase letters, digits and hyphens" ;;
+esac
+ENTRY_LIST=()
+entries_rest="$ENTRIES"
+while [ -n "$entries_rest" ]; do
+  entry="${entries_rest%%,*}"
+  case "$entry" in -*) unknown "--entries ids must not start with a hyphen" ;; esac
+  case ",${seen_entries:-}," in *",${entry},"*) unknown "--entries names an id twice" ;; esac
+  seen_entries="${seen_entries:+${seen_entries},}${entry}"
+  ENTRY_LIST+=("$entry")
+  case "$entries_rest" in *,*) entries_rest="${entries_rest#*,}" ;; *) entries_rest="" ;; esac
+done
+[ "${#ENTRY_LIST[@]}" -le 4 ] || unknown "--entries takes at most four ids"
 
 is_uint "$THRESHOLD" && [ "${#THRESHOLD}" -le 4 ] && [ "$((10#$THRESHOLD))" -ge 1 ] ||
   unknown "--threshold must be a positive integer of at most four digits"
@@ -296,32 +342,54 @@ state_signature() {
 }
 signature_before="$(state_signature)"
 
-liveness_rc=0
-# bash 3.2 runs the inherited ERR trap inside this substitution even though the status is handled
-# here, which would turn the check's exit 1 into 2. The trap is dropped for the subshell only.
-liveness_out="$(trap - ERR; "$liveness_cmd" "${liveness_args[@]}" 2>/dev/null)" || liveness_rc=$?
+# Each entry is judged by itself and the lane from all of them (see the header). An exit 1 must name
+# at least one NOT-PRODUCING task: an exit 1 with none is not a verdict this script understands, and
+# treating it as "down" would page on a failure of the check itself, so that entry is unjudged.
+producing=0
+down_ids=""
+unjudged_ids=""
+unjudged_reason=""
+down_lines=""
+for entry in "${ENTRY_LIST[@]}"; do
+  entry_rc=0
+  # bash 3.2 runs the inherited ERR trap inside this substitution even though the status is handled
+  # here, which would turn the check's exit 1 into 2. The trap is dropped for the subshell only.
+  entry_out="$(trap - ERR; "$liveness_cmd" "$liveness_flag" "$entry" ${liveness_args[@]+"${liveness_args[@]}"} 2>/dev/null)" || entry_rc=$?
+  case "$entry_rc" in
+    0) producing=1 ;;
+    1)
+      entry_down="$(printf '%s\n' "$entry_out" | grep -E '^[[:space:]]*NOT-PRODUCING[[:space:]]' || true)"
+      if [ -n "$entry_down" ]; then
+        down_ids="${down_ids:+${down_ids},}${entry}"
+        down_lines="${down_lines:+${down_lines}
+}${entry_down}"
+      else
+        unjudged_ids="${unjudged_ids:+${unjudged_ids},}${entry}"
+        [ -n "$unjudged_reason" ] || unjudged_reason="exited 1 without a NOT-PRODUCING line"
+      fi
+      ;;
+    *)
+      unjudged_ids="${unjudged_ids:+${unjudged_ids},}${entry}"
+      # Usually a dispatch still in flight, which a later look in the same run can judge.
+      [ -n "$unjudged_reason" ] || unjudged_reason="could not judge (exit ${entry_rc})"
+      ;;
+  esac
+done
 
-case "$liveness_rc" in
-  0)
-    # Producing again: the outage, if any, is over, so the next one may page afresh.
-    lock_state
-    if [ -e "$STATE_FILE" ] && [ "$(state_signature)" = "$signature_before" ]; then
-      rm -f "$STATE_FILE" 2>/dev/null || unknown "cannot clear the state file: $STATE_FILE"
-    fi
-    summary OK none
-    finish 0
-    ;;
-  1) ;;
-  *)
-    # Usually a dispatch still in flight, which a later look in the same run can judge.
-    unknown "the ${LANE} liveness check could not judge (exit ${liveness_rc}); the count is unchanged -- run this once more before the run report"
-    ;;
-esac
-
-# A `1` must name at least one NOT-PRODUCING task. An exit 1 with none is not a verdict this script
-# understands, and treating it as "down" would page on a failure of the check itself.
-down_lines="$(printf '%s\n' "$liveness_out" | grep -E '^[[:space:]]*NOT-PRODUCING[[:space:]]' || true)"
-[ -n "$down_lines" ] || unknown "the ${LANE} liveness check exited 1 without a NOT-PRODUCING line"
+if [ "$producing" -eq 1 ]; then
+  # Producing again: the outage, if any, is over, so the next one may page afresh.
+  lock_state
+  if [ -e "$STATE_FILE" ] && [ "$(state_signature)" = "$signature_before" ]; then
+    rm -f "$STATE_FILE" 2>/dev/null || unknown "cannot clear the state file: $STATE_FILE"
+  fi
+  entry_notes=""
+  [ -z "$down_ids" ] || entry_notes=" degraded=${down_ids}"
+  [ -z "$unjudged_ids" ] || entry_notes="${entry_notes} unjudged=${unjudged_ids}"
+  echo "$(summary OK none)${entry_notes}"
+  finish 0
+fi
+[ -z "$unjudged_ids" ] ||
+  unknown "the ${LANE} liveness check ${unjudged_reason} for ${unjudged_ids}; the count is unchanged -- run this once more before the run report"
 
 lock_state
 read_state
