@@ -10,6 +10,10 @@
 #      failure class this repository has been bitten by before.
 set -Eeuo pipefail
 
+# These original fixtures model the direct gh body interface. Keep that path
+# covered; cmd/conditional-get tests the real wrapper with HTTP/cache fixtures.
+export DISCLOSURE_API_CACHE_DIR=off
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 guard="$script_dir/comment-disclosure-drift.sh"
 untrusted_input_guide="$script_dir/../guides/trust-and-input.md"
