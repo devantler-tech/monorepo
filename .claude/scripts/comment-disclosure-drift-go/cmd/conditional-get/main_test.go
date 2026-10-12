@@ -9,6 +9,7 @@ import (
 	"testing"
 )
 
+// fixture models GitHub's changed and conditional list responses for the real wrapper.
 func fixture(t *testing.T) (string, string, string) {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
@@ -57,6 +58,7 @@ if [ "$FIXTURE_MODE" = failed ]; then exit 17; fi
 	return wrapper, dir, bin
 }
 
+// invoke executes the actual Bash wrapper with an isolated fake forge and private cache.
 func invoke(t *testing.T, wrapper, dir, bin, mode string) (int, string) {
 	t.Helper()
 	cmd := exec.Command("bash", wrapper, "--repo", "owner/repo", "--since", "2026-10-12T00:00:00Z")
@@ -79,6 +81,7 @@ func invoke(t *testing.T, wrapper, dir, bin, mode string) (int, string) {
 	return -1, ""
 }
 
+// charged counts full source responses rather than all conditional requests.
 func charged(t *testing.T, dir string) int {
 	t.Helper()
 	bytes, err := os.ReadFile(filepath.Join(dir, "charged"))
@@ -88,6 +91,7 @@ func charged(t *testing.T, dir string) int {
 	return len(strings.Fields(string(bytes)))
 }
 
+// TestWrapperConfirmsUnchangedPagesWithoutSpendingAgain proves the repeat sweep's budget reduction.
 func TestWrapperConfirmsUnchangedPagesWithoutSpendingAgain(t *testing.T) {
 	wrapper, dir, bin := fixture(t)
 	for run := 0; run < 2; run++ {
@@ -101,6 +105,7 @@ func TestWrapperConfirmsUnchangedPagesWithoutSpendingAgain(t *testing.T) {
 	}
 }
 
+// TestWrapperRefreshesFindingsAndPreservesProducerFailure preserves changed and failed-read verdicts.
 func TestWrapperRefreshesFindingsAndPreservesProducerFailure(t *testing.T) {
 	wrapper, dir, bin := fixture(t)
 	if code, out := invoke(t, wrapper, dir, bin, "clean"); code != 0 {

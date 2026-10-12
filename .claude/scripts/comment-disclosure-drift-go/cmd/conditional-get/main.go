@@ -49,18 +49,27 @@ type retained struct {
 	SHA256  string `json:"sha256"`
 }
 
+// digest binds retained bytes and endpoint keys to their exact contents.
 func digest(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
+
+// fileName scopes each page key to GitHub, the API version, and the full query.
 func fileName(dir, target string) string {
 	return filepath.Join(dir, digest([]byte("github.com\n2022-11-28\n"+target))+".json")
 }
+
+// private requires ownership by this user and excludes group or world access.
 func private(info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	return ok && int(stat.Uid) == os.Getuid() && info.Mode().Perm()&0077 == 0
 }
+
+// privateDir refuses symlinked or shared directories before retaining responses.
 func privateDir(dir string) bool {
 	info, err := os.Lstat(dir)
 	return err == nil && info.IsDir() && private(info)
 }
+
+// validBody accepts only a complete UTF-8 JSON list within the requested page bound.
 func validBody(body []byte) (int, error) {
 	if len(body) == 0 || len(body) > maxBody || !utf8.Valid(body) || !json.Valid(body) {
 		return 0, errors.New("invalid source body")
@@ -74,6 +83,8 @@ func validBody(body []byte) (int, error) {
 	}
 	return len(items), nil
 }
+
+// readRecord verifies an opened private file, its format, page key, and body integrity.
 func readRecord(path string) (retained, os.FileInfo, bool) {
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -98,6 +109,8 @@ func readRecord(path string) (retained, os.FileInfo, bool) {
 	}
 	return record, info, true
 }
+
+// load selects a valid recent page as a validator candidate, never as fresh evidence.
 func load(dir, target string) (retained, bool) {
 	if !privateDir(dir) {
 		return retained{}, false
@@ -108,6 +121,8 @@ func load(dir, target string) (retained, bool) {
 	}
 	return record, true
 }
+
+// store atomically retains a validated page when private caching is available.
 func store(dir, target string, page response) {
 	if dir == "" || !etagRE.MatchString(page.etag) {
 		return
@@ -136,6 +151,8 @@ func store(dir, target string, page response) {
 		prune(dir)
 	}
 }
+
+// prune bounds only verified transport records; unrelated files are never candidates.
 func prune(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil || !privateDir(dir) {
@@ -172,12 +189,15 @@ func prune(dir string) {
 
 type limitedBuffer struct{ bytes.Buffer }
 
+// Write bounds subprocess output before it can exhaust memory.
 func (b *limitedBuffer) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > maxBody+16384 {
 		return 0, errors.New("source response too large")
 	}
 	return b.Buffer.Write(p)
 }
+
+// parse separates source headers from bytes and rejects ambiguous ETags.
 func parse(raw []byte) (response, error) {
 	header, body, ok := bytes.Cut(raw, []byte("\r\n\r\n"))
 	if !ok {
@@ -212,6 +232,8 @@ func parse(raw []byte) (response, error) {
 	}
 	return page, nil
 }
+
+// fetch reads from the pinned forge and preserves failed-command semantics for HTTP 304.
 func fetch(ctx context.Context, target, etag string) (response, error) {
 	args := []string{"api", "--include", "--hostname", "github.com", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28"}
 	if etag != "" {
@@ -241,6 +263,8 @@ func fetch(ctx context.Context, target, etag string) (response, error) {
 	}
 	return page, nil
 }
+
+// read revalidates each page and buffers the entire bounded list before returning evidence.
 func read(ctx context.Context, endpoint, dir string, single, trace bool) ([]byte, error) {
 	uri, err := url.Parse(endpoint)
 	if err != nil || uri.IsAbs() || uri.Host != "" || uri.Fragment != "" || uri.RawPath != "" || !endpointRE.MatchString(uri.Path) {
@@ -321,6 +345,8 @@ func read(ctx context.Context, endpoint, dir string, single, trace bool) ([]byte
 	}
 	return nil, errors.New("source exceeds 50 pages")
 }
+
+// main exposes the bounded list reader and reports unreadable evidence as UNKNOWN.
 func main() {
 	endpoint := flag.String("endpoint", "", "GitHub list endpoint")
 	dir := flag.String("cache-dir", "", "private retained-page directory")

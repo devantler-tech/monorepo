@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// transportFixture models a full first page, validator changes, and later-page failures.
 func transportFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -62,6 +63,7 @@ printf 'HTTP/2.0 200 OK\r\nETag: %s\r\n\r\n%s' "$tag" "$body"
 	return filepath.Join(dir, "cache")
 }
 
+// TestRevalidationFindsNewPageAfterFullCachedPage prevents stale pagination from hiding new records.
 func TestRevalidationFindsNewPageAfterFullCachedPage(t *testing.T) {
 	dir := transportFixture(t)
 	endpoint := "repos/owner/repo/issues/1/comments"
@@ -89,6 +91,7 @@ func TestRevalidationFindsNewPageAfterFullCachedPage(t *testing.T) {
 	}
 }
 
+// TestLaterPageFailureCannotReturnPartialEvidence rejects partial success after a producer failure.
 func TestLaterPageFailureCannotReturnPartialEvidence(t *testing.T) {
 	dir := transportFixture(t)
 	endpoint := "repos/owner/repo/issues/1/comments"
@@ -102,6 +105,7 @@ func TestLaterPageFailureCannotReturnPartialEvidence(t *testing.T) {
 	}
 }
 
+// TestUnsolicitedNotModifiedCannotUseLocalData requires a validator bound to a retained page.
 func TestUnsolicitedNotModifiedCannotUseLocalData(t *testing.T) {
 	dir := transportFixture(t)
 	t.Setenv("TRANSPORT_MODE", "unsolicited")
@@ -110,6 +114,7 @@ func TestUnsolicitedNotModifiedCannotUseLocalData(t *testing.T) {
 	}
 }
 
+// TestInvalidEndpointsNeverReachGitHub prevents unsupported scope from reaching the transport.
 func TestInvalidEndpointsNeverReachGitHub(t *testing.T) {
 	dir := transportFixture(t)
 	for _, endpoint := range []string{
@@ -129,6 +134,7 @@ func TestInvalidEndpointsNeverReachGitHub(t *testing.T) {
 	}
 }
 
+// TestUnsafeRetainedPagesAreNeverReused rejects corrupt, expired, shared, or symlinked records.
 func TestUnsafeRetainedPagesAreNeverReused(t *testing.T) {
 	target := "repos/owner/repo/issues/1/comments?page=1&per_page=100"
 	for _, kind := range []string{"corrupt", "wrong-target", "public-file", "expired", "symlink", "public-directory"} {
@@ -181,6 +187,7 @@ func TestUnsafeRetainedPagesAreNeverReused(t *testing.T) {
 	}
 }
 
+// TestPrunePreservesUnrelatedFiles limits eviction to verifiable transport-owned records.
 func TestPrunePreservesUnrelatedFiles(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0700); err != nil {
@@ -209,6 +216,7 @@ func TestPrunePreservesUnrelatedFiles(t *testing.T) {
 	}
 }
 
+// TestMalformedSourceAnswersFailClosed rejects malformed headers and incomplete list bodies.
 func TestMalformedSourceAnswersFailClosed(t *testing.T) {
 	for _, raw := range []string{"[]", "HTTP/2.0 nope\r\n\r\n[]", "HTTP/2.0 200 OK\r\nETag: \"a\"\r\nETag: \"b\"\r\n\r\n[]", "HTTP/2.0 200 OK\r\nbad-header\r\n\r\n[]"} {
 		if _, err := parse([]byte(raw)); err == nil {
@@ -222,6 +230,7 @@ func TestMalformedSourceAnswersFailClosed(t *testing.T) {
 	}
 }
 
+// TestWeakETagRevalidationAcceptsEquivalentStrongValidator covers GitHub's live weak/strong equivalence.
 func TestWeakETagRevalidationAcceptsEquivalentStrongValidator(t *testing.T) {
 	dir := transportFixture(t)
 	t.Setenv("TRANSPORT_MODE", "weak")
@@ -236,6 +245,7 @@ func TestWeakETagRevalidationAcceptsEquivalentStrongValidator(t *testing.T) {
 	}
 }
 
+// TestDotRepositoryAndMismatchedValidator keeps .github supported while rejecting a different ETag.
 func TestDotRepositoryAndMismatchedValidator(t *testing.T) {
 	dir := transportFixture(t)
 	endpoint := "repos/devantler-tech/.github/issues/1/comments"
