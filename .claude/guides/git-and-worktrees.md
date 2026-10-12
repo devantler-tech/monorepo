@@ -144,9 +144,10 @@ Go build cache.
   per lane under the host's shared temp root (`/private/tmp` on macOS, `/tmp` on Linux):
   `GOCACHE=<tmp>/go-cache-<lane>`, `GOMODCACHE=<tmp>/go-mod-<lane>` and
   `GOLANGCI_LINT_CACHE=<tmp>/golangci-cache-<lane>`. Moving `GOCACHE` alone still leaves the module
-  cache at its unwritable default. Start the name with the cache, not the lane: `build-cache-reclaim.sh`
-  reaps `codex-*` and the other per-run tree names by the age of the directory itself, which a
-  busy cache never refreshes. Never use a path with a run, PR or issue suffix: each suffix is a
+  cache at its unwritable default. Keep exactly these names: `build-cache-reclaim.sh` budgets a
+  directory named `go-mod-*` as a module cache and recognises the other two by the README each tool
+  writes, while every other directory you own under that temp root is removed once nothing in it
+  was written for 24 hours. Never use a path with a run, PR or issue suffix: each suffix is a
   fresh multi-gigabyte copy.
 - A test fixture that needs an isolated cache keeps it inside its own temp dir and removes it on exit.
 
