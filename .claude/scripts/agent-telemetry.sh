@@ -5352,7 +5352,115 @@ if want drift; then
   CLAUDE_IMPROVER_EXPECTED=$(cadence_expected Claude 4)
   CODEX_ENGINEER_EXPECTED=$(cadence_expected Codex 3)
   CODEX_IMPROVER_EXPECTED=$(cadence_expected Codex 4)
-  CLAUDE_ENGINEER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
+  # A lane may have more than one engineer entry (monorepo#4117). The Claude
+  # scheduler holds back a start that would overlap the previous run of the SAME
+  # entry, so a second start an hour needs a second entry there. The lane's
+  # schedule is then the union of its entries' start minutes, compared with the
+  # cadence cell as one schedule. CLAUDE_ENGINEER_ENTRIES names the entries; the
+  # default is the one entry the lane has today, read exactly as before.
+  #
+  # The union is stated only when every named entry is readable, all cover the
+  # same hours, and no two start in the same minute. A lane read from the entries
+  # that happen to be readable would report a lost start as a MATCH on what is left.
+  CLAUDE_ENGINEER_ENTRIES="${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}"
+  claude_engineer_entry_ids() {
+    # Letters are spelled out: a range such as a-z follows the locale's collation
+    # in some awks and would admit capitals.
+    printf '%s\n' "$CLAUDE_ENGINEER_ENTRIES" | awk -F',' '
+      {
+        if (NF < 1 || NF > 4) invalid = 1
+        for (i = 1; i <= NF; i++) {
+          if ($i !~ /^[abcdefghijklmnopqrstuvwxyz0123456789][abcdefghijklmnopqrstuvwxyz0123456789-]*$/ ||
+              ($i in seen)) invalid = 1
+          seen[$i] = 1
+          ids[i] = $i
+        }
+        count = NF
+      }
+      END {
+        if (invalid || NR != 1) exit 1
+        for (i = 1; i <= count; i++) print ids[i]
+      }
+    '
+  }
+  # An entry's pointer sits beside the lane's first one, in a directory named
+  # after the entry.
+  claude_engineer_entry_loader() {
+    if [ "$1" = daily-ai-assistant ]; then
+      printf '%s\n' "$CLAUDE_LOADER"
+    else
+      printf '%s/%s/SKILL.md\n' "$(dirname "$(dirname "$CLAUDE_LOADER")")" "$1"
+    fi
+  }
+  CLAUDE_ENGINEER_ACTUAL=""
+  CLAUDE_ENGINEER_MARKER=""
+  CLAUDE_ENGINEER_UNREADABLE=""
+  # One " id=schedule" word per readable entry; the refusal count below reads it.
+  CLAUDE_ENGINEER_ENTRY_SCHEDULES=""
+  CLAUDE_ENGINEER_ENTRY_IDS=$(claude_engineer_entry_ids) || CLAUDE_ENGINEER_ENTRY_IDS=""
+  CLAUDE_ENGINEER_ENTRY_COUNT=$(printf '%s\n' "$CLAUDE_ENGINEER_ENTRY_IDS" | awk 'NF { count++ } END { print count + 0 }')
+  if [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 0 ]; then
+    CLAUDE_ENGINEER_UNREADABLE="entry list is unreadable (CLAUDE_ENGINEER_ENTRIES: ids of lowercase letters, digits and hyphens, at most four, none twice)"
+  elif [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 1 ]; then
+    CLAUDE_ENGINEER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" \
+      "$CLAUDE_ENGINEER_ENTRY_IDS" "$(claude_engineer_entry_loader "$CLAUDE_ENGINEER_ENTRY_IDS")")
+    CLAUDE_ENGINEER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" \
+      "$CLAUDE_ENGINEER_ENTRY_IDS" "$(claude_engineer_entry_loader "$CLAUDE_ENGINEER_ENTRY_IDS")")
+    [ -n "$CLAUDE_ENGINEER_ACTUAL" ] \
+      && CLAUDE_ENGINEER_ENTRY_SCHEDULES=" $CLAUDE_ENGINEER_ENTRY_IDS=$CLAUDE_ENGINEER_ACTUAL"
+  else
+    lane_hours=""
+    lane_minutes=""
+    lane_minute_owners=""
+    while IFS= read -r entry_id; do
+      entry_loader=$(claude_engineer_entry_loader "$entry_id")
+      entry_marker=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" "$entry_id" "$entry_loader")
+      # The lane's change marker is its newest dispatch on any entry.
+      if [[ "$entry_marker" =~ ^[0-9]+$ ]] \
+         && { [ -z "$CLAUDE_ENGINEER_MARKER" ] || [ "$entry_marker" -gt "$CLAUDE_ENGINEER_MARKER" ]; }; then
+        CLAUDE_ENGINEER_MARKER="$entry_marker"
+      fi
+      [ -z "$CLAUDE_ENGINEER_UNREADABLE" ] || continue
+      if [ ! -f "$entry_loader" ]; then
+        CLAUDE_ENGINEER_UNREADABLE="entry $entry_id schedule pointer missing"
+        continue
+      fi
+      entry_schedule=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" "$entry_id" "$entry_loader")
+      if [ -z "$entry_schedule" ]; then
+        CLAUDE_ENGINEER_UNREADABLE="entry $entry_id has no readable scheduler record"
+        continue
+      fi
+      CLAUDE_ENGINEER_ENTRY_SCHEDULES="$CLAUDE_ENGINEER_ENTRY_SCHEDULES $entry_id=$entry_schedule"
+      entry_hours=${entry_schedule%%@*}
+      entry_minutes=${entry_schedule##*@}
+      if [ -n "$lane_hours" ] && [ "$entry_hours" != "$lane_hours" ]; then
+        CLAUDE_ENGINEER_UNREADABLE="entries cover different hours (${CLAUDE_ENGINEER_ENTRY_SCHEDULES# })"
+        continue
+      fi
+      lane_hours="$entry_hours"
+      entry_minutes_rest="$entry_minutes"
+      while [ -n "$entry_minutes_rest" ]; do
+        entry_minute=${entry_minutes_rest%%,*}
+        case "$lane_minute_owners" in
+          *" $entry_minute="*)
+            minute_owner=${lane_minute_owners##*" $entry_minute="}
+            CLAUDE_ENGINEER_UNREADABLE="entries ${minute_owner%% *} and $entry_id both start at minute $entry_minute"
+            break ;;
+        esac
+        lane_minute_owners="$lane_minute_owners $entry_minute=$entry_id"
+        case "$entry_minutes_rest" in
+          *,*) entry_minutes_rest=${entry_minutes_rest#*,} ;;
+          *) entry_minutes_rest="" ;;
+        esac
+      done
+      lane_minutes="${lane_minutes:+$lane_minutes,}$entry_minutes"
+    done <<<"$CLAUDE_ENGINEER_ENTRY_IDS"
+    if [ -z "$CLAUDE_ENGINEER_UNREADABLE" ]; then
+      CLAUDE_ENGINEER_ACTUAL=$(schedule_from_parts "$lane_hours" "$lane_minutes")
+    else
+      CLAUDE_ENGINEER_ENTRY_SCHEDULES=""
+    fi
+  fi
   CLAUDE_IMPROVER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
   CODEX_ENGINEER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_LOADER")
   CODEX_IMPROVER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_IMPROVER_LOADER")
@@ -5366,7 +5474,6 @@ if want drift; then
   [ -n "$CODEX_IMPROVER_POINTER_ACTUAL" ] \
     && [ "$CODEX_IMPROVER_POINTER_ACTUAL" = "$CODEX_IMPROVER_STORE_ACTUAL" ] \
     && CODEX_IMPROVER_ACTUAL="$CODEX_IMPROVER_STORE_ACTUAL"
-  CLAUDE_ENGINEER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
   CLAUDE_IMPROVER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
   CODEX_ENGINEER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" daily-ai-engineer)
   CODEX_IMPROVER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" agent-improver)
@@ -5375,8 +5482,14 @@ if want drift; then
   CODEX_ENGINEER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-}"
   CODEX_IMPROVER_BASELINE="${CODEX_IMPROVER_MARKER_BASELINE:-}"
 
-  compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
-    "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" cron
+  if [ -n "$CLAUDE_ENGINEER_UNREADABLE" ]; then
+    echo "    UNKNOWN: claude engineer $CLAUDE_ENGINEER_UNREADABLE"
+  else
+    compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
+      "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" cron
+    [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -gt 1 ] \
+      && echo "      entries:$CLAUDE_ENGINEER_ENTRY_SCHEDULES"
+  fi
   compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
     "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE" cron
   compare_codex_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" \
@@ -5450,20 +5563,52 @@ if want drift; then
   if [ -n "$CLAUDE_ENGINEER_ACTUAL" ]; then
     CLAUDE_ENG_SLOTS_DAY=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" \
       | expand_schedules | awk 'NF { count++ } END { print count + 0 }')
-    CLAUDE_ENG_MINUTE=${CLAUDE_ENGINEER_ACTUAL##*@}
     SKIP_SINCE_MS=$(jq -nr --arg since "$WINDOW_SINCE" '
       ($since | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor) * 1000
     ' 2>/dev/null)
+    # Read per ENTRY and summed (monorepo#4117): the store keys a refusal by the
+    # entry that recorded it, and an entry is due only at its own minutes, so a
+    # record at a sibling entry's minute is poll noise for it. Every named entry
+    # must be readable for the lane to have a figure: the count is empty when one
+    # has no skip record at all, the floor is the LATEST first record (the records
+    # span the window only when every entry's do), and the lane counts as active in
+    # the window only when every entry is. With one entry all three are that
+    # entry's own values, exactly as before.
     CLAUDE_DROPPED=""
-    if [ -n "$WINDOW_SINCE" ] && [ -n "$SKIP_SINCE_MS" ] \
-       && [[ "$CLAUDE_ENG_MINUTE" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
-      CLAUDE_DROPPED=$(claude_store_skip_slots "$CLAUDE_SCHEDULE_STORE" \
-        daily-ai-assistant "$CLAUDE_ENG_MINUTE" "$SKIP_SINCE_MS" \
-        "${CLAUDE_ENGINEER_ACTUAL%%@*}")
-    fi
     SKIP_FLOOR=""
-    [ -n "$CLAUDE_DROPPED" ] \
-      && SKIP_FLOOR=$(claude_store_skip_floor "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant)
+    ACTIVE_IN_WINDOW=1
+    if [ -n "$WINDOW_SINCE" ] && [ -n "$SKIP_SINCE_MS" ]; then
+      lane_dropped=0
+      lane_floor=""
+      lane_skip_unread=0
+      for entry_pair in $CLAUDE_ENGINEER_ENTRY_SCHEDULES; do
+        entry_id=${entry_pair%%=*}
+        entry_schedule=${entry_pair#*=}
+        entry_minutes=${entry_schedule##*@}
+        [[ "$entry_minutes" =~ ^[0-9]+(,[0-9]+)*$ ]] || { lane_skip_unread=1; continue; }
+        entry_dropped=$(claude_store_skip_slots "$CLAUDE_SCHEDULE_STORE" \
+          "$entry_id" "$entry_minutes" "$SKIP_SINCE_MS" "${entry_schedule%%@*}")
+        entry_floor=$(claude_store_skip_floor "$CLAUDE_SCHEDULE_STORE" "$entry_id")
+        if ! [[ "$entry_dropped" =~ ^[0-9]+$ ]] || ! [[ "$entry_floor" =~ ^[0-9]+$ ]]; then
+          lane_skip_unread=1
+          continue
+        fi
+        lane_dropped=$(( lane_dropped + entry_dropped ))
+        { [ -z "$lane_floor" ] || [ "$entry_floor" -gt "$lane_floor" ]; } && lane_floor="$entry_floor"
+        entry_active=0
+        entry_marker=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" "$entry_id" \
+          "$(claude_engineer_entry_loader "$entry_id")")
+        [[ "$entry_marker" =~ ^[0-9]+$ ]] \
+          && [ $(( entry_marker * 1000 )) -ge "$SKIP_SINCE_MS" ] && entry_active=1
+        entry_latest=$(claude_store_skip_latest "$CLAUDE_SCHEDULE_STORE" "$entry_id")
+        [ -n "$entry_latest" ] && [ "$entry_latest" -ge "$SKIP_SINCE_MS" ] && entry_active=1
+        [ "$entry_active" -eq 1 ] || ACTIVE_IN_WINDOW=0
+      done
+      if [ "$lane_skip_unread" -eq 0 ] && [ -n "$lane_floor" ]; then
+        CLAUDE_DROPPED="$lane_dropped"
+        SKIP_FLOOR="$lane_floor"
+      fi
+    fi
     # An absent skip surface and a genuinely drop-free window are indistinguishable
     # from the count alone: both yield 0. Reporting that 0 would fabricate a clean
     # lane out of a surface that recorded nothing — the exact error this change
@@ -5494,11 +5639,6 @@ if want drift; then
       # skip record landing in it. Without either, the denominator describes slots
       # nothing was even attempting to fill.
       RATE_TOTAL=$(( CLAUDE_ENG_SLOTS_DAY * SINCE_DAYS ))
-      SKIP_LATEST=$(claude_store_skip_latest "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant)
-      ACTIVE_IN_WINDOW=0
-      [[ "$CLAUDE_ENGINEER_MARKER" =~ ^[0-9]+$ ]] \
-        && [ $(( CLAUDE_ENGINEER_MARKER * 1000 )) -ge "$SKIP_SINCE_MS" ] && ACTIVE_IN_WINDOW=1
-      [ -n "$SKIP_LATEST" ] && [ "$SKIP_LATEST" -ge "$SKIP_SINCE_MS" ] && ACTIVE_IN_WINDOW=1
       if [ "$SKIP_FLOOR" -le "$SKIP_SINCE_MS" ] \
          && [ "$ACTIVE_IN_WINDOW" -eq 1 ] \
          && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \

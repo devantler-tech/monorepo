@@ -927,6 +927,117 @@ check "a record off the one due minute stays uncounted" "$OUT" \
   "claude engineer dispatch refusals: 3 slot(s)"
 mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
+# ── a second Claude engineer entry (monorepo#4117) ────────────────────────────
+# The Claude scheduler holds back a start that would overlap the previous run of
+# the SAME entry, so a second start an hour needs a second entry there, where one
+# minute list is enough for Codex. The lane's entries are then read as a set: the
+# cadence cell is compared with the union of their start minutes, and a refusal is
+# counted under the entry that recorded it, at that entry's own due minute.
+ENTRY2=daily-ai-assistant-half
+mkdir -p "$FIX/claude-sched/$ENTRY2"
+cp "$FIX/claude-sched/daily-ai-assistant/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md"
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+set_entry2() { # $1 = a jq program applied to the pristine store with the second entry added
+  jq --arg id "$ENTRY2" --arg file "$FIX/claude-sched/$ENTRY2/SKILL.md" '
+    .scheduledTasks += [{ "id": $id, "enabled": true, "filePath": $file,
+                          "cronExpression": "20 * * * *",
+                          "lastRunAt": "2026-07-25T20:00:00.000Z" }]
+    | '"$1" "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+}
+TWO() { CLAUDE_ENGINEER_ENTRIES="daily-ai-assistant,$ENTRY2" NOBASE "$@"; }
+set_entry2 .
+# CONTROL: an entry the lane does not name is not read, and a one-entry lane keeps
+# its exact output.
+OUT=$(NOBASE --section drift)
+check "an entry the lane does not name is not read" "$OUT" \
+  "claude engineer: expected=*@50 actual=*@50 MATCH"
+nocheck "a one-entry lane never prints an entries line" "$OUT" "entries:"
+check "a one-entry lane keeps its refusal count" "$OUT" \
+  "claude engineer dispatch refusals: 3 slot(s)"
+# Named, the second entry's start is part of the lane's schedule. The table does
+# not describe it yet: DRIFT, with each entry's own schedule printed beside it.
+OUT=$(TWO --section drift)
+check "a second entry's start the table lacks is drift" "$OUT" \
+  "DRIFT: claude engineer schedule expected=*@50 actual=*@20,50"
+check "a two-entry lane prints each entry's schedule" "$OUT" \
+  "entries: daily-ai-assistant=*@50 $ENTRY2=*@20"
+set_cadence_cell Claude 'Every hour at `:20` and `:50`'
+OUT=$(TWO --section drift)
+check "two entries match a two-minute table cell" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH"
+check "two entries an hour count as two slots an hour" "$OUT" \
+  "local engineer slots scheduled/day: 72"
+check "two staggered entries do not collide" "$OUT" \
+  "local simultaneous starts/day: 0"
+# The order the lane names its entries in is not a difference.
+OUT=$(CLAUDE_ENGINEER_ENTRIES="$ENTRY2,daily-ai-assistant" NOBASE --section drift)
+check "entry order does not read as drift" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH"
+# The second entry has recorded no skip yet. An absent surface is not a zero, so
+# the lane's refusal figure is UNKNOWN instead of the first entry's count alone.
+check "an entry without a skip record leaves the refusal count unknown" "$OUT" \
+  "claude engineer dispatch refusals: UNKNOWN (no readable skip record"
+nocheck "the first entry's count never stands in for the lane" "$OUT" \
+  "claude engineer dispatch refusals: 3 slot(s)"
+# A refusal is counted under the entry that recorded it, at that entry's due
+# minute. The second entry gets one record at its own minute (10:20 UTC) and one
+# at the FIRST entry's minute (10:50 UTC), which is poll noise for it: 3 + 1 = 4.
+# Counting every entry at the union of minutes would read 5.
+set_entry2 '.recordedSkips[$id] = [{ "at": 1784542800000, "reason": "per_task_limit" },
+                                   { "at": 1784544600000, "reason": "per_task_limit" }]'
+OUT=$(TWO --section drift)
+check "refusals are summed over the lane's entries" "$OUT" \
+  "claude engineer dispatch refusals: 4 slot(s)"
+nocheck "an entry's refusal off its own due minute is not a slot" "$OUT" \
+  "claude engineer dispatch refusals: 5 slot(s)"
+# NEGATIVE CONTROLS: a named entry that cannot be read leaves the lane unreadable.
+# It is never read as the remaining entry alone.
+unreadable_two() { # $1 = case label, $2 = the UNKNOWN text expected
+  OUT=$(TWO --section drift)
+  check "$1 is unreadable" "$OUT" "UNKNOWN: claude engineer $2"
+  nocheck "$1 never reads as a schedule" "$OUT" "claude engineer: expected="
+  nocheck "$1 never reads as drift" "$OUT" "DRIFT: claude engineer"
+  check "$1 suppresses the slot count" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
+  check "$1 suppresses the refusal count" "$OUT" \
+    "claude engineer dispatch refusals: UNKNOWN (claude engineer schedule unmeasured)"
+}
+set_entry2 '(.scheduledTasks[] | select(.id == $id) | .enabled) = false'
+unreadable_two "a disabled second entry" "entry $ENTRY2 has no readable scheduler record"
+set_entry2 'del(.scheduledTasks[] | select(.id == $id))'
+unreadable_two "a second entry absent from the store" "entry $ENTRY2 has no readable scheduler record"
+set_entry2 '(.scheduledTasks[] | select(.id == $id) | .cronExpression) = "*/30 * * * *"'
+unreadable_two "a second entry with an unsupported cron" "entry $ENTRY2 has no readable scheduler record"
+set_entry2 .
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden"
+unreadable_two "a second entry without its pointer file" "entry $ENTRY2 schedule pointer missing"
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden" "$FIX/claude-sched/$ENTRY2/SKILL.md"
+# Two entries of one lane starting in the same minute work one branch namespace at
+# once; the union would hide that as a single start.
+set_entry2 '(.scheduledTasks[] | select(.id == $id) | .cronExpression) = "50 * * * *"'
+unreadable_two "a second entry on the first entry's minute" \
+  "entries daily-ai-assistant and $ENTRY2 both start at minute 50"
+# hours x minutes is the compact form, so entries on different hours have no union.
+set_entry2 '(.scheduledTasks[] | select(.id == $id) | .cronExpression) = "20 0,12 * * *"'
+unreadable_two "a second entry on other hours" "entries cover different hours"
+set_entry2 .
+# The entry list itself is read only as a whole: ids of lowercase letters, digits
+# and hyphens, at most four, none twice.
+for bad_entries in "daily-ai-assistant,,$ENTRY2" "daily-ai-assistant,Daily" "daily-ai-assistant,daily-ai-assistant" \
+                   "daily-ai-assistant,-x" "daily-ai-assistant,a b" "a,b,c,d,e" "daily-ai-assistant,"; do
+  OUT=$(CLAUDE_ENGINEER_ENTRIES="$bad_entries" NOBASE --section drift)
+  check "entry list '$bad_entries' is unreadable" "$OUT" \
+    "UNKNOWN: claude engineer entry list is unreadable"
+  nocheck "entry list '$bad_entries' never reads as a schedule" "$OUT" "claude engineer: expected="
+  check "entry list '$bad_entries' suppresses the slot count" "$OUT" \
+    "local engineer slots scheduled/day: UNKNOWN"
+done
+set_cadence_cell Claude 'Every hour at `:50`'
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+rm -r "$FIX/claude-sched/$ENTRY2"
+OUT=$(NOBASE --section drift)
+check "the fixture is back on its one-entry lane" "$OUT" \
+  "claude engineer: expected=*@50 actual=*@50 MATCH"
+
 # Fail-closed is PRESERVED: an unreadable pointer still suppresses the derivations
 # that depend on it. Only the persistence proof was decoupled, never readability.
 mv "$FIX/codex/automations/agent-improver/automation.toml" \
