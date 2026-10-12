@@ -2926,6 +2926,38 @@ t_salvage_keeps_files_in_a_nested_submodule_directory_with_a_tab_in_its_name() {
     'tab=$(printf "\tx") && tab=${tab%x} && d="in${tab}ner" && printf "[submodule \"inner\"]\n\tpath = \"in\\\\tner\"\n\turl = https://github.com/devantler-tech/inner.git\n" > "$wt/sub/.gitmodules" && git -C "$wt/sub" add .gitmodules && git -C "$wt/sub" update-index --add --cacheinfo "160000,$(git -C "$wt/sub" rev-parse HEAD),$d" && git -C "$wt/sub" commit -qm "a nested submodule" && git -C "$root/subsrc" checkout -q --detach && git -C "$wt/sub" push -q "$root/subsrc" HEAD:main && git -C "$wt/sub" update-ref refs/remotes/origin/main HEAD && mkdir "$wt/sub/$d" && echo authored > "$wt/sub/$d/notes.txt"'
 }
 
+t_salvage_keeps_a_submodule_commit_only_a_peeled_packed_line_names() {
+  # A `^<id>` line is taken by git to be the peel of the tag above it and is listed nowhere.
+  # Here it names a commit made in the submodule instead, under a tag the remote holds.
+  local name="salvage KEEPs a submodule whose packed-refs peel line names a commit its remote lacks"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subpeel || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subpeel" g lost
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t tag -a v1 -m "held by the remote" main \
+    && git -C "$wt/sub" fetch -q --tags origin && git -C "$wt/sub" pack-refs --all \
+    && echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "never pushed" \
+    && lost=$(git -C "$wt/sub" rev-parse HEAD) && git -C "$wt/sub" reset -q --hard HEAD~1 \
+    && : > "$g/logs/HEAD" && : > "$g/logs/refs/heads/main" && rm -f "$g/ORIG_HEAD" "$g/COMMIT_EDITMSG" \
+    || { bad "$name" "FIXTURE: tag or commit"; rm -rf "$root"; return; }
+  # The peel line under refs/tags/v1 is rewritten to the local commit.
+  awk -v lost="$lost" '/^\^/ { print "^" lost; next } { print }' "$g/packed-refs" > "$g/packed-refs.new" \
+    && mv "$g/packed-refs.new" "$g/packed-refs" && grep -q "^\^$lost\$" "$g/packed-refs" \
+    || { bad "$name" "FIXTURE: no peel line to rewrite"; rm -rf "$root"; return; }
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  age_tree "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -Eq 'KEEP .*subpeel .*modules/sub: it holds commit\(s\) its remote does not advertise' <<<"$out" \
+     && [ -d "$wt" ] && git -C "$wt/sub" cat-file -e "$lost" 2>/dev/null \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -5478,6 +5510,7 @@ t_unknown_when_a_directory_under_modules_cannot_be_listed
 t_salvage_keeps_a_submodule_with_a_newline_named_file_under_refs
 t_salvage_keeps_a_submodule_with_a_broken_packed_ref
 t_salvage_keeps_files_in_a_nested_submodule_directory_with_a_tab_in_its_name
+t_salvage_keeps_a_submodule_commit_only_a_peeled_packed_line_names
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read

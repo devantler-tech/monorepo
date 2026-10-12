@@ -1606,7 +1606,7 @@ module_held_by_remote() {
   while :; do
     # No blank line may reach --stdin, and `held` is empty for an empty remote.
     tip=$(module_git "$g" rev-list --topo-order --max-count=1 --all --reflog --stdin \
-          < <(grep . <<< "$MODULE_LOG_IDS"$'\n'"$held" || true) 2>/dev/null) || return 2
+          < <(grep . <<< "$MODULE_LOG_IDS"$'\n'"$MODULE_PACKED_IDS"$'\n'"$held" || true) 2>/dev/null) || return 2
     [ -n "$tip" ] || return 0
     asked=$((asked + 1))
     if [ "$asked" -gt "$SUBMODULE_TIP_LIMIT" ]; then
@@ -1845,10 +1845,12 @@ module_checkout() {
 MODULE_NOTE=""
 VERIFIED_CHECKOUTS=""
 MODULE_LOG_IDS=""
+MODULE_PACKED_IDS=""
 module_repository_pristine() {
   local g=$1 wt_real=$2 entry name co out ids rc line
   MODULE_NOTE=""
   MODULE_LOG_IDS=""
+  MODULE_PACKED_IDS=""
   dir_listable "$g" || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="it cannot be listed"; return 1; }
   for name in hooks info branches; do
     if [ -e "$g/$name" ] && [ ! -L "$g/$name" ] && [ -d "$g/$name" ] && ! dir_listable "$g/$name"; then
@@ -2030,6 +2032,28 @@ module_repository_pristine() {
             <(printf '%s\n' "$refnames") "$g/packed-refs") \
       || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs cannot be read"; return 1; }
     if [ -n "$stray" ]; then MODULE_NOTE="its packed-refs holds an entry git does not list as a ref"; return 1; fi
+    # The ids are checked as well as the names. A record under a loose ref of the same name is
+    # stale and names whatever the ref pointed at before, and a `^<id>` line is trusted by
+    # nothing here to be the peel of the tag above it. So every id the file holds is either a
+    # commit, handed to the remote check in 8 by name, or a tag object that some tag ref
+    # points at (those are compared with the remote's); anything else keeps the worktree.
+    local packed_ids tag_ids
+    packed_ids=$(sed -n -e 's/^\([0-9a-f]\{40,64\}\) .*/\1/p' -e 's/^\^\([0-9a-f]\{40,64\}\)$/\1/p' "$g/packed-refs" | sort -u) \
+      || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs cannot be read"; return 1; }
+    if [ -n "$packed_ids" ]; then
+      tag_ids=$(module_git "$g" for-each-ref --format='%(objectname)' refs/tags 2>/dev/null) \
+        || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its tags cannot be read"; return 1; }
+      out=$(module_git "$g" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$packed_ids" 2>/dev/null) \
+        || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs objects cannot be read"; return 1; }
+      stray=$(awk 'NR == FNR { if (NF) tags[$1]; next }
+                   NF != 2 { print; exit }
+                   $2 == "commit" || $2 == "missing" { next }
+                   $2 == "tag" && ($1 in tags) { next }
+                   { print; exit }' <(printf '%s\n' "$tag_ids") <(printf '%s\n' "$out")) \
+        || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs objects cannot be read"; return 1; }
+      if [ -n "$stray" ]; then MODULE_NOTE="its packed-refs names an object no ref accounts for"; return 1; fi
+      MODULE_PACKED_IDS=$(awk 'NF == 2 && $2 == "commit" { print $1 }' <<< "$out")
+    fi
   fi
   # 6. Everything a reflog, ORIG_HEAD or FETCH_HEAD names is a commit (a tag object named
   #    only there would be lost unseen), and the pseudo-refs' commits are on the remote.
