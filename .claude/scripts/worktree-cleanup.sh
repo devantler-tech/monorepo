@@ -1239,7 +1239,8 @@ work_age_h() {
       [ "$m" -gt "$newest" ] && newest=$m
     done < "$list"
     rm -f "$list"
-    [ "$unreadable" -eq 0 ] || return 1
+    # 2 again: a submodule repository file that could not be read was not examined.
+    [ "$unreadable" -eq 0 ] || return 2
   fi
   [ "$newest" -gt 0 ] || { echo 999999; return 0; }
   echo $(( (now - newest) / 3600 ))
@@ -1941,7 +1942,8 @@ module_repository_pristine() {
   out=$(git -C "$co" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') \
     || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its index cannot be read"; return 1; }
   case "$out" in *$'\001'*) MODULE_NOTE="a path in its index holds a newline"; return 1 ;; esac
-  out=$(awk -F'\t' '$1 ~ /^160000 / { print $2 }' <<< "$out")
+  # The path is everything after the FIRST tab: a path can hold tabs of its own.
+  out=$(grep '^160000 ' <<< "$out" | sed 's/^[^	]*	//') || true
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     if [ -e "$co/$line/.git" ] || [ -L "$co/$line/.git" ]; then continue; fi
@@ -1970,6 +1972,15 @@ module_repository_pristine() {
     [ -z "$out" ] || break
   done
   if [ -n "$out" ]; then MODULE_NOTE="a ref or reflog of it is not a plain file"; return 1; fi
+  # packed-refs first, by its shape: a record git cannot parse is left out of every listing
+  # (with a warning, or by failing the listing, depending on the version of git), and such a
+  # record can be the only thing that names a commit. A record is `<id> <refname>`, and no
+  # ref name holds a space; a `^<id>` line peels the annotated tag above it.
+  if [ -e "$g/packed-refs" ]; then
+    [ -r "$g/packed-refs" ] || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs cannot be read"; return 1; }
+    out=$(grep -Ev '^(#.*|\^[0-9a-f]{40,64}|[0-9a-f]{40,64} refs/[^ ]+)$' "$g/packed-refs" | sed -n '1p') || true
+    if [ -n "$out" ]; then MODULE_NOTE="its packed-refs holds a malformed record"; return 1; fi
+  fi
   out=$(module_git "$g" for-each-ref --format='%(refname)' 2>/dev/null) \
     || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its refs cannot be read"; return 1; }
   out=$(grep -Ev '^refs/(heads|remotes|tags)/' <<< "$out" | grep -v '^$' | head -1) || true
@@ -2007,6 +2018,19 @@ module_repository_pristine() {
       || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its $name cannot be compared with its refs"; return 1; }
     if [ -n "$stray" ]; then MODULE_NOTE="its $name holds a file that is no ref ($stray)"; return 1; fi
   done
+  # packed-refs holds refs too, and git drops a record it cannot parse from every listing
+  # with only a warning. Each record is `<id> <refname>`, or a peeled `^<id>` under an
+  # annotated tag; the name of every one must be a ref that was enumerated above.
+  if [ -e "$g/packed-refs" ]; then
+    [ -r "$g/packed-refs" ] || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs cannot be read"; return 1; }
+    stray=$(awk 'NR == FNR { known[$0]; next }
+                 /^#/ || /^\^[0-9a-f]+$/ || /^$/ { next }
+                 { name = $0; sub(/^[0-9a-f]+ /, "", name)
+                   if (name == $0 || !(name in known)) { print; exit } }' \
+            <(printf '%s\n' "$refnames") "$g/packed-refs") \
+      || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs cannot be read"; return 1; }
+    if [ -n "$stray" ]; then MODULE_NOTE="its packed-refs holds an entry git does not list as a ref"; return 1; fi
+  fi
   # 6. Everything a reflog, ORIG_HEAD or FETCH_HEAD names is a commit (a tag object named
   #    only there would be lost unseen), and the pseudo-refs' commits are on the remote.
   #    The reflogs' commits are covered by the remote check in 8.

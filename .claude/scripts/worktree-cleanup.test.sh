@@ -2911,6 +2911,21 @@ t_salvage_keeps_a_submodule_with_a_newline_named_file_under_refs() {
     'git -C "$wt/sub" branch a origin/main && git -C "$wt/sub" branch b origin/main && git -C "$wt/sub" pack-refs --all && nl=$(printf "\nx") && nl=${nl%x} && mkdir -p "$g/refs/heads/a${nl}refs/heads" && git -C "$wt/sub" rev-parse HEAD > "$g/refs/heads/a${nl}refs/heads/b"'
 }
 
+t_salvage_keeps_a_submodule_with_a_broken_packed_ref() {
+  # git warns about a packed-refs record it cannot parse and leaves it out of every listing.
+  # Here that record is the only thing that names a commit made in the submodule.
+  keeps_unpristine "salvage KEEPs a submodule whose packed-refs holds a record git does not list" subpacked \
+    'its packed-refs holds a malformed record' \
+    'git -C "$wt/sub" pack-refs --all && echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "never pushed" && lost=$(git -C "$wt/sub" rev-parse HEAD) && git -C "$wt/sub" reset -q --hard HEAD~1 && : > "$g/logs/HEAD" && : > "$g/logs/refs/heads/main" && rm -f "$g/ORIG_HEAD" && printf "%s refs/heads/bad name\n" "$lost" >> "$g/packed-refs"'
+}
+
+t_salvage_keeps_files_in_a_nested_submodule_directory_with_a_tab_in_its_name() {
+  # The index separates a record's path from the rest with a tab, and a path can hold one.
+  keeps_unpristine "salvage KEEPs a submodule whose uninitialised nested submodule directory has a tab in its name" subtab \
+    'its uninitialised nested submodule directory in' \
+    'tab=$(printf "\tx") && tab=${tab%x} && d="in${tab}ner" && printf "[submodule \"inner\"]\n\tpath = \"in\\\\tner\"\n\turl = https://github.com/devantler-tech/inner.git\n" > "$wt/sub/.gitmodules" && git -C "$wt/sub" add .gitmodules && git -C "$wt/sub" update-index --add --cacheinfo "160000,$(git -C "$wt/sub" rev-parse HEAD),$d" && git -C "$wt/sub" commit -qm "a nested submodule" && git -C "$root/subsrc" checkout -q --detach && git -C "$wt/sub" push -q "$root/subsrc" HEAD:main && git -C "$wt/sub" update-ref refs/remotes/origin/main HEAD && mkdir "$wt/sub/$d" && echo authored > "$wt/sub/$d/notes.txt"'
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -5461,6 +5476,8 @@ t_salvage_dry_run_counts_the_submodule_files_it_would_keep
 t_salvage_keeps_a_submodule_file_changed_and_changed_back_around_its_capture
 t_unknown_when_a_directory_under_modules_cannot_be_listed
 t_salvage_keeps_a_submodule_with_a_newline_named_file_under_refs
+t_salvage_keeps_a_submodule_with_a_broken_packed_ref
+t_salvage_keeps_files_in_a_nested_submodule_directory_with_a_tab_in_its_name
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read
