@@ -1198,7 +1198,7 @@ work_age_h() {
   # each worktree look freshly used.
   if [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ]; then
     list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
-    if ! find "$admin/modules" -name objects -prune -o -type f -print0 > "$list" 2>/dev/null; then
+    if ! find "$admin/modules" \( -name objects -type d -exec test -f {}/../HEAD -a -f {}/../config -a -d {}/../refs \; -prune \) -o -type f -print0 > "$list" 2>/dev/null; then
       rm -f "$list"; return 1
     fi
     while IFS= read -r -d '' p; do
@@ -1401,6 +1401,9 @@ module_origin_url() { git config --file "$1/config" --get remote.origin.url 2>/d
 #     deployment already reads.
 module_origin_portfolio() { [ -n "$(portfolio_repo "$(module_origin_url "$1" || true)")" ]; }
 
+# What is left out below, here and in work_age_h, is each repository's object store and
+# nothing else by that name: a directory called objects that sits beside a HEAD, a config and
+# a refs directory. A branch named `objects` is a file under refs/ and is counted.
 # modules_fingerprint <admin> -> prints one id for the bytes and names of every file under
 # the admin directory's modules/ outside the object stores (empty when there is none).
 # Taken before the snapshot and compared immediately before the removal: a branch created,
@@ -1412,7 +1415,7 @@ modules_fingerprint() {
   if [ ! -e "$admin/modules" ] && [ ! -L "$admin/modules" ]; then return 0; fi
   [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ] || return 1
   names=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-modules.XXXXXX") || return 1
-  if ! find "$admin/modules" -name objects -prune -o -type f -print0 2>/dev/null | LC_ALL=C sort -z > "$names"; then
+  if ! find "$admin/modules" \( -name objects -type d -exec test -f {}/../HEAD -a -f {}/../config -a -d {}/../refs \; -prune \) -o -type f -print0 2>/dev/null | LC_ALL=C sort -z > "$names"; then
     rm -f "$names"; return 1
   fi
   if ! { cat "$names" && xargs -0 cat < "$names"; } 2>/dev/null | git hash-object --stdin 2>/dev/null; then
@@ -1445,7 +1448,13 @@ module_remote_rows() {
     fi
     i=$((i + 1))
   done
-  rows=$(GIT_TERMINAL_PROMPT=0 run_bounded git --git-dir="$g" --work-tree="$g" ls-remote origin) \
+  # Asked by the URL that was just validated, with the host's and the environment's git
+  # configuration out of the way: a url.<base>.insteadOf rule there would send `origin`
+  # somewhere else, a local mirror included, while the repository still names GitHub. The
+  # repository's own config holds whitelisted keys only, none of which rewrites a URL.
+  rows=$(GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+         run_bounded env -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS \
+         git --git-dir="$g" --work-tree="$g" ls-remote -- "$url") \
     || { REMOTE_MODULE_FAILED=1; return 2; }
   # An answer holding anything but advertised lines is one this could not read.
   if [ -n "$rows" ] && grep -Evq '^([0-9a-f]{40}|[0-9a-f]{64})	[^	]+$' <<< "$rows"; then
@@ -1725,6 +1734,26 @@ module_repository_pristine() {
     || { MODULE_NOTE="its refs cannot be read"; return 1; }
   out=$(grep -Ev '^refs/(heads|remotes|tags)/' <<< "$out" | grep -v '^$' | head -1) || true
   if [ -n "$out" ]; then MODULE_NOTE="it holds the ref $out"; return 1; fi
+  # Every file under refs/ is a ref git enumerates, and every file under logs/ the reflog of
+  # one (or of HEAD). A leftover lock or scratch file there can hold the only pointer to a
+  # commit, and neither for-each-ref nor the walk below would ever look at it.
+  local refnames stray
+  refnames=$(module_git "$g" for-each-ref --format='%(refname)' 2>/dev/null) || { MODULE_NOTE="its refs cannot be read"; return 1; }
+  for name in refs logs; do
+    [ -d "$g/$name" ] || continue
+    # Listed relative to the repository (refs/...) or to logs/ (HEAD, refs/...), so each
+    # line is a ref name as for-each-ref spells it.
+    if [ "$name" = refs ]; then
+      stray=$(cd "$g" 2>/dev/null && find refs -type f -print 2>/dev/null) || { MODULE_NOTE="its refs cannot be listed"; return 1; }
+    else
+      stray=$(cd "$g/logs" 2>/dev/null && find . -type f -print 2>/dev/null | sed 's#^\./##') || { MODULE_NOTE="its logs cannot be listed"; return 1; }
+    fi
+    [ -n "$stray" ] || continue
+    stray=$(awk 'NR == FNR { known[$0]; next } NF && !($0 in known) && $0 != "HEAD"' \
+            <(printf '%s\n' "$refnames") <(printf '%s\n' "$stray") | sed -n '1p') \
+      || { MODULE_NOTE="its $name cannot be compared with its refs"; return 1; }
+    if [ -n "$stray" ]; then MODULE_NOTE="its $name holds a file that is no ref ($stray)"; return 1; fi
+  done
   # 6. Everything a reflog, ORIG_HEAD or FETCH_HEAD names is a commit (a tag object named
   #    only there would be lost unseen), and the pseudo-refs' commits are on the remote.
   #    The reflogs' commits are covered by the remote check in 8.

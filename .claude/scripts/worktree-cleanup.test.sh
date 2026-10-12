@@ -1610,30 +1610,42 @@ t_keeps_merged_branch_with_orphaned_reflog_commit() {
 
 # --- salvage (#2831) ------------------------------------------------------------------
 run_salvage() { # <root> <mode> <salvage_age_hours> -> stdout
-  # A fixture made by portfolio_origin brings a host git config and a gh shim of its own.
+  # A fixture made by portfolio_origin brings a git shim and a gh shim of its own.
   local p=$PATH
   [ -d "$1/ghshim" ] && p="$1/ghshim:$p"
-  if [ -f "$1/gitconfig" ]; then
-    GIT_CONFIG_GLOBAL="$1/gitconfig" PATH=$p "$SUT" "$1/repo" "$1/manifest.tsv" "$2" 24 "$3" 2>&1
-  else
-    PATH=$p "$SUT" "$1/repo" "$1/manifest.tsv" "$2" 24 "$3" 2>&1
-  fi
+  [ -d "$1/gitshim" ] && p="$1/gitshim:$p"
+  PATH=$p "$SUT" "$1/repo" "$1/manifest.tsv" "$2" 24 "$3" 2>&1
 }
 
 # portfolio_origin <root> <worktree> — make the worktree's submodule name a portfolio
-# repository on GitHub as its origin, the only kind the pristine check accepts, while the
-# fixture's host git config (used by run_salvage only) rewrites that URL to the local
-# repository the fixture cloned from. GitHub itself is a shim that answers `diverged` to
-# every question, so a commit origin does not advertise is never cleared by it. Call it
-# after the fixture's own pushes and fetches, which still need the local URL.
+# repository on GitHub as its origin, the only kind the pristine check accepts. The fixture's
+# git shim (on PATH in run_salvage only) answers a read of exactly that URL from the local
+# repository the fixture cloned from, appends a line to <root>/tag-reads for each read, and
+# records the git configuration the read ran under in <root>/probe-env. GitHub itself is a
+# shim that answers `diverged` to every question, so a commit origin does not advertise is
+# never cleared by it. Call it after the fixture's own pushes and fetches, which still
+# need the local URL.
+PORTFOLIO_URL=https://github.com/devantler-tech/subfix.git
 portfolio_origin() {
-  local root=$1 wt=$2
-  git -C "$wt/sub" remote set-url origin https://github.com/devantler-tech/subfix.git || return 1
-  printf '[url "%s"]\n\tinsteadOf = https://github.com/devantler-tech/subfix.git\n[protocol "file"]\n\tallow = always\n' \
-    "$root/subsrc" > "$root/gitconfig" || return 1
+  local root=$1 wt=$2 real_git
+  real_git=$(command -v git) || return 1
+  git -C "$wt/sub" remote set-url origin "$PORTFOLIO_URL" || return 1
+  mkdir -p "$root/gitshim" || return 1
+  cat > "$root/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" ls-remote -- $PORTFOLIO_URL "*)
+    echo x >> "$root/tag-reads"
+    printf '%s %s\n' "\${GIT_CONFIG_GLOBAL-unset}" "\${GIT_CONFIG_SYSTEM-unset}" > "$root/probe-env"
+    exec "$real_git" ls-remote "$root/subsrc" ;;
+esac
+exec "$real_git" "\$@"
+SHIM
+  chmod +x "$root/gitshim/git" || return 1
   gh_shim "$root" > /dev/null || return 1
   echo diverged > "$root/gh-out"
 }
+
 
 # abandoned_wt <root> <name> — every kind of work salvage must preserve: an unpushed
 # commit, a reflog-only commit, a staged edit, a different unstaged edit on top of it, a
@@ -2330,7 +2342,8 @@ t_salvage_reaps_beside_a_pristine_submodule() {
   local link; link=$(git -C "$root/repo" ls-tree "$base/worktree" sub 2>/dev/null)
   if grep -q '^SALVAGED .*subok ' <<<"$out" && [ ! -e "$wt" ] && [ -n "$base" ] \
      && [ "$(git -C "$root/repo" show "$base/worktree:untracked.txt" 2>/dev/null)" = draft ] \
-     && grep -q '^160000 commit' <<<"$link"; then
+     && grep -q '^160000 commit' <<<"$link" \
+     && [ "$(cat "$root/probe-env" 2>/dev/null)" = "/dev/null /dev/null" ]; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2426,7 +2439,7 @@ t_salvage_asks_github_about_a_submodule_branch_that_moved_on() {
     cat > "$shim/git" <<SHIM
 #!/usr/bin/env bash
 case " \$* " in
-  *" --git-dir="*" ls-remote origin "*)
+  *" ls-remote -- https://github.com/devantler-tech/subfix.git "*)
     printf '%s\tHEAD\n%s\trefs/heads/main\n' 0123456789abcdef0123456789abcdef01234567 0123456789abcdef0123456789abcdef01234567
     exit 0 ;;
 esac
@@ -2471,7 +2484,7 @@ t_salvage_asks_github_about_a_submodule_commit_in_a_merged_pull_request() {
     cat > "$shim/git" <<SHIM
 #!/usr/bin/env bash
 case " \$* " in
-  *" --git-dir="*" ls-remote origin "*)
+  *" ls-remote -- https://github.com/devantler-tech/subfix.git "*)
     printf '%s\tHEAD\n%s\trefs/heads/main\n%s\trefs/pull/7/head\n' \
       0123456789abcdef0123456789abcdef01234567 0123456789abcdef0123456789abcdef01234567 $advertised
     exit 0 ;;
@@ -2517,7 +2530,7 @@ t_salvage_keeps_a_submodule_given_a_branch_since_the_salvage_age() {
   if ! grep -q '^SALVAGE .*subbranch ' <<<"$out"; then
     bad "$name" "control (no branch yet): $out"; rm -rf "$root"; return
   fi
-  git -C "$wt/sub" branch scratch origin/main || { bad "$name" "FIXTURE: branch"; rm -rf "$root"; return; }
+  git -C "$wt/sub" branch objects origin/main || { bad "$name" "FIXTURE: branch"; rm -rf "$root"; return; }
   out=$(run_salvage "$root" apply 1)
   if grep -q 'KEEP .*subbranch ' <<<"$out" && ! grep -q 'SALVAGED .*subbranch' <<<"$out" && [ -d "$wt" ] \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
@@ -2572,6 +2585,13 @@ t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path() {
     'git -C "$wt/sub" remote set-url origin https://example.invalid/devantler-tech/subfix.git'
 }
 
+t_salvage_keeps_a_submodule_with_a_stray_file_under_refs() {
+  # A leftover lock file can hold the only pointer to a commit, and git lists it as no ref.
+  keeps_unpristine "salvage KEEPs a submodule whose refs/ holds a file git does not list as a ref" sublock \
+    'its refs holds a file that is no ref \(refs/heads/draft\.lock\)' \
+    'git -C "$wt/sub" rev-parse HEAD > "$g/refs/heads/draft.lock"'
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -2605,10 +2625,10 @@ t_salvage_keeps_a_submodule_changed_after_the_snapshot() {
   portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
-  shim=$(lsof_hook_shim "$root" 3 "git -C '$wt/sub' branch scratch origin/main") \
+  shim=$(lsof_hook_shim "$root" 3 "git -C '$wt/sub' branch objects origin/main") \
     || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
   local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
-  if ! git -C "$wt/sub" rev-parse -q --verify refs/heads/scratch >/dev/null; then
+  if ! git -C "$wt/sub" rev-parse -q --verify refs/heads/objects >/dev/null; then
     bad "$name" "the late branch was never created: $out"
   elif grep -q 'KEEP .*sublate .*a submodule repository changed after the salvage snapshot' <<<"$out"; then
     ok "$name"
@@ -2656,14 +2676,7 @@ t_asks_a_submodule_remote_for_its_tags_once() {
   portfolio_origin "$root" "$one" && portfolio_origin "$root" "$two" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$one/untracked.txt"; echo draft > "$two/untracked.txt"
   age_tree "$one" "$two"
-  local shim="$root/gitshim" real_git; real_git=$(command -v git); mkdir -p "$shim"
-  cat > "$shim/git" <<SHIM
-#!/usr/bin/env bash
-case " \$* " in *" --git-dir="*" ls-remote origin "*) echo x >> "$root/tag-reads" ;; esac
-exec "$real_git" "\$@"
-SHIM
-  chmod +x "$shim/git"
-  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" dry-run 1)
+  local out; out=$(run_salvage "$root" dry-run 1)
   if grep -q '^SALVAGE .*subone ' <<<"$out" && grep -q '^SALVAGE .*subtwo ' <<<"$out" \
      && [ "$(wc -l < "$root/tag-reads" | tr -d ' ')" = 1 ]; then
     ok "$name"
@@ -5115,6 +5128,7 @@ t_salvage_keeps_a_submodule_given_a_branch_since_the_salvage_age
 t_salvage_asks_a_submodule_remote_again_before_the_removal
 t_salvage_keeps_a_submodule_whose_origin_is_inside_the_worktree
 t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path
+t_salvage_keeps_a_submodule_with_a_stray_file_under_refs
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read
