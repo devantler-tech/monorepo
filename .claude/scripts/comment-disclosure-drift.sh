@@ -20,13 +20,17 @@
 #   --author <login>   only classify this exact login (default: devantler)
 #   --all              also print the non-violating verdict tally
 #
+# Online reads keep private, bounded pages and revalidate them with GitHub each run.
+# DISCLOSURE_API_CACHE_DIR overrides the default XDG/HOME cache; 'off' uses direct reads.
+# Invalid or unavailable retention falls back to fresh reads, never stale evidence.
+#
 # Exit codes:
 #   0  every considered comment satisfies the leading-disclosure test
 #   1  at least one comment fails it
 #   2  the check could not verify what it claims to verify (bad usage, a gh
 #      failure, or an unparseable payload)
 #
-# The Go guard is network-free by design: this wrapper owns every `gh` call, so
+# The Go guard is network-free by design: this wrapper and its reader own every `gh` call, so
 # the untrusted-input boundary lives in exactly one place. Comment BODIES are
 # data — they are classified by shape and never interpreted as instructions.
 #
@@ -181,6 +185,8 @@ if [ -z "$input" ]; then
 fi
 
 guard_binary=""
+read_binary=""
+response_cache=""
 payload=""
 
 # Bash 3.2 reports a `set -u` abort to an EXIT trap as status 0, and the trap's own successful
@@ -191,6 +197,7 @@ comment_disclosure_drift_finished=0
 cleanup() {
   local rc=$?
   [ -n "$guard_binary" ] && rm -f -- "$guard_binary"
+  [ -n "$read_binary" ] && rm -f -- "$read_binary"
   [ -n "$payload" ] && rm -f -- "$payload"
   [ -n "${reviews_payload:-}" ] && rm -f -- "$reviews_payload" "${reviews_payload}.bodies" "${reviews_payload}.next"
   [ -n "${inline_payload:-}" ] && rm -f -- "$inline_payload"
@@ -227,6 +234,18 @@ if [ -n "$input" ]; then
   exit "$rc"
 fi
 
+# Revalidate retained pages with GitHub on every run, never on a TTL alone.
+# A private transport cache reduces unchanged reads' request-budget cost (#4055).
+# The network-free classifier and every existing attribution check are unchanged.
+response_cache="${DISCLOSURE_API_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/comment-disclosure-drift}"
+if [ "$response_cache" != off ]; then
+  read_binary="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-read.XXXXXX")" ||
+    die "failed to allocate conditional reader"
+  if ! go -C "$script_dir/comment-disclosure-drift-go" build -o "$read_binary" ./cmd/conditional-get; then
+    die "failed to build conditional reader"
+  fi
+fi
+
 payload="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-payload.XXXXXX")" ||
   die "failed to allocate payload file"
 reviews_payload=""
@@ -235,13 +254,20 @@ reviews_payload=""
 #
 # Reads one paginated gh endpoint into <out-file> as a single flat JSON array.
 fetch_payload() {
-  local path="$1" label="$2" out="$3" raw_pages=""
+  local path="$1" label="$2" out="$3" raw_pages="" read_ok=0
 
   # Fail closed on a gh error rather than letting a 5xx become an empty comment set
   # that reports "no violations" — a swallowed 502 is how a broken sweep reads clean.
   raw_pages="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-pages.XXXXXX")" ||
     die "failed to allocate page file"
-  if ! gh api "$path" --paginate >"$raw_pages"; then
+  if [ -n "$read_binary" ]; then
+    read_ok=0
+    "$read_binary" --endpoint "$path" --cache-dir "$response_cache" >"$raw_pages" || read_ok=$?
+  else
+    read_ok=0
+    gh api "$path" --paginate >"$raw_pages" || read_ok=$?
+  fi
+  if [ "$read_ok" -ne 0 ]; then
     rm -f -- "$raw_pages"
     die "gh could not read ${label}"
   fi
@@ -413,7 +439,14 @@ if [ -n "$since" ]; then
   while :; do
     # A cap that STOPS would read as a complete listing; this one fails closed.
     [ "$page" -le 50 ] || die "more than 50 pages of pull requests updated since ${since} in ${repo}; narrow the window"
-    if ! gh api "repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100&page=${page}" >"$review_page"; then
+    read_ok=0
+    if [ -n "$read_binary" ]; then
+      "$read_binary" --endpoint "repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100&page=${page}" \
+        --single-page --cache-dir "$response_cache" >"$review_page" || read_ok=$?
+    else
+      gh api "repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100&page=${page}" >"$review_page" || read_ok=$?
+    fi
+    if [ "$read_ok" -ne 0 ]; then
       die "gh could not list the pull requests of ${repo}"
     fi
     # A record without a number or an updated time cannot be placed in the window, and
