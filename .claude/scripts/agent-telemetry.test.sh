@@ -9550,17 +9550,22 @@ OUT=$(dhset_run "$FIX/dh-set")
 check   "dispatch set: the default is the one entry"            "$OUT" 'dispatches of role "daily-ai-assistant" IN WINDOW BY RECORD: 1 '
 check   "dispatch set: by default a second entry is another role" "$OUT" 'other scheduled roles ....................: 2 '
 nocheck "dispatch set: one entry prints no per-entry line"       "$OUT" 'by entry:'
+nocheck "dispatch set: one entry prints no per-entry note"       "$OUT" 'does not show that the entry did not run'
 # EFFECT: both entries are the lane's dispatches, and each is counted by name.
 OUT=$(dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2)
 check   "dispatch set: two entries are counted together"   "$OUT" 'dispatches of role "daily-ai-assistant,agentic-engineer-2" IN WINDOW BY RECORD: 2 '
-check   "dispatch set: each entry gets its own count"      "$OUT" 'by entry: daily-ai-assistant=1 agentic-engineer-2=1'
+check   "dispatch set: each entry gets its own count"      "$OUT" 'runs recognised by entry: daily-ai-assistant=1 agentic-engineer-2=1'
 check   "dispatch set: the improver stays another role"    "$OUT" 'other scheduled roles ....................: 1 '
 check   "dispatch set: both entries are classified live"   "$OUT" 'live ......... 2'
 nocheck "dispatch set: two running entries raise no absence" "$OUT" 'has no dispatch inside this window'
 # A second entry that never ran beside a first that did is named, not averaged away.
 OUT=$(dhset_run "$FIX/dh-set-one" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2)
-check   "dispatch set: a silent entry is counted as zero"  "$OUT" 'by entry: daily-ai-assistant=1 agentic-engineer-2=0'
-check   "dispatch set: a silent entry is named"            "$OUT" 'entry "agentic-engineer-2" has no dispatch inside this window'
+check   "dispatch set: an entry with no recognised run reads zero" "$OUT" 'runs recognised by entry: daily-ai-assistant=1 agentic-engineer-2=0'
+# The section counts what it recognised. It never turns a zero into "this entry
+# did not run": a run it could not attribute would make that claim false, and
+# whether an entry ran is the lane liveness check's question.
+nocheck "dispatch set: a zero is never called an absence"   "$OUT" 'has no dispatch inside this window'
+check   "dispatch set: the zero carries its own caveat"     "$OUT" 'A 0 is a count of runs recognised here; it does not show that the entry did not run.'
 nocheck "dispatch set: the running entry is not named"     "$OUT" 'entry "daily-ai-assistant" has no dispatch'
 # DH_ROLE still selects one role outright, whatever the lane's list says.
 OUT=$(dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2 DH_ROLE=agentic-engineer-2)
@@ -9628,9 +9633,11 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id"
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}]}}' >> "$FIX/dh-set-undated/u.jsonl"
 OUT=$(dhset_run "$FIX/dh-set-undated" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2)
 check   "dispatch set: an undated entry is UNKNOWN by name"     "$OUT" 'entry "agentic-engineer-2": UNKNOWN'
+check   "dispatch set: an undated entry gets no number"         "$OUT" 'runs recognised by entry: daily-ai-assistant=1 agentic-engineer-2=UNKNOWN'
+nocheck "dispatch set: an undated entry is never printed as 0"  "$OUT" 'agentic-engineer-2=0'
 nocheck "dispatch set: an undated entry is not called silent"   "$OUT" 'entry "agentic-engineer-2" has no dispatch inside this window'
 check   "dispatch set: the undated run is still counted undated" "$OUT" 'same role, no usable record timestamp ....: 1 '
-# Control: with no undated run the same entry IS named silent (dh-set-one above).
+# Control: with no undated run the same entry reads a plain 0 (dh-set-one above).
 # (b) An unreadable list is exit 2, and it is read before the empty-corpus
 #     shortcut, so "no sessions" is never the answer to a malformed list.
 dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES='daily-ai-assistant,Bad' >/dev/null; rc=$?
@@ -9651,6 +9658,22 @@ dhrec_tail "$FIX/dhrec-indent/s.jsonl"
 OUT=$(dhrec_run "$FIX/dhrec-indent")
 check   "dispatch record: an indented record with no reminder is a quote" "$OUT" 'no dispatch record .......................: 1 '
 check   "dispatch record: an indented quote selects no role"              "$OUT" 'IN WINDOW BY RECORD: 0 '
+# The record is recognised only in the shape the runtime writes: reminder blocks,
+# each followed by one or two line breaks, then the record. Anything else in
+# front of it — here, indentation after a reminder — leaves it a quote.
+mkdir -p "$FIX/dhrec-indent-after" "$FIX/dhrec-space-first" "$FIX/dhrec-three-breaks"
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":"<system-reminder>\none\n</system-reminder>\n\n  <scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}}' > "$FIX/dhrec-indent-after/s.jsonl"
+dhrec_tail "$FIX/dhrec-indent-after/s.jsonl"
+OUT=$(dhrec_run "$FIX/dhrec-indent-after")
+check   "dispatch record: indentation after a reminder keeps it a quote" "$OUT" 'no dispatch record .......................: 1 '
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":" <system-reminder>\none\n</system-reminder>\n\n<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}}' > "$FIX/dhrec-space-first/s.jsonl"
+dhrec_tail "$FIX/dhrec-space-first/s.jsonl"
+OUT=$(dhrec_run "$FIX/dhrec-space-first")
+check   "dispatch record: text before the first reminder keeps it a quote" "$OUT" 'no dispatch record .......................: 1 '
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":"<system-reminder>\none\n</system-reminder>\n\n\n<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}}' > "$FIX/dhrec-three-breaks/s.jsonl"
+dhrec_tail "$FIX/dhrec-three-breaks/s.jsonl"
+OUT=$(dhrec_run "$FIX/dhrec-three-breaks")
+check   "dispatch record: three line breaks are not the runtime's shape" "$OUT" 'no dispatch record .......................: 1 '
 
 # ── Review round 2: EVERY unknown reading of the dispatch section is exit 2 ───
 # Round 1 gave the unreadable list its exit status and round 2 found the next
@@ -9670,7 +9693,7 @@ dh_rc "dispatch exit: a zero that cannot be attributed is exit 2"  2 "$FIX/dhrec
 dh_rc "dispatch exit: no computable window start is exit 2"        2 "$FIX/dh-set"         3650 PATH="$FIX/nodate:$PATH"
 # Known readings: these must stay exit 0, or exit 2 would mean nothing.
 dh_rc "dispatch exit: a healthy count is exit 0"                   0 "$FIX/dh-set"         3650
-dh_rc "dispatch exit: a named silent entry is a known reading"     0 "$FIX/dh-set-one"     3650 CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2
+dh_rc "dispatch exit: an entry reading zero is a known reading"   0 "$FIX/dh-set-one"     3650 CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2
 dh_rc "dispatch exit: a real absence of the role is exit 0"        0 "$FIX/dh-onlyother"   3650
 dh_rc "dispatch exit: a window of only older runs is exit 0"       0 "$FIX/dh-recwin-stale" 1
 dh_rc "dispatch exit: the section switched off is exit 0"          0 "$FIX/dhrec-prose"    3650 DISPATCH_HEALTH=off

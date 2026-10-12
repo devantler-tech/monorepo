@@ -2550,7 +2550,7 @@ if want dispatch; then
     # A lane may have more than one engineer entry (monorepo#4117), so the role
     # is a set: DH_ROLE if given, else the lane's entry list, else the one entry
     # the lane has today. Each classified dispatch is also remembered by entry,
-    # so an entry that never ran beside one that did is named below.
+    # so the count can be shown per entry below.
     DH_ROLE="${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}}"
     DH_ROLE_COUNT=$(printf '%s\n' "$DH_ROLE_IDS" | grep -c .)
     DH_BYROLE=""; DH_UNDATED_BYROLE=""
@@ -2581,13 +2581,14 @@ if want dispatch; then
       row=$(jq -Rrs --arg since "$WINDOW_SINCE" "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty)) as $recs
         | ([$recs[] | select(.type=="user")
             | (message_text // "")
-            # The runtime may put its own reminder blocks before the record
-            # (measured 2026-10-12: every scheduled root transcript opens with
-            # one). Only whole leading blocks and the blank space around them
-            # are skipped, so the record must still START what is left: prose
-            # before it is a quote, and a record inside a block goes with it.
-            # With no block nothing is skipped, so an indented record is a quote.
-            | sub("^(?:\\s*<system-reminder>(?:(?!</system-reminder>)[\\s\\S])*</system-reminder>)+\\s*"; "")
+            # The record is recognised only in the shape the runtime writes
+            # (measured 2026-10-12: every scheduled root transcript): nothing,
+            # or whole reminder blocks each followed by one or two line breaks,
+            # and then the record. This states what is allowed in front of the
+            # record instead of listing what to strip: any other lead-in,
+            # indentation included, leaves the text unchanged and the record a
+            # quote, and a record inside a block is removed with the block.
+            | sub("^(?:<system-reminder>(?:(?!</system-reminder>)[\\s\\S])*</system-reminder>\\n\\n?)+"; "")
             | select(startswith("<scheduled-task"))] | .[0] // "") as $disp
         | (($disp | capture("name=\"(?<n>[a-z0-9-]+)\"") | .n) // "") as $role
         | ([$recs[] | select(.type=="assistant") | content_blocks
@@ -2767,24 +2768,28 @@ EOF
     printf '  root transcripts selected by file mtime: %s\n' "$DH_ROOTS"
     printf '    dispatches of role "%s" IN WINDOW BY RECORD: %s   <- classified below\n' "$DH_ROLE" "$DH_TOTAL"
     if [ "$DH_ROLE_COUNT" -gt 1 ]; then
-      DH_ENTRY_LINE=""; DH_SILENT=""; DH_ENTRY_UNKNOWN=""
+      # What is printed per entry is a count of runs RECOGNISED here, and only
+      # that. The section never turns a zero into "this entry did not run": a
+      # transcript it could not attribute (no dispatch record, unreadable, or a
+      # marker the runtime changed) would make that claim false, and whether an
+      # entry ran is the lane liveness check's question. An entry with a run
+      # that cannot be placed in time gets no number at all.
+      DH_ENTRY_LINE=""; DH_ENTRY_UNKNOWN=""
       while IFS= read -r dh_id; do
         dh_n=$(printf '%s' "$DH_BYROLE" | grep -cxF -- "$dh_id" || true)
         dh_u=$(printf '%s' "$DH_UNDATED_BYROLE" | grep -cxF -- "$dh_id" || true)
-        DH_ENTRY_LINE="${DH_ENTRY_LINE} ${dh_id}=${dh_n}"
-        # A run that cannot be placed in time may be inside the window, so an
-        # entry with one is UNKNOWN. It is never reported as having no run.
         if [ "$dh_u" -gt 0 ]; then
+          DH_ENTRY_LINE="${DH_ENTRY_LINE} ${dh_id}=UNKNOWN"
           DH_ENTRY_UNKNOWN="${DH_ENTRY_UNKNOWN}${dh_id} ${dh_u}
 "
-        elif [ "$dh_n" -eq 0 ]; then
-          DH_SILENT="${DH_SILENT}${dh_id}
-"
+        else
+          DH_ENTRY_LINE="${DH_ENTRY_LINE} ${dh_id}=${dh_n}"
         fi
       done <<DH_IDS
 $DH_ROLE_IDS
 DH_IDS
-      printf '      by entry:%s\n' "$DH_ENTRY_LINE"
+      printf '      runs recognised by entry:%s\n' "$DH_ENTRY_LINE"
+      echo "      A 0 is a count of runs recognised here; it does not show that the entry did not run."
       while read -r dh_id dh_u; do
         [ -n "$dh_id" ] || continue
         printf '      entry "%s": UNKNOWN — %s of its transcripts carry no usable record timestamp, so its count for this window is not established.\n' "$dh_id" "$dh_u"
@@ -2792,16 +2797,6 @@ DH_IDS
       done <<DH_UNKNOWN_IDS
 $DH_ENTRY_UNKNOWN
 DH_UNKNOWN_IDS
-      # Only when another entry of the lane did run: with no dispatch at all the
-      # zero-population readings below already speak for the whole lane.
-      if [ "$DH_TOTAL" -gt 0 ]; then
-        while IFS= read -r dh_id; do
-          [ -n "$dh_id" ] || continue
-            printf '      entry "%s" has no dispatch inside this window while another entry of the lane does.\n' "$dh_id"
-        done <<DH_SILENT_IDS
-$DH_SILENT
-DH_SILENT_IDS
-      fi
     fi
     printf '    same role, last record BEFORE the window .: %s   (mtime superset, excluded)\n' "$DH_OUTWIN"
     printf '    same role, no usable record timestamp ....: %s   (undated, excluded)\n' "$DH_UNDATED"
