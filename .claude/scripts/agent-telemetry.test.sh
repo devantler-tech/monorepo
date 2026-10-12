@@ -9524,6 +9524,99 @@ else
   bad "negative control: a healthy pass still prints its real rate" \
       "$(grep -F 'metric to trend' <<<"$OUT" | head -1)"
 fi
+
+# ── monorepo#4117: DISPATCH HEALTH counts a lane's engineer entries as a set ──
+# A lane may have more than one engineer entry. The section selected one role by
+# name, so a second entry's runs were filed under "other scheduled roles" and a
+# second entry that never ran was not reported at all.
+dhset_live() { # $1 = role, $2 = hour, $3 = file
+  dispatch_rec "$1" "2026-08-01T$2:59:50.000Z" > "$3"
+  printf '{"type":"assistant","timestamp":"2026-08-01T%s:59:55.000Z","message":{"content":[{"type":"tool_use","id":"s1","name":"Bash","input":{"command":"echo hi"}}]}}\n' "$2" >> "$3"
+  printf '{"type":"assistant","timestamp":"2026-08-01T%s:59:58.000Z","message":{"content":[{"type":"text","text":"Done."}]}}\n' "$2" >> "$3"
+}
+mkdir -p "$FIX/dh-set" "$FIX/dh-set-one"
+dhset_live daily-ai-assistant 10 "$FIX/dh-set/a.jsonl"
+dhset_live agentic-engineer-2 11 "$FIX/dh-set/b.jsonl"
+dhset_live agent-improver     12 "$FIX/dh-set/c.jsonl"
+dhset_live daily-ai-assistant 10 "$FIX/dh-set-one/a.jsonl"
+dhset_live agent-improver     12 "$FIX/dh-set-one/c.jsonl"
+dhset_run() { # $1 = corpus; remaining args = env assignments
+  local corpus=$1; shift
+  env CLAUDE_PROJECTS_DIR="$corpus" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      DISPATCH_HEALTH=on "$@" bash "$TARGET" --since-days 3650 --section dispatch 2>&1
+}
+# NO-REGRESSION: with no entry list the section reads exactly as before.
+OUT=$(dhset_run "$FIX/dh-set")
+check   "dispatch set: the default is the one entry"            "$OUT" 'dispatches of role "daily-ai-assistant" IN WINDOW BY RECORD: 1 '
+check   "dispatch set: by default a second entry is another role" "$OUT" 'other scheduled roles ....................: 2 '
+nocheck "dispatch set: one entry prints no per-entry line"       "$OUT" 'by entry:'
+# EFFECT: both entries are the lane's dispatches, and each is counted by name.
+OUT=$(dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2)
+check   "dispatch set: two entries are counted together"   "$OUT" 'dispatches of role "daily-ai-assistant,agentic-engineer-2" IN WINDOW BY RECORD: 2 '
+check   "dispatch set: each entry gets its own count"      "$OUT" 'by entry: daily-ai-assistant=1 agentic-engineer-2=1'
+check   "dispatch set: the improver stays another role"    "$OUT" 'other scheduled roles ....................: 1 '
+check   "dispatch set: both entries are classified live"   "$OUT" 'live ......... 2'
+nocheck "dispatch set: two running entries raise no absence" "$OUT" 'has no dispatch inside this window'
+# A second entry that never ran beside a first that did is named, not averaged away.
+OUT=$(dhset_run "$FIX/dh-set-one" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2)
+check   "dispatch set: a silent entry is counted as zero"  "$OUT" 'by entry: daily-ai-assistant=1 agentic-engineer-2=0'
+check   "dispatch set: a silent entry is named"            "$OUT" 'entry "agentic-engineer-2" has no dispatch inside this window'
+nocheck "dispatch set: the running entry is not named"     "$OUT" 'entry "daily-ai-assistant" has no dispatch'
+# DH_ROLE still selects one role outright, whatever the lane's list says.
+OUT=$(dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2 DH_ROLE=agentic-engineer-2)
+check   "dispatch set: DH_ROLE overrides the entry list"   "$OUT" 'dispatches of role "agentic-engineer-2" IN WINDOW BY RECORD: 1 '
+# An id is matched whole: a prefix of a role is not that role.
+OUT=$(dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES=daily-ai,agentic-engineer)
+check   "dispatch set: a prefix of a role matches nothing"  "$OUT" 'IN WINDOW BY RECORD: 0 '
+check   "dispatch set: unmatched roles stay other roles"    "$OUT" 'other scheduled roles ....................: 3 '
+# Nor is a role matched by an id that merely contains it.
+OUT=$(dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant-2,x-agent-improver)
+check   "dispatch set: an id containing a role matches nothing" "$OUT" 'IN WINDOW BY RECORD: 0 '
+check   "dispatch set: contained roles stay other roles"        "$OUT" 'other scheduled roles ....................: 3 '
+# An unreadable list is UNKNOWN. It is never the count for the ids that parse.
+for bad_list in 'daily-ai-assistant,Bad' 'daily-ai-assistant,daily-ai-assistant' 'a,b,c,d,e' 'daily-ai-assistant,' ',daily-ai-assistant' 'a b'; do
+  OUT=$(dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES="$bad_list")
+  check   "dispatch set: list '$bad_list' is UNKNOWN"        "$OUT" 'UNKNOWN: dispatch role list is unreadable'
+  nocheck "dispatch set: list '$bad_list' classifies nothing" "$OUT" 'claude dispatches classified:'
+done
+
+# ── The dispatch record may open with the runtime's own reminder blocks ───────
+# Measured 2026-10-12 on the live corpus: 30 of 30 scheduled root transcripts in
+# a day open `<system-reminder>…</system-reminder>`, a blank line, then the
+# `<scheduled-task …>` record. The selector required the record to START the
+# text, so it matched 0 of 30 and filed every scheduled run as interactive.
+dhrec_run() { # $1 = corpus
+  env CLAUDE_PROJECTS_DIR="$1" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1
+}
+dhrec_tail() { # $1 = file: one tool call, then a normal end
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-08-01T10:00:05.000Z","message":{"content":[{"type":"tool_use","id":"r1","name":"Bash","input":{"command":"echo hi"}}]}}' >> "$1"
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-08-01T10:00:09.000Z","message":{"content":[{"type":"text","text":"Done."}]}}' >> "$1"
+}
+mkdir -p "$FIX/dhrec-lead" "$FIX/dhrec-two" "$FIX/dhrec-prose" "$FIX/dhrec-inside"
+# One reminder block, then the record: the shape production writes today.
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":"<system-reminder>\nYou are operating in a git worktree.\nWorktree path: /x/w\n</system-reminder>\n\n<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}}' > "$FIX/dhrec-lead/s.jsonl"
+dhrec_tail "$FIX/dhrec-lead/s.jsonl"
+OUT=$(dhrec_run "$FIX/dhrec-lead")
+check   "dispatch record: a leading reminder block does not hide the record" "$OUT" 'dispatches of role "daily-ai-assistant" IN WINDOW BY RECORD: 1 '
+check   "dispatch record: such a run is not an interactive session"          "$OUT" 'no dispatch record .......................: 0 '
+# Several reminder blocks in a row are still only a lead-in.
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":"<system-reminder>\none\n</system-reminder>\n<system-reminder>\ntwo\n</system-reminder>\n\n<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}}' > "$FIX/dhrec-two/s.jsonl"
+dhrec_tail "$FIX/dhrec-two/s.jsonl"
+OUT=$(dhrec_run "$FIX/dhrec-two")
+check   "dispatch record: two leading reminder blocks are skipped" "$OUT" 'dispatches of role "daily-ai-assistant" IN WINDOW BY RECORD: 1 '
+# NEGATIVE CONTROLS. Prose between the reminder and the record is a message that
+# quotes the record, and a record quoted INSIDE a reminder is the runtime
+# talking about one. Neither is a dispatch.
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":"<system-reminder>\none\n</system-reminder>\n\nplease look at this: <scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}}' > "$FIX/dhrec-prose/s.jsonl"
+dhrec_tail "$FIX/dhrec-prose/s.jsonl"
+OUT=$(dhrec_run "$FIX/dhrec-prose")
+check   "dispatch record: prose before the record keeps it a quote" "$OUT" 'no dispatch record .......................: 1 '
+check   "dispatch record: a quoted record selects no role"          "$OUT" 'IN WINDOW BY RECORD: 0 '
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":"<system-reminder>\n<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>\n</system-reminder>\n\nhello"}}' > "$FIX/dhrec-inside/s.jsonl"
+dhrec_tail "$FIX/dhrec-inside/s.jsonl"
+OUT=$(dhrec_run "$FIX/dhrec-inside")
+check   "dispatch record: a record inside a reminder is not a dispatch" "$OUT" 'no dispatch record .......................: 1 '
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

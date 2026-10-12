@@ -492,6 +492,30 @@ need jq || exit 3
 
 want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
 
+# A lane's scheduled entries, given as one comma-separated list (monorepo#4117):
+# one to four ids of lowercase letters, digits and hyphens, none twice. Prints
+# one id a line, or fails and prints nothing. Letters are spelled out: a range
+# such as a-z follows the locale's collation in some awks and would admit
+# capitals.
+entry_id_list() {
+  printf '%s\n' "$1" | awk -F',' '
+    {
+      if (NF < 1 || NF > 4) invalid = 1
+      for (i = 1; i <= NF; i++) {
+        if ($i !~ /^[abcdefghijklmnopqrstuvwxyz0123456789][abcdefghijklmnopqrstuvwxyz0123456789-]*$/ ||
+            ($i in seen)) invalid = 1
+        seen[$i] = 1
+        ids[i] = $i
+      }
+      count = NF
+    }
+    END {
+      if (invalid || NR != 1) exit 1
+      for (i = 1; i <= count; i++) print ids[i]
+    }
+  '
+}
+
 # Only forge outcome attribution requires the deployment registry. Native
 # transcript adapters retain their own format and coverage boundaries.
 #
@@ -2439,6 +2463,12 @@ if want dispatch; then
     echo "  UNKNOWN: cannot compute window start (no usable \`date\`) — refusing to score."
   elif [ "$SF_COUNT" -eq 0 ]; then
     echo "  (no claude sessions in window)"
+  elif ! DH_ROLE_IDS=$(entry_id_list "${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}}"); then
+    # The lane's engineer entries are counted as a set (monorepo#4117). A list
+    # that cannot be read is UNKNOWN: scoring the ids that happen to parse would
+    # file the others under "other scheduled roles" and print a clean count.
+    echo "  UNKNOWN: dispatch role list is unreadable (DH_ROLE or CLAUDE_ENGINEER_ENTRIES:"
+    echo "    one to four ids of lowercase letters, digits and hyphens, none twice) — refusing to score."
   else
     DH_LIVE=0; DH_DEAD=0; DH_TRUNC=0; DH_INCOMPLETE=0
     DH_ROOTS=0; DH_OTHERROLE=0; DH_NOREC=0; DH_UNREADABLE=0; DH_INCOMPLETE_NOWORK=0
@@ -2509,7 +2539,13 @@ if want dispatch; then
     # counting them lets the observer's own runs satisfy a dispatch volume floor
     # for the agent it is observing. Measured over a 2-day window: 76 engineer
     # dispatches, 4 improver, 2 interactive.
-    DH_ROLE="${DH_ROLE:-daily-ai-assistant}"
+    # A lane may have more than one engineer entry (monorepo#4117), so the role
+    # is a set: DH_ROLE if given, else the lane's entry list, else the one entry
+    # the lane has today. Each classified dispatch is also remembered by entry,
+    # so an entry that never ran beside one that did is named below.
+    DH_ROLE="${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}}"
+    DH_ROLE_COUNT=$(printf '%s\n' "$DH_ROLE_IDS" | grep -c .)
+    DH_BYROLE=""
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       # Defence in depth: root_session_files already excluded these BEFORE the
@@ -2537,6 +2573,12 @@ if want dispatch; then
       row=$(jq -Rrs --arg since "$WINDOW_SINCE" "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty)) as $recs
         | ([$recs[] | select(.type=="user")
             | (message_text // "")
+            # The runtime may put its own reminder blocks before the record
+            # (measured 2026-10-12: every scheduled root transcript opens with
+            # one). Only whole leading blocks and the blank space around them
+            # are skipped, so the record must still START what is left: prose
+            # before it is a quote, and a record inside a block goes with it.
+            | sub("^(?:\\s*<system-reminder>(?:(?!</system-reminder>)[\\s\\S])*</system-reminder>)*\\s*"; "")
             | select(startswith("<scheduled-task"))] | .[0] // "") as $disp
         | (($disp | capture("name=\"(?<n>[a-z0-9-]+)\"") | .n) // "") as $role
         | ([$recs[] | select(.type=="assistant") | content_blocks
@@ -2616,7 +2658,9 @@ if want dispatch; then
       # or corrupt transcript yields the same empty role as a genuine unscheduled
       # run, and lumping them together attributes a parse failure to a category
       # of real human work. The record count is what separates them.
-      if [ "$role" != "$DH_ROLE" ]; then
+      # Whole-id membership: the list was validated above, and the role is
+      # compared with each id exactly, never as a substring of the list.
+      if ! grep -qxF -- "$role" <<<"$DH_ROLE_IDS"; then
         if [ -n "$role" ]; then DH_OTHERROLE=$((DH_OTHERROLE+1))
         elif [ "$nrec" -eq 0 ]; then DH_UNREADABLE=$((DH_UNREADABLE+1))
         else DH_NOREC=$((DH_NOREC+1)); fi
@@ -2645,6 +2689,8 @@ if want dispatch; then
       # "this window genuinely held few dispatches" from "the filter ate them".
       if [ "$inw" = OUT ]; then DH_OUTWIN=$((DH_OUTWIN+1)); continue; fi
       if [ "$inw" != IN ]; then DH_UNDATED=$((DH_UNDATED+1)); continue; fi
+      DH_BYROLE="${DH_BYROLE}${role}
+"
       ended_on_refusal=0
       # TERMINAL STATE is required as well as wording. The template set still
       # accepts unobserved limit types by design — narrowing it to the one
@@ -2706,6 +2752,28 @@ EOF
     DH_TOTAL=$((DH_LIVE + DH_DEAD + DH_TRUNC + DH_INCOMPLETE))
     printf '  root transcripts selected by file mtime: %s\n' "$DH_ROOTS"
     printf '    dispatches of role "%s" IN WINDOW BY RECORD: %s   <- classified below\n' "$DH_ROLE" "$DH_TOTAL"
+    if [ "$DH_ROLE_COUNT" -gt 1 ]; then
+      DH_ENTRY_LINE=""; DH_SILENT=""
+      while IFS= read -r dh_id; do
+        dh_n=$(printf '%s' "$DH_BYROLE" | grep -cxF -- "$dh_id" || true)
+        DH_ENTRY_LINE="${DH_ENTRY_LINE} ${dh_id}=${dh_n}"
+        [ "$dh_n" -eq 0 ] && DH_SILENT="${DH_SILENT}${dh_id}
+"
+      done <<DH_IDS
+$DH_ROLE_IDS
+DH_IDS
+      printf '      by entry:%s\n' "$DH_ENTRY_LINE"
+      # Only when another entry of the lane did run: with no dispatch at all the
+      # zero-population readings below already speak for the whole lane.
+      if [ "$DH_TOTAL" -gt 0 ]; then
+        while IFS= read -r dh_id; do
+          [ -n "$dh_id" ] || continue
+            printf '      entry "%s" has no dispatch inside this window while another entry of the lane does.\n' "$dh_id"
+        done <<DH_SILENT_IDS
+$DH_SILENT
+DH_SILENT_IDS
+      fi
+    fi
     printf '    same role, last record BEFORE the window .: %s   (mtime superset, excluded)\n' "$DH_OUTWIN"
     printf '    same role, no usable record timestamp ....: %s   (undated, excluded)\n' "$DH_UNDATED"
     printf '    other scheduled roles ....................: %s   (another agent, not this one)\n' "$DH_OTHERROLE"
@@ -4882,26 +4950,7 @@ if want drift; then
   # same hours, and no two start in the same minute. A lane read from the entries
   # that happen to be readable would report a lost start as a MATCH on what is left.
   CLAUDE_ENGINEER_ENTRIES="${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}"
-  claude_engineer_entry_ids() {
-    # Letters are spelled out: a range such as a-z follows the locale's collation
-    # in some awks and would admit capitals.
-    printf '%s\n' "$CLAUDE_ENGINEER_ENTRIES" | awk -F',' '
-      {
-        if (NF < 1 || NF > 4) invalid = 1
-        for (i = 1; i <= NF; i++) {
-          if ($i !~ /^[abcdefghijklmnopqrstuvwxyz0123456789][abcdefghijklmnopqrstuvwxyz0123456789-]*$/ ||
-              ($i in seen)) invalid = 1
-          seen[$i] = 1
-          ids[i] = $i
-        }
-        count = NF
-      }
-      END {
-        if (invalid || NR != 1) exit 1
-        for (i = 1; i <= count; i++) print ids[i]
-      }
-    '
-  }
+  claude_engineer_entry_ids() { entry_id_list "$CLAUDE_ENGINEER_ENTRIES"; }
   # An entry's pointer sits beside the lane's first one, in a directory named
   # after the entry.
   claude_engineer_entry_loader() {
