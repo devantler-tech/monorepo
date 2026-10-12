@@ -2806,18 +2806,20 @@ t_salvage_dry_run_counts_the_submodule_files_it_would_keep() {
   portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
-  local out; out=$(run_salvage "$root" dry-run 1)
+  # The control runs under the same cap as the assertion: without the large file this
+  # worktree fits it, so the file is what the cap refuses.
+  local out; out=$(WORKTREE_SALVAGE_MAX_KB=64 run_salvage "$root" dry-run 1)
   if ! grep -q '^SALVAGE .*subbig ' <<<"$out"; then
-    bad "$name" "control (default cap): $out"; rm -rf "$root"; return
+    bad "$name" "control (same cap, no large file): $out"; rm -rf "$root"; return
   fi
-  # 64 KB written into a file the pristine check accepts by name; the cap is 32 KB.
-  head -c 65536 /dev/zero | tr '\0' '#' > "$g/description"
+  # 128 KB written into a file the pristine check accepts by name; the cap is 64 KB.
+  head -c 131072 /dev/zero | tr '\0' '#' > "$g/description"
   age_tree "$wt"
   local dry applied
-  dry=$(WORKTREE_SALVAGE_MAX_KB=32 run_salvage "$root" dry-run 1)
-  applied=$(WORKTREE_SALVAGE_MAX_KB=32 run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subbig .*more than 32 KB' <<<"$dry" && ! grep -q '^SALVAGE .*subbig ' <<<"$dry" \
-     && grep -q 'KEEP .*subbig .*more than 32 KB' <<<"$applied" && [ -d "$wt" ] \
+  dry=$(WORKTREE_SALVAGE_MAX_KB=64 run_salvage "$root" dry-run 1)
+  applied=$(WORKTREE_SALVAGE_MAX_KB=64 run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subbig .*more than 64 KB' <<<"$dry" && ! grep -q '^SALVAGE .*subbig ' <<<"$dry" \
+     && grep -q 'KEEP .*subbig .*more than 64 KB' <<<"$applied" && [ -d "$wt" ] \
      && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
     ok "$name"
   else
