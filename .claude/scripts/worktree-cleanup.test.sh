@@ -1177,6 +1177,24 @@ t_keeps_a_plain_reap_whose_reflog_changed_during_the_sweep() {
   rm -rf "$root"
 }
 
+t_pins_an_advertised_reflog_commit_before_reaping() {
+  # origin can drop the ref after the read, and the reflog goes with the worktree: the
+  # commit must stay referenced locally.
+  local name="apply pins a reflog-only commit origin advertises under refs/reaped before removing the worktree"
+  local root held out; root=$(make_repo)
+  held=$(reflog_fixture "$root" held 1) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin "$held:refs/pull/7/head" \
+    || { bad "$name" "FIXTURE: push"; rm -rf "$root"; return; }
+  out=$(run "$root" apply)
+  if [ ! -d "$root/repo/.claude/worktrees/held" ] \
+     && [ "$(git -C "$root/repo" rev-parse --verify --quiet "refs/reaped/$held")" = "$held" ]; then
+    ok "$name"
+  else
+    bad "$name" "held=$held refs=$(git -C "$root/repo" for-each-ref refs/reaped | tr "\n" " ") $out"
+  fi
+  rm -rf "$root"
+}
+
 t_keeps_reflog_commit_origin_no_longer_advertises() {
   # Pushed, then deleted on origin: a commit that was once there is not there now.
   local name="KEEPs a reflog-only commit whose remote ref was deleted"
@@ -4660,6 +4678,7 @@ t_origin_read_deadline_stops_the_transport_helper
 t_origin_read_deadline_holds_when_term_is_ignored
 t_unknown_when_the_advertisement_cannot_be_parsed
 t_keeps_a_plain_reap_whose_reflog_changed_during_the_sweep
+t_pins_an_advertised_reflog_commit_before_reaping
 t_keeps_reflog_commit_origin_no_longer_advertises
 t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing

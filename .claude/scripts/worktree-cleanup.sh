@@ -333,8 +333,9 @@ run_bounded() {
 # it could not ask about abandoned.
 # Call it from the main shell, never inside $(): a subshell would drop the result and every
 # worktree would ask origin again.
-# The answer is as of the read: a ref its owner deletes afterwards is no longer evidence, the
-# same limit a remote-tracking ref has, and a pull request head is never deleted.
+# The answer is as of the read, and origin can drop a ref afterwards. Unlike a remote-tracking
+# ref, an advertisement keeps nothing locally, so apply pins every commit accepted this way
+# under refs/reaped before the removal.
 REMOTE_HELD=""
 REMOTE_HELD_READ=0
 REMOTE_HELD_FAILED=0
@@ -1975,6 +1976,7 @@ while IFS= read -r wt <&3; do
   salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_RESOLVE_UNDO=""; SALVAGE_NOTE=""
   RESOLVE_UNDO_SAVED=0; RESOLVE_UNDO_REF=""
   SCAN_REF_IDS=""
+  REMOTE_CLEARED=""
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
   # here-string, NOT a pipe: grep -q exits at its first match, printf then takes SIGPIPE,
@@ -2176,7 +2178,12 @@ while IFS= read -r wt <&3; do
     # say. Asked only when something is left to ask about, so most sweeps never ask.
     if [ -n "$orphaned" ]; then
       remote_held_commits
-      orphaned=$(not_remote_held "$orphaned") || REMOTE_HELD_FAILED=1
+      unheld=$(not_remote_held "$orphaned") || REMOTE_HELD_FAILED=1
+      # What origin accounted for. Nothing local keeps these once the reflog is gone, and
+      # origin can drop the ref later, so apply pins each under refs/reaped before removal.
+      REMOTE_CLEARED=$(awk 'NR == FNR { if (NF) held[$0]; next } NF && !($0 in held)' \
+                       <(printf '%s\n' "$unheld") <(printf '%s\n' "$orphaned"))
+      orphaned=$unheld
     fi
     orphaned=$(head -1 <<< "$orphaned")
     if [ -n "$orphaned" ]; then
@@ -2354,6 +2361,15 @@ while IFS= read -r wt <&3; do
   if ! git -C "$TOPLEVEL" update-ref "refs/reaped/$sha" "$sha" 2>/dev/null; then
     worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     keep "$wt" "could not write refs/reaped/$sha — refusing to remove"; continue
+  fi
+  pin_failed=""
+  while IFS= read -r pin; do
+    [ -n "$pin" ] || continue
+    git -C "$TOPLEVEL" update-ref "refs/reaped/$pin" "$pin" 2>/dev/null || { pin_failed=$pin; break; }
+  done <<< "$REMOTE_CLEARED"
+  if [ -n "$pin_failed" ]; then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+    keep "$wt" "could not write refs/reaped/$pin_failed — refusing to remove"; continue
   fi
 
   # The fallback's unregistration is deliberately OUTSIDE the success condition: `rm -rf`
