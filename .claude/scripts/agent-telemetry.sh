@@ -4999,15 +4999,20 @@ if want drift; then
     ' "$AGENTS_MD" 2>/dev/null)
     [ -n "$cell" ] || return 0
     if grep -qi 'every hour' <<<"$cell"; then
-      # Every `:MM` the cell names is a start minute of every hour.
+      # Every `:MM` the cell names is a start minute of every hour. A token with a
+      # digit on either side (`:400`, `10:40`) is not a minute of every hour, and
+      # reading its first two digits would turn a typo into a MATCH, so the whole
+      # cell is then unreadable.
       minute=$(printf '%s\n' "$cell" | awk '
         {
           value = $0
           while (match(value, /:[0-9][0-9]?/)) {
+            if (substr(value, RSTART + RLENGTH, 1) ~ /[0-9]/ ||
+                (RSTART > 1 && substr(value, RSTART - 1, 1) ~ /[0-9]/)) invalid = 1
             out = out (out == "" ? "" : ",") substr(value, RSTART + 1, RLENGTH - 1)
             value = substr(value, RSTART + RLENGTH)
           }
-          print out
+          if (!invalid) print out
         }
       ')
       schedule_from_parts "*" "$minute"
@@ -5019,17 +5024,32 @@ if want drift; then
         while (match(value, /[0-9][0-9]?:[0-9][0-9]/)) {
           token = substr(value, RSTART, RLENGTH)
           split(token, pair, ":")
-          if (pair[1] + 0 < 0 || pair[1] + 0 > 23 ||
-              pair[2] + 0 < 0 || pair[2] + 0 > 59) exit 1
-          if (minute != "" && minute != pair[2] + 0) exit 1
+          hour = pair[1] + 0
           minute = pair[2] + 0
-          hours = hours (hours == "" ? "" : ",") pair[1]
+          # A digit on either side of the token (`07:300`, `107:30`) is a typo, not
+          # a start time.
+          if (hour > 23 || minute > 59 ||
+              substr(value, RSTART + RLENGTH, 1) ~ /[0-9]/ ||
+              (RSTART > 1 && substr(value, RSTART - 1, 1) ~ /[0-9]/)) invalid = 1
+          if (!((hour, minute) in starts)) { starts[hour, minute] = 1; start_count++ }
+          if (!(hour in hour_seen)) {
+            hour_seen[hour] = 1; hour_count++
+            hours = hours (hours == "" ? "" : ",") hour
+          }
+          if (!(minute in minute_seen)) {
+            minute_seen[minute] = 1; minute_count++
+            minutes = minutes (minutes == "" ? "" : ",") minute
+          }
           value = substr(value, RSTART + RLENGTH)
         }
       }
       END {
-        if (hours == "" || minute == "") exit 1
-        print hours "|" minute
+        # The compact form is hours x minutes, so the listed starts must be exactly
+        # that product: 07:00, 07:30, 19:00, 19:30 is 7,19@0,30, while 07:00, 19:30
+        # is not a schedule this form can state and stays unreadable. The verdict is
+        # taken here, because an exit in the main rule still runs END.
+        if (invalid || hours == "" || start_count != hour_count * minute_count) exit 1
+        print hours "|" minutes
       }
     ')
     [ -n "$parsed" ] || return 0

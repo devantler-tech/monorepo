@@ -788,9 +788,9 @@ set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0'
 # unreadable schedule and suppressed the stagger block for the whole deployment.
 # A schedule now carries its minutes as a sorted set ("*@10,40"); one minute
 # prints exactly as before, which every assertion above pins.
-set_cadence_cell() { # $1 = provider (Claude|Codex), $2 = the engineer cell's new text
-  awk -F'|' -v OFS='|' -v p="**$1**" -v cell=" $2 " '
-    index($2, p) { $3 = cell }
+set_cadence_cell() { # $1 = provider (Claude|Codex), $2 = the cell's new text, $3 = column (default 3, the engineer)
+  awk -F'|' -v OFS='|' -v p="**$1**" -v cell=" $2 " -v c="${3:-3}" '
+    index($2, p) { $c = cell }
     { print }
   ' "$FIX/monorepo/AGENTS.md" > "$FIX/monorepo/AGENTS.md.new" \
     && mv "$FIX/monorepo/AGENTS.md.new" "$FIX/monorepo/AGENTS.md"
@@ -839,8 +839,52 @@ for bad_minutes in '10,60' '10,' ',10' '10,,40' '10,x'; do
   check "minute list '$bad_minutes' suppresses the slot count" "$OUT" \
     "local engineer slots scheduled/day: UNKNOWN"
 done
+# NEGATIVE CONTROL: a malformed minute in the TABLE must not be read by its first
+# two digits. `:400` beside a runtime on 10 and 40 would otherwise read MATCH.
+set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1;BYMINUTE=10,40'
+for bad_cell in 'Every hour at `:10` and `:400`' 'Every hour at `:10` and `10:40`' 'Every hour at `:10` and `:60`'; do
+  set_cadence_cell Codex "$bad_cell"
+  OUT=$(NOBASE --section drift)
+  check "cell '$bad_cell' is unreadable" "$OUT" \
+    "UNKNOWN: codex engineer schedule absent from AGENTS.md cadence table"
+  nocheck "cell '$bad_cell' never reads MATCH" "$OUT" "codex engineer:  expected="
+  check "cell '$bad_cell' suppresses the slot count" "$OUT" \
+    "local engineer slots scheduled/day: UNKNOWN"
+done
 set_cadence_cell Codex 'Every hour at `:10`'
 set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0'
+
+# A schedule on listed hours may also start at several minutes of each. The cell
+# then lists every start, and the starts must be exactly hours x minutes.
+set_codex_improver_rule() {
+  sed -i.bak -E "s|^rrule = \".*\"\$|rrule = \"$1\"|" \
+    "$FIX/codex/automations/agent-improver/automation.toml"
+  sqlite3 "$CODEX_AUTOMATION_STORE" \
+    "UPDATE automations SET rrule = '$1' WHERE id = 'agent-improver';"
+}
+set_codex_improver_rule 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0,30;BYSECOND=0'
+set_cadence_cell Codex '07:00, 07:30, 19:00, 19:30' 4
+OUT=$(NOBASE --section drift)
+check "listed hours with two start minutes match their table cell" "$OUT" \
+  "codex improver:  expected=7,19@0,30 actual=7,19@0,30 MATCH"
+check "listed hours with two start minutes keep the stagger figure" "$OUT" \
+  "local simultaneous starts/day: 0"
+# NEGATIVE CONTROLS: starts that are not hours x minutes, and a malformed start,
+# leave the cell unreadable. Neither may be read as its first start alone.
+for bad_cell in '07:00, 19:30' '07:00, 07:30, 19:00' '07:00, 07:300, 19:00, 19:30' '07:00, 24:00'; do
+  set_cadence_cell Codex "$bad_cell" 4
+  OUT=$(NOBASE --section drift)
+  check "cell '$bad_cell' is unreadable" "$OUT" \
+    "UNKNOWN: codex improver schedule absent from AGENTS.md cadence table"
+  nocheck "cell '$bad_cell' never reads as a schedule" "$OUT" "codex improver:  expected="
+  check "cell '$bad_cell' suppresses the stagger figure" "$OUT" \
+    "local simultaneous starts/day: UNKNOWN"
+done
+set_cadence_cell Codex '07:00, 19:00' 4
+set_codex_improver_rule 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0'
+OUT=$(NOBASE --section drift)
+check "the fixture is back on its one-minute schedules" "$OUT" \
+  "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 
 # The Claude scheduler record is a cron, and its minute field takes the same list.
 # The refusal count must then treat EACH listed minute as a due minute, and two
