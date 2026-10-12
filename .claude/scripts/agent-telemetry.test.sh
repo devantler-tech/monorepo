@@ -294,7 +294,7 @@ run() {
   TZ=UTC \
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  CLAUDE_SCHEDULE_STORE_PATH="$FIX/claude-store/scheduled-tasks.json" \
+  CLAUDE_SCHEDULE_STORE_PATH="${CLAUDE_SCHEDULE_STORE_PATH-$FIX/claude-store/scheduled-tasks.json}" \
   CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" \
   CLAUDE_IMPROVER_LOADER_PATH="$FIX/claude-sched/agent-improver/SKILL.md" \
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
@@ -1079,6 +1079,63 @@ for bad_entries in "daily-ai-assistant,,$ENTRY2" "daily-ai-assistant,Daily" "dai
   check "entry list '$bad_entries' suppresses the slot count" "$OUT" \
     "local engineer slots scheduled/day: UNKNOWN"
 done
+# Every loader the lane names is read by the content checks too. A second entry's
+# loader that was never opened must not sit behind an all-clear.
+OUT=$(TWO --section drift)
+check "a clean second loader keeps the roster all-clear" "$OUT" \
+  "(no output above = no loader hard-codes the review-lane roster)"
+printf 'Request a CodeRabbit review, then stop.\n' > "$FIX/claude-sched/$ENTRY2/SKILL.md"
+OUT=$(TWO --section drift)
+check "a second loader that hard-codes a review lane is drift" "$OUT" \
+  "DRIFT: claude engineer entry $ENTRY2 loader hard-codes review lanes (CodeRabbit)"
+OUT=$(NOBASE --section drift)
+nocheck "an unnamed entry's loader is not scanned" "$OUT" "loader hard-codes review lanes"
+printf 'NEVER self-promote those drafts.\n' > "$FIX/claude-sched/$ENTRY2/SKILL.md"
+OUT=$(TWO --section drift)
+check "a second loader asserting a retired rule is drift" "$OUT" \
+  "DRIFT: $ENTRY2 still asserts the definition-PR promotion gate"
+cp "$FIX/claude-sched/daily-ai-assistant/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md"
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden"
+OUT=$(TWO --section drift)
+check "a missing second loader is reported by name" "$OUT" \
+  "UNKNOWN: claude engineer entry $ENTRY2 loader is missing or unreadable"
+check "a missing second loader makes the roster check incomplete" "$OUT" \
+  "roster check INCOMPLETE: 1 of 5 loaders not inspected"
+check "a missing second loader is listed as missing" "$OUT" \
+  "MISSING: $FIX/claude-sched/$ENTRY2/SKILL.md"
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden" "$FIX/claude-sched/$ENTRY2/SKILL.md"
+# The scheduler store is found by the entries the lane names. Without an explicit
+# store path, a store qualifies only when it holds every named entry, enabled and
+# pointing at its own loader.
+mkdir -p "$FIX/claude-root/a/b"
+DISCOVER() { CLAUDE_SCHEDULE_STORE_PATH='' CLAUDE_SCHEDULE_STORE_ROOT="$FIX/claude-root" NOBASE "$@"; }
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-root/a/b/scheduled-tasks.json"
+OUT=$(CLAUDE_ENGINEER_ENTRIES="daily-ai-assistant,$ENTRY2" DISCOVER --section drift)
+check "a store holding both named entries is discovered" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH"
+# A replacement: the lane names only the new entry and the old one is disabled.
+jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .enabled) = false' \
+  "$FIX/claude-store/scheduled-tasks.json" > "$FIX/claude-root/a/b/scheduled-tasks.json"
+set_cadence_cell Claude 'Every hour at `:20`'
+OUT=$(CLAUDE_ENGINEER_ENTRIES="$ENTRY2" DISCOVER --section drift)
+check "a store holding only the named replacement entry is discovered" "$OUT" \
+  "claude engineer: expected=*@20 actual=*@20 MATCH"
+nocheck "a named replacement entry does not leave the store missing" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+# CONTROLS: the same store does not qualify for a lane that names an entry it
+# holds disabled, and discovery itself still works for the default lane.
+OUT=$(DISCOVER --section drift)
+check "a store with a named entry disabled is not discovered" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+set_cadence_cell Claude 'Every hour at `:50`'
+cp "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-root/a/b/scheduled-tasks.json"
+OUT=$(DISCOVER --section drift)
+check "the default lane's store is still discovered" "$OUT" \
+  "claude engineer: expected=*@50 actual=*@50 MATCH"
+OUT=$(CLAUDE_ENGINEER_ENTRIES="daily-ai-assistant,$ENTRY2" DISCOVER --section drift)
+check "a store lacking a named entry is not discovered" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+rm -r "$FIX/claude-root"
 set_cadence_cell Claude 'Every hour at `:50`'
 mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 rm -r "$FIX/claude-sched/$ENTRY2"
