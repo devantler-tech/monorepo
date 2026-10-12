@@ -37,6 +37,9 @@
 #           (`git rev-list <head> --not --remotes`) covers both an unpushed branch and a
 #           detached HEAD left on an orphan commit — the only states where removing the
 #           directory would destroy the sole copy of real work.
+#   KEEP  - a worktree whose HEAD reflog, ORIG_HEAD or FETCH_HEAD names a commit no remote
+#           ref reaches. Here a commit origin advertises right now counts as on the remote
+#           too (a pull request's head, a claim tip), read once per sweep (#2831)
 #   KEEP  - a worktree with modified TRACKED files, other than UNSTAGED gitlink drift
 #   KEEP  - a worktree with untracked files outside the known tool-noise set
 #   KEEP  - a worktree whose modified submodule itself has uncommitted work, or any of whose
@@ -279,15 +282,31 @@ GH_DEADLINE_S=${WORKTREE_CLEANUP_GH_DEADLINE:-60}
 case "$GH_DEADLINE_S" in ''|*[!0-9]*|0) GH_DEADLINE_S=60 ;; esac
 
 # gh_bounded <gh args...> — gh with a deadline; prints its stdout, returns its status or 124.
-gh_bounded() {
-  local tmp pid rc ticks=0
+gh_bounded() { run_bounded "$GH_BIN" "$@"; }
+
+# run_bounded <command> [args...] — the command with the same deadline; prints its stdout,
+# returns its status or 124.
+# The command runs in its own process group (job control), and the deadline stops the whole
+# group: git hands a remote read to a transport helper (ssh, git-remote-https), and a signal
+# to git alone leaves that helper running after the sweep has given up on it.
+run_bounded() {
+  local tmp pid rc ticks=0 had_monitor=0
   tmp=$(mktemp "${TMPDIR:-/tmp}/worktree-cleanup-gh.XXXXXX") || return 2
-  "$GH_BIN" "$@" >"$tmp" 2>/dev/null &
+  case "$-" in *m*) had_monitor=1 ;; esac
+  set -m
+  "$@" >"$tmp" 2>/dev/null &
   pid=$!
+  [ "$had_monitor" -eq 1 ] || set +m
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$ticks" -ge $((GH_DEADLINE_S * 5)) ]; then
-      kill -TERM "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
+      # Negative pid = the group; the single pid is the fallback where job control gave none.
+      kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+      # TERM can be ignored, and `wait` on a command that ignores it never returns. So it
+      # gets two seconds, then the group is killed, and only then is the command reaped.
+      ticks=0
+      while kill -0 "$pid" 2>/dev/null && [ "$ticks" -lt 10 ]; do sleep 0.2; ticks=$((ticks + 1)); done
+      kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+      { wait "$pid"; } 2>/dev/null
       rm -f "$tmp"
       return 124
     fi
@@ -299,6 +318,60 @@ gh_bounded() {
   cat "$tmp"
   rm -f "$tmp"
   return "$rc"
+}
+
+# remote_held_commits -> sets REMOTE_HELD to every commit origin advertises right now that the
+# local object store also holds, one per line. Read once per sweep, and only when a worktree
+# first needs it.
+# `--not --remotes` knows only the remote-tracking refs this checkout happens to have, and a
+# commit can be on the remote without one: a pull request's head (refs/pull/<n>/head, which
+# GitHub keeps after the branch is deleted), a claim tip, or a branch pushed by refspec and
+# never fetched back. Measured on the host 2026-10-11: 20 of the 34 worktrees kept for a
+# reflog-only commit were kept for one origin advertised (#2831).
+# Any failure, a timeout included, leaves the list empty or short, which only ever keeps more,
+# and sets REMOTE_HELD_FAILED so the sweep ends UNKNOWN (exit 2) instead of calling worktrees
+# it could not ask about abandoned.
+# Call it from the main shell, never inside $(): a subshell would drop the result and every
+# worktree would ask origin again.
+# The answer is as of the read, and origin can drop a ref afterwards. Unlike a remote-tracking
+# ref, an advertisement keeps nothing locally, so apply pins every commit accepted this way
+# under refs/reaped before the removal.
+REMOTE_HELD=""
+REMOTE_HELD_READ=0
+REMOTE_HELD_FAILED=0
+remote_held_commits() {
+  [ "$REMOTE_HELD_READ" -eq 0 ] || return 0
+  REMOTE_HELD_READ=1
+  local rows ids
+  # No GIT_SSH_COMMAND here: it outranks core.sshCommand and GIT_SSH, so setting it would
+  # replace a transport the repository configured. The deadline bounds a prompt instead.
+  rows=$(GIT_TERMINAL_PROMPT=0 run_bounded git -C "$TOPLEVEL" ls-remote origin) || { REMOTE_HELD_FAILED=1; return 0; }
+  # An advertised line is `<object id><TAB><ref>`; anything else is not evidence.
+  ids=$(awk -F'\t' 'NF == 2 && $1 ~ /^([0-9a-f]{40}|[0-9a-f]{64})$/ { print $1 }' <<< "$rows" | sort -u) || { REMOTE_HELD_FAILED=1; return 0; }
+  # No id from a non-empty answer is an answer this could not read, not an empty remote.
+  if [ -z "$ids" ]; then
+    [ -z "$rows" ] || REMOTE_HELD_FAILED=1
+    return 0
+  fi
+  REMOTE_HELD=$(git -C "$TOPLEVEL" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" \
+                2>/dev/null | awk '$2 == "commit" { print $1 }') || { REMOTE_HELD=""; REMOTE_HELD_FAILED=1; }
+}
+
+# not_remote_held <commits> -> prints those of <commits> (one per line) that no commit origin
+# advertises reaches. With nothing advertised, prints them all. When the comparison itself
+# fails, prints them all and returns 1, so the caller can end the sweep UNKNOWN.
+# Reads REMOTE_HELD only; the caller runs remote_held_commits first.
+not_remote_held() {
+  local commits=$1 out
+  [ -n "$commits" ] || return 0
+  if [ -z "$REMOTE_HELD" ]; then printf '%s\n' "$commits"; return 0; fi
+  if out=$( { printf '%s\n' "$commits"; sed 's/^/^/' <<< "$REMOTE_HELD"; } \
+            | git -C "$TOPLEVEL" rev-list --no-walk --stdin 2>/dev/null); then
+    [ -z "$out" ] || printf '%s\n' "$out"
+  else
+    printf '%s\n' "$commits"
+    return 1
+  fi
 }
 
 # still_the_reviewed_worktree <wt> <branch> <sha> <merged_head> — re-read under the mutex.
@@ -827,6 +900,14 @@ recheck_mutable_gates() {
       1) keep "$wt" "submodule work appeared during the sweep ($SUBMODULE_NOTE)"; return 1 ;;
       *) keep "$wt" "cannot re-read its submodule repositories before removal ($SUBMODULE_NOTE)"; return 1 ;;
     esac
+    # A commit made and reset away since the initial scan leaves HEAD and status as they
+    # were and lives only in the reflog the removal deletes. The scan accounted for the
+    # ids it read, so any other set means the worktree was used since.
+    local now_ids
+    now_ids=$(worktree_ref_ids "$wt") || { keep "$wt" "cannot re-read the reflog before removal"; return 1; }
+    if [ "$now_ids" != "$SCAN_REF_IDS" ]; then
+      keep "$wt" "the HEAD reflog, ORIG_HEAD or FETCH_HEAD changed during the sweep"; return 1
+    fi
   fi
 
   # Status alone cannot cover this: not being visible to status is exactly what the
@@ -1894,6 +1975,8 @@ while IFS= read -r wt <&3; do
   # from the previous candidate.
   salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_RESOLVE_UNDO=""; SALVAGE_NOTE=""
   RESOLVE_UNDO_SAVED=0; RESOLVE_UNDO_REF=""
+  SCAN_REF_IDS=""
+  REMOTE_CLEARED=""
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
   # here-string, NOT a pipe: grep -q exits at its first match, printf then takes SIGPIPE,
@@ -2083,12 +2166,24 @@ while IFS= read -r wt <&3; do
   if ! reflog_shas=$(worktree_ref_ids "$wt"); then
     keep_stuck "$wt" "cannot read or classify the HEAD reflog, ORIG_HEAD or FETCH_HEAD"; continue
   fi
+  SCAN_REF_IDS=$reflog_shas
   if [ -n "$reflog_shas" ]; then
     # On a proven squash-merged branch, ancestors of the PR head are accounted for too;
     # a commit reset away from that history is not, and still keeps the worktree.
     # shellcheck disable=SC2086  # merged_head is empty or one sha
     if ! orphaned=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog_shas --not --remotes $merged_head 2>/dev/null); then
       keep "$wt" "cannot check whether reflog or pseudo-ref commits are reachable"; continue
+    fi
+    # A commit origin advertises is not held only here, whatever the remote-tracking refs
+    # say. Asked only when something is left to ask about, so most sweeps never ask.
+    if [ -n "$orphaned" ]; then
+      remote_held_commits
+      unheld=$(not_remote_held "$orphaned") || REMOTE_HELD_FAILED=1
+      # What origin accounted for. Nothing local keeps these once the reflog is gone, and
+      # origin can drop the ref later, so apply pins each under refs/reaped before removal.
+      REMOTE_CLEARED=$(awk 'NR == FNR { if (NF) held[$0]; next } NF && !($0 in held)' \
+                       <(printf '%s\n' "$unheld") <(printf '%s\n' "$orphaned"))
+      orphaned=$unheld
     fi
     orphaned=$(head -1 <<< "$orphaned")
     if [ -n "$orphaned" ]; then
@@ -2267,6 +2362,15 @@ while IFS= read -r wt <&3; do
     worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     keep "$wt" "could not write refs/reaped/$sha — refusing to remove"; continue
   fi
+  pin_failed=""
+  while IFS= read -r pin; do
+    [ -n "$pin" ] || continue
+    git -C "$TOPLEVEL" update-ref "refs/reaped/$pin" "$pin" 2>/dev/null || { pin_failed=$pin; break; }
+  done <<< "$REMOTE_CLEARED"
+  if [ -n "$pin_failed" ]; then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+    keep "$wt" "could not write refs/reaped/$pin_failed — refusing to remove"; continue
+  fi
 
   # The fallback's unregistration is deliberately OUTSIDE the success condition: `rm -rf`
   # can succeed while unregistering fails (git's admin dir unwritable), and folding it into
@@ -2334,4 +2438,10 @@ else
 fi
 if [ "$stuck" -gt 0 ]; then
   printf 'worktree-cleanup: %d of the kept worktree(s) hold abandoned work that no sweep will reap; salvage or discard it (#2831)\n' "$stuck"
+fi
+if [ "$REMOTE_HELD_FAILED" -ne 0 ]; then
+  # Said last and with exit 2: the worktrees kept for a reflog-only commit above were kept
+  # without evidence either way, so this sweep did not show they hold abandoned work.
+  printf 'worktree-cleanup: UNKNOWN — could not establish which reflog-only commits origin holds, so the worktrees kept for one were kept unexamined (#2831)\n' >&2
+  exit 2
 fi

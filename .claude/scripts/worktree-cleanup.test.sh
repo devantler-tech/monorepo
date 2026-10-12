@@ -948,6 +948,270 @@ t_keeps_worktree_with_orphaned_reflog_commit() {
   rm -rf "$root"
 }
 
+# reflog_fixture <root> <name> <commits> — a pushed worktree that then made <commits> commits
+# and reset them all away, so they live only in its HEAD reflog. Prints the newest one.
+reflog_fixture() {
+  local root=$1 name=$2 n=$3 w i
+  add_wt "$root" "$name" pushed || return 1
+  w="$root/repo/.claude/worktrees/$name"
+  for i in $(seq 1 "$n"); do
+    echo "wip $name $i" > "$w/wip-$i.txt"   # named: two fixtures in one second must not make one commit
+    git -C "$w" add "wip-$i.txt" && git -C "$w" commit -qm "wip $name $i" || return 1
+  done
+  git -C "$w" rev-parse HEAD
+  git -C "$w" reset -q --hard "HEAD~$n" || return 1
+  age_tree "$w"
+}
+
+t_reaps_reflog_commit_origin_advertises() {
+  # #2831: the reset-away commit is on the remote under a ref this checkout has no
+  # remote-tracking ref for (a pull request head), so nothing is held only here. The
+  # sibling worktree's commit is on no remote and must still be kept.
+  local name="REAPs a worktree whose reflog-only commit origin advertises; KEEPs its unadvertised twin"
+  local root held lost out; root=$(make_repo)
+  held=$(reflog_fixture "$root" held 1) && lost=$(reflog_fixture "$root" lost 1) \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  if ! git -C "$root/repo" push -q origin "$held:refs/pull/7/head" \
+     || [ -n "$(git -C "$root/repo" for-each-ref --contains "$held" refs/remotes)" ]; then
+    bad "$name" "FIXTURE: the commit must be on origin with no remote-tracking ref"; rm -rf "$root"; return
+  fi
+  out=$(run "$root")
+  if grep -q '^REAP  .*held' <<<"$out" \
+     && grep -q 'KEEP .*lost .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "held=$held lost=$lost $out"
+  fi
+  rm -rf "$root"
+}
+
+t_reaps_reflog_ancestor_of_an_advertised_commit() {
+  # Two commits reset away; origin advertises only the newer one, which reaches the older.
+  local name="REAPs when origin advertises a descendant of every reflog-only commit"
+  local root tip out; root=$(make_repo)
+  tip=$(reflog_fixture "$root" chain 2) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin "$tip:refs/pull/8/head" \
+    || { bad "$name" "FIXTURE: push"; rm -rf "$root"; return; }
+  out=$(run "$root")
+  if grep -q '^REAP  .*chain' <<<"$out"; then ok "$name"; else bad "$name" "$out"; fi
+  rm -rf "$root"
+}
+
+t_keeps_reflog_descendant_of_an_advertised_commit() {
+  # The direction matters: origin holds the OLDER commit only, so the newer one is still
+  # held nowhere else. An exclusion read the wrong way round would reap it.
+  local name="KEEPs a reflog-only commit that merely descends from an advertised one"
+  local root tip out; root=$(make_repo)
+  tip=$(reflog_fixture "$root" chain 2) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin "$tip~1:refs/pull/9/head" \
+    || { bad "$name" "FIXTURE: push"; rm -rf "$root"; return; }
+  out=$(run "$root")
+  if grep -q "KEEP .*chain .*reflog or pseudo-ref holds commit(s) reachable from nowhere else (${tip:0:12})" <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "tip=$tip $out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_reflog_commit_when_origin_cannot_be_read() {
+  # The commit IS on origin, but the sweep cannot ask: an unread remote proves nothing.
+  # The first run is the control that the same fixture is reaped when origin answers.
+  local name="KEEPs a reflog-only commit and exits UNKNOWN when origin cannot be read (and REAPs it, exit 0, when it can)"
+  local root held before before_rc out rc; root=$(make_repo)
+  held=$(reflog_fixture "$root" held 1) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin "$held:refs/pull/7/head" \
+    || { bad "$name" "FIXTURE: push"; rm -rf "$root"; return; }
+  before=$(run "$root"); before_rc=$?
+  git -C "$root/repo" remote set-url origin "$root/no-such-remote.git"
+  out=$(run "$root"); rc=$?
+  if [ "$before_rc" -eq 0 ] && grep -q '^REAP  .*held' <<<"$before" \
+     && ! grep -q 'could not establish which reflog-only commits origin holds' <<<"$before" \
+     && [ "$rc" -eq 2 ] && grep -q 'UNKNOWN — could not establish which reflog-only commits origin holds' <<<"$out" \
+     && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "before(rc=$before_rc): $before :: after(rc=$rc): $out"
+  fi
+  rm -rf "$root"
+}
+
+t_asks_origin_once_for_many_reflog_worktrees() {
+  # The read is shared across the sweep: three worktrees with reflog-only commits make one
+  # request, not three. Counted with a git that logs each ls-remote and then runs the real one.
+  local name="asks origin once per sweep however many worktrees hold reflog-only commits"
+  local root shim real n out; root=$(make_repo)
+  reflog_fixture "$root" one 1 >/dev/null && reflog_fixture "$root" two 1 >/dev/null \
+    && reflog_fixture "$root" three 1 >/dev/null \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  real=$(command -v git); shim="$root/shim"; mkdir -p "$shim"
+  cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = ls-remote ] && echo x >> "$root/ls-remote.count"; done
+exec "$real" "\$@"
+SHIM
+  chmod +x "$shim/git"
+  out=$(PATH="$shim:$PATH" run "$root")
+  n=$(wc -l < "$root/ls-remote.count" 2>/dev/null | tr -d " ")
+  if [ "$n" = 1 ] && [ "$(grep -c 'KEEP .*reflog or pseudo-ref holds commit' <<<"$out")" -eq 3 ]; then
+    ok "$name"
+  else
+    bad "$name" "ls-remote calls=${n:-0} $out"
+  fi
+  rm -rf "$root"
+}
+
+# git_shim <root> <body> — a git on PATH that runs <body> (with the real git in $real and the
+# fixture root in $root) before handing over to the real one. Prints the directory to put on PATH.
+git_shim() {
+  local root=$1 body=$2 real; real=$(command -v git); mkdir -p "$root/shim"
+  { printf '#!/usr/bin/env bash\nreal=%q\nroot=%q\n' "$real" "$root"; printf '%s\n' "$body"; printf 'exec "$real" "$@"\n'; } > "$root/shim/git"
+  chmod +x "$root/shim/git"
+  printf '%s\n' "$root/shim"
+}
+
+t_unknown_when_the_origin_comparison_fails() {
+  # origin answered, but the ancestry comparison itself failed: the worktree is kept and the
+  # sweep must not report it as abandoned work with exit 0.
+  local name="KEEPs and exits UNKNOWN when the comparison against origin fails"
+  local root shim out rc; root=$(make_repo)
+  reflog_fixture "$root" held 1 >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  shim=$(git_shim "$root" 'case " $* " in *" rev-list --no-walk --stdin "*) exit 128 ;; esac')
+  out=$(PATH="$shim:$PATH" run "$root"); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q 'UNKNOWN — could not establish which reflog-only commits origin holds' <<<"$out" \
+     && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+t_origin_read_keeps_the_configured_ssh_command() {
+  # GIT_SSH_COMMAND outranks core.sshCommand, so the sweep must not set one of its own.
+  local name="reads origin without replacing the configured ssh command"
+  local root shim out; root=$(make_repo)
+  reflog_fixture "$root" held 1 >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  shim=$(git_shim "$root" 'case " $* " in *" ls-remote "*) printf "%s\n" "${GIT_SSH_COMMAND-unset}" >> "$root/ssh.seen" ;; esac')
+  out=$(env -u GIT_SSH_COMMAND PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" dry-run 24 2>&1)
+  if [ "$(cat "$root/ssh.seen" 2>/dev/null)" = unset ]; then ok "$name"; else bad "$name" "seen=$(cat "$root/ssh.seen" 2>/dev/null) $out"; fi
+  rm -rf "$root"
+}
+
+t_origin_read_deadline_stops_the_transport_helper() {
+  # git hands the read to a helper process. At the deadline the helper must go too, not be
+  # left running after the sweep has moved on.
+  local name="stops the transport helper when the origin read passes its deadline, and exits UNKNOWN"
+  local root shim out rc helper; root=$(make_repo)
+  reflog_fixture "$root" held 1 >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  shim=$(git_shim "$root" 'case " $* " in *" ls-remote "*) sleep 300 & echo $! > "$root/helper.pid"; wait ;; esac')
+  out=$(WORKTREE_CLEANUP_GH_DEADLINE=1 PATH="$shim:$PATH" run "$root"); rc=$?
+  helper=$(cat "$root/helper.pid" 2>/dev/null)
+  if [ -n "$helper" ] && ! kill -0 "$helper" 2>/dev/null && [ "$rc" -eq 2 ] \
+     && grep -q 'UNKNOWN — could not establish which reflog-only commits origin holds' <<<"$out" \
+     && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc helper=${helper:-none} alive=$(kill -0 "$helper" 2>/dev/null && echo yes || echo no) $out"
+    [ -z "$helper" ] || kill -KILL "$helper" 2>/dev/null
+  fi
+  rm -rf "$root"
+}
+
+t_origin_read_deadline_holds_when_term_is_ignored() {
+  # A command that ignores TERM must not hang the sweep: it is killed after a short grace.
+  local name="returns at the deadline when the origin read ignores TERM, and exits UNKNOWN"
+  local root shim out rc helper start took; root=$(make_repo)
+  reflog_fixture "$root" held 1 >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  shim=$(git_shim "$root" 'case " $* " in *" ls-remote "*) trap "" TERM; sleep 60 & echo $! > "$root/helper.pid"; wait; exit 1 ;; esac')
+  start=$(date +%s)
+  out=$(WORKTREE_CLEANUP_GH_DEADLINE=1 PATH="$shim:$PATH" run "$root"); rc=$?
+  took=$(( $(date +%s) - start ))
+  helper=$(cat "$root/helper.pid" 2>/dev/null)
+  if [ -n "$helper" ] && ! kill -0 "$helper" 2>/dev/null && [ "$rc" -eq 2 ] && [ "$took" -lt 40 ] \
+     && grep -q 'UNKNOWN — could not establish which reflog-only commits origin holds' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc took=${took}s helper=${helper:-none} $out"
+    [ -z "$helper" ] || kill -KILL "$helper" 2>/dev/null
+  fi
+  rm -rf "$root"
+}
+
+t_unknown_when_the_advertisement_cannot_be_parsed() {
+  # origin answered with lines that name no object id: that is not an empty remote.
+  local name="KEEPs and exits UNKNOWN when origin answers with nothing it can read"
+  local root shim out rc; root=$(make_repo)
+  reflog_fixture "$root" held 1 >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  shim=$(git_shim "$root" 'case " $* " in *" ls-remote "*) echo "not an advertisement"; exit 0 ;; esac')
+  out=$(PATH="$shim:$PATH" run "$root"); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q 'UNKNOWN — could not establish which reflog-only commits origin holds' <<<"$out" \
+     && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_a_plain_reap_whose_reflog_changed_during_the_sweep() {
+  # A commit made and reset away after the scan leaves HEAD and status unchanged; only the
+  # reflog shows it, and the removal would delete the reflog.
+  local name="KEEPs a spent worktree that gained a reflog-only commit during the sweep"
+  local root wt shim out late; root=$(make_repo)
+  add_wt "$root" spent pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  wt="$root/repo/.claude/worktrees/spent"
+  shim=$(lsof_hook_shim "$root" 2 "git -C '$wt' commit -q --allow-empty -m late >/dev/null 2>&1 && git -C '$wt' reset -q --soft HEAD~1") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  out=$(PATH="$shim:$PATH" run "$root" apply)
+  late=$(git -C "$wt" rev-parse 'HEAD@{1}' 2>/dev/null)
+  if [ ! -d "$wt" ]; then
+    bad "$name" "worktree removed: $out"
+  elif [ "$(git -C "$wt" log -1 --format=%s "$late" 2>/dev/null)" != late ]; then
+    bad "$name" "FIXTURE: no late reflog commit: $out"
+  elif grep -q 'KEEP .*spent .*changed during the sweep' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_pins_an_advertised_reflog_commit_before_reaping() {
+  # origin can drop the ref after the read, and the reflog goes with the worktree: the
+  # commit must stay referenced locally.
+  local name="apply pins a reflog-only commit origin advertises under refs/reaped before removing the worktree"
+  local root held out; root=$(make_repo)
+  held=$(reflog_fixture "$root" held 1) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin "$held:refs/pull/7/head" \
+    || { bad "$name" "FIXTURE: push"; rm -rf "$root"; return; }
+  out=$(run "$root" apply)
+  if [ ! -d "$root/repo/.claude/worktrees/held" ] \
+     && [ "$(git -C "$root/repo" rev-parse --verify --quiet "refs/reaped/$held")" = "$held" ]; then
+    ok "$name"
+  else
+    bad "$name" "held=$held refs=$(git -C "$root/repo" for-each-ref refs/reaped | tr "\n" " ") $out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_reflog_commit_origin_no_longer_advertises() {
+  # Pushed, then deleted on origin: a commit that was once there is not there now.
+  local name="KEEPs a reflog-only commit whose remote ref was deleted"
+  local root held out; root=$(make_repo)
+  held=$(reflog_fixture "$root" held 1) || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin "$held:refs/heads/gone" \
+    && git -C "$root/repo" push -q origin ":refs/heads/gone" \
+    || { bad "$name" "FIXTURE: push then delete"; rm -rf "$root"; return; }
+  out=$(run "$root")
+  if grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_keeps_worktree_with_operation_in_progress() {
   # A worktree mid-rebase holds that operation's state only in its own admin dir, so
   # reaping it destroys work no commit or reflog accounts for.
@@ -4403,6 +4667,19 @@ t_keeps_untracked_when_showUntrackedFiles_is_no
 t_keeps_parent_of_nested_worktree_even_when_ignored
 t_reaps_a_spent_nested_worktree
 t_keeps_worktree_with_orphaned_reflog_commit
+t_reaps_reflog_commit_origin_advertises
+t_reaps_reflog_ancestor_of_an_advertised_commit
+t_keeps_reflog_descendant_of_an_advertised_commit
+t_keeps_reflog_commit_when_origin_cannot_be_read
+t_asks_origin_once_for_many_reflog_worktrees
+t_unknown_when_the_origin_comparison_fails
+t_origin_read_keeps_the_configured_ssh_command
+t_origin_read_deadline_stops_the_transport_helper
+t_origin_read_deadline_holds_when_term_is_ignored
+t_unknown_when_the_advertisement_cannot_be_parsed
+t_keeps_a_plain_reap_whose_reflog_changed_during_the_sweep
+t_pins_an_advertised_reflog_commit_before_reaping
+t_keeps_reflog_commit_origin_no_longer_advertises
 t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
