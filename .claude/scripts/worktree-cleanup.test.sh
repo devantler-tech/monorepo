@@ -1138,6 +1138,45 @@ t_origin_read_deadline_holds_when_term_is_ignored() {
   rm -rf "$root"
 }
 
+t_unknown_when_the_advertisement_cannot_be_parsed() {
+  # origin answered with lines that name no object id: that is not an empty remote.
+  local name="KEEPs and exits UNKNOWN when origin answers with nothing it can read"
+  local root shim out rc; root=$(make_repo)
+  reflog_fixture "$root" held 1 >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  shim=$(git_shim "$root" 'case " $* " in *" ls-remote "*) echo "not an advertisement"; exit 0 ;; esac')
+  out=$(PATH="$shim:$PATH" run "$root"); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q 'UNKNOWN — could not establish which reflog-only commits origin holds' <<<"$out" \
+     && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_a_plain_reap_whose_reflog_changed_during_the_sweep() {
+  # A commit made and reset away after the scan leaves HEAD and status unchanged; only the
+  # reflog shows it, and the removal would delete the reflog.
+  local name="KEEPs a spent worktree that gained a reflog-only commit during the sweep"
+  local root wt shim out late; root=$(make_repo)
+  add_wt "$root" spent pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  wt="$root/repo/.claude/worktrees/spent"
+  shim=$(lsof_hook_shim "$root" 2 "git -C '$wt' commit -q --allow-empty -m late >/dev/null 2>&1 && git -C '$wt' reset -q --soft HEAD~1") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  out=$(PATH="$shim:$PATH" run "$root" apply)
+  late=$(git -C "$wt" rev-parse 'HEAD@{1}' 2>/dev/null)
+  if [ ! -d "$wt" ]; then
+    bad "$name" "worktree removed: $out"
+  elif [ "$(git -C "$wt" log -1 --format=%s "$late" 2>/dev/null)" != late ]; then
+    bad "$name" "FIXTURE: no late reflog commit: $out"
+  elif grep -q 'KEEP .*spent .*changed during the sweep' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_keeps_reflog_commit_origin_no_longer_advertises() {
   # Pushed, then deleted on origin: a commit that was once there is not there now.
   local name="KEEPs a reflog-only commit whose remote ref was deleted"
@@ -4619,6 +4658,8 @@ t_unknown_when_the_origin_comparison_fails
 t_origin_read_keeps_the_configured_ssh_command
 t_origin_read_deadline_stops_the_transport_helper
 t_origin_read_deadline_holds_when_term_is_ignored
+t_unknown_when_the_advertisement_cannot_be_parsed
+t_keeps_a_plain_reap_whose_reflog_changed_during_the_sweep
 t_keeps_reflog_commit_origin_no_longer_advertises
 t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing

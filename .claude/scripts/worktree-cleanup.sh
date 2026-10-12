@@ -347,7 +347,11 @@ remote_held_commits() {
   rows=$(GIT_TERMINAL_PROMPT=0 run_bounded git -C "$TOPLEVEL" ls-remote origin) || { REMOTE_HELD_FAILED=1; return 0; }
   # An advertised line is `<object id><TAB><ref>`; anything else is not evidence.
   ids=$(awk -F'\t' 'NF == 2 && $1 ~ /^([0-9a-f]{40}|[0-9a-f]{64})$/ { print $1 }' <<< "$rows" | sort -u) || { REMOTE_HELD_FAILED=1; return 0; }
-  [ -n "$ids" ] || return 0
+  # No id from a non-empty answer is an answer this could not read, not an empty remote.
+  if [ -z "$ids" ]; then
+    [ -z "$rows" ] || REMOTE_HELD_FAILED=1
+    return 0
+  fi
   REMOTE_HELD=$(git -C "$TOPLEVEL" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" \
                 2>/dev/null | awk '$2 == "commit" { print $1 }') || { REMOTE_HELD=""; REMOTE_HELD_FAILED=1; }
 }
@@ -895,6 +899,14 @@ recheck_mutable_gates() {
       1) keep "$wt" "submodule work appeared during the sweep ($SUBMODULE_NOTE)"; return 1 ;;
       *) keep "$wt" "cannot re-read its submodule repositories before removal ($SUBMODULE_NOTE)"; return 1 ;;
     esac
+    # A commit made and reset away since the initial scan leaves HEAD and status as they
+    # were and lives only in the reflog the removal deletes. The scan accounted for the
+    # ids it read, so any other set means the worktree was used since.
+    local now_ids
+    now_ids=$(worktree_ref_ids "$wt") || { keep "$wt" "cannot re-read the reflog before removal"; return 1; }
+    if [ "$now_ids" != "$SCAN_REF_IDS" ]; then
+      keep "$wt" "the HEAD reflog, ORIG_HEAD or FETCH_HEAD changed during the sweep"; return 1
+    fi
   fi
 
   # Status alone cannot cover this: not being visible to status is exactly what the
@@ -1962,6 +1974,7 @@ while IFS= read -r wt <&3; do
   # from the previous candidate.
   salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_RESOLVE_UNDO=""; SALVAGE_NOTE=""
   RESOLVE_UNDO_SAVED=0; RESOLVE_UNDO_REF=""
+  SCAN_REF_IDS=""
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
   # here-string, NOT a pipe: grep -q exits at its first match, printf then takes SIGPIPE,
@@ -2151,6 +2164,7 @@ while IFS= read -r wt <&3; do
   if ! reflog_shas=$(worktree_ref_ids "$wt"); then
     keep_stuck "$wt" "cannot read or classify the HEAD reflog, ORIG_HEAD or FETCH_HEAD"; continue
   fi
+  SCAN_REF_IDS=$reflog_shas
   if [ -n "$reflog_shas" ]; then
     # On a proven squash-merged branch, ancestors of the PR head are accounted for too;
     # a commit reset away from that history is not, and still keeps the worktree.
