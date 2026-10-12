@@ -2867,6 +2867,34 @@ SHIM
   rm -rf "$root"
 }
 
+t_unknown_when_a_directory_under_modules_cannot_be_listed() {
+  # A directory that cannot be read matches no pattern and would pass for an empty one,
+  # while it may hold a whole repository. Kept, and not a clean sweep.
+  local name="a directory under modules/ that cannot be listed keeps the worktree and ends the sweep UNKNOWN"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" sublocked || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/sublocked" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  mkdir -p "$admin/modules/hidden/inner" && echo held > "$admin/modules/hidden/inner/work"
+  age_tree "$wt"
+  chmod 000 "$admin/modules/hidden"
+  if ls "$admin/modules/hidden" > /dev/null 2>&1; then
+    chmod 755 "$admin/modules/hidden"; bad "$name" "FIXTURE: chmod 000 did not revoke reading (root?)"; rm -rf "$root"; return
+  fi
+  local out rc; out=$(run_salvage "$root" apply 1); rc=$?
+  chmod 755 "$admin/modules/hidden"
+  if [ "$rc" -eq 2 ] && grep -q 'KEEP .*sublocked ' <<<"$out" && ! grep -q 'SALVAGED .*sublocked' <<<"$out" \
+     && grep -q 'UNKNOWN — could not read a submodule repository or its remote' <<<"$out" \
+     && [ -d "$wt" ] && [ -f "$admin/modules/hidden/inner/work" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -5415,6 +5443,7 @@ t_salvage_keeps_a_submodule_commit_only_a_malformed_reflog_line_names
 t_salvage_keeps_a_branch_namespace_that_looks_like_a_repository
 t_salvage_dry_run_counts_the_submodule_files_it_would_keep
 t_salvage_keeps_a_submodule_file_changed_and_changed_back_around_its_capture
+t_unknown_when_a_directory_under_modules_cannot_be_listed
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read

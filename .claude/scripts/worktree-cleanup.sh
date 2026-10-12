@@ -1153,8 +1153,12 @@ salvage_pathspec() {
 # for it: both its directory and its newest work (see work_age_h).
 salvage_eligible() {
   [ "$SALVAGE_AGE_HOURS" -gt 0 ] && [ "$1" -ge "$SALVAGE_AGE_HOURS" ] || return 1
-  local work
-  work=$(work_age_h "$2") || return 1
+  local work rc
+  work=$(work_age_h "$2"); rc=$?
+  # work_age_h runs in a subshell, so its "could not list the submodule repositories" comes
+  # back as status 2 and the sweep is marked here: kept, but not examined.
+  [ "$rc" -ne 2 ] || REMOTE_MODULE_FAILED=1
+  [ "$rc" -eq 0 ] || return 1
   [ "$work" -ge "$SALVAGE_AGE_HOURS" ]
 }
 
@@ -1227,7 +1231,8 @@ work_age_h() {
   if [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ]; then
     list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
     if ! module_state_files "$admin/modules" > "$list"; then
-      rm -f "$list"; return 1
+      # 2, not 1: the submodule repositories could not be listed, which the caller reports.
+      rm -f "$list"; return 2
     fi
     while IFS= read -r -d '' p; do
       m=$(file_changed "$p") || { unreadable=1; break; }
@@ -1435,6 +1440,11 @@ module_origin_url() { git config --file "$1/config" --get remote.origin.url 2>/d
 #     deployment already reads.
 module_origin_portfolio() { [ -n "$(portfolio_repo "$(module_origin_url "$1" || true)")" ]; }
 
+# dir_listable <dir> — exit 0 only when the directory's entries can be read. A glob over a
+# directory that cannot be read matches nothing and says nothing: the loop over it runs no
+# times, exactly as for an empty directory. Every walk below asks this first.
+dir_listable() { [ -d "$1" ] && ls -A "$1" > /dev/null 2>&1; }
+
 # module_state_files <modules-dir> -> prints, NUL-terminated, every file under a modules/
 # directory that is not inside a repository's object store. Repositories are found the way
 # module_tree_pristine finds them, from the top down: a directory holding a HEAD or an
@@ -1445,12 +1455,14 @@ module_origin_portfolio() { [ -n "$(portfolio_repo "$(module_origin_url "$1" || 
 # like any other ref. Non-zero when something cannot be listed.
 module_state_files() {
   local dir=$1 entry sub
+  dir_listable "$dir" || return 1
   for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     if [ -L "$entry" ] || [ ! -d "$entry" ]; then
       [ -f "$entry" ] && [ ! -L "$entry" ] && printf '%s\0' "$entry"
       continue
     fi
+    dir_listable "$entry" || return 1
     if [ -e "$entry/HEAD" ] || [ -L "$entry/HEAD" ] || [ -e "$entry/objects" ] || [ -L "$entry/objects" ]; then
       for sub in "$entry"/* "$entry"/.[!.]* "$entry"/..?*; do
         [ -e "$sub" ] || [ -L "$sub" ] || continue
@@ -1807,6 +1819,12 @@ module_repository_pristine() {
   local g=$1 wt_real=$2 entry name co out ids rc line
   MODULE_NOTE=""
   MODULE_LOG_IDS=""
+  dir_listable "$g" || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="it cannot be listed"; return 1; }
+  for name in hooks info branches; do
+    if [ -e "$g/$name" ] && [ ! -L "$g/$name" ] && [ -d "$g/$name" ] && ! dir_listable "$g/$name"; then
+      REMOTE_MODULE_FAILED=1; MODULE_NOTE="its $name cannot be listed"; return 1
+    fi
+  done
   # 1. Every entry of the repository directory is one git itself writes into a clone, and
   #    of the kind git writes. An operation in progress, a bisect log, a per-repository
   #    worktree, a split index and anything else unlisted is state nothing here inspects.
@@ -2016,6 +2034,7 @@ module_repository_pristine() {
 # not itself a repository is walked; any other entry there is content nothing classifies.
 module_tree_pristine() {
   local dir=$1 wt_real=$2 admin=$3 entry label
+  dir_listable "$dir" || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="${dir#"$admin"/} cannot be listed"; return 1; }
   for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     label=${entry#"$admin"/}
