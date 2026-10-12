@@ -1789,21 +1789,36 @@ checkout_matches_index() {
 }
 
 # module_checkout <git-dir> <worktree-realpath> -> sets MODULE_CHECKOUT to the physical path
-# of the repository's checkout; non-zero unless that checkout is a directory inside the
-# worktree whose .git is a plain file naming exactly this repository. A repository checked
-# out elsewhere, or not at all, holds an index nothing here can compare with a working tree.
+# of the repository's checkout. Exit 1 when the repository has no checkout that is a
+# directory inside the worktree whose .git is a plain file naming exactly this repository:
+# one checked out elsewhere, or not at all, holds an index nothing here can compare with a
+# working tree. Exit 2 when that could not be established because something that exists
+# could not be read; the caller reports that as unread, not as "no checkout".
 MODULE_CHECKOUT=""
 module_checkout() {
-  local g=$1 wt_real=$2 rel co back g_real
+  local g=$1 wt_real=$2 rel="" co back g_real f rc
   MODULE_CHECKOUT=""
-  rel=$(git --git-dir="$g" config --get core.worktree 2>/dev/null) && [ -n "$rel" ] || return 1
+  # Read from the files themselves: `git config` on the repository changes into its work
+  # tree first and fails outright when that is gone, which is the ordinary "no checkout".
+  # `config --get` answers 1 for a key that is not set and anything else for a failed read.
+  for f in "$g/config.worktree" "$g/config"; do
+    [ -e "$f" ] || continue
+    rel=$(git config --file "$f" --get core.worktree 2>/dev/null); rc=$?
+    case "$rc" in 0) [ -z "$rel" ] || break ;; 1) rel="" ;; *) return 2 ;; esac
+  done
+  [ -n "$rel" ] || return 1
   case "$rel" in /*) co=$rel ;; *) co="$g/$rel" ;; esac
-  co=$(physical_path "$co") || return 1
+  if [ ! -e "$co" ] && [ ! -L "$co" ]; then return 1; fi
+  # Something that is there but is no directory (the submodule replaced by a file) is not a
+  # checkout either.
+  [ -d "$co" ] || return 1
+  co=$(physical_path "$co") || return 2
   case "$co/" in "$wt_real"/?*) ;; *) return 1 ;; esac
+  if [ ! -e "$co/.git" ] && [ ! -L "$co/.git" ]; then return 1; fi
   [ -f "$co/.git" ] && [ ! -L "$co/.git" ] || return 1
-  back=$(git -C "$co" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$back" ] || return 1
-  back=$(physical_path "$back") || return 1
-  g_real=$(physical_path "$g") || return 1
+  back=$(git -C "$co" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$back" ] || return 2
+  back=$(physical_path "$back") || return 2
+  g_real=$(physical_path "$g") || return 2
   [ "$back" = "$g_real" ] || return 1
   MODULE_CHECKOUT=$co
 }
@@ -1884,7 +1899,12 @@ module_repository_pristine() {
   # 4. It is checked out inside this worktree, and that checkout holds no change: none
   #    status reports, none an index flag hides, none a filter or conversion hides, and no
   #    resolve-undo stage (which is in no tree).
-  module_checkout "$g" "$wt_real" || { MODULE_NOTE="it has no checkout inside the worktree"; return 1; }
+  module_checkout "$g" "$wt_real"; rc=$?
+  case "$rc" in
+    0) ;;
+    1) MODULE_NOTE="it has no checkout inside the worktree"; return 1 ;;
+    *) REMOTE_MODULE_FAILED=1; MODULE_NOTE="its checkout cannot be resolved"; return 1 ;;
+  esac
   co=$MODULE_CHECKOUT
   out=$(git -C "$co" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
     || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its checkout's status cannot be read"; return 1; }
