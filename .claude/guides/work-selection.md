@@ -503,9 +503,12 @@ Do not move active work upstream to manufacture capacity. Limits are ceilings, n
 
 **A Ready card that carries a resume condition is started work waiting for its next check, not new
 work** (monorepo#4109; the [board guide](issues-and-board.md#every-issue-belongs-on-the-board)
-defines the return from Verifying). Before admitting one, read its latest return note and compare
-the resume date or event with live state. If the condition is not met, leave the card in Ready
-and select something else: it is neither actionable nor a reason to stop. If it is met, the check
+defines the return from Verifying). The condition is the issue body's `**Measure on:**` date (skip
+clause (d)) or its `outcome` or `upstream` blocker record (skip clause (b)); a card whose wait is
+written only in a comment is under-specified, so repair the record before skipping it. Before
+admitting one, compare the date or event with live state, exactly as those clauses require. If
+the condition is not met, leave the card in Ready and select something else: it is neither
+actionable nor a reason to stop. If it is met, the check
 is due verification under rung 1: confirm Verifying has room, move the card there, then run the
 check and record expected against actual. Never open a second implementation for it, and never
 close it or tick a criterion because the card moved or the date passed.

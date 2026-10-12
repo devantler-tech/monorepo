@@ -214,8 +214,8 @@ Until that is solved, backfill is a standing duty, not an exception.
   overwritten or leave finished work looking pending. When the outcome cannot be known at merge, the
   PR also carries `Part of #experiment`; **that experiment/Kata issue stays open, and it is the one
   that goes to 📊 Verifying** once its check can be run, and becomes ✅ Done with the decision
-  recorded. **While it waits for a release, an activation or its measurement date it sits in
-  🫴 Ready with a resume condition** — Verifying holds only checks that can be run now (limit 3,
+  recorded. **While it waits for its measurement date, or for an event this lane cannot trigger, it sits
+  in 🫴 Ready with a recorded resume condition** — Verifying holds only checks that can be run now (limit 3,
   maintainer direction 2026-10-10, monorepo#4109; the
   [board guide](../../../guides/issues-and-board.md#every-issue-belongs-on-the-board) has the rule). If a change has no separate experiment issue but still needs a post-merge check, keep the
   delivery issue **open** (drop `Fixes`, use `Part of`) rather than closing it and reopening it. **This also makes
@@ -248,7 +248,8 @@ Until that is solved, backfill is a standing duty, not an exception.
      reliable than docs, which do not enumerate project-field qualifiers.
 - **Status semantics.** Options run **✅ Done → 📊 Verifying → 🚀 Ready to Merge → 👀 In Review →
   🏃🏻‍♂️ In Progress → 🫴 Ready → 📥 Backlog → 🧊 Icebox**, and the **merge is the boundary** between
-  *Ready to Merge* (pre-merge, mechanical) and *Verifying* (post-merge, evidential). The order is
+  pre-merge work (*Ready to Merge*, mechanical) and post-merge evidence work: *Verifying* while
+  the next check can be run now, *Ready* with a recorded resume condition while it cannot. The order is
   **deliberately reversed** — finishing work sits leftmost, so the board reads *stop starting, start
   finishing* (maintainer direction 2026-07-18). **Never re-order it into left-to-right flow.** Column
   **limits** encode the same WIP discipline; treat an over-limit column as a signal to finish, never as

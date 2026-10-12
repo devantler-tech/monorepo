@@ -186,7 +186,7 @@ ladder mirrors the agent's actual lifecycle, so every state answers "what's next
 | Status | Entry condition | What's next |
 |---|---|---|
 | **✅ Done** | Acceptance criteria validated, outcome decided | — |
-| **📊 Verifying** | **Merged**, and a post-merge check can be run **now** (the release is out, the measurement date has arrived) | Verify it actually works E2E; measure a Kata's signal; then decide. If the check stalls, return the card to Ready (see below) |
+| **📊 Verifying** | **Merged**, and a post-merge check can be run **now** (the release is out, the measurement date has arrived) | Verify it actually works E2E; measure a Kata's signal; then decide. If only a wait this lane cannot end remains, return the card to Ready (see below) |
 | **🚀 Ready to Merge** | Green review at head, all checks green, nothing unresolved | Self-promote and merge |
 | **👀 In Review** | PR open, CI green, review requested | Fix findings, re-request, re-secure green at the new head |
 | **🏃🏻‍♂️ In Progress** | Refined work pulled within downstream capacity; actual first-start evidenced | Finish the implementation, get CI green |
@@ -194,20 +194,27 @@ ladder mirrors the agent's actual lifecycle, so every state answers "what's next
 | **📥 Backlog** | Captured and triaged, not yet refined | Refine, or decompose if it is an Epic |
 | **🧊 Icebox** | Parked | Revisit at triage |
 
-**The merge is the boundary** between *Ready to Merge* (pre-merge, mechanical) and *Verifying*
-(post-merge, evidential) — shipped is not the same as decided.
+**The merge is the boundary** between pre-merge work (*Ready to Merge*, mechanical) and post-merge
+evidence work — shipped is not the same as decided. Which column an open, merged issue sits in
+depends on whether its next check can be run: *Verifying* when it can, *Ready* with a recorded
+resume condition when it cannot.
 
 **Verifying is an active, bounded check lane, never a waiting room** (maintainer direction
-2026-10-10, monorepo#4109). A card belongs there only while its next check can be run now. When
-merged work still waits on a release, an activation, a measurement date or any other event, or a
-check in progress stalls, the open issue goes back to **🫴 Ready**, even when Verifying is under
-its ceiling, with one comment that states the verified obstacle, the **resume condition** (a date
-or a named event) and the next action. The move changes nothing else: acceptance criteria,
+2026-10-10, monorepo#4109). A card belongs there only while its next check can be run now, and
+anything this lane can still do keeps it there as rung-1 work: trigger the release or the
+activation, repair a failing probe, take the measurement. Only a wait nobody in the lane can end
+moves a card: a measurement date that has not arrived, or an event that happens on its own
+schedule or needs another tracked item to move first. That open issue goes to **🫴 Ready**, even
+when Verifying is under its ceiling, and its **resume condition** is recorded in the form the
+[work-selection guide](work-selection.md) already reads, never in prose alone: a date as the
+`**Measure on:** YYYY-MM-DD` line in the issue body, an event as a `**Blocker:**` record of kind
+`outcome` (or `upstream` when a tracked item must move first) with the `blocked` label. One
+comment states the verified obstacle and the next action. The move changes nothing else: acceptance criteria,
 evidence, the `**Delivered on:**` and `**Measure on:**` lines, the First started value,
 dependencies, blockers and Priority all stay as they were. It is a queued continuation of started
 work, so it is not a new implementation, it does not mean the outcome passed, and it waives no
 review, security or deployment gate. Move the card back to Verifying when the resume condition is
-met and the column has room; if the check stalls again, return it again. Never mark a card Done
+met and the column has room; if it can only wait again, return it again. Never mark a card Done
 because it moved.
 
 The **reversed order is deliberate**:
@@ -241,7 +248,7 @@ during the current backlog cleanup; this does not waive any other ceiling. Count
 issue cards for the Kanban view, including parked unfinished work. Reconcile active work absent
 from or misplaced on the board before permitting a start; board occupancy alone is not full WIP.
 Do not fill columns to their limits or hide WIP by moving started work upstream; the one
-exception is a stalled post-merge check, which returns from Verifying to Ready as described
+exception is a post-merge check that can only wait, which returns from Verifying to Ready as described
 above and still counts as started work. A saturated active
 stage stops new implementation and redirects effort toward finishing/unblocking it.
 Selection freshness is **15 minutes** (`maxAgeSeconds=900`), measured from the oldest required observation,
