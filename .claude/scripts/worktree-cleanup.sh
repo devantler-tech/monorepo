@@ -877,6 +877,11 @@ recheck_mutable_gates() {
     # checks above compare, and the removal would delete it. The
     # configuration that decides whether status can see an edit (conversion_blocker) can
     # change after the snapshot too, and then every comparison above is blind to the edit.
+    local now_fp
+    if ! now_fp=$(modules_fingerprint "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)") \
+       || [ "$now_fp" != "$SALVAGE_MODULES_FP" ]; then
+      keep "$wt" "a submodule repository changed after the salvage snapshot ($SALVAGE_REF)"; return 1
+    fi
     # This is the last look before the removal, so each submodule's remote is asked again
     # rather than answered from what an earlier worktree in this sweep was told. What is
     # left is the time between this read and the removal itself.
@@ -1380,28 +1385,40 @@ resolve_undo_tree() {
 # stash, an expired reflog entry). Nor are the bytes of the description file and of the
 # hook samples, which git never runs or reads back.
 
-# module_origin_survives <git-dir> <worktree-realpath> <admin> — exit 0 when the repository's
-# origin is a copy the removal cannot delete: a network URL, or an absolute local path (or
-# file:// URL) to an existing directory that lies outside both the worktree and its admin
-# directory. An origin inside either would vouch for the very repository being removed, and
-# a relative path resolves against wherever the sweep happens to run. Anything else,
-# including a transport that is none of these, is refused.
-module_origin_survives() {
-  local g=$1 wt_real=$2 admin=$3 url path admin_real
-  url=$(module_git "$g" remote get-url origin 2>/dev/null) && [ -n "$url" ] || return 1
-  case "$url" in
-    https://*|ssh://*|git://*) return 0 ;;
-    file://*) path=${url#file://} ;;
-    /*) path=$url ;;
-    # scp-like `user@host:path`: a host part with no slash before the colon.
-    *@*:*) case "${url%%:*}" in */*) return 1 ;; *) return 0 ;; esac ;;
-    *) return 1 ;;
-  esac
-  case "$path" in /*) ;; *) return 1 ;; esac
-  path=$(physical_path "$path") || return 1
-  admin_real=$(physical_path "$admin") || return 1
-  case "$path/" in "$wt_real"/*|"$admin_real"/*) return 1 ;; esac
-  return 0
+# module_origin_url <git-dir> -> prints the origin URL exactly as the repository's own
+# config file records it. Not `git remote get-url`, which answers after the host's URL
+# rewrites: the question here is what the repository names, and its config file is the one
+# place whose keys are held to a whitelist.
+module_origin_url() { git config --file "$1/config" --get remote.origin.url 2>/dev/null; }
+
+# module_origin_portfolio <git-dir> — exit 0 only when the repository's origin is a
+# devantler-tech repository on GitHub (portfolio_repo). Nothing else is asked or accepted:
+#   - a local path can be another view of the repository being removed (a checkout whose
+#     .git points back here, an object store borrowed from here), so what it advertises
+#     proves no second copy exists;
+#   - the URL comes from repository content (.gitmodules), and an unattended sweep must not
+#     let content choose where it connects. A portfolio origin is a destination this
+#     deployment already reads.
+module_origin_portfolio() { [ -n "$(portfolio_repo "$(module_origin_url "$1" || true)")" ]; }
+
+# modules_fingerprint <admin> -> prints one id for the bytes and names of every file under
+# the admin directory's modules/ outside the object stores (empty when there is none).
+# Taken before the snapshot and compared immediately before the removal: a branch created,
+# a setting changed or another commit checked out in a submodule after the snapshot leaves
+# the parent's tree and index exactly as snapshotted, and can leave the repository
+# pristine too. Non-zero on any read failure.
+modules_fingerprint() {
+  local admin=$1 names
+  if [ ! -e "$admin/modules" ] && [ ! -L "$admin/modules" ]; then return 0; fi
+  [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ] || return 1
+  names=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-modules.XXXXXX") || return 1
+  if ! find "$admin/modules" -name objects -prune -o -type f -print0 2>/dev/null | LC_ALL=C sort -z > "$names"; then
+    rm -f "$names"; return 1
+  fi
+  if ! { cat "$names" && xargs -0 cat < "$names"; } 2>/dev/null | git hash-object --stdin 2>/dev/null; then
+    rm -f "$names"; return 1
+  fi
+  rm -f "$names"
 }
 
 # module_remote_rows <git-dir> -> sets MODULE_REMOTE_ROWS to what the repository's origin
@@ -1418,7 +1435,7 @@ REMOTE_MODULE_FAILED=0
 module_remote_rows() {
   local g=$1 url rows i=0
   MODULE_REMOTE_ROWS=""
-  url=$(module_git "$g" remote get-url origin 2>/dev/null) && [ -n "$url" ] || return 1
+  url=$(module_origin_url "$g") && [ -n "$url" ] || return 1
   while [ "$i" -lt "${#MODULE_REMOTE_URLS[@]}" ]; do
     if [ "${MODULE_REMOTE_URLS[$i]}" = "$url" ]; then
       # The check that immediately precedes a removal asks again (MODULE_REMOTE_FRESH): a
@@ -1529,7 +1546,7 @@ module_descends() {
 #     that was merged and deleted. GitHub keeps that ref after the branch is gone.
 module_tip_behind_remote() {
   local g=$1 tip=$2 repo names name adv rc unknown=0 rows number head
-  repo=$(portfolio_repo "$(module_git "$g" remote get-url origin 2>/dev/null || true)")
+  repo=$(portfolio_repo "$(module_origin_url "$g" || true)")
   [ -n "$repo" ] || return 1
   [ -n "$GH_BIN" ] || return 2
   names=$(module_git "$g" for-each-ref --contains "$tip" --format='%(refname)' refs/remotes/origin 2>/dev/null) || return 2
@@ -1740,7 +1757,7 @@ module_repository_pristine() {
   module_commit_editmsg_spent "$g" || { MODULE_NOTE="its COMMIT_EDITMSG is not the message of a commit it made"; return 1; }
   # 8. Every commit a ref or reflog reaches, and every tag, is held by the remote as it
   #    answers now (module_held_by_remote).
-  module_origin_survives "$g" "$wt_real" "$3" || { MODULE_NOTE="its origin is not a copy that outlives the worktree"; return 1; }
+  module_origin_portfolio "$g" || { MODULE_NOTE="its origin is not a portfolio repository on GitHub"; return 1; }
   module_remote_rows "$g"; rc=$?
   case "$rc" in
     0) ;;
@@ -2447,6 +2464,7 @@ while IFS= read -r wt <&3; do
   salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_RESOLVE_UNDO=""; SALVAGE_NOTE=""
   RESOLVE_UNDO_SAVED=0; RESOLVE_UNDO_REF=""
   SCAN_REF_IDS=""
+  SALVAGE_MODULES_FP=""
   REMOTE_CLEARED=""
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
@@ -2760,6 +2778,11 @@ while IFS= read -r wt <&3; do
     if ! still_the_reviewed_worktree "$wt" "$branch" "$sha" "$merged_head"; then
       worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
       keep "$wt" "$IDENTITY_NOTE"; continue
+    fi
+    # Before the blockers look, so a change they then see as harmless still shows below.
+    if ! SALVAGE_MODULES_FP=$(modules_fingerprint "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)"); then
+      worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+      keep_stuck "$wt" "$salvage_reason; not salvaged: cannot read its submodule repositories"; continue
     fi
     # Re-apply the salvage blockers under the mutex: the first check ran before the lock,
     # so data written since then (a large file, a new submodule commit) would otherwise be

@@ -1610,7 +1610,29 @@ t_keeps_merged_branch_with_orphaned_reflog_commit() {
 
 # --- salvage (#2831) ------------------------------------------------------------------
 run_salvage() { # <root> <mode> <salvage_age_hours> -> stdout
-  "$SUT" "$1/repo" "$1/manifest.tsv" "$2" 24 "$3" 2>&1
+  # A fixture made by portfolio_origin brings a host git config and a gh shim of its own.
+  local p=$PATH
+  [ -d "$1/ghshim" ] && p="$1/ghshim:$p"
+  if [ -f "$1/gitconfig" ]; then
+    GIT_CONFIG_GLOBAL="$1/gitconfig" PATH=$p "$SUT" "$1/repo" "$1/manifest.tsv" "$2" 24 "$3" 2>&1
+  else
+    PATH=$p "$SUT" "$1/repo" "$1/manifest.tsv" "$2" 24 "$3" 2>&1
+  fi
+}
+
+# portfolio_origin <root> <worktree> — make the worktree's submodule name a portfolio
+# repository on GitHub as its origin, the only kind the pristine check accepts, while the
+# fixture's host git config (used by run_salvage only) rewrites that URL to the local
+# repository the fixture cloned from. GitHub itself is a shim that answers `diverged` to
+# every question, so a commit origin does not advertise is never cleared by it. Call it
+# after the fixture's own pushes and fetches, which still need the local URL.
+portfolio_origin() {
+  local root=$1 wt=$2
+  git -C "$wt/sub" remote set-url origin https://github.com/devantler-tech/subfix.git || return 1
+  printf '[url "%s"]\n\tinsteadOf = https://github.com/devantler-tech/subfix.git\n[protocol "file"]\n\tallow = always\n' \
+    "$root/subsrc" > "$root/gitconfig" || return 1
+  gh_shim "$root" > /dev/null || return 1
+  echo diverged > "$root/gh-out"
 }
 
 # abandoned_wt <root> <name> — every kind of work salvage must preserve: an unpushed
@@ -2298,6 +2320,7 @@ t_salvage_reaps_beside_a_pristine_submodule() {
     && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t tag -a v1 -m "held by the remote" main \
     && git -C "$wt/sub" fetch -q --tags origin \
     || { bad "$name" "FIXTURE: pushed commit or tag"; rm -rf "$root"; return; }
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   [ -f "$g/COMMIT_EDITMSG" ] || { bad "$name" "FIXTURE: no COMMIT_EDITMSG"; rm -rf "$root"; return; }
   printf '/%s*\n' .claude-worktree-owner >> "$g/info/exclude"   # what worktree-claim.sh appends
   echo draft > "$wt/untracked.txt"
@@ -2327,6 +2350,7 @@ keeps_unpristine() {
   local wt="$root/repo/.claude/worktrees/$wtname" g
   g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
   echo draft > "$wt/untracked.txt"
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   if ! eval "$mutation" >/dev/null 2>&1; then bad "$name" "FIXTURE: mutation"; rm -rf "$root"; return; fi
   age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
@@ -2486,6 +2510,7 @@ t_salvage_keeps_a_submodule_given_a_branch_since_the_salvage_age() {
   local root; root=$(make_repo)
   admin_sub_wt "$root" subbranch || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/subbranch"
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
@@ -2515,6 +2540,7 @@ t_salvage_asks_a_submodule_remote_again_before_the_removal() {
     && echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "pushed from the submodule" \
     && git -C "$wt/sub" push -q origin HEAD:main \
     || { bad "$name" "FIXTURE: pushed commit"; rm -rf "$root"; return; }
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
   shim=$(lsof_hook_shim "$root" 3 "git -C '$root/subsrc' update-ref refs/heads/main $first") \
@@ -2532,16 +2558,18 @@ t_salvage_asks_a_submodule_remote_again_before_the_removal() {
 
 t_salvage_keeps_a_submodule_whose_origin_is_inside_the_worktree() {
   # An origin that is the submodule's own repository advertises everything it holds, and
-  # the removal deletes it. Only a copy that outlives the worktree is evidence.
-  keeps_unpristine "salvage KEEPs a submodule whose origin is a repository the removal deletes" subself \
-    'its origin is not a copy that outlives the worktree' \
+  # the removal deletes it. A local path is never evidence of a second copy.
+  keeps_unpristine "salvage KEEPs a submodule whose origin is a local repository" subself \
+    'its origin is not a portfolio repository on GitHub' \
     'echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "never pushed" && git -C "$wt/sub" remote set-url origin "$g" && git -C "$wt/sub" update-ref refs/remotes/origin/main HEAD'
 }
 
 t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path() {
-  keeps_unpristine "salvage KEEPs a submodule whose origin is a relative path" subrel \
-    'its origin is not a copy that outlives the worktree' \
-    'git -C "$wt/sub" remote set-url origin ../../subsrc'
+  # The URL comes from repository content, and the sweep must not let it choose where to
+  # connect: the remote must never be contacted.
+  keeps_unpristine "salvage KEEPs a submodule whose origin is another host, without contacting it" subrel \
+    'its origin is not a portfolio repository on GitHub' \
+    'git -C "$wt/sub" remote set-url origin https://example.invalid/devantler-tech/subfix.git'
 }
 
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
@@ -2552,6 +2580,7 @@ t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   admin_sub_wt "$root" subfresh || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/subfresh" g
   g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
   touch "$g/index"
@@ -2566,21 +2595,22 @@ t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
 }
 
 t_salvage_keeps_a_submodule_changed_after_the_snapshot() {
-  # State written into the submodule repository after the snapshot changes nothing the
+  # A branch created on a pushed commit after the snapshot leaves the repository pristine and changes nothing the
   # parent's snapshot, status or reflog comparison sees.
   local name="salvage KEEPs a worktree whose submodule repository changed after the snapshot"
   local root; root=$(make_repo)
   admin_sub_wt "$root" sublate || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/sublate" shim g
   g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
-  shim=$(lsof_hook_shim "$root" 3 "echo late > '$g/notes.txt'") \
+  shim=$(lsof_hook_shim "$root" 3 "git -C '$wt/sub' branch scratch origin/main") \
     || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
   local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
-  if [ ! -f "$g/notes.txt" ]; then
-    bad "$name" "late file missing: $out"
-  elif grep -q 'KEEP .*sublate .*it holds notes\.txt), after the salvage snapshot' <<<"$out"; then
+  if ! git -C "$wt/sub" rev-parse -q --verify refs/heads/scratch >/dev/null; then
+    bad "$name" "the late branch was never created: $out"
+  elif grep -q 'KEEP .*sublate .*a submodule repository changed after the salvage snapshot' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2596,6 +2626,7 @@ t_unknown_when_a_submodule_remotes_tags_cannot_be_read() {
   local wt="$root/repo/.claude/worktrees/subgone2"
   git -C "$root/subsrc" tag v1 && git -C "$wt/sub" fetch -q --tags origin \
     || { bad "$name" "FIXTURE: tag"; rm -rf "$root"; return; }
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
   mv "$root/subsrc/.git" "$root/subsrc.git.gone"     # the directory stays; it is no longer a repository
@@ -2622,6 +2653,7 @@ t_asks_a_submodule_remote_for_its_tags_once() {
     && git -C "$two" push -q origin claude/subtwo \
     && git -C "$one/sub" fetch -q --tags origin && git -C "$two/sub" fetch -q --tags origin \
     || { bad "$name" "FIXTURE: second worktree"; rm -rf "$root"; return; }
+  portfolio_origin "$root" "$one" && portfolio_origin "$root" "$two" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$one/untracked.txt"; echo draft > "$two/untracked.txt"
   age_tree "$one" "$two"
   local shim="$root/gitshim" real_git; real_git=$(command -v git); mkdir -p "$shim"
@@ -3643,6 +3675,7 @@ t_salvage_keeps_a_submodule_annotated_tag() {
   admin_sub_wt "$root" subtag || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/subtag"
   git -C "$wt/sub" tag -a v-local -m "only here" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
@@ -3926,6 +3959,7 @@ t_salvage_keeps_unclassified_content_under_admin_modules() {
   admin_sub_wt "$root" subpart || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/subpart" admin
   admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
   local out; out=$(run_salvage "$root" dry-run 1)
