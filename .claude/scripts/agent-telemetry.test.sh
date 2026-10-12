@@ -954,6 +954,15 @@ check "an entry the lane does not name is not read" "$OUT" \
 nocheck "a one-entry lane never prints an entries line" "$OUT" "entries:"
 check "a one-entry lane keeps its refusal count" "$OUT" \
   "claude engineer dispatch refusals: 3 slot(s)"
+# An entry's schedule ("*@50") is a glob pattern. A file of a matching name in the
+# working directory must not replace it when the refusal count walks the entries:
+# read through an unquoted expansion, the entry's hours would become "x" and the
+# count 0.
+mkdir -p "$FIX/globdir"
+: > "$FIX/globdir/daily-ai-assistant=x@50"
+OUT=$(cd "$FIX/globdir" && NOBASE --section drift)
+check "a file name matching an entry's schedule does not replace it" "$OUT" \
+  "claude engineer dispatch refusals: 3 slot(s)"
 # Named, the second entry's start is part of the lane's schedule. The table does
 # not describe it yet: DRIFT, with each entry's own schedule printed beside it.
 OUT=$(TWO --section drift)

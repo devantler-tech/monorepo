@@ -5581,7 +5581,11 @@ if want drift; then
       lane_dropped=0
       lane_floor=""
       lane_skip_unread=0
-      for entry_pair in $CLAUDE_ENGINEER_ENTRY_SCHEDULES; do
+      # Split with read, not an unquoted expansion: a schedule such as "*@50" is a
+      # glob pattern, and a matching file name in the working directory would
+      # replace the word.
+      read -r -a lane_entry_pairs <<<"$CLAUDE_ENGINEER_ENTRY_SCHEDULES"
+      for entry_pair in "${lane_entry_pairs[@]}"; do
         entry_id=${entry_pair%%=*}
         entry_schedule=${entry_pair#*=}
         entry_minutes=${entry_schedule##*@}
