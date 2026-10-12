@@ -819,6 +819,14 @@ set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1;BYMINUTE=40,10'
 OUT=$(NOBASE --section drift)
 check "minute order does not read as drift" "$OUT" \
   "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH"
+# The accepted cell spellings: minutes joined by a comma, "and", or both.
+for good_cell in 'Every hour at `:10`, `:40`' 'Every hour at `:40`, and `:10`' 'every hour at :10 and :40'; do
+  set_cadence_cell Codex "$good_cell"
+  OUT=$(NOBASE --section drift)
+  check "cell '$good_cell' reads as two start minutes" "$OUT" \
+    "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH"
+done
+set_cadence_cell Codex 'Every hour at `:10` and `:40`'
 # The second start disappears from the runtime while the table still names it.
 set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1;BYMINUTE=10'
 OUT=$(NOBASE --section drift)
@@ -842,7 +850,10 @@ done
 # NEGATIVE CONTROL: a malformed minute in the TABLE must not be read by its first
 # two digits. `:400` beside a runtime on 10 and 40 would otherwise read MATCH.
 set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1;BYMINUTE=10,40'
-for bad_cell in 'Every hour at `:10` and `:400`' 'Every hour at `:10` and `10:40`' 'Every hour at `:10` and `:60`'; do
+# A cell is read only as a whole, so a fragment no token pattern covers (`:x`, a
+# trailing note) leaves it unreadable too, instead of being skipped unseen.
+for bad_cell in 'Every hour at `:10` and `:400`' 'Every hour at `:10` and `10:40`' 'Every hour at `:10` and `:60`' \
+                'Every hour at `:10`, `:40`, and `:x`' 'Every hour at `:10` and `:40` or so' 'Every hour at `:10` `:40`'; do
   set_cadence_cell Codex "$bad_cell"
   OUT=$(NOBASE --section drift)
   check "cell '$bad_cell' is unreadable" "$OUT" \
@@ -871,7 +882,8 @@ check "listed hours with two start minutes keep the stagger figure" "$OUT" \
   "local simultaneous starts/day: 0"
 # NEGATIVE CONTROLS: starts that are not hours x minutes, and a malformed start,
 # leave the cell unreadable. Neither may be read as its first start alone.
-for bad_cell in '07:00, 19:30' '07:00, 07:30, 19:00' '07:00, 07:300, 19:00, 19:30' '07:00, 24:00'; do
+for bad_cell in '07:00, 19:30' '07:00, 07:30, 19:00' '07:00, 07:300, 19:00, 19:30' '07:00, 24:00' \
+                '07:00, 19:00, xx:30' '07:00 and sometimes 19:00'; do
   set_cadence_cell Codex "$bad_cell" 4
   OUT=$(NOBASE --section drift)
   check "cell '$bad_cell' is unreadable" "$OUT" \

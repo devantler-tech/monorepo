@@ -5003,9 +5003,17 @@ if want drift; then
       # digit on either side (`:400`, `10:40`) is not a minute of every hour, and
       # reading its first two digits would turn a typo into a MATCH, so the whole
       # cell is then unreadable.
+      #
+      # The cell is accepted only as a WHOLE: the phrase, then minutes joined by a
+      # comma or "and", and nothing else. Looking for minute tokens and ignoring
+      # the rest let any fragment the token pattern did not cover (`:x`) pass
+      # unseen, so the reader states what a cell may be instead of what it may not.
       minute=$(printf '%s\n' "$cell" | awk '
         {
           value = $0
+          gsub(/`/, "", value)
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+          if (tolower(value) !~ /^every hour at :[0-9][0-9]?((, and |, | and ):[0-9][0-9]?)*$/) invalid = 1
           while (match(value, /:[0-9][0-9]?/)) {
             if (substr(value, RSTART + RLENGTH, 1) ~ /[0-9]/ ||
                 (RSTART > 1 && substr(value, RSTART - 1, 1) ~ /[0-9]/)) invalid = 1
@@ -5018,9 +5026,13 @@ if want drift; then
       schedule_from_parts "*" "$minute"
       return 0
     fi
+    # Accepted only as a whole as well: start times joined by commas, nothing else.
     parsed=$(printf '%s\n' "$cell" | awk '
       {
         value = $0
+        gsub(/`/, "", value)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        if (value !~ /^[0-9][0-9]?:[0-9][0-9](, ?[0-9][0-9]?:[0-9][0-9])*$/) invalid = 1
         while (match(value, /[0-9][0-9]?:[0-9][0-9]/)) {
           token = substr(value, RSTART, RLENGTH)
           split(token, pair, ":")
