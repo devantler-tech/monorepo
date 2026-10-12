@@ -2335,6 +2335,8 @@ t_salvage_reaps_beside_a_pristine_submodule() {
   portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   [ -f "$g/COMMIT_EDITMSG" ] || { bad "$name" "FIXTURE: no COMMIT_EDITMSG"; rm -rf "$root"; return; }
   printf '/%s*\n' .claude-worktree-owner >> "$g/info/exclude"   # what worktree-claim.sh appends
+  # Written by someone, accepted by name, and so kept by their bytes.
+  echo "my notes" > "$g/description"; echo "# mine" >> "$g/hooks/pre-commit.sample"
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
@@ -2343,7 +2345,9 @@ t_salvage_reaps_beside_a_pristine_submodule() {
   if grep -q '^SALVAGED .*subok ' <<<"$out" && [ ! -e "$wt" ] && [ -n "$base" ] \
      && [ "$(git -C "$root/repo" show "$base/worktree:untracked.txt" 2>/dev/null)" = draft ] \
      && grep -q '^160000 commit' <<<"$link" \
-     && [ "$(cat "$root/probe-env" 2>/dev/null)" = "/dev/null /dev/null" ]; then
+     && [ "$(cat "$root/probe-env" 2>/dev/null)" = "/dev/null /dev/null" ] \
+     && [ "$(git -C "$root/repo" show "$base/module-files:modules/sub/description" 2>/dev/null)" = "my notes" ] \
+     && [ "$(git -C "$root/repo" show "$base/module-files:modules/sub/hooks/pre-commit.sample" 2>/dev/null | tail -1)" = "# mine" ]; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2355,9 +2359,10 @@ t_salvage_reaps_beside_a_pristine_submodule() {
 # tests below: a worktree whose submodule would be pristine, one mutation, and the KEEP must
 # name that mutation's reason. The mutation runs with $wt (the worktree) and $g (the
 # submodule's repository) set. The pristine case above is the control that the same
-# fixture is salvaged without it.
+# fixture is salvaged without it. A fifth argument `no-contact` also requires that neither
+# the remote nor GitHub was asked anything.
 keeps_unpristine() {
-  local name=$1 wtname=$2 reason=$3 mutation=$4
+  local name=$1 wtname=$2 reason=$3 mutation=$4 contact=${5:-}
   local root; root=$(make_repo)
   admin_sub_wt "$root" "$wtname" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/$wtname" g
@@ -2368,7 +2373,8 @@ keeps_unpristine() {
   age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   if grep -Eq "KEEP .*$wtname .*submodule repositories salvage cannot clear \(modules/sub: $reason" <<<"$out" \
-     && [ -d "$wt" ] && [ -d "$g" ] && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+     && [ -d "$wt" ] && [ -d "$g" ] && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ] \
+     && { [ "$contact" != no-contact ] || { [ ! -e "$root/tag-reads" ] && [ ! -e "$root/gh-args" ]; }; }; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2577,12 +2583,18 @@ t_salvage_keeps_a_submodule_whose_origin_is_inside_the_worktree() {
     'echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "never pushed" && git -C "$wt/sub" remote set-url origin "$g" && git -C "$wt/sub" update-ref refs/remotes/origin/main HEAD'
 }
 
-t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path() {
+t_salvage_keeps_a_submodule_whose_origin_is_another_host() {
   # The URL comes from repository content, and the sweep must not let it choose where to
   # connect: the remote must never be contacted.
   keeps_unpristine "salvage KEEPs a submodule whose origin is another host, without contacting it" subrel \
     'its origin is not a portfolio repository on GitHub' \
-    'git -C "$wt/sub" remote set-url origin https://example.invalid/devantler-tech/subfix.git'
+    'git -C "$wt/sub" remote set-url origin https://example.invalid/devantler-tech/subfix.git' no-contact
+}
+
+t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path() {
+  keeps_unpristine "salvage KEEPs a submodule whose origin is a relative path, without reading it" subrelp \
+    'its origin is not a portfolio repository on GitHub' \
+    'git -C "$wt/sub" remote set-url origin ../../subsrc' no-contact
 }
 
 t_salvage_keeps_a_submodule_with_a_stray_file_under_refs() {
@@ -5127,6 +5139,7 @@ t_salvage_asks_github_about_a_submodule_commit_in_a_merged_pull_request
 t_salvage_keeps_a_submodule_given_a_branch_since_the_salvage_age
 t_salvage_asks_a_submodule_remote_again_before_the_removal
 t_salvage_keeps_a_submodule_whose_origin_is_inside_the_worktree
+t_salvage_keeps_a_submodule_whose_origin_is_another_host
 t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path
 t_salvage_keeps_a_submodule_with_a_stray_file_under_refs
 t_salvage_keeps_a_submodule_used_since_the_salvage_age

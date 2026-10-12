@@ -73,6 +73,9 @@
 #   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog, ORIG_HEAD or FETCH_HEAD commit reachable from no remote
 #   refs/salvaged/<id>/commit-editmsg - the COMMIT_EDITMSG bytes, when present (a message a hook rejected)
 #   refs/salvaged/<id>/config-worktree - the config.worktree bytes, when present (per-worktree settings)
+#   refs/salvaged/<id>/module-files - a tree of each submodule repository's description and hook
+#                                   samples, when the worktree holds submodules, at
+#                                   modules/<path>/description and modules/<path>/hooks/<name>.sample
 #   refs/salvaged/<id>/resolve-undo - a tree of the index's resolve-undo stages, when present, as
 #                                   `stage<N>/<path>` (1 base, 2 ours, 3 theirs). Git has no
 #                                   command that writes them back into an index; read a stage
@@ -1382,8 +1385,8 @@ resolve_undo_tree() {
 # keeps the worktree.
 # Not compared, and lost with the removal as they are for the worktree's own repository:
 # files the checkout ignores, and objects no ref, reflog or pseudo-ref names (a dropped
-# stash, an expired reflog entry). Nor are the bytes of the description file and of the
-# hook samples, which git never runs or reads back.
+# stash, an expired reflog entry). The description file and the hook samples are accepted by
+# name and kept by their bytes (module_files_tree).
 
 # module_origin_url <git-dir> -> prints the origin URL exactly as the repository's own
 # config file records it. Not `git remote get-url`, which answers after the host's URL
@@ -2262,6 +2265,42 @@ salvage_namespace() {
     || { SALVAGE_NOTE="unusable salvage ref name $SALVAGE_BASE"; SALVAGE_BASE=""; return 1; }
 }
 
+# module_files_tree <worktree> -> sets MODULE_FILES_TREE to a tree holding, for every
+# submodule repository under the admin directory's modules/, its description and its hook
+# samples, at their paths under the admin directory (modules/<path>/description,
+# modules/<path>/hooks/<name>.sample); or to nothing when there is none. The pristine check
+# accepts those files by name: git never runs or reads them back, but someone can have
+# written in one, and git's own samples differ from version to version, so there is no
+# known content to compare with. Their bytes are kept instead (#2831). Built in a
+# temporary index in the repository that outlives the worktree. Non-zero on any failure.
+MODULE_FILES_TREE=""
+module_files_tree() {
+  local wt=$1 admin dir f rel blob mode tree
+  MODULE_FILES_TREE=""
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
+  if [ ! -d "$admin/modules" ] || [ -L "$admin/modules" ]; then return 0; fi
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/wt-salvage-module-files.XXXXXX") || return 1
+  if ! find "$admin/modules" -type f \( -name description -o -path '*/hooks/*.sample' \) -print0 \
+         > "$dir/list" 2>/dev/null; then
+    rm -rf "$dir"; return 1
+  fi
+  : > "$dir/entries" || { rm -rf "$dir"; return 1; }
+  while IFS= read -r -d '' f; do
+    rel=${f#"$admin"/}
+    blob=$(git -C "$TOPLEVEL" hash-object -w --no-filters -- "$f" 2>/dev/null) && [ -n "$blob" ] \
+      || { rm -rf "$dir"; return 1; }
+    mode=100644; [ -x "$f" ] && mode=100755
+    printf '%s %s\t%s\0' "$mode" "$blob" "$rel" >> "$dir/entries" || { rm -rf "$dir"; return 1; }
+  done < "$dir/list"
+  if [ ! -s "$dir/entries" ]; then rm -rf "$dir"; return 0; fi
+  if ! GIT_INDEX_FILE="$dir/index" git -C "$TOPLEVEL" update-index -z --index-info < "$dir/entries" 2>/dev/null \
+     || ! tree=$(GIT_INDEX_FILE="$dir/index" git -C "$TOPLEVEL" write-tree 2>/dev/null) || [ -z "$tree" ]; then
+    rm -rf "$dir"; return 1
+  fi
+  rm -rf "$dir"
+  MODULE_FILES_TREE=$tree
+}
+
 # resolve_undo_ref_write <base> <tree> -> writes and verifies <base>/resolve-undo.
 resolve_undo_ref_write() {
   git -C "$TOPLEVEL" update-ref "$1/resolve-undo" "$2" "" 2>/dev/null \
@@ -2317,7 +2356,14 @@ salvage_write() {
   if [ -n "$reuc_tree" ]; then
     reuc_kb=$(tree_kb "$wt" "$reuc_tree") || { SALVAGE_NOTE="cannot size the index's resolve-undo entries"; return 1; }
   fi
-  captured_kb=$((captured_kb + admin_kb + reuc_kb))
+  # The submodule repositories' description and hook-sample files, kept by their bytes.
+  local mod_tree mod_kb=0
+  module_files_tree "$wt" || { SALVAGE_NOTE="cannot preserve the submodule repositories' description and hook samples"; return 1; }
+  mod_tree=$MODULE_FILES_TREE
+  if [ -n "$mod_tree" ]; then
+    mod_kb=$(tree_kb "$wt" "$mod_tree") || { SALVAGE_NOTE="cannot size the submodule repositories' description and hook samples"; return 1; }
+  fi
+  captured_kb=$((captured_kb + admin_kb + reuc_kb + mod_kb))
   if [ "$captured_kb" -gt "$SALVAGE_MAX_KB" ]; then
     SALVAGE_NOTE="the snapshot holds more than ${SALVAGE_MAX_KB} KB of changed data"; return 1
   fi
@@ -2356,6 +2402,11 @@ salvage_write() {
   if [ -n "$reuc_tree" ]; then
     resolve_undo_ref_write "$base" "$reuc_tree" \
       || { SALVAGE_NOTE="cannot write or verify $base/resolve-undo"; return 1; }
+  fi
+  if [ -n "$mod_tree" ]; then
+    git -C "$TOPLEVEL" update-ref "$base/module-files" "$mod_tree" "" 2>/dev/null \
+      && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/module-files" 2>/dev/null)" = "$mod_tree" ] \
+      || { SALVAGE_NOTE="cannot write or verify $base/module-files"; return 1; }
   fi
   SALVAGE_RESOLVE_UNDO=$reuc_tree
   SALVAGE_REF=$base; SALVAGE_TREE=$wt_tree; SALVAGE_INDEX_TREE=$idx_tree; SALVAGE_ADMIN_BLOBS=$kept
