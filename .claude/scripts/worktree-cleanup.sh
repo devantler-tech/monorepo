@@ -3014,6 +3014,8 @@ while IFS= read -r wt <&3; do
     # Before the blockers look, so a change they then see as harmless still shows below.
     if ! SALVAGE_MODULES_FP=$(modules_fingerprint "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)"); then
       worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+      # Not examined, so not a clean sweep either.
+      REMOTE_MODULE_FAILED=1
       keep_stuck "$wt" "$salvage_reason; not salvaged: cannot read its submodule repositories"; continue
     fi
     # Re-apply the salvage blockers under the mutex: the first check ran before the lock,
