@@ -9617,6 +9617,40 @@ printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{
 dhrec_tail "$FIX/dhrec-inside/s.jsonl"
 OUT=$(dhrec_run "$FIX/dhrec-inside")
 check   "dispatch record: a record inside a reminder is not a dispatch" "$OUT" 'no dispatch record .......................: 1 '
+
+# ── Review round 1 on the entry set: three places that printed a clean claim ──
+# (a) An entry whose only run cannot be placed in time is UNKNOWN for that
+#     entry. It is not "no dispatch": the run may be inside the window.
+mkdir -p "$FIX/dh-set-undated" "$FIX/dh-set-empty" "$FIX/dhrec-indent"
+dhset_live daily-ai-assistant 10 "$FIX/dh-set-undated/a.jsonl"
+dispatch_rec agentic-engineer-2 2026-08-01T11:59:50.000Z > "$FIX/dh-set-undated/u.jsonl"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"u1","name":"Bash","input":{"command":"echo hi"}}]}}' >> "$FIX/dh-set-undated/u.jsonl"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}]}}' >> "$FIX/dh-set-undated/u.jsonl"
+OUT=$(dhset_run "$FIX/dh-set-undated" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2)
+check   "dispatch set: an undated entry is UNKNOWN by name"     "$OUT" 'entry "agentic-engineer-2": UNKNOWN'
+nocheck "dispatch set: an undated entry is not called silent"   "$OUT" 'entry "agentic-engineer-2" has no dispatch inside this window'
+check   "dispatch set: the undated run is still counted undated" "$OUT" 'same role, no usable record timestamp ....: 1 '
+# Control: with no undated run the same entry IS named silent (dh-set-one above).
+# (b) An unreadable list is exit 2, and it is read before the empty-corpus
+#     shortcut, so "no sessions" is never the answer to a malformed list.
+dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES='daily-ai-assistant,Bad' >/dev/null; rc=$?
+if [ "$rc" -eq 2 ]; then ok "dispatch set: an unreadable list exits 2"; else bad "dispatch set: an unreadable list exits 2" "exit $rc"; fi
+OUT=$(dhset_run "$FIX/dh-set-empty" CLAUDE_ENGINEER_ENTRIES='daily-ai-assistant,Bad'); rc=$?
+check   "dispatch set: an unreadable list is UNKNOWN on an empty corpus" "$OUT" 'UNKNOWN: dispatch role list is unreadable'
+nocheck "dispatch set: an unreadable list is never 'no sessions'"        "$OUT" '(no claude sessions in window)'
+if [ "$rc" -eq 2 ]; then ok "dispatch set: an unreadable list exits 2 on an empty corpus"; else bad "dispatch set: an unreadable list exits 2 on an empty corpus" "exit $rc"; fi
+dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2 >/dev/null; rc=$?
+if [ "$rc" -eq 0 ]; then ok "dispatch set: a readable list still exits 0"; else bad "dispatch set: a readable list still exits 0" "exit $rc"; fi
+OUT=$(dhset_run "$FIX/dh-set-empty"); rc=$?
+check   "dispatch set: an empty corpus with the default list reads as before" "$OUT" '(no claude sessions in window)'
+if [ "$rc" -eq 0 ]; then ok "dispatch set: an empty corpus with the default list exits 0"; else bad "dispatch set: an empty corpus with the default list exits 0" "exit $rc"; fi
+# (c) Leading blank space is skipped only together with a reminder block. An
+#     indented record with no block before it is a quoted example.
+printf '%s\n' '{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":"  <scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}}' > "$FIX/dhrec-indent/s.jsonl"
+dhrec_tail "$FIX/dhrec-indent/s.jsonl"
+OUT=$(dhrec_run "$FIX/dhrec-indent")
+check   "dispatch record: an indented record with no reminder is a quote" "$OUT" 'no dispatch record .......................: 1 '
+check   "dispatch record: an indented quote selects no role"              "$OUT" 'IN WINDOW BY RECORD: 0 '
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

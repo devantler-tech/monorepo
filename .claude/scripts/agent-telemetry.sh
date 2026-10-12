@@ -2461,14 +2461,17 @@ if want dispatch; then
     # An unbounded count is indistinguishable from a bounded one by inspection,
     # and this section's numbers are read as denominator instructions.
     echo "  UNKNOWN: cannot compute window start (no usable \`date\`) — refusing to score."
-  elif [ "$SF_COUNT" -eq 0 ]; then
-    echo "  (no claude sessions in window)"
   elif ! DH_ROLE_IDS=$(entry_id_list "${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}}"); then
     # The lane's engineer entries are counted as a set (monorepo#4117). A list
     # that cannot be read is UNKNOWN: scoring the ids that happen to parse would
     # file the others under "other scheduled roles" and print a clean count.
     echo "  UNKNOWN: dispatch role list is unreadable (DH_ROLE or CLAUDE_ENGINEER_ENTRIES:"
     echo "    one to four ids of lowercase letters, digits and hyphens, none twice) — refusing to score."
+    # Read before the empty-corpus shortcut and carried to the exit status:
+    # a malformed list must never read as a clean "no sessions" or as exit 0.
+    main_rc=2
+  elif [ "$SF_COUNT" -eq 0 ]; then
+    echo "  (no claude sessions in window)"
   else
     DH_LIVE=0; DH_DEAD=0; DH_TRUNC=0; DH_INCOMPLETE=0
     DH_ROOTS=0; DH_OTHERROLE=0; DH_NOREC=0; DH_UNREADABLE=0; DH_INCOMPLETE_NOWORK=0
@@ -2545,7 +2548,7 @@ if want dispatch; then
     # so an entry that never ran beside one that did is named below.
     DH_ROLE="${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}}"
     DH_ROLE_COUNT=$(printf '%s\n' "$DH_ROLE_IDS" | grep -c .)
-    DH_BYROLE=""
+    DH_BYROLE=""; DH_UNDATED_BYROLE=""
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       # Defence in depth: root_session_files already excluded these BEFORE the
@@ -2578,7 +2581,8 @@ if want dispatch; then
             # one). Only whole leading blocks and the blank space around them
             # are skipped, so the record must still START what is left: prose
             # before it is a quote, and a record inside a block goes with it.
-            | sub("^(?:\\s*<system-reminder>(?:(?!</system-reminder>)[\\s\\S])*</system-reminder>)*\\s*"; "")
+            # With no block nothing is skipped, so an indented record is a quote.
+            | sub("^(?:\\s*<system-reminder>(?:(?!</system-reminder>)[\\s\\S])*</system-reminder>)+\\s*"; "")
             | select(startswith("<scheduled-task"))] | .[0] // "") as $disp
         | (($disp | capture("name=\"(?<n>[a-z0-9-]+)\"") | .n) // "") as $role
         | ([$recs[] | select(.type=="assistant") | content_blocks
@@ -2688,7 +2692,12 @@ if want dispatch; then
       # the expected healthy reading, and printing it is what distinguishes
       # "this window genuinely held few dispatches" from "the filter ate them".
       if [ "$inw" = OUT ]; then DH_OUTWIN=$((DH_OUTWIN+1)); continue; fi
-      if [ "$inw" != IN ]; then DH_UNDATED=$((DH_UNDATED+1)); continue; fi
+      if [ "$inw" != IN ]; then
+        DH_UNDATED=$((DH_UNDATED+1))
+        DH_UNDATED_BYROLE="${DH_UNDATED_BYROLE}${role}
+"
+        continue
+      fi
       DH_BYROLE="${DH_BYROLE}${role}
 "
       ended_on_refusal=0
@@ -2753,16 +2762,30 @@ EOF
     printf '  root transcripts selected by file mtime: %s\n' "$DH_ROOTS"
     printf '    dispatches of role "%s" IN WINDOW BY RECORD: %s   <- classified below\n' "$DH_ROLE" "$DH_TOTAL"
     if [ "$DH_ROLE_COUNT" -gt 1 ]; then
-      DH_ENTRY_LINE=""; DH_SILENT=""
+      DH_ENTRY_LINE=""; DH_SILENT=""; DH_ENTRY_UNKNOWN=""
       while IFS= read -r dh_id; do
         dh_n=$(printf '%s' "$DH_BYROLE" | grep -cxF -- "$dh_id" || true)
+        dh_u=$(printf '%s' "$DH_UNDATED_BYROLE" | grep -cxF -- "$dh_id" || true)
         DH_ENTRY_LINE="${DH_ENTRY_LINE} ${dh_id}=${dh_n}"
-        [ "$dh_n" -eq 0 ] && DH_SILENT="${DH_SILENT}${dh_id}
+        # A run that cannot be placed in time may be inside the window, so an
+        # entry with one is UNKNOWN. It is never reported as having no run.
+        if [ "$dh_u" -gt 0 ]; then
+          DH_ENTRY_UNKNOWN="${DH_ENTRY_UNKNOWN}${dh_id} ${dh_u}
 "
+        elif [ "$dh_n" -eq 0 ]; then
+          DH_SILENT="${DH_SILENT}${dh_id}
+"
+        fi
       done <<DH_IDS
 $DH_ROLE_IDS
 DH_IDS
       printf '      by entry:%s\n' "$DH_ENTRY_LINE"
+      while read -r dh_id dh_u; do
+        [ -n "$dh_id" ] || continue
+        printf '      entry "%s": UNKNOWN — %s of its transcripts carry no usable record timestamp, so its count for this window is not established.\n' "$dh_id" "$dh_u"
+      done <<DH_UNKNOWN_IDS
+$DH_ENTRY_UNKNOWN
+DH_UNKNOWN_IDS
       # Only when another entry of the lane did run: with no dispatch at all the
       # zero-population readings below already speak for the whole lane.
       if [ "$DH_TOTAL" -gt 0 ]; then
