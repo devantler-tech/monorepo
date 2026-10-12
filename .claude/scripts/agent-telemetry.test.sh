@@ -781,6 +781,96 @@ check "rule without BYMINUTE stays unreadable" "$OUT" \
 check "rule without BYMINUTE suppresses stagger" "$OUT" "local simultaneous starts/day: UNKNOWN"
 set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0'
 
+# ── several start minutes in one schedule (monorepo#4117) ─────────────────────
+# One Codex automation with two start minutes (`BYMINUTE=10,40`) is the simplest
+# way to give a lane a second engineer start an hour: one automation, one memory
+# store. The check used to accept a single minute only, so that rule read as an
+# unreadable schedule and suppressed the stagger block for the whole deployment.
+# A schedule now carries its minutes as a sorted set ("*@10,40"); one minute
+# prints exactly as before, which every assertion above pins.
+set_cadence_cell() { # $1 = provider (Claude|Codex), $2 = the engineer cell's new text
+  awk -F'|' -v OFS='|' -v p="**$1**" -v cell=" $2 " '
+    index($2, p) { $3 = cell }
+    { print }
+  ' "$FIX/monorepo/AGENTS.md" > "$FIX/monorepo/AGENTS.md.new" \
+    && mv "$FIX/monorepo/AGENTS.md.new" "$FIX/monorepo/AGENTS.md"
+}
+# The runtime gains a start the table does not describe: that is DRIFT, with both
+# values printed, never an unreadable rule.
+set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1;BYMINUTE=10,40'
+OUT=$(NOBASE --section drift)
+check "a second start minute the table lacks is drift" "$OUT" \
+  "DRIFT: codex engineer schedule expected=*@10 actual=*@10,40"
+nocheck "a two-minute rule is not an unreadable rule" "$OUT" \
+  "UNKNOWN: codex engineer recurrence rule is incomplete or unsupported"
+check "a drifted two-minute rule still derives slots from the runtime" "$OUT" \
+  "local engineer slots scheduled/day: 72"
+# The table names both minutes: MATCH, and the slot count follows the schedule.
+set_cadence_cell Codex 'Every hour at `:10` and `:40`'
+OUT=$(NOBASE --section drift)
+check "a two-minute schedule matches a two-minute table cell" "$OUT" \
+  "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH"
+check "two start minutes an hour count as two slots an hour" "$OUT" \
+  "local engineer slots scheduled/day: 72"
+check "two staggered start minutes do not collide" "$OUT" \
+  "local simultaneous starts/day: 0"
+# The order a runtime serialises the minutes in is not a difference.
+set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1;BYMINUTE=40,10'
+OUT=$(NOBASE --section drift)
+check "minute order does not read as drift" "$OUT" \
+  "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH"
+# The second start disappears from the runtime while the table still names it.
+set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1;BYMINUTE=10'
+OUT=$(NOBASE --section drift)
+check "a start minute missing from the runtime is drift" "$OUT" \
+  "DRIFT: codex engineer schedule expected=*@10,40 actual=*@10"
+# ABLATION: put the second start on the Claude engineer's minute and the collision
+# count must move by one start an hour.
+set_codex_engineer_rule 'FREQ=HOURLY;INTERVAL=1;BYMINUTE=10,50'
+OUT=$(NOBASE --section drift)
+check "a second start minute on a sibling's minute collides" "$OUT" \
+  "local simultaneous starts/day: 24"
+# NEGATIVE CONTROLS: a minute list is readable only when every value is a minute.
+for bad_minutes in '10,60' '10,' ',10' '10,,40' '10,x'; do
+  set_codex_engineer_rule "FREQ=HOURLY;INTERVAL=1;BYMINUTE=$bad_minutes"
+  OUT=$(NOBASE --section drift)
+  check "minute list '$bad_minutes' stays unreadable" "$OUT" \
+    "UNKNOWN: codex engineer recurrence rule is incomplete or unsupported"
+  check "minute list '$bad_minutes' suppresses the slot count" "$OUT" \
+    "local engineer slots scheduled/day: UNKNOWN"
+done
+set_cadence_cell Codex 'Every hour at `:10`'
+set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0'
+
+# The Claude scheduler record is a cron, and its minute field takes the same list.
+# The refusal count must then treat EACH listed minute as a due minute, and two
+# refusals in one hour at two due minutes are two slots: the added record is 10:20
+# UTC, in the same hour as the fixture's 10:50 refusal, so counting by hour reads 3.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) = "20,50 * * * *"
+    | .recordedSkips["daily-ai-assistant"] += [{ "at": 1784542800000, "reason": "per_task_limit" }]' \
+  "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(NOBASE --section drift)
+check "a two-minute cron the table lacks is drift" "$OUT" \
+  "DRIFT: claude engineer schedule expected=*@50 actual=*@20,50"
+set_cadence_cell Claude 'Every hour at `:50` and `:20`'
+OUT=$(NOBASE --section drift)
+check "a two-minute cron matches a two-minute table cell" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH"
+check "refusals are counted at every due minute" "$OUT" \
+  "claude engineer dispatch refusals: 4 slot(s)"
+nocheck "two due minutes in one hour are not merged into one slot" "$OUT" \
+  "claude engineer dispatch refusals: 3 slot(s)"
+# CONTROL: the same added record under the one-minute cron is poll noise, not a slot.
+jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) = "50 * * * *"' \
+  "$FIX/claude-store/scheduled-tasks.json" > "$FIX/claude-store/scheduled-tasks.json.one"
+mv "$FIX/claude-store/scheduled-tasks.json.one" "$FIX/claude-store/scheduled-tasks.json"
+set_cadence_cell Claude 'Every hour at `:50`'
+OUT=$(NOBASE --section drift)
+check "a record off the one due minute stays uncounted" "$OUT" \
+  "claude engineer dispatch refusals: 3 slot(s)"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+
 # Fail-closed is PRESERVED: an unreadable pointer still suppresses the derivations
 # that depend on it. Only the persistence proof was decoupled, never readability.
 mv "$FIX/codex/automations/agent-improver/automation.toml" \
