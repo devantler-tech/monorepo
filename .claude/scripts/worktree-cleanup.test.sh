@@ -2304,9 +2304,10 @@ t_salvage_reaps_beside_a_pristine_submodule() {
   age_tree "$wt"
   local out; out=$(run_salvage "$root" apply 1)
   local base; base=$(git -C "$root/repo" for-each-ref --format='%(refname)' 'refs/salvaged/*/head' | sed 's#/head$##')
+  local link; link=$(git -C "$root/repo" ls-tree "$base/worktree" sub 2>/dev/null)
   if grep -q '^SALVAGED .*subok ' <<<"$out" && [ ! -e "$wt" ] && [ -n "$base" ] \
      && [ "$(git -C "$root/repo" show "$base/worktree:untracked.txt" 2>/dev/null)" = draft ] \
-     && git -C "$root/repo" ls-tree "$base/worktree" sub 2>/dev/null | grep -q '^160000 commit'; then
+     && grep -q '^160000 commit' <<<"$link"; then
     ok "$name"
   else
     bad "$name" "$out"
