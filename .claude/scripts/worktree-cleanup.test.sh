@@ -2648,11 +2648,11 @@ t_salvage_keeps_a_submodule_file_made_executable_after_the_snapshot() {
   portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
-  shim=$(lsof_hook_shim "$root" 3 "chmod u+x '$g/description'") \
+  shim=$(lsof_hook_shim "$root" 3 "ls -l '$g/description' > '$root/hook.log' 2>&1; chmod u+x '$g/description' >> '$root/hook.log' 2>&1; ls -l '$g/description' >> '$root/hook.log' 2>&1; test -x '$g/description' && echo executable >> '$root/hook.log'") \
     || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
   local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
   if [ ! -x "$g/description" ]; then
-    bad "$name" "the mode was never changed: $out"
+    bad "$name" "the mode was never changed (lsof calls: $(cat "$root/lsof-calls" 2>/dev/null); hook: $(tr '\n' '|' < "$root/hook.log" 2>/dev/null)): $out"
   elif grep -q 'KEEP .*submode .*a submodule repository changed after the salvage snapshot' <<<"$out" && [ -d "$wt" ] && [ -d "$g" ]; then
     ok "$name"
   else
