@@ -1389,7 +1389,9 @@ gh_shim() {
 printf '%s\n' "\$*" >> "$root/gh-args"
 [ -e "$root/gh-fail" ] && { echo "HTTP 502" >&2; exit 1; }
 case "\$*" in
-  "config get http_unix_socket"*) [ -e "$root/gh-socket" ] && cat "$root/gh-socket"; exit 0 ;;
+  "config list"*)
+    printf 'git_protocol=ssh\nhttp_unix_socket=%s\napi_host=%s\n' "\$(cat "$root/gh-socket" 2>/dev/null)" "\$(cat "$root/gh-apihost" 2>/dev/null)"
+    exit 0 ;;
 esac
 case "\$*" in
   *"/git/ref/tags/"*)
@@ -2353,7 +2355,9 @@ t_salvage_reaps_beside_a_pristine_submodule() {
      && [ "$(git -C "$root/repo" show "$base/module-files:modules/sub/description" 2>/dev/null)" = "my notes" ] \
      && [ "$(git -C "$root/repo" show "$base/module-files:modules/sub/hooks/pre-commit.sample" 2>/dev/null | tail -1)" = "# mine" ] \
      && grep -q "pushed from the submodule" <<<"$(git -C "$root/repo" show "$base/module-files:modules/sub/logs/HEAD" 2>/dev/null)" \
-     && grep -q "pushed from the submodule" <<<"$(git -C "$root/repo" show "$base/module-files:modules/sub/COMMIT_EDITMSG" 2>/dev/null)"; then
+     && grep -q "pushed from the submodule" <<<"$(git -C "$root/repo" show "$base/module-files:modules/sub/COMMIT_EDITMSG" 2>/dev/null)" \
+     && grep -q "t@t.t" <<<"$(git -C "$root/repo" show "$base/module-files:modules/sub/config" 2>/dev/null)" \
+     && grep -q "claude-worktree-owner" <<<"$(git -C "$root/repo" show "$base/module-files:modules/sub/info/exclude" 2>/dev/null)"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2440,7 +2444,7 @@ t_salvage_asks_github_about_a_submodule_branch_that_moved_on() {
   local name="a submodule whose branch moved on upstream is cleared only when GitHub says the branch still holds its tip"
   local failures="" answer root wt shim ghs real_git out want rc
   real_git=$(command -v git)
-  for answer in ahead identical diverged behind failed socket; do
+  for answer in ahead identical diverged behind failed socket apihost; do
     root=$(make_repo)
     admin_sub_wt "$root" "submoved" || { failures="$failures $answer(FIXTURE)"; rm -rf "$root"; continue; }
     wt="$root/repo/.claude/worktrees/submoved"
@@ -2463,19 +2467,20 @@ SHIM
       failed) touch "$root/gh-fail" ;;
       # gh told to talk through a socket: whatever listens there says `ahead`, and must not be asked.
       socket) echo ahead > "$root/gh-out"; echo /tmp/some.sock > "$root/gh-socket" ;;
+      apihost) echo ahead > "$root/gh-out"; echo gateway.example.invalid > "$root/gh-apihost" ;;
       *) printf '%s\n' "$answer" > "$root/gh-out" ;;
     esac
     out=$(PATH="$shim:$ghs:$PATH" run_salvage "$root" dry-run 1); rc=$?
     # A question GitHub did not answer is not a clean sweep.
-    case "$answer:$rc" in failed:2|socket:2) ;; failed:*|socket:*) failures="$failures $answer(rc=$rc)" ;; *:0) ;; *) failures="$failures $answer(rc=$rc)" ;; esac
+    case "$answer:$rc" in failed:2|socket:2|apihost:2) ;; failed:*|socket:*|apihost:*) failures="$failures $answer(rc=$rc)" ;; *:0) ;; *) failures="$failures $answer(rc=$rc)" ;; esac
     case "$answer" in
       ahead|identical) want='^SALVAGE .*submoved ' ;;
       diverged|behind) want='KEEP .*submoved .*modules/sub: it holds commit\(s\) its remote does not advertise' ;;
-      failed|socket)   want='KEEP .*submoved .*modules/sub: cannot ask GitHub whether its remote still holds' ;;
+      failed|socket|apihost) want='KEEP .*submoved .*modules/sub: cannot ask GitHub whether its remote still holds' ;;
     esac
     grep -Eq "$want" <<<"$out" || failures="$failures $answer($(grep -E 'KEEP|SALVAGE' <<<"$out" | cut -c1-200))"
-    if [ "$answer" = socket ]; then
-      if grep -q 'compare/' "$root/gh-args" 2>/dev/null; then failures="$failures socket(GitHub was asked through the socket)"; fi
+    if [ "$answer" = socket ] || [ "$answer" = apihost ]; then
+      if grep -q 'compare/' "$root/gh-args" 2>/dev/null; then failures="$failures $answer(GitHub was asked through the override)"; fi
     elif [ "$answer" != failed ] && ! grep -q 'compare/[0-9a-f]\{40\}\.\.\.0123456789abcdef0123456789abcdef01234567' "$root/gh-args" 2>/dev/null; then
       failures="$failures $answer(no compare call)"
     fi
@@ -2520,6 +2525,7 @@ SHIM
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$root/gh-args"
 case "\$*" in
+  "config list"*) printf 'git_protocol=ssh\nhttp_unix_socket=\napi_host=\n' ;;
   *"/pulls"*) printf '7\t%s\n' $pr ;;
   *"compare/"*"...$pr"*) [ "$variant" = unrelated ] && echo diverged || echo ahead ;;
   *"compare/"*) echo diverged ;;

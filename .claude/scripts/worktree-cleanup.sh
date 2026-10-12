@@ -73,10 +73,10 @@
 #   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog, ORIG_HEAD or FETCH_HEAD commit reachable from no remote
 #   refs/salvaged/<id>/commit-editmsg - the COMMIT_EDITMSG bytes, when present (a message a hook rejected)
 #   refs/salvaged/<id>/config-worktree - the config.worktree bytes, when present (per-worktree settings)
-#   refs/salvaged/<id>/module-files - a tree of each submodule repository's description, hook
-#                                   samples and reflogs, when the worktree holds submodules, at
-#                                   modules/<path>/description, modules/<path>/hooks/<name>.sample
-#                                   and modules/<path>/logs/...
+#   refs/salvaged/<id>/module-files - a tree of every file of each submodule repository outside its
+#                                   object store, when the worktree holds submodules, at its
+#                                   path under the admin directory (modules/<path>/config,
+#                                   .../description, .../hooks/..., .../info/exclude, .../logs/...)
 #   refs/salvaged/<id>/resolve-undo - a tree of the index's resolve-undo stages, when present, as
 #                                   `stage<N>/<path>` (1 base, 2 ours, 3 theirs). Git has no
 #                                   command that writes them back into an index; read a stage
@@ -1386,8 +1386,8 @@ resolve_undo_tree() {
 # keeps the worktree.
 # Not compared, and lost with the removal as they are for the worktree's own repository:
 # files the checkout ignores, and objects no ref, reflog or pseudo-ref names (a dropped
-# stash, an expired reflog entry). The description file and the hook samples are accepted by
-# name and kept by their bytes (module_files_tree).
+# stash, an expired reflog entry). Every other file of the repository, whether the check
+# accepts it by name or by what it holds, is kept by its bytes (module_files_tree).
 
 # module_origin_url <git-dir> -> prints the origin URL exactly as the repository's own
 # config file records it. Not `git remote get-url`, which answers after the host's URL
@@ -1567,13 +1567,17 @@ module_tip_behind_remote() {
   repo=$(portfolio_repo "$(module_origin_url "$g" || true)")
   [ -n "$repo" ] || return 1
   [ -n "$GH_BIN" ] || return 2
-  # gh can be told to send every request through a Unix socket (http_unix_socket, from its
-  # config or a GH_CONFIG_DIR the sweep inherited). Whatever listens there would be what
-  # answers, so with one configured nothing is asked. Read once per sweep.
+  # gh can be told to send its requests somewhere else: through a Unix socket
+  # (http_unix_socket), to another API host (api_host), from its config or a GH_CONFIG_DIR
+  # the sweep inherited. Whatever answers there would be what vouches for a commit, so with
+  # any setting whose name speaks of a socket, a host or a proxy set, nothing is asked. A
+  # read that failed says nothing about the settings, so nothing is asked then either.
+  # Read once per sweep.
   if [ -z "$MODULE_GH_SOCKET" ]; then
-    # A read that failed says nothing about the setting, so nothing is asked then either.
-    MODULE_GH_SOCKET=$(gh_bounded config get http_unix_socket --host github.com) || { MODULE_GH_SOCKET=""; return 2; }
-    MODULE_GH_SOCKET=${MODULE_GH_SOCKET:-none}
+    local settings
+    settings=$(gh_bounded config list --host github.com) || return 2
+    [ -n "$settings" ] || return 2
+    if grep -Eiq '^[^=]*(socket|host|proxy)[^=]*=.' <<< "$settings"; then MODULE_GH_SOCKET="set"; else MODULE_GH_SOCKET="none"; fi
   fi
   [ "$MODULE_GH_SOCKET" = none ] || return 2
   names=$(module_git "$g" for-each-ref --contains "$tip" --format='%(refname)' refs/remotes/origin 2>/dev/null) || return 2
@@ -2290,42 +2294,55 @@ salvage_namespace() {
     || { SALVAGE_NOTE="unusable salvage ref name $SALVAGE_BASE"; SALVAGE_BASE=""; return 1; }
 }
 
-# module_files_tree <worktree> -> sets MODULE_FILES_TREE to a tree holding, for every
-# submodule repository under the admin directory's modules/, its description, its hook
-# samples and its reflogs, at their paths under the admin directory (modules/<path>/description,
-# modules/<path>/hooks/<name>.sample, modules/<path>/logs/...); or to nothing when there is
-# none. A reflog's commits are checked against the remote, but each entry also carries a
-# message, which can be text someone wrote (`git update-ref -m`). COMMIT_EDITMSG is kept
-# too: the pristine check compares it with a made commit's message only after stripping
-# comments and blank lines, and the raw file can hold more. The pristine check
-# accepts those files by name: git never runs or reads them back, but someone can have
-# written in one, and git's own samples differ from version to version, so there is no
-# known content to compare with. Their bytes are kept instead (#2831). Built in a
-# temporary index in the repository that outlives the worktree. Non-zero on any failure.
+# module_files_tree <worktree> -> sets MODULE_FILES_TREE to a tree holding every file of every
+# submodule repository under the admin directory's modules/ outside the object stores, at
+# its path under the admin directory (modules/<path>/config, .../description,
+# .../hooks/<name>.sample, .../info/exclude, .../logs/..., .../COMMIT_EDITMSG, the index and
+# the refs themselves); or to nothing when there is none. It is the same set of files
+# modules_fingerprint compares. The pristine check accepts these files by name or by the
+# keys and ids they hold, and each can still carry bytes someone wrote: a note in the
+# description or in an exclude file's comments, an edited hook sample (git's own samples
+# differ from version to version, so there is no known content to compare with), an identity
+# in the config, a reflog message (`git update-ref -m`), a drafted commit message. So none
+# is judged; all are kept (#2831). Their sizes are summed against SALVAGE_MAX_KB BEFORE
+# anything is written, so an oversized file leaves no blob behind in the repository that
+# outlives the worktree. Built in a temporary index there. Non-zero, with SALVAGE_NOTE, on
+# any failure.
 MODULE_FILES_TREE=""
 module_files_tree() {
-  local wt=$1 admin dir f rel blob mode tree
+  local wt=$1 admin dir f rel blob mode tree sz kb=0
   MODULE_FILES_TREE=""
-  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
+    || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 1; }
   if [ ! -d "$admin/modules" ] || [ -L "$admin/modules" ]; then return 0; fi
-  dir=$(mktemp -d "${TMPDIR:-/tmp}/wt-salvage-module-files.XXXXXX") || return 1
-  if ! find "$admin/modules" -type f \( -name description -o -name COMMIT_EDITMSG -o -path '*/hooks/*.sample' \
-         -o -path '*/logs/*' \) -print0 \
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/wt-salvage-module-files.XXXXXX") \
+    || { SALVAGE_NOTE="cannot create a temporary directory"; return 1; }
+  if ! find "$admin/modules" \( -name objects -type d -exec test -f {}/../HEAD -a -f {}/../config -a -d {}/../refs \; -prune \) -o -type f -print0 \
          > "$dir/list" 2>/dev/null; then
-    rm -rf "$dir"; return 1
+    rm -rf "$dir"; SALVAGE_NOTE="cannot list the submodule repositories' files"; return 1
   fi
-  : > "$dir/entries" || { rm -rf "$dir"; return 1; }
+  while IFS= read -r -d '' f; do
+    sz=$(wc -c < "$f" 2>/dev/null) || { rm -rf "$dir"; SALVAGE_NOTE="cannot size a submodule repository file"; return 1; }
+    sz=$(printf '%s' "$sz" | tr -d ' ')
+    case "$sz" in ''|*[!0-9]*) rm -rf "$dir"; SALVAGE_NOTE="cannot size a submodule repository file"; return 1 ;; esac
+    kb=$((kb + (sz + 1023) / 1024))
+    if [ "$kb" -gt "$SALVAGE_MAX_KB" ]; then
+      rm -rf "$dir"; SALVAGE_NOTE="the submodule repositories hold more than ${SALVAGE_MAX_KB} KB of files to keep"; return 1
+    fi
+  done < "$dir/list"
+  : > "$dir/entries" || { rm -rf "$dir"; SALVAGE_NOTE="cannot write a temporary file"; return 1; }
   while IFS= read -r -d '' f; do
     rel=${f#"$admin"/}
     blob=$(git -C "$TOPLEVEL" hash-object -w --no-filters -- "$f" 2>/dev/null) && [ -n "$blob" ] \
-      || { rm -rf "$dir"; return 1; }
+      || { rm -rf "$dir"; SALVAGE_NOTE="cannot preserve a submodule repository file"; return 1; }
     mode=100644; [ -x "$f" ] && mode=100755
-    printf '%s %s\t%s\0' "$mode" "$blob" "$rel" >> "$dir/entries" || { rm -rf "$dir"; return 1; }
+    printf '%s %s\t%s\0' "$mode" "$blob" "$rel" >> "$dir/entries" \
+      || { rm -rf "$dir"; SALVAGE_NOTE="cannot write a temporary file"; return 1; }
   done < "$dir/list"
   if [ ! -s "$dir/entries" ]; then rm -rf "$dir"; return 0; fi
   if ! GIT_INDEX_FILE="$dir/index" git -C "$TOPLEVEL" update-index -z --index-info < "$dir/entries" 2>/dev/null \
      || ! tree=$(GIT_INDEX_FILE="$dir/index" git -C "$TOPLEVEL" write-tree 2>/dev/null) || [ -z "$tree" ]; then
-    rm -rf "$dir"; return 1
+    rm -rf "$dir"; SALVAGE_NOTE="cannot build the tree of submodule repository files"; return 1
   fi
   rm -rf "$dir"
   MODULE_FILES_TREE=$tree
@@ -2386,12 +2403,12 @@ salvage_write() {
   if [ -n "$reuc_tree" ]; then
     reuc_kb=$(tree_kb "$wt" "$reuc_tree") || { SALVAGE_NOTE="cannot size the index's resolve-undo entries"; return 1; }
   fi
-  # The submodule repositories' description and hook-sample files, kept by their bytes.
+  # Every file of the submodule repositories outside their object stores, kept by its bytes.
   local mod_tree mod_kb=0
-  module_files_tree "$wt" || { SALVAGE_NOTE="cannot preserve the submodule repositories' description and hook samples"; return 1; }
+  module_files_tree "$wt" || return 1
   mod_tree=$MODULE_FILES_TREE
   if [ -n "$mod_tree" ]; then
-    mod_kb=$(tree_kb "$wt" "$mod_tree") || { SALVAGE_NOTE="cannot size the submodule repositories' description and hook samples"; return 1; }
+    mod_kb=$(tree_kb "$wt" "$mod_tree") || { SALVAGE_NOTE="cannot size the submodule repositories' kept files"; return 1; }
   fi
   captured_kb=$((captured_kb + admin_kb + reuc_kb + mod_kb))
   if [ "$captured_kb" -gt "$SALVAGE_MAX_KB" ]; then
