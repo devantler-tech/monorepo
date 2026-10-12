@@ -1673,12 +1673,22 @@ module_commit_editmsg_spent() {
 # as `git add` would store it, to the blob the index records; 1 when one does not or is
 # missing; 2 when that cannot be read. Status answers the same question from the file's
 # size and times, and trusts them: with core.trustctime=false in the host's configuration, an
-# edit that keeps a file's size and puts its mtime back reads as unchanged. Symbolic links
-# and gitlinks hold no file bytes and are left to status.
+# edit that keeps a file's size and puts its mtime back reads as unchanged. A symbolic link
+# is compared by its target, which is what its blob holds. A gitlink holds no bytes here.
 checkout_matches_index() {
-  local co=$1 entries paths want got
-  entries=$(git -C "$co" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') || return 2
-  case "$entries" in *$'\001'*) return 2 ;; esac
+  local co=$1 entries paths want got all links meta path target
+  all=$(git -C "$co" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') || return 2
+  case "$all" in *$'\001'*) return 2 ;; esac
+  links=$(awk -F'\t' '$1 ~ /^120000 /' <<< "$all") || return 2
+  while IFS=$'\t' read -r meta path; do
+    [ -n "$meta" ] || continue
+    [ -L "$co/$path" ] || return 1
+    target=$(readlink "$co/$path" 2>/dev/null) || return 2
+    # shellcheck disable=SC2086  # meta is `mode sha stage`
+    set -- $meta
+    [ "$(printf '%s' "$target" | git hash-object --stdin 2>/dev/null)" = "$2" ] || return 1
+  done <<< "$links"
+  entries=$all
   entries=$(awk -F'\t' '$1 ~ /^100(644|755) /' <<< "$entries") || return 2
   [ -n "$entries" ] || return 0
   paths=$(sed 's/^[^	]*	//' <<< "$entries")

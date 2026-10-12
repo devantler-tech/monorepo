@@ -2688,6 +2688,38 @@ t_salvage_keeps_a_submodule_edit_status_cannot_see() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_submodule_symlink_retargeted_behind_status() {
+  # The same blind spot for a tracked symbolic link: a new target of the same length, with
+  # the link's mtime put back, under core.trustctime=false and core.checkStat=minimal.
+  local name="salvage KEEPs a submodule whose tracked symlink was retargeted behind status's back"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" sublink || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/sublink" g
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  git -C "$root/subsrc" checkout -q --detach \
+    && ln -s aaaa "$wt/sub/link" && git -C "$wt/sub" add link && git -C "$wt/sub" commit -qm "a link" \
+    && git -C "$wt/sub" push -q origin HEAD:main \
+    || { bad "$name" "FIXTURE: link"; rm -rf "$root"; return; }
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  printf '[core]\n\ttrustctime = false\n\tcheckStat = minimal\n' > "$root/hostconfig"
+  age_tree "$wt"
+  GIT_CONFIG_GLOBAL="$root/hostconfig" git -C "$wt/sub" update-index --refresh > /dev/null 2>&1
+  touch -t 202001020000 "$g/index"
+  rm -f "$wt/sub/link" && ln -s bbbb "$wt/sub/link" && touch -h -t 202001010000 "$wt/sub/link" "$wt/sub"
+  if [ -n "$(GIT_OPTIONAL_LOCKS=0 GIT_CONFIG_GLOBAL="$root/hostconfig" git -C "$wt/sub" status --porcelain 2>/dev/null)" ]; then
+    bad "$name" "FIXTURE: status sees the retargeted link, so this proves nothing"; rm -rf "$root"; return
+  fi
+  local out; out=$(GIT_CONFIG_GLOBAL="$root/hostconfig" run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*sublink .*modules/sub: a tracked file in its checkout differs from the index' <<<"$out" \
+     && [ "$(readlink "$wt/sub/link" 2>/dev/null)" = bbbb ] && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -5229,6 +5261,7 @@ t_salvage_keeps_a_submodule_with_a_stray_file_under_refs
 t_salvage_keeps_a_submodule_ref_that_names_a_tag_object
 t_salvage_keeps_a_submodule_file_made_executable_after_the_snapshot
 t_salvage_keeps_a_submodule_edit_status_cannot_see
+t_salvage_keeps_a_submodule_symlink_retargeted_behind_status
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read
