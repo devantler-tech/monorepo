@@ -167,7 +167,12 @@ card.
    `build-cache-reclaim.sh apply` once and re-check; if it is still `1`, or it is `2`, do no builds,
    tests or cluster work this run, record it in `needs_attention`, and escalate per
    *Maintainer channels*. (c) Run `shared-checkout-freshness.sh`; a `FROZEN` verdict is a finding
-   to report, never an edit to discard.
+   to report, never an edit to discard. (d) On the Claude lane, run
+   `claude-task-live-runs.sh --task <scheduled task id>` and read it as the
+   [cadence guide](../../guides/cadence.md) says. Exit `1` or `2` means an earlier run of this task
+   is still working: before you file an issue or open a pull request for a failure you found, read
+   what that run already filed for it, because a claim fences one issue number and cannot stop two
+   runs filing the same defect twice (monorepo#3536).
 
 ## 1. Survey (delegate to a read-only subagent — keep the JSON out of your context)
 > **Guides:** [work-selection](../../guides/work-selection.md) (rung details the digest is read
