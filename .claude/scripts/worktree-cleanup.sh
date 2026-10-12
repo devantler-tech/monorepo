@@ -1363,10 +1363,14 @@ resolve_undo_tree() {
 # repository under the admin directory's modules/ with all it holds. Until now any such
 # repository kept the worktree, so nothing in it had to be classified; measured on the host
 # 2026-10-12, that kept 12 abandoned worktrees (4.1 GB) whose submodules held nothing.
-# A submodule repository is PRISTINE when nothing in it could be work: it then holds only
-# what a fresh clone of its remote would hold, and the removal loses nothing salvage would
-# have had to carry. The test is a whitelist over what the repository directory contains,
-# not a list of the ways work can hide in one, so anything unlisted keeps the worktree.
+# A submodule repository is PRISTINE when nothing in it could be work, so the removal loses
+# nothing salvage would have had to carry. The test is a whitelist over what the repository
+# directory contains, not a list of the ways work can hide in one, so anything unlisted
+# keeps the worktree.
+# Not compared, and lost with the removal as they are for the worktree's own repository:
+# files the checkout ignores, and objects no ref, reflog or pseudo-ref names (a dropped
+# stash, an expired reflog entry). Nor are the bytes of the description file and of the
+# hook samples, which git never runs or reads back.
 
 # module_tags_on_remote <git-dir> — exit 0 when the remote holds every local tag at exactly
 # the same object; 1 when it lacks one or holds it elsewhere (an annotated tag made here is
@@ -1456,9 +1460,10 @@ module_checkout() {
   MODULE_CHECKOUT=$co
 }
 
-# module_repository_pristine <git-dir> <worktree-realpath> — exit 0 when the submodule
-# repository is pristine (see above); 1 with MODULE_NOTE saying what is not. Any read failure
-# is a 1. On success the checkout is added to VERIFIED_CHECKOUTS.
+# module_repository_pristine <git-dir> <worktree-realpath> <admin> — exit 0 when the
+# submodule repository is pristine (see above); 1 with MODULE_NOTE saying what is not. Any
+# read failure is a 1. On success the checkout is added to VERIFIED_CHECKOUTS. <admin> is
+# the worktree's admin directory, which only names its own submodules' repositories in a note.
 MODULE_NOTE=""
 VERIFIED_CHECKOUTS=""
 module_repository_pristine() {
@@ -1540,8 +1545,13 @@ module_repository_pristine() {
   # 5. Its refs are branches, remote-tracking refs and tags, each a plain file or packed;
   #    a stash, a replace ref, notes or a bisect ref is none of those. Every reflog is a
   #    plain file too: git reads through a symlinked one, and the walk below would not.
-  out=$(find "$g/logs" "$g/refs" ! -type d ! -type f -print 2>/dev/null | head -1) \
-    || { MODULE_NOTE="its refs and reflogs cannot be listed"; return 1; }
+  out=""
+  for name in logs refs; do
+    [ -d "$g/$name" ] || continue
+    out=$(find "$g/$name" ! -type d ! -type f -print 2>/dev/null) \
+      || { MODULE_NOTE="its $name cannot be listed"; return 1; }
+    [ -z "$out" ] || break
+  done
   if [ -n "$out" ]; then MODULE_NOTE="a ref or reflog of it is not a plain file"; return 1; fi
   out=$(module_git "$g" for-each-ref --format='%(refname)' 2>/dev/null) \
     || { MODULE_NOTE="its refs cannot be read"; return 1; }
