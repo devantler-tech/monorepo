@@ -212,7 +212,10 @@ when Verifying is under its ceiling, and its **resume condition** is recorded in
 record with its delivered ask; a `devantler-tech` issue that must be finished first as a
 native *blocked by* dependency, and one outside the portfolio as an `upstream` record. A
 dependency inside the portfolio is itself work to select, so the wait never hides it. One
-comment states the verified obstacle and the next action. The move changes nothing else:
+comment states the verified obstacle and the next action. The issue body must also carry its
+`**Delivered on:** YYYY-MM-DD` line before the move (add it with the real delivery date if it is
+missing): in Ready that line is what marks the card as a returned check and not new work. The
+move changes nothing else:
 acceptance criteria, evidence, the `**Delivered on:**` and `**Measure on:**` lines, the First started value,
 dependencies, blockers and Priority all stay as they were. It is a queued continuation of started
 work, so it is not a new implementation, it does not mean the outcome passed, and it waives no
@@ -236,7 +239,8 @@ the portfolio map's parenthetical** (both go stale — the map still said "UniFi
 while *Ready* or while *In Review* — so a Blocked column would destroy the information about where it
 actually is. Express it as a native **issue dependency** (`gh issue edit <N> --add-blocked-by <M>`),
 which renders a Blocked badge on the card in whatever column it sits. Reserve the `blocked` **label**
-for blockers that dependencies cannot express — an upstream release in another org. The board carries **exactly three
+for blockers that dependencies cannot express — every `**Blocker:**` record of kind `upstream`
+(such as a release in another org), `outcome` or `authority` carries it. The board carries **exactly three
 views** — **kanban (board)**, **backlog (table)**, **roadmap (roadmap)** — and epic breakdown is the
 **Backlog view's hierarchy** (its `Show hierarchy` toggle — **not** a `Parent issue` group-by), not a
 fourth view: **prefer an extra grouping/slice on an

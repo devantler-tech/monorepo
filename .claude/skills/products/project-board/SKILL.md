@@ -254,7 +254,8 @@ Until that is solved, backfill is a standing duty, not an exception.
   finishing* (maintainer direction 2026-07-18). **Never re-order it into left-to-right flow.** Column
   **limits** encode the same WIP discipline; treat an over-limit column as a signal to finish, never as
   a reason to raise the limit. **"Blocked" is intentionally not a status** — use a native issue
-  dependency (Blocked badge renders in-place) and reserve the `blocked` label for cross-org blockers.
+  dependency (Blocked badge renders in-place) and reserve the `blocked` label for what a dependency cannot express: every `**Blocker:**`
+  record (`upstream`, `outcome` or `authority`) carries it, a returned check's included.
 - **Value-pull flow fields and capacity.** Resolve the maintainer's explicit ceilings and field
   semantics from [Flow fields and WIP capacity](../../../guides/issues-and-board.md#flow-fields-and-wip-capacity).
   Project 5 attaches the native issue fields Priority, Effort, Start date and Target date; use
