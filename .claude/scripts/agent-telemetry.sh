@@ -492,6 +492,30 @@ need jq || exit 3
 
 want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
 
+# A lane's scheduled entries, given as one comma-separated list (monorepo#4117):
+# one to four ids of lowercase letters, digits and hyphens, none twice. Prints
+# one id a line, or fails and prints nothing. Letters are spelled out: a range
+# such as a-z follows the locale's collation in some awks and would admit
+# capitals.
+entry_id_list() {
+  printf '%s\n' "$1" | awk -F',' '
+    {
+      if (NF < 1 || NF > 4) invalid = 1
+      for (i = 1; i <= NF; i++) {
+        if ($i !~ /^[abcdefghijklmnopqrstuvwxyz0123456789][abcdefghijklmnopqrstuvwxyz0123456789-]*$/ ||
+            ($i in seen)) invalid = 1
+        seen[$i] = 1
+        ids[i] = $i
+      }
+      count = NF
+    }
+    END {
+      if (invalid || NR != 1) exit 1
+      for (i = 1; i <= count; i++) print ids[i]
+    }
+  '
+}
+
 # Only forge outcome attribution requires the deployment registry. Native
 # transcript adapters retain their own format and coverage boundaries.
 #
@@ -2437,6 +2461,20 @@ if want dispatch; then
     # An unbounded count is indistinguishable from a bounded one by inspection,
     # and this section's numbers are read as denominator instructions.
     echo "  UNKNOWN: cannot compute window start (no usable \`date\`) — refusing to score."
+    # Every reading this section calls unknown is exit 2 (.claude/scripts/AGENTS.md):
+    # here, the unreadable list below, an entry or a population that cannot be
+    # placed in time, and a zero that cannot be attributed. A known reading — a
+    # count, a named silent entry, a real absence, only older runs — stays 0.
+    main_rc=2
+  elif ! DH_ROLE_IDS=$(entry_id_list "${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}}"); then
+    # The lane's engineer entries are counted as a set (monorepo#4117). A list
+    # that cannot be read is UNKNOWN: scoring the ids that happen to parse would
+    # file the others under "other scheduled roles" and print a clean count.
+    echo "  UNKNOWN: dispatch role list is unreadable (DH_ROLE or CLAUDE_ENGINEER_ENTRIES:"
+    echo "    one to four ids of lowercase letters, digits and hyphens, none twice) — refusing to score."
+    # Read before the empty-corpus shortcut and carried to the exit status:
+    # a malformed list must never read as a clean "no sessions" or as exit 0.
+    main_rc=2
   elif [ "$SF_COUNT" -eq 0 ]; then
     echo "  (no claude sessions in window)"
   else
@@ -2509,7 +2547,13 @@ if want dispatch; then
     # counting them lets the observer's own runs satisfy a dispatch volume floor
     # for the agent it is observing. Measured over a 2-day window: 76 engineer
     # dispatches, 4 improver, 2 interactive.
-    DH_ROLE="${DH_ROLE:-daily-ai-assistant}"
+    # A lane may have more than one engineer entry (monorepo#4117), so the role
+    # is a set: DH_ROLE if given, else the lane's entry list, else the one entry
+    # the lane has today. Each classified dispatch is also remembered by entry,
+    # so the count can be shown per entry below.
+    DH_ROLE="${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}}"
+    DH_ROLE_COUNT=$(printf '%s\n' "$DH_ROLE_IDS" | grep -c .)
+    DH_BYROLE=""; DH_UNDATED_BYROLE=""
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       # Defence in depth: root_session_files already excluded these BEFORE the
@@ -2537,6 +2581,14 @@ if want dispatch; then
       row=$(jq -Rrs --arg since "$WINDOW_SINCE" "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty)) as $recs
         | ([$recs[] | select(.type=="user")
             | (message_text // "")
+            # The record is recognised only in the shape the runtime writes
+            # (measured 2026-10-12: every scheduled root transcript): nothing,
+            # or whole reminder blocks each followed by one or two line breaks,
+            # and then the record. This states what is allowed in front of the
+            # record instead of listing what to strip: any other lead-in,
+            # indentation included, leaves the text unchanged and the record a
+            # quote, and a record inside a block is removed with the block.
+            | sub("^(?:<system-reminder>(?:(?!</system-reminder>)[\\s\\S])*</system-reminder>\\n\\n?)+"; "")
             | select(startswith("<scheduled-task"))] | .[0] // "") as $disp
         | (($disp | capture("name=\"(?<n>[a-z0-9-]+)\"") | .n) // "") as $role
         | ([$recs[] | select(.type=="assistant") | content_blocks
@@ -2616,7 +2668,9 @@ if want dispatch; then
       # or corrupt transcript yields the same empty role as a genuine unscheduled
       # run, and lumping them together attributes a parse failure to a category
       # of real human work. The record count is what separates them.
-      if [ "$role" != "$DH_ROLE" ]; then
+      # Whole-id membership: the list was validated above, and the role is
+      # compared with each id exactly, never as a substring of the list.
+      if ! grep -qxF -- "$role" <<<"$DH_ROLE_IDS"; then
         if [ -n "$role" ]; then DH_OTHERROLE=$((DH_OTHERROLE+1))
         elif [ "$nrec" -eq 0 ]; then DH_UNREADABLE=$((DH_UNREADABLE+1))
         else DH_NOREC=$((DH_NOREC+1)); fi
@@ -2644,7 +2698,14 @@ if want dispatch; then
       # the expected healthy reading, and printing it is what distinguishes
       # "this window genuinely held few dispatches" from "the filter ate them".
       if [ "$inw" = OUT ]; then DH_OUTWIN=$((DH_OUTWIN+1)); continue; fi
-      if [ "$inw" != IN ]; then DH_UNDATED=$((DH_UNDATED+1)); continue; fi
+      if [ "$inw" != IN ]; then
+        DH_UNDATED=$((DH_UNDATED+1))
+        DH_UNDATED_BYROLE="${DH_UNDATED_BYROLE}${role}
+"
+        continue
+      fi
+      DH_BYROLE="${DH_BYROLE}${role}
+"
       ended_on_refusal=0
       # TERMINAL STATE is required as well as wording. The template set still
       # accepts unobserved limit types by design — narrowing it to the one
@@ -2706,6 +2767,37 @@ EOF
     DH_TOTAL=$((DH_LIVE + DH_DEAD + DH_TRUNC + DH_INCOMPLETE))
     printf '  root transcripts selected by file mtime: %s\n' "$DH_ROOTS"
     printf '    dispatches of role "%s" IN WINDOW BY RECORD: %s   <- classified below\n' "$DH_ROLE" "$DH_TOTAL"
+    if [ "$DH_ROLE_COUNT" -gt 1 ]; then
+      # What is printed per entry is a count of runs RECOGNISED here, and only
+      # that. The section never turns a zero into "this entry did not run": a
+      # transcript it could not attribute (no dispatch record, unreadable, or a
+      # marker the runtime changed) would make that claim false, and whether an
+      # entry ran is the lane liveness check's question. An entry with a run
+      # that cannot be placed in time gets no number at all.
+      DH_ENTRY_LINE=""; DH_ENTRY_UNKNOWN=""
+      while IFS= read -r dh_id; do
+        dh_n=$(printf '%s' "$DH_BYROLE" | grep -cxF -- "$dh_id" || true)
+        dh_u=$(printf '%s' "$DH_UNDATED_BYROLE" | grep -cxF -- "$dh_id" || true)
+        if [ "$dh_u" -gt 0 ]; then
+          DH_ENTRY_LINE="${DH_ENTRY_LINE} ${dh_id}=UNKNOWN"
+          DH_ENTRY_UNKNOWN="${DH_ENTRY_UNKNOWN}${dh_id} ${dh_u}
+"
+        else
+          DH_ENTRY_LINE="${DH_ENTRY_LINE} ${dh_id}=${dh_n}"
+        fi
+      done <<DH_IDS
+$DH_ROLE_IDS
+DH_IDS
+      printf '      runs recognised by entry:%s\n' "$DH_ENTRY_LINE"
+      echo "      A 0 is a count of runs recognised here; it does not show that the entry did not run."
+      while read -r dh_id dh_u; do
+        [ -n "$dh_id" ] || continue
+        printf '      entry "%s": UNKNOWN — %s of its transcripts carry no usable record timestamp, so its count for this window is not established.\n' "$dh_id" "$dh_u"
+        main_rc=2
+      done <<DH_UNKNOWN_IDS
+$DH_ENTRY_UNKNOWN
+DH_UNKNOWN_IDS
+    fi
     printf '    same role, last record BEFORE the window .: %s   (mtime superset, excluded)\n' "$DH_OUTWIN"
     printf '    same role, no usable record timestamp ....: %s   (undated, excluded)\n' "$DH_UNDATED"
     printf '    other scheduled roles ....................: %s   (another agent, not this one)\n' "$DH_OTHERROLE"
@@ -2769,6 +2861,7 @@ EOF
     # the section whose whole job is to say when it does not know.
     if [ "$DH_TOTAL" -eq 0 ] && [ "$DH_UNDATED" -gt 0 ]; then
       printf '  UNKNOWN in-window population for role "%s".\n' "$DH_ROLE"
+      main_rc=2
       printf '    %s of its transcripts carry no usable record timestamp, so whether any\n' "$DH_UNDATED"
       echo "    dispatch ran inside this window cannot be established either way."
       echo "    This is NOT evidence of an absence and NOT evidence of an outage."
@@ -2784,6 +2877,7 @@ EOF
       echo "    absence of the scheduled run, not an unreadable count."
     elif [ "$DH_TOTAL" -eq 0 ] && [ "$DH_ROOTS" -gt 0 ]; then
       printf '  WARNING: role selection matched 0 of %s root transcripts.\n' "$DH_ROOTS"
+      main_rc=2
       echo "    Treat the dispatch count as UNKNOWN, not as an outage: this is what a"
       echo "    changed dispatch-record format looks like, and it is indistinguishable"
       echo "    from a fleet that never ran unless you check the record itself."
@@ -4882,26 +4976,7 @@ if want drift; then
   # same hours, and no two start in the same minute. A lane read from the entries
   # that happen to be readable would report a lost start as a MATCH on what is left.
   CLAUDE_ENGINEER_ENTRIES="${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}"
-  claude_engineer_entry_ids() {
-    # Letters are spelled out: a range such as a-z follows the locale's collation
-    # in some awks and would admit capitals.
-    printf '%s\n' "$CLAUDE_ENGINEER_ENTRIES" | awk -F',' '
-      {
-        if (NF < 1 || NF > 4) invalid = 1
-        for (i = 1; i <= NF; i++) {
-          if ($i !~ /^[abcdefghijklmnopqrstuvwxyz0123456789][abcdefghijklmnopqrstuvwxyz0123456789-]*$/ ||
-              ($i in seen)) invalid = 1
-          seen[$i] = 1
-          ids[i] = $i
-        }
-        count = NF
-      }
-      END {
-        if (invalid || NR != 1) exit 1
-        for (i = 1; i <= count; i++) print ids[i]
-      }
-    '
-  }
+  claude_engineer_entry_ids() { entry_id_list "$CLAUDE_ENGINEER_ENTRIES"; }
   # An entry's pointer sits beside the lane's first one, in a directory named
   # after the entry.
   claude_engineer_entry_loader() {
