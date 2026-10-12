@@ -501,6 +501,27 @@ downstream ceiling immediately before claiming and again before moving Ready to 
 full implementation, review, merge or verification stage stops new starts and calls for helping it.
 Do not move active work upstream to manufacture capacity. Limits are ceilings, not fill targets.
 
+**A Ready card that carries a resume condition is started work waiting for its next check, not new
+work** (monorepo#4109; the [board guide](issues-and-board.md#every-issue-belongs-on-the-board)
+defines the return from Verifying). The condition is the issue body's `**Measure on:**` date (skip
+clause (d)), its `outcome`, `upstream` or `authority` blocker record (skip clause (b)) or its
+open native *blocked by* dependency (skip clause (g)); a card whose wait is written only in a
+comment is under-specified, so repair the record before skipping it. Before admitting one,
+compare the date or event with live state, exactly as those clauses require. A date that has
+arrived is a request to read the check's exact eligibility, not proof that it can run: where
+the plan records a not-before time or another eligibility condition, that must hold as well.
+A returned check is recognised by the `**Delivered on:**` line in its issue body, which the
+survey digest does not carry, so at rung 1 read the Ready column yourself for open issues with
+that line and check each one's condition; a returned check whose native dependency has closed
+otherwise looks like ordinary rung-3 work. The survey also never nominates a card that carries
+the `blocked` label, so read those from the blocked-record sweep at issue triage and re-check
+the event of each returned check then, whatever the age of its record. If the condition is not met, leave the card in Ready and select
+something else: it is neither actionable nor a reason to stop. If it is met and the check can
+run now, it is due verification under rung 1: clear the record and the label if it had them,
+confirm Verifying has room, move the card there, then run the check and record expected
+against actual. Never open a second implementation for it, and never
+close it or tick a criterion because the card moved or the date passed.
+
 Compare native issue Priority (Urgent, High, Medium, Low) first, then current product outcomes,
 audience impact, deadline/cost of waiting, risk reduction and prerequisites unlocked relative to
 **end-to-end** effort, including CI,

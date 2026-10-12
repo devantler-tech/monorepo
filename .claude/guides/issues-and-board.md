@@ -186,7 +186,7 @@ ladder mirrors the agent's actual lifecycle, so every state answers "what's next
 | Status | Entry condition | What's next |
 |---|---|---|
 | **✅ Done** | Acceptance criteria validated, outcome decided | — |
-| **📊 Verifying** | **Merged**, outcome not yet proven (covers the wait for an async release, and the wait for a Kata's measurement date) | Verify it actually works E2E once released; measure a Kata's signal; then decide |
+| **📊 Verifying** | **Merged**, and a post-merge check can be run **now** (the release is out, the measurement date has arrived) | Verify it actually works E2E; measure a Kata's signal; then decide. If only a wait this lane cannot end remains, return the card to Ready (see below) |
 | **🚀 Ready to Merge** | Green review at head, all checks green, nothing unresolved | Self-promote and merge |
 | **👀 In Review** | PR open, CI green, review requested | Fix findings, re-request, re-secure green at the new head |
 | **🏃🏻‍♂️ In Progress** | Refined work pulled within downstream capacity; actual first-start evidenced | Finish the implementation, get CI green |
@@ -194,8 +194,36 @@ ladder mirrors the agent's actual lifecycle, so every state answers "what's next
 | **📥 Backlog** | Captured and triaged, not yet refined | Refine, or decompose if it is an Epic |
 | **🧊 Icebox** | Parked | Revisit at triage |
 
-**The merge is the boundary** between *Ready to Merge* (pre-merge, mechanical) and *Verifying*
-(post-merge, evidential) — shipped is not the same as decided. The **reversed order is deliberate**:
+**The merge is the boundary** between pre-merge work (*Ready to Merge*, mechanical) and post-merge
+evidence work — shipped is not the same as decided. Which column an open, merged issue sits in
+depends on whether its next check can be run: *Verifying* when it can, *Ready* with a recorded
+resume condition when it cannot.
+
+**Verifying is an active, bounded check lane, never a waiting room** (maintainer direction
+2026-10-10, monorepo#4109). A card belongs there only while its next check can be run now, and
+anything this lane can still do keeps it there as rung-1 work: trigger the release or the
+activation, repair a failing probe, take the measurement. Only a wait the check itself cannot end
+moves a card: a measurement date that has not arrived, an event that happens on its own
+schedule, an act only the maintainer can perform, or another issue that must be finished first. That open issue goes to **🫴 Ready**, even
+when Verifying is under its ceiling, and its **resume condition** is recorded in the form the
+[work-selection guide](work-selection.md) already reads, never in prose alone: a date as the
+`**Measure on:** YYYY-MM-DD` line in the issue body; an event as a `**Blocker:**` record of kind
+`outcome` with the `blocked` label; an act only the maintainer can perform as an `authority`
+record with its delivered ask; a `devantler-tech` issue that must be finished first as a
+native *blocked by* dependency, and one outside the portfolio as an `upstream` record. A
+dependency inside the portfolio is itself work to select, so the wait never hides it. One
+comment states the verified obstacle and the next action. The issue body must also carry its
+`**Delivered on:** YYYY-MM-DD` line before the move (add it with the real delivery date if it is
+missing): in Ready that line is what marks the card as a returned check and not new work. The
+move changes nothing else:
+acceptance criteria, evidence, the `**Delivered on:**` and `**Measure on:**` lines, the First started value,
+dependencies, blockers and Priority all stay as they were. It is a queued continuation of started
+work, so it is not a new implementation, it does not mean the outcome passed, and it waives no
+review, security or deployment gate. Move the card back to Verifying when the resume condition is
+met and the column has room; if it can only wait again, return it again. Never mark a card Done
+because it moved.
+
+The **reversed order is deliberate**:
 finishing work sits leftmost so the board reads *stop starting, start finishing* (maintainer direction
 2026-07-18). **Never re-order it into left-to-right flow**, and treat an over-limit column as a signal
 to finish rather than a limit to raise. A newly-filed issue lands in **📥 Backlog** unless you know
@@ -211,7 +239,8 @@ the portfolio map's parenthetical** (both go stale — the map still said "UniFi
 while *Ready* or while *In Review* — so a Blocked column would destroy the information about where it
 actually is. Express it as a native **issue dependency** (`gh issue edit <N> --add-blocked-by <M>`),
 which renders a Blocked badge on the card in whatever column it sits. Reserve the `blocked` **label**
-for blockers that dependencies cannot express — an upstream release in another org. The board carries **exactly three
+for blockers that dependencies cannot express — every `**Blocker:**` record of kind `upstream`
+(such as a release in another org), `outcome` or `authority` carries it. The board carries **exactly three
 views** — **kanban (board)**, **backlog (table)**, **roadmap (roadmap)** — and epic breakdown is the
 **Backlog view's hierarchy** (its `Show hierarchy` toggle — **not** a `Parent issue` group-by), not a
 fourth view: **prefer an extra grouping/slice on an
@@ -225,7 +254,9 @@ In Review **12**, Ready to Merge **6**, Verifying **3**. Icebox overflow is temp
 during the current backlog cleanup; this does not waive any other ceiling. Count open non-Epic
 issue cards for the Kanban view, including parked unfinished work. Reconcile active work absent
 from or misplaced on the board before permitting a start; board occupancy alone is not full WIP.
-Do not fill columns to their limits or hide WIP by moving started work upstream. A saturated active
+Do not fill columns to their limits or hide WIP by moving started work upstream; the one
+exception is a post-merge check that can only wait, which returns from Verifying to Ready as described
+above and still counts as started work. A saturated active
 stage stops new implementation and redirects effort toward finishing/unblocking it.
 Selection freshness is **15 minutes** (`maxAgeSeconds=900`), measured from the oldest required observation,
 not the last page; re-read capacity before claim and before the Ready-to-In-Progress write.

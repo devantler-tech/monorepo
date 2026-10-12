@@ -40,13 +40,18 @@ native installation and actual later dispatch proof are distinct joins.
 ## Checkpoints finish existing work
 
 Keep existing statuses, finishing-first order, views and configured WIP limits. A begun experiment
-is In Progress/In Review until delivery is merged, then **Verifying** while awaiting release,
-activation or measurement. An unstarted deferred Kata may stay Icebox; a running or due measurement
+is In Progress/In Review until delivery is merged. It is **Verifying** only while a check can be
+run now, which for a dated measurement means its exact eligibility time has passed, not only
+its date. While it waits for that, for an event on its own schedule or for an act only the
+maintainer can perform, it sits in **Ready** with its resume condition recorded as the
+[board guide](issues-and-board.md#every-issue-belongs-on-the-board) describes (monorepo#4109):
+the `Measure on` line, or an `outcome` or `authority` blocker record. An unstarted deferred Kata may stay Icebox; a running or due measurement
 cannot be hidden there to manufacture capacity. Missing/misplaced cards remain unfinished WIP and
 are reconciled by the work-selection guide.
 
 Due eligible verification is finishing work ahead of new intake. Waiting and blocked measurement
-remain WIP. An explicit one-time maintainer exception is recorded on the affected delivery and
+remain started work wherever the card sits: the registered dates, floors and history do not move
+with it. An explicit one-time maintainer exception is recorded on the affected delivery and
 outcome issues with scope and recovery; it does not change limits or authorize unrelated starts.
 
 At Measure on, record expected versus actual, eligibility and attribution, protected floors,

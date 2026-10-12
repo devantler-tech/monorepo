@@ -213,8 +213,11 @@ Until that is solved, backfill is a standing duty, not an exception.
   closed→Done workflow marks it ✅ Done — moving it to *Verifying* would either be immediately
   overwritten or leave finished work looking pending. When the outcome cannot be known at merge, the
   PR also carries `Part of #experiment`; **that experiment/Kata issue stays open, and it is the one
-  that goes to 📊 Verifying** until its measurement date, when it becomes ✅ Done with the decision
-  recorded. If a change has no separate experiment issue but still needs a post-merge check, keep the
+  that goes to 📊 Verifying** once its check can be run, and becomes ✅ Done with the decision
+  recorded. **While it waits for its measurement date, or for an event this lane cannot trigger, it sits
+  in 🫴 Ready with a recorded resume condition** — Verifying holds only checks that can be run now (limit 3,
+  maintainer direction 2026-10-10, monorepo#4109; the
+  [board guide](../../../guides/issues-and-board.md#every-issue-belongs-on-the-board) has the rule). If a change has no separate experiment issue but still needs a post-merge check, keep the
   delivery issue **open** (drop `Fixes`, use `Part of`) rather than closing it and reopening it. **This also makes
   `Fixes #N` load-bearing for visibility, not just bookkeeping:** an agent-authored PR with no linked
   issue is now *invisible on the board*, so the capture-before-you-build rule is what keeps the board
@@ -245,12 +248,14 @@ Until that is solved, backfill is a standing duty, not an exception.
      reliable than docs, which do not enumerate project-field qualifiers.
 - **Status semantics.** Options run **✅ Done → 📊 Verifying → 🚀 Ready to Merge → 👀 In Review →
   🏃🏻‍♂️ In Progress → 🫴 Ready → 📥 Backlog → 🧊 Icebox**, and the **merge is the boundary** between
-  *Ready to Merge* (pre-merge, mechanical) and *Verifying* (post-merge, evidential). The order is
+  pre-merge work (*Ready to Merge*, mechanical) and post-merge evidence work: *Verifying* while
+  the next check can be run now, *Ready* with a recorded resume condition while it cannot. The order is
   **deliberately reversed** — finishing work sits leftmost, so the board reads *stop starting, start
   finishing* (maintainer direction 2026-07-18). **Never re-order it into left-to-right flow.** Column
   **limits** encode the same WIP discipline; treat an over-limit column as a signal to finish, never as
   a reason to raise the limit. **"Blocked" is intentionally not a status** — use a native issue
-  dependency (Blocked badge renders in-place) and reserve the `blocked` label for cross-org blockers.
+  dependency (Blocked badge renders in-place) and reserve the `blocked` label for what a dependency cannot express: every `**Blocker:**`
+  record (`upstream`, `outcome` or `authority`) carries it, a returned check's included.
 - **Value-pull flow fields and capacity.** Resolve the maintainer's explicit ceilings and field
   semantics from [Flow fields and WIP capacity](../../../guides/issues-and-board.md#flow-fields-and-wip-capacity).
   Project 5 attaches the native issue fields Priority, Effort, Start date and Target date; use
