@@ -1380,6 +1380,30 @@ resolve_undo_tree() {
 # stash, an expired reflog entry). Nor are the bytes of the description file and of the
 # hook samples, which git never runs or reads back.
 
+# module_origin_survives <git-dir> <worktree-realpath> <admin> — exit 0 when the repository's
+# origin is a copy the removal cannot delete: a network URL, or an absolute local path (or
+# file:// URL) to an existing directory that lies outside both the worktree and its admin
+# directory. An origin inside either would vouch for the very repository being removed, and
+# a relative path resolves against wherever the sweep happens to run. Anything else,
+# including a transport that is none of these, is refused.
+module_origin_survives() {
+  local g=$1 wt_real=$2 admin=$3 url path admin_real
+  url=$(module_git "$g" remote get-url origin 2>/dev/null) && [ -n "$url" ] || return 1
+  case "$url" in
+    https://*|ssh://*|git://*) return 0 ;;
+    file://*) path=${url#file://} ;;
+    /*) path=$url ;;
+    # scp-like `user@host:path`: a host part with no slash before the colon.
+    *@*:*) case "${url%%:*}" in */*) return 1 ;; *) return 0 ;; esac ;;
+    *) return 1 ;;
+  esac
+  case "$path" in /*) ;; *) return 1 ;; esac
+  path=$(physical_path "$path") || return 1
+  admin_real=$(physical_path "$admin") || return 1
+  case "$path/" in "$wt_real"/*|"$admin_real"/*) return 1 ;; esac
+  return 0
+}
+
 # module_remote_rows <git-dir> -> sets MODULE_REMOTE_ROWS to what the repository's origin
 # advertises right now (`<object id><TAB><ref>` lines; empty for an empty remote). Returns 1
 # when the repository names no origin, and 2 when origin could not be read or its answer not
@@ -1716,6 +1740,7 @@ module_repository_pristine() {
   module_commit_editmsg_spent "$g" || { MODULE_NOTE="its COMMIT_EDITMSG is not the message of a commit it made"; return 1; }
   # 8. Every commit a ref or reflog reaches, and every tag, is held by the remote as it
   #    answers now (module_held_by_remote).
+  module_origin_survives "$g" "$wt_real" "$3" || { MODULE_NOTE="its origin is not a copy that outlives the worktree"; return 1; }
   module_remote_rows "$g"; rc=$?
   case "$rc" in
     0) ;;

@@ -2530,6 +2530,20 @@ t_salvage_asks_a_submodule_remote_again_before_the_removal() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_submodule_whose_origin_is_inside_the_worktree() {
+  # An origin that is the submodule's own repository advertises everything it holds, and
+  # the removal deletes it. Only a copy that outlives the worktree is evidence.
+  keeps_unpristine "salvage KEEPs a submodule whose origin is a repository the removal deletes" subself \
+    'its origin is not a copy that outlives the worktree' \
+    'echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "never pushed" && git -C "$wt/sub" remote set-url origin "$g" && git -C "$wt/sub" update-ref refs/remotes/origin/main HEAD'
+}
+
+t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path() {
+  keeps_unpristine "salvage KEEPs a submodule whose origin is a relative path" subrel \
+    'its origin is not a copy that outlives the worktree' \
+    'git -C "$wt/sub" remote set-url origin ../../subsrc'
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -2584,7 +2598,7 @@ t_unknown_when_a_submodule_remotes_tags_cannot_be_read() {
     || { bad "$name" "FIXTURE: tag"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
-  mv "$root/subsrc" "$root/subsrc.gone"
+  mv "$root/subsrc/.git" "$root/subsrc.git.gone"     # the directory stays; it is no longer a repository
   local out rc; out=$(run_salvage "$root" apply 1); rc=$?
   if [ "$rc" -eq 2 ] && grep -q "KEEP .*subgone2 .*its remote cannot be read" <<<"$out" \
      && grep -q 'UNKNOWN — could not read a submodule remote' <<<"$out" && [ -d "$wt" ]; then
@@ -5065,6 +5079,8 @@ t_salvage_asks_github_about_a_submodule_branch_that_moved_on
 t_salvage_asks_github_about_a_submodule_commit_in_a_merged_pull_request
 t_salvage_keeps_a_submodule_given_a_branch_since_the_salvage_age
 t_salvage_asks_a_submodule_remote_again_before_the_removal
+t_salvage_keeps_a_submodule_whose_origin_is_inside_the_worktree
+t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read
