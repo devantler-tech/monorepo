@@ -2635,6 +2635,29 @@ t_salvage_keeps_a_submodule_ref_that_names_a_tag_object() {
     'git -C "$wt/sub" tag -a note -m "only here" && git -C "$wt/sub" update-ref refs/remotes/origin/pinned "$(git -C "$wt/sub" rev-parse refs/tags/note)" && git -C "$wt/sub" tag -d note'
 }
 
+t_salvage_keeps_a_submodule_file_made_executable_after_the_snapshot() {
+  # A mode change alters neither a name nor a byte, and the kept copy records the old mode.
+  local name="salvage KEEPs a worktree whose submodule repository file changed mode after the snapshot"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" submode || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/submode" shim g
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  age_tree "$wt"
+  shim=$(lsof_hook_shim "$root" 3 "chmod u+x '$g/description'") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if [ ! -x "$g/description" ]; then
+    bad "$name" "the mode was never changed: $out"
+  elif grep -q 'KEEP .*submode .*a submodule repository changed after the salvage snapshot' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -5174,6 +5197,7 @@ t_salvage_keeps_a_submodule_whose_origin_is_another_host
 t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path
 t_salvage_keeps_a_submodule_with_a_stray_file_under_refs
 t_salvage_keeps_a_submodule_ref_that_names_a_tag_object
+t_salvage_keeps_a_submodule_file_made_executable_after_the_snapshot
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read

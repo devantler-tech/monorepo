@@ -1408,7 +1408,7 @@ module_origin_portfolio() { [ -n "$(portfolio_repo "$(module_origin_url "$1" || 
 # What is left out below, here and in work_age_h, is each repository's object store and
 # nothing else by that name: a directory called objects that sits beside a HEAD, a config and
 # a refs directory. A branch named `objects` is a file under refs/ and is counted.
-# modules_fingerprint <admin> -> prints one id for the bytes and names of every file under
+# modules_fingerprint <admin> -> prints one id for the bytes, names and executable bit of every file under
 # the admin directory's modules/ outside the object stores (empty when there is none).
 # Taken before the snapshot and compared immediately before the removal: a branch created,
 # a setting changed or another commit checked out in a submodule after the snapshot leaves
@@ -1422,7 +1422,13 @@ modules_fingerprint() {
   if ! find "$admin/modules" \( -name objects -type d -exec test -f {}/../HEAD -a -f {}/../config -a -d {}/../refs \; -prune \) -o -type f -print0 2>/dev/null | LC_ALL=C sort -z > "$names"; then
     rm -f "$names"; return 1
   fi
-  if ! { cat "$names" && xargs -0 cat < "$names"; } 2>/dev/null | git hash-object --stdin 2>/dev/null; then
+  # Names, then whether each is executable (the one mode bit module_files_tree records),
+  # then the bytes.
+  local f modes=""
+  while IFS= read -r -d '' f; do
+    if [ -x "$f" ]; then modes="${modes}x"; else modes="${modes}-"; fi
+  done < "$names"
+  if ! { cat "$names" && printf '%s\n' "$modes" && xargs -0 cat < "$names"; } 2>/dev/null | git hash-object --stdin 2>/dev/null; then
     rm -f "$names"; return 1
   fi
   rm -f "$names"
@@ -1442,7 +1448,12 @@ REMOTE_MODULE_FAILED=0
 module_remote_rows() {
   local g=$1 url rows i=0
   MODULE_REMOTE_ROWS=""
-  url=$(module_origin_url "$g") && [ -n "$url" ] || return 1
+  # Read over HTTPS at the address built from the validated repository name, whichever form
+  # the repository's config spells it in. An SSH read would go through the host's OpenSSH
+  # configuration, where a Host rule can send github.com anywhere, and that configuration
+  # cannot be switched off without losing the key it supplies.
+  url=$(portfolio_repo "$(module_origin_url "$g" || true)") && [ -n "$url" ] || return 1
+  url="https://github.com/$url.git"
   while [ "$i" -lt "${#MODULE_REMOTE_URLS[@]}" ]; do
     if [ "${MODULE_REMOTE_URLS[$i]}" = "$url" ]; then
       # The check that immediately precedes a removal asks again (MODULE_REMOTE_FRESH): a
@@ -1456,12 +1467,17 @@ module_remote_rows() {
   # configuration out of the way: a url.<base>.insteadOf rule there would send `origin`
   # somewhere else, a local mirror included, while the repository still names GitHub. The
   # repository's own config holds whitelisted keys only, none of which rewrites a URL.
-  # The environment is rebuilt from a short list as well: GIT_SSH_COMMAND, GIT_SSH, a proxy
-  # command or a config override inherited by the sweep would each choose what answers.
+  # The environment is rebuilt from a short list as well: a proxy, a certificate bundle, an
+  # SSH command or a config override inherited by the sweep would each choose what answers.
+  # The one credential source is gh, for a private repository; without gh a private one
+  # cannot be read, which keeps its worktree.
+  local helper=()
+  [ -z "$GH_BIN" ] || helper=(-c "credential.https://github.com.helper=!$GH_BIN auth git-credential")
   rows=$(run_bounded env -i PATH="$PATH" HOME="${HOME:-}" USER="${USER:-}" LOGNAME="${LOGNAME:-}" \
-         TMPDIR="${TMPDIR:-/tmp}" SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-}" \
+         TMPDIR="${TMPDIR:-/tmp}" \
          GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
-         git --git-dir="$g" --work-tree="$g" ls-remote -- "$url") \
+         git --git-dir="$g" --work-tree="$g" -c credential.helper= ${helper[@]+"${helper[@]}"} \
+         ls-remote -- "$url") \
     || { REMOTE_MODULE_FAILED=1; return 2; }
   # An answer holding anything but advertised lines is one this could not read.
   if [ -n "$rows" ] && grep -Evq '^([0-9a-f]{40}|[0-9a-f]{64})	[^	]+$' <<< "$rows"; then
@@ -1521,6 +1537,15 @@ module_held_by_remote() {
   done
 }
 
+# module_gh <gh args...> — gh under the deadline, in an environment rebuilt from a short list:
+# Go's HTTP stack takes a proxy and a certificate bundle from the environment (HTTPS_PROXY,
+# SSL_CERT_FILE), and gh takes its host, token and config directory from it, so anything
+# the sweep inherited could choose what answers. gh's own stored login is what remains.
+module_gh() {
+  run_bounded env -i PATH="$PATH" HOME="${HOME:-}" USER="${USER:-}" LOGNAME="${LOGNAME:-}" \
+    TMPDIR="${TMPDIR:-/tmp}" "$GH_BIN" "$@"
+}
+
 # module_descends <owner/repo> <commit> <advertised-commit> — exit 0 when GitHub says the
 # advertised commit descends from <commit> or is it; 1 when it does not, or has never
 # received <commit>; 2 when GitHub could not be asked. Definitive answers are kept for the
@@ -1535,7 +1560,7 @@ module_descends() {
   # Asked of github.com by name: an inherited GH_HOST would send the question elsewhere.
   # compare/<base>...<head> reports the head relative to the base: `ahead` or `identical`
   # means the advertised commit contains <commit>.
-  out=$(gh_bounded api --hostname github.com "repos/$repo/compare/$tip...$adv" --jq '.status'); rc=$?
+  out=$(module_gh api --hostname github.com "repos/$repo/compare/$tip...$adv" --jq '.status'); rc=$?
   if [ "$rc" -eq 0 ]; then
     case "$out" in
       ahead|identical) rc=0 ;;
@@ -1575,7 +1600,7 @@ module_tip_behind_remote() {
   # Read once per sweep.
   if [ -z "$MODULE_GH_SOCKET" ]; then
     local settings
-    settings=$(gh_bounded config list --host github.com) || return 2
+    settings=$(module_gh config list --host github.com) || return 2
     [ -n "$settings" ] || return 2
     if grep -Eiq '^[^=]*(socket|host|proxy)[^=]*=.' <<< "$settings"; then MODULE_GH_SOCKET="set"; else MODULE_GH_SOCKET="none"; fi
   fi
@@ -1589,7 +1614,7 @@ module_tip_behind_remote() {
     module_descends "$repo" "$tip" "$adv"; rc=$?
     case "$rc" in 0) return 0 ;; 1) ;; *) unknown=1 ;; esac
   done
-  rows=$(gh_bounded api --hostname github.com --paginate "repos/$repo/commits/$tip/pulls" --jq '.[] | "\(.number)\t\(.head.sha)"'); rc=$?
+  rows=$(module_gh api --hostname github.com --paginate "repos/$repo/commits/$tip/pulls" --jq '.[] | "\(.number)\t\(.head.sha)"'); rc=$?
   if [ "$rc" -ne 0 ]; then
     # As in submodule_head_spent: a commit GitHub has never received is a definitive 422.
     case "$rows" in *"No commit found for SHA: $tip\""*) rows="" ;; *) return 2 ;; esac
