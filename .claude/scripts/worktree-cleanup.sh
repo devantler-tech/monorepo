@@ -1561,11 +1561,21 @@ module_descends() {
 #   - the head of each pull request GitHub associates with the commit (up to five), and only
 #     when origin advertises that head as refs/pull/<n>/head: an earlier push of a branch
 #     that was merged and deleted. GitHub keeps that ref after the branch is gone.
+MODULE_GH_SOCKET=""
 module_tip_behind_remote() {
   local g=$1 tip=$2 repo names name adv rc unknown=0 rows number head
   repo=$(portfolio_repo "$(module_origin_url "$g" || true)")
   [ -n "$repo" ] || return 1
   [ -n "$GH_BIN" ] || return 2
+  # gh can be told to send every request through a Unix socket (http_unix_socket, from its
+  # config or a GH_CONFIG_DIR the sweep inherited). Whatever listens there would be what
+  # answers, so with one configured nothing is asked. Read once per sweep.
+  if [ -z "$MODULE_GH_SOCKET" ]; then
+    # A read that failed says nothing about the setting, so nothing is asked then either.
+    MODULE_GH_SOCKET=$(gh_bounded config get http_unix_socket --host github.com) || { MODULE_GH_SOCKET=""; return 2; }
+    MODULE_GH_SOCKET=${MODULE_GH_SOCKET:-none}
+  fi
+  [ "$MODULE_GH_SOCKET" = none ] || return 2
   names=$(module_git "$g" for-each-ref --contains "$tip" --format='%(refname)' refs/remotes/origin 2>/dev/null) || return 2
   names=$(sed -n 's#^refs/remotes/origin/#refs/heads/#p' <<< "$names" | sed -n '1,3p')
   # A ref name holds no whitespace, so the list splits safely.
@@ -2285,7 +2295,9 @@ salvage_namespace() {
 # samples and its reflogs, at their paths under the admin directory (modules/<path>/description,
 # modules/<path>/hooks/<name>.sample, modules/<path>/logs/...); or to nothing when there is
 # none. A reflog's commits are checked against the remote, but each entry also carries a
-# message, which can be text someone wrote (`git update-ref -m`). The pristine check
+# message, which can be text someone wrote (`git update-ref -m`). COMMIT_EDITMSG is kept
+# too: the pristine check compares it with a made commit's message only after stripping
+# comments and blank lines, and the raw file can hold more. The pristine check
 # accepts those files by name: git never runs or reads them back, but someone can have
 # written in one, and git's own samples differ from version to version, so there is no
 # known content to compare with. Their bytes are kept instead (#2831). Built in a
@@ -2297,7 +2309,8 @@ module_files_tree() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
   if [ ! -d "$admin/modules" ] || [ -L "$admin/modules" ]; then return 0; fi
   dir=$(mktemp -d "${TMPDIR:-/tmp}/wt-salvage-module-files.XXXXXX") || return 1
-  if ! find "$admin/modules" -type f \( -name description -o -path '*/hooks/*.sample' -o -path '*/logs/*' \) -print0 \
+  if ! find "$admin/modules" -type f \( -name description -o -name COMMIT_EDITMSG -o -path '*/hooks/*.sample' \
+         -o -path '*/logs/*' \) -print0 \
          > "$dir/list" 2>/dev/null; then
     rm -rf "$dir"; return 1
   fi

@@ -1389,6 +1389,9 @@ gh_shim() {
 printf '%s\n' "\$*" >> "$root/gh-args"
 [ -e "$root/gh-fail" ] && { echo "HTTP 502" >&2; exit 1; }
 case "\$*" in
+  "config get http_unix_socket"*) [ -e "$root/gh-socket" ] && cat "$root/gh-socket"; exit 0 ;;
+esac
+case "\$*" in
   *"/git/ref/tags/"*)
     [ -e "$root/gh-tag-error-body" ] && { cat "$root/gh-tag-error-body"; exit 1; }
     [ -e "$root/gh-tag-out" ] && { cat "$root/gh-tag-out"; exit 0; } ;;
@@ -2349,7 +2352,8 @@ t_salvage_reaps_beside_a_pristine_submodule() {
      && [ "$(cat "$root/probe-env" 2>/dev/null)" = "/dev/null /dev/null unset unset" ] \
      && [ "$(git -C "$root/repo" show "$base/module-files:modules/sub/description" 2>/dev/null)" = "my notes" ] \
      && [ "$(git -C "$root/repo" show "$base/module-files:modules/sub/hooks/pre-commit.sample" 2>/dev/null | tail -1)" = "# mine" ] \
-     && grep -q "pushed from the submodule" <<<"$(git -C "$root/repo" show "$base/module-files:modules/sub/logs/HEAD" 2>/dev/null)"; then
+     && grep -q "pushed from the submodule" <<<"$(git -C "$root/repo" show "$base/module-files:modules/sub/logs/HEAD" 2>/dev/null)" \
+     && grep -q "pushed from the submodule" <<<"$(git -C "$root/repo" show "$base/module-files:modules/sub/COMMIT_EDITMSG" 2>/dev/null)"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2436,7 +2440,7 @@ t_salvage_asks_github_about_a_submodule_branch_that_moved_on() {
   local name="a submodule whose branch moved on upstream is cleared only when GitHub says the branch still holds its tip"
   local failures="" answer root wt shim ghs real_git out want rc
   real_git=$(command -v git)
-  for answer in ahead identical diverged behind failed; do
+  for answer in ahead identical diverged behind failed socket; do
     root=$(make_repo)
     admin_sub_wt "$root" "submoved" || { failures="$failures $answer(FIXTURE)"; rm -rf "$root"; continue; }
     wt="$root/repo/.claude/worktrees/submoved"
@@ -2455,20 +2459,28 @@ exec "$real_git" "\$@"
 SHIM
     chmod +x "$shim/git"
     ghs=$(gh_shim "$root") || { failures="$failures $answer(FIXTURE: gh)"; rm -rf "$root"; continue; }
-    if [ "$answer" = failed ]; then touch "$root/gh-fail"; else printf '%s\n' "$answer" > "$root/gh-out"; fi
+    case "$answer" in
+      failed) touch "$root/gh-fail" ;;
+      # gh told to talk through a socket: whatever listens there says `ahead`, and must not be asked.
+      socket) echo ahead > "$root/gh-out"; echo /tmp/some.sock > "$root/gh-socket" ;;
+      *) printf '%s\n' "$answer" > "$root/gh-out" ;;
+    esac
     out=$(PATH="$shim:$ghs:$PATH" run_salvage "$root" dry-run 1); rc=$?
     # A question GitHub did not answer is not a clean sweep.
-    case "$answer:$rc" in failed:2) ;; failed:*) failures="$failures failed(rc=$rc)" ;; *:0) ;; *) failures="$failures $answer(rc=$rc)" ;; esac
+    case "$answer:$rc" in failed:2|socket:2) ;; failed:*|socket:*) failures="$failures $answer(rc=$rc)" ;; *:0) ;; *) failures="$failures $answer(rc=$rc)" ;; esac
     case "$answer" in
       ahead|identical) want='^SALVAGE .*submoved ' ;;
       diverged|behind) want='KEEP .*submoved .*modules/sub: it holds commit\(s\) its remote does not advertise' ;;
-      failed)          want='KEEP .*submoved .*modules/sub: cannot ask GitHub whether its remote still holds' ;;
+      failed|socket)   want='KEEP .*submoved .*modules/sub: cannot ask GitHub whether its remote still holds' ;;
     esac
     grep -Eq "$want" <<<"$out" || failures="$failures $answer($(grep -E 'KEEP|SALVAGE' <<<"$out" | cut -c1-200))"
-    grep -q 'compare/[0-9a-f]\{40\}\.\.\.0123456789abcdef0123456789abcdef01234567' "$root/gh-args" 2>/dev/null \
-      || failures="$failures $answer(no compare call)"
+    if [ "$answer" = socket ]; then
+      if grep -q 'compare/' "$root/gh-args" 2>/dev/null; then failures="$failures socket(GitHub was asked through the socket)"; fi
+    elif [ "$answer" != failed ] && ! grep -q 'compare/[0-9a-f]\{40\}\.\.\.0123456789abcdef0123456789abcdef01234567' "$root/gh-args" 2>/dev/null; then
+      failures="$failures $answer(no compare call)"
+    fi
     # Asked of github.com by name, whatever GH_HOST the sweep inherited.
-    local unpinned; unpinned=$(grep -v -- '--hostname github\.com ' "$root/gh-args" 2>/dev/null || true)
+    local unpinned; unpinned=$(grep -v -e '--hostname github\.com ' -e '--host github\.com' "$root/gh-args" 2>/dev/null || true)
     if [ -n "$unpinned" ]; then failures="$failures $answer(a gh call without the hostname)"; fi
     rm -rf "$root"
   done
