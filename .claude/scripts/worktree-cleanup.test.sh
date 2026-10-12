@@ -2720,6 +2720,42 @@ t_salvage_keeps_a_submodule_symlink_retargeted_behind_status() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_files_in_an_uninitialised_nested_submodule_directory() {
+  # A gitlink inside the submodule that was never initialised is a plain directory, and git
+  # calls the submodule clean whatever is dropped into it.
+  keeps_unpristine "salvage KEEPs a submodule whose uninitialised nested submodule directory holds a file" subnested \
+    'its uninitialised nested submodule directory inner is not empty' \
+    'printf "[submodule \"inner\"]\n\tpath = inner\n\turl = https://github.com/devantler-tech/inner.git\n" > "$wt/sub/.gitmodules" && git -C "$wt/sub" add .gitmodules && git -C "$wt/sub" update-index --add --cacheinfo "160000,$(git -C "$wt/sub" rev-parse HEAD),inner" && git -C "$wt/sub" commit -qm "a nested submodule" && git -C "$root/subsrc" checkout -q --detach && git -C "$wt/sub" push -q "$root/subsrc" HEAD:main && git -C "$wt/sub" update-ref refs/remotes/origin/main HEAD && mkdir "$wt/sub/inner" && echo authored > "$wt/sub/inner/notes.txt"'
+}
+
+t_unknown_when_a_submodule_checkout_cannot_be_read() {
+  # A repository whose refs git cannot list was not examined: kept, and not a clean sweep.
+  local name="a submodule repository that cannot be read keeps the worktree and ends the sweep UNKNOWN"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subbroken || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subbroken" g
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  age_tree "$wt"
+  # git fails to list this one repository's refs, and answers everything else.
+  mv "$root/gitshim/git" "$root/gitshim-real" || { bad "$name" "FIXTURE: shim"; rm -rf "$root"; return; }
+  cat > "$root/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in *" --git-dir=$g "*" for-each-ref "*) exit 1 ;; esac
+exec "$root/gitshim-real" "\$@"
+SHIM
+  chmod +x "$root/gitshim/git"
+  local out rc; out=$(run_salvage "$root" apply 1); rc=$?
+  if [ "$rc" -eq 2 ] && grep -q "KEEP .*subbroken .*modules/sub: its refs cannot be read" <<<"$out" && ! grep -q 'SALVAGED .*subbroken' <<<"$out" \
+     && grep -q 'UNKNOWN — could not read a submodule repository or its remote' <<<"$out" && [ -d "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc :: $out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -2780,7 +2816,7 @@ t_unknown_when_a_submodule_remotes_tags_cannot_be_read() {
   mv "$root/subsrc/.git" "$root/subsrc.git.gone"     # the directory stays; it is no longer a repository
   local out rc; out=$(run_salvage "$root" apply 1); rc=$?
   if [ "$rc" -eq 2 ] && grep -q "KEEP .*subgone2 .*its remote cannot be read" <<<"$out" \
-     && grep -q 'UNKNOWN — could not read a submodule remote' <<<"$out" && [ -d "$wt" ]; then
+     && grep -q 'UNKNOWN — could not read a submodule repository or its remote' <<<"$out" && [ -d "$wt" ]; then
     ok "$name"
   else
     bad "$name" "rc=$rc :: $out"
@@ -5262,6 +5298,8 @@ t_salvage_keeps_a_submodule_ref_that_names_a_tag_object
 t_salvage_keeps_a_submodule_file_made_executable_after_the_snapshot
 t_salvage_keeps_a_submodule_edit_status_cannot_see
 t_salvage_keeps_a_submodule_symlink_retargeted_behind_status
+t_salvage_keeps_files_in_an_uninitialised_nested_submodule_directory
+t_unknown_when_a_submodule_checkout_cannot_be_read
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read
