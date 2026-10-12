@@ -294,7 +294,7 @@ run() {
   TZ=UTC \
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-  CLAUDE_SCHEDULE_STORE_PATH="$FIX/claude-store/scheduled-tasks.json" \
+  CLAUDE_SCHEDULE_STORE_PATH="${CLAUDE_SCHEDULE_STORE_PATH-$FIX/claude-store/scheduled-tasks.json}" \
   CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" \
   CLAUDE_IMPROVER_LOADER_PATH="$FIX/claude-sched/agent-improver/SKILL.md" \
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
@@ -926,6 +926,222 @@ OUT=$(NOBASE --section drift)
 check "a record off the one due minute stays uncounted" "$OUT" \
   "claude engineer dispatch refusals: 3 slot(s)"
 mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+
+# ── a second Claude engineer entry (monorepo#4117) ────────────────────────────
+# The Claude scheduler holds back a start that would overlap the previous run of
+# the SAME entry, so a second start an hour needs a second entry there, where one
+# minute list is enough for Codex. The lane's entries are then read as a set: the
+# cadence cell is compared with the union of their start minutes, and a refusal is
+# counted under the entry that recorded it, at that entry's own due minute.
+ENTRY2=daily-ai-assistant-half
+mkdir -p "$FIX/claude-sched/$ENTRY2"
+cp "$FIX/claude-sched/daily-ai-assistant/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md"
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+set_entry2() { # $1 = a jq program applied to the pristine store with the second entry added
+  jq --arg id "$ENTRY2" --arg file "$FIX/claude-sched/$ENTRY2/SKILL.md" '
+    .scheduledTasks += [{ "id": $id, "enabled": true, "filePath": $file,
+                          "cronExpression": "20 * * * *",
+                          "lastRunAt": "2026-07-25T20:00:00.000Z" }]
+    | '"$1" "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+}
+TWO() { CLAUDE_ENGINEER_ENTRIES="daily-ai-assistant,$ENTRY2" NOBASE "$@"; }
+set_entry2 .
+# CONTROL: an entry the lane does not name is not read, and a one-entry lane keeps
+# its exact output.
+OUT=$(NOBASE --section drift)
+check "an entry the lane does not name is not read" "$OUT" \
+  "claude engineer: expected=*@50 actual=*@50 MATCH"
+nocheck "a one-entry lane never prints an entries line" "$OUT" "entries:"
+check "a one-entry lane keeps its refusal count" "$OUT" \
+  "claude engineer dispatch refusals: 3 slot(s)"
+# An entry's schedule ("*@50") is a glob pattern. A file of a matching name in the
+# working directory must not replace it when the refusal count walks the entries:
+# read through an unquoted expansion, the entry's hours would become "x" and the
+# count 0.
+mkdir -p "$FIX/globdir"
+: > "$FIX/globdir/daily-ai-assistant=x@50"
+OUT=$(cd "$FIX/globdir" && NOBASE --section drift)
+check "a file name matching an entry's schedule does not replace it" "$OUT" \
+  "claude engineer dispatch refusals: 3 slot(s)"
+# Named, the second entry's start is part of the lane's schedule. The table does
+# not describe it yet: DRIFT, with each entry's own schedule printed beside it.
+OUT=$(TWO --section drift)
+check "a second entry's start the table lacks is drift" "$OUT" \
+  "DRIFT: claude engineer schedule expected=*@50 actual=*@20,50"
+check "a two-entry lane prints each entry's schedule" "$OUT" \
+  "entries: daily-ai-assistant=*@50 $ENTRY2=*@20"
+set_cadence_cell Claude 'Every hour at `:20` and `:50`'
+OUT=$(TWO --section drift)
+check "two entries match a two-minute table cell" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH"
+check "two entries an hour count as two slots an hour" "$OUT" \
+  "local engineer slots scheduled/day: 72"
+check "two staggered entries do not collide" "$OUT" \
+  "local simultaneous starts/day: 0"
+# The order the lane names its entries in is not a difference.
+OUT=$(CLAUDE_ENGINEER_ENTRIES="$ENTRY2,daily-ai-assistant" NOBASE --section drift)
+check "entry order does not read as drift" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH"
+# The second entry has recorded no skip yet. An absent surface is not a zero, so
+# the lane's refusal figure is UNKNOWN instead of the first entry's count alone.
+check "an entry without a skip record leaves the refusal count unknown" "$OUT" \
+  "claude engineer dispatch refusals: UNKNOWN (no readable skip record"
+nocheck "the first entry's count never stands in for the lane" "$OUT" \
+  "claude engineer dispatch refusals: 3 slot(s)"
+# A refusal is counted under the entry that recorded it, at that entry's due
+# minute. The second entry gets one record at its own minute (10:20 UTC) and one
+# at the FIRST entry's minute (10:50 UTC), which is poll noise for it: 3 + 1 = 4.
+# Counting every entry at the union of minutes would read 5.
+set_entry2 '.recordedSkips[$id] = [{ "at": 1784542800000, "reason": "per_task_limit" },
+                                   { "at": 1784544600000, "reason": "per_task_limit" }]'
+OUT=$(TWO --section drift)
+check "refusals are summed over the lane's entries" "$OUT" \
+  "claude engineer dispatch refusals: 4 slot(s)"
+nocheck "an entry's refusal off its own due minute is not a slot" "$OUT" \
+  "claude engineer dispatch refusals: 5 slot(s)"
+# Persistence asks whether an applied schedule edit survived a dispatch, so with
+# several entries EVERY entry's marker must have advanced past the baseline. The
+# newest marker alone would let the first entry's dispatch confirm an edit to a
+# second entry that has never run.
+TWO_BASE() { CLAUDE_ENGINEER_ENTRIES="daily-ai-assistant,$ENTRY2" run "$@"; }
+OUT=$(TWO_BASE --section drift)
+check "two entries that both dispatched after the baseline confirm persistence" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH persistence=CONFIRMED"
+set_entry2 '(.scheduledTasks[] | select(.id == $id) | .lastRunAt) = "2025-01-01T00:00:00.000Z"'
+OUT=$(TWO_BASE --section drift)
+check "an entry that has not dispatched since the baseline withholds persistence" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH persistence=UNKNOWN (change marker did not advance"
+nocheck "the first entry's dispatch never confirms the lane alone" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH persistence=CONFIRMED"
+set_entry2 'del(.scheduledTasks[] | select(.id == $id) | .lastRunAt)'
+OUT=$(TWO_BASE --section drift)
+check "an entry without a dispatch marker withholds persistence" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH persistence=UNKNOWN (change marker missing)"
+# A lane may name one entry that is not the default one, for a trial or a
+# replacement. Its own pointer is then the one that must exist: the default
+# entry's pointer is not part of the lane and its absence is not a finding.
+set_entry2 .
+set_cadence_cell Claude 'Every hour at `:20`'
+mv "$FIX/claude-sched/daily-ai-assistant/SKILL.md" "$FIX/claude-sched/daily-ai-assistant/SKILL.md.hidden"
+OUT=$(CLAUDE_ENGINEER_ENTRIES="$ENTRY2" CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" NOBASE --section drift)
+check "a lane naming one other entry reads that entry's pointer" "$OUT" \
+  "claude engineer: expected=*@20 actual=*@20 MATCH"
+nocheck "the unnamed default entry's missing pointer is not the lane's" "$OUT" \
+  "UNKNOWN: claude engineer schedule pointer missing"
+check "a lane naming one other entry keeps its slot count" "$OUT" \
+  "local engineer slots scheduled/day: 48"
+mv "$FIX/claude-sched/daily-ai-assistant/SKILL.md.hidden" "$FIX/claude-sched/daily-ai-assistant/SKILL.md"
+# CONTROL: the named entry's own pointer missing is still the lane's finding.
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden"
+OUT=$(CLAUDE_ENGINEER_ENTRIES="$ENTRY2" NOBASE --section drift)
+check "a lane naming one other entry reports that entry's missing pointer" "$OUT" \
+  "UNKNOWN: claude engineer schedule pointer missing"
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden" "$FIX/claude-sched/$ENTRY2/SKILL.md"
+set_cadence_cell Claude 'Every hour at `:20` and `:50`'
+# NEGATIVE CONTROLS: a named entry that cannot be read leaves the lane unreadable.
+# It is never read as the remaining entry alone.
+unreadable_two() { # $1 = case label, $2 = the UNKNOWN text expected
+  OUT=$(TWO --section drift)
+  check "$1 is unreadable" "$OUT" "UNKNOWN: claude engineer $2"
+  nocheck "$1 never reads as a schedule" "$OUT" "claude engineer: expected="
+  nocheck "$1 never reads as drift" "$OUT" "DRIFT: claude engineer"
+  check "$1 suppresses the slot count" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
+  check "$1 suppresses the refusal count" "$OUT" \
+    "claude engineer dispatch refusals: UNKNOWN (claude engineer schedule unmeasured)"
+}
+set_entry2 '(.scheduledTasks[] | select(.id == $id) | .enabled) = false'
+unreadable_two "a disabled second entry" "entry $ENTRY2 has no readable scheduler record"
+set_entry2 'del(.scheduledTasks[] | select(.id == $id))'
+unreadable_two "a second entry absent from the store" "entry $ENTRY2 has no readable scheduler record"
+set_entry2 '(.scheduledTasks[] | select(.id == $id) | .cronExpression) = "*/30 * * * *"'
+unreadable_two "a second entry with an unsupported cron" "entry $ENTRY2 has no readable scheduler record"
+set_entry2 .
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden"
+unreadable_two "a second entry without its pointer file" "entry $ENTRY2 schedule pointer missing"
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden" "$FIX/claude-sched/$ENTRY2/SKILL.md"
+# Two entries of one lane starting in the same minute work one branch namespace at
+# once; the union would hide that as a single start.
+set_entry2 '(.scheduledTasks[] | select(.id == $id) | .cronExpression) = "50 * * * *"'
+unreadable_two "a second entry on the first entry's minute" \
+  "entries daily-ai-assistant and $ENTRY2 both start at minute 50"
+# hours x minutes is the compact form, so entries on different hours have no union.
+set_entry2 '(.scheduledTasks[] | select(.id == $id) | .cronExpression) = "20 0,12 * * *"'
+unreadable_two "a second entry on other hours" "entries cover different hours"
+set_entry2 .
+# The entry list itself is read only as a whole: ids of lowercase letters, digits
+# and hyphens, at most four, none twice.
+for bad_entries in "daily-ai-assistant,,$ENTRY2" "daily-ai-assistant,Daily" "daily-ai-assistant,daily-ai-assistant" \
+                   "daily-ai-assistant,-x" "daily-ai-assistant,a b" "a,b,c,d,e" "daily-ai-assistant,"; do
+  OUT=$(CLAUDE_ENGINEER_ENTRIES="$bad_entries" NOBASE --section drift)
+  check "entry list '$bad_entries' is unreadable" "$OUT" \
+    "UNKNOWN: claude engineer entry list is unreadable"
+  nocheck "entry list '$bad_entries' never reads as a schedule" "$OUT" "claude engineer: expected="
+  check "entry list '$bad_entries' suppresses the slot count" "$OUT" \
+    "local engineer slots scheduled/day: UNKNOWN"
+done
+# Every loader the lane names is read by the content checks too. A second entry's
+# loader that was never opened must not sit behind an all-clear.
+OUT=$(TWO --section drift)
+check "a clean second loader keeps the roster all-clear" "$OUT" \
+  "(no output above = no loader hard-codes the review-lane roster)"
+printf 'Request a CodeRabbit review, then stop.\n' > "$FIX/claude-sched/$ENTRY2/SKILL.md"
+OUT=$(TWO --section drift)
+check "a second loader that hard-codes a review lane is drift" "$OUT" \
+  "DRIFT: claude engineer entry $ENTRY2 loader hard-codes review lanes (CodeRabbit)"
+OUT=$(NOBASE --section drift)
+nocheck "an unnamed entry's loader is not scanned" "$OUT" "loader hard-codes review lanes"
+printf 'NEVER self-promote those drafts.\n' > "$FIX/claude-sched/$ENTRY2/SKILL.md"
+OUT=$(TWO --section drift)
+check "a second loader asserting a retired rule is drift" "$OUT" \
+  "DRIFT: $ENTRY2 still asserts the definition-PR promotion gate"
+cp "$FIX/claude-sched/daily-ai-assistant/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md"
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden"
+OUT=$(TWO --section drift)
+check "a missing second loader is reported by name" "$OUT" \
+  "UNKNOWN: claude engineer entry $ENTRY2 loader is missing or unreadable"
+check "a missing second loader makes the roster check incomplete" "$OUT" \
+  "roster check INCOMPLETE: 1 of 5 loaders not inspected"
+check "a missing second loader is listed as missing" "$OUT" \
+  "MISSING: $FIX/claude-sched/$ENTRY2/SKILL.md"
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden" "$FIX/claude-sched/$ENTRY2/SKILL.md"
+# The scheduler store is found by the entries the lane names. Without an explicit
+# store path, a store qualifies only when it holds every named entry, enabled and
+# pointing at its own loader.
+mkdir -p "$FIX/claude-root/a/b"
+DISCOVER() { CLAUDE_SCHEDULE_STORE_PATH='' CLAUDE_SCHEDULE_STORE_ROOT="$FIX/claude-root" NOBASE "$@"; }
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-root/a/b/scheduled-tasks.json"
+OUT=$(CLAUDE_ENGINEER_ENTRIES="daily-ai-assistant,$ENTRY2" DISCOVER --section drift)
+check "a store holding both named entries is discovered" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH"
+# A replacement: the lane names only the new entry and the old one is disabled.
+jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .enabled) = false' \
+  "$FIX/claude-store/scheduled-tasks.json" > "$FIX/claude-root/a/b/scheduled-tasks.json"
+set_cadence_cell Claude 'Every hour at `:20`'
+OUT=$(CLAUDE_ENGINEER_ENTRIES="$ENTRY2" DISCOVER --section drift)
+check "a store holding only the named replacement entry is discovered" "$OUT" \
+  "claude engineer: expected=*@20 actual=*@20 MATCH"
+nocheck "a named replacement entry does not leave the store missing" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+# CONTROLS: the same store does not qualify for a lane that names an entry it
+# holds disabled, and discovery itself still works for the default lane.
+OUT=$(DISCOVER --section drift)
+check "a store with a named entry disabled is not discovered" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+set_cadence_cell Claude 'Every hour at `:50`'
+cp "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-root/a/b/scheduled-tasks.json"
+OUT=$(DISCOVER --section drift)
+check "the default lane's store is still discovered" "$OUT" \
+  "claude engineer: expected=*@50 actual=*@50 MATCH"
+OUT=$(CLAUDE_ENGINEER_ENTRIES="daily-ai-assistant,$ENTRY2" DISCOVER --section drift)
+check "a store lacking a named entry is not discovered" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+rm -r "$FIX/claude-root"
+set_cadence_cell Claude 'Every hour at `:50`'
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+rm -r "$FIX/claude-sched/$ENTRY2"
+OUT=$(NOBASE --section drift)
+check "the fixture is back on its one-entry lane" "$OUT" \
+  "claude engineer: expected=*@50 actual=*@50 MATCH"
 
 # Fail-closed is PRESERVED: an unreadable pointer still suppresses the derivations
 # that depend on it. Only the persistence proof was decoupled, never readability.
