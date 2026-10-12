@@ -902,8 +902,12 @@ recheck_mutable_gates() {
     # Last of all, and purely local: the submodule repositories' files against what they
     # were before the snapshot.
     local now_fp
-    if ! now_fp=$(modules_fingerprint "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)") \
-       || [ "$now_fp" != "$SALVAGE_MODULES_FP" ]; then
+    if ! now_fp=$(modules_fingerprint "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)"); then
+      # Not compared, so neither changed nor unchanged, and not a clean sweep.
+      REMOTE_MODULE_FAILED=1
+      keep "$wt" "cannot re-read its submodule repositories before removal ($SALVAGE_REF)"; return 1
+    fi
+    if [ "$now_fp" != "$SALVAGE_MODULES_FP" ]; then
       keep "$wt" "a submodule repository changed after the salvage snapshot ($SALVAGE_REF)"; return 1
     fi
   elif [ -n "$salvage_reason" ]; then
@@ -1249,6 +1253,12 @@ salvage_blocker() {
   # Salvage carries them in their own ref (resolve_undo_tree), so they only count
   # towards the cap here (#2831).
   sz=$(resolve_undo_kb "$wt") || { SALVAGE_NOTE="cannot read or size the index's resolve-undo entries"; return 0; }
+  total_kb=$((total_kb + sz))
+  # The submodule repositories' files are kept too (module_files_tree), so they count here.
+  local admin_dir
+  admin_dir=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin_dir" ] \
+    || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
+  sz=$(module_files_kb "$admin_dir") || { REMOTE_MODULE_FAILED=1; SALVAGE_NOTE="cannot list or size the submodule repositories' files"; return 0; }
   total_kb=$((total_kb + sz))
   if [ "$total_kb" -gt "$SALVAGE_MAX_KB" ]; then
     SALVAGE_NOTE="more than ${SALVAGE_MAX_KB} KB of changed or untracked data to salvage"; return 0
@@ -2439,6 +2449,26 @@ salvage_namespace() {
     || { SALVAGE_NOTE="unusable salvage ref name $SALVAGE_BASE"; SALVAGE_BASE=""; return 1; }
 }
 
+# module_files_kb <admin> -> prints the size in KB, rounded up per file, of the files
+# module_files_tree keeps (0 when the worktree holds no submodule repository). Read-only, so
+# salvage_blocker counts them too and dry-run cannot promise a salvage that apply then
+# refuses for its size. Non-zero when the files cannot be listed or sized, which also sets
+# REMOTE_MODULE_FAILED: files that were not read were not examined.
+module_files_kb() {
+  local admin=$1 list f sz kb=0
+  if [ ! -d "$admin/modules" ] || [ -L "$admin/modules" ]; then echo 0; return 0; fi
+  list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-module-kb.XXXXXX") || return 1
+  if ! module_state_files "$admin/modules" > "$list"; then rm -f "$list"; REMOTE_MODULE_FAILED=1; return 1; fi
+  while IFS= read -r -d '' f; do
+    sz=$(wc -c < "$f" 2>/dev/null) || { rm -f "$list"; REMOTE_MODULE_FAILED=1; return 1; }
+    sz=$(printf '%s' "$sz" | tr -d ' ')
+    case "$sz" in ''|*[!0-9]*) rm -f "$list"; REMOTE_MODULE_FAILED=1; return 1 ;; esac
+    kb=$((kb + (sz + 1023) / 1024))
+  done < "$list"
+  rm -f "$list"
+  printf '%s\n' "$kb"
+}
+
 # module_files_tree <worktree> -> sets MODULE_FILES_TREE to a tree holding every file of every
 # submodule repository under the admin directory's modules/ outside the object stores, at
 # its path under the admin directory (modules/<path>/config, .../description,
@@ -2462,18 +2492,14 @@ module_files_tree() {
   if [ ! -d "$admin/modules" ] || [ -L "$admin/modules" ]; then return 0; fi
   dir=$(mktemp -d "${TMPDIR:-/tmp}/wt-salvage-module-files.XXXXXX") \
     || { SALVAGE_NOTE="cannot create a temporary directory"; return 1; }
-  if ! module_state_files "$admin/modules" > "$dir/list"; then
-    rm -rf "$dir"; SALVAGE_NOTE="cannot list the submodule repositories' files"; return 1
+  # module_files_kb runs in a subshell here, so its failure flag is set again on this side.
+  kb=$(module_files_kb "$admin") || { rm -rf "$dir"; REMOTE_MODULE_FAILED=1; SALVAGE_NOTE="cannot list or size the submodule repositories' files"; return 1; }
+  if [ "$kb" -gt "$SALVAGE_MAX_KB" ]; then
+    rm -rf "$dir"; SALVAGE_NOTE="the submodule repositories hold more than ${SALVAGE_MAX_KB} KB of files to keep"; return 1
   fi
-  while IFS= read -r -d '' f; do
-    sz=$(wc -c < "$f" 2>/dev/null) || { rm -rf "$dir"; SALVAGE_NOTE="cannot size a submodule repository file"; return 1; }
-    sz=$(printf '%s' "$sz" | tr -d ' ')
-    case "$sz" in ''|*[!0-9]*) rm -rf "$dir"; SALVAGE_NOTE="cannot size a submodule repository file"; return 1 ;; esac
-    kb=$((kb + (sz + 1023) / 1024))
-    if [ "$kb" -gt "$SALVAGE_MAX_KB" ]; then
-      rm -rf "$dir"; SALVAGE_NOTE="the submodule repositories hold more than ${SALVAGE_MAX_KB} KB of files to keep"; return 1
-    fi
-  done < "$dir/list"
+  if ! module_state_files "$admin/modules" > "$dir/list"; then
+    rm -rf "$dir"; REMOTE_MODULE_FAILED=1; SALVAGE_NOTE="cannot list the submodule repositories' files"; return 1
+  fi
   : > "$dir/entries" || { rm -rf "$dir"; SALVAGE_NOTE="cannot write a temporary file"; return 1; }
   while IFS= read -r -d '' f; do
     rel=${f#"$admin"/}

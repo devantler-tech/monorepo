@@ -1387,12 +1387,13 @@ gh_shim() {
   cat > "$shim/gh" <<SHIM
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$root/gh-args"
-[ -e "$root/gh-fail" ] && { echo "HTTP 502" >&2; exit 1; }
 case "\$*" in
   "config list"*)
+    [ -e "$root/gh-config-fail" ] && { echo "cannot read the configuration" >&2; exit 1; }
     printf 'git_protocol=ssh\nhttp_unix_socket=%s\napi_host=%s\n' "\$(cat "$root/gh-socket" 2>/dev/null)" "\$(cat "$root/gh-apihost" 2>/dev/null)"
     exit 0 ;;
 esac
+[ -e "$root/gh-fail" ] && { echo "HTTP 502" >&2; exit 1; }
 case "\$*" in
   *"/git/ref/tags/"*)
     [ -e "$root/gh-tag-error-body" ] && { cat "$root/gh-tag-error-body"; exit 1; }
@@ -2444,7 +2445,7 @@ t_salvage_asks_github_about_a_submodule_branch_that_moved_on() {
   local name="a submodule whose branch moved on upstream is cleared only when GitHub says the branch still holds its tip"
   local failures="" answer root wt shim ghs real_git out want rc
   real_git=$(command -v git)
-  for answer in ahead identical diverged behind failed socket apihost; do
+  for answer in ahead identical diverged behind failed configfailed socket apihost; do
     root=$(make_repo)
     admin_sub_wt "$root" "submoved" || { failures="$failures $answer(FIXTURE)"; rm -rf "$root"; continue; }
     wt="$root/repo/.claude/worktrees/submoved"
@@ -2465,6 +2466,8 @@ SHIM
     ghs=$(gh_shim "$root") || { failures="$failures $answer(FIXTURE: gh)"; rm -rf "$root"; continue; }
     case "$answer" in
       failed) touch "$root/gh-fail" ;;
+      # gh's settings cannot be read, so nothing says where a question would go.
+      configfailed) echo ahead > "$root/gh-out"; touch "$root/gh-config-fail" ;;
       # gh told to talk through a socket: whatever listens there says `ahead`, and must not be asked.
       socket) echo ahead > "$root/gh-out"; echo /tmp/some.sock > "$root/gh-socket" ;;
       apihost) echo ahead > "$root/gh-out"; echo gateway.example.invalid > "$root/gh-apihost" ;;
@@ -2472,16 +2475,16 @@ SHIM
     esac
     out=$(PATH="$shim:$ghs:$PATH" run_salvage "$root" dry-run 1); rc=$?
     # A question GitHub did not answer is not a clean sweep.
-    case "$answer:$rc" in failed:2|socket:2|apihost:2) ;; failed:*|socket:*|apihost:*) failures="$failures $answer(rc=$rc)" ;; *:0) ;; *) failures="$failures $answer(rc=$rc)" ;; esac
+    case "$answer:$rc" in failed:2|configfailed:2|socket:2|apihost:2) ;; failed:*|configfailed:*|socket:*|apihost:*) failures="$failures $answer(rc=$rc)" ;; *:0) ;; *) failures="$failures $answer(rc=$rc)" ;; esac
     case "$answer" in
       ahead|identical) want='^SALVAGE .*submoved ' ;;
       diverged|behind) want='KEEP .*submoved .*modules/sub: it holds commit\(s\) its remote does not advertise' ;;
-      failed|socket|apihost) want='KEEP .*submoved .*modules/sub: cannot ask GitHub whether its remote still holds' ;;
+      failed|configfailed|socket|apihost) want='KEEP .*submoved .*modules/sub: cannot ask GitHub whether its remote still holds' ;;
     esac
     grep -Eq "$want" <<<"$out" || failures="$failures $answer($(grep -E 'KEEP|SALVAGE' <<<"$out" | cut -c1-200))"
-    if [ "$answer" = socket ] || [ "$answer" = apihost ]; then
-      if grep -q 'compare/' "$root/gh-args" 2>/dev/null; then failures="$failures $answer(GitHub was asked through the override)"; fi
-    elif [ "$answer" != failed ] && ! grep -q 'compare/[0-9a-f]\{40\}\.\.\.0123456789abcdef0123456789abcdef01234567' "$root/gh-args" 2>/dev/null; then
+    if [ "$answer" = socket ] || [ "$answer" = apihost ] || [ "$answer" = configfailed ]; then
+      if grep -q 'compare/' "$root/gh-args" 2>/dev/null; then failures="$failures $answer(GitHub was asked although its settings forbid or hide it)"; fi
+    elif ! grep -q 'compare/[0-9a-f]\{40\}\.\.\.0123456789abcdef0123456789abcdef01234567' "$root/gh-args" 2>/dev/null; then
       failures="$failures $answer(no compare call)"
     fi
     # Asked of github.com by name, whatever GH_HOST the sweep inherited.
@@ -2650,7 +2653,7 @@ t_salvage_keeps_a_submodule_file_made_executable_after_the_snapshot() {
   local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
   if [ ! -x "$g/description" ]; then
     bad "$name" "the mode was never changed: $out"
-  elif grep -q 'KEEP .*submode .*a submodule repository changed after the salvage snapshot' <<<"$out"; then
+  elif grep -q 'KEEP .*submode .*a submodule repository changed after the salvage snapshot' <<<"$out" && [ -d "$wt" ] && [ -d "$g" ]; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2792,6 +2795,37 @@ t_salvage_keeps_a_branch_namespace_that_looks_like_a_repository() {
   rm -rf "$root"
 }
 
+t_salvage_dry_run_counts_the_submodule_files_it_would_keep() {
+  # The submodule repositories' files are kept on apply, so they count towards the cap, and
+  # dry-run must say so instead of promising a salvage apply would refuse for its size.
+  local name="salvage dry-run counts the submodule repository files towards the size cap"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subbig || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subbig" g
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  age_tree "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if ! grep -q '^SALVAGE .*subbig ' <<<"$out"; then
+    bad "$name" "control (default cap): $out"; rm -rf "$root"; return
+  fi
+  # 64 KB written into a file the pristine check accepts by name; the cap is 32 KB.
+  head -c 65536 /dev/zero | tr '\0' '#' > "$g/description"
+  age_tree "$wt"
+  local dry applied
+  dry=$(WORKTREE_SALVAGE_MAX_KB=32 run_salvage "$root" dry-run 1)
+  applied=$(WORKTREE_SALVAGE_MAX_KB=32 run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subbig .*more than 32 KB' <<<"$dry" && ! grep -q '^SALVAGE .*subbig ' <<<"$dry" \
+     && grep -q 'KEEP .*subbig .*more than 32 KB' <<<"$applied" && [ -d "$wt" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "dry: $dry :: apply: $applied"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -2830,7 +2864,7 @@ t_salvage_keeps_a_submodule_changed_after_the_snapshot() {
   local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
   if ! git -C "$wt/sub" rev-parse -q --verify refs/heads/objects >/dev/null; then
     bad "$name" "the late branch was never created: $out"
-  elif grep -q 'KEEP .*sublate .*a submodule repository changed after the salvage snapshot' <<<"$out"; then
+  elif grep -q 'KEEP .*sublate .*a submodule repository changed after the salvage snapshot' <<<"$out" && [ -d "$wt" ] && [ -d "$g" ]; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -5338,6 +5372,7 @@ t_salvage_keeps_files_in_an_uninitialised_nested_submodule_directory
 t_unknown_when_a_submodule_checkout_cannot_be_read
 t_salvage_keeps_a_submodule_commit_only_a_malformed_reflog_line_names
 t_salvage_keeps_a_branch_namespace_that_looks_like_a_repository
+t_salvage_dry_run_counts_the_submodule_files_it_would_keep
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read
