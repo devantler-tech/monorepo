@@ -1108,10 +1108,31 @@ t_origin_read_deadline_stops_the_transport_helper() {
   out=$(WORKTREE_CLEANUP_GH_DEADLINE=1 PATH="$shim:$PATH" run "$root"); rc=$?
   helper=$(cat "$root/helper.pid" 2>/dev/null)
   if [ -n "$helper" ] && ! kill -0 "$helper" 2>/dev/null && [ "$rc" -eq 2 ] \
+     && grep -q 'UNKNOWN — could not establish which reflog-only commits origin holds' <<<"$out" \
      && grep -q 'KEEP .*held .*reflog or pseudo-ref holds commit' <<<"$out"; then
     ok "$name"
   else
     bad "$name" "rc=$rc helper=${helper:-none} alive=$(kill -0 "$helper" 2>/dev/null && echo yes || echo no) $out"
+    [ -z "$helper" ] || kill -KILL "$helper" 2>/dev/null
+  fi
+  rm -rf "$root"
+}
+
+t_origin_read_deadline_holds_when_term_is_ignored() {
+  # A command that ignores TERM must not hang the sweep: it is killed after a short grace.
+  local name="returns at the deadline when the origin read ignores TERM, and exits UNKNOWN"
+  local root shim out rc helper start took; root=$(make_repo)
+  reflog_fixture "$root" held 1 >/dev/null || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  shim=$(git_shim "$root" 'case " $* " in *" ls-remote "*) trap "" TERM; sleep 60 & echo $! > "$root/helper.pid"; wait; exit 1 ;; esac')
+  start=$(date +%s)
+  out=$(WORKTREE_CLEANUP_GH_DEADLINE=1 PATH="$shim:$PATH" run "$root"); rc=$?
+  took=$(( $(date +%s) - start ))
+  helper=$(cat "$root/helper.pid" 2>/dev/null)
+  if [ -n "$helper" ] && ! kill -0 "$helper" 2>/dev/null && [ "$rc" -eq 2 ] && [ "$took" -lt 40 ] \
+     && grep -q 'UNKNOWN — could not establish which reflog-only commits origin holds' <<<"$out"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc took=${took}s helper=${helper:-none} $out"
     [ -z "$helper" ] || kill -KILL "$helper" 2>/dev/null
   fi
   rm -rf "$root"
@@ -4597,6 +4618,7 @@ t_asks_origin_once_for_many_reflog_worktrees
 t_unknown_when_the_origin_comparison_fails
 t_origin_read_keeps_the_configured_ssh_command
 t_origin_read_deadline_stops_the_transport_helper
+t_origin_read_deadline_holds_when_term_is_ignored
 t_keeps_reflog_commit_origin_no_longer_advertises
 t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing

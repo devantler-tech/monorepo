@@ -301,9 +301,12 @@ run_bounded() {
     if [ "$ticks" -ge $((GH_DEADLINE_S * 5)) ]; then
       # Negative pid = the group; the single pid is the fallback where job control gave none.
       kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+      # TERM can be ignored, and `wait` on a command that ignores it never returns. So it
+      # gets two seconds, then the group is killed, and only then is the command reaped.
+      ticks=0
+      while kill -0 "$pid" 2>/dev/null && [ "$ticks" -lt 10 ]; do sleep 0.2; ticks=$((ticks + 1)); done
+      kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
       { wait "$pid"; } 2>/dev/null
-      # TERM can be ignored; whatever is left of the group outlived the command.
-      kill -KILL -"$pid" 2>/dev/null || true
       rm -f "$tmp"
       return 124
     fi
@@ -343,7 +346,7 @@ remote_held_commits() {
   # replace a transport the repository configured. The deadline bounds a prompt instead.
   rows=$(GIT_TERMINAL_PROMPT=0 run_bounded git -C "$TOPLEVEL" ls-remote origin) || { REMOTE_HELD_FAILED=1; return 0; }
   # An advertised line is `<object id><TAB><ref>`; anything else is not evidence.
-  ids=$(awk -F'\t' 'NF == 2 && $1 ~ /^([0-9a-f]{40}|[0-9a-f]{64})$/ { print $1 }' <<< "$rows" | sort -u)
+  ids=$(awk -F'\t' 'NF == 2 && $1 ~ /^([0-9a-f]{40}|[0-9a-f]{64})$/ { print $1 }' <<< "$rows" | sort -u) || { REMOTE_HELD_FAILED=1; return 0; }
   [ -n "$ids" ] || return 0
   REMOTE_HELD=$(git -C "$TOPLEVEL" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" \
                 2>/dev/null | awk '$2 == "commit" { print $1 }') || { REMOTE_HELD=""; REMOTE_HELD_FAILED=1; }
