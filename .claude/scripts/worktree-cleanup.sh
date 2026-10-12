@@ -1372,39 +1372,150 @@ resolve_undo_tree() {
 # stash, an expired reflog entry). Nor are the bytes of the description file and of the
 # hook samples, which git never runs or reads back.
 
-# module_tags_on_remote <git-dir> — exit 0 when the remote holds every local tag at exactly
-# the same object; 1 when it lacks one or holds it elsewhere (an annotated tag made here is
-# an object no clone would bring back, even on a pushed commit); 2 when the remote could not
-# be read, which also sets REMOTE_TAGS_FAILED so the sweep ends UNKNOWN. A repository with no
-# tag asks nothing. One read per remote URL per sweep: every worktree that populated a
-# submodule carries the same tags. Call it from the main shell, never inside $(), or the
-# answers kept for the sweep are dropped.
-MODULE_TAG_URLS=()
-MODULE_TAG_ROWS=()
-REMOTE_TAGS_FAILED=0
-module_tags_on_remote() {
-  local g=$1 local_tags url rows i missing
-  local_tags=$(module_git "$g" for-each-ref --format='%(objectname)%09%(refname)' refs/tags 2>/dev/null) || return 2
-  [ -n "$local_tags" ] || return 0
+# module_remote_rows <git-dir> -> sets MODULE_REMOTE_ROWS to what the repository's origin
+# advertises right now (`<object id><TAB><ref>` lines; empty for an empty remote). Returns 1
+# when the repository names no origin, and 2 when origin could not be read or its answer not
+# parsed, which also sets REMOTE_MODULE_FAILED so the sweep ends UNKNOWN. One read per remote
+# URL per sweep: every worktree that populated a submodule asks about the same remote. Call
+# it from the main shell, never inside $(), or the answers kept for the sweep are dropped.
+MODULE_REMOTE_URLS=()
+MODULE_REMOTE_ANSWERS=()
+MODULE_REMOTE_ROWS=""
+REMOTE_MODULE_FAILED=0
+module_remote_rows() {
+  local g=$1 url rows i=0
+  MODULE_REMOTE_ROWS=""
   url=$(module_git "$g" remote get-url origin 2>/dev/null) && [ -n "$url" ] || return 1
-  rows=""; i=0
-  while [ "$i" -lt "${#MODULE_TAG_URLS[@]}" ]; do
-    if [ "${MODULE_TAG_URLS[$i]}" = "$url" ]; then rows=${MODULE_TAG_ROWS[$i]}; break; fi
+  while [ "$i" -lt "${#MODULE_REMOTE_URLS[@]}" ]; do
+    if [ "${MODULE_REMOTE_URLS[$i]}" = "$url" ]; then MODULE_REMOTE_ROWS=${MODULE_REMOTE_ANSWERS[$i]}; return 0; fi
     i=$((i + 1))
   done
-  if [ "$i" -eq "${#MODULE_TAG_URLS[@]}" ]; then
-    rows=$(GIT_TERMINAL_PROMPT=0 run_bounded git --git-dir="$g" --work-tree="$g" ls-remote --tags origin) \
-      || { REMOTE_TAGS_FAILED=1; return 2; }
-    # An advertised line is `<object id><TAB><ref>`; an answer holding anything else is one
-    # this could not read. An empty answer is a remote with no tag at all.
-    if [ -n "$rows" ] && grep -Evq '^([0-9a-f]{40}|[0-9a-f]{64})	refs/tags/' <<< "$rows"; then
-      REMOTE_TAGS_FAILED=1; return 2
-    fi
-    MODULE_TAG_URLS[i]=$url; MODULE_TAG_ROWS[i]=$rows
+  rows=$(GIT_TERMINAL_PROMPT=0 run_bounded git --git-dir="$g" --work-tree="$g" ls-remote origin) \
+    || { REMOTE_MODULE_FAILED=1; return 2; }
+  # An answer holding anything but advertised lines is one this could not read.
+  if [ -n "$rows" ] && grep -Evq '^([0-9a-f]{40}|[0-9a-f]{64})	[^	]+$' <<< "$rows"; then
+    REMOTE_MODULE_FAILED=1; return 2
   fi
-  missing=$(awk 'NR == FNR { held[$0]; next } NF && !($0 in held)' \
-            <(printf '%s\n' "$rows") <(printf '%s\n' "$local_tags") | head -1) || return 2
-  [ -z "$missing" ]
+  MODULE_REMOTE_URLS[i]=$url; MODULE_REMOTE_ANSWERS[i]=$rows
+  MODULE_REMOTE_ROWS=$rows
+}
+
+# module_held_by_remote <git-dir> — exit 0 when origin, as it answers right now, holds
+# everything the repository's refs and reflogs reach; 1 with MODULE_NOTE when it does not;
+# 2 when origin could not be read. Reads MODULE_REMOTE_ROWS (module_remote_rows first).
+# The local remote-tracking refs are NOT the evidence: one can be stale (its branch deleted
+# upstream) or written by hand, and unlike the worktree's own repository, nothing of a
+# submodule repository survives the removal. So:
+#   - every local tag is advertised at exactly the same object (an annotated tag made here
+#     is an object no clone would bring back, even on a pushed commit);
+#   - every commit a ref or reflog reaches is reachable from a commit origin advertises: a
+#     branch, a tag, or a pull request's head, which GitHub keeps after its branch is gone.
+# A clone that has not fetched for weeks does not hold the commits origin advertises today,
+# so its own branch tips cannot be shown reachable from them locally. Each such tip is asked
+# about instead (module_tip_behind_remote), newest first as in
+# submodule_repository_disposable, and at most SUBMODULE_TIP_LIMIT of them.
+module_held_by_remote() {
+  local g=$1 local_tags missing ids held tip asked=0 rc
+  local_tags=$(module_git "$g" for-each-ref --format='%(objectname)%09%(refname)' refs/tags 2>/dev/null) || return 2
+  if [ -n "$local_tags" ]; then
+    missing=$(awk 'NR == FNR { held[$0]; next } NF && !($0 in held)' \
+              <(printf '%s\n' "$MODULE_REMOTE_ROWS") <(printf '%s\n' "$local_tags")) || return 2
+    if [ -n "$missing" ]; then MODULE_NOTE="it holds a tag its remote lacks"; return 1; fi
+  fi
+  # Advertised ids this store holds as commits. An annotated tag is advertised twice, the
+  # second time peeled (`^{}`) to its commit, so tag objects themselves are not needed.
+  ids=$(awk -F'\t' 'NF == 2 { print $1 }' <<< "$MODULE_REMOTE_ROWS" | sort -u) || return 2
+  held=""
+  if [ -n "$ids" ]; then
+    held=$(module_git "$g" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" 2>/dev/null \
+           | awk '$2 == "commit" { print "^" $1 }') || return 2
+  fi
+  while :; do
+    # No blank line may reach --stdin, and `held` is empty for an empty remote.
+    tip=$(module_git "$g" rev-list --topo-order --max-count=1 --all --reflog --stdin \
+          < <(grep . <<< "$held" || true) 2>/dev/null) || return 2
+    [ -n "$tip" ] || return 0
+    asked=$((asked + 1))
+    if [ "$asked" -gt "$SUBMODULE_TIP_LIMIT" ]; then
+      MODULE_NOTE="it holds more than $SUBMODULE_TIP_LIMIT tips its remote does not advertise"; return 1
+    fi
+    module_tip_behind_remote "$g" "$tip"; rc=$?
+    case "$rc" in
+      0) held="$held"$'\n'"^$tip" ;;
+      1) MODULE_NOTE="it holds commit(s) its remote does not advertise (${tip:0:12})"; return 1 ;;
+      *) MODULE_NOTE="cannot ask GitHub whether its remote still holds ${tip:0:12}"; return 1 ;;
+    esac
+  done
+}
+
+# module_descends <owner/repo> <commit> <advertised-commit> — exit 0 when GitHub says the
+# advertised commit descends from <commit> or is it; 1 when it does not, or has never
+# received <commit>; 2 when GitHub could not be asked. Definitive answers are kept for the
+# sweep: every worktree's clone of a submodule lags its remote the same way.
+MODULE_COMPARE_ANSWERS=$'\n'
+module_descends() {
+  local repo=$1 tip=$2 adv=$3 out rc key="$1 $2 $3"
+  case "$MODULE_COMPARE_ANSWERS" in
+    *$'\n'"$key 0"$'\n'*) return 0 ;;
+    *$'\n'"$key 1"$'\n'*) return 1 ;;
+  esac
+  # compare/<base>...<head> reports the head relative to the base: `ahead` or `identical`
+  # means the advertised commit contains <commit>.
+  out=$(gh_bounded api "repos/$repo/compare/$tip...$adv" --jq '.status'); rc=$?
+  if [ "$rc" -eq 0 ]; then
+    case "$out" in
+      ahead|identical) rc=0 ;;
+      behind|diverged) rc=1 ;;
+      *) return 2 ;;
+    esac
+  else
+    # GitHub answers a commit it has never received with a definitive 404, whose error body
+    # gh prints on stdout. Any other failure, a timeout included, stays unknown.
+    case "$out" in *'"status":"404"'*) rc=1 ;; *) return 2 ;; esac
+  fi
+  MODULE_COMPARE_ANSWERS="$MODULE_COMPARE_ANSWERS$key $rc"$'\n'
+  return "$rc"
+}
+
+# module_tip_behind_remote <git-dir> <commit> — exit 0 when GitHub says something origin
+# advertises right now descends from <commit>; 1 when nothing asked about does (the commit
+# was rewritten away upstream, or never pushed) or the remote is not a portfolio
+# repository; 2 when GitHub could not be asked. Reads MODULE_REMOTE_ROWS. Asked about, in
+# order:
+#   - the branch of the same name as each local remote-tracking ref that reaches the commit
+#     (up to three), and origin's HEAD: a clone that fell behind a branch that moved on;
+#   - the head of each pull request GitHub associates with the commit (up to five), and only
+#     when origin advertises that head as refs/pull/<n>/head: an earlier push of a branch
+#     that was merged and deleted. GitHub keeps that ref after the branch is gone.
+module_tip_behind_remote() {
+  local g=$1 tip=$2 repo names name adv rc unknown=0 rows number head
+  repo=$(portfolio_repo "$(module_git "$g" remote get-url origin 2>/dev/null || true)")
+  [ -n "$repo" ] || return 1
+  [ -n "$GH_BIN" ] || return 2
+  names=$(module_git "$g" for-each-ref --contains "$tip" --format='%(refname)' refs/remotes/origin 2>/dev/null) || return 2
+  names=$(sed -n 's#^refs/remotes/origin/#refs/heads/#p' <<< "$names" | sed -n '1,3p')
+  # A ref name holds no whitespace, so the list splits safely.
+  for name in $names HEAD; do
+    adv=$(awk -F'\t' -v r="$name" '$2 == r { print $1; exit }' <<< "$MODULE_REMOTE_ROWS")
+    if [ -z "$adv" ] || [ "$adv" = "$tip" ]; then continue; fi
+    module_descends "$repo" "$tip" "$adv"; rc=$?
+    case "$rc" in 0) return 0 ;; 1) ;; *) unknown=1 ;; esac
+  done
+  rows=$(gh_bounded api --paginate "repos/$repo/commits/$tip/pulls" --jq '.[] | "\(.number)\t\(.head.sha)"'); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # As in submodule_head_spent: a commit GitHub has never received is a definitive 422.
+    case "$rows" in *"No commit found for SHA: $tip\""*) rows="" ;; *) return 2 ;; esac
+  fi
+  while IFS=$'\t' read -r number head; do
+    [ -n "$number" ] || continue
+    case "$number" in *[!0-9]*) continue ;; esac
+    adv=$(awk -F'\t' -v r="refs/pull/$number/head" '$2 == r { print $1; exit }' <<< "$MODULE_REMOTE_ROWS")
+    if [ -z "$adv" ] || [ "$adv" != "$head" ]; then continue; fi
+    module_descends "$repo" "$tip" "$adv"; rc=$?
+    case "$rc" in 0) return 0 ;; 1) ;; *) unknown=1 ;; esac
+  done <<< "$(sed -n '1,5p' <<< "$rows")"
+  [ "$unknown" -eq 0 ] || return 2
+  return 1
 }
 
 # module_config_pristine <file> <allowed-keys-pattern> — exit 0 when every key in that
@@ -1587,18 +1698,19 @@ module_repository_pristine() {
   fi
   # 7. A COMMIT_EDITMSG is the message of a commit already made, not a draft.
   module_commit_editmsg_spent "$g" || { MODULE_NOTE="its COMMIT_EDITMSG is not the message of a commit it made"; return 1; }
-  # 8. Every commit a ref or reflog reaches is on the remote, and so is every tag.
-  module_tags_on_remote "$g"; rc=$?
+  # 8. Every commit a ref or reflog reaches, and every tag, is held by the remote as it
+  #    answers now (module_held_by_remote).
+  module_remote_rows "$g"; rc=$?
   case "$rc" in
     0) ;;
-    1) MODULE_NOTE="it holds a tag its remote lacks"; return 1 ;;
-    *) MODULE_NOTE="its remote's tags cannot be read"; return 1 ;;
+    1) MODULE_NOTE="it names no origin"; return 1 ;;
+    *) MODULE_NOTE="its remote cannot be read"; return 1 ;;
   esac
-  submodule_repository_disposable "$g"; rc=$?
+  module_held_by_remote "$g"; rc=$?
   case "$rc" in
     0) ;;
-    1) MODULE_NOTE="it holds commit(s) its remote lacks (${SUBMODULE_LOCAL_ONLY:0:12}$SUBMODULE_TIP_NOTE)"; return 1 ;;
-    *) MODULE_NOTE="cannot establish whether its remote holds its commits"; return 1 ;;
+    1) return 1 ;;
+    *) MODULE_NOTE="cannot compare it with what its remote advertises"; return 1 ;;
   esac
   VERIFIED_CHECKOUTS="$VERIFIED_CHECKOUTS$co"$'\n'
   # 9. Its own submodules' repositories, by the same rule.
@@ -2756,9 +2868,9 @@ fi
 if [ "$stuck" -gt 0 ]; then
   printf 'worktree-cleanup: %d of the kept worktree(s) hold abandoned work that no sweep will reap; salvage or discard it (#2831)\n' "$stuck"
 fi
-if [ "$REMOTE_TAGS_FAILED" -ne 0 ]; then
-  # The same reasoning as below, for a submodule's tags: its worktree was kept unexamined.
-  printf 'worktree-cleanup: UNKNOWN — could not read the tags of a submodule remote, so the worktrees kept for it were kept unexamined (#2831)\n' >&2
+if [ "$REMOTE_MODULE_FAILED" -ne 0 ]; then
+  # The same reasoning as below, for a submodule's remote: its worktree was kept unexamined.
+  printf 'worktree-cleanup: UNKNOWN — could not read a submodule remote, so the worktrees kept for it were kept unexamined (#2831)\n' >&2
   [ "$REMOTE_HELD_FAILED" -ne 0 ] || exit 2
 fi
 if [ "$REMOTE_HELD_FAILED" -ne 0 ]; then

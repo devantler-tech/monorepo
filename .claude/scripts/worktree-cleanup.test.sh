@@ -2376,6 +2376,106 @@ t_salvage_keeps_a_submodule_with_a_local_only_tag() {
     'git -C "$wt/sub" tag only-here'
 }
 
+t_salvage_keeps_a_submodule_commit_only_a_remote_tracking_ref_holds() {
+  # A remote-tracking ref is a local file: one written by hand, or left behind when its
+  # branch was deleted upstream, proves nothing about what the remote holds now.
+  keeps_unpristine "salvage KEEPs a submodule whose commit only a local remote-tracking ref holds" subghost \
+    'it holds commit\(s\) its remote does not advertise' \
+    'echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "never pushed" && git -C "$wt/sub" update-ref refs/remotes/origin/ghost HEAD && git -C "$wt/sub" reset -q --hard HEAD~1'
+}
+
+t_salvage_asks_github_about_a_submodule_branch_that_moved_on() {
+  # The clone is old: origin's main has moved to a commit this store does not hold, so
+  # nothing local shows that the clone's own main is still part of it. GitHub's compare
+  # answers that, and only `ahead` or `identical` lets the worktree go.
+  local name="a submodule whose branch moved on upstream is cleared only when GitHub says the branch still holds its tip"
+  local failures="" answer root wt shim ghs real_git out want
+  real_git=$(command -v git)
+  for answer in ahead identical diverged behind failed; do
+    root=$(make_repo)
+    admin_sub_wt "$root" "submoved" || { failures="$failures $answer(FIXTURE)"; rm -rf "$root"; continue; }
+    wt="$root/repo/.claude/worktrees/submoved"
+    git -C "$wt/sub" remote set-url origin https://github.com/devantler-tech/subfix.git
+    echo draft > "$wt/untracked.txt"
+    age_tree "$wt"
+    shim="$root/gitshim"; mkdir -p "$shim"
+    cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" --git-dir="*" ls-remote origin "*)
+    printf '%s\tHEAD\n%s\trefs/heads/main\n' 0123456789abcdef0123456789abcdef01234567 0123456789abcdef0123456789abcdef01234567
+    exit 0 ;;
+esac
+exec "$real_git" "\$@"
+SHIM
+    chmod +x "$shim/git"
+    ghs=$(gh_shim "$root") || { failures="$failures $answer(FIXTURE: gh)"; rm -rf "$root"; continue; }
+    if [ "$answer" = failed ]; then touch "$root/gh-fail"; else printf '%s\n' "$answer" > "$root/gh-out"; fi
+    out=$(PATH="$shim:$ghs:$PATH" run_salvage "$root" dry-run 1)
+    case "$answer" in
+      ahead|identical) want='^SALVAGE .*submoved ' ;;
+      diverged|behind) want='KEEP .*submoved .*modules/sub: it holds commit\(s\) its remote does not advertise' ;;
+      failed)          want='KEEP .*submoved .*modules/sub: cannot ask GitHub whether its remote still holds' ;;
+    esac
+    grep -Eq "$want" <<<"$out" || failures="$failures $answer($(grep -E 'KEEP|SALVAGE' <<<"$out" | cut -c1-200))"
+    grep -q 'compare/[0-9a-f]\{40\}\.\.\.0123456789abcdef0123456789abcdef01234567' "$root/gh-args" 2>/dev/null \
+      || failures="$failures $answer(no compare call)"
+    rm -rf "$root"
+  done
+  if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
+}
+
+t_salvage_asks_github_about_a_submodule_commit_in_a_merged_pull_request() {
+  # An earlier push of a branch that was merged and deleted: the branch is gone, and the
+  # pull request's head, which descends from the commit, is not in this store. The commit is
+  # cleared only when GitHub names a pull request for it, origin advertises that pull
+  # request's head, and that head descends from the commit.
+  local name="a submodule commit from a merged pull request is cleared only by that pull request's advertised head"
+  local failures="" variant root wt shim ghs real_git out want pr=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa advertised
+  real_git=$(command -v git)
+  for variant in held unadvertised unrelated; do
+    root=$(make_repo)
+    admin_sub_wt "$root" "subpr" || { failures="$failures $variant(FIXTURE)"; rm -rf "$root"; continue; }
+    wt="$root/repo/.claude/worktrees/subpr"
+    git -C "$wt/sub" remote set-url origin https://github.com/devantler-tech/subfix.git
+    echo draft > "$wt/untracked.txt"
+    age_tree "$wt"
+    advertised=$pr; [ "$variant" = unadvertised ] && advertised=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    shim="$root/gitshim"; mkdir -p "$shim"
+    cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" --git-dir="*" ls-remote origin "*)
+    printf '%s\tHEAD\n%s\trefs/heads/main\n%s\trefs/pull/7/head\n' \
+      0123456789abcdef0123456789abcdef01234567 0123456789abcdef0123456789abcdef01234567 $advertised
+    exit 0 ;;
+esac
+exec "$real_git" "\$@"
+SHIM
+    chmod +x "$shim/git"
+    ghs="$root/ghshim"; mkdir -p "$ghs"
+    cat > "$ghs/gh" <<SHIM
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$root/gh-args"
+case "\$*" in
+  *"/pulls"*) printf '7\t%s\n' $pr ;;
+  *"compare/"*"...$pr"*) [ "$variant" = unrelated ] && echo diverged || echo ahead ;;
+  *"compare/"*) echo diverged ;;
+esac
+exit 0
+SHIM
+    chmod +x "$ghs/gh"
+    out=$(PATH="$shim:$ghs:$PATH" run_salvage "$root" dry-run 1)
+    case "$variant" in
+      held) want='^SALVAGE .*subpr ' ;;
+      *)    want='KEEP .*subpr .*modules/sub: it holds commit\(s\) its remote does not advertise' ;;
+    esac
+    grep -Eq "$want" <<<"$out" || failures="$failures $variant($(grep -E 'KEEP|SALVAGE' <<<"$out" | cut -c1-200))"
+    rm -rf "$root"
+  done
+  if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -2421,9 +2521,8 @@ t_salvage_keeps_a_submodule_changed_after_the_snapshot() {
 }
 
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read() {
-  # The submodule holds a tag and its remote is gone, so nothing says whether the tag is
-  # local-only. The worktree is kept, and the sweep must not end as a clean pass.
-  local name="a submodule remote whose tags cannot be read keeps the worktree and ends the sweep UNKNOWN"
+  # The submodule's remote is gone, so nothing says whether what it holds is local-only. The worktree is kept, and the sweep must not end as a clean pass.
+  local name="a submodule remote that cannot be read keeps the worktree and ends the sweep UNKNOWN"
   local root; root=$(make_repo)
   admin_sub_wt "$root" subgone2 || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   local wt="$root/repo/.claude/worktrees/subgone2"
@@ -2433,8 +2532,8 @@ t_unknown_when_a_submodule_remotes_tags_cannot_be_read() {
   age_tree "$wt"
   mv "$root/subsrc" "$root/subsrc.gone"
   local out rc; out=$(run_salvage "$root" apply 1); rc=$?
-  if [ "$rc" -eq 2 ] && grep -q "KEEP .*subgone2 .*its remote's tags cannot be read" <<<"$out" \
-     && grep -q 'UNKNOWN — could not read the tags of a submodule remote' <<<"$out" && [ -d "$wt" ]; then
+  if [ "$rc" -eq 2 ] && grep -q "KEEP .*subgone2 .*its remote cannot be read" <<<"$out" \
+     && grep -q 'UNKNOWN — could not read a submodule remote' <<<"$out" && [ -d "$wt" ]; then
     ok "$name"
   else
     bad "$name" "rc=$rc :: $out"
@@ -2444,7 +2543,7 @@ t_unknown_when_a_submodule_remotes_tags_cannot_be_read() {
 
 t_asks_a_submodule_remote_for_its_tags_once() {
   # Two worktrees populated the same submodule from the same remote: one read answers both.
-  local name="a submodule remote is asked for its tags once per sweep"
+  local name="a submodule remote is asked once per sweep"
   local root; root=$(make_repo)
   admin_sub_wt "$root" subone || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   git -C "$root/subsrc" tag v1 || { bad "$name" "FIXTURE: tag"; rm -rf "$root"; return; }
@@ -2460,7 +2559,7 @@ t_asks_a_submodule_remote_for_its_tags_once() {
   local shim="$root/gitshim" real_git; real_git=$(command -v git); mkdir -p "$shim"
   cat > "$shim/git" <<SHIM
 #!/usr/bin/env bash
-case " \$* " in *" ls-remote --tags "*) echo x >> "$root/tag-reads" ;; esac
+case " \$* " in *" --git-dir="*" ls-remote origin "*) echo x >> "$root/tag-reads" ;; esac
 exec "$real_git" "\$@"
 SHIM
   chmod +x "$shim/git"
@@ -4904,6 +5003,9 @@ t_salvage_keeps_a_submodule_with_an_exclude_rule
 t_salvage_keeps_a_submodule_with_a_stash
 t_salvage_keeps_a_submodule_with_an_unlisted_entry
 t_salvage_keeps_a_submodule_with_a_local_only_tag
+t_salvage_keeps_a_submodule_commit_only_a_remote_tracking_ref_holds
+t_salvage_asks_github_about_a_submodule_branch_that_moved_on
+t_salvage_asks_github_about_a_submodule_commit_in_a_merged_pull_request
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read
