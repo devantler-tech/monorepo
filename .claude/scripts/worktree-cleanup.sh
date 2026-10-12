@@ -877,10 +877,16 @@ recheck_mutable_gates() {
     # checks above compare, and the removal would delete it. The
     # configuration that decides whether status can see an edit (conversion_blocker) can
     # change after the snapshot too, and then every comparison above is blind to the edit.
+    # This is the last look before the removal, so each submodule's remote is asked again
+    # rather than answered from what an earlier worktree in this sweep was told. What is
+    # left is the time between this read and the removal itself.
+    MODULE_REMOTE_FRESH=1
     if nested_repository_blocker "$wt" || gitlink_blocker "$wt" || worktree_state_blocker "$wt" \
        || conversion_blocker "$wt"; then
+      MODULE_REMOTE_FRESH=0
       keep "$wt" "$SALVAGE_NOTE, after the salvage snapshot ($SALVAGE_REF)"; return 1
     fi
+    MODULE_REMOTE_FRESH=0
   elif [ -n "$salvage_reason" ]; then
     # Salvage candidate before its snapshot: its changes are expected and are about to be
     # preserved, but not work in a submodule, which salvage cannot capture.
@@ -1179,13 +1185,15 @@ work_age_h() {
     m=$(file_changed "$p") || return 1
     [ "$m" -gt "$newest" ] && newest=$m
   done
-  # A submodule repository's own index, HEAD and pseudo-refs move with work done inside the
-  # submodule, which touches nothing above. Salvage now removes a worktree whose submodules
-  # are pristine, so use of one counts as use of the worktree (#2831).
+  # Work done inside a submodule touches nothing above. Salvage now removes a worktree whose
+  # submodules are pristine, so use of one counts as use of the worktree (#2831): every
+  # file of each submodule repository outside its object store, since a new branch writes
+  # only a ref, a reflog and a setting. Directories are not counted: git's own reads leave a
+  # repository directory's time changed (measured on the host), so every sweep would make
+  # each worktree look freshly used.
   if [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ]; then
     list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
-    if ! find "$admin/modules" -type f \( -name index -o -name HEAD -o -name ORIG_HEAD \
-           -o -name FETCH_HEAD -o -name COMMIT_EDITMSG \) -print0 > "$list" 2>/dev/null; then
+    if ! find "$admin/modules" -name objects -prune -o -type f -print0 > "$list" 2>/dev/null; then
       rm -f "$list"; return 1
     fi
     while IFS= read -r -d '' p; do
@@ -1381,13 +1389,19 @@ resolve_undo_tree() {
 MODULE_REMOTE_URLS=()
 MODULE_REMOTE_ANSWERS=()
 MODULE_REMOTE_ROWS=""
+MODULE_REMOTE_FRESH=0
 REMOTE_MODULE_FAILED=0
 module_remote_rows() {
   local g=$1 url rows i=0
   MODULE_REMOTE_ROWS=""
   url=$(module_git "$g" remote get-url origin 2>/dev/null) && [ -n "$url" ] || return 1
   while [ "$i" -lt "${#MODULE_REMOTE_URLS[@]}" ]; do
-    if [ "${MODULE_REMOTE_URLS[$i]}" = "$url" ]; then MODULE_REMOTE_ROWS=${MODULE_REMOTE_ANSWERS[$i]}; return 0; fi
+    if [ "${MODULE_REMOTE_URLS[$i]}" = "$url" ]; then
+      # The check that immediately precedes a removal asks again (MODULE_REMOTE_FRESH): a
+      # branch or tag deleted upstream since the kept answer was read is no longer held.
+      [ "$MODULE_REMOTE_FRESH" -eq 0 ] || break
+      MODULE_REMOTE_ROWS=${MODULE_REMOTE_ANSWERS[$i]}; return 0
+    fi
     i=$((i + 1))
   done
   rows=$(GIT_TERMINAL_PROMPT=0 run_bounded git --git-dir="$g" --work-tree="$g" ls-remote origin) \
@@ -1443,7 +1457,9 @@ module_held_by_remote() {
     case "$rc" in
       0) held="$held"$'\n'"^$tip" ;;
       1) MODULE_NOTE="it holds commit(s) its remote does not advertise (${tip:0:12})"; return 1 ;;
-      *) MODULE_NOTE="cannot ask GitHub whether its remote still holds ${tip:0:12}"; return 1 ;;
+      # Kept without evidence either way, so the sweep must not end as a clean pass.
+      *) REMOTE_MODULE_FAILED=1
+         MODULE_NOTE="cannot ask GitHub whether its remote still holds ${tip:0:12}"; return 1 ;;
     esac
   done
 }
@@ -1710,7 +1726,8 @@ module_repository_pristine() {
   case "$rc" in
     0) ;;
     1) return 1 ;;
-    *) MODULE_NOTE="cannot compare it with what its remote advertises"; return 1 ;;
+    *) REMOTE_MODULE_FAILED=1
+       MODULE_NOTE="cannot compare it with what its remote advertises"; return 1 ;;
   esac
   VERIFIED_CHECKOUTS="$VERIFIED_CHECKOUTS$co"$'\n'
   # 9. Its own submodules' repositories, by the same rule.

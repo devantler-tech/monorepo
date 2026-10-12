@@ -26,7 +26,7 @@ age_tree() {
       find "$p" -mindepth 1 -exec touch -h -t 202001010000 {} + 2>/dev/null
       for f in "$admin/index" "$admin/logs/HEAD"; do [ -e "$f" ] && touch -t 202001010000 "$f"; done
       # A submodule repository's files count towards the age too (work_age_h).
-      if [ -d "$admin/modules" ]; then find "$admin/modules" -type f -exec touch -t 202001010000 {} + 2>/dev/null; fi
+      if [ -d "$admin/modules" ]; then find "$admin/modules" -exec touch -h -t 202001010000 {} + 2>/dev/null; fi
     fi
     touch -t 202001010000 "$p"
   done
@@ -2389,7 +2389,7 @@ t_salvage_asks_github_about_a_submodule_branch_that_moved_on() {
   # nothing local shows that the clone's own main is still part of it. GitHub's compare
   # answers that, and only `ahead` or `identical` lets the worktree go.
   local name="a submodule whose branch moved on upstream is cleared only when GitHub says the branch still holds its tip"
-  local failures="" answer root wt shim ghs real_git out want
+  local failures="" answer root wt shim ghs real_git out want rc
   real_git=$(command -v git)
   for answer in ahead identical diverged behind failed; do
     root=$(make_repo)
@@ -2411,7 +2411,9 @@ SHIM
     chmod +x "$shim/git"
     ghs=$(gh_shim "$root") || { failures="$failures $answer(FIXTURE: gh)"; rm -rf "$root"; continue; }
     if [ "$answer" = failed ]; then touch "$root/gh-fail"; else printf '%s\n' "$answer" > "$root/gh-out"; fi
-    out=$(PATH="$shim:$ghs:$PATH" run_salvage "$root" dry-run 1)
+    out=$(PATH="$shim:$ghs:$PATH" run_salvage "$root" dry-run 1); rc=$?
+    # A question GitHub did not answer is not a clean sweep.
+    case "$answer:$rc" in failed:2) ;; failed:*) failures="$failures failed(rc=$rc)" ;; *:0) ;; *) failures="$failures $answer(rc=$rc)" ;; esac
     case "$answer" in
       ahead|identical) want='^SALVAGE .*submoved ' ;;
       diverged|behind) want='KEEP .*submoved .*modules/sub: it holds commit\(s\) its remote does not advertise' ;;
@@ -2474,6 +2476,58 @@ SHIM
     rm -rf "$root"
   done
   if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
+}
+
+t_salvage_keeps_a_submodule_given_a_branch_since_the_salvage_age() {
+  # A new branch on a pushed commit writes a ref and nothing else the index or HEAD shows,
+  # and its commit is on the remote, so only the age of the repository's own files says the
+  # worktree is in use.
+  local name="salvage KEEPs a worktree whose submodule repository gained a branch since the salvage age"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subbranch || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subbranch"
+  echo draft > "$wt/untracked.txt"
+  age_tree "$wt"
+  local out; out=$(run_salvage "$root" dry-run 1)
+  if ! grep -q '^SALVAGE .*subbranch ' <<<"$out"; then
+    bad "$name" "control (no branch yet): $out"; rm -rf "$root"; return
+  fi
+  git -C "$wt/sub" branch scratch origin/main || { bad "$name" "FIXTURE: branch"; rm -rf "$root"; return; }
+  out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subbranch ' <<<"$out" && ! grep -q 'SALVAGED .*subbranch' <<<"$out" && [ -d "$wt" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_asks_a_submodule_remote_again_before_the_removal() {
+  # The remote's branch is rewound after the snapshot, so the commit this submodule pushed
+  # is no longer held there. The answer read earlier in the sweep must not be reused.
+  local name="salvage KEEPs a worktree whose submodule remote dropped a commit after the snapshot"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subrewound || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subrewound" shim first
+  first=$(git -C "$root/subsrc" rev-parse main)
+  git -C "$root/subsrc" checkout -q --detach \
+    && echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "pushed from the submodule" \
+    && git -C "$wt/sub" push -q origin HEAD:main \
+    || { bad "$name" "FIXTURE: pushed commit"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  age_tree "$wt"
+  shim=$(lsof_hook_shim "$root" 3 "git -C '$root/subsrc' update-ref refs/heads/main $first") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if [ "$(git -C "$root/subsrc" rev-parse main)" != "$first" ]; then
+    bad "$name" "the remote was never rewound: $out"
+  elif grep -q 'KEEP .*subrewound .*its remote does not advertise.*after the salvage snapshot' <<<"$out" && [ -d "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
 }
 
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
@@ -3648,11 +3702,13 @@ t_salvage_keeps_a_submodule_with_a_custom_hook() {
   fi
   rm -f "$g/hooks/pre-commit"; mkdir -p "$g/info"; echo '*.local' >> "$g/info/exclude"   # an exclude rule of its own hides files from status: kept too
   echo 'f -text' > "$g/info/attributes"
+  age_tree "$wt"
   out=$(run_salvage "$root" dry-run 1)
   if ! grep -Eq 'KEEP .*subhook .*submodule repositories salvage cannot clear \(modules/sub: it holds info/attributes' <<<"$out" || grep -q '^SALVAGE .*subhook ' <<<"$out"; then
     bad "$name" "attributes: $out"; rm -rf "$root"; return
   fi
   rm -f "$g/info/attributes"
+  age_tree "$wt"
   out=$(run_salvage "$root" dry-run 1)
   if grep -Eq 'KEEP .*subhook .*submodule repositories salvage cannot clear \(modules/sub: its info/exclude holds a rule of its own' <<<"$out" && ! grep -q '^SALVAGE .*subhook ' <<<"$out"; then
     ok "$name"
@@ -3799,6 +3855,7 @@ t_salvage_keeps_a_submodule_checkout_it_cannot_enter() {
     bad "$name" "locked: $out"; rm -rf "$root"; return
   fi
   git --git-dir="${g%/sub}/other" config core.worktree "$root/gone/co"
+  age_tree "$wt"
   out=$(run_salvage "$root" dry-run 1)
   if grep -q 'KEEP .*subenter .*submodule repositories' <<<"$out" && ! grep -q '^SALVAGE .*subenter ' <<<"$out"; then
     ok "$name"
@@ -5006,6 +5063,8 @@ t_salvage_keeps_a_submodule_with_a_local_only_tag
 t_salvage_keeps_a_submodule_commit_only_a_remote_tracking_ref_holds
 t_salvage_asks_github_about_a_submodule_branch_that_moved_on
 t_salvage_asks_github_about_a_submodule_commit_in_a_merged_pull_request
+t_salvage_keeps_a_submodule_given_a_branch_since_the_salvage_age
+t_salvage_asks_a_submodule_remote_again_before_the_removal
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read
