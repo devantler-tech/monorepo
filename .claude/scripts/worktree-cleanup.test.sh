@@ -2897,6 +2897,14 @@ t_unknown_when_a_directory_under_modules_cannot_be_listed() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_submodule_with_a_newline_named_file_under_refs() {
+  # Read by line, the one file `refs/heads/a<newline>refs/heads/b` is two names, and both are
+  # real branches. Git itself lists it as no ref.
+  keeps_unpristine "salvage KEEPs a submodule whose refs/ holds a file with a newline in its name" subnlref \
+    'its refs holds a file whose name holds a newline' \
+    'git -C "$wt/sub" branch a origin/main && git -C "$wt/sub" branch b origin/main && git -C "$wt/sub" pack-refs --all && nl=$(printf "\nx") && nl=${nl%x} && mkdir -p "$g/refs/heads/a${nl}refs/heads" && git -C "$wt/sub" rev-parse HEAD > "$g/refs/heads/a${nl}refs/heads/b"'
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -5446,6 +5454,7 @@ t_salvage_keeps_a_branch_namespace_that_looks_like_a_repository
 t_salvage_dry_run_counts_the_submodule_files_it_would_keep
 t_salvage_keeps_a_submodule_file_changed_and_changed_back_around_its_capture
 t_unknown_when_a_directory_under_modules_cannot_be_listed
+t_salvage_keeps_a_submodule_with_a_newline_named_file_under_refs
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read

@@ -1743,18 +1743,29 @@ module_config_pristine() {
 # in a submodule leaves the file behind, and those commits are checked against the remote
 # separately; a message that matches none of them is a draft that was never committed.
 module_commit_editmsg_spent() {
-  local g=$1 f="$1/COMMIT_EDITMSG" want ids id got
+  local g=$1 f="$1/COMMIT_EDITMSG" want ids id got unread=0
   if [ ! -e "$f" ] && [ ! -L "$f" ]; then return 0; fi
-  want=$(git stripspace --strip-comments < "$f" 2>/dev/null) || return 1
+  # From here a read that fails is 2, not 1: a message that could not be compared is not a
+  # draft that was found.
+  [ -r "$f" ] || return 2
+  want=$(git stripspace --strip-comments < "$f" 2>/dev/null) || return 2
   [ -n "$want" ] || return 0
+  if [ ! -e "$g/logs/HEAD" ] && [ ! -L "$g/logs/HEAD" ]; then return 1; fi
   [ -f "$g/logs/HEAD" ] && [ ! -L "$g/logs/HEAD" ] || return 1
-  ids=$(awk '{ print $2; print $1 }' "$g/logs/HEAD" | grep -E '^([0-9a-f]{40}|[0-9a-f]{64})$' \
-        | grep -Ev '^0+$' | awk '{ line[NR] = $0 } END { for (i = NR; i >= 1; i--) if (!seen[line[i]]++) print line[i] }' \
-        | head -50) || return 1
+  [ -r "$g/logs/HEAD" ] || return 2
+  ids=$(awk '{ print $2; print $1 }' "$g/logs/HEAD") || return 2
+  ids=$(grep -E '^([0-9a-f]{40}|[0-9a-f]{64})$' <<< "$ids" | grep -Ev '^0+$' \
+        | awk '{ line[NR] = $0 } END { for (i = NR; i >= 1; i--) if (!seen[line[i]]++) print line[i] }' \
+        | sed -n '1,50p') || true
   for id in $ids; do
-    got=$(module_git "$g" show -s --format=%B "$id" 2>/dev/null | git stripspace --strip-comments 2>/dev/null) || continue
+    # An id whose object is gone has no message to compare; one that is there and cannot be
+    # shown is a failed read.
+    module_git "$g" cat-file -e "$id" 2>/dev/null || continue
+    got=$(module_git "$g" show -s --format=%B "$id" 2>/dev/null) || { unread=1; continue; }
+    got=$(git stripspace --strip-comments <<< "$got" 2>/dev/null) || { unread=1; continue; }
     [ "$got" = "$want" ] && return 0
   done
+  [ "$unread" -eq 0 ] || return 2
   return 1
 }
 
@@ -1980,10 +1991,13 @@ module_repository_pristine() {
     # Listed relative to the repository (refs/...) or to logs/ (HEAD, refs/...), so each
     # line is a ref name as for-each-ref spells it.
     if [ "$name" = refs ]; then
-      stray=$(cd "$g" 2>/dev/null && find refs -type f -print 2>/dev/null) || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its refs cannot be listed"; return 1; }
+      stray=$(cd "$g" 2>/dev/null && find refs -type f -print0 2>/dev/null | tr '\0\n' '\n\001') || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its refs cannot be listed"; return 1; }
     else
-      stray=$(cd "$g/logs" 2>/dev/null && find . -type f -print 2>/dev/null | sed 's#^\./##') || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its logs cannot be listed"; return 1; }
+      stray=$(cd "$g/logs" 2>/dev/null && find . -type f -print0 2>/dev/null | tr '\0\n' '\n\001' | sed 's#^\./##') || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its logs cannot be listed"; return 1; }
     fi
+    # Listed NUL-terminated and read by line: a name holding a newline would otherwise fall
+    # apart into lines that can each be the name of a real ref. No ref name holds one.
+    case "$stray" in *$'\001'*) MODULE_NOTE="its $name holds a file whose name holds a newline"; return 1 ;; esac
     [ -n "$stray" ] || continue
     stray=$(awk 'NR == FNR { known[$0]; next } NF && !($0 in known) && $0 != "HEAD"' \
             <(printf '%s\n' "$refnames") <(printf '%s\n' "$stray") | sed -n '1p') \
@@ -2022,7 +2036,12 @@ module_repository_pristine() {
     if [ -n "$out" ]; then MODULE_NOTE="its ORIG_HEAD or FETCH_HEAD names a commit its remote lacks"; return 1; fi
   fi
   # 7. A COMMIT_EDITMSG is the message of a commit already made, not a draft.
-  module_commit_editmsg_spent "$g" || { MODULE_NOTE="its COMMIT_EDITMSG is not the message of a commit it made"; return 1; }
+  module_commit_editmsg_spent "$g"; rc=$?
+  case "$rc" in
+    0) ;;
+    1) MODULE_NOTE="its COMMIT_EDITMSG is not the message of a commit it made"; return 1 ;;
+    *) REMOTE_MODULE_FAILED=1; MODULE_NOTE="its COMMIT_EDITMSG cannot be compared with its commits"; return 1 ;;
+  esac
   # 8. Every commit a ref or reflog reaches, and every tag, is held by the remote as it
   #    answers now (module_held_by_remote).
   module_origin_portfolio "$g" || { MODULE_NOTE="its origin is not a portfolio repository on GitHub"; return 1; }
