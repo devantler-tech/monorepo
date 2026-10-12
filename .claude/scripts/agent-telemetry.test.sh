@@ -9651,6 +9651,29 @@ dhrec_tail "$FIX/dhrec-indent/s.jsonl"
 OUT=$(dhrec_run "$FIX/dhrec-indent")
 check   "dispatch record: an indented record with no reminder is a quote" "$OUT" 'no dispatch record .......................: 1 '
 check   "dispatch record: an indented quote selects no role"              "$OUT" 'IN WINDOW BY RECORD: 0 '
+
+# ── Review round 2: EVERY unknown reading of the dispatch section is exit 2 ───
+# Round 1 gave the unreadable list its exit status and round 2 found the next
+# unknown reading still exiting 0. The rule is stated once for the section: a
+# reading the section itself calls unknown exits 2, and a known reading — a run
+# count, a known absence, a window known to hold only older runs — exits 0.
+dh_rc() { # $1 = label, $2 = expected exit, $3 = corpus, $4 = window days; rest = env
+  local label=$1 want=$2 corpus=$3 days=$4 rc; shift 4
+  env CLAUDE_PROJECTS_DIR="$corpus" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      DISPATCH_HEALTH=on "$@" bash "$TARGET" --since-days "$days" --section dispatch >/dev/null 2>&1; rc=$?
+  if [ "$rc" -eq "$want" ]; then ok "$label"; else bad "$label" "exit $rc, expected $want"; fi
+}
+# Unknown readings.
+dh_rc "dispatch exit: an entry with only an undated run is exit 2" 2 "$FIX/dh-set-undated" 3650 CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2
+dh_rc "dispatch exit: an undated-only population is exit 2"        2 "$FIX/dh-set-undated" 3650 DH_ROLE=agentic-engineer-2
+dh_rc "dispatch exit: a zero that cannot be attributed is exit 2"  2 "$FIX/dhrec-prose"     3650
+dh_rc "dispatch exit: no computable window start is exit 2"        2 "$FIX/dh-set"         3650 PATH="$FIX/nodate:$PATH"
+# Known readings: these must stay exit 0, or exit 2 would mean nothing.
+dh_rc "dispatch exit: a healthy count is exit 0"                   0 "$FIX/dh-set"         3650
+dh_rc "dispatch exit: a named silent entry is a known reading"     0 "$FIX/dh-set-one"     3650 CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2
+dh_rc "dispatch exit: a real absence of the role is exit 0"        0 "$FIX/dh-onlyother"   3650
+dh_rc "dispatch exit: a window of only older runs is exit 0"       0 "$FIX/dh-recwin-stale" 1
+dh_rc "dispatch exit: the section switched off is exit 0"          0 "$FIX/dhrec-prose"    3650 DISPATCH_HEALTH=off
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

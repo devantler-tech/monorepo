@@ -2461,6 +2461,11 @@ if want dispatch; then
     # An unbounded count is indistinguishable from a bounded one by inspection,
     # and this section's numbers are read as denominator instructions.
     echo "  UNKNOWN: cannot compute window start (no usable \`date\`) — refusing to score."
+    # Every reading this section calls unknown is exit 2 (.claude/scripts/AGENTS.md):
+    # here, the unreadable list below, an entry or a population that cannot be
+    # placed in time, and a zero that cannot be attributed. A known reading — a
+    # count, a named silent entry, a real absence, only older runs — stays 0.
+    main_rc=2
   elif ! DH_ROLE_IDS=$(entry_id_list "${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}}"); then
     # The lane's engineer entries are counted as a set (monorepo#4117). A list
     # that cannot be read is UNKNOWN: scoring the ids that happen to parse would
@@ -2783,6 +2788,7 @@ DH_IDS
       while read -r dh_id dh_u; do
         [ -n "$dh_id" ] || continue
         printf '      entry "%s": UNKNOWN — %s of its transcripts carry no usable record timestamp, so its count for this window is not established.\n' "$dh_id" "$dh_u"
+        main_rc=2
       done <<DH_UNKNOWN_IDS
 $DH_ENTRY_UNKNOWN
 DH_UNKNOWN_IDS
@@ -2860,6 +2866,7 @@ DH_SILENT_IDS
     # the section whose whole job is to say when it does not know.
     if [ "$DH_TOTAL" -eq 0 ] && [ "$DH_UNDATED" -gt 0 ]; then
       printf '  UNKNOWN in-window population for role "%s".\n' "$DH_ROLE"
+      main_rc=2
       printf '    %s of its transcripts carry no usable record timestamp, so whether any\n' "$DH_UNDATED"
       echo "    dispatch ran inside this window cannot be established either way."
       echo "    This is NOT evidence of an absence and NOT evidence of an outage."
@@ -2875,6 +2882,7 @@ DH_SILENT_IDS
       echo "    absence of the scheduled run, not an unreadable count."
     elif [ "$DH_TOTAL" -eq 0 ] && [ "$DH_ROOTS" -gt 0 ]; then
       printf '  WARNING: role selection matched 0 of %s root transcripts.\n' "$DH_ROOTS"
+      main_rc=2
       echo "    Treat the dispatch count as UNKNOWN, not as an outage: this is what a"
       echo "    changed dispatch-record format looks like, and it is indistinguishable"
       echo "    from a fleet that never ran unless you check the record itself."
