@@ -73,6 +73,10 @@
 #   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog, ORIG_HEAD or FETCH_HEAD commit reachable from no remote
 #   refs/salvaged/<id>/commit-editmsg - the COMMIT_EDITMSG bytes, when present (a message a hook rejected)
 #   refs/salvaged/<id>/config-worktree - the config.worktree bytes, when present (per-worktree settings)
+#   refs/salvaged/<id>/module-files - a tree of every file of each submodule repository outside its
+#                                   object store, when the worktree holds submodules, at its
+#                                   path under the admin directory (modules/<path>/config,
+#                                   .../description, .../hooks/..., .../info/exclude, .../logs/...)
 #   refs/salvaged/<id>/resolve-undo - a tree of the index's resolve-undo stages, when present, as
 #                                   `stage<N>/<path>` (1 base, 2 ours, 3 theirs). Git has no
 #                                   command that writes them back into an index; read a stage
@@ -88,8 +92,10 @@
 # `restore` runs checkout-side conversions (smudge filters, eol=crlf) on the way out; for a
 # byte-exact copy of one path read the blob raw: `git cat-file blob refs/salvaged/<id>/worktree:<path>`.
 # Every other gate is unchanged, and salvage fails closed to the old KEEP:
-#   KEEP  - a salvage candidate holding any repository besides its own (an initialised
-#           submodule, or an embedded repository even when ignored): removal deletes it
+#   KEEP  - a salvage candidate holding any repository besides its own that the removal
+#           would cost something: an embedded repository even when ignored, or a submodule
+#           repository that is not pristine (module_repository_pristine: only what a clone
+#           of its remote holds, checked out clean inside the worktree)
 #   KEEP  - untracked content git would record as an embedded repository (a gitlink
 #           only, not the files), or more than SALVAGE_MAX_KB of changed/untracked data
 #   KEEP  - any failure to build, write or verify a salvage ref, and any change to the
@@ -100,7 +106,8 @@
 # no user-space check can close that without a filesystem lock git does not take. Salvage
 # only runs on a worktree abandoned for the salvage age, so such a writer is not expected.
 # What salvage preserves is content: commits, tag objects, and working-tree and index
-# bytes, for single-repository worktrees only.
+# bytes, of the worktree's own repository. Nothing of a submodule repository is carried,
+# which is why one must be pristine.
 #
 # Submodule gitlink drift (` M applications/ksail`) and stray tool dirs (`?? .codex/`)
 # are NOT authored work — they are an artifact of the submodule checkout sitting at a
@@ -836,6 +843,20 @@ recheck_mutable_gates() {
     2) die "lsof re-check failed for $target — refusing to continue on an unverifiable live set" ;;
   esac
 
+  if [ -n "$SALVAGE_TREE" ]; then
+    # Everything that waits on the network comes first: each submodule's remote is asked again
+    # here, not answered from what an earlier worktree in this sweep was told, and GitHub is
+    # asked whatever that needs. Those reads can each take up to the deadline, and a change
+    # made while one is waiting must still meet the local comparisons, so every local
+    # comparison below runs after this, and the pristine check is repeated at the end from
+    # the answers just read, with nothing left to wait on.
+    MODULE_REMOTE_FRESH=1
+    if nested_repository_blocker "$wt"; then
+      MODULE_REMOTE_FRESH=0
+      keep "$wt" "$SALVAGE_NOTE, after the salvage snapshot ($SALVAGE_REF)"; return 1
+    fi
+    MODULE_REMOTE_FRESH=0
+  fi
   st=$(porcelain_status "$wt") \
     || { keep "$wt" "cannot re-read or classify status before removal"; return 1; }
   count_real_changes "$wt" "$st"
@@ -877,6 +898,27 @@ recheck_mutable_gates() {
     if nested_repository_blocker "$wt" || gitlink_blocker "$wt" || worktree_state_blocker "$wt" \
        || conversion_blocker "$wt"; then
       keep "$wt" "$SALVAGE_NOTE, after the salvage snapshot ($SALVAGE_REF)"; return 1
+    fi
+    # Last of all, and purely local: the submodule repositories' files against what they
+    # were before the snapshot.
+    local now_fp
+    if ! now_fp=$(modules_fingerprint "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)"); then
+      # Not compared, so neither changed nor unchanged, and not a clean sweep.
+      REMOTE_MODULE_FAILED=1
+      keep "$wt" "cannot re-read its submodule repositories before removal ($SALVAGE_REF)"; return 1
+    fi
+    if [ "$now_fp" != "$SALVAGE_MODULES_FP" ]; then
+      keep "$wt" "a submodule repository changed after the salvage snapshot ($SALVAGE_REF)"; return 1
+    fi
+    # And against the copy that was actually kept: a file changed after the fingerprint above
+    # was first taken, captured in that state and then changed back matches the fingerprint
+    # again, while the kept copy holds bytes that are no longer the ones being removed.
+    if ! module_files_tree "$wt"; then
+      REMOTE_MODULE_FAILED=1
+      keep "$wt" "cannot re-read its submodule repositories before removal ($SALVAGE_REF)"; return 1
+    fi
+    if [ "$MODULE_FILES_TREE" != "$SALVAGE_MODULE_TREE" ]; then
+      keep "$wt" "a submodule repository no longer matches its kept copy ($SALVAGE_REF)"; return 1
     fi
   elif [ -n "$salvage_reason" ]; then
     # Salvage candidate before its snapshot: its changes are expected and are about to be
@@ -1111,8 +1153,12 @@ salvage_pathspec() {
 # for it: both its directory and its newest work (see work_age_h).
 salvage_eligible() {
   [ "$SALVAGE_AGE_HOURS" -gt 0 ] && [ "$1" -ge "$SALVAGE_AGE_HOURS" ] || return 1
-  local work
-  work=$(work_age_h "$2") || return 1
+  local work rc
+  work=$(work_age_h "$2"); rc=$?
+  # work_age_h runs in a subshell, so its "could not list the submodule repositories" comes
+  # back as status 2 and the sweep is marked here: kept, but not examined.
+  [ "$rc" -ne 2 ] || REMOTE_MODULE_FAILED=1
+  [ "$rc" -eq 0 ] || return 1
   [ "$work" -ge "$SALVAGE_AGE_HOURS" ]
 }
 
@@ -1176,6 +1222,26 @@ work_age_h() {
     m=$(file_changed "$p") || return 1
     [ "$m" -gt "$newest" ] && newest=$m
   done
+  # Work done inside a submodule touches nothing above. Salvage now removes a worktree whose
+  # submodules are pristine, so use of one counts as use of the worktree (#2831): every
+  # file of each submodule repository outside its object store, since a new branch writes
+  # only a ref, a reflog and a setting. Directories are not counted: git's own reads leave a
+  # repository directory's time changed (measured on the host), so every sweep would make
+  # each worktree look freshly used.
+  if [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ]; then
+    list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
+    if ! module_state_files "$admin/modules" > "$list"; then
+      # 2, not 1: the submodule repositories could not be listed, which the caller reports.
+      rm -f "$list"; return 2
+    fi
+    while IFS= read -r -d '' p; do
+      m=$(file_changed "$p") || { unreadable=1; break; }
+      [ "$m" -gt "$newest" ] && newest=$m
+    done < "$list"
+    rm -f "$list"
+    # 2 again: a submodule repository file that could not be read was not examined.
+    [ "$unreadable" -eq 0 ] || return 2
+  fi
   [ "$newest" -gt 0 ] || { echo 999999; return 0; }
   echo $(( (now - newest) / 3600 ))
 }
@@ -1203,6 +1269,12 @@ salvage_blocker() {
   # Salvage carries them in their own ref (resolve_undo_tree), so they only count
   # towards the cap here (#2831).
   sz=$(resolve_undo_kb "$wt") || { SALVAGE_NOTE="cannot read or size the index's resolve-undo entries"; return 0; }
+  total_kb=$((total_kb + sz))
+  # The submodule repositories' files are kept too (module_files_tree), so they count here.
+  local admin_dir
+  admin_dir=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin_dir" ] \
+    || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
+  sz=$(module_files_kb "$admin_dir") || { REMOTE_MODULE_FAILED=1; SALVAGE_NOTE="cannot list or size the submodule repositories' files"; return 0; }
   total_kb=$((total_kb + sz))
   if [ "$total_kb" -gt "$SALVAGE_MAX_KB" ]; then
     SALVAGE_NOTE="more than ${SALVAGE_MAX_KB} KB of changed or untracked data to salvage"; return 0
@@ -1339,31 +1411,786 @@ resolve_undo_tree() {
   RESOLVE_UNDO_TREE=$tree
 }
 
+# --- pristine submodule repositories (#2831) ------------------------------------------
+# Salvage records only the parent repository, and the removal deletes every submodule
+# repository under the admin directory's modules/ with all it holds. Until now any such
+# repository kept the worktree, so nothing in it had to be classified; measured on the host
+# 2026-10-12, that kept 12 abandoned worktrees (4.1 GB) whose submodules held nothing.
+# A submodule repository is PRISTINE when nothing in it could be work, so the removal loses
+# nothing salvage would have had to carry. The test is a whitelist over what the repository
+# directory contains, not a list of the ways work can hide in one, so anything unlisted
+# keeps the worktree.
+# Not compared, and lost with the removal as they are for the worktree's own repository:
+# files the checkout ignores, and objects no ref, reflog or pseudo-ref names (a dropped
+# stash, an expired reflog entry). Every other file of the repository, whether the check
+# accepts it by name or by what it holds, is kept by its bytes (module_files_tree).
+
+# module_origin_url <git-dir> -> prints the origin URL exactly as the repository's own
+# config file records it. Not `git remote get-url`, which answers after the host's URL
+# rewrites: the question here is what the repository names, and its config file is the one
+# place whose keys are held to a whitelist.
+module_origin_url() { git config --file "$1/config" --get remote.origin.url 2>/dev/null; }
+
+# module_origin_portfolio <git-dir> — exit 0 only when the repository's origin is a
+# devantler-tech repository on GitHub (portfolio_repo). Nothing else is asked or accepted:
+#   - a local path can be another view of the repository being removed (a checkout whose
+#     .git points back here, an object store borrowed from here), so what it advertises
+#     proves no second copy exists;
+#   - the URL comes from repository content (.gitmodules), and an unattended sweep must not
+#     let content choose where it connects. A portfolio origin is a destination this
+#     deployment already reads.
+module_origin_portfolio() { [ -n "$(portfolio_repo "$(module_origin_url "$1" || true)")" ]; }
+
+# dir_listable <dir> — exit 0 only when the directory's entries can be read. A glob over a
+# directory that cannot be read matches nothing and says nothing: the loop over it runs no
+# times, exactly as for an empty directory. Every walk below asks this first.
+dir_listable() { [ -d "$1" ] && ls -A "$1" > /dev/null 2>&1; }
+
+# module_state_files <modules-dir> -> prints, NUL-terminated, every file under a modules/
+# directory that is not inside a repository's object store. Repositories are found the way
+# module_tree_pristine finds them, from the top down: a directory holding a HEAD or an
+# objects entry is a repository; its own objects/ entry is left out, its modules/ entry is
+# walked the same way, and everything else in it is listed in full. A directory that is not
+# a repository is walked for the ones below it. Nothing is recognised by its name alone, so
+# a branch namespace that happens to hold entries called HEAD, config and objects is listed
+# like any other ref. Non-zero when something cannot be listed.
+module_state_files() {
+  local dir=$1 entry sub
+  dir_listable "$dir" || return 1
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    if [ -L "$entry" ] || [ ! -d "$entry" ]; then
+      [ -f "$entry" ] && [ ! -L "$entry" ] && printf '%s\0' "$entry"
+      continue
+    fi
+    dir_listable "$entry" || return 1
+    if [ -e "$entry/HEAD" ] || [ -L "$entry/HEAD" ] || [ -e "$entry/objects" ] || [ -L "$entry/objects" ]; then
+      for sub in "$entry"/* "$entry"/.[!.]* "$entry"/..?*; do
+        [ -e "$sub" ] || [ -L "$sub" ] || continue
+        case "${sub##*/}" in
+          objects) continue ;;
+          modules) if [ -d "$sub" ] && [ ! -L "$sub" ]; then module_state_files "$sub" || return 1; fi; continue ;;
+        esac
+        if [ -d "$sub" ] && [ ! -L "$sub" ]; then
+          find "$sub" -type f -print0 2>/dev/null || return 1
+        elif [ -f "$sub" ] && [ ! -L "$sub" ]; then
+          printf '%s\0' "$sub"
+        fi
+      done
+    else
+      module_state_files "$entry" || return 1
+    fi
+  done
+  return 0
+}
+
+# modules_fingerprint <admin> -> prints one id for the name, executable bit and bytes of every file under
+# the admin directory's modules/ outside the object stores (empty when there is none).
+# Taken before the snapshot and compared immediately before the removal: a branch created,
+# a setting changed or another commit checked out in a submodule after the snapshot leaves
+# the parent's tree and index exactly as snapshotted, and can leave the repository
+# pristine too. Non-zero on any read failure.
+modules_fingerprint() {
+  local admin=$1 names f blob mode
+  # An empty or missing admin directory is a lookup that failed in the caller, not a
+  # worktree without submodules.
+  [ -n "$admin" ] && [ -d "$admin" ] || return 1
+  if [ ! -e "$admin/modules" ] && [ ! -L "$admin/modules" ]; then return 0; fi
+  [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ] || return 1
+  names=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-modules.XXXXXX") || return 1
+  if ! module_state_files "$admin/modules" > "$names.raw" || ! LC_ALL=C sort -z < "$names.raw" > "$names"; then
+    rm -f "$names.raw"
+    rm -f "$names"; return 1
+  fi
+  rm -f "$names.raw"
+  # One record per file: whether it is executable (the one mode bit module_files_tree
+  # records), the id of its own bytes, and its name, NUL-terminated. Hashing each file on
+  # its own keeps the boundaries: bytes moved from the end of one file to the start of the
+  # next would leave a single concatenated stream unchanged.
+  : > "$names.records" || { rm -f "$names"; return 1; }
+  while IFS= read -r -d '' f; do
+    blob=$(git hash-object --no-filters -- "$f" 2>/dev/null) && [ -n "$blob" ] \
+      || { rm -f "$names" "$names.records"; return 1; }
+    mode=-; [ -x "$f" ] && mode=x
+    printf '%s %s %s\0' "$mode" "$blob" "$f" >> "$names.records" || { rm -f "$names" "$names.records"; return 1; }
+  done < "$names"
+  if ! git hash-object --stdin < "$names.records" 2>/dev/null; then
+    rm -f "$names" "$names.records"; return 1
+  fi
+  rm -f "$names" "$names.records"
+}
+
+# module_remote_rows <git-dir> -> sets MODULE_REMOTE_ROWS to what the repository's origin
+# advertises right now (`<object id><TAB><ref>` lines; empty for an empty remote). Returns 1
+# when the repository names no origin, and 2 when origin could not be read or its answer not
+# parsed, which also sets REMOTE_MODULE_FAILED so the sweep ends UNKNOWN. One read per remote
+# URL per sweep: every worktree that populated a submodule asks about the same remote. Call
+# it from the main shell, never inside $(), or the answers kept for the sweep are dropped.
+MODULE_REMOTE_URLS=()
+MODULE_REMOTE_ANSWERS=()
+MODULE_REMOTE_ROWS=""
+MODULE_REMOTE_FRESH=0
+REMOTE_MODULE_FAILED=0
+module_remote_rows() {
+  local g=$1 url rows i=0
+  MODULE_REMOTE_ROWS=""
+  # Read over HTTPS at the address built from the validated repository name, whichever form
+  # the repository's config spells it in. An SSH read would go through the host's OpenSSH
+  # configuration, where a Host rule can send github.com anywhere, and that configuration
+  # cannot be switched off without losing the key it supplies.
+  url=$(portfolio_repo "$(module_origin_url "$g" || true)") && [ -n "$url" ] || return 1
+  url="https://github.com/$url.git"
+  while [ "$i" -lt "${#MODULE_REMOTE_URLS[@]}" ]; do
+    if [ "${MODULE_REMOTE_URLS[$i]}" = "$url" ]; then
+      # The check that immediately precedes a removal asks again (MODULE_REMOTE_FRESH): a
+      # branch or tag deleted upstream since the kept answer was read is no longer held.
+      [ "$MODULE_REMOTE_FRESH" -eq 0 ] || break
+      MODULE_REMOTE_ROWS=${MODULE_REMOTE_ANSWERS[$i]}; return 0
+    fi
+    i=$((i + 1))
+  done
+  # Asked by the URL that was just validated, with the host's and the environment's git
+  # configuration out of the way: a url.<base>.insteadOf rule there would send `origin`
+  # somewhere else, a local mirror included, while the repository still names GitHub. The
+  # repository's own config holds whitelisted keys only, none of which rewrites a URL.
+  # The environment is rebuilt from a short list as well: a proxy, a certificate bundle, an
+  # SSH command or a config override inherited by the sweep would each choose what answers.
+  # The one credential source is gh, for a private repository; without gh a private one
+  # cannot be read, which keeps its worktree.
+  local helper=()
+  [ -z "$GH_BIN" ] || helper=(-c "credential.https://github.com.helper=!$GH_BIN auth git-credential")
+  rows=$(run_bounded env -i PATH="$PATH" HOME="${HOME:-}" USER="${USER:-}" LOGNAME="${LOGNAME:-}" \
+         TMPDIR="${TMPDIR:-/tmp}" \
+         GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+         git --git-dir="$g" --work-tree="$g" -c credential.helper= ${helper[@]+"${helper[@]}"} \
+         ls-remote -- "$url") \
+    || { REMOTE_MODULE_FAILED=1; return 2; }
+  # An answer holding anything but advertised lines is one this could not read.
+  if [ -n "$rows" ] && grep -Evq '^([0-9a-f]{40}|[0-9a-f]{64})	[^	]+$' <<< "$rows"; then
+    REMOTE_MODULE_FAILED=1; return 2
+  fi
+  MODULE_REMOTE_URLS[i]=$url; MODULE_REMOTE_ANSWERS[i]=$rows
+  MODULE_REMOTE_ROWS=$rows
+}
+
+# module_held_by_remote <git-dir> — exit 0 when origin, as it answers right now, holds
+# everything the repository's refs and reflogs reach; 1 with MODULE_NOTE when it does not;
+# 2 when origin could not be read. Reads MODULE_REMOTE_ROWS (module_remote_rows first).
+# The local remote-tracking refs are NOT the evidence: one can be stale (its branch deleted
+# upstream) or written by hand, and unlike the worktree's own repository, nothing of a
+# submodule repository survives the removal. So:
+#   - every local tag is advertised at exactly the same object (an annotated tag made here
+#     is an object no clone would bring back, even on a pushed commit);
+#   - every commit a ref or reflog reaches is reachable from a commit origin advertises: a
+#     branch, a tag, or a pull request's head, which GitHub keeps after its branch is gone.
+# A clone that has not fetched for weeks does not hold the commits origin advertises today,
+# so its own branch tips cannot be shown reachable from them locally. Each such tip is asked
+# about instead (module_tip_behind_remote), newest first as in
+# submodule_repository_disposable, and at most SUBMODULE_TIP_LIMIT of them.
+module_held_by_remote() {
+  local g=$1 local_tags missing ids held tip asked=0 rc
+  local_tags=$(module_git "$g" for-each-ref --format='%(objectname)%09%(refname)' refs/tags 2>/dev/null) || return 2
+  if [ -n "$local_tags" ]; then
+    missing=$(awk 'NR == FNR { held[$0]; next } NF && !($0 in held)' \
+              <(printf '%s\n' "$MODULE_REMOTE_ROWS") <(printf '%s\n' "$local_tags")) || return 2
+    if [ -n "$missing" ]; then MODULE_NOTE="it holds a tag its remote lacks"; return 1; fi
+  fi
+  # Advertised ids this store holds as commits. An annotated tag is advertised twice, the
+  # second time peeled (`^{}`) to its commit, so tag objects themselves are not needed.
+  ids=$(awk -F'\t' 'NF == 2 { print $1 }' <<< "$MODULE_REMOTE_ROWS" | sort -u) || return 2
+  held=""
+  if [ -n "$ids" ]; then
+    held=$(module_git "$g" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" 2>/dev/null \
+           | awk '$2 == "commit" { print "^" $1 }') || return 2
+  fi
+  while :; do
+    # No blank line may reach --stdin, and `held` is empty for an empty remote.
+    tip=$(module_git "$g" rev-list --topo-order --max-count=1 --all --reflog --stdin \
+          < <(grep . <<< "$MODULE_LOG_IDS"$'\n'"$MODULE_PACKED_IDS"$'\n'"$held" || true) 2>/dev/null) || return 2
+    [ -n "$tip" ] || return 0
+    asked=$((asked + 1))
+    if [ "$asked" -gt "$SUBMODULE_TIP_LIMIT" ]; then
+      MODULE_NOTE="it holds more than $SUBMODULE_TIP_LIMIT tips its remote does not advertise"; return 1
+    fi
+    module_tip_behind_remote "$g" "$tip"; rc=$?
+    case "$rc" in
+      0) held="$held"$'\n'"^$tip" ;;
+      1) MODULE_NOTE="it holds commit(s) its remote does not advertise (${tip:0:12})"; return 1 ;;
+      # Kept without evidence either way, so the sweep must not end as a clean pass.
+      *) REMOTE_MODULE_FAILED=1
+         MODULE_NOTE="cannot ask GitHub whether its remote still holds ${tip:0:12}"; return 1 ;;
+    esac
+  done
+}
+
+# module_gh <gh args...> — gh under the deadline, in an environment rebuilt from a short list:
+# Go's HTTP stack takes a proxy and a certificate bundle from the environment (HTTPS_PROXY,
+# SSL_CERT_FILE), and gh takes its host, token and config directory from it, so anything
+# the sweep inherited could choose what answers. gh's own stored login is what remains.
+module_gh() {
+  run_bounded env -i PATH="$PATH" HOME="${HOME:-}" USER="${USER:-}" LOGNAME="${LOGNAME:-}" \
+    TMPDIR="${TMPDIR:-/tmp}" "$GH_BIN" "$@"
+}
+
+# module_descends <owner/repo> <commit> <advertised-commit> — exit 0 when GitHub says the
+# advertised commit descends from <commit> or is it; 1 when it does not, or has never
+# received <commit>; 2 when GitHub could not be asked. Definitive answers are kept for the
+# sweep: every worktree's clone of a submodule lags its remote the same way.
+MODULE_COMPARE_ANSWERS=$'\n'
+module_descends() {
+  local repo=$1 tip=$2 adv=$3 out rc key="$1 $2 $3"
+  case "$MODULE_COMPARE_ANSWERS" in
+    *$'\n'"$key 0"$'\n'*) return 0 ;;
+    *$'\n'"$key 1"$'\n'*) return 1 ;;
+  esac
+  # Asked of github.com by name: an inherited GH_HOST would send the question elsewhere.
+  # compare/<base>...<head> reports the head relative to the base: `ahead` or `identical`
+  # means the advertised commit contains <commit>.
+  out=$(module_gh api --hostname github.com "repos/$repo/compare/$tip...$adv" --jq '.status'); rc=$?
+  if [ "$rc" -eq 0 ]; then
+    case "$out" in
+      ahead|identical) rc=0 ;;
+      behind|diverged) rc=1 ;;
+      *) return 2 ;;
+    esac
+  else
+    # GitHub answers a commit it has never received with a definitive 404, whose error body
+    # gh prints on stdout. Any other failure, a timeout included, stays unknown.
+    case "$out" in *'"status":"404"'*) rc=1 ;; *) return 2 ;; esac
+  fi
+  MODULE_COMPARE_ANSWERS="$MODULE_COMPARE_ANSWERS$key $rc"$'\n'
+  return "$rc"
+}
+
+# module_tip_behind_remote <git-dir> <commit> — exit 0 when GitHub says something origin
+# advertises right now descends from <commit>; 1 when nothing asked about does (the commit
+# was rewritten away upstream, or never pushed) or the remote is not a portfolio
+# repository; 2 when GitHub could not be asked. Reads MODULE_REMOTE_ROWS. Asked about, in
+# order:
+#   - the branch of the same name as each local remote-tracking ref that reaches the commit
+#     (up to three), and origin's HEAD: a clone that fell behind a branch that moved on;
+#   - the head of each pull request GitHub associates with the commit (up to five), and only
+#     when origin advertises that head as refs/pull/<n>/head: an earlier push of a branch
+#     that was merged and deleted. GitHub keeps that ref after the branch is gone.
+MODULE_GH_SOCKET=""
+MODULE_PULLS_KEYS=()
+MODULE_PULLS_ROWS=()
+module_tip_behind_remote() {
+  local g=$1 tip=$2 repo names name adv rc unknown=0 rows number head
+  repo=$(portfolio_repo "$(module_origin_url "$g" || true)")
+  [ -n "$repo" ] || return 1
+  [ -n "$GH_BIN" ] || return 2
+  # gh can be told to send its requests somewhere else: through a Unix socket
+  # (http_unix_socket), to another API host (api_host), from its config or a GH_CONFIG_DIR
+  # the sweep inherited. Whatever answers there would be what vouches for a commit, so with
+  # any setting whose name speaks of a socket, a host or a proxy set, nothing is asked. A
+  # read that failed says nothing about the settings, so nothing is asked then either.
+  # Read once per sweep.
+  if [ -z "$MODULE_GH_SOCKET" ]; then
+    local settings
+    settings=$(module_gh config list --host github.com) || return 2
+    [ -n "$settings" ] || return 2
+    if grep -Eiq '^[^=]*(socket|host|proxy)[^=]*=.' <<< "$settings"; then MODULE_GH_SOCKET="set"; else MODULE_GH_SOCKET="none"; fi
+  fi
+  [ "$MODULE_GH_SOCKET" = none ] || return 2
+  names=$(module_git "$g" for-each-ref --contains "$tip" --format='%(refname)' refs/remotes/origin 2>/dev/null) || return 2
+  names=$(sed -n 's#^refs/remotes/origin/#refs/heads/#p' <<< "$names" | sed -n '1,3p')
+  # A ref name holds no whitespace, so the list splits safely.
+  for name in $names HEAD; do
+    adv=$(awk -F'\t' -v r="$name" '$2 == r { print $1; exit }' <<< "$MODULE_REMOTE_ROWS")
+    if [ -z "$adv" ] || [ "$adv" = "$tip" ]; then continue; fi
+    module_descends "$repo" "$tip" "$adv"; rc=$?
+    case "$rc" in 0) return 0 ;; 1) ;; *) unknown=1 ;; esac
+  done
+  # Which pull requests hold a commit is kept for the sweep like the comparisons, so the
+  # check repeated before a removal asks nothing it was already told.
+  local i=0 known=0
+  while [ "$i" -lt "${#MODULE_PULLS_KEYS[@]}" ]; do
+    if [ "${MODULE_PULLS_KEYS[$i]}" = "$repo $tip" ]; then rows=${MODULE_PULLS_ROWS[$i]}; known=1; break; fi
+    i=$((i + 1))
+  done
+  if [ "$known" -eq 0 ]; then
+    rows=$(module_gh api --hostname github.com --paginate "repos/$repo/commits/$tip/pulls" --jq '.[] | "\(.number)\t\(.head.sha)"'); rc=$?
+    if [ "$rc" -ne 0 ]; then
+      # As in submodule_head_spent: a commit GitHub has never received is a definitive 422.
+      case "$rows" in *"No commit found for SHA: $tip\""*) rows="" ;; *) return 2 ;; esac
+    fi
+    MODULE_PULLS_KEYS[i]="$repo $tip"; MODULE_PULLS_ROWS[i]=$rows
+  fi
+  while IFS=$'\t' read -r number head; do
+    [ -n "$number" ] || continue
+    case "$number" in *[!0-9]*) continue ;; esac
+    adv=$(awk -F'\t' -v r="refs/pull/$number/head" '$2 == r { print $1; exit }' <<< "$MODULE_REMOTE_ROWS")
+    if [ -z "$adv" ] || [ "$adv" != "$head" ]; then continue; fi
+    module_descends "$repo" "$tip" "$adv"; rc=$?
+    case "$rc" in 0) return 0 ;; 1) ;; *) unknown=1 ;; esac
+  done <<< "$(sed -n '1,5p' <<< "$rows")"
+  [ "$unknown" -eq 0 ] || return 2
+  return 1
+}
+
+# module_config_pristine <file> <allowed-keys-pattern> — exit 0 when every key in that
+# config file matches the extended regular expression; 1, with MODULE_NOTE naming the first
+# other key, when one does not; 2 when the file cannot be read. Read with --file, so an
+# include is a key like any other (and not followed).
+module_config_pristine() {
+  local file=$1 allowed=$2 keys other
+  keys=$(git config --file "$file" --name-only --list -z 2>/dev/null | tr '\0\n' '\n\001') || return 2
+  case "$keys" in *$'\001'*) MODULE_NOTE="a configuration key holds a newline"; return 1 ;; esac
+  other=$(grep -Ev "^($allowed)\$" <<< "$keys" | grep -v '^$' | head -1) || true
+  if [ -n "$other" ]; then MODULE_NOTE="its configuration sets $other"; return 1; fi
+  return 0
+}
+
+# module_commit_editmsg_spent <git-dir> — exit 0 when COMMIT_EDITMSG is absent, empty, or the
+# message of a commit the HEAD reflog names (the newest 50 ids are tried). Every commit made
+# in a submodule leaves the file behind, and those commits are checked against the remote
+# separately; a message that matches none of them is a draft that was never committed.
+module_commit_editmsg_spent() {
+  local g=$1 f="$1/COMMIT_EDITMSG" want ids id got unread=0
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then return 0; fi
+  # From here a read that fails is 2, not 1: a message that could not be compared is not a
+  # draft that was found.
+  [ -r "$f" ] || return 2
+  want=$(git stripspace --strip-comments < "$f" 2>/dev/null) || return 2
+  [ -n "$want" ] || return 0
+  if [ ! -e "$g/logs/HEAD" ] && [ ! -L "$g/logs/HEAD" ]; then return 1; fi
+  [ -f "$g/logs/HEAD" ] && [ ! -L "$g/logs/HEAD" ] || return 1
+  [ -r "$g/logs/HEAD" ] || return 2
+  ids=$(awk '{ print $2; print $1 }' "$g/logs/HEAD") || return 2
+  ids=$(grep -E '^([0-9a-f]{40}|[0-9a-f]{64})$' <<< "$ids" | grep -Ev '^0+$' \
+        | awk '{ line[NR] = $0 } END { for (i = NR; i >= 1; i--) if (!seen[line[i]]++) print line[i] }' \
+        | sed -n '1,50p') || true
+  for id in $ids; do
+    # An id whose object is gone has no message to compare; one that is there and cannot be
+    # shown is a failed read.
+    module_git "$g" cat-file -e "$id" 2>/dev/null || continue
+    got=$(module_git "$g" show -s --format=%B "$id" 2>/dev/null) || { unread=1; continue; }
+    got=$(git stripspace --strip-comments <<< "$got" 2>/dev/null) || { unread=1; continue; }
+    [ "$got" = "$want" ] && return 0
+  done
+  [ "$unread" -eq 0 ] || return 2
+  return 1
+}
+
+# checkout_matches_index <checkout> — exit 0 when every regular file the index tracks hashes,
+# as `git add` would store it, to the blob the index records; 1 when one does not or is
+# missing; 2 when that cannot be read. Status answers the same question from the file's
+# size and times, and trusts them: with core.trustctime=false in the host's configuration, an
+# edit that keeps a file's size and puts its mtime back reads as unchanged. A symbolic link
+# is compared by its target, which is what its blob holds. A gitlink holds no bytes here.
+checkout_matches_index() {
+  local co=$1 entries paths want got all links meta path target
+  all=$(git -C "$co" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') || return 2
+  case "$all" in *$'\001'*) return 2 ;; esac
+  links=$(awk -F'\t' '$1 ~ /^120000 /' <<< "$all") || return 2
+  while IFS=$'\t' read -r meta path; do
+    [ -n "$meta" ] || continue
+    [ -L "$co/$path" ] || return 1
+    target=$(readlink "$co/$path" 2>/dev/null) || return 2
+    # shellcheck disable=SC2086  # meta is `mode sha stage`
+    set -- $meta
+    [ "$(printf '%s' "$target" | git hash-object --stdin 2>/dev/null)" = "$2" ] || return 1
+  done <<< "$links"
+  entries=$all
+  entries=$(awk -F'\t' '$1 ~ /^100(644|755) /' <<< "$entries") || return 2
+  [ -n "$entries" ] || return 0
+  paths=$(sed 's/^[^	]*	//' <<< "$entries")
+  want=$(awk '{ print $2 }' <<< "$entries")
+  # A missing file makes hash-object fail, which is a difference, not an unreadable index.
+  got=$(cd "$co" 2>/dev/null && git hash-object --stdin-paths <<< "$paths" 2>/dev/null) || return 1
+  [ "$got" = "$want" ] || return 1
+  return 0
+}
+
+# module_checkout <git-dir> <worktree-realpath> -> sets MODULE_CHECKOUT to the physical path
+# of the repository's checkout. Exit 1 when the repository has no checkout that is a
+# directory inside the worktree whose .git is a plain file naming exactly this repository:
+# one checked out elsewhere, or not at all, holds an index nothing here can compare with a
+# working tree. Exit 2 when that could not be established because something that exists
+# could not be read; the caller reports that as unread, not as "no checkout".
+MODULE_CHECKOUT=""
+module_checkout() {
+  local g=$1 wt_real=$2 rel="" co back g_real f rc
+  MODULE_CHECKOUT=""
+  # Read from the files themselves: `git config` on the repository changes into its work
+  # tree first and fails outright when that is gone, which is the ordinary "no checkout".
+  # `config --get` answers 1 for a key that is not set and anything else for a failed read.
+  for f in "$g/config.worktree" "$g/config"; do
+    [ -e "$f" ] || continue
+    rel=$(git config --file "$f" --get core.worktree 2>/dev/null); rc=$?
+    case "$rc" in 0) [ -z "$rel" ] || break ;; 1) rel="" ;; *) return 2 ;; esac
+  done
+  [ -n "$rel" ] || return 1
+  case "$rel" in /*) co=$rel ;; *) co="$g/$rel" ;; esac
+  if [ ! -e "$co" ] && [ ! -L "$co" ]; then return 1; fi
+  # Something that is there but is no directory (the submodule replaced by a file) is not a
+  # checkout either.
+  [ -d "$co" ] || return 1
+  co=$(physical_path "$co") || return 2
+  case "$co/" in "$wt_real"/?*) ;; *) return 1 ;; esac
+  if [ ! -e "$co/.git" ] && [ ! -L "$co/.git" ]; then return 1; fi
+  [ -f "$co/.git" ] && [ ! -L "$co/.git" ] || return 1
+  back=$(git -C "$co" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$back" ] || return 2
+  back=$(physical_path "$back") || return 2
+  g_real=$(physical_path "$g") || return 2
+  [ "$back" = "$g_real" ] || return 1
+  MODULE_CHECKOUT=$co
+}
+
+# module_repository_pristine <git-dir> <worktree-realpath> <admin> — exit 0 when the
+# submodule repository is pristine (see above); 1 with MODULE_NOTE saying what is not. Any
+# read failure is a 1. On success the checkout is added to VERIFIED_CHECKOUTS. <admin> is
+# the worktree's admin directory, which only names its own submodules' repositories in a note.
+MODULE_NOTE=""
+VERIFIED_CHECKOUTS=""
+MODULE_LOG_IDS=""
+MODULE_PACKED_IDS=""
+module_repository_pristine() {
+  local g=$1 wt_real=$2 entry name co out ids rc line
+  MODULE_NOTE=""
+  MODULE_LOG_IDS=""
+  MODULE_PACKED_IDS=""
+  dir_listable "$g" || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="it cannot be listed"; return 1; }
+  for name in hooks info branches; do
+    if [ -e "$g/$name" ] && [ ! -L "$g/$name" ] && [ -d "$g/$name" ] && ! dir_listable "$g/$name"; then
+      REMOTE_MODULE_FAILED=1; MODULE_NOTE="its $name cannot be listed"; return 1
+    fi
+  done
+  # 1. Every entry of the repository directory is one git itself writes into a clone, and
+  #    of the kind git writes. An operation in progress, a bisect log, a per-repository
+  #    worktree, a split index and anything else unlisted is state nothing here inspects.
+  for entry in "$g"/* "$g"/.[!.]* "$g"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    name=${entry##*/}
+    case "$name" in
+      HEAD|config|config.worktree|description|index|packed-refs|FETCH_HEAD|ORIG_HEAD|COMMIT_EDITMSG)
+        [ -f "$entry" ] && [ ! -L "$entry" ] || { MODULE_NOTE="its $name is not a plain file"; return 1; } ;;
+      hooks|info|logs|refs|objects|branches|modules)
+        [ -d "$entry" ] && [ ! -L "$entry" ] || { MODULE_NOTE="its $name is not a plain directory"; return 1; } ;;
+      *) MODULE_NOTE="it holds $name"; return 1 ;;
+    esac
+  done
+  [ -f "$g/HEAD" ] && [ -f "$g/config" ] && [ -d "$g/objects" ] \
+    || { MODULE_NOTE="it lacks a HEAD, config or object store"; return 1; }
+  # 2. hooks/ holds git's own samples only; info/ only an exclude file with no rule of its own;
+  #    branches/ nothing; and the object store borrows from no other.
+  for entry in "$g/hooks"/* "$g/hooks"/.[!.]* "$g/hooks"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    case "${entry##*/}" in
+      *.sample) [ -f "$entry" ] && [ ! -L "$entry" ] || { MODULE_NOTE="hooks/${entry##*/} is not a plain file"; return 1; } ;;
+      *) MODULE_NOTE="it holds the hook ${entry##*/}"; return 1 ;;
+    esac
+  done
+  for entry in "$g/info"/* "$g/info"/.[!.]* "$g/info"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    if [ "${entry##*/}" != exclude ] || [ ! -f "$entry" ] || [ -L "$entry" ]; then
+      MODULE_NOTE="it holds info/${entry##*/}"; return 1
+    fi
+    # The one rule allowed is the one worktree-claim.sh appends for its ownership marker
+    # (229 submodule repositories on the host carried it, measured 2026-10-12).
+    out=$(grep -Ev '^[[:space:]]*(#.*)?$' "$entry" | grep -vxF "/$WORKTREE_CLAIM_MARKER_NAME*" | head -1) || true
+    if [ -n "$out" ]; then MODULE_NOTE="its info/exclude holds a rule of its own"; return 1; fi
+  done
+  for entry in "$g/branches"/* "$g/branches"/.[!.]* "$g/branches"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    MODULE_NOTE="it holds branches/${entry##*/}"; return 1
+  done
+  for name in alternates http-alternates; do
+    if [ -e "$g/objects/info/$name" ] || [ -L "$g/objects/info/$name" ]; then
+      MODULE_NOTE="its object store borrows from another (objects/info/$name)"; return 1
+    fi
+  done
+  # 3. Its configuration is what a clone and a submodule checkout write, plus an identity.
+  #    A filter, a hooks path, a second remote or an include is not.
+  local keys='core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|worktree)|extensions\.worktreeconfig|remote\.origin\.(url|fetch)|branch\..*\.(remote|merge)|submodule\..*\.(url|active)|user\.(name|email)'
+  module_config_pristine "$g/config" "$keys"; rc=$?
+  case "$rc" in 0) ;; 1) return 1 ;; *) REMOTE_MODULE_FAILED=1; MODULE_NOTE="its configuration cannot be read"; return 1 ;; esac
+  if [ -e "$g/config.worktree" ]; then
+    module_config_pristine "$g/config.worktree" 'core\.worktree'; rc=$?
+    case "$rc" in 0) ;; 1) return 1 ;; *) REMOTE_MODULE_FAILED=1; MODULE_NOTE="its config.worktree cannot be read"; return 1 ;; esac
+  fi
+  if [ "$(git config --file "$g/config" --bool --get core.bare 2>/dev/null || true)" = true ]; then
+    MODULE_NOTE="it is configured bare"; return 1
+  fi
+  # 4. It is checked out inside this worktree, and that checkout holds no change: none
+  #    status reports, none an index flag hides, none a filter or conversion hides, and no
+  #    resolve-undo stage (which is in no tree).
+  module_checkout "$g" "$wt_real"; rc=$?
+  case "$rc" in
+    0) ;;
+    1) MODULE_NOTE="it has no checkout inside the worktree"; return 1 ;;
+    *) REMOTE_MODULE_FAILED=1; MODULE_NOTE="its checkout cannot be resolved"; return 1 ;;
+  esac
+  co=$MODULE_CHECKOUT
+  out=$(git -C "$co" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its checkout's status cannot be read"; return 1; }
+  if [ -n "$out" ]; then MODULE_NOTE="its checkout holds changes"; return 1; fi
+  out=$(git -C "$co" ls-files -v 2>/dev/null) || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its index flags cannot be read"; return 1; }
+  if grep -q '^[a-zS]' <<< "$out"; then
+    MODULE_NOTE="its index hides files from status (assume-unchanged or skip-worktree)"; return 1
+  fi
+  out=$(git -C "$co" ls-files --resolve-undo 2>/dev/null) || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its resolve-undo entries cannot be read"; return 1; }
+  if [ -n "$out" ]; then MODULE_NOTE="its index holds resolve-undo entries"; return 1; fi
+  checkout_matches_index "$co"; rc=$?
+  case "$rc" in
+    0) ;;
+    1) MODULE_NOTE="a tracked file in its checkout differs from the index"; return 1 ;;
+    *) REMOTE_MODULE_FAILED=1; MODULE_NOTE="its checkout cannot be compared with its index"; return 1 ;;
+  esac
+  # A nested submodule that was never initialised is a plain directory to git: status calls
+  # the outer checkout clean whatever is dropped into it, and nothing else looks there. An
+  # initialised one has a .git, and its repository is checked in 9 like this one.
+  out=$(git -C "$co" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its index cannot be read"; return 1; }
+  case "$out" in *$'\001'*) MODULE_NOTE="a path in its index holds a newline"; return 1 ;; esac
+  # The path is everything after the FIRST tab: a path can hold tabs of its own.
+  out=$(grep '^160000 ' <<< "$out" | sed 's/^[^	]*	//') || true
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [ -e "$co/$line/.git" ] || [ -L "$co/$line/.git" ]; then continue; fi
+    if [ -L "$co/$line" ] || { [ -e "$co/$line" ] && [ ! -d "$co/$line" ]; }; then
+      MODULE_NOTE="its nested submodule path $line is not a directory"; return 1
+    fi
+    if [ -d "$co/$line" ] && [ -n "$(ls -A "$co/$line" 2>/dev/null || echo unreadable)" ]; then
+      MODULE_NOTE="its uninitialised nested submodule directory $line is not empty"; return 1
+    fi
+  done <<< "$out"
+  local saved_note=$SALVAGE_NOTE
+  if conversion_blocker "$co"; then
+    # Its `cannot ...` notes are reads that failed, not conversions found.
+    case "$SALVAGE_NOTE" in cannot*) REMOTE_MODULE_FAILED=1 ;; esac
+    MODULE_NOTE="in its checkout, $SALVAGE_NOTE"; SALVAGE_NOTE=$saved_note; return 1
+  fi
+  SALVAGE_NOTE=$saved_note
+  # 5. Its refs are branches, remote-tracking refs and tags, each a plain file or packed;
+  #    a stash, a replace ref, notes or a bisect ref is none of those. Every reflog is a
+  #    plain file too: git reads through a symlinked one, and the walk below would not.
+  out=""
+  for name in logs refs; do
+    [ -d "$g/$name" ] || continue
+    out=$(find "$g/$name" ! -type d ! -type f -print 2>/dev/null) \
+      || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its $name cannot be listed"; return 1; }
+    [ -z "$out" ] || break
+  done
+  if [ -n "$out" ]; then MODULE_NOTE="a ref or reflog of it is not a plain file"; return 1; fi
+  # packed-refs first, by its shape: a record git cannot parse is left out of every listing
+  # (with a warning, or by failing the listing, depending on the version of git), and such a
+  # record can be the only thing that names a commit. A record is `<id> <refname>`, and no
+  # ref name holds a space; a `^<id>` line peels the annotated tag above it.
+  if [ -e "$g/packed-refs" ]; then
+    [ -r "$g/packed-refs" ] || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs cannot be read"; return 1; }
+    out=$(grep -Ev '^(#.*|\^[0-9a-f]{40,64}|[0-9a-f]{40,64} refs/[^ ]+)$' "$g/packed-refs" | sed -n '1p') || true
+    if [ -n "$out" ]; then MODULE_NOTE="its packed-refs holds a malformed record"; return 1; fi
+  fi
+  out=$(module_git "$g" for-each-ref --format='%(refname)' 2>/dev/null) \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its refs cannot be read"; return 1; }
+  out=$(grep -Ev '^refs/(heads|remotes|tags)/' <<< "$out" | grep -v '^$' | head -1) || true
+  if [ -n "$out" ]; then MODULE_NOTE="it holds the ref $out"; return 1; fi
+  # A tag ref may name a tag object, which is compared with the remote's. HEAD and every
+  # other ref must name a commit: the walk in 8 peels a tag object to its commit, so a tag
+  # object only such a ref names would be lost unseen.
+  out=$(module_git "$g" for-each-ref --format='%(objecttype) %(refname)' refs/heads refs/remotes 2>/dev/null) \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its refs cannot be read"; return 1; }
+  out=$(awk 'NF && $1 != "commit" { print $2; exit }' <<< "$out")
+  if [ -n "$out" ]; then MODULE_NOTE="its ref $out names an object that is not a commit"; return 1; fi
+  out=$(module_git "$g" rev-parse --verify --quiet HEAD 2>/dev/null) && [ -n "$out" ] \
+    && [ "$(module_git "$g" cat-file -t "$out" 2>/dev/null)" = commit ] \
+    || { MODULE_NOTE="its HEAD names no commit"; return 1; }
+  # Every file under refs/ is a ref git enumerates, and every file under logs/ the reflog of
+  # one (or of HEAD). A leftover lock or scratch file there can hold the only pointer to a
+  # commit, and neither for-each-ref nor the walk below would ever look at it.
+  local refnames stray
+  refnames=$(module_git "$g" for-each-ref --format='%(refname)' 2>/dev/null) || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its refs cannot be read"; return 1; }
+  for name in refs logs; do
+    [ -d "$g/$name" ] || continue
+    # Listed relative to the repository (refs/...) or to logs/ (HEAD, refs/...), so each
+    # line is a ref name as for-each-ref spells it.
+    if [ "$name" = refs ]; then
+      stray=$(cd "$g" 2>/dev/null && find refs -type f -print0 2>/dev/null | tr '\0\n' '\n\001') || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its refs cannot be listed"; return 1; }
+    else
+      stray=$(cd "$g/logs" 2>/dev/null && find . -type f -print0 2>/dev/null | tr '\0\n' '\n\001' | sed 's#^\./##') || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its logs cannot be listed"; return 1; }
+    fi
+    # Listed NUL-terminated and read by line: a name holding a newline would otherwise fall
+    # apart into lines that can each be the name of a real ref. No ref name holds one.
+    case "$stray" in *$'\001'*) MODULE_NOTE="its $name holds a file whose name holds a newline"; return 1 ;; esac
+    [ -n "$stray" ] || continue
+    stray=$(awk 'NR == FNR { known[$0]; next } NF && !($0 in known) && $0 != "HEAD"' \
+            <(printf '%s\n' "$refnames") <(printf '%s\n' "$stray") | sed -n '1p') \
+      || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its $name cannot be compared with its refs"; return 1; }
+    if [ -n "$stray" ]; then MODULE_NOTE="its $name holds a file that is no ref ($stray)"; return 1; fi
+  done
+  # packed-refs holds refs too, and git drops a record it cannot parse from every listing
+  # with only a warning. Each record is `<id> <refname>`, or a peeled `^<id>` under an
+  # annotated tag; the name of every one must be a ref that was enumerated above.
+  if [ -e "$g/packed-refs" ]; then
+    [ -r "$g/packed-refs" ] || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs cannot be read"; return 1; }
+    stray=$(awk 'NR == FNR { known[$0]; next }
+                 /^#/ || /^\^[0-9a-f]+$/ || /^$/ { next }
+                 { name = $0; sub(/^[0-9a-f]+ /, "", name)
+                   if (name == $0 || !(name in known)) { print; exit } }' \
+            <(printf '%s\n' "$refnames") "$g/packed-refs") \
+      || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs cannot be read"; return 1; }
+    if [ -n "$stray" ]; then MODULE_NOTE="its packed-refs holds an entry git does not list as a ref"; return 1; fi
+    # The ids are checked as well as the names. A record under a loose ref of the same name is
+    # stale and names whatever the ref pointed at before, and a `^<id>` line is trusted by
+    # nothing here to be the peel of the tag above it. So every id the file holds is either a
+    # commit, handed to the remote check in 8 by name, or a tag object that some tag ref
+    # points at (those are compared with the remote's); anything else keeps the worktree.
+    local packed_ids tag_ids
+    packed_ids=$(sed -n -e 's/^\([0-9a-f]\{40,64\}\) .*/\1/p' -e 's/^\^\([0-9a-f]\{40,64\}\)$/\1/p' "$g/packed-refs" | sort -u) \
+      || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs cannot be read"; return 1; }
+    if [ -n "$packed_ids" ]; then
+      tag_ids=$(module_git "$g" for-each-ref --format='%(objectname)' refs/tags 2>/dev/null) \
+        || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its tags cannot be read"; return 1; }
+      out=$(module_git "$g" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$packed_ids" 2>/dev/null) \
+        || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs objects cannot be read"; return 1; }
+      stray=$(awk 'NR == FNR { if (NF) tags[$1]; next }
+                   NF != 2 { print; exit }
+                   $2 == "commit" || $2 == "missing" { next }
+                   $2 == "tag" && ($1 in tags) { next }
+                   { print; exit }' <(printf '%s\n' "$tag_ids") <(printf '%s\n' "$out")) \
+        || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its packed-refs objects cannot be read"; return 1; }
+      if [ -n "$stray" ]; then MODULE_NOTE="its packed-refs names an object no ref accounts for"; return 1; fi
+      MODULE_PACKED_IDS=$(awk 'NF == 2 && $2 == "commit" { print $1 }' <<< "$out")
+    fi
+  fi
+  # 6. Everything a reflog, ORIG_HEAD or FETCH_HEAD names is a commit (a tag object named
+  #    only there would be lost unseen), and the pseudo-refs' commits are on the remote.
+  #    The reflogs' commits are covered by the remote check in 8.
+  if [ -d "$g/logs" ]; then
+    ids=$(find "$g/logs" -type f -exec awk '{ print tolower($1); print tolower($2) }' {} + 2>/dev/null) \
+      || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its reflogs cannot be read"; return 1; }
+    if [ -n "$ids" ]; then
+      if grep -Evq '^([0-9a-f]{40}|[0-9a-f]{64})$' <<< "$ids"; then MODULE_NOTE="a reflog of it is malformed"; return 1; fi
+      ids=$(grep -Ev '^0+$' <<< "$ids" | sort -u)
+      if [ -n "$ids" ]; then
+        out=$(module_git "$g" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" 2>/dev/null) \
+          || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its reflog objects cannot be read"; return 1; }
+        # Kept for 8: git drops a reflog line whose metadata it cannot parse from its own
+        # walk, ids and all, so each id read here is handed to the remote check by name.
+        MODULE_LOG_IDS=$(awk 'NF == 2 && $2 == "commit" { print $1 }' <<< "$out")
+        out=$(awk 'NF != 2 || ($2 != "commit" && $2 != "missing") { print; exit }' <<< "$out")
+        if [ -n "$out" ]; then MODULE_NOTE="a reflog of it names an object that is not a commit"; return 1; fi
+      fi
+    fi
+  fi
+  ids=$(pseudo_ref_commits "$g") || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its ORIG_HEAD or FETCH_HEAD cannot be read"; return 1; }
+  if [ -n "$ids" ]; then
+    for line in $ids; do
+      [ "$(module_git "$g" cat-file -t "$line" 2>/dev/null)" = commit ] \
+        || { MODULE_NOTE="its ORIG_HEAD or FETCH_HEAD names an object that is not a commit"; return 1; }
+    done
+    # shellcheck disable=SC2086  # one sha per word
+    out=$(module_git "$g" rev-list --no-walk $ids --not --remotes 2>/dev/null) \
+      || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its ORIG_HEAD or FETCH_HEAD commits cannot be checked"; return 1; }
+    if [ -n "$out" ]; then MODULE_NOTE="its ORIG_HEAD or FETCH_HEAD names a commit its remote lacks"; return 1; fi
+  fi
+  # 7. A COMMIT_EDITMSG is the message of a commit already made, not a draft.
+  module_commit_editmsg_spent "$g"; rc=$?
+  case "$rc" in
+    0) ;;
+    1) MODULE_NOTE="its COMMIT_EDITMSG is not the message of a commit it made"; return 1 ;;
+    *) REMOTE_MODULE_FAILED=1; MODULE_NOTE="its COMMIT_EDITMSG cannot be compared with its commits"; return 1 ;;
+  esac
+  # 8. Every commit a ref or reflog reaches, and every tag, is held by the remote as it
+  #    answers now (module_held_by_remote).
+  module_origin_portfolio "$g" || { MODULE_NOTE="its origin is not a portfolio repository on GitHub"; return 1; }
+  module_remote_rows "$g"; rc=$?
+  case "$rc" in
+    0) ;;
+    1) MODULE_NOTE="it names no origin"; return 1 ;;
+    *) MODULE_NOTE="its remote cannot be read"; return 1 ;;
+  esac
+  module_held_by_remote "$g"; rc=$?
+  case "$rc" in
+    0) ;;
+    1) return 1 ;;
+    *) REMOTE_MODULE_FAILED=1
+       MODULE_NOTE="cannot compare it with what its remote advertises"; return 1 ;;
+  esac
+  VERIFIED_CHECKOUTS="$VERIFIED_CHECKOUTS$co"$'\n'
+  # 9. Its own submodules' repositories, by the same rule.
+  if [ -d "$g/modules" ]; then
+    module_tree_pristine "$g/modules" "$wt_real" "$3" || return 1
+  fi
+  return 0
+}
+
+# module_tree_pristine <modules-dir> <worktree-realpath> <admin> — exit 0 when everything
+# under a modules/ directory is a pristine submodule repository or a plain directory leading
+# to one; 1 with MODULE_NOTE (prefixed with the repository's path under the admin directory)
+# otherwise. A submodule at `a/b` puts its repository at modules/a/b, so a directory that is
+# not itself a repository is walked; any other entry there is content nothing classifies.
+module_tree_pristine() {
+  local dir=$1 wt_real=$2 admin=$3 entry label
+  dir_listable "$dir" || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="${dir#"$admin"/} cannot be listed"; return 1; }
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    label=${entry#"$admin"/}
+    if [ ! -d "$entry" ] || [ -L "$entry" ]; then
+      MODULE_NOTE="$label is not a submodule repository"; return 1
+    fi
+    if [ -e "$entry/HEAD" ] || [ -L "$entry/HEAD" ] || [ -e "$entry/objects" ] || [ -L "$entry/objects" ]; then
+      module_repository_pristine "$entry" "$wt_real" "$admin" || { MODULE_NOTE="$label: $MODULE_NOTE"; return 1; }
+    else
+      module_tree_pristine "$entry" "$wt_real" "$admin" || return 1
+    fi
+  done
+  return 0
+}
+
 # nested_repository_blocker <worktree> -> 0, with SALVAGE_NOTE, when the worktree holds any
-# repository besides its own: an initialised submodule (whose repository lives under the
-# admin directory's modules/) or any other .git entry below its top level, including one the
-# parent ignores or one inside a tracked directory. Salvage records only the parent
-# repository, and the removal deletes the others with every commit, ref, index and reflog
-# they hold, so salvage covers single-repository worktrees only. Found by walking the
+# repository besides its own that the removal would cost something: a submodule repository
+# under the admin directory's modules/ that is not pristine (module_repository_pristine), or
+# any other .git entry below its top level, including one the parent ignores or one inside a
+# tracked directory. Salvage records only the parent repository, and the removal deletes
+# the others with every commit, ref, index and reflog they hold. Found by walking the
 # filesystem, never through git's own listing, which is exactly what an ignore rule hides
-# from. Any read failure blocks.
+# from. Any read failure blocks. Sets VERIFIED_CHECKOUTS to the pristine submodules'
+# checkouts, which gitlink_blocker reads.
 nested_repository_blocker() {
-  local wt=$1 admin found
+  local wt=$1 admin found wt_real
+  VERIFIED_CHECKOUTS=""
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
     || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
+  wt_real=$(physical_path "$wt") || { SALVAGE_NOTE="cannot resolve the worktree's path"; return 0; }
   if [ -e "$admin/modules" ] || [ -L "$admin/modules" ]; then
-    SALVAGE_NOTE="holds submodule repositories (salvage covers single-repository worktrees only)"
-    return 0
+    if [ ! -d "$admin/modules" ] || [ -L "$admin/modules" ]; then
+      SALVAGE_NOTE="holds submodule repositories salvage cannot clear (modules is not a plain directory)"
+      return 0
+    fi
+    if ! module_tree_pristine "$admin/modules" "$wt_real" "$admin"; then
+      SALVAGE_NOTE="holds submodule repositories salvage cannot clear ($MODULE_NOTE)"
+      return 0
+    fi
   fi
   # A .git entry marks a repository with a working tree; a bare repository has none, so it
   # is recognised by its own layout: an objects/ entry beside a HEAD entry. Git resolves an
   # objects/ symlink normally, so a symlink counts as well as a directory, and refs/ is not
   # required: a repository whose empty refs/ was lost still holds packed-refs and objects.
-  local objs o
-  if ! found=$(find "$wt" -mindepth 2 -name .git -prune -print 2>/dev/null) \
-     || ! objs=$(find "$wt" -mindepth 2 -name objects \( -type d -o -type l \) -prune -print 2>/dev/null); then
+  local objs o gits d
+  # NUL-terminated, then read by line: a path holding a newline would otherwise fall apart
+  # into lines that can each be the path of a checkout already accounted for.
+  if ! gits=$(find "$wt" -mindepth 2 -name .git -prune -print0 2>/dev/null | tr '\0\n' '\n\001') \
+     || ! objs=$(find "$wt" -mindepth 2 -name objects \( -type d -o -type l \) -prune -print0 2>/dev/null | tr '\0\n' '\n\001'); then
     SALVAGE_NOTE="cannot search the worktree for nested repositories"; return 0
   fi
+  case "$gits$objs" in
+    *$'\001'*) SALVAGE_NOTE="holds a nested repository at a path with a newline in it (salvage carries no repository but the worktree's own)"; return 0 ;;
+  esac
+  # A pristine submodule's checkout is the one .git entry that is accounted for: a plain
+  # file naming a repository checked above. Every other one still marks a repository the
+  # removal would delete unexamined (a path holding a newline never matches, so it blocks).
+  found=""
+  while IFS= read -r o; do
+    [ -n "$o" ] || continue
+    d=$(physical_path "${o%/.git}") || d=""
+    if [ -n "$d" ] && [ -f "$o" ] && [ ! -L "$o" ]; then
+      case $'\n'"$VERIFIED_CHECKOUTS" in *$'\n'"$d"$'\n'*) continue ;; esac
+    fi
+    found=$o; break
+  done <<< "$gits"
   while IFS= read -r o; do
     [ -n "$o" ] || continue
     if [ -e "${o%/objects}/HEAD" ] || [ -L "${o%/objects}/HEAD" ]; then
@@ -1371,7 +2198,7 @@ nested_repository_blocker() {
     fi
   done <<< "$objs"
   if [ -n "$found" ]; then
-    SALVAGE_NOTE="holds a nested repository (${found%%$'\n'*}; salvage covers single-repository worktrees only)"
+    SALVAGE_NOTE="holds a nested repository (${found%%$'\n'*}; salvage carries no repository but the worktree's own)"
     return 0
   fi
   return 1
@@ -1394,9 +2221,14 @@ gitlink_blocker() {
     if [ -L "$wt/$p" ] || [ ! -d "$wt/$p" ]; then
       SALVAGE_NOTE="submodule directory $p was deleted or replaced (the snapshot cannot record it)"; return 0
     fi
-    # Only an uninitialised submodule gets this far (nested_repository_blocker keeps an
-    # initialised one). Status reports files dropped into its directory as clean, the
-    # snapshot records only the gitlink, and the removal would delete them.
+    # An initialised submodule gets this far only when nested_repository_blocker, which
+    # every caller runs first, found its repository pristine and its checkout clean.
+    local p_real
+    if p_real=$(physical_path "$wt/$p"); then
+      case $'\n'"$VERIFIED_CHECKOUTS" in *$'\n'"$p_real"$'\n'*) continue ;; esac
+    fi
+    # Otherwise it is uninitialised. Status reports files dropped into its directory as
+    # clean, the snapshot records only the gitlink, and the removal would delete them.
     if [ -n "$(ls -A "$wt/$p" 2>/dev/null || echo unreadable)" ]; then
       SALVAGE_NOTE="uninitialised submodule directory $p is not empty (cannot be salvaged)"; return 0
     fi
@@ -1745,6 +2577,75 @@ salvage_namespace() {
     || { SALVAGE_NOTE="unusable salvage ref name $SALVAGE_BASE"; SALVAGE_BASE=""; return 1; }
 }
 
+# module_files_kb <admin> -> prints the size in KB, rounded up per file, of the files
+# module_files_tree keeps (0 when the worktree holds no submodule repository). Read-only, so
+# salvage_blocker counts them too and dry-run cannot promise a salvage that apply then
+# refuses for its size. Non-zero when the files cannot be listed or sized, which also sets
+# REMOTE_MODULE_FAILED: files that were not read were not examined.
+module_files_kb() {
+  local admin=$1 list f sz kb=0
+  if [ ! -d "$admin/modules" ] || [ -L "$admin/modules" ]; then echo 0; return 0; fi
+  list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-module-kb.XXXXXX") || return 1
+  if ! module_state_files "$admin/modules" > "$list"; then rm -f "$list"; REMOTE_MODULE_FAILED=1; return 1; fi
+  while IFS= read -r -d '' f; do
+    sz=$(wc -c < "$f" 2>/dev/null) || { rm -f "$list"; REMOTE_MODULE_FAILED=1; return 1; }
+    sz=$(printf '%s' "$sz" | tr -d ' ')
+    case "$sz" in ''|*[!0-9]*) rm -f "$list"; REMOTE_MODULE_FAILED=1; return 1 ;; esac
+    kb=$((kb + (sz + 1023) / 1024))
+  done < "$list"
+  rm -f "$list"
+  printf '%s\n' "$kb"
+}
+
+# module_files_tree <worktree> -> sets MODULE_FILES_TREE to a tree holding every file of every
+# submodule repository under the admin directory's modules/ outside the object stores, at
+# its path under the admin directory (modules/<path>/config, .../description,
+# .../hooks/<name>.sample, .../info/exclude, .../logs/..., .../COMMIT_EDITMSG, the index and
+# the refs themselves); or to nothing when there is none. It is the same set of files
+# modules_fingerprint compares. The pristine check accepts these files by name or by the
+# keys and ids they hold, and each can still carry bytes someone wrote: a note in the
+# description or in an exclude file's comments, an edited hook sample (git's own samples
+# differ from version to version, so there is no known content to compare with), an identity
+# in the config, a reflog message (`git update-ref -m`), a drafted commit message. So none
+# is judged; all are kept (#2831). Their sizes are summed against SALVAGE_MAX_KB BEFORE
+# anything is written, so an oversized file leaves no blob behind in the repository that
+# outlives the worktree. Built in a temporary index there. Non-zero, with SALVAGE_NOTE, on
+# any failure.
+MODULE_FILES_TREE=""
+module_files_tree() {
+  local wt=$1 admin dir f rel blob mode tree sz kb=0
+  MODULE_FILES_TREE=""
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
+    || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 1; }
+  if [ ! -d "$admin/modules" ] || [ -L "$admin/modules" ]; then return 0; fi
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/wt-salvage-module-files.XXXXXX") \
+    || { SALVAGE_NOTE="cannot create a temporary directory"; return 1; }
+  # module_files_kb runs in a subshell here, so its failure flag is set again on this side.
+  kb=$(module_files_kb "$admin") || { rm -rf "$dir"; REMOTE_MODULE_FAILED=1; SALVAGE_NOTE="cannot list or size the submodule repositories' files"; return 1; }
+  if [ "$kb" -gt "$SALVAGE_MAX_KB" ]; then
+    rm -rf "$dir"; SALVAGE_NOTE="the submodule repositories hold more than ${SALVAGE_MAX_KB} KB of files to keep"; return 1
+  fi
+  if ! module_state_files "$admin/modules" > "$dir/list"; then
+    rm -rf "$dir"; REMOTE_MODULE_FAILED=1; SALVAGE_NOTE="cannot list the submodule repositories' files"; return 1
+  fi
+  : > "$dir/entries" || { rm -rf "$dir"; SALVAGE_NOTE="cannot write a temporary file"; return 1; }
+  while IFS= read -r -d '' f; do
+    rel=${f#"$admin"/}
+    blob=$(git -C "$TOPLEVEL" hash-object -w --no-filters -- "$f" 2>/dev/null) && [ -n "$blob" ] \
+      || { rm -rf "$dir"; SALVAGE_NOTE="cannot preserve a submodule repository file"; return 1; }
+    mode=100644; [ -x "$f" ] && mode=100755
+    printf '%s %s\t%s\0' "$mode" "$blob" "$rel" >> "$dir/entries" \
+      || { rm -rf "$dir"; SALVAGE_NOTE="cannot write a temporary file"; return 1; }
+  done < "$dir/list"
+  if [ ! -s "$dir/entries" ]; then rm -rf "$dir"; return 0; fi
+  if ! GIT_INDEX_FILE="$dir/index" git -C "$TOPLEVEL" update-index -z --index-info < "$dir/entries" 2>/dev/null \
+     || ! tree=$(GIT_INDEX_FILE="$dir/index" git -C "$TOPLEVEL" write-tree 2>/dev/null) || [ -z "$tree" ]; then
+    rm -rf "$dir"; SALVAGE_NOTE="cannot build the tree of submodule repository files"; return 1
+  fi
+  rm -rf "$dir"
+  MODULE_FILES_TREE=$tree
+}
+
 # resolve_undo_ref_write <base> <tree> -> writes and verifies <base>/resolve-undo.
 resolve_undo_ref_write() {
   git -C "$TOPLEVEL" update-ref "$1/resolve-undo" "$2" "" 2>/dev/null \
@@ -1777,6 +2678,7 @@ resolve_undo_preserve() {
 # only preserve data) and the caller KEEPs the worktree.
 salvage_write() {
   local wt=$1 sha=$2 base idx_tree wt_tree idx_commit wt_commit orphans o reuc_tree
+  SALVAGE_MODULE_TREE=""
   SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_RESOLVE_UNDO=""
   salvage_namespace "$wt" "$sha" || return 1
   base=$SALVAGE_BASE
@@ -1800,7 +2702,14 @@ salvage_write() {
   if [ -n "$reuc_tree" ]; then
     reuc_kb=$(tree_kb "$wt" "$reuc_tree") || { SALVAGE_NOTE="cannot size the index's resolve-undo entries"; return 1; }
   fi
-  captured_kb=$((captured_kb + admin_kb + reuc_kb))
+  # Every file of the submodule repositories outside their object stores, kept by its bytes.
+  local mod_tree mod_kb=0
+  module_files_tree "$wt" || return 1
+  mod_tree=$MODULE_FILES_TREE
+  if [ -n "$mod_tree" ]; then
+    mod_kb=$(tree_kb "$wt" "$mod_tree") || { SALVAGE_NOTE="cannot size the submodule repositories' kept files"; return 1; }
+  fi
+  captured_kb=$((captured_kb + admin_kb + reuc_kb + mod_kb))
   if [ "$captured_kb" -gt "$SALVAGE_MAX_KB" ]; then
     SALVAGE_NOTE="the snapshot holds more than ${SALVAGE_MAX_KB} KB of changed data"; return 1
   fi
@@ -1840,6 +2749,12 @@ salvage_write() {
     resolve_undo_ref_write "$base" "$reuc_tree" \
       || { SALVAGE_NOTE="cannot write or verify $base/resolve-undo"; return 1; }
   fi
+  if [ -n "$mod_tree" ]; then
+    git -C "$TOPLEVEL" update-ref "$base/module-files" "$mod_tree" "" 2>/dev/null \
+      && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/module-files" 2>/dev/null)" = "$mod_tree" ] \
+      || { SALVAGE_NOTE="cannot write or verify $base/module-files"; return 1; }
+  fi
+  SALVAGE_MODULE_TREE=$mod_tree
   SALVAGE_RESOLVE_UNDO=$reuc_tree
   SALVAGE_REF=$base; SALVAGE_TREE=$wt_tree; SALVAGE_INDEX_TREE=$idx_tree; SALVAGE_ADMIN_BLOBS=$kept
   return 0
@@ -1976,6 +2891,8 @@ while IFS= read -r wt <&3; do
   salvage_reason=""; SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_RESOLVE_UNDO=""; SALVAGE_NOTE=""
   RESOLVE_UNDO_SAVED=0; RESOLVE_UNDO_REF=""
   SCAN_REF_IDS=""
+  SALVAGE_MODULES_FP=""
+  SALVAGE_MODULE_TREE=""
   REMOTE_CLEARED=""
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
@@ -2216,7 +3133,7 @@ while IFS= read -r wt <&3; do
   # committed on a local branch there and then returned to the gitlink commit leaves that
   # commit in a repository the removal deletes. So every submodule repository is held to the
   # drifted one's rule, drifted or not, checked out or not. A salvage candidate is skipped:
-  # salvage_blocker refuses any worktree that holds a submodule repository at all.
+  # salvage_blocker holds each of its submodule repositories to the stricter pristine rule.
   if [ -z "$salvage_reason" ]; then
     submodule_repositories_disposable "$wt" "$wt_real"; sub_rc=$?
     case "$sub_rc" in
@@ -2289,6 +3206,13 @@ while IFS= read -r wt <&3; do
     if ! still_the_reviewed_worktree "$wt" "$branch" "$sha" "$merged_head"; then
       worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
       keep "$wt" "$IDENTITY_NOTE"; continue
+    fi
+    # Before the blockers look, so a change they then see as harmless still shows below.
+    if ! SALVAGE_MODULES_FP=$(modules_fingerprint "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)"); then
+      worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+      # Not examined, so not a clean sweep either.
+      REMOTE_MODULE_FAILED=1
+      keep_stuck "$wt" "$salvage_reason; not salvaged: cannot read its submodule repositories"; continue
     fi
     # Re-apply the salvage blockers under the mutex: the first check ran before the lock,
     # so data written since then (a large file, a new submodule commit) would otherwise be
@@ -2438,6 +3362,11 @@ else
 fi
 if [ "$stuck" -gt 0 ]; then
   printf 'worktree-cleanup: %d of the kept worktree(s) hold abandoned work that no sweep will reap; salvage or discard it (#2831)\n' "$stuck"
+fi
+if [ "$REMOTE_MODULE_FAILED" -ne 0 ]; then
+  # The same reasoning as below, for a submodule's remote: its worktree was kept unexamined.
+  printf 'worktree-cleanup: UNKNOWN — could not read a submodule repository or its remote, so the worktrees kept for it were kept unexamined (#2831)\n' >&2
+  [ "$REMOTE_HELD_FAILED" -ne 0 ] || exit 2
 fi
 if [ "$REMOTE_HELD_FAILED" -ne 0 ]; then
   # Said last and with exit 2: the worktrees kept for a reflog-only commit above were kept
