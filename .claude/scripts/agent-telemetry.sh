@@ -5395,10 +5395,15 @@ if want drift; then
   CLAUDE_ENGINEER_ACTUAL=""
   CLAUDE_ENGINEER_MARKER=""
   CLAUDE_ENGINEER_UNREADABLE=""
+  # The pointer the lane is read through: the first named entry's. With several
+  # entries every one is checked above, so the first stands for the set.
+  CLAUDE_ENGINEER_POINTER="$CLAUDE_LOADER"
   # One " id=schedule" word per readable entry; the refusal count below reads it.
   CLAUDE_ENGINEER_ENTRY_SCHEDULES=""
   CLAUDE_ENGINEER_ENTRY_IDS=$(claude_engineer_entry_ids) || CLAUDE_ENGINEER_ENTRY_IDS=""
   CLAUDE_ENGINEER_ENTRY_COUNT=$(printf '%s\n' "$CLAUDE_ENGINEER_ENTRY_IDS" | awk 'NF { count++ } END { print count + 0 }')
+  [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 0 ] \
+    || CLAUDE_ENGINEER_POINTER=$(claude_engineer_entry_loader "$(printf '%s\n' "$CLAUDE_ENGINEER_ENTRY_IDS" | awk 'NR == 1')")
   if [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 0 ]; then
     CLAUDE_ENGINEER_UNREADABLE="entry list is unreadable (CLAUDE_ENGINEER_ENTRIES: ids of lowercase letters, digits and hyphens, at most four, none twice)"
   elif [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 1 ]; then
@@ -5412,12 +5417,17 @@ if want drift; then
     lane_hours=""
     lane_minutes=""
     lane_minute_owners=""
+    lane_marker_unread=0
     while IFS= read -r entry_id; do
       entry_loader=$(claude_engineer_entry_loader "$entry_id")
       entry_marker=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" "$entry_id" "$entry_loader")
-      # The lane's change marker is its newest dispatch on any entry.
-      if [[ "$entry_marker" =~ ^[0-9]+$ ]] \
-         && { [ -z "$CLAUDE_ENGINEER_MARKER" ] || [ "$entry_marker" -gt "$CLAUDE_ENGINEER_MARKER" ]; }; then
+      # The lane's change marker is its OLDEST newest-dispatch: persistence asks
+      # whether an applied edit survived a dispatch, and the newest marker alone
+      # would let one entry's dispatch confirm an edit to an entry that has not
+      # run since. An entry without a readable marker leaves the lane without one.
+      if ! [[ "$entry_marker" =~ ^[0-9]+$ ]]; then
+        lane_marker_unread=1
+      elif [ -z "$CLAUDE_ENGINEER_MARKER" ] || [ "$entry_marker" -lt "$CLAUDE_ENGINEER_MARKER" ]; then
         CLAUDE_ENGINEER_MARKER="$entry_marker"
       fi
       [ -z "$CLAUDE_ENGINEER_UNREADABLE" ] || continue
@@ -5455,6 +5465,7 @@ if want drift; then
       done
       lane_minutes="${lane_minutes:+$lane_minutes,}$entry_minutes"
     done <<<"$CLAUDE_ENGINEER_ENTRY_IDS"
+    [ "$lane_marker_unread" -eq 0 ] || CLAUDE_ENGINEER_MARKER=""
     if [ -z "$CLAUDE_ENGINEER_UNREADABLE" ]; then
       CLAUDE_ENGINEER_ACTUAL=$(schedule_from_parts "$lane_hours" "$lane_minutes")
     else
@@ -5486,7 +5497,7 @@ if want drift; then
     echo "    UNKNOWN: claude engineer $CLAUDE_ENGINEER_UNREADABLE"
   else
     compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
-      "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" cron
+      "$CLAUDE_ENGINEER_POINTER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" cron
     [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -gt 1 ] \
       && echo "      entries:$CLAUDE_ENGINEER_ENTRY_SCHEDULES"
   fi
@@ -5524,7 +5535,7 @@ if want drift; then
   # Gated on cadence READABILITY, never on persistence (#2621): these two figures
   # are pure functions of the four crons. An unreadable or ambiguous pointer still
   # suppresses them — that fail-closed behaviour is unchanged and tested.
-  if schedule_cadence_readable "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
+  if schedule_cadence_readable "$CLAUDE_ENGINEER_POINTER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
      && schedule_cadence_readable "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
      && schedule_cadence_readable "$CODEX_LOADER" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
      && schedule_cadence_readable "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL"; then

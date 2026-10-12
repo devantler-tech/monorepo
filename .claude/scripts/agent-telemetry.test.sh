@@ -999,6 +999,45 @@ check "refusals are summed over the lane's entries" "$OUT" \
   "claude engineer dispatch refusals: 4 slot(s)"
 nocheck "an entry's refusal off its own due minute is not a slot" "$OUT" \
   "claude engineer dispatch refusals: 5 slot(s)"
+# Persistence asks whether an applied schedule edit survived a dispatch, so with
+# several entries EVERY entry's marker must have advanced past the baseline. The
+# newest marker alone would let the first entry's dispatch confirm an edit to a
+# second entry that has never run.
+TWO_BASE() { CLAUDE_ENGINEER_ENTRIES="daily-ai-assistant,$ENTRY2" run "$@"; }
+OUT=$(TWO_BASE --section drift)
+check "two entries that both dispatched after the baseline confirm persistence" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH persistence=CONFIRMED"
+set_entry2 '(.scheduledTasks[] | select(.id == $id) | .lastRunAt) = "2025-01-01T00:00:00.000Z"'
+OUT=$(TWO_BASE --section drift)
+check "an entry that has not dispatched since the baseline withholds persistence" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH persistence=UNKNOWN (change marker did not advance"
+nocheck "the first entry's dispatch never confirms the lane alone" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH persistence=CONFIRMED"
+set_entry2 'del(.scheduledTasks[] | select(.id == $id) | .lastRunAt)'
+OUT=$(TWO_BASE --section drift)
+check "an entry without a dispatch marker withholds persistence" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH persistence=UNKNOWN (change marker missing)"
+# A lane may name one entry that is not the default one, for a trial or a
+# replacement. Its own pointer is then the one that must exist: the default
+# entry's pointer is not part of the lane and its absence is not a finding.
+set_entry2 .
+set_cadence_cell Claude 'Every hour at `:20`'
+mv "$FIX/claude-sched/daily-ai-assistant/SKILL.md" "$FIX/claude-sched/daily-ai-assistant/SKILL.md.hidden"
+OUT=$(CLAUDE_ENGINEER_ENTRIES="$ENTRY2" CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" NOBASE --section drift)
+check "a lane naming one other entry reads that entry's pointer" "$OUT" \
+  "claude engineer: expected=*@20 actual=*@20 MATCH"
+nocheck "the unnamed default entry's missing pointer is not the lane's" "$OUT" \
+  "UNKNOWN: claude engineer schedule pointer missing"
+check "a lane naming one other entry keeps its slot count" "$OUT" \
+  "local engineer slots scheduled/day: 48"
+mv "$FIX/claude-sched/daily-ai-assistant/SKILL.md.hidden" "$FIX/claude-sched/daily-ai-assistant/SKILL.md"
+# CONTROL: the named entry's own pointer missing is still the lane's finding.
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md" "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden"
+OUT=$(CLAUDE_ENGINEER_ENTRIES="$ENTRY2" NOBASE --section drift)
+check "a lane naming one other entry reports that entry's missing pointer" "$OUT" \
+  "UNKNOWN: claude engineer schedule pointer missing"
+mv "$FIX/claude-sched/$ENTRY2/SKILL.md.hidden" "$FIX/claude-sched/$ENTRY2/SKILL.md"
+set_cadence_cell Claude 'Every hour at `:20` and `:50`'
 # NEGATIVE CONTROLS: a named entry that cannot be read leaves the lane unreadable.
 # It is never read as the remaining entry alone.
 unreadable_two() { # $1 = case label, $2 = the UNKNOWN text expected
