@@ -2640,19 +2640,25 @@ t_salvage_keeps_a_submodule_ref_that_names_a_tag_object() {
 
 t_salvage_keeps_a_submodule_file_made_executable_after_the_snapshot() {
   # A mode change alters neither a name nor a byte, and the kept copy records the old mode.
+  # The bit is flipped whichever way it starts: git's own template installs this file
+  # executable on some systems and not on others.
   local name="salvage KEEPs a worktree whose submodule repository file changed mode after the snapshot"
   local root; root=$(make_repo)
   admin_sub_wt "$root" submode || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
-  local wt="$root/repo/.claude/worktrees/submode" shim g
+  local wt="$root/repo/.claude/worktrees/submode" shim g before=plain
   g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
   portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
-  shim=$(lsof_hook_shim "$root" 3 "ls -l '$g/description' > '$root/hook.log' 2>&1; chmod u+x '$g/description' >> '$root/hook.log' 2>&1; ls -l '$g/description' >> '$root/hook.log' 2>&1; test -x '$g/description' && echo executable >> '$root/hook.log'") \
+  [ -x "$g/description" ] && before=executable
+  shim=$(lsof_hook_shim "$root" 3 "if [ -x '$g/description' ]; then chmod a-x '$g/description'; else chmod u+x '$g/description'; fi") \
     || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
-  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
-  if [ ! -x "$g/description" ]; then
-    bad "$name" "the mode was never changed (lsof calls: $(cat "$root/lsof-calls" 2>/dev/null); hook: $(tr '\n' '|' < "$root/hook.log" 2>/dev/null)): $out"
+  local out after=plain; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  [ -x "$g/description" ] && after=executable
+  if [ ! -e "$g/description" ]; then
+    bad "$name" "the file is gone: $out"
+  elif [ "$before" = "$after" ]; then
+    bad "$name" "FIXTURE: the mode was never changed (still $after): $out"
   elif grep -q 'KEEP .*submode .*a submodule repository changed after the salvage snapshot' <<<"$out" && [ -d "$wt" ] && [ -d "$g" ]; then
     ok "$name"
   else
