@@ -2826,6 +2826,47 @@ t_salvage_dry_run_counts_the_submodule_files_it_would_keep() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_submodule_file_changed_and_changed_back_around_its_capture() {
+  # A file is A when the baseline is taken, B when the kept copy is written, and A again
+  # before the removal. The baseline matches again, but what was kept is B, not the A
+  # about to be deleted.
+  local name="salvage KEEPs a worktree whose submodule file differs from its kept copy"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subflip || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subflip" g
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  echo AAAA > "$g/description"
+  age_tree "$wt"
+  mv "$root/gitshim/git" "$root/gitshim-real" || { bad "$name" "FIXTURE: shim"; rm -rf "$root"; return; }
+  # B is written when the snapshot starts (its first write-tree), and A is put back right
+  # after the kept copy of the file has been written.
+  cat > "$root/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" write-tree "*)
+    [ -e "$root/flipped" ] || { echo BBBB > "$g/description"; touch "$root/flipped"; } ;;
+  *" hash-object -w --no-filters -- $g/description "*)
+    "$root/gitshim-real" "\$@"; rc=\$?
+    echo AAAA > "$g/description"; touch "$root/flipped-back"
+    exit \$rc ;;
+esac
+exec "$root/gitshim-real" "\$@"
+SHIM
+  chmod +x "$root/gitshim/git"
+  local out; out=$(run_salvage "$root" apply 1)
+  if [ ! -e "$root/flipped" ] || [ ! -e "$root/flipped-back" ]; then
+    bad "$name" "FIXTURE: the file was never flipped and flipped back: $out"
+  elif grep -q 'KEEP .*subflip .*a submodule repository no longer matches its kept copy' <<<"$out" \
+       && [ -d "$wt" ] && [ "$(cat "$g/description" 2>/dev/null)" = AAAA ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -5373,6 +5414,7 @@ t_unknown_when_a_submodule_checkout_cannot_be_read
 t_salvage_keeps_a_submodule_commit_only_a_malformed_reflog_line_names
 t_salvage_keeps_a_branch_namespace_that_looks_like_a_repository
 t_salvage_dry_run_counts_the_submodule_files_it_would_keep
+t_salvage_keeps_a_submodule_file_changed_and_changed_back_around_its_capture
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read

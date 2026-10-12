@@ -910,6 +910,16 @@ recheck_mutable_gates() {
     if [ "$now_fp" != "$SALVAGE_MODULES_FP" ]; then
       keep "$wt" "a submodule repository changed after the salvage snapshot ($SALVAGE_REF)"; return 1
     fi
+    # And against the copy that was actually kept: a file changed after the fingerprint above
+    # was first taken, captured in that state and then changed back matches the fingerprint
+    # again, while the kept copy holds bytes that are no longer the ones being removed.
+    if ! module_files_tree "$wt"; then
+      REMOTE_MODULE_FAILED=1
+      keep "$wt" "cannot re-read its submodule repositories before removal ($SALVAGE_REF)"; return 1
+    fi
+    if [ "$MODULE_FILES_TREE" != "$SALVAGE_MODULE_TREE" ]; then
+      keep "$wt" "a submodule repository no longer matches its kept copy ($SALVAGE_REF)"; return 1
+    fi
   elif [ -n "$salvage_reason" ]; then
     # Salvage candidate before its snapshot: its changes are expected and are about to be
     # preserved, but not work in a submodule, which salvage cannot capture.
@@ -1891,7 +1901,11 @@ module_repository_pristine() {
     fi
   done <<< "$out"
   local saved_note=$SALVAGE_NOTE
-  if conversion_blocker "$co"; then MODULE_NOTE="in its checkout, $SALVAGE_NOTE"; SALVAGE_NOTE=$saved_note; return 1; fi
+  if conversion_blocker "$co"; then
+    # Its `cannot ...` notes are reads that failed, not conversions found.
+    case "$SALVAGE_NOTE" in cannot*) REMOTE_MODULE_FAILED=1 ;; esac
+    MODULE_NOTE="in its checkout, $SALVAGE_NOTE"; SALVAGE_NOTE=$saved_note; return 1
+  fi
   SALVAGE_NOTE=$saved_note
   # 5. Its refs are branches, remote-tracking refs and tags, each a plain file or packed;
   #    a stash, a replace ref, notes or a bisect ref is none of those. Every reflog is a
@@ -2550,6 +2564,7 @@ resolve_undo_preserve() {
 # only preserve data) and the caller KEEPs the worktree.
 salvage_write() {
   local wt=$1 sha=$2 base idx_tree wt_tree idx_commit wt_commit orphans o reuc_tree
+  SALVAGE_MODULE_TREE=""
   SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_RESOLVE_UNDO=""
   salvage_namespace "$wt" "$sha" || return 1
   base=$SALVAGE_BASE
@@ -2625,6 +2640,7 @@ salvage_write() {
       && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/module-files" 2>/dev/null)" = "$mod_tree" ] \
       || { SALVAGE_NOTE="cannot write or verify $base/module-files"; return 1; }
   fi
+  SALVAGE_MODULE_TREE=$mod_tree
   SALVAGE_RESOLVE_UNDO=$reuc_tree
   SALVAGE_REF=$base; SALVAGE_TREE=$wt_tree; SALVAGE_INDEX_TREE=$idx_tree; SALVAGE_ADMIN_BLOBS=$kept
   return 0
@@ -2762,6 +2778,7 @@ while IFS= read -r wt <&3; do
   RESOLVE_UNDO_SAVED=0; RESOLVE_UNDO_REF=""
   SCAN_REF_IDS=""
   SALVAGE_MODULES_FP=""
+  SALVAGE_MODULE_TREE=""
   REMOTE_CLEARED=""
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
