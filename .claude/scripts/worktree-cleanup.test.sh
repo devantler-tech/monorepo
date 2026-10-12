@@ -2468,7 +2468,8 @@ SHIM
     grep -q 'compare/[0-9a-f]\{40\}\.\.\.0123456789abcdef0123456789abcdef01234567' "$root/gh-args" 2>/dev/null \
       || failures="$failures $answer(no compare call)"
     # Asked of github.com by name, whatever GH_HOST the sweep inherited.
-    if grep -v -- '--hostname github\.com ' "$root/gh-args" 2>/dev/null | grep -q .; then failures="$failures $answer(a gh call without the hostname)"; fi
+    local unpinned; unpinned=$(grep -v -- '--hostname github\.com ' "$root/gh-args" 2>/dev/null || true)
+    if [ -n "$unpinned" ]; then failures="$failures $answer(a gh call without the hostname)"; fi
     rm -rf "$root"
   done
   if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
