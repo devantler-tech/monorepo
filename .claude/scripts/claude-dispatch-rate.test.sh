@@ -264,6 +264,67 @@ for h in 0 1 2 3; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
 expect 2 "whole-second" "a fractional --since is refused, never rounded into the window" \
   --task eng --since "2026-09-01T00:50:00.500Z" --until "$(iso_at "$NOW")"
 
+# A LANE WITH MORE THAN ONE ENGINEER ENTRY (monorepo#4117). The Claude scheduler refuses a start
+# that overlaps the previous run of the SAME entry, so a lane that starts twice an hour needs two
+# entries. Each entry is judged against its own schedule and its own sessions, then the lane is
+# summed. `eng` starts at :50 and `eng2` at :20.
+mkset() {
+  mkcase "$1"
+  printf '{"scheduledTasks":[{"id":"eng","enabled":true,"lastRunAt":"x","createdAt":%s,"cronExpression":"50 * * * *"},{"id":"eng2","enabled":%s,"lastRunAt":"x","createdAt":%s,"cronExpression":"%s"}]}\n' \
+    "$(( (BASE - 86400) * 1000 ))" "${ENG2_ENABLED:-true}" "${ENG2_CREATED_MS:-$(( (BASE - 86400) * 1000 ))}" "${ENG2_CRON:-20 * * * *}" > "$STORE"
+}
+S=(--task "eng,eng2" --since "$(iso_at "$BASE")" --until "$(iso_at $(( BASE + 6 * 3600 )))")
+# 00:00 to 06:00 settles five :50 slots (00:50 .. 04:50) and five :20 slots (00:20 .. 04:20).
+
+mkset set-all-dispatched
+for h in 0 1 2 3 4; do
+  mksession eng $(( BASE + h * 3600 + 3000 + 5 )); mksession eng2 $(( BASE + h * 3600 + 1200 + 5 ))
+done
+expect 0 "DISPATCH-RATE-SET tasks=eng,eng2 " "a set prints one summed line" "${S[@]}"
+expect 0 "scheduled=10 dispatched=10 dropped=0 drop_rate=0.0%" "a set sums its entries' slots" "${S[@]}"
+expect 0 'DISPATCH-RATE task=eng2 cron="20 * * * *"' "a set still prints each entry's own line" "${S[@]}"
+
+mkset set-second-entry-dead
+for h in 0 1 2 3 4; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
+expect 0 "DISPATCH-RATE task=eng2 cron=\"20 * * * *\" cron_source=current window=$(iso_at "$BASE")..$(iso_at $(( BASE + 6 * 3600 ))) scheduled=5 dispatched=0 dropped=5 drop_rate=100.0%" \
+  "a dead second entry reads fully dropped on its own line" "${S[@]}"
+expect 0 "tasks=eng,eng2 window=$(iso_at "$BASE")..$(iso_at $(( BASE + 6 * 3600 ))) scheduled=10 dispatched=5 dropped=5 drop_rate=50.0%" \
+  "a healthy first entry does not hide a dead second one in the sum" "${S[@]}"
+
+mkset set-sessions-are-not-shared
+# Both entries' sessions exist, but every `eng2` one is missing: an `eng` session that starts inside
+# a :20 interval must not fill the :20 slot.
+for h in 0 1 2 3 4; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
+mksession eng2 $(( BASE + 1200 + 5 ))
+expect 0 "scheduled=10 dispatched=6 dropped=4" "one entry's session never fills the other entry's slot" "${S[@]}"
+expect 0 "$(iso_at $(( BASE + 3600 + 1200 ))) dropped" "--slots lists each entry's slots under its line" "${S[@]}" --slots
+
+ENG2_ENABLED=false mkset set-entry-disabled
+for h in 0 1 2 3 4; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
+expect 2 "entry eng2" "a disabled named entry makes the set UNKNOWN, never the sum of the rest" "${S[@]}"
+run "${S[@]}" || true
+asserts=$(( asserts + 1 ))
+case "$OUT" in *DISPATCH-RATE-SET*|*'DISPATCH-RATE task='*) note_fail "an UNKNOWN set printed a rate -- $OUT" ;; esac
+
+ENG2_CREATED_MS=$(( (BASE + 3600) * 1000 )) mkset set-entry-younger-than-window
+for h in 0 1 2 3 4; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
+expect 2 "entry eng2" "an entry created inside the window makes the set UNKNOWN" "${S[@]}"
+
+ENG2_CRON="50 * * * *" mkset set-same-minute
+for h in 0 1 2 3 4; do
+  mksession eng $(( BASE + h * 3600 + 3000 + 5 )); mksession eng2 $(( BASE + h * 3600 + 3000 + 9 ))
+done
+expect 2 "same schedule" "two entries on one schedule are UNKNOWN: the second adds no start" "${S[@]}"
+
+mkset set-args
+for h in 0 1 2 3 4; do mksession eng $(( BASE + h * 3600 + 3000 + 5 )); done
+expect 2 "named twice" "a repeated id is UNKNOWN" --task eng,eng --since "$(iso_at "$BASE")" --until "$(iso_at "$NOW")"
+expect 2 "empty task id" "an empty id in the list is UNKNOWN" --task eng,,eng2 --since "$(iso_at "$BASE")" --until "$(iso_at "$NOW")"
+expect 2 "empty task id" "a trailing comma is UNKNOWN" --task eng, --since "$(iso_at "$BASE")" --until "$(iso_at "$NOW")"
+expect 2 "at most four" "more than four ids is UNKNOWN" --task a,b,c,d,e --since "$(iso_at "$BASE")" --until "$(iso_at "$NOW")"
+expect 2 "not a single enabled task" "an unknown id in the list is UNKNOWN" \
+  --task eng,nope --since "$(iso_at "$BASE")" --until "$(iso_at $(( BASE + 6 * 3600 )))"
+
 if [ "$fails" -gt 0 ]; then
   echo "claude-dispatch-rate.test.sh: $fails of $asserts assertions FAILED" >&2
   exit 1

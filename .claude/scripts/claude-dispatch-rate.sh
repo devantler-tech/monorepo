@@ -29,8 +29,14 @@
 # READ-ONLY, and as narrow as claude-lane-liveness.sh: from each transcript it reads only the
 # first line's task marker and timestamp. It never reads run content.
 #
-# Usage: claude-dispatch-rate.sh --task ID --since ISO [--until ISO] [--store PATH] [--projects PATH]
+# Usage: claude-dispatch-rate.sh --task ID[,ID...] --since ISO [--until ISO] [--store PATH] [--projects PATH]
 #                               [--now-epoch S] [--slots]
+#   --task           one scheduler entry id, or up to four separated by commas. A lane whose engineer
+#                    starts from more than one entry names them all (monorepo#4117): each entry is
+#                    measured on its own schedule and sessions and printed on its own line, then one
+#                    `DISPATCH-RATE-SET tasks=<ids> ... scheduled= dispatched= dropped= drop_rate=`
+#                    line sums them. If any named entry cannot be measured, or two share a schedule,
+#                    the whole set is UNKNOWN: it is never the sum of the entries that were readable.
 #   --since/--until  UTC instants, YYYY-MM-DDTHH:MM:SSZ. --until defaults to now and may not be later.
 #   --slots          also print one line per settled slot: `<slot-utc> dispatched|dropped`.
 #
@@ -46,7 +52,7 @@ STORE_ROOT="${CLAUDE_SCHEDULE_STORE_ROOT:-$HOME/Library/Application Support/Clau
 PROJECTS="${CLAUDE_PROJECTS_ROOT:-$HOME/.claude/projects}"
 TASK=""; SINCE=""; UNTIL=""; NOW_EPOCH=""; SLOTS=0
 
-usage() { sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; }
 die_unknown() { printf 'claude-dispatch-rate: UNKNOWN -- %s\n' "$1" >&2; exit 2; }
 
 while [ "$#" -gt 0 ]; do
@@ -65,7 +71,7 @@ done
 
 command -v jq >/dev/null 2>&1 || die_unknown "jq is not available"
 [ -n "$TASK" ] || die_unknown "--task is required"
-case "$TASK" in *[!A-Za-z0-9._-]*) die_unknown "unusable task id: $TASK" ;; esac
+case "$TASK" in *[!A-Za-z0-9._,-]*) die_unknown "unusable task id: $TASK" ;; esac
 [ -n "$SINCE" ] || die_unknown "--since is required"
 
 if [ -n "$NOW_EPOCH" ]; then
@@ -140,6 +146,55 @@ fi
 # A window reaching past now would settle slots whose dispatch window has not closed yet.
 [ "$UNTIL_E" -le "$NOW_EPOCH" ] || die_unknown "--until is later than now"
 [ "$SINCE_E" -lt "$UNTIL_E" ] || die_unknown "--since must be earlier than --until"
+
+# A LANE WITH MORE THAN ONE ENTRY (monorepo#4117). Each entry is measured by this same script, on
+# its own schedule and its own sessions, at one pinned clock; the lane's figure is their sum. It is
+# printed only when EVERY named entry was measured: a sum over the entries that happened to be
+# readable would report a lane that lost an entry as a lane with fewer, fully dispatched slots.
+case "$TASK" in *,*)
+  case ",$TASK," in *,,*) die_unknown "empty task id in --task: $TASK" ;; esac
+  IFS=, read -r -a SET_IDS <<EOF
+$TASK
+EOF
+  [ "${#SET_IDS[@]}" -le 4 ] || die_unknown "--task takes at most four ids, got ${#SET_IDS[@]}"
+  seen_ids=" "
+  for id in "${SET_IDS[@]}"; do
+    case "$seen_ids" in *" $id "*) die_unknown "task $id is named twice in --task" ;; esac
+    seen_ids="$seen_ids$id "
+  done
+  child_args=(--since "$SINCE" --until "$(epoch_to_iso "$UNTIL_E")" --projects "$PROJECTS" --now-epoch "$NOW_EPOCH" --slots)
+  [ -z "$STORE" ] || child_args+=(--store "$STORE")
+  set_out=""; set_scheduled=0; set_dispatched=0; seen_crons="
+"
+  for id in "${SET_IDS[@]}"; do
+    child_rc=0
+    child_out=$(trap - ERR; "$0" --task "$id" "${child_args[@]}" 2>&1) || child_rc=$?
+    [ "$child_rc" -eq 0 ] || die_unknown "entry $id could not be measured, so the set has no rate: ${child_out#claude-dispatch-rate: UNKNOWN -- }"
+    head_line=${child_out%%$'\n'*}
+    # The entry's own line is parsed whole or not at all; a partly read line would sum a guess.
+    fields=$(printf '%s\n' "$head_line" | sed -n 's/^DISPATCH-RATE task=[A-Za-z0-9._-]* cron="\([0-9*, ]*\)" cron_source=current window=[0-9TZ:.-]* scheduled=\([0-9][0-9]*\) dispatched=\([0-9][0-9]*\) dropped=[0-9][0-9]* drop_rate=[0-9.]*%$/\1|\2|\3/p')
+    [ -n "$fields" ] || die_unknown "entry $id printed no readable rate line"
+    child_cron=${fields%%|*}; fields=${fields#*|}
+    # Two entries on one schedule start together, and the scheduler's overlap rule is per entry, so
+    # the second adds no start to the lane. Summing them would double the lane's scheduled slots.
+    case "$seen_crons" in *"
+$child_cron
+"*) die_unknown "entry $id has the same schedule as another named entry ($child_cron)" ;; esac
+    seen_crons="$seen_crons$child_cron
+"
+    set_scheduled=$(( set_scheduled + ${fields%%|*} )); set_dispatched=$(( set_dispatched + ${fields#*|} ))
+    if [ "$SLOTS" -eq 1 ]; then set_out="$set_out$child_out
+"; else set_out="$set_out$head_line
+"; fi
+  done
+  [ "$set_scheduled" -gt 0 ] || die_unknown "no settled slot between --since and --until for $TASK"
+  set_dropped=$(( set_scheduled - set_dispatched ))
+  set_rate=$(awk -v d="$set_dropped" -v n="$set_scheduled" 'BEGIN { printf "%.1f", 100 * d / n }')
+  printf '%s' "$set_out"
+  printf 'DISPATCH-RATE-SET tasks=%s window=%s..%s scheduled=%d dispatched=%d dropped=%d drop_rate=%s%%\n' \
+    "$TASK" "$(epoch_to_iso "$SINCE_E")" "$(epoch_to_iso "$UNTIL_E")" "$set_scheduled" "$set_dispatched" "$set_dropped" "$set_rate"
+  exit 0 ;;
+esac
 
 # Store discovery matches claude-lane-liveness.sh: EXACTLY one enabled store, or UNKNOWN.
 if [ -z "$STORE" ]; then

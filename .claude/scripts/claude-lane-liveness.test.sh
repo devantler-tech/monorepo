@@ -712,6 +712,46 @@ for missing in id enabled lastRunAt cronExpression; do
   jq --arg f "$missing" 'del(.scheduledTasks[0][$f])' "$STORE" > "$STORE.tmp" && mv "$STORE.tmp" "$STORE"
   expect_msg 2 "unexpected store schema" "a task missing .$missing is UNKNOWN store-wide"
 done
+
+# --- A LANE WITH MORE THAN ONE ENGINEER ENTRY (monorepo#4117) -------------------------------------
+# `--task` takes the lane's entries as a set. Each named entry gets its own verdict line, and the
+# exit status covers exactly the named ones: an entry outside the set never decides it.
+H="\"$(iso_at $(( NOW - 3600 )))\""
+mkcase set_both_healthy
+mkstore "$STORE" alpha true "$H" beta true "$H" gamma true "$H"
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 40 1200 >/dev/null
+mksession "$PROJECTS/proj-a" gamma $(( NOW - 3599 )) 0 5 >/dev/null
+expect 1 "control: the dead task outside the set is seen when nothing is named"
+expect 0 "a set of two healthy entries is healthy; a task outside the set does not decide it" --task alpha,beta
+expect_msg 0 "OK  beta" "each entry of a healthy set gets its own line" --task alpha,beta
+
+mkcase set_second_dead
+mkstore "$STORE" alpha true "$H" beta true "$H"
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 0 5 >/dev/null
+expect 0 "control: the healthy first entry alone is healthy" --task alpha
+expect_msg 1 "NOT-PRODUCING  beta" "a healthy first entry does not hide a dead second one" --task alpha,beta
+expect_msg 1 "OK  alpha" "the healthy entry is still reported beside the dead one" --task alpha,beta
+expect 1 "the order of the ids does not change the verdict" --task beta,alpha
+
+mkcase set_entry_disabled
+mkstore "$STORE" alpha true "$H" beta false "$H"
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+expect_msg 2 "task beta is not a single enabled task" \
+  "a disabled named entry makes the set UNKNOWN, never the verdict of the rest" --task alpha,beta
+expect_msg 2 "task nope is not a single enabled task" \
+  "a missing named entry makes the set UNKNOWN, never the verdict of the rest" --task alpha,nope
+
+mkcase set_args
+mkstore "$STORE" alpha true "$H" beta true "$H"
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+mksession "$PROJECTS/proj-a" beta $(( NOW - 3599 )) 40 1200 >/dev/null
+expect_msg 2 "named twice" "a repeated id is UNKNOWN" --task alpha,alpha
+expect_msg 2 "empty task id" "an empty id in the list is UNKNOWN" --task alpha,,beta
+expect_msg 2 "empty task id" "a trailing comma is UNKNOWN" --task alpha,
+expect_msg 2 "at most four" "more than four ids is UNKNOWN" --task a,b,c,d,e
+
 echo "claude-lane-liveness.test.sh: $asserts assertion(s), $fails failure(s)"
 completed=1
 [ "$fails" -eq 0 ] || exit 1

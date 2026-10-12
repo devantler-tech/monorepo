@@ -39,10 +39,14 @@
 # It reads one structural fact besides: whether the session's last turn is a tool call with no
 # result, which is how a run waiting on an unanswered approval prompt looks (monorepo#3990).
 #
-# Usage: claude-lane-liveness.sh [--store PATH] [--projects PATH] [--task ID]
+# Usage: claude-lane-liveness.sh [--store PATH] [--projects PATH] [--task ID[,ID...]]
 #                               [--grace-seconds N] [--skew-seconds N]
 #                               [--lookback-hours N] [--stall-seconds N]
 #                               [--now-epoch S] [--quiet]
+#   --task  judge only this scheduler entry, or up to four separated by commas: a lane whose
+#           engineer starts from more than one entry names them all (monorepo#4117). Each named
+#           entry gets its own line and the exit status covers exactly the named ones. A named
+#           entry that is missing or disabled makes the whole call UNKNOWN.
 #
 # Exit 0  every enabled task checked is dispatching and produced work on its most recent settled run
 #      1  NOT PRODUCING -- a dispatch produced no work, stalled on a tool call, or never happened
@@ -78,7 +82,7 @@ RECOVERY="
   the expected slot and whether a session exists for the latest dispatch. Re-run this check once the
   newest expected dispatch has had time to settle."
 
-usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; }
 
 die_unknown() {
   printf 'claude-lane-liveness: UNKNOWN -- %s\n' "$1" >&2
@@ -305,14 +309,32 @@ jq -e '[.scheduledTasks[]? | select(.enabled == true) | .id] | length == (unique
 
 if [ "$TASK_SET" -eq 1 ]; then
   [ -n "$TASK" ] || die_unknown "--task must not be empty"
-  case "$TASK" in *[!A-Za-z0-9._-]*) die_unknown "unusable task id: $TASK" ;; esac
-  # A named task is held to the SAME enabled filter the unfiltered branch applies. A disabled task
-  # does not dispatch, so judging it would report NOT PRODUCING for something not meant to produce --
-  # a false positive on the one verdict this check makes, so it fails closed.
-  ok=$(jq -r --arg t "$TASK" '[.scheduledTasks[]? | select(.id == $t and .enabled == true)] | length' "$STORE") \
-    || die_unknown "could not look up task $TASK"
-  [ "$ok" = "1" ] || die_unknown "task $TASK is not a single enabled task in $STORE"
-  ids=$TASK
+  case "$TASK" in *[!A-Za-z0-9._,-]*) die_unknown "unusable task id: $TASK" ;; esac
+  # One id, or a lane's engineer entries as a set (monorepo#4117). Every named entry is judged and
+  # gets its own line, and the exit status covers exactly the named ones. A set is never reduced to
+  # the entries that could be found: a lane that lost an entry would then read as a healthy,
+  # smaller lane.
+  case ",$TASK," in *,,*) die_unknown "empty task id in --task: $TASK" ;; esac
+  IFS=, read -r -a task_ids <<EOF
+$TASK
+EOF
+  [ "${#task_ids[@]}" -le 4 ] || die_unknown "--task takes at most four ids, got ${#task_ids[@]}"
+  ids=""
+  for task_id in "${task_ids[@]}"; do
+    case "
+$ids
+" in *"
+$task_id
+"*) die_unknown "task $task_id is named twice in --task" ;; esac
+    # A named task is held to the SAME enabled filter the unfiltered branch applies. A disabled task
+    # does not dispatch, so judging it would report NOT PRODUCING for something not meant to produce --
+    # a false positive on the one verdict this check makes, so it fails closed.
+    ok=$(jq -r --arg t "$task_id" '[.scheduledTasks[]? | select(.id == $t and .enabled == true)] | length' "$STORE") \
+      || die_unknown "could not look up task $task_id"
+    [ "$ok" = "1" ] || die_unknown "task $task_id is not a single enabled task in $STORE"
+    ids="${ids:+$ids
+}$task_id"
+  done
 else
   ids=$(jq -r '[.scheduledTasks[]? | select(.enabled == true) | .id] | sort | .[]' "$STORE") \
     || die_unknown "could not enumerate scheduled tasks"
