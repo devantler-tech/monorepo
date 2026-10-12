@@ -73,9 +73,10 @@
 #   refs/salvaged/<id>/reflog/<sha> - every HEAD-reflog, ORIG_HEAD or FETCH_HEAD commit reachable from no remote
 #   refs/salvaged/<id>/commit-editmsg - the COMMIT_EDITMSG bytes, when present (a message a hook rejected)
 #   refs/salvaged/<id>/config-worktree - the config.worktree bytes, when present (per-worktree settings)
-#   refs/salvaged/<id>/module-files - a tree of each submodule repository's description and hook
-#                                   samples, when the worktree holds submodules, at
-#                                   modules/<path>/description and modules/<path>/hooks/<name>.sample
+#   refs/salvaged/<id>/module-files - a tree of each submodule repository's description, hook
+#                                   samples and reflogs, when the worktree holds submodules, at
+#                                   modules/<path>/description, modules/<path>/hooks/<name>.sample
+#                                   and modules/<path>/logs/...
 #   refs/salvaged/<id>/resolve-undo - a tree of the index's resolve-undo stages, when present, as
 #                                   `stage<N>/<path>` (1 base, 2 ours, 3 theirs). Git has no
 #                                   command that writes them back into an index; read a stage
@@ -1455,8 +1456,11 @@ module_remote_rows() {
   # configuration out of the way: a url.<base>.insteadOf rule there would send `origin`
   # somewhere else, a local mirror included, while the repository still names GitHub. The
   # repository's own config holds whitelisted keys only, none of which rewrites a URL.
-  rows=$(GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
-         run_bounded env -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS \
+  # The environment is rebuilt from a short list as well: GIT_SSH_COMMAND, GIT_SSH, a proxy
+  # command or a config override inherited by the sweep would each choose what answers.
+  rows=$(run_bounded env -i PATH="$PATH" HOME="${HOME:-}" USER="${USER:-}" LOGNAME="${LOGNAME:-}" \
+         TMPDIR="${TMPDIR:-/tmp}" SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-}" \
+         GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
          git --git-dir="$g" --work-tree="$g" ls-remote -- "$url") \
     || { REMOTE_MODULE_FAILED=1; return 2; }
   # An answer holding anything but advertised lines is one this could not read.
@@ -1528,9 +1532,10 @@ module_descends() {
     *$'\n'"$key 0"$'\n'*) return 0 ;;
     *$'\n'"$key 1"$'\n'*) return 1 ;;
   esac
+  # Asked of github.com by name: an inherited GH_HOST would send the question elsewhere.
   # compare/<base>...<head> reports the head relative to the base: `ahead` or `identical`
   # means the advertised commit contains <commit>.
-  out=$(gh_bounded api "repos/$repo/compare/$tip...$adv" --jq '.status'); rc=$?
+  out=$(gh_bounded api --hostname github.com "repos/$repo/compare/$tip...$adv" --jq '.status'); rc=$?
   if [ "$rc" -eq 0 ]; then
     case "$out" in
       ahead|identical) rc=0 ;;
@@ -1570,7 +1575,7 @@ module_tip_behind_remote() {
     module_descends "$repo" "$tip" "$adv"; rc=$?
     case "$rc" in 0) return 0 ;; 1) ;; *) unknown=1 ;; esac
   done
-  rows=$(gh_bounded api --paginate "repos/$repo/commits/$tip/pulls" --jq '.[] | "\(.number)\t\(.head.sha)"'); rc=$?
+  rows=$(gh_bounded api --hostname github.com --paginate "repos/$repo/commits/$tip/pulls" --jq '.[] | "\(.number)\t\(.head.sha)"'); rc=$?
   if [ "$rc" -ne 0 ]; then
     # As in submodule_head_spent: a commit GitHub has never received is a definitive 422.
     case "$rows" in *"No commit found for SHA: $tip\""*) rows="" ;; *) return 2 ;; esac
@@ -1737,6 +1742,16 @@ module_repository_pristine() {
     || { MODULE_NOTE="its refs cannot be read"; return 1; }
   out=$(grep -Ev '^refs/(heads|remotes|tags)/' <<< "$out" | grep -v '^$' | head -1) || true
   if [ -n "$out" ]; then MODULE_NOTE="it holds the ref $out"; return 1; fi
+  # A tag ref may name a tag object, which is compared with the remote's. HEAD and every
+  # other ref must name a commit: the walk in 8 peels a tag object to its commit, so a tag
+  # object only such a ref names would be lost unseen.
+  out=$(module_git "$g" for-each-ref --format='%(objecttype) %(refname)' refs/heads refs/remotes 2>/dev/null) \
+    || { MODULE_NOTE="its refs cannot be read"; return 1; }
+  out=$(awk 'NF && $1 != "commit" { print $2; exit }' <<< "$out")
+  if [ -n "$out" ]; then MODULE_NOTE="its ref $out names an object that is not a commit"; return 1; fi
+  out=$(module_git "$g" rev-parse --verify --quiet HEAD 2>/dev/null) && [ -n "$out" ] \
+    && [ "$(module_git "$g" cat-file -t "$out" 2>/dev/null)" = commit ] \
+    || { MODULE_NOTE="its HEAD names no commit"; return 1; }
   # Every file under refs/ is a ref git enumerates, and every file under logs/ the reflog of
   # one (or of HEAD). A leftover lock or scratch file there can hold the only pointer to a
   # commit, and neither for-each-ref nor the walk below would ever look at it.
@@ -2266,9 +2281,11 @@ salvage_namespace() {
 }
 
 # module_files_tree <worktree> -> sets MODULE_FILES_TREE to a tree holding, for every
-# submodule repository under the admin directory's modules/, its description and its hook
-# samples, at their paths under the admin directory (modules/<path>/description,
-# modules/<path>/hooks/<name>.sample); or to nothing when there is none. The pristine check
+# submodule repository under the admin directory's modules/, its description, its hook
+# samples and its reflogs, at their paths under the admin directory (modules/<path>/description,
+# modules/<path>/hooks/<name>.sample, modules/<path>/logs/...); or to nothing when there is
+# none. A reflog's commits are checked against the remote, but each entry also carries a
+# message, which can be text someone wrote (`git update-ref -m`). The pristine check
 # accepts those files by name: git never runs or reads them back, but someone can have
 # written in one, and git's own samples differ from version to version, so there is no
 # known content to compare with. Their bytes are kept instead (#2831). Built in a
@@ -2280,7 +2297,7 @@ module_files_tree() {
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
   if [ ! -d "$admin/modules" ] || [ -L "$admin/modules" ]; then return 0; fi
   dir=$(mktemp -d "${TMPDIR:-/tmp}/wt-salvage-module-files.XXXXXX") || return 1
-  if ! find "$admin/modules" -type f \( -name description -o -path '*/hooks/*.sample' \) -print0 \
+  if ! find "$admin/modules" -type f \( -name description -o -path '*/hooks/*.sample' -o -path '*/logs/*' \) -print0 \
          > "$dir/list" 2>/dev/null; then
     rm -rf "$dir"; return 1
   fi

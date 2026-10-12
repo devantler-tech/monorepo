@@ -1636,7 +1636,7 @@ portfolio_origin() {
 case " \$* " in
   *" ls-remote -- $PORTFOLIO_URL "*)
     echo x >> "$root/tag-reads"
-    printf '%s %s\n' "\${GIT_CONFIG_GLOBAL-unset}" "\${GIT_CONFIG_SYSTEM-unset}" > "$root/probe-env"
+    printf '%s %s %s %s\n' "\${GIT_CONFIG_GLOBAL-unset}" "\${GIT_CONFIG_SYSTEM-unset}" "\${GIT_SSH_COMMAND-unset}" "\${GIT_SSH-unset}" > "$root/probe-env"
     exec "$real_git" ls-remote "$root/subsrc" ;;
 esac
 exec "$real_git" "\$@"
@@ -2339,15 +2339,17 @@ t_salvage_reaps_beside_a_pristine_submodule() {
   echo "my notes" > "$g/description"; echo "# mine" >> "$g/hooks/pre-commit.sample"
   echo draft > "$wt/untracked.txt"
   age_tree "$wt"
-  local out; out=$(run_salvage "$root" apply 1)
+  # A transport override inherited by the sweep must not reach the remote read.
+  local out; out=$(GIT_SSH_COMMAND=/nonexistent/ssh GIT_SSH=/nonexistent/ssh run_salvage "$root" apply 1)
   local base; base=$(git -C "$root/repo" for-each-ref --format='%(refname)' 'refs/salvaged/*/head' | sed 's#/head$##')
   local link; link=$(git -C "$root/repo" ls-tree "$base/worktree" sub 2>/dev/null)
   if grep -q '^SALVAGED .*subok ' <<<"$out" && [ ! -e "$wt" ] && [ -n "$base" ] \
      && [ "$(git -C "$root/repo" show "$base/worktree:untracked.txt" 2>/dev/null)" = draft ] \
      && grep -q '^160000 commit' <<<"$link" \
-     && [ "$(cat "$root/probe-env" 2>/dev/null)" = "/dev/null /dev/null" ] \
+     && [ "$(cat "$root/probe-env" 2>/dev/null)" = "/dev/null /dev/null unset unset" ] \
      && [ "$(git -C "$root/repo" show "$base/module-files:modules/sub/description" 2>/dev/null)" = "my notes" ] \
-     && [ "$(git -C "$root/repo" show "$base/module-files:modules/sub/hooks/pre-commit.sample" 2>/dev/null | tail -1)" = "# mine" ]; then
+     && [ "$(git -C "$root/repo" show "$base/module-files:modules/sub/hooks/pre-commit.sample" 2>/dev/null | tail -1)" = "# mine" ] \
+     && grep -q "pushed from the submodule" <<<"$(git -C "$root/repo" show "$base/module-files:modules/sub/logs/HEAD" 2>/dev/null)"; then
     ok "$name"
   else
     bad "$name" "$out"
@@ -2465,6 +2467,8 @@ SHIM
     grep -Eq "$want" <<<"$out" || failures="$failures $answer($(grep -E 'KEEP|SALVAGE' <<<"$out" | cut -c1-200))"
     grep -q 'compare/[0-9a-f]\{40\}\.\.\.0123456789abcdef0123456789abcdef01234567' "$root/gh-args" 2>/dev/null \
       || failures="$failures $answer(no compare call)"
+    # Asked of github.com by name, whatever GH_HOST the sweep inherited.
+    if grep -v -- '--hostname github\.com ' "$root/gh-args" 2>/dev/null | grep -q .; then failures="$failures $answer(a gh call without the hostname)"; fi
     rm -rf "$root"
   done
   if [ -z "$failures" ]; then ok "$name"; else bad "$name" "$failures"; fi
@@ -2602,6 +2606,14 @@ t_salvage_keeps_a_submodule_with_a_stray_file_under_refs() {
   keeps_unpristine "salvage KEEPs a submodule whose refs/ holds a file git does not list as a ref" sublock \
     'its refs holds a file that is no ref \(refs/heads/draft\.lock\)' \
     'git -C "$wt/sub" rev-parse HEAD > "$g/refs/heads/draft.lock"'
+}
+
+t_salvage_keeps_a_submodule_ref_that_names_a_tag_object() {
+  # A remote-tracking ref written onto an annotated tag object: the tag's commit is on the
+  # remote, so a walk that peels the tag sees nothing local, and the tag object is lost.
+  keeps_unpristine "salvage KEEPs a submodule whose non-tag ref names a tag object" subtagref \
+    'its ref refs/remotes/origin/pinned names an object that is not a commit' \
+    'git -C "$wt/sub" tag -a note -m "only here" && git -C "$wt/sub" update-ref refs/remotes/origin/pinned "$(git -C "$wt/sub" rev-parse refs/tags/note)" && git -C "$wt/sub" tag -d note'
 }
 
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
@@ -5142,6 +5154,7 @@ t_salvage_keeps_a_submodule_whose_origin_is_inside_the_worktree
 t_salvage_keeps_a_submodule_whose_origin_is_another_host
 t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path
 t_salvage_keeps_a_submodule_with_a_stray_file_under_refs
+t_salvage_keeps_a_submodule_ref_that_names_a_tag_object
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read
