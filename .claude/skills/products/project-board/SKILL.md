@@ -213,8 +213,11 @@ Until that is solved, backfill is a standing duty, not an exception.
   closed→Done workflow marks it ✅ Done — moving it to *Verifying* would either be immediately
   overwritten or leave finished work looking pending. When the outcome cannot be known at merge, the
   PR also carries `Part of #experiment`; **that experiment/Kata issue stays open, and it is the one
-  that goes to 📊 Verifying** until its measurement date, when it becomes ✅ Done with the decision
-  recorded. If a change has no separate experiment issue but still needs a post-merge check, keep the
+  that goes to 📊 Verifying** once its check can be run, and becomes ✅ Done with the decision
+  recorded. **While it waits for a release, an activation or its measurement date it sits in
+  🫴 Ready with a resume condition** — Verifying holds only checks that can be run now (limit 3,
+  maintainer direction 2026-10-10, monorepo#4109; the
+  [board guide](../../../guides/issues-and-board.md#every-issue-belongs-on-the-board) has the rule). If a change has no separate experiment issue but still needs a post-merge check, keep the
   delivery issue **open** (drop `Fixes`, use `Part of`) rather than closing it and reopening it. **This also makes
   `Fixes #N` load-bearing for visibility, not just bookkeeping:** an agent-authored PR with no linked
   issue is now *invisible on the board*, so the capture-before-you-build rule is what keeps the board

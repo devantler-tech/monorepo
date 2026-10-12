@@ -501,6 +501,15 @@ downstream ceiling immediately before claiming and again before moving Ready to 
 full implementation, review, merge or verification stage stops new starts and calls for helping it.
 Do not move active work upstream to manufacture capacity. Limits are ceilings, not fill targets.
 
+**A Ready card that carries a resume condition is started work waiting for its next check, not new
+work** (monorepo#4109; the [board guide](issues-and-board.md#every-issue-belongs-on-the-board)
+defines the return from Verifying). Before admitting one, read its latest return note and compare
+the resume date or event with live state. If the condition is not met, leave the card in Ready
+and select something else: it is neither actionable nor a reason to stop. If it is met, the check
+is due verification under rung 1: confirm Verifying has room, move the card there, then run the
+check and record expected against actual. Never open a second implementation for it, and never
+close it or tick a criterion because the card moved or the date passed.
+
 Compare native issue Priority (Urgent, High, Medium, Low) first, then current product outcomes,
 audience impact, deadline/cost of waiting, risk reduction and prerequisites unlocked relative to
 **end-to-end** effort, including CI,

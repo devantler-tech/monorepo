@@ -186,7 +186,7 @@ ladder mirrors the agent's actual lifecycle, so every state answers "what's next
 | Status | Entry condition | What's next |
 |---|---|---|
 | **✅ Done** | Acceptance criteria validated, outcome decided | — |
-| **📊 Verifying** | **Merged**, outcome not yet proven (covers the wait for an async release, and the wait for a Kata's measurement date) | Verify it actually works E2E once released; measure a Kata's signal; then decide |
+| **📊 Verifying** | **Merged**, and a post-merge check can be run **now** (the release is out, the measurement date has arrived) | Verify it actually works E2E; measure a Kata's signal; then decide. If the check stalls, return the card to Ready (see below) |
 | **🚀 Ready to Merge** | Green review at head, all checks green, nothing unresolved | Self-promote and merge |
 | **👀 In Review** | PR open, CI green, review requested | Fix findings, re-request, re-secure green at the new head |
 | **🏃🏻‍♂️ In Progress** | Refined work pulled within downstream capacity; actual first-start evidenced | Finish the implementation, get CI green |
@@ -195,7 +195,22 @@ ladder mirrors the agent's actual lifecycle, so every state answers "what's next
 | **🧊 Icebox** | Parked | Revisit at triage |
 
 **The merge is the boundary** between *Ready to Merge* (pre-merge, mechanical) and *Verifying*
-(post-merge, evidential) — shipped is not the same as decided. The **reversed order is deliberate**:
+(post-merge, evidential) — shipped is not the same as decided.
+
+**Verifying is an active, bounded check lane, never a waiting room** (maintainer direction
+2026-10-10, monorepo#4109). A card belongs there only while its next check can be run now. When
+merged work still waits on a release, an activation, a measurement date or any other event, or a
+check in progress stalls, the open issue goes back to **🫴 Ready**, even when Verifying is under
+its ceiling, with one comment that states the verified obstacle, the **resume condition** (a date
+or a named event) and the next action. The move changes nothing else: acceptance criteria,
+evidence, the `**Delivered on:**` and `**Measure on:**` lines, the First started value,
+dependencies, blockers and Priority all stay as they were. It is a queued continuation of started
+work, so it is not a new implementation, it does not mean the outcome passed, and it waives no
+review, security or deployment gate. Move the card back to Verifying when the resume condition is
+met and the column has room; if the check stalls again, return it again. Never mark a card Done
+because it moved.
+
+The **reversed order is deliberate**:
 finishing work sits leftmost so the board reads *stop starting, start finishing* (maintainer direction
 2026-07-18). **Never re-order it into left-to-right flow**, and treat an over-limit column as a signal
 to finish rather than a limit to raise. A newly-filed issue lands in **📥 Backlog** unless you know
@@ -225,7 +240,9 @@ In Review **12**, Ready to Merge **6**, Verifying **3**. Icebox overflow is temp
 during the current backlog cleanup; this does not waive any other ceiling. Count open non-Epic
 issue cards for the Kanban view, including parked unfinished work. Reconcile active work absent
 from or misplaced on the board before permitting a start; board occupancy alone is not full WIP.
-Do not fill columns to their limits or hide WIP by moving started work upstream. A saturated active
+Do not fill columns to their limits or hide WIP by moving started work upstream; the one
+exception is a stalled post-merge check, which returns from Verifying to Ready as described
+above and still counts as started work. A saturated active
 stage stops new implementation and redirects effort toward finishing/unblocking it.
 Selection freshness is **15 minutes** (`maxAgeSeconds=900`), measured from the oldest required observation,
 not the last page; re-read capacity before claim and before the Ready-to-In-Progress write.
