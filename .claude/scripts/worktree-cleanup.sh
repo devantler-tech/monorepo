@@ -1212,7 +1212,7 @@ work_age_h() {
   # each worktree look freshly used.
   if [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ]; then
     list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
-    if ! find "$admin/modules" \( -name objects -type d -exec test -f {}/../HEAD -a -f {}/../config -a -d {}/../refs \; -prune \) -o -type f -print0 > "$list" 2>/dev/null; then
+    if ! module_state_files "$admin/modules" > "$list"; then
       rm -f "$list"; return 1
     fi
     while IFS= read -r -d '' p; do
@@ -1415,9 +1415,42 @@ module_origin_url() { git config --file "$1/config" --get remote.origin.url 2>/d
 #     deployment already reads.
 module_origin_portfolio() { [ -n "$(portfolio_repo "$(module_origin_url "$1" || true)")" ]; }
 
-# What is left out below, here and in work_age_h, is each repository's object store and
-# nothing else by that name: a directory called objects that sits beside a HEAD, a config and
-# a refs directory. A branch named `objects` is a file under refs/ and is counted.
+# module_state_files <modules-dir> -> prints, NUL-terminated, every file under a modules/
+# directory that is not inside a repository's object store. Repositories are found the way
+# module_tree_pristine finds them, from the top down: a directory holding a HEAD or an
+# objects entry is a repository; its own objects/ entry is left out, its modules/ entry is
+# walked the same way, and everything else in it is listed in full. A directory that is not
+# a repository is walked for the ones below it. Nothing is recognised by its name alone, so
+# a branch namespace that happens to hold entries called HEAD, config and objects is listed
+# like any other ref. Non-zero when something cannot be listed.
+module_state_files() {
+  local dir=$1 entry sub
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    if [ -L "$entry" ] || [ ! -d "$entry" ]; then
+      [ -f "$entry" ] && [ ! -L "$entry" ] && printf '%s\0' "$entry"
+      continue
+    fi
+    if [ -e "$entry/HEAD" ] || [ -L "$entry/HEAD" ] || [ -e "$entry/objects" ] || [ -L "$entry/objects" ]; then
+      for sub in "$entry"/* "$entry"/.[!.]* "$entry"/..?*; do
+        [ -e "$sub" ] || [ -L "$sub" ] || continue
+        case "${sub##*/}" in
+          objects) continue ;;
+          modules) if [ -d "$sub" ] && [ ! -L "$sub" ]; then module_state_files "$sub" || return 1; fi; continue ;;
+        esac
+        if [ -d "$sub" ] && [ ! -L "$sub" ]; then
+          find "$sub" -type f -print0 2>/dev/null || return 1
+        elif [ -f "$sub" ] && [ ! -L "$sub" ]; then
+          printf '%s\0' "$sub"
+        fi
+      done
+    else
+      module_state_files "$entry" || return 1
+    fi
+  done
+  return 0
+}
+
 # modules_fingerprint <admin> -> prints one id for the name, executable bit and bytes of every file under
 # the admin directory's modules/ outside the object stores (empty when there is none).
 # Taken before the snapshot and compared immediately before the removal: a branch created,
@@ -1429,9 +1462,11 @@ modules_fingerprint() {
   if [ ! -e "$admin/modules" ] && [ ! -L "$admin/modules" ]; then return 0; fi
   [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ] || return 1
   names=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-modules.XXXXXX") || return 1
-  if ! find "$admin/modules" \( -name objects -type d -exec test -f {}/../HEAD -a -f {}/../config -a -d {}/../refs \; -prune \) -o -type f -print0 2>/dev/null | LC_ALL=C sort -z > "$names"; then
+  if ! module_state_files "$admin/modules" > "$names.raw" || ! LC_ALL=C sort -z < "$names.raw" > "$names"; then
+    rm -f "$names.raw"
     rm -f "$names"; return 1
   fi
+  rm -f "$names.raw"
   # One record per file: whether it is executable (the one mode bit module_files_tree
   # records), the id of its own bytes, and its name, NUL-terminated. Hashing each file on
   # its own keeps the boundaries: bytes moved from the end of one file to the start of the
@@ -1535,7 +1570,7 @@ module_held_by_remote() {
   while :; do
     # No blank line may reach --stdin, and `held` is empty for an empty remote.
     tip=$(module_git "$g" rev-list --topo-order --max-count=1 --all --reflog --stdin \
-          < <(grep . <<< "$held" || true) 2>/dev/null) || return 2
+          < <(grep . <<< "$MODULE_LOG_IDS"$'\n'"$held" || true) 2>/dev/null) || return 2
     [ -n "$tip" ] || return 0
     asked=$((asked + 1))
     if [ "$asked" -gt "$SUBMODULE_TIP_LIMIT" ]; then
@@ -1747,9 +1782,11 @@ module_checkout() {
 # the worktree's admin directory, which only names its own submodules' repositories in a note.
 MODULE_NOTE=""
 VERIFIED_CHECKOUTS=""
+MODULE_LOG_IDS=""
 module_repository_pristine() {
   local g=$1 wt_real=$2 entry name co out ids rc line
   MODULE_NOTE=""
+  MODULE_LOG_IDS=""
   # 1. Every entry of the repository directory is one git itself writes into a clone, and
   #    of the kind git writes. An operation in progress, a bisect log, a per-repository
   #    worktree, a split index and anything else unlisted is state nothing here inspects.
@@ -1903,6 +1940,9 @@ module_repository_pristine() {
       if [ -n "$ids" ]; then
         out=$(module_git "$g" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" 2>/dev/null) \
           || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its reflog objects cannot be read"; return 1; }
+        # Kept for 8: git drops a reflog line whose metadata it cannot parse from its own
+        # walk, ids and all, so each id read here is handed to the remote check by name.
+        MODULE_LOG_IDS=$(awk 'NF == 2 && $2 == "commit" { print $1 }' <<< "$out")
         out=$(awk 'NF != 2 || ($2 != "commit" && $2 != "missing") { print; exit }' <<< "$out")
         if [ -n "$out" ]; then MODULE_NOTE="a reflog of it names an object that is not a commit"; return 1; fi
       fi
@@ -2422,8 +2462,7 @@ module_files_tree() {
   if [ ! -d "$admin/modules" ] || [ -L "$admin/modules" ]; then return 0; fi
   dir=$(mktemp -d "${TMPDIR:-/tmp}/wt-salvage-module-files.XXXXXX") \
     || { SALVAGE_NOTE="cannot create a temporary directory"; return 1; }
-  if ! find "$admin/modules" \( -name objects -type d -exec test -f {}/../HEAD -a -f {}/../config -a -d {}/../refs \; -prune \) -o -type f -print0 \
-         > "$dir/list" 2>/dev/null; then
+  if ! module_state_files "$admin/modules" > "$dir/list"; then
     rm -rf "$dir"; SALVAGE_NOTE="cannot list the submodule repositories' files"; return 1
   fi
   while IFS= read -r -d '' f; do

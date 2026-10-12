@@ -2756,6 +2756,42 @@ SHIM
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_submodule_commit_only_a_malformed_reflog_line_names() {
+  # git leaves a reflog line whose metadata it cannot parse out of its own walk, ids and
+  # all. The ids are still read here, and the commit they name is not on the remote.
+  keeps_unpristine "salvage KEEPs a submodule whose only pointer to a commit is a malformed reflog line" subbadlog \
+    'it holds commit\(s\) its remote does not advertise' \
+    'echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "never pushed" && lost=$(git -C "$wt/sub" rev-parse HEAD) && git -C "$wt/sub" reset -q --hard HEAD~1 && printf "%s %s malformed\n" "$(git -C "$wt/sub" rev-parse HEAD)" "$lost" > "$g/logs/HEAD" && : > "$g/logs/refs/heads/main" && rm -f "$g/ORIG_HEAD"'
+}
+
+t_salvage_keeps_a_branch_namespace_that_looks_like_a_repository() {
+  # Branches named x/HEAD, x/config and x/objects/y beside an empty x/refs/ directory look
+  # like a repository to a name-based test. The branch under x/objects/ is still a ref: it
+  # must be seen by the change comparison and kept with the rest.
+  local name="a branch namespace shaped like a repository is still listed, compared and kept"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subshape || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subshape" g shim
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  git -C "$wt/sub" branch x/HEAD origin/main && git -C "$wt/sub" branch x/config origin/main \
+    && git -C "$wt/sub" branch x/objects/y origin/main && mkdir -p "$g/refs/heads/x/refs" \
+    || { bad "$name" "FIXTURE: branches"; rm -rf "$root"; return; }
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  age_tree "$wt"
+  # After the snapshot the branch under x/objects/ is moved onto another pushed commit... there
+  # is only one, so its reflog is rewritten instead: the same ref, different bytes.
+  shim=$(lsof_hook_shim "$root" 3 "echo changed >> '$g/logs/refs/heads/x/objects/y'") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subshape .*after the salvage snapshot' <<<"$out" && [ -d "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -5300,6 +5336,8 @@ t_salvage_keeps_a_submodule_edit_status_cannot_see
 t_salvage_keeps_a_submodule_symlink_retargeted_behind_status
 t_salvage_keeps_files_in_an_uninitialised_nested_submodule_directory
 t_unknown_when_a_submodule_checkout_cannot_be_read
+t_salvage_keeps_a_submodule_commit_only_a_malformed_reflog_line_names
+t_salvage_keeps_a_branch_namespace_that_looks_like_a_repository
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read
