@@ -202,15 +202,18 @@ resume condition when it cannot.
 **Verifying is an active, bounded check lane, never a waiting room** (maintainer direction
 2026-10-10, monorepo#4109). A card belongs there only while its next check can be run now, and
 anything this lane can still do keeps it there as rung-1 work: trigger the release or the
-activation, repair a failing probe, take the measurement. Only a wait nobody in the lane can end
-moves a card: a measurement date that has not arrived, or an event that happens on its own
-schedule or needs another tracked item to move first. That open issue goes to **🫴 Ready**, even
+activation, repair a failing probe, take the measurement. Only a wait the check itself cannot end
+moves a card: a measurement date that has not arrived, an event that happens on its own
+schedule, an act only the maintainer can perform, or another issue that must be finished first. That open issue goes to **🫴 Ready**, even
 when Verifying is under its ceiling, and its **resume condition** is recorded in the form the
 [work-selection guide](work-selection.md) already reads, never in prose alone: a date as the
-`**Measure on:** YYYY-MM-DD` line in the issue body, an event as a `**Blocker:**` record of kind
-`outcome` (or `upstream` when a tracked item must move first) with the `blocked` label. One
-comment states the verified obstacle and the next action. The move changes nothing else: acceptance criteria,
-evidence, the `**Delivered on:**` and `**Measure on:**` lines, the First started value,
+`**Measure on:** YYYY-MM-DD` line in the issue body; an event as a `**Blocker:**` record of kind
+`outcome` with the `blocked` label; an act only the maintainer can perform as an `authority`
+record with its delivered ask; a `devantler-tech` issue that must be finished first as a
+native *blocked by* dependency, and one outside the portfolio as an `upstream` record. A
+dependency inside the portfolio is itself work to select, so the wait never hides it. One
+comment states the verified obstacle and the next action. The move changes nothing else:
+acceptance criteria, evidence, the `**Delivered on:**` and `**Measure on:**` lines, the First started value,
 dependencies, blockers and Priority all stay as they were. It is a queued continuation of started
 work, so it is not a new implementation, it does not mean the outcome passed, and it waives no
 review, security or deployment gate. Move the card back to Verifying when the resume condition is

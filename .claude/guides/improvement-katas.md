@@ -41,9 +41,11 @@ native installation and actual later dispatch proof are distinct joins.
 
 Keep existing statuses, finishing-first order, views and configured WIP limits. A begun experiment
 is In Progress/In Review until delivery is merged. It is **Verifying** only while a check can be
-run now; while it waits for its measurement date, or for a release or activation this lane cannot
-trigger, it sits in **Ready** with its recorded resume condition, as the
-[board guide](issues-and-board.md#every-issue-belongs-on-the-board) describes (monorepo#4109). An unstarted deferred Kata may stay Icebox; a running or due measurement
+run now, which for a dated measurement means its exact eligibility time has passed, not only
+its date. While it waits for that, for an event on its own schedule or for an act only the
+maintainer can perform, it sits in **Ready** with its resume condition recorded as the
+[board guide](issues-and-board.md#every-issue-belongs-on-the-board) describes (monorepo#4109):
+the `Measure on` line, or an `outcome` or `authority` blocker record. An unstarted deferred Kata may stay Icebox; a running or due measurement
 cannot be hidden there to manufacture capacity. Missing/misplaced cards remain unfinished WIP and
 are reconciled by the work-selection guide.
 
