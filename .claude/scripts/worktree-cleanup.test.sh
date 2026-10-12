@@ -2658,6 +2658,36 @@ t_salvage_keeps_a_submodule_file_made_executable_after_the_snapshot() {
   rm -rf "$root"
 }
 
+t_salvage_keeps_a_submodule_edit_status_cannot_see() {
+  # With core.trustctime=false in the host's configuration, an edit that keeps a tracked
+  # file's size and puts its mtime back is clean to status. Only the bytes say otherwise.
+  local name="salvage KEEPs a submodule whose tracked file was edited behind status's back"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" subracy || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subracy" g
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo draft > "$wt/untracked.txt"
+  printf '[core]\n\ttrustctime = false\n' > "$root/hostconfig"
+  age_tree "$wt"
+  # Make the index's recorded times those of the backdated file, then let the index itself
+  # be a day newer, so git has no reason to read the file again.
+  GIT_CONFIG_GLOBAL="$root/hostconfig" git -C "$wt/sub" update-index --refresh > /dev/null 2>&1
+  touch -t 202001020000 "$g/index"
+  printf 'eno\n' > "$wt/sub/f"; touch -t 202001010000 "$wt/sub/f"       # `one` rewritten, same size
+  if [ -n "$(GIT_OPTIONAL_LOCKS=0 GIT_CONFIG_GLOBAL="$root/hostconfig" git -C "$wt/sub" status --porcelain 2>/dev/null)" ]; then
+    bad "$name" "FIXTURE: status sees the edit, so this proves nothing"; rm -rf "$root"; return
+  fi
+  local out; out=$(GIT_CONFIG_GLOBAL="$root/hostconfig" run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subracy .*modules/sub: a tracked file in its checkout differs from the index' <<<"$out" \
+     && [ "$(cat "$wt/sub/f" 2>/dev/null)" = eno ] && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_submodule_used_since_the_salvage_age() {
   # The parent's work is old, but the submodule's index was written just now: someone is
   # using the worktree through its submodule, and nothing in the parent shows it.
@@ -5198,6 +5228,7 @@ t_salvage_keeps_a_submodule_whose_origin_is_a_relative_path
 t_salvage_keeps_a_submodule_with_a_stray_file_under_refs
 t_salvage_keeps_a_submodule_ref_that_names_a_tag_object
 t_salvage_keeps_a_submodule_file_made_executable_after_the_snapshot
+t_salvage_keeps_a_submodule_edit_status_cannot_see
 t_salvage_keeps_a_submodule_used_since_the_salvage_age
 t_salvage_keeps_a_submodule_changed_after_the_snapshot
 t_unknown_when_a_submodule_remotes_tags_cannot_be_read

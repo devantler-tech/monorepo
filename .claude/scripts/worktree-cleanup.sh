@@ -1408,30 +1408,35 @@ module_origin_portfolio() { [ -n "$(portfolio_repo "$(module_origin_url "$1" || 
 # What is left out below, here and in work_age_h, is each repository's object store and
 # nothing else by that name: a directory called objects that sits beside a HEAD, a config and
 # a refs directory. A branch named `objects` is a file under refs/ and is counted.
-# modules_fingerprint <admin> -> prints one id for the bytes, names and executable bit of every file under
+# modules_fingerprint <admin> -> prints one id for the name, executable bit and bytes of every file under
 # the admin directory's modules/ outside the object stores (empty when there is none).
 # Taken before the snapshot and compared immediately before the removal: a branch created,
 # a setting changed or another commit checked out in a submodule after the snapshot leaves
 # the parent's tree and index exactly as snapshotted, and can leave the repository
 # pristine too. Non-zero on any read failure.
 modules_fingerprint() {
-  local admin=$1 names
+  local admin=$1 names f blob mode
   if [ ! -e "$admin/modules" ] && [ ! -L "$admin/modules" ]; then return 0; fi
   [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ] || return 1
   names=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-modules.XXXXXX") || return 1
   if ! find "$admin/modules" \( -name objects -type d -exec test -f {}/../HEAD -a -f {}/../config -a -d {}/../refs \; -prune \) -o -type f -print0 2>/dev/null | LC_ALL=C sort -z > "$names"; then
     rm -f "$names"; return 1
   fi
-  # Names, then whether each is executable (the one mode bit module_files_tree records),
-  # then the bytes.
-  local f modes=""
+  # One record per file: whether it is executable (the one mode bit module_files_tree
+  # records), the id of its own bytes, and its name, NUL-terminated. Hashing each file on
+  # its own keeps the boundaries: bytes moved from the end of one file to the start of the
+  # next would leave a single concatenated stream unchanged.
+  : > "$names.records" || { rm -f "$names"; return 1; }
   while IFS= read -r -d '' f; do
-    if [ -x "$f" ]; then modes="${modes}x"; else modes="${modes}-"; fi
+    blob=$(git hash-object --no-filters -- "$f" 2>/dev/null) && [ -n "$blob" ] \
+      || { rm -f "$names" "$names.records"; return 1; }
+    mode=-; [ -x "$f" ] && mode=x
+    printf '%s %s %s\0' "$mode" "$blob" "$f" >> "$names.records" || { rm -f "$names" "$names.records"; return 1; }
   done < "$names"
-  if ! { cat "$names" && printf '%s\n' "$modes" && xargs -0 cat < "$names"; } 2>/dev/null | git hash-object --stdin 2>/dev/null; then
-    rm -f "$names"; return 1
+  if ! git hash-object --stdin < "$names.records" 2>/dev/null; then
+    rm -f "$names" "$names.records"; return 1
   fi
-  rm -f "$names"
+  rm -f "$names" "$names.records"
 }
 
 # module_remote_rows <git-dir> -> sets MODULE_REMOTE_ROWS to what the repository's origin
@@ -1664,6 +1669,26 @@ module_commit_editmsg_spent() {
   return 1
 }
 
+# checkout_matches_index <checkout> — exit 0 when every regular file the index tracks hashes,
+# as `git add` would store it, to the blob the index records; 1 when one does not or is
+# missing; 2 when that cannot be read. Status answers the same question from the file's
+# size and times, and trusts them: with core.trustctime=false in the host's configuration, an
+# edit that keeps a file's size and puts its mtime back reads as unchanged. Symbolic links
+# and gitlinks hold no file bytes and are left to status.
+checkout_matches_index() {
+  local co=$1 entries paths want got
+  entries=$(git -C "$co" ls-files -s -z 2>/dev/null | tr '\0\n' '\n\001') || return 2
+  case "$entries" in *$'\001'*) return 2 ;; esac
+  entries=$(awk -F'\t' '$1 ~ /^100(644|755) /' <<< "$entries") || return 2
+  [ -n "$entries" ] || return 0
+  paths=$(sed 's/^[^	]*	//' <<< "$entries")
+  want=$(awk '{ print $2 }' <<< "$entries")
+  # A missing file makes hash-object fail, which is a difference, not an unreadable index.
+  got=$(cd "$co" 2>/dev/null && git hash-object --stdin-paths <<< "$paths" 2>/dev/null) || return 1
+  [ "$got" = "$want" ] || return 1
+  return 0
+}
+
 # module_checkout <git-dir> <worktree-realpath> -> sets MODULE_CHECKOUT to the physical path
 # of the repository's checkout; non-zero unless that checkout is a directory inside the
 # worktree whose .git is a plain file naming exactly this repository. A repository checked
@@ -1763,6 +1788,12 @@ module_repository_pristine() {
   fi
   out=$(git -C "$co" ls-files --resolve-undo 2>/dev/null) || { MODULE_NOTE="its resolve-undo entries cannot be read"; return 1; }
   if [ -n "$out" ]; then MODULE_NOTE="its index holds resolve-undo entries"; return 1; fi
+  checkout_matches_index "$co"; rc=$?
+  case "$rc" in
+    0) ;;
+    1) MODULE_NOTE="a tracked file in its checkout differs from the index"; return 1 ;;
+    *) MODULE_NOTE="its checkout cannot be compared with its index"; return 1 ;;
+  esac
   local saved_note=$SALVAGE_NOTE
   if conversion_blocker "$co"; then MODULE_NOTE="in its checkout, $SALVAGE_NOTE"; SALVAGE_NOTE=$saved_note; return 1; fi
   SALVAGE_NOTE=$saved_note
