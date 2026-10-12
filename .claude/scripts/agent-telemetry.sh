@@ -4912,9 +4912,36 @@ if want drift; then
   echo "  cadence table vs all four runtime schedule pointers:"
 
   # Canonicalise schedule slots for exact comparison. The compact form is
-  # "hours@minute" (for example 0,12@0), with * representing every hour.
+  # "hours@minutes" (for example 0,12@0), with * representing every hour.
   # This keeps the output readable while still distinguishing staggered
   # schedules that share the same hour set.
+  #
+  # A schedule may start at several minutes of each hour it covers: one Codex
+  # automation with two start minutes keeps one memory store, where a second
+  # automation would get its own (monorepo#4117). The minutes are then listed
+  # sorted and without repeats ("*@10,40"), so the order a runtime writes them in
+  # is never a difference. One minute prints exactly as it always did.
+  normalise_minutes() {
+    awk -F',' '
+      {
+        if (NF < 1) invalid = 1
+        for (i = 1; i <= NF; i++) {
+          if ($i !~ /^[0-9][0-9]?$/ || $i + 0 > 59) invalid = 1
+          else seen[$i + 0] = 1
+        }
+      }
+      END {
+        if (invalid || NR != 1) exit 1
+        out = ""
+        for (m = 0; m <= 59; m++) {
+          if (!(m in seen)) continue
+          out = out (out == "" ? "" : ",") m
+        }
+        print out
+      }
+    '
+  }
+
   normalise_hours() {
     awk -F',' '
       {
@@ -4949,9 +4976,9 @@ if want drift; then
   }
 
   schedule_from_parts() {
-    local hours="$1" minute="$2" normalised all_hours
-    [[ "$minute" =~ ^[0-9][0-9]?$ ]] || return 0
-    [ "$minute" -ge 0 ] && [ "$minute" -le 59 ] || return 0
+    local hours="$1" minutes="$2" normalised all_hours
+    minutes=$(printf '%s\n' "$minutes" | normalise_minutes) || return 0
+    [ -n "$minutes" ] || return 0
     if [ "$hours" = "*" ]; then
       normalised="*"
     else
@@ -4960,7 +4987,7 @@ if want drift; then
       all_hours="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
       [ "$normalised" = "$all_hours" ] && normalised="*"
     fi
-    printf '%s@%s\n' "$normalised" "$((10#$minute))"
+    printf '%s@%s\n' "$normalised" "$minutes"
   }
 
   cadence_expected() {
@@ -4972,27 +4999,69 @@ if want drift; then
     ' "$AGENTS_MD" 2>/dev/null)
     [ -n "$cell" ] || return 0
     if grep -qi 'every hour' <<<"$cell"; then
-      minute=$(printf '%s\n' "$cell" | sed -nE 's/.*:([0-9][0-9]?).*/\1/p')
+      # Every `:MM` the cell names is a start minute of every hour. A token with a
+      # digit on either side (`:400`, `10:40`) is not a minute of every hour, and
+      # reading its first two digits would turn a typo into a MATCH, so the whole
+      # cell is then unreadable.
+      #
+      # The cell is accepted only as a WHOLE: the phrase, then minutes joined by a
+      # comma or "and", and nothing else. Looking for minute tokens and ignoring
+      # the rest let any fragment the token pattern did not cover (`:x`) pass
+      # unseen, so the reader states what a cell may be instead of what it may not.
+      minute=$(printf '%s\n' "$cell" | awk '
+        {
+          value = $0
+          gsub(/`/, "", value)
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+          if (tolower(value) !~ /^every hour at :[0-9][0-9]?((, and |, | and ):[0-9][0-9]?)*$/) invalid = 1
+          while (match(value, /:[0-9][0-9]?/)) {
+            if (substr(value, RSTART + RLENGTH, 1) ~ /[0-9]/ ||
+                (RSTART > 1 && substr(value, RSTART - 1, 1) ~ /[0-9]/)) invalid = 1
+            out = out (out == "" ? "" : ",") substr(value, RSTART + 1, RLENGTH - 1)
+            value = substr(value, RSTART + RLENGTH)
+          }
+          if (!invalid) print out
+        }
+      ')
       schedule_from_parts "*" "$minute"
       return 0
     fi
+    # Accepted only as a whole as well: start times joined by commas, nothing else.
     parsed=$(printf '%s\n' "$cell" | awk '
       {
         value = $0
+        gsub(/`/, "", value)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        if (value !~ /^[0-9][0-9]?:[0-9][0-9](, ?[0-9][0-9]?:[0-9][0-9])*$/) invalid = 1
         while (match(value, /[0-9][0-9]?:[0-9][0-9]/)) {
           token = substr(value, RSTART, RLENGTH)
           split(token, pair, ":")
-          if (pair[1] + 0 < 0 || pair[1] + 0 > 23 ||
-              pair[2] + 0 < 0 || pair[2] + 0 > 59) exit 1
-          if (minute != "" && minute != pair[2] + 0) exit 1
+          hour = pair[1] + 0
           minute = pair[2] + 0
-          hours = hours (hours == "" ? "" : ",") pair[1]
+          # A digit on either side of the token (`07:300`, `107:30`) is a typo, not
+          # a start time.
+          if (hour > 23 || minute > 59 ||
+              substr(value, RSTART + RLENGTH, 1) ~ /[0-9]/ ||
+              (RSTART > 1 && substr(value, RSTART - 1, 1) ~ /[0-9]/)) invalid = 1
+          if (!((hour, minute) in starts)) { starts[hour, minute] = 1; start_count++ }
+          if (!(hour in hour_seen)) {
+            hour_seen[hour] = 1; hour_count++
+            hours = hours (hours == "" ? "" : ",") hour
+          }
+          if (!(minute in minute_seen)) {
+            minute_seen[minute] = 1; minute_count++
+            minutes = minutes (minutes == "" ? "" : ",") minute
+          }
           value = substr(value, RSTART + RLENGTH)
         }
       }
       END {
-        if (hours == "" || minute == "") exit 1
-        print hours "|" minute
+        # The compact form is hours x minutes, so the listed starts must be exactly
+        # that product: 07:00, 07:30, 19:00, 19:30 is 7,19@0,30, while 07:00, 19:30
+        # is not a schedule this form can state and stays unreadable. The verdict is
+        # taken here, because an exit in the main rule still runs END.
+        if (invalid || hours == "" || start_count != hour_count * minute_count) exit 1
+        print hours "|" minutes
       }
     ')
     [ -n "$parsed" ] || return 0
@@ -5026,12 +5095,14 @@ if want drift; then
         # add an hour@minute start — the only thing this schedule reports. A
         # PRESENT BYSECOND must still be exactly "0": an empty, multi-valued or
         # non-zero value is a start the cadence table does not describe. A missing
-        # BYMINUTE stays unreadable, because only DTSTART could supply it.
+        # BYMINUTE stays unreadable, because only DTSTART could supply it. BYMINUTE
+        # may list several minutes; their range is checked where the schedule is
+        # canonicalised, so a value above 59 still leaves the rule unreadable.
         if (invalid || (freq != "DAILY" && freq != "HOURLY") ||
             (interval != "" && interval != "1") ||
             (hours != "" && hours !~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/) ||
             (freq == "DAILY" && hours == "") ||
-            minute !~ /^[0-9][0-9]?$/ || minute + 0 > 59 ||
+            minute !~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/ ||
             (has_second && second != "0")) exit 1
         print (hours == "" ? "*" : hours) "|" minute
       }
@@ -5112,25 +5183,31 @@ if want drift; then
   # test, which only agreed with local time because this host's offset is a whole
   # number of hours; it would have been wrong on a :30 offset.
   claude_store_skip_slots() {
-    local store="$1" id="$2" minute="$3" since_ms="$4" hours="$5"
+    local store="$1" id="$2" minutes="$3" since_ms="$4" hours="$5"
     [ -f "$store" ] || return 0
-    jq -r --arg id "$id" --argjson minute "$minute" --arg hours "$hours" \
+    # $minutes is the schedule's minute list. Every listed minute is a due minute,
+    # and a slot is an hour AND a due minute: with two start minutes an hour, two
+    # refusals in one hour are two slots, so the slot key carries the minute. With
+    # one minute the key is one per hour, exactly as before.
+    jq -r --arg id "$id" --arg minutes "$minutes" --arg hours "$hours" \
           --argjson since "$since_ms" '
       ($hours | split(",")) as $hourset
+      | ($minutes | split(",")) as $minuteset
       | [ .recordedSkips[$id][]?
           | select(.reason == "per_task_limit")
           | (.at // empty)
           | select(. >= $since)
           | (. / 1000 | floor)
-          | select((strflocaltime("%M") | tonumber) == $minute)
           # Bound to a variable first: index(f) evaluates f against the input of
           # index itself, so $hourset | index(strflocaltime(...)) would apply the
           # format to the hour ARRAY and abort on "requires parsed datetime inputs".
           | . as $epoch
+          | select(($minuteset
+                    | index($epoch | strflocaltime("%M") | tonumber | tostring)) != null)
           | select($hours == "*"
                    or ($hourset
                        | index($epoch | strflocaltime("%H") | tonumber | tostring)) != null)
-          | strflocaltime("%Y-%m-%dT%H")
+          | strflocaltime("%Y-%m-%dT%H:%M")
         ] | unique | length
     ' "$store" 2>/dev/null
   }
@@ -5170,7 +5247,7 @@ if want drift; then
     cron=$(claude_store_field "$store" "$id" "$pointer" cronExpression)
     [ -n "$cron" ] || return 0
     parsed=$(printf '%s\n' "$cron" | awk '
-      NF == 5 && $1 ~ /^[0-9][0-9]?$/ && $1 + 0 <= 59 &&
+      NF == 5 && $1 ~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/ &&
         ($2 == "*" || $2 ~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/) &&
         $3 == "*" && $4 == "*" && $5 == "*" { print $2 "|" $1 }
     ')
@@ -5318,11 +5395,14 @@ if want drift; then
   expand_schedules() {
     awk -F'@' '
       NF == 2 {
+        minute_count = split($2, minutes, ",")
         if ($1 == "*") {
-          for (hour = 0; hour <= 23; hour++) print hour ":" $2
+          for (hour = 0; hour <= 23; hour++)
+            for (j = 1; j <= minute_count; j++) print hour ":" minutes[j]
         } else {
           count = split($1, hours, ",")
-          for (i = 1; i <= count; i++) print hours[i] ":" $2
+          for (i = 1; i <= count; i++)
+            for (j = 1; j <= minute_count; j++) print hours[i] ":" minutes[j]
         }
       }
     '
@@ -5376,7 +5456,7 @@ if want drift; then
     ' 2>/dev/null)
     CLAUDE_DROPPED=""
     if [ -n "$WINDOW_SINCE" ] && [ -n "$SKIP_SINCE_MS" ] \
-       && [[ "$CLAUDE_ENG_MINUTE" =~ ^[0-9]+$ ]]; then
+       && [[ "$CLAUDE_ENG_MINUTE" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
       CLAUDE_DROPPED=$(claude_store_skip_slots "$CLAUDE_SCHEDULE_STORE" \
         daily-ai-assistant "$CLAUDE_ENG_MINUTE" "$SKIP_SINCE_MS" \
         "${CLAUDE_ENGINEER_ACTUAL%%@*}")
