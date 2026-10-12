@@ -1491,6 +1491,9 @@ module_state_files() {
 # pristine too. Non-zero on any read failure.
 modules_fingerprint() {
   local admin=$1 names f blob mode
+  # An empty or missing admin directory is a lookup that failed in the caller, not a
+  # worktree without submodules.
+  [ -n "$admin" ] && [ -d "$admin" ] || return 1
   if [ ! -e "$admin/modules" ] && [ ! -L "$admin/modules" ]; then return 0; fi
   [ -d "$admin/modules" ] && [ ! -L "$admin/modules" ] || return 1
   names=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-modules.XXXXXX") || return 1
@@ -2119,10 +2122,15 @@ nested_repository_blocker() {
   # objects/ symlink normally, so a symlink counts as well as a directory, and refs/ is not
   # required: a repository whose empty refs/ was lost still holds packed-refs and objects.
   local objs o gits d
-  if ! gits=$(find "$wt" -mindepth 2 -name .git -prune -print 2>/dev/null) \
-     || ! objs=$(find "$wt" -mindepth 2 -name objects \( -type d -o -type l \) -prune -print 2>/dev/null); then
+  # NUL-terminated, then read by line: a path holding a newline would otherwise fall apart
+  # into lines that can each be the path of a checkout already accounted for.
+  if ! gits=$(find "$wt" -mindepth 2 -name .git -prune -print0 2>/dev/null | tr '\0\n' '\n\001') \
+     || ! objs=$(find "$wt" -mindepth 2 -name objects \( -type d -o -type l \) -prune -print0 2>/dev/null | tr '\0\n' '\n\001'); then
     SALVAGE_NOTE="cannot search the worktree for nested repositories"; return 0
   fi
+  case "$gits$objs" in
+    *$'\001'*) SALVAGE_NOTE="holds a nested repository at a path with a newline in it (salvage carries no repository but the worktree's own)"; return 0 ;;
+  esac
   # A pristine submodule's checkout is the one .git entry that is accounted for: a plain
   # file naming a repository checked above. Every other one still marks a repository the
   # removal would delete unexamined (a path holding a newline never matches, so it blocks).
