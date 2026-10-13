@@ -516,6 +516,15 @@ entry_id_list() {
   '
 }
 
+# The engineer entries each lane is deployed with (AGENTS.md, Cadence & focus): the
+# lane's first entry, and a second one half an hour later (monorepo#4116). Both
+# lanes use a second ENTRY: the Claude scheduler holds back a start that overlaps
+# the previous run of the same entry, and the maintainer chose a second Codex
+# automation over a second start minute on the first. CLAUDE_ENGINEER_ENTRIES and
+# CODEX_ENGINEER_ENTRIES replace a lane's list for a trial or a replacement.
+DEFAULT_CLAUDE_ENGINEER_ENTRIES="daily-ai-assistant,agentic-engineer-2"
+DEFAULT_CODEX_ENGINEER_ENTRIES="daily-ai-engineer,agentic-engineer-2"
+
 # Only forge outcome attribution requires the deployment registry. Native
 # transcript adapters retain their own format and coverage boundaries.
 #
@@ -2629,7 +2638,7 @@ if want dispatch; then
     # placed in time, and a zero that cannot be attributed. A known reading — a
     # count, a named silent entry, a real absence, only older runs — stays 0.
     main_rc=2
-  elif ! DH_ROLE_IDS=$(entry_id_list "${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}}"); then
+  elif ! DH_ROLE_IDS=$(entry_id_list "${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-$DEFAULT_CLAUDE_ENGINEER_ENTRIES}}"); then
     # The lane's engineer entries are counted as a set (monorepo#4117). A list
     # that cannot be read is UNKNOWN: scoring the ids that happen to parse would
     # file the others under "other scheduled roles" and print a clean count.
@@ -2711,10 +2720,10 @@ if want dispatch; then
     # for the agent it is observing. Measured over a 2-day window: 76 engineer
     # dispatches, 4 improver, 2 interactive.
     # A lane may have more than one engineer entry (monorepo#4117), so the role
-    # is a set: DH_ROLE if given, else the lane's entry list, else the one entry
-    # the lane has today. Each classified dispatch is also remembered by entry,
-    # so the count can be shown per entry below.
-    DH_ROLE="${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}}"
+    # is a set: DH_ROLE if given, else the lane's entry list, else the two
+    # entries the lane is deployed with. Each classified dispatch is also
+    # remembered by entry, so the count can be shown per entry below.
+    DH_ROLE="${DH_ROLE:-${CLAUDE_ENGINEER_ENTRIES:-$DEFAULT_CLAUDE_ENGINEER_ENTRIES}}"
     DH_ROLE_COUNT=$(printf '%s\n' "$DH_ROLE_IDS" | grep -c .)
     DH_BYROLE=""; DH_UNDATED_BYROLE=""
     while IFS= read -r f; do
@@ -5133,18 +5142,20 @@ if want drift; then
   CODEX_AUTOMATION_STORE="${CODEX_AUTOMATION_STORE_PATH:-$CODEX_HOME/sqlite/codex-dev.db}"
   AGENTS_MD="$MONOREPO/AGENTS.md"
 
-  # A lane may have more than one engineer entry (monorepo#4117). The Claude
+  # A lane has more than one engineer entry (monorepo#4117, #4116). The Claude
   # scheduler holds back a start that would overlap the previous run of the SAME
-  # entry, so a second start an hour needs a second entry there. The lane's
-  # schedule is then the union of its entries' start minutes, compared with the
-  # cadence cell as one schedule. CLAUDE_ENGINEER_ENTRIES names the entries; the
-  # default is the one entry the lane has today, read exactly as before.
+  # entry, so a second start an hour needs a second entry there, and the Codex
+  # lane was given a second automation the same way. The lane's schedule is then
+  # the union of its entries' start minutes, compared with the cadence cell as one
+  # schedule. CLAUDE_ENGINEER_ENTRIES and CODEX_ENGINEER_ENTRIES name the entries;
+  # the default is the two each lane is deployed with. A list of one entry is read
+  # exactly as a one-entry lane always was.
   #
   # The union is stated only when every named entry is readable, all cover the
   # same hours, and no two start in the same minute. A lane read from the entries
   # that happen to be readable would report a lost start as a MATCH on what is left.
-  CLAUDE_ENGINEER_ENTRIES="${CLAUDE_ENGINEER_ENTRIES:-daily-ai-assistant}"
-  claude_engineer_entry_ids() { entry_id_list "$CLAUDE_ENGINEER_ENTRIES"; }
+  CLAUDE_ENGINEER_ENTRIES="${CLAUDE_ENGINEER_ENTRIES:-$DEFAULT_CLAUDE_ENGINEER_ENTRIES}"
+  CODEX_ENGINEER_ENTRIES="${CODEX_ENGINEER_ENTRIES:-$DEFAULT_CODEX_ENGINEER_ENTRIES}"
   # An entry's pointer sits beside the lane's first one, in a directory named
   # after the entry.
   claude_engineer_entry_loader() {
@@ -5154,19 +5165,39 @@ if want drift; then
       printf '%s/%s/SKILL.md\n' "$(dirname "$(dirname "$CLAUDE_LOADER")")" "$1"
     fi
   }
+  codex_engineer_entry_loader() {
+    if [ "$1" = daily-ai-engineer ]; then
+      printf '%s\n' "$CODEX_LOADER"
+    else
+      printf '%s/%s/automation.toml\n' "$(dirname "$(dirname "$CODEX_LOADER")")" "$1"
+    fi
+  }
   # The pointer the lane is read through: the first named entry's. With several
   # entries every one is checked above, so the first stands for the set.
   CLAUDE_ENGINEER_POINTER="$CLAUDE_LOADER"
-  CLAUDE_ENGINEER_ENTRY_IDS=$(claude_engineer_entry_ids) || CLAUDE_ENGINEER_ENTRY_IDS=""
+  CLAUDE_ENGINEER_ENTRY_IDS=$(entry_id_list "$CLAUDE_ENGINEER_ENTRIES") || CLAUDE_ENGINEER_ENTRY_IDS=""
   CLAUDE_ENGINEER_ENTRY_COUNT=$(printf '%s\n' "$CLAUDE_ENGINEER_ENTRY_IDS" | awk 'NF { count++ } END { print count + 0 }')
   [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 0 ] \
     || CLAUDE_ENGINEER_POINTER=$(claude_engineer_entry_loader "$(printf '%s\n' "$CLAUDE_ENGINEER_ENTRY_IDS" | awk 'NR == 1')")
-  # The lane's entries as "label|pointer" for the checks that read every loader,
-  # and as a JSON object for the store discovery. An unreadable entry list falls
-  # back to the default entry HERE only, so the other loaders are still checked;
-  # the schedule comparison reports the list itself as unreadable.
+  CODEX_ENGINEER_POINTER="$CODEX_LOADER"
+  CODEX_ENGINEER_ENTRY_IDS=$(entry_id_list "$CODEX_ENGINEER_ENTRIES") || CODEX_ENGINEER_ENTRY_IDS=""
+  CODEX_ENGINEER_ENTRY_COUNT=$(printf '%s\n' "$CODEX_ENGINEER_ENTRY_IDS" | awk 'NF { count++ } END { print count + 0 }')
+  [ "$CODEX_ENGINEER_ENTRY_COUNT" -eq 0 ] \
+    || CODEX_ENGINEER_POINTER=$(codex_engineer_entry_loader "$(printf '%s\n' "$CODEX_ENGINEER_ENTRY_IDS" | awk 'NR == 1')")
+  # Each lane's entries as "label|pointer" for the checks that read every loader,
+  # and the Claude lane's as a JSON object for the store discovery. An unreadable
+  # entry list falls back to the lane's first deployed entry HERE only, so the
+  # other loaders are still checked; the schedule comparison reports the list
+  # itself as unreadable.
+  #
+  # The store discovery asks only for the entries that have a pointer file on this
+  # host. An entry the lane names before its runtime entry exists has neither a
+  # pointer nor a record, and requiring it would leave the store unfound, so the
+  # improver and the lane's other entry would read UNKNOWN with it. When no named
+  # entry has a pointer, every one is asked for, as before.
   CLAUDE_ENGINEER_LOADER_ROWS=()
   CLAUDE_ENGINEER_STORE_ENTRIES='{}'
+  claude_store_entries_present='{}'
   while IFS= read -r entry_id; do
     [ -n "$entry_id" ] || continue
     entry_loader=$(claude_engineer_entry_loader "$entry_id")
@@ -5177,8 +5208,22 @@ if want drift; then
     fi
     CLAUDE_ENGINEER_STORE_ENTRIES=$(jq -cn --argjson entries "$CLAUDE_ENGINEER_STORE_ENTRIES" \
       --arg id "$entry_id" --arg file "$entry_loader" '$entries + {($id): $file}')
-  done <<<"${CLAUDE_ENGINEER_ENTRY_IDS:-daily-ai-assistant}"
-  CLAUDE_LOADER_TOTAL=$(( ${#CLAUDE_ENGINEER_LOADER_ROWS[@]} + 3 ))
+    [ ! -f "$entry_loader" ] \
+      || claude_store_entries_present=$(jq -cn --argjson entries "$claude_store_entries_present" \
+           --arg id "$entry_id" --arg file "$entry_loader" '$entries + {($id): $file}')
+  done <<<"${CLAUDE_ENGINEER_ENTRY_IDS:-${DEFAULT_CLAUDE_ENGINEER_ENTRIES%%,*}}"
+  [ "$claude_store_entries_present" = '{}' ] || CLAUDE_ENGINEER_STORE_ENTRIES="$claude_store_entries_present"
+  CODEX_ENGINEER_LOADER_ROWS=()
+  while IFS= read -r entry_id; do
+    [ -n "$entry_id" ] || continue
+    entry_loader=$(codex_engineer_entry_loader "$entry_id")
+    if [ "$CODEX_ENGINEER_ENTRY_COUNT" -gt 1 ]; then
+      CODEX_ENGINEER_LOADER_ROWS+=("codex engineer entry $entry_id|$entry_loader")
+    else
+      CODEX_ENGINEER_LOADER_ROWS+=("codex engineer|$entry_loader")
+    fi
+  done <<<"${CODEX_ENGINEER_ENTRY_IDS:-${DEFAULT_CODEX_ENGINEER_ENTRIES%%,*}}"
+  LOADER_TOTAL=$(( ${#CLAUDE_ENGINEER_LOADER_ROWS[@]} + ${#CODEX_ENGINEER_LOADER_ROWS[@]} + 2 ))
 
 
   discover_claude_schedule_store() {
@@ -5190,7 +5235,7 @@ if want drift; then
     root="${CLAUDE_SCHEDULE_STORE_ROOT:-$HOME/Library/Application Support/Claude/claude-code-sessions}"
     for candidate in "$root"/*/*/scheduled-tasks.json; do
       [ -f "$candidate" ] || continue
-      # The store is the one that holds EVERY entry the lane names, each enabled
+      # The store is the one that holds EVERY entry asked for above, each enabled
       # and pointing at its own loader, beside the improver (monorepo#4117).
       jq -e --argjson engineers "$CLAUDE_ENGINEER_STORE_ENTRIES" --arg improver "$CLAUDE_IMPROVER_LOADER" '
         [.scheduledTasks[]? |
@@ -5212,7 +5257,7 @@ if want drift; then
   CLAUDE_SCHEDULE_STORE=$(discover_claude_schedule_store)
 
   for f in "${CLAUDE_ENGINEER_LOADER_ROWS[@]#*|}" "$CLAUDE_IMPROVER_LOADER" \
-           "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER" "$AGENTS_MD"; do
+           "${CODEX_ENGINEER_LOADER_ROWS[@]#*|}" "$CODEX_IMPROVER_LOADER" "$AGENTS_MD"; do
     [ -f "$f" ] && echo "  present: $f" || echo "  MISSING: $f"
   done
   if [ -n "$CLAUDE_SCHEDULE_STORE" ] && [ -f "$CLAUDE_SCHEDULE_STORE" ]; then
@@ -5222,7 +5267,7 @@ if want drift; then
   fi
 
   echo
-  echo "  cadence table vs all four runtime schedule pointers:"
+  echo "  cadence table vs the runtime schedule pointers (two engineer entries and one improver entry a lane):"
 
   # Canonicalise schedule slots for exact comparison. The compact form is
   # "hours@minutes" (for example 0,12@0), with * representing every hour.
@@ -5436,9 +5481,24 @@ if want drift; then
     codex_rrule_schedule "$rule"
   }
 
+  # An automation that is not ACTIVE does not dispatch, so its recurrence is not a
+  # schedule the lane keeps. It is read as a switched-off Claude entry is: no
+  # readable record. Without this a paused second automation would read MATCH
+  # for a start that never happens (monorepo#4116).
+  codex_store_active() {
+    local store="$1" id="$2" escaped_id status
+    [ -f "$store" ] || return 1
+    escaped_id=${id//\'/\'\'}
+    status=$(sqlite3 -readonly "$store" \
+      "SELECT status FROM automations WHERE id = '$escaped_id';" 2>/dev/null \
+      | awk 'NF { print; exit }')
+    [ "$status" = ACTIVE ]
+  }
+
   codex_store_schedule() {
     local store="$1" id="$2" rule escaped_id
     [ -f "$store" ] || return 0
+    codex_store_active "$store" "$id" || return 0
     escaped_id=${id//\'/\'\'}
     rule=$(sqlite3 -readonly "$store" \
       "SELECT rrule FROM automations WHERE id = '$escaped_id';" 2>/dev/null \
@@ -5665,11 +5725,96 @@ if want drift; then
   CLAUDE_IMPROVER_EXPECTED=$(cadence_expected Claude 4)
   CODEX_ENGINEER_EXPECTED=$(cadence_expected Codex 3)
   CODEX_IMPROVER_EXPECTED=$(cadence_expected Codex 4)
+  # ── a lane's engineer entries as one schedule ───────────────────────────────
+  # lane_union_add builds the union of a lane's entries: the same hours, and no
+  # start minute shared. It works on the lane_* variables below, which each lane's
+  # loop reads back, and names in lane_union_error why the entries have no union.
+  lane_reset() {
+    lane_hours=""
+    lane_minutes=""
+    lane_minute_owners=""
+    lane_entry_schedules=""
+    lane_union_error=""
+    lane_marker=""
+    lane_marker_unread=0
+    lane_not_created=""
+  }
+  lane_union_add() { # $1 = entry id, $2 = its schedule ("hours@minutes")
+    local entry_id="$1" entry_schedule="$2" entry_hours entry_minutes rest minute owner
+    lane_entry_schedules="$lane_entry_schedules $entry_id=$entry_schedule"
+    entry_hours=${entry_schedule%%@*}
+    entry_minutes=${entry_schedule##*@}
+    if [ -n "$lane_hours" ] && [ "$entry_hours" != "$lane_hours" ]; then
+      lane_union_error="entries cover different hours (${lane_entry_schedules# })"
+      return 1
+    fi
+    lane_hours="$entry_hours"
+    rest="$entry_minutes"
+    while [ -n "$rest" ]; do
+      minute=${rest%%,*}
+      case "$lane_minute_owners" in
+        *" $minute="*)
+          owner=${lane_minute_owners##*" $minute="}
+          lane_union_error="entries ${owner%% *} and $entry_id both start at minute $minute"
+          return 1 ;;
+      esac
+      lane_minute_owners="$lane_minute_owners $minute=$entry_id"
+      case "$rest" in
+        *,*) rest=${rest#*,} ;;
+        *) rest="" ;;
+      esac
+    done
+    lane_minutes="${lane_minutes:+$lane_minutes,}$entry_minutes"
+  }
+  # The lane's change marker is its OLDEST newest-dispatch: persistence asks
+  # whether an applied edit survived a dispatch, and the newest marker alone
+  # would let one entry's dispatch confirm an edit to an entry that has not
+  # run since. An entry without a readable marker leaves the lane without one.
+  lane_marker_add() { # $1 = one entry's marker
+    if ! [[ "$1" =~ ^[0-9]+$ ]]; then
+      lane_marker_unread=1
+    elif [ -z "$lane_marker" ] || [ "$1" -lt "$lane_marker" ]; then
+      lane_marker="$1"
+    fi
+  }
+
+  # An entry the lane names before its runtime entry exists (monorepo#4116): no
+  # pointer file, and no record of that id in the scheduler store in any state.
+  # The cadence table is changed first and the runtime entry is created to match
+  # it afterwards, so this is the expected reading in between, and it is reported
+  # as what it is. Both halves must be shown: a missing pointer beside a record, a
+  # record without a pointer, or a store that cannot be read is a defect, and
+  # keeps the wording it always had.
+  claude_entry_not_created() { # $1 = entry id, $2 = its pointer
+    [ ! -e "$2" ] && [ -n "$CLAUDE_SCHEDULE_STORE" ] && [ -f "$CLAUDE_SCHEDULE_STORE" ] \
+      && jq -e --arg id "$1" '
+           (.scheduledTasks | type) == "array"
+           and ([.scheduledTasks[] | select(type == "object" and .id == $id)] | length) == 0
+         ' "$CLAUDE_SCHEDULE_STORE" >/dev/null 2>&1
+  }
+  # How many records the Codex scheduler store holds for an id, in any state.
+  # Prints nothing when the store cannot be read, which is neither 0 nor 1.
+  codex_store_held() { # $1 = entry id
+    local id="$1" escaped_id
+    [ -f "$CODEX_AUTOMATION_STORE" ] || return 0
+    escaped_id=${id//\'/\'\'}
+    sqlite3 -readonly "$CODEX_AUTOMATION_STORE" \
+      "SELECT COUNT(*) FROM automations WHERE id = '$escaped_id';" 2>/dev/null
+  }
+  codex_entry_not_created() { # $1 = entry id, $2 = its pointer
+    [ ! -e "$2" ] && [ "$(codex_store_held "$1")" = 0 ]
+  }
+
   CLAUDE_ENGINEER_ACTUAL=""
   CLAUDE_ENGINEER_MARKER=""
   CLAUDE_ENGINEER_UNREADABLE=""
   # One " id=schedule" word per readable entry; the refusal count below reads it.
   CLAUDE_ENGINEER_ENTRY_SCHEDULES=""
+  # Set only when the lane is readable except for entries that are not created
+  # yet: their ids, and the schedule of the entries that do exist.
+  CLAUDE_ENGINEER_NOT_CREATED=""
+  CLAUDE_ENGINEER_CREATED=""
+  CLAUDE_ENGINEER_CREATED_SCHEDULES=""
   if [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 0 ]; then
     CLAUDE_ENGINEER_UNREADABLE="entry list is unreadable (CLAUDE_ENGINEER_ENTRIES: ids of lowercase letters, digits and hyphens, at most four, none twice)"
   elif [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -eq 1 ]; then
@@ -5680,22 +5825,14 @@ if want drift; then
     [ -n "$CLAUDE_ENGINEER_ACTUAL" ] \
       && CLAUDE_ENGINEER_ENTRY_SCHEDULES=" $CLAUDE_ENGINEER_ENTRY_IDS=$CLAUDE_ENGINEER_ACTUAL"
   else
-    lane_hours=""
-    lane_minutes=""
-    lane_minute_owners=""
-    lane_marker_unread=0
+    lane_reset
     while IFS= read -r entry_id; do
       entry_loader=$(claude_engineer_entry_loader "$entry_id")
-      entry_marker=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" "$entry_id" "$entry_loader")
-      # The lane's change marker is its OLDEST newest-dispatch: persistence asks
-      # whether an applied edit survived a dispatch, and the newest marker alone
-      # would let one entry's dispatch confirm an edit to an entry that has not
-      # run since. An entry without a readable marker leaves the lane without one.
-      if ! [[ "$entry_marker" =~ ^[0-9]+$ ]]; then
-        lane_marker_unread=1
-      elif [ -z "$CLAUDE_ENGINEER_MARKER" ] || [ "$entry_marker" -lt "$CLAUDE_ENGINEER_MARKER" ]; then
-        CLAUDE_ENGINEER_MARKER="$entry_marker"
+      if claude_entry_not_created "$entry_id" "$entry_loader"; then
+        lane_not_created="${lane_not_created:+$lane_not_created, }$entry_id"
+        continue
       fi
+      lane_marker_add "$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" "$entry_id" "$entry_loader")"
       [ -z "$CLAUDE_ENGINEER_UNREADABLE" ] || continue
       if [ ! -f "$entry_loader" ]; then
         CLAUDE_ENGINEER_UNREADABLE="entry $entry_id schedule pointer missing"
@@ -5706,82 +5843,105 @@ if want drift; then
         CLAUDE_ENGINEER_UNREADABLE="entry $entry_id has no readable scheduler record"
         continue
       fi
-      CLAUDE_ENGINEER_ENTRY_SCHEDULES="$CLAUDE_ENGINEER_ENTRY_SCHEDULES $entry_id=$entry_schedule"
-      entry_hours=${entry_schedule%%@*}
-      entry_minutes=${entry_schedule##*@}
-      if [ -n "$lane_hours" ] && [ "$entry_hours" != "$lane_hours" ]; then
-        CLAUDE_ENGINEER_UNREADABLE="entries cover different hours (${CLAUDE_ENGINEER_ENTRY_SCHEDULES# })"
-        continue
-      fi
-      lane_hours="$entry_hours"
-      entry_minutes_rest="$entry_minutes"
-      while [ -n "$entry_minutes_rest" ]; do
-        entry_minute=${entry_minutes_rest%%,*}
-        case "$lane_minute_owners" in
-          *" $entry_minute="*)
-            minute_owner=${lane_minute_owners##*" $entry_minute="}
-            CLAUDE_ENGINEER_UNREADABLE="entries ${minute_owner%% *} and $entry_id both start at minute $entry_minute"
-            break ;;
-        esac
-        lane_minute_owners="$lane_minute_owners $entry_minute=$entry_id"
-        case "$entry_minutes_rest" in
-          *,*) entry_minutes_rest=${entry_minutes_rest#*,} ;;
-          *) entry_minutes_rest="" ;;
-        esac
-      done
-      lane_minutes="${lane_minutes:+$lane_minutes,}$entry_minutes"
+      lane_union_add "$entry_id" "$entry_schedule" || CLAUDE_ENGINEER_UNREADABLE="$lane_union_error"
     done <<<"$CLAUDE_ENGINEER_ENTRY_IDS"
-    [ "$lane_marker_unread" -eq 0 ] || CLAUDE_ENGINEER_MARKER=""
-    if [ -z "$CLAUDE_ENGINEER_UNREADABLE" ]; then
-      CLAUDE_ENGINEER_ACTUAL=$(schedule_from_parts "$lane_hours" "$lane_minutes")
+    [ "$lane_marker_unread" -ne 0 ] || CLAUDE_ENGINEER_MARKER="$lane_marker"
+    if [ -n "$CLAUDE_ENGINEER_UNREADABLE" ]; then
+      :
+    elif [ -n "$lane_not_created" ]; then
+      CLAUDE_ENGINEER_NOT_CREATED="$lane_not_created"
+      CLAUDE_ENGINEER_CREATED_SCHEDULES="$lane_entry_schedules"
+      [ -z "$lane_minutes" ] \
+        || CLAUDE_ENGINEER_CREATED=$(schedule_from_parts "$lane_hours" "$lane_minutes")
     else
-      CLAUDE_ENGINEER_ENTRY_SCHEDULES=""
+      CLAUDE_ENGINEER_ACTUAL=$(schedule_from_parts "$lane_hours" "$lane_minutes")
+      CLAUDE_ENGINEER_ENTRY_SCHEDULES="$lane_entry_schedules"
     fi
   fi
   CLAUDE_IMPROVER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
-  CODEX_ENGINEER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_LOADER")
-  CODEX_IMPROVER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_IMPROVER_LOADER")
-  CODEX_ENGINEER_STORE_ACTUAL=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" daily-ai-engineer)
-  CODEX_IMPROVER_STORE_ACTUAL=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" agent-improver)
+
+  # The Codex lane's entries are automations. Each has its own pointer and its own
+  # scheduler record, and an entry's two must agree before it joins the union.
+  CODEX_ENGINEER_POINTER_ACTUAL=""
+  CODEX_ENGINEER_STORE_ACTUAL=""
   CODEX_ENGINEER_ACTUAL=""
+  CODEX_ENGINEER_MARKER=""
+  CODEX_ENGINEER_UNREADABLE=""
+  CODEX_ENGINEER_POINTER_DRIFT=""
+  CODEX_ENGINEER_ENTRY_SCHEDULES=""
+  CODEX_ENGINEER_NOT_CREATED=""
+  CODEX_ENGINEER_CREATED=""
+  CODEX_ENGINEER_CREATED_SCHEDULES=""
+  if [ "$CODEX_ENGINEER_ENTRY_COUNT" -eq 0 ]; then
+    CODEX_ENGINEER_UNREADABLE="entry list is unreadable (CODEX_ENGINEER_ENTRIES: ids of lowercase letters, digits and hyphens, at most four, none twice)"
+  elif [ "$CODEX_ENGINEER_ENTRY_COUNT" -eq 1 ]; then
+    CODEX_ENGINEER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_ENGINEER_POINTER")
+    CODEX_ENGINEER_STORE_ACTUAL=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" "$CODEX_ENGINEER_ENTRY_IDS")
+    [ -n "$CODEX_ENGINEER_POINTER_ACTUAL" ] \
+      && [ "$CODEX_ENGINEER_POINTER_ACTUAL" = "$CODEX_ENGINEER_STORE_ACTUAL" ] \
+      && CODEX_ENGINEER_ACTUAL="$CODEX_ENGINEER_STORE_ACTUAL"
+    CODEX_ENGINEER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" "$CODEX_ENGINEER_ENTRY_IDS")
+  else
+    lane_reset
+    while IFS= read -r entry_id; do
+      entry_loader=$(codex_engineer_entry_loader "$entry_id")
+      if codex_entry_not_created "$entry_id" "$entry_loader"; then
+        lane_not_created="${lane_not_created:+$lane_not_created, }$entry_id"
+        continue
+      fi
+      lane_marker_add "$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" "$entry_id")"
+      [ -z "$CODEX_ENGINEER_UNREADABLE$CODEX_ENGINEER_POINTER_DRIFT" ] || continue
+      entry_pointer_schedule=$(codex_pointer_schedule "$entry_loader")
+      entry_store_schedule=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" "$entry_id")
+      if [ ! -f "$entry_loader" ]; then
+        CODEX_ENGINEER_UNREADABLE="entry $entry_id schedule pointer missing"
+      elif [ ! -f "$CODEX_AUTOMATION_STORE" ]; then
+        CODEX_ENGINEER_UNREADABLE="authoritative scheduler store missing"
+      elif [ -z "$entry_pointer_schedule" ]; then
+        CODEX_ENGINEER_UNREADABLE="entry $entry_id recurrence rule is incomplete or unsupported"
+      elif [ "$(codex_store_held "$entry_id")" = 1 ] \
+           && ! codex_store_active "$CODEX_AUTOMATION_STORE" "$entry_id"; then
+        CODEX_ENGINEER_UNREADABLE="entry $entry_id is not ACTIVE in the scheduler store"
+      elif [ -z "$entry_store_schedule" ]; then
+        CODEX_ENGINEER_UNREADABLE="entry $entry_id authoritative scheduler recurrence is missing or unsupported"
+      elif [ "$entry_pointer_schedule" != "$entry_store_schedule" ]; then
+        CODEX_ENGINEER_POINTER_DRIFT="entry $entry_id schedule pointer=$entry_pointer_schedule scheduler=$entry_store_schedule"
+      else
+        lane_union_add "$entry_id" "$entry_store_schedule" || CODEX_ENGINEER_UNREADABLE="$lane_union_error"
+      fi
+    done <<<"$CODEX_ENGINEER_ENTRY_IDS"
+    [ "$lane_marker_unread" -ne 0 ] || CODEX_ENGINEER_MARKER="$lane_marker"
+    if [ -n "$CODEX_ENGINEER_UNREADABLE$CODEX_ENGINEER_POINTER_DRIFT" ]; then
+      :
+    elif [ -n "$lane_not_created" ]; then
+      CODEX_ENGINEER_NOT_CREATED="$lane_not_created"
+      CODEX_ENGINEER_CREATED_SCHEDULES="$lane_entry_schedules"
+      [ -z "$lane_minutes" ] \
+        || CODEX_ENGINEER_CREATED=$(schedule_from_parts "$lane_hours" "$lane_minutes")
+    else
+      CODEX_ENGINEER_ACTUAL=$(schedule_from_parts "$lane_hours" "$lane_minutes")
+      CODEX_ENGINEER_ENTRY_SCHEDULES="$lane_entry_schedules"
+    fi
+  fi
+  CODEX_IMPROVER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_IMPROVER_LOADER")
+  CODEX_IMPROVER_STORE_ACTUAL=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" agent-improver)
   CODEX_IMPROVER_ACTUAL=""
-  [ -n "$CODEX_ENGINEER_POINTER_ACTUAL" ] \
-    && [ "$CODEX_ENGINEER_POINTER_ACTUAL" = "$CODEX_ENGINEER_STORE_ACTUAL" ] \
-    && CODEX_ENGINEER_ACTUAL="$CODEX_ENGINEER_STORE_ACTUAL"
   [ -n "$CODEX_IMPROVER_POINTER_ACTUAL" ] \
     && [ "$CODEX_IMPROVER_POINTER_ACTUAL" = "$CODEX_IMPROVER_STORE_ACTUAL" ] \
     && CODEX_IMPROVER_ACTUAL="$CODEX_IMPROVER_STORE_ACTUAL"
   CLAUDE_IMPROVER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
-  CODEX_ENGINEER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" daily-ai-engineer)
   CODEX_IMPROVER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" agent-improver)
   CLAUDE_ENGINEER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-}"
   CLAUDE_IMPROVER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-}"
   CODEX_ENGINEER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-}"
   CODEX_IMPROVER_BASELINE="${CODEX_IMPROVER_MARKER_BASELINE:-}"
 
-  if [ -n "$CLAUDE_ENGINEER_UNREADABLE" ]; then
-    echo "    UNKNOWN: claude engineer $CLAUDE_ENGINEER_UNREADABLE"
-  else
-    compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
-      "$CLAUDE_ENGINEER_POINTER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" cron
-    [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -gt 1 ] \
-      && echo "      entries:$CLAUDE_ENGINEER_ENTRY_SCHEDULES"
-  fi
-  compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
-    "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE" cron
-  compare_codex_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" \
-    "$CODEX_ENGINEER_POINTER_ACTUAL" "$CODEX_ENGINEER_STORE_ACTUAL" \
-    "$CODEX_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE"
-  compare_codex_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" \
-    "$CODEX_IMPROVER_POINTER_ACTUAL" "$CODEX_IMPROVER_STORE_ACTUAL" \
-    "$CODEX_IMPROVER_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"
-
-  # Defined before the aggregate gate, not inside it: the per-lane drop reporting
-  # below runs even when the gate fails, and a helper defined only on the success
-  # path left that path computing an EMPTY slot count — which silently downgraded a
-  # measurable drop rate to UNKNOWN. Caught by evaluating the change on the live
-  # store, where the gate does fail; every test fixture measures cleanly, so no
-  # fixture could have exposed it.
+  # Defined before every use, not inside the aggregate gate: the per-lane drop
+  # reporting below runs even when the gate fails, and a helper defined only on the
+  # success path left that path computing an EMPTY slot count — which silently
+  # downgraded a measurable drop rate to UNKNOWN. Caught by evaluating the change on
+  # the live store, where the gate does fail; every test fixture measures cleanly,
+  # so no fixture could have exposed it.
   expand_schedules() {
     awk -F'@' '
       NF == 2 {
@@ -5797,17 +5957,86 @@ if want drift; then
       }
     '
   }
+  # True when every start of schedule $1 is also a start of schedule $2.
+  schedule_within() {
+    [ -n "$1" ] && [ -n "$2" ] || return 1
+    {
+      printf '%s\n' "$2" | expand_schedules | sed 's/^/table /'
+      printf '%s\n' "$1" | expand_schedules | sed 's/^/runtime /'
+    } | awk '
+      $1 == "table" { named[$2] = 1; next }
+      !($2 in named) { outside = 1 }
+      END { exit outside ? 1 : 0 }
+    '
+  }
+
+  # A lane with an entry that is not created yet is not compared as a whole: the
+  # table is ahead of the runtime on purpose, so that is neither a MATCH nor the
+  # lane's DRIFT. It reads UNKNOWN and says why, with the entries that do exist
+  # beside it. Those entries are still held to the table: a start the table does
+  # not name is DRIFT whether or not another entry is outstanding, and waiting for
+  # the lane to be complete would hide it for as long as that takes.
+  report_not_created() { # $1 = lane label, $2 = ids not created ("a, b"), $3 = the created entries' schedules, $4 = the table's schedule, $5 = the created entries' union
+    echo "    UNKNOWN: $1 has an entry that is not created yet (no schedule pointer, no scheduler record): $2"
+    echo "      entries:$3$(printf ' %s' "$2" | sed 's/,//g; s/\([^ ][^ ]*\)/\1=not-created/g')"
+    if [ -n "$4" ] && [ -n "$5" ] && ! schedule_within "$5" "$4"; then
+      echo "    ⚠️  DRIFT: $1 entries that exist start outside the cadence table: expected=$4 existing=$5"
+    fi
+  }
+
+  if [ -n "$CLAUDE_ENGINEER_UNREADABLE" ]; then
+    echo "    UNKNOWN: claude engineer $CLAUDE_ENGINEER_UNREADABLE"
+  elif [ -n "$CLAUDE_ENGINEER_NOT_CREATED" ]; then
+    report_not_created "claude engineer" "$CLAUDE_ENGINEER_NOT_CREATED" "$CLAUDE_ENGINEER_CREATED_SCHEDULES" \
+      "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_CREATED"
+  else
+    compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
+      "$CLAUDE_ENGINEER_POINTER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" cron
+    [ "$CLAUDE_ENGINEER_ENTRY_COUNT" -gt 1 ] \
+      && echo "      entries:$CLAUDE_ENGINEER_ENTRY_SCHEDULES"
+  fi
+  compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
+    "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE" cron
+  if [ -n "$CODEX_ENGINEER_UNREADABLE" ]; then
+    echo "    UNKNOWN: codex engineer $CODEX_ENGINEER_UNREADABLE"
+  elif [ -n "$CODEX_ENGINEER_POINTER_DRIFT" ]; then
+    echo "    ⚠️  DRIFT: codex engineer $CODEX_ENGINEER_POINTER_DRIFT marker=${CODEX_ENGINEER_MARKER:-missing} baseline=${CODEX_ENGINEER_BASELINE:-missing}"
+  elif [ -n "$CODEX_ENGINEER_NOT_CREATED" ]; then
+    report_not_created "codex engineer" "$CODEX_ENGINEER_NOT_CREATED" "$CODEX_ENGINEER_CREATED_SCHEDULES" \
+      "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_CREATED"
+  elif [ "$CODEX_ENGINEER_ENTRY_COUNT" -eq 1 ]; then
+    compare_codex_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" \
+      "$CODEX_ENGINEER_POINTER_ACTUAL" "$CODEX_ENGINEER_STORE_ACTUAL" \
+      "$CODEX_ENGINEER_POINTER" "$CODEX_AUTOMATION_STORE" "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE"
+  else
+    compare_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
+      "$CODEX_ENGINEER_POINTER" "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" recurrence
+    echo "      entries:$CODEX_ENGINEER_ENTRY_SCHEDULES"
+  fi
+  compare_codex_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" \
+    "$CODEX_IMPROVER_POINTER_ACTUAL" "$CODEX_IMPROVER_STORE_ACTUAL" \
+    "$CODEX_IMPROVER_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"
 
   # Gated on cadence READABILITY, never on persistence (#2621): these two figures
-  # are pure functions of the four crons. An unreadable or ambiguous pointer still
+  # are pure functions of the schedules. An unreadable or ambiguous pointer still
   # suppresses them — that fail-closed behaviour is unchanged and tested.
-  if schedule_cadence_readable "$CLAUDE_ENGINEER_POINTER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
+  #
+  # A lane with an entry that is not created yet is the one exception, and only
+  # for these two figures: they count STARTS THE RUNTIME MAKES, and the entries
+  # that exist make theirs whether or not the table names more. Suppressing the
+  # figures until every lane's second entry exists would leave the stagger
+  # invariant unwatched for as long as one lane's entry is outstanding, which is
+  # the blind spot #2621 closed. So the entries that exist are counted, and the
+  # line below the figures says which entries are not in them.
+  CLAUDE_ENGINEER_STARTS="${CLAUDE_ENGINEER_ACTUAL:-$CLAUDE_ENGINEER_CREATED}"
+  CODEX_ENGINEER_STARTS="${CODEX_ENGINEER_ACTUAL:-$CODEX_ENGINEER_CREATED}"
+  if schedule_cadence_readable "$CLAUDE_ENGINEER_POINTER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_STARTS" \
      && schedule_cadence_readable "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
-     && schedule_cadence_readable "$CODEX_LOADER" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
+     && schedule_cadence_readable "$CODEX_ENGINEER_POINTER" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_STARTS" \
      && schedule_cadence_readable "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL"; then
     :
-    ALL_SLOTS=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CLAUDE_IMPROVER_ACTUAL" \
-      "$CODEX_ENGINEER_ACTUAL" "$CODEX_IMPROVER_ACTUAL" | expand_schedules)
+    ALL_SLOTS=$(printf '%s\n' "$CLAUDE_ENGINEER_STARTS" "$CLAUDE_IMPROVER_ACTUAL" \
+      "$CODEX_ENGINEER_STARTS" "$CODEX_IMPROVER_ACTUAL" | expand_schedules)
     COLLISIONS=$(printf '%s\n' "$ALL_SLOTS" | awk '
       NF { starts[$0]++ }
       END {
@@ -5817,7 +6046,7 @@ if want drift; then
         print collisions + 0
       }
     ')
-    ENGINEER_DISPATCHES=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CODEX_ENGINEER_ACTUAL" \
+    ENGINEER_DISPATCHES=$(printf '%s\n' "$CLAUDE_ENGINEER_STARTS" "$CODEX_ENGINEER_STARTS" \
       | expand_schedules | awk 'NF { count++ } END { print count + 0 }')
     echo "    local simultaneous starts/day: $COLLISIONS"
     # "slots scheduled", not "dispatches": this number is the cron expanded, and a
@@ -5825,6 +6054,13 @@ if want drift; then
     # which matters because this deployment states hypothesis volume floors in
     # DISPATCHES — so a floor could be cleared by slots that never ran.
     echo "    local engineer slots scheduled/day: $ENGINEER_DISPATCHES"
+    if [ -n "$CLAUDE_ENGINEER_NOT_CREATED$CODEX_ENGINEER_NOT_CREATED" ]; then
+      NOT_CREATED_NOTE=""
+      [ -z "$CLAUDE_ENGINEER_NOT_CREATED" ] || NOT_CREATED_NOTE="claude $CLAUDE_ENGINEER_NOT_CREATED"
+      [ -z "$CODEX_ENGINEER_NOT_CREATED" ] \
+        || NOT_CREATED_NOTE="${NOT_CREATED_NOTE:+$NOT_CREATED_NOTE; }codex $CODEX_ENGINEER_NOT_CREATED"
+      echo "      ^ both figures count the entries that exist; not created yet: $NOT_CREATED_NOTE"
+    fi
   else
     echo "    local simultaneous starts/day: UNKNOWN (one or more pointers unmeasured)"
     echo "    local engineer slots scheduled/day: UNKNOWN (one or more engineer pointers unmeasured)"
@@ -5953,7 +6189,7 @@ if want drift; then
   echo
   echo "  retired-rule residue (loader asserts something the constitution dropped):"
   for L in "${CLAUDE_ENGINEER_LOADER_ROWS[@]#*|}" "$CLAUDE_IMPROVER_LOADER" \
-           "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER"; do
+           "${CODEX_ENGINEER_LOADER_ROWS[@]#*|}" "$CODEX_IMPROVER_LOADER"; do
     [ -f "$L" ] || continue
     if grep -qiE 'NEVER self-promote those|promotion stays the maintainer' "$L" 2>/dev/null; then
       # The contract is AGENTS.md plus the guides it indexes; the retirement is recorded in a guide.
@@ -5979,6 +6215,18 @@ if want drift; then
   # directory, and an instance has to know whether the stale prompt is its own
   # (editable) or its sibling's (report-only).
   roster_unread=0
+  roster_not_created=""
+  loader_not_created() { # $1 = a loader's label
+    local id="${1##* }" not_created=""
+    case "$1" in
+      "claude engineer entry "*) not_created="$CLAUDE_ENGINEER_NOT_CREATED" ;;
+      "codex engineer entry "*) not_created="$CODEX_ENGINEER_NOT_CREATED" ;;
+    esac
+    case ", $not_created, " in
+      *", $id, "*) return 0 ;;
+    esac
+    return 1
+  }
   # "Codex" and "Cursor" are also runtime and product names that a thin pointer may
   # legitimately use, so they count as a lane only beside review-request wording or
   # another lane. "review" must be a whole word (review/reviews/reviewer(s)/reviewing):
@@ -5992,13 +6240,21 @@ if want drift; then
   codex_lane_re="chatgpt-codex-connector|$(review_near codex)|(coderabbit|bugbot)[^.]{0,20}codex|codex[^.]{0,20}(coderabbit|bugbot)"
   cursor_lane_re="bugbot|$(review_near cursor)|coderabbit[^.]{0,20}cursor|cursor[^.]{0,20}coderabbit"
   for entry in "${CLAUDE_ENGINEER_LOADER_ROWS[@]}" "claude improver|$CLAUDE_IMPROVER_LOADER" \
-               "codex engineer|$CODEX_LOADER" "codex improver|$CODEX_IMPROVER_LOADER"; do
+               "${CODEX_ENGINEER_LOADER_ROWS[@]}" "codex improver|$CODEX_IMPROVER_LOADER"; do
     label=${entry%%|*}
     L=${entry#*|}
     # An uninspected loader is not a clean one: count it, so the all-clear below can
     # never stand in for a check that did not run. Read it exactly once, and only as a
     # regular file — a directory passes `-r` while every grep over it fails silently.
     if [ ! -f "$L" ] || [ ! -r "$L" ] || ! loader_text=$(cat -- "$L" 2>/dev/null); then
+      # An entry that is not created yet has no loader that could hard-code
+      # anything. It is named below the verdict instead of making every report
+      # INCOMPLETE until the runtime entry exists; the schedule comparison above
+      # is where it was established that neither a pointer nor a record exists.
+      if loader_not_created "$label"; then
+        roster_not_created="${roster_not_created:+$roster_not_created; }$label"
+        continue
+      fi
       roster_unread=$((roster_unread + 1))
       echo "    UNKNOWN: $label loader is missing or unreadable"
       continue
@@ -6015,8 +6271,10 @@ if want drift; then
   if [ "$roster_unread" -eq 0 ]; then
     echo "    (no output above = no loader hard-codes the review-lane roster)"
   else
-    echo "    roster check INCOMPLETE: $roster_unread of $CLAUDE_LOADER_TOTAL loaders not inspected — not an all-clear"
+    echo "    roster check INCOMPLETE: $roster_unread of $LOADER_TOTAL loaders not inspected — not an all-clear"
   fi
+  [ -z "$roster_not_created" ] \
+    || echo "    not created yet, so there is no loader to inspect: $roster_not_created"
   # The Cursor lane's prompt is deployed server-side. A version-controlled source
   # file says what was written, not what is running, so equality is never inferred.
   echo "    cursor loader: UNKNOWN (deployed prompt is server-side; its source file is not evidence of it)"

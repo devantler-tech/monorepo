@@ -159,15 +159,15 @@ Full rules: [trust and untrusted input](.claude/guides/trust-and-input.md) and t
 
 ### Cadence & focus
 **This table IS the deployment's dispatch schedule** — the concrete cadence the plugin's
-`cadenceFrom: AGENTS.md#Cadence` pointer resolves to (the plugin deliberately carries no fixed
-schedule; see *Agentic engineering plugin contract*). Times are the agent host's local time. The
+`cadenceFrom: AGENTS.md#Cadence` pointer resolves to. Times are the agent host's local time. Each
+lane's engineer has two entries: its first, and `agentic-engineer-2` half an hour later. The
 runtime-local scheduler entries are **thin pointers that must match this table**; when the two
 disagree, the scheduler is the defect — reconcile it there, per *Agent definition locations*.
 
 | Lane | Agentic Engineer | Agent Improver |
 |---|---|---|
-| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 06:00, 12:00, 18:00 |
-| **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 03:00, 09:00, 15:00, 21:00 |
+| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:20` and `:50` | 00:00, 06:00, 12:00, 18:00 |
+| **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` and `:40` | 03:00, 09:00, 15:00, 21:00 |
 
 Work [*The work-selection ladder*](#the-work-selection-ladder--one-ordering-checked-top-down-every-run)
 top-down every run and **keep going while actionable work remains** — the floor is at least one
@@ -199,8 +199,8 @@ UNKNOWN, which means not permitted). Hotfixes and filing issues are exempt. Full
 - Memory has several writers: re-read before writing and append. A whole-file rewrite goes only through
   `.claude/scripts/memory-rewrite.sh`, after `.claude/scripts/memory-backup.sh`.
 - Sensitive notes go only to the private, out-of-repository stores (Claude's project memory under
-  `~/.claude/projects/`, Codex's `automations/<id>/memory.md`) — never to a `memory/` directory inside
-  a checkout. The end-of-run report is a per-run record, not a way to reach the maintainer.
+  `~/.claude/projects/`, Codex's `automations/<first entry>/memory.md`) — never a `memory/` directory
+  in a checkout. The end-of-run report is a per-run record, not a way to reach the maintainer.
 
 Store paths, ledgers and the sibling cross-read: [durable memory guide](.claude/guides/durable-memory.md).
 

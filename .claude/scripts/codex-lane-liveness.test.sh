@@ -502,6 +502,29 @@ run_check "$db" --automation lane-b
 expect_rc 2 "an inactive automation must be UNKNOWN, never NOT-PRODUCING"
 expect_out "not an ACTIVE automation" "the inactive refusal must name the reason"
 
+# --- a named automation the scheduler is not dispatching is NAMED on stdout (monorepo#4116) -------
+# Still UNKNOWN. The lane watch judges a lane entry by entry and must tell "nothing is dispatching
+# this automation" (not created yet, or not ACTIVE) from "a run that could not be judged": only the
+# second may hold back the outage of the lane's other entry. A program reads the line, so it is
+# asserted whole and on stdout alone.
+stdout_of() { bash "$SCRIPT" --store "$1" --sessions "$TMP/sessions" --now-ms "$NOW_MS" "${@:2}" 2>/dev/null || true; }
+expect_stdout() {
+  asserts=$(( asserts + 1 ))
+  [ "$3" = "$1" ] || note_fail "$2 (stdout was: $3)"
+}
+expect_stdout "  NOT-SCHEDULED  lane-b — the scheduler holds this automation, and it is not ACTIVE" \
+  "an automation that is not ACTIVE is named as not scheduled" "$(stdout_of "$db" --automation lane-b)"
+run_check "$db" --automation lane-c
+expect_rc 2 "an automation the store does not hold must be UNKNOWN, never a verdict"
+expect_stdout "  NOT-SCHEDULED  lane-c — the scheduler holds no automation with this id (not created yet, or removed)" \
+  "an automation the store does not hold is named as not scheduled" "$(stdout_of "$db" --automation lane-c)"
+expect_stdout "" "--quiet prints no NOT-SCHEDULED line" "$(stdout_of "$db" --quiet --automation lane-c)"
+# CONTROLS. An ACTIVE automation never carries the marker, whether it can be judged or not: lane-a
+# has no settled run at all, which is "could not judge" and must stay distinguishable.
+run_check "$db" --automation lane-a
+expect_rc 2 "control: an ACTIVE automation with no settled run is UNKNOWN"
+expect_out_not "NOT-SCHEDULED" "an ACTIVE automation that cannot be judged must not be named as not scheduled"
+
 # --- a run just OVER the pre-flight window is not a pre-flight stop -------------------------------
 # Whole-second truncation classified `N*1000 + 999` ms as exactly N seconds, so a run genuinely over
 # a threshold counted as under it. Both runs sit 999 ms over the pre-flight window, so the comparison

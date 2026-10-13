@@ -31,6 +31,13 @@ trap 'rm -rf "$FIX"' EXIT
 # The boundary tests below override this deliberately to prove exclusion works.
 export PORTFOLIO_PATHS="$FIX"
 
+# The fixtures model ONE engineer entry a lane, and a case that needs more names
+# them. The script's own default is the two entries each lane is deployed with
+# (monorepo#4116), which the fixtures do not hold, so the suite pins the one-entry
+# lane here and the deployed default has its own section in the drift tests.
+export CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant
+export CODEX_ENGINEER_ENTRIES=daily-ai-engineer
+
 # #3830: no runtime phrase means no runtime normalisation work. Instrument the
 # real redactor, retaining its output, rather than relying on wall-clock timing.
 mkdir -p "$FIX/injempty"
@@ -260,6 +267,7 @@ CODEX_AUTOMATION_STORE="$FIX/codex/codex-dev.db"
 if ! sqlite3 "$CODEX_AUTOMATION_STORE" <<'SQL'
 CREATE TABLE automations (
   id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
   rrule TEXT NOT NULL,
   last_run_at INTEGER
 );
@@ -610,17 +618,21 @@ echo
 echo "syntax"
 if bash -n "$TARGET" 2>/dev/null; then ok "parses"; else bad "parses" "bash -n failed"; fi
 if [ -x "$TARGET" ]; then ok "executable"; else bad "executable" "chmod +x missing"; fi
-if [ "$(grep -Fc "escaped_id=\${id//\\'/\\'\\'}" "$TARGET")" -eq 2 ]; then
-  ok "escapes both Codex automation ids before SQL interpolation"
+# Four queries read the Codex scheduler store by automation id: the recurrence
+# rule, the dispatch marker, whether the automation is ACTIVE, and whether an
+# entry exists at all (monorepo#4116).
+if [ "$(grep -Fc "escaped_id=\${id//\\'/\\'\\'}" "$TARGET")" -eq 4 ]; then
+  ok "escapes every Codex automation id before SQL interpolation"
 else
-  bad "escapes both Codex automation ids before SQL interpolation" \
-    "expected two defensive single-quote substitutions"
+  bad "escapes every Codex automation id before SQL interpolation" \
+    "expected four defensive single-quote substitutions"
 fi
-if [ "$(grep -Fc "WHERE id = '\$escaped_id';" "$TARGET")" -eq 2 ]; then
-  ok "uses escaped ids in both Codex scheduler queries"
+if [ "$(grep -Fc "WHERE id = '\$escaped_id';" "$TARGET")" -eq 4 ] \
+   && [ "$(grep -c "FROM automations WHERE id = " "$TARGET")" -eq 4 ]; then
+  ok "uses escaped ids in every Codex scheduler query"
 else
-  bad "uses escaped ids in both Codex scheduler queries" \
-    "expected both queries to interpolate escaped_id"
+  bad "uses escaped ids in every Codex scheduler query" \
+    "expected all four queries, and no other, to interpolate escaped_id"
 fi
 
 # ── 2. reliability: errors attributed to the right tool ───────────────────────
@@ -1142,6 +1154,336 @@ rm -r "$FIX/claude-sched/$ENTRY2"
 OUT=$(NOBASE --section drift)
 check "the fixture is back on its one-entry lane" "$OUT" \
   "claude engineer: expected=*@50 actual=*@50 MATCH"
+
+# ── a second Codex engineer automation (monorepo#4116) ────────────────────────
+# The Codex lane's second start an hour comes from a second automation, the way
+# the Claude lane's comes from a second scheduler entry. Its entries are read as
+# a set too: each entry's pointer must equal its own scheduler record, and the
+# cadence cell is compared with the union of their start minutes.
+CX2=daily-ai-engineer-half
+R10='RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0'
+R40='RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=40;BYSECOND=0'
+codex_entry2() { # $1 = the second automation's rule in its pointer, $2 = in the store ("" = no row)
+  mkdir -p "$FIX/codex/automations/$CX2"
+  printf 'rrule = "%s"\nupdated_at = 1785238559676\n' "$1" > "$FIX/codex/automations/$CX2/automation.toml"
+  sqlite3 "$CODEX_AUTOMATION_STORE" "DELETE FROM automations WHERE id = '$CX2';"
+  [ -z "${2:-}" ] || sqlite3 "$CODEX_AUTOMATION_STORE" \
+    "INSERT INTO automations (id, rrule, last_run_at) VALUES ('$CX2', '$2', 1785238561000);"
+}
+CX_TWO() { CODEX_ENGINEER_ENTRIES="daily-ai-engineer,$CX2" NOBASE "$@"; }
+codex_entry2 "$R40" "$R40"
+# CONTROL: an automation the lane does not name is not read, and a one-entry lane
+# keeps its exact output.
+OUT=$(NOBASE --section drift)
+check "an automation the lane does not name is not read" "$OUT" \
+  "codex engineer:  expected=*@10 actual=*@10 MATCH"
+nocheck "a one-entry Codex lane never prints an entries line" "$OUT" "entries: daily-ai-engineer"
+# Named, the second automation's start is part of the lane's schedule. The table
+# does not describe it yet: DRIFT, with each entry's own schedule beside it.
+OUT=$(CX_TWO --section drift)
+check "a second automation's start the table lacks is drift" "$OUT" \
+  "DRIFT: codex engineer schedule expected=*@10 actual=*@10,40"
+check "a two-automation lane prints each entry's schedule" "$OUT" \
+  "entries: daily-ai-engineer=*@10 $CX2=*@40"
+set_cadence_cell Codex 'Every hour at `:10` and `:40`'
+OUT=$(CX_TWO --section drift)
+check "two automations match a two-minute table cell" "$OUT" \
+  "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH"
+check "two automations an hour count as two slots an hour" "$OUT" \
+  "local engineer slots scheduled/day: 72"
+check "two staggered automations do not collide" "$OUT" \
+  "local simultaneous starts/day: 0"
+OUT=$(CODEX_ENGINEER_ENTRIES="$CX2,daily-ai-engineer" NOBASE --section drift)
+check "automation order does not read as drift" "$OUT" \
+  "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH"
+# Persistence needs EVERY automation's dispatch marker past the baseline, and the
+# lane's marker is the oldest of them.
+OUT=$(CODEX_ENGINEER_ENTRIES="daily-ai-engineer,$CX2" run --section drift)
+check "two automations that both dispatched after the baseline confirm persistence" "$OUT" \
+  "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH persistence=CONFIRMED marker=1785238560676 baseline=1785238559000"
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET last_run_at = 1785238558000 WHERE id = '$CX2';"
+OUT=$(CODEX_ENGINEER_ENTRIES="daily-ai-engineer,$CX2" run --section drift)
+check "an automation that has not dispatched since the baseline withholds persistence" "$OUT" \
+  "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH persistence=UNKNOWN (change marker did not advance"
+nocheck "the first automation's dispatch never confirms the lane alone" "$OUT" \
+  "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH persistence=CONFIRMED"
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET last_run_at = NULL WHERE id = '$CX2';"
+OUT=$(CODEX_ENGINEER_ENTRIES="daily-ai-engineer,$CX2" run --section drift)
+check "an automation without a dispatch marker withholds persistence" "$OUT" \
+  "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH persistence=UNKNOWN (change marker missing)"
+# NEGATIVE CONTROLS: a named automation that cannot be read leaves the lane
+# without a schedule. It is never read as the remaining automation alone.
+unreadable_cx_two() { # $1 = case label, $2 = the line expected
+  OUT=$(CX_TWO --section drift)
+  check "$1 is reported" "$OUT" "$2"
+  nocheck "$1 never reads as a schedule" "$OUT" "codex engineer:  expected="
+  nocheck "$1 never reads as the first automation's schedule drifting" "$OUT" \
+    "DRIFT: codex engineer schedule expected="
+  check "$1 suppresses the slot count" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
+}
+codex_entry2 "$R40" 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=45;BYSECOND=0'
+unreadable_cx_two "a second automation whose pointer and record disagree" \
+  "DRIFT: codex engineer entry $CX2 schedule pointer=*@40 scheduler=*@45"
+codex_entry2 "$R40" ""
+unreadable_cx_two "a second automation with a pointer and no record" \
+  "UNKNOWN: codex engineer entry $CX2 authoritative scheduler recurrence is missing or unsupported"
+# An automation that is not ACTIVE does not dispatch. Its stored rule still equals
+# the table, so reading the rule alone would report MATCH for a start that never
+# happens, which is how a switched-off second entry would go unseen.
+codex_entry2 "$R40" "$R40"
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET status = 'PAUSED' WHERE id = '$CX2';"
+unreadable_cx_two "a second automation that is not ACTIVE" \
+  "UNKNOWN: codex engineer entry $CX2 is not ACTIVE in the scheduler store"
+# The same holds for a lane of one automation, and for the improver: no MATCH.
+codex_entry2 "$R40" "$R40"
+set_cadence_cell Codex 'Every hour at `:10`'
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET status = 'PAUSED' WHERE id = 'daily-ai-engineer';"
+OUT=$(NOBASE --section drift)
+check "a one-automation lane that is not ACTIVE has no readable record" "$OUT" \
+  "UNKNOWN: codex engineer authoritative scheduler recurrence is missing or unsupported"
+nocheck "a one-automation lane that is not ACTIVE never reads MATCH" "$OUT" "codex engineer:  expected="
+check "a lane that is not ACTIVE suppresses the slot count" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET status = 'ACTIVE' WHERE id = 'daily-ai-engineer';"
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET status = 'PAUSED' WHERE id = 'agent-improver';"
+OUT=$(NOBASE --section drift)
+check "an improver automation that is not ACTIVE has no readable record" "$OUT" \
+  "UNKNOWN: codex improver authoritative scheduler recurrence is missing or unsupported"
+nocheck "an improver automation that is not ACTIVE never reads MATCH" "$OUT" "codex improver:  expected="
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET status = 'ACTIVE' WHERE id = 'agent-improver';"
+OUT=$(NOBASE --section drift)
+check "CONTROL: the same automations read MATCH again once ACTIVE" "$OUT" \
+  "codex engineer:  expected=*@10 actual=*@10 MATCH"
+set_cadence_cell Codex 'Every hour at `:10` and `:40`'
+codex_entry2 'RRULE:FREQ=HOURLY;INTERVAL=1' "$R40"
+unreadable_cx_two "a second automation with an incomplete rule" \
+  "UNKNOWN: codex engineer entry $CX2 recurrence rule is incomplete or unsupported"
+codex_entry2 "$R40" "$R40"
+mv "$FIX/codex/automations/$CX2/automation.toml" "$FIX/codex/automations/$CX2/automation.toml.hidden"
+unreadable_cx_two "a second automation with a record and no pointer" \
+  "UNKNOWN: codex engineer entry $CX2 schedule pointer missing"
+mv "$FIX/codex/automations/$CX2/automation.toml.hidden" "$FIX/codex/automations/$CX2/automation.toml"
+# Two entries of one lane starting in the same minute work one branch namespace at
+# once; the union would hide that as a single start.
+codex_entry2 "$R10" "$R10"
+unreadable_cx_two "a second automation on the first one's minute" \
+  "UNKNOWN: codex engineer entries daily-ai-engineer and $CX2 both start at minute 10"
+codex_entry2 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=40;BYSECOND=0' 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=40;BYSECOND=0'
+unreadable_cx_two "a second automation on other hours" \
+  "UNKNOWN: codex engineer entries cover different hours (daily-ai-engineer=*@10 $CX2=7,19@40)"
+codex_entry2 "$R40" "$R40"
+for bad_entries in "daily-ai-engineer,,$CX2" "daily-ai-engineer,Daily" "daily-ai-engineer,daily-ai-engineer" \
+                   "daily-ai-engineer,-x" "a,b,c,d,e" "daily-ai-engineer,"; do
+  OUT=$(CODEX_ENGINEER_ENTRIES="$bad_entries" NOBASE --section drift)
+  check "Codex entry list '$bad_entries' is unreadable" "$OUT" \
+    "UNKNOWN: codex engineer entry list is unreadable"
+  nocheck "Codex entry list '$bad_entries' never reads as a schedule" "$OUT" "codex engineer:  expected="
+  check "Codex entry list '$bad_entries' suppresses the slot count" "$OUT" \
+    "local engineer slots scheduled/day: UNKNOWN"
+done
+# Every loader the lane names is read by the content checks too.
+printf 'prompt = "Request a CodeRabbit review, then stop."\n' >> "$FIX/codex/automations/$CX2/automation.toml"
+OUT=$(CX_TWO --section drift)
+check "a second automation's loader that hard-codes a review lane is drift" "$OUT" \
+  "DRIFT: codex engineer entry $CX2 loader hard-codes review lanes (CodeRabbit)"
+OUT=$(NOBASE --section drift)
+nocheck "an unnamed automation's loader is not scanned" "$OUT" "entry $CX2 loader hard-codes review lanes"
+mv "$FIX/codex/automations/$CX2/automation.toml" "$FIX/codex/automations/$CX2/automation.toml.hidden"
+OUT=$(CX_TWO --section drift)
+check "a missing second automation loader is reported by name" "$OUT" \
+  "UNKNOWN: codex engineer entry $CX2 loader is missing or unreadable"
+check "a missing second automation loader makes the roster check incomplete" "$OUT" \
+  "roster check INCOMPLETE: 1 of 5 loaders not inspected"
+check "a missing second automation loader is listed as missing" "$OUT" \
+  "MISSING: $FIX/codex/automations/$CX2/automation.toml"
+rm -r "$FIX/codex/automations/$CX2"
+sqlite3 "$CODEX_AUTOMATION_STORE" "DELETE FROM automations WHERE id = '$CX2';"
+set_cadence_cell Codex 'Every hour at `:10`'
+OUT=$(NOBASE --section drift)
+check "the fixture is back on its one-automation lane" "$OUT" \
+  "codex engineer:  expected=*@10 actual=*@10 MATCH"
+
+# ── an entry that is not created yet (monorepo#4116) ──────────────────────────
+# The cadence table is changed first and each lane's second runtime entry is
+# created to match it afterwards, the Codex one possibly days later. In between
+# the script's default names an entry that has no pointer and no scheduler record.
+# That is reported as what it is: never a MATCH, never the drift of a lane whose
+# first entry is fine, and never a reason to lose the store or the stagger figures
+# for the entries that do exist.
+NC2=agentic-engineer-2
+DEPLOYED() { (unset CLAUDE_ENGINEER_ENTRIES CODEX_ENGINEER_ENTRIES; NOBASE "$@"); }
+set_cadence_cell Claude 'Every hour at `:20` and `:50`'
+set_cadence_cell Codex 'Every hour at `:10` and `:40`'
+OUT=$(DEPLOYED --section drift)
+check "the deployed default names the Claude lane's second entry" "$OUT" \
+  "UNKNOWN: claude engineer has an entry that is not created yet (no schedule pointer, no scheduler record): $NC2"
+check "the Claude entry that exists is still shown" "$OUT" \
+  "entries: daily-ai-assistant=*@50 $NC2=not-created"
+check "the deployed default names the Codex lane's second entry" "$OUT" \
+  "UNKNOWN: codex engineer has an entry that is not created yet (no schedule pointer, no scheduler record): $NC2"
+check "the Codex entry that exists is still shown" "$OUT" \
+  "entries: daily-ai-engineer=*@10 $NC2=not-created"
+nocheck "a Claude entry not created yet never reads MATCH" "$OUT" "claude engineer: expected="
+nocheck "a Codex entry not created yet never reads MATCH" "$OUT" "codex engineer:  expected="
+nocheck "a Claude entry not created yet is not the lane's drift" "$OUT" "DRIFT: claude engineer"
+nocheck "a Codex entry not created yet is not the lane's drift" "$OUT" "DRIFT: codex engineer"
+nocheck "an entry not created yet does not lose the Claude store" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+check "the Claude improver is still compared" "$OUT" \
+  "claude improver: expected=0,12@0 actual=0,12@0 MATCH"
+check "the Codex improver is still compared" "$OUT" \
+  "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
+check "the stagger figure counts the entries that exist" "$OUT" "local simultaneous starts/day: 0"
+check "the slot figure counts the entries that exist" "$OUT" "local engineer slots scheduled/day: 48"
+check "the figures say which entries they leave out" "$OUT" \
+  "^ both figures count the entries that exist; not created yet: claude $NC2; codex $NC2"
+check "the refusal count waits for the whole lane" "$OUT" \
+  "claude engineer dispatch refusals: UNKNOWN (claude engineer schedule unmeasured)"
+# An entry that is not created yet has no loader to inspect. It is named, and it
+# does not make the roster check incomplete for as long as the entry is outstanding.
+check "the loaders that exist still get their all-clear" "$OUT" \
+  "(no output above = no loader hard-codes the review-lane roster)"
+check "the entries without a loader are named below it" "$OUT" \
+  "not created yet, so there is no loader to inspect: claude engineer entry $NC2; codex engineer entry $NC2"
+nocheck "an entry not created yet does not make the roster check incomplete" "$OUT" \
+  "roster check INCOMPLETE"
+# ABLATION: a collision between two entries that DO exist still shows.
+set_codex_engineer_rule 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=50;BYSECOND=0'
+OUT=$(DEPLOYED --section drift)
+check "a collision among the entries that exist still shows" "$OUT" "local simultaneous starts/day: 24"
+check "a drifted first entry is visible beside the missing one" "$OUT" \
+  "entries: daily-ai-engineer=*@50 $NC2=not-created"
+# The entries that exist are still held to the table. A start the table does not
+# name is DRIFT at once: waiting for the outstanding entry would hide it.
+check "a drifted first entry is drift although the second is outstanding" "$OUT" \
+  "DRIFT: codex engineer entries that exist start outside the cadence table: expected=*@10,40 existing=*@50"
+nocheck "the Claude entry on its own minute is not drift beside it" "$OUT" \
+  "DRIFT: claude engineer"
+set_codex_engineer_rule "$R10"
+OUT=$(DEPLOYED --section drift)
+nocheck "an entry back on the table's minute is no longer drift" "$OUT" "start outside the cadence table"
+# A first entry that already covers both minutes must not turn the missing entry
+# into a MATCH: the lane names an entry the runtime does not hold.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) = "20,50 * * * *"' \
+  "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(DEPLOYED --section drift)
+check "a first entry covering both minutes does not stand in for the missing entry" "$OUT" \
+  "UNKNOWN: claude engineer has an entry that is not created yet (no schedule pointer, no scheduler record): $NC2"
+nocheck "a first entry covering both minutes never reads MATCH" "$OUT" "claude engineer: expected="
+cp "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+# The store is still discovered without an explicit path: it is asked only for
+# the entries that have a pointer on this host.
+mkdir -p "$FIX/claude-root/a/b"
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-root/a/b/scheduled-tasks.json"
+OUT=$(unset CLAUDE_ENGINEER_ENTRIES CODEX_ENGINEER_ENTRIES
+      CLAUDE_SCHEDULE_STORE_PATH='' CLAUDE_SCHEDULE_STORE_ROOT="$FIX/claude-root" NOBASE --section drift)
+nocheck "a store is discovered while an entry is not created yet" "$OUT" \
+  "MISSING: authoritative Claude scheduled-tasks store"
+check "a discovered store still reads the improver" "$OUT" \
+  "claude improver: expected=0,12@0 actual=0,12@0 MATCH"
+check "a discovered store still names the entry not created yet" "$OUT" \
+  "UNKNOWN: claude engineer has an entry that is not created yet (no schedule pointer, no scheduler record): $NC2"
+rm -r "$FIX/claude-root"
+# NEGATIVE CONTROLS: half an entry is a defect, not "not created yet". Each keeps
+# the wording it had before, so a lost pointer or a lost record is never excused.
+nc2_claude_record() { # $1 = enabled (true|false)
+  jq --arg id "$NC2" --arg file "$FIX/claude-sched/$NC2/SKILL.md" --argjson enabled "$1" '
+    .scheduledTasks += [{ "id": $id, "enabled": $enabled, "filePath": $file,
+                          "cronExpression": "20 * * * *",
+                          "lastRunAt": "2026-07-25T20:00:00.000Z" }]' \
+    "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+}
+nc2_claude_record true
+OUT=$(DEPLOYED --section drift)
+check "a Claude record without its pointer is a missing pointer" "$OUT" \
+  "UNKNOWN: claude engineer entry $NC2 schedule pointer missing"
+nocheck "a Claude record without its pointer is not 'not created yet'" "$OUT" \
+  "claude engineer has an entry that is not created yet"
+# Its loader is a loader that could not be inspected, and the roster check says so.
+check "a Claude record without its pointer leaves a loader uninspected" "$OUT" \
+  "UNKNOWN: claude engineer entry $NC2 loader is missing or unreadable"
+check "a Claude record without its pointer makes the roster check incomplete" "$OUT" \
+  "roster check INCOMPLETE: 1 of 6 loaders not inspected"
+nc2_claude_record false
+OUT=$(DEPLOYED --section drift)
+check "a switched-off Claude record without its pointer is a missing pointer" "$OUT" \
+  "UNKNOWN: claude engineer entry $NC2 schedule pointer missing"
+cp "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+mkdir -p "$FIX/claude-sched/$NC2"
+cp "$FIX/claude-sched/daily-ai-assistant/SKILL.md" "$FIX/claude-sched/$NC2/SKILL.md"
+OUT=$(DEPLOYED --section drift)
+check "a Claude pointer without its record is an unreadable record" "$OUT" \
+  "UNKNOWN: claude engineer entry $NC2 has no readable scheduler record"
+nocheck "a Claude pointer without its record is not 'not created yet'" "$OUT" \
+  "claude engineer has an entry that is not created yet"
+mkdir -p "$FIX/codex/automations/$NC2"
+printf 'rrule = "%s"\nupdated_at = 1785238559676\n' "$R40" > "$FIX/codex/automations/$NC2/automation.toml"
+OUT=$(DEPLOYED --section drift)
+check "a Codex pointer without its record is an unreadable record" "$OUT" \
+  "UNKNOWN: codex engineer entry $NC2 authoritative scheduler recurrence is missing or unsupported"
+nocheck "a Codex pointer without its record is not 'not created yet'" "$OUT" \
+  "codex engineer has an entry that is not created yet"
+mv "$FIX/codex/automations/$NC2/automation.toml" "$FIX/codex/automations/$NC2/automation.toml.hidden"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "INSERT INTO automations (id, rrule, last_run_at) VALUES ('$NC2', '$R40', 1785238561000);"
+OUT=$(DEPLOYED --section drift)
+check "a Codex record without its pointer is a missing pointer" "$OUT" \
+  "UNKNOWN: codex engineer entry $NC2 schedule pointer missing"
+nocheck "a Codex record without its pointer is not 'not created yet'" "$OUT" \
+  "codex engineer has an entry that is not created yet"
+# A store that cannot be read proves nothing about an entry: no "not created yet".
+sqlite3 "$CODEX_AUTOMATION_STORE" "DELETE FROM automations WHERE id = '$NC2';"
+mv "$CODEX_AUTOMATION_STORE" "$CODEX_AUTOMATION_STORE.hidden"
+OUT=$(DEPLOYED --section drift)
+nocheck "a missing Codex store never reads as 'not created yet'" "$OUT" \
+  "codex engineer has an entry that is not created yet"
+check "a missing Codex store is still reported as missing" "$OUT" \
+  "UNKNOWN: codex engineer authoritative scheduler store missing"
+mv "$CODEX_AUTOMATION_STORE.hidden" "$CODEX_AUTOMATION_STORE"
+# THE CLAUDE ENTRY IS CREATED, the Codex one is still outstanding: the Claude
+# lane is compared in full and the figures leave out only the Codex entry.
+nc2_claude_record true
+OUT=$(DEPLOYED --section drift)
+check "a created Claude second entry is compared" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH"
+check "a created Claude second entry is listed with its schedule" "$OUT" \
+  "entries: daily-ai-assistant=*@50 $NC2=*@20"
+check "the Codex entry is still named as not created" "$OUT" \
+  "UNKNOWN: codex engineer has an entry that is not created yet (no schedule pointer, no scheduler record): $NC2"
+check "the slot figure gains the created entry" "$OUT" "local engineer slots scheduled/day: 72"
+check "the figures leave out only the Codex entry" "$OUT" \
+  "^ both figures count the entries that exist; not created yet: codex $NC2"
+# BOTH CREATED: the deployed default reads two entries a lane and four starts an hour.
+mv "$FIX/codex/automations/$NC2/automation.toml.hidden" "$FIX/codex/automations/$NC2/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "INSERT INTO automations (id, rrule, last_run_at) VALUES ('$NC2', '$R40', 1785238561000);"
+OUT=$(DEPLOYED --section drift)
+check "the deployed Claude lane matches its two-minute cell" "$OUT" \
+  "claude engineer: expected=*@20,50 actual=*@20,50 MATCH"
+check "the deployed Codex lane matches its two-minute cell" "$OUT" \
+  "codex engineer:  expected=*@10,40 actual=*@10,40 MATCH"
+check "the deployed Codex lane lists both automations" "$OUT" \
+  "entries: daily-ai-engineer=*@10 $NC2=*@40"
+check "four engineer starts an hour are 96 slots a day" "$OUT" "local engineer slots scheduled/day: 96"
+check "the four engineer starts and the improvers do not collide" "$OUT" "local simultaneous starts/day: 0"
+nocheck "nothing is left out once every entry exists" "$OUT" "not created yet"
+# ONE HEALTHY AND ONE LOST ENTRY: an entry that existed and lost its record is
+# the lane's finding, and the entry that is left never stands for the lane.
+sqlite3 "$CODEX_AUTOMATION_STORE" "DELETE FROM automations WHERE id = '$NC2';"
+OUT=$(DEPLOYED --section drift)
+check "a Codex entry that lost its record is reported" "$OUT" \
+  "UNKNOWN: codex engineer entry $NC2 authoritative scheduler recurrence is missing or unsupported"
+nocheck "the remaining Codex entry never reads as the lane" "$OUT" "codex engineer:  expected="
+check "a lost entry suppresses the slot figure" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
+rm -r "$FIX/codex/automations/$NC2" "$FIX/claude-sched/$NC2"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+set_cadence_cell Claude 'Every hour at `:50`'
+set_cadence_cell Codex 'Every hour at `:10`'
+OUT=$(NOBASE --section drift)
+check "the fixture is back on its one-entry lanes" "$OUT" \
+  "claude engineer: expected=*@50 actual=*@50 MATCH"
+check "the fixture's Codex lane is back on one automation" "$OUT" \
+  "codex engineer:  expected=*@10 actual=*@10 MATCH"
 
 # Fail-closed is PRESERVED: an unreadable pointer still suppresses the derivations
 # that depend on it. Only the persistence proof was decoupled, never readability.
@@ -9545,10 +9887,11 @@ dhset_run() { # $1 = corpus; remaining args = env assignments
   env CLAUDE_PROJECTS_DIR="$corpus" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       DISPATCH_HEALTH=on "$@" bash "$TARGET" --since-days 3650 --section dispatch 2>&1
 }
-# NO-REGRESSION: with no entry list the section reads exactly as before.
+# NO-REGRESSION: a one-entry list (the suite's pinned lane) reads exactly as it
+# always did.
 OUT=$(dhset_run "$FIX/dh-set")
-check   "dispatch set: the default is the one entry"            "$OUT" 'dispatches of role "daily-ai-assistant" IN WINDOW BY RECORD: 1 '
-check   "dispatch set: by default a second entry is another role" "$OUT" 'other scheduled roles ....................: 2 '
+check   "dispatch set: a one-entry list counts the one entry"    "$OUT" 'dispatches of role "daily-ai-assistant" IN WINDOW BY RECORD: 1 '
+check   "dispatch set: an entry the list lacks is another role"  "$OUT" 'other scheduled roles ....................: 2 '
 nocheck "dispatch set: one entry prints no per-entry line"       "$OUT" 'by entry:'
 nocheck "dispatch set: one entry prints no per-entry note"       "$OUT" 'does not show that the entry did not run'
 # EFFECT: both entries are the lane's dispatches, and each is counted by name.
@@ -9567,6 +9910,17 @@ check   "dispatch set: an entry with no recognised run reads zero" "$OUT" 'runs 
 nocheck "dispatch set: a zero is never called an absence"   "$OUT" 'has no dispatch inside this window'
 check   "dispatch set: the zero carries its own caveat"     "$OUT" 'A 0 is a count of runs recognised here; it does not show that the entry did not run.'
 nocheck "dispatch set: the running entry is not named"     "$OUT" 'entry "daily-ai-assistant" has no dispatch'
+# THE DEPLOYED DEFAULT (monorepo#4116): with no list at all the role is the two
+# entries the lane is deployed with. Asked for with the suite's pin removed.
+OUT=$(unset CLAUDE_ENGINEER_ENTRIES; dhset_run "$FIX/dh-set")
+check   "dispatch set: the default is the lane's two entries" "$OUT" 'dispatches of role "daily-ai-assistant,agentic-engineer-2" IN WINDOW BY RECORD: 2 '
+check   "dispatch set: the default counts each entry"        "$OUT" 'runs recognised by entry: daily-ai-assistant=1 agentic-engineer-2=1'
+# Before the second entry is created it has no run to recognise. That reads as a
+# zero with its caveat, never as an absence and never as a second healthy entry.
+OUT=$(unset CLAUDE_ENGINEER_ENTRIES; dhset_run "$FIX/dh-set-one")
+check   "dispatch set: an entry not created yet reads zero by default" "$OUT" 'runs recognised by entry: daily-ai-assistant=1 agentic-engineer-2=0'
+check   "dispatch set: that zero carries its caveat"                  "$OUT" 'A 0 is a count of runs recognised here; it does not show that the entry did not run.'
+nocheck "dispatch set: that zero is never called an absence"          "$OUT" 'has no dispatch inside this window'
 # DH_ROLE still selects one role outright, whatever the lane's list says.
 OUT=$(dhset_run "$FIX/dh-set" CLAUDE_ENGINEER_ENTRIES=daily-ai-assistant,agentic-engineer-2 DH_ROLE=agentic-engineer-2)
 check   "dispatch set: DH_ROLE overrides the entry list"   "$OUT" 'dispatches of role "agentic-engineer-2" IN WINDOW BY RECORD: 1 '

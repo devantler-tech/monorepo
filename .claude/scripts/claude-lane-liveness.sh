@@ -46,12 +46,15 @@
 #   --task  judge only this scheduler entry, or up to four separated by commas: a lane whose
 #           engineer starts from more than one entry names them all (monorepo#4117). Each named
 #           entry gets its own line and the exit status covers exactly the named ones. A named
-#           entry that is missing or disabled makes the whole call UNKNOWN.
+#           entry that is missing or disabled makes the whole call UNKNOWN, and is named on a
+#           `NOT-SCHEDULED` line: the scheduler is not dispatching it, which is a different
+#           finding from a dispatch that could not be judged (monorepo#4116).
 #
 # Exit 0  every enabled task checked is dispatching and produced work on its most recent settled run
 #      1  NOT PRODUCING -- a dispatch produced no work, stalled on a tool call, or never happened
 #      2  UNKNOWN -- could not determine (no jq, absent/ambiguous store, absent projects root,
-#         unparsable record, or the newest dispatch still in flight)
+#         unparsable record, a named task the scheduler does not hold enabled, or the newest
+#         dispatch still in flight)
 #
 # Any OTHER non-zero status is an unexpected internal failure under `set -e` and also means UNKNOWN.
 # Only 0 and 1 are verdicts. Exit 2 is deliberately NOT exit 0: "I could not check" and "the lane is
@@ -82,7 +85,7 @@ RECOVERY="
   the expected slot and whether a session exists for the latest dispatch. Re-run this check once the
   newest expected dispatch has had time to settle."
 
-usage() { sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,57p' "$0" | sed 's/^# \{0,1\}//'; }
 
 die_unknown() {
   printf 'claude-lane-liveness: UNKNOWN -- %s\n' "$1" >&2
@@ -331,6 +334,22 @@ $task_id
     # a false positive on the one verdict this check makes, so it fails closed.
     ok=$(jq -r --arg t "$task_id" '[.scheduledTasks[]? | select(.id == $t and .enabled == true)] | length' "$STORE") \
       || die_unknown "could not look up task $task_id"
+    if [ "$ok" = "0" ]; then
+      # The scheduler holds no enabled entry of this id, so nothing is dispatching it. The call is
+      # still UNKNOWN, but the entry is named on stdout: a caller that judges a lane entry by entry
+      # (sibling-lane-watch.sh) must be able to tell "not dispatching by design or not created yet"
+      # from "dispatched and could not be judged". Without that, a lane whose second entry does not
+      # exist yet could never be called down, whatever its first entry did (monorepo#4116).
+      held=$(jq -r --arg t "$task_id" '[.scheduledTasks[]? | select(.id == $t)] | length' "$STORE") \
+        || die_unknown "could not look up task $task_id"
+      if [ "$QUIET" -eq 0 ]; then
+        if [ "$held" = "0" ]; then
+          printf '  NOT-SCHEDULED  %s -- the scheduler holds no entry with this id (not created yet, or removed)\n' "$task_id"
+        else
+          printf '  NOT-SCHEDULED  %s -- the scheduler holds this entry switched off\n' "$task_id"
+        fi
+      fi
+    fi
     [ "$ok" = "1" ] || die_unknown "task $task_id is not a single enabled task in $STORE"
     ids="${ids:+$ids
 }$task_id"

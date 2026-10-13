@@ -7,25 +7,59 @@
 
 ## Cadence & focus — how the schedule behaves
 
-The dispatch table itself is in [AGENTS.md → *Cadence & focus*](../../AGENTS.md#cadence--focus).
+The dispatch table itself is in [AGENTS.md → *Cadence & focus*](../../AGENTS.md#cadence--focus). The
+reviewed plugin carries no schedule of its own: its `cadenceFrom` pointer resolves to that table.
 
-**The stagger invariant IS the schedule: both machine-local Agentic Engineer lanes dispatch every
-hour, at distinct minute offsets — the current Codex adapter at `:10` and Claude adapter at
-`:50`; the eight Agent Improver starts remain at `:00`.** No two scheduled roles share an exact start
-time. Read your lane's row for your own slots, and treat runtime jitter plus long-running siblings as
-normal overlap rather than evidence that a slot is free.
+**The stagger invariant IS the schedule: both machine-local Agentic Engineer lanes dispatch twice an
+hour, at four distinct minute offsets — the Codex adapter at `:10` and `:40`, the Claude adapter at
+`:20` and `:50`; the eight Agent Improver starts remain at `:00`.** No two scheduled entries share an
+exact start time. Read your lane's row for your own slots, and treat runtime jitter plus long-running
+siblings as normal overlap rather than evidence that a slot is free.
 
-Both machine-local Agentic Engineer lanes are **scheduled** every hour — for what the Claude lane
-actually keeps, see *Scheduled is not delivered* below. These rows are deployment bindings, not
+Both machine-local Agentic Engineer lanes are **scheduled** every half hour — for what the Claude
+lane actually keeps, see *Scheduled is not delivered* below. These rows are deployment bindings, not
 provider requirements for the portable role. The Agent Improver
 runs 8×/day, alternating every three hours (00, 06, 12, 18 Claude; 03, 09, 15, 21 Codex), as
-additional `:00` starts; those slots no longer replace an Agentic Engineer tick. The improver cadence
-was doubled to use the weekly allowances (maintainer decision 2026-10-11, monorepo#4116). A
-30-minute engineer cadence was decided the same day and is not scheduled yet: it needs a second
-engineer entry per lane, and the schedule drift check, the liveness checks and the lane watch read
-one entry per lane (monorepo#4117). Weekly allowance use is re-read on 2026-10-18; a cap reached
-early is evidence to lower that lane's cadence, and nothing works around a cap. This table covers the two scheduled engineering
+additional `:00` starts; those slots no longer replace an Agentic Engineer tick. Both cadences were
+raised to use the weekly allowances (maintainer decisions 2026-10-11 and 2026-10-13,
+monorepo#4116). Weekly allowance use is re-read on 2026-10-18; a cap reached early is evidence to
+lower that lane's cadence, by changing this table first and the runtime entry to match, and nothing
+works around a cap. This table covers the two scheduled engineering
 roles only — spend stewardship has no dispatch slot of its own (see *Spend contract*).
+
+### Two engineer entries per lane
+
+Each lane's engineer starts from **two hourly scheduler entries**: its first entry
+(`daily-ai-assistant` on Claude at `:50`, `daily-ai-engineer` on Codex at `:10`) and
+`agentic-engineer-2` half an hour later (`:20` on Claude, `:40` on Codex). The second entry is the
+first one again with another start minute: the same prompt, working folder, model and settings, the
+same branch namespace, and the same memory (for Codex, see the
+[durable memory guide](durable-memory.md)).
+
+It is two entries and not one entry with two start minutes for two reasons:
+
+- **The Claude scheduler refuses a dispatch that would overlap the previous run of the same task.**
+  A run's median is 51 minutes (see below), so on one entry the start half an hour later would
+  usually be refused. A second entry has a slot of its own.
+- **The liveness and dispatch-rate checks read one start minute per entry.** Each entry is judged
+  against its own schedule and its own runs, so a dead or missing entry is seen as that entry.
+
+The Codex scheduler does not hold back an overlapping start, so one automation with two start
+minutes would also run twice an hour there. The maintainer chose a second automation on both
+runtimes, so the two lanes are built and checked the same way.
+
+**The table is changed first and the runtime entry is created to match it**, by a session on that
+runtime or by the maintainer, so a named entry can be outstanding for a while. Until an entry
+exists, and whenever one is switched off, every check says so. None reads it as producing, and none
+reads it as a lane outage:
+
+| Check | Both entries producing | One entry not producing | Second entry not created yet, or switched off |
+|---|---|---|---|
+| `sibling-lane-watch.sh --lane <sibling>` | `OK` | `OK` with `degraded=<id>`: reported, never paged. The lane is down only when every scheduled entry is | `OK` with `unscheduled=<id>` while the other produces. If the other is not producing, the outage counts and pages as it did with one entry |
+| `claude-lane-liveness.sh --task <id>`, `codex-lane-liveness.sh --automation <id>` | exit `0` | exit `1`, `NOT-PRODUCING <id>` | exit `2` with a `NOT-SCHEDULED <id>` line |
+| `claude-lane-liveness.sh` and `claude-dispatch-rate.sh` with `--task <id>,<id>` | one line per entry | the entry on its own line; liveness exits `1` | exit `2`: a set is never reduced to the entries that exist, so name the existing entry alone |
+| `agent-telemetry.sh --section drift` | `MATCH`, with an `entries:` line | not a liveness check. An entry that lost its record or pointer, or moved, makes the lane `UNKNOWN` or `DRIFT`, never the schedule of the entry that is left | not created: `UNKNOWN`, naming the entry as not created yet beside the schedules of the entries that exist; the two stagger figures count the existing entries and say which they leave out. Switched off: `UNKNOWN`, as for any entry without a readable record |
+| `agent-telemetry.sh --section dispatch` (off by default) | a count per entry | a count is not a verdict | `<id>=0`, with the note that a zero does not show the entry did not run |
 
 **Two properties of this schedule change how you plan a run.**
 ⚠️ **A sibling being mid-run is the NORMAL case — scan cross-lane on EVERY run, never at one special
@@ -35,8 +69,9 @@ the 7 days to 2026-07-28 (n=26 completed Claude dispatches): **median 51 min, p7
 longer than 60 minutes, max 377**. So a sibling lane is very often still working when you start.
 *Claim protocol* rule 4 records that claim arbitration does **not** work across lanes — each instance
 writes its own namespace, so both pushes succeed and both believe they won. Scan every registered namespace and open PR before claiming, always.
-**Same-lane overlap is expected, and it IS arbitrated.** With hourly spacing and 46% of measured
-Claude runs exceeding 60 minutes, your own lane's next dispatch often starts before you finish. That
+**Same-lane overlap is expected, and it IS arbitrated.** With half-hourly spacing across the lane's
+two entries and a measured median run of 51 minutes, your own lane's next dispatch usually starts
+before you finish. That
 case is safe by construction — same namespace, same deterministic branch name, and a non-forced push
 is refused (see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim
 branch. Therefore, same-lane task presence or post-start activity alone is never a global stand-down
@@ -49,8 +84,9 @@ break a sibling mid-flight; keep the fence scoped to that artifact or surface an
 invisible there. On the Claude lane, run
 `.claude/scripts/claude-task-live-runs.sh --task <scheduled task id>`: it lists the live session
 processes, leaves out your own, and attributes each of the others to its task from the opening
-marker of its transcript. A lane whose engineer runs on more than one scheduler entry passes every
-entry's id, separated by commas, because those entries work one branch namespace (monorepo#4117).
+marker of its transcript. An engineer run passes both of the lane's entries, separated by commas
+(`--task daily-ai-assistant,agentic-engineer-2`), because those entries work one branch namespace
+(monorepo#4117). It reads transcripts, so an entry that is not created yet has no run to list.
 Exit `1` prints one `LIVE` line per other run of the task. That is not a
 stand-down: it means the items the previous run recorded as its next steps are still being worked,
 so re-read a pull request's state immediately before you promote, queue or merge it, and do not
@@ -110,9 +146,10 @@ session for the task starts before the next slot, an open slot is never counted,
 UNKNOWN, never a rate. Measured with it for 2026-09-18T00Z → 2026-09-24T23Z: **165 of 166** engineer
 slots and **13 of 13** Improver slots dispatched, against 28 hours carrying a refusal record. So the
 one-in-five figure below describes its own August window, not a standing property of the lane.
-A lane whose engineer starts from more than one scheduler entry names them all: each entry is
+The lane's engineer starts from two scheduler entries, so name both: each entry is
 measured on its own schedule and printed on its own line, and the `DISPATCH-RATE-SET` line is the
-lane's figure. `claude-lane-liveness.sh --task` takes the same list.
+lane's figure. `claude-lane-liveness.sh --task` takes the same list. A named entry that does not
+exist yet makes either call exit `2`; until it exists, name the entry that does.
 Re-measure before relying on either.
 **So never time anything off "the next tick."** A carry-forward, a claim-expiry judgement, or a "the
 next run will collect this" decision is wrong whenever that tick is dropped. That was roughly one
