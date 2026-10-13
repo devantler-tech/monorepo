@@ -1095,6 +1095,10 @@ recheck_mutable_gates() {
   # Last, after everything above that can wait on a network or a snapshot: the desktop app's
   # marker (#4152) must still be what the manifest row says. Written, or given content,
   # after the row, it would be deleted unrecorded.
+  # This is the one place the comparison is made, by decision (#4155): no check can be
+  # atomic with the removal, so a later one only narrows the window. What stays open is an
+  # empty file appearing between here and the delete in a worktree idle past the reap age;
+  # the min-age, live-process and lock gates bound it as they bound every other gate here.
   if [ -n "$DESKTOP_MARKER_RECORDED" ]; then
     desktop_marker_read "$wt" \
       || { keep "$wt" "$DESKTOP_MARKER_NOTE, after the manifest row was written"; return 1; }
