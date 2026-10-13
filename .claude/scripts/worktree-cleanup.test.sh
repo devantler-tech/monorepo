@@ -5795,6 +5795,35 @@ SHIM
   rm -rf "$root"
 }
 
+t_salvage_keeps_submodule_work_the_main_checkout_only_claims_to_hold() {
+  # The main checkout's repository already has a branch at the carried commit but has lost
+  # one of the files that commit holds. The copy then sends nothing (the commit is "had"),
+  # so only a walk of everything the carried refs reach can see the hole.
+  local name="salvage KEEPs submodule work when the main checkout's repository lacks an object a ref of its own claims"
+  local root; root=$(make_repo)
+  carry_wt "$root" hollow || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/hollow" d="$root/repo/.git/modules/sub" out c blob obj
+  echo only-here > "$wt/sub/g" && git -C "$wt/sub" add g && git -C "$wt/sub" commit -qm local-only \
+    || { bad "$name" "FIXTURE: commit"; rm -rf "$root"; return; }
+  c=$(git -C "$wt/sub" rev-parse HEAD); blob=$(git -C "$wt/sub" rev-parse HEAD:g)
+  git --git-dir="$d" -c protocol.file.allow=always fetch -q --no-tags "$(git -C "$wt/sub" rev-parse --absolute-git-dir)" \
+      "$c:refs/heads/claims" >/dev/null 2>&1 \
+    || { bad "$name" "FIXTURE: fetch"; rm -rf "$root"; return; }
+  obj="$d/objects/$(printf '%s' "$blob" | cut -c1-2)/$(printf '%s' "$blob" | cut -c3-)"
+  [ -f "$obj" ] && rm -f "$obj" && ! git --git-dir="$d" cat-file -e "$blob" 2>/dev/null \
+    || { bad "$name" "FIXTURE: the file's object is not loose"; rm -rf "$root"; return; }
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1)
+  if grep -q "^KEEP .*hollow .*not salvaged: the work of modules/sub is not complete in the main checkout's repository for it" <<<"$out" \
+     && [ -d "$wt" ] && [ "$(cat "$wt/sub/g")" = only-here ] \
+     && ! grep -q 'reaped$' "$root/manifest.tsv" 2>/dev/null; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_salvage_keeps_a_submodule_owned_worktree_even_with_a_main_checkout_repository() {
   # A worktree registered to the submodule, inside the candidate: the existing guard keeps
   # it whatever could be carried, and the carry check refuses the repository too.
@@ -6480,6 +6509,7 @@ t_salvage_keeps_submodule_work_when_the_main_checkout_repository_borrows_objects
 t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_read_only
 t_salvage_keeps_submodule_work_when_the_copy_fails
 t_salvage_keeps_submodule_work_when_the_copy_does_not_verify
+t_salvage_keeps_submodule_work_the_main_checkout_only_claims_to_hold
 t_salvage_keeps_a_submodule_owned_worktree_even_with_a_main_checkout_repository
 t_salvage_keeps_a_pruned_submodule_worktree_registration
 t_salvage_keeps_an_embedded_repository_in_a_submodule

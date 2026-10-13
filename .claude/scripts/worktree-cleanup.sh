@@ -2673,8 +2673,10 @@ module_carry_verify() {
   [ "$(module_git "$durable" rev-parse --verify --quiet "$base/index^{tree}" 2>/dev/null)" = "$itree" ] \
     && [ "$(module_git "$durable" rev-parse --verify --quiet "$base/worktree^{tree}" 2>/dev/null)" = "$wtree" ] \
     || { SALVAGE_NOTE="$base trees do not verify in the main checkout's $label"; return 1; }
-  GIT_NO_LAZY_FETCH=1 module_git "$durable" rev-list --objects --quiet "${ids[@]}" \
-      --not --branches --remotes --tags > /dev/null 2>&1 \
+  # Everything the carried refs reach, with nothing left out: a branch, remote or tag of
+  # the receiving repository at a carried commit does not prove it holds what that commit
+  # reaches, and the copy sends nothing for a commit the receiver says it already has.
+  GIT_NO_LAZY_FETCH=1 module_git "$durable" rev-list --objects --quiet "${ids[@]}" > /dev/null 2>&1 \
     || { SALVAGE_NOTE="the work of $label is not complete in the main checkout's repository for it"; return 1; }
   return 0
 }
