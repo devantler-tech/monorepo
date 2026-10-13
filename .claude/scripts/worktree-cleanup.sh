@@ -52,6 +52,8 @@
 #           --force, and never removed by the rm -rf fallback either)
 #   ABORT - a caller-chosen root that is relative, a symlink, or holds the checkout being
 #           swept or the main worktree
+#   ABORT - a shared git directory that cannot be resolved (where the main checkout's
+#           submodule repositories live): unread is not the same as absent
 #   ABORT - on any infrastructure failure (worktree list, lsof — including a partial
 #           enumeration that exits nonzero — or a manifest write), and the multi-repo
 #           wrapper propagates that abort instead of reporting a successful sweep
@@ -84,6 +86,45 @@
 #                                   A clean, fully pushed worktree is reaped without salvage,
 #                                   but its index dies too, so this one ref is written for it
 #                                   as well and the manifest row names it (resolve-undo=<ref>)
+#   refs/salvaged/<id>/submodules - the record of each submodule whose work was carried (below),
+#                                   one tab-separated line each: its repository's path under
+#                                   the git directory, the path its checkout had inside the
+#                                   worktree, the repository that now holds the work, and
+#                                   the three objects; then a line per extra ref
+# SUBMODULE WORK. Work held inside a submodule is not in any of the refs above: a linked
+# worktree's submodule repository lives under its admin directory (modules/<name>) and the
+# removal deletes it. It is carried instead into the repository that outlives the worktree
+# for that submodule, the main checkout's own, under the SAME name, and the manifest row
+# gains one `submodule=<label>` field for each. <label> is that repository's path under the
+# git directory: modules/<name>, or modules/<a>/modules/<b> for a submodule of a submodule.
+# It follows the submodule's NAME, which is its path only by default, so it does not say
+# where the submodule is checked out. The repository itself is <git directory>/<label>:
+#   refs/salvaged/<id>/head       - the submodule's HEAD commit
+#   refs/salvaged/<id>/index      - a commit of its staged index, parent HEAD
+#   refs/salvaged/<id>/worktree   - a commit of its whole working tree, parent HEAD, taken as
+#                                   the parent's is (untracked files in, ignored files out)
+#   refs/salvaged/<id>/commit/<sha> - each commit a ref, reflog, ORIG_HEAD or FETCH_HEAD of it
+#                                   reaches that its origin does not advertise (tips only)
+#   refs/salvaged/<id>/object/<sha> - each tag it holds that its origin does not advertise
+# The copy is a local `git fetch` between the two directories: no network and never a push.
+# It is then read back from the receiving repository (each ref at the object sent, both
+# trees equal to the snapshot, nothing they reach missing) before the manifest names it,
+# and read back once more, with the parent's record, immediately before the removal. The
+# size cap counts what the copy adds to that repository: the snapshot's changed data and
+# every object the carried commits reach that it does not already hold. A submodule back
+# on its recorded commit whose repository alone holds such commits (nothing in the
+# parent's status) makes the worktree a salvage candidate in the same way, past the
+# salvage age. Which branch or tag held a commit is in the parent's
+# module-files tree (<label>/refs/..., packed-refs, logs/...).
+# Restore a submodule's work from the manifest row alone, with D=<git directory>/<label>
+# (the git directory is the main checkout's .git):
+#   git --git-dir="$D" --work-tree="$D" worktree add --detach <dir> refs/salvaged/<id>/head
+#   git -C <dir> read-tree refs/salvaged/<id>/index
+#   git -C <dir> restore --source=refs/salvaged/<id>/worktree --worktree -- .
+# That needs no checkout of the submodule anywhere. To work in the main checkout's own
+# checkout of it instead, it is the directory whose `git rev-parse --absolute-git-dir` is
+# $D (`git -C <main> submodule foreach --recursive 'git rev-parse --absolute-git-dir'`
+# lists them); the record's second column is the path it had inside the removed worktree.
 # Restore: `git worktree add --detach <path> refs/salvaged/<id>/head`, then
 # `git -C <path> read-tree refs/salvaged/<id>/index` for the staged index and
 # `git -C <path> restore --source=refs/salvaged/<id>/worktree --worktree -- .` for the working
@@ -94,8 +135,24 @@
 # Every other gate is unchanged, and salvage fails closed to the old KEEP:
 #   KEEP  - a salvage candidate holding any repository besides its own that the removal
 #           would cost something: an embedded repository even when ignored, or a submodule
-#           repository that is not pristine (module_repository_pristine: only what a clone
-#           of its remote holds, checked out clean inside the worktree)
+#           repository that is neither pristine (module_repository_pristine: only what a
+#           clone of its remote holds, checked out clean inside the worktree) nor one whose
+#           work can be carried as above
+#   KEEP  - submodule work with nowhere to go, or that cannot be carried whole: the main
+#           checkout has no repository for that submodule, or one that is a symbolic link,
+#           borrows its objects, is a partial clone, cannot be written, or names another
+#           origin than the submodule's; the submodule repository holds a stash or any ref
+#           outside branches and tags, a hook, a setting or exclude rule of its own, an
+#           operation in progress, a worktree of its own (even one whose directory is
+#           gone), resolve-undo stages, intent-to-add or conflicted index entries, or files
+#           its index hides from status; its checkout holds an embedded repository, or
+#           ignored files under its own agent worktree root (.claude/worktrees,
+#           .codex/worktrees); or it holds more than 50 commits and tags to carry, or its
+#           files and commits together would add more than the size cap
+#   KEEP  - carried work that no longer reads back from the receiving repository, or whose
+#           record in the parent changed, between the copy and the removal
+#   KEEP  - a worktree holding a worktree registered to one of its submodules, exactly as
+#           without salvage: that rule runs first and nothing here relaxes it
 #   KEEP  - untracked content git would record as an embedded repository (a gitlink
 #           only, not the files), or more than SALVAGE_MAX_KB of changed/untracked data
 #   KEEP  - any failure to build, write or verify a salvage ref, and any change to the
@@ -106,8 +163,10 @@
 # no user-space check can close that without a filesystem lock git does not take. Salvage
 # only runs on a worktree abandoned for the salvage age, so such a writer is not expected.
 # What salvage preserves is content: commits, tag objects, and working-tree and index
-# bytes, of the worktree's own repository. Nothing of a submodule repository is carried,
-# which is why one must be pristine.
+# bytes, of the worktree's own repository and of each submodule carried as above. A
+# submodule's ignored files are not kept, like the worktree's own, and neither is anything
+# the list above refuses, which is why such a submodule keeps the worktree.
+
 #
 # Submodule gitlink drift (` M applications/ksail`) and stray tool dirs (`?? .codex/`)
 # are NOT authored work — they are an artifact of the submodule checkout sitting at a
@@ -242,6 +301,16 @@ fi
 case "$TOPLEVEL/" in
   "$WT_ROOT"/*) die "worktree root $WT_ROOT holds the checkout being swept ($TOPLEVEL) — refusing" ;;
 esac
+# The repository's shared git directory, canonical: the main checkout's own submodule
+# repositories live under its modules/ and outlive every linked worktree (module_durable).
+# Not resolving it is a failed read of the repository, like the toplevel above, and not
+# proof that no such repository exists: reading it as "nowhere to carry to" would report
+# worktrees as stuck on work nobody looked for a home for. So it aborts.
+COMMON_DIR=$(git -C "$TOPLEVEL" rev-parse --git-common-dir 2>/dev/null) && [ -n "$COMMON_DIR" ] \
+  || die "cannot resolve the shared git directory of $TOPLEVEL"
+case "$COMMON_DIR" in /*) ;; *) COMMON_DIR="$TOPLEVEL/$COMMON_DIR" ;; esac
+COMMON_DIR=$(physical_path "$COMMON_DIR") && [ -n "$COMMON_DIR" ] \
+  || die "cannot resolve the shared git directory of $TOPLEVEL to a canonical path"
 
 # --- squash-merge evidence (#2678) ---------------------------------------------------
 # The portfolio squash-merges and deletes the merged branch, so a merged branch's own
@@ -864,7 +933,10 @@ recheck_mutable_gates() {
     # Salvaged: the work may be uncommitted, so compare it with the snapshot instead.
     # Anything written after the snapshot is not in the salvage refs and must not be lost.
     local now_tree now_index
-    if [ "$REAL_SUBMODULE_CHANGES" -gt 0 ]; then
+    # The submodule changes counted at the scan were expected and are held by the checks
+    # below (each submodule repository pristine, or carried exactly as it now is). Any other
+    # count means a submodule changed since.
+    if [ "$REAL_SUBMODULE_CHANGES" -ne "$SCAN_SUBMODULE_CHANGES" ]; then
       keep "$wt" "submodule work appeared after the salvage snapshot"; return 1
     fi
     snapshot_tree "$wt" || { keep "$wt" "cannot re-snapshot the working tree before removal ($SALVAGE_NOTE)"; return 1; }
@@ -899,6 +971,36 @@ recheck_mutable_gates() {
        || conversion_blocker "$wt"; then
       keep "$wt" "$SALVAGE_NOTE, after the salvage snapshot ($SALVAGE_REF)"; return 1
     fi
+    # The submodule repositories whose work was carried, re-read from the plan the check
+    # above just rebuilt: the same repositories, each with the same HEAD, index, working
+    # tree and commits as the copy the main checkout's repository now holds. A file edited
+    # in a submodule after the snapshot changes none of the parent's trees.
+    if ! module_carry_signature; then
+      keep "$wt" "cannot re-snapshot a submodule's work before removal ($SALVAGE_NOTE)"; return 1
+    fi
+    if [ "$CARRY_SIGNATURE" != "$SALVAGE_CARRIED" ]; then
+      keep "$wt" "a submodule's work changed after the salvage snapshot ($SALVAGE_REF)"; return 1
+    fi
+    # The source still matches what was sent. The copy is read again as well, from the
+    # repository that received it: nothing locks that repository, and a ref deleted or
+    # moved there since the copy was verified (a prune, a gc, another tool, a person) would
+    # leave the manifest naming work that the removal is about to make the last copy of.
+    local vi=0
+    while [ "$vi" -lt "${#CARRIED_DURABLE[@]}" ]; do
+      if ! module_carry_verify "${CARRIED_DURABLE[$vi]}" "${CARRIED_LABEL[$vi]}" "$SALVAGE_REF" \
+             "${CARRIED_ITREE[$vi]}" "${CARRIED_WTREE[$vi]}" "${CARRIED_SPECS[$vi]}"; then
+        keep "$wt" "a submodule's carried work no longer verifies before removal ($SALVAGE_NOTE)"; return 1
+      fi
+      vi=$((vi + 1))
+    done
+    # And the parent's record of what went where: the ref still at the blob written (its id
+    # is its bytes), and the blob still in the object store.
+    if [ -n "$SALVAGE_CARRIED" ]; then
+      if [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$SALVAGE_REF/submodules" 2>/dev/null)" != "$SALVAGE_CARRIED_BLOB" ] \
+         || ! git -C "$TOPLEVEL" cat-file -e "$SALVAGE_CARRIED_BLOB" 2>/dev/null; then
+        keep "$wt" "the record of the carried submodule work changed before removal ($SALVAGE_REF/submodules)"; return 1
+      fi
+    fi
     # Last of all, and purely local: the submodule repositories' files against what they
     # were before the snapshot.
     local now_fp
@@ -922,9 +1024,10 @@ recheck_mutable_gates() {
     fi
   elif [ -n "$salvage_reason" ]; then
     # Salvage candidate before its snapshot: its changes are expected and are about to be
-    # preserved, but not work in a submodule, which salvage cannot capture.
-    if [ "$REAL_SUBMODULE_CHANGES" -gt 0 ]; then
-      keep "$wt" "submodule work appeared during the sweep (cannot be salvaged)"; return 1
+    # preserved. So are the submodule changes the scan counted, which the salvage blockers
+    # judge next (carried, or kept); more of them than that is work that arrived since.
+    if [ "$REAL_SUBMODULE_CHANGES" -gt "$SCAN_SUBMODULE_CHANGES" ]; then
+      keep "$wt" "submodule work appeared during the sweep"; return 1
     fi
     # The salvage age is measured from the newest work, and new work since the initial
     # scan resets it: never salvage-and-remove a worktree someone is using again.
@@ -1045,8 +1148,10 @@ porcelain_status() {
 count_real_changes() {
   local wt=$1 status=$2 line code path sub_status sub_sha sub_unpushed sub_gitdir sub_rc
   REAL_CHANGES=0
-  # The subset of REAL_CHANGES held in a submodule. Salvage cannot preserve those: a
-  # linked worktree's submodule repository lives in its admin dir and dies with it.
+  # The subset of REAL_CHANGES held in a submodule. A linked worktree's submodule repository
+  # lives in its admin dir and dies with it, so the parent's salvage refs cannot hold them;
+  # salvage carries them to the main checkout's repository for that submodule when there is
+  # one (module_carry_plan), and keeps the worktree when there is not.
   REAL_SUBMODULE_CHANGES=0
   # The subset of those whose evidence could not be read (a failed GitHub query). A later
   # sweep may prove them spent, so they keep the worktree without marking it stuck.
@@ -1111,9 +1216,9 @@ count_real_changes() {
           # .git/worktrees/<id>/modules/..., which `worktree remove` deletes — so the ref
           # died with the thing it was meant to outlive — and because this function also
           # runs in dry-run, it made "report only" mutate the repository.
-          # There is no durable place to preserve a linked worktree's submodule object
-          # from here, so the exposure is documented instead of hidden behind an
-          # ineffective write.
+          # Nothing is written from here, so the exposure is documented instead of hidden
+          # behind an ineffective write. (Salvage does have a durable place, the main
+          # checkout's repository for the same submodule, and writes there in apply only.)
         else
           REAL_CHANGES=$((REAL_CHANGES+1))
         fi
@@ -1194,29 +1299,9 @@ file_changed() {
 # moves only with someone's git activity in that worktree (#3642). Non-zero on a read
 # failure (the caller then keeps).
 work_age_h() {
-  local wt=$1 admin list p d m newest=0 unreadable=0
+  local wt=$1 admin list p m newest=0 unreadable=0
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
-  list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
-  # Plumbing diff-index, never porcelain `git diff`: the porcelain refreshes and rewrites
-  # the index whatever GIT_OPTIONAL_LOCKS says, so every sweep would restart the age it is
-  # measuring. Without that refresh a stat-only change is listed too, which can only make a
-  # tree look newer, never older.
-  if ! { git -C "$wt" diff-index -z --name-only HEAD && git -C "$wt" ls-files -z -o --exclude-standard; } \
-       > "$list" 2>/dev/null; then
-    rm -f "$list"; return 1
-  fi
-  while IFS= read -r -d '' p; do
-    # A deleted path has no mtime; its nearest surviving ancestor changed when it went.
-    # The parent alone is not enough: `mv a/old a/new` leaves no `a/old`, and the moved
-    # children keep their old times, so only `a` records the rename. A path (or ancestor)
-    # that exists but cannot be read is a failure, never an old path.
-    d="$wt/$p"
-    until [ -e "$d" ] || [ -L "$d" ]; do d=$(dirname "$d"); done
-    m=$(file_changed "$d") || { unreadable=1; break; }
-    [ "$m" -gt "$newest" ] && newest=$m
-  done < "$list"
-  rm -f "$list"
-  [ "$unreadable" -eq 0 ] || return 1
+  newest=$(changed_paths_newest "$wt") || return 1
   for p in "$admin/index" "$admin/logs/HEAD"; do
     [ -e "$p" ] || continue
     m=$(file_changed "$p") || return 1
@@ -1241,9 +1326,80 @@ work_age_h() {
     rm -f "$list"
     # 2 again: a submodule repository file that could not be read was not examined.
     [ "$unreadable" -eq 0 ] || return 2
+    # Salvage also carries a submodule's uncommitted work (module_carry_plan), and editing a
+    # file in a submodule's checkout touches none of its repository's files. So each
+    # checkout's own changed and untracked paths count, like the worktree's above.
+    local wt_real
+    wt_real=$(physical_path "$wt") || return 1
+    m=$(module_checkouts_newest "$admin/modules" "$wt_real") || return 2
+    [ "$m" -gt "$newest" ] && newest=$m
   fi
   [ "$newest" -gt 0 ] || { echo 999999; return 0; }
   echo $(( (now - newest) / 3600 ))
+}
+
+# module_checkouts_newest <modules-dir> <worktree-realpath> -> prints the newest change time
+# (changed_paths_newest) among the checkouts of the submodule repositories under a modules/
+# directory; 0 when none has a changed path. Repositories are found from the top down, as
+# module_state_files finds them: a directory holding a HEAD or an objects entry is one, and
+# its own modules/ is walked the same way. One with no checkout inside the worktree
+# (module_checkout) has no working tree to age. Non-zero when something cannot be listed, a
+# checkout that exists cannot be resolved, or its changed paths cannot be read.
+module_checkouts_newest() {
+  local dir=$1 wt_real=$2 entry m rc newest=0
+  dir_listable "$dir" || return 1
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    if [ -L "$entry" ] || [ ! -d "$entry" ]; then continue; fi
+    dir_listable "$entry" || return 1
+    if [ -e "$entry/HEAD" ] || [ -L "$entry/HEAD" ] || [ -e "$entry/objects" ] || [ -L "$entry/objects" ]; then
+      module_checkout "$entry" "$wt_real"; rc=$?
+      case "$rc" in
+        0) m=$(changed_paths_newest "$MODULE_CHECKOUT") || return 1
+           [ "$m" -le "$newest" ] || newest=$m ;;
+        1) ;;
+        *) return 1 ;;
+      esac
+      if [ -d "$entry/modules" ] && [ ! -L "$entry/modules" ]; then
+        m=$(module_checkouts_newest "$entry/modules" "$wt_real") || return 1
+        [ "$m" -le "$newest" ] || newest=$m
+      fi
+    else
+      m=$(module_checkouts_newest "$entry" "$wt_real") || return 1
+      [ "$m" -le "$newest" ] || newest=$m
+    fi
+  done
+  printf '%s\n' "$newest"
+}
+
+
+# changed_paths_newest <checkout> -> prints the newest change time (file_changed) among the
+# checkout's staged, modified and untracked (non-ignored) paths; 0 when it has none.
+# Non-zero on a read failure.
+changed_paths_newest() {
+  local wt=$1 list p d m newest=0 unreadable=0
+  list=$(mktemp "${TMPDIR:-/tmp}/wt-salvage-age.XXXXXX") || return 1
+  # Plumbing diff-index, never porcelain `git diff`: the porcelain refreshes and rewrites
+  # the index whatever GIT_OPTIONAL_LOCKS says, so every sweep would restart the age it is
+  # measuring. Without that refresh a stat-only change is listed too, which can only make a
+  # tree look newer, never older.
+  if ! { git -C "$wt" diff-index -z --name-only HEAD && git -C "$wt" ls-files -z -o --exclude-standard; } \
+       > "$list" 2>/dev/null; then
+    rm -f "$list"; return 1
+  fi
+  while IFS= read -r -d '' p; do
+    # A deleted path has no mtime; its nearest surviving ancestor changed when it went.
+    # The parent alone is not enough: `mv a/old a/new` leaves no `a/old`, and the moved
+    # children keep their old times, so only `a` records the rename. A path (or ancestor)
+    # that exists but cannot be read is a failure, never an old path.
+    d="$wt/$p"
+    until [ -e "$d" ] || [ -L "$d" ]; do d=$(dirname "$d"); done
+    m=$(file_changed "$d") || { unreadable=1; break; }
+    [ "$m" -gt "$newest" ] && newest=$m
+  done < "$list"
+  rm -f "$list"
+  [ "$unreadable" -eq 0 ] || return 1
+  printf '%s\n' "$newest"
 }
 
 # salvage_blocker <worktree> -> 0 and SALVAGE_NOTE set when the tree must NOT be salvaged;
@@ -1276,9 +1432,30 @@ salvage_blocker() {
     || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
   sz=$(module_files_kb "$admin_dir") || { REMOTE_MODULE_FAILED=1; SALVAGE_NOTE="cannot list or size the submodule repositories' files"; return 0; }
   total_kb=$((total_kb + sz))
+  # So does the changed and untracked data of each submodule whose work is carried
+  # (module_carry_plan summed it while nested_repository_blocker ran, above).
+  total_kb=$((total_kb + MODULE_CARRY_KB))
   if [ "$total_kb" -gt "$SALVAGE_MAX_KB" ]; then
     SALVAGE_NOTE="more than ${SALVAGE_MAX_KB} KB of changed or untracked data to salvage"; return 0
   fi
+  changed_data_kb "$wt" "$total_kb" || return 0
+  # The snapshot must record exactly HEAD's gitlinks (snapshot_tree refuses otherwise), so
+  # check the same thing read-only here and dry-run cannot promise a salvage apply refuses.
+  gitlink_blocker "$wt" && return 0
+  worktree_state_blocker "$wt" && return 0
+  conversion_blocker "$wt" && return 0
+  return 1
+}
+
+# changed_data_kb <checkout> <kb-so-far> -> sets CHANGED_KB to <kb-so-far> plus the size of
+# the checkout's changed, untracked and staged data, the bytes a snapshot of it makes
+# permanent. Non-zero, with SALVAGE_NOTE, when that passes SALVAGE_MAX_KB, when an untracked
+# path is an embedded repository, or on any read failure. Read-only. Used for the worktree
+# and for each submodule checkout whose work is carried.
+CHANGED_KB=0
+changed_data_kb() {
+  local wt=$1 total_kb=$2 list rc f sz
+  CHANGED_KB=0
   # NUL-delimited: the default output C-quotes unusual names, which would hide them from
   # both the embedded-repository test and the size sum. tr keeps NULs out of $( ).
   # Untracked tool noise is sized as the snapshot takes it: not at all (salvage_pathspec).
@@ -1286,19 +1463,19 @@ salvage_blocker() {
   list=$( { git -C "$wt" ls-files -z -m \
             && git -C "$wt" ls-files -z -o --exclude-standard -- "${SALVAGE_PATHSPEC[@]}"; } \
           2>/dev/null | tr '\0' '\n'); rc=$?
-  if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot list changed files for salvage"; return 0; fi
+  if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot list changed files for salvage"; return 1; fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in
-      */) SALVAGE_NOTE="untracked embedded repository ($f) cannot be salvaged"; return 0 ;;
+      */) SALVAGE_NOTE="untracked embedded repository ($f) cannot be salvaged"; return 1 ;;
     esac
     [ -f "$wt/$f" ] || continue          # a deletion or a directory holds no bytes here
-    sz=$(wc -c < "$wt/$f" 2>/dev/null) || { SALVAGE_NOTE="cannot size $f for salvage"; return 0; }
+    sz=$(wc -c < "$wt/$f" 2>/dev/null) || { SALVAGE_NOTE="cannot size $f for salvage"; return 1; }
     sz=$(printf '%s' "$sz" | tr -d ' ')
     total_kb=$((total_kb + (sz + 1023) / 1024))
     if [ "$total_kb" -gt "$SALVAGE_MAX_KB" ]; then
       SALVAGE_NOTE="more than ${SALVAGE_MAX_KB} KB of changed or untracked data to salvage"
-      return 0
+      return 1
     fi
   done <<< "$list"
   # The STAGED index is salvaged too (refs/salvaged/<id>/index), and `ls-files -m -o`
@@ -1307,29 +1484,25 @@ salvage_blocker() {
   # staged-only addition cannot slip under the cap and be made permanent by a salvage ref.
   # --raw -z alternates a `:modes shas status` field with its path field.
   list=$(git -C "$wt" diff --cached --raw --no-renames --no-abbrev -z 2>/dev/null | tr '\0' '\n'); rc=$?
-  if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot list staged changes for salvage"; return 0; fi
+  if [ "$rc" -ne 0 ]; then SALVAGE_NOTE="cannot list staged changes for salvage"; return 1; fi
   local meta newmode newsha
   while IFS= read -r meta; do
     [ -n "$meta" ] || continue
-    IFS= read -r f || { SALVAGE_NOTE="cannot parse staged changes for salvage"; return 0; }
+    IFS= read -r f || { SALVAGE_NOTE="cannot parse staged changes for salvage"; return 1; }
     # meta: `:oldmode newmode oldsha newsha status`
     # shellcheck disable=SC2086  # split the space-separated metadata field on purpose
     set -- $meta
     newmode=$2; newsha=$4
     case "$newmode" in 000000|160000) continue ;; esac   # a deletion, or a gitlink (no bytes here)
-    sz=$(git -C "$wt" cat-file -s "$newsha" 2>/dev/null) || { SALVAGE_NOTE="cannot size staged $f for salvage"; return 0; }
+    sz=$(git -C "$wt" cat-file -s "$newsha" 2>/dev/null) || { SALVAGE_NOTE="cannot size staged $f for salvage"; return 1; }
     total_kb=$((total_kb + (sz + 1023) / 1024))
     if [ "$total_kb" -gt "$SALVAGE_MAX_KB" ]; then
       SALVAGE_NOTE="more than ${SALVAGE_MAX_KB} KB of changed or untracked data to salvage"
-      return 0
+      return 1
     fi
   done <<< "$list"
-  # The snapshot must record exactly HEAD's gitlinks (snapshot_tree refuses otherwise), so
-  # check the same thing read-only here and dry-run cannot promise a salvage apply refuses.
-  gitlink_blocker "$wt" && return 0
-  worktree_state_blocker "$wt" && return 0
-  conversion_blocker "$wt" && return 0
-  return 1
+  CHANGED_KB=$total_kb
+  return 0
 }
 
 # resolve_undo_entries <worktree> <file> -> writes one NUL-terminated
@@ -1842,12 +2015,20 @@ module_checkout() {
 # submodule repository is pristine (see above); 1 with MODULE_NOTE saying what is not. Any
 # read failure is a 1. On success the checkout is added to VERIFIED_CHECKOUTS. <admin> is
 # the worktree's admin directory, which only names its own submodules' repositories in a note.
+# A fourth argument `carry` asks the other question (module_tree_pristine asks it only of a
+# repository that is not pristine, and only when module_durable found where its work can
+# go): can everything in it that is not pristine be CARRIED? Then the checks that find
+# work no longer fail; they note it. Uncommitted and untracked files in the checkout, a
+# commit or tag the remote does not advertise, and a drafted commit message are carried or
+# kept by their bytes (module_carry_plan, module_files_tree). Every check about the
+# repository's shape, its configuration and what status can see still fails as before.
 MODULE_NOTE=""
 VERIFIED_CHECKOUTS=""
 MODULE_LOG_IDS=""
 MODULE_PACKED_IDS=""
 module_repository_pristine() {
-  local g=$1 wt_real=$2 entry name co out ids rc line
+  local g=$1 wt_real=$2 entry name co out ids rc line carry=0 carry_ids=""
+  [ "${4:-}" != carry ] || carry=1
   MODULE_NOTE=""
   MODULE_LOG_IDS=""
   MODULE_PACKED_IDS=""
@@ -1925,7 +2106,7 @@ module_repository_pristine() {
   co=$MODULE_CHECKOUT
   out=$(git -C "$co" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
     || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its checkout's status cannot be read"; return 1; }
-  if [ -n "$out" ]; then MODULE_NOTE="its checkout holds changes"; return 1; fi
+  if [ -n "$out" ] && [ "$carry" -eq 0 ]; then MODULE_NOTE="its checkout holds changes"; return 1; fi
   out=$(git -C "$co" ls-files -v 2>/dev/null) || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its index flags cannot be read"; return 1; }
   if grep -q '^[a-zS]' <<< "$out"; then
     MODULE_NOTE="its index hides files from status (assume-unchanged or skip-worktree)"; return 1
@@ -1935,7 +2116,9 @@ module_repository_pristine() {
   checkout_matches_index "$co"; rc=$?
   case "$rc" in
     0) ;;
-    1) MODULE_NOTE="a tracked file in its checkout differs from the index"; return 1 ;;
+    # Carried: the snapshot hashes every file afresh (snapshot_tree starts from an index
+    # with no file times in it), so an edit status cannot see is in the tree it records.
+    1) [ "$carry" -eq 1 ] || { MODULE_NOTE="a tracked file in its checkout differs from the index"; return 1; } ;;
     *) REMOTE_MODULE_FAILED=1; MODULE_NOTE="its checkout cannot be compared with its index"; return 1 ;;
   esac
   # A nested submodule that was never initialised is a plain directory to git: status calls
@@ -2084,13 +2267,16 @@ module_repository_pristine() {
     # shellcheck disable=SC2086  # one sha per word
     out=$(module_git "$g" rev-list --no-walk $ids --not --remotes 2>/dev/null) \
       || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its ORIG_HEAD or FETCH_HEAD commits cannot be checked"; return 1; }
-    if [ -n "$out" ]; then MODULE_NOTE="its ORIG_HEAD or FETCH_HEAD names a commit its remote lacks"; return 1; fi
+    if [ -n "$out" ] && [ "$carry" -eq 0 ]; then MODULE_NOTE="its ORIG_HEAD or FETCH_HEAD names a commit its remote lacks"; return 1; fi
+    # Carried: handed to the remote comparison in 8 by name, like the reflogs' commits.
+    carry_ids=$ids
   fi
   # 7. A COMMIT_EDITMSG is the message of a commit already made, not a draft.
   module_commit_editmsg_spent "$g"; rc=$?
   case "$rc" in
     0) ;;
-    1) MODULE_NOTE="its COMMIT_EDITMSG is not the message of a commit it made"; return 1 ;;
+    # Carried: a draft is kept by its bytes with the repository's other files (module_files_tree).
+    1) [ "$carry" -eq 1 ] || { MODULE_NOTE="its COMMIT_EDITMSG is not the message of a commit it made"; return 1; } ;;
     *) REMOTE_MODULE_FAILED=1; MODULE_NOTE="its COMMIT_EDITMSG cannot be compared with its commits"; return 1 ;;
   esac
   # 8. Every commit a ref or reflog reaches, and every tag, is held by the remote as it
@@ -2102,13 +2288,19 @@ module_repository_pristine() {
     1) MODULE_NOTE="it names no origin"; return 1 ;;
     *) MODULE_NOTE="its remote cannot be read"; return 1 ;;
   esac
-  module_held_by_remote "$g"; rc=$?
-  case "$rc" in
-    0) ;;
-    1) return 1 ;;
-    *) REMOTE_MODULE_FAILED=1
-       MODULE_NOTE="cannot compare it with what its remote advertises"; return 1 ;;
-  esac
+  if [ "$carry" -eq 1 ]; then
+    # Nothing is asked of GitHub here: a commit or tag origin does not advertise is carried,
+    # whether or not origin would turn out to hold it some other way.
+    module_carry_plan "$g" "$co" "${g#"$3"/}" "$carry_ids" "${co#"$wt_real"/}" || return 1
+  else
+    module_held_by_remote "$g"; rc=$?
+    case "$rc" in
+      0) ;;
+      1) return 1 ;;
+      *) REMOTE_MODULE_FAILED=1
+         MODULE_NOTE="cannot compare it with what its remote advertises"; return 1 ;;
+    esac
+  fi
   VERIFIED_CHECKOUTS="$VERIFIED_CHECKOUTS$co"$'\n'
   # 9. Its own submodules' repositories, by the same rule.
   if [ -d "$g/modules" ]; then
@@ -2132,7 +2324,25 @@ module_tree_pristine() {
       MODULE_NOTE="$label is not a submodule repository"; return 1
     fi
     if [ -e "$entry/HEAD" ] || [ -L "$entry/HEAD" ] || [ -e "$entry/objects" ] || [ -L "$entry/objects" ]; then
-      module_repository_pristine "$entry" "$wt_real" "$admin" || { MODULE_NOTE="$label: $MODULE_NOTE"; return 1; }
+      local unknown_before=$REMOTE_MODULE_FAILED pristine_note durable_rc
+      if ! module_repository_pristine "$entry" "$wt_real" "$admin"; then
+        # Not pristine. Its work can still be carried when the main checkout holds a
+        # repository for the same submodule (module_durable). Where there is none, this is
+        # the KEEP it always was, with the reason the pristine check gave.
+        pristine_note=$MODULE_NOTE
+        module_durable "$entry" "$admin"; durable_rc=$?
+        case "$durable_rc" in
+          0) ;;
+          1) MODULE_NOTE="$label: $pristine_note"; return 1 ;;
+          *) MODULE_NOTE="$label: $pristine_note; its work cannot be carried either: $DURABLE_NOTE"; return 1 ;;
+        esac
+        module_repository_pristine "$entry" "$wt_real" "$admin" carry \
+          || { MODULE_NOTE="$label: $MODULE_NOTE"; return 1; }
+        # The pristine check may have called this repository unread only because GitHub could
+        # not be asked about a commit. Carrying asks GitHub nothing, so that no longer leaves
+        # the worktree kept unexamined.
+        REMOTE_MODULE_FAILED=$unknown_before
+      fi
     else
       module_tree_pristine "$entry" "$wt_real" "$admin" || return 1
     fi
@@ -2140,9 +2350,374 @@ module_tree_pristine() {
   return 0
 }
 
+# --- carrying a submodule's work (#2831) ------------------------------------------------
+# A submodule repository that is not pristine holds work, and the parent's salvage refs
+# cannot hold it: they live in the parent repository, and the submodule's objects are in a
+# repository under the worktree's admin directory, which the removal deletes. Until now
+# that kept the worktree for good (18 worktrees, about 7.5 GB, on the host 2026-10-13).
+# There is one repository that holds the same submodule and outlives the worktree: the main
+# checkout's own, at the same path under the shared git directory's modules/. When it is
+# there, is an ordinary repository, and names the same devantler-tech repository as its
+# origin, the submodule's work is carried into it before the removal, under the same
+# refs/salvaged/<id>/ name the parent uses:
+#   head            - the submodule's HEAD commit
+#   index           - a commit of its staged index, parent HEAD
+#   worktree        - a commit of its whole working tree, parent HEAD, taken exactly as the
+#                     parent's is (snapshot_tree: untracked files included, ignored files not)
+#   commit/<sha>    - every commit a ref, reflog, ORIG_HEAD or FETCH_HEAD of it reaches that
+#                     its origin does not advertise right now (the tips; history comes along)
+#   object/<sha>    - every tag it holds that its origin does not advertise at that object
+# They are copied with a local `git fetch` from the worktree's repository (no network, no
+# push), then read back from the receiving repository: each ref at exactly the object sent,
+# the two trees equal to the ones snapshotted, and every object they need present. Only
+# then does the manifest name them. Anything else is the KEEP it always was: no repository
+# to carry to, one that names another origin or cannot be written, a submodule repository
+# whose shape, settings or index the pristine check refuses for a reason other than the
+# work itself (a stash, a hook, a submodule-owned worktree, an operation in progress,
+# resolve-undo stages, hidden index flags), an embedded repository, or any step that fails.
+
+# module_plan_reset — forget the submodule repositories found to need carrying. The plan is
+# rebuilt by every nested_repository_blocker run, which is every time salvage is judged.
+PLAN_G=(); PLAN_CO=(); PLAN_DURABLE=(); PLAN_LABEL=(); PLAN_IDS=(); PLAN_HISTORY_KB=(); PLAN_REL=()
+MODULE_CARRY_KB=0
+# More refs than this for one submodule repository is not a worktree's abandoned work.
+SUBMODULE_CARRY_LIMIT=50
+module_plan_reset() {
+  PLAN_G=(); PLAN_CO=(); PLAN_DURABLE=(); PLAN_LABEL=(); PLAN_IDS=(); PLAN_HISTORY_KB=(); PLAN_REL=()
+  MODULE_CARRY_KB=0
+}
+
+# module_durable <git-dir> <admin> — exit 0 with MODULE_DURABLE set to the main checkout's
+# repository for the same submodule: the one at the same path under the shared git
+# directory as <git-dir> has under the worktree's admin directory. Exit 1 when there is
+# none. Exit 2, with DURABLE_NOTE, when something is there that work must not be carried
+# into: not a plain repository directory reached without a symbolic link, one whose object
+# store borrows from another or is a partial clone (an object it reports may not be in it),
+# one that names another origin than the submodule's (or not a devantler-tech repository on
+# GitHub), or one that cannot be read or written. Read-only.
+MODULE_DURABLE=""
+DURABLE_NOTE=""
+module_durable() {
+  local g=$1 admin=$2 rel d d_real name keys a b
+  MODULE_DURABLE=""; DURABLE_NOTE=""
+  case "$g" in "$admin"/modules/?*) rel=${g#"$admin"/} ;; *) return 1 ;; esac
+  d="$COMMON_DIR/$rel"
+  if [ ! -e "$d" ] && [ ! -L "$d" ]; then return 1; fi
+  if [ -L "$d" ] || [ ! -d "$d" ]; then
+    DURABLE_NOTE="the main checkout's $rel is not a plain directory"; return 2
+  fi
+  # COMMON_DIR is canonical, so any difference is a symbolic link on the way, and what it
+  # names need not outlive the worktree.
+  d_real=$(physical_path "$d") && [ "$d_real" = "$d" ] \
+    || { DURABLE_NOTE="the main checkout's $rel is reached through a symbolic link"; return 2; }
+  for name in HEAD config; do
+    [ -f "$d/$name" ] && [ ! -L "$d/$name" ] \
+      || { DURABLE_NOTE="the main checkout's $rel is not a repository (no plain $name)"; return 2; }
+  done
+  for name in objects refs; do
+    [ -d "$d/$name" ] && [ ! -L "$d/$name" ] \
+      || { DURABLE_NOTE="the main checkout's $rel is not a repository (no plain $name directory)"; return 2; }
+  done
+  for name in alternates http-alternates; do
+    if [ -e "$d/objects/info/$name" ] || [ -L "$d/objects/info/$name" ]; then
+      DURABLE_NOTE="the main checkout's $rel borrows its objects from another repository"; return 2
+    fi
+  done
+  keys=$(git config --file "$d/config" --name-only --list 2>/dev/null) \
+    || { DURABLE_NOTE="the main checkout's $rel has a configuration that cannot be read"; return 2; }
+  if grep -Eiq '^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$' <<< "$keys"; then
+    DURABLE_NOTE="the main checkout's $rel is a partial clone"; return 2
+  fi
+  # The copy is a fetch run in this repository, so its own configuration applies to it. A
+  # rule that rewrites URLs could point the source path at another repository or a network
+  # endpoint, and an include could bring such a rule from a file not read here.
+  if grep -Eiq '^(url\..*\.(insteadof|pushinsteadof)|include\.path|includeif\..*\.path)$' <<< "$keys"; then
+    DURABLE_NOTE="the main checkout's $rel rewrites URLs or includes other configuration"; return 2
+  fi
+  if [ -e "$d/config.worktree" ] || [ -L "$d/config.worktree" ]; then
+    keys=$(git config --file "$d/config.worktree" --name-only --list 2>/dev/null) \
+      || { DURABLE_NOTE="the main checkout's $rel has a worktree configuration that cannot be read"; return 2; }
+    if grep -Eiq '^(url\..*\.(insteadof|pushinsteadof)|include\.path|includeif\..*\.path)$' <<< "$keys"; then
+      DURABLE_NOTE="the main checkout's $rel rewrites URLs or includes other configuration"; return 2
+    fi
+  fi
+  a=$(portfolio_repo "$(module_origin_url "$d" || true)")
+  b=$(portfolio_repo "$(module_origin_url "$g" || true)")
+  if [ -z "$a" ] || [ "$a" != "$b" ]; then
+    DURABLE_NOTE="the main checkout's $rel does not name the same origin"; return 2
+  fi
+  module_git "$d" rev-parse --git-dir > /dev/null 2>&1 \
+    || { DURABLE_NOTE="the main checkout's $rel cannot be read as a repository"; return 2; }
+  if [ ! -w "$d" ] || [ ! -w "$d/objects" ] || [ ! -w "$d/refs" ]; then
+    DURABLE_NOTE="the main checkout's $rel cannot be written to"; return 2
+  fi
+  MODULE_DURABLE=$d
+}
+
+# intent_to_add_count <checkout> -> prints how many index entries carry the intent-to-add
+# flag (CE_INTENT_TO_ADD, bit 29 of the --debug flags). Read from the flag itself: a
+# worktree diff calls a deleted intent-to-add path D, not A, yet write-tree still drops it.
+intent_to_add_count() {
+  git -C "$1" ls-files --debug 2>/dev/null \
+    | awk '/^  size: .*flags: / { f = $NF; if (length(f) == 8 && substr(f, 1, 1) ~ /[2367abef]/) n++ } END { print n + 0 }'
+}
+
+# module_carry_plan <git-dir> <checkout> <label> <pseudo-ref-commits> <checkout-path> — the last part of the
+# carry question (module_repository_pristine ... carry): exit 0 after adding the repository
+# to the plan, with the commits and tags to carry; 1 with MODULE_NOTE when something in it
+# could not be carried faithfully. Reads MODULE_DURABLE, MODULE_REMOTE_ROWS and the ids the
+# pristine check collected. Read-only, so dry-run reports what apply would do.
+module_carry_plan() {
+  local g=$1 co=$2 label=$3 extra=$4 rel=$5 durable=$MODULE_DURABLE out n head_links idx_links saved_note
+  local local_tags missing objects="" ids held="" set tips refs
+  [ -n "$durable" ] || { MODULE_NOTE="there is no repository to carry its work to"; return 1; }
+  # The label goes into the manifest, one `submodule=<label>` field among `;`-separated ones.
+  case "$label" in
+    *[[:cntrl:]]*|*\;*) MODULE_NOTE="its path cannot be named in the manifest"; return 1 ;;
+  esac
+  # The checkout's path inside the worktree goes into the kept record, one tab-separated
+  # field on one line. It is not the label: the label is the repository's place under the
+  # git directory, which follows the submodule's NAME (and nests as modules/a/modules/b).
+  case "$rel" in
+    ''|/*|*[[:cntrl:]]*) MODULE_NOTE="its checkout's path cannot be written in the salvage record"; return 1 ;;
+  esac
+  # What the parent's own snapshot refuses, refused here for the same reasons: a conflicted
+  # index cannot be written as a tree, an intent-to-add entry has no blob, and a submodule
+  # added or removed inside this one is not what its HEAD records.
+  out=$(git -C "$co" ls-files -u 2>/dev/null) \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its index cannot be read for conflicts"; return 1; }
+  if [ -n "$out" ]; then MODULE_NOTE="its index holds unmerged (conflicted) entries"; return 1; fi
+  n=$(intent_to_add_count "$co") \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its intent-to-add entries cannot be listed"; return 1; }
+  if [ "$n" != 0 ]; then MODULE_NOTE="its index holds intent-to-add entries (they cannot be carried)"; return 1; fi
+  head_links=$(git -C "$co" ls-tree -r HEAD 2>/dev/null | awk -F'\t' '$1 ~ /^160000 /{print $2}') \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its HEAD gitlinks cannot be listed"; return 1; }
+  idx_links=$(git -C "$co" ls-files -s 2>/dev/null | awk -F'\t' '$1 ~ /^160000 /{print $2}') \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its staged gitlinks cannot be listed"; return 1; }
+  if [ "$head_links" != "$idx_links" ]; then
+    MODULE_NOTE="a submodule of it was added, removed or replaced (the snapshot cannot record it)"; return 1
+  fi
+  # An untracked embedded repository, and the size of what the snapshot would make
+  # permanent, counted with the other carried checkouts towards the one cap.
+  saved_note=$SALVAGE_NOTE
+  if ! changed_data_kb "$co" "$MODULE_CARRY_KB"; then
+    case "$SALVAGE_NOTE" in cannot*) REMOTE_MODULE_FAILED=1 ;; esac
+    MODULE_NOTE="in its checkout, $SALVAGE_NOTE"; SALVAGE_NOTE=$saved_note; return 1
+  fi
+  SALVAGE_NOTE=$saved_note
+  # The snapshot leaves ignored files behind, as the parent's does. A submodule's own agent
+  # worktree root is the one place where that is never build output: whatever sits there
+  # was a session's working directory, and the submodule may well ignore the whole root.
+  out=$(git -C "$co" status --porcelain --ignored=matching --untracked-files=all \
+          -- .claude/worktrees .codex/worktrees 2>/dev/null) \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its checkout's ignored files cannot be listed"; return 1; }
+  if grep -q '^!!' <<< "$out"; then
+    MODULE_NOTE="its checkout holds ignored files under an agent worktree root (the snapshot would leave them behind)"; return 1
+  fi
+  # Tags origin does not advertise at exactly the same object.
+  local_tags=$(module_git "$g" for-each-ref --format='%(objectname)%09%(refname)' refs/tags 2>/dev/null) \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its tags cannot be read"; return 1; }
+  if [ -n "$local_tags" ]; then
+    missing=$(awk 'NR == FNR { held[$0]; next } NF && !($0 in held)' \
+              <(printf '%s\n' "$MODULE_REMOTE_ROWS") <(printf '%s\n' "$local_tags")) \
+      || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its tags cannot be compared with its remote's"; return 1; }
+    objects=$(awk -F'\t' 'NF { print $1 }' <<< "$missing" | sort -u)
+  fi
+  # Commits: everything a ref, a reflog or a pseudo-ref reaches, less what the commits
+  # origin advertises reach (as module_held_by_remote lists them). Only the tips are named;
+  # the copy brings their history.
+  ids=$(awk -F'\t' 'NF == 2 { print $1 }' <<< "$MODULE_REMOTE_ROWS" | sort -u) \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its remote's answer cannot be read"; return 1; }
+  if [ -n "$ids" ]; then
+    held=$(module_git "$g" cat-file --batch-check='%(objectname) %(objecttype)' <<< "$ids" 2>/dev/null \
+           | awk '$2 == "commit" { print "^" $1 }') \
+      || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its remote's commits cannot be looked up"; return 1; }
+  fi
+  set=$(module_git "$g" rev-list --parents --all --reflog --stdin \
+        < <(grep . <<< "$MODULE_LOG_IDS"$'\n'"$MODULE_PACKED_IDS"$'\n'"$extra"$'\n'"$held" || true) 2>/dev/null) \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its commits cannot be listed"; return 1; }
+  tips=$(awk 'NF { c[$1]; for (i = 2; i <= NF; i++) p[$i] } END { for (k in c) if (!(k in p)) print k }' <<< "$set" | sort) \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its commits cannot be listed"; return 1; }
+  refs=$( { [ -z "$tips" ] || awk '{ print "commit/" $0 }' <<< "$tips"
+            [ -z "$objects" ] || awk '{ print "object/" $0 }' <<< "$objects"; } )
+  if grep -Evq '^(commit|object)/([0-9a-f]{40}|[0-9a-f]{64})$' <<< "${refs:-commit/0000000000000000000000000000000000000000}"; then
+    REMOTE_MODULE_FAILED=1; MODULE_NOTE="its commits cannot be listed"; return 1
+  fi
+  if [ -n "$refs" ] && [ "$(grep -c . <<< "$refs")" -gt "$SUBMODULE_CARRY_LIMIT" ]; then
+    MODULE_NOTE="it holds more than $SUBMODULE_CARRY_LIMIT commits and tags its remote does not advertise"; return 1
+  fi
+  # The cap also covers the commits themselves: the copy brings every object the carried
+  # HEAD, commits and tags reach that the receiving repository lacks, and a local commit
+  # can hold any amount of data without a single changed or untracked file.
+  local head history_kb
+  head=$(module_git "$g" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null) && [ -n "$head" ] \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="its HEAD cannot be read"; return 1; }
+  history_kb=$(module_history_kb "$g" "$durable" "$head"$'\n'"$(awk -F/ 'NF == 2 { print $2 }' <<< "$refs")") \
+    || { REMOTE_MODULE_FAILED=1; MODULE_NOTE="what carrying its commits would add to the main checkout's repository cannot be measured"; return 1; }
+  case "$history_kb" in ''|*[!0-9]*) REMOTE_MODULE_FAILED=1; MODULE_NOTE="what carrying its commits would add to the main checkout's repository cannot be measured"; return 1 ;; esac
+  if [ "$((CHANGED_KB + history_kb))" -gt "$SALVAGE_MAX_KB" ]; then
+    MODULE_NOTE="carrying its commits and files would add more than ${SALVAGE_MAX_KB} KB to the main checkout's repository"; return 1
+  fi
+  n=${#PLAN_G[@]}
+  PLAN_G[n]=$g; PLAN_CO[n]=$co; PLAN_DURABLE[n]=$durable; PLAN_LABEL[n]=$label; PLAN_IDS[n]=$refs
+  PLAN_HISTORY_KB[n]=$history_kb; PLAN_REL[n]=$rel
+  MODULE_CARRY_KB=$((CHANGED_KB + history_kb))
+  return 0
+}
+
+# index_tree <checkout> <git-dir> -> prints the tree of the checkout's staged index, written
+# from a COPY of the index file. `git write-tree` records the trees it computed back into
+# the index it read, and a submodule's index is one of the files the sweep fingerprints and
+# keeps (modules_fingerprint, module_files_tree), so the real one must not be rewritten.
+index_tree() {
+  local dir tree rc
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/wt-salvage-sub-index.XXXXXX") || return 1
+  if [ -e "$2/index" ] && ! cp "$2/index" "$dir/index" 2>/dev/null; then rm -rf "$dir"; return 1; fi
+  tree=$(GIT_INDEX_FILE="$dir/index" git -C "$1" write-tree 2>/dev/null); rc=$?
+  rm -rf "$dir"
+  [ "$rc" -eq 0 ] && [ -n "$tree" ] || return 1
+  printf '%s\n' "$tree"
+}
+
+# module_carry_snapshot <plan-index> -> sets CARRY_HEAD, CARRY_ITREE and CARRY_WTREE to the
+# planned repository's HEAD commit and the trees of its staged index and whole working
+# tree. Writes objects into the worktree's own copy of the submodule repository only.
+# Non-zero, with SALVAGE_NOTE, on any failure.
+CARRY_HEAD=""; CARRY_ITREE=""; CARRY_WTREE=""
+module_carry_snapshot() {
+  local g=${PLAN_G[$1]} co=${PLAN_CO[$1]} label=${PLAN_LABEL[$1]}
+  CARRY_HEAD=$(module_git "$g" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null) && [ -n "$CARRY_HEAD" ] \
+    || { SALVAGE_NOTE="cannot read the HEAD of $label"; return 1; }
+  CARRY_ITREE=$(index_tree "$co" "$g") \
+    || { SALVAGE_NOTE="cannot write the staged index of $label as a tree"; return 1; }
+  snapshot_tree "$co" || { SALVAGE_NOTE="$label: $SALVAGE_NOTE"; return 1; }
+  CARRY_WTREE=$SNAPSHOT_TREE
+}
+
+# carry_record <plan-index> <head> <index-tree> <worktree-tree> -> prints what was (or would
+# now be) carried for that repository. One tab-separated line: the repository's path under
+# the git directory (the manifest's label), the path its checkout had inside the worktree,
+# the repository that received the work, and the HEAD commit, index tree and working-tree
+# tree; then one line per extra ref. The same text is the kept record
+# (refs/salvaged/<id>/submodules) and what the check before the removal compares.
+carry_record() {
+  printf '%s\t%s\t%s\t%s %s %s\n%s\n' "${PLAN_LABEL[$1]}" "${PLAN_REL[$1]}" "${PLAN_DURABLE[$1]}" "$2" "$3" "$4" "${PLAN_IDS[$1]}"
+}
+
+# module_carry_signature -> sets CARRY_SIGNATURE to the carry_record of every planned
+# repository as it is right now (empty when nothing is planned). Non-zero, with
+# SALVAGE_NOTE, when one cannot be snapshotted.
+CARRY_SIGNATURE=""
+module_carry_signature() {
+  local i=0
+  CARRY_SIGNATURE=""
+  while [ "$i" -lt "${#PLAN_G[@]}" ]; do
+    module_carry_snapshot "$i" || return 1
+    CARRY_SIGNATURE="$CARRY_SIGNATURE$(carry_record "$i" "$CARRY_HEAD" "$CARRY_ITREE" "$CARRY_WTREE")"$'\n'
+    i=$((i + 1))
+  done
+  return 0
+}
+
+# module_carry_write <plan-index> <base> <head> <index-tree> <worktree-tree> -> copies the
+# planned repository's work into the main checkout's repository for that submodule under
+# <base>/ and verifies it there. Non-zero, with SALVAGE_NOTE, on any failure; refs already
+# written stay (they only preserve data) and the caller KEEPs the worktree.
+module_carry_write() {
+  local g=${PLAN_G[$1]} co=${PLAN_CO[$1]} durable=${PLAN_DURABLE[$1]} label=${PLAN_LABEL[$1]}
+  local base=$2 head=$3 itree=$4 wtree=$5 icommit wcommit out line specs n
+  icommit=$(salvage_commit "$co" "$itree" "$head" "salvage: staged index of submodule $label") && [ -n "$icommit" ] \
+    || { SALVAGE_NOTE="cannot commit the staged index of $label"; return 1; }
+  wcommit=$(salvage_commit "$co" "$wtree" "$head" "salvage: working tree of submodule $label") && [ -n "$wcommit" ] \
+    || { SALVAGE_NOTE="cannot commit the working tree of $label"; return 1; }
+  # A fetch moves an existing ref forward without a word, so the names must be new. The
+  # name holds the second, the worktree's path and its HEAD, so anything there is not this.
+  out=$(module_git "$durable" for-each-ref --format='%(refname)' "$base" 2>/dev/null) \
+    || { SALVAGE_NOTE="cannot read the refs of the main checkout's $label"; return 1; }
+  if [ -n "$out" ]; then SALVAGE_NOTE="$base already exists in the main checkout's $label"; return 1; fi
+  specs=("$head:$base/head" "$icommit:$base/index" "$wcommit:$base/worktree")
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    specs+=("${line#*/}:$base/$line")
+  done <<< "${PLAN_IDS[$1]}"
+  # A local copy between two directories: no network, no push, no hook, no housekeeping in
+  # the receiving repository, and nothing taken from the host's configuration (a URL
+  # rewrite there could name another source). The source is an absolute path.
+  if ! GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 \
+       module_git "$durable" -c core.hooksPath=/dev/null -c gc.auto=0 -c maintenance.auto=false \
+         -c protocol.allow=never -c protocol.file.allow=always -c uploadpack.allowAnySHA1InWant=true \
+         fetch --quiet --no-tags --no-recurse-submodules --no-write-fetch-head --no-auto-maintenance \
+         -- "$g" "${specs[@]}" > /dev/null 2>&1; then
+    SALVAGE_NOTE="cannot copy the work of $label into the main checkout's repository for it"; return 1
+  fi
+  # Read back from the repository that outlives the worktree, and remembered so the same
+  # reading can be repeated immediately before the removal (recheck_mutable_gates).
+  out=$(printf '%s\n' "${specs[@]}")
+  module_carry_verify "$durable" "$label" "$base" "$itree" "$wtree" "$out" || return 1
+  n=${#CARRIED_DURABLE[@]}
+  CARRIED_DURABLE[n]=$durable; CARRIED_LABEL[n]=$label; CARRIED_ITREE[n]=$itree; CARRIED_WTREE[n]=$wtree
+  CARRIED_SPECS[n]=$out
+  return 0
+}
+
+# module_carry_verify <durable> <label> <base> <index-tree> <worktree-tree> <specs> — reads
+# carried work back from the repository that received it: each `<object>:<ref>` line of
+# <specs> names a ref that is at exactly that object, which is there; <base>/index and
+# <base>/worktree have the two trees; and nothing those objects reach is missing. Non-zero,
+# with SALVAGE_NOTE, when any of it does not hold. Read-only.
+CARRIED_DURABLE=(); CARRIED_LABEL=(); CARRIED_ITREE=(); CARRIED_WTREE=(); CARRIED_SPECS=()
+SALVAGE_CARRIED_BLOB=""
+module_carried_reset() {
+  CARRIED_DURABLE=(); CARRIED_LABEL=(); CARRIED_ITREE=(); CARRIED_WTREE=(); CARRIED_SPECS=()
+  SALVAGE_CARRIED_BLOB=""
+}
+module_carry_verify() {
+  local durable=$1 label=$2 base=$3 itree=$4 wtree=$5 spec_lines=$6 spec id ref ids=()
+  while IFS= read -r spec; do
+    [ -n "$spec" ] || continue
+    id=${spec%%:*}; ref=${spec#*:}
+    if [ "$(module_git "$durable" rev-parse --verify --quiet "$ref" 2>/dev/null)" != "$id" ] \
+       || ! GIT_NO_LAZY_FETCH=1 module_git "$durable" cat-file -e "$id" 2>/dev/null; then
+      SALVAGE_NOTE="$ref does not verify in the main checkout's $label"; return 1
+    fi
+    ids+=("$id")
+  done <<< "$spec_lines"
+  [ "${#ids[@]}" -ge 3 ] || { SALVAGE_NOTE="$base holds no carried work to verify for $label"; return 1; }
+  [ "$(module_git "$durable" rev-parse --verify --quiet "$base/index^{tree}" 2>/dev/null)" = "$itree" ] \
+    && [ "$(module_git "$durable" rev-parse --verify --quiet "$base/worktree^{tree}" 2>/dev/null)" = "$wtree" ] \
+    || { SALVAGE_NOTE="$base trees do not verify in the main checkout's $label"; return 1; }
+  # Everything the carried refs reach, with nothing left out: a branch, remote or tag of
+  # the receiving repository at a carried commit does not prove it holds what that commit
+  # reaches, and the copy sends nothing for a commit the receiver says it already has.
+  GIT_NO_LAZY_FETCH=1 module_git "$durable" rev-list --objects --quiet "${ids[@]}" > /dev/null 2>&1 \
+    || { SALVAGE_NOTE="the work of $label is not complete in the main checkout's repository for it"; return 1; }
+  return 0
+}
+
+# module_history_kb <git-dir> <durable> <ids> -> prints the size in KB of every object the
+# ids (one per line) reach that the receiving repository does not already hold: what the
+# copy would add to it. "Already holds" is everything its refs reach, read from the refs
+# themselves, so an object it has but no ref keeps is counted, which only errs towards
+# keeping. Sizes are the objects' own, as elsewhere under the cap. Read-only, and computed
+# when the plan is made, so dry-run and apply reach the same verdict. Non-zero on any
+# failed read.
+module_history_kb() {
+  local g=$1 durable=$2 want=$3 have held="" objs
+  have=$(GIT_NO_LAZY_FETCH=1 module_git "$durable" for-each-ref --format='%(objectname)' 2>/dev/null) || return 1
+  if [ -n "$have" ]; then
+    held=$(sort -u <<< "$have" | module_git "$g" cat-file --batch-check='%(objectname) %(objecttype)' 2>/dev/null \
+           | awk '$2 == "commit" || $2 == "tag" { print "^" $1 }') || return 1
+  fi
+  objs=$(grep . <<< "$want"$'\n'"$held" | module_git "$g" rev-list --objects --stdin 2>/dev/null) || return 1
+  [ -n "$objs" ] || { echo 0; return 0; }
+  awk '{ print $1 }' <<< "$objs" | module_git "$g" cat-file --batch-check='%(objectsize)' 2>/dev/null \
+    | awk 'NF != 1 || $1 !~ /^[0-9]+$/ { bad = 1 } { b += $1 } END { if (bad) exit 1; print int((b + 1023) / 1024) }'
+}
+
 # nested_repository_blocker <worktree> -> 0, with SALVAGE_NOTE, when the worktree holds any
 # repository besides its own that the removal would cost something: a submodule repository
-# under the admin directory's modules/ that is not pristine (module_repository_pristine), or
+# under the admin directory's modules/ that is neither pristine nor one whose work can be
+# carried (module_repository_pristine), or
 # any other .git entry below its top level, including one the parent ignores or one inside a
 # tracked directory. Salvage records only the parent repository, and the removal deletes
 # the others with every commit, ref, index and reflog they hold. Found by walking the
@@ -2152,6 +2727,7 @@ module_tree_pristine() {
 nested_repository_blocker() {
   local wt=$1 admin found wt_real
   VERIFIED_CHECKOUTS=""
+  module_plan_reset
   admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] \
     || { SALVAGE_NOTE="cannot locate the worktree's admin directory"; return 0; }
   wt_real=$(physical_path "$wt") || { SALVAGE_NOTE="cannot resolve the worktree's path"; return 0; }
@@ -2680,6 +3256,8 @@ salvage_write() {
   local wt=$1 sha=$2 base idx_tree wt_tree idx_commit wt_commit orphans o reuc_tree
   SALVAGE_MODULE_TREE=""
   SALVAGE_REF=""; SALVAGE_TREE=""; SALVAGE_INDEX_TREE=""; SALVAGE_ADMIN_BLOBS=""; SALVAGE_RESOLVE_UNDO=""
+  SALVAGE_CARRIED=""; SALVAGE_SUBMODULES=""
+  module_carried_reset
   salvage_namespace "$wt" "$sha" || return 1
   base=$SALVAGE_BASE
   idx_tree=$(git -C "$wt" write-tree 2>/dev/null) || { SALVAGE_NOTE="cannot write the staged index as a tree"; return 1; }
@@ -2709,7 +3287,20 @@ salvage_write() {
   if [ -n "$mod_tree" ]; then
     mod_kb=$(tree_kb "$wt" "$mod_tree") || { SALVAGE_NOTE="cannot size the submodule repositories' kept files"; return 1; }
   fi
-  captured_kb=$((captured_kb + admin_kb + reuc_kb + mod_kb))
+  # The submodules whose work is carried (the plan the salvage blockers just built) are
+  # snapshotted here too, before anything is written anywhere that lasts, so the one cap
+  # covers what their refs make permanent as well.
+  local ci=0 carry_kb=0 k carry_heads=() carry_itrees=() carry_wtrees=()
+  while [ "$ci" -lt "${#PLAN_G[@]}" ]; do
+    module_carry_snapshot "$ci" || return 1
+    k=$(snapshot_kb "${PLAN_CO[$ci]}" "$CARRY_HEAD" "$CARRY_ITREE" "$CARRY_WTREE") \
+      || { SALVAGE_NOTE="cannot size the snapshot of ${PLAN_LABEL[$ci]}"; return 1; }
+    # Plus what the copy of its commits adds (measured with the plan, module_history_kb).
+    carry_kb=$((carry_kb + k + ${PLAN_HISTORY_KB[$ci]}))
+    carry_heads[ci]=$CARRY_HEAD; carry_itrees[ci]=$CARRY_ITREE; carry_wtrees[ci]=$CARRY_WTREE
+    ci=$((ci + 1))
+  done
+  captured_kb=$((captured_kb + admin_kb + reuc_kb + mod_kb + carry_kb))
   if [ "$captured_kb" -gt "$SALVAGE_MAX_KB" ]; then
     SALVAGE_NOTE="the snapshot holds more than ${SALVAGE_MAX_KB} KB of changed data"; return 1
   fi
@@ -2754,6 +3345,23 @@ salvage_write() {
       && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/module-files" 2>/dev/null)" = "$mod_tree" ] \
       || { SALVAGE_NOTE="cannot write or verify $base/module-files"; return 1; }
   fi
+  # Each planned submodule's work goes to the main checkout's repository for it, under the
+  # same name, and is verified there. The parent keeps the record of what went where.
+  local carried="" carried_labels="" record_blob
+  ci=0
+  while [ "$ci" -lt "${#PLAN_G[@]}" ]; do
+    module_carry_write "$ci" "$base" "${carry_heads[$ci]}" "${carry_itrees[$ci]}" "${carry_wtrees[$ci]}" || return 1
+    carried="$carried$(carry_record "$ci" "${carry_heads[$ci]}" "${carry_itrees[$ci]}" "${carry_wtrees[$ci]}")"$'\n'
+    carried_labels="${carried_labels:+$carried_labels;}submodule=${PLAN_LABEL[$ci]}"
+    ci=$((ci + 1))
+  done
+  if [ -n "$carried" ]; then
+    record_blob=$(printf '%s' "$carried" | git -C "$TOPLEVEL" hash-object -w --stdin 2>/dev/null) && [ -n "$record_blob" ] \
+      && git -C "$TOPLEVEL" update-ref "$base/submodules" "$record_blob" "" 2>/dev/null \
+      && [ "$(git -C "$TOPLEVEL" rev-parse --verify --quiet "$base/submodules" 2>/dev/null)" = "$record_blob" ] \
+      || { SALVAGE_NOTE="cannot write or verify $base/submodules"; return 1; }
+  fi
+  SALVAGE_CARRIED=$carried; SALVAGE_SUBMODULES=$carried_labels; SALVAGE_CARRIED_BLOB=${record_blob:-}
   SALVAGE_MODULE_TREE=$mod_tree
   SALVAGE_RESOLVE_UNDO=$reuc_tree
   SALVAGE_REF=$base; SALVAGE_TREE=$wt_tree; SALVAGE_INDEX_TREE=$idx_tree; SALVAGE_ADMIN_BLOBS=$kept
@@ -2894,6 +3502,9 @@ while IFS= read -r wt <&3; do
   SALVAGE_MODULES_FP=""
   SALVAGE_MODULE_TREE=""
   REMOTE_CLEARED=""
+  SCAN_SUBMODULE_CHANGES=0; SALVAGE_CARRIED=""; SALVAGE_SUBMODULES=""; CARRY_SIGNATURE=""
+  module_plan_reset
+  module_carried_reset
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
   # here-string, NOT a pipe: grep -q exits at its first match, printf then takes SIGPIPE,
@@ -3046,10 +3657,15 @@ while IFS= read -r wt <&3; do
       keep_stuck "$wt" "$REAL_CHANGES uncommitted change(s)"; continue
     fi
     if [ "$REAL_SUBMODULE_CHANGES" -gt 0 ]; then
-      keep_stuck "$wt" "$REAL_CHANGES uncommitted change(s), $REAL_SUBMODULE_CHANGES in a submodule (cannot be salvaged)"
-      continue
+      # Work held in a submodule is not in the parent's salvage refs. Whether it can be
+      # carried to the main checkout's repository for that submodule is decided with the
+      # other salvage blockers (nested_repository_blocker), after every gate below; when it
+      # cannot, the worktree is kept there, as it was kept here before (#2831).
+      SCAN_SUBMODULE_CHANGES=$REAL_SUBMODULE_CHANGES
+      salvage_reason="${salvage_reason:+$salvage_reason; }$REAL_CHANGES uncommitted change(s), $REAL_SUBMODULE_CHANGES in a submodule"
+    else
+      salvage_reason="${salvage_reason:+$salvage_reason; }$REAL_CHANGES uncommitted change(s)"
     fi
-    salvage_reason="${salvage_reason:+$salvage_reason; }$REAL_CHANGES uncommitted change(s)"
   fi
 
   # KEEP: a registered worktree nested INSIDE this one. The untracked-directory signal
@@ -3134,11 +3750,18 @@ while IFS= read -r wt <&3; do
   # commit in a repository the removal deletes. So every submodule repository is held to the
   # drifted one's rule, drifted or not, checked out or not. A salvage candidate is skipped:
   # salvage_blocker holds each of its submodule repositories to the stricter pristine rule.
+  # Past the salvage age, such a repository makes the worktree a salvage candidate too:
+  # that work is abandoned like any other, and salvage carries it when it can (#2831). Every
+  # gate above has already run, and the salvage blockers decide the rest.
   if [ -z "$salvage_reason" ]; then
     submodule_repositories_disposable "$wt" "$wt_real"; sub_rc=$?
     case "$sub_rc" in
       0) ;;
-      1) keep_stuck "$wt" "submodule repository holds commit(s) its remote lacks ($SUBMODULE_NOTE)"; continue ;;
+      1) if ! salvage_eligible "$age_h" "$wt"; then
+           keep_stuck "$wt" "submodule repository holds commit(s) its remote lacks ($SUBMODULE_NOTE)"; continue
+         fi
+         # Without the note: it names a path, and this text goes into a manifest column.
+         salvage_reason="a submodule repository holds commit(s) its remote lacks" ;;
       *) keep "$wt" "cannot prove its submodule repositories hold nothing local-only ($SUBMODULE_NOTE; retried next sweep)"
          continue ;;
     esac
@@ -3177,6 +3800,8 @@ while IFS= read -r wt <&3; do
   fi
   if [ "$MODE" = "dry-run" ]; then
     if [ -n "$salvage_reason" ]; then
+      # The plan salvage_blocker just built: how many submodules' work apply would carry.
+      [ "${#PLAN_G[@]}" -eq 0 ] || salvage_reason="$salvage_reason; work of ${#PLAN_G[@]} submodule(s) carried to the main checkout's"
       printf 'SALVAGE %-51s %s (%s; %s%s)\n' "$name" "$branch" "$salvage_reason" "$size_note" "$ign_note"
       salvaged=$((salvaged+1))
     else
@@ -3244,6 +3869,9 @@ while IFS= read -r wt <&3; do
   reach_evidence="reachable-from-remote"
   [ -n "$merged_head" ] && reach_evidence="merged-pr-head"
   [ -n "$SALVAGE_REF" ] && reach_evidence="salvaged=$SALVAGE_REF ($salvage_reason)"
+  # One `submodule=<path under the git directory>` field per submodule whose work was
+  # carried: the same ref names exist in that repository of the main checkout.
+  [ -n "$SALVAGE_SUBMODULES" ] && reach_evidence="$reach_evidence;$SALVAGE_SUBMODULES"
   [ -n "$RESOLVE_UNDO_REF" ] && reach_evidence="$reach_evidence;resolve-undo=$RESOLVE_UNDO_REF"
   if ! record "$wt_real" "$branch" "$sha" "$reach_evidence;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
     die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"

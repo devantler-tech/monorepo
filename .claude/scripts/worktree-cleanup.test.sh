@@ -1633,9 +1633,9 @@ run_salvage() { # <root> <mode> <salvage_age_hours> -> stdout
 # need the local URL.
 PORTFOLIO_URL=https://github.com/devantler-tech/subfix.git
 portfolio_origin() {
-  local root=$1 wt=$2 real_git
+  local root=$1 wt=$2 real_git subpath=${3:-sub}
   real_git=$(command -v git) || return 1
-  git -C "$wt/sub" remote set-url origin "$PORTFOLIO_URL" || return 1
+  git -C "$wt/$subpath" remote set-url origin "$PORTFOLIO_URL" || return 1
   mkdir -p "$root/gitshim" || return 1
   cat > "$root/gitshim/git" <<SHIM
 #!/usr/bin/env bash
@@ -1790,7 +1790,8 @@ t_salvage_keeps_oversized_work() {
 # salvage cannot capture. Hermetic form, as in t_keeps_staged_gitlink_update.
 submodule_wt() {
   local root=$1 name=$2 kind=$3 sub seed subA subB wt
-  sub="$root/sub.git"; [ -d "$sub" ] || git init -q --bare "$sub"
+  # One remote per fixture: each seeds its own history, and a shared one took only the first.
+  sub="$root/sub-$name.git"; git init -q --bare "$sub"
   seed="$root/seed-$name"
   git init -q -b main "$seed"; git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
   echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one; subA=$(git -C "$seed" rev-parse HEAD)
@@ -1798,10 +1799,18 @@ submodule_wt() {
   git -C "$seed" push -q "$sub" main
   add_wt "$root" "$name" pushed || return 1
   wt="$root/repo/.claude/worktrees/$name"
-  git clone -q "$sub" "$wt/sub"
+  git clone -q "$sub" "$wt/sub" || return 1
+  git -C "$wt/sub" checkout -q --detach "$subA" || return 1
+  # Registered in .gitmodules, so the submodule can be enumerated and the sweep reaches the
+  # checks about its work. A bare gitlink stops at "cannot enumerate submodule-owned
+  # worktrees" (t_keeps_a_gitlink_that_cannot_be_enumerated) and proves nothing about them.
+  printf '[submodule "sub"]\n\tpath = sub\n\turl = %s\n' "$sub" > "$wt/.gitmodules"
+  git -C "$wt" add .gitmodules || return 1
   git -C "$wt" update-index --add --cacheinfo "160000,$subA,sub"
-  git -C "$wt" commit -qm "track sub at A"; git -C "$wt" push -q origin "claude/$name"
+  git -C "$wt" commit -qm "track sub at A"; git -C "$wt" push -q origin "claude/$name" || return 1
+  git -C "$wt" submodule foreach --quiet 'true' >/dev/null 2>&1 || return 1
   if [ "$kind" = staged ]; then
+    git -C "$wt/sub" checkout -q --detach "$subB" || return 1
     git -C "$wt" update-index --cacheinfo "160000,$subB,sub"
   else
     echo dirty >> "$wt/sub/f"                        # uncommitted work inside the submodule
@@ -1815,8 +1824,13 @@ t_salvage_keeps_submodule_work() {
     bad "salvage keeps submodule work" "FIXTURE"; rm -rf "$root"; return
   fi
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subdirty .*in a submodule (cannot be salvaged)' <<<"$out" \
-     && grep -q 'KEEP .*substaged .*in a submodule (cannot be salvaged)' <<<"$out" \
+  # The submodule's repository is an embedded .git inside the worktree, so there is nowhere
+  # to carry its work: the salvage blockers refuse it, for that reason and no earlier one.
+  local staged_row; staged_row=$(GIT_OPTIONAL_LOCKS=0 git -C "$root/repo/.claude/worktrees/substaged" status --porcelain --ignore-submodules=none)
+  if grep -q 'KEEP .*subdirty .*1 in a submodule; not salvaged: holds a nested repository (.*/subdirty/sub/\.git; salvage carries no repository but the worktree.s own)' <<<"$out" \
+     && grep -q 'KEEP .*substaged .*1 in a submodule; not salvaged: holds a nested repository (.*/substaged/sub/\.git; salvage carries no repository but the worktree.s own)' <<<"$out" \
+     && ! grep -q 'cannot enumerate' <<<"$out" && [ "$staged_row" = "M  sub" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ] \
      && [ "$(tail -1 "$root/repo/.claude/worktrees/subdirty/sub/f")" = dirty ] \
      && [ -d "$root/repo/.claude/worktrees/substaged" ]; then
     ok "salvage KEEPs dirty and staged submodule work it cannot capture"
@@ -1899,6 +1913,9 @@ t_salvage_keeps_submodule_work_at_a_quoted_path() {
   add_wt "$root" subq pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   wt="$root/repo/.claude/worktrees/subq"
   git clone -q "$sub" "$wt/süb"
+  # In .gitmodules too, so the submodule is enumerated and its work is what decides.
+  printf '[submodule "sq"]\n\tpath = süb\n\turl = %s\n' "$sub" > "$wt/.gitmodules"
+  git -C "$wt" add .gitmodules
   git -C "$wt" update-index --add --cacheinfo "160000,$subA,süb"
   git -C "$wt" commit -qm "track süb"; git -C "$wt" push -q origin claude/subq
   echo dirty >> "$wt/süb/f"
@@ -1910,7 +1927,8 @@ t_salvage_keeps_submodule_work_at_a_quoted_path() {
     bad "$name" "FIXTURE: porcelain did not quote the path"; rm -rf "$root"; return
   fi
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subq .*in a submodule (cannot be salvaged)' <<<"$out" \
+  if grep -q 'KEEP .*subq .*1 in a submodule; not salvaged: holds a nested repository (.*/süb/\.git; salvage carries no repository but the worktree.s own)' <<<"$out" \
+     && ! grep -q 'cannot enumerate' <<<"$out" \
      && [ "$(tail -1 "$wt/süb/f" 2>/dev/null)" = dirty ]; then
     ok "$name"
   else
@@ -5395,6 +5413,894 @@ EOF
   rm -rf "$root"
 }
 
+# --- carrying a submodule's work (#2831) -----------------------------------------------
+# carry_wt <root> <name> — an old, pushed worktree with one initialised submodule `sub`
+# that the MAIN checkout holds too, so the main checkout's repository for it
+# (<root>/repo/.git/modules/sub) is there to carry work into. Both repositories name the
+# same portfolio origin, and the submodule is pristine until a test adds work to it.
+carry_wt() {
+  local root=$1 name=$2 wt="$1/repo/.claude/worktrees/$2"
+  if [ ! -d "$root/repo/.git/modules/sub" ]; then
+    git init -q -b main "$root/subsrc" && echo one > "$root/subsrc/f" \
+      && git -C "$root/subsrc" add f && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm one || return 1
+    git -C "$root/repo" -c protocol.file.allow=always submodule add -q "$root/subsrc" sub >/dev/null 2>&1 || return 1
+    git -C "$root/repo" commit -qm "add sub" && git -C "$root/repo" push -q origin main || return 1
+  fi
+  add_wt "$root" "$name" pushed || return 1
+  git -C "$wt" -c protocol.file.allow=always submodule update -q --init >/dev/null 2>&1 || return 1
+  [ -d "$(git -C "$wt" rev-parse --absolute-git-dir)/modules/sub" ] || return 1
+  git -C "$wt/sub" config user.email t@t.t && git -C "$wt/sub" config user.name t || return 1
+  portfolio_origin "$root" "$wt" || return 1
+  git config --file "$root/repo/.git/modules/sub/config" remote.origin.url "$PORTFOLIO_URL"
+}
+
+# carried_base <root> — prints the salvage namespace(s) the main checkout's repository for
+# `sub` holds, or nothing.
+carried_base() {
+  git --git-dir="$1/repo/.git/modules/sub" for-each-ref --format='%(refname)' 'refs/salvaged/*/head' | sed 's#/head$##'
+}
+
+# carries_submodule_work <test-name> <worktree-name> <mutation> <check> — the shared shape of
+# the positive cases: a worktree whose only work is in its submodule, made by <mutation>
+# (with $wt set), must be SALVAGED and removed, and that work must then be in the main
+# checkout's repository for the submodule, which <check> reads (with $d its git directory,
+# $base the salvage namespace and $before the submodule's HEAD when the sweep ran). The
+# manifest row must name the namespace and the submodule.
+carries_submodule_work() {
+  local name=$1 wtname=$2 mutation=$3 check=$4
+  local root; root=$(make_repo)
+  carry_wt "$root" "$wtname" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/$wtname" d="$root/repo/.git/modules/sub" before base out
+  if ! eval "$mutation" >/dev/null 2>&1; then bad "$name" "FIXTURE: mutation"; rm -rf "$root"; return; fi
+  before=$(git -C "$wt/sub" rev-parse HEAD)
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1)
+  base=$(carried_base "$root")
+  if grep -q "^SALVAGED .*$wtname " <<<"$out" && [ ! -e "$wt" ] && [ -n "$base" ] \
+     && [ "$(git --git-dir="$d" rev-parse --verify --quiet "$base/head" 2>/dev/null)" = "$before" ] \
+     && git -C "$root/repo" rev-parse --verify --quiet "$base/head" >/dev/null \
+     && grep -q "^modules/sub	sub	$d	$before " <<<"$(git -C "$root/repo" cat-file blob "$base/submodules" 2>/dev/null)" \
+     && grep -q "salvaged=$base .*;submodule=modules/sub;.*pending\$" "$root/manifest.tsv" \
+     && grep -q 'reaped$' "$root/manifest.tsv" \
+     && eval "$check"; then
+    ok "$name"
+  else
+    bad "$name" "base=[$base] $out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_carries_a_dirty_tracked_file_in_a_submodule() {
+  carries_submodule_work "salvage carries an uncommitted edit in a submodule to the main checkout's repository" carrydirty \
+    'echo dirty >> "$wt/sub/f"' \
+    '[ "$(git --git-dir="$d" show "$base/worktree:f" | tail -1)" = dirty ] && [ "$(git --git-dir="$d" show "$base/index:f")" = one ]'
+}
+
+t_salvage_carries_an_untracked_file_in_a_submodule() {
+  carries_submodule_work "salvage carries an untracked file in a submodule" carryuntracked \
+    'mkdir -p "$wt/sub/notes" && echo draft > "$wt/sub/notes/todo.txt"' \
+    '[ "$(git --git-dir="$d" show "$base/worktree:notes/todo.txt")" = draft ] && ! git --git-dir="$d" cat-file -e "$base/index:notes/todo.txt" 2>/dev/null'
+}
+
+t_salvage_carries_a_staged_change_in_a_submodule() {
+  # Staged, then overwritten in the working tree: the index and the working tree differ.
+  carries_submodule_work "salvage carries a staged change in a submodule, apart from the working tree" carrystaged \
+    'echo staged > "$wt/sub/g" && git -C "$wt/sub" add g && echo later > "$wt/sub/g"' \
+    '[ "$(git --git-dir="$d" show "$base/index:g")" = staged ] && [ "$(git --git-dir="$d" show "$base/worktree:g")" = later ]'
+}
+
+t_salvage_carries_an_unpushed_commit_in_a_clean_submodule() {
+  # The submodule's status is clean; only its repository holds the work: a commit HEAD is
+  # on, one a local branch holds, one only the reflog still names, and a tag made here.
+  carries_submodule_work "salvage carries unpushed, branch-only and reflog-only commits and a local tag of a clean submodule" carrycommit \
+    'echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "local only" \
+       && git -C "$wt/sub" branch side && echo three >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "reflog only" \
+       && git -C "$wt/sub" rev-parse HEAD > "$root/lost" && git -C "$wt/sub" reset -q --hard HEAD~1 \
+       && git -C "$wt/sub" checkout -q -b other && echo four > "$wt/sub/h" && git -C "$wt/sub" add h && git -C "$wt/sub" commit -qm "branch only" \
+       && git -C "$wt/sub" rev-parse HEAD > "$root/branchonly" && git -C "$wt/sub" tag -a mine -m "made here" \
+       && git -C "$wt/sub" rev-parse refs/tags/mine > "$root/tagobj" && git -C "$wt/sub" checkout -q --detach side' \
+    '[ "$(git --git-dir="$d" log -1 --format=%s "$base/head")" = "local only" ] \
+       && [ "$(git --git-dir="$d" log -1 --format=%s "$base/commit/$(cat "$root/lost")" 2>/dev/null)" = "reflog only" ] \
+       && [ "$(git --git-dir="$d" log -1 --format=%s "$base/commit/$(cat "$root/branchonly")" 2>/dev/null)" = "branch only" ] \
+       && [ "$(git --git-dir="$d" cat-file -t "$base/object/$(cat "$root/tagobj")" 2>/dev/null)" = tag ] \
+       && grep -q "refs/heads/other" <<<"$(git -C "$root/repo" ls-tree -r --name-only "$base/module-files")"'
+}
+
+t_salvage_restores_carried_submodule_work_from_the_manifest() {
+  # Everything at once, then the restore the header documents, followed to the letter and
+  # driven by nothing but the manifest row. The submodule's NAME (foo) is not its PATH
+  # (bar): the manifest's label is the repository's place under the git directory, which
+  # follows the name, so a restore that looked for <main>/<label's last part> would miss.
+  local name="the manifest row alone restores a carried submodule whose name differs from its path, byte for byte"
+  local root; root=$(make_repo)
+  git init -q -b main "$root/subsrc" && echo one > "$root/subsrc/f" && git -C "$root/subsrc" add f \
+    && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm one \
+    && git -C "$root/repo" -c protocol.file.allow=always submodule add -q --name foo "$root/subsrc" bar >/dev/null 2>&1 \
+    && git -C "$root/repo" commit -qm "add foo at bar" && git -C "$root/repo" push -q origin main \
+    && add_wt "$root" carryall pushed \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/carryall" out row base label D r="$root/restored" record
+  git -C "$wt" -c protocol.file.allow=always submodule update -q --init >/dev/null 2>&1 \
+    && [ -d "$(git -C "$wt" rev-parse --absolute-git-dir)/modules/foo" ] && [ ! -e "$root/repo/.git/modules/bar" ] \
+    && git -C "$wt/bar" config user.email t@t.t && git -C "$wt/bar" config user.name t \
+    && portfolio_origin "$root" "$wt" bar \
+    && git config --file "$root/repo/.git/modules/foo/config" remote.origin.url "$PORTFOLIO_URL" \
+    || { bad "$name" "FIXTURE: submodule"; rm -rf "$root"; return; }
+  echo two >> "$wt/bar/f" && git -C "$wt/bar" commit -qam "local only" \
+    && printf 'staged\r\n' > "$wt/bar/g" && git -C "$wt/bar" add g && printf 'later\n' > "$wt/bar/g" \
+    && echo dirty >> "$wt/bar/f" && echo draft > "$wt/bar/untracked.txt" && echo parent > "$wt/untracked.txt" \
+    || { bad "$name" "FIXTURE: work"; rm -rf "$root"; return; }
+  cp "$wt/bar/f" "$root/want-f"
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1)
+  row=$(grep 'pending$' "$root/manifest.tsv" 2>/dev/null)
+  base=$(sed -n 's/.*salvaged=\(refs\/salvaged\/[^ ]*\) .*/\1/p' <<<"$row")
+  label=$(sed -n 's/.*;submodule=\([^;]*\);.*/\1/p' <<<"$row")
+  if [ -e "$wt" ] || [ -z "$base" ] || [ "$label" != modules/foo ]; then
+    bad "$name" "row=[$row] $out"; rm -rf "$root"; return
+  fi
+  # The header's steps: D is <git directory>/<label>; no checkout of the submodule is used.
+  D="$root/repo/.git/$label"
+  record=$(git -C "$root/repo" cat-file blob "$base/submodules" 2>/dev/null)
+  if git --git-dir="$D" --work-tree="$D" worktree add -q --detach "$r" "$base/head" 2>/dev/null \
+     && git -C "$r" read-tree "$base/index" \
+     && git -C "$r" restore --source="$base/worktree" --worktree -- . \
+     && cmp -s "$r/f" "$root/want-f" && [ "$(cat "$r/g")" = later ] && [ "$(cat "$r/untracked.txt")" = draft ] \
+     && git -C "$r" cat-file blob :g | cmp -s - <(printf 'staged\r\n') \
+     && [ "$(git -C "$r" log -1 --format=%s)" = "local only" ] \
+     && [ "$(git -C "$root/repo" show "$base/worktree:untracked.txt")" = parent ] \
+     && [ "$(git -C "$root/repo" rev-parse "$base/worktree:bar")" = "$(git -C "$r" rev-parse HEAD)" ] \
+     && grep -q "^modules/foo	bar	$D	" <<<"$record" \
+     && [ "$(git -C "$root/repo" submodule foreach --quiet --recursive 'git rev-parse --absolute-git-dir')" = "$D" ] \
+     && [ "$(git -C "$root/repo/bar" rev-parse --absolute-git-dir)" = "$D" ] && [ ! -e "$root/repo/foo" ]; then
+    ok "$name"
+  else
+    bad "$name" "restore failed: record=[$record] $out"
+  fi
+  rm -rf "$root"
+}
+
+# keeps_unnameable_submodule <test-name> <worktree-name> <submodule-name> <submodule-path> <reason>
+# — a worktree whose submodule holds an uncommitted edit and could be carried, except that
+# its name or its path cannot be written where the restore instructions are read from.
+keeps_unnameable_submodule() {
+  local name=$1 wtname=$2 subname=$3 subpath=$4 reason=$5
+  local root; root=$(make_repo)
+  git init -q -b main "$root/subsrc" && echo one > "$root/subsrc/f" && git -C "$root/subsrc" add f \
+    && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm one \
+    && git -C "$root/repo" -c protocol.file.allow=always submodule add -q --name "$subname" "$root/subsrc" "$subpath" >/dev/null 2>&1 \
+    && git -C "$root/repo" commit -qm "add submodule" && git -C "$root/repo" push -q origin main \
+    && add_wt "$root" "$wtname" pushed \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/$wtname" d="$root/repo/.git/modules/$subname" out
+  git -C "$wt" -c protocol.file.allow=always submodule update -q --init >/dev/null 2>&1 \
+    && [ -d "$d" ] && portfolio_origin "$root" "$wt" "$subpath" \
+    && git config --file "$d/config" remote.origin.url "$PORTFOLIO_URL" \
+    && echo dirty >> "$wt/$subpath/f" \
+    || { bad "$name" "FIXTURE: submodule"; rm -rf "$root"; return; }
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1)
+  if grep -Fq "$reason" <<<"$(grep "^KEEP .*$wtname " <<<"$out")" && [ -d "$wt" ] && grep -q dirty "$wt/$subpath/f" \
+     && [ -z "$(git --git-dir="$d" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_whose_name_would_break_the_manifest() {
+  keeps_unnameable_submodule "salvage KEEPs a submodule whose name holds the manifest's field separator" seminame \
+    'fo;o' bar "modules/fo;o: its path cannot be named in the manifest"
+}
+
+t_salvage_keeps_a_submodule_whose_checkout_path_would_break_the_record() {
+  local tab; tab=$(printf '\tx'); tab=${tab%x}
+  keeps_unnameable_submodule "salvage KEEPs a submodule whose checkout path holds a control character" tabpath \
+    foo "ba${tab}r" "modules/foo: its checkout's path cannot be written in the salvage record"
+}
+
+t_keeps_a_gitlink_that_cannot_be_enumerated() {
+  # A gitlink with no .gitmodules entry: git cannot enumerate it, so nothing can say whether
+  # it owns a worktree inside this one. That is a KEEP of its own, and it goes away once
+  # the entry exists.
+  local name="KEEPs a worktree whose gitlink has no .gitmodules entry, and only for that reason"
+  local root; root=$(make_repo)
+  local sub="$root/subbare.git" seed="$root/seedbare" subA wt out fixed
+  git init -q --bare -b main "$sub"; git init -q -b main "$seed"
+  git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
+  echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one
+  subA=$(git -C "$seed" rev-parse HEAD); git -C "$seed" push -q "$sub" main
+  add_wt "$root" barelink pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  wt="$root/repo/.claude/worktrees/barelink"
+  git clone -q "$sub" "$wt/sub" && git -C "$wt" update-index --add --cacheinfo "160000,$subA,sub" \
+    && git -C "$wt" commit -qm "track sub" && git -C "$wt" push -q origin claude/barelink \
+    || { bad "$name" "FIXTURE: gitlink"; rm -rf "$root"; return; }
+  age_tree "$wt"
+  out=$(run "$root" dry-run)
+  printf '[submodule "sub"]\n\tpath = sub\n\turl = %s\n' "$sub" > "$wt/.gitmodules"
+  git -C "$wt" add .gitmodules && git -C "$wt" commit -qm "register sub" && git -C "$wt" push -q origin claude/barelink
+  age_tree "$wt"
+  fixed=$(run "$root" dry-run)
+  if grep -q '^KEEP  *barelink  *cannot enumerate submodule-owned worktrees$' <<<"$out" \
+     && grep -q 'barelink' <<<"$fixed" && ! grep -q 'cannot enumerate' <<<"$fixed"; then
+    ok "$name"
+  else
+    bad "$name" "$out :: $fixed"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_preserves_a_staged_gitlink_update() {
+  # The parent's index points the submodule at commit B, which exists only in the
+  # worktree's copy of the submodule repository; the checkout has since moved back to A.
+  # Before, a staged gitlink was always kept. Now it is salvaged, so both halves must
+  # survive: the parent's index ref records the gitlink at B (and its working tree at A),
+  # and B itself is carried to the main checkout's repository for the submodule.
+  local name="salvage preserves a staged gitlink update: the parent's index names the commit and the commit is carried"
+  local root; root=$(make_repo)
+  carry_wt "$root" stagedlink || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/stagedlink" d="$root/repo/.git/modules/sub" A B out base row
+  A=$(git -C "$wt/sub" rev-parse HEAD)
+  echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "staged in the parent" \
+    && B=$(git -C "$wt/sub" rev-parse HEAD) && git -C "$wt" add sub \
+    && git -C "$wt/sub" checkout -q --detach "$A" || { bad "$name" "FIXTURE: work"; rm -rf "$root"; return; }
+  row=$(GIT_OPTIONAL_LOCKS=0 git -C "$wt" status --porcelain --ignore-submodules=none)
+  if [ "$row" != "MM sub" ] || git --git-dir="$d" cat-file -e "$B" 2>/dev/null; then
+    bad "$name" "FIXTURE: status=[$row], or the main checkout already holds B"; rm -rf "$root"; return
+  fi
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1)
+  base=$(carried_base "$root")
+  if grep -q '^SALVAGED .*stagedlink ' <<<"$out" && [ ! -e "$wt" ] && [ -n "$base" ] \
+     && [ "$(git -C "$root/repo" rev-parse --verify --quiet "$base/index:sub")" = "$B" ] \
+     && [ "$(git -C "$root/repo" rev-parse --verify --quiet "$base/worktree:sub")" = "$A" ] \
+     && [ "$(git --git-dir="$d" rev-parse --verify --quiet "$base/head")" = "$A" ] \
+     && [ "$(git --git-dir="$d" rev-parse --verify --quiet "$base/commit/$B")" = "$B" ] \
+     && [ "$(git --git-dir="$d" log -1 --format=%s "$B" 2>/dev/null)" = "staged in the parent" ]; then
+    ok "$name"
+  else
+    bad "$name" "A=$A B=$B base=[$base] $out"
+  fi
+  rm -rf "$root"
+}
+
+# keeps_uncarried <test-name> <worktree-name> <reason-regex> <mutation> [mode] — the negative
+# controls: the same worktree as the positive cases, with an uncommitted edit in its
+# submodule, plus one <mutation> (with $root, $wt and $d, the main checkout's repository for
+# the submodule, set). The KEEP must give that mutation's reason, the worktree and the edit
+# must still be there, and the main checkout's repository must hold no salvage ref.
+keeps_uncarried() {
+  local name=$1 wtname=$2 reason=$3 mutation=$4
+  local root; root=$(make_repo)
+  carry_wt "$root" "$wtname" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/$wtname" d="$root/repo/.git/modules/sub" out
+  echo dirty >> "$wt/sub/f"
+  age_tree "$wt"
+  if ! eval "$mutation" >/dev/null 2>&1; then bad "$name" "FIXTURE: mutation"; chmod -R u+w "$root" 2>/dev/null; rm -rf "$root"; return; fi
+  out=$(run_salvage "$root" apply 1)
+  chmod -R u+w "$d" 2>/dev/null
+  if grep -Eq "^KEEP .*$wtname .*$reason" <<<"$out" && ! grep -q "SALVAGED .*$wtname" <<<"$out" \
+     && [ -d "$wt" ] && grep -q dirty "$wt/sub/f" \
+     && [ -z "$(git --git-dir="$d" for-each-ref refs/salvaged 2>/dev/null)" ] \
+     && ! grep -q 'reaped$' "$root/manifest.tsv" 2>/dev/null; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_submodule_work_with_no_main_checkout_repository() {
+  # The submodule exists only in the worktree, so nothing outlives it: the KEEP is the one
+  # the pristine check always gave, word for word.
+  local name="salvage KEEPs submodule work when the main checkout has no repository for that submodule"
+  local root; root=$(make_repo)
+  admin_sub_wt "$root" nodurable || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/nodurable"
+  portfolio_origin "$root" "$wt" || { bad "$name" "FIXTURE: origin"; rm -rf "$root"; return; }
+  echo dirty >> "$wt/sub/f"
+  age_tree "$wt"
+  local out; out=$(run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*nodurable .*1 in a submodule; not salvaged: holds submodule repositories salvage cannot clear (modules/sub: its checkout holds changes)$' <<<"$out" \
+     && [ -d "$wt" ] && grep -q dirty "$wt/sub/f" && [ ! -e "$root/repo/.git/modules" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_names_another_origin() {
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's repository names another origin" otherorigin \
+    'modules/sub: its checkout holds changes; its work cannot be carried either: the main checkout.s modules/sub does not name the same origin' \
+    'git config --file "$d/config" remote.origin.url https://github.com/devantler-tech/another.git'
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_origin_is_local() {
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's repository names a local origin" localorigin \
+    'its work cannot be carried either: the main checkout.s modules/sub does not name the same origin' \
+    'git config --file "$d/config" remote.origin.url "$root/subsrc"'
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_a_symlink() {
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's repository is a symbolic link" linkdurable \
+    'its work cannot be carried either: the main checkout.s modules/sub is not a plain directory' \
+    'mv "$d" "$root/elsewhere" && ln -s "$root/elsewhere" "$d"'
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_borrows_objects() {
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's repository borrows its objects" altdurable \
+    'its work cannot be carried either: the main checkout.s modules/sub borrows its objects from another repository' \
+    'mkdir -p "$d/objects/info" && echo "$root/subsrc/.git/objects" > "$d/objects/info/alternates"'
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_read_only() {
+  local name="salvage KEEPs submodule work when the main checkout's repository cannot be written"
+  if [ "$(id -u)" = 0 ]; then ok "$name (skipped: root ignores permissions)"; return; fi
+  keeps_uncarried "$name" rodurable \
+    'its work cannot be carried either: the main checkout.s modules/sub cannot be written to' \
+    'chmod a-w "$d/objects"'
+}
+
+t_salvage_keeps_submodule_work_when_the_copy_fails() {
+  # Nothing the read-only checks look at is wrong, but no ref can be created under
+  # refs/salvaged in the receiving repository, so the copy itself fails. The parent's own
+  # salvage refs were written by then and stay; the worktree does too.
+  local name="salvage KEEPs submodule work when the copy into the main checkout's repository fails"
+  local root; root=$(make_repo)
+  carry_wt "$root" copyfail || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/copyfail" d="$root/repo/.git/modules/sub" out
+  echo dirty >> "$wt/sub/f"
+  : > "$d/refs/salvaged"
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1)
+  if grep -q "^KEEP .*copyfail .*not salvaged: cannot copy the work of modules/sub into the main checkout's repository for it" <<<"$out" \
+     && [ -d "$wt" ] && grep -q dirty "$wt/sub/f" && [ ! -s "$d/refs/salvaged" ] \
+     && ! grep -q 'reaped$' "$root/manifest.tsv" 2>/dev/null; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_submodule_work_when_the_copy_does_not_verify() {
+  # The copy "succeeds" without bringing the objects: a git shim turns the fetch into a
+  # no-op. The read-back must refuse it.
+  local name="salvage KEEPs submodule work when the copy does not verify in the main checkout's repository"
+  local root; root=$(make_repo)
+  carry_wt "$root" noverify || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/noverify" d="$root/repo/.git/modules/sub" out real_git
+  real_git=$(command -v git)
+  echo dirty >> "$wt/sub/f"
+  cat > "$root/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" ls-remote -- $PORTFOLIO_URL "*) exec "$real_git" ls-remote "$root/subsrc" ;;
+  *" fetch --quiet --no-tags "*) echo x >> "$root/fetch-skipped"; exit 0 ;;
+esac
+exec "$real_git" "\$@"
+SHIM
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1)
+  if grep -q "^KEEP .*noverify .*not salvaged: refs/salvaged/.*/head does not verify in the main checkout's modules/sub" <<<"$out" \
+     && [ -e "$root/fetch-skipped" ] && [ -d "$wt" ] && grep -q dirty "$wt/sub/f" \
+     && ! grep -q 'reaped$' "$root/manifest.tsv" 2>/dev/null; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_submodule_work_the_main_checkout_only_claims_to_hold() {
+  # The main checkout's repository already has a branch at the carried commit but has lost
+  # one of the files that commit holds. The copy then sends nothing (the commit is "had"),
+  # so only a walk of everything the carried refs reach can see the hole.
+  local name="salvage KEEPs submodule work when the main checkout's repository lacks an object a ref of its own claims"
+  local root; root=$(make_repo)
+  carry_wt "$root" hollow || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/hollow" d="$root/repo/.git/modules/sub" out c blob obj
+  echo only-here > "$wt/sub/g" && git -C "$wt/sub" add g && git -C "$wt/sub" commit -qm local-only \
+    || { bad "$name" "FIXTURE: commit"; rm -rf "$root"; return; }
+  c=$(git -C "$wt/sub" rev-parse HEAD); blob=$(git -C "$wt/sub" rev-parse HEAD:g)
+  git --git-dir="$d" -c protocol.file.allow=always fetch -q --no-tags "$(git -C "$wt/sub" rev-parse --absolute-git-dir)" \
+      "$c:refs/heads/claims" >/dev/null 2>&1 \
+    || { bad "$name" "FIXTURE: fetch"; rm -rf "$root"; return; }
+  obj="$d/objects/$(printf '%s' "$blob" | cut -c1-2)/$(printf '%s' "$blob" | cut -c3-)"
+  [ -f "$obj" ] && rm -f "$obj" && ! git --git-dir="$d" cat-file -e "$blob" 2>/dev/null \
+    || { bad "$name" "FIXTURE: the file's object is not loose"; rm -rf "$root"; return; }
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1)
+  if grep -q "^KEEP .*hollow .*not salvaged: the work of modules/sub is not complete in the main checkout's repository for it" <<<"$out" \
+     && [ -d "$wt" ] && [ "$(cat "$wt/sub/g")" = only-here ] \
+     && ! grep -q 'reaped$' "$root/manifest.tsv" 2>/dev/null; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_owned_worktree_even_with_a_main_checkout_repository() {
+  # A worktree registered to the submodule, inside the candidate: the existing guard keeps
+  # it whatever could be carried, and the carry check refuses the repository too.
+  keeps_uncarried "salvage KEEPs a worktree whose submodule owns a nested worktree, carried or not" subowned \
+    'contains a submodule-owned worktree \(sub/\.claude/worktrees/inner\)' \
+    'git -C "$wt/sub" worktree add -q "$wt/sub/.claude/worktrees/inner" && age_tree "$wt"'
+}
+
+t_salvage_keeps_a_pruned_submodule_worktree_registration() {
+  # The nested worktree's directory is gone but the submodule repository still holds its
+  # registration (and with it a HEAD, an index and a reflog nothing here reads).
+  keeps_uncarried "salvage KEEPs a submodule repository that still registers a worktree" subreg \
+    '(contains a submodule-owned worktree|modules/sub: it holds worktrees)' \
+    'git -C "$wt/sub" worktree add -q "$wt/sub/.claude/worktrees/inner" && rm -rf "$wt/sub/.claude" && age_tree "$wt"'
+}
+
+t_salvage_keeps_an_embedded_repository_in_a_submodule() {
+  keeps_uncarried "salvage KEEPs a submodule holding an untracked embedded repository" subembedded \
+    'modules/sub: in its checkout, untracked embedded repository \(emb/\) cannot be salvaged' \
+    'git init -q "$wt/sub/emb" && echo x > "$wt/sub/emb/x" && git -C "$wt/sub/emb" add x && git -C "$wt/sub/emb" -c user.email=t@t.t -c user.name=t commit -qm x && age_tree "$wt"'
+}
+
+t_salvage_keeps_ignored_files_under_a_submodules_worktree_root() {
+  # The submodule ignores .claude/worktrees/, so the snapshot would leave these behind.
+  keeps_uncarried "salvage KEEPs a submodule holding ignored files under its agent worktree root" subignored \
+    'modules/sub: its checkout holds ignored files under an agent worktree root' \
+    'echo ".claude/worktrees/" > "$wt/sub/.gitignore" && mkdir -p "$wt/sub/.claude/worktrees/old" && echo left > "$wt/sub/.claude/worktrees/old/notes" && age_tree "$wt"'
+}
+
+t_salvage_keeps_a_stash_in_a_submodule_even_with_a_main_checkout_repository() {
+  keeps_uncarried "salvage KEEPs a submodule holding a stash, which is not carried" substashed \
+    'modules/sub: it holds the ref refs/stash' \
+    'echo more >> "$wt/sub/f" && git -C "$wt/sub" stash -q && echo dirty >> "$wt/sub/f" && age_tree "$wt"'
+}
+
+t_salvage_keeps_a_hidden_edit_in_a_submodule_with_a_main_checkout_repository() {
+  keeps_uncarried "salvage KEEPs a submodule whose index hides an edit from status, carried or not" subflag \
+    'modules/sub: its index hides files from status' \
+    'git -C "$wt/sub" update-index --assume-unchanged f && echo seen > "$wt/sub/other.txt" && age_tree "$wt"'
+}
+
+t_salvage_keeps_submodule_work_newer_than_the_salvage_age() {
+  # The worktree and the submodule's repository are old; one file in the submodule's
+  # checkout was edited just now. Nothing in the parent or in the repository shows it.
+  local name="salvage KEEPs a worktree whose submodule file was edited since the salvage age"
+  local root; root=$(make_repo)
+  carry_wt "$root" subfresh || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subfresh" d="$root/repo/.git/modules/sub" out
+  echo dirty >> "$wt/sub/f"
+  age_tree "$wt"
+  echo fresh >> "$wt/sub/f"                             # mtime is now; no git command follows
+  out=$(run_salvage "$root" apply 1)
+  if grep -q '^KEEP .*subfresh .*1 uncommitted change(s)$' <<<"$out" && grep -q fresh "$wt/sub/f" \
+     && [ -z "$(git --git-dir="$d" for-each-ref refs/salvaged)" ] && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_dry_run_of_submodule_work_writes_nothing() {
+  local name="salvage dry-run reports carried submodule work and writes no ref, object, index or manifest"
+  local root; root=$(make_repo)
+  carry_wt "$root" subdryrun || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subdryrun" d="$root/repo/.git/modules/sub" g out before after
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "local only" && echo staged > "$wt/sub/g" \
+    && git -C "$wt/sub" add g && echo dirty >> "$wt/sub/f" && echo draft > "$wt/sub/untracked.txt" \
+    || { bad "$name" "FIXTURE: work"; rm -rf "$root"; return; }
+  age_tree "$wt"
+  # Every file of all three repositories, with its size and time: nothing may change.
+  # GNU form first: GNU stat reads -f as "file system status" and does not fail on it.
+  if "$REAL_STAT" -c '%n' "$root" >/dev/null 2>&1; then
+    listing() { find "$root/repo/.git" -type f -exec "$REAL_STAT" -c '%n %s %Y' {} + 2>/dev/null | sort | cksum; }
+  else
+    listing() { find "$root/repo/.git" -type f -exec "$REAL_STAT" -f '%N %z %m' {} + 2>/dev/null | sort | cksum; }
+  fi
+  before=$(listing)
+  out=$(run_salvage "$root" dry-run 1)
+  after=$(listing)
+  if grep -q "^SALVAGE .*subdryrun .*work of 1 submodule(s) carried to the main checkout's" <<<"$out" \
+     && [ "$before" = "$after" ] && [ -d "$wt" ] && [ ! -e "$root/manifest.tsv" ] \
+     && [ -z "$(git --git-dir="$d" for-each-ref refs/salvaged)" ] && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ] \
+     && [ -d "$g" ]; then
+    ok "$name"
+  else
+    bad "$name" "files $before -> $after :: $out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_submodule_work_edited_after_the_snapshot() {
+  # A file edited in the submodule after its work was carried changes none of the parent's
+  # trees and none of the submodule repository's files.
+  local name="salvage KEEPs a worktree whose submodule file was edited after its work was carried"
+  local root; root=$(make_repo)
+  carry_wt "$root" sublateedit || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/sublateedit" shim out
+  echo dirty >> "$wt/sub/f"
+  age_tree "$wt"
+  shim=$(lsof_hook_shim "$root" 3 "echo late >> '$wt/sub/f'") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if ! grep -q late "$wt/sub/f" 2>/dev/null; then
+    bad "$name" "the late edit was never made, or the worktree is gone: $out"
+  elif grep -q "KEEP .*sublateedit .*a submodule's work changed after the salvage snapshot" <<<"$out" && [ -d "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_caps_the_data_carried_from_a_submodule() {
+  # The cap covers what a submodule's snapshot would make permanent in the main checkout's
+  # repository, exactly as it covers the parent's.
+  local name="salvage KEEPs a submodule holding more untracked data than the salvage cap"
+  local root; root=$(make_repo)
+  carry_wt "$root" subbig || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subbig" d="$root/repo/.git/modules/sub" out
+  head -c 65536 /dev/urandom > "$wt/sub/blob.bin"
+  age_tree "$wt"
+  out=$(WORKTREE_SALVAGE_MAX_KB=8 run_salvage "$root" apply 1)
+  if grep -q 'KEEP .*subbig .*modules/sub: in its checkout, more than 8 KB of changed or untracked data' <<<"$out" \
+     && [ -f "$wt/sub/blob.bin" ] && [ -z "$(git --git-dir="$d" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_cap_sums_the_parent_and_its_submodules() {
+  # 64 KB in the submodule and 64 KB in the parent, under a cap with room for one of them
+  # on top of the repository files that are kept anyway: together they pass it.
+  local name="the salvage cap counts a carried submodule's data together with the parent's"
+  local root; root=$(make_repo)
+  carry_wt "$root" subsum || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subsum" admin f sz kept=0 cap out control
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  head -c 65536 /dev/urandom > "$wt/sub/blob.bin"; head -c 65536 /dev/urandom > "$wt/blob.bin"
+  age_tree "$wt"
+  while IFS= read -r f; do
+    sz=$(wc -c < "$f" | tr -d ' '); kept=$((kept + (sz + 1023) / 1024))
+  done < <(find "$admin/modules" -type f ! -path '*/objects/*')
+  cap=$((kept + 100))
+  out=$(WORKTREE_SALVAGE_MAX_KB=$cap run_salvage "$root" dry-run 1)
+  control=$(WORKTREE_SALVAGE_MAX_KB=$((kept + 200)) run_salvage "$root" dry-run 1)
+  if grep -q "KEEP .*subsum .*not salvaged: more than $cap KB of changed or untracked data" <<<"$out" \
+     && grep -q '^SALVAGE .*subsum ' <<<"$control"; then
+    ok "$name"
+  else
+    bad "$name" "kept=$kept cap=$cap :: $out :: $control"
+  fi
+  rm -rf "$root"
+}
+
+# module_files_kept_kb <worktree> — prints the KB of the submodule repository files salvage
+# keeps anyway (module_files_tree), so a test can set a cap relative to them.
+module_files_kept_kb() {
+  local admin f sz kept=0
+  admin=$(git -C "$1" rev-parse --absolute-git-dir)
+  while IFS= read -r f; do
+    sz=$(wc -c < "$f" | tr -d ' '); kept=$((kept + (sz + 1023) / 1024))
+  done < <(find "$admin/modules" -type f ! -path '*/objects/*')
+  printf '%s\n' "$kept"
+}
+
+t_salvage_cap_counts_the_commits_a_submodule_carries() {
+  # A megabyte committed in the submodule: no changed or untracked file anywhere, so only
+  # the commit's own objects carry it. Dry-run and apply must refuse it alike, and the same
+  # commit costs nothing once the main checkout's repository already holds it.
+  local name="the salvage cap counts the commits carried from a submodule, in dry-run and apply alike"
+  local root; root=$(make_repo)
+  carry_wt "$root" subhist || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subhist" d="$root/repo/.git/modules/sub" g kept cap dry applied held
+  g=$(git -C "$wt/sub" rev-parse --absolute-git-dir)
+  head -c 1048576 /dev/urandom > "$wt/sub/blob.bin" && git -C "$wt/sub" add blob.bin \
+    && git -C "$wt/sub" commit -qm "a large commit" || { bad "$name" "FIXTURE: commit"; rm -rf "$root"; return; }
+  age_tree "$wt"
+  kept=$(module_files_kept_kb "$wt"); cap=$((kept + 100))
+  if [ "$kept" -gt 800 ]; then bad "$name" "FIXTURE: $kept KB of repository files leaves no room under the blob"; rm -rf "$root"; return; fi
+  dry=$(WORKTREE_SALVAGE_MAX_KB=$cap run_salvage "$root" dry-run 1)
+  applied=$(WORKTREE_SALVAGE_MAX_KB=$cap run_salvage "$root" apply 1)
+  # Control: the main checkout's repository now holds that commit, so the copy adds nothing.
+  git --git-dir="$d" fetch -q "$g" HEAD:refs/heads/held 2>/dev/null \
+    || { bad "$name" "FIXTURE: control fetch"; rm -rf "$root"; return; }
+  held=$(WORKTREE_SALVAGE_MAX_KB=$cap run_salvage "$root" dry-run 1)
+  local want="KEEP .*subhist .*modules/sub: carrying its commits and files would add more than $cap KB to the main checkout's repository"
+  if grep -q "$want" <<<"$dry" && grep -q "$want" <<<"$applied" && [ -d "$wt" ] \
+     && [ -z "$(git --git-dir="$d" for-each-ref refs/salvaged)" ] && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ] \
+     && grep -q '^SALVAGE .*subhist ' <<<"$held"; then
+    ok "$name"
+  else
+    bad "$name" "cap=$cap :: $dry :: $applied :: $held"
+  fi
+  rm -rf "$root"
+}
+
+t_unknown_when_carried_commits_cannot_be_measured() {
+  # The receiving repository's refs cannot be listed, so what the copy would add is not
+  # known: kept, and the sweep must not end as a clean pass.
+  local name="carried commits that cannot be measured keep the worktree and end the sweep UNKNOWN"
+  local root; root=$(make_repo)
+  carry_wt "$root" subunmeasured || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subunmeasured" d="$root/repo/.git/modules/sub" real_git out rc
+  real_git=$(command -v git)
+  echo dirty >> "$wt/sub/f"
+  cat > "$root/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" ls-remote -- $PORTFOLIO_URL "*) exec "$real_git" ls-remote "$root/subsrc" ;;
+  *" --git-dir=$d --work-tree=$d for-each-ref --format=%(objectname) ") exit 1 ;;
+esac
+exec "$real_git" "\$@"
+SHIM
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1); rc=$?
+  if [ "$rc" -eq 2 ] && [ -d "$wt" ] \
+     && grep -q "KEEP .*subunmeasured .*modules/sub: what carrying its commits would add to the main checkout's repository cannot be measured" <<<"$out" \
+     && grep -q 'UNKNOWN — could not read a submodule repository or its remote' <<<"$out" \
+     && [ -z "$(git --git-dir="$d" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+# repo_only_wt <root> <name> — carry_wt, then work that only the submodule's REPOSITORY
+# holds: a commit on a local branch, with the checkout back on the recorded gitlink. The
+# parent's status is clean and so is the submodule's.
+repo_only_wt() {
+  local root=$1 name=$2 wt="$1/repo/.claude/worktrees/$2" link
+  carry_wt "$root" "$name" || return 1
+  link=$(git -C "$wt/sub" rev-parse HEAD)
+  git -C "$wt/sub" checkout -q -b side && echo local >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "branch only" \
+    && git -C "$wt/sub" rev-parse HEAD > "$root/side-$name" && git -C "$wt/sub" checkout -q --detach "$link" || return 1
+  [ -z "$(GIT_OPTIONAL_LOCKS=0 git -C "$wt" status --porcelain --ignore-submodules=none)" ] || return 1
+  age_tree "$wt"
+}
+
+t_salvage_carries_work_only_a_submodule_repository_holds() {
+  # Nothing in the parent's status and nothing in the submodule's: before, this was a KEEP
+  # no sweep could ever clear, whatever its age.
+  local name="salvage carries a commit only a submodule's repository holds, with a clean parent and a clean submodule"
+  local root; root=$(make_repo)
+  repo_only_wt "$root" subrepoonly || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subrepoonly" d="$root/repo/.git/modules/sub" out base side
+  side=$(cat "$root/side-subrepoonly")
+  out=$(run_salvage "$root" apply 1)
+  base=$(carried_base "$root")
+  if grep -q '^SALVAGED .*subrepoonly ' <<<"$out" && [ ! -e "$wt" ] && [ -n "$base" ] \
+     && [ "$(git --git-dir="$d" log -1 --format=%s "$base/commit/$side" 2>/dev/null)" = "branch only" ] \
+     && grep -q "salvaged=$base (a submodule repository holds commit(s) its remote lacks);submodule=modules/sub;" "$root/manifest.tsv"; then
+    ok "$name"
+  else
+    bad "$name" "base=[$base] $out"
+  fi
+  rm -rf "$root"
+}
+
+t_repository_only_submodule_work_keeps_its_other_gates() {
+  # The same state is still the old KEEP when salvage is off and when the repository was
+  # used since the salvage age, and still a KEEP when there is nowhere to carry it.
+  local name="a commit only a submodule's repository holds is still kept without salvage, when fresh, and with nowhere to go"
+  local root; root=$(make_repo)
+  repo_only_wt "$root" offcase && repo_only_wt "$root" freshcase || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local off="$root/repo/.claude/worktrees/offcase" fresh="$root/repo/.claude/worktrees/freshcase" d="$root/repo/.git/modules/sub" g out1 out2 out3
+  out1=$(PATH="$root/ghshim:$root/gitshim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1)
+  g=$(git -C "$fresh/sub" rev-parse --absolute-git-dir)
+  touch "$g/logs/HEAD"                                  # used just now
+  out2=$(run_salvage "$root" dry-run 1)
+  # Nowhere to go: the main checkout's repository for the submodule names another origin.
+  git config --file "$d/config" remote.origin.url https://github.com/devantler-tech/another.git
+  out3=$(run_salvage "$root" apply 1)
+  local old='submodule repository holds commit(s) its remote lacks (modules/sub at '
+  if grep -qF "offcase" <<<"$out1" && grep -q "^KEEP .*offcase .*" <<<"$out1" && grep -qF "$old" <<<"$(grep offcase <<<"$out1")" \
+     && grep -qF "$old" <<<"$(grep freshcase <<<"$out2")" && grep -q '^SALVAGE .*offcase ' <<<"$out2" \
+     && grep -q "^KEEP .*offcase .*a submodule repository holds commit(s) its remote lacks; not salvaged: .*its work cannot be carried either: the main checkout.s modules/sub does not name the same origin" <<<"$out3" \
+     && [ -d "$off" ] && [ -d "$fresh" ] && [ -z "$(git --git-dir="$d" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "1: $out1 :: 2: $out2 :: 3: $out3"
+  fi
+  rm -rf "$root"
+}
+
+# keeps_after_tampering <test-name> <worktree-name> <reason-regex> <hook-body> — a worktree
+# whose submodule work is carried, then <hook-body> runs between the copy and the removal
+# (as the post-snapshot re-check starts) with $d the main checkout's repository for the
+# submodule and $repo the parent. The worktree must be kept for that reason.
+keeps_after_tampering() {
+  local name=$1 wtname=$2 reason=$3 body=$4
+  local root; root=$(make_repo)
+  carry_wt "$root" "$wtname" || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/$wtname" d="$root/repo/.git/modules/sub" shim out
+  echo dirty >> "$wt/sub/f"
+  age_tree "$wt"
+  { printf '#!/usr/bin/env bash\nd=%q\nrepo=%q\n' "$d" "$root/repo"; printf '%s\n' "$body"; printf ': > %q\n' "$root/tampered"; } > "$root/hook.sh"
+  shim=$(lsof_hook_shim "$root" 3 "bash '$root/hook.sh' >/dev/null 2>&1") \
+    || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if [ ! -e "$root/tampered" ]; then
+    bad "$name" "the hook never ran: $out"
+  elif grep -Eq "^KEEP .*$wtname .*$reason" <<<"$out" && [ -d "$wt" ] && grep -q dirty "$wt/sub/f" \
+       && ! grep -q 'reaped$' "$root/manifest.tsv" 2>/dev/null; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_when_a_carried_ref_is_deleted_before_removal() {
+  keeps_after_tampering "salvage KEEPs a worktree whose carried submodule ref was deleted before the removal" carrydeleted \
+    "a submodule.s carried work no longer verifies before removal \(refs/salvaged/.*/worktree does not verify in the main checkout.s modules/sub\)" \
+    'for r in $(git --git-dir="$d" for-each-ref --format="%(refname)" "refs/salvaged/*/worktree"); do git --git-dir="$d" update-ref -d "$r"; done'
+}
+
+t_salvage_keeps_when_a_carried_ref_is_moved_before_removal() {
+  keeps_after_tampering "salvage KEEPs a worktree whose carried submodule ref was moved before the removal" carrymoved \
+    "a submodule.s carried work no longer verifies before removal \(refs/salvaged/.*/index does not verify in the main checkout.s modules/sub\)" \
+    'for r in $(git --git-dir="$d" for-each-ref --format="%(refname)" "refs/salvaged/*/index"); do git --git-dir="$d" update-ref "$r" "$(git --git-dir="$d" rev-parse "${r%/index}/head")"; done'
+}
+
+t_salvage_keeps_when_the_carry_record_is_deleted_before_removal() {
+  keeps_after_tampering "salvage KEEPs a worktree whose record of carried submodule work was deleted before the removal" carryrecord \
+    "the record of the carried submodule work changed before removal \(refs/salvaged/.*/submodules\)" \
+    'for r in $(git -C "$repo" for-each-ref --format="%(refname)" "refs/salvaged/*/submodules"); do git -C "$repo" update-ref -d "$r"; done'
+}
+
+t_salvage_keeps_when_the_carry_record_is_rewritten_before_removal() {
+  keeps_after_tampering "salvage KEEPs a worktree whose record of carried submodule work was rewritten before the removal" carryrewritten \
+    "the record of the carried submodule work changed before removal \(refs/salvaged/.*/submodules\)" \
+    'for r in $(git -C "$repo" for-each-ref --format="%(refname)" "refs/salvaged/*/submodules"); do git -C "$repo" update-ref "$r" "$(echo other | git -C "$repo" hash-object -w --stdin)"; done'
+}
+
+t_salvage_keeps_when_the_carry_record_object_is_gone_before_removal() {
+  # The ref still names the record, but the object behind it was removed from the store.
+  keeps_after_tampering "salvage KEEPs a worktree whose record of carried submodule work lost its object before the removal" carrygone \
+    "the record of the carried submodule work changed before removal \(refs/salvaged/.*/submodules\)" \
+    'for r in $(git -C "$repo" for-each-ref --format="%(objectname)" "refs/salvaged/*/submodules"); do rm -f "$repo/.git/objects/${r:0:2}/${r:2}"; done'
+}
+
+t_aborts_when_the_shared_git_directory_cannot_be_resolved() {
+  # A failed read of where the main checkout's submodule repositories live is not "there
+  # are none": the sweep must stop before judging or removing anything.
+  local name="aborts when the repository's shared git directory cannot be resolved"
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local real_git out rc; real_git=$(command -v git)
+  mkdir -p "$root/gitshim"
+  cat > "$root/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in *" rev-parse --git-common-dir "*) exit 128 ;; esac
+exec "$real_git" "\$@"
+SHIM
+  chmod +x "$root/gitshim/git"
+  out=$(run_salvage "$root" apply 1); rc=$?
+  local control; control=$("$SUT" "$root/repo" "$root/manifest.tsv" dry-run 24 2>&1)
+  if [ "$rc" -eq 2 ] && grep -q 'worktree-cleanup: cannot resolve the shared git directory of ' <<<"$out" \
+     && ! grep -q 'REAP\|KEEP' <<<"$out" && [ -d "$root/repo/.claude/worktrees/spent" ] \
+     && grep -q '^REAP  *spent' <<<"$control"; then
+    ok "$name"
+  else
+    bad "$name" "rc=$rc $out :: $control"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_submodule_work_when_its_namespace_already_exists() {
+  # The receiving repository already holds a ref under the very name this salvage would
+  # use (the clock is pinned so the name can be known in advance). A fetch would move it
+  # forward without a word.
+  local name="salvage KEEPs submodule work when its salvage namespace already exists in the main checkout's repository"
+  local root; root=$(make_repo)
+  carry_wt "$root" subtaken || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/subtaken" d="$root/repo/.git/modules/sub" real_date base pid sha out before
+  real_date=$(command -v date)
+  mkdir -p "$root/dateshim"
+  cat > "$root/dateshim/date" <<SHIM
+#!/usr/bin/env bash
+case "\$*" in "-u +%Y%m%dT%H%M%SZ") echo 20200101T000000Z; exit 0 ;; esac
+exec "$real_date" "\$@"
+SHIM
+  chmod +x "$root/dateshim/date"
+  echo dirty >> "$wt/sub/f"
+  pid=$(printf '%s' "$wt" | git hash-object --stdin); sha=$(git -C "$wt" rev-parse HEAD)
+  base="refs/salvaged/20200101T000000Z-subtaken-${pid:0:12}-${sha:0:12}"
+  before=$(git --git-dir="$d" rev-parse HEAD)
+  git --git-dir="$d" update-ref "$base/head" "$before" || { bad "$name" "FIXTURE: ref"; rm -rf "$root"; return; }
+  age_tree "$wt"
+  out=$(PATH="$root/dateshim:$PATH" run_salvage "$root" apply 1)
+  if grep -q "^KEEP .*subtaken .*not salvaged: $base already exists in the main checkout's modules/sub" <<<"$out" \
+     && [ -d "$wt" ] && [ "$(git --git-dir="$d" rev-parse "$base/head")" = "$before" ] \
+     && [ "$(git --git-dir="$d" for-each-ref refs/salvaged | grep -c .)" = 1 ]; then
+    ok "$name"
+  else
+    bad "$name" "base=$base :: $out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_limits_the_refs_carried_from_one_submodule() {
+  # Fifty local-only commits are carried; fifty-one are not a worktree's abandoned work.
+  local name="salvage carries up to 50 commits of one submodule and KEEPs at 51"
+  local root; root=$(make_repo)
+  carry_wt "$root" submany || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/submany" i c tree at50 at51
+  tree=$(git -C "$wt/sub" rev-parse 'HEAD^{tree}')
+  for i in $(seq 1 50); do
+    c=$(git -C "$wt/sub" commit-tree "$tree" -p HEAD -m "local $i") && git -C "$wt/sub" update-ref "refs/heads/b$i" "$c" \
+      || { bad "$name" "FIXTURE: commit $i"; rm -rf "$root"; return; }
+  done
+  age_tree "$wt"
+  at50=$(run_salvage "$root" dry-run 1)
+  c=$(git -C "$wt/sub" commit-tree "$tree" -p HEAD -m "local 51") && git -C "$wt/sub" update-ref refs/heads/b51 "$c"
+  age_tree "$wt"
+  at51=$(run_salvage "$root" dry-run 1)
+  if grep -q '^SALVAGE .*submany .*work of 1 submodule(s) carried' <<<"$at50" \
+     && grep -q 'KEEP .*submany .*modules/sub: it holds more than 50 commits and tags its remote does not advertise' <<<"$at51"; then
+    ok "$name"
+  else
+    bad "$name" "50: $at50 :: 51: $at51"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_a_partial_clone() {
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's repository is a partial clone" partialdurable \
+    'its work cannot be carried either: the main checkout.s modules/sub is a partial clone' \
+    'git config --file "$d/config" remote.origin.promisor true'
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_rewrites_urls() {
+  # The copy is a fetch run in the receiving repository, so a rewrite rule of its own could
+  # send it somewhere else, the network included.
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's repository rewrites URLs" rewritedurable \
+    'its work cannot be carried either: the main checkout.s modules/sub rewrites URLs or includes other configuration' \
+    'git config --file "$d/config" url.https://example.invalid/.insteadOf "$root/"'
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_includes_configuration() {
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's repository includes other configuration" includedurable \
+    'its work cannot be carried either: the main checkout.s modules/sub rewrites URLs or includes other configuration' \
+    'git config --file "$d/config" include.path "$root/elsewhere.config"'
+}
+
+t_salvage_keeps_submodule_work_when_the_main_checkout_worktree_configuration_rewrites_urls() {
+  keeps_uncarried "salvage KEEPs submodule work when the main checkout's worktree configuration rewrites URLs" rewritewtdurable \
+    'its work cannot be carried either: the main checkout.s modules/sub rewrites URLs or includes other configuration' \
+    'git config --file "$d/config.worktree" url.https://example.invalid/.insteadOf "$root/"'
+}
+
+t_salvage_carries_one_submodule_and_clears_another() {
+  # Two worktrees in one sweep: one whose submodule holds work, one whose submodule is
+  # pristine. The pristine one is salvaged exactly as before, with nothing carried.
+  local name="salvage carries a submodule's work only where there is some"
+  local root; root=$(make_repo)
+  carry_wt "$root" withwork && carry_wt "$root" pristine || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local a="$root/repo/.claude/worktrees/withwork" b="$root/repo/.claude/worktrees/pristine" d="$root/repo/.git/modules/sub" out
+  echo dirty >> "$a/sub/f"; echo draft > "$b/untracked.txt"
+  age_tree "$a" "$b"
+  out=$(run_salvage "$root" apply 1)
+  if grep -q '^SALVAGED .*withwork ' <<<"$out" && grep -q '^SALVAGED .*pristine ' <<<"$out" \
+     && [ ! -e "$a" ] && [ ! -e "$b" ] \
+     && [ "$(carried_base "$root" | grep -c .)" = 1 ] \
+     && [ "$(grep -c ';submodule=modules/sub;' "$root/manifest.tsv")" = 1 ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup.sh contract tests\n'
 t_reaps_spent
 t_keeps_unpushed
@@ -5606,6 +6512,52 @@ t_submodule_drift_keeps_local_only_refs
 t_undrifted_submodule_repository_is_checked
 t_undrifted_submodule_evidence
 t_submodule_work_during_the_sweep_keeps
+t_salvage_carries_a_dirty_tracked_file_in_a_submodule
+t_salvage_carries_an_untracked_file_in_a_submodule
+t_salvage_carries_a_staged_change_in_a_submodule
+t_salvage_carries_an_unpushed_commit_in_a_clean_submodule
+t_salvage_restores_carried_submodule_work_from_the_manifest
+t_keeps_a_gitlink_that_cannot_be_enumerated
+t_salvage_preserves_a_staged_gitlink_update
+t_salvage_keeps_a_submodule_whose_name_would_break_the_manifest
+t_salvage_keeps_a_submodule_whose_checkout_path_would_break_the_record
+t_salvage_keeps_submodule_work_with_no_main_checkout_repository
+t_salvage_keeps_submodule_work_when_the_main_checkout_names_another_origin
+t_salvage_keeps_submodule_work_when_the_main_checkout_origin_is_local
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_a_symlink
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_borrows_objects
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_read_only
+t_salvage_keeps_submodule_work_when_the_copy_fails
+t_salvage_keeps_submodule_work_when_the_copy_does_not_verify
+t_salvage_keeps_submodule_work_the_main_checkout_only_claims_to_hold
+t_salvage_keeps_a_submodule_owned_worktree_even_with_a_main_checkout_repository
+t_salvage_keeps_a_pruned_submodule_worktree_registration
+t_salvage_keeps_an_embedded_repository_in_a_submodule
+t_salvage_keeps_ignored_files_under_a_submodules_worktree_root
+t_salvage_keeps_a_stash_in_a_submodule_even_with_a_main_checkout_repository
+t_salvage_keeps_a_hidden_edit_in_a_submodule_with_a_main_checkout_repository
+t_salvage_keeps_submodule_work_newer_than_the_salvage_age
+t_salvage_dry_run_of_submodule_work_writes_nothing
+t_salvage_keeps_submodule_work_edited_after_the_snapshot
+t_salvage_carries_one_submodule_and_clears_another
+t_salvage_caps_the_data_carried_from_a_submodule
+t_salvage_cap_sums_the_parent_and_its_submodules
+t_salvage_cap_counts_the_commits_a_submodule_carries
+t_unknown_when_carried_commits_cannot_be_measured
+t_salvage_carries_work_only_a_submodule_repository_holds
+t_repository_only_submodule_work_keeps_its_other_gates
+t_salvage_keeps_when_a_carried_ref_is_deleted_before_removal
+t_salvage_keeps_when_a_carried_ref_is_moved_before_removal
+t_salvage_keeps_when_the_carry_record_is_deleted_before_removal
+t_salvage_keeps_when_the_carry_record_is_rewritten_before_removal
+t_salvage_keeps_when_the_carry_record_object_is_gone_before_removal
+t_aborts_when_the_shared_git_directory_cannot_be_resolved
+t_salvage_keeps_submodule_work_when_its_namespace_already_exists
+t_salvage_limits_the_refs_carried_from_one_submodule
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_is_a_partial_clone
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_rewrites_urls
+t_salvage_keeps_submodule_work_when_the_main_checkout_repository_includes_configuration
+t_salvage_keeps_submodule_work_when_the_main_checkout_worktree_configuration_rewrites_urls
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 cleanup_test_finished=1
 [ "$fail" -eq 0 ]
