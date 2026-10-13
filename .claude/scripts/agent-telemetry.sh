@@ -2330,7 +2330,14 @@ codex_session_files() {
   # transcript's own recorded cwd. A file whose cwd cannot be determined is
   # EXCLUDED (fail closed) rather than assumed in-scope. Only the head of the
   # file is inspected, so an out-of-scope transcript's body is never read.
-  newest_first "$CODEX_HOME/sessions" \
+  #
+  # BOTH folders are listed (monorepo#4146). `sessions/` holds runs in progress and
+  # delegated sessions; the Codex app moves a scheduled run's transcript to
+  # `archived_sessions/` when the run settles. Reading `sessions/` alone left every
+  # finished scheduled run out: measured on the host, 361 of 361 settled runs in
+  # 14 days were in the archive folder and 0 in `sessions/`. The scope rule and the
+  # newest-first cap are the same for both, so the archive widens neither.
+  { newest_first "$CODEX_HOME/sessions"; newest_first "$CODEX_HOME/archived_sessions"; } \
     | sort -rn | cut -d' ' -f2- \
     | while IFS= read -r f; do
         # Read ONLY the metadata records, not 64 KiB. `session_meta` is the first
@@ -2349,6 +2356,8 @@ SF_COUNT=0
 WINDOW_SINCE=''
 CX_CACHE=''
 CX_COUNT=0
+CX_LIVE=0
+CX_ARCHIVED=0
 ALL_CACHE=''
 
 # ── The window cutoff, computed ONCE for every section that bounds by record ──
@@ -2382,6 +2391,17 @@ populate_session_cache() {
                  || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
   [ "$SAFETY_SCOPE" = claude ] || CX_CACHE="$(codex_session_files)"
   CX_COUNT=$(printf '%s' "$CX_CACHE" | grep -c . || true)
+  # How many listed transcripts came from each folder, so a folder the walk never
+  # reached is visible in the output instead of being inferred from the total.
+  # Matched as a literal path prefix: the Codex home is a path, not a pattern.
+  CX_LIVE=0; CX_ARCHIVED=0
+  local cx_f
+  while IFS= read -r cx_f; do
+    case "$cx_f" in
+      "$CODEX_HOME/archived_sessions/"*) CX_ARCHIVED=$((CX_ARCHIVED + 1)) ;;
+      "$CODEX_HOME/sessions/"*)          CX_LIVE=$((CX_LIVE + 1)) ;;
+    esac
+  done <<<"$CX_CACHE"
   ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
 }
 
@@ -4920,6 +4940,9 @@ if want a2a; then
   # the ones codex_session_files() deliberately excluded as out of scope — so the
   # cross-instance scorecard reported professional sessions it must not see.
   echo "  codex sessions in window ... ${CX_COUNT}  (scope-filtered)"
+  # A settled scheduled Codex run is in the archive folder (monorepo#4146): an
+  # archive count of 0 on a day with scheduled runs means they were not read.
+  echo "    from sessions/ ${CX_LIVE}, from archived_sessions/ ${CX_ARCHIVED}"
   echo "  claude sessions in window .. ${SF_COUNT}"
   # Collisions are inherently a CROSS-instance metric, so reading only the Claude
   # corpus was self-defeating: a race the Codex instance hit — the sibling half of

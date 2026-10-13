@@ -9697,6 +9697,48 @@ dh_rc "dispatch exit: an entry reading zero is a known reading"   0 "$FIX/dh-set
 dh_rc "dispatch exit: a real absence of the role is exit 0"        0 "$FIX/dh-onlyother"   3650
 dh_rc "dispatch exit: a window of only older runs is exit 0"       0 "$FIX/dh-recwin-stale" 1
 dh_rc "dispatch exit: the section switched off is exit 0"          0 "$FIX/dhrec-prose"    3650 DISPATCH_HEALTH=off
+
+# ── monorepo#4146: a settled scheduled Codex run lives in `archived_sessions/` ─
+# The Codex app moves a scheduled run's transcript out of `sessions/` when the
+# run settles. Measured on the host: 361 of 361 settled scheduled runs in 14
+# days were in the archive folder and 0 in `sessions/`, so every Codex figure
+# described delegated sessions and the run in progress only.
+mkdir -p "$FIX/cxarch/sessions" "$FIX/cxarch/archived_sessions" "$FIX/empty"
+cxarch_file() { # $1 = path, $2 = recorded cwd, $3 = output payload
+  printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$2\"}}" > "$1"
+  printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 45\"}"}}' >> "$1"
+  printf '%s\n' "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"output\":\"$3\"}}" >> "$1"
+}
+cxarch_file "$FIX/cxarch/archived_sessions/rollout-settled.jsonl" "$FIX/cxarch" "__AWS__"
+# Out of scope by its own recorded cwd: the archive folder must not widen scope.
+cxarch_file "$FIX/cxarch/archived_sessions/rollout-elsewhere.jsonl" "/somewhere/else" "__SLACK__"
+subst "$FIX/cxarch/archived_sessions/rollout-settled.jsonl" "$FIX/cxarch/archived_sessions/rollout-elsewhere.jsonl"
+cxarch_run() { # $1 = section
+  CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxarch" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    bash "$TARGET" --since-days 3650 --section "$1" 2>&1
+}
+OUT=$(cxarch_run safety)
+cxarch_block=$(awk 'seen { print } /instance scope: codex transcripts/ { seen = 1 }' <<<"$OUT")
+nocheck "archived Codex run: the Codex scope is not empty" "$cxarch_block" "no sessions in window"
+if grep -qF 'aws-access-key-id' <<<"$OUT"; then ok "archived Codex run: a credential shape in it is caught"
+else bad "archived Codex run: a credential shape in it is caught" "missed"; fi
+nocheck "archived Codex run: the raw value is redacted" "$OUT" "$(ex __AWS__)"
+nocheck "archived Codex run: an out-of-scope archived transcript is not scanned" "$OUT" "slack"
+OUT=$(cxarch_run efficiency)
+if grep -qE 'sleep/poll calls \.\. 1( |$)' <<<"$OUT"; then ok "archived Codex run: its busy-wait is counted once"
+else bad "archived Codex run: its busy-wait is counted once" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+OUT=$(cxarch_run a2a)
+check "archived Codex run: counted in the Codex session count" "$OUT" "codex sessions in window ... 1  (scope-filtered)"
+check "archived Codex run: the archive share is printed"       "$OUT" "from sessions/ 0, from archived_sessions/ 1"
+# A run in progress beside it: both folders are read, each counted in its own column.
+cxarch_file "$FIX/cxarch/sessions/rollout-live.jsonl" "$FIX/cxarch" "ok"
+OUT=$(cxarch_run a2a)
+check "archived Codex run: live and archived are both counted" "$OUT" "codex sessions in window ... 2  (scope-filtered)"
+check "archived Codex run: each folder has its own count"      "$OUT" "from sessions/ 1, from archived_sessions/ 1"
+# No archive folder at all (an older runtime): the live folder reads as before.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+check "archived Codex run: a missing archive folder reads zero, not an error" "$OUT" "from sessions/ 1, from archived_sessions/ 0"
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
