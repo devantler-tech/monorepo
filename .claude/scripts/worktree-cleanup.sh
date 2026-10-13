@@ -2905,6 +2905,21 @@ worktree_state_blocker() {
 # one form of the desktop app's marker the removal can delete without losing anything.
 desktop_marker_empty() { [ -f "$1" ] && [ ! -L "$1" ] && [ ! -s "$1" ]; }
 
+# desktop_marker_state <worktree> -> prints `empty` or `absent`; 1 when the admin directory
+# cannot be located or the name holds anything else, so a caller never reads a failed look
+# as "no marker".
+desktop_marker_state() {
+  local admin
+  admin=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 1
+  if [ ! -e "$admin/claude-desktop-worktree" ] && [ ! -L "$admin/claude-desktop-worktree" ]; then
+    printf 'absent\n'
+  elif desktop_marker_empty "$admin/claude-desktop-worktree"; then
+    printf 'empty\n'
+  else
+    return 1
+  fi
+}
+
 # entry_type_ok <path> -> 0 when a whitelisted git-directory entry has the type git gives it:
 # the directory-shaped names are real directories, everything else a file (a symlink to a
 # file counts, as git reads through it). Anything else is state the checks never inspect.
@@ -3813,6 +3828,11 @@ while IFS= read -r wt <&3; do
       keep_stuck "$wt" "not reaped: the index holds more than ${SALVAGE_MAX_KB} KB of resolve-undo stages"; continue
     fi
   fi
+  # The desktop app's marker (#4152) dies with the admin directory on either path, so a
+  # plain reap reads it too: anything but the empty file, or no file, keeps the worktree.
+  if ! desktop_marker=$(desktop_marker_state "$wt"); then
+    keep_stuck "$wt" "not reaped: the desktop app's marker cannot be read or is not the empty file it writes"; continue
+  fi
   if [ "$MODE" = "dry-run" ]; then
     if [ -n "$salvage_reason" ]; then
       # The plan salvage_blocker just built: how many submodules' work apply would carry.
@@ -3889,10 +3909,13 @@ while IFS= read -r wt <&3; do
   [ -n "$SALVAGE_SUBMODULES" ] && reach_evidence="$reach_evidence;$SALVAGE_SUBMODULES"
   [ -n "$RESOLVE_UNDO_REF" ] && reach_evidence="$reach_evidence;resolve-undo=$RESOLVE_UNDO_REF"
   # The desktop app's empty marker dies with the admin directory; the row keeps the fact,
-  # so a restore can tell the folder was a desktop-app session (#4152).
-  desktop_admin=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) \
-    && desktop_marker_empty "$desktop_admin/claude-desktop-worktree" \
-    && reach_evidence="$reach_evidence;desktop-marker=empty"
+  # so a restore can tell the folder was a desktop-app session (#4152). Read again under
+  # the mutex, and once more after the last recheck below: the row must say what is deleted.
+  if ! desktop_marker=$(desktop_marker_state "$wt"); then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+    keep_stuck "$wt" "not reaped: the desktop app's marker cannot be read or is not the empty file it writes"; continue
+  fi
+  [ "$desktop_marker" = empty ] && reach_evidence="$reach_evidence;desktop-marker=empty"
   if ! record "$wt_real" "$branch" "$sha" "$reach_evidence;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
     die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"
   fi
@@ -3911,6 +3934,10 @@ while IFS= read -r wt <&3; do
   if ! recheck_mutable_gates "$wt" "$wt_real"; then
     worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     continue
+  fi
+  if [ "$(desktop_marker_state "$wt" || echo unreadable)" != "$desktop_marker" ]; then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+    keep "$wt" "the desktop app's marker changed after the manifest row was written"; continue
   fi
 
   # Keep the reaped commit reachable so the manifest's SHA stays restorable. Without

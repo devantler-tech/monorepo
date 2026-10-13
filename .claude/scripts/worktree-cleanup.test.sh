@@ -3176,10 +3176,12 @@ t_salvage_carries_the_empty_desktop_marker() {
   local problems=""
   [ -e "$wt" ] && problems="$problems worktree-still-present"
   grep -q '^SALVAGED .*desk .*refs/salvaged/' <<<"$out" || problems="$problems no-SALVAGED-line"
-  grep '/desk	' "$root/manifest.tsv" 2>/dev/null | grep -q 'salvaged=.*;desktop-marker=empty;' \
-    || problems="$problems manifest-lacks-marker"
-  grep '/plain	' "$root/manifest.tsv" 2>/dev/null | grep -q 'salvaged=' || problems="$problems control-not-recorded"
-  grep '/plain	' "$root/manifest.tsv" 2>/dev/null | grep -q 'desktop-marker' && problems="$problems control-claims-marker"
+  local desk_row plain_row
+  desk_row=$(grep '/desk	' "$root/manifest.tsv" 2>/dev/null || true)
+  plain_row=$(grep '/plain	' "$root/manifest.tsv" 2>/dev/null || true)
+  grep -q 'salvaged=.*;desktop-marker=empty;' <<<"$desk_row" || problems="$problems manifest-lacks-marker"
+  grep -q 'salvaged=' <<<"$plain_row" || problems="$problems control-not-recorded"
+  grep -q 'desktop-marker' <<<"$plain_row" && problems="$problems control-claims-marker"
   if [ -z "$problems" ]; then ok "$name"; else bad "$name" "$problems :: $out"; fi
   rm -rf "$root"
 }
@@ -3208,6 +3210,34 @@ t_salvage_keeps_a_desktop_marker_that_is_not_empty() {
     fi
     rm -rf "$root"
   done
+}
+
+
+t_plain_reap_keeps_a_desktop_marker_that_is_not_empty() {
+  # A clean, pushed worktree is reaped without salvage, yet its admin directory dies all the
+  # same: a marker holding data keeps it, the empty one is recorded, none says nothing.
+  local name="apply keeps a pushed worktree whose desktop marker has content and records an empty one"
+  local root; root=$(make_repo)
+  add_wt "$root" full pushed && add_wt "$root" mark pushed && add_wt "$root" none pushed \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wts="$root/repo/.claude/worktrees"
+  echo data > "$(git -C "$wts/full" rev-parse --absolute-git-dir)/claude-desktop-worktree"
+  : > "$(git -C "$wts/mark" rev-parse --absolute-git-dir)/claude-desktop-worktree"
+  local dry; dry=$(run_salvage "$root" dry-run 1)
+  local out; out=$(run_salvage "$root" apply 1)
+  local mark_row none_row problems=""
+  mark_row=$(grep '/mark	' "$root/manifest.tsv" 2>/dev/null || true)
+  none_row=$(grep '/none	' "$root/manifest.tsv" 2>/dev/null || true)
+  grep -q 'KEEP .*full .*marker cannot be read or is not the empty file' <<<"$dry" || problems="$problems dry-run-did-not-keep"
+  grep -q 'KEEP .*full .*marker cannot be read or is not the empty file' <<<"$out" || problems="$problems apply-did-not-keep"
+  [ -d "$wts/full" ] || problems="$problems removed-a-marker-with-content"
+  [ -e "$wts/mark" ] && problems="$problems empty-marker-not-reaped"
+  [ -e "$wts/none" ] && problems="$problems control-not-reaped"
+  grep -q ';desktop-marker=empty;' <<<"$mark_row" || problems="$problems manifest-lacks-marker"
+  [ -n "$none_row" ] || problems="$problems control-not-recorded"
+  grep -q 'desktop-marker' <<<"$none_row" && problems="$problems control-claims-marker"
+  if [ -z "$problems" ]; then ok "$name"; else bad "$name" "$problems :: $dry :: $out"; fi
+  rm -rf "$root"
 }
 
 t_salvage_keeps_a_filtered_path() {
@@ -6477,6 +6507,7 @@ t_salvage_keeps_a_hidden_edit_in_an_embedded_submodule
 t_salvage_keeps_unlisted_git_state
 t_salvage_carries_the_empty_desktop_marker
 t_salvage_keeps_a_desktop_marker_that_is_not_empty
+t_plain_reap_keeps_a_desktop_marker_that_is_not_empty
 t_salvage_keeps_a_filtered_path
 t_salvage_keeps_a_submodule_mid_bisect
 t_salvage_keeps_when_file_modes_are_ignored
