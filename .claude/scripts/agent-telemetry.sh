@@ -5481,9 +5481,24 @@ if want drift; then
     codex_rrule_schedule "$rule"
   }
 
+  # An automation that is not ACTIVE does not dispatch, so its recurrence is not a
+  # schedule the lane keeps. It is read as a switched-off Claude entry is: no
+  # readable record. Without this a paused second automation would read MATCH
+  # for a start that never happens (monorepo#4116).
+  codex_store_active() {
+    local store="$1" id="$2" escaped_id status
+    [ -f "$store" ] || return 1
+    escaped_id=${id//\'/\'\'}
+    status=$(sqlite3 -readonly "$store" \
+      "SELECT status FROM automations WHERE id = '$escaped_id';" 2>/dev/null \
+      | awk 'NF { print; exit }')
+    [ "$status" = ACTIVE ]
+  }
+
   codex_store_schedule() {
     local store="$1" id="$2" rule escaped_id
     [ -f "$store" ] || return 0
+    codex_store_active "$store" "$id" || return 0
     escaped_id=${id//\'/\'\'}
     rule=$(sqlite3 -readonly "$store" \
       "SELECT rrule FROM automations WHERE id = '$escaped_id';" 2>/dev/null \
@@ -5777,13 +5792,17 @@ if want drift; then
            and ([.scheduledTasks[] | select(type == "object" and .id == $id)] | length) == 0
          ' "$CLAUDE_SCHEDULE_STORE" >/dev/null 2>&1
   }
-  codex_entry_not_created() { # $1 = entry id, $2 = its pointer
-    local id="$1" escaped_id held
-    [ ! -e "$2" ] && [ -f "$CODEX_AUTOMATION_STORE" ] || return 1
+  # How many records the Codex scheduler store holds for an id, in any state.
+  # Prints nothing when the store cannot be read, which is neither 0 nor 1.
+  codex_store_held() { # $1 = entry id
+    local id="$1" escaped_id
+    [ -f "$CODEX_AUTOMATION_STORE" ] || return 0
     escaped_id=${id//\'/\'\'}
-    held=$(sqlite3 -readonly "$CODEX_AUTOMATION_STORE" \
-      "SELECT COUNT(*) FROM automations WHERE id = '$escaped_id';" 2>/dev/null) || return 1
-    [ "$held" = 0 ]
+    sqlite3 -readonly "$CODEX_AUTOMATION_STORE" \
+      "SELECT COUNT(*) FROM automations WHERE id = '$escaped_id';" 2>/dev/null
+  }
+  codex_entry_not_created() { # $1 = entry id, $2 = its pointer
+    [ ! -e "$2" ] && [ "$(codex_store_held "$1")" = 0 ]
   }
 
   CLAUDE_ENGINEER_ACTUAL=""
@@ -5880,6 +5899,9 @@ if want drift; then
         CODEX_ENGINEER_UNREADABLE="authoritative scheduler store missing"
       elif [ -z "$entry_pointer_schedule" ]; then
         CODEX_ENGINEER_UNREADABLE="entry $entry_id recurrence rule is incomplete or unsupported"
+      elif [ "$(codex_store_held "$entry_id")" = 1 ] \
+           && ! codex_store_active "$CODEX_AUTOMATION_STORE" "$entry_id"; then
+        CODEX_ENGINEER_UNREADABLE="entry $entry_id is not ACTIVE in the scheduler store"
       elif [ -z "$entry_store_schedule" ]; then
         CODEX_ENGINEER_UNREADABLE="entry $entry_id authoritative scheduler recurrence is missing or unsupported"
       elif [ "$entry_pointer_schedule" != "$entry_store_schedule" ]; then

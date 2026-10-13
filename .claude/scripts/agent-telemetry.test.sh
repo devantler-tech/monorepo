@@ -267,6 +267,7 @@ CODEX_AUTOMATION_STORE="$FIX/codex/codex-dev.db"
 if ! sqlite3 "$CODEX_AUTOMATION_STORE" <<'SQL'
 CREATE TABLE automations (
   id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
   rrule TEXT NOT NULL,
   last_run_at INTEGER
 );
@@ -617,20 +618,21 @@ echo
 echo "syntax"
 if bash -n "$TARGET" 2>/dev/null; then ok "parses"; else bad "parses" "bash -n failed"; fi
 if [ -x "$TARGET" ]; then ok "executable"; else bad "executable" "chmod +x missing"; fi
-# Three queries read the Codex scheduler store by automation id: the recurrence
-# rule, the dispatch marker, and whether an entry exists at all (monorepo#4116).
-if [ "$(grep -Fc "escaped_id=\${id//\\'/\\'\\'}" "$TARGET")" -eq 3 ]; then
+# Four queries read the Codex scheduler store by automation id: the recurrence
+# rule, the dispatch marker, whether the automation is ACTIVE, and whether an
+# entry exists at all (monorepo#4116).
+if [ "$(grep -Fc "escaped_id=\${id//\\'/\\'\\'}" "$TARGET")" -eq 4 ]; then
   ok "escapes every Codex automation id before SQL interpolation"
 else
   bad "escapes every Codex automation id before SQL interpolation" \
-    "expected three defensive single-quote substitutions"
+    "expected four defensive single-quote substitutions"
 fi
-if [ "$(grep -Fc "WHERE id = '\$escaped_id';" "$TARGET")" -eq 3 ] \
-   && [ "$(grep -c "FROM automations WHERE id = " "$TARGET")" -eq 3 ]; then
+if [ "$(grep -Fc "WHERE id = '\$escaped_id';" "$TARGET")" -eq 4 ] \
+   && [ "$(grep -c "FROM automations WHERE id = " "$TARGET")" -eq 4 ]; then
   ok "uses escaped ids in every Codex scheduler query"
 else
   bad "uses escaped ids in every Codex scheduler query" \
-    "expected all three queries, and no other, to interpolate escaped_id"
+    "expected all four queries, and no other, to interpolate escaped_id"
 fi
 
 # ── 2. reliability: errors attributed to the right tool ───────────────────────
@@ -1225,6 +1227,33 @@ unreadable_cx_two "a second automation whose pointer and record disagree" \
 codex_entry2 "$R40" ""
 unreadable_cx_two "a second automation with a pointer and no record" \
   "UNKNOWN: codex engineer entry $CX2 authoritative scheduler recurrence is missing or unsupported"
+# An automation that is not ACTIVE does not dispatch. Its stored rule still equals
+# the table, so reading the rule alone would report MATCH for a start that never
+# happens, which is how a switched-off second entry would go unseen.
+codex_entry2 "$R40" "$R40"
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET status = 'PAUSED' WHERE id = '$CX2';"
+unreadable_cx_two "a second automation that is not ACTIVE" \
+  "UNKNOWN: codex engineer entry $CX2 is not ACTIVE in the scheduler store"
+# The same holds for a lane of one automation, and for the improver: no MATCH.
+codex_entry2 "$R40" "$R40"
+set_cadence_cell Codex 'Every hour at `:10`'
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET status = 'PAUSED' WHERE id = 'daily-ai-engineer';"
+OUT=$(NOBASE --section drift)
+check "a one-automation lane that is not ACTIVE has no readable record" "$OUT" \
+  "UNKNOWN: codex engineer authoritative scheduler recurrence is missing or unsupported"
+nocheck "a one-automation lane that is not ACTIVE never reads MATCH" "$OUT" "codex engineer:  expected="
+check "a lane that is not ACTIVE suppresses the slot count" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET status = 'ACTIVE' WHERE id = 'daily-ai-engineer';"
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET status = 'PAUSED' WHERE id = 'agent-improver';"
+OUT=$(NOBASE --section drift)
+check "an improver automation that is not ACTIVE has no readable record" "$OUT" \
+  "UNKNOWN: codex improver authoritative scheduler recurrence is missing or unsupported"
+nocheck "an improver automation that is not ACTIVE never reads MATCH" "$OUT" "codex improver:  expected="
+sqlite3 "$CODEX_AUTOMATION_STORE" "UPDATE automations SET status = 'ACTIVE' WHERE id = 'agent-improver';"
+OUT=$(NOBASE --section drift)
+check "CONTROL: the same automations read MATCH again once ACTIVE" "$OUT" \
+  "codex engineer:  expected=*@10 actual=*@10 MATCH"
+set_cadence_cell Codex 'Every hour at `:10` and `:40`'
 codex_entry2 'RRULE:FREQ=HOURLY;INTERVAL=1' "$R40"
 unreadable_cx_two "a second automation with an incomplete rule" \
   "UNKNOWN: codex engineer entry $CX2 recurrence rule is incomplete or unsupported"
