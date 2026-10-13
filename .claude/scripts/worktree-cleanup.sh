@@ -116,6 +116,13 @@
 # parent's status) makes the worktree a salvage candidate in the same way, past the
 # salvage age. Which branch or tag held a commit is in the parent's
 # module-files tree (<label>/refs/..., packed-refs, logs/...).
+# The Claude desktop app writes an empty `claude-desktop-worktree` file into the admin
+# directory of each session worktree it creates (#4152). That empty regular file is the one
+# entry git did not write that the removal may delete: the manifest row of any reaped
+# worktree that held it gains a `desktop-marker=empty` field. To restore the marker, recreate
+# the worktree first (the restore steps above), then run, against that existing directory,
+# `: > "$(git -C <dir> rev-parse --absolute-git-dir)/claude-desktop-worktree"`. With
+# content, or as a link or directory, it keeps the worktree like any unlisted entry.
 # Restore a submodule's work from the manifest row alone, with D=<git directory>/<label>
 # (the git directory is the main checkout's .git):
 #   git --git-dir="$D" --work-tree="$D" worktree add --detach <dir> refs/salvaged/<id>/head
@@ -781,6 +788,9 @@ esac
 
 now=$(date +%s)
 reaped=0; kept=0; stuck=0; salvaged=0; freed_kb=0; unmeasured=0
+# What the pending manifest row says of the desktop app's marker (empty|absent); "" before a row.
+DESKTOP_MARKER_RECORDED=""
+DESKTOP_MARKER_UNREAD=0; DESKTOP_MARKER_NOW=""; DESKTOP_MARKER_NOTE=""
 
 # record <path> <branch> <sha> <evidence> <outcome>
 # The outcome column is what stops a row claiming a removal that never happened. The
@@ -1081,6 +1091,20 @@ recheck_mutable_gates() {
   fi
   if [ -n "$sub_nested" ]; then
     keep "$wt" "a submodule-owned worktree appeared during the sweep (${sub_nested#"$target"/})"; return 1
+  fi
+  # Last, after everything above that can wait on a network or a snapshot: the desktop app's
+  # marker (#4152) must still be what the manifest row says. Written, or given content,
+  # after the row, it would be deleted unrecorded.
+  # This is the one place the comparison is made, by decision (#4155): no check can be
+  # atomic with the removal, so a later one only narrows the window. What stays open is an
+  # empty file appearing between here and the delete in a worktree idle past the reap age;
+  # the min-age, live-process and lock gates bound it as they bound every other gate here.
+  if [ -n "$DESKTOP_MARKER_RECORDED" ]; then
+    desktop_marker_read "$wt" \
+      || { keep "$wt" "$DESKTOP_MARKER_NOTE, after the manifest row was written"; return 1; }
+    if [ "$DESKTOP_MARKER_NOW" != "$DESKTOP_MARKER_RECORDED" ]; then
+      keep "$wt" "the desktop app's marker changed after the manifest row was written"; return 1
+    fi
   fi
   return 0
 }
@@ -2829,6 +2853,18 @@ worktree_state_blocker() {
     case "${entry##*/}" in
       HEAD|ORIG_HEAD|FETCH_HEAD|COMMIT_EDITMSG|commondir|gitdir|index|config.worktree|logs|refs|modules)
         entry_type_ok "$entry" || { SALVAGE_NOTE="the worktree's ${entry##*/} is not the kind of entry git writes there"; return 0; } ;;
+      # The Claude desktop app drops an empty marker into each session worktree's admin
+      # directory (#4152). An empty regular file carries nothing to lose, and the manifest
+      # row notes it; with content, or as a link or directory, it is unlisted state.
+      claude-desktop-worktree)
+        # Through the one reader, so a look that failed is not taken for a marker with content.
+        desktop_marker_lookup "$admin" >/dev/null
+        case $? in
+          0) ;;
+          1) SALVAGE_NOTE="the worktree's ${entry##*/} is not the empty marker the desktop app writes (salvage cannot carry it)"; return 0 ;;
+          *) DESKTOP_MARKER_UNREAD=1
+             SALVAGE_NOTE="cannot read the worktree's git state for the desktop app's marker"; return 0 ;;
+        esac ;;
       *) SALVAGE_NOTE="the worktree's git state holds ${entry##*/} (salvage cannot carry it)"; return 0 ;;
     esac
   done
@@ -2887,6 +2923,44 @@ worktree_state_blocker() {
   if [ -n "$pseudo_tags" ]; then
     SALVAGE_NOTE="ORIG_HEAD or FETCH_HEAD names a tag (salvage cannot carry it)"; return 0
   fi
+  return 1
+}
+
+# desktop_marker_lookup <admin directory> -> prints `empty` or `absent`. 1 when the name
+# holds anything but the empty file (a verdict: keep). 2 when the look itself failed (no
+# verdict). This is the one reader of the marker (#4155): every caller decides from it, so
+# a failed look is never read as "no marker", as "not empty" or as examined. Both answers
+# come from a status-checked `find`, which reports an entry it cannot stat by failing; a
+# link is not followed, so only an empty regular file matches the second look.
+desktop_marker_lookup() {
+  local found
+  found=$(find "$1" -maxdepth 1 -name claude-desktop-worktree 2>/dev/null) || return 2
+  [ -n "$found" ] || { printf 'absent\n'; return 0; }
+  found=$(find "$1" -maxdepth 1 -name claude-desktop-worktree -type f -size 0 2>/dev/null) || return 2
+  [ -n "$found" ] || return 1
+  printf 'empty\n'
+}
+
+# desktop_marker_state <worktree> -> desktop_marker_lookup on the worktree's admin
+# directory; 2 as well when that directory cannot be located.
+desktop_marker_state() {
+  local admin
+  admin=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$admin" ] || return 2
+  desktop_marker_lookup "$admin"
+}
+
+# desktop_marker_read <worktree> -> 0 with DESKTOP_MARKER_NOW (empty|absent); 1 with
+# DESKTOP_MARKER_NOTE when the worktree must be kept. A failed read also sets
+# DESKTOP_MARKER_UNREAD, which ends the sweep UNKNOWN: that worktree was kept unexamined.
+desktop_marker_read() {
+  local rc
+  DESKTOP_MARKER_NOW=$(desktop_marker_state "$1"); rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) DESKTOP_MARKER_NOTE="the desktop app's marker is not the empty file it writes" ;;
+    *) DESKTOP_MARKER_UNREAD=1; DESKTOP_MARKER_NOTE="cannot read the worktree's git state for the desktop app's marker" ;;
+  esac
+  DESKTOP_MARKER_NOW=""
   return 1
 }
 
@@ -3798,6 +3872,13 @@ while IFS= read -r wt <&3; do
       keep_stuck "$wt" "not reaped: the index holds more than ${SALVAGE_MAX_KB} KB of resolve-undo stages"; continue
     fi
   fi
+  # The desktop app's marker (#4152) dies with the admin directory on either path, so a
+  # plain reap reads it too: anything but the empty file, or no file, keeps the worktree.
+  DESKTOP_MARKER_RECORDED=""
+  if ! desktop_marker_read "$wt"; then
+    keep_stuck "$wt" "not reaped: $DESKTOP_MARKER_NOTE"; continue
+  fi
+  desktop_marker=$DESKTOP_MARKER_NOW
   if [ "$MODE" = "dry-run" ]; then
     if [ -n "$salvage_reason" ]; then
       # The plan salvage_blocker just built: how many submodules' work apply would carry.
@@ -3873,6 +3954,16 @@ while IFS= read -r wt <&3; do
   # carried: the same ref names exist in that repository of the main checkout.
   [ -n "$SALVAGE_SUBMODULES" ] && reach_evidence="$reach_evidence;$SALVAGE_SUBMODULES"
   [ -n "$RESOLVE_UNDO_REF" ] && reach_evidence="$reach_evidence;resolve-undo=$RESOLVE_UNDO_REF"
+  # The desktop app's empty marker dies with the admin directory; the row keeps the fact,
+  # so a restore can tell the folder was a desktop-app session (#4152). Read again under
+  # the mutex; the shared final recheck compares it with the row: the row must say what is deleted.
+  if ! desktop_marker_read "$wt"; then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+    keep_stuck "$wt" "not reaped: $DESKTOP_MARKER_NOTE"; continue
+  fi
+  desktop_marker=$DESKTOP_MARKER_NOW
+  [ "$desktop_marker" = empty ] && reach_evidence="$reach_evidence;desktop-marker=empty"
+  DESKTOP_MARKER_RECORDED=$desktop_marker
   if ! record "$wt_real" "$branch" "$sha" "$reach_evidence;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
     die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"
   fi
@@ -3990,6 +4081,11 @@ else
 fi
 if [ "$stuck" -gt 0 ]; then
   printf 'worktree-cleanup: %d of the kept worktree(s) hold abandoned work that no sweep will reap; salvage or discard it (#2831)\n' "$stuck"
+fi
+if [ "$DESKTOP_MARKER_UNREAD" -ne 0 ]; then
+  # A worktree whose admin directory could not be read was kept without a verdict (#4152).
+  printf 'worktree-cleanup: UNKNOWN — could not read a worktree'"'"'s git state for the desktop app'"'"'s marker, so it was kept unexamined (#4152)\n'
+  [ "$REMOTE_MODULE_FAILED" -ne 0 ] || [ "$REMOTE_HELD_FAILED" -ne 0 ] || exit 2
 fi
 if [ "$REMOTE_MODULE_FAILED" -ne 0 ]; then
   # The same reasoning as below, for a submodule's remote: its worktree was kept unexamined.

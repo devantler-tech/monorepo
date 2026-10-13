@@ -3161,6 +3161,165 @@ t_salvage_keeps_unlisted_git_state() {
   rm -rf "$root"
 }
 
+
+t_salvage_carries_the_empty_desktop_marker() {
+  # The desktop app's empty marker (#4152) must not keep abandoned work from being saved;
+  # the manifest row keeps the fact that it was there. A worktree without one says nothing.
+  local name="salvage apply reaps a worktree holding the empty desktop marker and records it"
+  local root; root=$(make_repo)
+  abandoned_wt "$root" desk || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  abandoned_wt "$root" plain || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/desk" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  : > "$admin/claude-desktop-worktree"
+  local out; out=$(run_salvage "$root" apply 1)
+  local problems=""
+  [ -e "$wt" ] && problems="$problems worktree-still-present"
+  grep -q '^SALVAGED .*desk .*refs/salvaged/' <<<"$out" || problems="$problems no-SALVAGED-line"
+  local desk_row plain_row
+  desk_row=$(grep '/desk	' "$root/manifest.tsv" 2>/dev/null || true)
+  plain_row=$(grep '/plain	' "$root/manifest.tsv" 2>/dev/null || true)
+  grep -q 'salvaged=.*;desktop-marker=empty;' <<<"$desk_row" || problems="$problems manifest-lacks-marker"
+  grep -q 'salvaged=' <<<"$plain_row" || problems="$problems control-not-recorded"
+  grep -q 'desktop-marker' <<<"$plain_row" && problems="$problems control-claims-marker"
+  if [ -z "$problems" ]; then ok "$name"; else bad "$name" "$problems :: $out"; fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_desktop_marker_that_is_not_empty() {
+  # Only the empty regular file is known to carry nothing: content, a link or a directory
+  # under that name is unlisted state like any other.
+  local kind
+  for kind in content symlink directory; do
+    local name="salvage dry-run KEEPs a worktree whose desktop marker is a $kind"
+    local root; root=$(make_repo)
+    abandoned_wt "$root" desk || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
+    local wt="$root/repo/.claude/worktrees/desk" admin
+    admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+    case "$kind" in
+      content) echo data > "$admin/claude-desktop-worktree" ;;
+      symlink) : > "$root/empty" && ln -s "$root/empty" "$admin/claude-desktop-worktree" ;;
+      directory) mkdir "$admin/claude-desktop-worktree" ;;
+    esac
+    local out; out=$(run_salvage "$root" dry-run 1)
+    if grep -q 'KEEP .*desk .*claude-desktop-worktree is not the empty marker' <<<"$out" \
+       && ! grep -q '^SALVAGE .*desk ' <<<"$out" && [ -e "$wt" ]; then
+      ok "$name"
+    else
+      bad "$name" "$out"
+    fi
+    rm -rf "$root"
+  done
+}
+
+
+t_plain_reap_keeps_a_desktop_marker_that_is_not_empty() {
+  # A clean, pushed worktree is reaped without salvage, yet its admin directory dies all the
+  # same: a marker holding data keeps it, the empty one is recorded, none says nothing.
+  local name="apply keeps a pushed worktree whose desktop marker has content and records an empty one"
+  local root; root=$(make_repo)
+  add_wt "$root" full pushed && add_wt "$root" mark pushed && add_wt "$root" none pushed \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wts="$root/repo/.claude/worktrees"
+  echo data > "$(git -C "$wts/full" rev-parse --absolute-git-dir)/claude-desktop-worktree"
+  : > "$(git -C "$wts/mark" rev-parse --absolute-git-dir)/claude-desktop-worktree"
+  local dry; dry=$(run_salvage "$root" dry-run 1)
+  local out; out=$(run_salvage "$root" apply 1)
+  local mark_row none_row problems=""
+  mark_row=$(grep '/mark	' "$root/manifest.tsv" 2>/dev/null || true)
+  none_row=$(grep '/none	' "$root/manifest.tsv" 2>/dev/null || true)
+  grep -q 'KEEP .*full .*marker is not the empty file it writes' <<<"$dry" || problems="$problems dry-run-did-not-keep"
+  grep -q 'KEEP .*full .*marker is not the empty file it writes' <<<"$out" || problems="$problems apply-did-not-keep"
+  [ -d "$wts/full" ] || problems="$problems removed-a-marker-with-content"
+  [ -e "$wts/mark" ] && problems="$problems empty-marker-not-reaped"
+  [ -e "$wts/none" ] && problems="$problems control-not-reaped"
+  grep -q ';desktop-marker=empty;' <<<"$mark_row" || problems="$problems manifest-lacks-marker"
+  [ -n "$none_row" ] || problems="$problems control-not-recorded"
+  grep -q 'desktop-marker' <<<"$none_row" && problems="$problems control-claims-marker"
+  if [ -z "$problems" ]; then ok "$name"; else bad "$name" "$problems :: $dry :: $out"; fi
+  rm -rf "$root"
+}
+
+
+t_keeps_a_desktop_marker_written_after_the_manifest_row() {
+  # The row is written before the last recheck. The lsof shim writes the marker on its
+  # third call — the recheck after the row — so the row says "no marker" of a worktree that
+  # now holds one: it must be kept, not deleted with an unrecorded marker.
+  local name="apply KEEPs a worktree whose desktop marker appears after its manifest row"
+  local root; root=$(make_repo)
+  abandoned_wt "$root" aband || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/aband" admin
+  admin=$(git -C "$wt" rev-parse --absolute-git-dir)
+  local real_lsof; real_lsof=$(command -v lsof) || real_lsof=
+  [ -n "$real_lsof" ] || { bad "$name" "FIXTURE: no lsof"; rm -rf "$root"; return; }
+  local shim="$root/shim" count="$root/lsof-calls"; mkdir -p "$shim"
+  cat > "$shim/lsof" <<SHIM
+#!/usr/bin/env bash
+n=\$(( \$(cat "$count" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$count"
+[ "\$n" -eq 3 ] && : > "$admin/claude-desktop-worktree"
+exec "$real_lsof" "\$@"
+SHIM
+  chmod +x "$shim/lsof"
+  local out; out=$(PATH="$shim:$PATH" run_salvage "$root" apply 1)
+  if [ ! -e "$admin/claude-desktop-worktree" ]; then
+    bad "$name" "marker missing (never written, or deleted): $out"
+  elif grep -q 'KEEP .*aband .*marker changed after the manifest row' <<<"$out" && [ -d "$wt" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+
+t_unreadable_desktop_marker_state_ends_unknown() {
+  # A look at the marker that fails is no verdict: the worktree is kept, and the sweep must
+  # not end as a clean one. The find shim fails for the marker look in that directory only:
+  # `any` fails the first look (is the name there), `kind` only the second (is it the empty
+  # file), which is a marker that is listed but cannot be examined. On the salvage path the
+  # state check meets the marker first, so it must report the failed look too (#4155).
+  local look path
+  for look in any kind; do
+    for path in plain salvage; do
+      local name="dry-run ends UNKNOWN when the marker look ($look) fails on the $path path"
+      local root; root=$(make_repo)
+      if [ "$path" = salvage ]; then
+        abandoned_wt "$root" dark && add_wt "$root" lit pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
+      else
+        add_wt "$root" dark pushed && add_wt "$root" lit pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; continue; }
+      fi
+      local admin; admin=$(git -C "$root/repo/.claude/worktrees/dark" rev-parse --absolute-git-dir)
+      : > "$admin/claude-desktop-worktree"
+      local real_find; real_find=$(command -v find)
+      local shim="$root/shim"; mkdir -p "$shim"
+      cat > "$shim/find" <<SHIM
+#!/usr/bin/env bash
+marker=0; sized=0
+for a in "\$@"; do
+  [ "\$a" = claude-desktop-worktree ] && marker=1
+  [ "\$a" = -size ] && sized=1
+done
+if [ "\$1" = "$admin" ] && [ "\$marker" -eq 1 ]; then
+  [ "$look" = any ] && exit 1
+  [ "\$sized" -eq 1 ] && exit 1
+fi
+exec "$real_find" "\$@"
+SHIM
+      chmod +x "$shim/find"
+      local out rc; out=$(PATH="$shim:$PATH" run_salvage "$root" dry-run 1); rc=$?
+      if [ "$rc" -eq 2 ] && grep -q 'KEEP .*dark .*cannot read the worktree.s git state for the desktop app' <<<"$out" \
+         && grep -q 'UNKNOWN — could not read a worktree.s git state for the desktop app' <<<"$out" \
+         && ! grep -q '^SALVAGE .*dark \|^REAP .*dark ' <<<"$out" \
+         && grep -q '^REAP .*lit ' <<<"$out"; then
+        ok "$name"
+      else
+        bad "$name" "rc=$rc $out"
+      fi
+      rm -rf "$root"
+    done
+  done
+}
+
 t_salvage_keeps_a_filtered_path() {
   local name="salvage dry-run KEEPs a changed path with a clean filter"
   local root; root=$(make_repo)
@@ -6426,6 +6585,11 @@ t_salvage_keeps_an_intent_to_add_entry
 t_salvage_dry_run_refuses_an_unsnappable_gitlink_change
 t_salvage_keeps_a_hidden_edit_in_an_embedded_submodule
 t_salvage_keeps_unlisted_git_state
+t_salvage_carries_the_empty_desktop_marker
+t_salvage_keeps_a_desktop_marker_that_is_not_empty
+t_plain_reap_keeps_a_desktop_marker_that_is_not_empty
+t_keeps_a_desktop_marker_written_after_the_manifest_row
+t_unreadable_desktop_marker_state_ends_unknown
 t_salvage_keeps_a_filtered_path
 t_salvage_keeps_a_submodule_mid_bisect
 t_salvage_keeps_when_file_modes_are_ignored
