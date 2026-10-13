@@ -1531,8 +1531,25 @@ if [ -n "$run_tmp_canon" ] && [ "$run_tmp_canon" != "$go_tmp_canon" ]; then
   go_work_roots+=("$TMPDIR_ROOT")
 fi
 
+# The temp root is shared with every user and every tool on the host, which the per-user
+# temp dir is not. So work dirs are taken only when this user owns them, and under either
+# root a tree that holds a mount point, or a socket, FIFO or device, is kept: the guards
+# (2) applies, for the reasons given there. A read that fails examines nothing.
+go_work_uid=$(id -u 2>/dev/null) || go_work_uid=''
 for go_work_root in "${go_work_roots[@]}"; do
   [ -d "$go_work_root" ] || continue
+  if [ -z "$go_work_uid" ]; then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (own user id unreadable) $go_work_root: Go work dirs not examined"
+    continue
+  fi
+  if ! go_work_trees=$(find -H "$go_work_root" -mindepth 1 -maxdepth 1 -type d \
+    -user "$go_work_uid" \( -name 'go-build[0-9]*' -o -name 'go-link-[0-9]*' \) \
+    -mmin "+$((GO_TMP_MIN_AGE_HOURS * 60))" 2>/dev/null); then
+    unknown=$((unknown + 1))
+    log "UNKNOWN (scan failed) $go_work_root: Go work dirs not examined"
+    continue
+  fi
   while IFS= read -r tree; do
     [ -n "$tree" ] || continue
     # `find -name` cannot say "digits only", so check the suffix here. Only the exact shape
@@ -1551,11 +1568,30 @@ for go_work_root in "${go_work_roots[@]}"; do
       log "KEEP  (go running)    $tree"
       continue
     fi
+    if [ "$MOUNTS_OK" -ne 1 ]; then
+      unknown=$((unknown + 1))
+      log "UNKNOWN (mount table unreadable, tree not examined) $tree"
+      continue
+    fi
+    if holds_mount "$tree"; then
+      kept=$((kept + 1))
+      log "KEEP  (mount point)   $tree"
+      continue
+    fi
+    if ! go_work_hit=$(find "$tree" \( -type s -o -type p -o -type b -o -type c \) \
+      -print -quit 2>/dev/null); then
+      unknown=$((unknown + 1))
+      log "UNKNOWN (scan failed, tree not examined) $tree"
+      continue
+    fi
+    if [ -n "$go_work_hit" ]; then
+      kept=$((kept + 1))
+      log "KEEP  (socket or device inside) $tree"
+      continue
+    fi
     sweep_candidate "$tree" host
   done <<EOF
-$(find -H "$go_work_root" -mindepth 1 -maxdepth 1 -type d \
-  \( -name 'go-build[0-9]*' -o -name 'go-link-[0-9]*' \) \
-  -mmin "+$((GO_TMP_MIN_AGE_HOURS * 60))" 2>/dev/null)
+$go_work_trees
 EOF
 done
 

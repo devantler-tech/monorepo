@@ -208,6 +208,29 @@ lookalike=$(make_tree 'go-buildcache-x' 0) || fail 'fixture: go-buildcache-x'
 out=$(run apply 3 "$NEVER_CLEAN_BUDGET")
 [ -e "$orphan" ] && fail "an orphaned Go work dir under the per-run temp root was not reaped: $orphan"
 [ -e "$lookalike" ] || fail "a fresh tree that only resembles a Go work dir was reaped: $lookalike"
+# 3i. the work-dir step applies the shared-root guards too: the temp root is shared with
+# every tool on the host, so a work dir with a FIFO inside, or one holding a mount point,
+# is kept there as well. Each is reaped once that one condition is gone.
+piped_work=$(make_tree 'go-build4136002' 0) || fail 'fixture: go-build4136002'
+mkfifo "${piped_work}/b001-control" || fail 'fixture: mkfifo in work dir'
+age_tree "$(stamp_hours_ago 12)" "$piped_work" || fail 'fixture: age go-build4136002'
+mounted_work=$(make_tree 'go-link-4136003' 0) || fail 'fixture: go-link-4136003'
+age_tree "$(stamp_hours_ago 12)" "$mounted_work" || fail 'fixture: age go-link-4136003'
+mounted_work_canon=$(cd -- "$mounted_work" && pwd -P) || fail 'fixture: resolve mounted work dir'
+printf '#!/bin/sh\nprintf "%%s\\n" "/dev/disk9s2 on %s (apfs, local)"\n' "$mounted_work_canon" \
+  > "${mount_stub}/mount"
+out=$(PATH="${mount_stub}:$PATH" run apply 3 "$NEVER_CLEAN_BUDGET")
+[ -e "$piped_work" ] || fail "a Go work dir with a FIFO inside was reaped: $piped_work"
+grep -qF "KEEP  (socket or device inside) $piped_work" <<<"$out" ||
+  fail 'a Go work dir with a FIFO inside was not reported as kept for it'
+[ -e "$mounted_work" ] || fail "a Go work dir holding a mount point was reaped: $mounted_work"
+grep -qF "KEEP  (mount point)   $mounted_work" <<<"$out" ||
+  fail 'a Go work dir holding a mount point was not reported as kept for it'
+rm -f "${piped_work}/b001-control" || fail 'fixture: remove FIFO'
+age_tree "$(stamp_hours_ago 12)" "$piped_work" || fail 'fixture: re-age go-build4136002'
+run apply 3 "$NEVER_CLEAN_BUDGET" > /dev/null
+[ -e "$piped_work" ] && fail "the FIFO ablation partner was not reaped: $piped_work"
+[ -e "$mounted_work" ] && fail "the work-dir mount ablation partner was not reaped: $mounted_work"
 
 # --- 4. dry-run deletes nothing (mode ablation) -----------------------------------
 dry=$(make_tree 'ksail-dry-run' 10) || fail 'fixture: ksail-dry-run'
