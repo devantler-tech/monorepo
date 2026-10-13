@@ -86,14 +86,19 @@
 #                                   A clean, fully pushed worktree is reaped without salvage,
 #                                   but its index dies too, so this one ref is written for it
 #                                   as well and the manifest row names it (resolve-undo=<ref>)
-#   refs/salvaged/<id>/submodules - the record of each submodule whose work was carried (below):
-#                                   its path under the git directory, the repository that now
-#                                   holds it, the three objects and the extra refs
+#   refs/salvaged/<id>/submodules - the record of each submodule whose work was carried (below),
+#                                   one tab-separated line each: its repository's path under
+#                                   the git directory, the path its checkout had inside the
+#                                   worktree, the repository that now holds the work, and
+#                                   the three objects; then a line per extra ref
 # SUBMODULE WORK. Work held inside a submodule is not in any of the refs above: a linked
-# worktree's submodule repository lives under its admin directory (modules/<path>) and the
+# worktree's submodule repository lives under its admin directory (modules/<name>) and the
 # removal deletes it. It is carried instead into the repository that outlives the worktree
-# for that submodule, the main checkout's own at <git directory>/modules/<path>, under the
-# SAME name, and the manifest row gains one `submodule=modules/<path>` field for each:
+# for that submodule, the main checkout's own, under the SAME name, and the manifest row
+# gains one `submodule=<label>` field for each. <label> is that repository's path under the
+# git directory: modules/<name>, or modules/<a>/modules/<b> for a submodule of a submodule.
+# It follows the submodule's NAME, which is its path only by default, so it does not say
+# where the submodule is checked out. The repository itself is <git directory>/<label>:
 #   refs/salvaged/<id>/head       - the submodule's HEAD commit
 #   refs/salvaged/<id>/index      - a commit of its staged index, parent HEAD
 #   refs/salvaged/<id>/worktree   - a commit of its whole working tree, parent HEAD, taken as
@@ -110,10 +115,16 @@
 # on its recorded commit whose repository alone holds such commits (nothing in the
 # parent's status) makes the worktree a salvage candidate in the same way, past the
 # salvage age. Which branch or tag held a commit is in the parent's
-# module-files tree (modules/<path>/refs/..., packed-refs, logs/...).
-# Restore a submodule's work in the main checkout's submodule (<main>/<path>) with the same
-# three commands as below, run there: `git -C <main>/<path> worktree add --detach <dir>
-# refs/salvaged/<id>/head`, then `read-tree` and `restore` in <dir>.
+# module-files tree (<label>/refs/..., packed-refs, logs/...).
+# Restore a submodule's work from the manifest row alone, with D=<git directory>/<label>
+# (the git directory is the main checkout's .git):
+#   git --git-dir="$D" --work-tree="$D" worktree add --detach <dir> refs/salvaged/<id>/head
+#   git -C <dir> read-tree refs/salvaged/<id>/index
+#   git -C <dir> restore --source=refs/salvaged/<id>/worktree --worktree -- .
+# That needs no checkout of the submodule anywhere. To work in the main checkout's own
+# checkout of it instead, it is the directory whose `git rev-parse --absolute-git-dir` is
+# $D (`git -C <main> submodule foreach --recursive 'git rev-parse --absolute-git-dir'`
+# lists them); the record's second column is the path it had inside the removed worktree.
 # Restore: `git worktree add --detach <path> refs/salvaged/<id>/head`, then
 # `git -C <path> read-tree refs/salvaged/<id>/index` for the staged index and
 # `git -C <path> restore --source=refs/salvaged/<id>/worktree --worktree -- .` for the working
@@ -2280,7 +2291,7 @@ module_repository_pristine() {
   if [ "$carry" -eq 1 ]; then
     # Nothing is asked of GitHub here: a commit or tag origin does not advertise is carried,
     # whether or not origin would turn out to hold it some other way.
-    module_carry_plan "$g" "$co" "${g#"$3"/}" "$carry_ids" || return 1
+    module_carry_plan "$g" "$co" "${g#"$3"/}" "$carry_ids" "${co#"$wt_real"/}" || return 1
   else
     module_held_by_remote "$g"; rc=$?
     case "$rc" in
@@ -2367,12 +2378,12 @@ module_tree_pristine() {
 
 # module_plan_reset — forget the submodule repositories found to need carrying. The plan is
 # rebuilt by every nested_repository_blocker run, which is every time salvage is judged.
-PLAN_G=(); PLAN_CO=(); PLAN_DURABLE=(); PLAN_LABEL=(); PLAN_IDS=(); PLAN_HISTORY_KB=()
+PLAN_G=(); PLAN_CO=(); PLAN_DURABLE=(); PLAN_LABEL=(); PLAN_IDS=(); PLAN_HISTORY_KB=(); PLAN_REL=()
 MODULE_CARRY_KB=0
 # More refs than this for one submodule repository is not a worktree's abandoned work.
 SUBMODULE_CARRY_LIMIT=50
 module_plan_reset() {
-  PLAN_G=(); PLAN_CO=(); PLAN_DURABLE=(); PLAN_LABEL=(); PLAN_IDS=(); PLAN_HISTORY_KB=()
+  PLAN_G=(); PLAN_CO=(); PLAN_DURABLE=(); PLAN_LABEL=(); PLAN_IDS=(); PLAN_HISTORY_KB=(); PLAN_REL=()
   MODULE_CARRY_KB=0
 }
 
@@ -2438,18 +2449,24 @@ intent_to_add_count() {
     | awk '/^  size: .*flags: / { f = $NF; if (length(f) == 8 && substr(f, 1, 1) ~ /[2367abef]/) n++ } END { print n + 0 }'
 }
 
-# module_carry_plan <git-dir> <checkout> <label> <pseudo-ref-commits> — the last part of the
+# module_carry_plan <git-dir> <checkout> <label> <pseudo-ref-commits> <checkout-path> — the last part of the
 # carry question (module_repository_pristine ... carry): exit 0 after adding the repository
 # to the plan, with the commits and tags to carry; 1 with MODULE_NOTE when something in it
 # could not be carried faithfully. Reads MODULE_DURABLE, MODULE_REMOTE_ROWS and the ids the
 # pristine check collected. Read-only, so dry-run reports what apply would do.
 module_carry_plan() {
-  local g=$1 co=$2 label=$3 extra=$4 durable=$MODULE_DURABLE out n head_links idx_links saved_note
+  local g=$1 co=$2 label=$3 extra=$4 rel=$5 durable=$MODULE_DURABLE out n head_links idx_links saved_note
   local local_tags missing objects="" ids held="" set tips refs
   [ -n "$durable" ] || { MODULE_NOTE="there is no repository to carry its work to"; return 1; }
   # The label goes into the manifest, one `submodule=<label>` field among `;`-separated ones.
   case "$label" in
     *[[:cntrl:]]*|*\;*) MODULE_NOTE="its path cannot be named in the manifest"; return 1 ;;
+  esac
+  # The checkout's path inside the worktree goes into the kept record, one tab-separated
+  # field on one line. It is not the label: the label is the repository's place under the
+  # git directory, which follows the submodule's NAME (and nests as modules/a/modules/b).
+  case "$rel" in
+    ''|/*|*[[:cntrl:]]*) MODULE_NOTE="its checkout's path cannot be written in the salvage record"; return 1 ;;
   esac
   # What the parent's own snapshot refuses, refused here for the same reasons: a conflicted
   # index cannot be written as a tree, an intent-to-add entry has no blob, and a submodule
@@ -2530,7 +2547,7 @@ module_carry_plan() {
   fi
   n=${#PLAN_G[@]}
   PLAN_G[n]=$g; PLAN_CO[n]=$co; PLAN_DURABLE[n]=$durable; PLAN_LABEL[n]=$label; PLAN_IDS[n]=$refs
-  PLAN_HISTORY_KB[n]=$history_kb
+  PLAN_HISTORY_KB[n]=$history_kb; PLAN_REL[n]=$rel
   MODULE_CARRY_KB=$((CHANGED_KB + history_kb))
   return 0
 }
@@ -2565,11 +2582,13 @@ module_carry_snapshot() {
 }
 
 # carry_record <plan-index> <head> <index-tree> <worktree-tree> -> prints what was (or would
-# now be) carried for that repository: where from, where to, the three objects and the
-# refs. The same text is the kept record (refs/salvaged/<id>/submodules) and what the
-# check before the removal compares.
+# now be) carried for that repository. One tab-separated line: the repository's path under
+# the git directory (the manifest's label), the path its checkout had inside the worktree,
+# the repository that received the work, and the HEAD commit, index tree and working-tree
+# tree; then one line per extra ref. The same text is the kept record
+# (refs/salvaged/<id>/submodules) and what the check before the removal compares.
 carry_record() {
-  printf '%s\t%s\t%s %s %s\n%s\n' "${PLAN_LABEL[$1]}" "${PLAN_DURABLE[$1]}" "$2" "$3" "$4" "${PLAN_IDS[$1]}"
+  printf '%s\t%s\t%s\t%s %s %s\n%s\n' "${PLAN_LABEL[$1]}" "${PLAN_REL[$1]}" "${PLAN_DURABLE[$1]}" "$2" "$3" "$4" "${PLAN_IDS[$1]}"
 }
 
 # module_carry_signature -> sets CARRY_SIGNATURE to the carry_record of every planned

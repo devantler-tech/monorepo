@@ -1633,9 +1633,9 @@ run_salvage() { # <root> <mode> <salvage_age_hours> -> stdout
 # need the local URL.
 PORTFOLIO_URL=https://github.com/devantler-tech/subfix.git
 portfolio_origin() {
-  local root=$1 wt=$2 real_git
+  local root=$1 wt=$2 real_git subpath=${3:-sub}
   real_git=$(command -v git) || return 1
-  git -C "$wt/sub" remote set-url origin "$PORTFOLIO_URL" || return 1
+  git -C "$wt/$subpath" remote set-url origin "$PORTFOLIO_URL" || return 1
   mkdir -p "$root/gitshim" || return 1
   cat > "$root/gitshim/git" <<SHIM
 #!/usr/bin/env bash
@@ -1790,7 +1790,8 @@ t_salvage_keeps_oversized_work() {
 # salvage cannot capture. Hermetic form, as in t_keeps_staged_gitlink_update.
 submodule_wt() {
   local root=$1 name=$2 kind=$3 sub seed subA subB wt
-  sub="$root/sub.git"; [ -d "$sub" ] || git init -q --bare "$sub"
+  # One remote per fixture: each seeds its own history, and a shared one took only the first.
+  sub="$root/sub-$name.git"; git init -q --bare "$sub"
   seed="$root/seed-$name"
   git init -q -b main "$seed"; git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
   echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one; subA=$(git -C "$seed" rev-parse HEAD)
@@ -1798,10 +1799,18 @@ submodule_wt() {
   git -C "$seed" push -q "$sub" main
   add_wt "$root" "$name" pushed || return 1
   wt="$root/repo/.claude/worktrees/$name"
-  git clone -q "$sub" "$wt/sub"
+  git clone -q "$sub" "$wt/sub" || return 1
+  git -C "$wt/sub" checkout -q --detach "$subA" || return 1
+  # Registered in .gitmodules, so the submodule can be enumerated and the sweep reaches the
+  # checks about its work. A bare gitlink stops at "cannot enumerate submodule-owned
+  # worktrees" (t_keeps_a_gitlink_that_cannot_be_enumerated) and proves nothing about them.
+  printf '[submodule "sub"]\n\tpath = sub\n\turl = %s\n' "$sub" > "$wt/.gitmodules"
+  git -C "$wt" add .gitmodules || return 1
   git -C "$wt" update-index --add --cacheinfo "160000,$subA,sub"
-  git -C "$wt" commit -qm "track sub at A"; git -C "$wt" push -q origin "claude/$name"
+  git -C "$wt" commit -qm "track sub at A"; git -C "$wt" push -q origin "claude/$name" || return 1
+  git -C "$wt" submodule foreach --quiet 'true' >/dev/null 2>&1 || return 1
   if [ "$kind" = staged ]; then
+    git -C "$wt/sub" checkout -q --detach "$subB" || return 1
     git -C "$wt" update-index --cacheinfo "160000,$subB,sub"
   else
     echo dirty >> "$wt/sub/f"                        # uncommitted work inside the submodule
@@ -1815,10 +1824,13 @@ t_salvage_keeps_submodule_work() {
     bad "salvage keeps submodule work" "FIXTURE"; rm -rf "$root"; return
   fi
   local out; out=$(run_salvage "$root" apply 1)
-  # The submodule is a gitlink with no .gitmodules entry, so it cannot be enumerated: the
-  # gate that the submodule KEEP used to come before now gives the reason.
-  if grep -q 'KEEP .*subdirty .*cannot enumerate submodule-owned worktrees' <<<"$out" \
-     && grep -q 'KEEP .*substaged .*cannot enumerate submodule-owned worktrees' <<<"$out" \
+  # The submodule's repository is an embedded .git inside the worktree, so there is nowhere
+  # to carry its work: the salvage blockers refuse it, for that reason and no earlier one.
+  local staged_row; staged_row=$(GIT_OPTIONAL_LOCKS=0 git -C "$root/repo/.claude/worktrees/substaged" status --porcelain --ignore-submodules=none)
+  if grep -q 'KEEP .*subdirty .*1 in a submodule; not salvaged: holds a nested repository (.*/subdirty/sub/\.git; salvage carries no repository but the worktree.s own)' <<<"$out" \
+     && grep -q 'KEEP .*substaged .*1 in a submodule; not salvaged: holds a nested repository (.*/substaged/sub/\.git; salvage carries no repository but the worktree.s own)' <<<"$out" \
+     && ! grep -q 'cannot enumerate' <<<"$out" && [ "$staged_row" = "M  sub" ] \
+     && [ -z "$(git -C "$root/repo" for-each-ref refs/salvaged)" ] \
      && [ "$(tail -1 "$root/repo/.claude/worktrees/subdirty/sub/f")" = dirty ] \
      && [ -d "$root/repo/.claude/worktrees/substaged" ]; then
     ok "salvage KEEPs dirty and staged submodule work it cannot capture"
@@ -1901,6 +1913,9 @@ t_salvage_keeps_submodule_work_at_a_quoted_path() {
   add_wt "$root" subq pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
   wt="$root/repo/.claude/worktrees/subq"
   git clone -q "$sub" "$wt/süb"
+  # In .gitmodules too, so the submodule is enumerated and its work is what decides.
+  printf '[submodule "sq"]\n\tpath = süb\n\turl = %s\n' "$sub" > "$wt/.gitmodules"
+  git -C "$wt" add .gitmodules
   git -C "$wt" update-index --add --cacheinfo "160000,$subA,süb"
   git -C "$wt" commit -qm "track süb"; git -C "$wt" push -q origin claude/subq
   echo dirty >> "$wt/süb/f"
@@ -1912,7 +1927,8 @@ t_salvage_keeps_submodule_work_at_a_quoted_path() {
     bad "$name" "FIXTURE: porcelain did not quote the path"; rm -rf "$root"; return
   fi
   local out; out=$(run_salvage "$root" apply 1)
-  if grep -q 'KEEP .*subq .*cannot enumerate submodule-owned worktrees' <<<"$out" \
+  if grep -q 'KEEP .*subq .*1 in a submodule; not salvaged: holds a nested repository (.*/süb/\.git; salvage carries no repository but the worktree.s own)' <<<"$out" \
+     && ! grep -q 'cannot enumerate' <<<"$out" \
      && [ "$(tail -1 "$wt/süb/f" 2>/dev/null)" = dirty ]; then
     ok "$name"
   else
@@ -5443,7 +5459,7 @@ carries_submodule_work() {
   if grep -q "^SALVAGED .*$wtname " <<<"$out" && [ ! -e "$wt" ] && [ -n "$base" ] \
      && [ "$(git --git-dir="$d" rev-parse --verify --quiet "$base/head" 2>/dev/null)" = "$before" ] \
      && git -C "$root/repo" rev-parse --verify --quiet "$base/head" >/dev/null \
-     && grep -q "^modules/sub	$d	$before " <<<"$(git -C "$root/repo" cat-file blob "$base/submodules" 2>/dev/null)" \
+     && grep -q "^modules/sub	sub	$d	$before " <<<"$(git -C "$root/repo" cat-file blob "$base/submodules" 2>/dev/null)" \
      && grep -q "salvaged=$base .*;submodule=modules/sub;.*pending\$" "$root/manifest.tsv" \
      && grep -q 'reaped$' "$root/manifest.tsv" \
      && eval "$check"; then
@@ -5491,38 +5507,160 @@ t_salvage_carries_an_unpushed_commit_in_a_clean_submodule() {
 }
 
 t_salvage_restores_carried_submodule_work_from_the_manifest() {
-  # Everything at once, then the documented restore, driven by nothing but the manifest
-  # row: the namespace and the submodule's path under the git directory.
-  local name="the manifest's names restore a carried submodule's index and working tree byte for byte"
+  # Everything at once, then the restore the header documents, followed to the letter and
+  # driven by nothing but the manifest row. The submodule's NAME (foo) is not its PATH
+  # (bar): the manifest's label is the repository's place under the git directory, which
+  # follows the name, so a restore that looked for <main>/<label's last part> would miss.
+  local name="the manifest row alone restores a carried submodule whose name differs from its path, byte for byte"
   local root; root=$(make_repo)
-  carry_wt "$root" carryall || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
-  local wt="$root/repo/.claude/worktrees/carryall" out row base label d r="$root/restored"
-  echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "local only" \
-    && printf 'staged\r\n' > "$wt/sub/g" && git -C "$wt/sub" add g && printf 'later\n' > "$wt/sub/g" \
-    && echo dirty >> "$wt/sub/f" && echo draft > "$wt/sub/untracked.txt" && echo parent > "$wt/untracked.txt" \
+  git init -q -b main "$root/subsrc" && echo one > "$root/subsrc/f" && git -C "$root/subsrc" add f \
+    && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm one \
+    && git -C "$root/repo" -c protocol.file.allow=always submodule add -q --name foo "$root/subsrc" bar >/dev/null 2>&1 \
+    && git -C "$root/repo" commit -qm "add foo at bar" && git -C "$root/repo" push -q origin main \
+    && add_wt "$root" carryall pushed \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/carryall" out row base label D r="$root/restored" record
+  git -C "$wt" -c protocol.file.allow=always submodule update -q --init >/dev/null 2>&1 \
+    && [ -d "$(git -C "$wt" rev-parse --absolute-git-dir)/modules/foo" ] && [ ! -e "$root/repo/.git/modules/bar" ] \
+    && git -C "$wt/bar" config user.email t@t.t && git -C "$wt/bar" config user.name t \
+    && portfolio_origin "$root" "$wt" bar \
+    && git config --file "$root/repo/.git/modules/foo/config" remote.origin.url "$PORTFOLIO_URL" \
+    || { bad "$name" "FIXTURE: submodule"; rm -rf "$root"; return; }
+  echo two >> "$wt/bar/f" && git -C "$wt/bar" commit -qam "local only" \
+    && printf 'staged\r\n' > "$wt/bar/g" && git -C "$wt/bar" add g && printf 'later\n' > "$wt/bar/g" \
+    && echo dirty >> "$wt/bar/f" && echo draft > "$wt/bar/untracked.txt" && echo parent > "$wt/untracked.txt" \
     || { bad "$name" "FIXTURE: work"; rm -rf "$root"; return; }
-  cp "$wt/sub/f" "$root/want-f"
+  cp "$wt/bar/f" "$root/want-f"
   age_tree "$wt"
   out=$(run_salvage "$root" apply 1)
   row=$(grep 'pending$' "$root/manifest.tsv" 2>/dev/null)
   base=$(sed -n 's/.*salvaged=\(refs\/salvaged\/[^ ]*\) .*/\1/p' <<<"$row")
   label=$(sed -n 's/.*;submodule=\([^;]*\);.*/\1/p' <<<"$row")
-  d="$root/repo/.git/$label"
-  if [ -e "$wt" ] || [ -z "$base" ] || [ "$label" != modules/sub ]; then
+  if [ -e "$wt" ] || [ -z "$base" ] || [ "$label" != modules/foo ]; then
     bad "$name" "row=[$row] $out"; rm -rf "$root"; return
   fi
-  # The restore the header documents, in the main checkout's submodule.
-  if git -C "$root/repo/sub" worktree add -q --detach "$r" "$base/head" 2>/dev/null \
+  # The header's steps: D is <git directory>/<label>; no checkout of the submodule is used.
+  D="$root/repo/.git/$label"
+  record=$(git -C "$root/repo" cat-file blob "$base/submodules" 2>/dev/null)
+  if git --git-dir="$D" --work-tree="$D" worktree add -q --detach "$r" "$base/head" 2>/dev/null \
      && git -C "$r" read-tree "$base/index" \
      && git -C "$r" restore --source="$base/worktree" --worktree -- . \
      && cmp -s "$r/f" "$root/want-f" && [ "$(cat "$r/g")" = later ] && [ "$(cat "$r/untracked.txt")" = draft ] \
      && git -C "$r" cat-file blob :g | cmp -s - <(printf 'staged\r\n') \
      && [ "$(git -C "$r" log -1 --format=%s)" = "local only" ] \
      && [ "$(git -C "$root/repo" show "$base/worktree:untracked.txt")" = parent ] \
-     && [ "$(git -C "$root/repo" rev-parse "$base/worktree:sub")" = "$(git -C "$r" rev-parse HEAD)" ]; then
+     && [ "$(git -C "$root/repo" rev-parse "$base/worktree:bar")" = "$(git -C "$r" rev-parse HEAD)" ] \
+     && grep -q "^modules/foo	bar	$D	" <<<"$record" \
+     && [ "$(git -C "$root/repo" submodule foreach --quiet --recursive 'git rev-parse --absolute-git-dir')" = "$D" ] \
+     && [ "$(git -C "$root/repo/bar" rev-parse --absolute-git-dir)" = "$D" ] && [ ! -e "$root/repo/foo" ]; then
     ok "$name"
   else
-    bad "$name" "restore failed: $out"
+    bad "$name" "restore failed: record=[$record] $out"
+  fi
+  rm -rf "$root"
+}
+
+# keeps_unnameable_submodule <test-name> <worktree-name> <submodule-name> <submodule-path> <reason>
+# — a worktree whose submodule holds an uncommitted edit and could be carried, except that
+# its name or its path cannot be written where the restore instructions are read from.
+keeps_unnameable_submodule() {
+  local name=$1 wtname=$2 subname=$3 subpath=$4 reason=$5
+  local root; root=$(make_repo)
+  git init -q -b main "$root/subsrc" && echo one > "$root/subsrc/f" && git -C "$root/subsrc" add f \
+    && git -C "$root/subsrc" -c user.email=t@t.t -c user.name=t commit -qm one \
+    && git -C "$root/repo" -c protocol.file.allow=always submodule add -q --name "$subname" "$root/subsrc" "$subpath" >/dev/null 2>&1 \
+    && git -C "$root/repo" commit -qm "add submodule" && git -C "$root/repo" push -q origin main \
+    && add_wt "$root" "$wtname" pushed \
+    || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/$wtname" d="$root/repo/.git/modules/$subname" out
+  git -C "$wt" -c protocol.file.allow=always submodule update -q --init >/dev/null 2>&1 \
+    && [ -d "$d" ] && portfolio_origin "$root" "$wt" "$subpath" \
+    && git config --file "$d/config" remote.origin.url "$PORTFOLIO_URL" \
+    && echo dirty >> "$wt/$subpath/f" \
+    || { bad "$name" "FIXTURE: submodule"; rm -rf "$root"; return; }
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1)
+  if grep -Fq "$reason" <<<"$(grep "^KEEP .*$wtname " <<<"$out")" && [ -d "$wt" ] && grep -q dirty "$wt/$subpath/f" \
+     && [ -z "$(git --git-dir="$d" for-each-ref refs/salvaged)" ]; then
+    ok "$name"
+  else
+    bad "$name" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_keeps_a_submodule_whose_name_would_break_the_manifest() {
+  keeps_unnameable_submodule "salvage KEEPs a submodule whose name holds the manifest's field separator" seminame \
+    'fo;o' bar "modules/fo;o: its path cannot be named in the manifest"
+}
+
+t_salvage_keeps_a_submodule_whose_checkout_path_would_break_the_record() {
+  local tab; tab=$(printf '\tx'); tab=${tab%x}
+  keeps_unnameable_submodule "salvage KEEPs a submodule whose checkout path holds a control character" tabpath \
+    foo "ba${tab}r" "modules/foo: its checkout's path cannot be written in the salvage record"
+}
+
+t_keeps_a_gitlink_that_cannot_be_enumerated() {
+  # A gitlink with no .gitmodules entry: git cannot enumerate it, so nothing can say whether
+  # it owns a worktree inside this one. That is a KEEP of its own, and it goes away once
+  # the entry exists.
+  local name="KEEPs a worktree whose gitlink has no .gitmodules entry, and only for that reason"
+  local root; root=$(make_repo)
+  local sub="$root/subbare.git" seed="$root/seedbare" subA wt out fixed
+  git init -q --bare -b main "$sub"; git init -q -b main "$seed"
+  git -C "$seed" config user.email t@t.t; git -C "$seed" config user.name t
+  echo one > "$seed/f"; git -C "$seed" add f; git -C "$seed" commit -qm one
+  subA=$(git -C "$seed" rev-parse HEAD); git -C "$seed" push -q "$sub" main
+  add_wt "$root" barelink pushed || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  wt="$root/repo/.claude/worktrees/barelink"
+  git clone -q "$sub" "$wt/sub" && git -C "$wt" update-index --add --cacheinfo "160000,$subA,sub" \
+    && git -C "$wt" commit -qm "track sub" && git -C "$wt" push -q origin claude/barelink \
+    || { bad "$name" "FIXTURE: gitlink"; rm -rf "$root"; return; }
+  age_tree "$wt"
+  out=$(run "$root" dry-run)
+  printf '[submodule "sub"]\n\tpath = sub\n\turl = %s\n' "$sub" > "$wt/.gitmodules"
+  git -C "$wt" add .gitmodules && git -C "$wt" commit -qm "register sub" && git -C "$wt" push -q origin claude/barelink
+  age_tree "$wt"
+  fixed=$(run "$root" dry-run)
+  if grep -q '^KEEP  *barelink  *cannot enumerate submodule-owned worktrees$' <<<"$out" \
+     && grep -q 'barelink' <<<"$fixed" && ! grep -q 'cannot enumerate' <<<"$fixed"; then
+    ok "$name"
+  else
+    bad "$name" "$out :: $fixed"
+  fi
+  rm -rf "$root"
+}
+
+t_salvage_preserves_a_staged_gitlink_update() {
+  # The parent's index points the submodule at commit B, which exists only in the
+  # worktree's copy of the submodule repository; the checkout has since moved back to A.
+  # Before, a staged gitlink was always kept. Now it is salvaged, so both halves must
+  # survive: the parent's index ref records the gitlink at B (and its working tree at A),
+  # and B itself is carried to the main checkout's repository for the submodule.
+  local name="salvage preserves a staged gitlink update: the parent's index names the commit and the commit is carried"
+  local root; root=$(make_repo)
+  carry_wt "$root" stagedlink || { bad "$name" "FIXTURE"; rm -rf "$root"; return; }
+  local wt="$root/repo/.claude/worktrees/stagedlink" d="$root/repo/.git/modules/sub" A B out base row
+  A=$(git -C "$wt/sub" rev-parse HEAD)
+  echo two >> "$wt/sub/f" && git -C "$wt/sub" commit -qam "staged in the parent" \
+    && B=$(git -C "$wt/sub" rev-parse HEAD) && git -C "$wt" add sub \
+    && git -C "$wt/sub" checkout -q --detach "$A" || { bad "$name" "FIXTURE: work"; rm -rf "$root"; return; }
+  row=$(GIT_OPTIONAL_LOCKS=0 git -C "$wt" status --porcelain --ignore-submodules=none)
+  if [ "$row" != "MM sub" ] || git --git-dir="$d" cat-file -e "$B" 2>/dev/null; then
+    bad "$name" "FIXTURE: status=[$row], or the main checkout already holds B"; rm -rf "$root"; return
+  fi
+  age_tree "$wt"
+  out=$(run_salvage "$root" apply 1)
+  base=$(carried_base "$root")
+  if grep -q '^SALVAGED .*stagedlink ' <<<"$out" && [ ! -e "$wt" ] && [ -n "$base" ] \
+     && [ "$(git -C "$root/repo" rev-parse --verify --quiet "$base/index:sub")" = "$B" ] \
+     && [ "$(git -C "$root/repo" rev-parse --verify --quiet "$base/worktree:sub")" = "$A" ] \
+     && [ "$(git --git-dir="$d" rev-parse --verify --quiet "$base/head")" = "$A" ] \
+     && [ "$(git --git-dir="$d" rev-parse --verify --quiet "$base/commit/$B")" = "$B" ] \
+     && [ "$(git --git-dir="$d" log -1 --format=%s "$B" 2>/dev/null)" = "staged in the parent" ]; then
+    ok "$name"
+  else
+    bad "$name" "A=$A B=$B base=[$base] $out"
   fi
   rm -rf "$root"
 }
@@ -6330,6 +6468,10 @@ t_salvage_carries_an_untracked_file_in_a_submodule
 t_salvage_carries_a_staged_change_in_a_submodule
 t_salvage_carries_an_unpushed_commit_in_a_clean_submodule
 t_salvage_restores_carried_submodule_work_from_the_manifest
+t_keeps_a_gitlink_that_cannot_be_enumerated
+t_salvage_preserves_a_staged_gitlink_update
+t_salvage_keeps_a_submodule_whose_name_would_break_the_manifest
+t_salvage_keeps_a_submodule_whose_checkout_path_would_break_the_record
 t_salvage_keeps_submodule_work_with_no_main_checkout_repository
 t_salvage_keeps_submodule_work_when_the_main_checkout_names_another_origin
 t_salvage_keeps_submodule_work_when_the_main_checkout_origin_is_local
