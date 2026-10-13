@@ -196,15 +196,22 @@ check "an unclassified cause is unknown" 0 "cause=unknown" 0
 out=$(watch $SLOT)
 if grep -qE 'daily-ai-assistant|dispatched at|header line' <<<"$out"; then bad "the liveness report leaked into the output"; else ok; fi
 
-# --- only the hourly task is judged, by the check beside the script ------------------------------
+# --- only the hourly entries are judged, by the check beside the script --------------------------
+# Each lane names two engineer entries (AGENTS.md, Cadence & focus). With no --entries the watch asks
+# about exactly those two, one call each, and about nothing else: never the improver, and never an
+# unscoped call, which would let the caller's own dispatch decide the verdict.
 reset; liveness 1 "$DOWN_NO_SESSION"
-rm -f "$FIX/liveness.args"; watch 0 >/dev/null
-args=$(cat "$FIX/liveness.args" 2>/dev/null || echo "<check not invoked>")
-case "$args" in *"--task daily-ai-assistant --grace-seconds 300 --now-epoch $T0") ok ;; *) bad "the Claude check is not limited to the hourly task with the short grace: $args" ;; esac
-rm -f "$FIX/liveness.args"
+watch 0 >/dev/null
+calls=$(cat "$FIX/liveness.calls" 2>/dev/null || echo "<check not invoked>")
+want_calls="--task daily-ai-assistant --grace-seconds 300 --now-epoch $T0
+--task agentic-engineer-2 --grace-seconds 300 --now-epoch $T0"
+if [ "$calls" = "$want_calls" ]; then ok; else bad "the Claude check is not limited to the lane's two hourly entries with the short grace: $calls"; fi
+reset
 bash "$STUBBED" --lane codex --state-file "$FIX/state/codex.json" --now-epoch "$T0" >/dev/null 2>&1 || true
-args=$(cat "$FIX/liveness.args" 2>/dev/null || echo "<check not invoked>")
-case "$args" in "--automation daily-ai-engineer --now-ms ${T0}000") ok ;; *) bad "the Codex check is not limited to the hourly automation: $args" ;; esac
+calls=$(cat "$FIX/liveness.calls" 2>/dev/null || echo "<check not invoked>")
+want_calls="--automation daily-ai-engineer --now-ms ${T0}000
+--automation agentic-engineer-2 --now-ms ${T0}000"
+if [ "$calls" = "$want_calls" ]; then ok; else bad "the Codex check is not limited to the lane's two hourly automations: $calls"; fi
 # The check is the one beside the script and nothing else: no environment variable names one.
 if grep -qE '\$\{?[A-Z_]*LIVENESS_CMD' "$SCRIPT"; then bad "the liveness check can be replaced through the environment"; else ok; fi
 # shellcheck disable=SC2016  # matching the literal source text
@@ -462,6 +469,86 @@ if grep -qF "verdict=OK lane=codex" <<<"$out" && grep -qF "degraded=${SECOND}" <
   grep -q -- "^--automation ${SECOND} --now-ms ${T0}000\$" "$FIX/liveness.calls"; then ok
 else bad "the codex lane must judge each entry through --automation: $out / $(cat "$FIX/liveness.calls" 2>/dev/null)"; fi
 
+# --- an entry the scheduler is not dispatching (monorepo#4116) -----------------------------------
+# The lane names an entry before its runtime entry exists, and an entry can be switched off later.
+# The liveness check answers UNKNOWN for it and names it on a NOT-SCHEDULED line. Such an entry is
+# reported, never read as healthy, and never holds back the outage of the entries that do run.
+NOT_SCHEDULED="  NOT-SCHEDULED  ${SECOND} -- the scheduler holds no entry with this id (not created yet, or removed)"
+reset; entry daily-ai-assistant 0 "$OK_LINE"; entry "$SECOND" 2 "$NOT_SCHEDULED"
+out=$(watch 0 --entries "$PAIR"); rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "verdict=OK lane=claude observations=0/3 first_seen_epoch=0 notified_epoch=0 cause=none unscheduled=${SECOND}" ]; then ok
+else bad "a producing first entry beside one not created yet must read OK and name it (rc=$rc: $out)"; fi
+no_state "an entry that is not created yet must not start a count"
+if grep -qE 'unjudged=|degraded=' <<<"$out"; then bad "an entry that is not scheduled is neither unjudged nor degraded: $out"; else ok; fi
+
+# The outage this watch exists for, in the window before the second entry is created: the first
+# entry dies and the second does not exist. That must count and page exactly as a one-entry lane did.
+reset; entry daily-ai-assistant 1 "$DOWN_NO_SESSION"; entry "$SECOND" 2 "$NOT_SCHEDULED"
+check "a dead first entry beside one not created yet counts" 0 "verdict=WATCHING lane=claude observations=1/3 first_seen_epoch=$T0 notified_epoch=0 cause=unknown unscheduled=${SECOND}" 0 --entries "$PAIR"
+check "a dead first entry beside one not created yet, second slot" 0 "observations=2/3" $SLOT --entries "$PAIR"
+check "a dead first entry beside one not created yet pages" 1 "verdict=ESCALATE lane=claude observations=3/3" $((2 * SLOT)) --entries "$PAIR"
+check "the page names the entry that is not scheduled" 0 "verdict=ESCALATION-CLAIMED lane=claude observations=3/3" $((2 * SLOT + 60)) --entries "$PAIR"
+case "$(watch $((2 * SLOT + 120)) --entries "$PAIR")" in *" unscheduled=${SECOND}") ok ;; *) bad "an outage verdict must still name the entry that is not scheduled" ;; esac
+# The second entry is created and produces: the outage is over.
+entry "$SECOND" 0 "  OK  ${SECOND} -- produced work"
+check "the second entry, once created and producing, ends the outage" 0 "cause=none degraded=daily-ai-assistant" $((3 * SLOT)) --entries "$PAIR"
+no_state "a lane whose new entry produces must clear the count"
+# A usage limit on the only scheduled entry is still a known reset.
+reset; entry daily-ai-assistant 1 "$DOWN_FIRST_QUOTA"; entry "$SECOND" 2 "$NOT_SCHEDULED"
+check "a usage limit on the only scheduled entry is a known reset" 0 "verdict=KNOWN-RESET lane=claude observations=0/3 first_seen_epoch=0 notified_epoch=0 cause=quota/billing unscheduled=${SECOND}" 0 --entries "$PAIR"
+
+# No entry of the lane is scheduled: there is nothing to call down, and nothing produced.
+reset; entry daily-ai-assistant 2 "  NOT-SCHEDULED  daily-ai-assistant -- the scheduler holds this entry switched off"; entry "$SECOND" 2 "$NOT_SCHEDULED"
+check "a lane with no scheduled entry is UNKNOWN" 2 "verdict=UNKNOWN" 0 --entries "$PAIR"
+no_state "a lane with no scheduled entry must not start a count"
+hint=$(bash "$STUBBED" --lane claude --state-file "$STATE" --now-epoch "$T0" --entries "$PAIR" 2>&1 >/dev/null || true)
+if grep -qF 'dispatching no engineer entry of the claude lane' <<<"$hint"; then ok; else bad "a lane with no scheduled entry must say so: $hint"; fi
+
+# An entry that could not be judged still makes a look with nothing producing UNKNOWN, whatever
+# else is not scheduled.
+reset; entry daily-ai-assistant 1 "$DOWN_NO_SESSION"; entry "$SECOND" 2 "$NOT_SCHEDULED"; entry third-entry 2 "could not judge"
+check "an unjudged entry beside a dead and an unscheduled one is UNKNOWN" 2 "verdict=UNKNOWN" 0 --entries "${PAIR},third-entry"
+no_state "a partial reading must not start a count"
+
+# The marker is read narrowly. Only exit 2 carries it, it must name THIS entry, and an id that
+# merely starts with the entry's id is another entry.
+reset; entry daily-ai-assistant 1 "$DOWN_NO_SESSION"
+entry "$SECOND" 2 "  NOT-SCHEDULED  ${SECOND}0 -- the scheduler holds no entry with this id (not created yet, or removed)"
+check "a NOT-SCHEDULED line naming a longer id is not this entry" 2 "verdict=UNKNOWN" 0 --entries "$PAIR"
+entry "$SECOND" 2 "  NOT-SCHEDULED  daily-ai-assistant -- the scheduler holds this entry switched off"
+check "a NOT-SCHEDULED line naming another entry is not this entry" 2 "verdict=UNKNOWN" 0 --entries "$PAIR"
+entry "$SECOND" 2 "the text NOT-SCHEDULED  ${SECOND} inside a sentence"
+check "NOT-SCHEDULED must open the line" 2 "verdict=UNKNOWN" 0 --entries "$PAIR"
+entry "$SECOND" 3 "$NOT_SCHEDULED"
+check "only exit 2 carries NOT-SCHEDULED" 2 "verdict=UNKNOWN" 0 --entries "$PAIR"
+no_state "a marker that does not name the entry must not start a count"
+# The exit status still decides: a verdict beside the marker is the verdict.
+entry "$SECOND" 0 "$NOT_SCHEDULED" "  OK  ${SECOND} -- produced work"
+check "exit 0 beside a NOT-SCHEDULED line is producing" 0 "cause=none degraded=daily-ai-assistant" 0 --entries "$PAIR"
+entry "$SECOND" 1 "$NOT_SCHEDULED" "$DOWN_SECOND"
+out=$(watch 0 --entries "$PAIR") || true
+if grep -qF "verdict=WATCHING lane=claude observations=1/3" <<<"$out" && ! grep -qF 'unscheduled=' <<<"$out"; then ok
+else bad "exit 1 beside a NOT-SCHEDULED line is a dead entry, not an unscheduled one: $out"; fi
+
+# Negative control: a watch that reads NOT-SCHEDULED as "could not judge" must FAIL the outage case
+# above, and for that reason: it answers UNKNOWN for as long as the second entry does not exist.
+mkdir -p "$FIX/mutant"
+cp "$FIX/bin/"*-lane-liveness.sh "$FIX/mutant/"
+# shellcheck disable=SC2016 # The pattern and its replacement are literal script text.
+sed 's/^      if \[ "\$entry_rc" -eq 2 \] &&$/      if false \&\&/' "$SCRIPT" > "$FIX/mutant/sibling-lane-watch.sh"
+if cmp -s "$SCRIPT" "$FIX/mutant/sibling-lane-watch.sh"; then
+  bad "negative control: the NOT-SCHEDULED mutation did not change the script"
+else
+  reset; entry daily-ai-assistant 1 "$DOWN_NO_SESSION"; entry "$SECOND" 2 "$NOT_SCHEDULED"
+  mutant_rc=0
+  out=$(bash "$FIX/mutant/sibling-lane-watch.sh" --lane claude --state-file "$STATE" --now-epoch "$T0" --entries "$PAIR" 2>/dev/null) || mutant_rc=$?
+  if [ "$mutant_rc" -eq 2 ] && grep -qF "verdict=UNKNOWN" <<<"$out" && [ ! -e "$STATE" ]; then ok
+  else bad "negative control: a watch that reads NOT-SCHEDULED as unjudged should answer UNKNOWN and count nothing (rc=$mutant_rc: $out)"; fi
+  out=$(watch 0 --entries "$PAIR") || true
+  if grep -qF "verdict=WATCHING lane=claude observations=1/3" <<<"$out"; then ok
+  else bad "the real watch must count the same fixture: $out"; fi
+fi
+
 # A malformed set is refused before any check runs: an id reaches the check as an argument.
 for bad_set in "" "daily-ai-assistant," ",daily-ai-assistant" "a,,b" "a,a" "Daily" "-x" "a b" 'a;b' "a,b,c,d,e"; do
   reset
@@ -535,10 +622,10 @@ touch_at() {
   [ -n "$out" ] || { echo "FAIL: cannot render epoch $1 as a touch stamp" >&2; exit 1; }
   printf '%s\n' "$out"
 }
-# session_at <file> <dispatch-epoch> — a transcript attributable to the hourly task, with one turn
+# session_at <file> <dispatch-epoch> [task] — a transcript attributable to an hourly task, with one turn
 session_at() {
   {
-    printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"<scheduled-task name=\\"daily-ai-assistant\\" file=\\"/x\\">go</scheduled-task>"}}\n' "$(iso_at $(($2 + 1)))"
+    printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"<scheduled-task name=\\"%s\\" file=\\"/x\\">go</scheduled-task>"}}\n' "$(iso_at $(($2 + 1)))" "${3:-daily-ai-assistant}"
     printf '{"type":"assistant","timestamp":"%s"}\n' "$(iso_at $(($2 + 20)))"
     printf '{"type":"system","timestamp":"%s"}\n' "$(iso_at $(($2 + 200)))"
   } > "$1"
@@ -568,6 +655,37 @@ real_case "a healthy dispatch at the latest measured jitter reads OK" 763 health
 real_case "a healthy dispatch at the shorter measured jitter reads OK" 523 healthy 0 "verdict=OK"
 # A dispatch younger than the short grace is still in flight, and that stays UNKNOWN.
 real_case "a dispatch four minutes old is still UNKNOWN" 964 none 2 "verdict=UNKNOWN"
+# The store above holds the first entry only, which is the deployment between this change and the
+# creation of the second entry. The real check must name the second as not scheduled, and the cases
+# above show it neither hides the first entry's outage nor reads as healthy.
+real_case "the real check names an entry that is not created yet" 763 healthy 0 "cause=none unscheduled=agentic-engineer-2"
+real_case "a dead first entry is still counted while the second is not created" 763 none 0 "cause=unknown unscheduled=agentic-engineer-2"
+
+# The lane with both entries, read by the real check. The second entry is scheduled at `:20`, so the
+# Codex run at `:10` reads its dispatch of the hour before.
+SECOND_SCHEDULED=$((T0 - 2400))
+# real_pair <name> <first: none|healthy> <second: none|healthy|off> <want-rc> <want-stdout-substring>
+real_pair() {
+  local name=$1 first=$2 second=$3 want_rc=$4 want=$5 d1 d2 enabled=true out rc=0
+  d1=$((SCHEDULED + 763)); d2=$((SECOND_SCHEDULED + 523))
+  [ "$second" != off ] || enabled=false
+  rm -rf "$REAL"; mkdir -p "$REAL/projects/proj-a"
+  printf '{"scheduledTasks":[{"id":"daily-ai-assistant","enabled":true,"lastRunAt":"%s","lastScheduledFor":"%s","cronExpression":"50 * * * *","filePath":"/x","cwd":"/y"},{"id":"agentic-engineer-2","enabled":%s,"lastRunAt":"%s","lastScheduledFor":"%s","cronExpression":"20 * * * *","filePath":"/x2","cwd":"/y"}]}\n' \
+    "$(iso_at "$d1")" "$(iso_at "$SCHEDULED")" "$enabled" "$(iso_at "$d2")" "$(iso_at "$SECOND_SCHEDULED")" > "$REAL/store.json"
+  session_at "$REAL/projects/proj-a/previous.jsonl" $((d1 - 3600))
+  [ "$first" != healthy ] || session_at "$REAL/projects/proj-a/first.jsonl" "$d1"
+  [ "$second" != healthy ] || session_at "$REAL/projects/proj-a/second.jsonl" "$d2" agentic-engineer-2
+  out=$(CLAUDE_SCHEDULE_STORE_PATH="$REAL/store.json" CLAUDE_PROJECTS_ROOT="$REAL/projects" \
+    bash "$SCRIPT" --lane claude --state-file "$REAL/state.json" --now-epoch "$CODEX_RUN" 2>/dev/null) || rc=$?
+  if [ "$rc" -eq "$want_rc" ] && [ "$out" = "$want" ]; then ok; else bad "$name (rc=$rc want=$want_rc, wanted '$want': $out)"; fi
+}
+OK_PREFIX="verdict=OK lane=claude observations=0/3 first_seen_epoch=0 notified_epoch=0 cause=none"
+real_pair "two producing entries read OK with nothing to report" healthy healthy 0 "$OK_PREFIX"
+real_pair "a dead second entry beside a producing first is degraded, not an outage" healthy none 0 "$OK_PREFIX degraded=agentic-engineer-2"
+real_pair "a dead first entry beside a producing second is degraded, not an outage" none healthy 0 "$OK_PREFIX degraded=daily-ai-assistant"
+real_pair "two dead entries are the outage" none none 0 "verdict=WATCHING lane=claude observations=1/3 first_seen_epoch=$CODEX_RUN notified_epoch=0 cause=unknown"
+real_pair "a second entry switched off is named beside a producing first" healthy off 0 "$OK_PREFIX unscheduled=agentic-engineer-2"
+real_pair "a second entry switched off does not hide a dead first" none off 0 "verdict=WATCHING lane=claude observations=1/3 first_seen_epoch=$CODEX_RUN notified_epoch=0 cause=unknown unscheduled=agentic-engineer-2"
 
 # --- contract: every run watches its sibling, and the DM rules are stated where they are used ----
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
@@ -583,7 +701,8 @@ section=$(awk '/^## Sibling lane outage/{on=1; print; next} on && /^## /{exit} o
 # shellcheck disable=SC2016  # the backticks are literal Markdown, not a command substitution
 for needle in 'sibling-lane-watch.sh --lane' '--mark-notified' 'Exit `1`' 'Exit `2`' 'KNOWN-RESET' \
   'ESCALATION-CLAIMED' '`verdict=ESCALATE`' 'both directions' 'once per outage' 'cause class' \
-  'three hourly slots running' 'once more before the run report'; do
+  'three hourly slots running' 'once more before the run report' \
+  '`degraded=<ids>`' '`unjudged=<ids>`' '`unscheduled=<ids>`' 'not created yet'; do
   if grep -qF -- "$needle" <<<"$section"; then ok; else bad "contract — the outage section lacks: $needle"; fi
 done
 if grep -qE '^THRESHOLD=3$' "$SCRIPT"; then ok; else bad "the script default threshold is not 3"; fi
@@ -598,6 +717,19 @@ for pair in claude:50 codex:10; do
     ok
   else
     bad "contract — the watch's minute for the $lane lane does not match the Cadence table"
+  fi
+done
+# The table gives each lane two engineer starts an hour, one per scheduler entry, and the watch must
+# judge both entries. A table that gained or lost a start without the watch's entry list following
+# would leave an entry unwatched, or page on one that no longer exists.
+for triple in "claude:daily-ai-assistant,agentic-engineer-2:20:50" "codex:daily-ai-engineer,agentic-engineer-2:10:40"; do
+  lane=${triple%%:*}; rest=${triple#*:}; entries=${rest%%:*}; minutes=${rest#*:}
+  row=$(grep -F -- "\`${lane}/*\`" <<<"$cadence" || true)
+  if grep -qF -- "| Every hour at \`:${minutes%%:*}\` and \`:${minutes##*:}\` |" <<<"$row" &&
+    awk -v lane="$lane" -v e="$entries" '$1 == lane")" {on=1} on && $1 == "default_entries=\"" e "\"" {found=1} on && /;;/ {exit} END {exit !found}' "$SCRIPT"; then
+    ok
+  else
+    bad "contract — the $lane lane's two engineer starts in the Cadence table do not match the watch's entries ($entries)"
   fi
 done
 

@@ -122,9 +122,15 @@ definition surface, and an installed/cache copy is never an authoring target.
 memory and the run report:**
 
 - Claude schedule pointers:
-  `/Users/homelab-mac-mini/.claude/scheduled-tasks/{daily-ai-assistant,agent-improver}/SKILL.md`.
+  `/Users/homelab-mac-mini/.claude/scheduled-tasks/{daily-ai-assistant,agentic-engineer-2,agent-improver}/SKILL.md`.
 - Codex schedule pointers:
-  `/Users/homelab-mac-mini/.codex/automations/{daily-ai-engineer,agent-improver}/automation.toml`.
+  `/Users/homelab-mac-mini/.codex/automations/{daily-ai-engineer,agentic-engineer-2,agent-improver}/automation.toml`.
+  Each lane's engineer has two entries, its first one and `agentic-engineer-2`. The second is the
+  first again with another start minute: the same thin pointer, working folder, model and settings.
+  The [cadence guide](cadence.md#two-engineer-entries-per-lane) says why it is two entries, and
+  both Codex entries use the one engineer memory store the
+  [durable memory guide](durable-memory.md) names. An edit to one engineer entry's pointer is an
+  edit to both: change them together, and verify each after its own next dispatch.
   A `finops-engineer` schedule under either path is **retired state to remove**, not a definition
   surface: spend now runs inside the engineer's own loop, so a surviving schedule would dispatch a role
   no reviewed definition describes. Retire it **at or before** the switch, never after: leaving it armed
@@ -149,7 +155,9 @@ authoritative `scheduled-tasks.json` record selected by exact task id plus point
 `~/Library/Application Support/Claude/claude-code-sessions/<session-uuid>/<task-uuid>/scheduled-tasks.json`,
 not under `~/.claude`. Select the one such file whose enabled records match those task ids and pointer
 paths, as `agent-telemetry.sh` and `claude-lane-liveness.sh` do; never a `.bak-<epoch>` sibling, and
-never a `find` or `grep -r` over `$HOME`, which times out. Codex cadence and its
+never a `find` or `grep -r` over `$HOME`, which times out. The drift check asks a store only for the
+engineer entries that have a pointer file on the host, so an entry that is not created yet does not
+leave the store unfound. Codex cadence and its
 dispatch marker come from the exact automation id's `rrule` and `last_run_at` fields in Codex's local
 `sqlite/codex-dev.db` scheduler store. The complete RRULE in `automation.toml` is a required thin
 pointer and must equal that scheduler record before the drift check reports `MATCH`;
@@ -172,6 +180,30 @@ unadvanced marker, or a missing marker still yields `persistence=UNKNOWN` — ne
 pointer that does not equal its scheduler record, or an incomplete recurrence rule yields `UNKNOWN`
 for that pointer *and* suppresses the derived `local simultaneous starts/day` and
 `local engineer slots scheduled/day`. Only the persistence proof was decoupled.
+
+**A lane's two engineer entries are read as one schedule.** On both runtimes the drift check
+compares the cadence cell with the union of the entries' start minutes, and prints each entry's own
+schedule on an `entries:` line. The union is stated only when every named entry is readable, all
+cover the same hours and no two start in the same minute; a Codex entry's pointer must also equal
+its own scheduler record. An entry that lost its pointer or its record, was switched off or moved
+makes the lane `UNKNOWN` or `DRIFT`. The lane is never read as the entries that are left, because
+that would report a lost start as a `MATCH`. The lane's change marker is the oldest of its entries'
+newest dispatches, so each baseline variable above still takes one value per lane, and persistence
+is confirmed only when every entry has dispatched since. The lists the check reads are
+`CLAUDE_ENGINEER_ENTRIES` and `CODEX_ENGINEER_ENTRIES`. Their defaults are the deployed pairs, and
+they change in the same pull request as the cadence table.
+
+**An entry that is not created yet is reported as that.** The cadence table is changed first and
+the runtime entry is created to match it, so for a while the check names an entry that has no
+pointer file and no scheduler record of that id in any state. Only when both are absent does the
+lane read `UNKNOWN: … has an entry that is not created yet`, beside the schedules of the entries
+that exist. It is never a `MATCH`. The entries that exist are still held to the table: a start the
+table does not name is `DRIFT` at once, whether or not another entry is outstanding. The two
+derived figures then count the entries that exist and
+say which they leave out: they count starts the runtime makes, and suppressing them for the whole
+wait would leave the stagger invariant unwatched again. Half an entry (a pointer without a record,
+a record without a pointer, or a store that cannot be read) is a defect and keeps its ordinary
+`UNKNOWN`.
 
 🔴 **`last_run_at` is a DISPATCH marker, never a LIVENESS signal — a fully dead lane advances it
 exactly like a healthy one.** The scheduler records when it *started* a run, not whether the run did
@@ -251,6 +283,15 @@ wrong by ~2.7 hours. Report at **class** granularity; the message beside it carr
 account detail that stay in the private operator notes.
 A `1` is reported and its cause pursued; it is never a run-stopper, and the remedy may lie outside
 agent authority.
+
+**A named entry the scheduler is not dispatching is `2`, and both checks name it.** When
+`--automation` or `--task` names an entry the scheduler does not hold, or holds switched off, the
+check prints a `NOT-SCHEDULED <id>` line beside its exit `2`. Nothing is dispatching that entry,
+which is a different finding from a dispatch that could not be judged.
+`sibling-lane-watch.sh` reads the line: such an entry is reported as `unscheduled`, and it neither
+clears nor holds back the outage of the lane's other entry. Read as "could not judge", a lane whose
+second entry does not exist yet could never be called down while its first entry was dead
+(monorepo#4116).
 
 🔴 **A per-automation `OK` is NOT lane health when another automation on the SAME runtime account is
 not producing for an account-scoped cause.** The check classifies **per automation**, over that

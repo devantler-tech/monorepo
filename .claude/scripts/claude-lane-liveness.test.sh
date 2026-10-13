@@ -743,6 +743,46 @@ expect_msg 2 "task beta is not a single enabled task" \
 expect_msg 2 "task nope is not a single enabled task" \
   "a missing named entry makes the set UNKNOWN, never the verdict of the rest" --task alpha,nope
 
+# --- A NAMED ENTRY THE SCHEDULER IS NOT DISPATCHING (monorepo#4116) --------------------------------
+# Still UNKNOWN, and NAMED on stdout. The lane watch judges entry by entry, and it must tell "nothing
+# is dispatching this entry" (not created yet, or switched off) from "a dispatch that could not be
+# judged": only the second may hold back the outage of the lane's other entry. The line is read by a
+# program, so it is asserted whole and on stdout alone.
+stdout_of() { "$SCRIPT" --store "$STORE" --projects "$PROJECTS" --now-epoch "$NOW" "$@" 2>/dev/null || true; }
+expect_stdout() {
+  local want=$1 label=$2; shift 2
+  local out
+  out=$(stdout_of "$@")
+  asserts=$(( asserts + 1 ))
+  [ "$out" = "$want" ] || note_fail "$label: stdout was '$out'"
+}
+expect 2 "an entry the store does not hold is UNKNOWN, never a verdict" --task nope
+expect_stdout "  NOT-SCHEDULED  nope -- the scheduler holds no entry with this id (not created yet, or removed)" \
+  "an entry the store does not hold is named as not scheduled" --task nope
+expect 2 "an entry held switched off is UNKNOWN, never a verdict" --task beta
+expect_stdout "  NOT-SCHEDULED  beta -- the scheduler holds this entry switched off" \
+  "an entry held switched off is named as not scheduled" --task beta
+expect_stdout "" "--quiet prints no NOT-SCHEDULED line" --quiet --task nope
+# CONTROLS. A healthy named entry never carries the marker, and neither does an entry that exists
+# but cannot be judged yet: that one is unjudged, and reading it as not scheduled would let a lane
+# be called down while one of its dispatches is still in flight.
+asserts=$(( asserts + 1 ))
+case "$(stdout_of --task alpha)" in
+  *NOT-SCHEDULED*) note_fail "a healthy named entry must not be named as not scheduled" ;;
+  *"OK  alpha"*) : ;;
+  *) note_fail "control: the healthy named entry did not read OK" ;;
+esac
+mkcase set_entry_in_flight
+mkstore "$STORE" alpha true "$H" beta true "\"$(iso_at $(( NOW - 60 )))\""
+mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null
+expect 2 "control: a dispatch still in flight is UNKNOWN" --task beta
+asserts=$(( asserts + 1 ))
+case "$(stdout_of --task beta)" in
+  *NOT-SCHEDULED*) note_fail "a dispatch still in flight must not be named as not scheduled" ;;
+  *"UNKNOWN  beta"*) : ;;
+  *) note_fail "control: the in-flight entry did not read UNKNOWN on its own line" ;;
+esac
+
 mkcase set_args
 mkstore "$STORE" alpha true "$H" beta true "$H"
 mksession "$PROJECTS/proj-a" alpha $(( NOW - 3599 )) 40 1200 >/dev/null

@@ -611,9 +611,9 @@ incomplete until partitioned discovery is implemented. The sweep does not pagina
 
 The loop paces itself and stops at a small bounded batch. Three limits bind and the batch is sized
 by the tightest: ~80 content-generating requests a minute, ~500 an hour **shared across both
-machine-local lanes** (each runs this sweep hourly), and the runtime's own ~120-second Bash call
-budget. Each add is **two** requests, so the defaults spend under a minute sleeping and two lanes
-together stay near a fifth of the hourly budget. A batch large enough to outlast the call timeout
+machine-local lanes** (each runs this sweep twice an hour), and the runtime's own ~120-second Bash
+call budget. Each add is **two** requests, so the defaults spend under a minute sleeping and two lanes
+together stay within two fifths of the hourly budget. A batch large enough to outlast the call timeout
 would be killed mid-run, losing its summary and exit status while leaving the writes it had already
 made applied — the self-test asserts the defaults against both budgets so a later raise cannot
 contradict this silently.

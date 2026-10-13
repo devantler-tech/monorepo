@@ -32,7 +32,9 @@
 #      1  NOT PRODUCING — some automation's scheduled run is overdue, its newest runs are ALL stubs,
 #         or its newest runs ALL ended inside the pre-flight window
 #      2  UNKNOWN — could not determine (no sqlite3, unreadable/absent store, unexpected schema,
-#         an unusable automation id, or too little settled history to judge)
+#         an unusable automation id, or too little settled history to judge). A named automation
+#         the scheduler does not hold ACTIVE is UNKNOWN too, and is named on a `NOT-SCHEDULED`
+#         line: nothing is dispatching it, which differs from a run that could not be judged.
 #
 # Any OTHER non-zero status is an unexpected internal failure under `set -e` and also means UNKNOWN.
 # Only 0 and 1 are verdicts. Exit 2 is deliberately NOT exit 0: "I could not check" and "the lane is
@@ -114,7 +116,7 @@ RECOVERY="
   run has settled."
 
 usage() {
-  sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,62p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 die_unknown() {
@@ -251,6 +253,22 @@ if [ "$AUTOMATION_SET" -eq 1 ]; then
   # is a false positive on the one verdict this check exists to make, so it fails closed to UNKNOWN.
   active=$(sq "SELECT COUNT(*) FROM automations WHERE id = '${AUTOMATION}' AND status = 'ACTIVE';") \
     || die_unknown "could not look up automation ${AUTOMATION}"
+  if [ "${active:-0}" = "0" ]; then
+    # Nothing is dispatching this automation. The call is still UNKNOWN, but the automation is named
+    # on stdout, so a caller that judges a lane entry by entry (sibling-lane-watch.sh) can tell an
+    # entry that is switched off or not created yet from a run that could not be judged. Without
+    # that, a lane whose second entry does not exist yet could never be called down
+    # (monorepo#4116).
+    held=$(sq "SELECT COUNT(*) FROM automations WHERE id = '${AUTOMATION}';") \
+      || die_unknown "could not look up automation ${AUTOMATION}"
+    if [ "$QUIET" -eq 0 ]; then
+      if [ "${held:-0}" = "0" ]; then
+        printf '  NOT-SCHEDULED  %s — the scheduler holds no automation with this id (not created yet, or removed)\n' "$AUTOMATION"
+      else
+        printf '  NOT-SCHEDULED  %s — the scheduler holds this automation, and it is not ACTIVE\n' "$AUTOMATION"
+      fi
+    fi
+  fi
   [ "${active:-0}" = "1" ] || die_unknown "automation ${AUTOMATION} is not an ACTIVE automation in $STORE"
   ids=$AUTOMATION
 else

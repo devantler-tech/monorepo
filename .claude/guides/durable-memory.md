@@ -31,6 +31,28 @@ step:
    satisfy a boot-read budget. Update Codex memory only through the runtime's supported
    memory-maintenance path and let it rebuild the projection.
 
+   **Each lane's engineer has ONE memory, whichever of its two entries dispatched the run**
+   (monorepo#4117). The engineer starts from two scheduler entries on each runtime (the
+   [cadence guide](cadence.md#two-engineer-entries-per-lane) says why), and both are the same
+   engineer working the same branch namespace. On Claude nothing needs deciding: both entries run
+   in the same project and read the same project memory. On Codex the native projection above is
+   one per runtime, so both entries boot from it, but the runtime also gives every automation a
+   directory of its own. **The Codex engineer's automation-scoped store is the first entry's,
+   `/Users/homelab-mac-mini/.codex/automations/daily-ai-engineer/memory.md`, for both entries.** A
+   run dispatched from `agentic-engineer-2` reads and appends to that file exactly as a run of the
+   first entry does, and keeps nothing under `automations/agentic-engineer-2/` beyond one line that
+   points to it. A second store would split the rotation cursor, `needs_attention`, the run notes
+   and the spend ledger between alternating runs, so every other run would act on notes the run
+   before it never saw.
+   ⚠️ **The two entries' runs overlap by design, so they are two writers of one store.** The
+   multi-writer rules below apply between them exactly as between lanes: re-read immediately before
+   writing, append, and never rewrite the file from a copy read earlier in the run. One cost is
+   known and is not to be worked around: a Codex run that starts while the other entry's run is
+   banking memory can find the projection newer than its own dispatch, and the pre-flight guard
+   below then ends that run. That is one lost slot, measured once in the 14 days to 2026-10-12, and
+   not a lane outage. If it recurs once both entries run, it is evidence about the Codex cadence
+   for the maintainer, never a reason to skip the guard.
+
    In an author-managed/legacy store, **`MEMORY.md` is one line per entry — never more.** It is an
    *index*: each bullet is a
    pointer + one-line hook to a detail file; the latest-tick log and `last_run` prose belong in
@@ -189,7 +211,8 @@ step:
    write it. The
    **spend evidence/proposal/realisation ledger** — snapshots, proposals with their confidence, open
    maintainer asks, and the projected-versus-realised record — lives in the engineer's own runtime
-   store: `/Users/homelab-mac-mini/.codex/automations/daily-ai-engineer/memory.md` for Codex and the
+   store: `/Users/homelab-mac-mini/.codex/automations/daily-ai-engineer/memory.md` for Codex, whichever
+   engineer entry dispatched the run, and the
    runtime's native project memory for Claude. These are private runtime stores, never repository
    artifacts, and absolute financial figures live **only** here or in the private channel.
    **Agent Improver research register and cursor** — the durable store the `agent-improvement` skill's

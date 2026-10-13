@@ -89,9 +89,10 @@ resume_from=""
 # board-add performs an item-add AND an item-edit, so one WRITE costs TWO requests.
 #
 #   per-minute  ~80 content-generating requests: 2 requests / 2 s = 60 a minute, with margin.
-#   per-hour    ~500, and that budget is SHARED — both machine-local lanes run this sweep every
-#               hour, so the ceiling is per-hour-per-fleet, not per-process. 2 lanes x 25 writes
-#               x 2 requests = 100 an hour, leaving the rest for everything else the runs do.
+#   per-hour    ~500, and that budget is SHARED — both machine-local lanes run this sweep twice
+#               an hour, once from each of a lane's two engineer entries (monorepo#4116), so the
+#               ceiling is per-hour-per-fleet, not per-process. 2 lanes x 2 runs x 25 writes
+#               x 2 requests = 200 an hour, leaving the rest for everything else the runs do.
 #   per-call    the runtime's Bash timeout defaults to 120 s. At a 2 s pace a batch of 25 spends
 #               48 s sleeping before any API latency, which fits; a batch of 150 would have spent
 #               298 s and been killed mid-run, losing the summary and the exit status while

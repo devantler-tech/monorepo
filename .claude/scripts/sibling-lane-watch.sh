@@ -17,7 +17,8 @@
 # to send the DM through the Slack connector and then record that with --mark-notified.
 #
 # WHAT IT COUNTS
-#   Slots of the sibling's HOURLY task in which that task was not producing. Two runs inside one
+#   Hourly slots in which the sibling lane's engineer was not producing, on any of its entries (see
+#   the two sections below). Two runs inside one
 #   slot are one observation; runs in different slots are separate ones, however close together. A
 #   count survives one slot the watch did not observe and starts again after two, so old bad slots
 #   cannot combine with a new one into a page. A producing look always clears it.
@@ -46,6 +47,16 @@
 #   seen producing, one unjudged entry makes the whole look UNKNOWN, because the lane cannot be
 #   called down on a partial reading. Slots are still counted on the FIRST entry's minute.
 #
+# AN ENTRY THE SCHEDULER IS NOT DISPATCHING (monorepo#4116)
+#   Both lanes name two engineer entries, and an entry can be named here before its runtime entry
+#   exists, or be switched off later to lower a lane's cadence. The liveness check says so on a
+#   `NOT-SCHEDULED` line, and such an entry is named in `unscheduled=`. It is neither producing nor
+#   down, and it is not "could not judge": nothing is waiting to be read. So it never clears a
+#   count, and it never holds one back either: the lane is down when every entry that IS scheduled
+#   is down. Reading it as unjudged would make a lane with one missing entry UNKNOWN for as long as
+#   its other entry was dead, which is the outage this watch exists to page on. A lane with no
+#   scheduled entry at all is UNKNOWN, as it was with one entry.
+#
 # READ-ONLY toward both runtimes. Everything it writes sits beside its own state file: the file, its
 # `.lock` and `.reap` directories, and a `.corrupt` copy of a state file it had to set aside. The
 # state holds a lane name, a count, a slot number and three timestamps — nothing from a transcript
@@ -65,9 +76,9 @@
 # passed on to it.
 #
 # --entries names the watched lane's engineer entries (scheduler task or automation ids), first
-# entry first. The default is the lane's deployed set, declared below next to its minute, so the
-# every-run command stays the same when a lane gains an entry; the option exists for the test suite
-# and for trying a set before it is deployed.
+# entry first. The default is the lane's deployed pair, declared below next to its minute, so the
+# every-run command stays the same when a lane gains or loses an entry; the option exists for the
+# test suite and for trying a set before it is deployed.
 #
 # Exit 0  nothing to send — verdict OK, WATCHING, KNOWN-RESET, ESCALATION-CLAIMED or ALREADY-NOTIFIED
 #      1  ESCALATE — the lane has been NOT-PRODUCING for the threshold and nobody has been told
@@ -170,21 +181,22 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-# Only the HOURLY task is judged (see the header). `sibling_minute` is the minute that task is
-# scheduled at (AGENTS.md, Cadence & focus); it turns the caller's clock into the sibling slot whose
-# dispatch this run can judge.
+# Only the HOURLY entries are judged (see the header). `sibling_minute` is the minute the lane's
+# FIRST entry is scheduled at (AGENTS.md, Cadence & focus); it turns the caller's clock into the
+# sibling slot this run can judge. The second entry starts half an hour later and is judged in the
+# same slot, so three bad slots still means three hours.
 case "$LANE" in
   claude)
     default_state="$HOME/.codex/lane-watch/claude.json"
     sibling_minute=50
-    default_entries="daily-ai-assistant"
+    default_entries="daily-ai-assistant,agentic-engineer-2"
     liveness_flag="--task"
     liveness_args=(--grace-seconds "$CLAUDE_GRACE_SECONDS")
     ;;
   codex)
     default_state="$HOME/.claude/lane-watch/codex.json"
     sibling_minute=10
-    default_entries="daily-ai-engineer"
+    default_entries="daily-ai-engineer,agentic-engineer-2"
     liveness_flag="--automation"
     liveness_args=()
     ;;
@@ -309,8 +321,11 @@ write_state() {
   }
 }
 
+# `lane_notes` names the entries that are not carrying the lane (degraded=, unjudged=, unscheduled=).
+# It is empty until the entries have been judged, and stays empty for --mark-notified.
+lane_notes=""
 summary() {
-  echo "verdict=$1 lane=${LANE} observations=${observations}/${THRESHOLD} first_seen_epoch=${first_seen} notified_epoch=${notified} cause=$2"
+  echo "verdict=$1 lane=${LANE} observations=${observations}/${THRESHOLD} first_seen_epoch=${first_seen} notified_epoch=${notified} cause=$2${lane_notes}"
 }
 
 if [ "$MARK_NOTIFIED" -eq 1 ]; then
@@ -349,6 +364,7 @@ producing=0
 down_ids=""
 unjudged_ids=""
 unjudged_reason=""
+unscheduled_ids=""
 down_lines=""
 for entry in "${ENTRY_LIST[@]}"; do
   entry_rc=0
@@ -369,9 +385,16 @@ for entry in "${ENTRY_LIST[@]}"; do
       fi
       ;;
     *)
-      unjudged_ids="${unjudged_ids:+${unjudged_ids},}${entry}"
-      # Usually a dispatch still in flight, which a later look in the same run can judge.
-      [ -n "$unjudged_reason" ] || unjudged_reason="could not judge (exit ${entry_rc})"
+      # The exit status still decides: only an UNKNOWN (2) that names THIS entry on a NOT-SCHEDULED
+      # line is an entry the scheduler is not dispatching. Every other non-verdict is unjudged.
+      if [ "$entry_rc" -eq 2 ] &&
+        grep -qE "^[[:space:]]*NOT-SCHEDULED[[:space:]]+${entry}[[:space:]]" <<<"$entry_out"; then
+        unscheduled_ids="${unscheduled_ids:+${unscheduled_ids},}${entry}"
+      else
+        unjudged_ids="${unjudged_ids:+${unjudged_ids},}${entry}"
+        # Usually a dispatch still in flight, which a later look in the same run can judge.
+        [ -n "$unjudged_reason" ] || unjudged_reason="could not judge (exit ${entry_rc})"
+      fi
       ;;
   esac
 done
@@ -382,14 +405,22 @@ if [ "$producing" -eq 1 ]; then
   if [ -e "$STATE_FILE" ] && [ "$(state_signature)" = "$signature_before" ]; then
     rm -f "$STATE_FILE" 2>/dev/null || unknown "cannot clear the state file: $STATE_FILE"
   fi
-  entry_notes=""
-  [ -z "$down_ids" ] || entry_notes=" degraded=${down_ids}"
-  [ -z "$unjudged_ids" ] || entry_notes="${entry_notes} unjudged=${unjudged_ids}"
-  echo "$(summary OK none)${entry_notes}"
+  [ -z "$down_ids" ] || lane_notes=" degraded=${down_ids}"
+  [ -z "$unjudged_ids" ] || lane_notes="${lane_notes} unjudged=${unjudged_ids}"
+  [ -z "$unscheduled_ids" ] || lane_notes="${lane_notes} unscheduled=${unscheduled_ids}"
+  summary OK none
   finish 0
 fi
 [ -z "$unjudged_ids" ] ||
   unknown "the ${LANE} liveness check ${unjudged_reason} for ${unjudged_ids}; the count is unchanged -- run this once more before the run report"
+# Nothing is down and nothing produced: the scheduler dispatches no entry of this lane. That is not
+# an outage this watch can count, so it stays UNKNOWN, as it was when the lane's one entry was
+# switched off.
+[ -n "$down_ids" ] ||
+  unknown "the scheduler is dispatching no engineer entry of the ${LANE} lane (${unscheduled_ids}); the count is unchanged"
+# Every scheduled entry is down. An entry that is not scheduled is named beside the verdict, so the
+# reader sees the lane was running on fewer entries than it names.
+[ -z "$unscheduled_ids" ] || lane_notes=" unscheduled=${unscheduled_ids}"
 
 lock_state
 read_state

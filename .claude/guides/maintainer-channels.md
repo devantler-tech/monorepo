@@ -156,8 +156,9 @@ Every Engineer run does this in pre-flight, and an Improver run may:
 .claude/scripts/sibling-lane-watch.sh --lane <codex|claude>   # the lane you are NOT
 ```
 
-It runs that lane's own liveness check on the lane's hourly task only, and counts the slots of that
-task in which it was not producing. Two runs inside one slot count once. A count survives one slot
+It runs that lane's own liveness check on each of the lane's two hourly engineer entries, never on
+the improver, and counts the hourly slots in which the lane was not producing. A slot starts at the
+first entry's minute. Two runs inside one slot count once. A count survives one slot
 the watch did not observe, because a long run can make the watcher skip an hour, and starts again
 after two; a producing look always clears it. It prints one summary line and never the liveness
 report, so the line is safe to quote.
@@ -168,10 +169,14 @@ report, so the line is safe to quote.
   nobody was paged for. `ESCALATION-CLAIMED`
   means another run was handed the page within the last hour. `ALREADY-NOTIFIED` is an outage he
   has been told about.
-  A lane may dispatch its engineer from more than one scheduler entry, and it is down only when
-  every entry is. While one produces, the verdict is `OK` and the line ends with `degraded=<ids>`
-  for each entry that is not producing and `unjudged=<ids>` for each the check could not judge:
-  put either in the run report, and do not page for it.
+  Each lane dispatches its engineer from two scheduler entries, and the lane is down only when
+  every entry the scheduler is dispatching is down. While one produces, the verdict is `OK` and the
+  line ends with `degraded=<ids>` for each entry that is not producing and `unjudged=<ids>` for
+  each the check could not judge. `unscheduled=<ids>` names an entry the scheduler is not
+  dispatching, because it is not created yet or is switched off. It can follow any verdict: such an
+  entry is never read as producing, and it never holds back the outage of the entries that do run.
+  Put all three in the run report, and do not page for them. A lane with no scheduled entry at all
+  is exit `2`.
 - **Exit `1` together with `verdict=ESCALATE` on stdout: the lane was not producing in
   three hourly slots running, with no producing look between them, and nobody has been told.** Both
   must hold; any other non-zero exit is UNKNOWN. Send the Slack DM above, once per outage: the 🤖 disclosure line, the lane's name, how

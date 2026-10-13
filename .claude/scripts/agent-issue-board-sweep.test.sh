@@ -417,11 +417,12 @@ report "the script declares numeric pace and batch defaults" \
 sleep_budget=$(( def_pace * (def_batch - 1) ))
 report "a full batch's sleeping fits the 120 s call budget with margin" \
   "$([ "$sleep_budget" -le 90 ] && echo yes || echo no)" "${def_pace}s x ($def_batch - 1) = ${sleep_budget}s"
-# The ~500/hour budget is shared across BOTH machine-local lanes, each running this hourly, and
-# every write costs two requests.
-fleet_hourly=$(( 2 * def_batch * 2 ))
-report "two lanes' hourly writes stay well inside the shared ~500 request budget" \
-  "$([ "$fleet_hourly" -le 250 ] && echo yes || echo no)" "2 lanes x $def_batch writes x 2 requests = $fleet_hourly"
+# The ~500/hour budget is shared across BOTH machine-local lanes, each running this twice an hour
+# (one run from each of a lane's two engineer entries, monorepo#4116), and every write costs two
+# requests. Half the budget is the ceiling: the rest is for everything else those runs do.
+fleet_hourly=$(( 2 * 2 * def_batch * 2 ))
+report "two lanes' hourly writes stay inside half the shared ~500 request budget" \
+  "$([ "$fleet_hourly" -le 250 ] && echo yes || echo no)" "2 lanes x 2 runs x $def_batch writes x 2 requests = $fleet_hourly"
 
 # ---------------------------------------------------------------------------
 # 9. BULK MEMBERSHIP (monorepo#3340). The sweep used to ask board-add.sh about every issue, three
