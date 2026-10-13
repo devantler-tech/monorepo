@@ -288,10 +288,18 @@ jq -e . "$STORE" >/dev/null 2>&1 || die_unknown "scheduled-tasks store is not va
 # only lastRunAt and the transcript, stopped running for BOTH Claude lanes at once (monorepo#3530).
 jq -e 'has("scheduledTasks") and (.scheduledTasks | type == "array")' "$STORE" >/dev/null 2>&1 \
   || die_unknown "unexpected store schema: .scheduledTasks is missing or not an array"
-for field in id enabled lastRunAt cronExpression; do
+for field in id enabled cronExpression; do
   jq -e --arg f "$field" 'all(.scheduledTasks[]?; has($f))' "$STORE" >/dev/null 2>&1 \
     || die_unknown "unexpected store schema: a scheduled task is missing .$field"
 done
+# `lastRunAt` is asserted on the STORE, not on every record. The scheduler writes it at an entry's
+# first dispatch, so an entry that has never run -- created switched off, or enabled minutes ago --
+# has none. Asserting it per record let one such entry turn the whole check UNKNOWN, the #3530
+# blackout again: the lane's running entry could not be judged at all (monorepo#4156). An entry
+# without it is that entry's own UNKNOWN line below. What must still abort is the field missing
+# EVERYWHERE, because that is how a rename looks, and it makes every lookup below return empty.
+jq -e 'any(.scheduledTasks[]?; has("lastRunAt"))' "$STORE" >/dev/null 2>&1 \
+  || die_unknown "unexpected store schema: no scheduled task carries .lastRunAt"
 
 # Field PRESENCE is not field VALIDITY. Two malformed-store shapes reach a verdict otherwise,
 # and both fail OPEN in the direction that matters:
