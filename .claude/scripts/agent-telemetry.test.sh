@@ -9799,6 +9799,7 @@ n=$(cxgone_sleeps); [ "$n" = 2 ] && ok "gone worktree: an address value with a l
 # its real remote may differ from the recorded address: it is left out and the
 # report says unknown. Root searches through any mode, so not built as root.
 if [ "$(id -u)" -ne 0 ]; then
+  gone_before=$(cxgone_run a2a | grep -F "left out, worktree gone")
   mkdir -p "$FIX/cxgone/worktrees/locked/monorepo"
   cxgone_file locked "$FIX/cxgone/worktrees/locked/monorepo" '{"repository_url":"git@github.com:devantler-tech/monorepo.git"}' 25
   chmod 000 "$FIX/cxgone/worktrees/locked"
@@ -9807,7 +9808,7 @@ if [ "$(id -u)" -ne 0 ]; then
   [ "$n" = 2 ] && ok "unsearchable worktree: the recorded address does not admit it" \
     || bad "unsearchable worktree: the recorded address does not admit it" "sleep count '$n', expected 2"
   check "unsearchable worktree: the report says unknown" "$OUT" "UNKNOWN: 1 Codex transcript(s) left out"
-  check "unsearchable worktree: it is not counted as a gone one" "$OUT" "left out, worktree gone and no portfolio address recorded: 3"
+  check "unsearchable worktree: it is not counted as a gone one" "$OUT" "$gone_before"
   if [ "$rc" -eq 2 ]; then ok "unsearchable worktree: exit 2"; else bad "unsearchable worktree: exit 2" "exit $rc"; fi
   # Searchable again: the folder exists and has no remote, so the folder is the
   # judge — out of scope, a known reading.
